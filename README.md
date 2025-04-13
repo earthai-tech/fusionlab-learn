@@ -2,7 +2,7 @@
 
 ---
 
-## A Modular Library for Temporal Fusion Transformer (TFT) Variants** 
+## A Modular Library for Temporal Fusion Transformer (TFT) Variants
 
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
