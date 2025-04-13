@@ -16,9 +16,9 @@
 
 - **Modular TFT Implementations**: Build custom TFT variants using reusable components.
 - **Preconfigured Architectures**:
-  - **XTFT** (*Extreme Temporal Fusion X*): High-capacity variant for complex time-series.
+  - **XTFT** (*Extreme Temporal Fusion Transformer XTFT): High-capacity variant for complex time-series.
   - **DynamicTFT**: Architecture with runtime-adjustable components.
-  - [Your other variants here...]
+  - ...
 - **Framework-Agnostic Design**: Compatible with PyTorch, TensorFlow, or JAX (specify your focus).
 - **Battle-Tested Utilities**: Data loaders, time-series preprocessing, and evaluation metrics.
 
