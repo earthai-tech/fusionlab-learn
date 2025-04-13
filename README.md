@@ -37,4 +37,7 @@ We welcome contributions! See our [Contribution Guidelines](CONTRIBUTING.md) for
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-# Stay update for next release ...
+## Note 
+**🌟 Stay in the Fusion Loop!**  
+*Click the "Watch" button above to get notified about the next release — exciting enhancements, new architectures, and experimental features are brewing! 🚀*
+
