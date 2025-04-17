@@ -357,7 +357,7 @@ where :math:`\mathbf{F}_{T}` is the feature vector at the last time step.
 
 Examples
 --------
->>> from gofast.nn.transformers import TemporalFusionTransformer
+>>> from fusionlab.nn.transformers import TemporalFusionTransformer
 >>> # Define model parameters
 >>> model = TemporalFusionTransformer(
 ...     static_input_dim=1,
@@ -419,7 +419,7 @@ Notes
 
 See Also
 --------
-- :class:`gofast.nn.transformers.TemporalFusionTransformer`: 
+- :class:`fusionlab.nn.transformers.TemporalFusionTransformer`: 
     The main class that implements the Temporal Fusion Transformers supporting
     the keras API.
 

@@ -10,7 +10,7 @@ Utilities for batch processing, unique ID generation, slicing, and
 input validation in FusionLab. Supports generating reproducible IDs,
 partitioning data into batches, and applying noise‑validation routines.
 
-Adapted for FusionLab from the original gofast.core.handlers module.
+Adapted for FusionLab from the original fusionlab.core.handlers module.
 """
 
 from __future__ import print_function
@@ -96,7 +96,7 @@ class TypeEnforcer:
 
     Examples
     --------
-    >>> from gofast.core.handlers import TypeEnforcer
+    >>> from fusionlab.core.handlers import TypeEnforcer
     >>> 
     >>> @TypeEnforcer
     >>> def example_function1(a):
@@ -431,8 +431,8 @@ def delegate_on_error(
     Examples
     --------
     >>> import warnings
-    >>> from gofast.compat.sklearn import InvalidParametersError 
-    >>> from gofast.core.handlers import delegate_on_error
+    >>> from fusionlab.compat.sklearn import InvalidParametersError 
+    >>> from fusionlab.core.handlers import delegate_on_error
     >>> 
     >>> class A:
     ...     def methodA2(self, param, parama11, parama12=None, verbose=1):
@@ -670,7 +670,7 @@ def param_deprecated_message(
 
     Examples
     --------
-    >>> from gofast.core.handlers import param_deprecated_message
+    >>> from fusionlab.core.handlers import param_deprecated_message
     >>> @param_deprecated_message(
     ...     deprecated_params_mappings=[
     ...         {
@@ -897,7 +897,7 @@ def generate_id(
 
     Examples
     --------
-    >>> from gofast.core.handlers import generate_id
+    >>> from fusionlab.core.handlers import generate_id
     >>> generate_id(length=8, prefix="PAT-", suffix="-ID", include_timestamp=True)
     'PAT-WJ8N6F-20231025123456-ID'
     
@@ -1004,7 +1004,7 @@ def get_valid_kwargs(obj_or_func, raise_warning=False, **kwargs):
     
     Examples
     --------
-    >>> from gofast.core.handlers import get_valid_kwargs
+    >>> from fusionlab.core.handlers import get_valid_kwargs
     >>> class MyClass:
     ...     def __init__(self, a, b):
     ...         self.a = a
@@ -1170,7 +1170,7 @@ def get_batch_size(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.handlers import get_batch_size
+    >>> from fusionlab.core.handlers import get_batch_size
     >>> X = np.random.rand(1000, 20)
     >>> y = np.random.rand(1000)
     >>> batch_size = get_batch_size(X, y)
@@ -1296,7 +1296,7 @@ def batch_generator(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.utils.sysutils import batch_generator
+    >>> from fusionlab.utils.sysutils import batch_generator
     >>> X = np.arange(10)
     >>> y = np.arange(10) * 2
     >>> batch_size = 3
@@ -1487,7 +1487,7 @@ def adjust_to_samples(n_samples, *values, initial_guess=None, error='warn'):
 
     Examples
     --------
-    >>> from gofast.core.handlers import adjust_to_samples
+    >>> from fusionlab.core.handlers import adjust_to_samples
     >>> adjust_to_samples(1000, 10, 20, initial_guess=5)
     (50, 20)
 
@@ -1597,7 +1597,7 @@ def add_noises_to(
 
     Examples
     --------
-    >>> from gofast.core.handlers import add_noises_to
+    >>> from fusionlab.core.handlers import add_noises_to
     >>> import pandas as pd
     >>> df = pd.DataFrame({'A': [1, 2, 3], 'B': ['x', 'y', 'z']})
     >>> new_df = add_noises_to(df, noise=0.2)
@@ -1693,7 +1693,7 @@ def _parse_gaussian_noise(noise):
 
     Examples
     --------
-    >>> from gofast.core.handlers import _parse_gaussian_noise
+    >>> from fusionlab.core.handlers import _parse_gaussian_noise
     >>> _parse_gaussian_noise('0.1gaussian')
     (0.1, True)
     >>> _parse_gaussian_noise('gaussian0.1')
@@ -1760,7 +1760,7 @@ def make_ids(
         An iterable object (e.g., list, tuple, or array-like) to generate 
         an ID for each item.
         For example, it can be a list of EDI objects, such as a collection of
-        `gofast.edi.Edi` objects.
+        `fusionlab.edi.Edi` objects.
 
     prefix : str, optional, default: None
         A string value to prepend to each generated ID. This can be used to 
@@ -1792,7 +1792,7 @@ def make_ids(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.handlers import make_ids
+    >>> from fusionlab.core.handlers import make_ids
     >>> values = ['edi1', 'edi2', 'edi3']
     >>> make_ids(values, prefix='ix')
     ['ix0', 'ix1', 'ix2']
@@ -1858,7 +1858,7 @@ def get_params(obj: object) -> dict:
     Examples
     --------
     >>> from sklearn.svm import SVC 
-    >>> from gofast.core.handlers import get_params 
+    >>> from fusionlab.core.handlers import get_params 
     >>> sigmoid = SVC(
     ...     **{
     ...         'C': 512.0,
@@ -1930,7 +1930,7 @@ def parse_attrs (attr,  regex=None ):
     
     Example
     ---------
-    >>> from gofast.core.utils import parse_attrs 
+    >>> from fusionlab.core.utils import parse_attrs 
     >>> parse_attrs('lwi_sub_ohmSmulmagnitude')
     ... ['lwi', 'ohmS', 'magnitude']
     
@@ -1994,7 +1994,7 @@ def columns_getter(
     --------
     1) **Return union of columns (any):**
 
-       >>> from gofast.core.handlers import columns_getter
+       >>> from fusionlab.core.handlers import columns_getter
        >>> import pandas as pd
        >>> df1 = pd.DataFrame({"A": [1,2], "B": [3,4]})
        >>> df2 = pd.DataFrame({"B": [5,6], "C": [7,8]})
@@ -2145,7 +2145,7 @@ def columns_manager(
 
     Example
     -------
-    >>> from gofast.core.handlers import columns_manager
+    >>> from fusionlab.core.handlers import columns_manager
     >>> columns_manager("col1, col2, col3", separator=",")
     ['col1', 'col2', 'col3']
 
@@ -2296,7 +2296,7 @@ def resolve_label(
 
     Examples
     --------
-    >>> from gofast.core.handlers import resolve_label
+    >>> from fusionlab.core.handlers import resolve_label
     >>> import pandas as pd
     >>> # Retrieving a label
     >>> lab = resolve_label("latitude")
@@ -2550,7 +2550,7 @@ def extend_values(
 
     Examples
     --------
-    >>> from gofast.core.handlers import extend_values
+    >>> from fusionlab.core.handlers import extend_values
     >>> # Example 1: constant extension
     >>> val = 0.3
     >>> ext = extend_values(val, 3, mode='constant')

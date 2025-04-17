@@ -11,7 +11,7 @@ validation, assertion, and feature extraction. Provides type-consistency
 checks, feature-existence verifications, regex-based searches, and 
 task-specific validators.
 
-Adapted for FusionLab from the original gofast.core.checks implementation.
+Adapted for FusionLab from the original fusionlab.core.checks implementation.
 """
 
 from __future__ import print_function, annotations
@@ -149,7 +149,7 @@ class ParamsValidator:
     Validate parameters of a function to ensure `age` is an integer and `name`
     is a string:
 
-    >>> from gofast.core.checks import ParamsValidator
+    >>> from fusionlab.core.checks import ParamsValidator
     >>> constraints = {
     ...     'age': [int],
     ...     'name': [str]
@@ -167,7 +167,7 @@ class ParamsValidator:
 
     Validate a class constructor to ensure `data` is a pandas DataFrame:
 
-    >>> from gofast.core.checks import ParamsValidator
+    >>> from fusionlab.core.checks import ParamsValidator
     >>> import pandas as pd
     >>> constraints = {
     ...     'data': ['array-like:dataframe:transf']
@@ -802,7 +802,7 @@ def check_numeric_dtype(
 
     Examples
     --------
-    >>> from gofast.core.checks import check_numeric_dtype
+    >>> from fusionlab.core.checks import check_numeric_dtype
     >>> import numpy as np
     >>> X = [1, 2, '3', 4]
     >>> # Check without coercion
@@ -826,7 +826,7 @@ def check_numeric_dtype(
     References
     ----------
     .. [1] Gofast Documentation. Available at:
-           https://gofast.readthedocs.io/en/latest/
+           https://fusionlab.readthedocs.io/en/latest/
     """
     # Retrieve custom names if provided, else defaults
     names = param_names or {}
@@ -997,14 +997,14 @@ def check_empty(
     --------
     Minimal usage with no parentheses:
     
-    >>> from gofast.core.checks import check_empty
+    >>> from fusionlab.core.checks import check_empty
     >>> @check_empty
     ... def process_data(data, *args, **kwargs):
     ...     print("Data:", data)
 
     Using parentheses with custom parameters:
     
-    >>> from gofast.core.checks import check_empty
+    >>> from fusionlab.core.checks import check_empty
     >>> @check_empty(params=['data'], allow_none=False)
     ... def load_data(data, path=None):
     ...     print("Loading data:", data, "from", path)
@@ -1166,7 +1166,7 @@ def _check_empty(
     Examples
     --------
     As a decorator:
-    >>> from gofast.core.checks import check_empty
+    >>> from fusionlab.core.checks import check_empty
     >>> @check_empty(params=['data'], allow_none=False)
     ... def process_data(data, *args, **kws):
     ...     print("Processing:", data)
@@ -1365,7 +1365,7 @@ def find_closest(arr, values):
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.checks import find_closest
+    >>> from fusionlab.core.checks import find_closest
     >>> find_closest([2, 3, 4, 5], 2.6)
     array([3.])
 
@@ -1472,7 +1472,7 @@ def find_by_regex(
     Examples
     --------
     >>> import re
-    >>> from gofast.core.checks import find_by_regex
+    >>> from fusionlab.core.checks import find_by_regex
     >>> 
     >>> # Example 1: Find pattern in a concatenated string
     >>> text = "depth_top, depth_bottom, temperature"
@@ -1629,7 +1629,7 @@ def is_in_if(
     
     Examples
     --------
-    >>> from gofast.core.checks import is_in_if
+    >>> from fusionlab.core.checks import is_in_if
     >>> 
     >>> # Example 1: Check presence with error raising
     >>> o = ['apple', 'banana', 'cherry']
@@ -1784,7 +1784,7 @@ def is_depth_in(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import is_depth_in
+    >>> from fusionlab.core.checks import is_depth_in
     >>> 
     >>> # Example 1: Depth column by name
     >>> df = pd.DataFrame({
@@ -2036,7 +2036,7 @@ def exist_labels(
     Example
     -------
     >>> import pandas as pd 
-    >>> from gofast.core.checks import exist_labels
+    >>> from fusionlab.core.checks import exist_labels
     >>> df = pd.DataFrame({
     >>>     'A': ['X', 'Y', 'Z', 'X', 'W'],
     >>>     'B': ['c', 'c', 'd', 'e', 'c'],
@@ -2199,7 +2199,7 @@ def is_classification_task(
 
     Examples
     --------
-    >>> from gofast.core.checks import is_classification_task 
+    >>> from fusionlab.core.checks import is_classification_task 
     >>> y_true = [0, 1, 1, 0, 1]
     >>> y_pred = [0, 1, 0, 0, 1]
     >>> is_classification_task(y_true, y_pred)
@@ -2345,7 +2345,7 @@ def validate_feature(
 
     Examples
     --------
-    >>> from gofast.core.checks import validate_feature
+    >>> from fusionlab.core.checks import validate_feature
     >>> import pandas as pd
     >>> import re
     >>> # Sample DataFrame
@@ -2577,7 +2577,7 @@ def features_in(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import features_in
+    >>> from fusionlab.core.checks import features_in
     >>> data1 = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
     >>> data2 = pd.Series([5, 6], name='C')
     >>> data3 = pd.DataFrame({'X': [7, 8]})
@@ -2625,8 +2625,8 @@ def find_features_in(
 
     Examples
     --------
-    >>> from gofast.datasets import fetch_data
-    >>> from gofast.utils.mlutils import find_features_in
+    >>> from fusionlab.datasets import fetch_data
+    >>> from fusionlab.utils.mlutils import find_features_in
     >>> data = fetch_data('bagoue').frame 
     >>> cat, num = find_features_in(data)
     >>> cat, num
@@ -2738,7 +2738,7 @@ def check_uniform_type(
         
     Examples
     --------
-    >>> from gofast.core.checks import check_uniform_type
+    >>> from fusionlab.core.checks import check_uniform_type
     >>> check_uniform_type([1, 2, 3])
     True
 
@@ -2886,7 +2886,7 @@ def assert_ratio(
     1. **Basic Usage with Bounds:**
     
         ```python
-        from gofast.core.checks import assert_ratio
+        from fusionlab.core.checks import assert_ratio
         assert_ratio(0.5, bounds=(0.0, 1.0))
         # Returns: 0.5
         ```
@@ -3120,7 +3120,7 @@ def exist_features(
 
     Examples
     --------
-    >>> from gofast.core.checks import exist_features
+    >>> from fusionlab.core.checks import exist_features
     >>> import pandas as pd
 
     >>> # Sample DataFrame
@@ -3247,7 +3247,7 @@ def is_iterable(
 
     Examples
     --------
-    >>> from gofast.core.checks.is_iterable import is_iterable
+    >>> from fusionlab.core.checks.is_iterable import is_iterable
     >>> is_iterable('iterable', exclude_string=True)
     False
     >>> is_iterable('iterable', exclude_string=True, transform=True)
@@ -3370,7 +3370,7 @@ def str2columns(
 
     Examples
     --------
-    >>> from gofast.core.checks import str2columns
+    >>> from fusionlab.core.checks import str2columns
     >>> text = "this.is an-example"
     >>> str2columns(text)
     ['this','is','an','example']
@@ -3517,7 +3517,7 @@ def is_numeric_dtype(o, to_array=False):
 
     Examples
     --------
-    >>> from gofast.core.checks import _is_numeric_dtypes
+    >>> from fusionlab.core.checks import _is_numeric_dtypes
     >>> is_numeric_dtype([1, 2, 3])
     True
 
@@ -3599,7 +3599,7 @@ def is_in(
 
     Examples
     --------
-    >>> from gofast.core.checks import is_in 
+    >>> from fusionlab.core.checks import is_in 
     >>> is_in([1, 2, 3, 4, 5], [2, 4])
     True
     
@@ -3837,7 +3837,7 @@ def validate_name_in(
 
     Examples
     --------
-    >>> from gofast.core.checks import validate_name_in
+    >>> from fusionlab.core.checks import validate_name_in
     >>> dnames = ('NAME', 'FIRST NAME', 'SURNAME')
     >>> validate_name_in('name', defaults=dnames)
     False
@@ -3968,7 +3968,7 @@ def is_valid_dtypes(
     
     Examples
     ---------
-    >>> from gofast.utils.datautils import is_valid_dtypes
+    >>> from fusionlab.utils.datautils import is_valid_dtypes
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'age': [25, 30, 45],
@@ -4172,7 +4172,7 @@ def check_features_types(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import check_features_types
+    >>> from fusionlab.core.checks import check_features_types
     >>> data = {
     ...     'age': [25, 30, 45],
     ...     'salary': [50000.0, 60000.5, 75000.0],
@@ -4332,7 +4332,7 @@ def are_all_frames_valid(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import is_all_frames
+    >>> from fusionlab.core.checks import is_all_frames
     
     # Example with multiple DataFrames
     >>> df1 = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
@@ -4488,7 +4488,7 @@ def has_nan(
         
     Examples
     --------
-    >>> from gofast.core.checks import has_nan 
+    >>> from fusionlab.core.checks import has_nan 
     >>> df = pd.DataFrame({'A': [1, 2, None], 'B': [None, 2, 3]})
     >>> has_nan(df)
     True
@@ -4626,7 +4626,7 @@ def validate_spatial_columns(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import validate_spatial_columns
+    >>> from fusionlab.core.checks import validate_spatial_columns
     
     >>> # Sample DataFrame with various spatial column name formats
     >>> data = {
@@ -4811,7 +4811,7 @@ def check_spatial_columns(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import check_spatial_columns
+    >>> from fusionlab.core.checks import check_spatial_columns
 
     >>> # Valid spatial columns
     >>> df = pd.DataFrame({
@@ -4919,7 +4919,7 @@ def validate_column_types(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import validate_column_types
+    >>> from fusionlab.core.checks import validate_column_types
     >>> df = pd.DataFrame({
     ...     'age': [25, 30, 35, 40],
     ...     'gender': ['M', 'F', 'M', 'F'],
@@ -5085,7 +5085,7 @@ def is_df_square(
     
     Examples
     --------
-    >>> from gofast.core.checks import is_df_square
+    >>> from fusionlab.core.checks import is_df_square
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     >>>     'A': [1, 2, 3],
@@ -5271,7 +5271,7 @@ def check_files(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.checks import check_files
+    >>> from fusionlab.core.checks import check_files
     
     >>> # Single file validation
     >>> valid_file = check_files(
@@ -5661,7 +5661,7 @@ def validate_nested_param(
     
     Examples
     --------
-    >>> from gofast.core.checks import validate_nested_param
+    >>> from fusionlab.core.checks import validate_nested_param
     >>> # Validate a single string item
     >>> validate_nested_param('item', str, 'static_feature_names')
     'item'
@@ -5906,7 +5906,7 @@ def check_params(param_types: Dict[str, Any], coerce: bool = True):
 
     Examples
     --------
-    >>> from gofast.core.checks import check_params
+    >>> from fusionlab.core.checks import check_params
     >>> from typing import List, Dict
     >>> @check_params({"items": List[str], "mapping": Dict[str, float]}, coerce=True)
     ... def process_data(items, mapping):
@@ -6075,7 +6075,7 @@ def check_array_like(
     
     Examples
     --------
-    >>> from gofast.core.checks import check_array_like 
+    >>> from fusionlab.core.checks import check_array_like 
     >>> check_array_like([1, 2, 3])
     True
     
@@ -6214,7 +6214,7 @@ def check_datetime(
 
     Examples
     --------
-    >>> from gofast.core.checks import check_datetime
+    >>> from fusionlab.core.checks import check_datetime
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'date_col': pd.date_range('2021-01-01', periods=5),
@@ -6477,7 +6477,7 @@ def ensure_same_shape(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import ensure_same_shape
+    >>> from fusionlab.core.array_manager import ensure_same_shape
     >>> import numpy as np
     
     >>> A = np.random.rand(5, 3)
@@ -6506,7 +6506,7 @@ def ensure_same_shape(
     
     See Also
     --------
-    gofast.utils.validator.check_consistent_length : 
+    fusionlab.utils.validator.check_consistent_length : 
         A related function that cross-checks dimensional alignment.
 
     References
@@ -6632,7 +6632,7 @@ def validate_axis(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import validate_axis
+    >>> from fusionlab.core.array_manager import validate_axis
     >>> import numpy as np
 
     >>> arr_2d = np.ones((5, 4))
@@ -6661,7 +6661,7 @@ def validate_axis(
 
     See Also
     --------
-    gofast.utils.validator.check_consistency_size :
+    fusionlab.utils.validator.check_consistency_size :
         A related function that also checks axis validity for
         multi-dimensional arrays.
 
@@ -6850,7 +6850,7 @@ def validate_depth(
 
     Examples
     --------
-    >>> from gofast.core.checks import validate_depth
+    >>> from fusionlab.core.checks import validate_depth
     >>> import pandas as pd
     >>> df = pd.DataFrame({'A': [1, 2, 3], 'depth': [10, 20, 30]})
     >>> pred = pd.Series([1.1, 2.1, 3.1], name='prediction')
@@ -7276,7 +7276,7 @@ def check_non_emptiness(
     --------
     
     1) Decorator used without parentheses:
-       >>> from gofast.core.checks import check_non_emptiness
+       >>> from fusionlab.core.checks import check_non_emptiness
        >>> @check_non_emptiness
        ... def func_first_arg(x):
        ...     return x

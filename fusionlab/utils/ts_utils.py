@@ -100,7 +100,7 @@ def filter_by_period(
 
     Examples
     --------
-    >>> from gofast.utils.ts_utils import filter_by_period
+    >>> from fusionlab.utils.ts_utils import filter_by_period
     >>> df = pd.DataFrame({
     ...     'dt_col': ['2023-01-01', '2023-01-02', '2023-03-03', '2022-05-05'],
     ...     'value': [10, 20, 30, 40]
@@ -312,7 +312,7 @@ def to_dt(
 
     Examples
     --------
-    >>> from gofast.utils.ts_utils import to_dt
+    >>> from fusionlab.utils.ts_utils import to_dt
     >>> import pandas as pd
 
     >>> data = {
@@ -560,7 +560,7 @@ def ts_validator(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import ts_validator
+    >>> from fusionlab.utils.ts_utils import ts_validator
 
     >>> # Example DataFrame with a 'Date' column
     >>> data = {
@@ -823,7 +823,7 @@ def trend_analysis(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import trend_analysis
+    >>> from fusionlab.utils.ts_utils import trend_analysis
     >>> data = {
     ...     'Date': [
     ...         '2020-01-01', '2020-01-02', '2020-01-03',
@@ -1134,7 +1134,7 @@ def trend_ops(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import trend_ops
+    >>> from fusionlab.utils.ts_utils import trend_ops
     >>> data = {
     ...     'Date': [
     ...         '2020-01-01', '2020-01-02', '2020-01-03',
@@ -1468,7 +1468,7 @@ def visual_inspection(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import visual_inspection
+    >>> from fusionlab.utils.ts_utils import visual_inspection
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01','2021-02-01','2021-03-01',
@@ -1849,7 +1849,7 @@ def get_decomposition_method(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import get_decomposition_method
+    >>> from fusionlab.utils.ts_utils import get_decomposition_method
     >>> data = {
     ...     'Date': [
     ...         '2020-01-01','2020-02-01','2020-03-01',
@@ -2018,7 +2018,7 @@ def infer_decomposition_method(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import infer_decomposition_method
+    >>> from fusionlab.utils.ts_utils import infer_decomposition_method
     >>> data = {
     ...     'Date': [
     ...         '2020-01-01','2020-02-01','2020-03-01',
@@ -2351,7 +2351,7 @@ def decompose_ts(
     --------
     >>> import numpy as np
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import decompose_ts
+    >>> from fusionlab.utils.ts_utils import decompose_ts
 
     >>> # Generate 100 days of synthetic data
     >>> df = pd.DataFrame({
@@ -2580,7 +2580,7 @@ def ts_engineering(
     --------
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gofast.utils.ts_utils import ts_engineering
+    >>> from fusionlab.utils.ts_utils import ts_engineering
 
     >>> # Generate synthetic daily data
     >>> idx = pd.date_range(
@@ -2801,7 +2801,7 @@ def prepare_ts_df(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import prepare_ts_df
+    >>> from fusionlab.utils.ts_utils import prepare_ts_df
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01', '2021-01-02', '2021-01-03'
@@ -2998,7 +2998,7 @@ def ts_corr_analysis(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import ts_corr_analysis
+    >>> from fusionlab.utils.ts_utils import ts_corr_analysis
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01','2021-01-02','2021-01-03',
@@ -3369,7 +3369,7 @@ def transform_stationarity(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import transform_stationarity
+    >>> from fusionlab.utils.ts_utils import transform_stationarity
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01', '2021-01-02', '2021-01-03',
@@ -3680,7 +3680,7 @@ def ts_split(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import ts_split
+    >>> from fusionlab.utils.ts_utils import ts_split
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01','2021-01-02','2021-01-03',
@@ -3921,7 +3921,7 @@ def ts_outlier_detector(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import ts_outlier_detector
+    >>> from fusionlab.utils.ts_utils import ts_outlier_detector
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01','2021-01-02','2021-01-03',
@@ -4160,7 +4160,7 @@ def create_lag_features(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import create_lag_features
+    >>> from fusionlab.utils.ts_utils import create_lag_features
     >>> data = {
     ...     'Date': [
     ...         '2021-01-01','2021-01-02','2021-01-03',
@@ -4388,7 +4388,7 @@ def select_and_reduce_features(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.ts_utils import select_and_reduce_features
+    >>> from fusionlab.utils.ts_utils import select_and_reduce_features
     >>> data = {
     ...     'A': [1, 2, 3, 4, 5],
     ...     'B': [2, 4, 6, 8, 10],

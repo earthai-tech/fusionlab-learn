@@ -69,8 +69,8 @@ from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 import warnings
 import sklearn
 import gofast as gf
-from gofast.utils.data_utils import pop_labels_in 
-from gofast.nn.tft import XTFT
+from fusionlab.utils.data_utils import pop_labels_in 
+from fusionlab.nn.tft import XTFT
 # Versioning of packages for reproducibility
 pkgs_versions = {
     "numpy": np.__version__,

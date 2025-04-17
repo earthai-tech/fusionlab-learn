@@ -420,7 +420,7 @@ def validate_tft_inputs(
             
     Examples
     --------
-    >>> from gofast.nn._tensor_validation import validate_tft_inputs
+    >>> from fusionlab.nn._tensor_validation import validate_tft_inputs
     >>> import tensorflow as tf
     >>> # Example with only past (dynamic) inputs
     >>> single_input = tf.random.normal([8, 24, 10])  # batch=8, time=24
@@ -655,7 +655,7 @@ def validate_xtft_inputs(
     ---------
     >>> # Example without future covariates
     >>> import tensorflow as tf 
-    >>> from gofast.nn._tensor_validation import validate_xtft_inputs 
+    >>> from fusionlab.nn._tensor_validation import validate_xtft_inputs 
     >>> static_input = tf.random.normal((32, 10))
     >>> dynamic_input = tf.random.normal((32, 20, 45))
     >>> inputs = [static_input, dynamic_input, None]
@@ -1062,7 +1062,7 @@ def validate_minimal_inputs(
     
     Examples
     --------
-    >>> from gofast.nn._tensor_validation import validate_minimal_inputs
+    >>> from fusionlab.nn._tensor_validation import validate_minimal_inputs
     >>> import numpy as np
     >>> X_static0  = np.random.rand(100, 5)
     >>> X_dynamic0 = np.random.rand(100, 10, 3)
@@ -1210,7 +1210,7 @@ def validate_minimal_inputs(
             f"Batch sizes do not match: X_static ({B_sta}), "
             f"X_dynamic ({B_dyn}), X_future ({B_fut}). "
             "Ensure data is correctly shaped using "
-            "`gofast.nn.utils.reshape_xft_data`."
+            "`fusionlab.nn.utils.reshape_xft_data`."
         )
 
     # Validate forecast horizon consistency.

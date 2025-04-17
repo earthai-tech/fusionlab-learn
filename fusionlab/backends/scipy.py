@@ -15,7 +15,7 @@ To utilize the ScipyBackend, ensure SciPy is installed in your environment:
 Example Usage:
 
 1. Initializing ScipyBackend:
-    from gofast.backends.scipy import ScipyBackend
+    from fusionlab.backends.scipy import ScipyBackend
     scipy_backend = ScipyBackend()
 
 2. Optimizing a Quadratic Function:
@@ -95,7 +95,7 @@ class ScipyBackend(BaseBackend):
 
     Examples
     --------
-    >>> from gofast.backends.scipy_backend import ScipyBackend
+    >>> from fusionlab.backends.scipy_backend import ScipyBackend
     >>> scipy_backend = ScipyBackend()
     
     Optimizing a quadratic function:

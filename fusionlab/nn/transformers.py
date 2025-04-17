@@ -34,7 +34,7 @@ Assume:
 For illustration, we create synthetic data:
 
 >>> import numpy as np
->>> from gofast.nn.transformers import XTFT
+>>> from fusionlab.nn.transformers import XTFT
 >>> batch_size = 32
 >>> forecast_horizons = 20
 >>> static_input_dim = 10
@@ -94,7 +94,7 @@ Assume:
 - ``output_dim = 1``
 - ``quantiles = [0.1, 0.5, 0.9]``
 
->>> from gofast.nn.transformers import TemporalFusionTransformer
+>>> from fusionlab.nn.transformers import TemporalFusionTransformer
 >>> batch_size = 32
 >>> static_input_dim = 10
 >>> dynamic_input_dim = 45
@@ -138,7 +138,7 @@ multi-horizon forecasting with attention-based architectures.
 """
 
 import warnings
-from gofast.compat.tf import HAS_TF
+from fusionlab.compat.tf import HAS_TF
 
 if not HAS_TF:
     warnings.warn(

@@ -158,7 +158,7 @@ def process_y_pairs(
     --------
     Basic usage with valid pairs:
 
-    >>> from gofast.utils.validator  import process_y_pairs
+    >>> from fusionlab.utils.validator  import process_y_pairs
     >>> y_true1 = [1.2, 2.3, 3.4]
     >>> y_pred1 = [1.1, 2.4, 3.3]
     >>> y_true2 = [4.5, 5.6]
@@ -380,7 +380,7 @@ def check_donut_inputs(
     --------
     Build inputs from a DataFrame with explicit column names:
 
-    >>> from gofast.utils.validator import check_donut_inputs
+    >>> from fusionlab.utils.validator import check_donut_inputs
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     "Sales": [100, 200, 150],
@@ -421,7 +421,7 @@ def check_donut_inputs(
     numeric data satisfies the necessary type constraints.
     The function supports grouping or multiple donut charts by 
     using the input DataFrame directly. See also 
-    :func:`~gofast.core.checks.check_numeric_dtype` for numeric 
+    :func:`~fusionlab.core.checks.check_numeric_dtype` for numeric 
     type validation.
 
     Formulation
@@ -443,9 +443,9 @@ def check_donut_inputs(
 
     See Also
     --------
-    gofast.core.checks.check_numeric_dtype` : 
+    fusionlab.core.checks.check_numeric_dtype` : 
         Validate numeric types in arrays.  
-    gofast.core.parameter_validator: Validate string parameters.
+    fusionlab.core.parameter_validator: Validate string parameters.
 
     """
     from ..core.checks import check_numeric_dtype
@@ -671,7 +671,7 @@ def validate_strategy(
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_strategy
+    >>> from fusionlab.utils.validator import validate_strategy
     >>> validate_strategy('mean constant')
     {'numeric': 'mean', 'categorical': 'constant'}
 
@@ -889,7 +889,7 @@ def has_methods(
 
     Examples
     --------
-    >>> from gofast.utils.validator import has_methods
+    >>> from fusionlab.utils.validator import has_methods
     >>> class ModelA:
     ...     def train(self):
     ...         pass
@@ -1105,7 +1105,7 @@ def check_is_runned(estimator, attributes=None, *, msg=None, all_or_any=all):
 
     Examples
     --------
-    >>> from gofast.utils.validator import check_is_runned
+    >>> from fusionlab.utils.validator import check_is_runned
     >>> class ExampleClass:
     ...     def __init__(self):
     ...         self._is_runned = False
@@ -1188,7 +1188,7 @@ def check_has_run_method(estimator, msg=None, method_name="run"):
     
     Examples
     --------
-    >>> from gofast.utils.validator import check_has_run_method
+    >>> from fusionlab.utils.validator import check_has_run_method
     >>> class MyClass:
     ...     def run(self):
     ...         pass
@@ -1320,7 +1320,7 @@ def validate_batch_size(
 
     Examples
     --------
-    >>> from gofast.utils.validators import validate_batch_size
+    >>> from fusionlab.utils.validators import validate_batch_size
     >>> validate_batch_size(32, 100)  # Valid case
     >>> validate_batch_size(0, 100)  # Raises ValueError
     >>> validate_batch_size(150, 100)  # Raises ValueError
@@ -1335,7 +1335,7 @@ def validate_batch_size(
 
     See Also
     --------
-    - Other validation functions in the `gofast.utils.validators` module
+    - Other validation functions in the `fusionlab.utils.validators` module
     - Documentation on batch processing in machine learning frameworks
 
     References
@@ -1407,7 +1407,7 @@ def validate_estimator_methods(estimator, methods, msg=None):
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_estimator_methods
+    >>> from fusionlab.utils.validator import validate_estimator_methods
     >>> class MyClass:
     ...     def fit(self):
     ...         pass
@@ -1592,7 +1592,7 @@ def validate_sets(
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_sets 
+    >>> from fusionlab.utils.validator import validate_sets 
     >>> validate_sets({1, 2, 3}, mode='base')
     {1, 2, 3}
 
@@ -1732,7 +1732,7 @@ def validate_scores(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.utils.validator import validate_scores
+    >>> from fusionlab.utils.validator import validate_scores
     >>> scores_single = np.array([[0.1, 0.9], [0.8, 0.2]])
     >>> print(validate_scores(scores_single))
     [[0.1, 0.9]
@@ -1807,7 +1807,7 @@ def _is_probability_distribution(y, mode='strict', error="ignore"):
 
     Examples
     --------
-    >>> from gofast.utils.validator import _is_probability_distribution
+    >>> from fusionlab.utils.validator import _is_probability_distribution
     >>> y = np.array([0.3, 0.7])
     >>> print(_is_probability_distribution(y, mode='strict'))
     True
@@ -1890,7 +1890,7 @@ def validate_square_matrix(data, align=False, align_mode="auto", message=''):
 
     Examples:
     ---------
-    >>> from gofast.utils.validator import validate_square_matrix
+    >>> from fusionlab.utils.validator import validate_square_matrix
     >>> validate_square(np.array([[1, 2], [3, 4]]))
     array([[1, 2],
            [3, 4]])
@@ -2017,7 +2017,7 @@ def validate_multiclass_target(
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_multiclass_target
+    >>> from fusionlab.utils.validator import validate_multiclass_target
     >>> validate_multiclass_target([0, 1, 2, 1, 0])
     array([0, 1, 2, 1, 0])
     >>> validate_multiclass_target([0, 0, 0])
@@ -2090,7 +2090,7 @@ def validate_sample_weights(weights, y, normalize =False):
 
     Examples
     --------
-    >>> frpm gofast.utils.validator import validate_sample_weights
+    >>> frpm fusionlab.utils.validator import validate_sample_weights
     >>> y = [0, 1, 2, 3]
     >>> weights = [0.1, 0.2, 0.3, 0.4]
     >>> validate_sample_weights(weights, y)
@@ -2165,7 +2165,7 @@ def validate_weights(
 
     Examples:
     --------
-    >>> from gofast.utils.validator import validate_weights
+    >>> from fusionlab.utils.validator import validate_weights
     
     >>> validate_weights([0.25, 0.75, 0.5], normalize=True)
     array([0.2, 0.6, 0.4])
@@ -2302,7 +2302,7 @@ def normalize_array(arr, normalize="auto", method='01'):
     Examples:
     --------
     >>> import numpy as np 
-    >>> from gofast.utils.validator import normalize_array 
+    >>> from fusionlab.utils.validator import normalize_array 
 
     >>> data = np.array([1, 2, 3, 4, 5])
     >>> normalized_data = normalize_array(data, normalize=True, method='01')
@@ -2370,7 +2370,7 @@ def is_binary_class(y, accept_multioutput=False):
 
     Examples:
     --------
-    >>> from gofast.utils.validator import is_binary_class 
+    >>> from fusionlab.utils.validator import is_binary_class 
     >>> is_binary_class([0, 1, 1, 0])
     True
     >>> is_binary_class([[0, 1], [1, 0], [0, 1], [1, 0]], accept_multioutput=True)
@@ -2447,7 +2447,7 @@ def handle_zero_division(
     
     Examples 
     ---------
-    >>> from gofast.utils.validator import handle_zero_division 
+    >>> from fusionlab.utils.validator import handle_zero_division 
     >>> y_true = [0, 1, 2, 3, 0]
     >>> processed_y_true = handle_zero_division(
         y_true, replace_with=0.001, zero_division='warn')
@@ -2508,7 +2508,7 @@ def convert_to_numeric(value, preserve_integers=True, context_description='Data'
     
     Examples
     --------
-    >>> from gofast.utils.validator import convert_to_numeric
+    >>> from fusionlab.utils.validator import convert_to_numeric
     >>> convert_to_numeric(5)
     5.0
     >>> convert_to_numeric(5, preserve_integers=True)
@@ -2599,7 +2599,7 @@ def validate_performance_data(
 
     1. **As a function**: Provide data directly to perform validation.
     
-    >>> from gofast.utils.validator import validate_performance_data
+    >>> from fusionlab.utils.validator import validate_performance_data
     >>> data = {'model1': [0.85, 0.90, 0.92], 'model2': [0.80, 0.87, 0.88]}
     >>> validate_performance_data(data)
 
@@ -2780,7 +2780,7 @@ def validate_sequences(
     Examples 
     ---------
     >>> import numpy as np
-    >>> from gofast.utils.validator import validate_sequences
+    >>> from fusionlab.utils.validator import validate_sequences
     
     >>> # Example 3D sequences array (batch_size=2, sequence_length=3, n_features=4)
     >>> sequences = np.random.rand(2, 3, 4)
@@ -2863,7 +2863,7 @@ def validate_comparison_data(df,  alignment="auto"):
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_comparison_data
+    >>> from fusionlab.utils.validator import validate_comparison_data
     >>> data = pd.DataFrame({
     ...     'A': [1, 0.9, 0.8],
     ...     'B': [0.9, 1, 0.85],
@@ -2970,7 +2970,7 @@ def validate_data_types(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.utils.validator import validate_data_types 
+    >>> from fusionlab.utils.validator import validate_data_types 
     >>> df = pd.DataFrame({'A': [1, 2, 'a', 3.5, np.nan], 'B': ['x', 'y', 'z', None, 't']})
     >>> validate_data_types(df, expected_type='numeric', nan_policy='warn', 
     ...                  return_data=True, error='warn')
@@ -3081,7 +3081,7 @@ def ensure_2d(X, output_format="auto"):
     Examples
     --------
     >>> import numpy as np 
-    >>> from gofast.utils.validator import ensure_2d
+    >>> from fusionlab.utils.validator import ensure_2d
     >>> X = np.array([1, 2, 3])
     >>> ensure_2d(X, output_format="array")
     array([[1],
@@ -3157,7 +3157,7 @@ def is_categorical(data, column, strict=False, error='raise'):
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.utils.validator import is_categorical
+    >>> from fusionlab.utils.validator import is_categorical
     >>> df = pd.DataFrame({
     ...     'fruit': ['Apple', 'Banana', 'Cherry'],
     ...     'count': [10, 20, 15]
@@ -3212,7 +3212,7 @@ def parameter_validator(
         Specifies whether an exception should be raised if validation fails. 
         Defaults to True, raising an exception on failure.
     **kws: dict, 
-       Keyword arguments passed to :func:`gofast.core.utils.normalize_string`. 
+       Keyword arguments passed to :func:`fusionlab.core.utils.normalize_string`. 
     Returns
     -------
     function
@@ -3223,7 +3223,7 @@ def parameter_validator(
 
     Examples
     --------
-    >>> from gofast.utils.validator import parameter_validator
+    >>> from fusionlab.utils.validator import parameter_validator
     >>> validate_outlier_method = parameter_validator(
     ...  'outlier_method', ['z_score', 'iqr'])
     >>> outlier_method = "z_score"
@@ -3239,7 +3239,7 @@ def parameter_validator(
     Notes
     -----
     - The function leverages a custom utility function `normalize_string` 
-      from a module named `gofast.core.utils`. This utility is assumed to handle 
+      from a module named `fusionlab.core.utils`. This utility is assumed to handle 
       string normalization and matching based on the provided `match_method`.
     - If `raise_exception` is set to False and the input does not match any 
       target string, the input string is returned unchanged. This behavior 
@@ -3303,7 +3303,7 @@ def validate_distribution(
 
     Examples 
     ---------
-    >>> from gofast.utils.validator import validate_distribution
+    >>> from fusionlab.utils.validator import validate_distribution
     >>> validate_distribution("auto", elements=['positive', 'neutral', 'negative'])
     (0.1450318690603951, 0.5660028611331361, 0.2889652698064687)
     """
@@ -3385,7 +3385,7 @@ def validate_length_range(length_range, sorted_values=True, param_name=None):
         
     Examples 
     --------
-    >>> from gofast.utils.validator import validate_length_range
+    >>> from fusionlab.utils.validator import validate_length_range
     >>> validate_length_range ( (202, 25) )
     (25, 202)
     >>> validate_length_range ( (202,) )
@@ -3441,7 +3441,7 @@ def contains_nested_objects(lst, strict=False, allowed_types=None):
 
     Examples
     --------
-    >>> from gofast.utils.validator import contains_nested_objects
+    >>> from fusionlab.utils.validator import contains_nested_objects
     >>> example_list1 = [{1, 2}, [3, 4], {'key': 'value'}]
     >>> example_list2 = [1, 2, 3, [4]]
     >>> example_list3 = [1, 2, 3, 4]
@@ -3521,7 +3521,7 @@ def validate_nan_policy(nan_policy, *arrays, sample_weights=None):
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.utils.validator import validate_nan_policy
+    >>> from fusionlab.utils.validator import validate_nan_policy
     >>> y_true = np.array([1, np.nan, 3])
     >>> y_pred = np.array([1, 2, 3])
     >>> sample_weights = np.array([0.5, 0.5, 1.0])
@@ -3665,7 +3665,7 @@ def is_valid_policies(nan_policy, allowed_policies=None):
 
     Examples
     --------
-    >>> from gofast.utils.validator import is_valid_policies
+    >>> from fusionlab.utils.validator import is_valid_policies
     >>> is_valid_policies('omit')  # This should pass without an error.
     >>> is_valid_policies('ignore')  # This should raise a ValueError.
       
@@ -3719,7 +3719,7 @@ def validate_multioutput(value, extra=''):
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_multioutput
+    >>> from fusionlab.utils.validator import validate_multioutput
     >>> validate_multioutput('raw_values')
     'raw_values'
 
@@ -4018,7 +4018,7 @@ def check_classification_targets(
     --------
     Using the function with a single array of integer labels:
     
-    >>> from gofast.utils.validator import check_classification_targets
+    >>> from fusionlab.utils.validator import check_classification_targets
     >>> y = [1, 2, 3, 2, 1]
     >>> check_classification_targets(y)
     [array([1, 2, 3, 2, 1], dtype=object)]
@@ -4243,7 +4243,7 @@ def check_mixed_data_types(data ) -> bool:
         
     >>> import numpy as np 
     >>> import pandas as pd 
-    >>> from gofast.utils.validator import check_mixed_data_types
+    >>> from fusionlab.utils.validator import check_mixed_data_types
     >>> df = pd.DataFrame({'A': [1, 2, 3], 'B': ['a', 'b', 'c']})
     >>> print(check_mixed_data_types(df))
     True
@@ -4339,7 +4339,7 @@ def validate_dates(
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_dates
+    >>> from fusionlab.utils.validator import validate_dates
     >>> validate_dates(1999, 2001)
     (1999, 2001)
 
@@ -4508,7 +4508,7 @@ def validate_and_adjust_ranges(**kwargs):
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_and_adjust_ranges
+    >>> from fusionlab.utils.validator import validate_and_adjust_ranges
     >>> validate_and_adjust_ranges(lat_range=(34.00, 36.00), lon_range=(-118.50, -117.00))
     {'lat_range': (34.00, 36.00), 'lon_range': (-118.50, -117.00)}
 
@@ -4635,7 +4635,7 @@ def is_installed(module: str ) -> bool:
 
     Examples
     --------
-    >>> from gofast.utils.validator import is_installed 
+    >>> from fusionlab.utils.validator import is_installed 
     >>> print(is_installed("tensorflow"))
     True  # Output will be True if TensorFlow is installed, False otherwise.
     """
@@ -4793,7 +4793,7 @@ def assert_xy_in (
     ---------
     >>> import numpy as np 
     >>> import pandas as pd 
-    >>> from gofast.utils.validator import assert_xy_in 
+    >>> from fusionlab.utils.validator import assert_xy_in 
     >>> x, y = np.random.rand(7 ), np.arange (7 ) 
     >>> data = pd.DataFrame ({'x': x, 'y':y} ) 
     >>> assert_xy_in (x='x', y='y', data = data ) 
@@ -4981,7 +4981,7 @@ def validate_numeric(
 
     Examples
     --------
-    >>> from gofast.utils.validator import validate_numeric
+    >>> from fusionlab.utils.validator import validate_numeric
     >>> validate_numeric("42", convert_to='int')
     42
     >>> validate_numeric(np.array([3.14]), convert_to='float')
@@ -6112,7 +6112,7 @@ def is_frame(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.validator import is_frame
+    >>> from fusionlab.utils.validator import is_frame
 
     >>> df = pd.DataFrame({'A': [1,2,3]})
     >>> is_frame(df)
@@ -6802,7 +6802,7 @@ def build_series_if(
 
     Examples
     --------
-    >>> from gofast.utils.validator import build_series_if
+    >>> from fusionlab.utils.validator import build_series_if
     >>> data = [1, 2, 3]
     >>> build_series_if(data)
     0    1
@@ -7034,7 +7034,7 @@ def build_data_if(
     naming. Intended to standardize data structures for
     downstream analysis.
     
-    See more in :func:`gofast.utils.data_utils.build_df` for 
+    See more in :func:`fusionlab.utils.data_utils.build_df` for 
     documentation details. 
     
     """
@@ -7207,7 +7207,7 @@ def array_to_frame(
 
     Examples
     --------
-    >>> from gofast.utils.validator import array_to_frame
+    >>> from fusionlab.utils.validator import array_to_frame
     >>> from sklearn.datasets import load_iris
     >>> data = load_iris()
     >>> X = data.data
@@ -7278,8 +7278,8 @@ def array_to_frame2(
     
     Example
     ---------
-    >>> from gofast.datasets import fetch_data  
-    >>> from gofast.utils.validator import array_to_frame 
+    >>> from fusionlab.datasets import fetch_data  
+    >>> from fusionlab.utils.validator import array_to_frame 
     >>> data = fetch_data ('hlogs').frame 
     >>> array_to_frame (data.k.values , 
                         to_frame= True, columns =None, input_name= 'y',
@@ -7503,7 +7503,7 @@ def _assert_all_finite(
         f"{input_name} does not accept missing values encoded as NaN"
         " natively. Alternatively, it is possible to preprocess the data,"
         " for instance by using the imputer transformer like the ufunc"
-        " 'soft_imputer' in 'gofast.utils.mlutils.soft_imputer'."
+        " 'soft_imputer' in 'fusionlab.utils.mlutils.soft_imputer'."
         )
     
     xp, _ = get_namespace(X)

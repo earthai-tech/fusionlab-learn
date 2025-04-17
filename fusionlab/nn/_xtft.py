@@ -95,7 +95,7 @@ if KERAS_BACKEND:
     
 DEP_MSG = dependency_message('transformers') 
 
-@register_keras_serializable('gofast.nn.transformers', name="XTFT")
+@register_keras_serializable('fusionlab.nn.transformers', name="XTFT")
 @doc (
     key_improvements= dedent(_shared_docs['xtft_key_improvements']), 
     key_functions= dedent(_shared_docs['xtft_key_functions']), 
@@ -683,8 +683,8 @@ class XTFT(Model, NNLearner):
           
         See also:
         --------
-        gofast.nn.losses.combined_quantile_loss
-        gofast.nn.losses.combined_total_loss
+        fusionlab.nn.losses.combined_quantile_loss
+        fusionlab.nn.losses.combined_total_loss
         """
         # 1) If user explicitly provides a loss, respect that and skip defaults
         if loss is not None:
@@ -948,7 +948,7 @@ class XTFT(Model, NNLearner):
     ), 
     join='\n', 
 )
-@register_keras_serializable('gofast.nn.transformers', name="SuperXTFT")
+@register_keras_serializable('fusionlab.nn.transformers', name="SuperXTFT")
 class SuperXTFT(XTFT):
     """
     SuperXTFT: An enhanced version of XTFT with Variable Selection Networks (VSNs) 
@@ -1599,9 +1599,9 @@ Examples
 >>> import tensorflow as tf 
 >>> import pandas as pd
 >>> import numpy as np
->>> from gofast.nn.transformers import XTFT
->>> from gofast.nn.losses import combined_quantile_loss
->>> from gofast.nn.utils import generate_forecast
+>>> from fusionlab.nn.transformers import XTFT
+>>> from fusionlab.nn.losses import combined_quantile_loss
+>>> from fusionlab.nn.utils import generate_forecast
 >>> 
 >>> # Create a dummy training DataFrame with a date column,
 >>> # dynamic features "feat1", "feat2", static feature "stat1",
@@ -1716,7 +1716,7 @@ Out[10]: <keras.src.callbacks.History at 0x1c7a9114c10>
     
 See Also
 --------
-gofast.nn.tft.TemporalFusionTransformer : 
+fusionlab.nn.tft.TemporalFusionTransformer : 
     The original TFT model for comparison.
 MultiHeadAttention : Keras layer for multi-head attention.
 LSTM : Keras LSTM layer for sequence modeling.

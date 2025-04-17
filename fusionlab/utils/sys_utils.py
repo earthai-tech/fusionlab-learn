@@ -162,7 +162,7 @@ class BatchDataFrameBuilder:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import BatchDataFrameBuilder
+    >>> from fusionlab.utils.sys_utils import BatchDataFrameBuilder
     >>> # Suppose we have a large list of dictionaries
     >>> data = [
     ...     {'colA': i, 'colB': i**2} for i in range(10**6)
@@ -467,7 +467,7 @@ class WorkflowOptimizer:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import WorkflowOptimizer
+    >>> from fusionlab.utils.sys_utils import WorkflowOptimizer
     >>> import time
     >>> 
     >>> @WorkflowOptimizer(
@@ -706,7 +706,7 @@ def build_large_df(
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import build_large_df
+    >>> from fusionlab.utils.sys_utils import build_large_df
     >>> import numpy as np
 
     # Basic usage with 1M rows
@@ -740,8 +740,8 @@ def build_large_df(
     --------
     pd.DataFrame : Base DataFrame construction
     pd.concat : Chunk aggregation method
-    gofast.nn.utils.generate_forecast : Primary data source
-    gofast.utils.memory_optimizer.reduce_mem_usage : Detailed dtype optimization
+    fusionlab.nn.utils.generate_forecast : Primary data source
+    fusionlab.utils.memory_optimizer.reduce_mem_usage : Detailed dtype optimization
 
     References
     ----------
@@ -990,7 +990,7 @@ def get_cpu_usage(per_cpu: bool = False) -> Optional[float]:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_cpu_usage
+    >>> from fusionlab.utils.sys_utils import get_cpu_usage
     >>> get_cpu_usage()
     1.3
     >>> get_cpu_usage(per_cpu=True)
@@ -1033,7 +1033,7 @@ def get_memory_usage() -> Optional[Tuple[float, float, float]]:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_memory_usage
+    >>> from fusionlab.utils.sys_utils import get_memory_usage
     >>> total, used, available = get_memory_usage()
     >>> print(f"Total: {total} MB, Used: {used} MB, Available: {available} MB")
     Total: 8192 MB, Used: 4096 MB, Available: 4096 MB
@@ -1097,7 +1097,7 @@ def get_disk_usage(path: str = "/") -> Optional[Tuple[float, float, float]]:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_disk_usage
+    >>> from fusionlab.utils.sys_utils import get_disk_usage
     >>> total, used, free = get_disk_usage(path="/")
     >>> print(f"Total: {total} GB, Used: {used} GB, Free: {free} GB")
     Total: 256 GB, Used: 128 GB, Free: 128 GB
@@ -1152,7 +1152,7 @@ def is_gpu_available() -> bool:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import is_gpu_available
+    >>> from fusionlab.utils.sys_utils import is_gpu_available
     >>> is_gpu_available()
     True
 
@@ -1205,7 +1205,7 @@ def get_gpu_info() -> Optional[Dict[str, str]]:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_gpu_info
+    >>> from fusionlab.utils.sys_utils import get_gpu_info
     >>> gpu_info = get_gpu_info()
     >>> print(gpu_info)
     {'device_count': '1', 'device_name': 'NVIDIA Tesla T4', 
@@ -1264,7 +1264,7 @@ def system_uptime() -> str:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import system_uptime
+    >>> from fusionlab.utils.sys_utils import system_uptime
     >>> system_uptime()
     '2d:10h:33m:12s'
     
@@ -1320,7 +1320,7 @@ def is_port_open(port: int) -> bool:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import is_port_open
+    >>> from fusionlab.utils.sys_utils import is_port_open
     >>> is_port_open(8080)
     False
     
@@ -1374,7 +1374,7 @@ def environment_summary() -> Dict[str, str]:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import environment_summary
+    >>> from fusionlab.utils.sys_utils import environment_summary
     >>> env_info = environment_summary()
     >>> print(env_info)
     {'python_version': '3.9.5', 'os': 'Linux', 'os_version': '5.4.0-80-generic',
@@ -1479,7 +1479,7 @@ def manage_env_variable(
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import manage_env_variable
+    >>> from fusionlab.utils.sys_utils import manage_env_variable
     >>> manage_env_variable('HOME', action='get')
     '/home/username'
     >>> manage_env_variable('NEW_VAR', value='new_value', action='set')
@@ -1554,7 +1554,7 @@ def is_path_accessible(path: str, permissions: str = "r") -> bool:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import is_path_accessible
+    >>> from fusionlab.utils.sys_utils import is_path_accessible
     >>> is_path_accessible("/path/to/file", permissions="rw")
     True
 
@@ -1641,7 +1641,7 @@ def manage_file_lock(
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import manage_file_lock
+    >>> from fusionlab.utils.sys_utils import manage_file_lock
     >>> fd = manage_file_lock("/path/to/file", action="lock", blocking=True)
     >>> if fd:
     ...     print("File is locked.")
@@ -1706,7 +1706,7 @@ def get_system_info() -> Dict[str, str]:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_system_info
+    >>> from fusionlab.utils.sys_utils import get_system_info
     >>> get_system_info()
     {'os_name': 'Linux', 'os_version': '5.4.0-81-generic', 'python_version': '3.8.5', 
      'cpu_count': '8', 'gpu_available': 'True'}
@@ -1742,7 +1742,7 @@ def get_python_version() -> str:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_python_version
+    >>> from fusionlab.utils.sys_utils import get_python_version
     >>> get_python_version()
     '3.8.5'
 
@@ -1771,7 +1771,7 @@ def get_installed_packages() -> List[str]:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_installed_packages
+    >>> from fusionlab.utils.sys_utils import get_installed_packages
     >>> get_installed_packages()
     ['numpy==1.21.0', 'pandas==1.3.0', 'scikit-learn==0.24.2', ...]
 
@@ -1822,7 +1822,7 @@ def run_command(command: str, capture_output: bool = True) -> Optional[str]:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import run_command
+    >>> from fusionlab.utils.sys_utils import run_command
     >>> run_command("echo Hello World")
     'Hello World\n'
     
@@ -1863,7 +1863,7 @@ def create_temp_file(suffix: str = "", prefix: str = "tmp") -> str:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import create_temp_file
+    >>> from fusionlab.utils.sys_utils import create_temp_file
     >>> temp_file = create_temp_file()
     >>> print(temp_file)
     '/tmp/tmpabcd1234'
@@ -1898,7 +1898,7 @@ def create_temp_dir(prefix: str = "tmp") -> str:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import create_temp_dir
+    >>> from fusionlab.utils.sys_utils import create_temp_dir
     >>> temp_dir = create_temp_dir()
     >>> print(temp_dir)
     '/tmp/tmpabcd1234'
@@ -1931,7 +1931,7 @@ def clean_temp_files(directory: Optional[str] = None) -> None:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import clean_temp_files
+    >>> from fusionlab.utils.sys_utils import clean_temp_files
     >>> clean_temp_files("/path/to/temp/dir")
     
     """
@@ -1964,7 +1964,7 @@ def is_package_installed(package_name: str) -> bool:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import is_package_installed
+    >>> from fusionlab.utils.sys_utils import is_package_installed
     >>> is_package_installed("numpy")
     True
     
@@ -2031,7 +2031,7 @@ def manage_temp(
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import manage_temp
+    >>> from fusionlab.utils.sys_utils import manage_temp
     >>> temp_file = manage_temp(action="create_file")
     >>> print(temp_file)
     '/tmp/tmpabcd1234'
@@ -2096,7 +2096,7 @@ def check_port_in_use(port: int) -> bool:
     
     Examples
     --------
-    >>> from gofast.utils.sys_utils import check_port_in_use
+    >>> from fusionlab.utils.sys_utils import check_port_in_use
     >>> check_port_in_use(8080)
     False
     
@@ -2122,7 +2122,7 @@ def get_uptime() -> str:
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import get_uptime
+    >>> from fusionlab.utils.sys_utils import get_uptime
     >>> get_uptime()
     '2d:5h:34m:12s'
     
@@ -2175,7 +2175,7 @@ def parallelize_jobs(
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import parallelize_jobs
+    >>> from fusionlab.utils.sys_utils import parallelize_jobs
     >>> def greet(name, greeting='Hello'):
     ...     return f"{greeting}, {name}!"
     >>> tasks = [
@@ -2256,8 +2256,8 @@ def find_by_regex (o , pattern,  func = re.match, **kws ):
         
     Example
     --------
-    >>> from gofast.utils.sys_utils import find_by_regex
-    >>> from gofast.datasets import load_hlogs 
+    >>> from fusionlab.utils.sys_utils import find_by_regex
+    >>> from fusionlab.datasets import load_hlogs 
     >>> X0, _= load_hlogs (as_frame =True )
     >>> columns = X0.columns 
     >>> str_columns =','.join (columns) 
@@ -2325,7 +2325,7 @@ def find_similar_string(
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import find_similar_string
+    >>> from fusionlab.utils.sys_utils import find_similar_string
     >>> container = {'dipole': 1, 'quadrupole': 2}
     >>> find_similar_string('dipole_', container)
     'dipole'
@@ -2429,7 +2429,7 @@ def represent_callable(
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import represent_callable
+    >>> from fusionlab.utils.sys_utils import represent_callable
     >>> def example_function(a, b=2):
     ...     pass
     >>> represent_callable(example_function)
@@ -2526,7 +2526,7 @@ def safe_getattr(obj: Any, name: str, default_value: Optional[Any] = None) -> An
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import safe_getattr
+    >>> from fusionlab.utils.sys_utils import safe_getattr
     >>> class MyClass:
     ...     def __init__(self, a, b):
     ...         self.a = a
@@ -2760,7 +2760,7 @@ def safe_optimize(
 
     Examples
     --------
-    >>> from gofast.utils.sys_utils import safe_optimize
+    >>> from fusionlab.utils.sys_utils import safe_optimize
 
     >>> @safe_optimize(
     ...     parallelize=True,

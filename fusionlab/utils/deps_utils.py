@@ -238,7 +238,7 @@ def ensure_module_installed(
 
     Examples
     --------
-    >>> from gofast.utils.deps_utils import ensure_module_installed
+    >>> from fusionlab.utils.deps_utils import ensure_module_installed
 
     >>> # Ensure that 'numpy' is installed
     >>> ensure_module_installed("numpy")
@@ -407,7 +407,7 @@ def install_package(
 
     Examples
     --------
-    >>> from gofast.utils.deps_utils import install_package
+    >>> from fusionlab.utils.deps_utils import install_package
     >>> # Install requests with no version constraint, default pip:
     >>> install_package('requests', verbose=True)
 
@@ -615,7 +615,7 @@ def install_pkg(
     Examples
     --------
     Install a package using pip without version specification:
-        >>> from gofast.utils.deps_utils import install_package
+        >>> from fusionlab.utils.deps_utils import install_package
         >>> install_package('requests', verbose=True)
 
     Install a specific version of a package using conda:
@@ -776,7 +776,7 @@ def ensure_pkg(
 
     Examples
     --------
-    >>> from gofast.utils.deps_utils import ensure_pkg
+    >>> from fusionlab.utils.deps_utils import ensure_pkg
     >>> @ensure_pkg("numpy", auto_install=True)
     ... def use_numpy():
     ...     import numpy as np
@@ -989,7 +989,7 @@ def ensure_pkgs(
 
     Examples
     --------
-    >>> from gofast.utils.deps_utils import ensure_pkgs
+    >>> from fusionlab.utils.deps_utils import ensure_pkgs
     >>> @ensure_pkgs("numpy, pandas", auto_install=True)
     ... def use_numpy_pandas():
     ...     import numpy as np

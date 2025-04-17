@@ -648,7 +648,7 @@ plot_results()
 
 See Also
 --------
-- :class:`gofast.nn.optimize.NNLearner` : Base class for neural network learners.
+- :class:`fusionlab.nn.optimize.NNLearner` : Base class for neural network learners.
 - :func:`keras.models.Model.compile` : Configures the model for training.
 - :func:`keras.models.Model.fit` : Trains the model for a fixed number of epochs.
 
@@ -666,7 +666,7 @@ Examples
 --------
 >>> import numpy as np
 >>> import pandas as pd
->>> from gofast.nn.optimize import QPSOOptimizer
+>>> from fusionlab.nn.optimize import QPSOOptimizer
 >>> 
 >>> # Define a simple Keras model or use a pre-defined one
 >>> def create_model(head_size, num_heads, ff_dim, num_trans_blocks, mlp_units,
@@ -733,7 +733,7 @@ Notes
 
 See Also
 --------
-- :class:`gofast.nn.optimize.NNLearner` : Base class for neural network learners.
+- :class:`fusionlab.nn.optimize.NNLearner` : Base class for neural network learners.
 - :func:`keras.models.Model.compile` : Configures the model for training.
 - :func:`keras.models.Model.fit` : Trains the model for a fixed number of epochs.
 

@@ -110,7 +110,7 @@ _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_shared_nn_params), 
 )
 
-@register_keras_serializable('gofast.nn.components', name="Activation")
+@register_keras_serializable('fusionlab.nn.components', name="Activation")
 class Activation(Layer):
     """
     Custom Activation layer that wraps a Keras activation function
@@ -179,7 +179,7 @@ class Activation(Layer):
 
 # -------------------- TFT components ----------------------------------------
 
-@register_keras_serializable('gofast.nn.components', name='PositionalEncoding')
+@register_keras_serializable('fusionlab.nn.components', name='PositionalEncoding')
 class PositionalEncoding(Layer, NNLearner):
     r"""
     Positional Encoding layer that incorporates temporal 
@@ -223,7 +223,7 @@ class PositionalEncoding(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import PositionalEncoding
+    >>> from fusionlab.nn.components import PositionalEncoding
     >>> import tensorflow as tf
     >>> # Create random input of shape
     ... # (batch_size, time_steps, feature_dim)
@@ -325,7 +325,7 @@ class PositionalEncoding(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', name="GatedResidualNetwork"
+    'fusionlab.nn.components', name="GatedResidualNetwork"
 )
 class GatedResidualNetwork(Layer, NNLearner):
     r"""
@@ -399,7 +399,7 @@ class GatedResidualNetwork(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import GatedResidualNetwork
+    >>> from fusionlab.nn.components import GatedResidualNetwork
     >>> import tensorflow as tf
     >>> # Create a random input of shape
     ... # (batch_size, time_steps, input_dim)
@@ -627,7 +627,7 @@ class GatedResidualNetwork(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="StaticEnrichmentLayer"
  )
 class StaticEnrichmentLayer(Layer, NNLearner):
@@ -695,7 +695,7 @@ class StaticEnrichmentLayer(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import StaticEnrichmentLayer
+    >>> from fusionlab.nn.components import StaticEnrichmentLayer
     >>> import tensorflow as tf
     >>> # Define static context of shape (batch_size, units)
     ... # and temporal features of shape
@@ -881,7 +881,7 @@ class StaticEnrichmentLayer(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="TemporalAttentionLayer"
 )
 class TemporalAttentionLayer(Layer, NNLearner):
@@ -959,7 +959,7 @@ class TemporalAttentionLayer(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import TemporalAttentionLayer
+    >>> from fusionlab.nn.components import TemporalAttentionLayer
     >>> import tensorflow as tf
     >>> # Create random inputs
     ... # shape (batch_size, time_steps, units)
@@ -1217,7 +1217,7 @@ class TemporalAttentionLayer(Layer, NNLearner):
 # -------------------- XTFT components ----------------------------------------
 
 @register_keras_serializable(
-    'gofast.nn.components', name="LearnedNormalization"
+    'fusionlab.nn.components', name="LearnedNormalization"
 )
 class LearnedNormalization(Layer, NNLearner):
     r"""
@@ -1259,7 +1259,7 @@ class LearnedNormalization(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import LearnedNormalization
+    >>> from fusionlab.nn.components import LearnedNormalization
     >>> import tensorflow as tf
     >>> # Create input of shape (batch_size, features)
     >>> x = tf.random.normal((32, 10))
@@ -1366,7 +1366,7 @@ class LearnedNormalization(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', name="MultiModalEmbedding"
+    'fusionlab.nn.components', name="MultiModalEmbedding"
 )
 class MultiModalEmbedding(Layer, NNLearner):
     r"""
@@ -1415,7 +1415,7 @@ class MultiModalEmbedding(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import MultiModalEmbedding
+    >>> from fusionlab.nn.components import MultiModalEmbedding
     >>> import tensorflow as tf
     >>> # Suppose we have two modalities:
     ... #   dynamic_modality  : (batch, time, dyn_dim)
@@ -1545,7 +1545,7 @@ class MultiModalEmbedding(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', name="HierarchicalAttention"
+    'fusionlab.nn.components', name="HierarchicalAttention"
 )
 class HierarchicalAttention(Layer, NNLearner):
     r"""
@@ -1600,7 +1600,7 @@ class HierarchicalAttention(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import HierarchicalAttention
+    >>> from fusionlab.nn.components import HierarchicalAttention
     >>> import tensorflow as tf
     >>> # Suppose short_term and long_term have
     ... # shape (batch_size, time_steps, features).
@@ -1742,7 +1742,7 @@ class HierarchicalAttention(Layer, NNLearner):
         return cls(**config)
 
 @register_keras_serializable(
-    'gofast.nn.components', name="CrossAttention"
+    'fusionlab.nn.components', name="CrossAttention"
 )
 class CrossAttention(Layer, NNLearner):
     r"""
@@ -1796,7 +1796,7 @@ class CrossAttention(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import CrossAttention
+    >>> from fusionlab.nn.components import CrossAttention
     >>> import tensorflow as tf
     >>> # Two sequences of shape (batch_size, time_steps, features)
     >>> source1 = tf.random.normal((32, 10, 64))
@@ -1919,7 +1919,7 @@ class CrossAttention(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="MemoryAugmentedAttention"
 )
 class MemoryAugmentedAttention(Layer, NNLearner):
@@ -1973,7 +1973,7 @@ class MemoryAugmentedAttention(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import MemoryAugmentedAttention
+    >>> from fusionlab.nn.components import MemoryAugmentedAttention
     >>> import tensorflow as tf
     >>> # Suppose we have an input of shape (batch_size, time_steps, units)
     >>> x = tf.random.normal((32, 10, 64))
@@ -2113,7 +2113,7 @@ class MemoryAugmentedAttention(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="AdaptiveQuantileLoss"
 )
 class AdaptiveQuantileLoss(Loss, NNLearner):
@@ -2162,7 +2162,7 @@ class AdaptiveQuantileLoss(Loss, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import AdaptiveQuantileLoss
+    >>> from fusionlab.nn.components import AdaptiveQuantileLoss
     >>> import tensorflow as tf
     >>> # Suppose y_true is (B, H, O)
     ... # y_pred is (B, H, Q, O)
@@ -2276,7 +2276,7 @@ class AdaptiveQuantileLoss(Loss, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components',
+    'fusionlab.nn.components',
     name="AnomalyLoss"
 )
 class AnomalyLoss(Loss, NNLearner):
@@ -2320,7 +2320,7 @@ class AnomalyLoss(Loss, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import AnomalyLoss
+    >>> from fusionlab.nn.components import AnomalyLoss
     >>> import tensorflow as tf
     >>> # Suppose anomaly_scores is (B, H, D)
     >>> anomaly_scores = tf.random.normal((32, 10, 8))
@@ -2410,7 +2410,7 @@ class AnomalyLoss(Loss, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="MultiObjectiveLoss"
 )
 class MultiObjectiveLoss(Loss, NNLearner):
@@ -2461,7 +2461,7 @@ class MultiObjectiveLoss(Loss, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import (
+    >>> from fusionlab.nn.components import (
     ...     MultiObjectiveLoss,
     ...     AdaptiveQuantileLoss,
     ...     AnomalyLoss
@@ -2596,7 +2596,7 @@ class MultiObjectiveLoss(Loss, NNLearner):
         )
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="VariableSelectionNetwork"
 )
 class VariableSelectionNetwork(Layer, NNLearner):
@@ -2676,7 +2676,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import VariableSelectionNetwork
+    >>> from fusionlab.nn.components import VariableSelectionNetwork
     >>> vsn = VariableSelectionNetwork(
     ...     num_inputs=5,
     ...     units=32,
@@ -2903,7 +2903,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
         return cls(**config)
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="ExplainableAttention"
 )
 class ExplainableAttention(Layer, NNLearner):
@@ -2949,7 +2949,7 @@ class ExplainableAttention(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import ExplainableAttention
+    >>> from fusionlab.nn.components import ExplainableAttention
     >>> import tensorflow as tf
     >>> # Suppose we have input of shape (batch_size, time_steps, features)
     >>> x = tf.random.normal((32, 10, 64))
@@ -3063,7 +3063,7 @@ class ExplainableAttention(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="MultiDecoder"
  )
 class MultiDecoder(Layer, NNLearner):
@@ -3106,7 +3106,7 @@ class MultiDecoder(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import MultiDecoder
+    >>> from fusionlab.nn.components import MultiDecoder
     >>> import tensorflow as tf
     >>> # Input of shape (batch_size, feature_dim)
     >>> x = tf.random.normal((32, 128))
@@ -3216,7 +3216,7 @@ class MultiDecoder(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="MultiResolutionAttentionFusion"
 )
 class MultiResolutionAttentionFusion(Layer, NNLearner):
@@ -3258,7 +3258,7 @@ class MultiResolutionAttentionFusion(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import MultiResolutionAttentionFusion
+    >>> from fusionlab.nn.components import MultiResolutionAttentionFusion
     >>> import tensorflow as tf
     >>> x = tf.random.normal((32, 10, 64))
     >>> # Instantiate multi-resolution attention
@@ -3372,7 +3372,7 @@ class MultiResolutionAttentionFusion(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components',
+    'fusionlab.nn.components',
     name="DynamicTimeWindow"
 )
 class DynamicTimeWindow(Layer, NNLearner):
@@ -3412,7 +3412,7 @@ class DynamicTimeWindow(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import DynamicTimeWindow
+    >>> from fusionlab.nn.components import DynamicTimeWindow
     >>> import tensorflow as tf
     >>> x = tf.random.normal((32, 50, 64))
     >>> # Keep last 10 time steps
@@ -3507,7 +3507,7 @@ class DynamicTimeWindow(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name="QuantileDistributionModeling"
 )
 class QuantileDistributionModeling(Layer, NNLearner):
@@ -3554,7 +3554,7 @@ class QuantileDistributionModeling(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import QuantileDistributionModeling
+    >>> from fusionlab.nn.components import QuantileDistributionModeling
     >>> import tensorflow as tf
     >>> x = tf.random.normal((32, 10, 64))  # (B, H, O)
     >>> # Instantiate with quantiles
@@ -3683,7 +3683,7 @@ class QuantileDistributionModeling(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name='MultiScaleLSTM'
 )
 class MultiScaleLSTM(Layer, NNLearner):
@@ -3734,7 +3734,7 @@ class MultiScaleLSTM(Layer, NNLearner):
 
     Examples
     --------
-    >>> from gofast.nn.components import MultiScaleLSTM
+    >>> from fusionlab.nn.components import MultiScaleLSTM
     >>> import tensorflow as tf
     >>> x = tf.random.normal((32, 20, 16))  # (B, T, D)
     >>> # Instantiating a multi-scale LSTM
@@ -3876,7 +3876,7 @@ class MultiScaleLSTM(Layer, NNLearner):
 # -----functions --------------------------------------------------------------
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name='aggregate_multiscale'
 )
 def aggregate_multiscale(lstm_output, mode="auto"):
@@ -3984,7 +3984,7 @@ def aggregate_multiscale(lstm_output, mode="auto"):
     
     Examples
     --------
-    >>> from gofast.nn.components import aggregate_multiscale
+    >>> from fusionlab.nn.components import aggregate_multiscale
     >>> import tensorflow as tf
     
     # Three scales with different time dimensions
@@ -4087,7 +4087,7 @@ def aggregate_multiscale(lstm_output, mode="auto"):
     return lstm_features 
 
 @register_keras_serializable(
-    'gofast.nn.components', 
+    'fusionlab.nn.components', 
     name='aggregate_time_window_output'
 )
 def aggregate_time_window_output(
@@ -4152,7 +4152,7 @@ def aggregate_time_window_output(
 
     Examples
     --------
-    >>> from gofast.nn.components import aggregate_time_window_output
+    >>> from fusionlab.nn.components import aggregate_time_window_output
     >>> import tensorflow as tf
     >>> # Create a dummy tensor with shape (2, 3, 4)
     >>> dummy = tf.random.uniform((2, 3, 4))

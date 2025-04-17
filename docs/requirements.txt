@@ -1,0 +1,35 @@
+# -----------------------------------------------------
+# Requirements for building fusionlab documentation & development
+# -----------------------------------------------------
+
+# Core Dependencies (for running fusionlab code)
+# ---------------------------------------------
+numpy>=1.20, <2 # Used throughout for numerical operations
+pandas>=1.3 # Used for data manipulation and structures
+scipy>=1.7 # Used in some ts_utils (e.g., stats)
+scikit-learn>=1.0 # Used for preprocessing (scalers), metrics, model_selection
+statsmodels>=0.13 # Used for ts_utils analysis (ACF/PACF, Decomp, Tests)
+matplotlib>=3.5 # Used for visualization utilities and examples
+joblib>=1.1 # Used for saving/loading scalers, models
+
+# Neural Network Backend
+# ----------------------
+# FusionLab currently relies heavily on TensorFlow/Keras.
+tensorflow>=2.8,<2.16 # Specify a compatible range
+
+# Documentation Tools (Sphinx & Extensions)
+# -----------------------------------------
+sphinx>=4.0,<8.0 # Core documentation generator
+furo # The chosen HTML theme
+sphinx-copybutton # Adds copy buttons to code blocks
+myst-parser 
+sphinx-gallery # To automatically generate example galleries (optional)
+sphinx-issues # To link to GitHub issues (optional)
+sphinx-prompt # For nicely formatted shell examples (optional)
+sphinx-design # For advanced layouts, grids, cards etc.
+
+# Optional/Development Tools
+# --------------------------
+keras-tuner # Required for hyperparameter tuning utilities (forecast_tuner)
+pytest # For running automated tests
+flake8 # For code linting/style checks

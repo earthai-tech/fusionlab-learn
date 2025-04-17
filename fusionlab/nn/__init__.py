@@ -69,6 +69,12 @@ if KERAS_BACKEND:
         Hyperband, PBTTrainer, base_tuning, custom_loss, deep_cv_tuning, 
         fair_neural_tuning, find_best_lr, lstm_ts_tuner, robust_tuning
     )
+    from .transformers import ( 
+        TemporalFusionTransformer, 
+        # NTemporalFusionTransformer
+        TFT, XTFT, SuperXTFT
+        )
+    
     __all__ = [
         "plot_history",
         "base_tuning",
@@ -76,28 +82,16 @@ if KERAS_BACKEND:
         "build_mlp_model",
         "fair_neural_tuning",
         "deep_cv_tuning",
-        "train_and_evaluate2",
-        "train_and_evaluate",
         "Hyperband",
         'PBTTrainer',
         "custom_loss",
         "train_epoch",
-        "calculate_validation_loss",
-        "data_generator",
-        "evaluate_model",
-        "train_model",
-        "create_lstm_model",
-        "create_cnn_model",
-        "create_autoencoder_model",
-        "create_attention_model",
-        "plot_errors",
-        "plot_predictions",
         "find_best_lr",
-        "create_sequences",
-        "make_future_predictions",
-        "build_lstm_model",
         "lstm_ts_tuner",
         "cross_validate_lstm",
+        "TemporalFusionTransformer", 
+        # NTemporalFusionTransformer
+        "TFT", "XTFT", "SuperXTFT"
     ]
 
 
