@@ -7,14 +7,15 @@
 # FusionLab 🔥🧪: Igniting Next-Gen Fusion Models
 
 ### _A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_
-
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
-[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/)
-[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest)](https://fusionlab.readthedocs.io/en/latest/?badge=latest) ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
+
+[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest&style=flat-square)](https://fusionlab.readthedocs.io/en/latest/?badge=latest)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/python-package-conda.yml?branch=main&style=flat-square)](https://github.com/earthai-tech/fusionlab/actions/workflows/python-package-conda.yml)
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) ---
+<!-- [![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/) -->
+
 
 **FusionLab** provides a flexible and extensible framework in Python
 for working with advanced time-series forecasting models. It focuses
@@ -36,13 +37,13 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
     * Specialized Attention Layers (Temporal, Cross, Hierarchical, Memory-Augmented)
     * Multi-Scale LSTMs & Multi-Resolution Fusion
     * Learned Normalization, Positional Encoding
-    * And more... (See :doc:`Components Guide <user_guide/components>`)
+
 * 🚀 **Advanced Architectures Implemented:**
     * :class:`~fusionlab.nn.TemporalFusionTransformer`: A flexible implementation of the standard TFT.
     * :class:`~fusionlab.nn.NTemporalFusionTransformer`: A variant requiring static/dynamic inputs (point forecasts only currently).
     * :class:`~fusionlab.nn.XTFT`: High-capacity *Extreme Temporal Fusion X* with advanced attention, multi-scale processing, and anomaly detection features.
     * :class:`~fusionlab.nn.SuperXTFT`: An experimental enhancement of XTFT with input VSNs (currently deprecated).
-    * *(Others like `TFT` from `_adj_tft` if applicable)*
+
 * 🔬 **Integrated Anomaly Detection:** XTFT includes strategies for
     feature-based or prediction-based anomaly score calculation and
     integration into the loss.
@@ -53,8 +54,7 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
     * Generating and visualizing forecasts (`generate_forecast`, `visualize_forecasts`).
     * Hyperparameter tuning using Keras Tuner (`forecast_tuner`).
 * ⚙️ **TensorFlow Backend:** Currently built on TensorFlow/Keras, leveraging its
-    ecosystem. *(Future compatibility with other backends like PyTorch/JAX
-    is a design goal but not yet implemented).*
+    ecosystem. 
 
 
 ---
