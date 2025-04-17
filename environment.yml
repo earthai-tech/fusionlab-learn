@@ -1,31 +1,50 @@
-name: gofast-0.1.0
+# Conda environment configuration for fusionlab
+# Use this file to create an environment with:
+# conda env create -f environment.yml
+# Or update an existing environment with:
+# conda env update -f environment.yml --prune
+name: fusionlab
+
 channels:
-  - conda-forge
+  - conda-forge # Prioritize conda-forge for many data science packages
   - defaults
+
 dependencies:
-  - python=3.10.*  # Use Python 3.10 and newer versions
-  - setuptools
-  - scikit-learn>=1.1.2
-  - cython>=0.29.33
-  - h5py>=3.2.0
-  - joblib>=1.2.0
-  - matplotlib>=3.5.2
-  - numpy<2.0
-  - pandas<2.0
-  - scipy>=1.9.0
-  - seaborn>=0.12.0
-  - sqlalchemy
-  - openpyxl>=3.0.3
-  - pyproj>=3.3.0
-  - pyyaml>=5.0.0
-  - pytables>=3.6.1
-  - threadpoolctl>=3.1.0
-  - tqdm>=4.64.1
-  - click>=8.0.4
-  - statsmodels
-  - docutils>=0.18.1
-  - tensorflow>=2.15.0
-  - geopandas
-  - lifelines 
-  - psutil
-  - pytest
+  # --- Core Requirements ---
+  - python=3.10.* # Specify Python version
+  - setuptools          # Standard packaging utility
+  - pip                 # Needed for installing packages not on conda channels
+
+  # --- Numerical & Data Handling ---
+  - numpy<2.0           # Core numerical library (pinned below 2.0 due to major changes)
+  - pandas>=1.3,<2.2     # Data manipulation (allowing Pandas 2.x)
+  - scipy>=1.7          # Scientific computing utilities
+  - cython>=0.29        # Often needed for building other packages
+
+  # --- Machine Learning & Stats ---
+  - scikit-learn>=1.1   # Core ML tools (preprocessing, model selection)
+  - statsmodels>=0.13   # Time series analysis tools (ACF, Decomp, Tests)
+
+  # --- Neural Network Backend ---
+  - tensorflow>=2.10,<2.16 # TF/Keras backend (adjust range as needed)
+                          # Note: Installs CPU version by default.
+                          # For GPU, manual CUDA setup or specific conda packages might be needed.
+  - keras-tuner         # For hyperparameter tuning (forecast_tuner)
+  - h5py>=3.2           # For saving Keras models in HDF5 format
+
+  # --- Utilities & Plotting ---
+  - joblib>=1.2         # For saving/loading scalers/models
+  - matplotlib>=3.5     # For plotting utilities and examples
+  - seaborn>=0.12       # Statistical plotting (optional, for examples/analysis)
+  - tqdm>=4.64          # Progress bars
+  - threadpoolctl>=3.1  # Used by scikit-learn etc.
+
+  # --- Development & Testing ---
+  - pytest              # For running tests
+
+  # --- Pip Dependencies (for packages not on conda channels) ---
+  - pip:
+    # Add 'gofast' here if it's not available via conda channels
+    # - gofast>=...
+    # Add any other pip-only dependencies here
+    #- <other-pip-package>

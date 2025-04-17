@@ -8,6 +8,10 @@ Available Models
 series forecasting models. This section details the main model
 classes available, their characteristics, and typical use cases.
 
+.. raw:: html
+
+    <hr>
+    
 TemporalFusionTransformer
 --------------------------
 
@@ -186,7 +190,10 @@ to handle diverse inputs, capture temporal patterns, incorporate
 static context, and generate interpretable multi-horizon forecasts
 with uncertainty estimates.
 
+.. raw:: html
 
+    <hr>
+    
 NTemporalFusionTransformer
 ------------------------------
 
@@ -277,7 +284,10 @@ description are:
 Essentially, it implements the standard TFT flow but is specialized
 for a scenario limited to static/past inputs and point predictions.
 
+.. raw:: html
 
+    <hr>
+    
 XTFT (Extreme Temporal Fusion Transformer)
 ---------------------------------------------
 
@@ -426,7 +436,9 @@ flexible architecture capable of handling very complex time series
 dynamics and incorporating domain-specific features like anomaly
 detection.
 
+.. raw:: html
 
+    <hr>
 
 SuperXTFT
 -----------

@@ -1,0 +1,185 @@
+/* custom.css for FusionLab Documentation */
+
+/* 1. Define Brand Colors (Optional but good practice) */
+:root {
+    --fusionlab-blue: #121EAF;
+    --fusionlab-orange: #F4870F;
+    --fusionlab-blue-light: #5465FF; /* Lighter blue for dark mode brand / light mode hover */
+    --fusionlab-blue-dark: #0e188c;  /* Darker blue */
+    --fusionlab-blue-bg-light: #e8eaff; /* Very light blue for backgrounds */
+    --fusionlab-orange-bg-light: #fff0e1; /* Very light orange for backgrounds */
+
+    /* Define a subtle border color */
+    --fusionlab-border-color: #d1d5db; /* A neutral light gray */
+    --fusionlab-dark-border-color: #444449; /* A subtle dark gray for dark mode */
+
+    /* Define link hover colors */
+    --fusionlab-link-hover-light: #0b147d; /* Slightly darker blue for light hover */
+    --fusionlab-link-hover-dark: #8a9aff;  /* Even lighter blue for dark hover */
+}
+
+/* 2. Furo Variable Overrides (Light Mode / Defaults) */
+:root {
+    /* --- Brand --- */
+    --color-brand-primary: var(--fusionlab-blue);
+    --color-brand-content: var(--fusionlab-blue);
+
+    /* --- Sidebar --- */
+    --color-sidebar-background: #f8f9fa;
+    --color-sidebar-background-hover: var(--fusionlab-blue-bg-light);
+    --color-sidebar-link-text: #303030;
+    --color-sidebar-link-text--top-level: var(--fusionlab-blue);
+
+    /* --- Admonitions (Light) --- */
+    --color-admonition-note-background: var(--fusionlab-blue-bg-light);
+    --color-admonition-note-border: var(--fusionlab-blue);
+    --color-admonition-warning-background: var(--fusionlab-orange-bg-light);
+    --color-admonition-warning-border: var(--fusionlab-orange);
+    /* You can add danger, tip, important etc. similarly */
+
+    /* --- Other Light --- */
+    --color-highlight-on-target: var(--fusionlab-blue-bg-light);
+    --color-background-border: var(--fusionlab-border-color); /* Use our defined border */
+    --color-foreground-border: var(--fusionlab-border-color);
+}
+
+/* 3. Furo Variable Overrides (Dark Mode) */
+/* Use Furo's data attribute selector for dark theme */
+html[data-theme="dark"] {
+    /* --- Brand (Dark) --- */
+    --color-brand-primary: var(--fusionlab-blue-light); /* Use the lighter blue */
+    --color-brand-content: var(--fusionlab-blue-light);
+
+    /* --- Sidebar (Dark) --- */
+    /* Furo's defaults are often good, but you can override: */
+    /* --color-sidebar-background: #1c1c1e; */
+    /* --color-sidebar-background-hover: #303033; */
+    /* --color-sidebar-link-text: #cccccc; */
+    --color-sidebar-link-text--top-level: var(--fusionlab-blue-light); /* Make top level stand out */
+
+    /* --- Admonitions (Dark) --- */
+    --color-admonition-note-background: rgba(84, 101, 255, 0.15); /* Transparent blue */
+    --color-admonition-note-border: var(--fusionlab-blue-light);
+    --color-admonition-warning-background: rgba(244, 135, 15, 0.15); /* Transparent orange */
+    --color-admonition-warning-border: var(--fusionlab-orange);
+
+    /* --- Other Dark --- */
+    --color-highlight-on-target: rgba(84, 101, 255, 0.2);
+    --color-background-border: var(--fusionlab-dark-border-color); /* Use darker border */
+    --color-foreground-border: var(--fusionlab-dark-border-color);
+}
+
+
+/* 4. Other Custom Styles (Tables, Headings, Links etc.) */
+
+/* Link hover effects for light and dark modes */
+a:hover,
+a:focus {
+  color: var(--fusionlab-link-hover-light);
+  text-decoration: underline;
+}
+html[data-theme="dark"] a:hover,
+html[data-theme="dark"] a:focus {
+    color: var(--fusionlab-link-hover-dark);
+}
+
+/* --- Improved Table Styling --- */
+table.docutils,
+table.dataframe {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1.5em;
+    margin-bottom: 1.5em;
+    border: 1px solid var(--color-background-border); /* Use theme border color */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    font-size: 0.9em;
+}
+
+table.docutils th,
+table.dataframe th {
+    background-color: var(--color-background-secondary); /* Use theme secondary bg */
+    border: 1px solid var(--color-background-border);
+    border-bottom-width: 2px;
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--color-foreground-primary);
+}
+/* Specific dark mode header background if needed */
+html[data-theme="dark"] table.docutils th,
+html[data-theme="dark"] table.dataframe th {
+     background-color: #2a2a2e; /* Slightly lighter than default dark bg */
+}
+
+table.docutils td,
+table.dataframe td {
+    border: 1px solid var(--color-background-border);
+    padding: 10px 14px;
+    vertical-align: top;
+    line-height: 1.5;
+}
+
+/* Zebra striping for tables */
+table.docutils tbody tr:nth-child(odd),
+table.dataframe tbody tr:nth-child(odd) {
+    background-color: var(--color-background-secondary);
+}
+/* Hover effect for table rows */
+table.docutils tbody tr:hover,
+table.dataframe tbody tr:hover {
+    background-color: var(--fusionlab-blue-bg-light); /* Light blue tint */
+}
+html[data-theme="dark"] table.docutils tbody tr:hover,
+html[data-theme="dark"] table.dataframe tbody tr:hover {
+    background-color: rgba(84, 101, 255, 0.1); /* Darker blue tint */
+}
+
+/* --- Heading Styling --- */
+h1 {
+    border-bottom: 2px solid var(--color-brand-primary); /* Use brand color */
+    padding-bottom: 0.4em;
+    margin-bottom: 1em;
+}
+h2 {
+    border-bottom: 1px solid var(--color-foreground-border); /* Use theme border */
+    padding-bottom: 0.3em;
+    margin-top: 2em;
+}
+
+/* --- Code Block Styling --- */
+div.highlight,
+pre {
+    border: 1px solid var(--color-background-border); /* Use theme border */
+    border-radius: 4px;
+    padding: 0.8em 1em;
+}
+/* Adjust sphinx-copybutton appearance */
+button.copybtn {
+    background-color: var(--color-background-secondary);
+    border: 1px solid var(--color-background-border);
+    color: var(--color-foreground-muted);
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+button.copybtn:hover {
+    background-color: var(--fusionlab-blue-bg-light) !important;
+    border-color: var(--fusionlab-blue);
+    color: var(--fusionlab-blue-dark);
+}
+html[data-theme="dark"] button.copybtn:hover {
+    background-color: rgba(84, 101, 255, 0.15) !important;
+    border-color: var(--fusionlab-blue-light);
+    color: var(--fusionlab-blue-light);
+}
+
+/* --- Other Enhancements --- */
+/* Make definition list terms bolder */
+dl.field-list > dt,
+dl.option-list > dt {
+    font-weight: 600;
+}
+/* Improve spacing for definition lists (like parameters) */
+dl.field-list dd,
+dl.option-list dd {
+    margin-left: 1.5em;
+    margin-bottom: 0.8em;
+}

@@ -139,8 +139,10 @@ class KerasDependencies:
             'get_static_value':('tensorflow', 'get_static_value'),
             'equal': ('tensorflow', 'equal'), 
             'debugging': ('tensorflow', 'debugging'), 
-            'assert_equal': ('tensorflow', 'assert_equal')
+            'assert_equal': ('tensorflow', 'assert_equal'), 
             # 'constant': ('tensorflow', 'constant')
+            'subtract': ('tensorflow', 'subtract'), 
+            'RepeatVector': ('tensorflow', 'RepeatVector')
         }
 
         mapping = {
