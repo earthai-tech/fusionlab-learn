@@ -10,16 +10,16 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.10" # Or "3.8", "3.9", "3.11" - match your project needs
-  jobs:
-    pre_build:
+  # jobs:
+    # pre_build:
       # Generate API documentation before building
       # Adjust paths relative to the project root:
       # -o <output_path_for_rst_files>
       # <path_to_your_package>
       # [paths_to_exclude...]
-      - >
-        sphinx-apidoc -o docs/source/api/ -e -M -f fusionlab fusionlab/tests/* fusionlab/data/*;
-        echo "Generated API documentation using sphinx-apidoc."
+      # - >
+        # sphinx-apidoc -o docs/source/api/ -e -M -f fusionlab fusionlab/tests/* fusionlab/data/*;
+        # echo "Generated API documentation using sphinx-apidoc."
 
 # Optionally build your docs in additional formats such as PDF/ePub
 # formats:
