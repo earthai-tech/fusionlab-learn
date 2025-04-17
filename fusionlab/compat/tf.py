@@ -139,8 +139,10 @@ class KerasDependencies:
             'get_static_value':('tensorflow', 'get_static_value'),
             'equal': ('tensorflow', 'equal'), 
             'debugging': ('tensorflow', 'debugging'), 
-            'assert_equal': ('tensorflow', 'assert_equal')
+            'assert_equal': ('tensorflow', 'assert_equal'), 
             # 'constant': ('tensorflow', 'constant')
+            'subtract': ('tensorflow', 'subtract'), 
+            'RepeatVector': ('tensorflow', 'RepeatVector')
         }
 
         mapping = {
@@ -309,7 +311,7 @@ class TFConfig:
         
         This method overrides TensorFlow's default `ndim` property with
         a custom method that uses the `get_ndim` function from the
-        `gofast.compat.tf` module, allowing compatibility with both
+        `fusionlab.compat.tf` module, allowing compatibility with both
         old and new TensorFlow versions.
         """
         # Define a compatibility method for ndim that uses get_ndim
@@ -563,7 +565,7 @@ def get_ndim(tensor):
 
     Examples
     --------
-    >>> from gofast.compat.tf import get_ndim
+    >>> from fusionlab.compat.tf import get_ndim
     >>> import tensorflow as tf
     >>> tensor = tf.constant([[1, 2], [3, 4]])
     >>> get_ndim(tensor)
@@ -756,7 +758,7 @@ class from `keras`.
 
 Examples
 --------
->>> from gofast.compat.tf import KerasDependencies
+>>> from fusionlab.compat.tf import KerasDependencies
 >>> deps = KerasDependencies(extra_msg="Custom warning message")
 >>> Adam = deps.Adam  # Only imports Adam optimizer when accessed
 >>> Sequential = deps.Sequential  # Only imports Sequential model when accessed
@@ -886,7 +888,7 @@ is the function from `keras`.
 
 Examples
 --------
->>> from gofast.compat.nn import import_keras_function
+>>> from fusionlab.compat.nn import import_keras_function
 >>> Adam = import_keras_function('optimizers', 'Adam')
 >>> load_model = import_keras_function('models', 'load_model')
 
@@ -950,7 +952,7 @@ class from `keras`.
 
 Examples
 --------
->>> from gofast.compat.tf import import_keras_dependencies
+>>> from fusionlab.compat.tf import import_keras_dependencies
 >>> deps = import_keras_dependencies(extra_msg="Custom warning message")
 >>> Adam = deps.Adam  # Only imports Adam optimizer when accessed
 >>> Sequential = deps.Sequential  # Only imports Sequential model when accessed

@@ -34,7 +34,7 @@ class Bunch:
     
     Examples
     --------
-    >>> from gofast.utils.box import Bunch 
+    >>> from fusionlab.utils.box import Bunch 
     >>> results = Bunch()
     >>> results.accuracy = 0.95
     >>> results.loss = 0.05
@@ -552,7 +552,7 @@ class FlexDict(dict):
     --------
     Here is how you can use a `FlexDict`:
 
-    >>> from gofast.api.structures import FlexDict
+    >>> from fusionlab.api.structures import FlexDict
     >>> fd = FlexDict(pkg='gofast', goal='simplify tasks', version='1.0')
     >>> fd['pkg']  # Standard dictionary access
     'gofast'

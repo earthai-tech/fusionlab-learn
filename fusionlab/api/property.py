@@ -113,7 +113,7 @@ class HelpMeta(type):
 
     Examples
     --------
-    >>> from gofast.api.property import HelpMeta
+    >>> from fusionlab.api.property import HelpMeta
     >>> class Example(metaclass=HelpMeta):
     ...     \"\"\"
     ...     An example class to demonstrate HelpMeta functionality.
@@ -377,7 +377,7 @@ class Property(metaclass=HelpMeta):
 
     Examples
     --------
-    >>> from gofast.api.property import Property
+    >>> from fusionlab.api.property import Property
     >>> config = Property()
     >>> print(config.WHITESPACE_ESCAPE)
     π
@@ -486,7 +486,7 @@ class PipelineBaseClass(metaclass=LearnerMeta):
 
     Examples
     --------
-    >>> from gofast.api.property import PipelineBaseClass
+    >>> from fusionlab.api.property import PipelineBaseClass
     >>> class SomeStep:
     ...     def __repr__(self):
     ...         return 'SomeStep()'
@@ -619,7 +619,7 @@ class BaseClass(metaclass=HelpMeta):
 
     Examples
     --------
-    >>> from gofast.api.property import BaseClass
+    >>> from fusionlab.api.property import BaseClass
     >>> class Optimizer(BaseClass):
     ...     def __init__(self, name, iterations):
     ...         self.name = name
@@ -1457,7 +1457,7 @@ class BaseLearner(metaclass=LearnerMeta):
 
     Examples
     --------
-    >>> from gofast.api.property import BaseLearner
+    >>> from fusionlab.api.property import BaseLearner
     
     # Define a subclass inheriting from BaseLearner 
     # with specific parameters and methods
@@ -1757,7 +1757,7 @@ class BaseLearner(metaclass=LearnerMeta):
     
         Examples
         --------
-        >>> from gofast.api.property import BaseLearner
+        >>> from fusionlab.api.property import BaseLearner
         >>> class MyLearner(BaseLearner):
         ...     def __init__(self):
         ...         self.model_ = None  # Placeholder attribute after running
@@ -1959,7 +1959,7 @@ class BaseLearner(metaclass=LearnerMeta):
 
         Examples
         --------
-        >>> from gofast.api.property import BaseLearner
+        >>> from fusionlab.api.property import BaseLearner
         >>> class Learner(BaseLearner):
         ...     def __init__(self, data):
         ...         self.data = data
@@ -2110,7 +2110,7 @@ class PandasDataHandlers(BaseClass):
 
     Examples
     --------
-    >>> from gofast.api.property import PandasDataHandlers
+    >>> from fusionlab.api.property import PandasDataHandlers
     >>> data_handler = PandasDataHandlers()
     
     # Reading a CSV file

@@ -26,7 +26,7 @@ However, depending on the specific backend subclass being used, relevant librari
 Example Usage:
 
 1. Selecting a Backend:
-    from gofast.backends.numpy import NumpyBackend
+    from fusionlab.backends.numpy import NumpyBackend
     numpy_backend = NumpyBackend()
 
 2. Performing Array Operations:
@@ -65,7 +65,7 @@ __all__=["BaseBackend"]
 
 class BaseBackend(BaseClass):
     """
-    Base class for all computational backends in gofast.
+    Base class for all computational backends in fusionlab.
     This class defines a common interface for backend operations, ensuring 
     consistency and facilitating ease of use across different computational
     environments.

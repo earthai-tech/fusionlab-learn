@@ -135,7 +135,7 @@ sklearn.model_selection.GridSearchCV : Exhaustive grid hyperparameter search.
 tensorflow.keras.Model : TensorFlow Keras Model API.
 sklearn.base.BaseEstimator : Base class for all estimators in Scikit-Learn.
 sklearn.base.RegressorMixin : Mixin class for all regressors in Scikit-Learn.
-gofast.nn.transformers.TemporalFusionTransformer: 
+fusionlab.nn.transformers.TemporalFusionTransformer: 
     Gofast Temporal Fusion Transformer Model API.
 
 References
@@ -152,7 +152,7 @@ examples = dedent (
 """
 Examples
 --------
->>> from gofast.nn.wrappers import TFTRegressor
+>>> from fusionlab.nn.wrappers import TFTRegressor
 >>> import numpy as np
 >>> from sklearn.model_selection import RandomizedSearchCV
 >>> 
@@ -700,7 +700,7 @@ class TFTWrapper(BaseEstimator, RegressorMixin):
     
     Examples
     --------
-    >>> from gofast.nn.wrappers import TFTWrapper
+    >>> from fusionlab.nn.wrappers import TFTWrapper
     >>> import numpy as np
     >>> 
     >>> # Sample data
@@ -1103,7 +1103,7 @@ class XTFTWrapper(BaseEstimator, RegressorMixin):
 
     Examples
     --------
-    >>> from gofast.nn.wrappers import XTFTWrapper
+    >>> from fusionlab.nn.wrappers import XTFTWrapper
     >>> import numpy as np
     >>>
     >>> # Sample data
@@ -1556,7 +1556,7 @@ def create_tft_model(
     
     Examples
     --------
-    >>> from gofast.nn.wrappers import create_tft_model
+    >>> from fusionlab.nn.wrappers import create_tft_model
     >>> 
     >>> # Define model parameters
     >>> static_input_dim = 1
@@ -1753,7 +1753,7 @@ def create_xtft_model(
 
     Examples
     --------
-    >>> from gofast.nn.wrappers import create_xtft_model
+    >>> from fusionlab.nn.wrappers import create_xtft_model
     >>> import numpy as np
     >>>
     >>> # Define model parameters

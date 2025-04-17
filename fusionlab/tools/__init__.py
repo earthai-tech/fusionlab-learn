@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-gofast.tools
+fusionlab.tools
 ==============
 
 **Description:**
-This initialization script for the `gofast.tools` package ensures that 
+This initialization script for the `fusionlab.tools` package ensures that 
 essential dependencies, such as TensorFlow, are available when specific 
 applications or scripts within the package are invoked. If the required 
 dependencies are missing, the script raises informative errors
@@ -30,7 +30,7 @@ TensorFlow installed, an `ImportError` with a detailed message will be raised.
 
 **Example:**
 ```python
-from gofast.tools import xtft_proba_p
+from fusionlab.tools import xtft_proba_p
 # If TensorFlow is not installed, an ImportError will be raised with an
  informative message.
 ```
@@ -79,7 +79,7 @@ def _check_tensorflow():
 
 def __getattr__(name):
     """
-    Custom attribute access for the gofast.tools package. Checks 
+    Custom attribute access for the fusionlab.tools package. Checks 
     for required dependencies
     when specific modules are accessed.
 
@@ -96,7 +96,7 @@ def __getattr__(name):
         except ImportError as e:
             error_message = (
                 f"Failed to import module '{name}'. Ensure it exists"
-                " within the 'gofast.tools' package."
+                " within the 'fusionlab.tools' package."
             )
             logger.error(error_message)
             raise ImportError(error_message) from e
@@ -104,7 +104,7 @@ def __getattr__(name):
 
 def __dir__():
     """
-    Custom directory listing for the gofast.tools package.
+    Custom directory listing for the fusionlab.tools package.
     Includes monitored modules.
     """
     standard_attrs = list(globals().keys())

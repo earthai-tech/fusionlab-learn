@@ -11,7 +11,7 @@ Essential utilities for data processing and analysis in FusionLab,
 offering functions for normalization, interpolation, feature selection,
 outlier removal, and various data manipulation tasks.
 
-Adapted for FusionLab from the original gofast.utils.base_utils.
+Adapted for FusionLab from the original fusionlab.utils.base_utils.
 """
 
 from __future__ import annotations
@@ -159,7 +159,7 @@ def map_values(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import map_values
+    >>> from fusionlab.utils.base_utils import map_values
     >>> import pandas as pd
     >>> df = pd.DataFrame({'A': [1, 2, 3], 'B': ['X', 'Y', 'Z']})
     >>> mapping = {1: 100, 'X': 'Alpha'}
@@ -193,7 +193,7 @@ def map_values(
            in Python. Journal of Machine Learning Research,
            12, 2825-2830.
     .. [2] Gofast Documentation. Available at:
-           https://gofast.readthedocs.io/en/latest/
+           https://fusionlab.readthedocs.io/en/latest/
     """
 
     error = error_policy(error, base='warn') 
@@ -394,7 +394,7 @@ def detect_categorical_columns(
     
     Examples
     --------
-    >>> from gofast.utils.base_utils import detect_categorical_columns
+    >>> from fusionlab.utils.base_utils import detect_categorical_columns
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': [1, 2, 3],
@@ -421,7 +421,7 @@ def detect_categorical_columns(
     categorical inputs, such as decision trees or classification models.
     
     This method uses the helper function `build_data_if` from 
-    `gofast.utils.validator` to ensure that the input `data` is a DataFrame. 
+    `fusionlab.utils.validator` to ensure that the input `data` is a DataFrame. 
     If the input is not a DataFrame, it creates one, giving column names that 
     start with `input_name`.
     
@@ -757,7 +757,7 @@ def handle_outliers(
 
     >>> import numpy as np
     >>> import pandas as pd
-    >>> from gofast.utils.base_utils import handle_outliers
+    >>> from fusionlab.utils.base_utils import handle_outliers
     >>> data = pd.Series([1, 2, 2, 3, 4, 100])
     >>> clean_data = handle_outliers(data, method='iqr', threshold=1.5)
     >>> print(clean_data)
@@ -1204,7 +1204,7 @@ def remove_outliers(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.utils.base_utils import remove_outliers 
+    >>> from fusionlab.utils.base_utils import remove_outliers 
     >>> np.random.seed(42)
     >>> data = np.random.randn(7, 3)
     >>> data_r = remove_outliers(data)
@@ -1330,7 +1330,7 @@ def interpolate_grid(
     Examples
     ---------
     >>> import numpy as np
-    >>> from gofast.utils.base_utils import interpolate_grid 
+    >>> from fusionlab.utils.base_utils import interpolate_grid 
     >>> x = [28, np.nan, 50, 60] ; y = [np.nan, 1000, 2000, 3000]
     >>> xy = np.vstack ((x, y))._T
     >>> xyi = interpolate_grid (xy, view=True ) 
@@ -1562,7 +1562,7 @@ def fill_NaN(arr, method='ff'):
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import fill_NaN
+    >>> from fusionlab.utils.base_utils import fill_NaN
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': [1, 2, np.nan, 4],
@@ -1583,13 +1583,13 @@ def fill_NaN(arr, method='ff'):
 
     See Also
     --------
-    gofast.core.array_manager.array_preserver:
+    fusionlab.core.array_manager.array_preserver:
         Preserves and restores array structures.
-    gofast.core.array_manager.to_array:
+    fusionlab.core.array_manager.to_array:
         Converts input to a pandas-compatible array-like structure.
-    gofast.core.checks.is_numeric_dtype:
+    fusionlab.core.checks.is_numeric_dtype:
         Checks if the array has numeric data types.
-    gofast.utils.base_utils.fillNaN :
+    fusionlab.utils.base_utils.fillNaN :
         Core function to fill NaN values in numeric data.
 
     """
@@ -1736,7 +1736,7 @@ def fillNaN0(
     Examples
     --------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils import fillNaN 
+    >>> from fusionlab.utils.base_utils import fillNaN 
     >>> arr2d = np.random.randn(7, 3)
     >>> arr2d[[0, 2, 3, 3], [0, 2, 1, 2]] = np.nan
     >>> print(arr2d)
@@ -1982,7 +1982,7 @@ def convert_array_dimensions(
         
     Examples
     --------
-    >>> from gofast.utils.base_utils import convert_array_dimensions
+    >>> from fusionlab.utils.base_utils import convert_array_dimensions
     >>> import numpy as np
 
     # Example 1: Convert a 1D array to a 2D array with a specific shape
@@ -2106,7 +2106,7 @@ def filter_nan_entries(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import filter_nan_entries
+    >>> from fusionlab.utils.base_utils import filter_nan_entries
     >>> list1 = [1, 2, np.nan, 4]
     >>> list2 = [np.nan, 2, 3, 4]
     >>> weights = [0.5, 1.0, 1.5, 2.0]
@@ -2268,7 +2268,7 @@ def filter_nan_values(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import filter_nan_values
+    >>> from fusionlab.utils.base_utils import filter_nan_values
     >>> list1 = [{2, 3}, {1, 2, np.nan}]
     >>> list2 = [{1, 2, 3}, {1, 2, 3, np.nan}]
     >>> weights = [0.5, 1.0, 1.5, 2.0]
@@ -2373,7 +2373,7 @@ def adjust_weights(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import adjust_weights
+    >>> from fusionlab.utils.base_utils import adjust_weights
     >>> weights = [1, 2, 3, 4, 5]
     >>> data_lengths = [3, 4]
     >>> adjust_weights(data_lengths, weights, match_mode='trim')
@@ -2573,7 +2573,7 @@ def filter_nan_from( *listof, sample_weights=None):
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import filter_nan_from
+    >>> from fusionlab.utils.base_utils import filter_nan_from
     >>> list1 = [[1, 2, np.nan], [4, np.nan, 6]]
     >>> list2 = [[np.nan, 8, 9], [10, 11, np.nan]]
     >>> weights = [0.5, 1.0]
@@ -2659,7 +2659,7 @@ def standardize_input(*arrays):
     Examples
     --------
     >>> from numpy import array
-    >>> from gofast.utils.base_utils import standardize_input
+    >>> from fusionlab.utils.base_utils import standardize_input
     >>> y_true = [[1, 2], [3]]
     >>> y_pred = array([[2, 1], [3]])
     >>> standardized_inputs = standardize_input(y_true, y_pred)
@@ -2732,7 +2732,7 @@ def smart_rotation(ax):
     >>> import pandas as pd
     >>> import matplotlib.pyplot as plt
     >>> from matplotlib.dates import DateFormatter
-    >>> from gofast.utils.base_utils import smart_rotation
+    >>> from fusionlab.utils.base_utils import smart_rotation
 
     # Generate a date range and some random data
     >>> dates = pd.date_range(start="2020-01-01", periods=100, freq='D')
@@ -2877,7 +2877,7 @@ def select_features(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import select_features
+    >>> from fusionlab.utils.base_utils import select_features
     >>> import pandas as pd
     >>> import re
     >>> import numpy as np
@@ -3132,7 +3132,7 @@ def run_shell_command(command, progress_bar_duration=30, pkg=None):
     
     Example 
     -------
-    >>> from gofast.utils.base_utils import run_shell_command 
+    >>> from fusionlab.utils.base_utils import run_shell_command 
     >>> run_shell_command(["pip", "install", "gofast"])
     """
     def run_command(command):
@@ -3177,7 +3177,7 @@ def download_file(url, filename , dstpath =None ):
        
     Example 
     ---------
-    >>> from gofast.utils.base_utils import download_file
+    >>> from fusionlab.utils.base_utils import download_file
     >>> url = 'https://raw.githubusercontent.com/WEgeophysics/gofast/master/gofast/datasets/data/h.h5'
     >>> local_filename = 'h.h5'
     >>> download_file(url, local_filename, test_directory)    
@@ -3281,7 +3281,7 @@ def fancier_downloader(
     
     Examples
     --------
-    >>> from gofast.utils.base_utils import fancier_downloader
+    >>> from fusionlab.utils.base_utils import fancier_downloader
     >>> url = 'https://example.com/data/file.h5'
     >>> local_filename = 'file.h5'
     >>> # Download to current directory without size check
@@ -3322,7 +3322,7 @@ def fancier_downloader(
     - :func:`requests.get` : Function to perform HTTP GET requests.
     - :func:`tqdm` : A library for creating progress bars.
     - :func:`os.makedirs` : Function to create directories.
-    - :func:`gofast.utils.base_utils.check_file_exists` : Utility to check file
+    - :func:`fusionlab.utils.base_utils.check_file_exists` : Utility to check file
       existence.
     
     References
@@ -3476,7 +3476,7 @@ def fancier_downloader0(url, filename, dstpath =None ):
        None if the `dstpath` is supplied and `local_filename` otherwise. 
     Example
     --------
-    >>> from gofast.utils.base_utils import fancier_downloader
+    >>> from fusionlab.utils.base_utils import fancier_downloader
     >>> url = 'https://raw.githubusercontent.com/WEgeophysics/gofast/master/gofast/datasets/data/h.h5'
     >>> local_filename = 'h.h5'
     >>> download_file(url, local_filename)
@@ -3525,7 +3525,7 @@ def move_file(file_path, directory):
     
     Example 
     ---------
-    >>> from gofast.utils.base_utils import move_file
+    >>> from fusionlab.utils.base_utils import move_file
     >>> file_path = 'path/to/your/file.txt'  # Replace with your file's path
     >>> directory = 'path/to/your/directory'  # Replace with your directory's path
     >>> move_file(file_path, directory)
@@ -3547,8 +3547,8 @@ def check_file_exists(package, resource):
     :return: Boolean indicating if the resource exists.
     
     :example: 
-        >>> from gofast.utils.base_utils import check_file_exists
-        >>> package_name = 'gofast.datasets.data'  # Replace with your package name
+        >>> from fusionlab.utils.base_utils import check_file_exists
+        >>> package_name = 'fusionlab.datasets.data'  # Replace with your package name
         >>> file_name = 'h.h5'    # Replace with your file name
 
         >>> file_exists = check_file_exists(package_name, file_name)
@@ -3674,7 +3674,7 @@ def array2hdf5 (
     Examples 
     ----------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils import array2hdf5
+    >>> from fusionlab.utils.base_utils import array2hdf5
     >>> data = np.random.randn (100, 27 ) 
     >>> array2hdf5 ('test.h5', data   )
     >>> load_data = array2hdf5 ( 'test.h5', data, task ='load')
@@ -3996,7 +3996,7 @@ def categorize_target(
     Examples 
     --------
 
-    >>> from gofast.utils.base_utils import categorize_target 
+    >>> from fusionlab.utils.base_utils import categorize_target 
     >>> def binfunc(v): 
             if v < 3 : return 0 
             else : return 1 
@@ -4109,7 +4109,7 @@ def rename_labels_in (
 
     
 def _cattarget (ar , labels , order=None): 
-    """ A shadow function of :func:`gofast.utils.base_utils.cattarget`. 
+    """ A shadow function of :func:`fusionlab.utils.base_utils.cattarget`. 
     
     :param ar: array-like of numerical values 
     :param labels: int or list of int, 
@@ -4232,7 +4232,7 @@ def labels_validator(
     Examples
     --------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils import labels_validator
+    >>> from fusionlab.utils.base_utils import labels_validator
     >>> target = np.array([1, 2, 3, 4, 5])
     >>> labels_validator(target, [1, 2, 3])
     [1, 2, 3]
@@ -4274,7 +4274,7 @@ def generate_placeholders(
         the format "{n}", where n is the index of the placeholder.
         
     :Example:
-        >>> from gofast.utils.base_utils import generate_placeholders
+        >>> from fusionlab.utils.base_utils import generate_placeholders
         >>> generate_placeholders_for_iterable({'ohmS', 'lwi', 'power', 'id', 
         ...                                     'sfi', 'magnitude'})
         ['{0}', '{1}', '{2}', '{3}', '{4}', '{5}']
@@ -4367,7 +4367,7 @@ def find_intersection(
 
     Example
     -------
-    >>> from gofast.utils.base_utils import find_intersection_between_generics
+    >>> from fusionlab.utils.base_utils import find_intersection_between_generics
     >>> compute_intersection(
     ...     ['ohmS', 'lwi', 'power', 'id', 'sfi', 'magnitude'], 
     ...     {'ohmS', 'lwi', 'power'}
@@ -4524,7 +4524,7 @@ def control_existing_estimator(
 
     Example
     -------
-    >>> from gofast.utils.base_utils import control_existing_estimator
+    >>> from fusionlab.utils.base_utils import control_existing_estimator
     >>> test_est = control_existing_estimator('svm')
     >>> print(test_est)
     ('svc', 'SupportVectorClassifier')
@@ -4628,7 +4628,7 @@ def get_target(df, tname, inplace=True):
     Examples
     --------
     >>> from sklearn.datasets import load_iris
-    >>> from gofast.base_utils import get_target 
+    >>> from fusionlab.base_utils import get_target 
     >>> data = load_iris(as_frame=True).frame
     >>> targets, modified_df = get_target(data, 'target', inplace=False)
     >>> print(targets.head())
@@ -4694,7 +4694,7 @@ def binning_statistic(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.utils.base_utils import binning_statistic
+    >>> from fusionlab.utils.base_utils import binning_statistic
     >>> df = pd.DataFrame({
     ...     'Category': ['A', 'B', 'A', 'C', 'B', 'A', 'C'],
     ...     'Value': [1, 2, 3, 4, 5, 6, 7]
@@ -4771,7 +4771,7 @@ def category_count(data,  *categorical_columns, error='raise'):
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.utils.base_utils import category_count
+    >>> from fusionlab.utils.base_utils import category_count
     >>> df = pd.DataFrame({
     ...     'Fruit': ['Apple', 'Banana', 'Apple', 'Cherry', 'Banana', 'Apple'],
     ...     'Color': ['Red', 'Yellow', 'Green', 'Red', 'Yellow', 'Green']
@@ -4851,7 +4851,7 @@ def soft_bin_stat(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.utils.base_utils import soft_bin_stat
+    >>> from fusionlab.utils.base_utils import soft_bin_stat
     >>> df = pd.DataFrame({
     ...     'Category': ['A', 'B', 'A', 'C', 'B', 'A', 'C'],
     ...     'Target': [1, 0, 1, 0, 1, 0, 1]
@@ -4925,7 +4925,7 @@ def reshape_to_dataframe(flattened_array, columns, error ='raise'):
     Examples
     --------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils import reshape_to_dataframe
+    >>> from fusionlab.utils.base_utils import reshape_to_dataframe
     >>> data = np.array([1, 2, 3, 4, 5, 6])
     >>> print(reshape_to_dataframe(data, ['A', 'B', 'C']))  # DataFrame with 2 rows and 3 columns
     >>> print(reshape_to_dataframe(data, 'A'))  # Series with 6 elements
@@ -4987,7 +4987,7 @@ def save_figure(fig, filename=None, dpi=300, close=True, ax=None,
     --------
     >>> import matplotlib.pyplot as plt
     >>> import numpy as np
-    >>> from gofast.utils.base_utils import save_figure
+    >>> from fusionlab.utils.base_utils import save_figure
     >>> fig, ax = plt.subplots()
     >>> x = np.linspace(0, 10, 100)
     >>> y = np.sin(x)
@@ -5174,7 +5174,7 @@ def nan_to_mode(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.utils.base_utils import nan_to_mode
+    >>> from fusionlab.utils.base_utils import nan_to_mode
 
     >>> arr = np.array([1, 2, 2, 3, np.nan, 4, np.nan, 2])
     >>> nan_to_mode(arr)
@@ -5281,7 +5281,7 @@ def smooth1d(
     Examples 
     ---------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils  import smooth1d 
+    >>> from fusionlab.utils.base_utils  import smooth1d 
     >>> # add Guassian Noise 
     >>> np.random.seed (42)
     >>> ar = np.random.randn (20 ) * 20 + np.random.normal ( 20 )
@@ -5302,7 +5302,7 @@ def smooth1d(
         is_iterable(ar, exclude_string = True , transform =True )) 
     
     if not _is_arraylike_1d(ar): 
-        raise TypeError("Expect one-dimensional array. Use `gofast.smoothing`"
+        raise TypeError("Expect one-dimensional array. Use `fusionlab.smoothing`"
                         " for handling two-dimensional array.")
     if not _is_numeric_dtype(ar): 
         raise ValueError (f"{ar.dtype.name!r} is not allowed. Expect a numeric"
@@ -5415,7 +5415,7 @@ def smoothing (
     Examples 
     ---------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils  import smoothing
+    >>> from fusionlab.utils.base_utils  import smoothing
     >>> # add Guassian Noises 
     >>> np.random.seed (42)
     >>> ar = np.random.randn (20, 7 ) * 20 + np.random.normal ( 20, 7 )
@@ -5686,7 +5686,7 @@ def interpolate_data(
     --------
     >>> import numpy as np
     >>> import pandas as pd 
-    >>> from gofast.utils.base_utils import interpolate_data
+    >>> from fusionlab.utils.base_utils import interpolate_data
     >>> s = pd.Series([1, np.nan, 3, 4, np.nan, 6])
     >>> interpolate_data(s, view=True)
     0    1.0
@@ -5848,7 +5848,7 @@ def normalizer(
     Examples
     --------
     >>> import numpy as np 
-    >>> from gofast.utils.base_utils import normalizer 
+    >>> from fusionlab.utils.base_utils import normalizer 
     >>> arr = np.array([10, 20, 30, 40, 50])
     >>> normalizer(arr, method='01', scaler='naive')
     array([0. , 0.25, 0.5 , 0.75, 1. ])
@@ -6023,7 +6023,7 @@ def pandas_manager(
     --------
     >>> import numpy as np
     >>> import pandas as pd
-    >>> from gofast.utils.base_utils import pandas_manager
+    >>> from fusionlab.utils.base_utils import pandas_manager
 
     Get action with pandas DataFrame:
     >>> df = pd.DataFrame([[1, 2], [3, 4]], columns=['A', 'B'])
@@ -6128,7 +6128,7 @@ def make_df(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import make_df
+    >>> from fusionlab.utils.base_utils import make_df
     >>> X = np.random.rand(90, 5)
     >>> y = np.random.rand(100)
     >>> df = make_df(X, y, coerce=True, error='ignore')
@@ -6280,7 +6280,7 @@ def update_df(
 
     Examples
     --------
-    >>> from gofast.utils.base_utils import update_df
+    >>> from fusionlab.utils.base_utils import update_df
 
     # Example 1: Return only common columns
     >>> updated_common = update_df(old_df, new_df, return_common_columns=True)

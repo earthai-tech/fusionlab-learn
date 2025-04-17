@@ -89,7 +89,7 @@ def objective_loss(
 
     Examples
     --------
-    >>> from gofast.nn.components import (
+    >>> from fusionlab.nn.components import (
     ...    MultiObjectiveLoss, AdaptiveQuantileLoss, AnomalyLoss
     ... )
     >>> mo_loss = MultiObjectiveLoss(
@@ -108,7 +108,7 @@ def objective_loss(
 
     See Also
     --------
-    gofast.nn.losses.MultiObjectiveLoss : 
+    fusionlab.nn.losses.MultiObjectiveLoss : 
         The layer combining quantile + anomaly losses.
     """
     from .components import MultiObjectiveLoss
@@ -125,7 +125,7 @@ def objective_loss(
     )
 
     @register_keras_serializable(
-        package="gofast.nn.losses", name="objective_loss"
+        package="fusionlab.nn.losses", name="objective_loss"
      )
     @ParamsValidator(
         {
@@ -185,7 +185,7 @@ def prediction_based_loss(
         logger.debug(f"Using quantiles: {quantiles}")
 
     @register_keras_serializable(
-        "gofast.nn.losses", 
+        "fusionlab.nn.losses", 
         name=f"prediction_based_loss_q{quantiles}_w{anomaly_loss_weight}"
     )
     def _pb_loss(y_true, y_pred):
@@ -245,7 +245,7 @@ def combined_quantile_loss(quantiles: List[float]):
     quantiles = validate_quantiles_in(quantiles)
     
     @register_keras_serializable(
-        "gofast.nn.losses", 
+        "fusionlab.nn.losses", 
         name="combined_quantile_loss"
     )
     def _cqloss(y_true, y_pred):
@@ -314,7 +314,7 @@ def combined_total_loss(
     )
     
     @register_keras_serializable(
-        package="gofast.nn.losses", 
+        package="fusionlab.nn.losses", 
         name="combined_total_loss"
     )
     def _total_loss(y_true, y_pred):
@@ -372,7 +372,7 @@ def quantile_loss(q):
     
     Examples
     --------
-    >>> from gofast.nn.losses import quantile_loss
+    >>> from fusionlab.nn.losses import quantile_loss
     >>> import tensorflow as tf
     >>> from tensorflow.keras.models import Sequential
     >>> from tensorflow.keras.layers import Dense
@@ -436,7 +436,7 @@ def quantile_loss(q):
            Press* 
             .
     """
-    @register_keras_serializable("gofast.nn.losses", name='quantile_loss')
+    @register_keras_serializable("fusionlab.nn.losses", name='quantile_loss')
     def _q_loss(y_true, y_pred):
         """
         Compute the Quantile Loss (Pinball Loss) for a Given Batch.
@@ -526,7 +526,7 @@ def quantile_loss_multi(quantiles=[0.1, 0.5, 0.9]):
     
     Examples
     --------
-    >>> from gofast.nn.loss import quantile_loss_multi
+    >>> from fusionlab.nn.loss import quantile_loss_multi
     >>> import tensorflow as tf
     >>> from tensorflow.keras.models import Sequential
     >>> from tensorflow.keras.layers import Dense
@@ -599,7 +599,7 @@ def quantile_loss_multi(quantiles=[0.1, 0.5, 0.9]):
     """
     quantiles =validate_quantiles_in(quantiles)
     
-    @register_keras_serializable("gofast.nn.losses", name="quantile_loss_multi")
+    @register_keras_serializable("fusionlab.nn.losses", name="quantile_loss_multi")
     def _q_loss_multi(y_true, y_pred):
         """
         Compute the Multi-Quantile Loss (Averaged Pinball Loss) for a Given 
@@ -692,7 +692,7 @@ def anomaly_loss(anomaly_scores, anomaly_loss_weight=1.0):
     
     Examples
     --------
-    >>> from gofast.nn.losses import anomaly_loss
+    >>> from fusionlab.nn.losses import anomaly_loss
     >>> import tensorflow as tf
     >>> anomaly_scores = tf.constant([0.1, 0.5, 2.0], dtype=tf.float32)
     >>> loss_fn = anomaly_loss(anomaly_scores, anomaly_loss_weight=0.5)
@@ -738,7 +738,7 @@ def anomaly_loss(anomaly_scores, anomaly_loss_weight=1.0):
         anomaly_loss_weight, dtype=anomaly_scores.dtype
     )
     @register_keras_serializable(
-        "gofast.nn.losses", name="anomaly_loss"
+        "fusionlab.nn.losses", name="anomaly_loss"
     )
     def _a_loss(y_true, y_pred):
         return anomaly_loss_weight * tf_reduce_mean(tf_square(anomaly_scores))

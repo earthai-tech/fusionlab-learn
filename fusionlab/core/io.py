@@ -11,7 +11,7 @@ I/O utilities for reading, saving, and loading data within FusionLab.
 Provides routines to ensure file integrity, convert between formats,
 and validate data structures for downstream processing.
 
-Adapted for FusionLab from the original gofast.core.io implementation.
+Adapted for FusionLab from the original fusionlab.core.io implementation.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class EnsureFileExists:
     --------
     Basic usage with verbose output:
     
-    >>> from gofast.core.io import EnsureFileExists
+    >>> from fusionlab.core.io import EnsureFileExists
     >>> @EnsureFileExists(verbose=True)
     ... def process_data(file_path: str):
     ...     print(f"Processing data from {file_path}")
@@ -95,7 +95,7 @@ class EnsureFileExists:
 
     Checking URL existence:
     
-    >>> from gofast.decorators import EnsureFileExists
+    >>> from fusionlab.decorators import EnsureFileExists
     >>> @EnsureFileExists(file_param='url', verbose=True)
     ... def fetch_data(url: str):
     ...     print(f"Fetching data from {url}")
@@ -245,13 +245,13 @@ class EnsureFileExists:
 
         Examples
         --------
-        >>> from gofast.decorators import EnsureFileExists
+        >>> from fusionlab.decorators import EnsureFileExists
         >>> @EnsureFileExists(verbose=True)
         ... def process_data(file_path: str):
         ...     print(f"Processing data from {file_path}")
         >>> process_data("example_file.txt")
 
-        >>> from gofast.decorators import EnsureFileExists
+        >>> from fusionlab.decorators import EnsureFileExists
         >>> @EnsureFileExists
         ... def process_data(file_path: str):
         ...     print(f"Processing data from {file_path}")
@@ -309,8 +309,8 @@ class SaveFile:
     --------
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gofast.core.io import SaveFile
-    >>> from gofast.utils.datautils import to_categories
+    >>> from fusionlab.core.io import SaveFile
+    >>> from fusionlab.utils.datautils import to_categories
     
     >>> # Sample DataFrame
     >>> data = {
@@ -541,7 +541,7 @@ def save_file(func=None, *, data_index=0, dout='.csv'):
     Both save_file (function-based) and SaveFile (class-based) decorators
     are designed to allow users to save the returned DataFrame(s) from a 
     decorated function to a file, if needed. For more details and advanced
-    usage, please refer to the documentation of :class:`gofast.core.io.SaveFile`,
+    usage, please refer to the documentation of :class:`fusionlab.core.io.SaveFile`,
     as both operate in a similar manner.
     
     * When to Use SaveFile vs. save_file? 
@@ -555,7 +555,7 @@ def save_file(func=None, *, data_index=0, dout='.csv'):
     result using the rules described above.
     
     For full documentation and more advanced usage details, please check 
-    the documentation of :class:`gofast.core.io.SaveFile`.
+    the documentation of :class:`fusionlab.core.io.SaveFile`.
     """
     # If called without parentheses, `func` is the function object.
     # If called with parentheses, `func` is None on first pass
@@ -732,7 +732,7 @@ def _read_data(
 
     Examples
     --------
-    >>> from gofast.core.io import read_data
+    >>> from fusionlab.core.io import read_data
     >>> df = read_data('data.csv', sanitize=True, reset_index=True)
     >>> print(df.head())
 
@@ -740,8 +740,8 @@ def _read_data(
     --------
     np.loadtxt : Load text file.
     np.load : Load uncompressed or compressed numpy `.npy` and `.npz` formats.
-    gofast.dataops.management.save_or_load : Save or load numpy arrays.
-    gofast.core.io.export_data: 
+    fusionlab.dataops.management.save_or_load : Save or load numpy arrays.
+    fusionlab.core.io.export_data: 
         Export a pandas DataFrame to multiple file formats based on specified
         extensions.
         
@@ -928,7 +928,7 @@ def read_data(
 
     Examples
     --------
-    >>> from gofast.core.io import read_data
+    >>> from fusionlab.core.io import read_data
     >>> import pathlib
     >>> # Reading a CSV file with sanitization
     >>> df_csv = read_data(
@@ -1216,7 +1216,7 @@ def export_data(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.io import export_data
+    >>> from fusionlab.core.io import export_data
     >>> 
     >>> # Sample DataFrame
     >>> data = pd.DataFrame({
@@ -1290,9 +1290,9 @@ def export_data(
     pandas.DataFrame.to_csv : Write DataFrame to a comma-separated values (csv) file.
     pandas.DataFrame.to_json : Convert the DataFrame to a JSON string.
     pandas.DataFrame.to_excel : Write DataFrame to an Excel file.
-    gofast.api.property.PandasDataHandlers.writers :
+    fusionlab.api.property.PandasDataHandlers.writers :
         Provides a mapping of file extensions to Pandas writer functions.
-    gofast.core.io.read_data: 
+    fusionlab.core.io.read_data: 
         Read all specific files and URLs allowed by the package.
     
     References
@@ -1487,7 +1487,7 @@ def save_or_load(
     Examples 
     ----------
     >>> import numpy as np 
-    >>> from gofast.utils.baseutils import save_or_load 
+    >>> from fusionlab.utils.baseutils import save_or_load 
     >>> data = np.random.randn (2, 7)
     >>> # save to txt 
     >>> save_or_load ( "test.txt" , data)
@@ -1562,7 +1562,7 @@ def _is_data_readable(func=None, *, data_to_read=None, params=None):
     argument (usually `args[0]`).
 
     The data is passed to the `read_data` function from the 
-    `gofast.dataops.management` module for processing before being returned 
+    `fusionlab.dataops.management` module for processing before being returned 
     to the decorated function.
 
     Parameters
@@ -1581,7 +1581,7 @@ def _is_data_readable(func=None, *, data_to_read=None, params=None):
 
     params : dict, optional
         A dictionary of parameters to pass to the `read_data` function (from 
-        the `gofast.dataops.management` module). These parameters are used 
+        the `fusionlab.dataops.management` module). These parameters are used 
         when processing the data before passing it to the decorated function.
 
     Returns
@@ -1608,7 +1608,7 @@ def _is_data_readable(func=None, *, data_to_read=None, params=None):
     --------
     Example 1: Using the decorator without parentheses:
 
-    >>> from gofast.core.io import is_data_readable
+    >>> from fusionlab.core.io import is_data_readable
     >>> @is_data_readable(params={"sanitize": True, "reset_index": True})
     >>> def process_data(data):
     >>>     print(data.head())
@@ -1738,7 +1738,7 @@ def is_data_readable(
 
     Examples
     --------
-    >>> from gofast.core.io import is_data_readable
+    >>> from fusionlab.core.io import is_data_readable
     >>> @is_data_readable(data_to_read='input_data',
     ...                   params={'sep': ';'},
     ...                   fallback=pd.DataFrame(),
@@ -1901,7 +1901,7 @@ def to_frame_if(
     Notes
     -----
     - If `data` is a file path (string), the function uses the `read_data` 
-      function from the `gofast.core.io` module to load the data into a DataFrame.
+      function from the `fusionlab.core.io` module to load the data into a DataFrame.
     - If `data` is a pandas Series and `df_only=True`, the Series will be 
       converted into a DataFrame. If `df_only=False`, the function will return 
       the Series without modification.
@@ -1914,7 +1914,7 @@ def to_frame_if(
     --------
     1. Convert a pandas Series to a DataFrame:
     >>> import pandas as pd
-    >>> from gofast.core.io import to_frame_if 
+    >>> from fusionlab.core.io import to_frame_if 
     >>> series = pd.Series([1, 2, 3, 4])
     >>> to_frame_if(series)
        0
@@ -2043,7 +2043,7 @@ def fmt_text(
     
     Examples
     --------
-    >>> from gofast.core.io import fmt_text
+    >>> from fusionlab.core.io import fmt_text
     >>> sample_text = "This is a sample text that will be formatted with"
     " left spaces, underlines, and auto-wrapping."
     >>> print(fmt_text(sample_text, alignment='center', style='~', 
@@ -2355,7 +2355,7 @@ def to_text(
 
     Examples
     --------
-    >>> from gofast.core.io import to_text 
+    >>> from fusionlab.core.io import to_text 
     1) If used without parameters:
        >>> @to_text
        ... def example_func(data):

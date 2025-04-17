@@ -10,7 +10,7 @@ Provides a collection of reusable decorators to enhance and simplify
 common programming tasks in FusionLab, including docstring sanitization,
 output suppression, deprecation handling, and feature-importance plotting.
 
-Adapted for FusionLab from the original gofast.decorators implementation.
+Adapted for FusionLab from the original fusionlab.decorators implementation.
 """
 
 from __future__ import print_function, annotations  
@@ -114,7 +114,7 @@ class EnsureMethod:
     
     Examples
     --------
-    >>> from gofast.decorators import EnsureMethod
+    >>> from fusionlab.decorators import EnsureMethod
     >>> @EnsureMethod(method_name="custom_method", error="warn", mode="strict")
     ... class MyClass:
     ...     def custom_method(self):
@@ -369,7 +369,7 @@ def executeWithFallback(method, *, mode="soft"):
 
     Examples
     --------
-    >>> from gofast.decorators import executeWithFallback
+    >>> from fusionlab.decorators import executeWithFallback
     >>> class MyClass:
     >>>     @executeWithFallback
     >>>     def execute(self, *args, **kwargs):
@@ -502,7 +502,7 @@ class RunReturn:
 
     Examples
     --------
-    >>> from gofast.decorators import RunReturn
+    >>> from fusionlab.decorators import RunReturn
     >>> class MyModel:
     ...     def __init__(self, name):
     ...         self.name = name
@@ -687,7 +687,7 @@ class RunReturn:
         --------
         Usage with parentheses:
         
-        >>> from gofast.decorators import RunReturn
+        >>> from fusionlab.decorators import RunReturn
         >>> class MyModel:
         ...     def __init__(self, name):
         ...         self.name = name
@@ -701,7 +701,7 @@ class RunReturn:
     
         Usage without parentheses (default behavior):
     
-        >>> from gofast.decorators import RunReturn
+        >>> from fusionlab.decorators import RunReturn
         >>> class MyModel:
         ...     def __init__(self, name):
         ...         self.name = name
@@ -772,7 +772,7 @@ def smartFitRun(cls):
     
     Example
     -------
-    >>> from gofast.decorators import smartFitRun
+    >>> from fusionlab.decorators import smartFitRun
     >>> @smartFitRun
     >>> class ModelExampleFitOnly:
     >>>     ''' Expects run while fit is called'''
@@ -882,7 +882,7 @@ class SmartProcessor:
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.decorators import SmartProcessor
+    >>> from fusionlab.decorators import SmartProcessor
     >>> @SmartProcessor(to_dataframe=True)
     ... def scale_data(data):
     ...     return (data - data.mean()) / data.std()
@@ -958,7 +958,7 @@ class SmartProcessor:
     
         Examples
         --------
-        >>> from gofast.decorators import SmartProcessor
+        >>> from fusionlab.decorators import SmartProcessor
         >>> import pandas as pd
         >>> @SmartProcessor(to_dataframe=True)
         ... def scale_data(data):
@@ -1239,7 +1239,7 @@ class DataTransformer:
     to a DataFrame and rename columns based on a predefined structure:
 
     >>> import pandas as pd
-    >>> from gofast.decorators import DataTransformer
+    >>> from fusionlab.decorators import DataTransformer
     >>> @DataTransformer(rename_columns=True, verbose=True)
     ... def process_data():
     ...     return pd.DataFrame([[1, 2], [3, 4]], columns=['A', 'B'])
@@ -1447,7 +1447,7 @@ class Extract1dArrayOrSeries:
 
     >>> import numpy as np 
     >>> import pandas as pd 
-    >>> from gofast.decorators import Extract1dArrayOrSeries
+    >>> from fusionlab.decorators import Extract1dArrayOrSeries
     >>> @Extract1dArrayOrSeries(column=0, as_series=True, verbose=1)
     >>> def compute_average(data):
     ...     return data.mean()
@@ -1771,7 +1771,7 @@ class DynamicMethod:
 
     Examples
     --------
-    >>> from gofast.decorators import DynamicMethod
+    >>> from fusionlab.decorators import DynamicMethod
     >>> @DynamicMethod(expected_type='numeric', capture_columns=True, 
     ... verbose=True, drop_na=True, na_axis='row', na_thresh=0.5, reset_index=True)
     ... def calculate_variance(data):
@@ -2124,7 +2124,7 @@ class ExportData:
 
     Examples
     --------
-    >>> from gofast.decorators import ExportData
+    >>> from fusionlab.decorators import ExportData
     >>> @ExportData(export_type='frame', file_format='csv')
     ... def data_processing_function():
     ...     df = pd.DataFrame({'A': [1, 2, 3], 'B': [4, 5, 6]})
@@ -2243,7 +2243,7 @@ class Temp2D:
 
     Examples
     --------
-    >>> from gofast.decorators import Temp2D
+    >>> from fusionlab.decorators import Temp2D
     >>> @Temp2D(reason="Show an example")
     ... def generate_data():
     ...     x = np.linspace(0, 10, 100)
@@ -2338,7 +2338,7 @@ class SignalFutureChange:
 
     Examples
     --------
-    >>> from gofast.decorators import SignalFutureChange
+    >>> from fusionlab.decorators import SignalFutureChange
     >>> @SignalFutureChange(message="This function will be deprecated in future "
     ...                        "releases. Consider using `new_function` instead.")
     ... def old_function():
@@ -2381,7 +2381,7 @@ class AppendDocReferences:
 
     Examples
     --------
-    >>> from gofast.decorators import AppendDocReferences
+    >>> from fusionlab.decorators import AppendDocReferences
     >>> @AppendDocReferences(docref=".. |VES| replace:: Vertical Electrical"
     ...                         " Sounding\\n.. |ERP| replace:: Electrical Resistivity Profiling")
     ... def example_function():
@@ -2425,7 +2425,7 @@ class Deprecated:
 
     Examples
     --------
-    >>> from gofast.decorators import Deprecated
+    >>> from fusionlab.decorators import Deprecated
     >>> @Deprecated(reason="Use `new_function` instead.")
     ... def old_function():
     ...     print("This function is deprecated.")
@@ -2476,7 +2476,7 @@ class CheckGDALData:
 
     Examples
     --------
-    >>> from gofast.decorators import CheckGDALData
+    >>> from fusionlab.decorators import CheckGDALData
     >>> @CheckGDALData(raise_error=True, verbose=1)
     ... def my_gdal_function():
     ...     print("This function uses GDAL.")
@@ -2568,7 +2568,7 @@ class RedirectToNew:
 
     Examples
     --------
-    >>> from gofast.decorators import RedirectToNew
+    >>> from fusionlab.decorators import RedirectToNew
     >>> @RedirectToNew(new_function, "Use `new_function` instead of `old_function`.")
     ... def old_function():
     ...     pass
@@ -2632,7 +2632,7 @@ class PlotPrediction:
 
     Examples
     --------
-    >>> from gofast.decorators import PlotPrediction
+    >>> from fusionlab.decorators import PlotPrediction
     >>> @PlotPrediction(turn='on', fig_size=(10, 6))
     ... def my_prediction_function():
     ...     # prediction function logic here
@@ -2714,7 +2714,7 @@ class PlotFeatureImportance:
 
     Examples
     --------
-    >>> from gofast.decorators import PlotFeatureImportance
+    >>> from fusionlab.decorators import PlotFeatureImportance
     >>> @PlotFeatureImportance(kind='pfi', turn='on', fig_size=(10, 6))
     ... def my_model_analysis_function():
     ...     # Function logic here
@@ -2802,7 +2802,7 @@ class AppendDocSection:
 
     Examples
     --------
-    >>> from gofast.decorators import AppendDocSection
+    >>> from fusionlab.decorators import AppendDocSection
     >>> @AppendDocSection(source_func=writedf, start='param reason', end='param to_')
     ... def new_function():
     ...     '''Function-specific docstring.'''
@@ -2868,7 +2868,7 @@ class AppendDocFrom:
 
     Examples
     --------
-    >>> from gofast.decorators import AppendDocFrom
+    >>> from fusionlab.decorators import AppendDocFrom
     >>> @AppendDocFrom(source=func0, from_='Parameters', to='Returns', insert_at='Parameters')
     ... def new_func():
     ...     '''New function docstring.'''
@@ -3309,7 +3309,7 @@ class IsPerformanceData:
     --------
     Using as a decorator without arguments:
 
-    >>> from gofast.decorators import IsPerformanceData
+    >>> from fusionlab.decorators import IsPerformanceData
     >>> @IsPerformanceData
     ... def analyze_performance(data):
     ...     # Function body
@@ -3317,7 +3317,7 @@ class IsPerformanceData:
 
     Using as a decorator with arguments:
 
-    >>> from gofast.decorators import IsPerformanceData
+    >>> from fusionlab.decorators import IsPerformanceData
     >>> @IsPerformanceData(nan_policy='omit', verbose=True)
     ... def analyze_performance(data):
     ...     # Function body
@@ -3325,7 +3325,7 @@ class IsPerformanceData:
 
     Using as a function:
 
-    >>> from gofast.decorators import IsPerformanceData
+    >>> from fusionlab.decorators import IsPerformanceData
     >>> validator = IsPerformanceData(nan_policy='omit')
     >>> validated_data = validator(data)
 
@@ -3391,7 +3391,7 @@ class IsPerformanceData:
         --------
         Using as a decorator:
 
-        >>> from gofast.decorators import IsPerformanceData
+        >>> from fusionlab.decorators import IsPerformanceData
         >>> @IsPerformanceData
         ... def analyze_performance(data):
         ...     # Function body
@@ -3399,7 +3399,7 @@ class IsPerformanceData:
 
         Using as a function:
 
-        >>> from gofast.decorators import IsPerformanceData
+        >>> from fusionlab.decorators import IsPerformanceData
         >>> validator = IsPerformanceData()
         >>> validated_data = validator(data)
 
@@ -3596,7 +3596,7 @@ class NumpyDocstringFormatter:
     --------
     Using the decorator with default settings to reformat all sections:
 
-    >>> from gofast.decorators import NumpyDocstringFormatter
+    >>> from fusionlab.decorators import NumpyDocstringFormatter
     >>> @NumpyDocstringFormatter()
     ... def example_function(param1, param2=None):
     ...     '''
@@ -3896,7 +3896,7 @@ class Dataify:
 
     Examples
     --------
-    >>> from gofast.decorators import Dataify
+    >>> from fusionlab.decorators import Dataify
     >>> import numpy as np
     >>> import pandas as pd 
     >>> @Dataify(enforce_df=True, columns=['A', 'B'],
@@ -4326,7 +4326,7 @@ class ValidateXy:
     
     Examples
     --------
-    >>> from gofast.decorators import ValidateXy 
+    >>> from fusionlab.decorators import ValidateXy 
     >>> @ValidateXy(check_y=True, ensure_y_2d=True, check_1d_input=True)
     >>> def my_model(X, y):
     >>>     # Model processing here

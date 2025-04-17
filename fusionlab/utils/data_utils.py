@@ -146,7 +146,7 @@ def mask_by_reference(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.utils.data_utils import mask_by_reference
+    >>> from fusionlab.utils.data_utils import mask_by_reference
     >>>
     >>> df = pd.DataFrame({
     ...     "A": [10, 0, 8, 0],

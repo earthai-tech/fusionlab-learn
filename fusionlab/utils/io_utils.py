@@ -12,7 +12,7 @@ loading serialized data within FusionLab. Provides error-checked
 deserialization, directory management, and archive handling
 (e.g., .tgz, .zip), streamlining file operations and data recovery.
 
-Adapted for FusionLab from the original gofast.utils.io_utils.
+Adapted for FusionLab from the original fusionlab.utils.io_utils.
 """
 
 import os
@@ -154,7 +154,7 @@ class FileManager(BaseClass):
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import FileManager
+    >>> from fusionlab.utils.io_utils import FileManager
     >>> manager = FileManager(
     ...     root_dir='data/raw',
     ...     target_dir='data/processed',
@@ -453,7 +453,7 @@ def zip_extractor(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import zip_extractor
+    >>> from fusionlab.utils.io_utils import zip_extractor
     >>> extracted_files = zip_extractor(
     ...     'data/archive.zip',
     ...     samples='*',
@@ -640,7 +640,7 @@ def to_hdf5(
     --------
     >>> import os
     >>> import pandas as pd
-    >>> from gofast.utils.io_utils import to_hdf5
+    >>> from fusionlab.utils.io_utils import to_hdf5
     >>> data = pd.DataFrame({
     ...     'a': [1, 2, 3],
     ...     'b': [4, 5, 6]
@@ -812,8 +812,8 @@ def store_or_write_hdf5 (
   
     Examples
     --------
-    >>> from gofast.utils.io_utils import store_or_write_hdf5
-    >>> from gofast.datasets import load_bagoue 
+    >>> from fusionlab.utils.io_utils import store_or_write_hdf5
+    >>> from fusionlab.datasets import load_bagoue 
     >>> data = load_bagoue().frame 
     >>> data.geol[:5]
     0    VOLCANO-SEDIM. SCHISTS
@@ -959,7 +959,7 @@ def key_checker (
     Examples
     --------
     
-    >>> from gofast.utils.io_utils import key_checker
+    >>> from fusionlab.utils.io_utils import key_checker
     >>> key_checker('h502', valid_keys= ['h502', 'h253','h2601'])  
     Out[68]: 'h502'
     >>> key_checker('h502+h2601', valid_keys= ['h502', 'h253','h2601'])
@@ -1070,7 +1070,7 @@ def key_search (
 
     Examples
     ---------
-    >>> from gofast.utils.io_utils import key_search 
+    >>> from fusionlab.utils.io_utils import key_search 
     >>> key_search('h502-hh2601', default_keys= ['h502', 'h253','HH2601'])
     Out[44]: ['h502']
     >>> key_search('h502-hh2601', default_keys= ['h502', 'h253','HH2601'], 
@@ -1188,7 +1188,7 @@ def serialize_data_in(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import serialize_data_in
+    >>> from fusionlab.utils.io_utils import serialize_data_in
     >>> data = {"a": 1, "b": 2}
     >>> filepath = serialize_data_in(data, filename='data.pkl', 
     ...                              force=True, verbose=1)
@@ -1322,7 +1322,7 @@ def sanitize_unicode_string(str_: str) -> str:
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import sanitize_unicode_string 
+    >>> from fusionlab.utils.io_utils import sanitize_unicode_string 
     >>> sentence ='Nos clients sont extrêmement satisfaits '
         'de la qualité du service fourni. En outre Nos clients '
             'rachètent frequemment nos "services".'
@@ -1635,7 +1635,7 @@ def fetch_joblib_data(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import fetch_joblib_data
+    >>> from fusionlab.utils.io_utils import fetch_joblib_data
     >>> data = fetch_joblib_data('data.joblib', 'X_train', 'y_train')
     >>> X, y = fetch_joblib_data('data.joblib', 'X_val', 'y_val', verbose=1)
     >>> full_dict = fetch_joblib_data('data.joblib')
@@ -1708,7 +1708,7 @@ def cpath(savepath: str = None, dpath: str = '_default_path_') -> str:
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import cpath
+    >>> from fusionlab.utils.io_utils import cpath
     >>> default_path = cpath()
     >>> print(f"Files will be saved to: {default_path}")
 
@@ -1756,7 +1756,7 @@ def spath(name_of_path: str) -> str:
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import spath
+    >>> from fusionlab.utils.io_utils import spath
     >>> path = spath('data/saved_models')
     >>> print(f"Directory available at: {path}")
 
@@ -1805,7 +1805,7 @@ def load_serialized_data(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import load_serialized_data
+    >>> from fusionlab.utils.io_utils import load_serialized_data
     >>> data = load_serialized_data('data/my_data.pkl', verbose=3)
 
     Notes
@@ -1924,7 +1924,7 @@ def save_job(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import save_job
+    >>> from fusionlab.utils.io_utils import save_job
     >>> model = {"key": "value"}  # Replace with actual model object
     >>> savefile = save_job(model, "my_model", append_date=True, append_versions=True)
     >>> print(savefile)
@@ -2024,7 +2024,7 @@ def move_cfile(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import move_cfile
+    >>> from fusionlab.utils.io_utils import move_cfile
     >>> new_path, msg = move_cfile('myfile.txt', 'new_directory')
     >>> print(new_path, msg)
 
@@ -2065,7 +2065,7 @@ def print_cmsg(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import print_cmsg
+    >>> from fusionlab.utils.io_utils import print_cmsg
     >>> msg = print_cmsg('config.yml', 'dump')
     >>> print(msg)
     --> YAML 'config.yml' data was successfully saved.
@@ -2133,7 +2133,7 @@ def parse_csv(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import parse_csv
+    >>> from fusionlab.utils.io_utils import parse_csv
     >>> data = [{"name": "Alice", "age": 30}, {"name": "Bob", "age": 25}]
     >>> parse_csv(csv_fn='output.csv', data=data, todo='dictwriter', fieldnames=['name', 'age'])
     >>> loaded_data = parse_csv(csv_fn='output.csv', todo='dictreader', fieldnames=['name', 'age'])
@@ -2553,7 +2553,7 @@ def deserialize_data(filename: str, verbose: int = 0) -> Any:
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import deserialize_data
+    >>> from fusionlab.utils.io_utils import deserialize_data
     >>> data = deserialize_data('path/to/serialized_data.pkl', verbose=1)
     Data loaded successfully from 'path/to/serialized_data.pkl' using joblib.
 
@@ -2664,7 +2664,7 @@ def serialize_data(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import serialize_data
+    >>> from fusionlab.utils.io_utils import serialize_data
     >>> import numpy as np
     >>> data = {"a": np.arange(10), "b": np.random.rand(10)}
     >>> filepath = serialize_data(
@@ -2822,7 +2822,7 @@ def fetch_tgz_from_url(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import fetch_tgz_from_url
+    >>> from fusionlab.utils.io_utils import fetch_tgz_from_url
     >>> data_url = 'https://example.com/data.tar.gz'
     >>> extracted_file = fetch_tgz_from_url(
     ...     data_url, 'data.tar.gz', data_path='data_dir', file_to_retrieve='file.csv')
@@ -2891,7 +2891,7 @@ def fetch_tgz_locally(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import fetch_tgz_locally
+    >>> from fusionlab.utils.io_utils import fetch_tgz_locally
     >>> fetched_file = fetch_tgz_locally(
     ...     'path/to/archive.tgz', 'file.csv', savefile='extracted', rename_outfile='renamed.csv')
     >>> print(fetched_file)
@@ -2940,7 +2940,7 @@ def extract_tar_with_progress(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import extract_tar_with_progress
+    >>> from fusionlab.utils.io_utils import extract_tar_with_progress
     >>> with tarfile.open('data.tar.gz', 'r:gz') as tar:
     ...     member = tar.getmember('file.csv')
     ...     extract_tar_with_progress(tar, member, Path('output_dir'))
@@ -3034,7 +3034,7 @@ def load_csv(
 
     To load this file into a DataFrame:
 
-    >>> from gofast.utils.io_utils import load_csv
+    >>> from fusionlab.utils.io_utils import load_csv
     >>> df = load_csv('example.csv')
     >>> print(df)
          name  age         city
@@ -3110,7 +3110,7 @@ def get_valid_key(input_key, default_key, substitute_key_dict=None,
     
     Example
     -------
-    >>> from gofast.utils.io_utils import get_valid_key
+    >>> from fusionlab.utils.io_utils import get_valid_key
     >>> substitute_key_dict = {'valid_key1': ['vk1', 'key1'], 'valid_key2': ['vk2', 'key2']}
     >>> get_valid_key('vk1', 'default_key', substitute_key_dict)
     'valid_key1'
@@ -3260,7 +3260,7 @@ def to_txt(
 
     Examples
     --------
-    >>> from gofast.utils.io_utils import to_txt
+    >>> from fusionlab.utils.io_utils import to_txt
     >>> my_data = {"name":"Alice","age":30}
     >>> # Basic text export
     >>> txt_file = to_txt(my_data, verbose=2)

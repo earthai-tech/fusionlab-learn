@@ -224,10 +224,10 @@ def select_dtypes(
     --------
     1. Select all numeric columns from the DataFrame:
     
-    >>> from gofast.compat.pandas import select_dtypes 
+    >>> from fusionlab.compat.pandas import select_dtypes 
     >>> import pandas as pd
     >>> df = pd.DataFrame({'a': [1, 2, 3], 'b': [1.1, 2.2, 3.3], 'c': ['x', 'y', 'z']})
-    >>> from gofast.compat.pandas import select_dtypes
+    >>> from fusionlab.compat.pandas import select_dtypes
     >>> select_dtypes(df, 'numeric')
        a    b
     0  1  1.1
@@ -397,7 +397,7 @@ def describe_dataframe(
 
     Examples
     --------
-    >>> from gofast.compat.pandas import describe_dataframe
+    >>> from fusionlab.compat.pandas import describe_dataframe
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': [1, 2, 3, 4],
@@ -531,7 +531,7 @@ def iteritems_compat(series: pd.Series):
     
     Example
     --------
-    from gofast.compat.pandas import iteritems_compat
+    from fusionlab.compat.pandas import iteritems_compat
 
     # Example usage of iteritems_compat
     series = pd.Series([1, 2, 3])
@@ -554,7 +554,7 @@ def make_dataframe_compat():
         
     Example 
     --------
-    from gofast.compat.pandas import make_dataframe_compat
+    from fusionlab.compat.pandas import make_dataframe_compat
 
     # Example usage of make_dataframe_compat
     df = make_dataframe_compat()
@@ -608,7 +608,7 @@ def is_pandas_version_less_than(version: str) -> bool:
         
     Example 
     -------
-    from gofast.compat.pandas import is_pandas_version_less_than
+    from fusionlab.compat.pandas import is_pandas_version_less_than
 
     # Example usage of is_pandas_version_less_than
     if is_pandas_version_less_than("2.0.0"):
