@@ -1,0 +1,59 @@
+version: 1
+disable_existing_loggers: False
+
+formatters:
+  detailed:
+    format: "%(asctime)s - %(name)s - %(levelname)s - [%(threadName)s] [%(process)d] %(message)s"
+    datefmt: "%Y-%m-%dT%H:%M:%S"
+
+handlers:
+   console:
+     class: logging.StreamHandler
+     level: INFO
+     formatter: detailed
+     stream: ext://sys.stdout
+
+  info_file_handler:
+    class: logging.handlers.TimedRotatingFileHandler
+    level: INFO
+    formatter: detailed
+    filename: "fusionlab/flogs/infos.log"
+    when: midnight
+    backupCount: 7
+    encoding: utf-8
+    delay: True
+
+  error_file_handler:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: detailed
+    filename: "fusionlab/flogs/errors.log"
+    maxBytes: 1048576 # 1MB
+    backupCount: 5
+    encoding: utf-8
+    delay: True
+
+  warning_file_handler:
+    class: logging.handlers.RotatingFileHandler
+    level: WARNING
+    formatter: detailed
+    filename: "fusionlab/flogs/warnings.log"
+    maxBytes: 1048576 # 1MB
+    backupCount: 5
+    encoding: utf-8
+    delay: True
+
+loggers:
+  fusionlab:
+    level: DEBUG
+    handlers: [info_file_handler, error_file_handler, warning_file_handler]
+    propagate: no
+
+  __main__:
+    level: DEBUG
+    handlers: [info_file_handler, error_file_handler, warning_file_handler]
+    propagate: no
+
+root:
+  level: DEBUG
+  handlers: [info_file_handler, error_file_handler, warning_file_handler]
