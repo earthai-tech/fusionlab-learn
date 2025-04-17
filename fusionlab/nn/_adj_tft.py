@@ -62,7 +62,7 @@ DEP_MSG = dependency_message('transformers.tft')
     TemporalFusionTransformer.__doc__.replace ('TemporalFusionTransformer', 'TFT')
     ), join='\n'
  )
-@register_keras_serializable('gofast.nn.transformers', name="TFT")
+@register_keras_serializable('fusionlab.nn.transformers', name="TFT")
 class TFT(Model, NNLearner):
     @validate_params({
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')], 
@@ -759,75 +759,3 @@ class VariableSelectionNetwork(Layer):
                 )
        
 
-# if __name__=='__main__': 
-#     import tensorflow as tf 
-#     import numpy as np
-    
-#     # Define model parameters
-#     batch_size       = 2
-#     past_steps       = 4
-#     forecast_horizon  = 3
-#     dynamic_input_dim = 5      # Number of dynamic (past) input features
-#     static_input_dim  = 6      # Number of static (metadata) input features
-#     future_input_dim  = 4      # Number of future (covariate) input features
-#     hidden_units      = 16     # Embedding and hidden layer size
-#     num_heads         = 4       # Number of attention heads
-#     dropout_rate      = 0.1     # Dropout rate
-#     quantiles         = [0.1, 0.5, 0.9]  # Quantiles for probabilistic forecasting
-#     activation        = 'elu'   # Activation function for GRNs
-#     use_batch_norm    = False   # Whether to use Batch Normalization in GRNs
-#     lstm_units        = None    # Number of units in LSTM layers (defaults to hidden_units)
-#     output_dim        = 1       # Number of output variables
-    
-#     # Instantiate the model
-#     model = TFT(
-#         dynamic_input_dim=dynamic_input_dim,
-#         hidden_units=hidden_units,
-#         num_heads=num_heads,
-#         dropout_rate=dropout_rate,
-#         forecast_horizon=forecast_horizon,
-#         quantiles=quantiles,          # Set to None for deterministic predictions
-#         activation=activation,
-#         use_batch_norm=use_batch_norm,
-#         lstm_units=lstm_units,
-#         output_dim=output_dim,
-#         static_input_dim=static_input_dim,
-#         future_input_dim=future_input_dim
-#     )
-    
-#     # Compile the model with Mean Squared Error loss for deterministic predictions
-#     optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
-#     model.compile(
-#         optimizer=optimizer,
-#         loss='mse'
-#     )
-    
-#     # Generate dummy data
-#     num_samples = 100
-    
-#     # Past inputs: (batch_size, past_steps, dynamic_input_dim)
-#     past_in = np.random.randn(num_samples, past_steps, dynamic_input_dim).astype(np.float32)
-    
-#     # Future inputs: (batch_size, forecast_horizon, future_input_dim)
-#     future_in = np.random.randn(num_samples, forecast_horizon, future_input_dim).astype(np.float32)
-    
-#     # Static inputs: (batch_size, static_input_dim)
-#     static_in = np.random.randn(num_samples, static_input_dim).astype(np.float32)
-    
-#     # Targets: (batch_size, forecast_horizon, output_dim)
-#     y_true = np.random.randn(num_samples, forecast_horizon, output_dim).astype(np.float32)
-    
-#     # Fit the model
-#     history = model.fit(
-#         x=(past_in, future_in, static_in),
-#         y=y_true,
-#         epochs=5,
-#         batch_size=16
-#     )
-    
-#     # Display training history
-#     print(history.history)
-    
-#     # Predict using the model
-#     y_pred = model.predict((past_in, future_in, static_in))
-#     print(y_pred.shape)  # Expected: (batch_size, forecast_horizon, num_quantiles, output_dim) or (batch_size, forecast_horizon, output_dim)

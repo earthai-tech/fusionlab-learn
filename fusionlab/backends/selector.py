@@ -38,7 +38,7 @@ resources or between different data processing libraries.
 
 Examples
 --------
->>> from gofast.selector import BackendSelector
+>>> from fusionlab.selector import BackendSelector
 >>> backend_selector = BackendSelector()
 >>> backend = backend_selector.select_backend("numpy")
 
@@ -139,7 +139,7 @@ class BackendSelector(BaseClass):
     --------
     To select a general computation backend explicitly:
 
-    >>> from gofast.backends.selector import BackendSelector
+    >>> from fusionlab.backends.selector import BackendSelector
     >>> backend_selector = BackendSelector(preferred_backend='scipy')
     >>> backend = backend_selector.get_backend()
     >>> array = backend.array([1, 2, 3])
@@ -587,7 +587,7 @@ def select_backend_n(
 
     Examples
     --------
-    >>> from gofast.backends.selector import select_backend_n 
+    >>> from fusionlab.backends.selector import select_backend_n 
     >>> select_backend_n('tf')
     'tensorflow'
     
@@ -721,7 +721,7 @@ def safe_cast(backend, value, dtype, backend_name=None):
     Using NumPy backend:
     
     >>> import numpy as np
-    >>> from gofast.backends.selector import safe_cast
+    >>> from fusionlab.backends.selector import safe_cast
     >>> value = [1, 2, 3]
     >>> dtype = np.float32
     >>> casted_value = safe_cast('numpy', value, dtype)
@@ -731,7 +731,7 @@ def safe_cast(backend, value, dtype, backend_name=None):
     Using TensorFlow backend:
     
     >>> import tensorflow as tf
-    >>> from gofast.backends.selector import safe_cast
+    >>> from fusionlab.backends.selector import safe_cast
     >>> value = tf.constant([1, 2, 3], dtype=tf.int32)
     >>> dtype = tf.float32
     >>> casted_value = safe_cast('tf', value, dtype)
@@ -741,7 +741,7 @@ def safe_cast(backend, value, dtype, backend_name=None):
     Using PyTorch backend:
     
     >>> import torch
-    >>> from gofast.backends.selector import safe_cast
+    >>> from fusionlab.backends.selector import safe_cast
     >>> value = torch.tensor([1, 2, 3], dtype=torch.int32)
     >>> dtype = torch.float32
     >>> casted_value = safe_cast('torch', value, dtype)
@@ -917,7 +917,7 @@ def check_processor(
 
     Examples
     --------
-    >>> from gofast.backends.selector check_processor
+    >>> from fusionlab.backends.selector check_processor
     >>> check_processor(authorized='gpu', verbose=1)
     Checking GPU via PyTorch...
     GPU is available.

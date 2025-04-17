@@ -241,7 +241,7 @@ class Interval:
     `inclusive` parameter:
     
     >>> from numbers import Integral
-    >>> from gofast.compat.sklearn import Interval
+    >>> from fusionlab.compat.sklearn import Interval
     >>> interval = Interval(Integral, 1, 10, closed="left", inclusive=True)
     >>> interval
     
@@ -352,7 +352,7 @@ def type_of_target(y):
 
     Examples
     --------
-    >>> from gofast.compat.sklearn import type_of_target
+    >>> from fusionlab.compat.sklearn import type_of_target
 
     Binary classification:
 
@@ -407,7 +407,7 @@ def type_of_target(y):
     See also
     --------
     `sklearn.utils.multiclass.type_of_target` : scikit-learn's implementation
-    `gofast.core.utils.type_of_target` : gofast's fallback implementation
+    `fusionlab.core.utils.type_of_target` : gofast's fallback implementation
 
     References
     ----------
@@ -417,7 +417,7 @@ def type_of_target(y):
            & Duchesnay, É. (2011). Scikit-learn: Machine Learning in Python.
            Journal of Machine Learning Research, 12, 2825–2830.
 
-    .. [2] Gofast Documentation. Available at https://gofast.readthedocs.io/en/latest/
+    .. [2] Gofast Documentation. Available at https://fusionlab.readthedocs.io/en/latest/
 
     """
     # Attempt to import type_of_target from scikit-learn
@@ -427,14 +427,14 @@ def type_of_target(y):
     except ImportError:
         # Fallback to gofast's type_of_target if scikit-learn is not available
         try:
-            from gofast.core.utils import type_of_target as gofast_type_of_target
+            from fusionlab.core.utils import type_of_target as gofast_type_of_target
             return gofast_type_of_target(y)
         except ImportError:
             # If both imports fail, raise an ImportError
             raise ImportError(
-                "Neither scikit-learn nor gofast.core.utils could provide "
+                "Neither scikit-learn nor fusionlab.core.utils could provide "
                 "'type_of_target'. Please ensure that scikit-learn is installed "
-                "or gofast.core.utils contains 'type_of_target'."
+                "or fusionlab.core.utils contains 'type_of_target'."
             )
 
 
@@ -561,7 +561,7 @@ def validate_params(params, *args, prefer_skip_nested_validation=True, **kwargs)
 
     Examples
     --------
-    >>> from gofast.compat.sklearn import validate_params
+    >>> from fusionlab.compat.sklearn import validate_params
     >>> @validate_params({
     ...     'step_name': [str],
     ...     'param_grid': [dict],

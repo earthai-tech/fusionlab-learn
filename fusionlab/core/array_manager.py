@@ -10,7 +10,7 @@ Core utilities for array and DataFrame manipulation in FusionLab,
 including data reshaping, conversion, and sparse matrix handling.
 Ensures consistent array-like formats across the package.
 
-Adapted from the original gofast.core module.
+Adapted from the original fusionlab.core module.
 """
 
 from __future__ import print_function, annotations
@@ -178,7 +178,7 @@ def to_array(
     
     Examples
     --------
-    >>> from gofast.core.array_manager import to_array
+    >>> from fusionlab.core.array_manager import to_array
     >>> import numpy as np
     >>> import pandas as pd
     >>> # Convert a list to a 2D NumPy array
@@ -737,7 +737,7 @@ def to_arrays(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import to_arrays
+    >>> from fusionlab.core.array_manager import to_arrays
     >>> import numpy as np
     >>> import pandas as pd
     >>> # Define multiple array-like inputs
@@ -984,7 +984,7 @@ def smart_ts_detector(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import smart_ts_detector
+    >>> from fusionlab.core.array_manager import smart_ts_detector
     >>> import pandas as pd
     >>> df = pd.DataFrame({'year': [2020, 2021, 2022]})
     >>> # Detect format from year-like integers:
@@ -1306,7 +1306,7 @@ def extract_array_from(
     
     Examples
     --------
-    >>> from gofast.core.array_manager import extract_array_from
+    >>> from fusionlab.core.array_manager import extract_array_from
     >>> import pandas as pd
     >>> import numpy as np
 
@@ -1607,7 +1607,7 @@ def reduce_dimensions(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.array_manager import reduce_dimensions
+    >>> from fusionlab.core.array_manager import reduce_dimensions
     >>> 
     >>> # Sample data array
     >>> data = np.array([
@@ -1874,7 +1874,7 @@ def decode_sparse_data(sparse_data: pd.Series) -> pd.DataFrame:
     
     Examples
     --------
-    >>> from gofast.core.array_manager import decode_sparse_data
+    >>> from fusionlab.core.array_manager import decode_sparse_data
     >>> import pandas as pd
     >>> 
     >>> # Sample sparse data as a pandas Series
@@ -2020,7 +2020,7 @@ def process_and_extract_data(
     --------
     >>> import numpy as np 
     >>> import pandas as pd 
-    >>> from gofast.core.array_manager import process_and_extract_data
+    >>> from fusionlab.core.array_manager import process_and_extract_data
     >>> data = pd.DataFrame({'A': [1, 2, 3], 'B': [4, 5, 6]})
     >>> process_and_extract_data(data, columns=['A'], to_array=True)
     [array([1, 2, 3])]
@@ -2151,7 +2151,7 @@ def to_series_if(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import to_series_if
+    >>> from fusionlab.core.array_manager import to_series_if
     >>> series = to_series_if(0.5, 8, np.array(
         [6.3]), [5], 2, value_names=['a', 'b', 'c', 'd', 'e'])
     >>> print(series)
@@ -2236,7 +2236,7 @@ def make_arr_consistent (
     Examples 
     ----------
     >>> import numpy as np 
-    >>> from gofast.core.array_manager import make_arr_consistent
+    >>> from fusionlab.core.array_manager import make_arr_consistent
     >>> refarr = np.arange (12) 
     >>> arr = np.arange (7, 10) 
     >>> make_arr_consistent (refarr, arr ) 
@@ -2301,7 +2301,7 @@ def split_train_test(
     --------
     >>> import pandas as pd
     >>> from sklearn.datasets import load_iris
-    >>> from gofast.core.array_manager import split_train_test
+    >>> from fusionlab.core.array_manager import split_train_test
     >>> data = load_iris(as_frame=True)['data']
     >>> train_set, test_set = split_train_test(data, test_ratio=0.2)
     >>> len(train_set), len(test_set)
@@ -2344,7 +2344,7 @@ def test_set_check_id(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import test_set_check_id
+    >>> from fusionlab.core.array_manager import test_set_check_id
     >>> test_set_check_id(42, test_ratio=0.2, hash=hashlib.md5)
     ... False
     """
@@ -2391,7 +2391,7 @@ def split_train_test_by_id(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.core.array_manager import split_train_test_by_id
+    >>> from fusionlab.core.array_manager import split_train_test_by_id
     >>> data = pd.DataFrame({'ID': [1, 2, 3, 4, 5], 'Value': [10, 20, 30, 40, 50]})
     >>> train_set, test_set = split_train_test_by_id(data, test_ratio=0.2, id_column=['ID'])
     >>> len(train_set), len(test_set)
@@ -2486,7 +2486,7 @@ def split_list(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import split_list
+    >>> from fusionlab.core.array_manager import split_list
     >>> data = [1, 2, 3, 4, 5, 6, 7, 8]
     >>> split_list(data, 3)
     [[1, 2, 3], [4, 5, 6], [7, 8]]
@@ -2596,7 +2596,7 @@ def squeeze_specific_dim(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import squeeze_specific_dim
+    >>> from fusionlab.core.array_manager import squeeze_specific_dim
     >>> a = np.arange(6).reshape(3, 2, 1)
     >>> squeeze_specific_dim(a).shape
     (3, 2)
@@ -2657,7 +2657,7 @@ def reshape(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import reshape
+    >>> from fusionlab.core.array_manager import reshape
     >>> x = np.arange(5)
     >>> reshape(x, 1).shape
     (1, 5)
@@ -2851,8 +2851,8 @@ def to_numeric_dtypes(
 
     Examples
     --------
-    >>> from gofast.datasets.dload import load_bagoue
-    >>> from gofast.core.array_manager import to_numeric_dtypes
+    >>> from fusionlab.datasets.dload import load_bagoue
+    >>> from fusionlab.core.array_manager import to_numeric_dtypes
     >>> X = load_bagoue(as_frame=True)
     >>> X0 = X[['shape', 'power', 'magnitude']]
 
@@ -2873,9 +2873,9 @@ def to_numeric_dtypes(
 
     See Also
     --------
-    gofast.preprocessing.sanitize_frame_cols : Sanitize DataFrame column names.
-    gofast.tools.validator.is_numeric_dtype : Check for numeric column types.
-    gofast.core.array_manager.to_dataframe : Convert arrays to structured DataFrames.
+    fusionlab.preprocessing.sanitize_frame_cols : Sanitize DataFrame column names.
+    fusionlab.tools.validator.is_numeric_dtype : Check for numeric column types.
+    fusionlab.core.array_manager.to_dataframe : Convert arrays to structured DataFrames.
 
     References
     ----------
@@ -2983,7 +2983,7 @@ def denormalize(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.array_manager import denormalize
+    >>> from fusionlab.core.array_manager import denormalize
     >>> normalized_data = np.array([0, 0.5, 1])
     >>> min_value = 10
     >>> max_value = 20
@@ -3044,7 +3044,7 @@ def convert_to_structured_format(
     Examples
     --------
     Converting to pandas DataFrame/Series:
-    >>> from gofast.core.array_manager import convert_to_structured_format
+    >>> from fusionlab.core.array_manager import convert_to_structured_format
     >>> import numpy as np 
     >>> import pandas as pd 
     >>> features= {"feature_1": range (7), "feature_2":['1', 2, 9, 35, "0", "76", 'r']}
@@ -3169,8 +3169,8 @@ def map_specific_columns (
         
     Examples 
     ---------
-    >>> from gofast.datasets import load_hlogs 
-    >>> from gofast.utils.plotutils import map_specific_columns 
+    >>> from fusionlab.datasets import load_hlogs 
+    >>> from fusionlab.utils.plotutils import map_specific_columns 
     >>> X0, _= load_hlogs (as_frame =True ) 
     >>> # let visualize the  first3 values of `sp` and `resistivity` keys 
     >>> X0['sp'][:3] , X0['resistivity'][:3]  
@@ -3259,7 +3259,7 @@ def concat_array_from_list(list_of_array, concat_axis=0):
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.array_manager import concat_array_from_list
+    >>> from fusionlab.core.array_manager import concat_array_from_list
     >>> np.random.seed(0)
     >>> ass = np.random.randn(10)
     >>> ass2 = np.linspace(0, 15, 10)
@@ -3406,7 +3406,7 @@ def drop_nan_in(
     --------
     >>> import numpy as np
     >>> import pandas as pd
-    >>> from gofast.core.array_manager import drop_nan_in
+    >>> from fusionlab.core.array_manager import drop_nan_in
     >>> 
     >>> # Sample DataFrames and ndarray
     >>> df1 = pd.DataFrame({
@@ -3949,7 +3949,7 @@ def array_preserver(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import array_preserver
+    >>> from fusionlab.core.array_manager import array_preserver
     >>> import numpy as np
     >>> import pandas as pd
     >>> 
@@ -4284,7 +4284,7 @@ def index_based_selector(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import index_based_selector
+    >>> from fusionlab.core.array_manager import index_based_selector
     >>> import pandas as pd
     >>> df1 = pd.DataFrame(
     ...     {'A': [1, 2, 3]},
@@ -4340,7 +4340,7 @@ def index_based_selector(
            Pandas, NumPy, and IPython." O'Reilly, 2017.
     """
     # 1) Check if all provided `dfs` are valid DataFrames.
-    #    Use `are_all_frame_valid` from `gofast.core.checks` to ensure
+    #    Use `are_all_frame_valid` from `fusionlab.core.checks` to ensure
     #    they're DataFrames and optionally check if they have the same
     #    length if `check_size=True`. The `error='raise'` here means
     #    that any invalid condition immediately raises an error.
@@ -4489,7 +4489,7 @@ def to_series(
 
     Examples
     --------
-    >>> from gofast.core.array_manager import to_series
+    >>> from fusionlab.core.array_manager import to_series
     >>> import pandas as pd
     >>> import numpy as np
     >>> # Convert a list to Series

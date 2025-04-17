@@ -16,7 +16,7 @@ To use the DaskBackend, ensure Dask is installed in your environment:
 Example Usage:
 
 1. Initialize DaskBackend:
-    from gofast.backends.dask import DaskBackend
+    from fusionlab.backends.dask import DaskBackend
     dask_backend = DaskBackend()
 
 2. Leverage Dask for Dataframe Operations:
@@ -109,7 +109,7 @@ class DaskBackend(BaseBackend):
 
     Examples
     --------
-    >>> from gofast.backends.dask import DaskBackend
+    >>> from fusionlab.backends.dask import DaskBackend
     >>> dask_backend = DaskBackend()
     >>> import dask.array as da
     >>> large_array = da.random.random((10000, 10000), chunks=(1000, 1000))

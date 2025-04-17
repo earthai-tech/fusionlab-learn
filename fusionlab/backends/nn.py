@@ -22,7 +22,7 @@ frameworks are available; otherwise, it will use PyTorch:
 Example Usage:
 
 1. Initialize NNBackend:
-    >>> from gofast.backends.nn import NNBackend
+    >>> from fusionlab.backends.nn import NNBackend
     >>> nn_backend = NNBackend(backend='auto')  
     # Automatically selects TensorFlow if available, else PyTorch
 
@@ -77,7 +77,7 @@ Note:
 Remember:
 The flexibility of NNBackend is enhanced by its compatibility with two major 
 deep learning frameworks, making it a powerful tool for any machine learning 
-project within gofast.
+project within fusionlab.
 """
 
 from ..api.property import BaseClass 
@@ -152,7 +152,7 @@ class NNBackend( BaseClass):
 
     Examples
     --------
-    >>> from gofast.backends.nn import NNBackend
+    >>> from fusionlab.backends.nn import NNBackend
     >>> nn_backend = NNBackend(backend='auto')
     >>> model = nn_backend.sequential_model([
     ...     nn_backend.dense_layer(128, activation='relu'),

@@ -259,7 +259,7 @@ def compute_anomaly_scores(
     
     Examples
     --------
-    >>> from gofast.nn.losses import compute_anomaly_scores
+    >>> from fusionlab.nn.losses import compute_anomaly_scores
     >>> import numpy as np
     
     >>> # Statistical method example
@@ -285,9 +285,9 @@ def compute_anomaly_scores(
     
     See Also
     --------
-    gofast.nn.losses.compute_quantile_loss` : 
+    fusionlab.nn.losses.compute_quantile_loss` : 
         For computing quantile losses.
-    gofast.nn.losses.objective_loss :
+    fusionlab.nn.losses.objective_loss :
         For integrating anomaly scores into a multi-objective loss.
     
     References
@@ -472,7 +472,7 @@ def split_static_dynamic(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.nn.utils import split_static_dynamic
+    >>> from fusionlab.nn.utils import split_static_dynamic
     >>> 
     >>> # Create a dummy sequence array
     >>> sequences = np.random.rand(100, 10, 5)  # (
@@ -625,7 +625,7 @@ def create_sequences(
     --------
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gofast.nn.utils import create_sequences
+    >>> from fusionlab.nn.utils import create_sequences
 
     >>> # Create a dummy DataFrame
     >>> data = pd.DataFrame({
@@ -690,7 +690,7 @@ def create_sequences(
       target.
 
     - **Data Validation:** The function utilizes
-      `are_all_frames_valid` from `gofast.core.checks` to ensure the
+      `are_all_frames_valid` from `fusionlab.core.checks` to ensure the
       integrity of input DataFrame before processing and
       `exist_features` to verify the presence of the target column.
      
@@ -717,7 +717,7 @@ def create_sequences(
 
     See Also
     --------
-    gofast.nn.utils.split_static_dynamic :
+    fusionlab.nn.utils.split_static_dynamic :
         Function to split sequences into static and dynamic inputs.
 
     References
@@ -901,7 +901,7 @@ def compute_forecast_horizon(
 
     Examples
     --------
-    >>> from gofast.nn.utils import compute_forecast_horizon
+    >>> from fusionlab.nn.utils import compute_forecast_horizon
     >>> import pandas as pd
     >>> import numpy as np
     >>> from datetime import datetime, timedelta
@@ -1231,7 +1231,7 @@ def extract_callbacks_from(fit_params, return_fit_params=False):
 
     Examples
     --------
-    >>> from gofast.nn.utils import extract_callbacks_from
+    >>> from fusionlab.nn.utils import extract_callbacks_from
     >>> from tensorflow.keras.callbacks import EarlyStopping
     >>> fit_params = {
     ...     'epochs': 100,
@@ -1402,7 +1402,7 @@ def prepare_spatial_future_data(
 
     Examples
     --------
-    >>> from gofast.nn.utils import prepare_spatial_future_data
+    >>> from fusionlab.nn.utils import prepare_spatial_future_data
     >>> import pandas as pd
     >>> data = pd.DataFrame({
     ...     'location_id': [1, 1, 1, 2, 2, 2],
@@ -2162,7 +2162,7 @@ def reshape_xtft_data(
     
     Examples
     --------
-    >>> from gofast.nn.utils import reshape_xtft_data
+    >>> from fusionlab.nn.utils import reshape_xtft_data
     >>> static_data, dynamic_data, future_data, target_data = 
     ...     reshape_xtft_data(
     ...         df,
@@ -2226,11 +2226,11 @@ def reshape_xtft_data(
     
     See Also
     --------
-    gofast.utils.ts_utils.ts_validator :
+    fusionlab.utils.ts_utils.ts_validator :
         Validates and converts the datetime column.
-    gofast.core.handlers.columns_manager` :
+    fusionlab.core.handlers.columns_manager` :
         Formats and validates lists of column names.
-    gofast.core.checks.exist_features` : 
+    fusionlab.core.checks.exist_features` : 
         Checks for the existence of specified columns in a DataFrame.
 
     """
@@ -2458,18 +2458,18 @@ def reshape_xtft_data(
 def generate_forecast(
     xtft_model,
     train_data,
-    dt_col,           # e.g., 'year' or datetime column
+    dt_col,           
     dynamic_features,
     future_features=None,
     static_features=None,
-    test_data=None,   # used for evaluation if provided
-    mode="quantile",  # "quantile" or "point"
+    test_data=None,   
+    mode="quantile",  
     spatial_cols=None,
     forecast_horizon=4,
     time_steps=3,
-    q=None,           # default quantiles: [0.1, 0.5, 0.9]
-    tname=None,       # target name, e.g., 'subsidence'
-    forecast_dt=None, # if 'auto', derive from dt_col; else, manual [2023, 2024, 2025, 2026]
+    q=None,           
+    tname=None,       
+    forecast_dt=None, 
     savefile=None,     
     verbose=3
 ):
@@ -2552,9 +2552,9 @@ def generate_forecast(
     >>> import os 
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from gofast.nn.transformers import XTFT
-    >>> from gofast.nn.losses import combined_quantile_loss
-    >>> from gofast.nn.utils import generate_forecast
+    >>> from fusionlab.nn.transformers import XTFT
+    >>> from fusionlab.nn.losses import combined_quantile_loss
+    >>> from fusionlab.nn.utils import generate_forecast
     >>> 
     >>> # Create a dummy training DataFrame with a date column,
     >>> # dynamic features "feat1", "feat2", static feature "stat1",
@@ -2786,19 +2786,19 @@ def generate_forecast(
     
     See Also
     --------
-    gofast.nn.utils.reshape_xtft_data:
+    fusionlab.nn.utils.reshape_xtft_data:
         Function to reshape data for XTFT models.
-    gofast.utils.validator.validate_keras_model:
+    fusionlab.utils.validator.validate_keras_model:
         Function to validate Keras model compatibility.
-    gofast.core.handlers.columns_manager: 
+    fusionlab.core.handlers.columns_manager: 
         Utility to manage and format column names.
-    gofast.core.checks.check_datetime: 
+    fusionlab.core.checks.check_datetime: 
         Function to check and validate datetime columns.
-    gofast.core.checks.check_spatial_columns: 
+    fusionlab.core.checks.check_spatial_columns: 
         Function to validate spatial columns in data.
-    gofast.core.checks.assert_ratio: 
+    fusionlab.core.checks.assert_ratio: 
         Function to validate and assert ratio values.
-    gofast.metrics_special.coverage_score: 
+    fusionlab.metrics_special.coverage_score: 
         Function to compute coverage score for quantile predictions.
 
     References
@@ -3420,7 +3420,7 @@ def visualize_forecasts(
     for the spatial coordinates. We visualize the results for two
     evaluation periods (2023 and 2024), using **quantile** mode for the forecast.
 
-    >>> from gofast.nn.utils import visualize_forecasts
+    >>> from fusionlab.nn.utils import visualize_forecasts
     >>> forecast_results = pd.DataFrame({
     >>>     'longitude': [-103.808151, -103.808151, -103.808151],
     >>>     'latitude': [0.473152, 0.473152, 0.473152],
@@ -3454,7 +3454,7 @@ def visualize_forecasts(
     `longitude` and `latitude` are still provided but used for non-spatial
     x and y axes. Evaluation is for 2023.
 
-    >>> from gofast.nn.utils import visualize_forecasts
+    >>> from fusionlab.nn.utils import visualize_forecasts
     >>> forecast_results = pd.DataFrame({
     >>>     'longitude': [-103.808151, -103.808151, -103.808151],
     >>>     'latitude': [0.473152, 0.473152, 0.473152],
@@ -3803,8 +3803,8 @@ def forecast_single_step(
     Examples
     --------
 
-    >>> from gofast.nn.transformers import XTFT
-    >>> from gofast.nn.utils import forecast_single_step
+    >>> from fusionlab.nn.transformers import XTFT
+    >>> from fusionlab.nn.utils import forecast_single_step
     >>> import pandas as pd
     >>> import numpy as np
     >>> 
@@ -4161,9 +4161,9 @@ def forecast_multi_step(
     Examples
     --------
 
-    >>> from gofast.nn.transformers import XTFT
-    >>> from gofast.nn.utils import forecast_multi_step
-    >>> from gofast.nn.losses import combined_quantile_loss 
+    >>> from fusionlab.nn.transformers import XTFT
+    >>> from fusionlab.nn.utils import forecast_multi_step
+    >>> from fusionlab.nn.losses import combined_quantile_loss 
     >>> import pandas as pd
     >>> import numpy as np
     >>> 
@@ -5052,7 +5052,7 @@ pandas.DataFrame
 
 Examples
 --------
->>> from gofast.nn.utils import step_to_long
+>>> from fusionlab.nn.utils import step_to_long
 >>> # Given a DataFrame `forecast_df` with columns like:
 >>> # ['longitude', 'latitude', 'year', 'subsidence_actual',
 >>> #  'subsidence_q10_step1', 'subsidence_q50_step1', 'subsidence_q89_step1',
@@ -5203,8 +5203,8 @@ pandas.DataFrame
 Examples
 --------
 
->>> from gofast.nn.transformers import XTFT
->>> from gofast.nn.utils import generate_forecast_with
+>>> from fusionlab.nn.transformers import XTFT
+>>> from fusionlab.nn.utils import generate_forecast_with
 >>> import numpy as np
 >>> 
 >>> # Prepare a dummy XTFT model with example parameters.

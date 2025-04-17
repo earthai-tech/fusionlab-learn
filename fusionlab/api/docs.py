@@ -421,7 +421,7 @@ depends on the specific activation function being applied.
 Examples
 --------
 >>> import numpy as np 
->>> from gofast.transformers.activations import {fmt}
+>>> from fusionlab.transformers.activations import {fmt}
 >>> X = np.array([[1, 2], [3, 4]])
 >>> transformer = {fmt}(
 ...    scale=1.0, 
