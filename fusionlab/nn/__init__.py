@@ -75,7 +75,7 @@ if KERAS_BACKEND:
     )
     from .transformers import ( 
         TemporalFusionTransformer, 
-        # NTemporalFusionTransformer
+        NTemporalFusionTransformer
         TFT, XTFT, SuperXTFT
         )
     
@@ -94,7 +94,7 @@ if KERAS_BACKEND:
         "lstm_ts_tuner",
         "cross_validate_lstm",
         "TemporalFusionTransformer", 
-        # NTemporalFusionTransformer
+        "NTemporalFusionTransformer", 
         "TFT", "XTFT", "SuperXTFT"
     ]
 
