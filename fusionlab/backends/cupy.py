@@ -17,7 +17,7 @@ CUDA support::
 Example Usage:
 
 1. Initializing CuPyBackend:
-    from gofast.backends.cupy_backend import CuPyBackend
+    from fusionlab.backends.cupy_backend import CuPyBackend
     cupy_backend = CuPyBackend()
 
 2. Performing Array Operations:
@@ -131,7 +131,7 @@ class CuPyBackend(BaseBackend):
 
     Examples
     --------
-    >>> from gofast.backends.cupy_backend import CuPyBackend
+    >>> from fusionlab.backends.cupy_backend import CuPyBackend
     >>> backend = CuPyBackend()
     >>> a = backend.array([[3, 1], [1, 2]])
     >>> b = backend.array([9, 8])

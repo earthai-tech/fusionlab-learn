@@ -11,7 +11,7 @@ Utility functions for data manipulation, validation, and preprocessing
 within FusionLab. Includes routines for handling missing data,
 string normalization, type inspection, and other common utilities.
 
-Adapted for FusionLab from the original gofast.core.utils implementation.
+Adapted for FusionLab from the original fusionlab.core.utils implementation.
 """
 
 from __future__ import print_function, annotations
@@ -124,7 +124,7 @@ def run_return(
 
     Examples
     --------
-    >>> from gofast.core.utils import run_return
+    >>> from fusionlab.core.utils import run_return
     >>> class MyModel:
     ...     def __init__(self, name):
     ...         self.name = name
@@ -285,7 +285,7 @@ def gen_X_y_batches(
 
     Examples
     --------
-    >>> from gofast.core.utils import gen_X_y_batches
+    >>> from fusionlab.core.utils import gen_X_y_batches
     >>> X = np.random.rand(2000, 5)
     >>> y = np.random.randint(0, 2, size=(2000,))
     >>> batches = gen_X_y_batches(X, y, batch_size=500, shuffle=True)
@@ -481,7 +481,7 @@ def ensure_non_empty_batch(
 
     Examples
     --------
-    >>> from gofast.core.utils import ensure_non_empty_batch
+    >>> from fusionlab.core.utils import ensure_non_empty_batch
     >>> import numpy as np
     >>> X = np.random.rand(2000, 5)
     >>> y = np.random.randint(0, 2, size=(2000,))
@@ -623,7 +623,7 @@ def ensure_non_empty_batch(
 #     Examples
 #     --------
 #     >>> import numpy as np
-#     >>> from gofast.core.utils import get_batch_size
+#     >>> from fusionlab.core.utils import get_batch_size
 #     >>> X = np.random.rand(1000, 20)
 #     >>> y = np.random.rand(1000)
 #     >>> batch_size = _get_batch_size(X, y)
@@ -732,7 +732,7 @@ def training_progress_bar(
     
     Examples
     --------
-    >>> from gofast.utils.sysutils import training_progress_bar
+    >>> from fusionlab.utils.sysutils import training_progress_bar
     >>> metrics = {'loss': 1.0, 'accuracy': 0.5, 'val_loss': 1.0, 'val_accuracy': 0.5}
     >>> with training_progress_bar(epochs=5, steps_per_epoch=20, 
                                    metrics=metrics, obj_name="Model") as progress:
@@ -845,7 +845,7 @@ def format_to_datetime(data, date_col, verbose=0, **dt_kws):
 
     Examples
     --------
-    >>> from gofast.core.utils import format_to_datetime
+    >>> from fusionlab.core.utils import format_to_datetime
     >>> df = pd.DataFrame({
     ...     'Date': ['2021-01-01', '01/02/2021', '03-Jan-2021', '2021.04.01',
                      '05 May 2021'],
@@ -891,7 +891,7 @@ def unpack_list_of_dicts(list_of_dicts):
 
     Example:
     --------
-    >>> from gofast.core.utils import unpack_list_of_dicts
+    >>> from fusionlab.core.utils import unpack_list_of_dicts
     >>> list_of_dicts = [
             {'key1': ['value10', 'value11']},
             {'key2': ['value20', 'value21']},
@@ -1069,7 +1069,7 @@ def listing_items_format (
         None or string litteral if verbose is set to ``False``.
     Examples
     ---------
-    >>> from gofast.core.utils import listing_items_format 
+    >>> from fusionlab.core.utils import listing_items_format 
     >>> litems = ['hole_number', 'depth_top', 'depth_bottom', 'strata_name', 
                 'rock_name','thickness', 'resistivity', 'gamma_gamma', 
                 'natural_gamma', 'sp','short_distance_gamma', 'well_diameter']
@@ -1132,7 +1132,7 @@ def shrunkformat(
     :example: 
         
     >>> import numpy as np 
-    >>> from gofast.core.utils import shrunkformat
+    >>> from fusionlab.core.utils import shrunkformat
     >>> text=" I'm a long text and I will be shrunked and replaced by ellipsis."
     >>> shrunkformat (text)
     ... 'Im a long ... and replaced by ellipsis.'
@@ -1225,7 +1225,7 @@ def accept_types(
     Examples
     --------
     >>> import numpy as np; import pandas as pd 
-    >>> from gofast.core.utils import accept_types
+    >>> from fusionlab.core.utils import accept_types
     >>> accept_types(pd.Series, pd.DataFrame, tuple, list, str)
     "'Series','DataFrame','tuple','list' and 'str'"
 
@@ -1267,7 +1267,7 @@ def smart_format(iter_obj, choice='and'):
 
     Examples
     --------
-    >>> from gofast.core.utils import smart_format
+    >>> from fusionlab.core.utils import smart_format
     >>> smart_format(['model', 'iter', 'mesh', 'data'])
     'model', 'iter', 'mesh' and 'data'
 
@@ -1460,7 +1460,7 @@ def interpol_scipy(
     Examples
     --------
     >>> import numpy as np
-    >>> from gofast.core.utils import interpol_scipy
+    >>> from fusionlab.core.utils import interpol_scipy
     >>> x = np.array([0, 1, 2, 3, 4])
     >>> y = np.array([0, 1, 4, 9, 16])
     >>> x_new = np.array([1.5, 2.5, 3.5])
@@ -1522,7 +1522,7 @@ def _remove_str_word (ch, word_to_remove, deep_remove=False):
         
     Examples
     ---------
-    >>> from gofast.tools import funcutils as func
+    >>> from fusionlab.tools import funcutils as func
     >>> ch ='AMTAVG 7.76: "K1.fld", Dated 99-01-01,AMTAVG, 
     ...    Processed 11 Jul 17 AMTAVG'
     >>> ss=func._remove_str_word(char=ch, word_to_remove='AMTAVG', 
@@ -1561,7 +1561,7 @@ def stn_check_split_type(data_lines):
     :rtype: str
     
     :Example: 
-        >>> from gofast.tools  import funcutils as func
+        >>> from fusionlab.tools  import funcutils as func
         >>> path =  data/ K6.stn
         >>> with open (path, 'r', encoding='utf8') as f : 
         ...                     data= f.readlines()
@@ -1704,7 +1704,7 @@ def fmt_text(
     
     :Example: 
         
-        >>> from gofast.core.utils import fmt_text
+        >>> from fusionlab.core.utils import fmt_text
         >>> fmt_text(anFeatures =[1,130, 93,(146,145, 125)])
     
     """
@@ -1792,7 +1792,7 @@ def ismissing(refarr, arr, fill_value = np.nan, return_index =False):
     :Example: 
         
     >>> import numpy as np 
-    >>> from gofast.core.utils import ismissing
+    >>> from fusionlab.core.utils import ismissing
     >>> refreq = np.linspace(7e7, 1e0, 20) # 20 frequencies as reference
     >>> # remove the value between index 7 to 12 and stack again
     >>> freq = np.hstack ((refreq.copy()[:7], refreq.copy()[12:] ))  
@@ -1991,8 +1991,8 @@ def sanitize_frame_cols(
         
     Examples 
     ---------
-    >>> from gofast.core.utils import sanitize_frame_cols 
-    >>> from gofast.core.utils import read_data 
+    >>> from fusionlab.core.utils import sanitize_frame_cols 
+    >>> from fusionlab.core.utils import read_data 
     >>> h502= read_data ('data/boreholes/H502.xlsx') 
     >>> h502 = sanitize_frame_cols (h502, fill_pattern ='_' ) 
     >>> h502.columns[:3]
@@ -2062,7 +2062,7 @@ def convert_value_in (v, unit ='m'):
        
     Examples 
     ---------
-    >>> from gofast.core.utils import convert_value_in 
+    >>> from fusionlab.core.utils import convert_value_in 
     >>> convert_value_in (20) 
     20.0
     >>> convert_value_in ('20mm') 
@@ -2143,7 +2143,7 @@ def get_confidence_ratio (
            [ 4,  8],
            [10, 19],
            [ 5,  7]])
-    >>> from gofast.core.utils import get_confidence_ratio 
+    >>> from fusionlab.core.utils import get_confidence_ratio 
     >>> get_confidence_ratio (test)
     >>> array([1., 1.])
     >>> get_confidence_ratio (test, invalid= ( 13, 19) )
@@ -2212,8 +2212,8 @@ def make_obj_consistent_if (
        
     Examples 
     ----------
-    >>> from gofast.core.utils import make_obj_consistent_if
-    >>> from gofast.exlib import SVC, LogisticRegression, XGBClassifier 
+    >>> from fusionlab.core.utils import make_obj_consistent_if
+    >>> from fusionlab.exlib import SVC, LogisticRegression, XGBClassifier 
     >>> classifiers = ["SVC", "LogisticRegression", "XGBClassifier"] 
     >>> classifier_names = ['SVC', 'LR'] 
     >>> make_obj_consistent_if (classifiers, default = classifier_names ) 
@@ -2275,7 +2275,7 @@ def ellipsis2false(
 
     Examples
     --------
-    >>> from gofast.core.utils import ellipsis2false
+    >>> from fusionlab.core.utils import ellipsis2false
     >>> var, = ellipsis2false(...)
     >>> var
     False
@@ -2370,7 +2370,7 @@ def fancier_repr_formatter(obj, max_attrs=7):
 
     Examples:
     --------
-    >>> from gofast.core.utils import fancier_repr_formatter
+    >>> from fusionlab.core.utils import fancier_repr_formatter
     >>> class MyClass:
     >>>     def __init__(self, a, b, c):
     >>>         self.a = a
@@ -2459,7 +2459,7 @@ def normalize_string(
 
     Examples
     --------
-    >>> from gofast.core.utils import normalize_string
+    >>> from fusionlab.core.utils import normalize_string
     >>> normalize_string("Hello World", target_strs=["hello", "world"], ignore_case=True)
     'hello world'
     >>> normalize_string("Goodbye World", target_strs=["hello", "goodbye"], 
@@ -2540,7 +2540,7 @@ def format_and_print_dict(data_dict, front_space=4):
 
     Examples
     --------
-    >>> from gofast.core.utils import format_and_print_dict
+    >>> from fusionlab.core.utils import format_and_print_dict
     >>> sample_dict = {
             'gender': {1: 'Male', 0: 'Female'},
             'age': {1: '35-60', 0: '16-35', 2: '>60'}
@@ -2596,7 +2596,7 @@ def fill_nan_in(
     Example
     -------
     >>> import pandas as pd
-    >>> from gofast.core.utils import fill_nan_in
+    >>> from fusionlab.core.utils import fill_nan_in
     >>> df = pd.DataFrame({'A': [1, 2, np.nan], 'B': [np.nan, 2, 3]})
     >>> df = fill_nan_in(df, method='median')
     >>> print(df)
@@ -2646,7 +2646,7 @@ def contains_delimiter(s: str, delimiters: Union[str, list, set]) -> bool:
 
     Examples
     --------
-    >>> from gofast.core.utils import contains_delimiter
+    >>> from fusionlab.core.utils import contains_delimiter
     >>> contains_delimiter("example__string", "__")
     True
 
@@ -2727,7 +2727,7 @@ def lowertify(
 
     Examples
     --------
-    >>> from gofast.core.utils import lowertify
+    >>> from fusionlab.core.utils import lowertify
     >>> lowertify('KIND')
     ('kind',)
     
@@ -2809,7 +2809,7 @@ def fetch_value_in(
 
     Examples
     --------
-    >>> from gofast.core.utils import fetch_value_in
+    >>> from fusionlab.core.utils import fetch_value_in
     >>> metrics = {
     ...     'accuracy_score': lambda x: x,
     ...     'balanced_accuracy_score': lambda x: x,
@@ -3054,7 +3054,7 @@ def error_policy(
 
     Examples
     --------
-    >>> from gofast.core.utils import error_policy
+    >>> from fusionlab.core.utils import error_policy
     >>> # Basic usage:
     >>> resolved_error = error_policy('warn')
     >>> print(resolved_error)
@@ -3072,7 +3072,7 @@ def error_policy(
 
     See Also
     --------
-    gofast.utils.validator.validate_nan_policy : A function that
+    fusionlab.utils.validator.validate_nan_policy : A function that
         validate NaN policies.
     """  # noqa: E501
 

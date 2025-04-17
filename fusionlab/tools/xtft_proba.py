@@ -25,7 +25,7 @@ Features:
 
 Usage:
 ------
-This application is intended to be used as part of the `gofast.tools` subpackage. Users can
+This application is intended to be used as part of the `fusionlab.tools` subpackage. Users can
 manipulate external parameters such as data paths, feature lists, model hyperparameters, and other
 configurations to tailor the tool to their specific forecasting tasks.
 
@@ -78,8 +78,8 @@ import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
 import gofast as gf
-from gofast.core.io import read_data, print_script_info, show_usage 
-from gofast.nn.tft import XTFT
+from fusionlab.core.io import read_data, print_script_info, show_usage 
+from fusionlab.nn.tft import XTFT
 
 # Configure logging
 logging.basicConfig(

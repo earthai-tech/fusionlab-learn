@@ -217,8 +217,8 @@ class DependencyError(Exception):
 
     See also
     --------
-    - `gofast.exceptions`: Other custom exceptions in the `gofast` package.
-    - `gofast.utils.install_dependencies`: Function that installs missing 
+    - `fusionlab.exceptions`: Other custom exceptions in the `gofast` package.
+    - `fusionlab.utils.install_dependencies`: Function that installs missing 
       dependencies for the package.
 
     References
@@ -261,7 +261,7 @@ class NotRunnedError(Exception):
 
     Examples
     --------
-    >>> from gofast.utils.validator import check_is_runned, NotRunnedError
+    >>> from fusionlab.utils.validator import check_is_runned, NotRunnedError
     >>> class ExampleClass:
     ...     def __init__(self):
     ...         self._is_runned = False

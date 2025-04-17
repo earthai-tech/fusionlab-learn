@@ -12,14 +12,14 @@ LSTM units, better handling of dynamic features, consolidated training
 across batches, and streamlined data processing.
 
 **Usage:**
-Integrate this script as part of the `gofast.tools` subpackage to
+Integrate this script as part of the `fusionlab.tools` subpackage to
 perform TFT-based subsidence predictions.
 
 **Example:**
 
 .. code-block:: python
 
-    from gofast.tools import tft_batch_p
+    from fusionlab.tools import tft_batch_p
 
     # Execute the main function
     tft_batch_p.main()
@@ -61,10 +61,10 @@ import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
-import gofast as gf
-from gofast.nn.tft import TemporalFusionTransformer
-from gofast.utils.spatial_utils import spatial_sampling, batch_spatial_sampling
-from gofast.utils.data_utils import pop_labels_in
+import fusionlab as flab
+from fusionlab.nn.tft import TemporalFusionTransformer
+from fusionlab.utils.spatial_utils import spatial_sampling, batch_spatial_sampling
+from fusionlab.utils.data_utils import pop_labels_in
 
 # =============================================================================
 # Suppress warnings for clarity
@@ -78,10 +78,10 @@ tf.get_logger().setLevel('ERROR')
 pkgs_versions = {
     "numpy": np.__version__,
     "pandas": pd.__version__,
-    "scikit-learn": gf.__version__,  # Corrected scikit-learn version
+    "scikit-learn": flab.__version__,  # Corrected scikit-learn version
     "joblib": joblib.__version__,
-    "tensorflow": tf.__version__,
-    "gofast": gf.__version__,
+    "tensorflow": flab.__version__,
+    "gofast": flab.__version__,
     "matplotlib": mpl.__version__,
     'scikeras': scikeras.__version__,
 }

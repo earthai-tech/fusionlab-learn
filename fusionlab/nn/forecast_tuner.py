@@ -580,7 +580,7 @@ tuple
 
 Examples
 --------
->>> from gofast.nn.forecast_tuner import xtft_tuner
+>>> from fusionlab.nn.forecast_tuner import xtft_tuner
 >>> # Assume preprocessed inputs: X_static, X_dynamic, X_future, and y
 >>> best_hps, best_model, tuner = xtft_tuner(
 ...     inputs=[X_static, X_dynamic, X_future],
@@ -707,7 +707,7 @@ tuple
 
 Examples
 --------
->>> from gofast.nn.forecast_tuner import tft_tuner
+>>> from fusionlab.nn.forecast_tuner import tft_tuner
 >>> best_hps, best_model, tuner = tft_tuner(
 ...     inputs=[X_static, X_dynamic, X_future],
 ...     y=y,

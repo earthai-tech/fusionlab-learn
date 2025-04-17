@@ -21,7 +21,7 @@ Features:
 
 Usage:
 ------
-This script is intended to be used as part of the `gofast.tools` subpackage. Users can
+This script is intended to be used as part of the `fusionlab.tools` subpackage. Users can
 manipulate external parameters such as data paths, model hyperparameters, and other
 configurations to tailor the tool to their specific tasks.
 
@@ -62,7 +62,7 @@ from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
-from gofast.nn.tft import XTFT
+from fusionlab.nn.tft import XTFT
 import gofast as gf
 
 # Configure logging

@@ -106,7 +106,7 @@ def coverage_score(
 
     Examples
     --------
-    >>> from gofast.metrics_special import coverage_score
+    >>> from fusionlab.metrics_special import coverage_score
     >>> import numpy as np
     >>> y_true = np.array([10, 12, 11, 9])
     >>> y_lower = np.array([9, 11, 10, 8])

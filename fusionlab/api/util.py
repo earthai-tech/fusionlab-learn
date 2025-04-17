@@ -114,7 +114,7 @@ class TerminalSize:
 
     Examples
     --------
-    >>> from gofast.api.util import TerminalSize
+    >>> from fusionlab.api.util import TerminalSize
     >>> TerminalSize.get_terminal_size()
     (80, 25)
 
@@ -332,7 +332,7 @@ def distribute_column_widths(*dfs,  **kws):
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.api.util import distribute_column_widths
+    >>> from fusionlab.api.util import distribute_column_widths
     >>> df1 = pd.DataFrame({
     ...     'A': ['long text here', 'short'], 
     ...     'B': [123456, 123]
@@ -613,7 +613,7 @@ def get_column_widths_in(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import get_column_widths_in
+    >>> from fusionlab.api.util import get_column_widths_in
     >>> df1 = pd.DataFrame({'A': [1, 2], 'B': ['x', 'y']})
     >>> df2 = pd.DataFrame({'A': [3, 4], 'B': ['w', 'z']})
     >>> get_column_widths_in(df1, df2, max_text_length=10, include_index=True,
@@ -694,7 +694,7 @@ def get_display_dimensions(
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.api.util import get_display_dimensions
+    >>> from fusionlab.api.util import get_display_dimensions
     >>> df1 = pd.DataFrame({"A": range(10), "B": range(10, 20)})
     >>> df2 = pd.DataFrame({"C": range(5), "D": range(5, 10)})
     >>> get_display_dimensions(df1, df2, max_rows=5, max_cols=1, 
@@ -766,7 +766,7 @@ def is_numeric_type(df, target="index"):
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import is_numeric_type
+    >>> from fusionlab.api.util import is_numeric_type
     >>> df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
     >>> print(is_numeric_type(df, 'index'))
     False
@@ -830,7 +830,7 @@ def extract_truncate_df(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import extract_truncate_df
+    >>> from fusionlab.api.util import extract_truncate_df
     >>> df = pd.DataFrame({
     ...        "A": range(150), 
     ...        "B": range(150)
@@ -935,7 +935,7 @@ def select_optimal_display_dimensions(
     
     Examples
     --------
-    >>> from gofast.api.util import select_optimal_display_dimensions
+    >>> from fusionlab.api.util import select_optimal_display_dimensions
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': range(1, 101),
@@ -992,7 +992,7 @@ def extract_matching_columns(header_line, data_columns):
 
     Examples
     --------
-    >>> from gofast.api.util import extract_matching_columns
+    >>> from fusionlab.api.util import extract_matching_columns
     >>> header_line = "name age city  ... income"
     >>> data_columns = ["name", "age", "city", "state", "income"]
     >>> matching_columns = extract_matching_columns(header_line, data_columns)
@@ -1042,7 +1042,7 @@ def insert_ellipsis_to_df(sub_df, full_df=None, include_index=True):
         
     Example
     ```python    
-    from gofast.api.util import insert_ellipsis_to_df
+    from fusionlab.api.util import insert_ellipsis_to_df
     data = {
         'location_id': [1.0, 1.0, 1.0, 100.0, 100.0],
         'location_name': ['Griffin Grove', 'Griffin Grove', 'Griffin Grove', 
@@ -1154,7 +1154,7 @@ def apply_precision(value, precision=4):
 
     Examples
     --------
-    >>> from gofast.api.util import apply_precision
+    >>> from fusionlab.api.util import apply_precision
     >>> apply_precision(123.456789, 2)
     123.46
     >>> apply_precision(123.4, 2)
@@ -1292,7 +1292,7 @@ def flex_df_formatter(
     --------
     >>> import numpy as np 
     >>> import pandas as pd 
-    >>> from gofast.api.util import flex_df_formatter
+    >>> from fusionlab.api.util import flex_df_formatter
     >>> data = {
     ...    'age': range(30),
     ...    'tenure_months': range(30),
@@ -1412,7 +1412,7 @@ def resolve_auto_settings(*settings):
 
     Examples
     --------
-    >>> from gofast.api.util import resolve_auto_settings
+    >>> from fusionlab.api.util import resolve_auto_settings
     >>> max_rows = None
     >>> max_cols = None
     >>> display_settings = resolve_auto_settings(max_rows, max_cols)
@@ -1459,7 +1459,7 @@ def select_df_styles(style, df, **kwargs):
 
     Examples
     --------
-    >>> from gofast.api.util import select_df_styles
+    >>> from fusionlab.api.util import select_df_styles
     >>> data = {'Col1': range(150), 'Col2': range(150)}
     >>> df = pd.DataFrame(data)
     >>> select_df_styles('auto', df)
@@ -1537,7 +1537,7 @@ def is_dataframe_long(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import is_dataframe_long
+    >>> from fusionlab.api.util import is_dataframe_long
     >>> data = {'Col1': range(50), 'Col2': range(50)}
     >>> df = pd.DataFrame(data)
     >>> is_dataframe_long(df, max_rows=100, max_cols=10)
@@ -1651,7 +1651,7 @@ def propose_layouts(
 
     Examples
     --------
-    >>> from gofast.api.util import propose_layouts
+    >>> from fusionlab.api.util import propose_layouts
     >>> import pandas as pd
     >>> df1 = pd.DataFrame({'A': [1, 2, 3], 'B': ['x', 'y', 'z']})
     >>> df2 = pd.DataFrame({'C': [4, 5, 6], 'D': ['a', 'b', 'c']})
@@ -1856,7 +1856,7 @@ def _robust_df_display(
 
     Examples
     --------
-    >>> from gofast.api.util import _robust_df_display
+    >>> from fusionlab.api.util import _robust_df_display
     >>> df = pd.DataFrame({
             "A": range(5),
             "B": ['one', 'two', 'three', 'four', 'five']
@@ -2065,7 +2065,7 @@ def df_advanced_style(
 
     Examples
     --------
-    >>> from gofast.api.util import df_advanced_style
+    >>> from fusionlab.api.util import df_advanced_style
     >>> formatted_df = "index    A    B    C\\n0       1    2    3\\n1       4    5    6"
     >>> print(df_advanced_style(formatted_df, title="Advanced Table", index=True))
         Advanced Table  
@@ -2198,7 +2198,7 @@ def calculate_column_widths(
 
     Examples
     --------
-    >>> from gofast.api.util import calculate_column_widths
+    >>> from fusionlab.api.util import calculate_column_widths
     >>> lines = [
     ...     '    age  tenure_months  monthly_charges',
     ...     '0     0              0          89.0012',
@@ -2362,7 +2362,7 @@ def auto_adjust_dataframe_display(df, header=True, index=True, sample_size=100):
 
     Examples
     --------
-    >>> from gofast.api.util import auto_adjust_dataframe_display
+    >>> from fusionlab.api.util import auto_adjust_dataframe_display
     >>> df = pd.DataFrame(np.random.randn(100, 10), columns=[f"col_{i}" for i in range(10)])
     >>> max_rows, max_cols = auto_adjust_dataframe_display(df)
     >>> print(f"Max Rows: {max_rows}, Max Cols: {max_cols}")
@@ -2447,7 +2447,7 @@ def find_best_display_params(
     --------
     >>> import numpy as np
     >>> import pandas as pd 
-    >>> from gofast.api.util import find_best_display_params
+    >>> from fusionlab.api.util import find_best_display_params
     >>> df1 = pd.DataFrame(np.random.randn(100, 5))
     >>> df2 = pd.DataFrame(np.random.randn(200, 10))
     >>> max_rows, max_cols = find_best_display_params(
@@ -2515,7 +2515,7 @@ def find_best_display_params2(*dfs, index=True, header=True, sample_size=100):
     --------
     >>> import numpy as np
     >>> import pandas as pd 
-    >>> from gofast.api.util import find_best_display_params2
+    >>> from fusionlab.api.util import find_best_display_params2
     >>> df1 = pd.DataFrame(np.random.randn(100, 5))
     >>> df2 = pd.DataFrame(np.random.randn(200, 10))
     >>> param_resolver = find_best_display_params2(df1, df2, index=True,
@@ -2591,7 +2591,7 @@ def parse_component_kind(pc_list, kind):
 
     Examples
     --------
-    >>> from gofast.api.extension import parse_component_kind
+    >>> from fusionlab.api.extension import parse_component_kind
     >>> pc_list = [
     ...     ('pc1', ['feature1', 'feature2', 'feature3'], [0.8, 0.5, 0.3]),
     ...     ('pc2', ['feature1', 'feature2', 'feature3'], [0.6, 0.4, 0.2])
@@ -2651,7 +2651,7 @@ def find_maximum_table_width(summary_contents, header_marker='='):
 
     Examples
     --------
-    >>> from gofast.api.util import find_maximum_table_width
+    >>> from fusionlab.api.util import find_maximum_table_width
     >>> summary = '''Model Performance
     ... ===============
     ... Estimator : SVC
@@ -2727,7 +2727,7 @@ def format_text(
 
     Examples
     --------
-    >>> from gofast.api.util import format_text
+    >>> from fusionlab.api.util import format_text
     >>> text_example = ("This is an example text that is supposed to wrap" 
                       "around after a certain number of characters.")
     >>> print(format_text(text_example, key="Note"))
@@ -2804,7 +2804,7 @@ def format_value(value, precision=4):
     
     Examples
     --------
-    >>> from gofast.api.util import format_value
+    >>> from fusionlab.api.util import format_value
     >>> format_value(123)
     '123'
     >>> format_value(123.45678)
@@ -2835,7 +2835,7 @@ def get_frame_chars(frame_char):
 
     Examples
     --------
-    >>> from gofast.api.util import get_frame_chars
+    >>> from fusionlab.api.util import get_frame_chars
     >>> get_frame_chars('[')
     (']', '[', ']')
     >>> get_frame_chars('{')
@@ -2872,7 +2872,7 @@ def df_to_custom_dict(df, key_prefix='Row', frame_char='['):
 
     Examples
     --------
-    >>> from gofast.api.util import df_to_custom_dict
+    >>> from fusionlab.api.util import df_to_custom_dict
     >>> df = pd.DataFrame({'col0': [10, 20], 'col1': [30, 40]}, 
                           index=['a', 'b'])
     >>> dataframe_to_custom_dict(df)
@@ -2930,7 +2930,7 @@ def calculate_widths(df, max_text_length=50):
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import calculate_widths
+    >>> from fusionlab.api.util import calculate_widths
     >>> df = pd.DataFrame({
     ...     'usage': [12345, 123],
     ...     'time': ['long text here that will be cut', 'short']
@@ -3010,7 +3010,7 @@ def format_df(
     Consider a DataFrame `df` created as follows:
     
     >>> import pandas as pd 
-    >>> from gofast.api.util import format_df 
+    >>> from fusionlab.api.util import format_df 
     >>> data = {
         'Name': ['Alice', 'Bob', 'Charlie'],
         'Occupation': ['Engineer', 'Doctor', 'Artist'],
@@ -3029,7 +3029,7 @@ def format_df(
     2 |  Charlie      Artist   35
     =============================
     
-    >>> from gofast.datasets.simulate import simulate_medical_diagnosis 
+    >>> from fusionlab.datasets.simulate import simulate_medical_diagnosis 
     >>> med_data = medical_diagnosis(as_frame=True ) 
     >>> print(format_correlations (med_data, autofit= True ) ) 
 
@@ -3111,7 +3111,7 @@ def is_autofit_needed(
     
     Examples
     --------
-    >>> from gofast.api.util import is_autofit_needed
+    >>> from fusionlab.api.util import is_autofit_needed
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': range(1, 101),
@@ -3195,7 +3195,7 @@ def autofit_display(
 
     Examples
     --------
-    >>> from gofast.api.util import autofit_display
+    >>> from fusionlab.api.util import autofit_display
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': range(1, 101),
@@ -3269,7 +3269,7 @@ def validate_data(data, columns=None, error_mode='raise'):
     Examples
     --------
     >>> import numpy as np 
-    >>> from gofast.api.util import validate_data
+    >>> from fusionlab.api.util import validate_data
     >>> data = np.array([[1, 2], [3, 4]])
     >>> validate_data(data)
        feature_0  feature_1
@@ -3411,7 +3411,7 @@ def format_correlations(
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import format_correlations
+    >>> from fusionlab.api.util import format_correlations
     >>> data = pd.DataFrame({
     ...     'A': np.random.randn(100),
     ...     'B': np.random.randn(100),
@@ -3571,7 +3571,7 @@ def get_table_width_from(
     
     Examples
     --------
-    >>> from gofast.api.util import get_table_width_from
+    >>> from fusionlab.api.util import get_table_width_from
     >>> formatted_str = "=======\n| Col |\n=======\n"
     >>> get_table_width_from(formatted_str)
     7
@@ -3663,7 +3663,7 @@ def generate_legend(
 
     Examples
     --------
-    >>> from gofast.api.util import generate_legend
+    >>> from fusionlab.api.util import generate_legend
     >>> custom_markers = {"++": "High Positive", "--": "High Negative"}
     >>> print(generate_legend(custom_markers=custom_markers, max_width=60))
     ............................................................
@@ -3803,7 +3803,7 @@ def series_to_dataframe(series):
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.api.util import series_to_dataframe
+    >>> from fusionlab.api.util import series_to_dataframe
     >>> series = pd.Series(data=[1, 2, 3], index=['a', 'b', 'c'])
     >>> df = series_to_dataframe(series)
     >>> print(df)
@@ -3896,7 +3896,7 @@ def get_terminal_size():
 
     Examples
     --------
-    >>> from gofast.api.util import get_terminal_size
+    >>> from fusionlab.api.util import get_terminal_size
     >>> terminal_width, terminal_height = get_terminal_size()
     >>> print("Terminal Width:", terminal_width)
     >>> print("Terminal Height:", terminal_height)
@@ -3946,7 +3946,7 @@ def optimize_col_width (max_cols=4, df=None, min_col_width=10):
     Examples
     --------
     >>> import pandas as pd 
-    >>> from gofast.api.util import optimize_col_width
+    >>> from fusionlab.api.util import optimize_col_width
     >>> df = pd.DataFrame({'A': range(100), 'B': range(100), 'C': range(100)})
     >>> max_width = optimize_col_width(max_cols=3, df=df)
     >>> print("Maximum column width for display:", max_width)
@@ -4002,7 +4002,7 @@ def get_displayable_columns(cols_or_df, /, buffer_space=2, min_col_width=10):
     Examples
     --------
     >>> import pandas as pd
-    >>> from gofast.api.util import get_displayable_columns
+    >>> from fusionlab.api.util import get_displayable_columns
     >>> df = pd.DataFrame({'A': range(100), 'B': range(100), 'C': range(100)})
     >>> num_cols = get_displayable_columns(df)
     >>> print(f"Number of displayable columns: {num_cols}")
@@ -4068,7 +4068,7 @@ def to_camel_case(text, delimiter=None, use_regex=False):
 
     Examples
     --------
-    >>> from gofast.api.util import to_camel_case
+    >>> from fusionlab.api.util import to_camel_case
     >>> to_camel_case('outlier_results', '_')
     'OutlierResults'
 
@@ -4143,7 +4143,7 @@ def check_index_column_types(df):
 
     Examples
     --------
-    >>> from gofast.api.util import check_index_column_types
+    >>> from fusionlab.api.util import check_index_column_types
     >>> data = pd.DataFrame({
     ...     'A': [1, 2, 3],
     ...     'B': [4, 5, 6],
@@ -4192,7 +4192,7 @@ def beautify_dict(d, space=4, key=None, max_char=None):
 
     Examples:
     --------
-    >>> from gofast.api.util import beautify_dict
+    >>> from fusionlab.api.util import beautify_dict
     >>> dictionary = {
     ...     3: 'Home & Garden',
     ...     2: 'Health & Beauty',
@@ -4266,7 +4266,7 @@ def remove_extra_spaces(text):
 
     Example
     -------
-    >>> from gofast.api.util import remove_extra_spaces
+    >>> from fusionlab.api.util import remove_extra_spaces
     >>> text = "this is      text that    have   extra          space."
     >>> remove_extra_spaces(text)
     'this is text that have extra space.'
@@ -4606,7 +4606,7 @@ def rearrange(obj):
 
     Examples
     --------
-    >>> from gofast.api.util import rearrange
+    >>> from fusionlab.api.util import rearrange
     >>> dico = {'A': 'valueA', 'B': 'valueB', 'C': 'valueC', 'D': 'valueD'}
     >>> rearrange(dico)
     {'A': 'valueA', 'D': 'valueD', 'B': 'valueB', 'C': 'valueC'}
@@ -4742,7 +4742,7 @@ def propose_layout(
 
     Examples
     --------
-    >>> from gofast.api.util import propose_layout
+    >>> from fusionlab.api.util import propose_layout
     >>> import pandas as pd
     >>> data = pd.DataFrame({
     ...     'Column1': range(10),
@@ -4871,8 +4871,8 @@ def refine_df(
 
     Examples
     --------
-    >>> from gofast.api.util import refine_df
-    >>> from gofast.api.util import refine_df
+    >>> from fusionlab.api.util import refine_df
+    >>> from fusionlab.api.util import refine_df
     >>> df = pd.DataFrame({'A': [1.123456, 2.345678, 3.987654], 
     ...                    'B': ['short', 
     ...                          'a very long string that exceeds the maximum character length', 
@@ -5001,20 +5001,20 @@ def count_functions(
 
     Examples
     --------
-    >>> from gofast.api.util import count_functions_classes
-    >>> count_functions_classes('gofast.api.util', include_class=True,
+    >>> from fusionlab.api.util import count_functions_classes
+    >>> count_functions_classes('fusionlab.api.util', include_class=True,
                                 return_counts=True)
     10
 
-    >>> count_functions('gofast.api.util', include_class=True,
+    >>> count_functions('fusionlab.api.util', include_class=True,
                                 return_counts=False)
     ['ClassA', 'ClassB', 'func1', 'func2', 'func3']
 
-    >>> count_functions('gofast.api.util', include_class=False, 
+    >>> count_functions('fusionlab.api.util', include_class=False, 
                                 return_counts=True, include_private=True)
     15
 
-    >>> count_functions('gofast.api.util', include_class=False, 
+    >>> count_functions('fusionlab.api.util', include_class=False, 
                                 return_counts=False, include_private=True)
     ['_private_func1', '_private_func2', 'func1', 'func2']
 
@@ -5142,7 +5142,7 @@ def round_numeric_values(df, precision=4):
 
     Examples
     --------
-    >>> from gofast.api.util import round_numeric_values
+    >>> from fusionlab.api.util import round_numeric_values
     >>> import pandas as pd
     >>> df = pd.DataFrame({
     ...     'A': [1.12345, 2.6789, 3],

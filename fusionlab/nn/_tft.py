@@ -74,7 +74,7 @@ _param_docs = DocstringComponents.from_nested_components(
     ]
 )
 @register_keras_serializable(
-    'gofast.nn.transformers', 
+    'fusionlab.nn.transformers', 
     name="NTemporalFusionTransformer"
 )
 class NTemporalFusionTransformer(Model, NNLearner):
@@ -356,7 +356,7 @@ class NTemporalFusionTransformer(Model, NNLearner):
         return cls(**config)
     
 @register_keras_serializable( 
-   'gofast.nn.transformers', 
+   'fusionlab.nn.transformers', 
     name="TemporalFusionTransformer"
 )
 class TemporalFusionTransformer(Model, NNLearner):
@@ -876,8 +876,8 @@ lstm_units : list of int or None, default=None
 
 Examples
 --------
->>> from gofast.nn._tensor_validation import validate_tft_inputs
->>> from gofast.nn.tft import TemporalFusionTransformer
+>>> from fusionlab.nn._tensor_validation import validate_tft_inputs
+>>> from fusionlab.nn.tft import TemporalFusionTransformer
 >>> model = TemporalFusionTransformer(
 ...     dynamic_input_dim=10,
 ...     static_input_dim=5,

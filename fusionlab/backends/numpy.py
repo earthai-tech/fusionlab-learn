@@ -18,7 +18,7 @@ To use the NumpyBackend, ensure NumPy is installed in your environment:
 Example Usage:
 
 1. Initializing NumpyBackend:
-    from gofast.backends.numpy import NumpyBackend
+    from fusionlab.backends.numpy import NumpyBackend
     numpy_backend = NumpyBackend()
 
 2. Performing Array Operations:
@@ -91,7 +91,7 @@ class NumpyBackend(BaseBackend):
     --------
     To utilize the NumpyBackend for common array operations:
 
-    >>> from gofast.backends.numpy import NumpyBackend
+    >>> from fusionlab.backends.numpy import NumpyBackend
     >>> backend = NumpyBackend()
     >>> a = backend.array([1, 2, 3])
     >>> b = backend.random_normal(loc=0, scale=1, size=3)
@@ -281,7 +281,7 @@ if __name__=='__main__':
         return _active_backend
     
     # Example Usage
-    # from gofast.config import set_backend, get_backend
+    # from fusionlab.config import set_backend, get_backend
     
     # Set the active backend to NumPy
     set_backend('numpy')
