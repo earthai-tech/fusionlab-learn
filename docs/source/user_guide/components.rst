@@ -139,6 +139,10 @@ location, product category).
 applied after the sequence encoder (like an LSTM) and before the
 main temporal attention layer.
 
+.. raw:: html
+
+    <hr>
+    
 Input Processing & Embedding Layers
 -------------------------------------
 
@@ -201,6 +205,9 @@ future covariates, into a single sequence representation before
 applying positional encoding and subsequent attention or recurrent
 layers.
 
+.. raw:: html
+
+    <hr>
 
 Sequence Processing Layers
 ----------------------------
@@ -240,6 +247,9 @@ scale 1, weekly patterns with scale 7) from the dynamic input features.
 The utility function :func:`~fusionlab.nn.components.aggregate_multiscale`
 is often used subsequently to combine the outputs if needed.
 
+.. raw:: html
+
+    <hr>
 
 Attention Mechanisms
 ----------------------
@@ -507,6 +517,10 @@ which can be beneficial if long-range dependencies have already
 been captured by other mechanisms (like LSTMs or memory attention)
 and the final prediction relies more heavily on recent patterns.
 
+.. raw:: html
+
+    <hr>
+    
 Output & Decoding Layers
 --------------------------
 
@@ -575,6 +589,10 @@ or :class:`~fusionlab.nn.components.AdaptiveQuantileLoss` for quantile
 forecasts).
 
 
+.. raw:: html
+
+    <hr>
+    
 Loss Function Components
 --------------------------
 
@@ -672,6 +690,10 @@ The code comments suggest this specific multi-objective combination
 might be subject to change in future versions).*
 
 
+.. raw:: html
+
+    <hr>
+    
 Utility Functions
 -------------------
 
