@@ -8,6 +8,7 @@
 
 *_A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_*
 
+
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
 [![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/)
@@ -55,6 +56,7 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 * ⚙️ **TensorFlow Backend:** Currently built on TensorFlow/Keras, leveraging its
     ecosystem. *(Future compatibility with other backends like PyTorch/JAX
     is a design goal but not yet implemented).*
+
 
 ---
 
@@ -158,4 +160,9 @@ started.
 
 This project is licensed under the ** BSD-3-Clause**. See the
 [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+
+
+## Note 
+**🌟 Stay in the Fusion Loop!**  
+*Click the "Watch" button above to get notified about the next release — exciting enhancements, new architectures, and experimental features are brewing! 🚀*
 
