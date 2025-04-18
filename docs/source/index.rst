@@ -10,42 +10,38 @@
               tft, xtft, machine learning, deep learning, python,
               tensorflow
 
-.. image:: _static/fusionlab.png
-   :alt: FusionLab Logo
-   :align: center
-   :width: 150px
-   :target: https://github.com/earthai-tech/fusionlab/
+##################################################
+FusionLab: Igniting Next-Gen Fusion Models
+##################################################
 
 .. raw:: html
 
    <p align="center" style="margin-bottom: 1.5em;">
-     <a href="https://pypi.org/project/fusionlab/">
-       <img src="https://img.shields.io/pypi/v/fusionlab?color=blue" alt="PyPI Version">
+     <a href="https://pypi.org/project/fusionlab/" target="_blank" rel="noopener noreferrer">
+       <img src="https://img.shields.io/pypi/v/fusionlab?color=121EAF&label=PyPI" alt="PyPI Version">
      </a>
-     <a href="https://fusionlab.readthedocs.io/en/latest/?badge=latest">
+     <a href="https://fusionlab.readthedocs.io/en/latest/?badge=latest" target="_blank" rel="noopener noreferrer">
        <img src="https://readthedocs.org/projects/fusionlab/badge/?version=latest" alt="Documentation Status"/>
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE">
-       <img src="https://img.shields.io/github/license/earthai-tech/fusionlab" alt="GitHub License">
+     <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+       <img src="https://img.shields.io/github/license/earthai-tech/fusionlab?color=121EAF" alt="GitHub License">
      </a>
-     <a href="https://www.python.org/">
-       <img src="https://img.shields.io/badge/Python-3.8%2B-blue" alt="Python Version">
+     <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">
+       <img src="https://img.shields.io/badge/Python-3.8%2B-121EAF" alt="Python Version">
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab/actions">
-        <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main" alt="Build Status">
+     <a href="https://github.com/earthai-tech/fusionlab/actions" target="_blank" rel="noopener noreferrer">
+        <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/python-package-conda.yml?branch=main" alt="Build Status">
      </a>
    </p>
-
-==================================================
-FusionLab 🔥🧪: Igniting Next-Gen Fusion Models
-==================================================
 
 **A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond**
 
 *Extend, experiment, and fuse time-series predictions with
 state-of-the-art architectures.*
 
----
+.. raw:: html
+
+    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 **FusionLab** provides a flexible and extensible framework built on
 **TensorFlow/Keras** for advanced time-series forecasting. It centers
@@ -57,70 +53,198 @@ Whether you need interpretable multi-horizon forecasts, robust
 uncertainty quantification, or a platform to experiment with novel
 temporal architectures, FusionLab aims to provide the necessary tools.
 
-.. # Hiding the main toctree from the page content,
-   # but it builds the sidebar.
+.. # --- Sidebar Navigation Structure (Hidden from main page content) ---
+.. # This builds the navigation panel on the left.
 .. toctree::
    :hidden:
    :maxdepth: 2
    :caption: Documentation
 
    self
-
-.. # Define the main structure for the sidebar Table of Contents
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Overview
-
    motivation
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Getting Started
-
    installation
    quickstart
-
-.. toctree::
-   :maxdepth: 2
-   :caption: User Guide
-
    user_guide/index
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Examples
-
    user_guide/examples/index
-
-.. toctree::
-   :maxdepth: 2
-   :caption: API Reference
-
    api
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Development & Community
-
    contributing
-   Code of Conduct <code_of_conduct> 
-   Release Notes <release_notes> 
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Reference
-
+   code_of_conduct
    license
-   citing 
+   citing
    glossary
+   release_notes
+
+.. # --- Main Content Navigation Grid (using sphinx-design) ---
+.. # This provides attractive clickable cards on the main page.
+
+.. container:: sd-text-center sd-mt-4 sd-mb-4
+
+   .. row::
+      :gutter: 3 
+
+      .. col::
+         :col-md-6: :sd-col-lg-4: 
+
+         .. card::
+            :shadow: md
+            :class-card: mb-3 
+
+            **🚀 Getting Started**
+            
+            New to FusionLab? Install the library and run your first
+            forecast in minutes.
+
+            .. button-ref:: installation
+               :color: primary 
+               :outline:
+               :expand:
+
+               Installation Guide
+
+            .. button-ref:: quickstart
+               :color: primary
+               :outline:
+               :expand:
+
+               Quickstart Example
+
+      .. col::
+         :col-md-6: :col-lg-4:
+
+         .. card::
+            :shadow: md
+            :class-card: mb-3
+
+            **📘 User Guide**
+            
+            Dive deeper into core concepts, model architectures,
+            components, utilities, and advanced features like anomaly
+            detection and tuning.
+
+            .. button-ref:: /user_guide/index
+               :ref-type: doc 
+               :color: primary
+               :outline:
+               :expand:
+
+               Explore the User Guide
+
+      .. col::
+         :col-md-6: :sd-col-lg-4:
+
+         .. card::
+            :shadow: md
+            :class-card: mb-3
+
+            **💡 Examples Gallery**
+           
+            See practical code examples demonstrating various use cases,
+            from basic forecasting to complex workflows.
+
+            .. sd-button-ref:: /user_guide/examples/index
+               :ref-type: doc
+               :color: primary
+               :outline:
+               :expand:
+
+               View Examples
+
+      .. col::
+         :col-md-6: :sd-col-lg-4:
+
+         .. card::
+            :shadow: md
+            :class-card: mb-3
+
+            **</> API Reference**
+         
+            Detailed specifications for all public modules, classes,
+            functions, and methods. Essential for development.
+
+            .. button-ref:: api
+               :color: primary
+               :outline:
+               :expand:
+
+               Browse the API
+
+      .. col::
+         :col-md-6: :col-lg-4:
+
+         .. card::
+            :shadow: md
+            :class-card: sd-mb-3
+
+            **🤝 Development & Community**
+            
+            Find out how to contribute, report issues, and understand
+            project governance and release history.
+
+            .. button-ref:: contributing
+               :color: secondary 
+               :outline:
+               :expand:
+
+               Contribution Guide
+
+            .. button-ref:: code_of_conduct
+               :color: secondary
+               :outline:
+               :expand:
+
+               Code of Conduct
+
+            .. button-ref:: release_notes
+               :color: secondary
+               :outline:
+               :expand:
+         
+               Release Notes
+
+      .. col::
+         :col-md-6: :col-lg-4:
+
+         .. card::
+            :shadow: md
+            :class-card: sd-mb-3
+
+            **📜 Reference**
+            
+            Important reference information including the project
+            license, how to cite the software, and a glossary of terms.
+
+            .. button-ref:: license
+               :color: secondary
+               :outline:
+               :expand:
+
+               License (BSD-3-Clause)
+
+            .. button-ref:: citing
+               :color: secondary
+               :outline:
+               :expand:
+
+               How to Cite
+
+            .. button-ref:: glossary
+               :color: secondary
+               :outline:
+               :expand:
+
+               Glossary
 
 
-.. sd-card::
-    :class-card: sd-outline-info sd-rounded-lg sd-p-4 # Style the card
+.. raw:: html
+
+    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
+.. card::
+    :class-card: sd-outline-info sd-rounded-lg sd-p-4 sd-mb-4
 
     **✨ Key Features**
-    ^^^
+    
     * 🧩 **Modular Design:**
       Build custom forecasting models using interchangeable components
       like specialized attention layers, GRNs, VSNs, multi-scale LSTMs,
@@ -145,25 +269,6 @@ temporal architectures, FusionLab aims to provide the necessary tools.
       allowing models to identify and potentially adapt to irregular data
       patterns during training.
 
----
+.. raw:: html
 
-Where to Go Next
-----------------
-
-* **New Users:** Start with :doc:`installation` and the
-  :doc:`quickstart` guide.
-* **Understand the 'Why':** Read the :doc:`motivation` behind the project.
-* **Learn the Concepts:** Dive into the :doc:`User Guide </user_guide/index>`.
-* **See it in Action:** Explore the :doc:`Examples </user_guide/examples/index>`.
-* **Code Details:** Consult the :doc:`API Reference <api>`.
-* **Cite the Work:** See how to cite ``fusionlab`` in the :doc:`citing` guide.
-
----
-
-**Community & Development:**
-------------------------------
-
-* `GitHub Repository <https://github.com/earthai-tech/fusionlab>`_:
-  Source code, issue tracking, and contributions.
-* :doc:`contributing`: Learn how to contribute.
-* :doc:`license`: Project license information (MIT License). *(Verify)*
+    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">

@@ -1,89 +1,245 @@
-/* custom.css for FusionLab Documentation */
+/* custom.css for fusionlab documentation with Furo theme */
 
-/* 1. Define Brand Colors (Optional but good practice) */
-:root {
-    --fusionlab-blue: #121EAF;
-    --fusionlab-orange: #F4870F;
-    --fusionlab-blue-light: #5465FF; /* Lighter blue for dark mode brand / light mode hover */
-    --fusionlab-blue-dark: #0e188c;  /* Darker blue */
+/*--------------------------------------------------------------------------
+ * Variables and Color Palette (FusionLab Theme)
+ *--------------------------------------------------------------------------*/
+
+:root,
+html[data-theme="light"] {
+    /* --- Brand Colors (FusionLab) --- */
+    --fusionlab-blue: #121EAF;        /* Primary Deep Blue */
+    --fusionlab-orange: #F4870F;      /* Secondary Orange */
+    /* Derived shades */
+    --fusionlab-blue-light: #5465FF;  /* Lighter blue for dark mode / hover */
+    --fusionlab-blue-dark: #0e188c;   /* Darker blue for light hover */
     --fusionlab-blue-bg-light: #e8eaff; /* Very light blue for backgrounds */
-    --fusionlab-orange-bg-light: #fff0e1; /* Very light orange for backgrounds */
+    --fusionlab-orange-bg-light: #fff0e1;/* Very light orange for backgrounds */
+    --fusionlab-link-hover-light: var(--fusionlab-blue-dark);
+    --fusionlab-link-hover-dark: #8a9aff; /* Even lighter blue */
 
-    /* Define a subtle border color */
-    --fusionlab-border-color: #d1d5db; /* A neutral light gray */
-    --fusionlab-dark-border-color: #444449; /* A subtle dark gray for dark mode */
-
-    /* Define link hover colors */
-    --fusionlab-link-hover-light: #0b147d; /* Slightly darker blue for light hover */
-    --fusionlab-link-hover-dark: #8a9aff;  /* Even lighter blue for dark hover */
-}
-
-/* 2. Furo Variable Overrides (Light Mode / Defaults) */
-:root {
-    /* --- Brand --- */
+    /* --- Furo Variable Overrides (Light Mode) --- */
+    /* Brand */
     --color-brand-primary: var(--fusionlab-blue);
     --color-brand-content: var(--fusionlab-blue);
 
-    /* --- Sidebar --- */
+    /* Base */
+    --color-foreground-primary: #212529; /* Near Black */
+    --color-foreground-secondary: #495057; /* Dark Grey */
+    --color-foreground-muted: #6c757d;   /* Medium Grey */
+    --color-background-primary: #ffffff; /* White */
+    --color-background-secondary: #f8f9fa;/* Off-white */
+    --color-background-hover: #e9ecef;   /* Light grey hover */
+    --color-border: #dee2e6;             /* Light grey border */
+
+    /* Code Blocks */
+    --color-code-background: #f8f9fa;
+    --color-code-border: var(--color-border);
+
+    /* Sidebar */
     --color-sidebar-background: #f8f9fa;
     --color-sidebar-background-hover: var(--fusionlab-blue-bg-light);
     --color-sidebar-link-text: #303030;
     --color-sidebar-link-text--top-level: var(--fusionlab-blue);
 
-    /* --- Admonitions (Light) --- */
+    /* Admonitions */
     --color-admonition-note-background: var(--fusionlab-blue-bg-light);
     --color-admonition-note-border: var(--fusionlab-blue);
     --color-admonition-warning-background: var(--fusionlab-orange-bg-light);
     --color-admonition-warning-border: var(--fusionlab-orange);
-    /* You can add danger, tip, important etc. similarly */
+    /* Using Orange also for important/danger/error for consistency */
+    --color-admonition-important-background: var(--fusionlab-orange-bg-light);
+    --color-admonition-important-border: var(--fusionlab-orange);
+    --color-admonition-danger-background: var(--fusionlab-orange-bg-light);
+    --color-admonition-danger-border: var(--fusionlab-orange);
+    --color-admonition-error-background: var(--fusionlab-orange-bg-light);
+    --color-admonition-error-border: var(--fusionlab-orange);
+    /* Tip/Hint - maybe use a neutral or light blue? */
+    --color-admonition-tip-background: var(--fusionlab-blue-bg-light);
+    --color-admonition-tip-border: var(--fusionlab-blue);
 
-    /* --- Other Light --- */
+    /* Other Accents */
     --color-highlight-on-target: var(--fusionlab-blue-bg-light);
-    --color-background-border: var(--fusionlab-border-color); /* Use our defined border */
-    --color-foreground-border: var(--fusionlab-border-color);
 }
 
-/* 3. Furo Variable Overrides (Dark Mode) */
-/* Use Furo's data attribute selector for dark theme */
 html[data-theme="dark"] {
-    /* --- Brand (Dark) --- */
-    --color-brand-primary: var(--fusionlab-blue-light); /* Use the lighter blue */
+    /* --- Furo Variable Overrides (Dark Mode) --- */
+    /* Brand */
+    --color-brand-primary: var(--fusionlab-blue-light);
     --color-brand-content: var(--fusionlab-blue-light);
 
-    /* --- Sidebar (Dark) --- */
-    /* Furo's defaults are often good, but you can override: */
-    /* --color-sidebar-background: #1c1c1e; */
-    /* --color-sidebar-background-hover: #303033; */
-    /* --color-sidebar-link-text: #cccccc; */
-    --color-sidebar-link-text--top-level: var(--fusionlab-blue-light); /* Make top level stand out */
+    /* Base */
+    --color-foreground-primary: #e9ecef; /* Light Grey */
+    --color-foreground-secondary: #ced4da;
+    --color-foreground-muted: #adb5bd;
+    --color-background-primary: #212529; /* Dark Grey */
+    --color-background-secondary: #2c3034;
+    --color-background-hover: #343a40;
+    --color-border: #495057; /* Darker border */
 
-    /* --- Admonitions (Dark) --- */
-    --color-admonition-note-background: rgba(84, 101, 255, 0.15); /* Transparent blue */
+    /* Code Blocks */
+    --color-code-background: #2c3034;
+    --color-code-border: var(--color-border);
+
+    /* Sidebar */
+    --color-sidebar-background: #1c1c1e;
+    --color-sidebar-background-hover: #303033;
+    --color-sidebar-link-text: #cccccc;
+    --color-sidebar-link-text--top-level: var(--fusionlab-blue-light);
+
+    /* Admonitions */
+    --color-admonition-note-background: rgba(84, 101, 255, 0.15);
     --color-admonition-note-border: var(--fusionlab-blue-light);
-    --color-admonition-warning-background: rgba(244, 135, 15, 0.15); /* Transparent orange */
+    --color-admonition-warning-background: rgba(244, 135, 15, 0.15);
     --color-admonition-warning-border: var(--fusionlab-orange);
+    --color-admonition-important-background: rgba(244, 135, 15, 0.15);
+    --color-admonition-important-border: var(--fusionlab-orange);
+    --color-admonition-danger-background: rgba(244, 135, 15, 0.15);
+    --color-admonition-danger-border: var(--fusionlab-orange);
+    --color-admonition-error-background: rgba(244, 135, 15, 0.15);
+    --color-admonition-error-border: var(--fusionlab-orange);
+    --color-admonition-tip-background: rgba(84, 101, 255, 0.15);
+    --color-admonition-tip-border: var(--fusionlab-blue-light);
 
-    /* --- Other Dark --- */
+    /* Other Accents */
     --color-highlight-on-target: rgba(84, 101, 255, 0.2);
-    --color-background-border: var(--fusionlab-dark-border-color); /* Use darker border */
-    --color-foreground-border: var(--fusionlab-dark-border-color);
 }
 
 
-/* 4. Other Custom Styles (Tables, Headings, Links etc.) */
+/*--------------------------------------------------------------------------
+ * General Typography & Layout (Adapted from k-diagram example)
+ *--------------------------------------------------------------------------*/
+body {
+    line-height: 1.7;
+    font-size: 16px;
+    /* Example font stack - keep Furo's default or customize */
+    /* font-family: "Segoe UI", Roboto, Ubuntu, Cantarell, "Helvetica Neue", sans-serif; */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
 
-/* Link hover effects for light and dark modes */
+/* Limit main content width */
+/* .wy-nav-content, .container, .content > article {
+    max-width: 960px;
+} */
+
+/* Headings - Using brand colors */
+h1, .heading-title {
+    font-size: 2.7rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.7rem;
+    border-bottom: 3px solid var(--color-brand-primary); /* Blue underline */
+    color: var(--color-brand-primary); /* Blue text */
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+
+h2 {
+    font-size: 2.0rem;
+    margin-top: 3.5rem;
+    margin-bottom: 1.4rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-brand-content); /* Blue text */
+    font-weight: 600;
+}
+
+h3 {
+    font-size: 1.6rem;
+    margin-top: 3rem;
+    margin-bottom: 1.2rem;
+    color: var(--color-foreground-primary); /* Default text color */
+    font-weight: 600;
+}
+
+h4 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--color-foreground-secondary); /* Use secondary text color */
+    /* text-transform: uppercase; */ /* Optional */
+    /* letter-spacing: 0.5px; */ /* Optional */
+    margin-top: 2rem;
+}
+
+/* Links - Use animation from example */
+a,
+a:visited {
+    color: var(--color-brand-content); /* Blue */
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    position: relative;
+    transition: color 0.2s ease-out;
+}
+a::after { /* Animated underline */
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 1px;
+    display: block;
+    margin-top: 2px;
+    right: 0;
+    background: var(--color-brand-primary); /* Blue underline */
+    transition: width 0.3s ease;
+    -webkit-transition: width 0.3s ease;
+}
 a:hover,
 a:focus {
-  color: var(--fusionlab-link-hover-light);
-  text-decoration: underline;
+    color: var(--fusionlab-link-hover-light); /* Use defined hover color */
+    border-bottom-color: transparent;
 }
 html[data-theme="dark"] a:hover,
 html[data-theme="dark"] a:focus {
     color: var(--fusionlab-link-hover-dark);
 }
+a:hover::after {
+    width: 100%;
+    left: 0;
+    background-color: var(--color-brand-primary);
+}
 
-/* --- Improved Table Styling --- */
+/*--------------------------------------------------------------------------
+ * Code Blocks & Inline Code (Adapted from k-diagram example)
+ *--------------------------------------------------------------------------*/
+pre, :not(pre) > code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono",
+                 Menlo, Courier, monospace;
+    border-radius: 5px;
+    border: 1px solid var(--color-code-border);
+    background-color: var(--color-code-background);
+}
+pre {
+    padding: 1em 1.2em;
+    margin: 1.7em 0;
+    font-size: 0.92em;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    line-height: 1.6;
+}
+:not(pre) > code {
+    padding: 0.2em 0.45em;
+    font-size: 0.9em;
+    white-space: nowrap;
+}
+button.copybtn {
+    background-color: transparent !important;
+    border: 1px solid var(--color-code-border) !important;
+    color: var(--color-foreground-muted) !important;
+    opacity: 0.6 !important; /* Slightly more visible */
+    transition: all 0.2s ease-in-out;
+}
+button.copybtn:hover {
+    opacity: 1 !important;
+    background-color: var(--fusionlab-blue-bg-light) !important; /* Blue tint hover */
+    color: var(--fusionlab-blue-dark) !important;
+    border-color: var(--fusionlab-blue) !important;
+}
+html[data-theme="dark"] button.copybtn:hover {
+    background-color: rgba(84, 101, 255, 0.15) !important;
+    color: var(--fusionlab-blue-light) !important;
+    border-color: var(--fusionlab-blue-light) !important;
+}
+
+/*--------------------------------------------------------------------------
+ * Tables (Using the previously generated fusionlab style)
+ *--------------------------------------------------------------------------*/
 table.docutils,
 table.dataframe {
     width: 100%;
@@ -105,7 +261,6 @@ table.dataframe th {
     font-weight: 600;
     color: var(--color-foreground-primary);
 }
-/* Specific dark mode header background if needed */
 html[data-theme="dark"] table.docutils th,
 html[data-theme="dark"] table.dataframe th {
      background-color: #2a2a2e; /* Slightly lighter than default dark bg */
@@ -119,12 +274,12 @@ table.dataframe td {
     line-height: 1.5;
 }
 
-/* Zebra striping for tables */
+/* Zebra striping */
 table.docutils tbody tr:nth-child(odd),
 table.dataframe tbody tr:nth-child(odd) {
     background-color: var(--color-background-secondary);
 }
-/* Hover effect for table rows */
+/* Hover effect */
 table.docutils tbody tr:hover,
 table.dataframe tbody tr:hover {
     background-color: var(--fusionlab-blue-bg-light); /* Light blue tint */
@@ -134,50 +289,228 @@ html[data-theme="dark"] table.dataframe tbody tr:hover {
     background-color: rgba(84, 101, 255, 0.1); /* Darker blue tint */
 }
 
-/* --- Heading Styling --- */
-h1 {
-    border-bottom: 2px solid var(--color-brand-primary); /* Use brand color */
-    padding-bottom: 0.4em;
-    margin-bottom: 1em;
-}
-h2 {
-    border-bottom: 1px solid var(--color-foreground-border); /* Use theme border */
-    padding-bottom: 0.3em;
-    margin-top: 2em;
-}
-
-/* --- Code Block Styling --- */
-div.highlight,
-pre {
-    border: 1px solid var(--color-background-border); /* Use theme border */
-    border-radius: 4px;
-    padding: 0.8em 1em;
-}
-/* Adjust sphinx-copybutton appearance */
-button.copybtn {
+/*--------------------------------------------------------------------------
+ * Admonitions (Colored by Type - FusionLab Palette)
+ *--------------------------------------------------------------------------*/
+.admonition {
+    border-radius: 6px;
+    padding: 1.2em 1.5em;
+    margin: 2em 0;
+    border-left-width: 6px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
     background-color: var(--color-background-secondary);
-    border: 1px solid var(--color-background-border);
-    color: var(--color-foreground-muted);
-    transition: background-color 0.2s ease, color 0.2s ease;
 }
-button.copybtn:hover {
-    background-color: var(--fusionlab-blue-bg-light) !important;
-    border-color: var(--fusionlab-blue);
-    color: var(--fusionlab-blue-dark);
+.admonition p:last-child {
+    margin-bottom: 0;
 }
-html[data-theme="dark"] button.copybtn:hover {
-    background-color: rgba(84, 101, 255, 0.15) !important;
-    border-color: var(--fusionlab-blue-light);
-    color: var(--fusionlab-blue-light);
+.admonition .admonition-title {
+    font-weight: 700;
+    margin-bottom: 0.6em;
+    display: block;
 }
 
-/* --- Other Enhancements --- */
-/* Make definition list terms bolder */
+/* Note / Info / See Also (Primary Blue) */
+.admonition.note, .admonition.seealso, .admonition.info {
+    border-left-color: var(--color-brand-primary); /* Blue border */
+    background-color: color-mix(
+        in srgb, var(--color-brand-primary) 10%, /* Light tint */
+        var(--color-background-secondary)
+    );
+}
+html[data-theme="dark"] .admonition.note,
+html[data-theme="dark"] .admonition.seealso,
+html[data-theme="dark"] .admonition.info {
+     background-color: rgba(84, 101, 255, 0.15); /* Dark tint */
+     border-left-color: var(--color-brand-primary); /* Lighter blue border */
+}
+.admonition.note .admonition-title,
+.admonition.seealso .admonition-title,
+.admonition.info .admonition-title {
+    color: var(--color-brand-primary);
+}
+
+/* Tip / Hint (Keep subtle or use blue too) */
+.admonition.tip, .admonition.hint {
+    border-left-color: var(--color-brand-primary); /* Use Blue */
+    background-color: color-mix(
+        in srgb, var(--color-brand-primary) 8%, /* Even lighter tint */
+        var(--color-background-secondary)
+    );
+}
+html[data-theme="dark"] .admonition.tip,
+html[data-theme="dark"] .admonition.hint {
+     background-color: rgba(84, 101, 255, 0.1); /* Dark tint */
+     border-left-color: var(--color-brand-primary);
+}
+.admonition.tip .admonition-title,
+.admonition.hint .admonition-title {
+    color: var(--color-brand-primary);
+}
+
+/* Warning / Caution / Important (Secondary Orange) */
+.admonition.warning, .admonition.caution, .admonition.important {
+    border-left-color: var(--fusionlab-orange); /* Orange border */
+    background-color: color-mix(
+        in srgb, var(--fusionlab-orange) 12%, /* Light tint */
+        var(--color-background-secondary)
+    );
+}
+html[data-theme="dark"] .admonition.warning,
+html[data-theme="dark"] .admonition.caution,
+html[data-theme="dark"] .admonition.important {
+     background-color: rgba(244, 135, 15, 0.15); /* Dark tint */
+     border-left-color: var(--fusionlab-orange);
+}
+.admonition.warning .admonition-title,
+.admonition.caution .admonition-title,
+.admonition.important .admonition-title {
+    color: #d97706; /* Darker Orange for text contrast */
+}
+html[data-theme="dark"] .admonition.warning .admonition-title,
+html[data-theme="dark"] .admonition.caution .admonition-title,
+html[data-theme="dark"] .admonition.important .admonition-title {
+     color: var(--fusionlab-orange); /* Lighter orange for dark mode */
+}
+
+/* Error / Danger (Standard Red or Orange?) */
+.admonition.error, .admonition.danger {
+     /* Option 1: Use Orange */
+     border-left-color: var(--fusionlab-orange);
+     background-color: color-mix(in srgb, var(--fusionlab-orange) 15%,
+                        var(--color-background-secondary));
+     /* Option 2: Use standard Red (uncomment below) */
+     /* border-left-color: #E53E3E; */
+     /* background-color: color-mix(in srgb, #E53E3E 15%,
+                        var(--color-background-secondary)); */
+}
+html[data-theme="dark"] .admonition.error,
+html[data-theme="dark"] .admonition.danger {
+      /* Option 1: Use Orange */
+      background-color: rgba(244, 135, 15, 0.2);
+      border-left-color: var(--fusionlab-orange);
+      /* Option 2: Use standard Red */
+      /* background-color: rgba(229, 62, 62, 0.2); */
+      /* border-left-color: #E53E3E; */
+}
+.admonition.error .admonition-title,
+.admonition.danger .admonition-title {
+      /* Option 1: Use Orange */
+     color: #d97706; /* Darker Orange */
+      /* Option 2: Use standard Red */
+     /* color: #E53E3E; */
+}
+html[data-theme="dark"] .admonition.error .admonition-title,
+html[data-theme="dark"] .admonition.danger .admonition-title {
+      /* Option 1: Use Orange */
+     color: var(--fusionlab-orange); /* Lighter orange */
+      /* Option 2: Use standard Red */
+     /* color: #FC8181; */ /* Light Red */
+}
+
+/*--------------------------------------------------------------------------
+ * Sidebar Customization (Furo) - Adapted Hover
+ *--------------------------------------------------------------------------*/
+.sidebar-drawer {
+    /* width: 18rem; */ /* Keep Furo default or adjust */
+    border-right: 1px solid var(--color-border);
+}
+.toc-drawer > .toc-tree {
+    padding-inline-start: 1.5rem;
+}
+.sidebar-drawer .reference {
+    transition: background-color 0.15s ease-in-out,
+                color 0.15s ease-in-out,
+                padding-left 0.15s ease-in-out;
+    padding: 0.3em 0.8em;
+    border-radius: 4px;
+    margin: 1px 0;
+    display: block;
+}
+.sidebar-drawer .reference:hover {
+    /* Use Primary Blue for hover background */
+    background-color: var(--color-brand-primary);
+    /* Ensure text is readable on Primary Blue */
+    color: var(--color-background-primary) !important;
+    padding-left: 1.1em; /* Indent slightly on hover */
+}
+.sidebar-drawer li.current > a.reference { /* Current page link */
+    background-color: var(--color-brand-primary);
+    color: var(--color-background-primary) !important;
+    font-weight: 600;
+}
+
+/*--------------------------------------------------------------------------
+ * Sphinx Design Components (Refined - FusionLab Palette)
+ *--------------------------------------------------------------------------*/
+.sd-button-link {
+    border-radius: 6px;
+    transition: all 0.2s ease-in-out;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+}
+.sd-button-link:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+/* Style primary buttons using fusionlab-blue */
+.sd-button-link.sd-color-primary,
+.sd-button-link.sd-outline-primary:hover {
+    background-color: var(--fusionlab-blue) !important;
+    border-color: var(--fusionlab-blue) !important;
+    color: white !important;
+}
+.sd-button-link.sd-color-primary:hover {
+    background-color: var(--fusionlab-blue-dark) !important;
+    border-color: var(--fusionlab-blue-dark) !important;
+}
+.sd-button-link.sd-outline-primary {
+    border-color: var(--fusionlab-blue) !important;
+    color: var(--fusionlab-blue) !important;
+}
+/* Style secondary buttons using fusionlab-orange */
+.sd-button-link.sd-color-secondary,
+.sd-button-link.sd-outline-secondary:hover {
+    background-color: var(--fusionlab-orange) !important;
+    border-color: var(--fusionlab-orange) !important;
+    color: white !important;
+}
+.sd-button-link.sd-color-secondary:hover {
+    background-color: color-mix(in srgb, var(--fusionlab-orange) 85%, black) !important;
+    border-color: color-mix(in srgb, var(--fusionlab-orange) 85%, black) !important;
+}
+.sd-button-link.sd-outline-secondary {
+    border-color: var(--fusionlab-orange) !important;
+    color: var(--fusionlab-orange) !important;
+}
+
+.sd-card {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    transition: box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.sd-card:hover {
+     box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+     /* Use Primary Blue for card hover border */
+     border-color: var(--color-brand-primary);
+}
+.sd-card .sd-card-header {
+    background-color: var(--color-background-secondary);
+    border-bottom: 1px solid var(--color-border);
+    font-weight: 600;
+    padding: 0.8em 1.2em;
+}
+.sd-card .sd-card-body {
+    padding: 1.2em;
+}
+
+/*--------------------------------------------------------------------------
+ * Other Enhancements (Definition Lists etc.)
+ *--------------------------------------------------------------------------*/
 dl.field-list > dt,
 dl.option-list > dt {
     font-weight: 600;
 }
-/* Improve spacing for definition lists (like parameters) */
 dl.field-list dd,
 dl.option-list dd {
     margin-left: 1.5em;

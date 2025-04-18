@@ -51,6 +51,44 @@ TFT architecture. Use it when:
 * You require either point forecasts or probabilistic (quantile)
     forecasts.
 
+.. important:: Input Data Order and Format
+
+   While ``TemporalFusionTransformer`` offers flexibility by allowing
+   ``static_input_dim`` and ``future_input_dim`` to be optional
+   during initialization, providing the input data correctly during
+   training (`.fit`) or prediction (`.predict`, `.call`) is crucial.
+
+   The model expects the inputs as a **list or tuple** containing the
+   active feature tensors. The **order** within this list/tuple depends
+   on which input types are enabled (i.e., which dimensions were set
+   during initialization):
+
+   * **Only Dynamic Inputs:**
+     Pass a list/tuple with one element:
+     ``[dynamic_array]``
+     *(Requires `static_input_dim=None` and `future_input_dim=None`)*
+
+   * **Dynamic + Static Inputs:**
+     Pass a list/tuple with two elements in this order:
+     ``[dynamic_array, static_array]``
+     *(Requires `static_input_dim` set, `future_input_dim=None`)*
+
+   * **Dynamic + Future Inputs:**
+     Pass a list/tuple with two elements in this order:
+     ``[dynamic_array, future_array]``
+     *(Requires `future_input_dim` set, `static_input_dim=None`)*
+
+   * **Dynamic + Future + Static Inputs:**
+     Pass a list/tuple with three elements in this **specific order**:
+     ``[dynamic_array, future_array, static_array]``
+     *(Requires both `static_input_dim` and `future_input_dim` set)*
+
+   Providing inputs in the wrong order, especially when all three types
+   are used, will lead to dimension mismatch errors during processing by
+   internal components like Variable Selection Networks. This order is
+   enforced by the internal validation logic (see
+   `fusionlab.nn._tensor_validation.validate_tft_inputs`).
+
 
 Mathematical Formulation
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -194,6 +232,156 @@ with uncertainty estimates.
 
     <hr>
     
+
+.. _tft_model_revised:
+
+TFT (Temporal Fusion Transformer - No Flex: Standard)
+--------------------------------------------------------
+:API Reference: :class:`~fusionlab.nn.transformers.TFT`
+
+This class implements the Temporal Fusion Transformer (TFT)
+architecture, closely following the structure described in the
+original paper [Lim21]_. It is designed for multi-horizon time
+series forecasting and explicitly requires static covariates,
+dynamic (historical) covariates, and known future covariates as
+inputs.
+
+Compared to implementations above (more flexible) allowing optional inputs, 
+this version mandates all input types, simplifying the internal input handling
+logic while adhering closely to the paper's component structure. It
+incorporates key TFT components like Variable Selection Networks
+(VSNs), Gated Residual Networks (GRNs) for static context generation
+and feature processing, LSTM encoding, static enrichment, interpretable
+multi-head attention, and position-wise feedforward layers.
+
+**Use Case and Importance**
+
+This revised `TFT` class provides a structured implementation useful
+when all feature types (static, dynamic past, known future) are
+available and adherence to the paper's component structure (like
+distinct static contexts) is desired. It provides a strong baseline
+for complex forecasting tasks demanding interpretability and handling
+of heterogeneous data. Its requirement for all inputs simplifies the
+`call` method compared to versions handling optional inputs, making
+the internal flow potentially easier to follow for developers aiming
+to match the original paper closely.
+
+**Parameters**
+
+* **dynamic_input_dim** (`int`):
+    The total number of features present in the dynamic (past)
+    input tensor.
+* **static_input_dim** (`int`):
+    The total number of features present in the static
+    (time-invariant) input tensor.
+* **future_input_dim** (`int`):
+    The total number of features present in the known future input
+    tensor.
+* **hidden_units** (`int`, default: `32`):
+    Main dimensionality of hidden layers (VSNs, GRNs, Attention).
+* **num_heads** (`int`, default: `4`):
+    Number of attention heads in the Temporal Attention Layer.
+* **dropout_rate** (`float`, default: `0.1`):
+    Dropout rate for non-recurrent connections (0 to 1).
+* **recurrent_dropout_rate** (`float`, default: `0.0`):
+    Dropout rate for LSTM recurrent connections (0 to 1). May impact
+    GPU performance.
+* **forecast_horizon** (`int`, default: `1`):
+    Number of future time steps to predict.
+* **quantiles** (`Optional[List[float]]`, default: `None`):
+    List of quantiles (e.g., `[0.1, 0.5, 0.9]`) for probabilistic
+    forecasting. If `None`, performs point forecasting (MSE loss).
+* **activation** (`str`, default: `'elu'`):
+    Activation function for GRNs (e.g., 'relu', 'gelu').
+* **use_batch_norm** (`bool`, default: `False`):
+    If True, use Batch Normalization in GRNs (Layer Normalization is
+    more common in TFT).
+* **num_lstm_layers** (`int`, default: `1`):
+    Number of stacked LSTM layers in the encoder.
+* **lstm_units** (`Optional[Union[int, List[int]]]`, default: `None`):
+    Units per LSTM layer. If `int`, used for all layers. If `list`,
+    length must match `num_lstm_layers`. If `None`, defaults to
+    `hidden_units`.
+* **output_dim** (`int`, default: `1`):
+    Number of target variables predicted per step.
+
+**Notes**
+
+* **Input Format:** This implementation requires inputs to the `call`
+    method as a list or tuple containing exactly three tensors in the
+    order: ``[static_inputs, dynamic_inputs, future_inputs]``.
+    Expected shapes:
+    * `static_inputs`: `(Batch, StaticFeatures)`
+    * `dynamic_inputs`: `(Batch, PastTimeSteps, DynamicFeatures)`
+    * `future_inputs`: `(Batch, TotalTimeSteps, FutureFeatures)` *(Note:
+        The exact required length of `TotalTimeSteps` for future inputs
+        depends on how they are combined and processed before the LSTM.
+        Ensure data preparation aligns with model expectations).*
+* **Categorical Features:** This specific implementation assumes inputs
+    are *numeric*. Handling categorical features would require adding
+    embedding layers and adjusting the VSN input structure (as explored
+    in a previous revision).
+
+Mathematical Formulation
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The model processes inputs through these key stages:
+
+1.  **Variable Selection:** Separate Variable Selection Networks (VSNs)
+    process static ($\mathbf{s}$), dynamic past ($\mathbf{x}_t$), and
+    known future ($\mathbf{z}_t$) numerical inputs, potentially
+    conditioned by a static context ($c_s$). Output: $\zeta$,
+    $\xi^{dyn}_t$, $\xi^{fut}_t$.
+
+    .. math::
+       \zeta = \text{VSN}_{static}(\mathbf{s}, [c_s]), \quad \dots
+
+2.  **Static Context Generation:** Four distinct Gated Residual Networks
+    (GRNs) process the static VSN output $\zeta$ to produce context vectors:
+    $c_s$ (for VSNs), $c_e$ (for enrichment), $c_h$ (LSTM initial hidden
+    state), $c_c$ (LSTM initial cell state).
+
+    .. math::
+       c_s = GRN_{vs}(\zeta), \quad c_e = GRN_{e}(\zeta), \quad \dots
+
+3.  **Temporal Processing Input:** Selected dynamic ($\xi^{dyn}_t$) and
+    future ($\xi^{fut}_t$) embeddings are combined (e.g., concatenated
+    along time or features depending on preparation) and augmented with
+    Positional Encoding ($\psi_t$).
+
+4.  **LSTM Encoder:** A stack of LSTMs processes $\psi_t$, initialized
+    with $[c_h, c_c]$, outputting hidden states $\{h_t\}$.
+
+    .. math::
+       \{h_t\} = \text{LSTMStack}(\{\psi_t\}, \text{init}=[c_h, c_c])
+
+5.  **Static Enrichment:** A time-distributed GRN combines LSTM outputs
+    $h_t$ with the static enrichment context $c_e$.
+
+    .. math::
+       \phi_t = GRN_{enrich}(h_t, c_e)
+
+6.  **Temporal Self-Attention:** :class:`~fusionlab.nn.components.TemporalAttentionLayer`
+    processes the enriched sequence $\{\phi_t\}$ using $c_s$ as context,
+    outputting $\beta_t$ after internal gating/residuals.
+
+    .. math::
+       \beta_t = \text{TemporalAttention}(\{\phi_t\}, c_s)
+
+7.  **Position-wise Feed-Forward:** A final time-distributed GRN processes $\beta_t$.
+
+    .. math::
+       \delta_t = GRN_{final}(\beta_t)
+
+8.  **Output Projection:** Features for the forecast horizon ($t > T$)
+    are selected from $\{\delta_t\}$ and passed through output Dense
+    layer(s) for point or quantile predictions $\hat{y}_{t+1}, \dots$.
+
+
+.. raw:: html
+
+    <hr>
+    
 NTemporalFusionTransformer
 ------------------------------
 
@@ -288,6 +476,7 @@ for a scenario limited to static/past inputs and point predictions.
 
     <hr>
     
+
 XTFT (Extreme Temporal Fusion Transformer)
 ---------------------------------------------
 

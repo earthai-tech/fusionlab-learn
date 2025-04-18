@@ -106,6 +106,7 @@ class KerasDependencies:
             'reduce_mean': ('tensorflow', 'reduce_mean'),
             'reduce_sum': ('tensorflow', 'reduce_sum'),
             'reduce_all': ('tensorflow', 'reduce_all'),
+            'reduce_max': ('tensorflow', 'reduce_max'),
             'rank': ('tensorflow', 'rank'), 
             'zeros': ('tensorflow', 'zeros'),
             'zeros_like': ('tensorflow', 'zeros_like'), 
@@ -123,7 +124,8 @@ class KerasDependencies:
             'Dataset': ('tensorflow.data', 'Dataset'),
             'set_seed':('tensorflow.random', 'set_seed'), 
             'add_n': ('tensorflow.math', 'add_n'), 
-            'maximum':('tensorflow.math', 'maximum'), 
+            'maximum':('tensorflow.math', 'maximum'),
+            'minimum':('tensorflow.math', 'minimum'), 
             'backend': ('tensorflow.keras', 'backend'), 
             'activations': ('tensorflow.keras', 'activations'), 
             'add': ('tensorflow.math', 'add'), 
@@ -142,7 +144,10 @@ class KerasDependencies:
             'assert_equal': ('tensorflow', 'assert_equal'), 
             # 'constant': ('tensorflow', 'constant')
             'subtract': ('tensorflow', 'subtract'), 
-            'RepeatVector': ('tensorflow', 'RepeatVector')
+            'regularizers': ('tensorflow.keras', 'regularizers'), 
+            'split': ('tensorflow', 'split'),
+            'gather': ('tensorflow', 'gather'), 
+            'squeeze': ('tensorflow', 'squeeze'), 
         }
 
         mapping = {
@@ -199,6 +204,8 @@ class KerasDependencies:
             'Embedding': ('layers', 'Embedding'), 
             'clone_model': ('models', 'clone_model'),
             'load_model': ('models', 'load_model'),
+            'RepeatVector': ('layers', 'RepeatVector'), 
+            'Bidirectional': ('layers', 'Bidirectional'), 
             "register_keras_serializable": (saving_module, "register_keras_serializable"),
         }
 
