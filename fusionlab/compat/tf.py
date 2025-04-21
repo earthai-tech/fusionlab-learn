@@ -135,19 +135,23 @@ class KerasDependencies:
             'cast': ('tensorflow', 'cast'), 
             'abs': ('tensorflow', 'abs'), 
             'float32': ('tensorflow', 'float32'), 
+            'int32': ('tensorflow', 'int32'), 
             'autograph': ('tensorflow', 'autograph'), 
-            # 'zeros': ('tensorflow', 'zeros'),
+            'zeros': ('tensorflow', 'zeros'),
             'multiply': ('tensorflow', 'multiply'), 
             'get_static_value':('tensorflow', 'get_static_value'),
             'equal': ('tensorflow', 'equal'), 
             'debugging': ('tensorflow', 'debugging'), 
             'assert_equal': ('tensorflow', 'assert_equal'), 
-            # 'constant': ('tensorflow', 'constant')
+            'constant': ('tensorflow', 'constant'), 
             'subtract': ('tensorflow', 'subtract'), 
             'regularizers': ('tensorflow.keras', 'regularizers'), 
             'split': ('tensorflow', 'split'),
             'gather': ('tensorflow', 'gather'), 
             'squeeze': ('tensorflow', 'squeeze'), 
+            'control_dependencies': ('tensorflow', 'control_dependencies'), 
+            'cond': ('tensorflow', 'cond'), 
+            
         }
 
         mapping = {
