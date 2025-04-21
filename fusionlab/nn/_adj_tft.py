@@ -658,7 +658,7 @@ References
     TemporalFusionTransformer.__doc__.replace ('TemporalFusionTransformer', 'TFT')
     ), join='\n'
  )
-@register_keras_serializable('fusionlab.nn.transformers', name="TFT")
+@register_keras_serializable('fusionlab.nn.transformers', name="_TFT")
 class _TFT(Model, NNLearner):
     @validate_params({
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')], 
@@ -984,7 +984,7 @@ class _TFT(Model, NNLearner):
         """
         return cls(**config)
 
-@register_keras_serializable('fusionlab.nn.transformers', name="TFT")
+@register_keras_serializable('fusionlab.nn.transformers', name="TFTPlus")
 class TFTPlus(Model):
     """Revised Temporal Fusion Transformer (TFT) requiring static,
     dynamic (past), and future inputs, with categorical handling.
