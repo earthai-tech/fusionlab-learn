@@ -23,8 +23,10 @@ if KERAS_BACKEND:
     tf_debugging= KERAS_DEPS.debugging 
     tf_assert_equal=KERAS_DEPS.assert_equal
     tf_autograph=KERAS_DEPS.autograph
+    tf_concat = KERAS_DEPS.concat
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     tf_expand_dims=KERAS_DEPS.expand_dims
+    tf_control_dependencies=KERAS_DEPS.control_dependencies
     tf_autograph.set_verbosity(0)
     
 else: 
@@ -1247,7 +1249,114 @@ def validate_minimal_inputs(
     return X_static, X_dynamic, X_future
  
 
+def combine_temporal_inputs_for_lstm(
+    dynamic_selected: "Tensor",
+    future_selected: "Tensor",
+    mode: str = 'strict' 
+    ) -> "Tensor":
+    """Combines selected dynamic (past) and future features for LSTM input.
 
+    Handles potential shape mismatches based on the selected mode.
+
+    Args:
+        dynamic_selected: Tensor containing processed dynamic features,
+            ideally shape (Batch, T_past, HiddenUnits).
+        future_selected: Tensor containing processed known future features,
+            ideally shape (Batch, T_future_total, HiddenUnits) where
+            T_future_total >= T_past.
+        mode (str): Handling mode for shape/dimension issues.
+            - 'strict' (default): Enforces 3D inputs and that
+              T_future_total >= T_past, raising errors otherwise.
+            - 'soft': Attempts to handle 2D inputs by adding a time
+              dimension (with warning). Still requires T_future_total >= T_past.
+
+    Returns:
+        Tensor: Combined features ready for LSTM input, with shape
+                (Batch, T_past, CombinedFeatures). Feature dimension
+                depends on concatenation axis used.
+
+    Raises:
+        ValueError: If inputs have unsupported ranks or incompatible
+                    time dimensions in 'strict' mode or if basic
+                    shape requirements aren't met in 'soft' mode.
+    """
+    # --- Validate Mode ---
+    if mode not in ['strict', 'soft']:
+        raise ValueError(f"Invalid mode: '{mode}'. Choose 'strict' or 'soft'.")
+
+    # --- Input Tensor Validation and Processing ---
+    processed_dynamic = dynamic_selected
+    processed_future = future_selected
+
+    # Check ranks and potentially reshape in 'soft' mode
+    dynamic_rank = len(processed_dynamic.shape)
+    future_rank = len(processed_future.shape)
+
+    if mode == 'soft':
+        # Attempt to add time dimension if inputs are 2D
+        if dynamic_rank == 2:
+            warnings.warn(
+                "Soft mode: Received 2D dynamic_selected input."
+                " Assuming TimeSteps=1 and adding dimension.", UserWarning
+                )
+            processed_dynamic = tf_expand_dims(processed_dynamic, axis=1)
+            dynamic_rank = 3
+        if future_rank == 2:
+            warnings.warn(
+                "Soft mode: Received 2D future_selected input."
+                " Assuming TimeSteps=1 and adding dimension.", UserWarning
+                )
+            processed_future = tf_expand_dims(processed_future, axis=1)
+            future_rank = 3
+
+    # --- Strict Shape Checks (Applied in both modes after potential reshape) ---
+    if dynamic_rank != 3 or future_rank != 3:
+        raise ValueError(
+            f"Inputs must be 3D (Batch, Time, Features) after "
+            f"processing. Got shapes: dynamic={processed_dynamic.shape}, "
+            f"future={processed_future.shape}"
+        )
+
+    # Get dynamic time steps
+    # Use tf.shape for compatibility with graph mode
+    dynamic_shape = tf_shape(processed_dynamic)
+    future_shape = tf_shape(processed_future)
+    # This might indicate future_selected includes horizon steps
+    # For LSTM input, we only need the past portion here.
+    # This assumes T_past = self.dynamic_input_time_steps (if defined)
+    # Let's assume dynamic_selected has T_past length
+    
+    num_dynamic_steps = dynamic_shape[1] # T_past
+    # Take only the first T_past steps from future_selected
+    num_future_steps = future_shape[1]   # T_future_total
+    # Warning: This might discard future info if not handled later
+    
+    # Check T_future_total >= T_past (critical for slicing)
+    # Use tf.debugging.assert for graph-mode check
+    tf_assert = tf_debugging.assert_greater_equal(
+        num_future_steps, num_dynamic_steps,
+        message=( # Use tuple for message args in TF assert
+            f"Future input time steps ({num_future_steps}) must be >= "
+            f"Dynamic input time steps ({num_dynamic_steps}) for LSTM input prep."
+        )
+    )
+    # Ensure the assertion is part of the graph execution
+    with tf_control_dependencies([tf_assert]):
+        # Slice future features to match the lookback period (T_past)
+        future_selected_for_lstm = processed_future[:, :num_dynamic_steps, :]
+        # Shape: (Batch, T_past, HiddenUnits)
+
+    # --- Concatenate Features ---
+    # Concatenate along the feature dimension (last axis)
+    combined_lstm_input = tf_concat(
+        [processed_dynamic, future_selected_for_lstm], axis=-1
+        )
+    # Shape: (Batch, T_past, DynamicFeatures + FutureFeatures)
+    # Note: Assuming dynamic/future selected features have same HiddenUnits dim
+
+    # Comment: Combined dynamic past and known future features for LSTM window.
+
+    return combined_lstm_input
 
 
 

@@ -62,6 +62,11 @@ if KERAS_BACKEND:
     tf_rank=KERAS_DEPS.rank
     tf_split = KERAS_DEPS.split
     tf_multiply=KERAS_DEPS.multiply
+    tf_cond=KERAS_DEPS.cond
+    tf_constant =KERAS_DEPS.constant 
+    tf_equal =KERAS_DEPS.equal 
+    tf_int32=KERAS_DEPS.int32 
+    tf_debugging =KERAS_DEPS.debugging 
     tf_autograph=KERAS_DEPS.autograph
     
     try:
@@ -329,7 +334,7 @@ class PositionalEncoding(Layer, NNLearner):
         return config
 
 
-
+#XXX TOFIX : 
 @register_keras_serializable(
     'fusionlab.nn.components', name="GatedResidualNetwork"
 )
@@ -488,33 +493,58 @@ class GatedResidualNetwork(Layer):
         # --- 2. Process Input and Context ---
         # Project input features to 'units' dimension
         projected_input = self.input_dense(x) # Shape (B, ..., Units)
-
+        input_plus_context = projected_input # No context added; Default 
+        
         # Add processed context if provided
         if context is not None:
             context_proj = self.context_dense(context) # Shape (B, ..., Units)
 
             # Ensure context can be added (handle broadcasting)
-            x_rank = tf_rank(projected_input)
-            ctx_rank = tf_rank(context_proj)
+            #x_rank = tf_rank(projected_input)
+            
+             # Use standard Python len() on shapes now, because of decorator
+            # Use standard Python len() on shapes now, because of decorator
+            x_rank = len(projected_input.shape)
+            ctx_rank = len(context_proj.shape)
+            
+            # x_rank = projected_input.shape.rank 
+            # #ctx_rank = tf_rank(context_proj)
+            # ctx_rank = context_proj.shape.rank 
 
-            if x_rank > ctx_rank and ctx_rank == 2: # e.g., x=(B,T,U), ctx=(B,U)
-                 # Add time dimension for broadcasting: (B,U) -> (B,1,U)
-                 context_proj = tf_expand_dims(context_proj, axis=1)
-            elif x_rank < ctx_rank and x_rank == 2: # e.g., x=(B,U), ctx=(B,T,U)
-                 # This case is ambiguous, typically context is static
-                 # Raise error or maybe average context across time?
-                 raise ValueError(f"Cannot add time-varying context (rank "
-                                  f"{ctx_rank}) to non-time-varying input "
-                                  f"(rank {x_rank}).")
-            elif x_rank != ctx_rank:
-                 # Other rank mismatches
-                 raise ValueError(f"Incompatible ranks for input ({x_rank})"
-                                  f" and context ({ctx_rank}).")
-            # Now shapes should be broadcast-compatible
-            input_plus_context = tf_add(projected_input, context_proj)
-            #  Context added.
-        else:
-            input_plus_context = projected_input # No context added
+            if x_rank == 3 and ctx_rank == 2:# e.g., x=(B,T,U), ctx=(B,U)
+                # Add time dimension for broadcasting: (B,U) -> (B,1,U)
+                context_proj_expanded = tf_expand_dims(context_proj, axis=1)
+                # Now shapes should be broadcast-compatible
+                input_plus_context = tf_add(projected_input, context_proj_expanded)
+            elif x_rank == ctx_rank:
+                # Ranks match, add directly
+                input_plus_context = tf_add(projected_input, context_proj)
+                
+            else:
+                # Raise error for incompatible ranks
+                raise ValueError(
+                    f"Incompatible ranks GRN input ({x_rank})"
+                    f" and context ({ctx_rank}). Cannot broadcast/add."
+                )
+                
+        #     if x_rank > ctx_rank and ctx_rank == 2: # e.g., x=(B,T,U), ctx=(B,U)
+        #          # Add time dimension for broadcasting: (B,U) -> (B,1,U)
+        #          context_proj = tf_expand_dims(context_proj, axis=1)
+        #     elif x_rank < ctx_rank and x_rank == 2: # e.g., x=(B,U), ctx=(B,T,U)
+        #          # This case is ambiguous, typically context is static
+        #          # Raise error or maybe average context across time?
+        #          raise ValueError(f"Cannot add time-varying context (rank "
+        #                           f"{ctx_rank}) to non-time-varying input "
+        #                           f"(rank {x_rank}).")
+        #     elif x_rank != ctx_rank:
+        #          # Other rank mismatches
+        #          raise ValueError(f"Incompatible ranks for input ({x_rank})"
+        #                           f" and context ({ctx_rank}).")
+        #     # Now shapes should be broadcast-compatible
+        #     input_plus_context = tf_add(projected_input, context_proj)
+        #     #  Context added.
+        # else:
+        #     input_plus_context = projected_input # No context added
 
         # --- 3. Apply Activation and Regularization ---
         activated_features = self.activation_fn(input_plus_context)
@@ -565,166 +595,7 @@ class GatedResidualNetwork(Layer):
         """Creates layer from its config."""
         return cls(**config)
     
-# @register_keras_serializable(
-#     'fusionlab.nn.components', name="GatedResidualNetwork"
-# )
-# class GatedResidualNetwork(Layer, NNLearner): 
-#     """Gated Residual Network applying transformations with optional context."""
 
-#     @validate_params({
-#         "units": [Interval(Integral, 1, None, closed='left')],
-#         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
-#         "use_time_distributed": [bool],
-#         "use_batch_norm": [bool],
-#         "activation": [StrOptions(
-#             {"elu", "relu", "tanh", "sigmoid", "linear", "gelu",}
-#             )],
-#         "output_activation": [StrOptions( 
-#             {"elu", "relu", "tanh", "sigmoid", "linear", "gelu",}
-#             ), None]
-#     })
-#     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-#     def __init__(
-#         self,
-#         units: int,
-#         dropout_rate: float = 0.0,
-#         use_time_distributed: bool = False, # Still needed by VSN init?
-#         activation: str = 'elu',
-#         output_activation: Optional[str] = None, # Activation after final LayerNorm
-#         use_batch_norm: bool = False,
-#         **kwargs
-#     ):
-#         super().__init__(**kwargs)
-#         self.units = units
-#         self.dropout_rate = dropout_rate
-#         # Store use_time_distributed for potential 
-#         # conditional logic if needed later
-#         self.use_time_distributed = use_time_distributed
-#         self.use_batch_norm = use_batch_norm
-#         # Store activation strings for config
-#         self.activation= activation
-#         self.output_activation = output_activation
-#         self.activation_fn = Activation(activation).activation 
-#         self.output_activation_fn = Activation(activation).activation 
-        
-        
-#         # --- Define Layers ---
-#         # Dense layer for processing input + context before main path & gate
-#         # Uses linear activation, activation applied manually after
-#         self.input_dense = Dense(units, activation=None, name="input_dense")
-
-#         # Dense layer for optional context projection (if context provided)
-#         # No activation, added directly to input projection
-#         self.context_dense = Dense(units, use_bias=False, name="context_dense")
-
-#         # Dense layer for main transformation path (after activation+dropout)
-#         # Typically uses linear activation before gating
-#         self.output_dense = Dense(units, activation=None, name="output_dense")
-
-#         # Dense layer for gating mechanism
-#         self.gate_dense = Dense(units, activation='sigmoid', name="gate_dense")
-
-#         # Normalization Layers
-#         if self.use_batch_norm:
-#              # Apply BN after input_dense + activation
-#              self.batch_norm = BatchNormalization(name="batch_norm")
-#         # Layer Normalization applied at the end (standard for GRN)
-#         self.layer_norm = LayerNormalization(name="output_layer_norm")
-
-#         # Dropout Layer (applied after activation of input_dense)
-#         self.dropout = Dropout(dropout_rate, name="grn_dropout")
-
-#         # Projection layer for the residual connection (built in build)
-#         self.projection = None
-
-#     def build(self, input_shape):
-#         """Build projection layer if input dim doesn't match units."""
-#         # Input can be x or [x, context] if context shape is known
-#         # We build based on x's shape (first element if list)
-#         main_input_shape = input_shape[0] if isinstance(
-#             input_shape, (list, tuple)) else input_shape
-#         input_dim = main_input_shape[-1]
-
-#         # Create projection only if input_dim != units for residual connection
-#         if input_dim != self.units:
-#             self.projection = Dense(self.units, name="residual_projection")
-#             # Build projection layer explicitly
-#             self.projection.build(main_input_shape)
-
-#         # Note: context_dense will be built when first
-#         # called if context provided
-#         super().build(input_shape)
-
-#     def call(self, x, context=None, training=False):
-#         """Forward pass implementing GRN with optional context."""
-#         # context, if provided, has a shape
-#         # compatible with broadcasting/addition after projection, or
-#         # has the same number of dimensions (excluding feature dim) as x.
-#         # If context is time-distributed and x is not, or vice versa,
-#         # careful handling (e.g., tiling) might be needed outside this layer.
-
-#         # --- 1. Residual Connection Setup ---
-#         shortcut = x
-#         # Apply projection if dimensions mismatch units
-#         if self.projection is not None:
-#             shortcut = self.projection(shortcut)
-#             # Input projected for residual connection.
-
-#         # --- 2. Process Input and Context ---
-#         processed_input = self.input_dense(x)
-#         if context is not None:
-#             # Project context and add to processed input
-#             context_proj = self.context_dense(context)
-#             processed_input = tf_add(processed_input, context_proj)
-#             #  Context added to main input projection.
-
-#         # --- 3. Apply Activation and Regularization ---
-#         activated_input = self.activation_fn(processed_input)
-#         if self.use_batch_norm:
-#              # Apply BN after activation
-#              activated_input = self.batch_norm(activated_input, training=training)
-#         regularized_input = self.dropout(activated_input, training=training)
-
-#         # --- 4. Main Transformation Path ---
-#         transformed_output = self.output_dense(regularized_input)
-
-#         # --- 5. Gating Path ---
-#         gate_values = self.gate_dense(processed_input) # Gate based on input+context
-
-#         # --- 6. Apply Gate ---
-#         gated_output = tf_multiply(transformed_output, gate_values)
-
-#         # --- 7. Add Residual ---
-#         residual_output = tf_add(shortcut, gated_output)
-
-#         # --- 8. Final Normalization & Optional Activation ---
-#         normalized_output = self.layer_norm(residual_output)
-#         final_output = normalized_output
-#         if self.output_activation_fn is not None:
-#             final_output = self.output_activation_fn(normalized_output)
-#             # Applied final output activation.
-
-#         return final_output
-
-#     def get_config(self):
-#         """Returns the layer configuration."""
-#         config = super().get_config()
-#         config.update({
-#             'units': self.units,
-#             'dropout_rate': self.dropout_rate,
-#             'use_time_distributed': self.use_time_distributed,
-#             'activation': self.activation, 
-#             'output_activation': self.output_activation, 
-#             'use_batch_norm': self.use_batch_norm,
-#         })
-#         return config
-
-#     @classmethod
-#     def from_config(cls, config):
-#         """Creates layer from its config."""
-#         return cls(**config)
-    
-    
 @register_keras_serializable(
     'fusionlab.nn.components', name="GatedResidualNetworkIn"
 )
@@ -1280,12 +1151,134 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         """
         return cls(**config)
 
-
+## XXXTODO: FIX 
 @register_keras_serializable(
-    'fusionlab.nn.components', 
+    'fusionlab.nn.components',
     name="TemporalAttentionLayer"
 )
-class TemporalAttentionLayer(Layer, NNLearner):
+class TemporalAttentionLayer(Layer):
+    """Temporal Attention Layer conditioning query with context."""
+
+    # ... (@validate_params decorator as before) ...
+
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+    def __init__(
+        self,
+        units: int,
+        num_heads: int,
+        dropout_rate: float = 0.0,
+        activation: str = 'elu',
+        use_batch_norm: bool = False,
+        **kwargs
+    ):
+        """Initializes the TemporalAttentionLayer."""
+        super().__init__(**kwargs)
+        self.units = units
+        self.num_heads = num_heads
+        self.dropout_rate = dropout_rate
+        self.use_batch_norm = use_batch_norm
+        self.activation_str = activation # Store string for config
+
+        # --- Define Internal Layers ---
+        self.multi_head_attention = MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=units,
+            dropout=dropout_rate,
+            name="mha"
+        )
+        self.dropout = Dropout(dropout_rate, name="attn_dropout")
+        self.layer_norm1 = LayerNormalization(name="layer_norm_1")
+
+        # GRN to process the input context_vector
+        # Ensure this is a single instance, passing the activation string
+        self.context_grn = GatedResidualNetwork(
+            units=units, # Output matches main path 'units'
+            dropout_rate=dropout_rate,
+            activation=self.activation_str,
+            use_batch_norm=self.use_batch_norm,
+            name="context_grn"
+            # Note: GRN's internal activation handling should be fixed
+        )
+
+        # Final GRN (position-wise feedforward)
+        # Ensure this is also a single instance
+        self.output_grn = GatedResidualNetwork(
+            units=units,
+            dropout_rate=dropout_rate,
+            activation=self.activation_str,
+            use_batch_norm=self.use_batch_norm,
+            name="output_grn"
+        )
+
+
+    @tf_autograph.experimental.do_not_convert
+    def call(self, inputs, context_vector=None, training=False):
+        """Forward pass of the temporal attention layer."""
+        # Input shapes: inputs=(B, T, U), context_vector=(B, U_ctx)
+
+        query = inputs # Default query
+        processed_context = None
+
+        # --- Process Context Vector (if provided) ---
+        if context_vector is not None:
+            # Pass context_vector as the main input 'x' to context_grn
+            processed_context = self.context_grn(
+                x=context_vector,
+                context=None, # No nested context for the context_grn itself
+                training=training
+            )
+            # Output shape: (B, units)
+
+            # Expand context across time: (B, units) -> (B, 1, units)
+            context_expanded = tf_expand_dims(processed_context, axis=1)
+            # Add to inputs (broadcasting handles time dimension)
+            query = tf_add(inputs, context_expanded)
+            # Comment: Query now incorporates static context.
+
+        # --- Multi-Head Self-Attention ---
+        attn_output = self.multi_head_attention(
+            query=query, value=inputs, key=inputs, training=training
+        ) # Shape: (B, T, units)
+
+        # --- Add & Norm (First Residual Connection) ---
+        attn_output_dropout = self.dropout(attn_output, training=training)
+        # Residual connection uses original 'inputs'
+        x_attn = self.layer_norm1(tf_add(inputs, attn_output_dropout))
+        # Shape: (B, T, units)
+
+        # --- Position-wise Feedforward (Final GRN) ---
+        # This GRN takes the output of the attention block as input 'x'
+        # It does not receive the external 'context_vector' here.
+        output = self.output_grn(
+            x=x_attn,
+            context=None, # No external context for the final GRN
+            training=training
+        )
+        # Shape: (B, T, units)
+        return output
+
+    def get_config(self):
+        """Returns the layer configuration."""
+        config = super().get_config()
+        config.update({
+            'units': self.units,
+            'num_heads': self.num_heads,
+            'dropout_rate': self.dropout_rate,
+            'activation': self.activation_str, # Save original string
+            'use_batch_norm': self.use_batch_norm,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        """Creates layer from its config."""
+        return cls(**config)
+    
+@register_keras_serializable(
+    'fusionlab.nn.components', 
+    name="TemporalAttentionLayer0"
+)
+class TemporalAttentionLayer0(Layer, NNLearner):
     r"""
     Temporal Attention Layer for focusing on
     important time steps [1]_.
@@ -1459,23 +1452,29 @@ class TemporalAttentionLayer(Layer, NNLearner):
         self.multi_head_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=units,
-            dropout=dropout_rate
+            dropout=dropout_rate, 
+            name="mha"
         )
 
         # Dropout
-        self.dropout = Dropout(dropout_rate)
+        self.dropout = Dropout(
+            dropout_rate, name="attn_dropout"
+            )
 
         # Layer normalization for residual block
-        self.layer_norm = LayerNormalization()
+        self.layer_norm = LayerNormalization(
+            name="layer_norm_1"
+        )
 
         # GRN to transform input prior 
         # to multi-head attention
         self.grn = GatedResidualNetwork(
             units,
             dropout_rate,
-            use_time_distributed=True,
+            # use_time_distributed=True,
             activation=self.activation,
-            use_batch_norm=use_batch_norm
+            use_batch_norm=use_batch_norm, 
+           name="output_grn" 
         )
 
         # GRN to transform context vector
@@ -1483,7 +1482,8 @@ class TemporalAttentionLayer(Layer, NNLearner):
             units,
             dropout_rate,
             activation=self.activation,
-            use_batch_norm=use_batch_norm
+            use_batch_norm=use_batch_norm, 
+           name="context_grn"
         )
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context_vector, training=False):
@@ -1539,11 +1539,15 @@ class TemporalAttentionLayer(Layer, NNLearner):
         # if it's actually provided
         if context_vector is not None:
             
-            # Transform context vector
+            # Transform context vector 
+            # Apply GRN to transform the context vector
+            # Pass context_vector as the main input 'x' to context_grn
+            # No further context is passed *to* this GRN itself
             context_vector = self.context_grn(
-                context_vector,
+                x=context_vector,
                 training=training
             )
+            # Output shape: (B, units)
     
             # Expand and tile context
             context_expanded = tf_expand_dims(
@@ -1554,9 +1558,15 @@ class TemporalAttentionLayer(Layer, NNLearner):
                 context_expanded,
                 [1, tf_shape(inputs)[1], 1]
             )
-    
+            # Tile is handled by broadcasting during addition if needed
+            # Shape (B, 1, units) will broadcast with (B, T, units)
+            
             # Combine with inputs to form query
             query = inputs + context_expanded
+            # or 
+            # Add processed context to inputs to form the query
+            # query = tf_add(inputs, context_expanded)
+            
             #  Query now incorporates static context
         # else:
             #  No context provided, query remains original inputs
@@ -1568,7 +1578,8 @@ class TemporalAttentionLayer(Layer, NNLearner):
             key=inputs,
             training=training
         )
-
+        # Output shape: (B, T, units)
+        
         # Dropout on attention output
         attn_output = self.dropout(
             attn_output,
@@ -1579,7 +1590,8 @@ class TemporalAttentionLayer(Layer, NNLearner):
         x = self.layer_norm(
             inputs + attn_output
         )
-
+        # Shape: (B, T, units)
+        
         # Final GRN
         output = self.grn(
             x,
@@ -3157,7 +3169,7 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
             GatedResidualNetwork(
                 units=units,
                 dropout_rate=dropout_rate,
-                use_time_distributed=False,
+                # use_time_distributed=False,
                 activation=self.activation,
                 use_batch_norm=use_batch_norm, 
                 name=f"single_var_grn_{i}"
@@ -3201,7 +3213,7 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
         #      activation=self.activation_str
         # )
         
-
+    @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training=False):
         r"""
         Execute the forward pass.
@@ -3350,64 +3362,16 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
         """
         return cls(**config)
 
-# # -*- coding: utf-8 -*-
-# # License: BSD-3-Clause
-# # Author: LKouadio <etanoyau@gmail.com>
-# # File: e.g., fusionlab/nn/components.py (Revised VariableSelectionNetwork)
+# XXX TOFIX: 
 
-# """
-# Neural network components including VariableSelectionNetwork.
-# """
-# from numbers import Real, Integral
-# from typing import Optional, Union, List
+@register_keras_serializable(
+    'fusionlab.nn.components',
+    name="VariableSelectionNetwork"
+)
+class VariableSelectionNetwork(Layer): # Removed NNLearner for simplicity
+    """Applies GRN to each variable and learns importance weights."""
 
-# # Adapt internal imports as needed
-# # from ..api.property import NNLearner # If used for shared properties
-# from ..compat.sklearn import validate_params, Interval, StrOptions
-# from ..utils.deps_utils import ensure_pkg
-
-# # Import Keras backend utilities
-# from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-# if KERAS_BACKEND:
-#     Layer = KERAS_DEPS.Layer
-#     Dense = KERAS_DEPS.Dense
-#     Softmax = KERAS_DEPS.Softmax
-#     LayerNormalization = KERAS_DEPS.LayerNormalization # Might be used in GRN
-#     Dropout = KERAS_DEPS.Dropout # Might be used in GRN
-#     # Import necessary TF functions
-#     tf_expand_dims = KERAS_DEPS.expand_dims
-#     tf_rank = KERAS_DEPS.rank
-#     tf_stack = KERAS_DEPS.stack
-#     tf_reduce_sum = KERAS_DEPS.reduce_sum
-#     tf_multiply = KERAS_DEPS.multiply
-#     tf_reshape = KERAS_DEPS.reshape
-#     tf_shape = KERAS_DEPS.shape
-#     register_keras_serializable = KERAS_DEPS.register_keras_serializable
-#     Tensor = KERAS_DEPS.Tensor
-#     # Import activations module
-#     try:
-#         import tensorflow as tf
-#         activations = tf.keras.activations
-#     except ImportError:
-#         activations = KERAS_DEPS.activations
-
-#     # Import GRN (assuming it's compatible and handles context)
-#     # This GRN implementation needs to accept context=None gracefully
-#     from .components import GatedResidualNetwork
-# else:
-#     Layer = object
-#     # ... other dummies ...
-
-# DEP_MSG = dependency_message('nn.components.VariableSelectionNetwork')
-
-# @register_keras_serializable(
-#     'fusionlab.nn.components',
-#     name="VariableSelectionNetwork"
-# )
-class VariableSelectionNetwork(Layer):
-    """Applies GRN to each var and learns importance weights, accepts context."""
-
-    @validate_params({ # Ensure parameter validation reflects implementation
+    @validate_params({
         "num_inputs": [Interval(Integral, 1, None, closed='left')],
         "units": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
@@ -3434,163 +3398,169 @@ class VariableSelectionNetwork(Layer):
         self.dropout_rate = dropout_rate
         self.use_time_distributed = use_time_distributed
         self.use_batch_norm = use_batch_norm
-        self.activation_str = activation # Store original string for config
+        
+        # Store original activation string for config
 
+        if isinstance (activation, str): 
+            self.activation_str = activation
+        else: 
+            _Activation = Activation(activation) 
+            self.activation_fn = _Activation.activation # Not needed now
+            self.activation_str = _Activation.name 
+            
         # --- Layers ---
         # 1. GRN for each individual input variable
+        #    GRN's __init__ should handle converting activation string
         self.single_variable_grns = [
             GatedResidualNetwork(
                 units=units, dropout_rate=dropout_rate,
-                use_time_distributed=False, # Applied per feature slice
-                activation=self.activation_str,
-                use_batch_norm=use_batch_norm, name=f"single_var_grn_{i}"
+                activation=self.activation_str, # Pass string
+                use_batch_norm=use_batch_norm,
+                name=f"single_var_grn_{i}"
             ) for i in range(num_inputs)
         ]
 
-        # 2. GRN for calculating weights (processes combined features)
-        # Input shape will be (B, [T,] num_inputs * units) after flattening
-        # OR (B, [T,], units) if processing original flattened inputs
-        # Let's use the GRN on combined *original* inputs as per paper
-        self.weighting_grn = GatedResidualNetwork(
-            units=self.num_inputs, # Output one logit per input variable
-            dropout_rate=dropout_rate,
-            use_time_distributed=self.use_time_distributed, # Match input mode
-            activation=self.activation_str,
-            use_batch_norm=self.use_batch_norm,
-            name="weighting_grn"
+        # 2. Dense layer to compute variable importances (applied later)
+        #    Output units = 1 per variable for the original weighting method
+        self.variable_importance_dense = Dense(
+            1, name="variable_importance_dense"
         )
 
-        # 3. Softmax for normalizing variable weights across variables (axis=-1)
-        softmax_layer = Softmax(axis=-1, name="variable_weights_softmax")
-        if self.use_time_distributed:
-            # Apply Softmax independently for each time step
-            self.softmax = TimeDistributed(softmax_layer, name="variable_weights_td")
-        else:
-            self.softmax = softmax_layer
+        # 3. Softmax for normalizing weights across variables (N dimension)
+        #    Axis -2 assumes stacked_outputs shape (B, [T,] N, units)
+        self.softmax = Softmax(axis=-2, name="variable_weights_softmax")
 
-        # 4. Optional context projection layer (built dynamically)
+        # 4. Optional context projection layer (created in build)
+        #    Projects external context to 'units' for GRNs
         self.context_projection = None
-        # Placeholder for activation function object (set in build/init)
-        self.activation_fn = None
-        if activations: # Check if activations module was imported
-            try:
-                self.activation_fn = activations.get(activation)
-            except Exception as e:
-                 # Handle cases where activation string might be invalid early
-                 raise ValueError(f"Invalid activation: {activation}") from e
+
+        # 5. Activation function object (used if needed manually)
+        #    GRN now handles activation internally via its __init__
+        # self.activation_fn = Activation(activation).activation # Not needed now
 
         # Attribute to store weights
         self.variable_importances_ = None
 
     def build(self, input_shape):
-        """Builds the context projection layer if needed."""
-        # We don't know the context shape here, so create projection
-        # without input_shape, Keras will build it on first call.
-        # Or assume context is pre-processed to self.units dimension
-        # For robustness, let's create it without input_shape here.
+        """Builds the context projection layer lazily."""
+        # Build context projection layer if not already built
+        # We don't know context shape, so create without input_shape
         if self.context_projection is None:
-             # If context is expected to influence GRNs directly,
-             # project it to 'units'. If it influences the weighting GRN,
-             # its projection depends on weighting_grn's needs.
-             # Assuming context influences single_var_grns and weighting_grn.
-             self.context_projection = Dense(
-                 self.units, # Project to GRN units dimension
-                 activation=self.activation_fn, # Use function object
-                 name="context_projection"
-             )
+            self.context_projection = Dense(
+                self.units, # Project context to GRN hidden units
+                # # Assuming activation_fn is correctly set in __init__
+                #  activation=getattr(self, 'activation_fn', None)
+                activation=self.activation_str, # Use original string
+                name="context_projection"
+            )
+            # context_projection created lazily.
+            # Keras will build weights on first call with context.
         super().build(input_shape)
-
+        
+    @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context=None, training=False):
         """Execute the forward pass with optional context."""
 
         # --- Input Validation and Reshaping ---
-        actual_rank = len(inputs.shape)
-        expected_min_rank = 3 if self.use_time_distributed else 2
-        if actual_rank < expected_min_rank:
-            raise ValueError(f"Input rank must be >= {expected_min_rank}")
+        actual_rank = inputs.shape.rank
+        # actual_rank = len(inputs.shape)
+        # Determine expected minimum rank based on layer config
+        expected_min_rank = tf_constant(
+            3 if self.use_time_distributed else 2, dtype=tf_int32
+            )
 
-        if actual_rank == expected_min_rank:
-            inputs = tf_expand_dims(inputs, axis=-1)
+        # Assert rank meets minimum requirement (graph-safe check)
+        print("DEBUG==:", )
+        # expected_min_rank = 3 if self.use_time_distributed else 2
+        print("actual_rank=", actual_rank,
+              "expected_min_rank=", expected_min_rank
+              )
+        tf_debugging.assert_greater_equal(
+            actual_rank, expected_min_rank,
+            message=f"Input rank must be >= {expected_min_rank}."
+            )
+        # # Add feature dimension if missing using tf.cond
+        # # This check needs graph-compatible comparison
+        inputs = tf_cond(
+            tf_equal(actual_rank, expected_min_rank),
+            # Function to execute if True (rank matches min expected -> expand)
+            lambda: tf_expand_dims(inputs, axis=-1),
+            # Function to execute if False (rank already > min expected -> keep)
+            lambda: inputs
+        )
+        # Input shape is now guaranteed to be at least rank 3 or 4
+        # e.g., (B, N, F=1) or (B, T, N, F=1)
+        
+        
+        # if actual_rank < expected_min_rank:
+        #       raise ValueError(
+        #           f"Input rank must be >= {expected_min_rank}. "
+        #           f"Got rank {actual_rank}."
+        #           )
+             
+        # Add feature dimension if missing
+        # if actual_rank == expected_min_rank:
+        #     inputs = tf_expand_dims(inputs, axis=-1)
         # Input shape is now (B, N, F=1) or (B, T, N, F=1)
 
         # --- Context Processing ---
         processed_context = None
         if context is not None:
+            # Project context to the 'units' dimension if layer exists
             if self.context_projection is None:
-                 # This should ideally be built in build, but try runtime build
+                 # Should have been created in build, but create lazily if missed
+                 # This might indicate an issue if build wasn't called prior
                  self.context_projection = Dense(
-                     self.units, name="context_projection",
-                     activation=self.activation_fn)
-                 # Build it explicitly if possible - requires context shape
-                 # self.context_projection.build(context.shape) # Risky if shape varies
+                      self.units, name="context_projection",
+                      activation=self.activation_str
+                      )
             processed_context = self.context_projection(context)
-            # Developer comment: Context projected to 'units' dim
+            # Note: GRN's call method handles broadcasting this context
 
         # --- Apply GRN to each variable ---
         var_outputs = []
-        for i in range(self.num_inputs):
+        # Axes: B=0, T=1, N=2, F=3 (TimeDistributed)
+        # Axes: B=0, N=1, F=2 (Not TimeDistributed)
+        # num_vars_tf = tf_shape(inputs)[-2] # Get N dynamically
+       
+        for i in tf_range(self.num_inputs):
             if self.use_time_distributed:
-                var_input = inputs[:, :, i, :] # Shape (B, T, F=1)
+                # Slice variable i: (B, T, N, F) -> (B, T, F)
+                var_input = inputs[:, :, i, :]
             else:
-                var_input = inputs[:, i, :] # Shape (B, F=1)
+                # Slice variable i: (B, N, F) -> (B, F)
+                var_input = inputs[:, i, :]
 
-            # Apply GRN, passing processed context (can be None)
+            # Apply the i-th GRN, passing the (potentially None) context
             grn_output = self.single_variable_grns[i](
                 var_input,
-                context=processed_context,
+                context=processed_context, # GRN handles context=None
                 training=training
             )
             var_outputs.append(grn_output)
             # Output shape: (B, T, units) or (B, units)
 
-        # Stack processed outputs along variable dimension (N)
+        # --- Stack GRN outputs along variable dimension (N) ---
+        # axis=-2 places N before the 'units' dimension
         stacked_outputs = tf_stack(var_outputs, axis=-2)
         # Shape: (B, T, N, units) or (B, N, units)
 
-        # --- Calculate Variable Importance Weights ---
-        # 1. Prepare input for weighting GRN:
-        #    Flatten original features (per step if TD)
-        if self.use_time_distributed:
-            # Input shape (B, T, N, F=1) -> Flatten N*F -> (B, T, N)
-            batch_size = tf_shape(inputs)[0]
-            time_steps = tf_shape(inputs)[1]
-            num_features = self.num_inputs # Since F=1 after expansion
-            flattened_inputs = tf_reshape(
-                inputs, [batch_size, time_steps, num_features]
-                )
-        else:
-            # Input shape (B, N, F=1) -> Flatten N*F -> (B, N)
-            batch_size = tf_shape(inputs)[0]
-            num_features = self.num_inputs
-            flattened_inputs = tf_reshape(inputs, [batch_size, num_features])
+        # --- Calculate Variable Importance Weights (Original Logic) ---
+        # 1. Apply Dense layer (output units = 1) to stacked outputs
+        #    Acts on the last dimension ('units') -> (B, [T,] N, 1)
+        importance_logits = self.variable_importance_dense(stacked_outputs)
 
-        # 2. Apply Weighting GRN to flattened original inputs,
-        #    potentially conditioned by the processed context
-        weighting_grn_output = self.weighting_grn(
-            flattened_inputs, context=processed_context, training=training
-            )
-        # Output shape: (B, T, units) or (B, units)
-
-        # 3. Apply Dense layer to get logits per input variable
-        # Note: Weighting GRN output units must match dense layer input needs.
-        # Here weighting_grn outputs 'units', dense expects 'units', outputs 'num_inputs'.
-        logits = self.variable_importance_dense(weighting_grn_output)
-        # Shape: (B, T, num_inputs) or (B, num_inputs)
-
-        # 4. Apply Softmax across the variable dimension ('N')
-        weights = self.softmax(logits) # Softmax applied on last dim
-        # Shape: (B, T, num_inputs) or (B, num_inputs)
+        # 2. Apply Softmax across the variable dimension (N, axis=-2)
+        weights = self.softmax(importance_logits)
+        # Shape: (B, [T,] N, 1)
         self.variable_importances_ = weights # Store weights
 
         # --- Weighted Combination ---
-        # Reshape weights for broadcasting: (B, [T,] N) -> (B, [T,] N, 1)
-        weights_expanded = tf_expand_dims(weights, axis=-1)
-
         # Multiply stacked GRN outputs by weights and sum
         # stacked_outputs: (B, [T,] N, units)
-        # weights_expanded: (B, [T,] N, 1)
+        # weights:         (B, [T,] N, 1) -> broadcasts correctly
         weighted_sum = tf_reduce_sum(
-            tf_multiply(stacked_outputs, weights_expanded),
+            tf_multiply(stacked_outputs, weights),
             axis=-2 # Sum across the variable dimension (N)
         )
         # Final output shape: (B, T, units) or (B, units)
@@ -3614,7 +3584,7 @@ class VariableSelectionNetwork(Layer):
         """Creates layer from its config."""
         return cls(**config)
     
-    
+
 @register_keras_serializable(
     'fusionlab.nn.components', 
     name="ExplainableAttention"
