@@ -62,6 +62,7 @@ if KERAS_BACKEND:
     tf_rank=KERAS_DEPS.rank
     tf_split = KERAS_DEPS.split
     tf_multiply=KERAS_DEPS.multiply
+    tf_autograph=KERAS_DEPS.autograph
     
     try:
         # Equivalent to: from tensorflow.keras import activations
@@ -115,7 +116,7 @@ _param_docs = DocstringComponents.from_nested_components(
 )
 
 @register_keras_serializable('fusionlab.nn.components', name="Activation")
-class Activation(Layer):
+class Activation(Layer, NNLearner):
     """
     Custom Activation layer that wraps a Keras activation function
     and captures its name.
@@ -329,134 +330,207 @@ class PositionalEncoding(Layer, NNLearner):
 
 
 
-DEP_MSG = dependency_message('nn.components.GatedResidualNetwork')
-
 @register_keras_serializable(
     'fusionlab.nn.components', name="GatedResidualNetwork"
 )
-class GatedResidualNetwork(Layer): # Removed NNLearner for simplicity
+class GatedResidualNetwork(Layer):
     """Gated Residual Network applying transformations with optional context."""
+
+    # Define common activation options for validation
+    _COMMON_ACTIVATIONS = {
+        "relu", "tanh", "sigmoid", "elu", "selu", "gelu", "linear",
+    }
 
     @validate_params({
         "units": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
-        # use_time_distributed flag might affect how context is added or if wrapper needed
-        "use_time_distributed": [bool],
         "use_batch_norm": [bool],
-        "activation": [StrOptions(
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu",}
-            )],
-        "output_activation": [StrOptions( 
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu",}
-            ), None]
+        "activation": [StrOptions(_COMMON_ACTIVATIONS)],
+        "output_activation": [StrOptions(_COMMON_ACTIVATIONS), None]
     })
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
     def __init__(
         self,
         units: int,
         dropout_rate: float = 0.0,
-        use_time_distributed: bool = False, # Still needed by VSN init?
         activation: str = 'elu',
-        output_activation: Optional[str] = None, # Activation after final LayerNorm
+        output_activation: Optional[str] = None,
         use_batch_norm: bool = False,
         **kwargs
     ):
+        """Initializes the GatedResidualNetwork layer.
+
+        Args:
+            units: Number of output units for the layer.
+            dropout_rate: Dropout rate applied within the network.
+            activation: Activation function string for the main path.
+            output_activation: Optional activation function string applied
+                after the final LayerNormalization.
+            use_batch_norm: Whether to use Batch Normalization after the
+                first dense layer's activation. Layer Normalization is
+                always applied at the end.
+            **kwargs: Additional keyword arguments for the base Layer.
+        """
         super().__init__(**kwargs)
         self.units = units
         self.dropout_rate = dropout_rate
-        # Store use_time_distributed for potential 
-        # conditional logic if needed later
-        self.use_time_distributed = use_time_distributed
         self.use_batch_norm = use_batch_norm
-        # Store activation strings for config
-        self.activation= activation
-        self.output_activation = output_activation
-        self.activation_fn = Activation(activation).activation 
-        self.output_activation_fn = Activation(activation).activation 
-        
-        
-        # --- Define Layers ---
-        # Dense layer for processing input + context before main path & gate
-        # Uses linear activation, activation applied manually after
-        self.input_dense = Dense(units, activation=None, name="input_dense")
+        # Store original activation strings for serialization
+        self.activation_str = activation
+        self.output_activation_str = output_activation
 
-        # Dense layer for optional context projection (if context provided)
-        # No activation, added directly to input projection
-        self.context_dense = Dense(units, use_bias=False, name="context_dense")
+        # --- Convert activation strings to callable functions ---
+        try:
+            self.activation_fn = activations.get(activation)
+            self.output_activation_fn = activations.get(output_activation) \
+                if output_activation is not None else None
+        except Exception as e:
+             # Catch potential errors during activation lookup
+             raise ValueError(
+                 f"Failed to get activation function '{activation}' or "
+                 f"'{output_activation}'. Error: {e}"
+                 ) from e
 
-        # Dense layer for main transformation path (after activation+dropout)
-        # Typically uses linear activation before gating
-        self.output_dense = Dense(units, activation=None, name="output_dense")
+        # --- Define Internal Layers ---
+        # Dense layer processing input (x + optional context)
+        # Activation is applied *after* this layer manually
+        self.input_dense = Dense(self.units, activation=None,
+                                 name="input_dense")
 
-        # Dense layer for gating mechanism
-        self.gate_dense = Dense(units, activation='sigmoid', name="gate_dense")
+        # Dense layer projecting context (if provided)
+        # No bias as per original paper often; no activation needed here
+        self.context_dense = Dense(self.units, use_bias=False,
+                                   name="context_dense")
 
-        # Normalization Layers
-        if self.use_batch_norm:
-             # Apply BN after input_dense + activation
-             self.batch_norm = BatchNormalization(name="batch_norm")
-        # Layer Normalization applied at the end (standard for GRN)
+        # Optional Batch Normalization (applied after main activation)
+        self.batch_norm = BatchNormalization(name="batch_norm") \
+            if self.use_batch_norm else None
+
+        # Dropout Layer (applied after activation/norm)
+        self.dropout = Dropout(self.dropout_rate, name="grn_dropout")
+
+        # Dense layer for main transformation path (after dropout)
+        self.output_dense = Dense(self.units, activation=None,
+                                  name="output_dense")
+
+        # Dense layer for gating mechanism applied to input projection
+        self.gate_dense = Dense(self.units, activation='sigmoid',
+                                name="gate_dense")
+
+        # Final Layer Normalization (standard in GRN)
         self.layer_norm = LayerNormalization(name="output_layer_norm")
 
-        # Dropout Layer (applied after activation of input_dense)
-        self.dropout = Dropout(dropout_rate, name="grn_dropout")
-
-        # Projection layer for the residual connection (built in build)
+        # Projection layer for residual connection (created in build)
         self.projection = None
 
+
     def build(self, input_shape):
-        """Build projection layer if input dim doesn't match units."""
-        # Input can be x or [x, context] if context shape is known
-        # We build based on x's shape (first element if list)
-        main_input_shape = input_shape[0] if isinstance(
-            input_shape, (list, tuple)) else input_shape
-        input_dim = main_input_shape[-1]
+        """Builds the residual projection layer if needed."""
+        # input_shape received by build for a Layer
+        # typically corresponds to the shape of the main input 'x'.
+        # It should be a tuple or TensorShape.
 
-        # Create projection only if input_dim != units for residual connection
+        # Ensure input_shape is a tuple for consistent indexing
+        if not isinstance(input_shape, tuple):
+            try:
+                input_shape = tuple(input_shape)
+            except TypeError:
+                raise ValueError(
+                    "Could not convert input_shape to tuple: "
+                    f"{input_shape}"
+                    )
+
+        # Check minimum rank (Batch, Features)
+        if len(input_shape) < 2:
+            raise ValueError(
+                "Input shape must have at least 2 dimensions "
+                f"(Batch, Features). Received shape: {input_shape}"
+                )
+
+        # --- Correctly get the input feature dimension ---
+        input_dim = input_shape[-1]
+        # -----------------------------------------------
+
+        # Developer Comment: Create projection layer only if the input
+        # feature dimension differs from the layer's output units.
         if input_dim != self.units:
-            self.projection = Dense(self.units, name="residual_projection")
-            # Build projection layer explicitly
-            self.projection.build(main_input_shape)
+            if self.projection is None: # Avoid recreating
+                self.projection = Dense(
+                    self.units, name="residual_projection"
+                    )
+                # Build the projection layer using the full input shape
+                # to ensure its weights are correctly initialized.
+                self.projection.build(input_shape)
+                # Developer Comment: Residual projection created and built.
+        else:
+             # Ensure projection is None if not needed
+             self.projection= None
 
-        # Note: context_dense will be built when first
-        # called if context provided
+        # Developer Comment: context_dense layer builds automatically
+        # on first call when context is provided, based on context shape.
+
+        # Call the build method of the parent class (Layer) AFTER
+        # defining layers/weights owned by this subclass.
         super().build(input_shape)
-
+        # self.built = True # super().build() should set this
+        
+    @tf_autograph.experimental.do_not_convert
     def call(self, x, context=None, training=False):
         """Forward pass implementing GRN with optional context."""
-        # context, if provided, has a shape
-        # compatible with broadcasting/addition after projection, or
-        # has the same number of dimensions (excluding feature dim) as x.
-        # If context is time-distributed and x is not, or vice versa,
-        # careful handling (e.g., tiling) might be needed outside this layer.
+        # Input x shape (B, ..., F_in)
+        # Context shape (if provided) (B, ..., Units) after projection
 
         # --- 1. Residual Connection Setup ---
         shortcut = x
-        # Apply projection if dimensions mismatch units
         if self.projection is not None:
-            shortcut = self.projection(shortcut)
-            # Input projected for residual connection.
+            shortcut = self.projection(shortcut) # Shape (B, ..., Units)
 
         # --- 2. Process Input and Context ---
-        processed_input = self.input_dense(x)
+        # Project input features to 'units' dimension
+        projected_input = self.input_dense(x) # Shape (B, ..., Units)
+
+        # Add processed context if provided
         if context is not None:
-            # Project context and add to processed input
-            context_proj = self.context_dense(context)
-            processed_input = tf_add(processed_input, context_proj)
-            #  Context added to main input projection.
+            context_proj = self.context_dense(context) # Shape (B, ..., Units)
+
+            # Ensure context can be added (handle broadcasting)
+            x_rank = tf_rank(projected_input)
+            ctx_rank = tf_rank(context_proj)
+
+            if x_rank > ctx_rank and ctx_rank == 2: # e.g., x=(B,T,U), ctx=(B,U)
+                 # Add time dimension for broadcasting: (B,U) -> (B,1,U)
+                 context_proj = tf_expand_dims(context_proj, axis=1)
+            elif x_rank < ctx_rank and x_rank == 2: # e.g., x=(B,U), ctx=(B,T,U)
+                 # This case is ambiguous, typically context is static
+                 # Raise error or maybe average context across time?
+                 raise ValueError(f"Cannot add time-varying context (rank "
+                                  f"{ctx_rank}) to non-time-varying input "
+                                  f"(rank {x_rank}).")
+            elif x_rank != ctx_rank:
+                 # Other rank mismatches
+                 raise ValueError(f"Incompatible ranks for input ({x_rank})"
+                                  f" and context ({ctx_rank}).")
+            # Now shapes should be broadcast-compatible
+            input_plus_context = tf_add(projected_input, context_proj)
+            #  Context added.
+        else:
+            input_plus_context = projected_input # No context added
 
         # --- 3. Apply Activation and Regularization ---
-        activated_input = self.activation_fn(processed_input)
-        if self.use_batch_norm:
-             # Apply BN after activation
-             activated_input = self.batch_norm(activated_input, training=training)
-        regularized_input = self.dropout(activated_input, training=training)
+        activated_features = self.activation_fn(input_plus_context)
+        if self.batch_norm is not None:
+            # Apply BN after activation
+            activated_features = self.batch_norm(activated_features,
+                                                 training=training)
+        regularized_features = self.dropout(activated_features,
+                                            training=training)
 
         # --- 4. Main Transformation Path ---
-        transformed_output = self.output_dense(regularized_input)
+        transformed_output = self.output_dense(regularized_features)
 
         # --- 5. Gating Path ---
-        gate_values = self.gate_dense(processed_input) # Gate based on input+context
+        # Gate depends on input+context projection *before* main activation
+        gate_values = self.gate_dense(input_plus_context)
 
         # --- 6. Apply Gate ---
         gated_output = tf_multiply(transformed_output, gate_values)
@@ -469,19 +543,19 @@ class GatedResidualNetwork(Layer): # Removed NNLearner for simplicity
         final_output = normalized_output
         if self.output_activation_fn is not None:
             final_output = self.output_activation_fn(normalized_output)
-            # Applied final output activation.
+            #  Applied final output activation.
 
         return final_output
-
+    
     def get_config(self):
         """Returns the layer configuration."""
         config = super().get_config()
         config.update({
             'units': self.units,
             'dropout_rate': self.dropout_rate,
-            'use_time_distributed': self.use_time_distributed,
-            'activation': self.activation, 
-            'output_activation': self.output_activation, 
+            # 'use_time_distributed' removed from config
+            'activation': self.activation_str, # Use original string
+            'output_activation': self.output_activation_str, # Use original string
             'use_batch_norm': self.use_batch_norm,
         })
         return config
@@ -491,9 +565,168 @@ class GatedResidualNetwork(Layer): # Removed NNLearner for simplicity
         """Creates layer from its config."""
         return cls(**config)
     
+# @register_keras_serializable(
+#     'fusionlab.nn.components', name="GatedResidualNetwork"
+# )
+# class GatedResidualNetwork(Layer, NNLearner): 
+#     """Gated Residual Network applying transformations with optional context."""
+
+#     @validate_params({
+#         "units": [Interval(Integral, 1, None, closed='left')],
+#         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
+#         "use_time_distributed": [bool],
+#         "use_batch_norm": [bool],
+#         "activation": [StrOptions(
+#             {"elu", "relu", "tanh", "sigmoid", "linear", "gelu",}
+#             )],
+#         "output_activation": [StrOptions( 
+#             {"elu", "relu", "tanh", "sigmoid", "linear", "gelu",}
+#             ), None]
+#     })
+#     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+#     def __init__(
+#         self,
+#         units: int,
+#         dropout_rate: float = 0.0,
+#         use_time_distributed: bool = False, # Still needed by VSN init?
+#         activation: str = 'elu',
+#         output_activation: Optional[str] = None, # Activation after final LayerNorm
+#         use_batch_norm: bool = False,
+#         **kwargs
+#     ):
+#         super().__init__(**kwargs)
+#         self.units = units
+#         self.dropout_rate = dropout_rate
+#         # Store use_time_distributed for potential 
+#         # conditional logic if needed later
+#         self.use_time_distributed = use_time_distributed
+#         self.use_batch_norm = use_batch_norm
+#         # Store activation strings for config
+#         self.activation= activation
+#         self.output_activation = output_activation
+#         self.activation_fn = Activation(activation).activation 
+#         self.output_activation_fn = Activation(activation).activation 
+        
+        
+#         # --- Define Layers ---
+#         # Dense layer for processing input + context before main path & gate
+#         # Uses linear activation, activation applied manually after
+#         self.input_dense = Dense(units, activation=None, name="input_dense")
+
+#         # Dense layer for optional context projection (if context provided)
+#         # No activation, added directly to input projection
+#         self.context_dense = Dense(units, use_bias=False, name="context_dense")
+
+#         # Dense layer for main transformation path (after activation+dropout)
+#         # Typically uses linear activation before gating
+#         self.output_dense = Dense(units, activation=None, name="output_dense")
+
+#         # Dense layer for gating mechanism
+#         self.gate_dense = Dense(units, activation='sigmoid', name="gate_dense")
+
+#         # Normalization Layers
+#         if self.use_batch_norm:
+#              # Apply BN after input_dense + activation
+#              self.batch_norm = BatchNormalization(name="batch_norm")
+#         # Layer Normalization applied at the end (standard for GRN)
+#         self.layer_norm = LayerNormalization(name="output_layer_norm")
+
+#         # Dropout Layer (applied after activation of input_dense)
+#         self.dropout = Dropout(dropout_rate, name="grn_dropout")
+
+#         # Projection layer for the residual connection (built in build)
+#         self.projection = None
+
+#     def build(self, input_shape):
+#         """Build projection layer if input dim doesn't match units."""
+#         # Input can be x or [x, context] if context shape is known
+#         # We build based on x's shape (first element if list)
+#         main_input_shape = input_shape[0] if isinstance(
+#             input_shape, (list, tuple)) else input_shape
+#         input_dim = main_input_shape[-1]
+
+#         # Create projection only if input_dim != units for residual connection
+#         if input_dim != self.units:
+#             self.projection = Dense(self.units, name="residual_projection")
+#             # Build projection layer explicitly
+#             self.projection.build(main_input_shape)
+
+#         # Note: context_dense will be built when first
+#         # called if context provided
+#         super().build(input_shape)
+
+#     def call(self, x, context=None, training=False):
+#         """Forward pass implementing GRN with optional context."""
+#         # context, if provided, has a shape
+#         # compatible with broadcasting/addition after projection, or
+#         # has the same number of dimensions (excluding feature dim) as x.
+#         # If context is time-distributed and x is not, or vice versa,
+#         # careful handling (e.g., tiling) might be needed outside this layer.
+
+#         # --- 1. Residual Connection Setup ---
+#         shortcut = x
+#         # Apply projection if dimensions mismatch units
+#         if self.projection is not None:
+#             shortcut = self.projection(shortcut)
+#             # Input projected for residual connection.
+
+#         # --- 2. Process Input and Context ---
+#         processed_input = self.input_dense(x)
+#         if context is not None:
+#             # Project context and add to processed input
+#             context_proj = self.context_dense(context)
+#             processed_input = tf_add(processed_input, context_proj)
+#             #  Context added to main input projection.
+
+#         # --- 3. Apply Activation and Regularization ---
+#         activated_input = self.activation_fn(processed_input)
+#         if self.use_batch_norm:
+#              # Apply BN after activation
+#              activated_input = self.batch_norm(activated_input, training=training)
+#         regularized_input = self.dropout(activated_input, training=training)
+
+#         # --- 4. Main Transformation Path ---
+#         transformed_output = self.output_dense(regularized_input)
+
+#         # --- 5. Gating Path ---
+#         gate_values = self.gate_dense(processed_input) # Gate based on input+context
+
+#         # --- 6. Apply Gate ---
+#         gated_output = tf_multiply(transformed_output, gate_values)
+
+#         # --- 7. Add Residual ---
+#         residual_output = tf_add(shortcut, gated_output)
+
+#         # --- 8. Final Normalization & Optional Activation ---
+#         normalized_output = self.layer_norm(residual_output)
+#         final_output = normalized_output
+#         if self.output_activation_fn is not None:
+#             final_output = self.output_activation_fn(normalized_output)
+#             # Applied final output activation.
+
+#         return final_output
+
+#     def get_config(self):
+#         """Returns the layer configuration."""
+#         config = super().get_config()
+#         config.update({
+#             'units': self.units,
+#             'dropout_rate': self.dropout_rate,
+#             'use_time_distributed': self.use_time_distributed,
+#             'activation': self.activation, 
+#             'output_activation': self.output_activation, 
+#             'use_batch_norm': self.use_batch_norm,
+#         })
+#         return config
+
+#     @classmethod
+#     def from_config(cls, config):
+#         """Creates layer from its config."""
+#         return cls(**config)
+    
     
 @register_keras_serializable(
-    'fusionlab.nn.components', name="GatedResidualNetwork"
+    'fusionlab.nn.components', name="GatedResidualNetworkIn"
 )
 class GatedResidualNetworkIn(Layer, NNLearner):
     r"""
