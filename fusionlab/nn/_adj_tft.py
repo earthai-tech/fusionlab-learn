@@ -224,7 +224,7 @@ class TFT(Model, NNLearner):
         # 8. Positional Encoding Layer
         self.positional_encoding = PositionalEncoding(name="pos_enc")
 
-
+    @tf_autograph.experimental.do_not_convert 
     def call(self, inputs, training=None):
         """Forward pass for the revised TFT with numerical inputs."""
         # --- Input Validation and Reordering ---
@@ -256,7 +256,8 @@ class TFT(Model, NNLearner):
         # 1. Static VSN
         print("static_inputs before:=", static_inputs.shape)
         #    Requires shape (B, N_stat, 1) or (B, N_stat)
-        if tf_rank(static_inputs) == 2:
+        if static_inputs.shape.rank ==2:
+        # if tf_rank(static_inputs) == 2:
             static_inputs_r = tf_expand_dims(static_inputs, axis=-1)
         else:
             static_inputs_r = static_inputs # Assume already (B, N_stat, 1)

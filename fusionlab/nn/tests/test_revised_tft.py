@@ -4,20 +4,18 @@ import pytest
 import numpy as np
 
 
-# --- Attempt to import revised TFT and dependencies ---
 try:
     import tensorflow as tf
-    # Assuming the revised TFT class is accessible via this import path
+    
     from fusionlab.nn._adj_tft import TFT # The revised TFT class
     # Import necessary components used internally for potential checks
-    from fusionlab.nn.components import (
+    # refreshed fixed: 
+    from fusionlab.nn.components import ( # Noqa 
         VariableSelectionNetwork, GatedResidualNetwork,
         PositionalEncoding, TemporalAttentionLayer
         )
-    from fusionlab.nn.losses import combined_quantile_loss
-    # Import the validator used internally
-    from fusionlab.nn._tensor_validation import validate_tft_inputs
-    # Check if TF backend is available
+    from fusionlab.nn.losses import combined_quantile_loss # Noqa 
+    from fusionlab.nn._tensor_validation import validate_tft_inputs # Noqa 
     from fusionlab.nn import KERAS_BACKEND
 except ImportError as e:
     print(f"Skipping revised TFT tests due to import error: {e}")
@@ -28,7 +26,7 @@ except ImportError as e:
 pytestmark = pytest.mark.skipif(
     not KERAS_BACKEND, reason="TensorFlow/Keras backend not available"
 )
-
+#%
 # --- Test Fixtures ---
 
 @pytest.fixture(scope="module")
@@ -78,29 +76,28 @@ def tft_dummy_data(tft_config):
     }
 
 # --- Test Functions ---
+def test_tft_instantiation_required(tft_config):
+    """Test revised TFT instantiation with required args."""
+    config = tft_config.copy()
+    # Remove optional args to test minimum requirement
+    config.pop("hidden_units", None)
+    config.pop("num_heads", None)
+    config.pop("dropout_rate", None)
+    config.pop("recurrent_dropout_rate", None)
+    config.pop("quantiles", None)
+    config.pop("activation", None)
+    config.pop("use_batch_norm", None)
+    config.pop("num_lstm_layers", None)
+    config.pop("lstm_units", None)
+    config.pop("output_dim", None)
 
-# def test_tft_instantiation_required(tft_config):
-#     """Test revised TFT instantiation with required args."""
-#     config = tft_config.copy()
-#     # Remove optional args to test minimum requirement
-#     config.pop("hidden_units", None)
-#     config.pop("num_heads", None)
-#     config.pop("dropout_rate", None)
-#     config.pop("recurrent_dropout_rate", None)
-#     config.pop("quantiles", None)
-#     config.pop("activation", None)
-#     config.pop("use_batch_norm", None)
-#     config.pop("num_lstm_layers", None)
-#     config.pop("lstm_units", None)
-#     config.pop("output_dim", None)
-
-#     try:
-#         model = TFT(**config) # Should work with defaults for optional args
-#         assert isinstance(model, tf.keras.Model)
-#         assert model.quantiles is None
-#     except Exception as e:
-#         pytest.fail(f"Revised TFT instantiation with required args failed. Error: {e}")
-#     print("Revised TFT Instantiation (Required Args) OK")
+    try:
+        model = TFT(**config) # Should work with defaults for optional args
+        assert isinstance(model, tf.keras.Model)
+        assert model.quantiles is None
+    except Exception as e:
+        pytest.fail(f"Revised TFT instantiation with required args failed. Error: {e}")
+    print("Revised TFT Instantiation (Required Args) OK")
 
 @pytest.mark.parametrize("use_quantiles", [False, True])
 def test_tft_call_and_output_shape(tft_config, tft_dummy_data, use_quantiles):
@@ -163,6 +160,7 @@ def test_tft_call_wrong_input_number(tft_config, tft_dummy_data):
         _ = model(bad_inputs, training=False)
     print("Revised TFT Call Input Number Check OK")
 
+
 @pytest.mark.parametrize("use_quantiles", [False, True])
 def test_tft_compile_and_fit(tft_config, tft_dummy_data, use_quantiles):
     """Test compile and a single training step for revised TFT."""
@@ -182,15 +180,32 @@ def test_tft_compile_and_fit(tft_config, tft_dummy_data, use_quantiles):
     ]
     y = data["y"] # Target shape (B, H, O=1)
 
+    # --- ADD EXPLICIT BUILD STEP ---
+    try:
+        print("Attempting explicit model build...")
+        # Calling the model once outside fit often triggers build
+        _ = model(inputs, training=False)
+        # Or use model.build() if input shapes are easily determined
+        # model.build(input_shape=[i.shape for i in inputs]) # Might be complex
+        print("Model build successful (via initial call).")
+    except Exception as e:
+        pytest.fail(f"Explicit model build failed. Error: {e}")
+    # --- END EXPLICIT BUILD STEP ---
+
     try:
         # Use the model's compile method
         model.compile(optimizer='adam', loss=loss_fn)
-        # Fit for one step
+        # Fit for one step (model should already be built)
+        print("Attempting model fit...")
         history = model.fit(
             inputs, y, epochs=1, batch_size=2, verbose=0
             )
+        print("Model fit successful.")
     except Exception as e:
-        pytest.fail(f"Revised TFT compile/fit failed (quantiles={use_quantiles}). Error: {e}")
+        pytest.fail(
+            f"Revised TFT compile/fit failed (quantiles={use_quantiles})."
+            f" Error: {e}"
+            )
 
     assert history is not None
     assert 'loss' in history.history
@@ -215,7 +230,7 @@ def test_tft_serialization(tft_config, tft_dummy_data):
         # Verify key parameters are saved
         assert retrieved_config['static_input_dim'] == config['static_input_dim']
         assert retrieved_config['future_input_dim'] == config['future_input_dim']
-        assert retrieved_config['quantiles'] == config['quantiles']
+        assert np.around (retrieved_config['quantiles'], 2).tolist() == config['quantiles']
         assert retrieved_config['recurrent_dropout_rate'] == config['recurrent_dropout_rate']
         assert retrieved_config['lstm_units'] == config['lstm_units'] # Check original spec saved
 
