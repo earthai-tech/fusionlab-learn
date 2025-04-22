@@ -103,10 +103,15 @@ class KerasDependencies:
         name
     ):
         standalone_mapping = {
+            'Assert': ('tensorflow', 'Assert'), 
+            'TensorShape': ('tensorflow', 'TensorShape'), 
+            'Tensor': ('tensorflow', 'Tensor'), 
+            
             'reduce_mean': ('tensorflow', 'reduce_mean'),
             'reduce_sum': ('tensorflow', 'reduce_sum'),
             'reduce_all': ('tensorflow', 'reduce_all'),
             'reduce_max': ('tensorflow', 'reduce_max'),
+            'repeat': ('tensorflow', 'repeat'), 
             'rank': ('tensorflow', 'rank'), 
             'zeros': ('tensorflow', 'zeros'),
             'zeros_like': ('tensorflow', 'zeros_like'), 
@@ -131,7 +136,7 @@ class KerasDependencies:
             'add': ('tensorflow.math', 'add'), 
             'range':('tensorflow', 'range'), 
             'convert_to_tensor': ('tensorflow', 'convert_to_tensor'), 
-            'Tensor': ('tensorflow', 'Tensor'), 
+            'transpose': ('tensorflow', 'transpose'), 
             'cast': ('tensorflow', 'cast'), 
             'abs': ('tensorflow', 'abs'), 
             'float32': ('tensorflow', 'float32'), 
@@ -151,6 +156,10 @@ class KerasDependencies:
             'squeeze': ('tensorflow', 'squeeze'), 
             'control_dependencies': ('tensorflow', 'control_dependencies'), 
             'cond': ('tensorflow', 'cond'), 
+            'logical_and': ('tensorflow', 'logical_and'), 
+            'logical_not': ('tensorflow', 'logical_not'), 
+            'logical_or': ('tensorflow', 'logical_or'), 
+            
             
         }
 
