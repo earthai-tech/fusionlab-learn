@@ -20,7 +20,6 @@ build:
   #     - >
   #       sphinx-apidoc -o docs/source/api/ -e -M -f fusionlab fusionlab/tests/* fusionlab/data/*;
   #       echo "Generated API documentation using sphinx-apidoc."
-
 # Optionally build the docs in additional formats such as PDF/ePub
 # formats:
 #  - pdf

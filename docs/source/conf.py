@@ -53,7 +53,7 @@ extensions = [
     'myst_parser',              # Allow parsing Markdown files (like README.md)
     'sphinx_design',            # Enable design elements like cards, buttons, grids
     # Add other extensions here if needed, e.g., 'sphinx_gallery.gen_gallery'
-    'sphinxcontrib.bibtex',   # Add BibTeX support <--- ADD THIS LINE
+    # 'sphinxcontrib.bibtex',   # Add BibTeX support <--- ADD THIS LINE
 ]
 
 # Add any paths that contain templates here, relative to this directory.

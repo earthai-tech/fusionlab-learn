@@ -69,6 +69,10 @@ if KERAS_BACKEND:
         Hyperband, PBTTrainer, base_tuning, custom_loss, deep_cv_tuning, 
         fair_neural_tuning, find_best_lr, lstm_ts_tuner, robust_tuning
     )
+    from .anomaly_detection import ( 
+         LSTMAutoencoderAnomaly, 
+         SequenceAnomalyScoreLayer
+    )
     from .transformers import ( 
         TemporalFusionTransformer, 
         NTemporalFusionTransformer, 
@@ -99,7 +103,6 @@ if KERAS_BACKEND:
         "LSTMAutoencoderAnomaly", 
         "SequenceAnomalyScoreLayer", 
         "PredictionErrorAnomalyScore", 
-        
         "TFT", "XTFT", "SuperXTFT"
     ]
 
