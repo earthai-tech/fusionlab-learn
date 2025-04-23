@@ -6,16 +6,16 @@
 
 # Igniting Next-Gen Fusion Models
 
-*🔥🧪_A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_*
+*🔥🧪A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond*
 
 
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
 [![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/)
-[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest)](https://fusionlab.readthedocs.io/en/latest/?badge=latest) ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
+[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest)](https://fusionlab.readthedocs.io/en/latest/?badge=latest)
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) ---
+<!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
 
 **FusionLab** provides a flexible and extensible framework in Python
 for working with advanced time-series forecasting models. It focuses
