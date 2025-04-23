@@ -4,9 +4,9 @@
 
 -----------------------------------------------------
 
-# FusionLab 🔥🧪: Igniting Next-Gen Fusion Models
+# Igniting Next-Gen Fusion Models
 
-*_A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_*
+*🔥🧪_A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_*
 
 
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*

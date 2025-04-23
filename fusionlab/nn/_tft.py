@@ -47,8 +47,8 @@ if KERAS_BACKEND:
     tf_rank=KERAS_DEPS.rank
     
     from ._tensor_validation import validate_tft_inputs
-    from .components import GatedResidualNetwork, VariableSelectionNetwork 
-    from .components import StaticEnrichmentLayer, TemporalAttentionLayer 
+    from .components import GatedResidualNetworkIn, VariableSelectionNetworkIn 
+    from .components import StaticEnrichmentLayer, TemporalAttentionLayerIn 
     from .components import PositionalEncoding
     
 DEP_MSG = dependency_message('transformers.tft') 
@@ -146,14 +146,14 @@ class NTemporalFusionTransformer(Model, NNLearner):
 
         # Variable Selection Networks
         self.logger.debug("Initializing Variable Selection Networks...")
-        self.static_var_sel = VariableSelectionNetwork(
+        self.static_var_sel = VariableSelectionNetworkIn(
             num_inputs=static_input_dim,
             units=hidden_units,
             dropout_rate=dropout_rate,
             activation=self.activation,
             use_batch_norm=use_batch_norm
         )
-        self.dynamic_var_sel = VariableSelectionNetwork(
+        self.dynamic_var_sel = VariableSelectionNetworkIn(
             num_inputs=dynamic_input_dim,
             units=hidden_units,
             dropout_rate=dropout_rate,
@@ -168,13 +168,13 @@ class NTemporalFusionTransformer(Model, NNLearner):
 
         # Static Context GRNs
         self.logger.debug("Initializing Static Context GRNs...")
-        self.static_context_grn = GatedResidualNetwork(
+        self.static_context_grn = GatedResidualNetworkIn(
             hidden_units,
             dropout_rate,
             activation=self.activation,
             use_batch_norm=use_batch_norm
         )
-        self.static_context_enrichment_grn = GatedResidualNetwork(
+        self.static_context_enrichment_grn = GatedResidualNetworkIn(
             hidden_units,
             dropout_rate,
             activation=self.activation,
@@ -211,7 +211,7 @@ class NTemporalFusionTransformer(Model, NNLearner):
 
         # Temporal Attention Layer
         self.logger.debug("Initializing Temporal Attention Layer...")
-        self.temporal_attention = TemporalAttentionLayer(
+        self.temporal_attention = TemporalAttentionLayerIn(
             hidden_units,
             num_heads,
             dropout_rate,
@@ -221,7 +221,7 @@ class NTemporalFusionTransformer(Model, NNLearner):
 
         # Position-wise Feedforward
         self.logger.debug("Initializing Position-wise Feedforward Network...")
-        self.positionwise_grn = GatedResidualNetwork(
+        self.positionwise_grn = GatedResidualNetworkIn(
             hidden_units,
             dropout_rate,
             use_time_distributed=True,
@@ -442,7 +442,7 @@ class TemporalFusionTransformer(Model, NNLearner):
 
         # For static inputs (metadata)
         self.static_var_sel = (
-            VariableSelectionNetwork(
+            VariableSelectionNetworkIn(
                 num_inputs=static_input_dim,
                 units=hidden_units,
                 dropout_rate=dropout_rate,
@@ -452,7 +452,7 @@ class TemporalFusionTransformer(Model, NNLearner):
         )
 
         # For dynamic (past) inputs
-        self.dynamic_var_sel = VariableSelectionNetwork(
+        self.dynamic_var_sel = VariableSelectionNetworkIn(
             num_inputs=dynamic_input_dim,
             units=hidden_units,
             dropout_rate=dropout_rate,
@@ -464,7 +464,7 @@ class TemporalFusionTransformer(Model, NNLearner):
         # For future inputs (if needed)
         if self.future_input_dim is not None:
             self.logger.debug("Initializing Future Variable Selection Network...")
-            self.future_var_sel = VariableSelectionNetwork(
+            self.future_var_sel = VariableSelectionNetworkIn(
                 num_inputs=future_input_dim,
                 units=hidden_units,
                 dropout_rate=dropout_rate,
@@ -484,7 +484,7 @@ class TemporalFusionTransformer(Model, NNLearner):
         # and enrichment vectors from static inputs (if present).
         self.logger.debug("Initializing Static Context GRNs...")
         self.static_context_grn = (
-            GatedResidualNetwork(
+            GatedResidualNetworkIn(
                 hidden_units,
                 dropout_rate,
                 activation=self.activation,
@@ -492,7 +492,7 @@ class TemporalFusionTransformer(Model, NNLearner):
             ) if static_input_dim else None
         )
         self.static_context_enrichment_grn = (
-            GatedResidualNetwork(
+            GatedResidualNetworkIn(
                 hidden_units,
                 dropout_rate,
                 activation=self.activation,
@@ -534,7 +534,7 @@ class TemporalFusionTransformer(Model, NNLearner):
         # Temporal Attention Layer for interpretability and weighting 
         # various time steps. 
         self.logger.debug("Initializing Temporal Attention Layer...")
-        self.temporal_attention = TemporalAttentionLayer(
+        self.temporal_attention = TemporalAttentionLayerIn(
             hidden_units,
             num_heads,
             dropout_rate,
@@ -545,7 +545,7 @@ class TemporalFusionTransformer(Model, NNLearner):
         # Position-wise Feedforward (GRN) for final transformation 
         # after attention.
         self.logger.debug("Initializing Position-wise Feedforward Network...")
-        self.positionwise_grn = GatedResidualNetwork(
+        self.positionwise_grn = GatedResidualNetworkIn(
             hidden_units,
             dropout_rate,
             use_time_distributed=True,

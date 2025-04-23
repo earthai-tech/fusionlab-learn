@@ -59,15 +59,12 @@ if KERAS_BACKEND:
     from ._tensor_validation import ( 
         validate_tft_inputs, combine_temporal_inputs_for_lstm
         )
-    from ._tft import TemporalFusionTransformer
     from .losses import combined_quantile_loss 
-    from .utils import set_default_params
-    
-    from .components import ( # Noqa E504 
+
+    from .components import (
         VariableSelectionNetwork,
         PositionalEncoding,
         GatedResidualNetwork,
-        StaticEnrichmentLayer, 
         TemporalAttentionLayer, 
         CategoricalEmbeddingProcessor 
     )
@@ -76,8 +73,9 @@ if KERAS_BACKEND:
 DEP_MSG = dependency_message('transformers.tft') 
 logger = fusionlog().get_fusionlab_logger(__name__) 
 
-# ------------------------ TFT implementation --------------------------------
+__all__= ['TFT']
 
+# ------------------------ TFT implementation --------------------------------
 
 @register_keras_serializable('fusionlab.nn.transformers', name="TFT")
 class TFT(Model, NNLearner): 
@@ -120,6 +118,7 @@ class TFT(Model, NNLearner):
         **kwargs
     ):
         super().__init__(**kwargs)
+        
         # --- Store parameters ---
         self.dynamic_input_dim = dynamic_input_dim
         self.static_input_dim = static_input_dim
@@ -129,61 +128,93 @@ class TFT(Model, NNLearner):
         self.dropout_rate = dropout_rate
         self.recurrent_dropout_rate = recurrent_dropout_rate
         self.forecast_horizon = forecast_horizon
-        self.activation = activation # Store string for config
+        self.activation = activation 
         self.use_batch_norm = use_batch_norm
         self.num_lstm_layers = num_lstm_layers
         self.output_dim = output_dim
-        self.quantiles = validate_quantiles(quantiles) if quantiles else None
-        self.num_quantiles = len(self.quantiles) if self.quantiles else 1
-        self._lstm_units = lstm_units # Store original spec for get_config
+        self.quantiles = validate_quantiles(
+            quantiles) if quantiles else None
+        self.num_quantiles = len(
+            self.quantiles) if self.quantiles else 1
+        self._lstm_units = lstm_units 
+        
         # Process LSTM units list
         _lstm_units_resolved = lstm_units or hidden_units
         self.lstm_units_list = (
              [_lstm_units_resolved] * num_lstm_layers
              if isinstance(_lstm_units_resolved, int)
-             else _lstm_units_resolved
+             else is_iterable(
+                 _lstm_units_resolved, 
+                 exclude_string=True, 
+                 transform=True
+                 )
          )
+        self.lstm_units_list = [
+            validate_positive_integer(v, "LSTM units")
+            for v in self.lstm_units_list 
+        ]
         if len(self.lstm_units_list) != num_lstm_layers:
-             raise ValueError("'lstm_units' length must match 'num_lstm_layers'.")
+             raise ValueError(
+                 "'lstm_units' length must match 'num_lstm_layers'.")
 
         # --- Initialize Core TFT Components ---
-        # (Initialize components as in previous version: VSNs, Static GRNs,
-        #  LSTM Layers, Enrichment GRN, Attention Layer, Position-wise GRN,
-        #  Output Layer(s))
-        
         # 1. Variable Selection Networks
         self.static_vsn = VariableSelectionNetwork(
-            num_inputs=self.static_input_dim, units=self.hidden_units,
-            dropout_rate=self.dropout_rate, activation=self.activation,
-            use_batch_norm=self.use_batch_norm, name="static_vsn")
+            num_inputs=self.static_input_dim, 
+            units=self.hidden_units,
+            dropout_rate=self.dropout_rate, 
+            activation=self.activation,
+            use_batch_norm=self.use_batch_norm, 
+            name="static_vsn"
+        )
         self.dynamic_vsn = VariableSelectionNetwork(
-            num_inputs=self.dynamic_input_dim, units=self.hidden_units,
-            dropout_rate=self.dropout_rate, use_time_distributed=True,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="dynamic_vsn")
+            num_inputs=self.dynamic_input_dim, 
+            units=self.hidden_units,
+            dropout_rate=self.dropout_rate,
+            use_time_distributed=True,
+            activation=self.activation, 
+            use_batch_norm=self.use_batch_norm,
+            name="dynamic_vsn"
+        )
         self.future_vsn = VariableSelectionNetwork(
-            num_inputs=self.future_input_dim, units=self.hidden_units,
-            dropout_rate=self.dropout_rate, use_time_distributed=True,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="future_vsn")
+            num_inputs=self.future_input_dim, 
+            units=self.hidden_units,
+            dropout_rate=self.dropout_rate, 
+            use_time_distributed=True,
+            activation=self.activation, 
+            use_batch_norm=self.use_batch_norm,
+            name="future_vsn"
+        )
         
         # 2. Static Context GRNs
         self.static_grn_for_vsns = GatedResidualNetwork(
-            units=self.hidden_units, dropout_rate=self.dropout_rate,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="static_grn_for_vsns")
+            units=self.hidden_units, 
+            dropout_rate=self.dropout_rate,
+            activation=self.activation,
+            use_batch_norm=self.use_batch_norm,
+            name="static_grn_for_vsns"
+        )
         self.static_grn_for_enrichment = GatedResidualNetwork(
-            units=self.hidden_units, dropout_rate=self.dropout_rate,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="static_grn_for_enrichment")
+            units=self.hidden_units, 
+            dropout_rate=self.dropout_rate,
+            activation=self.activation, 
+            use_batch_norm=self.use_batch_norm,
+            name="static_grn_for_enrichment"
+        )
         self.static_grn_for_state_h = GatedResidualNetwork(
-            units=self.lstm_units_list[0], dropout_rate=self.dropout_rate,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="static_grn_for_state_h")
+            units=self.lstm_units_list[0], 
+            dropout_rate=self.dropout_rate,
+            activation=self.activation, 
+            use_batch_norm=self.use_batch_norm,
+            name="static_grn_for_state_h"
+        )
         self.static_grn_for_state_c = GatedResidualNetwork(
-            units=self.lstm_units_list[0], dropout_rate=self.dropout_rate,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="static_grn_for_state_c")
+            units=self.lstm_units_list[0], 
+            dropout_rate=self.dropout_rate,
+            activation=self.activation,
+            use_batch_norm=self.use_batch_norm,
+            name="static_grn_for_state_c"
+        )
         
         # 3. LSTM Encoder Layers
         self.lstm_layers = [
@@ -196,25 +227,37 @@ class TFT(Model, NNLearner):
         ]
         # 4. Static Enrichment GRN
         self.static_enrichment_grn = GatedResidualNetwork(
-             units=self.hidden_units, dropout_rate=self.dropout_rate,
-             activation=self.activation, use_batch_norm=self.use_batch_norm,
-             name="static_enrichment_grn")
+             units=self.hidden_units, 
+             dropout_rate=self.dropout_rate,
+             activation=self.activation, 
+             use_batch_norm=self.use_batch_norm,
+             name="static_enrichment_grn"
+        )
         # 5. Temporal Self-Attention Layer
         self.temporal_attention_layer = TemporalAttentionLayer(
-            units=self.hidden_units, num_heads=self.num_heads,
-            dropout_rate=self.dropout_rate, activation=self.activation,
-            use_batch_norm=self.use_batch_norm, name="temporal_self_attention")
+            units=self.hidden_units, 
+            num_heads=self.num_heads,
+            dropout_rate=self.dropout_rate, 
+            activation=self.activation,
+            use_batch_norm=self.use_batch_norm, 
+            name="temporal_self_attention"
+        )
         
         # 6. Position-wise Feedforward GRN
         self.positionwise_grn = GatedResidualNetwork(
-            units=self.hidden_units, dropout_rate=self.dropout_rate,
+            units=self.hidden_units, 
+            dropout_rate=self.dropout_rate,
             activation=self.activation,
-            use_batch_norm=self.use_batch_norm, name="pos_wise_ff_grn")
+            use_batch_norm=self.use_batch_norm, 
+            name="pos_wise_ff_grn"
+        )
         
         # 7. Output Layer(s)
         if self.quantiles:
             self.output_layers = [
-                TimeDistributed(Dense(self.output_dim), name=f'q_{int(q*100)}_td')
+                TimeDistributed(
+                    Dense(self.output_dim), name=f'q_{int(q*100)}_td'
+                    )
                 for q in self.quantiles
             ]
         else:
@@ -224,250 +267,249 @@ class TFT(Model, NNLearner):
         # 8. Positional Encoding Layer
         self.positional_encoding = PositionalEncoding(name="pos_enc")
 
-    @tf_autograph.experimental.do_not_convert 
+
+    @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training=None):
         """Forward pass for the revised TFT with numerical inputs."""
-        # --- Input Validation and Reordering ---
-        if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
-             raise ValueError(
-                 "TFT expects inputs as list/tuple: [static, dynamic, future]."
-             )
-        # Unpack inputs in the user-provided order
-        static_inputs_user, dynamic_inputs_user, future_inputs_user = inputs
+        logger.debug(f"TFT '{self.name}': Entering call method.")
+        logger.debug(f"  Received {len(inputs)} inputs.")
 
-        # Reorder for internal validation function if using it
-        # (This step assumes validate_tft_inputs expects [D, F, S])
+        # --- Input Validation and Reordering ---
+        # User provides [static, dynamic, future]
+        # Validator expects [dynamic, future, static]
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
+            raise ValueError(
+                "TFT expects inputs as list/tuple of 3 elements: "
+                "[static_inputs, dynamic_inputs, future_inputs]."
+            )
+        static_inputs_user, dynamic_inputs_user, future_inputs_user = inputs
+        logger.debug(
+            f"  User inputs shapes: Static={static_inputs_user.shape}, "
+            f"Dynamic={dynamic_inputs_user.shape}, "
+            f"Future={future_inputs_user.shape}"
+            )
+
+        # Reorder for internal validation function
         validator_input_order = [
              dynamic_inputs_user, future_inputs_user, static_inputs_user
              ]
-        # Call validator - it checks types, converts to float32, checks dims
-        # and returns in order (dynamic, future, static)
+        # Call validator: returns (dynamic, future, static) tensors
+        # Performs type checks, float32 conversion, dimension checks.
         dynamic_inputs, future_inputs, static_inputs = validate_tft_inputs(
              validator_input_order,
              dynamic_input_dim=self.dynamic_input_dim,
              static_input_dim=self.static_input_dim,
              future_covariate_dim=self.future_input_dim,
-             error='raise' # Fail early if validation fails
+             error='raise'
          )
-        # Developer comment: Inputs validated and assigned to internal variables
-        # Shapes: dynamic(B,T_past,D_dyn), future(B,T_future,D_fut), static(B,D_stat)
+        logger.debug(
+            "  Inputs validated and assigned internally."
+            f" Shapes: Dyn={dynamic_inputs.shape},"
+            f" Fut={future_inputs.shape}, Stat={static_inputs.shape}"
+            )
 
         # --- Static Pathway ---
-        # 1. Static VSN
-        print("static_inputs before:=", static_inputs.shape)
-        #    Requires shape (B, N_stat, 1) or (B, N_stat)
-        if static_inputs.shape.rank ==2:
-        # if tf_rank(static_inputs) == 2:
+        logger.debug("  Processing Static Pathway...")
+        # 1a. Reshape Static Input for VSN if needed (B, N) -> (B, N, 1)
+        # why use static_inputs.shape.rank rather than tf_rank (static_inputs)? 
+        # to avoid issue of unknow rank for autograph conversion 
+        # when it's removed.
+        if static_inputs.shape.rank == 2:
             static_inputs_r = tf_expand_dims(static_inputs, axis=-1)
+            logger.debug(
+                "    Expanded static input rank to 3:"
+                f" {static_inputs_r.shape}")
         else:
-            static_inputs_r = static_inputs # Assume already (B, N_stat, 1)
-            
-        print("static_inputs after:=", static_inputs.shape)
-        static_selected = self.static_vsn(static_inputs_r, training=training)
-        # Shape: (B, hidden_units)
+            static_inputs_r = static_inputs # already (B, N, F)
 
-        # 2. Static Context Generation
+        # 1b. Static VSN
+        # Processes static features, potentially
+        # using context if VSN modified
+        static_selected = self.static_vsn(
+            static_inputs_r,
+            training=training,
+            # context=None # Context for static VSN usually not needed
+            )
+        # Output shape: (B, hidden_units)
+        logger.debug(
+            f"    Static VSN output shape: {static_selected.shape}")
+
+        # 1c. Static Context Vector Generation using GRNs
+        # Context for conditioning VSNs (passed if VSNs accept context)
         context_for_vsns = self.static_grn_for_vsns(
             static_selected, training=training)
+        # Context for enriching temporal features after LSTM
         context_for_enrichment = self.static_grn_for_enrichment(
             static_selected, training=training)
+        # Contexts for initializing LSTM states
         context_state_h = self.static_grn_for_state_h(
             static_selected, training=training)
         context_state_c = self.static_grn_for_state_c(
             static_selected, training=training)
         initial_state = [context_state_h, context_state_c]
-        # Developer comment: Generated static context vectors
+        logger.debug(
+            f"    Generated static contexts:"
+            f" VSN={context_for_vsns.shape},"
+            f" Enrich={context_for_enrichment.shape},"
+            f" StateH={context_state_h.shape},"
+            f" StateC={context_state_c.shape}"
+            )
 
         # --- Temporal Pathway ---
-        # 3. Temporal VSNs
-        #    Requires shape (B, T, N_dyn/N_fut, 1)
-        if tf_rank(dynamic_inputs) == 3:
+        logger.debug("  Processing Temporal Pathway...")
+        # 3a. Reshape Dynamic/Future Inputs for VSNs if needed
+        if dynamic_inputs.shape.rank == 3:
              dynamic_inputs_r = tf_expand_dims(dynamic_inputs, axis=-1)
-        else: dynamic_inputs_r = dynamic_inputs
-        if tf_rank(future_inputs) == 3:
+        else: 
+            dynamic_inputs_r = dynamic_inputs # Assume (B, T, N, F)
+        if future_inputs.shape.rank == 3:
              future_inputs_r = tf_expand_dims(future_inputs, axis=-1)
-        else: future_inputs_r = future_inputs
+        else: 
+            future_inputs_r = future_inputs # Assume (B, T_fut, N, F)
+        logger.debug(
+            f"    Temporal input shapes for VSN: Dyn={dynamic_inputs_r.shape},"
+            f" Fut={future_inputs_r.shape}"
+            )
 
-        # Pass static context for VSNs if VSN implementation uses it
+        # 3b. Dynamic/Future VSNs
+        # Pass static context derived earlier
         dynamic_selected = self.dynamic_vsn(
-             dynamic_inputs_r, training=training, context=context_for_vsns)
+             dynamic_inputs_r, training=training, 
+             context=context_for_vsns)
         future_selected = self.future_vsn(
              future_inputs_r, training=training, context=context_for_vsns)
-        # Shapes: (B, T_past, H_units), (B, T_future, H_units)
+        # Shapes: (B, T_past, H_units), (B, T_future_total, H_units)
+        logger.debug(
+            f"    Temporal VSN outputs shapes: Dyn={dynamic_selected.shape},"
+            f" Fut={future_selected.shape}"
+            )
 
-        # 4. Combine Features for LSTM Input
-        # Developer comment: Key step - how past and future features are combined.
-        # Original paper combines embeddings from all inputs at each time step 't'.
-        # Simplified approach: Concatenate features relevant for the LSTM window.
-        # Assume `dynamic_selected` covers lookback period (T_past)
-        # Assume `future_selected` covers lookback + horizon period (T_total)
-        # We only need the future features corresponding to the lookback period
-        # to combine with dynamic features before the main LSTM.
-        # The future features corresponding to the *horizon* will be used implicitly
-        # by the attention mechanism later via the full `enriched_output`.
-
-        # Check future_selected time dimension matches dynamic_selected
-        # This requires careful input prep or slicing future_selected here.
-        # Assuming for simplicity here: future_selected corresponds to T_past steps
-        # If future_selected covers T_total, slice it: future_selected[:, :T_past, :]
-        # Let's assume future_selected has T_past steps for input combination
-
-        # Concatenate along feature dimension
+        # 4. Combine Features for LSTM Input using helper
+        # Handles slicing future_selected to match T_past and concatenates
+        logger.debug(
+            "  Combining dynamic and future features for LSTM...")
         temporal_features = combine_temporal_inputs_for_lstm(
             dynamic_selected, future_selected, 
-            mode='soft'
+            mode='soft' # Use soft? or strict?
             )
-        # temporal_features = tf_concat(
-        #     [dynamic_selected, future_selected_for_lstm], axis=-1
-        #     )
-        # Shape: (B, T_past, 2 * hidden_units)
+        # Shape: (B, T_past, combined_features = D_dyn_emb + D_fut_emb)
+        # Assuming VSN outputs hidden_units: (B, T_past, 2 * hidden_units)
+        logger.debug(
+            f"    Combined temporal features shape:"
+            f" {temporal_features.shape}")
 
-        # 5. Positional Encoding (Apply to combined features)
-        temporal_features_pos = self.positional_encoding(temporal_features)
+        # 5. Positional Encoding
+        temporal_features_pos = self.positional_encoding(
+            temporal_features
+            )
+        logger.debug("    Applied positional encoding.")
 
         # 6. LSTM Encoder
+        logger.debug("  Running LSTM encoder...")
         lstm_output = temporal_features_pos
         current_state = initial_state
         for i, layer in enumerate(self.lstm_layers):
+             layer_input_shape = lstm_output.shape
              if i == 0:
-                  lstm_output = layer(
-                      lstm_output, initial_state=current_state, training=training
-                      )
+                 lstm_output = layer(
+                     lstm_output, initial_state=current_state,
+                     training=training
+                     )
              else:
-                  lstm_output = layer(lstm_output, training=training)
-        # Shape: (B, T_past, lstm_units)
+                 lstm_output = layer(lstm_output, training=training)
+             logger.debug(
+                 f"    LSTM layer {i+1} output shape: {layer_input_shape}")
+        # Final LSTM output shape: (B, T_past, lstm_units)
 
         # 7. Static Enrichment
-        # Developer comment: This uses the enrichment GRN. The input context
-        # should match the GRN's expectations (usually static, rank 2).
-        # The GRN's call method handles broadcasting it across time.
+        logger.debug("  Applying static enrichment...")
         enriched_output = self.static_enrichment_grn(
-            lstm_output, context=context_for_enrichment, training=training
-        ) # Shape: (B, T_past, hidden_units)
+            lstm_output, context=context_for_enrichment, 
+            training=training
+        )
+        # Shape: (B, T_past, hidden_units)
+        logger.debug(
+            f"    Enriched output shape: {enriched_output.shape}")
 
         # 8. Temporal Self-Attention
-        # Developer comment: Attention focuses on the enriched past sequence.
-        # It uses static context (context_for_vsns) to potentially inform
-        # the attention score calculation (Q/K/V projections or gating).
+        logger.debug("  Applying temporal attention...")
         attention_output = self.temporal_attention_layer(
-            enriched_output, context_vector=context_for_vsns, training=training
-        ) # Shape: (B, T_past, hidden_units)
+            enriched_output, 
+            context_vector=context_for_vsns, 
+            training=training
+        )
+        # Shape: (B, T_past, hidden_units)
+        logger.debug(
+            f"    Attention output shape: {attention_output.shape}")
 
         # 9. Position-wise Feedforward
+        logger.debug("  Applying position-wise feedforward...")
         final_temporal_repr = self.positionwise_grn(
             attention_output, training=training
-        ) # Shape: (B, T_past, hidden_units)
-
-        # 10. Output Slice and Projection
-        # Select the *last* time step's representation from the processed
-        # sequence as input to the output layer(s). This aggregated state
-        # is assumed to contain enough info for the multi-horizon forecast.
-        # This is different from the original paper's direct mapping from
-        # future decoder steps, but simpler with standard components.
-        
-        # output_features = final_temporal_repr[:, -1, :] # Shape: (B, hidden_units)
-
-        # # Apply output layer(s) - Not TimeDistributed anymore
-        # if self.quantiles:
-        #     # Need Dense layers directly, not TimeDistributed
-        #     # Re-initialize output layers in __init__ without TimeDistributed
-        #     # self.output_layers = [Dense(self.output_dim, ...) ... ]
-        #     # For now, assume they were created correctly:
-        #     quantile_outputs = [
-        #         layer(output_features) for layer in self.output_layers
-        #         ] # Each (B, output_dim)
-        #     outputs = tf_stack(quantile_outputs, axis=1) # Shape (B, Q, O)
-        #     # Reshape to match target: (B, H, Q) or (B, H, Q, O) ?
-        #     # Standard TFT output is (B, H, Q*O). Let's match that.
-        #     # Need a final Dense layer projecting from hidden_units -> H * Q * O
-        #     # Or adjust the output layer definition.
-
-        #     # --- Let's stick to the previous TimeDistributed approach for output ---
-        #     # Revert slicing: Use last H steps of final_temporal_repr
-        #     output_features_sliced = final_temporal_repr[:, -self.forecast_horizon:, :]
-        #     quantile_outputs = [
-        #         layer(output_features_sliced, training=training) # Pass training flag
-        #         for layer in self.output_layers
-        #     ]
-        #     outputs = tf_stack(quantile_outputs, axis=2) # (B, H, Q, O)
-        #     if self.output_dim == 1:
-        #         outputs = tf_squeeze(outputs, axis=-1) # (B, H, Q)
-
-        # else:
-        #     # Use the TimeDistributed output layer
-        #     output_features_sliced = final_temporal_repr[:, -self.forecast_horizon:, :]
-        #     outputs = self.output_layer(output_features_sliced, training=training)
-        #     # Shape (B, H, O)
-
-        # return outputs
-    
-   
+        )
+        # Shape: (B, T_past, hidden_units)
+        logger.debug(
+            "    Final temporal representation shape:"
+            f" {final_temporal_repr.shape}")
 
         # --- 10. Output Slice and Projection ---
-        # Slice the features corresponding to the forecast horizon
-        # from the final temporal representation.
-        # Input final_temporal_repr shape: (B, T_past, hidden_units)
-        # We need the last H steps for the output.
-        output_features_sliced = final_temporal_repr[:, -self.forecast_horizon:, :]
-        # Sliced shape should be: (B, H, hidden_units)
-
-        # Developer Comment: Ensure slicing is correct and provides 3D input
-        # logger.debug(f"Output features sliced shape:
-            # {tf_shape(output_features_sliced)}") # Optional Debug
+        logger.debug("  Generating final predictions...")
+        # Slice features corresponding to the forecast horizon
+        output_features_sliced = final_temporal_repr[
+            :, -self.forecast_horizon:, :]
+        logger.debug(
+            "    Sliced features for output shape:"
+            f" {output_features_sliced.shape}")
+        # Shape: (B, H, hidden_units)
 
         # Apply the final TimeDistributed output layer(s)
         if self.quantiles:
-            # Apply each quantile-specific TimeDistributed(Dense) layer
             quantile_outputs = []
             if not hasattr(self, 'output_layers'):
-                 # Safety check
                  raise AttributeError(
-                     "Quantile output layers not initialized in TFT __init__."
+                     "Quantile output layers not initialized."
                      )
+            for i, layer in enumerate(self.output_layers):
+                out_i = layer(output_features_sliced, training=training)
+                quantile_outputs.append(out_i)
+                logger.debug(
+                    f"      Quantile output {i} shape: {out_i.shape}")
 
-            for layer in self.output_layers: # List of TimeDistributed(Dense)
-                # Pass the CORRECT 3D sliced input
-                quantile_outputs.append(
-                    layer(output_features_sliced, training=training)
-                    )
-            # Each output in quantile_outputs is (B, H, output_dim)
-
-            # Stack outputs along a new dimension for quantiles (axis=2)
-            outputs = tf_stack(quantile_outputs, axis=2)
-            # Shape: (B, H, Q, O)
-
-            # Squeeze the last dimension if output_dim is 1
+            outputs = tf_stack(quantile_outputs, axis=2) # (B, H, Q, O)
+            logger.debug(
+                f"      Stacked quantile output shape: {outputs.shape}")
             if self.output_dim == 1:
-                outputs = tf_squeeze(outputs, axis=-1)
-                # Final Shape for Quantiles (O=1): (B, H, Q)
+                outputs = tf_squeeze(outputs, axis=-1) # (B, H, Q)
+                logger.debug(
+                    "      Squeezed final dimension (output_dim=1).")
         else:
-            # Point Forecast: Apply the single TimeDistributed(Dense) layer
+            # Point Forecast
             if not hasattr(self, 'output_layer'):
-                 # Safety check
-                 raise AttributeError(
-                     "Point output layer not initialized in TFT __init__."
-                     )
-
+                 raise AttributeError("Point output layer not initialized.")
             outputs = self.output_layer(
-                output_features_sliced, training=training # Pass correct 3D input
+                output_features_sliced, training=training
                 )
-            # Final Shape for Point Forecast: (B, H, O)
+            # Shape (B, H, O)
 
-        # Developer comment: Output generated for forecast horizon.
-        logger.debug(f"Final output shape: {tf_shape(outputs)}") # Optional Debug
-
+        logger.debug(
+            f"TFT '{self.name}': Final output shape: {outputs.shape}")
+        logger.debug(
+            f"TFT '{self.name}': Exiting call method.")
         return outputs
+    
 
-    # --- Keep compile, get_config, from_config methods ---
-    # (Ensure they reflect the parameters in __init__)
     def compile(self, optimizer, loss=None, **kwargs):
-         # ... (compile logic as before) ...
         if self.quantiles is None:
             effective_loss = loss or 'mean_squared_error'
         else:
-            effective_loss = loss or combined_quantile_loss(self.quantiles)
-        super().compile(optimizer=optimizer, loss=effective_loss, **kwargs)
-
+            effective_loss = loss or combined_quantile_loss(
+                self.quantiles)
+        super().compile(
+            optimizer=optimizer, 
+            loss=effective_loss, 
+            **kwargs
+        )
+        
     def get_config(self):
         config = super().get_config()
         config.update({
@@ -480,10 +522,10 @@ class TFT(Model, NNLearner):
             'recurrent_dropout_rate': self.recurrent_dropout_rate,
             'forecast_horizon': self.forecast_horizon,
             'quantiles': self.quantiles,
-            'activation': self.activation, # Use original string
+            'activation': self.activation, 
             'use_batch_norm': self.use_batch_norm,
             'num_lstm_layers': self.num_lstm_layers,
-            'lstm_units': self._lstm_units, # Use original spec
+            'lstm_units': self._lstm_units, 
             'output_dim': self.output_dim,
         })
         return config
@@ -491,335 +533,7 @@ class TFT(Model, NNLearner):
     @classmethod
     def from_config(cls, config):
         return cls(**config)
-    
-@register_keras_serializable('fusionlab.nn.transformers', name="TFT0")
-class TFT0(Model, NNLearner): 
-    """Revised Temporal Fusion Transformer (TFT) requiring static,
-    dynamic (past), and future inputs, closer to original paper.
-    """
-    @validate_params({
-        "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
-        "static_input_dim": [Interval(Integral, 1, None, closed='left')],
-        "future_input_dim": [Interval(Integral, 1, None, closed='left')],
-        "hidden_units": [Interval(Integral, 1, None, closed='left')],
-        "num_heads": [Interval(Integral, 1, None, closed='left')],
-        "dropout_rate": [Interval(Real, 0, 1, closed="both")],
-        "recurrent_dropout_rate": [Interval(Real, 0, 1, closed="both")], # Added
-        "forecast_horizon": [Interval(Integral, 1, None, closed='left')],
-        "quantiles": ['array-like', None],
-        "activation": [StrOptions(
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu"}
-            )],
-        "use_batch_norm": [bool],
-        "num_lstm_layers": [Interval(Integral, 1, None, closed='left')],
-        "lstm_units": ['array-like', Interval(Integral, 1, None, closed='left'), None],
-        "output_dim": [Interval(Integral, 1, None, closed='left')],
-    })
-    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-    def __init__(
-        self,
-        dynamic_input_dim: int,
-        static_input_dim: int,
-        future_input_dim: int,
-        hidden_units: int = 32,
-        num_heads: int = 4,
-        dropout_rate: float = 0.1,
-        recurrent_dropout_rate: float = 0.0, 
-        forecast_horizon: int = 1,
-        quantiles: Optional[List[float]] = None,
-        activation: str = 'elu',
-        use_batch_norm: bool = False,
-        num_lstm_layers: int = 1,
-        lstm_units: Optional[Union[int, List[int]]] = None,
-        output_dim: int = 1,
-        **kwargs
-    ):
-        super().__init__(**kwargs)
-
-        # --- Store parameters ---
-        self.dynamic_input_dim = dynamic_input_dim
-        self.static_input_dim = static_input_dim
-        self.future_input_dim = future_input_dim
-        self.hidden_units = hidden_units
-        self.num_heads = num_heads
-        self.dropout_rate = dropout_rate
-        self.recurrent_dropout_rate = recurrent_dropout_rate 
-        self.forecast_horizon = forecast_horizon
-        self.activation = activation
-        self.use_batch_norm = use_batch_norm
-        self.num_lstm_layers = num_lstm_layers
-        self.output_dim = output_dim
-        self.quantiles = validate_quantiles(quantiles) if quantiles else None
-        self.num_quantiles = len(self.quantiles) if self.quantiles else 1
-
-        # Process LSTM units (same logic as before)
-        _lstm_units = lstm_units or hidden_units
-         # Store original spec for self._lstm_units if it was list/int
-        self._lstm_units = _lstm_units
-        
-        self.lstm_units_list = (
-            [_lstm_units] * num_lstm_layers if isinstance(_lstm_units, int)
-            else _lstm_units
-        )
-        self.lstm_units_list = is_iterable(
-            self.lstm_units_list, exclude_string=True, transform=True
-            )
-        self.lstm_units_list = [ 
-            validate_positive_integer(v, "lstm_unit {v}")
-            for v in self.lstm_units_list ]
-       
-
-        if len(self.lstm_units_list) != num_lstm_layers:
-             raise ValueError("Length of 'lstm_units' list must match"
-                              " 'num_lstm_layers'.")
-
-        # --- Initialize Core TFT Components ---
-        # Using components from fusionlab.nn.components
-        # Names align more closely with original TFT paper roles.
-        # 1. Variable Selection Networks
-        self.static_vsn = VariableSelectionNetwork(
-            num_inputs=self.static_input_dim, units=self.hidden_units,
-            dropout_rate=self.dropout_rate, activation=self.activation,
-            use_batch_norm=self.use_batch_norm, name="static_vsn")
-
-        self.dynamic_vsn = VariableSelectionNetwork(
-            num_inputs=self.dynamic_input_dim, units=self.hidden_units,
-            dropout_rate=self.dropout_rate, use_time_distributed=True,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="dynamic_vsn")
-
-        self.future_vsn = VariableSelectionNetwork(
-            num_inputs=self.future_input_dim, units=self.hidden_units,
-            dropout_rate=self.dropout_rate, use_time_distributed=True,
-            activation=self.activation, use_batch_norm=self.use_batch_norm,
-            name="future_vsn")
-
-        # 2. Static Context GRNs (processing VSN output)
-        # Context for VSNs (used within VSN GRNs)
-        self.static_grn_for_vsns = GatedResidualNetwork(
-             units=self.hidden_units, dropout_rate=self.dropout_rate,
-             activation=self.activation, use_batch_norm=self.use_batch_norm,
-             name="static_grn_for_vsns")
-        # Context for Enrichment GRN
-        self.static_grn_for_enrichment = GatedResidualNetwork(
-             units=self.hidden_units, dropout_rate=self.dropout_rate,
-             activation=self.activation, use_batch_norm=self.use_batch_norm,
-             name="static_grn_for_enrichment")
-        # Context for LSTM Hidden State Init
-        self.static_grn_for_state_h = GatedResidualNetwork(
-             units=self.lstm_units_list[0], # Match first LSTM layer units
-             dropout_rate=self.dropout_rate, activation=self.activation,
-             use_batch_norm=self.use_batch_norm, name="static_grn_for_state_h")
-        # Context for LSTM Cell State Init
-        self.static_grn_for_state_c = GatedResidualNetwork(
-             units=self.lstm_units_list[0], # Match first LSTM layer units
-             dropout_rate=self.dropout_rate, activation=self.activation,
-             use_batch_norm=self.use_batch_norm, name="static_grn_for_state_c")
-
-        # 3. LSTM Encoder Layers
-        self.lstm_layers = []
-        for i in range(self.num_lstm_layers):
-            self.lstm_layers.append(LSTM(
-                units=self.lstm_units_list[i],
-                return_sequences=True,
-                dropout=self.dropout_rate,
-                recurrent_dropout=self.recurrent_dropout_rate, # Use new param
-                name=f'encoder_lstm_{i+1}'
-            ))
-
-        # 4. Static Enrichment GRN (applied after LSTM)
-        # Note: StaticEnrichmentLayer component might encapsulate this GRN
-        # Here we define the GRN directly as per paper diagram structure.
-        self.static_enrichment_grn = GatedResidualNetwork(
-             units=self.hidden_units, dropout_rate=self.dropout_rate,
-             activation=self.activation, use_batch_norm=self.use_batch_norm,
-             use_time_distributed=True, name="static_enrichment_grn"
-             )
-
-        # 5. Temporal Self-Attention (Interpretable Multi-Head Attention)
-        # This component internally contains GRNs for Q, K, V projections
-        # and the final output gating, potentially conditioned by static context.
-        self.temporal_attention_layer = TemporalAttentionLayer(
-            units=self.hidden_units, num_heads=self.num_heads,
-            dropout_rate=self.dropout_rate, activation=self.activation,
-            use_batch_norm=self.use_batch_norm, name="temporal_self_attention")
-
-        # 6. Position-wise Feedforward GRN (applied after attention)
-        self.positionwise_grn = GatedResidualNetwork(
-            units=self.hidden_units, dropout_rate=self.dropout_rate,
-            use_time_distributed=True, activation=self.activation,
-            use_batch_norm=self.use_batch_norm, name="pos_wise_ff_grn")
-
-        # 7. Output Layer(s)
-        if self.quantiles:
-            self.output_layers = [
-                TimeDistributed(Dense(self.output_dim), name=f'q_{int(q*100)}_td')
-                for q in self.quantiles
-            ]
-        else:
-            self.output_layer = TimeDistributed(
-                Dense(self.output_dim), name='point_td'
-            )
-
-    def call(self, inputs, training=None):
-        """Forward pass following the standard TFT architecture."""
-        static_inputs, dynamic_inputs, future_inputs = inputs
-        
-        inputs = validate_tft_inputs (
-            [dynamic_inputs, future_inputs, static_inputs], 
-            dynamic_input_dim=self.dynamic_input_dim, 
-            static_input_dim= self.static_input_dim, 
-            future_covariate_dim= self.future_input_dim, 
-            )
-        # remake into tensors 
-        dynamic_inputs, future_inputs, static_inputs = inputs 
-        # # Expect inputs: [static_inputs, dynamic_inputs, future_inputs]
-        # if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
-        #      raise ValueError(
-        #          "TFT expects inputs as a list/tuple of 3 elements: "
-        #          "[static_inputs, dynamic_inputs, future_inputs]."
-        #      )
-        # static_inputs, dynamic_inputs, future_inputs = inputs
-
-        # 1a. Initial static processing (e.g., embeddings for categoricals)
-        # Assuming this happens *before* this model or handle here if needed.
-        # For now, assume static_inputs are ready numerical features.
-        # 1b. Static VSN (requires 3D/4D input if time distributed used internally)
-        # Assuming VSN handles 2D static input (B, D_stat) correctly
-        static_selected = self.static_vsn(static_inputs, training=training)
-
-        # 1c. Static Context Vector Generation
-        # Context for VSNs (can be passed back into VSN's internal GRNs if implemented)
-        context_for_vsns = self.static_grn_for_vsns(
-            static_selected, training=training)
-        # Context for enrichment GRN
-        context_for_enrichment = self.static_grn_for_enrichment(
-            static_selected, training=training)
-        # Context for LSTM initial states
-        context_state_h = self.static_grn_for_state_h(
-            static_selected, training=training)
-        context_state_c = self.static_grn_for_state_c(
-            static_selected, training=training)
-        initial_state = [context_state_h, context_state_c]
-
-        # --- Temporal Pathway ---
-        # 2a. Initial processing for dynamic/future features (e.g., embeddings)
-        # Assume inputs are ready numerical features. Reshape for VSN.
-        if tf_rank(dynamic_inputs) == 3:
-             dynamic_inputs_r = tf_expand_dims(dynamic_inputs, axis=-1)
-        else: dynamic_inputs_r = dynamic_inputs
-        if tf_rank(future_inputs) == 3:
-             future_inputs_r = tf_expand_dims(future_inputs, axis=-1)
-        else: future_inputs_r = future_inputs
-
-        # 2b. Dynamic/Future VSNs
-        # Pass static context (context_for_vsns) if VSNs accept it
-        dynamic_selected = self.dynamic_vsn(
-             dynamic_inputs_r, training=training, context=context_for_vsns)
-        future_selected = self.future_vsn(
-             future_inputs_r, training=training, context=context_for_vsns)
-
-        # 2c. Combine and Encode Temporally
-        # This assumes future_inputs cover the same time steps
-        # as dynamic_inputs PLUS the forecast horizon steps. Careful
-        # data preparation is needed before calling the model.
-        # Concatenate VSN outputs along the feature dimension.
-        temporal_features = tf_concat(
-            [dynamic_selected, future_selected], axis=-1
-        )
-        # positional encoding (implementation depends on PositionalEncoding layer)
-        # Assuming simple addition or concatenation if PE handles it.
-        temporal_features_pos = self.positional_encoding(temporal_features)
-
-        # 3. LSTM Encoder
-        lstm_output = temporal_features_pos
-        # Pass initial state derived from static features to the first layer
-        current_state = initial_state
-        processed_lstm_layers = []
-        for i, layer in enumerate(self.lstm_layers):
-             # Pass state only to the first layer, 
-             # subsequent layers use previous output state
-             if i == 0:
-                  lstm_output = layer(lstm_output, initial_state=current_state,
-                                      training=training)
-             else:
-                  lstm_output = layer(lstm_output, training=training)
-             processed_lstm_layers.append(lstm_output)
-        # Use final LSTM output
-        lstm_output = processed_lstm_layers[-1]
-
-        # 4. Static Enrichment (using dedicated GRN)
-        # Pass LSTM output and static enrichment context
-        enriched_output = self.static_enrichment_grn(
-            lstm_output, context=context_for_enrichment, training=training
-        )
-
-        # 5. Temporal Self-Attention
-        # Pass enriched output and context for attention (e.g., for VSN context)
-        attention_output = self.temporal_attention_layer(
-            enriched_output, context_vector=context_for_vsns, training=training
-        )
-
-        # 6. Position-wise Feedforward
-        final_temporal_repr = self.positionwise_grn(
-            attention_output, training=training
-        )
-
-        # 7. Output Slice and Projection
-        # Slice the forecast horizon steps from the final representation
-        output_features = final_temporal_repr[:, -self.forecast_horizon:, :]
-
-        if self.quantiles:
-            quantile_outputs = [
-                layer(output_features, training=training)
-                for layer in self.output_layers
-            ]
-            outputs = tf_stack(quantile_outputs, axis=2) # (B, H, Q, O)
-            if self.output_dim == 1:
-                outputs = tf_squeeze(outputs, axis=-1) # (B, H, Q)
-        else:
-            outputs = self.output_layer(output_features, training=training) # (B, H, O)
-
-        return outputs
-
-    # --- Keep compile, get_config, from_config methods ---
-    def compile(self, optimizer, loss=None, **kwargs):
-        """Compile method handling default loss based on quantiles."""
-
-        if self.quantiles is None:
-            effective_loss = loss or 'mean_squared_error'
-        else:
-            effective_loss = loss or combined_quantile_loss(self.quantiles)
-        super().compile(optimizer=optimizer, loss=effective_loss, **kwargs)
-
-    def get_config(self):
-        """Returns the model configuration."""
-        config = super().get_config()
-        config.update({
-            'dynamic_input_dim': self.dynamic_input_dim,
-            'static_input_dim': self.static_input_dim,
-            'future_input_dim': self.future_input_dim,
-            'hidden_units': self.hidden_units,
-            'num_heads': self.num_heads,
-            'dropout_rate': self.dropout_rate,
-            'recurrent_dropout_rate': self.recurrent_dropout_rate, 
-            'forecast_horizon': self.forecast_horizon,
-            'quantiles': self.quantiles,
-            'activation': self.activation,
-            'use_batch_norm': self.use_batch_norm,
-            'num_lstm_layers': self.num_lstm_layers,
-            # Store original spec for self._lstm_units if it was list/int
-            'lstm_units': self._lstm_units if isinstance(self.lstm_units_list[0], int)\
-                 else self.lstm_units_list, 
-            'output_dim': self.output_dim,
-        })
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        """Creates model from configuration."""
-        return cls(**config)
-    
+   
 TFT.__doc__=r"""\
     Temporal Fusion Transformer (TFT) requiring static,
 dynamic (past), and future inputs.
@@ -1069,338 +783,10 @@ References
    time series forecasting. *International Journal of Forecasting*,
    37(4), 1748-1764.
 """
-@Appender(dedent(
-    TemporalFusionTransformer.__doc__.replace ('TemporalFusionTransformer', 'TFT')
-    ), join='\n'
- )
-@register_keras_serializable('fusionlab.nn.transformers', name="_TFT")
-class _TFT(Model, NNLearner):
-    @validate_params({
-        "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')], 
-        "static_input_dim": [Interval(Integral, 1, None, closed='left'),], 
-        "future_input_dim": [Interval(Integral, 1, None, closed='left'),], 
-        "hidden_units": [Interval(Integral, 1, None, closed='left')], 
-        "num_heads": [Interval(Integral, 1, None, closed='left')],
-        "dropout_rate": [Interval(Real, 0, 1, closed="both")],
-        "forecast_horizon": [Interval(Integral, 1, None, closed='left')],
-        "quantiles": ['array-like', StrOptions({'auto'}), None],
-        "activation": [
-            StrOptions({"elu", "relu", "tanh", "sigmoid", "linear", "gelu"}),
-            callable],
-        "use_batch_norm": [bool],
-        "output_dim": [Interval(Integral, 1, None, closed='left')],
-        "lstm_units": ['array-like', Interval(Integral, 1, None, closed='left'), None]
-        },
-    )
-    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-    def __init__(
-        self,
-        dynamic_input_dim,      
-        future_input_dim=None,    
-        static_input_dim=None,  
-        hidden_units=32, 
-        num_heads=4,            
-        dropout_rate=0.1,       
-        forecast_horizon=1,     
-        quantiles=None,         
-        activation='elu',       
-        use_batch_norm=False,   
-        lstm_units=None,        
-        output_dim=1,           
-    ):
-        super().__init__()
-        self.dynamic_input_dim = dynamic_input_dim
-        self.hidden_units = hidden_units
-        self.future_input_dim = future_input_dim
-        self.static_input_dim = static_input_dim
-        self.num_heads = num_heads
-        self.dropout_rate = dropout_rate
-        self.forecast_horizon = forecast_horizon
-        self.activation = activation
-        self.use_batch_norm = use_batch_norm
-        self.lstm_units = lstm_units if lstm_units is not None else hidden_units
-        self.output_dim = output_dim
 
-        # Initialize logger
-        self.logger = fusionlog().get_fusionlab_logger(__name__)
-        self.logger.debug(
-            "Initializing TemporalFusionTransformer with parameters: "
-            f"static_input_dim={static_input_dim}, "
-            f"dynamic_input_dim={dynamic_input_dim}, "
-            f"future_input_dim={future_input_dim}, "
-            f"hidden_units={hidden_units}, "
-            f"num_heads={num_heads}, "
-            f"dropout_rate={dropout_rate}, "
-            f"forecast_horizon={forecast_horizon}, "
-            f"quantiles={quantiles}, "
-            f"activation={activation}, "
-            f"use_batch_norm={use_batch_norm}, "
-            f"lstm_units={lstm_units}"
-            f"output_dim={output_dim}"
-        )
-        # Handle default quantiles, scales and multi_scale_agg 
-        self.quantiles, _, _ = set_default_params(quantiles) 
-        
-        # Embedding layers for dynamic (past) inputs
-        self.past_embedding = TimeDistributed(
-            Dense(hidden_units, activation=None),
-            name='past_embedding'
-        )
-        
-        # Embedding layers for future inputs if provided
-        self.future_embedding = (
-            TimeDistributed(
-                Dense(hidden_units, activation=None),
-                name='future_embedding'
-            ) 
-            if self.future_input_dim is not None else None
-        )
-        
-        # Embedding layer for static inputs using TimeDistributed
-        self.static_embedding = (
-            TimeDistributed(
-                Dense(hidden_units, activation=None),
-                name='static_embedding'
-            ) 
-            if self.static_input_dim is not None else None
-        )
-        
-        # Variable Selection Network for dynamic (past) inputs
-        self.past_varsel = VariableSelectionNetwork(
-            num_inputs=self.dynamic_input_dim, 
-            hidden_units=hidden_units, 
-            dropout_rate=dropout_rate, 
-            activation=activation, 
-            use_batch_norm=use_batch_norm
-        )
-        
-        # LSTM Encoder
-        self.encoder = _LSTMEncoder(
-            lstm_units=self.lstm_units, 
-            dropout_rate=dropout_rate
-        )
-        
-        # Variable Selection Network for future inputs if provided
-        self.future_varsel = (
-            _VariableSelectionNetwork(
-                num_inputs=self.future_input_dim, 
-                hidden_units=hidden_units, 
-                dropout_rate=dropout_rate, 
-                activation=activation, 
-                use_batch_norm=use_batch_norm
-            ) 
-            if self.future_input_dim is not None else None
-        )
-        
-        # LSTM Decoder
-        self.decoder = _LSTMDecoder(
-            lstm_units=self.lstm_units, 
-            dropout_rate=dropout_rate
-        )
-        
-        # Variable Selection Network for static inputs if provided
-        self.static_varsel = (
-            _VariableSelectionNetwork(
-                num_inputs=self.static_input_dim, 
-                hidden_units=hidden_units, 
-                dropout_rate=dropout_rate, 
-                activation=activation, 
-                use_batch_norm=use_batch_norm
-            ) 
-            if self.static_input_dim is not None else None
-        )
-        
-        # Temporal Fusion Decoder (includes attention and gating)
-        self.temporal_fusion_decoder = _TemporalFusionDecoder(
-            hidden_units=hidden_units, 
-            num_heads=num_heads, 
-            dropout_rate=dropout_rate, 
-            activation=activation, 
-            use_batch_norm=use_batch_norm
-        )
-        
-        # Final Dense layer(s) for output
-        self.num_quantiles =None 
-        if self.quantiles is not None:
-            # If quantiles are provided, adjust output size accordingly
-            self.num_quantiles = len(self.quantiles)
-        self.output_layer = (
-            Dense(
-                self.output_dim * self.num_quantiles, 
-                name='output_layer'
-            ) 
-            if self.quantiles is not None else 
-            Dense(
-                self.output_dim, 
-                name='output_layer'
-            )
-        )
-    
-    def call(self, inputs, training=None):
-        # Unpack inputs
-        past_inputs, future_inputs, static_inputs=validate_tft_inputs(
-            inputs =inputs,
-            static_input_dim=self.static_input_dim, 
-            dynamic_input_dim= self.dynamic_input_dim, 
-            future_covariate_dim= self.future_input_dim, 
-        )
-        # 1) Embed past inputs
-        # ---> (batch_size, past_steps, dynamic_input_dim, 1)
-        past_inputs_expanded = tf_expand_dims(past_inputs, axis=-1)  
-        # ---> (batch_size, past_steps, dynamic_input_dim, hidden_units)
-        past_embedded = self.past_embedding(past_inputs_expanded) 
-        
-        self.logger.debug(f"Past inputs shape: {past_inputs.shape}")
-        self.logger.debug(f"Past embedded shape: {past_embedded.shape}")
-        
-        # 2) Variable Selection for past inputs
-        past_selected, past_weights = self.past_varsel(
-            past_embedded, 
-            training=training
-        )  # (batch_size, past_steps, hidden_units)
-        self.logger.debug(f"Past selected shape: {past_selected.shape}")
-        
-        # 3) Encode with LSTM
-        encoder_out, state_h, state_c = self.encoder(
-            past_selected, 
-            training=training
-        )  # (batch_size, past_steps, lstm_units)
-        self.logger.debug(f"Encoder output shape: {encoder_out.shape}")
-        
-        # 4) Embed future inputs if provided
-        if self.future_varsel is not None:
-            # ---> (batch_size, forecast_horizon, future_input_dim, 1)
-            future_inputs_expanded = tf_expand_dims(future_inputs, axis=-1)  
-            # ---> (batch_size, forecast_horizon, future_input_dim, hidden_units)
-            future_embedded = self.future_embedding(future_inputs_expanded)  
-            
-            self.logger.debug(f"Future inputs shape: {future_inputs.shape}")
-            self.logger.debug(f"Future embedded shape: {future_embedded.shape}")
-            
-            # Variable Selection for future inputs
-            future_selected, future_weights = self.future_varsel(
-                future_embedded, 
-                training=training
-            )  # (batch_size, forecast_horizon, hidden_units)
-            self.logger.debug(f"Future selected shape: {future_selected.shape}")
-        else:
-            # Placeholder for no future inputs
-            future_selected = tf_zeros(
-                shape=(tf_shape(past_inputs)[0], self.forecast_horizon, self.hidden_units),
-                dtype=tf_float32
-            )
-            self.logger.info("No future inputs provided; using zero placeholder.")
-        
-        # 5) Decode with LSTM
-        decoder_out, decoder_state = self.decoder(
-            future_selected, 
-            initial_state=(state_h, state_c), 
-            training=training
-        )  # (batch_size, forecast_horizon, lstm_units)
-        self.logger.debug(f"Decoder output shape: {decoder_out.shape}")
-        
-        # 6) Embed and Variable Selection for static inputs if provided
-        if self.static_varsel is not None:
-            #  ---> (batch_size, static_input_dim, 1)
-            static_inputs_expanded = tf_expand_dims(static_inputs, axis=-1)  
-            # ---> (batch_size, static_input_dim, hidden_units)
-            static_embedded = self.static_embedding(static_inputs_expanded)  
-            
-            self.logger.debug(f"Static inputs shape: {static_inputs.shape}")
-            self.logger.debug(f"Static embedded shape: {static_embedded.shape}")
-            
-            # Variable Selection for static inputs
-            static_selected, static_weights = self.static_varsel(
-                static_embedded, 
-                training=training
-            )  # (batch_size, hidden_units)
-            self.logger.debug(f"Static selected shape: {static_selected.shape}")
-        else:
-            static_selected = None
-        
-        # 7) Temporal Fusion Decoder
-        fused_output = self.temporal_fusion_decoder(
-            decoder_out, 
-            static_context=static_selected, 
-            training=training
-        )  # (batch_size, forecast_horizon, hidden_units)
-        self.logger.debug(f"Fused output shape: {fused_output.shape}")
-        
-        # 8) Final Projection
-        outputs = self.output_layer(fused_output)  
-        # (batch_size, forecast_horizon, output_dim * num_quantiles) 
-        # or (batch_size, forecast_horizon, output_dim)
-        self.logger.debug(f"Output layer shape: {outputs.shape}")
-        
-        # Reshape if quantiles are provided
-        if self.quantiles is not None:
-            outputs = tf_reshape(
-                outputs, 
-                (-1, self.forecast_horizon, self.num_quantiles, self.output_dim)
-            )
-            self.logger.debug(f"Reshaped outputs shape: {outputs.shape}")
-        
-        return outputs
-    
-    def compilex(self, optimizer, loss=None, **kwargs):
-        """
-        Custom compile method to handle quantile loss.
-        
-        Args:
-            optimizer: Optimizer to use.
-            loss: Loss function (optional).
-            **kwargs: Additional keyword arguments.
-        """
-        if self.quantiles is None:
-            # Deterministic scenario with Mean Squared Error
-            super().compile(
-                optimizer=optimizer, 
-                loss=loss or 'mse', 
-                **kwargs
-            )
-            self.logger.info("Compiled with MSE loss for deterministic predictions.")
-        else:
-            # Probabilistic scenario with combined quantile loss
-            quantile_loss_fn = combined_quantile_loss(self.quantiles)
-            super().compile(
-                optimizer=optimizer, 
-                loss=quantile_loss_fn, 
-                **kwargs
-            )
-            self.logger.info(
-                f"Compiled with combined quantile loss for quantiles: {self.quantiles}"
-            )
-    
-    def get_config(self):
-        """
-        Returns the config of the model for serialization.
-        """
-        config = super().get_config().copy()
-        config.update({
-            'dynamic_input_dim': self.dynamic_input_dim, 
-            'static_input_dim' : self.static_input_dim,
-            'future_input_dim' : self.future_input_dim,
-            'hidden_units'     : self.hidden_units,
-            'num_heads'        : self.num_heads,
-            'dropout_rate'     : self.dropout_rate,
-            'forecast_horizon': self.forecast_horizon,
-            'quantiles'        : self.quantiles,
-            'activation'       : self.activation,
-            'use_batch_norm'   : self.use_batch_norm,
-            'lstm_units'       : self.lstm_units,
-            'output_dim'       : self.output_dim,
-        })
-        return config
-    
-    @classmethod
-    def from_config(cls, config):
-        """
-        Creates a model from its config.
-        """
-        return cls(**config)
-
-@register_keras_serializable('fusionlab.nn.transformers', name="TFTPlus")
-class TFTPlus(Model):
+# XXX TODO: 
+@register_keras_serializable('fusionlab.nn.transformers', name="_TFTPlus")
+class _TFTPlus(Model):
     """Revised Temporal Fusion Transformer (TFT) requiring static,
     dynamic (past), and future inputs, with categorical handling.
     """
