@@ -1,124 +1,229 @@
-.. _user_guide_neural_utils:
+.. _user_guide_nn_utils:
 
-===========================
+==========================
 Neural Network Utilities
-===========================
+==========================
 
 The ``fusionlab.nn.utils`` module provides helpful functions for
-working with the neural network models in ``fusionlab``. These
-utilities assist with tasks such as data preprocessing tailored for
-models like TFT and XTFT, computing anomaly scores, generating
+working specifically with the neural network models in ``fusionlab``.
+These utilities assist with tasks such as data preprocessing tailored
+for models like TFT and XTFT, computing anomaly scores, generating
 forecasts, and reshaping data arrays.
 
 Anomaly Score Calculation
--------------------------
+---------------------------
 
-.. _compute_anomaly_scores:
+.. _compute_anomaly_scores_util:
 
 compute_anomaly_scores
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.compute_anomaly_scores`
 
 **Purpose:** To calculate anomaly scores for time series data using
-various methods. These scores quantify the "unusualness" of data
-points and can be used to inform model training (e.g., with the
-`'from_config'` strategy in :class:`~fusionlab.nn.XTFT`) or for
-post-hoc analysis.
+various statistical or algorithmic methods. These scores quantify the
+"unusualness" of data points or sequences and can be used to inform
+model training (e.g., with the `'from_config'` strategy in
+:class:`~fusionlab.nn.XTFT`) or for post-hoc analysis and evaluation.
 
 **Functionality / Methods:**
-This function computes scores based on the chosen `method`. Let $y$
-denote a value from `y_true`, $\mu$ its mean, $\sigma$ its standard
-deviation, and $\epsilon$ a small constant:
+This function computes scores based on the chosen `method`. Let :math:`y`
+denote a value from ``y_true``, :math:`\mu` its mean, :math:`\sigma` its
+standard deviation, and :math:`\epsilon` a small constant:
 
 * **`'statistical'` (or `'stats'`):** Calculates scores based on
-    normalized deviation from the mean.
+  the squared normalized deviation from the mean (squared Z-score).
+  Higher scores indicate larger deviations.
 
-    .. math::
-       Score(y) = \left(\frac{y - \mu}{\sigma + \epsilon}\right)^2
+  .. math::
+     Score(y) = \left(\frac{y - \mu}{\sigma + \epsilon}\right)^2
 
-* **`'domain'`:** Uses a user-provided `domain_func(y)` or a
-    default heuristic (e.g., penalizing negative values).
+* **`'domain'`:** Uses a user-provided callable `domain_func(y)` or a
+  default heuristic (e.g., assigning higher scores to negative or zero
+  values if only positive values are expected).
 
-* **`'isolation_forest'` (or `'if'`):** Uses the Isolation Forest
-    algorithm. Scores are derived from `-iso.score_samples(y)`.
-    Requires :mod:`sklearn`.
+* **`'isolation_forest'` (or `'if'`):** Uses the
+  :class:`sklearn.ensemble.IsolationForest` algorithm. Scores are
+  derived from the negative average path length required to isolate
+  a sample (e.g., ``-iso.score_samples(y)``). Lower original scores
+  (more negative) indicate higher anomaly likelihood; the function
+  may transform these. Requires :mod:`sklearn`.
 
-* **`'residual'`:** Requires `y_pred`. Scores based on the error
-    $e = y_{true} - y_{pred}$:
-    * `'mse'`: $Score = e^2$
-    * `'mae'`: $Score = |e|$
-    * `'rmse'`: $Score = \sqrt{e^2 + \epsilon}$
+* **`'residual'`:** Requires providing corresponding predictions `y_pred`.
+  Scores are based on the prediction error :math:`e = y_{true} - y_{pred}`:
+    * `'mae'` sub-method: :math:`Score = |e|`
+    * `'mse'` sub-method: :math:`Score = e^2`
+    * `'rmse'` sub-method: :math:`Score = \sqrt{e^2 + \epsilon}`
 
 *(Refer to the API documentation for details on parameters like
-`threshold`, `contamination`, etc.)*
+`threshold`, `contamination`, `sklearn_params`, `error_metric` etc.)*
 
 **Usage Context:** This function is typically used *outside* the main
-model training loop, for instance, to pre-calculate anomaly scores
-that can then be fed into the :class:`~fusionlab.nn.XTFT` model via
-the `anomaly_config` parameter when using the `'from_config'`
-strategy. It provides flexibility in defining how anomalies are
-quantified based on different statistical, algorithmic, or
-domain-specific approaches.
+model training loop, for instance, to **pre-calculate** anomaly scores
+from historical data, baseline model predictions, or domain rules.
+These pre-calculated scores can then be passed to the
+:class:`~fusionlab.nn.XTFT` model via the ``anomaly_config`` parameter
+when using the ``anomaly_detection_strategy='from_config'``. It offers
+a flexible way to define anomaly signals based on various approaches
+before integrating them into an anomaly-aware training process.
+
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import numpy as np
+   from fusionlab.nn.utils import compute_anomaly_scores
+   # IsolationForest needed for 'if' method
+   # from sklearn.ensemble import IsolationForest
+
+   # Config
+   batch_size = 4
+   time_steps = 10
+   features = 1
+
+   # Dummy data (e.g., target values)
+   y_true = np.random.randn(batch_size, time_steps, features).astype(np.float32)
+   # Inject an anomaly
+   y_true[1, 5, 0] = 10.0
+
+   # Dummy predictions (for residual method)
+   y_pred = y_true + np.random.normal(0, 0.5, y_true.shape).astype(np.float32)
+
+   # 1. Calculate using 'statistical' method
+   stat_scores = compute_anomaly_scores(
+       y_true=y_true,
+       method='statistical'
+   )
+   print("--- Statistical Scores ---")
+   print(f"Input y_true shape: {y_true.shape}")
+   print(f"Output scores shape: {stat_scores.shape}")
+   # Expected shape: (4, 10, 1)
+   print(f"Example score for anomalous point: {stat_scores[1, 5, 0]:.2f}")
+   print(f"Example score for normal point: {stat_scores[0, 5, 0]:.2f}")
+
+   # 2. Calculate using 'residual' (MAE) method
+   resid_scores = compute_anomaly_scores(
+       y_true=y_true,
+       y_pred=y_pred,
+       method='residual',
+       error_metric='mae' # Use MAE for residuals
+   )
+   print("\n--- Residual (MAE) Scores ---")
+   print(f"Input y_true shape: {y_true.shape}")
+   print(f"Input y_pred shape: {y_pred.shape}")
+   print(f"Output scores shape: {resid_scores.shape}")
+   # Expected shape: (4, 10, 1)
+   print(f"Example score for anomalous point: {resid_scores[1, 5, 0]:.2f}")
+   print(f"Example score for normal point: {resid_scores[0, 5, 0]:.2f}")
+
+   # 3. Calculate using 'isolation_forest' (requires sklearn)
+   # Need to reshape data for Isolation Forest (Samples, Features)
+   # For time series, might apply IF per timestep or on sequence features
+   # Example: Apply per timestep (treat each B*T point independently)
+   # try:
+   #     y_true_flat = y_true.reshape(-1, features)
+   #     if_scores_flat = compute_anomaly_scores(
+   #         y_true=y_true_flat,
+   #         method='isolation_forest',
+   #         contamination=0.05 # Expected anomaly rate
+   #     )
+   #     if_scores = if_scores_flat.reshape(batch_size, time_steps, features)
+   #     print("\n--- Isolation Forest Scores ---")
+   #     print(f"Output scores shape: {if_scores.shape}")
+   # except ImportError:
+   #     print("\nSkipping Isolation Forest example (sklearn not found).")
+
 
 .. raw:: html
 
-    <hr>
-    
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
 Data Preparation & Preprocessing
 ----------------------------------
 
 These functions help prepare raw time series data into the specific
 formats expected by models like TFT and XTFT.
 
-.. _split_static_dynamic:
+.. _split_static_dynamic_util:
 
 split_static_dynamic
 ~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.split_static_dynamic`
 
 **Purpose:** To separate an input array containing sequences of
-features into two distinct arrays: one for static (time-invariant)
-features and one for dynamic (time-varying) features. This is a
-common preprocessing step for models that handle these input types
-separately.
+combined features into two distinct arrays: one for static
+(time-invariant extracted from a single time step) features and one
+for dynamic (time-varying) features. This is often needed when a
+simpler sequence generation tool creates a combined array first.
 
 **Functionality:**
 Given an input sequence tensor
-$\mathbf{X} \in \mathbb{R}^{B \times T \times N}$ (Batch, TimeSteps,
-NumFeatures), static feature indices $I_{static}$, dynamic feature
-indices $I_{dynamic}$, and a specific time step $t_{static}$ (usually
-0):
+:math:`\mathbf{X} \in \mathbb{R}^{B \times T \times N}`
+(Batch, TimeSteps, NumCombinedFeatures), static feature indices
+:math:`I_{static}`, dynamic feature indices :math:`I_{dynamic}`,
+and a specific time step :math:`t_{static}` (usually 0) for
+extracting static values:
 
-1.  **Extract Static Features:** Selects features $I_{static}$ at the
-    single time step $t_{static}$.
+1.  **Extract Static Features:** Selects features :math:`I_{static}`
+    at time step :math:`t_{static}`.
 
     .. math::
        \mathbf{S}_{raw} = \mathbf{X}_{:, t_{static}, I_{static}} \in \mathbb{R}^{B \times |I_{static}|}
 
-2.  **Extract Dynamic Features:** Selects features $I_{dynamic}$ across
-    *all* time steps $T$.
+2.  **Extract Dynamic Features:** Selects features :math:`I_{dynamic}`
+    across *all* time steps :math:`T`.
 
     .. math::
        \mathbf{D}_{raw} = \mathbf{X}_{:, :, I_{dynamic}} \in \mathbb{R}^{B \times T \times |I_{dynamic}|}
 
-3.  **Reshape (Optional):** If `reshape_static` or `reshape_dynamic`
-    are True (default), the extracted arrays are reshaped. The default
-    reshaping adds a trailing dimension of 1, suitable for some
-    Keras layers:
-    * $\mathbf{S} \in \mathbb{R}^{B \times |I_{static}| \times 1}$
-    * $\mathbf{D} \in \mathbb{R}^{B \times T \times |I_{dynamic}| \times 1}$
-    Custom shapes can also be provided via parameters.
+3.  **Reshape (Optional):** If ``reshape_static`` or ``reshape_dynamic``
+    are True (default), adds a trailing dimension of 1:
+    * :math:`\mathbf{S} \in \mathbb{R}^{B \times |I_{static}| \times 1}`
+    * :math:`\mathbf{D} \in \mathbb{R}^{B \times T \times |I_{dynamic}| \times 1}`
 
-**Usage Context:** Use this function during data preparation when your
-raw sequence data (with combined static and dynamic columns) needs
-to be split into the separate input arrays required by models like
-:class:`~fusionlab.nn.TemporalFusionTransformer`,
-:class:`~fusionlab.nn.NTemporalFusionTransformer`, or
-:class:`~fusionlab.nn.XTFT`.
+**Usage Context:** Use this function after creating combined sequences
+(e.g., using :func:`create_sequences` on a DataFrame containing both
+static and dynamic columns) when you need to separate them into the
+distinct static and dynamic input arrays required by models like
+:class:`~fusionlab.nn.TemporalFusionTransformer` or
+:class:`~fusionlab.nn.NTemporalFusionTransformer`. It assumes static
+values are repeated across time in the input sequence.
+
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import numpy as np
+   # Assuming split_static_dynamic is importable
+   from fusionlab.nn.utils import split_static_dynamic
+
+   # Config
+   B, T, N = 4, 10, 5 # Batch, Time, Features (2 static, 3 dynamic)
+   static_indices = [0, 1]
+   dynamic_indices = [2, 3, 4]
+   static_timestep_idx = 0 # Extract static from first step
+
+   # Dummy combined sequence input
+   combined_sequences = np.random.rand(B, T, N).astype(np.float32)
+
+   # Split the sequences
+   static_array, dynamic_array = split_static_dynamic(
+       X=combined_sequences,
+       static_features_indices=static_indices,
+       dynamic_features_indices=dynamic_indices,
+       static_timestep=static_timestep_idx,
+       reshape_static=True, # Default
+       reshape_dynamic=True # Default
+   )
+
+   print(f"Input combined sequence shape: {combined_sequences.shape}")
+   print(f"Output static array shape: {static_array.shape}")
+   print(f"Output dynamic array shape: {dynamic_array.shape}")
+   # Expected: (4, 10, 5), (4, 2, 1), (4, 10, 3, 1)
 
 
-
-.. _create_sequences:
+.. _create_sequences_util:
 
 create_sequences
 ~~~~~~~~~~~~~~~~~~
@@ -127,54 +232,85 @@ create_sequences
 **Purpose:** To transform a time series dataset (typically in a
 Pandas DataFrame) into a format suitable for supervised learning
 with sequence models. It creates input sequences (windows of past
-data) and their corresponding target values (future data to predict).
+data, including *all* available features) and their corresponding
+target values (future data to predict from a specific column).
 
 **Functionality:**
-This function slides a window of a specified `sequence_length` ($T$)
-across the input DataFrame `df`. For each window, it extracts:
+This function slides a window of a specified `sequence_length`
+(:math:`T`) across the input DataFrame `df`. For each window, it
+extracts:
 
-1.  **Input Sequence ($\mathbf{X}^{(i)}$):** A segment of the DataFrame
-    containing all features over $T$ consecutive time steps starting
-    at index $i$.
+1.  **Input Sequence (:math:`\mathbf{X}^{(i)}`):** A segment of the
+    DataFrame containing **all feature columns** over :math:`T`
+    consecutive time steps starting at index :math:`i`.
 
     .. math::
        \mathbf{X}^{(i)} = [\mathbf{df}_{i}, \mathbf{df}_{i+1}, ..., \mathbf{df}_{i+T-1}]
 
-2.  **Target Value(s) ($y^{(i)}$):** The value(s) from the specified
-    `target_col` that occur immediately after the input sequence.
-    * **Single-step forecasting** (`forecast_horizon=None` or 1):
-        The target is the single value at time step $i+T$.
-
-        .. math::
-           y^{(i)} = \text{target\_value}_{i+T}
-
-    * **Multi-step forecasting** (`forecast_horizon=H`): The target
-        is the sequence of $H$ values from the `target_col` starting
-        at time step $i+T$.
-
-        .. math::
-           y^{(i)} = [\text{target\_value}_{i+T}, ..., \text{target\_value}_{i+T+H-1}]
+2.  **Target Value(s) (:math:`y^{(i)}`):** The value(s) from the
+    specified `target_col` that occur immediately after the input
+    sequence.
+    * **Single-step** (`forecast_horizon=None` or 1): Target is
+      :math:`\text{target\_value}_{i+T}`.
+    * **Multi-step** (`forecast_horizon=H`): Target is the sequence
+      :math:`[\text{target\_value}_{i+T}, ..., \text{target\_value}_{i+T+H-1}]`.
 
 The function iterates through the DataFrame with a given `step` size
-(stride). Setting `step=1` (default) creates maximally overlapping
-sequences. The `drop_last` parameter controls whether sequences at
-the very end of the DataFrame, which might not have a complete
-corresponding target, are included.
+(stride=1 creates overlapping sequences). The `drop_last` parameter
+controls handling of sequences near the end without full targets.
 
 **Output:** Returns two NumPy arrays:
-* `sequences`: Shape `(NumSequences, SequenceLength, NumFeatures)`
-* `targets`: Shape `(NumSequences,)` for single-step or
-    `(NumSequences, ForecastHorizon)` for multi-step.
+* `sequences`: Shape :math:`(\text{NumSeq}, T, \text{NumFeatures})`
+* `targets`: Shape :math:`(\text{NumSeq},)` for single-step or
+  :math:`(\text{NumSeq}, H)` for multi-step.
 
-**Usage Context:** This is a fundamental preprocessing step for time
-series forecasting. Use it after cleaning and feature engineering your
-DataFrame to generate the `(X, y)` pairs needed to train sequence
-models like LSTMs, GRUs, TFT, and XTFT. The output `sequences` array
-might then be further processed (e.g., using
-:func:`split_static_dynamic`) depending on the specific model's input
-requirements.
+**Usage Context:** A fundamental preprocessing step. Use it after
+cleaning and feature engineering your DataFrame to generate the
+`(X, y)` pairs needed to train basic sequence models or as an
+intermediate step before further processing (like using
+:func:`split_static_dynamic`) for more complex models like TFT/XTFT.
+It's simpler than :func:`reshape_xtft_data` as it doesn't automatically
+separate static/dynamic/future types.
 
-.. _compute_forecast_horizon:
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import numpy as np
+   import pandas as pd
+   # Assuming create_sequences is importable
+   from fusionlab.nn.utils import create_sequences
+
+   # Dummy DataFrame
+   data = {
+       'Time': pd.to_datetime(pd.date_range('2023-01-01', periods=50)),
+       'Feature1': np.random.rand(50) * 10,
+       'Target': np.sin(np.arange(50) * 0.5) + 5
+   }
+   df = pd.DataFrame(data).set_index('Time')
+
+   # Config
+   sequence_length = 10 # Lookback window
+   forecast_horizon = 5 # Predict 5 steps ahead
+   target_column = 'Target'
+
+   # Create sequences and multi-step targets
+   X, y = create_sequences(
+       df=df,
+       sequence_length=sequence_length,
+       forecast_horizon=forecast_horizon,
+       target_col=target_column,
+       step=1 # Default stride
+   )
+
+   print(f"Original DataFrame shape: {df.shape}")
+   print(f"Output sequences (X) shape: {X.shape}")
+   print(f"Output targets (y) shape: {y.shape}")
+   # Expected shapes (approx): (50, 2), (36, 10, 2), (36, 5)
+
+
+.. _compute_forecast_horizon_util:
 
 compute_forecast_horizon
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -182,424 +318,501 @@ compute_forecast_horizon
 
 **Purpose:** To determine the number of time steps (`forecast_horizon`)
 between a specified prediction start date/time and end date/time,
-often based on the frequency of the time series data.
+optionally using the inferred frequency of provided time series data.
 
 **Functionality:**
-1.  **Frequency Inference:** If `data` (e.g., DataFrame with `dt_col`,
-    Series, list of datetimes) is provided, the function attempts to
-    infer the time series frequency (e.g., 'D' for daily, 'H' for
-    hourly) using `pandas.infer_freq`.
-2.  **Date Parsing:** Converts `start_pred` and `end_pred` inputs
-    (which can be strings, datetime objects, or integers representing
-    years) into pandas Timestamp objects.
-3.  **Horizon Calculation (with Frequency):** If a frequency `freq`
-    was successfully inferred, it calculates the number of steps by
-    generating a date range between `start_pred` and `end_pred` using
-    that frequency: `len(pd.date_range(start, end, freq=freq))`.
-4.  **Horizon Calculation (without Frequency):** If frequency cannot
-    be inferred or no data is provided, it calculates the time delta
-    between `start_pred` and `end_pred` and estimates the horizon
-    based on the largest applicable time unit (years, months, weeks,
-    or days). For example, if the difference is 400 days, it might
-    return $400 // 365 + 1 = 2$ years (depending on exact logic).
-5.  **Error Handling:** Manages invalid inputs or inability to parse
-    dates based on the `error` parameter ('raise', 'warn').
+1.  **Frequency Inference:** Optionally infers the time series frequency
+    (e.g., 'D', 'H', 'MS') from input `data` using `pandas.infer_freq`.
+2.  **Date Parsing:** Converts `start_pred` and `end_pred` (strings,
+    datetimes, or integer years) into pandas Timestamps.
+3.  **Horizon Calculation:**
+    * **With Frequency:** Calculates the number of steps by generating
+      a date range between start and end using the inferred frequency.
+    * **Without Frequency:** Estimates the horizon based on the time
+      delta in the largest applicable unit (years, months, weeks, days).
 
 **Usage Context:** Useful before creating sequences or configuring models
-when you know the desired start and end dates of your forecast period
-but need to determine the corresponding number of steps (`forecast_horizon`)
-based on your data's time frequency. Helps ensure consistency between
-the desired prediction range and model parameters or data generation
-steps like :func:`create_sequences`.
+when the forecast period is defined by start/end dates rather than a
+fixed number of steps. Helps ensure consistency between the desired
+prediction range and parameters like ``forecast_horizon`` used in
+:func:`create_sequences` or model initialization.
+
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import pandas as pd
+   from fusionlab.nn.utils import compute_forecast_horizon
+
+   # Example 1: Using frequency inference
+   dates = pd.date_range('2023-01-01', periods=60, freq='D')
+   df_daily = pd.DataFrame({'date': dates})
+   horizon1 = compute_forecast_horizon(
+       data=df_daily, # Provide data to infer frequency
+       dt_col='date',
+       start_pred='2023-03-01',
+       end_pred='2023-03-10'
+   )
+   print(f"Horizon (daily data, Mar 1 to Mar 10): {horizon1}")
+   # Expected: 10
+
+   # Example 2: Using integer years (no frequency)
+   horizon2 = compute_forecast_horizon(
+       start_pred=2024,
+       end_pred=2026
+       # No data/freq provided, calculates based on years
+   )
+   print(f"Horizon (years 2024 to 2026): {horizon2}")
+   # Expected: 3 (2024, 2025, 2026)
 
 
-.. _prepare_spatial_future_data:
+.. _prepare_spatial_future_data_util:
 
 prepare_spatial_future_data
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.prepare_spatial_future_data`
 
-**Purpose:** To prepare the static and dynamic input arrays needed
-to make *future predictions* using a trained sequence model,
-especially when data is organized by spatial locations (e.g.,
-different sensors or stores).
+**Purpose:** To prepare the specific static and dynamic input arrays
+needed to generate **out-of-sample future predictions** using a trained
+sequence model, particularly designed for datasets structured with
+spatial groupings (e.g., locations, sensors).
 
 **Functionality:**
-This function processes a dataset containing historical data, potentially
-grouped by location, to construct the inputs required for forecasting
-beyond the last known time point.
+Processes a DataFrame containing historical data, grouped by location,
+to construct model inputs for time steps beyond the training data range.
 
-1.  **Grouping:** Groups the input `final_processed_data` DataFrame
-    by spatial identifiers (e.g., 'longitude', 'latitude' specified
-    via `spatial_cols`). If no spatial columns are given, treats the
-    entire dataset as one group.
-2.  **Last Sequence Extraction:** For each group (location), it sorts
-    the data by time (`dt_col`) and extracts the *most recent* sequence
-    of length `sequence_length`.
-3.  **Static Input Preparation:** Extracts the static feature values
-    (defined by `static_feature_names` and `encoded_cat_columns`)
-    from this last sequence. These static features are assumed to remain
-    constant for future predictions for that location.
-4.  **Dynamic Input Preparation:** Extracts the dynamic feature values
-    (defined by `dynamic_feature_indices`) from the last sequence.
-5.  **Future Time Step Generation:** Determines the future time steps
-    to predict based on `forecast_horizon` and optionally provided
-    `future_years`.
-6.  **Future Dynamic Input Construction:** For each future time step:
-    * It takes the *last known dynamic sequence* as a template.
-    * It **updates the time feature** within this template sequence
-      to reflect the specific future time step being predicted. This
-      update often involves scaling the future time value using
-      provided or computed `scaling_params` ($\mu, \sigma$):
+1.  **Grouping & Sorting:** Groups data by `spatial_cols` and sorts
+    by time (`dt_col`).
+2.  **Last Sequence Extraction:** Extracts the most recent sequence
+    (length `sequence_length`) for each group/location.
+3.  **Input Preparation:** From the last sequence, it extracts:
+    * **Static Inputs:** Values from `static_feature_names`.
+    * **Dynamic Inputs:** Values from `dynamic_feature_indices`. This
+      forms a template for future dynamic inputs.
+4.  **Future Time Step Projection:** For each required future step (up
+    to `forecast_horizon`, based on `future_years`):
+    * It **updates the time feature(s)** within the dynamic template
+      sequence to reflect the future time step, potentially applying
+      inverse scaling if necessary using provided `scaling_params`
+      (:math:`\mu, \sigma`). Other dynamic features are usually carried
+      forward from the last known state.
 
-      .. math::
-         scaled\_time = \frac{\text{future\_time} - \mu}{\sigma + \epsilon}
+    .. math::
+       scaled\_future\_time = \frac{\text{future\_time} - \mu_{time}}{\sigma_{time} + \epsilon}
 
-    * Other dynamic features in the template sequence (from the last
-      known data) are typically carried forward.
-7.  **Output Collection:** Collects the prepared static inputs (repeated
-    for each future step of each location) and the corresponding
-    time-updated future dynamic inputs into NumPy arrays. It also
-    returns lists containing metadata like the future time steps,
-    location IDs, and coordinates for traceability.
+**Output:** Returns prepared NumPy arrays for static and future dynamic
+inputs, ready for the model's `.predict()` method, along with metadata
+like future time steps and location identifiers.
 
-**Usage Context:** Use this function *after* training a model, when
-you want to generate forecasts for future periods not present in the
-original dataset. It constructs the specific input arrays needed for
-the model's `.predict()` method by using the last known state for
-each location and projecting it forward by updating the time feature.
+**Usage Context:** This is a crucial function for **generating actual
+forecasts** after a model has been trained. Use it to create the input
+arrays needed to predict future values not seen during training, based
+on the last available historical data for each spatial group. See the
+CLI tools (:doc:`/user_guide/tools`) or forecasting examples
+(:doc:`/user_guide/examples/index`) for contextual usage. *(A direct code
+example here would require significant setup; refer to full workflow
+examples).*
 
-.. _reshape_xtft_data:
+.. _reshape_xtft_data_util:
 
 reshape_xtft_data
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.reshape_xtft_data`
 
 **Purpose:** A comprehensive utility to transform a time series
-DataFrame into the structured sequence format required for *training*
-and *evaluating* complex sequence models like XTFT and TFT. It handles
-the creation of rolling windows and separates static, dynamic, future,
-and target features.
+DataFrame into the structured sequence format with **separate arrays**
+for static, dynamic (past), future (known), and target features, as
+required for *training* and *evaluating* models like XTFT and TFT.
 
 **Functionality:**
-1.  **Validation & Grouping:** Validates input columns and converts the
-    datetime column (`dt_col`). Optionally groups the DataFrame by
-    `spatial_cols`; otherwise processes the entire DataFrame as one group.
-    Sorts data by time within each group.
-2.  **Rolling Window Generation:** Iterates through each group using a
-    sliding window approach based on `time_steps` ($T$) and
-    `forecast_horizons` ($H$).
-3.  **Feature Extraction per Window:** For each window starting at index $i$:
-    * **Static Features:** Extracts values from `static_cols`. Typically
-        takes the value from the first row of the group (assuming static
-        within a group).
-    * **Dynamic Features:** Extracts the sequence from `dynamic_cols` for
-        time steps $i$ to $i+T-1$.
-    * **Future Features:** Extracts values from `future_cols`. The current
-        implementation appears to take the future feature values from the
-        *start* of the input window ($i$) and repeats them across all $T$
-        time steps of the input sequence. *(Note: This specific handling
-        of future features might differ from other conventions and should
-        be considered during model design and interpretation).*
-    * **Target Features:** Extracts the sequence from `target_col` for the
-        *prediction* window, i.e., time steps $i+T$ to $i+T+H-1$.
-4.  **Data Aggregation:** Collects the extracted static, dynamic, future,
-    and target sequences from all windows and groups into separate lists.
-5.  **Output Conversion:** Converts the lists into NumPy arrays.
-    The function returns a tuple:
-    `(static_data, dynamic_data, future_data, target_data)`. Static and
-    future data arrays will be `None` if the corresponding columns are not
-    provided.
-6.  **Saving (Optional):** If `savefile` is provided, saves the processed
-    arrays and feature names to a file using `joblib`.
+1.  **Validation & Grouping:** Validates inputs, handles datetime column,
+    optionally groups by `spatial_cols`, sorts by time.
+2.  **Rolling Window:** Slides a window (length `time_steps` +
+    `forecast_horizons`) across the data within each group.
+3.  **Feature Extraction per Window:** For each window, it extracts and
+    separates sequences for:
+    * **Static Features:** From `static_cols` (value usually taken once per group).
+    * **Dynamic Features:** From `dynamic_cols` for the lookback period (`time_steps`).
+    * **Future Features:** From `future_cols` for a period relevant to the model
+      (often lookback + horizon). *(Note: Verify precise time window used for
+      future features based on implementation/model needs).*
+    * **Target Features:** From `target_col` for the forecast period (`forecast_horizons`).
+4.  **Output:** Returns a tuple of NumPy arrays:
+    `(static_data, dynamic_data, future_data, target_data)`. Arrays for
+    optional inputs (static/future) will be `None` if no corresponding columns
+    are provided. Static data typically has shape :math:`(NumSeq, NumStatic)`, while
+    others are 3D: :math:`(NumSeq, Time, Features)`.
 
 **Mathematical Concept (Rolling Window):**
-The core idea is creating pairs of input ($\mathbf{X}^{(i)}$) and target
-($\mathbf{Y}^{(i)}$) sequences. For a window starting at index $i$:
+Generates pairs of input sequences (:math:`\mathbf{X}^{(i)}`, possibly split by type)
+and target sequences (:math:`\mathbf{Y}^{(i)}`) for supervised training.
 
 .. math::
-   \mathbf{X}^{(i)} =
-   \begin{bmatrix}
-      \mathbf{features}_{i} \\
-      \mathbf{features}_{i+1} \\
-      \vdots \\
-      \mathbf{features}_{i+T-1}
-   \end{bmatrix}
-   \quad , \quad
-   \mathbf{Y}^{(i)} =
-   \begin{bmatrix}
-      \text{target}_{i+T} \\
-      \text{target}_{i+T+1} \\
-      \vdots \\
-      \text{target}_{i+T+H-1}
-   \end{bmatrix}
+   \mathbf{X}^{(i)} = \text{Features}_{i \dots i+T-1} \quad , \quad
+   \mathbf{Y}^{(i)} = \text{Targets}_{i+T \dots i+T+H-1}
 
-where $\mathbf{features}_t$ includes the relevant static (repeated),
-dynamic, and future features for time $t$.
-
-**Usage Context:** This function is designed to be a primary tool for
-preparing complete datasets for training or evaluating TFT/XTFT models
-directly from a Pandas DataFrame. It handles the complexities of
-sequence generation, feature type separation, and optional spatial
-grouping.
-
+**Usage Context:** This is the **recommended primary tool** for preparing
+datasets directly from DataFrames for training or evaluating `fusionlab`'s
+TFT and XTFT models. It handles sequence creation, feature type separation,
+and spatial grouping in one step, producing the exact array formats needed
+by the models' `call` methods. See examples like
+:doc:`/user_guide/examples/advanced_forecasting_xtft` for usage. *(A direct
+code example here would be very similar to the full model examples; refer
+to those for context).*
 
 .. raw:: html
 
-    <hr>
-    
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
+
 Forecasting & Visualization
 ---------------------------
 
 These functions assist with generating predictions from trained models
 and visualizing the forecast results.
 
-.. _generate_forecast:
+.. _generate_forecast_util:
 
 generate_forecast
-~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.generate_forecast`
 
 **Purpose:** To generate future predictions using a pre-trained
-``fusionlab`` model (like XTFT or TFT). This function acts as a
+``fusionlab`` model (like :class:`~fusionlab.nn.XTFT` or
+:class:`~fusionlab.nn.transformers.TFT`). This function acts as a
 high-level wrapper that handles preparing the necessary model inputs
 from the end of the provided training data and formats the model's
 output into a structured DataFrame.
 
 **Functionality:**
-1.  **Model Validation:** Ensures the provided `xtft_model` is a
-    valid, trained Keras model.
-2.  **Input Preparation:**
-    * Optionally groups `train_data` by `spatial_cols`.
-    * For each group (or the entire dataset):
-        * Extracts the *last* sequence of length `time_steps` from
-            the sorted `train_data`.
-        * Constructs the required input arrays for the model's
-            `.predict()` method:
-            * `X_static`: Uses static features from the last record.
-                (Uses zeros if `static_features` not provided).
-            * `X_dynamic`: Uses dynamic features from the last
-                `time_steps` records.
-            * `X_future`: Uses future features. The current implementation
-                takes values from the *first* record of the last
-                sequence and tiles them across `time_steps`. (Uses zeros
-                if `future_features` not provided).
-3.  **Prediction:** Calls `xtft_model.predict()` with the prepared
-    `[X_static, X_dynamic, X_future]` arrays for each group.
-    Conceptually:
+1.  **Model Validation:** Ensures ``xtft_model`` is a valid Keras model.
+2.  **Input Preparation:** Groups ``train_data`` by ``spatial_cols``
+    (if provided). For each group, extracts the last sequence of
+    length ``time_steps`` and constructs the input arrays
+    ``[X_static, X_dynamic, X_future]`` needed for prediction, using
+    logic similar to :func:`prepare_spatial_future_data`.
+3.  **Prediction:** Calls ``xtft_model.predict()`` with the prepared
+    arrays for each group. Conceptually:
 
     .. math::
-       \hat{y}_{t+1...t+H} = f_{model}(X_{\text{static}}, X_{\text{dynamic}}, X_{\text{future}})
+       \hat{\mathbf{y}}_{t+1...t+H} = f_{model}(\mathbf{X}_{\text{static}}, \mathbf{X}_{\text{dynamic}}, \mathbf{X}_{\text{future}})
 
-    where $H$ is the `forecast_horizon`.
-4.  **Output Formatting:**
-    * Determines the future dates/periods (`forecast_dt`), inferring
-        automatically if set to `"auto"`.
-    * Organizes the raw predictions into a Pandas DataFrame.
-    * Includes spatial identifiers (if used) and the corresponding
-        forecast date/period for each prediction.
-    * Creates columns for point predictions (`<tname>_pred`) or
-        quantile predictions (`<tname>_qXX`) based on the `mode` and
-        `q` parameters.
-5.  **Evaluation (Optional):** If `test_data` is provided, it aligns
-    the forecasts with the actual values based on dates and spatial
-    columns (if applicable) for the common periods within the
-    `forecast_horizon`. It then calculates and prints the R² score
-    (comparing actuals to median/point forecast) and, if in
-    `'quantile'` mode, the coverage score (using the lowest and
-    highest specified quantiles).
-6.  **Saving (Optional):** Saves the resulting forecast DataFrame to
-    a CSV file if `savefile` is specified.
+    where :math:`H` is the ``forecast_horizon``.
+4.  **Output Formatting:** Organizes predictions into a Pandas
+    DataFrame, including spatial identifiers and forecast dates/periods
+    (``forecast_dt``). Creates columns for point predictions
+    (``<tname>_pred``) or quantile predictions (``<tname>_qXX``).
+5.  **Evaluation (Optional):** If ``test_data`` is provided, aligns
+    forecasts with actuals and calculates/prints R² and Coverage
+    Scores for the overlapping periods within the horizon.
+6.  **Saving (Optional):** Saves the forecast DataFrame if ``savefile``
+    is specified.
 
-**Usage Context:** This is the primary function to use after training
-a model to generate out-of-sample forecasts. It simplifies the process
-of preparing the specific inputs needed for prediction directly from
-the training dataset and provides the results in an easily usable
-DataFrame format, optionally including basic evaluation metrics if
-test data is available.
+**Usage Context:** This is the primary function for **generating
+out-of-sample forecasts** after model training. It simplifies input
+preparation based on historical data and structures the results. See
+the CLI tools (:doc:`/user_guide/tools`) or forecasting examples
+(:doc:`/user_guide/examples/index`) for contextual usage. *(A direct
+code example here would require significant setup; refer to full
+workflow examples).*
 
-.. _visualize_forecasts:
+.. _visualize_forecasts_util:
 
 visualize_forecasts
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.visualize_forecasts`
 
 **Purpose:** To create visualizations comparing forecasted values
-against actual values (if available), particularly useful for spatial
-data or analyzing performance across different time periods.
+against actual values (if available), particularly useful for
+spatial data or analyzing performance across different time periods.
 
 **Functionality:**
-1.  **Data Filtering:** Selects data from `forecast_df` and optional
-    `test_data` corresponding to the specified `eval_periods` (or
-    infers up to 3 periods if `eval_periods` is `None`). Ensures only
-    common periods present in both forecast and test data (if provided)
-    are used.
-2.  **Column Identification:** Determines the column names for predicted
-    values (e.g., `<tname>_q50` or `<tname>_pred` based on `mode`)
-    and actual values (`tname` or `actual_name` in `test_data`).
-    Identifies coordinate columns (`x`, `y`) based on `kind` ('spatial'
-    defaults to 'longitude'/'latitude').
-3.  **Plot Grid Setup:** Creates a `matplotlib` subplot grid. The size
-    depends on the number of `eval_periods` and `max_cols`. If
-    `test_data` is provided, it creates two plots per period (Actual
-    vs. Predicted); otherwise, just one plot (Predicted).
-4.  **Plotting:** For each evaluation period:
-    * Creates a scatter plot of actual values (if `test_data` given),
-        coloring points by the actual value.
-    * Creates a scatter plot of predicted values, coloring points by
-        the predicted value.
-    * Uses `x` and `y` columns for plot coordinates.
-    * Applies a consistent color map (`cmap`) and value range (`vmin`,
-        `vmax`) across all plots for comparability.
-    * Adds titles indicating the period and whether it's actual or
-        predicted data, labels, optional grid, and color bars.
-5.  **Display:** Shows the generated `matplotlib` figure.
+1.  **Data Filtering:** Selects data for specified ``eval_periods`` from
+    ``forecast_df`` and optional ``test_data``.
+2.  **Column Identification:** Determines prediction, actual, and
+    coordinate column names.
+3.  **Plot Grid Setup:** Creates a `matplotlib` grid showing actual vs.
+    predicted plots for each period.
+4.  **Plotting:** Generates scatter plots for actuals (if available)
+    and predictions, colored by value, using specified coordinates.
+    Applies consistent colormap and range. Adds titles, labels,
+    colorbars.
+5.  **Display:** Shows the `matplotlib` figure.
 
-**Usage Context:** Use this function after generating forecasts (e.g.,
-using :func:`generate_forecast`) to visually assess the model's
-performance. It's particularly helpful for:
-* Comparing predicted patterns to actual patterns spatially.
-* Observing how forecast accuracy changes over different periods.
-* Checking the spread and median of quantile forecasts against actuals.
+**Usage Context:** Use this after generating forecasts (e.g., via
+:func:`generate_forecast`) to visually inspect spatial patterns, compare
+predictions to actuals over time, or assess quantile forecast spreads.
+See the forecasting examples (:doc:`/user_guide/examples/index`) for
+contextual usage. *(A direct code example here requires forecast data;
+refer to full workflow examples).*
 
-
-.. _forecast_single_step:
+.. _forecast_single_step_util:
 
 forecast_single_step
 ~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.forecast_single_step`
 
-**Purpose:** To generate a forecast for only the *next single time step*
-using a pre-trained ``fusionlab`` model and pre-prepared input arrays.
+**Purpose:** To generate a forecast for only the **next single time step**
+(:math:`H=1`) using a pre-trained ``fusionlab`` model and
+**pre-prepared** input arrays.
 
 **Functionality:**
-1.  **Input:** Takes a validated Keras `xtft_model` and a list/tuple
-    `inputs` containing the NumPy arrays `[X_static, X_dynamic, X_future]`
-    ready for prediction.
-2.  **Prediction:** Calls `xtft_model.predict(inputs)` to get the raw
-    model output. It assumes the prediction for the first step ahead
-    is the relevant one.
+1.  **Input:** Takes a validated Keras ``xtft_model`` and ``inputs``
+    (a list/tuple `[X_static, X_dynamic, X_future]`).
+2.  **Prediction:** Calls ``xtft_model.predict(inputs)``. Assumes the
+    model outputs multiple horizon steps and extracts the prediction
+    for the first step (:math:`t+1`).
+3.  **Output Formatting:** Creates a Pandas DataFrame including spatial
+    columns (if specified), optional datetime, optional actuals (`y`),
+    and prediction columns (``<tname>_pred`` or ``<tname>_qXX``).
+4.  **Masking (Optional):** Masks predictions based on `mask_values` in `y`.
+5.  **Evaluation (Optional):** Calculates R²/Coverage if `y` provided.
+6.  **Saving (Optional):** Saves DataFrame if `savefile` specified.
 
-    .. math::
-       \hat{y}_{t+1} = f_{model}(X_{\text{static}}, X_{\text{dynamic}}, X_{\text{future}})_{step=1}
+**Usage Context:** Use when you only need the immediate next prediction
+and have already manually prepared the required model input arrays
+(`X_static`, `X_dynamic`, `X_future`). Useful in scenarios like
+real-time single-step updates or when integrating into systems where
+input preparation is handled separately.
 
-3.  **Output Formatting:** Creates a Pandas DataFrame containing the
-    predictions.
-    * Includes spatial columns (e.g., longitude, latitude) if
-        `spatial_cols` are provided (extracted from the first columns
-        of `X_static`).
-    * Optionally adds a `dt_col` column (values need external context).
-    * Optionally adds actual target values (`y`) if provided.
-    * Adds prediction columns:
-        * **Quantile Mode:** `<tname>_qXX` for each quantile `q`.
-        * **Point Mode:** `<tname>_pred`.
-4.  **Masking (Optional):** If `apply_mask=True`, uses the provided
-    `mask_values` in the actual target column (`y`) to mask corresponding
-    predictions (setting them to `mask_fill_value`). Requires `y`.
-5.  **Evaluation (Optional):** If actual target values `y` are provided,
-    computes and prints the R² score and (for quantile mode) the
-    coverage score between `y` and the relevant prediction column(s).
-6.  **Saving (Optional):** Saves the resulting DataFrame to a CSV file
-    if `savefile` is specified.
+**Code Example:**
 
-**Usage Context:** Use this function when you have already prepared the
-specific `X_static`, `X_dynamic`, and `X_future` input arrays needed
-to predict the immediate next time step for a batch of samples/locations.
-This is useful for direct prediction tasks where the input preparation
-is handled separately, unlike :func:`generate_forecast` which prepares
-inputs from historical data internally.
+.. code-block:: python
+   :linenos:
 
-.. _forecast_multi_step:
+   import numpy as np
+   import pandas as pd
+   import tensorflow as tf
+   # Assuming forecast_single_step and a dummy model class are available
+   from fusionlab.nn.utils import forecast_single_step
+   # from fusionlab.nn import XTFT # Replace with your actual model class
+
+   # Dummy Model
+   class DummyModel(tf.keras.Model):
+       def __init__(self, horizon=1, num_outputs=1):
+           super().__init__()
+           self.horizon = horizon
+           self.num_outputs=num_outputs
+           # Dummy layer to ensure model is callable
+           self.dense = tf.keras.layers.Dense(horizon * num_outputs)
+       def call(self, inputs):
+           # Simulate output shape (B, H, O) or (B, H, Q)
+           batch_size = tf.shape(inputs[1])[0] # Get from dynamic
+           # Flatten and project to simulate processing
+           flat_in = tf.keras.layers.Flatten()(inputs[1][:,-1,:]) # Use last step dynamic
+           out_flat = self.dense(flat_in) # Shape (B, H*O)
+           return tf.reshape(out_flat, (batch_size, self.horizon, self.num_outputs))
+
+   # Config & Dummy Data
+   B, T, H_model = 4, 12, 6 # Model trained for H=6
+   D_dyn, D_stat, D_fut = 5, 3, 2
+   static_in = tf.random.normal((B, D_stat))
+   dynamic_in = tf.random.normal((B, T, D_dyn))
+   future_in = tf.random.normal((B, T + H_model, D_fut)) # Future for model call
+   # Dummy target for NEXT SINGLE STEP ONLY (H=1)
+   y_true_single = tf.random.normal((B, 1)) # Needs to match output dim (usually 1)
+
+   # Instantiate Dummy Model (trained for H=6, output O=1)
+   model = DummyModel(horizon=H_model, num_outputs=1)
+   # Dummy call to build model
+   _ = model([static_in, dynamic_in, future_in])
+
+   # Prepare inputs for forecast_single_step
+   model_inputs = [static_in, dynamic_in, future_in]
+
+   # Generate single step forecast
+   forecast_df = forecast_single_step(
+       xtft_model=model,
+       inputs=model_inputs,
+       target_col='Value',
+       mode='point', # Point forecast
+       y=y_true_single, # Provide actuals for next step
+       evaluate=True, # Ask for evaluation
+       spatial_cols=['ID'], # Assume static_in had ID column (needs adjustment)
+       # dt_col='Timestamp' # Optional
+   )
+
+   print("\n--- Single Step Forecast ---")
+   print(forecast_df.head())
+
+
+.. _forecast_multi_step_util:
 
 forecast_multi_step
 ~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.forecast_multi_step`
 
-**Purpose:** To generate forecasts for *multiple future time steps*
+**Purpose:** To generate forecasts for **multiple future time steps**
 (up to a specified `forecast_horizon`) using a pre-trained
 ``fusionlab`` model and pre-prepared input arrays.
 
 **Functionality:**
-1.  **Input:** Similar to `forecast_single_step`, takes a validated
-    `xtft_model` and `inputs = [X_static, X_dynamic, X_future]`. Requires
-    `forecast_horizon` to be specified.
-2.  **Prediction:** Calls `xtft_model.predict(inputs)`. The model is
-    expected to output predictions for the entire horizon, typically
-    with shape `(Batch, Horizon, NumOutputs)`.
-3.  **Initial Output Formatting (Wide):** Iterates through each sample
-    and each forecast step `i` (from 1 to `forecast_horizon`). Creates
-    a wide-format DataFrame where each row corresponds to a sample,
-    and columns represent predictions for specific steps and quantiles
-    (e.g., `<tname>_q10_step1`, `<tname>_q50_step1`,
-    `<tname>_q10_step2`, etc.) or points (`<tname>_pred_step1`,
-    `<tname>_pred_step2`, etc.). Includes spatial columns and optional
-    `dt_col` placeholders if specified. Actual values (`y`) are also
-    added if provided. A `BatchDataFrameBuilder` is used internally
-    for memory efficiency with large numbers of samples.
-4.  **Reshaping to Long Format:** Calls the internal utility `step_to_long`
-    to likely transform the wide-format DataFrame into a long format,
-    where each row represents a single prediction for a specific sample,
-    time step, and potentially quantile. *(Note: The exact output format
-    depends on the implementation of `step_to_long`, but long format is
-    common for multi-step results).*
-5.  **Masking (Optional):** If `apply_mask=True`, masks predictions based
-    on `mask_values` in the actual target column (`y`). Requires `y`.
-6.  **Evaluation (Optional):** If actual target values `y` are provided,
-    computes and prints R² and Coverage Scores, comparing predictions
-    against actuals across *all* available forecast steps (up to
-    `forecast_horizon` or the length of `y`).
-7.  **Saving (Optional):** Saves the final (likely long-format)
-    DataFrame to a CSV file if `savefile` is specified.
+1.  **Input:** Takes ``xtft_model``, ``inputs = [X_s, X_d, X_f]``, and
+    ``forecast_horizon``.
+2.  **Prediction:** Calls ``xtft_model.predict(inputs)``, expecting an
+    output covering the full horizon (shape :math:`(B, H, Outputs)`).
+3.  **Output Formatting (Wide -> Long):** Organizes the multi-step
+    predictions. It first creates a wide-format DataFrame (columns
+    like `<tname>_pred_step1`, `<tname>_pred_step2`, etc.) using an
+    internal `BatchDataFrameBuilder`, then likely converts it to a
+    long format using :func:`step_to_long`, where each row represents
+    a specific sample, forecast step, and prediction value.
+4.  **Masking (Optional):** Masks predictions based on `mask_values` in `y`.
+5.  **Evaluation (Optional):** Calculates R²/Coverage across all horizon
+    steps if `y` (with shape :math:`(B, H, O)`) is provided.
+6.  **Saving (Optional):** Saves the final DataFrame if `savefile` given.
 
-**Usage Context:** Use when you need predictions spanning multiple time
-steps ahead, based on a specific set of prepared input arrays. Like
-`forecast_single_step`, it assumes input preparation is done externally.
-It handles the complexity of organizing and potentially reshaping
-multi-step outputs from the model.
+**Usage Context:** Use when you need multi-step forecasts based on a
+specific set of pre-prepared input arrays. It handles the organization
+of the model's multi-step output into a structured DataFrame.
 
-.. _generate_forecast_with:
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import numpy as np
+   import pandas as pd
+   import tensorflow as tf
+   # Assuming forecast_multi_step and a dummy model class are available
+   from fusionlab.nn.utils import forecast_multi_step
+   # from fusionlab.nn import XTFT # Replace with your actual model class
+
+   # Dummy Model (same as single-step example)
+   class DummyModel(tf.keras.Model):
+       def __init__(self, horizon=1, num_outputs=1):
+           super().__init__()
+           self.horizon = horizon; self.num_outputs = num_outputs
+           self.dense = tf.keras.layers.Dense(horizon * num_outputs)
+       def call(self, inputs):
+           batch_size = tf.shape(inputs[1])[0]
+           flat_in = tf.keras.layers.Flatten()(inputs[1][:,-1,:])
+           out_flat = self.dense(flat_in)
+           return tf.reshape(out_flat, (batch_size, self.horizon, self.num_outputs))
+
+   # Config & Dummy Data
+   B, T, H = 4, 12, 6 # Horizon H=6
+   D_dyn, D_stat, D_fut = 5, 3, 2
+   output_dim = 1
+   static_in = tf.random.normal((B, D_stat))
+   dynamic_in = tf.random.normal((B, T, D_dyn))
+   future_in = tf.random.normal((B, T + H, D_fut)) # Future for model call
+   # Dummy target for MULTIPLE steps (H=6)
+   y_true_multi = tf.random.normal((B, H, output_dim))
+
+   # Instantiate Dummy Model (trained for H=6, output O=1)
+   model = DummyModel(horizon=H, num_outputs=output_dim)
+   _ = model([static_in, dynamic_in, future_in]) # Build
+
+   # Prepare inputs for forecast_multi_step
+   model_inputs = [static_in, dynamic_in, future_in]
+
+   # Generate multi-step forecast
+   forecast_df_multi = forecast_multi_step(
+       xtft_model=model,
+       inputs=model_inputs,
+       target_col='Value',
+       forecast_horizon=H, # Specify horizon
+       mode='point',
+       y=y_true_multi, # Provide multi-step actuals
+       evaluate=True,
+       spatial_cols=['ID'], # Assume static_in had ID
+       # dt_col='Timestamp' # Optional
+   )
+
+   print("\n--- Multi Step Forecast (Long Format) ---")
+   print(forecast_df_multi.head()) # Display long format
+
+
+.. _generate_forecast_with_util:
 
 generate_forecast_with
-~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.generate_forecast_with`
 
 **Purpose:** A convenient wrapper function that automatically calls
 either :func:`forecast_single_step` or :func:`forecast_multi_step`
-based on the specified `forecast_horizon`.
+based on the specified ``forecast_horizon``.
 
 **Functionality:**
-1.  Takes all the same arguments as `forecast_single_step` and
-    `forecast_multi_step` (including the `xtft_model`, prepared
-    `inputs`, `forecast_horizon`, etc.).
-2.  Checks the value of `forecast_horizon`:
-    * If `forecast_horizon == 1`, it internally calls
-      :func:`forecast_single_step`, passing along all the other
-      arguments.
-    * If `forecast_horizon > 1`, it internally calls
-      :func:`forecast_multi_step`, passing along all the other
-      arguments.
-3.  Returns the DataFrame produced by the called function (either
-    single-step or multi-step results).
+1. Takes all the same arguments as :func:`forecast_single_step` and
+   :func:`forecast_multi_step`.
+2. Checks ``forecast_horizon``:
+   * If ``forecast_horizon == 1``, calls :func:`forecast_single_step`.
+   * If ``forecast_horizon > 1``, calls :func:`forecast_multi_step`.
+3. Returns the DataFrame produced by the called function.
 
-**Usage Context:** This function provides a unified interface for
-generating forecasts when using pre-prepared input arrays. Instead of
-manually choosing between the single-step and multi-step functions,
-users can simply call `generate_forecast_with` and let it dispatch
-the task based on the desired `forecast_horizon`. This can simplify
-workflows where the forecast length might vary.
+**Usage Context:** Provides a unified interface for generating forecasts
+from pre-prepared input arrays, regardless of whether you need one step
+or multiple steps ahead. Simplifies workflows where the forecast length
+might be a variable parameter.
+
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import numpy as np
+   import pandas as pd
+   import tensorflow as tf
+   # Assuming generate_forecast_with and dummy model are available
+   from fusionlab.nn.utils import generate_forecast_with
+   # from my_models import DummyModel # Use same dummy model as above
+
+   # Use Dummy Model and Data from previous examples
+   B, T, H = 4, 12, 6
+   D_dyn, D_stat, D_fut = 5, 3, 2
+   output_dim = 1
+   static_in = tf.random.normal((B, D_stat))
+   dynamic_in = tf.random.normal((B, T, D_dyn))
+   future_in = tf.random.normal((B, T + H, D_fut))
+   y_true_multi = tf.random.normal((B, H, output_dim))
+   model = DummyModel(horizon=H, num_outputs=output_dim)
+   _ = model([static_in, dynamic_in, future_in]) # Build
+   model_inputs = [static_in, dynamic_in, future_in]
+
+   # Example 1: Generate single step (H=1 passed implicitly)
+   print("--- generate_forecast_with (H=1) ---")
+   df_single = generate_forecast_with(
+       xtft_model=model,
+       inputs=model_inputs,
+       target_col='Value',
+       # forecast_horizon=1 # (Default or set to 1)
+       mode='point',
+       y=y_true_multi[:, :1, :] # Provide only first step actuals
+   )
+   print(df_single.head())
+
+   # Example 2: Generate multi step
+   print("\n--- generate_forecast_with (H=6) ---")
+   df_multi = generate_forecast_with(
+       xtft_model=model,
+       inputs=model_inputs,
+       target_col='Value',
+       forecast_horizon=H, # Explicitly set > 1
+       mode='point',
+       y=y_true_multi
+   )
+   print(df_multi.head())
 
 
 .. raw:: html
 
-    <hr>
-    
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
 Data Reshaping Utilities
 ------------------------
 
-.. _step_to_long:
+These functions assist in transforming data between different formats
+commonly encountered in multi-step time series forecasting workflows.
+
+.. _step_to_long_util:
 
 step_to_long
-~~~~~~~~~~~~
+~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.nn.utils.step_to_long`
 
 **Purpose:** To transform a DataFrame containing multi-step forecast
@@ -607,28 +820,94 @@ results from a "wide" format into a "long" format. In the wide
 format, each forecast step typically occupies separate columns (e.g.,
 `target_q50_step1`, `target_q50_step2`). The long format reshapes
 this so that each row represents a single prediction for a specific
-sample, time step, and possibly quantile.
+sample (identified by original index or identifier columns), time
+step into the future, and possibly quantile level.
 
 **Functionality:**
-1.  Takes a wide-format DataFrame `df` as input, along with metadata
-    like `tname`, `dt_col`, `spatial_cols`, and `mode` ('quantile' or
-    'point').
-2.  Identifies the columns corresponding to different forecast steps
-    and quantiles based on naming conventions (e.g., `_stepX`, `_qYY`).
-3.  Uses internal helper functions (`_step_to_long_q` for quantile,
-    `_step_to_long_pred` for point) which likely employ Pandas
-    melting or stacking operations.
-4.  Reshapes the data, creating new columns for the forecast step
-    (e.g., 'step') and quantile (e.g., 'quantile'), and consolidating
-    the prediction values into a single column (e.g., 'predicted_value').
-5.  Identifier columns (`dt_col`, `spatial_cols`, actual values if
-    present) are typically preserved and duplicated across the reshaped
-    rows.
-6.  Optionally sorts the final long-format DataFrame.
+1. Takes a wide-format DataFrame `df` as input, along with metadata
+   like `tname` (target variable base name), `dt_col` (datetime/period
+   column), `spatial_cols` (identifier columns), and `mode`
+   ('quantile' or 'point').
+2. Identifies the columns corresponding to different forecast steps
+   and quantiles based on naming conventions. It typically looks for
+   patterns like `_stepX` and `_qYY` appended to the `tname`.
+3. Uses internal helper functions (likely employing Pandas melting,
+   stacking, or pivoting operations) to unpivot the step-based columns.
+4. Reshapes the data, creating new columns usually named 'step' (for
+   the forecast horizon step) and potentially 'quantile'. It
+   consolidates the prediction values into a single column (e.g.,
+   'predicted_value').
+5. Identifier columns (`dt_col`, `spatial_cols`), and any actual target
+   value columns present in the wide DataFrame are typically preserved
+   and duplicated appropriately across the newly created long-format rows.
+6. Optionally sorts the final long-format DataFrame based on
+   identifiers and step.
 
 **Usage Context:** This function is primarily used as an internal
 helper within :func:`forecast_multi_step` to convert the initially
-generated wide-format predictions into a more standardized long format.
-Users might also find it useful if they have wide-format forecast data
-from other sources and want to reshape it for easier plotting or analysis.
+generated wide-format predictions into a more standardized long format,
+which is often easier for plotting or subsequent analysis (e.g.,
+evaluating performance per step). Users might also find it useful if
+they have wide-format forecast data from other sources and want to
+reshape it.
 
+**Code Example:**
+
+.. code-block:: python
+   :linenos:
+
+   import pandas as pd
+   import numpy as np
+   from fusionlab.nn.utils import step_to_long
+
+   # 1. Create Dummy Wide-Format DataFrame (simulating output)
+   # (e.g., as might be initially created by forecast_multi_step)
+   data_wide = {
+       'ID': [1, 1, 2, 2],
+       'ForecastStartDate': pd.to_datetime(['2023-01-01', '2023-01-02',
+                                            '2023-01-01', '2023-01-02']),
+       'Actual_step1': [10, 11, 20, 21],
+       'Actual_step2': [12, 13, 22, 23],
+       # Point predictions
+       'Value_pred_step1': [9.8, 11.2, 19.5, 21.3],
+       'Value_pred_step2': [11.5, 13.1, 21.8, 23.2],
+       # Quantile predictions
+       'Value_q10_step1': [8.8, 10.2, 18.5, 20.3],
+       'Value_q50_step1': [9.8, 11.2, 19.5, 21.3], # Same as point
+       'Value_q90_step1': [10.8, 12.2, 20.5, 22.3],
+       'Value_q10_step2': [10.5, 12.1, 20.8, 22.2],
+       'Value_q50_step2': [11.5, 13.1, 21.8, 23.2], # Same as point
+       'Value_q90_step2': [12.5, 14.1, 22.8, 24.2],
+   }
+   df_wide = pd.DataFrame(data_wide)
+   print("--- Original Wide DataFrame ---")
+   print(df_wide)
+
+   # 2. Convert Point Forecast Columns to Long Format
+   df_long_point = step_to_long(
+       df=df_wide.drop(columns=[c for c in df_wide if '_q' in c]), # Keep only pred cols
+       tname='Value',
+       dt_col='ForecastStartDate',
+       mode='point',
+       spatial_cols=['ID'],
+       pred_colname='Value_pred' # Name for the prediction column
+   )
+   print("\n--- Long Format DataFrame (Point Mode) ---")
+   print(df_long_point)
+
+   # 3. Convert Quantile Forecast Columns to Long Format
+   df_long_quantile = step_to_long(
+       df=df_wide.drop(columns=[c for c in df_wide if '_pred_' in c]), # Keep only quantile cols
+       tname='Value',
+       dt_col='ForecastStartDate',
+       mode='quantile',
+       spatial_cols=['ID'],
+       pred_colname='Value_quantile' # Name for the prediction column
+   )
+   print("\n--- Long Format DataFrame (Quantile Mode) ---")
+   print(df_long_quantile)
+
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">

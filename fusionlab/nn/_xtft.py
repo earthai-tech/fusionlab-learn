@@ -17,7 +17,7 @@ from ..api.property import NNLearner
 from ..compat.sklearn import validate_params, Interval, StrOptions 
 from ..core.handlers import param_deprecated_message 
 from ..utils.deps_utils import ensure_pkg
-from ..decorators import Appender , Deprecated
+from ..decorators import Appender
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from ._nn_docs import _shared_docs 
@@ -58,6 +58,7 @@ if KERAS_BACKEND:
     tf_is_nan =KERAS_DEPS.is_nan 
     tf_reduce_all=KERAS_DEPS.reduce_all
     tf_zeros_like=KERAS_DEPS.zeros_like
+    tf_squeeze = KERAS_DEPS.squeeze
     
     tf_autograph.set_verbosity(0)
     
@@ -72,7 +73,8 @@ if KERAS_BACKEND:
         prediction_based_loss
     )
     from .utils import set_default_params
-    from .components import ( 
+    from .components import (
+            Activation, 
             AdaptiveQuantileLoss,
             AnomalyLoss,
             CrossAttention,
@@ -93,7 +95,9 @@ if KERAS_BACKEND:
             aggregate_time_window_output
         )
     
-DEP_MSG = dependency_message('transformers') 
+DEP_MSG = dependency_message('nn.transformers') 
+
+logger = fusionlog().get_fusionlab_logger(__name__)
 
 @register_keras_serializable('fusionlab.nn.transformers', name="XTFT")
 @doc (
@@ -198,13 +202,9 @@ class XTFT(Model, NNLearner):
     ):
         super().__init__(**kw)
 
-        # Initialize Logger
-        self.logger = fusionlog().get_gofast_logger(__name__)
+        self.activation = Activation(activation).activation_str 
         
-        #self.activation = Activation(activation) 
-        self.activation = activation #.activation
-        
-        self.logger.debug(
+        logger.debug(
             "Initializing XTFT with parameters: "
             f"static_input_dim={static_input_dim}, "
             f"dynamic_input_dim={dynamic_input_dim}, "
@@ -239,7 +239,6 @@ class XTFT(Model, NNLearner):
         self.num_heads = num_heads
         self.dropout_rate = dropout_rate
         self.output_dim = output_dim
-        # self.anomaly_config=set_anomaly_config(anomaly_config)
         self.attention_units = attention_units
         self.hidden_units = hidden_units
         self.lstm_units = lstm_units
@@ -303,7 +302,7 @@ class XTFT(Model, NNLearner):
                 return_loss_weight=True
             )
 
-        self.logger.debug(
+        logger.debug(
             f"anomaly_config={self.anomaly_config.keys()}, "
             f"anomaly_detection_strategy={anomaly_detection_strategy}"
             f"anomaly_loss_weight={anomaly_loss_weight}"
@@ -440,7 +439,7 @@ class XTFT(Model, NNLearner):
             static_input, 
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Normalized Static Shape: {normalized_static.shape}"
         )
         # Apply -> GRN pipeline to cross attention
@@ -450,7 +449,7 @@ class XTFT(Model, NNLearner):
                 static_features,
                 training=training
             )
-            self.logger.debug(
+            logger.debug(
                 "Static Features after BatchNorm Shape: "
                 f"{static_features.shape}"
             )
@@ -459,7 +458,7 @@ class XTFT(Model, NNLearner):
             static_features,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Static Features Shape: {static_features.shape}"
         )
         # XXX TODO # check apply --> GRN
@@ -473,7 +472,7 @@ class XTFT(Model, NNLearner):
             [dynamic_input, future_input],
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Embeddings Shape: {embeddings.shape}"
         )
     
@@ -484,13 +483,13 @@ class XTFT(Model, NNLearner):
             training=training 
         )  
         
-        self.logger.debug(
+        logger.debug(
             f"Embeddings with Positional Encoding Shape: {embeddings.shape}"
         )
     
         if self.use_residuals:
             embeddings = embeddings + self.residual_dense(embeddings)
-            self.logger.debug(
+            logger.debug(
                 "Embeddings with Residuals Shape: "
                 f"{embeddings.shape}"
             )
@@ -514,7 +513,7 @@ class XTFT(Model, NNLearner):
         # Tile to match tf_time steps: (B, T, features)
         lstm_features = tf_tile(lstm_features, [1, time_steps, 1])
 
-        self.logger.debug(
+        logger.debug(
             f"LSTM Features Shape: {lstm_features.shape}"
         )
     
@@ -523,7 +522,7 @@ class XTFT(Model, NNLearner):
             [dynamic_input, future_input],
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Hierarchical Attention Shape: {hierarchical_att.shape}"
         )
     
@@ -531,7 +530,7 @@ class XTFT(Model, NNLearner):
             [dynamic_input, embeddings],
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Cross Attention Output Shape: {cross_attention_output.shape}"
         )
     
@@ -539,7 +538,7 @@ class XTFT(Model, NNLearner):
             hierarchical_att,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             "Memory Augmented Attention Output Shape: "
             f"{memory_attention_output.shape}"
         )
@@ -550,7 +549,7 @@ class XTFT(Model, NNLearner):
             tf_expand_dims(static_features, axis=1),
             [1, time_steps, 1]
         )
-        self.logger.debug(
+        logger.debug(
             "Static Features Expanded Shape: "
             f"{static_features_expanded.shape}"
         )
@@ -562,7 +561,7 @@ class XTFT(Model, NNLearner):
             hierarchical_att,
             memory_attention_output,
         ])
-        self.logger.debug(
+        logger.debug(
             f"Combined Features Shape: {combined_features.shape}"
         )
     
@@ -570,7 +569,7 @@ class XTFT(Model, NNLearner):
             combined_features,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             "Attention Fusion Output Shape: "
             f"{attention_fusion_output.shape}"
         )
@@ -579,7 +578,7 @@ class XTFT(Model, NNLearner):
             attention_fusion_output,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Time Window Output Shape: {time_window_output.shape}"
         )
         # final_agg: last/average/flatten applied on time_window_output
@@ -591,7 +590,7 @@ class XTFT(Model, NNLearner):
             final_features,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Decoder Outputs Shape: {decoder_outputs.shape}"
         )
     
@@ -626,7 +625,7 @@ class XTFT(Model, NNLearner):
                 self.anomaly_config, 
                 self.forecast_horizon
             )
-            self.logger.debug(
+            logger.debug(
                 "Using Anomaly Scores from anomaly_config"
                 f" Shape: {self.anomaly_scores.shape}")
             
@@ -642,7 +641,7 @@ class XTFT(Model, NNLearner):
             # )
             default_y_pred = tf_zeros_like(self.anomaly_scores)
 
-            self.logger.debug(
+            logger.debug(
                 "Using Anomaly Scores from anomaly_config with"
                 f" weight: {self.anomaly_loss_weight}.")
             
@@ -652,19 +651,47 @@ class XTFT(Model, NNLearner):
                 default_y_pred, 
             )
             self.add_loss(self.anomaly_loss_weight * anomaly_loss)
-            self.logger.debug(
+            logger.debug(
                 f"Anomaly Loss Computed and Added: {anomaly_loss}")
         else:
             # Optionally, log a warning or set a default value.
-            self.logger.warning(
+            logger.warning(
                 "Anomaly scores are None. Skipping anomaly loss."
             )
         
-        self.logger.debug(
+        logger.debug(
             f"Predictions Shape: {predictions.shape}"
         )
+        
+        # Explicitly squeeze ONLY if quantiles were 
+        # requested AND output_dim is 1
+        if self.quantiles is not None and self.output_dim == 1:
+            # Check if the tensor actually has 4 dimensions before squeezing
+            if len(predictions.shape) == 4:
+                final_output = tf_squeeze(predictions, axis=-1)
+                logger.debug( 
+                    f"Squeezed final quantile output dim (O=1)."
+                    f" New shape: {tf_shape(final_output)}"
+                    )
+            elif len(predictions.shape) == 3:
+                 # Already has shape (B, H, Q), no squeeze needed
+                 final_output = predictions
+            else:
+                 # Unexpected shape
+                 logger.warning(f"Unexpected prediction shape before squeeze:"
+                                f" {predictions.shape}. Returning as is.")
+                 final_output = predictions
 
-        return predictions
+        elif self.quantiles is None:
+             # Point forecast, ensure shape is (B, H, O)
+             # (May not need specific handling 
+             # if output_layer gives correct shape)
+             final_output = predictions
+
+        logger.debug(f"TFT '{self.name}': Final returned output shape:"
+                     f" {tf_shape(final_output)}")
+        
+        return final_output
 
     def compile(self, optimizer, loss=None, **kws):
         """
@@ -794,7 +821,7 @@ class XTFT(Model, NNLearner):
                     x, y = tf_unstack(data, num=2, axis=0)
                     
             except (ValueError, tf_errors.InvalidArgumentError):
-                self.logger.warning(
+                logger.warning(
                     "Prediction-based strategy requires (x, y) data pairs. "
                     "Falling back to standard training step."
                 )
@@ -802,7 +829,7 @@ class XTFT(Model, NNLearner):
     
             # Verify y_true contains valid values
             if y.shape.ndims == 0 or tf_reduce_all(tf_is_nan(y)):
-                self.logger.warning(
+                logger.warning(
                     "Invalid y_true provided for prediction-based strategy. "
                     "Contains NaN values or incorrect shape."
                 )
@@ -894,7 +921,7 @@ class XTFT(Model, NNLearner):
         })
     
         # Log that the configuration has been updated.
-        self.logger.debug(
+        logger.debug(
             "Configuration for XTFT has been updated in get_config."
         )
         return config
@@ -926,23 +953,16 @@ class XTFT(Model, NNLearner):
         -------
         >>> loaded_model = XTFT.from_config(json.load(open('model_config.json')))
         """
-        # Initialize logger for instance creation.
-        logger = fusionlog().get_gofast_logger(__name__)
         logger.debug("Creating XTFT instance from configuration.")
     
         # Convert anomaly_scores from list back to a NumPy array, if present.
-        if config["anomaly_config"]["anomaly_scores"] is not None:
+        if config["anomaly_config"].get("anomaly_scores") is not None:
             config["anomaly_config"]["anomaly_scores"] = np.array(
                 config["anomaly_config"]["anomaly_scores"], dtype=np.float32
             )
         # Return a new instance created using the updated configuration.
         return cls(**config)
 
-@Deprecated(
-    "SuperXTFT is currently under maintenance and will be released soon. " 
-    "Please stay updated for the upcoming release. For now, use the "
-    "standard XTFT instead."
-)
 @Appender ( dedent( 
     XTFT.__doc__.replace ('XTFT', 'SuperXTFT'),
     ), 
@@ -1007,9 +1027,7 @@ class SuperXTFT(XTFT):
             anomaly_loss_weight=anomaly_loss_weight, 
             **kw, 
         )
-        
-        self.logger = fusionlog().get_gofast_logger(__name__)
-        
+
         # Initialize Variable Selection Networks (VSNs)
         self.variable_selection_static = VariableSelectionNetwork(
             num_inputs=static_input_dim,  
@@ -1044,7 +1062,6 @@ class SuperXTFT(XTFT):
         self.grn_attention_hierarchical = GatedResidualNetwork(
             units=attention_units,
             dropout_rate=dropout_rate,
-            use_time_distributed=False,
             activation=activation,
             use_batch_norm=use_batch_norm
         )
@@ -1052,7 +1069,6 @@ class SuperXTFT(XTFT):
         self.grn_attention_cross = GatedResidualNetwork(
             units=attention_units,
             dropout_rate=dropout_rate,
-            use_time_distributed=False,
             activation=activation,
             use_batch_norm=use_batch_norm
         )
@@ -1060,7 +1076,6 @@ class SuperXTFT(XTFT):
         self.grn_memory_attention= GatedResidualNetwork(
             units=attention_units,
             dropout_rate=dropout_rate,
-            use_time_distributed=False,
             activation=activation,
             use_batch_norm=use_batch_norm
         )
@@ -1069,7 +1084,6 @@ class SuperXTFT(XTFT):
         self.grn_decoder = GatedResidualNetwork(
             units=output_dim,
             dropout_rate=dropout_rate, 
-            use_time_distributed=False,
             activation=activation,
             use_batch_norm=use_batch_norm
         )
@@ -1092,13 +1106,13 @@ class SuperXTFT(XTFT):
         selected_future = self.variable_future_covariate(
             future_input, training=training)
         
-        self.logger.debug(
+        logger.debug(
             f"Selected Static Features Shape: {selected_static.shape}"
         )
-        self.logger.debug(
+        logger.debug(
             f"Selected Dynamic Features Shape: {selected_dynamic.shape}"
         )
-        self.logger.debug(
+        logger.debug(
             f"Selected Covariate Features Shape: {selected_future.shape}"
         )
         
@@ -1108,7 +1122,7 @@ class SuperXTFT(XTFT):
             selected_static, 
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Normalized Static Shape: {normalized_static.shape}"
         )
         
@@ -1118,7 +1132,7 @@ class SuperXTFT(XTFT):
                 static_features,
                 training=training
             )
-            self.logger.debug(
+            logger.debug(
                 "Static Features after BatchNorm Shape: "
                 f"{static_features.shape}"
             )
@@ -1127,7 +1141,7 @@ class SuperXTFT(XTFT):
             static_features,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Static Features Shape: {static_features.shape}"
         )
         # Embeddings for dynamic and future covariates using selected_dynamic
@@ -1135,7 +1149,7 @@ class SuperXTFT(XTFT):
             [selected_dynamic, selected_future],
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Embeddings Shape: {embeddings.shape}"
         )
         
@@ -1145,13 +1159,13 @@ class SuperXTFT(XTFT):
             training=training
         )  
         
-        self.logger.debug(
+        logger.debug(
             f"Embeddings Shape after Positional Encoding: {embeddings.shape}"
         )
         
         if self.use_residuals:
             embeddings = embeddings + self.residual_dense(embeddings)
-            self.logger.debug(
+            logger.debug(
                 "Embeddings with Residuals Shape: "
                 f"{embeddings.shape}"
             )
@@ -1171,7 +1185,7 @@ class SuperXTFT(XTFT):
         lstm_features = tf_expand_dims(lstm_features, axis=1)  # (B, 1, features)
         lstm_features = tf_tile(lstm_features, [1, time_steps, 1])  # (B, T, features)
         
-        self.logger.debug(
+        logger.debug(
             f"LSTM Features Shape: {lstm_features.shape}"
         )
         
@@ -1180,7 +1194,7 @@ class SuperXTFT(XTFT):
             [selected_dynamic, future_input],
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Hierarchical Attention Shape: {hierarchical_att.shape}"
         )
 
@@ -1189,7 +1203,7 @@ class SuperXTFT(XTFT):
             hierarchical_att,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Hierarchical Attention after GRN Shape: {hierarchical_att_grn.shape}"
         )
         
@@ -1197,7 +1211,7 @@ class SuperXTFT(XTFT):
             [selected_dynamic, embeddings],
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Cross Attention Output Shape: {cross_attention_output.shape}"
         )
         
@@ -1206,7 +1220,7 @@ class SuperXTFT(XTFT):
             cross_attention_output,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Cross Attention after GRN Shape: {cross_attention_grn.shape}"
         )
         
@@ -1214,7 +1228,7 @@ class SuperXTFT(XTFT):
             hierarchical_att_grn,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             "Memory Augmented Attention Output Shape: "
             f"{memory_attention_output.shape}"
         )
@@ -1224,7 +1238,7 @@ class SuperXTFT(XTFT):
             hierarchical_att_grn,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Memory Attention after GRN Shape: {memory_attention_grn.shape}"
         )
         
@@ -1234,7 +1248,7 @@ class SuperXTFT(XTFT):
             [1, time_steps, 1]
         )
 
-        self.logger.debug(
+        logger.debug(
             "Static Features Expanded Shape: "
             f"{static_features_expanded.shape}"
         )
@@ -1247,7 +1261,7 @@ class SuperXTFT(XTFT):
             memory_attention_grn,
         ])
 
-        self.logger.debug(
+        logger.debug(
             f"Combined Features Shape: {combined_features.shape}"
         )
         
@@ -1255,7 +1269,7 @@ class SuperXTFT(XTFT):
             combined_features,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             "Attention Fusion Output Shape: "
             f"{attention_fusion_output.shape}"
         )
@@ -1279,7 +1293,7 @@ class SuperXTFT(XTFT):
             attention_fusion_output,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Time Window Output Shape: {time_window_output.shape}"
         )
         
@@ -1293,18 +1307,18 @@ class SuperXTFT(XTFT):
             final_features,
             training=training
         )
-        self.logger.debug(
+        logger.debug(
             f"Decoder Outputs Shape: {decoder_outputs.shape}"
         )
         
         # Apply Gate -> Add & Norm -> GRN pipeline to decoder_outputs
         # Gate
-        G = self.grn_decoder.gate(decoder_outputs)
+        G = self.grn_decoder.gate_dense(decoder_outputs)
         # Add & Norm
         Z_norm = self.grn_decoder.layer_norm(decoder_outputs + G)
         # GRN
         Z_grn = self.grn_decoder(Z_norm, training=training)
-        self.logger.debug(
+        logger.debug(
             f"Decoder Outputs after GRN Pipeline Shape: {Z_grn.shape}"
         )
         
@@ -1317,7 +1331,7 @@ class SuperXTFT(XTFT):
         # Compute anomaly scores if configureg 
         # Add anomaly loss if scores exist
         if self.anomaly_scores is not None:
-            self.logger.debug(
+            logger.debug(
                 "Using Anomaly Scores from anomaly_config "
                 f"Shape: {self.anomaly_scores.shape}"
             )
@@ -1326,20 +1340,46 @@ class SuperXTFT(XTFT):
                 self.anomaly_scores, tf_zeros_like(self.anomaly_scores)
                 )
             self.add_loss(self.anomaly_loss_weight * anomaly_loss)
-            self.logger.debug(
+            logger.debug(
                 f"Anomaly Loss Computed and Added: {anomaly_loss}"
                 )
         
-        self.logger.debug(
+        logger.debug(
             f"Predictions Shape: {predictions.shape}"
         )
         
-        return predictions
+        # Explicitly squeeze ONLY if quantiles were 
+        # requested AND output_dim is 1
+        if self.quantiles is not None and self.output_dim == 1:
+            # Check if the tensor actually has 4 dimensions before squeezing
+            if len(predictions.shape) == 4:
+                final_output = tf_squeeze(predictions, axis=-1)
+                logger.debug( 
+                    f"Squeezed final quantile output dim (O=1)."
+                    f" New shape: {tf_shape(final_output)}"
+                    )
+            elif len(predictions.shape) == 3:
+                 # Already has shape (B, H, Q), no squeeze needed
+                 final_output = predictions
+            else:
+                 # Unexpected shape
+                 logger.warning(f"Unexpected prediction shape before squeeze:"
+                                f" {predictions.shape}. Returning as is.")
+                 final_output = predictions
+
+        elif self.quantiles is None:
+             # Point forecast, ensure shape is (B, H, O)
+             # (May not need specific handling 
+             # if output_layer gives correct shape)
+             final_output = predictions
+
+        logger.debug(f"TFT '{self.name}': Final returned output shape:"
+                     f" {tf_shape(final_output)}")
+        
+        return final_output
     
     @classmethod
     def from_config(cls, config):
-
-        logger = fusionlog().get_gofast_logger(__name__)
         logger.debug("Creating SuperXTFT instance from config.")
         return cls(**config)
 

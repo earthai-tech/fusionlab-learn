@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
-# File: fusionlab/nn/anomaly_detection.py
 
 """
 Neural network components for anomaly detection in time series.
