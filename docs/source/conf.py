@@ -165,7 +165,7 @@ myst_enable_extensions = [
     "smartquotes",      # Use smart quotes
     "replacements",     # Apply textual replacements
     # "linkify",        # Automatically identify URL links (optional)
-    # "dollarmath",     # Allow $...$ and $$...$$ for math (if not using mathjax)
+    "dollarmath",     # Allow $...$ and $$...$$ for math (if not using mathjax)
 ]
 myst_heading_anchors = 3 # Automatically add anchors to headings up to level 3
 

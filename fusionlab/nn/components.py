@@ -8,13 +8,17 @@ forecasting and anomaly detection models. It includes building
 blocks such as attention mechanisms, multi-scale LSTMs, gating 
 and normalization layers, and multi-objective loss functions.
 """
+from __future__ import annotations 
+import warnings  
 from numbers import Real, Integral  
-from typing import Optional, Union, List 
+from typing import Optional, Union, List, Dict, Tuple, Callable
 
+from .._fusionlog import fusionlog 
 from ..api.docstring import DocstringComponents
 from ..api.property import  NNLearner 
 from ..core.checks import validate_nested_param
-from ..compat.sklearn import validate_params, Interval
+from ..core.handlers import param_deprecated_message
+from ..compat.sklearn import validate_params, Interval, StrOptions
 from ..utils.deps_utils import ensure_pkg
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
@@ -41,25 +45,40 @@ if KERAS_BACKEND:
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     Tensor=KERAS_DEPS.Tensor
 
+    tf_Assert= KERAS_DEPS.Assert
+    tf_TensorShape= KERAS_DEPS.TensorShape
     tf_concat = KERAS_DEPS.concat
     tf_shape = KERAS_DEPS.shape
     tf_reshape=KERAS_DEPS.reshape
+    tf_repeat =KERAS_DEPS.repeat
     tf_add = KERAS_DEPS.add
+    tf_cast=KERAS_DEPS.cast
     tf_maximum = KERAS_DEPS.maximum
     tf_reduce_mean = KERAS_DEPS.reduce_mean
     tf_add_n = KERAS_DEPS.add_n
     tf_float32=KERAS_DEPS.float32
     tf_constant=KERAS_DEPS.constant 
     tf_square=KERAS_DEPS.square 
-    tf_autograph=KERAS_DEPS.autograph
+    tf_transpose=KERAS_DEPS.transpose 
+    tf_logical_and=KERAS_DEPS.logical_and 
+    tf_logical_not = KERAS_DEPS.logical_not 
+    tf_logical_or = KERAS_DEPS.logical_or
+    tf_get_static_value =KERAS_DEPS.get_static_value
     tf_reduce_sum = KERAS_DEPS.reduce_sum
     tf_stack = KERAS_DEPS.stack
     tf_expand_dims = KERAS_DEPS.expand_dims
     tf_tile = KERAS_DEPS.tile
     tf_range=KERAS_DEPS.range 
-    tf_concat = KERAS_DEPS.concat
     tf_shape = KERAS_DEPS.shape
     tf_rank=KERAS_DEPS.rank
+    tf_split = KERAS_DEPS.split
+    tf_multiply=KERAS_DEPS.multiply
+    tf_cond=KERAS_DEPS.cond
+    tf_constant =KERAS_DEPS.constant 
+    tf_equal =KERAS_DEPS.equal 
+    tf_int32=KERAS_DEPS.int32 
+    tf_debugging =KERAS_DEPS.debugging 
+    tf_autograph=KERAS_DEPS.autograph
     
     try:
         # Equivalent to: from tensorflow.keras import activations
@@ -79,6 +98,8 @@ if KERAS_BACKEND:
         )
     
 
+_logger = fusionlog().get_fusionlab_logger(__name__)
+
 DEP_MSG = dependency_message('components') 
 
 __all__ = [
@@ -88,6 +109,7 @@ __all__ = [
      'DynamicTimeWindow',
      'ExplainableAttention',
      'GatedResidualNetwork',
+     'GatedResidualNetworkIn',
      'HierarchicalAttention',
      'LearnedNormalization',
      'MemoryAugmentedAttention',
@@ -100,7 +122,9 @@ __all__ = [
      'QuantileDistributionModeling',
      'StaticEnrichmentLayer',
      'TemporalAttentionLayer',
+     'TemporalAttentionLayerIn',
      'VariableSelectionNetwork',
+     'VariableSelectionNetworkIn',
      'Activation', 
      'aggregate_multiscale', 
      'aggregate_time_window_output'
@@ -110,72 +134,191 @@ _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_shared_nn_params), 
 )
 
-@register_keras_serializable('fusionlab.nn.components', name="Activation")
-class Activation(Layer):
-    """
-    Custom Activation layer that wraps a Keras activation function
-    and captures its name.
-    """
-    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-    def __init__(self, activation='relu', **kw):
-        super().__init__(**kw)
-        # Get the activation function; Keras
-        # will raise an error if invalid
-        self.activation= activations.get(activation)
-        # self.activation = activation  
-        # Store the original activation parameter
 
-        # Assign activation name
-        if isinstance(activation, str):
-            self.activation_name = activation
+@register_keras_serializable(
+    'fusionlab.nn.components', name="Activation"
+  )
+class Activation(Layer, NNLearner):
+    r"""
+    Flexible activation layer that transparently delegates to any
+    built‑in or user‑defined activation function.
+
+    Parameters
+    ----------
+    activation : str or Callable or None, default ``'relu'``
+        Identifier of the desired activation.
+
+        * If *str*, it must be recognised by
+          :pymeth:`keras.activations.get`.
+        * If *Callable*, it must follow the signature
+          ``f(tensor) -> tensor``.
+        * If *None*, the layer acts as the identity mapping
+          :math:`f(x)=x`.
+
+    **kwargs
+        Additional keyword arguments forwarded to
+        :class:`keras.layers.Layer` (e.g. ``name`` or ``dtype``).
+
+    Notes
+    -----
+    Let :math:`\mathbf{x}\in\mathbb{R}^{n}` be the input tensor and
+    :math:`\phi` the resolved activation function.  The layer performs
+
+    .. math::
+
+        \mathbf{y} = \phi(\mathbf{x}).
+
+    Because :pyclass:`Activation` inherits from
+    :class:`keras.layers.Layer`, it can be freely composed inside a
+    ``tf.keras.Sequential`` or functional graph.
+
+    Methods
+    -------
+    call(inputs, training=False)
+        Apply the resolved activation to *inputs*.
+
+    get_config()
+        Return a JSON‑serialisable configuration dictionary.
+
+    __repr__()
+        Nicely formatted string representation—helpful in interactive
+        sessions.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> from fusionlab.nn.components import Activation
+    >>> x  = tf.constant([‑2., 0., 1.5])
+    >>> act = Activation('swish')
+    >>> act(x).numpy()
+    array([‑0.238, 0.   , 1.273], dtype=float32)
+
+    Custom callable:
+
+    >>> def leaky_relu(x, alpha=0.1):
+    ...     return tf.where(x > 0, x, alpha * x)
+    ...
+    >>> act = Activation(leaky_relu)
+    >>> act(x).numpy()
+    array([‑0.2, 0. , 1.5], dtype=float32)
+
+    See Also
+    --------
+    keras.activations.get
+        Canonical resolver used under the hood.
+    keras.layers.Activation
+        Native Keras counterpart with fewer conveniences.
+
+    References
+    ----------
+    .. [1] Ramachandran, Prajit, et al. *Searching for Activation
+       Functions*. arXiv preprint arXiv:1710.05941 (2017).
+    """
+
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+    def __init__(self,
+                 activation: Union[str, Callable, None] = 'relu',
+                 **kwargs):
+        super().__init__(**kwargs)
+
+        # Store original user input for debugging / introspection
+        self.activation_original = activation
+
+        # Resolve activation into (callable, canonical string)
+        if activation is None:
+            self.activation_fn  = activations.get(None)
+            self.activation_str = 'linear'
+
+        elif isinstance(activation, str):
+            # Try to get a standard name via serialize,
+            # fallback to object name
+            try:
+                self.activation_fn  = activations.get(activation)
+                self.activation_str = activation
+            except ValueError as err:
+                raise ValueError(
+                    f"Unknown activation '{activation}'."
+                ) from err
+
         elif callable(activation):
-            # Try to get the name from the activation function
-            self.activation_name = getattr(
-                activation, '__name__', 
-                activation.__class__.__name__
-            )
+            self.activation_fn = activation
+            try:                                       # Try serialising
+                ser = activations.serialize(activation)
+                # Fallback if serialize doesn't give simple string
+                self.activation_str = (
+                    ser if isinstance(ser, str)
+                    else getattr(activation, '__name__',
+                                  activation.__class__.__name__)
+                )
+            except ValueError: 
+                # Fallback if serialize doesn't give simple string
+                self.activation_str = getattr(
+                    activation, '__name__',
+                    activation.__class__.__name__
+                )
         else:
-            # Fallback to string representation
-            self.activation_name = str(activation)
-            
+            raise TypeError(
+                "Parameter 'activation' must be *str*, Callable, or "
+                "*None*. Received type "
+                f"{type(activation).__name__!r}."
+            )
+
+        if not callable(self.activation_fn):
+            raise TypeError(
+                f"Resolved activation '{self.activation_str}' is not "
+                "callable."
+            )
+
     @tf_autograph.experimental.do_not_convert
-    def call(self, inputs, training=False):
-        r"""
-        Forward pass of the Activation layer.
-    
-        Applies the stored activation function to the input tensor.
-        The ``training`` parameter is accepted for API compatibility but
-        is not used in this implementation.
-    
+    def call(self, inputs, training: bool = False):
+        """
+        Apply the stored activation to `inputs`.
+
         Parameters
         ----------
         inputs : tf.Tensor
-            The input tensor on which the activation is applied.
-        training : bool, optional
-            Boolean flag indicating whether the layer is in training mode.
-            This argument is ignored. Default is ``False``.
-    
+            Input tensor of arbitrary shape.
+        training : bool, default ``False``
+            Present for API compatibility; ignored because most
+            activations do not behave differently at training time.
+
         Returns
         -------
         tf.Tensor
-            The output tensor after applying the activation function.
+            Tensor with identical shape to *inputs* but transformed
+            element‑wise by the activation.
         """
-        return self.activation(inputs)
+        # A single line keeps Autograph happy 
+        # and maximises performance
+        return self.activation_fn(inputs)
 
 
-    def get_config(self):
-        config = super(Activation, self).get_config()
-        # Serialize the activation function properly
+    def get_config(self) -> dict:
+        """
+        Configuration dictionary for model serialization.
+
+        Returns
+        -------
+        dict
+            JSON‑friendly mapping that allows
+            :pyfunc:`keras.layers.deserialize` to recreate the layer.
+        """
+        config = super().get_config()
+        # Save the CANONICAL STRING NAME for serialization
         config.update({
-            'activation': activations.serialize(self.activation)
+            'activation': self.activation_str
         })
         return config
 
-    def __repr__(self):
-        return ( 
-            f"{self.__class__.__name__}("
-            f"activation={self.activation_name!r})"
-        )
+    # String representation
+    def __repr__(self) -> str:                         # noqa: D401
+        """
+        Return *repr(self)*.
+
+        The canonical activation string is included for clarity.
+        """
+        return (f"{self.__class__.__name__}("
+                f"activation={self.activation_str!r})")
 
 # -------------------- TFT components ----------------------------------------
 
@@ -323,11 +466,887 @@ class PositionalEncoding(Layer, NNLearner):
         config = super().get_config().copy()
         return config
 
-
+#XXX TO FIX: 
 @register_keras_serializable(
     'fusionlab.nn.components', name="GatedResidualNetwork"
 )
-class GatedResidualNetwork(Layer, NNLearner):
+@param_deprecated_message(
+    conditions_params_mappings=[
+        {
+            'param': 'use_time_distributed',
+            'condition': lambda v: v is not None and v is not False,
+            'message': (
+                "The 'use_time_distributed' parameter in GatedResidualNetwork "
+                "is deprecated and has no effect.\n"
+                "The layer automatically handles time dimensions based on "
+                "input rank.\n"
+                "If using within VariableSelectionNetwork, control time "
+                "distribution via the VSN's own 'use_time_distributed' parameter."
+            ),
+        }
+    ],
+    warning_category=DeprecationWarning 
+)
+class GatedResidualNetwork(Layer):
+    """Gated Residual Network applying transformations with optional context."""
+
+    _COMMON_ACTIVATIONS = {
+        "relu", "tanh", "sigmoid", "elu", "selu", "gelu", "linear", None
+    }
+
+    @validate_params({
+        "units": [Interval(Integral, 1, None, closed='left')],
+        "dropout_rate": [Interval(Real, 0, 1, closed="both")],
+        "use_batch_norm": [bool],
+        "activation": [StrOptions(_COMMON_ACTIVATIONS)],
+        "output_activation": [StrOptions(_COMMON_ACTIVATIONS), None],
+        "use_time_distributed": [bool, None],
+    })
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+    def __init__(
+        self,
+        units: int,
+        dropout_rate: float = 0.0,
+        activation: str = 'elu',
+        output_activation: Optional[str] = None,
+        use_batch_norm: bool = False,
+        use_time_distributed: Optional[bool] = None, 
+        **kwargs
+    ):
+        """Initializes the GatedResidualNetwork layer."""
+        super().__init__(**kwargs)
+        self.units = units
+        self.dropout_rate = dropout_rate
+        self.use_batch_norm = use_batch_norm
+        self.activation_str = activation
+        self.output_activation_str = output_activation
+        # The use_time_distributed parameter is stored only to allow
+        # the decorator to check its value. It is NOT used in the
+        # layer's logic anymore.
+        self._deprecated_use_td = use_time_distributed 
+
+        # --- Convert activation strings to callable functions ---
+        try:
+            self.activation_fn = activations.get(activation)
+            self.output_activation_fn = activations.get(output_activation) \
+                if output_activation is not None else None
+        except Exception as e:
+             # Catch potential errors during activation lookup
+             raise ValueError(
+                 f"Failed to get activation function '{activation}' or "
+                 f"'{output_activation}'. Error: {e}"
+                 ) from e
+
+        # --- Define Internal Layers ---
+        # Dense layer processing input (x + optional context)
+        # Activation is applied *after* this layer manually
+        self.input_dense = Dense(self.units, activation=None,
+                                 name="input_dense")
+
+        # Dense layer projecting context (if provided)
+        # No bias as per original paper often; no activation needed here
+        self.context_dense = Dense(
+            self.units, use_bias=False,
+            name="context_dense"
+        )
+
+        # Optional Batch Normalization (applied after main activation)
+        self.batch_norm = BatchNormalization(
+            name="batch_norm"
+            ) if self.use_batch_norm else None
+
+        # Dropout Layer (applied after activation/norm)
+        self.dropout = Dropout(
+            self.dropout_rate, name="grn_dropout"
+            )
+
+        # Dense layer for main transformation path (after dropout)
+        self.output_dense = Dense(
+            self.units, activation=None,
+            name="output_dense"
+        )
+
+        # Dense layer for gating mechanism applied to input projection
+        self.gate_dense = Dense(
+            self.units, activation='sigmoid',
+            name="gate_dense"
+        )
+
+        # Final Layer Normalization (standard in GRN)
+        self.layer_norm = LayerNormalization(
+            name="output_layer_norm"
+        )
+
+        # Projection layer for residual 
+        # connection (created in build)
+        self.projection = None
+
+    def build(self, input_shape):
+        """Builds the residual projection layer if needed."""
+        # Use TensorShape object directly if available
+        if not isinstance(input_shape, tf_TensorShape):
+            # Attempt conversion, handles tuples, lists, TensorShape
+            try:
+                input_shape = tf_TensorShape(input_shape)
+            except TypeError:
+                 raise ValueError(
+                    f"Could not convert input_shape to TensorShape:"
+                    f" {input_shape}"
+                    )
+
+        # Check rank using the TensorShape object property
+        input_rank = input_shape.rank # This returns None if rank is unknown
+
+        # Check minimum rank requirement only if rank is known
+        if input_rank is not None and input_rank < 2:
+            raise ValueError(
+                "Input shape must have at least 2 dimensions "
+                f"(Batch, Features). Received rank: {input_rank}"
+                f", shape: {input_shape}"
+            )
+
+        input_dim = None
+        # Only try to get last dimension if rank is known
+        if input_rank is not None:
+            input_dim = input_shape[-1]
+            # Further check if last dimension itself is known (is an integer)
+            if not isinstance(input_dim, int) or input_dim <= 0 :
+                 # Last dimension is unknown or invalid
+                 warnings.warn(
+                     f"Input shape {input_shape} has unknown or invalid "
+                     "last dimension in GRN build. Cannot check "
+                     "if projection layer is needed.", RuntimeWarning
+                     )
+                 input_dim = None # Treat as unknown if not valid int
+
+        # Create projection layer only if dimensions are known and differ
+        if (input_dim is not None) and (input_dim != self.units):
+            if self.projection is None: # Avoid recreating
+                self.projection = Dense(self.units, name="residual_projection")
+                # Build projection layer using the full input shape object
+                self.projection.build(input_shape)
+                # Comment: Residual projection created and built.
+        elif input_dim == self.units:
+             # Set projection to None explicitly if dims match
+             self.projection = None
+
+        # context_dense builds lazily on first call
+        # Call the build method of the parent class
+        super().build(input_shape)
+        
+    def call(self, x, context=None, training=False):
+        """Forward pass implementing GRN with optional context."""
+        # Input x shape (B, ..., F_in)
+        # Context shape (if provided) (B, ..., Units) after projection
+        """Forward pass implementing GRN with optional context."""
+        _logger.debug(
+            f"DEBUG_GRN: Entering call. x shape: {tf_shape(x)},"
+            f" context provided: {context is not None}") # DEBUG
+        # --- 1. Residual Connection Setup ---
+        shortcut = x
+        if self.projection is not None:
+            _logger.debug("DEBUG_GRN: Applying projection.") # DEBUG
+            shortcut = self.projection(shortcut) # Shape (B, ..., Units)
+
+        # --- 2. Process Input and Context ---
+        # Project input features to 'units' dimension
+        _logger.debug(
+            f"DEBUG_GRN: Applying input_dense to x shape: {tf_shape(x)}") # DEBUG
+        projected_input = self.input_dense(x) # Shape (B, ..., Units)
+        input_plus_context = projected_input # No context added; Default 
+        
+        # Add processed context if provided
+        if context is not None:
+            _logger.debug("DEBUG_GRN: Applying context_dense"
+                  f" to context shape: {tf_shape(context)}") # DEBUG
+            context_proj = self.context_dense(context) # Shape (B, ..., Units)
+
+            # Ensure context can be added (handle broadcasting)
+            # x_rank = tf_rank(projected_input)
+            
+             # Use standard Python len() on shapes now,
+            # Use standard Python len() on shapes now, 
+            x_rank = len(projected_input.shape)
+            ctx_rank = len(context_proj.shape)
+            
+            # x_rank = projected_input.shape.rank 
+            # #ctx_rank = tf_rank(context_proj)
+            # ctx_rank = context_proj.shape.rank 
+            _logger.debug(
+                f"DEBUG_GRN: x_rank={x_rank}, ctx_rank={ctx_rank}") # DEBUG
+            if x_rank == 3 and ctx_rank == 2:# e.g., x=(B,T,U), ctx=(B,U)
+                # Add time dimension for broadcasting: (B,U) -> (B,1,U)
+                context_proj_expanded = tf_expand_dims(context_proj, axis=1)
+                # Now shapes should be broadcast-compatible
+                _logger.debug("DEBUG_GRN: Adding context.") # DEBUG
+                input_plus_context = tf_add(projected_input, context_proj_expanded)
+            elif x_rank == ctx_rank:
+                # Ranks match, add directly
+                _logger.debug(
+                    "DEBUG_GRN: Ranks match,  Adding context directly."
+                    ) # DEBUG
+                input_plus_context = tf_add(projected_input, context_proj)
+                
+            else:
+                # Raise error for incompatible ranks
+                raise ValueError(
+                    f"Incompatible ranks GRN input ({x_rank})"
+                    f" and context ({ctx_rank}). Cannot broadcast/add."
+                )
+
+        # --- 3. Apply Activation and Regularization ---
+        _logger.debug("DEBUG_GRN: Applying activation_fn.") # DEBUG
+        activated_features = self.activation_fn(input_plus_context)
+        if self.batch_norm is not None:
+            print("DEBUG_GRN: Applying batch_norm.") # DEBUG
+            # Apply BN after activation
+            activated_features = self.batch_norm(activated_features,
+                                                 training=training)
+        _logger.debug("DEBUG_GRN: Applying dropout.") # DEBUG
+        regularized_features = self.dropout(activated_features,
+                                            training=training)
+
+        # --- 4. Main Transformation Path ---
+        _logger.debug("DEBUG_GRN: Applying output_dense.") # DEBUG
+        transformed_output = self.output_dense(regularized_features)
+
+        # --- 5. Gating Path ---
+        _logger.debug("DEBUG_GRN: Applying gate_dense.") # DEBUG
+        # Gate depends on input+context projection *before* main activation
+        gate_values = self.gate_dense(input_plus_context)
+
+        # --- 6. Apply Gate ---
+        _logger.debug("DEBUG_GRN: Applying gate multiplication.") # DEBUG
+        gated_output = tf_multiply(transformed_output, gate_values)
+
+        # --- 7. Add Residual ---
+        _logger.debug("DEBUG_GRN: Adding residual connection.") # DEBUG
+        residual_output = tf_add(shortcut, gated_output)
+
+        # --- 8. Final Normalization & Optional Activation ---
+        _logger.debug("DEBUG_GRN: Applying layer_norm.") # DEBUG
+        normalized_output = self.layer_norm(residual_output)
+        final_output = normalized_output
+        if self.output_activation_fn is not None:
+            _logger.debug("DEBUG_GRN: Applying output_activation_fn.") # DEBUG
+            final_output = self.output_activation_fn(normalized_output)
+            #  Applied final output activation.
+        _logger.debug("DEBUG_GRN: Exiting call successfully.") # DEBUG
+        return final_output
+    
+    def get_config(self):
+        """Returns the layer configuration."""
+        config = super().get_config()
+        config.update({
+            'units': self.units,
+            'dropout_rate': self.dropout_rate,
+            # 'use_time_distributed' removed from config
+            'activation': self.activation_str, # Use original string
+            'output_activation': self.output_activation_str, # Use original string
+            'use_batch_norm': self.use_batch_norm,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        """Creates layer from its config."""
+        return cls(**config)
+
+# XXX TOFIX: 
+@register_keras_serializable(
+    'fusionlab.nn.components',
+    name="VariableSelectionNetwork"
+)
+class VariableSelectionNetwork(Layer, NNLearner): 
+    """Applies GRN to each variable and learns importance weights."""
+
+    @validate_params({
+        "num_inputs": [Interval(Integral, 1, None, closed='left')],
+        "units": [Interval(Integral, 1, None, closed='left')],
+        "dropout_rate": [Interval(Real, 0, 1, closed="both")],
+        "use_time_distributed": [bool],
+        "use_batch_norm": [bool],
+        "activation": [StrOptions(
+            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu", None}
+            )]
+    })
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+    def __init__(
+        self,
+        num_inputs: int,
+        units: int,
+        dropout_rate: float = 0.0,
+        use_time_distributed: bool = False,
+        activation: str = 'elu',
+        use_batch_norm: bool = False,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.num_inputs = num_inputs
+        self.units = units
+        self.dropout_rate = dropout_rate
+        self.use_time_distributed = use_time_distributed
+        self.use_batch_norm = use_batch_norm
+        
+        # Store original activation string for config
+        _Activation = Activation(activation) 
+        self.activation_str = _Activation.activation_str 
+        self.activation_fn = _Activation.activation_fn 
+
+        # --- Layers ---
+        # 1. GRN for each individual input variable
+        #    GRN's __init__ should handle converting activation string
+        self.single_variable_grns = [
+            GatedResidualNetwork(
+                units=units, dropout_rate=dropout_rate,
+                activation=self.activation_str, # Pass string
+                use_batch_norm=use_batch_norm,
+                name=f"single_var_grn_{i}"
+            ) for i in range(num_inputs)
+        ]
+
+        # 2. Dense layer to compute variable importances (applied later)
+        #    Output units = 1 per variable for the original weighting method
+        self.variable_importance_dense = Dense(
+            1, name="variable_importance_dense"
+        )
+
+        # 3. Softmax for normalizing weights across variables (N dimension)
+        #    Axis -2 assumes stacked_outputs shape (B, [T,] N, units)
+        self.softmax = Softmax(axis=-2, name="variable_weights_softmax")
+
+        # 4. Optional context projection layer (created in build)
+        #    Projects external context to 'units' for GRNs
+        self.context_projection = None
+
+        # Attribute to store weights
+        self.variable_importances_ = None
+
+    @tf_autograph.experimental.do_not_convert
+    def build(self, input_shape):
+        """Builds internal GRNs and projection layers 
+        with explicit shapes."""
+        # Use TensorShape object for robust handling
+        if not isinstance(input_shape, tf_TensorShape):
+            input_shape = tf_TensorShape(input_shape)
+
+        input_rank = input_shape.rank
+        expected_min_rank = 3 if self.use_time_distributed else 2
+
+        # Check if rank is known and sufficient
+        if input_rank is None or input_rank < expected_min_rank:
+            # If rank unknown or too low at build time,
+            # we cannot proceed reliably.
+            # This indicates an issue upstream or 
+            # requires dynamic shapes throughout.
+            raise ValueError(
+                f"VSN build requires input rank >= {expected_min_rank}"
+                f" with known rank. Received shape: {input_shape}"
+            )
+
+        # Determine shape of input slices passed to single_variable_grns
+        # Add feature dim F=1 if missing
+        # Add feature dimension if missing
+        inferred_input_shape = tf_cond(
+             tf_equal(input_rank, expected_min_rank),
+             lambda: input_shape.as_list() + [1],
+             lambda: input_shape.as_list()
+         )
+        # Shape: (B, N, F=1) or (B, T, N, F=1)
+
+        # Ensure dimensions (except batch) are 
+        # known for building sub-layers
+        if any(d is None for d in inferred_input_shape[1:]):
+             # This should ideally not happen if 
+             # input comes from previous layers
+             # but handle defensively.
+             raise ValueError(
+                 f"VSN build received unknown non-batch dimensions in shape "
+                 f"{inferred_input_shape}. Cannot reliably build sub-layers."
+             )
+
+        # Calculate the expected shape for a single variable slice
+        if self.use_time_distributed:
+            # Input (B, T, N, F) -> Slice is (B, T, F)
+            single_var_input_shape = tf_TensorShape(
+                [inferred_input_shape[0], # Batch (can be None)
+                 inferred_input_shape[1], # Time (should be known)
+                 inferred_input_shape[3]] # Features (should be known)
+                )
+        else:
+            # Input (B, N, F) -> Slice is (B, F)
+             single_var_input_shape = tf_TensorShape(
+                 [inferred_input_shape[0], # Batch (can be None)
+                  inferred_input_shape[2]] # Features (should be known)
+                 )
+
+        # --- Explicitly build each single_variable_grn ---
+        # Use the calculated slice shape
+        for grn in self.single_variable_grns:
+            if not grn.built:
+                try:
+                    grn.build(single_var_input_shape)
+                    # Comment: Built internal GRN with calculated shape.
+                except Exception as e:
+                     # Add more context if GRN build fails
+                     raise RuntimeError(
+                         f"Failed to build internal GRN {grn.name} with shape "
+                         f"{single_var_input_shape} derived from VSN input "
+                         f"{input_shape}. Original error: {e}"
+                         ) from e
+
+        # Build context projection layer lazily (or here if context shape known)
+        if self.context_projection is None:
+             self.context_projection = Dense(
+                  self.units, name="context_projection",
+                  # Pass string, Dense handles activation resolution
+                  activation=self.activation_str
+                  )
+             # Let Keras build context_projection on first call with context
+
+        # Build other internal layers like weighting_grn if needed here
+        super().build(input_shape) # Call parent build last
+        
+
+    # @tf_autograph.experimental.do_not_convert
+    # def call_(self, inputs, context=None, training=False):
+    #     """Execute the forward pass with optional context."""
+
+    #     # --- Input Validation and Reshaping ---
+    #     # actual_rank = inputs.shape.rank
+    #     actual_rank = len(inputs.shape)
+    #     # Determine expected minimum rank based on layer config
+     
+    #     # Assert rank meets minimum requirement (graph-safe check)
+    #     expected_min_rank = 3 if self.use_time_distributed else 2
+     
+    #     if actual_rank < expected_min_rank:
+    #         # This check should now work reliably with the decorator
+    #         raise ValueError(
+    #             f"Input rank must be >= {expected_min_rank}. "
+    #             f"Got rank {actual_rank} for shape {inputs.shape}."
+    #             )
+    #     # Add feature dimension if missing
+    #     if actual_rank == expected_min_rank:
+    #         # Use tf_expand_dims from KERAS_DEPS or tf
+    #         inputs = tf_expand_dims(inputs, axis=-1)
+    #         # Comment: Added feature dimension (size 1).
+    #     # Input shape: (B, N, F=1) or (B, T, N, F=1)
+        
+    #     # --- Context Processing ---
+    #     processed_context = None
+    #     if context is not None:
+    #         # Project context to the 'units' dimension if layer exists
+    #         if self.context_projection is None:
+    #              # Should have been created in build, but create lazily if missed
+    #              # This might indicate an issue if build wasn't called prior
+    #              self.context_projection = Dense(
+    #                   self.units, name="context_projection",
+    #                   activation=self.activation_str
+    #                   )
+    #         processed_context = self.context_projection(context)
+    #         # Note: GRN's call method handles broadcasting this context
+
+    #     # --- Apply GRN to each variable ---
+    #     var_outputs = []
+    #     # Axes: B=0, T=1, N=2, F=3 (TimeDistributed)
+    #     # Axes: B=0, N=1, F=2 (Not TimeDistributed)
+    #     # num_vars_tf = tf_shape(inputs)[-2] # Get N dynamically
+       
+    #     for i in range(self.num_inputs):
+    #         if self.use_time_distributed:
+    #             # Slice variable i: (B, T, N, F) -> (B, T, F)
+    #             var_input = inputs[:, :, i, :]
+    #         else:
+    #             # Slice variable i: (B, N, F) -> (B, F)
+    #             var_input = inputs[:, i, :]
+
+    #         # Apply the i-th GRN, passing the (potentially None) context
+    #         grn_output = self.single_variable_grns[i](
+    #             var_input,
+    #             context=processed_context, # GRN handles context=None
+    #             training=training
+    #         )
+    #         var_outputs.append(grn_output)
+    #         # Output shape: (B, T, units) or (B, units)
+
+    #     # --- Stack GRN outputs along variable dimension (N) ---
+    #     # axis=-2 places N before the 'units' dimension
+    #     stacked_outputs = tf_stack(var_outputs, axis=-2)
+    #     # Shape: (B, T, N, units) or (B, N, units)
+
+    #     # --- Calculate Variable Importance Weights (Original Logic) ---
+    #     # 1. Apply Dense layer (output units = 1) to stacked outputs
+    #     #    Acts on the last dimension ('units') -> (B, [T,] N, 1)
+    #     importance_logits = self.variable_importance_dense(stacked_outputs)
+
+    #     # 2. Apply Softmax across the variable dimension (N, axis=-2)
+    #     weights = self.softmax(importance_logits)
+    #     # Shape: (B, [T,] N, 1)
+    #     self.variable_importances_ = weights # Store weights
+
+    #     # --- Weighted Combination ---
+    #     # Multiply stacked GRN outputs by weights and sum
+    #     # stacked_outputs: (B, [T,] N, units)
+    #     # weights:         (B, [T,] N, 1) -> broadcasts correctly
+    #     weighted_sum = tf_reduce_sum(
+    #         tf_multiply(stacked_outputs, weights),
+    #         axis=-2 # Sum across the variable dimension (N)
+    #     )
+    #     # Final output shape: (B, T, units) or (B, units)
+    #     return weighted_sum
+
+    @tf_autograph.experimental.do_not_convert
+    def call(self, inputs, context=None, training=False):
+        """Execute the forward pass with optional context."""
+        _logger.debug(f"VSN '{self.name}': Entering call method.")
+        _logger.debug(
+            f"  Initial input shape: {getattr(inputs, 'shape', 'N/A')}")
+        _logger.debug(f"  Context provided: {context is not None}")
+        _logger.debug(f"  Training mode: {training}")
+
+        # --- Input Validation and Reshaping ---
+        # Use Python len() on shape - works reliably with decorator
+        try:
+            actual_rank = len(inputs.shape)
+        except Exception as e:
+             _logger.error(f"VSN '{self.name}': Failed to get input rank."
+                          f" Input type: {type(inputs)}. Error: {e}")
+             raise TypeError(f"Could not determine rank of input with shape"
+                             f" {getattr(inputs, 'shape', 'N/A')}") from e
+
+        expected_min_rank = 3 if self.use_time_distributed else 2
+        _logger.debug(f"  Input rank: actual={actual_rank}, expected_min="
+                     f"{expected_min_rank}")
+
+        if actual_rank < expected_min_rank:
+            # Raise error if rank is insufficient
+            raise ValueError(
+                f"VSN '{self.name}': Input rank must be >= "
+                f"{expected_min_rank}. Got rank {actual_rank} for "
+                f"shape {inputs.shape}."
+            )
+
+        # Add feature dimension if missing (e.g., B,N -> B,N,1 or B,T,N -> B,T,N,1)
+        if actual_rank == expected_min_rank:
+            _logger.debug(
+                f"  Input rank matches minimum expected ({actual_rank})."
+                " Expanding feature dimension."
+                )
+            inputs = tf_expand_dims(inputs, axis=-1)
+            _logger.debug(
+                f"  Input shape after expansion: {inputs.shape}"
+                )
+        # Input shape is now (B, N, F) or (B, T, N, F)
+
+        # --- Context Processing ---
+        processed_context = None
+        if context is not None:
+            _logger.debug(
+                f"  Processing provided context. Shape: {context.shape}"
+                )
+            # Ensure context projection layer is created (lazily if needed)
+            if self.context_projection is None:
+                 _logger.warning(
+                     f"VSN '{self.name}': Context projection layer"
+                     " not built in build method. Building lazily."
+                )
+                 self.context_projection = Dense(
+                      self.units, name="context_projection",
+                      activation=self.activation_str # Use string
+                      )
+            processed_context = self.context_projection(context)
+            _logger.debug(
+                f"  Processed context shape: {processed_context.shape}")
+            # Note: GRN's call method handles broadcasting this context
+        else:
+            _logger.debug("  No context provided.")
+
+        # --- Apply GRN to each variable ---
+        var_outputs = []
+        _logger.debug(
+            f"  Applying single_variable_grns to {self.num_inputs}"
+            " inputs..."
+            )
+        # Python loop - should execute as Python code due to decorator
+        for i in range(self.num_inputs):
+            _logger.debug(
+                f"    Processing variable index {i}")
+            # Slice input for the i-th variable
+            if self.use_time_distributed:
+                # Slice variable i: (B, T, N, F) -> (B, T, F)
+                var_input = inputs[:, :, i, :]
+                _logger.debug(
+                    "      Sliced var_input shape (TD):"
+                    f" {var_input.shape}")
+            else:
+                # Slice variable i: (B, N, F) -> (B, F)
+                var_input = inputs[:, i, :]
+                _logger.debug(
+                    "      Sliced var_input shape (non-TD):"
+                    f" {var_input.shape}")
+
+            # Apply the i-th GRN, passing the (potentially None) context
+            # GRN's call method should also have @do_not_convert if needed
+            grn_output = self.single_variable_grns[i](
+                var_input,
+                context=processed_context, # Pass processed context
+                training=training
+            )
+            var_outputs.append(grn_output)
+            _logger.debug(
+                "      GRN output shape for var {i}:"
+                f" {grn_output.shape}")
+            # Output shape: (B, T, units) or (B, units)
+
+        # --- Stack GRN outputs along variable dimension (N) ---
+        # axis=-2 places N before the 'units' dimension
+        stacked_outputs = tf_stack(var_outputs, axis=-2)
+        _logger.debug(
+            f"  Stacked GRN outputs shape: {stacked_outputs.shape}")
+        # Shape: (B, T, N, units) or (B, N, units)
+
+        # --- Calculate Variable Importance Weights (Original Simple Logic) ---
+        # 1. Apply Dense layer (output units = 1) to stacked outputs
+        #    Acts on the last dimension ('units')
+        _logger.debug("  Calculating importance logits...")
+        importance_logits = self.variable_importance_dense(stacked_outputs)
+        _logger.debug(
+            f"  Importance logits shape: {importance_logits.shape}"
+            )
+        # Shape: (B, [T,] N, 1)
+
+        # 2. Apply Softmax across the variable dimension (N, axis=-2)
+        _logger.debug("  Calculating importance weights (softmax)...")
+        weights = self.softmax(importance_logits)
+        _logger.debug(f"  Importance weights shape: {weights.shape}")
+        # Shape: (B, [T,] N, 1)
+        self.variable_importances_ = weights # Store weights
+
+        # --- Weighted Combination ---
+        # Multiply stacked GRN outputs by weights and sum across N
+        _logger.debug("  Performing weighted sum...")
+        weighted_sum = tf_reduce_sum(
+            tf_multiply(stacked_outputs, weights),
+            axis=-2 # Sum across the variable dimension (N)
+        )
+        _logger.debug(
+            f"  Final weighted sum output shape: {weighted_sum.shape}"
+            )
+        # Final output shape: (B, T, units) or (B, units)
+
+        _logger.debug(f"VSN '{self.name}': Exiting call method.")
+        
+        return weighted_sum
+    
+    def get_config(self):
+        """Returns the layer configuration."""
+        config = super().get_config()
+        config.update({
+            'num_inputs': self.num_inputs,
+            'units': self.units,
+            'dropout_rate': self.dropout_rate,
+            'use_time_distributed': self.use_time_distributed,
+            'activation': self.activation_str, 
+            'use_batch_norm': self.use_batch_norm,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        """Creates layer from its config."""
+        return cls(**config)
+        
+## XXXTODO: FIX 
+@register_keras_serializable(
+    'fusionlab.nn.components',
+    name="TemporalAttentionLayer"
+)
+class TemporalAttentionLayer(Layer):
+    """Temporal Attention Layer conditioning query with context."""
+
+    @validate_params({
+         "units": [Interval(Integral, 1, None, 
+                            closed='left')],
+         "num_heads": [Interval(Integral, 1, None,
+                                closed='left')],
+         "dropout_rate": [Interval(Real, 0, 1,
+                                   closed="both")],
+         "use_batch_norm": [bool],
+     })
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
+    def __init__(
+        self,
+        units: int,
+        num_heads: int,
+        dropout_rate: float = 0.0,
+        activation: str = 'elu',
+        use_batch_norm: bool = False,
+        **kwargs
+    ):
+        """Initializes the TemporalAttentionLayer."""
+        super().__init__(**kwargs)
+        self.units = units
+        self.num_heads = num_heads
+        self.dropout_rate = dropout_rate
+        self.use_batch_norm = use_batch_norm
+        self.activation_str = Activation(activation).activation_str 
+
+        # --- Define Internal Layers ---
+        self.multi_head_attention = MultiHeadAttention(
+            num_heads=num_heads,
+            key_dim=units,
+            dropout=dropout_rate,
+            name="mha"
+        )
+        self.dropout = Dropout(dropout_rate, name="attn_dropout")
+        self.layer_norm1 = LayerNormalization(name="layer_norm_1")
+
+        # GRN to process the input context_vector
+        # Ensure this is a single instance, passing the activation string
+        self.context_grn = GatedResidualNetwork(
+            units=units, # Output matches main path 'units'
+            dropout_rate=dropout_rate,
+            activation=self.activation_str,
+            use_batch_norm=self.use_batch_norm,
+            name="context_grn"
+            # Note: GRN's internal activation handling should be fixed
+        )
+
+        # Final GRN (position-wise feedforward)
+        # Ensure this is also a single instance
+        self.output_grn = GatedResidualNetwork(
+            units=units,
+            dropout_rate=dropout_rate,
+            activation=self.activation_str,
+            use_batch_norm=self.use_batch_norm,
+            name="output_grn"
+        )
+        
+    def build(self, input_shape):
+        """Builds internal layers, especially GRNs."""
+        # input_shape corresponds to the main 'inputs' tensor (B, T, U)
+        if not isinstance(input_shape, (list, tuple)):
+             # If only main input shape is passed (common)
+             main_input_shape = tuple(input_shape)
+        elif len(input_shape) == 2: 
+            #  [inputs_shape, context_shape] rarelly happended
+             main_input_shape = tuple(input_shape[0])
+             # Optionally build context_grn if context_shape is known
+             context_shape = tuple(input_shape[1])
+             if not self.context_grn.built:
+                  self.context_grn.build(context_shape)
+        else:
+             raise ValueError(
+                 "Unexpected input_shape format for build.")
+ 
+        if len(main_input_shape) < 3:
+            raise ValueError(
+                "TemporalAttentionLayer expects input rank >= 3")
+
+        # Define expected input shape for output_grn
+        # It receives output from layer_norm1, which has same shape as input
+        output_grn_input_shape = main_input_shape
+
+        # Explicitly build the output GRN if not already built
+        if not self.output_grn.built:
+            self.output_grn.build(output_grn_input_shape)
+            # Developer comment: Explicitly built output_grn.
+
+        # Build context_grn lazily during call or here
+        # Call the parent build method AFTER building sub-layers
+        super().build(input_shape)
+        # Developer comment: Layer built status should now be True.
+
+    def call(self, inputs, context_vector=None, training=False):
+        """Forward pass of the temporal attention layer."""
+        # Input shapes: inputs=(B, T, U), context_vector=(B, U_ctx)
+
+        query = inputs # Default query
+        processed_context = None
+
+        # --- Process Context Vector (if provided) ---
+        if context_vector is not None:
+            # Pass context_vector as the main input 'x' to context_grn
+            processed_context = self.context_grn(
+                x=context_vector,
+                context=None, # No nested context for the context_grn itself
+                training=training
+            )
+            # Output shape: (B, units)
+
+            # Expand context across time: (B, units) -> (B, 1, units)
+            context_expanded = tf_expand_dims(processed_context, axis=1)
+            # Add to inputs (broadcasting handles time dimension)
+            query = tf_add(inputs, context_expanded)
+            # Comment: Query now incorporates static context.
+
+        # --- Multi-Head Self-Attention ---
+        attn_output = self.multi_head_attention(
+            query=query, value=inputs, key=inputs, training=training
+        ) # Shape: (B, T, units)
+
+        # --- Add & Norm (First Residual Connection) ---
+        attn_output_dropout = self.dropout(attn_output, training=training)
+        # Residual connection uses original 'inputs'
+        x_attn = self.layer_norm1(tf_add(inputs, attn_output_dropout))
+        # Shape: (B, T, units)
+
+        # --- Position-wise Feedforward (Final GRN) ---
+        # This GRN takes the output of the attention block as input 'x'
+        # It does not receive the external 'context_vector' here.
+        # --- DEBUG lines ---
+        _logger.debug("\nDEBUG>> About to call self.output_grn")
+        _logger.debug(
+            "DEBUG>> Type of self.output_grn:"
+            f" {type(self.output_grn)}")
+        _logger.debug(
+            "DEBUG>> Is self.output_grn callable:"
+            f" {callable(self.output_grn)}")
+        try:
+            # Try accessing an attribute expected on a Keras layer
+            _logger.debug(
+                "DEBUG>> self.output_grn name:"
+                f" {self.output_grn.name}")
+            _logger.debug(
+                "DEBUG>> self.output_grn built status:"
+                f" {self.output_grn.built}")
+        except AttributeError as ae:
+             _logger.debug(
+                 "DEBUG>> Failed to access attributes"
+                 f" of self.output_grn: {ae}")
+        _logger.debug(
+            f"DEBUG>> Input x_attn shape: {tf_shape(x_attn)}\n")
+        
+        # --- End DEBUG lines ---
+        output = self.output_grn(
+            x=x_attn,
+            context=None, # No external context for the final GRN
+            training=training
+        )
+        # Shape: (B, T, units)
+        return output
+
+    def get_config(self):
+        """Returns the layer configuration."""
+        config = super().get_config()
+        config.update({
+            'units': self.units,
+            'num_heads': self.num_heads,
+            'dropout_rate': self.dropout_rate,
+            'activation': self.activation_str, 
+            'use_batch_norm': self.use_batch_norm,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        """Creates layer from its config."""
+        return cls(**config)
+@register_keras_serializable(
+    'fusionlab.nn.components', name="GatedResidualNetworkIn"
+)
+class GatedResidualNetworkIn(Layer, NNLearner):
     r"""
     Gated Residual Network (GRN) for deep feature 
     transformation with gating and residual 
@@ -880,11 +1899,12 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         return cls(**config)
 
 
+    
 @register_keras_serializable(
     'fusionlab.nn.components', 
-    name="TemporalAttentionLayer"
+    name="TemporalAttentionLayerIn"
 )
-class TemporalAttentionLayer(Layer, NNLearner):
+class TemporalAttentionLayerIn(Layer, NNLearner):
     r"""
     Temporal Attention Layer for focusing on
     important time steps [1]_.
@@ -1058,31 +2078,38 @@ class TemporalAttentionLayer(Layer, NNLearner):
         self.multi_head_attention = MultiHeadAttention(
             num_heads=num_heads,
             key_dim=units,
-            dropout=dropout_rate
+            dropout=dropout_rate, 
+            name="mha"
         )
 
         # Dropout
-        self.dropout = Dropout(dropout_rate)
+        self.dropout = Dropout(
+            dropout_rate, name="attn_dropout"
+            )
 
         # Layer normalization for residual block
-        self.layer_norm = LayerNormalization()
+        self.layer_norm = LayerNormalization(
+            name="layer_norm_1"
+        )
 
         # GRN to transform input prior 
         # to multi-head attention
-        self.grn = GatedResidualNetwork(
+        self.grn = GatedResidualNetworkIn(
             units,
             dropout_rate,
             use_time_distributed=True,
             activation=self.activation,
-            use_batch_norm=use_batch_norm
+            use_batch_norm=use_batch_norm, 
+           name="output_grn" 
         )
 
         # GRN to transform context vector
-        self.context_grn = GatedResidualNetwork(
+        self.context_grn = GatedResidualNetworkIn(
             units,
             dropout_rate,
             activation=self.activation,
-            use_batch_norm=use_batch_norm
+            use_batch_norm=use_batch_norm, 
+           name="context_grn"
         )
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context_vector, training=False):
@@ -1126,25 +2153,50 @@ class TemporalAttentionLayer(Layer, NNLearner):
            passed through another GRN for the
            final output.
         """
-        # Transform context vector
-        context_vector = self.context_grn(
-            context_vector,
-            training=training
-        )
+        # Default query is just the input sequence
+        query = inputs
+        
+        _logger.error(
+            f"DEBUG: TemporalAttentionLayer received"
+            f" context_vector type: {type(context_vector)},"
+            f" value: {context_vector}")
 
-        # Expand and tile context
-        context_expanded = tf_expand_dims(
-            context_vector,
-            axis=1
-        )
-        context_expanded = tf_tile(
-            context_expanded,
-            [1, tf_shape(inputs)[1], 1]
-        )
-
-        # Combine with inputs to form query
-        query = inputs + context_expanded
-
+        # Only process and add context 
+        # if it's actually provided
+        if context_vector is not None:
+            
+            # Transform context vector 
+            # Apply GRN to transform the context vector
+            # Pass context_vector as the main input 'x' to context_grn
+            # No further context is passed *to* this GRN itself
+            context_vector = self.context_grn(
+                x=context_vector,
+                training=training
+            )
+            # Output shape: (B, units)
+    
+            # Expand and tile context
+            context_expanded = tf_expand_dims(
+                context_vector,
+                axis=1
+            )
+            context_expanded = tf_tile(
+                context_expanded,
+                [1, tf_shape(inputs)[1], 1]
+            )
+            # Tile is handled by broadcasting during addition if needed
+            # Shape (B, 1, units) will broadcast with (B, T, units)
+            
+            # Combine with inputs to form query
+            query = inputs + context_expanded
+            # or 
+            # Add processed context to inputs to form the query
+            # query = tf_add(inputs, context_expanded)
+            
+            #  Query now incorporates static context
+        # else:
+            #  No context provided, query remains original inputs
+            
         # Apply multi-head attention
         attn_output = self.multi_head_attention(
             query=query,
@@ -1152,7 +2204,8 @@ class TemporalAttentionLayer(Layer, NNLearner):
             key=inputs,
             training=training
         )
-
+        # Output shape: (B, T, units)
+        
         # Dropout on attention output
         attn_output = self.dropout(
             attn_output,
@@ -1163,7 +2216,8 @@ class TemporalAttentionLayer(Layer, NNLearner):
         x = self.layer_norm(
             inputs + attn_output
         )
-
+        # Shape: (B, T, units)
+        
         # Final GRN
         output = self.grn(
             x,
@@ -1213,7 +2267,7 @@ class TemporalAttentionLayer(Layer, NNLearner):
         """
         return cls(**config)
     
-    
+
 # -------------------- XTFT components ----------------------------------------
 
 @register_keras_serializable(
@@ -2597,9 +3651,9 @@ class MultiObjectiveLoss(Loss, NNLearner):
 
 @register_keras_serializable(
     'fusionlab.nn.components', 
-    name="VariableSelectionNetwork"
+    name="VariableSelectionNetworkIn"
 )
-class VariableSelectionNetwork(Layer, NNLearner):
+class VariableSelectionNetworkIn(Layer, NNLearner):
     r"""
     VariableSelectionNetwork is designed to handle multiple
     input variables (static, dynamic, or future covariates)
@@ -2733,28 +3787,33 @@ class VariableSelectionNetwork(Layer, NNLearner):
 
         # Create the activation object from its name
         self.activation = activation
+        # Store activation string for config, convert later or inside GRN
+        self.activation_str = activation
 
         # Build one GRN for each variable
         self.single_variable_grns = [
-            GatedResidualNetwork(
+            GatedResidualNetworkIn(
                 units=units,
                 dropout_rate=dropout_rate,
                 use_time_distributed=False,
                 activation=self.activation,
-                use_batch_norm=use_batch_norm
+                use_batch_norm=use_batch_norm, 
+                name=f"single_var_grn_{i}"
             )
-            for _ in range(num_inputs)
+            for i in range(num_inputs)
         ]
         
         # Dense layer to compute variable importances
         self.variable_importance_dense = Dense(
-            1,
+             1, # num_inputs when context is applied.
             name="variable_importance"
         )
 
         # Softmax for normalizing variable weights
         self.softmax = Softmax(axis=-2)
-
+        
+        
+    @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training=False):
         r"""
         Execute the forward pass.
@@ -2797,6 +3856,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
             importance scores.
         """
         # rank = tf_rank(inputs)
+        # Ensure input has rank 3 (B, N, F) or 4 (B, T, N, F)
         actual_rank=inputs.shape.rank 
         
         var_outputs = []
@@ -2901,6 +3961,8 @@ class VariableSelectionNetwork(Layer, NNLearner):
             specified configuration.
         """
         return cls(**config)
+
+
 
 @register_keras_serializable(
     'fusionlab.nn.components', 
@@ -3873,6 +4935,87 @@ class MultiScaleLSTM(Layer, NNLearner):
         """
         return cls(**config)
 
+
+
+@register_keras_serializable(
+    'fusionlab.nn.components', name='CategoricalEmbeddingProcessor'
+)
+class CategoricalEmbeddingProcessor(Layer, NNLearner):
+    """Embeds multiple categorical features and concatenates them."""
+    def __init__(
+        self,
+        categorical_embedding_info: Dict[int, Tuple[int, int]],
+        # Dict mapping feature index to (vocab_size, embedding_dim)
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.categorical_embedding_info = categorical_embedding_info
+        self.embedding_layers = {}
+
+        # Create Embedding layers based on info provided
+        for index, (vocab_size, embed_dim) in \
+                self.categorical_embedding_info.items():
+            self.embedding_layers[index] = Embedding(
+                input_dim=vocab_size,
+                output_dim=embed_dim,
+                name=f"cat_embed_idx_{index}"
+            )
+
+    def call(self, inputs):
+        """Applies embedding to specified indices and concatenates."""
+        ## XXX TODO
+        # Input shape: (Batch, [TimeSteps,] NumCatFeatures)
+        # Note: Assumes input `inputs` ONLY contains the categorical features
+        #       in the correct order corresponding to the indices in the info dict.
+        #       A more robust version might take the full feature tensor and indices.
+
+        embeddings = []
+        # Check rank to handle static (2D) vs dynamic/future (3D)
+        input_rank = len(inputs.shape)
+        num_cat_features_provided = inputs.shape[-1]
+
+        # Validate number of features matches expected keys
+        if num_cat_features_provided != len(self.categorical_embedding_info):
+             raise ValueError(
+                f"Number of input categorical features ({num_cat_features_provided})"
+                f" does not match number of embedding layers"
+                f" ({len(self.categorical_embedding_info)})."
+                 )
+
+        feature_index_counter = 0
+        for original_index in sorted(self.embedding_layers.keys()):
+            # Assume the input tensor columns are ordered corresponding
+            # to the sorted original indices.
+            if input_rank == 2: # Static: (Batch, NumCatFeatures)
+                feature_tensor = inputs[:, feature_index_counter]
+            elif input_rank == 3: # Dynamic/Future: (Batch, Time, NumCatFeatures)
+                feature_tensor = inputs[:, :, feature_index_counter]
+            else:
+                raise ValueError(f"Unsupported input rank: {input_rank}")
+
+            # Apply embedding layer corresponding to the original index
+            embed_layer = self.embedding_layers[original_index]
+            embeddings.append(embed_layer(feature_tensor))
+            feature_index_counter += 1
+
+        # Concatenate embeddings along the last dimension
+        if not embeddings:
+            return None # Or handle appropriately if no categoricals
+        return tf_concat(embeddings, axis=-1)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "categorical_embedding_info": self.categorical_embedding_info,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+         # Keras serialization handles nested layers like Embedding
+        return cls(**config)
+    
+    
 # -----functions --------------------------------------------------------------
 
 @register_keras_serializable(

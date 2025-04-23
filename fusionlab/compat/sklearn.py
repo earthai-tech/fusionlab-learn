@@ -39,6 +39,7 @@ check_is_fitted
 """
 import warnings
 from packaging.version import Version, parse
+from typing import Optional, Union 
 import inspect
 import numpy as np
 import sklearn
@@ -83,6 +84,132 @@ __all__ = [
     "SKLEARN_LT_0_24"
 ]
 
+try : 
+    from sklearn.utils._param_validation import _Constraint, _type_name 
+except: 
+    # Or define minimal versions if to fallback:
+    class _Constraint:
+        """Base class for constraints."""
+        def is_satisfied_by(self, val):
+            raise NotImplementedError("Concrete constraint must implement 'is_satisfied_by'")
+        def __str__(self):
+            raise NotImplementedError("Concrete constraint must implement '__str__'")
+        def __or__(self, other):
+            from sklearn.utils._param_validation import Union 
+            return Union(self, other)
+    
+    def _type_name(type_):
+        """Helper to get the name of a type."""
+        module = getattr(type_, "__module__", None)
+        if module is None or module == "builtins":
+            return getattr(type_, "__qualname__", repr(type_))
+        return f"{module}.{getattr(type_, '__qualname__', repr(type_))}"
+
+
+class ListOptions(_Constraint):
+    """Constraint representing a list/tuple where each element
+    satisfies specific constraint(s).
+
+    Parameters
+    ----------
+    element_constraint : _Constraint or type
+        The constraint that each element in the list must satisfy.
+        Can be another `_Constraint` instance (like `Interval`,
+        `StrOptions`) or a basic type (`int`, `float`, `str`).
+    min_len : int or None, default=None
+        Minimum allowed length of the list/tuple. If None, no minimum
+        length check.
+    max_len : int or None, default=None
+        Maximum allowed length of the list/tuple. If None, no maximum
+        length check.
+    """
+    def __init__(
+        self,
+        element_constraint: Union[_Constraint, type],
+        *,
+        min_len: Optional[int] = None,
+        max_len: Optional[int] = None
+    ):
+        super().__init__()
+
+        # Check if element_constraint is a type or a _Constraint instance
+        if not isinstance(element_constraint, (_Constraint, type)):
+            raise TypeError(
+                "'element_constraint' must be a type (e.g., int, str) "
+                "or an instance of _Constraint (e.g., Interval(...))."
+            )
+
+        # Validate length constraints
+        if min_len is not None and (
+            not isinstance(min_len, int) or min_len < 0):
+            raise ValueError(
+                "'min_len' must be a non-negative integer or None."
+                )
+        if max_len is not None and (
+            not isinstance(max_len, int) or max_len < 0):
+            raise ValueError(
+                "'max_len' must be a non-negative integer or None."
+                )
+        if min_len is not None and max_len is not None and min_len > max_len:
+            raise ValueError(
+                "'min_len' cannot be greater than 'max_len'."
+                )
+
+        self.element_constraint = element_constraint
+        self.min_len = min_len
+        self.max_len = max_len
+
+        # Store how to check elements based on constraint type
+        if isinstance(self.element_constraint, _Constraint):
+            self._check_element = self.element_constraint.is_satisfied_by
+        else: # Assume it's a type
+            self._check_element = lambda val: isinstance(
+                val, self.element_constraint
+                )
+
+    def is_satisfied_by(self, val: object) -> bool:
+        """Check if `val` is a list/tuple satisfying the constraints."""
+        # 1. Check if it's a sequence type (list or tuple)
+        if not isinstance(val, (list, tuple)):
+            return False
+
+        # 2. Check length constraints
+        n = len(val)
+        if self.min_len is not None and n < self.min_len:
+            return False
+        if self.max_len is not None and n > self.max_len:
+            return False
+
+        # 3. Check each element against the element_constraint
+        for item in val:
+            if not self._check_element(item):
+                # Exit early if any element fails the check
+                return False
+
+        # If all checks pass
+        return True
+
+    def __str__(self) -> str:
+        """String representation of the constraint."""
+        # Get string representation of the element constraint
+        if isinstance(self.element_constraint, _Constraint):
+            element_str = str(self.element_constraint)
+        else: # It's a type
+            element_str = f"an instance of {_type_name(self.element_constraint)}"
+
+        s = f"a list or tuple where each element is {element_str}"
+
+        # Add length constraints to the description
+        len_constraints = []
+        if self.min_len is not None:
+            len_constraints.append(f"min length {self.min_len}")
+        if self.max_len is not None:
+            len_constraints.append(f"max length {self.max_len}")
+
+        if len_constraints:
+            s += f" (with {', '.join(len_constraints)})"
+
+        return s
 
 class OneHotEncoder(SklearnOneHotEncoder):
     """

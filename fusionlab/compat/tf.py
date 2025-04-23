@@ -103,9 +103,15 @@ class KerasDependencies:
         name
     ):
         standalone_mapping = {
+            'Assert': ('tensorflow', 'Assert'), 
+            'TensorShape': ('tensorflow', 'TensorShape'), 
+            'Tensor': ('tensorflow', 'Tensor'), 
+            
             'reduce_mean': ('tensorflow', 'reduce_mean'),
             'reduce_sum': ('tensorflow', 'reduce_sum'),
             'reduce_all': ('tensorflow', 'reduce_all'),
+            'reduce_max': ('tensorflow', 'reduce_max'),
+            'repeat': ('tensorflow', 'repeat'), 
             'rank': ('tensorflow', 'rank'), 
             'zeros': ('tensorflow', 'zeros'),
             'zeros_like': ('tensorflow', 'zeros_like'), 
@@ -123,26 +129,38 @@ class KerasDependencies:
             'Dataset': ('tensorflow.data', 'Dataset'),
             'set_seed':('tensorflow.random', 'set_seed'), 
             'add_n': ('tensorflow.math', 'add_n'), 
-            'maximum':('tensorflow.math', 'maximum'), 
+            'maximum':('tensorflow.math', 'maximum'),
+            'minimum':('tensorflow.math', 'minimum'), 
             'backend': ('tensorflow.keras', 'backend'), 
             'activations': ('tensorflow.keras', 'activations'), 
             'add': ('tensorflow.math', 'add'), 
             'range':('tensorflow', 'range'), 
             'convert_to_tensor': ('tensorflow', 'convert_to_tensor'), 
-            'Tensor': ('tensorflow', 'Tensor'), 
+            'transpose': ('tensorflow', 'transpose'), 
             'cast': ('tensorflow', 'cast'), 
             'abs': ('tensorflow', 'abs'), 
             'float32': ('tensorflow', 'float32'), 
+            'int32': ('tensorflow', 'int32'), 
             'autograph': ('tensorflow', 'autograph'), 
-            # 'zeros': ('tensorflow', 'zeros'),
+            'zeros': ('tensorflow', 'zeros'),
             'multiply': ('tensorflow', 'multiply'), 
             'get_static_value':('tensorflow', 'get_static_value'),
             'equal': ('tensorflow', 'equal'), 
             'debugging': ('tensorflow', 'debugging'), 
             'assert_equal': ('tensorflow', 'assert_equal'), 
-            # 'constant': ('tensorflow', 'constant')
+            'constant': ('tensorflow', 'constant'), 
             'subtract': ('tensorflow', 'subtract'), 
-            'RepeatVector': ('tensorflow', 'RepeatVector')
+            'regularizers': ('tensorflow.keras', 'regularizers'), 
+            'split': ('tensorflow', 'split'),
+            'gather': ('tensorflow', 'gather'), 
+            'squeeze': ('tensorflow', 'squeeze'), 
+            'control_dependencies': ('tensorflow', 'control_dependencies'), 
+            'cond': ('tensorflow', 'cond'), 
+            'logical_and': ('tensorflow', 'logical_and'), 
+            'logical_not': ('tensorflow', 'logical_not'), 
+            'logical_or': ('tensorflow', 'logical_or'), 
+            
+            
         }
 
         mapping = {
@@ -199,6 +217,8 @@ class KerasDependencies:
             'Embedding': ('layers', 'Embedding'), 
             'clone_model': ('models', 'clone_model'),
             'load_model': ('models', 'load_model'),
+            'RepeatVector': ('layers', 'RepeatVector'), 
+            'Bidirectional': ('layers', 'Bidirectional'), 
             "register_keras_serializable": (saving_module, "register_keras_serializable"),
         }
 

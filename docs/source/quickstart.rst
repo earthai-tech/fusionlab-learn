@@ -24,6 +24,7 @@ forecasting using only dynamic (past) inputs.
    We need TensorFlow, NumPy, and the model class.
 
    .. code-block:: python
+      :linenos:
 
       import tensorflow as tf
       import numpy as np
@@ -39,7 +40,8 @@ forecasting using only dynamic (past) inputs.
    a target variable.
 
    .. code-block:: python
-
+      :linenos:
+      
       # Define data dimensions
       batch_size = 16
       num_past_timesteps = 20  # Length of historical input sequence
@@ -69,7 +71,8 @@ forecasting using only dynamic (past) inputs.
    We omit `quantiles` for point forecasting.
 
    .. code-block:: python
-
+      :linenos:
+      
       model = TemporalFusionTransformer(
           dynamic_input_dim=dynamic_feature_dim,
           forecast_horizon=forecast_horizon,
@@ -94,7 +97,8 @@ forecasting using only dynamic (past) inputs.
    Mean Squared Error ('mse') is a common choice.
 
    .. code-block:: python
-
+      :linenos:
+      
       model.compile(optimizer='adam', loss='mse')
 
 
@@ -102,7 +106,8 @@ forecasting using only dynamic (past) inputs.
    Fit the model to the dummy data for a few epochs.
 
    .. code-block:: python
-
+      :linenos: 
+      
       print("\nTraining the model...")
       history = model.fit(
           x=(X_dynamic,), # Input must be a tuple
@@ -119,7 +124,8 @@ forecasting using only dynamic (past) inputs.
    same data in this example).
 
    .. code-block:: python
-
+      :linenos:
+      
       print("\nMaking predictions...")
       # Use the same input data for prediction in this example
       predictions = model.predict((X_dynamic,))

@@ -75,8 +75,13 @@ if KERAS_BACKEND:
     )
     from .transformers import ( 
         TemporalFusionTransformer, 
-        NTemporalFusionTransformer
+        NTemporalFusionTransformer, 
         TFT, XTFT, SuperXTFT
+        )
+    from .anomaly_detection import ( 
+        LSTMAutoencoderAnomaly, 
+        SequenceAnomalyScoreLayer, 
+        PredictionErrorAnomalyScore
         )
     
     __all__ = [
@@ -95,6 +100,9 @@ if KERAS_BACKEND:
         "cross_validate_lstm",
         "TemporalFusionTransformer", 
         "NTemporalFusionTransformer", 
+        "LSTMAutoencoderAnomaly", 
+        "SequenceAnomalyScoreLayer", 
+        "PredictionErrorAnomalyScore", 
         "TFT", "XTFT", "SuperXTFT"
     ]
 
