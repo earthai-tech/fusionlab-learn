@@ -1,73 +1,168 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 664.2 288.06">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 636.72 254.8">
   <defs>
     <style>
       .cls-1 {
-        stroke: url(#Super_Soft_Black_Vignette);
+        fill: url(#Super_Soft_Black_Vignette-13);
       }
 
-      .cls-1, .cls-2, .cls-3, .cls-4, .cls-5, .cls-6 {
+      .cls-1, .cls-2, .cls-3, .cls-4, .cls-5, .cls-6, .cls-7, .cls-8, .cls-9, .cls-10, .cls-11, .cls-12, .cls-13, .cls-14, .cls-15, .cls-16, .cls-17, .cls-18, .cls-19, .cls-20 {
         stroke-miterlimit: 10;
       }
 
-      .cls-1, .cls-2, .cls-4 {
-        stroke-width: 3px;
+      .cls-1, .cls-3, .cls-4, .cls-5, .cls-6, .cls-8, .cls-10, .cls-11, .cls-13, .cls-14, .cls-16, .cls-17, .cls-18, .cls-20 {
+        stroke: #f6921e;
       }
 
-      .cls-1, .cls-2, .cls-4, .cls-5 {
-        fill: #2c3c97;
+      .cls-1, .cls-3, .cls-4, .cls-5, .cls-6, .cls-8, .cls-10, .cls-11, .cls-13, .cls-14, .cls-17, .cls-18, .cls-20 {
+        opacity: .5;
       }
 
       .cls-2 {
-        font-size: 210.47px;
-        stroke: #000;
-      }
-
-      .cls-2, .cls-5 {
-        font-family: BradleyHandITC, 'Bradley Hand ITC';
-      }
-
-      .cls-3 {
-        fill: #f7941d;
-        stroke: #231f20;
+        fill: #f28620;
         stroke-width: 5px;
       }
 
+      .cls-2, .cls-19 {
+        stroke: #231f20;
+      }
+
+      .cls-3 {
+        fill: url(#Super_Soft_Black_Vignette-11);
+      }
+
       .cls-4 {
-        stroke: url(#Super_Soft_Black_Vignette-2);
+        fill: url(#Super_Soft_Black_Vignette-10);
       }
 
       .cls-5 {
-        font-size: 100px;
-      }
-
-      .cls-5, .cls-6 {
-        stroke: #f7941d;
+        fill: url(#Super_Soft_Black_Vignette-9);
       }
 
       .cls-6 {
+        fill: url(#Super_Soft_Black_Vignette-8);
+      }
+
+      .cls-7 {
+        stroke-dasharray: 0 0 1 1;
+      }
+
+      .cls-7, .cls-9, .cls-12, .cls-15 {
+        stroke: #fff;
+      }
+
+      .cls-7, .cls-12, .cls-15, .cls-19 {
+        stroke-width: 3px;
+      }
+
+      .cls-7, .cls-15 {
+        fill: none;
+      }
+
+      .cls-8 {
+        fill: url(#Super_Soft_Black_Vignette-12);
+      }
+
+      .cls-9, .cls-16 {
+        stroke-width: 2px;
+      }
+
+      .cls-9, .cls-19 {
+        fill: #f6921e;
+      }
+
+      .cls-10 {
         fill: url(#Super_Soft_Black_Vignette-3);
       }
+
+      .cls-11 {
+        fill: url(#Super_Soft_Black_Vignette-7);
+      }
+
+      .cls-12, .cls-21 {
+        fill: #2e3191;
+      }
+
+      .cls-13 {
+        fill: url(#Super_Soft_Black_Vignette-4);
+      }
+
+      .cls-14 {
+        fill: url(#Super_Soft_Black_Vignette-5);
+      }
+
+      .cls-21 {
+        stroke-width: 0px;
+      }
+
+      .cls-16 {
+        fill: #2b3c97;
+        font-family: ComicSansMS-Bold, 'Comic Sans MS';
+        font-size: 90px;
+        font-weight: 700;
+      }
+
+      .cls-17 {
+        fill: url(#Super_Soft_Black_Vignette-2);
+      }
+
+      .cls-18 {
+        fill: url(#Super_Soft_Black_Vignette);
+      }
+
+      .cls-20 {
+        fill: url(#Super_Soft_Black_Vignette-6);
+      }
     </style>
-    <radialGradient id="Super_Soft_Black_Vignette" data-name="Super Soft Black Vignette" cx="165.99" cy="148.04" fx="165.99" fy="148.04" r="91.25" gradientUnits="userSpaceOnUse">
+    <radialGradient id="Super_Soft_Black_Vignette" data-name="Super Soft Black Vignette" cx="99.48" cy="108.09" fx="99.48" fy="108.09" r="31.24" gradientUnits="userSpaceOnUse">
       <stop offset=".57" stop-color="#130c0e" stop-opacity="0"/>
       <stop offset=".8" stop-color="#130c0e" stop-opacity=".65"/>
       <stop offset=".82" stop-color="#130c0e" stop-opacity=".7"/>
       <stop offset="1" stop-color="#130c0e" stop-opacity=".95"/>
     </radialGradient>
-    <radialGradient id="Super_Soft_Black_Vignette-2" data-name="Super Soft Black Vignette" cx="116.71" cy="119.69" fx="116.71" fy="119.69" r="68.68" xlink:href="#Super_Soft_Black_Vignette"/>
-    <radialGradient id="Super_Soft_Black_Vignette-3" data-name="Super Soft Black Vignette" cx="161.16" cy="250.39" fx="161.16" fy="250.39" r="60.09" gradientTransform="translate(24.44 -1.36) scale(.52)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-2" data-name="Super Soft Black Vignette" cx="-673.14" cy="1206.93" fx="-673.14" fy="1206.93" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-3" data-name="Super Soft Black Vignette" cx="-730.41" cy="1238.17" fx="-730.41" fy="1238.17" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-4" data-name="Super Soft Black Vignette" cx="-610.65" cy="1243.78" fx="-610.65" fy="1243.78" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-5" data-name="Super Soft Black Vignette" cx="-704.38" cy="1275.02" fx="-704.38" fy="1275.02" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-6" data-name="Super Soft Black Vignette" cx="-761.66" cy="1290.22" fx="-761.66" fy="1290.22" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-7" data-name="Super Soft Black Vignette" cx="-834.12" cy="1160.49" fx="-834.12" fy="1160.49" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-8" data-name="Super Soft Black Vignette" cx="-478.4" cy="1129.24" fx="-478.4" fy="1129.24" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-9" data-name="Super Soft Black Vignette" cx="-478.4" cy="1160.49" fx="-478.4" fy="1160.49" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-10" data-name="Super Soft Black Vignette" cx="-880.56" cy="1191.73" fx="-880.56" fy="1191.73" r="31.24" gradientTransform="translate(203.24 98.9) scale(.11 .1)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-11" data-name="Super Soft Black Vignette" cx="-580.59" cy="1168.6" fx="-580.59" fy="1168.6" r="31.24" gradientTransform="translate(237.12 43.49) scale(.17 .15)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-12" data-name="Super Soft Black Vignette" cx="-716.17" cy="1189.62" fx="-716.17" fy="1189.62" r="31.24" gradientTransform="translate(237.12 43.49) scale(.17 .15)" xlink:href="#Super_Soft_Black_Vignette"/>
+    <radialGradient id="Super_Soft_Black_Vignette-13" data-name="Super Soft Black Vignette" cx="-764.93" cy="1214.41" fx="-764.93" fy="1214.41" gradientTransform="translate(237.12 43.49) scale(.17 .15)" xlink:href="#Super_Soft_Black_Vignette"/>
   </defs>
   <g id="l">
-    <path class="cls-3" d="M132.61.92c-5.92,14.9-13.67,36.06-21,62-6.34,22.44-13.36,47.25-16.37,77.89-4.69,47.82-8.25,84.05,14.37,103.11,18.77,15.82,53.72,18.25,74,0,17.22-15.5,22.25-44.46,12-60-.77-1.16-8.29-12.27-17-11-7.03,1.02-10.79,9.52-11,10-5.48,12.85,7.47,21.44,5,35-2.64,14.49-21.76,28.34-37,25-13.49-2.96-19.91-18.51-23-26-5.53-13.41-7.52-28.63,2-79,0,0,8.41-44.47,21-85,7.54-24.28,16.85-48.62,16.85-48.62.03-.08.11-.3.15-.38"/>
+    <path class="cls-2" d="M110.48,25.38c-33.81,156.45-20.71,196.22-3.37,204.44,11.22,5.32,30.3.31,42.34-8.32,17.78-12.75,27.79-38.85,19.9-49.75-2.51-3.47-7.31-6.06-12.13-6.04-5.9.03-12.49,4-13.07,8.65-.75,6.06,9.29,8.53,9.77,14.57.76,9.69-23.27,26.69-36.87,20.8-24.15-10.47-13.79-92.44,1.41-144.22,4.92-16.78,10.33-30.3,14.3-39.43,0,0,0,0,0,0,.03-.08.09-.23.12-.31"/>
   </g>
   <g id="Layer_1" data-name="Layer 1">
-    <text class="cls-2" transform="translate(15.23 174.25) rotate(7.74) scale(2.23 1)"><tspan x="0" y="0">f</tspan></text>
-    <path class="cls-1" d="M246.12,70.51l-3.63-2.92-3.78-4-3.78-2.22-4.39-2.1-1.2-1.18c-2.42-.89-4.97-1.73-7.55-2.49l-1.61-.02-5.79-1.62-9.18-2.18-12.49.06-7.8-2.24c-.24,0-.48,0-.72,0l-3.13,1.28-2.36-.74h-3.64c-2.89.36-5.85.9-8.87,1.71l-2.16,2.05h-4.18l-7.15,5.24-3.56.44-2.54,1.64,1.21,1.31-2.22.16-1.74,1.79.22,1.79-10.7,9.31.12,2.22-5.9,4.28.95,3.24-2.96,1.36-3.2,6.51-4.57,1.35-.9,2.37-1.36.92c-.46.69-.92,1.38-1.37,2.06l.9,4.44-3.28,3.02-1.57,5.45-2.84,3.87,1.3,1.13-6.14,12.42-1.36,2.36-5.16,10.12-2.24,4.44c-.1.56-.16.99-.18,1.27-.04.48-.22,3.59-1.28,7.56l.04,1.6-.41.28c-1.02,5.95-4.28,27.2-5.86,45.72v.04s-.01.09-.01.09c-.06.74-.12,1.48-.18,2.21h0s-.07.95-.08,2.53l1.55,2.81-1.42,2.05c.1,1.63.26,3.46.52,5.42l.25.74-.13.07c.57,3.88,1.53,8.18,3.16,12.33l4.29,6.63v1.44c.48.75,1,1.84,1.72,2.94l1.78.77,2.18,2.68,3.21-.72h1.78l.86-1.49-.88-3.75.14-1.02-1.46-3.96-3.37-3.02,2.02-2.94,3.32-.59-6.85-5.7.33-12.61-3.68-12.01,1.55-1.81c0-.98.03-1.96.08-2.96l-1.46-3.3,1.97-1.95c.03-.23.07-.46.1-.7l-1.56-1.31-.92-3.26,2.26-8.97,3.51-4.56-1.87-4.92,4.99-4.4-.96-3.14,3.17-2.89-.17-8.94,3.79-2.88c.36-1.14.74-2.28,1.13-3.43l-.61-1.61,2.23-3.05s.02-.07.04-.1l-.98-2.9,3.44-3.55c1.57-3.89,3.34-7.83,5.36-11.8l-.17-.72.98-.84c1.62-3.08,3.4-6.18,5.37-9.27l-.04-.42.74-.66c2.08-3.2,4.37-6.39,6.9-9.57v-.03l.51-.6c1.57-1.94,3.22-3.88,4.98-5.81,1.16-1.27,2.32-2.55,3.49-3.81l-.75-1.11,3.81-2.99,3.6-3.88,1.13.06c1.56-1.46,3.16-2.86,4.82-4.2l1.17-2.36,20.31-10.99,2.16,2.12,1.93-.57,2.18-2.4,10.04.67,3.91.95c2.23.1,4.54.32,6.88.7l3.2-.6,12.67,3.69,4.45-.74,5.56,3.78,7.45,11.36.76-.11c3.81-.71,7.78-3.97,7.86-7.22Z"/>
-    <path class="cls-4" d="M211.26,132.46v-.64c-.3-.1-.7-.21-1.21-.34l-4.83.25-4.01-2.07c-.15-.03-.3-.06-.46-.09l-4.03-.44-8.49-1.69-10.35-.37-9.56-2.75-9.41-.45-12.91-1.96-8.91-.8-5.93-.43h-5.56l-1.29-.93c-3.78-.27-10.36-.78-17.95-1.61l-2.1.32h-3.33l-8.22-1.33-8.02-1.59-9.09-.86h-6.67l-11.33-2.22-10.22-1.77h-8l-2.6-1.46-9.17-2.32c-1.95,1.28-3.8,3.06-5.07,4.89l3.12,3.54,9.27,4.22,3.12-1.04,3.43.99c4.61,0,9.98.15,16.08.8,5.55.59,4.56.82,15.08,2.91l2.09-.85,4.91,2.19c.06.01.12.02.18.03l4.62-.59,6.9,1.97,4.25-.2,3.45-.31.92,2.6c7.28,1.14,12.03,1.72,15.26,2.01l1.77-.62,3.72.32,3.06-.85,3.38-1.37,8.42,1.22,3.5,1.38c.27,0,.53,0,.82,0,2.49.02,4.79.06,6.86.11l.88-.06,1.5-.83,5.37,1.13c.97.04,1.79.07,2.43.1,1.14.05,2.24.1,3.34.14l6.82-.91,2.96,1.32c29.28,1.24,38.78,1.56,41.2,1.26Z"/>
-    <text class="cls-5" transform="translate(229.76 154.18)"><tspan x="0" y="0">fusion-lab</tspan></text>
+    <text class="cls-16" transform="translate(196.7 164.33)"><tspan x="0" y="0">fusion-lab</tspan></text>
+    <g>
+      <path class="cls-21" d="M64.36,254.55c.76-4.59,1.94-11.38,3.56-19.56,4.2-21.26,9.18-45.96,20.08-75.29.8-2.16,8.63-23.05,17.85-39.08,4.49-7.82,9.67-15.44,9.67-15.44s3.82-5.64,7.11-9.94c19.58-25.64,46.81-33.78,46.81-33.78,7.55-2.26,23.31-5.98,42.08-2.81,11.01,1.86,16.5,4.93,20.14,1.63,3.58-3.25,3.28-11.06.59-15.84-8.32-14.76-46.39-12.47-73-3.07,0,0-40.77,14.39-69.24,57.19-4.83,7.27-9.59,15.95-9.59,15.95-7.44,15.01-12.77,27.91-16.38,37.34-12.53,32.65-19.79,70.98-21.83,80.81"/>
+      <g>
+        <path class="cls-15" d="M64.36,254.55c.03-.16.05-.32.08-.49"/>
+        <path class="cls-7" d="M64.61,253.08c.76-4.52,1.86-10.74,3.31-18.08,4.2-21.26,9.18-45.96,20.08-75.29.8-2.16,8.63-23.05,17.85-39.08,4.49-7.82,9.67-15.44,9.67-15.44s3.82-5.64,7.11-9.94c19.58-25.64,46.81-33.78,46.81-33.78,7.55-2.26,23.31-5.98,42.08-2.81,11.01,1.86,16.5,4.93,20.14,1.63,3.58-3.25,3.28-11.06.59-15.84-8.32-14.76-46.39-12.47-73-3.07,0,0-40.77,14.39-69.24,57.19-4.83,7.27-9.59,15.95-9.59,15.95-7.44,15.01-12.77,27.91-16.38,37.34-12.15,31.65-19.34,68.65-21.63,79.83"/>
+        <path class="cls-15" d="M42.3,232.18c-.03.17-.07.33-.1.49"/>
+      </g>
+    </g>
+    <ellipse class="cls-19" cx="121.66" cy="25.51" rx="12.05" ry="3.97"/>
+    <path class="cls-12" d="M88.8,112.16c-9.08-4.17-19.61-7.32-19.61-7.32-9.76-2.92-17.23-4.11-24.87-5.3-8.7-1.35-20.24-2.74-34.05-3.25,2.24-4.71,4.48-9.42,6.71-14.13,9.84,1.12,20.06,2.7,30.61,4.83,46.82,9.48,85.96,27.11,116.75,45.2-7.45,8.85-14.9,17.7-22.35,26.55-3.79-4.8-27.96-35-53.2-46.59Z"/>
   </g>
   <g id="circle">
-    <circle class="cls-6" cx="108.23" cy="128.82" r="31.24"/>
+    <circle class="cls-18" cx="99.48" cy="108.09" r="31.24"/>
+    <ellipse class="cls-17" cx="127.92" cy="218.08" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-10" cx="121.51" cy="221.16" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-13" cx="134.91" cy="221.72" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-14" cx="124.42" cy="224.8" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-20" cx="118.01" cy="226.3" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-11" cx="109.9" cy="213.49" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-6" cx="149.71" cy="210.41" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-5" cx="149.71" cy="213.49" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-4" cx="104.71" cy="216.58" rx="3.5" ry="3.09"/>
+    <ellipse class="cls-3" cx="140.56" cy="214.99" rx="5.2" ry="4.59"/>
+    <ellipse class="cls-8" cx="118.01" cy="218.08" rx="5.2" ry="4.59"/>
+    <ellipse class="cls-1" cx="109.9" cy="221.72" rx="5.2" ry="4.59"/>
+    <circle class="cls-9" cx="97.48" cy="108.2" r="11.56"/>
   </g>
 </svg>

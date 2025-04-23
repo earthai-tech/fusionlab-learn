@@ -4,18 +4,18 @@
 
 -----------------------------------------------------
 
-# FusionLab 🔥🧪: Igniting Next-Gen Fusion Models
+# Igniting Next-Gen Fusion Models
 
-### _A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_
+*🔥🧪A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond*
+
+
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
-
-[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest&style=flat-square)](https://fusionlab.readthedocs.io/en/latest/?badge=latest)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/python-package-conda.yml?branch=main&style=flat-square)](https://github.com/earthai-tech/fusionlab/actions/workflows/python-package-conda.yml)
+[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/)
+[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest)](https://fusionlab.readthedocs.io/en/latest/?badge=latest)
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
-<!-- [![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/) -->
-
+<!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
 
 **FusionLab** provides a flexible and extensible framework in Python
 for working with advanced time-series forecasting models. It focuses
@@ -31,31 +31,33 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 
 ## ✨ Key Features
 
-* 🧩 **Modular Components:** Build custom models using reusable blocks:
-    * Gated Residual Networks (GRNs)
-    * Variable Selection Networks (VSNs)
-    * Specialized Attention Layers (Temporal, Cross, Hierarchical, Memory-Augmented)
-    * Multi-Scale LSTMs & Multi-Resolution Fusion
-    * Learned Normalization, Positional Encoding
+### 🔧 **Modular Architecture**
+- **Reusable Neural Blocks** for custom model building:
+  - Gated Residual Networks (GRNs)
+  - Variable Selection Networks (VSNs)
+  - Specialized Attention Layers (Temporal, Cross, Hierarchical, Memory-Augmented)
+  - Multi-Scale LSTMs, Fusion Mechanisms
+  - Learned Normalization & Positional Encoding
 
-* 🚀 **Advanced Architectures Implemented:**
-    * :class:`~fusionlab.nn.TemporalFusionTransformer`: A flexible implementation of the standard TFT.
-    * :class:`~fusionlab.nn.NTemporalFusionTransformer`: A variant requiring static/dynamic inputs (point forecasts only currently).
-    * :class:`~fusionlab.nn.XTFT`: High-capacity *Extreme Temporal Fusion X* with advanced attention, multi-scale processing, and anomaly detection features.
-    * :class:`~fusionlab.nn.SuperXTFT`: An experimental enhancement of XTFT with input VSNs (currently deprecated).
+### 🧠 **Implemented Architectures**
+- `TemporalFusionTransformer` – Standard TFT model
+- `NTemporalFusionTransformer` – Point forecast variant with structured inputs
+- `XTFT` – *Extreme TFT* with advanced attention and anomaly tools
+- `SuperXTFT` – Experimental, VSN-enhanced 
 
-* 🔬 **Integrated Anomaly Detection:** XTFT includes strategies for
-    feature-based or prediction-based anomaly score calculation and
-    integration into the loss.
-* 🛠️ **Practical Utilities:** Includes helpers for:
-    * Time series data preprocessing and validation (`ts_utils`).
-    * Sequence generation for training (`create_sequences`, `reshape_xtft_data`).
-    * Preparing inputs for future predictions (`prepare_spatial_future_data`).
-    * Generating and visualizing forecasts (`generate_forecast`, `visualize_forecasts`).
-    * Hyperparameter tuning using Keras Tuner (`forecast_tuner`).
-* ⚙️ **TensorFlow Backend:** Currently built on TensorFlow/Keras, leveraging its
-    ecosystem. 
+### 🚨 **Anomaly Detection**
+- Integrated within `XTFT`
+- Based on features or predictions
+- Supports loss weighting and anomaly-aware learning
 
+### 🛠️ **Utility Functions**
+- Time series tools: `ts_utils`, `create_sequences`, `reshape_xtft_data`
+- Forecast prep and visualization: `prepare_spatial_future_data`, `generate_forecast`, `visualize_forecasts`
+- Hyperparameter tuning: `forecast_tuner` (via Keras Tuner)
+
+### ⚙️ **Framework**
+- Built on **TensorFlow/Keras**
+- **Planned support** for PyTorch and JAX in future updates
 
 ---
 

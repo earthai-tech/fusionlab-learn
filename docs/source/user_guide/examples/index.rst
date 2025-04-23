@@ -18,6 +18,7 @@ Browse through the examples below to see ``fusionlab`` in action.
    :caption: Examples:
 
    basic_tft_forecasting
+   tft_no_flex
    quantile_forecasting_tft
    advanced_forecasting_xtft
    xtft_with_anomaly_detection

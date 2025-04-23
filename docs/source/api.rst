@@ -121,6 +121,7 @@ Components specifically designed for anomaly detection tasks.
 
    ~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly
    ~fusionlab.nn.anomaly_detection.SequenceAnomalyScoreLayer
+   ~fusionlab.nn.anomaly_detection.PredictionErrorAnomalyScore
 
 
 Hyperparameter Tuning (`fusionlab.nn.forecast_tuner`)

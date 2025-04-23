@@ -681,27 +681,7 @@ class FlexDict(dict):
         keys = ', '.join(self.keys())
         return f"<FlexDict with keys: {keys}>"
 
-# # write a function that accept dictionnary  and format the result accordingly 
-# DictionnaryName( { 
-#                     key1: value1, 
-#                     key2: value2, 
-#                     key3: value3, 
-#                     ...: ..., 
-#                   }
-# )
-        
-# # the space to reach the key is the sum of the length "DictionnaryName( {" + "  " + the maximum 
-# # key length of the dictionnay "maxkeylength" then add ":" and value. If value is exceeded 
-# # max character 50, then use three dots "..." and. 
 
-
-# # for instance : 
-#     def format_dict_result( dict_name, max_char=50): 
-#         # implement the rest. you can rename the function to make it 
-#         # intuitive and the name of parameters also 
-    
-
-            
             
             
             
