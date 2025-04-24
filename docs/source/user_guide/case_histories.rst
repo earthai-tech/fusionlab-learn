@@ -406,12 +406,6 @@ items or time periods using matplotlib or :func:`~fusionlab.nn.utils.visualize_f
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
-# ... (End of Nansha Case Study section) ...
-
-.. raw:: html
-
-   <hr style="margin-top: 2em; margin-bottom: 2em;">
-
 .. _case_history_zhongshan:
 
 Zhongshan Land Subsidence Forecasting (Using XTFT)

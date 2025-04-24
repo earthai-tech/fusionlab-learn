@@ -52,7 +52,7 @@ extensions = [
     'sphinx_copybutton',        # Adds a 'copy' button to code blocks
     'myst_parser',              # Allow parsing Markdown files (like README.md)
     'sphinx_design',            # Enable design elements like cards, buttons, grids
-    # Add other extensions here if needed, e.g., 'sphinx_gallery.gen_gallery'
+                                # e.g., 'sphinx_gallery.gen_gallery'
     # 'sphinxcontrib.bibtex',   # Add BibTeX support <--- ADD THIS LINE
 ]
 
@@ -155,7 +155,7 @@ napoleon_use_ivar = True       # Use :ivar: role for instance variables
 napoleon_use_param = True      # Use :param: role for parameters
 napoleon_use_rtype = True      # Use :rtype: role for return types
 napoleon_preprocess_types = True # Process type strings into links
-# napoleon_type_aliases = None # Dictionary to map type names
+napoleon_type_aliases = None # Dictionary to map type names
 napoleon_attr_annotations = True # Use PEP 526 annotations for attributes
 
 # -- Options for MyST Parser (Markdown) --
@@ -164,8 +164,8 @@ myst_enable_extensions = [
     "deflist",          # Allow definition lists
     "smartquotes",      # Use smart quotes
     "replacements",     # Apply textual replacements
-    # "linkify",        # Automatically identify URL links (optional)
-    "dollarmath",     # Allow $...$ and $$...$$ for math (if not using mathjax)
+    "linkify",        # Automatically identify URL links (optional)
+    "dollarmath",     # Allow $...$ and $$...$$ for math (ifcd  not using mathjax)
 ]
 myst_heading_anchors = 3 # Automatically add anchors to headings up to level 3
 
@@ -178,9 +178,8 @@ intersphinx_mapping = {
     'sklearn': ('[https://scikit-learn.org/stable/](https://scikit-learn.org/stable/)', None),
     'pandas': ('[https://pandas.pydata.org/pandas-docs/stable/](https://pandas.pydata.org/pandas-docs/stable/)', None),
     'tensorflow': ('[https://www.tensorflow.org/api_docs/python](https://www.tensorflow.org/api_docs/python)', '[https://www.tensorflow.org/api_docs/python/objects.inv](https://www.tensorflow.org/api_docs/python/objects.inv)'),
-    'keras': ('[https://keras.io/api/](https://keras.io/api/)', None), # Verify Keras objects.inv availability
+    'keras': ('[https://keras.io/api/](https://keras.io/api/)', None), #
     'matplotlib': ('[https://matplotlib.org/stable/](https://matplotlib.org/stable/)', None),
-    # Add other relevant libraries here
 }
 
 # -- Options for copybutton extension --
