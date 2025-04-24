@@ -1,8 +1,8 @@
 .. _example_hyperparameter_tuning:
 
-============================
+==============================
 Hyperparameter Tuning Example
-============================
+==============================
 
 Finding optimal hyperparameters is crucial for getting the best
 performance from models like :class:`~fusionlab.nn.XTFT` and
@@ -10,8 +10,10 @@ performance from models like :class:`~fusionlab.nn.XTFT` and
 convenient wrappers around the `Keras Tuner <https://keras.io/keras_tuner/>`_
 library to automate this search process.
 
-This example demonstrates how to use :func:`~fusionlab.nn.forecast_tuner.xtft_tuner`
-to tune an XTFT model for quantile forecasting.
+This example demonstrates how to use
+:func:`~fusionlab.nn.forecast_tuner.xtft_tuner` to tune an XTFT model
+for quantile forecasting. The process for using
+:func:`~fusionlab.nn.forecast_tuner.tft_tuner` is analogous.
 
 Prerequisites
 -------------
@@ -22,8 +24,12 @@ Ensure you have installed `keras-tuner`:
 
    pip install keras-tuner -q
 
-Code Example
-------------
+Step 1: Imports and Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Import necessary libraries including the model to tune (e.g., `XTFT`),
+the corresponding tuner function (`xtft_tuner`), data preparation
+utilities (`reshape_xtft_data`), Keras Tuner (`kt`), and standard data
+science libraries. Set up an output directory for tuner results.
 
 .. code-block:: python
    :linenos:
@@ -33,13 +39,12 @@ Code Example
    import tensorflow as tf
    import os
    import joblib
-   import keras_tuner as kt # Import Keras Tuner
+   import keras_tuner as kt # Keras Tuner
 
-   # Assuming fusionlab components are importable
    from fusionlab.nn.transformers import XTFT # Model to tune
    from fusionlab.nn.forecast_tuner import xtft_tuner # Tuner function
-   from fusionlab.utils.ts_utils import reshape_xtft_data # Data prep utility
-   from fusionlab.nn.losses import combined_quantile_loss # Loss for model
+   from fusionlab.utils.ts_utils import reshape_xtft_data # Data prep
+   from fusionlab.nn.losses import combined_quantile_loss # For context
 
    # Suppress warnings and TF logs for cleaner output
    import warnings
@@ -50,127 +55,174 @@ Code Example
    # --- Configuration ---
    output_dir = "./tuning_example_output" # For tuner logs/results
    os.makedirs(output_dir, exist_ok=True)
+   print(f"Tuner logs will be saved to: {output_dir}")
 
-   # 1. Prepare Data (Similar to advanced_forecasting_xtft example)
-   # ------------------------------------------------------------
-   # Generate/Load data, define features, scale, reshape into sequences
-   # (Using placeholder generation for brevity - replace with full prep)
+
+Step 2: Prepare Data
+~~~~~~~~~~~~~~~~~~~~~~~
+Load, preprocess, scale, and reshape your data into the required
+sequence format (`static_data`, `dynamic_data`, `future_data`,
+`target_data`) using appropriate utilities like
+:func:`~fusionlab.utils.ts_utils.reshape_xtft_data`. Split the data
+into training and validation sets **before** passing it to the tuner.
+The tuner will use the training portions for its search and internal
+final model training, evaluating on the validation split you define
+within the tuner arguments.
+
+*(Note: Placeholder data generation is used here for brevity. Replace
+this with your actual data pipeline, similar to the Data Preparation
+Workflow example)*.
+
+.. code-block:: python
+   :linenos:
 
    print("Preparing data (using placeholder logic)...")
-   # Placeholder shapes - replace with actual data loading and reshaping
-   n_samples_total = 100
-   time_steps = 12
-   forecast_horizons = 6
-   # Assume these result from reshape_xtft_data
-   static_data = np.random.rand(n_samples_total, 2).astype(np.float32) # (Samples, StaticFeats)
-   dynamic_data = np.random.rand(n_samples_total, time_steps, 5).astype(np.float32) # (Samples, T, DynFeats)
-   future_data = np.random.rand(n_samples_total, time_steps, 3).astype(np.float32) # (Samples, T, FutFeats)
-   target_data = np.random.rand(n_samples_total, forecast_horizons, 1).astype(np.float32) # (Samples, H, 1)
+   # Placeholder shapes & data
+   B, T, H = 8, 12, 6
+   D_stat, D_dyn, D_fut = 3, 5, 2
+   T_future_total = T + H # Example shape for future inputs
+   n_samples_total = 50 # Fewer samples for faster demo
+
+   static_data = np.random.rand(n_samples_total, D_stat).astype(np.float32)
+   dynamic_data = np.random.rand(n_samples_total, T, D_dyn).astype(np.float32)
+   future_data = np.random.rand(n_samples_total, T_future_total, D_fut).astype(np.float32)
+   target_data = np.random.rand(n_samples_total, H, 1).astype(np.float32)
 
    # Split into Train/Validation (simple split for demo)
-   val_split_fraction = 0.25
+   val_split_fraction = 0.3 # Use 30% for final validation by tuner
    split_idx = int(n_samples_total * (1 - val_split_fraction))
+
    X_train_static, X_val_static = static_data[:split_idx], static_data[split_idx:]
    X_train_dynamic, X_val_dynamic = dynamic_data[:split_idx], dynamic_data[split_idx:]
-   X_train_future, X_val_future = future_data[:split_idx], future_data[split_idx:]
+   # IMPORTANT: Ensure future data passed to tuner has correct time dim expected by model builder
+   # Assuming builder needs T for future input context during LSTM phase
+   X_train_future, X_val_future = future_data[:split_idx, :T, :], future_data[split_idx:, :T, :]
    y_train, y_val = target_data[:split_idx], target_data[split_idx:]
 
+   # Package inputs for the tuner function
+   # Order needs to match tuner's internal model builder
+   # Assuming [Static, Dynamic, Future] order for this example
    train_inputs = [X_train_static, X_train_dynamic, X_train_future]
-   val_inputs = [X_val_static, X_val_dynamic, X_val_future] # Needed for internal validation fit
-   print("Data prepared and split.")
+   # Validation data (X_val_*, y_val) is used internally by tuner if validation_split is set
 
-   # 2. Define Quantiles and Base Case Info
-   # --------------------------------------
+   print(f"Data prepared and split. Training samples: {split_idx}")
+
+
+Step 3: Define Quantiles and Case Info
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Specify the `quantiles` for probabilistic forecasting (or `None` for
+point forecasting). The `case_info` dictionary passes essential fixed
+parameters like `forecast_horizon` and `quantiles` to the tuner's
+internal model builder function.
+
+.. code-block:: python
+   :linenos:
+
    quantiles_to_predict = [0.1, 0.5, 0.9]
-   case_info = { # Passed to tuner, used by default builder
-       'quantiles': quantiles_to_predict,
-       'forecast_horizon': forecast_horizons
-   }
+   forecast_horizons = H # From data prep step
 
-   # 3. Define Hyperparameter Search Space (Optional)
-   # -----------------------------------------------
-   # Override or narrow down default search ranges if desired
-   # Keys should match parameters of XTFT or Adam optimizer
+   case_info = {
+       'quantiles': quantiles_to_predict,
+       'forecast_horizon': forecast_horizons,
+       # Add any other FIXED parameters the model builder needs
+       'static_input_dim': D_stat,
+       'dynamic_input_dim': D_dyn,
+       'future_input_dim': D_fut,
+       'output_dim': 1
+   }
+   print(f"Defined case info: Quantiles={case_info['quantiles']}, "
+         f"Horizon={case_info['forecast_horizon']}")
+
+
+Step 4: Define Hyperparameter Search Space (Optional)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The tuner uses a default search space. You can override parts of it by
+providing a `param_space` dictionary. Keys should match the names of
+hyperparameters accepted by the target model (e.g., `XTFT`) or the
+optimizer (e.g., `learning_rate`). Use lists for `hp.Choice`.
+
+.. code-block:: python
+   :linenos:
+
+   # Override or narrow down default search ranges
    custom_param_space = {
-       'hidden_units': [32, 64], # Try only 32 or 64 units
-       'num_heads': [2, 4],      # Try 2 or 4 heads
-       'learning_rate': [0.01, 0.005, 0.001], # Specific learning rates
-       # 'dropout_rate': [0.1], # Fix dropout if needed
-       # Other parameters will use defaults from forecast_tuner.DEFAULT_PS
-       # For example: 'embed_dim', 'lstm_units', 'attention_units', etc.
+       'hidden_units': [16, 32],    # Try only 16 or 32 units
+       'num_heads': [1, 2],         # Try 1 or 2 heads
+       'learning_rate': [1e-3, 5e-4] # Try two specific learning rates
+       # 'dropout_rate': [0.1]     # Example: Fix dropout rate
    }
    print("Defined custom hyperparameter search space (subset).")
 
-   # 4. Run the Tuner
-   # ----------------
-   print("Starting hyperparameter tuning...")
-   best_hps, best_model, tuner = xtft_tuner(
-       inputs=train_inputs, # Use training data for search
-       y=y_train,
-       param_space=custom_param_space, # Provide custom space
-       forecast_horizon=forecast_horizons, # Needed by builder
-       quantiles=quantiles_to_predict,   # Needed by builder for loss
-       case_info=case_info, # Pass case info
-       max_trials=4,        # Number of HP combinations to try (low for demo)
-       objective='val_loss', # Metric to optimize
-       epochs=10,           # Epochs for FULL training run AFTER search for a batch size
-                            # Note: Keras Tuner might use fewer epochs during the SEARCH phase itself
-       batch_sizes=[32, 64],# List of batch sizes to try
-       validation_split=val_split_fraction, # Use same split for internal validation fit
-       tuner_dir=output_dir, # Directory to store results
-       project_name="XTFT_Quantile_Tuning_Example",
-       tuner_type='random', # Use 'random' or 'bayesian'
-       verbose=1 # Show basic tuner progress logs
-   )
 
+Step 5: Run the Tuner
+~~~~~~~~~~~~~~~~~~~~~~
+Call the appropriate tuner function (`xtft_tuner` or `tft_tuner`).
+Provide the training data (`inputs`, `y`), the search space, case info,
+and tuning configuration like `max_trials` (per batch size), `epochs`
+(for final training run per batch size), `batch_sizes` (list to try),
+`validation_split` (used on provided training data), `objective`,
+output directory, project name, and tuner type (`'random'` or `'bayesian'`).
+
+.. code-block:: python
+   :linenos:
+
+   # Tuning Parameters
+   output_dir = "./xtft_tuning_output"
+   project_name = "XTFT_Quantile_Tuning_Example"
+   max_trials = 4         # Low for demo (try more combinations)
+   epochs_per_run = 5     # Low for demo (epochs for final train of best HP per batch)
+   batch_sizes_to_try = [8, 16] # Example batch sizes
+
+   print(f"\nStarting XTFT tuning (Max Trials={max_trials} per batch size)...")
+   best_hps, best_model, tuner = xtft_tuner(
+       inputs=train_inputs,        # Training data (list)
+       y=y_train,                  # Training targets
+       param_space=custom_param_space, # Optional custom search space
+       # forecast_horizon=forecast_horizons, # Now in case_info
+       # quantiles=quantiles_to_predict,   # Now in case_info
+       case_info=case_info,        # Pass fixed info
+       max_trials=max_trials,
+       objective='val_loss',       # Optimize validation loss
+       epochs=epochs_per_run,
+       batch_sizes=batch_sizes_to_try,
+       validation_split=val_split_fraction, # Fraction of train data for tuner validation
+       tuner_dir=output_dir,
+       project_name=project_name,
+       tuner_type='random',        # 'random' or 'bayesian'
+       model_name="xtft",          # Ensures XTFT is built internally
+       verbose=0                   # Set > 0 for more Keras Tuner logs
+   )
    print("\nHyperparameter tuning finished.")
 
-   # 5. Show Results
-   # ---------------
+
+Step 6: Show Results
+~~~~~~~~~~~~~~~~~~~~~
+The tuner function returns the best hyperparameters found (`best_hps`
+dictionary), the corresponding fully trained model (`best_model`), and
+the Keras Tuner object (`tuner`) for further inspection.
+
+.. code-block:: python
+   :linenos:
+
    print("\n--- Best Hyperparameters Found ---")
-   # best_hps is a dictionary
-   for param, value in best_hps.items():
-       print(f"  {param}: {value}")
+   # best_hps is a dictionary combining model HPs and batch size
+   if best_hps:
+       for param, value in best_hps.items():
+           print(f"  {param}: {value}")
+       print(f"\nOptimal Batch Size (among tested): {best_hps.get('batch_size', 'N/A')}")
+   else:
+       print("Tuning did not complete successfully or find best HPs.")
 
-   print(f"\nAchieved best validation loss: {tuner.oracle.get_best_trials(1)[0].score:.4f}")
-   print(f"Optimal Batch Size: {best_hps.get('batch_size', 'N/A')} "
-         f"(Note: Tuner iterates batches; best overall HP set is returned)")
-
-
+   # Display summary of the best model found and trained
    print("\n--- Summary of the Best Trained Model ---")
-   best_model.summary() # Display architecture of the best model
+   if best_model:
+       best_model.summary()
+       # This model is ready for evaluation on a hold-out test set
+       # e.g., test_loss = best_model.evaluate(val_inputs, y_val)
+   else:
+       print("Tuning did not return a best model.")
 
-   # You can explore more results via the tuner object
-   # tuner.results_summary()
-
-   # The 'best_model' is fully trained and ready for evaluation or prediction
-   # Example: Predict on validation set with the best model
-   # predictions = best_model.predict(val_inputs)
-
-
-.. topic:: Explanations
-
-   1.  **Imports & Config:** Import standard libraries, `XTFT` model,
-       the `xtft_tuner` function (or `tft_tuner` if tuning TFT),
-       data utilities, Keras Tuner (`kt`), and loss functions. Define
-       an output directory for tuner logs.
-   2.  **Data Preparation:** Load, preprocess, scale, and reshape your
-       time series data into the required sequence format
-       (`static_data`, `dynamic_data`, `future_data`, `target_data`).
-       This typically involves using functions like
-       :func:`~fusionlab.utils.ts_utils.reshape_xtft_data`. Split the
-       data into training and validation sets *before* passing the
-       training portions (`train_inputs`, `y_train`) to the tuner.
-       The `validation_split` argument within the tuner function is
-       used for internal validation during the hyperparameter search
-       and the final training run for each batch size candidate.
-   3.  **Define Quantiles & Case Info:** Specify the `quantiles` if doing
-       quantile forecasting. The `case_info` dictionary passes essential
-       information like `forecast_horizon` and `quantiles` to the
-       internal default model builder (`_model_builder_factory`).
-   4.  **Define Search Space (Optional):** The tuner functions use a
-       default search space (`DEFAULT_PS`) for common hyperparameters.
-       You can provide a `param_space` dictionary to override or add
-       to this space. Use Keras Tuner syntax implicitly (e.g., a list
-       like `[16, 32, 64]` implies `hp.Choice`).
-   5.  **Run Tuner:** Call
+   # You can explore more results via the tuner object if needed
+   # Example: Display top N trials
+   # if tuner:
+   #     tuner.results_summary(num_trials=3)

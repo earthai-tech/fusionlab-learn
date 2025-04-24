@@ -21,6 +21,7 @@ tensorflow>=2.8,<2.16 # Specify a compatible range
 # -----------------------------------------
 sphinx>=4.0,<8.0 # Core documentation generator
 furo # The chosen HTML theme
+
 sphinx-copybutton # Adds copy buttons to code blocks
 myst-parser 
 sphinx-gallery # To automatically generate example galleries (optional)

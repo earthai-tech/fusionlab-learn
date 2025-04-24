@@ -1,0 +1,153 @@
+/* ──────────────────────────────────────────────────────────────
+   FusionLab – Sphinx-Book-Theme customisation
+   Save as docs/_static/custom.css and rebuild the docs.
+   ────────────────────────────────────────────────────────────── */
+
+/* 1 ── Brand palette
+ *    Book-theme honours *both* the PyData tokens (`--pst-*`) and
+ *    its own aliases (`--sbt-*`).  We set both so every component
+ *    (navbar, margin-notes, launch-buttons) picks them up.          */
+:root,
+html[data-theme="light"] {
+  --fusionlab-primary:          #2E3191;
+  --fusionlab-primary-dark:     #242774;
+  --fusionlab-primary-light:    #787BC4;
+  --fusionlab-secondary:        #F28620;
+  --fusionlab-secondary-dark:   #D97706;
+  --fusionlab-secondary-light:  #F8A953;
+
+  /* PyData tokens (still used under the hood) */
+  --pst-color-primary:          var(--fusionlab-primary);
+  --pst-color-secondary:        var(--fusionlab-secondary);
+  --pst-color-link:             var(--fusionlab-primary);
+  --pst-color-link-hover:       var(--fusionlab-secondary);
+
+  /* Book-theme aliases */
+  --sbt-color-primary:          var(--fusionlab-primary);
+  --sbt-color-secondary:        var(--fusionlab-secondary);
+  --sbt-color-link:             var(--fusionlab-primary);
+  --sbt-color-link-hover:       var(--fusionlab-secondary);
+}
+
+html[data-theme="dark"] {
+  --pst-color-primary:          var(--fusionlab-primary-light);
+  --pst-color-secondary:        var(--fusionlab-secondary-light);
+  --pst-color-link:             var(--fusionlab-primary-light);
+  --pst-color-link-hover:       var(--fusionlab-secondary-light);
+
+  --sbt-color-primary:          var(--fusionlab-primary-light);
+  --sbt-color-secondary:        var(--fusionlab-secondary-light);
+  --sbt-color-link:             var(--fusionlab-primary-light);
+  --sbt-color-link-hover:       var(--fusionlab-secondary-light);
+}
+
+/* 2 ── Global typography & headings
+ *    (unchanged from your previous file)                               */
+body {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial,
+               sans-serif, Apple Color Emoji, Segoe UI Emoji;
+  line-height: 1.7;
+}
+
+h1, h2, h3, h4, h5, h6,
+h1 a, h2 a, h3 a, h4 a, h5 a, h6 a {
+  color: var(--sbt-color-primary);
+  font-weight: 700;
+}
+
+h1 {
+  border-bottom: 3px solid var(--sbt-color-primary);
+  padding-bottom: 0.4rem;
+}
+
+/* 3 ── Links & inline code */
+a, a:visited {
+  color: var(--sbt-color-link);
+  text-decoration: none;
+  transition: color 0.15s ease-in-out;
+}
+a:hover, a:focus {
+  color: var(--sbt-color-link-hover);
+}
+
+:not(pre) > code {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.05);
+}
+
+/* 4 ── Navbar (book-theme = .bd-navbar) */
+.bd-navbar .navbar-nav > li > a.nav-link {
+  transition: color 0.15s ease-in-out;
+}
+.bd-navbar .navbar-nav > li > a.nav-link:hover,
+.bd-navbar .navbar-nav > li > a.nav-link:focus {
+  color: var(--sbt-color-secondary);
+}
+
+/* 5 ── Left sidebar / Table-of-Contents */
+.bd-sidebar .nav > li > a {
+  transition: color 0.15s, background-color 0.15s;
+}
+.bd-sidebar .nav > li > a:hover {
+  background: rgba(46,49,145,0.08);
+  color: var(--sbt-color-primary);
+}
+
+.bd-sidebar .nav > li > a.active {
+  color: var(--sbt-color-primary);
+  border-left: 3px solid var(--sbt-color-primary);
+}
+
+/* 6 ── Margin (right) Toc / page-level nav links */
+div.bd-toc a.nav-link:hover {
+  color: var(--sbt-color-secondary);
+}
+
+/* 7 ── Buttons (launch, admon-actions, etc.) */
+.btn-primary {
+  background-color: var(--fusionlab-primary);
+  border-color: var(--fusionlab-primary);
+  transition: background-color 0.15s, border-color 0.15s;
+}
+.btn-primary:hover,
+.btn-primary:focus {
+  background-color: var(--fusionlab-secondary);
+  border-color: var(--fusionlab-secondary);
+}
+
+.btn-outline-primary {
+  color: var(--fusionlab-primary);
+  border-color: var(--fusionlab-primary);
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
+}
+.btn-outline-primary:hover,
+.btn-outline-primary:focus {
+  background-color: var(--fusionlab-secondary);
+  border-color: var(--fusionlab-secondary);
+  color: #fff;
+}
+
+/* 8 ── Tables (zebra + hover) */
+table.docutils tbody tr:nth-child(odd) { background: rgba(0,0,0,0.02); }
+table.docutils tbody tr:hover          { background: rgba(46,49,145,0.07); }
+
+/* 9 ── Admonition borders */
+.admonition.note,
+.admonition.tip,
+.admonition.info   { border-left: 4px solid var(--fusionlab-primary); }
+
+.admonition.warning,
+.admonition.caution,
+.admonition.danger { border-left: 4px solid var(--fusionlab-secondary); }
+
+/* 10 ── Copy-code button */
+button.copybtn {
+  opacity: 0.6;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+button.copybtn:hover {
+  opacity: 1;
+  background: var(--sbt-color-primary);
+  color: #fff;
+}

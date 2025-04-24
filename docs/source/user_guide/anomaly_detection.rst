@@ -170,7 +170,6 @@ from learned features.
    :linenos:
 
    import tensorflow as tf
-   # Assuming SequenceAnomalyScoreLayer is importable
    from fusionlab.nn.anomaly_detection import SequenceAnomalyScoreLayer
 
    # Config

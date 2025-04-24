@@ -9,7 +9,7 @@ generating and formatting summaries and reports, ensuring clear and consistent
 
 import copy
 
-from .structures import FlexDict
+from .bunch import FlexDict
 from .util import to_snake_case, get_table_size 
 from .util import  to_camel_case  
 from .util import beautify_dict

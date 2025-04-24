@@ -1590,7 +1590,6 @@ def rename_files(
             if keep_copy : shutil.copy (f, nf , **kws )
             else : os.rename (f, nf , **kws )
             
-
 @EnsureFileExists
 def fetch_joblib_data(
     job_file: str, 

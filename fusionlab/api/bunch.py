@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd 
 from .util import format_value,format_dict_result
 
-__all__= ['Boxspace', 'Bunch', 'FlexDict']
+__all__= ['XBunch', 'Bunch', 'FlexDict']
 
 class Bunch:
     """
@@ -411,19 +411,19 @@ class Bunch:
         """
         return isinstance(other, Bunch) and self.__dict__ == other.__dict__
 
-class Boxspace(dict):
+class XBunch(dict):
     """
     A container object that extends dictionaries by enabling attribute-like 
     access to its items.
     
-    `Boxspace` allows accessing values using the standard dictionary key 
+    `XBunch` allows accessing values using the standard dictionary key 
     access method or directly as attributes. This feature provides a more 
     convenient and intuitive way to handle data, especially when dealing with 
     configurations or loosely structured objects.
     
     Examples
     --------
-    >>> bs = Boxspace(pkg='gofast', objective='give water', version='0.1.dev')
+    >>> bs = XBunch(pkg='gofast', objective='give water', version='0.1.dev')
     >>> bs['pkg']
     'gofast'
     >>> bs.pkg
@@ -435,14 +435,14 @@ class Boxspace(dict):
     
     Notes
     -----
-    While `Boxspace` provides a flexible way to access dictionary items, it's 
+    While `XBunch` provides a flexible way to access dictionary items, it's 
     important to ensure that key names do not conflict with the dictionary's 
     method names, as this could lead to unexpected behavior.
     """
 
     def __init__(self, **kwargs):
         """
-        Initializes a Boxspace object with optional keyword arguments.
+        Initializes a XBunch object with optional keyword arguments.
         
         Parameters
         ----------
