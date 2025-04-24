@@ -34,7 +34,8 @@ _required_dependencies = [
     # "torch",  # Assuming PyTorch is a core dependency
     "tensorflow",  # Assuming TensorFlow is a core dependency
     # "jax",  # If using JAX for some operations
-    "seaborn"
+    "seaborn", 
+    "joblib"
 ]
 
 # Package data specification

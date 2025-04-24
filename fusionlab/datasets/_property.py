@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# File: kdiagram/datasets/_property.py 
 # Author: LKouadio <etanoyau@gmail.com>
 # License: Apache License 2.0 (see LICENSE file)
 # -------------------------------------------------------------------
@@ -7,21 +6,21 @@
 # Adapted or inspired by the 'gofast.datasets.io' module from the
 # 'gofast' package: https://github.com/earthai-tech/gofast
 # Original 'gofast' code licensed under BSD-3-Clause.
-# Modifications and 'k-diagram' are under Apache License 2.0.
+# Modifications and 'fusionlab' are under Apache License 2.0.
 # -------------------------------------------------------------------
 """
 Internal Dataset Storage and Retrieval Utilities
-(:mod:`kdiagram.datasets._property`)
+(:mod:`fusionlab.datasets._property`)
 =================================================
 
 This internal module provides base functions for managing the local
 storage location (cache directory) for datasets used or downloaded by
-`k-diagram`. It includes utilities to determine the data directory
+`fusionlab`. It includes utilities to determine the data directory
 path, remove cached data, and potentially download remote dataset
 files based on predefined metadata.
 
 These functions are typically intended for internal use by dataset
-loading functions within the :mod:`kdiagram.datasets` subpackage and
+loading functions within the :mod:`fusionlab.datasets` subpackage and
 are not guaranteed to have a stable API for end-users.
 """
 
@@ -36,24 +35,24 @@ from typing import Optional, Union
 from urllib.parse import urljoin
 
 # Assuming io utils are now one level up relative to datasets/_property.py
-# Adjust if kdiagram.utils doesn't exist or io is elsewhere
+# Adjust if fusionlab.utils doesn't exist or io is elsewhere
 try:
     from ..utils.io import check_file_exists, fancier_downloader
 except ImportError:
     # Handle case where utils might not be structured like this yet
     # Or raise a more specific error if these are essential internal deps
-    warnings.warn("Could not import IO utilities from kdiagram.utils.io")
+    warnings.warn("Could not import IO utilities from fusionlab.utils.io")
     # Define dummy functions if needed for static analysis, but runtime will fail
     def check_file_exists(*args, **kwargs): return False
     def fancier_downloader(*args, **kwargs): raise NotImplementedError
 
 
-# TODO: Update if k-diagram will host data/descriptions 
-KD_DMODULE = "kdiagram.datasets.data" # Path for potential packaged data
-KD_DESCR = "kdiagram.datasets.descr" # Path for potential packaged descriptions
-KD_REMOTE_DATA_URL = ( # Example URL if k-diagram hosts data samples
-    'https://raw.githubusercontent.com/earthai-tech/k-diagram/main/'
-    'kdiagram/datasets/data/'
+# TODO: Update if fusionlab will host data/descriptions 
+FLAB_DMODULE = "fusionlab.datasets.data" # Path for potential packaged data
+KD_DESCR = "fusionlab.datasets.descr" # Path for potential packaged descriptions
+FLAB_REMOTE_DATA_URL = ( # Example URL if fusionlab hosts data samples
+    'https://raw.githubusercontent.com/earthai-tech/fusionlab/main/'
+    'fusionlab/datasets/data/'
 )
 
 # Define structure for remote dataset metadata 
@@ -64,8 +63,8 @@ RemoteMetadata = namedtuple(
 
 
 __all__ = [
-    'KD_DMODULE', 
-    'KD_REMOTE_DATA_URL', 
+    'FLAB_DMODULE', 
+    'FLAB_REMOTE_DATA_URL', 
     'get_data', 
     'remove_data',
     
@@ -74,32 +73,32 @@ __all__ = [
 # --- Function Definitions ---
 
 def get_data(data_home: Optional[str] = None) -> str:
-    """Get the path to the k-diagram data cache directory.
+    """Get the path to the fusionlab data cache directory.
 
     Determines the local directory path used for caching downloaded
-    datasets or storing user-provided data relevant to k-diagram.
+    datasets or storing user-provided data relevant to fusionlab.
     The directory is created if it doesn't exist.
 
-    The location defaults to ``~/kdiagram_data`` but can be overridden
-    by setting the ``KDIAGRAM_DATA`` environment variable or by
+    The location defaults to ``~/fusionlab_data`` but can be overridden
+    by setting the ``FUSIONLAB_DATA`` environment variable or by
     providing an explicit path to the `data_home` argument.
 
     Parameters
     ----------
     data_home : str, optional
         Explicit path to the desired data directory. If ``None``,
-        checks the 'KDIAGRAM_DATA' environment variable, then falls
-        back to ``~/kdiagram_data``. Tilde ('~') is expanded to the
+        checks the 'FUSIONLAB_DATA' environment variable, then falls
+        back to ``~/fusionlab_data``. Tilde ('~') is expanded to the
         user's home directory. Default is ``None``.
 
     Returns
     -------
     data_dir : str
-        The absolute path to the k-diagram data cache directory.
+        The absolute path to the fusionlab data cache directory.
 
     Examples
     --------
-    >>> from kdiagram.datasets._property import get_data # Use actual import
+    >>> from fusionlab.datasets._property import get_data # Use actual import
     >>> default_path = get_data()
     >>> print(f"Default data directory: {default_path}")
     >>> custom_path = get_data("/path/to/my/kdata")
@@ -108,7 +107,7 @@ def get_data(data_home: Optional[str] = None) -> str:
     if data_home is None:
         # Check environment variable first
         data_home = os.environ.get(
-            "KDIAGRAM_DATA", os.path.join("~", "kdiagram_data")
+            "FUSIONLAB_DATA", os.path.join("~", "fusionlab_data")
         )
     # Expand user path (~ character)
     data_home = os.path.expanduser(data_home)
@@ -122,16 +121,16 @@ def get_data(data_home: Optional[str] = None) -> str:
     return data_home
 
 def remove_data(data_home: Optional[str] = None) -> None:
-    """Delete the k-diagram data cache directory and its contents.
+    """Delete the fusionlab data cache directory and its contents.
 
     Removes the entire directory specified by `data_home` (or the
-    default k-diagram cache directory if `data_home` is ``None``).
+    default fusionlab cache directory if `data_home` is ``None``).
     Use with caution, as this permanently deletes cached data.
 
     Parameters
     ----------
     data_home : str, optional
-        The path to the k-diagram data directory to remove. If ``None``,
+        The path to the fusionlab data directory to remove. If ``None``,
         locates the directory using :func:`get_data`.
         Default is ``None``.
 
@@ -141,7 +140,7 @@ def remove_data(data_home: Optional[str] = None) -> None:
 
     Examples
     --------
-    >>> from kdiagram.datasets._property import remove_data, get_data
+    >>> from fusionlab.datasets._property import remove_data, get_data
     >>> # To remove the default cache:
     >>> # remove_data()
     >>> # To remove a custom cache:
@@ -152,10 +151,10 @@ def remove_data(data_home: Optional[str] = None) -> None:
     data_dir = get_data(data_home)
     # Remove the directory tree if it exists
     if os.path.exists(data_dir):
-        print(f"Removing k-diagram data cache directory: {data_dir}")
+        print(f"Removing fusionlab data cache directory: {data_dir}")
         shutil.rmtree(data_dir)
     else:
-        print(f"k-diagram data cache directory not found: {data_dir}")
+        print(f"fusionlab data cache directory not found: {data_dir}")
 
  
 def download_file_if_missing(
@@ -168,7 +167,7 @@ def download_file_if_missing(
     """Download and cache a remote file if not present locally.
 
     Checks if a file defined by `metadata` exists in the local
-    k-diagram data cache directory (determined by `get_data`). If
+    fusionlab data cache directory (determined by `get_data`). If
     the file is missing and `download_if_missing` is True, it
     attempts to download it from the specified URL.
 
@@ -179,10 +178,10 @@ def download_file_if_missing(
         `file` (filename) and `url` (base URL) attributes if a
         `RemoteMetadata` object. If a string is provided, it's
         treated as the filename, and the default module URL
-        (`KD_REMOTE_DATA_URL`) is used.
+        (`FLAB_REMOTE_DATA_URL`) is used.
 
     data_home : str, optional
-        Path to the k-diagram data cache directory. If ``None``, uses
+        Path to the fusionlab data cache directory. If ``None``, uses
         the default location determined by :func:`get_data`.
         Default is ``None``.
 
@@ -227,7 +226,7 @@ def download_file_if_missing(
     # Handle string input for metadata convenience
     if isinstance(metadata, str):
         # Assume string is filename, use default URL
-        if not KD_REMOTE_DATA_URL:
+        if not FLAB_REMOTE_DATA_URL:
              msg = ("Default remote data URL is not configured. Cannot "
                     "download file specified only by name.")
              if error == 'raise': raise ValueError(msg)
@@ -236,10 +235,10 @@ def download_file_if_missing(
         # Create a minimal metadata object
         metadata = RemoteMetadata(
             file=metadata,
-            url=KD_REMOTE_DATA_URL,
+            url=FLAB_REMOTE_DATA_URL,
             checksum=None, # No checksum provided
             descr_module=None,
-            data_module=KD_DMODULE
+            data_module=FLAB_DMODULE
         )
     elif not isinstance(metadata, RemoteMetadata):
         raise TypeError(
@@ -256,14 +255,14 @@ def download_file_if_missing(
     
     if not file_exists: 
         # Construct the full path to the file within the package using importlib.resources
-        package_path = str(resources.files(KD_DMODULE).joinpath(metadata.file))
+        package_path = str(resources.files(FLAB_DMODULE).joinpath(metadata.file))
         # Determine the directory where the file should be saved
         data_dir = os.path.dirname(package_path)
         # Ensure the destination directory exists to prevent
         # errors during download
         os.makedirs(data_dir, exist_ok=True)
         # Check if the specified file already exists within the given package
-        file_exists = check_file_exists(KD_DMODULE, metadata.file)
+        file_exists = check_file_exists(FLAB_DMODULE, metadata.file)
     
     if file_exists:
         if verbose:
@@ -281,15 +280,6 @@ def download_file_if_missing(
         if verbose:
             print(f"Data file '{metadata.file}' not found in cache. "
                   f"Attempting download from {metadata.url}...")
-
-        # Ensure download utility is available
-        # if 'fancier_downloader' not in globals() or not callable(fancier_downloader):
-        #      msg = "Downloader utility is not available."
-        #      if error == 'raise': 
-        #          raise RuntimeError(msg)
-        #      elif error == 'warn':
-        #          warnings.warn(msg)
-        #      return None
 
         # Construct the full URL
         # Ensure base URL ends with / if not already present
@@ -349,7 +339,7 @@ def download_file_if(
 
     Checks for a dataset file in sequence:
     1. Checks the installed package resources.
-    2. Checks the local k-diagram data cache directory.
+    2. Checks the local fusionlab data cache directory.
     3. Optionally downloads to the cache if missing from both.
 
     If the file is found in the package resources but not in the cache,
@@ -361,13 +351,13 @@ def download_file_if(
         Metadata defining the remote file, or just the filename string.
         If RemoteMetadata, must contain at least ``file`` and ``url``
         attributes. It should also contain ``data_module`` (e.g.,
-        'kdiagram.datasets.data') specifying the package location
+        'fusionlab.datasets.data') specifying the package location
         to check for bundled data. If a string (filename) is
-        provided, default URL (`KD_REMOTE_DATA_URL`) and data module
+        provided, default URL (`FLAB_REMOTE_DATA_URL`) and data module
         (`KD_DATA_MODULE`) are used.
 
     data_home : str, optional
-        Path to the k-diagram data cache directory. If ``None``, uses
+        Path to the fusionlab data cache directory. If ``None``, uses
         the default location determined by :func:`get_data`.
         Default is ``None``.
 
@@ -414,7 +404,7 @@ def download_file_if(
         )
 
     if isinstance(metadata, str):
-        if not KD_REMOTE_DATA_URL or not KD_DMODULE:
+        if not FLAB_REMOTE_DATA_URL or not FLAB_DMODULE:
              msg = ("Default remote URL or data module path not configured."
                     " Cannot process file specified only by name.")
              if error == 'raise': raise ValueError(msg)
@@ -423,8 +413,8 @@ def download_file_if(
         # Create metadata object from string filename
         filename = metadata
         meta = RemoteMetadata(
-            file=filename, url=KD_REMOTE_DATA_URL, checksum=None,
-            descr_module=None, data_module=KD_DMODULE
+            file=filename, url=FLAB_REMOTE_DATA_URL, checksum=None,
+            descr_module=None, data_module=FLAB_DMODULE
         )
     elif isinstance(metadata, RemoteMetadata):
         meta = metadata

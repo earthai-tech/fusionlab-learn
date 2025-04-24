@@ -1,8 +1,8 @@
 .. _example_ad_components:
 
-==========================
+============================
 Anomaly Detection Examples
-==========================
+============================
 
 This page provides examples on how to use the specialized anomaly
 detection components available in
@@ -211,6 +211,62 @@ a custom setup not shown in this isolated example.
    # Expected: (Batch, 1) -> (16, 1)
 
 
+Example 3: Using PredictionErrorAnomalyScore
+---------------------------------------------
+
+This layer calculates an anomaly score based directly on the difference
+between true values and predicted values for a sequence.
+
+.. code-block:: python
+   :linenos:
+
+   import tensorflow as tf
+   from fusionlab.nn.anomaly_detection import PredictionErrorAnomalyScore
+
+   # Config
+   batch_size = 4
+   time_steps = 10
+   features = 1
+
+   # Dummy true values (e.g., from dataset)
+   y_true = tf.random.normal((batch_size, time_steps, features))
+   # Dummy predicted values (e.g., output from a forecasting model)
+   # Add some noise to simulate prediction errors
+   y_pred = y_true + tf.random.normal(tf.shape(y_true), stddev=0.6)
+   # Add a larger error for one sample to see difference in 'max' aggregation
+   y_pred = tf.tensor_scatter_nd_update(
+       y_pred, [[1, 5, 0]], [y_pred[1, 5, 0] + 5.0] # Add large error to sample 1, step 5
+   )
+
+   # --- Instantiate with MAE and Mean Aggregation ---
+   error_scorer_mean = PredictionErrorAnomalyScore(
+       error_metric='mae',
+       aggregation='mean'
+   )
+   # Calculate scores (average error per sequence)
+   anomaly_scores_mean = error_scorer_mean([y_true, y_pred])
+
+   # --- Instantiate with MAE and Max Aggregation ---
+   error_scorer_max = PredictionErrorAnomalyScore(
+       error_metric='mae',
+       aggregation='max'
+   )
+   # Calculate scores (max error per sequence)
+   anomaly_scores_max = error_scorer_max([y_true, y_pred])
+
+
+   print(f"Input y_true shape: {y_true.shape}")
+   print(f"Input y_pred shape: {y_pred.shape}")
+   print("\n--- MAE + Mean Aggregation ---")
+   print(f"Output anomaly scores shape: {anomaly_scores_mean.shape}")
+   print(f"Example Scores (Mean Error): \n{anomaly_scores_mean.numpy()}")
+   print("\n--- MAE + Max Aggregation ---")
+   print(f"Output anomaly scores shape: {anomaly_scores_max.shape}")
+   print(f"Example Scores (Max Error): \n{anomaly_scores_max.numpy()}")
+   # Expected output shapes: (4, 10, 1), (4, 10, 1), (4, 1), (4, 1)
+   # Note how scores differ based on aggregation, esp. for sample 1
+
+
 .. topic:: Explanations
 
     **Example 1: LSTM Autoencoder**
@@ -269,3 +325,19 @@ a custom setup not shown in this isolated example.
         semi-supervised objective). This isolated example only shows the
         forward pass. Refer to the XTFT `'feature_based'` strategy discussion
         in the :doc:`../anomaly_detection` guide for conceptual integration.
+        
+   **Example 3: PredictionErrorAnomalyScore**
+
+   1.  **Concept:** This layer directly quantifies the difference between
+       actual (`y_true`) and predicted (`y_pred`) sequences.
+   2.  **Data:** We create dummy `y_true` and `y_pred` tensors, adding
+       some noise to `y_pred` to simulate prediction errors.
+   3.  **Instantiation:** We show how to create the layer, specifying the
+       `error_metric` ('mae' or 'mse') and the `aggregation` method
+       ('mean' or 'max') for combining errors across time steps.
+   4.  **Usage:** The layer is called with a list containing the true and
+       predicted tensors: `layer([y_true, y_pred])`.
+   5.  **Output:** It returns a single score per sequence in the batch
+       (shape `(Batch, 1)`), representing either the average or maximum
+       prediction error for that sequence. This score can be used in
+       loss functions similar to the `'prediction_based'` strategy in XTFT.
