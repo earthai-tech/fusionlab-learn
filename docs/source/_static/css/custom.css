@@ -1,172 +1,130 @@
-/* custom.css for fusionlab documentation with Furo theme */
+/* custom.css for k-diagram documentation with Furo theme */
 
 /*--------------------------------------------------------------------------
- * Variables and Color Palette (FusionLab Theme v2)
+ * Variables and Color Palette (k-diagram Theme v2)
  *--------------------------------------------------------------------------*/
 
 :root,
 html[data-theme="light"] {
-    /* --- Brand Colors (FusionLab) --- */
-    --fusionlab-primary: #2E3191;        /* Deep Blue/Purple */
-    --fusionlab-secondary: #F28620;      /* Orange */
-    /* Derived Shades */
-    --fusionlab-primary-light: #787BC4;  /* Lighter for dark mode text/hover */
-    --fusionlab-primary-dark: #242774;   /* Darker for light mode hover */
-    --fusionlab-secondary-light: #F8A953; /* Lighter orange for dark mode */
-    --fusionlab-secondary-dark: #D97706;  /* Darker orange */
-    /* Background Tints */
-    --fusionlab-primary-bg-tint-light: rgba(46, 49, 145, 0.07);
-    --fusionlab-secondary-bg-tint-light: rgba(242, 134, 32, 0.08);
-    --fusionlab-primary-bg-tint-dark: rgba(120, 123, 196, 0.12);
-    --fusionlab-secondary-bg-tint-dark: rgba(248, 169, 83, 0.12);
-    /* Link Hover */
-    --fusionlab-link-hover-light: var(--fusionlab-primary-dark);
-    --fusionlab-link-hover-dark: var(--fusionlab-primary-light);
+    /* --- Brand Colors --- */
+    /* Primary: Dark Red based on image_357b7c.png */
+    --color-brand-primary: ##00796B; /* DarkRed */
+    /* Content color for static links, H2 */
+    --color-brand-content: #A93226; /* Slightly Lighter DarkRed */
+    /* Secondary: Slate Blue from logo_k_diagram.png */
+    --color-brand-secondary: #36456e; /* SlateBlue */
+    /* Tertiary: Sea Green from logo_k_diagram.png */
+    --color-brand-tertiary: #2E8B57; /* SeaGreen */
 
-    /* --- Furo Variable Overrides (Light Mode) --- */
-    /* Brand */
-    --color-brand-primary: var(--fusionlab-primary);
-    --color-brand-content: var(--fusionlab-primary); /* Use primary for links too */
+    /* --- Status Colors --- */
+    --color-warning-border: #f57c00;  /* Amber */
+    --color-warning-bg-tint: 15%;
+    --color-error-border: var(--color-brand-primary); /* Use Primary Red */
+    --color-error-bg-tint: 15%;
+    --color-info-border: var(--color-brand-secondary);/* Use Secondary Blue */
+    --color-info-bg-tint: 10%;
+    --color-tip-border: var(--color-brand-tertiary);  /* Use Tertiary Green */
+    --color-tip-bg-tint: 10%;
 
-    /* Base */
-    --color-foreground-primary: #212529;
-    --color-foreground-secondary: #495057;
-    --color-foreground-muted: #6c757d;
+    /* --- Base Colors --- */
+    --color-foreground-primary: #212529; /* Near Black */
+    --color-foreground-secondary: #495057; /* Dark Grey */
+    --color-foreground-muted: #6c757d;   /* Medium Grey */
     --color-background-primary: #ffffff;
     --color-background-secondary: #f8f9fa;
-    --color-background-hover: #eff1f3; /* Slightly softer hover */
+    --color-background-hover: #e9ecef;
     --color-border: #dee2e6;
 
-    /* Code Blocks */
+    /* --- Code Blocks --- */
     --color-code-background: #f8f9fa;
-    --color-code-border: var(--color-border);
-    --color-code-foreground: #343a40;
+    --color-code-border: #dee2e6; /* Match base border */
 
-    /* Sidebar */
-    --color-sidebar-background: var(--color-background-secondary);
-    --color-sidebar-background-hover: var(--fusionlab-primary-bg-tint-light);
-    --color-sidebar-link-text: var(--color-foreground-secondary);
-    --color-sidebar-link-text--top-level: var(--fusionlab-primary-dark);
-
-    /* Admonitions */
-    --color-admonition-background: var(--color-background-secondary); /* Default BG */
-    /* Note, Info, SeeAlso, Tip, Hint use Primary */
-    --color-admonition-note-border: var(--fusionlab-primary);
-    --color-admonition-note-background: var(--fusionlab-primary-bg-tint-light);
-    --color-admonition-info-border: var(--fusionlab-primary);
-    --color-admonition-info-background: var(--fusionlab-primary-bg-tint-light);
-    --color-admonition-tip-border: var(--fusionlab-primary);
-    --color-admonition-tip-background: var(--fusionlab-primary-bg-tint-light);
-    --color-admonition-hint-border: var(--fusionlab-primary);
-    --color-admonition-hint-background: var(--fusionlab-primary-bg-tint-light);
-    /* Warning, Caution, Important, Error, Danger use Secondary */
-    --color-admonition-warning-border: var(--fusionlab-secondary);
-    --color-admonition-warning-background: var(--fusionlab-secondary-bg-tint-light);
-    --color-admonition-caution-border: var(--fusionlab-secondary);
-    --color-admonition-caution-background: var(--fusionlab-secondary-bg-tint-light);
-    --color-admonition-important-border: var(--fusionlab-secondary);
-    --color-admonition-important-background: var(--fusionlab-secondary-bg-tint-light);
-    --color-admonition-error-border: var(--fusionlab-secondary-dark); /* Use darker orange */
-    --color-admonition-error-background: var(--fusionlab-secondary-bg-tint-light);
-    --color-admonition-danger-border: var(--fusionlab-secondary-dark);
-    --color-admonition-danger-background: var(--fusionlab-secondary-bg-tint-light);
+    /* --- Tables --- */
+    --color-table-border: #dee2e6;
+    --color-table-header-bg: #f1f3f5;
+    --color-table-stripe-bg: #f8f9fa; /* Subtle stripe */
+    --color-table-hover-bg-tint: 8%; /* Primary Red tint % */
 }
 
 html[data-theme="dark"] {
-    /* --- Furo Variable Overrides (Dark Mode) --- */
-    /* Brand */
-    --color-brand-primary: var(--fusionlab-primary-light);
-    --color-brand-content: var(--fusionlab-primary-light);
+    /* --- Brand Colors (Dark Mode) --- */
+    --color-brand-primary: #E57373; /* Light Red */
+    --color-brand-content: #F08080; /* Light Coral */
+    --color-brand-secondary: #8a9bcd; /* Light Slate Blue */
+    --color-brand-tertiary: #66bbab; /* Light Sea Green */
 
-    /* Base */
-    --color-foreground-primary: #e9ecef;
+    /* --- Status Colors (Dark Mode) --- */
+    --color-warning-border: #ffa726; /* Lighter Amber */
+    --color-warning-bg-tint: 20%;
+    --color-error-border: var(--color-brand-primary); /* Use Primary Light Red */
+    --color-error-bg-tint: 20%;
+    --color-info-border: var(--color-brand-secondary); /* Use Secondary Light Blue */
+    --color-info-bg-tint: 15%;
+    --color-tip-border: var(--color-brand-tertiary);  /* Use Tertiary Light Green */
+    --color-tip-bg-tint: 15%;
+
+    /* --- Base Colors (Dark Mode) --- */
+    --color-foreground-primary: #e9ecef; /* Light Grey */
     --color-foreground-secondary: #ced4da;
     --color-foreground-muted: #adb5bd;
-    --color-background-primary: #212529;
+    --color-background-primary: #212529; /* Dark Grey */
     --color-background-secondary: #2c3034;
     --color-background-hover: #343a40;
     --color-border: #495057;
 
-    /* Code Blocks */
+    /* --- Code Blocks (Dark Mode) --- */
     --color-code-background: #2c3034;
-    --color-code-border: var(--color-border);
-    --color-code-foreground: #ced4da;
+    --color-code-border: #495057;
 
-    /* Sidebar */
-    --color-sidebar-background: #1f2326; /* Slightly darker */
-    --color-sidebar-background-hover: var(--fusionlab-primary-bg-tint-dark);
-    --color-sidebar-link-text: #adb5bd;
-    --color-sidebar-link-text--top-level: var(--fusionlab-primary-light);
-
-    /* Admonitions */
-    --color-admonition-background: var(--color-background-secondary);
-    /* Note, Info, SeeAlso, Tip, Hint use Primary */
-    --color-admonition-note-border: var(--fusionlab-primary-light);
-    --color-admonition-note-background: var(--fusionlab-primary-bg-tint-dark);
-    --color-admonition-info-border: var(--fusionlab-primary-light);
-    --color-admonition-info-background: var(--fusionlab-primary-bg-tint-dark);
-    --color-admonition-tip-border: var(--fusionlab-primary-light);
-    --color-admonition-tip-background: var(--fusionlab-primary-bg-tint-dark);
-    --color-admonition-hint-border: var(--fusionlab-primary-light);
-    --color-admonition-hint-background: var(--fusionlab-primary-bg-tint-dark);
-    /* Warning, Caution, Important, Error, Danger use Secondary */
-    --color-admonition-warning-border: var(--fusionlab-secondary-light);
-    --color-admonition-warning-background: var(--fusionlab-secondary-bg-tint-dark);
-    --color-admonition-caution-border: var(--fusionlab-secondary-light);
-    --color-admonition-caution-background: var(--fusionlab-secondary-bg-tint-dark);
-    --color-admonition-important-border: var(--fusionlab-secondary-light);
-    --color-admonition-important-background: var(--fusionlab-secondary-bg-tint-dark);
-    --color-admonition-error-border: var(--fusionlab-secondary); /* Use base orange */
-    --color-admonition-error-background: var(--fusionlab-secondary-bg-tint-dark);
-    --color-admonition-danger-border: var(--fusionlab-secondary);
-    --color-admonition-danger-background: var(--fusionlab-secondary-bg-tint-dark);
+    /* --- Tables (Dark Mode) --- */
+    --color-table-border: #495057;
+    --color-table-header-bg: #343a40;
+    --color-table-stripe-bg: #2c3034; /* Subtle stripe */
+    --color-table-hover-bg-tint: 12%; /* Primary Red tint % */
 }
 
 /*--------------------------------------------------------------------------
- * General Typography & Layout (Inspired by k-diagram example)
+ * General Typography & Layout
  *--------------------------------------------------------------------------*/
 body {
     line-height: 1.7;
     font-size: 16px;
-    /* Using system fonts common in Furo */
-    font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,
-                 sans-serif,Apple Color Emoji,Segoe UI Emoji;
+    font-family: "Segoe UI", Roboto, Ubuntu, Cantarell,
+                 "Helvetica Neue", sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 }
 
-/* Set max width for main content area for readability */
-.main-grid { /* Furo structure */
-    max-width: 980px; /* Adjust as needed */
+body > .container, .content > article {
+    max-width: 960px;
 }
-/* or */
-/* .container, article {
-    max-width: 980px;
-} */
 
 /* Headings */
 h1, .heading-title {
-    font-size: 2.6rem; /* Slightly smaller */
+    font-size: 2.7rem;
     margin-bottom: 1.5rem;
-    padding-bottom: 0.6rem;
-    border-bottom: 3px solid var(--color-brand-primary); /* Primary accent */
-    color: var(--color-brand-primary); /* Primary color */
+    padding-bottom: 0.7rem;
+    /* Use Primary Red for H1 */
+    border-bottom: 3px solid var(--color-brand-primary);
+    color: var(--color-brand-primary);
     font-weight: 700;
     letter-spacing: -0.5px;
 }
+}
 
 h2 {
-    font-size: 1.9rem; /* Slightly smaller */
+    font-size: 2.0rem;
     margin-top: 3.5rem;
     margin-bottom: 1.4rem;
     padding-bottom: 0.5rem;
     border-bottom: 1px solid var(--color-border);
-    color: var(--color-brand-content); /* Primary accent */
+    /* Use Content Red for H2 */
+    color: var(--color-brand-content);
     font-weight: 600;
 }
 
 h3 {
-    font-size: 1.5rem;
+    font-size: 1.6rem;
     margin-top: 3rem;
     margin-bottom: 1.2rem;
     color: var(--color-foreground-primary);
@@ -174,45 +132,55 @@ h3 {
 }
 
 h4 {
-    font-size: 1.2rem;
+    font-size: 1.25rem;
     font-weight: 600;
-    /* Use secondary text color, slightly less emphasis */
-    color: var(--color-foreground-secondary);
-    /* text-transform: uppercase; */ /* Removed uppercase */
-    letter-spacing: 0.2px;
+    /* Use Secondary Blue for H4 */
+    color: var(--color-brand-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
     margin-top: 2rem;
 }
 
-/* Links - New Hover Effect */
+/* Links */
 a,
 a:visited {
-    color: var(--color-brand-content); /* Primary blue */
+    /* Use Content Red for static links */
+    color: var(--color-brand-content);
     text-decoration: none;
-    transition: color 0.2s ease-out, background-color 0.2s ease-out;
-    border-radius: 3px; /* Slight rounding for background hover */
-    padding: 0.05em 0.1em; /* Tiny padding for background */
-    margin: -0.05em -0.1em; /* Counteract padding */
+    border-bottom: 1px solid transparent;
+    position: relative;
+    transition: color 0.2s ease-out;
 }
-
-a:hover,
-a:focus {
-    color: var(--fusionlab-link-hover-light); /* Darker blue */
-    background-color: var(--fusionlab-primary-bg-tint-light); /* Light blue tint */
-    text-decoration: none !important; /* Ensure no underline */
+a::after {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 1px;
+    display: block;
+    margin-top: 2px;
+    right: 0;
+    /* Underline uses Primary Red */
+    background: var(--color-brand-primary);
+    transition: width 0.3s ease;
+    -webkit-transition: width 0.3s ease;
 }
-
-html[data-theme="dark"] a:hover,
-html[data-theme="dark"] a:focus {
-    color: var(--fusionlab-link-hover-dark); /* Lighter blue */
-    background-color: var(--fusionlab-primary-bg-tint-dark); /* Darker blue tint */
+a:hover {
+    /* Use Primary Red on hover */
+    color: var(--color-brand-primary);
+    border-bottom-color: transparent;
+}
+a:hover::after {
+    width: 100%;
+    left: 0;
+    background-color: var(--color-brand-primary);
 }
 
 /*--------------------------------------------------------------------------
- * Code Blocks & Inline Code (Adapted)
+ * Code Blocks & Inline Code
  *--------------------------------------------------------------------------*/
 pre, :not(pre) > code {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
-                 Courier, monospace;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono",
+                 Menlo, Courier, monospace;
     border-radius: 5px;
     border: 1px solid var(--color-code-border);
     background-color: var(--color-code-background);
@@ -229,94 +197,65 @@ pre {
     font-size: 0.9em;
     white-space: nowrap;
 }
-/* Code copy button styling */
 button.copybtn {
-    background-color: var(--color-code-background) !important;
+    background-color: transparent !important;
     border: 1px solid var(--color-code-border) !important;
     color: var(--color-foreground-muted) !important;
-    opacity: 0.7 !important; /* Slightly more visible */
+    opacity: 0.5 !important;
     transition: all 0.2s ease-in-out;
-    border-radius: 4px;
 }
 button.copybtn:hover {
     opacity: 1 !important;
-    background-color: var(--color-brand-primary) !important; /* Primary hover */
-    color: var(--color-background-primary) !important; /* White text */
-    border-color: var(--color-brand-primary) !important;
-}
-html[data-theme="dark"] button.copybtn {
-    background-color: var(--color-code-background) !important;
-    border-color: var(--color-border) !important;
-    color: var(--color-foreground-muted) !important;
-}
-html[data-theme="dark"] button.copybtn:hover {
-    background-color: var(--color-brand-primary) !important; /* Lighter blue hover */
-    color: var(--color-background-primary) !important;
-    border-color: var(--color-brand-primary) !important;
+    background-color: var(--color-code-border) !important;
+    color: var(--color-foreground-primary) !important;
 }
 
 /*--------------------------------------------------------------------------
- * Tables (Using FusionLab Style - Replace this with your preferred style)
+ * Tables
  *--------------------------------------------------------------------------*/
-table.docutils,
-table.dataframe {
+table.docutils {
     width: 100%;
-    border-collapse: collapse;
-    margin-top: 1.5em;
-    margin-bottom: 1.5em;
-    border: 1px solid var(--color-border); /* Use theme border color */
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    font-size: 0.9em;
-    border-radius: 6px; /* Added rounded corners */
-    overflow: hidden; /* Clip content to rounded corners */
+    margin: 2em 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--color-table-border);
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    overflow: hidden;
 }
 
-table.docutils th,
-table.dataframe th {
-    background-color: var(--color-background-secondary);
-    border: 1px solid var(--color-border);
-    border-bottom-width: 2px; /* Emphasize header bottom border */
-    padding: 10px 14px;
-    text-align: left;
+table.docutils th {
+    background-color: var(--color-table-header-bg);
+    border-bottom: 1px solid var(--color-table-border);
+    padding: 0.9em 1em;
     font-weight: 600;
+    text-align: left;
     color: var(--color-foreground-primary);
 }
-html[data-theme="dark"] table.docutils th,
-html[data-theme="dark"] table.dataframe th {
-     background-color: #2c3034; /* Slightly distinct dark header */
-     border-color: var(--color-border);
+table.docutils thead tr:first-child th {
+    border-top: none;
 }
-
-table.docutils td,
-table.dataframe td {
-    border: 1px solid var(--color-border);
-    padding: 10px 14px;
+table.docutils td {
+    border-top: 1px solid var(--color-table-border);
+    padding: 0.9em 1em;
     vertical-align: top;
-    line-height: 1.5;
+    font-size: 0.95em;
 }
-
-/* Zebra striping */
-table.docutils tbody tr:nth-child(odd),
-table.dataframe tbody tr:nth-child(odd) {
-    /* Use a slightly different bg than headers for clarity */
-    background-color: var(--color-background-hover);
+table.docutils tbody tr:nth-child(even) {
+    background-color: var(--color-table-stripe-bg);
 }
-html[data-theme="dark"] table.docutils tbody tr:nth-child(odd),
-html[data-theme="dark"] table.dataframe tbody tr:nth-child(odd) {
-    background-color: var(--color-background-secondary);
-}
-/* Hover effect */
-table.docutils tbody tr:hover,
-table.dataframe tbody tr:hover {
-    background-color: var(--fusionlab-primary-bg-tint-light); /* Primary tint hover */
-}
-html[data-theme="dark"] table.docutils tbody tr:hover,
-html[data-theme="dark"] table.dataframe tbody tr:hover {
-    background-color: var(--fusionlab-primary-bg-tint-dark);
+table.docutils tbody tr:hover {
+    /* Hover uses tint of Primary Red */
+    background-color: color-mix(
+        in srgb,
+        var(--color-brand-primary) var(--color-table-hover-bg-tint),
+        transparent
+    );
+    transition: background-color 0.15s ease-in-out;
 }
 
 /*--------------------------------------------------------------------------
- * Admonitions - Colored by Type (FusionLab Palette)
+ * Admonitions - Colored by Type
  *--------------------------------------------------------------------------*/
 .admonition {
     border-radius: 6px;
@@ -333,209 +272,149 @@ html[data-theme="dark"] table.dataframe tbody tr:hover {
     font-weight: 700;
     margin-bottom: 0.6em;
     display: block;
-    font-size: 1.05em; /* Slightly larger title */
 }
 
-/* Note / Info / See Also / Tip / Hint (Primary Blue) */
-.admonition.note, .admonition.seealso, .admonition.info,
-.admonition.tip, .admonition.hint {
-    border-left-color: var(--fusionlab-primary);
-    background-color: var(--fusionlab-primary-bg-tint-light);
-}
-html[data-theme="dark"] .admonition.note,
-html[data-theme="dark"] .admonition.seealso,
-html[data-theme="dark"] .admonition.info,
-html[data-theme="dark"] .admonition.tip,
-html[data-theme="dark"] .admonition.hint {
-     background-color: var(--fusionlab-primary-bg-tint-dark);
-     border-left-color: var(--fusionlab-primary-light);
+/* Note / Info / See Also (Secondary Blue) */
+.admonition.note, .admonition.seealso {
+    border-left-color: var(--color-brand-secondary);
+    background-color: color-mix(
+        in srgb,
+        var(--color-brand-secondary) var(--color-info-bg-tint),
+        var(--color-background-secondary)
+    );
 }
 .admonition.note .admonition-title,
-.admonition.seealso .admonition-title,
-.admonition.info .admonition-title,
+.admonition.seealso .admonition-title {
+    color: var(--color-brand-secondary);
+}
+
+/* Tip / Hint (Tertiary Green) */
+.admonition.tip, .admonition.hint {
+    border-left-color: var(--color-brand-tertiary);
+    background-color: color-mix(
+        in srgb,
+        var(--color-brand-tertiary) var(--color-tip-bg-tint),
+        var(--color-background-secondary)
+    );
+}
 .admonition.tip .admonition-title,
 .admonition.hint .admonition-title {
-    color: var(--fusionlab-primary-dark); /* Darker blue for contrast */
-}
-html[data-theme="dark"] .admonition.note .admonition-title,
-html[data-theme="dark"] .admonition.seealso .admonition-title,
-html[data-theme="dark"] .admonition.info .admonition-title,
-html[data-theme="dark"] .admonition.tip .admonition-title,
-html[data-theme="dark"] .admonition.hint .admonition-title {
-    color: var(--fusionlab-primary-light); /* Lighter blue */
+    color: var(--color-brand-tertiary);
 }
 
-/* Warning / Caution / Important / Error / Danger (Secondary Orange) */
-.admonition.warning, .admonition.caution, .admonition.important,
-.admonition.error, .admonition.danger {
-    border-left-color: var(--fusionlab-secondary);
-    background-color: var(--fusionlab-secondary-bg-tint-light);
-}
-html[data-theme="dark"] .admonition.warning,
-html[data-theme="dark"] .admonition.caution,
-html[data-theme="dark"] .admonition.important,
-html[data-theme="dark"] .admonition.error,
-html[data-theme="dark"] .admonition.danger {
-     background-color: var(--fusionlab-secondary-bg-tint-dark);
-     border-left-color: var(--fusionlab-secondary-light);
+/* Warning / Caution (Orange) */
+.admonition.warning, .admonition.caution {
+    border-left-color: var(--color-warning-border);
+    background-color: color-mix(
+        in srgb,
+        var(--color-warning-border) var(--color-warning-bg-tint),
+        var(--color-background-secondary)
+    );
 }
 .admonition.warning .admonition-title,
-.admonition.caution .admonition-title,
-.admonition.important .admonition-title,
-.admonition.error .admonition-title,
-.admonition.danger .admonition-title {
-    color: var(--fusionlab-secondary-dark); /* Darker Orange */
-}
-html[data-theme="dark"] .admonition.warning .admonition-title,
-html[data-theme="dark"] .admonition.caution .admonition-title,
-html[data-theme="dark"] .admonition.important .admonition-title,
-html[data-theme="dark"] .admonition.error .admonition-title,
-html[data-theme="dark"] .admonition.danger .admonition-title {
-     color: var(--fusionlab-secondary-light); /* Lighter orange */
+.admonition.caution .admonition-title {
+    color: var(--color-warning-border);
 }
 
+/* Error / Danger / Important (Primary Red) */
+.admonition.error, .admonition.danger, .admonition.important {
+     border-left-color: var(--color-error-border);
+     background-color: color-mix(
+        in srgb,
+        var(--color-error-border) var(--color-error-bg-tint),
+        var(--color-background-secondary)
+     );
+}
+.admonition.error .admonition-title,
+.admonition.danger .admonition-title,
+.admonition.important .admonition-title {
+     color: var(--color-error-border);
+}
+
+
 /*--------------------------------------------------------------------------
- * Sidebar Customization (Furo) - FusionLab Colors
+ * Sidebar Customization (Furo) - Updated Hover
  *--------------------------------------------------------------------------*/
 .sidebar-drawer {
-    /* width: 18rem; */ /* Keep Furo default or adjust */
+    width: 18rem;
     border-right: 1px solid var(--color-border);
 }
 .toc-drawer > .toc-tree {
-    padding-inline-start: 1.2rem; /* Slightly reduce indent */
+     padding-inline-start: 1.5rem;
 }
 .sidebar-drawer .reference {
     transition: background-color 0.15s ease-in-out,
                 color 0.15s ease-in-out,
-                padding-left 0.15s ease-in-out,
-                border-left 0.15s ease-in-out;
-    padding: 0.35em 0.8em; /* Adjust padding */
+                padding-left 0.15s ease-in-out;
+    padding: 0.3em 0.8em;
     border-radius: 4px;
     margin: 1px 0;
     display: block;
-    border-left: 3px solid transparent; /* Add space for active indicator */
 }
 .sidebar-drawer .reference:hover {
-    background-color: var(--fusionlab-primary-bg-tint-light);
-    color: var(--fusionlab-primary-dark) !important; /* Darker blue text */
-    border-left-color: var(--fusionlab-primary); /* Show accent on hover */
+    /* Use Primary Red for hover background */
+    background-color: var(--color-brand-primary);
+    /* Ensure text is readable on Primary Red */
+    color: var(--color-background-primary) !important;
+    padding-left: 1.1em;
 }
-html[data-theme="dark"] .sidebar-drawer .reference:hover {
-    background-color: var(--fusionlab-primary-bg-tint-dark);
-    color: var(--fusionlab-primary-light) !important; /* Lighter blue text */
-    border-left-color: var(--fusionlab-primary-light);
-}
-
 .sidebar-drawer li.current > a.reference { /* Current page link */
-    background-color: var(--fusionlab-primary-bg-tint-light);
-    color: var(--fusionlab-primary) !important; /* Primary blue text */
+    /* Keep using Primary Red for active/current link */
+    background-color: var(--color-brand-primary);
+    color: var(--color-background-primary) !important;
     font-weight: 600;
-    border-left-color: var(--fusionlab-primary); /* Accent border */
-}
-html[data-theme="dark"] .sidebar-drawer li.current > a.reference {
-    background-color: var(--fusionlab-primary-bg-tint-dark);
-    color: var(--fusionlab-primary-light) !important; /* Light blue text */
-    border-left-color: var(--fusionlab-primary-light);
 }
 
 /*--------------------------------------------------------------------------
- * Index Page Specific Styles (Button Container)
+ * Sphinx Design Components (Refined)
  *--------------------------------------------------------------------------*/
-.button-container {
-    text-align: center;
-    margin-top: 2.5rem;
-    margin-bottom: 2.5rem;
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 1rem;
-}
-.button-container a.button-link-primary,
-.button-container a.button-link-secondary {
-    display: inline-flex; /* Align icon and text if needed */
-    align-items: center;
-    justify-content: center;
-    padding: 0.7em 1.5em;
-    border: 2px solid transparent; /* Slightly thicker border */
+.sd-button-link {
     border-radius: 6px;
-    text-decoration: none !important;
-    font-weight: 600;
     transition: all 0.2s ease-in-out;
     box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-    min-width: 180px;
-    text-align: center;
-    font-size: 0.95em;
 }
-.button-container a.button-link-primary::after,
-.button-container a.button-link-secondary::after {
-    content: none !important; /* Remove inherited link underline */
-}
-.button-container a.button-link-primary:hover,
-.button_container a.button-link-secondary:hover {
+.sd-button-link:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0,0,0,0.1);
 }
-/* Primary Button (Blue Solid) */
-.button-container a.button-link-primary {
-    background-color: var(--fusionlab-primary);
-    border-color: var(--fusionlab-primary);
-    color: white !important;
+/* Style primary/secondary buttons */
+.sd-button-link.sd-color-primary {
+    background-color: var(--color-brand-primary) !important;
+    border-color: var(--color-brand-primary) !important;
+    color: white !important; /* Assuming white text works on primary */
 }
-.button-container a.button-link-primary:hover {
-    background-color: var(--fusionlab-primary-dark);
-    border-color: var(--fusionlab-primary-dark);
+.sd-button-link.sd-color-primary:hover {
+    /* Slightly darken primary color */
+    background-color: color-mix(in srgb, var(--color-brand-primary) 85%, black) !important;
 }
-/* Secondary Button (Orange Outline) */
-.button-container a.button-link-secondary {
-    background-color: transparent;
-    border-color: var(--fusionlab-secondary);
-    color: var(--fusionlab-secondary) !important;
+.sd-button-link.sd-color-secondary {
+    background-color: var(--color-brand-secondary) !important;
+    border-color: var(--color-brand-secondary) !important;
+    color: white !important; /* Assuming white text works on secondary */
 }
-.button-container a.button-link-secondary:hover {
-    background-color: var(--fusionlab-secondary);
-    border-color: var(--fusionlab-orange);
-    color: white !important;
-}
-html[data-theme="dark"] .button-container a.button-link-secondary {
-    color: var(--fusionlab-secondary-light) !important; /* Lighter orange */
-    border-color: var(--fusionlab-secondary-light);
-}
-html[data-theme="dark"] .button-container a.button-link-secondary:hover {
-    background-color: var(--fusionlab-secondary-light);
-    border-color: var(--fusionlab-secondary-light);
-    color: var(--color-background-primary) !important;
+.sd-button-link.sd-color-secondary:hover {
+     /* Slightly darken secondary color */
+    background-color: color-mix(in srgb, var(--color-brand-secondary) 85%, black) !important;
 }
 
-/* Topic box styling (alternative to sd-card) */
-.topic {
+.sd-card {
     border: 1px solid var(--color-border);
-    border-left-width: 5px;
-    border-left-color: var(--color-brand-primary); /* Blue accent */
-    padding: 1.2em 1.5em; /* Slightly more padding */
-    margin: 2.5em 0;
-    border-radius: 8px; /* Slightly more rounded */
+    border-radius: 8px;
+    transition: box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.sd-card:hover {
+     box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+     /* Use Secondary Blue for card hover border */
+     border-color: var(--color-brand-secondary);
+}
+.sd-card .sd-card-header {
     background-color: var(--color-background-secondary);
-    box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+    border-bottom: 1px solid var(--color-border);
+    font-weight: 600;
+    padding: 0.8em 1.2em;
 }
-.topic p.topic-title {
-    font-size: 1.1em;
-    font-weight: 600; /* Bold */
-    margin-top: 0;
-    margin-bottom: 0.8em;
-    color: var(--color-brand-primary); /* Match border */
-}
-html[data-theme="dark"] .topic {
-     background-color: var(--color-code-background); /* Use code bg */
-     border-color: var(--color-border);
-     border-left-color: var(--color-brand-primary);
-}
-html[data-theme="dark"] .topic p.topic-title {
-     color: var(--color-brand-primary);
-}
-
-/* Other small tweaks */
-hr {
-    border: none;
-    border-top: 1px solid var(--color-border);
-    margin: 2.5rem 0; /* More space around HR */
+.sd-card .sd-card-body {
+    padding: 1.2em;
 }
