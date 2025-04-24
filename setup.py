@@ -31,10 +31,11 @@ _required_dependencies = [
     "matplotlib",
     "tqdm",
     "scikit-learn",
-    # "torch",  # Assuming PyTorch is a core dependency
-    "tensorflow",  # Assuming TensorFlow is a core dependency
+    # "torch",  # PyTorch is a core dependency in next realease
+    "tensorflow",  
     # "jax",  # If using JAX for some operations
-    "seaborn"
+    "seaborn", 
+    "joblib"
 ]
 
 # Package data specification
