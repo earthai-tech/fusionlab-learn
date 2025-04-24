@@ -11,8 +11,8 @@
 
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
-[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/)
-[![Documentation Status](https://readthedocs.org/projects/fusionlab/badge/?version=latest)](https://fusionlab.readthedocs.io/en/latest/?badge=latest)
+[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusion-lab/)
+[![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
 <!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
