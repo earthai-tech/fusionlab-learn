@@ -4,7 +4,7 @@
 
 -----------------------------------------------------
 
-# Igniting Next-Gen Fusion Models
+# Igniting Next-Generation Fusion Models
 
 *🔥🧪_A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond_*
 
