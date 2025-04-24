@@ -18,8 +18,8 @@ FusionLab: Igniting Next-Gen Fusion Models
      <a href="https://pypi.org/project/fusionlab/" target="_blank" rel="noopener noreferrer">
        <img src="https://img.shields.io/pypi/v/fusionlab?color=121EAF&label=PyPI" alt="PyPI Version">
      </a>
-     <a href="https://fusionlab.readthedocs.io/en/latest/?badge=latest" target="_blank" rel="noopener noreferrer">
-       <img src="https://readthedocs.org/projects/fusionlab/badge/?version=latest" alt="Documentation Status"/>
+     <a href="https://fusion-lab.readthedocs.io/en/latest/?badge=latest" target="_blank" rel="noopener noreferrer">
+       <img src="https://readthedocs.org/projects/fusion-lab/badge/?version=latest" alt="Documentation Status"/>
      </a>
      <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
        <img src="https://img.shields.io/github/license/earthai-tech/fusionlab?color=121EAF" alt="GitHub License">
