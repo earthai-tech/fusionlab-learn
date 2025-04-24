@@ -34,28 +34,23 @@ from collections import namedtuple
 from typing import Optional, Union
 from urllib.parse import urljoin
 
-# Assuming io utils are now one level up relative to datasets/_property.py
-# Adjust if fusionlab.utils doesn't exist or io is elsewhere
 try:
-    from ..utils.io import check_file_exists, fancier_downloader
+    from ..utils.base_utils import check_file_exists, fancier_downloader 
 except ImportError:
-    # Handle case where utils might not be structured like this yet
-    # Or raise a more specific error if these are essential internal deps
     warnings.warn("Could not import IO utilities from fusionlab.utils.io")
-    # Define dummy functions if needed for static analysis, but runtime will fail
+    # Define dummy functions if needed for
+    # static analysis, but runtime will fail
     def check_file_exists(*args, **kwargs): return False
     def fancier_downloader(*args, **kwargs): raise NotImplementedError
 
 
-# TODO: Update if fusionlab will host data/descriptions 
-FLAB_DMODULE = "fusionlab.datasets.data" # Path for potential packaged data
-KD_DESCR = "fusionlab.datasets.descr" # Path for potential packaged descriptions
-FLAB_REMOTE_DATA_URL = ( # Example URL if fusionlab hosts data samples
+FLAB_DMODULE = "fusionlab.datasets.data" 
+KD_DESCR = "fusionlab.datasets.descr" 
+FLAB_REMOTE_DATA_URL = ( 
     'https://raw.githubusercontent.com/earthai-tech/fusionlab/main/'
     'fusionlab/datasets/data/'
 )
 
-# Define structure for remote dataset metadata 
 RemoteMetadata = namedtuple(
     "RemoteMetadata",
     ["file", "url", "checksum", "descr_module", "data_module"]
@@ -70,7 +65,6 @@ __all__ = [
     
 ]
 
-# --- Function Definitions ---
 
 def get_data(data_home: Optional[str] = None) -> str:
     """Get the path to the fusionlab data cache directory.
