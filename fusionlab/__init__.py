@@ -45,8 +45,10 @@ _required_dependencies = [
     ("matplotlib", None),
     ("tqdm", None),
     ("scikit-learn", "sklearn"),
+    ("joblib", None), 
     #("jax", None),
     ("tensorflow", "tensorflow"),
+    ("joblib", None)
     # ("torch", "torch"),
 ]
 

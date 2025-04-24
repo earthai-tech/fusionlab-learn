@@ -13,7 +13,7 @@ directly from the terminal.
 .. _tft_cli:
 
 General TFT Command-Line Interface (CLI)
-----------------------------------------
+------------------------------------------
 *(Script: ``fusionlab/tools/tft_cli.py`` or similar)*
 
 **Purpose:**
@@ -189,7 +189,7 @@ Run the script from your terminal, specifying the mode and relevant options:
 **Dependencies:**
 Ensure the following libraries are installed:
 `pandas`, `numpy`, `scikit-learn`, `tensorflow` (which includes Keras),
-`matplotlib` (likely used by internal helpers), `joblib`, `gofast`
+`matplotlib` (likely used by internal helpers), `joblib`, 
 (likely used by internal helpers), and `fusionlab` itself.
 .. _xtft_proba_app:
 
@@ -410,6 +410,5 @@ specific subsidence prediction task.)*
 **Dependencies:**
 Ensure the following libraries are installed:
 `pandas`, `numpy`, `scikit-learn`, `tensorflow` (which includes Keras),
-`matplotlib`, `joblib`, `gofast` (likely used by internal helpers),
-and `fusionlab` itself.
+`matplotlib`, `joblib`, and `fusionlab` itself.
 

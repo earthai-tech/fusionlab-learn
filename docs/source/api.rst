@@ -183,6 +183,35 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.step_to_long
 
 
+
+Datasets (`fusionlab.datasets`)
+-------------------------------
+Utilities for loading included sample datasets and generating synthetic
+time series data for testing and demonstration.
+
+**Loading Functions (`fusionlab.datasets.load`)**
+
+.. autosummary::
+   :toctree: _autosummary/datasets_load
+   :nosignatures:
+
+   ~fusionlab.datasets.load.fetch_zhongshan_data
+   ~fusionlab.datasets.load.fetch_nansha_data
+   ~fusionlab.datasets.load.load_processed_subsidence_data
+
+**Generation Functions (`fusionlab.datasets.make`)**
+
+.. autosummary::
+   :toctree: _autosummary/datasets_make
+   :nosignatures:
+
+   ~fusionlab.datasets.make.make_multi_feature_time_series
+   ~fusionlab.datasets.make.make_quantile_prediction_data
+   ~fusionlab.datasets.make.make_anomaly_data
+   ~fusionlab.datasets.make.make_trend_seasonal_data
+   ~fusionlab.datasets.make.make_multivariate_target_data
+
+
 Command-Line Tools (`fusionlab.tools`)
 ---------------------------------------
 High-level applications for common workflows. For usage details, see the
