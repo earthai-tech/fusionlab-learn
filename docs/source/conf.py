@@ -91,6 +91,7 @@ bibtex_default_style = 'plain' # (or 'unsrt', 'alpha', etc.)
 
 
 # -- Options for HTML output -------------------------------------------------
+
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
 # The theme to use for HTML and HTML Help pages.
@@ -104,6 +105,64 @@ html_theme_options = {
     "source_branch": "main",
     "source_directory": "docs/source/",
     # light_css_variables and dark_css_variables removed, using custom.css instead
+}
+# -- Options for HTML output -------------------------------------------------
+
+html_theme_options = {
+    # ── VCS “Edit this page” -----------------------------------------------
+    "source_repository":  "https://github.com/earthai-tech/fusionlab/",
+    "source_branch":      "main",
+    "source_directory":   "docs/source/",
+
+    # ── Layout tweaks -------------------------------------------------------
+    "sidebar_hide_name":      False,   # hide the project name over the logo
+    "navigation_with_keys":   True,   # ← / → to browse pages
+
+    # # ── Logos ---------------------------------------------------------------
+    # "light_logo": "fusionlab.png",
+    # "dark_logo":  "fusionlab.png",   # add this SVG to _static/
+
+    # ── Footer icons --------------------------------------------------------
+    "footer_icons": [
+        {
+            "name": "GitHub",
+            "url":  "https://github.com/earthai-tech/fusionlab",
+            "html": """
+                <svg viewBox="0 0 24 24" aria-hidden="true"
+                     height="1.35em" width="1.35em">
+                  <path fill="currentColor"
+                        d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2
+                           c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1.2-.8.1-.8.1-.8
+                           1.3.1 2 1.3 2 1.3 1.2 2 3.1 1.4 3.8 1.1.1-.9.5-1.4.9-1.8
+                           -2.7-.3-5.4-1.4-5.4-6.3 0-1.4.5-2.5 1.3-3.4 0-.3-.6-1.5.1-3
+                           0 0 1-.3 3.3 1.3a11.4 11.4 0 0 1 6 0c2.2-1.6 3.3-1.3 3.3-1.3
+                           .7 1.5.1 2.7.1 3A5 5 0 0 1 21 13c0 4.9-2.7 6-5.4 6.3
+                           .6.5 1.1 1.4 1.1 2.8v4.2c0 .3.2.7.8.6A12 12 0 0 0 12 .3Z"/>
+                </svg>
+            """,
+            "class": "",
+        },
+        {
+            "name": "PyPI",
+            "url":  "https://pypi.org/project/fusionlab/",
+            "html": "<span class='fa fa-box-open'></span>",
+            "class": "",
+        },
+    ],
+
+    # ── Brand colours via Furo’s CSS variables -----------------------------
+    # "light_css_variables": {
+    #     "color-brand-primary":   "#2E3191",
+    #     "color-brand-content":   "#2E3191",
+    #     "color-sidebar-link-text--top-level": "#242774",
+    #     "color-sidebar-background-hover":     "rgba(46,49,145,0.08)",
+    # },
+    # "dark_css_variables": {
+    #     "color-brand-primary":   "#787BC4",
+    #     "color-brand-content":   "#787BC4",
+    #     "color-sidebar-link-text--top-level": "#787BC4",
+    #     "color-sidebar-background-hover":     "rgba(120,123,196,0.12)",
+    # },
 }
 
 # Add any paths that contain custom static files (such as style sheets or logo)
@@ -121,6 +180,47 @@ html_logo = '_static/fusionlab.png'
 # The name of an image file (relative to this directory, within _static path)
 # Place your favicon file at 'docs/source/_static/favicon.ico'
 html_favicon = '_static/favicon.ico'
+
+# -- HTML output --------------------------------------------------------------
+
+# # 1) add the theme to your environment
+# #    pip install sphinx-book-theme
+
+# # 2) make sure it’s in the extension list so Sphinx fails fast
+# extensions += ["sphinx_book_theme"]
+
+# # 3) set the theme + options
+# html_theme = "sphinx_book_theme"
+
+# html_logo    = "_static/fusionlab.svg"      # light-mode logo
+# html_favicon = "_static/favicon.ico"
+
+# html_theme_options = {
+#     # ----- Repository buttons -----
+#     "repository_url":      "https://github.com/earthai-tech/fusionlab",
+#     "repository_branch":   "main",          # default: 'main'
+#     "path_to_docs":        "docs/source",   # from repo root
+#     "use_edit_page_button": True,           # “Suggest edit”
+#     "use_repository_button": True,          # link to repo
+#     "use_issues_button":     True,          # open issue
+#     "use_source_button":     True,          # show raw source
+
+#     # ----- Layout tweaks -----
+#     "home_page_in_toc": True,     # show “Home” in sidebar
+#     "show_navbar_depth": 2,       # how deep the nav expands
+#     "extra_navbar": "",           # custom HTML if you’d like
+#     "extra_footer": "",           # likewise for footer
+
+#     # ----- Launch buttons (optional) -----
+#     # "launch_buttons": {
+#     #     "binderhub_url": "https://mybinder.org",
+#     #     "colab_url": "https://colab.research.google.com",
+#     # },
+# }
+
+# # keep your custom CSS (it still applies)
+# html_static_path = ["_static"]
+# html_css_files   = ["custom.css"]
 
 
 # -- Extension configuration -------------------------------------------------
