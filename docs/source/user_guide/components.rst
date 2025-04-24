@@ -696,10 +696,6 @@ return the contextually weighted features needed for subsequent layers.
    print(f"Output Attention Scores shape: {attention_scores.shape}")
    # Expected: (B, NumHeads, T_q, T_k) -> (4, 2, 10, 15)
 
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
 
 CrossAttention
 ~~~~~~~~~~~~~~
