@@ -144,7 +144,7 @@ print("Prediction shape:", predictions.shape)
 For detailed usage, tutorials, API reference, and explanations of the
 underlying concepts, please see the full documentation:
 
-**[Read the Documentation](https://www.google.com/search?q=https://fusionlab.readthedocs.io/en/latest/)**
+**[Read the Documentation](https://www.google.com/search?q=https://fusion-lab.readthedocs.io/en/latest/)**
 
 -----
 
