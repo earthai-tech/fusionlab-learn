@@ -29,8 +29,8 @@ build:
 python:
   install:
     - requirements: docs/requirements.txt 
-    # - method: pip
-    #   path: . # Installs the fusionlab package itself if required for docs
+    - method: pip
+      path: . # Installs the fusionlab package itself if required for docs
     #   extra_requirements:
     #     - dev # Installs dev dependencies if specified in setup.py/pyproject.toml
 
