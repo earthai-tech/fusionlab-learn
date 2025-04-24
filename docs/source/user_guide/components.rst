@@ -550,7 +550,7 @@ and the final prediction relies more heavily on recent patterns.
 
 
 Attention Mechanisms
---------------------~~
+----------------------
 
 Attention layers are a powerful tool in modern deep learning,
 allowing models to dynamically weigh the importance of different
