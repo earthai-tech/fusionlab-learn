@@ -1,0 +1,420 @@
+/* custom.css for k-diagram documentation with Furo theme */
+
+/*--------------------------------------------------------------------------
+ * Variables and Color Palette (k-diagram Theme v2)
+ *--------------------------------------------------------------------------*/
+
+:root,
+html[data-theme="light"] {
+    /* --- Brand Colors --- */
+    /* Primary: Dark Red based on image_357b7c.png */
+    --color-brand-primary: ##00796B; /* DarkRed */
+    /* Content color for static links, H2 */
+    --color-brand-content: #A93226; /* Slightly Lighter DarkRed */
+    /* Secondary: Slate Blue from logo_k_diagram.png */
+    --color-brand-secondary: #36456e; /* SlateBlue */
+    /* Tertiary: Sea Green from logo_k_diagram.png */
+    --color-brand-tertiary: #2E8B57; /* SeaGreen */
+
+    /* --- Status Colors --- */
+    --color-warning-border: #f57c00;  /* Amber */
+    --color-warning-bg-tint: 15%;
+    --color-error-border: var(--color-brand-primary); /* Use Primary Red */
+    --color-error-bg-tint: 15%;
+    --color-info-border: var(--color-brand-secondary);/* Use Secondary Blue */
+    --color-info-bg-tint: 10%;
+    --color-tip-border: var(--color-brand-tertiary);  /* Use Tertiary Green */
+    --color-tip-bg-tint: 10%;
+
+    /* --- Base Colors --- */
+    --color-foreground-primary: #212529; /* Near Black */
+    --color-foreground-secondary: #495057; /* Dark Grey */
+    --color-foreground-muted: #6c757d;   /* Medium Grey */
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f8f9fa;
+    --color-background-hover: #e9ecef;
+    --color-border: #dee2e6;
+
+    /* --- Code Blocks --- */
+    --color-code-background: #f8f9fa;
+    --color-code-border: #dee2e6; /* Match base border */
+
+    /* --- Tables --- */
+    --color-table-border: #dee2e6;
+    --color-table-header-bg: #f1f3f5;
+    --color-table-stripe-bg: #f8f9fa; /* Subtle stripe */
+    --color-table-hover-bg-tint: 8%; /* Primary Red tint % */
+}
+
+html[data-theme="dark"] {
+    /* --- Brand Colors (Dark Mode) --- */
+    --color-brand-primary: #E57373; /* Light Red */
+    --color-brand-content: #F08080; /* Light Coral */
+    --color-brand-secondary: #8a9bcd; /* Light Slate Blue */
+    --color-brand-tertiary: #66bbab; /* Light Sea Green */
+
+    /* --- Status Colors (Dark Mode) --- */
+    --color-warning-border: #ffa726; /* Lighter Amber */
+    --color-warning-bg-tint: 20%;
+    --color-error-border: var(--color-brand-primary); /* Use Primary Light Red */
+    --color-error-bg-tint: 20%;
+    --color-info-border: var(--color-brand-secondary); /* Use Secondary Light Blue */
+    --color-info-bg-tint: 15%;
+    --color-tip-border: var(--color-brand-tertiary);  /* Use Tertiary Light Green */
+    --color-tip-bg-tint: 15%;
+
+    /* --- Base Colors (Dark Mode) --- */
+    --color-foreground-primary: #e9ecef; /* Light Grey */
+    --color-foreground-secondary: #ced4da;
+    --color-foreground-muted: #adb5bd;
+    --color-background-primary: #212529; /* Dark Grey */
+    --color-background-secondary: #2c3034;
+    --color-background-hover: #343a40;
+    --color-border: #495057;
+
+    /* --- Code Blocks (Dark Mode) --- */
+    --color-code-background: #2c3034;
+    --color-code-border: #495057;
+
+    /* --- Tables (Dark Mode) --- */
+    --color-table-border: #495057;
+    --color-table-header-bg: #343a40;
+    --color-table-stripe-bg: #2c3034; /* Subtle stripe */
+    --color-table-hover-bg-tint: 12%; /* Primary Red tint % */
+}
+
+/*--------------------------------------------------------------------------
+ * General Typography & Layout
+ *--------------------------------------------------------------------------*/
+body {
+    line-height: 1.7;
+    font-size: 16px;
+    font-family: "Segoe UI", Roboto, Ubuntu, Cantarell,
+                 "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+body > .container, .content > article {
+    max-width: 960px;
+}
+
+/* Headings */
+h1, .heading-title {
+    font-size: 2.7rem;
+    margin-bottom: 1.5rem;
+    padding-bottom: 0.7rem;
+    /* Use Primary Red for H1 */
+    border-bottom: 3px solid var(--color-brand-primary);
+    color: var(--color-brand-primary);
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}
+}
+
+h2 {
+    font-size: 2.0rem;
+    margin-top: 3.5rem;
+    margin-bottom: 1.4rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+    /* Use Content Red for H2 */
+    color: var(--color-brand-content);
+    font-weight: 600;
+}
+
+h3 {
+    font-size: 1.6rem;
+    margin-top: 3rem;
+    margin-bottom: 1.2rem;
+    color: var(--color-foreground-primary);
+    font-weight: 600;
+}
+
+h4 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    /* Use Secondary Blue for H4 */
+    color: var(--color-brand-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2rem;
+}
+
+/* Links */
+a,
+a:visited {
+    /* Use Content Red for static links */
+    color: var(--color-brand-content);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    position: relative;
+    transition: color 0.2s ease-out;
+}
+a::after {
+    content: '';
+    position: absolute;
+    width: 0;
+    height: 1px;
+    display: block;
+    margin-top: 2px;
+    right: 0;
+    /* Underline uses Primary Red */
+    background: var(--color-brand-primary);
+    transition: width 0.3s ease;
+    -webkit-transition: width 0.3s ease;
+}
+a:hover {
+    /* Use Primary Red on hover */
+    color: var(--color-brand-primary);
+    border-bottom-color: transparent;
+}
+a:hover::after {
+    width: 100%;
+    left: 0;
+    background-color: var(--color-brand-primary);
+}
+
+/*--------------------------------------------------------------------------
+ * Code Blocks & Inline Code
+ *--------------------------------------------------------------------------*/
+pre, :not(pre) > code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono",
+                 Menlo, Courier, monospace;
+    border-radius: 5px;
+    border: 1px solid var(--color-code-border);
+    background-color: var(--color-code-background);
+}
+pre {
+    padding: 1em 1.2em;
+    margin: 1.7em 0;
+    font-size: 0.92em;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+    line-height: 1.6;
+}
+:not(pre) > code {
+    padding: 0.2em 0.45em;
+    font-size: 0.9em;
+    white-space: nowrap;
+}
+button.copybtn {
+    background-color: transparent !important;
+    border: 1px solid var(--color-code-border) !important;
+    color: var(--color-foreground-muted) !important;
+    opacity: 0.5 !important;
+    transition: all 0.2s ease-in-out;
+}
+button.copybtn:hover {
+    opacity: 1 !important;
+    background-color: var(--color-code-border) !important;
+    color: var(--color-foreground-primary) !important;
+}
+
+/*--------------------------------------------------------------------------
+ * Tables
+ *--------------------------------------------------------------------------*/
+table.docutils {
+    width: 100%;
+    margin: 2em 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    border: 1px solid var(--color-table-border);
+    border-radius: 6px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    overflow: hidden;
+}
+
+table.docutils th {
+    background-color: var(--color-table-header-bg);
+    border-bottom: 1px solid var(--color-table-border);
+    padding: 0.9em 1em;
+    font-weight: 600;
+    text-align: left;
+    color: var(--color-foreground-primary);
+}
+table.docutils thead tr:first-child th {
+    border-top: none;
+}
+table.docutils td {
+    border-top: 1px solid var(--color-table-border);
+    padding: 0.9em 1em;
+    vertical-align: top;
+    font-size: 0.95em;
+}
+table.docutils tbody tr:nth-child(even) {
+    background-color: var(--color-table-stripe-bg);
+}
+table.docutils tbody tr:hover {
+    /* Hover uses tint of Primary Red */
+    background-color: color-mix(
+        in srgb,
+        var(--color-brand-primary) var(--color-table-hover-bg-tint),
+        transparent
+    );
+    transition: background-color 0.15s ease-in-out;
+}
+
+/*--------------------------------------------------------------------------
+ * Admonitions - Colored by Type
+ *--------------------------------------------------------------------------*/
+.admonition {
+    border-radius: 6px;
+    padding: 1.2em 1.5em;
+    margin: 2em 0;
+    border-left-width: 6px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    background-color: var(--color-background-secondary);
+}
+.admonition p:last-child {
+    margin-bottom: 0;
+}
+.admonition .admonition-title {
+    font-weight: 700;
+    margin-bottom: 0.6em;
+    display: block;
+}
+
+/* Note / Info / See Also (Secondary Blue) */
+.admonition.note, .admonition.seealso {
+    border-left-color: var(--color-brand-secondary);
+    background-color: color-mix(
+        in srgb,
+        var(--color-brand-secondary) var(--color-info-bg-tint),
+        var(--color-background-secondary)
+    );
+}
+.admonition.note .admonition-title,
+.admonition.seealso .admonition-title {
+    color: var(--color-brand-secondary);
+}
+
+/* Tip / Hint (Tertiary Green) */
+.admonition.tip, .admonition.hint {
+    border-left-color: var(--color-brand-tertiary);
+    background-color: color-mix(
+        in srgb,
+        var(--color-brand-tertiary) var(--color-tip-bg-tint),
+        var(--color-background-secondary)
+    );
+}
+.admonition.tip .admonition-title,
+.admonition.hint .admonition-title {
+    color: var(--color-brand-tertiary);
+}
+
+/* Warning / Caution (Orange) */
+.admonition.warning, .admonition.caution {
+    border-left-color: var(--color-warning-border);
+    background-color: color-mix(
+        in srgb,
+        var(--color-warning-border) var(--color-warning-bg-tint),
+        var(--color-background-secondary)
+    );
+}
+.admonition.warning .admonition-title,
+.admonition.caution .admonition-title {
+    color: var(--color-warning-border);
+}
+
+/* Error / Danger / Important (Primary Red) */
+.admonition.error, .admonition.danger, .admonition.important {
+     border-left-color: var(--color-error-border);
+     background-color: color-mix(
+        in srgb,
+        var(--color-error-border) var(--color-error-bg-tint),
+        var(--color-background-secondary)
+     );
+}
+.admonition.error .admonition-title,
+.admonition.danger .admonition-title,
+.admonition.important .admonition-title {
+     color: var(--color-error-border);
+}
+
+
+/*--------------------------------------------------------------------------
+ * Sidebar Customization (Furo) - Updated Hover
+ *--------------------------------------------------------------------------*/
+.sidebar-drawer {
+    width: 18rem;
+    border-right: 1px solid var(--color-border);
+}
+.toc-drawer > .toc-tree {
+     padding-inline-start: 1.5rem;
+}
+.sidebar-drawer .reference {
+    transition: background-color 0.15s ease-in-out,
+                color 0.15s ease-in-out,
+                padding-left 0.15s ease-in-out;
+    padding: 0.3em 0.8em;
+    border-radius: 4px;
+    margin: 1px 0;
+    display: block;
+}
+.sidebar-drawer .reference:hover {
+    /* Use Primary Red for hover background */
+    background-color: var(--color-brand-primary);
+    /* Ensure text is readable on Primary Red */
+    color: var(--color-background-primary) !important;
+    padding-left: 1.1em;
+}
+.sidebar-drawer li.current > a.reference { /* Current page link */
+    /* Keep using Primary Red for active/current link */
+    background-color: var(--color-brand-primary);
+    color: var(--color-background-primary) !important;
+    font-weight: 600;
+}
+
+/*--------------------------------------------------------------------------
+ * Sphinx Design Components (Refined)
+ *--------------------------------------------------------------------------*/
+.sd-button-link {
+    border-radius: 6px;
+    transition: all 0.2s ease-in-out;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+}
+.sd-button-link:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+/* Style primary/secondary buttons */
+.sd-button-link.sd-color-primary {
+    background-color: var(--color-brand-primary) !important;
+    border-color: var(--color-brand-primary) !important;
+    color: white !important; /* Assuming white text works on primary */
+}
+.sd-button-link.sd-color-primary:hover {
+    /* Slightly darken primary color */
+    background-color: color-mix(in srgb, var(--color-brand-primary) 85%, black) !important;
+}
+.sd-button-link.sd-color-secondary {
+    background-color: var(--color-brand-secondary) !important;
+    border-color: var(--color-brand-secondary) !important;
+    color: white !important; /* Assuming white text works on secondary */
+}
+.sd-button-link.sd-color-secondary:hover {
+     /* Slightly darken secondary color */
+    background-color: color-mix(in srgb, var(--color-brand-secondary) 85%, black) !important;
+}
+
+.sd-card {
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    transition: box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.sd-card:hover {
+     box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+     /* Use Secondary Blue for card hover border */
+     border-color: var(--color-brand-secondary);
+}
+.sd-card .sd-card-header {
+    background-color: var(--color-background-secondary);
+    border-bottom: 1px solid var(--color-border);
+    font-weight: 600;
+    padding: 0.8em 1.2em;
+}
+.sd-card .sd-card-body {
+    padding: 1.2em;
+}

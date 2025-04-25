@@ -25,28 +25,28 @@ Getting Started
   page.
 
 Setting up for Development
---------------------------
+----------------------------
 
 To make changes to the code or documentation, you'll need to set up
 a development environment. Please follow the instructions in the
 :ref:`installation` guide under the section
-**"Installation from Source (for Development)"**. This typically
+**Installation from Source (for Development)**. This typically
 involves:
 
-1. Forking the repository on GitHub (`earthai-tech/fusionlab`).
+1. Forking the repository on GitHub (``earthai-tech/fusionlab``).
 2. Cloning your fork locally (e.g.,
-   `git clone https://github.com/YourUsername/fusionlab.git`).
+   :code:`git clone https://github.com/[YourUsername]/fusionlab.git`).
 3. Installing the package in editable mode with development
-   dependencies (`pip install -e .[dev]`). Using a virtual environment
-   (like `venv` or `conda`) is highly recommended.
+   dependencies (:code:`pip install -e .[dev]`). Using a virtual environment
+   (like ``venv`` or ``conda``) is highly recommended.
 
 Making Changes
 --------------
 
-1.  **Create a Branch:** Create a new branch from the `main` branch
+1.  **Create a Branch:** Create a new branch from the ``main`` branch
     (or the current primary development branch) for your changes.
-    Use a descriptive name (e.g., `fix/lstm-state-bug` or
-    `feature/add-transformer-encoder`).
+    Use a descriptive name (e.g., ``fix/lstm-state-bug`` or
+    ``feature/add-transformer-encoder``).
 
     .. code-block:: bash
 
@@ -69,11 +69,11 @@ Making Changes
 
 4.  **Testing:** ``fusionlab`` uses `pytest` for testing.
     * Add new tests for any new features you implement in the relevant
-        `tests/` directory.
+      `tests/` directory.
     * Add or update tests to cover any bug fixes, ensuring the bug
-        is resolved and doesn't reappear.
+      is resolved and doesn't reappear.
     * Ensure all tests pass before submitting your changes. Run tests
-        from the project root directory:
+      from the project root directory:
 
     .. code-block:: bash
 
@@ -96,7 +96,7 @@ Making Changes
     the "what" and "why" of your changes.
 
 Submitting a Pull Request
--------------------------
+---------------------------
 
 1.  **Push to Fork:** Push your changes to your forked repository on
     GitHub:
@@ -128,14 +128,9 @@ Code of Conduct
 
 All participants in the ``fusionlab`` project (contributors,
 maintainers, users in community spaces like the issue tracker) are
-expected to adhere to the project's Code of Conduct. Please review
-this document to understand the expected standards of behavior.
-*(Note: Ensure a `code_of_conduct.rst` or linked file exists)*
-
-*(Link to Code of Conduct - assuming it exists at docs/source/code_of_conduct.rst)*
-:doc:`Code of Conduct <code_of_conduct>`
+expected to adhere to the project's :doc:`Code of Conduct <code_of_conduct>`. 
+Please review this document to understand the expected standards of behavior.
 
 We strive to foster an open, welcoming, and respectful community.
-
 
 Thank you again for contributing to ``fusionlab``!

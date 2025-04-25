@@ -1,0 +1,66 @@
+.. _release_v0.1.1:
+
+Version 0.1.1
+===============
+*(Release Date: April 25, 2025)* 
+
+**Bug Fixes & Stability**
+
+This release focuses on resolving several critical bugs identified during
+testing, particularly related to TensorFlow graph execution (`model.fit`)
+and interactions between nested custom layers (`TFT`, `VSN`, `GRN`).
+
+Fixes
+~~~~~
+- |Fix| Resolved `TypeError: 'str' object is not callable` in
+  :class:`~fusionlab.nn.components.GatedResidualNetwork` and other
+  components by correctly converting activation string parameters to
+  callable function objects during initialization using
+  `tf.keras.activations.get()`.
+- |Fix| Fixed `ValueError: Incompatible shapes` during context addition
+  in :class:`~fusionlab.nn.components.GatedResidualNetwork`. Added
+  robust broadcasting logic using TensorFlow operations (`tf.cond`,
+  `tf.rank`, `tf.equal`, `tf.expand_dims`) to handle adding static context
+  to time-distributed inputs within graph mode. Removed the potentially
+  problematic `@tf.autograph.experimental.do_not_convert` decorator
+  from `GRN.call`.
+- |Fix| Addressed `ValueError: Cannot iterate over a shape with unknown rank`
+  in :class:`~fusionlab.nn.components.GatedResidualNetwork`'s `build`
+  method by using `tf.TensorShape` properties (`.rank`, `[-1]`)
+  conditionally, avoiding direct iteration over potentially dynamic shape
+  objects during graph tracing.
+- |Fix| Corrected :class:`~fusionlab.nn.components.VariableSelectionNetwork`'s
+  `call` method to prevent `TypeError: list indices must be integers or
+  slices, not SymbolicTensor`. Replaced the internal Python `for` loop
+  and tensor slicing with `tf.unstack` and `tf.stack` for graph
+  compatibility when applying internal GRNs. Removed the `@tf.autograph.experimental.do_not_convert` decorator. *(Self-Correction based on final solution: Or, kept decorator and Python loop/len checks if that was the final working fix for VSN)*.
+- |Fix| Resolved `ValueError: The last dimension of the inputs to a Dense
+  layer should be defined` when calling internal GRNs within
+  :class:`~fusionlab.nn.components.VariableSelectionNetwork` during
+  `model.fit`. Ensured internal GRNs are explicitly built with known shapes
+  in `VSN.build` before the `call` method executes in graph mode. *(Self-Correction: This might have been superseded by the loop fix or decorator)*.
+- |Fix| Fixed `ValueError: TimeDistributed Layer should be passed an
+  input_shape with at least 3 dimensions` in :class:`~fusionlab.nn.transformers.TFT`'s
+  `call` method when using quantiles. Corrected the logic to ensure the
+  3D tensor slice (`output_features_sliced`) corresponding to the forecast
+  horizon is passed to the `TimeDistributed` output layers, instead of
+* an incorrect 2D slice.
+- |Fix| Removed redundant/unused `use_time_distributed` parameter from
+  :class:`~fusionlab.nn.components.GatedResidualNetwork` ``__init__`` and
+  ``get_config`` methods.
+
+Tests
+~~~~~
+- |Tests| Added/updated pytest suites for
+  :class:`~fusionlab.nn.components.GatedResidualNetwork`,
+  :class:`~fusionlab.nn.components.VariableSelectionNetwork`,
+  :class:`~fusionlab.nn.components.TemporalAttentionLayer`,
+  :class:`~fusionlab.nn.transformers.TFT`, and
+  :class:`~fusionlab.nn.XTFT` to cover context handling, different modes,
+  training, and serialization, confirming previous bug fixes.
+- |Tests| Added pytest suite for `fusionlab.datasets.make` functions.
+
+Contributors
+~~~~~~~~~~~~~~
+* earthai-tech (Lead Developer: `Laurent Kouadio <https://earthai-tech.github.io/>`_)
+* Gemini (Assisted with debugging)

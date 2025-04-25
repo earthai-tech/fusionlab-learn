@@ -1,8 +1,8 @@
 .. _motivation:
 
-========================
-Motivation and Genesis
-========================
+============
+Motivation
+============
 
 Time series forecasting is fundamental across countless domains, yet
 predicting complex real-world systems remains a significant challenge.
