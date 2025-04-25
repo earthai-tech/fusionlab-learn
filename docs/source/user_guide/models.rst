@@ -21,7 +21,7 @@ TemporalFusionTransformer
 
 The ``TemporalFusionTransformer`` class is the primary, flexible
 implementation of the Temporal Fusion Transformer architecture
-[Lim21]_ within ``fusionlab``. It is designed to handle a variety of
+[1]_ within ``fusionlab``. It is designed to handle a variety of
 input configurations and forecasting tasks.
 
 **Key Features:**
@@ -160,8 +160,8 @@ This example shows how to instantiate the flexible
    (:func:`~fusionlab.nn._tensor_validation.validate_tft_inputs`).
 
 
-Mathematical Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Formulation
+~~~~~~~~~~~~~~~~
 
 Here, we describe the core mathematical concepts behind the
 Temporal Fusion Transformer, following the architecture outlined
@@ -260,7 +260,10 @@ inputs are processed and transformed to generate forecasts.
     :math:`\{\delta_t\}_{t=T+1}^{T+\tau}` are passed through linear layers
     to produce predictions.
     * **Quantiles:** Separate linear layers for each quantile :math:`q`:
-      :math:`\hat{y}_{t, q} = Linear_q(\delta_t)`.
+      
+      .. math:: 
+         \hat{y}_{t, q} = Linear_q(\delta_t)
+         
     * **Point:** A single linear layer: :math:`\hat{y}_t = Linear_{point}(\delta_t)`.
 
 This detailed flow illustrates how TFT integrates various components
@@ -356,19 +359,20 @@ easier to follow.
   method as a list or tuple containing exactly three tensors in the
   order: ``[static_inputs, dynamic_inputs, future_inputs]``.
   Expected shapes are generally:
+  
     * `static_inputs`: :math:`(B, D_s)`
     * `dynamic_inputs`: :math:`(B, T_{past}, D_{dyn})`
     * `future_inputs`: :math:`(B, T_{future}, D_{fut})` *(Note: The
-      required length :math:`T_{future}` depends on how inputs are
+      required length* :math:`T_{future}` *depends on how inputs are
       combined internally before the LSTM. Ensure data preparation
-      aligns, e.g., using
-      :func:`~fusionlab.nn.utils.reshape_xtft_data`)*.
+      aligns, e.g., using*
+      :func:`~fusionlab.nn.utils.reshape_xtft_data`).
 * **Categorical Features:** This implementation assumes inputs
   are *numeric*. Handling categorical features requires modifications
   (e.g., adding embedding layers before VSNs).
 
-Mathematical Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Formulation
+~~~~~~~~~~~~~~
 *(This section describes the flow assuming numeric inputs)*
 
 1.  **Variable Selection:** Separate
@@ -459,11 +463,6 @@ Mathematical Formulation
    # Expected: (B, H, OutputDim=1) -> (4, 6, 1)
 
 
-.. [Lim21] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
-   Temporal fusion transformers for interpretable multi-horizon
-   time series forecasting. *International Journal of Forecasting*,
-   37(4), 1748-1764.
-
 .. raw:: html
 
    <hr>
@@ -515,8 +514,8 @@ or requiring probabilistic (quantile) forecasts, the primary
 :class:`~fusionlab.nn.transformers.TFT` class (requiring all three
 inputs) offer greater flexibility.)*
 
-Mathematical Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Formulation
+~~~~~~~~~~~~~
 
 The ``NTemporalFusionTransformer`` follows the core mathematical
 principles of the standard Temporal Fusion Transformer, applying key
@@ -624,10 +623,12 @@ learning, multi-scale analysis, and integrated anomaly detection.
   :func:`~fusionlab.nn.components.aggregate_multiscale`.
 * **Sophisticated Attention Mechanisms:** Incorporates multiple
   specialized attention layers for richer context modeling:
-    * :class:`~fusionlab.nn.components.HierarchicalAttention`
-    * :class:`~fusionlab.nn.components.CrossAttention`
-    * :class:`~fusionlab.nn.components.MemoryAugmentedAttention`
-    * :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`
+  
+  * :class:`~fusionlab.nn.components.HierarchicalAttention`
+  * :class:`~fusionlab.nn.components.CrossAttention`
+  * :class:`~fusionlab.nn.components.MemoryAugmentedAttention`
+  * :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`
+    
 * **Dynamic Temporal Focus:** Uses a
   :class:`~fusionlab.nn.components.DynamicTimeWindow` component to potentially
   focus on the most relevant recent time steps before final aggregation.
@@ -637,15 +638,15 @@ learning, multi-scale analysis, and integrated anomaly detection.
 * **Integrated Anomaly Detection:** Offers multiple strategies
   (via ``anomaly_detection_strategy`` parameter) for incorporating
   anomaly information into the training process:
-    * **`'feature_based'`:** Learns anomaly scores from internal features
-      using dedicated attention/scoring layers.
-    * **`'prediction_based'`:** Calculates anomaly scores based on
-      prediction errors using a specialized loss function
-      (:func:`~fusionlab.nn.losses.prediction_based_loss`).
-    * **`'from_config'`:** Uses pre-computed anomaly scores provided via
-      the ``anomaly_config`` dictionary, integrated into the loss via
-      :class:`~fusionlab.nn.components.AnomalyLoss` and potentially
-      :func:`~fusionlab.nn.losses.combined_total_loss`.
+  * **`'feature_based'`:** Learns anomaly scores from internal features
+    using dedicated attention/scoring layers.
+  * **`'prediction_based'`:** Calculates anomaly scores based on
+    prediction errors using a specialized loss function
+    (:func:`~fusionlab.nn.losses.prediction_based_loss`).
+  * **`'from_config'`:** Uses pre-computed anomaly scores provided via
+    the ``anomaly_config`` dictionary, integrated into the loss via
+    :class:`~fusionlab.nn.components.AnomalyLoss` and potentially
+    :func:`~fusionlab.nn.losses.combined_total_loss`.
     The contribution of anomaly loss is controlled by ``anomaly_loss_weight``.
 * **Flexible Output:** Features a :class:`~fusionlab.nn.components.MultiDecoder`
   (generating horizon-specific features) and
@@ -669,8 +670,8 @@ XTFT is designed for challenging forecasting problems where:
   of increased model complexity and computational resources compared
   to standard TFT.
 
-Mathematical Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Formulation
+~~~~~~~~~~~~~~
 
 XTFT significantly extends the standard TFT architecture. While it
 builds upon core concepts like GRNs and attention, it introduces
@@ -679,9 +680,8 @@ modifications here. For full details, please refer to the source code
 and the documentation of individual components (linked above).
 
 1.  **Input Processing:**
-    * Static inputs (:math:`s`) undergo
-      :class:`~fusionlab.nn.components.LearnedNormalization` and
-      are processed by internal GRNs/Dense layers (`static_dense`,
+    * Static inputs (:math:`s`) undergo :class:`~fusionlab.nn.components.LearnedNormalization` 
+      and are processed by internal GRNs/Dense layers (`static_dense`,
       `static_dropout`, `grn_static`).
     * Dynamic (:math:`x_t`) and Future (:math:`z_t`) inputs are jointly
       processed by :class:`~fusionlab.nn.components.MultiModalEmbedding`.
@@ -695,8 +695,7 @@ and the documentation of individual components (linked above).
     * Outputs are aggregated (e.g., 'last' step) into `lstm_features`.
 
 3.  **Advanced Attention Layers:**
-    * :class:`~fusionlab.nn.components.HierarchicalAttention` processes
-      dynamic and future inputs.
+    * :class:`~fusionlab.nn.components.HierarchicalAttention` processes dynamic and future inputs.
     * :class:`~fusionlab.nn.components.CrossAttention` models interactions
       between dynamic inputs and combined embeddings.
     * :class:`~fusionlab.nn.components.MemoryAugmentedAttention` uses
@@ -840,8 +839,8 @@ enhancing feature representation and the internal processing flow.
   ``XTFT`` once development stabilizes.
 * **Avoid for production or general use until officially recommended.**
 
-Mathematical Formulation
-~~~~~~~~~~~~~~~~~~~~~~~~~
+Formulation
+~~~~~~~~~~~~~
 
 ``SuperXTFT`` modifies the data flow of the base ``XTFT`` model in
 two main ways:
@@ -914,3 +913,10 @@ Use with caution.)*
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
+
+.. rubric:: References
+
+.. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
+       Temporal fusion transformers for interpretable multi-horizon
+       time series forecasting. *International Journal of Forecasting*,
+       37(4), 1748-1764. (Also arXiv:1912.09363)

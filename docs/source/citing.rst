@@ -20,13 +20,6 @@ and the project's URL. You can find the installed version using:
    import fusionlab
    print(fusionlab.__version__)
 
-**Example Citation (APA Style):**
-
-Kouadio, K. L., Liu, Z., Liu, J., Bizimana, P., Liu, W., & FusionLab
-Contributors. (YYYY). *FusionLab: Igniting Next-Gen Fusion Models*
-(Version X.Y.Z) [Computer software].
-https://github.com/earthai-tech/fusionlab/
-
 
 **BibTeX Entry for Software:**
 
@@ -42,7 +35,7 @@ https://github.com/earthai-tech/fusionlab/
 
 
 Citing the XTFT Research Paper
-------------------------------
+--------------------------------
 
 The core concepts, design, and evaluation of the **Extreme Temporal
 Fusion Transformer (XTFT)** model, a key component of ``fusionlab``,
@@ -53,12 +46,6 @@ are detailed in the following research paper:
    submitted for publication. Please check for updated information
    (DOI, volume, pages) if citing after publication.
 
-**Citation:**
-
-Kouadio, K. L., Liu, Z., Liu, J., Bizimana, P., & Liu, W. (Submitted).
-*XTFT: A Next-Generation Temporal Fusion Transformer for
-Uncertainty-Rich Time Series Forecasting*. Submitted to IEEE
-Transactions on Pattern Analysis and Machine Intelligence.
 
 **BibTeX Entry for Paper:**
 

@@ -4,7 +4,7 @@ try:
     import fusionlab
     VERSION = fusionlab.__version__
 except:
-    VERSION = "0.1.0"  
+    VERSION = "0.1.1"  
     
 # Package metadata
 DISTNAME = "fusionlab"

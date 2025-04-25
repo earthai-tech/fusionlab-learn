@@ -21,7 +21,7 @@ try:
 except ImportError:
     print("Warning: Could not import fusionlab to determine version.")
     print("Setting version and release to defaults.")
-    release = '0.1.0' # Default fallback
+    release = '0.1.1' # Default fallback
     version = '0.1'   # Default fallback
 
 # -- Project information -----------------------------------------------------
@@ -90,6 +90,41 @@ bibtex_reference_style = 'label'#  (or choose another style)
 bibtex_default_style = 'plain' # (or 'unsrt', 'alpha', etc.)
 
 
+# -- Custom Roles for Release Notes (rst_epilog) -------------------------
+# These substitutions are appended to the end of every processed RST file.
+# Defines roles like |Feature|, |Fix|, etc., using CSS classes for styling.
+# Allow shorthand references for main function interface
+#rst_prolog = wx_rst_epilog
+rst_epilog = """
+.. role:: bdg-success(raw)
+   :format: html
+
+.. role:: bdg-danger(raw)
+   :format: html
+
+.. role:: bdg-info(raw)
+   :format: html
+
+.. role:: bdg-warning(raw)
+   :format: html
+
+.. role:: bdg-primary(raw)
+   :format: html
+
+.. role:: bdg-secondary(raw)
+   :format: html
+
+.. |Feature| replace:: :bdg-success:`Feature`
+.. |Fix| replace:: :bdg-danger:`Fix`
+.. |Enhancement| replace:: :bdg-info:`Enhancement`
+.. |Breaking| replace:: :bdg-warning:`Breaking`
+.. |API Change| replace:: :bdg-warning:`API Change`
+.. |Docs| replace:: :bdg-secondary:`Docs`
+.. |Build| replace:: :bdg-primary:`Build`
+.. |Tests| replace:: :bdg-primary:`Tests`
+
+"""
+
 # -- Options for HTML output -------------------------------------------------
 
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
@@ -97,16 +132,10 @@ bibtex_default_style = 'plain' # (or 'unsrt', 'alpha', etc.)
 # The theme to use for HTML and HTML Help pages.
 html_theme = 'furo'
 
+
+# -- Options for HTML output -------------------------------------------------
 # Theme options are theme-specific and customize the look and feel.
 # We are putting most CSS customizations in custom.css
-html_theme_options = {
-    # Keep source repository links for Furo's "Edit on GitHub" feature
-    "source_repository": "https://github.com/earthai-tech/fusionlab/",
-    "source_branch": "main",
-    "source_directory": "docs/source/",
-    # light_css_variables and dark_css_variables removed, using custom.css instead
-}
-# -- Options for HTML output -------------------------------------------------
 
 html_theme_options = {
     # ── VCS “Edit this page” -----------------------------------------------
@@ -115,7 +144,7 @@ html_theme_options = {
     "source_directory":   "docs/source/",
 
     # ── Layout tweaks -------------------------------------------------------
-    "sidebar_hide_name":      False,   # hide the project name over the logo
+    "sidebar_hide_name":      True,   # hide the project name over the logo
     "navigation_with_keys":   True,   # ← / → to browse pages
 
     # # ── Logos ---------------------------------------------------------------
@@ -151,6 +180,7 @@ html_theme_options = {
     ],
 
     # ── Brand colours via Furo’s CSS variables -----------------------------
+    # light_css_variables and dark_css_variables removed, using custom.css instead
     # "light_css_variables": {
     #     "color-brand-primary":   "#2E3191",
     #     "color-brand-content":   "#2E3191",
@@ -170,12 +200,12 @@ html_static_path = ['_static']
 
 # List of CSS files to include. Relative to html_static_path.
 html_css_files = [
-    'custom.css', # Your custom styles including variable overrides
+    'css/custom.css', # Your custom styles including variable overrides
 ]
 
 # The name of an image file (relative to this directory, within _static path)
 # Place your logo file at 'docs/source/_static/fusionlab.png'
-html_logo = '_static/fusionlab.png'
+html_logo = '_static/fusionlab_b.png'
 
 # The name of an image file (relative to this directory, within _static path)
 # Place your favicon file at 'docs/source/_static/favicon.ico'
@@ -285,3 +315,4 @@ intersphinx_mapping = {
 # -- Options for copybutton extension --
 copybutton_prompt_text = r">>> |\.\.\. |\$ |In \[\d*\]: | {2,5}\.\.\.: | {5,8}: "
 copybutton_prompt_is_regexp = True
+

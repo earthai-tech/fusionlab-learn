@@ -142,11 +142,11 @@ implementation, e.g., where exactly dropout/BN are applied):
 ordering and transformations)*
 
 **Usage Context:** GRNs are used extensively throughout TFT and XTFT:
+
 * Processing static features to generate context vectors.
 * Applying transformations within Variable Selection Networks.
 * Processing outputs of attention layers (position-wise feed-forward).
-* Static enrichment of temporal features (see
-  :class:`~fusionlab.nn.components.StaticEnrichmentLayer`).
+* Static enrichment of temporal features (see :class:`~fusionlab.nn.components.StaticEnrichmentLayer`).
 
 **Code Example:**
 
@@ -203,6 +203,7 @@ location, product category).
 
 **Functionality:**
 The layer typically performs the following:
+
 1. Takes a *static context vector* (shape :math:`(B, U)`) and
    *temporal features* (shape :math:`(B, T, U)`), where :math:`U`
    is the number of hidden units.
@@ -277,6 +278,7 @@ training, rather than being pre-calculated from the dataset
 statistics (like `StandardScaler`).
 
 **Functionality:**
+
 1.  Maintains two trainable weight vectors: `mean` and `stddev`,
     initialized typically near 0 and 1 respectively. Their size
     matches the number of input features (last dimension).
@@ -348,6 +350,7 @@ of features initially, by projecting each into a **common embedding
 space** and then combining them (typically via concatenation).
 
 **Functionality:**
+
 1.  Takes a *list* of input tensors (e.g.,
     `[dynamic_inputs, future_inputs]`). Each tensor must share the
     same batch and time dimensions (e.g., :math:`(B, T)`) but can
@@ -419,6 +422,7 @@ sub-sampled versions of the input. This allows the model to capture
 both short-term and longer-term dynamics within the data.
 
 **Functionality:**
+
 1. Takes a single input time series tensor (shape :math:`(B, T, D)`).
 2. Initializes multiple standard Keras LSTM layers, one for each
    `scale` factor provided (e.g., ``scales=[1, 3, 7]``). All LSTMs
@@ -710,6 +714,7 @@ sequences. It allows one sequence (the "query") to attend to another
 sequence (the "key" and "value").
 
 **Functionality:**
+
 1. Takes a list of two tensors: `[source1, source2]`.
 2. Applies separate dense layers to project each source to `units`.
 3. Performs multi-head attention: `query=projected_source1`,
@@ -764,6 +769,7 @@ block from the standard TFT architecture. It weights past time steps
 based on relevance to the current step, conditioned by static context.
 
 **Functionality:**
+
 1. Takes temporal features (`inputs`, shape :math:`(B, T, U)`) and
    a static context vector (shape :math:`(B, U)`).
 2. Transforms static context via a GRN, expands it across time, and
@@ -818,6 +824,7 @@ attend to an external, trainable `memory` matrix, potentially capturing
 longer-range dependencies or learned prototypes.
 
 **Functionality:**
+
 1. Maintains an internal trainable `memory` matrix
    (shape :math:`(M, U)`, where :math:`M` = `memory_size`).
 2. Input sequence (shape :math:`(B, T, U)`) serves as the `query`.
@@ -870,6 +877,7 @@ independent self-attention mechanisms, then combines their refined
 representations (typically via addition).
 
 **Functionality:**
+
 1. Takes a list of two input tensors `[seq1, seq2]`, both usually
    shape :math:`(B, T, D)`.
 2. Projects each sequence independently to `units` dimension.
@@ -986,6 +994,7 @@ parameters (a separate dense layer), enabling step-specific predictions
 from a shared context.
 
 **Functionality:**
+
 1. Takes a feature vector representing the aggregated context learned
    by the preceding parts of the model (typically shape
    :math:`(B, F)`, where :math:`B` is Batch, :math:`F` is Features).
@@ -1049,11 +1058,12 @@ quantile predictions, forming the final output tensor of the forecasting
 model.
 
 **Functionality:**
+
 1. Takes the output features from a preceding layer (like
    :class:`~fusionlab.nn.components.MultiDecoder` or the final GRN in
    TFT), typically representing processed features for each forecast
    horizon step (shape :math:`(B, H, F)`).
-2. **If `quantiles` were specified** during initialization (e.g.,
+2. **If quantiles were specified** during initialization (e.g.,
    ``[0.1, 0.5, 0.9]``):
    * It uses a separate :class:`~tf.keras.layers.Dense` layer for
      each quantile :math:`q`.
@@ -1292,6 +1302,7 @@ into a single callable loss object, facilitating multi-task learning or
 training with combined objectives (like forecasting + anomaly detection).
 
 **Functionality:**
+
 1.  Initialized with instances of other Keras loss layers, such as
     `quantile_loss_fn` (e.g., `AdaptiveQuantileLoss`) and
     `anomaly_loss_fn` (e.g., `AnomalyLoss`).
