@@ -1,426 +1,507 @@
 .. _glossary:
 
-==========
+=========
 Glossary
-==========
+=========
 
-This glossary defines key terms and concepts used in the
-``fusionlab`` library and the domain of time series forecasting.
+This glossary defines key terms, abbreviations, and concepts used
+throughout the ``fusionlab`` library documentation and the broader
+domain of time series forecasting and deep learning.
 
 .. glossary::
    :sorted:
 
    ACF (Autocorrelation Function)
-       A function that measures the correlation between a time series
-       and lagged versions of itself. Used to identify seasonality and
-       autoregressive patterns. See :func:`~fusionlab.utils.ts_utils.ts_corr_analysis`.
+       A function measuring the correlation between a time series
+       and lagged versions of itself. Used to identify seasonality,
+       memory, and autoregressive patterns. See
+       :func:`~fusionlab.utils.ts_utils.ts_corr_analysis`.
 
    ADF Test (Augmented Dickey-Fuller Test)
-       A statistical test used to check for stationarity in a time
-       series. The null hypothesis is that the series has a unit root
-       (is non-stationary). See :func:`~fusionlab.utils.ts_utils.trend_analysis`.
+       A statistical test for :term:`Stationarity`. The null
+       hypothesis assumes the series has a unit root (is
+       non-stationary). A low p-value suggests stationarity. See
+       :func:`~fusionlab.utils.ts_utils.trend_analysis`.
 
    Additive Decomposition
        A model for time series decomposition where the components are
-       summed: $Y_t = \text{Trend}_t + \text{Seasonal}_t + \text{Residual}_t$.
-       See :func:`~fusionlab.utils.ts_utils.decompose_ts`.
+       summed: :math:`Y_t = Trend_t + Seasonal_t + Residual_t`.
+       Often suitable when seasonality/residuals do not scale with the
+       trend. See :func:`~fusionlab.utils.ts_utils.decompose_ts`.
 
    Anomaly Detection
        The process of identifying data points, events, or patterns
-       that deviate significantly from the expected or normal behavior
-       in a dataset. :class:`~fusionlab.nn.XTFT` includes integrated
-       strategies for this.
+       that deviate significantly from expected or normal behavior.
+       See the :doc:`Anomaly Detection guide </user_guide/anomaly_detection>`.
 
    Anomaly Score
        A numerical value indicating the degree to which a data point
-       is considered anomalous. Higher scores typically represent
-       greater abnormality. See :func:`~fusionlab.nn.utils.compute_anomaly_scores`.
+       or sequence is considered anomalous. Higher scores typically
+       represent greater abnormality. See
+       :func:`~fusionlab.nn.utils.compute_anomaly_scores`.
 
    Attention Mechanism
-       A technique in neural networks that allows the model to
-       dynamically weigh the importance of different parts of the
-       input data (e.g., different time steps or features) when
-       making predictions or creating representations. Includes
-       variants like Self-Attention, Cross-Attention, Multi-Head
-       Attention. See :ref:`Attention Mechanisms <user_guide_components>`.
+       A technique allowing neural networks to dynamically weigh the
+       importance of different input parts (e.g., time steps, features)
+       when forming representations or predictions. Includes variants
+       like Self-Attention, Cross-Attention, Multi-Head Attention.
+       See the :ref:`Attention Mechanisms <user_guide_components>` section.
 
    Autocorrelation
        The correlation of a time series with lagged versions of itself.
        See :term:`ACF (Autocorrelation Function)`.
 
    Autoencoder
-       A type of neural network trained to reconstruct its input. Often
-       used for dimensionality reduction or anomaly detection, where high
-       reconstruction error can indicate an anomaly. See
+       A neural network trained for unsupervised reconstruction of its
+       input, often via a compressed :term:`Latent Space`. High
+       reconstruction error can indicate anomalies. See
        :class:`~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly`.
 
+   Autoregressive Model (AR Model)
+       A time series model where the current value is predicted based
+       on a linear combination of its own past values (lags).
+
    Backtesting
-       A method for evaluating a forecasting model's performance on
-       historical data by simulating how the model would have performed
-       if it had been used in the past. Often involves rolling or expanding
-       windows. See :term:`Time Series Cross-Validation`.
+       Evaluating a forecasting model's performance on historical data
+       by simulating its past usage, often with rolling or expanding
+       windows to respect temporal order. See
+       :term:`Time Series Cross-Validation`.
+
+   Batch Normalization
+       A normalization technique applied across the batch dimension,
+       typically after a linear layer and before activation, to stabilize
+       training by normalizing layer inputs. Compare with
+       :term:`Layer Normalization`.
 
    Batch Size
-       The number of samples processed together in one iteration during
-       model training or inference.
+       The number of samples processed together in one forward/backward
+       pass during model training or inference.
+
+   Bunch
+       A utility class (similar to a dictionary but allowing attribute-style
+       access) used by ``fusionlab`` dataset loaders to return data and
+       metadata. See :class:`~fusionlab.api.bunch.Bunch`.
+
+   Categorical Feature
+       A feature whose values belong to a finite set of discrete
+       categories (e.g., 'product_type', 'day_of_week'). Often requires
+       :term:`One-Hot Encoding` or :term:`Embedding` before use in models.
 
    CLI (Command-Line Interface)
-       A text-based interface used to run programs or scripts from a
-       terminal or command prompt. See :doc:`/user_guide/tools`.
+       A text-based interface for interacting with software via commands
+       entered in a terminal. See :doc:`/user_guide/tools`.
+
+   Continuous Feature
+       A feature whose values can take any number within a range (e.g.,
+       'temperature', 'sales_amount'). Often requires :term:`Scaling`.
 
    Coverage Score
-       A metric used to evaluate probabilistic forecasts (specifically
-       prediction intervals). It measures the proportion of actual
-       values that fall within the predicted interval (e.g., between
-       the 10th and 90th percentiles).
+       A metric evaluating probabilistic forecasts (prediction intervals).
+       It measures the proportion of actual values falling within the
+       predicted interval (e.g., between the 0.1 and 0.9 quantiles).
 
    Cross-Attention
-       A type of attention mechanism where one sequence (query) attends
-       to a different sequence (key/value), allowing interaction
-       between distinct inputs. See
-       :class:`~fusionlab.nn.components.CrossAttention`.
+       Attention where one sequence (query) attends to a *different*
+       sequence (key/value), modeling interactions between distinct inputs.
+       See :class:`~fusionlab.nn.components.CrossAttention`.
 
    Cross-Validation (CV)
        See :term:`Time Series Cross-Validation`.
 
    Decomposition
-       The process of breaking down a time series into its underlying
-       components, typically Trend, Seasonality, and Residuals.
-       See :func:`~fusionlab.utils.ts_utils.decompose_ts`.
+       Separating a time series into constituent components like Trend,
+       Seasonality, and Residuals. See
+       :func:`~fusionlab.utils.ts_utils.decompose_ts`.
 
    Detrending
-       The process of removing the trend component from a time series
-       to isolate other patterns like seasonality or residuals.
-       See :func:`~fusionlab.utils.ts_utils.transform_stationarity`.
+       Removing the trend component from a time series. See
+       :func:`~fusionlab.utils.ts_utils.transform_stationarity`.
 
    Differencing
-       A transformation applied to time series data to stabilize the
-       mean by subtracting previous observations from current ones
-       ($Y'_t = Y_t - Y_{t-d}$). Used to achieve :term:`Stationarity`.
+       Transforming a time series by subtracting previous values, e.g.,
+       :math:`Y'_t = Y_t - Y_{t-d}`. Used to achieve :term:`Stationarity`.
        See :func:`~fusionlab.utils.ts_utils.transform_stationarity`.
 
    Dynamic Features
-       Features whose values change over time within a sequence (e.g.,
-       past sales, temperature, promotions that occurred). Input to the
-       temporal processing parts of models like TFT/XTFT.
+       Features whose values change over time (e.g., past sales, weather,
+       day-of-week). Used as historical inputs in TFT/XTFT.
+
+   Dynamic Time Window
+       A component that adaptively selects or weights the most recent
+       time steps from a sequence. See
+       :class:`~fusionlab.nn.components.DynamicTimeWindow`.
 
    Early Stopping
-       A regularization technique used during model training where
-       training is stopped early if performance on a validation set
-       stops improving (or starts degrading) for a certain number of
-       epochs (`patience`).
+       A regularization technique stopping training early if validation
+       performance plateaus or degrades, preventing overfitting.
 
    Embedding
-       A learned, typically lower-dimensional, dense vector
-       representation of discrete variables (like categorical features)
-       or continuous features. Models like TFT/XTFT use embeddings for
-       various inputs. See
+       A learned, dense vector representation, typically of lower
+       dimension, used to represent discrete inputs (like categories) or
+       project continuous inputs. See
        :class:`~fusionlab.nn.components.MultiModalEmbedding`.
 
    Epoch
-       One complete pass through the entire training dataset during
-       model training.
+       One complete pass through the entire training dataset.
 
    Exogenous Variables
-       External variables that can influence the target variable but are
-       not directly influenced by it within the model's scope (e.g.,
-       weather affecting sales, but sales not affecting weather). Often
-       used as :term:`Future Features` if known in advance.
+       External variables influencing the target variable but not
+       influenced by it (e.g., weather affecting sales). Often used as
+       :term:`Future Features` if known in advance.
+
+   Feature Engineering
+       The process of creating new input features from raw data to
+       improve model performance. See
+       :func:`~fusionlab.utils.ts_utils.ts_engineering`.
 
    Forecast Horizon
-       The number of future time steps for which predictions are generated.
-       Also referred to as `H`.
+       The number of future time steps (:math:`H`) for which predictions
+       are generated.
 
    Fourier Features / Transform
-       Features derived from the Discrete Fourier Transform (DFT or FFT)
-       of a time series. They represent the magnitude (or phase) of
-       different frequency components and can capture complex
-       periodicities. See :func:`~fusionlab.utils.ts_utils.ts_engineering`.
+       Features derived from the Discrete Fourier Transform (DFT or FFT),
+       representing the magnitude/phase of different frequency components.
+       Useful for capturing complex periodicities. See
+       :func:`~fusionlab.utils.ts_utils.ts_engineering`.
 
    Future Features (Known Covariates)
-       Features whose values are known or can be reliably estimated for
-       future time steps at the time of prediction (e.g., upcoming
-       holidays, planned promotions, day of the week). TFT/XTFT are
-       designed to leverage this information.
+       Features whose values are known in advance for future time steps
+       at the time of prediction (e.g., holidays, promotions, day-of-week).
+       Leveraged by TFT/XTFT.
 
-   GRN (Gated Residual Network)
-       A core building block in TFT/XTFT, consisting of dense layers,
-       gating mechanisms (like GLU), non-linear activation, and a
-       residual connection. Used for flexible feature transformations.
-       See :class:`~fusionlab.nn.components.GatedResidualNetwork`.
+   Gate / Gating Mechanism
+       A component in neural networks (often using sigmoid activation)
+       that controls the flow of information through a layer, allowing
+       the network to dynamically adjust computations. See :term:`GLU`
+       and :term:`GRN`.
 
    GLU (Gated Linear Unit)
-       A gating mechanism often used within GRNs, calculated as
-       $a \odot \sigma(b)$, where $a$ and $b$ are typically outputs of
-       linear layers, $\odot$ is element-wise multiplication, and $\sigma$
-       is the sigmoid function.
+       A specific gating mechanism, often :math:`a \odot \sigma(b)`, where
+       :math:`a` and :math:`b` are linear transformations of an input,
+       :math:`\odot` is element-wise multiplication, and :math:`\sigma`
+       is sigmoid. Used within :term:`GRN`.
+
+   GRN (Gated Residual Network)
+       A core component combining linear transformations, non-linear
+       activation, gating (GLU), and a residual connection with layer
+       normalization. Enables complex, stable transformations. See
+       :class:`~fusionlab.nn.components.GatedResidualNetwork`.
 
    Heuristic
-       A practical approach or rule of thumb used for problem-solving
-       or decision-making, often based on experience or simplified logic,
-       especially when an optimal solution is complex to find (e.g.,
-       heuristic methods for choosing decomposition type).
+       A practical rule or method, often based on experience, used when
+       an optimal algorithm is impractical (e.g., heuristic choice of
+       decomposition model).
+
+   Hierarchical Attention
+       An attention mechanism designed to process inputs at multiple
+       levels or scales, potentially capturing relationships within and
+       between different temporal resolutions or feature groups. See
+       :class:`~fusionlab.nn.components.HierarchicalAttention`.
 
    Hyperparameter
-       A parameter whose value is set *before* the learning process begins,
-       controlling the model architecture or training algorithm (e.g.,
-       learning rate, number of hidden units, dropout rate). Contrast with
-       model parameters learned during training (e.g., weights).
+       A parameter set *before* training begins, controlling model
+       architecture or the learning process (e.g., learning rate,
+       `hidden_units`). Contrast with model weights learned during training.
 
    Hyperparameter Tuning / Optimization
-       The process of systematically searching for the optimal set of
-       hyperparameters for a model to achieve the best performance on a
-       given task or dataset. See :doc:`/user_guide/forecast_tuner`.
+       The process of searching for the optimal set of hyperparameters
+       to maximize model performance. See
+       :doc:`/user_guide/forecast_tuner`.
 
    IQR (Interquartile Range)
-       A measure of statistical dispersion, calculated as the difference
-       between the 75th percentile (Q3) and the 25th percentile (Q1).
-       Used in outlier detection. See
+       A measure of statistical dispersion (:math:`Q3 - Q1`). Used in
+       robust outlier detection. See
        :func:`~fusionlab.utils.ts_utils.ts_outlier_detector`.
 
+   Interpretability
+       The degree to which a model's predictions and internal workings
+       can be understood by humans. TFT/XTFT incorporate components like
+       VSNs and attention to enhance interpretability.
+
+   Keras
+       A high-level API for building and training neural networks, commonly
+       used with backends like TensorFlow, JAX, or PyTorch. `fusionlab`
+       currently uses the Keras API provided by TensorFlow.
+
    Keras Tuner
-       A library for automating hyperparameter tuning for Keras models,
-       used by ``fusionlab.nn.forecast_tuner``.
+       A library for automating hyperparameter tuning for Keras models.
+       See :doc:`/user_guide/forecast_tuner`.
 
    KPSS Test (Kwiatkowski-Phillips-Schmidt-Shin Test)
-       A statistical test used to check for stationarity in a time
-       series. The null hypothesis is that the series is stationary
-       around a deterministic trend (level or linear). See
+       A statistical test for :term:`Stationarity`. The null hypothesis
+       is stationarity around a deterministic trend. A low p-value
+       suggests non-stationarity. See
        :func:`~fusionlab.utils.ts_utils.trend_analysis`.
 
    Lag Features
-       Features created by shifting a time series back by one or more
-       time steps ($X_{t-k}$). Allows models to use past values as
-       predictors. See :func:`~fusionlab.utils.ts_utils.create_lag_features`.
+       Features created by shifting a time series (:math:`Y_{t-k}`). See
+       :func:`~fusionlab.utils.ts_utils.create_lag_features`.
 
    Latent Space / Representation
-       A lower-dimensional space into which high-dimensional data is
-       encoded, typically capturing the most salient features. Used in
-       autoencoders. See
-       :class:`~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly`.
+       A typically lower-dimensional space capturing salient features,
+       learned by encoding high-dimensional data. Used in :term:`Autoencoder`.
 
    Layer Normalization
-       A normalization technique applied across the features dimension
-       for a single data sample, often used in Transformer-based models
-       and GRNs to stabilize training.
+       Normalization applied across features for a *single* sample, often
+       used in Transformers and GRNs. Contrast with :term:`Batch Normalization`.
+
+   Learned Normalization
+       Normalization using learned scale and shift parameters instead of
+       pre-calculated statistics. See
+       :class:`~fusionlab.nn.components.LearnedNormalization`.
 
    Lookback Period / Window
-       The number of past time steps used as input features to predict
-       future values. Corresponds to `sequence_length` or `time_steps`
-       parameters.
+       The number of past time steps (:math:`T` or `time_steps`) used as
+       input to predict the future.
 
    LOESS (Locally Estimated Scatterplot Smoothing)
-       A non-parametric regression method used to fit a smooth curve
-       through data points. Used internally by the :term:`STL`
-       decomposition method.
+       A non-parametric regression method fitting smooth curves locally.
+       Used internally by :term:`STL`.
+
+   Loss Function
+       A function measuring the discrepancy between model predictions and
+       true values, guiding model training via optimization. See
+       :doc:`/user_guide/losses`.
 
    LSTM (Long Short-Term Memory)
-       A type of Recurrent Neural Network (RNN) architecture capable of
-       learning long-range dependencies in sequential data, often used
-       as encoders in time series models. See
+       A type of Recurrent Neural Network (RNN) adept at learning long-range
+       dependencies in sequences. See
        :class:`~fusionlab.nn.components.MultiScaleLSTM`.
 
    MAE (Mean Absolute Error)
-       A metric for evaluating regression models, calculated as the
-       average of the absolute differences between predicted and actual
-       values.
+       An evaluation metric: mean of absolute differences between
+       predictions and actuals.
+
+   Memory-Augmented Attention
+       Attention mechanism incorporating an external, trainable memory
+       matrix, allowing the model to potentially access longer-term or
+       learned contextual information. See
+       :class:`~fusionlab.nn.components.MemoryAugmentedAttention`.
+
+   MinMaxScaler
+       A scikit-learn scaler that transforms features to a specific range,
+       typically [0, 1].
 
    MSE (Mean Squared Error)
-       A common loss function and metric for regression, calculated as
-       the average of the squared differences between predicted and
-       actual values.
+       A common loss function/metric: mean of squared differences between
+       predictions and actuals.
 
    Multi-Head Attention
-       An extension of the basic attention mechanism where attention is
-       calculated multiple times in parallel with different learned linear
-       projections (heads). The results are concatenated and projected,
-       allowing the model to jointly attend to information from different
-       representation subspaces. See :ref:`Attention Mechanisms <user_guide_components>`.
+       Attention performed multiple times in parallel using different
+       projections (heads), allowing focus on different representation
+       subspaces. See :ref:`Attention Mechanisms <user_guide_components>`.
 
    Multi-Horizon Forecasting
-       Predicting multiple time steps into the future simultaneously, rather
-       than just the single next step. `forecast_horizon` > 1.
+       Predicting multiple future time steps simultaneously. Requires
+       `forecast_horizon` > 1.
+
+   Multi-Modal Embedding
+       A layer that projects multiple input sequences (modalities) into a
+       common embedding space before combining them. See
+       :class:`~fusionlab.nn.components.MultiModalEmbedding`.
+
+   Multi-Resolution Attention Fusion
+       A self-attention layer applied to features combined from various
+       sources (e.g., multi-scale LSTMs, different attention outputs) to
+       create a unified representation. See
+       :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`.
 
    Multi-Scale Processing
-       Analyzing a time series at different temporal resolutions or
-       frequencies simultaneously, e.g., using LSTMs on daily and weekly
-       sampled data. See :class:`~fusionlab.nn.components.MultiScaleLSTM`.
+       Analyzing data at different temporal resolutions simultaneously.
+       See :class:`~fusionlab.nn.components.MultiScaleLSTM`.
+
+   Multi-Target Forecasting
+       Predicting multiple related target variables simultaneously.
+       See :func:`~fusionlab.datasets.make.make_multivariate_target_data`.
 
    Multiplicative Decomposition
-       A model for time series decomposition where the components are
-       multiplied: $Y_t = \text{Trend}_t \times \text{Seasonal}_t \times \text{Residual}_t$.
-       Often suitable for series where seasonal variation or noise scales
-       with the trend level. See :func:`~fusionlab.utils.ts_utils.decompose_ts`.
-
-   NumPy Style Docstrings
-       A convention for formatting Python docstrings, characterized by
-       sections like Parameters, Returns, Examples, etc. Used by `fusionlab`.
-       See :ext:`sphinx.ext.napoleon`.
-
-   One-Hot Encoding
-       A process of converting categorical integer features into a binary
-       vector format where only one element is 'hot' (1) and the rest are 0.
-
-   Outlier
-       A data point that differs significantly from other observations.
-       See :func:`~fusionlab.utils.ts_utils.ts_outlier_detector`.
-
-   PACF (Partial Autocorrelation Function)
-       Measures the correlation between a time series and its lag, after
-       removing the linear dependence on shorter lags. Used to identify
-       autoregressive order. See :func:`~fusionlab.utils.ts_utils.ts_corr_analysis`.
-
-   Pinball Loss
-       See :term:`Quantile Loss`.
-
-   Point Forecast
-       A single value prediction for each future time step, typically
-       representing the expected value or median of the target distribution.
-       Contrast with :term:`Quantile Forecast`.
-
-   Positional Encoding
-       A technique used primarily in Transformer-based models to inject
-       information about the position or order of elements in a sequence,
-       as self-attention mechanisms are otherwise permutation-invariant.
-       See :class:`~fusionlab.nn.components.PositionalEncoding`.
-
-   Probabilistic Forecasting
-       Forecasting that provides an estimate of the uncertainty associated
-       with predictions, typically by outputting a full predictive
-       distribution or specific quantiles. See :term:`Quantile Forecast`.
-
-   Quantile
-       A point below which a certain percentage of the data falls. For
-       example, the 0.1 quantile (or 10th percentile) is the value below
-       which 10% of the data lies.
-
-   Quantile Forecast
-       A type of probabilistic forecast where the model predicts specific
-       quantiles (e.g., 0.1, 0.5, 0.9) of the target variable's future
-       distribution. This allows constructing prediction intervals.
-
-   Quantile Loss (Pinball Loss)
-       A loss function used for training models to predict specific
-       quantiles. It penalizes errors asymmetrically based on the target
-       quantile. See :func:`~fusionlab.nn.losses.combined_quantile_loss`.
-
-   R² Score (Coefficient of Determination)
-       A statistical measure representing the proportion of the variance
-       in the dependent variable that is predictable from the independent
-       variables. Ranges from -inf to 1.
-
-   Residual
-       The difference between the observed value and the value predicted
-       or fitted by a model. In decomposition, it's the component left
-       after removing trend and seasonality.
-
-   Rolling Statistics / Window
-       Statistics (e.g., mean, standard deviation) calculated over a
-       sliding window of fixed size moving through the time series. Used
-       to visualize local trends or volatility. See
-       :func:`~fusionlab.utils.ts_utils.ts_engineering`.
-
-   Scaler
-       A data preprocessing tool (e.g., `StandardScaler`, `MinMaxScaler`
-       from scikit-learn) used to normalize or scale numerical features,
-       often necessary for optimal neural network training.
-
-   Scaling
-       The process of transforming numerical features to a standard range
-       (e.g., [0, 1] for MinMaxScaler) or distribution (e.g., mean 0,
-       std dev 1 for StandardScaler).
-
-   SDT (Seasonal Decomposition of Time series)
-       The classical method for time series decomposition available in
-       `statsmodels`, supporting additive and multiplicative models.
-       See :func:`~fusionlab.utils.ts_utils.decompose_ts`.
-
-   Seasonality
-       Patterns in a time series that repeat over a fixed period (e.g.,
-       daily, weekly, yearly).
-
-   Self-Attention
-       An attention mechanism where a sequence attends to itself, allowing
-       different positions within the sequence to interact and weigh each
-       other's importance.
-
-   Sequence Length
-       See :term:`Lookback Period / Window`.
-
-   Sequence-to-Sequence (Seq2Seq) Model
-       A type of neural network architecture that maps an input sequence
-       to an output sequence, commonly used in machine translation, text
-       summarization, and time series forecasting.
-
-   StandardScaler
-       A preprocessing technique from scikit-learn that standardizes
-       features by removing the mean and scaling to unit variance (Z-score).
-
-   Static Features
-       Features associated with a time series that do not change over
-       time (e.g., store location ID, product category, sensor type).
-       TFT/XTFT can leverage these as context.
-
-   Stationarity
-       A property of a time series whose statistical properties (like mean,
-       variance, autocorrelation) are constant over time. Many classical
-       time series models assume stationarity.
-
-   STL (Seasonal-Trend decomposition using LOESS)
-       A robust method for decomposing a time series into trend, seasonal,
-       and residual components, available in `statsmodels`. See
+       Time series decomposition where components are multiplied:
+       :math:`Y_t = T_t \times S_t \times R_t`. See
        :func:`~fusionlab.utils.ts_utils.decompose_ts`.
-
-   Supervised Learning
-       A type of machine learning where the model learns a mapping from
-       input features to output labels based on labeled training examples.
-       Time series forecasting is often framed as a supervised task where
-       past data predicts future data.
-
-   TensorFlow
-       An open-source machine learning framework developed by Google, used
-       as the primary backend for ``fusionlab``'s neural network models.
-
-   TFT (Temporal Fusion Transformer)
-       A powerful deep learning architecture specifically designed for
-       multi-horizon time series forecasting, capable of handling diverse
-       feature types and providing interpretable outputs. See
-       :class:`~fusionlab.nn.TemporalFusionTransformer`.
-
-   Time Series
-       A sequence of data points indexed (or graphed) in time order.
-
-   Time Series Cross-Validation
-       A cross-validation strategy for time series data that respects
-       temporal order. Typically involves training on past data and
-       testing on future data, often using expanding or rolling windows.
-       See :func:`~fusionlab.utils.ts_utils.ts_split` (using `split_type='cv'`).
-
-   Trend
-       The long-term increase or decrease in a time series, ignoring
-       short-term fluctuations and seasonality.
-
-   Univariate Time Series
-       A time series consisting of observations on only a single variable
-       over time.
 
    Multivariate Time Series
        A time series consisting of observations on multiple variables
        over time.
 
+   NumPy Style Docstrings
+       A convention for formatting Python docstrings using specific
+       sections (Parameters, Returns, etc.). Used by `fusionlab` and
+       parsed by :ext:`sphinx.ext.napoleon`.
+
+   NTemporalFusionTransformer
+       A ``fusionlab`` variant of TFT requiring static and dynamic inputs,
+       currently focused on point forecasts. See
+       :class:`~fusionlab.nn.NTemporalFusionTransformer`.
+
+   One-Hot Encoding
+       Converting categorical integer features into binary vectors where
+       only the element corresponding to the category is 1.
+
+   Outlier
+       A data point significantly different from other observations. See
+       :func:`~fusionlab.utils.ts_utils.ts_outlier_detector`.
+
+   PACF (Partial Autocorrelation Function)
+       Measures correlation between a series and its lag, after removing
+       effects of intermediate lags. Helps identify AR order. See
+       :func:`~fusionlab.utils.ts_utils.ts_corr_analysis`.
+
+   Pinball Loss
+       See :term:`Quantile Loss`.
+
+   Point Forecast
+       A single value prediction for each future time step. Contrast with
+       :term:`Quantile Forecast`.
+
+   Positional Encoding
+       Technique to inject sequence order information into models like
+       Transformers that don't inherently process order. See
+       :class:`~fusionlab.nn.components.PositionalEncoding`.
+
+   Probabilistic Forecasting
+       Forecasting that provides uncertainty estimates, typically via
+       quantiles or a full predictive distribution. See
+       :term:`Quantile Forecast`.
+
+   Quantile
+       A point below which a specified percentage (quantile level) of
+       data falls (e.g., 0.5 quantile = median).
+
+   Quantile Distribution Modeling
+       The final output component in XTFT that maps decoder features to
+       specific quantile predictions (or a point forecast). See
+       :class:`~fusionlab.nn.components.QuantileDistributionModeling`.
+
+   Quantile Forecast
+       Predicting specific quantiles (e.g., 0.1, 0.5, 0.9) of the target
+       variable's future distribution to represent uncertainty.
+
+   Quantile Loss (Pinball Loss)
+       Loss function for training quantile forecasting models, penalizing
+       errors asymmetrically based on the quantile level. See
+       :func:`~fusionlab.nn.losses.combined_quantile_loss`.
+
+   R² Score (Coefficient of Determination)
+       Statistical measure (:math:`R^2`) of the proportion of variance in the
+       dependent variable predictable from independent variables.
+
+   Recurrent Neural Network (RNN)
+       A class of neural networks designed for sequential data, containing
+       feedback loops (e.g., :term:`LSTM`, GRU).
+
+   Residual
+       The component of a time series remaining after Trend and Seasonality
+       have been removed, or the error between predictions and actuals.
+
+   Rolling Statistics / Window
+       Statistics (mean, std dev) calculated over a sliding window. See
+       :func:`~fusionlab.utils.ts_utils.ts_engineering`.
+
+   Scaler
+       Tool (e.g., `StandardScaler`, `MinMaxScaler`) for feature
+       :term:`Scaling`.
+
+   Scaling
+       Transforming numerical features to a common scale (e.g., [0, 1] or
+       mean 0, std 1) for better model training.
+
+   Scikit-learn
+       A popular Python library for machine learning, providing tools for
+       preprocessing, model selection, evaluation, and various algorithms.
+       Used by some ``fusionlab`` utilities.
+
+   SDT (Seasonal Decomposition of Time series)
+       Classical time series decomposition method (additive/multiplicative).
+       See :func:`~fusionlab.utils.ts_utils.decompose_ts`.
+
+   Seasonality
+       Patterns repeating over a fixed period (daily, weekly, yearly).
+
+   Self-Attention
+       Attention mechanism where a sequence attends to itself to model
+       internal relationships.
+
+   Sequence Length
+       See :term:`Lookback Period / Window`.
+
+   Sequence-to-Sequence (Seq2Seq) Model
+       Architecture mapping an input sequence to an output sequence.
+
+   Spatiotemporal Data
+       Data that has both spatial (location) and temporal (time) dimensions.
+
+   StandardScaler
+       Scikit-learn scaler standardizing features to zero mean and unit
+       variance (Z-score).
+
+   Static Features
+       Time-invariant features associated with a series (e.g., sensor ID,
+       location category). Used as context by TFT/XTFT.
+
+   Stationarity
+       Property where a time series' statistical properties (mean, variance,
+       autocorrelation) are constant over time.
+
+   Statsmodels
+       A Python library providing classes and functions for estimating
+       many different statistical models, as well as statistical tests
+       and data exploration. Used by some ``fusionlab`` utilities.
+
+   STL (Seasonal-Trend decomposition using LOESS)
+       Robust time series decomposition method. See
+       :func:`~fusionlab.utils.ts_utils.decompose_ts`.
+
+   Supervised Learning
+       Machine learning where a model learns a mapping from inputs to
+       outputs using labeled examples. Forecasting is often framed this way.
+
+   SuperXTFT
+       An experimental, enhanced version of XTFT with input VSNs and extra
+       GRNs. See :class:`~fusionlab.nn.SuperXTFT`.
+
+   Taylor Diagram
+       A diagram used to graphically summarize how well patterns match
+       each other in terms of correlation, standard deviation, and RMSE.
+       *(Mentioned in relation to k-diagram)*
+
+   TensorFlow
+       Open-source machine learning framework used as the backend for
+       ``fusionlab`` neural network models.
+
+   TFT (Temporal Fusion Transformer)
+       Baseline interpretable deep learning architecture for multi-horizon
+       time series forecasting. See
+       :class:`~fusionlab.nn.TemporalFusionTransformer` and
+       :class:`~fusionlab.nn.transformers.TFT`.
+
+   Time Series
+       A sequence of data points indexed in time order.
+
+   Time Series Cross-Validation
+       Cross-validation respecting temporal order, typically using
+       expanding or rolling forecast origins. See
+       :func:`~fusionlab.utils.ts_utils.ts_split` (`split_type='cv'`).
+
+   Trend
+       The long-term increase or decrease in a time series.
+
+   Uncertainty Quantification (UQ)
+       The process of estimating and characterizing the uncertainty
+       associated with model predictions, often via prediction intervals
+       or full distributions. Quantile forecasting is a method for UQ.
+
+   Univariate Time Series
+       A time series with observations on only a single variable.
+
    VSN (Variable Selection Network)
-       A component within TFT/XTFT that learns to assign importance weights
-       to different input features, aiding interpretability and potentially
-       improving performance by focusing on relevant inputs. See
+       Component that learns importance weights for input features. See
        :class:`~fusionlab.nn.components.VariableSelectionNetwork`.
 
    XTFT (Extreme Temporal Fusion Transformer)
-       An enhanced version of TFT developed within ``fusionlab`` (or based
-       on related research), incorporating more advanced components like
-       multi-scale LSTMs, specialized attention mechanisms, and integrated
-       anomaly detection. See :class:`~fusionlab.nn.XTFT`.
+       Enhanced TFT variant with multi-scale processing, advanced attention,
+       and anomaly detection. See :class:`~fusionlab.nn.XTFT`.
 
    Z-Score
-       A statistical measurement describing a value's relationship to the
-       mean of a group of values, measured in terms of standard deviations.
-       Used in :func:`~fusionlab.utils.ts_utils.ts_outlier_detector`.
+       Statistical measure of a value's deviation from the mean in units
+       of standard deviations. See
+       :func:`~fusionlab.utils.ts_utils.ts_outlier_detector`.

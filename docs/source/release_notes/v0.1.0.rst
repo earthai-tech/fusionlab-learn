@@ -1,0 +1,95 @@
+.. _release_v0.1.0:
+
+Version 0.1.0
+===============
+*(Release Date: April 17, 2025)* 
+
+**Initial Public Release**
+
+This is the first public release of ``fusionlab``, establishing the
+core framework for building and experimenting with advanced time
+series forecasting models based on Temporal Fusion Transformer
+architectures.
+
+Key Features & Modules Included
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+* |Feature| **Core Forecasting Models (fusionlab.nn.transformers):**
+    * :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`:
+      A flexible implementation of the standard TFT model.
+    * :class:`~fusionlab.nn.transformers.XTFT`: The Extreme Temporal
+      Fusion Transformer, featuring enhanced components for complex
+      time series, including multi-scale processing, advanced
+      attention, and integrated anomaly detection capabilities.
+    * :class:`~fusionlab.nn.transformers.NTemporalFusionTransformer`:
+      A variant requiring static/dynamic inputs (point forecast only).
+    * :class:`~fusionlab.nn.transformers.SuperXTFT`: An experimental
+      variant of XTFT.
+
+* |Feature| **Modular Components (fusionlab.nn.components):**
+    * Core blocks:
+      :class:`~fusionlab.nn.components.GatedResidualNetwork`,
+      :class:`~fusionlab.nn.components.VariableSelectionNetwork`,
+      :class:`~fusionlab.nn.components.PositionalEncoding`.
+    * Sequence processing:
+      :class:`~fusionlab.nn.components.MultiScaleLSTM`,
+      :class:`~fusionlab.nn.components.DynamicTimeWindow`,
+      :func:`~fusionlab.nn.components.aggregate_multiscale`,
+      :func:`~fusionlab.nn.components.aggregate_time_window_output`.
+    * Attention mechanisms:
+      :class:`~fusionlab.nn.components.TemporalAttentionLayer`,
+      :class:`~fusionlab.nn.components.CrossAttention`,
+      :class:`~fusionlab.nn.components.HierarchicalAttention`,
+      :class:`~fusionlab.nn.components.MemoryAugmentedAttention`,
+      :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`,
+      :class:`~fusionlab.nn.components.ExplainableAttention`.
+    * Input/Output layers:
+      :class:`~fusionlab.nn.components.MultiModalEmbedding`,
+      :class:`~fusionlab.nn.components.LearnedNormalization`,
+      :class:`~fusionlab.nn.components.MultiDecoder`,
+      :class:`~fusionlab.nn.components.QuantileDistributionModeling`.
+
+* |Feature| **Loss Functions (fusionlab.nn.losses, fusionlab.nn.components):**
+    * Support for point (MSE) and quantile forecasting
+      (:func:`~fusionlab.nn.losses.combined_quantile_loss`).
+    * Components/factories for combined anomaly objectives:
+      :class:`~fusionlab.nn.components.AnomalyLoss`,
+      :class:`~fusionlab.nn.components.MultiObjectiveLoss`,
+      :func:`~fusionlab.nn.losses.prediction_based_loss`,
+      :func:`~fusionlab.nn.losses.combined_total_loss`.
+
+* |Feature| **Anomaly Detection (fusionlab.nn.anomaly_detection):**
+    * Initial components:
+      :class:`~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly`,
+      :class:`~fusionlab.nn.anomaly_detection.SequenceAnomalyScoreLayer`.
+
+* |Feature| **Hyperparameter Tuning (fusionlab.nn.forecast_tuner):**
+    * Utilities (:func:`~fusionlab.nn.forecast_tuner.xtft_tuner`,
+      :func:`~fusionlab.nn.forecast_tuner.tft_tuner`) using `keras-tuner`.
+
+* |Feature| **Utilities (fusionlab.utils, fusionlab.nn.utils):**
+    * Time series helpers (`ts_utils`) for feature engineering, analysis, etc.
+    * Neural network helpers (`nn.utils`) for sequence preparation,
+      forecasting execution, visualization.
+
+* |Feature| **Tools (fusionlab.tools):**
+    * Initial command-line applications for running workflows.
+
+* |Docs| **Documentation:**
+    * Initial Sphinx setup: User Guide, Examples, API Reference, Glossary.
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+* |Breaking| Initial release. No breaking changes from previous versions.
+
+Known Issues / Limitations
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+* |API Change| :class:`~fusionlab.nn.SuperXTFT` is experimental and
+  its API may change or be removed.
+* |Enhancement| Backend support is currently focused on TensorFlow/Keras.
+* |Enhancement| Some utility functions might require optional dependencies
+  (e.g., `statsmodels`, `scikit-learn`).
+
+Contributors
+~~~~~~~~~~~~~~
+* earthai-tech (Lead Developer: `Laurent Kouadio <https://earthai-tech.github.io/>`_)

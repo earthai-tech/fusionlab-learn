@@ -136,6 +136,28 @@ Utilities for optimizing model hyperparameters using Keras Tuner.
    ~fusionlab.nn.forecast_tuner.tft_tuner
 
 
+Neural Network Utilities (`fusionlab.nn.utils`)
+------------------------------------------------
+Utilities specifically for preparing data for or interacting with neural network models.
+
+.. autosummary::
+   :toctree: _autosummary/nn_utils
+   :nosignatures:
+
+   ~fusionlab.nn.utils.create_sequences
+   ~fusionlab.nn.utils.split_static_dynamic
+   ~fusionlab.nn.utils.reshape_xtft_data
+   ~fusionlab.nn.utils.compute_forecast_horizon
+   ~fusionlab.nn.utils.prepare_spatial_future_data
+   ~fusionlab.nn.utils.compute_anomaly_scores
+   ~fusionlab.nn.utils.generate_forecast
+   ~fusionlab.nn.utils.generate_forecast_with
+   ~fusionlab.nn.utils.forecast_single_step
+   ~fusionlab.nn.utils.forecast_multi_step
+   ~fusionlab.nn.utils.visualize_forecasts
+   ~fusionlab.nn.utils.step_to_long
+
+
 Time Series Utilities (`fusionlab.utils.ts_utils`)
 ---------------------------------------------------
 General utilities for time series data processing, analysis, and feature engineering.
@@ -160,36 +182,12 @@ General utilities for time series data processing, analysis, and feature enginee
    ~fusionlab.utils.ts_utils.ts_outlier_detector
    ~fusionlab.utils.ts_utils.select_and_reduce_features
 
-
-Neural Network Utilities (`fusionlab.nn.utils`)
-------------------------------------------------
-Utilities specifically for preparing data for or interacting with neural network models.
-
-.. autosummary::
-   :toctree: _autosummary/nn_utils
-   :nosignatures:
-
-   ~fusionlab.nn.utils.create_sequences
-   ~fusionlab.nn.utils.split_static_dynamic
-   ~fusionlab.nn.utils.reshape_xtft_data
-   ~fusionlab.nn.utils.compute_forecast_horizon
-   ~fusionlab.nn.utils.prepare_spatial_future_data
-   ~fusionlab.nn.utils.compute_anomaly_scores
-   ~fusionlab.nn.utils.generate_forecast
-   ~fusionlab.nn.utils.generate_forecast_with
-   ~fusionlab.nn.utils.forecast_single_step
-   ~fusionlab.nn.utils.forecast_multi_step
-   ~fusionlab.nn.utils.visualize_forecasts
-   ~fusionlab.nn.utils.step_to_long
-
-
-
 Datasets (`fusionlab.datasets`)
 -------------------------------
 Utilities for loading included sample datasets and generating synthetic
 time series data for testing and demonstration.
 
-**Loading Functions (`fusionlab.datasets.load`)**
+**Loading Functions** (`fusionlab.datasets.load`)
 
 .. autosummary::
    :toctree: _autosummary/datasets_load
@@ -199,7 +197,7 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.load.fetch_nansha_data
    ~fusionlab.datasets.load.load_processed_subsidence_data
 
-**Generation Functions (`fusionlab.datasets.make`)**
+**Generation Functions** (`fusionlab.datasets.make`)
 
 .. autosummary::
    :toctree: _autosummary/datasets_make
@@ -216,3 +214,10 @@ Command-Line Tools (`fusionlab.tools`)
 ---------------------------------------
 High-level applications for common workflows. For usage details, see the
 :doc:`Command-Line Tools guide </user_guide/tools>`.
+
+.. rubric:: References
+
+.. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
+       Temporal fusion transformers for interpretable multi-horizon
+       time series forecasting. *International Journal of Forecasting*,
+       37(4), 1748-1764. (Also arXiv:1912.09363)
