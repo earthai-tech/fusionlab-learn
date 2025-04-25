@@ -140,6 +140,8 @@ def xtft_tuner(
     model_name="xtft",
     verbose: int = 3
 ) -> tuple:
+    """ Fine-tune the XTFT forecasting model using Keras Tuner with Bayesian 
+    or RandomSearch Optimization."""
     
     loss_fn="mse"
     if quantiles is not None: 
@@ -163,7 +165,7 @@ def xtft_tuner(
     # Define default parameter space.
     vlog(
         f"Start {model_name.upper()} {tuner_type.upper()} tune ... ",
-        level=3
+        level=3, verbose=verbose
     )
     # Local helper to retrieve parameter space values.
     def get_param_space(name):
@@ -172,7 +174,7 @@ def xtft_tuner(
     
     vlog(
         "Check parameters... ",
-        level=4
+        level=4, verbose=verbose
     )
     forecast_horizon= validate_positive_integer(
         forecast_horizon, "forecast_horizon", 
@@ -207,14 +209,14 @@ def xtft_tuner(
         X_static, X_dynamic, X_future, y = validated
     vlog(
         "Parameters check sucessfully passed. ",
-        level=4
+        level=4, verbose=verbose
     )
     
     # Define default model builder if none is provided.
     if model_builder is None:
         vlog(
             "Set default model builder... ",
-            level=3
+            level=3, verbose=verbose
         )
         # Define model builder if none is provided
         model_builder = lambda hp: _model_builder_factory(
@@ -223,7 +225,7 @@ def xtft_tuner(
   
     vlog(
         "Is model builder a keras model object?",
-        level=5
+        level=5, verbose=verbose
     )
     model_builder = validate_keras_model(
         model_builder, 
@@ -232,14 +234,14 @@ def xtft_tuner(
     
     vlog(
         "YES",
-        level=5
+        level=5, verbose=verbose
     )
     
     # Set default callbacks if none provided.
     if callbacks is None:
         vlog(
             "Set default callbacks... ",
-            level=3
+            level=3, verbose=verbose
         )
         callbacks = [
             EarlyStopping(
@@ -250,7 +252,7 @@ def xtft_tuner(
         ]
         vlog(
             "Callbacks set successfully. ",
-            level=3
+            level=3, verbose=verbose
         )
     # Set default tuner directory and project name.
     tuner_dir = tuner_dir or os.path.join(os.getcwd(), "tuning_results")
@@ -260,7 +262,7 @@ def xtft_tuner(
 
     # Initialize the tuner based on the selected strategy.
     vlog(f"Initialize the Keras Tuner using {tuner_type.upper()}...", 
-         level=3)
+         level=3, verbose=verbose)
     
     if tuner_type == "bayesian":
         tuner = kt.BayesianOptimization(
@@ -279,7 +281,8 @@ def xtft_tuner(
             project_name=project_name
         )
 
-    vlog("Tuner initialization completed.", level=3)
+    vlog("Tuner initialization completed.", 
+         level=3, verbose=verbose)
 
     # Variables to store the best model and hyperparameters.
     best_model   = None
@@ -288,9 +291,13 @@ def xtft_tuner(
     best_batch   = None
     tuning_results= []
     # Iterate over each batch size and tune.
-    vlog("Run hyperparameter tuning...", level=3)
+    vlog("Run hyperparameter tuning...", 
+         level=3, verbose=verbose
+        )
     for bs in batch_sizes:
-        vlog(f"Tuning with batch size: {bs}", level=4)
+        vlog(f"Tuning with batch size: {bs}", 
+             level=4, verbose=verbose
+        )
         try:
             tuner.search(
                 x = [X_static, X_dynamic, X_future],
@@ -304,7 +311,7 @@ def xtft_tuner(
             # Retrieve best hyperparameters for current batch size.
             vlog(
                 f"Retrieve best hyperparameters for current batch: {bs}",
-                level=5
+                level=5, verbose=verbose
             )
             current_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
             # Build and train model using these hyperparameters.
@@ -321,7 +328,7 @@ def xtft_tuner(
             current_val_loss = min(history.history['val_loss'])
             vlog(
                 f"Batch Size {bs}: Best val_loss = {current_val_loss:.4f}", 
-                level=3
+                level=3, verbose=verbose
             )
             
             if current_val_loss < best_val_loss:
@@ -338,7 +345,7 @@ def xtft_tuner(
         except Exception as e:
             vlog(
                 "Tuning failed for batch size {bs}",
-                level=1
+                level=1, verbose=verbose
             )
             warnings.warn(f"Tuning failed for batch size {bs}: {e}")
             continue
@@ -358,10 +365,10 @@ def xtft_tuner(
     with open(log_file, "w") as f:
         json.dump(tuning_results, f, indent=4)
 
-    vlog(f"Tuning results saved to {log_file}", level=3)
+    vlog(f"Tuning results saved to {log_file}", level=3, verbose=verbose)
     
-    vlog(f"Best Batch Size: {best_batch}", level=3)
-    vlog(f"Best Hyperparameters: {best_hps}", level=3)
+    vlog(f"Best Batch Size: {best_batch}", level=3, verbose=verbose)
+    vlog(f"Best Hyperparameters: {best_hps}", level=3, verbose=verbose)
 
     return best_hps, best_model, tuner
 
@@ -385,7 +392,7 @@ def tft_tuner(
     model_builder: Optional[Callable] = None,
     verbose: int = 1
 ) -> tuple:
-
+    """ Fine-tune Temporal Fusion Transformer (TFT) models using Keras Tuner. """
     return xtft_tuner(
         inputs=inputs,
         y=y,
@@ -494,11 +501,8 @@ def _model_builder_factory(
 
     return model
 
-xtft_tuner.__doc__=r"""\
-Fine-tune the XTFT forecasting model using Keras Tuner with Bayesian 
-or RandomSearch Optimization.
-
-This function sets up a hyperparameter tuning workflow for the XTFT model, 
+xtft_tuner.__doc__+=r"""\
+The function sets up a hyperparameter tuning workflow for the XTFT model, 
 leveraging Keras Tuner's Bayesian Optimization to search over a defined 
 hyperparameter space. The function accepts input tensors for static, dynamic,
 and future features along with the target output, and returns the best 
@@ -628,9 +632,7 @@ References
        Computing in Science & Engineering, 13(2), 22-30.
 """
 
-tft_tuner.__doc__=r"""\
-Fine-tune Temporal Fusion Transformer (TFT) models using Keras Tuner.
-
+tft_tuner.__doc__+=r"""\
 This function is a wrapper around :func:`xtft_tuner` that explicitly 
 sets the model type to ``"tft"`` and configures hyperparameter tuning 
 for Temporal Fusion Transformer (TFT) models. It leverages Bayesian 

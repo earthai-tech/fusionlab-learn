@@ -21,9 +21,9 @@ Real-world time series data often presents significant hurdles:
     various types of features:
     * *Past Values:* Historical target values and covariates.
     * *Known Future Inputs:* Events or values known in advance
-        (e.g., holidays, promotions).
+      (e.g., holidays, promotions).
     * *Static Metadata:* Time-invariant features (e.g., store ID,
-        sensor location).
+      sensor location).
 * **Multi-Horizon Needs:** Often, predictions are needed for
     multiple steps into the future, not just the next one.
 * **Uncertainty:** Providing not just a single point forecast, but

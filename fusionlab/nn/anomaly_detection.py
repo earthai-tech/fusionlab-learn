@@ -56,7 +56,8 @@ __all__ = [
     'fusionlab.nn.anomaly_detection', name='LSTMAutoencoderAnomaly'
 )
 class LSTMAutoencoderAnomaly(Layer, NNLearner): 
-    """LSTM Autoencoder for reconstruction-based anomaly detection."""
+    """LSTM Autoencoder for time series reconstruction-based anomaly
+       detection."""
 
     @validate_params({
         "latent_dim": [Interval(Integral, 1, None, closed="left")],
@@ -324,10 +325,7 @@ class LSTMAutoencoderAnomaly(Layer, NNLearner):
         """Creates layer from its config."""
         return cls(**config)
 
-LSTMAutoencoderAnomaly.__doc__=r"""\
-    LSTM Autoencoder for time series reconstruction-based anomaly
-detection.
-
+LSTMAutoencoderAnomaly.__doc__+=r"""\
 This layer implements a configurable LSTM autoencoder architecture.
 It encodes an input sequence into a lower-dimensional latent
 representation and then decodes this representation back into a
@@ -541,7 +539,8 @@ References
     'fusionlab.nn.anomaly_detection', name='SequenceAnomalyScoreLayer'
 )
 class SequenceAnomalyScoreLayer(Layer, NNLearner):
-
+    """Computes an anomaly score from input features using a Multi-Layer
+    Perceptron (MLP)."""
     _COMMON_ACTIVATIONS = {
         "relu", "tanh", "sigmoid", "elu", "selu", "gelu", "linear", 
     }
@@ -675,10 +674,7 @@ class SequenceAnomalyScoreLayer(Layer, NNLearner):
             config.get('bias_regularizer'))
         return cls(**config)
 
-SequenceAnomalyScoreLayer.__doc__=r"""\
-    Computes an anomaly score from input features using a Multi-Layer
-Perceptron (MLP).
-
+SequenceAnomalyScoreLayer.__doc__+=r"""\
 This layer processes input features, typically representing learned
 embeddings or aggregated sequence information from upstream layers,
 through a configurable MLP to produce a scalar anomaly score for
@@ -813,7 +809,8 @@ References
     'fusionlab.nn.anomaly_detection', name='PredictionErrorAnomalyScore'
 )
 class PredictionErrorAnomalyScore(Layer, NNLearner):
-
+    """ Calculates an anomaly score based on prediction error between
+    true and predicted sequences."""
     @validate_params({
         "error_metric": [StrOptions({"mae", "mse"})],
         "aggregation": [StrOptions({"mean", "max"})],
@@ -911,10 +908,7 @@ class PredictionErrorAnomalyScore(Layer, NNLearner):
         """Creates layer from its config."""
         return cls(**config)
 
-PredictionErrorAnomalyScore.__doc__=r"""\
-    Calculates an anomaly score based on prediction error between
-true and predicted sequences.
-
+PredictionErrorAnomalyScore.__doc__+=r"""\
 This layer quantifies the discrepancy between ground truth (`y_true`)
 and model predictions (`y_pred`) for time series, aggregating the
 error across time and features to produce a single anomaly score per

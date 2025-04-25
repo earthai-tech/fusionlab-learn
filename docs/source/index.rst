@@ -53,15 +53,19 @@ Whether you need interpretable multi-horizon forecasts, robust
 uncertainty quantification, or a platform to experiment with novel
 temporal architectures, FusionLab aims to provide the necessary tools.
 
+.. container:: text-center
+
+    .. button-ref:: installation
+        :color: primary
+        :expand:
+        :outline:
+
+        Install fusion-lab
+        
 .. container:: button-container
 
    .. grid:: 1 2 2 2
       :gutter: 2
-
-      .. grid-item-card:: Installation
-         :link: installation
-         :link-type: doc
-         :class-item: button-link-primary
 
       .. grid-item-card:: Quickstart
          :link: quickstart
@@ -78,7 +82,11 @@ temporal architectures, FusionLab aims to provide the necessary tools.
          :link-type: doc
          :class-item: button-link-secondary
 
-
+      .. grid-item-card:: What's New?
+         :link: release_notes/index
+         :link-type: doc
+         :class-item: button-link-primary
+            
 .. topic:: Key Features
    :class: sd-rounded-lg
 
@@ -126,16 +134,17 @@ temporal architectures, FusionLab aims to provide the necessary tools.
    :maxdepth: 2
    :caption: Documentation
 
-   self
-   motivation
    installation
    quickstart
+   motivation
    user_guide/index
    user_guide/examples/index
    api
    contributing
    code_of_conduct
-   license
    citing
+   release_notes/index
    glossary
-   release_notes
+   license
+   
+
