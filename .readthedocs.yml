@@ -21,7 +21,7 @@ python:
     #    can import FusionLab modules while generating docs.
     - method: pip
       path: .
-      editable: true
+     #  editable: true
 
     # 2) Then install the doc-specific requirements (Furo, myst-parser, 
 )
