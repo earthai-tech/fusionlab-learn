@@ -11,7 +11,8 @@
 
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
-[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusionlab/)
+
+[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusion-lab/)
 [![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
 ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab)
@@ -144,7 +145,7 @@ print("Prediction shape:", predictions.shape)
 For detailed usage, tutorials, API reference, and explanations of the
 underlying concepts, please see the full documentation:
 
-**[Read the Documentation](https://www.google.com/search?q=https://fusionlab.readthedocs.io/en/latest/)**
+**[Read the Documentation](https://www.google.com/search?q=https://fusion-lab.readthedocs.io/en/latest/)**
 
 -----
 
