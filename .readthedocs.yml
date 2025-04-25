@@ -23,7 +23,8 @@ python:
       path: .
       editable: true
 
-    # 2) Then install the doc-specific requirements (Furo, myst-parser, …)
+    # 2) Then install the doc-specific requirements (Furo, myst-parser, 
+)
     - requirements: docs/requirements.txt
 
 sphinx:
