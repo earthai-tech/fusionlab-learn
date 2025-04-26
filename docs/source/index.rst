@@ -32,12 +32,16 @@ FusionLab: Igniting Next-Gen Fusion Models
      </a>
    </p>
 
-.. card:: **A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond**
-   :margin: 0 0 1 0
-   :text-align: center
+.. container:: special-card-wrapper
 
-   *Extend, experiment, and fuse time-series predictions with
-   state-of-the-art architectures.*
+   .. card:: **A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond**
+      :margin: 0 0 1 0
+      :text-align: center
+
+      *Extend, experiment, and fuse time-series predictions with
+      state-of-the-art architectures.*
+
+
 
 .. raw:: html
 
@@ -64,29 +68,30 @@ temporal architectures, FusionLab aims to provide the necessary tools.
         
 .. container:: button-container
 
-   .. grid:: 1 2 2 2
-      :gutter: 2
+    .. grid:: 1 2 2 2
+       :gutter: 2
 
-      .. grid-item-card:: Quickstart
-         :link: quickstart
-         :link-type: doc
-         :class-item: button-link-primary
+       .. grid-item-card:: Quickstart
+          :link: quickstart
+          :link-type: doc
+          :class-item: button-link-primary
 
-      .. grid-item-card:: User Guide
-         :link: /user_guide/index
-         :link-type: doc
-         :class-item: button-link-secondary
+       .. grid-item-card:: User Guide
+          :link: /user_guide/index
+          :link-type: doc
+          :class-item: button-link-secondary
 
-      .. grid-item-card:: API Reference
-         :link: api
-         :link-type: doc
-         :class-item: button-link-secondary
+       .. grid-item-card:: API Reference
+          :link: api
+          :link-type: doc
+          :class-item: button-link-secondary
 
-      .. grid-item-card:: What's New?
-         :link: release_notes/index
-         :link-type: doc
-         :class-item: button-link-primary
-            
+       .. grid-item-card:: What’s New?
+          :link: /release_notes/index
+          :link-type: doc
+          :class-item: button-link-primary
+
+
 .. topic:: Key Features
    :class: sd-rounded-lg
 
