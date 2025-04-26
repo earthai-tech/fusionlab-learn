@@ -62,5 +62,4 @@ Tests
 
 Contributors
 ~~~~~~~~~~~~~~
-* earthai-tech (Lead Developer: `Laurent Kouadio <https://earthai-tech.github.io/>`_)
-* Gemini (Assisted with debugging)
+* earthai-tech 

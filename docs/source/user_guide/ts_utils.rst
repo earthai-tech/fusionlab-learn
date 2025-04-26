@@ -27,6 +27,7 @@ datetime values fall within specified evaluation periods (e.g.,
 specific years, months, days, weeks).
 
 **Functionality:**
+
 1.  **Datetime Validation:** Ensures the specified ``dt_col`` (or the
     DataFrame index) is a proper Pandas datetime format, using the
     internal :func:`ts_validator`.
@@ -82,6 +83,7 @@ It includes special handling for columns/indices containing integer
 representations of dates (like years).
 
 **Functionality:**
+
 1.  Takes DataFrame `df` and optional `dt_col` name (defaults to index).
 2.  Uses :func:`pandas.to_datetime` for conversion, passing extra arguments.
 3.  **Integer Handling:** If the target column/index has an integer
@@ -135,6 +137,7 @@ while respecting chronological order, or to generate time-series-aware
 cross-validation splits. This prevents lookahead bias.
 
 **Functionality:**
+
 Takes a DataFrame `df` and parameters controlling the split type.
 
 * **`split_type='simple'`**: Performs a single chronological split.
@@ -229,6 +232,7 @@ series column (`value_col`) using standard statistical methods
 (Z-Score or IQR). Optionally removes detected outliers.
 
 **Functionality:**
+
 Uses one of two methods based on the `method` parameter:
 
 * **`method='zscore'`:** Calculates Z-scores
@@ -315,6 +319,7 @@ its overall trend direction (upward, downward, or stationary) and
 optionally assess its stationarity using statistical tests (ADF or KPSS).
 
 **Functionality:**
+
 1.  **Stationarity Test (Optional):** If ``check_stationarity=True``,
     performs ADF (Null: Non-stationary) or KPSS (Null: Stationary)
     test.
@@ -383,6 +388,7 @@ mitigating trends based on an automatic trend analysis performed
 internally using :func:`trend_analysis`.
 
 **Functionality:**
+
 1.  **Trend Detection:** Calls :func:`trend_analysis` to find the
     trend ('upward', 'downward', 'stationary').
 2.  **Transformation:** Based on detected `trend` and specified `ops`:
@@ -450,6 +456,7 @@ visually exploring the characteristics of a time series, including
 trend, seasonality, autocorrelation, and decomposition components.
 
 **Functionality:**
+
 Creates a `matplotlib` grid displaying:
 
 1.  **Original Time Series:** Plot of raw data.
@@ -559,6 +566,7 @@ infer_decomposition_method
 or by comparing residual variances from both decomposition types.
 
 **Functionality:**
+
 Takes `df`, `dt_col`, required `period`.
 
 1.  **`method='heuristic'`:** Checks if all values > 0. Returns
@@ -620,6 +628,7 @@ and Residual (:math:`R_t`) components using `statsmodels` methods
 (STL or classical SDT).
 
 **Functionality:**
+
 1. Takes `df`, `value_col`, optional `dt_col`, `method` ('additive' or
    'multiplicative' for SDT), `strategy` ('STL' or 'SDT'),
    `seasonal_period`.
@@ -692,6 +701,7 @@ transform_stationarity
 improving time series stationarity (stabilizing mean/variance).
 
 **Functionality:**
+
 Applies a transformation to ``value_col`` based on ``method``:
 
 * **`'differencing'`:** Applies differencing of `order` or uses

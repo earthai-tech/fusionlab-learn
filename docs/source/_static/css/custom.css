@@ -9,6 +9,9 @@ html[data-theme="light"] {
     /* --- Brand Colors (FusionLab) --- */
     --fusionlab-primary: #2E3191;        /* Deep Blue/Purple */
     --fusionlab-secondary: #F28620;      /* Orange */
+    /* F28620 is 242,134,32 in decimal */
+    --fusionlab-secondary-rgb: 242, 134, 32;
+    
     /* Derived Shades */
     --fusionlab-primary-light: #787BC4;  /* Lighter blue */
     --fusionlab-primary-dark: #242774;   /* Darker blue */
@@ -426,3 +429,36 @@ html[data-theme="dark"] body {
     background-color: var(--color-background-primary);
     color: var(--color-foreground-primary);
 }
+
+/* Make sure each card can host an absolutely-positioned overlay link */
+.sd-card {
+  position: relative;        /* so the stretched link can fill its bounds */
+}
+
+/* Ensure the link really *covers* the card and can be clicked */
+.sd-stretched-link {
+  position: absolute !important;
+  inset: 0 !important;       /* top/right/bottom/left = 0 */
+  z-index: 2 !important;      /* float above card body */
+  pointer-events: auto !important;
+}
+/* smoothly transition bg-color */
+.sd-card {
+  transition: background-color 0.2s ease-in-out;
+}
+
+/* always 50%-opaque secondary on that one card */
+.special-card-wrapper > .sd-card {
+  background-color: rgba(var(--fusionlab-secondary-rgb), 0.5) !important;
+}
+
+/* on hover, fill with your secondary color */
+.sd-card:hover {
+  /* 0.5 = 50% opacity */
+  background-color: rgba(var(--fusionlab-secondary-rgb), 0.5) !important;
+}
+
+
+/*.sd-stretched-link {
+ * background: rgba(255,0,0,0.2);  /* temporarily tint it so you can see it */
+/* }*/

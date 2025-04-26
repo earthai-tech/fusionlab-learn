@@ -52,6 +52,7 @@ error** (the difference between the original input :math:`\mathbf{X}` and
 the reconstructed output :math:`\mathbf{\hat{X}}`).
 
 **How it Works:**
+
 * Takes an input sequence (Batch, TimeSteps, Features).
 * The encoder LSTM processes the sequence and produces a latent
   vector (typically the final hidden state).
@@ -62,6 +63,7 @@ the reconstructed output :math:`\mathbf{\hat{X}}`).
   API reference for details).
 
 **Usage:**
+
 1.  **Training:** Train the autoencoder typically on data assumed to
     be *normal*, minimizing a reconstruction loss like Mean Squared
     Error (MSE) between the input and the output. This is an
@@ -139,6 +141,7 @@ the final hidden state of an LSTM, the output of attention layers, or
 an aggregated feature vector).
 
 **How it Works:**
+
 * Takes input features (typically Batch, Features).
 * Passes these features through one or more internal Dense layers
   with non-linear activations and optional dropout/normalization.
@@ -148,6 +151,7 @@ an aggregated feature vector).
   determines the score's range.
 
 **Usage:**
+
 1.  **Integration:** Add this layer near the end of a larger neural
     network architecture (like a modified XTFT or a custom model). It
     takes informative features from the network as input.
@@ -209,6 +213,7 @@ error across time and features to produce a single anomaly score per
 sequence.
 
 **Functionality:**
+
 1. Takes input as a list `[y_true, y_pred]`, where both tensors
    typically have shape :math:`(B, T, F)`.
 2. Calculates the element-wise error based on the specified
