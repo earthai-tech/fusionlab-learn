@@ -17,16 +17,11 @@ build:
 
 python:
   install:
-    # 1) Install the *package itself* in editable mode so autosummary
-    #    can import FusionLab modules while generating docs.
+    - requirements: docs/requirements.txt 
     - method: pip
-      path: .
-     #  editable: true
-
-    # 2) Then install the doc-specific requirements (Furo, myst-parser, 
-)
-    - requirements: docs/requirements.txt
-
+      path: . # Installs the fusionlab package itself if required for docs
+    #   extra_requirements:
+    #     - dev # Installs dev dependencies if specified in setup.py/pyproject.toml
 sphinx:
   configuration: docs/source/conf.py
   fail_on_warning: false   # flip to true to make warnings fatal
