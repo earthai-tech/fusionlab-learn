@@ -458,3 +458,8 @@ html[data-theme="dark"] .bdg-secondary { background-color: var(--fusionlab-secon
  * background: rgba(255,0,0,0.2);  /* temporarily tint it so you can see it */
 /* }*/
 
+/* Ensure base colors cover entire page in dark mode (Req 1 fix) */
+html[data-theme="dark"] body {
+    background-color: var(--color-background-primary);
+    color: var(--color-foreground-primary);
+}
