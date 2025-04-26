@@ -12,11 +12,13 @@
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
 
-[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusion-lab/)
+[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=orange)](https://pypi.org/project/fusion-lab/)
 [![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/.github%2Fworkflows%2Fpython-package-conda.yml)
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
-![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&logo=BSD-3-Clause&color=orange)
+![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&logo=BSD-3-Clause&color=cyan)
+![GitHub commits since latest release](https://img.shields.io/github/commits-since/earthai-tech/fusionlab/latest?color=purple)
+
 
 <!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
 
