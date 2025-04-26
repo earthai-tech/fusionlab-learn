@@ -70,7 +70,7 @@ def filter_by_period(
     values in the :math:`eval_{periods}` and filters the DataFrame accordingly.
 
     Parameters
-    ----------
+    ------------
     df : pandas.DataFrame
         The DataFrame to be filtered. It must contain a column with 
         date/time information specified in :param:`dt_col`.

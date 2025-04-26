@@ -326,7 +326,7 @@ domain of time series forecasting and deep learning.
    NumPy Style Docstrings
        A convention for formatting Python docstrings using specific
        sections (Parameters, Returns, etc.). Used by `fusionlab` and
-       parsed by :ext:`sphinx.ext.napoleon`.
+       parsed by :mod:`sphinx.ext.napoleon`.
 
    NTemporalFusionTransformer
        A ``fusionlab`` variant of TFT requiring static and dynamic inputs,

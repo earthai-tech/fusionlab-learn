@@ -133,6 +133,7 @@ Run the script from your terminal, specifying the mode and relevant options:
 *(Note: Default values are shown in parentheses)*
 
 *General:*
+
 * `--mode` (Required): 'train' or 'predict'.
 * `--data` (Required): Path to the main dataset CSV.
 * `--target` (Required): Name of the target column.
@@ -142,6 +143,7 @@ Run the script from your terminal, specifying the mode and relevant options:
 * `--seed`: Random seed (42).
 
 *Features:*
+
 * `--dynamic_features` (Required): List of dynamic column names.
 * `--static_features`: List of static column names (None).
 * `--future_features`: List of known future column names (None).
@@ -150,16 +152,19 @@ Run the script from your terminal, specifying the mode and relevant options:
 * `--spatial_cols`: List of spatial identifier columns (None).
 
 *Preprocessing:*
+
 * `--scaler`: Scaler for numerical features ('z-norm', 'minmax', 'none',
     default: 'z-norm').
 * `--handle_na`: Strategy for missing values ('drop', 'ffill', default:
     'ffill').
 
 *Sequence Parameters:*
+
 * `--time_steps`: Input sequence length (10).
 * `--forecast_horizon`: Output prediction length (1).
 
 *Model Hyperparameters:*
+
 * `--hidden_units`: Hidden units for GRNs/Dense layers (32).
 * `--num_heads`: Number of attention heads (4).
 * `--dropout_rate`: Dropout rate (0.1).
@@ -170,6 +175,7 @@ Run the script from your terminal, specifying the mode and relevant options:
 * `--lstm_units`: Units per LSTM layer (None = use hidden_units).
 
 *Training Specific:*
+
 * `--epochs`: Number of training epochs (50).
 * `--batch_size`: Training batch size (32).
 * `--learning_rate`: Optimizer learning rate (0.001).
@@ -179,6 +185,7 @@ Run the script from your terminal, specifying the mode and relevant options:
 * `--model_name`: Base name for saved model ('tft_model').
 
 *Prediction Specific:*
+
 * `--load_model_path`: Path to load a trained model (None). Required
     for predict mode.
 * `--load_scalers_path`: Path to load saved scalers (None). Required
@@ -187,6 +194,7 @@ Run the script from your terminal, specifying the mode and relevant options:
     `<output_dir>/<model_name>_predictions.csv`). Required for predict mode.
 
 **Dependencies:**
+
 Ensure the following libraries are installed:
 `pandas`, `numpy`, `scikit-learn`, `tensorflow` (which includes Keras),
 `matplotlib` (likely used by internal helpers), `joblib`, 
