@@ -8,8 +8,6 @@
 
 <p align="center"><em>🔥🧪 A Modular Library for Temporal Fusion Transformer (TFT) Variants &amp; Beyond</em></p>
 
-*Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
-
 
 [![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=orange)](https://pypi.org/project/fusion-lab/)
 [![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
@@ -18,7 +16,9 @@
 ![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&logo=BSD-3-Clause&color=cyan)
 ![GitHub commits since latest release](https://img.shields.io/github/commits-since/earthai-tech/fusionlab/latest?color=purple)
 
+*Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
+---
 <!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
 
 **FusionLab** provides a flexible and extensible framework in Python
