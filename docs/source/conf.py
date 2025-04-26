@@ -187,8 +187,9 @@ html_theme_options = {
     #     "color-sidebar-link-text--top-level": "#242774",
     #     "color-sidebar-background-hover":     "rgba(46,49,145,0.08)",
     # },
+    
     # "dark_css_variables": {
-    #     "color-brand-primary":   "#787BC4",
+    #     "color-brand-primary":   "#000000",
     #     "color-brand-content":   "#787BC4",
     #     "color-sidebar-link-text--top-level": "#787BC4",
     #     "color-sidebar-background-hover":     "rgba(120,123,196,0.12)",
