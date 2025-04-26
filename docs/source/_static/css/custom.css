@@ -424,11 +424,6 @@ html[data-theme="dark"] .bdg-warning { background-color: #f59f00; color: #000; }
 html[data-theme="dark"] .bdg-primary { background-color: var(--fusionlab-primary-light); color: #000; }
 html[data-theme="dark"] .bdg-secondary { background-color: var(--fusionlab-secondary-light); color: #000; }
 
-/* Ensure base colors cover entire page in dark mode (Req 1 fix) */
-html[data-theme="dark"] body {
-    background-color: var(--color-background-primary);
-    color: var(--color-foreground-primary);
-}
 
 /* Make sure each card can host an absolutely-positioned overlay link */
 .sd-card {
@@ -462,3 +457,4 @@ html[data-theme="dark"] body {
 /*.sd-stretched-link {
  * background: rgba(255,0,0,0.2);  /* temporarily tint it so you can see it */
 /* }*/
+
