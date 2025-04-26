@@ -554,7 +554,7 @@ and the final prediction relies more heavily on recent patterns.
 
 
 Attention Mechanisms
---------------------~~
+----------------------
 
 Attention layers are a powerful tool in modern deep learning,
 allowing models to dynamically weigh the importance of different
@@ -699,10 +699,6 @@ return the contextually weighted features needed for subsequent layers.
    print(f"Key/Value shape: {key.shape}")
    print(f"Output Attention Scores shape: {attention_scores.shape}")
    # Expected: (B, NumHeads, T_q, T_k) -> (4, 2, 10, 15)
-
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 
 CrossAttention
