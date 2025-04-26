@@ -5,7 +5,6 @@
 """Implements the Temporal Fusion Transformer (TFT), a state-of-the-art 
 architecture for multi-horizon time-series forecasting.
 """
-from textwrap import dedent 
 from numbers import Real, Integral  
 from typing import List, Optional, Union, Dict, Tuple
 
@@ -14,7 +13,6 @@ from ..api.property import NNLearner
 from ..core.checks import is_iterable
 from ..core.diagnose_q import validate_quantiles
 from ..compat.sklearn import validate_params, Interval, StrOptions
-from ..decorators import Appender 
 from ..utils.deps_utils import ensure_pkg 
 from ..utils.validator import validate_positive_integer
 
@@ -79,6 +77,7 @@ __all__= ['TFT']
 
 @register_keras_serializable('fusionlab.nn.transformers', name="TFT")
 class TFT(Model, NNLearner): 
+    """Temporal Fusion Transformer (TFT) requiring static, dynamic(past), and future inputs. """
 
     @validate_params({
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
@@ -534,10 +533,7 @@ class TFT(Model, NNLearner):
     def from_config(cls, config):
         return cls(**config)
    
-TFT.__doc__=r"""\
-    Temporal Fusion Transformer (TFT) requiring static,
-dynamic (past), and future inputs.
-
+TFT.__doc__+=r"""\
 This class implements the Temporal Fusion Transformer (TFT)
 architecture, closely following the structure described in the
 original paper [Lim21]_. It is designed for multi-horizon time
