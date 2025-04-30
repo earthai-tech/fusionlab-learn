@@ -75,13 +75,13 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 
 2.  **Install from PyPI (Recommended):**
     ```bash
-    pip install fusionlab
+    pip install fusionlab-learn
     ```
     *(TensorFlow might need separate installation depending on your system)*
 
 3.  **Install from Source (for Development):**
     ```bash
-    git clone [https://github.com/earthai-tech/fusionlab.git](https://github.com/earthai-tech/fusionlab.git)
+    git clone [https://github.com/earthai-tech/fusionlab.git](https://github.com/earthai-tech/fusionlab-learn.git)
     cd fusionlab
     pip install -e .
     # Optional: Install dev dependencies
