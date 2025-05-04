@@ -5,12 +5,12 @@ Quickstart
 ============
 
 This guide provides a minimal example to get you started with
-training a basic forecasting model using ``fusionlab``.
+training a basic forecasting model using ``fusionlab-learn``.
 
 Prerequisites
 --------------
 
-Make sure you have installed ``fusionlab`` and its core
+Make sure you have installed ``fusionlab-learn`` and its core
 dependencies, including TensorFlow. If not, please follow the
 :ref:`installation` guide first.
 

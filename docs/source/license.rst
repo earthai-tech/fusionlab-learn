@@ -4,7 +4,7 @@
 License
 =========
 
-``fusionlab`` is licensed under the **BSD 3-Clause License**.
+``fusionlab-learn`` is licensed under the **BSD 3-Clause License**.
 
 The "BSD 3-Clause" or "New BSD" license is a permissive free software
 license, allowing great freedom with the software with minimal

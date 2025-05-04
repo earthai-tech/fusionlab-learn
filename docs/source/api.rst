@@ -5,16 +5,16 @@
 API Reference
 ===============
 
-Welcome to the ``fusionlab`` API reference. This section provides detailed
+Welcome to the ``fusionlab-learn`` API reference. This section provides detailed
 specifications for the public functions, classes, and modules included
 in the package.
 
 The documentation here is largely auto-generated from the docstrings
-within the ``fusionlab`` source code. For narrative explanations and usage
+within the ``fusionlab-learn`` source code. For narrative explanations and usage
 examples, please consult the :doc:`User Guide </user_guide/index>`.
 
 .. note::
-   Ensure ``fusionlab`` is installed in your documentation build
+   Ensure ``fusionlab-learn`` is installed in your documentation build
    environment (see :doc:`installation`) for these links and summaries
    to be generated correctly. You also need `sphinx.ext.autosummary`
    enabled in your `conf.py` with `autosummary_generate = True`.

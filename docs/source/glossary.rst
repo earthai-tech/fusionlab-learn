@@ -5,7 +5,7 @@ Glossary
 =========
 
 This glossary defines key terms, abbreviations, and concepts used
-throughout the ``fusionlab`` library documentation and the broader
+throughout the ``fusionlab-learn`` library documentation and the broader
 domain of time series forecasting and deep learning.
 
 .. glossary::
@@ -79,7 +79,7 @@ domain of time series forecasting and deep learning.
 
    Bunch
        A utility class (similar to a dictionary but allowing attribute-style
-       access) used by ``fusionlab`` dataset loaders to return data and
+       access) used by ``fusionlab-learn`` dataset loaders to return data and
        metadata. See :class:`~fusionlab.api.bunch.Bunch`.
 
    Categorical Feature
@@ -329,7 +329,7 @@ domain of time series forecasting and deep learning.
        parsed by :mod:`sphinx.ext.napoleon`.
 
    NTemporalFusionTransformer
-       A ``fusionlab`` variant of TFT requiring static and dynamic inputs,
+       A ``fusionlab-learn`` variant of TFT requiring static and dynamic inputs,
        currently focused on point forecasts. See
        :class:`~fusionlab.nn.NTemporalFusionTransformer`.
 
@@ -408,7 +408,7 @@ domain of time series forecasting and deep learning.
    Scikit-learn
        A popular Python library for machine learning, providing tools for
        preprocessing, model selection, evaluation, and various algorithms.
-       Used by some ``fusionlab`` utilities.
+       Used by some ``fusionlab-learn`` utilities.
 
    SDT (Seasonal Decomposition of Time series)
        Classical time series decomposition method (additive/multiplicative).
@@ -445,7 +445,7 @@ domain of time series forecasting and deep learning.
    Statsmodels
        A Python library providing classes and functions for estimating
        many different statistical models, as well as statistical tests
-       and data exploration. Used by some ``fusionlab`` utilities.
+       and data exploration. Used by some ``fusionlab-learn`` utilities.
 
    STL (Seasonal-Trend decomposition using LOESS)
        Robust time series decomposition method. See
@@ -466,7 +466,7 @@ domain of time series forecasting and deep learning.
 
    TensorFlow
        Open-source machine learning framework used as the backend for
-       ``fusionlab`` neural network models.
+       ``fusionlab-learn`` neural network models.
 
    TFT (Temporal Fusion Transformer)
        Baseline interpretable deep learning architecture for multi-horizon

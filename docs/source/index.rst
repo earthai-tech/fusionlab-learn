@@ -9,7 +9,7 @@
               xtft, machine learning, deep learning, python, tensorflow
 
 ##################################################
-FusionLab: Igniting Next-Gen Fusion Models
+Fusionlab-learn: Igniting Next-Gen Fusion Models
 ##################################################
 
 .. raw:: html
@@ -27,8 +27,8 @@ FusionLab: Igniting Next-Gen Fusion Models
      <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">
        <img src="https://img.shields.io/badge/Python-3.8%2B-121EAF" alt="Python Version">
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab/actions" target="_blank" rel="noopener noreferrer">
-        <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/python-package-conda.yml?branch=main" alt="Build Status">
+     <a href="https://github.com/earthai-tech/fusionlab-learn/actions" target="_blank" rel="noopener noreferrer">
+        <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab-learn/python-package-conda.yml?branch=main" alt="Build Status">
      </a>
    </p>
 
