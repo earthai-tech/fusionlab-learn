@@ -4,12 +4,12 @@
 Installation
 ==============
 
-This page covers how to install the ``fusionlab`` library.
+This page covers how to install the ``fusionlab-learn`` library.
 
 Prerequisites
 ---------------
 
-Before installing ``fusionlab``, ensure you have the following:
+Before installing ``fusionlab-learn``, ensure you have the following:
 
 * **Python:** Version 3.8 or higher. You can check your Python
   version by running ``python --version``.
@@ -17,20 +17,20 @@ Before installing ``fusionlab``, ensure you have the following:
 * **pip:** The Python package installer. Pip usually comes with
   Python. You can update it using ``pip install --upgrade pip``.
 
-* **TensorFlow:** ``fusionlab``'s core neural network models (like
+* **TensorFlow:** ``fusionlab-learn``'s core neural network models (like
   TFT, XTFT) currently rely heavily on TensorFlow. You need a
   working installation of TensorFlow (version 2.x is recommended).
 
 Installation from PyPI (Recommended)
 --------------------------------------
 
-The easiest way to install ``fusionlab`` is using ``pip``, which
+The easiest way to install ``fusionlab-learn`` is using ``pip``, which
 will fetch the latest stable release from the Python Package Index
 (PyPI):
 
 .. code-block:: bash
 
-   pip install fusionlab
+   pip install fusionlab-learn
 
 .. note::
    This command should automatically install required dependencies,
@@ -53,14 +53,14 @@ Installation from Source (for Development)
 --------------------------------------------
 
 If you want to work with the latest development version, contribute
-to the project, or modify the code, you can install ``fusionlab``
+to the project, or modify the code, you can install ``fusionlab-learn``
 directly from the source code on GitHub:
 
 1.  **Clone the repository:**
 
     .. code-block:: bash
 
-       git clone https://github.com/earthai-tech/fusionlab.git
+       git clone https://github.com/earthai-tech/fusionlab-learn.git
        cd fusionlab
 
 2.  **Install in editable mode:**
@@ -82,7 +82,7 @@ directly from the source code on GitHub:
 Verify Installation
 ---------------------
 
-To quickly check if ``fusionlab`` is installed correctly, you can
+To quickly check if ``fusionlab-learn`` is installed correctly, you can
 try importing it in Python and printing its version:
 
 .. code-block:: bash

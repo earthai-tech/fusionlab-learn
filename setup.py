@@ -7,7 +7,7 @@ except:
     VERSION = "0.1.1"  
     
 # Package metadata
-DISTNAME = "fusionlab"
+DISTNAME = "fusionlab-learn"
 DESCRIPTION = "Next-Gen Temporal Fusion Architectures for Time-Series Forecasting"
 LONG_DESCRIPTION = open('README.md', 'r', encoding='utf8').read()
 MAINTAINER = "Laurent Kouadio"
@@ -15,11 +15,11 @@ MAINTAINER_EMAIL = 'etanoyau@gmail.com'
 URL = "https://github.com/earthai-tech/fusionlab"
 LICENSE = "BSD-3-Clause"
 PROJECT_URLS = {
-    "API Documentation": "https://fusionlab.readthedocs.io/en/latest/api_references.html",
-    "Home page": "https://fusionlab.readthedocs.io",
+    "API Documentation": "https://fusion-lab.readthedocs.io/en/latest/api_references.html",
+    "Home page": "https://fusion-lab.readthedocs.io",
     "Bugs tracker": "https://github.com/earthai-tech/fusionlab/issues",
-    "Installation guide": "https://fusionlab.readthedocs.io/en/latest/installation.html",
-    "User guide": "https://fusionlab.readthedocs.io/en/latest/user_guide.html",
+    "Installation guide": "https://fusion-lab.readthedocs.io/en/latest/installation.html",
+    "User guide": "https://fusion-lab.readthedocs.io/en/latest/user_guide.html",
 }
 KEYWORDS = "time-series forecasting, machine learning, temporal fusion, deep learning"
 
