@@ -535,6 +535,7 @@ def load_processed_subsidence_data(
     time_steps: int = 4,
     forecast_horizons: int = 4,
     target_col: str = 'subsidence',
+    scale_target: bool=False, 
     use_processed_cache: bool = True,
     use_sequence_cache: bool = True,
     save_processed_frame: bool = False,
@@ -638,6 +639,8 @@ def load_processed_subsidence_data(
         generation. Only used if ``return_sequences=True``.
     target_col : str, default='subsidence'
         Name of the target variable column used for sequence generation.
+    scale_target: bool, default=False 
+        Whether to scale the target or not. 
     use_processed_cache : bool, default=True
         If ``True`` and ``return_sequences=False``, attempts to load a
         previously saved processed DataFrame (and scaler/encoder info)
@@ -917,9 +920,19 @@ def load_processed_subsidence_data(
                 set(numerical_cols) & set(current_num_cols) - set(
                     encoded_flat_list))
             # Also scale the target column if present
-            if target_col in df_processed.columns and target_col not in cols_to_scale:
-                cols_to_scale.append(target_col)
-
+            if scale_target: 
+                if target_col in df_processed.columns and target_col not in cols_to_scale:
+                    cols_to_scale.append(target_col)
+            else: 
+                # for consisteny drop target if exist in cols_to_scale 
+                if target_col in cols_to_scale: 
+                    try:
+                        cols_to_scale.remove(target_col)
+                    except: 
+                        cols_to_scale = [
+                            col for col in cols_to_scale if col !=target_col
+                        ]
+                    
             if cols_to_scale:
                 if verbose: 
                     print(f"  Scaling numerical features: {cols_to_scale}...")

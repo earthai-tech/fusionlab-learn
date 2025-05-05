@@ -9,7 +9,7 @@
               xtft, machine learning, deep learning, python, tensorflow
 
 ##################################################
-FusionLab: Igniting Next-Gen Fusion Models
+Fusionlab-learn: Igniting Next-Gen Fusion Models
 ##################################################
 
 .. raw:: html
@@ -21,14 +21,14 @@ FusionLab: Igniting Next-Gen Fusion Models
      <a href="https://fusion-lab.readthedocs.io/en/latest/?badge=latest" target="_blank" rel="noopener noreferrer">
        <img src="https://readthedocs.org/projects/fusion-lab/badge/?version=latest" alt="Documentation Status"/>
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
-       <img src="https://img.shields.io/github/license/earthai-tech/fusionlab?color=121EAF" alt="GitHub License">
+     <a href="https://github.com/earthai-tech/fusionlab-learn/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+       <img src="https://img.shields.io/github/license/earthai-tech/fusionlab-learn?color=121EAF" alt="GitHub License">
      </a>
      <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">
        <img src="https://img.shields.io/badge/Python-3.8%2B-121EAF" alt="Python Version">
      </a>
      <a href="https://github.com/earthai-tech/fusionlab/actions" target="_blank" rel="noopener noreferrer">
-        <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/python-package-conda.yml?branch=main" alt="Build Status">
+        <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab-learn/python-package-conda.yml?branch=main" alt="Build Status">
      </a>
    </p>
 
