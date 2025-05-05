@@ -51,6 +51,7 @@ from ..compat.sklearn import (
     validate_params
 )
 from ..decorators import DynamicMethod, isdf 
+from ..exceptions import NotEnoughDataError 
 from ..metrics_special import coverage_score
 from ..utils.data_utils import mask_by_reference 
 from ..utils.deps_utils import ensure_pkg, get_versions 
@@ -3008,8 +3009,12 @@ def generate_forecast(
             loc = {}  # dummy global location
 
         if len(location_data) < time_steps:
-            loc_str = (tuple(loc.values())
-                       if spatial_cols else "global")
+            try:
+                loc_str = (tuple(loc.values())
+                           if spatial_cols else "global")
+            except: 
+                loc_str = (tuple(loc.values)
+                           if spatial_cols else "global")
             if verbose >= 2:
                 print(
                     "Skipping {} - Insufficient data (requires {} "
@@ -3201,13 +3206,23 @@ def generate_forecast(
         savefile = "{}_forecast_{}_results.csv"\
                    .format(mode, tname)
 
+    if forecast_df.empty: 
+        e_msg=(
+            f"Insufficient data for time equals to {time_steps} steps."
+            " Consider reducing the time steps or provide enough data."
+            )
+        raise NotEnoughDataError(e_msg)
+   
+    
     forecast_df.to_csv(savefile, index=False)
     if verbose >= 1:
         print(
             "Forecast results saved to: {}"
             .format(savefile)
         )
-
+     
+    
+            
     # Evaluation if test_data is provided
     if test_data is not None:
         # Obtain unique evaluation dates from test_data 
@@ -4812,7 +4827,7 @@ def _step_to_long_pred(
     )
 
     # Convert the DataFrame to a NumPy array for fast processing.
-    data_array   = df.to_numpy()
+    data_array   = df.to_numpy().astype(float) # XXX RECHECK .astype(float)
     column_index = {col: i for i, col in enumerate(df.columns)}
 
     # Initialize an output array filled with NaNs.

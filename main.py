@@ -53,18 +53,29 @@ from fusionlab.nn.utils import forecast_multi_step
 from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.utils.io_utils import fetch_joblib_data   
 #%
+# main_path = r'D:\nature_data\zhongshan_data\another_tests'
+from fusionlab.datasets._property import get_data
+# from fusionlab.datasets.load import _ZHONGSHAN_METADATA, _NANSHA_METADATA
+from fusionlab.datasets import fetch_zhongshan_data, fetch_nansha_data 
+
+# =================== CONFIG PARAMS ========================================
 
 USE_SUPER =False 
 
 super_ext = '' if not USE_SUPER else '_super'
 TRANSF_= SuperXTFT if USE_SUPER else XTFT  # TRANSF_ MEANS Fusion transformer 
+forecast_years = [2022, 2023, 2024, 2025]  # for NANSHA WHEN [2023, 2024, 2025, 2026]
+time_steps =3 
+# IMPORTANT NOTE: Spatial columns is important for runing, however need enough data 
+# for reproducityky and testting pupose wen turn of too None 
+spatial_cols=None#("longitude", "latitude")
+quantiles = [ 0.1, 0.5, 0.9 ] # quantiles =None, for point prediction 
+
+# ===========================================================================
+
 # ------------------------------------------
 # ** Step 1: Define Data Paths**
 # ------------------------------------------
-# main_path = r'D:\nature_data\zhongshan_data\another_tests'
-from fusionlab.datasets._property import get_data
-# from fusionlab.datasets.load import _ZHONGSHAN_METADATA, _NANSHA_METADATA
-from fusionlab.datasets import fetch_zhongshan_data 
 
 data_path = get_data()
      
@@ -73,9 +84,10 @@ data_path = get_data()
 # # Load dataset
 # zhongshan_file = os.path.join(main_path, 'zhongshan_filtered_final_data.csv')
 
-zhongshan_data = fetch_zhongshan_data().frame
+# zhongshan_data = fetch_zhongshan_data().frame
+# zhongshan_data = fetch_nansha_data().frame
 
-# zhongshan_data = pd.read_csv(os.path.join( r'J:\nature_data\final', 'zhongshan_data.csv'))
+zhongshan_data = pd.read_csv(r'J:\nature_data\final\nansha_200_0000.csv')
 # # Rename geological category column for consistency
 zhongshan_data.rename(columns={"geological_category": "geology"}, inplace=True)
 
@@ -86,9 +98,16 @@ zhongshan_data_original = zhongshan_data.copy()
 # ** Step 2: Feature Selection**
 # ------------------------------------------
 selected_features = [
-    'longitude', 'latitude', 'year', 'GWL',
-    'rainfall_mm', 'geology', 'normalized_density',
-    'density_tier', 'normalized_seismic_risk_score', 'subsidence'
+    'longitude', 'latitude', 'year', 
+    'GWL','rainfall_mm', 'geology',
+    
+    # --> density_tier and normalized_density are only valid for zhongshan_data 
+    #'density_tier',  'normalized_density', # (only in zhongshan)'
+    
+    #-->  Now soil_thickness and building_concentration are  only valid for nanshan_data, 
+     'soil_thickness', 'building_concentration', # (only for Nansha)
+     
+    'normalized_seismic_risk_score', 'subsidence'
 ]
 zhongshan_data = zhongshan_data[selected_features].copy()
 
@@ -100,9 +119,9 @@ zhongshan_data = nan_ops(zhongshan_data, ops='sanitize',
 print(f" NaN exists after processing? "
       f"{zhongshan_data.isna().any().any()}")
 
-# ==========================================
+# =================================================
 #  SECTION 2: FEATURE ENGINEERING & NORMALIZATION
-# ==========================================
+# =================================================
 
 #  Step 3: Encoding Categorical Features
 encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
@@ -111,18 +130,24 @@ encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
 geology_encoded = encoder.fit_transform(zhongshan_data[['geology']])
 geology_columns = [f'geology_{cat}' for cat in encoder.categories_[0]]
 
-# Encode 'density_tier'
-density_tier_encoded = encoder.fit_transform(zhongshan_data[['density_tier']])
-density_tier_columns = [f'density_tier_{cat}' 
-                        for cat in encoder.categories_[0]]
 
+# Encode 'density_tier'
+
+if 'density_tier' in selected_features: 
+    density_tier_encoded = encoder.fit_transform(zhongshan_data[['density_tier']])
+    density_tier_columns = [f'density_tier_{cat}' for cat in encoder.categories_[0]]
+  
+else: # use building concentration # for Nansha 
+    density_tier_encoded = encoder.fit_transform(zhongshan_data[['building_concentration']])
+    density_tier_columns = [f'building_concentration_{cat}' for cat in encoder.categories_[0]]
+    
 # Convert encoded arrays to DataFrames
 geology_df = pd.DataFrame(geology_encoded, columns=geology_columns)
 density_df = pd.DataFrame(density_tier_encoded, columns=density_tier_columns)
 
 #  Step 4: Normalize Numerical Features (excluding longitude & latitude, year,  subsidence)
 scaler = MinMaxScaler()
-columns_to_normalize= ['GWL', 'rainfall_mm', 'subsidence'] # skip renormalizing normalized_density and 
+columns_to_normalize= ['GWL', 'rainfall_mm',] # skip renormalizing normalized_density and 
 # normalized_seismic_risk_score since they are already normalized. 
 zhongshan_data[columns_to_normalize] = scaler.fit_transform(
     zhongshan_data[columns_to_normalize]
@@ -134,7 +159,11 @@ print("Columns before dropping geology/density_tier:\n",
 #  Step 5: Merge Encoded Features & Clean Data
 zhongshan_data = pd.concat([zhongshan_data, geology_df, density_df],
                             axis=1)
-zhongshan_data.drop(columns=['geology', 'density_tier'], inplace=True)
+if 'density_tier' in selected_features: # when use zhongshan data 
+    zhongshan_data.drop(columns=['geology', 'density_tier'], inplace=True)
+else: # when use Nansha data 
+    zhongshan_data.drop(columns=['geology', 'building_concentration'], inplace=True)
+    
 print("Columns after dropping geology/density_tier:\n",
       list(zhongshan_data.columns))
 
@@ -142,17 +171,27 @@ print("Columns after dropping geology/density_tier:\n",
 # SECTION 3: DATA SPLITTING & SEQUENCING
 # ==========================================
 
-# Step 6: Split Data for Training and Testing
-# Training data: years 2015 to 2022; Testing data: year 2023
-train_data = zhongshan_data[zhongshan_data['year'] <= 2022].copy()
-train_data.sort_values('year', inplace=True)
-test_data  = zhongshan_data[zhongshan_data['year'] == 2023].copy()
-
+# For ZHONGSHAN: 
+if 'density_tier' in selected_features: 
+    # Step 6: Split Data for Training and Testing
+    # Training data: years 2015 to 2022; Testing data: year 2023
+    train_data = zhongshan_data[zhongshan_data['year'] <= 2022].copy()
+    train_data.sort_values('year', inplace=True)
+    test_data  = zhongshan_data[zhongshan_data['year'] == 2023].copy()
+else:
+    # FOR NANSHA : 
+        # Training data: years 2015 to 2021; Testing data: year 2022
+    train_data = zhongshan_data[zhongshan_data['year'] <= 2021].copy()
+    train_data.sort_values('year', inplace=True)
+    test_data  = zhongshan_data[zhongshan_data['year'] == 2022].copy()
+    
 # Step 7: Define Feature Sets
 static_features  = ['longitude', 'latitude'] + \
                     list(geology_df.columns) + list(density_df.columns)
 dynamic_features = ['GWL', 'rainfall_mm', 
-                    'normalized_seismic_risk_score', 'normalized_density']
+                    'normalized_seismic_risk_score',
+                    # 'normalized_density'# valid only for zhongshan
+                    ]
 future_features  = ['rainfall_mm']
 
 print("Actual subsidence for 2023 (validation):\n")
@@ -161,8 +200,13 @@ print(test_data["subsidence"].head())
 # # Step 8: Generate Sequences Using `reshape_xtft_data`
 # # Set time_steps = 3 and forecast_horizons = 4 to forecast 2023-2026
 # from fusionlab.datasets import load_processed_subsidence_data 
-time_steps       = 4
-forecast_horizon = 4
+forecast_horizon = len(forecast_years)
+time_steps = forecast_horizon -1  if time_steps is None else time_steps 
+
+is_valid_time_steps = time_steps <= forecast_horizon
+time_steps       = time_steps if is_valid_time_steps else ( 
+    forecast_horizon - 1  if forecast_horizon > 1 else 1) 
+
 
 # X_static, X_dynamic, X_future, y_train_seq = load_processed_subsidence_data (
 #     'zhongshan',return_sequences =True, 
@@ -173,7 +217,7 @@ forecast_horizon = 4
 #     verbose = 7 
 #     )
 
-#%
+# 
 # #%
 print("Reshaping training data for XTFT input...\n")
 if os.path.isfile (os.path.join(data_path, 'qt.2023_2026.train_data_v3.joblib')): 
@@ -194,7 +238,7 @@ else:
         future_cols       = future_features,
         time_steps        = time_steps,
         forecast_horizons = forecast_horizon,
-       # spatial_cols      = ("longitude", "latitude"),
+        spatial_cols      = spatial_cols, 
         savefile          = os.path.join(data_path, 'qt.2023_2026.train_data_v3.joblib'), 
         verbose           = 7 
     )
@@ -306,9 +350,8 @@ model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
 )
 #%
 
-# quantiles =None, for point prediction 
 
-quantiles = [0.1, 0.5, 0.9]
+
 xtft_model = TRANSF_(
     static_input_dim  = X_static_train.shape[1],
     dynamic_input_dim = X_dynamic_train.shape[2],
@@ -318,7 +361,11 @@ xtft_model = TRANSF_(
     quantiles         = quantiles,
     **best_params
 )
-loss_fn = combined_quantile_loss (quantiles)
+if quantiles is not None: 
+    loss_fn = combined_quantile_loss (quantiles)
+else: 
+    loss_fn ='mse'
+    
 xtft_model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), 
     loss=loss_fn 
@@ -398,8 +445,28 @@ print("Generating Super quantile forecast for 2023-2026...\n")
 # Prepare empty lists for forecast results
 # forecast_results = []
 #%
-forecast_years = [2023, 2024, 2025, 2026] 
 
+
+# from fusionlab.nn.utils import generate_forecast 
+
+# forecast_df0 = generate_forecast(
+#     xtft_model, 
+#     train_data, 
+#     dt_col='year' , 
+#     dynamic_features= dynamic_features, 
+#     static_features= static_features, 
+#     future_features = future_features, 
+#     test_data = test_data, 
+#     forecast_dt= forecast_years, 
+#     spatial_cols = ('longitude', 'latitude'), 
+#     forecast_horizon= forecast_horizon, 
+#     time_steps = 2, 
+#     q= quantiles if quantiles is not None else None, 
+#     tname ='subsidence', 
+#     savefile = os.path.join(data_path, f"qt.forecast_results_2023_2026_v3{super_ext}_2.csv"), 
+#     verbose=7 
+#   )
+#%
 forecast_df2 = forecast_multi_step(
      xtft_model=xtft_model,
      inputs=[X_static, X_dynamic, X_future],
@@ -424,24 +491,20 @@ forecast_df2 = forecast_multi_step(
 ll_df = pd.DataFrame() 
 ll_df[['longitude', 'latitude']] = X_static[:, :2]
 
-ll_dupl = [ll_df[['longitude', 'latitude']] for _ in range(4)]
+ll_dupl = [ll_df[['longitude', 'latitude']] for _ in range(len(forecast_years))]
 
 ll_df= pd.concat(ll_dupl, ignore_index= True, axis =0 ) 
 #
 forecast_df3 = pd.concat ([ll_df, forecast_df2, ], axis =1) 
 #%
-print(forecast_df2)
-
-#%
-print(forecast_df3)
-#%%
 visualize_forecasts(
     forecast_df3, 
     dt_col="year", 
     tname="subsidence", 
+    # actual_name ='subsidence_q50', # use when generate_forecast is triggered.
     eval_periods= forecast_years, 
-    # test_data = test_data, 
-    mode="quantile", 
+    test_data = test_data, 
+    mode="quantile" if quantiles is not None else 'point', 
     kind= "spatial", 
     x="longitude", 
     y="latitude",
