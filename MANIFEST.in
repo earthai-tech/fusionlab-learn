@@ -31,9 +31,8 @@ recursive-exclude docs *.jpg *.mp4 *.png
 exclude .readthedocs.yml 
 exclude CODE_OF_CONDUCT.md
 exclude ISSUE_TEMPLATE.md
-exclude venv
-exclude gofast/datasets/data/h.h5
-exclude gofast/datasets/data/n.npz 
+exclude venv main.py # exclude main since used for code-ocean testing only
+
 
 
 global-exclude *.py[cod] __pycache__/* *.so *.dylib .coveragerc tests/*

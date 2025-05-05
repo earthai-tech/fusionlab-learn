@@ -2333,7 +2333,7 @@ def reshape_xtft_data(
             static_values = group.iloc[0][static_cols].values
         else:
             static_values = None
-
+         
         # Generate rolling sequences.
         for i in range(len(group) - time_steps - forecast_horizons + 1):
             sequence_data = group.iloc[i : i + time_steps]
@@ -2447,7 +2447,7 @@ def reshape_xtft_data(
                     f"[INFO] Job dictionary successfully saved "
                     f"to '{savefile}'."
                 )
-
+                
     return static_data, dynamic_data, future_data, target_data
 
 @check_empty(
@@ -4374,7 +4374,7 @@ def forecast_multi_step(
             np.asarray(X_dynamic, dtype=np.float32),
             np.asarray(X_future, dtype=np.float32)
         ]
-    ).squeeze(-1)
+    )#.squeeze(-1)
  
     # Determine available forecast steps based on y.
     available_steps = forecast_horizon
