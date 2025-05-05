@@ -533,8 +533,9 @@ def load_processed_subsidence_data(
     scaler_type: str = 'minmax',
     return_sequences: bool = False,
     time_steps: int = 4,
-    forecast_horizon: int = 4,
+    forecast_horizons: int = 4,
     target_col: str = 'subsidence',
+    scale_target: bool=False, 
     use_processed_cache: bool = True,
     use_sequence_cache: bool = True,
     save_processed_frame: bool = False,
@@ -633,11 +634,13 @@ def load_processed_subsidence_data(
     time_steps : int, default=4
         Lookback window size (number of past time steps) for sequence
         generation. Only used if ``return_sequences=True``.
-    forecast_horizon : int, default=4
+    forecast_horizons : int, default=4
         Prediction horizon (number of future steps) for sequence
         generation. Only used if ``return_sequences=True``.
     target_col : str, default='subsidence'
         Name of the target variable column used for sequence generation.
+    scale_target: bool, default=False 
+        Whether to scale the target or not. 
     use_processed_cache : bool, default=True
         If ``True`` and ``return_sequences=False``, attempts to load a
         previously saved processed DataFrame (and scaler/encoder info)
@@ -714,7 +717,7 @@ def load_processed_subsidence_data(
     ...     dataset_name='nansha',
     ...     return_sequences=True,
     ...     time_steps=6,
-    ...     forecast_horizon=3,
+    ...     forecast_horizons=3,
     ...     scale_numericals=True,
     ...     scaler_type='standard',
     ...     verbose=False
@@ -758,9 +761,9 @@ def load_processed_subsidence_data(
              'geology', 'GWL', 'rainfall_mm',
              'normalized_seismic_risk_score', 'soil_thickness', 'subsidence'
              ]
-        categorical_cols = ['geology'] # Example, adjust as needed
+        categorical_cols = ['geology', 'building_concentration'] # Example, adjust as needed
         numerical_cols = [
-             'building_concentration', 'GWL', 'rainfall_mm',
+             'GWL', 'rainfall_mm',
              'normalized_seismic_risk_score', 'soil_thickness'
              ]
         spatial_cols = ['longitude', 'latitude']
@@ -773,7 +776,7 @@ def load_processed_subsidence_data(
     data_dir = get_data(data_home)
     processed_fname = f"{dataset_name}_processed{cache_suffix}.joblib"
     processed_fpath = os.path.join(data_dir, processed_fname)
-    seq_fname = (f"{dataset_name}_sequences_T{time_steps}_H{forecast_horizon}"
+    seq_fname = (f"{dataset_name}_sequences_T{time_steps}_H{forecast_horizons}"
                  f"{cache_suffix}.joblib")
     seq_fpath = os.path.join(data_dir, seq_fname)
 
@@ -841,7 +844,7 @@ def load_processed_subsidence_data(
             include_target=True
         )
         df_processed = df_raw.copy()
-
+        df_processed.sort_values('year', inplace=True)
         # 2. Feature Selection
         if apply_feature_select:
             # Ensure all required features for the steps exist
@@ -917,9 +920,19 @@ def load_processed_subsidence_data(
                 set(numerical_cols) & set(current_num_cols) - set(
                     encoded_flat_list))
             # Also scale the target column if present
-            if target_col in df_processed.columns and target_col not in cols_to_scale:
-                cols_to_scale.append(target_col)
-
+            if scale_target: 
+                if target_col in df_processed.columns and target_col not in cols_to_scale:
+                    cols_to_scale.append(target_col)
+            else: 
+                # for consisteny drop target if exist in cols_to_scale 
+                if target_col in cols_to_scale: 
+                    try:
+                        cols_to_scale.remove(target_col)
+                    except: 
+                        cols_to_scale = [
+                            col for col in cols_to_scale if col !=target_col
+                        ]
+                    
             if cols_to_scale:
                 if verbose: 
                     print(f"  Scaling numerical features: {cols_to_scale}...")
@@ -1024,7 +1037,7 @@ def load_processed_subsidence_data(
     elif dataset_name == 'nansha':
          # Add encoded columns for nansha if applicable
          final_static_cols.extend([c for c in encoded_cat_cols if c.startswith(
-             'geology_')])
+             'geology_') or c.startswith('building_concentration_')])
     # Ensure no duplicates and columns exist
     final_static_cols = sorted(list(set(
         c for c in final_static_cols if c in df_processed.columns)))
@@ -1079,7 +1092,7 @@ def load_processed_subsidence_data(
         future_cols=final_future_cols,
         spatial_cols=spatial_cols,
         time_steps=time_steps,
-        forecast_horizons=forecast_horizon,
+        forecast_horizons=forecast_horizons,
         verbose=verbose > 0
     )
 
