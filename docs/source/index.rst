@@ -47,7 +47,7 @@ Fusionlab-learn: Igniting Next-Gen Fusion Models
 
     <hr style="margin-top: 1.5em; margin-bottom: 2em;">
 
-**FusionLab** provides a flexible and extensible framework built on
+**Fusionlab-learn** provides a flexible and extensible framework built on
 **TensorFlow/Keras** for advanced time-series forecasting. It centers
 on the **Temporal Fusion Transformer (TFT)** and its extensions like
 the **Extreme Temporal Fusion Transformer (XTFT)**, offering modular
@@ -120,6 +120,7 @@ temporal architectures, FusionLab aims to provide the necessary tools.
      patterns during training.
 
 
+
 .. rubric:: Explore Further
 
 * **Motivation:** Understand the :doc:`motivation` behind FusionLab.
@@ -130,8 +131,17 @@ temporal architectures, FusionLab aims to provide the necessary tools.
 
 .. raw:: html
 
-    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+    <hr style="margin-top: 1.0em; margin-bottom: 1.0em;">
 
+.. admonition:: Terminology
+
+   For brevity and consistency, the library will be referred to as ``fusionlab``
+   throughout the remainder of the documentation.
+
+.. raw:: html
+
+    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+    
 .. # --- Sidebar Navigation Structure (Hidden from main page content) ---
 .. # This builds the navigation panel on the left using Furo theme.
 .. toctree::
