@@ -215,7 +215,7 @@ def test_load_processed_sequences(dataset_name):
             dataset_name=dataset_name,
             return_sequences=True,
             time_steps=T,
-            forecast_horizon=H,
+            forecast_horizons=H,
             use_sequence_cache=False, # Disable caching for this test
             save_sequences=False,
             verbose=False,
@@ -281,7 +281,7 @@ def test_load_processed_cache(dataset_name, tmp_path):
     # 3. Run once, saving sequences
     _ = load_processed_subsidence_data(
         dataset_name=dataset_name, data_home=str(cache_dir),
-        return_sequences=True, time_steps=T, forecast_horizon=H,
+        return_sequences=True, time_steps=T, forecast_horizons=H,
         save_sequences=True, use_sequence_cache=False,
         cache_suffix=suffix, verbose=False, download_if_missing=False
     )
@@ -293,7 +293,7 @@ def test_load_processed_cache(dataset_name, tmp_path):
     with pytest.warns(None) as record_seq:
         seq_loaded = load_processed_subsidence_data(
             dataset_name=dataset_name, data_home=str(cache_dir),
-            return_sequences=True, time_steps=T, forecast_horizon=H,
+            return_sequences=True, time_steps=T, forecast_horizons=H,
             save_sequences=False, use_sequence_cache=True, # Use cache
             cache_suffix=suffix, verbose=False, download_if_missing=False
         )
