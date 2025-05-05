@@ -30,7 +30,7 @@ will fetch the latest stable release from the Python Package Index
 
 .. code-block:: bash
 
-   pip install fusionlab
+   pip install fusionlab-learn
 
 .. note::
    This command should automatically install required dependencies,
@@ -60,7 +60,7 @@ directly from the source code on GitHub:
 
     .. code-block:: bash
 
-       git clone https://github.com/earthai-tech/fusionlab.git
+       git clone https://github.com/earthai-tech/fusionlab-learn.git
        cd fusionlab
 
 2.  **Install in editable mode:**
