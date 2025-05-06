@@ -139,7 +139,7 @@ html_theme = 'furo'
 
 html_theme_options = {
     # ── VCS “Edit this page” -----------------------------------------------
-    "source_repository":  "https://github.com/earthai-tech/fusionlab/",
+    "source_repository":  "https://github.com/earthai-tech/fusionlab-learn/",
     "source_branch":      "main",
     "source_directory":   "docs/source/",
 
@@ -155,7 +155,7 @@ html_theme_options = {
     "footer_icons": [
         {
             "name": "GitHub",
-            "url":  "https://github.com/earthai-tech/fusionlab",
+            "url":  "https://github.com/earthai-tech/fusionlab-learn",
             "html": """
                 <svg viewBox="0 0 24 24" aria-hidden="true"
                      height="1.35em" width="1.35em">
@@ -173,7 +173,7 @@ html_theme_options = {
         },
         {
             "name": "PyPI",
-            "url":  "https://pypi.org/project/fusionlab/",
+            "url":  "https://pypi.org/project/fusionlab-learn/",
             "html": "<span class='fa fa-box-open'></span>",
             "class": "",
         },

@@ -61,6 +61,7 @@ except ImportError:
 __all__ = [
     "fetch_zhongshan_data",
     "fetch_nansha_data",
+    "load_processed_subsidence_data"
     ]
 
 # --- Metadata Definition ---
@@ -246,6 +247,7 @@ def fetch_zhongshan_data(
 
     # --- Step 5: Return DataFrame or Bunch ---
     if as_frame:
+        df_subset.sort_values('year', inplace =True)
         return df_subset
     else:
         # Assemble Bunch object (descriptions need updating)
