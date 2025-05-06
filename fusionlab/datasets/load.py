@@ -43,13 +43,20 @@ except ImportError:
 
 
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, OneHotEncoder
-from fusionlab.nn.utils import reshape_xtft_data 
+
 try:
+    from fusionlab.nn.utils import reshape_xtft_data 
     from fusionlab.utils.data_utils import nan_ops 
 except ImportError:
     def nan_ops(df, **kwargs):
         warnings.warn("nan_ops function not found. Skipping NaN handling.")
         return df
+    def reshape_xtft_data(*args, **kwargs):
+        warnings.warn(
+            "reshape_xtft_data currently operates with tensorflow as backend."
+            " Make sure to have tensorflow installed.")
+        raise ModuleNotFoundError 
+        
 try:
     from fusionlab.utils.io_utils import fetch_joblib_data 
 except ImportError:
@@ -61,6 +68,7 @@ except ImportError:
 __all__ = [
     "fetch_zhongshan_data",
     "fetch_nansha_data",
+    "load_processed_subsidence_data"
     ]
 
 # --- Metadata Definition ---
@@ -246,6 +254,7 @@ def fetch_zhongshan_data(
 
     # --- Step 5: Return DataFrame or Bunch ---
     if as_frame:
+        df_subset.sort_values('year', inplace =True)
         return df_subset
     else:
         # Assemble Bunch object (descriptions need updating)
