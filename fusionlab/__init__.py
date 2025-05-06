@@ -3,8 +3,8 @@
 # Author: L. Kouadio <etanoyau@gmail.com>
 
 """
-FusionLab 🔥🧪: Igniting Next‑Gen Temporal Fusion Architectures
-=================================================================
+Fusionlab-learn 🔥🧪: Igniting Next‑Gen Temporal Fusion Architectures
+========================================================================
 
 A modular library for building, experimenting with, and fusing state‑of‑the‑art
 Temporal Fusion Transformer (TFT) variants. FusionLab streamlines every step of
@@ -48,7 +48,8 @@ _required_dependencies = [
     ("joblib", None), 
     #("jax", None),
     ("tensorflow", "tensorflow"),
-    ("joblib", None)
+    ("joblib", None), 
+    ("statsmodels", None), 
     # ("torch", "torch"),
 ]
 

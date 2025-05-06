@@ -68,8 +68,11 @@ forecast_years = [2022, 2023, 2024, 2025]  # for NANSHA WHEN [2023, 2024, 2025, 
 time_steps =3 
 # IMPORTANT NOTE: Spatial columns is important for runing, however need enough data 
 # for reproducityky and testting pupose wen turn of too None 
-spatial_cols=None#("longitude", "latitude")
+spatial_cols=("longitude", "latitude")
 quantiles = [ 0.1, 0.5, 0.9 ] # quantiles =None, for point prediction 
+anomaly_detection_strategy ='feature_based'
+EPOCHS= 2
+LEARNING_RATE= 0.001
 
 # ===========================================================================
 
@@ -85,9 +88,9 @@ data_path = get_data()
 # zhongshan_file = os.path.join(main_path, 'zhongshan_filtered_final_data.csv')
 
 # zhongshan_data = fetch_zhongshan_data().frame
-# zhongshan_data = fetch_nansha_data().frame
+zhongshan_data = fetch_nansha_data().frame
 
-zhongshan_data = pd.read_csv(r'J:\nature_data\final\nansha_200_0000.csv')
+zhongshan_data = pd.read_csv(r'J:\nature_data\final\nansha_data.csv')
 # # Rename geological category column for consistency
 zhongshan_data.rename(columns={"geological_category": "geology"}, inplace=True)
 
@@ -206,7 +209,6 @@ time_steps = forecast_horizon -1  if time_steps is None else time_steps
 is_valid_time_steps = time_steps <= forecast_horizon
 time_steps       = time_steps if is_valid_time_steps else ( 
     forecast_horizon - 1  if forecast_horizon > 1 else 1) 
-
 
 # X_static, X_dynamic, X_future, y_train_seq = load_processed_subsidence_data (
 #     'zhongshan',return_sequences =True, 
@@ -331,7 +333,7 @@ best_params = {
     'attention_units' : 64,
     'hidden_units'    : 32, 
     'multi_scale_agg' : 'auto', 
-   #  'anomaly_detection_strategy': 'feature_based', 
+    'anomaly_detection_strategy': anomaly_detection_strategy, 
     
 }
 
@@ -367,7 +369,7 @@ else:
     loss_fn ='mse'
     
 xtft_model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), 
+    optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE), 
     loss=loss_fn 
 )
 
@@ -375,7 +377,7 @@ print("Training the XTFT model...\n")
 xtft_model.fit(
     x              = [X_static_train, X_dynamic_train, X_future_train],
     y              = y_train,
-    epochs         = 50,
+    epochs         = EPOCHS,
     batch_size     = 32,
     validation_data= ([X_static_val, X_dynamic_val, X_future_val], y_val),
     callbacks      = [early_stopping, model_checkpoint]

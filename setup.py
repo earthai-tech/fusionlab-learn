@@ -31,6 +31,7 @@ _required_dependencies = [
     "matplotlib",
     "tqdm",
     "scikit-learn",
+    "statsmodels", 
     # "torch",  # PyTorch is a core dependency in next realease
     "tensorflow",  
     # "jax",  # If using JAX for some operations

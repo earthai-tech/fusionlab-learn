@@ -8,9 +8,9 @@
    :keywords: time series, forecasting, temporal fusion transformer, tft,
               xtft, machine learning, deep learning, python, tensorflow
 
-##################################################
-Fusionlab-learn: Igniting Next-Gen Fusion Models
-##################################################
+################################################################
+:code:`Fusionlab-learn`: Igniting Next-Gen Fusion Models
+################################################################
 
 .. raw:: html
 
