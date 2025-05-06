@@ -43,13 +43,20 @@ except ImportError:
 
 
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, OneHotEncoder
-from fusionlab.nn.utils import reshape_xtft_data 
+
 try:
+    from fusionlab.nn.utils import reshape_xtft_data 
     from fusionlab.utils.data_utils import nan_ops 
 except ImportError:
     def nan_ops(df, **kwargs):
         warnings.warn("nan_ops function not found. Skipping NaN handling.")
         return df
+    def reshape_xtft_data(*args, **kwargs):
+        warnings.warn(
+            "reshape_xtft_data currently operates with tensorflow as backend."
+            " Make sure to have tensorflow installed.")
+        raise ModuleNotFoundError 
+        
 try:
     from fusionlab.utils.io_utils import fetch_joblib_data 
 except ImportError:

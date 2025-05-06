@@ -1,38 +1,75 @@
+# MANIFEST.in for fusionlab project
 
-include *.rst
-recursive-include docs *
-recursive-include docs/_static *
-recursive-include examples *.txt *.py
-recursive-include gofast *.c *.cpp *.h *.pyx *.pxd *.pxi *.tp
-recursive-include gofast/datasets *.csv *.csv.gz *.rst *.jpg *.txt *.arff.gz *.json.gz *.zip *.pkl *.h5 *.joblib
-recursice-include gofast/utils *.npy 
+# Include essential root files
 include LICENSE
 include README.md
-include CITATION.cff
-include pyproject.toml
+# include CITATION.cff  # Uncomment if you add this file
+# include pyproject.toml # Uncomment if you use it
 include MANIFEST.in
 include setup.py
-include setup.cfg
-include gofast/utils/epsg.npy
-include .coveragerc
+# include setup.cfg     # Uncomment if you use this file
 
-# exclude from sdist
-recursive-exclude asv_benchmarks *
-recursive-exclude examples *.png 
-recursive-exclude benchmarks *
-recursive-exclude build_tools *
-recursive-exclude maint_tools *
-recursive-exclude benchmarks *
-recursive-exclude .binder *
-recursive-exclude ci *
-recursive-exclude data * 
-recursive-exclude docs *.jpg *.mp4 *.png 
+# --- Include files needed for PyPI description (README rendering) ---
+# Include everything in the _static directory (contains logo)
+recursive-include docs/source/_static *
+# Include specific images referenced in README.md (assuming naming convention)
+# This looks for files like 'readme_*.png' directly inside 'docs/source/images/'
+include docs/source/images/readme_*.png
 
-exclude .readthedocs.yml 
-exclude CODE_OF_CONDUCT.md
-exclude ISSUE_TEMPLATE.md
-exclude venv main.py # exclude main since used for code-ocean testing only
+# --- Include documentation source files (for building docs from sdist) ---
+recursive-include docs/source *.rst
+recursive-include docs/source *.py
+# Note: _static is already included above
+recursive-include docs/source/_templates *
+# Optional: Include ALL gallery source images? (Uncomment if needed)
+# recursive-include docs/source/gallery/images *
+include docs/Makefile
+include docs/make.bat
+include docs/requirements.txt # Include requirements needed to build docs
 
+# --- Include package data ---
+# Include the dataset bundled with the package
+include fusionlab/datasets/data/*
 
+# --- Include examples directory (if it exists) ---
+# recursive-include examples *.py *.ipynb *.csv *.md
 
-global-exclude *.py[cod] __pycache__/* *.so *.dylib .coveragerc tests/*
+# --- Exclusions ---
+
+# Exclude compiled Python files, caches, compiled extensions
+global-exclude *.py[cod] __pycache__/* *.so *.dylib *.o *.a *.dll *.lib
+
+# Exclude the test suite from the source distribution
+recursive-exclude tests *
+exclude .coverage
+exclude coverage.xml
+exclude .pytest_cache
+exclude main.py # Only use for code-ocean testing 
+
+# Exclude development / CI / environment files
+exclude .gitignore
+exclude .gitattributes
+# exclude .readthedocs.yml # Usually okay to include for context
+# exclude environment.yml  # Usually okay to include for context
+recursive-exclude .github *
+
+# Exclude common virtual environment directories
+recursive-exclude venv *
+recursive-exclude .venv *
+
+# Exclude common IDE directories and other hidden files/dirs like .git
+recursive-exclude .*
+
+# Exclude build artifacts explicitly
+recursive-exclude build *
+recursive-exclude dist *
+recursive-exclude *.egg-info *
+recursive-exclude docs/_build *
+
+# Exclude benchmark or maintenance tool directories if they exist
+# recursive-exclude benchmarks *
+# recursive-exclude maint_tools *
+
+# Prune empty directories resulting from exclusions
+prune docs/_build
+# prune tests/__pycache__ # Example
