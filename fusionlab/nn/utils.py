@@ -2321,6 +2321,7 @@ def reshape_xtft_data(
     future_data  = []
     target_data  = []
 
+    # print("grouped=", grouped)
     # Process each group (location or entire DataFrame).
     for key, group in grouped:
         if not spatial_cols:
@@ -2328,18 +2329,38 @@ def reshape_xtft_data(
 
         # Sort group by datetime.
         group = group.sort_values(dt_col)
+        
+        min_len = time_steps + forecast_horizons
+        if len(group) < min_len:
+            if verbose >= 1:
+                print(
+                    f"\nGroup Warning:\n" 
+                    f"     Group '{key}' has {len(group)} data points, "
+                    f"which is less than:\n      time_steps ({time_steps}) + "
+                    f"forecast_horizons ({forecast_horizons}).\n "
+                    f"     Skipping sequence generation for this group."
+            )
+            continue  # Skip to the next group
+                
+        # Extract static features if provided.        
+        if spatial_cols:
+            if static_cols:
+                static_values = group.iloc[0][static_cols].values
+            else:
+                static_values = None
 
-        # Extract static features if provided.
-        if static_cols:
-            static_values = group.iloc[0][static_cols].values
-        else:
-            static_values = None
-         
         # Generate rolling sequences.
         for i in range(len(group) - time_steps - forecast_horizons + 1):
             sequence_data = group.iloc[i : i + time_steps]
             dynamic_seq   = sequence_data[dynamic_cols].values
 
+            # Extract static features for the current sequence
+            if not spatial_cols:
+                if static_cols:
+                    static_values = sequence_data.iloc[0][static_cols].values
+                else:
+                    static_values = None
+                
             # Handle future features if provided.
             if future_cols:
                 future_seq = np.repeat(
