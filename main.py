@@ -50,6 +50,7 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
 
 # FusionLab - Custom Modules
+from fusionlab.api.util import get_table_size
 from fusionlab.datasets import fetch_nansha_data
 from fusionlab.datasets._property import get_data
 from fusionlab.nn.losses import combined_quantile_loss
@@ -62,6 +63,7 @@ from fusionlab.nn.utils import (
 from fusionlab.utils.data_utils import nan_ops
 from fusionlab.utils.io_utils import fetch_joblib_data
 
+_TW = get_table_size()
 # =================== CONFIGURATION PARAMETERS =============================
 
 # Toggle to use the SuperXTFT variant; if False, use the standard XTFT.
@@ -79,16 +81,15 @@ forecast_years = [2022, 2023, 2024, 2025]  # e.g., [2023, 2024, 2025, 2026] for 
 
 # Number of time steps to consider for input sequence length.
 time_steps = 3
-
 # NOTE: Spatial columns are required for models involving spatial input.
 # For reproducibility or limited datasets, you may set this to None.
-spatial_cols = None  # Example: ("longitude", "latitude")
+spatial_cols =None # Example: ("longitude", "latitude")
 
 # Quantile values for probabilistic forecasting; use None for point prediction.
 quantiles = [0.1, 0.5, 0.9]  # Set to None for deterministic forecasts
 
 # Strategy used for anomaly detection; 'feature_based' is one of the supported modes.
-anomaly_detection_strategy = 'feature_based'
+anomaly_detection_strategy = None #'feature_based'
 
 # Training hyperparameters
 EPOCHS = 50
@@ -245,7 +246,7 @@ else:
         savefile=sequence_file,
         verbose=7
     )
-
+#%
 # ==========================================
 # SECTION 4: Train-Validation Split & Saving
 # ==========================================
@@ -337,6 +338,9 @@ best_params = {
     'hidden_units'    : 32,
     'multi_scale_agg' : 'auto',
     'anomaly_detection_strategy': anomaly_detection_strategy,
+    'use_residuals': True,
+    'use_batch_norm':  True,
+    'final_agg':'last',
 }
 
 # Early stopping to prevent overfitting
@@ -452,6 +456,7 @@ print(f"📊 Forecasting mode: {'quantile' if quantiles else 'point'}")
 print(f"🧩 Forecast points per year: {len(X_static)}")
 print(f"📈 Total forecast points: {len(forecast_years) * len(X_static)}")
 
+#%
 # Run forecast
 forecast_path = os.path.join(data_path, f"qt.forecast_results_2023_2026_v3{super_ext}.csv")
 forecast_df = forecast_multi_step(
@@ -464,6 +469,7 @@ forecast_df = forecast_multi_step(
     q=quantiles,
     tname="subsidence",
     forecast_dt=forecast_years,
+    apply_mask= True if quantiles else False, 
     mask_values=0,
     mask_fill_value=0,
     savefile=forecast_path,
@@ -510,9 +516,11 @@ visualize_forecasts(
     y="latitude",
     max_cols=2,
     axis="off",
-    verbose=7
+    verbose=7, 
+    cmap="jet_r", 
+    s=10, 
 )
-print("+" * 77)
+print("+" * _TW)
 print(
     """
     WARNING: For optimal results, ensure you have sufficient data and 
@@ -531,4 +539,4 @@ print(
     https://fusion-lab.readthedocs.io/en/latest/user_guide/anomaly_detection.html#using-anomaly-detection-with-xtft
     """
 )
-print("+" * 77)
+print("+" * _TW)
