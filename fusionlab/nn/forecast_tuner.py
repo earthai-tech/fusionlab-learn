@@ -227,9 +227,9 @@ def xtft_tuner(
         "Is model builder a keras model object?",
         level=5, verbose=verbose
     )
-    model_builder = validate_keras_model(
+    validate_keras_model(
         model_builder, 
-        raise_exception= True 
+        raise_exception= False 
         )
     
     vlog(

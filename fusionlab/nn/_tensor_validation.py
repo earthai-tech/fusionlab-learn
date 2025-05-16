@@ -975,7 +975,188 @@ def validate_batch_sizes_eager(
             f"``future_covariate_input`` batch_size={future_batch_size}."
         )
 
+#XXXT TO FIX 
+
 def validate_minimal_inputs(
+    X_static: Union[np.ndarray, Tensor],
+    X_dynamic: Union[np.ndarray, Tensor],
+    X_future: Union[np.ndarray, Tensor],
+    y: Optional[Union[np.ndarray, Tensor]] = None,
+    forecast_horizon: Optional[int] = None, # Model's output horizon
+    deep_check: bool = True
+) -> Union[Tuple[Tensor, Tensor, Tensor], Tuple[Tensor, Tensor, Tensor, Tensor]]:
+    r"""
+    Validate minimal inputs for forecasting models like TFT/XTFT.
+
+    This function verifies that the provided input arrays
+    (``X_static``, ``X_dynamic``, ``X_future`` and, optionally, ``y``)
+    have the expected dimensionality and consistent shapes. It
+    converts inputs to ``float32`` and ensures shapes meet requirements:
+
+    .. math::
+        X_{\text{static}} \in \mathbb{R}^{B \times N_s} \\
+        X_{\text{dynamic}} \in \mathbb{R}^{B \times T_{past} \times N_d} \\
+        X_{\text{future}} \in \mathbb{R}^{B \times T_{future\_span} \times N_f}
+
+    and, if provided,
+
+    .. math::
+        y \in \mathbb{R}^{B \times H \times O}
+
+    where :math:`B` is batch size, :math:`T_{past}` is the lookback
+    period for dynamic inputs, :math:`T_{future\_span}` is the total
+    time steps for future inputs (must be :math:`\ge T_{past}`),
+    :math:`H` is the model's output forecast horizon, and
+    :math:`N_s, N_d, N_f, O` are feature/output dimensions.
+
+    Parameters
+    ----------
+    X_static : np.ndarray or tf.Tensor
+        Static features, shape (Batch, NumStaticFeatures).
+    X_dynamic : np.ndarray or tf.Tensor
+        Dynamic past features, shape (Batch, PastTimeSteps, NumDynamicFeatures).
+    X_future : np.ndarray or tf.Tensor
+        Known future features, shape (Batch, FutureTimeSpan, NumFutureFeatures).
+        ``FutureTimeSpan`` must be >= ``PastTimeSteps``.
+    y : np.ndarray or tf.Tensor, optional
+        Target values, shape (Batch, ForecastHorizon, OutputDim).
+    forecast_horizon : int, optional
+        The expected output forecast horizon of the model. Used to
+        validate ``y.shape[1]`` if ``y`` is provided.
+    deep_check : bool, default=True
+        If True, perform full consistency checks on batch sizes and
+        relevant time dimensions.
+
+    Returns
+    -------
+    tuple
+        Validated input tensors (X_static, X_dynamic, X_future) or
+        (X_static, X_dynamic, X_future, y), converted to float32.
+
+    Raises
+    ------
+    ValueError
+        If inputs have unexpected dimensions or inconsistent shapes.
+    TypeError
+        If inputs are not np.ndarray or tf.Tensor.
+    """
+
+    def _check_tensor_shape(
+        arr: Union[np.ndarray, Tensor],
+        expected_ndim: int,
+        name: str
+    ):
+        """Helper to check tensor dimensionality."""
+        if not isinstance(arr, (np.ndarray, Tensor)):
+            raise TypeError(
+                f"{name} must be a NumPy array or TensorFlow Tensor. "
+                f"Got {type(arr)}."
+            )
+        if arr.ndim != expected_ndim:
+            raise ValueError(
+                f"{name} must be {expected_ndim}D. Got {arr.ndim}D "
+                f"with shape {arr.shape}."
+            )
+        return arr
+
+    def _ensure_float32(data: Union[np.ndarray, Tensor], name: str):
+        """Ensure data is float32."""
+        if isinstance(data, np.ndarray):
+            return data.astype(np.float32)
+        elif hasattr(data, "dtype"): # Check for Tensor-like objects
+            # For TensorFlow tensors, use tf.cast
+            if KERAS_BACKEND and data.dtype != tf_float32:
+                return tf_cast(data, tf_float32)
+            # For other tensor types or if already float32, return as is
+            return data
+        else:
+            raise TypeError(
+                f"Unsupported data type for {name}: {type(data)}. "
+                "Must be np.ndarray or tf.Tensor."
+            )
+
+    # Ensure inputs are tensors and float32
+    X_static = _ensure_float32(X_static, "X_static")
+    X_dynamic = _ensure_float32(X_dynamic, "X_dynamic")
+    X_future = _ensure_float32(X_future, "X_future")
+
+    # Initial dimension checks
+    X_static = _check_tensor_shape(X_static, 2, "X_static")
+    X_dynamic = _check_tensor_shape(X_dynamic, 3, "X_dynamic")
+    X_future = _check_tensor_shape(X_future, 3, "X_future")
+
+    if y is not None:
+        y = _ensure_float32(y, "y")
+        y = _check_tensor_shape(y, 3, "y (target)")
+
+    if not deep_check:
+        return (X_static, X_dynamic, X_future) if y is None \
+            else (X_static, X_dynamic, X_future, y)
+
+    # --- Deeper Consistency Checks ---
+    # Get shapes (Batch, NumStaticFeatures)
+    B_sta, Ns = X_static.shape
+    # (Batch, PastTimeSteps, NumDynamicFeatures)
+    B_dyn, T_past_dyn, Nd = X_dynamic.shape
+    # (Batch, FutureTimeSpan, NumFutureFeatures)
+    B_fut, T_span_fut, Nf = X_future.shape
+
+    # 1. Validate batch sizes match
+    if not (B_sta == B_dyn == B_fut):
+        raise ValueError(
+            f"Batch sizes do not match: X_static ({B_sta}), "
+            f"X_dynamic ({B_dyn}), X_future ({B_fut})."
+        )
+
+    # 2. Validate future time span covers at least dynamic past time span
+    if T_span_fut < T_past_dyn:
+        raise ValueError(
+            f"Future input time span ({T_span_fut}) must be at least "
+            f"as long as dynamic input time span ({T_past_dyn})."
+        )
+
+    # 3. Validate y if provided
+    if y is not None:
+        B_y, H_y, O_y = y.shape # H_y is horizon from y data
+
+        if B_y != B_sta: # Check against a common batch size
+            raise ValueError(
+                f"Batch size of y ({B_y}) does not match "
+                f"input data batch size ({B_sta})."
+            )
+
+        # If forecast_horizon parameter is given, it should match y's horizon
+        if forecast_horizon is not None and forecast_horizon != H_y:
+            warnings.warn(
+                f"Provided 'forecast_horizon' parameter ({forecast_horizon}) "
+                f"differs from y.shape[1] ({H_y}). "
+                f"Using horizon from y data ({H_y}) for validation.",
+                UserWarning
+            )
+            effective_horizon = H_y
+        elif forecast_horizon is None and y is not None:
+            effective_horizon = H_y # Infer from y
+        elif forecast_horizon is not None: # and matches y.shape[1]
+            effective_horizon = forecast_horizon
+        else: # y is None, forecast_horizon might be None or int
+            effective_horizon = forecast_horizon # Can be None
+
+        # If model output horizon (effective_horizon) is known,
+        # check if future input span is sufficient.
+        # Future inputs should cover T_past_dyn (for encoder) + effective_horizon (for decoder).
+        if effective_horizon is not None and T_span_fut < (T_past_dyn + effective_horizon):
+            warnings.warn(
+                f"Future input time span ({T_span_fut}) is less than "
+                f"dynamic lookback ({T_past_dyn}) + output horizon ({effective_horizon}). "
+                f"This might be insufficient for some model architectures "
+                f"that use future inputs during decoding.",
+                UserWarning
+            )
+        return X_static, X_dynamic, X_future, y
+
+    return X_static, X_dynamic, X_future
+
+def validate_minimal_inputs_in(
     X_static, X_dynamic, 
     X_future, y=None, 
     forecast_horizon=None, 

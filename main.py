@@ -246,7 +246,7 @@ else:
         savefile=sequence_file,
         verbose=7
     )
-#%
+#%%
 # ==========================================
 # SECTION 4: Train-Validation Split & Saving
 # ==========================================
@@ -478,7 +478,7 @@ forecast_df = forecast_multi_step(
 )
 
 print(f"✅ Forecast saved to: {forecast_path}")
-
+#%%
 # Backup forecast file with timestamp
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 backup_path = os.path.join(data_path, f"backup_forecast_{timestamp}.csv")
