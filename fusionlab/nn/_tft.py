@@ -46,7 +46,7 @@ if KERAS_BACKEND:
     tf_shape = KERAS_DEPS.shape
     tf_rank=KERAS_DEPS.rank
     
-    from ._tensor_validation import validate_tft_inputs
+    from ._tensor_validation import validate_tft_inputs, align_temporal_dimensions
     from .components import GatedResidualNetworkIn, VariableSelectionNetworkIn 
     from .components import StaticEnrichmentLayer, TemporalAttentionLayerIn 
     from .components import PositionalEncoding
@@ -626,6 +626,17 @@ class TemporalFusionTransformer(Model, NNLearner):
             self.logger.debug("Applying Variable Selection on Future Inputs...")
             fut_embed = self.future_var_sel(future_inputs, training=training)
             self.future_variable_importances_ = self.future_var_sel.variable_importances_
+            
+            # dynamic_input is the reference for T_past (lookback period).
+    
+            self.logger.debug("  Aligning temporal inputs for MultiModalEmbedding...")
+            _, fut_embed = align_temporal_dimensions(
+                tensor_ref=dynamic_embedding,       # Shape (B, T_past, D_dyn)
+                tensor_to_align=fut_embed,   # Shape (B, T_future_total, D_fut)
+                mode='slice_to_ref',            # Slice future if longer
+                name="future_input_for_mme"
+            )
+            
             dynamic_embedding = tf_concat([dynamic_embedding, fut_embed], axis=1)
 
         # 4. Positional encoding for combined sequence embedding

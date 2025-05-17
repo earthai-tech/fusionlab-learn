@@ -246,7 +246,7 @@ else:
         savefile=sequence_file,
         verbose=7
     )
-#%%
+#%
 # ==========================================
 # SECTION 4: Train-Validation Split & Saving
 # ==========================================
@@ -438,7 +438,7 @@ else:
 if xtft_model is None:
     raise RuntimeError("XTFT model is not loaded. Forecasting aborted.")
 
-
+#%%
 # ==========================================
 #  SECTION 5: FORECASTING & EVALUATION
 # ==========================================
@@ -456,7 +456,7 @@ print(f"📊 Forecasting mode: {'quantile' if quantiles else 'point'}")
 print(f"🧩 Forecast points per year: {len(X_static)}")
 print(f"📈 Total forecast points: {len(forecast_years) * len(X_static)}")
 
-#%
+#%%
 # Run forecast
 forecast_path = os.path.join(data_path, f"qt.forecast_results_2023_2026_v3{super_ext}.csv")
 forecast_df = forecast_multi_step(

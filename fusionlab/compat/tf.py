@@ -138,6 +138,7 @@ class KerasDependencies:
             'convert_to_tensor': ('tensorflow', 'convert_to_tensor'), 
             'transpose': ('tensorflow', 'transpose'), 
             'cast': ('tensorflow', 'cast'), 
+            'pad': ('tensorflow', 'pad'), 
             'abs': ('tensorflow', 'abs'), 
             'float32': ('tensorflow', 'float32'), 
             'int32': ('tensorflow', 'int32'), 
