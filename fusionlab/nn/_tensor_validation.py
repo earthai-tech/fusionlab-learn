@@ -21,6 +21,9 @@ if KERAS_BACKEND:
     tf_reduce_all=KERAS_DEPS.reduce_all
     tf_equal=KERAS_DEPS.equal 
     tf_debugging= KERAS_DEPS.debugging 
+    tf_pad = KERAS_DEPS.pad 
+    tf_rank= KERAS_DEPS.rank 
+    tf_constant =KERAS_DEPS.constant
     tf_assert_equal=KERAS_DEPS.assert_equal
     tf_autograph=KERAS_DEPS.autograph
     tf_concat = KERAS_DEPS.concat
@@ -37,6 +40,28 @@ else:
         " TensorFlow to use this module.",
         ImportWarning
     )
+
+    class Tensor: pass # Dummy
+    def tf_shape(t): return np.array(t.shape)
+    def tf_concat(t, axis): return np.concatenate(t, axis=axis)
+    def tf_expand_dims(t, axis): return np.expand_dims(t, axis=axis)
+    def tf_pad(tensor, paddings, mode="CONSTANT", constant_values=0):
+        return np.pad(tensor, paddings, mode=mode, constant_values=constant_values)
+    class tf_debugging:
+        @staticmethod
+        def assert_greater_equal(a,b,message): assert a >= b, message
+
+    # # For standalone use, ensure tf is imported
+    # if not hasattr(tf, 'Tensor'): # Basic check if tf ops are available
+    #     Tensor = np.ndarray
+    #     tf_shape = lambda t: np.array(t.shape)
+    #     tf_concat = lambda t, axis: np.concatenate(t, axis=axis)
+    #     tf_expand_dims = lambda t, axis: np.expand_dims(t, axis=axis)
+    #     tf_pad = lambda tensor, paddings, mode="CONSTANT", constant_values=0: \
+    #         np.pad(tensor, paddings, mode=mode.lower() if mode else "constant", constant_values=constant_values)
+    #     class tf_debugging:
+    #         @staticmethod
+    #         def assert_greater_equal(a,b,message): assert a >= b, str(message)
     
 if HAS_TF:
     config = TFConfig()
@@ -585,7 +610,7 @@ def validate_tft_inputs(
                 are_equal = tf_reduce_all(
                     tf_equal(ref_batch_size, batch_size)
                 )
-                if not bool(are_equal.numpy()):
+                if not bool(are_equal.numpy()): # are_equal.numpy()
                     msg = ("Inconsistent batch sizes among inputs. "
                            "Got a mismatch in dynamic shapes.")
                     if error == 'raise':
@@ -975,7 +1000,152 @@ def validate_batch_sizes_eager(
             f"``future_covariate_input`` batch_size={future_batch_size}."
         )
 
-#XXXT TO FIX 
+
+def align_temporal_dimensions(
+    tensor_ref: Tensor,
+    tensor_to_align: Tensor,
+    ref_time_dim_index: int = 1,
+    align_time_dim_index: int = 1,
+    mode: str = 'slice_to_ref',
+    # allow_broadcast_shorter_ref: bool = False, # Removed for clarity
+    name: str = "tensor_to_align",
+    padding_value: int = 0
+) -> Tuple[Tensor, Tensor]:
+    r"""Aligns the time dimension of `tensor_to_align` to `tensor_ref`.
+
+    This function is typically used to ensure that two temporal tensors
+    (e.g., dynamic past features and known future features) have a
+    compatible time dimension before operations like concatenation or
+    element-wise addition, especially for input to encoder stages.
+
+    Parameters
+    ----------
+    tensor_ref : tf.Tensor or np.ndarray
+        The reference tensor, typically 3D (Batch, Time_Ref, Features_Ref).
+        The time dimension of this tensor is used as the target length.
+    tensor_to_align : tf.Tensor or np.ndarray
+        The tensor whose time dimension needs to be aligned, typically 3D
+        (Batch, Time_Align, Features_Align).
+    ref_time_dim_index : int, default=1
+        The index of the time dimension in `tensor_ref`.
+    align_time_dim_index : int, default=1
+        The index of the time dimension in `tensor_to_align`.
+    mode : {'slice_to_ref', 'pad_to_ref', 'truncate_ref_if_shorter'}, default='slice_to_ref'
+        Strategy for alignment:
+        - ``'slice_to_ref'``: Slices `tensor_to_align` if it is longer
+          than `tensor_ref` along the time dimension. Raises an error
+          if `tensor_to_align` is shorter. `tensor_ref` is unchanged.
+        - ``'pad_to_ref'``: If `tensor_to_align` is shorter than
+          `tensor_ref` in time, it's padded with `padding_value` (default 0)
+          at the end of its time dimension. If longer, it's sliced.
+          `tensor_ref` is unchanged.
+        - ``'truncate_ref_if_shorter'``: If `tensor_to_align`'s time
+          dimension is shorter than `tensor_ref`'s, then `tensor_ref`
+          itself is truncated to match `tensor_to_align`'s time length.
+          `tensor_to_align` is returned as is. If `tensor_to_align` is
+          not shorter, both are returned as is.
+    name : str, default="tensor_to_align"
+        Name for the tensor being aligned, used in error messages.
+    padding_value : int, default=0
+        Value to use for padding if `mode='pad_to_ref'` and
+        `tensor_to_align` is shorter.
+
+    Returns
+    -------
+    Tuple[tf.Tensor, tf.Tensor]
+        A tuple containing:
+        - ``output_tensor_ref``: The reference tensor, potentially modified
+          if `mode='truncate_ref_if_shorter'`.
+        - ``output_tensor_to_align``: The tensor_to_align, potentially
+          modified by slicing or padding.
+
+    Raises
+    ------
+    ValueError
+        If input tensors have unsupported ranks, invalid time dimension
+        indices, or if time dimensions are incompatible based on the
+        chosen mode (e.g., for 'slice_to_ref' if align is shorter).
+    NotImplementedError
+        If an unsupported mode is requested.
+    """
+    # Validate ranks
+    rank_ref = len(tensor_ref.shape)
+    rank_align = len(tensor_to_align.shape)
+
+    if rank_ref < 2 or rank_align < 2:
+        raise ValueError(
+            "Both tensor_ref and tensor_to_align must be at least 2D. "
+            f"Got ranks: ref={rank_ref}, align={rank_align}"
+        )
+    # Ensure time dimension indices are valid for the given ranks
+    if rank_ref > 1 and not (0 <= ref_time_dim_index < rank_ref):
+        raise ValueError(f"Invalid ref_time_dim_index {ref_time_dim_index} "
+                         f"for tensor_ref with rank {rank_ref}")
+    if rank_align > 1 and not (0 <= align_time_dim_index < rank_align):
+        raise ValueError(f"Invalid align_time_dim_index {align_time_dim_index} "
+                         f"for tensor_to_align with rank {rank_align}")
+
+    # Get dynamic shapes using tf.shape for graph compatibility
+    shape_ref = tf_shape(tensor_ref)
+    shape_align = tf_shape(tensor_to_align)
+
+    # Determine target time steps from tensor_ref's specified time dimension
+    # If rank is 1 (e.g. a vector considered as having 1 time step), handle gracefully.
+    target_time_steps = shape_ref[ref_time_dim_index] if rank_ref > 1 else 1
+    current_align_time_steps = shape_align[align_time_dim_index] if rank_align > 1 else 1
+
+    # Initialize outputs
+    output_tensor_ref = tensor_ref
+    output_tensor_to_align = tensor_to_align
+
+    if mode == 'slice_to_ref':
+        tf_debugging.assert_greater_equal(
+            current_align_time_steps, target_time_steps,
+            message=(
+                f"{name} time steps ({current_align_time_steps}) must be >= "
+                f"reference tensor time steps ({target_time_steps}) "
+                f"for mode 'slice_to_ref'."
+            )
+        )
+        slicers = [slice(None)] * rank_align
+        slicers[align_time_dim_index] = slice(None, target_time_steps)
+        output_tensor_to_align = tensor_to_align[tuple(slicers)]
+
+    elif mode == 'pad_to_ref':
+        if current_align_time_steps < target_time_steps:
+            # Calculate padding needed for the time dimension
+            padding_needed = target_time_steps - current_align_time_steps
+            # Construct paddings argument for tf.pad
+            # It's a list of pairs for each dimension: [[before, after], ...]
+            paddings = [[0, 0]] * rank_align
+            paddings[align_time_dim_index] = [0, padding_needed]
+            output_tensor_to_align = tf_pad(
+                tensor_to_align, paddings, mode="CONSTANT",
+                constant_values=padding_value
+            )
+        elif current_align_time_steps > target_time_steps:
+            # Slice if tensor_to_align is longer
+            slicers = [slice(None)] * rank_align
+            slicers[align_time_dim_index] = slice(None, target_time_steps)
+            output_tensor_to_align = tensor_to_align[tuple(slicers)]
+        # If equal, no change needed for output_tensor_to_align
+
+    elif mode == 'truncate_ref_if_shorter':
+        # "truncate tensor_ref if tensor_to_align is shorter"
+        if current_align_time_steps < target_time_steps:
+            # Truncate tensor_ref to match tensor_to_align's time length
+            slicers_ref = [slice(None)] * rank_ref
+            slicers_ref[ref_time_dim_index] = slice(None, current_align_time_steps)
+            output_tensor_ref = tensor_ref[tuple(slicers_ref)]
+            # output_tensor_to_align remains as is
+        # If tensor_to_align is not shorter, both are returned as is in this mode.
+
+    else:
+        raise ValueError(f"Unsupported alignment mode: '{mode}'. "
+                         "Choose 'slice_to_ref', 'pad_to_ref', or "
+                         "'truncate_ref_if_shorter'.")
+
+    return output_tensor_ref, output_tensor_to_align
 
 def validate_minimal_inputs(
     X_static: Union[np.ndarray, Tensor],
@@ -1040,21 +1210,71 @@ def validate_minimal_inputs(
     TypeError
         If inputs are not np.ndarray or tf.Tensor.
     """
+    def _check_tensor_shape_(
+        arr: Union[np.ndarray, Tensor],
+        expected_ndim_int: int, # Expected rank as Python int
+        name: str
+    ):
+        """Helper to check tensor dimensionality using tf.rank."""
+        # origin_dim = arr.ndim 
+        if not isinstance(arr, (np.ndarray, Tensor)): # Check against tf.Tensor
+            raise TypeError(
+                f"{name} must be a NumPy array or TensorFlow Tensor. "
+                f"Got {type(arr)}."
+            )
+        # Use tf.rank for TensorFlow tensors, arr.ndim for NumPy arrays
+        current_rank = tf_rank(arr) if isinstance(arr, Tensor) else arr.ndim 
 
+        # Compare ranks (tf.rank returns a 0-D Tensor)
+        if not tf_equal(current_rank, tf_constant(
+                expected_ndim_int, dtype=current_rank.dtype)):
+            # Construct error message parts
+            expected_descriptions = {
+                "static": ("Expected shape is (B, Ns) [2D]", 2),
+                "dynamic": ("Expected shape is (B, T_past, Nd) [3D]", 3),
+                "future": ("Expected shape is (B, T_future_span, Nf) [3D]", 3),
+                "target": ("Expected shape is (B, H, O) [3D]", 3)
+            }
+            desc_key = None
+            for key_prefix in expected_descriptions.keys():
+                if key_prefix in name.lower():
+                    desc_key = key_prefix
+                    break
+            
+            expected_msg = f"Expected {expected_ndim_int}D."
+            if desc_key:
+                expected_msg = expected_descriptions[desc_key][0]
+
+            # Try to get concrete rank for error message if possible
+            try:
+                # This might work in eager, fail in graph if rank is symbolic
+                current_rank_val = current_rank.numpy() if hasattr(
+                    current_rank, 'numpy') else current_rank
+            except: # pylint: disable=bare-except
+                current_rank_val = "<unknown_in_graph>"
+
+            raise ValueError(
+                f"{name} must be {expected_ndim_int}D.\n"
+                f"{expected_msg}\n"
+                f"Got array with rank {current_rank_val} and shape {arr.shape}."
+            )
+        return arr
+    
     def _check_tensor_shape(
         arr: Union[np.ndarray, Tensor],
         expected_ndim: int,
         name: str
     ):
         """Helper to check tensor dimensionality."""
+        origin_dim = arr.ndim 
         if not isinstance(arr, (np.ndarray, Tensor)):
             raise TypeError(
                 f"{name} must be a NumPy array or TensorFlow Tensor. "
                 f"Got {type(arr)}."
             )
-        if arr.ndim != expected_ndim:
+        if origin_dim != expected_ndim:
             raise ValueError(
-                f"{name} must be {expected_ndim}D. Got {arr.ndim}D "
+                f"{name} must be {expected_ndim}D. Got {origin_dim}D "
                 f"with shape {arr.shape}."
             )
         return arr

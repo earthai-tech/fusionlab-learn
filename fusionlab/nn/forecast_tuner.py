@@ -185,7 +185,8 @@ def xtft_tuner(
         name ="validation split"
     )
     model_name = parameter_validator(
-        "model_name", target_strs= {"xtft", 'superxtft', 'super_xtft'}, 
+        "model_name", target_strs= {"xtft", 'superxtft', 'super_xtft', 'tft'}, 
+        match_method="startswith", 
         )(model_name)
     
     # Validate input type.
@@ -201,7 +202,8 @@ def xtft_tuner(
     # Validate input shapes using the minimal inputs validator.
     # This returns X_static, X_dynamic, X_future, and optionally y.
     validated = validate_minimal_inputs(
-        *inputs, y=y, forecast_horizon=forecast_horizon, deep_check=True
+        *inputs, y=y, forecast_horizon=forecast_horizon,
+        deep_check=True
     )
     if y is None:
         X_static, X_dynamic, X_future = validated
@@ -372,7 +374,6 @@ def xtft_tuner(
 
     return best_hps, best_model, tuner
 
-
 def tft_tuner(
     inputs: List[Union[np.ndarray, Tensor]],
     y: Optional[np.ndarray] = None,
@@ -390,6 +391,7 @@ def tft_tuner(
     tuner_type: str = 'bayesian',
     callbacks: Optional[List] = None,
     model_builder: Optional[Callable] = None,
+    model_name: str = 'tft', # does nothing 
     verbose: int = 1
 ) -> tuple:
     """ Fine-tune Temporal Fusion Transformer (TFT) models using Keras Tuner. """
@@ -481,7 +483,7 @@ def _model_builder_factory(
                 'lstm_units', get_param_space('lstm_units')
                 )
         })
-        model_class = TemporalFusionTransformer
+        model_class = TemporalFusionTransformer  
     else:
         raise ValueError(
             f"Unsupported model type: {model_name}")

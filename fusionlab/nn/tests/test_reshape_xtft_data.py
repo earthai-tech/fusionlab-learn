@@ -1,5 +1,4 @@
 # test_reshape_xtft_data.py
-# (Place in your tests directory, e.g., fusionlab/utils/tests/ or fusionlab/nn/tests/)
 
 import pytest
 import numpy as np
@@ -262,7 +261,7 @@ def test_savefile_functionality(sample_df, sample_df_config, tmp_path):
     )
     # Load using the string representation of the path, as joblib expects
    
-    r'C:\Users\\Daniel\AppData\Local\Temp\pytest-of-Daniel\pytest-50\test_savefile_functionality0'
+    # r'C:\Users\\Daniel\AppData\Local\Temp\pytest-of-Daniel\pytest-50\test_savefile_functionality0'
     loaded_data = joblib.load(str(save_path))
 
     assert 'static_data' in loaded_data
