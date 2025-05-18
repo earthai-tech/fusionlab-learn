@@ -96,6 +96,10 @@ class EstimatorError(Exception):
     """
     Exception raised when an incorrect estimator or assessor is provided.
     """
+class NotEnoughDataError(Exception): 
+    """
+    Exception raised when for insufficient data.
+    """
     pass
 
 class GeoPropertyError(Exception):

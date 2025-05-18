@@ -12,12 +12,12 @@ DESCRIPTION = "Next-Gen Temporal Fusion Architectures for Time-Series Forecastin
 LONG_DESCRIPTION = open('README.md', 'r', encoding='utf8').read()
 MAINTAINER = "Laurent Kouadio"
 MAINTAINER_EMAIL = 'etanoyau@gmail.com'
-URL = "https://github.com/earthai-tech/fusionlab"
+URL = "https://github.com/earthai-tech/fusionlab-learn"
 LICENSE = "BSD-3-Clause"
 PROJECT_URLS = {
-    "API Documentation": "https://fusion-lab.readthedocs.io/en/latest/api_references.html",
+    "API Documentation": "https://fusion-lab.readthedocs.io/en/latest/api.html",
     "Home page": "https://fusion-lab.readthedocs.io",
-    "Bugs tracker": "https://github.com/earthai-tech/fusionlab/issues",
+    "Bugs tracker": "https://github.com/earthai-tech/fusionlab-learn/issues",
     "Installation guide": "https://fusion-lab.readthedocs.io/en/latest/installation.html",
     "User guide": "https://fusion-lab.readthedocs.io/en/latest/user_guide.html",
 }
@@ -31,6 +31,7 @@ _required_dependencies = [
     "matplotlib",
     "tqdm",
     "scikit-learn",
+    "statsmodels", 
     # "torch",  # PyTorch is a core dependency in next realease
     "tensorflow",  
     # "jax",  # If using JAX for some operations

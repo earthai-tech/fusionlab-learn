@@ -66,6 +66,7 @@ if KERAS_BACKEND:
     from ._tensor_validation import validate_anomaly_scores 
     from ._tensor_validation import validate_xtft_inputs
     from ._tensor_validation import validate_anomaly_config 
+    from ._tensor_validation import align_temporal_dimensions
     
     from .losses import ( 
         combined_quantile_loss, 
@@ -432,6 +433,7 @@ class XTFT(Model, NNLearner):
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim= self.dynamic_input_dim, 
             future_covariate_dim= self.future_input_dim, 
+            forecast_horizon= self.forecast_horizon 
         )
   
         # Normalize and process static features
@@ -466,14 +468,30 @@ class XTFT(Model, NNLearner):
             static_features, 
             training=training
         ) 
-        
-        # Embeddings for dynamic and future covariates
+   
+        # --- Prepare inputs for MultiModalEmbedding ---
+        # dynamic_input is the reference for T_past (lookback period).
+        # future_input needs its time dimension aligned to dynamic_input's.
+        logger.debug("  Aligning temporal inputs for MultiModalEmbedding...")
+        _, future_input_for_embedding = align_temporal_dimensions(
+            tensor_ref=dynamic_input,       # Shape (B, T_past, D_dyn)
+            tensor_to_align=future_input,   # Shape (B, T_future_total, D_fut)
+            mode='slice_to_ref',            # Slice future if longer
+            name="future_input_for_mme"
+        )
+        # future_input_for_embedding now has shape (B, T_past, D_fut)
+        logger.debug(
+            f"    Dynamic for MME: {dynamic_input.shape}, "
+            f"Future for MME: {future_input_for_embedding.shape}"
+        )
+
         embeddings = self.multi_modal_embedding(
-            [dynamic_input, future_input],
+            [dynamic_input, future_input_for_embedding], # Pass ALIGNED inputs
             training=training
         )
+        # Output of MultiModalEmbedding: (B, T_past, CombinedEmbedDim)
         logger.debug(
-            f"Embeddings Shape: {embeddings.shape}"
+            f"  Embeddings shape after MultiModalEmbedding: {embeddings.shape}"
         )
     
         # Add positional encoding to embeddings
@@ -518,8 +536,17 @@ class XTFT(Model, NNLearner):
         )
     
         # Attention mechanisms
+       # For HierarchicalAttention, if it adds outputs,
+       # inputs need same time dim.
+        # We use dynamic_input (T_past) and the already sliced
+        # future_input_for_embedding (T_past).
+        logger.debug(
+            "  Aligning temporal inputs for HierarchicalAttention..."
+            )
+        # No further alignment needed if using future_input_for_embedding
+        # which is already aligned to dynamic_input's T_past.
         hierarchical_att = self.hierarchical_attention(
-            [dynamic_input, future_input],
+            [dynamic_input, future_input_for_embedding], # Both (B, T_past, Feats)
             training=training
         )
         logger.debug(
@@ -1145,8 +1172,25 @@ class SuperXTFT(XTFT):
             f"Static Features Shape: {static_features.shape}"
         )
         # Embeddings for dynamic and future covariates using selected_dynamic
+        
+        # --- Prepare inputs for MultiModalEmbedding ---
+        # dynamic_input is the reference for T_past (lookback period).
+        # future_input needs its time dimension aligned to dynamic_input's.
+        # In principle no need , just here for consistency
+        logger.debug("  Aligning temporal inputs for MultiModalEmbedding...")
+        _, selected_future_input_for_embedding = align_temporal_dimensions(
+            tensor_ref=selected_dynamic,       # Shape (B, T_past, D_dyn)
+            tensor_to_align=selected_future,   # Shape (B, T_future_total, D_fut)
+            mode='slice_to_ref',            # Slice future if longer
+            name="future_input_for_mme"
+        )
+        # future_input_for_embedding now has shape (B, T_past, D_fut)
+        logger.debug(
+            f"    Dynamic for MME: {selected_dynamic.shape}, "
+            f"Future for MME: {selected_future_input_for_embedding.shape}"
+        )
         embeddings = self.multi_modal_embedding(
-            [selected_dynamic, selected_future],
+            [selected_dynamic, selected_future_input_for_embedding],
             training=training
         )
         logger.debug(
@@ -1191,7 +1235,7 @@ class SuperXTFT(XTFT):
         
         # Attention mechanisms with integrated GRNs
         hierarchical_att = self.hierarchical_attention(
-            [selected_dynamic, future_input],
+            [selected_dynamic, selected_future_input_for_embedding],
             training=training
         )
         logger.debug(
