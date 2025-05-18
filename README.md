@@ -4,18 +4,22 @@
 
 -----------------------------------------------------
 
-# Igniting Next-Generation Fusion Models
+<h1 align="center">Igniting Next-Generation Fusion Models</h1>
 
-*🔥🧪A Modular Library for Temporal Fusion Transformer (TFT) Variants & Beyond*
+<p align="center"><em>🔥🧪 A Modular Library for Temporal Fusion Transformer (TFT) Variants &amp; Beyond</em></p>
 
+
+[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=orange)](https://pypi.org/project/fusion-lab/)
+[![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/.github%2Fworkflows%2Fpython-package-conda.yml)
+[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&logo=BSD-3-Clause&color=cyan)
+![GitHub commits since latest release](https://img.shields.io/github/commits-since/earthai-tech/fusionlab/latest?color=purple)
 
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
+---
 
-[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=blue)](https://pypi.org/project/fusion-lab/)
-[![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
-[![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue)](https://www.python.org/)
-![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab-learn)
 <!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
 
 **FusionLab** provides a flexible and extensible framework in Python
@@ -78,8 +82,10 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 
 3.  **Install from Source (for Development):**
     ```bash
-    git clone [https://github.com/earthai-tech/fusionlab.git](https://github.com/earthai-tech/fusionlab.git)
-    cd fusionlab-learn
+
+    git clone [https://github.com/earthai-tech/fusionlab.git](https://github.com/earthai-tech/fusionlab-learn.git)
+    cd fusionlab
+
     pip install -e .
     # Optional: Install dev dependencies
     # pip install -e .[dev]

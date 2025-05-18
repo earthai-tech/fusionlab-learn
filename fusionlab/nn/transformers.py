@@ -2,6 +2,40 @@
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
 
+import warnings
+from fusionlab.compat.tf import HAS_TF
+
+if not HAS_TF:
+    warnings.warn(
+        "TensorFlow is not installed. 'TemporalFusionTransformer',"
+        " 'NTemporalFusionTransformer','XTFT', 'SuperXTFT',"
+        " 'TFT' require tensorflow to be available."
+    )
+
+# If TF is available, import the actual classes
+if HAS_TF:
+    from ._tft import TemporalFusionTransformer, NTemporalFusionTransformer
+    from ._adj_tft import TFT
+    from ._xtft import XTFT, SuperXTFT
+
+    __all__ = [
+        "TemporalFusionTransformer",
+        "NTemporalFusionTransformer",
+        "XTFT",
+        "SuperXTFT",
+        "TFT"
+    ]
+else:
+    # Provide stubs that do nothing if user tries to import them 
+    # but we have already warned that TF is not installed.
+    __all__ = [
+        "TemporalFusionTransformer",
+        "NTemporalFusionTransformer",
+        "XTFT",
+        "SuperXTFT",
+        "TFT"
+    ]
+
 """
 Implements the Temporal Fusion Transformer (TFT) and the extreme
 TFT (XTFT) architectures for multi-horizon time-series forecasting.
@@ -136,38 +170,3 @@ Below code provides the classes from `_tft.py`, `_adj_tft.py`,
 and `_xtft.py`. They define the above models, letting you explore
 multi-horizon forecasting with attention-based architectures.
 """
-
-import warnings
-from fusionlab.compat.tf import HAS_TF
-
-if not HAS_TF:
-    warnings.warn(
-        "TensorFlow is not installed. 'TemporalFusionTransformer',"
-        " 'NTemporalFusionTransformer','XTFT', 'SuperXTFT',"
-        " 'TFT' require tensorflow to be available."
-    )
-
-# If TF is available, import the actual classes
-if HAS_TF:
-    from ._tft import TemporalFusionTransformer, NTemporalFusionTransformer
-    from ._adj_tft import TFT
-    from ._xtft import XTFT, SuperXTFT
-
-    __all__ = [
-        "TemporalFusionTransformer",
-        "NTemporalFusionTransformer",
-        "XTFT",
-        "SuperXTFT",
-        "TFT"
-    ]
-else:
-    # Provide stubs that do nothing if user tries to import them 
-    # but we have already warned that TF is not installed.
-    __all__ = [
-        "TemporalFusionTransformer",
-        "NTemporalFusionTransformer",
-        "XTFT",
-        "SuperXTFT",
-        "TFT"
-    ]
-

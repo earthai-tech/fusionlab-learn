@@ -8,9 +8,9 @@
    :keywords: time series, forecasting, temporal fusion transformer, tft,
               xtft, machine learning, deep learning, python, tensorflow
 
-##################################################
-Fusionlab-learn: Igniting Next-Gen Fusion Models
-##################################################
+################################################################
+:code:`Fusionlab-learn`: Igniting Next-Gen Fusion Models
+################################################################
 
 .. raw:: html
 
@@ -21,13 +21,13 @@ Fusionlab-learn: Igniting Next-Gen Fusion Models
      <a href="https://fusion-lab.readthedocs.io/en/latest/?badge=latest" target="_blank" rel="noopener noreferrer">
        <img src="https://readthedocs.org/projects/fusion-lab/badge/?version=latest" alt="Documentation Status"/>
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
-       <img src="https://img.shields.io/github/license/earthai-tech/fusionlab?color=121EAF" alt="GitHub License">
+     <a href="https://github.com/earthai-tech/fusionlab-learn/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">
+       <img src="https://img.shields.io/github/license/earthai-tech/fusionlab-learn?color=121EAF" alt="GitHub License">
      </a>
      <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">
        <img src="https://img.shields.io/badge/Python-3.8%2B-121EAF" alt="Python Version">
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab-learn/actions" target="_blank" rel="noopener noreferrer">
+     <a href="https://github.com/earthai-tech/fusionlab/actions" target="_blank" rel="noopener noreferrer">
         <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab-learn/python-package-conda.yml?branch=main" alt="Build Status">
      </a>
    </p>
@@ -47,7 +47,7 @@ Fusionlab-learn: Igniting Next-Gen Fusion Models
 
     <hr style="margin-top: 1.5em; margin-bottom: 2em;">
 
-**FusionLab** provides a flexible and extensible framework built on
+**Fusionlab-learn** provides a flexible and extensible framework built on
 **TensorFlow/Keras** for advanced time-series forecasting. It centers
 on the **Temporal Fusion Transformer (TFT)** and its extensions like
 the **Extreme Temporal Fusion Transformer (XTFT)**, offering modular
@@ -120,6 +120,7 @@ temporal architectures, FusionLab aims to provide the necessary tools.
      patterns during training.
 
 
+
 .. rubric:: Explore Further
 
 * **Motivation:** Understand the :doc:`motivation` behind FusionLab.
@@ -130,8 +131,17 @@ temporal architectures, FusionLab aims to provide the necessary tools.
 
 .. raw:: html
 
-    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+    <hr style="margin-top: 1.0em; margin-bottom: 1.0em;">
 
+.. admonition:: Terminology
+
+   For brevity and consistency, the library will be referred to as ``fusionlab``
+   throughout the remainder of the documentation.
+
+.. raw:: html
+
+    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+    
 .. # --- Sidebar Navigation Structure (Hidden from main page content) ---
 .. # This builds the navigation panel on the left using Furo theme.
 .. toctree::
