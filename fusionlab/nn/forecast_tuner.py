@@ -680,7 +680,7 @@ def _model_builder_factory(
 
     return model
 
-#  ------------------Deprecated functions ---------------------------------
+# ---------------------- Deprecated functions ---------------------------------
 
 @ensure_pkg (
     'keras_tuner',
