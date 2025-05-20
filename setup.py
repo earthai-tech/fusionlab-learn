@@ -4,8 +4,8 @@ try:
     import fusionlab
     VERSION = fusionlab.__version__
 except:
-    VERSION = "0.1.1"  
-    
+    VERSION = "0.2.0" # Fallback, ensure this matches your _version.py
+
 # Package metadata
 DISTNAME = "fusionlab-learn"
 DESCRIPTION = "Next-Gen Temporal Fusion Architectures for Time-Series Forecasting"
@@ -13,7 +13,7 @@ LONG_DESCRIPTION = open('README.md', 'r', encoding='utf8').read()
 MAINTAINER = "Laurent Kouadio"
 MAINTAINER_EMAIL = 'etanoyau@gmail.com'
 URL = "https://github.com/earthai-tech/fusionlab-learn"
-LICENSE = "BSD-3-Clause"
+LICENSE = "BSD-3-Clause" # Corrected
 PROJECT_URLS = {
     "API Documentation": "https://fusion-lab.readthedocs.io/en/latest/api.html",
     "Home page": "https://fusion-lab.readthedocs.io",
@@ -23,26 +23,47 @@ PROJECT_URLS = {
 }
 KEYWORDS = "time-series forecasting, machine learning, temporal fusion, deep learning"
 
-# Ensure dependencies are installed
+# Core dependencies
 _required_dependencies = [
-    "numpy<2",
+    "numpy<2", # Specify version constraints if necessary
     "pandas",
     "scipy",
     "matplotlib",
     "tqdm",
     "scikit-learn",
-    "statsmodels", 
-    # "torch",  # PyTorch is a core dependency in next realease
-    "tensorflow",  
-    # "jax",  # If using JAX for some operations
-    "seaborn", 
-    "joblib"
+    "statsmodels",
+    "tensorflow>=2.10", # Example: specify a minimum TF version
+    "joblib",
+    "pyyaml"
 ]
+
+# Optional dependencies
+_extras_require = {
+    "dev": [
+        "pytest",
+        "sphinx",
+        "flake8",
+        # Add other dev tools like black, isort, mypy if used
+    ],
+    "kdiagram": [ # New extra for kdiagram
+        "k-diagram>=0.1.0", # Specify a version if needed
+    ],
+    "full": [ # Convenience extra to install all optional deps
+        "k-diagram>=0.1.0",
+    ]
+}
+# Add "full" to include all optional dependencies by default if desired
+# or keep them separate. For now, let's make "full" install kdiagram.
+_extras_require["full"] = list(
+    set(dep for group in _extras_require.values() for dep in group)
+    )
+
 
 # Package data specification
 PACKAGE_DATA = {
     'fusionlab': [
-        # 'data/*.json', 
+        'datasets/data/*.csv', # Ensure your sample CSVs are included
+        # 'data/*.json',
         # 'assets/*.txt'
     ],
 }
@@ -52,16 +73,10 @@ setup_kwargs = {
             'fusionlab=fusionlab.cli:main',
         ]
     },
-    'packages': find_packages(),
+    'packages': find_packages(exclude=['docs', 'tests', 'examples']), # Exclude top-level test/docs
     'install_requires': _required_dependencies,
-    'extras_require': {
-        "dev": [
-            "pytest",
-            "sphinx",
-            "flake8",
-        ]
-    },
-    'python_requires': '>=3.9',
+    'extras_require': _extras_require, # Use the new extras
+    'python_requires': '>=3.9', # Consistent with your previous setup
 }
 
 setup(
@@ -88,9 +103,6 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Operating System :: OS Independent",
-        "Operating System :: Microsoft :: Windows",
-        "Operating System :: POSIX",
-        "Operating System :: Unix",
     ],
     keywords=KEYWORDS,
     package_data=PACKAGE_DATA,

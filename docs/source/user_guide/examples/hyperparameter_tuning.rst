@@ -43,7 +43,7 @@ science libraries. Set up an output directory for tuner results.
 
    from fusionlab.nn.transformers import XTFT # Model to tune
    from fusionlab.nn.forecast_tuner import xtft_tuner # Tuner function
-   from fusionlab.utils.ts_utils import reshape_xtft_data # Data prep
+   from fusionlab.nn.utils import reshape_xtft_data # Data prep
    from fusionlab.nn.losses import combined_quantile_loss # For context
 
    # Suppress warnings and TF logs for cleaner output

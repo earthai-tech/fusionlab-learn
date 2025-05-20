@@ -49,7 +49,8 @@ We will:
    import warnings
    warnings.filterwarnings('ignore')
    tf.get_logger().setLevel('ERROR')
-   tf.autograph.set_verbosity(0)
+   if hasattr(tf, 'autograph'): # Check if autograph is available
+       tf.autograph.set_verbosity(0)
 
    # 1. Generate Synthetic Data (same as basic example)
    # --------------------------------------------------
@@ -73,7 +74,6 @@ We will:
 
    # Reshape targets for Keras: (Samples, Horizon, OutputDim=1)
    targets = targets.reshape(-1, forecast_horizon, 1).astype(np.float32)
-   # Ensure sequences are float32 as well
    sequences = sequences.astype(np.float32)
 
    print(f"\nInput sequences shape (X): {sequences.shape}")
@@ -81,17 +81,19 @@ We will:
 
    # 3. Define Flexible TFT Model for Quantile Forecast
    # --------------------------------------------------
-   quantiles_to_predict = [0.1, 0.5, 0.9] # 10th, 50th (Median), 90th
+   quantiles_to_predict = [0.1, 0.5, 0.9]
 
-   model_flex = TemporalFusionTransformer( # Using the flexible model
-       dynamic_input_dim=sequences.shape[-1], # Only dynamic needed
+   model_flex = TemporalFusionTransformer(
+       dynamic_input_dim=sequences.shape[-1],
        static_input_dim=None, # Explicitly None
        future_input_dim=None, # Explicitly None
        forecast_horizon=forecast_horizon,
+       output_dim=1, # Predicting a single target variable
        hidden_units=16,
        num_heads=2,
-       quantiles=quantiles_to_predict # Provide the list of quantiles
+       quantiles=quantiles_to_predict
    )
+   print("\nFlexible TFT for quantiles instantiated.")
 
    # 4. Compile the Model with Quantile Loss
    # ---------------------------------------
@@ -101,57 +103,84 @@ We will:
 
    # 5. Train the Model
    # ------------------
-   # Input is list with only dynamic sequences
-   train_inputs = [sequences]
+   # Input is list [Static, Dynamic, Future]
+   train_inputs = [None, sequences, None] # Corrected order
 
-   print("Starting flexible TFT training (few epochs)...")
+   print("\nStarting flexible TFT training (few epochs)...")
    history = model_flex.fit(
-       train_inputs,
-       targets, # Shape (Samples, Horizon, 1)
+       train_inputs, # Pass the 3-element list
+       targets,
        epochs=5,
        batch_size=32,
        validation_split=0.2,
        verbose=0
    )
    print("Training finished.")
+   print(f"Final validation loss: {history.history['val_loss'][-1]:.4f}")
 
    # 6. Make Predictions (Quantiles)
    # -------------------------------
    val_start_index = int(len(sequences) * (1 - 0.2))
    sample_input_dynamic = np.expand_dims(sequences[val_start_index], axis=0)
-   sample_input = [sample_input_dynamic]
+   # Corrected input format for prediction
+   sample_input = [None, sample_input_dynamic, None]
 
    print("\nMaking quantile predictions (flexible TFT)...")
    predictions_quantiles = model_flex.predict(sample_input, verbose=0)
    print("Prediction output shape:", predictions_quantiles.shape)
    # Expected: (Batch, Horizon, NumQuantiles) -> (1, 5, 3)
+   print("Sample Predictions (Quantiles 0.1, 0.5, 0.9 for first step):")
+   print(f"  Step 1: {predictions_quantiles[0, 0, :]}")
 
-   # 7. Visualize Quantile Forecast (code omitted for brevity, same as before)
-   # ... (Plotting code using 'targets' and 'predictions_quantiles') ...
-   print("Visualization would show prediction intervals.")
+
+   # 7. Visualize Quantile Forecast
+   # ------------------------------
+   print("\nPreparing data for visualization...")
+   val_dynamic_inputs = sequences[val_start_index:]
+   val_actuals_for_plot = targets[val_start_index:]
+
+   # Prepare validation inputs in the correct list format
+   val_inputs_list_for_plot = [None, val_dynamic_inputs, None]
+   val_predictions = model_flex.predict(val_inputs_list_for_plot, verbose=0)
+
+   sample_to_plot = 0 # Plot the first sample from the validation predictions
+   actual_vals = val_actuals_for_plot[sample_to_plot, :, 0]
+   pred_quantiles = val_predictions[sample_to_plot, :, :]
+
+   start_time_index = val_start_index + sequence_length + sample_to_plot
+   pred_time = time[start_time_index : start_time_index + forecast_horizon]
+
+   plt.figure(figsize=(12, 6))
+   plt.plot(pred_time, actual_vals, label='Actual Value', marker='o', linestyle='--')
+   plt.plot(pred_time, pred_quantiles[:, 1], label='Predicted Median (q=0.5)', marker='x')
+   plt.fill_between(
+       pred_time,
+       pred_quantiles[:, 0], # Lower quantile (q=0.1)
+       pred_quantiles[:, 2], # Upper quantile (q=0.9)
+       color='gray', alpha=0.3, label='Prediction Interval (q=0.1 to q=0.9)'
+   )
+   plt.title(f'Flexible TFT Quantile Forecast (Validation Sample {sample_to_plot})')
+   plt.xlabel('Time'); plt.ylabel('Value'); plt.legend(); plt.grid(True)
+   # plt.show()
+   print("Plot generated.")
 
 
 .. topic:: Explanations (Flexible TemporalFusionTransformer)
 
-   1.  **Imports & Data:** Standard setup using the flexible
-       :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`.
-   2.  **Sequence Preparation:** :func:`~fusionlab.nn.utils.create_sequences`
-       is used with ``forecast_horizon=5`` to get multi-step targets.
-       Targets are reshaped to `(Samples, Horizon, 1)`.
-   3.  **Model Definition:** The flexible `TemporalFusionTransformer` is
-       instantiated. Only ``dynamic_input_dim`` is required. Crucially,
-       the ``quantiles`` parameter is set to the list `[0.1, 0.5, 0.9]`.
-   4.  **Model Compilation:** The model is compiled using the loss function
-       returned by :func:`~fusionlab.nn.losses.combined_quantile_loss`,
-       passing the same list of quantiles.
-   5.  **Training:** The model is trained using `.fit`. The input `X` is
-       provided as a single-element list `[sequences]` because only
-       dynamic inputs were configured.
-   6.  **Prediction:** `.predict` returns an output shape corresponding to
-       `(Batch, Horizon, NumQuantiles)`.
-   7.  **Visualization:** Shows the median prediction and the uncertainty
-       interval derived from the lower and upper quantiles against the
-       actual values.
+   1.  **Imports & Data:** Standard setup.
+   2.  **Sequence Preparation:** Targets are multi-step and reshaped to
+       `(Samples, Horizon, OutputDim)`.
+   3.  **Model Definition:** ``TemporalFusionTransformer`` is instantiated
+       with ``static_input_dim=None``, ``future_input_dim=None``,
+       and the ``quantiles`` parameter is set. ``output_dim=1`` is specified.
+   4.  **Model Compilation:** Uses
+       :func:`~fusionlab.nn.losses.combined_quantile_loss`.
+   5.  **Model Training:**
+       * **Input Format:** Input `X` is passed as ``[None, sequences, None]``
+         to match the `[static, dynamic, future]` order, with ``None``
+         for unused inputs.
+   6.  **Prediction:** Output shape is `(Batch, Horizon, NumQuantiles)`.
+   7.  **Visualization:** Shows median and prediction intervals.
 
 
 .. raw:: html

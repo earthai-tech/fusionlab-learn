@@ -6,14 +6,17 @@
 Provides common helper functions and for validation, 
 comparison, and other generic operations
 """
+import os
 import re
 import warnings
 import inspect
 
+import matplotlib.pyplot as plt
+from datetime import datetime
 from typing import ( 
     Union, Optional, 
     Dict, Any, List,
-    Literal
+    Literal, Tuple
 )
 import numpy as np 
 import pandas as pd 
@@ -21,7 +24,8 @@ import pandas as pd
 __all__ =['verify_identical_items', 'vlog', 'detect_dt_format',
           'get_actual_column_name', 'transform_contributions', 
           'exclude_duplicate_kwargs', 'reorder_columns',
-          'find_id_column', 'check_group_column_validity']
+          'find_id_column', 'check_group_column_validity', 
+          'save_all_figures']
 
 def check_group_column_validity(
     df: pd.DataFrame,
@@ -1587,3 +1591,242 @@ def reorder_columns(
 
     # Return the DataFrame with the new column order
     return df[new_order]
+
+
+def map_scales_choice(
+    scales_choice_str: str
+) -> Optional[List[int]]:
+    """
+    Maps a string choice for scales to an actual list of scale values 
+    or None if no scales are provided.
+
+    This function interprets specific string inputs and converts them 
+    to corresponding lists of integers. If no matching string is found, 
+    it returns None as a default fallback.
+
+    Parameters
+    ----------
+    scales_choice_str : str
+        A string representing the choice of scale. It can be one of 
+        'default_scales', 'alt_scales', or 'no_scales'.
+
+    Returns
+    -------
+    Optional[List[int]]
+        A list of integers corresponding to the chosen scales, or None 
+        if no scales are provided.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import map_scales_choice
+    >>> map_scales_choice('default_scales')
+    [1, 3, 7]
+    
+    >>> map_scales_choice('alt_scales')
+    [1, 5, 10]
+    
+    >>> map_scales_choice('no_scales')
+    None
+
+    >>> map_scales_choice('unknown_scales')
+    None
+    """
+    if not isinstance(scales_choice_str, str):
+        raise ValueError("scales_choice_str must be a string.")
+    
+    if scales_choice_str == 'default_scales':
+        return [1, 3, 7]
+    elif scales_choice_str == 'alt_scales':
+        return [1, 5, 10]
+    elif scales_choice_str == 'no_scales':
+        return None
+    return None  # Default fallback for unrecognized inputs
+
+
+def cast_hp_to_bool(
+    params: Dict[str, Any],
+    param_name: str,
+    default_value: bool = False  
+) -> None:
+    """
+    Casts a hyperparameter value in the `params` dictionary to a boolean.
+
+    The function ensures that hyperparameters that are supposed to be 
+    booleans are correctly cast to Python booleans. This is particularly 
+    useful in cases where Keras Tuner or other libraries might return 
+    0 or 1 as the value for boolean choices.
+
+    Parameters
+    ----------
+    params : Dict[str, Any]
+        A dictionary of hyperparameters to be validated and updated in place.
+    
+    param_name : str
+        The key of the hyperparameter to be checked and casted to boolean.
+    
+    default_value : bool, optional
+        The default value to assign if the parameter is not found or 
+        has an invalid value. The default is False.
+
+    Returns
+    -------
+    None
+        This function modifies the `params` dictionary in-place.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import cast_hp_to_bool
+    >>> params = {'use_batch_norm': 1}
+    >>> cast_hp_to_bool(params, 'use_batch_norm', default_value=False)
+    >>> print(params['use_batch_norm'])
+    True
+    
+    >>> params = {'use_residuals': 0}
+    >>> cast_hp_to_bool(params, 'use_residuals', default_value=True)
+    >>> print(params['use_residuals'])
+    False
+    
+    >>> params = {'use_dropout': 'yes'}
+    >>> cast_hp_to_bool(params, 'use_dropout', default_value=False)
+    >>> print(params['use_dropout'])
+    False
+    """
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary.")
+    
+    if param_name in params:
+        value = params[param_name]
+        if isinstance(value, (int, float)):  # Handles 0, 1, 0.0, 1.0
+            params[param_name] = bool(value)
+        elif not isinstance(value, bool):
+            # Warn if the value is not a valid boolean type (int, float, bool)
+            warnings.warn(
+                f"Hyperparameter '{param_name}' received unexpected value "
+                f"'{value}' (type: {type(value)}). Expected bool or 0/1. "
+                f"Defaulting to {default_value}. Please check param_space definition."
+            )
+            params[param_name] = default_value
+
+def cast_multiple_bool_params(
+    params: Dict[str, Any],
+    bool_params_to_cast: List[Tuple[str, bool]]
+) -> None:
+    """
+    Casts a list of boolean hyperparameters to ensure they are Python booleans.
+
+    This function iterates over a list of parameter names and default values,
+    ensuring that each parameter is properly cast to a boolean type. If a 
+    parameter does not exist or has an invalid value, it is set to the 
+    provided default.
+
+    Parameters
+    ----------
+    params : Dict[str, Any]
+        A dictionary of hyperparameters to be validated and updated in place.
+    
+    bool_params_to_cast : List[Tuple[str, bool]]
+        A list of tuples where each tuple consists of a hyperparameter name 
+        and its default boolean value. The function will cast the corresponding
+        parameter to a boolean.
+
+    Returns
+    -------
+    None
+        This function modifies the `params` dictionary in-place.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import cast_multiple_bool_params
+    >>> params = {'use_batch_norm': 1, 'use_residuals': 0}
+    >>> cast_multiple_bool_params(params, [('use_batch_norm', False), ('use_residuals', True)])
+    >>> print(params)
+    {'use_batch_norm': True, 'use_residuals': False}
+    """
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary.")
+    
+    if not isinstance(bool_params_to_cast, list):
+        raise ValueError("bool_params_to_cast must be a list of tuples.")
+    
+    for param_name, default_value in bool_params_to_cast:
+        cast_hp_to_bool(params, param_name, default_value)
+
+def save_all_figures(
+    output_dir: str = "figures",
+    prefix: str = "figure",
+    formats: Union[List[str], tuple] = ("png",),
+    close: bool = True,
+    dpi: Union[int, None] = 150,
+    transparent: bool = False,
+    timestamp: bool = True,
+    verbose: bool = True
+) -> List[str]:
+    """
+    Save all currently open Matplotlib figures to disk in specified formats.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory where figures will be saved. Created if not exists.
+    prefix : str
+        Filename prefix for each figure.
+    formats : list or tuple of str
+        File formats/extensions to use (e.g., ('png','pdf')).
+    close : bool
+        Whether to close each figure after saving. Default is True.
+    dpi : int or None
+        Resolution in dots per inch. None uses Matplotlib default.
+    transparent : bool
+        Whether to save figures with transparent background.
+    timestamp : bool
+        Append current timestamp (YYYYmmddTHHMMSS) to filenames.
+    verbose : bool
+        Print progress messages.
+
+    Returns
+    -------
+    List[str]
+        List of saved file paths.
+
+    Examples
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> plt.figure(); plt.plot([1, 2, 3])
+    >>> from fusionlab.utils.generic_utils import save_all_figures
+    >>> paths = save_all_figures(output_dir="plots", formats=("png",))
+    >>> print(paths)
+    ['plots/figure_1_20250521T153045.png']
+    """
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    saved_paths = []
+    fig_nums = plt.get_fignums()
+    
+    for num in fig_nums:
+        fig = plt.figure(num)
+        # Build base filename
+        name_parts = [prefix, str(num)]
+        if timestamp:
+            name_parts.append(datetime.now().strftime("%Y%m%dT%H%M%S"))
+        base_name = "_".join(name_parts)
+        
+        # Save in each requested format
+        for ext in formats:
+            filename = f"{base_name}.{ext.lstrip('.')}"
+            path = os.path.join(output_dir, filename)
+            try:
+                fig.savefig(path, dpi=dpi, transparent=transparent)
+                saved_paths.append(path)
+                if verbose:
+                    print(f"Saved Figure {num} as: {path}")
+            except Exception as e:
+                if verbose:
+                    print(f"ERROR saving Figure {num} to {path}: {e}")
+        
+        if close:
+            plt.close(fig)
+    
+    return saved_paths
+
+

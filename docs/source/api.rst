@@ -30,7 +30,7 @@ Core implementations of the Temporal Fusion Transformer and its variants.
    ~fusionlab.nn.transformers.TemporalFusionTransformer
    ~fusionlab.nn.transformers.TFT
    ~fusionlab.nn.transformers.XTFT
-   ~fusionlab.nn.transformers.NTemporalFusionTransformer
+   ~fusionlab.nn.transformers.DummyTFT
    ~fusionlab.nn.transformers.SuperXTFT
 
 

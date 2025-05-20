@@ -1798,8 +1798,8 @@ class StaticEnrichmentLayer(Layer, NNLearner):
     @tf_autograph.experimental.do_not_convert
     def call(
             self,
-            static_context_vector,
             temporal_features,
+            context_vector,
             training=False
     ):
         r"""
@@ -1835,7 +1835,7 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         # Expand the static context to align
         # with temporal features along T
         static_context_expanded = tf_expand_dims(
-            static_context_vector,
+            context_vector,
             axis=1
         )
 

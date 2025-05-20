@@ -51,7 +51,6 @@ if KERAS_BACKEND:
     tf_float32=KERAS_DEPS.float32
     tf_constant=KERAS_DEPS.constant 
     tf_square=KERAS_DEPS.square 
-    tf_autograph=KERAS_DEPS.autograph
     tf_GradientTape=KERAS_DEPS.GradientTape
     tf_unstack =KERAS_DEPS.unstack
     tf_errors=KERAS_DEPS.errors 
@@ -60,6 +59,7 @@ if KERAS_BACKEND:
     tf_zeros_like=KERAS_DEPS.zeros_like
     tf_squeeze = KERAS_DEPS.squeeze
     
+    tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
     from ..compat.tf import optional_tf_function 
@@ -163,8 +163,8 @@ class XTFT(Model, NNLearner):
             None
         ],
         "scales": ['array-like', StrOptions({"auto"}),  None],
-        "use_batch_norm": [bool],
-        "use_residuals": [bool],
+        "use_batch_norm": [bool,  Interval(Integral, 0, 1, closed="both")],
+        "use_residuals": [bool, Interval(Integral, 0, 1, closed="both")],
         "final_agg": [StrOptions({"last", "average",  "flatten"})],
         "anomaly_detection_strategy": [
             StrOptions({"prediction_based", "feature_based", "from_config"}), 
