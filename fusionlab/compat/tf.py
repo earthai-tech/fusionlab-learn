@@ -8,13 +8,14 @@ standalone Keras. It includes functions and classes for dynamically importing
 Keras dependencies and checking the availability of TensorFlow or Keras.
 """
 import os
+import re
 import logging
 import warnings 
 import importlib
 import numpy as np 
 from functools import wraps
 from contextlib import contextmanager 
-from typing import Callable 
+from typing import Callable, Optional, Any
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # 0 = all messages are logged (default)
@@ -462,6 +463,70 @@ def check_keras_backend(
             elif error == 'raise':
                 raise ImportError(message) from e
             return None
+
+def tf_debugging_assert_equal(
+    x: Any,
+    y: Any,
+    msg_fmt: str,
+    *args,
+    summarize: Optional[int] = None
+) -> Any:
+    """
+    Wrapper for tf.debugging.assert_equal that supports
+    both percent-style and {}-style formatting in
+    graph/eager modes, with Python fallback.
+    """
+    # Fallback when TensorFlow is not available
+    if not HAS_TF:
+        # Static message formatting
+        if '%' in msg_fmt:
+            message = msg_fmt % args
+        else:
+            curly_fmt = re.sub(r'%[ds]', '{}', msg_fmt)
+            message   = curly_fmt.format(*args)
+
+        # Compare arrays or scalars via numpy
+        try:
+            equal = np.array_equal(x, y)
+        except Exception:
+            equal = x == y
+
+        if not equal:
+            raise AssertionError(message)
+        return None
+
+    # TensorFlow available: import debugging ops
+    import tensorflow as tf
+    # from tensorflow.python.ops import debugging_ops
+
+    # Detect if any arg is a TF tensor for dynamic formatting
+    use_tf_fmt = any(isinstance(a, tf.Tensor) for a in args)
+
+    # Static formatting when no TF tensors present
+    if '%' in msg_fmt and not use_tf_fmt:
+        message = msg_fmt % args
+    else:
+        # Convert %d/%s placeholders to {} for tf.strings.format()
+        curly_fmt = re.sub(r'%[ds]', '{}', msg_fmt)
+        fmt_args  = []
+        for a in args:
+            if isinstance(a, tf.Tensor):
+                fmt_args.append(tf.strings.as_string(a))
+            else:
+                fmt_args.append(
+                    tf.constant(str(a), dtype=tf.string)
+                )
+        # Build dynamic message tensor
+        message = tf.strings.format(curly_fmt, tuple(fmt_args))
+
+    # Execute the TensorFlow assertion
+    return tf.debugging.assert_equal(
+        x,
+        y,
+        message   = message,
+        summarize = summarize
+    )
+
 
 def standalone_keras(module_name):
     """

@@ -5,7 +5,11 @@
 import warnings
 from typing import List, Tuple, Optional, Union, Dict, Any
 from ..utils.deps_utils import ensure_pkg 
-from ..compat.tf import optional_tf_function, suppress_tf_warnings
+from ..compat.tf import ( 
+    optional_tf_function, 
+    suppress_tf_warnings, 
+    tf_debugging_assert_equal
+)
 from ..compat.tf import TFConfig, HAS_TF  
 from . import KERAS_DEPS, KERAS_BACKEND
 
@@ -32,9 +36,10 @@ if KERAS_BACKEND:
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     tf_expand_dims=KERAS_DEPS.expand_dims
     tf_control_dependencies=KERAS_DEPS.control_dependencies
+    tf_get_static_value = KERAS_DEPS.get_static_value
     
     if hasattr(tf_autograph, 'set_verbosity'):
-        tf_autograph.set_verbosity(0) # Suppress Autograph warnings
+        tf_autograph.set_verbosity(0) 
     
 else: 
    # Warn the user that TensorFlow
@@ -45,7 +50,7 @@ else:
         ImportWarning
     )
 
-    class Tensor: pass # Dummy
+    class Tensor: pass 
     def tf_shape(t): return np.array(t.shape)
     def tf_concat(t, axis): return np.concatenate(t, axis=axis)
     def tf_expand_dims(t, axis): return np.expand_dims(t, axis=axis)
@@ -54,38 +59,17 @@ else:
     class tf_debugging:
         @staticmethod
         def assert_greater_equal(a,b,message): assert a >= b, message
-    # Define fallbacks if Keras backend is not available
-    # This is mainly for type hinting and basic script parsing.
-    # Actual TensorFlow operations would fail if KERAS_BACKEND is False.
 
     tf_float32 = np.float32
     tf_int32 = np.int32
     def tf_convert_to_tensor(x, dtype=None): return np.array(x, dtype=dtype)
     def tf_cast(x, dtype): return x.astype(dtype)
     def tf_equal(x, y): return np.equal(x, y)
-    # class tf_debugging_mock:
-    #     @staticmethod
-    #     def assert_equal(x, y, message="", summarize=None):
-    #         if not np.array_equal(x, y): raise ValueError(message)
-    #     @staticmethod
-    #     def assert_greater_equal(x, y, message="", summarize=None):
-    #         if not np.all(x >= y): raise ValueError(message)
-    # tf_debugging = tf_debugging_mock
+
     def tf_rank(x): return np.ndim(x)
     def tf_less(x,y): return np.less(x,y)
 
-    # # For standalone use, ensure tf_is imported
-    # if not hasattr(tf_ 'Tensor'): # Basic check if tf_ops are available
-    #     Tensor = np.ndarray
-    #     tf_shape = lambda t: np.array(t.shape)
-    #     tf_concat = lambda t, axis: np.concatenate(t, axis=axis)
-    #     tf_expand_dims = lambda t, axis: np.expand_dims(t, axis=axis)
-    #     tf_pad = lambda tensor, paddings, mode="CONSTANT", constant_values=0: I am running a few minutes late; my previous meeting is running over.
-    #         np.pad(tensor, paddings, mode=mode.lower() if mode else "constant", constant_values=constant_values)
-    #     class tf_debugging:
-    #         @staticmethod
-    #         def assert_greater_equal(a,b,message): assert a >= b, str(message)
-    
+
 if HAS_TF:
     config = TFConfig()
     # Enable compatibility mode for ndim
@@ -646,40 +630,6 @@ def validate_tft_inputs(
     return past_inputs, future_inputs, static_inputs
 
 
-def _get_batch_size_for_validation(
-    t: Union[np.ndarray, Tensor],
-    verbose: int = 0  # Verbosity for this helper
-    ) -> Tensor: # Always returns a 0-D Tensor
-    """
-    Return the first-dimension batch size as a TensorFlow tensor.
-    Uses tf.shape for graph compatibility.
-    """
-    # Ensure input is a tensor for tf.shape.
-    if not isinstance(t, Tensor): # Check against base tf.Tensor
-        t_tensor = tf_convert_to_tensor(t)
-    else:
-        t_tensor = t
-
-    # Check rank before accessing shape element.
-    rank = tf_rank(t_tensor)
-    # tf.Assert is graph-compatible.
-    tf_debugging.assert_greater_equal(
-        rank, tf_constant(1, dtype=rank.dtype), # Must be at least 1D
-        # message="Input tensor to _get_batch_size must be at least 1D.",
-        # data=[rank], # Pass tensor for dynamic message formatting
-        message=(
-           "Input tensor to _get_batch_size must be at least 1D. "
-           f"Input tensor rank: {rank}."
-         ),
-        summarize=1  # Summarize tensor value in error
-        )
-
-    batch_s = tf_shape(t_tensor)[0]
-    if verbose >= 7: # Very detailed debug for this helper
-        print(f"    _get_batch_size: input shape "
-              f"{getattr(t_tensor, 'shape', 'N/A')}, "
-              f"determined batch size: {batch_s}")
-    return batch_s
 
 @optional_tf_function
 def validate_xtft_inputs(
@@ -1927,21 +1877,21 @@ def validate_minimal_inputs_in(
     
     Parameters
     ----------
-    `X_static`       : np.ndarray or Tensor
+    X_static       : np.ndarray or Tensor
         The static feature input, expected to have shape (``B``, ``N_s``).
-    `X_dynamic`      : np.ndarray or Tensor
+    X_dynamic      : np.ndarray or Tensor
         The dynamic feature input, expected to have shape (``B``, ``F``, 
         ``N_d``).
-    `X_future`       : np.ndarray or Tensor
+    X_future       : np.ndarray or Tensor
         The future feature input, expected to have shape (``B``, ``F``, 
         ``N_f``).
-    `y`              : np.ndarray or Tensor, optional
+    y              : np.ndarray or Tensor, optional
         The target output, expected to have shape (``B``, ``F``, ``O``).
-    `forecast_horizon`: int, optional
+    forecast_horizon: int, optional
         The expected forecast horizon (``F``). If provided and it differs 
         from the input data, a warning is issued and the input forecast 
         horizon is used.
-    `deep_check`     : bool, optional
+    deep_check     : bool, optional
         If True, perform full consistency checks on batch sizes and forecast 
         horizons. Default is True.
     
@@ -2255,10 +2205,639 @@ def combine_temporal_inputs_for_lstm(
         )
     # Shape: (Batch, T_past, DynamicFeatures + FutureFeatures)
     # Note: Assuming dynamic/future selected features have same HiddenUnits dim
-
     # Comment: Combined dynamic past and known future features for LSTM window.
 
     return combined_lstm_input
 
 
+def _get_batch_size_for_val( 
+    t: Union[np.ndarray, Tensor],
+    verbose: int = 0
+    ) -> Tensor:
+    """Return batch size as a TF tensor, preferring static."""
+    if not isinstance(t, Tensor):
+        t_tensor = tf_convert_to_tensor(t)
+    else:
+        t_tensor = t
+    rank = tf_rank(t_tensor)
+    # Assert tensor is at least 1D to have a batch dimension.
+    tf_debugging.assert_greater_equal(
+        rank, tf_constant(1, dtype=rank.dtype),
+        message=(
+        "Input to _get_batch_size_for_val must have rank ≥ 1: "
+        f"got rank {rank}."
+        ),
+        summarize=1
+    )
+    batch_s = tf_shape(t_tensor)[0]
+    if verbose >= 7: # Very detailed debug
+        print(f"    _get_batch_size_for_val: input "
+              f"{getattr(t_tensor, 'shape', 'N/A')}, got {batch_s}")
+    return batch_s
+
+@optional_tf_function
+def _validate_tensor_basic(
+    data_input: Optional[Union[np.ndarray, Tensor]],
+    name: str,
+    expected_rank_int: int,
+    expected_feat_dim: Optional[int],
+    mode: str, # 'strict' or 'soft'
+    error: str,
+    verbose: int
+) -> Optional[Tensor]:
+    """
+    Basic validation: type, rank, and optionally feature dimension.
+    Returns processed tensor or None.
+    """
+    if data_input is None:
+        # If input is None, check if its dimension was specified as required.
+        if expected_feat_dim is not None and mode == 'strict' \
+                and error == "raise":
+            # This implies a mismatch between model config and provided data.
+            raise ValueError(
+                f"{name} input is None but its dimension "
+                f"({expected_feat_dim}) was specified as required "
+                "for the model in 'strict' mode."
+            )
+        if verbose >= 5: print(f"      {name} is None, skipping checks.")
+        return None # Keep None if optional and not provided
+
+    # Convert to TensorFlow tensor and ensure float32 type.
+    if not isinstance(data_input, Tensor): # tf.Tensor or KerasTensor
+        try:
+            data_input = tf_convert_to_tensor(
+                data_input, dtype=tf_float32
+                )
+        except Exception as e:
+            raise TypeError(
+                f"Failed to convert {name} input to tensor: {e}"
+                ) from e
+    elif data_input.dtype != tf_float32:
+        data_input = tf_cast(data_input, tf_float32)
+
+    # Check rank using TensorFlow operations for graph safety.
+    current_rank_tensor = tf_rank(data_input)
+    expected_rank_tensor = tf_constant(
+        expected_rank_int, dtype=current_rank_tensor.dtype
+        )
+    # Graph-compatible assertion for rank.
+    # Graph-compatible assertion for rank.
+    tf_debugging_assert_equal(
+        current_rank_tensor,
+        expected_rank_tensor,
+        "%s input must be %dD, but got rank %d for input shape %s.",
+        name,
+        expected_rank_int,
+        current_rank_tensor,
+        tf_shape(data_input),
+        summarize=3  # Show more shape details in the error.
+    )
+    
+    # Check feature dimension if in 'strict' mode or if
+    # expected_feat_dim was explicitly provided.
+    if (
+        mode == 'strict'
+        or expected_feat_dim is not None
+    ) and expected_feat_dim is not None:
+    
+        # Extract the actual feature dimension
+        actual_feat_dim_tensor = tf_shape(data_input)[-1]
+        expected_feat_dim_tensor = tf_constant(
+            expected_feat_dim,
+            dtype=actual_feat_dim_tensor.dtype
+        )
+    
+        tf_debugging_assert_equal(
+            actual_feat_dim_tensor,
+            expected_feat_dim_tensor,
+            "%s input last dimension mismatch: expected %d, got %d "
+            "for input shape %s.",
+            name,
+            expected_feat_dim,
+            actual_feat_dim_tensor,
+            tf_shape(data_input),
+            summarize=3  # Show more tensor details in the error.
+        )
+    
+    if verbose >= 5:
+        print(
+            f"      {name} validated. "
+            f"Shape: {data_input.shape}"
+        )
+
+
+    return data_input
+
+
+def _get_batch_size_for_validation(
+    t: Union[np.ndarray, Tensor],
+    verbose: int = 0  # Verbosity for this helper
+    ) -> Tensor: # Always returns a 0-D Tensor
+    """
+    Return the first-dimension batch size as a TensorFlow tensor.
+    Uses tf.shape for graph compatibility.
+    """
+    # Ensure input is a tensor for tf.shape.
+    if not isinstance(t, Tensor): # Check against base tf.Tensor
+        t_tensor = tf_convert_to_tensor(t)
+    else:
+        t_tensor = t
+
+    # Check rank before accessing shape element.
+    rank = tf_rank(t_tensor)
+    # tf.Assert is graph-compatible.
+    tf_debugging.assert_greater_equal(
+        rank, tf_constant(1, dtype=rank.dtype), # Must be at least 1D
+        # message="Input tensor to _get_batch_size must be at least 1D.",
+        # data=[rank], # Pass tensor for dynamic message formatting
+        message=(
+           "Input tensor to _get_batch_size must be at least 1D. "
+           f"Input tensor rank: {rank}."
+         ),
+        summarize=1  # Summarize tensor value in error
+        )
+
+    batch_s = tf_shape(t_tensor)[0]
+    if verbose >= 7: # Very detailed debug for this helper
+        print(f"    _get_batch_size: input shape "
+              f"{getattr(t_tensor, 'shape', 'N/A')}, "
+              f"determined batch size: {batch_s}")
+    return batch_s
+
+# @optional_tf_function
+def _validate_tft_flexible_inputs_soft_mode(
+    inputs_raw: Union[Tensor, np.ndarray, List[Optional[Union[Tensor, np.ndarray]]]],
+    verbose: int = 0
+) -> Tuple[Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
+    """
+    Helper to infer static, dynamic, and future inputs for
+    TFTFlexible in 'soft' mode.
+    """
+    if verbose >= 4:
+        print("  Enter `_validate_tft_flexible_inputs_soft_mode`...")
+
+    static_p, dynamic_p, future_p = None, None, None
+
+    # Ensure inputs_raw is a list for consistent processing.
+    if not isinstance(inputs_raw, (list, tuple)):
+        # Single tensor provided.
+        inputs_list = [inputs_raw]
+    else:
+        inputs_list = list(inputs_raw)
+
+    num_provided_inputs = len(inputs_list)
+
+    if verbose >= 5:
+        print(f"    Flexible helper received {num_provided_inputs} input(s).")
+
+    if num_provided_inputs == 1:
+        # Single input: Assume it's dynamic.
+        # Static and future will be None.
+        # Basic rank check: dynamic should be 3D.
+        inp0 = inputs_list[0]
+        if inp0 is not None:
+            rank0 = tf_rank(tf_convert_to_tensor(inp0))
+            # Graph-compatible assertion for single input dimension in soft mode.
+            tf_debugging.assert_equal(
+                rank0,
+                tf_constant(3, dtype=rank0.dtype),
+                message=(
+                    "Single input to tft_flex (soft mode)"
+                    " must be 3D (dynamic): expected rank 3,"
+                    f" got {rank0} for input shape {tf_shape(inp0)}."
+                ),
+                # Removed unsupported `data` kwarg; details are now in the message.
+                summarize=3  # Show tensor details in the error.
+            )
+            dynamic_p = inp0
+        if verbose >= 5:
+            print("    Mode: Single input -> Dynamic.")
+
+    elif num_provided_inputs == 2:
+        # Two inputs: [dynamic, static] or [dynamic, future].
+        # Infer based on ranks (Static=2D, Dynamic/Future=3D).
+        inp0, inp1 = inputs_list[0], inputs_list[1]
+        rank0 = tf_rank(tf_convert_to_tensor(inp0)) if inp0 is not None else -1
+        rank1 = tf_rank(tf_convert_to_tensor(inp1)) if inp1 is not None else -1
+
+        # Convert ranks to Python int for easier logic here,
+        # as these are structural checks before deep validation.
+        # This is safe as tf.rank on a defined tensor is a 0-D tensor.
+        try:
+            py_rank0 = rank0.numpy() if hasattr(rank0, 'numpy') else int(rank0)
+            py_rank1 = rank1.numpy() if hasattr(rank1, 'numpy') else int(rank1)
+        except: # Fallback if .numpy() fails in some context
+            py_rank0 = -1 if rank0 is -1 else 3 # Assume 3D if tensor
+            py_rank1 = -1 if rank1 is -1 else 3 # Assume 3D if tensor
+
+        if py_rank0 == 3 and py_rank1 == 2:
+            # [Dynamic (3D), Static (2D)]
+            dynamic_p, static_p = inp0, inp1
+            if verbose >= 5: print("    Mode: Two inputs -> Dynamic, Static.")
+        elif py_rank0 == 3 and py_rank1 == 3:
+            # [Dynamic (3D), Future (3D)]
+            dynamic_p, future_p = inp0, inp1
+            if verbose >= 5: print("    Mode: Two inputs -> Dynamic, Future.")
+        elif py_rank0 == 2 and py_rank1 == 3:
+            # [Static (2D), Dynamic (3D)] - User might pass in this order.
+            static_p, dynamic_p = inp0, inp1
+            if verbose >= 5: print("    Mode: Two inputs -> Static, Dynamic.")
+        else:
+            # Ambiguous or unsupported combination for 2 inputs.
+            raise ValueError(
+                "With two inputs for tft_flex (soft mode), expect one "
+                "2D (static) and one 3D (dynamic), or two 3D "
+                "(dynamic, future). Got ranks: "
+                f"{py_rank0 if inp0 is not None else 'None'}, "
+                f"{py_rank1 if inp1 is not None else 'None'}."
+            )
+
+    elif num_provided_inputs == 3:
+        # Three inputs: Assume [static, dynamic, future] order.
+        # This is the standard order for `validate_model_inputs`.
+        static_p, dynamic_p, future_p = (
+            inputs_list[0], inputs_list[1], inputs_list[2]
+            )
+        if verbose >= 5:
+            print("    Mode: Three inputs -> Static, Dynamic, Future.")
+        # Basic rank checks for this assumed order.
+        if static_p is not None:
+            rank_s = tf_rank(tf_convert_to_tensor(static_p))
+            tf_debugging.assert_equal(
+                rank_s,
+                tf_constant(2, dtype=rank_s.dtype),
+                message=(
+                    "Static input (first of 3) must be 2D: "
+                    f"expected rank 2, got {rank_s} for"
+                    f" input shape {tf_shape(static_p)}."
+                ), 
+                summarize=3
+            )
+        if dynamic_p is not None:
+            rank_d = tf_rank(tf_convert_to_tensor(dynamic_p))
+            tf_debugging.assert_equal(
+                rank_d,
+                tf_constant(3, dtype=rank_d.dtype),
+                message=(
+                    "Dynamic input (second of 3) must be 3D: "
+                    f"expected rank 3, got {rank_d} for input"
+                    f" shape {tf_shape(dynamic_p)}."
+                ), 
+                summarize=3
+            )
+        if future_p is not None:
+            rank_f = tf_rank(tf_convert_to_tensor(future_p))
+            tf_debugging.assert_equal(
+                rank_f,
+                tf_constant(3, dtype=rank_f.dtype),
+                message=(
+                    "Future input (third of 3) must be 3D: "
+                    f"expected rank 3, got {rank_f} for"
+                    f" input shape {tf_shape(future_p)}."
+                ),
+                summarize=3
+            )
+
+    elif num_provided_inputs == 0:
+        # No inputs provided, all remain None.
+        if verbose >=5: print("    Mode: Zero inputs provided.")
+    else:
+        # More than 3 inputs, which is not standard for TFT types.
+        raise ValueError(
+            f"Received {num_provided_inputs} inputs. "
+            "validate_model_inputs expects a list of 1 to 3 tensors "
+            "([static], [dynamic], [future])."
+        )
+
+    if verbose >= 4:
+        s_s = getattr(static_p, 'shape', "None")
+        d_s = getattr(dynamic_p, 'shape', "None")
+        f_s = getattr(future_p, 'shape', "None")
+        print(f"  Exit `_validate_tft_flexible_inputs_soft_mode`. "
+              f"Inferred shapes: S={s_s}, D={d_s}, F={f_s}")
+    
+    # Ensure the dynamic input is provided
+    if dynamic_p is None:
+        raise ValueError(
+            "Parameter 'dynamic_p' is required and cannot be None. "
+            "Please provide a valid dynamic input."
+        )
+
+    return static_p, dynamic_p, future_p
+
+def validate_model_inputs(
+    inputs: Union[Tensor, np.ndarray,
+                 List[Optional[Union[np.ndarray, Tensor]]]],
+    static_input_dim: Optional[int] = None,
+    dynamic_input_dim: Optional[int] = None,
+    future_covariate_dim: Optional[int] = None,
+    forecast_horizon: Optional[int] = None,
+    error: str = "raise",
+    mode: str = "strict",
+    deep_check: Optional[bool] = None,
+    model_name: Optional[str] = None,
+    verbose: int = 0,
+    **kwargs
+) -> Tuple[Optional[Tensor], Optional[Tensor],
+           Optional[Tensor]]:
+    r"""
+    Validate and homogenise the triplet of tensors that acts as
+    input to Temporal‑Fusion‑Transformer‑type models.
+    (e.g. :pyfunc:`~fusionlab.nn._xtft.XTFT.call`).
+
+    The helper inspects the list/tuple *inputs* and verifies
+    fundamental structural constraints:
+
+    * rank‐2 *static* tensors have shape
+      :math:`(B,\;F_\text{static})`,
+    * rank‐3 *dynamic* tensors have shape
+      :math:`(B,\;T_\text{past},\;F_\text{dyn})`,
+    * rank‐3 *future* tensors (known covariates) have shape
+      :math:`(B,\;T_\text{future},\;F_\text{fut})` with
+      :math:`T_\text{future}\ge T_\text{past}` and, if
+      *forecast_horizon* is supplied, additionally
+
+      .. math::
+
+         T_\text{future}\;\ge\;
+         T_\text{past}\;+\;\text{forecast\_horizon}.
+
+    When ``model_name == 'tft_flex'`` and *mode* is ``'soft'`` the
+    function can infer the rôle of each tensor (static / dynamic /
+    future) by inspecting rank and feature dimension, thereby
+    allowing more concise user code.
+
+    The routine raises or logs informative diagnostics depending on
+    *error* and *verbose* settings.
+
+    Notes
+    -----
+    The helper calls two internal utilities:
+
+    * ``_validate_tft_flexible_inputs_soft_mode`` – recognises the
+      rôle of each tensor in *soft* mode.
+    * ``_validate_tensor_basic`` – validates rank, dtype and
+      feature‑dimension.
+    * ``_get_batch_size_for_val`` – extracts batch dimension for
+      consistency checks.
+
+    Although these helpers are prefixed with “_”, they are listed
+    here for completeness because they encapsulate most of the
+    heavy lifting.
+
+    Parameters
+    ----------
+    inputs : Union[Tensor, np.ndarray,
+                  List[Optional[Union[np.ndarray, Tensor]]]]
+        Triplet ``[static, dynamic, future]`` or, when
+        *model_name* is ``'tft_flex'`` and *mode* is ``'soft'``,
+        the tensors in any order.  See *Examples*.
+    static_input_dim : int or None, optional
+        Expected feature dimension of the static block.
+    dynamic_input_dim : int or None, optional
+        Expected feature dimension of the dynamic past block.
+    future_covariate_dim : int or None, optional
+        Expected feature dimension of the known‑future covariates.
+    forecast_horizon : int or None, optional
+        If given, checks that the future span is large enough for
+        the decoder horizon (see equation above).
+    error : {'raise', 'warn', 'ignore'}, default ``'raise'``
+        Behaviour when a validation test fails.
+    mode : {'strict', 'soft'}, default ``'strict'``
+        *strict* enforces every rule; *soft* relaxes feature‑dim
+        checks and allows automatic rôle inference for
+        ``'tft_flex'``.
+    deep_check : bool or None, deprecated
+        Legacy switch superseded by *mode*.  Will be removed in a
+        future release.
+    model_name : str or None, optional
+        Name of the caller model.  Currently recognised value is
+        ``'tft_flex'``.
+    verbose : int, default ``0``
+        0 = silent, 1 = warnings, 2+ = verbose tracing.
+    **kwargs
+        Reserved for future extensions.
+
+    Returns
+    -------
+    static : Tensor or None
+        Sanitised static tensor, shape
+        :math:`(B,\;F_\text{static})`.
+    dynamic : Tensor or None
+        Sanitised dynamic tensor, shape
+        :math:`(B,\;T_\text{past},\;F_\text{dyn})`.
+    future : Tensor or None
+        Sanitised future tensor, shape
+        :math:`(B,\;T_\text{future},\;F_\text{fut})`.
+
+    Raises
+    ------
+    ValueError
+        If a critical inconsistency is detected and
+        ``error == 'raise'``.
+    UserWarning
+        When ``error == 'warn'`` and an inconsistency is found.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from fusionlab.nn._tensor_validation import validate_model_inputs
+    >>> B, Tpast, Tfuture = 16, 12, 18
+    >>> static  = np.random.rand(B, 5).astype("float32")
+    >>> dynamic = np.random.rand(B, Tpast, 7).astype("float32")
+    >>> future  = np.random.rand(B, Tfuture, 3).astype("float32")
+    >>> s, d, f = validate_model_inputs(
+    ...     [static, dynamic, future],
+    ...     static_input_dim=5,
+    ...     dynamic_input_dim=7,
+    ...     future_covariate_dim=3,
+    ...     forecast_horizon=6,
+    ...     verbose=1
+    ... )
+    >>> s.shape, d.shape, f.shape
+    ((16, 5), (16, 12, 7), (16, 18, 3))
+
+    References
+    ----------
+    .. [1] Lim B., Zohren S., "Temporal Fusion Transformers for
+           Interpretable Multi‑horizon Time Series Forecasting",
+           *International Journal of Forecasting*, 2021.
+    """
+
+    # --- 0. Handle deep_check deprecation and mode setting ---
+    if deep_check is not None:
+        warnings.warn(
+            "'deep_check' is deprecated and will be removed. "
+            "Use 'mode' ('strict' or 'soft') instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        if mode == 'strict' and not deep_check:
+            mode = 'soft' # User explicitly set mode, override deep_check
+        elif deep_check:
+            mode = 'strict'
+        else: # deep_check is False
+            mode = 'soft'
+
+    if mode not in ['strict', 'soft']:
+        raise ValueError("`mode` must be 'strict' or 'soft'.")
+
+    if verbose >= 2:
+        print(f"Enter `validate_model_inputs` (mode='{mode}', "
+              f"model_name='{model_name}', verbose={verbose})")
+
+    # --- 1. Input Interpretation (Smart Handling for tft_flex) ---
+    static_raw, dynamic_raw, future_raw = None, None, None
+
+    if model_name == 'tft_flex' and mode == 'soft':
+        if verbose >= 3:
+            print("  Running 'tft_flex' in 'soft' mode: "
+                  "inferring input roles.")
+        # Helper infers roles based on number/rank of inputs.
+        static_raw, dynamic_raw, future_raw = \
+            _validate_tft_flexible_inputs_soft_mode(
+                inputs, verbose=verbose
+                )
+    else:
+        # Standard path: expect a list of 3 (some can be None).
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
+            raise ValueError(
+                f"`inputs` must be a list/tuple of 3 elements for "
+                f"model '{model_name}' in '{mode}' mode: "
+                "[static, dynamic, future]. "
+                f"Received {len(inputs) if isinstance(inputs, (list,tuple)) else 1} "
+                f"element(s) of type {type(inputs)}."
+            )
+        static_raw, dynamic_raw, future_raw = inputs
+
+    if verbose >= 3:
+        s_s = getattr(static_raw, 'shape', "None")
+        d_s = getattr(dynamic_raw, 'shape', "None")
+        f_s = getattr(future_raw, 'shape', "None")
+        print(f"  Inputs after role assignment/initial unpack: "
+              f"S={s_s}, D={d_s}, F={f_s}")
+
+    # --- 2. Individual Tensor Validation (Type, Rank, Features) ---
+    # Define properties for each input type in the order:
+    # static, dynamic, future.
+    input_properties = [
+        {"name": "Static", "data": static_raw,
+         "feat_dim": static_input_dim, "expected_rank": 2},
+        {"name": "Dynamic", "data": dynamic_raw,
+         "feat_dim": dynamic_input_dim, "expected_rank": 3},
+        {"name": "Future", "data": future_raw,
+         "feat_dim": future_covariate_dim, "expected_rank": 3},
+    ]
+    processed_tensors: List[Optional[Tensor]] = []
+
+    for prop in input_properties:
+        # For 'tft_flex' in 'soft' mode, expected_feat_dim might
+        # be None if the corresponding *_input_dim was not passed.
+        # _validate_tensor_basic handles this.
+        current_expected_feat_dim = prop["feat_dim"]
+        if model_name == 'tft_flex' and mode == 'soft' \
+                and prop["data"] is not None:
+            # In soft mode for tft_flex, don't enforce feat_dim
+            # if it wasn't explicitly provided to the validator.
+            # The model's __init__ will handle defaults.
+            pass # feat_dim check will be skipped if None
+
+        validated_tensor = _validate_tensor_basic(
+            prop["data"], prop["name"], prop["expected_rank"],
+            current_expected_feat_dim, # Pass potentially None dim
+            mode, error, verbose
+        )
+        processed_tensors.append(validated_tensor)
+
+    static_p, dynamic_p, future_p = processed_tensors
+
+    # --- 3. Batch Size Consistency Check ---
+    # (Keep existing batch size check logic using _get_batch_size_for_val
+    #  and tf.debugging.assert_equal - this part was already robust)
+    non_null_for_batch_check = [
+        t for t in processed_tensors if t is not None
+        ]
+    if len(non_null_for_batch_check) > 1:
+        if verbose >= 3:
+            print("  Checking batch size consistency across inputs...")
+        ref_batch_tensor = _get_batch_size_for_val( # Use renamed helper
+            non_null_for_batch_check[0], verbose=verbose
+            )
+        for t_current in non_null_for_batch_check[1:]:
+            current_batch_tensor = _get_batch_size_for_val( # Use renamed helper
+                t_current, verbose=verbose
+                )
+            tf_debugging.assert_equal(
+                ref_batch_tensor, current_batch_tensor,
+               message=(
+                    "Inconsistent batch sizes among inputs: "
+                    f"reference batch size = {ref_batch_tensor},"
+                    f" current batch size = {current_batch_tensor}."
+                ), 
+                # data=[ref_batch_tensor, current_batch_tensor],
+                summarize=10
+            )
+        if verbose >= 3: print("    Batch sizes are consistent.")
+
+
+    # --- 4. Time Dimension Consistency (Dynamic vs. Future) ---
+    # (Keep existing time dimension check logic - also robust)
+    if dynamic_p is not None and future_p is not None:
+        if verbose >= 3:
+            print("  Checking time dim (dynamic vs future)...")
+        t_past_dyn = tf_shape(dynamic_p)[1]
+        t_span_fut = tf_shape(future_p)[1]
+        
+        tf_debugging.assert_greater_equal(
+            t_span_fut, t_past_dyn,
+            message=(
+               "Future input time span must be >= dynamic input time span: "
+               f"future span = {t_span_fut}, past dynamic span = {t_past_dyn}."
+           ),
+            # data=[t_span_fut, t_past_dyn], 
+            summarize=10
+        )
+        # if forecast_horizon is not None:
+            # fh_tensor = tf_cast(forecast_horizon, dtype=t_span_fut.dtype)
+            # req_fut_span = t_past_dyn + fh_tensor
+            # if tf_less(t_span_fut, req_fut_span) and verbose >= 1:
+            #     t_s_val = tf_get_static_value(t_span_fut, partial=True)
+            #     t_p_val = tf_get_static_value(t_past_dyn, partial=True)
+            #     warnings.warn(
+            #         f"Future input time span ({t_s_val}) is less "
+            #         f"than dynamic lookback ({t_p_val}) + "
+            #         f"forecast_horizon ({forecast_horizon}). May be "
+            #         "insufficient for decoder.", UserWarning
+            #     )
+        if forecast_horizon is not None and verbose >= 1:
+            # try to get concrete Python ints
+            t_s_val = tf_get_static_value(t_span_fut, partial=True)
+            t_p_val = tf_get_static_value(t_past_dyn, partial=True)
+        
+            # only warn if both spans are statically known
+            if (
+                t_s_val is not None
+                and t_p_val is not None
+                and t_s_val < (t_p_val + forecast_horizon)
+            ):
+                warnings.warn(
+                    f"Future input time span ({t_s_val}) is less than "
+                    f"dynamic lookback ({t_p_val}) + forecast_horizon "
+                    f"({forecast_horizon}). May be insufficient for decoder.",
+                    UserWarning
+                )
+
+
+        if verbose >= 3:
+            print("    Time dimensions (dynamic vs future) compatible.")
+
+    if verbose >= 2:
+        s_s = static_p.shape if static_p is not None else 'None'
+        d_s = dynamic_p.shape if dynamic_p is not None else 'None'
+        f_s = future_p.shape if future_p is not None else 'None'
+        print(f"Exit `validate_model_inputs`. Processed shapes: "
+              f"S={s_s}, D={d_s}, F={f_s}")
+
+    # Return in the order: static, dynamic, future
+    return static_p, dynamic_p, future_p
 

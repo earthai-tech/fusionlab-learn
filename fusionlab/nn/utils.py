@@ -2996,7 +2996,8 @@ def generate_forecast(
     tname=None,       
     forecast_dt=None, 
     savefile=None,     
-    verbose=3
+    verbose=3, 
+    **kw
 ):
     """
     Generate forecast using the XTFT model.
@@ -4255,7 +4256,8 @@ def forecast_single_step(
     mask_values=None,
     mask_fill_value=None,
     savefile=None,
-    verbose=3
+    verbose=3, 
+    **kws
 ):
     """
     Generate a single-step forecast using the XTFT model.
@@ -4605,7 +4607,8 @@ def forecast_multi_step(
     mask_values=None,
     mask_fill_value=None,
     savefile=None,
-    verbose=3
+    verbose=3, 
+    **kws
     ):
     """
     Generate a multi-step forecast using the XTFT model.
