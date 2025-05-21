@@ -81,8 +81,8 @@ class TFT(Model, NNLearner):
 
     @validate_params({
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
-        "static_input_dim": [Interval(Integral, 1, None, closed='left')],
-        "future_input_dim": [Interval(Integral, 1, None, closed='left')],
+        "static_input_dim": [Interval(Integral, 0, None, closed='left')],
+        "future_input_dim": [Interval(Integral, 0, None, closed='left')],
         "hidden_units": [Interval(Integral, 1, None, closed='left')],
         "num_heads": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],

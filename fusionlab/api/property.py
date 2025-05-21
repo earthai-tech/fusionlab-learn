@@ -258,7 +258,7 @@ class HelpMeta(type):
         return help_method
     
     @classmethod
-    def _decorate_method(mcs, method):
+    def __decorate_method(mcs, method):
         """
         Decorator that adds 'my_params' and 'help' attributes to methods.
     
@@ -330,6 +330,70 @@ class HelpMeta(type):
         # Case 4: If method is not recognized, return it unchanged
         else:
             return method
+
+    @classmethod
+    def _decorate_method(mcs, method):
+ 
+        # Case 1: staticmethod
+        if isinstance(method, staticmethod):
+            original_func = method.__func__
+            @wraps(original_func)
+            def static_wrapper(*args, **kwargs): # No 'self' or 'cls'
+                return original_func(*args, **kwargs)
+            static_wrapper.my_params = DisplayStr(mcs._get_my_params(original_func))
+            static_wrapper.help = mcs._create_help(original_func)
+            return staticmethod(static_wrapper)
+
+        # Case 2: classmethod
+        elif isinstance(method, classmethod):
+            original_func = method.__func__
+            @wraps(original_func)
+            def class_wrapper(cls, *args, **kwargs): # 'cls' is first
+                return original_func(cls, *args, **kwargs)
+            class_wrapper.my_params = DisplayStr(mcs._get_my_params(original_func))
+            class_wrapper.help = mcs._create_help(original_func)
+            return classmethod(class_wrapper)
+
+        # Case 3: If method is a regular instance method (FunctionType)
+        elif isinstance(method, FunctionType):
+            original_func = method
+
+            # Check if it's likely a Keras Model's 'call' method
+            # A simple check: name is 'call' and first arg after 'self' is 'inputs'
+            sig = inspect.signature(original_func)
+            params = list(sig.parameters.values())
+            is_keras_model_call = (
+                original_func.__name__ == 'call' and
+                len(params) > 1 and params[0].name == 'self' and
+                params[1].name == 'inputs' # Keras usually expects 'inputs'
+            )
+
+            if is_keras_model_call:
+                # Create a wrapper that matches Keras's expected call signature
+                @wraps(original_func)
+                def keras_call_wrapper(
+                        self_obj, inputs, training=False, **call_kwargs):
+                    # self_obj is 'self' for the instance
+                    # Pass through known Keras call arguments explicitly
+                    return original_func(
+                        self_obj, inputs, training=training, **call_kwargs)
+                
+                wrapper_to_enhance = keras_call_wrapper
+            else:
+                # Generic wrapper for other instance methods
+                @wraps(original_func)
+                def generic_wrapper(self_obj, *args, **call_kwargs):
+                    return original_func(self_obj, *args, **call_kwargs)
+                wrapper_to_enhance = generic_wrapper
+            
+            wrapper_to_enhance.my_params = DisplayStr(
+                mcs._get_my_params(original_func))
+            wrapper_to_enhance.help = mcs._create_help(original_func)
+            return wrapper_to_enhance
+        
+        # Case 4: If method is not recognized (e.g., already bound method, etc.)
+        else:
+            return method  
         
 class LearnerMeta(ABCMeta, HelpMeta):
     """

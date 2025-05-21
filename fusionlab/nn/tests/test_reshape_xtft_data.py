@@ -9,7 +9,7 @@ import tensorflow as tf # Ensure TensorFlow is imported for tf.constant
 
 # --- Attempt to import function and dependencies ---
 try:
-    # Assuming reshape_xtft_data is in fusionlab.nn.utils
+    from fusionlab.utils.generic_utils import handle_emptiness 
     from fusionlab.nn.utils import reshape_xtft_data
     # Import helpers if they need to be mocked or if their absence is tested
     from fusionlab.utils.ts_utils import ts_validator
@@ -166,7 +166,7 @@ def test_optional_features(sample_df, sample_df_config, use_static, use_future):
         assert s is not None
         assert s.shape == (total_expected_seq, len(cfg["static_cols_base"]))
     else:
-        assert s is None
+        assert handle_emptiness(s) is None
 
     assert d is not None # Dynamic is always required by current signature
     assert d.shape == (total_expected_seq, T, len(cfg["dynamic_cols_base"]))
@@ -175,7 +175,7 @@ def test_optional_features(sample_df, sample_df_config, use_static, use_future):
         assert f is not None
         assert f.shape == (total_expected_seq, T + H, len(cfg["future_cols_base"]))
     else:
-        assert f is None
+        assert handle_emptiness(f) is None
 
     assert t is not None
     assert t.shape == (total_expected_seq, H, 1)

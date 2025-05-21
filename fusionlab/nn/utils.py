@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import r2_score
 
+from ..api.util import get_table_size
 from ..core.checks import (
     ParamsValidator, 
     are_all_frames_valid, 
@@ -50,12 +51,12 @@ from ..compat.sklearn import (
     Hidden, 
     validate_params
 )
-from ..decorators import DynamicMethod, isdf 
+from ..decorators import Deprecated, isdf 
 from ..exceptions import NotEnoughDataError 
-from ..metrics_special import coverage_score
+from ..metrics import coverage_score
 from ..utils.data_utils import mask_by_reference 
 from ..utils.deps_utils import ensure_pkg, get_versions 
-from ..utils.generic_utils import get_actual_column_name
+from ..utils.generic_utils import get_actual_column_name, print_box 
 from ..utils.io_utils import save_job
 from ..utils.sys_utils import BatchDataFrameBuilder, build_large_df 
 from ..utils.ts_utils import ts_validator, filter_by_period 
@@ -74,6 +75,7 @@ if KERAS_BACKEND:
     Callback=KERAS_DEPS.Callback
     
 DEP_MSG = dependency_message('nn.utils') 
+_TW = get_table_size()
 
 __all__ = [
     "split_static_dynamic", 
@@ -547,13 +549,13 @@ def split_static_dynamic(
     return static_inputs, dynamic_inputs
 
 
-@DynamicMethod ('numeric', prefixer ='exclude')
+@isdf
 @validate_params({ 
     'df': ['array-like'], 
     'sequence_length': [Interval(Integral, 2, None, closed ='left')], 
     'target_col': [str], 
     'step': [Interval(Integral, 1, None, closed ='left')], 
-    'forecast_horizon': [Interval(Integral, 1, None, closed ='left'), None], 
+    'forecast_horizon': [Interval(Integral, 0, None, closed ='left'), None], 
     }
 )
 def create_sequences(
@@ -733,7 +735,7 @@ def create_sequences(
            *arXiv preprint arXiv:1912.09363*.
     """
     if verbose >= 1:
-        print("Starting sequence generation ...")
+        print("[INFO] Starting sequence generation ...")
 
     # Validate all frames
     are_all_frames_valid(df, df_only=True, error_msg=(
@@ -748,10 +750,10 @@ def create_sequences(
 
     if verbose >= 2:
         print(
-            f"[DEBUG] sequence_length={sequence_length}, step={step},\n "
+            f"  [DEBUG] sequence_length={sequence_length}, step={step},\n "
             f"drop_last={drop_last}, forecast_horizon={forecast_horizon}"
         )
-        print(f"[DEBUG] DataFrame length={len(df)}")
+        print(f"  [DEBUG] DataFrame length={len(df)}")
 
     sequences = []
     targets = []
@@ -761,7 +763,7 @@ def create_sequences(
     max_horizon = forecast_horizon if forecast_horizon is not None else 1
 
     if verbose >= 2:
-        print(f"[DEBUG] max_horizon set to {max_horizon}")
+        print(f"  [DEBUG] max_horizon set to {max_horizon}")
 
     # Main loop to generate sequences
     for i in range(0, total_length - sequence_length - max_horizon + 1, step):
@@ -782,7 +784,7 @@ def create_sequences(
 
         if verbose >= 3:
             print(
-                f"[TRACE] Created sequence index {len(sequences) - 1} "
+                f"    [TRACE] Created sequence index {len(sequences) - 1} "
                 f"from row {i} to {i + sequence_length - 1}, "
                 f"target index from {i + sequence_length} to "
                 f"{i + sequence_length + max_horizon - 1}"
@@ -802,7 +804,7 @@ def create_sequences(
                 targets.append(target.values)
                 if verbose >= 2:
                     print(
-                        "[DEBUG] Appended the last incomplete sequence "
+                        "  [DEBUG] Appended the last incomplete sequence "
                         "and targets with forecast horizon."
                     )
         else:
@@ -813,7 +815,7 @@ def create_sequences(
                 targets.append(target)
                 if verbose >= 2:
                     print(
-                        "[DEBUG] Appended the last incomplete sequence "
+                        "  [DEBUG] Appended the last incomplete sequence "
                         "and single-step target."
                     )
 
@@ -2077,12 +2079,14 @@ def reshape_xtft_data(
     future_cols: Optional[List[str]] = None,
     spatial_cols: Optional[Union[str, List[str]]] = None,
     time_steps: int = 4,
-    forecast_horizons: int = 1,
+    forecast_horizon: int = 1,
     to_datetime: Optional[str] = None,
     model: str = "xtft",
     error: str = "raise", 
     savefile: Optional[str] = None,
-    verbose: int = 1
+    forecast_horizons: Optional[int] = None,  
+    verbose: int = 1, 
+    **kw
 ) -> Tuple[Optional[np.ndarray], np.ndarray, Optional[np.ndarray], np.ndarray]:
     """Reshapes time series data into rolling sequences for models like
     Temporal Fusion Transformer (TFT) and Extreme Temporal Fusion
@@ -2100,15 +2104,31 @@ def reshape_xtft_data(
     (`time_steps`) and prediction (`forecast_horizons`) windows.
 
     """
+    # Backward‐compatibility: accept `forecast_horizons` (deprecated)
+    if forecast_horizons is not None:
+       warnings.warn(
+           "`forecast_horizons` is deprecated and will be removed in a "
+           "future release; please use `forecast_horizon` instead.",
+           DeprecationWarning,
+           stacklevel=2
+       )
+       # override the new param with the old value
+       forecast_horizon = forecast_horizons
+        
     # --- Initial Validations ---
+    if verbose >1: 
+        print("[INFO] T.S Data in rolling"
+              " Sequences reshaping triggered ...")
     # Validate and convert datetime column
     # verbose > 1 maps to True for ts_validator's own verbose flag
+
     df = ts_validator(
         df, dt_col=dt_col, 
         to_datetime=to_datetime,
         as_index=False, 
         verbose=verbose > 1
     )
+
     # Ensure target column exists
     exist_features(
         df, features=target_col, 
@@ -2117,7 +2137,7 @@ def reshape_xtft_data(
 
     # Manage and validate feature column lists
     # Convert single string to list and check existence
-    dynamic_cols = columns_manager(dynamic_cols)
+    dynamic_cols = columns_manager(dynamic_cols, empty_as_none=False)
     exist_features(
         df, features=dynamic_cols, 
         name="Dynamic columns",
@@ -2149,15 +2169,15 @@ def reshape_xtft_data(
 
     # Validate positive integers for sequence lengths
     time_steps = validate_positive_integer(time_steps, 'time_steps')
-    forecast_horizons = validate_positive_integer(
-        forecast_horizons, 'forecast_horizons'
+    forecast_horizon = validate_positive_integer(
+        forecast_horizon, 'forecast_horizon'
         )
     # Minimum length a group must have to produce at least one sequence
-    min_len_per_group = time_steps + forecast_horizons
+    min_len_per_group = time_steps + forecast_horizon
 
     if verbose >= 2:
-        print(f"  Validated parameters: time_steps={time_steps},"
-              f" forecast_horizons={forecast_horizons}")
+        print(f"  [DEBUG] Validated parameters: time_steps={time_steps},"
+              f" forecast_horizon={forecast_horizon}")
 
     # --- Grouping and Sorting ---
     if spatial_cols:
@@ -2169,7 +2189,7 @@ def reshape_xtft_data(
         # Store group keys for the second pass
         group_keys = list(grouped.groups.keys())
         if verbose >= 1:
-            print(f"Data grouped by {spatial_cols} into "
+            print(f"\n[INFO] Data grouped by {spatial_cols} into "
                   f"{len(group_keys)} groups.")
     else:
         # If no spatial columns, sort the entire DataFrame by time
@@ -2178,7 +2198,7 @@ def reshape_xtft_data(
         grouped = [(None, df)] # List of one tuple
         group_keys = [None] # Single key for the one group
         if verbose >= 1:
-            print("Processing entire DataFrame as a single group.")
+            print("[INFO] Processing entire DataFrame as a single group.")
 
     # --- First Pass: Calculate total number of sequences ---
     total_sequences = 0
@@ -2188,7 +2208,7 @@ def reshape_xtft_data(
     temp_grouped_list: List[pd.DataFrame] = []
 
     if verbose >= 2:
-        print("Starting first pass to calculate total sequences...")
+        print("[INFO] Starting first pass to calculate total sequences...")
     for group_idx, group_key in enumerate(group_keys):
         # Retrieve the group DataFrame
         group_df = grouped.get_group(group_key) if spatial_cols else df
@@ -2199,7 +2219,7 @@ def reshape_xtft_data(
                 key_str = group_key if group_key is not None \
                     else "<Full Dataset>"
                 print(
-                    f"Warning: Group '{key_str}' has {len(group_df)} "
+                    f"   \n[DEBUG] Warning: Group '{key_str}' has {len(group_df)} "
                     f"points, less than min required "
                     f"({min_len_per_group}). Skipping."
                 )
@@ -2207,15 +2227,15 @@ def reshape_xtft_data(
         # Add number of possible sequences from this group
         total_sequences += (len(group_df) - min_len_per_group + 1)
         valid_group_indices.append(group_idx)
-
+        
     if total_sequences == 0:
         raise ValueError(
             "Not enough data points in any group to create sequences "
             f"with time_steps={time_steps} and "
-            f"forecast_horizons={forecast_horizons}."
+            f"forecast_horizon={forecast_horizon}."
         )
     if verbose >= 1:
-        print(f"Total valid sequences to be generated: {total_sequences}")
+        print(f"\n[INFO] Total valid sequences to be generated: {total_sequences}")
 
     # --- Pre-allocate NumPy Arrays for efficiency ---
     # Get feature dimensions
@@ -2226,7 +2246,7 @@ def reshape_xtft_data(
     # Initialize arrays with zeros, or None if features not provided
     static_data_arr = np.zeros(
         (total_sequences, num_static_features), dtype=np.float32
-        ) if static_cols else None
+        ) # if static_cols else None
 
     dynamic_data_arr = np.zeros(
         (total_sequences, time_steps, num_dynamic_features),
@@ -2234,95 +2254,98 @@ def reshape_xtft_data(
         )
 
     future_data_arr = np.zeros(
-        (total_sequences, time_steps + forecast_horizons,
+        (total_sequences, time_steps + forecast_horizon,
          num_future_features), dtype=np.float32
-        ) if future_cols else None
+        ) # if future_cols else None
 
     target_data_arr = np.zeros(
-        (total_sequences, forecast_horizons, 1), dtype=np.float32
+        (total_sequences, forecast_horizon, 1), dtype=np.float32
         ) # Assuming target_col is univariate
 
     if verbose >= 2:
-        print("Pre-allocated NumPy arrays for sequence data.")
-        if static_data_arr is not None:
-            print(f"  Static array shape: {static_data_arr.shape}")
-        print(f"  Dynamic array shape: {dynamic_data_arr.shape}")
-        if future_data_arr is not None:
-            print(f"  Future array shape: {future_data_arr.shape}")
-        print(f"  Target array shape: {target_data_arr.shape}")
-
+        print("\n[INFO] Pre-allocated NumPy arrays for sequence data.")
+        print(f"  [DEBUG] Static array shape: {static_data_arr.shape}")
+        print(f"  [DEBUG] Dynamic array shape: {dynamic_data_arr.shape}")
+        print(f"  [DEBUG] Future array shape: {future_data_arr.shape}")
+        print(f"  [DEBUG] Target array shape: {target_data_arr.shape}")
+        
     # --- Second Pass: Populate Pre-allocated Arrays ---
     current_seq_idx = 0 # Index for filling the pre-allocated arrays
     if verbose >= 2:
-        print("Starting second pass to populate sequence arrays...")
+        print("\n[INFO] Starting second pass to populate sequence arrays...")
+
 
     for group_idx in valid_group_indices:
         group_df = temp_grouped_list[group_idx]
         group_key_for_log = group_keys[group_idx] if spatial_cols \
             else "<Full Dataset>"
         if verbose >= 3:
-            print(f"  Processing group: {group_key_for_log}")
-
-        # Extract static values for this group once if spatial grouping
+            print()
+            print_box(
+                f"Processing group: {group_key_for_log}",
+                width=_TW,
+                align='center',
+                border_char='+',
+                horizontal_char='-',
+                vertical_char='|',
+                padding=1
+            )
         group_static_values = None
-        if spatial_cols and static_cols:
-            group_static_values = group_df.iloc[0][static_cols].values
-
-        # Generate rolling sequences for this valid group
-        num_sequences_in_group = len(group_df) - min_len_per_group + 1
-        for i in range(num_sequences_in_group):
-            # Static features
-            if static_cols and static_data_arr is not None:
+        if static_cols and num_static_features > 0: # Check num_static_features
+            if spatial_cols:
+                group_static_values = group_df.iloc[0][static_cols].values
+        
+        num_seq_in_group = len(group_df) - min_len_per_group + 1
+        for i in range(num_seq_in_group):
+            if static_cols and num_static_features > 0:
                 if spatial_cols:
-                    # Use pre-extracted static values for the group
                     static_data_arr[current_seq_idx] = group_static_values
                 else:
-                    # Non-spatial: static from start of each input window
-                    static_data_arr[current_seq_idx] = group_df.iloc[
-                        i][static_cols].values
+                    static_data_arr[current_seq_idx] = group_df.iloc[i][static_cols].values
+            # If num_static_features is 0, static_data_arr[current_seq_idx] is an empty slice.
 
-            # Dynamic features for input window
             dynamic_data_arr[current_seq_idx] = group_df.iloc[
-                i : i + time_steps
-                ][dynamic_cols].values
+                i : i + time_steps][dynamic_cols].values
 
-            # Future features for input window + horizon
-            if future_cols and future_data_arr is not None:
+            if future_cols and num_future_features > 0:
                 future_data_arr[current_seq_idx] = group_df.iloc[
-                    i : i + time_steps + forecast_horizons
-                    ][future_cols].values
+                    i : i + time_steps + forecast_horizon][future_cols].values
+            # If num_future_features is 0, future_data_arr[current_seq_idx] is an empty slice.
 
-            # Target values for forecast horizon
             target_data_arr[current_seq_idx] = group_df.iloc[
-                i + time_steps : i + time_steps + forecast_horizons
-                ][target_col].values.reshape(forecast_horizons, 1)
-
+                i + time_steps : i + time_steps + forecast_horizon
+                ][target_col].values.reshape(forecast_horizon, 1)
+            
             if verbose >= 7: # Very detailed logging for debugging
-                print(f"    Seq {current_seq_idx} (Group {group_key_for_log}, "
+                print(f"\n    [TRACE] Seq {current_seq_idx} (Group {group_key_for_log}, "
                       f"WinStartIdx {i}):")
-                if static_data_arr is not None:
+                if num_static_features > 0:
                     print("      Static sample: "
-                          f"{static_data_arr[current_seq_idx][:2]}") # First 2
-                print("      Dynamic sample (first step): "
-                      f"{dynamic_data_arr[current_seq_idx][0]}")
-                if future_data_arr is not None:
-                    print("      Future sample (first step):"
-                          f" {future_data_arr[current_seq_idx][0]}")
-                print("      Target sample (first step):"
-                      f" {target_data_arr[current_seq_idx][0]}")
-
+                          f"{list(static_data_arr[current_seq_idx][:2])}") # First 2
+                print("      - Dynamic sample (first step): "
+                      f"{list(dynamic_data_arr[current_seq_idx][0])}")
+                if num_future_features > 0:
+                    print("      - Future sample (first step):"
+                          f" {list(future_data_arr[current_seq_idx][0])}")
+                print("      - Target sample (first step):"
+                      f" {list(target_data_arr[current_seq_idx][0])}")
+                
             current_seq_idx += 1
+            
+            if verbose >= 2:
+                # print(f"\nProcessed sequences for location: {key}")
+                print(f"\n    * Total sequences so far: {len(target_data_arr)}")
 
     if verbose >= 1:
-        print("\nFinal data shapes after reshaping:")
+        print("\n[INFO] Final data shapes after reshaping:")
         shape_log = (
-            "  Static Data : "
+            "  [DEBUG] Static Data : "
             f"{static_data_arr.shape if static_data_arr is not None else 'None'}\n"
-            "  Dynamic Data: "
+            "  [DEBUG] Dynamic Data: "
             f"{dynamic_data_arr.shape if dynamic_data_arr is not None else 'None'}\n"
-            "  Future Data : "
+            "  [DEBUG] Future Data : "
             f"{future_data_arr.shape if future_data_arr is not None else 'None'}\n"
-            "  Target Data : "
+            "  [DEBUG] Target Data : "
             f"{target_data_arr.shape if target_data_arr is not None else 'None'}"
         )
         print(shape_log)
@@ -2330,7 +2353,7 @@ def reshape_xtft_data(
     # --- Save to File (Optional) ---
     if savefile:
         if verbose >= 1:
-            print(f"Preparing to save sequence data to '{savefile}'...")
+            print(f"\nPreparing to save sequence data to '{savefile}'...")
         job_dict = {
             'static_data': static_data_arr,
             'dynamic_data': dynamic_data_arr,
@@ -2343,14 +2366,14 @@ def reshape_xtft_data(
             'spatial_features': spatial_cols,
             'dt_col': dt_col,
             'time_steps': time_steps,
-            'forecast_horizons': forecast_horizons,
+            'forecast_horizon': forecast_horizon,
         }
         # Add version information if available
         try:
             job_dict.update(get_versions())
         except NameError: # If get_versions is not defined/imported
             if verbose >=2:
-                print("  `get_versions` not found, version info not saved.")
+                print("\n  `get_versions` not found, version info not saved.")
 
         try:
             # save_job to be a wrapper around joblib.dump
@@ -2363,212 +2386,23 @@ def reshape_xtft_data(
                 print(f"[ERROR] Failed to save job dictionary to "
                       f"'{savefile}': {e}")
 
+    if verbose>=1: 
+        print("\n[INFO] T.S. Data in Rolling Sequences"
+              " successfully reshaped. ")
+        
     return static_data_arr, dynamic_data_arr, future_data_arr, target_data_arr
 
-
-reshape_xtft_data.__doc__+=r"""\
-
-The core process involves:
-1.  Validating input DataFrame and specified columns.
-2.  Optionally grouping the data by `spatial_cols`. If not provided,
-    the entire DataFrame is treated as a single group.
-3.  Sorting data within each group by the datetime column (`dt_col`).
-4.  A two-pass system for efficiency:
-    a.  **First Pass:** Iterates through groups to determine the total
-        number of valid sequences that can be generated based on
-        `time_steps` and `forecast_horizons`. Groups too short to
-        form even one complete input-target pair are skipped.
-    b.  **Pre-allocation:** Empty NumPy arrays are created with the
-        final determined dimensions to store static, dynamic, future,
-        and target sequences.
-    c.  **Second Pass:** Iterates through valid groups again, creating
-        rolling windows and populating the pre-allocated arrays.
-5.  For each window:
-    * **Static features** (`static_cols`): Extracted once per group if
-        `spatial_cols` are used, or from the first time step of the
-        current input window if no spatial grouping.
-    * **Dynamic features** (`dynamic_cols`): Extracted for the lookback
-        period of `time_steps`.
-    * **Future features** (`future_cols`): Extracted for a combined
-        period covering both the `time_steps` (lookback) and the
-        `forecast_horizons`. This provides the model with known future
-        information relevant to both the input window and the
-        prediction window.
-    * **Target features** (`target_col`): Extracted for the
-        `forecast_horizons` immediately following the input window.
-6.  Optionally saves the generated sequence arrays and metadata to a
-    `.joblib` file.
-
-Parameters
-----------
-df : pandas.DataFrame
-    The input DataFrame containing time series data. It must include
-    a datetime column specified by `dt_col` and the `target_col`.
-dt_col : str
-    The name of the datetime column in `df`. This column is
-    processed to ensure proper datetime formatting.
-target_col : str
-    The column in `df` holding the target values for forecasting.
-dynamic_cols : List[str]
-    A list of column names representing dynamic features that vary
-    over time (e.g., past observed values, exogenous variables).
-static_cols : List[str], optional
-    A list of column names representing static features that are
-    time-invariant for each group (if `spatial_cols` are used) or
-    per sequence (if no `spatial_cols`). If ``None``, no static
-    data is generated. Default is ``None``.
-future_cols : List[str], optional
-    A list of column names representing known future covariates.
-    If ``None``, no future data is generated. Default is ``None``.
-spatial_cols : str or List[str], optional
-    Column name(s) used to group the DataFrame, typically by a
-    spatial identifier (e.g., 'location_id', ['longitude', 'latitude']).
-    If ``None``, the entire DataFrame is treated as a single group.
-    Default is ``None``.
-time_steps : int, default=4
-    The number of past time steps to include in each input
-    sequence (lookback window).
-forecast_horizons : int, default=1
-    The number of future time steps to predict for each input
-    sequence.
-to_datetime : str, optional
-    Specifies a conversion rule for `dt_col` if it's not already
-    in datetime format (e.g., "auto", "Y", "M", "D"). Passed to
-    :func:`~fusionlab.utils.ts_utils.ts_validator`. Default is ``None``.
-model : str, default="xtft"
-    Indicates the target model type. Currently, this parameter is
-    primarily for forward compatibility or specific internal checks
-    and does not alter the core reshaping logic for numerical data.
-    Supported: {"xtft", "tft", "any", "lstm", None}.
-error : str, default='raise'
-    Error handling strategy if required columns are missing.
-    Options: {'raise', 'warn', 'ignore'}.
-savefile : str, optional
-    If provided, path to save the generated sequence arrays and
-    metadata as a ``.joblib`` file. Default is ``None``.
-verbose : int, default=1
-    Verbosity level for logging and status messages:
-    - ``0``: Silent.
-    - ``1``: Basic information (e.g., grouping, total sequences,
-      final shapes, save messages).
-    - ``2``: More detailed processing steps (e.g., per-group sequence
-      counts if `spatial_cols` used).
-    - ``3`` (or higher): Debug-level information including internal
-      shapes during sequence generation (not typically used).
-
-Returns
--------
-static_data_arr : numpy.ndarray or None
-    Array of static feature sequences. Shape:
-    :math:`(\text{TotalSequences}, \text{NumStaticFeatures})`.
-    Returns ``None`` if `static_cols` is not provided.
-dynamic_data_arr : numpy.ndarray
-    Array of dynamic feature sequences. Shape:
-    :math:`(\text{TotalSequences}, \text{time_steps}, \text{NumDynamicFeatures})`.
-future_data_arr : numpy.ndarray or None
-    Array of future covariate sequences. Shape:
-    :math:`(\text{TotalSequences}, \text{time_steps} + \text{forecast_horizons}, \text{NumFutureFeatures})`.
-    Returns ``None`` if `future_cols` is not provided.
-target_data_arr : numpy.ndarray
-    Array of target value sequences. Shape:
-    :math:`(\text{TotalSequences}, \text{forecast_horizons}, 1)`.
-
-Raises
-------
-ValueError
-    If `time_steps` or `forecast_horizons` are not positive integers.
-    If not enough data points exist in any group to create sequences.
-    If required columns specified in `*_cols` arguments are missing
-    and `error='raise'`.
-KeyError
-    If `target_col` or columns in `dynamic_cols` (or other provided
-    `*_cols`) do not exist in the DataFrame and `error='raise'`.
-
-Notes
------
-- The function sorts data by `spatial_cols` (if any) and then by
-  `dt_col` before generating sequences. Ensure `dt_col` represents
-  a sortable time progression.
-- For non-spatial data (`spatial_cols=None`), static features are
-  extracted from the first time step of each generated input window.
-- The `future_data_arr` is constructed to span both the input
-  lookback window (`time_steps`) and the prediction window
-  (`forecast_horizons`), providing the model with all known future
-  information relevant to the current input and target sequences.
-
-Mathematical Concept (Rolling Window)
--------------------------------------
-The function constructs rolling windows. For an input sequence
-starting at index :math:`j` within a group:
-- Dynamic Input :math:`\mathbf{X}^{(j)}_{dyn} = [\mathbf{x}_{j}, ..., \mathbf{x}_{j+T-1}]`
-- Future Input :math:`\mathbf{X}^{(j)}_{fut} = [\mathbf{z}_{j}, ..., \mathbf{z}_{j+T+H-1}]`
-- Static Input :math:`\mathbf{X}^{(j)}_{stat}` (constant for the sequence)
-- Target :math:`\mathbf{Y}^{(j)} = [y_{j+T}, ..., y_{j+T+H-1}]^T`
-where :math:`T` is `time_steps` and :math:`H` is `forecast_horizons`.
-
-Examples
---------
->>> import pandas as pd
->>> import numpy as np
->>> from fusionlab.nn.utils import reshape_xtft_data
-
->>> # Example 1: Basic usage without spatial grouping
->>> n_points = 50
->>> df1 = pd.DataFrame({
-...     'Date': pd.to_datetime(pd.date_range('2023-01-01', periods=n_points)),
-...     'Target': np.arange(n_points),
-...     'Dynamic1': np.random.rand(n_points),
-...     'Static1_val': np.random.rand(n_points) * 10, # Will be sequence-static
-...     'Future1': np.random.rand(n_points) + 5
-... })
->>> s, d, f, t = reshape_xtft_data(
-...     df1, dt_col='Date', target_col='Target',
-...     dynamic_cols=['Dynamic1'], static_cols=['Static1_val'],
-...     future_cols=['Future1'], time_steps=5, forecast_horizons=3,
-...     verbose=0
-... )
->>> print(f"Example 1 Shapes: S={s.shape}, D={d.shape}, F={f.shape}, T={t.shape}")
-Example 1 Shapes: S=(43, 1), D=(43, 5, 1), F=(43, 8, 1), T=(43, 3, 1)
-
->>> # Example 2: With spatial grouping
->>> df_list = []
->>> for group_id in ['A', 'B']:
-...     group_df = pd.DataFrame({
-...         'Date': pd.to_datetime(pd.date_range('2023-01-01', periods=30)),
-...         'Target': np.random.rand(30) + (10 if group_id == 'A' else 20),
-...         'Dynamic1': np.random.rand(30),
-...         'Static_Group': 100 if group_id == 'A' else 200, # Truly static per group
-...         'Future1': np.random.rand(30) + 5,
-...         'GroupID': group_id
-...     })
-...     df_list.append(group_df)
->>> df2 = pd.concat(df_list)
->>> s, d, f, t = reshape_xtft_data(
-...     df2, dt_col='Date', target_col='Target',
-...     dynamic_cols=['Dynamic1'], static_cols=['Static_Group'],
-...     future_cols=['Future1'], spatial_cols=['GroupID'],
-...     time_steps=6, forecast_horizons=4, verbose=0
-... )
->>> print(f"\nExample 2 Shapes (Spatial): S={s.shape}, D={d.shape}, F={f.shape}, T={t.shape}")
-Example 2 Shapes (Spatial): S=(42, 1), D=(42, 6, 1), F=(42, 10, 1), T=(42, 4, 1)
-
-See Also
---------
-fusionlab.utils.ts_utils.ts_validator : Validates and converts datetime columns.
-fusionlab.core.handlers.columns_manager : Formats and validates column lists.
-fusionlab.core.checks.exist_features : Checks for column existence.
-fusionlab.utils.io_utils.save_job : Utility for saving processed data.
-fusionlab.nn.utils.create_sequences : Simpler sequence creation for basic models.
-
-References
-----------
-.. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
-   Temporal Fusion Transformers for interpretable multi-horizon
-   time series forecasting. *International Journal of Forecasting*,
-   37(4), 1748-1764. (Illustrates the type of data structure TFTs expect).
-
-"""
-
+@Deprecated(
+    reason=(
+        "`reshape_xtft_data_in` is **deprecated** and will be removed in a "
+        "future release. Switch to `reshape_xtft_data`, which offers a more "
+        "robust, consistent API (supports explicit `forecast_horizon`, "
+        "two‑pass pre‑allocation, richer validation, and unified saving)."
+    ),
+    version="0.2.0",         
+    category=DeprecationWarning, 
+    alternative="reshape_xtft_data",
+)
 @isdf
 def reshape_xtft_data_in(
     df,
@@ -5824,3 +5658,207 @@ References
    Forecasting, 2025. (In Review)
 """
 
+
+reshape_xtft_data.__doc__+=r"""\
+The core process involves:
+1.  Validating input DataFrame and specified columns.
+2.  Optionally grouping the data by `spatial_cols`. If not provided,
+    the entire DataFrame is treated as a single group.
+3.  Sorting data within each group by the datetime column (`dt_col`).
+4.  A two-pass system for efficiency:
+    a.  **First Pass:** Iterates through groups to determine the total
+        number of valid sequences that can be generated based on
+        `time_steps` and `forecast_horizon`. Groups too short to
+        form even one complete input-target pair are skipped.
+    b.  **Pre-allocation:** Empty NumPy arrays are created with the
+        final determined dimensions to store static, dynamic, future,
+        and target sequences.
+    c.  **Second Pass:** Iterates through valid groups again, creating
+        rolling windows and populating the pre-allocated arrays.
+5.  For each window:
+    * **Static features** (`static_cols`): Extracted once per group if
+        `spatial_cols` are used, or from the first time step of the
+        current input window if no spatial grouping.
+    * **Dynamic features** (`dynamic_cols`): Extracted for the lookback
+        period of `time_steps`.
+    * **Future features** (`future_cols`): Extracted for a combined
+        period covering both the `time_steps` (lookback) and the
+        `forecast_horizon`. This provides the model with known future
+        information relevant to both the input window and the
+        prediction window.
+    * **Target features** (`target_col`): Extracted for the
+        `forecast_horizon` immediately following the input window.
+6.  Optionally saves the generated sequence arrays and metadata to a
+    `.joblib` file.
+
+Parameters
+----------
+df : pandas.DataFrame
+    The input DataFrame containing time series data. It must include
+    a datetime column specified by `dt_col` and the `target_col`.
+dt_col : str
+    The name of the datetime column in `df`. This column is
+    processed to ensure proper datetime formatting.
+target_col : str
+    The column in `df` holding the target values for forecasting.
+dynamic_cols : List[str]
+    A list of column names representing dynamic features that vary
+    over time (e.g., past observed values, exogenous variables).
+static_cols : List[str], optional
+    A list of column names representing static features that are
+    time-invariant for each group (if `spatial_cols` are used) or
+    per sequence (if no `spatial_cols`). If ``None``, no static
+    data is generated. Default is ``None``.
+future_cols : List[str], optional
+    A list of column names representing known future covariates.
+    If ``None``, no future data is generated. Default is ``None``.
+spatial_cols : str or List[str], optional
+    Column name(s) used to group the DataFrame, typically by a
+    spatial identifier (e.g., 'location_id', ['longitude', 'latitude']).
+    If ``None``, the entire DataFrame is treated as a single group.
+    Default is ``None``.
+time_steps : int, default=4
+    The number of past time steps to include in each input
+    sequence (lookback window).
+forecast_horizon : int, default=1
+    The number of future time steps to predict for each input
+    sequence.
+to_datetime : str, optional
+    Specifies a conversion rule for `dt_col` if it's not already
+    in datetime format (e.g., "auto", "Y", "M", "D"). Passed to
+    :func:`~fusionlab.utils.ts_utils.ts_validator`. Default is ``None``.
+model : str, default="xtft"
+    Indicates the target model type. Currently, this parameter is
+    primarily for forward compatibility or specific internal checks
+    and does not alter the core reshaping logic for numerical data.
+    Supported: {"xtft", "tft", "any", "lstm", None}.
+error : str, default='raise'
+    Error handling strategy if required columns are missing.
+    Options: {'raise', 'warn', 'ignore'}.
+savefile : str, optional
+    If provided, path to save the generated sequence arrays and
+    metadata as a ``.joblib`` file. Default is ``None``.
+verbose : int, default=1
+    Verbosity level for logging and status messages:
+    - ``0``: Silent.
+    - ``1``: Basic information (e.g., grouping, total sequences,
+      final shapes, save messages).
+    - ``2``: More detailed processing steps (e.g., per-group sequence
+      counts if `spatial_cols` used).
+    - ``3`` (or higher): Debug-level information including internal
+      shapes during sequence generation (not typically used).
+**kw  
+    Placeholder for forward‑compat extensions.
+    
+Returns
+-------
+static_data_arr : numpy.ndarray or None
+    Array of static feature sequences. Shape:
+    :math:`(\text{TotalSequences}, \text{NumStaticFeatures})`.
+    Returns ``None`` if `static_cols` is not provided.
+dynamic_data_arr : numpy.ndarray
+    Array of dynamic feature sequences. Shape:
+    :math:`(\text{TotalSequences}, \text{time_steps}, \text{NumDynamicFeatures})`.
+future_data_arr : numpy.ndarray or None
+    Array of future covariate sequences. Shape:
+    :math:`(\text{TotalSequences}, \text{time_steps} + \text{forecast_horizons}, \text{NumFutureFeatures})`.
+    Returns ``None`` if `future_cols` is not provided.
+target_data_arr : numpy.ndarray
+    Array of target value sequences. Shape:
+    :math:`(\text{TotalSequences}, \text{forecast_horizons}, 1)`.
+
+Raises
+------
+ValueError
+    If `time_steps` or `forecast_horizons` are not positive integers.
+    If not enough data points exist in any group to create sequences.
+    If required columns specified in `*_cols` arguments are missing
+    and `error='raise'`.
+KeyError
+    If `target_col` or columns in `dynamic_cols` (or other provided
+    `*_cols`) do not exist in the DataFrame and `error='raise'`.
+
+Notes
+-----
+- The function sorts data by `spatial_cols` (if any) and then by
+  `dt_col` before generating sequences. Ensure `dt_col` represents
+  a sortable time progression.
+- For non-spatial data (`spatial_cols=None`), static features are
+  extracted from the first time step of each generated input window.
+- The `future_data_arr` is constructed to span both the input
+  lookback window (`time_steps`) and the prediction window
+  (`forecast_horizons`), providing the model with all known future
+  information relevant to the current input and target sequences.
+
+Rolling Window Concept
+------------------------
+The function constructs rolling windows. For an input sequence
+starting at index :math:`j` within a group:
+- Dynamic Input :math:`\mathbf{X}^{(j)}_{dyn} = [\mathbf{x}_{j}, ..., \mathbf{x}_{j+T-1}]`
+- Future Input :math:`\mathbf{X}^{(j)}_{fut} = [\mathbf{z}_{j}, ..., \mathbf{z}_{j+T+H-1}]`
+- Static Input :math:`\mathbf{X}^{(j)}_{stat}` (constant for the sequence)
+- Target :math:`\mathbf{Y}^{(j)} = [y_{j+T}, ..., y_{j+T+H-1}]^T`
+where :math:`T` is `time_steps` and :math:`H` is `forecast_horizons`.
+
+Examples
+--------
+>>> import pandas as pd
+>>> import numpy as np
+>>> from fusionlab.nn.utils import reshape_xtft_data
+
+>>> # Example 1: Basic usage without spatial grouping
+>>> n_points = 50
+>>> df1 = pd.DataFrame({
+...     'Date': pd.to_datetime(pd.date_range('2023-01-01', periods=n_points)),
+...     'Target': np.arange(n_points),
+...     'Dynamic1': np.random.rand(n_points),
+...     'Static1_val': np.random.rand(n_points) * 10, # Will be sequence-static
+...     'Future1': np.random.rand(n_points) + 5
+... })
+>>> s, d, f, t = reshape_xtft_data(
+...     df1, dt_col='Date', target_col='Target',
+...     dynamic_cols=['Dynamic1'], static_cols=['Static1_val'],
+...     future_cols=['Future1'], time_steps=5, forecast_horizons=3,
+...     verbose=0
+... )
+>>> print(f"Example 1 Shapes: S={s.shape}, D={d.shape}, F={f.shape}, T={t.shape}")
+Example 1 Shapes: S=(43, 1), D=(43, 5, 1), F=(43, 8, 1), T=(43, 3, 1)
+
+>>> # Example 2: With spatial grouping
+>>> df_list = []
+>>> for group_id in ['A', 'B']:
+...     group_df = pd.DataFrame({
+...         'Date': pd.to_datetime(pd.date_range('2023-01-01', periods=30)),
+...         'Target': np.random.rand(30) + (10 if group_id == 'A' else 20),
+...         'Dynamic1': np.random.rand(30),
+...         'Static_Group': 100 if group_id == 'A' else 200, # Truly static per group
+...         'Future1': np.random.rand(30) + 5,
+...         'GroupID': group_id
+...     })
+...     df_list.append(group_df)
+>>> df2 = pd.concat(df_list)
+>>> s, d, f, t = reshape_xtft_data(
+...     df2, dt_col='Date', target_col='Target',
+...     dynamic_cols=['Dynamic1'], static_cols=['Static_Group'],
+...     future_cols=['Future1'], spatial_cols=['GroupID'],
+...     time_steps=6, forecast_horizons=4, verbose=0
+... )
+>>> print(f"\nExample 2 Shapes (Spatial): S={s.shape}, D={d.shape}, F={f.shape}, T={t.shape}")
+Example 2 Shapes (Spatial): S=(42, 1), D=(42, 6, 1), F=(42, 10, 1), T=(42, 4, 1)
+
+See Also
+--------
+fusionlab.utils.ts_utils.ts_validator : Validates and converts datetime columns.
+fusionlab.core.handlers.columns_manager : Formats and validates column lists.
+fusionlab.core.checks.exist_features : Checks for column existence.
+fusionlab.utils.io_utils.save_job : Utility for saving processed data.
+fusionlab.nn.utils.create_sequences : Simpler sequence creation for basic models.
+
+References
+----------
+.. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
+   Temporal Fusion Transformers for interpretable multi-horizon
+   time series forecasting. *International Journal of Forecasting*,
+   37(4), 1748-1764. (Illustrates the type of data structure TFTs expect).
+
+"""

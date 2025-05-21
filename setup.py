@@ -25,14 +25,14 @@ KEYWORDS = "time-series forecasting, machine learning, temporal fusion, deep lea
 
 # Core dependencies
 _required_dependencies = [
-    "numpy<2", # Specify version constraints if necessary
+    "numpy<2", 
     "pandas",
     "scipy",
     "matplotlib",
     "tqdm",
     "scikit-learn",
     "statsmodels",
-    "tensorflow>=2.10", # Example: specify a minimum TF version
+    "tensorflow>=2.15", 
     "joblib",
     "pyyaml"
 ]
@@ -43,21 +43,20 @@ _extras_require = {
         "pytest",
         "sphinx",
         "flake8",
-        # Add other dev tools like black, isort, mypy if used
+        # other dev tools like black, isort, mypy can be added
     ],
-    "kdiagram": [ # New extra for kdiagram
-        "k-diagram>=0.1.0", # Specify a version if needed
+    "kdiagram": [ 
+        "k-diagram>=1.0.3", 
     ],
-    "full": [ # Convenience extra to install all optional deps
-        "k-diagram>=0.1.0",
+    "full": [ 
+        "k-diagram>=1.0.3",
     ]
 }
-# Add "full" to include all optional dependencies by default if desired
-# or keep them separate. For now, let's make "full" install kdiagram.
+# "full" to include all optional dependencies by default if desired
+# or keep them separate. Let's make "full" install kdiagram.
 _extras_require["full"] = list(
     set(dep for group in _extras_require.values() for dep in group)
     )
-
 
 # Package data specification
 PACKAGE_DATA = {
@@ -75,8 +74,8 @@ setup_kwargs = {
     },
     'packages': find_packages(exclude=['docs', 'tests', 'examples']), # Exclude top-level test/docs
     'install_requires': _required_dependencies,
-    'extras_require': _extras_require, # Use the new extras
-    'python_requires': '>=3.9', # Consistent with your previous setup
+    'extras_require': _extras_require, 
+    'python_requires': '>=3.9', 
 }
 
 setup(

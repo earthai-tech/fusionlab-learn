@@ -64,7 +64,7 @@ if KERAS_BACKEND:
     
     from ..compat.tf import optional_tf_function 
     from ._tensor_validation import validate_anomaly_scores 
-    from ._tensor_validation import validate_xtft_inputs
+    from ._tensor_validation import validate_model_inputs
     from ._tensor_validation import validate_anomaly_config 
     from ._tensor_validation import align_temporal_dimensions
     
@@ -130,9 +130,9 @@ logger = fusionlog().get_fusionlab_logger(__name__)
 )
 class XTFT(Model, NNLearner):
     @validate_params({
-        "static_input_dim": [Interval(Integral, 1, None, closed='left')], 
+        "static_input_dim": [Interval(Integral, 0, None, closed='left')], 
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')], 
-        "future_input_dim": [Interval(Integral, 1, None, closed='left')], 
+        "future_input_dim": [Interval(Integral, 0, None, closed='left')], 
         "embed_dim": [Interval(Integral, 1, None, closed='left')],
         "forecast_horizon": [Interval(Integral, 1, None, closed='left')], 
         "quantiles": ['array-like', StrOptions({'auto'}),  None],
@@ -428,7 +428,7 @@ class XTFT(Model, NNLearner):
           - Memory-augmented attention
           - Dynamic time windowing
         """
-        static_input , dynamic_input, future_input = validate_xtft_inputs (
+        static_input , dynamic_input, future_input = validate_model_inputs (
             inputs =inputs,
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim= self.dynamic_input_dim, 
@@ -1117,7 +1117,7 @@ class SuperXTFT(XTFT):
         
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training=False, **kwargs):
-        static_input, dynamic_input, future_input = validate_xtft_inputs(
+        static_input, dynamic_input, future_input = validate_model_inputs(
             inputs=inputs,
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim=self.dynamic_input_dim, 

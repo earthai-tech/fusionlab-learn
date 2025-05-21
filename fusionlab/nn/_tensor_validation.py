@@ -10,7 +10,7 @@ from ..compat.tf import (
     suppress_tf_warnings, 
     tf_debugging_assert_equal
 )
-from ..compat.tf import TFConfig, HAS_TF  
+from ..compat.tf import  HAS_TF, TFConfig 
 from . import KERAS_DEPS, KERAS_BACKEND
 
 import numpy as np 
@@ -72,8 +72,8 @@ else:
 
 if HAS_TF:
     config = TFConfig()
-    # Enable compatibility mode for ndim
-    config.compat_ndim_enabled = True 
+#     # Enable compatibility mode for ndim
+#     config.compat_ndim_enabled = True 
 
 # --------------------------- tensor validation -------------------------------
 
