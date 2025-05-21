@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# File: fusionlab/datasets/make.py
 # Author: LKouadio <etanoyau@gmail.com>
 # License: BSD-3-Clause 
 # -------------------------------------------------------------------
@@ -36,7 +35,6 @@ __all__ = [
     "make_trend_seasonal_data",
     "make_multivariate_target_data"
     ]
-
 
 def make_multi_feature_time_series(
     n_series: int = 3,
@@ -134,10 +132,9 @@ def make_multi_feature_time_series(
     ...                                           as_frame=True, seed=123)
     >>> print(df_monthly.info())
     """
-    if seed is not None:
-        rng = np.random.default_rng(seed)
-    else:
-        rng = np.random.default_rng()
+    # if seed is not None:
+    rng = np.random.RandomState(seed)
+
 
     all_series_df = []
     start_date = '2020-01-01' # Arbitrary start date
@@ -208,14 +205,16 @@ def make_multi_feature_time_series(
     dynamic_features = ['month', 'dayofweek', 'dynamic_cov', 'target_lag1']
     future_features = ['month', 'dayofweek', 'future_event']
     # Exclude target and ID from features list passed to Bunch
-    feature_names = static_features[1:] + dynamic_features + future_features
+    dynamic_and_future_features = list(set (dynamic_features + future_features))
+    feature_names = static_features[1:] + dynamic_and_future_features 
+    # dynamic_features + future_features
 
     # --- Return based on as_frame ---
     if as_frame:
         # Return DataFrame with logical column order
         ordered_cols = (
             [dt_col, spatial_id_col] + static_features[1:] +
-            dynamic_features + future_features + [target_col]
+            dynamic_and_future_features + [target_col]
             )
         # Ensure columns exist before ordering
         ordered_cols = [c for c in ordered_cols if c in df.columns]
@@ -253,7 +252,7 @@ def make_multi_feature_time_series(
         # Order frame columns for Bunch frame attribute
         frame_cols = (
              [dt_col, spatial_id_col] + static_features[1:] +
-             dynamic_features + future_features + [target_col]
+             dynamic_and_future_features + [target_col]
              )
         frame_cols = [c for c in frame_cols if c in df.columns]
 

@@ -10,6 +10,7 @@ import os
 import re
 import warnings
 import inspect
+import textwrap
 
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -1829,4 +1830,170 @@ def save_all_figures(
     
     return saved_paths
 
+def print_box(
+    msg: Union[str, List[str]],
+    width: int = 80,
+    align: str = 'center',
+    border_char: str = '+',
+    horizontal_char: str = '-',
+    vertical_char: str = '|',
+    padding: int = 1
+) -> None:
+    """
+    Print a boxed message with customizable styling.
 
+    Parameters
+    ----------
+    msg : str or list of str
+        The message to display. If a list is provided, each element
+        is treated as a separate line.
+    width : int, default=80
+        Total width of the box including borders.
+    align : {'center','left','right'}, default='center'
+        Text alignment within the box.
+    border_char : str, default='+'
+        Character used for the four corners of the box.
+    horizontal_char : str, default='-'
+        Character used for the top/bottom border lines.
+    vertical_char : str, default='|'
+        Character used for the left/right border lines.
+    padding : int, default=1
+        Number of spaces between text and vertical borders.
+
+    Returns
+    -------
+    None
+        Prints the styled box directly to stdout.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import print_box 
+    >>> print_box("Hello, world!", width=40)
+    +--------------------------------------+
+    |             Hello, world!           |
+    +--------------------------------------+
+
+    >>> print_box(
+    ...     ["Line one", "This is a longer line that will wrap"],
+    ...     width=50, align='left', border_char='*'
+    ... )
+    **************************************************
+    * Line one                                      *
+    * This is a longer line that will                *
+    * wrap                                          *
+    **************************************************
+    """
+    # Ensure msg is a list of lines
+    lines = msg if isinstance(msg, list) else msg.split('\n')
+
+    # Calculate inner width for text (excluding borders & padding)
+    inner_width = width - 2 - 2 * padding
+    if inner_width < 10:
+        raise ValueError("Width too small for the given padding.")
+
+    # Build top and bottom border
+    border_line = (
+        border_char
+        + horizontal_char * (width - 2)
+        + border_char
+    )
+
+    # Function to align a single line
+    def align_line(text: str) -> str:
+        if len(text) > inner_width:
+            text = text[:inner_width]
+        if align == 'left':
+            return text.ljust(inner_width)
+        elif align == 'right':
+            return text.rjust(inner_width)
+        else:  # center
+            return text.center(inner_width)
+
+    # Print the box
+    print(border_line)
+    for raw_line in lines:
+        # Wrap long lines
+        wrapped = textwrap.wrap(raw_line, inner_width) or ['']
+        for wline in wrapped:
+            print(
+                vertical_char
+                + ' ' * padding
+                + align_line(wline)
+                + ' ' * padding
+                + vertical_char
+            )
+    print(border_line)
+
+def handle_emptiness(
+    obj: Any,
+    ops: str = 'validate',
+    empty_as_none: bool = True
+) -> Union[Any, bool]:
+    """
+    Smart helper to check or normalize empty/None values.
+
+    Parameters
+    ----------
+    obj : Any
+        The object to inspect. Can be None, numpy array,
+        pandas Series/DataFrame, list, tuple, etc.
+    ops : {'validate','check_only'}, default='validate'
+        - 'check_only': return True if obj is None or empty.
+        - 'validate': return normalized obj or placeholder.
+    empty_as_none : bool, default=True
+        Only used when ops='validate':
+        - If True, empty or None -> return None
+        - If False, empty or None -> return [] (empty list)
+
+    Returns
+    -------
+    obj or bool
+        - If `ops=='check_only'`, returns a bool indicating if
+          `obj` is None or empty.
+        - If `ops=='validate'`,
+          - Non-empty object -> returned unchanged
+          - Empty/None -> None or [] based on `empty_as_none`
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from fusionlab.utils.generic_utils import \
+            handle_emptiness
+    >>> handle_emptiness(None, ops='check_only')
+    True
+    >>> handle_emptiness([], ops='check_only')
+    True
+    >>> handle_emptiness(np.array([]), ops='check_only')
+    True
+    >>> handle_emptiness(pd.DataFrame(), ops='check_only')
+    True
+    >>> handle_emptiness([1,2,3], ops='check_only')
+    False
+    >>> handle_emptiness([], ops='validate', empty_as_none=True)
+    None
+    >>> handle_emptiness([], ops='validate', empty_as_none=False)
+    []
+
+    """
+    def _is_empty(o: Any) -> bool:
+        """Determine if o is None or contains no elements."""
+        if o is None:
+            return True
+        if isinstance(o, np.ndarray):
+            return o.size == 0
+        if isinstance(o, (pd.Series, pd.DataFrame)):
+            return o.empty
+        try:
+            return len(o) == 0
+        except Exception:
+            return False
+
+    if ops == 'check_only':
+        return _is_empty(obj)
+
+    if ops == 'validate':
+        if _is_empty(obj):
+            return None if empty_as_none else []
+        return obj
+
+    raise ValueError("`ops` must be 'validate' or 'check_only'")

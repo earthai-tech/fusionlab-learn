@@ -239,11 +239,12 @@ def xtft_tuner(
 
     # --- Input Validation ---
     # User provides inputs as [Static, Dynamic, Future]
-    if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
-        raise ValueError(
-            "Inputs must be a list/tuple of 3 elements: "
-            "[X_static, X_dynamic, X_future]."
-            )
+    if model_name !='tft_flex':
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
+            raise ValueError(
+                "Inputs must be a list/tuple of 3 elements: "
+                "[X_static, X_dynamic, X_future]."
+                )
     # Ensure y is a tensor for shape operations
     y_tensor = tf_convert_to_tensor(y, dtype=tf_float32)
           
@@ -583,7 +584,7 @@ def _model_builder_factory(
     if X_future_val is not None:
         params["future_input_dim"] = X_future_val.shape[-1]
     # else: future_input_dim remains unset or will be None
-
+    
     # --- Model-specific parameters and class selection ---
     if model_name_lower in ["xtft", "superxtft", "super_xtft"]:
         # These models require all three input dimensions
@@ -702,7 +703,7 @@ def _model_builder_factory(
   
     # Instantiate model
     # For tft_flex, some *_input_dim might be None, which is fine for its __init__
-   
+
     model = model_class(**params)
 
     # Compile model

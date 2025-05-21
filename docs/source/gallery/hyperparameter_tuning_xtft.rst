@@ -1,8 +1,8 @@
 .. _example_hyperparameter_tuning:
 
-==============================
-Hyperparameter Tuning Example
-==============================
+======================================
+Hyperparameter Tuning Example: XTFT
+======================================
 
 Finding optimal hyperparameters is crucial for getting the best
 performance from models like :class:`~fusionlab.nn.XTFT` and
