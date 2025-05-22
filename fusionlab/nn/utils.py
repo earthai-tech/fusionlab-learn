@@ -24,6 +24,7 @@ from typing import (
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors 
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import r2_score
 
@@ -126,7 +127,415 @@ except ImportError:
         )
         return np.nan
 
-# now let visualize the results of prediction 
+
+# for package consisteny parameter name, I have rename some parameters 
+# to be consistent over all the package. 
+# I have already a visualize forecast function , 
+# I want to rename this, which name ddo you suggest to me, make it shorter 
+# at most two combine name like forecast_visualizing or else more instuitive 
+# now document robustly the function 
+
+# dont write the code, since it is already done, just document only the docstring 
+def visualize_forecasts(
+    forecast_df: pd.DataFrame,
+    target_name: str = "target",
+    quantiles: Optional[List[float]] = None,
+    output_dim: int = 1,
+    kind: str = "temporal", # spatial 
+    actual_data: Optional[pd.DataFrame] = None,
+    dt_col: Optional[str] = None,
+    actual_target_name: Optional[str] = None, # Name of target in actual_data
+    sample_ids: Optional[Union[int, List[int], str]] = "first_n",
+    num_samples: int = 3,
+    horizon_steps: Optional[Union[int, List[int]]] = 1,
+    spatial_cols : List[str] =None, 
+    # spatial_x_col: Optional[str] = None,
+    # spatial_y_col: Optional[str] = None,
+    max_cols: int = 2,
+    figsize: Tuple[float, float] = (8, 4.5),
+    scaler: Optional[Any] = None,
+    scaler_feature_names: Optional[List[str]] = None,
+    target_idx_in_scaler: Optional[int] = None,
+    titles: List [str] =None, 
+    verbose: int = 0,
+    **plot_kwargs: Any
+) -> None:
+    """
+    Visualizes model forecasts from a structured DataFrame.
+
+    (Full NumPy docstring omitted for brevity as requested.
+    It would detail all parameters, their interactions, expected
+    DataFrame structure, and various plotting scenarios.)
+    """
+    vlog(f"Starting forecast visualization (kind='{kind}')...",
+         level=3, verbose=verbose)
+
+    if not isinstance(forecast_df, pd.DataFrame):
+        raise TypeError("`forecast_df` must be a pandas DataFrame, typically "
+                        "the output of `format_predictions_to_dataframe`.")
+
+    if 'sample_idx' not in forecast_df.columns or \
+       'forecast_step' not in forecast_df.columns:
+        raise ValueError(
+            "`forecast_df` must contain 'sample_idx' and 'forecast_step' "
+            "columns."
+        )
+
+    # --- Data Preparation & Inverse Transform ---
+    # Work on a copy to avoid modifying the original DataFrame
+    df_to_plot = forecast_df.copy()
+    actual_col_names_in_df = [] # To store names of actual columns in df_to_plot
+    pred_col_names_in_df = []   # To store names of prediction columns
+
+    # Identify prediction and actual columns based on target_name and quantiles
+    base_pred_name = target_name
+    base_actual_name = actual_target_name if actual_target_name \
+        else target_name
+
+    if quantiles:
+        # Sort quantiles to ensure consistent order for plotting (e.g., low, mid, high)
+        sorted_quantiles = sorted([float(q) for q in quantiles])
+        for o_idx in range(output_dim):
+            for q_val in sorted_quantiles:
+                q_suffix = f"_q{int(q_val*100)}"
+                col_name = f"{base_pred_name}"
+                if output_dim > 1: col_name += f"_{o_idx}"
+                col_name += q_suffix
+                if col_name in df_to_plot.columns:
+                    pred_col_names_in_df.append(col_name)
+            # Actual column for this output dimension
+            actual_col = f"{base_actual_name}"
+            if output_dim > 1: actual_col += f"_{o_idx}"
+            actual_col += "_actual"
+            if actual_col in df_to_plot.columns:
+                actual_col_names_in_df.append(actual_col)
+    else: # Point forecast
+        for o_idx in range(output_dim):
+            col_name = f"{base_pred_name}"
+            if output_dim > 1: col_name += f"_{o_idx}"
+            col_name += "_pred"
+            if col_name in df_to_plot.columns:
+                pred_col_names_in_df.append(col_name)
+            actual_col = f"{base_actual_name}"
+            if output_dim > 1: actual_col += f"_{o_idx}"
+            actual_col += "_actual"
+            if actual_col in df_to_plot.columns:
+                actual_col_names_in_df.append(actual_col)
+
+    if not pred_col_names_in_df:
+        warnings.warn("No prediction columns found in `forecast_df` "
+                      "based on `target_name` and `quantiles`.")
+        # Attempt to find any column ending with _pred or _qXX
+        pred_cols_found = [c for c in df_to_plot.columns if "_pred" in c or "_q" in c]
+        if pred_cols_found:
+            pred_col_names_in_df = pred_cols_found
+            vlog(f"  Auto-detected prediction columns: {pred_col_names_in_df}",
+                 level=2, verbose=verbose)
+        else:
+            vlog("  No prediction columns could be auto-detected. "
+                 "Plotting may be limited.", level=2, verbose=verbose)
+
+    # Apply inverse transform if scaler is provided
+    if scaler is not None:
+        if scaler_feature_names is None or target_idx_in_scaler is None:
+            warnings.warn(
+                "Scaler provided, but `scaler_feature_names` or "
+                "`target_idx_in_scaler` is missing. Inverse transform "
+                "cannot be applied correctly to specific target columns.",
+                UserWarning
+            )
+        else:
+            vlog("  Applying inverse transformation using provided scaler...",
+                 level=4, verbose=verbose)
+            cols_to_inverse_transform = pred_col_names_in_df + actual_col_names_in_df
+            dummy_array_shape = (len(df_to_plot), len(scaler_feature_names))
+
+            for col_to_inv in cols_to_inverse_transform:
+                if col_to_inv in df_to_plot.columns:
+                    try:
+                        dummy = np.zeros(dummy_array_shape)
+                        dummy[:, target_idx_in_scaler] = df_to_plot[col_to_inv]
+                        df_to_plot[col_to_inv] = scaler.inverse_transform(
+                            dummy
+                            )[:, target_idx_in_scaler]
+                    except Exception as e:
+                        warnings.warn(
+                            f"Failed to inverse transform column '{col_to_inv}'. "
+                            f"Plotting scaled value. Error: {e}"
+                            )
+            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
+
+    # --- Select Samples/Items to Plot ---
+    unique_sample_ids = df_to_plot['sample_idx'].unique()
+    selected_ids_for_plot = []
+    if isinstance(sample_ids, str):
+        if sample_ids.lower() == "all":
+            selected_ids_for_plot = unique_sample_ids
+        elif sample_ids.lower() == "first_n":
+            selected_ids_for_plot = unique_sample_ids[:num_samples]
+        else:
+            warnings.warn(f"Unknown string for `sample_ids`: "
+                          f"'{sample_ids}'. Plotting first sample.")
+            selected_ids_for_plot = unique_sample_ids[:1]
+    elif isinstance(sample_ids, int):
+        if sample_ids < len(unique_sample_ids):
+            selected_ids_for_plot = [unique_sample_ids[sample_ids]]
+        else:
+            warnings.warn(f"sample_idx {sample_ids} out of range. "
+                          "Plotting first sample.")
+            selected_ids_for_plot = unique_sample_ids[:1]
+    elif isinstance(sample_ids, list):
+        selected_ids_for_plot = [
+            sid for sid in sample_ids if sid in unique_sample_ids
+            ]
+    if not selected_ids_for_plot:
+        vlog("No valid sample_idx found to plot. Defaulting to first available.",
+             level=2, verbose=verbose)
+        selected_ids_for_plot = unique_sample_ids[:1]
+    if not selected_ids_for_plot.size > 0 : # check if is empty
+        vlog ("No sample to plot. Returning ...", level =1, verbose=verbose)
+        return
+
+    vlog(f"  Plotting for sample_idx: {selected_ids_for_plot}",
+         level=4, verbose=verbose)
+
+    # --- Plotting Logic ---
+    if kind == "temporal":
+        num_plots = len(selected_ids_for_plot) * output_dim
+        if num_plots == 0:
+            vlog("No data to plot for temporal type.", level=2, verbose=verbose)
+            return
+
+        n_cols_plot = min(max_cols, num_plots)
+        n_rows_plot = (num_plots + n_cols_plot - 1) // n_cols_plot
+
+        fig, axes = plt.subplots(
+            n_rows_plot, n_cols_plot,
+            figsize=(n_cols_plot * figsize[0],
+                     n_rows_plot * figsize[1]),
+            squeeze=False # Always return 2D array for axes
+        )
+        axes_flat = axes.flatten()
+        plot_idx = 0
+
+        for s_idx in selected_ids_for_plot:
+            sample_df = df_to_plot[df_to_plot['sample_idx'] == s_idx]
+            if sample_df.empty:
+                continue
+
+            for o_idx in range(output_dim):
+                if plot_idx >= len(axes_flat): break # Should not happen
+                ax = axes_flat[plot_idx]
+
+                title = f"Sample ID: {s_idx}"
+                if output_dim > 1:
+                    title += f", Target Dim: {o_idx}"
+                if titles and plot_idx < len(titles):
+                    title = titles[plot_idx]
+                ax.set_title(title)
+
+                # Plot actuals if available
+                actual_col = f"{base_actual_name}"
+                if output_dim > 1: actual_col += f"_{o_idx}"
+                actual_col += "_actual"
+                if actual_col in sample_df.columns:
+                    ax.plot(
+                        sample_df['forecast_step'], sample_df[actual_col],
+                        label=f'Actual {target_name}'
+                              f'{f"_{o_idx}" if output_dim > 1 else ""}',
+                        marker='o', linestyle='--'
+                    )
+
+                # Plot predictions
+                if quantiles:
+                    median_q_val = 0.5
+                    if 0.5 not in quantiles: # Find closest if 0.5 not present
+                        median_q_val = quantiles[len(quantiles) // 2]
+
+                    median_col = f"{base_pred_name}"
+                    if output_dim > 1: median_col += f"_{o_idx}"
+                    median_col += f"_q{int(median_q_val*100)}"
+
+                    lower_q_col = f"{base_pred_name}"
+                    if output_dim > 1: lower_q_col += f"_{o_idx}"
+                    lower_q_col += f"_q{int(sorted_quantiles[0]*100)}"
+
+                    upper_q_col = f"{base_pred_name}"
+                    if output_dim > 1: upper_q_col += f"_{o_idx}"
+                    upper_q_col += f"_q{int(sorted_quantiles[-1]*100)}"
+
+                    if median_col in sample_df.columns:
+                        ax.plot(
+                            sample_df['forecast_step'], sample_df[median_col],
+                            label=f'Median (q{int(median_q_val*100)})',
+                            marker='x',
+                            **plot_kwargs.get("median_plot_kwargs", {})
+                        )
+                    if lower_q_col in sample_df.columns and \
+                       upper_q_col in sample_df.columns:
+                        ax.fill_between(
+                            sample_df['forecast_step'],
+                            sample_df[lower_q_col],
+                            sample_df[upper_q_col],
+                            color='gray', alpha=0.3,
+                            label=f'Interval (q{int(sorted_quantiles[0]*100)}'
+                                  f'-q{int(sorted_quantiles[-1]*100)})',
+                            **plot_kwargs.get("fill_between_kwargs", {})
+                        )
+                else: # Point forecast
+                    pred_col = f"{base_pred_name}"
+                    if output_dim > 1: pred_col += f"_{o_idx}"
+                    pred_col += "_pred"
+                    if pred_col in sample_df.columns:
+                        ax.plot(
+                            sample_df['forecast_step'], sample_df[pred_col],
+                            label=f'Predicted {target_name}'
+                                  f'{f"_{o_idx}" if output_dim > 1 else ""}',
+                            marker='x',
+                            **plot_kwargs.get("point_plot_kwargs", {})
+                        )
+                ax.set_xlabel("Forecast Step into Horizon")
+                ax.set_ylabel(
+                    f"{target_name}{f' (Dim {o_idx})' if output_dim > 1 else ''}"
+                    )
+                ax.legend()
+                ax.grid(True)
+                plot_idx += 1
+
+        # Hide unused subplots
+        for i in range(plot_idx, len(axes_flat)):
+            axes_flat[i].set_visible(False)
+        fig.tight_layout()
+        plt.show()
+
+    elif kind == "spatial":
+        
+        spatial_x_col = None 
+        spatial_y_col =None 
+        
+        if spatial_cols is not None:
+            spatial_cols = columns_manager (spatial_cols, empty_as_none=False)
+            if len(spatial_cols )!=2: 
+                raise ValueError(
+                    "Spatial_cols need exactly two columns (e.g., longitude,"
+                    f" latitude ). Got {spatial_cols}")
+                
+            spatial_x_col , spatial_y_col = spatial_cols 
+    
+        if spatial_x_col is None or spatial_y_col is None:
+            raise ValueError(
+                "`spatial_x_col` and `spatial_y_col` must be provided "
+                "for `kind='spatial'`."
+            )
+        if spatial_x_col not in df_to_plot.columns or \
+           spatial_y_col not in df_to_plot.columns:
+            raise ValueError(
+                f"Spatial columns '{spatial_x_col}' or '{spatial_y_col}' "
+                "not found in forecast_df."
+            )
+
+        steps_to_plot = []
+        if isinstance(horizon_steps, int):
+            steps_to_plot = [horizon_steps]
+        elif isinstance(horizon_steps, list):
+            steps_to_plot = horizon_steps
+        elif horizon_steps is None or \
+             str(horizon_steps).lower() == "all":
+            # Plot all unique forecast steps present in the data
+            steps_to_plot = sorted(df_to_plot['forecast_step'].unique())
+        else:
+            raise ValueError("Invalid `horizon_steps`.")
+
+        num_plots = len(steps_to_plot) * output_dim
+        if num_plots == 0:
+            vlog("No data/steps to plot for spatial type.",
+                 level=2, verbose=verbose)
+            return
+
+        n_cols_plot = min(max_cols, num_plots)
+        n_rows_plot = (num_plots + n_cols_plot - 1) // n_cols_plot
+
+        fig, axes = plt.subplots(
+            n_rows_plot, n_cols_plot,
+            figsize=(n_cols_plot * figsize[0],
+                     n_rows_plot * figsize[1]),
+            squeeze=False
+        )
+        axes_flat = axes.flatten()
+        plot_idx = 0
+
+        for step in steps_to_plot:
+            step_df = df_to_plot[df_to_plot['forecast_step'] == step]
+            if step_df.empty:
+                continue
+            for o_idx in range(output_dim):
+                if plot_idx >= len(axes_flat): break
+                ax = axes_flat[plot_idx]
+
+                # Determine column to use for color intensity
+                color_col = None
+                plot_title_suffix = ""
+                if quantiles: # Use median for color
+                    median_q_val = 0.5
+                    if 0.5 not in quantiles:
+                        median_q_val = quantiles[len(quantiles) // 2]
+                    color_col = f"{base_pred_name}"
+                    if output_dim > 1: color_col += f"_{o_idx}"
+                    color_col += f"_q{int(median_q_val*100)}"
+                    plot_title_suffix = f" (Median q{int(median_q_val*100)})"
+                else: # Point forecast
+                    color_col = f"{base_pred_name}"
+                    if output_dim > 1: color_col += f"_{o_idx}"
+                    color_col += "_pred"
+
+                if color_col not in step_df.columns:
+                    warnings.warn(f"Color column '{color_col}' not found "
+                                  "for spatial plot. Skipping subplot.")
+                    plot_idx +=1 # Increment to avoid reusing subplot
+                    continue
+
+                scatter_data = step_df.dropna(
+                    subset=[spatial_x_col, spatial_y_col, color_col]
+                    )
+                if scatter_data.empty:
+                    warnings.warn(f"No valid data to plot for step {step}, "
+                                  f"output_dim {o_idx} after dropna. Skipping.")
+                    plot_idx += 1
+                    continue
+
+                # Normalize color data for better visualization
+                norm = mcolors.Normalize(
+                    vmin=scatter_data[color_col].min(),
+                    vmax=scatter_data[color_col].max()
+                    )
+                cmap = plot_kwargs.get('cmap', 'viridis')
+
+                sc = ax.scatter(
+                    scatter_data[spatial_x_col], scatter_data[spatial_y_col],
+                    c=scatter_data[color_col], cmap=cmap, norm=norm,
+                    s=plot_kwargs.get('s', 50), # Marker size
+                    alpha=plot_kwargs.get('alpha', 0.7)
+                )
+                fig.colorbar(sc, ax=ax, label=f"{target_name}{plot_title_suffix}")
+                title = f"Forecast Step: {step}"
+                if output_dim > 1: title += f", Target Dim: {o_idx}"
+                ax.set_title(title)
+                ax.set_xlabel(spatial_x_col)
+                ax.set_ylabel(spatial_y_col)
+                ax.grid(True)
+                plot_idx += 1
+        
+        for i in range(plot_idx, len(axes_flat)):
+            axes_flat[i].set_visible(False)
+        fig.tight_layout()
+        plt.show()
+
+    else:
+        raise ValueError(
+            f"Unsupported `kind`: '{kind}'. "
+            "Choose 'temporal' or 'spatial'."
+            )
+    vlog("Forecast visualization complete.", level=3, verbose=verbose)
 
 def format_predictions_to_dataframe(
     predictions: Optional[Union[np.ndarray, Tensor]] = None,
@@ -149,10 +558,206 @@ def format_predictions_to_dataframe(
     verbose: int = 0,
     **kwargs: Any
 ) -> pd.DataFrame:
-    """
-    Formats model predictions into a structured pandas DataFrame.
 
+    """Formats model predictions into a structured pandas DataFrame.
+
+    This utility function takes raw model predictions (either directly
+    as an array/tensor or generated by a provided model and its inputs)
+    and transforms them into a long-format pandas DataFrame. It can
+    handle point forecasts, quantile forecasts, single or multi-output
+    predictions, and optionally include actual target values, spatial
+    identifiers, and perform coverage score evaluation for quantile
+    forecasts.
+    
+    The output DataFrame is structured with 'sample_idx' (identifying
+    the original input sequence) and 'forecast_step' (from 1 to H,
+    where H is the forecast horizon).
+    
+    Parameters
+    ----------
+    predictions : np.ndarray or tf.Tensor, optional
+        The raw prediction tensor or array.
+        - For point forecasts, expected shapes:
+            - (num_samples, forecast_horizon, output_dim)
+            - (num_samples, forecast_horizon) if output_dim=1 (will be reshaped)
+            - (num_samples, output_dim) if forecast_horizon=1 (will be reshaped)
+        - For quantile forecasts, expected shapes:
+            - (num_samples, forecast_horizon, num_quantiles * output_dim)
+            - (num_samples, forecast_horizon, num_quantiles, output_dim)
+            - (num_samples, num_quantiles * output_dim) if forecast_horizon=1
+        If ``None``, `model` and `model_inputs` must be provided.
+        Default is ``None``.
+    model : tf.keras.Model, optional
+        A trained Keras model to generate predictions if `predictions`
+        is not provided. Used in conjunction with `model_inputs`.
+        Default is ``None``.
+    model_inputs : List[Optional[Union[np.ndarray, tf.Tensor]]], optional
+        A list of input tensors (e.g., [static, dynamic, future])
+        required by the `model` to generate predictions. Required if
+        `predictions` is ``None`` and `model` is provided.
+        Default is ``None``.
+    y_true_sequences : np.ndarray or tf.Tensor, optional
+        The true target values corresponding to the predictions, used
+        for including actuals in the output DataFrame and for
+        evaluation. Expected shape:
+        `(num_samples, forecast_horizon, output_dim)`.
+        Default is ``None``.
+    target_name : str, optional
+        Base name for the target variable. Used to prefix prediction
+        and actual column names (e.g., "sales_pred", "sales_q50",
+        "sales_actual"). Default is "target".
+    quantiles : List[float], optional
+        A list of quantiles that were predicted by the model (e.g.,
+        `[0.1, 0.5, 0.9]`). Required if the predictions are quantile
+        forecasts. If provided, prediction columns will be named like
+        `{target_name}_q10`, `{target_name}_q50`, etc.
+        Default is ``None`` (for point forecasts).
+    forecast_horizon : int, optional
+        The number of time steps into the future that the model
+        predicts. If not provided, it's inferred from
+        `predictions.shape[1]` or `y_true_sequences.shape[1]`.
+        Default is ``None``.
+    output_dim : int, optional
+        The number of target variables predicted at each time step
+        (e.g., 1 for univariate, >1 for multivariate target).
+        If not provided, it's inferred from the shape of
+        `predictions` or `y_true_sequences`. Default is ``None``.
+    spatial_data_array : np.ndarray or tf.Tensor or pd.DataFrame or pd.Series, optional
+        An array or DataFrame containing static spatial/identifier
+        features for each of the `num_samples` sequences.
+        - If NumPy/Tensor: Expected shape `(num_samples, num_spatial_features)`.
+          `spatial_cols_indices` must be provided.
+        - If DataFrame/Series: Must have `num_samples` rows.
+          `spatial_cols_names` must be provided.
+        These features will be repeated for each forecast step in the
+        output DataFrame. Default is ``None``.
+    spatial_cols_names : List[str], optional
+        List of column names to select from `spatial_data_array` if it's
+        a DataFrame/Series, or names to assign to columns if
+        `spatial_data_array` is NumPy/Tensor and `spatial_cols_indices`
+        are provided. Default is ``None``.
+    spatial_cols_indices : List[int], optional
+        List of column indices to select from `spatial_data_array` if
+        it's a NumPy/Tensor. Length must match `spatial_cols_names` if
+        provided. Default is ``None``.
+    evaluate_coverage : bool, default False
+        If ``True``, `quantiles` are provided (at least two), and
+        `y_true_sequences` is available, calculates the coverage score
+        using the first and last quantiles as interval bounds.
+        Requires `fusionlab.metrics.coverage_score`.
+    scaler : Any, optional
+        A fitted scikit-learn-like scaler object (must have an
+        `inverse_transform` method) used to scale the target variable
+        and potentially other features. If provided along with
+        `scaler_feature_names` and `target_idx_in_scaler`, predictions
+        and actuals for the target will be inverse-transformed.
+        Default is ``None``.
+    scaler_feature_names : List[str], optional
+        A list of all feature names (in order) that the `scaler` was
+        originally fit on. Required if `scaler` is provided and
+        targeted inverse transformation is needed. Default is ``None``.
+    target_idx_in_scaler : int, optional
+        The index of the `target_name` within the
+        `scaler_feature_names` list. Required if `scaler` is
+        provided and targeted inverse transformation is needed.
+        Default is ``None``.
+    verbose : int, default 0
+        Verbosity level for logging during processing.
+        - ``0``: Silent.
+        - ``1``: Basic info.
+        - ``3``: More detailed steps.
+        - ``5``: Very detailed shape information.
+    **kwargs : Any
+        Additional keyword arguments (currently not used but included
+        for future extensibility).
+    
+    Returns
+    -------
+    pandas.DataFrame
+        A long-format DataFrame with columns including:
+        - `sample_idx`: Identifier for the original input sequence.
+        - `forecast_step`: Time step within the forecast horizon (1 to H).
+        - Spatial columns (if `spatial_data_array` provided).
+        - Prediction columns:
+            - Point forecast: `{target_name}_pred` (or
+              `{target_name}_{output_idx}_pred` for multi-output).
+            - Quantile forecast: `{target_name}_qXX` (or
+              `{target_name}_{output_idx}_qXX` for multi-output).
+        - Actual value columns (if `y_true_sequences` provided):
+            - `{target_name}_actual` (or
+              `{target_name}_{output_idx}_actual`).
+        Values in prediction and actual columns will be inverse-
+        transformed if a valid `scaler` and related parameters are given.
+    
+    Raises
+    ------
+    ValueError
+        If `predictions` is None and `model` or `model_inputs` is also None.
+        If `predictions` shape is invalid (not 2D, 3D, or 4D).
+        If `quantiles` are provided but prediction shape is incompatible
+        for inferring `output_dim`.
+        If `spatial_data_array` is provided without necessary name/index
+        parameters.
+    TypeError
+        If `predictions` or other inputs cannot be converted to the
+        expected tensor/array types.
+    
+    See Also
+    --------
+    fusionlab.nn.utils.forecast_multi_step : Higher-level forecasting utility.
+    fusionlab.metrics.coverage_score : For evaluating quantile forecast intervals.
+    
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> import numpy as np
+    >>> from fusionlab.nn.utils import format_predictions_to_dataframe
+    
+    >>> B, H, O = 4, 3, 1 # Batch, Horizon, OutputDim
+    >>> Q = [0.1, 0.5, 0.9]
+    >>> preds_point = tf.random.normal((B, H, O))
+    >>> preds_quant = tf.random.normal((B, H, len(Q))) # For O=1
+    >>> y_true = tf.random.normal((B, H, O))
+    
+    >>> # Point forecast
+    >>> df_point = format_predictions_to_dataframe(
+    ...     predictions=preds_point, y_true_sequences=y_true,
+    ...     target_name="value", forecast_horizon=H, output_dim=O
+    ... )
+    >>> print(df_point.head(H)) # Show first sample's horizon
+       sample_idx  forecast_step  value_pred  value_actual
+    0           0              1   -0.576731     -0.647362
+    1           0              2    0.183931      1.198977
+    2           0              3   -0.766871      0.534040
+    
+    
+    >>> # Quantile forecast
+    >>> df_quant = format_predictions_to_dataframe(
+    ...     predictions=preds_quant, y_true_sequences=y_true,
+    ...     target_name="value", quantiles=Q,
+    ...     forecast_horizon=H, output_dim=O
+    ... )
+    >>> print(df_quant.head(H))
+       sample_idx  forecast_step  value_q10  value_q50  value_q90  value_actual
+    0           0              1  -0.209947   0.263107  -0.308929     -0.647362
+    1           0              2   0.303091   0.594701  -0.225007      1.198977
+    2           0              3   0.136699  -1.237739   0.002834      0.534040
+    
+    >>> # With spatial data (NumPy array)
+    >>> spatial_np = np.array([[101, 201], [102, 202], [103, 203], [104, 204]])
+    >>> df_spatial = format_predictions_to_dataframe(
+    ...     predictions=preds_point,
+    ...     spatial_data_array=spatial_np,
+    ...     spatial_cols_names=['store_id', 'region_id'],
+    ...     spatial_cols_indices=[0, 1]
+    ... )
+    >>> print(df_spatial[['sample_idx', 'forecast_step', 'store_id']].head(H))
+       sample_idx  forecast_step  store_id
+    0           0              1     101.0
+    1           0              2     101.0
+    2           0              3     101.0
     """
+
     vlog("Starting prediction formatting to DataFrame.",
          level=3, verbose=verbose)
 
