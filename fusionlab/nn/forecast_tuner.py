@@ -74,6 +74,9 @@ if KERAS_BACKEND:
     EarlyStopping = KERAS_DEPS.EarlyStopping
     tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
     tf_float32 = KERAS_DEPS.float32
+    tf_zeros = KERAS_DEPS.zeros 
+    tf_shape =KERAS_DEPS.shape 
+    
     
 else:
     class Model: pass
@@ -318,23 +321,68 @@ def xtft_tuner(
           level=4, verbose=verbose
       )
         
+    # --- Inside xtft_tuner function ---
+    # Prepare inputs for Keras Tuner's fit method.
+    # Replace None with dummy tensors with 0 features.
+    inputs_for_fit_list = []
+    
+    # Determine a reference batch size and time steps from dynamic_input
+    # (which is guaranteed to be non-None for all relevant models).
+    ref_batch_size = tf_shape(X_dynamic)[0]
+    ref_dyn_time_steps = tf_shape(X_dynamic)[1]
+
+    if X_static is not None:
+        inputs_for_fit_list.append(X_static)
+    else:
+        # Create dummy 2D static tensor: (Batch, 0 Features)
+        dummy_static = tf_zeros((ref_batch_size, 0), dtype=tf_float32)
+        inputs_for_fit_list.append(dummy_static)
+        if verbose >= 2:
+            vlog(f"  Using dummy static input for fit: {dummy_static.shape}",
+                 level=3, verbose=verbose)
+
+    inputs_for_fit_list.append(X_dynamic) # Dynamic is always present
+
+    if X_future is not None:
+        inputs_for_fit_list.append(X_future)
+    else:
+        # Create dummy 3D future tensor: (Batch, Time, 0 Features)
+        # The time dimension for future dummy should match what the model
+        # might expect if future_input was present.
+        # For TFTFlexible, it might align with dynamic or dynamic + horizon.
+        # Using dynamic's time steps + forecast_horizon is a safe default length.
+        future_time_span_for_dummy = ref_dyn_time_steps
+        if run_case_info.get("forecast_horizon") is not None:
+            future_time_span_for_dummy += run_case_info["forecast_horizon"]
+        
+        dummy_future = tf_zeros(
+            (ref_batch_size, future_time_span_for_dummy, 0),
+            dtype=tf_float32
+        )
+        inputs_for_fit_list.append(dummy_future)
+        if verbose >= 2:
+            vlog(f"  Using dummy future input for fit: {dummy_future.shape}",
+                 level=3, verbose=verbose)
+
+    inputs_for_fit = inputs_for_fit_list
+    # inputs_for_fit is now always a list of 3 actual tensors.
+
     # Update case_info with actual input dimensions for the builder
-    # These are used by _model_builder_factory
-    run_case_info['static_input_dim'] = (
-        X_static.shape[-1] if X_static is not None else None
-        )
-    run_case_info['dynamic_input_dim'] = X_dynamic.shape[-1] # Must exist
-    run_case_info['future_input_dim'] = (
-        X_future.shape[-1] if X_future is not None else None
-        )
+    # These will be 0 if dummy tensors were used.
+    run_case_info['static_input_dim'] = inputs_for_fit[0].shape[-1]
+    run_case_info['dynamic_input_dim'] = inputs_for_fit[1].shape[-1]
+    run_case_info['future_input_dim'] = inputs_for_fit[2].shape[-1]
 
-    # Inputs for Keras Tuner's fit method
-    inputs_for_fit = [X_static, X_dynamic, X_future]
+    vlog(f"  Final input dims for model builder: "
+         f"S={run_case_info['static_input_dim']}, "
+         f"D={run_case_info['dynamic_input_dim']}, "
+         f"F={run_case_info['future_input_dim']}",
+         level=3, verbose=verbose)
 
-    vlog("Parameters and inputs checked successfully.",
+
+    vlog("Parameters and inputs checked/validated successfully.",
          level=2, verbose=verbose)
 
-   
     # --- Define model_builder ---
     actual_model_builder = model_builder
     if actual_model_builder is None:
@@ -409,10 +457,11 @@ def xtft_tuner(
             )
             current_best_trial_hps = tuner.get_best_hyperparameters(
                 num_trials=1)[0]
+            
             vlog(f"  Best HPs for batch {current_batch_size}: "
                  f"{current_best_trial_hps.values}",
                  level=2, verbose=verbose)
-
+            
             current_best_model = tuner.hypermodel.build(
                 current_best_trial_hps
                 )
@@ -481,8 +530,15 @@ def xtft_tuner(
     vlog("--- Overall Best ---", level=1, verbose=verbose)
     vlog(f"Best Batch Size: {overall_best_batch_size}",
          level=1, verbose=verbose)
-    vlog(f"Best Hyperparameters: {overall_best_hps_dict}",
-         level=1, verbose=verbose)
+    
+    from fusionlab.api.summary import ResultSummary 
+    
+    summary = ResultSummary(
+        'BestHyperParameters').add_results(overall_best_hps_dict)
+    vlog(f"Best Hyperparameters:\n {summary}",
+         level=1, verbose=verbose
+         )
+    
     vlog(f"Best Validation Loss: {overall_best_val_loss:.4f}",
          level=1, verbose=verbose)
 

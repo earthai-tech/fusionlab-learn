@@ -258,7 +258,7 @@ class HelpMeta(type):
         return help_method
     
     @classmethod
-    def __decorate_method(mcs, method):
+    def _decorate_method(mcs, method):
         """
         Decorator that adds 'my_params' and 'help' attributes to methods.
     
@@ -282,58 +282,7 @@ class HelpMeta(type):
             The wrapped method, now with `my_params` and `help` attributes, 
             either as a `staticmethod`, `classmethod`, or a regular method.
         """
-        # Case 1: If method is a staticmethod
-        if isinstance(method, staticmethod):
-            # Retrieve the original function behind the staticmethod decorator
-            original_func = method.__func__
-    
-            # Define a wrapper for the original function
-            @wraps(original_func)
-            def wrapper(*args, **kwargs):
-                return original_func(*args, **kwargs)
-    
-            # Attach 'my_params' and 'help' to the wrapper
-            wrapper.my_params = mcs._get_my_params(original_func)
-            wrapper.my_params = DisplayStr(wrapper.my_params)
-            wrapper.help = mcs._create_help(original_func)
-            return staticmethod(wrapper)
-    
-        # Case 2: If method is a classmethod
-        elif isinstance(method, classmethod):
-            # Retrieve the original function behind the classmethod decorator
-            original_func = method.__func__
-    
-            # Define a wrapper for the original function
-            @wraps(original_func)
-            def wrapper(cls, *args, **kwargs):
-                return original_func(cls, *args, **kwargs)
-    
-            # Attach 'my_params' and 'help' to the wrapper
-            wrapper.my_params = mcs._get_my_params(original_func)
-            wrapper.my_params = DisplayStr(wrapper.my_params)
-            wrapper.help = mcs._create_help(original_func)
-            return classmethod(wrapper)
-    
-        # Case 3: If method is a regular instance method
-        elif isinstance(method, FunctionType):
-            # Define a wrapper for the regular function
-            @wraps(method)
-            def wrapper(self, *args, **kwargs):
-                return method(self, *args, **kwargs)
-    
-            # Attach 'my_params' and 'help' to the wrapper
-            wrapper.my_params = mcs._get_my_params(method)
-            wrapper.my_params = DisplayStr(wrapper.my_params)
-            wrapper.help = mcs._create_help(method)
-            return wrapper
-    
-        # Case 4: If method is not recognized, return it unchanged
-        else:
-            return method
-
-    @classmethod
-    def _decorate_method(mcs, method):
- 
+        
         # Case 1: staticmethod
         if isinstance(method, staticmethod):
             original_func = method.__func__
@@ -372,11 +321,11 @@ class HelpMeta(type):
                 # Create a wrapper that matches Keras's expected call signature
                 @wraps(original_func)
                 def keras_call_wrapper(
-                        self_obj, inputs, training=False, **call_kwargs):
+                        self_obj, inputs, **call_kwargs):
                     # self_obj is 'self' for the instance
                     # Pass through known Keras call arguments explicitly
                     return original_func(
-                        self_obj, inputs, training=training, **call_kwargs)
+                        self_obj, inputs, **call_kwargs)
                 
                 wrapper_to_enhance = keras_call_wrapper
             else:
