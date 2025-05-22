@@ -233,7 +233,7 @@ def test_predictions_from_model(dummy_keras_model, dummy_model_inputs, y_true_si
     model = dummy_keras_model(output_shape_to_return=model_output_shape)
     df = format_predictions_to_dataframe(
         model=model,
-        model_inputs=dummy_model_inputs,
+        inputs=dummy_model_inputs,
         y_true_sequences=y_true_single_output,
         target_name="value",
         forecast_horizon=H, # Provide to model if needed
