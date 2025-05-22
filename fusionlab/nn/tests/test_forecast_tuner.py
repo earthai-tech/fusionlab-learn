@@ -36,7 +36,7 @@ except ImportError as e:
     
 # --- End Imports ---
 # XXX TO OPTIMIZE later : SKIP for Now; 
-HAS_KT =False 
+# HAS_KT =False 
 
 pytestmark = pytest.mark.skipif(
     not (FUSIONLAB_INSTALLED and HAS_KT),

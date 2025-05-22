@@ -21,6 +21,7 @@ Browse through the examples below to see ``fusionlab-learn`` in action.
    anomaly_detection_examples
    data_preparation_workflow
    hyperparameter_tuning_example
+   hyperparameter_tuning_example
    command_line_usage
 
 .. note::

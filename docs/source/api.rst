@@ -157,6 +157,8 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.forecast_multi_step
    ~fusionlab.nn.utils.visualize_forecasts
    ~fusionlab.nn.utils.step_to_long
+   ~fusionlab.nn.utils.format_predictions_to_dataframe 
+   ~fusionlab.nn.utils.prepare_model_inputs 
 
 
 Time Series Utilities (`fusionlab.utils.ts_utils`)

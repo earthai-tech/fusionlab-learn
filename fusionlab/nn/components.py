@@ -466,7 +466,7 @@ class PositionalEncoding(Layer, NNLearner):
         config = super().get_config().copy()
         return config
 
-#XXX TO FIX: 
+
 @register_keras_serializable(
     'fusionlab.nn.components', name="GatedResidualNetwork"
 )
@@ -495,7 +495,7 @@ class GatedResidualNetwork(Layer):
     }
 
     @validate_params({
-        "units": [Interval(Integral, 1, None, closed='left')],
+        "units": [Interval(Integral, 0, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "use_batch_norm": [bool],
         "activation": [StrOptions(_COMMON_ACTIVATIONS)],
@@ -695,43 +695,42 @@ class GatedResidualNetwork(Layer):
                 )
 
         # --- 3. Apply Activation and Regularization ---
-        _logger.debug("DEBUG_GRN: Applying activation_fn.") # DEBUG
+        _logger.debug("Applying activation_fn.") # DEBUG
         activated_features = self.activation_fn(input_plus_context)
         if self.batch_norm is not None:
-            print("DEBUG_GRN: Applying batch_norm.") # DEBUG
             # Apply BN after activation
             activated_features = self.batch_norm(activated_features,
                                                  training=training)
-        _logger.debug("DEBUG_GRN: Applying dropout.") # DEBUG
+        _logger.debug("Applying dropout.") # DEBUG
         regularized_features = self.dropout(activated_features,
                                             training=training)
 
         # --- 4. Main Transformation Path ---
-        _logger.debug("DEBUG_GRN: Applying output_dense.") # DEBUG
+        _logger.debug("Applying output_dense.") # DEBUG
         transformed_output = self.output_dense(regularized_features)
 
         # --- 5. Gating Path ---
-        _logger.debug("DEBUG_GRN: Applying gate_dense.") # DEBUG
+        _logger.debug("Applying gate_dense.") # DEBUG
         # Gate depends on input+context projection *before* main activation
         gate_values = self.gate_dense(input_plus_context)
 
         # --- 6. Apply Gate ---
-        _logger.debug("DEBUG_GRN: Applying gate multiplication.") # DEBUG
+        _logger.debug("Applying gate multiplication.") # DEBUG
         gated_output = tf_multiply(transformed_output, gate_values)
 
         # --- 7. Add Residual ---
-        _logger.debug("DEBUG_GRN: Adding residual connection.") # DEBUG
+        _logger.debug("Adding residual connection.") # DEBUG
         residual_output = tf_add(shortcut, gated_output)
 
         # --- 8. Final Normalization & Optional Activation ---
-        _logger.debug("DEBUG_GRN: Applying layer_norm.") # DEBUG
+        _logger.debug("Applying layer_norm.") # DEBUG
         normalized_output = self.layer_norm(residual_output)
         final_output = normalized_output
         if self.output_activation_fn is not None:
-            _logger.debug("DEBUG_GRN: Applying output_activation_fn.") # DEBUG
+            _logger.debug("Applying output_activation_fn.") # DEBUG
             final_output = self.output_activation_fn(normalized_output)
             #  Applied final output activation.
-        _logger.debug("DEBUG_GRN: Exiting call successfully.") # DEBUG
+        _logger.debug("Exiting call successfully.") # DEBUG
         return final_output
     
     def get_config(self):
@@ -752,7 +751,6 @@ class GatedResidualNetwork(Layer):
         """Creates layer from its config."""
         return cls(**config)
 
-# XXX TOFIX: 
 @register_keras_serializable(
     'fusionlab.nn.components',
     name="VariableSelectionNetwork"
@@ -761,7 +759,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
     """Applies GRN to each variable and learns importance weights."""
 
     @validate_params({
-        "num_inputs": [Interval(Integral, 1, None, closed='left')],
+        "num_inputs": [Interval(Integral, 0, None, closed='left')],
         "units": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "use_time_distributed": [bool],
@@ -1157,7 +1155,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
         """Creates layer from its config."""
         return cls(**config)
         
-## XXXTODO: FIX 
+
 @register_keras_serializable(
     'fusionlab.nn.components',
     name="TemporalAttentionLayer"
@@ -1166,9 +1164,9 @@ class TemporalAttentionLayer(Layer):
     """Temporal Attention Layer conditioning query with context."""
 
     @validate_params({
-         "units": [Interval(Integral, 1, None, 
+         "units": [Interval(Integral, 0, None, 
                             closed='left')],
-         "num_heads": [Interval(Integral, 1, None,
+         "num_heads": [Interval(Integral, 0, None,
                                 closed='left')],
          "dropout_rate": [Interval(Real, 0, 1,
                                    closed="both")],
@@ -1452,7 +1450,7 @@ class GatedResidualNetworkIn(Layer, NNLearner):
     """
 
     @validate_params({
-        "units": [Interval(Integral, 1, None, 
+        "units": [Interval(Integral, 0, None, 
                            closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, 
                                   closed="both")],
@@ -2020,7 +2018,7 @@ class TemporalAttentionLayerIn(Layer, NNLearner):
     """
 
     @validate_params({
-        "units": [Interval(Integral, 1, None, 
+        "units": [Interval(Integral, 0, None, 
                            closed='left')],
         "num_heads": [Interval(Integral, 1, None,
                                closed='left')],
@@ -2333,8 +2331,8 @@ class LearnedNormalization(Layer, NNLearner):
     """
 
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kws):
+        super().__init__(**kws)
 
     def build(self, input_shape):
         r"""
@@ -3757,9 +3755,9 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
            20200209.
     """
     @validate_params({
-        "num_inputs": [Interval(Integral, 1, None, 
+        "num_inputs": [Interval(Integral, 0, None, 
                                 closed='left')],
-        "units": [Interval(Integral, 1, None, 
+        "units": [Interval(Integral, 0, None, 
                            closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, 
                                   closed="both")],
@@ -4934,7 +4932,6 @@ class MultiScaleLSTM(Layer, NNLearner):
             A new instance of this layer.
         """
         return cls(**config)
-
 
 
 @register_keras_serializable(

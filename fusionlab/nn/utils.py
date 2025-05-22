@@ -16,8 +16,11 @@ import time
 import datetime 
 from numbers import Integral, Real 
 import warnings
-from typing import List, Tuple, Optional, Union, Dict, Callable
-
+from typing import ( 
+    List, Tuple, Optional,
+    Union, Dict, Callable, 
+    Any
+)
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -53,10 +56,13 @@ from ..compat.sklearn import (
 )
 from ..decorators import Deprecated, isdf 
 from ..exceptions import NotEnoughDataError 
-from ..metrics import coverage_score
 from ..utils.data_utils import mask_by_reference 
 from ..utils.deps_utils import ensure_pkg, get_versions 
-from ..utils.generic_utils import get_actual_column_name, print_box 
+from ..utils.generic_utils import ( 
+    get_actual_column_name,
+    print_box, 
+    vlog
+)
 from ..utils.io_utils import save_job
 from ..utils.sys_utils import BatchDataFrameBuilder, build_large_df 
 from ..utils.ts_utils import ts_validator, filter_by_period 
@@ -73,6 +79,20 @@ from .keras_validator import validate_keras_model, check_keras_model_status
 
 if KERAS_BACKEND:
     Callback=KERAS_DEPS.Callback
+    Tensor =KERAS_DEPS.Tensor
+    Model =KERAS_DEPS.Model
+    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor
+    tf_float32 = KERAS_DEPS.float32
+    tf_int32 = KERAS_DEPS.int32
+    tf_rank = KERAS_DEPS.rank 
+    tf_cast = KERAS_DEPS.cast
+    tf_zeros = KERAS_DEPS.zeros 
+    tf_shape =KERAS_DEPS.shape 
+    tf_constant =KERAS_DEPS.constant
+  
+else:
+    class Tensor: pass
+    class Model: pass 
     
 DEP_MSG = dependency_message('nn.utils') 
 _TW = get_table_size()
@@ -90,8 +110,742 @@ __all__ = [
     "forecast_multi_step", 
     "forecast_single_step", 
     "step_to_long", 
+    "prepare_model_inputs"
     
    ]
+
+try:
+    from ..metrics import coverage_score
+    HAS_COVERAGE_SCORE = True
+except ImportError:
+    HAS_COVERAGE_SCORE = False
+    def coverage_score(*args, **kwargs): 
+        warnings.warn(
+            "coverage_score not found in fusionlab.metrics. "
+            "Evaluation for quantile forecasts will be skipped."
+        )
+        return np.nan
+
+# now let visualize the results of prediction 
+
+def format_predictions_to_dataframe(
+    predictions: Optional[Union[np.ndarray, Tensor]] = None,
+    model: Optional[Model] = None,
+    model_inputs: Optional[List[Optional[Union[np.ndarray, Tensor]]]] = None,
+    y_true_sequences: Optional[Union[np.ndarray, Tensor]] = None,
+    target_name: Optional[str] = "target",
+    quantiles: Optional[List[float]] = None,
+    forecast_horizon: Optional[int] = None,
+    output_dim: Optional[int] = None,
+    spatial_data_array: Optional[Union[np.ndarray, Tensor]] = None,
+    spatial_cols_names: Optional[List[str]] = None,
+    spatial_cols_indices: Optional[List[int]] = None,
+    # dt_col_name_in_test_data: Optional[str] = None, # For future alignment
+    evaluate_coverage: bool = False,
+    scaler: Optional[Any] = None, 
+    scaler_feature_names: Optional[List[str]] = None,
+    # Index of target_name within scaler_feature_names
+    target_idx_in_scaler: Optional[int] = None,
+    verbose: int = 0,
+    **kwargs: Any
+) -> pd.DataFrame:
+    """
+    Formats model predictions into a structured pandas DataFrame.
+
+    """
+    vlog("Starting prediction formatting to DataFrame.",
+         level=3, verbose=verbose)
+
+    # --- 1. Validate and Obtain Predictions ---
+    if predictions is None:
+        if model is None or model_inputs is None:
+            raise ValueError(
+                "If 'predictions' is None, both 'model' and "
+                "'model_inputs' must be provided to generate predictions."
+            )
+        vlog("  Predictions not provided, generating from model...",
+             level=4, verbose=verbose)
+        try:
+            # Ensure model_inputs is a list for Keras predict
+            # The prepare_model_inputs util should have done this.
+            if not isinstance(model_inputs, (list, tuple)):
+                model_inputs = [model_inputs]
+            predictions_raw = model.predict(model_inputs, verbose=0)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to generate predictions from model: {e}"
+            ) from e
+    else:
+        predictions_raw = predictions
+
+    # Convert predictions to NumPy array if it's a TensorFlow Tensor
+    if hasattr(predictions_raw, 'numpy'):
+        predictions_np = predictions_raw.numpy()
+    elif isinstance(predictions_raw, np.ndarray):
+        predictions_np = predictions_raw
+    else:
+        try:
+            predictions_np = np.array(predictions_raw)
+        except Exception as e:
+            raise TypeError(
+                f"Could not convert 'predictions' to NumPy array. "
+                f"Type: {type(predictions_raw)}. Error: {e}"
+            ) from e
+
+    if predictions_np.ndim not in [2, 3, 4]: # (S,F), (S,H,F), (S,H,Q,F)
+        raise ValueError(
+            f"Predictions must be 2D, 3D or 4D. "
+            f"Got shape: {predictions_np.shape}"
+        )
+    vlog(f"  Raw predictions shape: {predictions_np.shape}",
+         level=5, verbose=verbose)
+
+    # --- 2. Infer Shapes and Parameters ---
+    num_samples = predictions_np.shape[0]
+
+    # Infer Forecast Horizon (H)
+    if forecast_horizon is not None:
+        H = forecast_horizon
+    elif predictions_np.ndim >= 2: # Must be at least (S,H) or (S,F)
+        H = predictions_np.shape[1]
+    else: # Should not happen due to ndim check
+        raise ValueError("Cannot infer forecast_horizon from predictions.")
+
+    # Infer Output Dimension (O) and Number of Quantiles (Q)
+    num_quantiles_actual = 1
+    if quantiles:
+        # Sort and validate quantiles for consistency
+        quantiles = sorted([float(q) for q in quantiles])
+        if not all(0 < q < 1 for q in quantiles):
+            raise ValueError("Quantiles must be between 0 and 1.")
+        num_quantiles_actual = len(quantiles)
+
+    if output_dim is not None:
+        O = output_dim
+    elif predictions_np.ndim == 4: # (S, H, Q, O)
+        O = predictions_np.shape[3]
+    elif predictions_np.ndim == 3: # (S, H, F_out)
+        # F_out could be Q*O or O
+        if quantiles:
+            if predictions_np.shape[2] % num_quantiles_actual == 0:
+                O = predictions_np.shape[2] // num_quantiles_actual
+            else:
+                raise ValueError(
+                    f"Prediction's last dim ({predictions_np.shape[2]}) "
+                    f"not divisible by num_quantiles ({num_quantiles_actual})."
+                    " Cannot infer output_dim."
+                )
+        else: # Point forecast
+            O = predictions_np.shape[2]
+    elif predictions_np.ndim == 2: # (S, F_out) -> H=1 assumed by Keras
+        # This case implies H=1 was squeezed by model or is (Samples, Features)
+        # If H was > 1, this indicates a shape mismatch.
+        # For now, assume if 2D, H=1 was intended for this structure.
+        if H > 1 and num_samples * H == predictions_np.shape[0]:
+             # Predictions might already be flattened (N*H, F_out)
+             # Reshape to (N, H, F_out)
+            try:
+                predictions_np = predictions_np.reshape(
+                    (num_samples, H, -1)) # Infer last dim
+                O = predictions_np.shape[2] // num_quantiles_actual \
+                    if quantiles else predictions_np.shape[2]
+            except ValueError as e:
+                 raise ValueError(
+                    f"Cannot reshape 2D predictions of shape "
+                    f"{predictions_np.shape} to 3D using H={H}. {e}"
+                 ) from e
+        elif quantiles:
+            if predictions_np.shape[1] % num_quantiles_actual == 0:
+                O = predictions_np.shape[1] // num_quantiles_actual
+            else:
+                raise ValueError(
+                    f"2D Prediction's last dim ({predictions_np.shape[1]}) "
+                    f"not divisible by num_quantiles ({num_quantiles_actual})."
+                )
+        else: # Point forecast, 2D
+            O = predictions_np.shape[1]
+        # If predictions were 2D (N, F_out), reshape to (N, 1, F_out) if H=1
+        if H == 1 and predictions_np.ndim == 2:
+            predictions_np = predictions_np.reshape((num_samples, 1, -1))
+
+    if predictions_np.ndim == 3 and quantiles and O > 1 and \
+       predictions_np.shape[-1] == num_quantiles_actual * O:
+        # Reshape (B, H, Q*O) to (B, H, Q, O) for easier processing
+        try:
+            predictions_np = predictions_np.reshape(
+                num_samples, H, num_quantiles_actual, O
+            )
+            vlog(f"  Reshaped predictions for multi-output quantiles to "
+                 f"{predictions_np.shape}", level=5, verbose=verbose)
+        except ValueError as e:
+            raise ValueError(
+                f"Could not reshape predictions from (B,H,Q*O) to "
+                f"(B,H,Q,O). Shape: {predictions_np.shape}, Q={num_quantiles_actual}, "
+                f"O={O}. Error: {e}"
+            ) from e
+
+    vlog(f"  Inferred/Validated: Samples={num_samples}, Horizon={H}, "
+         f"OutputDim={O}, NumQuantiles={num_quantiles_actual}",
+         level=4, verbose=verbose)
+
+    # --- 3. Prepare Base DataFrame (Long Format) ---
+    # Index for each sample and each forecast step
+    sample_indices = np.repeat(np.arange(num_samples), H)
+    forecast_steps = np.tile(np.arange(1, H + 1), num_samples)
+    df_list = [
+        pd.DataFrame({
+            'sample_idx': sample_indices,
+            'forecast_step': forecast_steps
+        })
+    ]
+
+    # --- 4. Add Spatial Columns ---
+    if spatial_data_array is not None:
+        if spatial_cols_names is None and spatial_cols_indices is None:
+            warnings.warn(
+                "spatial_data_array provided, but neither "
+                "spatial_cols_names (for DataFrame) nor "
+                "spatial_cols_indices (for NumPy array) were given. "
+                "Skipping spatial columns.", UserWarning
+            )
+        elif isinstance(spatial_data_array, (pd.DataFrame, pd.Series)):
+            if spatial_cols_names is None:
+                warnings.warn(
+                    "spatial_data_array is DataFrame/Series but "
+                    "spatial_cols_names is missing. Skipping.", UserWarning
+                    )
+            else:
+                cols = [spatial_cols_names] if \
+                    isinstance(spatial_cols_names, str) \
+                    else list(spatial_cols_names)
+                try:
+                    spatial_df_part = pd.DataFrame(
+                        spatial_data_array[cols].iloc[sample_indices].values,
+                        columns=cols
+                        )
+                    df_list.append(spatial_df_part)
+                    vlog(f"  Added spatial columns: {cols}",
+                         level=4, verbose=verbose)
+                except KeyError as e:
+                    warnings.warn(f"Spatial columns not found in "
+                                  f"spatial_data_array: {e}. Skipping.")
+        elif isinstance(spatial_data_array, (np.ndarray, Tensor)):
+            if spatial_cols_indices is None:
+                warnings.warn(
+                    "spatial_data_array is NumPy/Tensor but "
+                    "spatial_cols_indices is missing. Skipping.", UserWarning
+                    )
+            else:
+                s_arr = spatial_data_array.numpy() \
+                    if hasattr(spatial_data_array, 'numpy') \
+                    else np.array(spatial_data_array)
+                indices = [spatial_cols_indices] if \
+                    isinstance(spatial_cols_indices, int) \
+                    else list(spatial_cols_indices)
+                # Ensure names are provided if indices are used
+                names = spatial_cols_names if spatial_cols_names else \
+                    [f"spatial_{k}" for k in range(len(indices))]
+                if len(names) != len(indices):
+                    warnings.warn(
+                        "Length of spatial_cols_names does not match "
+                        "spatial_cols_indices. Using default names."
+                        )
+                    names = [f"spatial_{k}" for k in range(len(indices))]
+                try:
+                    spatial_df_part = pd.DataFrame(
+                        s_arr[sample_indices][:, indices], columns=names
+                        )
+                    df_list.append(spatial_df_part)
+                    vlog(f"  Added spatial columns from array: {names}",
+                         level=4, verbose=verbose)
+                except IndexError as e:
+                    warnings.warn(
+                        f"Spatial indices out of bounds for "
+                        f"spatial_data_array: {e}. Skipping."
+                        )
+        else:
+            warnings.warn(
+                f"Unsupported type for spatial_data_array: "
+                f"{type(spatial_data_array)}. Skipping."
+                )
+
+    # --- 5. Reshape and Add Predictions ---
+    # Reshape predictions to (num_samples * H, FeaturesOut)
+    # FeaturesOut is O for point, Q*O or (Q,O) for quantile
+    pred_reshaped_for_df = predictions_np.reshape(num_samples * H, -1)
+    pred_cols_names = []
+
+    base_target_name = target_name if target_name else "pred"
+
+    if quantiles: # Quantile forecast
+        if O == 1: # Univariate target, multivariate quantiles
+            # pred_reshaped_for_df shape: (N*H, Q)
+            for i, q_val in enumerate(quantiles):
+                col_name = f"{base_target_name}_q{int(q_val*100)}"
+                pred_cols_names.append(col_name)
+            pred_df_part = pd.DataFrame(
+                pred_reshaped_for_df, columns=pred_cols_names
+                )
+        else: # Multi-output quantiles
+            # predictions_np original shape (N, H, Q, O)
+            # pred_reshaped_for_df should be (N*H, Q*O) if not further reshaped
+            # Or, if predictions_np was (N,H,Q,O), then reshape to (N*H, Q, O)
+            # then iterate through O and Q
+            if predictions_np.ndim == 4: # (N, H, Q, O)
+                temp_pred_df_parts = []
+                for o_idx in range(O):
+                    for q_idx, q_val in enumerate(quantiles):
+                        col_name = (f"{base_target_name}_{o_idx}_"
+                                    f"q{int(q_val*100)}")
+                        pred_cols_names.append(col_name)
+                        # Extract (N*H, 1) for this target_dim & quantile
+                        series_data = predictions_np[:, :, q_idx, o_idx].reshape(-1, 1)
+                        temp_pred_df_parts.append(pd.DataFrame(
+                            series_data, columns=[col_name]))
+                pred_df_part = pd.concat(temp_pred_df_parts, axis=1)
+            else: # Should be (N*H, Q*O)
+                # This case requires careful unstacking based on Q and O
+                # Assuming Q is the faster moving index in the last dim
+                for o_idx in range(O):
+                    for q_idx, q_val in enumerate(quantiles):
+                        col_name = (f"{base_target_name}_{o_idx}_"
+                                    f"q{int(q_val*100)}")
+                        pred_cols_names.append(col_name)
+                pred_df_part = pd.DataFrame(
+                    pred_reshaped_for_df, columns=pred_cols_names
+                    )
+    else: # Point forecast
+        if O == 1:
+            col_name = f"{base_target_name}_pred"
+            pred_cols_names.append(col_name)
+        else: # Multi-output point
+            for o_idx in range(O):
+                col_name = f"{base_target_name}_{o_idx}_pred"
+                pred_cols_names.append(col_name)
+        pred_df_part = pd.DataFrame(
+            pred_reshaped_for_df, columns=pred_cols_names
+            )
+    df_list.append(pred_df_part)
+    vlog(f"  Added prediction columns: {pred_cols_names}",
+         level=4, verbose=verbose)
+
+    # --- 6. Inverse Transform Predictions (if scaler provided) ---
+    
+    # XXX TODO: 
+    # This step should happen *after* predictions are in the DataFrame
+    # to allow easy column selection for multi-output scalers.
+    # For simplicity now, assume inverse transform happens on `predictions_np`
+    # before adding to DataFrame if scaler is complex.
+    # If scaler is simple (for target only), it can be done on the column.
+
+    # --- 7. Add Actual Values (if y_true_sequences provided) ---
+    actual_cols_names = []
+    if y_true_sequences is not None:
+        if hasattr(y_true_sequences, 'numpy'):
+            y_true_np = y_true_sequences.numpy()
+        else:
+            y_true_np = np.array(y_true_sequences)
+
+        if y_true_np.shape[0] != num_samples or y_true_np.shape[1] != H:
+            warnings.warn(
+                f"Shape of y_true_sequences {y_true_np.shape} "
+                f"is incompatible with predictions "
+                f"({num_samples}, {H}, ...). Skipping actuals.", UserWarning
+            )
+        else:
+            # y_true_np shape: (N, H, O)
+            y_true_reshaped = y_true_np.reshape(num_samples * H, O)
+            if O == 1:
+                col_name = f"{base_target_name}_actual"
+                actual_cols_names.append(col_name)
+            else:
+                for o_idx in range(O):
+                    col_name = f"{base_target_name}_{o_idx}_actual"
+                    actual_cols_names.append(col_name)
+            actual_df_part = pd.DataFrame(
+                y_true_reshaped, columns=actual_cols_names
+                )
+            df_list.append(actual_df_part)
+            vlog(f"  Added actual value columns: {actual_cols_names}",
+                 level=4, verbose=verbose)
+
+    # --- Concatenate all parts ---
+    final_df = pd.concat(df_list, axis=1)
+
+    # --- 8. Inverse Transform (if scaler provided) ---
+    # Now apply inverse transform on the DataFrame columns
+    if scaler is not None:
+        if scaler_feature_names is None or target_idx_in_scaler is None:
+            warnings.warn(
+                "Scaler provided, but `scaler_feature_names` or "
+                "`target_idx_in_scaler` is missing. Cannot perform "
+                "targeted inverse transform. Attempting on all pred/actual cols.",
+                UserWarning
+            )
+            # Try to inverse transform all prediction and actual columns
+            # This assumes they were all scaled together, which might be wrong.
+            cols_to_inv = pred_cols_names + actual_cols_names
+            for col in cols_to_inv:
+                if col in final_df:
+                    try:
+                        # This simple inverse assumes scaler was fit on single col
+                        final_df[col] = scaler.inverse_transform(
+                            final_df[[col]]
+                            )
+                    except Exception as e:
+                        warnings.warn(f"Failed to simple inverse transform "
+                                      f"column '{col}': {e}")
+        else: # Targeted inverse transform
+            vlog("  Applying inverse transformation using scaler...",
+                 level=4, verbose=verbose)
+            # Create dummy array for inverse transform
+            dummy_array_shape = (len(final_df), len(scaler_feature_names))
+
+            for col_group_idx in range(O): # For each output dimension
+                # Inverse transform predictions
+                if quantiles:
+                    for q_idx, q_val in enumerate(quantiles):
+                        pred_col_name = f"{base_target_name}"
+                        if O > 1: pred_col_name += f"_{col_group_idx}"
+                        pred_col_name += f"_q{int(q_val*100)}"
+
+                        if pred_col_name in final_df:
+                            dummy = np.zeros(dummy_array_shape)
+                            dummy[:, target_idx_in_scaler] = final_df[pred_col_name]
+                            final_df[pred_col_name] = scaler.inverse_transform(
+                                dummy)[:, target_idx_in_scaler]
+                else: # Point forecast
+                    pred_col_name = f"{base_target_name}"
+                    if O > 1: pred_col_name += f"_{col_group_idx}"
+                    pred_col_name += "_pred"
+                    if pred_col_name in final_df:
+                        dummy = np.zeros(dummy_array_shape)
+                        dummy[:, target_idx_in_scaler] = final_df[pred_col_name]
+                        final_df[pred_col_name] = scaler.inverse_transform(
+                            dummy)[:, target_idx_in_scaler]
+
+                # Inverse transform actuals
+                actual_col_name = f"{base_target_name}"
+                if O > 1: actual_col_name += f"_{col_group_idx}"
+                actual_col_name += "_actual"
+                if actual_col_name in final_df:
+                    dummy = np.zeros(dummy_array_shape)
+                    dummy[:, target_idx_in_scaler] = final_df[actual_col_name]
+                    final_df[actual_col_name] = scaler.inverse_transform(
+                        dummy)[:, target_idx_in_scaler]
+            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
+
+    # --- 9. Evaluate Coverage (if requested for quantiles) ---
+    if evaluate_coverage and quantiles and y_true_sequences is not None \
+            and HAS_COVERAGE_SCORE:
+        if len(quantiles) < 2:
+            warnings.warn(
+                "Coverage score requires at least two quantiles "
+                "(lower and upper bound). Skipping evaluation.", UserWarning
+            )
+        elif O > 1:
+            warnings.warn(
+                "Coverage score evaluation for multi-output (>1 output_dim) "
+                "quantile forecasts is not directly implemented in this "
+                "example. Skipping.", UserWarning
+            )
+        else: # Univariate quantile forecast
+            # Assume quantiles are sorted, first is lower, last is upper
+            # for a symmetric interval around median (if present).
+            # More robustly, user should specify which quantiles form the interval.
+            # For this example, assume first and last define the interval.
+            lower_q_col = f"{base_target_name}_q{int(quantiles[0]*100)}"
+            upper_q_col = f"{base_target_name}_q{int(quantiles[-1]*100)}"
+            actual_col = f"{base_target_name}_actual"
+
+            if lower_q_col in final_df and upper_q_col in final_df \
+                    and actual_col in final_df:
+                coverage = coverage_score(
+                    final_df[actual_col],
+                    final_df[lower_q_col],
+                    final_df[upper_q_col]
+                )
+                # Add as a global attribute or print
+                # For DataFrame, it's harder to add a single score. Print for now.
+                vlog(f"  Coverage Score ({quantiles[0]}-{quantiles[-1]}): "
+                     f"{coverage:.4f}", level=3, verbose=verbose)
+                # Could add to df.attrs if desired: final_df.attrs['coverage_score'] = coverage
+            else:
+                warnings.warn(
+                    "Required columns for coverage score not found in DataFrame. "
+                    "Skipping evaluation.", UserWarning
+                )
+    elif evaluate_coverage and not HAS_COVERAGE_SCORE:
+         warnings.warn("`fusionlab.metrics.coverage_score` not found. "
+                       "Skipping coverage evaluation.", ImportWarning)
+
+    vlog("Prediction formatting to DataFrame complete.",
+         level=3, verbose=verbose)
+    
+    return final_df
+
+
+    
+@ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
+@validate_params ({
+    'forecast_horizon': [Interval(Integral, 0, None, closed='left'), None], 
+    'model_type': [StrOptions({'strict', 'flexible'})]
+    })
+def prepare_model_inputs(
+    dynamic_input: Union[np.ndarray, Tensor],
+    static_input: Optional[Union[np.ndarray, Tensor]] = None,
+    future_input: Optional[Union[np.ndarray, Tensor]] = None,
+    model_type: str = 'strict',
+    forecast_horizon: Optional[int] = None,
+    verbose: int = 0,
+    **kwargs 
+) -> List[Optional[Tensor]]:
+    """Prepares a list of input tensors for a model's call method.
+
+    This function standardizes the creation of the input list
+    `[static, dynamic, future]` expected by many models in
+    ``fusionlab``. It handles cases where static or future inputs
+    might be ``None``, creating appropriate dummy tensors with zero
+    features if the `model_type` is 'strict'.
+
+    Parameters
+    ----------
+    dynamic_input : np.ndarray or tf.Tensor
+        The dynamic (past observed) features. This input is
+        always required and must be a valid tensor or array.
+        Expected shape: `(batch_size, past_time_steps, num_dynamic_features)`.
+    static_input : np.ndarray or tf.Tensor, optional
+        The static (time-invariant) features.
+        Expected shape: `(batch_size, num_static_features)`.
+        If ``None`` and `model_type` is 'strict', a dummy tensor
+        with 0 static features will be created. Default is ``None``.
+    future_input : np.ndarray or tf.Tensor, optional
+        The known future features.
+        Expected shape: `(batch_size, future_time_span, num_future_features)`.
+        If ``None`` and `model_type` is 'strict', a dummy tensor
+        with 0 future features will be created. The time span for
+        this dummy future tensor will be `past_time_steps` (from
+        `dynamic_input`) plus `forecast_horizon` if provided,
+        otherwise just `past_time_steps`. Default is ``None``.
+    model_type : {'strict', 'flexible'}, default 'strict'
+        Determines how ``None`` inputs for static and future features
+        are handled:
+        - ``'strict'``: If `static_input` or `future_input` is
+          ``None``, a dummy tensor with a feature dimension of 0
+          will be created and included in the output list. This is
+          for models that expect a 3-element list of tensors, even
+          if some paths are unused.
+        - ``'flexible'``: If `static_input` or `future_input` is
+          ``None``, ``None`` itself will be placed in the
+          corresponding position in the output list. This is for
+          models that can internally handle ``None`` inputs for
+          optional feature types.
+    forecast_horizon : int, optional
+        The forecast horizon. Used only if `model_type='strict'`
+        and `future_input` is ``None``, to determine the time
+        dimension of the dummy future tensor
+        (as `past_time_steps + forecast_horizon`). If not provided
+        in this scenario, the dummy future tensor's time dimension
+        will match `dynamic_input`'s `past_time_steps`.
+        Default is ``None``.
+    verbose : int, default 0
+        Verbosity level. If > 0, prints information about dummy
+        tensor creation.
+        - ``0``: Silent.
+        - ``1``: Basic info on dummy creation.
+        - ``2``: More details on shapes.
+
+    Returns
+    -------
+    List[Optional[tf.Tensor]]
+        A list containing three elements in the order:
+        `[processed_static_input, processed_dynamic_input, processed_future_input]`.
+        Elements can be TensorFlow tensors or ``None`` (if
+        `model_type='flexible'` and original input was ``None``).
+        All returned tensors are cast to `tf.float32`.
+
+    Raises
+    ------
+    ValueError
+        If `dynamic_input` is ``None``.
+        If `dynamic_input` is not at least 2D (needs batch dimension).
+        If `static_input` (when provided) is not 2D.
+        If `future_input` (when provided) is not 3D.
+    TypeError
+        If inputs cannot be converted to TensorFlow tensors.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> import numpy as np
+    >>> from fusionlab.nn.utils import prepare_model_inputs 
+    >>> B, T, H = 2, 10, 3
+    >>> D_s, D_d, D_f = 2, 4, 1
+    >>> dyn_in = tf.random.normal((B, T, D_d))
+    >>> stat_in = tf.random.normal((B, D_s))
+    >>> fut_in = tf.random.normal((B, T + H, D_f))
+
+    >>> # Strict mode, all inputs provided
+    >>> s, d, f = prepare_model_inputs(dyn_in, stat_in, fut_in, model_type='strict')
+    >>> print(f"S: {s.shape}, D: {d.shape}, F: {f.shape}")
+    S: (2, 2), D: (2, 10, 4), F: (2, 13, 1)
+
+    >>> # Strict mode, static is None
+    >>> s, d, f = prepare_model_inputs(dyn_in, static_input=None, future_input=fut_in,
+    ...                                model_type='strict', forecast_horizon=H)
+    >>> print(f"S: {s.shape}, D: {d.shape}, F: {f.shape}")
+    S: (2, 0), D: (2, 10, 4), F: (2, 13, 1)
+
+    >>> # Flexible mode, static and future are None
+    >>> s, d, f = prepare_model_inputs(dyn_in, static_input=None, future_input=None,
+    ...                                model_type='flexible')
+    >>> print(f"S: {s is None}, D: {d.shape}, F: {f is None}")
+    S: True, D: (2, 10, 4), F: True
+    """
+    
+    # --- Input Validation and Type Conversion ---
+    if dynamic_input is None:
+        raise ValueError("`dynamic_input` is required and cannot be None.")
+
+    def _to_tensor_float32(
+        data: Optional[Union[np.ndarray, Tensor]], name: str
+        ) -> Optional[Tensor]:
+        # Helper to convert to tf.Tensor and tf.float32 if not None.
+        if data is None:
+            return None
+        try:
+            tensor_data = tf_convert_to_tensor(data)
+            if tensor_data.dtype != tf_float32:
+                tensor_data = tf_cast(tensor_data, tf_float32)
+            return tensor_data
+        except Exception as e:
+            raise TypeError(
+                f"Failed to convert '{name}' to TensorFlow tensor "
+                f"of type float32. Error: {e}"
+            ) from e
+
+    processed_dynamic_input = _to_tensor_float32(
+        dynamic_input, "dynamic_input"
+        )
+    processed_static_input = _to_tensor_float32(
+        static_input, "static_input"
+        )
+    processed_future_input = _to_tensor_float32(
+        future_input, "future_input"
+        )
+
+    # --- Shape Checks for Provided Inputs ---
+    # Dynamic input must be at least 2D (Batch, Features) or 3D (B, T, F)
+    if tf_rank(processed_dynamic_input) < 2:
+        raise ValueError(
+            f"dynamic_input must be at least 2D. "
+            f"Got rank {tf_rank(processed_dynamic_input)}."
+            )
+    # If 2D, assume it's (Batch, Features) and needs expansion for time
+    if tf_rank(processed_dynamic_input) == 2:
+        # This case implies dynamic input is treated as static-like
+        # or time dimension is 1. For TFTs, dynamic is usually 3D.
+        # This utility assumes dynamic_input is already time-distributed.
+        warnings.warn(
+            "dynamic_input was 2D. For sequence models, it's "
+            "typically expected to be 3D (Batch, TimeSteps, Features). "
+            "Proceeding, but ensure this is intended.", UserWarning
+        )
+
+    if processed_static_input is not None and \
+       tf_rank(processed_static_input) != 2:
+        raise ValueError(
+            f"static_input, if provided, must be 2D (Batch, Features)."
+            f" Got rank {tf_rank(processed_static_input)}."
+            )
+
+    if processed_future_input is not None and \
+       tf_rank(processed_future_input) != 3:
+        raise ValueError(
+            f"future_input, if provided, must be 3D "
+            f"(Batch, TimeSteps, Features). "
+            f"Got rank {tf_rank(processed_future_input)}."
+            )
+
+    # --- Determine Batch Size and Time Steps from Dynamic Input ---
+    # These are used for creating dummy tensors if needed.
+    # Use tf.shape for graph compatibility.
+    shape_dynamic = tf_shape(processed_dynamic_input)
+    batch_size = shape_dynamic[0]
+    # Dynamic input might be 2D (B, D_dyn) or 3D (B, T_dyn, D_dyn)
+    # Default to 1 time step if dynamic input is 2D
+    past_time_steps = shape_dynamic[1] if \
+        tf_rank(processed_dynamic_input) == 3 else tf_constant( 
+            1, dtype=tf_int32)
+    
+
+    if verbose >= 2:
+        print(f"  prepare_model_inputs: Derived batch_size={batch_size}, "
+              f"past_time_steps={past_time_steps}")
+
+    # --- Handle based on model_type ---
+    s_to_pass: Optional[Tensor] = processed_static_input
+    d_to_pass: Tensor = processed_dynamic_input # Always present
+    f_to_pass: Optional[Tensor] = processed_future_input
+
+    if model_type == 'strict':
+        if s_to_pass is None:
+            # Create dummy 2D static tensor: (Batch, 0 Features)
+            # s_to_pass = tf_zeros((batch_size, 0), dtype=tf_float32)
+            s_to_pass = tf_zeros(
+                    (tf_cast(batch_size, tf_int32), # Ensure int32
+                     tf_constant(0, dtype=tf_int32)),     # Num features
+                    dtype=tf_float32
+                )
+            
+            if verbose >= 1:
+                print(f"  prepare_model_inputs (strict): Created dummy "
+                      f"static input with shape {s_to_pass.shape}")
+        elif tf_rank(s_to_pass) == 2 and tf_shape(s_to_pass)[-1] == 0:
+             if verbose >= 1:
+                print(f"  prepare_model_inputs (strict): Static input "
+                      f"provided with 0 features, shape {s_to_pass.shape}")
+
+
+        if f_to_pass is None:
+            # Determine time dimension for dummy future tensor
+            num_future_timesteps = tf_cast(past_time_steps, tf_int32)
+            if forecast_horizon is not None and forecast_horizon > 0:
+                # Ensure forecast_horizon is a tensor for addition
+                fh_tensor = tf_cast(forecast_horizon, tf_int32)
+                num_future_timesteps += fh_tensor
+            # Create dummy 3D future tensor: (Batch, Time, 0 Features)
+            f_to_pass = tf_zeros(
+                (tf_cast(batch_size, tf_int32),      
+                 tf_cast(num_future_timesteps, tf_int32), 
+                 tf_constant(0, dtype=tf_int32)),             
+                dtype=tf_float32
+                )
+            
+            if verbose >= 1:
+                print(f"  prepare_model_inputs (strict): Created dummy "
+                      f"future input with shape {f_to_pass.shape}")
+        elif tf_rank(f_to_pass) == 3 and tf_shape(f_to_pass)[-1] == 0:
+            if verbose >= 1:
+                print(f"  prepare_model_inputs (strict): Future input "
+                      f"provided with 0 features, shape {f_to_pass.shape}")
+
+    elif model_type == 'flexible':
+        # For flexible models, None inputs are passed through as None.
+        # The processed_static_input, etc., are already correct.
+        if verbose >= 1:
+            print(f"  prepare_model_inputs (flexible): Passing inputs "
+                  f"as is (Static: {type(s_to_pass)}, "
+                  f"Dynamic: {type(d_to_pass)}, Future: {type(f_to_pass)})")
+    else:
+        # This wont reach since @validate_parameters handle it. 
+        raise ValueError(
+            f"Invalid `model_type`: '{model_type}'. "
+            "Must be 'strict' or 'flexible'."
+            )
+    # Return in the standard order [Static, Dynamic, Future]
+    return [s_to_pass, d_to_pass, f_to_pass]
+
 
 @check_params({'domain_func': Optional[Callable]}, coerce=False)
 @ParamsValidator( 
@@ -2116,12 +2870,12 @@ def reshape_xtft_data(
        forecast_horizon = forecast_horizons
         
     # --- Initial Validations ---
-    if verbose >1: 
-        print("[INFO] T.S Data in rolling"
-              " Sequences reshaping triggered ...")
+    if verbose >=1: 
+        print("[INFO] Reshaping time‑series"
+              " data into rolling sequences...")
+        
     # Validate and convert datetime column
     # verbose > 1 maps to True for ts_validator's own verbose flag
-
     df = ts_validator(
         df, dt_col=dt_col, 
         to_datetime=to_datetime,
@@ -2387,8 +3141,8 @@ def reshape_xtft_data(
                       f"'{savefile}': {e}")
 
     if verbose>=1: 
-        print("\n[INFO] T.S. Data in Rolling Sequences"
-              " successfully reshaped. ")
+        print("\n[INFO] Time‑series data successfully"
+              " reshaped into rolling sequences. ")
         
     return static_data_arr, dynamic_data_arr, future_data_arr, target_data_arr
 

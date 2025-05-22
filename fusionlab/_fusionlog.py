@@ -99,6 +99,21 @@ class fusionlog:
 
         logger.handlers = list(set(logger.handlers))
 
+
+class OncePerMessageFilter(logging.Filter):
+    """Filter that lets each distinct log message through exactly once."""
+    def __init__(self, name: str = "") -> None:
+        super().__init__(name)
+        self._seen: set[str] = set()
+
+    def filter(self, record: logging.LogRecord) -> bool:   # noqa: D401
+        key = record.getMessage()
+        if key in self._seen:
+            return False          # suppress duplicate
+        self._seen.add(key)
+        return True
+
+
 def setup_logging(config_path: str = 'path/to/_flog.yml') -> None:
     with open(config_path, 'rt') as f:
         config = yaml.safe_load(f.read())
