@@ -14,7 +14,7 @@ across different functions and classes within the package.
 
 from typing import Union, Any, Callable, List, Optional, Iterable
 from typing import Tuple, Set, Pattern, TypeVar, SupportsInt 
-from typing import Dict, TYPE_CHECKING, Iterator
+from typing import Dict, TYPE_CHECKING, Iterator, Literal
 import pandas as pd
 import numpy as np
 
@@ -132,6 +132,9 @@ _Sequential = Union[TorchSequential, TFSequential]
 # Type aliases for additional Python built-in types
 Iterator = Iterator[Any] 
 
+# Define MultioutputLiteral for type hinting if not using StrOptions directly in hints
+MultioutputLiteral = Literal['raw_values', 'uniform_average']
+NanPolicyLiteral = Literal['omit', 'propagate', 'raise']
 
 def is_dataframe(obj: Any) -> bool:
     """
