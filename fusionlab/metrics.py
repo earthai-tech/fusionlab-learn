@@ -14,7 +14,6 @@ from .compat.sklearn import (
 )
 from .utils.validator import _ensure_y_is_valid 
 
-
 __all__ = [
     'coverage_score',
     'crps_score', 
