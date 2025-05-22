@@ -33,6 +33,7 @@ from typing import (
 import numpy as np
 
 from .__init__ import config
+from ..api.summary import ResultSummary 
 from ..compat.sklearn import validate_params, Interval
 from ..core.checks import (
     assert_ratio, check_params, check_non_emptiness
@@ -531,7 +532,7 @@ def xtft_tuner(
     vlog(f"Best Batch Size: {overall_best_batch_size}",
          level=1, verbose=verbose)
     
-    from fusionlab.api.summary import ResultSummary 
+    
     
     summary = ResultSummary(
         'BestHyperParameters').add_results(overall_best_hps_dict)
@@ -664,10 +665,6 @@ def _model_builder_factory(
             "recurrent_dropout_rate": hp.Choice(
                 'recurrent_dropout_rate',
                 get_param_space_func('recurrent_dropout_rate', [0.0, 0.1])),
-            # "use_residuals": hp.Boolean(
-            #     'use_residuals',
-            #     default=get_param_space_func('use_residuals', True)),
-            # XXX TO FIX problem here 
             "use_residuals": hp.Choice(
                 'use_residuals',
                 get_param_space_func('use_residuals', [False, True]), 
