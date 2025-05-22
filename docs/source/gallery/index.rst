@@ -20,8 +20,8 @@ Browse through the examples below to see ``fusionlab-learn`` in action.
    forecasting/index
    anomaly_detection_examples
    data_preparation_workflow
-   hyperparameter_tuning_example
-   hyperparameter_tuning_example
+   hyperparameter_tuning/index
+   exercices/index
    command_line_usage
 
 .. note::
