@@ -11,7 +11,7 @@ Dependency utilities providing functions to handle package installation,
 checking, and ensuring that optional dependencies are available.
 """
 
-import importlib
+
 import warnings
 import sys
 import functools
@@ -25,7 +25,17 @@ from ..decorators import Deprecated
 
 _logger = fusionlog.get_fusionlab_logger(__name__)
 
+import importlib
 
+try:
+    from importlib import metadata as importlib_metadata 
+except ImportError:
+    try:
+        # Backport package for Python < 3.8
+        import importlib_metadata 
+    except ImportError:
+        importlib_metadata = None 
+        
 __all__ = [
     "ensure_pkg", 
     "ensure_pkgs", 
@@ -140,6 +150,15 @@ def get_versions(
 
     all_pkgs = default_pkgs + list(extras)
     version_dict = {}
+    
+    if importlib_metadata is None: # Check if metadata module is available
+       warnings.warn(
+           "Version retrieval skipped: 'importlib.metadata' (or its backport "
+           "'importlib_metadata') not found. This typically occurs in "
+           "Python versions older than 3.8. Consider upgrading Python or "
+           "installing 'importlib-metadata' if you are using an older Python."
+       )
+       return {"__version__": version_dict} # Return empty if no way to get versions
 
     for pkg in all_pkgs:
         # Determine the actual distribution name for version lookup

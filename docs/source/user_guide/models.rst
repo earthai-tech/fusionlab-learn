@@ -67,13 +67,12 @@ This example shows how to instantiate the flexible
 
    import numpy as np
    import tensorflow as tf
-   from fusionlab.nn import TemporalFusionTransformer # Use the flexible version
+   from fusionlab.nn import TemporalFusionTransformer # Flexible version
 
    # --- Dummy Data Dimensions ---
-   B, T_past, H = 4, 12, 6 # Batch, Lookback Horizon, Forecast Horizon
+   B, T_past, H = 4, 12, 6 # Batch, Lookback, Forecast Horizon
    D_dyn, D_stat, D_fut = 5, 3, 2 # Feature dimensions
-   # Assume future inputs prepared for relevant time length (T_past + H ?)
-   T_future_total = T_past + H
+   T_future_total = T_past + H # Future inputs span lookback + horizon
 
    # Create Dummy Input Tensors
    static_in = tf.random.normal((B, D_stat), dtype=tf.float32)
@@ -87,13 +86,15 @@ This example shows how to instantiate the flexible
        static_input_dim=None,  # Explicitly None
        future_input_dim=None,  # Explicitly None
        forecast_horizon=H,
+       output_dim=1, # Specify output dimension
        hidden_units=8, num_heads=1 # Small params for example
    )
-   # Input is a list containing only the dynamic tensor
-   inputs1 = [dynamic_in]
+   # Input is a list: [Static, Dynamic, Future]
+   # For dynamic only, static and future are None
+   inputs1 = [None, dynamic_in, None]
    try:
        output1 = model_dyn_only(inputs1, training=False)
-       print(f"Input: [Dynamic ({dynamic_in.shape})]")
+       print(f"Input: [None, Dynamic ({dynamic_in.shape}), None]")
        print(f"Output Shape (Point): {output1.shape}")
        # Expected: (B, H, OutputDim=1) -> (4, 6, 1)
    except Exception as e:
@@ -109,55 +110,41 @@ This example shows how to instantiate the flexible
        future_input_dim=D_fut,   # Provide future dim
        forecast_horizon=H,
        quantiles=my_quantiles,   # Set quantiles
-       hidden_units=8, num_heads=1, output_dim=1
+       output_dim=1,             # Specify output dimension
+       hidden_units=8, num_heads=1
    )
-   # Input is a list [Dynamic, Future, Static] as per validator
-   inputs2 = [dynamic_in, future_in, static_in]
+   # Input is a list [Static, Dynamic, Future]
+   inputs2 = [static_in, dynamic_in, future_in]
    try:
        output2 = model_all_inputs(inputs2, training=False)
-       print(f"Input: [Dyn ({dynamic_in.shape}), Fut ({future_in.shape}),"
-             f" Stat ({static_in.shape})]")
+       print(f"Input: [Stat ({static_in.shape}), Dyn ({dynamic_in.shape}), "
+             f"Fut ({future_in.shape})]")
        print(f"Output Shape (Quantile): {output2.shape}")
-       # Expected: (B, H, NumQuantiles) -> (4, 6, 3)
+       # Expected: (B, H, NumQuantiles) if output_dim=1 -> (4, 6, 3)
    except Exception as e:
        print(f"Call failed for All Inputs: {e}")
 
-.. important:: Input Data Order and Format
+.. important:: Input Data Order and Format for `TemporalFusionTransformer`
 
-   While ``TemporalFusionTransformer`` offers flexibility by allowing
-   ``static_input_dim`` and ``future_input_dim`` to be optional
-   during initialization, providing the input data correctly during
-   training (`.fit`) or prediction (`.predict`, `.call`) is crucial.
+   The flexible ``TemporalFusionTransformer`` expects its `inputs` argument
+   in the ``call`` method (and subsequently for ``.fit()``, ``.predict()``)
+   to be a **list or tuple of three elements**:
+   ``[static_features, dynamic_features, future_features]``.
 
-   The model expects the inputs as a **list or tuple** containing the
-   active feature tensors. The **order** within this list/tuple depends
-   on which input types are enabled (i.e., which dimensions were set
-   during initialization):
-
-   * **Only Dynamic Inputs:**
-     Pass a list/tuple with one element:
-     ``[dynamic_array]``
-     *(Requires `static_input_dim=None` and `future_input_dim=None`)*
-
-   * **Dynamic + Static Inputs:**
-     Pass a list/tuple with two elements in this order:
-     ``[dynamic_array, static_array]``
-     *(Requires `static_input_dim` set, `future_input_dim=None`)*
-
-   * **Dynamic + Future Inputs:**
-     Pass a list/tuple with two elements in this order:
-     ``[dynamic_array, future_array]``
-     *(Requires `future_input_dim` set, `static_input_dim=None`)*
-
-   * **Dynamic + Future + Static Inputs:**
-     Pass a list/tuple with three elements in this **specific order**:
-     ``[dynamic_array, future_array, static_array]``
-     *(Requires both `static_input_dim` and `future_input_dim` set)*
-
-   Providing inputs in the wrong order will lead to dimension mismatch
-   errors during processing by internal components. This order is handled
-   by the internal validation logic
-   (:func:`~fusionlab.nn._tensor_validation.validate_tft_inputs`).
+   * If a particular input type is not used (e.g., no static features),
+     pass ``None`` for that element in the list.
+     For example:
+       * Dynamic only: ``[None, dynamic_array, None]``
+       * Dynamic + Static: ``[static_array, dynamic_array, None]``
+       * Dynamic + Future: ``[None, dynamic_array, future_array]``
+       * All three: ``[static_array, dynamic_array, future_array]``
+   * The ``dynamic_features`` input is always required.
+   * The model's ``__init__`` parameters (`static_input_dim`,
+     `dynamic_input_dim`, `future_input_dim`) determine which of these
+     inputs are expected to be actual tensors versus ``None``.
+   * This order is handled by the internal validation logic
+     (:func:`~fusionlab.nn._tensor_validation.validate_model_inputs`
+     when ``model_name='tft_flex'``).
 
 
 Formulation
@@ -279,25 +266,27 @@ with uncertainty estimates.
 
 .. raw:: html
 
-   <hr>
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
-.. _tft_model_revised:
+.. _tft_model_stricter:
 
-TFT (Standard Implementation - Required Inputs)
--------------------------------------------------
+TFT (Stricter Implementation - All Inputs Required)
+---------------------------------------------------
 :API Reference: :class:`~fusionlab.nn.transformers.TFT`
 
 *(Note: This refers to a specific ``TFT`` class implementation within
 fusionlab that enforces stricter input requirements compared to the
 more flexible ``TemporalFusionTransformer`` described above. It assumes
-static, dynamic past, and known future inputs are always provided).*
+static, dynamic past, and known future inputs are always provided and
+are not ``None``).*
 
 This class implements the Temporal Fusion Transformer (TFT)
 architecture, closely following the structure described in the
-original paper [Lim21]_. It is designed for multi-horizon time
+original paper [1]_. It is designed for multi-horizon time
 series forecasting and explicitly requires static covariates,
 dynamic (historical) covariates, and known future covariates as
-inputs for simplification and adherence to the core paper structure.
+inputs.
+
 
 Compared to implementations allowing optional inputs, this version
 mandates all input types, simplifying the internal input handling
@@ -465,62 +454,70 @@ Formulation
 
 .. raw:: html
 
-   <hr>
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
-.. _ntemporal_fusion_transformer_model:
+.. _dummy_tft_model:
 
-NTemporalFusionTransformer
-----------------------------
-:API Reference: :class:`~fusionlab.nn.NTemporalFusionTransformer`
+DummyTFT (Static & Dynamic Inputs Only)
+---------------------------------------
+:API Reference: :class:`~fusionlab.nn.transformers.DummyTFT`
 
-The ``NTemporalFusionTransformer`` is a variant of the TFT model
-available in ``fusionlab``, characterized by specific input
-requirements and focusing on deterministic forecasting.
+The ``DummyTFT`` (formerly ``NTemporalFusionTransformer``) is a
+variant of the TFT model available in ``fusionlab``. It is
+characterized by its specific input requirements, focusing on scenarios
+where only static and dynamic (past) features are available.
+
+.. param_deprecated_message::
+   :conditions_params_mappings:
+     - param: future_input_dim
+       condition: "lambda v: v is not None"
+       message: |
+         The 'future_input_dim' parameter is accepted by DummyTFT for API
+         consistency with other TFT models, but DummyTFT **does not
+         utilize future covariates**. This parameter will be internally
+         ignored and effectively treated as None. If you need to use
+         known future covariates, please consider using the standard
+         :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`
+         (for flexible input handling) or the stricter
+         :class:`~fusionlab.nn.transformers.TFT` (which requires future inputs).
+       default: None
 
 **Key Features & Differences:**
 
-* **Mandatory Static & Dynamic Inputs:** Unlike the main
-  :class:`~fusionlab.nn.TemporalFusionTransformer`, this class
-  **requires** both ``static_input_dim`` and ``dynamic_input_dim``
-  to be specified during initialization. It expects corresponding
-  static and dynamic (past) tensors as input.
-* **No Future Inputs:** This variant is designed specifically for
+* **Mandatory Static & Dynamic Inputs:** This class **requires** both
+  ``static_input_dim`` and ``dynamic_input_dim`` to be specified
+  during initialization and expects corresponding non-None static and
+  dynamic (past) tensors as input.
+* **No Future Inputs Used:** This variant is designed specifically for
   scenarios where known future covariates are not available or
-  not utilized. The architecture does not include pathways for
-  processing future inputs.
-* **Point Forecasts Only:** This class is currently designed to
-  produce only deterministic (point) forecasts. Any ``quantiles``
-  parameter provided during initialization might be ignored, and the
-  model will output a single predicted value per forecast horizon step.
+  not utilized. The architecture omits pathways for processing
+  future inputs.
+* **Point or Quantile Forecasts:** Can produce deterministic (point)
+  forecasts or probabilistic (quantile) forecasts if the ``quantiles``
+  parameter is specified.
 * **Core TFT Architecture:** It utilizes fundamental TFT components like
-  :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSNs),
-  LSTM encoders, Static Enrichment (using GRNs), Temporal Self-Attention
+  :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSNs for
+  static and dynamic inputs), LSTM encoders, Static Enrichment,
+  Temporal Self-Attention
   (:class:`~fusionlab.nn.components.TemporalAttentionLayer`), and
   :class:`~fusionlab.nn.components.GatedResidualNetwork` (GRNs),
-  configured for its specific two-input structure.
+  configured for its two-input structure.
 
 **When to Use:**
 
-Consider using ``NTemporalFusionTransformer`` primarily when:
+Consider using ``DummyTFT`` primarily when:
 
 * Your forecasting problem involves **only** static metadata and
   dynamic (past) observed features.
 * You explicitly **do not** have or require known future covariates.
-* You only need single-value **point forecasts**.
-
-*(Note: For general use cases, especially those involving future inputs
-or requiring probabilistic (quantile) forecasts, the primary
-:class:`~fusionlab.nn.TemporalFusionTransformer` or the stricter
-:class:`~fusionlab.nn.transformers.TFT` class (requiring all three
-inputs) offer greater flexibility.)*
+* You need point or quantile forecasts based on this two-input setup.
 
 Formulation
 ~~~~~~~~~~~~~
-
-The ``NTemporalFusionTransformer`` follows the core mathematical
-principles of the standard Temporal Fusion Transformer, applying key
-components like VSNs, static context GRNs, LSTM encoding, static
-enrichment, temporal self-attention, and position-wise feed-forward GRNs.
+The ``DummyTFT`` follows the core mathematical principles of the
+standard Temporal Fusion Transformer [1]_, employing components like
+VSNs, static context GRNs, LSTM encoding, static enrichment,
+temporal self-attention, and position-wise feed-forward GRNs.
 
 The main distinctions in the formulation are:
 
@@ -528,16 +525,10 @@ The main distinctions in the formulation are:
     pathway for known future inputs (:math:`z_t`). VSNs are not applied
     to them, and they are not included in the sequence fed to the LSTM
     or attention mechanisms. Only static (:math:`s`) and past dynamic
-    (:math:`x_t`) inputs are processed through their respective VSNs
-    to produce :math:`\zeta` and :math:`\xi^{dyn}_t`.
-2.  **Point Output Layer:** The final output layer consists of a single
-    dense layer applied to the features corresponding to the forecast
-    horizon (:math:`\{\delta_t\}_{t=T+1}^{T+\tau}`), producing a single
-    value per step: :math:`\hat{y}_t = Linear_{point}(\delta_t)`. It does
-    not generate separate outputs for different quantiles.
-
-Essentially, it implements the standard TFT flow but is specialized
-for a scenario limited to static/past inputs and point predictions.
+    (:math:`x_t`) inputs are processed.
+2.  **Output Layer:** The final output layer processes features derived
+    from static and dynamic inputs to produce point or quantile
+    predictions for the forecast horizon.
 
 **Code Example:**
 
@@ -546,50 +537,58 @@ for a scenario limited to static/past inputs and point predictions.
 
    import numpy as np
    import tensorflow as tf
-   from fusionlab.nn.transformers import NTemporalFusionTransformer
+   from fusionlab.nn.transformers import DummyTFT
 
    # Dummy Data Dimensions
-   B, T_past, H = 4, 12, 6
-   D_dyn, D_stat = 5, 3
-   output_dim = 1
+   B, T_past, H = 4, 12, 6 # Batch, Lookback, Horizon
+   D_dyn, D_stat = 5, 3    # Dynamic, Static feature dimensions
+   output_dim = 1          # Univariate target
 
    # Create Dummy Input Tensors (Static and Dynamic ONLY)
    static_in = tf.random.normal((B, D_stat), dtype=tf.float32)
    dynamic_in = tf.random.normal((B, T_past, D_dyn), dtype=tf.float32)
-   dummy_target = tf.random.normal((B, H, output_dim), dtype=tf.float32)
 
-   # Instantiate the NTFT Model
-   # Note: future_input_dim is NOT provided
-   model = NTemporalFusionTransformer(
+   # Instantiate the DummyTFT Model (Point Forecast)
+   model_point = DummyTFT(
        static_input_dim=D_stat,
        dynamic_input_dim=D_dyn,
        forecast_horizon=H,
-       hidden_units=16,
-       num_heads=2,
-       num_lstm_layers=1,
-       output_dim=output_dim
-       # quantiles parameter is ignored or absent
+       output_dim=output_dim,
+       hidden_units=16, num_heads=2,
+       quantiles=None # Point forecast
    )
 
-   # Compile for point forecast
-   model.compile(optimizer='adam', loss='mse')
-
    # Prepare input list: [static, dynamic]
-   # The order might depend on internal validation, confirm if needed.
-   # Assuming standard order expected by its specific validator.
-   # Let's assume [dynamic, static] based on TFT validator patterns
-   model_inputs = [dynamic_in, static_in] # Check expected order
+   model_inputs_point = [static_in, dynamic_in]
 
-   # Build model (e.g., via fit or predict or explicit build)
-   # For simplicity, call model directly
+   # Call the model
    try:
-       predictions = model(model_inputs, training=False)
+       predictions_point = model_point(model_inputs_point, training=False)
+       print("--- DummyTFT Point Forecast ---")
        print(f"Input Shapes: S={static_in.shape}, D={dynamic_in.shape}")
-       print(f"Output shape (Point): {predictions.shape}")
+       print(f"Output shape (Point): {predictions_point.shape}")
        # Expected: (B, H, O) -> (4, 6, 1)
    except Exception as e:
-       print(f"Model call failed. Check expected input order/validation "
-             f"for NTFT. Error: {e}")
+       print(f"DummyTFT (Point) call failed: {e}")
+
+   # Instantiate for Quantile Forecast
+   my_quantiles = [0.2, 0.5, 0.8]
+   model_quant = DummyTFT(
+       static_input_dim=D_stat,
+       dynamic_input_dim=D_dyn,
+       forecast_horizon=H,
+       output_dim=output_dim,
+       quantiles=my_quantiles,
+       hidden_units=16, num_heads=2
+   )
+   model_inputs_quant = [static_in, dynamic_in]
+   try:
+       predictions_quant = model_quant(model_inputs_quant, training=False)
+       print("\n--- DummyTFT Quantile Forecast ---")
+       print(f"Output shape (Quantile): {predictions_quant.shape}")
+       # Expected for output_dim=1: (B, H, NumQuantiles) -> (4, 6, 3)
+   except Exception as e:
+       print(f"DummyTFT (Quantile) call failed: {e}")
 
 
 .. raw:: html
@@ -917,6 +916,6 @@ Use with caution.)*
 .. rubric:: References
 
 .. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
-       Temporal fusion transformers for interpretable multi-horizon
-       time series forecasting. *International Journal of Forecasting*,
-       37(4), 1748-1764. (Also arXiv:1912.09363)
+   Temporal fusion transformers for interpretable multi-horizon
+   time series forecasting. *International Journal of Forecasting*,
+   37(4), 1748-1764. (Also arXiv:1912.09363)

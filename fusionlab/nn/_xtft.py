@@ -11,7 +11,7 @@ from numbers import Real, Integral
 from typing import List, Optional, Union, Dict, Any  
 import numpy as np 
 
-from .._fusionlog import fusionlog
+from .._fusionlog import fusionlog, OncePerMessageFilter
 from ..api.docs import doc 
 from ..api.property import NNLearner 
 from ..compat.sklearn import validate_params, Interval, StrOptions 
@@ -51,7 +51,6 @@ if KERAS_BACKEND:
     tf_float32=KERAS_DEPS.float32
     tf_constant=KERAS_DEPS.constant 
     tf_square=KERAS_DEPS.square 
-    tf_autograph=KERAS_DEPS.autograph
     tf_GradientTape=KERAS_DEPS.GradientTape
     tf_unstack =KERAS_DEPS.unstack
     tf_errors=KERAS_DEPS.errors 
@@ -60,11 +59,12 @@ if KERAS_BACKEND:
     tf_zeros_like=KERAS_DEPS.zeros_like
     tf_squeeze = KERAS_DEPS.squeeze
     
+    tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
     from ..compat.tf import optional_tf_function 
     from ._tensor_validation import validate_anomaly_scores 
-    from ._tensor_validation import validate_xtft_inputs
+    from ._tensor_validation import validate_model_inputs
     from ._tensor_validation import validate_anomaly_config 
     from ._tensor_validation import align_temporal_dimensions
     
@@ -99,6 +99,7 @@ if KERAS_BACKEND:
 DEP_MSG = dependency_message('nn.transformers') 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
+logger.addFilter(OncePerMessageFilter())
 
 @register_keras_serializable('fusionlab.nn.transformers', name="XTFT")
 @doc (
@@ -163,8 +164,8 @@ class XTFT(Model, NNLearner):
             None
         ],
         "scales": ['array-like', StrOptions({"auto"}),  None],
-        "use_batch_norm": [bool],
-        "use_residuals": [bool],
+        "use_batch_norm": [bool,  Interval(Integral, 0, 1, closed="both")],
+        "use_residuals": [bool, Interval(Integral, 0, 1, closed="both")],
         "final_agg": [StrOptions({"last", "average",  "flatten"})],
         "anomaly_detection_strategy": [
             StrOptions({"prediction_based", "feature_based", "from_config"}), 
@@ -252,7 +253,7 @@ class XTFT(Model, NNLearner):
         self.anomaly_loss_weight=anomaly_loss_weight
 
         # Layers
-        self.learned_normalization = LearnedNormalization()
+        
         self.multi_modal_embedding = MultiModalEmbedding(embed_dim)
         
         # Add PositionalEncoding layer
@@ -336,7 +337,7 @@ class XTFT(Model, NNLearner):
             anomaly_loss_fn=self.anomaly_loss_layer
         )
         # ---------------------------------------------------------------------
- 
+        self.learned_normalization = LearnedNormalization()
         self.static_dense = Dense(hidden_units, activation=self.activation)
         self.static_dropout = Dropout(dropout_rate)
         if self.use_batch_norm:
@@ -352,8 +353,7 @@ class XTFT(Model, NNLearner):
         )
     
         self.residual_dense = Dense(2 * embed_dim) if use_residuals else None
-        # self.final_dense = Dense(output_dim)
-        
+
     def _init_feature_based_components(self):
         """
         Initializes architecture components for feature-based
@@ -428,14 +428,16 @@ class XTFT(Model, NNLearner):
           - Memory-augmented attention
           - Dynamic time windowing
         """
-        static_input , dynamic_input, future_input = validate_xtft_inputs (
+        static_input , dynamic_input, future_input = validate_model_inputs (
             inputs =inputs,
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim= self.dynamic_input_dim, 
             future_covariate_dim= self.future_input_dim, 
-            forecast_horizon= self.forecast_horizon 
+            forecast_horizon=self.forecast_horizon, 
+            mode='strict', # XTFT is generally strict
+            model_name='xtft', # For specific validation logic if any
+            verbose= 1 if logger.level <= 10 else 0 # DEBUG level
         )
-  
         # Normalize and process static features
         normalized_static = self.learned_normalization(
             static_input, 
@@ -1117,7 +1119,7 @@ class SuperXTFT(XTFT):
         
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training=False, **kwargs):
-        static_input, dynamic_input, future_input = validate_xtft_inputs(
+        static_input, dynamic_input, future_input = validate_model_inputs(
             inputs=inputs,
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim=self.dynamic_input_dim, 

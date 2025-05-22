@@ -116,3 +116,4 @@ __all__ = ["__version__"]
 
 # Append version to module docstring
 __doc__ += f"\nVersion: {__version__}\n"
+

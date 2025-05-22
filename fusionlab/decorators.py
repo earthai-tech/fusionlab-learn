@@ -24,9 +24,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt 
 
-from typing import Any, Union, Optional, Callable
+from typing import Any, Union, Optional, Callable, Tuple, Dict, Type 
 from ._fusionlog import fusionlog
-
+try:
+    from sklearn.preprocessing import LabelEncoder
+except ImportError:
+    LabelEncoder = None
+    warnings.warn(
+        "scikit-learn not found. LabelEncoding for 'encode_categories' "
+        "will not be available in DynamicMethod."
+    )
+    
 _logger = fusionlog.get_fusionlab_logger(__name__)
 
 __docformat__ = 'restructuredtext'
@@ -1678,7 +1686,7 @@ class Extract1dArrayOrSeries:
         
         return result
 
-class DynamicMethod:
+class DynamicMethodIn:
     """
     A class-based decorator designed to preprocess data before it's passed to 
     a function or method. This preprocessing includes filtering data by type, 
@@ -2103,7 +2111,511 @@ class DynamicMethod:
                     if self.verbose:
                         print(f"Failed to add method {method_name}: {e}")
                     # Optionally log or handle the error as needed
-                    
+               
+class DynamicMethod:
+    """
+    A class-based decorator for preprocessing data before it's
+    passed to a function or method, with flexible data argument
+    identification.
+
+    """
+    def __init__(
+        self,
+        expected_type: str = 'numeric',
+        capture_columns: bool = False,
+        treat_int_as_categorical: bool = False,
+        encode_categories: bool = False,
+        drop_na: bool = False,
+        na_axis: Union[int, str] = 0,
+        na_thresh: Optional[float] = None,
+        transform_func: Optional[Callable] = None,
+        condition: Optional[Callable[[pd.DataFrame], bool]] = None,
+        reset_index: bool = False,
+        prefixer: Optional[str] = None, 
+        param: Optional[str] = None, 
+        verbose: bool = False,
+        ):
+        # Store all initialization parameters
+        self.param = param
+        self.expected_type = expected_type
+        self.capture_columns = capture_columns
+        self.treat_int_as_categorical = treat_int_as_categorical
+        self.encode_categories = encode_categories
+        self.drop_na = drop_na
+        self.na_axis = na_axis
+        self.na_thresh = na_thresh
+        self.transform_func = transform_func
+        self.condition = condition
+        self.reset_index = reset_index
+        # Default prefixer to 'go' if None, unless explicitly 'exclude'
+        if prefixer is None:
+            self.prefixer = "go" # Default prefix
+        elif isinstance(prefixer, str) and \
+            prefixer.lower() in ("exclude", "false", "none", ""):
+            self.prefixer = "exclude" # No prefix
+        else:
+            self.prefixer = prefixer
+
+        self.verbose = verbose
+
+    def _get_data_from_args(
+        self,
+        func_name: str, # For logging
+        args: Tuple[Any, ...],
+        kwargs: Dict[str, Any]
+    ) -> Tuple[Any, bool, Optional[int], Optional[str]]:
+        """
+        Identifies the data to be processed from args or kwargs.
+
+        Returns:
+            - data_to_process: The identified data object.
+            - was_kwarg: True if data was found in kwargs.
+            - arg_pos_idx: Index if data was in args, else None.
+            - kwarg_name: Key if data was in kwargs, else None.
+            Returns (None, False, None, None) if no data identified.
+        """
+        data_to_process = None
+        was_kwarg = False
+        arg_pos_idx = None
+        kwarg_name = None
+
+        if self.param: # `param` name is explicitly set
+            if self.param in kwargs:
+                data_to_process = kwargs[self.param]
+                was_kwarg = True
+                kwarg_name = self.param
+                if self.verbose:
+                    print(f"  DynamicMethod ({func_name}): Data identified "
+                          f"from specified kwarg '{self.param}'.")
+            else:
+                # If `param` is set, it *must* be a keyword argument.
+                # Not finding it is a configuration/usage error.
+                # (Alternative: could try to find it by inspecting
+                # func.__code__.co_varnames, but that's more complex)
+                msg = (
+                    f"DynamicMethod ({func_name}): Decorator parameter "
+                    f"'{self.param}' was specified, but no keyword "
+                    f"argument named '{self.param}' was found in the "
+                    "function call. Cannot identify data for processing."
+                )
+                # Depending on desired strictness, could raise error or warn
+                warnings.warn(msg, UserWarning)
+                if self.verbose: print(f"  {msg}")
+                return None, False, None, None # No data to process
+            
+        else: # `param` is None, try to infer data argument
+            common_data_keys = ('data', 'df') # 'X', 'x') # Common names
+            for key in common_data_keys:
+                if key in kwargs:
+                    data_to_process = kwargs[key]
+                    was_kwarg = True
+                    kwarg_name = key
+                    if self.verbose:
+                        print(f"  DynamicMethod ({func_name}): Data "
+                              f"identified from common kwarg '{key}'.")
+                    break
+            if data_to_process is None and args: # Check positional args
+                data_to_process = args[0]
+                arg_pos_idx = 0 # It's the first positional argument
+                if self.verbose:
+                    print(f"  DynamicMethod ({func_name}): Data "
+                          "identified from args[0].")
+
+        if data_to_process is None and self.verbose:
+            print(f"  DynamicMethod ({func_name}): No data argument "
+                  "identified for preprocessing.")
+
+        return data_to_process, was_kwarg, arg_pos_idx, kwarg_name
+
+    def __call__(self, func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            if self.verbose:
+                print(f"DynamicMethod: Preprocessing data for "
+                      f"'{func.__name__}'...")
+
+            # 1. Identify data from args/kwargs
+            original_data, was_kwarg, arg_pos_idx, kwarg_name = \
+                self._get_data_from_args(func.__name__, args, kwargs)
+
+            if original_data is None:
+                # No data identified, or `param` was set but not found.
+                # Call original function without preprocessing.
+                if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): No data "
+                          "to process or data not found as specified. "
+                          "Calling original function as is.")
+                return func(*args, **kwargs)
+
+            # 2. Validate and prepare (convert to DataFrame if needed)
+            try:
+                # Pass original_data identified, and kwargs for 'columns'
+                processed_df = self._validate_and_prepare_data(
+                    original_data, func_name=func.__name__, **kwargs
+                    )
+            except ValueError as e:
+                # If validation/preparation fails, call original function
+                if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): Data "
+                          f"validation/preparation failed: {e}. "
+                          "Calling original function.")
+                return func(*args, **kwargs)
+
+            if processed_df is None: # Should not happen if _validate raises
+                if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): Data became "
+                          "None after validation. Calling original function.")
+                return func(*args, **kwargs)
+
+            # 3. Apply further processing steps defined by decorator params
+            # Pass kwargs for _capture_columns to find 'columns' if needed
+            processed_df_after_steps = self._process_data(
+                processed_df, func_name=func.__name__, **kwargs
+                )
+
+            if processed_df_after_steps is None:
+                 # This can happen if self.condition in _process_data
+                 # evaluates to False.
+                 if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): Condition for "
+                          "execution not met or data became None after "
+                          "processing steps. Calling original function.")
+                 return func(*args, **kwargs)
+
+            # 4. Call the original function with processed data
+            final_args = list(args)
+            final_kwargs = kwargs.copy()
+
+            if was_kwarg and kwarg_name:
+                # Data was originally a keyword argument
+                final_kwargs[kwarg_name] = processed_df_after_steps
+                if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): Calling with "
+                          f"processed data in kwarg '{kwarg_name}'.")
+            elif arg_pos_idx is not None:
+                # Data was originally a positional argument
+                final_args[arg_pos_idx] = processed_df_after_steps
+                if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): Calling with "
+                          f"processed data at args[{arg_pos_idx}].")
+            else:
+                # This case should not be reached if original_data was found
+                if self.verbose:
+                    print(f"  DynamicMethod ({func.__name__}): Error in "
+                          "reconstructing arguments. Calling original func.")
+                return func(*args, **kwargs) # Fallback
+
+            return func(*final_args, **final_kwargs)
+
+        # Add the wrapped function as a method to pandas DataFrame/Series
+        # if a prefixer is specified (and not "exclude").
+        if self.prefixer and self.prefixer.lower() != "exclude":
+            self._add_method_to_pandas(wrapper, prefixer=self.prefixer)
+        elif self.prefixer is None: # Default "go" prefix
+             self._add_method_to_pandas(wrapper, prefixer="go")
+        # If self.prefixer is "exclude", no prefix is used by _add_method_to_pandas
+
+        return wrapper
+
+    def _validate_and_prepare_data(
+        self,
+        data_obj: Any,
+        func_name: str, # For logging
+        **kwargs
+        ) -> Optional[pd.DataFrame]:
+        """
+        Validates data_obj and converts to DataFrame if possible.
+        """
+        current_data = data_obj
+        if self.verbose >=2: # More detailed log for this step
+            print(f"    DynamicMethod ({func_name}): Validating data type: "
+                  f"{type(current_data)}")
+
+        if isinstance(current_data, dict):
+            current_data = pd.DataFrame(current_data)
+        elif hasattr(current_data, '__iter__') and not isinstance(
+            current_data, (pd.DataFrame, np.ndarray, pd.Series)
+            ):
+            try:
+                # Convert iterables (like list of lists) to numpy first
+                current_data = np.array(current_data)
+            except Exception as e:
+                msg = (
+                    f"DynamicMethod ({func_name}): Data argument is an "
+                    "iterable but could not be converted to NumPy array. "
+                    f"Error: {e}"
+                    )
+                if self.verbose: print(f"  {msg}")
+                raise ValueError(msg) from e
+
+        if isinstance(current_data, np.ndarray):
+            # Check if 'columns' was passed to the decorated function
+            columns_from_kw = kwargs.get('columns')
+            if isinstance(columns_from_kw, str):
+                columns_from_kw = [columns_from_kw]
+
+            df_columns = None
+            if columns_from_kw and isinstance(columns_from_kw, list):
+                if current_data.ndim == 1 and len(columns_from_kw) == 1:
+                    # Reshape 1D array to 2D for DataFrame creation
+                    current_data = current_data.reshape(-1, 1)
+                    df_columns = columns_from_kw
+                elif current_data.ndim == 2 and \
+                     len(columns_from_kw) == current_data.shape[1]:
+                    df_columns = columns_from_kw
+                elif self.verbose:
+                    print(f"    DynamicMethod ({func_name}): 'columns' kwarg "
+                          "provided but length does not match ndarray shape. "
+                          "Creating DataFrame without explicit column names.")
+            current_data = pd.DataFrame(current_data, columns=df_columns)
+        elif isinstance(current_data, pd.Series):
+            current_data = pd.DataFrame(current_data)
+
+        if not isinstance(current_data, pd.DataFrame):
+            msg = (
+                f"DynamicMethod ({func_name}): Input data must be, or be "
+                f"convertible to, a pd.DataFrame. Got type: {type(data_obj)}."
+                )
+            if self.verbose: print(f"  {msg}")
+            raise ValueError(msg)
+
+        if self.verbose >=2:
+            print(f"    DynamicMethod ({func_name}): Data prepared as "
+                  f"DataFrame. Shape: {current_data.shape}")
+        return current_data
+
+    def _process_data(
+        self,
+        data: pd.DataFrame,
+        func_name: str, # For logging
+        **kwargs
+        ) -> Optional[pd.DataFrame]:
+        """
+        Applies preprocessing steps like column capture, type filtering,
+        NA dropping, custom transform, and condition checking.
+        """
+        # Make a copy to avoid modifying original DataFrame if passed by ref
+        processed_data = data.copy()
+        if self.verbose >=2:
+            print(f"    DynamicMethod ({func_name}): Starting data processing steps...")
+
+        if self.capture_columns:
+            processed_data = self._capture_columns(
+                processed_data, func_name=func_name, **kwargs
+                )
+            if self.verbose >= 3:
+                print(f"      After column capture: {processed_data.shape}, "
+                      f"Cols: {processed_data.columns.tolist()[:5]}...")
+
+
+        if self.expected_type in ['numeric', 'categorical', 'both']:
+            # 'both' implies no type filtering, but categorical handling might apply
+            if self.expected_type != 'both':
+                processed_data = self._filter_data_type(
+                    processed_data, func_name=func_name
+                    )
+                if self.verbose >= 3:
+                    print(f"      After type filter ('{self.expected_type}'): "
+                          f"{processed_data.shape}")
+            # Handle categorical specific transformations even if 'both'
+            if self.treat_int_as_categorical or self.encode_categories:
+                 processed_data = self._handle_categorical_data(
+                     processed_data, func_name=func_name
+                     )
+                 if self.verbose >= 3:
+                     print(f"      After categorical handling: {processed_data.shape}")
+
+        if self.drop_na:
+            original_len = len(processed_data)
+            processed_data = self._drop_na(processed_data, func_name=func_name)
+            if self.verbose >= 3:
+                print(f"      After drop_na: {processed_data.shape}. "
+                      f"Dropped {original_len - len(processed_data)} rows/cols.")
+
+        if self.transform_func:
+            if self.verbose >= 3: 
+                print("      Applying transform_func...")
+            processed_data = self.transform_func(processed_data)
+            if self.verbose >= 3:
+                print(f"      After transform_func: {processed_data.shape}")
+
+
+        if self.condition and not self.condition(processed_data):
+            if self.verbose:
+                print(f"  DynamicMethod ({func_name}): Condition for "
+                      "execution not met, skipping function call and "
+                      "returning None from _process_data.")
+            return None # Signal to wrapper to call original func with original data
+
+        if self.reset_index:
+            if self.verbose >= 3: 
+                print("      Resetting index...")
+            processed_data = processed_data.reset_index(drop=True)
+
+        if self.verbose >=2:
+            print(f"    DynamicMethod ({func_name}): Data processing steps complete.")
+        return processed_data
+
+    def _capture_columns(
+        self, data: pd.DataFrame, func_name: str, **kwargs
+        ) -> pd.DataFrame:
+        """Filters columns based on 'columns' kwarg."""
+        columns_to_select = kwargs.get('columns') # Do not pop from kwargs here
+        if columns_to_select is not None:
+            if isinstance(columns_to_select, str):
+                columns_to_select = [columns_to_select]
+            if not isinstance(columns_to_select, list):
+                if self.verbose:
+                    print(f"    DynamicMethod ({func_name}): 'columns' kwarg "
+                          "is not a list or string, ignoring.")
+                return data
+            try:
+                # Select only existing columns to avoid KeyError
+                existing_cols_to_select = [
+                    col for col in columns_to_select if col in data.columns
+                    ]
+                if len(existing_cols_to_select) < len(columns_to_select) \
+                        and self.verbose:
+                    missing = set(columns_to_select) - set(existing_cols_to_select)
+                    print(f"    DynamicMethod ({func_name}): Warning - "
+                          f"specified columns not found: {missing}")
+                if not existing_cols_to_select and self.verbose:
+                     print(f"    DynamicMethod ({func_name}): No specified "
+                           "columns found in DataFrame. Returning original.")
+                     return data
+                return data[existing_cols_to_select]
+            except Exception as e: # Broad exception for safety
+                if self.verbose:
+                    print(f"    DynamicMethod ({func_name}): Error capturing "
+                          f"columns: {e}. Returning original data.")
+        return data
+
+    def _filter_data_type(
+        self, data: pd.DataFrame, func_name: str
+        ) -> pd.DataFrame:
+        """Filters data by expected_type ('numeric' or 'categorical')."""
+        if self.verbose >=3:
+            print(f"      Filtering data to type: '{self.expected_type}'")
+        if self.expected_type == 'numeric':
+            return data.select_dtypes(include=[np.number])
+        elif self.expected_type == 'categorical':
+            # If treat_int_as_categorical is True, it's handled in
+            # _handle_categorical_data. Here, select object/category.
+            return data.select_dtypes(include=['category', 'object'])
+        return data # Should not be reached if type is validated
+
+    def _handle_categorical_data(
+        self, data: pd.DataFrame, func_name: str
+        ) -> pd.DataFrame:
+        """Handles int_as_categorical and encoding."""
+        df_processed_cat = data
+        if self.treat_int_as_categorical:
+            if self.verbose >=3:
+                print("        Treating integer columns as categorical...")
+            int_cols = df_processed_cat.select_dtypes(
+                include=[np.integer] # More specific than int
+                ).columns.tolist()
+            if int_cols:
+                df_processed_cat[int_cols] = \
+                    df_processed_cat[int_cols].astype('category')
+        if self.encode_categories:
+            if self.verbose >=3:
+                print("        Encoding categorical columns to integers...")
+            df_processed_cat = self._encode_categorical_columns(
+                df_processed_cat, func_name=func_name
+                )
+        return df_processed_cat
+
+    def _encode_categorical_columns(
+        self, data: pd.DataFrame, func_name: str
+        ) -> pd.DataFrame:
+        """Encodes categorical columns to integers using LabelEncoder."""
+        if LabelEncoder is None:
+            if self.verbose:
+                print("      DynamicMethod: LabelEncoder not available "
+                      "(sklearn missing). Skipping categorical encoding.")
+            return data
+        # Select columns of 'category' or 'object' dtype
+        cat_columns = data.select_dtypes(
+            include=['category', 'object']).columns
+        if self.verbose >= 4 and not cat_columns.empty:
+            print(f"        Encoding columns: {cat_columns.tolist()}")
+        for col in cat_columns:
+            le = LabelEncoder()
+            try:
+                data[col] = le.fit_transform(data[col])
+            except Exception as e:
+                if self.verbose:
+                    print(f"      DynamicMethod ({func_name}): Error "
+                          f"encoding column '{col}': {e}. Skipping column.")
+        return data
+
+    def _drop_na(
+        self, data: pd.DataFrame, func_name: str
+        ) -> pd.DataFrame:
+        """Drops NaNs based on na_axis and na_thresh."""
+        # Convert na_axis from string to integer if necessary
+        current_na_axis = 0
+        if isinstance(self.na_axis, str):
+            if self.na_axis.lower() == 'col' \
+                    or self.na_axis.lower() == 'column':
+                current_na_axis = 1
+            elif self.na_axis.lower() != 'row': # Default to row
+                warnings.warn(f"Invalid na_axis '{self.na_axis}'. "
+                              "Defaulting to 0 (row).")
+        elif isinstance(self.na_axis, int) and self.na_axis in [0, 1]:
+            current_na_axis = self.na_axis
+        else:
+            warnings.warn(f"Invalid na_axis type/value '{self.na_axis}'. "
+                          "Defaulting to 0 (row).")
+            current_na_axis = 0
+
+        current_thresh = self.na_thresh
+        if current_thresh is not None and 0 < current_thresh <= 1:
+            # Proportion based threshold
+            axis_len = data.shape[1] if current_na_axis == 0 \
+                else data.shape[0] # Length of rows or columns
+            current_thresh = int(axis_len * current_thresh)
+            # Ensure threshold is at least 1 if proportion is very small
+            current_thresh = max(1, current_thresh)
+        elif current_thresh is not None and not isinstance(current_thresh, int):
+            warnings.warn(f"Invalid na_thresh '{self.na_thresh}'. "
+                          "Must be None, int, or float (0,1]. Ignoring.")
+            current_thresh = None # Revert to default dropna behavior
+
+        if self.verbose >= 4:
+            print(f"        Dropping NaNs: axis={current_na_axis}, "
+                  f"thresh={current_thresh}")
+        return data.dropna(axis=current_na_axis, thresh=current_thresh)
+
+    def _add_method_to_pandas(self, func_to_add, prefixer=None):
+        """Dynamically adds func_to_add as a method to pandas."""
+        # Determine method name based on prefixer
+        # Default prefix is "go" if self.prefixer was initially None
+        # If self.prefixer was "exclude", then no prefix.
+        if prefixer == "exclude":
+            method_name = func_to_add.__name__
+        elif isinstance(prefixer, str):
+            method_name = prefixer + "_" + func_to_add.__name__
+        else: # Should not happen if __init__ logic is correct
+            method_name = "go_" + func_to_add.__name__
+
+
+        for cls_to_extend in [pd.DataFrame, pd.Series]:
+            if not hasattr(cls_to_extend, method_name):
+                try:
+                    setattr(cls_to_extend, method_name, func_to_add)
+                    if self.verbose >= 2:
+                        print(f"    DynamicMethod: Added method '{method_name}' "
+                              f"to pandas.{cls_to_extend.__name__}")
+                except Exception as e:
+                    if self.verbose:
+                        print(f"    DynamicMethod: Failed to add method "
+                              f"{method_name} to {cls_to_extend.__name__}: {e}")
+            elif self.verbose >=3:
+                 print(f"    DynamicMethod: Method '{method_name}' already "
+                       f"exists on pandas.{cls_to_extend.__name__}.")
+
 class ExportData:
     """
     A decorator for exporting data into various formats post-function execution. 
@@ -2412,7 +2924,91 @@ class AppendDocReferences:
         
         return wrapper
     
+
 class Deprecated:
+    """
+    Decorator that flags functions, methods, or classes as *deprecated*.
+
+    When the decorated object is *called* (functions / methods) or
+    *instantiated* (classes), a deprecation warning is emitted that
+    pin‑points the call‑site (``stacklevel=2``) and explains **why** the
+    API is obsolete and **what** to use instead.
+
+    Parameters
+    ----------
+    reason : str
+        Short sentence that explains the deprecation.
+    version : str, optional
+        Version **since** which the object is considered deprecated
+        (e.g. ``"0.9.0"``).  Added to the warning text if supplied.
+    alternative : str, optional
+        Name of the preferred replacement (function or class).  Shown
+        in the warning so users can migrate quickly.
+    category : Type[Warning], default=DeprecationWarning
+        Warning subclass to raise.  Using a custom subclass lets
+        advanced users silence only your library’s deprecations.
+
+    Examples
+    --------
+    >>> from fusionlab.decorators import Deprecated
+    >>> @Deprecated(
+    ...     reason="Use ``reshape_xtft_data`` instead.",
+    ...     version="0.9.0",
+    ...     alternative="reshape_xtft_data",
+    ... )
+    ... def reshape_xtft_data_in(*args, **kwargs):
+    ...     pass
+    >>> reshape_xtft_data_in()  # doctest: +ELLIPSIS
+    .../example.py:<line>: DeprecationWarning: [0.9.0] ...
+      Use `reshape_xtft_data` instead.
+    """
+    # pylint: disable=too-many-arguments
+    def __init__(
+        self,
+        reason: str,
+        *,
+        version: Optional[str] = None,
+        alternative: Optional[str] = None,
+        category: Type[Warning] = DeprecationWarning,
+    ) -> None:
+        if not reason:
+            raise ValueError("`reason` must be a non‑empty string.")
+
+        if not issubclass(category, Warning):
+            raise TypeError("`category` must derive from `Warning`.")
+
+        self.reason: str = reason
+        self.version: Optional[str] = version
+        self.alternative: Optional[str] = alternative
+        self.category: Type[Warning] = category
+
+    def __call__(self, obj: Callable) -> Callable:
+        if not (inspect.isfunction(obj) or inspect.isclass(obj)):
+            raise TypeError(
+                "Deprecated decorator can only be applied to "
+                "functions, methods, or classes."
+            )
+
+        # craft a detailed, actionable message
+        parts: list[str] = []
+        if self.version:
+            parts.append(f"[{self.version}]")
+        parts.append(f"{obj.__name__!s} is deprecated.")
+        parts.append(self.reason.rstrip("."))
+
+        if self.alternative:
+            parts.append(f"Use `{self.alternative}` instead.")
+        message: str = " ".join(parts)
+
+        # wrap the original callable / class
+        @functools.wraps(obj)
+        def _wrapper(*args, **kwargs):
+            warnings.warn(message, category=self.category, stacklevel=2)
+            return obj(*args, **kwargs)
+
+        return _wrapper
+
+class _Deprecated:
     """
     A decorator for marking functions, methods, and classes as deprecated. 
     It emits a deprecation warning when the decorated item is called or 
@@ -2440,7 +3036,7 @@ class Deprecated:
     codebases.
     """
     
-    def __init__(self, reason):
+    def __init__(self, reason, **kws):
         if not reason:
             raise ValueError("A reason for deprecation must be supplied.")
         self.reason = reason
