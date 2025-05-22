@@ -90,8 +90,7 @@ class TFT(Model, NNLearner):
         "forecast_horizon": [Interval(Integral, 1, None, closed='left')],
         "quantiles": ['array-like', None],
         "activation": [StrOptions(
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu"}
-            )],
+            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu"})],
         "use_batch_norm": [bool],
         "num_lstm_layers": [Interval(Integral, 1, None, closed='left')],
         "lstm_units": ['array-like', Interval(Integral, 1, None, closed='left'), None],
