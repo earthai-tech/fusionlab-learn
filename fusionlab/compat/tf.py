@@ -8,13 +8,17 @@ standalone Keras. It includes functions and classes for dynamically importing
 Keras dependencies and checking the availability of TensorFlow or Keras.
 """
 import os
+import re
 import logging
 import warnings 
 import importlib
 import numpy as np 
 from functools import wraps
 from contextlib import contextmanager 
-from typing import Callable 
+from typing import Callable, Optional, Any, Union 
+
+# --- TensorFlow Setup ---
+
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # 0 = all messages are logged (default)
@@ -26,6 +30,13 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 # # '3' shows only errors, suppressing warnings and infos
 # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+# Convenience flag: should *our* warnings be shown?
+_tf_logs_suppressed = os.environ.get("TF_CPP_MIN_LOG_LEVEL", "0") != "0"
+
+# Placeholder for tf.Tensor type hint
+tf = None
+Tensor = None 
 
 try:
     import tensorflow as tf
@@ -52,6 +63,42 @@ except ImportError:
     # Fallback: In older TF/Keras, `register_keras_serializable` is in `utils`.
     from tensorflow.keras.utils import register_keras_serializable # noqa: F401
     saving_module = "utils"
+
+# I want to use :
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+    # 0 = all messages are logged (default)
+    # 1 = filter out INFO messages
+    # 2 = filter out INFO and WARNING messages
+    # 3 = filter out INFO, WARNING, and ERROR messages
+
+    # Disable OneDNN logs or usage (Optional):
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+    # # '3' shows only errors, suppressing warnings and infos
+    # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+    
+    # so when value is 0 warnings .warn is triggered below 
+try:
+    tf_spec = importlib.util.find_spec("tensorflow")
+    if tf_spec is not None:
+        tf = importlib.util.module_from_spec(tf_spec)
+        tf_spec.loader.exec_module(tf)
+        if hasattr(tf, 'Tensor'): # Basic check
+            Tensor = tf.Tensor
+        HAS_TF = True
+except ImportError:
+    if not _tf_logs_suppressed:
+        warnings.warn(
+            "TensorFlow is not installed. Some functionalities in "
+            "fusionlab.compat.tf will be limited or fall back to NumPy.",
+            ImportWarning
+        )
+except Exception as e:
+    if not _tf_logs_suppressed:
+        warnings.warn(
+            f"An error occurred during TensorFlow import: {e}. "
+            "TensorFlow-dependent functionalities might not work.",
+            ImportWarning
+        )
 
 __all__ = [
     'KerasDependencies',
@@ -286,14 +333,26 @@ class TFConfig:
         _set_compat_ndim_tensor : bool
             A flag to toggle compatibility mode for `ndim`.
         """
-        # Check TensorFlow version before accessing tf.Tensor.ndim
-        if hasattr(tf.Tensor, 'ndim'):
-            self._original_ndim = tf.Tensor.ndim
+  
+        # self.compat_ndim_enabled was removed to prevent recursion.
+        # Any version-specific TF logic should be handled within
+        # individual utility functions using tf.version.VERSION if needed.
+        if HAS_TF:
+            # Example: Log TF version or set TF-specific flags
+            # print(f"TFConfig initialized with TensorFlow version: {tf.version.VERSION}")
+            pass
         else:
-            # Indicate that ndim doesn't exist in TensorFlow
-            self._original_ndim = None  
+            # print("TFConfig initialized, but TensorFlow not found.")
+            pass
+        
+        # # Check TensorFlow version before accessing tf.Tensor.ndim
+        # if hasattr(tf.Tensor, 'ndim'):
+        #     self._original_ndim = tf.Tensor.ndim
+        # else:
+        #     # Indicate that ndim doesn't exist in TensorFlow
+        #     self._original_ndim = None  
 
-        self._set_compat_ndim_tensor = False
+        # self._set_compat_ndim_tensor = False
 
     @property
     def compat_ndim_enabled(self):
@@ -463,6 +522,70 @@ def check_keras_backend(
                 raise ImportError(message) from e
             return None
 
+def tf_debugging_assert_equal(
+    x: Any,
+    y: Any,
+    msg_fmt: str,
+    *args,
+    summarize: Optional[int] = None
+) -> Any:
+    """
+    Wrapper for tf.debugging.assert_equal that supports
+    both percent-style and {}-style formatting in
+    graph/eager modes, with Python fallback.
+    """
+    # Fallback when TensorFlow is not available
+    if not HAS_TF:
+        # Static message formatting
+        if '%' in msg_fmt:
+            message = msg_fmt % args
+        else:
+            curly_fmt = re.sub(r'%[ds]', '{}', msg_fmt)
+            message   = curly_fmt.format(*args)
+
+        # Compare arrays or scalars via numpy
+        try:
+            equal = np.array_equal(x, y)
+        except Exception:
+            equal = x == y
+
+        if not equal:
+            raise AssertionError(message)
+        return None
+
+    # TensorFlow available: import debugging ops
+    import tensorflow as tf
+    # from tensorflow.python.ops import debugging_ops
+
+    # Detect if any arg is a TF tensor for dynamic formatting
+    use_tf_fmt = any(isinstance(a, tf.Tensor) for a in args)
+
+    # Static formatting when no TF tensors present
+    if '%' in msg_fmt and not use_tf_fmt:
+        message = msg_fmt % args
+    else:
+        # Convert %d/%s placeholders to {} for tf.strings.format()
+        curly_fmt = re.sub(r'%[ds]', '{}', msg_fmt)
+        fmt_args  = []
+        for a in args:
+            if isinstance(a, tf.Tensor):
+                fmt_args.append(tf.strings.as_string(a))
+            else:
+                fmt_args.append(
+                    tf.constant(str(a), dtype=tf.string)
+                )
+        # Build dynamic message tensor
+        message = tf.strings.format(curly_fmt, tuple(fmt_args))
+
+    # Execute the TensorFlow assertion
+    return tf.debugging.assert_equal(
+        x,
+        y,
+        message   = message,
+        summarize = summarize
+    )
+
+
 def standalone_keras(module_name):
     """
     Tries to import the specified module from tensorflow.keras or 
@@ -552,7 +675,71 @@ def suppress_tf_warnings():
             tf_logger.setLevel(original_level)  # Restore original logging level
          
 
-def get_ndim(tensor):
+
+# --- Compatibility Functions ---
+
+def get_ndim(tensor: Union[Tensor, np.ndarray, Any]) -> int:
+    """
+    Reliably get the number of dimensions (rank) of a tensor-like object.
+
+    Uses tf.rank for TensorFlow tensors and converts to a Python integer.
+    Uses .ndim for NumPy arrays. Falls back to len(tensor.shape) for
+    other objects with a .shape attribute.
+
+    Parameters
+    ----------
+    tensor : tf.Tensor, np.ndarray, or object with .shape
+        The input tensor-like object.
+
+    Returns
+    -------
+    int
+        The number of dimensions of the tensor.
+
+    Raises
+    ------
+    TypeError
+        If the input object type is not supported or lacks shape info.
+    tf.errors.InvalidArgumentError
+        May be raised by tf.rank if the tensor is invalid, though
+        this function attempts to get a static rank first.
+    """
+    if HAS_TF and isinstance(tensor, tf.Tensor):
+        # For TensorFlow tensors, tf.rank() is robust.
+        # Try to get static rank first if available.
+        if tensor.shape.rank is not None:
+            return tensor.shape.rank
+        # Fallback to dynamic rank (will be a 0-D Tensor)
+        # This path is more for graph execution; direct int needed for Python logic
+        # If called outside tf.function, .numpy() would work on rank_tensor.
+        # For validation logic that needs an int *before* graph construction,
+        # relying on static shape (tensor.shape.rank) is preferred.
+        # If in graph and dynamic, the caller should use tf.rank directly.
+        # This function aims to return a Python int.
+        try:
+            # This will work in eager mode or if rank is statically known
+            return tf.rank(tensor).numpy()
+        except AttributeError: # Not in eager, .numpy() fails
+             # This indicates a symbolic tensor where static rank isn't known.
+             # Returning a symbolic tensor from here would change API.
+             # For now, raise if static rank isn't available for Python int return.
+            raise ValueError(
+                "Cannot determine static rank for symbolic TensorFlow tensor "
+                "without eager execution. Use tf.rank() directly in graph "
+                "operations if a symbolic rank tensor is acceptable."
+            )
+    elif isinstance(tensor, np.ndarray):
+        return tensor.ndim
+    elif hasattr(tensor, 'shape') and hasattr(tensor.shape, '__len__'):
+        return len(tensor.shape)
+    elif hasattr(tensor, "ndim"): # Fallback for other array-like
+        return tensor.ndim
+
+    raise TypeError(
+        f"Input object of type {type(tensor)} must be a TensorFlow tensor,"
+        f" a NumPy array, or have a 'shape' or 'ndim' attribute."
+    )
+def _get_ndim(tensor):
     """
     Compatibility function to retrieve the number of dimensions
     of a TensorFlow tensor.
@@ -635,7 +822,6 @@ def get_ndim(tensor):
         "Input object must be a TensorFlow tensor,"
         " a NumPy array, or an object with a 'shape' attribute."
     )
-
 
 def has_wrappers(
         error="warn", model=None, ops="check_only", 

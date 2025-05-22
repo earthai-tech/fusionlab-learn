@@ -33,7 +33,10 @@ except ImportError as e:
     def tft_tuner(*args, **kwargs): raise ImportError("tft_tuner not found")
     class kt:
         class Tuner: pass
+    
 # --- End Imports ---
+# XXX TO OPTIMIZE later : SKIP for Now; 
+# HAS_KT =False 
 
 pytestmark = pytest.mark.skipif(
     not (FUSIONLAB_INSTALLED and HAS_KT),
