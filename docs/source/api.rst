@@ -19,6 +19,54 @@ examples, please consult the :doc:`User Guide </user_guide/index>`.
    to be generated correctly. You also need `sphinx.ext.autosummary`
    enabled in your `conf.py` with `autosummary_generate = True`.
 
+Datasets (`fusionlab.datasets`)
+-------------------------------
+Utilities for loading included sample datasets and generating synthetic
+time series data for testing and demonstration.
+
+**Loading Functions** (`fusionlab.datasets.load`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets_load
+   :nosignatures:
+
+   ~fusionlab.datasets.load.fetch_zhongshan_data
+   ~fusionlab.datasets.load.fetch_nansha_data
+   ~fusionlab.datasets.load.load_processed_subsidence_data
+
+**Generation Functions** (`fusionlab.datasets.make`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets_make
+   :nosignatures:
+
+   ~fusionlab.datasets.make.make_multi_feature_time_series
+   ~fusionlab.datasets.make.make_quantile_prediction_data
+   ~fusionlab.datasets.make.make_anomaly_data
+   ~fusionlab.datasets.make.make_trend_seasonal_data
+   ~fusionlab.datasets.make.make_multivariate_target_data
+
+Metrics (`fusionlab.metrics`)
+-------------------------------
+A collection of metrics for evaluating forecast accuracy, calibration,
+sharpness, and stability, particularly suited for probabilistic and
+time-series forecasting.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.metrics.coverage_score
+   ~fusionlab.metrics.crp_score
+   ~fusionlab.metrics.mean_interval_width_score
+   ~fusionlab.metrics.prediction_stability_score
+   ~fusionlab.metrics.quantile_calibration_error
+   ~fusionlab.metrics.theils_u_score
+   ~fusionlab.metrics.time_weighted_accuracy_score
+   ~fusionlab.metrics.time_weighted_interval_score
+   ~fusionlab.metrics.time_weighted_mean_absolute_error
+   ~fusionlab.metrics.weighted_interval_score
+   
 Forecasting Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
 Core implementations of the Temporal Fusion Transformer and its variants.
@@ -158,7 +206,8 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.visualize_forecasts
    ~fusionlab.nn.utils.step_to_long
    ~fusionlab.nn.utils.format_predictions_to_dataframe 
-   ~fusionlab.nn.utils.prepare_model_inputs 
+   ~fusionlab.nn.utils.prepare_model_inputs
+   ~fusionalb.nn.utils.plot_forecasts  
 
 
 Time Series Utilities (`fusionlab.utils.ts_utils`)
@@ -184,33 +233,6 @@ General utilities for time series data processing, analysis, and feature enginee
    ~fusionlab.utils.ts_utils.ts_split
    ~fusionlab.utils.ts_utils.ts_outlier_detector
    ~fusionlab.utils.ts_utils.select_and_reduce_features
-
-Datasets (`fusionlab.datasets`)
--------------------------------
-Utilities for loading included sample datasets and generating synthetic
-time series data for testing and demonstration.
-
-**Loading Functions** (`fusionlab.datasets.load`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_load
-   :nosignatures:
-
-   ~fusionlab.datasets.load.fetch_zhongshan_data
-   ~fusionlab.datasets.load.fetch_nansha_data
-   ~fusionlab.datasets.load.load_processed_subsidence_data
-
-**Generation Functions** (`fusionlab.datasets.make`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_make
-   :nosignatures:
-
-   ~fusionlab.datasets.make.make_multi_feature_time_series
-   ~fusionlab.datasets.make.make_quantile_prediction_data
-   ~fusionlab.datasets.make.make_anomaly_data
-   ~fusionlab.datasets.make.make_trend_seasonal_data
-   ~fusionlab.datasets.make.make_multivariate_target_data
 
 
 Command-Line Tools (`fusionlab.tools`)

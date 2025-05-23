@@ -21,7 +21,6 @@ models to your forecasting problems:
    tft_required_inputs_example
    advanced_forecasting_xtft
    xtft_with_anomaly_detection
-
    # multivariate_forecasting_example
    # long_horizon_forecasting
 
