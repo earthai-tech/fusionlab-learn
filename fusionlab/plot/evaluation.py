@@ -12,7 +12,6 @@ from typing import (
     Optional, 
     Union, 
     Any, 
-    Dict, 
     Callable
 )
 from sklearn.metrics import (
@@ -26,6 +25,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
+from ..decorators import isdf 
 from ..utils.generic_utils import vlog
 from ..metrics import coverage_score
 
@@ -35,6 +35,7 @@ __all__ = [
     'plot_metric_over_horizon' 
     ]
 
+@isdf 
 def plot_metric_radar(
     forecast_df: pd.DataFrame,
     segment_col: str,
@@ -404,10 +405,12 @@ def plot_metric_radar(
         plt.tight_layout()
         plt.show()
 
-    vlog("Metric radar plot generation complete.", level=3, verbose=verbose)
+    vlog("Metric radar plot generation complete.", 
+         level=3, verbose=verbose)
+    
+    return ax 
 
-
-
+@isdf 
 def plot_forecast_comparison(
     forecast_df: pd.DataFrame,
     target_name: str = "target",
@@ -791,9 +794,9 @@ def plot_forecast_comparison(
             )
     vlog("Forecast visualization complete.", level=3, verbose=verbose)
 
+    return ax
 
-
-
+@isdf 
 def plot_metric_over_horizon(
     forecast_df: pd.DataFrame,
     target_name: str = "target",
