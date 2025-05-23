@@ -579,6 +579,146 @@ strategy : str, optional
         📌 Recommended:
             - When you want a robust and general dataset          
 """
+# fusionlab/api/docs.py (or a new _shared_plot_docs.py)
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
+"""
+Shared docstring components for plotting functions related to metrics
+and forecast evaluation.
+"""
+
+# Note: Ensure line lengths are kept around 65 characters for
+# optimal rendering in Sphinx.
+
+_shared_metric_plot_params = dict(
+    y_true="""
+y_true : np.ndarray
+    Ground truth (correct) target values. The shape required
+    may depend on the specific plot and metric (e.g., 1D for
+    aggregated scores, 2D for sequence-wise scores).""",
+    y_pred="""
+y_pred : np.ndarray
+    Predicted target values (for point forecasts). Shape should
+    typically align with `y_true` for metric calculation.""",
+    y_median="""
+y_median : np.ndarray
+    Predicted median values (quantile=0.5) from a probabilistic
+    forecast. Shape should align with `y_true`.""",
+    y_lower="""
+y_lower : np.ndarray
+    Predicted lower-bound quantile values from a probabilistic
+    forecast (e.g., q10, q05). Shape should align with `y_true`.""",
+    y_upper="""
+y_upper : np.ndarray
+    Predicted upper-bound quantile values from a probabilistic
+    forecast (e.g., q90, q95). Shape should align with `y_true`.""",
+    y_pred_quantiles="""
+y_pred_quantiles : np.ndarray
+    Array of predicted quantiles. Typically of shape
+    (n_samples, n_horizons, n_quantiles) or
+    (n_samples, n_quantiles) if aggregated over horizon.""",
+    quantiles="""
+quantiles : np.ndarray
+    The array of quantile levels corresponding to `y_pred_quantiles`
+    (e.g., `np.array([0.1, 0.5, 0.9])`).""",
+    alphas="""
+alphas : np.ndarray
+    Alpha levels for the Weighted Interval Score (WIS), typically
+    derived from quantiles (e.g., `2 * q` for `q < 0.5`). Used to
+    define the nominal coverage of prediction intervals.""",
+    metric_values="""
+metric_values : float or np.ndarray, optional
+    Pre-computed metric value(s) to plot. If provided, the function
+    may skip internal metric calculation and directly visualize these
+    values. Default is ``None`` (metric is computed internally).""",
+    metric_kws="""
+metric_kws : dict, optional
+    Additional keyword arguments to pass to the underlying metric
+    calculation function (e.g., :func:`~fusionlab.metrics.coverage_score`
+    or a custom metric function). Default is ``None``.""",
+    kind="""
+kind : str
+    Specifies the type of plot to generate. Available options
+    depend on the specific plotting function (e.g., 'summary_bar',
+    'intervals', 'reliability_diagram').""",
+    output_idx="""
+output_idx : int, optional
+    If the model predicts multiple target variables (output_dim > 1),
+    this specifies the index of the target variable to plot the
+    metric for. Default is ``None`` (may imply plotting for the first
+    target or aggregating if not applicable).""",
+    sample_idx="""
+sample_idx : int, optional
+    For plots that show individual sample performance (like CRPS ECDF),
+    this specifies the index of the sample in `y_true` and
+    `y_pred_ensemble` to visualize. Default is ``0`` (first sample).""",
+    figsize="""
+figsize : Tuple[float, float], optional
+    The size `(width, height)` in inches for the generated figure or
+    for each subplot if multiple plots are created.
+    Default varies by function (e.g., (8, 6) or (10, 6)).""",
+    title="""
+title : str, optional
+    The main title for the plot or figure. If ``None``, a default
+    title may be generated based on the metric and parameters.
+    Default is ``None``.""",
+    xlabel="""
+xlabel : str, optional
+    Label for the x-axis. If ``None``, a default may be used based
+    on the plot type. Default is ``None``.""",
+    ylabel="""
+ylabel : str, optional
+    Label for the y-axis. If ``None``, a default may be used based
+    on the plot type (e.g., 'Metric Value', 'Score').
+    Default is ``None``.""",
+    bar_color="""
+bar_color : str or List[str], optional
+    Color(s) for the bars in bar plots. Can be a single color name
+    or a list of colors if multiple bars are present per group.
+    Default varies (e.g., 'cornflowerblue', 'chocolate').""",
+    bar_width="""
+bar_width : float, default 0.8
+    The width of the bars in bar plots.""",
+    score_annotation_format="""
+score_annotation_format : str, optional
+    Format string for annotating scores on plots (e.g., bars).
+    Example: ``"{:.4f}"`` for floats, ``"{:.2%}"`` for percentages.
+    Default varies by function.""",
+    show_score_on_title="""
+show_score_on_title : bool, optional
+    If ``True``, appends the calculated metric score (e.g., overall
+    WIS) to the plot title. Default is often ``True``.""",
+    show_score="""
+show_score : bool, optional
+    Similar to `show_score_on_title`, controls whether the calculated
+    metric score is displayed, typically on the plot or in the title.
+    Default is often ``True``.""",
+    show_grid="""
+show_grid : bool, default True
+    Whether to display a grid on the plot.""",
+    grid_props="""
+grid_props : dict, optional
+    Additional keyword arguments to pass to `ax.grid()` for
+    customizing the grid appearance (e.g., `{'linestyle': '--',
+    'alpha': 0.7}`). Default is ``None``.""",
+    ax="""
+ax : matplotlib.axes.Axes, optional
+    A Matplotlib Axes object to plot on. If ``None``, a new figure
+    and axes will be created. Default is ``None``.""",
+    verbose="""
+verbose : int, default 0
+    Verbosity level for logging or printing informational messages.
+    ``0`` for silent, higher values for more details.""",
+    kwargs="""
+**kwargs : Any
+    Additional keyword arguments to be passed to underlying Matplotlib
+    plotting functions (e.g., `plt.plot`, `plt.bar`, `plt.scatter`,
+    `ax.fill_between`) for fine-grained control over plot aesthetics."""
+)
+
+
 
 def filter_docs(keys, input_dict=None):
     """

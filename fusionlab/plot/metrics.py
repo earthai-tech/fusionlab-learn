@@ -1189,7 +1189,6 @@ def plot_time_weighted_metric(
     return ax
 
 
-
 def plot_quantile_calibration(
     y_true: np.ndarray,
     y_pred_quantiles: np.ndarray,
@@ -1518,7 +1517,6 @@ def plot_quantile_calibration(
         ax.grid(False)
 
     return ax
-
 
 def plot_coverage(
     y_true: np.ndarray,
