@@ -20,12 +20,12 @@ from .compat.sklearn import (
     validate_params,
     
 )
-# from .utils.validator import _ensure_y_is_valid 
+from .utils.generic_utils import are_all_values_in_bounds 
 
 
 __all__ = [
     'coverage_score',
-    'crps_score', 
+    'crp_score', 
     'weighted_interval_score', 
     'prediction_stability_score' , 
     'time_weighted_mean_absolute_error', 
@@ -33,7 +33,6 @@ __all__ = [
     'mean_interval_width_score', 
     'theils_u_score'
    ]
-
 
 @validate_params({
     'y_true': ['array-like'],
@@ -125,7 +124,7 @@ def time_weighted_interval_score(
     time_weights : array-like of shape (n_timesteps,), str, or None, \
                    default='inverse_time'
         Weights for each time step. Normalized to sum to 1.
-        See `twa_score` for details.
+        See `time_weighted_accuracy_score` for details.
     sample_weight : array-like of shape (n_samples,), optional
         Sample weights. Sum must be > `eps`.
     nan_policy : {'omit', 'propagate', 'raise'}, default='propagate'
@@ -170,7 +169,7 @@ def time_weighted_interval_score(
     See Also
     --------
     weighted_interval_score : Non-time-weighted version.
-    twa_score : Time-weighted accuracy for classification.
+    time_weighted_accuracy_score : Time-weighted accuracy for classification.
     """
     # --- 1. Input Validation and Preprocessing ---
     if not (eps > 0):
@@ -193,8 +192,14 @@ def time_weighted_interval_score(
             "meaningful for interval calculations (e.g., > eps and < 1-eps).",
             UserWarning
         )
-    if not (0 < np.all(alphas_arr) and np.all(alphas_arr) < 1):
-        raise ValueError("All alpha values must be strictly between 0 and 1.")
+    
+    are_all_values_in_bounds(
+        alphas_arr, bounds=(0, 1), 
+        closed='neither', 
+        message= "All alpha values must be strictly between 0 and 1.", 
+        nan_policy = 'raise' 
+    )
+
     if alphas_arr.ndim > 1: alphas_arr = alphas_arr.squeeze()
     if alphas_arr.ndim == 0 and alphas_arr.size == 1:
         alphas_arr = alphas_arr.reshape(1,)
@@ -262,7 +267,7 @@ def time_weighted_interval_score(
             return np.full(n_outputs, np.nan)
         return np.nan
 
-    # Process time_weights (same as twa_score)
+    # Process time_weights (same as time_weighted_accuracy_score)
     w_t: np.ndarray
     if time_weights is None:
         w_t = np.full(n_timesteps, 1.0 / n_timesteps if n_timesteps > 0 else 0)
@@ -396,7 +401,10 @@ def time_weighted_interval_score(
                 twis_so, axis=0, weights=current_s_weights
             )
     else:
-        output_scores = np.nanmean(twis_so, axis=0)
+        if nan_policy =='propagate': 
+            output_scores = np.mean (twis_so,  axis= 0 )
+        else:
+            output_scores = np.nanmean(twis_so, axis=0)
 
     if multioutput == 'uniform_average':
         final_score = np.nanmean(output_scores)
@@ -434,7 +442,7 @@ def time_weighted_interval_score(
     'eps': [Real],
     'verbose': [Integral, bool],
 })
-def twa_score(
+def time_weighted_accuracy_score(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     time_weights: Optional[Union[Sequence[float], str]] = 'inverse_time',
@@ -515,7 +523,7 @@ def twa_score(
     Examples
     --------
     >>> import numpy as np
-    >>> # from fusionlab.metrics import twa_score
+    >>> # from fusionlab.metrics import time_weighted_accuracy_score
 
     >>> # Single output (2 samples, 3 timesteps)
     >>> y_t = np.array([[1, 0, 1], [0, 1, 1]])
@@ -525,14 +533,14 @@ def twa_score(
     >>> # TWA_S0 = 1*0.545 + 0*0.273 + 1*0.182 = 0.727
     >>> # TWA_S1 = 1*0.545 + 1*0.273 + 0*0.182 = 0.818
     >>> # Avg TWA = (0.727 + 0.818) / 2 = 0.7725
-    >>> score = twa_score(y_t, y_p)
+    >>> score = time_weighted_accuracy_score(y_t, y_p)
     >>> print(f"TWA score (default weights): {score:.4f}")
     TWA score (default weights): 0.7727
 
     >>> # With NaN
     >>> y_t_nan = np.array([[1, np.nan, 1], [0,1,1]])
     >>> y_p_nan = np.array([[1, 1, 1], [0,1,0]])
-    >>> score_prop = twa_score(y_t_nan, y_p_nan, nan_policy='propagate')
+    >>> score_prop = time_weighted_accuracy_score(y_t_nan, y_p_nan, nan_policy='propagate')
     >>> print(f"TWA score (propagate NaN): {score_prop:.4f}")
     TWA score (propagate NaN): nan
 
@@ -1065,178 +1073,6 @@ def theils_u_score(
     return final_score
 
 
-
-# @validate_params ({ 
-#     'y_true': ['array-like'], 
-#     'y_lower': ['array-like'], 
-#     'y_upper': ['array-like'],
-#     'nan_policy': [StrOptions ({'omit', 'propagate', 'raise'})], 
-#     'fill_value': [Real, None], 
-#     }
-# )
-# def coverage_score(
-#     y_true,
-#     y_lower,
-#     y_upper,
-#     nan_policy='propagate',
-#     fill_value=np.nan,
-#     verbose=1
-# ):
-#     r"""
-#     Compute the coverage score of prediction intervals, measuring
-#     the fraction of instances where the true value lies within a
-#     provided lower and upper bound. This metric is useful for
-#     evaluating uncertainty estimates in probabilistic forecasts,
-#     resembling a probabilistic analog to traditional accuracy.
-
-#     Formally, given observed true values 
-#     :math:`y = \{y_1, \ldots, y_n\}`, and corresponding interval 
-#     bounds :math:`\{l_1, \ldots, l_n\}` and 
-#     :math:`\{u_1, \ldots, u_n\}`, the coverage score is defined
-#     as:
-
-#     .. math::
-#        \text{coverage} = \frac{1}{n}\sum_{i=1}^{n}
-#        \mathbf{1}\{ l_i \leq y_i \leq u_i \},
-
-#     where :math:`\mathbf{1}\{\cdot\}` is an indicator function 
-#     that equals 1 if :math:`y_i` falls within the interval 
-#     :math:`[l_i, u_i]` and 0 otherwise.
-
-#     Parameters
-#     ----------
-#     y_true : array-like
-#         The true observed values. Must be array-like and numeric.
-#     y_lower : array-like
-#         The lower bound predictions for each instance, matching 
-#         `<y_true>` in shape and alignment.
-#     y_upper : array-like
-#         The upper bound predictions, aligned with `<y_true>` and 
-#         `<y_lower>`.
-#     nan_policy: {'omit', 'propagate', 'raise'}, optional
-#         Defines how to handle NaN values in `<y_true>`, `<y_lower>`, 
-#         or `<y_upper>`:
-        
-#         - ``'propagate'``: NaNs remain, potentially affecting the 
-#           result or causing it to be NaN.
-#         - ``'omit'``: NaNs lead to omission of those samples from 
-#           coverage calculation.
-#         - ``'raise'``: Encountering NaNs raises a ValueError.
-#     fill_value: scalar, optional
-#         The value used to fill missing entries if `<allow_missing>` 
-#         is True. Default is `np.nan`. If `nan_policy='omit'`, these 
-#         filled values may be omitted.
-#     verbose: int, optional
-#         Controls the level of verbosity for internal logging:
-        
-#         - 0: No output.
-#         - 1: Basic info (e.g., final coverage).
-#         - 2: Additional details (e.g., handling NaNs).
-#         - 3: More internal state details (shapes, conversions).
-#         - 4: Very detailed output (e.g., sample masks).
-    
-#     Returns
-#     -------
-#     float
-#         The coverage score, a number between 0 and 1. A value closer 
-#         to 1.0 indicates that the provided intervals successfully 
-#         capture a large portion of the true values.
-
-#     Notes
-#     -----
-#     The `<nan_policy>` or `<allow_missing>` parameters control how 
-#     missing values are handled. If `nan_policy='raise'` and NaNs 
-#     are found, an error is raised. If `nan_policy='omit'`, these 
-#     samples are excluded from the calculation. If `nan_policy` is 
-#     'propagate', NaNs remain, potentially influencing the result 
-#     (e.g., coverage might become NaN if the fraction cannot be 
-#     computed).
-
-#     When `<allow_missing>` is True, missing values are filled with 
-#     `<fill_value>`. This can interact with `nan_policy`. For 
-#     instance, if `fill_value` is NaN and `nan_policy='omit'`, 
-#     those samples are omitted anyway.
-
-#     By adjusting these parameters, users can adapt the function 
-#     to various data cleanliness scenarios and desired behaviors.
-
-#     Examples
-#     --------
-#     >>> from fusionlab.metrics import coverage_score
-#     >>> import numpy as np
-#     >>> y_true = np.array([10, 12, 11, 9])
-#     >>> y_lower = np.array([9, 11, 10, 8])
-#     >>> y_upper = np.array([11, 13, 12, 10])
-#     >>> cov = coverage_score(y_true, y_lower, y_upper)
-#     >>> print(f"Coverage: {cov:.2f}")
-#     Coverage: 1.00
-
-#     See Also
-#     --------
-#     numpy.isnan : Identify missing values in arrays.
-
-#     References
-#     ----------
-#     .. [1] Gneiting, T. & Raftery, A. E. (2007). "Strictly Proper 
-#            Scoring Rules, Prediction, and Estimation." J. Amer. 
-#            Statist. Assoc., 102(477):359–378.
-#     """
-#     # Ensure inputs are numpy arrays for consistency
-#     y_true_arr, y_lower_arr = _ensure_y_is_valid(
-#         y_true, y_lower, y_numeric=True, allow_nan=True, multi_output =False
-#     )
-#     _, y_upper_arr = _ensure_y_is_valid(
-#         y_true_arr, y_upper, y_numeric=True, allow_nan=True, multi_output =False
-#     )
-
-#     if verbose >= 3:
-#         print("Converting inputs to arrays...")
-#         print("Shapes:", y_true_arr.shape, y_lower_arr.shape, y_upper_arr.shape)
-
-#     if y_true_arr.shape != y_lower_arr.shape or y_true_arr.shape != y_upper_arr.shape:
-#         if verbose >= 2:
-#             print("Shapes not matching:")
-#             print("y_true:", y_true_arr.shape)
-#             print("y_lower:", y_lower_arr.shape)
-#             print("y_upper:", y_upper_arr.shape)
-#         raise ValueError(
-#             "All inputs (y_true, y_lower, y_upper) must have the same shape."
-#         )
-
-#     mask_missing = np.isnan(y_true_arr) | np.isnan(y_lower_arr) | np.isnan(y_upper_arr)
-
-#     if np.any(mask_missing):
-#         if nan_policy == 'raise':
-#             if verbose >= 2:
-#                 print("Missing values detected and nan_policy='raise'. Raising error.")
-#             raise ValueError(
-#                 "Missing values detected. To allow missing values, change nan_policy."
-#             )
-#         elif nan_policy == 'omit':
-#             if verbose >= 2:
-#                 print("Missing values detected. Omitting these samples.")
-#             # omit those samples
-#             valid_mask = ~mask_missing
-#             y_true_arr = y_true_arr[valid_mask]
-#             y_lower_arr = y_lower_arr[valid_mask]
-#             y_upper_arr = y_upper_arr[valid_mask]
-#         elif nan_policy == 'propagate':
-#             if verbose >= 2:
-#                 print("Missing values detected and nan_policy='propagate'."
-#                       "No special handling. Result may be NaN.")
-#             # do nothing
-      
-#     coverage_mask = (y_true_arr >= y_lower_arr) & (y_true_arr <= y_upper_arr)
-#     coverage = np.mean(coverage_mask) if coverage_mask.size > 0 else np.nan
-
-#     if verbose >= 4:
-#         print("Coverage mask (sample):",
-#               coverage_mask[:10] if coverage_mask.size > 10 else coverage_mask)
-#     if verbose >= 1:
-#         print(f"Coverage computed: {coverage:.4f}")
-
-#     return coverage
-
 @validate_params({
     'y_lower': ['array-like'],
     'y_upper': ['array-like'],
@@ -1488,8 +1324,13 @@ def mean_interval_width_score(
                 widths, axis=0, weights=current_s_weights
             )
     else:
-        # np.nanmean handles NaNs correctly
-        output_scores = np.nanmean(widths, axis=0)
+        # NO weights → choose between propagate vs omit policies
+       if nan_policy == 'propagate':
+           # any NaN in widths → NaN in result
+           output_scores = np.mean(widths, axis=0)
+       else:  # e.g. 'omit'
+           # ignore NaNs when computing the mean
+           output_scores = np.nanmean(widths, axis=0)
 
     # Handle multioutput aggregation
     if multioutput == 'uniform_average':
@@ -1660,11 +1501,12 @@ def quantile_calibration_error(
             "Current implementation checks (0,1) strictly but uses eps for sums.",
             UserWarning
         )
-    if not (0 < np.all(q_arr) and np.all(q_arr) < 1): # Strict check
-        raise ValueError(
-            "All quantile values must be strictly between 0 and 1."
-        )
 
+    are_all_values_in_bounds(
+        q_arr, nan_policy='raise', closed ="right", 
+        message="All quantile values must be strictly between 0 and 1."
+    )
+ 
     if q_arr.ndim > 1: q_arr = q_arr.squeeze()
     if q_arr.ndim == 0 and q_arr.size ==1 : q_arr = q_arr.reshape(1,)
     if q_arr.ndim > 1:
@@ -2524,7 +2366,7 @@ def weighted_interval_score(
     alphas_arr = check_array(alphas, ensure_2d=False, dtype="numeric",
         force_all_finite=True, copy=False) # Alphas must be finite
 
-    if not (0 < np.all(alphas_arr) and np.all(alphas_arr) < 1):
+    if not np.all((alphas_arr > 0) & (alphas_arr < 1)):
         raise ValueError(
             "All alpha values must be strictly between 0 and 1."
         )
@@ -2731,7 +2573,6 @@ def weighted_interval_score(
     return final_score
 
 
-
 @validate_params({
     'y_true': ['array-like'],
     'y_pred': ['array-like'],
@@ -2740,7 +2581,8 @@ def weighted_interval_score(
     'multioutput': [StrOptions({'raw_values', 'uniform_average'})],
     'verbose': [Integral, bool] 
 })
-def crps_score(
+ 
+def crp_score(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     sample_weight: Optional[np.ndarray] = None,
@@ -2801,7 +2643,7 @@ def crps_score(
     Examples
     --------
     >>> import numpy as np
-    >>> # from fusionlab.metrics import crps_score 
+    >>> # from fusionlab.metrics import crp_score 
 
     >>> y_true_1d = np.array([0.5, 0.0, 1.0, np.nan])
     >>> y_pred_1d = np.array([
@@ -2810,12 +2652,12 @@ def crps_score(
     ...     [0.9, 1.1, 1.0],  # For 1.0
     ...     [0.0, 0.5, np.nan] # For np.nan y_true
     ... ])
-    >>> score = crps_score(y_true_1d, y_pred_1d, nan_policy='omit', verbose=1)
+    >>> score = crp_score(y_true_1d, y_pred_1d, nan_policy='omit', verbose=1)
     CRPS computed: 0.0333
     >>> print(f"CRPS (1D, omit NaNs): {score:.4f}")
     CRPS (1D, omit NaNs): 0.0333
 
-    >>> score_prop = crps_score(y_true_1d, y_pred_1d, nan_policy='propagate')
+    >>> score_prop = crp_score(y_true_1d, y_pred_1d, nan_policy='propagate')
     >>> print(f"CRPS (1D, propagate NaNs): {score_prop}") # Will be nan
     CRPS (1D, propagate NaNs): nan
 
@@ -2825,14 +2667,14 @@ def crps_score(
     ...     [[0.0, 0.1, 0.2], [np.nan, 3.1, 3.2]], # For [0.0, np.nan]
     ...     [[0.9, 1.1, 1.0], [2.8, 3.0, 3.2]]  # For [1.0, 3.0]
     ... ])
-    >>> raw_scores = crps_score(y_true_2d, y_pred_2d,
+    >>> raw_scores = crp_score(y_true_2d, y_pred_2d,
     ...                         nan_policy='propagate',
     ...                         multioutput='raw_values', verbose=1)
     CRPS computed: [0.0333 nan   ]
     >>> print(f"CRPS (2D, raw, propagate): {raw_scores}")
     CRPS (2D, raw, propagate): [0.03333333        nan]
 
-    >>> avg_score = crps_score(y_true_2d, y_pred_2d,
+    >>> avg_score = crp_score(y_true_2d, y_pred_2d,
     ...                        nan_policy='omit',
     ...                        multioutput='uniform_average', verbose=1)
     CRPS computed: 0.0500
@@ -3117,6 +2959,7 @@ def coverage_score(
     nan_policy: NanPolicyLiteral = 'propagate',
     multioutput: MultioutputLiteral = 'uniform_average',
     warn_invalid_bounds: bool = True,
+    eps: float = 1e-8, 
     verbose: int = 0
 ) -> Union[float, np.ndarray]:
     r"""
@@ -3171,6 +3014,9 @@ def coverage_score(
     warn_invalid_bounds : bool, default=True
         If True, issues a `UserWarning` if any `y_lower[i] > y_upper[i]`.
         These samples will always count as uncovered.
+    eps : float, default=1e-8
+        Small epsilon value to prevent division by zero or issues with
+        very small sum of weights when `sample_weight` is used.
     verbose : int, default=0
         Controls the level of verbosity for internal logging (prints to console):
         - 0: No output.
@@ -3257,6 +3103,9 @@ def coverage_score(
         copy=False)
 
     y_true_orig_ndim = y_true_p.ndim
+    
+    if not (eps > 0):
+        raise ValueError("eps must be positive.")
 
     if verbose >= 3:
         print("Input shapes before reshaping:")
@@ -3464,14 +3313,26 @@ def coverage_score(
 
     if multioutput == 'uniform_average':
         if weights is not None:
-            # Weighted average per output, then unweighted average of these scores
-            if np.sum(weights) == 0 : # Avoid division by zero if all weights are zero
-                 output_scores = np.full(coverage_mask.shape[1], np.nan)
+            sum_weights = np.sum(weights)
+            # Weighted average per output, then unweighted 
+            # average of these scores
+            # Treat sum of weights close to zero as zero
+            if sum_weights < eps: 
+                if verbose >= 1 and sum_weights > 0: 
+                    # Warn if sum_weights is positive but too small
+                     warnings.warn(
+                         f"Sum of weights ({sum_weights}) is < eps ({eps})."
+                         " Result will be NaN.", UserWarning)
+                # np.average with sum_weights=0 raises ZeroDivisionError
+                # or returns NaNs if weights contain NaNs that sum to 0.
+                # We want consistent NaN output if sum_weights < eps.
+                output_scores = np.full(coverage_mask.shape[1], np.nan)
             else: 
                 output_scores = np.average(coverage_mask, axis=0, weights=weights)
-            # If nan_policy='propagate', output_scores can have NaNs. np.nanmean handles this.
+            # If nan_policy='propagate', output_scores can 
+            # have NaNs. np.nanmean handles this.
             coverage = ( 
-                np.nanmean( output_scores) if nan_policy == 'propagate' 
+                np.nanmean( output_scores) if nan_policy != 'propagate' 
                 else np.mean(output_scores)
             )
         else:
@@ -3479,12 +3340,12 @@ def coverage_score(
             # np.nanmean for outer mean if propagation could lead to NaN output_scores
             output_scores = ( 
                 np.nanmean( coverage_mask, axis=0) 
-                if nan_policy == 'propagate' 
+                if nan_policy != 'propagate' 
                 else np.mean(coverage_mask, axis=0)
             )
             coverage = ( 
                 np.nanmean(output_scores) 
-                if nan_policy == 'propagate' 
+                if nan_policy != 'propagate' 
                 else np.mean(output_scores)
             )
 
@@ -3532,3 +3393,4 @@ def coverage_score(
             print(f"Coverage computed: {coverage:.4f}") # Changed precision
 
     return coverage
+

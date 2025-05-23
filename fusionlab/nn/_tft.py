@@ -875,7 +875,6 @@ class TemporalFusionTransformer(Model, NNLearner):
         return cls(**config)
 
 DummyTFT.__doc__+="""\
-
 The DummyTFT combines high-performance multi-horizon
 forecasting with interpretable insights into temporal dynamics [1]_.
 It integrates several advanced mechanisms, including:
@@ -962,7 +961,7 @@ get_config()
 from_config(config)
     Instantiates the model from a configuration dictionary.
 
-""".format( params=_param_docs) 
+""".format(params=_param_docs) 
 
 TemporalFusionTransformer.__doc__="""\
 TemporalFusionTransformer model implementation for multi-horizon 
