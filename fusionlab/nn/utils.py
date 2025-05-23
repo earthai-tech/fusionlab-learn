@@ -705,16 +705,16 @@ def plot_forecasts(
 def format_predictions_to_dataframe(
     predictions: Optional[Union[np.ndarray, Tensor]] = None,
     model: Optional[Model] = None,
-    model_inputs: Optional[List[Optional[Union[np.ndarray, Tensor]]]] = None,
+    inputs: Optional[List[Optional[Union[np.ndarray, Tensor]]]] = None,
     y_true_sequences: Optional[Union[np.ndarray, Tensor]] = None,
     target_name: Optional[str] = "target",
     quantiles: Optional[List[float]] = None,
     forecast_horizon: Optional[int] = None,
     output_dim: Optional[int] = None,
     spatial_data_array: Optional[Union[np.ndarray, Tensor]] = None,
-    spatial_cols_names: Optional[List[str]] = None,
+    spatial_cols: Optional[List[str]] = None,
     spatial_cols_indices: Optional[List[int]] = None,
-    # dt_col_name_in_test_data: Optional[str] = None, # For future alignment
+    # dt_col: Optional[str] = None, # For future alignment
     evaluate_coverage: bool = False,
     scaler: Optional[Any] = None, 
     scaler_feature_names: Optional[List[str]] = None,
@@ -750,13 +750,13 @@ def format_predictions_to_dataframe(
             - (num_samples, forecast_horizon, num_quantiles * output_dim)
             - (num_samples, forecast_horizon, num_quantiles, output_dim)
             - (num_samples, num_quantiles * output_dim) if forecast_horizon=1
-        If ``None``, `model` and `model_inputs` must be provided.
+        If ``None``, `model` and `inputs` must be provided.
         Default is ``None``.
     model : tf.keras.Model, optional
         A trained Keras model to generate predictions if `predictions`
-        is not provided. Used in conjunction with `model_inputs`.
+        is not provided. Used in conjunction with `inputs`.
         Default is ``None``.
-    model_inputs : List[Optional[Union[np.ndarray, tf.Tensor]]], optional
+    inputs : List[Optional[Union[np.ndarray, tf.Tensor]]], optional
         A list of input tensors (e.g., [static, dynamic, future])
         required by the `model` to generate predictions. Required if
         `predictions` is ``None`` and `model` is provided.
@@ -793,17 +793,17 @@ def format_predictions_to_dataframe(
         - If NumPy/Tensor: Expected shape `(num_samples, num_spatial_features)`.
           `spatial_cols_indices` must be provided.
         - If DataFrame/Series: Must have `num_samples` rows.
-          `spatial_cols_names` must be provided.
+          `spatial_cols` must be provided.
         These features will be repeated for each forecast step in the
         output DataFrame. Default is ``None``.
-    spatial_cols_names : List[str], optional
+    spatial_cols : List[str], optional
         List of column names to select from `spatial_data_array` if it's
         a DataFrame/Series, or names to assign to columns if
         `spatial_data_array` is NumPy/Tensor and `spatial_cols_indices`
         are provided. Default is ``None``.
     spatial_cols_indices : List[int], optional
         List of column indices to select from `spatial_data_array` if
-        it's a NumPy/Tensor. Length must match `spatial_cols_names` if
+        it's a NumPy/Tensor. Length must match `spatial_cols` if
         provided. Default is ``None``.
     evaluate_coverage : bool, default False
         If ``True``, `quantiles` are provided (at least two), and
@@ -857,7 +857,7 @@ def format_predictions_to_dataframe(
     Raises
     ------
     ValueError
-        If `predictions` is None and `model` or `model_inputs` is also None.
+        If `predictions` is None and `model` or `inputs` is also None.
         If `predictions` shape is invalid (not 2D, 3D, or 4D).
         If `quantiles` are provided but prediction shape is incompatible
         for inferring `output_dim`.
@@ -913,7 +913,7 @@ def format_predictions_to_dataframe(
     >>> df_spatial = format_predictions_to_dataframe(
     ...     predictions=preds_point,
     ...     spatial_data_array=spatial_np,
-    ...     spatial_cols_names=['store_id', 'region_id'],
+    ...     spatial_cols=['store_id', 'region_id'],
     ...     spatial_cols_indices=[0, 1]
     ... )
     >>> print(df_spatial[['sample_idx', 'forecast_step', 'store_id']].head(H))
@@ -928,19 +928,19 @@ def format_predictions_to_dataframe(
 
     # --- 1. Validate and Obtain Predictions ---
     if predictions is None:
-        if model is None or model_inputs is None:
+        if model is None or inputs is None:
             raise ValueError(
                 "If 'predictions' is None, both 'model' and "
-                "'model_inputs' must be provided to generate predictions."
+                "'inputs' must be provided to generate predictions."
             )
         vlog("  Predictions not provided, generating from model...",
              level=4, verbose=verbose)
         try:
-            # Ensure model_inputs is a list for Keras predict
-            # The prepare_model_inputs util should have done this.
-            if not isinstance(model_inputs, (list, tuple)):
-                model_inputs = [model_inputs]
-            predictions_raw = model.predict(model_inputs, verbose=0)
+            # Ensure inputs is a list for Keras predict
+            # The prepare_inputs util should have done this.
+            if not isinstance(inputs, (list, tuple)):
+                inputs = [inputs]
+            predictions_raw = model.predict(inputs, verbose=0)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to generate predictions from model: {e}"
@@ -1071,23 +1071,23 @@ def format_predictions_to_dataframe(
 
     # --- 4. Add Spatial Columns ---
     if spatial_data_array is not None:
-        if spatial_cols_names is None and spatial_cols_indices is None:
+        if spatial_cols is None and spatial_cols_indices is None:
             warnings.warn(
                 "spatial_data_array provided, but neither "
-                "spatial_cols_names (for DataFrame) nor "
+                "spatial_cols (for DataFrame) nor "
                 "spatial_cols_indices (for NumPy array) were given. "
                 "Skipping spatial columns.", UserWarning
             )
         elif isinstance(spatial_data_array, (pd.DataFrame, pd.Series)):
-            if spatial_cols_names is None:
+            if spatial_cols is None:
                 warnings.warn(
                     "spatial_data_array is DataFrame/Series but "
-                    "spatial_cols_names is missing. Skipping.", UserWarning
+                    "spatial_cols is missing. Skipping.", UserWarning
                     )
             else:
-                cols = [spatial_cols_names] if \
-                    isinstance(spatial_cols_names, str) \
-                    else list(spatial_cols_names)
+                cols = [spatial_cols] if \
+                    isinstance(spatial_cols, str) \
+                    else list(spatial_cols)
                 try:
                     spatial_df_part = pd.DataFrame(
                         spatial_data_array[cols].iloc[sample_indices].values,
@@ -1113,11 +1113,11 @@ def format_predictions_to_dataframe(
                     isinstance(spatial_cols_indices, int) \
                     else list(spatial_cols_indices)
                 # Ensure names are provided if indices are used
-                names = spatial_cols_names if spatial_cols_names else \
+                names = spatial_cols if spatial_cols else \
                     [f"spatial_{k}" for k in range(len(indices))]
                 if len(names) != len(indices):
                     warnings.warn(
-                        "Length of spatial_cols_names does not match "
+                        "Length of spatial_cols does not match "
                         "spatial_cols_indices. Using default names."
                         )
                     names = [f"spatial_{k}" for k in range(len(indices))]
