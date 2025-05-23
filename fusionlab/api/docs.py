@@ -449,14 +449,14 @@ strategy : str, optional
         nearby regions may share similar environmental
         conditions but did not experience a landslide.
 
-        ✅ Pros:
+        Pros:
             - Spatially consistent with real events
             - Easy to implement
-        ⚠️ Cons:
+        Cons:
             - Risk of overlapping with actual landslide
               zones
             - May include false negatives
-        📌 Recommended:
+        Recommended:
             - When landslide events are georeferenced but
               no gauge data is available
 
@@ -467,13 +467,13 @@ strategy : str, optional
         points should reflect areas under monitoring, but
         with no landslide occurrence.
 
-        ✅ Pros:
+        Pros:
             - Leverages real measurement locations
             - Works well with rainfall‑based models
-        ⚠️ Cons:
+        Cons:
             - Not all gauges may represent terrain
               diversity
-        📌 Recommended:
+        Recommended:
             - When rainfall is the main driver and gauge
               locations are reliable
 
@@ -484,14 +484,14 @@ strategy : str, optional
         include unrealistic or low‑risk zones, depending
         on the study area.
 
-        ✅ Pros:
+        Pros:
             - Covers full spatial variability
             - Simple and fast
-        ⚠️ Cons:
+        Cons:
             - May include unrealistic zones (e.g., flat
               deserts, urban areas)
             - Poor environmental control
-        📌 Recommended:
+        Recommended:
             - For exploratory models or when spatial
               context is less critical
 
@@ -502,13 +502,13 @@ strategy : str, optional
         rainfall), as it controls for geography while
         testing different temporal conditions.
 
-        ✅ Pros:
+        Pros:
             - Controls for geography
             - Focuses on temporal variation (e.g., rainfall)
-        ⚠️ Cons:
+        Cons:
             - Requires time‑series data
             - May still be close to actual disaster dates
-        📌 Recommended:
+         Recommended:
             - For temporal models or rainfall‑driven
               landslide prediction
 
@@ -519,13 +519,13 @@ strategy : str, optional
         variability by shifting away from exact event
         locations.
 
-        ✅ Pros:
+        Pros:
             - Reduces overfitting to exact event locations
             - Balances spatial diversity
-        ⚠️ Cons:
+         Cons:
             - Needs tuning for clustering
             - May miss sparse or isolated regions
-        📌 Recommended:
+         Recommended:
             - For datasets with highly clustered landslides
 
     - ``'environmental_similarity'``:
@@ -536,13 +536,13 @@ strategy : str, optional
         difficult negative examples and improves model
         generalization.
 
-        ✅ Pros:
+        Pros:
             - Generates “hard negatives”
             - Excellent for feature‑sensitive models
-        ⚠️ Cons:
+        Cons:
             - Computationally expensive
             - Requires complete feature data for all regions
-        📌 Recommended:
+        Recommended:
             - When building highly accurate or
               generalizable ML models
 
@@ -553,13 +553,13 @@ strategy : str, optional
         strong negative class with minimal false
         negatives.
 
-        ✅ Pros:
+        Pros:
             - Produces clearly negative samples
             - Low chance of false negatives
-        ⚠️ Cons:
+        Cons:
             - Poor variability
             - Could skew the classifier
-        📌 Recommended:
+         Recommended:
             - When needing a clear separation between
               classes (e.g., binary baseline)
 
@@ -570,27 +570,15 @@ strategy : str, optional
         reduce sampling bias and improve classifier
         performance.
 
-        ✅ Pros:
+        Pros:
             - Rich, diverse sample set
             - Reduces sampling bias
-        ⚠️ Cons:
+         Cons:
             - More complex logic
             - Possible duplicate locations
-        📌 Recommended:
+         Recommended:
             - When you want a robust and general dataset          
 """
-# fusionlab/api/docs.py (or a new _shared_plot_docs.py)
-# -*- coding: utf-8 -*-
-# License: BSD-3-Clause
-# Author: L. Kouadio <etanoyau@gmail.com>
-
-"""
-Shared docstring components for plotting functions related to metrics
-and forecast evaluation.
-"""
-
-# Note: Ensure line lengths are kept around 65 characters for
-# optimal rendering in Sphinx.
 
 _shared_metric_plot_params = dict(
     y_true="""
