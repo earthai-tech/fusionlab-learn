@@ -25,6 +25,7 @@ for your time series forecasting tasks.
    forecast_tuner       
    datasets             
    ts_utils             
-   nn_utils             
+   nn_utils  
+   metrics           
    tools                
    case_histories       

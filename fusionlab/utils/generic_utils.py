@@ -11,6 +11,7 @@ import re
 import warnings
 import inspect
 import textwrap
+from numbers import Real 
 
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -1997,3 +1998,274 @@ def handle_emptiness(
         return obj
 
     raise ValueError("`ops` must be 'validate' or 'check_only'")
+
+
+def _report_condition(
+    policy: Literal['raise', 'warn', 'ignore'],
+    default_message: str,
+    custom_message: Optional[str],
+    exception_type: type = ValueError,
+    warning_type: type = UserWarning
+) -> None:
+    """Helper to raise error, issue warning, or ignore based on policy."""
+    message_to_use = custom_message if custom_message is not None \
+        else default_message
+    
+    if policy == 'raise':
+        raise exception_type(message_to_use)
+    elif policy == 'warn':
+        warnings.warn(message_to_use, warning_type)
+    # If 'ignore', do nothing.
+
+def are_all_values_in_bounds(
+    values: Any,
+    bounds: Union[Tuple[Real, Real], List[Real]] = (0, 1),
+    closed: Literal['both', 'left', 'right', 'neither'] = 'neither',
+    nan_policy: Literal['raise', 'propagate', 'omit'] = 'propagate',
+    empty_policy: Literal['allow_true', 'treat_as_false'] = 'allow_true',
+    error: Literal['raise', 'warn', 'ignore'] = 'raise',
+    message: Optional[str] = None
+) -> bool:
+    """
+    Check if all evaluable input values are within specified numeric bounds.
+
+    Supports various input types including scalars, lists, tuples,
+    NumPy arrays, and pandas Series/Index. It attempts to convert
+    inputs to a numeric format (float) for comparison. Non-numeric
+    entries that cannot be converted will typically result in False
+    or trigger the `error` policy if conversion itself fails.
+
+    Parameters
+    ----------
+    values : Any
+        Input data to check.
+    bounds : tuple[Real, Real] or list[Real, Real], default=(0, 1)
+        A sequence of two numeric values (lower_bound, upper_bound).
+        `bounds[0]` must be less than or equal to `bounds[1]`.
+    closed : {'both', 'left', 'right', 'neither'}, default='neither'
+        Defines whether the interval is closed or open:
+        - ``'both'``: `lower_bound <= value <= upper_bound`
+        - ``'left'``: `lower_bound <= value < upper_bound`
+        - ``'right'``: `lower_bound < value <= upper_bound`
+        - ``'neither'``: `lower_bound < value < upper_bound` (strict)
+    nan_policy : {'raise', 'propagate', 'omit'}, default='propagate'
+        How to handle NaN (Not a Number) values:
+        - ``'raise'``: Behavior depends on `error` policy. If `error`
+          is 'raise', a ValueError is raised. If 'warn', a warning
+          is issued and False is returned. If 'ignore', False is
+          returned (as NaNs are not in bounds).
+        - ``'propagate'``: If any NaN is found, return False.
+        - ``'omit'``: NaNs are removed. The behavior for an array
+          that becomes empty after omission is governed by
+          `empty_array_policy`.
+    empty_array_policy : {'allow_true', 'treat_as_false'}, default='allow_true'
+        Policy for handling an empty array of values to check. An array
+        can be empty if the original input was empty (e.g., `[]`) or
+        if all values were NaNs and `nan_policy='omit'` was used.
+        - ``'allow_true'``: An empty array is considered to have all
+          its (zero) elements within bounds (vacuously true).
+        - ``'treat_as_false'``: An empty array results in False.
+    error : {'raise', 'warn', 'ignore'}, default='raise'
+        Policy for handling invalid parameters (e.g., `bounds`,
+        `closed`), non-convertible inputs, NaNs when
+        `nan_policy='raise'`, or when values are out of bounds:
+        - ``'raise'``: Raise a ValueError.
+        - ``'warn'``: Issue a UserWarning. The function will then
+          return False if the condition (e.g., out of bounds, NaN
+          present with nan_policy='raise') makes the check fail.
+        - ``'ignore'``: Suppress the error/warning. The function will
+          return False if the condition makes the check fail.
+    message : str, optional
+        Custom message to use when `error` policy is 'raise' or 'warn'.
+        If None, a default message is used for the specific condition.
+
+    Returns
+    -------
+    bool
+        True if all evaluable values are within bounds (considering
+        `nan_policy` and `empty_array_policy`), False otherwise.
+
+    Raises
+    ------
+    ValueError
+        If `error='raise'` and an invalid parameter is provided,
+        input is non-convertible, NaNs are present with
+        `nan_policy='raise'`, or values are out of bounds.
+    UserWarning
+        If `error='warn'` for the same conditions as ValueError.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import are_all_values_in_bounds
+    >>> are_all_values_in_bounds(0.5)
+    True
+    >>> are_all_values_in_bounds([]) # Empty list, default empty_policy='allow_true'
+    True
+    >>> are_all_values_in_bounds([], empty_policy='treat_as_false')
+    False
+    >>> are_all_values_in_bounds(pd.Series([np.nan]), nan_policy='omit',
+                                 empty_array_policy='treat_as_false')
+    False
+    >>> try:
+    ...     are_all_values_in_bounds([0, 2], bounds=(0,1),
+    ...                                 error='raise', closed='neither')
+    ... except ValueError as e:
+    ...     print(e)
+    One or more values are out of the specified bounds.
+    """
+    arr: np.ndarray
+
+    # --- 1. Input Conversion to NumPy float array ---
+    if np.isscalar(values):
+        if not isinstance(values, (int, float, np.number)):
+            try:
+                val_float = float(values)
+                arr = np.array([val_float])
+            except (ValueError, TypeError):
+                 _report_condition(
+                    error,
+                    f"Scalar input '{values}' of type {type(values).__name__} "
+                    "is not convertible to a numeric value.",
+                    message,
+                )
+                 return False
+        else:
+            arr = np.array([float(values)])
+            
+    elif isinstance(values, (pd.Series, pd.Index)):
+        temp_arr = values.to_numpy()
+        try:
+            if temp_arr.dtype == object or \
+               not np.issubdtype(temp_arr.dtype, np.number):
+                arr = pd.to_numeric(temp_arr, errors='raise').astype(float)
+            else:
+                arr = temp_arr.astype(float)
+        except (ValueError, TypeError):
+            _report_condition(
+                error,
+                "Pandas input contains non-convertible non-numeric values.",
+                message,
+            )
+            return False
+    else: 
+        try:
+            arr = np.asarray(values, dtype=float)
+        except (ValueError, TypeError):
+            _report_condition(
+                error,
+                "Input sequence contains non-convertible non-numeric values.",
+                message,
+            )
+            return False
+    
+    # --- 2. Validate `bounds` and `closed` Parameters ---
+    # These checks happen early. If they fail and error is 'raise'/'warn',
+    # the function returns False or raises, so subsequent logic is safe.
+    if not (isinstance(bounds, (list, tuple)) and len(bounds) == 2):
+        _report_condition(
+            error,
+            "`bounds` must be a list or tuple of two numbers.",
+            message
+        )
+        return False 
+    
+    try:
+        lower_b = float(bounds[0])
+        upper_b = float(bounds[1])
+    except (IndexError, ValueError, TypeError):
+        _report_condition(
+            error,
+            "Elements of `bounds` must be numeric and `bounds` must "
+            "have length 2.",
+            message
+        )
+        return False
+
+    if lower_b > upper_b:
+        _report_condition(
+            error,
+            f"Lower bound {lower_b} cannot be greater than upper "
+            f"bound {upper_b}.",
+            message
+        )
+        return False
+
+    valid_closed_options = {'both', 'left', 'right', 'neither'}
+    if closed not in valid_closed_options:
+        _report_condition(
+            error,
+            f"Invalid 'closed' parameter: {closed}. Must be one of "
+            f"{valid_closed_options}.",
+            message
+        )
+        return False
+        
+    # --- 3. Handle NaNs based on `nan_policy` ---
+    # This section modifies `arr` if nan_policy is 'omit'.
+    # For other policies, it might return early.
+    has_nans = np.isnan(arr).any()
+
+    if has_nans:
+        if nan_policy == 'raise':
+            _report_condition(
+                error,
+                "Input contains NaNs.",
+                message
+            )
+            return False # Returns False if error policy is 'warn' or 'ignore'
+        elif nan_policy == 'propagate':
+            return False 
+        elif nan_policy == 'omit':
+            arr = arr[~np.isnan(arr)]
+            # `arr` might be empty now. This is handled in step 4.
+    
+    # --- 4. Handle Empty Array (original or after NaN omission) ---
+    if arr.size == 0:
+        if empty_policy == 'allow_true':
+            return True
+        elif empty_policy == 'treat_as_false':
+            return False
+        else: # Should be caught by Literal type hint
+            _report_condition(
+                error,
+                f"Internal error: Invalid 'empty_policy' "
+                f"value '{empty_policy}'.",
+                message
+            )
+            return False # Fallback for invalid policy if not raised
+
+    # --- 5. Perform Bounds Check on (Potentially Modified) `arr` ---
+    # At this point, `arr` contains only non-NaN numeric values,
+    # and is guaranteed to be non-empty.
+    in_bounds_mask: np.ndarray
+    if closed == 'both':
+        in_bounds_mask = (arr >= lower_b) & (arr <= upper_b)
+    elif closed == 'left':
+        in_bounds_mask = (arr >= lower_b) & (arr < upper_b)
+    elif closed == 'right':
+        in_bounds_mask = (arr > lower_b) & (arr <= upper_b)
+    elif closed == 'neither': 
+        in_bounds_mask = (arr > lower_b) & (arr < upper_b)
+    else:
+        # This case should have been caught by parameter validation.
+        # If error='ignore' for invalid 'closed', this is a fallback.
+        _report_condition(
+            error,
+            f"Internal error: Invalid 'closed' value '{closed}' "
+            "reached bounds check.",
+            message
+        )
+        return False
+
+    all_values_are_in_bounds = bool(np.all(in_bounds_mask))
+
+    if not all_values_are_in_bounds:
+        _report_condition(
+            error,
+            "One or more values are out of the specified bounds.",
+            message
+        )
+        return False # Returns False if error policy is 'warn' or 'ignore'
+    else:
+        return True
+

@@ -4,7 +4,7 @@ try:
     import fusionlab
     VERSION = fusionlab.__version__
 except:
-    VERSION = "0.2.0" # Fallback, ensure this matches your _version.py
+    VERSION = "0.2.0" 
 
 # Package metadata
 DISTNAME = "fusionlab-learn"
@@ -13,7 +13,7 @@ LONG_DESCRIPTION = open('README.md', 'r', encoding='utf8').read()
 MAINTAINER = "Laurent Kouadio"
 MAINTAINER_EMAIL = 'etanoyau@gmail.com'
 URL = "https://github.com/earthai-tech/fusionlab-learn"
-LICENSE = "BSD-3-Clause" # Corrected
+LICENSE = "BSD-3-Clause" 
 PROJECT_URLS = {
     "API Documentation": "https://fusion-lab.readthedocs.io/en/latest/api.html",
     "Home page": "https://fusion-lab.readthedocs.io",
@@ -61,7 +61,7 @@ _extras_require["full"] = list(
 # Package data specification
 PACKAGE_DATA = {
     'fusionlab': [
-        'datasets/data/*.csv', # Ensure your sample CSVs are included
+        'datasets/data/*.csv', 
         # 'data/*.json',
         # 'assets/*.txt'
     ],
@@ -72,7 +72,7 @@ setup_kwargs = {
             'fusionlab=fusionlab.cli:main',
         ]
     },
-    'packages': find_packages(exclude=['docs', 'tests', 'examples']), # Exclude top-level test/docs
+    'packages': find_packages(exclude=['docs', 'tests', 'examples']), 
     'install_requires': _required_dependencies,
     'extras_require': _extras_require, 
     'python_requires': '>=3.9', 
