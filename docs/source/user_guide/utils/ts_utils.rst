@@ -53,7 +53,6 @@ data for analysis, evaluation, or creating specific training/test sets
    :linenos:
 
    import pandas as pd
-   # Assuming filter_by_period is importable
    from fusionlab.utils.ts_utils import filter_by_period
 
    # Create dummy data

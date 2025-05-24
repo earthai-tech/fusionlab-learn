@@ -20,13 +20,12 @@ from sklearn.base import BaseEstimator, RegressorMixin
 
 import numpy as np 
 
-from ..api.docs import doc
+from ..api.docs import _shared_docs, doc
 from ..core.diagnose_q import validate_quantiles_in 
 from ..compat.sklearn import validate_params, Interval, StrOptions
 from ..utils.deps_utils import ensure_pkg 
 from ..utils.validator import check_is_fitted 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ._nn_docs import _shared_docs
 
 if KERAS_BACKEND:
     Optimizer=KERAS_DEPS.Optimizer

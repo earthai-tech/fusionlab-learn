@@ -25,7 +25,7 @@ from .utils.generic_utils import are_all_values_in_bounds
 
 __all__ = [
     'coverage_score',
-    'crp_score', 
+    'continuous_ranked_probability_score', 
     'weighted_interval_score', 
     'prediction_stability_score' , 
     'time_weighted_mean_absolute_error', 
@@ -2582,7 +2582,7 @@ def weighted_interval_score(
     'verbose': [Integral, bool] 
 })
  
-def crp_score(
+def continuous_ranked_probability_score(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     sample_weight: Optional[np.ndarray] = None,
@@ -2643,7 +2643,7 @@ def crp_score(
     Examples
     --------
     >>> import numpy as np
-    >>> # from fusionlab.metrics import crp_score 
+    >>> # from fusionlab.metrics import continuous_ranked_probability_score 
 
     >>> y_true_1d = np.array([0.5, 0.0, 1.0, np.nan])
     >>> y_pred_1d = np.array([
@@ -2652,12 +2652,12 @@ def crp_score(
     ...     [0.9, 1.1, 1.0],  # For 1.0
     ...     [0.0, 0.5, np.nan] # For np.nan y_true
     ... ])
-    >>> score = crp_score(y_true_1d, y_pred_1d, nan_policy='omit', verbose=1)
+    >>> score = continuous_ranked_probability_score(y_true_1d, y_pred_1d, nan_policy='omit', verbose=1)
     CRPS computed: 0.0333
     >>> print(f"CRPS (1D, omit NaNs): {score:.4f}")
     CRPS (1D, omit NaNs): 0.0333
 
-    >>> score_prop = crp_score(y_true_1d, y_pred_1d, nan_policy='propagate')
+    >>> score_prop = continuous_ranked_probability_score(y_true_1d, y_pred_1d, nan_policy='propagate')
     >>> print(f"CRPS (1D, propagate NaNs): {score_prop}") # Will be nan
     CRPS (1D, propagate NaNs): nan
 
@@ -2667,14 +2667,14 @@ def crp_score(
     ...     [[0.0, 0.1, 0.2], [np.nan, 3.1, 3.2]], # For [0.0, np.nan]
     ...     [[0.9, 1.1, 1.0], [2.8, 3.0, 3.2]]  # For [1.0, 3.0]
     ... ])
-    >>> raw_scores = crp_score(y_true_2d, y_pred_2d,
+    >>> raw_scores = continuous_ranked_probability_score(y_true_2d, y_pred_2d,
     ...                         nan_policy='propagate',
     ...                         multioutput='raw_values', verbose=1)
     CRPS computed: [0.0333 nan   ]
     >>> print(f"CRPS (2D, raw, propagate): {raw_scores}")
     CRPS (2D, raw, propagate): [0.03333333        nan]
 
-    >>> avg_score = crp_score(y_true_2d, y_pred_2d,
+    >>> avg_score = continuous_ranked_probability_score(y_true_2d, y_pred_2d,
     ...                        nan_policy='omit',
     ...                        multioutput='uniform_average', verbose=1)
     CRPS computed: 0.0500

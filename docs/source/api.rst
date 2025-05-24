@@ -57,7 +57,7 @@ time-series forecasting.
    :nosignatures:
 
    ~fusionlab.metrics.coverage_score
-   ~fusionlab.metrics.crp_score
+   ~fusionlab.metrics.continuous_ranked_probability_score
    ~fusionlab.metrics.mean_interval_width_score
    ~fusionlab.metrics.prediction_stability_score
    ~fusionlab.metrics.quantile_calibration_error
@@ -210,6 +210,46 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionalb.nn.utils.plot_forecasts  
 
 
+Visual‑metric helpers (`fusionlab.plot.evaluation`)
+------------------------------------------------------
+A curated set of plotting utilities that turn the raw numbers returned  
+by :pymod:`fusionlab.metrics` into clear, publication‑quality figures.  
+They cover point‑forecast accuracy, interval **sharpness & coverage**,  
+ensemble calibration, temporal stability, and more – all tailored to  
+time‑series / probabilistic‑forecast workflows.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.evaluation.plot_coverage
+   ~fusionlab.evaluation.plot_crps
+   ~fusionlab.evaluation.plot_forecast_comparison
+   ~fusionlab.evaluation.plot_mean_interval_width
+   ~fusionlab.evaluation.plot_metric_over_horizon
+   ~fusionlab.evaluation.plot_metric_radar
+   ~fusionlab.evaluation.plot_prediction_stability
+   ~fusionlab.evaluation.plot_quantile_calibration
+   ~fusionlab.evaluation.plot_theils_u_score
+   ~fusionlab.evaluation.plot_time_weighted_metric
+   ~fusionlab.evaluation.plot_weighted_interval_score
+
+
+Quick‑look forecast helpers (`fusionlab.plot.forecast`)
+---------------------------------------------------------
+Light‑weight plotting utilities that turn a long‑format forecast
+DataFrame (as returned by
+:func:fusionlab.nn.utils.format_predictions_to_dataframe) into clear,
+side‑by‑side figures for rapid inspection.
+ 
+.. autosummary::
+   :toctree: _autosummary/forecast
+   :nosignatures:
+
+   ~fusionlab.plot.forecast.plot_forecasts
+   ~fusionlab.plot.forecast.visualize_forecasts
+
+   
 Time Series Utilities (`fusionlab.utils.ts_utils`)
 ---------------------------------------------------
 General utilities for time series data processing, analysis, and feature engineering.

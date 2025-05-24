@@ -12,7 +12,7 @@ from typing import List, Optional, Union, Dict, Any
 import numpy as np 
 
 from .._fusionlog import fusionlog, OncePerMessageFilter
-from ..api.docs import doc 
+from ..api.docs import _shared_docs, doc 
 from ..api.property import NNLearner 
 from ..compat.sklearn import validate_params, Interval, StrOptions 
 from ..core.handlers import param_deprecated_message 
@@ -20,8 +20,7 @@ from ..utils.deps_utils import ensure_pkg
 from ..decorators import Appender
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ._nn_docs import _shared_docs 
-
+ 
 if KERAS_BACKEND:
     LSTM = KERAS_DEPS.LSTM
     Dense = KERAS_DEPS.Dense
