@@ -15,6 +15,7 @@ from matplotlib.ticker import MaxNLocator
 import numpy as np
 from sklearn.utils.validation import check_array, check_consistent_length
 
+from ..api.docs import DocstringComponents, _shared_metric_plot_params
 from ..api.types import ( 
     MetricFunctionType,
     PlotKind, 
@@ -25,7 +26,6 @@ from ..api.types import (
 from ..core.io import _get_valid_kwargs 
 from ..metrics import (
     coverage_score,
-    crp_score,
     weighted_interval_score,
     prediction_stability_score,
     time_weighted_mean_absolute_error,
@@ -33,21 +33,27 @@ from ..metrics import (
     mean_interval_width_score,
     theils_u_score,
     time_weighted_accuracy_score, 
-    time_weighted_interval_score
+    time_weighted_interval_score, 
+)
+from ..metrics  import ( 
+    continuous_ranked_probability_score as crp_score
 )
 from ..utils.generic_utils import are_all_values_in_bounds 
 
 __all__= [
-    'plot_coverage',
-    'plot_crps',
-    'plot_mean_interval_width',
-    'plot_prediction_stability',
-    'plot_quantile_calibration',
-    'plot_theils_u_score',
-    'plot_time_weighted_metric',
-    'plot_weighted_interval_score'
-]
+     'plot_coverage',
+     'plot_crps',
+     'plot_mean_interval_width',
+     'plot_prediction_stability',
+     'plot_quantile_calibration',
+     'plot_theils_u_score',
+     'plot_time_weighted_metric',
+     'plot_weighted_interval_score'
+ ]
 
+_param_docs = DocstringComponents.from_nested_components(
+    base=DocstringComponents(_shared_metric_plot_params), 
+)
 def plot_theils_u_score(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -68,10 +74,98 @@ def plot_theils_u_score(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
-    """
-    Visualize Theil's U Statistic.
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise Theil’s U statistic.
+    
+    A single‑bar (or multi‑bar) summary plot that benchmarks a model’s
+    error against a naïve “last‑value’’ forecast.  
+    *U < 1* implies the model improves upon the naïve baseline;  
+    *U = 1* indicates parity;  
+    *U > 1* denotes under‑performance.
+    
+    Parameters
+    ----------
+    {params.base.y_true}
+    {params.base.y_pred}
+    
+    metric_values : float or ndarray, optional  
+        Pre‑computed Theil’s U statistic(s).  When supplied the helper
+        skips internal evaluation and plots the given number(s) verbatim.
+    metric_kws : dict, optional  
+        Additional keyword arguments forwarded to
+        :func:`fusionlab.metrics.theils_u_score`
+        (e.g. ``multioutput='raw_values'``).
+    
+    kind : {{'summary_bar'}}, default ``'summary_bar'``  
+        Currently only a bar‑chart summary is available.  Additional kinds
+        may be added in future releases.
+    
+    reference_line_at_1 : bool, default ``True``  
+        Draw a horizontal reference line at *U = 1* to highlight the
+        naïve‑benchmark threshold.
+    reference_line_props : dict, optional  
+        Matplotlib style overrides for the reference line
+        (colour, linestyle, linewidth …).
+    
+    {params.base.figsize}
+    {params.base.title}
+    {params.base.ylabel}
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        The axes object with the rendered plot.
+    
+    Notes
+    -----
+    For a univariate series the statistic is
+    
+    .. math::
+    
+       U = \sqrt{{\frac{{\sum_{{t=2}}^{{T}} \bigl(y_t - \hat y_t\bigr)^2}}
+                         {{\sum_{{t=2}}^{{T}} \bigl(y_t - y_{{t-1}}\bigr)^2}}}}
+    
+    where :math:`y_{{t-1}}` is the naïve forecast.  
+    The helper calls :func:`fusionlab.metrics.theils_u_score` for the
+    computation.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_theils_u_score
+    >>> rng = np.random.default_rng(0)
+    >>> y_true = rng.normal(size=100)
+    >>> y_pred = y_true + rng.normal(scale=.2, size=100)
+    >>> plot_theils_u_score(y_true, y_pred,
+    ...                     bar_color='steelblue',
+    ...                     figsize=(6, 4))
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.theils_u_score  
+        Metric implementation.
+    fusionlab.plot.metrics.plot_crps  
+        Continuous Ranked Probability Score visualiser.
+    fusionlab.plot.metrics.plot_wis  
+        Weighted Interval Score plot.
+    
+    References
+    ----------
+    .. [1] H. Theil, *Applied Economic Forecasting*, North‑Holland, 1966.  
+    .. [2] Makridakis, Wheelwright & Hyndman,
+           *Forecasting: Methods and Applications*, 3rd ed., 1998.
+    """.format(params=_param_docs)
+
+    
     # --- 1. Input Validation and Preparation ---
     # y_true, y_pred: (T,), (N,T), or (N,O,T)
     # Metric function handles detailed shape validation.
@@ -334,10 +428,132 @@ def plot_weighted_interval_score(
     verbose: int = 0,
     **kwargs: Any
 ) -> plt.Axes:
-    """
-    Visualize Weighted Interval Score (WIS).
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise **Weighted Interval Score (WIS)**.
+    
+    WIS aggregates interval widths and coverage penalties across a set of
+    central prediction intervals, producing a proper scoring rule that
+    simultaneously rewards *sharpness* and *calibration* of probabilistic
+    forecasts [1]_.
+    
+    The helper provides two complementary views:
+    
+    * **'summary_bar'** – one bar per output (or a single bar for the
+      uniform average).  
+    * **'scores_histogram'** – the distribution of per‑sample WIS values
+      for a selected output.
+    
+    Parameters
+    ----------
+    {params.base.y_true}
+    y_median : ndarray
+        Median (50 % quantile) forecast, shape compatible with
+        ``y_true``.
+    {params.base.y_lower}
+    {params.base.y_upper}
+    
+    alphas : ndarray of shape (K,)
+        Alpha levels that define the nominal coverage of each prediction
+        interval: :math:`\alpha_k = 1 - (q_{{k+1}} - q_k)`.  Must satisfy
+        ``0 < α < 1`` and be strictly increasing.
+    
+    metric_values : float or ndarray, optional
+        Pre‑computed WIS value(s).  When supplied, plotting is performed
+        without recalculating the metric.
+    metric_kws : dict, optional
+        Extra keyword arguments forwarded to
+        :func:`fusionlab.metrics.weighted_interval_score`
+        (e.g. ``multioutput='raw_values'``).
+    
+    kind : {{'summary_bar', 'scores_histogram'}}, default ``'summary_bar'``
+        Style of visualisation.
+    
+    output_idx : int, optional
+        Index of the target variable to visualise when
+        ``kind='scores_histogram'`` on multi‑output data.
+    
+    hist_bins : int | sequence | str, default ``'auto'``
+        Binning strategy for the histogram (passed to
+        :func:`matplotlib.pyplot.hist`).
+    
+    hist_color : str, default ``'mediumseagreen'``  
+    hist_edgecolor : str, default ``'black'``  
+        Bar‑face and edge colours for the histogram.
+    
+    {params.base.figsize}
+    title : str, optional
+        Custom figure title.  If *None*, a context‑aware title is generated.
+    {params.base.xlabel}
+    {params.base.ylabel}
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    
+    show_score_on_title : bool, default ``True``
+        Append the mean WIS to the title when
+        ``kind='scores_histogram'``.
+    
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        The axes object containing the plot.
+    
+    Notes
+    -----
+    The weighted interval score for a single observation and :math:`K`
+    central prediction intervals is
+    
+    .. math::
+    
+       \mathrm{{WIS}} \;=\;
+       \frac{{1}}{{K + 0.5}}\;\Bigl[
+       \lvert y - \hat{{y}}_{{0.5}}\rvert\;+\;
+       \sum_{{k=1}}^{{K}} \alpha_k
+         \bigl\{{\, (y < l_k)\,(l_k - y)
+                  + (y > u_k)\,(y - u_k)
+                  + (u_k - l_k) \bigr\}}
+       \Bigr],
+    
+    where :math:`[l_k, u_k]` is the :math:`(1-\alpha_k)` central interval.
+    Lower WIS indicates a sharper, better‑calibrated forecast.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_weighted_interval_score
+    >>> rng = np.random.default_rng(0)
+    >>> y_true   = rng.normal(size=100)
+    >>> y_med    = y_true + rng.normal(scale=.1, size=100)
+    >>> y_lower  = y_med - 1.0
+    >>> y_upper  = y_med + 1.0
+    >>> alphas   = np.array([0.2])
+    >>> plot_weighted_interval_score(y_true, y_med,
+    ...                              y_lower, y_upper, alphas,
+    ...                              kind='summary_bar',
+    ...                              bar_color='slateblue')
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.weighted_interval_score  
+        Numerical implementation of WIS.
+    fusionlab.plot.metrics.plot_crps  
+        Continuous Ranked Probability Score visualiser.
+    fusionlab.plot.metrics.plot_theils_u_score  
+        Deterministic relative‑skill bar plot.
+    
+    References
+    ----------
+    .. [1] Bracher, J. et al.  *Evaluating Probabilistic Forecasts with
+           Scoring Rules.*  *arXiv preprint* arXiv:2101.05552, 2021.
+    """.format(params=_param_docs)
+
     # --- 1. Input Validation and Preparation ---
     y_true_arr = check_array(
         y_true, ensure_2d=False, dtype="numeric",
@@ -756,22 +972,18 @@ def plot_time_weighted_metric(
     kind: PlotKind = 'summary_bar',
     output_idx: Optional[int] = None,
     sample_idx: Optional[int] = None,
-    # General plotting parameters
     figsize: Tuple[float, float] = (12, 6),
     title: Optional[str] = None,
     xlabel: Optional[str] = None,
     ylabel: Optional[str] = None,
-    # Time profile specific
     profile_line_color: str = 'royalblue',
     profile_line_style: str = '-',
     profile_marker: Optional[str] = 'o',
     time_weights_color: str = 'gray',
     show_time_weights_on_profile: bool = False,
-    # Summary bar specific
     bar_color: Union[str, List[str]] = 'royalblue',
     bar_width: float = 0.8,
     score_annotation_format: str = "{:.4f}",
-    # Common params
     show_score_on_title: bool = True,
     show_grid: bool = True,
     grid_props: Optional[Dict[str, Any]] = None,
@@ -779,10 +991,143 @@ def plot_time_weighted_metric(
     verbose: int = 0,
     **kwargs: Any
 ) -> plt.Axes:
-    """
-    Visualize time-weighted metrics (MAE, Accuracy, Interval Score).
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise **time‑weighted error / accuracy metrics** (MAE, classification
+    accuracy, or interval‑based scores) as either
+    
+    * a **summary bar** of the overall time‑weighted score, or one bar per
+      output dimension; or
+    * a **time‑profile** curve that shows how the metric evolves over the
+      forecasting horizon, optionally overlaid with the weight
+      distribution.
+    
+    The helper delegates numeric computation to the corresponding
+    metric in :pymod:`fusionlab.metrics` and applies the chosen *time
+    weights* before visualisation.
+    
+    Parameters
+    ----------
+    metric_type : {{'mae', 'accuracy', 'interval_score'}}
+        Which metric to compute and plot.
+        * ``'mae'`` – Mean Absolute Error.  
+        * ``'accuracy'`` – Classification accuracy.  
+        * ``'interval_score'`` – Weighted interval score
+          (requires median, bounds, and ``alphas``).
+    
+    {params.base.y_true}
+    {params.base.y_pred}
+    {params.base.y_median}
+    {params.base.y_lower}
+    {params.base.y_upper}
+    {params.base.alphas}
+    
+    time_weights : 1‑D sequence, ``'inverse_time'`` or ``None``,\
+        default ``'inverse_time'``
+        * **array‑like** – explicit non‑negative weights for each
+          timestep *(length T)*.  They are automatically normalised to sum
+          to 1.  
+        * ``'inverse_time'`` – use
+          :math:`w_t \propto 1 / (t + 1)` (early timesteps matter more).  
+        * ``None`` – uniform weights *(1/T)*.
+    
+    metric_values : float or ndarray, optional
+        Pre‑computed time‑weighted score(s) to plot, bypassing internal
+        metric evaluation.
+    {params.base.metric_kws}
+    
+    kind : {{'summary_bar', 'time_profile'}}, default ``'summary_bar'``
+        * **summary_bar** – bar plot of the overall score.  
+        * **time_profile** – line plot of the per‑timestep metric
+          (averaged over samples), optionally with the weight profile.
+    
+    output_idx : int, optional
+        Output dimension to plot when the data are multi‑output and
+        ``kind='time_profile'``.
+    {params.base.sample_idx}
+    
+    figsize, title, xlabel, ylabel
+        {{see shared parameters below}}
+    
+    Time‑profile styling
+    ^^^^^^^^^^^^^^^^^^^^
+    profile_line_color : str, default ``'royalblue'``  
+    profile_line_style : str, default ``'-'``  
+    profile_marker : str or ``None``, default ``'o'``  
+        Matplotlib properties for the metric curve.
+    
+    time_weights_color : str, default ``'gray'``  
+    show_time_weights_on_profile : bool, default ``False``  
+        If *True*, draws a semi‑transparent bar chart of the
+        normalised weights on a secondary y‑axis.
+    
+    Summary‑bar styling
+    ^^^^^^^^^^^^^^^^^^^
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    
+    Common plot controls
+    ^^^^^^^^^^^^^^^^^^^^
+    {params.base.figsize}
+    {params.base.show_score_on_title}
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        The axes object with the rendered figure.
+    
+    Notes
+    -----
+    Let :math:`w_t` be the *normalised* time weight for horizon *t*.
+    For MAE the time‑weighted score is
+    
+    .. math::
+    
+       \text{{TW‑MAE}} \;=\; \sum_{{t=1}}^{{T}} w_t \,
+       \lvert y_t - \hat y_t\rvert .
+    
+    Analogous definitions apply for accuracy (with the 0‑1 loss) and
+    for the weighted interval score (using the per‑timestep WIS).
+    
+    If *``kind='time_profile'``* the helper first computes the unweighted
+    metric value for each timestep, then applies the ``time_weights`` when
+    plotting or when aggregating to a single title score.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_time_weighted_metric
+    >>> T = 24
+    >>> y_true = np.sin(np.linspace(0, 3*np.pi, T))
+    >>> y_pred = y_true + np.random.normal(0, 0.1, T)
+    >>> ax = plot_time_weighted_metric(
+    ...     metric_type='mae',
+    ...     y_true=y_true,
+    ...     y_pred=y_pred,
+    ...     kind='time_profile',
+    ...     show_time_weights_on_profile=True,
+    ...     figsize=(8, 4))
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.time_weighted_mae  
+    fusionlab.metrics.time_weighted_accuracy  
+    fusionlab.metrics.time_weighted_interval_score  
+    fusionlab.plot.metrics.plot_weighted_interval_score
+    
+    References
+    ----------
+    .. [1] Tay, F.E.H., *et al.* “Application of Weighted Metrics in Time‑
+           Series Forecast Evaluation,” *International Journal of Forecasting*,
+           vol 35, 2019.
+    """.format(params=_param_docs)
+
     # --- 1. Input Validation and Metric Function Selection ---
     metric_func = _get_metric_function(metric_type)
     
@@ -1172,7 +1517,6 @@ def plot_time_weighted_metric(
                     ha="center",
                     va=va,
                 )
-
     else:
         raise ValueError(f"Unknown plot kind: '{kind}'.")
 
@@ -1187,7 +1531,6 @@ def plot_time_weighted_metric(
         ax.grid(False)
 
     return ax
-
 
 def plot_quantile_calibration(
     y_true: np.ndarray,
@@ -1214,10 +1557,107 @@ def plot_quantile_calibration(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
-    """
-    Visualize Quantile Calibration Error (QCE).
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise **Quantile Calibration Error (QCE)**.
+    
+    Two complementary views are supported:
+    
+    * **'reliability_diagram'** – plots the observed proportion  
+      :math:`\Pr(y \le \hat q)` against the nominal quantile level  
+      *q*.  Perfect calibration lies on the diagonal.
+    * **'summary_bar'** – one bar per output (or an overall bar) showing
+      the time‑weighted QCE score.
+    
+    Parameters
+    ----------
+    {params.base.y_true}
+    {params.base.y_pred_quantiles}
+    {params.base.quantiles}
+    
+    qce_values : float or ndarray, optional  
+        Pre‑computed QCE value(s).  If supplied, the helper skips internal
+        metric evaluation.
+    metric_kws : dict, optional  
+        Extra keyword arguments passed to
+        :func:`fusionlab.metrics.quantile_calibration_error`.
+    
+    kind : {{'reliability_diagram', 'summary_bar'}},  
+        default ``'reliability_diagram'``  
+        Choose the visualisation style.
+    output_idx : int, optional  
+        Output dimension to plot when the data contain multiple outputs
+        and ``kind='reliability_diagram'``.
+    
+    perfect_calib_color : str, default ``'red'``  
+        Line colour for the 45‑degree “perfect calibration’’ reference.
+    observed_prop_color : str, default ``'blue'``  
+    observed_prop_marker : str, default ``'o'``  
+        Style for the observed‑proportion curve.
+    
+    {params.base.figsize}
+    {params.base.title}
+    {params.base.xlabel}
+    {params.base.ylabel}
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    show_score : bool, default ``True``  
+        Display the average QCE on the plot or title.
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        Axes containing the calibration plot.
+    
+    Notes
+    -----
+    The *quantile calibration error* for one output is
+    
+    .. math::
+    
+       \mathrm{{QCE}} \;=\;
+       \frac{{1}}{{Q}}\sum_{{k=1}}^{{Q}}
+       \bigl|\,
+       \hat F_y(q_k) \;-\; q_k
+       \bigr|,
+    
+    where :math:`\hat F_y(q_k)` is the empirical cdf evaluated at the
+    predicted quantile :math:`\hat q_k`.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_quantile_calibration
+    >>> rng = np.random.default_rng(0)
+    >>> y_true = rng.normal(size=500)
+    >>> qs = np.array([0.1, 0.5, 0.9])
+    >>> y_pred_q = np.quantile(
+    ...     y_true[:, None] + rng.normal(scale=.1, size=(500, 3)),
+    ...     qs, axis=1).T
+    >>> plot_quantile_calibration(
+    ...     y_true, y_pred_q, qs, kind='reliability_diagram')
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.quantile_calibration_error  
+        Numeric implementation of QCE.
+    fusionlab.plot.metrics.plot_weighted_interval_score  
+        Visualises interval‑based probabilistic scores.
+    fusionlab.plot.metrics.plot_time_weighted_metric  
+        Time‑weighted MAE / accuracy / interval‑score plots.
+    
+    References
+    ----------
+    .. [1] Gneiting, T. & Katzfuss, M.  *Probabilistic Forecasting,*  
+           *Annu. Rev. Stat. Appl.*, 2014.
+    """.format(params=_param_docs)
+
     # --- Input Validation and Preparation ---
     # y_true: (N,), (N,O)
     # y_pred_quantiles: (N,Q) or (N,O,Q)
@@ -1551,95 +1991,119 @@ def plot_coverage(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
-    """
-    Visualize prediction interval coverage.
-
-    Provides 'intervals' plot (true values vs. prediction intervals)
-    and 'summary_bar' plot (bar chart of coverage score(s)).
-
+    r"""
+    Visualise **prediction‑interval coverage** in two ways:
+    
+    * **'intervals'** –  true values overlaid on their prediction
+      intervals, coloured by whether each point is covered.
+    * **'summary_bar'** – bar chart of the empirical coverage rate
+      (overall or per output).
+    
     Parameters
-    ----------
-    y_true : np.ndarray
-        True observed values. Shape (n_samples,) or (n_samples, n_outputs).
-    y_lower : np.ndarray
-        Lower bounds of prediction intervals, matching `y_true` shape.
-    y_upper : np.ndarray
-        Upper bounds of prediction intervals, matching `y_true` shape.
-    coverage_values : float or np.ndarray, optional
-        Pre-computed coverage score(s). If provided, internal calculation
-        via `coverage_score` is skipped. Shape should match expected
-        output of `coverage_score` based on `metric_kws['multioutput']`.
-    metric_kws : dict, optional
-        Keyword arguments to pass to the `coverage_score` function if
-        `coverage_values` is None. Use this to control `nan_policy`,
-        `multioutput`, `eps`, `sample_weight`, etc., for the metric
-        calculation.
-    sample_indices : np.ndarray, optional
-        Custom x-axis indices for 'intervals' plot.
-    output_index : int, optional
-        For 2D `y_true` and `kind='intervals'`, specifies which output
-        feature to plot. Required if `y_true` is 2D with >1 output.
-    kind : {'intervals', 'summary_bar'}, default='intervals'
-        Type of plot.
-    figsize : tuple, default=(12, 6)
-        Figure size.
-    title : str, optional
-        Plot title.
-    xlabel : str, default='Sample Index'
-        X-axis label for 'intervals' plot.
-    ylabel : str, default='Value'
-        Y-axis label.
-    covered_color : str, default='mediumseagreen'
-        Color for covered true values.
-    uncovered_color : str, default='salmon'
-        Color for uncovered true values.
-    line_color : str, optional, default='dimgray'
-        Color for the line connecting true values. None to hide.
-    line_style : str, default='--'
-        Line style for true values.
-    line_width : float, default=0.8
-        Line width for true values.
-    marker : str, default='o'
-        Marker for true values.
-    marker_size : int, default=30
-        Marker size for true values.
-    interval_color : str, default='skyblue'
-        Fill color for prediction interval.
-    interval_alpha : float, default=0.5
-        Alpha for interval fill.
-    legend : bool, default=True
-        Whether to show legend for 'intervals' plot.
-    show_score : bool, default=True
-        If True and `kind='intervals'`, appends coverage score to title.
-    bar_color : str or list[str], default='cornflowerblue'
-        Bar color(s) for 'summary_bar'.
-    bar_width : float, default=0.8
-        Bar width for 'summary_bar'.
-    score_annotation_format : str, default="{:.2%}"
-        Format for annotating scores on bars.
-    show_grid : bool, default=True
-        Whether to display the grid.
-    grid_props : dict, optional
-        Properties for `ax.grid()`. Defaults to
-        `{'linestyle': ':', 'alpha': 0.7}` if None.
-    ax : plt.Axes, optional
-        Existing Matplotlib Axes to plot on.
-    verbose : int, default=0
-        Verbosity level. If > 0 and score is computed internally,
-        the score will be printed.
-    **kwargs : Any
-        Additional keyword arguments for Matplotlib functions.
-
+    ------------
+    
+    {params.base.y_true}
+    {params.base.y_lower}
+    {params.base.y_upper}
+    
+    coverage_values : float or ndarray, optional  
+        Pre‑computed coverage score(s).  If supplied, the helper skips the
+        internal call to :func:`fusionlab.metrics.coverage_score`.
+    metric_kws : dict, optional  
+        Extra keyword arguments forwarded to
+        :func:`fusionlab.metrics.coverage_score` when
+        ``coverage_values`` is *None*.
+    
+    sample_indices : ndarray, optional  
+        Custom x‑axis locations for the **'intervals'** plot.  Must match
+        the first dimension of ``y_true``.
+    output_index : int, optional  
+        Output dimension to visualise when the data contain multiple
+        outputs and ``kind='intervals'``.
+    
+    kind : {{'intervals', 'summary_bar'}}, default ``'intervals'``  
+        Select the visualisation style.
+    
+    {params.base.figsize}
+    title : str, optional  
+        Figure title.  If *None*, a context‑aware default is generated.
+    xlabel : str, default ``'Sample Index'``  
+    ylabel : str, default ``'Value'``  
+    
+    Interval‑plot styling
+    ^^^^^^^^^^^^^^^^^^^^^
+    covered_color   : str, default ``'mediumseagreen'``  
+    uncovered_color : str, default ``'salmon'``  
+    line_color      : str or None, default ``'dimgray'``  
+    line_style      : str, default ``'--'``  
+    line_width      : float, default 0.8  
+    marker          : str, default ``'o'``  
+    marker_size     : int, default 30  
+    interval_color  : str, default ``'skyblue'``  
+    interval_alpha  : float, default 0.5  
+    legend          : bool, default ``True``  
+    show_score      : bool, default ``True``  
+        Append the empirical coverage (as a percentage) to the title of
+        the *intervals* plot.
+    
+    Summary‑bar styling
+    ^^^^^^^^^^^^^^^^^^^
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
     Returns
     -------
-    plt.Axes
-        The Matplotlib Axes object.
+    matplotlib.axes.Axes  
+        Axes containing the coverage visualisation.
+    
+    Notes
+    -----
+    The empirical coverage for one output is
+    
+    .. math::
+    
+       \widehat C \;=\;
+       \frac{{1}}{{N}} \sum_{{i=1}}^{{N}}
+       \mathbb{{1}}\{{\,y_i \in [\ell_i, u_i]\,\}},
+    
+    where :math:`[\ell_i, u_i]` is the prediction interval for sample *i*.
+    The helper colours covered points with *covered_color* and uncovered
+    points with *uncovered_color*.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_coverage
+    >>> rng = np.random.default_rng(1)
+    >>> y_true  = rng.normal(size=50)
+    >>> y_lower = y_true - 1.0
+    >>> y_upper = y_true + 1.0
+    >>> plot_coverage(y_true, y_lower, y_upper, kind='intervals',
+    ...               figsize=(8, 4))
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.coverage_score  
+        Numerical implementation of empirical coverage.
+    fusionlab.plot.metrics.plot_weighted_interval_score  
+        Visualises interval sharpness and calibration jointly.
+    fusionlab.plot.metrics.plot_quantile_calibration  
+        Reliability diagrams for quantile forecasts.
+    
+    References
+    ----------
+    .. [1] Gneiting, T. & Raftery, A.E. (2007).  *Strictly Proper Scoring
+           Rules, Prediction, and Estimation*.  *JASA* 102(477), 359‑378.
+    """.format(params=_param_docs)
 
-    Raises
-    ------
-    ValueError
-        If inputs are invalid or `output_index` is missing.
-    """
     # --- Input Validation and Preparation ---
     y_true_arr = check_array(
         y_true, ensure_2d=False, force_all_finite=False,
@@ -1893,7 +2357,6 @@ def plot_coverage(
 
     return ax
 
-
 def plot_crps(
     y_true: np.ndarray,
     y_pred_ensemble: np.ndarray,
@@ -1908,12 +2371,10 @@ def plot_crps(
     hist_bins: Union[int, Sequence[Real], str] = 'auto',
     hist_color: str = 'skyblue',
     hist_edgecolor: str = 'black',
-
     figsize: Tuple[float, float] = (10, 6),
     title: Optional[str] = "Continuous Ranked Probability Score (CRPS)",
     xlabel: Optional[str] = None,
     ylabel: Optional[str] = None,
-
     bar_color: Union[str, List[str]] = 'cornflowerblue',
     bar_width: float = 0.8,
     score_annotation_format: str = "{:.4f}", 
@@ -1924,10 +2385,112 @@ def plot_crps(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
-    """
-    Visualize Continuous Ranked Probability Score (CRPS) and ensembles.
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise the **Continuous Ranked Probability Score (CRPS)** for
+    ensemble forecasts.
+    
+    Three complementary views are available:
+    
+    * **'ensemble_ecdf'** – ECDF of a single ensemble, the true value,  
+      and the per‑instance CRPS.
+    * **'scores_histogram'** – distribution of per‑sample CRPS values.
+    * **'summary_bar'** – bar chart of the overall CRPS (or one bar per
+      output).
+    
+    Parameters
+    ----------
+    {params.base.y_true}
+    
+    y_pred_ensemble : ndarray  
+        Ensemble predictions.  Shape *(N, M)* for a single output or
+        *(N, O, M)* for multiple outputs, where *M* is the number of
+        ensemble members.
+    
+    crps_values : float or ndarray, optional  
+        Pre‑computed CRPS value(s).  If supplied, the helper skips internal
+        calls to :func:`fusionlab.metrics.continuous_ranked_probability_score`.
+    {params.base.metric_kws}
+    
+    kind : {{'ensemble_ecdf', 'scores_histogram', 'summary_bar'}},  
+        default ``'summary_bar'``  
+        Style of plot to generate.
+    
+    sample_idx : int, default 0  
+        Index of the sample to display when ``kind='ensemble_ecdf'``.
+    output_idx : int, default 0  
+        Output dimension to display when ``kind='ensemble_ecdf'``.
+    
+    ecdf_color : str, default ``'dodgerblue'``  
+    true_value_color : str, default ``'red'``  
+    ensemble_marker_color : str, default ``'gray'``  
+        Styling parameters for the ECDF plot.
+    
+    hist_bins : int | sequence | str, default ``'auto'``  
+    hist_color : str, default ``'skyblue'``  
+    hist_edgecolor : str, default ``'black'``  
+        Histogram styling parameters.
+    
+    {params.base.figsize}
+    {params.base.title}
+    {params.base.xlabel}
+    {params.base.ylabel}
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    show_score : bool, default ``True``  
+        Append the numeric CRPS to the title (where applicable).
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        Axes containing the CRPS visualisation.
+    
+    Notes
+    -----
+    For one observation with ensemble members
+    :math:`x_1,\dots,x_M` and true value :math:`y`, the
+    sample‑based CRPS is
+    
+    .. math::
+    
+       \operatorname{{CRPS}} \;=\;
+         \frac{{1}}{{M}}\sum_{{j=1}}^M |x_j - y|
+         \;-\;\frac{{1}}{{2M^2}}\sum_{{i=1}}^M\sum_{{j=1}}^M |x_i - x_j|.
+    
+    Lower scores indicate sharper and better‑calibrated
+    probabilistic forecasts.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_crps
+    >>> rng = np.random.default_rng(0)
+    >>> y_true = rng.normal(size=500)
+    >>> ens     = y_true[:, None] + rng.normal(scale=.5, size=(500, 20))
+    >>> plot_crps(y_true, ens, kind='scores_histogram')
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.continuous_ranked_probability_score  
+        Numeric computation of sample‑based CRPS.
+    fusionlab.plot.metrics.plot_quantile_calibration  
+        Reliability diagrams for quantile forecasts.
+    fusionlab.plot.metrics.plot_weighted_interval_score  
+        Interval‑based sharpness and calibration plot.
+    
+    References
+    ----------
+    .. [1] Hersbach, H. (2000). *Decomposition of the Continuous Ranked  
+           Probability Score for Ensemble Prediction Systems*.  
+           *Weather and Forecasting*, 15(5), 559‑570.
+    """.format(params=_param_docs)
+
     # --- Input Validation and Preparation ---
     # y_true: (N,), (N,O)
     # y_pred_ensemble: (N,M), (N,O,M)
@@ -1939,7 +2502,6 @@ def plot_crps(
         y_pred_ensemble, ensure_2d=False, allow_nd=True,
         dtype="numeric", force_all_finite=False, copy=True
     )
-
     # Reshape y_true and y_pred_ensemble for consistent processing
     # Target shape for y_true_proc: (N, O)
     # Target shape for y_pred_proc: (N, O, M)
@@ -2009,7 +2571,6 @@ def plot_crps(
         'multioutput': 'uniform_average', # Default for overall score
         'verbose': 0 # Metric's internal verbose
     }
-    
     # For 'scores_histogram', we need per-sample CRPS values.
     # The crps_score function, as refactored, returns per-sample, per-output
     # scores before the final aggregation if 'multioutput' is 'raw_values'
@@ -2097,11 +2658,11 @@ def plot_crps(
             else:
                 warnings.warn("Provided `crps_values` shape incompatible for histogram.")
         else:
-            hist_kws = {**default_kws_for_metric, **current_metric_kws}
+            hist_kws = {**default_kws_for_metric, **current_metric_kws} # noqa
             # XXX TODO:
             # To get per-sample, per-output scores, need to call crps_score differently
-            # The current crp_score refactor returns (N_calc, O) before final aggregation
-            # This is not directly exposed. We need to call it in a loop or modify crp_score
+            # The current continuous_ranked_probability_score refactor returns (N_calc, O) before final aggregation
+            # This is not directly exposed. We need to call it in a loop or modify continuous_ranked_probability_score
             # For now, let's assume we can get per-sample scores for a chosen output_idx
             # Or average over outputs if output_idx is None.
             # Let's compute CRPS for each sample, for a specific output_idx or averaged
@@ -2116,7 +2677,8 @@ def plot_crps(
                 cleaned_kws_ss = _get_valid_kwargs(crp_score, single_sample_kws)
 
                 try:
-                    s_crps = crp_score(temp_y_true, temp_y_pred, **cleaned_kws_ss) # (O,)
+                    s_crps = crp_score(
+                        temp_y_true, temp_y_pred, **cleaned_kws_ss) # (O,)
                     if n_outputs > 1 and output_idx is not None:
                         if 0 <= output_idx < n_outputs:
                             all_sample_crps_list.append(s_crps[output_idx])
@@ -2249,10 +2811,109 @@ def plot_mean_interval_width(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
-    """
-    Visualize Mean Interval Width (MIW) / Sharpness.
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise **Mean Interval Width (MIW)** – a simple sharpness measure
+    equal to the average distance between lower and upper prediction‐
+    interval bounds.
+    
+    Two complementary views are implemented:
+    
+    * **'widths_histogram'** – distribution of individual interval widths
+      for a chosen output.
+    * **'summary_bar'** – bar chart of the averaged width (overall or one
+      bar per output).
+    
+    Parameters
+    ----------
+    {params.base.y_lower}
+    {params.base.y_upper}
+    
+    miw_values : float or ndarray, optional  
+        Pre‑computed MIW score(s).  If supplied the helper skips the
+        internal call to
+        :func:`fusionlab.metrics.mean_interval_width_score`.
+    metric_kws : dict, optional  
+        Extra keyword arguments forwarded to
+        :func:`fusionlab.metrics.mean_interval_width_score`.
+    
+    kind : {{'widths_histogram', 'summary_bar'}},  
+        default ``'summary_bar'``  
+        Select the visualisation style.
+    
+    output_idx : int, optional  
+        Output dimension to plot when ``kind='widths_histogram'`` on
+        multi‑output data.
+    
+    hist_bins : int | sequence | str, default ``'auto'``  
+    hist_color : str, default ``'mediumpurple'``  
+    hist_edgecolor : str, default ``'black'``  
+        Styling options for the histogram.
+    
+    {params.base.figsize}
+    {params.base.title}
+    {params.base.xlabel}
+    {params.base.ylabel}
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    show_score : bool, default ``True``  
+        Display the mean width on the histogram title.
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        Axes containing the MIW visualisation.
+    
+    Notes
+    -----
+    For a single observation the interval width is simply
+    
+    .. math::
+    
+       w_i \;=\; u_i \;-\; \ell_i ,
+    
+    where :math:`u_i` and :math:`\ell_i` are the upper and lower bounds.
+    The mean interval width over *N* samples is
+    
+    .. math::
+    
+       \text{{MIW}} \;=\; \frac{{1}}{{N}}\sum_{{i=1}}^{{N}} w_i.
+    
+    Lower MIW indicates a *sharper* forecast, but should always be
+    interpreted together with coverage diagnostics.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_mean_interval_width
+    >>> rng = np.random.default_rng(1)
+    >>> y_l = rng.normal(loc=-1.0, scale=.5, size=200)
+    >>> y_u = y_l + rng.uniform(1.5, 2.5, size=200)
+    >>> plot_mean_interval_width(
+    ...     y_lower=y_l, y_upper=y_u, kind='widths_histogram',
+    ...     figsize=(8, 4))
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.mean_interval_width_score  
+        Numeric computation of MIW.
+    fusionlab.plot.metrics.plot_coverage  
+        Shows how many observations fall inside the intervals.
+    fusionlab.plot.metrics.plot_weighted_interval_score  
+        Combines width with calibration penalties.
+    
+    References
+    ----------
+    .. [1] Gneiting, T. & Katzfuss, M. (2014). *Probabilistic Forecasting*.
+           *Ann. Rev. Stat. Appl.*, 1, 125‑151 — section 4.1, “Sharpness”.
+    """.format(params=_param_docs)
+
     # --- Input Validation and Preparation ---
     # y_lower, y_upper: (N,), (N,O)
     y_lower_arr = check_array(
@@ -2479,38 +3140,129 @@ def plot_mean_interval_width(
 
     return ax
 
-
 def plot_prediction_stability(
     y_pred: np.ndarray,
     pss_values: Optional[Union[float, np.ndarray]] = None,
     metric_kws: Optional[Dict[str, Any]] = None,
     kind: Literal['scores_histogram', 'summary_bar'] = 'summary_bar',
-    # Histogram plot specific parameters
-    output_idx: Optional[int] = None, # For multi-output y_pred
+    output_idx: Optional[int] = None, 
     hist_bins: Union[int, Sequence[Real], str] = 'auto',
     hist_color: str = 'teal',
     hist_edgecolor: str = 'black',
-    # General plotting parameters
     figsize: Tuple[float, float] = (10, 6),
     title: Optional[str] = "Prediction Stability Score (PSS)",
     xlabel: Optional[str] = None,
     ylabel: Optional[str] = None,
-    # Summary bar specific parameters
     bar_color: Union[str, List[str]] = 'teal',
     bar_width: float = 0.8,
     score_annotation_format: str = "{:.4f}",
-    # Common params
-    show_score: bool = True, # Shows mean PSS on hist, or bar values
+    show_score: bool = True, 
     show_grid: bool = True,
     grid_props: Optional[Dict[str, Any]] = None,
     ax: Optional[plt.Axes] = None,
     verbose: int = 0,
-    **kwargs: Any # For other matplotlib args
+    **kwargs: Any 
 ) -> plt.Axes:
-    """
-    Visualize Prediction Stability Score (PSS).
-    (Docstring to be expanded later for brevity now)
-    """
+    r"""
+    Visualise the **Prediction Stability Score (PSS)** — the average
+    absolute change between successive time steps in a forecast
+    trajectory.  Lower PSS ⇒ smoother (more stable) predictions.
+    
+    Two complementary views are provided:
+    
+    * **'scores_histogram'** – distribution of per‑trajectory PSS values
+      for a chosen output.
+    * **'summary_bar'** – bar chart of the mean PSS (overall or one bar
+      per output).
+    
+    Parameters
+    ----------
+    y_pred : ndarray  
+        Model predictions.  Accepts  
+        * 1‑D ``(T,)``              – single trajectory, one output;  
+        * 2‑D ``(N, T)``            – *N* trajectories, one output;  
+        * 3‑D ``(N, O, T)``         – *N* trajectories, *O* outputs.  
+        The final dimension is the temporal axis (*T ≥ 2* for PSS).
+    
+    pss_values : float or ndarray, optional  
+        Pre‑computed PSS value(s).  If supplied the helper skips internal
+        calls to
+        :func:`fusionlab.metrics.prediction_stability_score`.
+    metric_kws : dict, optional  
+        Extra keyword arguments forwarded to the metric function.
+    
+    kind : {{'scores_histogram', 'summary_bar'}},  
+        default ``'summary_bar'``  
+        Select the visualisation style.
+    
+    output_idx : int, optional  
+        Output dimension to plot when ``kind='scores_histogram'`` on
+        multi‑output data.
+    
+    hist_bins : int | sequence | str, default ``'auto'``  
+    hist_color : str, default ``'teal'``  
+    hist_edgecolor : str, default ``'black'``  
+        Styling options for the histogram.
+    
+    {params.base.figsize}
+    {params.base.title}
+    {params.base.xlabel}
+    {params.base.ylabel}
+    {params.base.bar_color}
+    {params.base.bar_width}
+    {params.base.score_annotation_format}
+    show_score : bool, default ``True``  
+        Display the mean PSS on the histogram title.
+    {params.base.show_grid}
+    {params.base.grid_props}
+    {params.base.ax}
+    {params.base.verbose}
+    {params.base.kwargs}
+    
+    Returns
+    -------
+    matplotlib.axes.Axes  
+        Axes containing the stability visualisation.
+    
+    Notes
+    -----
+    For one trajectory :math:`(\hat y_{{1}},\dots,\hat y_{{T}})` the stability
+    score is
+    
+    .. math::
+    
+       \operatorname{{PSS}}
+       \;=\;
+       \frac{{1}}{{T-1}}\sum_{{t=2}}^{{T}}
+       \bigl|\hat y_{{t}} - \hat y_{{t-1}}\bigr|.
+    
+    The helper first reshapes ``y_pred`` to *(N, O, T)*, computes the
+    per‑trajectory scores, and then aggregates or plots them according to
+    ``kind``.
+    
+    Examples
+    --------
+    >>> import numpy as np, matplotlib.pyplot as plt
+    >>> from fusionlab.plot.metrics import plot_prediction_stability
+    >>> rng = np.random.default_rng(0)
+    >>> preds = rng.normal(size=(200, 30))      # 200 series, 30 time steps
+    >>> plot_prediction_stability(
+    ...     preds, kind='scores_histogram', figsize=(8, 4))
+    >>> plt.show()
+    
+    See Also
+    --------
+    fusionlab.metrics.prediction_stability_score  
+        Numeric implementation of PSS.
+    fusionlab.plot.metrics.plot_time_weighted_metric  
+        Time‑weighted MAE, accuracy, and interval‑score plots.
+    
+    References
+    ----------
+    .. [1] Hyndman, R.J. & Athanasopoulos, G. *Forecasting: Principles and
+           Practice*, 3rd ed., OTexts, 2021 — section 2.6, “Stability”.
+    """.format(params=_param_docs)
+
     # --- Input Validation and Preparation ---
     # y_pred: (T,), (N,T), or (N,O,T)
     y_pred_arr = check_array(

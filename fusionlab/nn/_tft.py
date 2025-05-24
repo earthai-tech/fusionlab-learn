@@ -10,7 +10,11 @@ import logging
 from typing import Optional, List, Any, Union
 
 from .._fusionlog import fusionlog
-from ..api.docstring import DocstringComponents
+from ..api.docs import ( 
+    _shared_nn_params, 
+    _shared_docs, 
+    DocstringComponents,
+)
 from ..api.property import  NNLearner 
 from ..core.checks import is_iterable
 from ..core.diagnose_q import validate_quantiles
@@ -20,8 +24,7 @@ from ..decorators import Appender
 from ..utils.deps_utils import ensure_pkg
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ._nn_docs import _shared_nn_params, _shared_docs  
- 
+
 if KERAS_BACKEND:
     LSTM = KERAS_DEPS.LSTM
     LayerNormalization = KERAS_DEPS.LayerNormalization 
@@ -51,10 +54,17 @@ if KERAS_BACKEND:
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
-    from ._tensor_validation import validate_model_inputs, align_temporal_dimensions
-    from .components import StaticEnrichmentLayer, PositionalEncoding
-    from .components import GatedResidualNetwork, VariableSelectionNetwork 
-    from .components import TemporalAttentionLayer
+    from ._tensor_validation import ( 
+        validate_model_inputs, 
+        align_temporal_dimensions
+    )
+    from .components import ( 
+        StaticEnrichmentLayer, 
+        PositionalEncoding, 
+        GatedResidualNetwork, 
+        VariableSelectionNetwork ,
+        TemporalAttentionLayer, 
+    )
     
 DEP_MSG = dependency_message('transformers.tft') 
 
@@ -63,7 +73,6 @@ __all__ = ["TemporalFusionTransformer", "DummyTFT"]
 _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_shared_nn_params), 
 )
-
 
 @Appender(_shared_docs['tft_math_doc'], join='\n', indents=0)
 @param_deprecated_message(
@@ -163,11 +172,10 @@ class DummyTFT(Model, NNLearner):
         self.output_dim = output_dim # Store output_dim
         self.quantiles = quantiles 
         
-        
-
         # Process quantiles
         if self.quantiles is None:
-            # For point forecast, output layer produces output_dim features
+            # For point forecast, output layer produces 
+            # output_dim features
             self.num_output_features = self.output_dim
         else:
             self.quantiles = validate_quantiles(quantiles) 

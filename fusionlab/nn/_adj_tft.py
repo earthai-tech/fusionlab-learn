@@ -6,7 +6,7 @@
 architecture for multi-horizon time-series forecasting.
 """
 from numbers import Real, Integral  
-from typing import List, Optional, Union, Dict, Tuple
+from typing import List, Optional, Union 
 
 from .._fusionlog import fusionlog 
 from ..api.property import NNLearner 
@@ -58,13 +58,11 @@ if KERAS_BACKEND:
         validate_model_inputs, combine_temporal_inputs_for_lstm
         )
     from .losses import combined_quantile_loss 
-
     from .components import (
         VariableSelectionNetwork,
         PositionalEncoding,
         GatedResidualNetwork,
         TemporalAttentionLayer, 
-       #  CategoricalEmbeddingProcessor 
     )
 
     
@@ -117,7 +115,6 @@ class TFT(Model, NNLearner):
     ):
         super().__init__(**kwargs)
         
-        # --- Store parameters ---
         self.dynamic_input_dim = dynamic_input_dim
         self.static_input_dim = static_input_dim
         self.future_input_dim = future_input_dim

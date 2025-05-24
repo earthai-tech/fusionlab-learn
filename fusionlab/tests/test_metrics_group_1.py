@@ -14,7 +14,7 @@ import warnings
 try:
     from fusionlab.metrics import (
         coverage_score,
-        crp_score,
+        continuous_ranked_probability_score as crp_score,
         weighted_interval_score, 
         prediction_stability_score,
     )

@@ -1756,7 +1756,7 @@ def cast_multiple_bool_params(
 def save_all_figures(
     output_dir: str = "figures",
     prefix: str = "figure",
-    formats: Union[List[str], tuple] = ("png",),
+    fmts: Union[List[str], tuple] = ("png",),
     close: bool = True,
     dpi: Union[int, None] = 150,
     transparent: bool = False,
@@ -1814,7 +1814,7 @@ def save_all_figures(
         base_name = "_".join(name_parts)
         
         # Save in each requested format
-        for ext in formats:
+        for ext in fmts:
             filename = f"{base_name}.{ext.lstrip('.')}"
             path = os.path.join(output_dir, filename)
             try:

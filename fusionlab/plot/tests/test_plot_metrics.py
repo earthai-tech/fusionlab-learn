@@ -10,7 +10,7 @@ import warnings
 from typing import Optional
 
 try:
-    from fusionlab.plot.metrics import (
+    from fusionlab.plot._evaluation import (
         plot_coverage,
         plot_crps,
         plot_mean_interval_width,
@@ -28,12 +28,11 @@ except ImportError as e:
         "Plotting tests will be skipped or will use placeholders. "
         "Ensure fusionlab is correctly installed and accessible."
     )
-    # Define placeholders if imports fail, so tests can be parsed
     def _placeholder_plot_func(*args, **kwargs) -> Optional[Axes]:
         if kwargs.get('ax') is not None: return kwargs['ax']
         warnings.warn(f"Plot function for {args[0] if args else 'metric'} "
                       "is a placeholder due to import error.")
-        return None # Or mock plt.gca()
+        return None 
     
     plot_coverage = _placeholder_plot_func
     plot_crps = _placeholder_plot_func

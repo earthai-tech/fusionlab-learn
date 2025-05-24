@@ -58,9 +58,9 @@ try:
     from fusionlab.nn.transformers import SuperXTFT, XTFT
     from fusionlab.nn.utils import (
         forecast_multi_step,
-        reshape_xtft_data,
-        visualize_forecasts
+        reshape_xtft_data_in,
     )
+    from fusionlab.plot.forecast import visualize_forecasts
     from fusionlab.utils.data_utils import nan_ops
     from fusionlab.utils.io_utils import fetch_joblib_data
 except ImportError as e:
@@ -385,7 +385,7 @@ if os.path.isfile(sequence_file):
     )
 else:
     print("Generating sequences from scratch...")
-    X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq = reshape_xtft_data(
+    X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq = reshape_xtft_data_in(
         df_train_master, # Use the master training data
         dt_col=dt_col_name,
         target_col=target_col_name,
@@ -615,7 +615,7 @@ forecast_csv_path = os.path.join(
 # Reshape df_test_master into sequences
 if not df_test_master.empty:
     print("Reshaping master test data (year 2022) for evaluation...")
-    s_test_master, d_test_master, f_test_master, y_test_master = reshape_xtft_data(
+    s_test_master, d_test_master, f_test_master, y_test_master = reshape_xtft_data_in(
        df_test_master, dt_col=dt_col_name, target_col=target_col_name,
        static_cols=static_feature_names, dynamic_cols=dynamic_feature_names,
        future_cols=future_feature_names, spatial_cols=spatial_cols,
@@ -691,14 +691,14 @@ if not df_test_master.empty:
 
     # Optional: visualize coordinate grid (for sanity check)
     plt.scatter(forecast_df_full["longitude"], forecast_df_full["latitude"], alpha=0.5)
-    plt.title("🗺️ Forecast Coordinate Grid")
+    plt.title("Forecast Coordinate Grid")
     plt.xlabel("Longitude")
     plt.ylabel("Latitude")
     plt.grid(True)
     plt.show()
 
     # Visualize final spatial-temporal forecast
-    print("🖼️ Visualizing forecast results...\n")
+    print("Visualizing forecast results...\n")
     visualize_forecasts(
         forecast_df_full,  # Already merged with coordinates
         dt_col="year",

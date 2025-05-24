@@ -5,7 +5,7 @@ from numpy.testing import assert_allclose
 
 from fusionlab.metrics import (
     coverage_score,
-    crp_score,
+    continuous_ranked_probability_score as crp_score,
     weighted_interval_score,
     prediction_stability_score,
     time_weighted_mean_absolute_error,

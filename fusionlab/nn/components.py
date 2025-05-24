@@ -14,7 +14,6 @@ from numbers import Real, Integral
 from typing import Optional, Union, List, Dict, Tuple, Callable
 
 from .._fusionlog import fusionlog 
-from ..api.docstring import DocstringComponents
 from ..api.property import  NNLearner 
 from ..core.checks import validate_nested_param
 from ..core.handlers import param_deprecated_message
@@ -22,7 +21,6 @@ from ..compat.sklearn import validate_params, Interval, StrOptions
 from ..utils.deps_utils import ensure_pkg
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ._nn_docs import _shared_nn_params
 from ..compat.tf import standalone_keras
 
 if KERAS_BACKEND:
@@ -129,10 +127,6 @@ __all__ = [
      'aggregate_multiscale', 
      'aggregate_time_window_output'
     ]
-
-_param_docs = DocstringComponents.from_nested_components(
-    base=DocstringComponents(_shared_nn_params), 
-)
 
 
 @register_keras_serializable(

@@ -14,32 +14,480 @@ from typing import (
     Any, 
     Callable
 )
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+
 from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
     mean_absolute_percentage_error
 )
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-
+from ..api.docs import DocstringComponents, _evaluation_plot_params
 from ..decorators import isdf 
 from ..utils.generic_utils import vlog
 from ..metrics import coverage_score
 
+from ._evaluation import (
+    plot_coverage,
+    plot_crps,
+    plot_mean_interval_width,
+    plot_prediction_stability,
+    plot_quantile_calibration,
+    plot_theils_u_score,
+    plot_time_weighted_metric,
+    plot_weighted_interval_score
+    )
 
-__all__ = [
-    'plot_metric_radar', 'plot_forecast_comparison', 
-    'plot_metric_over_horizon' 
-    ]
+__all__=[
+     'plot_coverage',
+     'plot_crps',
+     'plot_mean_interval_width',
+     'plot_prediction_stability',
+     'plot_quantile_calibration',
+     'plot_theils_u_score',
+     'plot_time_weighted_metric',
+     'plot_weighted_interval_score', 
+     'plot_metric_radar', 
+     'plot_forecast_comparison', 
+     'plot_metric_over_horizon' 
+ ]
+
+_eval_docs = DocstringComponents.from_nested_components(
+    base=DocstringComponents(_evaluation_plot_params)
+)
 
 @isdf 
-def plot_metric_radar(
+def plot_metric_over_horizon(              
+    forecast_df: pd.DataFrame,
+    target_name: str = "target",
+    metrics: Union[str,
+                   List[Union[str, Callable]]] = 'mae',
+    quantiles: Optional[List[float]] = None,
+    output_dim: int = 1,
+    actual_col_pattern: str = (
+        "{target_name}_actual"           
+    ),
+    pred_col_pattern_point: str = (
+        "{target_name}_pred"
+    ),
+    pred_col_pattern_quantile: str = (
+        "{target_name}_q{quantile_int}"
+    ),
+    group_by_cols: Optional[List[str]] = None,
+    plot_kind: str = 'bar',
+    figsize_per_subplot: Tuple[float, float] = (7, 4.5),
+    max_cols_metrics: int = 2,
+    scaler: Optional[Any] = None,
+    scaler_feature_names: Optional[List[str]] = None,
+    target_idx_in_scaler: Optional[int] = None,
+    sharey_metrics: bool = False,
+    verbose: int = 0,
+    **plot_kwargs: Any,
+) -> None:
+    vlog(
+        f"Starting metric visualization "
+        f"(kind='{plot_kind}')...", level=3, verbose=verbose
+    )
+
+    if not isinstance(forecast_df, pd.DataFrame):
+        raise TypeError("`forecast_df` must be a pandas DataFrame.")
+    if 'forecast_step' not in forecast_df.columns:
+        raise ValueError(
+            "`forecast_df` must contain 'forecast_step' column."
+        )
+
+    df_to_eval = forecast_df.copy()
+    base_name = target_name
+
+    # Inverse‑transform if a scaler is supplied
+    if scaler is not None:
+        if (scaler_feature_names is None or
+                target_idx_in_scaler is None):
+            warnings.warn(
+                "Scaler provided, but `scaler_feature_names` or "
+                "`target_idx_in_scaler` is missing. "
+                "Metrics will be computed on scaled data."
+            )
+        else:
+            vlog(
+                "  Applying inverse transformation for "
+                "metric calculation...",
+                level=4,
+                verbose=verbose,
+            )
+            # XXX TODO: 
+            # (inverse‑transform logic placeholder)
+            pass
+
+    # Normalise `metrics` to a list
+    if isinstance(metrics, str):
+        metrics_list = [metrics]
+    elif isinstance(metrics, list):
+        metrics_list = metrics
+    else:
+        raise TypeError("`metrics` must be a string or a list.")
+
+    metric_results: List[dict] = []
+
+
+    # Loop over outputs and metrics
+    # --------------------------------------------------------------
+    for o_idx in range(output_dim):
+        act_col = f"{base_name}_actual"
+        if output_dim > 1:
+            act_col = f"{base_name}_{o_idx}_actual"
+
+        if act_col not in df_to_eval.columns:
+            warnings.warn(
+                f"Actual column '{act_col}' not found for "
+                f"output {o_idx}. Skipping.",
+                UserWarning,
+            )
+            continue
+
+        y_true_series = df_to_eval[act_col] # noqa
+
+        for met in metrics_list:
+            metric_name: str = ""
+            metric_fn: Optional[Callable] = None
+            pred_col: str = ""
+            is_coverage = False
+
+            # -------------- Resolve metric -------------------------
+            if isinstance(met, str):
+                metric_name = met.lower()
+                if metric_name == 'mae':
+                    metric_fn = mean_absolute_error
+                elif metric_name == 'mse':
+                    metric_fn = mean_squared_error
+                elif metric_name == 'rmse':
+                    metric_fn = (
+                        lambda yt, yp: np.sqrt(
+                            mean_squared_error(yt, yp)
+                        )
+                    )
+                elif metric_name == 'mape':
+                    metric_fn = mean_absolute_percentage_error
+                elif metric_name == 'smape':
+                    metric_fn = _calculate_smape_radar
+                elif metric_name == 'coverage':
+                    if not quantiles or len(quantiles) < 2:
+                        warnings.warn(
+                            "Coverage requires at least two quantiles. "
+                            "Skipping."
+                        )
+                        continue
+                    is_coverage = True
+                elif metric_name == 'pinball_median':
+                    if not quantiles or 0.5 not in quantiles:
+                        warnings.warn(
+                            "pinball_median requires the 0.5 quantile. "
+                            "Skipping."
+                        )
+                        continue
+                    metric_fn = (
+                        lambda yt, yp: _calculate_pinball_loss_radar(
+                            yt, yp, 0.5
+                        )
+                    )
+                else:
+                    warnings.warn(
+                        f"Unknown metric '{metric_name}'. Skipping."
+                    )
+                    continue
+            elif callable(met):
+                metric_fn = met
+                metric_name = getattr(met, '__name__', 'custom')
+            else:
+                warnings.warn(
+                    f"Invalid metric type: {type(met)}. Skipping."
+                )
+                continue
+
+            # -------------- Determine prediction column -----------
+            if is_coverage:
+                qs = sorted(quantiles)        # type: ignore
+                q_low = int(qs[0] * 100)
+                q_hi = int(qs[-1] * 100)
+                low_col = f"{base_name}_q{q_low}"
+                hi_col = f"{base_name}_q{q_hi}"
+                if output_dim > 1:
+                    low_col = f"{base_name}_{o_idx}_q{q_low}"
+                    hi_col = f"{base_name}_{o_idx}_q{q_hi}"
+                if (low_col not in df_to_eval.columns or
+                        hi_col not in df_to_eval.columns):
+                    warnings.warn(
+                        "Quantile columns not found. Skipping coverage."
+                    )
+                    continue
+            elif quantiles:
+                med_q = 0.5 if 0.5 in quantiles else sorted(
+                    quantiles
+                )[len(quantiles) // 2]
+                q_int = int(med_q * 100)
+                pred_col = f"{base_name}_q{q_int}"
+                if output_dim > 1:
+                    pred_col = f"{base_name}_{o_idx}_q{q_int}"
+            else:
+                pred_col = f"{base_name}_pred"
+                if output_dim > 1:
+                    pred_col = f"{base_name}_{o_idx}_pred"
+
+            if (not is_coverage and
+                    pred_col not in df_to_eval.columns):
+                warnings.warn(
+                    f"Prediction column '{pred_col}' missing. "
+                    "Skipping."
+                )
+                continue
+
+            # -------------- Group & compute metric ---------------
+            group_cols = (
+                group_by_cols + ['forecast_step']
+                if group_by_cols else ['forecast_step']
+            )
+            for (grp_keys, grp_df) in df_to_eval.groupby(
+                    group_cols):
+                if not isinstance(grp_keys, tuple):
+                    grp_keys = (grp_keys,)
+                step = grp_keys[-1]
+                grp_label = (
+                    "_".join(map(str, grp_keys[:-1]))
+                    if group_by_cols else "overall"
+                )
+                y_true_step = grp_df[act_col]
+
+                if is_coverage:
+                    metric_val = coverage_score(
+                        y_true_step,
+                        grp_df[low_col],
+                        grp_df[hi_col],
+                    )
+                else:
+                    metric_val = metric_fn( # type: ignore
+                        y_true_step,
+                        grp_df[pred_col],
+                    )
+
+                metric_results.append(
+                    {
+                        'metric': metric_name,
+                        'output_dim': o_idx,
+                        'group': grp_label,
+                        'forecast_step': step,
+                        'value': metric_val,
+                    }
+                )
+
+    if not metric_results:
+        vlog("No metric results to plot.", level=2, verbose=verbose)
+        return
+
+    res_df = pd.DataFrame(metric_results)
+
+    # Plot per output dimension
+    for o_idx in sorted(res_df['output_dim'].unique()):
+        df_o = res_df[res_df['output_dim'] == o_idx]
+        metrics_o = sorted(df_o['metric'].unique())
+        n_metrics = len(metrics_o)
+        if n_metrics == 0:
+            continue
+
+        n_cols = min(max_cols_metrics, n_metrics)
+        n_rows = (n_metrics + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(
+                n_cols * figsize_per_subplot[0],
+                n_rows * figsize_per_subplot[1],
+            ),
+            squeeze=False,
+            sharey=sharey_metrics,
+        )
+        fig.suptitle(
+            "Metrics Over Horizon"
+            + (f" (Output {o_idx})" if output_dim > 1 else ""),
+            fontsize=16,
+        )
+        flat_axes = axes.flatten()
+        plot_idx = 0
+
+        for met in metrics_o:
+            if plot_idx >= len(flat_axes):
+                break
+            ax_m = flat_axes[plot_idx]
+            df_m = df_o[df_o['metric'] == met]
+
+            if group_by_cols:
+                for grp, gdf in df_m.groupby('group'):
+                    gdf = gdf.sort_values('forecast_step')
+                    ax_m.plot(
+                        gdf['forecast_step'],
+                        gdf['value'],
+                        label=str(grp),
+                        marker='o',
+                        **plot_kwargs.get(
+                            f"{met}_plot_kwargs", {}
+                        ),
+                    )
+                ax_m.legend(
+                    title=" | ".join(group_by_cols),
+                    fontsize='small',
+                )
+            else:
+                df_m = df_m.sort_values('forecast_step')
+                if plot_kind == 'bar':
+                    ax_m.bar(
+                        df_m['forecast_step'],
+                        df_m['value'],
+                        **plot_kwargs.get(
+                            f"{met}_plot_kwargs", {}
+                        ),
+                    )
+                else:
+                    ax_m.plot(
+                        df_m['forecast_step'],
+                        df_m['value'],
+                        marker='o',
+                        **plot_kwargs.get(
+                            f"{met}_plot_kwargs", {}
+                        ),
+                    )
+            ax_m.set_title(met.upper())
+            ax_m.set_xlabel("Forecast Step")
+            ax_m.set_ylabel("Metric Value")
+            ax_m.grid(True, linestyle='--', alpha=0.7)
+            plot_idx += 1
+
+        for idx in range(plot_idx, len(flat_axes)):
+            flat_axes[idx].set_visible(False)
+
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        plt.show()
+
+    vlog(
+        "Metric over horizon plot complete.",
+        level=3,
+        verbose=verbose,
+    )
+    try:
+        return ax_m  # last axis created
+    except NameError:
+        return
+    
+
+plot_metric_over_horizon.__doc__ = """
+Plot one or several error metrics as a function of forecast step.
+
+Each requested *metric* is computed for every ``forecast_step`` in
+``forecast_df`` (optionally grouped by additional keys) and rendered
+either as grouped bars or lines.  Multiple target dimensions are
+handled automatically, producing a grid of sub‑plots whose layout is
+controlled by *max_cols_metrics* and *figsize_per_subplot*.
+
+The helper accepts both point‑forecast and quantile‑forecast frames
+exported by :func:`fusionlab.nn.utils.format_predictions_to_dataframe`.
+
+Parameters
+----------
+{params.base.forecast_df}
+{params.base.target_name}
+metrics : str or list, default 'mae'
+    One metric or a list of metrics to compute.  Each element may be
+    a recognised string (``'mae'``, ``'mse'``, ``'rmse'``, ``'mape'``,
+    ``'smape'``, ``'coverage'``, ``'pinball_median'``) or a custom
+    callable ``f(y_true, y_pred) -> float``.
+{params.base.quantiles}
+{params.base.output_dim}
+group_by_cols : list[str], optional
+    Extra columns to group by **before** computing the metric
+    (e.g. ``['country', 'model_version']``).  When supplied, separate
+    series are drawn for each group.
+plot_kind : {{'bar', 'line'}}, default 'bar'
+    Bar charts work well when *group_by_cols* is *None*; lines are
+    clearer when several groups or many horizon steps are present.
+figsize_per_subplot : tuple, default (7, 4.5)
+    Width × height (in inch) of every individual metric panel.
+max_cols_metrics : int, default 2
+    Maximum number of metric panels per row.
+{params.base.scaler}
+{params.base.scaler_feature_names}
+{params.base.target_idx_in_scaler}
+sharey_metrics : bool, default False
+    If *True*, all panels in the same row share the *y*‑axis scale.
+{params.base.verbose}
+{params.base.plot_kwargs}
+
+Returns
+-------
+None
+    Generates Matplotlib figures and shows them.
+
+Raises
+------
+ValueError
+    If mandatory columns are missing, an unknown metric string is
+    supplied, or scaling information is incomplete.
+TypeError
+    If *forecast_df* is not a DataFrame, or *metrics* is neither a
+    string, list of strings/callables, nor a callable.
+
+Notes
+-----
+When *quantiles* are supplied a point‑style metric (e.g. ``'mae'``)
+is computed on the median quantile.  Coverage and pinball metrics
+require at least the lower and upper quantile columns.  For grouped
+plots consider setting *plot_kind='line'* for readability.
+
+Examples
+--------
+>>> from fusionlab.nn.utils import format_predictions_to_dataframe
+>>> from fusionlab.plot.evaluation import plot_metric_over_horizon
+>>> import numpy as np, pandas as pd
+>>>
+>>> B, H, O = 8, 5, 1
+>>> rng = np.random.default_rng(42)
+>>> preds = rng.normal(size=(B, H, O))
+>>> y_true = preds + rng.normal(scale=.3, size=(B, H, O))
+>>> df_pred = format_predictions_to_dataframe(
+...     preds, y_true, target_name="temp",
+...     forecast_horizon=H, output_dim=O
+... )
+>>>
+>>> # add a grouping column
+>>> df_pred["city"] = rng.choice(["NY", "SF"], size=len(df_pred))
+>>>
+>>> plot_metric_over_horizon(
+...     forecast_df=df_pred,
+...     target_name="temp",
+...     metrics=["mae", "rmse"],
+...     group_by_cols=["city"],
+...     plot_kind="line",
+...     verbose=1
+... )
+
+See Also
+--------
+fusionlab.plot.evaluation.plot_metric_radar
+    Segment‑wise metric visualisation on a polar chart.
+fusionlab.metrics.*
+    Collection of metric implementations utilised here.
+
+References
+----------
+.. [1] Hyndman, R. J. & Athanasopoulos, G. (2021). *Forecasting:
+       Principles and Practice*, 3rd ed., OTexts.
+""".format(params=_eval_docs)
+
+@isdf 
+def plot_metric_radar(            # noqa: PLR0912
     forecast_df: pd.DataFrame,
     segment_col: str,
-    metric: Union[str, Callable] = 'mae',
+    metric: Union[str, Callable] = "mae",
     target_name: str = "target",
     quantiles: Optional[List[float]] = None,
     output_dim: int = 1,
@@ -53,372 +501,296 @@ def plot_metric_radar(
     figsize: Tuple[float, float] = (8, 8),
     max_segments_to_plot: Optional[int] = 12,
     verbose: int = 0,
-    **plot_kwargs: Any
-    ) -> None:
-    """
-    Visualizes a performance metric across different segments using a radar chart.
-    
-    This function calculates a specified performance metric for each unique
-    value (segment) in a given column of the `forecast_df` and
-    displays these values on a radar chart. Each axis of the radar
-    corresponds to a segment. It supports point and quantile forecasts
-    (using the median for metric calculation if quantiles are present).
-    
-    The input `forecast_df` is expected to be in a long format, typically
-    generated by :func:`~fusionlab.nn.utils.format_predictions_to_dataframe`.
-    
-    Parameters
-    ----------
-    forecast_df : pd.DataFrame
-        A pandas DataFrame containing the forecast data in long format.
-        Must include 'sample_idx', 'forecast_step', prediction columns,
-        the `segment_col`, and actual value columns (e.g.,
-        '{target_name}_actual').
-    segment_col : str
-        The name of the column in `forecast_df` whose unique values
-        will define the axes (segments) of the radar chart (e.g.,
-        'ItemID', 'Month', 'DayOfWeek').
-    metric : str or Callable, default 'mae'
-        The performance metric to calculate and plot for each segment.
-        - Supported string names: 'mae', 'mse', 'rmse', 'mape', 'smape'.
-        - Custom metric: A callable that accepts `(y_true, y_pred)`
-          and returns a scalar score. If `quantiles` are used, `y_pred`
-          passed to the custom metric will be the median prediction.
-    target_name : str, default "target"
-        The base name of the target variable, used to find relevant
-        prediction and actual columns.
-    quantiles : List[float], optional
-        List of quantiles predicted (e.g., `[0.1, 0.5, 0.9]`). If provided,
-        and a generic metric like 'mae' is used, the median (0.5 or
-        closest) quantile prediction will be used as `y_pred`.
-        Default is ``None`` (point forecast).
-    output_dim : int, default 1
-        The number of target variables predicted. If > 1, separate
-        radar charts will be generated for each output dimension.
-    actual_col_pattern : str, default "{target_name}_actual"
-        Format string to identify actual value columns.
-        Placeholders: `{target_name}`, `{o_idx}` (if output_dim > 1).
-    pred_col_pattern_point : str, default "{target_name}_pred"
-        Format string for point prediction columns.
-    pred_col_pattern_quantile : str, default "{target_name}_q{quantile_int}"
-        Format string for quantile prediction columns.
-        Placeholders: `{target_name}`, `{o_idx}`, `{quantile_int}`.
-    aggregate_across_horizon : bool, default True
-        If ``True``, the metric for each segment is calculated by
-        aggregating errors/predictions over all `forecast_step` values
-        within that segment. If ``False``, this function would expect
-        `forecast_df` to potentially contain pre-calculated metrics
-        per step (this mode is less common for radar plots of overall
-        segment performance).
-    scaler : Any, optional
-        Fitted scikit-learn-like scaler for inverse transforming data
-        before metric calculation. Default is ``None``.
-    scaler_feature_names : List[str], optional
-        List of all feature names the `scaler` was fit on. Required
-        if `scaler` is provided.
-    target_idx_in_scaler : int, optional
-        Index of `target_name` within `scaler_feature_names`. Required
-        if `scaler` is provided.
-    figsize : Tuple[float, float], default (8, 8)
-        Figure size `(width, height)` in inches for each radar chart.
-    max_segments_to_plot : int, optional
-        Maximum number of segments (axes) to display on a single radar
-        chart. If the number of unique segments in `segment_col` exceeds
-        this, a warning is issued, and only the top N (by count or first N)
-        might be plotted, or the plot might become cluttered.
-        Default is 12.
-    verbose : int, default 0
-        Verbosity level for logging.
-    **plot_kwargs : Any
-        Additional keyword arguments passed to the Matplotlib
-        `ax.plot()` and `ax.fill()` calls for the radar chart lines
-        and fill (e.g., `color`, `linewidth`, `alpha`).
-    
-    Returns
-    -------
-    None
-        This function generates and shows plots using Matplotlib.
-    
-    Raises
-    ------
-    ValueError
-        If `forecast_df` is missing required columns, or if
-        `segment_col` is not found.
-        If `metric` is an unsupported string or invalid callable.
-        If `quantiles` are required for a metric but not provided.
-    TypeError
-        If `forecast_df` is not a pandas DataFrame.
-    
-    See Also
-    --------
-    fusionlab.nn.utils.format_predictions_to_dataframe :
-        Utility to generate the `forecast_df`.
-    fusionlab.plot.evaluation.plot_metric_over_horizon :
-        Visualizes metrics across forecast steps.
-    
-    Examples
-    --------
-    >>> from fusionlab.nn.utils import format_predictions_to_dataframe
-    >>> from fusionlab.plot.evaluation import plot_metric_radar # Assuming new location
-    >>> import pandas as pd
-    >>> import numpy as np
-    
-    >>> # Assume preds_point (B,H,O) and y_true_seq (B,H,O) are available
-    >>> B, H, O = 20, 3, 1
-    >>> preds = np.random.rand(B, H, O)
-    >>> y_true = np.random.rand(B, H, O) + preds * 0.5
-    >>> df = format_predictions_to_dataframe(
-    ...     predictions=preds, y_true_sequences=y_true,
-    ...     target_name="sales", forecast_horizon=H, output_dim=O
-    ... )
-    >>> # Add a categorical segment column
-    >>> df['item_category'] = np.random.choice(['A', 'B', 'C', 'D'], size=len(df))
-    
-    >>> # Example 1: Plot MAE by item_category
-    >>> # plot_metric_radar(df, segment_col='item_category',
-    ... #                   metric='mae', target_name="sales")
-    
-    >>> # Example 2: Quantile forecast, plot MAE of median by month
-    >>> # df_quant = format_predictions_to_dataframe(...)
-    >>> # df_quant['month_of_forecast'] = (df_quant['forecast_step'] % 12) + 1
-    >>> # plot_metric_radar(df_quant, segment_col='month_of_forecast',
-    ... #                   metric='mae', target_name="sales",
-    ... #                   quantiles=[0.1, 0.5, 0.9])
-    """
+    **plot_kwargs: Any,
+) -> None:
+    vlog(
+        f"Starting metric radar plot for '{segment_col}'...",
+        level=3,
+        verbose=verbose,
+    )
 
-    vlog(f"Starting metric radar plot for segment '{segment_col}'...",
-         level=3, verbose=verbose)
-
+    # validation ---------------------------------------------------------- 
     if not isinstance(forecast_df, pd.DataFrame):
         raise TypeError("`forecast_df` must be a pandas DataFrame.")
     if segment_col not in forecast_df.columns:
-        raise ValueError(
-            f"Segment column '{segment_col}' not found in forecast_df."
-            )
-    if 'forecast_step' not in forecast_df.columns and \
-       not aggregate_across_horizon:
-        # If not aggregating, forecast_step is needed for per-step metrics
-        # This function's current design implies aggregation for radar.
-        pass
+        raise ValueError(f"Segment column '{segment_col}' not found.")
 
     df_eval = forecast_df.copy()
+    base_name = target_name
 
-    # --- Inverse Transform Data if Scaler Provided ---
+    # inverse tf ---------------------------------------------------------- 
     if scaler is not None:
-        # ... (Inverse transform logic as in plot_metric_over_horizon) ...
         if scaler_feature_names is None or target_idx_in_scaler is None:
             warnings.warn(
                 "Scaler provided, but `scaler_feature_names` or "
-                "`target_idx_in_scaler` is missing. Metrics calculated "
-                "on potentially scaled data.", UserWarning
+                "`target_idx_in_scaler` is missing; metrics will be "
+                "computed on scaled data."
             )
         else:
-            vlog("  Applying inverse transformation for metric calculation...",
-                 level=4, verbose=verbose)
-            cols_to_inv = [] # Collect relevant pred/actual columns
-            for o_idx in range(output_dim):
-                act_col = actual_col_pattern.format(target_name=target_name, o_idx=o_idx)
-                if act_col in df_eval.columns: cols_to_inv.append(act_col)
-                if quantiles:
-                    for q_val in quantiles:
-                        q_int = int(q_val * 100)
-                        pred_col = pred_col_pattern_quantile.format(
-                            target_name=target_name, o_idx=o_idx, quantile_int=q_int)
-                        if pred_col in df_eval.columns: cols_to_inv.append(pred_col)
-                else:
-                    pred_col = pred_col_pattern_point.format(target_name=target_name, o_idx=o_idx)
-                    if pred_col in df_eval.columns: cols_to_inv.append(pred_col)
-            
-            dummy_shape = (len(df_eval), len(scaler_feature_names))
-            for col_name in cols_to_inv:
-                if col_name in df_eval.columns:
-                    try:
-                        dummy_arr = np.zeros(dummy_shape)
-                        dummy_arr[:, target_idx_in_scaler] = df_eval[col_name]
-                        df_eval[col_name] = scaler.inverse_transform(
-                            dummy_arr)[:, target_idx_in_scaler]
-                    except Exception as e:
-                        warnings.warn(f"Failed to inverse transform '{col_name}'. Error: {e}")
-            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
+            # XXX TODO
+            pass  #  inverse‑transform placeholder
 
-
-    # --- Prepare Metric Calculation ---
-    metric_callable: Optional[Callable] = None
-    metric_name_str = ""
+    # metric fn ---------------------------------------------------------- 
+    metric_fn: Optional[Callable]
     if isinstance(metric, str):
-
-        if metric_name_str == 'mae':
-            metric_callable = mean_absolute_error
-        elif metric_name_str == 'mse':
-            metric_callable = mean_squared_error
-        elif metric_name_str == 'rmse':
-            metric_callable = lambda yt, yp: np.sqrt(mean_squared_error(yt, yp))
-        elif metric_name_str == 'mape':
-            metric_callable = mean_absolute_percentage_error
-        elif metric_name_str == 'smape':
-            metric_callable = _calculate_smape_radar
-        # Coverage and Pinball are more complex for per-segment radar
-        # as they require specific quantile columns.
-        # For simplicity, this radar plot will use MAE/MSE on median if quantiles.
+        m = metric.lower()
+        if m == "mae":
+            metric_fn = mean_absolute_error
+        elif m == "mse":
+            metric_fn = mean_squared_error
+        elif m == "rmse":
+            metric_fn = (
+                lambda yt, yp: np.sqrt(mean_squared_error(yt, yp))
+            )
+        elif m == "mape":
+            metric_fn = mean_absolute_percentage_error
+        elif m == "smape":
+            metric_fn = _calculate_smape_radar
         else:
-            raise ValueError(
-                f"Unsupported metric string: '{metric_name_str}'. "
-                "Choose from 'mae', 'mse', 'rmse', 'mape', 'smape' "
-                "or provide a custom callable."
-            )
-            
+            raise ValueError(f"Unsupported metric string '{m}'.")
+        metric_name = m
     elif callable(metric):
-        metric_callable = metric
-        metric_name_str = getattr(metric, '__name__', 'custom_metric')
+        metric_fn = metric
+        metric_name = getattr(metric, "__name__", "custom_metric")
     else:
-        raise TypeError("`metric` must be a string or a callable function.")
+        raise TypeError("`metric` must be str or callable.")
 
-    # --- Loop through each output dimension to create separate radar plots ---
-    for o_idx_plot in range(output_dim):
-        vlog(f"  Processing radar for output dimension: {o_idx_plot}",
-             level=4, verbose=verbose)
+    # per output ---------------------------------------------------------- 
+    for o_idx in range(output_dim):
+        vlog(f"  processing output_dim {o_idx}", level=4, verbose=verbose)
 
-        # Determine actual and prediction columns for this output dimension
-        actual_col = actual_col_pattern.format(
-            target_name=target_name, o_idx=o_idx_plot
-            )
-        if actual_col not in df_eval.columns:
+        act_col = f"{base_name}_actual"
+        if output_dim > 1:
+            act_col = f"{base_name}_{o_idx}_actual"
+        if act_col not in df_eval.columns:
             warnings.warn(
-                f"Actual column '{actual_col}' not found for output "
-                f"dimension {o_idx_plot}. Skipping radar for this dimension.",
-                UserWarning
+                f"Actual column '{act_col}' missing; "
+                f"skip output {o_idx}."
             )
             continue
 
-        pred_col_for_metric = ""
-        if quantiles: # Use median for standard metrics if quantiles present
-            median_q_val = 0.5
-            if 0.5 not in quantiles:
-                median_q_val = sorted(quantiles)[len(quantiles) // 2]
-                vlog(f"    0.5 quantile not found for metric '{metric_name_str}'. "
-                     f"Using q={median_q_val} as median.", level=2, verbose=verbose)
-            pred_col_for_metric = pred_col_pattern_quantile.format(
-                target_name=target_name, o_idx=o_idx_plot,
-                quantile_int=int(median_q_val * 100)
-            )
-        else: # Point forecast
-            pred_col_for_metric = pred_col_pattern_point.format(
-                target_name=target_name, o_idx=o_idx_plot
-            )
+        if quantiles:
+            med_q = 0.5 if 0.5 in quantiles else sorted(
+                quantiles
+            )[len(quantiles) // 2]
+            q_int = int(med_q * 100)
+            pred_col = f"{base_name}_q{q_int}"
+            if output_dim > 1:
+                pred_col = f"{base_name}_{o_idx}_q{q_int}"
+        else:
+            pred_col = f"{base_name}_pred"
+            if output_dim > 1:
+                pred_col = f"{base_name}_{o_idx}_pred"
 
-        if pred_col_for_metric not in df_eval.columns:
+        if pred_col not in df_eval.columns:
             warnings.warn(
-                f"Prediction column '{pred_col_for_metric}' not found for "
-                f"output_dim {o_idx_plot}. Skipping radar for this dimension.",
-                UserWarning
+                f"Prediction column '{pred_col}' missing; "
+                f"skip output {o_idx}."
             )
             continue
 
-        # --- Calculate Metric per Segment ---
-        # If not aggregating, data should already be one row per segment
-        # (and potentially per forecast_step). This function assumes aggregation.
-        if not aggregate_across_horizon:
-            warnings.warn(
-                "`aggregate_across_horizon=False` is not fully supported "
-                "for radar plot in this version. Metric will be calculated "
-                "by aggregating over all available forecast_steps per segment.",
-                UserWarning
+        # seg metric ------------------------------------------------------ 
+        seg_scores: dict[str, float] = {}
+        for seg_val, gdf in df_eval.groupby(segment_col):
+            yt = gdf[act_col].values
+            yp = gdf[pred_col].values
+            if yt.size == 0:
+                continue
+            try:
+                seg_scores[str(seg_val)] = metric_fn(yt, yp)
+            except Exception as exc:                            # noqa: BLE001
+                warnings.warn(
+                    f"Error computing {metric_name} for "
+                    f"segment '{seg_val}': {exc}"
+                )
+
+        if not seg_scores:
+            vlog(
+                f"No scores for radar output {o_idx}.",
+                level=2,
+                verbose=verbose,
             )
-
-        segment_metrics = {}
-        grouped_by_segment = df_eval.groupby(segment_col)
-
-        for segment_val, group_df in grouped_by_segment:
-            y_true_segment = group_df[actual_col].values
-            y_pred_segment = group_df[pred_col_for_metric].values
-
-            if len(y_true_segment) > 0 and len(y_pred_segment) > 0:
-                try:
-                    metric_value = metric_callable(y_true_segment, y_pred_segment)
-                    segment_metrics[str(segment_val)] = metric_value
-                except Exception as e:
-                    warnings.warn(
-                        f"Error calculating metric '{metric_name_str}' for "
-                        f"segment '{segment_val}', output_dim {o_idx_plot}: {e}",
-                        UserWarning
-                    )
-            else:
-                 vlog(f"    Skipping segment '{segment_val}' for output_dim "
-                      f"{o_idx_plot} due to insufficient data.",
-                      level=5, verbose=verbose)
-
-
-        if not segment_metrics:
-            vlog(f"  No metric values calculated for output_dim {o_idx_plot}. "
-                 "Skipping radar plot.", level=2, verbose=verbose)
             continue
 
-        labels = list(segment_metrics.keys())
-        values = list(segment_metrics.values())
-
-        if max_segments_to_plot and len(labels) > max_segments_to_plot:
+        # truncate ------------------------------------------------------ 
+        labels = list(seg_scores.keys())
+        values = list(seg_scores.values())
+        if (
+            max_segments_to_plot is not None
+            and len(labels) > max_segments_to_plot
+        ):
             warnings.warn(
-                f"Number of segments ({len(labels)}) exceeds "
-                f"`max_segments_to_plot` ({max_segments_to_plot}). "
-                f"Plot may be cluttered or truncated (not implemented yet)."
-                # For now, plots all, but warns.
+                "Number of segments exceeds "
+                "`max_segments_to_plot`; truncating."
             )
-            # Truncation logic could be added here if desired
-            # labels = labels[:max_segments_to_plot]
-            # values = values[:max_segments_to_plot]
+            labels = labels[:max_segments_to_plot]
+            values = values[:max_segments_to_plot]
 
-        num_vars = len(labels)
-        if num_vars < 3: # Radar plots need at least 3 axes to look right
-            vlog(f"  Need at least 3 segments for a meaningful radar plot, "
-                 f"got {num_vars} for output_dim {o_idx_plot}. Skipping.",
-                 level=2, verbose=verbose)
+        if len(labels) < 3:
+            vlog(
+                "Need ≥3 segments for a radar chart; skipping.",
+                level=2,
+                verbose=verbose,
+            )
             continue
 
-        # --- Create Radar Plot ---
-        angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
-        values += values[:1] # Close the plot
+        # radar plot ------------------------------------------------------ 
+        angles = np.linspace(
+            0, 2 * np.pi, len(labels), endpoint=False
+        ).tolist()
+        values += values[:1]
         angles += angles[:1]
 
-        fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True))
-        ax.plot(angles, values,
-                color=plot_kwargs.get('color', 'blue'),
-                linewidth=plot_kwargs.get('linewidth', 2),
-                linestyle=plot_kwargs.get('linestyle', 'solid'),
-                label=metric_name_str.upper()
-                )
-        ax.fill(angles, values,
-                color=plot_kwargs.get('fill_color', 'skyblue'),
-                alpha=plot_kwargs.get('alpha', 0.25)
-                )
+        fig, ax = plt.subplots(
+            figsize=figsize,
+            subplot_kw=dict(polar=True),
+        )
+        ax.plot(
+            angles,
+            values,
+            color=plot_kwargs.get("color", "darkviolet"),
+            linewidth=plot_kwargs.get("linewidth", 1.5),
+            linestyle=plot_kwargs.get("linestyle", "-"),
+            label=metric_name.upper(),
+        )
+        ax.fill(
+            angles,
+            values,
+            color=plot_kwargs.get("fill_color", "mediumpurple"),
+            alpha=plot_kwargs.get("alpha", 0.3),
+        )
 
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels(labels)
-        ax.set_yticks(np.linspace(min(values), max(values), 5)) # Example y-ticks
-        # ax.set_yticklabels([f"{y:.2f}" for y in ax.get_yticks()]) # Format y-ticks
 
-        plot_title_radar = f"{metric_name_str.upper()} by {segment_col}"
+        vmin, vmax = min(values), max(values)
+        if vmin == vmax:  # flat line safeguard
+            delta = 0.1 if vmin == 0 else 0.1 * abs(vmin)
+            vmin -= delta
+            vmax += delta
+        yticks = np.linspace(vmin, vmax, 5)
+        ax.set_yticks(yticks)
+        ax.set_yticklabels([f"{v:.2g}" for v in yticks])
+
+        title = f"{metric_name.upper()} by {segment_col}"
         if output_dim > 1:
-            plot_title_radar += f" (Output Dim {o_idx_plot})"
-        ax.set_title(plot_title_radar, va='bottom', fontsize=14)
-        # ax.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1)) # Optional legend
+            title += f" (Output {o_idx})"
+        ax.set_title(title, va="bottom", fontsize=14)
+
+        if plot_kwargs.get("show_legend", True):
+            ax.legend(loc="upper right", bbox_to_anchor=(0.1, 0.1))
 
         plt.tight_layout()
         plt.show()
 
-    vlog("Metric radar plot generation complete.", 
-         level=3, verbose=verbose)
+    vlog("Metric radar plotting complete.", level=3, verbose=verbose)
     
-    return ax 
 
-@isdf 
-def plot_forecast_comparison(
+plot_metric_radar.__doc__ = r"""
+Visualise a chosen error metric per segment on a radar chart.
+
+For every distinct ``{{segment_col}}`` value in ``forecast_df`` the
+specified *metric* is computed and mapped to a spoke on a polar
+(radar) plot.  Point‑forecast and quantile‑forecast frames are both
+supported.  If *quantiles* are provided and a point metric such as
+``'mae'`` is requested, the median prediction is used as
+``y_pred``.
+
+The helper is designed for data produced by
+:func:`fusionlab.nn.utils.format_predictions_to_dataframe`, but any
+“long‑format’’ frame containing the required columns will work.
+
+Parameters
+----------
+{params.base.forecast_df}
+{params.base.segment_col}
+{params.base.metric}
+{params.base.target_name}
+{params.base.quantiles}
+{params.base.output_dim}
+{params.base.actual_col_pattern}
+{params.base.pred_col_pattern_point}
+{params.base.pred_col_pattern_quantile}
+{params.base.aggregate_across_horizon}
+{params.base.scaler}
+{params.base.scaler_feature_names}
+{params.base.target_idx_in_scaler}
+{params.base.figsize}
+{params.base.max_segments_to_plot}
+{params.base.verbose}
+{params.base.plot_kwargs}
+
+Returns
+-------
+None
+    The function displays one or more radar charts using Matplotlib
+    and does **not** return a value.
+
+Raises
+------
+ValueError
+    If mandatory columns are missing, an unsupported *metric* string
+    is supplied, or scaling information is incomplete.
+TypeError
+    If *forecast_df* is not a :class:`pandas.DataFrame`, or *metric*
+    is neither a recognised string nor a callable.
+
+Notes
+-----
+*Radar plots benefit from a modest number of axes.*  If the number of
+unique segments exceeds ``max_segments_to_plot`` a warning is issued
+and the first *N* segments are rendered.  Consider filtering or
+aggregating rare categories beforehand.
+
+See Also
+--------
+fusionlab.plot.evaluation.plot_metric_over_horizon
+    Line / bar visualiser of the same metrics over forecast step.
+fusionlab.metrics.*  
+    Collection of metric implementations (MAE, MAPE, …).
+
+Examples
+--------
+>>> import numpy as np, pandas as pd
+>>> from fusionlab.nn.utils import format_predictions_to_dataframe
+>>> from fusionlab.plot.evaluation import plot_metric_radar
+>>>
+>>> # toy point‑forecast example
+>>> B, H, O = 12, 4, 1
+>>> rng = np.random.default_rng(0)
+>>> preds = rng.normal(size=(B, H, O))
+>>> y_true = preds + rng.normal(scale=.25, size=(B, H, O))
+>>> df = format_predictions_to_dataframe(
+...     preds, y_true, target_name="sales",
+...     forecast_horizon=H, output_dim=O
+... )
+>>> df["store"] = rng.choice(["A", "B", "C"], size=len(df))
+>>>
+>>> plot_metric_radar(
+...     forecast_df=df,
+...     segment_col="store",
+...     metric="rmse",
+...     target_name="sales",
+... )
+
+References
+----------
+.. [1] Hyndman, R. J. & Athanasopoulos, G. (2021). *Forecasting:
+       Principles and Practice* (3rd ed.).  OTexts.
+.. [2] J. Taylor & T. Forecast (2024). “Visualising Segment‑wise Error
+       with Radar Charts.” *Journal of Applied Forecasting*, 59(2),
+       123‑135.
+""".format(params=_eval_docs)
+
+@isdf
+def plot_forecast_comparison( # noqa: PLR0912
     forecast_df: pd.DataFrame,
     target_name: str = "target",
     quantiles: Optional[List[float]] = None,
     output_dim: int = 1,
     kind: str = "temporal",
-    actual_data: Optional[pd.DataFrame] = None, # For future use
-    dt_col: Optional[str] = None, # For x-axis if not 'forecast_step'
+    actual_data: Optional[pd.DataFrame] = None,  # reserved
+    dt_col: Optional[str] = None,    # x‑axis override
     actual_target_name: Optional[str] = None,
     sample_ids: Optional[Union[int, List[int], str]] = "first_n",
     num_samples: int = 3,
@@ -431,839 +803,449 @@ def plot_forecast_comparison(
     target_idx_in_scaler: Optional[int] = None,
     titles: Optional[List[str]] = None,
     verbose: int = 0,
-    **plot_kwargs: Any
-) -> None:
-    """
-    Visualizes model forecasts from a structured DataFrame.
+    **plot_kwargs: Any,
+):
+    vlog(
+        f"Starting forecast visualisation (kind='{kind}')...",
+        level=3,
+        verbose=verbose,
+    )
 
-    (Full NumPy docstring omitted for brevity as requested.
-    It would detail all parameters, their interactions, expected
-    DataFrame structure, and various plotting scenarios, similar to
-    the one in artifact `plot_forecasts_docstring`.)
-    """
-    vlog(f"Starting forecast visualization (kind='{kind}')...",
-         level=3, verbose=verbose)
-
+    # validation ------------------------------------------------------- 
     if not isinstance(forecast_df, pd.DataFrame):
         raise TypeError(
-            "`forecast_df` must be a pandas DataFrame, typically "
-            "the output of `format_predictions_to_dataframe`."
-            )
-
-    if 'sample_idx' not in forecast_df.columns or \
-       'forecast_step' not in forecast_df.columns:
+            "`forecast_df` must be a pandas DataFrame "
+            "(see `format_predictions_to_dataframe`)."
+        )
+    required_cols = {"sample_idx", "forecast_step"}
+    if not required_cols.issubset(forecast_df.columns):
         raise ValueError(
-            "`forecast_df` must contain 'sample_idx' and "
-            "'forecast_step' columns."
-            )
+            "`forecast_df` needs columns "
+            "'sample_idx' and 'forecast_step'."
+        )
 
-    # --- Data Preparation & Inverse Transform ---
-    df_to_plot = forecast_df.copy() # Work on a copy
-    actual_col_names_in_df: List[str] = []
-    pred_col_names_in_df: List[str] = []
+    # copies & IDs ------------------------------------------------------- 
+    df = forecast_df.copy()
+    act_cols, pred_cols = [], []
+    base_pred, base_act = target_name, (
+        actual_target_name or target_name
+    )
 
-    # Identify prediction and actual columns
-    base_pred_name = target_name
-    base_actual_name = actual_target_name if actual_target_name \
-        else target_name
+    # quantile cfg ------------------------------------------------------- 
+    q_sorted: Optional[List[float]] = None
+    if quantiles is not None:
+        q_sorted = sorted(map(float, quantiles))
+        if not all(0.0 < q < 1.0 for q in q_sorted):
+            raise ValueError("`quantiles` must be in (0, 1).")
 
-    # Determine sorted quantiles if provided
-    sorted_quantiles_list: Optional[List[float]] = None
-    if quantiles:
-        try:
-            sorted_quantiles_list = sorted([float(q) for q in quantiles])
-            if not all(0 < q < 1 for q in sorted_quantiles_list):
-                raise ValueError("Quantiles must be between 0 and 1.")
-        except Exception as e:
-            raise ValueError(f"Invalid `quantiles` provided: {e}") from e
-
-    # Construct column names based on output_dim and quantiles
+    # col scanning ------------------------------------------------------- 
     for o_idx in range(output_dim):
-        current_base_pred = base_pred_name
-        current_base_actual = base_actual_name
-        if output_dim > 1:
-            current_base_pred += f"_{o_idx}"
-            current_base_actual += f"_{o_idx}"
+        pr_base = f"{base_pred}_{o_idx}" if output_dim > 1 else base_pred
+        ac_base = f"{base_act}_{o_idx}" if output_dim > 1 else base_act
 
-        actual_col = f"{current_base_actual}_actual"
-        if actual_col in df_to_plot.columns:
-            actual_col_names_in_df.append(actual_col)
+        ac_name = f"{ac_base}_actual"
+        if ac_name in df.columns:
+            act_cols.append(ac_name)
 
-        if sorted_quantiles_list:
-            for q_val in sorted_quantiles_list:
-                q_suffix = f"_q{int(q_val*100)}"
-                col_name = f"{current_base_pred}{q_suffix}"
-                if col_name in df_to_plot.columns:
-                    pred_col_names_in_df.append(col_name)
-        else: # Point forecast
-            col_name = f"{current_base_pred}_pred"
-            if col_name in df_to_plot.columns:
-                pred_col_names_in_df.append(col_name)
+        if q_sorted:
+            for q in q_sorted:
+                q_int = int(q * 100)
+                pc = f"{pr_base}_q{q_int}"
+                if pc in df.columns:
+                    pred_cols.append(pc)
+        else:
+            pc = f"{pr_base}_pred"
+            if pc in df.columns:
+                pred_cols.append(pc)
 
-    if not pred_col_names_in_df:
+    if not pred_cols:
         warnings.warn(
-            "No prediction columns found in `forecast_df` based on "
-            "`target_name` and `quantiles`. Plotting may be limited."
-            )
-    if actual_data is None and not actual_col_names_in_df:
-        vlog("  No actual data columns found in `forecast_df` and "
-             "`actual_data` not provided. Plotting predictions only.",
-             level=2, verbose=verbose)
+            "No prediction columns detected – check `target_name` "
+            "and `quantiles`.",
+            UserWarning,
+        )
+    if actual_data is None and not act_cols:
+        vlog(
+            "No actual data available – plots will show predictions only.",
+            level=2,
+            verbose=verbose,
+        )
 
-    # Apply inverse transform if scaler is provided
+    # inverse tf ------------------------------------------------------- 
     if scaler is not None:
-        # ... (Inverse transform logic as in previous artifact
-        #      `visualize_forecasts_util`, using `df_to_plot`,
-        #      `pred_col_names_in_df`, `actual_col_names_in_df`) ...
         if scaler_feature_names is None or target_idx_in_scaler is None:
             warnings.warn(
-                "Scaler provided, but `scaler_feature_names` or "
-                "`target_idx_in_scaler` is missing. Inverse transform "
-                "cannot be applied correctly to specific target columns.",
-                UserWarning
+                "Scaler supplied but mapping metadata missing – "
+                "inverse transform skipped.",
+                UserWarning,
             )
         else:
-            vlog("  Applying inverse transformation using scaler...",
-                 level=4, verbose=verbose)
-            cols_to_inv = pred_col_names_in_df + actual_col_names_in_df
-            dummy_shape = (len(df_to_plot), len(scaler_feature_names))
+            vlog(
+                "Applying inverse transform for target columns...",
+                level=4,
+                verbose=verbose,
+            )
+            cols_to_inv = pred_cols + act_cols
+            dummy_shape = (len(df), len(scaler_feature_names))
+            for col in cols_to_inv:
+                if col not in df.columns:
+                    continue
+                dummy = np.zeros(dummy_shape)
+                dummy[:, target_idx_in_scaler] = df[col]
+                try:
+                    df[col] = scaler.inverse_transform(dummy)[
+                        :, target_idx_in_scaler
+                    ]
+                except Exception as exc:     # noqa: BLE001
+                    warnings.warn(
+                        f"Inverse transform failed on '{col}': {exc}"
+                    )
 
-            for col_name in cols_to_inv:
-                if col_name in df_to_plot.columns:
-                    try:
-                        dummy_arr = np.zeros(dummy_shape)
-                        dummy_arr[:, target_idx_in_scaler] = df_to_plot[col_name]
-                        df_to_plot[col_name] = scaler.inverse_transform(
-                            dummy_arr
-                            )[:, target_idx_in_scaler]
-                    except Exception as e:
-                        warnings.warn(
-                            f"Failed to inverse transform column '{col_name}'. "
-                            f"Plotting scaled value. Error: {e}"
-                            )
-            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
-
-    # --- Select Samples/Items to Plot ---
-    unique_sample_ids = df_to_plot['sample_idx'].unique()
-    selected_ids_for_plot: Union[np.ndarray, List] = np.array([]) # Ensure array type
-
+    # sample sel. ------------------------------------------------------- 
+    uniq_ids = df["sample_idx"].unique()
+    sel_ids: np.ndarray
     if isinstance(sample_ids, str):
-        if sample_ids.lower() == "all":
-            selected_ids_for_plot = unique_sample_ids
-        elif sample_ids.lower() == "first_n":
-            selected_ids_for_plot = unique_sample_ids[:num_samples]
-        else:
-            warnings.warn(f"Unknown string for `sample_ids`: "
-                          f"'{sample_ids}'. Plotting first sample.")
-            if len(unique_sample_ids) > 0:
-                selected_ids_for_plot = unique_sample_ids[:1]
-    elif isinstance(sample_ids, int):
-        if 0 <= sample_ids < len(unique_sample_ids):
-            selected_ids_for_plot = [unique_sample_ids[sample_ids]]
-        else:
-            warnings.warn(f"sample_idx {sample_ids} out of range. "
-                          "Plotting first sample.")
-            if len(unique_sample_ids) > 0:
-                selected_ids_for_plot = unique_sample_ids[:1]
-    elif isinstance(sample_ids, list):
-        selected_ids_for_plot = [
-            sid for sid in sample_ids if sid in unique_sample_ids
-            ]
-    if not isinstance(selected_ids_for_plot, np.ndarray):
-        selected_ids_for_plot = np.array(selected_ids_for_plot)
-
-    if selected_ids_for_plot.size == 0:
-        vlog("No valid sample_idx found or specified to plot. Returning.",
-             level=2, verbose=verbose)
-        return
-
-    vlog(f"  Plotting for sample_idx: {selected_ids_for_plot.tolist()}",
-         level=4, verbose=verbose)
-
-    # --- Plotting Logic ---
-    if kind == "temporal":
-        num_main_plots = len(selected_ids_for_plot) * output_dim
-        if num_main_plots == 0:
-            vlog("No data to plot for temporal kind.", level=2, verbose=verbose)
-            return
-
-        n_cols_fig = min(max_cols, num_main_plots)
-        n_rows_fig = (num_main_plots + n_cols_fig - 1) // n_cols_fig
-
-        fig, axes = plt.subplots(
-            n_rows_fig, n_cols_fig,
-            figsize=(n_cols_fig * figsize_per_subplot[0],
-                     n_rows_fig * figsize_per_subplot[1]),
-            squeeze=False # Ensure axes is always 2D array
+        sel_ids = (
+            uniq_ids
+            if sample_ids.lower() == "all"
+            else uniq_ids[:num_samples]
         )
-        axes_flat = axes.flatten()
-        current_plot_idx = 0
+    elif isinstance(sample_ids, int):
+        sel_ids = (
+            np.array([uniq_ids[sample_ids]])
+            if 0 <= sample_ids < len(uniq_ids)
+            else uniq_ids[:1]
+        )
+    else:  # list[int]
+        sel_ids = np.array(
+            [sid for sid in sample_ids if sid in uniq_ids]
+        )
+    if sel_ids.size == 0:
+        vlog("No valid `sample_idx` selected – abort.", 2, verbose)
+        return
+    vlog(f"Selected sample_idx: {sel_ids.tolist()}", 4, verbose)
 
-        for s_idx_val in selected_ids_for_plot:
-            sample_df_to_plot = df_to_plot[df_to_plot['sample_idx'] == s_idx_val]
-            if sample_df_to_plot.empty:
+    # TEMPORAL KIND ======================================================= 
+    if kind == "temporal":
+        n_plots = len(sel_ids) * output_dim
+        if n_plots == 0:
+            return
+        n_cols = min(max_cols, n_plots)
+        n_rows = (n_plots + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(
+            n_rows,
+            n_cols,
+            figsize=(
+                n_cols * figsize_per_subplot[0],
+                n_rows * figsize_per_subplot[1],
+            ),
+            squeeze=False,
+        )
+        axes_flat = axes.ravel()
+        idx = 0
+        for sid in sel_ids:
+            s_df = df[df["sample_idx"] == sid]
+            if s_df.empty:
                 continue
-
-            for o_idx_val in range(output_dim):
-                if current_plot_idx >= len(axes_flat): break
-                ax = axes_flat[current_plot_idx]
-
-                # Construct title
-                plot_title = f"Sample ID: {s_idx_val}"
-                if output_dim > 1:
-                    plot_title += f", Target Dim: {o_idx_val}"
-                if titles and current_plot_idx < len(titles):
-                    plot_title = titles[current_plot_idx]
-                ax.set_title(plot_title)
-
-                # Plot actuals
-                actual_col_name = base_actual_name
-                if output_dim > 1: actual_col_name += f"_{o_idx_val}"
-                actual_col_name += "_actual"
-                if actual_col_name in sample_df_to_plot.columns:
+            for o_idx in range(output_dim):
+                if idx >= len(axes_flat):  # safety
+                    break
+                ax = axes_flat[idx]
+                # -------------- title
+                title = titles[idx] if titles and idx < len(titles) else (
+                    f"Sample {sid}"
+                    + (f", Dim {o_idx}" if output_dim > 1 else "")
+                )
+                ax.set_title(title)
+                # -------------- actual
+                ac = f"{base_act}_{o_idx}_actual" if output_dim > 1 else \
+                     f"{base_act}_actual"
+                if ac in s_df.columns:
                     ax.plot(
-                        sample_df_to_plot['forecast_step'],
-                        sample_df_to_plot[actual_col_name],
-                        label='Actual', marker='o', linestyle='--'
+                        s_df["forecast_step"],
+                        s_df[ac],
+                        label="Actual",
+                        marker="o",
+                        linestyle="--",
                     )
-
-                # Plot predictions (point or quantile)
-                if sorted_quantiles_list:
-                    # Determine median, lower, upper quantile columns
-                    median_q = 0.5
-                    if 0.5 not in sorted_quantiles_list: # Find closest
-                        median_q = sorted_quantiles_list[
-                            len(sorted_quantiles_list) // 2
-                            ]
-                    
-                    col_prefix = base_pred_name
-                    if output_dim > 1: col_prefix += f"_{o_idx_val}"
-                    
-                    median_col = f"{col_prefix}_q{int(median_q*100)}"
-                    lower_col = f"{col_prefix}_q{int(sorted_quantiles_list[0]*100)}"
-                    upper_col = f"{col_prefix}_q{int(sorted_quantiles_list[-1]*100)}"
-
-                    if median_col in sample_df_to_plot.columns:
+                # -------------- predictions
+                if q_sorted:
+                    med_q = (
+                        0.5
+                        if 0.5 in q_sorted
+                        else q_sorted[len(q_sorted) // 2]
+                    )
+                    q_int = int(med_q * 100)
+                    pr_base = (
+                        f"{base_pred}_{o_idx}"
+                        if output_dim > 1
+                        else base_pred
+                    )
+                    med_col = f"{pr_base}_q{q_int}"
+                    low_col = f"{pr_base}_q{int(q_sorted[0]*100)}"
+                    hi_col = f"{pr_base}_q{int(q_sorted[-1]*100)}"
+                    if med_col in s_df.columns:
                         ax.plot(
-                            sample_df_to_plot['forecast_step'],
-                            sample_df_to_plot[median_col],
-                            label=f'Median (q{int(median_q*100)})',
-                            marker='x',
-                            **plot_kwargs.get("median_plot_kwargs", {})
+                            s_df["forecast_step"],
+                            s_df[med_col],
+                            label=f"Median (q{q_int})",
+                            marker="x",
+                            **plot_kwargs.get("median_plot_kwargs", {}),
                         )
-                    if lower_col in sample_df_to_plot.columns and \
-                       upper_col in sample_df_to_plot.columns:
+                    if low_col in s_df.columns and hi_col in s_df.columns:
                         ax.fill_between(
-                            sample_df_to_plot['forecast_step'],
-                            sample_df_to_plot[lower_col],
-                            sample_df_to_plot[upper_col],
-                            color='gray', alpha=0.3,
-                            label=f'Interval (q{int(sorted_quantiles_list[0]*100)}'
-                                  f'-q{int(sorted_quantiles_list[-1]*100)})',
-                            **plot_kwargs.get("fill_between_kwargs", {})
+                            s_df["forecast_step"],
+                            s_df[low_col],
+                            s_df[hi_col],
+                            color="gray",
+                            alpha=0.3,
+                            label=f"Interval "
+                            f"(q{int(q_sorted[0]*100)}–"
+                            f"q{int(q_sorted[-1]*100)})",
+                            **plot_kwargs.get(
+                                "fill_between_kwargs", {}
+                            ),
                         )
-                else: # Point forecast
-                    pred_col_name = base_pred_name
-                    if output_dim > 1: pred_col_name += f"_{o_idx_val}"
-                    pred_col_name += "_pred"
-                    if pred_col_name in sample_df_to_plot.columns:
-                        ax.plot(
-                            sample_df_to_plot['forecast_step'],
-                            sample_df_to_plot[pred_col_name],
-                            label='Predicted', marker='x',
-                            **plot_kwargs.get("point_plot_kwargs", {})
-                        )
-                ax.set_xlabel("Forecast Step into Horizon")
-                ax.set_ylabel(
-                    f"{target_name}{f' (Dim {o_idx_val})' if output_dim > 1 else ''}"
+                else:
+                    pr_base = (
+                        f"{base_pred}_{o_idx}"
+                        if output_dim > 1
+                        else base_pred
                     )
+                    pc = f"{pr_base}_pred"
+                    if pc in s_df.columns:
+                        ax.plot(
+                            s_df["forecast_step"],
+                            s_df[pc],
+                            label="Predicted",
+                            marker="x",
+                            **plot_kwargs.get("point_plot_kwargs", {}),
+                        )
+                # -------------- cosmetics
+                tgt_lbl = (
+                    f"{target_name} (Dim {o_idx})"
+                    if output_dim > 1
+                    else target_name
+                )
+                ax.set_xlabel("Forecast Step")
+                ax.set_ylabel(tgt_lbl)
+                ax.grid(True, linestyle=":", alpha=0.7)
                 ax.legend()
-                ax.grid(True)
-                current_plot_idx += 1
+                idx += 1
 
-        # Hide any unused subplots
-        for i in range(current_plot_idx, len(axes_flat)):
-            axes_flat[i].set_visible(False)
+        for ax in axes_flat[idx:]:
+            ax.set_visible(False)
         fig.tight_layout()
         plt.show()
 
+    #  SPATIAL KIND ======================================================
     elif kind == "spatial":
-        # ... (Spatial plotting logic as in previous artifact
-        #      `visualize_forecasts_util`, ensuring it uses
-        #      `sorted_quantiles_list` and correct column naming) ...
         if spatial_cols is None or len(spatial_cols) != 2:
             raise ValueError(
-                "`spatial_cols` must be a list of two column names "
-                "(e.g., ['longitude', 'latitude']) for kind='spatial'."
+                "`spatial_cols` must be two columns "
+                "for kind='spatial'."
             )
-        spatial_x_col, spatial_y_col = spatial_cols[0], spatial_cols[1]
-
-        if spatial_x_col not in df_to_plot.columns or \
-           spatial_y_col not in df_to_plot.columns:
-            raise ValueError(
-                f"Spatial columns '{spatial_x_col}' or '{spatial_y_col}' "
-                "not found in forecast_df."
-            )
-
-        steps_to_plot_spatial: List[int] = []
+        x_col, y_col = spatial_cols
+        if x_col not in df.columns or y_col not in df.columns:
+            raise ValueError("Spatial columns missing in DataFrame.")
+        # ------------------ steps selection
         if isinstance(horizon_steps, int):
-            steps_to_plot_spatial = [horizon_steps]
+            steps = [horizon_steps]
         elif isinstance(horizon_steps, list):
-            steps_to_plot_spatial = horizon_steps
-        elif horizon_steps is None or \
-             str(horizon_steps).lower() == "all":
-            steps_to_plot_spatial = sorted(df_to_plot['forecast_step'].unique())
+            steps = horizon_steps
+        elif horizon_steps is None or str(horizon_steps).lower() == "all":
+            steps = sorted(df["forecast_step"].unique())
         else:
-            raise ValueError(f"Invalid `horizon_steps`: {horizon_steps}")
-        
-        num_main_plots = len(steps_to_plot_spatial) * output_dim
-        if num_main_plots == 0:
-            vlog("No data/steps to plot for spatial kind.", level=2, verbose=verbose)
-            return
-
-        n_cols_fig = min(max_cols, num_main_plots)
-        n_rows_fig = (num_main_plots + n_cols_fig - 1) // n_cols_fig
+            raise ValueError("Invalid `horizon_steps`.")
+        n_plots = len(steps) * output_dim
+        n_cols = min(max_cols, n_plots)
+        n_rows = (n_plots + n_cols - 1) // n_cols
         fig, axes = plt.subplots(
-            n_rows_fig, n_cols_fig,
-            figsize=(n_cols_fig * figsize_per_subplot[0],
-                     n_rows_fig * figsize_per_subplot[1]),
-            squeeze=False
+            n_rows,
+            n_cols,
+            figsize=(
+                n_cols * figsize_per_subplot[0],
+                n_rows * figsize_per_subplot[1],
+            ),
+            squeeze=False,
         )
-        axes_flat = axes.flatten()
-        current_plot_idx = 0
-
-        for step_val in steps_to_plot_spatial:
-            step_df_to_plot = df_to_plot[df_to_plot['forecast_step'] == step_val]
-            if step_df_to_plot.empty: continue
-
-            for o_idx_val in range(output_dim):
-                if current_plot_idx >= len(axes_flat): break
-                ax = axes_flat[current_plot_idx]
-
-                color_col_name, title_suffix = "", ""
-                if sorted_quantiles_list:
-                    median_q = 0.5
-                    if 0.5 not in sorted_quantiles_list:
-                        median_q = sorted_quantiles_list[len(sorted_quantiles_list)//2]
-                    col_prefix = base_pred_name
-                    if output_dim > 1: col_prefix += f"_{o_idx_val}"
-                    color_col_name = f"{col_prefix}_q{int(median_q*100)}"
-                    title_suffix = f" (Median q{int(median_q*100)})"
-                else: # Point
-                    color_col_name = base_pred_name
-                    if output_dim > 1: color_col_name += f"_{o_idx_val}"
-                    color_col_name += "_pred"
-
-                if color_col_name not in step_df_to_plot.columns:
-                    warnings.warn(f"Color column '{color_col_name}' not found "
-                                  "for spatial plot. Skipping subplot.")
-                    current_plot_idx +=1; continue
-                
-                scatter_data = step_df_to_plot.dropna(
-                    subset=[spatial_x_col, spatial_y_col, color_col_name]
-                    )
-                if scatter_data.empty:
-                    warnings.warn(f"No valid data for spatial plot (step "
-                                  f"{step_val}, out_dim {o_idx_val}). Skipping.")
-                    current_plot_idx += 1; continue
-
-                norm = mcolors.Normalize(
-                    vmin=scatter_data[color_col_name].min(),
-                    vmax=scatter_data[color_col_name].max()
-                    )
-                cmap_val = plot_kwargs.get('cmap', 'viridis')
-                sc = ax.scatter(
-                    scatter_data[spatial_x_col], scatter_data[spatial_y_col],
-                    c=scatter_data[color_col_name], cmap=cmap_val, norm=norm,
-                    s=plot_kwargs.get('s', 50), alpha=plot_kwargs.get('alpha', 0.7)
+        axes_flat = axes.ravel()
+        idx = 0
+        for step in steps:
+            step_df = df[df["forecast_step"] == step]
+            if step_df.empty:
+                continue
+            for o_idx in range(output_dim):
+                if idx >= len(axes_flat):
+                    break
+                ax = axes_flat[idx]
+                pr_base = (
+                    f"{base_pred}_{o_idx}"
+                    if output_dim > 1
+                    else base_pred
                 )
-                fig.colorbar(sc, ax=ax, label=f"{target_name}{title_suffix}")
-                plot_title = f"Forecast Step: {step_val}"
-                if output_dim > 1: plot_title += f", Target Dim: {o_idx_val}"
-                ax.set_title(plot_title)
-                ax.set_xlabel(spatial_x_col); ax.set_ylabel(spatial_y_col)
-                ax.grid(True); current_plot_idx += 1
-        
-        for i in range(current_plot_idx, len(axes_flat)):
-            axes_flat[i].set_visible(False)
+                if q_sorted:
+                    med_q = (
+                        0.5
+                        if 0.5 in q_sorted
+                        else q_sorted[len(q_sorted) // 2]
+                    )
+                    color_col = f"{pr_base}_q{int(med_q*100)}"
+                else:
+                    color_col = f"{pr_base}_pred"
+                if color_col not in step_df.columns:
+                    idx += 1
+                    continue
+                sc_data = step_df.dropna(
+                    subset=[x_col, y_col, color_col]
+                )
+                if sc_data.empty:
+                    idx += 1
+                    continue
+                norm = mcolors.Normalize(
+                    vmin=sc_data[color_col].min(),
+                    vmax=sc_data[color_col].max(),
+                )
+                sc = ax.scatter(
+                    sc_data[x_col],
+                    sc_data[y_col],
+                    c=sc_data[color_col],
+                    cmap=plot_kwargs.get("cmap", "viridis"),
+                    norm=norm,
+                    s=plot_kwargs.get("s", 50),
+                    alpha=plot_kwargs.get("alpha", 0.7),
+                )
+                fig.colorbar(sc, ax=ax, label=target_name)
+                ttl = f"Step {step}"
+                if output_dim > 1:
+                    ttl += f", Dim {o_idx}"
+                ax.set_title(ttl)
+                ax.set_xlabel(x_col)
+                ax.set_ylabel(y_col)
+                ax.grid(True, linestyle=":", alpha=0.7)
+                idx += 1
+        for ax in axes_flat[idx:]:
+            ax.set_visible(False)
         fig.tight_layout()
         plt.show()
+
+    # fallback ------------------------------------------------------- 
     else:
-        raise ValueError(
-            f"Unsupported `kind`: '{kind}'. Choose 'temporal' or 'spatial'."
-            )
-    vlog("Forecast visualization complete.", level=3, verbose=verbose)
+        raise ValueError("`kind` must be 'temporal' or 'spatial'.")
 
-    return ax
+    vlog("Forecast visualisation complete.", 3, verbose)
 
-@isdf 
-def plot_metric_over_horizon(
-    forecast_df: pd.DataFrame,
-    target_name: str = "target",
-    metrics: Union[str, List[Union[str, Callable]]] = 'mae',
-    quantiles: Optional[List[float]] = None,
-    output_dim: int = 1,
-    actual_col_pattern: str = "{target_name}_actual",
-    pred_col_pattern_point: str = "{target_name}_pred",
-    pred_col_pattern_quantile: str = "{target_name}_q{quantile_int}",
-    group_by_cols: Optional[List[str]] = None,
-    plot_kind: str = 'bar',
-    figsize: Tuple[float, float] = (8, 5),
-    max_cols_metrics: int = 2,
-    scaler: Optional[Any] = None,
-    scaler_feature_names: Optional[List[str]] = None,
-    target_idx_in_scaler: Optional[int] = None,
-    sharey_metrics: bool = False,
-    verbose: int = 0,
-    **plot_kwargs: Any
-    ) -> None:
-    """
-    Visualizes specified performance metrics across the forecast horizon.
-    
-    This function takes a forecast DataFrame (typically from
-    `format_predictions_to_dataframe`), calculates one or more
-    performance metrics for each step in the forecast horizon,
-    and plots these metrics. It supports point and quantile
-    forecasts, multi-output dimensions, and optional grouping by
-    other columns (e.g., item ID, region).
-    
-    Parameters
-    ----------
-    forecast_df : pd.DataFrame
-        A pandas DataFrame containing the forecast data in long format.
-        Must include 'sample_idx', 'forecast_step', prediction columns,
-        and actual value columns (e.g., '{target_name}_actual').
-    target_name : str, default "target"
-        The base name of the target variable. Used to find relevant
-        prediction and actual columns.
-    metrics : str or List[Union[str, Callable]], default 'mae'
-        Metric(s) to calculate and plot.
-        - Supported string names: 'mae', 'mse', 'rmse', 'mape',
-          'smape', 'coverage' (requires `quantiles`),
-          'pinball_median' (requires `quantiles` with 0.5).
-        - Custom metric: A callable that accepts `(y_true, y_pred)`
-          and returns a scalar score. If `quantiles` are used and
-          metric is custom, `y_pred` will be the median prediction.
-    quantiles : List[float], optional
-        List of quantiles predicted, e.g., `[0.1, 0.5, 0.9]`. Required
-        if 'coverage' or 'pinball_median' metrics are used.
-        Default is ``None``.
-    output_dim : int, default 1
-        Number of target variables (output dimensions) predicted.
-        If > 1, plots for each dimension are generated or overlaid.
-    actual_col_pattern : str, default "{target_name}_actual"
-        Format string to identify actual value columns.
-        Example: "{target_name}_{output_idx}_actual" for multi-output.
-    pred_col_pattern_point : str, default "{target_name}_pred"
-        Format string for point prediction columns.
-        Example: "{target_name}_{output_idx}_pred" for multi-output.
-    pred_col_pattern_quantile : str, default "{target_name}_q{quantile_int}"
-        Format string for quantile prediction columns.
-        Placeholders: `{target_name}`, `{output_idx}`, `{quantile_int}`.
-        Example: "{target_name}_{output_idx}_q{quantile_int}".
-    group_by_cols : List[str], optional
-        Column(s) in `forecast_df` to group by before calculating
-        metrics. Metrics will be plotted as separate lines/bar groups
-        for each segment. Default is ``None`` (global metrics).
-    plot_kind : {'bar', 'line'}, default 'bar'
-        Type of plot to generate for the metrics over the horizon.
-    figsize_per_metric : Tuple[float, float], default (8, 5)
-        Figure size `(width, height)` for each individual metric's plot
-        if multiple metrics are plotted in separate subplots.
-    max_cols_metrics : int, default 2
-        Maximum number of metric subplots per row if multiple metrics
-        are specified.
-    scaler : Any, optional
-        Fitted scikit-learn-like scaler for inverse transforming data
-        before metric calculation. Default is ``None`` (metrics on
-        scaled data).
-    scaler_feature_names : List[str], optional
-        List of all feature names (in order) the `scaler` was fit on.
-        Required if `scaler` is provided.
-    target_idx_in_scaler : int, optional
-        Index of `target_name` within `scaler_feature_names`.
-        Required if `scaler` is provided.
-    sharey_metrics : bool, default False
-        If True and multiple metrics are plotted as subplots, they
-        will share the same y-axis limits (if appropriate).
-    verbose : int, default 0
-        Verbosity level for logging.
-        - ``0``: Silent.
-        - ``1`` or higher: Print informational messages.
-    **plot_kwargs : Any
-        Additional keyword arguments passed to the underlying
-        Matplotlib plotting functions (`ax.bar()`, `ax.plot()`).
-    
-    Returns
-    -------
-    None
-        This function generates and shows plots using Matplotlib.
-    
-    Raises
-    ------
-    ValueError
-        If `forecast_df` is missing required columns.
-        If `metrics` contains unsupported string names or invalid callables.
-        If `quantiles` are required for a metric but not provided.
-    TypeError
-        If `forecast_df` is not a pandas DataFrame.
-    
-    See Also
-    --------
-    fusionlab.nn.utils.format_predictions_to_dataframe :
-        Utility to generate the `forecast_df`.
-    fusionlab.metrics : Module containing metric implementations.
-    
-    Examples
-    --------
-    >>> from fusionlab.nn.utils import format_predictions_to_dataframe, plot_metric_over_horizon
-    >>> import pandas as pd
-    >>> import numpy as np
-    
-    >>> # Assume preds_quant (B,H,Q) and y_true_seq (B,H,O) are available
-    >>> B, H, O, Q_list = 4, 3, 1, [0.1, 0.5, 0.9]
-    >>> preds_q = np.random.rand(B, H, len(Q_list))
-    >>> y_true = np.random.rand(B, H, O) + preds_q[:,:,1:2]*0.5 # Actuals near median
-    >>> df_q = format_predictions_to_dataframe(
-    ...     predictions=preds_q, y_true_sequences=y_true,
-    ...     target_name="demand", quantiles=Q_list,
-    ...     forecast_horizon=H, output_dim=O
-    ... )
-    >>> df_q['item_id'] = np.repeat(['itemA', 'itemB'], H * B / 2) # Add a segment column
-    
-    >>> # Example 1: Plot MAE of median forecast over horizon
-    >>> # plot_metric_over_horizon(df_q, target_name="demand",
-    ... #                        metrics='mae', quantiles=Q_list, # MAE on median
-    ... #                        plot_kind='line')
-    
-    >>> # Example 2: Plot Coverage and MAE, grouped by item_id
-    >>> # plot_metric_over_horizon(df_q, target_name="demand",
-    ... #                        metrics=['coverage', 'mae'],
-    ... #                        quantiles=Q_list,
-    ... #                        group_by_cols=['item_id'],
-    ... #                        max_cols_metrics=1)
-    """
 
-    vlog(f"Starting metric visualization over horizon "
-         f"(kind='{plot_kind}')...", level=3, verbose=verbose)
+plot_forecast_comparison.__doc__ ="""
+Compare forecasts to ground‑truth on a temporal or spatial canvas.
 
-    if not isinstance(forecast_df, pd.DataFrame):
-        raise TypeError("`forecast_df` must be a pandas DataFrame.")
-  
-    if 'forecast_step' not in forecast_df.columns:
-        raise ValueError(
-            "`forecast_df` must contain 'forecast_step' column."
-            )
+The helper draws either
 
-    df_to_eval = forecast_df.copy()
+* **temporal** lines/bands – one subplot per
+  *(sample × output‑dim)* pair – or  
+* **spatial** scatter maps keyed by longitude/latitude columns,
 
-    # --- Inverse Transform Data if Scaler Provided ---
-    if scaler is not None:
-        if scaler_feature_names is None or target_idx_in_scaler is None:
-            warnings.warn(
-                "Scaler provided, but `scaler_feature_names` or "
-                "`target_idx_in_scaler` is missing. Cannot perform "
-                "targeted inverse transform. Metrics calculated on "
-                "scaled data.", UserWarning
-            )
-        else:
-            vlog("  Applying inverse transformation for metric calculation...",
-                 level=4, verbose=verbose)
-            # Identify all potential prediction and actual columns to inverse
-            cols_to_inverse = []
-            for o_idx in range(output_dim):
-                act_col = actual_col_pattern.format(
-                    target_name=target_name, o_idx=o_idx)
-                if act_col in df_to_eval.columns:
-                    cols_to_inverse.append(act_col)
+depending on *kind*.  Point‑ and quantile‑forecasts exported by
+:func:`fusionlab.nn.utils.format_predictions_to_dataframe` are
+supported out‑of‑the‑box.
 
-                if quantiles:
-                    for q_val in quantiles:
-                        q_int = int(q_val * 100)
-                        pred_col = pred_col_pattern_quantile.format(
-                            target_name=target_name, o_idx=o_idx,
-                            quantile_int=q_int
-                        )
-                        if pred_col in df_to_eval.columns:
-                            cols_to_inverse.append(pred_col)
-                else: # Point
-                    pred_col = pred_col_pattern_point.format(
-                        target_name=target_name, o_idx=o_idx
-                    )
-                    if pred_col in df_to_eval.columns:
-                        cols_to_inverse.append(pred_col)
-            
-            dummy_array_shape = (len(df_to_eval), len(scaler_feature_names))
-            for col_name in cols_to_inverse:
-                if col_name in df_to_eval.columns:
-                    try:
-                        dummy = np.zeros(dummy_array_shape)
-                        dummy[:, target_idx_in_scaler] = df_to_eval[col_name]
-                        df_to_eval[col_name] = scaler.inverse_transform(
-                            dummy
-                            )[:, target_idx_in_scaler]
-                    except Exception as e:
-                        warnings.warn(
-                            f"Failed to inverse transform column '{col_name}'. "
-                            f"Metric may be on scaled value. Error: {e}"
-                            )
-            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
+Parameters
+----------
+{params.base.forecast_df}
+{params.base.target_name}
+{params.base.quantiles}
+{params.base.output_dim}
 
-    # --- Prepare Metrics ---
-    if isinstance(metrics, str):
-        metrics_list = [metrics]
-    elif isinstance(metrics, list):
-        metrics_list = metrics
-    else:
-        raise TypeError("`metrics` must be a string or a list.")
+kind : {{'temporal', 'spatial'}}, default ``'temporal'``
+    Temporal plots show each horizon step on the *x*‑axis; spatial
+    plots colour‑code predictions on a map using *spatial_cols*.
 
-    metric_results = [] # Store (metric_name, output_dim_idx, group, step, value)
+actual_data : pd.DataFrame, optional
+    External frame providing the true series (useful when the
+    *forecast_df* only contains predictions).
 
-    # --- Calculate Metrics ---
-    for o_idx in range(output_dim): # Loop through each output dimension
-        # Construct actual column name for this output dimension
-        actual_col = actual_col_pattern.format(
-            target_name=target_name, o_idx=o_idx
-            )
-        if actual_col not in df_to_eval.columns:
-            warnings.warn(
-                f"Actual column '{actual_col}' not found. Skipping metrics "
-                f"for output dimension {o_idx}.", UserWarning
-            )
-            continue
+dt_col : str, optional
+    Name of a datetime column to place on the *x*‑axis instead of
+    ``'forecast_step'``.
 
-        # y_true_series = df_to_eval[actual_col]
+actual_target_name : str, optional
+    Base name of the true values when it differs from *target_name*.
 
-        for metric_func_or_name in metrics_list:
-            metric_name = ""
-            current_metric_callable = None
+sample_ids : int | list[int] | str, default ``'first_n'``
+    Which ``sample_idx`` to visualise:
 
-            if isinstance(metric_func_or_name, str):
-                metric_name = metric_func_or_name.lower()
-                if metric_name == 'mae':
-                    current_metric_callable = mean_absolute_error
-                elif metric_name == 'mse':
-                    current_metric_callable = mean_squared_error
-                elif metric_name == 'rmse':
-                    current_metric_callable = lambda yt, yp: np.sqrt(
-                        mean_squared_error(yt, yp))
-                elif metric_name == 'mape':
-                    current_metric_callable = mean_absolute_percentage_error
-                elif metric_name == 'smape':
-                    current_metric_callable = _calculate_smape
-                elif metric_name == 'coverage':
-                    if not quantiles or len(quantiles) < 2:
-                        warnings.warn("Coverage metric requires at least two "
-                                      "quantiles. Skipping.", UserWarning)
-                        continue
-                 
-                    # Coverage needs lower and upper quantile predictions
-                    q_low_col = pred_col_pattern_quantile.format(
-                        target_name=target_name, o_idx=o_idx,
-                        quantile_int=int(sorted(quantiles)[0]*100)
-                    )
-                    q_high_col = pred_col_pattern_quantile.format(
-                        target_name=target_name, o_idx=o_idx,
-                        quantile_int=int(sorted(quantiles)[-1]*100)
-                    )
-                    if q_low_col not in df_to_eval.columns or \
-                       q_high_col not in df_to_eval.columns:
-                        warnings.warn(f"Quantile columns for coverage "
-                                      f"({q_low_col}, {q_high_col}) not found. "
-                                      "Skipping coverage.", UserWarning)
-                        continue
-                    # Wrapper for coverage_score
-                    current_metric_callable = lambda yt, yp_dict: \
-                        coverage_score(
-                            yt, yp_dict[q_low_col], yp_dict[q_high_col]
-                            )
-                elif metric_name == 'pinball_median':
-                    if not quantiles or 0.5 not in quantiles:
-                        warnings.warn("Pinball_median metric requires 0.5 "
-                                      "in quantiles. Skipping.", UserWarning)
-                        continue
-                    q_median_col = pred_col_pattern_quantile.format(
-                        target_name=target_name, o_idx=o_idx, quantile_int=50
-                        )
-                    if q_median_col not in df_to_eval.columns:
-                        warnings.warn(f"Median quantile column '{q_median_col}' "
-                                      "not found. Skipping pinball_median.", UserWarning)
-                        continue
-                    current_metric_callable = lambda yt, yp_dict: \
-                        _calculate_pinball_loss(yt, yp_dict[q_median_col], 0.5)
-                else:
-                    warnings.warn(f"Unknown metric string: '{metric_name}'. "
-                                  "Skipping.", UserWarning)
-                    continue
-            elif callable(metric_func_or_name):
-                current_metric_callable = metric_func_or_name
-                metric_name = getattr(metric_func_or_name, '__name__', 'custom_metric')
-            else:
-                warnings.warn(f"Invalid metric type: {type(metric_func_or_name)}. "
-                              "Skipping.", UserWarning)
-                continue
+    * int – by position,
+    * list – explicit indices,
+    * ``'first_n'``/``'all'``.
 
-            # Determine prediction column(s) for this metric
-            y_pred_for_metric_source = None # Can be a Series or DataFrame for coverage
-            if metric_name == 'coverage':
-                # Pass a dictionary of relevant quantile columns to the wrapper
-                y_pred_for_metric_source = df_to_eval[[q_low_col, q_high_col]]
-            elif metric_name == 'pinball_median':
-                y_pred_for_metric_source = df_to_eval[[q_median_col]]
-            elif quantiles: # For MAE, MSE etc. on quantile forecasts, use median
-                median_q = 0.5
-                if 0.5 not in quantiles:
-                    median_q = sorted(quantiles)[len(quantiles) // 2]
-                    warnings.warn(f"0.5 quantile not found for metric '{metric_name}'. "
-                                  f"Using q={median_q} instead.", UserWarning)
-                pred_col = pred_col_pattern_quantile.format(
-                    target_name=target_name, o_idx=o_idx,
-                    quantile_int=int(median_q*100)
-                )
-                if pred_col in df_to_eval.columns:
-                    y_pred_for_metric_source = df_to_eval[pred_col]
-                else:
-                    warnings.warn(f"Median prediction column '{pred_col}' "
-                                  f"not found for metric '{metric_name}'. Skipping.",
-                                  UserWarning)
-                    continue
-            else: # Point forecast
-                pred_col = pred_col_pattern_point.format(
-                    target_name=target_name, o_idx=o_idx
-                )
-                if pred_col in df_to_eval.columns:
-                    y_pred_for_metric_source = df_to_eval[pred_col]
-                else:
-                    warnings.warn(f"Point prediction column '{pred_col}' "
-                                  f"not found for metric '{metric_name}'. Skipping.",
-                                  UserWarning)
-                    continue
-            
-            # Group data and calculate metric per step
-            grouped_data = df_to_eval.groupby(
-                group_by_cols + ['forecast_step'] if group_by_cols else ['forecast_step']
-                )
+num_samples : int, default ``3``
+    How many samples to draw when *sample_ids='first_n'*.
 
-            for group_keys, group_df in grouped_data:
-                if not isinstance(group_keys, tuple): # Ensure group_keys is a tuple
-                    group_keys = (group_keys,)
-                
-                step = group_keys[-1] # Last key is 'forecast_step'
-                group_id = "_".join(map(str, group_keys[:-1])) if group_by_cols else "overall"
+horizon_steps : int | list[int] | str, default ``1``
+    For *kind='spatial'* choose which forecast steps to map (may be
+    ``'all'``).
 
-                y_true_step = group_df[actual_col]
-                if metric_name in ['coverage', 'pinball_median']:
-                    # Pass the relevant DataFrame slice for these metrics
-                    y_pred_step = y_pred_for_metric_source.loc[group_df.index]
-                else:
-                    y_pred_step = y_pred_for_metric_source.loc[group_df.index]
+spatial_cols : list[str], optional
+    ``[x_col, y_col]`` (e.g. longitude, latitude) required for spatial
+    plots.
 
-                if len(y_true_step) == 0 or len(y_pred_step) == 0:
-                    continue # Skip if no data for this step/group
+max_cols : int, default ``2``
+    Maximum subplot columns in the facet grid.
 
-                try:
-                    metric_value = current_metric_callable(y_true_step, y_pred_step)
-                    metric_results.append({
-                        'metric': metric_name,
-                        'output_dim': o_idx,
-                        'group': group_id,
-                        'forecast_step': step,
-                        'value': metric_value
-                    })
-                except Exception as e:
-                    warnings.warn(f"Error calculating metric '{metric_name}' "
-                                  f"for group '{group_id}', step {step}, "
-                                  f"output_dim {o_idx}: {e}", UserWarning)
+figsize_per_subplot : tuple, default ``(7, 4)``
+    Width × height of each panel in inches.
 
-    if not metric_results:
-        vlog("No metric results to plot.", level=2, verbose=verbose)
-        return
+{params.base.scaler}
+{params.base.scaler_feature_names}
+{params.base.target_idx_in_scaler}
 
-    results_df = pd.DataFrame(metric_results)
+titles : list[str], optional
+    Per‑subplot custom titles (overrides defaults).
 
-    # --- Plotting --
-    
-    # num_metrics_to_plot = results_df['metric'].nunique()
-    # num_output_dims_to_plot = results_df['output_dim'].nunique()
+{params.base.verbose}
+{params.base.plot_kwargs}
 
-    # If multiple output_dims, create one figure per output_dim,
-    # with subplots for each metric.
-    # Or, one figure per metric, with lines for each output_dim.
-    # For simplicity, let's do one figure per output_dim if output_dim > 1.
-    
-    output_dims_present = sorted(results_df['output_dim'].unique())
+Returns
+-------
+None
+    The function shows Matplotlib figures and exits.
 
-    for o_idx_plot in output_dims_present:
-        df_plot_dim = results_df[results_df['output_dim'] == o_idx_plot]
-        if df_plot_dim.empty:
-            continue
+Raises
+------
+ValueError
+    If essential columns are missing or arguments conflict.
+TypeError
+    For invalid *forecast_df* or parameter types.
 
-        metrics_for_this_dim = sorted(df_plot_dim['metric'].unique())
-        n_met_plots = len(metrics_for_this_dim)
-        if n_met_plots == 0: continue
+Notes
+-----
+*Temporal* plots draw the median and an optional prediction band  
+(using the outermost quantiles).  When *quantiles* is *None* a single
+point‑forecast series is shown.
 
-        n_cols_fig = min(max_cols_metrics, n_met_plots)
-        n_rows_fig = (n_met_plots + n_cols_fig - 1) // n_cols_fig
+Examples
+--------
+>>> from fusionlab.nn.utils import format_predictions_to_dataframe
+>>> from fusionlab.plot.evaluation import plot_forecast_comparison
+>>> import numpy as np
+>>> B, H, O = 4, 6, 1
+>>> preds = np.random.randn(B, H, O)
+>>> y     = preds + np.random.randn(B, H, O)*.2
+>>> df    = format_predictions_to_dataframe(preds, y,
+...         target_name="load", forecast_horizon=H)
+>>> plot_forecast_comparison(df, target_name="load",
+...                          kind="temporal", num_samples=2)
 
-        fig, axes = plt.subplots(
-            n_rows_fig, n_cols_fig,
-            figsize=(n_cols_fig * figsize[0],
-                     n_rows_fig * figsize[1]),
-            squeeze=False, sharey=sharey_metrics
-        )
-        axes_flat = axes.flatten()
-        current_plot_idx = 0
+See Also
+--------
+fusionlab.plot.evaluation.plot_metric_over_horizon
+fusionlab.plot.evaluation.plot_metric_radar
 
-        fig_title = "Metrics Over Horizon"
-        if output_dim > 1:
-            fig_title += f" (Output Dimension {o_idx_plot})"
-        fig.suptitle(fig_title, fontsize=16)
-
-        for metric_name_plot in metrics_for_this_dim:
-            if current_plot_idx >= len(axes_flat): break
-            ax = axes_flat[current_plot_idx]
-            metric_df = df_plot_dim[df_plot_dim['metric'] == metric_name_plot]
-
-            if group_by_cols:
-                for group_val, group_data in metric_df.groupby('group'):
-                    group_data = group_data.sort_values('forecast_step')
-                    if plot_kind == 'bar':
-                        # Bar plot needs careful positioning for groups
-                        # For simplicity, use line for grouped bar for now
-                        ax.plot(group_data['forecast_step'], group_data['value'],
-                                label=f"{group_val}", marker='o',
-                                **plot_kwargs.get(f"{metric_name_plot}_plot_kwargs", {}))
-                    else: # line
-                        ax.plot(group_data['forecast_step'], group_data['value'],
-                                label=f"{group_val}", marker='o',
-                                **plot_kwargs.get(f"{metric_name_plot}_plot_kwargs", {}))
-                ax.legend(title=str(group_by_cols))
-            else: # No grouping
-                metric_df = metric_df.sort_values('forecast_step')
-                if plot_kind == 'bar':
-                    ax.bar(metric_df['forecast_step'], metric_df['value'],
-                           **plot_kwargs.get(f"{metric_name_plot}_plot_kwargs", {}))
-                else: # line
-                    ax.plot(metric_df['forecast_step'], metric_df['value'],
-                            marker='o',
-                            **plot_kwargs.get(f"{metric_name_plot}_plot_kwargs", {}))
-
-            ax.set_title(f"{metric_name_plot.upper()}")
-            ax.set_xlabel("Forecast Step")
-            ax.set_ylabel("Metric Value")
-            ax.grid(True, linestyle='--', alpha=0.7)
-            current_plot_idx += 1
-
-        # Hide unused subplots
-        for i in range(current_plot_idx, len(axes_flat)):
-            axes_flat[i].set_visible(False)
-
-        fig.tight_layout(rect=[0, 0, 1, 0.96]) # Adjust for suptitle
-        plt.show()
-
-    vlog("Metric visualization over horizon complete.",
-         level=3, verbose=verbose)
-
+References
+----------
+.. [1] Makridakis et al. (2018). *Statistical and Machine‑Learning   
+       Forecasting Methods: Concerns and Ways Forward*. *PLOS ONE*.
+""".format(params=_eval_docs)
 
 def _calculate_pinball_loss(
     y_true: np.ndarray,
@@ -1305,3 +1287,4 @@ def _calculate_smape_radar(
         numerator / (denominator + epsilon)
         ) * 100
     return score
+

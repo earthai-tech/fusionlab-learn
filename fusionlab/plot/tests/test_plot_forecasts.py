@@ -13,9 +13,10 @@ try:
     # Assuming plot_forecasts and format_predictions_to_dataframe
     # are in fusionlab.nn.utils
     from fusionlab.nn.utils import (
-        plot_forecasts,
         format_predictions_to_dataframe
     )
+    from fusionlab.plot.forecast import plot_forecasts 
+    
     # For type hinting if KERAS_BACKEND is not fully set up for tests
     if hasattr(tf, 'Tensor'):
         Tensor = tf.Tensor
