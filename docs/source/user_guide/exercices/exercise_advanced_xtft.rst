@@ -23,9 +23,6 @@ multi-horizon quantile forecasts.
 
 Let's begin!
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -37,7 +34,6 @@ installed. For visualizations, `matplotlib` is also needed.
 
    pip install fusionlab-learn matplotlib scikit-learn joblib
 
----
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

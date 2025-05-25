@@ -26,10 +26,6 @@ from :mod:`fusionlab.plot.evaluation`.
 Forecasting Metrics (`fusionlab.metrics`)
 ------------------------------------------
 
-.. contents:: Metrics Overview
-   :local:
-   :depth: 1
-
 .. _metric_coverage_score:
 
 coverage_score
@@ -128,7 +124,7 @@ highlighting which points are covered.
 
 **Expected Plot (`plot_coverage`):**
 
-.. figure:: ../images/metric_coverage_plot.png
+.. figure:: ../../images/metric_coverage_plot.png
    :alt: Visualization of Prediction Interval Coverage
    :align: center
    :width: 80%
@@ -171,6 +167,7 @@ average absolute difference between all pairs of ensemble members
 the average CRPS over all provided samples.
 
 **When to Use:**
+
 Use CRPS when your model produces an ensemble of possible future
 trajectories rather than quantiles or a single point forecast. It's a
 comprehensive measure for evaluating the overall quality of such
@@ -263,7 +260,7 @@ scores (`kind='scores_histogram'`).
 
 **Expected Plot (`plot_crps` - ECDF):**
 
-.. figure:: ../images/metric_crps_ecdf_plot.png
+.. figure:: ../../images/metric_crps_ecdf_plot.png
    :alt: Visualization of CRPS Ensemble ECDF
    :align: center
    :width: 70%
@@ -273,7 +270,7 @@ scores (`kind='scores_histogram'`).
 
 **Expected Plot (`plot_crps` - Histogram):**
 
-.. figure:: ../images/metric_crps_histogram_plot.png
+.. figure:: ../../images/metric_crps_histogram_plot.png
    :alt: Visualization of CRPS Scores Histogram
    :align: center
    :width: 70%
@@ -305,6 +302,7 @@ Where:
    prediction interval for sample :math:`i`.
 
 **When to Use:**
+
 Use this metric alongside `coverage_score` to evaluate probabilistic
 forecasts that produce prediction intervals. While high coverage is
 good, if the intervals are excessively wide, they may not be very
@@ -335,6 +333,7 @@ useful. A good model balances high coverage with reasonably narrow
 **Visualization with `plot_metric_over_horizon` or `plot_metric_radar`:**
 
 The Mean Interval Width can be visualized:
+
 * **Over the forecast horizon:** Use
   :func:`~fusionlab.plot.evaluation.plot_metric_over_horizon`.
   This requires calculating MIW for each forecast step.
@@ -397,7 +396,7 @@ For a simple bar chart of the overall MIW, you can use Matplotlib directly.
 
 **Expected Plot (Overall MIW Bar Chart):**
 
-.. figure:: ../images/metric_miw_plot.png
+.. figure:: ../../images/metric_miw_plot.png
    :alt: Visualization of Mean Interval Width
    :align: center
    :width: 60%
@@ -424,6 +423,7 @@ can be desirable for interpretability and actionability.
 
 For a single forecast trajectory :math:`\hat{y}_1, \dots, \hat{y}_T`
 (where :math:`T` is the horizon length):
+
 .. math::
    \mathrm{PSS}_{\text{trajectory}} = \frac{1}{T-1} \sum_{t=2}^{T}
    |\hat{y}_{t} - \hat{y}_{t-1}|
@@ -488,7 +488,7 @@ if you have PSS calculated for different categories.
 
 **Expected Plot (Overall PSS Bar Chart):**
 
-.. figure:: ../images/metric_pss_plot.png
+.. figure:: ../../images/metric_pss_plot.png
    :alt: Visualization of Prediction Stability Score
    :align: center
    :width: 60%
@@ -583,7 +583,7 @@ nominal quantile level.
 
 **Expected Plot (`plot_quantile_calibration`):**
 
-.. figure:: ../images/metric_qce_plot.png
+.. figure:: ../../images/metric_qce_plot.png
    :alt: Quantile Calibration Reliability Diagram
    :align: center
    :width: 70%
@@ -622,6 +622,7 @@ lag is used for the naive model).
  - :math:`U > 1`: Forecast is worse than the naive model.
 
 **When to Use:**
+
 Use Theil's U to understand if your sophisticated forecasting model is
 actually providing more value than a very simple baseline (like
 predicting the last known value). It's a good sanity check, especially
@@ -676,7 +677,7 @@ can display Theil's U as a bar chart, often with a reference line at 1.0.
 
 **Expected Plot (`plot_theils_u_score`):**
 
-.. figure:: ../images/metric_theils_u_plot.png
+.. figure:: ../../images/metric_theils_u_plot.png
    :alt: Theil's U Statistic Visualization
    :align: center
    :width: 60%
@@ -772,7 +773,7 @@ evolve over the time steps.
 
 **Expected Plot (`plot_time_weighted_metric` for TWA):**
 
-.. figure:: ../images/metric_twa_plot.png
+.. figure:: ../../images/metric_twa_plot.png
    :alt: Time-Weighted Accuracy Profile
    :align: center
    :width: 70%
@@ -802,6 +803,7 @@ WIS itself considers both sharpness (interval width) and calibration
 The WIS for a single observation :math:`y`, median :math:`m`, and
 :math:`K` prediction intervals (defined by lower bounds :math:`l_k`
 and upper bounds :math:`u_k` with nominal coverages :math:`1-\alpha_k`) is:
+
 .. math::
    \mathrm{WIS}(y, m, \text{intervals}) = \frac{1}{K+0.5} \left(
      |y-m| + \sum_{k=1}^K \frac{\alpha_k}{2} \mathrm{IS}_{\alpha_k}(y, l_k, u_k)
@@ -814,6 +816,7 @@ be checked for precise interpretation.)
 
 TWIS then calculates :math:`\mathrm{WIS}_{iot}` for each sample :math:`i`,
 output :math:`o`, and time step :math:`t`, and applies time weights:
+
 .. math::
    \mathrm{TWIS}_{io} = \sum_{t=1}^{T_{steps}} w_t \cdot \mathrm{WIS}_{iot}
 
@@ -889,7 +892,7 @@ with `metric_type='interval_score'`.
 
 **Expected Plot (`plot_time_weighted_metric` for TWIS):**
 
-.. figure:: ../images/metric_twis_plot.png
+.. figure:: ../../images/metric_twis_plot.png
    :alt: Time-Weighted Interval Score Profile
    :align: center
    :width: 70%
@@ -915,6 +918,7 @@ errors at certain points (e.g., early predictions in a multi-step
 forecast) are considered more critical than errors at later steps.
 
 For a single sequence :math:`i` and output :math:`o`:
+
 .. math::
    \mathrm{TWMAE}_{io} = \sum_{t=1}^{T_{steps}}
    w_t | \hat{y}_{i,o,t} - y_{i,o,t} |
@@ -987,7 +991,7 @@ with `metric_type='mae'`.
 
 **Expected Plot (`plot_time_weighted_metric` for TW-MAE):**
 
-.. figure:: ../images/metric_twmae_plot.png
+.. figure:: ../../images/metric_twmae_plot.png
    :alt: Time-Weighted MAE Profile
    :align: center
    :width: 70%
@@ -1023,6 +1027,7 @@ Where :math:`m` is the median forecast, and :math:`\mathrm{IS}_{\alpha_k}`
 is the interval score for the k-th prediction interval :math:`(l_k, u_k)`
 with nominal coverage :math:`1-\alpha_k`. The interval score component is
 typically:
+
 .. math::
    \mathrm{IS}_{\alpha_k}(y, l_k, u_k) = (u_k - l_k) +
    \frac{2}{\alpha_k}(l_k - y)\mathbf{1}\{y < l_k\} +
@@ -1088,7 +1093,7 @@ chart, especially when comparing different models or segments.
 
 **Expected Plot (Overall WIS Bar Chart):**
 
-.. figure:: ../images/metric_wis_plot.png
+.. figure:: ../../images/metric_wis_plot.png
    :alt: Visualization of Weighted Interval Score
    :align: center
    :width: 60%

@@ -31,10 +31,6 @@ data preparation and model interaction for this TFT variant.
 
 Let's get started!
 
-.. contents::
-   :local:
-   :depth: 2
-
 Prerequisites
 -------------
 

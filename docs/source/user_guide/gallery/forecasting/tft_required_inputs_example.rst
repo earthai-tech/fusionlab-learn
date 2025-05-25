@@ -16,6 +16,7 @@ We will perform a single-step point forecast, showcasing the specific
 data preparation and model interaction for this TFT variant.
 
 The workflow includes:
+
 1.  Generating synthetic data with distinct static, dynamic, and
     future features for multiple items.
 2.  Defining feature roles, encoding categorical static features, and
@@ -29,9 +30,6 @@ The workflow includes:
 6.  Making predictions using the mandatory three-part input structure.
 7.  Visualizing the results.
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -335,7 +333,7 @@ interpretable results.
 
 **Example Output Plot:**
 
-.. figure:: ../../images/forecasting_tft_required_inputs.png
+.. figure:: ../../../images/forecasting_tft_required_inputs.png
    :alt: Stricter TFT Point Forecast
    :align: center
    :width: 80%

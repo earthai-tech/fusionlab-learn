@@ -190,8 +190,7 @@ def xtft_tuner(
     **kws
 ) -> Tuple[Optional[Dict], Optional[Model], Optional[kt.Tuner]]:
     """
-    Fine-tunes XTFT, SuperXTFT, TFT (stricter), or
-    TemporalFusionTransformer (flexible) models.
+    Fine-tunes XTFT, SuperXTFT, or TFT (stricter) models.
 
     """
     if not HAS_KT: # Check if Keras Tuner was imported

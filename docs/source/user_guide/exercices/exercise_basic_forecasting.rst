@@ -25,9 +25,6 @@ dynamic (past observed) features to predict a single future time step.
 
 Let's get started!
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -40,7 +37,7 @@ also needed.
 
    pip install fusionlab-learn matplotlib
 
----
+
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -357,8 +354,8 @@ data and plot these predictions against the actual values.
 Discussion of Exercise
 ----------------------
 In this exercise, you learned how to:
-* Prepare simple time series data for a forecasting model using
-  ``create_sequences``.
+
+* Prepare simple time series data for a forecasting model using create_sequences``.
 * Instantiate the flexible
   :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`
   for a point forecasting task, specifying only the

@@ -1,7 +1,7 @@
 .. _user_guide_forecast_tuner:
 
 =======================
-Hyperparameter Tuning
+Forecast Tuner Guide
 =======================
 
 Finding the optimal set of hyperparameters for deep learning models
@@ -301,8 +301,8 @@ This example tunes the flexible TFT, providing only dynamic inputs.
 
    <hr>
 
-Internal Model Builder (`_model_builder_factory`)
---------------------------------------------------
+Internal Model Builder 
+-------------------------
 :API Reference: :func:`~fusionlab.nn.forecast_tuner._model_builder_factory` (Note: private function)
 
 

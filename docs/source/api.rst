@@ -203,17 +203,15 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.generate_forecast_with
    ~fusionlab.nn.utils.forecast_single_step
    ~fusionlab.nn.utils.forecast_multi_step
-   ~fusionlab.nn.utils.visualize_forecasts
    ~fusionlab.nn.utils.step_to_long
    ~fusionlab.nn.utils.format_predictions_to_dataframe 
-   ~fusionlab.nn.utils.prepare_model_inputs
-   ~fusionalb.nn.utils.plot_forecasts  
+   ~fusionlab.nn.utils.prepare_model_inputs  
 
 
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
 ------------------------------------------------------
 A curated set of plotting utilities that turn the raw numbers returned  
-by :pymod:`fusionlab.metrics` into clear, publication‑quality figures.  
+by `fusionlab.metrics` into clear, publication‑quality figures.  
 They cover point‑forecast accuracy, interval **sharpness & coverage**,  
 ensemble calibration, temporal stability, and more – all tailored to  
 time‑series / probabilistic‑forecast workflows.
@@ -222,17 +220,17 @@ time‑series / probabilistic‑forecast workflows.
    :toctree: _autosummary/metrics
    :nosignatures:
 
-   ~fusionlab.evaluation.plot_coverage
-   ~fusionlab.evaluation.plot_crps
-   ~fusionlab.evaluation.plot_forecast_comparison
-   ~fusionlab.evaluation.plot_mean_interval_width
-   ~fusionlab.evaluation.plot_metric_over_horizon
-   ~fusionlab.evaluation.plot_metric_radar
-   ~fusionlab.evaluation.plot_prediction_stability
-   ~fusionlab.evaluation.plot_quantile_calibration
-   ~fusionlab.evaluation.plot_theils_u_score
-   ~fusionlab.evaluation.plot_time_weighted_metric
-   ~fusionlab.evaluation.plot_weighted_interval_score
+   ~fusionlab.plot.evaluation.plot_coverage
+   ~fusionlab.plot.evaluation.plot_crps
+   ~fusionlab.plot.evaluation.plot_forecast_comparison
+   ~fusionlab.plot.evaluation.plot_mean_interval_width
+   ~fusionlab.plot.evaluation.plot_metric_over_horizon
+   ~fusionlab.plot.evaluation.plot_metric_radar
+   ~fusionlab.plot.evaluation.plot_prediction_stability
+   ~fusionlab.plot.evaluation.plot_quantile_calibration
+   ~fusionlab.plot.evaluation.plot_theils_u_score
+   ~fusionlab.plot.evaluation.plot_time_weighted_metric
+   ~fusionlab.plot.evaluation.plot_weighted_interval_score
 
 
 Quick‑look forecast helpers (`fusionlab.plot.forecast`)

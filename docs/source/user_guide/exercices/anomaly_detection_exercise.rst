@@ -22,9 +22,6 @@ data.
 
 Let's get started!
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -37,7 +34,6 @@ also needed.
 
    pip install fusionlab-learn matplotlib scikit-learn
 
----
 
 Exercise 1: Unsupervised Anomaly Detection with LSTM Autoencoder
 ----------------------------------------------------------------

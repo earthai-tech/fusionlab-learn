@@ -42,7 +42,7 @@ Explore the sections below to learn how to effectively use
    :maxdepth: 2
    :caption: Training & Evaluation
 
-   forecast_tuner
+   forecast_tuner/index
    evaluation/index
    visualizing_with_kdiagram
 

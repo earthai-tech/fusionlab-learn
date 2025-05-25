@@ -31,11 +31,7 @@ If you have `fusionlab-learn` already and only need `k-diagram`:
 
    pip install k-diagram matplotlib
 
-.. contents::
-   :local:
-   :depth: 2
 
----
 
 Preparing Forecast Data for K-Diagram
 -------------------------------------
@@ -57,7 +53,7 @@ For quantile forecasts, it might have `my_target_q10`,
 The following examples will simulate such DataFrames and then use
 `fusionlab.kdiagram` for visualization.
 
----
+
 
 Example 1: Actual vs. Predicted Plot
 ------------------------------------
@@ -153,7 +149,7 @@ Imagine you have point forecasts from a ``fusionlab-learn`` model.
    ...
    Plot saved to docs/source/images/fusionlab_kdiag_actual_vs_pred.png
 
-.. figure:: ../../images/fusionlab_kdiag_actual_vs_pred.png
+.. figure:: ../images/fusionlab_kdiag_actual_vs_pred.png
    :alt: Actual vs. Predicted Plot using K-Diagram with FusionLab Output
    :align: center
    :width: 70%
@@ -161,7 +157,7 @@ Imagine you have point forecasts from a ``fusionlab-learn`` model.
    Polar plot comparing actual sales to FusionLab model predictions,
    visualized using `k-diagram` via `fusionlab.kdiagram`.
 
----
+
 
 Example 2: Coverage Diagnostic Plot
 --------------------------------------
@@ -235,7 +231,7 @@ You have quantile forecasts (e.g., q10, q50, q90) from a ``fusionlab-learn`` mod
    ...
    Plot saved to docs/source/images/fusionlab_kdiag_coverage.png
 
-.. figure:: ../../images/fusionlab_kdiag_coverage.png
+.. figure:: ../images/fusionlab_kdiag_coverage.png
    :alt: Coverage Diagnostic Plot using K-Diagram
    :align: center
    :width: 70%
@@ -243,7 +239,7 @@ You have quantile forecasts (e.g., q10, q50, q90) from a ``fusionlab-learn`` mod
    Point-wise coverage diagnostic for FusionLab quantile forecasts,
    visualized using `k-diagram` via `fusionlab.kdiagram`.
 
----
+
 
 Example 3: Model Drift Plot
 ---------------------------
@@ -320,7 +316,7 @@ Data is in a wide format where each horizon's quantiles are columns.
    Visualization of prediction interval drift across forecast horizons,
    using `k-diagram` via `fusionlab.kdiagram`.
 
----
+
 
 Example 4: Prediction Velocity Plot
 -----------------------------------
@@ -390,7 +386,7 @@ Data is wide, with median forecasts for different horizons as columns.
 
    Visualization of prediction velocity using `k-diagram` via `fusionlab.kdiagram`.
 
----
+
 
 Example 5: Taylor Diagram for Model Comparison
 ----------------------------------------------
@@ -452,7 +448,6 @@ Comparing point predictions from two ``fusionlab-learn`` models.
    Taylor diagram comparing FusionLab models, visualized using
    `k-diagram` via `fusionlab.kdiagram`.
 
----
 
 This guide provides a starting point for using `k-diagram` with
 ``fusionlab-learn``. Explore the `k-diagram` documentation for more

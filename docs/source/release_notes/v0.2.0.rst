@@ -29,12 +29,13 @@ New Features
   stratified sub-sample.
 * |Feature| Added new synthetic data generators to
   :mod:`fusionlab.datasets.make`:
-    * :func:`~fusionlab.datasets.make.make_trend_seasonal_data`:
-      Generates univariate series with configurable trend and multiple
-      seasonal components.
-    * :func:`~fusionlab.datasets.make.make_multivariate_target_data`:
-      Generates multi-series data with static/dynamic/future features
-      and multiple, potentially interdependent, target variables.
+ 
+  * :func:`~fusionlab.datasets.make.make_trend_seasonal_data`:
+    Generates univariate series with configurable trend and multiple
+    seasonal components.
+  * :func:`~fusionlab.datasets.make.make_multivariate_target_data`:
+    Generates multi-series data with static/dynamic/future features
+    and multiple, potentially interdependent, target variables.
 
 API Changes & Enhancements
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -47,34 +48,36 @@ API Changes & Enhancements
 * |Enhancement| Major refactoring of input validation with the introduction of
   :func:`~fusionlab.nn._tensor_validation.validate_model_inputs`.
   This function provides:
-    * Robust graph-compatible checks for tensor ranks, feature
-      dimensions, batch sizes, and time dimension consistency using
-      TensorFlow operations.
-    * A `mode` parameter (`'strict'` or `'soft'`) to control validation
-      depth.
-    * Specialized internal helper
-      (`_validate_tft_flexible_inputs_soft_mode`) to intelligently
-      infer input roles for the flexible
-      :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`
-      (when ``model_name='tft_flex'`` and ``mode='soft'``).
-    * Consistent return order of `(static, dynamic, future)` processed
-      tensors, requiring updates in model `call` methods that use it.
+  
+  * Robust graph-compatible checks for tensor ranks, feature
+    dimensions, batch sizes, and time dimension consistency using
+    TensorFlow operations.
+  * A `mode` parameter (`'strict'` or `'soft'`) to control validation
+    depth.
+  * Specialized internal helper
+    (`_validate_tft_flexible_inputs_soft_mode`) to intelligently
+    infer input roles for the flexible
+    :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`
+    (when ``model_name='tft_flex'`` and ``mode='soft'``).
+  * Consistent return order of `(static, dynamic, future)` processed
+    tensors, requiring updates in model `call` methods that use it.
 * |Enhancement| Improved :mod:`fusionlab.nn.forecast_tuner`
   (:func:`~fusionlab.nn.forecast_tuner.xtft_tuner` and its internal
   `_model_builder_factory`):
-    * Correctly handles `model_name` options: `"xtft"`, `"superxtft"`,
-      `"tft"` (stricter), and `"tft_flex"` (flexible
-      `TemporalFusionTransformer`).
-    * Ensures appropriate input validation path is chosen based on
-      `model_name` before calling `validate_model_inputs`.
-    * Passes only relevant parameters to model constructors, especially
-      for the flexible `TemporalFusionTransformer`.
-    * Correctly derives and passes input dimensions to the model
-      builder, respecting `None` for optional inputs in `tft_flex`.
-    * Robustly handles boolean hyperparameters (e.g., `use_batch_norm`,
-      `use_residuals`) and list-like hyperparameters (e.g., `scales`)
-      for Keras Tuner, ensuring correct type casting before model
-      instantiation.
+  
+  * Correctly handles `model_name` options: `"xtft"`, `"superxtft"`,
+    `"tft"` (stricter), and `"tft_flex"` (flexible
+    `TemporalFusionTransformer`).
+  * Ensures appropriate input validation path is chosen based on
+    `model_name` before calling `validate_model_inputs`.
+  * Passes only relevant parameters to model constructors, especially
+    for the flexible `TemporalFusionTransformer`.
+  * Correctly derives and passes input dimensions to the model
+    builder, respecting `None` for optional inputs in `tft_flex`.
+  * Robustly handles boolean hyperparameters (e.g., `use_batch_norm`,
+    `use_residuals`) and list-like hyperparameters (e.g., `scales`)
+    for Keras Tuner, ensuring correct type casting before model
+    instantiation.
 * |Enhancement| Refined :meth:`~fusionlab.nn.XTFT.call` and
   :meth:`~fusionlab.nn.SuperXTFT.call` to use the
   :func:`~fusionlab.nn._tensor_validation.align_temporal_dimensions`
@@ -85,13 +88,14 @@ API Changes & Enhancements
 * |Enhancement| Removed redundant concatenation of `embeddings_with_pos`
   in the final feature fusion stage of :meth:`~fusionlab.nn.XTFT.call`.
 * |Enhancement| Refined :class:`~fusionlab.nn.transformers.DummyTFT`:
-    * `call`: Now correctly uses `validate_model_inputs` for its
-      two-input (static, dynamic) signature by passing appropriate
-      parameters for `future_covariate_dim` (None) and `model_name`.
-      Output layer logic for quantiles with `output_dim > 1` now
-      correctly stacks to `(B, H, Q, O)`.
-    * `get_config`: Includes `_future_input_dim_config` (what user passed)
-      and `output_dim`.
+
+  * `call`: Now correctly uses `validate_model_inputs` for its
+    two-input (static, dynamic) signature by passing appropriate
+    parameters for `future_covariate_dim` (None) and `model_name`.
+    Output layer logic for quantiles with `output_dim > 1` now
+    correctly stacks to `(B, H, Q, O)`.
+  * `get_config`: Includes `_future_input_dim_config` (what user passed)
+    and `output_dim`.
 * |Enhancement| Made :func:`fusionlab.utils.deps_utils.get_versions`
   more resilient by attempting to import `importlib_metadata` as a
   fallback if `importlib.metadata` (Python 3.8+) is not found.

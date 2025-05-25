@@ -1,8 +1,8 @@
 . _example_hyperparameter_tuning:
 
-======================================================
-Hyperparameter Tuning with Keras Tuner
-======================================================
+======================
+Tuning Examples
+======================
 
 Finding optimal hyperparameters is crucial for maximizing the
 performance of complex models like
@@ -25,9 +25,6 @@ We will cover:
     demonstrating its ability to handle optional inputs (e.g., only
     dynamic features).
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------

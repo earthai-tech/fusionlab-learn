@@ -19,9 +19,6 @@ The workflow includes:
 4.  Training the model for a few epochs.
 5.  Making a sample prediction and visualizing the results.
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -203,8 +200,8 @@ then plot the predictions against actual values.
    # The target for sequence `i` corresponds to data point `time[i + sequence_length]`
    # The validation data starts at `val_start_idx` in the `sequences` array.
    plot_val_time_axis = time[
-       val_start_index + sequence_length : \
-       val_start_index + sequence_length + len(val_actuals_for_plot)
+       val_start_idx + sequence_length : \
+       val_start_idx + sequence_length + len(val_actuals_for_plot)
        ]
 
    # Ensure plot_val_time_axis has the same length as predictions/actuals
@@ -213,7 +210,7 @@ then plot the predictions against actual values.
 
    plt.figure(figsize=(14, 7))
    # Plot a portion of original data for context
-   context_end_idx = val_start_index + sequence_length + num_plot_points
+   context_end_idx = val_start_idx + sequence_length + num_plot_points
    plt.plot(time[:context_end_idx], amplitude[:context_end_idx],
             label='Original Data Context', alpha=0.6, color='lightblue')
 
@@ -221,13 +218,13 @@ then plot the predictions against actual values.
    plt.plot(plot_val_time_axis[:num_plot_points],
             val_actuals_for_plot[:num_plot_points, 0, 0],
             label=f'Actual Validation Data (H=1)',
-            linestyle='--', marker='o', color='green')
+            linestyle='--', marker='o', color='cyan')
 
    # Plot predictions on validation set (first horizon step, first output dim)
    plt.plot(plot_val_time_axis[:num_plot_points],
             val_predictions_scaled[:num_plot_points, 0, 0],
             label=f'Predicted Validation Data (H=1)',
-            marker='x', color='red')
+            marker='D', color='orange', linestyle =':')
 
    plt.title('Flexible TFT Point Forecast (Dynamic Input Only)')
    plt.xlabel('Time')
@@ -246,7 +243,7 @@ then plot the predictions against actual values.
 
 **Example Output Plot:**
 
-.. figure:: ../../images/forecasting_basic_tft_flexible_point_forecast.png
+.. figure:: ../../../images/forecasting_basic_tft_flexible_point_forecast.png
    :alt: Basic TFT Point Forecast Example
    :align: center
    :width: 80%
@@ -265,6 +262,7 @@ then plot the predictions against actual values.
        ensures point forecasting. ``output_dim=1`` is specified.
    4.  **Model Compilation:** Standard 'mse' loss.
    5.  **Model Training:**
+   
        * **Input Format:** The input `X` is passed as a list
          ``[None, sequences, None]``. This matches the expected
          `[static_input, dynamic_input, future_input]` order, with
@@ -272,5 +270,4 @@ then plot the predictions against actual values.
    6.  **Prediction:** Input for prediction is also packaged as
        ``[None, sample_input_dynamic, None]``.
    7.  **Visualization:** The plot shows predictions against actuals on
-       the validation set. The ``.. figure::`` directive displays the
-       saved plot image.
+       the validation set. 

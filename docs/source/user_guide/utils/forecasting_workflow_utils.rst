@@ -16,7 +16,7 @@ workflow using three key utilities:
     Transforms raw model predictions (point or quantile) into a
     structured, long-format pandas DataFrame, suitable for analysis,
     storage, and further visualization.
-3.  :func:`~fusionlab.plot.evaluation.plot_forecasts`: Visualizes the
+3.  :func:`~fusionlab.plot.forecast.plot_forecasts`: Visualizes the
     formatted forecast DataFrame, allowing comparison of predictions
     against actuals in both temporal and spatial dimensions.
     *(Note: This function resides in `fusionlab.plot.evaluation` but
@@ -25,9 +25,6 @@ workflow using three key utilities:
 By using these utilities together, you can significantly simplify your
 forecasting code, making it more robust and easier to manage.
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -62,9 +59,8 @@ target values.
        prepare_model_inputs,
        format_predictions_to_dataframe
    )
-   # Assuming plot_forecasts is in fusionlab.plot.evaluation
    try:
-       from fusionlab.plot.evaluation import plot_forecasts
+       from fusionlab.plot.forecast import plot_forecasts
    except ImportError:
        # Fallback if plot_forecasts is in nn.utils for some versions
        from fusionlab.nn.utils import plot_forecasts
