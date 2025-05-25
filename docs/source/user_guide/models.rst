@@ -134,10 +134,11 @@ This example shows how to instantiate the flexible
    * If a particular input type is not used (e.g., no static features),
      pass ``None`` for that element in the list.
      For example:
-       * Dynamic only: ``[None, dynamic_array, None]``
-       * Dynamic + Static: ``[static_array, dynamic_array, None]``
-       * Dynamic + Future: ``[None, dynamic_array, future_array]``
-       * All three: ``[static_array, dynamic_array, future_array]``
+     
+     * Dynamic only: ``[None, dynamic_array, None]``
+     * Dynamic + Static: ``[static_array, dynamic_array, None]``
+     * Dynamic + Future: ``[None, dynamic_array, future_array]``
+     * All three: ``[static_array, dynamic_array, future_array]``
    * The ``dynamic_features`` input is always required.
    * The model's ``__init__`` parameters (`static_input_dim`,
      `dynamic_input_dim`, `future_input_dim`) determine which of these
@@ -152,7 +153,7 @@ Formulation
 
 Here, we describe the core mathematical concepts behind the
 Temporal Fusion Transformer, following the architecture outlined
-in the original paper [Lim21]_. This provides insight into how different
+in the original paper [1]_. This provides insight into how different
 inputs are processed and transformed to generate forecasts.
 
 **Notation:**
@@ -246,6 +247,7 @@ inputs are processed and transformed to generate forecasts.
     The final features corresponding to the forecast horizon
     :math:`\{\delta_t\}_{t=T+1}^{T+\tau}` are passed through linear layers
     to produce predictions.
+    
     * **Quantiles:** Separate linear layers for each quantile :math:`q`:
       
       .. math:: 
@@ -259,11 +261,6 @@ static context, and generate interpretable multi-horizon forecasts
 with uncertainty estimates.
 
 
-.. [Lim21] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
-   Temporal fusion transformers for interpretable multi-horizon
-   time series forecasting. *International Journal of Forecasting*,
-   37(4), 1748-1764. (Also arXiv:1912.09363)
-
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
@@ -274,11 +271,11 @@ TFT (Stricter Implementation - All Inputs Required)
 ---------------------------------------------------
 :API Reference: :class:`~fusionlab.nn.transformers.TFT`
 
-*(Note: This refers to a specific ``TFT`` class implementation within
+*(Note: This refers to a specific* ``TFT`` *class implementation within
 fusionlab that enforces stricter input requirements compared to the
-more flexible ``TemporalFusionTransformer`` described above. It assumes
+more flexible* ``TemporalFusionTransformer`` *described above. It assumes
 static, dynamic past, and known future inputs are always provided and
-are not ``None``).*
+are not* ``None``*).*
 
 This class implements the Temporal Fusion Transformer (TFT)
 architecture, closely following the structure described in the
@@ -349,13 +346,12 @@ easier to follow.
   order: ``[static_inputs, dynamic_inputs, future_inputs]``.
   Expected shapes are generally:
   
-    * `static_inputs`: :math:`(B, D_s)`
-    * `dynamic_inputs`: :math:`(B, T_{past}, D_{dyn})`
-    * `future_inputs`: :math:`(B, T_{future}, D_{fut})` *(Note: The
-      required length* :math:`T_{future}` *depends on how inputs are
-      combined internally before the LSTM. Ensure data preparation
-      aligns, e.g., using*
-      :func:`~fusionlab.nn.utils.reshape_xtft_data`).
+  * `static_inputs`: :math:`(B, D_s)`
+  * `dynamic_inputs`: :math:`(B, T_{past}, D_{dyn})`
+  * `future_inputs`: :math:`(B, T_{future}, D_{fut})` *(Note: The
+    required length* :math:`T_{future}` *depends on how inputs are
+    combined internally before the LSTM. Ensure data preparation
+    aligns, e.g., using* :func:`~fusionlab.nn.utils.reshape_xtft_data`).
 * **Categorical Features:** This implementation assumes inputs
   are *numeric*. Handling categorical features requires modifications
   (e.g., adding embedding layers before VSNs).
@@ -637,12 +633,13 @@ learning, multi-scale analysis, and integrated anomaly detection.
 * **Integrated Anomaly Detection:** Offers multiple strategies
   (via ``anomaly_detection_strategy`` parameter) for incorporating
   anomaly information into the training process:
-  * **`'feature_based'`:** Learns anomaly scores from internal features
+  
+  * **'feature_based':** Learns anomaly scores from internal features
     using dedicated attention/scoring layers.
-  * **`'prediction_based'`:** Calculates anomaly scores based on
+  * **'prediction_based':** Calculates anomaly scores based on
     prediction errors using a specialized loss function
     (:func:`~fusionlab.nn.losses.prediction_based_loss`).
-  * **`'from_config'`:** Uses pre-computed anomaly scores provided via
+  * **'from_config':** Uses pre-computed anomaly scores provided via
     the ``anomaly_config`` dictionary, integrated into the loss via
     :class:`~fusionlab.nn.components.AnomalyLoss` and potentially
     :func:`~fusionlab.nn.losses.combined_total_loss`.
@@ -679,6 +676,7 @@ modifications here. For full details, please refer to the source code
 and the documentation of individual components (linked above).
 
 1.  **Input Processing:**
+
     * Static inputs (:math:`s`) undergo :class:`~fusionlab.nn.components.LearnedNormalization` 
       and are processed by internal GRNs/Dense layers (`static_dense`,
       `static_dropout`, `grn_static`).
@@ -688,45 +686,47 @@ and the documentation of individual components (linked above).
     * Optional residual connections enhance gradient flow.
 
 2.  **Multi-Scale LSTM:**
+
     * Dynamic inputs (:math:`x_t` or embeddings derived from them) are
       processed by :class:`~fusionlab.nn.components.MultiScaleLSTM` using
       different temporal ``scales``.
     * Outputs are aggregated (e.g., 'last' step) into `lstm_features`.
 
 3.  **Advanced Attention Layers:**
+
     * :class:`~fusionlab.nn.components.HierarchicalAttention` processes dynamic and future inputs.
-    * :class:`~fusionlab.nn.components.CrossAttention` models interactions
-      between dynamic inputs and combined embeddings.
+    * :class:`~fusionlab.nn.components.CrossAttention` models interactions between dynamic inputs and combined embeddings.
     * :class:`~fusionlab.nn.components.MemoryAugmentedAttention` uses
       hierarchical attention output to query an external memory.
     * GRNs are applied after each attention block (`grn_attention_*`).
 
 4.  **Feature Fusion:**
+
     * Processed static features, aggregated `lstm_features`, and outputs
-      from the various attention mechanisms are concatenated.
+    from the various attention mechanisms are concatenated.
     * :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`
-      is applied to integrate these diverse feature streams.
+    is applied to integrate these diverse feature streams.
 
 5.  **Dynamic Windowing & Aggregation:**
+
     * :class:`~fusionlab.nn.components.DynamicTimeWindow` selects recent
       time steps from the fused features.
     * :func:`~fusionlab.nn.components.aggregate_time_window_output`
       collapses the time dimension based on `final_agg` strategy.
 
 6.  **Decoding and Output:**
-    * :class:`~fusionlab.nn.components.MultiDecoder` transforms the
-      aggregated features for each horizon step.
+
+    * :class:`~fusionlab.nn.components.MultiDecoder` transforms the aggregated features for each horizon step.
     * A final GRN pipeline (`grn_decoder`) processes decoder outputs.
     * :class:`~fusionlab.nn.components.QuantileDistributionModeling` maps
       these features to the final quantile or point predictions
       (:math:`\hat{y}_{t, q}` / :math:`\hat{y}_t`).
 
 7.  **Anomaly Detection Integration:**
+
     * **Feature-Based:** Internal `anomaly_attention`, `anomaly_projection`,
-      and `anomaly_scorer` layers compute `anomaly_scores` during the
-      forward pass.
-    * **Config-Based:** Pre-computed `anomaly_scores` are provided via
-      `anomaly_config`.
+      and `anomaly_scorer` layers compute `anomaly_scores` during the forward pass.
+    * **Config-Based:** Pre-computed `anomaly_scores` are provided via `anomaly_config`.
     * **Loss Calculation:** If `anomaly_scores` exist,
       :class:`~fusionlab.nn.components.AnomalyLoss` calculates an anomaly term,
       which is added via ``model.add_loss`` (used in feature/config modes).
