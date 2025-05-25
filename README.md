@@ -9,7 +9,7 @@
 <p align="center"><em>🔥🧪 A Modular Library for Temporal Fusion Transformer (TFT) Variants &amp; Beyond</em></p>
 
 
-[![PyPI Version](https://img.shields.io/pypi/v/fusionlab?color=orange)](https://pypi.org/project/fusion-lab/)
+![PyPI - Version](https://img.shields.io/pypi/v/fusionlab-learn)
 [![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
 ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/.github%2Fworkflows%2Fpython-package-conda.yml)
 [![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
@@ -142,7 +142,7 @@ print("Prediction shape:", predictions.shape)
 # Expected: (16, 5, 1) -> (Batch, Horizon, NumOutputs)
 ````
 
-*(See the `Quickstart Guide <https://fusion-lab.readthedocs.io/en/latest/quickstart.html>`_ for a more detailed walkthrough.)*
+*(See the* [*Quickstart Guide*](https://fusion-lab.readthedocs.io/en/latest/quickstart.html) *for a more detailed walkthrough.)*
 
 -----
 
@@ -151,7 +151,7 @@ print("Prediction shape:", predictions.shape)
 For detailed usage, tutorials, API reference, and explanations of the
 underlying concepts, please see the full documentation:
 
-**[Read the Documentation](https://fusion-lab.readthedocs.io/**
+**[Read the Documentation](https://fusion-lab.readthedocs.io/)**
 
 -----
 
