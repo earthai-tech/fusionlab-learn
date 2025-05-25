@@ -45,7 +45,7 @@ _extras_require = {
         "flake8",
         # other dev tools like black, isort, mypy can be added
     ],
-    "kdiagram": [ 
+    "k-diagram": [ 
         "k-diagram>=1.0.3", 
     ],
     "full": [ 
