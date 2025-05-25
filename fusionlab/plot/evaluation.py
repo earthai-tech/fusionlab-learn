@@ -39,7 +39,7 @@ from ._evaluation import (
     plot_theils_u_score,
     plot_time_weighted_metric,
     plot_weighted_interval_score
-    )
+ )
 
 __all__=[
      'plot_coverage',
