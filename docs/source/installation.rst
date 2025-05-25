@@ -69,7 +69,7 @@ To install ``fusionlab-learn`` with the `k-diagram` extra:
 
 .. code-block:: bash
 
-   pip install fusionlab-learn[kdiagram]
+   pip install fusionlab-learn[k-diagram]
 
 This will install `fusionlab-learn` and also pull in the `k-diagram`
 package, enabling you to use visualization utilities that depend on it

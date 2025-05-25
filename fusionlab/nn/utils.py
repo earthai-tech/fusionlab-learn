@@ -5947,7 +5947,7 @@ def generate_forecast_with(
             verbose=verbose
         )
 
-step_to_long.__doc__=r"""\
+step_to_long.__doc__=r"""
 Convert a multi-step forecast DataFrame from wide to long format.
 
 This function transforms a DataFrame containing multi-step forecast

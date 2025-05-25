@@ -23,7 +23,7 @@ which will also install the `k-diagram` package and `matplotlib`:
 
 .. code-block:: bash
 
-   pip install fusionlab-learn[kdiagram]
+   pip install fusionlab-learn[k-diagram]
 
 If you have `fusionlab-learn` already and only need `k-diagram`:
 
