@@ -11,8 +11,8 @@ from numbers import Real, Integral
 from typing import List, Optional, Union, Dict, Any  
 import numpy as np 
 
-from .._fusionlog import fusionlog
-from ..api.docs import doc 
+from .._fusionlog import fusionlog, OncePerMessageFilter
+from ..api.docs import _shared_docs, doc 
 from ..api.property import NNLearner 
 from ..compat.sklearn import validate_params, Interval, StrOptions 
 from ..core.handlers import param_deprecated_message 
@@ -20,8 +20,7 @@ from ..utils.deps_utils import ensure_pkg
 from ..decorators import Appender
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ._nn_docs import _shared_docs 
-
+ 
 if KERAS_BACKEND:
     LSTM = KERAS_DEPS.LSTM
     Dense = KERAS_DEPS.Dense
@@ -51,7 +50,6 @@ if KERAS_BACKEND:
     tf_float32=KERAS_DEPS.float32
     tf_constant=KERAS_DEPS.constant 
     tf_square=KERAS_DEPS.square 
-    tf_autograph=KERAS_DEPS.autograph
     tf_GradientTape=KERAS_DEPS.GradientTape
     tf_unstack =KERAS_DEPS.unstack
     tf_errors=KERAS_DEPS.errors 
@@ -60,12 +58,14 @@ if KERAS_BACKEND:
     tf_zeros_like=KERAS_DEPS.zeros_like
     tf_squeeze = KERAS_DEPS.squeeze
     
+    tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
     from ..compat.tf import optional_tf_function 
     from ._tensor_validation import validate_anomaly_scores 
-    from ._tensor_validation import validate_xtft_inputs
+    from ._tensor_validation import validate_model_inputs
     from ._tensor_validation import validate_anomaly_config 
+    from ._tensor_validation import align_temporal_dimensions
     
     from .losses import ( 
         combined_quantile_loss, 
@@ -98,6 +98,7 @@ if KERAS_BACKEND:
 DEP_MSG = dependency_message('nn.transformers') 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
+logger.addFilter(OncePerMessageFilter())
 
 @register_keras_serializable('fusionlab.nn.transformers', name="XTFT")
 @doc (
@@ -162,8 +163,8 @@ class XTFT(Model, NNLearner):
             None
         ],
         "scales": ['array-like', StrOptions({"auto"}),  None],
-        "use_batch_norm": [bool],
-        "use_residuals": [bool],
+        "use_batch_norm": [bool,  Interval(Integral, 0, 1, closed="both")],
+        "use_residuals": [bool, Interval(Integral, 0, 1, closed="both")],
         "final_agg": [StrOptions({"last", "average",  "flatten"})],
         "anomaly_detection_strategy": [
             StrOptions({"prediction_based", "feature_based", "from_config"}), 
@@ -251,7 +252,7 @@ class XTFT(Model, NNLearner):
         self.anomaly_loss_weight=anomaly_loss_weight
 
         # Layers
-        self.learned_normalization = LearnedNormalization()
+        
         self.multi_modal_embedding = MultiModalEmbedding(embed_dim)
         
         # Add PositionalEncoding layer
@@ -335,7 +336,7 @@ class XTFT(Model, NNLearner):
             anomaly_loss_fn=self.anomaly_loss_layer
         )
         # ---------------------------------------------------------------------
- 
+        self.learned_normalization = LearnedNormalization()
         self.static_dense = Dense(hidden_units, activation=self.activation)
         self.static_dropout = Dropout(dropout_rate)
         if self.use_batch_norm:
@@ -351,8 +352,7 @@ class XTFT(Model, NNLearner):
         )
     
         self.residual_dense = Dense(2 * embed_dim) if use_residuals else None
-        # self.final_dense = Dense(output_dim)
-        
+
     def _init_feature_based_components(self):
         """
         Initializes architecture components for feature-based
@@ -427,13 +427,16 @@ class XTFT(Model, NNLearner):
           - Memory-augmented attention
           - Dynamic time windowing
         """
-        static_input , dynamic_input, future_input = validate_xtft_inputs (
+        static_input , dynamic_input, future_input = validate_model_inputs (
             inputs =inputs,
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim= self.dynamic_input_dim, 
             future_covariate_dim= self.future_input_dim, 
+            forecast_horizon=self.forecast_horizon, 
+            mode='strict', # XTFT is generally strict
+            model_name='xtft', # For specific validation logic if any
+            verbose= 1 if logger.level <= 10 else 0 # DEBUG level
         )
-  
         # Normalize and process static features
         normalized_static = self.learned_normalization(
             static_input, 
@@ -466,14 +469,30 @@ class XTFT(Model, NNLearner):
             static_features, 
             training=training
         ) 
-        
-        # Embeddings for dynamic and future covariates
+   
+        # --- Prepare inputs for MultiModalEmbedding ---
+        # dynamic_input is the reference for T_past (lookback period).
+        # future_input needs its time dimension aligned to dynamic_input's.
+        logger.debug("  Aligning temporal inputs for MultiModalEmbedding...")
+        _, future_input_for_embedding = align_temporal_dimensions(
+            tensor_ref=dynamic_input,       # Shape (B, T_past, D_dyn)
+            tensor_to_align=future_input,   # Shape (B, T_future_total, D_fut)
+            mode='slice_to_ref',            # Slice future if longer
+            name="future_input_for_mme"
+        )
+        # future_input_for_embedding now has shape (B, T_past, D_fut)
+        logger.debug(
+            f"    Dynamic for MME: {dynamic_input.shape}, "
+            f"Future for MME: {future_input_for_embedding.shape}"
+        )
+
         embeddings = self.multi_modal_embedding(
-            [dynamic_input, future_input],
+            [dynamic_input, future_input_for_embedding], # Pass ALIGNED inputs
             training=training
         )
+        # Output of MultiModalEmbedding: (B, T_past, CombinedEmbedDim)
         logger.debug(
-            f"Embeddings Shape: {embeddings.shape}"
+            f"  Embeddings shape after MultiModalEmbedding: {embeddings.shape}"
         )
     
         # Add positional encoding to embeddings
@@ -518,8 +537,17 @@ class XTFT(Model, NNLearner):
         )
     
         # Attention mechanisms
+       # For HierarchicalAttention, if it adds outputs,
+       # inputs need same time dim.
+        # We use dynamic_input (T_past) and the already sliced
+        # future_input_for_embedding (T_past).
+        logger.debug(
+            "  Aligning temporal inputs for HierarchicalAttention..."
+            )
+        # No further alignment needed if using future_input_for_embedding
+        # which is already aligned to dynamic_input's T_past.
         hierarchical_att = self.hierarchical_attention(
-            [dynamic_input, future_input],
+            [dynamic_input, future_input_for_embedding], # Both (B, T_past, Feats)
             training=training
         )
         logger.debug(
@@ -1090,7 +1118,7 @@ class SuperXTFT(XTFT):
         
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training=False, **kwargs):
-        static_input, dynamic_input, future_input = validate_xtft_inputs(
+        static_input, dynamic_input, future_input = validate_model_inputs(
             inputs=inputs,
             static_input_dim=self.static_input_dim, 
             dynamic_input_dim=self.dynamic_input_dim, 
@@ -1145,8 +1173,25 @@ class SuperXTFT(XTFT):
             f"Static Features Shape: {static_features.shape}"
         )
         # Embeddings for dynamic and future covariates using selected_dynamic
+        
+        # --- Prepare inputs for MultiModalEmbedding ---
+        # dynamic_input is the reference for T_past (lookback period).
+        # future_input needs its time dimension aligned to dynamic_input's.
+        # In principle no need , just here for consistency
+        logger.debug("  Aligning temporal inputs for MultiModalEmbedding...")
+        _, selected_future_input_for_embedding = align_temporal_dimensions(
+            tensor_ref=selected_dynamic,       # Shape (B, T_past, D_dyn)
+            tensor_to_align=selected_future,   # Shape (B, T_future_total, D_fut)
+            mode='slice_to_ref',            # Slice future if longer
+            name="future_input_for_mme"
+        )
+        # future_input_for_embedding now has shape (B, T_past, D_fut)
+        logger.debug(
+            f"    Dynamic for MME: {selected_dynamic.shape}, "
+            f"Future for MME: {selected_future_input_for_embedding.shape}"
+        )
         embeddings = self.multi_modal_embedding(
-            [selected_dynamic, selected_future],
+            [selected_dynamic, selected_future_input_for_embedding],
             training=training
         )
         logger.debug(
@@ -1191,7 +1236,7 @@ class SuperXTFT(XTFT):
         
         # Attention mechanisms with integrated GRNs
         hierarchical_att = self.hierarchical_attention(
-            [selected_dynamic, future_input],
+            [selected_dynamic, selected_future_input_for_embedding],
             training=training
         )
         logger.debug(

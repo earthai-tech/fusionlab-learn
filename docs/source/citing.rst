@@ -4,14 +4,14 @@
 How to Cite
 =============
 
-If you use ``fusionlab`` in your research, projects, or publications,
+If you use ``fusionlab-learn`` in your research, projects, or publications,
 we appreciate citations! Proper acknowledgment helps support the
 project's development and allows others to find the work.
 
 Citing the Software
 -------------------
 
-To cite the ``fusionlab`` software package itself, please include the
+To cite the ``fusionlab-learn`` software package itself, please include the
 version number you used, the authors/contributors, the title, year,
 and the project's URL. You can find the installed version using:
 
@@ -26,9 +26,9 @@ and the project's URL. You can find the installed version using:
 .. code-block:: bibtex
 
    @software{fusionlab_software,
-     author       = {Kouadio, Kouao Laurent and Liu, Zhuo and Liu, Jianxin and Bizimana, Pierre and Liu, Wenxiang and {FusionLab Contributors}},
-     title        = {{FusionLab: Igniting Next-Gen Fusion Models}},
-     url          = {https://github.com/earthai-tech/fusionlab/},
+     author       = {Kouadio, Kouao Laurent and {FusionLab Contributors}},
+     title        = {{FusionLab-Learn: Igniting Next-Gen Fusion Models}},
+     url          = {https://github.com/earthai-tech/fusionlab-learn/},
      version      = {X.Y.Z},
      year         = {YYYY}
    }
@@ -38,7 +38,7 @@ Citing the XTFT Research Paper
 --------------------------------
 
 The core concepts, design, and evaluation of the **Extreme Temporal
-Fusion Transformer (XTFT)** model, a key component of ``fusionlab``,
+Fusion Transformer (XTFT)** model, a key component of ``fusionlab-learn``,
 are detailed in the following research paper:
 
 .. note::
@@ -67,4 +67,4 @@ If your work heavily relies on the specific methodologies or findings
 presented in the XTFT paper, we recommend citing **both** the software
 package and the research paper.
 
-Thank you for acknowledging ``fusionlab``!
+Thank you for acknowledging ``fusionlab-learn``!

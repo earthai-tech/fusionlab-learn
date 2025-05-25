@@ -20,6 +20,7 @@ from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 
 if KERAS_BACKEND:
     Layer = KERAS_DEPS.Layer
+    Model = KERAS_DEPS.Model
     LSTM = KERAS_DEPS.LSTM
     Dense = KERAS_DEPS.Dense
     Dropout = KERAS_DEPS.Dropout
@@ -55,7 +56,7 @@ __all__ = [
 @register_keras_serializable(
     'fusionlab.nn.anomaly_detection', name='LSTMAutoencoderAnomaly'
 )
-class LSTMAutoencoderAnomaly(Layer, NNLearner): 
+class LSTMAutoencoderAnomaly(Model, NNLearner): 
     """LSTM Autoencoder for time series reconstruction-based anomaly
        detection."""
 
@@ -129,6 +130,35 @@ class LSTMAutoencoderAnomaly(Layer, NNLearner):
             self.bottleneck_dense_c = Dense(
                 self.latent_dim, activation=self.intermediate_activation,
                 name="bottleneck_c"
+            )
+            
+        # Conceptual addition to LSTMAutoencoderAnomaly.__init__
+        # ... after defining encoder and bottleneck layers ...
+        self.project_state_h = None
+        self.project_state_c = None
+        
+        # Default if not bidirectional and no bottleneck
+        encoder_output_state_dim = self.lstm_units 
+        if self.use_bidirectional_encoder:
+            encoder_output_state_dim *= 2
+        
+        # If bottleneck is used, its output (latent_dim) becomes the state passed
+        if self.use_bottleneck_dense:
+            dim_for_decoder_state_input = self.latent_dim
+        else:
+            dim_for_decoder_state_input = encoder_output_state_dim
+        
+        # Decoder LSTMs are created with self.lstm_units
+        if dim_for_decoder_state_input != self.lstm_units:
+            self.project_state_h = Dense(
+                self.lstm_units, 
+                activation=self.intermediate_activation, # Or other suitable
+                name="project_decoder_state_h"
+            )
+            self.project_state_c = Dense(
+                self.lstm_units,
+                activation=self.intermediate_activation,
+                name="project_decoder_state_c"
             )
 
         # --- Define Decoder LSTM Layers ---
@@ -244,14 +274,28 @@ class LSTMAutoencoderAnomaly(Layer, NNLearner):
              raise RuntimeError("Repeater layer was not built.")
              # Shape (B, num_repeats, latent_dim_eff)
         repeated_vector = self.repeater(latent_vector)
-
+        
         decoded = repeated_vector
-        initial_state_for_decoder = decoder_initial_state
+   
+        current_h_state_for_decoder = decoder_initial_state[0]
+        current_c_state_for_decoder = decoder_initial_state[1]
+        
+        if self.project_state_h is not None: # Implies projection is needed
+            projected_h = self.project_state_h(current_h_state_for_decoder)
+            projected_c = self.project_state_c(current_c_state_for_decoder)
+            initial_state_for_first_decoder = [projected_h, projected_c]
+        else:
+            # This path is taken if the encoder's output state dimension
+            # (or latent_dim if bottleneck is used) already matches
+            # the decoder's lstm_units.
+            initial_state_for_first_decoder = decoder_initial_state
+        
+        # initial_state_for_decoder = decoder_initial_state
         for i, layer in enumerate(self.decoder_layers):
              # Pass initial state only to the first decoder layer
             if i == 0:
                 decoded = layer(
-                    decoded, initial_state=initial_state_for_decoder,
+                    decoded, initial_state=initial_state_for_first_decoder,
                     training=training
                 )
             else:
@@ -303,7 +347,6 @@ class LSTMAutoencoderAnomaly(Layer, NNLearner):
     def get_config(self):
         """Returns the layer configuration."""
         config = super().get_config()
-        # Update with all parameters from __init__
         config.update({
             "latent_dim": self.latent_dim,
             "lstm_units": self.lstm_units,

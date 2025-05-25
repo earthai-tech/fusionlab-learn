@@ -55,7 +55,7 @@ systems, particularly for complex spatiotemporal or multivariate data:
 
 The FusionLab Vision: Addressing the Gaps
 ---------------------------------------------
-``fusionlab`` was born from the need to address these persistent gaps.
+``fusionlab-learn`` was born from the need to address these persistent gaps.
 Motivated by complex real-world forecasting problems, such as
 understanding the uncertainty in **land subsidence predictions** for
 urban planning [1]_, we aim to provide a framework for building,
@@ -81,7 +81,7 @@ specifically incorporate features designed to tackle the challenges above:
   TensorFlow/Keras) for researchers and practitioners to easily
   experiment with new ideas and build custom model variants.
 
-Ultimately, ``fusionlab`` strives to facilitate the development of more
+Ultimately, ``fusionlab-learn`` strives to facilitate the development of more
 robust, interpretable, and uncertainty-aware forecasting solutions for
 complex, real-world time series challenges.
 

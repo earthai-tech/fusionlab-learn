@@ -21,67 +21,816 @@ Dependencies:
 - Keras Tuner for hyperparameter optimization.
 """
 
+
 import os
 import warnings
-import json 
-from numbers import Real, Integral 
-from typing import Union, Dict, Any, Optional, Callable, List
-from typing import TYPE_CHECKING # noqa
+import json
+from numbers import Real, Integral
+from typing import (
+    Union, Dict, Any, Optional, Callable, List, Tuple
+)
 
 import numpy as np
 
-from ..compat.sklearn import validate_params, Interval 
-from ..core.checks import assert_ratio, check_params, check_non_emptiness
+from .__init__ import config
+from ..api.summary import ResultSummary 
+from ..compat.sklearn import validate_params, Interval
+from ..core.checks import (
+    assert_ratio, check_params, check_non_emptiness
+    )
 from ..core.handlers import param_deprecated_message
-from ..utils.deps_utils import ensure_pkg 
+from ..core.io import _get_valid_kwargs 
+from ..decorators import Deprecated 
+from ..utils.deps_utils import ensure_pkg
 from ..utils.generic_utils import vlog
-from ..utils.validator import validate_positive_integer, parameter_validator
+from ..utils.validator import (
+    validate_positive_integer, parameter_validator
+    )
 
-from .__init__ import config 
 from ._tensor_validation import validate_minimal_inputs 
-from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from .keras_validator import validate_keras_model 
-from .losses import combined_quantile_loss 
-from .transformers import XTFT, SuperXTFT, TemporalFusionTransformer 
+from ._tensor_validation import validate_model_inputs
 
-HAS_KT=False
-try: 
+from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
+from .losses import combined_quantile_loss
+from .keras_validator import validate_keras_model 
+
+from .transformers import (
+    XTFT,
+    SuperXTFT,
+    TemporalFusionTransformer as TFTFlexible, 
+    TFT as TFTStricter 
+)
+
+HAS_KT = False
+try:
     import keras_tuner as kt
-    HAS_KT=True
-except : 
-    kt=None 
-    pass 
+    HAS_KT = True
+except ImportError:
+    kt = None 
 
 if KERAS_BACKEND:
     Adam = KERAS_DEPS.Adam
-    Model=KERAS_DEPS.Model
-    Tensor=KERAS_DEPS.Tensor 
-    EarlyStopping=KERAS_DEPS.EarlyStopping
+    Model = KERAS_DEPS.Model
+    Tensor = KERAS_DEPS.Tensor
+    EarlyStopping = KERAS_DEPS.EarlyStopping
+    tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+    tf_float32 = KERAS_DEPS.float32
+    tf_zeros = KERAS_DEPS.zeros 
+    tf_shape =KERAS_DEPS.shape 
     
-DEP_MSG = dependency_message('nn.forecast_tuner') 
+    
+else:
+    class Model: pass
+    class Tensor: pass
+    class Adam: pass
+    class EarlyStopping: pass
 
-CASE_INFO = { 
-    "description": "{} forecast", 
-    "forecast_horizons": 1,
+DEP_MSG = dependency_message('nn.forecast_tuner')
+
+# Default case info for model builder
+# Keys here should match what _model_builder_factory expects
+CASE_INFO = {
+    "description": "{} forecast",
+    "forecast_horizon": 1, # Matches model param name
     "quantiles": None,
-   }
+    "output_dim": 1,
+    "static_input_dim": None, # Will be derived from data
+    "dynamic_input_dim": None,
+    "future_input_dim": None,
+    "verbose_build": 0 # Verbosity for model builder
+}
 
+# Default hyperparameter search space
 DEFAULT_PS = {
-    'embed_dim'         : [16, 32, 64],
-    'max_window_size'   : [3, 5, 10],
-    'memory_size'       : [50, 100, 200],
-    'num_heads'         : [2, 4, 8],
-    'dropout_rate'      : [0.1, 0.2, 0.3],
-    'lstm_units'        : [32, 64, 128],
-    'attention_units'   : [32, 64, 128],
-    'hidden_units'      : [32, 64, 128],
-    'learning_rate'     : [0.0001, 0.001, 0.01],
-    'monitor'           : 'val_loss',
-    'patience'          : 5,
-    }
+    'embed_dim': [16, 32, 64],        # XTFT/SuperXTFT
+    'max_window_size': [3, 5, 10],   # XTFT/SuperXTFT
+    'memory_size': [50, 100, 200],     # XTFT/SuperXTFT
+    'num_heads': [2, 4, 8],          # Common
+    'dropout_rate': [0.0, 0.1, 0.2, 0.3],   # Common
+    'recurrent_dropout_rate': [0.0, 0.1, 0.2], # TFT (stricter) & XTFT
+    'lstm_units': [32, 64, 128],       # Common
+    'attention_units': [32, 64, 128],  # XTFT/SuperXTFT
+    'hidden_units': [32, 64, 128],     # Common
+    'num_lstm_layers': [1, 2],    # TFTs
+    'activation': ["relu", "gelu"], # Common
+    'use_batch_norm': [False, True],# Common
+    'use_residuals': [True, False],# XTFT/SuperXTFT
+    'final_agg': ['last', 'average'],# XTFT/SuperXTFT
+    'multi_scale_agg': ['last', 'average'],# XTFT/SuperXTFT
+    # Define scales as string options for Keras Tuner
+    'scales_options': ['default_scales', 'alt_scales', 'no_scales'], # XTFT/SuperXTFT
+ 
+    'learning_rate': [1e-3, 1e-4, 5e-4],# Common
+    'monitor': 'val_loss',        # Common
+    'patience': 10,               # Common
+    # 'loss' is added dynamically based on quantiles
+}
 
 __all__ = ['xtft_tuner', 'tft_tuner']
 
+@ensure_pkg(
+    'keras_tuner',
+    extra="'keras_tuner' is required for model tuning.",
+    auto_install=config.INSTALL_DEPS,
+    use_conda=config.USE_CONDA
+)
+@param_deprecated_message(
+    conditions_params_mappings=[
+        {
+            'param': 'tuner_type',
+            'condition': lambda v: v not in {'bayesian', 'random'},
+            'message': (
+                "Tuner type supports 'bayesian' or 'random'. "
+                "Defaulting to 'random'."
+            ),
+            'default': "random"
+        }
+    ],
+    warning_category=UserWarning
+)
+@check_params({
+    'tuner_dir': Optional[str],
+    'project_name': Optional[str]
+    })
+@validate_params({
+    'inputs': ['array-like'],
+    'y': ['array-like'],
+    'param_space': [dict, None],
+    'forecast_horizon': [Interval(Integral, 1, None, closed="left")],
+    'quantiles': ['array-like', None],
+    'case_info': [dict, None],
+    'max_trials': [Interval(Integral, 1, None, closed ='left')],
+    'objective': [str],
+    'epochs': [Interval(Integral, 1, None, closed ='left')],
+    'batch_sizes': ['array-like'],
+    'validation_split': [Interval(Real, 0, 1, closed='neither')],
+    'tuner_type': [str],
+    'model_name': [str],
+    })
+@check_non_emptiness 
+def xtft_tuner(
+    inputs: List[Optional[Union[np.ndarray, Tensor]]],
+    y: Union[np.ndarray, Tensor],
+    param_space: Optional[Dict[str, Any]] = None,
+    forecast_horizon: int = 1,
+    quantiles: Optional[List[float]] = None,
+    case_info: Optional[Dict[str, Any]] = None,
+    max_trials: int = 10,
+    objective: str = 'val_loss',
+    epochs: int = 10, # Epochs for final training of best model
+    batch_sizes: List[int] = [32],
+    validation_split: float = 0.2,
+    tuner_dir: Optional[str] = None,
+    project_name: Optional[str] = None,
+    tuner_type: str = 'random',
+    callbacks: Optional[List[Callable]] = None,
+    model_builder: Optional[Callable] = None,
+    model_name: str = "xtft",
+    verbose: int = 1, 
+    **kws
+) -> Tuple[Optional[Dict], Optional[Model], Optional[kt.Tuner]]:
+    """
+    Fine-tunes XTFT, SuperXTFT, or TFT (stricter) models.
+
+    """
+    if not HAS_KT: # Check if Keras Tuner was imported
+        raise ImportError(
+            "keras_tuner is not installed. Please install it via "
+            "`pip install keras-tuner` to use this tuning function."
+            )
+
+    # Determine loss function based on quantiles
+    current_loss_fn_obj: Union[str, Callable] = "mse"
+    if quantiles is not None:
+        current_loss_fn_obj = combined_quantile_loss(quantiles)
+
+    # Prepare case_info for the model builder
+    run_case_info = CASE_INFO.copy() # Start with global defaults
+    run_case_info.update({
+        'description': run_case_info['description'].format(
+            "Quantile" if quantiles is not None else "Point"),
+        'forecast_horizon': forecast_horizon, # Use correct key
+        'quantiles': quantiles,
+        'output_dim': y.shape[-1] if y.ndim == 3 else 1,
+        'verbose_build': verbose >= 3 # Pass high verbosity to builder
+    })
+    if case_info: # User-provided case_info overrides
+        run_case_info.update(case_info)
+
+    # Prepare parameter space for the tuner
+    current_default_ps = DEFAULT_PS.copy()
+    current_default_ps['loss'] = current_loss_fn_obj
+
+    def get_param_space_value(name: str, default_override=None):
+        user_ps = param_space or {}
+        # User's space -> current defaults (with dynamic loss) -> hardcoded default
+        return user_ps.get(name, current_default_ps.get(name, default_override))
+
+    vlog(f"Starting {model_name.upper()} {tuner_type.upper()} tune...",
+         level=1, verbose=verbose)
+
+    # Validate model_name
+    valid_model_names = {
+        "xtft", 'superxtft', 'super_xtft', 'tft', 'tft_flex'
+        }
+    model_name_lower = model_name.lower()
+    if model_name_lower not in valid_model_names:
+        raise ValueError(
+            f"Unsupported model_name: '{model_name}'. Must be one of "
+            f"{valid_model_names}."
+        )
+
+    # --- Input Validation ---
+    # User provides inputs as [Static, Dynamic, Future]
+    if model_name !='tft_flex':
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
+            raise ValueError(
+                "Inputs must be a list/tuple of 3 elements: "
+                "[X_static, X_dynamic, X_future]."
+                )
+    # Ensure y is a tensor for shape operations
+    y_tensor = tf_convert_to_tensor(y, dtype=tf_float32)
+          
+    # `validate_tft_inputs` expects [S, D, F] and returns (D_p, F_p, S_p)
+    # This specific order is for the internal structure of TFT model.
+    # The flexible `TemporalFusionTransformer` handles Nones internally.
+    # --- Prepare inputs_for_validator (always a list of 3) ---
+    s_input_raw: Optional[Union[np.ndarray, Tensor]] = None
+    d_input_raw: Optional[Union[np.ndarray, Tensor]] = None
+    f_input_raw: Optional[Union[np.ndarray, Tensor]] = None
+
+    if model_name_lower == 'tft_flex':
+        if not isinstance(inputs, (list, tuple)): # Single tensor
+            d_input_raw = inputs # Assumed dynamic
+        elif len(inputs) == 1:
+            d_input_raw = inputs[0] # Assumed dynamic
+        elif len(inputs) == 2:
+            # `validate_model_inputs` with `mode='soft'` will infer roles
+            # We pass it as [in0, in1, None]
+            # For deriving initial dims, we need to make a temp assumption
+            # or let validate_model_inputs handle it entirely.
+            # For now, pass as is to validator, it will sort it out.
+            s_input_raw, d_input_raw, f_input_raw = (
+                inputs[0], inputs[1], None) # Temp assignment
+        elif len(inputs) == 3:
+            s_input_raw, d_input_raw, f_input_raw = inputs
+        else:
+            raise ValueError(
+                "For 'tft_flex', inputs must be a single tensor or a "
+                "list/tuple of 1, 2, or 3 elements."
+            )
+    else: # Stricter models (xtft, superxtft, tft)
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 3:
+            raise ValueError(
+                f"Model '{model_name}' requires inputs as a list/tuple of "
+                "3 elements: [X_static, X_dynamic, X_future]."
+            )
+        s_input_raw, d_input_raw, f_input_raw = inputs
+        if s_input_raw is None or d_input_raw is None or f_input_raw is None:
+             raise ValueError(
+                f"Model '{model_name}' requires all three inputs "
+                "(static, dynamic, future) to be non-None."
+            )
+    # At this point, s_input_raw, d_input_raw, f_input_raw are set
+    # (some might be None only if model_name_lower == 'tft_flex')
+    # Get initial feature dimensions for the validator
+    s_dim_val = s_input_raw.shape[-1] if s_input_raw is not None else None
+    d_dim_val = d_input_raw.shape[-1] if d_input_raw is not None else None
+    f_dim_val = f_input_raw.shape[-1] if f_input_raw is not None else None
+
+    if d_input_raw is None or d_dim_val is None: # Dynamic is always essential
+        raise ValueError("Dynamic input is missing or has no features.")
+
+    validation_mode = 'soft' if model_name_lower == 'tft_flex' else 'strict'
+
+    # `validate_model_inputs` expects [S,D,F] and returns (S,D,F)
+    X_static, X_dynamic, X_future = validate_model_inputs(
+        inputs=[s_input_raw, d_input_raw, f_input_raw],
+        static_input_dim=s_dim_val,
+        dynamic_input_dim=d_dim_val,
+        future_covariate_dim=f_dim_val,
+        forecast_horizon=forecast_horizon,
+        error="raise",
+        mode=validation_mode,
+        model_name=model_name_lower,
+        verbose=verbose >= 4
+    )
+    # X_static, X_dynamic, X_future are now validated.
+    vlog(
+          "Parameters check sucessfully passed. ",
+          level=4, verbose=verbose
+      )
+        
+    # --- Inside xtft_tuner function ---
+    # Prepare inputs for Keras Tuner's fit method.
+    # Replace None with dummy tensors with 0 features.
+    inputs_for_fit_list = []
+    
+    # Determine a reference batch size and time steps from dynamic_input
+    # (which is guaranteed to be non-None for all relevant models).
+    ref_batch_size = tf_shape(X_dynamic)[0]
+    ref_dyn_time_steps = tf_shape(X_dynamic)[1]
+
+    if X_static is not None:
+        inputs_for_fit_list.append(X_static)
+    else:
+        # Create dummy 2D static tensor: (Batch, 0 Features)
+        dummy_static = tf_zeros((ref_batch_size, 0), dtype=tf_float32)
+        inputs_for_fit_list.append(dummy_static)
+        if verbose >= 2:
+            vlog(f"  Using dummy static input for fit: {dummy_static.shape}",
+                 level=3, verbose=verbose)
+
+    inputs_for_fit_list.append(X_dynamic) # Dynamic is always present
+
+    if X_future is not None:
+        inputs_for_fit_list.append(X_future)
+    else:
+        # Create dummy 3D future tensor: (Batch, Time, 0 Features)
+        # The time dimension for future dummy should match what the model
+        # might expect if future_input was present.
+        # For TFTFlexible, it might align with dynamic or dynamic + horizon.
+        # Using dynamic's time steps + forecast_horizon is a safe default length.
+        future_time_span_for_dummy = ref_dyn_time_steps
+        if run_case_info.get("forecast_horizon") is not None:
+            future_time_span_for_dummy += run_case_info["forecast_horizon"]
+        
+        dummy_future = tf_zeros(
+            (ref_batch_size, future_time_span_for_dummy, 0),
+            dtype=tf_float32
+        )
+        inputs_for_fit_list.append(dummy_future)
+        if verbose >= 2:
+            vlog(f"  Using dummy future input for fit: {dummy_future.shape}",
+                 level=3, verbose=verbose)
+
+    inputs_for_fit = inputs_for_fit_list
+    # inputs_for_fit is now always a list of 3 actual tensors.
+
+    # Update case_info with actual input dimensions for the builder
+    # These will be 0 if dummy tensors were used.
+    run_case_info['static_input_dim'] = inputs_for_fit[0].shape[-1]
+    run_case_info['dynamic_input_dim'] = inputs_for_fit[1].shape[-1]
+    run_case_info['future_input_dim'] = inputs_for_fit[2].shape[-1]
+
+    vlog(f"  Final input dims for model builder: "
+         f"S={run_case_info['static_input_dim']}, "
+         f"D={run_case_info['dynamic_input_dim']}, "
+         f"F={run_case_info['future_input_dim']}",
+         level=3, verbose=verbose)
+
+
+    vlog("Parameters and inputs checked/validated successfully.",
+         level=2, verbose=verbose)
+
+    # --- Define model_builder ---
+    actual_model_builder = model_builder
+    if actual_model_builder is None:
+        vlog("Using default _model_builder_factory.",
+             level=2, verbose=verbose)
+        actual_model_builder = lambda hp: _model_builder_factory(
+            hp, model_name_lower, # Pass lowercase model_name
+            X_static, X_dynamic, X_future, # Pass validated S, D, F
+            run_case_info,
+            get_param_space_value
+        )
+
+    # --- Callbacks ---
+    actual_callbacks = callbacks
+    if actual_callbacks is None:
+        vlog("Setting default EarlyStopping callback.",
+             level=2, verbose=verbose)
+        actual_callbacks = [
+            EarlyStopping(
+                monitor=get_param_space_value('monitor', 'val_loss'),
+                patience=get_param_space_value('patience', 10),
+                restore_best_weights=True
+            )
+        ]
+
+    # --- Tuner Setup ---
+    tuner_dir = tuner_dir or os.path.join(
+        os.getcwd(), "fusionlab_tuning_results"
+        )
+    project_name = project_name or (
+        f"{model_name.upper()}_Tune_"
+        f"{run_case_info.get('description', '').replace(' ', '_')}"
+        )
+
+    vlog(f"Initializing Keras Tuner: {tuner_type.upper()} "
+         f"for {project_name}", level=1, verbose=verbose)
+    common_tuner_args = {
+        "hypermodel": actual_model_builder,
+        "objective": objective,
+        "max_trials": max_trials,
+        "directory": tuner_dir,
+        "project_name": project_name,
+        "overwrite": True # Start fresh each time for tests
+    }
+    if tuner_type == "bayesian":
+        tuner = kt.BayesianOptimization(**common_tuner_args)
+    elif tuner_type == "random":
+        tuner = kt.RandomSearch(**common_tuner_args)
+    else:
+        raise ValueError(f"Unsupported tuner_type: {tuner_type}")
+    vlog("Tuner initialized.", level=2, verbose=verbose)
+
+    # --- Tuning Loop ---
+    overall_best_model: Optional[Model] = None
+    overall_best_hps_dict: Optional[Dict] = None
+    overall_best_val_loss = np.inf
+    overall_best_batch_size: Optional[int] = None
+    tuning_log_data: List[Dict] = []
+
+    for current_batch_size in batch_sizes:
+        vlog(f"--- Tuning with Batch Size: {current_batch_size} ---",
+             level=1, verbose=verbose)
+        try:
+            tuner.search(
+                x=inputs_for_fit, # Use [S, D, F] order
+                y=y_tensor,
+                epochs=epochs, # Epochs for each trial in search
+                batch_size=current_batch_size,
+                validation_split=validation_split,
+                callbacks=actual_callbacks,
+                verbose=verbose >= 2 # Tuner's own verbosity
+            )
+            current_best_trial_hps = tuner.get_best_hyperparameters(
+                num_trials=1)[0]
+            
+            vlog(f"  Best HPs for batch {current_batch_size}: "
+                 f"{current_best_trial_hps.values}",
+                 level=2, verbose=verbose)
+            
+            current_best_model = tuner.hypermodel.build(
+                current_best_trial_hps
+                )
+            vlog(f"  Training best model for batch {current_batch_size} "
+                 f"for {epochs} epochs...", level=2, verbose=verbose)
+            history = current_best_model.fit(
+                x=inputs_for_fit, y=y_tensor, epochs=epochs,
+                batch_size=current_batch_size,
+                validation_split=validation_split,
+                callbacks=actual_callbacks, verbose=verbose >= 2
+            )
+            current_model_val_loss = min(history.history['val_loss'])
+            vlog(
+                f"  Batch Size {current_batch_size}: Final val_loss = "
+                f"{current_model_val_loss:.4f}",
+                level=1, verbose=verbose
+            )
+            trial_info = {
+                "batch_size": current_batch_size,
+                "best_val_loss_for_batch": current_model_val_loss,
+                "hyperparameters": current_best_trial_hps.values
+            }
+            tuning_log_data.append(trial_info)
+
+            if current_model_val_loss < overall_best_val_loss:
+                overall_best_val_loss = current_model_val_loss
+                overall_best_hps_dict = current_best_trial_hps.values.copy()
+                overall_best_model = current_best_model
+                overall_best_batch_size = current_batch_size
+                if overall_best_hps_dict is not None:
+                    overall_best_hps_dict['batch_size'] = (
+                        overall_best_batch_size
+                        )
+        except Exception as e:
+            vlog(f"Tuning failed for batch size {current_batch_size}."
+                 f" Error: {e}", level=0, verbose=verbose)
+            warnings.warn(
+                f"Tuning for batch {current_batch_size} failed: {e}"
+                )
+            continue # Try next batch size
+
+    if overall_best_model is None:
+        vlog("Hyperparameter tuning failed for all batch sizes.",
+             level=0, verbose=verbose)
+        return None, None, tuner
+
+    # Log final results
+    if overall_best_hps_dict is not None:
+        tuning_log_data.append({
+            'overall_best_batch_size': overall_best_batch_size,
+            'overall_best_val_loss': overall_best_val_loss,
+            'overall_best_hyperparameters': overall_best_hps_dict
+        })
+    log_file_path = os.path.join(
+        tuner_dir, f"{project_name}_tuning_summary.json"
+        )
+    try:
+        with open(log_file_path, "w") as f:
+            # Use default=str for non-serializable Keras HP values
+            json.dump(tuning_log_data, f, indent=4, default=str)
+        vlog(f"Full tuning summary saved to {log_file_path}",
+             level=1, verbose=verbose)
+    except Exception as e:
+        warnings.warn(f"Could not save tuning summary log: {e}")
+
+    vlog("--- Overall Best ---", level=1, verbose=verbose)
+    vlog(f"Best Batch Size: {overall_best_batch_size}",
+         level=1, verbose=verbose)
+    
+    
+    
+    summary = ResultSummary(
+        'BestHyperParameters').add_results(overall_best_hps_dict)
+    vlog(f"Best Hyperparameters:\n {summary}",
+         level=1, verbose=verbose
+         )
+    
+    vlog(f"Best Validation Loss: {overall_best_val_loss:.4f}",
+         level=1, verbose=verbose)
+
+    return overall_best_hps_dict, overall_best_model, tuner
+
+def tft_tuner( 
+    inputs: List[Optional[Union[np.ndarray, Tensor]]],
+    y: Union[np.ndarray, Tensor],
+    param_space: Optional[Dict[str, Any]] = None,
+    forecast_horizon: int = 1,
+    quantiles: Optional[List[float]] = None,
+    case_info: Optional[Dict[str, Any]] = None,
+    max_trials: int = 10,
+    objective: str = 'val_loss',
+    epochs: int = 10, # Reduced default for faster example
+    batch_sizes: List[int] = [32],
+    validation_split: float = 0.2,
+    tuner_dir: Optional[str] = None,
+    project_name: Optional[str] = None,
+    tuner_type: str = 'random',
+    callbacks: Optional[List[Callable]] = None,
+    model_builder: Optional[Callable] = None,
+    model_name: str = "tft", # Default to stricter 'tft'
+    verbose: int = 1
+) -> tuple:
+    """
+    Fine-tunes TemporalFusionTransformer (flexible via model_name='tft_flex')
+    or TFT (stricter via model_name='tft') models.
+    """
+    # Ensure model_name is one of the TFT variants
+    if model_name.lower() not in ["tft", "tft_flex"]:
+        warnings.warn(
+            f"model_name '{model_name}' for tft_tuner is unusual. "
+            "Expected 'tft' or 'tft_flex'. Proceeding."
+            )
+    return xtft_tuner(
+        inputs=inputs, y=y, param_space=param_space,
+        forecast_horizon=forecast_horizon, quantiles=quantiles,
+        case_info=case_info, max_trials=max_trials,
+        objective=objective, epochs=epochs, batch_sizes=batch_sizes,
+        validation_split=validation_split, tuner_dir=tuner_dir,
+        project_name=project_name, tuner_type=tuner_type,
+        callbacks=callbacks, model_builder=model_builder,
+        model_name=model_name, # Pass along specified tft or tft_flex
+        verbose=verbose
+    )
+
+def _model_builder_factory(
+    hp: "kt.HyperParameters",
+    model_name_lower: str, # Expects lowercase
+    # These are the validated inputs in S, D, F order
+    X_static_val: Optional[Tensor],
+    X_dynamic_val: Tensor,
+    X_future_val: Optional[Tensor],
+    case_info_param: Dict[str, Any],
+    get_param_space_func: Callable
+    ):
+    """
+    Builds and compiles a model instance for Keras Tuner.
+    (Full docstring omitted for brevity)
+    """
+    # --- Base parameters common to most models ---
+    params = {
+        "forecast_horizon": case_info_param.get("forecast_horizon"),
+        "quantiles": case_info_param.get("quantiles"),
+        "output_dim": case_info_param.get("output_dim", 1),
+        "hidden_units": hp.Choice(
+            'hidden_units',
+            get_param_space_func('hidden_units', [32, 64]) # Default
+            ),
+        "num_heads": hp.Choice(
+            'num_heads',
+            get_param_space_func('num_heads', [2, 4])
+            ),
+        "dropout_rate": hp.Choice(
+            'dropout_rate',
+            get_param_space_func('dropout_rate', [0.0, 0.1])
+            ),
+        "activation": hp.Choice( # Pass string, model __init__ handles it
+            'activation',
+            get_param_space_func('activation', ["relu", "gelu"])
+            ),
+        "use_batch_norm": hp.Choice(
+            'use_batch_norm',
+             get_param_space_func('use_batch_norm', [True, False]), 
+             default=False, 
+        ),
+    }
+
+    # --- Add input dimensions from validated data ---
+    # Dynamic is always required for all these models
+    params["dynamic_input_dim"] = X_dynamic_val.shape[-1]
+
+    # Static and Future dimensions depend on whether they were provided
+    if X_static_val is not None:
+        params["static_input_dim"] = X_static_val.shape[-1]
+    # else: static_input_dim remains unset or will be None if model allows
+
+    if X_future_val is not None:
+        params["future_input_dim"] = X_future_val.shape[-1]
+    # else: future_input_dim remains unset or will be None
+    
+    # --- Model-specific parameters and class selection ---
+    if model_name_lower in ["xtft", "superxtft", "super_xtft"]:
+        # These models require all three input dimensions
+        if params.get("static_input_dim") is None or \
+           params.get("future_input_dim") is None:
+            raise ValueError(
+                f"{model_name_lower.upper()} requires static and future inputs."
+                " Corresponding X_static or X_future was None."
+            )
+        params.update({
+            "embed_dim": hp.Choice(
+                'embed_dim', get_param_space_func('embed_dim', [16, 32])),
+            "max_window_size": hp.Choice(
+                'max_window_size', get_param_space_func('max_window_size', [5, 10])),
+            "memory_size": hp.Choice(
+                'memory_size', get_param_space_func('memory_size', [50, 100])),
+            "lstm_units": hp.Choice(
+                'lstm_units', get_param_space_func('lstm_units', [32, 64])),
+            "attention_units": hp.Choice(
+                'attention_units', get_param_space_func('attention_units', [32, 64])),
+            "recurrent_dropout_rate": hp.Choice(
+                'recurrent_dropout_rate',
+                get_param_space_func('recurrent_dropout_rate', [0.0, 0.1])),
+            "use_residuals": hp.Choice(
+                'use_residuals',
+                get_param_space_func('use_residuals', [False, True]), 
+                default=True 
+                ),
+            "final_agg": hp.Choice(
+                'final_agg',
+                get_param_space_func('final_agg', ['last', 'average'])),
+            "multi_scale_agg": hp.Choice(
+                'multi_scale_agg',
+                get_param_space_func('multi_scale_agg', ['last', 'average'])),
+            # Handle scales string to actual list/None mapping
+               "scales": _map_scales_choice(hp.Choice(
+                   'scales_options', # Use the string choice name
+                   get_param_space_func('scales_options', ['default_scales', 'no_scales'])
+                   ))
+        })
+        model_class = SuperXTFT if model_name_lower in [
+            "super_xtft", "superxtft"] else XTFT
+
+    elif model_name_lower == "tft": # Stricter TFT
+        # Stricter TFT also requires all three input dimensions
+        if params.get("static_input_dim") is None or \
+           params.get("future_input_dim") is None:
+            raise ValueError(
+                "Stricter TFT model requires static_input_dim and "
+                "future_input_dim. Corresponding X_static or X_future was None."
+            )
+        params.update({
+            "num_lstm_layers": hp.Choice(
+                'num_lstm_layers',
+                get_param_space_func('num_lstm_layers', [1, 2])),
+            "lstm_units": hp.Choice( # Can be int or list
+                'lstm_units',
+                get_param_space_func('lstm_units', [32, 64])),
+            "recurrent_dropout_rate": hp.Choice(
+                'recurrent_dropout_rate',
+                get_param_space_func('recurrent_dropout_rate', [0.0, 0.1]))
+        })
+        model_class = TFTStricter # Use aliased stricter TFT
+
+    elif model_name_lower == "tft_flex": # Flexible TemporalFusionTransformer
+        # This model only *requires* dynamic_input_dim.
+        # static_input_dim and future_input_dim are optional.
+        # We need to ensure only valid params are passed.
+        tft_flex_params = {
+            "dynamic_input_dim": params["dynamic_input_dim"]
+            }
+        # Add optional dims if they were provided (i.e., X_static/X_future were not None)
+        if "static_input_dim" in params:
+            tft_flex_params["static_input_dim"] = params["static_input_dim"]
+        if "future_input_dim" in params:
+            tft_flex_params["future_input_dim"] = params["future_input_dim"]
+
+        # Add other common params it accepts (from base `params` dict)
+        for common_param in ["forecast_horizon", "quantiles", "output_dim",
+                             "hidden_units", "num_heads", "dropout_rate",
+                             "activation", "use_batch_norm"]:
+            if common_param in params: # Check if defined by HP or case_info
+                tft_flex_params[common_param] = params[common_param]
+
+        # LSTM specific params for TemporalFusionTransformer
+        tft_flex_params["num_lstm_layers"] = hp.Choice(
+            'num_lstm_layers',
+            get_param_space_func('num_lstm_layers', [1, 2]))
+        tft_flex_params["lstm_units"] = hp.Choice( # Can be int or list
+            'lstm_units',
+            get_param_space_func('lstm_units', [32, 64]))
+        # Note: TemporalFusionTransformer (flexible) does not take
+        # recurrent_dropout_rate in its __init__ as per its signature.
+
+        params = tft_flex_params # Override params dict for this model
+        model_class = TFTFlexible # Use aliased flexible TFT
+    else:
+        # This case should ideally be caught by model_name validation earlier
+        raise ValueError(
+            f"Unsupported model_name for tuning factory: {model_name_lower}")
+
+    # --- Explicitly cast boolean HPs before model instantiation ---
+    # These are parameters that the models expect as Python bool
+    # then apply the transformation inplace via _cast_hp_to_bool
+    # to change param dict inplace. 
+    # Usage:
+    bool_params_to_cast = [('use_batch_norm', False), ('use_residuals', True)]
+    cast_multiple_bool_params(params, bool_params_to_cast)
+                 
+    # for safetly # get the valid params of model class 
+    params = _get_valid_kwargs (model_class, params )
+  
+    # Instantiate model
+    # For tft_flex, some *_input_dim might be None, which is fine for its __init__
+
+    model = model_class(**params)
+
+    # Compile model
+    learning_rate = hp.Choice(
+        'learning_rate',
+        get_param_space_func('learning_rate', [1e-3, 5e-4])
+        )
+    # Loss should be a callable function or a string Keras recognizes
+    loss_to_use = get_param_space_func('loss', 'mse')
+
+    model.compile(
+        optimizer=Adam(learning_rate=learning_rate),
+        loss=loss_to_use
+    )
+    vlog(f"{model_name_lower.upper()} model built and compiled for trial.",
+         level=3, verbose=case_info_param.get("verbose_build", 0))
+
+    return model
+
+def _map_scales_choice(scales_choice_str: str) -> Optional[List[int]]:
+    """Maps string choice for scales to actual list or None."""
+    if scales_choice_str == 'default_scales':
+        return [1, 3, 7]
+    elif scales_choice_str == 'alt_scales':
+        return [1, 5, 10]
+    elif scales_choice_str == 'no_scales':
+        return None
+    return None # Default fallback
+
+def _cast_hp_to_bool(
+    params: Dict[str, Any],
+    param_name: str,
+    default_value: bool = False # Default if param not in hp choices
+) -> None:
+    """
+    Casts a hyperparameter value in the params dict to boolean.
+    Keras Tuner might return 0 or 1 for boolean choices.
+    This helper ensures it's a Python bool before model instantiation.
+    Modifies `params` in-place.
+    """
+    if param_name in params:
+        value = params[param_name]
+        if isinstance(value, (int, float)): # Catches 0, 1, 0.0, 1.0
+            params[param_name] = bool(value)
+        elif not isinstance(value, bool):
+            # If it's something else, it might be an issue with
+            # param_space definition or how Keras Tuner sampled it.
+            # For safety, default or warn.
+            warnings.warn(
+                f"Hyperparameter '{param_name}' received unexpected value "
+                f"'{value}' (type: {type(value)}). Expected bool or 0/1. "
+                f"Defaulting to False. Please check param_space definition."
+            )
+            params[param_name] = default_value
+    # If param_name not in params from hp, it might be a fixed value
+    # from case_info, which should already be bool. Or it might not be
+    # applicable to the current model. No action needed here.
+
+# Optimized casting for multiple boolean parameters
+def cast_multiple_bool_params(
+        params: Dict[str, Any], 
+        bool_params_to_cast: List[Tuple[str, bool]]
+        ) -> None:
+    """
+    Casts a list of boolean hyperparameters to ensure they are Python booleans.
+    
+    Args:
+        params: Dictionary of hyperparameters.
+        bool_params_to_cast: List of tuples (param_name, default_value) for boolean params.
+    """
+    for param_name, default_value in bool_params_to_cast:
+        _cast_hp_to_bool(params, param_name, default_value)
+
+
+# ---------------------- Deprecated functions ---------------------------------
 
 @ensure_pkg (
     'keras_tuner',
@@ -120,7 +869,7 @@ __all__ = ['xtft_tuner', 'tft_tuner']
     'validation_split': [Interval (Real, 0, 1, closed='neither'), str],
     })
 @check_non_emptiness 
-def xtft_tuner(
+def xtft_tuner_in(
     inputs: List[Union [ np.ndarray, Tensor]],
     y: np.ndarray,
     param_space: Dict[str, Any] = None,
@@ -143,6 +892,12 @@ def xtft_tuner(
     """ Fine-tune the XTFT forecasting model using Keras Tuner with Bayesian 
     or RandomSearch Optimization."""
     
+    warnings.warn(
+    "This function is deprecated and will be removed in a future release. "
+    "Please use {'xtft_tuner' if model_name.startswith('xtft') else 'tft_tuner'}"
+    " instead.", FutureWarning
+    )
+
     loss_fn="mse"
     if quantiles is not None: 
         loss_fn = combined_quantile_loss (quantiles)
@@ -185,7 +940,8 @@ def xtft_tuner(
         name ="validation split"
     )
     model_name = parameter_validator(
-        "model_name", target_strs= {"xtft", 'superxtft', 'super_xtft'}, 
+        "model_name", target_strs= {"xtft", 'superxtft', 'super_xtft', 'tft'}, 
+        match_method="startswith", 
         )(model_name)
     
     # Validate input type.
@@ -200,17 +956,27 @@ def xtft_tuner(
 
     # Validate input shapes using the minimal inputs validator.
     # This returns X_static, X_dynamic, X_future, and optionally y.
-    validated = validate_minimal_inputs(
-        *inputs, y=y, forecast_horizon=forecast_horizon, deep_check=True
-    )
-    if y is None:
-        X_static, X_dynamic, X_future = validated
+    if not model_name.startswith('tft_flex'): # This is for temporal fusion Transformer 
+        validated = validate_minimal_inputs(
+            *inputs, y=y, forecast_horizon=forecast_horizon,
+            deep_check=True
+        )
+        if y is None:
+            X_static, X_dynamic, X_future = validated
+        else:
+            X_static, X_dynamic, X_future, y = validated
+            
+        vlog(
+            "Parameters check sucessfully passed. ",
+            level=4, verbose=verbose
+        )
     else:
-        X_static, X_dynamic, X_future, y = validated
-    vlog(
-        "Parameters check sucessfully passed. ",
-        level=4, verbose=verbose
-    )
+        if y is None:
+            X_dynamic, X_future, X_static  = inputs
+        else:
+            X_static, X_dynamic, X_future, y = inputs
+   
+
     
     # Define default model builder if none is provided.
     if model_builder is None:
@@ -219,7 +985,7 @@ def xtft_tuner(
             level=3, verbose=verbose
         )
         # Define model builder if none is provided
-        model_builder = lambda hp: _model_builder_factory(
+        model_builder = lambda hp: _model_builder_factory_in(
             hp, model_name, *inputs, case_info, get_param_space
         )
   
@@ -227,9 +993,9 @@ def xtft_tuner(
         "Is model builder a keras model object?",
         level=5, verbose=verbose
     )
-    model_builder = validate_keras_model(
+    validate_keras_model(
         model_builder, 
-        raise_exception= True 
+        raise_exception= False 
         )
     
     vlog(
@@ -372,8 +1138,11 @@ def xtft_tuner(
 
     return best_hps, best_model, tuner
 
-
-def tft_tuner(
+@Deprecated (
+    "Function is deprecated and should be "
+    " in future release. Use tft_tuner instead."
+ )
+def tft_tuner_in(
     inputs: List[Union[np.ndarray, Tensor]],
     y: Optional[np.ndarray] = None,
     param_space: Optional[Dict[str, Any]] = None,
@@ -390,10 +1159,11 @@ def tft_tuner(
     tuner_type: str = 'bayesian',
     callbacks: Optional[List] = None,
     model_builder: Optional[Callable] = None,
+    model_name: str = 'tft', # does nothing 
     verbose: int = 1
 ) -> tuple:
     """ Fine-tune Temporal Fusion Transformer (TFT) models using Keras Tuner. """
-    return xtft_tuner(
+    return xtft_tuner_in(
         inputs=inputs,
         y=y,
         param_space=param_space,
@@ -414,7 +1184,7 @@ def tft_tuner(
         verbose=verbose
     )
 
-def _model_builder_factory(
+def _model_builder_factory_in(
     hp: "kt.HyperParameters", 
     model_name: str, 
     X_static, 
@@ -481,7 +1251,7 @@ def _model_builder_factory(
                 'lstm_units', get_param_space('lstm_units')
                 )
         })
-        model_class = TemporalFusionTransformer
+        model_class = TFTFlexible  
     else:
         raise ValueError(
             f"Unsupported model type: {model_name}")
@@ -753,4 +1523,8 @@ References
        NumPy Array: A Structure for Efficient Numerical Computation". 
        Computing in Science & Engineering, 13(2), 22-30.
 """
+
+
+
+
 

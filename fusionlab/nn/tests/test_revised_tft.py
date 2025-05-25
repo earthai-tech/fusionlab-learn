@@ -24,7 +24,8 @@ except ImportError as e:
 
 # Skip all tests if TF/Keras backend is not available
 pytestmark = pytest.mark.skipif(
-    not KERAS_BACKEND, reason="TensorFlow/Keras backend not available"
+    not KERAS_BACKEND, 
+    reason="TensorFlow/Keras backend not available"
 )
 #%
 # --- Test Fixtures ---

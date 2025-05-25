@@ -4,7 +4,9 @@
 include LICENSE
 include README.md
 # include CITATION.cff  # Uncomment if you add this file
-# include pyproject.toml # Uncomment if you use it
+
+# include pyproject.toml 
+
 include MANIFEST.in
 include setup.py
 # include setup.cfg     # Uncomment if you use this file
@@ -44,6 +46,7 @@ recursive-exclude tests *
 exclude .coverage
 exclude coverage.xml
 exclude .pytest_cache
+
 exclude main.py # Only use for code-ocean testing 
 
 # Exclude development / CI / environment files
@@ -60,6 +63,7 @@ recursive-exclude .venv *
 # Exclude common IDE directories and other hidden files/dirs like .git
 recursive-exclude .*
 
+
 # Exclude build artifacts explicitly
 recursive-exclude build *
 recursive-exclude dist *
@@ -72,4 +76,5 @@ recursive-exclude docs/_build *
 
 # Prune empty directories resulting from exclusions
 prune docs/_build
+
 # prune tests/__pycache__ # Example

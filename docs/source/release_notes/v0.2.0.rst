@@ -1,0 +1,152 @@
+.. _release_v0.2.0:
+
+Version 0.2.0
+===============
+*(Release Date: May 20, 2025)*
+
+**Focus: Major Input Validation Overhaul, Enhanced Tuner, New Dataset Utilities, and API Refinements**
+
+This release introduces significant improvements to input validation
+robustness across all models, particularly for TensorFlow graph
+execution. The hyperparameter tuning framework has been substantially
+enhanced for better model compatibility and parameter handling. New
+dataset loading and generation utilities have been added. Key API
+refinements include the renaming of `NTemporalFusionTransformer` to
+`DummyTFT` for clarity.
+
+New Features
+~~~~~~~~~~~~~~
+* |Feature| Added :func:`~fusionlab.datasets.load.load_processed_subsidence_data`
+  utility. This function provides a comprehensive pipeline for loading
+  raw Zhongshan or Nansha datasets, applying a predefined
+  preprocessing workflow (feature selection, NaN handling, encoding,
+  scaling), and optionally reshaping data into sequences for TFT/XTFT
+  models. Includes caching for processed data and sequences.
+* |Feature| Introduced `n_samples` and `random_state` parameters to
+  :func:`~fusionlab.datasets.load.fetch_zhongshan_data` and
+  :func:`~fusionlab.datasets.load.fetch_nansha_data` to allow
+  loading the full sampled dataset or requesting a smaller, spatially
+  stratified sub-sample.
+* |Feature| Added new synthetic data generators to
+  :mod:`fusionlab.datasets.make`:
+ 
+  * :func:`~fusionlab.datasets.make.make_trend_seasonal_data`:
+    Generates univariate series with configurable trend and multiple
+    seasonal components.
+  * :func:`~fusionlab.datasets.make.make_multivariate_target_data`:
+    Generates multi-series data with static/dynamic/future features
+    and multiple, potentially interdependent, target variables.
+
+API Changes & Enhancements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* |API Change| Renamed :class:`~fusionlab.nn.transformers.NTemporalFusionTransformer`
+  to :class:`~fusionlab.nn.transformers.DummyTFT` to better reflect
+  its role as a simplified TFT variant (static and dynamic inputs only,
+  primarily for point forecasts). The `future_input_dim` parameter is
+  now accepted in `DummyTFT.__init__` for API consistency but is
+  internally ignored and a warning is issued.
+* |Enhancement| Major refactoring of input validation with the introduction of
+  :func:`~fusionlab.nn._tensor_validation.validate_model_inputs`.
+  This function provides:
+  
+  * Robust graph-compatible checks for tensor ranks, feature
+    dimensions, batch sizes, and time dimension consistency using
+    TensorFlow operations.
+  * A `mode` parameter (`'strict'` or `'soft'`) to control validation
+    depth.
+  * Specialized internal helper
+    (`_validate_tft_flexible_inputs_soft_mode`) to intelligently
+    infer input roles for the flexible
+    :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`
+    (when ``model_name='tft_flex'`` and ``mode='soft'``).
+  * Consistent return order of `(static, dynamic, future)` processed
+    tensors, requiring updates in model `call` methods that use it.
+* |Enhancement| Improved :mod:`fusionlab.nn.forecast_tuner`
+  (:func:`~fusionlab.nn.forecast_tuner.xtft_tuner` and its internal
+  `_model_builder_factory`):
+  
+  * Correctly handles `model_name` options: `"xtft"`, `"superxtft"`,
+    `"tft"` (stricter), and `"tft_flex"` (flexible
+    `TemporalFusionTransformer`).
+  * Ensures appropriate input validation path is chosen based on
+    `model_name` before calling `validate_model_inputs`.
+  * Passes only relevant parameters to model constructors, especially
+    for the flexible `TemporalFusionTransformer`.
+  * Correctly derives and passes input dimensions to the model
+    builder, respecting `None` for optional inputs in `tft_flex`.
+  * Robustly handles boolean hyperparameters (e.g., `use_batch_norm`,
+    `use_residuals`) and list-like hyperparameters (e.g., `scales`)
+    for Keras Tuner, ensuring correct type casting before model
+    instantiation.
+* |Enhancement| Refined :meth:`~fusionlab.nn.XTFT.call` and
+  :meth:`~fusionlab.nn.SuperXTFT.call` to use the
+  :func:`~fusionlab.nn._tensor_validation.align_temporal_dimensions`
+  helper. This ensures correct time alignment of inputs before they
+  are passed to components like
+  :class:`~fusionlab.nn.components.MultiModalEmbedding` and
+  :class:`~fusionlab.nn.components.HierarchicalAttention`.
+* |Enhancement| Removed redundant concatenation of `embeddings_with_pos`
+  in the final feature fusion stage of :meth:`~fusionlab.nn.XTFT.call`.
+* |Enhancement| Refined :class:`~fusionlab.nn.transformers.DummyTFT`:
+
+  * `call`: Now correctly uses `validate_model_inputs` for its
+    two-input (static, dynamic) signature by passing appropriate
+    parameters for `future_covariate_dim` (None) and `model_name`.
+    Output layer logic for quantiles with `output_dim > 1` now
+    correctly stacks to `(B, H, Q, O)`.
+  * `get_config`: Includes `_future_input_dim_config` (what user passed)
+    and `output_dim`.
+* |Enhancement| Made :func:`fusionlab.utils.deps_utils.get_versions`
+  more resilient by attempting to import `importlib_metadata` as a
+  fallback if `importlib.metadata` (Python 3.8+) is not found.
+
+Fixes
+~~~~~~~
+* |Fix| Resolved `AttributeError: 'Tensor' object has no attribute 'numpy'`
+  in input validation functions by replacing Python boolean conversions of
+  symbolic tensors with TensorFlow graph-compatible assertions
+  (e.g., `tf.debugging.assert_equal`).
+* |Fix| Addressed `InvalidArgumentError: Static input must be 2D. Got rank X`
+  and similar rank/dimension mismatch errors in `validate_model_inputs`
+  by using `tf.rank` and `tf.shape` consistently with
+  `tf.debugging.assert_equal`.
+* |Fix| Corrected `ValueError: Dimension 1 in both shapes must be equal...`
+  in :class:`~fusionlab.nn.components.MultiModalEmbedding` and
+  `InvalidArgumentError: Incompatible shapes... [Op:AddV2]` in
+  :class:`~fusionlab.nn.components.HierarchicalAttention` by ensuring
+  time-aligned inputs are passed from model `call` methods (using
+  `align_temporal_dimensions`).
+* |Fix| Fixed `TypeError: A Choice can contain only int, float, str, or bool...`
+  and `InvalidParameterError: ...must be an instance of 'bool'. Got 0/1...`
+  in `_model_builder_factory` of `forecast_tuner.py`. Boolean
+  hyperparameters are now defined using `hp.Choice` with `[True, False]`
+  values, and `scales` are handled using string options mapped to actual
+  values. Explicit casting to `bool` is applied before model instantiation.
+
+Tests
+~~~~~~~
+* |Tests| Added comprehensive pytest suite for the revised
+  :func:`~fusionlab.nn._tensor_validation.validate_model_inputs`
+  covering different modes, input combinations, and error conditions.
+* |Tests| Updated pytest suite for :mod:`fusionlab.nn.forecast_tuner`
+  to test various `model_name` options and ensure correct parameter handling.
+* |Tests| Added pytest suite for :class:`~fusionlab.nn.transformers.DummyTFT`.
+* |Tests| Updated pytest suite for
+  :func:`~fusionlab.nn.utils.reshape_xtft_data` to fix minor issues
+  and ensure save functionality with `tmp_path`.
+
+Documentation
+~~~~~~~~~~~~~~~
+* |Docs| Updated User Guide for :mod:`fusionlab.datasets` to include
+  documentation for `load_processed_subsidence_data` and new data
+  generation functions in `make.py`.
+* |Docs| Revised User Guide for :mod:`fusionlab.nn.forecast_tuner` with
+  step-by-step examples.
+* |Docs| Updated API reference in `api.rst` to include new dataset
+  functions.
+* |Docs| Corrected license information in `license.rst` to BSD-3-Clause.
+* |Docs| Updated `README.md` for Code Ocean capsule to emphasize Python
+  version requirements and clarify data usage.
+
+
+

@@ -14,7 +14,6 @@ from numbers import Real, Integral
 from typing import Optional, Union, List, Dict, Tuple, Callable
 
 from .._fusionlog import fusionlog 
-from ..api.docstring import DocstringComponents
 from ..api.property import  NNLearner 
 from ..core.checks import validate_nested_param
 from ..core.handlers import param_deprecated_message
@@ -22,7 +21,6 @@ from ..compat.sklearn import validate_params, Interval, StrOptions
 from ..utils.deps_utils import ensure_pkg
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ._nn_docs import _shared_nn_params
 from ..compat.tf import standalone_keras
 
 if KERAS_BACKEND:
@@ -129,10 +127,6 @@ __all__ = [
      'aggregate_multiscale', 
      'aggregate_time_window_output'
     ]
-
-_param_docs = DocstringComponents.from_nested_components(
-    base=DocstringComponents(_shared_nn_params), 
-)
 
 
 @register_keras_serializable(
@@ -466,7 +460,7 @@ class PositionalEncoding(Layer, NNLearner):
         config = super().get_config().copy()
         return config
 
-#XXX TO FIX: 
+
 @register_keras_serializable(
     'fusionlab.nn.components', name="GatedResidualNetwork"
 )
@@ -495,7 +489,7 @@ class GatedResidualNetwork(Layer):
     }
 
     @validate_params({
-        "units": [Interval(Integral, 1, None, closed='left')],
+        "units": [Interval(Integral, 0, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "use_batch_norm": [bool],
         "activation": [StrOptions(_COMMON_ACTIVATIONS)],
@@ -695,43 +689,42 @@ class GatedResidualNetwork(Layer):
                 )
 
         # --- 3. Apply Activation and Regularization ---
-        _logger.debug("DEBUG_GRN: Applying activation_fn.") # DEBUG
+        _logger.debug("Applying activation_fn.") # DEBUG
         activated_features = self.activation_fn(input_plus_context)
         if self.batch_norm is not None:
-            print("DEBUG_GRN: Applying batch_norm.") # DEBUG
             # Apply BN after activation
             activated_features = self.batch_norm(activated_features,
                                                  training=training)
-        _logger.debug("DEBUG_GRN: Applying dropout.") # DEBUG
+        _logger.debug("Applying dropout.") # DEBUG
         regularized_features = self.dropout(activated_features,
                                             training=training)
 
         # --- 4. Main Transformation Path ---
-        _logger.debug("DEBUG_GRN: Applying output_dense.") # DEBUG
+        _logger.debug("Applying output_dense.") # DEBUG
         transformed_output = self.output_dense(regularized_features)
 
         # --- 5. Gating Path ---
-        _logger.debug("DEBUG_GRN: Applying gate_dense.") # DEBUG
+        _logger.debug("Applying gate_dense.") # DEBUG
         # Gate depends on input+context projection *before* main activation
         gate_values = self.gate_dense(input_plus_context)
 
         # --- 6. Apply Gate ---
-        _logger.debug("DEBUG_GRN: Applying gate multiplication.") # DEBUG
+        _logger.debug("Applying gate multiplication.") # DEBUG
         gated_output = tf_multiply(transformed_output, gate_values)
 
         # --- 7. Add Residual ---
-        _logger.debug("DEBUG_GRN: Adding residual connection.") # DEBUG
+        _logger.debug("Adding residual connection.") # DEBUG
         residual_output = tf_add(shortcut, gated_output)
 
         # --- 8. Final Normalization & Optional Activation ---
-        _logger.debug("DEBUG_GRN: Applying layer_norm.") # DEBUG
+        _logger.debug("Applying layer_norm.") # DEBUG
         normalized_output = self.layer_norm(residual_output)
         final_output = normalized_output
         if self.output_activation_fn is not None:
-            _logger.debug("DEBUG_GRN: Applying output_activation_fn.") # DEBUG
+            _logger.debug("Applying output_activation_fn.") # DEBUG
             final_output = self.output_activation_fn(normalized_output)
             #  Applied final output activation.
-        _logger.debug("DEBUG_GRN: Exiting call successfully.") # DEBUG
+        _logger.debug("Exiting call successfully.") # DEBUG
         return final_output
     
     def get_config(self):
@@ -752,7 +745,6 @@ class GatedResidualNetwork(Layer):
         """Creates layer from its config."""
         return cls(**config)
 
-# XXX TOFIX: 
 @register_keras_serializable(
     'fusionlab.nn.components',
     name="VariableSelectionNetwork"
@@ -761,7 +753,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
     """Applies GRN to each variable and learns importance weights."""
 
     @validate_params({
-        "num_inputs": [Interval(Integral, 1, None, closed='left')],
+        "num_inputs": [Interval(Integral, 0, None, closed='left')],
         "units": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "use_time_distributed": [bool],
@@ -907,94 +899,6 @@ class VariableSelectionNetwork(Layer, NNLearner):
         # Build other internal layers like weighting_grn if needed here
         super().build(input_shape) # Call parent build last
         
-
-    # @tf_autograph.experimental.do_not_convert
-    # def call_(self, inputs, context=None, training=False):
-    #     """Execute the forward pass with optional context."""
-
-    #     # --- Input Validation and Reshaping ---
-    #     # actual_rank = inputs.shape.rank
-    #     actual_rank = len(inputs.shape)
-    #     # Determine expected minimum rank based on layer config
-     
-    #     # Assert rank meets minimum requirement (graph-safe check)
-    #     expected_min_rank = 3 if self.use_time_distributed else 2
-     
-    #     if actual_rank < expected_min_rank:
-    #         # This check should now work reliably with the decorator
-    #         raise ValueError(
-    #             f"Input rank must be >= {expected_min_rank}. "
-    #             f"Got rank {actual_rank} for shape {inputs.shape}."
-    #             )
-    #     # Add feature dimension if missing
-    #     if actual_rank == expected_min_rank:
-    #         # Use tf_expand_dims from KERAS_DEPS or tf
-    #         inputs = tf_expand_dims(inputs, axis=-1)
-    #         # Comment: Added feature dimension (size 1).
-    #     # Input shape: (B, N, F=1) or (B, T, N, F=1)
-        
-    #     # --- Context Processing ---
-    #     processed_context = None
-    #     if context is not None:
-    #         # Project context to the 'units' dimension if layer exists
-    #         if self.context_projection is None:
-    #              # Should have been created in build, but create lazily if missed
-    #              # This might indicate an issue if build wasn't called prior
-    #              self.context_projection = Dense(
-    #                   self.units, name="context_projection",
-    #                   activation=self.activation_str
-    #                   )
-    #         processed_context = self.context_projection(context)
-    #         # Note: GRN's call method handles broadcasting this context
-
-    #     # --- Apply GRN to each variable ---
-    #     var_outputs = []
-    #     # Axes: B=0, T=1, N=2, F=3 (TimeDistributed)
-    #     # Axes: B=0, N=1, F=2 (Not TimeDistributed)
-    #     # num_vars_tf = tf_shape(inputs)[-2] # Get N dynamically
-       
-    #     for i in range(self.num_inputs):
-    #         if self.use_time_distributed:
-    #             # Slice variable i: (B, T, N, F) -> (B, T, F)
-    #             var_input = inputs[:, :, i, :]
-    #         else:
-    #             # Slice variable i: (B, N, F) -> (B, F)
-    #             var_input = inputs[:, i, :]
-
-    #         # Apply the i-th GRN, passing the (potentially None) context
-    #         grn_output = self.single_variable_grns[i](
-    #             var_input,
-    #             context=processed_context, # GRN handles context=None
-    #             training=training
-    #         )
-    #         var_outputs.append(grn_output)
-    #         # Output shape: (B, T, units) or (B, units)
-
-    #     # --- Stack GRN outputs along variable dimension (N) ---
-    #     # axis=-2 places N before the 'units' dimension
-    #     stacked_outputs = tf_stack(var_outputs, axis=-2)
-    #     # Shape: (B, T, N, units) or (B, N, units)
-
-    #     # --- Calculate Variable Importance Weights (Original Logic) ---
-    #     # 1. Apply Dense layer (output units = 1) to stacked outputs
-    #     #    Acts on the last dimension ('units') -> (B, [T,] N, 1)
-    #     importance_logits = self.variable_importance_dense(stacked_outputs)
-
-    #     # 2. Apply Softmax across the variable dimension (N, axis=-2)
-    #     weights = self.softmax(importance_logits)
-    #     # Shape: (B, [T,] N, 1)
-    #     self.variable_importances_ = weights # Store weights
-
-    #     # --- Weighted Combination ---
-    #     # Multiply stacked GRN outputs by weights and sum
-    #     # stacked_outputs: (B, [T,] N, units)
-    #     # weights:         (B, [T,] N, 1) -> broadcasts correctly
-    #     weighted_sum = tf_reduce_sum(
-    #         tf_multiply(stacked_outputs, weights),
-    #         axis=-2 # Sum across the variable dimension (N)
-    #     )
-    #     # Final output shape: (B, T, units) or (B, units)
-    #     return weighted_sum
 
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context=None, training=False):
@@ -1157,7 +1061,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
         """Creates layer from its config."""
         return cls(**config)
         
-## XXXTODO: FIX 
+
 @register_keras_serializable(
     'fusionlab.nn.components',
     name="TemporalAttentionLayer"
@@ -1166,9 +1070,9 @@ class TemporalAttentionLayer(Layer):
     """Temporal Attention Layer conditioning query with context."""
 
     @validate_params({
-         "units": [Interval(Integral, 1, None, 
+         "units": [Interval(Integral, 0, None, 
                             closed='left')],
-         "num_heads": [Interval(Integral, 1, None,
+         "num_heads": [Interval(Integral, 0, None,
                                 closed='left')],
          "dropout_rate": [Interval(Real, 0, 1,
                                    closed="both")],
@@ -1452,7 +1356,7 @@ class GatedResidualNetworkIn(Layer, NNLearner):
     """
 
     @validate_params({
-        "units": [Interval(Integral, 1, None, 
+        "units": [Interval(Integral, 0, None, 
                            closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, 
                                   closed="both")],
@@ -1797,10 +1701,10 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         )
     @tf_autograph.experimental.do_not_convert
     def call(
-            self,
-            static_context_vector,
-            temporal_features,
-            training=False
+        self,
+        temporal_features,
+        context_vector,
+        training=False
     ):
         r"""
         Forward pass of the static enrichment layer.
@@ -1835,7 +1739,7 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         # Expand the static context to align
         # with temporal features along T
         static_context_expanded = tf_expand_dims(
-            static_context_vector,
+            context_vector,
             axis=1
         )
 
@@ -2020,7 +1924,7 @@ class TemporalAttentionLayerIn(Layer, NNLearner):
     """
 
     @validate_params({
-        "units": [Interval(Integral, 1, None, 
+        "units": [Interval(Integral, 0, None, 
                            closed='left')],
         "num_heads": [Interval(Integral, 1, None,
                                closed='left')],
@@ -2031,13 +1935,13 @@ class TemporalAttentionLayerIn(Layer, NNLearner):
     @ensure_pkg(KERAS_BACKEND or "keras",
                 extra=DEP_MSG)
     def __init__(
-            self,
-            units,
-            num_heads,
-            dropout_rate=0.0,
-            activation='elu',
-            use_batch_norm=False,
-            **kwargs
+        self,
+        units,
+        num_heads,
+        dropout_rate=0.0,
+        activation='elu',
+        use_batch_norm=False,
+        **kwargs
     ):
         r"""
         Initialize the TemporalAttentionLayer.
@@ -2164,7 +2068,6 @@ class TemporalAttentionLayerIn(Layer, NNLearner):
         # Only process and add context 
         # if it's actually provided
         if context_vector is not None:
-            
             # Transform context vector 
             # Apply GRN to transform the context vector
             # Pass context_vector as the main input 'x' to context_grn
@@ -2333,8 +2236,8 @@ class LearnedNormalization(Layer, NNLearner):
     """
 
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kws):
+        super().__init__(**kws)
 
     def build(self, input_shape):
         r"""
@@ -2599,7 +2502,8 @@ class MultiModalEmbedding(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'fusionlab.nn.components', name="HierarchicalAttention"
+    'fusionlab.nn.components', 
+    name="HierarchicalAttention"
 )
 class HierarchicalAttention(Layer, NNLearner):
     r"""
@@ -2796,7 +2700,8 @@ class HierarchicalAttention(Layer, NNLearner):
         return cls(**config)
 
 @register_keras_serializable(
-    'fusionlab.nn.components', name="CrossAttention"
+    'fusionlab.nn.components',
+    name="CrossAttention"
 )
 class CrossAttention(Layer, NNLearner):
     r"""
@@ -3757,9 +3662,9 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
            20200209.
     """
     @validate_params({
-        "num_inputs": [Interval(Integral, 1, None, 
+        "num_inputs": [Interval(Integral, 0, None, 
                                 closed='left')],
-        "units": [Interval(Integral, 1, None, 
+        "units": [Interval(Integral, 0, None, 
                            closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, 
                                   closed="both")],
@@ -3787,7 +3692,8 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
 
         # Create the activation object from its name
         self.activation = activation
-        # Store activation string for config, convert later or inside GRN
+        # Store activation string for config,
+        # convert later or inside GRN
         self.activation_str = activation
 
         # Build one GRN for each variable
@@ -4934,7 +4840,6 @@ class MultiScaleLSTM(Layer, NNLearner):
             A new instance of this layer.
         """
         return cls(**config)
-
 
 
 @register_keras_serializable(

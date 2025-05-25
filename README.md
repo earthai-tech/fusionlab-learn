@@ -19,6 +19,7 @@
 *Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
 
 ---
+
 <!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
 
 **FusionLab** provides a flexible and extensible framework in Python
@@ -70,7 +71,7 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 ### Installation
 
 1.  **Prerequisites:**
-    * Python 3.8+
+    * Python 3.9+
     * TensorFlow 2.x (See [TensorFlow Installation Guide](https://www.tensorflow.org/install))
 
 2.  **Install from PyPI (Recommended):**
@@ -81,8 +82,10 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 
 3.  **Install from Source (for Development):**
     ```bash
-    git clone [https://github.com/earthai-tech/fusionlab.git](https://github.com/earthai-tech/fusionlab-learn.git)
-    cd fusionlab
+
+    git clone [https://github.com/earthai-tech/fusionlab-learn.git](https://github.com/earthai-tech/fusionlab-learn.git)
+    cd fusionlab-learn
+
     pip install -e .
     # Optional: Install dev dependencies
     # pip install -e .[dev]
@@ -139,7 +142,7 @@ print("Prediction shape:", predictions.shape)
 # Expected: (16, 5, 1) -> (Batch, Horizon, NumOutputs)
 ````
 
-*(See the :doc:`Quickstart Guide <quickstart>` for a more detailed walkthrough.)*
+*(See the `Quickstart Guide <https://fusion-lab.readthedocs.io/en/latest/quickstart.html>`_ for a more detailed walkthrough.)*
 
 -----
 
@@ -148,26 +151,37 @@ print("Prediction shape:", predictions.shape)
 For detailed usage, tutorials, API reference, and explanations of the
 underlying concepts, please see the full documentation:
 
-**[Read the Documentation](https://www.google.com/search?q=https://fusion-lab.readthedocs.io/en/latest/)**
+**[Read the Documentation](https://fusion-lab.readthedocs.io/**
 
 -----
+
+
+## 📄 License
+
+This project is licensed under the **BSD-3-Clause**. See the
+[LICENSE](https://github.com/earthai-tech/fusionlab-learn/blob/main/LICENSE) file for details.
+
+----
 
 ## 🤝 Contributing
 
 We welcome contributions\! Whether it's adding new features, fixing bugs,
 or improving documentation, your help is appreciated. Please see our
-[Contribution Guidelines](https://www.google.com/search?q=CONTRIBUTING.md) for more details on how to get
+[Contribution Guidelines](https://fusion-lab.readthedocs.io/en/latest/contributing.html) for more details on how to get
 started.
 
 -----
 
-## 📄 License
+## 📞 Contact & Support
 
-This project is licensed under the ** BSD-3-Clause**. See the
-[LICENSE](https://www.google.com/search?q=LICENSE) file for details.
+  * **Bug Reports & Feature Requests:** The best place to report issues,
+    ask questions about usage, or request new features is the
+    [**GitHub Issues**](https://github.com/earthai-tech/fusionlab-learn/issues) page for the project.
 
+  * **Developer Contact:** For direct inquiries related to the project's
+    origins or specific collaborations, you can reach the author:
 
-## Note 
-**🌟 Stay in the Fusion Loop!**  
-*Click the "Watch" button above to get notified about the next release — exciting enhancements, new architectures, and experimental features are brewing! 🚀*
-
+      * **Name:** Laurent Kouadio
+      * 📧 **Email:** [etanoyau@gmail.com](mailto:etanoyau@gmail.com)
+      * 💼 **LinkedIn:** [linkedin.com/in/laurent-kouadio-483b2baa](https://linkedin.com/in/laurent-kouadio-483b2baa)
+      * 🆔 **ORCID:** [0000-0001-7259-7254](https://orcid.org/0000-0001-7259-7254)

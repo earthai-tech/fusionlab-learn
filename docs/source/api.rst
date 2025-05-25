@@ -5,20 +5,68 @@
 API Reference
 ===============
 
-Welcome to the ``fusionlab`` API reference. This section provides detailed
+Welcome to the ``fusionlab-learn`` API reference. This section provides detailed
 specifications for the public functions, classes, and modules included
 in the package.
 
 The documentation here is largely auto-generated from the docstrings
-within the ``fusionlab`` source code. For narrative explanations and usage
+within the ``fusionlab-learn`` source code. For narrative explanations and usage
 examples, please consult the :doc:`User Guide </user_guide/index>`.
 
 .. note::
-   Ensure ``fusionlab`` is installed in your documentation build
+   Ensure ``fusionlab-learn`` is installed in your documentation build
    environment (see :doc:`installation`) for these links and summaries
    to be generated correctly. You also need `sphinx.ext.autosummary`
    enabled in your `conf.py` with `autosummary_generate = True`.
 
+Datasets (`fusionlab.datasets`)
+-------------------------------
+Utilities for loading included sample datasets and generating synthetic
+time series data for testing and demonstration.
+
+**Loading Functions** (`fusionlab.datasets.load`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets_load
+   :nosignatures:
+
+   ~fusionlab.datasets.load.fetch_zhongshan_data
+   ~fusionlab.datasets.load.fetch_nansha_data
+   ~fusionlab.datasets.load.load_processed_subsidence_data
+
+**Generation Functions** (`fusionlab.datasets.make`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets_make
+   :nosignatures:
+
+   ~fusionlab.datasets.make.make_multi_feature_time_series
+   ~fusionlab.datasets.make.make_quantile_prediction_data
+   ~fusionlab.datasets.make.make_anomaly_data
+   ~fusionlab.datasets.make.make_trend_seasonal_data
+   ~fusionlab.datasets.make.make_multivariate_target_data
+
+Metrics (`fusionlab.metrics`)
+-------------------------------
+A collection of metrics for evaluating forecast accuracy, calibration,
+sharpness, and stability, particularly suited for probabilistic and
+time-series forecasting.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.metrics.coverage_score
+   ~fusionlab.metrics.continuous_ranked_probability_score
+   ~fusionlab.metrics.mean_interval_width_score
+   ~fusionlab.metrics.prediction_stability_score
+   ~fusionlab.metrics.quantile_calibration_error
+   ~fusionlab.metrics.theils_u_score
+   ~fusionlab.metrics.time_weighted_accuracy_score
+   ~fusionlab.metrics.time_weighted_interval_score
+   ~fusionlab.metrics.time_weighted_mean_absolute_error
+   ~fusionlab.metrics.weighted_interval_score
+   
 Forecasting Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
 Core implementations of the Temporal Fusion Transformer and its variants.
@@ -30,7 +78,7 @@ Core implementations of the Temporal Fusion Transformer and its variants.
    ~fusionlab.nn.transformers.TemporalFusionTransformer
    ~fusionlab.nn.transformers.TFT
    ~fusionlab.nn.transformers.XTFT
-   ~fusionlab.nn.transformers.NTemporalFusionTransformer
+   ~fusionlab.nn.transformers.DummyTFT
    ~fusionlab.nn.transformers.SuperXTFT
 
 
@@ -155,10 +203,51 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.generate_forecast_with
    ~fusionlab.nn.utils.forecast_single_step
    ~fusionlab.nn.utils.forecast_multi_step
-   ~fusionlab.nn.utils.visualize_forecasts
    ~fusionlab.nn.utils.step_to_long
+   ~fusionlab.nn.utils.format_predictions_to_dataframe 
+   ~fusionlab.nn.utils.prepare_model_inputs  
 
 
+Visual‑metric helpers (`fusionlab.plot.evaluation`)
+------------------------------------------------------
+A curated set of plotting utilities that turn the raw numbers returned  
+by `fusionlab.metrics` into clear, publication‑quality figures.  
+They cover point‑forecast accuracy, interval **sharpness & coverage**,  
+ensemble calibration, temporal stability, and more – all tailored to  
+time‑series / probabilistic‑forecast workflows.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.plot.evaluation.plot_coverage
+   ~fusionlab.plot.evaluation.plot_crps
+   ~fusionlab.plot.evaluation.plot_forecast_comparison
+   ~fusionlab.plot.evaluation.plot_mean_interval_width
+   ~fusionlab.plot.evaluation.plot_metric_over_horizon
+   ~fusionlab.plot.evaluation.plot_metric_radar
+   ~fusionlab.plot.evaluation.plot_prediction_stability
+   ~fusionlab.plot.evaluation.plot_quantile_calibration
+   ~fusionlab.plot.evaluation.plot_theils_u_score
+   ~fusionlab.plot.evaluation.plot_time_weighted_metric
+   ~fusionlab.plot.evaluation.plot_weighted_interval_score
+
+
+Quick‑look forecast helpers (`fusionlab.plot.forecast`)
+---------------------------------------------------------
+Light‑weight plotting utilities that turn a long‑format forecast
+DataFrame (as returned by
+:func:fusionlab.nn.utils.format_predictions_to_dataframe) into clear,
+side‑by‑side figures for rapid inspection.
+ 
+.. autosummary::
+   :toctree: _autosummary/forecast
+   :nosignatures:
+
+   ~fusionlab.plot.forecast.plot_forecasts
+   ~fusionlab.plot.forecast.visualize_forecasts
+
+   
 Time Series Utilities (`fusionlab.utils.ts_utils`)
 ---------------------------------------------------
 General utilities for time series data processing, analysis, and feature engineering.
@@ -182,33 +271,6 @@ General utilities for time series data processing, analysis, and feature enginee
    ~fusionlab.utils.ts_utils.ts_split
    ~fusionlab.utils.ts_utils.ts_outlier_detector
    ~fusionlab.utils.ts_utils.select_and_reduce_features
-
-Datasets (`fusionlab.datasets`)
--------------------------------
-Utilities for loading included sample datasets and generating synthetic
-time series data for testing and demonstration.
-
-**Loading Functions** (`fusionlab.datasets.load`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_load
-   :nosignatures:
-
-   ~fusionlab.datasets.load.fetch_zhongshan_data
-   ~fusionlab.datasets.load.fetch_nansha_data
-   ~fusionlab.datasets.load.load_processed_subsidence_data
-
-**Generation Functions** (`fusionlab.datasets.make`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_make
-   :nosignatures:
-
-   ~fusionlab.datasets.make.make_multi_feature_time_series
-   ~fusionlab.datasets.make.make_quantile_prediction_data
-   ~fusionlab.datasets.make.make_anomaly_data
-   ~fusionlab.datasets.make.make_trend_seasonal_data
-   ~fusionlab.datasets.make.make_multivariate_target_data
 
 
 Command-Line Tools (`fusionlab.tools`)
