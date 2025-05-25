@@ -142,7 +142,7 @@ print("Prediction shape:", predictions.shape)
 # Expected: (16, 5, 1) -> (Batch, Horizon, NumOutputs)
 ````
 
-*(See the `Quickstart Guide <https://fusion-lab.readthedocs.io/en/latest/quickstart.html>`_ for a more detailed walkthrough.)*
+*(See the* [*Quickstart Guide*](https://fusion-lab.readthedocs.io/en/latest/quickstart.html) *for a more detailed walkthrough.)*
 
 -----
 
