@@ -26,9 +26,9 @@ and the project's URL. You can find the installed version using:
 .. code-block:: bibtex
 
    @software{fusionlab_software,
-     author       = {Kouadio, Kouao Laurent and Liu, Zhuo and Liu, Jianxin and Bizimana, Pierre and Liu, Wenxiang and {FusionLab Contributors}},
-     title        = {{FusionLab: Igniting Next-Gen Fusion Models}},
-     url          = {https://github.com/earthai-tech/fusionlab/},
+     author       = {Kouadio, Kouao Laurent and {FusionLab Contributors}},
+     title        = {{FusionLab-Learn: Igniting Next-Gen Fusion Models}},
+     url          = {https://github.com/earthai-tech/fusionlab-learn/},
      version      = {X.Y.Z},
      year         = {YYYY}
    }

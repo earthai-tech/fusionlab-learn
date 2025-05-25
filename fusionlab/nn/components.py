@@ -900,94 +900,6 @@ class VariableSelectionNetwork(Layer, NNLearner):
         super().build(input_shape) # Call parent build last
         
 
-    # @tf_autograph.experimental.do_not_convert
-    # def call_(self, inputs, context=None, training=False):
-    #     """Execute the forward pass with optional context."""
-
-    #     # --- Input Validation and Reshaping ---
-    #     # actual_rank = inputs.shape.rank
-    #     actual_rank = len(inputs.shape)
-    #     # Determine expected minimum rank based on layer config
-     
-    #     # Assert rank meets minimum requirement (graph-safe check)
-    #     expected_min_rank = 3 if self.use_time_distributed else 2
-     
-    #     if actual_rank < expected_min_rank:
-    #         # This check should now work reliably with the decorator
-    #         raise ValueError(
-    #             f"Input rank must be >= {expected_min_rank}. "
-    #             f"Got rank {actual_rank} for shape {inputs.shape}."
-    #             )
-    #     # Add feature dimension if missing
-    #     if actual_rank == expected_min_rank:
-    #         # Use tf_expand_dims from KERAS_DEPS or tf
-    #         inputs = tf_expand_dims(inputs, axis=-1)
-    #         # Comment: Added feature dimension (size 1).
-    #     # Input shape: (B, N, F=1) or (B, T, N, F=1)
-        
-    #     # --- Context Processing ---
-    #     processed_context = None
-    #     if context is not None:
-    #         # Project context to the 'units' dimension if layer exists
-    #         if self.context_projection is None:
-    #              # Should have been created in build, but create lazily if missed
-    #              # This might indicate an issue if build wasn't called prior
-    #              self.context_projection = Dense(
-    #                   self.units, name="context_projection",
-    #                   activation=self.activation_str
-    #                   )
-    #         processed_context = self.context_projection(context)
-    #         # Note: GRN's call method handles broadcasting this context
-
-    #     # --- Apply GRN to each variable ---
-    #     var_outputs = []
-    #     # Axes: B=0, T=1, N=2, F=3 (TimeDistributed)
-    #     # Axes: B=0, N=1, F=2 (Not TimeDistributed)
-    #     # num_vars_tf = tf_shape(inputs)[-2] # Get N dynamically
-       
-    #     for i in range(self.num_inputs):
-    #         if self.use_time_distributed:
-    #             # Slice variable i: (B, T, N, F) -> (B, T, F)
-    #             var_input = inputs[:, :, i, :]
-    #         else:
-    #             # Slice variable i: (B, N, F) -> (B, F)
-    #             var_input = inputs[:, i, :]
-
-    #         # Apply the i-th GRN, passing the (potentially None) context
-    #         grn_output = self.single_variable_grns[i](
-    #             var_input,
-    #             context=processed_context, # GRN handles context=None
-    #             training=training
-    #         )
-    #         var_outputs.append(grn_output)
-    #         # Output shape: (B, T, units) or (B, units)
-
-    #     # --- Stack GRN outputs along variable dimension (N) ---
-    #     # axis=-2 places N before the 'units' dimension
-    #     stacked_outputs = tf_stack(var_outputs, axis=-2)
-    #     # Shape: (B, T, N, units) or (B, N, units)
-
-    #     # --- Calculate Variable Importance Weights (Original Logic) ---
-    #     # 1. Apply Dense layer (output units = 1) to stacked outputs
-    #     #    Acts on the last dimension ('units') -> (B, [T,] N, 1)
-    #     importance_logits = self.variable_importance_dense(stacked_outputs)
-
-    #     # 2. Apply Softmax across the variable dimension (N, axis=-2)
-    #     weights = self.softmax(importance_logits)
-    #     # Shape: (B, [T,] N, 1)
-    #     self.variable_importances_ = weights # Store weights
-
-    #     # --- Weighted Combination ---
-    #     # Multiply stacked GRN outputs by weights and sum
-    #     # stacked_outputs: (B, [T,] N, units)
-    #     # weights:         (B, [T,] N, 1) -> broadcasts correctly
-    #     weighted_sum = tf_reduce_sum(
-    #         tf_multiply(stacked_outputs, weights),
-    #         axis=-2 # Sum across the variable dimension (N)
-    #     )
-    #     # Final output shape: (B, T, units) or (B, units)
-    #     return weighted_sum
-
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context=None, training=False):
         """Execute the forward pass with optional context."""
@@ -1789,10 +1701,10 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         )
     @tf_autograph.experimental.do_not_convert
     def call(
-            self,
-            temporal_features,
-            context_vector,
-            training=False
+        self,
+        temporal_features,
+        context_vector,
+        training=False
     ):
         r"""
         Forward pass of the static enrichment layer.
@@ -2023,13 +1935,13 @@ class TemporalAttentionLayerIn(Layer, NNLearner):
     @ensure_pkg(KERAS_BACKEND or "keras",
                 extra=DEP_MSG)
     def __init__(
-            self,
-            units,
-            num_heads,
-            dropout_rate=0.0,
-            activation='elu',
-            use_batch_norm=False,
-            **kwargs
+        self,
+        units,
+        num_heads,
+        dropout_rate=0.0,
+        activation='elu',
+        use_batch_norm=False,
+        **kwargs
     ):
         r"""
         Initialize the TemporalAttentionLayer.
@@ -2156,7 +2068,6 @@ class TemporalAttentionLayerIn(Layer, NNLearner):
         # Only process and add context 
         # if it's actually provided
         if context_vector is not None:
-            
             # Transform context vector 
             # Apply GRN to transform the context vector
             # Pass context_vector as the main input 'x' to context_grn
@@ -2591,7 +2502,8 @@ class MultiModalEmbedding(Layer, NNLearner):
 
 
 @register_keras_serializable(
-    'fusionlab.nn.components', name="HierarchicalAttention"
+    'fusionlab.nn.components', 
+    name="HierarchicalAttention"
 )
 class HierarchicalAttention(Layer, NNLearner):
     r"""
@@ -2788,7 +2700,8 @@ class HierarchicalAttention(Layer, NNLearner):
         return cls(**config)
 
 @register_keras_serializable(
-    'fusionlab.nn.components', name="CrossAttention"
+    'fusionlab.nn.components',
+    name="CrossAttention"
 )
 class CrossAttention(Layer, NNLearner):
     r"""
@@ -3779,7 +3692,8 @@ class VariableSelectionNetworkIn(Layer, NNLearner):
 
         # Create the activation object from its name
         self.activation = activation
-        # Store activation string for config, convert later or inside GRN
+        # Store activation string for config,
+        # convert later or inside GRN
         self.activation_str = activation
 
         # Build one GRN for each variable

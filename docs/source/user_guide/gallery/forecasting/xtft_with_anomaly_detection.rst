@@ -25,9 +25,6 @@ into a multi-step quantile forecasting task:
     directly from prediction errors during training via a specialized
     loss function (:func:`~fusionlab.nn.losses.prediction_based_loss`).
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -329,7 +326,7 @@ Prediction and visualization are standard.
 
 **Example Output Plot:**
 
-.. figure:: ../../images/s1_forecasting_xtft_anomaly_example.png
+.. figure:: ../../../images/s1_forecasting_xtft_anomaly_example.png
    :alt: XTFT Forecast with Anomaly Detection
    :align: center
    :width: 80%
@@ -479,7 +476,7 @@ using `model_s2`.
 
 **Example Output Plot (Conceptual):**
 
-.. figure:: ../../images/s2_forecasting_xtft_anomaly_example.png
+.. figure:: ../../../images/s2_forecasting_xtft_anomaly_example.png
    :alt: XTFT Forecast with Anomaly Detection
    :align: center
    :width: 80%

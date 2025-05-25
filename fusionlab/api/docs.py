@@ -457,7 +457,6 @@ _core_docs = dict(
 )
 
 
-
 refglossary =type ('refglossary', (), dict (
     __doc__="""\
 

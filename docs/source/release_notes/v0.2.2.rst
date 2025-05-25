@@ -13,16 +13,17 @@ and completeness.
 
 Enhancements & Improvements
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* |Enhancement| Improved :func:`~fusionlab.plot.evaluation.plot_forecasts`
-  (a shadow of `visualize_forecasts`):
-    * Added `figsize_per_subplot` parameter to allow more direct
-      control over individual subplot sizes when `kind='temporal'` and
-      multiple samples or output dimensions are plotted. The total
-      figure size is now dynamically calculated.
-    * Enhanced title generation for subplots to be more informative,
-      especially for multi-output models.
-    * Improved handling of `actual_data` parameter for more flexible
-      comparison against external true values in temporal plots.
+* |Enhancement| Improved :func:`~fusionlab.plot.forecast.plot_forecasts`
+  (a shadow of :func:`~fusionlab.plot.forecast.visualize_forecasts`):
+  
+  * Added `figsize_per_subplot` parameter to allow more direct
+    control over individual subplot sizes when `kind='temporal'` and
+    multiple samples or output dimensions are plotted. The total
+    figure size is now dynamically calculated.
+  * Enhanced title generation for subplots to be more informative,
+    especially for multi-output models.
+  * Improved handling of `actual_data` parameter for more flexible
+    comparison against external true values in temporal plots.
 * |Enhancement| The :func:`~fusionlab.plot.evaluation.plot_metric_over_horizon`
   function now more gracefully handles cases where a specified metric
   cannot be calculated for a particular step or group (e.g., due to
@@ -48,7 +49,7 @@ Fixes
   containing non-string identifiers could lead to incorrect grouping
   if not properly cast or handled before `groupby`. Now ensures
   grouping keys are consistently managed.
-* |Fix| Corrected an issue in :func:`~fusionlab.plot.evaluation.plot_forecasts`
+* |Fix| Corrected an issue in :func:`~fusionlab.plot.forecast.plot_forecasts`
   where `spatial_cols` were not correctly utilized if `forecast_df`
   was generated with a different naming convention for coordinates than
   the default expected by the plot function. Now uses `spatial_cols`
@@ -57,7 +58,7 @@ Fixes
   the `anomaly_scores` attribute might not be reset correctly between
   calls if `anomaly_detection_strategy` was changed without re-compiling.
 * |Fix| Fixed a potential `KeyError` in
-  :func:`~fusionlab.plot.evaluation.plot_metric_over_horizon` if a
+  :func:`~fusionlab.plot.forecast.plot_metric_over_horizon` if a
   custom metric function was used and `output_dim > 1` without proper
   handling of multi-output metric aggregation.
 
@@ -103,6 +104,6 @@ Documentation
 
 Contributors
 ~~~~~~~~~~~~~
-* `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer: earthai-tech)
+* `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)
 
 

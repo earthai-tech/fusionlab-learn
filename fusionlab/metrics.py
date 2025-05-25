@@ -2200,7 +2200,6 @@ def prediction_stability_score(
     return final_score
 
 
-
 @validate_params({
     'y_true': ['array-like'],
     'y_lower': ['array-like'],

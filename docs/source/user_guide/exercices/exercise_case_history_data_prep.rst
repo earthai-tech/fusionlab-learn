@@ -28,9 +28,6 @@ subsequent model training.
 
 Let's begin!
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -42,7 +39,6 @@ installed. We'll also use `joblib` for saving artifacts.
 
    pip install fusionlab-learn scikit-learn joblib matplotlib
 
----
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -443,9 +439,9 @@ Discussion of Exercise
 ------------------------
 In this exercise, we performed a comprehensive data preparation
 workflow for the Zhongshan dataset:
+
 1.  **Loaded** the raw data.
-2.  **Cleaned** it by ensuring correct datetime formatting and handling
-    missing values.
+2.  **Cleaned** it by ensuring correct datetime formatting and handling missing values.
 3.  **Engineered new features** like lags, rolling statistics, and
     calendar attributes using `ts_engineering`.
 4.  **Encoded categorical features** (`geology`, `density_tier`) into

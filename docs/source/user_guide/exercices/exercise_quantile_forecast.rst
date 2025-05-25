@@ -28,9 +28,6 @@ variants from ``fusionlab-learn`` for this task:
 
 Let's begin!
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -42,7 +39,6 @@ installed. For visualizations, `matplotlib` is also needed.
 
    pip install fusionlab-learn matplotlib scikit-learn joblib
 
----
 
 Exercise 1: Quantile Forecasting with Flexible `TemporalFusionTransformer`
 --------------------------------------------------------------------------
@@ -548,6 +544,7 @@ class, which **requires static, dynamic, and future inputs**.
 Discussion of Exercise
 ----------------------
 In this exercise, you explored quantile forecasting with two TFT variants:
+
 1.  **Flexible `TemporalFusionTransformer`**: Demonstrated with only
     dynamic inputs, showcasing its adaptability. Inputs are provided as
     `[None, dynamic_array, None]`.
@@ -558,10 +555,10 @@ In this exercise, you explored quantile forecasting with two TFT variants:
     Inputs are provided as `[static_array, dynamic_array, future_array]`.
 
 Key takeaways include:
+
 * Setting the `quantiles` parameter in the model's `__init__` method.
 * Using :func:`~fusionlab.nn.losses.combined_quantile_loss` for training.
-* Understanding that the model's output shape changes to include the
-  number of quantiles.
+* Understanding that the model's output shape changes to include the number of quantiles.
 * Visualizing prediction intervals to assess forecast uncertainty.
 
 This exercise provides a foundation for building more complex

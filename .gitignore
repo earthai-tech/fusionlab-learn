@@ -179,3 +179,5 @@ docs/source/_autosummary/
 # future release preparations 
 _future_releases/
 results/
+main_ieee_tpami.py
+

@@ -11,6 +11,7 @@ be integrated into larger forecasting frameworks like
 :class:`~fusionlab.nn.XTFT` to make them anomaly-aware.
 
 We will cover:
+
 1.  Using :class:`~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly`
     for reconstruction-based anomaly detection.
 2.  Conceptual usage of
@@ -20,9 +21,6 @@ We will cover:
     :class:`~fusionlab.nn.anomaly_detection.PredictionErrorAnomalyScore`
     to derive anomaly scores from prediction errors.
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------

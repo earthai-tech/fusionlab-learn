@@ -14,7 +14,7 @@ directly from the terminal.
 
 General TFT Command-Line Interface (CLI)
 ------------------------------------------
-*(Script: ``fusionlab/tools/tft_cli.py`` or similar)*
+*(Script:* ``fusionlab/tools/tft_cli.py`` *or similar)*
 
 **Purpose:**
 This script provides a configurable command-line interface for

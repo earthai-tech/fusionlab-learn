@@ -11,14 +11,12 @@ the model predicts multiple quantiles (e.g., 10th, 50th, 90th
 percentiles), providing an estimate of the prediction uncertainty.
 
 We will show examples using both:
+
 1. The flexible :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`
    (handling optional inputs, demonstrated with dynamic inputs only).
 2. The stricter :class:`~fusionlab.nn.transformers.TFT` (requiring
    all static, dynamic, and future inputs).
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -216,7 +214,7 @@ We visualize the median and the prediction interval.
 
 **Example Output Plot (Flexible TFT):**
 
-.. figure:: ../../images/forecasting_quantile_tft_flexible.png
+.. figure:: ../../../images/forecasting_quantile_tft_flexible.png
    :alt: Flexible TFT Quantile Forecast
    :align: center
    :width: 80%
@@ -435,7 +433,7 @@ Predictions and visualization follow a similar pattern.
 
 **Example Output Plot (Stricter TFT - Scaled Values):**
 
-.. figure:: ../../images/forecasting_quantile_tft_stricter.png
+.. figure:: ../../../images/forecasting_quantile_tft_stricter.png
    :alt: Stricter TFT Quantile Forecast
    :align: center
    :width: 80%

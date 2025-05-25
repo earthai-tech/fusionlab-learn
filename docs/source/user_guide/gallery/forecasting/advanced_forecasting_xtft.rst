@@ -24,10 +24,6 @@ We will walk through the process step-by-step:
 8.  Make predictions and inverse transform them.
 9.  Visualize the quantile predictions for a sample item.
 
-.. contents::
-   :local:
-   :depth: 2
-
 Prerequisites
 -------------
 
@@ -412,7 +408,7 @@ shaded interval) for one sample item from the validation set.
 
 **Example Output Plot:**
 
-.. figure:: ../../images/forecasting_advanced_xtft_quantile_forecast.png
+.. figure:: ../../../images/forecasting_advanced_xtft_quantile_forecast.png
    :alt: Advanced XTFT Quantile Forecast
    :align: center
    :width: 80%

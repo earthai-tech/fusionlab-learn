@@ -20,9 +20,6 @@ This guide demonstrates how to use the primary plotting functions:
 * :func:`~fusionlab.plot.evaluation.plot_metric_radar`: For comparing
   a metric across different segments or categories.
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -149,7 +146,6 @@ produced after running a model and formatting its output.
    Libraries imported and setup complete for evaluation plotting.
    Base data and sample DataFrames prepared for plotting examples.
 
----
 
 1. Visualizing Forecast Comparisons (`plot_forecast_comparison`)
 -----------------------------------------------------------------
@@ -162,6 +158,7 @@ scatter plots (showing forecast values across geographical coordinates
 for a specific horizon step).
 
 **Key Use Cases:**
+
 * **Temporal Point Forecasts:** Plot actual vs. predicted lines for
   selected time series samples.
 * **Temporal Quantile Forecasts:** Plot actuals, the median prediction,
@@ -261,7 +258,6 @@ for a specific horizon step).
    Scatter plot showing the median predicted values across spatial
    coordinates for a specific forecast horizon step.
 
----
 
 2. Visualizing Metrics Over the Forecast Horizon (`plot_metric_over_horizon`)
 ------------------------------------------------------------------------------
@@ -273,6 +269,7 @@ It's useful for identifying if a model's accuracy degrades
 significantly for longer horizons.
 
 **Key Use Cases:**
+
 * Plotting MAE, RMSE, MAPE, etc., for each step of the horizon.
 * For quantile forecasts, plotting coverage or pinball loss over the
   horizon.
@@ -339,7 +336,6 @@ significantly for longer horizons.
    Line plot showing prediction interval coverage for each forecast
    step, potentially with separate lines for different categories.
 
----
 
 3. Visualizing Metrics Across Segments with Radar Plots (`plot_metric_radar`)
 -----------------------------------------------------------------------------
@@ -351,6 +347,7 @@ months). Each segment forms an axis on the radar, and the metric's
 value for that segment is plotted along it.
 
 **Key Use Cases:**
+
 * Comparing model performance (e.g., MAE, RMSE) across different
   product categories.
 * Identifying if a model performs consistently across different
@@ -386,7 +383,6 @@ value for that segment is plotted along it.
    Radar chart showing the Mean Absolute Error (of the median
    forecast) for different categories.
 
----
 
 Further Exploration
 -------------------

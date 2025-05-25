@@ -22,24 +22,25 @@ API Changes & Enhancements
   :func:`~fusionlab.nn.utils.plot_forecasts` for clarity and
   consistency with other ``fusionlab-learn`` utilities and common
   practices. Key changes include:
-    * `inputs` in `model.predict` context is now `model_inputs` in
-      `format_predictions_to_dataframe`.
-    * `y` (true values) is now `y_true_sequences` in
-      `format_predictions_to_dataframe`.
-    * `plot_type` is now `kind` in `plot_forecasts`.
-    * `actual_data_for_comparison` is now `actual_data` in
-      `plot_forecasts`.
-    * `dt_col_actual` is now `dt_col` in `plot_forecasts`.
-    * `actual_target_col_name` is now `actual_target_name` in
-      `plot_forecasts`.
-    * `sample_ids_to_plot` is now `sample_ids` in `plot_forecasts`.
-    * `num_samples_to_plot` is now `num_samples` in `plot_forecasts`.
-    * `horizon_steps_to_plot_spatial` is now `horizon_steps` in
-      `plot_forecasts`.
-    * `spatial_x_col` and `spatial_y_col` are consolidated into
-      `spatial_cols` (a list of two strings) in `plot_forecasts`.
-    * `figsize_per_subplot` is now `figsize` in `plot_forecasts`
-      (representing size per subplot).
+  
+  * `inputs` in `model.predict` context is now `model_inputs` in
+    `format_predictions_to_dataframe`.
+  * `y` (true values) is now `y_true_sequences` in
+    `format_predictions_to_dataframe`.
+  * `plot_type` is now `kind` in `plot_forecasts`.
+  * `actual_data_for_comparison` is now `actual_data` in
+    `plot_forecasts`.
+  * `dt_col_actual` is now `dt_col` in `plot_forecasts`.
+  * `actual_target_col_name` is now `actual_target_name` in
+    `plot_forecasts`.
+  * `sample_ids_to_plot` is now `sample_ids` in `plot_forecasts`.
+  * `num_samples_to_plot` is now `num_samples` in `plot_forecasts`.
+  * `horizon_steps_to_plot_spatial` is now `horizon_steps` in
+    `plot_forecasts`.
+  * `spatial_x_col` and `spatial_y_col` are consolidated into
+    `spatial_cols` (a list of two strings) in `plot_forecasts`.
+  * `figsize_per_subplot` is now `figsize` in `plot_forecasts`
+    (representing size per subplot).
 * |Enhancement| The :func:`~fusionlab.nn.utils.format_predictions_to_dataframe`
   function was made more robust in handling various prediction shapes
   (2D, 3D, 4D) for point and quantile forecasts, including multi-output
@@ -47,11 +48,12 @@ API Changes & Enhancements
   `spatial_data_array` types and scaler application.
 * |Enhancement| The :func:`~fusionlab.nn.utils.plot_forecasts` function
   was enhanced to:
-    * Better handle different `sample_ids` specifications for temporal plots.
-    * More flexibly plot spatial forecasts for specified `horizon_steps`.
-    * Improve subplot layout management with `max_cols`.
-    * Clarify behavior for inverse transformation using `scaler`.
-    * Use `vlog` for internal logging.
+  
+  * Better handle different `sample_ids` specifications for temporal plots.
+  * More flexibly plot spatial forecasts for specified `horizon_steps`.
+  * Improve subplot layout management with `max_cols`.
+  * Clarify behavior for inverse transformation using `scaler`.
+  * Use `vlog` for internal logging.
 
 Fixes
 ~~~~~

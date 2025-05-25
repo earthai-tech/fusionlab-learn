@@ -29,9 +29,6 @@ for several internal stages.
 
 Let's begin!
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------
@@ -43,7 +40,6 @@ installed.
 
    pip install fusionlab-learn matplotlib scikit-learn joblib
 
----
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -1,8 +1,8 @@
-.. _example_hyperparameter_tuning:
+.. _example_xtft_hyperparameter_tuning:
 
-======================================================
-Hyperparameter Tuning with Keras Tuner for XTFT
-======================================================
+==============
+XTFT Tuning
+==============
 
 Finding optimal hyperparameters is crucial for maximizing the
 performance of complex models like
@@ -19,9 +19,6 @@ The workflow includes:
 3.  Configuring and running the `xtft_tuner`.
 4.  Retrieving and inspecting the best hyperparameters and model.
 
-.. contents::
-   :local:
-   :depth: 2
 
 Prerequisites
 -------------

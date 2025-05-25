@@ -41,10 +41,11 @@ directory and suppress warnings.
    import os
 
    # from fusionlab.core.io import read_data # Example loader (or use pd.read_csv)
+   # from fusionlab.utils.io import save_job # For robust saver
+   from fusionlab.nn.utils import reshape_xtft_data
    from fusionlab.utils.ts_utils import (
        to_dt,
        ts_engineering,
-       reshape_xtft_data,
        # select_and_reduce_features # Import if using this optional step
    )
 
