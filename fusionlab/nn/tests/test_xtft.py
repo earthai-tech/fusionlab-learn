@@ -183,6 +183,9 @@ def test_xtft_compile_fit_point(xtft_base_config, dummy_xtft_data):
     assert history is not None and 'loss' in history.history
     print("XTFT Compile/Fit OK: Point Forecast")
 
+# @pytest.mark.skip (
+#     "Keras registering loss functions. Pass anyway since local test has passed."
+#  )
 def test_xtft_compile_fit_quantile(xtft_base_config, dummy_xtft_data):
     """Test compile/fit for quantile forecast."""
     config = xtft_base_config.copy()
@@ -202,6 +205,9 @@ def test_xtft_compile_fit_quantile(xtft_base_config, dummy_xtft_data):
     assert history is not None and 'loss' in history.history
     print("XTFT Compile/Fit OK: Quantile Forecast")
 
+# @pytest.mark.skip (
+#     "Keras registering loss functions. Pass anyway since local test has passed."
+#  )
 def test_xtft_compile_fit_anomaly_from_config(xtft_base_config, dummy_xtft_data):
     """Test compile/fit for anomaly strategy 'from_config'."""
     config = xtft_base_config.copy()
@@ -245,6 +251,11 @@ def test_xtft_compile_fit_anomaly_from_config(xtft_base_config, dummy_xtft_data)
     assert history is not None and 'loss' in history.history
     print("XTFT Compile/Fit OK: Anomaly='from_config'")
 
+
+# @pytest.mark.skip (
+#     "Keras registering loss functions. Pass anyway since local test has passed."
+#     "This passed for keras>=2.15"
+#  )
 def test_xtft_compile_fit_anomaly_prediction_based(xtft_base_config, dummy_xtft_data):
     """Test compile/fit for anomaly strategy 'prediction_based'."""
     config = xtft_base_config.copy()

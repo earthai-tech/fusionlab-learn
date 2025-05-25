@@ -15,8 +15,8 @@
 .. raw:: html
 
    <p align="center" style="margin-bottom: 1.5em;">
-     <a href="https://pypi.org/project/fusionlab/" target="_blank" rel="noopener noreferrer">
-       <img src="https://img.shields.io/pypi/v/fusionlab?color=121EAF&label=PyPI" alt="PyPI Version">
+     <a href="https://pypi.org/project/fusionlab-learn/" target="_blank" rel="noopener noreferrer">
+       <img src="https://img.shields.io/pypi/v/fusionlab-learn?color=121EAF&label=PyPI" alt="PyPI Version">
      </a>
      <a href="https://fusion-lab.readthedocs.io/en/latest/?badge=latest" target="_blank" rel="noopener noreferrer">
        <img src="https://readthedocs.org/projects/fusion-lab/badge/?version=latest" alt="Documentation Status"/>
@@ -25,9 +25,9 @@
        <img src="https://img.shields.io/github/license/earthai-tech/fusionlab-learn?color=121EAF" alt="GitHub License">
      </a>
      <a href="https://www.python.org/" target="_blank" rel="noopener noreferrer">
-       <img src="https://img.shields.io/badge/Python-3.8%2B-121EAF" alt="Python Version">
+       <img src="https://img.shields.io/badge/Python-3.9%2B-121EAF" alt="Python Version">
      </a>
-     <a href="https://github.com/earthai-tech/fusionlab/actions" target="_blank" rel="noopener noreferrer">
+     <a href="https://github.com/earthai-tech/fusionlab-learn/actions" target="_blank" rel="noopener noreferrer">
         <img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab-learn/python-package-conda.yml?branch=main" alt="Build Status">
      </a>
    </p>
@@ -40,7 +40,6 @@
 
       *Extend, experiment, and fuse time-series predictions with
       state-of-the-art architectures.*
-
 
 
 .. raw:: html
@@ -124,7 +123,7 @@ temporal architectures, FusionLab aims to provide the necessary tools.
 .. rubric:: Explore Further
 
 * **Motivation:** Understand the :doc:`motivation` behind FusionLab.
-* **Examples:** See practical applications in the :doc:`Examples Gallery </user_guide/examples/index>`.
+* **Examples:** See practical applications in the :doc:`Examples Gallery </user_guide/gallery/index>`.
 * **Contribute:** Learn how to :doc:`contribute <contributing>` to the project.
 * **Cite:** Find out :doc:`how to cite <citing>` FusionLab in your work.
 * **Reference:** Consult the :doc:`glossary` or view the :doc:`license` (BSD-3-Clause).

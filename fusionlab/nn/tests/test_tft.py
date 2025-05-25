@@ -1,4 +1,4 @@
-# test_tft.py (or similar location like fusionlab/nn/tests/test_tft.py)
+# test_tft.py 
 
 import pytest
 import numpy as np
@@ -104,11 +104,12 @@ def test_tft_call_and_output_shape(dummy_data, use_static, use_future, quantiles
 
     # Prepare inputs based on flags
     inputs = []
+    if use_static:
+        inputs.append(dummy_data["X_static"])
     inputs.append(dummy_data["X_dynamic"])
     if use_future:
         inputs.append(dummy_data["X_future"])
-    if use_static:
-        inputs.append(dummy_data["X_static"])
+    
 
     # Perform forward pass
     # Need to build model first or run predict once
@@ -155,11 +156,12 @@ def test_tft_compile_and_fit(dummy_data, use_quantiles):
 
    # --- FIX: Prepare inputs IN THE CORRECT ORDER ---
     # Expected order by validate_tft_inputs for 3 inputs:
-    # (Dynamic, Future, Static)
+    # (Static, Dynamic, Future )
     inputs = [
-        dummy_data["X_dynamic"], # Index 0
-        dummy_data["X_future"],  # Index 1
-        dummy_data["X_static"]   # Index 2
+        dummy_data["X_static"],   # Index 0
+        dummy_data["X_dynamic"], # Index 1
+        dummy_data["X_future"],  # Index 2
+        
     ]
     # --------------------------------------------
 
@@ -200,9 +202,9 @@ def test_tft_serialization(dummy_data):
     )
     # Prepare inputs to allow building the model before get_config
     inputs = [
+        dummy_data["X_static"],
         dummy_data["X_dynamic"],
         dummy_data["X_future"], 
-        dummy_data["X_static"],
     ]
     _ = model(inputs) # Run a forward pass to build
 

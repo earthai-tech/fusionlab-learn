@@ -7,7 +7,7 @@
 # -------------------------------------------------------------------
 """
 Dataset Loading Utilities (:mod:`fusionlab.datasets.load`)
-=========================================================
+=============================================================
 
 Functions to load sample datasets included with the ``fusionlab``
 package, suitable for demonstrating and testing forecasting models

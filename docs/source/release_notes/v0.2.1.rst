@@ -1,0 +1,114 @@
+.. _release_v0.2.1:
+
+Version 0.2.1
+===============
+*(Release Date: May 22, 2025)*
+
+**Focus: Standardization of Prediction Utilities and Enhanced Visualization**
+
+This patch release focuses on improving the consistency and usability
+of utility functions related to processing and visualizing model
+predictions. Key functions :func:`~fusionlab.nn.utils.format_predictions_to_dataframe`
+and the newly named :func:`~fusionlab.nn.utils.plot_forecasts`
+(formerly `visualize_forecasts`) have had their parameters
+standardized for better cross-package consistency and intuitiveness.
+
+API Changes & Enhancements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* |API Change| Renamed the visualization utility from `visualize_forecasts`
+  to :func:`~fusionlab.nn.utils.plot_forecasts` for brevity and
+  alignment with common plotting library conventions.
+* |API Change| Standardized parameter names in
+  :func:`~fusionlab.nn.utils.plot_forecasts` for clarity and
+  consistency with other ``fusionlab-learn`` utilities and common
+  practices. Key changes include:
+  
+  * `inputs` in `model.predict` context is now `model_inputs` in
+    `format_predictions_to_dataframe`.
+  * `y` (true values) is now `y_true_sequences` in
+    `format_predictions_to_dataframe`.
+  * `plot_type` is now `kind` in `plot_forecasts`.
+  * `actual_data_for_comparison` is now `actual_data` in
+    `plot_forecasts`.
+  * `dt_col_actual` is now `dt_col` in `plot_forecasts`.
+  * `actual_target_col_name` is now `actual_target_name` in
+    `plot_forecasts`.
+  * `sample_ids_to_plot` is now `sample_ids` in `plot_forecasts`.
+  * `num_samples_to_plot` is now `num_samples` in `plot_forecasts`.
+  * `horizon_steps_to_plot_spatial` is now `horizon_steps` in
+    `plot_forecasts`.
+  * `spatial_x_col` and `spatial_y_col` are consolidated into
+    `spatial_cols` (a list of two strings) in `plot_forecasts`.
+  * `figsize_per_subplot` is now `figsize` in `plot_forecasts`
+    (representing size per subplot).
+* |Enhancement| The :func:`~fusionlab.nn.utils.format_predictions_to_dataframe`
+  function was made more robust in handling various prediction shapes
+  (2D, 3D, 4D) for point and quantile forecasts, including multi-output
+  scenarios. It also includes more robust handling of optional
+  `spatial_data_array` types and scaler application.
+* |Enhancement| The :func:`~fusionlab.nn.utils.plot_forecasts` function
+  was enhanced to:
+  
+  * Better handle different `sample_ids` specifications for temporal plots.
+  * More flexibly plot spatial forecasts for specified `horizon_steps`.
+  * Improve subplot layout management with `max_cols`.
+  * Clarify behavior for inverse transformation using `scaler`.
+  * Use `vlog` for internal logging.
+
+Fixes
+~~~~~
+* |Fix| Ensured that `static_input_dim=0` or `future_input_dim=0`
+  (resulting from empty static/future feature lists passed to
+  `reshape_xtft_data`) is correctly handled by the `XTFT` model's
+  `__init__` and `call` methods by conditionally creating/using
+  layers for these input paths. This prevents errors when an input
+  type is intentionally absent but the model structure expects a
+  placeholder. *(Note: This fix is primarily internal to XTFT's
+  robustness, building on the `reshape_xtft_data` changes from v0.2.0
+  that always return arrays).*
+* |Fix| Corrected potential `RecursionError` in `fusionlab.compat.tf.get_ndim`
+  by removing the monkey-patching behavior of `TFConfig` and ensuring
+  `get_ndim` uses `tf.rank()` appropriately for TensorFlow tensors when
+  a static integer rank is needed. This also involved fixes in
+  `_tensor_validation.py` functions to use `tf.rank()` and TensorFlow
+  assertions correctly in graph mode.
+* |Fix| Resolved `AttributeError: 'Tensor' object has no attribute 'numpy'`
+  in `validate_tft_inputs` (now part of `validate_model_inputs`) by
+  replacing Python boolean conversions of symbolic tensors with
+  TensorFlow graph-compatible assertions (e.g., `tf.debugging.assert_equal`)
+  for batch size and dimension checks.
+* |Fix| Addressed `ValueError` in `LSTMAutoencoderAnomaly` related to
+  `initial_state` and `cell.state_size` mismatch when using
+  bidirectional encoders or bottlenecks. The model now correctly
+  projects encoder states to match decoder LSTM unit sizes if necessary.
+  Also fixed the `ValueError: You can only call build() on a model if its
+  call() method accepts an inputs argument` by ensuring the `NNLearner`'s
+  method wrapping (via `HelpMeta`) preserves Keras-compatible signatures
+  for `Model.call`.
+
+Tests
+~~~~~
+* |Tests| Added comprehensive pytest suite for the revised
+  :func:`~fusionlab.nn.utils.format_predictions_to_dataframe` utility.
+* |Tests| Added comprehensive pytest suite for the new
+  :func:`~fusionlab.nn.utils.plot_forecasts` utility, including
+  mocking for plot generation checks.
+* |Tests| Ensured `LSTMAutoencoderAnomaly` tests pass after fixes to its
+  internal state handling and the `NNLearner` metaclass interaction.
+
+Documentation
+~~~~~~~~~~~~~
+* |Docs| Updated example gallery scripts (`advanced_forecasting_xtft.rst`,
+  `basic_tft_forecasting.rst`, `quantile_forecasting_tft.rst`) to use
+  the new :func:`~fusionlab.nn.utils.plot_forecasts` function and reflect
+  parameter name changes in :func:`~fusionlab.nn.utils.format_predictions_to_dataframe`.
+* |Docs| Added new "Exercise" versions of key examples in a new
+  `docs/source/gallery/exercises/` subdirectory, including
+  `anomaly_detection_exercise.rst`, `exercise_advanced_xtft.rst`, and
+  `exercise_basic_forecasting.rst`.
+* |Docs| Updated `gallery/index.rst` and created
+  `gallery/forecasting/index.rst` and `gallery/exercises/index.rst`
+  to reflect new gallery structure.
+
+
+

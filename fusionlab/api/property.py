@@ -282,54 +282,67 @@ class HelpMeta(type):
             The wrapped method, now with `my_params` and `help` attributes, 
             either as a `staticmethod`, `classmethod`, or a regular method.
         """
-        # Case 1: If method is a staticmethod
+        
+        # Case 1: staticmethod
         if isinstance(method, staticmethod):
-            # Retrieve the original function behind the staticmethod decorator
             original_func = method.__func__
-    
-            # Define a wrapper for the original function
             @wraps(original_func)
-            def wrapper(*args, **kwargs):
+            def static_wrapper(*args, **kwargs): # No 'self' or 'cls'
                 return original_func(*args, **kwargs)
-    
-            # Attach 'my_params' and 'help' to the wrapper
-            wrapper.my_params = mcs._get_my_params(original_func)
-            wrapper.my_params = DisplayStr(wrapper.my_params)
-            wrapper.help = mcs._create_help(original_func)
-            return staticmethod(wrapper)
-    
-        # Case 2: If method is a classmethod
+            static_wrapper.my_params = DisplayStr(mcs._get_my_params(original_func))
+            static_wrapper.help = mcs._create_help(original_func)
+            return staticmethod(static_wrapper)
+
+        # Case 2: classmethod
         elif isinstance(method, classmethod):
-            # Retrieve the original function behind the classmethod decorator
             original_func = method.__func__
-    
-            # Define a wrapper for the original function
             @wraps(original_func)
-            def wrapper(cls, *args, **kwargs):
+            def class_wrapper(cls, *args, **kwargs): # 'cls' is first
                 return original_func(cls, *args, **kwargs)
-    
-            # Attach 'my_params' and 'help' to the wrapper
-            wrapper.my_params = mcs._get_my_params(original_func)
-            wrapper.my_params = DisplayStr(wrapper.my_params)
-            wrapper.help = mcs._create_help(original_func)
-            return classmethod(wrapper)
-    
-        # Case 3: If method is a regular instance method
+            class_wrapper.my_params = DisplayStr(mcs._get_my_params(original_func))
+            class_wrapper.help = mcs._create_help(original_func)
+            return classmethod(class_wrapper)
+
+        # Case 3: If method is a regular instance method (FunctionType)
         elif isinstance(method, FunctionType):
-            # Define a wrapper for the regular function
-            @wraps(method)
-            def wrapper(self, *args, **kwargs):
-                return method(self, *args, **kwargs)
-    
-            # Attach 'my_params' and 'help' to the wrapper
-            wrapper.my_params = mcs._get_my_params(method)
-            wrapper.my_params = DisplayStr(wrapper.my_params)
-            wrapper.help = mcs._create_help(method)
-            return wrapper
-    
-        # Case 4: If method is not recognized, return it unchanged
+            original_func = method
+
+            # Check if it's likely a Keras Model's 'call' method
+            # A simple check: name is 'call' and first arg after 'self' is 'inputs'
+            sig = inspect.signature(original_func)
+            params = list(sig.parameters.values())
+            is_keras_model_call = (
+                original_func.__name__ == 'call' and
+                len(params) > 1 and params[0].name == 'self' and
+                params[1].name == 'inputs' # Keras usually expects 'inputs'
+            )
+
+            if is_keras_model_call:
+                # Create a wrapper that matches Keras's expected call signature
+                @wraps(original_func)
+                def keras_call_wrapper(
+                        self_obj, inputs, **call_kwargs):
+                    # self_obj is 'self' for the instance
+                    # Pass through known Keras call arguments explicitly
+                    return original_func(
+                        self_obj, inputs, **call_kwargs)
+                
+                wrapper_to_enhance = keras_call_wrapper
+            else:
+                # Generic wrapper for other instance methods
+                @wraps(original_func)
+                def generic_wrapper(self_obj, *args, **call_kwargs):
+                    return original_func(self_obj, *args, **call_kwargs)
+                wrapper_to_enhance = generic_wrapper
+            
+            wrapper_to_enhance.my_params = DisplayStr(
+                mcs._get_my_params(original_func))
+            wrapper_to_enhance.help = mcs._create_help(original_func)
+            return wrapper_to_enhance
+        
+        # Case 4: If method is not recognized (e.g., already bound method, etc.)
         else:
-            return method
+            return method  
         
 class LearnerMeta(ABCMeta, HelpMeta):
     """

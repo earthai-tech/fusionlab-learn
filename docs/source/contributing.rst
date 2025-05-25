@@ -4,10 +4,10 @@
 Contributing
 ============
 
-We welcome contributions to ``fusionlab``! Whether you're fixing a
+We welcome contributions to ``fusionlab-learn``! Whether you're fixing a
 bug, adding a new feature, improving documentation, or suggesting
 ideas, your help is valued. Thank you for your interest in making
-``fusionlab`` better.
+``fusionlab-learn`` better.
 
 Getting Started
 ---------------
@@ -67,7 +67,7 @@ Making Changes
     docstring standard**. Ensure existing docstrings are updated if
     function signatures or behavior change.
 
-4.  **Testing:** ``fusionlab`` uses `pytest` for testing.
+4.  **Testing:** ``fusionlab-learn`` uses `pytest` for testing.
     * Add new tests for any new features you implement in the relevant
       `tests/` directory.
     * Add or update tests to cover any bug fixes, ensuring the bug
@@ -105,9 +105,9 @@ Submitting a Pull Request
 
        git push origin your-descriptive-branch-name
 
-2.  **Open Pull Request:** Go to the original ``fusionlab`` repository
+2.  **Open Pull Request:** Go to the original ``fusionlab-learn`` repository
     on GitHub (`earthai-tech/fusionlab`) and open a Pull Request (PR)
-    from your branch to the ``fusionlab`` `main` branch (or the
+    from your branch to the ``fusionlab-learn`` `main` branch (or the
     designated development branch).
 
 3.  **Describe PR:** Write a clear description of the changes you made
@@ -126,11 +126,11 @@ Submitting a Pull Request
 Code of Conduct
 ---------------
 
-All participants in the ``fusionlab`` project (contributors,
+All participants in the ``fusionlab-learn`` project (contributors,
 maintainers, users in community spaces like the issue tracker) are
 expected to adhere to the project's :doc:`Code of Conduct <code_of_conduct>`. 
 Please review this document to understand the expected standards of behavior.
 
 We strive to foster an open, welcoming, and respectful community.
 
-Thank you again for contributing to ``fusionlab``!
+Thank you again for contributing to ``fusionlab-learn``!

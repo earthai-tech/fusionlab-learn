@@ -6,14 +6,19 @@
 Provides common helper functions and for validation, 
 comparison, and other generic operations
 """
+import os
 import re
 import warnings
 import inspect
+import textwrap
+from numbers import Real 
 
+import matplotlib.pyplot as plt
+from datetime import datetime
 from typing import ( 
     Union, Optional, 
     Dict, Any, List,
-    Literal
+    Literal, Tuple
 )
 import numpy as np 
 import pandas as pd 
@@ -21,7 +26,8 @@ import pandas as pd
 __all__ =['verify_identical_items', 'vlog', 'detect_dt_format',
           'get_actual_column_name', 'transform_contributions', 
           'exclude_duplicate_kwargs', 'reorder_columns',
-          'find_id_column', 'check_group_column_validity']
+          'find_id_column', 'check_group_column_validity', 
+          'save_all_figures']
 
 def check_group_column_validity(
     df: pd.DataFrame,
@@ -1587,3 +1593,679 @@ def reorder_columns(
 
     # Return the DataFrame with the new column order
     return df[new_order]
+
+
+def map_scales_choice(
+    scales_choice_str: str
+) -> Optional[List[int]]:
+    """
+    Maps a string choice for scales to an actual list of scale values 
+    or None if no scales are provided.
+
+    This function interprets specific string inputs and converts them 
+    to corresponding lists of integers. If no matching string is found, 
+    it returns None as a default fallback.
+
+    Parameters
+    ----------
+    scales_choice_str : str
+        A string representing the choice of scale. It can be one of 
+        'default_scales', 'alt_scales', or 'no_scales'.
+
+    Returns
+    -------
+    Optional[List[int]]
+        A list of integers corresponding to the chosen scales, or None 
+        if no scales are provided.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import map_scales_choice
+    >>> map_scales_choice('default_scales')
+    [1, 3, 7]
+    
+    >>> map_scales_choice('alt_scales')
+    [1, 5, 10]
+    
+    >>> map_scales_choice('no_scales')
+    None
+
+    >>> map_scales_choice('unknown_scales')
+    None
+    """
+    if not isinstance(scales_choice_str, str):
+        raise ValueError("scales_choice_str must be a string.")
+    
+    if scales_choice_str == 'default_scales':
+        return [1, 3, 7]
+    elif scales_choice_str == 'alt_scales':
+        return [1, 5, 10]
+    elif scales_choice_str == 'no_scales':
+        return None
+    return None  # Default fallback for unrecognized inputs
+
+
+def cast_hp_to_bool(
+    params: Dict[str, Any],
+    param_name: str,
+    default_value: bool = False  
+) -> None:
+    """
+    Casts a hyperparameter value in the `params` dictionary to a boolean.
+
+    The function ensures that hyperparameters that are supposed to be 
+    booleans are correctly cast to Python booleans. This is particularly 
+    useful in cases where Keras Tuner or other libraries might return 
+    0 or 1 as the value for boolean choices.
+
+    Parameters
+    ----------
+    params : Dict[str, Any]
+        A dictionary of hyperparameters to be validated and updated in place.
+    
+    param_name : str
+        The key of the hyperparameter to be checked and casted to boolean.
+    
+    default_value : bool, optional
+        The default value to assign if the parameter is not found or 
+        has an invalid value. The default is False.
+
+    Returns
+    -------
+    None
+        This function modifies the `params` dictionary in-place.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import cast_hp_to_bool
+    >>> params = {'use_batch_norm': 1}
+    >>> cast_hp_to_bool(params, 'use_batch_norm', default_value=False)
+    >>> print(params['use_batch_norm'])
+    True
+    
+    >>> params = {'use_residuals': 0}
+    >>> cast_hp_to_bool(params, 'use_residuals', default_value=True)
+    >>> print(params['use_residuals'])
+    False
+    
+    >>> params = {'use_dropout': 'yes'}
+    >>> cast_hp_to_bool(params, 'use_dropout', default_value=False)
+    >>> print(params['use_dropout'])
+    False
+    """
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary.")
+    
+    if param_name in params:
+        value = params[param_name]
+        if isinstance(value, (int, float)):  # Handles 0, 1, 0.0, 1.0
+            params[param_name] = bool(value)
+        elif not isinstance(value, bool):
+            # Warn if the value is not a valid boolean type (int, float, bool)
+            warnings.warn(
+                f"Hyperparameter '{param_name}' received unexpected value "
+                f"'{value}' (type: {type(value)}). Expected bool or 0/1. "
+                f"Defaulting to {default_value}. Please check param_space definition."
+            )
+            params[param_name] = default_value
+
+def cast_multiple_bool_params(
+    params: Dict[str, Any],
+    bool_params_to_cast: List[Tuple[str, bool]]
+) -> None:
+    """
+    Casts a list of boolean hyperparameters to ensure they are Python booleans.
+
+    This function iterates over a list of parameter names and default values,
+    ensuring that each parameter is properly cast to a boolean type. If a 
+    parameter does not exist or has an invalid value, it is set to the 
+    provided default.
+
+    Parameters
+    ----------
+    params : Dict[str, Any]
+        A dictionary of hyperparameters to be validated and updated in place.
+    
+    bool_params_to_cast : List[Tuple[str, bool]]
+        A list of tuples where each tuple consists of a hyperparameter name 
+        and its default boolean value. The function will cast the corresponding
+        parameter to a boolean.
+
+    Returns
+    -------
+    None
+        This function modifies the `params` dictionary in-place.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import cast_multiple_bool_params
+    >>> params = {'use_batch_norm': 1, 'use_residuals': 0}
+    >>> cast_multiple_bool_params(params, [('use_batch_norm', False), ('use_residuals', True)])
+    >>> print(params)
+    {'use_batch_norm': True, 'use_residuals': False}
+    """
+    if not isinstance(params, dict):
+        raise ValueError("params must be a dictionary.")
+    
+    if not isinstance(bool_params_to_cast, list):
+        raise ValueError("bool_params_to_cast must be a list of tuples.")
+    
+    for param_name, default_value in bool_params_to_cast:
+        cast_hp_to_bool(params, param_name, default_value)
+
+def save_all_figures(
+    output_dir: str = "figures",
+    prefix: str = "figure",
+    fmts: Union[List[str], tuple] = ("png",),
+    close: bool = True,
+    dpi: Union[int, None] = 150,
+    transparent: bool = False,
+    timestamp: bool = True,
+    verbose: bool = True
+) -> List[str]:
+    """
+    Save all currently open Matplotlib figures to disk in specified formats.
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory where figures will be saved. Created if not exists.
+    prefix : str
+        Filename prefix for each figure.
+    formats : list or tuple of str
+        File formats/extensions to use (e.g., ('png','pdf')).
+    close : bool
+        Whether to close each figure after saving. Default is True.
+    dpi : int or None
+        Resolution in dots per inch. None uses Matplotlib default.
+    transparent : bool
+        Whether to save figures with transparent background.
+    timestamp : bool
+        Append current timestamp (YYYYmmddTHHMMSS) to filenames.
+    verbose : bool
+        Print progress messages.
+
+    Returns
+    -------
+    List[str]
+        List of saved file paths.
+
+    Examples
+    --------
+    >>> import matplotlib.pyplot as plt
+    >>> plt.figure(); plt.plot([1, 2, 3])
+    >>> from fusionlab.utils.generic_utils import save_all_figures
+    >>> paths = save_all_figures(output_dir="plots", formats=("png",))
+    >>> print(paths)
+    ['plots/figure_1_20250521T153045.png']
+    """
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    saved_paths = []
+    fig_nums = plt.get_fignums()
+    
+    for num in fig_nums:
+        fig = plt.figure(num)
+        # Build base filename
+        name_parts = [prefix, str(num)]
+        if timestamp:
+            name_parts.append(datetime.now().strftime("%Y%m%dT%H%M%S"))
+        base_name = "_".join(name_parts)
+        
+        # Save in each requested format
+        for ext in fmts:
+            filename = f"{base_name}.{ext.lstrip('.')}"
+            path = os.path.join(output_dir, filename)
+            try:
+                fig.savefig(path, dpi=dpi, transparent=transparent)
+                saved_paths.append(path)
+                if verbose:
+                    print(f"Saved Figure {num} as: {path}")
+            except Exception as e:
+                if verbose:
+                    print(f"ERROR saving Figure {num} to {path}: {e}")
+        
+        if close:
+            plt.close(fig)
+    
+    return saved_paths
+
+def print_box(
+    msg: Union[str, List[str]],
+    width: int = 80,
+    align: str = 'center',
+    border_char: str = '+',
+    horizontal_char: str = '-',
+    vertical_char: str = '|',
+    padding: int = 1
+) -> None:
+    """
+    Print a boxed message with customizable styling.
+
+    Parameters
+    ----------
+    msg : str or list of str
+        The message to display. If a list is provided, each element
+        is treated as a separate line.
+    width : int, default=80
+        Total width of the box including borders.
+    align : {'center','left','right'}, default='center'
+        Text alignment within the box.
+    border_char : str, default='+'
+        Character used for the four corners of the box.
+    horizontal_char : str, default='-'
+        Character used for the top/bottom border lines.
+    vertical_char : str, default='|'
+        Character used for the left/right border lines.
+    padding : int, default=1
+        Number of spaces between text and vertical borders.
+
+    Returns
+    -------
+    None
+        Prints the styled box directly to stdout.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import print_box 
+    >>> print_box("Hello, world!", width=40)
+    +--------------------------------------+
+    |             Hello, world!           |
+    +--------------------------------------+
+
+    >>> print_box(
+    ...     ["Line one", "This is a longer line that will wrap"],
+    ...     width=50, align='left', border_char='*'
+    ... )
+    **************************************************
+    * Line one                                      *
+    * This is a longer line that will                *
+    * wrap                                          *
+    **************************************************
+    """
+    # Ensure msg is a list of lines
+    lines = msg if isinstance(msg, list) else msg.split('\n')
+
+    # Calculate inner width for text (excluding borders & padding)
+    inner_width = width - 2 - 2 * padding
+    if inner_width < 10:
+        raise ValueError("Width too small for the given padding.")
+
+    # Build top and bottom border
+    border_line = (
+        border_char
+        + horizontal_char * (width - 2)
+        + border_char
+    )
+
+    # Function to align a single line
+    def align_line(text: str) -> str:
+        if len(text) > inner_width:
+            text = text[:inner_width]
+        if align == 'left':
+            return text.ljust(inner_width)
+        elif align == 'right':
+            return text.rjust(inner_width)
+        else:  # center
+            return text.center(inner_width)
+
+    # Print the box
+    print(border_line)
+    for raw_line in lines:
+        # Wrap long lines
+        wrapped = textwrap.wrap(raw_line, inner_width) or ['']
+        for wline in wrapped:
+            print(
+                vertical_char
+                + ' ' * padding
+                + align_line(wline)
+                + ' ' * padding
+                + vertical_char
+            )
+    print(border_line)
+
+def handle_emptiness(
+    obj: Any,
+    ops: str = 'validate',
+    empty_as_none: bool = True
+) -> Union[Any, bool]:
+    """
+    Smart helper to check or normalize empty/None values.
+
+    Parameters
+    ----------
+    obj : Any
+        The object to inspect. Can be None, numpy array,
+        pandas Series/DataFrame, list, tuple, etc.
+    ops : {'validate','check_only'}, default='validate'
+        - 'check_only': return True if obj is None or empty.
+        - 'validate': return normalized obj or placeholder.
+    empty_as_none : bool, default=True
+        Only used when ops='validate':
+        - If True, empty or None -> return None
+        - If False, empty or None -> return [] (empty list)
+
+    Returns
+    -------
+    obj or bool
+        - If `ops=='check_only'`, returns a bool indicating if
+          `obj` is None or empty.
+        - If `ops=='validate'`,
+          - Non-empty object -> returned unchanged
+          - Empty/None -> None or [] based on `empty_as_none`
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from fusionlab.utils.generic_utils import \
+            handle_emptiness
+    >>> handle_emptiness(None, ops='check_only')
+    True
+    >>> handle_emptiness([], ops='check_only')
+    True
+    >>> handle_emptiness(np.array([]), ops='check_only')
+    True
+    >>> handle_emptiness(pd.DataFrame(), ops='check_only')
+    True
+    >>> handle_emptiness([1,2,3], ops='check_only')
+    False
+    >>> handle_emptiness([], ops='validate', empty_as_none=True)
+    None
+    >>> handle_emptiness([], ops='validate', empty_as_none=False)
+    []
+
+    """
+    def _is_empty(o: Any) -> bool:
+        """Determine if o is None or contains no elements."""
+        if o is None:
+            return True
+        if isinstance(o, np.ndarray):
+            return o.size == 0
+        if isinstance(o, (pd.Series, pd.DataFrame)):
+            return o.empty
+        try:
+            return len(o) == 0
+        except Exception:
+            return False
+
+    if ops == 'check_only':
+        return _is_empty(obj)
+
+    if ops == 'validate':
+        if _is_empty(obj):
+            return None if empty_as_none else []
+        return obj
+
+    raise ValueError("`ops` must be 'validate' or 'check_only'")
+
+
+def _report_condition(
+    policy: Literal['raise', 'warn', 'ignore'],
+    default_message: str,
+    custom_message: Optional[str],
+    exception_type: type = ValueError,
+    warning_type: type = UserWarning
+) -> None:
+    """Helper to raise error, issue warning, or ignore based on policy."""
+    message_to_use = custom_message if custom_message is not None \
+        else default_message
+    
+    if policy == 'raise':
+        raise exception_type(message_to_use)
+    elif policy == 'warn':
+        warnings.warn(message_to_use, warning_type)
+    # If 'ignore', do nothing.
+
+def are_all_values_in_bounds(
+    values: Any,
+    bounds: Union[Tuple[Real, Real], List[Real]] = (0, 1),
+    closed: Literal['both', 'left', 'right', 'neither'] = 'neither',
+    nan_policy: Literal['raise', 'propagate', 'omit'] = 'propagate',
+    empty_policy: Literal['allow_true', 'treat_as_false'] = 'allow_true',
+    error: Literal['raise', 'warn', 'ignore'] = 'raise',
+    message: Optional[str] = None
+) -> bool:
+    """
+    Check if all evaluable input values are within specified numeric bounds.
+
+    Supports various input types including scalars, lists, tuples,
+    NumPy arrays, and pandas Series/Index. It attempts to convert
+    inputs to a numeric format (float) for comparison. Non-numeric
+    entries that cannot be converted will typically result in False
+    or trigger the `error` policy if conversion itself fails.
+
+    Parameters
+    ----------
+    values : Any
+        Input data to check.
+    bounds : tuple[Real, Real] or list[Real, Real], default=(0, 1)
+        A sequence of two numeric values (lower_bound, upper_bound).
+        `bounds[0]` must be less than or equal to `bounds[1]`.
+    closed : {'both', 'left', 'right', 'neither'}, default='neither'
+        Defines whether the interval is closed or open:
+        - ``'both'``: `lower_bound <= value <= upper_bound`
+        - ``'left'``: `lower_bound <= value < upper_bound`
+        - ``'right'``: `lower_bound < value <= upper_bound`
+        - ``'neither'``: `lower_bound < value < upper_bound` (strict)
+    nan_policy : {'raise', 'propagate', 'omit'}, default='propagate'
+        How to handle NaN (Not a Number) values:
+        - ``'raise'``: Behavior depends on `error` policy. If `error`
+          is 'raise', a ValueError is raised. If 'warn', a warning
+          is issued and False is returned. If 'ignore', False is
+          returned (as NaNs are not in bounds).
+        - ``'propagate'``: If any NaN is found, return False.
+        - ``'omit'``: NaNs are removed. The behavior for an array
+          that becomes empty after omission is governed by
+          `empty_array_policy`.
+    empty_array_policy : {'allow_true', 'treat_as_false'}, default='allow_true'
+        Policy for handling an empty array of values to check. An array
+        can be empty if the original input was empty (e.g., `[]`) or
+        if all values were NaNs and `nan_policy='omit'` was used.
+        - ``'allow_true'``: An empty array is considered to have all
+          its (zero) elements within bounds (vacuously true).
+        - ``'treat_as_false'``: An empty array results in False.
+    error : {'raise', 'warn', 'ignore'}, default='raise'
+        Policy for handling invalid parameters (e.g., `bounds`,
+        `closed`), non-convertible inputs, NaNs when
+        `nan_policy='raise'`, or when values are out of bounds:
+        - ``'raise'``: Raise a ValueError.
+        - ``'warn'``: Issue a UserWarning. The function will then
+          return False if the condition (e.g., out of bounds, NaN
+          present with nan_policy='raise') makes the check fail.
+        - ``'ignore'``: Suppress the error/warning. The function will
+          return False if the condition makes the check fail.
+    message : str, optional
+        Custom message to use when `error` policy is 'raise' or 'warn'.
+        If None, a default message is used for the specific condition.
+
+    Returns
+    -------
+    bool
+        True if all evaluable values are within bounds (considering
+        `nan_policy` and `empty_array_policy`), False otherwise.
+
+    Raises
+    ------
+    ValueError
+        If `error='raise'` and an invalid parameter is provided,
+        input is non-convertible, NaNs are present with
+        `nan_policy='raise'`, or values are out of bounds.
+    UserWarning
+        If `error='warn'` for the same conditions as ValueError.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import are_all_values_in_bounds
+    >>> are_all_values_in_bounds(0.5)
+    True
+    >>> are_all_values_in_bounds([]) # Empty list, default empty_policy='allow_true'
+    True
+    >>> are_all_values_in_bounds([], empty_policy='treat_as_false')
+    False
+    >>> are_all_values_in_bounds(pd.Series([np.nan]), nan_policy='omit',
+                                 empty_array_policy='treat_as_false')
+    False
+    >>> try:
+    ...     are_all_values_in_bounds([0, 2], bounds=(0,1),
+    ...                                 error='raise', closed='neither')
+    ... except ValueError as e:
+    ...     print(e)
+    One or more values are out of the specified bounds.
+    """
+    arr: np.ndarray
+
+    # --- 1. Input Conversion to NumPy float array ---
+    if np.isscalar(values):
+        if not isinstance(values, (int, float, np.number)):
+            try:
+                val_float = float(values)
+                arr = np.array([val_float])
+            except (ValueError, TypeError):
+                 _report_condition(
+                    error,
+                    f"Scalar input '{values}' of type {type(values).__name__} "
+                    "is not convertible to a numeric value.",
+                    message,
+                )
+                 return False
+        else:
+            arr = np.array([float(values)])
+            
+    elif isinstance(values, (pd.Series, pd.Index)):
+        temp_arr = values.to_numpy()
+        try:
+            if temp_arr.dtype == object or \
+               not np.issubdtype(temp_arr.dtype, np.number):
+                arr = pd.to_numeric(temp_arr, errors='raise').astype(float)
+            else:
+                arr = temp_arr.astype(float)
+        except (ValueError, TypeError):
+            _report_condition(
+                error,
+                "Pandas input contains non-convertible non-numeric values.",
+                message,
+            )
+            return False
+    else: 
+        try:
+            arr = np.asarray(values, dtype=float)
+        except (ValueError, TypeError):
+            _report_condition(
+                error,
+                "Input sequence contains non-convertible non-numeric values.",
+                message,
+            )
+            return False
+    
+    # --- 2. Validate `bounds` and `closed` Parameters ---
+    # These checks happen early. If they fail and error is 'raise'/'warn',
+    # the function returns False or raises, so subsequent logic is safe.
+    if not (isinstance(bounds, (list, tuple)) and len(bounds) == 2):
+        _report_condition(
+            error,
+            "`bounds` must be a list or tuple of two numbers.",
+            message
+        )
+        return False 
+    
+    try:
+        lower_b = float(bounds[0])
+        upper_b = float(bounds[1])
+    except (IndexError, ValueError, TypeError):
+        _report_condition(
+            error,
+            "Elements of `bounds` must be numeric and `bounds` must "
+            "have length 2.",
+            message
+        )
+        return False
+
+    if lower_b > upper_b:
+        _report_condition(
+            error,
+            f"Lower bound {lower_b} cannot be greater than upper "
+            f"bound {upper_b}.",
+            message
+        )
+        return False
+
+    valid_closed_options = {'both', 'left', 'right', 'neither'}
+    if closed not in valid_closed_options:
+        _report_condition(
+            error,
+            f"Invalid 'closed' parameter: {closed}. Must be one of "
+            f"{valid_closed_options}.",
+            message
+        )
+        return False
+        
+    # --- 3. Handle NaNs based on `nan_policy` ---
+    # This section modifies `arr` if nan_policy is 'omit'.
+    # For other policies, it might return early.
+    has_nans = np.isnan(arr).any()
+
+    if has_nans:
+        if nan_policy == 'raise':
+            _report_condition(
+                error,
+                "Input contains NaNs.",
+                message
+            )
+            return False # Returns False if error policy is 'warn' or 'ignore'
+        elif nan_policy == 'propagate':
+            return False 
+        elif nan_policy == 'omit':
+            arr = arr[~np.isnan(arr)]
+            # `arr` might be empty now. This is handled in step 4.
+    
+    # --- 4. Handle Empty Array (original or after NaN omission) ---
+    if arr.size == 0:
+        if empty_policy == 'allow_true':
+            return True
+        elif empty_policy == 'treat_as_false':
+            return False
+        else: # Should be caught by Literal type hint
+            _report_condition(
+                error,
+                f"Internal error: Invalid 'empty_policy' "
+                f"value '{empty_policy}'.",
+                message
+            )
+            return False # Fallback for invalid policy if not raised
+
+    # --- 5. Perform Bounds Check on (Potentially Modified) `arr` ---
+    # At this point, `arr` contains only non-NaN numeric values,
+    # and is guaranteed to be non-empty.
+    in_bounds_mask: np.ndarray
+    if closed == 'both':
+        in_bounds_mask = (arr >= lower_b) & (arr <= upper_b)
+    elif closed == 'left':
+        in_bounds_mask = (arr >= lower_b) & (arr < upper_b)
+    elif closed == 'right':
+        in_bounds_mask = (arr > lower_b) & (arr <= upper_b)
+    elif closed == 'neither': 
+        in_bounds_mask = (arr > lower_b) & (arr < upper_b)
+    else:
+        # This case should have been caught by parameter validation.
+        # If error='ignore' for invalid 'closed', this is a fallback.
+        _report_condition(
+            error,
+            f"Internal error: Invalid 'closed' value '{closed}' "
+            "reached bounds check.",
+            message
+        )
+        return False
+
+    all_values_are_in_bounds = bool(np.all(in_bounds_mask))
+
+    if not all_values_are_in_bounds:
+        _report_condition(
+            error,
+            "One or more values are out of the specified bounds.",
+            message
+        )
+        return False # Returns False if error policy is 'warn' or 'ignore'
+    else:
+        return True
+

@@ -1,0 +1,109 @@
+.. _release_v0.2.2:
+
+Version 0.2.2
+==============
+*(Release Date: May 24, 2025)*
+
+**Focus: Usability Enhancements, Minor Fixes, and Documentation Polish**
+
+This patch release builds upon the utility standardization in v0.2.1,
+introducing further usability improvements to plotting functions,
+addressing minor bugs, and enhancing the documentation for clarity
+and completeness.
+
+Enhancements & Improvements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* |Enhancement| Improved :func:`~fusionlab.plot.forecast.plot_forecasts`
+  (a shadow of :func:`~fusionlab.plot.forecast.visualize_forecasts`):
+  
+  * Added `figsize_per_subplot` parameter to allow more direct
+    control over individual subplot sizes when `kind='temporal'` and
+    multiple samples or output dimensions are plotted. The total
+    figure size is now dynamically calculated.
+  * Enhanced title generation for subplots to be more informative,
+    especially for multi-output models.
+  * Improved handling of `actual_data` parameter for more flexible
+    comparison against external true values in temporal plots.
+* |Enhancement| The :func:`~fusionlab.plot.evaluation.plot_metric_over_horizon`
+  function now more gracefully handles cases where a specified metric
+  cannot be calculated for a particular step or group (e.g., due to
+  all NaNs or division by zero in MAPE for zero actuals), issuing a
+  warning and skipping that point instead of erroring.
+* |Enhancement| The :func:`~fusionlab.plot.evaluation.plot_metric_radar`
+  function now offers improved y-axis tick formatting for better
+  readability of metric values. Added a `max_segments_to_plot`
+  parameter to prevent overly cluttered radar charts, with a warning
+  if more segments are present than plotted.
+* |Enhancement| Minor performance improvements in
+  :func:`~fusionlab.nn.utils.format_predictions_to_dataframe`
+  when handling very large prediction arrays.
+* |Enhancement| Improved error messaging in
+  :func:`~fusionlab.nn._tensor_validation.validate_model_inputs`
+  when `model_name='tft_flex'` and an unexpected number of inputs
+  are provided to the `_validate_tft_flexible_inputs_soft_mode` helper.
+
+Fixes
+~~~~~
+* |Fix| Resolved an edge case in
+  :func:`~fusionlab.nn.utils.reshape_xtft_data` where `spatial_cols`
+  containing non-string identifiers could lead to incorrect grouping
+  if not properly cast or handled before `groupby`. Now ensures
+  grouping keys are consistently managed.
+* |Fix| Corrected an issue in :func:`~fusionlab.plot.forecast.plot_forecasts`
+  where `spatial_cols` were not correctly utilized if `forecast_df`
+  was generated with a different naming convention for coordinates than
+  the default expected by the plot function. Now uses `spatial_cols`
+  more reliably.
+* |Fix| Addressed a minor issue in :class:`~fusionlab.nn.XTFT` where
+  the `anomaly_scores` attribute might not be reset correctly between
+  calls if `anomaly_detection_strategy` was changed without re-compiling.
+* |Fix| Fixed a potential `KeyError` in
+  :func:`~fusionlab.plot.forecast.plot_metric_over_horizon` if a
+  custom metric function was used and `output_dim > 1` without proper
+  handling of multi-output metric aggregation.
+
+Tests
+~~~~~
+* |Tests| Expanded pytest suite for :mod:`fusionlab.plot.evaluation`
+  to cover more edge cases for `plot_forecasts`,
+  `plot_metric_over_horizon`, and `plot_metric_radar`, including
+  tests with empty DataFrames or missing optional columns.
+* |Tests| Added specific tests for the `verbose` parameter in various
+  utility functions to ensure logging levels behave as expected.
+
+Documentation
+~~~~~~~~~~~~~
+* |Docs| Added a new User Guide page: :doc:`/user_guide/evaluation/evaluation_plotting`
+  (formerly part of gallery) to showcase the usage of
+  `plot_forecast_comparison` (renamed from `plot_forecasts` in v0.2.1),
+  `plot_metric_over_horizon`, and `plot_metric_radar`.
+* |Docs| Reorganized the main User Guide index (`user_guide/index.rst`)
+  for better structure, creating sub-sections for "Utilities" and
+  "Evaluation & Visualization".
+* |Docs| Updated the "Examples Gallery" structure (`gallery/index.rst`)
+  to include a dedicated "Exercises" section
+  (`exercises/index.rst`).
+* |Docs| Transformed several existing examples into more guided
+  "Exercise" formats within `docs/source/user_guide/exercises/`, including
+  `anomaly_detection_exercise.rst`, `exercise_advanced_xtft.rst`,
+  `exercise_basic_forecasting.rst`, and `exercise_tft_required.rst`.
+* |Docs| Added a new User Guide page :doc:`/user_guide/utils/forecasting_workflow_utils`
+  to illustrate the combined use of `prepare_model_inputs`,
+  `format_predictions_to_dataframe`, and `plot_forecasts`.
+* |Docs| Clarified documentation for parameters in
+  :func:`~fusionlab.nn.utils.format_predictions_to_dataframe` and
+  :func:`~fusionlab.plot.evaluation.plot_forecasts` regarding
+  parameter name consistency (e.g., `model_inputs` vs `inputs`,
+  `y_true_sequences` vs `y`).
+* |Docs| Added a User Guide page :doc:`/user_guide/visualizing_with_kdiagram`
+  to demonstrate integrating `fusionlab-learn` outputs with the
+  `k-diagram` library for specialized polar visualizations.
+* |Docs| Updated `installation.rst` to include instructions for
+  installing optional dependencies like `k-diagram` using extras
+  (e.g., `pip install fusionlab-learn[kdiagram]`).
+
+Contributors
+~~~~~~~~~~~~~
+* `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)
+
+
