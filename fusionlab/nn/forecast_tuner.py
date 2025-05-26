@@ -33,6 +33,7 @@ from typing import (
 import numpy as np
 
 from .__init__ import config
+from ..api.docs import _tuner_common_params, DocstringComponents 
 from ..api.summary import ResultSummary 
 from ..compat.sklearn import validate_params, Interval
 from ..core.checks import (
@@ -46,14 +47,16 @@ from ._tensor_validation import validate_model_inputs
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from .losses import combined_quantile_loss
-
+from ._forecast_tuner import( 
+    CASE_INFO, DEFAULT_PS,
+    BaseTuner
+)
 from .transformers import (
     XTFT,
     SuperXTFT,
     TemporalFusionTransformer as TFTFlexible, 
     TFT as TFTStricter 
 )
-
 HAS_KT = False
 try:
     import keras_tuner as kt
@@ -92,46 +95,294 @@ else:
 
 DEP_MSG = dependency_message('nn.forecast_tuner')
 
-# Default case info for model builder
-# Keys here should match what _model_builder_factory expects
-CASE_INFO = {
-    "description": "{} forecast",
-    "forecast_horizon": 1, # Matches model param name
-    "quantiles": None,
-    "output_dim": 1,
-    "static_input_dim": None, # Will be derived from data
-    "dynamic_input_dim": None,
-    "future_input_dim": None,
-    "verbose_build": 0 # Verbosity for model builder
-}
-
-# Default hyperparameter search space
-DEFAULT_PS = {
-    'embed_dim': [16, 32, 64],        # XTFT/SuperXTFT
-    'max_window_size': [3, 5, 10],   # XTFT/SuperXTFT
-    'memory_size': [50, 100, 200],     # XTFT/SuperXTFT
-    'num_heads': [2, 4, 8],          # Common
-    'dropout_rate': [0.0, 0.1, 0.2, 0.3],   # Common
-    'recurrent_dropout_rate': [0.0, 0.1, 0.2], # TFT (stricter) & XTFT
-    'lstm_units': [32, 64, 128],       # Common
-    'attention_units': [32, 64, 128],  # XTFT/SuperXTFT
-    'hidden_units': [32, 64, 128],     # Common
-    'num_lstm_layers': [1, 2],    # TFTs
-    'activation': ["relu", "gelu"], # Common
-    'use_batch_norm': [False, True],# Common
-    'use_residuals': [True, False],# XTFT/SuperXTFT
-    'final_agg': ['last', 'average'],# XTFT/SuperXTFT
-    'multi_scale_agg': ['last', 'average'],# XTFT/SuperXTFT
-    # Define scales as string options for Keras Tuner
-    'scales_options': ['default_scales', 'alt_scales', 'no_scales'], # XTFT/SuperXTFT
- 
-    'learning_rate': [1e-3, 1e-4, 5e-4],# Common
-    'monitor': 'val_loss',        # Common
-    'patience': 10,               # Common
-    # 'loss' is added dynamically based on quantiles
-}
+_tuner_docs = DocstringComponents.from_nested_components(
+    base=DocstringComponents(_tuner_common_params)
+)
 
 __all__ = ['XTFTTuner', 'TFTTuner', 'xtft_tuner', 'tft_tuner']
+
+
+class XTFTTuner(BaseTuner):
+    _DEFAULT_MODEL_NAME: str = "xtft"
+    _SUPPORTED_XTFT_MODELS: List[str] = [
+        "xtft",
+        "superxtft",
+        "super_xtft",
+    ]
+
+    def __init__(  # noqa: D401
+        self,
+        model_name: str = _DEFAULT_MODEL_NAME,
+        param_space: Optional[Dict[str, Any]] = None,
+        max_trials: int = 10,
+        objective: str = "val_loss",
+        epochs: int = 10,
+        batch_sizes: List[int] = [32],
+        validation_split: float = 0.2,
+        tuner_dir: Optional[str] = None,
+        project_name: Optional[str] = None,
+        tuner_type: str = "random",
+        callbacks: Optional[List[Callable]] = None,
+        model_builder: Optional[Callable] = None,
+        verbose: int = 1,
+        **kws: Any,
+    ):
+        model_name_lower = model_name.lower()
+        if model_name_lower not in self._SUPPORTED_XTFT_MODELS:
+            raise ValueError(
+                f"Model '{model_name}' not supported. "
+                f"Choose from {self._SUPPORTED_XTFT_MODELS}."
+            )
+
+        super().__init__(
+            model_name=model_name_lower,
+            param_space=param_space,
+            max_trials=max_trials,
+            objective=objective,
+            epochs=epochs,
+            batch_sizes=batch_sizes,
+            validation_split=validation_split,
+            tuner_dir=tuner_dir,
+            project_name=project_name,
+            tuner_type=tuner_type,
+            callbacks=callbacks,
+            model_builder=model_builder,
+            verbose=verbose,
+            **kws,
+        )
+
+XTFTTuner.__doc__ = """
+Keras‑Tuner wrapper dedicated to Extreme Temporal Fusion Transformer
+families (XTFT, SuperXTFT).
+
+The tuner searches a composite hyper‑parameter space covering
+embedding size, window length, memory depth, attention width, LSTM
+layers, residual routing, and optimiser learning rate.  Each batch
+size listed in *batch_sizes* triggers an independent search followed
+by a *refit* phase that prolongs training on the best trial.
+
+Mathematically the optimisation objective is
+
+.. math::
+
+   \\theta^* \\;=\\; \\arg\\min_{{\\theta\\,\\in\\,\\Theta}}
+   \\;\\; L_{{\\text{{val}}}}\\bigl(f_{{\\theta}}(\\boldsymbol X),\\,
+   \\boldsymbol y\\bigr),
+
+where :math:`\\Theta` denotes the hyper‑parameter space and
+:math:`L_{{\\text{{val}}}}` the validation loss.
+
+Supported model aliases
+~~~~~~~~~~~~~~~~~~~~~~~
+- ``"xtft"``
+- ``"superxtft"``
+- ``"super_xtft"``
+
+Parameters
+----------
+{params.base.model_name}
+{params.base.param_space}
+{params.base.max_trials}
+{params.base.objective}
+{params.base.epochs}
+{params.base.batch_sizes}
+{params.base.validation_split}
+{params.base.tuner_dir}
+{params.base.project_name}
+{params.base.tuner_type}
+{params.base.callbacks}
+{params.base.model_builder}
+{params.base.verbose}
+
+**kws : Any
+    Extra keyword arguments forwarded verbatim to
+    :class:`~fusionlab.nn._forecast_tuner.BaseTuner`.
+
+Examples
+--------
+Create synthetic data, instantiate the tuner, and run a full search.
+
+>>> import numpy as np, tensorflow as tf
+>>> from fusionlab.forecast_tuner import XTFTTuner
+>>> B, F, Ns, Nd, Nf, O = 128, 6, 3, 4, 2, 1
+>>> rng = np.random.default_rng(42)
+>>> X_static  = rng.normal(size=(B, Ns)).astype("float32")
+>>> X_dynamic = rng.normal(size=(B, F, Nd)).astype("float32")
+>>> X_future  = rng.normal(size=(B, F, Nf)).astype("float32")
+>>> y         = rng.normal(size=(B, F, O)).astype("float32")
+>>>
+>>> tuner = XTFTTuner(
+...     max_trials=5,
+...     epochs=50,
+...     batch_sizes=[16, 32],
+...     tuner_type="bayesian",
+...     verbose=2,
+... )
+>>> best_hps, best_model, kt_obj = tuner.fit(
+...     inputs=[X_static, X_dynamic, X_future],
+...     y=y,
+...     forecast_horizon=F,
+...     quantiles=[0.1, 0.5, 0.9],
+... )
+>>> print(best_hps)
+
+See Also
+--------
+TFTTuner
+    Analogue tuner class for Temporal Fusion Transformer variants.
+fusionlab.nn.transformers.XTFT
+    Reference implementation of the model being tuned.
+
+References
+----------
+.. [1] McKinney, W. (2010). "Data Structures for Statistical Computing 
+       in Python". Proceedings of the 9th Python in Science Conference.
+.. [2] Van der Walt, S., Colbert, S. C., & Varoquaux, G. (2011). "The 
+       NumPy Array: A Structure for Efficient Numerical Computation". 
+       Computing in Science & Engineering, 13(2), 22-30.
+       
+""".format(params=_tuner_docs)
+
+class TFTTuner(BaseTuner):
+    _DEFAULT_MODEL_NAME: str = "tft"
+    _SUPPORTED_TFT_MODELS: List[str] = ["tft", "tft_flex"]
+
+    def __init__(  # noqa: D401
+        self,
+        model_name: str = _DEFAULT_MODEL_NAME,
+        param_space: Optional[Dict[str, Any]] = None,
+        max_trials: int = 10,
+        objective: str = "val_loss",
+        epochs: int = 10,
+        batch_sizes: List[int] = [32],
+        validation_split: float = 0.2,
+        tuner_dir: Optional[str] = None,
+        project_name: Optional[str] = None,
+        tuner_type: str = "random",
+        callbacks: Optional[List[Callable]] = None,
+        model_builder: Optional[Callable] = None,
+        verbose: int = 1,
+        **kws: Any,
+    ):
+        model_name_lower = model_name.lower()
+        if model_name_lower not in self._SUPPORTED_TFT_MODELS:
+            raise ValueError(
+                f"Model '{model_name}' not supported. "
+                f"Choose from {self._SUPPORTED_TFT_MODELS}."
+            )
+
+        super().__init__(
+            model_name=model_name_lower,
+            param_space=param_space,
+            max_trials=max_trials,
+            objective=objective,
+            epochs=epochs,
+            batch_sizes=batch_sizes,
+            validation_split=validation_split,
+            tuner_dir=tuner_dir,
+            project_name=project_name,
+            tuner_type=tuner_type,
+            callbacks=callbacks,
+            model_builder=model_builder,
+            verbose=verbose,
+            **kws,
+        )
+
+TFTTuner.__doc__ = """
+Hyper‑parameter optimiser for Temporal Fusion Transformer (TFT)
+architectures – both the stricter TFT and the flexible
+TemporalFusionTransformer (``'tft_flex'``).
+
+The tuner explores LSTM depth, attention heads, hidden size,
+drop‑out, batch‑norm toggles, and optimiser learning rate.  Every
+candidate batch size launches its own search loop followed by a
+refit on the champion trial, yielding a single best model across
+all batch sizes.
+
+Objective
+~~~~~~~~~
+.. math::
+
+   \\theta^* \\;=\\; \\arg\\min_{{\\theta\\in\\Theta}}\\;
+   L_{{\\text{{val}}}}\\bigl(f_{{\\theta}}(\\mathbf X),\\,\\mathbf y\\bigr)
+
+with :math:`\\Theta` the joint hyper‑parameter space and
+:math:`L_{{\\text{{val}}}}` the validation loss.
+
+Supported model aliases
+~~~~~~~~~~~~~~~~~~~~~~~
+- ``"tft"``
+- ``"tft_flex"``
+
+Parameters
+----------
+{params.base.model_name}
+{params.base.param_space}
+{params.base.max_trials}
+{params.base.objective}
+{params.base.epochs}
+{params.base.batch_sizes}
+{params.base.validation_split}
+{params.base.tuner_dir}
+{params.base.project_name}
+{params.base.tuner_type}
+{params.base.callbacks}
+{params.base.model_builder}
+{params.base.verbose}
+
+**kws : Any
+    Extra keyword arguments forwarded to the base tuner.
+
+Example
+-------
+Create synthetic data, instantiate the tuner, and run a full search.
+
+>>> import numpy as np, tensorflow as tf
+>>> from fusionlab.forecast_tuner import TFTTuner
+>>> B, F, Ns, Nd, Nf, O = 128, 6, 3, 4, 2, 1
+>>> rng = np.random.default_rng(42)
+>>> X_static  = rng.normal(size=(B, Ns)).astype("float32")
+>>> X_dynamic = rng.normal(size=(B, F, Nd)).astype("float32")
+>>> X_future  = rng.normal(size=(B, F, Nf)).astype("float32")
+>>> y         = rng.normal(size=(B, F, O)).astype("float32")
+>>>
+>>> tuner = TFTTuner(
+...     model_name="tft_flex",
+...     max_trials=4,
+...     epochs=30,
+...     batch_sizes=[32, 64],
+...     tuner_type="bayesian",
+...     verbose=2,
+... )
+>>> best_hps, best_model, kt_obj = tuner.fit(
+...     inputs=[X_static, X_dynamic, X_future],
+...     y=y,
+...     forecast_horizon=F,
+... )
+>>> print("Best learning‑rate:",
+...       f"{{best_hps['learning_rate']:.3g}}")
+
+See Also
+--------
+XTFTTuner
+    Companion tuner for Extreme TFT variants.
+fusionlab.nn.transformers.TFT
+    Strict reference implementation.
+fusionlab.nn.transformers.TemporalFusionTransformer
+    Flexible implementation accepting missing input blocks.
+
+References
+----------
+.. [1] Lim, B. & Zohren, S. (2021). *Temporal Fusion Transformers
+       for Interpretable Multi‑horizon Time Series Forecasting*,
+       Int. J. Forecasting, 37(4), 1748‑1764.
+.. [2] Ouali, Y. et al. (2022). *Improving Temporal Fusion
+       Transformers with Hierarchical Context Modelling*,
+       arXiv:2202.01176.
+""".format(params=_tuner_docs)
+
+
+
 
 @ensure_pkg(
     'keras_tuner',
@@ -1087,281 +1338,5 @@ References
        Computing in Science & Engineering, 13(2), 22-30.
 """
 
-# ---------------prepare for next release -------------------------------------
-from ._forecast_tuner import BaseTuner
-# Convenience wrapper that can later be imported for doc composition
-from ..api.docs import DocstringComponents, _tuner_common_params
-
-_tuner_docs = DocstringComponents.from_nested_components(
-    base=DocstringComponents(_tuner_common_params)
-)
-
-class XTFTTuner(BaseTuner):
-    _DEFAULT_MODEL_NAME: str = "xtft"
-    _SUPPORTED_XTFT_MODELS: List[str] = [
-        "xtft",
-        "superxtft",
-        "super_xtft",
-    ]
-
-    def __init__(  # noqa: D401
-        self,
-        model_name: str = _DEFAULT_MODEL_NAME,
-        param_space: Optional[Dict[str, Any]] = None,
-        max_trials: int = 10,
-        objective: str = "val_loss",
-        epochs: int = 10,
-        batch_sizes: List[int] = [32],
-        validation_split: float = 0.2,
-        tuner_dir: Optional[str] = None,
-        project_name: Optional[str] = None,
-        tuner_type: str = "random",
-        callbacks: Optional[List[Callable]] = None,
-        model_builder: Optional[Callable] = None,
-        verbose: int = 1,
-        **kws: Any,
-    ):
-        model_name_lower = model_name.lower()
-        if model_name_lower not in self._SUPPORTED_XTFT_MODELS:
-            raise ValueError(
-                f"Model '{model_name}' not supported. "
-                f"Choose from {self._SUPPORTED_XTFT_MODELS}."
-            )
-
-        super().__init__(
-            model_name=model_name_lower,
-            param_space=param_space,
-            max_trials=max_trials,
-            objective=objective,
-            epochs=epochs,
-            batch_sizes=batch_sizes,
-            validation_split=validation_split,
-            tuner_dir=tuner_dir,
-            project_name=project_name,
-            tuner_type=tuner_type,
-            callbacks=callbacks,
-            model_builder=model_builder,
-            verbose=verbose,
-            **kws,
-        )
-
-XTFTTuner.__doc__ = """
-Keras‑Tuner wrapper dedicated to Extreme Temporal Fusion Transformer
-families (XTFT, SuperXTFT).
-
-The tuner searches a composite hyper‑parameter space covering
-embedding size, window length, memory depth, attention width, LSTM
-layers, residual routing, and optimiser learning rate.  Each batch
-size listed in *batch_sizes* triggers an independent search followed
-by a *refit* phase that prolongs training on the best trial.
-
-Mathematically the optimisation objective is
-
-.. math::
-
-   \\theta^* \\;=\\; \\arg\\min_{{\\theta\\,\\in\\,\\Theta}}
-   \\;\\; L_{{\\text{{val}}}}\\bigl(f_{{\\theta}}(\\boldsymbol X),\\,
-   \\boldsymbol y\\bigr),
-
-where :math:`\\Theta` denotes the hyper‑parameter space and
-:math:`L_{{\\text{{val}}}}` the validation loss.
-
-Supported model aliases
-~~~~~~~~~~~~~~~~~~~~~~~
-- ``"xtft"``
-- ``"superxtft"``
-- ``"super_xtft"``
-
-Parameters
-----------
-{params.base.model_name}
-{params.base.param_space}
-{params.base.max_trials}
-{params.base.objective}
-{params.base.epochs}
-{params.base.batch_sizes}
-{params.base.validation_split}
-{params.base.tuner_dir}
-{params.base.project_name}
-{params.base.tuner_type}
-{params.base.callbacks}
-{params.base.model_builder}
-{params.base.verbose}
-
-**kws : Any
-    Extra keyword arguments forwarded verbatim to
-    :class:`~fusionlab.nn._forecast_tuner.BaseTuner`.
-
-Examples
---------
->>> tuner = XTFTTuner(
-...     max_trials=5,
-...     epochs=50,
-...     batch_sizes=[16, 32],
-...     tuner_type="bayesian",
-...     verbose=2,
-... )
->>> best_hps, best_model, kt_obj = tuner.fit(
-...     inputs=[X_static, X_dynamic, X_future],
-...     y=y,
-...     forecast_horizon=4,
-...     quantiles=[0.1, 0.5, 0.9],
-... )
->>> print(best_hps)
-
-See Also
---------
-TFTTuner
-    Analogue tuner class for Temporal Fusion Transformer variants.
-fusionlab.nn.transformers.XTFT
-    Reference implementation of the model being tuned.
-
-References
-----------
-.. [1] McKinney, W. (2010). "Data Structures for Statistical Computing 
-       in Python". Proceedings of the 9th Python in Science Conference.
-.. [2] Van der Walt, S., Colbert, S. C., & Varoquaux, G. (2011). "The 
-       NumPy Array: A Structure for Efficient Numerical Computation". 
-       Computing in Science & Engineering, 13(2), 22-30.
-       
-""".format(params=_tuner_docs)
-
-class TFTTuner(BaseTuner):
-    _DEFAULT_MODEL_NAME: str = "tft"
-    _SUPPORTED_TFT_MODELS: List[str] = ["tft", "tft_flex"]
-
-    def __init__(  # noqa: D401
-        self,
-        model_name: str = _DEFAULT_MODEL_NAME,
-        param_space: Optional[Dict[str, Any]] = None,
-        max_trials: int = 10,
-        objective: str = "val_loss",
-        epochs: int = 10,
-        batch_sizes: List[int] = [32],
-        validation_split: float = 0.2,
-        tuner_dir: Optional[str] = None,
-        project_name: Optional[str] = None,
-        tuner_type: str = "random",
-        callbacks: Optional[List[Callable]] = None,
-        model_builder: Optional[Callable] = None,
-        verbose: int = 1,
-        **kws: Any,
-    ):
-        model_name_lower = model_name.lower()
-        if model_name_lower not in self._SUPPORTED_TFT_MODELS:
-            raise ValueError(
-                f"Model '{model_name}' not supported. "
-                f"Choose from {self._SUPPORTED_TFT_MODELS}."
-            )
-
-        super().__init__(
-            model_name=model_name_lower,
-            param_space=param_space,
-            max_trials=max_trials,
-            objective=objective,
-            epochs=epochs,
-            batch_sizes=batch_sizes,
-            validation_split=validation_split,
-            tuner_dir=tuner_dir,
-            project_name=project_name,
-            tuner_type=tuner_type,
-            callbacks=callbacks,
-            model_builder=model_builder,
-            verbose=verbose,
-            **kws,
-        )
-
-TFTTuner.__doc__ = """
-Hyper‑parameter optimiser for Temporal Fusion Transformer (TFT)
-architectures – both the stricter *TFT* and the flexible
-*TemporalFusionTransformer* (``'tft_flex'``).
-
-The tuner explores LSTM depth, attention heads, hidden size,
-drop‑out, batch‑norm toggles, and optimiser learning rate.  Every
-candidate batch size launches its own search loop followed by a
-refit on the champion trial, yielding a single best model across
-all batch sizes.
-
-Objective
-~~~~~~~~~
-.. math::
-
-   \\theta^* \\;=\\; \\arg\\min_{{\\theta\\in\\Theta}}\\;
-   L_{{\\text{{val}}}}\\bigl(f_{{\\theta}}(\\mathbf X),\\,\\mathbf y\\bigr)
-
-with :math:`\\Theta` the joint hyper‑parameter space and
-:math:`L_{{\\text{{val}}}}` the validation loss.
-
-Supported model aliases
-~~~~~~~~~~~~~~~~~~~~~~~
-- ``"tft"``
-- ``"tft_flex"``
-
-Parameters
-----------
-{params.base.model_name}
-{params.base.param_space}
-{params.base.max_trials}
-{params.base.objective}
-{params.base.epochs}
-{params.base.batch_sizes}
-{params.base.validation_split}
-{params.base.tuner_dir}
-{params.base.project_name}
-{params.base.tuner_type}
-{params.base.callbacks}
-{params.base.model_builder}
-{params.base.verbose}
-
-**kws : Any
-    Extra keyword arguments forwarded to the base tuner.
-
-Example
--------
-Create synthetic data, instantiate the tuner, and run a full search.
-
->>> import numpy as np, tensorflow as tf
->>> from fusionlab.forecast_tuner import TFTTuner
->>> B, F, Ns, Nd, Nf, O = 128, 6, 3, 4, 2, 1
->>> rng = np.random.default_rng(42)
->>> X_static  = rng.normal(size=(B, Ns)).astype("float32")
->>> X_dynamic = rng.normal(size=(B, F, Nd)).astype("float32")
->>> X_future  = rng.normal(size=(B, F, Nf)).astype("float32")
->>> y         = rng.normal(size=(B, F, O)).astype("float32")
->>>
->>> tuner = TFTTuner(
-...     model_name="tft_flex",
-...     max_trials=4,
-...     epochs=30,
-...     batch_sizes=[32, 64],
-...     tuner_type="bayesian",
-...     verbose=2,
-... )
->>> best_hps, best_model, kt_obj = tuner.fit(
-...     inputs=[X_static, X_dynamic, X_future],
-...     y=y,
-...     forecast_horizon=F,
-... )
->>> print("Best learning‑rate:",
-...       f"{{best_hps['learning_rate']:.3g}}")
-
-See Also
---------
-XTFTTuner
-    Companion tuner for Extreme TFT variants.
-fusionlab.nn.transformers.TFT
-    Strict reference implementation.
-fusionlab.nn.transformers.TemporalFusionTransformer
-    Flexible implementation accepting missing input blocks.
-
-References
-----------
-.. [1] Lim, B. & Zohren, S. (2021). *Temporal Fusion Transformers
-       for Interpretable Multi‑horizon Time Series Forecasting*,
-       Int. J. Forecasting, 37(4), 1748‑1764.
-.. [2] Ouali, Y. et al. (2022). *Improving Temporal Fusion
-       Transformers with Hierarchical Context Modelling*,
-       arXiv:2202.01176.
-""".format(params=_tuner_docs)
 
 
