@@ -24,6 +24,7 @@ search process.
    :caption: Guide
 
    forecast_tuner
+   forecast_tuner_class_based
 
 .. toctree::
    :maxdepth: 1

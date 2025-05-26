@@ -2,13 +2,14 @@
 
 import pytest
 import numpy as np
-import tensorflow as tf
+
 import os
 import shutil # For cleaning up tuner directories
 from pathlib import Path
 
 # --- Attempt to import tuner functions and dependencies ---
 try:
+    import tensorflow as tf
     from fusionlab.nn.forecast_tuner import xtft_tuner, tft_tuner
     from fusionlab.nn.transformers import (
         XTFT, SuperXTFT,

@@ -115,6 +115,7 @@ rst_epilog = """
    :format: html
 
 .. |Feature| replace:: :bdg-success:`Feature`
+.. |New| replace:: :bdg-success:`Feature`
 .. |Fix| replace:: :bdg-danger:`Fix`
 .. |Enhancement| replace:: :bdg-info:`Enhancement`
 .. |Breaking| replace:: :bdg-warning:`Breaking`

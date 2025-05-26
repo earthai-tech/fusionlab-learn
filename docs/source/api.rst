@@ -183,6 +183,8 @@ Utilities for optimizing model hyperparameters using Keras Tuner.
 
    ~fusionlab.nn.forecast_tuner.xtft_tuner
    ~fusionlab.nn.forecast_tuner.tft_tuner
+   ~fusionlab.nn.forecast_tuner.XTFTTuner
+   ~fusionlab.nn.forecast_tuner.TFTTuner
 
 
 Neural Network Utilities (`fusionlab.nn.utils`)
