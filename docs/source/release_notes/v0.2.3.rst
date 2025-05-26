@@ -54,47 +54,47 @@ Enhancements & Improvements
       
 * **Code Example (New Class-Based Approach):**
 
-    .. code-block:: python
-        :linenos:
+  .. code-block:: python
+      :linenos:
 
-        import numpy as np
-        from fusionlab.nn.forecast_tuner import XTFTTuner
+      import numpy as np
+      from fusionlab.nn.forecast_tuner import XTFTTuner
 
-        # 1. Prepare Dummy Data
-        B, T_past, H_out = 8, 12, 6
-        D_s, D_d, D_f = 3, 5, 2
-        T_future_total = T_past + H_out
-        X_s = np.random.rand(B, D_s).astype(np.float32)
-        X_d = np.random.rand(B, T_past, D_d).astype(np.float32)
-        X_f = np.random.rand(B, T_future_total, D_f).astype(np.float32)
-        y = np.random.rand(B, H_out, 1).astype(np.float32)
-        train_inputs = [X_s, X_d, X_f]
+      # 1. Prepare Dummy Data
+      B, T_past, H_out = 8, 12, 6
+      D_s, D_d, D_f = 3, 5, 2
+      T_future_total = T_past + H_out
+      X_s = np.random.rand(B, D_s).astype(np.float32)
+      X_d = np.random.rand(B, T_past, D_d).astype(np.float32)
+      X_f = np.random.rand(B, T_future_total, D_f).astype(np.float32)
+      y = np.random.rand(B, H_out, 1).astype(np.float32)
+      train_inputs = [X_s, X_d, X_f]
 
-        # 2. Instantiate the Tuner
-        tuner = XTFTTuner(
-            model_name="xtft",
-            max_trials=3,      # Keep low for demo
-            epochs=2,          # Keep low for demo
-            batch_sizes=[8],   # Single batch for demo
-            tuner_dir="./xtft_class_tuning_v023",
-            verbose=0          # Suppress detailed Keras Tuner logs
-        )
+      # 2. Instantiate the Tuner
+      tuner = XTFTTuner(
+          model_name="xtft",
+          max_trials=3,      # Keep low for demo
+          epochs=2,          # Keep low for demo
+          batch_sizes=[8],   # Single batch for demo
+          tuner_dir="./xtft_class_tuning_v023",
+          verbose=0          # Suppress detailed Keras Tuner logs
+      )
 
-        # 3. Run the Tuning
-        print("Starting XTFT tuning with new class-based approach...")
-        best_hps, best_model, _ = tuner.fit(
-            inputs=train_inputs,
-            y=y,
-            forecast_horizon=H_out
-        )
+      # 3. Run the Tuning
+      print("Starting XTFT tuning with new class-based approach...")
+      best_hps, best_model, _ = tuner.fit(
+          inputs=train_inputs,
+          y=y,
+          forecast_horizon=H_out
+      )
 
-        # 4. Use results
-        if best_hps:
-            print("Tuning successful!")
-            print(f"Best Batch Size: {best_hps.get('batch_size')}")
-            print(f"Best Learning Rate: {best_hps.get('learning_rate')}")
-        else:
-            print("Tuning did not find a best model.")
+      # 4. Use results
+      if best_hps:
+          print("Tuning successful!")
+          print(f"Best Batch Size: {best_hps.get('batch_size')}")
+          print(f"Best Learning Rate: {best_hps.get('learning_rate')}")
+      else:
+          print("Tuning did not find a best model.")
 
 Fixes
 ~~~~~
