@@ -1,0 +1,47 @@
+[
+    {
+        "batch_size": 8,
+        "best_val_loss_for_batch": 0.1037457212805748,
+        "hyperparameters": {
+            "hidden_units": 16,
+            "num_heads": 2,
+            "dropout_rate": 0.3,
+            "activation": "relu",
+            "use_batch_norm": 1,
+            "embed_dim": 16,
+            "max_window_size": 10,
+            "memory_size": 50,
+            "lstm_units": 128,
+            "attention_units": 64,
+            "recurrent_dropout_rate": 0.2,
+            "use_residuals": 0,
+            "final_agg": "average",
+            "multi_scale_agg": "last",
+            "scales_options": "alt_scales",
+            "learning_rate": 0.001
+        }
+    },
+    {
+        "overall_best_batch_size": 8,
+        "overall_best_val_loss": 0.1037457212805748,
+        "overall_best_hyperparameters": {
+            "hidden_units": 16,
+            "num_heads": 2,
+            "dropout_rate": 0.3,
+            "activation": "relu",
+            "use_batch_norm": 1,
+            "embed_dim": 16,
+            "max_window_size": 10,
+            "memory_size": 50,
+            "lstm_units": 128,
+            "attention_units": 64,
+            "recurrent_dropout_rate": 0.2,
+            "use_residuals": 0,
+            "final_agg": "average",
+            "multi_scale_agg": "last",
+            "scales_options": "alt_scales",
+            "learning_rate": 0.001,
+            "batch_size": 8
+        }
+    }
+]
