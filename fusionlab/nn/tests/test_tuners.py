@@ -67,7 +67,7 @@ def _run_quick_tune(tuner_cls, model_name, inputs, y, fh):
         batch_sizes=[2],
         search_epochs=1,        # speed‑up search phase
         validation_split=0.25,
-        verbose=7,
+        verbose=3,
     )
 
     best_hps, best_model, tuner_obj = tuner.fit(

@@ -11,6 +11,7 @@ from pathlib import Path
 try:
     import tensorflow as tf
     from fusionlab.nn.forecast_tuner import xtft_tuner, tft_tuner
+    from fusionlab.nn.utils import prepare_model_inputs 
     from fusionlab.nn.transformers import (
         XTFT, SuperXTFT,
         TemporalFusionTransformer as TFTFlexible, # Alias for clarity
@@ -157,8 +158,20 @@ def _run_tuner_and_asserts(
     if model_name_arg == "tft_flex" and not use_quantiles: # Example: point forecast no static/future
         inputs_list_flex = [None, data_dict["X_dynamic"], None]
         case_info_flex = case_info.copy()
+        # Using full inputs for now, builder handles flexibility.
+        # we can use the prepare_model_inputs for consistent preparations: 
+            # transforming in strict mode, the None into a zeros tensors
         case_info_flex['static_input_dim'] = None
         case_info_flex['future_input_dim'] = None
+        
+        inputs_list_flex = prepare_model_inputs(
+            static_input= inputs_list_flex[0], 
+            dynamic_input= inputs_list_flex[1] ,
+            future_input =inputs_list_flex[-1],
+            model_type = 'strict',
+          )
+        
+        
         current_inputs = inputs_list_flex
         current_case_info = case_info_flex
     else:
@@ -183,7 +196,7 @@ def _run_tuner_and_asserts(
             project_name=project_name,
             tuner_type=tuner_type_arg,
             model_name=model_name_arg, # Pass model_name to tuner
-            verbose=0
+            verbose=7
         )
     except Exception as e:
         pytest.fail(
@@ -226,6 +239,7 @@ def test_xtft_tuner_for_xtft_runs(
 def test_xtft_tuner_for_superxtft_runs(
     tuner_shared_config, dummy_tuner_data, temp_tuner_dir
 ):
+    
     """Test xtft_tuner for SuperXTFT model."""
     print("\nTesting xtft_tuner for SuperXTFT")
     _run_tuner_and_asserts(
@@ -270,8 +284,23 @@ def test_tft_tuner_variants_run(
         # but the _model_builder_factory logic for 'tft_flex' should correctly
         # handle passing None for static_input_dim / future_input_dim if
         # corresponding X_static_val / X_future_val are None.
-        pass # Using full inputs for now, builder handles flexibility.
+        pass 
 
+    # Using full inputs for now, builder handles flexibility.
+    # we can use the prepare_model_inputs for consistent preparations: 
+        # transforming in strict mode, the None into a zeros tensors
+ 
+    X_static, X_dynamic, X_future = prepare_model_inputs(
+        static_input= current_dummy_data['X_static'], 
+        dynamic_input= current_dummy_data["X_dynamic"] ,
+        future_input =current_dummy_data['X_future'],
+        model_type = 'strict',
+      )
+    # # update dummy data 
+    # current_dummy_data['X_static'] = X_static
+    # current_dummy_data['X_dynamic'] = X_dynamic
+    # current_dummy_data['X_future'] = X_future
+    
     _run_tuner_and_asserts(
         tft_tuner, expected_model_class, tuner_shared_config,
         current_dummy_data, temp_tuner_dir, use_quantiles=use_quantiles,
