@@ -66,8 +66,8 @@ is one of these supported variants ("xtft", "superxtft", or "super_xtft").
     tuning-process parameters (e.g., `max_trials`, `epochs`, `batch_sizes`,
     `param_space`). You must specify a supported `model_name` (defaults
     to "xtft").
-2.  **Fitting (`fit`)**: You call the `fit` method with your input tensors
-    (`inputs = [X_static, X_dynamic, X_future]`), target `y`, and crucial
+2.  **Fitting (`fit`)**: You call the ``fit`` method with your input tensors
+    (``inputs = [X_static, X_dynamic, X_future]``), target `y`, and crucial
     task parameters like `forecast_horizon` and `quantiles`.
 3.  **Tuning**: The `fit` method executes the Keras Tuner search loop,
     building models using the internal factory or a custom builder,
@@ -144,47 +144,6 @@ is one of these supported variants ("xtft", "superxtft", or "super_xtft").
 .. code-block:: text
 
     Starting XTFT tuning (Class-Based)...
-    [INFO] Starting XTFT RANDOM tune...
-    [INFO] Final input dims ‑ S=3, D=5, F=2
-        [INFO] Inputs prepared and validated.
-        [INFO] Using default internal _model_builder_factory.
-        [INFO] Setting default EarlyStopping callback.
-    [INFO] Keras Tuner initialized: RANDOM for XTFT_Class_Tune
-    [INFO] --- Tuning with Batch Size: 8 ---
-        [INFO]   Best HPs for batch 8 (search phase): {'hidden_units': 16, 'num_heads': 2, 'dropout_rate': 0.3, 'activation': 'gelu', 'use_batch_norm': 0, 'embed_dim': 64, 'max_window_size': 10, 'memory_size': 100, 'lstm_units': 64, 'attention_units': 128, 'recurrent_dropout_rate': 0.0, 'use_residuals': 1, 'final_agg': 'average', 'multi_scale_agg': 'last', 'scales_options': 'no_scales', 'learning_rate': 0.001}
-        [INFO]   Training best model for batch 8 for 2 epochs...
-    [INFO]   Batch Size 8: Final val_loss = 0.7599
-    [INFO] Full tuning summary saved to ./xtft_class_tuning\XTFT_Class_Tune_tuning_summary.json
-    [INFO] --- Overall Best ---
-    [INFO] Best Batch Size: 8
-    [INFO] Best Hyperparameters:
-     BestHyperParameters(
-      {
-
-           hidden_units : 16
-           num_heads : 2
-           dropout_rate : 0.3
-           activation : gelu
-           use_batch_norm : 0
-           embed_dim : 64
-           max_window_size : 10
-           memory_size : 100
-           lstm_units : 64
-           attention_units : 128
-           recurrent_dropout_rate : 0.0
-           use_residuals : 1
-           final_agg : average
-           multi_scale_agg : last
-           scales_options : no_scales
-           learning_rate : 0.001
-           batch_size : 8
-
-      }
-    )
-
-    [ 17 entries ]
-    [INFO] Best Validation Loss: 0.7599
-
     XTFT Tuning complete.
     --- Best Hyperparameters (XTFT) ---
     {'hidden_units': 16, 'num_heads': 2, 'dropout_rate': 0.3, 'activation': 'gelu', 
@@ -210,15 +169,15 @@ It supports both the stricter `TFT` (requires all inputs, set
 (handles optional inputs, set `model_name="tft_flex"`).
 
 **Functionality:**
-Similar to `XTFTTuner`:
+Similar to :class:`fusionlab.nn.forecast_tuner.XTFTTuner`:
 
 1.  **Initialization (`__init__`)**: Configure the tuning process. Crucially,
     set `model_name` to either `"tft"` or `"tft_flex"`.
 2.  **Fitting (`fit`)**: Call `fit` with the data and task parameters.
     * If `model_name="tft"`, `inputs` *must* be `[X_s, X_d, X_f]` with
-        non-None tensors.
+      non-None tensors.
     * If `model_name="tft_flex"`, `inputs` can be `[X_s, X_d, X_f]`
-        where `X_s` and `X_f` can be `None`.
+      where `X_s` and `X_f` can be `None`.
 3.  **Tuning**: Executes the search process.
 4.  **Results**: Access via `best_hps_`, `best_model_`, `tuner_`.
 
@@ -290,11 +249,11 @@ Customizing the Tuning
 While the default settings and model builders are powerful, you
 can customize the process:
 
-* **`param_space`**: Provide a dictionary in the `__init__` method to
+* **param_space**: Provide a dictionary in the `__init__` method to
     define specific ranges or choices for any hyperparameter used by the
     internal `_model_builder_factory`. See Keras Tuner documentation for
     how to define choices.
-* **`model_builder`**: For complete control, you can write your own
+* **model_builder**: For complete control, you can write your own
     function that takes `hp` (Keras Tuner's `HyperParameters` object)
     and returns a compiled Keras model. Pass this function to the
     `__init__` method. This allows you to explore entirely different
