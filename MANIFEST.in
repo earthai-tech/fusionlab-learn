@@ -52,6 +52,9 @@ exclude main.py # Only use for code-ocean testing
 # Exclude development / CI / environment files
 exclude .gitignore
 exclude .gitattributes
+# exclude the main.py of code-ocean 
+exclude main.py
+
 # exclude .readthedocs.yml # Usually okay to include for context
 # exclude environment.yml  # Usually okay to include for context
 recursive-exclude .github *
@@ -78,3 +81,4 @@ recursive-exclude docs/_build *
 prune docs/_build
 
 # prune tests/__pycache__ # Example
+

@@ -116,7 +116,7 @@ directly from the source code on GitHub:
 
     .. code-block:: bash
 
-       pip install -e .[kdiagram]
+       pip install -e .[k-diagram]
        pip install -e .[dev]
        pip install -e .[full] # Installs all extras
 

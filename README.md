@@ -46,7 +46,7 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 
 ### 🧠 **Implemented Architectures**
 - `TemporalFusionTransformer` – Standard TFT model
-- `NTemporalFusionTransformer` – Point forecast variant with structured inputs
+- `DummyTFT` – Point forecast variant with structured inputs
 - `XTFT` – *Extreme TFT* with advanced attention and anomaly tools
 - `SuperXTFT` – Experimental, VSN-enhanced 
 
