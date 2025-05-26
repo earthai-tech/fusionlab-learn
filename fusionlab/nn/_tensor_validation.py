@@ -2837,7 +2837,22 @@ def validate_model_inputs(
         f_s = future_p.shape if future_p is not None else 'None'
         print(f"Exit `validate_model_inputs`. Processed shapes: "
               f"S={s_s}, D={d_s}, F={f_s}")
-
+    
+    # XXX TODO: Use 'prepare model so  model can handle None if passe. 
+    #     None should systematically converted to a zeros tensors. 
+    
+    # try: 
+    #     from .utils import prepare_model_inputs 
+    # except: 
+    #    # For safety try to reconvert the tensor to zeros tensor. 
+    #    static_p, dynamic_p, future_p = prepare_model_inputs(
+    #        static_input= static_p, 
+    #        dynamic_input= dynamic_p, 
+    #        future_input= future_p,
+    #        # forecast_horizon= forecast_horizon # mute since it has been done. 
+    #        model_type="strict",# for convertir None to zeros tensor.
+    #       )
+       
     # Return in the order: static, dynamic, future
     return static_p, dynamic_p, future_p
 

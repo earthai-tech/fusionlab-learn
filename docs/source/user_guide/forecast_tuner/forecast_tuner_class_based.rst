@@ -174,8 +174,7 @@ Similar to :class:`fusionlab.nn.forecast_tuner.XTFTTuner`:
 1.  **Initialization (`__init__`)**: Configure the tuning process. Crucially,
     set `model_name` to either `"tft"` or `"tft_flex"`.
 2.  **Fitting (`fit`)**: Call `fit` with the data and task parameters.
-    * If `model_name="tft"`, `inputs` *must* be `[X_s, X_d, X_f]` with
-      non-None tensors.
+    * If `model_name="tft"`, `inputs` *must* be `[X_s, X_d, X_f]` with non-None tensors.
     * If `model_name="tft_flex"`, `inputs` can be `[X_s, X_d, X_f]`
       where `X_s` and `X_f` can be `None`.
 3.  **Tuning**: Executes the search process.

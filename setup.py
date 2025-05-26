@@ -4,7 +4,7 @@ try:
     import fusionlab
     VERSION = fusionlab.__version__
 except:
-    VERSION = "0.2.1" 
+    VERSION = "0.2.3" 
 
 # Package metadata
 DISTNAME = "fusionlab-learn"
