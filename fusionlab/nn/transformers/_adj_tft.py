@@ -8,15 +8,15 @@ architecture for multi-horizon time-series forecasting.
 from numbers import Real, Integral  
 from typing import List, Optional, Union 
 
-from .._fusionlog import fusionlog 
-from ..api.property import NNLearner 
-from ..core.checks import is_iterable
-from ..core.diagnose_q import validate_quantiles
-from ..compat.sklearn import validate_params, Interval, StrOptions
-from ..utils.deps_utils import ensure_pkg 
-from ..utils.validator import validate_positive_integer
+from ..._fusionlog import fusionlog 
+from ...api.property import NNLearner 
+from ...core.checks import is_iterable
+from ...core.diagnose_q import validate_quantiles
+from ...compat.sklearn import validate_params, Interval, StrOptions
+from ...utils.deps_utils import ensure_pkg 
+from ...utils.validator import validate_positive_integer
 
-from . import KERAS_DEPS, KERAS_BACKEND, dependency_message 
+from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message 
 
 if KERAS_BACKEND:
     LSTM = KERAS_DEPS.LSTM
@@ -54,11 +54,11 @@ if KERAS_BACKEND:
     tf_get_static_value=KERAS_DEPS.get_static_value
     tf_gather=KERAS_DEPS.gather 
     
-    from ._tensor_validation import ( 
+    from .._tensor_validation import ( 
         validate_model_inputs, combine_temporal_inputs_for_lstm
         )
-    from .losses import combined_quantile_loss 
-    from .components import (
+    from ..losses import combined_quantile_loss 
+    from ..components import (
         VariableSelectionNetwork,
         PositionalEncoding,
         GatedResidualNetwork,

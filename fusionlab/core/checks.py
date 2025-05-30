@@ -3070,7 +3070,8 @@ def exist_features(
     df: pd.DataFrame, 
     features, 
     error='raise',  
-    name="Feature"
+    name="Feature", 
+    message=None, 
 ) -> bool:
     """
     Check whether the specified features exist in the dataframe.
@@ -3177,7 +3178,7 @@ def exist_features(
 
     # If there are missing features, handle according to 'error' type
     if missing_features:
-        msg = f"{name}{'s' if len(features) > 1 else ''}"
+        msg = message or f"{name}{'s' if len(features) > 1 else ''}"
 
         if error == 'raise':
             raise ValueError(

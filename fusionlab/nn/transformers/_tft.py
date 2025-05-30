@@ -9,21 +9,21 @@ from numbers import Real, Integral
 import logging
 from typing import Optional, List, Any, Union
 
-from .._fusionlog import fusionlog
-from ..api.docs import ( 
+from ..._fusionlog import fusionlog
+from ...api.docs import ( 
     _shared_nn_params, 
     _shared_docs, 
     DocstringComponents,
 )
-from ..api.property import  NNLearner 
-from ..core.checks import is_iterable
-from ..core.diagnose_q import validate_quantiles
-from ..core.handlers import param_deprecated_message 
-from ..compat.sklearn import validate_params, Interval, StrOptions 
-from ..decorators import Appender 
-from ..utils.deps_utils import ensure_pkg
+from ...api.property import  NNLearner 
+from ...core.checks import is_iterable
+from ...core.diagnose_q import validate_quantiles
+from ...core.handlers import param_deprecated_message 
+from ...compat.sklearn import validate_params, Interval, StrOptions 
+from ...decorators import Appender 
+from ...utils.deps_utils import ensure_pkg
 
-from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
+from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 
 if KERAS_BACKEND:
     LSTM = KERAS_DEPS.LSTM
@@ -54,11 +54,11 @@ if KERAS_BACKEND:
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
-    from ._tensor_validation import ( 
+    from .._tensor_validation import ( 
         validate_model_inputs, 
         align_temporal_dimensions
     )
-    from .components import ( 
+    from ..components import ( 
         StaticEnrichmentLayer, 
         PositionalEncoding, 
         GatedResidualNetwork, 

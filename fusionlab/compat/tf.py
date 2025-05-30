@@ -153,6 +153,8 @@ class KerasDependencies:
             'Assert': ('tensorflow', 'Assert'), 
             'TensorShape': ('tensorflow', 'TensorShape'), 
             'Tensor': ('tensorflow', 'Tensor'), 
+            'Variable': ('tensorflow', 'Variable'), 
+            'GradientTape':('tensorflow', 'GradientTape'), 
             
             'reduce_mean': ('tensorflow', 'reduce_mean'),
             'reduce_sum': ('tensorflow', 'reduce_sum'),
@@ -208,6 +210,19 @@ class KerasDependencies:
             'logical_and': ('tensorflow', 'logical_and'), 
             'logical_not': ('tensorflow', 'logical_not'), 
             'logical_or': ('tensorflow', 'logical_or'), 
+            'newaxis': ('tensorflow', 'newaxis'), 
+            'sin': ('tensorflow', 'sin'), 
+            'cos': ('tensorflow', 'cos'), 
+            'pow': ('tensorflow', 'pow'), 
+            'linalg':('tensorflow', 'linalg'), 
+            'floordiv': ('tensorflow.math', 'floordiv'), 
+            'identity':('tensorflow', 'identity'), 
+            'greater_equal': ('tensorflow', 'greater_equal'), 
+            'greater': ('tensorflow', 'greater'), 
+            'bool': ('tensorflow', 'bool'), 
+            'where':('tensorflow', 'where'), 
+            'log': ('tensorflow.math', 'log'), 
+            'exp': ('tensorflow', 'exp')
             
             
         }
@@ -232,6 +247,7 @@ class KerasDependencies:
             'Input': ('layers', 'Input'),
             'Conv2D': ('layers', 'Conv2D'),
             'Conv1D': ('layers', 'Conv1D'),
+            'Constant': ('initializers', 'Constant'), 
             'Optimizer':('optimizers', 'Optimizer'), 
             'Metric': ('metrics', 'Metric'), 
             'MaxPooling2D': ('layers', 'MaxPooling2D'),

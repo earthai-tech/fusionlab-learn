@@ -13,6 +13,8 @@ import warnings
 from numbers import Real, Integral  
 from typing import Optional, Union, List, Dict, Tuple, Callable
 
+import numpy as np 
+
 from .._fusionlog import fusionlog 
 from ..api.property import  NNLearner 
 from ..core.checks import validate_nested_param
@@ -42,6 +44,7 @@ if KERAS_BACKEND:
     Loss=KERAS_DEPS.Loss
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     Tensor=KERAS_DEPS.Tensor
+    Sequential =KERAS_DEPS.Sequential
 
     tf_Assert= KERAS_DEPS.Assert
     tf_TensorShape= KERAS_DEPS.TensorShape
@@ -67,7 +70,6 @@ if KERAS_BACKEND:
     tf_expand_dims = KERAS_DEPS.expand_dims
     tf_tile = KERAS_DEPS.tile
     tf_range=KERAS_DEPS.range 
-    tf_shape = KERAS_DEPS.shape
     tf_rank=KERAS_DEPS.rank
     tf_split = KERAS_DEPS.split
     tf_multiply=KERAS_DEPS.multiply
@@ -78,6 +80,16 @@ if KERAS_BACKEND:
     tf_debugging =KERAS_DEPS.debugging 
     tf_autograph=KERAS_DEPS.autograph
     
+    tf_newaxis = KERAS_DEPS.newaxis 
+    tf_pow = KERAS_DEPS.pow
+    tf_sin = KERAS_DEPS.sin
+    tf_cos = KERAS_DEPS.cos
+    tf_ones = KERAS_DEPS.ones 
+    tf_linalg = KERAS_DEPS.linalg
+    tf_floordiv = KERAS_DEPS.floordiv
+    tf_greater =KERAS_DEPS.greater 
+    
+
     try:
         # Equivalent to: from tensorflow.keras import activations
         activations = KERAS_DEPS.activations  
@@ -107,7 +119,6 @@ __all__ = [
      'DynamicTimeWindow',
      'ExplainableAttention',
      'GatedResidualNetwork',
-     'GatedResidualNetworkIn',
      'HierarchicalAttention',
      'LearnedNormalization',
      'MemoryAugmentedAttention',
@@ -120,12 +131,14 @@ __all__ = [
      'QuantileDistributionModeling',
      'StaticEnrichmentLayer',
      'TemporalAttentionLayer',
-     'TemporalAttentionLayerIn',
      'VariableSelectionNetwork',
-     'VariableSelectionNetworkIn',
      'Activation', 
+     'TransformerEncoderLayer', 
+     'TransformerDecoderLayer', 
+     'PositionalEncodingTF', 
      'aggregate_multiscale', 
-     'aggregate_time_window_output'
+     'aggregate_time_window_output', 
+     'create_causal_mask'
     ]
 
 
@@ -313,8 +326,282 @@ class Activation(Layer, NNLearner):
         """
         return (f"{self.__class__.__name__}("
                 f"activation={self.activation_str!r})")
+    
+# -------------------- Pure Transformers components ------------------------------
+
+@register_keras_serializable(
+    'fusionlab.nn.transformers', 
+    name="TransformerEncoderLayer"
+)
+class TransformerEncoderLayer(Layer):
+    """
+    A single layer of the Transformer Encoder.
+
+    Args:
+        embed_dim (int): Dimensionality of the input and output.
+        num_heads (int): Number of attention heads.
+        ffn_dim (int): Hidden dimensionality of the feed-forward network.
+        dropout_rate (float): Dropout rate.
+        ffn_activation (str): Activation function for the FFN.
+        layer_norm_epsilon (float): Epsilon for LayerNormalization.
+    """
+    def __init__(
+        self, 
+        embed_dim: int, 
+        num_heads: int, 
+        ffn_dim: int, 
+        dropout_rate: float = 0.1,
+        ffn_activation: str = 'relu',
+        layer_norm_epsilon: float = 1e-6,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.ffn_dim = ffn_dim
+        self.dropout_rate = dropout_rate
+        self.ffn_activation = ffn_activation
+        self.layer_norm_epsilon = layer_norm_epsilon
+
+        self.mha = MultiHeadAttention(
+            num_heads=num_heads, key_dim=embed_dim, dropout=dropout_rate
+        )
+        self.ffn = Sequential([
+            Dense(ffn_dim, activation=ffn_activation),
+            Dense(embed_dim)
+        ], name="encoder_ffn")
+        self.layernorm1 = LayerNormalization(epsilon=layer_norm_epsilon)
+        self.layernorm2 = LayerNormalization(epsilon=layer_norm_epsilon)
+        self.dropout1 = Dropout(dropout_rate) # MHA output dropout is in MHA layer
+        self.dropout_ffn = Dropout(dropout_rate)
+
+    def call(
+            self, x: Tensor, training: bool = False, 
+            attention_mask: Optional[Tensor] = None) -> Tensor:
+        attn_output = self.mha(
+            query=x, value=x, key=x,
+            attention_mask=attention_mask, training=training
+        )
+        # Dropout after MHA is already handled by MHA layer's dropout param.
+        # self.dropout1 is if we want additional dropout on the residual sum.
+        out1 = self.layernorm1(x + attn_output) # Post-norm
+
+        ffn_output = self.ffn(out1, training=training)
+        ffn_output = self.dropout_ffn(ffn_output, training=training)
+        out2 = self.layernorm2(out1 + ffn_output) # Post-norm
+        return out2
+        
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embed_dim": self.embed_dim,
+            "num_heads": self.num_heads,
+            "ffn_dim": self.ffn_dim,
+            "dropout_rate": self.dropout_rate,
+            "ffn_activation": self.ffn_activation,
+            "layer_norm_epsilon": self.layer_norm_epsilon,
+        })
+        return config
+
+@register_keras_serializable(
+    'fusionlab.nn.transformers', name="TransformerDecoderLayer")
+class TransformerDecoderLayer(Layer):
+    """
+    A single layer of the Transformer Decoder.
+    (Arguments similar to TransformerEncoderLayer)
+    """
+    def __init__(
+        self, 
+        embed_dim: int, 
+        num_heads: int, 
+        ffn_dim: int, 
+        dropout_rate: float = 0.1,
+        ffn_activation: str = 'relu',
+        layer_norm_epsilon: float = 1e-6,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.ffn_dim = ffn_dim
+        self.dropout_rate = dropout_rate
+        self.ffn_activation = ffn_activation
+        self.layer_norm_epsilon = layer_norm_epsilon
+
+        self.mha1_self_attn = MultiHeadAttention(
+            num_heads=num_heads, key_dim=embed_dim, 
+            dropout=dropout_rate
+        )
+        self.mha2_cross_attn = MultiHeadAttention(
+            num_heads=num_heads, key_dim=embed_dim,
+            dropout=dropout_rate
+        )
+        self.ffn = Sequential([
+            Dense(ffn_dim, activation=ffn_activation),
+            Dense(embed_dim)
+        ], name="decoder_ffn")
+        
+        self.layernorm1 = LayerNormalization(epsilon=layer_norm_epsilon)
+        self.layernorm2 = LayerNormalization(epsilon=layer_norm_epsilon)
+        self.layernorm3 = LayerNormalization(epsilon=layer_norm_epsilon)
+        
+        # Dropout layers if needed beyond MHA's internal dropout
+        self.dropout_ffn = Dropout(dropout_rate)
+
+    def call(
+        self, 
+        x: Tensor, 
+        enc_output: Tensor, 
+        training: bool = False, 
+        look_ahead_mask: Optional[Tensor] = None, 
+        # For encoder output in cross-attention
+        padding_mask: Optional[Tensor] = None, 
+    ) -> Tensor:
+        
+        # Masked Multi-Head Self-Attention (for decoder inputs)
+        attn1_output = self.mha1_self_attn(
+            query=x, value=x, key=x, 
+            attention_mask=look_ahead_mask, 
+            training=training
+        )
+        out1 = self.layernorm1(x + attn1_output)
+
+        # Multi-Head Cross-Attention (Query=Decoder, Key/Value=Encoder)
+        attn2_output = self.mha2_cross_attn(
+            query=out1, value=enc_output, key=enc_output,
+            attention_mask=padding_mask, training=training
+        )
+        out2 = self.layernorm2(out1 + attn2_output) 
+
+        # Feed-Forward Network
+        ffn_output = self.ffn(out2, training=training)
+        ffn_output = self.dropout_ffn(ffn_output, training=training)
+        out3 = self.layernorm3(out2 + ffn_output)
+        return out3
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "embed_dim": self.embed_dim,
+            "num_heads": self.num_heads,
+            "ffn_dim": self.ffn_dim,
+            "dropout_rate": self.dropout_rate,
+            "ffn_activation": self.ffn_activation,
+            "layer_norm_epsilon": self.layer_norm_epsilon,
+        })
+        return config
+        
+    
+@register_keras_serializable(
+    'fusionlab.nn.components', name="PositionalEncodingTF")
+class PositionalEncodingTF(Layer):
+    """
+    Standard Transformer Positional Encoding using sine and cosine functions.
+    Adds positional information to input embeddings.
+
+    Args:
+        max_position (int): Maximum sequence length that this layer can handle.
+        embed_dim (int): The dimensionality of the embeddings (and the
+                         positional encoding).
+    """
+    def __init__(self, max_position: int, embed_dim: int, **kwargs):
+        super().__init__(**kwargs)
+        self.max_position = max_position
+        self.embed_dim = embed_dim
+        # self.pos_encoding is created once and stored.
+        self.pos_encoding = self._build_positional_encoding(max_position, embed_dim)
+
+    def _build_positional_encoding(
+            self, position: int, d_model: int) -> Tensor:
+        """Builds the positional encoding matrix using NumPy 
+        then converts to Tensor."""
+    
+        # 1. Calculate angles in NumPy
+        # 'pos' is for positions (sequence length), 'i' is for dimension
+        pos_np = np.arange(position)[:, np.newaxis]
+        i_np = np.arange(d_model)[np.newaxis, :]
+        
+        angle_rates_np = 1 / np.power(
+            10000, (2 * (i_np // 2)) / np.float32(d_model)
+        )
+        angle_rads_np = pos_np * angle_rates_np
+    
+        # 2. Apply sin to even indices in the array; 2i
+        angle_rads_np[:, 0::2] = np.sin(angle_rads_np[:, 0::2])
+    
+        # 3. Apply cos to odd indices in the array; 2i+1
+        angle_rads_np[:, 1::2] = np.cos(angle_rads_np[:, 1::2])
+    
+        # 4. Add a new axis for batch dimension and cast to TensorFlow tensor
+        # The self.pos_encoding expects (1, max_position, embed_dim)
+        pos_encoding_tensor = tf_cast(
+            angle_rads_np[np.newaxis, ...], dtype=tf_float32
+        )
+        
+        return pos_encoding_tensor
+
+    def _tf_build_positional_encoding(self, position, d_model):
+        """Builds the positional encoding matrix."""
+        angle_rads = self._get_angles(
+            # Use np.arange for non-Tensor context 
+            # if KERAS_DEPS.arange isn't suitable
+            tf_range(position)[:, tf_newaxis],
+            tf_range(d_model)[tf_newaxis, :],
+            d_model
+            )
+        # Apply sin to even indices in the array; 2i
+        angle_rads[:, 0::2] = tf_sin(angle_rads[:, 0::2])
+        # Apply cos to odd indices in the array; 2i+1
+        angle_rads[:, 1::2] = tf_cos(angle_rads[:, 1::2])
+
+        pos_encoding_np = angle_rads[tf_newaxis, ...]
+        
+        return tf_cast(pos_encoding_np, dtype=tf_float32)
+        
+    def _get_angles(self, pos, i, d_model):
+        """Calculates the angle rates for positional encoding."""
+        # Use np.power for non-Tensor context
+        angle_rates = 1 / np.power(10000, (
+            2 * (i // 2)) / np.float32(d_model))
+        return pos * angle_rates
+    
+    def _tf_get_angles(self, pos, i, d_model):
+        """Calculates the angle rates for positional encoding."""
+        # cast d_model to float32
+        d_model_f = tf_cast(d_model, tf_float32)
+        # compute floor(i/2) as an integer tensor
+        half_i = tf_floordiv(i, 2)
+        # build the numerator 2 * (i//2), then cast to float32
+        numer = tf_cast(2 * half_i, tf_float32)
+        # now both numer and d_model_f are float32
+        exponent = numer / d_model_f
+        # compute the rates with float constants
+        angle_rates = 1.0 / tf_pow(10000.0, exponent)
+        # and finally apply to pos (cast pos to float32 if needed)
+        return tf_cast(pos, tf_float32) * angle_rates
+
+    def call(self, x):
+        """Adds positional encoding to the input tensor `x`."""
+        if not KERAS_BACKEND:
+            raise RuntimeError(
+                "PositionalEncodingTF layer requires "
+                "a Keras backend (TensorFlow)."
+            )
+        input_seq_len = tf_shape(x)[1]
+        # Add positional encoding up to the length of the input sequence.
+        return x + self.pos_encoding[:, :input_seq_len, :]
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "max_position": self.max_position,
+            "embed_dim": self.embed_dim,
+        })
+        return config
+
 
 # -------------------- TFT components ----------------------------------------
+
 
 @register_keras_serializable('fusionlab.nn.components', name='PositionalEncoding')
 class PositionalEncoding(Layer, NNLearner):
@@ -1247,307 +1534,6 @@ class TemporalAttentionLayer(Layer):
     def from_config(cls, config):
         """Creates layer from its config."""
         return cls(**config)
-@register_keras_serializable(
-    'fusionlab.nn.components', name="GatedResidualNetworkIn"
-)
-class GatedResidualNetworkIn(Layer, NNLearner):
-    r"""
-    Gated Residual Network (GRN) for deep feature 
-    transformation with gating and residual 
-    connections [1]_.
-
-    This layer captures complex nonlinear relationships 
-    by applying two linear transformations with a 
-    specified `activation`, followed by gating and a 
-    residual skip connection. An optional batch 
-    normalization can be included. The shape of the 
-    output can match the input if a projection is 
-    applied.
-
-    .. math::
-        \mathbf{h} = \text{LayerNorm}\Big(
-            \mathbf{x} + \big(\mathbf{W}_2
-            \,\phi(\mathbf{W}_1\,\mathbf{x} + 
-            \mathbf{b}_1)\,\mathbf{g}\big)
-        \Big)
-
-    where :math:`\mathbf{g}` is the output of the gate.
-
-    Parameters
-    ----------
-    units : int
-        Number of hidden units in the GRN.
-    dropout_rate : float, optional
-        Dropout rate used after the second linear 
-        transformation. Defaults to 0.0.
-    use_time_distributed : bool, optional
-        Whether to wrap this layer with 
-        ``TimeDistributed`` for temporal data. 
-        Defaults to False.
-    activation : str, optional
-        Activation function to use. Must be one 
-        of {'elu', 'relu', 'tanh', 'sigmoid', 
-        'linear'}. Defaults to 'elu'.
-    use_batch_norm : bool, optional
-        Whether to apply batch normalization 
-        after the first linear transformation. 
-        Defaults to False.
-    **kwargs : 
-        Additional arguments passed to the 
-        parent Keras ``Layer``.
-
-    Notes
-    -----
-    - The gating mechanism is used to control 
-      the contribution of the transformed 
-      features to the output.
-    - The residual connection helps in training 
-      deeper networks by mitigating vanishing 
-      gradient issues.
-
-    Methods
-    -------
-    call(`x`, training=False)
-        Forward pass of the GRN. Accepts an 
-        input tensor ``x`` of shape 
-        (batch_size, ..., input_dim).
-
-    get_config()
-        Returns the configuration dictionary 
-        for serialization.
-
-    from_config(`config`)
-        Creates a new GRN from a given 
-        configuration dictionary.
-
-    Examples
-    --------
-    >>> from fusionlab.nn.components import GatedResidualNetwork
-    >>> import tensorflow as tf
-    >>> # Create a random input of shape
-    ... # (batch_size, time_steps, input_dim)
-    >>> inputs = tf.random.normal((32, 10, 64))
-    >>> # Instantiate GRN
-    >>> grn = GatedResidualNetwork(
-    ...     units=64,
-    ...     dropout_rate=0.1,
-    ...     use_time_distributed=True,
-    ...     activation='relu',
-    ...     use_batch_norm=True
-    ... )
-    >>> # Forward pass
-    >>> outputs = grn(inputs)
-
-    See Also
-    --------
-    VariableSelectionNetwork 
-        Utilizes GRN to process multiple 
-        input variables.
-    PositionalEncoding 
-        Provides positional encoding for 
-        sequence inputs.
-
-    References
-    ----------
-    .. [1] Lim, B., & Zohren, S. (2021). "Time-series 
-           forecasting with deep learning: a survey." 
-           *Philosophical Transactions of the Royal 
-           Society A*, 379(2194), 20200209.
-    """
-
-    @validate_params({
-        "units": [Interval(Integral, 0, None, 
-                           closed='left')],
-        "dropout_rate": [Interval(Real, 0, 1, 
-                                  closed="both")],
-        "use_time_distributed": [bool],
-        "use_batch_norm": [bool],
-    })
-    @ensure_pkg(KERAS_BACKEND or "keras", 
-                extra=DEP_MSG)
-    def __init__(
-        self,
-        units,
-        dropout_rate=0.0,
-        use_time_distributed=False,
-        activation='elu',
-        use_batch_norm=False,
-        **kwargs
-    ):
-        super().__init__(**kwargs)
-        self.units = units
-        self.dropout_rate = dropout_rate
-        self.use_time_distributed = use_time_distributed
-        self.use_batch_norm = use_batch_norm
-
-        # Store activation as an object
-        self.activation= activation
-
-        # First linear transform
-        self.linear = Dense(
-            units, 
-            activation=self.activation
-        )
-        # Second linear transform
-        self.linear2 = Dense(
-            units, 
-            activation= self.activation 
-        )
-
-        # Optionally apply batch normalization
-        if self.use_batch_norm:
-            self.batch_norm = BatchNormalization()
-
-        # Dropout layer
-        self.dropout = Dropout(
-            dropout_rate
-        )
-
-        # Layer normalization for the output
-        self.layer_norm = LayerNormalization()
-
-        # Gate for controlling feature flow
-        self.gate = Dense(
-            units,
-            activation='sigmoid'
-        )
-
-        # Projection for matching dimensions if needed
-        self.projection = None
-
-    def build(self, input_shape):
-        r"""
-        Build method that creates the projection 
-        layer if the input dimension does not 
-        match `units`.
-
-        Parameters
-        ----------
-        input_shape : tuple
-            Shape of the input tensor,
-            typically (batch_size, ..., input_dim).
-        """
-        input_dim = input_shape[-1]
-
-        # Create projection only if input_dim != units
-        if input_dim != self.units:
-            self.projection = Dense(
-                self.units
-            )
-        super().build(input_shape)
-        
-    @tf_autograph.experimental.do_not_convert
-    def call(self, x, training=False):
-        r"""
-        Forward pass of the GRN, which applies:
-        1) Two linear transformations with a 
-           specified activation,
-        2) An optional batch normalization, 
-        3) A gating mechanism, 
-        4) A residual skip connection, 
-        5) Layer normalization.
-
-        Parameters
-        ----------
-        ``x`` : tf.Tensor
-            Input tensor of shape 
-            :math:`(B, ..., \text{input_dim})`.
-        training : bool, optional
-            Indicates whether the layer is 
-            in training mode for dropout 
-            and batch normalization.
-
-        Returns
-        -------
-        tf.Tensor
-            Output tensor of shape 
-            :math:`(B, ..., \text{units})`.
-        """
-        # Save reference for residual
-        shortcut = x
-
-        # First linear transform
-        x = self.linear(x)
-
-        # # Activation
-        # x = self.activation(x)
-
-        # Batch normalization if enabled
-        if self.use_batch_norm:
-            x = self.batch_norm(
-                x,
-                training=training
-            )
-
-        # Second linear transform
-        x = self.linear2(x)
-
-        # Dropout
-        x = self.dropout(
-            x,
-            training=training
-        )
-
-        # Gate
-        gate_output = self.gate(x)
-
-        # Multiply by gate output
-        x = x * gate_output
-
-        # If dimensions differ, apply projection
-        if self.projection is not None:
-            shortcut = self.projection(shortcut)
-
-        # Residual connection
-        x = x + shortcut
-
-        # Layer normalization
-        x = self.layer_norm(x)
-        return x
-
-    def get_config(self):
-        r"""
-        Return the configuration dictionary 
-        of the GRN.
-
-        Returns
-        -------
-        dict
-            Configuration dictionary containing 
-            parameters that define this layer.
-        """
-        config = super().get_config().copy()
-        config.update({
-            'units': self.units,
-            'dropout_rate': self.dropout_rate,
-            'use_time_distributed': (
-                self.use_time_distributed
-            ),
-            'activation': self.activation,
-            'use_batch_norm': self.use_batch_norm,
-        })
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        r"""
-        Create a new instance of this layer 
-        from a given config dictionary.
-
-        Parameters
-        ----------
-        ``config`` : dict
-            Configuration dictionary as 
-            returned by ``get_config``.
-
-        Returns
-        -------
-        GatedResidualNetwork
-            A new instance of 
-            GatedResidualNetwork.
-        """
-        return cls(**config)
-
 
 @register_keras_serializable(
     'fusionlab.nn.components', 
@@ -1802,374 +1788,6 @@ class StaticEnrichmentLayer(Layer, NNLearner):
         """
         return cls(**config)
 
-
-    
-@register_keras_serializable(
-    'fusionlab.nn.components', 
-    name="TemporalAttentionLayerIn"
-)
-class TemporalAttentionLayerIn(Layer, NNLearner):
-    r"""
-    Temporal Attention Layer for focusing on
-    important time steps [1]_.
-
-    This layer uses a multi-head attention
-    mechanism on temporal sequences to learn
-    which time steps are most relevant for
-    prediction. It also enriches queries
-    with a static context via a 
-    :class:`GatedResidualNetwork`, then applies
-    multi-head attention followed by a second
-    GRN to refine the attended sequence.
-
-    .. math::
-        \mathbf{Z} = \text{GRN}\Big(
-            \mathbf{X} + \text{MHA}\big(\mathbf{Q},
-            \mathbf{X}, \mathbf{X}\big)\Big)
-
-    where :math:`\mathbf{Q}` is the sum of
-    :math:`\mathbf{X}` and the tiled static
-    context.
-
-    Parameters
-    ----------
-    units : int
-        Dimensionality of the query/key/value
-        projections within multi-head attention,
-        as well as hidden units in the GRN.
-    num_heads : int
-        Number of attention heads.
-    dropout_rate : float, optional
-        Dropout rate applied in multi-head
-        attention and in the GRNs. Defaults
-        to 0.0.
-    activation : str, optional
-        Activation function used in the GRNs.
-        Must be one of {'elu', 'relu', 'tanh',
-        'sigmoid', 'linear'}. Defaults to
-        ``'elu'``.
-    use_batch_norm : bool, optional
-        Whether to apply batch normalization
-        in the GRNs. Defaults to ``False``.
-    **kwargs :
-        Additional arguments passed to the
-        parent Keras ``Layer``.
-
-    Notes
-    -----
-    1. The static context is first transformed
-       by a GRN, expanded, and added to the
-       input sequence to form the query.
-    2. Multi-head attention is performed
-       between the query, key, and value
-       (all set to `inputs`).
-    3. The result is normalized and passed
-       through another GRN for final 
-       transformation.
-
-    Methods
-    -------
-    call(`inputs`, `context_vector`, training=False)
-        Forward pass of the temporal attention
-        layer.
-
-    get_config()
-        Returns configuration dictionary for
-        serialization.
-
-    from_config(`config`)
-        Creates a new instance from a config
-        dictionary.
-
-    Examples
-    --------
-    >>> from fusionlab.nn.components import TemporalAttentionLayer
-    >>> import tensorflow as tf
-    >>> # Create random inputs
-    ... # shape (batch_size, time_steps, units)
-    >>> inputs = tf.random.normal((32, 10, 64))
-    >>> # Create static context vector
-    ... # shape (batch_size, units)
-    >>> context_vector = tf.random.normal((32, 64))
-    >>> # Instantiate the layer
-    >>> tal = TemporalAttentionLayer(
-    ...     units=64,
-    ...     num_heads=4,
-    ...     dropout_rate=0.1,
-    ...     activation='relu',
-    ...     use_batch_norm=True
-    ... )
-    >>> # Forward pass
-    >>> outputs = tal(
-    ...     inputs,
-    ...     context_vector,
-    ...     training=True
-    ... )
-
-    See Also
-    --------
-    GatedResidualNetwork
-        Provides transformation for the
-        query and the final output.
-    TemporalFusionTransformer
-        A composite model utilizing temporal 
-        attention for time-series forecasting.
-
-    References
-    ----------
-    .. [1] Lim, B., & Zohren, S. (2021). "Time-series
-           forecasting with deep learning: a survey."
-           *Philosophical Transactions of the Royal
-           Society A*, 379(2194), 20200209.
-    """
-
-    @validate_params({
-        "units": [Interval(Integral, 0, None, 
-                           closed='left')],
-        "num_heads": [Interval(Integral, 1, None,
-                               closed='left')],
-        "dropout_rate": [Interval(Real, 0, 1,
-                                  closed="both")],
-        "use_batch_norm": [bool],
-    })
-    @ensure_pkg(KERAS_BACKEND or "keras",
-                extra=DEP_MSG)
-    def __init__(
-        self,
-        units,
-        num_heads,
-        dropout_rate=0.0,
-        activation='elu',
-        use_batch_norm=False,
-        **kwargs
-    ):
-        r"""
-        Initialize the TemporalAttentionLayer.
-
-        Parameters
-        ----------
-        units : int
-            Dimensionality for query/key/value
-            projections and hidden units in 
-            the GRNs.
-        num_heads : int
-            Number of attention heads in
-            multi-head attention.
-        dropout_rate : float, optional
-            Dropout rate for both multi-head
-            attention and GRNs. Defaults to 0.0.
-        activation : str, optional
-            Activation used in the internal GRNs.
-            Defaults to ``'elu'``.
-        use_batch_norm : bool, optional
-            Whether to apply batch normalization
-            in the GRNs. Defaults to ``False``.
-        **kwargs :
-            Additional arguments passed to
-            the parent Keras ``Layer``.
-        """
-        super().__init__(**kwargs)
-        self.units = units
-        self.num_heads = num_heads
-        self.dropout_rate = dropout_rate
-
-        # Create activation object
-        self.activation = activation
-
-        self.use_batch_norm = use_batch_norm
-
-        # Multi-head attention
-        self.multi_head_attention = MultiHeadAttention(
-            num_heads=num_heads,
-            key_dim=units,
-            dropout=dropout_rate, 
-            name="mha"
-        )
-
-        # Dropout
-        self.dropout = Dropout(
-            dropout_rate, name="attn_dropout"
-            )
-
-        # Layer normalization for residual block
-        self.layer_norm = LayerNormalization(
-            name="layer_norm_1"
-        )
-
-        # GRN to transform input prior 
-        # to multi-head attention
-        self.grn = GatedResidualNetworkIn(
-            units,
-            dropout_rate,
-            use_time_distributed=True,
-            activation=self.activation,
-            use_batch_norm=use_batch_norm, 
-           name="output_grn" 
-        )
-
-        # GRN to transform context vector
-        self.context_grn = GatedResidualNetworkIn(
-            units,
-            dropout_rate,
-            activation=self.activation,
-            use_batch_norm=use_batch_norm, 
-           name="context_grn"
-        )
-    @tf_autograph.experimental.do_not_convert
-    def call(self, inputs, context_vector, training=False):
-        r"""
-        Forward pass of the temporal attention layer.
-
-        Parameters
-        ----------
-        ``inputs`` : tf.Tensor
-            A 3D tensor of shape 
-            :math:`(B, T, U)`, where ``B`` is the
-            batch size, ``T`` is the time dimension,
-            and ``U`` is the feature dimension
-            (matching `units`).
-        ``context_vector`` : tf.Tensor
-            A 2D tensor of shape 
-            :math:`(B, U)`, representing 
-            static context to enrich the 
-            query.
-        training : bool, optional
-            Whether the layer is in training mode
-            (e.g. for dropout). Defaults to ``False``.
-
-        Returns
-        -------
-        tf.Tensor
-            A 3D tensor of shape :math:`(B, T, U)`,
-            representing the output after temporal
-            attention and the final GRN.
-
-        Notes
-        -----
-        1. The context vector is transformed by
-           a GRN and expanded to shape (B, T, U).
-        2. This expanded context is added to
-           `inputs` to form the attention query.
-        3. Multi-head attention is applied with
-           query, key, and value all set to 
-           `inputs`.
-        4. The result is normalized and then
-           passed through another GRN for the
-           final output.
-        """
-        # Default query is just the input sequence
-        query = inputs
-        
-        _logger.error(
-            f"DEBUG: TemporalAttentionLayer received"
-            f" context_vector type: {type(context_vector)},"
-            f" value: {context_vector}")
-
-        # Only process and add context 
-        # if it's actually provided
-        if context_vector is not None:
-            # Transform context vector 
-            # Apply GRN to transform the context vector
-            # Pass context_vector as the main input 'x' to context_grn
-            # No further context is passed *to* this GRN itself
-            context_vector = self.context_grn(
-                x=context_vector,
-                training=training
-            )
-            # Output shape: (B, units)
-    
-            # Expand and tile context
-            context_expanded = tf_expand_dims(
-                context_vector,
-                axis=1
-            )
-            context_expanded = tf_tile(
-                context_expanded,
-                [1, tf_shape(inputs)[1], 1]
-            )
-            # Tile is handled by broadcasting during addition if needed
-            # Shape (B, 1, units) will broadcast with (B, T, units)
-            
-            # Combine with inputs to form query
-            query = inputs + context_expanded
-            # or 
-            # Add processed context to inputs to form the query
-            # query = tf_add(inputs, context_expanded)
-            
-            #  Query now incorporates static context
-        # else:
-            #  No context provided, query remains original inputs
-            
-        # Apply multi-head attention
-        attn_output = self.multi_head_attention(
-            query=query,
-            value=inputs,
-            key=inputs,
-            training=training
-        )
-        # Output shape: (B, T, units)
-        
-        # Dropout on attention output
-        attn_output = self.dropout(
-            attn_output,
-            training=training
-        )
-
-        # Residual connection + layer norm
-        x = self.layer_norm(
-            inputs + attn_output
-        )
-        # Shape: (B, T, units)
-        
-        # Final GRN
-        output = self.grn(
-            x,
-            training=training
-        )
-        return output
-
-    def get_config(self):
-        r"""
-        Return the configuration dictionary for
-        serialization.
-
-        Returns
-        -------
-        dict
-            Configuration parameters for
-            this layer.
-        """
-        config = super().get_config().copy()
-        config.update({
-            'units': self.units,
-            'num_heads': self.num_heads,
-            'dropout_rate': self.dropout_rate,
-            'activation': self.activation,
-            'use_batch_norm': self.use_batch_norm,
-        })
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        r"""
-        Create a new instance of 
-        TemporalAttentionLayer from a
-        given config dictionary.
-
-        Parameters
-        ----------
-        ``config`` : dict
-            Configuration dictionary, as 
-            returned by ``get_config``.
-
-        Returns
-        -------
-        TemporalAttentionLayer
-            A new instance of 
-            TemporalAttentionLayer.
-        """
-        return cls(**config)
-    
 
 # -------------------- XTFT components ----------------------------------------
 
@@ -3553,322 +3171,6 @@ class MultiObjectiveLoss(Loss, NNLearner):
             quantile_loss_fn=quantile_loss_fn,
             anomaly_loss_fn=anomaly_loss_fn
         )
-
-@register_keras_serializable(
-    'fusionlab.nn.components', 
-    name="VariableSelectionNetworkIn"
-)
-class VariableSelectionNetworkIn(Layer, NNLearner):
-    r"""
-    VariableSelectionNetwork is designed to handle multiple
-    input variables (static, dynamic, or future covariates)
-    by passing each variable through its own
-    GatedResidualNetwork (GRN). Then, a learned
-    importance weighting is applied to combine these
-    variable-specific embeddings into a single output
-    representation.
-
-    The user can choose whether the network should treat
-    inputs as time-distributed (e.g., for dynamic
-    or future inputs with time steps) by setting 
-    `use_time_distributed`. In time-distributed mode,
-    the layer expects a rank-4 input
-    :math:`(B, T, N, F)`, or rank-3 input
-    :math:`(B, T, N)` which is expanded to
-    :math:`(B, T, N, 1)`. In non-time-distributed mode,
-    the layer expects a rank-3 input
-    :math:`(B, N, F)`, or rank-2 input :math:`(B, N)`
-    which is expanded to :math:`(B, N, 1)`.
-
-    Mathematically, let :math:`h_i` be the GRN output
-    of the i-th variable, and let :math:`\alpha_i`
-    be its learned importance weight. The final output
-    :math:`o` can be written as:
-
-    .. math::
-        o = \sum_{i=1}^{N} \alpha_i h_i
-
-    where
-
-    .. math::
-        \alpha_i = 
-          \frac{\exp(\mathbf{w}^\top h_i)}
-               {\sum_{j=1}^{N}\exp(\mathbf{w}^\top h_j)}
-
-    Here, :math:`\mathbf{w}` is trained via a 
-    ``variable_importance_dense`` layer of shape (1).
-
-    Parameters
-    ----------
-    num_inputs : int
-        Number of distinct input variables (N). Each
-        variable is processed separately within its own GRN.
-    units : int
-        Number of hidden units in each GatedResidualNetwork (GRN).
-    dropout_rate : float, optional
-        Dropout rate used in each GRN. Defaults to 0.0.
-    use_time_distributed : bool, optional
-        If `use_time_distributed` is True, the input is
-        interpreted as (batch, time_steps, num_inputs, features).
-        Otherwise, the input is interpreted as
-        (batch, num_inputs, features). Defaults to False.
-    activation : str, optional
-        Activation function to use inside each GRN.
-        One of {'elu', 'relu', 'tanh', 'sigmoid', 'linear'}.
-        Defaults to 'elu'.
-    use_batch_norm : bool, optional
-        Whether to apply batch normalization within each GRN.
-        Defaults to False.
-    **kwargs : 
-        Additional keyword arguments passed to the parent
-        Keras ``Layer``.
-
-    Notes
-    -----
-    - This layer is often used within TFT/XTFT-based models
-      to learn variable-specific representations and their
-      relative importance.
-    - Each GRN is defined in the class
-      `GatedResidualNetwork` which applies a nonlinear
-      transformation followed by a gating mechanism
-      for flexible feature extraction.
-
-    Examples
-    --------
-    >>> from fusionlab.nn.components import VariableSelectionNetwork
-    >>> vsn = VariableSelectionNetwork(
-    ...     num_inputs=5,
-    ...     units=32,
-    ...     dropout_rate=0.1,
-    ...     use_time_distributed=False,
-    ...     activation='relu',
-    ...     use_batch_norm=True
-    ... )
-
-    See Also
-    --------
-    GatedResidualNetwork
-        Implements the internal GRN used for variable
-        transformation.
-    SuperXTFT
-        Enhanced version of XTFT using variable 
-        selection networks (VSNs) for input features.
-
-    References
-    ----------
-    .. [1] Lim, B., & Zohren, S. (2020). "Time Series
-           Forecasting With Deep Learning: A Survey."
-           Phil. Trans. R. Soc. A, 379(2194),
-           20200209.
-    """
-    @validate_params({
-        "num_inputs": [Interval(Integral, 0, None, 
-                                closed='left')],
-        "units": [Interval(Integral, 0, None, 
-                           closed='left')],
-        "dropout_rate": [Interval(Real, 0, 1, 
-                                  closed="both")],
-        "use_time_distributed": [bool],
-        "use_batch_norm": [bool],
-    })
-    @ensure_pkg(KERAS_BACKEND or "keras", 
-                extra=DEP_MSG)
-    def __init__(
-        self,
-        num_inputs: int,
-        units: int,
-        dropout_rate: float = 0.0,
-        use_time_distributed: bool = False,
-        activation: str = 'elu',
-        use_batch_norm: bool = False,
-        **kwargs
-    ):
-        super().__init__(**kwargs)
-        self.num_inputs = num_inputs
-        self.units = units
-        self.dropout_rate = dropout_rate
-        self.use_time_distributed = use_time_distributed
-        self.use_batch_norm = use_batch_norm
-
-        # Create the activation object from its name
-        self.activation = activation
-        # Store activation string for config,
-        # convert later or inside GRN
-        self.activation_str = activation
-
-        # Build one GRN for each variable
-        self.single_variable_grns = [
-            GatedResidualNetworkIn(
-                units=units,
-                dropout_rate=dropout_rate,
-                use_time_distributed=False,
-                activation=self.activation,
-                use_batch_norm=use_batch_norm, 
-                name=f"single_var_grn_{i}"
-            )
-            for i in range(num_inputs)
-        ]
-        
-        # Dense layer to compute variable importances
-        self.variable_importance_dense = Dense(
-             1, # num_inputs when context is applied.
-            name="variable_importance"
-        )
-
-        # Softmax for normalizing variable weights
-        self.softmax = Softmax(axis=-2)
-        
-        
-    @tf_autograph.experimental.do_not_convert
-    def call(self, inputs, training=False):
-        r"""
-        Execute the forward pass.
-
-        The method processes each variable in `inputs`
-        with its own GRN and then applies a learned
-        importance weighting to combine them. The shape
-        of `inputs` is determined by `use_time_distributed`
-        and the rank of `inputs`.
-
-        Parameters
-        ----------
-        inputs : tf.Tensor
-            Tensor representing either static or 
-            dynamic/future time-distributed input(s).
-            - If `use_time_distributed` is True, 
-              expects rank-4 data 
-              (B, T, N, F) or rank-3 data 
-              (B, T, N) expanded to 
-              (B, T, N, 1).
-            - If `use_time_distributed` is False,
-              expects rank-3 data 
-              (B, N, F) or rank-2 data (B, N) 
-              expanded to (B, N, 1).
-        training : bool, optional
-            Indicates if layer should behave in 
-            training mode (e.g., for dropout).
-            Defaults to False.
-
-        Returns
-        -------
-        outputs : tf.Tensor
-            A tensor of shape 
-            :math:`(B, T, units)` if 
-            `use_time_distributed` is True,
-            otherwise :math:`(B, units)` for 
-            the non-time-distributed case. 
-            Each variable-specific embedding 
-            is weighted by the variable-level
-            importance scores.
-        """
-        # rank = tf_rank(inputs)
-        # Ensure input has rank 3 (B, N, F) or 4 (B, T, N, F)
-        actual_rank=inputs.shape.rank 
-        
-        var_outputs = []
-
-        # Case 1: time-distributed
-        if self.use_time_distributed:
-            if actual_rank == 3:
-                # Expand last dim if necessary
-                # (B, T, N) -> (B, T, N, 1)
-                inputs = tf_expand_dims(inputs, axis=-1)
-
-            # Now we assume rank == 4 => (B, T, N, F)
-            for i in range(self.num_inputs):
-                var_input = inputs[:, :, i, :]
-                grn_output = self.single_variable_grns[i](
-                    var_input,
-                    training=training
-                )
-                var_outputs.append(grn_output)
-        else:
-            # Case 2: non-time-distributed
-            if actual_rank == 2:
-                # Expand if shape => (B, N)
-                # becomes => (B, N, 1)
-                inputs = tf_expand_dims(inputs, axis=-1)
-
-            # Now we assume rank == 3 => (B, N, F)
-            for i in range(self.num_inputs):
-                var_input = inputs[:, i, :]
-                grn_output = self.single_variable_grns[i](
-                    var_input,
-                    training=training
-                )
-                var_outputs.append(grn_output)
-
-        # Stack variable outputs => 
-        # shape (B, T?, N, units)
-        stacked_outputs = tf_stack(
-            var_outputs,
-            axis=-2
-        )
-
-        # Compute importances => shape (B, T?, N, 1)
-        self.variable_importances_ = (
-            self.variable_importance_dense(
-                stacked_outputs
-            )
-        )
-
-        # Normalize across the variable dimension => -2
-        weights = self.softmax(
-            self.variable_importances_
-        )
-
-        # Weighted sum => shape (B, T?, units)
-        outputs = tf_reduce_sum(
-            stacked_outputs * weights,
-            axis=-2
-        )
-        return outputs
-
-    def get_config(self):
-        r"""
-        Get the configuration of this layer.
-
-        Returns
-        -------
-        config : dict
-            Dictionary containing the initialization
-            parameters of this layer.
-        """
-        config = super().get_config()
-        config.update({
-            'num_inputs': self.num_inputs,
-            'units': self.units,
-            'dropout_rate': self.dropout_rate,
-            'use_time_distributed': self.use_time_distributed,
-            'activation': self.activation,
-            'use_batch_norm': self.use_batch_norm,
-        })
-        return config
-
-    @classmethod
-    def from_config(cls, config):
-        r"""
-        Instantiate a new layer from its config.
-
-        This method creates a `VariableSelectionNetwork`
-        layer using the dictionary returned by
-        ``get_config``.
-
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary typically produced
-            by ``get_config``.
-
-        Returns
-        -------
-        VariableSelectionNetwork
-            A new instance of this class with the
-            specified configuration.
-        """
-        return cls(**config)
-
-
 
 @register_keras_serializable(
     'fusionlab.nn.components', 
@@ -5259,3 +4561,63 @@ def aggregate_time_window_output(
         )
 
     return final_features
+
+def create_causal_mask(size: Union[int,Tensor]) -> Tensor:
+    """
+    Creates a causal attention mask of shape [1,1,seq_len,seq_len]
+    where mask[0,0,i,j] = 1.0 if j > i else 0.0.
+    """
+    
+    # Make sure size is a 0-D int32 Tensor
+    size = tf_cast(size, tf_int32)
+
+    # Build a vector [0,1,2,...,size-1]
+    idxs = tf_range(size)                  # shape: [size]
+
+    # Compare row < col for every pair (i,j)
+    #   row_idxs: [size,1], col_idxs: [1,size]
+    row_idxs = tf_expand_dims(idxs, 1)     # [size,1]
+    col_idxs = tf_expand_dims(idxs, 0)     # [1,size]
+
+    # mask2d[i,j] = True if j > i, else False
+    mask2d = tf_greater(col_idxs, row_idxs)  # [size,size], dtype=bool
+
+    # Cast to float (1.0 for masked positions, 0.0 elsewhere)
+    mask2d = tf_cast(mask2d, tf_float32)     # [size,size]
+
+    # Expand to [1,1,size,size] so it broadcasts over (batch, heads)
+    mask = tf_expand_dims(tf_expand_dims(mask2d, 0), 1)
+
+    return mask
+
+# def create_causal_mask(size: Union[int, Tensor]) -> Tensor:
+#     """Creates a causal attention mask of shape [1,1,seq_len,seq_len]."""
+#     # ensure `size` is an int32 Tensor
+#     size = tf_cast(size, tf_int32)
+
+#     # build shape as a Tensor so we don't capture Python tuples of Tensors
+#     shape = tf_stack([size, size])
+#     ones = tf_ones(shape, dtype=tf_float32)
+
+#     # make the [seq_len, seq_len] causal matrix
+#     mask2d = 1.0 - tf_linalg.band_part(ones, -1, 0)
+
+#     # now expand batch dim then head dim → [1,1,seq_len,seq_len]
+#     mask = tf_expand_dims(mask2d, 0)  # → [1, seq_len, seq_len]
+#     mask = tf_expand_dims(mask, 1)    # → [1, 1, seq_len, seq_len]
+
+#     return mask
+
+def _create_causal_mask(size: Union[int, Tensor]) -> Tensor:
+    """Creates a causal attention mask for the decoder."""
+    mask = 1 - tf_linalg.band_part(tf_ones((size, size)), -1, 0)
+    # Add batch and head dimensions for broadcasting
+    return mask[tf_expand_dims(tf_range(size), 0), :] # (1, 1, seq_len, seq_len) -> Keras MHA expects (B, T, T) or (B, N_heads, T, T)
+                                                      # TF MHA expects (B, N_heads, T, T)
+                                                      # Let's make it (1,1,T,T) for TF MHA layer, it will broadcast
+    # # Keras MHA expects mask shape (batch_size, num_heads, query_length, key_length)
+    # # or (batch_size, query_length, key_length)
+    # # For causal, query_length == key_length == size
+    # return tf_expand_dims(tf_expand_dims(
+    #     1 - tf_linalg.band_part(tf_ones((size, size)), -1, 0), axis=0), axis=0)
+

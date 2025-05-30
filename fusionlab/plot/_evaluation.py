@@ -11,9 +11,17 @@ from typing import (
 )
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+from matplotlib.colors import to_rgba
 
 import numpy as np
+import pandas as pd 
 from sklearn.utils.validation import check_array, check_consistent_length
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    mean_absolute_percentage_error
+)
+
 
 from ..api.docs import DocstringComponents, _shared_metric_plot_params
 from ..api.types import ( 
@@ -23,7 +31,11 @@ from ..api.types import (
     PlotKindWIS, 
     PlotKindTheilU
 )
+from ..core.handlers import columns_manager
 from ..core.io import _get_valid_kwargs 
+from ..core.checks import exist_features
+from ..core.diagnose_q import validate_quantiles
+
 from ..metrics import (
     coverage_score,
     weighted_interval_score,
@@ -40,6 +52,7 @@ from ..metrics  import (
 )
 from ..utils.generic_utils import are_all_values_in_bounds 
 
+
 __all__= [
      'plot_coverage',
      'plot_crps',
@@ -48,7 +61,9 @@ __all__= [
      'plot_quantile_calibration',
      'plot_theils_u_score',
      'plot_time_weighted_metric',
-     'plot_weighted_interval_score'
+     'plot_weighted_interval_score', 
+     'plot_qce_donut', 
+     'plot_radar_scores'
  ]
 
 _param_docs = DocstringComponents.from_nested_components(
@@ -3546,3 +3561,1230 @@ References
 .. [1] Hyndman, R.J. & Athanasopoulos, G. *Forecasting: Principles and
        Practice*, 3rd ed., OTexts, 2021 — section 2.6, “Stability”.
 """.format(params=_param_docs)
+
+
+def plot_qce_donut(
+    df: pd.DataFrame,
+    actual_col: str,
+    quantile_cols: List[str],
+    quantile_levels: List[float],
+    metric_kws: Optional[Dict[str, Any]] = None,
+    figsize: Tuple[float, float] = (8, 8),
+    title: Optional[str] = "Quantile Calibration Error Contributions",
+    colors: Optional[List[str]] = None,
+    center_text_format: str = "Avg QCE:\n{:.4f}",
+    segment_label_format: str = "{name}\n({value:.2f})", # {name}, {value}, {percent}
+    startangle: float = 90,
+    counterclock: bool = False,
+    wedgeprops: Optional[Dict[str, Any]] = None,
+    donut_width: float = 0.4, # Width of the donut ring
+    value_annotations: bool=True, 
+    # Legend and labels
+    show_legend: bool = True,
+    legend_title: Optional[str] = "Quantiles",
+    legend_loc: str = "center left",
+    legend_bbox_to_anchor: Tuple[float, float] = (0.95, 0.5),
+    # Common params
+    # Grid and labels
+    show_grid: bool = True,
+    grid_props: Optional[Dict[str, Any]] = None,
+    ax: Optional[plt.Axes] = None,
+    verbose: int = 0,
+    **kwargs: Any # For future matplotlib extensions
+) -> plt.Axes:
+    """
+    Visualizes Quantile Calibration Error (QCE) components as a donut chart.
+    (Full docstring to be added later for detailed parameter explanation)
+    """
+    
+    df, quantile_levels = _validate_qce_plot_inputs(
+        df, actual_col=actual_col, 
+        quantile_cols= quantile_cols, 
+        quantile_levels= quantile_levels, 
+        error_policy= 'raise'
+    )
+
+    y_true_np = df[actual_col].to_numpy(dtype=float)
+    y_pred_quantiles_np = df[quantile_cols].to_numpy(dtype=float) # (N, Q)
+    quantile_levels_np = np.array(quantile_levels, dtype=float) # (Q,)
+
+    n_samples, n_quantiles = y_pred_quantiles_np.shape
+    if n_samples != len(y_true_np):
+        raise ValueError("Length mismatch: actual_col vs quantile_cols.")
+
+    # --- 2. Handle NaNs and Sample Weights (from metric_kws) ---
+    current_metric_kws = metric_kws or {}
+    nan_policy = current_metric_kws.get('nan_policy', 'propagate')
+    sample_weight = current_metric_kws.get('sample_weight', None)
+    eps = current_metric_kws.get('eps', 1e-8)
+
+    # Create a mask for NaNs across y_true and all relevant y_pred_quantiles
+    # nan_mask_samples is 1D (n_samples,)
+    nan_mask_true = np.isnan(y_true_np)
+    nan_mask_preds = np.isnan(y_pred_quantiles_np).any(axis=1)
+    combined_nan_mask_samples = nan_mask_true | nan_mask_preds
+
+    y_t_calc = y_true_np
+    y_p_calc = y_pred_quantiles_np
+    s_weights_calc = sample_weight
+
+    if np.any(combined_nan_mask_samples):
+        if nan_policy == 'raise':
+            raise ValueError("NaNs found in input data.")
+        elif nan_policy == 'propagate':
+            # If any NaN leads to an overall NaN result for donut chart
+            warnings.warn(
+                "NaNs found with nan_policy='propagate'. Donut chart "
+                "may not be meaningful if miscalibrations become NaN."
+            )
+            # Calculations below will propagate NaNs
+        elif nan_policy == 'omit':
+            if verbose > 0:
+                print("NaNs detected. Omitting samples with NaNs.")
+            rows_to_keep = ~combined_nan_mask_samples
+            if not np.any(rows_to_keep):
+                if verbose > 0: warnings.warn("All samples omitted due to NaNs.")
+                # Create an empty plot or return early
+                if ax is None: _, ax = plt.subplots(figsize=figsize)
+                ax.set_title(title or "QCE Donut (No Data)")
+                return ax # type: ignore
+            
+            y_t_calc = y_true_np[rows_to_keep]
+            y_p_calc = y_pred_quantiles_np[rows_to_keep]
+            if s_weights_calc is not None:
+                s_weights_calc = check_array(s_weights_calc, ensure_2d=False,
+                                             dtype="numeric", force_all_finite=True)
+                check_consistent_length(y_true_np, s_weights_calc)
+                s_weights_calc = s_weights_calc[rows_to_keep]
+    
+    if y_t_calc.shape[0] == 0: # All samples omitted or original empty
+        if verbose > 0: warnings.warn("No valid samples for QCE calculation.")
+        if ax is None: _, ax = plt.subplots(figsize=figsize)
+        ax.set_title(title or "QCE Donut (No Valid Data)")
+        return ax # type: ignore
+
+    # --- 3. Calculate Per-Quantile Miscalibration ---
+    indicators = (y_t_calc[:, np.newaxis] <= y_p_calc).astype(float)
+    
+    observed_proportions_q: np.ndarray
+    if s_weights_calc is not None:
+        sum_sw = np.sum(s_weights_calc)
+        if sum_sw < eps:
+            warnings.warn(f"Sum of sample_weight ({sum_sw}) < eps ({eps}). "
+                          "Observed proportions may be unstable or NaN.")
+            observed_proportions_q = np.full(n_quantiles, np.nan)
+        else:
+            # Weighted average, careful with NaNs in indicators if propagate was used
+            # and some y_t_calc or y_p_calc were NaN
+            # Assuming NaNs in indicators will propagate with np.average if weights are numbers
+            observed_proportions_q = np.average(
+                indicators, axis=0, weights=s_weights_calc
+            )
+    else:
+        observed_proportions_q = np.nanmean(indicators, axis=0)
+
+    miscalibrations_q = np.abs(
+        observed_proportions_q - quantile_levels_np
+    ) # Shape (Q,)
+
+    # Handle cases where all miscalibrations are NaN or zero
+    valid_miscal_mask = ~np.isnan(miscalibrations_q)
+    if not np.any(valid_miscal_mask) or \
+       np.sum(miscalibrations_q[valid_miscal_mask]) < eps :
+        # If all are NaN or sum is effectively zero, donut chart is not meaningful
+        warnings.warn(
+            "All per-quantile miscalibrations are NaN or sum to near zero. "
+            "Donut chart cannot be generated meaningfully."
+        )
+        if ax is None: _, ax = plt.subplots(figsize=figsize)
+        ax.set_title(title or "QCE Donut (No Miscalibration / Data Issues)")
+        # Add text to center indicating the situation
+        center_text = "No Miscalibration\nor Data Issues"
+        if np.any(np.isnan(miscalibrations_q)):
+             center_text = "Data Issues\n(NaNs)"
+        elif np.sum(miscalibrations_q[valid_miscal_mask]) < eps :
+             center_text = "Perfect Calibration\n(Avg QCE ~ 0)"
+             
+        ax.text(0.5, 0.5, center_text, ha='center', va='center',
+                transform=ax.transAxes, fontsize='large')
+        ax.set_aspect('equal') # Ensure circle
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return ax # type: ignore
+
+    # Use quantile_cols for labels if available and match length
+    segment_names = quantile_cols if len(quantile_cols) == n_quantiles \
+                    else [f"q={q:.2f}" for q in quantile_levels_np]
+
+    # Filter out NaN miscalibrations for plotting pie
+    plot_miscalibrations = miscalibrations_q[valid_miscal_mask]
+    plot_segment_names = [
+        name for i, name in enumerate(segment_names) if valid_miscal_mask[i]
+    ]
+    plot_colors = None
+    if colors:
+        plot_colors = [
+            c for i,c in enumerate(colors) if valid_miscal_mask[i]
+        ] if len(colors) == n_quantiles else colors
+
+
+    # --- 4. Plotting ---
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize) # type: ignore
+    
+    ax.set_title(title or "QCE Donut")
+
+    wedges, texts, autotexts = ax.pie(
+        plot_miscalibrations,
+        labels=None, # Labels handled by legend or custom placement
+        autopct=lambda pct: segment_label_format.format(
+            name="", # Name will be in legend
+            value= (pct/100.)*np.sum(plot_miscalibrations), # Value this segment represents
+            percent=pct
+        ) if value_annotations else None,
+        startangle=startangle,
+        counterclock=counterclock,
+        colors=plot_colors,
+        wedgeprops=wedgeprops or dict(width=donut_width, edgecolor='w')
+    )
+
+    # Center circle to make it a donut
+    center_circle = plt.Circle((0,0), 1-donut_width, fc='white')
+    ax.add_artist(center_circle)
+
+    # Text in the center
+    avg_qce = np.nanmean(miscalibrations_q) # Mean of non-NaN miscalibrations
+    if not np.isnan(avg_qce):
+        center_label = center_text_format.format(avg_qce)
+        ax.text(0, 0, center_label, ha='center', va='center',
+                fontsize='large', fontweight='bold')
+
+    ax.axis('equal') # Equal aspect ratio ensures that pie is drawn as a circle.
+
+    if show_legend:
+        # Create legend with proper labels (quantile levels or names)
+        # Use plot_segment_names which correspond to plot_miscalibrations
+        legend_handles = []
+        for i, w in enumerate(wedges):
+            # Ensure color is RGBA for legend patch
+            face_color = w.get_facecolor()
+            if isinstance(face_color, tuple) and len(face_color) == 4:
+                patch_color = face_color
+            else: # Convert if it's a named color string or RGB
+                patch_color = to_rgba(face_color) # type: ignore
+            
+            legend_handles.append(
+                plt.Rectangle((0,0),1,1, facecolor=patch_color)
+            )
+        ax.legend(
+            legend_handles,
+            plot_segment_names,
+            title=legend_title,
+            loc=legend_loc,
+            bbox_to_anchor=legend_bbox_to_anchor
+        )
+
+    # Grid is not typically used for pie/donut charts
+    if show_grid:
+        if verbose > 0:
+            warnings.warn("'show_grid' is True, but grids are not "
+                          "standard for donut charts.")
+        # ax.grid(**(grid_props or {})) # Usually off for pie
+    
+    # Remove default ticks and labels for pie chart axes
+    ax.set_xticks([])
+    ax.set_yticks([])
+    
+    return ax
+
+def _validate_qce_plot_inputs(
+    df: pd.DataFrame,
+    actual_col: str,
+    quantile_cols: List[str],
+    quantile_levels: List[Real],
+    error_policy: Literal['raise', 'warn', 'ignore'] = 'raise'
+) -> Tuple[pd.DataFrame, np.ndarray]:
+    """
+    Validates inputs for QCE plotting functions.
+
+    Checks DataFrame type, column existence, and quantile properties.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame containing actual and predicted quantile values.
+    actual_col : str
+        Name of the column containing true observed values.
+    quantile_cols : List[str]
+        List of column names corresponding to predicted quantiles.
+    quantile_levels : List[Real]
+        List of nominal quantile levels (e.g., [0.1, 0.5, 0.9]).
+    error_policy : {'raise', 'warn', 'ignore'}, default='raise'
+        Policy for handling feature existence errors from `exist_features`.
+
+    Returns
+    -------
+    Tuple[pd.DataFrame, np.ndarray]
+        The validated input DataFrame and a NumPy array of validated
+        and processed quantile levels.
+
+    Raises
+    ------
+    TypeError
+        If `df` is not a pandas DataFrame, or if `quantile_cols`
+        or `quantile_levels` are not lists of the correct types.
+    ValueError
+        If columns are missing (and `error_policy='raise'`), if
+        lengths of `quantile_cols` and `quantile_levels` mismatch,
+        or if `quantile_levels` are not strictly between 0 and 1.
+    """
+    if not isinstance(df, pd.DataFrame):
+        # For non-existence errors, _report_condition is better,
+        # but for fundamental type errors, direct raise is common.
+        # Match this with how _report_condition is used elsewhere.
+        # For now, direct raise for type errors on df.
+        raise TypeError("Input 'df' must be a pandas DataFrame.")
+
+    # Validate existence of actual_col
+    exist_features(df, features=actual_col, error=error_policy)
+
+    # Validate quantile_cols type and existence
+    if not (isinstance(quantile_cols, list) and
+            all(isinstance(qc, str) for qc in quantile_cols)):
+        raise TypeError(
+            "'quantile_cols' must be a list of strings."
+        )
+    if not quantile_cols: # Check if the list is empty
+        raise ValueError("'quantile_cols' cannot be empty.")
+        
+    exist_features(df, features=quantile_cols, error=error_policy)
+
+    # Validate and process quantile_levels
+    # We expect quantile_levels to be numeric and in (0,1) for QCE.
+    # validate_quantiles with mode='strict' ensures they are in [0,1].
+    # An additional check for strict (0,1) is needed.
+    try:
+        # Use asarray=True to get a NumPy array for easier processing
+        # Pass round_digits and dtype if they are relevant from a higher context
+        # or use defaults within validate_quantiles.
+        # For QCE, high precision is good, so float64 might be better if available.
+        validated_levels_np = validate_quantiles(
+            quantile_levels,
+            asarray=True,
+            mode="strict", # Ensures values are in [0,1] and numeric
+            # Default round_digits and dtype from validate_quantiles used
+        )
+    except (TypeError, ValueError) as e:
+        # Catch errors from validate_quantiles (e.g., non-numeric, out of [0,1])
+        # Re-raise as ValueError for consistency, or let original error propagate
+        raise ValueError(
+            f"Validation of 'quantile_levels' failed: {e}"
+        ) from e
+
+    
+    # After validate_quantiles(mode='strict'), levels are in [0,1].
+    # Check for strict (0,1) as QCE is typically not for 0 or 1.
+    
+    are_all_values_in_bounds(
+        validated_levels_np, bounds =(0, 1), closed='neither',
+             message =(
+            "All 'quantile_levels' must be strictly between 0 and 1 "
+            "(exclusive of 0 and 1)."
+        )
+    )
+    # Check for length consistency
+    if len(quantile_cols) != len(validated_levels_np):
+        raise ValueError(
+            "Length of 'quantile_cols' ({}) must match the length of "
+            "validated 'quantile_levels' ({}).".format(
+                len(quantile_cols), len(validated_levels_np)
+            )
+        )
+    
+    # df is returned as is, as it's not modified by these checks,
+    # but its columns are confirmed to exist.
+    # validated_levels_np is returned as it's processed.
+    return df, validated_levels_np
+
+
+def plot_radar_scores(
+    data_values: Optional[Union[List[Real], Dict[str, Real], Real]] = None,
+    category_names: Optional[List[str]] = None,
+    y_true: Optional[np.ndarray] = None,
+    y_pred: Optional[np.ndarray] = None,
+    metric_functions: Optional[Union[
+        MetricFunctionType, List[MetricFunctionType]]] = None,
+    metric_kwargs_list: Optional[Union[
+        Dict[str, Any], List[Dict[str, Any]]]] = None,
+    normalize_values: bool = False,
+    plot_target_type: Literal['metric'] = 'metric', # For future expansion
+    # Plotting customizations
+    figsize: Tuple[float, float] = (8, 8),
+    title: Optional[str] = "Metric Scores Radar Plot",
+    value_annotations: bool = True,
+    annotation_format: str = "{:.2f}",
+    fill_radar: bool = True,
+    fill_alpha: float = 0.25,
+    line_color: Optional[str] = None, # Auto-cycles if multiple lines
+    line_width: float = 2,
+    marker: Optional[str] = 'o',
+    # Radial axis customization
+    r_min: Optional[Real] = None,
+    r_max: Optional[Real] = None,
+    r_ticks_count: int = 5,
+    # Grid and labels
+    show_grid: bool = True,
+    grid_props: Optional[Dict[str, Any]] = None,
+    category_label_props: Optional[Dict[str, Any]] = None,
+    value_label_props: Optional[Dict[str, Any]] = None,
+    legend_label: Optional[str] = None, # For when plotting single entity
+    ax: Optional[plt.Axes] = None,
+    verbose: int = 0,
+    **kwargs: Any # For future matplotlib extensions
+) -> plt.Axes:
+    """
+    Generates a radar plot to visualize multiple scores or attributes.
+    Primarily designed for comparing metric scores.
+    """
+    # --- 1. Input Processing and Score Calculation ---
+    final_values_to_plot: np.ndarray
+    final_category_names: List[str]
+
+    if data_values is not None:
+        if isinstance(data_values, dict):
+            final_category_names = list(data_values.keys())
+            final_values_to_plot = np.array(list(data_values.values()),
+                                            dtype=float)
+        else: # List, scalar, or array-like
+            # Use column_manager to handle scalar or list-like
+            managed_values = columns_manager(
+                data_values, # force_array=True, to_list=False
+            )
+            if hasattr(managed_values, '__iter__'): 
+                managed_values = np.array ( managed_values)
+                
+            if managed_values is None or managed_values.size == 0:
+                raise ValueError(
+                    "If 'data_values' is not a dict, it must not be empty "
+                    "after processing."
+                )
+            final_values_to_plot = managed_values.astype(float)
+
+            if category_names is not None:
+                if len(category_names) < len(final_values_to_plot):
+                    if verbose > 0:
+                        warnings.warn(
+                            "Length of 'category_names' is less than "
+                            "'data_values'. Auto-generating remaining names."
+                        )
+                    base_name = f"{plot_target_type}_"
+                    num_missing = len(final_values_to_plot) - len(category_names)
+                    auto_names = [f"{base_name}{i+len(category_names)+1}"
+                                  for i in range(num_missing)]
+                    final_category_names = category_names + auto_names
+                elif len(category_names) > len(final_values_to_plot):
+                     if verbose > 0:
+                        warnings.warn(
+                            "Length of 'category_names' is greater than "
+                            "'data_values'. Truncating 'category_names'."
+                        )
+                     final_category_names = category_names[:len(final_values_to_plot)]
+                else:
+                    final_category_names = category_names
+            else: # Auto-generate all names
+                base_name = f"{plot_target_type}_"
+                final_category_names = [f"{base_name}{i+1}" for i in
+                                        range(len(final_values_to_plot))]
+    elif plot_target_type == 'metric':
+        if y_true is None or y_pred is None:
+            raise ValueError(
+                "If 'data_values' is None and 'plot_target_type' is 'metric',"
+                " 'y_true' and 'y_pred' must be provided."
+            )
+        y_t = check_array(y_true, ensure_2d=False, force_all_finite=True,
+                          dtype="numeric")
+        y_p = check_array(y_pred, ensure_2d=False, force_all_finite=True,
+                          dtype="numeric")
+        check_consistent_length(y_t, y_p)
+
+        # Default metric functions if none provided
+        if metric_functions is None:
+            metric_funcs_to_use: List[MetricFunctionType] = [
+                mean_absolute_error,
+                lambda yt, yp, **kws: np.sqrt(mean_squared_error(yt, yp, **kws)), # RMSE
+                mean_absolute_percentage_error
+            ]
+            default_names = ["MAE", "RMSE", "MAPE"]
+            # Ensure default kwargs for RMSE's mean_squared_error if any
+            default_metric_kws_list: List[Dict] = [{}, {'squared': False}, {}]
+            # User can override these defaults via metric_kwargs_list
+            if metric_kwargs_list is None:
+                metric_kws_list_proc = default_metric_kws_list
+            elif isinstance(metric_kwargs_list, dict): # Apply to all defaults
+                metric_kws_list_proc = [
+                    {**dkw, **metric_kwargs_list} for dkw in default_metric_kws_list
+                ]
+            elif isinstance(metric_kwargs_list, list) and \
+                 len(metric_kwargs_list) == len(metric_funcs_to_use):
+                metric_kws_list_proc = [
+                    {**dkw, **ukw} for dkw, ukw in zip(
+                        default_metric_kws_list, metric_kwargs_list) # type: ignore
+                ]
+            else:
+                raise ValueError(
+                    "Invalid 'metric_kwargs_list' for default functions.")
+
+            final_category_names = category_names if category_names and \
+                len(category_names)==len(default_names) else default_names
+
+        elif callable(metric_functions): # Single function
+            metric_funcs_to_use = [metric_functions]
+            metric_kws_list_proc = [metric_kwargs_list or {}] \
+                if isinstance(metric_kwargs_list, dict) or metric_kwargs_list is None \
+                else metric_kwargs_list # Should be list of one dict
+            
+            if category_names:
+                final_category_names = category_names
+            else:
+                func_name = getattr(metric_functions, '__name__', 'metric_1')
+                final_category_names = [func_name]
+        
+        elif isinstance(metric_functions, list): # List of functions
+            metric_funcs_to_use = metric_functions
+            if metric_kwargs_list is None:
+                metric_kws_list_proc = [{} for _ in metric_funcs_to_use]
+            elif isinstance(metric_kwargs_list, list) and \
+                 len(metric_kwargs_list) == len(metric_funcs_to_use):
+                metric_kws_list_proc = metric_kwargs_list
+            else:
+                raise ValueError(
+                    "'metric_kwargs_list' must be a list of dicts matching "
+                    "'metric_functions' length, or None."
+                )
+            if category_names and len(category_names) == len(metric_funcs_to_use):
+                final_category_names = category_names
+            elif category_names is None:
+                final_category_names = [
+                    getattr(f, '__name__', f"{plot_target_type}_{i+1}")
+                    for i, f in enumerate(metric_funcs_to_use)
+                ]
+            else:
+                raise ValueError(
+                    "Length of 'category_names' must match 'metric_functions'."
+                )
+        else:
+            raise TypeError(
+                "'metric_functions' must be None, a callable, or list of callables.")
+
+        # Compute scores
+        computed_scores = []
+        for func, kws_for_func in zip(metric_funcs_to_use, metric_kws_list_proc):
+            valid_kws = _get_valid_kwargs(func, kws_for_func)
+            try:
+                score = func(y_t, y_p, **valid_kws)
+                computed_scores.append(score)
+            except Exception as e:
+                warnings.warn(
+                    "Error computing metric "
+                    f"{getattr(func,'__name__','unknown')}:"
+                    f" {e}. Skipping."
+                )
+                computed_scores.append(np.nan)
+        final_values_to_plot = np.array(
+            computed_scores, dtype=float
+            )
+
+    else:
+        raise ValueError(
+            f"Unsupported 'plot_target_type': {plot_target_type}. "
+            "Currently only 'metric' is supported."
+        )
+
+    if final_values_to_plot.ndim > 1:
+        # This implies multiple sets of values (e.g., from multi-output metrics)
+        # The current design plots one radar line.
+        # For now, require scalar values per category.
+        raise ValueError(
+            "Each category for the radar plot must correspond to a single "
+            "scalar value. Received multi-dimensional values."
+        )
+    if len(final_values_to_plot) != len(final_category_names):
+        raise ValueError(
+            "Mismatch between number of values to plot and category names. "
+            f"Got {len(final_values_to_plot)} values and "
+            f"{len(final_category_names)} names."
+        )
+    
+    num_vars = len(final_category_names)
+    if num_vars < 3:
+        warnings.warn(
+            "Radar plots are typically used for 3 or more categories. "
+            "Consider a bar chart for fewer categories."
+        )
+        # Fallback or proceed? For now, proceed if user insists.
+        if num_vars == 0:
+            if ax is None: _, ax = plt.subplots(figsize=figsize)
+            ax.set_title(title or "Radar Plot (No Data)")
+            if show_grid: ax.grid(**(grid_props or {}))
+            return ax
+
+
+    # --- 2. Normalization (if requested) ---
+    plot_values = final_values_to_plot.copy()
+    original_values_for_annotation = final_values_to_plot.copy()
+    
+    # Handle NaNs before normalization or plotting
+    nan_mask = np.isnan(plot_values)
+    if np.all(nan_mask): # All values are NaN
+        warnings.warn("All values for radar plot are NaN. Plot will be empty.")
+        # Proceed to draw empty radar axes
+    
+    # Replace NaNs with a value for plotting structure, but they won't be "seen"
+    # if we are careful with plotting (e.g., don't connect across NaNs).
+    # Or, for simplicity in radar, they might be plotted at 0 or min.
+    # For now, let's make them 0 for structure, but annotations will show NaN.
+    plot_values_for_structure = np.nan_to_num(plot_values, nan=0.0)
+
+
+    if normalize_values:
+        # Min-max scale to [0, 1] for better shape comparison
+        # Only use non-NaN values for finding min/max
+        valid_plot_vals = plot_values[~nan_mask]
+        if valid_plot_vals.size > 0:
+            min_val = np.min(valid_plot_vals)
+            max_val = np.max(valid_plot_vals)
+            if max_val - min_val > 1e-8: # Avoid division by zero if all same
+                # Apply scaling to non-NaN original values
+                scaled_non_nan = (valid_plot_vals - min_val) / (max_val - min_val)
+                # Put scaled values back, keep NaNs as NaNs in plot_values
+                # plot_values will be used for plotting line/fill
+                # original_values_for_annotation keeps original scale for text
+                temp_scaled_values = np.full_like(plot_values, np.nan)
+                temp_scaled_values[~nan_mask] = scaled_non_nan
+                plot_values = temp_scaled_values
+                plot_values_for_structure = np.nan_to_num(plot_values, nan=0.0)
+
+                if verbose > 0:
+                    print(f"Values normalized. Original range: [{min_val:.2f}, {max_val:.2f}].")
+            elif verbose > 0: # All valid values are the same
+                warnings.warn(
+                    "All valid values are identical after NaN handling; "
+                    "normalization to [0,1] range results in all zeros or ones. "
+                    "Radar shape might not be informative."
+                )
+                # Set all to 0.5 to show a regular polygon if all same
+                plot_values[~nan_mask] = 0.5 
+                plot_values_for_structure = np.nan_to_num(plot_values, nan=0.0)
+
+        else: # All values were NaN
+            if verbose > 0: warnings.warn("All values are NaN, cannot normalize.")
+        
+        # If normalized, radial ticks should be 0 to 1
+        if r_min is None: r_min = 0
+        if r_max is None: r_max = 1
+        
+    # --- 3. Radar Plot Creation ---
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize, subplot_kw=dict(polar=True)) # type: ignore
+    elif not hasattr(ax, 'plot'): # Check if it's a Matplotlib Axes
+         raise TypeError("`ax` must be a Matplotlib Axes object.")
+    # If ax is provided, assume it's already polar if needed, or make it so.
+    # This is tricky. Standard practice is to create polar on a figure.
+    # For simplicity, if ax is passed, we'll try to use it as is.
+    # User should ensure it's a polar Axes if passing one.
+
+    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+    # Make the plot close by appending the first value and angle
+    plot_data_closed = np.concatenate(
+        (plot_values_for_structure, [plot_values_for_structure[0]]))
+    angles_closed = angles + [angles[0]]
+    original_values_closed = np.concatenate( # noqa
+        (original_values_for_annotation, [original_values_for_annotation[0]])
+    ) 
+    nan_mask_closed = np.concatenate((nan_mask, [nan_mask[0]]))
+
+
+    # Plotting the data line
+    # To handle NaNs gracefully (not connecting across them):
+    # Plot segments between non-NaN points.
+    segments = np.ma.masked_where( # noqa
+        nan_mask_closed, plot_data_closed).tolist()
+    
+    # For a single radar line, line_color can be a string
+    # If comparing multiple entities on same radar later, this would need cycling
+    current_line_color = line_color if line_color is not None else \
+                         next(ax._get_lines.prop_cycler)['color'] # type: ignore
+
+    ax.plot(angles_closed, plot_data_closed, color=current_line_color,
+            linewidth=line_width, marker=marker if marker else '',
+            label=legend_label if legend_label else plot_target_type.title())
+    
+    if fill_radar:
+        ax.fill(angles_closed, plot_data_closed, color=current_line_color,
+                alpha=fill_alpha)
+
+    # Category labels
+    ax.set_xticks(angles)
+    category_label_defaults = {'size': 'medium'}
+    category_label_final_props = {
+        **category_label_defaults,
+        **(category_label_props or {})
+    }
+    ax.set_xticklabels(final_category_names, **category_label_final_props)
+
+    # Radial axis (y-axis in polar)
+    if r_min is not None or r_max is not None:
+        ax.set_ylim(r_min, r_max)
+    
+    # Set radial ticks. MaxNLocator helps get "nice" ticks.
+    # Get current ylim if not set by user, to inform tick locator
+    # from matplotlib.ticker import MaxNLocator
+
+    current_r_lim = ax.get_ylim()
+    
+    # Try your preferred prune option, otherwise fall back
+    try:
+        locator = MaxNLocator(nbins=r_ticks_count, prune='min')
+    except ValueError:
+        # 'min' isn’t supported; fall back to no pruning (or use 'lower'/'upper' as you see fit)
+        locator = MaxNLocator(nbins=r_ticks_count)
+    
+    # Now generate your tick locations
+    r_tick_locs = locator.tick_values(current_r_lim[0], current_r_lim[1])
+
+
+    # current_r_lim = ax.get_ylim()
+    # r_tick_locs = MaxNLocator(
+    #     nbins=r_ticks_count, prune='min' # 'min' to ensure 0 is often a tick
+    # ).tick_values(current_r_lim[0], current_r_lim[1])
+    
+    # Filter out ticks outside the explicit r_min/r_max if they were set
+    if r_min is not None: 
+        r_tick_locs = r_tick_locs[r_tick_locs >= r_min]
+    if r_max is not None: 
+        r_tick_locs = r_tick_locs[r_tick_locs <= r_max]
+    # Ensure 0 is a tick if within range, and if r_min is not set above 0
+    if (r_min is None or r_min <=0) and 0 not in r_tick_locs and current_r_lim[0] <=0:
+        r_tick_locs = np.unique(np.sort(np.concatenate(([0], r_tick_locs))))
+
+    ax.set_yticks(r_tick_locs)
+
+    value_label_defaults = {'size': 'small'}
+    value_label_final_props = {
+        **value_label_defaults,
+        **(value_label_props or {})
+    }
+    ax.set_yticklabels(
+        [annotation_format.format(tick) for tick in r_tick_locs],
+        **value_label_final_props
+    )
+
+
+    # Value annotations on the radar points
+    if value_annotations:
+        for i, (angle, val_plot, val_orig) in enumerate(zip(
+            angles, plot_values, original_values_for_annotation
+            )):
+            if not np.isnan(val_plot) and not np.isnan(val_orig):
+                # Use original value for annotation text
+                annotation_text = annotation_format.format(val_orig)
+                ax.text(angle, val_plot, annotation_text,
+                        ha='center', va='bottom' if val_plot >=0 else 'top',
+                        fontsize=category_label_final_props.get('size', 'small'), # type: ignore
+                        bbox=dict(facecolor='white', alpha=0.5,
+                                  edgecolor='none', pad=1.0)
+                       ) # Add background for readability
+
+    if title:
+        ax.set_title(title, va='bottom',
+                     fontdict={'fontsize': plt.rcParams['axes.titlesize'], # type: ignore
+                               'fontweight': plt.rcParams['axes.titleweight']}) # type: ignore
+    
+    if show_grid:
+        grid_final_props = grid_props if grid_props is not None \
+            else {'linestyle': '--', 'alpha': 0.7, 'linewidth':0.5}
+        ax.grid(**grid_final_props)
+    else:
+        ax.grid(False)
+        
+    if legend_label: # If a single entity is plotted, legend might be useful
+        ax.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+
+    return ax
+
+def _calculate_qce_miscalibrations(
+    y_true_period: np.ndarray,      # (N_period,)
+    y_pred_q_period: np.ndarray,  # (N_period, Q)
+    quantile_levels: np.ndarray,  # (Q,)
+    sample_weight_period: Optional[np.ndarray], # (N_period,)
+    eps: float
+) -> np.ndarray:
+    """Calculates per-quantile miscalibrations for a given period."""
+    indicators = (
+        y_true_period[:, np.newaxis] <= y_pred_q_period
+    ).astype(float) # (N_period, Q)
+
+    observed_proportions_q: np.ndarray
+    if sample_weight_period is not None:
+        sum_sw = np.sum(sample_weight_period)
+        if sum_sw < eps:
+            return np.full(quantile_levels.shape[0], np.nan)
+        
+        # Weighted average, handling NaNs from inputs if they exist
+        # NaNs in indicators should result from NaNs in y_true or y_pred_q
+        temp_props_list = []
+        for q_idx in range(quantile_levels.shape[0]):
+            valid_inds_q = indicators[:, q_idx]
+            finite_mask_q = ~np.isnan(valid_inds_q)
+            if np.any(finite_mask_q):
+                current_weights = sample_weight_period[finite_mask_q]
+                sum_finite_weights = np.sum(current_weights)
+                if sum_finite_weights >= eps:
+                    prop = np.sum(
+                        valid_inds_q[finite_mask_q] * current_weights
+                    ) / sum_finite_weights
+                    temp_props_list.append(prop)
+                else:
+                    temp_props_list.append(np.nan)
+            else:
+                temp_props_list.append(np.nan)
+        observed_proportions_q = np.array(temp_props_list)
+    else:
+        observed_proportions_q = np.nanmean(indicators, axis=0)
+
+    miscalibrations_q = np.abs(
+        observed_proportions_q - quantile_levels
+    )
+    return miscalibrations_q
+
+# --- Main Plotting Function ---
+# make actual_col to be optional set to None,
+# because some metrics works with the prediction only. 
+# also if metric is not provided and actual_col is None, 
+# the you plot the uncertainty distribution of quantile every years ( like average) 
+# and plot rather than qce instead. 
+# so revise 
+
+# --- Main Plotting Function ---
+def plot_nested_quantiles(
+    df: pd.DataFrame,
+    quantile_cols: List[str],
+    quantile_levels: List[Real],
+    actual_col: Optional[str] = None, # Now optional
+    dt_col: Optional[str] = None,
+    periods: Optional[List[Any]] = None, # Renamed
+    metric_func: Optional[MetricFunctionType] = None,
+    metric_kws: Optional[Dict[str, Any]] = None,
+    # Plotting customizations
+    figsize: Tuple[float, float] = (10, 10),
+    title: Optional[str] = None, # Default title set based on mode
+    colors: Optional[List[str]] = None,
+    show_center_text: bool = True,
+    center_text_format: str = "Avg:\n{value:.3f}",
+    segment_label_format: str = "{name}\n{value:.2f}",
+    show_segment_labels: bool = True,
+    startangle: float = 90,
+    counterclock: bool = False,
+    wedgeprops: Optional[Dict[str, Any]] = None, # User can set gap here
+    donut_width: float = 0.3,
+    donut_ring_spacing: float = 0.05,
+    donut_base_radius: float = 0.3, 
+    segment_explode: Optional[Union[float, List[float]]] = None,
+    # Legend
+    show_overall_legend: bool = True,
+    legend_title: Optional[str] = "Quantiles",
+    legend_loc: str = "center left",
+    legend_bbox_to_anchor: Tuple[float, float] = (1.05, 0.5),
+    # Common params
+    show_grid: bool=False, # for API consistency 
+    grid_props: dict =None, # for API consistency 
+    ax: Optional[plt.Axes] = None,
+    verbose: int = 0,
+    **kwargs: Any
+) -> plt.Axes:
+    """
+    Visualizes quantile-based metrics or average quantile values
+    over periods as nested donut charts.
+    (Full docstring to be expanded later)
+    """
+    # --- 1. Determine Plotting Mode ---
+    plot_mode: Literal['qce', 'custom_metric', 'avg_quantiles']
+    if actual_col is None and metric_func is None:
+        plot_mode = 'avg_quantiles'
+        default_title = "" #"Average Predicted Quantile Values by Period"
+    elif metric_func is not None:
+        plot_mode = 'custom_metric'
+        func_name = getattr(metric_func, '__name__', 'Custom Metric')
+        default_title = f"{func_name} Evolution Over Periods"
+    else: # actual_col is provided and metric_func is None
+        plot_mode = 'qce'
+        default_title = "Quantile Calibration Error by Period"
+
+    final_title = title if title is not None else default_title
+
+    # --- 2. Input Validation ---
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input 'df' must be a pandas DataFrame.")
+    
+    cols_to_check_existence = quantile_cols[:]
+    if actual_col: # Only check if provided
+        cols_to_check_existence.append(actual_col)
+    if dt_col:
+        cols_to_check_existence.append(dt_col)
+    exist_features(df, features=cols_to_check_existence, error='raise')
+
+    if not (isinstance(quantile_cols, list) and
+            all(isinstance(qc, str) for qc in quantile_cols)):
+        raise TypeError("'quantile_cols' must be a list of strings.")
+    if not quantile_cols:
+        raise ValueError("'quantile_cols' cannot be empty.")
+        
+    try:
+        q_levels_np = validate_quantiles(
+            quantile_levels, asarray=True, mode="strict"
+        )
+        # For QCE and custom metrics expecting strict (0,1) quantiles
+        if plot_mode != 'avg_quantiles': # Avg quantiles don't impose this
+            if not np.all((q_levels_np > 0) & (q_levels_np < 1)):
+                raise ValueError(
+                    "All 'quantile_levels' must be strictly in (0,1) "
+                    "for metric calculation."
+                )
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"Validation of 'quantile_levels' failed: {e}"
+        ) from e
+
+    if len(quantile_cols) != len(q_levels_np):
+        raise ValueError(
+            "Length of 'quantile_cols' must match 'quantile_levels'."
+        )
+
+    # --- 3. Data Preparation ---
+    metric_kws = metric_kws or {}
+    eps = metric_kws.get('eps', 1e-8)
+    sample_weight_col = metric_kws.get('sample_weight_col', None)
+    if sample_weight_col:
+        exist_features(df, features=sample_weight_col, error='raise')
+
+    if dt_col:
+        unique_periods = sorted(df[dt_col].unique())
+        periods_to_use = periods # Use renamed parameter
+        if periods_to_use is not None:
+            periods_val = [p for p in periods_to_use if p in unique_periods]
+            if not periods_val:
+                raise ValueError(
+                    "None of the specified 'periods' found in data."
+                )
+        else:
+            periods_val = unique_periods
+    else: 
+        periods_val = ["Overall"] 
+
+    num_periods = len(periods_val)
+    if num_periods == 0:
+        warnings.warn("No periods to plot.")
+        if ax is None: _, ax = plt.subplots(figsize=figsize)
+        ax.set_title(final_title + " (No Data)")
+        return ax # type: ignore
+
+    # --- 4. Calculate Values per Period and Quantile ---
+    period_values_dict: Dict[Any, np.ndarray] = {} 
+    
+    for period_name in periods_val:
+        period_df_slice = df if dt_col is None else \
+                          df[df[dt_col] == period_name]
+        if period_df_slice.empty:
+            period_values_dict[period_name] = np.full(len(q_levels_np), np.nan)
+            if verbose > 0:
+                warnings.warn(
+                    f"No data for period '{period_name}'. Values set to NaN."
+                )
+            continue
+
+        y_p_q_period = period_df_slice[quantile_cols].to_numpy(dtype=float)
+        s_weights_period = period_df_slice[sample_weight_col].to_numpy(dtype=float) \
+                           if sample_weight_col else None
+        
+        nan_policy_metric = metric_kws.get('nan_policy', 'propagate')
+        
+        # NaN handling for y_p_q_period and potentially y_t_period
+        # This needs to be done carefully based on the plot_mode
+        
+        current_period_values: np.ndarray
+
+        if plot_mode == 'avg_quantiles':
+            # NaNs in y_p_q_period for this mode
+            nan_mask_preds_period = np.isnan(y_p_q_period) # (N_period, Q)
+            if np.any(nan_mask_preds_period):
+                if nan_policy_metric == 'raise':
+                    raise ValueError(
+                        f"NaNs found in quantile_cols for period '{period_name}'."
+                    )
+                elif nan_policy_metric == 'omit':
+                    # Omit rows if ANY quantile in that row is NaN
+                    rows_with_nan_in_preds = nan_mask_preds_period.any(axis=1)
+                    keep_rows = ~rows_with_nan_in_preds
+                    if not np.any(keep_rows):
+                        current_period_values = np.full(len(q_levels_np), np.nan)
+                    else:
+                        y_p_q_period_clean = y_p_q_period[keep_rows]
+                        s_weights_period_clean = s_weights_period[keep_rows] \
+                            if s_weights_period is not None else None
+                        if s_weights_period_clean is not None and \
+                           np.sum(s_weights_period_clean) < eps:
+                            current_period_values = np.full(len(q_levels_np), np.nan)
+                        else:
+                            current_period_values = np.average(
+                                y_p_q_period_clean, axis=0,
+                                weights=s_weights_period_clean
+                            )
+                else: # propagate
+                    current_period_values = np.nanmean(y_p_q_period, axis=0)
+            else: # No NaNs in y_p_q_period
+                if s_weights_period is not None and np.sum(s_weights_period) < eps:
+                     current_period_values = np.full(len(q_levels_np), np.nan)
+                else:
+                    current_period_values = np.average(
+                        y_p_q_period, axis=0, weights=s_weights_period
+                    )
+        else: # 'qce' or 'custom_metric'
+            y_t_period = period_df_slice[actual_col].to_numpy(dtype=float) # type: ignore
+            nan_mask_true_period = np.isnan(y_t_period)
+            nan_mask_preds_period_any = np.isnan(y_p_q_period).any(axis=1)
+            combined_nan_samples = nan_mask_true_period | nan_mask_preds_period_any
+
+            if np.any(combined_nan_samples):
+                if nan_policy_metric == 'raise':
+                    raise ValueError(
+                        f"NaNs found in data for period '{period_name}'."
+                    )
+                elif nan_policy_metric == 'omit':
+                    keep_rows = ~combined_nan_samples
+                    if not np.any(keep_rows):
+                        current_period_values = np.full(len(q_levels_np), np.nan)
+                    else:
+                        y_t_period = y_t_period[keep_rows]
+                        y_p_q_period = y_p_q_period[keep_rows]
+                        if s_weights_period is not None:
+                            s_weights_period = s_weights_period[keep_rows]
+                # If 'propagate', handled by metric func or helper
+            
+            if y_t_period.shape[0] == 0:
+                 current_period_values = np.full(len(q_levels_np), np.nan)
+            elif plot_mode == 'qce':
+                current_period_values = _calculate_qce_miscalibrations(
+                    y_t_period, y_p_q_period, q_levels_np,
+                    s_weights_period, eps
+                )
+            else: # 'custom_metric'
+                try:
+                    # Custom metric func signature might vary.
+                    # Assuming it can handle these inputs or uses _get_valid_kwargs.
+                    # For simplicity, pass all relevant, let metric handle.
+                    metric_args = {
+                        'y_true_period': y_t_period,
+                        'y_pred_q_period': y_p_q_period,
+                        'quantile_levels': q_levels_np,
+                        'sample_weight_period': s_weights_period,
+                        'eps': eps
+                    }
+                    # Allow metric_kws to override these if needed
+                    final_metric_args = {**metric_args, **(metric_kws or {})}
+                    cleaned_metric_args = _get_valid_kwargs(
+                        metric_func, final_metric_args) # type: ignore
+                    current_period_values = metric_func(
+                        **cleaned_metric_args) # type: ignore
+                except Exception as e:
+                    warnings.warn(
+                        f"Error calling custom metric_func for period "
+                        f"'{period_name}': {e}. Values set to NaN."
+                    )
+                    current_period_values = np.full(len(q_levels_np), np.nan)
+        
+        period_values_dict[period_name] = current_period_values
+
+    # --- 5. Plotting Setup ---
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize) # type: ignore
+    
+    ax.set_title(final_title)
+    ax.axis('equal') 
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    if colors is None:
+        prop_cycle = plt.rcParams['axes.prop_cycle']
+        default_colors = prop_cycle.by_key()['color']
+        plot_colors = [default_colors[i % len(default_colors)]
+                       for i in range(len(q_levels_np))]
+    elif len(colors) < len(q_levels_np):
+        warnings.warn("Not enough colors for quantiles. Colors will cycle.")
+        plot_colors = [colors[i % len(colors)] for i in range(len(q_levels_np))]
+    else:
+        plot_colors = colors[:len(q_levels_np)]
+
+    if segment_explode is None:
+        explodes = [0] * len(q_levels_np)
+    elif isinstance(segment_explode, float):
+        explodes = [segment_explode] * len(q_levels_np)
+    elif isinstance(segment_explode, list) and \
+         len(segment_explode) == len(q_levels_np):
+        explodes = segment_explode
+    else:
+        warnings.warn("Invalid 'segment_explode'. Using no explosion.")
+        explodes = [0] * len(q_levels_np)
+
+    # Default wedge properties for gap
+    base_wedgeprops = {'edgecolor': 'white', 'linewidth': 1.5}
+    if wedgeprops: # User can override/add to this
+        base_wedgeprops.update(wedgeprops)
+
+    # --- 6. Plotting Nested Donuts ---
+    current_outer_radius = donut_base_radius + \
+                           num_periods * donut_width + \
+                           max(0, num_periods - 1) * donut_ring_spacing
+    
+    legend_items_overall = [] 
+
+    for i, period_name in enumerate(periods_val): # Use validated periods_val
+        values_for_period = period_values_dict[period_name]
+        valid_scores_mask = ~np.isnan(values_for_period)
+
+        if not np.any(valid_scores_mask):
+            if verbose > 0:
+                warnings.warn(
+                    f"All values for period '{period_name}' are NaN. "
+                    "Skipping donut for this period."
+                )
+            current_outer_radius -= (donut_width + donut_ring_spacing)
+            continue
+
+        plot_data_period = values_for_period[valid_scores_mask]
+        # Use original quantile_cols for names if plot_mode is 'avg_quantiles'
+        # and lengths match, otherwise generate from q_levels_np
+        if plot_mode == 'avg_quantiles' and \
+           len(quantile_cols) == len(q_levels_np):
+            period_segment_names_all = quantile_cols
+        else:
+            period_segment_names_all = [f"q={q:.2f}" for q in q_levels_np]
+             
+        period_segment_names = [ # noqa
+            period_segment_names_all[j] for j, keep in enumerate(valid_scores_mask) if keep
+        ]
+        period_colors = [
+            plot_colors[j] for j, keep in enumerate(valid_scores_mask) if keep
+        ]
+        period_explodes = [
+            explodes[j] for j, keep in enumerate(valid_scores_mask) if keep
+        ]
+
+        sum_plot_data = np.sum(plot_data_period)
+        # For pie chart, values should be positive. If metric can be negative,
+        # this visualization might not be ideal or needs transformation.
+        # Assuming metric scores (like QCE) or avg quantiles are non-negative.
+        if sum_plot_data < eps and not np.all(plot_data_period < eps):
+             if verbose > 0:
+                warnings.warn(
+                    f"Sum of values for period '{period_name}' is near zero, "
+                    "but individual values are not all zero. "
+                    "Donut segments may not be visible or meaningful."
+                )
+        
+        # If all plot_data_period are zero or negative, pie chart is problematic
+        if np.all(plot_data_period <= eps) and plot_data_period.size > 0 :
+            if verbose > 0:
+                warnings.warn(
+                    f"All values for period '{period_name}' are zero or negative. "
+                    "Drawing empty/minimal donut ring."
+                )
+            # Draw a simple ring to indicate the period without segments
+            ring = plt.Circle((0,0), current_outer_radius - donut_width/2,
+                              width=donut_width, color='lightgray', fill=False,
+                              linestyle='--', ec='gray')
+            ax.add_artist(ring)
+            # Add period label to the ring
+            angle_for_label = startangle + \
+                (counterclock * 2 -1) * (i * 360/num_periods) # Distribute labels
+            text_x = (current_outer_radius - donut_width/2) * \
+                     np.cos(np.deg2rad(angle_for_label))
+            text_y = (current_outer_radius - donut_width/2) * \
+                     np.sin(np.deg2rad(angle_for_label))
+            ax.text(text_x, text_y, str(period_name), ha='center', va='center',
+                    fontsize='small', color='dimGray')
+
+        elif plot_data_period.size > 0 : # Ensure there's data to plot
+            wedges, *texts_autotexts = ax.pie(
+                plot_data_period,
+                radius=current_outer_radius,
+                labels=None, 
+                autopct=(lambda pct: segment_label_format.format(
+                            name="", 
+                            value=(pct/100.)*sum_plot_data if sum_plot_data > eps else 0,
+                            percent=pct)
+                        ) if show_segment_labels and sum_plot_data > eps else None,
+                startangle=startangle,
+                counterclock=counterclock,
+                colors=period_colors,
+                explode=period_explodes,
+                wedgeprops={**base_wedgeprops, 'width': donut_width} # type: ignore
+            )
+            
+        
+        if i == 0 and show_overall_legend and plot_data_period.size > 0:
+            # Create legend items based on the *original* full set of quantiles
+            # and their assigned colors, to ensure consistency.
+            for q_idx, q_level_val in enumerate(q_levels_np):
+                # Use original quantile_cols if available and matches, else q=...
+                leg_name = quantile_cols[q_idx] if \
+                    len(quantile_cols) == len(q_levels_np) else f"q={q_level_val:.2f}"
+                legend_items_overall.append(
+                    (plt.Rectangle((0,0),1,1, facecolor=plot_colors[q_idx]), leg_name)
+                )
+        
+        if show_center_text and plot_data_period.size > 0:
+            # For the innermost donut, show overall average for that period
+            avg_value_period = np.nanmean(values_for_period) 
+            if not np.isnan(avg_value_period):
+                if i == num_periods -1 : 
+                     center_text_val = center_text_format.format(value=avg_value_period)
+                     if plot_mode == 'avg_quantiles' and dt_col is None: # Single overall donut
+                         center_text_val = "Avg. Quantile\nValues"
+                     elif plot_mode == 'avg_quantiles':
+                          center_text_val = f"{period_name}\nAvg. Values"
+
+                     ax.text(0, 0, center_text_val,
+                             ha='center', va='center', fontsize='medium',
+                             fontweight='bold',
+                             path_effects=kwargs.get('center_text_path_effects', None))
+                elif verbose > 1 and dt_col is not None: 
+                    print(
+                        f"Period '{period_name}' Avg Score/Value: {avg_value_period:.3f}"
+                    )
+        current_outer_radius -= (donut_width + donut_ring_spacing)
+
+    # --- 7. Final Touches (Legend, Grid) ---
+    if show_overall_legend and legend_items_overall:
+        # Remove duplicate legend items if colors/names were cycled
+        unique_legend_items = []
+        seen_labels = set()
+        for handle, label in legend_items_overall:
+            if label not in seen_labels:
+                unique_legend_items.append((handle, label))
+                seen_labels.add(label)
+        
+        if unique_legend_items:
+            handles, labels = zip(*unique_legend_items)
+            ax.legend(handles, labels, title=legend_title,
+                      loc=legend_loc, bbox_to_anchor=legend_bbox_to_anchor)
+
+    if show_grid:
+        if verbose > 0:
+            warnings.warn(
+                "'show_grid' for donut chart might not be conventional."
+            )
+        ax.grid(**(grid_props or {'linestyle': ':', 'alpha': 0.3}))
+    else:
+        ax.grid(False)
+        
+    return ax
