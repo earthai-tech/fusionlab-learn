@@ -8,7 +8,7 @@ import os
 # --- Attempt to import XTFT and dependencies ---
 try:
     import tensorflow as tf
-    from fusionlab.nn._xtft import XTFT
+    from fusionlab.nn.models._xtft import XTFT
     # Import necessary components for context/checks if needed
     from fusionlab.nn.components import (
          GatedResidualNetwork, VariableSelectionNetwork # Min dependencies

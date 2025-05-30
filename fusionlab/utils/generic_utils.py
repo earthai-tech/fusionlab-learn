@@ -1999,7 +1999,6 @@ def handle_emptiness(
 
     raise ValueError("`ops` must be 'validate' or 'check_only'")
 
-
 def _report_condition(
     policy: Literal['raise', 'warn', 'ignore'],
     default_message: str,

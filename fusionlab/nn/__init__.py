@@ -73,8 +73,10 @@ if KERAS_BACKEND:
     from .transformers import ( 
         TemporalFusionTransformer, 
         DummyTFT, 
-        TFT, XTFT, SuperXTFT
+        TFT, 
         )
+    from .models import XTFT, SuperXTFT
+    
     from .anomaly_detection import ( 
         LSTMAutoencoderAnomaly, 
         SequenceAnomalyScoreLayer, 

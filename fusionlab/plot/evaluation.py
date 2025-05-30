@@ -38,7 +38,9 @@ from ._evaluation import (
     plot_quantile_calibration,
     plot_theils_u_score,
     plot_time_weighted_metric,
-    plot_weighted_interval_score
+    plot_weighted_interval_score, 
+    plot_radar_scores, 
+    plot_qce_donut
  )
 
 __all__=[
@@ -52,7 +54,9 @@ __all__=[
      'plot_weighted_interval_score', 
      'plot_metric_radar', 
      'plot_forecast_comparison', 
-     'plot_metric_over_horizon' 
+     'plot_metric_over_horizon' , 
+     'plot_radar_scores', 
+     'plot_qce_donut', 
  ]
 
 _eval_docs = DocstringComponents.from_nested_components(

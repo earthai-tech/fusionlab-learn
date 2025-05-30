@@ -6,7 +6,7 @@ import tensorflow as tf
 
 # Attempt to import necessary components
 try:
-    from fusionlab.nn import TemporalFusionTransformer
+    from fusionlab.nn.transformers import TemporalFusionTransformer
     # Import loss if testing quantile mode compilation/training
     from fusionlab.nn.losses import combined_quantile_loss
     # Check if TF backend is available (using the flag from your nn package)

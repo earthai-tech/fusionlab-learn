@@ -11,10 +11,10 @@ inputs and creating input sequences with corresponding targets for time series
 forecasting.
 
 """
-
 import time
 import datetime 
 from numbers import Integral, Real 
+from textwrap import dedent 
 import warnings
 from typing import ( 
     List, Tuple, Optional,
@@ -27,6 +27,7 @@ import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import r2_score
 
+from .._fusionlog import fusionlog
 from ..api.util import get_table_size
 from ..core.checks import (
     ParamsValidator, 
@@ -52,7 +53,7 @@ from ..compat.sklearn import (
     Hidden, 
     validate_params
 )
-from ..decorators import Deprecated, isdf 
+from ..decorators import Deprecated, Appender, isdf 
 from ..exceptions import NotEnoughDataError 
 from ..utils.data_utils import mask_by_reference 
 from ..utils.deps_utils import ensure_pkg, get_versions 
@@ -85,13 +86,23 @@ if KERAS_BACKEND:
     tf_zeros = KERAS_DEPS.zeros 
     tf_shape =KERAS_DEPS.shape 
     tf_constant =KERAS_DEPS.constant
-  
+    tf_Assert = KERAS_DEPS.Assert 
+    tf_debugging = KERAS_DEPS.debugging 
+    tf_equal = KERAS_DEPS.equal 
+    tf_control_dependencies= KERAS_DEPS.control_dependencies
+    tf_identity =KERAS_DEPS.identity
+    tf_greater_equal =KERAS_DEPS.greater_equal
+    
+    from ..compat.tf import optional_tf_function 
+
 else:
     class Tensor: pass
     class Model: pass 
     
 DEP_MSG = dependency_message('nn.utils') 
 _TW = get_table_size()
+
+logger = fusionlog().get_fusionlab_logger(__name__)
 
 __all__ = [
     "split_static_dynamic", 
@@ -1033,6 +1044,183 @@ def prepare_model_inputs(
             "Must be 'strict' or 'flexible'."
             )
     # Return in the standard order [Static, Dynamic, Future]
+    return [s_to_pass, d_to_pass, f_to_pass]
+
+
+@Appender (dedent( 
+    prepare_model_inputs.__doc__.replace (
+        'prepare_model_inputs', 'prepare_model_inputs_in'),), 
+    join='\n', 
+)
+@ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
+@validate_params ({
+    'forecast_horizon': [Interval(Integral, 0, None, closed='left'), None], 
+    'model_type': [StrOptions({'strict', 'flexible'})]
+    })
+@optional_tf_function 
+def prepare_model_inputs_in(
+    dynamic_input: Union[np.ndarray, Tensor],
+    static_input: Optional[Union[np.ndarray, Tensor]] = None,
+    future_input: Optional[Union[np.ndarray, Tensor]] = None,
+    model_type: str = 'strict',
+    forecast_horizon: Optional[int] = None,
+    verbose: int = 0,
+    # **kwargs # Removed if not used
+) -> List[Optional[Tensor]]:
+    """Prepares a list of input tensors for a model's call method in graph 
+    compatible mode.
+    """
+    
+    if not KERAS_BACKEND:
+        raise RuntimeError("prepare_model_inputs requires a Keras backend.")
+
+    if dynamic_input is None:
+        raise ValueError(
+            "`dynamic_input` is required and cannot be None."
+            )
+
+    def _to_tensor_float32(
+        data: Optional[Union[np.ndarray, Tensor]], name: str
+        ) -> Optional[Tensor]:
+        if data is None:
+            return None
+        try:
+            # Ensure it's a tensor first
+            tensor_data = tf_convert_to_tensor(data, dtype=tf_float32)
+            # Explicitly cast if it's not float32 
+            # (though convert_to_tensor with dtype should handle it)
+            if tensor_data.dtype != tf_float32:
+                 tensor_data = tf_cast(tensor_data, tf_float32)
+            return tensor_data
+        except Exception as e:
+            raise TypeError(
+                f"Failed to convert '{name}' to TensorFlow tensor "
+                f"of type float32. Error: {e}"
+            ) from e
+
+    processed_dynamic_input = _to_tensor_float32(
+        dynamic_input, "dynamic_input"
+        )
+    processed_static_input = _to_tensor_float32(
+        static_input, "static_input"
+        )
+    processed_future_input = _to_tensor_float32(
+        future_input, "future_input"
+        )
+
+    # --- Shape Assertions (Graph-Compatible) ---
+    rank_dynamic = tf_rank(processed_dynamic_input)
+    # Use tf.control_dependencies for assertions if they don't return the tensor
+    # However, tf.Assert ops are executed when the tensor they depend on is computed.
+    # Forcing dependency by including the tensor itself in the assertion data.
+    assert_op_dyn_rank = tf_Assert(
+        tf_greater_equal(rank_dynamic, tf_constant(2, dtype=rank_dynamic.dtype)),
+        ["dynamic_input must be at least 2D. Got rank:", rank_dynamic, 
+         "Shape:", tf_shape(processed_dynamic_input)]
+    )
+    # Make sure assertion is executed
+    with tf_control_dependencies([assert_op_dyn_rank]):
+        processed_dynamic_input = tf_identity(processed_dynamic_input)
+
+    if tf_rank(processed_dynamic_input) == 2 and verbose > 0:
+        logger.warning(
+            "dynamic_input was 2D. For sequence models, it's "
+            "typically expected to be 3D (Batch, TimeSteps, Features). "
+            "Proceeding, but ensure this is intended."
+        )
+
+    if processed_static_input is not None:
+        rank_static = tf_rank(processed_static_input)
+        assert_op_stat_rank = tf_Assert(
+            tf_equal(rank_static, tf_constant(2, dtype=rank_static.dtype)),
+            ["static_input, if provided, must be 2D. Got rank:", rank_static,
+             "Shape:", tf_shape(processed_static_input)]
+        )
+        with tf_control_dependencies([assert_op_stat_rank]):
+            processed_static_input = tf_identity(processed_static_input)
+            
+    if processed_future_input is not None:
+        rank_future = tf_rank(processed_future_input)
+        assert_op_fut_rank = tf_Assert(
+            tf_equal(rank_future, tf_constant(3, dtype=rank_future.dtype)),
+            ["future_input, if provided, must be 3D. Got rank:", rank_future,
+             "Shape:", tf_shape(processed_future_input)]
+        )
+        with tf_control_dependencies([assert_op_fut_rank]):
+            processed_future_input = tf_identity(processed_future_input)
+
+    shape_dynamic = tf_shape(processed_dynamic_input)
+    batch_size_dyn = shape_dynamic[0]
+    past_time_steps = shape_dynamic[1] if \
+        tf_rank(processed_dynamic_input) == 3 else \
+            tf_constant(1, dtype=tf_int32)
+    
+    if verbose >= 2:
+        logger.debug(
+             f"prepare_model_inputs: Derived batch_size={batch_size_dyn}, "
+             f"past_time_steps={past_time_steps}"
+             )
+
+    s_to_pass: Optional[Tensor] = processed_static_input
+    d_to_pass: Tensor = processed_dynamic_input
+    f_to_pass: Optional[Tensor] = processed_future_input
+
+    if model_type == 'strict':
+        if s_to_pass is None:
+            s_to_pass = tf_zeros(
+                (tf_cast(batch_size_dyn, tf_int32), 
+                 tf_constant(0, dtype=tf_int32)), 
+                dtype=tf_float32
+            )
+            if verbose >= 1:
+                logger.info(
+                    f"prepare_model_inputs (strict): Created dummy "
+                    f"static input with shape {tf_shape(s_to_pass)}"
+                    )
+        # ... (rest of dummy tensor creation for static and future as before) ...
+        elif tf_rank(s_to_pass) == 2 and tf_shape(s_to_pass)[-1] == 0 \
+            and verbose >=1:
+             logger.info(
+                 f"prepare_model_inputs (strict): Static input "
+                 f"provided with 0 features, shape {tf_shape(s_to_pass)}"
+                 )
+
+        if f_to_pass is None:
+            num_future_timesteps = tf_cast(past_time_steps, tf_int32)
+            if forecast_horizon is not None and forecast_horizon > 0:
+                fh_tensor = tf_cast(forecast_horizon, tf_int32)
+                num_future_timesteps += fh_tensor 
+            
+            f_to_pass = tf_zeros(
+                (tf_cast(batch_size_dyn, tf_int32),  
+                 tf_cast(num_future_timesteps, tf_int32), 
+                 tf_constant(0, dtype=tf_int32)),      
+                dtype=tf_float32
+            )
+            if verbose >= 1:
+                logger.info(
+                    f"prepare_model_inputs (strict): Created dummy "
+                    f"future input with shape {tf_shape(f_to_pass)}"
+                    )
+        elif tf_rank(f_to_pass) == 3 and tf_shape(f_to_pass)[-1] == 0 \
+            and verbose >=1:
+            logger.info(
+                f"prepare_model_inputs (strict): Future input "
+                f"provided with 0 features, shape {tf_shape(f_to_pass)}"
+                )
+                
+    elif model_type == 'flexible':
+        if verbose >= 1:
+            logger.info(
+                f"prepare_model_inputs (flexible): Passing inputs "
+                f"as is (Static: {type(s_to_pass)}, "
+                f"Dynamic: {type(d_to_pass)}, Future: {type(f_to_pass)})"
+                )
+    else: # Should be caught by @validate_params if active for this function
+        raise ValueError(
+            f"Invalid `model_type`: '{model_type}'. "
+            "Must be 'strict' or 'flexible'."
+        )
     return [s_to_pass, d_to_pass, f_to_pass]
 
 

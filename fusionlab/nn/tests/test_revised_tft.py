@@ -7,7 +7,7 @@ import numpy as np
 try:
     import tensorflow as tf
     
-    from fusionlab.nn._adj_tft import TFT # The revised TFT class
+    from fusionlab.nn.transformers._adj_tft import TFT # The revised TFT class
     # Import necessary components used internally for potential checks
     # refreshed fixed: 
     from fusionlab.nn.components import ( # Noqa 

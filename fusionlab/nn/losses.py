@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from .._fusionlog import fusionlog
 from ..compat.sklearn import Interval
+from ..compat.tf import optional_tf_function
 from ..core.checks import ParamsValidator, check_params
 from ..core.diagnose_q import validate_quantiles_in 
 from ..utils.deps_utils import ensure_pkg
@@ -32,6 +33,8 @@ if KERAS_BACKEND:
     tf_expand_dims=KERAS_DEPS.expand_dims
     tf_maximum=KERAS_DEPS.maximum
     tf_rank=KERAS_DEPS.rank 
+    tf_cond =KERAS_DEPS.cond 
+    tf_equal = KERAS_DEPS.equal 
     tf_zeros_like=KERAS_DEPS.zeros_like
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     
@@ -249,12 +252,25 @@ def combined_quantile_loss(quantiles: List[float]):
         name="combined_quantile_loss"
     )
     def _cqloss(y_true, y_pred):
+        
+        def case_rank3():
+            yp = tf_expand_dims(y_pred, axis=-1)  # (B, H, Q, 1)
+            return yp
+
+        def case_rank4():
+            return y_pred  # Already has shape (B, H, Q, O)
+    
         # Expand y_true so it matches y_pred's quantile dimension
         y_true_expanded = tf_expand_dims(y_true, axis=2)  # => (B, H, 1, O)
-
-        if tf_rank(y_pred) == 3:
-            # e.g. shape (B, H, Q) => expand last dim
-            y_pred = tf_expand_dims(y_pred, axis=-1)  # => (B, H, Q, 1)
+        rank = tf_rank(y_pred) 
+        #XXX TODO: FIX 
+        try: 
+            if len(y_pred) == 3:
+                # e.g. shape (B, H, Q) => expand last dim
+                y_pred = tf_expand_dims(y_pred, axis=-1)  # => (B, H, Q, 1)
+        except: 
+            # Conditionally expand if rank == 3
+            y_pred = tf_cond(tf_equal(rank, 3), case_rank3, case_rank4)
 
         # Broadcast y_true_expanded to match y_pred's shape
         # shape => (B, H, Q, O)
@@ -270,6 +286,70 @@ def combined_quantile_loss(quantiles: List[float]):
             loss_val += tf_reduce_mean(q_loss)
 
         # Average loss over all quantiles
+        return loss_val / len(quantiles)
+
+    return _cqloss
+
+# @register_keras_serializable("fusionlab.nn.losses", name="combined_quantile_loss0")
+# def combined_quantile_loss0(quantiles):
+#     quantiles = validate_quantiles_in(quantiles)
+
+#     def _expand_and_compute(y_true, y_pred):
+#         y_true_exp = tf_expand_dims(y_true, axis=2)  # (B, H, 1, O)
+#         error = y_true_exp - y_pred                  # (B, H, Q, O)
+
+#         loss_val = 0.0
+#         for i, q in enumerate(quantiles):
+#             q_loss = tf_maximum(q * error[:, :, i, :], (q - 1) * error[:, :, i, :])
+#             loss_val += tf_reduce_mean(q_loss)
+#         return loss_val / len(quantiles)
+
+#     @optional_tf_function  # Ensures graph-safe execution
+#     def _cqloss(y_true, y_pred):
+#         rank = tf_rank(y_pred)
+
+#         def case_rank3():
+#             y_pred_reshaped = tf_expand_dims(y_pred, axis=-1)  # (B, H, Q) → (B, H, Q, 1)
+#             return _expand_and_compute(y_true, y_pred_reshaped)
+
+#         def case_rank4():
+#             return _expand_and_compute(y_true, y_pred)
+
+#         return tf_cond(
+#             tf_equal(rank, 3),
+#             true_fn=case_rank3,
+#             false_fn=case_rank4
+#         )
+
+#     return _cqloss
+
+@register_keras_serializable("fusionlab.nn.losses", name="combined_quantile_loss_")
+def combined_quantile_loss_(quantiles):
+    quantiles = validate_quantiles_in(quantiles)
+
+    # @optional_tf_function
+    def _cqloss(y_true, y_pred):
+        # Ensure y_pred has shape (B, H, Q, O)
+        y_true_exp = tf_expand_dims(y_true, axis=2)  # (B, H, 1, O)
+
+        # Handle y_pred that may be (B, H, Q) or (B, H, Q, O)
+        y_pred_rank = tf_rank(y_pred)
+
+        def expand_pred():
+            return tf_expand_dims(y_pred, axis=-1)  # (B, H, Q) → (B, H, Q, 1)
+
+        def identity_pred():
+            return y_pred
+
+        y_pred = tf_cond(tf_equal(y_pred_rank, 3), expand_pred, identity_pred)
+
+        # Now both y_true_exp and y_pred are (B, H, Q, O)
+        error = y_true_exp - y_pred
+        loss_val = 0.0
+        for i, q in enumerate(quantiles):
+            q_loss = tf_maximum(q * error[:, :, i, :], (q - 1) * error[:, :, i, :])
+            loss_val += tf_reduce_mean(q_loss)
+
         return loss_val / len(quantiles)
 
     return _cqloss
