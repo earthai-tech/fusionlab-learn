@@ -154,7 +154,9 @@ class KerasDependencies:
             'TensorShape': ('tensorflow', 'TensorShape'), 
             'Tensor': ('tensorflow', 'Tensor'), 
             'Variable': ('tensorflow', 'Variable'), 
-            'GradientTape':('tensorflow', 'GradientTape'), 
+            'GradientTape':('tensorflow', 'GradientTape'),
+            'Dataset': ('tensorflow.data', 'Dataset'),
+            'AUTOTUNE': ('tensorflow.data', 'AUTOTUNE'),
             
             'reduce_mean': ('tensorflow', 'reduce_mean'),
             'reduce_sum': ('tensorflow', 'reduce_sum'),
@@ -174,8 +176,6 @@ class KerasDependencies:
             'shape': ('tensorflow', 'shape'), 
             'square': ('tensorflow.math', 'square'),
             'is_nan': ('tensorflow.math', 'is_nan'), 
-            'GradientTape': ('tensorflow', 'GradientTape'),
-            'Dataset': ('tensorflow.data', 'Dataset'),
             'set_seed':('tensorflow.random', 'set_seed'), 
             'add_n': ('tensorflow.math', 'add_n'), 
             'maximum':('tensorflow.math', 'maximum'),
@@ -222,7 +222,8 @@ class KerasDependencies:
             'bool': ('tensorflow', 'bool'), 
             'where':('tensorflow', 'where'), 
             'log': ('tensorflow.math', 'log'), 
-            'exp': ('tensorflow', 'exp')
+            'exp': ('tensorflow', 'exp'), 
+            'name_scope': ('tensorflow', 'name_scope')
             
             
         }
@@ -266,6 +267,8 @@ class KerasDependencies:
             'mean_squared_error': ('losses', 'mean_squared_error'),
             'categorical_crossentropy': ('losses', 'categorical_crossentropy'),
             'binary_crossentropy': ('losses', 'binary_crossentropy'),
+            'MeanSquaredError': ('losses', 'MeanSquaredError'), 
+            'MeanAbsoluteError': ('metrics', 'MeanAbsoluteError'), 
             'K': ('backend', 'K'), 
             'sum': ('backend', 'sum'),
             'ones': ('backend', 'ones'),
@@ -1197,7 +1200,6 @@ References
 .. [2] Abadi, Martín et al. *TensorFlow: Large-Scale Machine Learning 
         on Heterogeneous Systems*. 2015.
 """
-
 
 
 check_keras_backend.__doc__="""\

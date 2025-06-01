@@ -3,7 +3,7 @@
 #   Author: LKouadio <etanoyau@gmail.com>
 
 import warnings
-from fusionlab.compat.tf import HAS_TF
+from fusionlab.compat.tf import HAS_TF # nOQA
 
 # Core model definitions
 from ._models import HALNet

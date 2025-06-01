@@ -11,8 +11,8 @@ detection. These functions are designed to be compatible with the
 Keras API (e.g., ``model.compile(loss=...)``).
 
 Understanding these losses is key to training models like
-:class:`~fusionlab.nn.TemporalFusionTransformer` and
-:class:`~fusionlab.nn.XTFT` effectively, especially when dealing
+:class:`~fusionlab.nn.transformers.TemporalFusionTransformer` and
+:class:`~fusionlab.nn.transformers.XTFT` effectively, especially when dealing
 with uncertainty estimation or anomaly-aware training strategies.
 
 Quantile Loss Functions
@@ -174,7 +174,7 @@ This function takes a list of target `quantiles` (e.g.,
 **Usage Context:** This is the standard loss function to use with
 `model.compile` when training a model (like TFT or XTFT) that is
 configured to output predictions for multiple quantiles. The use of
-`@register_keras_serializable` within the factory ensures models
+``@register_keras_serializable`` within the factory ensures models
 compiled with this loss can often be saved and loaded correctly.
 
 **Code Example:**
@@ -245,7 +245,7 @@ loss *only* based on the `anomaly_scores` provided when the loss
 function was created:
 
 .. math::
-   L_{anomaly} = w_{anomaly} \cdot \text{mean}(\text{anomaly\_scores}^2)
+   L_{anomaly} = w_{anomaly} \cdot \text{mean}(\text{anomaly\_{scores}}^2)
 
 where :math:`w_{anomaly}` is the `anomaly_loss_weight`.
 
@@ -314,11 +314,13 @@ and returns a Keras loss function :math:`loss\_fn(y_{true}, y_{pred})`.
 The returned :math:`loss\_fn` computes two components internally:
 
 1.  **Prediction Loss (:math:`L_{pred}`):**
+
     * If `quantiles` are provided: Standard quantile loss based on
-      :func:`combined_quantile_loss`.
+      :func:`fusionlab.nn.losses.combined_quantile_loss`.
     * If `quantiles` is `None`: Standard Mean Squared Error (MSE).
       :math:`L_{pred} = \text{mean}((y_{true} - y_{pred})^2)`.
 2.  **Anomaly Loss (:math:`L_{anomaly}`):**
+
     * Calculates prediction error :math:`|y_{true} - y_{pred}|`. If
       predicting quantiles, the error relative to the median
       (or average across quantiles) might be used.
@@ -403,7 +405,7 @@ loss function :math:`loss\_fn(y_{true}, y_{pred})`. The returned
 2.  **Anomaly Loss (:math:`L_{anomaly}`):** Calculated by calling the
     provided `anomaly_layer` with the *fixed* `anomaly_scores` tensor
     that was passed during the creation of this loss function.
-    Typically: :math:`L_{anomaly} = w \cdot \text{mean}(\text{anomaly\_scores}^2)`.
+    Typically: :math:`L_{anomaly} = w \cdot \text{mean}(\text{anomaly\_{scores}}^2)`.
 3.  **Total Loss:** :math:`L_{total} = L_{quantile} + L_{anomaly}`
 
 **Usage Context:** Used to create the loss for `model.compile` when
@@ -421,7 +423,6 @@ for `'from_config'`)*.
 
    import tensorflow as tf
    import numpy as np
-   # Assuming relevant functions/classes are importable
    from fusionlab.nn.losses import combined_total_loss
    from fusionlab.nn.components import AnomalyLoss
 

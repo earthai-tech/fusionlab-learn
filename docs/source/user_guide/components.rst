@@ -432,7 +432,8 @@ both short-term and longer-term dynamics within the data.
    (e.g., ``input[:, ::s, :]``).
 4. Feeds each sub-sampled sequence into its corresponding LSTM layer.
 5. **Output Handling (controlled by `return_sequences`):**
-   * If `return_sequences=False`: Each LSTM returns only its final
+
+   * If ``return_sequences=False``: Each LSTM returns only its final
      hidden state (shape :math:`(B, \text{lstm_units})`). These final
      states from all scales are concatenated along the feature
      dimension, yielding a single output tensor of shape
@@ -1061,19 +1062,19 @@ model.
    horizon step (shape :math:`(B, H, F)`).
 2. **If quantiles were specified** during initialization (e.g.,
    ``[0.1, 0.5, 0.9]``):
-   * It uses a separate :class:`~tf.keras.layers.Dense` layer for
-     each quantile :math:`q`.
+   
+   * It uses a separate :class:`~tf.keras.layers.Dense` layer for each quantile :math:`q`.
    * Each dense layer projects the input features :math:`F` to the
      target `output_dim` (:math:`O`).
    * The outputs for all quantiles are stacked along a new dimension,
      resulting in a shape of :math:`(B, H, Q, O)`, where :math:`Q`
-     is the number of quantiles. *(Note: If :math:`O=1`, the final
+     is the number of quantiles. (Note: If :math:`O=1`, the final
      output might be squeezed to :math:`(B, H, Q)` depending on model
-     configuration or subsequent steps).*
-3. **If `quantiles` is `None`:**
+     configuration or subsequent steps).
+3. **If quantiles** is ``None``:
+
    * It uses a single :class:`~tf.keras.layers.Dense` layer.
-   * This layer projects the input features :math:`F` to the target
-     `output_dim` (:math:`O`).
+   * This layer projects the input features :math:`F` to the target `output_dim` (:math:`O`).
    * The output shape is :math:`(B, H, O)`.
 
 **Usage Context:** This is typically the **very last layer** in TFT and
@@ -1252,13 +1253,13 @@ loss) encourages the model to produce representations or predictions
 associated with lower anomaly scores for the training data.
 
 **Usage Context:** Primarily used as part of a combined loss strategy
-within :class:`~fusionlab.nn.XTFT`, especially for `'feature_based'` or
+within :class:`~fusionlab.nn.transformers.XTFT`, especially for `'feature_based'` or
 `'from_config'` anomaly detection.
 * In `'feature_based'`, the model might output scores internally, which
-    are then fed to this loss (often added via `model.add_loss`).
+  are then fed to this loss (often added via `model.add_loss`).
 * In `'from_config'`, pre-computed scores might be used with this loss
-    layer within a :class:`~fusionlab.nn.components.MultiObjectiveLoss`
-    or the :func:`~fusionlab.nn.losses.combined_total_loss` factory.
+  layer within a :class:`~fusionlab.nn.components.MultiObjectiveLoss`
+  or the :func:`~fusionlab.nn.losses.combined_total_loss` factory.
 
 **Code Example:**
 

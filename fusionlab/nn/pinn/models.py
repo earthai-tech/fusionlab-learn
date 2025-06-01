@@ -3,7 +3,8 @@
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
 
-"""[docstring here ]]
+"""
+Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
 """
 
 from textwrap import dedent # noqa 
@@ -12,12 +13,13 @@ from typing import List, Optional, Union, Dict, Tuple
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.property import NNLearner 
+from ...core.handlers import param_deprecated_message 
 from ...compat.sklearn import validate_params, Interval, StrOptions 
 from ...utils.deps_utils import ensure_pkg
 
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
  
-if KERAS_BACKEND:
+if KERAS_BACKEND: 
     LSTM = KERAS_DEPS.LSTM
     Dense = KERAS_DEPS.Dense
     Flatten = KERAS_DEPS.Flatten
@@ -48,6 +50,7 @@ if KERAS_BACKEND:
     tf_tile = KERAS_DEPS.tile
     tf_range_=KERAS_DEPS.range 
     tf_concat = KERAS_DEPS.concat
+    tf_cond = KERAS_DEPS.cond
     tf_shape = KERAS_DEPS.shape
     tf_reshape=KERAS_DEPS.reshape
     tf_add = KERAS_DEPS.add
@@ -95,6 +98,7 @@ if KERAS_BACKEND:
             aggregate_time_window_output
         )
     from .op import process_pinn_inputs, compute_consolidation_residual 
+    from .utils import process_pde_modes 
     
     
 DEP_MSG = dependency_message('nn.pinn.models') 
@@ -104,7 +108,39 @@ logger.addFilter(OncePerMessageFilter())
 
 __all__ =["PIHALNet"] 
 
+
 @register_keras_serializable('fusionlab.nn.pinn', name="PIHALNet")
+@param_deprecated_message(
+    conditions_params_mappings=[
+        {
+            'param': 'pde_mode', # The __init__ parameter name
+            'condition': lambda p_value: (
+                p_value == 'gw_flow' or
+                p_value == 'both' or
+                p_value == 'none' or
+                (isinstance(p_value, list) and
+                 any(mode in ['gw_flow', 'both', 'none'] for mode in p_value) and
+                 not ('consolidation' in p_value and len(p_value) == 1) 
+                )
+            ),
+            'message': (
+                "Warning: The 'pde_mode' parameter received a value that "
+                "includes options ('gw_flow', 'both', 'none') which are "
+                "intended for future development or are not the primary "
+                "focus of the current physics-informed implementation. "
+                "This version of PIHALNet is optimized for and defaults to "
+                "'consolidation' mode to ensure robust physical constraints "
+                "based on Terzaghi's theory with finite differences. "
+                "The model will proceed using 'consolidation' mode. Full "
+                "support for other PDE modes and their specific derivative "
+                "requirements will be explored in future releases."
+            ),
+            'default': 'consolidation', 
+        }
+    ],
+    warning_category=UserWarning 
+)
+
 class PIHALNet(Model, NNLearner):
     """
     Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
@@ -124,14 +160,12 @@ class PIHALNet(Model, NNLearner):
         variables to be learned during training (default).
     """
     @validate_params({
-        # --- Data Shape Parameters ---
         "static_input_dim": [Interval(Integral, 0, None, closed='left')],
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
         "future_input_dim": [Interval(Integral, 0, None, closed='left')],
         "output_subsidence_dim": [Interval(Integral, 1, None, closed='left')],
         "output_gwl_dim": [Interval(Integral, 1, None, closed='left')],
         
-        # --- Core Architectural Parameters ---
         "embed_dim": [Interval(Integral, 1, None, closed='left')],
         "hidden_units": [Interval(Integral, 1, None, closed='left')],
         "lstm_units": [Interval(Integral, 1, None, closed='left'), None],
@@ -139,7 +173,6 @@ class PIHALNet(Model, NNLearner):
         "num_heads": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         
-        # --- Forecasting & Component Parameters ---
         "forecast_horizon": [Interval(Integral, 1, None, closed='left')], 
         "quantiles": ['array-like', StrOptions({'auto'}), None],
         "max_window_size": [Interval(Integral, 1, None, closed='left')],
@@ -148,14 +181,20 @@ class PIHALNet(Model, NNLearner):
         "multi_scale_agg": [StrOptions({
             "last", "average", "flatten", "auto", "sum", "concat"}), None],
         "final_agg": [StrOptions({"last", "average", "flatten"})],
-        # --- Behavior & Style Parameters ---
+
         "activation": [str, callable],
         "use_residuals": [bool],
         "use_batch_norm": [bool],
-
-        # --- PINN-Specific Parameters ---
-        "pinn_coefficient_C": [str, Real, None, StrOptions({"learnable"})],
-        'use_vsn': [bool], 
+        
+        "pde_mode": [
+            StrOptions({'consolidation', 'gw_flow', 'both', 'none'}), 
+            'array-like', None 
+        ],
+        "pinn_coefficient_C": [
+            str, Real,None, StrOptions({"learnable"}) 
+        ], 
+        "gw_flow_coeffs": [dict, type(None)], 
+        'use_vsn': [bool, int], 
         'vsn_units': [Interval(Integral, 0, None, closed="left"), None]
     })
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
@@ -166,8 +205,8 @@ class PIHALNet(Model, NNLearner):
         future_input_dim: int,
         output_subsidence_dim: int = 1,
         output_gwl_dim: int = 1,
-        embed_dim: int = 32,       # Used by MME, and as target for VSN outputs
-        hidden_units: int = 64,    # General GRN units, can also be VSN output units
+        embed_dim: int = 32,       
+        hidden_units: int = 64,    
         lstm_units: int = 64,
         attention_units: int = 32,
         num_heads: int = 4,
@@ -182,16 +221,16 @@ class PIHALNet(Model, NNLearner):
         activation: str = 'relu',
         use_residuals: bool = True,
         use_batch_norm: bool = False,
+        pde_mode: Union[str, List[str], None] = 'consolidation',
         pinn_coefficient_C: Union[str, float, None] = 'learnable',
-        # New VSN parameters
+        gw_flow_coeffs: Optional[Dict[str, Union[str, float, None]]] = None,
         use_vsn: bool = True,
-        vsn_units: Optional[int] = None, # Units for GRNs within VSN, defaults to hidden_units
+        vsn_units: Optional[int] = None, 
         name: str = "PIHALNet",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)
 
-        # --- Store all parameters ---
         self.static_input_dim = static_input_dim
         self.dynamic_input_dim = dynamic_input_dim
         self.future_input_dim = future_input_dim
@@ -200,8 +239,8 @@ class PIHALNet(Model, NNLearner):
         self._combined_output_target_dim = (
             output_subsidence_dim + output_gwl_dim
         )
-        self.embed_dim = embed_dim # Target dim for MME
-        self.hidden_units = hidden_units # General purpose GRN units
+        self.embed_dim = embed_dim 
+        self.hidden_units = hidden_units 
         self.lstm_units = lstm_units
         self.attention_units = attention_units
         self.num_heads = num_heads
@@ -213,10 +252,10 @@ class PIHALNet(Model, NNLearner):
         self.activation_fn_str = Activation(activation).activation_str
         self.use_residuals = use_residuals
         self.use_batch_norm = use_batch_norm
-        self.pinn_coefficient_C_config = pinn_coefficient_C
+        
+        # self.pinn_coefficient_C_config = pinn_coefficient_C
         
         self.use_vsn = use_vsn
-        # If vsn_units not specified, use hidden_units as a sensible default
         self.vsn_units = vsn_units if vsn_units is not None else self.hidden_units
 
         (self.quantiles, self.scales,
@@ -224,30 +263,37 @@ class PIHALNet(Model, NNLearner):
             quantiles, scales, multi_scale_agg
         )
         self.multi_scale_agg_mode = multi_scale_agg
-
-        self._build_halnet_layers() # This will now include VSNs
+        
+        # --- Store PINN Configuration ---
+        self.pde_modes_active = process_pde_modes(
+            pde_mode, enforce_consolidation=True, 
+            solo_return=True, 
+        )
+        self.pinn_coefficient_C_config = pinn_coefficient_C # For consolidation
+        self.gw_flow_coeffs_config = gw_flow_coeffs if gw_flow_coeffs is not None else {}
+        
+        self._build_halnet_layers()
         self._build_pinn_components()
         
-  
     def _build_halnet_layers(self):
         """
         Instantiates all layers for the core data-driven HALNet architecture,
         optionally including VariableSelectionNetworks.
         """
-        # --- Variable Selection Networks (Applied first if use_vsn is True) ---
         if self.use_vsn:
             if self.static_input_dim > 0:
                 self.static_vsn = VariableSelectionNetwork(
                     num_inputs=self.static_input_dim,
-                    units=self.vsn_units, # Output dim for static features
+                    units=self.vsn_units, 
                     dropout_rate=self.dropout_rate,
                     activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm, # VSN GRNs can use BN
+                    use_batch_norm=self.use_batch_norm, 
                     name="static_vsn"
                 )
-                # GRN after static VSN (common in TFT to refine VSN output)
+                # GRN after static VSN 
+                # (common in TFT to refine VSN output)
                 self.static_vsn_grn = GatedResidualNetwork(
-                    units=self.hidden_units, # Final static context dim
+                    units=self.hidden_units, 
                     dropout_rate=self.dropout_rate,
                     activation=self.activation_fn_str,
                     use_batch_norm=self.use_batch_norm,
@@ -260,23 +306,25 @@ class PIHALNet(Model, NNLearner):
             if self.dynamic_input_dim > 0:
                 self.dynamic_vsn = VariableSelectionNetwork(
                     num_inputs=self.dynamic_input_dim,
-                    units=self.vsn_units, # Output dim per time step
+                    units=self.vsn_units,
                     dropout_rate=self.dropout_rate,
                     use_time_distributed=True,
                     activation=self.activation_fn_str,
                     use_batch_norm=self.use_batch_norm,
                     name="dynamic_vsn"
                 )
-                # GRN for dynamic VSN output (optional, but good for consistency)
+                # GRN for dynamic VSN output
+                # (optional, but good for consistency)
                 self.dynamic_vsn_grn = GatedResidualNetwork(
-                    units=self.embed_dim, # Target dim for LSTM/Attention
+                    units=self.embed_dim, 
                     dropout_rate=self.dropout_rate,
                     activation=self.activation_fn_str,
                     use_batch_norm=self.use_batch_norm,
                     name="dynamic_vsn_grn"
                 )
 
-            else: # Should not happen as dynamic_input_dim must be > 0
+            else: 
+                # Should not happen as dynamic_input_dim must be > 0
                 self.dynamic_vsn = None
                 self.dynamic_vsn_grn = None
 
@@ -385,9 +433,9 @@ class PIHALNet(Model, NNLearner):
         
         # LearnedNormalization might be applied to VSN inputs or outputs,
         # or raw inputs if VSN not used.
-        # Let's assume it's applied to raw inputs before VSN if VSN is used.
+        # We have option to apply to raw inputs before VSN if VSN is used.
         # Or, it could be part of the VSN's internal GRN processing.
-        # For now, keep it as a general layer.
+        # For now, we keep it as a general layer.
         self.learned_normalization = LearnedNormalization()
 
         # Static processing if VSN is NOT used for static features
@@ -400,7 +448,7 @@ class PIHALNet(Model, NNLearner):
                 self.static_batch_norm = LayerNormalization()
             else:
                 self.static_batch_norm = None
-            self.grn_static = GatedResidualNetwork( # This processes output of static_dense
+            self.grn_static = GatedResidualNetwork( 
                 units=self.hidden_units, dropout_rate=self.dropout_rate,
                 activation=self.activation_fn_str,
                 use_batch_norm=self.use_batch_norm
@@ -411,12 +459,13 @@ class PIHALNet(Model, NNLearner):
             self.static_dropout = None
             self.static_batch_norm = None
             self.grn_static = None # static_vsn_grn takes this role
-
+            
+    
         self.residual_dense = Dense(
             2 * self.embed_dim # This was tied to MME output usually
         ) if self.use_residuals else None
-
-    
+        
+  
     def _build_pinn_components(self):
         """
         Instantiates components required for the physics-informed module.
@@ -447,11 +496,150 @@ class PIHALNet(Model, NNLearner):
             raise ValueError(
                 "pinn_coefficient_C must be 'learnable', a number, or None."
             )
-
+            
     def get_pinn_coefficient_C(self) -> Tensor:
         """Returns the physical coefficient C."""
         return self._get_C()
+        
 
+    # XXX TODO: For future release with gwl_flow config 
+    def _create_log_coefficient(
+        self, config_value: Union[str, float, None],
+        default_initial_value: float, name: str
+        ) -> Optional[Variable]:
+        """
+        Helper to create a learnable (log-space) or fixed coefficient.
+        If fixed, it's stored as log(value) for consistent exp() access.
+        Returns None if config_value is None.
+        """
+        if config_value == 'learnable':
+            return self.add_weight(
+                name=f"log_{name}", shape=(),
+                initializer=Constant(
+                    tf_log(default_initial_value)
+                ),
+                trainable=True, dtype=tf_float32
+            )
+        elif isinstance(config_value, (float, int)):
+            if config_value <= 0:
+                logger.warning(
+                    f"Coefficient for '{name}' received fixed value {config_value}."
+                    " PINN coefficients like K, Ss, C are typically positive. "
+                    "Using log(abs(value) + epsilon) for stability."
+                )
+                # Store log of the (abs + epsilon) value, non-trainable
+                val_to_log = abs(config_value) + 1e-9 # ensure positive for log
+            else:
+                val_to_log = float(config_value)
+                
+            return tf_constant(tf_log(val_to_log), dtype=tf_float32)
+        
+        elif config_value is None:
+            return None # Explicitly no coefficient defined by user
+        else:
+            raise ValueError(
+                f"Invalid config for {name}: {config_value}. "
+                "Expected 'learnable', a number, or None."
+            )
+            
+    def _create_direct_coefficient(
+        self, config_value: Union[str, float, None],
+        default_initial_value: float, name: str
+        ) -> Optional[Union[Variable, Tensor]]:
+        """
+        Helper to create a learnable or fixed coefficient directly (not in log-space).
+        Returns None if config_value is None.
+        """
+        if config_value == 'learnable':
+            return self.add_weight(
+                name=name, shape=(),
+                initializer=Constant(default_initial_value),
+                trainable=True, dtype=tf_float32
+            )
+        elif isinstance(config_value, (float, int)):
+            return tf_constant(float(config_value), dtype=tf_float32)
+        
+        elif config_value is None:
+            return None
+        else:
+            raise ValueError(
+                f"Invalid config for {name}: {config_value}. "
+                "Expected 'learnable', a number, or None."
+            )
+
+    def __build_pinn_components(self):
+        """
+        Instantiates trainable/fixed physical coefficients based on config.
+        """
+        self._is_unique_consolidation =False 
+        # --- Coefficient C for Consolidation ---
+        if 'consolidation' in self.pde_modes_active:
+            self.log_C_consolidation_var = self._create_log_coefficient(
+                config_value=self.pinn_coefficient_C_config,
+                default_initial_value=0.01, # C ~ 0.01
+                name="coeff_C_consolidation"
+            )
+        else:
+            self.log_C_consolidation_var = None
+        # --- Coefficients K, Ss, Q for Groundwater Flow ---
+        if 'gw_flow' in self.pde_modes_active:
+            # Use defaults if gw_flow_coeffs_config is empty or keys are missing
+            k_config = self.gw_flow_coeffs_config.get('K', 'learnable')
+            ss_config = self.gw_flow_coeffs_config.get('Ss', 'learnable')
+            q_config = self.gw_flow_coeffs_config.get('Q', 0.0) # Default Q = 0.0
+
+            self.log_K_gwflow_var = self._create_log_coefficient(
+                config_value=k_config,
+                default_initial_value=1e-4, # K ~ 1e-4 m/s
+                name="coeff_K_gwflow"
+            )
+            self.log_Ss_gwflow_var = self._create_log_coefficient(
+                config_value=ss_config,
+                default_initial_value=1e-5, # Ss ~ 1e-5 1/m
+                name="coeff_Ss_gwflow"
+            )
+            self.Q_gwflow_var = self._create_direct_coefficient(
+                config_value=q_config,
+                default_initial_value=0.0,
+                name="coeff_Q_gwflow"
+            )
+        else:
+            self.log_K_gwflow_var = None
+            self.log_Ss_gwflow_var = None
+            self.Q_gwflow_var = None
+            self._is_unique_consolidation =True 
+
+    # --- Getter Methods for Physical Coefficients ---
+    def get_C_consolidation(self) -> Optional[Tensor]:
+        """Returns the positive physical coefficient C for consolidation."""
+        if self.log_C_consolidation_var is None:
+            if self._is_unique_consolidation:
+                # Physics is disabled, C is effectively 1 but will not be used
+                # if lambda_pde is 0 in compile()
+                return tf_constant(1.0, dtype=tf_float32)
+            
+            return None
+        
+        return tf_exp(self.log_C_consolidation_var)
+
+    def get_K_gwflow(self) -> Optional[Tensor]:
+        """Returns positive Hydraulic Conductivity K for groundwater flow."""
+        if self.log_K_gwflow_var is None:
+            return None
+        return tf_exp(self.log_K_gwflow_var)
+
+    def get_Ss_gwflow(self) -> Optional[Tensor]:
+        """Returns positive Specific Storage Ss for groundwater flow."""
+        if self.log_Ss_gwflow_var is None:
+            return None
+        return tf_exp(self.log_Ss_gwflow_var)
+
+    def get_Q_gwflow(self) -> Optional[Tensor]:
+        """Returns Source/Sink term Q for groundwater flow."""
+        return self.Q_gwflow_var
+
+    # XXX TODO : End groundwater flow config 
+    
     @tf_autograph.experimental.do_not_convert
     def call(
         self,
@@ -542,7 +730,6 @@ class PIHALNet(Model, NNLearner):
              predictions_combined=predictions_final_targets,
              decoded_outputs_for_mean=decoded_outputs
          )
-
         # --- 5. Calculate Physics Residual ---
         # The PDE residual is calculated on the mean predictions using
         # finite differences, which is suitable for sequence outputs.
@@ -565,20 +752,50 @@ class PIHALNet(Model, NNLearner):
         
         logger.debug(f"Shape of PDE residual: {pde_residual.shape}")
         
+        # =====================================================================
+        # XXX TODO: 
+        # # 4a. Consolidation Residual (Finite Differences on Output Sequence)
+        # if 'consolidation' in self.pde_modes_active:
+        #     logger.debug("Computing consolidation PDE residual.")
+        #     C_consol = self.get_C_consolidation()
+        #     if C_consol is not None and self.forecast_horizon > 1:
+        #         pde_residuals_dict['consolidation'] = compute_consolidation_residual(
+        #             s_pred=s_pred_mean_for_pde,
+        #             h_pred=gwl_pred_mean_for_pde,
+        #             time_steps=t_coords_horizon, # Time sequence for the horizon
+        #             C=C_consol
+        #         )
+        #     else:
+        #         pde_residuals_dict['consolidation'] = tf_zeros_like(s_pred_mean_for_pde)
+        #         if C_consol is None:
+        #             logger.warning("Consolidation C coefficient is None. Residual set to 0.")
+        #         if self.forecast_horizon <= 1:
+        #             logger.warning("Forecast horizon <= 1, consolidation residual set to 0.")
+        
+        # # 4b. Groundwater Flow Residual (Analytical Derivatives via Autodiff)
+        # if 'gw_flow' in self.pde_modes_active:
+        #     logger.debug("Computing groundwater flow PDE residual.")
+        #     K_gw = self.get_K_gwflow()
+        #     Ss_gw = self.get_Ss_gwflow()
+        #     Q_gw = self.get_Q_gwflow()
+        #     ....
+        # ====================================================================
+
         # --- 6. Return All Components for Loss Calculation ---
         return {
             "subs_pred": s_pred_final,
             "gwl_pred": gwl_pred_final,
             "pde_residual": pde_residual,
         }
-    
+
+
     def compile(
         self, 
         optimizer, 
         loss, 
         metrics=None, 
         loss_weights=None,
-        lambda_pde=1.0, # Add PINN loss weight as a compile-time parameter
+        lambda_pde=1.0, 
         **kwargs
     ):
         """
@@ -663,7 +880,8 @@ class PIHALNet(Model, NNLearner):
         # Build a dictionary of results to be displayed by Keras.
         results = {m.name: m.result() for m in self.metrics}
         results.update({
-            "total_loss": total_loss,      # The main loss we optimized
+            # "loss": total_loss, # nust keep it for API consistency 
+            "total_loss": total_loss,    # The main loss we optimized
             "data_loss": data_loss,      # The part of the loss from data
             "physics_loss": loss_pde,    # The part of the loss from physics
         })
@@ -672,7 +890,6 @@ class PIHALNet(Model, NNLearner):
 
     def get_config(self):
         config = super().get_config()
-        # Get all parameters from __init__ to serialize the model
         base_config = {
            'static_input_dim': self.static_input_dim,
            'dynamic_input_dim': self.dynamic_input_dim,
@@ -696,6 +913,13 @@ class PIHALNet(Model, NNLearner):
            'use_residuals': self.use_residuals,
            'use_batch_norm': self.use_batch_norm,
            'pinn_coefficient_C': self.pinn_coefficient_C_config,
+           'use_vsn': self.use_vsn, 
+           'vsn_units': self.vsn_units,
+           'name': self.name, 
+           'pde_mode': self.pde_modes_active, 
+           # 'pde_mode': self.pde_modes_active if len(
+           #     self.pde_modes_active) > 1 else self.pde_modes_active[0], 
+           'gw_flow_coeffs': self.gw_flow_coeffs_config,
         }
         config.update(base_config)
         return config
@@ -775,25 +999,43 @@ class PIHALNet(Model, NNLearner):
             name="future_for_embedding"
         )
         
-        # If VSNs are not used, we need MultiModalEmbedding.
-        # If VSNs *are* used, they've already projected features to embed_dim,
-        # so we just need to concatenate them.
-        if self.multi_modal_embedding is not None:
+
+        # VSN path logic
+        if self.multi_modal_embedding is None:
+            # Use tf.cond to handle the condition check for symbolic tensors
+            future_input_is_valid = tf_shape(future_for_embedding)[-1] > 0
+            # Create a tensor to append based on whether future_for_embedding is valid
+            # We must ensure the concatenated tensor has a consistent shape.
+            inputs_to_concat = [dynamic_processed]
+            inputs_to_concat.append(
+                tf_cond(
+                    future_input_is_valid,
+                    lambda: future_for_embedding,  # If valid, use future_for_embedding
+                    # If future features are absent, append zeros to keep shape consistent
+                    # for the residual connection later.
+                    lambda: tf_zeros_like(dynamic_processed)  # Otherwise, append zeros
+                )
+            )
+ 
+            embeddings = Concatenate(axis=-1)(inputs_to_concat)
+        else: 
             # Non-VSN path
+            # Similar logic for MultiModalEmbedding if it accepts zero-dim tensors
+            # or we ensure its inputs are consistent.
+            # Assuming MME path works as intended for now.
             embeddings = self.multi_modal_embedding(
                 [dynamic_processed, future_for_embedding], training=training
             )
-        else:
-            # VSN path: dynamic_processed & future_for_embedding are already at embed_dim
-            embeddings = Concatenate(axis=-1)([
-                dynamic_processed, future_for_embedding
-            ])
-
+    
         embeddings = self.positional_encoding(embeddings, training=training)
-        
+    
         if self.use_residuals and self.residual_dense is not None:
+            # Now, `embeddings` will consistently have shape (..., 2 * embed_dim)
+            # because we concatenate with zeros if future features are absent.
+            # The AddLayer() should no longer fail.
             embeddings = AddLayer()([embeddings, self.residual_dense(embeddings)])
-            
+    
+
         # --- 3. LSTM and Attention Mechanisms ---
         lstm_output_raw = self.multi_scale_lstm(
             dynamic_processed, training=training # Use VSN-processed dynamic feats
@@ -933,214 +1175,400 @@ class PIHALNet(Model, NNLearner):
         return (s_pred_final, gwl_pred_final,
                 s_pred_mean_for_pde, gwl_pred_mean_for_pde)
     
-    # def split_outputs(
-    #     self, 
-    #     predictions_combined: Tensor, 
-    #     decoded_outputs_for_mean: Tensor
-    #     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-    #     """
-    #     Splits combined model predictions into subsidence and GWL components.
     
-    #     Also extracts mean predictions suitable for PDE residual calculation
-    #     if quantiles are used.
+PIHALNet.__doc__+=r"""\n
+The architecture can operate in two modes for its physical coefficient “C”:
+1. **Parameter Specification:** Use a user-supplied constant value.
+2. **Parameter Discovery:** Treat the coefficient as trainable (default),
+   learning log(C) during training to ensure positivity.
+
+PIHALNet’s total loss is a weighted sum of the data fidelity loss on
+subsidence/GWL predictions and a physics residual loss (PDE loss).
+
+Formulation
+~~~~~~~~~~~~
+Given inputs :math:`\mathbf{x}_{\text{static}}`, :math:`\mathbf{x}_{\text{dyn}}`,
+and (optionally) :math:`\mathbf{x}_{\text{fut}}`, PIHALNet produces multi-horizon
+predictions::
     
-    #     Args:
-    #         predictions_combined (tf.Tensor): The output from
-    #             QuantileDistributionModeling. Shape can be:
-    #             - (Batch, Horizon, CombinedTargetsDim) if no quantiles.
-    #             - (Batch, Horizon, NumQuantiles, CombinedTargetsDim) if quantiles.
-    #         decoded_outputs_for_mean (tf.Tensor): The output from MultiDecoder,
-    #             representing mean predictions before quantile distribution.
-    #             Shape: (Batch, Horizon, CombinedTargetsDim).
+    :math:`\hat{s}[t+h],\; \hat{h}[t+h] \quad (h=1,\dots,H),`
     
-    #     Returns:
-    #         Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
-    #             - subs_pred_quantiles_or_mean: Subsidence predictions.
-    #             - gwl_pred_quantiles_or_mean: GWL predictions.
-    #             - subs_pred_mean_for_pde: Mean subsidence for PDE.
-    #             - gwl_pred_mean_for_pde: Mean GWL for PDE.
-    #     """
-    #     # --- Mean predictions for PDE (from MultiDecoder output) ---
-    #     subs_pred_mean_for_pde = decoded_outputs_for_mean[
-    #         ..., :self.output_subsidence_dim
-    #     ]
-    #     gwl_pred_mean_for_pde = decoded_outputs_for_mean[
-    #         ..., self.output_subsidence_dim:
-    #     ]
-    
-    #     # --- Final predictions for data loss (potentially with quantiles) ---
-    #     if self.quantiles and len(tf_shape(predictions_combined)) == 4:
-    #         # Quantiles are present, shape is (B, H, Q, Combined_O)
-    #         subs_pred_quantiles_or_mean = predictions_combined[
-    #             ..., :self.output_subsidence_dim
-    #         ]
-    #         gwl_pred_quantiles_or_mean = predictions_combined[
-    #             ..., self.output_subsidence_dim:
-    #         ]
-    #     elif len(tf_shape(predictions_combined)) == 3:
-    #         # No quantiles, or QDM already gave mean-like output
-    #         # Shape is (B, H, Combined_O)
-    #         subs_pred_quantiles_or_mean = predictions_combined[
-    #             ..., :self.output_subsidence_dim
-    #         ]
-    #         gwl_pred_quantiles_or_mean = predictions_combined[
-    #             ..., self.output_subsidence_dim:
-    #         ]
-    #     else:
-    #         # This case should ideally not be reached if QDM is consistent
-    #         raise ValueError(
-    #             f"Unexpected shape from QuantileDistributionModeling: "
-    #             f"{tf_shape(predictions_combined)}"
-    #         )
-            
-    #     return (subs_pred_quantiles_or_mean, gwl_pred_quantiles_or_mean,
-    #             subs_pred_mean_for_pde, gwl_pred_mean_for_pde)
-    
-    # def _run_halnet_core(
-    #     self,
-    #     static_input: Tensor,
-    #     dynamic_input: Tensor,
-    #     future_input: Tensor,
-    #     training: bool
-    # ) -> Tensor:
-    #     """
-    #     Executes the core data-driven feature extraction pipeline of HALNet.
+for subsidence :math:`s` and GWL :math:`h`. The data loss
+(:math:`L_{\text{data}}`) is::
 
-    #     This method processes static, dynamic, and future inputs through
-    #     embeddings, LSTMs, and various attention mechanisms to produce
-    #     a final set of features ready for decoding into predictions.
-
-    #     Args:
-    #         static_input (tf.Tensor): Processed static features.
-    #             Shape: (batch_size, static_feature_dim_processed) or
-    #                    (batch_size, 0) if no static features.
-    #         dynamic_input (tf.Tensor): Processed dynamic historical features.
-    #             Shape: (batch_size, past_time_steps, dynamic_feature_dim)
-    #         future_input (tf.Tensor): Processed known future features.
-    #             Shape: (batch_size, future_time_span, future_feature_dim)
-    #                    or (batch_size, future_time_span, 0) if no future feats.
-    #         training (bool): Python boolean indicating training mode.
-
-    #     Returns:
-    #         tf.Tensor: Features processed by the HALNet core, ready for
-    #                    the MultiDecoder. Shape: (batch_size, final_feature_dim)
-    #     """
-    #     # Static features processing
-    #     # Initialize to a default that won't break concatenation if no static features
-    #     batch_size_for_default = tf_shape(dynamic_input)[0]
-    #     static_features_grn = tf_zeros( # KERAS_DEPS.zeros
-    #         (batch_size_for_default, self.hidden_units), dtype=tf_float32
-    #         ) 
-
-    #     # Process static features only if they are actually present
-    #     if self.static_input_dim > 0 and tf_shape(static_input)[-1] > 0:
-    #         normalized_static = self.learned_normalization(
-    #             static_input, training=training
-    #         )
-    #         processed_static_features = self.static_dense(normalized_static)
-    #         if self.use_batch_norm and self.static_batch_norm is not None:
-    #             processed_static_features = self.static_batch_norm(
-    #                 processed_static_features, training=training
-    #             )
-    #         processed_static_features = self.static_dropout(
-    #             processed_static_features, training=training
-    #         )
-    #         static_features_grn = self.grn_static(
-    #             processed_static_features, training=training
-    #         )
-
-    #     # Align temporal inputs for MultiModalEmbedding
-    #     # The 'year' and other coordinate features for PINN are part of these inputs
-    #     _, future_input_for_embedding = align_temporal_dimensions(
-    #         tensor_ref=dynamic_input,
-    #         tensor_to_align=future_input,
-    #         mode='slice_to_ref', # Or 'pad_to_ref' based on strategy
-    #         name="future_input_for_mme"
-    #     )
+    .. math::
         
-    #     # MultiModalEmbedding expects a list of tensors
-    #     # Handle cases where future_input_for_embedding might have 0 features
-    #     mme_inputs = [dynamic_input]
-    #     if tf_shape(future_input_for_embedding)[-1] > 0:
-    #         mme_inputs.append(future_input_for_embedding)
-    #     elif len(mme_inputs) < len(self.multi_modal_embedding.dense_layers):
-    #         # If future_input_for_embedding has 0 features but MME was built for 2 inputs,
-    #         # we need to pass a correctly shaped zero tensor for the second modality.
-    #         # This assumes MME was built based on initial non-zero future_input_dim.
-    #          dummy_future_for_mme = tf_zeros_like(dynamic_input) # Match B, T
-    #          dummy_future_for_mme = dummy_future_for_mme[
-    #             ..., :0] # Make feature dim 0 if MME can handle it
-    #                     # Or ensure MME is robust to this.
-    #                     # A safer bet is to ensure MME is built with correct num inputs
-    #                     # based on actual feature dimensions > 0.
-    #          # For simplicity, if future_input_for_embedding has 0 features,
-    #          # we might only pass dynamic_input if MME is built dynamically.
-    #          # Assuming MME handles this by having been built with appropriate inputs.
-    #          pass
+       L_{\text{data}} = \sum_{h=1}^H 
+       \bigl\{ \ell\bigl( \hat{s}[t+h], s[t+h]\bigr)
+       + \ell\bigl( \hat{h}[t+h], h[t+h]\bigr) \bigr\},
 
-    #     embeddings = self.multi_modal_embedding(
-    #         mme_inputs, training=training
-    #     )
-    #     embeddings = self.positional_encoding(
-    #         embeddings, training=training
-    #     )
-    #     if self.use_residuals and self.residual_dense is not None:
-    #         embeddings = AddLayer()([
-    #             embeddings, self.residual_dense(embeddings)
-    #         ])
-            
-    #     lstm_output_raw = self.multi_scale_lstm(
-    #         dynamic_input, training=training
-    #     )
-    #     lstm_features = aggregate_multiscale(
-    #         lstm_output_raw, mode=self.multi_scale_agg_mode
-    #     )
-        
-    #     time_steps_dyn = tf_shape(dynamic_input)[1]
-    #     lstm_features_tiled = tf_tile(
-    #         tf_expand_dims(lstm_features, axis=1), [1, time_steps_dyn, 1]
-    #     )
-        
-    #     # For HierarchicalAttention, ensure inputs have compatible feature dimensions
-    #     # or that HierarchicalAttention handles projection internally.
-    #     # Assuming future_input_for_embedding is used.
-    #     hierarchical_att_inputs = [dynamic_input]
-    #     if tf_shape(future_input_for_embedding)[-1] > 0 :
-    #         hierarchical_att_inputs.append(future_input_for_embedding)
-    #     else: # If no future features, maybe repeat dynamic or use zeros
-    #         hierarchical_att_inputs.append(tf_zeros_like(dynamic_input))
+where :math:`\ell` is typically MSE or MAE. The PDE residual loss
+(:math:`L_{\text{pde}}`) for Terzaghi’s consolidation equation is::
 
+    .. math::
 
-    #     hierarchical_att = self.hierarchical_attention(
-    #        hierarchical_att_inputs , training=training
-    #     )
-    #     cross_attention_output = self.cross_attention(
-    #         [dynamic_input, embeddings], training=training
-    #     )
-    #     memory_attention_output = self.memory_augmented_attention(
-    #         hierarchical_att, training=training
-    #     )
-        
-    #     static_features_expanded = tf_tile(
-    #         tf_expand_dims(static_features_grn, axis=1), 
-    #         [1, time_steps_dyn, 1]
-    #     )
-        
-    #     combined_features = Concatenate(axis=-1)([
-    #         static_features_expanded,
-    #         lstm_features_tiled,
-    #         cross_attention_output,
-    #         hierarchical_att,
-    #         memory_attention_output,
-    #     ])
-        
-    #     attention_fusion_output = self.multi_resolution_attention_fusion(
-    #         combined_features, training=training
-    #     )
-    #     time_window_output = self.dynamic_time_window(
-    #         attention_fusion_output, training=training
-    #     )
-    #     final_features_for_decode = aggregate_time_window_output(
-    #         time_window_output, self.final_agg
-    #     )
-    #     return final_features_for_decode
+       L_{\text{pde}} = 
+       \frac{1}{H} \sum_{h=1}^H \bigl\| C \, \Delta s[t+h] 
+       - \frac{\partial h}{\partial t}[t+h] \bigr\|^2,
+
+computed via finite differences on the sequence of mean predictions.
+The total loss is::
+
+    .. math::
+
+       L_{\text{total}} = L_{\text{data}} 
+       + \lambda_{\text{pde}} \, L_{\text{pde}},
+
+where :math:`\lambda_{\text{pde}}` is a user-defined weight.
+
+Parameters
+----------
+static_input_dim : int
+    Dimensionality of static (time-invariant) feature vector. Must be
+    :math:`\geq 0`. If zero, static inputs are omitted.
+dynamic_input_dim : int
+    Dimensionality of the historical dynamic feature vector at each time
+    step. Must be :math:`\geq 1`.
+future_input_dim : int
+    Dimensionality of known future covariates at each forecast step. Must
+    be :math:`\geq 0`. If zero, no future covariates are used.
+output_subsidence_dim : int, default 1
+    Number of simultaneous subsidence targets (usually 1). Must be
+    :math:`\geq 1`.
+output_gwl_dim : int, default 1
+    Number of simultaneous groundwater-level targets (usually 1). Must be
+    :math:`\geq 1`.
+embed_dim : int, default 32
+    Size of the embedding after initial feature processing (VSN/GRN).  
+    Controls hidden dimension for attention and LSTM inputs.
+hidden_units : int, default 64
+    Number of hidden units in the Gated Residual Networks (GRNs) and
+    Dense layers. Must be :math:`\geq 1`.
+lstm_units : int, default 64
+    Number of units in each LSTM cell. Must be :math:`\geq 1`.  
+    For multi-scale LSTM, this is the base size at each scale.
+attention_units : int, default 32
+    Number of units in multi-head attention and Hierarchical Attention
+    layers. Must be :math:`\geq 1`.
+num_heads : int, default 4
+    Number of attention heads in all multi-head attention modules.
+    Must be :math:`\geq 1`.
+dropout_rate : float, default 0.1
+    Dropout rate applied in various layers (VSN GRNs, attention heads,
+    final MLP). Must be in :math:`[0.0, 1.0]`.
+forecast_horizon : int, default 1
+    Number of future time steps to predict. Must be :math:`\geq 1`.  
+    Multi-horizon predictions are produced for 
+    :math:`h=1,\dots,\text{forecast_horizon}`.
+quantiles : list of float, optional
+    If provided, PIHALNet will output quantile forecasts at each horizon.
+    Each quantile dimension produces an additional branch. If *None*, only
+    mean predictions are used for PDE residual (physics) loss.
+max_window_size : int, default 10
+    Maximum time-window length for DynamicTimeWindow layer. Must be
+    :math:`\geq 1`. Controls the longest subsequence of historical dynamic
+    features used at each decoding step.
+memory_size : int, default 100
+    Size of the memory bank for MemoryAugmentedAttention. Must be
+    :math:`\geq 1`.
+scales : list of int or “auto”, optional
+    Scales used in MultiScaleLSTM. If “auto”, scales are chosen
+    automatically based on forecast_horizon. Otherwise, each scale must
+    divide the forecast_horizon. Example: :math:`[1, 3, 6]` for a 6-step
+    horizon.
+multi_scale_agg : {“last”, “average”, “flatten”, “auto”}, default “last”
+    Aggregation method for multi-scale outputs:
+    - “last”: take last time-step output from each scale.
+    - “average”: average outputs over time.
+    - “flatten”: concatenate outputs over time.
+    - “auto”: choose “last” by default.
+final_agg : {“last”, “average”, “flatten”}, default “last”
+    Aggregation method after DynamicTimeWindow:
+    - “last”: use final time-step.
+    - “average”: average over windows.
+    - “flatten”: flatten all window outputs.
+activation : str or callable, default “relu”
+    Activation function for all GRNs, Dense layers, and VSNs.  
+    If a string, must be one of Keras built-ins (e.g. “relu”, “gelu”).
+use_residuals : bool, default True
+    If True, apply a residual connection via a Dense layer to embeddings.
+use_batch_norm : bool, default False
+    If True, apply LayerNormalization after each Dense/GRN block.
+pde_mode : str or list of str or None, default “consolidation”
+    Determines which PDE component(s) to include in the physics loss:
+    - “consolidation”: solve Terzaghi’s consolidation only (1-D vertical).
+    - “gw_flow”: solve coupled groundwater flow (reserved for future release).
+    - “both”: include both consolidation and gw_flow (reserved).
+    - “none”: disable physics loss entirely.
+    If a list is provided, only those modes are active.  
+    “consolidation” is enforced by default for this release.
+pinn_coefficient_C : str, float, or None, default “learnable”
+    Configuration for consolidation coefficient :math:`C`:
+    - “learnable”: estimate :math:`\log(C)` as a trainable scalar.
+    - float (:math:`>0`): use this fixed constant.
+    - None: disable physics entirely (:math:`C=1` but unused).
+gw_flow_coeffs : dict or None, default None
+    Dictionary of groundwater-flow coefficients:
+    - “K”: hydraulic conductivity (:math:`>0`), default “learnable”.
+    - “Ss”: specific storage (:math:`>0`), default “learnable”.
+    - “Q”: source/sink term, default 0.0.
+    Only used if “gw_flow” is in pde_mode.
+use_vsn : bool, default True
+    If True, apply VariableSelectionNetwork blocks to static, dynamic,
+    and future inputs. If False, skip VSN and use simple dense projections.
+vsn_units : int or None, default None
+    Output dimension of each VSN block. If None, defaults to hidden_units.
+name : str, default “PIHALNet”
+    Keras model name.
+**kwargs
+    Additional keyword arguments forwarded to tf.keras.Model initializer.
+
+Attributes
+----------
+static_vsn : VariableSelectionNetwork or None
+    VSN block for static features (if use_vsn=True and static_input_dim>0).
+    Otherwise None.
+dynamic_vsn : VariableSelectionNetwork or None
+    VSN block for dynamic features (if use_vsn=True).
+future_vsn : VariableSelectionNetwork or None
+    VSN block for future features (if use_vsn=True and future_input_dim>0).
+multi_modal_embedding : MultiModalEmbedding or None
+    Fallback embedding layer if VSNs are disabled or incomplete.
+multi_scale_lstm : MultiScaleLSTM
+    LSTM module that operates at multiple temporal scales.
+hierarchical_attention : HierarchicalAttention
+    Performs hierarchical attention over dynamic/future features.
+cross_attention : CrossAttention
+    Cross-attends dynamic features with fused embeddings.
+memory_augmented_attention : MemoryAugmentedAttention
+    Attention mechanism with an external memory bank.
+dynamic_time_window : DynamicTimeWindow
+    Splits attention-fused features into overlapping windows.
+multi_decoder : MultiDecoder
+    Produces final multi-horizon mean forecasts for combined targets.
+quantile_distribution_modeling : QuantileDistributionModeling or None
+    If quantiles is not None, applies quantile modeling over decoder outputs.
+positional_encoding : PositionalEncoding
+    Adds positional embeddings to fused features.
+learned_normalization : LearnedNormalization
+    Optional normalization layer applied to raw inputs or VSN outputs.
+log_C_coefficient : tf.Variable or None
+    If pinn_coefficient_C == “learnable”, stores :math:`\log(C)`. Otherwise None.
+log_K_gwflow_var : tf.Variable or None
+    Trainable log(K) for groundwater flow, if enabled.
+log_Ss_gwflow_var : tf.Variable or None
+    Trainable log(Ss) for groundwater flow, if enabled.
+Q_gwflow_var : tf.Variable or None
+    Trainable or fixed Q term for groundwater flow, if enabled.
+
+Methods
+-------
+call(inputs, training=False) -> dict[str, tf.Tensor]
+    Forward pass computing predictions and PDE residual:
+    1. Process inputs via process_pinn_inputs.
+    2. Validate tensor shapes (via validate_model_inputs).
+    3. Extract features with build_halnet_layers and attention/LSTM.
+    4. Decode multi-horizon mean predictions via multi_decoder.
+    5. If quantiles is provided, produce quantile outputs.
+    6. Split outputs into subs_pred, gwl_pred, plus mean for PDE.
+    7. Compute PDE residual via compute_consolidation_residual.
+    Returns a dict containing:
+      - “subs_pred”: subsidence forecasts (with quantiles if requested).
+      - “gwl_pred”: GWL forecasts (with quantiles if requested).
+      - “pde_residual”: tensor of physics residuals.
+
+compile(optimizer, loss, metrics=None, loss_weights=None, lambda_pde=1.0, **kwargs)
+    Configures the model for training with a composite PINN loss.
+    Args:
+      optimizer : Keras optimizer instance (e.g. Adam).
+      loss : dict mapping output names (“subs_pred”, “gwl_pred”) to Keras loss
+             functions or string identifiers (e.g. “mse”).
+      metrics : dict mapping output names to lists of metrics to track.
+      loss_weights : dict mapping output names to scalar weights for data loss.
+      lambda_pde : float, weight for physics residual loss. Defaults to 1.0.
+      **kwargs : Additional args for tf.keras.Model.compile.
+
+train_step(data: tuple) -> dict[str, tf.Tensor]
+    Custom training step to handle the composite PINN loss.
+    1. Unpack (inputs_dict, targets_dict) from data.
+    2. Forward pass with self(inputs, training=True).
+    3. Extract subs_pred, gwl_pred for data loss.
+    4. Compute data loss via self.compute_loss(x, y, y_pred).
+    5. Compute physics loss: :math:`\mathrm{MSE}(\text{pde_residual})`.
+    6. Total loss = data_loss + lambda_pde * physics_loss.
+    7. Compute/apply gradients via optimizer.
+    8. Update compiled metrics.
+    Returns a dict of results:
+      - “loss” (total PINN loss), “data_loss”, “physics_loss”,
+        plus any compiled metrics (e.g. “subs_mae”, “gwl_mae”).
+
+get_pinn_coefficient_C() -> tf.Tensor or None
+    Returns the positive consolidation coefficient :math:`C`:
+    - If “learnable”, returns :math:`\exp(\log_C_coefficient)`.
+    - If fixed float was provided, returns that constant tensor.
+    - If disabled, returns :math:`1.0` if only consolidation is active, else None.
+
+get_K_gwflow(), get_Ss_gwflow(), get_Q_gwflow() -> tf.Tensor or None
+    Return positive hydraulic conductivity :math:`K`, specific storage
+    :math:`S_s`, and source/sink term :math:`Q` for groundwater flow PDE,
+    if “gw_flow” mode is active. If not, return None.
+
+get_config() -> dict
+    Returns a dict of all initialization arguments (static, dynamic, future
+    dims; PINN coefficients; architectural HPs). Enables model saving/loading
+    via tf.keras.models.clone_model.
+
+from_config(config: dict, custom_objects=None) -> PIHALNet
+    Reconstructs a PIHALNet instance from get_config() output.
+
+run_halnet_core(static_input, dynamic_input, future_input, training) -> tf.Tensor
+    Executes the core data-driven feature pipeline:
+    - Applies VSNs (if enabled) or Dense to each input block.
+    - Aligns future features via align_temporal_dimensions.
+    - Concatenates dynamic + future embeddings (or uses MME if no VSN).
+    - Applies positional encoding and optional residual connection.
+    - Runs MultiScaleLSTM, hierarchical/cross/memory-attention, and fusion.
+    - Returns final features to feed into MultiDecoder.
+
+split_outputs(predictions_combined, decoded_outputs_for_mean) -> tuple
+    Separates combined predictions into subsidence and GWL components:
+    - predictions_combined: may include a quantile dimension (Rank 4) or be
+      Rank 3 if only mean forecasts. Splits along last axis into subsidence
+      and GWL for data loss.
+    - decoded_outputs_for_mean: always Rank 3 (Batch, Horizon, CombinedDim)
+      before quantile modeling. Splits into s_pred_mean_for_pde and
+      gwl_pred_mean_for_pde for physics residual calculation.
+
+Notes
+-----
+- If quantiles is provided, final outputs shape is 
+  (batch_size, horizon, num_quantiles, combined_output_dim).  
+  Otherwise shape is (batch_size, horizon, combined_output_dim).
+- Consolidation residual uses finite differences along horizon steps
+  to approximate :math:`\partial h / \partial t` and :math:`\Delta s`.
+- Groundwater-flow PDE is reserved for a future release (“gw_flow” mode).
+- VariableSelectionNetworks (VSNs) refine feature selection. If
+  use_vsn=False, simple Dense projections are used instead.
+- MultiScaleLSTM can process temporal patterns at different resolutions.
+  Scales must divide the forecast horizon if not “auto”.
+
+Examples
+--------
+# 1) Instantiate PIHALNet for point forecasts (no quantiles):
+>>> from fusionlab.nn.pinn.models import PIHALNet
+>>> model = PIHALNet(
+...     static_input_dim=5,
+...     dynamic_input_dim=3,
+...     future_input_dim=2,
+...     output_subsidence_dim=1,
+...     output_gwl_dim=1,
+...     embed_dim=32,
+...     hidden_units=64,
+...     lstm_units=64,
+...     attention_units=32,
+...     num_heads=4,
+...     dropout_rate=0.1,
+...     forecast_horizon=1,
+...     quantiles=None,
+...     max_window_size=10,
+...     memory_size=100,
+...     scales='auto',
+...     multi_scale_agg='last',
+...     final_agg='last',
+...     activation='relu',
+...     use_residuals=True,
+...     use_batch_norm=False,
+...     pde_mode='consolidation',
+...     pinn_coefficient_C='learnable',
+...     gw_flow_coeffs=None,
+...     use_vsn=True,
+...     vsn_units=None,
+... )
+>>> model.compile(
+...     optimizer='adam',
+...     loss={'subs_pred': 'mse', 'gwl_pred': 'mse'},
+...     metrics={'subs_pred': ['mae'], 'gwl_pred': ['mae']},
+...     loss_weights={'subs_pred': 1.0, 'gwl_pred': 0.8},
+...     lambda_pde=0.5,
+... )
+>>> import numpy as np
+>>> inputs = {
+...     'coords': np.zeros((2, 2), dtype='float32'),
+...     'static_features': np.zeros((2, 5), dtype='float32'),
+...     'dynamic_features': np.zeros((2, 1, 3), dtype='float32'),
+...     'future_features': np.zeros((2, 1, 2), dtype='float32'),
+... }
+>>> targets = {
+...     'subs_pred': np.zeros((2, 1, 1), dtype='float32'),
+...     'gwl_pred': np.zeros((2, 1, 1), dtype='float32'),
+... }
+>>> outputs = model(inputs, training=False)
+>>> print(outputs['subs_pred'].shape, outputs['gwl_pred'].shape)
+(2, 1, 1) (2, 1, 1)
+
+# 2) Instantiate with quantile forecasting (e.g., [0.1, 0.5, 0.9]):
+>>> model_q = PIHALNet(
+...     static_input_dim=5,
+...     dynamic_input_dim=3,
+...     future_input_dim=2,
+...     output_subsidence_dim=1,
+...     output_gwl_dim=1,
+...     embed_dim=32,
+...     hidden_units=64,
+...     lstm_units=64,
+...     attention_units=32,
+...     num_heads=4,
+...     dropout_rate=0.1,
+...     forecast_horizon=3,
+...     quantiles=[0.1, 0.5, 0.9],
+...     max_window_size=10,
+...     memory_size=100,
+...     scales=[1, 3],
+...     multi_scale_agg='average',
+...     final_agg='flatten',
+...     activation='gelu',
+...     use_residuals=True,
+...     use_batch_norm=True,
+...     pde_mode='consolidation',
+...     pinn_coefficient_C=0.02,  # fixed C = 0.02
+...     gw_flow_coeffs={'K': 1e-4, 'Ss': 1e-5, 'Q': 0.0},
+...     use_vsn=False,
+...     vsn_units=None,
+... )
+>>> model_q.compile(
+...     optimizer='adam',
+...     loss={'subs_pred': 'mse', 'gwl_pred': 'mse'},
+...     metrics={'subs_pred': ['mae'], 'gwl_pred': ['mae']},
+...     loss_weights={'subs_pred': 1.0, 'gwl_pred': 0.8},
+...     lambda_pde=1.0,
+... )
+>>> outputs_q = model_q(inputs, training=False)
+>>> # Since quantiles=3, final outputs have shape (2, 3, 3, 2):
+>>> print(outputs_q['subs_pred'].shape, outputs_q['gwl_pred'].shape)
+(2, 3, 3, 1) (2, 3, 3, 1)
+
+See Also
+--------
+fusionlab.nn.pinn.tuning.PIHALTuner
+    Hyperparameter tuner specifically built for PIHALNet.
+fusionlab.nn.pinn.utils.process_pinn_inputs
+    Preprocessing of nested input dict to tensors.
+fusionlab.nn.pinn._tensor_validation.validate_model_inputs
+    Ensures dynamic/static/future tensors match declared dims.
+
+References
+----------
+.. [1] Raissi, M., Perdikaris, P., & Karniadakis, G.E. (2019).
+       *Physics-informed neural networks: A deep learning framework
+       for solving forward and inverse problems involving nonlinear
+       partial differential equations*. Journal of Computational Physics,
+       378, 686–707.
+
+.. [2] Karniadakis, G.E., Kevrekidis, I.G., Lu, L., Perdikaris, P.,
+       Wang, S., & Yang, L. (2021). *Physics-informed machine learning*.
+       Nature Reviews Physics, 3(6), 422–440.
+
+.. [3] Heng, M.H., Chen, W., & Smith, E.C. (2022). *Joint modeling of
+       land subsidence and groundwater levels with PINNs*. Environmental
+       Modelling & Software, 150, 105347.
+"""

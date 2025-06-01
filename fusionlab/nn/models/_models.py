@@ -11,15 +11,15 @@ from numbers import Real, Integral
 from typing import List, Optional, Union, Dict, Any  
 import numpy as np 
 
-from .._fusionlog import fusionlog, OncePerMessageFilter
-from ..api.docs import _shared_docs, doc 
-from ..api.property import NNLearner 
-from ..compat.sklearn import validate_params, Interval, StrOptions 
-from ..core.handlers import param_deprecated_message 
-from ..utils.deps_utils import ensure_pkg
+from ..._fusionlog import fusionlog, OncePerMessageFilter
+from ...api.docs import _shared_docs, doc 
+from ...api.property import NNLearner 
+from ...compat.sklearn import validate_params, Interval, StrOptions 
+from ...core.handlers import param_deprecated_message 
+from ...utils.deps_utils import ensure_pkg
 # from ..decorators import Appender
 
-from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
+from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
  
 if KERAS_BACKEND:
     LSTM = KERAS_DEPS.LSTM
@@ -61,19 +61,19 @@ if KERAS_BACKEND:
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
-    from ..compat.tf import optional_tf_function 
-    from ._tensor_validation import validate_anomaly_scores 
-    from ._tensor_validation import validate_model_inputs
-    from ._tensor_validation import validate_anomaly_config 
-    from ._tensor_validation import align_temporal_dimensions
+    from ...compat.tf import optional_tf_function 
+    from .._tensor_validation import validate_anomaly_scores 
+    from .._tensor_validation import validate_model_inputs
+    from .._tensor_validation import validate_anomaly_config 
+    from .._tensor_validation import align_temporal_dimensions
     
-    from .losses import ( 
+    from ..losses import ( 
         combined_quantile_loss, 
         combined_total_loss, 
         prediction_based_loss
     )
-    from .utils import set_default_params
-    from .components import (
+    from ..utils import set_default_params
+    from ..components import (
             Activation, 
             AdaptiveQuantileLoss,
             AnomalyLoss,
@@ -100,6 +100,7 @@ DEP_MSG = dependency_message('nn.transformers')
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
+__all__=['HALNet']
 
 @register_keras_serializable('fusionlab.nn.transformers', name="HALNet")
 @doc (

@@ -78,6 +78,7 @@ if KERAS_BACKEND:
     Callback=KERAS_DEPS.Callback
     Tensor =KERAS_DEPS.Tensor
     Model =KERAS_DEPS.Model
+    
     tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor
     tf_float32 = KERAS_DEPS.float32
     tf_int32 = KERAS_DEPS.int32
@@ -117,8 +118,7 @@ __all__ = [
     "forecast_multi_step", 
     "forecast_single_step", 
     "step_to_long", 
-    "prepare_model_inputs"
-    
+    "prepare_model_inputs"  
    ]
 
 try:

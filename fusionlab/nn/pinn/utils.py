@@ -7,25 +7,17 @@ Physics-Informed Neural Network (PINN) Utility functions.
 """
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Optional, Dict #, Union, Any
+from typing import List, Tuple, Optional, Dict, Union#, Any
 import warnings # noqa 
 
 from ..._fusionlog import fusionlog
 from ...api.util import get_table_size 
-from ...core.checks import (
-    exist_features,
-    check_datetime,
-)
-
+from ...core.checks import exist_features, check_datetime
 from ...core.handlers import columns_manager
 from ...utils.validator import validate_positive_integer #, is_frame
 from ...decorators import isdf 
-from ...utils.generic_utils import ( 
-    print_box, 
-    vlog
-)
+from ...utils.generic_utils import print_box, vlog
 from ...utils.geo_utils import resolve_spatial_columns 
-
 from ...utils.io_utils import save_job 
 from .. import KERAS_BACKEND, KERAS_DEPS
 
@@ -35,7 +27,6 @@ else:
     Tensor = np.ndarray # Fallback for type hinting
 
 logger = fusionlog().get_fusionlab_logger(__name__)
-
 _TW = get_table_size()
 
 @isdf 
@@ -578,44 +569,218 @@ def prepare_pinn_data_sequences(
     
     return inputs_dict, targets_dict
 
+def process_pde_modes(
+    pde_mode: Union[str, list, None], 
+    enforce_consolidation: bool = False,
+    pde_mode_config: Union[str, list, None] = None, 
+    solo_return: bool=False, 
+) -> list:
+    """
+    Process and validate the `pde_mode` argument to determine the active PDE modes.
 
+    This function handles `pde_mode` inputs and processes them according to
+    the following rules:
+    - If the input is 'none', only the mode 'none' will be active.
+    - If the input is 'both', it will set both 'consolidation' and 'gw_flow'.
+    - If the input is not 'consolidation' and `enforce_consolidation` is True,
+      it will issue a warning and fallback to using only 'consolidation'.
+    - If `pde_mode_config` is provided, it overrides any other mode setting.
 
-# Example usage:
-# Assuming 'df' is your pandas DataFrame and you've defined all column names
+    Parameters
+    ----------
+    pde_mode : str, list of str, or None
+        The desired PDE modes. Can be:
+        - A string (e.g., 'consolidation', 'gw_flow', etc.)
+        - A list of strings (e.g., ['consolidation', 'gw_flow'])
+        - None (to set no active modes)
+    enforce_consolidation : bool, default=False
+        If True, the function ensures that 'consolidation' is the only
+        mode active and issues a warning if another mode is passed.
+    pde_mode_config : str, list of str, or None, optional
+        If provided, overrides the `pde_mode` argument.
 
-# # Define your column lists
-# time_c = 'year' # or your actual date column
-# lon_c = 'longitude'
-# lat_c = 'latitude'
-# subs_c = 'subsidence'
-# gwl_c = 'GWL'
-# dyn_cols = ['rainfall_mm', 'normalized_density', 'another_dynamic_feat'] # Example
-# stat_cols = ['geological_category_encoded', 'soil_thickness'] # Example
-# fut_cols = ['planned_pumping_rate'] # Example, known for future horizon
+    Returns
+    -------
+    list of str
+        A list of active PDE modes. The list will contain the modes in lowercase.
+        If 'none' or 'both' is specified, these will be processed according to the logic.
 
-# # If you have multiple sites, e.g., identified by 'site_id'
-# group_cols = ['site_id'] 
-# # If processing as one large dataset, group_cols = None
+    Raises
+    ------
+    TypeError
+        If `pde_mode` is neither a string, a list of strings, nor None.
 
-# inputs_data_dict, targets_data_dict = prepare_pinn_data_sequences(
-#     df=your_dataframe,
-#     time_col=time_c,
-#     lon_col=lon_c,
-#     lat_col=lat_c,
-#     subsidence_col=subs_c,
-#     gwl_col=gwl_c,
-#     dynamic_feature_cols=dyn_cols,
-#     static_feature_cols=stat_cols,
-#     future_feature_cols=fut_cols,
-#     group_id_cols=group_cols,
-#     time_steps=24, # e.g., 24 months lookback
-#     forecast_horizon=12, # e.g., predict 12 months ahead
-#     verbose=3 # Set verbosity level
-# )
+    Warnings
+    --------
+    If `enforce_consolidation` is True and a mode other than 'consolidation'
+    is passed, a warning will be issued, and 'consolidation' will be used
+    as the active mode instead.
+    """
+    # If pde_mode_config is provided, use it, otherwise fall back to pde_mode
+    if pde_mode_config:
+        pde_mode = pde_mode_config
 
-# These dictionaries can then be used to create a tf.data.Dataset
-# and fed into your PIHALNet model's fit() method.
-# For example:
-# train_dataset = tf.data.Dataset.from_tensor_slices(
-#     (inputs_data_dict, targets_data_dict)
-# ).batch(batch_size)
+    if isinstance(pde_mode, str):
+        pde_modes_active = [pde_mode.lower()]
+    elif isinstance(pde_mode, list):
+        pde_modes_active = [p_type.lower() for p_type in pde_mode]
+    elif pde_mode is None:
+        pde_modes_active = ['none']  # Explicitly 'none' if None is provided
+    else:
+        raise TypeError("`pde_mode` must be a string, list of strings, or None.")
+
+    # Handle special cases for "none" and "both"
+    if "none" in pde_modes_active:  # If 'none' is present, override others
+        pde_modes_active = ['none']
+    if "both" in pde_modes_active:  # If 'both' is present, use both modes
+        pde_modes_active = ['consolidation', 'gw_flow']
+
+    # Enforce consolidation mode if specified
+    if enforce_consolidation and 'consolidation' not in pde_modes_active:
+        warnings.warn(
+            "You have passed a mode other than 'consolidation'. "
+            "Falling back to 'consolidation' as the active mode.",
+            UserWarning
+        )
+        pde_modes_active = ['consolidation']
+
+    # Ensure 'consolidation' is the only active mode if it was defaulted,
+    # or if user explicitly selected only unsupported modes.
+    if any(unsupported in pde_modes_active 
+           for unsupported in ['gw_flow', 'both', 'none']) \
+       and 'consolidation' not in pde_modes_active:
+        # This case means decorator didn't force 'consolidation', so we do it here
+        logger.info(
+            f"Unsupported pde_mode '{pde_mode}' "
+            "selected without 'consolidation'. "
+            "PIHALNet will use 'consolidation' mode."
+        )
+        pde_modes_active = ['consolidation']
+
+    if solo_return: 
+        pde_modes_active = pde_modes_active[0]
+        
+    # Return the processed pde_modes_active
+    return pde_modes_active
+
+def check_and_rename_keys(inputs, y): # ranem to check_input_keys 
+    """
+    Helper function to check and rename keys in the inputs
+    and target dictionaries.
+
+    This function ensures that the necessary keys are present in both the 
+    `inputs` and `y` dictionaries. If the keys for 'subsidence' or 'gwl' 
+    are not found, it attempts to rename them from possible alternatives 
+    like 'subs_pred' or 'gwl_pred'.
+
+    Parameters
+    ----------
+    inputs : dict
+        A dictionary containing the input data. The keys 'coords' and 
+        'dynamic_features' are expected.
+        
+    y : dict
+        A dictionary containing the target values. The keys 'subsidence' 
+        and 'gwl' are expected, but they could also appear as 'subs_pred' 
+        or 'gwl_pred'.
+
+    Raises
+    ------
+    ValueError
+        If required keys are missing in `inputs` or `y`, or if renaming 
+        does not result in valid keys for 'subsidence' and 'gwl'.
+    """
+    
+    # Check if 'coords' and 'dynamic_features' are in inputs
+    if 'coords' not in inputs or inputs['coords'] is None:
+        raise ValueError("Input 'coords' is missing or None.")
+    if 'dynamic_features' not in inputs or inputs['dynamic_features'] is None:
+        raise ValueError("Input 'dynamic_features' is missing or None.")
+    
+    # Check for 'subsidence' in y, allow renaming from 'subs_pred'
+    # just check whether subsidence or subs_pred in y 
+    
+    if 'subsidence' not in y and 'subs_pred' in y:
+        y['subsidence'] = y.pop('subs_pred')
+    if 'subsidence' not in y:
+        # here by explicit to hel the 
+        raise ValueError("Target 'subsidence' is missing or None.") 
+        # use that user should provide subsidene or subs_pred 
+    
+    # Check for 'gwl' in y, allow renaming from 'gwl_pred'
+    # just check whether gwl or gwl_pred one,its in the y 
+    # 
+    if 'gwl_pred' not in y and 'gwl' in y:
+        # no need to rename yet, later this will handle si just check only 
+        y['gwl_pred'] = y.pop('gwl')  
+    if 'gwl' not in y:
+        raise ValueError("Target 'gwl' is missing or None.")
+    
+    return inputs, y
+
+def check_required_input_keys(inputs, y=None, message=None ):
+    """
+    Helper function to check and rename keys in the inputs
+    and target dictionaries.
+
+    This function ensures that the necessary keys are present in both the 
+    `inputs` and `y` dictionaries. If the keys for 'subsidence' or 'gwl' 
+    are not found, it attempts to rename them from possible alternatives 
+    like 'subs_pred' or 'gwl_pred'.
+
+    Parameters
+    ----------
+    inputs : dict
+        A dictionary containing the input data. The keys 'coords' and 
+        'dynamic_features' are expected.
+        
+    y : dict
+        A dictionary containing the target values. The keys 'subsidence' 
+        and 'gwl' are expected, but they could also appear as 'subs_pred' 
+        or 'gwl_pred'.
+        
+    message : str, optional 
+       Message to raise error when inputs/y are not dictionnary. 
+       
+    Raises
+    ------
+    ValueError
+        If required keys are missing in `inputs` or `y`, or if renaming 
+        does not result in valid keys for 'subsidence' and 'gwl'.
+    """
+    if inputs is not None: 
+        if not isinstance (inputs, dict): 
+            message = message or (
+                "Inputs must be a dictionnary containing"
+                " 'coords' and 'dynamic_features'."
+                f" Got {type(inputs).__name__!r}")
+            raise TypeError (message )
+        
+        # Check if 'coords' and 'dynamic_features' are in inputs
+        if 'coords' not in inputs or inputs['coords'] is None:
+            raise ValueError("Input 'coords' is missing or None.")
+        if 'dynamic_features' not in inputs or inputs['dynamic_features'] is None:
+            raise ValueError("Input 'dynamic_features' is missing or None.")
+    
+    if y is not None: 
+        if not isinstance (y, dict): 
+            message = message or (
+                "Target `y` must be a dictionnary containing"
+                " 'subs_pred/subsidence' and 'gwl/gwl_red'."
+                f" Got {type(y).__name__!r}"
+            )
+            raise TypeError (message)
+            
+        # Check for 'subsidence' in y, allow renaming from 'subs_pred'
+        if 'subsidence' not in y and 'subs_pred' not in y :
+            raise ValueError(
+                "Target 'subsidence' is missing or None."
+                " Please provide 'subsidence' or 'subs_pred'.")
+        
+        # Check for 'gwl' in y, allow renaming from 'gwl_pred'
+        if 'gwl' not in y and 'gwl_pred' not in y:
+            raise ValueError(
+                "Target 'gwl' is missing or None."
+                " Please provide 'gwl' or 'gwl_pred'.")
+    
+    return inputs, y

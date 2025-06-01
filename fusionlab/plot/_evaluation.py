@@ -22,7 +22,6 @@ from sklearn.metrics import (
     mean_absolute_percentage_error
 )
 
-
 from ..api.docs import DocstringComponents, _shared_metric_plot_params
 from ..api.types import ( 
     MetricFunctionType,

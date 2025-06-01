@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
+
 """
 Physics-Informed Neural Network (PINN) Operations
 and Helpers.
 """
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Callable
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...utils.deps_utils import ensure_pkg 
@@ -18,6 +19,10 @@ if KERAS_BACKEND:
     
     tf_concat = KERAS_DEPS.concat
     tf_square = KERAS_DEPS.square 
+    tf_name_scope = KERAS_DEPS.name_scope
+    tf_float32 =KERAS_DEPS.float32 
+    tf_constant = KERAS_DEPS.constant 
+    
 else:
     class Model:
         pass
@@ -190,7 +195,7 @@ def compute_gw_flow_residual(
 
     Examples
     --------
-    >>> from fusionlab.nn.pinn.models import compute_gw_flow_residual
+    >>> from fusionlab.nn.pinn.op import compute_gw_flow_residual
     >>> # Assume `net` is a tf.keras.Model and t,x,y are tf.Variables
     >>> res = compute_gw_flow_residual(
     ...     model=net,
@@ -406,3 +411,203 @@ def process_pinn_inputs(
         dynamic_features,
         future_features
     )
+
+def calculate_gw_flow_pde_residual_from_derivs(
+    dh_dt: Tensor,
+    d2h_dx2: Tensor,
+    d2h_dy2: Tensor,
+    K: Union[float, Tensor],
+    Ss: Union[float, Tensor],
+    Q: Union[float, Tensor] = 0.0,
+    name: Optional[str] = None
+) -> Tensor:
+    r"""
+    Calculates the residual of the 2D transient groundwater flow equation
+    using pre-computed derivatives.
+
+    This function is intended to be used within a PINN framework where
+    the derivatives of the hydraulic head :math:`h` with respect to time
+    :math:`t` and spatial coordinates :math:`x, y` have already been
+    computed (e.g., via automatic differentiation in the main model's
+    forward pass).
+
+    The implemented PDE is:
+
+    .. math::
+
+        S_s \frac{\partial h}{\partial t} = K \left( \frac{\partial^2 h}{\partial x^2} +
+        \frac{\partial^2 h}{\partial y^2} \right) + Q
+
+    The residual :math:`R` is therefore:
+
+    .. math::
+
+        R = K \left( \frac{\partial^2 h}{\partial x^2} +
+        \frac{\partial^2 h}{\partial y^2} \right) + Q - S_s \frac{\partial h}{\partial t}
+
+    Minimizing this residual (i.e., :math:`R \to 0`) at various
+    spatio-temporal collocation points enforces the physical law.
+
+    Parameters
+    ----------
+    dh_dt : tf.Tensor
+        First partial derivative of hydraulic head with respect to time
+        :math:`\left(\frac{\partial h}{\partial t}\right)`.
+        Shape should match the points where the residual is evaluated.
+    d2h_dx2 : tf.Tensor
+        Second partial derivative of hydraulic head with respect to x
+        :math:`\left(\frac{\partial^2 h}{\partial x^2}\right)`. Shape should match.
+    d2h_dy2 : tf.Tensor
+        Second partial derivative of hydraulic head with respect to y
+        :math:`\left(\frac{\partial^2 h}{\partial y^2}\right)`. Shape should match.
+    K : Union[float, tf.Tensor]
+        Hydraulic conductivity. Can be a scalar float, a tf.Tensor (if
+        spatially variable and predicted/provided), or a trainable
+        ``tf.Variable``.
+    Ss : Union[float, tf.Tensor]
+        Specific storage. Can be a scalar float, a tf.Tensor, or a
+        trainable ``tf.Variable``.
+    Q : Union[float, tf.Tensor], default 0.0
+        Source/sink term (e.g., recharge, pumping). Can be a scalar,
+        a tf.Tensor, or a trainable ``tf.Variable``.
+    name : str, optional
+        Optional name for the TensorFlow operations.
+
+    Returns
+    -------
+    tf.Tensor
+        A tensor representing the PDE residual at each input point.
+        Its shape will match the input derivative tensors.
+
+    Notes
+    -----
+    - All input tensors (derivatives, K, Ss, Q) are expected to be
+      broadcastable for element-wise operations.
+    - This function assumes isotropic hydraulic conductivity :math:`K`.
+      For anisotropic cases, the PDE and this function would need
+      modification.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> from fusionlab.nn.pinn.op import calculate_gw_flow_pde_residual_from_derivs
+    >>> B, N_points = 4, 100 # Batch size, number of collocation points
+    >>> dh_dt_vals = tf.random.normal((B, N_points, 1))
+    >>> d2h_dx2_vals = tf.random.normal((B, N_points, 1))
+    >>> d2h_dy2_vals = tf.random.normal((B, N_points, 1))
+    >>> K_val = tf.constant(1.5e-4)
+    >>> Ss_val = tf.constant(2.0e-5)
+    >>> Q_val = tf.constant(0.0)
+    >>> pde_residual = calculate_gw_flow_pde_residual_from_derivs(
+    ...     dh_dt_vals, d2h_dx2_vals, d2h_dy2_vals, K_val, Ss_val, Q_val
+    ... )
+    >>> print(f"PDE Residual shape: {pde_residual.shape}")
+    PDE Residual shape: (4, 100, 1)
+
+    """
+    if not KERAS_BACKEND:
+        raise RuntimeError(
+            "TensorFlow/Keras backend is required for this operation."
+        )
+
+    with tf_name_scope(name or "gw_flow_pde_residual"):
+        # Ensure inputs are tensors
+        K_tf = tf_constant(K, dtype=tf_float32) if isinstance(
+            K, (float, int)) else K
+        Ss_tf = tf_constant(Ss, dtype=tf_float32) if isinstance(
+            Ss, (float, int)) else Ss
+        Q_tf = tf_constant(Q, dtype=tf_float32) if isinstance(
+            Q, (float, int)) else Q
+
+        # Laplacian term: K * (d^2h/dx^2 + d^2h/dy^2)
+        laplacian_h = d2h_dx2 + d2h_dy2
+        diffusion_term = K_tf * laplacian_h
+
+        # Storage term: Ss * dh/dt
+        storage_term = Ss_tf * dh_dt
+        
+        # Source/sink term
+        source_term = Q_tf
+        
+        # PDE Residual: R = Diffusion + Source - Storage
+        pde_residual = diffusion_term + source_term - storage_term
+        
+    return pde_residual
+
+def compute_gw_flow_derivatives(
+    model_gwl_predictor_func: Callable[[Tensor, Tensor, Tensor], Tensor],
+    t: Tensor,
+    x: Tensor,
+    y: Tensor
+) -> Tuple[Optional[Tensor], Optional[Tensor], Optional[Tensor]]:
+    r"""
+    Computes first and second order derivatives of predicted hydraulic
+    head :math:`h` for the groundwater flow PDE using `tf.GradientTape`.
+
+    This function is designed to be called within a context where `t`, `x`,
+    and `y` are being watched by an outer `GradientTape` if necessary
+    (e.g., if parameters of `model_gwl_predictor_func` are being trained).
+    It primarily focuses on deriving :math:`\frac{\partial h}{\partial t}`,
+    :math:`\frac{\partial^2 h}{\partial x^2}`, and
+    :math:`\frac{\partial^2 h}{\partial y^2}`.
+
+    Args:
+        model_gwl_predictor_func (Callable[[tf.Tensor, tf.Tensor, tf.Tensor], tf.Tensor]):
+            A callable function (e.g., a part of a Keras model or a
+            lambda) that takes individual `t`, `x`, `y` coordinate tensors
+            (each typically of shape `(Batch, N_points, 1)`) and returns
+            the predicted hydraulic head `h_pred` (shape `(Batch, N_points, 1)`).
+            This function must be differentiable with respect to `t`, `x`, `y`.
+        t (tf.Tensor): Time coordinate tensor.
+        x (tf.Tensor): Spatial x-coordinate tensor (e.g., longitude).
+        y (tf.Tensor): Spatial y-coordinate tensor (e.g., latitude).
+
+    Returns:
+        Tuple[Optional[tf.Tensor], Optional[tf.Tensor], Optional[tf.Tensor]]:
+            A tuple containing:
+            - `dh_dt`: Derivative of h w.r.t. t.
+            - `d2h_dx2`: Second derivative of h w.r.t. x.
+            - `d2h_dy2`: Second derivative of h w.r.t. y.
+            Returns (None, None, None) if any primary gradient is None.
+    """
+    if not KERAS_BACKEND:
+        raise RuntimeError("TensorFlow/Keras backend required.")
+
+    dh_dt, d2h_dx2, d2h_dy2 = None, None, None
+
+    with GradientTape(persistent=True) as tape_h_derivs:
+        tape_h_derivs.watch([t, x, y])
+        
+        # For second derivatives, need to compute first derivatives inside this tape
+        with GradientTape(persistent=True) as tape_h_first_order:
+            tape_h_first_order.watch([t, x, y])
+            # Get h_pred from the specialized function/model part
+            h_pred_for_derivs = model_gwl_predictor_func(t, x, y)
+            # Ensure model output is watched if it's not directly from t,x,y
+            # (though it should be for this to work)
+            tape_h_first_order.watch(h_pred_for_derivs)
+
+        # First order derivatives
+        # We are interested in dh/dt for the PDE, and dh/dx, dh/dy for Laplacian
+        dh_dt = tape_h_first_order.gradient(h_pred_for_derivs, t)
+        dh_dx = tape_h_first_order.gradient(h_pred_for_derivs, x)
+        dh_dy = tape_h_first_order.gradient(h_pred_for_derivs, y)
+
+    if dh_dx is not None and dh_dy is not None:
+        d2h_dx2 = tape_h_derivs.gradient(dh_dx, x)
+        d2h_dy2 = tape_h_derivs.gradient(dh_dy, y)
+    else: # If first order spatial derivatives are None, second order will be too
+        logger.warning("Could not compute first-order spatial derivatives for GW flow PDE.")
+
+    del tape_h_derivs
+    del tape_h_first_order
+    
+    # Basic check for None gradients
+    if dh_dt is None:
+        logger.warning("dh/dt is None in compute_gw_flow_derivatives.")
+    if d2h_dx2 is None:
+        logger.warning("d2h/dx2 is None in compute_gw_flow_derivatives.")
+    if d2h_dy2 is None:
+        logger.warning("d2h/dy2 is None in compute_gw_flow_derivatives.")
+        
+    return dh_dt, d2h_dx2, d2h_dy2

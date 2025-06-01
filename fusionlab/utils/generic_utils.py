@@ -23,11 +23,13 @@ from typing import (
 import numpy as np 
 import pandas as pd 
 
-__all__ =['verify_identical_items', 'vlog', 'detect_dt_format',
-          'get_actual_column_name', 'transform_contributions', 
-          'exclude_duplicate_kwargs', 'reorder_columns',
-          'find_id_column', 'check_group_column_validity', 
-          'save_all_figures']
+__all__ =[
+    'verify_identical_items', 'vlog', 'detect_dt_format',
+    'get_actual_column_name', 'transform_contributions', 
+    'exclude_duplicate_kwargs', 'reorder_columns',
+    'find_id_column', 'check_group_column_validity', 
+    'save_all_figures', 'rename_dict_keys'
+ ]
 
 def check_group_column_validity(
     df: pd.DataFrame,
@@ -2267,4 +2269,92 @@ def are_all_values_in_bounds(
         return False # Returns False if error policy is 'warn' or 'ignore'
     else:
         return True
+
+def rename_dict_keys(data, param_to_rename=None):
+    """
+    Renames keys in the `data` dictionary based on 
+    the provided `param_to_rename` dictionary.
+    
+    This function will check if the key exists in the `data` dictionary.
+    If the key is present, it will be renamed according to the mapping 
+    provided in the `param_to_rename` dictionary. If the key is not found 
+    in `data` and a mapping exists in `param_to_rename`, the function will 
+    apply the rename. If no rename is required, the function will return the 
+    original dictionary.
+
+    Parameters
+    ----------
+    data : dict
+        The dictionary whose keys may be renamed. The function will iterate 
+        over the keys of this dictionary and rename them according to the 
+        mapping provided in `param_to_rename`.
+
+    param_to_rename : dict, optional
+        A dictionary mapping old keys to new keys. Each key in this dictionary 
+        represents an old key that may be found in `data`, and the corresponding 
+        value is the new key. If `None`, no renaming is performed. If a key in 
+        `data` matches an old key in `param_to_rename`, that key will be renamed.
+
+    Returns
+    -------
+    dict
+        The updated dictionary with keys renamed as per the `param_to_rename` 
+        mapping. If no keys need renaming, the original dictionary is returned.
+
+    Raises
+    ------
+    ValueError
+        If `param_to_rename` is not a dictionary, a `ValueError` will be raised.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import 
+    Example 1: Renaming a key in the dictionary:
+    
+    >>> data = {"subsidence": 100}
+    >>> param_to_rename = {"subsidence": "subs_pred"}
+    >>> rename_dict_keys(data, param_to_rename)
+    {'subs_pred': 100}
+    
+    Example 2: When the key is already valid (no change needed):
+    
+    >>> data = {"subs_pred": 100}
+    >>> param_to_rename = {"subsidence": "subs_pred"}
+    >>> rename_dict_keys(data, param_to_rename)
+    {'subs_pred': 100}
+    
+    Example 3: When `param_to_rename` is `None`, no renaming is performed:
+    
+    >>> data = {"subsidence": 100}
+    >>> rename_dict_keys(data)
+    {'subsidence': 100}
+
+    Notes
+    -----
+    - If `param_to_rename` is `None`, no renaming occurs, and the `data` 
+      dictionary is returned as is.
+    - This function raises an error if `param_to_rename` is not a dictionary. 
+      Ensure that the parameter is a valid dictionary of old-to-new key mappings.
+    """
+    
+    if param_to_rename is None:
+        return data  # If no param_to_rename, return data as is
+    
+    # Ensure param_to_rename is a dictionary
+    if not isinstance(param_to_rename, dict):
+        raise ValueError(
+            "param_to_rename must be a dictionary.")
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"data must be a dictionary. Got {type(data).__name__!r}")
+        
+    # Create a copy of data to avoid modifying the original
+    updated_data = data.copy()
+    
+    # Rename keys based on param_to_rename mapping
+    for old_key, new_key in param_to_rename.items():
+        if old_key in updated_data:
+            updated_data[new_key] = updated_data.pop(old_key)
+    
+    return updated_data
 

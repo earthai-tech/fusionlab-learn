@@ -4,7 +4,7 @@
 Introduction
 ==============
 
-Welcome to the ``fusionlab`` user guide! This section provides a
+Welcome to the ``fusionlab-learn`` user guide! This section provides a
 conceptual overview of the models and techniques implemented in the
 library, focusing on advanced time series forecasting.
 
@@ -19,9 +19,9 @@ Real-world time series data often presents significant hurdles:
     trends, and irregular cycles that are hard to model.
 * **Multiple Inputs:** Effective forecasting often requires using
     various types of features:
+    
     * *Past Values:* Historical target values and covariates.
-    * *Known Future Inputs:* Events or values known in advance
-      (e.g., holidays, promotions).
+    * *Known Future Inputs:* Events or values known in advance (e.g., holidays, promotions).
     * *Static Metadata:* Time-invariant features (e.g., store ID,
       sensor location).
 * **Multi-Horizon Needs:** Often, predictions are needed for
@@ -57,7 +57,7 @@ attention) with specialized components for time series:
 ----------------------------------------
 
 While TFT provides a powerful baseline, real-world data can push
-its limits. ``fusionlab`` provides robust implementations of TFT
+its limits. ``fusionlab-learn`` provides robust implementations of TFT
 and goes further by offering **XTFT (Extreme Temporal Fusion
 Transformer)**, an enhanced architecture designed for even greater
 complexity and performance.
@@ -80,7 +80,7 @@ XTFT builds upon TFT by incorporating several advanced modules:
 Modularity at its Core
 ------------------------
 
-A key philosophy of ``fusionlab`` is **modularity**. Both TFT and
+A key philosophy of ``fusionlab-learn`` is **modularity**. Both TFT and
 XTFT are constructed from reusable building blocks (available in
 :doc:`components`). This design allows researchers and practitioners
 to:

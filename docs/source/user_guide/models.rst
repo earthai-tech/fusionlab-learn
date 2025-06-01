@@ -4,7 +4,7 @@
 Available Models
 =================
 
-``fusionlab`` provides several implementations of advanced time
+``fusionlab-learn`` provides several implementations of advanced time
 series forecasting models. This section details the main model
 classes available, their characteristics, and typical use cases.
 
@@ -596,7 +596,7 @@ The main distinctions in the formulation are:
 
 XTFT (Extreme Temporal Fusion Transformer)
 --------------------------------------------
-:API Reference: :class:`~fusionlab.nn.XTFT`
+:API Reference: :class:`~fusionlab.nn.transformers.XTFT`
 
 The ``XTFT`` model represents a significant evolution of the Temporal
 Fusion Transformer, designed to tackle highly complex time series
@@ -797,7 +797,7 @@ and the documentation of individual components (linked above).
 
 SuperXTFT
 -----------
-:API Reference: :class:`~fusionlab.nn.SuperXTFT`
+:API Reference: :class:`~fusionlab.nn.transformers.SuperXTFT`
 
 .. warning::
    ``SuperXTFT`` is currently considered **experimental** and may be
