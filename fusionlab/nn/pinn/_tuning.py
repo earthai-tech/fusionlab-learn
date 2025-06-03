@@ -66,15 +66,15 @@ if KERAS_BACKEND:
     EarlyStopping = KERAS_DEPS.EarlyStopping
     
 else:
-    class Model: pass # Dummy
-    class Callback: pass # Dummy
-    class Adam: pass # Dummy
-    class EarlyStopping: pass # Dummy
+    class Model: pass 
+    class Callback: pass 
+    class Adam: pass 
+    class EarlyStopping: pass 
 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 
-class PINNTunerBase(kt.HyperModel):
+class PINNTunerBase(kt.HyperModel, BaseClass):
     """
     Base class for hyperparameter tuning of Physics-Informed Neural
     Networks (PINNs) like PIHALNet, using Keras Tuner.
@@ -127,7 +127,7 @@ class PINNTunerBase(kt.HyperModel):
     @ensure_pkg(
         "keras_tuner",
         extra="'keras_tuner' is required for model tuning.",
-        auto_install=config.INSTALL_DEPS, # Assuming config is available
+        auto_install=config.INSTALL_DEPS, 
         use_conda=config.USE_CONDA
     )
     def __init__(
@@ -147,7 +147,7 @@ class PINNTunerBase(kt.HyperModel):
                 "keras_tuner is not installed. Please run "
                 "`pip install keras-tuner` to use this tuning class."
             )
-        super().__init__() # kt.HyperModel __init__
+        super().__init__() 
         
         self.objective = objective
         self.max_trials = max_trials

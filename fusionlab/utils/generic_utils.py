@@ -12,6 +12,7 @@ import warnings
 import inspect
 import textwrap
 from numbers import Real 
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 from datetime import datetime
@@ -24,12 +25,177 @@ import numpy as np
 import pandas as pd 
 
 __all__ =[
+    'ExistenceChecker', 'ensure_directory_exists', 
     'verify_identical_items', 'vlog', 'detect_dt_format',
     'get_actual_column_name', 'transform_contributions', 
     'exclude_duplicate_kwargs', 'reorder_columns',
     'find_id_column', 'check_group_column_validity', 
     'save_all_figures', 'rename_dict_keys'
  ]
+
+
+class ExistenceChecker:
+    """
+    A utility class for checking and ensuring the existence of files
+    and directories on the filesystem.
+
+    This class provides static methods to verify whether a given path
+    exists and to create directories or files if necessary. It raises
+    informative exceptions when paths are invalid or cannot be created.
+
+    Methods
+    -------
+    ensure_directory(path)
+        Ensure a directory exists at the specified path.
+    ensure_file(path, create_parent_dirs=False)
+        Ensure a file exists at the specified path, optionally creating
+        parent directories.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import ExistenceChecker
+    >>> # Ensure a directory exists
+    >>> dir_path = ExistenceChecker.ensure_directory("data/output")
+    >>> isinstance(dir_path, Path)
+    True
+    >>> # Ensure a file exists, creating parent directories
+    >>> file_path = ExistenceChecker.ensure_file(
+    ...     "data/output/results.txt", create_parent_dirs=True
+    ... )
+    >>> file_path.exists()
+    True
+
+    Notes
+    -----
+    - Uses `pathlib.Path.mkdir(..., parents=True, exist_ok=True)` under
+      the hood to create directories.
+    - Creating a file will produce an empty file if it does not exist.
+    - Raises TypeError if the given path is not a str or pathlib.Path,
+      and appropriate OSError/FileExistsError for filesystem errors.
+
+    See Also
+    --------
+    pathlib.Path.mkdir : Method to create directories.
+    pathlib.Path.touch : Method to create an empty file.
+    os.makedirs : Legacy function for creating directories recursively.
+    os.path.exists : Check if a path exists.
+    """
+
+    @staticmethod
+    def ensure_directory(path):
+        """
+        Ensure that a directory exists at the given path, creating it if
+        needed.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            The filesystem path for which to ensure directory existence.
+            Can be either a string or a `pathlib.Path` object.
+
+        Returns
+        -------
+        pathlib.Path
+            A `Path` object pointing to the existing (or newly created)
+            directory.
+
+        Raises
+        ------
+        TypeError
+            If `path` is not a string or `pathlib.Path`.
+        FileExistsError
+            If a file (not a directory) already exists at `path`.
+        OSError
+            If the directory cannot be created for any other reason
+            (e.g., insufficient permissions).
+        """
+        # Validate type
+        if not isinstance(path, (str, Path)):
+            raise TypeError("`path` must be a str or pathlib.Path, got "
+                            f"{type(path).__name__!r}")
+
+        dir_path = Path(path)
+
+        # If it exists and is a directory, return immediately
+        if dir_path.exists():
+            if dir_path.is_dir():
+                return dir_path
+            else:
+                # A non-directory file exists at this path
+                raise FileExistsError(f"A non-directory file exists at: "
+                                      f"{dir_path}")
+
+        # Attempt to create the directory (including parents)
+        try:
+            dir_path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise OSError(f"Unable to create directory {dir_path}: {exc}") \
+                from exc
+
+        return dir_path
+
+    @staticmethod
+    def ensure_file(path, create_parent_dirs=False):
+        """
+        Ensure that a file exists at the given path, creating it if needed.
+
+        If `create_parent_dirs` is True, any missing parent directories will
+        be created automatically.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path
+            The filesystem path for the file that must exist.
+        create_parent_dirs : bool, optional
+            If True, create any missing parent directories. Default is False.
+
+        Returns
+        -------
+        pathlib.Path
+            A `Path` object pointing to the existing (or newly created)
+            file.
+
+        Raises
+        ------
+        TypeError
+            If `path` is not a string or `pathlib.Path`.
+        FileExistsError
+            If a directory (not a file) already exists at `path`.
+        OSError
+            If the file or parent directories cannot be created due to
+            filesystem errors.
+        """
+        # Validate type
+        if not isinstance(path, (str, Path)):
+            raise TypeError("`path` must be a str or pathlib.Path, got "
+                            f"{type(path).__name__!r}")
+
+        file_path = Path(path)
+
+        # If it exists and is a file, return immediately
+        if file_path.exists():
+            if file_path.is_file():
+                return file_path
+            else:
+                # A directory exists at this path
+                raise FileExistsError(f"A directory exists at: {file_path}")
+
+        # Create parent directories if requested
+        parent_dir = file_path.parent
+        if create_parent_dirs and not parent_dir.exists():
+            try:
+                parent_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise OSError(f"Unable to create parent directories {parent_dir}: "
+                              f"{exc}") from exc
+
+        # Attempt to create the file
+        try:
+            file_path.touch(exist_ok=True)
+        except OSError as exc:
+            raise OSError(f"Unable to create file {file_path}: {exc}") from exc
+
+        return file_path
 
 def check_group_column_validity(
     df: pd.DataFrame,
@@ -755,7 +921,8 @@ def vlog(
     level: int = 3,
     depth: Union[int, str] = "auto",
     mode:Optional[str]=None,
-    vp: bool=True
+    vp: bool=True, 
+    logger=None, 
 ):
     """
     Log or naive messages with optional indentation and
@@ -808,12 +975,15 @@ def vlog(
         Otherwise (if ``None`` or ``'naive'``), it
         follows a custom logic driven by `<parameter
         inline> verbose`.
+    
     vp : bool, default=True
         If ``True``, the function automatically prepends
         bracketed tags (e.g. [INFO]) unless the message
         already contains one of [INFO], [DEBUG], [ERROR],
         [WARNING], or [TRACE].
-
+    logger: Logging instance, optional 
+       For future extensions.
+       
     Returns
     -------
     None
@@ -2358,3 +2528,80 @@ def rename_dict_keys(data, param_to_rename=None):
     
     return updated_data
 
+def ensure_directory_exists(path):
+    """
+    Ensure that a directory exists at the given path, creating it if needed.
+
+    This function checks whether the provided `path` exists and is a
+    directory. If the path does not exist, it attempts to create the
+    directory (including any necessary parent directories). If a file
+    with the same name already exists, or if creation fails, an exception
+    is raised.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The filesystem path for which to ensure directory existence. Can be
+        either a string or a `pathlib.Path` object.
+
+    Returns
+    -------
+    pathlib.Path
+        A `Path` object pointing to the existing (or newly created)
+        directory.
+
+    Raises
+    ------
+    TypeError
+        If `path` is not a string or `pathlib.Path`.
+    FileExistsError
+        If a file (not a directory) already exists at `path`.
+    OSError
+        If the directory cannot be created for any other reason (e.g.,
+        insufficient permissions).
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> from fusionlab.utils.generic_utils import ensure_directory_exists
+    >>> output_dir = ensure_directory_exists("data/output")
+    >>> isinstance(output_dir, Path)
+    True
+    >>> # The directory "data/output" now exists on disk.
+
+    Notes
+    -----
+    - Uses `pathlib.Path.mkdir(..., parents=True, exist_ok=True)` under the
+      hood for cross-platform compatibility.
+    - If `path` already exists as a directory, this function returns
+      immediately without modifying it.
+
+    See Also
+    --------
+    pathlib.Path.mkdir : Method to create a directory.
+    os.makedirs : Legacy function for creating directories recursively.
+    """
+    # Validate type
+    if not isinstance(path, (str, Path)):
+        raise TypeError("`path` must be a str or pathlib.Path, got "
+                        f"{type(path).__name__!r}")
+
+    # Convert to Path
+    dir_path = Path(path)
+
+    # If it exists and is a directory, return immediately
+    if dir_path.exists():
+        if dir_path.is_dir():
+            return dir_path
+        else:
+            # A non-directory file exists at this path
+            raise FileExistsError(
+                f"A non-directory file exists at: {dir_path}")
+
+    # Attempt to create the directory (including parents)
+    try:
+        dir_path.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OSError(f"Unable to create directory {dir_path}: {exc}") from exc
+
+    return dir_path

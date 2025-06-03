@@ -11,7 +11,7 @@ Utilities for diagnosing and validating quantile-related operations
 within FusionLab. Provides functions to handle, validate, and parse
 quantile data structures, ensuring compatibility with expected formats.
 """
-
+from __future__ import annotations 
 import re
 import warnings
 import operator
