@@ -78,7 +78,7 @@ if KERAS_BACKEND:
     from .._tensor_validation import align_temporal_dimensions
     
 
-    from ..utils import set_default_params
+    from ..utils import set_default_params, squeeze_last_dim_if #noqa
     from ..components import (
             Activation, 
             CrossAttention,
@@ -500,146 +500,7 @@ class PIHALNet(Model, NNLearner):
     def get_pinn_coefficient_C(self) -> Tensor:
         """Returns the physical coefficient C."""
         return self._get_C()
-        
-
-    # XXX TODO: For future release with gwl_flow config 
-    def _create_log_coefficient(
-        self, config_value: Union[str, float, None],
-        default_initial_value: float, name: str
-        ) -> Optional[Variable]:
-        """
-        Helper to create a learnable (log-space) or fixed coefficient.
-        If fixed, it's stored as log(value) for consistent exp() access.
-        Returns None if config_value is None.
-        """
-        if config_value == 'learnable':
-            return self.add_weight(
-                name=f"log_{name}", shape=(),
-                initializer=Constant(
-                    tf_log(default_initial_value)
-                ),
-                trainable=True, dtype=tf_float32
-            )
-        elif isinstance(config_value, (float, int)):
-            if config_value <= 0:
-                logger.warning(
-                    f"Coefficient for '{name}' received fixed value {config_value}."
-                    " PINN coefficients like K, Ss, C are typically positive. "
-                    "Using log(abs(value) + epsilon) for stability."
-                )
-                # Store log of the (abs + epsilon) value, non-trainable
-                val_to_log = abs(config_value) + 1e-9 # ensure positive for log
-            else:
-                val_to_log = float(config_value)
-                
-            return tf_constant(tf_log(val_to_log), dtype=tf_float32)
-        
-        elif config_value is None:
-            return None # Explicitly no coefficient defined by user
-        else:
-            raise ValueError(
-                f"Invalid config for {name}: {config_value}. "
-                "Expected 'learnable', a number, or None."
-            )
-            
-    def _create_direct_coefficient(
-        self, config_value: Union[str, float, None],
-        default_initial_value: float, name: str
-        ) -> Optional[Union[Variable, Tensor]]:
-        """
-        Helper to create a learnable or fixed coefficient directly (not in log-space).
-        Returns None if config_value is None.
-        """
-        if config_value == 'learnable':
-            return self.add_weight(
-                name=name, shape=(),
-                initializer=Constant(default_initial_value),
-                trainable=True, dtype=tf_float32
-            )
-        elif isinstance(config_value, (float, int)):
-            return tf_constant(float(config_value), dtype=tf_float32)
-        
-        elif config_value is None:
-            return None
-        else:
-            raise ValueError(
-                f"Invalid config for {name}: {config_value}. "
-                "Expected 'learnable', a number, or None."
-            )
-
-    def __build_pinn_components(self):
-        """
-        Instantiates trainable/fixed physical coefficients based on config.
-        """
-        self._is_unique_consolidation =False 
-        # --- Coefficient C for Consolidation ---
-        if 'consolidation' in self.pde_modes_active:
-            self.log_C_consolidation_var = self._create_log_coefficient(
-                config_value=self.pinn_coefficient_C_config,
-                default_initial_value=0.01, # C ~ 0.01
-                name="coeff_C_consolidation"
-            )
-        else:
-            self.log_C_consolidation_var = None
-        # --- Coefficients K, Ss, Q for Groundwater Flow ---
-        if 'gw_flow' in self.pde_modes_active:
-            # Use defaults if gw_flow_coeffs_config is empty or keys are missing
-            k_config = self.gw_flow_coeffs_config.get('K', 'learnable')
-            ss_config = self.gw_flow_coeffs_config.get('Ss', 'learnable')
-            q_config = self.gw_flow_coeffs_config.get('Q', 0.0) # Default Q = 0.0
-
-            self.log_K_gwflow_var = self._create_log_coefficient(
-                config_value=k_config,
-                default_initial_value=1e-4, # K ~ 1e-4 m/s
-                name="coeff_K_gwflow"
-            )
-            self.log_Ss_gwflow_var = self._create_log_coefficient(
-                config_value=ss_config,
-                default_initial_value=1e-5, # Ss ~ 1e-5 1/m
-                name="coeff_Ss_gwflow"
-            )
-            self.Q_gwflow_var = self._create_direct_coefficient(
-                config_value=q_config,
-                default_initial_value=0.0,
-                name="coeff_Q_gwflow"
-            )
-        else:
-            self.log_K_gwflow_var = None
-            self.log_Ss_gwflow_var = None
-            self.Q_gwflow_var = None
-            self._is_unique_consolidation =True 
-
-    # --- Getter Methods for Physical Coefficients ---
-    def get_C_consolidation(self) -> Optional[Tensor]:
-        """Returns the positive physical coefficient C for consolidation."""
-        if self.log_C_consolidation_var is None:
-            if self._is_unique_consolidation:
-                # Physics is disabled, C is effectively 1 but will not be used
-                # if lambda_pde is 0 in compile()
-                return tf_constant(1.0, dtype=tf_float32)
-            
-            return None
-        
-        return tf_exp(self.log_C_consolidation_var)
-
-    def get_K_gwflow(self) -> Optional[Tensor]:
-        """Returns positive Hydraulic Conductivity K for groundwater flow."""
-        if self.log_K_gwflow_var is None:
-            return None
-        return tf_exp(self.log_K_gwflow_var)
-
-    def get_Ss_gwflow(self) -> Optional[Tensor]:
-        """Returns positive Specific Storage Ss for groundwater flow."""
-        if self.log_Ss_gwflow_var is None:
-            return None
-        return tf_exp(self.log_Ss_gwflow_var)
-
-    def get_Q_gwflow(self) -> Optional[Tensor]:
-        """Returns Source/Sink term Q for groundwater flow."""
-        return self.Q_gwflow_var
-
-    # XXX TODO : End groundwater flow config 
-    
+ 
     @tf_autograph.experimental.do_not_convert
     def call(
         self,
@@ -680,7 +541,7 @@ class PIHALNet(Model, NNLearner):
             static_input_dim=self.static_input_dim,
             dynamic_input_dim=self.dynamic_input_dim,
             future_covariate_dim=self.future_input_dim,
-            forecast_horizon=self.forecast_horizon,
+            # forecast_horizon=self.forecast_horizon,
             mode='strict',
             verbose=0 # Set to 1 for more detailed logging from validator
         )
@@ -754,40 +615,13 @@ class PIHALNet(Model, NNLearner):
         
         # =====================================================================
         # XXX TODO: 
-        # # 4a. Consolidation Residual (Finite Differences on Output Sequence)
-        # if 'consolidation' in self.pde_modes_active:
-        #     logger.debug("Computing consolidation PDE residual.")
-        #     C_consol = self.get_C_consolidation()
-        #     if C_consol is not None and self.forecast_horizon > 1:
-        #         pde_residuals_dict['consolidation'] = compute_consolidation_residual(
-        #             s_pred=s_pred_mean_for_pde,
-        #             h_pred=gwl_pred_mean_for_pde,
-        #             time_steps=t_coords_horizon, # Time sequence for the horizon
-        #             C=C_consol
-        #         )
-        #     else:
-        #         pde_residuals_dict['consolidation'] = tf_zeros_like(s_pred_mean_for_pde)
-        #         if C_consol is None:
-        #             logger.warning("Consolidation C coefficient is None. Residual set to 0.")
-        #         if self.forecast_horizon <= 1:
-        #             logger.warning("Forecast horizon <= 1, consolidation residual set to 0.")
-        
-        # # 4b. Groundwater Flow Residual (Analytical Derivatives via Autodiff)
-        # if 'gw_flow' in self.pde_modes_active:
-        #     logger.debug("Computing groundwater flow PDE residual.")
-        #     K_gw = self.get_K_gwflow()
-        #     Ss_gw = self.get_Ss_gwflow()
-        #     Q_gw = self.get_Q_gwflow()
-        #     ....
-        # ====================================================================
-
         # --- 6. Return All Components for Loss Calculation ---
         return {
             "subs_pred": s_pred_final,
             "gwl_pred": gwl_pred_final,
             "pde_residual": pde_residual,
         }
-
+        
 
     def compile(
         self, 
@@ -1175,6 +1009,143 @@ class PIHALNet(Model, NNLearner):
         return (s_pred_final, gwl_pred_final,
                 s_pred_mean_for_pde, gwl_pred_mean_for_pde)
     
+    # XXX TODO: For future release with gwl_flow config 
+    # def _create_log_coefficient(
+    #     self, config_value: Union[str, float, None],
+    #     default_initial_value: float, name: str
+    #     ) -> Optional[Variable]:
+    #     """
+    #     Helper to create a learnable (log-space) or fixed coefficient.
+    #     If fixed, it's stored as log(value) for consistent exp() access.
+    #     Returns None if config_value is None.
+    #     """
+    #     if config_value == 'learnable':
+    #         return self.add_weight(
+    #             name=f"log_{name}", shape=(),
+    #             initializer=Constant(
+    #                 tf_log(default_initial_value)
+    #             ),
+    #             trainable=True, dtype=tf_float32
+    #         )
+    #     elif isinstance(config_value, (float, int)):
+    #         if config_value <= 0:
+    #             logger.warning(
+    #                 f"Coefficient for '{name}' received fixed value {config_value}."
+    #                 " PINN coefficients like K, Ss, C are typically positive. "
+    #                 "Using log(abs(value) + epsilon) for stability."
+    #             )
+    #             # Store log of the (abs + epsilon) value, non-trainable
+    #             val_to_log = abs(config_value) + 1e-9 # ensure positive for log
+    #         else:
+    #             val_to_log = float(config_value)
+                
+    #         return tf_constant(tf_log(val_to_log), dtype=tf_float32)
+        
+    #     elif config_value is None:
+    #         return None # Explicitly no coefficient defined by user
+    #     else:
+    #         raise ValueError(
+    #             f"Invalid config for {name}: {config_value}. "
+    #             "Expected 'learnable', a number, or None."
+    #         )
+            
+    # def _create_direct_coefficient(
+    #     self, config_value: Union[str, float, None],
+    #     default_initial_value: float, name: str
+    #     ) -> Optional[Union[Variable, Tensor]]:
+    #     """
+    #     Helper to create a learnable or fixed coefficient directly (not in log-space).
+    #     Returns None if config_value is None.
+    #     """
+    #     if config_value == 'learnable':
+    #         return self.add_weight(
+    #             name=name, shape=(),
+    #             initializer=Constant(default_initial_value),
+    #             trainable=True, dtype=tf_float32
+    #         )
+    #     elif isinstance(config_value, (float, int)):
+    #         return tf_constant(float(config_value), dtype=tf_float32)
+        
+    #     elif config_value is None:
+    #         return None
+    #     else:
+    #         raise ValueError(
+    #             f"Invalid config for {name}: {config_value}. "
+    #             "Expected 'learnable', a number, or None."
+    #         )
+
+    # def __build_pinn_components(self):
+    #     """
+    #     Instantiates trainable/fixed physical coefficients based on config.
+    #     """
+    #     self._is_unique_consolidation =False 
+    #     # --- Coefficient C for Consolidation ---
+    #     if 'consolidation' in self.pde_modes_active:
+    #         self.log_C_consolidation_var = self._create_log_coefficient(
+    #             config_value=self.pinn_coefficient_C_config,
+    #             default_initial_value=0.01, # C ~ 0.01
+    #             name="coeff_C_consolidation"
+    #         )
+    #     else:
+    #         self.log_C_consolidation_var = None
+    #     # --- Coefficients K, Ss, Q for Groundwater Flow ---
+    #     if 'gw_flow' in self.pde_modes_active:
+    #         # Use defaults if gw_flow_coeffs_config is empty or keys are missing
+    #         k_config = self.gw_flow_coeffs_config.get('K', 'learnable')
+    #         ss_config = self.gw_flow_coeffs_config.get('Ss', 'learnable')
+    #         q_config = self.gw_flow_coeffs_config.get('Q', 0.0) # Default Q = 0.0
+
+    #         self.log_K_gwflow_var = self._create_log_coefficient(
+    #             config_value=k_config,
+    #             default_initial_value=1e-4, # K ~ 1e-4 m/s
+    #             name="coeff_K_gwflow"
+    #         )
+    #         self.log_Ss_gwflow_var = self._create_log_coefficient(
+    #             config_value=ss_config,
+    #             default_initial_value=1e-5, # Ss ~ 1e-5 1/m
+    #             name="coeff_Ss_gwflow"
+    #         )
+    #         self.Q_gwflow_var = self._create_direct_coefficient(
+    #             config_value=q_config,
+    #             default_initial_value=0.0,
+    #             name="coeff_Q_gwflow"
+    #         )
+    #     else:
+    #         self.log_K_gwflow_var = None
+    #         self.log_Ss_gwflow_var = None
+    #         self.Q_gwflow_var = None
+    #         self._is_unique_consolidation =True 
+
+    # # --- Getter Methods for Physical Coefficients ---
+    # def get_C_consolidation(self) -> Optional[Tensor]:
+    #     """Returns the positive physical coefficient C for consolidation."""
+    #     if self.log_C_consolidation_var is None:
+    #         if self._is_unique_consolidation:
+    #             # Physics is disabled, C is effectively 1 but will not be used
+    #             # if lambda_pde is 0 in compile()
+    #             return tf_constant(1.0, dtype=tf_float32)
+            
+    #         return None
+        
+    #     return tf_exp(self.log_C_consolidation_var)
+
+    # def get_K_gwflow(self) -> Optional[Tensor]:
+    #     """Returns positive Hydraulic Conductivity K for groundwater flow."""
+    #     if self.log_K_gwflow_var is None:
+    #         return None
+    #     return tf_exp(self.log_K_gwflow_var)
+
+    # def get_Ss_gwflow(self) -> Optional[Tensor]:
+    #     """Returns positive Specific Storage Ss for groundwater flow."""
+    #     if self.log_Ss_gwflow_var is None:
+    #         return None
+    #     return tf_exp(self.log_Ss_gwflow_var)
+
+    # def get_Q_gwflow(self) -> Optional[Tensor]:
+    #     """Returns Source/Sink term Q for groundwater flow."""
+    #     return self.Q_gwflow_var
+
+    # XXX TODO : End groundwater flow config 
     
 PIHALNet.__doc__+=r"""\n
 The architecture can operate in two modes for its physical coefficient “C”:

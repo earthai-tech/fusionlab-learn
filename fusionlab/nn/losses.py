@@ -20,6 +20,7 @@ from ..utils.deps_utils import ensure_pkg
 from ..utils.validator import check_consistent_length 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from .keras_validator import validate_keras_loss 
+from .utils import squeeze_last_dim_if 
 
 if KERAS_BACKEND:
     K = KERAS_DEPS.backend
@@ -34,7 +35,9 @@ if KERAS_BACKEND:
     tf_maximum=KERAS_DEPS.maximum
     tf_rank=KERAS_DEPS.rank 
     tf_cond =KERAS_DEPS.cond 
+    tf_constant =KERAS_DEPS.constant 
     tf_equal = KERAS_DEPS.equal 
+    tf_cast=KERAS_DEPS.cast 
     tf_zeros_like=KERAS_DEPS.zeros_like
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     
@@ -220,7 +223,7 @@ def prediction_based_loss(
 
 @ParamsValidator({'quantiles': [Real, 'array-like']})
 @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
-def combined_quantile_loss(quantiles: List[float]):
+def combined_quantile_loss_(quantiles: List[float]):
     """
     Create a quantile loss function for multiple quantiles.
 
@@ -249,7 +252,7 @@ def combined_quantile_loss(quantiles: List[float]):
     
     @register_keras_serializable(
         "fusionlab.nn.losses", 
-        name="combined_quantile_loss"
+        name="combined_quantile_loss_"
     )
     def _cqloss(y_true, y_pred):
         
@@ -290,41 +293,79 @@ def combined_quantile_loss(quantiles: List[float]):
 
     return _cqloss
 
-# @register_keras_serializable("fusionlab.nn.losses", name="combined_quantile_loss0")
-# def combined_quantile_loss0(quantiles):
-#     quantiles = validate_quantiles_in(quantiles)
+@register_keras_serializable("fusionlab.nn.losses", name="combined_quantile_loss")
+def combined_quantile_loss(quantiles):
 
-#     def _expand_and_compute(y_true, y_pred):
-#         y_true_exp = tf_expand_dims(y_true, axis=2)  # (B, H, 1, O)
-#         error = y_true_exp - y_pred                  # (B, H, Q, O)
+    # Validate & store quantiles
+    quantiles = validate_quantiles_in(quantiles)
+    
+    @register_keras_serializable(
+        "fusionlab.nn.losses",
+        name="combined_quantile_loss"
+    )
+    def _cqloss(y_true, y_pred):
 
-#         loss_val = 0.0
-#         for i, q in enumerate(quantiles):
-#             q_loss = tf_maximum(q * error[:, :, i, :], (q - 1) * error[:, :, i, :])
-#             loss_val += tf_reduce_mean(q_loss)
-#         return loss_val / len(quantiles)
+        # y_true original shape: (batch_size, horizon, output_dim), e.g., (20, 3, 1)
+        # Expand y_true to (batch_size, horizon, 1, output_dim) for broadcasting
+        y_true_expanded = tf_expand_dims(y_true, axis=2)
+        # y_true_expanded shape: (20, 3, 1, 1)
 
-#     @optional_tf_function  # Ensures graph-safe execution
-#     def _cqloss(y_true, y_pred):
-#         rank = tf_rank(y_pred)
+        # y_pred original shape can be:
+        # (batch, horizon, quantiles), e.g., (20, 3, 3) if output_dim is implicitly 1
+        # OR (batch, horizon, quantiles, output_dim), e.g., (20, 3, 3, 1)
 
-#         def case_rank3():
-#             y_pred_reshaped = tf_expand_dims(y_pred, axis=-1)  # (B, H, Q) → (B, H, Q, 1)
-#             return _expand_and_compute(y_true, y_pred_reshaped)
+        rank = tf_rank(y_pred)
 
-#         def case_rank4():
-#             return _expand_and_compute(y_true, y_pred)
+        # case_rank3 and case_rank4 are defined in your original code:
+        # These functions capture `y_pred` from the _cqloss arguments.
+        def case_rank3():
+            # Called when y_pred is (Batch, Horizon, Quantiles)
+            return tf_expand_dims(y_pred, axis=-1)  # Returns (B, H, Q, 1)
 
-#         return tf_cond(
-#             tf_equal(rank, 3),
-#             true_fn=case_rank3,
-#             false_fn=case_rank4
-#         )
+        def case_rank4():
+            # Called when y_pred is (Batch, Horizon, Quantiles, OutputDim)
+            return y_pred # Returns (B, H, Q, O)
 
-#     return _cqloss
+        # --- MODIFICATION START ---
+        # Remove the try-except block and directly use tf.cond
+        # This ensures y_pred is reshaped correctly before the subtraction.
+        # The result of tf.cond is assigned back to y_pred (or a new variable).
+        y_pred_reshaped = tf_cond(tf_equal(rank, 3),
+                                  true_fn=case_rank3,
+                                  false_fn=case_rank4)
+        # --- MODIFICATION END ---
 
-@register_keras_serializable("fusionlab.nn.losses", name="combined_quantile_loss_")
-def combined_quantile_loss_(quantiles):
+        # Now, y_pred_reshaped should have shape (B, H, Q, O), e.g., (20, 3, 3, 1)
+
+        # Broadcast y_true_expanded to match y_pred_reshaped's shape
+        # y_true_expanded: (20, 3, 1, 1)
+        # y_pred_reshaped: (20, 3, 3, 1)
+        # Subtraction broadcasts along the 3rd dimension (axis=2).
+        error = y_true_expanded - y_pred_reshaped
+        # error shape: (20, 3, 3, 1)
+
+        # Initialize loss
+        loss_val = tf_constant(0.0, dtype=error.dtype)
+
+        # Accumulate pinball losses for each quantile
+        for i, q_float in enumerate(quantiles): # quantiles is the list of float values
+            q = tf_cast(q_float, dtype=error.dtype)
+
+            # error is (B,H,Q,O). Slicing error[:, :, i, :] gives (B,H,O)
+            current_error_slice = error[:, :, i, :]
+
+            q_loss = tf_maximum(q * current_error_slice,
+                                (q - 1) * current_error_slice)
+            # Aggregate loss (mean over batch, horizons, and output_dim for this quantile)
+            loss_val += tf_reduce_mean(q_loss)
+
+        # Average loss over all quantiles
+        return loss_val / tf_cast(len(quantiles), dtype=loss_val.dtype)
+
+    return _cqloss
+
+@register_keras_serializable("fusionlab.nn.losses", name="combined_quantile_loss__")
+def combined_quantile_loss__(quantiles):
     quantiles = validate_quantiles_in(quantiles)
 
     # @optional_tf_function

@@ -9,10 +9,15 @@ import numpy as np
 import pandas as pd
 from typing import List, Tuple, Optional, Union, Dict, Any
 import warnings # noqa 
+from sklearn.preprocessing import MinMaxScaler
 
 from ..._fusionlog import fusionlog
 from ...api.util import get_table_size 
-from ...core.checks import exist_features, check_datetime
+from ...core.checks import ( 
+    exist_features, 
+    check_datetime, 
+    check_empty
+)
 from ...core.io import SaveFile 
 from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
@@ -60,14 +65,13 @@ def format_pihalnet_predictions(
     quantiles: Optional[List[float]] = None,
     forecast_horizon: Optional[int] = None,
     output_dims: Optional[Dict[str, int]] = None,
-    # For additional static identifiers/features per sample
     ids_data_array: Optional[Union[np.ndarray, pd.DataFrame]] = None,
     ids_cols: Optional[List[str]] = None,
     ids_cols_indices: Optional[List[int]] = None,
-    # Scaler for inverse transformation
     scaler_info: Optional[Dict[str, Dict[str, Any]]] = None,
     # e.g., {'subsidence': {'scaler': scaler_obj, 
     #                       'all_features': ['f1', 'subs', 'f3'], 'idx': 1}}
+    coord_scaler: Optional[Any] = None, # <-- ADD THIS NEW PARAMETER
     evaluate_coverage: bool = False,
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: str = None, 
@@ -201,6 +205,18 @@ def format_pihalnet_predictions(
             if coords_arr.shape[0] == num_samples and \
                coords_arr.shape[1] == H_inferred and coords_arr.shape[2] == 3:
                 coords_reshaped = coords_arr.reshape(num_samples * H_inferred, 3)
+                # --- INSERT THE INVERSE TRANSFORM LOGIC HERE ---
+                if coord_scaler is not None:
+                    vlog("  Applying inverse transform to t,x,y coordinates...",
+                         level=4, verbose=verbose, logger=logger)
+                    try:
+                        # Overwrite the reshaped coordinates with their original scale
+                        coords_reshaped = coord_scaler.inverse_transform(coords_reshaped)
+                    except Exception as e:
+                        vlog(f"  WARNING: Could not inverse transform coordinates: {e}."
+                             " Using normalized coordinates instead.",
+                             level=1, verbose=verbose, logger=logger)
+                # --- END OF NEW LOGIC ---
                 coord_names = ['coord_t', 'coord_x', 'coord_y']
                 all_data_dfs.append(
                     pd.DataFrame(coords_reshaped, columns=coord_names)
@@ -616,9 +632,14 @@ def prepare_pinn_data_sequences(
     output_gwl_dim: int = 1,       # Typically 1 for GWL value
     datetime_format: Optional[str] = None,
     normalize_coords: bool = True, # Option to normalize t,x,y
+    cols_to_scale: Union[List[str], str, None] = None,
+    return_coord_scaler: bool =False, 
     savefile: Optional[str] = None,
     verbose: int = 0,
-) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+) -> Union[
+    Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
+    Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Optional[MinMaxScaler]]
+]:
     """
     Reshapes and prepares time-series data into sequences for PINN models.
 
@@ -673,6 +694,13 @@ def prepare_pinn_data_sequences(
         (derived from `time_col`, `lon_col`, `lat_col`) to the [0, 1]
         range based on the min/max within each group. This is often
         beneficial for neural network training.
+    cols_to_scale : list of str or "auto" or None, default "auto"
+        - If a list of column names: scale exactly those columns.
+        - If "auto": select all numeric columns, then:
+          * Exclude `time_col`, `lon_col`, `lat_col` if `scale_coords=False`.
+          * Exclude any columns whose values are only \{0,1\} (assumed one-hot).
+        - If None: no extra columns are scaled.
+        
     verbose : int, default 0
         Verbosity level for logging (0-10).
         - 0: Silent.
@@ -683,7 +711,10 @@ def prepare_pinn_data_sequences(
 
     Returns
     -------
-    Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]
+    Union[
+        Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
+        Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Optional[MinMaxScaler]]
+    ]
         A tuple containing two dictionaries:
         1. `inputs_dict`:
            - 'coords': np.ndarray of shape `(N, H, 3)` for `[t, x, y]`
@@ -697,7 +728,16 @@ def prepare_pinn_data_sequences(
         Where N is the total number of sequences, H is `forecast_horizon`,
         T_past is `time_steps`, D_s/d/f are feature dimensions, and
         O_subs/gwl are output dimensions.
-
+        
+        
+        If `return_coord_scaler` is False (default):
+            A tuple containing two dictionaries: `inputs_dict` and `targets_dict`.
+        If `return_coord_scaler` is True:
+            A tuple containing three elements: `inputs_dict`, `targets_dict`,
+            and `coord_scaler`. `coord_scaler` is the `MinMaxScaler` instance
+            used if `normalize_coords` was True (and thus coordinates were
+            normalized), otherwise it's `None`.
+ 
     Raises
     ------
     ValueError
@@ -790,29 +830,87 @@ def prepare_pinn_data_sequences(
     # This is crucial for PINN as 't' is an input for differentiation.
     vlog("Converting time column to numeric values...",
          verbose=verbose, level=4)
-    
-    try:
-        df_proc[time_col] = pd.to_datetime(
-            df_proc[time_col], format=datetime_format)
-        # Convert to a numerical representation, e.g., year with fraction
-        df_proc[f"{time_col}_numeric"] = (
-            df_proc[time_col].dt.year + 
-            (df_proc[time_col].dt.dayofyear -1) / 
-            (365 + df_proc[time_col].dt.is_leap_year)
-        )
-        numerical_time_col = f"{time_col}_numeric"
-        if verbose >=2:
+    # Check if the provided time column is already numeric
+    if pd.api.types.is_numeric_dtype(df_proc[time_col]):
+        numerical_time_col = time_col
+        if verbose >= 2:
             logger.debug(
-                f"Converted datetime column '{time_col}'"
-                f" to numerical '{numerical_time_col}'.")
-        vlog(f"Time column converted to '{numerical_time_col}'",
-             verbose=verbose, level=5)
-        
-    except Exception as e:
-        raise ValueError(
-            f"Failed to convert or process time column '{time_col}'. "
-            f"Ensure it's datetime-like or specify `datetime_format`. Error: {e}"
-        )
+                f"Time column '{time_col}' is already numeric. Using it directly."
+            )
+    else:
+        # If not numeric, then perform the conversion
+        try:
+            df_proc[time_col] = pd.to_datetime(
+                df_proc[time_col], format=datetime_format)
+            # Convert to a numerical representation, e.g., year with fraction
+            df_proc[f"{time_col}_numeric"] = (
+                df_proc[time_col].dt.year +
+                (df_proc[time_col].dt.dayofyear - 1) /
+                (365 + df_proc[time_col].dt.is_leap_year.astype(int))
+            )
+            numerical_time_col = f"{time_col}_numeric"
+            if verbose >= 2:
+                logger.debug(
+                    f"Converted datetime column '{time_col}'"
+                    f" to numerical '{numerical_time_col}'."
+                )
+            vlog(f"Time column converted to '{numerical_time_col}'",
+                 verbose=verbose, level=5)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to convert or process time column '{time_col}'. "
+                f"Ensure it's datetime-like or specify `datetime_format`."
+                f" Error: {e}"
+            )
+   
+    # Initialize coord_scaler
+    # --- Apply Global Coordinate Normalization (if enabled) ---
+    df_proc, coord_scaler, cols_scaler = normalize_for_pinn(
+        df=df_proc, 
+        time_col= numerical_time_col, 
+        lon_col=lon_col, 
+        lat_col=lat_col, 
+        scale_coords= normalize_coords, 
+        cols_to_scale =cols_to_scale, 
+        verbose =verbose 
+    )
+    # coord_scaler = None # ADDED
+   
+    # if normalize_coords: 
+    #     vlog("Applying global normalization to t, x, y coordinates...",
+    #          verbose=verbose, level=2)
+    #     if verbose >=2:
+    #         logger.debug(
+    #             "Applying global MinMaxScaler to t,x,y coordinates.")
+
+    #     coord_cols_to_scale = [numerical_time_col, lon_col, lat_col]
+    #     # Ensure these columns exist and are numeric before scaling
+    #     for col in coord_cols_to_scale:
+    #         if col not in df_proc.columns:
+    #             raise ValueError(
+    #                 f"Coordinate column '{col}' not found for normalization.")
+    #         if not pd.api.types.is_numeric_dtype(df_proc[col]):
+    #             try:
+    #                 df_proc[col] = pd.to_numeric(df_proc[col])
+    #             except ValueError as e:
+    #                 raise ValueError(
+    #                     f"Coordinate column '{col}' could not be converted to numeric"
+    #                     f" for normalization. Error: {e}")
+
+    #     coord_scaler = MinMaxScaler() 
+    #     df_proc[coord_cols_to_scale] = coord_scaler.fit_transform(
+    #         df_proc[coord_cols_to_scale]
+    #     )
+    #     if verbose >= 3:
+    #         logger.debug(
+    #             f"  Min values used for scaling (t,x,y): {coord_scaler.data_min_}")
+    #         logger.debug(
+    #             f"  Max values used for scaling (t,x,y): {coord_scaler.data_max_}")
+            
+
+    # --- 2. Group and Sort Data ---
+    vlog("Grouping and sorting data...",
+         verbose=verbose, level=2)
 
     # --- 2. Group and Sort Data ---
     vlog("Grouping and sorting data...",
@@ -962,15 +1060,32 @@ def prepare_pinn_data_sequences(
         group_x_coords = group_df[lon_col].values
         group_y_coords = group_df[lat_col].values
 
-        # Normalization parameters for coordinates (per group if grouped)
-        t_min, t_max = group_t_coords.min(), group_t_coords.max()
-        x_min, x_max = group_x_coords.min(), group_x_coords.max()
-        y_min, y_max = group_y_coords.min(), group_y_coords.max()
+        # # Normalization parameters for coordinates (per group if grouped)
+        # t_min, t_max = group_t_coords.min(), group_t_coords.max()
+        # x_min, x_max = group_x_coords.min(), group_x_coords.max()
+        # y_min, y_max = group_y_coords.min(), group_y_coords.max()
         
+        # Normalization parameters for coordinates (per group if grouped)
+        # These are now only for reference if normalize_coords was False,
+        # or for potential debugging. The actual normalization happens globally if enabled.
+        t_min_group, t_max_group = group_t_coords.min(), group_t_coords.max() 
+        # x_min_group, x_max_group = group_x_coords.min(), group_x_coords.max() # Renamed
+        # y_min_group, y_max_group = group_y_coords.min(), group_y_coords.max() # Renamed
+            
         if verbose >= 3:
             print()
+            time_scale_info = f"{t_min_group:.4f}-{t_max_group:.4f}"
+            if normalize_coords and coord_scaler: # Check if scaler exists
+                # Attempt to show original scale for 't' if possible
+                # This requires careful handling as group_t_coords might be a slice
+                # For simplicity, we'll just note if it's normalized.
+                time_scale_info += " (normalized)"
+            else:
+                time_scale_info += " (original scale)"
+            
             print_box(
-                f"Group window: t {t_min}-{t_max}",
+               # f"Group window: t {t_min}-{t_max}",
+                f"Group window t: {time_scale_info}",
                 width=_TW,
                 align='center',
                 border_char='+',
@@ -1013,12 +1128,12 @@ def prepare_pinn_data_sequences(
             x_horizon = group_x_coords[horizon_start_idx:horizon_end_idx]
             y_horizon = group_y_coords[horizon_start_idx:horizon_end_idx]
 
-            if normalize_coords:
-                # Avoid division by zero if min == max 
-                # (e.g., single point in time/space for horizon)
-                t_horizon = (t_horizon - t_min) / (t_max - t_min + 1e-9)
-                x_horizon = (x_horizon - x_min) / (x_max - x_min + 1e-9)
-                y_horizon = (y_horizon - y_min) / (y_max - y_min + 1e-9)
+            # if normalize_coords:
+            #     # Avoid division by zero if min == max 
+            #     # (e.g., single point in time/space for horizon)
+            #     t_horizon = (t_horizon - t_min) / (t_max - t_min + 1e-9)
+            #     x_horizon = (x_horizon - x_min) / (x_max - x_min + 1e-9)
+            #     y_horizon = (y_horizon - y_min) / (y_max - y_min + 1e-9)
             
             coords_horizon_arr[current_seq_idx, :, 0] = t_horizon
             coords_horizon_arr[current_seq_idx, :, 1] = x_horizon
@@ -1101,6 +1216,11 @@ def prepare_pinn_data_sequences(
             'time_col': time_col,
             'time_steps': time_steps,
             'forecast_horizon': forecast_horizon,
+            'cols_scaler': cols_scaler, 
+            'coord_scaler': coord_scaler, 
+            'normalize_coords_flag': normalize_coords, # ADDED for context
+            'saved_coord_scaler_flag':coord_scaler is not None, # ADDED
+
         }
         # Add version information if available
         try:
@@ -1134,6 +1254,9 @@ def prepare_pinn_data_sequences(
     
     vlog("PINN data sequence preparation successfully completed.",
          verbose=verbose, level=3)
+    
+    if return_coord_scaler: 
+        return inputs_dict, targets_dict, coord_scaler 
     
     return inputs_dict, targets_dict
 
@@ -1352,3 +1475,234 @@ def check_required_input_keys(inputs, y=None, message=None ):
                 " Please provide 'gwl' or 'gwl_pred'.")
     
     return inputs, y
+
+@check_empty(['df']) 
+def normalize_for_pinn(
+    df: pd.DataFrame,
+    time_col: str,
+    lon_col: str,
+    lat_col: str,
+    cols_to_scale: Union[List[str], str, None] = "auto",
+    scale_coords: bool = True,
+    verbose: int = 1
+) -> Tuple[pd.DataFrame, Optional[MinMaxScaler], Optional[MinMaxScaler]]:
+    r"""
+    Apply Min-Max normalization to spatial–temporal coordinates and
+    optionally to other numeric columns. If `cols_to_scale == "auto"`,
+    automatically select numeric columns excluding categorical and
+    one-hot features.
+
+    By default, this function scales the time, longitude, and latitude
+    columns (if `scale_coords=True`). Then, it either scales explicitly
+    provided columns in `cols_to_scale` or automatically infers numeric
+    columns (excluding coordinates if `scale_coords` is False, and
+    excluding one-hot/boolean columns).
+
+    The Min-Max scaling for a feature \(x\) is:
+
+    .. math::
+       x' = \frac{x - \min(x)}{\max(x) - \min(x)}
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame with at least `time_col`, `lon_col`, `lat_col`.
+    time_col : str
+        Name of the numeric time column (e.g., year as numeric or datetime).
+    lon_col : str
+        Name of the longitude column.
+    lat_col : str
+        Name of the latitude column.
+    cols_to_scale : list of str or "auto" or None, default "auto"
+        - If a list of column names: scale exactly those columns.
+        - If "auto": select all numeric columns, then:
+          * Exclude `time_col`, `lon_col`, `lat_col` if `scale_coords=False`.
+          * Exclude any columns whose values are only \{0,1\} (assumed one-hot).
+        - If None: no extra columns are scaled.
+    scale_coords : bool, default True
+        If True, Min-Max scale `[time_col, lon_col, lat_col]`. Otherwise,
+        leave these columns unchanged.
+    verbose : int, default 1
+        Verbosity level via `vlog` (≥2 for detailed debug info).
+
+    Returns
+    -------
+    df_scaled : pd.DataFrame
+        A new DataFrame with specified columns normalized.
+    coord_scaler : MinMaxScaler or None
+        The fitted scaler for `[time_col, lon_col, lat_col]` if
+        `scale_coords=True`, else None.
+    other_scaler : MinMaxScaler or None
+        The fitted scaler for `cols_to_scale` (after auto-selection),
+        or None if no other columns were scaled.
+
+    Raises
+    ------
+    TypeError
+        If `df` is not a DataFrame, or `cols_to_scale` is neither a list
+        nor "auto" nor None, or if any explicitly provided column is not
+        a string.
+    ValueError
+        If required columns (`time_col`, `lon_col`, `lat_col`) or any
+        of `cols_to_scale` do not exist in `df`, or cannot be converted
+        to numeric.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.nn.pinn.utils import normalize_for_pinn
+    >>> data = {
+    ...     "year_num": [0.0, 1.0, 2.0],
+    ...     "lon": [100.0, 101.0, 102.0],
+    ...     "lat": [30.0, 31.0, 32.0],
+    ...     "feat1": [10.0, 20.0, 30.0],
+    ...     "one_hot_A": [0, 1, 0]
+    ... }
+    >>> df = pd.DataFrame(data)
+    >>> df_scaled, coord_scl, feat_scl = normalize_for_pinn(
+    ...     df,
+    ...     time_col="year_num",
+    ...     lon_col="lon",
+    ...     lat_col="lat",
+    ...     cols_to_scale="auto",
+    ...     scale_coords=True,
+    ...     verbose=2
+    ... )
+    >>> # 'year_num','lon','lat','feat1' get scaled; 'one_hot_A' excluded
+    >>> df_scaled["year_num"].tolist()
+    [0.0, 0.5, 1.0]
+    >>> df_scaled["feat1"].tolist()
+    [0.0, 0.5, 1.0]
+
+    Notes
+    -----
+    - When `cols_to_scale="auto"`, numeric columns with only {0,1}
+      values are assumed one-hot and excluded from scaling.
+    - If `scale_coords=False`, coordinate columns remain unchanged,
+      and auto-selection (if used) will exclude them.
+    - Returned `coord_scaler` is None if `scale_coords=False`.
+      Returned `other_scaler` is None if `cols_to_scale` is None or
+      results in an empty set after filtering.
+
+    See Also
+    --------
+    sklearn.preprocessing.MinMaxScaler : Scales features to [0,1].
+    """
+    # --- Validate df ---
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"`df` must be a pandas DataFrame, got "
+                        f"{type(df).__name__}")
+
+    # --- Validate core column names ---
+    for name in (time_col, lon_col, lat_col):
+        if not isinstance(name, str):
+            raise TypeError(f"Column names must be strings, got {name}")
+        if name not in df.columns:
+            raise ValueError(f"Column '{name}' not found in DataFrame")
+
+    # --- Validate cols_to_scale type ---
+    if cols_to_scale is not None and cols_to_scale != "auto":
+        if not isinstance(cols_to_scale, list) or not all(
+            isinstance(c, str) for c in cols_to_scale
+        ):
+            raise TypeError("`cols_to_scale` must be a list of strings, "
+                            "'auto', or None")
+
+    # Make a copy to avoid side effects
+    df_scaled = df.copy(deep=True)
+    coord_scaler: Optional[MinMaxScaler] = None
+    other_scaler: Optional[MinMaxScaler] = None
+
+    # --- 1. Scale coordinates if requested ---
+
+    if scale_coords:
+        vlog("Scaling time, lon, lat columns...", verbose=verbose, level=2)
+        coord_cols = [time_col, lon_col, lat_col]
+        for col in coord_cols:
+            if not pd.api.types.is_numeric_dtype(df_scaled[col]):
+                try:
+                    df_scaled[col] = pd.to_numeric(df_scaled[col])
+                    vlog(f"Converted '{col}' to numeric.", 
+                         verbose=verbose, level=3)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot convert '{col}' to numeric: {e}"
+                    )
+        coord_scaler = MinMaxScaler()
+        df_scaled[coord_cols] = coord_scaler.fit_transform(
+            df_scaled[coord_cols]
+        )
+        if verbose >= 3:
+            logger.debug(
+                f" coord_scaler.data_min_: {coord_scaler.data_min_}"
+            )
+            logger.debug(
+                f" coord_scaler.data_max_: {coord_scaler.data_max_}"
+            )
+
+    # --- 2. Determine `other_cols_to_scale` ---
+    if cols_to_scale == "auto":
+        vlog("Auto-selecting numeric columns to scale...", 
+             verbose=verbose, level=2)
+        # Start with all numeric columns
+        numeric_cols = df_scaled.select_dtypes(
+            include=[np.number]).columns.tolist()
+
+        # Exclude coordinate columns if not scaling them 
+        # if not scale_coords :
+        for c in (time_col, lon_col, lat_col):
+            if c in numeric_cols:
+                numeric_cols.remove(c)
+
+        # Exclude one-hot columns: numeric columns whose unique values ⊆ {0,1}
+        auto_cols = []
+        for c in numeric_cols:
+            uniq = pd.unique(df_scaled[c])
+            if set(np.unique(uniq)) <= {0, 1}:
+                vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
+                     verbose=verbose, level=3)
+                continue
+            auto_cols.append(c)
+
+        other_cols_to_scale = auto_cols
+        vlog(f"Auto-selected columns: {other_cols_to_scale}", 
+             verbose=verbose, level=2)
+    elif isinstance(cols_to_scale, list):
+        other_cols_to_scale = cols_to_scale.copy()
+    else:  # cols_to_scale is None
+        other_cols_to_scale = []
+
+    # --- 3. Scale `other_cols_to_scale` if any ---
+    if other_cols_to_scale:
+        vlog(f"Scaling additional columns: {other_cols_to_scale}", 
+             verbose=verbose, level=2)
+        # Verify existence and numeric type
+        valid_cols = []
+        for col in other_cols_to_scale:
+            if col not in df_scaled.columns:
+                raise ValueError(f"Column '{col}' not found for scaling.")
+            if not pd.api.types.is_numeric_dtype(df_scaled[col]):
+                try:
+                    df_scaled[col] = pd.to_numeric(df_scaled[col])
+                    vlog(f"Converted '{col}' to numeric.", 
+                         verbose=verbose, level=3)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot convert '{col}' to numeric: {e}"
+                    )
+            valid_cols.append(col)
+
+        if valid_cols:
+            other_scaler = MinMaxScaler()
+            df_scaled[valid_cols] = other_scaler.fit_transform(
+                df_scaled[valid_cols]
+            )
+            if verbose >= 3:
+                logger.debug(
+                    f" other_scaler.data_min_: {other_scaler.data_min_}"
+                )
+                logger.debug(
+                    f" other_scaler.data_max_: {other_scaler.data_max_}"
+                )
+
+    return df_scaled, coord_scaler, other_scaler

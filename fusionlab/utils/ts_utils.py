@@ -8,7 +8,7 @@ Times-series utilities (ts_utils).
 
 import warnings
 from numbers import Real, Integral
-from typing import Union, List
+from typing import Union, List, Optional, Dict
 import pandas as pd
 import numpy as np
 from scipy.fft import fft
@@ -46,8 +46,166 @@ __all__= [
     'ts_corr_analysis', 'transform_stationarity','ts_split', 
     'ts_outlier_detector', 'create_lag_features', 
     'select_and_reduce_features', 'get_decomposition_method', 
-    'filter_by_period', 'to_dt', 
+    'filter_by_period', 'to_dt', 'compute_group_window_counts'
  ]
+
+
+def compute_group_window_counts(
+    group_lengths: Dict[str, int],
+    time_steps: int,
+    forecast_horizon: int,
+    min_windows_per_group: Optional[int] = None
+) -> Dict[str, int]:
+    r"""
+    Compute the number of sliding‐window samples for each group given its
+    time‐series length, input window size, and forecast horizon.
+
+    For a single group :math:`g` with total length :math:`T_g`, and given:
+
+      - :math:`\text{time\_steps}`: length of the input window (number of past
+        timesteps used as features),
+      - :math:`\text{forecast\_horizon}`: number of future steps to predict,
+
+    the number of valid sliding windows :math:`N_g` is computed as:
+
+    .. math::
+       N_g = \max\Bigl(
+         0,\;T_g - (\text{time\_steps} + \text{forecast\_horizon}) + 1
+       \Bigr)
+
+    That is, each window consumes :code:`time_steps` for inputs plus
+    :code:`forecast_horizon` for the prediction target. We subtract that
+    total from :math:`T_g` and add 1, provided
+    :math:`T_g \ge \text{time\_steps} + \text{forecast\_horizon}`. If
+    :math:`T_g` is smaller, :math:`N_g = 0`.
+
+    Parameters
+    ----------
+    group_lengths : dict of str to int
+        A mapping from each group identifier (e.g., spatial coordinate,
+        date‐bin) to its total number of timesteps :math:`T_g`. Must be
+        non‐negative integers.
+
+    time_steps : int
+        The length of the sliding window inputs. Equivalent to
+        :math:`\text{time\_steps}` in the formula. Must be positive.
+
+    forecast_horizon : int
+        The number of future timesteps to forecast. Equivalent to
+        :math:`\text{forecast\_horizon}` in the formula. Must be positive.
+
+    min_windows_per_group : int, optional
+        If provided, warns for any group whose computed :math:`N_g` is less
+        than :code:`min_windows_per_group`. Does not raise an error, but
+        issues a warning. If :code:`None`, no warning is emitted.
+
+    Returns
+    -------
+    dict of str to int
+        A dictionary mapping each group identifier to its computed
+        :math:`N_g`, the number of valid sliding windows. If
+        :math:`T_g < \text{time\_steps} + \text{forecast\_horizon}`, then
+        :math:`N_g = 0`.
+
+    Raises
+    ------
+    TypeError
+        If :code:`group_lengths` is not a dict of str to ints, or if
+        :code:`time_steps` or :code:`forecast_horizon` is not int.
+
+    ValueError
+        If :code:`time_steps <= 0` or :code:`forecast_horizon <= 0`, or if
+        any :math:`T_g < 0`.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.ts_utils import compute_group_window_counts
+    >>> group_lengths = {"A": 200, "B": 150, "C": 80}
+    >>> time_steps = 30
+    >>> forecast_horizon = 7
+    >>> # Without minimum threshold
+    >>> counts = compute_group_window_counts(
+    ...     group_lengths,
+    ...     time_steps,
+    ...     forecast_horizon
+    ... )
+    >>> counts
+    {'A': 164, 'B': 114, 'C': 44}
+
+    >>> # With a minimum of 50 windows per group
+    >>> counts = compute_group_window_counts(
+    ...     group_lengths,
+    ...     time_steps,
+    ...     forecast_horizon,
+    ...     min_windows_per_group=50
+    ... )
+    WARNING: Group "C" has only 44 windows, below the minimum of 50.
+    >>> counts
+    {'A': 164, 'B': 114, 'C': 44}
+
+    Notes
+    -----
+    - If you require each group to have at least :math:`M` windows, supply
+      :code:`min_windows_per_group = M`. Groups with :math:`N_g < M` will
+      trigger a warning.
+    - The total number of windows across all groups is simply:
+      :math:`\sum_g N_g`.
+
+    See Also
+    --------
+    prepare_pinn_data_sequences : Generates input/target sequences based
+        on sliding windows for each group.
+    """
+    # Validate types
+    if not isinstance(group_lengths, dict):
+        raise TypeError(
+            f"`group_lengths` must be a dict[str, int], got "
+            f"{type(group_lengths).__name__}"
+        )
+    if not isinstance(time_steps, int) or time_steps <= 0:
+        raise ValueError(
+            f"`time_steps` must be a positive int, got {time_steps}"
+        )
+    if not isinstance(forecast_horizon, int) or forecast_horizon <= 0:
+        raise ValueError(
+            f"`forecast_horizon` must be a positive int, got {forecast_horizon}"
+        )
+    if min_windows_per_group is not None:
+        if not isinstance(min_windows_per_group, int) or min_windows_per_group < 0:
+            raise ValueError(
+                f"`min_windows_per_group` must be a non-negative int, got "
+                f"{min_windows_per_group}"
+            )
+
+    result: Dict[str, int] = {}
+    for group_key, T_g in group_lengths.items():
+        if not isinstance(group_key, str):
+            raise TypeError(
+                f"Group key must be str, got {type(group_key).__name__}"
+            )
+        if not isinstance(T_g, int) or T_g < 0:
+            raise ValueError(
+                f"Length for group '{group_key}' must be a non-negative int, "
+                f"got {T_g}"
+            )
+
+        # Compute N_g = max(0, T_g - (time_steps + forecast_horizon) + 1)
+        raw_count = T_g - (time_steps + forecast_horizon) + 1
+        N_g = raw_count if raw_count > 0 else 0
+        result[group_key] = N_g
+
+        # Issue warning if below threshold
+        if (
+            min_windows_per_group is not None
+            and N_g < min_windows_per_group
+        ):
+            warnings.warn(
+                f'Group "{group_key}" has only {N_g} windows, '
+                f'below the minimum of {min_windows_per_group}.'
+            )
+
+    return result
+
 
 def filter_by_period(
     df, eval_periods, 

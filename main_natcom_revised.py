@@ -38,10 +38,9 @@ import shutil
 import joblib
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt # Explicit import for save_all_figures
+import matplotlib.pyplot as plt # Explicit import for save_all_figures # noqa
 
 import tensorflow as tf
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
@@ -62,24 +61,26 @@ try:
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
     from fusionlab.nn.pinn.models import PIHALNet      # Our PINN model
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences # PINN data prep
-    from fusionlab.nn.pinn.op import ( # PINN physics helpers
-        compute_consolidation_residual,
+    from fusionlab.nn.pinn.op import ( # PINN physics helpers : Noqa
+        compute_consolidation_residual, 
         # calculate_gw_flow_pde_residual_from_derivs # For future use
     )
+    from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
     from fusionlab.nn.pinn.utils import format_pihalnet_predictions
     from fusionlab.plot.forecast import plot_forecasts
     from fusionlab.utils.data_utils import nan_ops
-    from fusionlab.utils.io_utils import save_job, fetch_joblib_data
-    from fusionlab.utils.generic_utils import save_all_figures, ExistenceChecker
+    from fusionlab.utils.io_utils import save_job #, fetch_joblib_data
+    from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column 
     from fusionlab.utils.generic_utils import ensure_directory_exists
+    from fusionlab.utils.geo_utils import augment_city_spatiotemporal_data #noq
 
     print("Successfully imported fusionlab modules.")
 except ImportError as e:
     print(f"Critical Error: Failed to import fusionlab modules: {e}. "
           "Please ensure 'fusionlab-learn' is correctly installed.")
     raise
-
+#%
 # --- Configuration Parameters ---
 CITY_NAME = 'zhongshan'
 MODEL_NAME = 'PIHALNet' # Using our new model name
@@ -89,14 +90,14 @@ MODEL_NAME = 'PIHALNet' # Using our new model name
 # JUPYTER_PROJECT_ROOT can be set as an environment variable
 # For local runs, adjust DATA_DIR as needed.
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..") # Go up one level from script if not set
-ZHONGSHAN_500K_FILENAME = "zhongshan_500000.csv" # Target file
+ZHONGSHAN_500K_FILENAME = "zhongshan_500k.csv" # Target file
 ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 
 # Training and Forecasting Periods
-TRAIN_END_YEAR = 2020        # Example: Use data up to 2020 for training
-FORECAST_START_YEAR = 2021   # Example: Start forecasting for 2021
-FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023)
-TIME_STEPS = 3               # Lookback window (in years) for dynamic features
+TRAIN_END_YEAR = 2022        # Example: Use data up to 2020 for training
+FORECAST_START_YEAR = 2023   # Example: Start forecasting for 2021
+FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
+TIME_STEPS = 4               # Lookback window (in years) for dynamic features
 
 # PINN Configuration
 PDE_MODE_CONFIG = 'consolidation' # Focus on consolidation
@@ -111,6 +112,9 @@ EPOCHS = 50 # For demonstration; increase for robust results (e.g., 100-200)
 LEARNING_RATE = 0.001
 BATCH_SIZE = 256 # Adjusted for potentially larger dataset
 
+NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not enough data
+                                # in df_test_master, auto extract all batches.  
+AGG = True # Set this to True or False as needed for your specific test case
 
 # Output Directories
 BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn") # For Code Ocean compatibility
@@ -235,9 +239,19 @@ df_selected = zhongshan_df_raw[selected_features].copy()
 
 # Convert year to datetime for consistent processing, then to numeric for PINN
 DT_COL_NAME_TEMP = 'datetime_temp' # Temporary datetime column
-df_selected[DT_COL_NAME_TEMP] = pd.to_datetime(
-    df_selected[TIME_COL], format='%Y'
-)
+
+try: 
+    df_selected[DT_COL_NAME_TEMP] = pd.to_datetime(
+        df_selected[TIME_COL], format='%Y'
+    )
+except: 
+    df_selected = normalize_time_column(
+        df_selected, time_col= TIME_COL, 
+        datetime_col= DT_COL_NAME_TEMP, 
+        year_col= TIME_COL,
+        drop_orig= True 
+    )
+
 print(f"  Initial features selected. Shape: {df_selected.shape}")
 
 # Cleaning NaNs
@@ -317,13 +331,17 @@ TIME_COL_NUMERIC_PINN = f"{TIME_COL}_numeric_coord"
 # All numerical features including targets and coordinates might be scaled
 # `prepare_pinn_data_sequences` has its own `normalize_coords` option.
 # Here, we scale features that go into the data-driven part.
+# XXX TO FIX : Optimize
 numerical_cols_for_scaling_model = [
-    LON_COL, LAT_COL, GWL_COL, 'rainfall_mm',
+    # LON_COL, 
+    # LAT_COL, 
+    GWL_COL, 
+    'rainfall_mm',
     # 'soil_thickness', # If Nanshan
     'normalized_density', # If present and numerical # because not use in Nansha
     'normalized_seismic_risk_score',
     SUBSIDENCE_COL, # Scale target as well for stable training
-    TIME_COL_NUMERIC_PINN # Scale numeric time
+    # TIME_COL_NUMERIC_PINN # Scale numeric time
 ]
 # Add OHE features (already 0 or 1, but good practice if other numerical derived)
 # numerical_cols_for_scaling_model.extend(encoded_feature_names_list)
@@ -397,7 +415,6 @@ print(f"  Dynamic Features: {dynamic_features_list}")
 print(f"  Future Features: {future_features_list}")
 print(f"  Group ID Cols for Sequencing: {GROUP_ID_COLS_SEQ}")
 
-
 # ==================================================================
 # ** Step 5: Split Master Data & Generate Sequences for Training **
 # ==================================================================
@@ -428,7 +445,7 @@ print(f"Generating PINN training sequences (T={TIME_STEPS}, H={FORECAST_HORIZON_
 # Note: `prepare_pinn_data_sequences` requires lon_col, lat_col explicitly
 OUT_S_DIM =1 
 OUT_G_DIM =1
-inputs_train_dict, targets_train_dict = prepare_pinn_data_sequences(
+inputs_train_dict, targets_train_dict, coord_scaler = prepare_pinn_data_sequences(
     df=df_train_master,
     time_col=TIME_COL_NUMERIC_PINN, # Use the numeric time for 't' coord
     lon_col=LON_COL,
@@ -445,6 +462,7 @@ inputs_train_dict, targets_train_dict = prepare_pinn_data_sequences(
     output_gwl_dim=OUT_G_DIM,       # PIHALNet default is 1
     normalize_coords=True, # Recommended for PINN coordinates
     savefile=sequence_file_path_train, # Save the prepared sequences
+    return_coord_scaler= True, # return corrd-scaler for inverse_transform. 
     verbose=7 # High verbosity for sequence generation
 )
 
@@ -502,7 +520,7 @@ for x_batch, y_batch in train_dataset.take(1):
     print("  Sample batch target keys:", list(y_batch.keys()))
     for k,v in y_batch.items(): print(f"    {k}: {v.shape}")
     break
-
+#%
 # ==================================================================
 # ** Step 7: PIHALNet Model Definition, Compilation & Training **
 # ==================================================================
@@ -610,7 +628,7 @@ history = pihal_model_inst.fit(
 )
 print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
-
+# %
 # Load the best model saved by ModelCheckpoint
 print(f"\nLoading best model from checkpoint: {model_checkpoint_path}")
 
@@ -635,36 +653,28 @@ except Exception as e_load:
     print(f"Error loading saved PIHALNet model: {e_load}. "
           "Using model from end of training.")
     pihal_model_loaded = pihal_model_inst
-
+#%
 # =============================================================================
 # ** Step 8: Forecasting on Test Data **
 # =============================================================================
 print(f"\n{'='*20} Step 8: Forecasting on Test Data {'='*20}")
 # For PIHALNet, we need to prepare test inputs similar to training
 # This includes 'coords', 'static_features', 'dynamic_features', 'future_features'
+# Initialize variables
+inputs_test_dict = None
+targets_test_dict_for_eval = None
+dataset_name_for_forecast = "Unknown"
+test_coord_scaler =None # Placeholder for recovering coordinate scaler.
+try:
+    # 1. Attempt to generate sequences from the test dataset
+    if df_test_master.empty:
+        print("Warning: Test data (df_test_master) is empty. Cannot generate test sequences.")
+        # Raise an exception if the dataframe is empty to trigger the fallback
+        raise ValueError("Test data (df_test_master) is empty.")
 
-if df_test_master.empty:
-    print("Warning: Test data (df_test_master) is empty. Cannot generate test sequences.")
-    inputs_test_dict = None
-    targets_test_dict_for_eval = None # For evaluation against actuals
-    dataset_name_for_forecast = "ValidationSet_DueToNoTestData"
-    # Fallback to use validation data for "forecasting" demonstration
-    # You'd typically have a separate, unseen test set.
-    # Create a dataset from val_inputs and y_val (used for tf.data.Dataset earlier)
-    # This part requires careful re-preparation if not saving val_dataset as NumPy
-    print("Attempting to use validation data for forecasting demonstration.")
-    # For demonstration, we just predict on the first batch of val_dataset
-    for x_val_sample, y_val_sample in val_dataset.take(1):
-        inputs_test_dict = x_val_sample
-        targets_test_dict_for_eval = y_val_sample # Keys: 'subs_pred', 'gwl_pred'
-        break
-    if inputs_test_dict is None:
-        print("Could not get validation data for forecast demo. Skipping forecast.")
-
-else:
-    print(f"Generating PINN sequences from test data (year {FORECAST_START_YEAR})...")
-    inputs_test_dict, targets_test_dict_raw = prepare_pinn_data_sequences(
-        df=df_test_master,
+    print(f"Attempting to generate PINN sequences from test data (year {FORECAST_START_YEAR})...")
+    inputs_test_dict, targets_test_dict_raw, test_coord_scaler = prepare_pinn_data_sequences(
+        df=df_train_master, #df_test_master,
         time_col=TIME_COL_NUMERIC_PINN,
         lon_col=LON_COL, lat_col=LAT_COL,
         subsidence_col=SUBSIDENCE_COL,
@@ -675,49 +685,170 @@ else:
         group_id_cols=GROUP_ID_COLS_SEQ,
         time_steps=TIME_STEPS,
         forecast_horizon=FORECAST_HORIZON_YEARS,
-        output_subsidence_dim=OUT_S_DIM, 
+        output_subsidence_dim=OUT_S_DIM,
         output_gwl_dim=OUT_G_DIM,
         normalize_coords=True, # Match training
+        return_coord_scaler= True, 
         verbose=1
     )
-    if targets_test_dict_raw['subsidence'].shape[0] == 0:
-        print("Warning: No test sequences generated. Skipping forecast.")
-        inputs_test_dict = None # Flag that no forecast can be made
-    else:
-        dataset_name_for_forecast = f"TestSet (Year {FORECAST_START_YEAR})"
-        # Rename keys for evaluation
-        targets_test_dict_for_eval = {
-            'subs_pred': targets_test_dict_raw['subsidence'],
-            'gwl_pred': targets_test_dict_raw['gwl']
-        }
 
-forecast_df_pihalnet = None
+    # Check if any sequences were actually created
+    if targets_test_dict_raw['subsidence'].shape[0] == 0:
+        # Raise an exception to trigger the fallback
+        raise ValueError("No test sequences were generated from the provided test data.")
+
+    # If successful, prepare the target dictionary for evaluation
+    print("Test sequences generated successfully.")
+    dataset_name_for_forecast = f"TestSet (Year {FORECAST_START_YEAR})"
+    targets_test_dict_for_eval = {
+        'subs_pred': targets_test_dict_raw['subsidence'],
+        'gwl_pred': targets_test_dict_raw['gwl']
+    }
+
+except Exception as e:
+    # 2. If any error occurs, fall back to using the validation set
+    print(f"\n[WARNING] Could not generate test sequences due to an error: {e}")
+    print(
+        "Falling back to use the validation dataset for forecasting "
+        "demonstration."
+    )
+    
+    dataset_name_for_forecast = "ValidationSet_Fallback"
+
+    print(
+        f"Attempting to extract batches from validation set (AGG={AGG})..."
+    )
+    # Use the new utility function
+    # train_dataset 
+    extracted_validation_data = extract_batches_from_dataset(
+        val_dataset,
+        num_batches_to_extract=NUM_BATCHES_TO_EXTRACT,
+        errors='warn', 
+        agg=AGG, 
+    )
+
+    inputs_test_dict = None
+    targets_test_dict_for_eval = None
+
+    if AGG:
+        # If agg is True, extracted_validation_data is a single tuple 
+        # (inputs, targets) or None
+        if extracted_validation_data is not None:
+            print(
+                "Successfully extracted and aggregated validation batch(es)."
+            )
+            # Ensure the tuple has at least two elements before unpacking
+            if isinstance(extracted_validation_data, tuple) and \
+               len(extracted_validation_data) >= 2:
+                inputs_test_dict = extracted_validation_data[0]
+                targets_test_dict_for_eval = extracted_validation_data[1]
+                # If more elements in tuple, you might need to handle them:
+                # e.g., 
+                # inputs_test_dict, targets_test_dict_for_eval, 
+                # *other_aggregated_parts = extracted_validation_data
+            elif isinstance(extracted_validation_data, tuple) and \
+                 len(extracted_validation_data) == 1:
+                inputs_test_dict = extracted_validation_data[0]
+                # targets_test_dict_for_eval would remain None or handle
+                # as appropriate
+                print(
+                    "[WARNING] Aggregated data only contained one component "
+                    "(inputs). Targets will be None."
+                )
+            else:
+                print(
+                    f"[ERROR] Aggregated data is not a tuple or has "
+                    f"unexpected structure: {type(extracted_validation_data)}. "
+                    "Cannot unpack."
+                )
+        else:
+            print(
+                "[WARNING] Aggregation returned None. No validation data "
+                "extracted."
+            )
+    else:
+        # If agg is False, extracted_validation_data is a list of batch tuples
+        if extracted_validation_data: # Check if the list is not empty
+            print(
+                f"Successfully extracted {len(extracted_validation_data)} "
+                "validation batch(es) (no aggregation). Using the first one."
+            )
+            # Ensure the first batch tuple has at least two elements
+            first_batch = extracted_validation_data[0]
+            if isinstance(first_batch, tuple) and len(first_batch) >= 2:
+                inputs_test_dict = first_batch[0]
+                targets_test_dict_for_eval = first_batch[1]
+            elif isinstance(first_batch, tuple) and len(first_batch) == 1:
+                inputs_test_dict = first_batch[0]
+                print(
+                    "[WARNING] First extracted batch only contained one "
+                    "component (inputs). Targets will be None."
+                )
+            else:
+                print(
+                    f"[ERROR] First extracted batch is not a tuple or has "
+                    f"unexpected structure: {type(first_batch)}. "
+                    "Cannot unpack."
+                )
+        else:
+            print(
+                "[WARNING] Extraction returned an empty list. No validation "
+                "data extracted."
+            )
+
+    # Fallback if the utility function didn't yield usable data
+    if inputs_test_dict is None:
+        print(
+            "[INFO] Fallback to val_dataset.take(1) as primary extraction "
+            "failed or yielded no data."
+        )
+        # Attempt to take one batch directly if previous attempts failed
+        for x_val_sample_fallback, y_val_sample_fallback in val_dataset.take(1):
+            inputs_test_dict = x_val_sample_fallback
+            targets_test_dict_for_eval = y_val_sample_fallback
+            print(
+                "[INFO] Successfully extracted one batch using "
+                "val_dataset.take(1)."
+            )
+            break # Use only this first batch
+        else: 
+            # This else belongs to the for loop, executed if the loop 
+            # completes without a break (i.e., val_dataset.take(1) was empty)
+            print(
+                "[ERROR] Critical Fallback failed: Could not extract any "
+                "batches from the validation dataset even with .take(1)."
+            )
+            # inputs_test_dict and targets_test_dict_for_eval will remain None
+
+# 3. Proceed with forecasting if input data (from test or validation) is available
 if inputs_test_dict is not None:
-    print(f"Generating PIHALNet predictions on {dataset_name_for_forecast}...")
-    # PIHALNet.predict returns the same dict structure as call()
+    print(f"\nGenerating PIHALNet predictions on: {dataset_name_for_forecast}...")
+    
+    # Get model predictions
     pihalnet_test_outputs = pihal_model_loaded.predict(inputs_test_dict, verbose=0)
     
-    # Ensure targets_test_dict_for_eval matches the output keys for formatting
+    # Format true values for comparison
     y_true_for_format = {
-        'subsidence': targets_test_dict_for_eval['subs_pred'], # From original target names
+        'subsidence': targets_test_dict_for_eval['subs_pred'],
         'gwl': targets_test_dict_for_eval['gwl_pred']
     }
 
+    # Format predictions into a clear DataFrame
     forecast_df_pihalnet = format_pihalnet_predictions(
         pihalnet_outputs=pihalnet_test_outputs,
         y_true_dict=y_true_for_format,
-        target_mapping={'subs_pred': SUBSIDENCE_COL, 'gwl_pred': GWL_COL}, # Map to original names
+        target_mapping={'subs_pred': SUBSIDENCE_COL, 'gwl_pred': GWL_COL},
         quantiles=QUANTILES,
         forecast_horizon=FORECAST_HORIZON_YEARS,
         output_dims={'subs_pred': OUT_S_DIM, 'gwl_pred': OUT_G_DIM},
         include_coords_in_df=True,
-        model_inputs=inputs_test_dict, # To get coords for the DataFrame
-        # ids_data_array can be X_static_test_seq if needed
-        # scaler_info if you want to inverse transform
+        model_inputs=inputs_test_dict,
         evaluate_coverage=True if QUANTILES else False,
+        coord_scaler= test_coord_scaler or coord_scaler, # either test is passed or not
         verbose=1
     )
 
+    # Save the results to a CSV file
     if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
         forecast_csv_filename = (
             f"{CITY_NAME}_{MODEL_NAME}_forecast_{dataset_name_for_forecast.replace(' ', '_')}"
@@ -725,16 +856,13 @@ if inputs_test_dict is not None:
         )
         forecast_csv_path = os.path.join(RUN_OUTPUT_PATH, forecast_csv_filename)
         forecast_df_pihalnet.to_csv(forecast_csv_path, index=False)
-        print(f"PIHALNet forecast results for {dataset_name_for_forecast} "
-              f"saved to: {forecast_csv_path}")
+        print(f"\nPIHALNet forecast results for {dataset_name_for_forecast} saved to: {forecast_csv_path}")
         print("\nSample of PIHALNet forecast DataFrame:")
         print(forecast_df_pihalnet.head())
     else:
-        print("No final PIHALNet forecast DataFrame generated.")
+        print("\nNo final PIHALNet forecast DataFrame was generated.")
 else:
-    print("Skipping forecasting as no valid "
-          "test/validation input sequences were prepared.")
-
+    print("\nSkipping forecasting as no valid test or validation input sequences could be prepared.")
 
 # ==================================================================
 # ** Step 9: Visualize Forecasts **

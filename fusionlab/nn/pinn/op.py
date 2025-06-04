@@ -390,8 +390,8 @@ def process_pinn_inputs(
             )
         # Unpack based on the defined order
         coords_tensor = inputs[0]
-        dynamic_features = inputs[1]
-        static_features = inputs[2] if num_inputs > 2 else None
+        static_features = inputs[1] if num_inputs > 2 else None
+        dynamic_features = inputs[2]
         future_features = inputs[3] if num_inputs > 3 else None
 
     else:

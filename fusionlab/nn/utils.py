@@ -55,7 +55,9 @@ from ..compat.sklearn import (
 )
 from ..decorators import Deprecated, Appender, isdf 
 from ..exceptions import NotEnoughDataError 
-from ..utils.data_utils import mask_by_reference 
+from ..utils.data_utils import ( 
+    mask_by_reference
+)
 from ..utils.deps_utils import ensure_pkg, get_versions 
 from ..utils.generic_utils import ( 
     print_box, 
@@ -78,14 +80,17 @@ if KERAS_BACKEND:
     Callback=KERAS_DEPS.Callback
     Tensor =KERAS_DEPS.Tensor
     Model =KERAS_DEPS.Model
+    Dataset =KERAS_DEPS.Dataset 
     
     tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor
     tf_float32 = KERAS_DEPS.float32
     tf_int32 = KERAS_DEPS.int32
     tf_rank = KERAS_DEPS.rank 
     tf_cast = KERAS_DEPS.cast
+    tf_squeeze =KERAS_DEPS.squeeze
     tf_zeros = KERAS_DEPS.zeros 
     tf_shape =KERAS_DEPS.shape 
+    tf_concat = KERAS_DEPS.concat
     tf_constant =KERAS_DEPS.constant
     tf_Assert = KERAS_DEPS.Assert 
     tf_debugging = KERAS_DEPS.debugging 
@@ -100,10 +105,23 @@ else:
     class Tensor: pass
     class Model: pass 
     
+try:
+    from ..metrics import coverage_score
+    HAS_COVERAGE_SCORE = True
+except ImportError:
+    HAS_COVERAGE_SCORE = False
+    def coverage_score(*args, **kwargs): 
+        warnings.warn(
+            "coverage_score not found in fusionlab.metrics. "
+            "Evaluation for quantile forecasts will be skipped."
+        )
+        return np.nan
+
 DEP_MSG = dependency_message('nn.utils') 
 _TW = get_table_size()
 
 logger = fusionlog().get_fusionlab_logger(__name__)
+
 
 __all__ = [
     "split_static_dynamic", 
@@ -118,22 +136,288 @@ __all__ = [
     "forecast_multi_step", 
     "forecast_single_step", 
     "step_to_long", 
-    "prepare_model_inputs"  
+    "prepare_model_inputs" , 
+    "extract_batches_from_dataset", 
+    "format_predictions", 
    ]
 
-try:
-    from ..metrics import coverage_score
-    HAS_COVERAGE_SCORE = True
-except ImportError:
-    HAS_COVERAGE_SCORE = False
-    def coverage_score(*args, **kwargs): 
-        warnings.warn(
-            "coverage_score not found in fusionlab.metrics. "
-            "Evaluation for quantile forecasts will be skipped."
-        )
-        return np.nan
 
-def format_predictions_to_dataframe(
+def extract_batches_from_dataset(
+    dataset: Dataset,
+    num_batches_to_extract: Union[int, str] = 1,
+    agg: bool = False, 
+    errors: str = 'warn'
+) -> Union[List[Tuple[Any, ...]], Optional[Tuple[Any, ...]]]:
+    """
+    Extracts a specified number of batches from a tf.data.Dataset.
+    Optionally aggregates the extracted batches.
+
+    Parameters:
+    ----------
+    dataset : tf.data.Dataset
+        The TensorFlow dataset to extract batches from.
+    num_batches_to_extract : Union[int, str], default 1
+        Number of batches: int, or 'all', '*', 'auto'.
+    agg : bool, default False
+        If True, attempts to aggregate the extracted batches into a single
+        tuple structure by concatenating corresponding tensors/arrays or
+        aggregating dictionaries.
+    errors : str, default 'warn'
+        Error handling: 'raise', 'warn', 'ignore'.
+
+    Returns:
+    -------
+    Union[List[Tuple[Any, ...]], Optional[Tuple[Any, ...]]]
+        - If `agg` is False: A list of batch tuples.
+        - If `agg` is True: A single tuple representing the aggregated batch data,
+          or `None` if no batches were extracted.
+        Returns an empty list (if `agg=False`) or `None` (if `agg=True`)
+        if 0 batches are requested or the dataset is empty.
+
+    Raises:
+    ------
+    TypeError
+        If `dataset` is not a `tf.data.Dataset` or `num_batches_to_extract`
+        is invalid (and `errors='raise'`).
+    ValueError
+        If `num_batches_to_extract` is negative, or fewer batches are available
+        than requested (and `errors='raise'` and not taking all).
+    RuntimeError
+        For unexpected errors during dataset iteration (and `errors='raise'`).
+    """
+    # Validate 'dataset' type
+    if not isinstance(dataset, Dataset):
+        msg = "Input 'dataset' must be a tf.data.Dataset instance."
+        if errors == 'raise':
+            raise TypeError(msg)
+        elif errors == 'warn':
+            logger.warning(msg + " Returning empty list/None.")
+        return None if agg else []
+
+    # Validate 'errors' parameter
+    if errors not in ['raise', 'warn', 'ignore']:
+        warnings.warn(
+            f"Invalid 'errors' value: '{errors}'. Defaulting to 'warn'.",
+            UserWarning
+        )
+        errors = 'warn'
+
+    # Process 'num_batches_to_extract'
+    actual_num_to_extract: int
+    take_all: bool = False
+
+    if isinstance(num_batches_to_extract, str) and \
+       num_batches_to_extract.lower() in ['all', '*', 'auto']:
+        take_all = True
+        actual_num_to_extract = -1 # Placeholder
+    elif isinstance(num_batches_to_extract, int):
+        if num_batches_to_extract < 0:
+            msg = (f"num_batches_to_extract cannot be negative "
+                   f"({num_batches_to_extract}).")
+            if errors == 'raise':
+                raise ValueError(msg)
+            elif errors == 'warn':
+                warnings.warn(
+                    msg + " Returning 0 batches (empty list/None).",
+                    UserWarning)
+            return None if agg else []
+        elif num_batches_to_extract == 0:
+            return None if agg else []
+        else:
+            actual_num_to_extract = num_batches_to_extract
+    else:
+        msg = (f"Invalid type for num_batches_to_extract: "
+               f"{type(num_batches_to_extract)}."
+               " Must be int or str ('all', '*', 'auto').")
+        if errors == 'raise':
+            raise TypeError(msg)
+        elif errors == 'warn':
+            warnings.warn(
+                msg + " Defaulting to extracting 1 batch.",
+                UserWarning)
+            actual_num_to_extract = 1
+        else: # errors == 'ignore'
+            logger.debug(msg + " Defaulting to extracting 1 batch.")
+            actual_num_to_extract = 1
+
+    collected_batches: List[Tuple[Any, ...]] = []
+    dataset_iterator = iter(dataset)
+    batches_extracted_count = 0
+
+    if take_all:
+        try:
+            while True:
+                batch = next(dataset_iterator)
+                collected_batches.append(batch)
+                batches_extracted_count += 1
+        except StopIteration:
+            logger.debug(f"Finished extracting all {batches_extracted_count} "
+                          "batches from the dataset.")
+        except Exception as e:
+            msg = f"An unexpected error occurred while extracting all batches: {e}"
+            if errors == 'raise':
+                raise RuntimeError(msg) from e
+            elif errors == 'warn':
+                logger.error(msg)
+                warnings.warn(
+                    "Error during 'all' batch extraction. "
+                    "Returning partially collected batches or None if aggregating.",
+                    RuntimeWarning)
+            # Return what was collected before the error, then aggregate if needed
+            if agg: # Aggregation happens after collection or partial collection
+                if not collected_batches: return None
+                # (Aggregation logic will be applied below)
+            else:
+                return collected_batches # Return list of batches
+            
+    else: # Specific number of batches
+        try:
+            for _ in range(actual_num_to_extract):
+                batch = next(dataset_iterator)
+                collected_batches.append(batch)
+                batches_extracted_count += 1
+        except StopIteration:
+            if batches_extracted_count < actual_num_to_extract:
+                msg = (f"Dataset exhausted. Requested"
+                       f" {actual_num_to_extract} batches, "
+                       f"but only {batches_extracted_count} were available.")
+                if errors == 'raise':
+                    raise ValueError(msg)
+                elif errors == 'warn':
+                    warnings.warn(
+                        msg + " Returning available batches"
+                        " (or aggregated if agg=True).", UserWarning)
+        except Exception as e:
+            msg = (f"An unexpected error occurred while extracting "
+                   f"{actual_num_to_extract} batches: {e}")
+            if errors == 'raise':
+                raise RuntimeError(msg) from e
+            elif errors == 'warn':
+                logger.error(msg)
+                warnings.warn(
+                    f"Error during batch extraction"
+                    f" (requested {actual_num_to_extract}). "
+                    "Returning partially collected batches or"
+                    " None if aggregating.",
+                    RuntimeWarning)
+            if agg:
+                if not collected_batches: return None
+            else:
+                return collected_batches
+
+    # Handle case where dataset was empty and specific number > 0 was requested
+    if not take_all and actual_num_to_extract > 0 and batches_extracted_count == 0:
+        msg = (f"Dataset appears to be empty. Could not extract the "
+               f"requested {actual_num_to_extract} batch(es).")
+        if errors == 'warn':
+            warnings.warn(msg + " Returning empty list/None.", UserWarning)
+        elif errors == 'ignore':
+            logger.debug(msg + " Returning empty list/None.")
+        return None if agg else []
+
+    # --- Aggregation Step ---
+    if agg:
+        if not collected_batches:
+            return None
+
+        try:
+            # Assuming all batches have the same tuple structure
+            num_elements_in_batch_tuple = len(collected_batches[0])
+            aggregated_result_parts = []
+
+            for i in range(num_elements_in_batch_tuple):
+                component_parts = [batch[i] for batch in collected_batches]
+                aggregated_component = _aggregate_component(component_parts)
+                aggregated_result_parts.append(aggregated_component)
+            
+            return tuple(aggregated_result_parts)
+        except Exception as e:
+            msg = f"Error during aggregation of batches: {e}"
+            if errors == 'raise':
+                raise RuntimeError(msg) from e
+            elif errors == 'warn':
+                logger.error(msg)
+                warnings.warn("Aggregation failed. Returning None.",
+                              RuntimeWarning)
+            return None # Failed aggregation
+    else:
+        return collected_batches
+
+
+def _aggregate_component(parts: List[Any]) -> Any:
+    """
+    Helper function to aggregate a list of components from batches.
+    Tries to concatenate if components are TF tensors or NumPy arrays.
+    If components are dicts, aggregates their values recursively.
+    """
+    if not parts:
+        return None
+
+    first_part = parts[0]
+
+    if isinstance(first_part, dict):
+        aggregated_dict: Dict[str, Any] = {}
+        # Assume all dicts in 'parts' have similar keys as the first one
+        # More robustly, one might collect all unique keys first.
+        for key in first_part.keys():
+            # Collect items for this key from all dicts in 'parts'
+            items_for_key = []
+            for p in parts:
+                if isinstance(p, dict) and key in p:
+                    items_for_key.append(p[key])
+                else: # Handle cases where a key might be missing in some dicts
+                    logger.debug(
+                        f"Key '{key}' not found in a batch"
+                        " component during aggregation.")
+            
+            if not items_for_key:
+                aggregated_dict[key] = None # Or an empty list: []
+                continue
+
+            # Try to concatenate if all items for this key are tensors/arrays
+            if all(isinstance(item, Tensor) for item in items_for_key):
+                try:
+                    aggregated_dict[key] = tf_concat(items_for_key, axis=0)
+                except Exception as e:
+                    logger.debug(
+                        f"TF concat failed for dict key '{key}':"
+                        f" {e}. Falling back to list.")
+                    aggregated_dict[key] = items_for_key
+            elif all(isinstance(item, np.ndarray) for item in items_for_key):
+                try:
+                    aggregated_dict[key] = np.concatenate(items_for_key, axis=0)
+                except Exception as e:
+                    logger.debug(
+                        f"NumPy concat failed for dict key '{key}':"
+                        f" {e}. Falling back to list.")
+                    aggregated_dict[key] = items_for_key
+            else:
+                # If types are mixed or not concat-able, store as a list
+                aggregated_dict[key] = items_for_key
+        return aggregated_dict
+    
+    elif all(isinstance(p, Tensor) for p in parts):
+        try:
+            return tf_concat(parts, axis=0)
+        except Exception as e:
+            logger.debug(
+                f"TF concat failed for tensor list: {e}."
+                " Falling back to list.")
+            return parts
+    elif all(isinstance(p, np.ndarray) for p in parts):
+        try:
+            return np.concatenate(parts, axis=0)
+        except Exception as e:
+            logger.debug("NumPy concat failed for ndarray list:"
+                         f" {e}. Falling back to list.")
+            return parts
+    else:
+        # If components are not dicts and not all tensors/arrays,
+        # return the list of parts
+        return parts
+    
+    
+def format_predictions(
     predictions: Optional[Union[np.ndarray, Tensor]] = None,
     model: Optional[Model] = None,
     inputs: Optional[List[Optional[Union[np.ndarray, Tensor]]]] = None,
@@ -6134,6 +6418,228 @@ def generate_forecast_with(
             savefile=savefile,
             verbose=verbose
         )
+
+
+def squeeze_last_dim_if(tensors, output_dims):
+    """
+    Squeeze the last dimension of tensor(s) if it equals 1 based on `output_dims`.
+
+    `output_dims` can be:
+      * a single int: apply that rule to every tensor
+      * a list of ints: must match length of `tensors` list, each applied
+        to corresponding tensor
+      * a dict mapping keys to ints: each key must appear in `tensors` dict;
+        unmatched keys in `output_dims` will warn but be ignored
+
+    Parameters
+    ----------
+    tensors : tf.Tensor or list of tf.Tensor or dict of tf.Tensor
+        - If a single `tf.Tensor`, processed with `output_dims` if int.
+        - If a `list`, each element is processed with its corresponding
+          entry in `output_dims` if list, or with the single int if int.
+        - If a `dict`, each value is processed with the matching int in
+          `output_dims` dict, or with the single int if `output_dims` is int.
+
+    output_dims : int or list of int or dict of int
+        - If int: all tensors use that output dimension rule.
+        - If list: length must equal `len(tensors)` when `tensors` is list.
+        - If dict: keys map to ints; for any key in `tensors` missing from
+          `output_dims`, no squeeze is applied; keys in `output_dims` absent
+          in `tensors` produce a warning.
+
+    Returns
+    -------
+    tf.Tensor or list or dict
+        Same structure as `tensors`, but with trailing size-1 axes removed
+        where `output_dim == 1`. If `output_dim != 1`, that tensor is unchanged.
+
+    Raises
+    ------
+    TypeError
+        If `tensors` is not a `tf.Tensor`, list, or dict; or if `output_dims`
+        type is invalid; or if list lengths do not match.
+    ValueError
+        If list lengths mismatch.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> from fusionlab.utils.generic_utils import squeeze_last_dim_if
+    >>>
+    >>> # Single tensor, single int → squeeze if last dim=1
+    >>> t = tf.zeros((8, 5, 1))
+    >>> out = squeeze_last_dim_if(t, output_dims=1)
+    >>> out.shape
+    TensorShape([8, 5])
+    >>>
+    >>> # List of tensors, list of ints
+    >>> t_list = [tf.zeros((4, 1)), tf.zeros((4, 2, 1))]
+    >>> out_list = squeeze_last_dim_if(t_list, output_dims=[1, 2])
+    >>> [x.shape for x in out_list]
+    [TensorShape([4]), TensorShape([4, 2, 1])]
+    >>>
+    >>> # Dict of tensors, dict of ints
+    >>> t_dict = {
+    ...     "a": tf.zeros((3, 1, 1)),
+    ...     "b": tf.zeros((3, 1, 2))
+    ... }
+    >>> out_dict = squeeze_last_dim_if(t_dict, output_dims={"a": 1, "b": 2})
+    >>> {k: v.shape for k, v in out_dict.items()}
+    {'a': TensorShape([3, 1]), 'b': TensorShape([3, 1, 2])}
+
+    Notes
+    -----
+    - This function does a shallow traversal:
+      * If `tensors` is list, each element must be `tf.Tensor`.
+      * If `tensors` is dict, each value must be `tf.Tensor`.
+    - For dict mode: missing keys in `output_dims` → no change;
+      extra keys in `output_dims` → warning.
+
+    See Also
+    --------
+    tf.squeeze : Remove dimensions of size 1 from the shape of a tensor.
+    tf.reshape : Manually reshape a tensor if more complex edits are needed.
+    """
+
+    # Validate output_dims type
+    if not isinstance(output_dims, (int, list, dict)):
+        raise TypeError(
+            f"`output_dims` must be int, list, or dict, got "
+            f"{type(output_dims).__name__}"
+        )
+
+    def _process_tensor(tensor, od):
+        if not isinstance(tensor, Tensor):
+            raise TypeError(f"Expected tf.Tensor, got {type(tensor).__name__}")
+        # Only squeeze when od == 1 and last axis size is 1
+        if od == 1 and tensor.shape.rank is not None and tensor.shape[-1] == 1:
+            return tf_squeeze(tensor, axis=-1)
+        return tensor
+
+    # Single tensor case
+    if isinstance(tensors, Tensor):
+        if isinstance(output_dims, int):
+            return _process_tensor(tensors, output_dims)
+        else:
+            raise TypeError(
+                "`output_dims` must be int when `tensors` is a single Tensor"
+            )
+
+    # List of tensors case
+    if isinstance(tensors, list):
+        if isinstance(output_dims, int):
+            return [
+                _process_tensor(t, output_dims) for t in tensors
+            ]
+        if isinstance(output_dims, list):
+            if len(output_dims) != len(tensors):
+                raise ValueError(
+                    "Length of `output_dims` list must match length of `tensors` list"
+                )
+            return [
+                _process_tensor(t, od) for t, od in zip(tensors, output_dims)
+            ]
+        # dict not allowed if tensors is list
+        raise TypeError(
+            "`output_dims` must be int or list when `tensors` is a list"
+        )
+
+    # Dict of tensors case
+    if isinstance(tensors, dict):
+        result = {}
+        if isinstance(output_dims, int):
+            for key, tensor in tensors.items():
+                result[key] = _process_tensor(tensor, output_dims)
+            return result
+
+        if isinstance(output_dims, dict):
+            # Warn about extra keys in output_dims not in tensors
+            for k in output_dims:
+                if k not in tensors:
+                    warnings.warn(
+                        f"Key '{k}' in `output_dims` not found in `tensors`. Ignored."
+                    )
+            # Process only matching keys
+            for key, tensor in tensors.items():
+                od = output_dims.get(key, None)
+                if od is None:
+                    # No output_dim specified for this key → no change
+                    result[key] = tensor
+                else:
+                    result[key] = _process_tensor(tensor, od)
+            return result
+
+        # list not allowed if tensors is dict
+        raise TypeError(
+            "`output_dims` must be int or dict when `tensors` is a dict"
+        )
+
+    # Invalid type for tensors
+    raise TypeError(
+        f"`tensors` must be a tf.Tensor, list, or dict, got {type(tensors).__name__}"
+    )
+
+
+
+@Deprecated(
+    reason=(
+        "`format_predictions_to_dataframe` is **deprecated** and will be removed "
+        "in a future release. Switch to `format_predictions`, which offers a more "
+        "robust, consistent API (supports explicit `forecast_horizon`, enriched "
+        "validation, and unified outputs)."
+    ),
+    version="0.2.3",
+    category=DeprecationWarning,
+    alternative="format_predictions",
+)
+def format_predictions_to_dataframe(
+    predictions: Optional[Union[np.ndarray, Tensor]] = None,
+    model: Optional[Model] = None,
+    inputs: Optional[List[Optional[Union[np.ndarray, Tensor]]]] = None,
+    y_true_sequences: Optional[Union[np.ndarray, Tensor]] = None,
+    target_name: Optional[str] = "target",
+    quantiles: Optional[List[float]] = None,
+    forecast_horizon: Optional[int] = None,
+    output_dim: Optional[int] = None,
+    spatial_data_array: Optional[Union[np.ndarray, Tensor]] = None,
+    spatial_cols: Optional[List[str]] = None,
+    spatial_cols_indices: Optional[List[int]] = None,
+    evaluate_coverage: bool = False,
+    scaler: Optional[Any] = None,
+    scaler_feature_names: Optional[List[str]] = None,
+    target_idx_in_scaler: Optional[int] = None,
+    verbose: int = 0,
+    **kwargs: Any
+) -> pd.DataFrame:
+    """
+    Deprecated alias for `format_predictions`. See `format_predictions`
+    for the updated, recommended API. All original parameters are forwarded
+    to `format_predictions`.
+
+    Returns
+    -------
+    pd.DataFrame
+        The formatted prediction DataFrame from `format_predictions`.
+    """
+    return format_predictions(
+        predictions=predictions,
+        model=model,
+        inputs=inputs,
+        y_true_sequences=y_true_sequences,
+        target_name=target_name,
+        quantiles=quantiles,
+        forecast_horizon=forecast_horizon,
+        output_dim=output_dim,
+        spatial_data_array=spatial_data_array,
+        spatial_cols=spatial_cols,
+        spatial_cols_indices=spatial_cols_indices,
+        evaluate_coverage=evaluate_coverage,
+        scaler=scaler,
+        scaler_feature_names=scaler_feature_names,
+        target_idx_in_scaler=target_idx_in_scaler,
+        verbose=verbose,
+        **kwargs
+    )
 
 step_to_long.__doc__=r"""
 Convert a multi-step forecast DataFrame from wide to long format.

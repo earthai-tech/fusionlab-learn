@@ -54,9 +54,9 @@ _pinn_tuner_docs = DocstringComponents.from_nested_components(
 
 
 DEFAULT_PIHALNET_FIXED_PARAMS = {
-    "static_input_dim": 0,
-    "dynamic_input_dim": 1, # [Must be > 0]
-    "future_input_dim": 0,
+    # "static_input_dim": 0,
+    # "dynamic_input_dim": 1, # [Must be > 0]
+    # "future_input_dim": 0,
     "output_subsidence_dim": 1,
     "output_gwl_dim": 1,
     "forecast_horizon": 1,
@@ -88,9 +88,9 @@ DEFAULT_PIHAL_CASE_INFO = {
     "quantiles": None,
     "output_subsidence_dim": 1,
     "output_gwl_dim": 1,
-    "static_input_dim": 0,
-    "dynamic_input_dim": 0,
-    "future_input_dim": 0,
+    # "static_input_dim": 0,
+    # "dynamic_input_dim": 0,
+    # "future_input_dim": 0,
 }
 
 
@@ -410,10 +410,10 @@ class PIHALTuner(PINNTunerBase):
         )
         return model
 
-    def fit(
+    def run(
         self,
         inputs: Dict[str, np.ndarray], 
-        y: Dict[str, np.ndarray],       
+        y: Dict[str, np.ndarray],  
         validation_data: Optional[
             Tuple[Dict[str, np.ndarray], Dict[
                 str, np.ndarray]]] = None,
@@ -478,7 +478,15 @@ class PIHALTuner(PINNTunerBase):
                 vlog(f"  {k}: {v_}", 
                      verbose=verbose, level=3, 
             )
-
+        # for consisteny ,recheck and apply rename 
+        if y is not None: 
+            # Check required target keys after renaming
+            check_required_input_keys(None, y=y)
+            y = rename_dict_keys(
+                y.copy(), # Work on a copy
+                param_to_rename={"subsidence": 'subs_pred', "gwl": 'gwl_pred'}
+            )
+            
         # Prepare tf.data.Dataset
         targets_for_dataset = {
             'subs_pred': y['subs_pred'],
@@ -491,6 +499,15 @@ class PIHALTuner(PINNTunerBase):
         val_dataset = None
         if validation_data:
             val_inputs_dict, val_targets_dict = validation_data
+            
+            # Check required target keys after renaming
+            
+            check_required_input_keys(None, y=val_targets_dict)
+            val_targets_dict = rename_dict_keys(
+                val_targets_dict.copy(), # Work on a copy
+                param_to_rename={"subsidence": 'subs_pred', "gwl": 'gwl_pred'}
+            )
+            
             val_targets_for_dataset = {
                 'subs_pred': val_targets_dict['subs_pred'],
                 'gwl_pred': val_targets_dict['gwl_pred']
@@ -541,42 +558,6 @@ class PIHALTuner(PINNTunerBase):
             **kwargs
         )
 
-    def _populate_fixed_params_from_data(
-        self,
-        inputs_data_dict: Dict[str, np.ndarray],
-        targets_data_dict: Dict[str, np.ndarray],
-        forecast_horizon: int,
-        quantiles: Optional[List[float]]
-    ):
-        """Infers and sets fixed model parameters from input data shapes."""
-        self.fixed_model_params['static_input_dim'] = \
-            inputs_data_dict['static_features'].shape[-1] \
-            if inputs_data_dict.get('static_features') is not None \
-               and inputs_data_dict['static_features'].ndim == 2 else 0
-        
-        self.fixed_model_params['dynamic_input_dim'] = \
-            inputs_data_dict['dynamic_features'].shape[-1]
-            
-        self.fixed_model_params['future_input_dim'] = \
-            inputs_data_dict['future_features'].shape[-1] \
-            if inputs_data_dict.get('future_features') is not None \
-               and inputs_data_dict['future_features'].ndim == 3 else 0
-        
-        self.fixed_model_params['output_subsidence_dim'] = \
-            targets_data_dict['subs_pred'].shape[-1]
-        self.fixed_model_params['output_gwl_dim'] = \
-            targets_data_dict['gwl_pred'].shape[-1]
-            
-        self.fixed_model_params['forecast_horizon'] = forecast_horizon
-        self.fixed_model_params['quantiles'] = quantiles
-        
-        # Update _current_run_case_info as well
-        self._current_run_case_info = DEFAULT_PIHAL_CASE_INFO.copy()
-        self._current_run_case_info.update(self.fixed_model_params)
-        self._current_run_case_info["description"] = \
-            self._current_run_case_info["description"].format(
-                "Quantile" if quantiles else "Point"
-            )
 
 PIHALTuner.__doc__ = """
 Hyperparameter tuner for the PIHALNet model, which jointly predicts

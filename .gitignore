@@ -181,4 +181,5 @@ _future_releases/
 results/
 main_ieee_tpami.py
 _pinn_works/
-
+results_pinn/
+zhongshan_tuning_pinn/

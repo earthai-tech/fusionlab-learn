@@ -2605,3 +2605,187 @@ def ensure_directory_exists(path):
         raise OSError(f"Unable to create directory {dir_path}: {exc}") from exc
 
     return dir_path
+
+def normalize_time_column(
+    df: pd.DataFrame,
+    time_col: str,
+    datetime_col: str = "datetime_temp",
+    year_col: str = "year_int",
+    drop_orig: bool= False, 
+) -> pd.DataFrame:
+    r"""
+    Ensure a time column becomes both a datetime and an integer year.
+
+    Given a DataFrame `df` with a column `time_col` that may contain
+    integer years (e.g., 2015), ISO‐formatted strings (e.g., "2020‐03‐15"),
+    or pandas datetime values, this function:
+      1. Creates a new column `datetime_col` of type `datetime64[ns]`,
+         representing each entry as a full timestamp (if the original was
+         integer or string “YYYY”, it becomes January 1st of that year).
+      2. Creates a new column `year_col` of integer dtype, extracting
+         the year from `datetime_col`.
+      3. Optionally, if `drop_orig=True`, removes the original `time_col`
+         and renames `datetime_col` back to `time_col`.
+
+    It handles mixed‐type entries by first identifying pure integers,
+    parsing those with format `%Y`, and then generically parsing all
+    remaining entries. Invalid entries will raise immediately.
+
+    Mathematically, for each row index $i$ and original value $v_i` in
+    `time_col`:
+    .. math::
+       \text{datetime\_col}_i =
+         \begin{cases}
+           \text{v}_i, & \text{if } v_i \text{ is already a Timestamp}\\[6pt]
+           \text{Timestamp}(\text{str}(v_i) + "-01-01"), & \text{if } v_i \in \mathbb{Z}\\[6pt]
+           \text{pd.to\_datetime}(v_i), & \text{otherwise}
+         \end{cases}
+    and
+    .. math::
+       \text{year\_col}_i = \text{datetime\_col}_i.\text{year}
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame containing a time column named `time_col`.
+    time_col : str
+        Name of the column to normalize. May contain ints, strings, or
+        datetime64 values.
+    datetime_col : str, default "datetime_temp"
+        Name of the new column to hold parsed datetime values.
+    year_col : str, default "year_int"
+        Name of the new column to hold integer years extracted from
+        `datetime_col`.
+    drop_orig : bool, default False
+        If True, drop original `time_col` and rename `datetime_col` to
+        `time_col` after parsing.
+    Returns
+    -------
+    pd.DataFrame
+        A copy of `df` with two additional columns:
+        - `datetime_col` as dtype `datetime64[ns]`
+        - `year_col` as integer dtype
+
+    Raises
+    ------
+    ValueError
+        If `time_col` is missing, or if parsing fails for any entry.
+    TypeError
+        If `df` is not a pandas DataFrame.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.utils.generic_utils import normalize_time_column
+    >>> df = pd.DataFrame({
+    ...     "time_mixed": [2015, "2016-07-10", "2017", pd.Timestamp("2018-05-05")]
+    ... })
+    >>> df
+         time_mixed
+    0          2015
+    1    2016-07-10
+    2          2017
+    3    2018-05-05
+
+    >>> df2 = normalize_time_column(
+    ...     df, time_col="time_mixed", datetime_col="dt_col", year_col="yr_col"
+    ... )
+    >>> df2
+         time_mixed     dt_col  yr_col
+    0          2015 2015-01-01    2015
+    1    2016-07-10 2016-07-10    2016
+    2          2017 2017-01-01    2017
+    3    2018-05-05 2018-05-05    2018
+
+    Notes
+    -----
+    - After this call, you can drop the original `time_col` if you
+      only need the normalized columns.
+    - If you only want the integer year, you can still benefit from
+      `datetime_col` for any downstream date‐based logic.
+    - Invalid date strings (e.g., "foo") will cause a `ValueError`
+      during parsing.
+
+    See Also
+    --------
+    pandas.to_datetime : Convert argument to datetime.
+    """
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"`df` must be a pandas DataFrame, got {type(df).__name__}.")
+
+    if time_col not in df.columns:
+        raise ValueError(f"Time column '{time_col}' not found in DataFrame.")
+
+    df_norm = df.copy()
+
+    # Create empty column for parsed datetime values
+    df_norm[datetime_col] = pd.NaT
+
+    # 1) Identify rows where value is already a Timestamp or datetime64
+    mask_ts = df_norm[time_col].apply(
+        lambda x: pd.api.types.is_datetime64_any_dtype(type(x)))
+
+    if mask_ts.all():
+        # If entire column is datetime dtype, just copy it
+        df_norm[datetime_col] = df_norm[time_col]
+    else:
+        # 2) Identify pure-integer years
+        mask_int = df_norm[time_col].apply(
+            lambda x: isinstance(x, (int, np.integer)))
+
+        # Parse integer‐year entries via format="%Y"
+        if mask_int.any():
+            try:
+                df_norm.loc[mask_int, datetime_col] = pd.to_datetime(
+                    df_norm.loc[mask_int, time_col], format="%Y"
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"Could not parse integer years in '{time_col}': {exc}"
+                )
+
+        # 3) Parse all remaining (non-integer) entries generically
+        mask_remain = ~mask_int
+        if mask_remain.any():
+            try:
+                df_norm.loc[mask_remain, datetime_col] = pd.to_datetime(
+                    df_norm.loc[mask_remain, time_col], errors="raise"
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"Could not parse '{time_col}' into datetime for "
+                    f"non-integer entries: {exc}"
+                )
+
+    # Finally, ensure datetime_col is dtype datetime64[ns]
+    if not pd.api.types.is_datetime64_any_dtype(df_norm[datetime_col]):
+        try:
+            df_norm[datetime_col] = pd.to_datetime(df_norm[datetime_col], errors="raise")
+        except Exception as exc:
+            raise ValueError(f"Failed to coerce '{datetime_col}' to datetime: {exc}")
+
+    # 4) Extract integer year into year_col
+    try:
+        df_norm[year_col] = df_norm[datetime_col].dt.year.astype(int)
+    except Exception as exc:
+        raise ValueError(
+            f"Failed to extract year from '{datetime_col}': {exc}"
+        )
+ 
+    # --- Drop original time_col and adjust columns if requested ---
+    if drop_orig:
+        # If the original time_col and year_col share the same name, 
+        # we need to preserve the integer year before dropping.
+        if year_col == time_col:
+            # Temporarily stash original values
+            temp_col = f"{time_col}_xtemp"
+            df_norm[temp_col] = df_norm[time_col]
+            df_norm.drop(columns=[time_col], inplace=True)
+            # Rename the stashed column back to time_col
+            df_norm.rename(columns={temp_col: time_col}, inplace=True)
+        else:
+            # Simply drop the original time_col
+            df_norm.drop(columns=[time_col], inplace=True)
+        
+    return df_norm
+
