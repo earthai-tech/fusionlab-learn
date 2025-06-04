@@ -73,7 +73,6 @@ try:
     from fusionlab.utils.io_utils import save_job #, fetch_joblib_data
     from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column 
     from fusionlab.utils.generic_utils import ensure_directory_exists
-    from fusionlab.utils.geo_utils import augment_city_spatiotemporal_data #noq
 
     print("Successfully imported fusionlab modules.")
 except ImportError as e:
