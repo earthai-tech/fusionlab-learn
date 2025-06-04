@@ -357,7 +357,7 @@ class PIHALTuner(PINNTunerBase):
         pinn_c_value_hp = 'learnable' if pinn_c_type == 'learnable' else \
             self._get_hp_float(hp, 'pinn_coefficient_C_value', 1e-4, 1e-1, sampling='log')
         
-        lambda_pde_hp = self._get_hp_float(hp, 'lambda_pde', 0.01, 10.0, sampling='log')
+        lambda_pde_hp = self._get_hp_float(hp, 'lambda_pde', 1, 10.0, sampling='log')
         learning_rate_hp = self._get_hp_choice(hp, 'learning_rate', [1e-3, 5e-4, 1e-4])
 
         cast_multiple_bool_params (

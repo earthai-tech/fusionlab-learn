@@ -384,7 +384,7 @@ if __name__ == "__main__":
         raise ValueError("Sequence generation produced no validation samples for the tuner.")
 
 
-#%%
+#%
     # 4. Define Fixed Model Parameters and Hyperparameter Space for PIHALTuner
     # Infer dimensions from the training data sequences
     # These are passed to PIHALTuner.create or PIHALTuner constructor
@@ -477,28 +477,32 @@ if __name__ == "__main__":
     )
     print(tuner.fixed_model_params)
     # % 
-    # Call tuner.search with tf.data.Dataset objects
-    tuner.search(
-        train_data=train_tf_dataset,       # Pass the tf.data.Dataset
-        validation_data=val_tf_dataset,  # Pass the tf.data.Dataset (or None)
-        epochs=EPOCHS_PER_TRIAL,
-        callbacks=[early_stopping_cb],
-        # batch_size is now part of the dataset, so Keras/Tuner will use that.
-        # Passing it here might be redundant or ignored.
-        verbose=1, 
-    )
-    # # Call tuner.search with tf.data.Dataset objects
-    # tuner.run(
-    #     inputs = inputs_train_dict,        # Pass the tf.data.Dataset
-    #     y= targets_train_dict, 
-    #     validation_data=(inputs_val_dict, targets_val_dict),  # Pass the tf.data.Dataset (or None)
-    #     epochs=EPOCHS_PER_TRIAL,
-    #     callbacks=[early_stopping_cb],
-    #     batch_size =BATCH_SIZE, 
-    #     # batch_size is now part of the dataset, so Keras/Tuner will use that.
-    #     # Passing it here might be redundant or ignored.
-    #     verbose=1, 
-    # )
+    try: 
+        print("Leverage keras HyperModel search... ")
+        # Call tuner.search with tf.data.Dataset objects
+        tuner.search(
+            train_data=train_tf_dataset,       # Pass the tf.data.Dataset
+            validation_data=val_tf_dataset,  # Pass the tf.data.Dataset (or None)
+            epochs=EPOCHS_PER_TRIAL,
+            callbacks=[early_stopping_cb],
+            # batch_size is now part of the dataset, so Keras/Tuner will use that.
+            # Passing it here might be redundant or ignored.
+            verbose=1, 
+        )
+    except: 
+        print("Implement Run for robust data parsing ...")
+        # Call tuner.search with tf.data.Dataset objects
+        tuner.run(
+            inputs = inputs_train_dict,        # Pass the tf.data.Dataset
+            y= targets_train_dict, 
+            validation_data=(inputs_val_dict, targets_val_dict),  # Pass the tf.data.Dataset (or None)
+            epochs=EPOCHS_PER_TRIAL,
+            callbacks=[early_stopping_cb],
+            batch_size =BATCH_SIZE, 
+            # batch_size is now part of the dataset, so Keras/Tuner will use that.
+            # Passing it here might be redundant or ignored.
+            verbose=1, 
+        )
     
     logger.info("Hyperparameter search completed.")
     
