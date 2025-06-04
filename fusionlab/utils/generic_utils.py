@@ -30,7 +30,8 @@ __all__ =[
     'get_actual_column_name', 'transform_contributions', 
     'exclude_duplicate_kwargs', 'reorder_columns',
     'find_id_column', 'check_group_column_validity', 
-    'save_all_figures', 'rename_dict_keys'
+    'save_all_figures', 'rename_dict_keys', 
+    'normalize_time_column'
  ]
 
 

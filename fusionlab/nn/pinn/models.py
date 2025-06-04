@@ -691,7 +691,7 @@ class PIHALNet(Model, NNLearner):
             data_loss = self.compute_loss(
                 x=inputs, y=targets, y_pred=y_pred_for_loss
             )
-
+            print("→ data_loss on first batch:", data_loss.numpy())
             # 3. Calculate Physics Residual Loss (L_pde)
             # We penalize the mean of the squared residual to force it to zero.
             pde_residual = outputs['pde_residual']
