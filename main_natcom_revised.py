@@ -95,7 +95,7 @@ ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 # Training and Forecasting Periods
 TRAIN_END_YEAR = 2022        # Example: Use data up to 2020 for training
 FORECAST_START_YEAR = 2023   # Example: Start forecasting for 2021
-FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
+FORECAST_HORIZON_YEARS = 4   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
 TIME_STEPS = 4               # Lookback window (in years) for dynamic features
 
 # PINN Configuration

@@ -1031,63 +1031,59 @@ class BaseTuner:
                 f"{log_file_path}: {e}"
             )
 
-# ------------------------------------------------------------------
-# Shared documentation components for tuner classes are defined in
-# `_tuner_docs` 
-# ------------------------------------------------------------------
 
 BaseTuner.__doc__ = (
-    """
-    Base class for hyperparameter tuning of time-series forecasting models.
+"""
+Base class for hyperparameter tuning of time-series forecasting models.
 
-    This class provides the core framework for setting up and running
-    Keras Tuner optimization, including input preparation, model building,
-    and results logging. Specific tuner implementations for different
-    model architectures (e.g., XTFT, TFT) should inherit from this class.
-    
-    Universal hyper‑parameter tuning scaffold that powers both
-    :class:`XTFTTuner` and :class:`TFTTuner`.
+This class provides the core framework for setting up and running
+Keras Tuner optimization, including input preparation, model building,
+and results logging. Specific tuner implementations for different
+model architectures (e.g., XTFT, TFT) should inherit from this class.
 
-    The class bundles:
+Universal hyper‑parameter tuning scaffold that powers both
+:class:`XTFTTuner` and :class:`TFTTuner`.
 
-    * **Input validation** – converts NumPy / Tensor inputs to
-      ``float32`` and enforces dimensional consistency via
-      :func:`fusionlab.nn._tensor_validation.validate_model_inputs`.
-    * **Model factory** – builds a compiled model from a
-      :class:`keras_tuner.HyperParameters` instance.
-    * **Batch‑size sweep** – runs an independent Keras Tuner search
-      for every value in *batch_sizes*, then refits the champion
-      trial for additional epochs.
-    * **Result logging** – stores trial summaries and a final
-      JSON report under *tuner_dir/project_name*.
+The class bundles:
 
-    Parameters
-    ----------
-    {params.base.model_name}
-    {params.base.param_space}
-    {params.base.max_trials}
-    {params.base.objective}
-    {params.base.epochs}
-    {params.base.batch_sizes}
-    {params.base.validation_split}
-    {params.base.tuner_dir}
-    {params.base.project_name}
-    {params.base.tuner_type}
-    {params.base.callbacks}
-    {params.base.model_builder}
-    {params.base.verbose}
+* **Input validation** – converts NumPy / Tensor inputs to
+  ``float32`` and enforces dimensional consistency via
+  :func:`fusionlab.nn._tensor_validation.validate_model_inputs`.
+* **Model factory** – builds a compiled model from a
+  :class:`keras_tuner.HyperParameters` instance.
+* **Batch‑size sweep** – runs an independent Keras Tuner search
+  for every value in *batch_sizes*, then refits the champion
+  trial for additional epochs.
+* **Result logging** – stores trial summaries and a final
+  JSON report under *tuner_dir/project_name*.
 
-    Attributes
-    ----------
-    best_hps_ : dict | None
-        Mapping of the best hyper‑parameters discovered.
-    best_model_ : tf.keras.Model | None
-        Fully trained model achieving *overall_best_val_loss*.
-    tuner_ : keras_tuner.Tuner | None
-        Underlying Keras Tuner object.
-    tuning_log_ : list[dict]
-        Chronological list of per‑batch results – ultimately persisted
-        to ``<tuner_dir>/<project_name>_tuning_summary.json``.
-    """
+Parameters
+----------
+{params.base.model_name}
+{params.base.param_space}
+{params.base.max_trials}
+{params.base.objective}
+{params.base.epochs}
+{params.base.batch_sizes}
+{params.base.validation_split}
+{params.base.tuner_dir}
+{params.base.project_name}
+{params.base.tuner_type}
+{params.base.callbacks}
+{params.base.model_builder}
+{params.base.verbose}
+
+Attributes
+----------
+best_hps_ : dict | None
+    Mapping of the best hyper‑parameters discovered.
+best_model_ : tf.keras.Model | None
+    Fully trained model achieving *overall_best_val_loss*.
+tuner_ : keras_tuner.Tuner | None
+    Underlying Keras Tuner object.
+tuning_log_ : list[dict]
+    Chronological list of per‑batch results – ultimately persisted
+    to ``<tuner_dir>/<project_name>_tuning_summary.json``.
+"""
 ).format(params=_tuner_docs)
 

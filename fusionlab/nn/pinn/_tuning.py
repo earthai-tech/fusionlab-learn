@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #   License: BSD-3-Clause
-#   Author: LKouadio <etanoyau@gmail.com> & Gemini AI
+#   Author: LKouadio <etanoyau@gmail.com>
 
 """
 Base classes and utilities for hyperparameter tuning of PINN models.
@@ -10,13 +10,14 @@ import json
 import warnings
 from typing import Dict, Any, Optional, List, Tuple, Union
 
-# import numpy as np
-
 from ..._fusionlog import fusionlog 
+from ...api.docs import DocstringComponents
+from ...api.docs import _pinn_tuner_common_params
 from ...api.property import BaseClass
-from ...utils.generic_utils import vlog 
+from ...utils.generic_utils import vlog, rename_dict_keys  
 from ...utils.deps_utils import ensure_pkg
-from .. import KERAS_BACKEND, KERAS_DEPS, config  
+ 
+from .. import KERAS_BACKEND, KERAS_DEPS, config 
 
 # Keras Tuner is an optional dependency
 HAS_KT = False
@@ -64,6 +65,7 @@ if KERAS_BACKEND:
     Dataset = KERAS_DEPS.Dataset 
     Adam = KERAS_DEPS.Adam
     EarlyStopping = KERAS_DEPS.EarlyStopping
+    AUTOTUNE =KERAS_DEPS.AUTOTUNE 
     
 else:
     class Model: pass 
@@ -71,59 +73,13 @@ else:
     class Adam: pass 
     class EarlyStopping: pass 
 
+_pinn_tuner_docs = DocstringComponents.from_nested_components(
+    base=DocstringComponents(_pinn_tuner_common_params)
+)
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 
 class PINNTunerBase(kt.HyperModel, BaseClass):
-    """
-    Base class for hyperparameter tuning of Physics-Informed Neural
-    Networks (PINNs) like PIHALNet, using Keras Tuner.
-
-    This class should be inherited by specific model tuners (e.g.,
-    `PIHALTuner`). The subclass must implement the `build(self, hp)`
-    method, which defines how the Keras model is constructed and
-    compiled with a given set of hyperparameters.
-
-    The `PINNTunerBase` provides a `search` method to orchestrate the
-    tuning process.
-
-    Parameters
-    ----------
-    fixed_model_params : Dict[str, Any]
-        A dictionary of parameters that are fixed for the model during
-        this tuning session (e.g., input/output dimensions,
-        forecast_horizon). These are passed to the model's constructor.
-    param_space_config : Dict[str, Any], optional
-        A dictionary defining the hyperparameter search space. Keys are
-        parameter names, and values define how they are sampled by
-        Keras Tuner (e.g., using `hp.Choice`, `hp.Int`, `hp.Float`).
-        If None, the subclass's `build` method must define the full space.
-    objective : Union[str, kt.Objective]
-        The objective to optimize (e.g., 'val_loss',
-        'val_total_loss', or a custom `kt.Objective` instance).
-    max_trials : int
-        The maximum number of hyperparameter combinations to try.
-    project_name : str
-        Name of the Keras Tuner project. Results will be stored in
-        `directory/project_name`.
-    directory : str, default "pinn_tuner_results"
-        Directory to store Keras Tuner results.
-    executions_per_trial : int, default 1
-        Number of models to build and fit for each trial for robustness.
-    tuner_type : str, default 'randomsearch'
-        Type of Keras Tuner to use. Options: 'randomsearch',
-        'bayesianoptimization', 'hyperband'.
-    seed : int, optional
-        Random seed for the tuner and hyperparameter sampling for
-        reproducibility.
-    overwrite_tuner : bool, default True
-        Whether to overwrite a previous tuning run with the same
-        `project_name` in the same `directory`.
-    **tuner_kwargs : Any
-        Additional keyword arguments to pass to the specific Keras Tuner
-        constructor (e.g., `beta` for BayesianOptimization,
-        `hyperband_iterations` for Hyperband).
-    """
     @ensure_pkg(
         "keras_tuner",
         extra="'keras_tuner' is required for model tuning.",
@@ -132,7 +88,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
     )
     def __init__(
         self,
-        objective: Union[str, kt.Objective] = 'val_total_loss',
+        objective: Union[str, kt.Objective] = 'val_loss',
         max_trials: int = 10,
         project_name: str = "PINN_Tuning",
         directory: str = "pinn_tuner_results",
@@ -218,7 +174,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
         validation_data: Optional[Dataset] = None,
         callbacks: Optional[List[Callback]] = None,
         verbose: int = 1, 
-        early_stopping_patience: int = 10,
+        patience: int = 10,
         **additional_search_kwargs
     ) -> Tuple[Optional[Model], Optional[kt.HyperParameters], Optional[kt.Tuner]]:
         """
@@ -244,13 +200,49 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
                 Returns (None, None, self.tuner_) if search encounters issues or
                 no best HPs are found.
         """
+        def _rename_target_dict(original_target_dict):
+            """
+            Accepts a Python dict of numpy/TF tensors. Renames keys as needed.
+
+            - "subsidence" → "subs_pred"
+            - "gwl"        → "gwl_pred"
+            - All other keys pass through unmodified.
+
+            Returns a brand-new dict.
+            """
+            return rename_dict_keys(
+                original_target_dict,
+                param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"}
+            )
+
+        # STEP 1: If train_data is not None, wrap it so that any target dict
+        #          inside gets its keys renamed.  We assume each element of
+        #          train_data is (input_dict, target_dict).
+        
+        if train_data is not None:
+            train_data = train_data.map(
+                lambda inputs_dict, targets_dict: (
+                    inputs_dict,
+                    _rename_target_dict(targets_dict)
+                ),
+                num_parallel_calls=AUTOTUNE
+            )
+        # STEP 2: Do the same for validation_data, if provided.
+        if validation_data is not None:
+            validation_data = validation_data.map(
+                lambda inputs_dict, targets_dict: (
+                    inputs_dict,
+                    _rename_target_dict(targets_dict)
+                ),
+                num_parallel_calls=AUTOTUNE
+            )
+            
         tuner_class_map = {
             'randomsearch': kt.RandomSearch,
             'bayesianoptimization': kt.BayesianOptimization,
             'hyperband': kt.Hyperband
         }
         TunerClass = tuner_class_map[self.tuner_type]
-        
         
         tuner_params = {
             "hypermodel": self,
@@ -290,7 +282,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
             
             early_stopping_search = EarlyStopping(
                 monitor=str(monitor_objective), # Ensure it's a string
-                patience=early_stopping_patience,
+                patience=patience,
                 verbose=1 if verbose >=2 else 0, # Keras verbose mapping
                 restore_best_weights=True
             )
@@ -298,7 +290,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
 
             vlog("  Added default EarlyStopping callback for search.",
                  verbose=verbose, level=2, )
-            
+
         self.tuner_.search(
             train_data,
             epochs=epochs,
@@ -381,3 +373,47 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
             logger.warning(
                 f"Could not save tuning summary log to {log_file_path}: {e}"
             )
+            
+
+
+PINNTunerBase.__doc__=(
+    """
+    Base class for hyperparameter tuning of Physics‐Informed Neural
+    Networks (PINNs) like PIHALNet, using Keras Tuner.
+    
+    This class should be inherited by specific model tuners (e.g.,
+    ``PIHALTuner``). The subclass must implement the
+    ``build(self, hp)`` method, which defines how the Keras model is
+    constructed and compiled with a given set of hyperparameters.
+    
+    The ``PINNTunerBase`` provides a ``search`` method to orchestrate
+    the tuning process.
+    
+    Parameters
+    ----------
+    {params.base.fixed_model_params}
+    {params.base.param_space}
+    {params.base.objective}
+    {params.base.max_trials}
+    {params.base.project_name}
+    {params.base.directory}
+    {params.base.executions_per_trial}
+    {params.base.tuner_type}
+    {params.base.seed}
+    {params.base.overwrite_tuner}
+    {params.base.tuner_kwargs}
+    
+    Attributes
+    ----------
+    best_hps_ : dict | None
+        Mapping of the best hyper-parameters discovered during tuning.
+    best_model_ : tf.keras.Model | None
+        Fully trained model achieving the best validation objective.
+    tuner_ : keras_tuner.Tuner | None
+        Underlying Keras Tuner instance used for trials.
+    tuning_log_ : list[dict]
+        Chronological list of trial results, ultimately saved to
+        ``<directory>/<project_name>_tuning_summary.json``.
+    """
+    ).format(params=_pinn_tuner_docs)
+    

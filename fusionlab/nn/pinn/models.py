@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
@@ -12,6 +11,7 @@ from numbers import Real, Integral
 from typing import List, Optional, Union, Dict, Tuple  
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
+from ...params import LearnableC, FixedC, DisabledC 
 from ...api.property import NNLearner 
 from ...core.handlers import param_deprecated_message 
 from ...compat.sklearn import validate_params, Interval, StrOptions 
@@ -205,8 +205,8 @@ class PIHALNet(Model, NNLearner):
         future_input_dim: int,
         output_subsidence_dim: int = 1,
         output_gwl_dim: int = 1,
-        embed_dim: int = 32,       
-        hidden_units: int = 64,    
+        embed_dim: int = 32,
+        hidden_units: int = 64,
         lstm_units: int = 64,
         attention_units: int = 32,
         num_heads: int = 4,
@@ -222,10 +222,12 @@ class PIHALNet(Model, NNLearner):
         use_residuals: bool = True,
         use_batch_norm: bool = False,
         pde_mode: Union[str, List[str], None] = 'consolidation',
-        pinn_coefficient_C: Union[str, float, None] = 'learnable',
+        pinn_coefficient_C: Union[
+            LearnableC, FixedC, DisabledC, str, float, None
+        ] = LearnableC(initial_value=0.01),
         gw_flow_coeffs: Optional[Dict[str, Union[str, float, None]]] = None,
         use_vsn: bool = True,
-        vsn_units: Optional[int] = None, 
+        vsn_units: Optional[int] = None,
         name: str = "PIHALNet",
         **kwargs
     ):
@@ -253,8 +255,7 @@ class PIHALNet(Model, NNLearner):
         self.use_residuals = use_residuals
         self.use_batch_norm = use_batch_norm
         
-        # self.pinn_coefficient_C_config = pinn_coefficient_C
-        
+
         self.use_vsn = use_vsn
         self.vsn_units = vsn_units if vsn_units is not None else self.hidden_units
 
@@ -263,17 +264,119 @@ class PIHALNet(Model, NNLearner):
             quantiles, scales, multi_scale_agg
         )
         self.multi_scale_agg_mode = multi_scale_agg
-        
+
         # --- Store PINN Configuration ---
         self.pde_modes_active = process_pde_modes(
-            pde_mode, enforce_consolidation=True, 
-            solo_return=True, 
+            pde_mode, enforce_consolidation=True,
+            solo_return=True,
         )
-        self.pinn_coefficient_C_config = pinn_coefficient_C # For consolidation
+
+        # Normalize pinn_coefficient_C into one of our helper classes or legacy:
+        self.pinn_coefficient_C_config = self._normalize_C_descriptor(
+            pinn_coefficient_C)
+
         self.gw_flow_coeffs_config = gw_flow_coeffs if gw_flow_coeffs is not None else {}
-        
+
         self._build_halnet_layers()
         self._build_pinn_components()
+
+    def _normalize_C_descriptor(
+        self,
+        raw: Union[LearnableC, FixedC, DisabledC, str, float, None]
+    ):
+        """
+        Internal helper: turn the user‐passed `raw` into exactly one of
+        our three classes (LearnableC, FixedC, DisabledC).
+
+        Raises
+        ------
+        ValueError
+            If `raw` is an unrecognized string or negative float.
+        TypeError
+            If `raw` is not one of the expected types.
+        """
+        # 1) Already one of our classes?
+        if isinstance(raw, (LearnableC, FixedC, DisabledC)):
+            return raw
+
+        # 2) If user passed a bare float or int: treat as FixedC(value=raw)
+        if isinstance(raw, (float, int)):
+            if raw < 0:
+                raise ValueError(
+                    "Numeric pinn_coefficient_C must"
+                    f" be non‐negative, got {raw}"
+                )
+            # Nonzero means 'fixed to that value'
+            return FixedC(value=float(raw))
+
+        # 3) If user passed a string, allow the legacy
+        # values "learnable" or "fixed"
+        if isinstance(raw, str):
+            low = raw.strip().lower()
+            if low == "learnable":
+                # Default initial value = 0.01 is built into LearnableC
+                return LearnableC(initial_value=0.01)
+            if low == "fixed":
+                # Default fixed value = 1.0
+                return FixedC(value=1.0)
+            if low in ("none", "disabled", "off"):
+                return DisabledC()
+
+            raise ValueError(
+                f"Unrecognized pinn_coefficient_C string: '{raw}'. "
+                "Expected 'learnable', 'fixed', 'none', or use"
+                " a LearnableC/FixedC/DisabledC instance."
+            )
+
+        # 4) If user passed None, treat as DisabledC()
+        if raw is None:
+            return DisabledC()
+
+        raise TypeError(
+            f"pinn_coefficient_C must be LearnableC, FixedC, DisabledC, "
+            f"str, float, or None; got {type(raw).__name__}."
+        )
+
+    def _build_pinn_components(self):
+        """
+        Instantiates components required for the physics‐informed module.
+        Specifically, sets up how we obtain C:
+          - If LearnableC, create a trainable variable log_C.
+          - If FixedC, store a lambda that returns a fixed tf.constant(value).
+          - If DisabledC, store a lambda that returns tf.constant(1.0).
+        """
+        # Check which descriptor we have:
+        desc = self.pinn_coefficient_C_config
+
+        if isinstance(desc, LearnableC):
+            # We learn log(C) so that C = exp(log_C) is always > 0
+            self.log_C_coefficient = self.add_weight(
+                name="log_pinn_coefficient_C",
+                shape=(),  # scalar
+                initializer=Constant(tf_log(desc.initial_value)),
+                trainable=True
+            )
+            self._get_C = lambda: tf_exp(self.log_C_coefficient)
+
+        elif isinstance(desc, FixedC):
+            # Fixed value, non‐trainable
+            val = desc.value
+            self._get_C = lambda: tf_constant(val, dtype=tf_float32)
+
+        elif isinstance(desc, DisabledC):
+            # Physics disabled => C internally 1.0 but not used if lambda_pde==0
+            # in compile()
+            self._get_C = lambda: tf_constant(1.0, dtype=tf_float32)
+
+        else:
+            # Should never happen if _normalize_C_descriptor is correct
+            raise RuntimeError(
+                "Internal error: pinn_coefficient_C_config is not a recognized type."
+            )
+
+    def get_pinn_coefficient_C(self) -> Tensor:
+        """Returns the physical coefficient C."""
+        return self._get_C()
         
     def _build_halnet_layers(self):
         """
@@ -466,41 +569,6 @@ class PIHALNet(Model, NNLearner):
         ) if self.use_residuals else None
         
   
-    def _build_pinn_components(self):
-        """
-        Instantiates components required for the physics-informed module.
-        """
-        # --- Learnable Physical Coefficient C ---
-        if self.pinn_coefficient_C_config == 'learnable':
-            # We learn log(C) and use exp(log(C)) to ensure C > 0
-            self.log_C_coefficient = self.add_weight(
-                name="log_pinn_coefficient_C",
-                shape=(), # Scalar
-                initializer=Constant(
-                    tf_log(0.01) # Start with C=0.01
-                ),
-                trainable=True,
-            )
-            self._get_C = lambda: tf_exp(self.log_C_coefficient)
-
-        elif isinstance(self.pinn_coefficient_C_config, (float, int)):
-            # Use a fixed, non-trainable constant value
-            self._get_C = lambda: tf_constant(
-                self.pinn_coefficient_C_config, dtype=tf_float32
-            )
-        elif self.pinn_coefficient_C_config is None:
-            # Physics is disabled, C is effectively 1 but will not be used
-            # if lambda_pde is 0 in compile()
-            self._get_C = lambda: tf_constant(1.0, dtype=tf_float32)
-        else:
-            raise ValueError(
-                "pinn_coefficient_C must be 'learnable', a number, or None."
-            )
-            
-    def get_pinn_coefficient_C(self) -> Tensor:
-        """Returns the physical coefficient C."""
-        return self._get_C()
- 
     @tf_autograph.experimental.do_not_convert
     def call(
         self,
@@ -612,9 +680,8 @@ class PIHALNet(Model, NNLearner):
             pde_residual = tf_zeros_like(s_pred_mean_for_pde)
         
         logger.debug(f"Shape of PDE residual: {pde_residual.shape}")
-        
-        # =====================================================================
-        # XXX TODO: 
+   
+        # XXX TODO: Implement GW flow
         # --- 6. Return All Components for Loss Calculation ---
         return {
             "subs_pred": s_pred_final,
@@ -622,7 +689,6 @@ class PIHALNet(Model, NNLearner):
             "pde_residual": pde_residual,
         }
         
-
     def compile(
         self, 
         optimizer, 
@@ -832,7 +898,6 @@ class PIHALNet(Model, NNLearner):
             name="future_for_embedding"
         )
         
-
         # VSN path logic
         if self.multi_modal_embedding is None:
             # Use tf.cond to handle the condition check for symbolic tensors
@@ -1008,144 +1073,7 @@ class PIHALNet(Model, NNLearner):
         return (s_pred_final, gwl_pred_final,
                 s_pred_mean_for_pde, gwl_pred_mean_for_pde)
     
-    # XXX TODO: For future release with gwl_flow config 
-    # def _create_log_coefficient(
-    #     self, config_value: Union[str, float, None],
-    #     default_initial_value: float, name: str
-    #     ) -> Optional[Variable]:
-    #     """
-    #     Helper to create a learnable (log-space) or fixed coefficient.
-    #     If fixed, it's stored as log(value) for consistent exp() access.
-    #     Returns None if config_value is None.
-    #     """
-    #     if config_value == 'learnable':
-    #         return self.add_weight(
-    #             name=f"log_{name}", shape=(),
-    #             initializer=Constant(
-    #                 tf_log(default_initial_value)
-    #             ),
-    #             trainable=True, dtype=tf_float32
-    #         )
-    #     elif isinstance(config_value, (float, int)):
-    #         if config_value <= 0:
-    #             logger.warning(
-    #                 f"Coefficient for '{name}' received fixed value {config_value}."
-    #                 " PINN coefficients like K, Ss, C are typically positive. "
-    #                 "Using log(abs(value) + epsilon) for stability."
-    #             )
-    #             # Store log of the (abs + epsilon) value, non-trainable
-    #             val_to_log = abs(config_value) + 1e-9 # ensure positive for log
-    #         else:
-    #             val_to_log = float(config_value)
-                
-    #         return tf_constant(tf_log(val_to_log), dtype=tf_float32)
-        
-    #     elif config_value is None:
-    #         return None # Explicitly no coefficient defined by user
-    #     else:
-    #         raise ValueError(
-    #             f"Invalid config for {name}: {config_value}. "
-    #             "Expected 'learnable', a number, or None."
-    #         )
-            
-    # def _create_direct_coefficient(
-    #     self, config_value: Union[str, float, None],
-    #     default_initial_value: float, name: str
-    #     ) -> Optional[Union[Variable, Tensor]]:
-    #     """
-    #     Helper to create a learnable or fixed coefficient directly (not in log-space).
-    #     Returns None if config_value is None.
-    #     """
-    #     if config_value == 'learnable':
-    #         return self.add_weight(
-    #             name=name, shape=(),
-    #             initializer=Constant(default_initial_value),
-    #             trainable=True, dtype=tf_float32
-    #         )
-    #     elif isinstance(config_value, (float, int)):
-    #         return tf_constant(float(config_value), dtype=tf_float32)
-        
-    #     elif config_value is None:
-    #         return None
-    #     else:
-    #         raise ValueError(
-    #             f"Invalid config for {name}: {config_value}. "
-    #             "Expected 'learnable', a number, or None."
-    #         )
-
-    # def __build_pinn_components(self):
-    #     """
-    #     Instantiates trainable/fixed physical coefficients based on config.
-    #     """
-    #     self._is_unique_consolidation =False 
-    #     # --- Coefficient C for Consolidation ---
-    #     if 'consolidation' in self.pde_modes_active:
-    #         self.log_C_consolidation_var = self._create_log_coefficient(
-    #             config_value=self.pinn_coefficient_C_config,
-    #             default_initial_value=0.01, # C ~ 0.01
-    #             name="coeff_C_consolidation"
-    #         )
-    #     else:
-    #         self.log_C_consolidation_var = None
-    #     # --- Coefficients K, Ss, Q for Groundwater Flow ---
-    #     if 'gw_flow' in self.pde_modes_active:
-    #         # Use defaults if gw_flow_coeffs_config is empty or keys are missing
-    #         k_config = self.gw_flow_coeffs_config.get('K', 'learnable')
-    #         ss_config = self.gw_flow_coeffs_config.get('Ss', 'learnable')
-    #         q_config = self.gw_flow_coeffs_config.get('Q', 0.0) # Default Q = 0.0
-
-    #         self.log_K_gwflow_var = self._create_log_coefficient(
-    #             config_value=k_config,
-    #             default_initial_value=1e-4, # K ~ 1e-4 m/s
-    #             name="coeff_K_gwflow"
-    #         )
-    #         self.log_Ss_gwflow_var = self._create_log_coefficient(
-    #             config_value=ss_config,
-    #             default_initial_value=1e-5, # Ss ~ 1e-5 1/m
-    #             name="coeff_Ss_gwflow"
-    #         )
-    #         self.Q_gwflow_var = self._create_direct_coefficient(
-    #             config_value=q_config,
-    #             default_initial_value=0.0,
-    #             name="coeff_Q_gwflow"
-    #         )
-    #     else:
-    #         self.log_K_gwflow_var = None
-    #         self.log_Ss_gwflow_var = None
-    #         self.Q_gwflow_var = None
-    #         self._is_unique_consolidation =True 
-
-    # # --- Getter Methods for Physical Coefficients ---
-    # def get_C_consolidation(self) -> Optional[Tensor]:
-    #     """Returns the positive physical coefficient C for consolidation."""
-    #     if self.log_C_consolidation_var is None:
-    #         if self._is_unique_consolidation:
-    #             # Physics is disabled, C is effectively 1 but will not be used
-    #             # if lambda_pde is 0 in compile()
-    #             return tf_constant(1.0, dtype=tf_float32)
-            
-    #         return None
-        
-    #     return tf_exp(self.log_C_consolidation_var)
-
-    # def get_K_gwflow(self) -> Optional[Tensor]:
-    #     """Returns positive Hydraulic Conductivity K for groundwater flow."""
-    #     if self.log_K_gwflow_var is None:
-    #         return None
-    #     return tf_exp(self.log_K_gwflow_var)
-
-    # def get_Ss_gwflow(self) -> Optional[Tensor]:
-    #     """Returns positive Specific Storage Ss for groundwater flow."""
-    #     if self.log_Ss_gwflow_var is None:
-    #         return None
-    #     return tf_exp(self.log_Ss_gwflow_var)
-
-    # def get_Q_gwflow(self) -> Optional[Tensor]:
-    #     """Returns Source/Sink term Q for groundwater flow."""
-    #     return self.Q_gwflow_var
-
-    # XXX TODO : End groundwater flow config 
-    
+ 
 PIHALNet.__doc__+=r"""\n
 The architecture can operate in two modes for its physical coefficient “C”:
 1. **Parameter Specification:** Use a user-supplied constant value.

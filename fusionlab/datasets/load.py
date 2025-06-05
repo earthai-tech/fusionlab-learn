@@ -1,81 +1,103 @@
 # -*- coding: utf-8 -*-
-# File: fusionlab/datasets/load.py
 # Author: LKouadio <etanoyau@gmail.com>
 # License: BSD-3-Clause
-# -------------------------------------------------------------------
-# Provides API functions for loading datasets included with fusionlab.
-# -------------------------------------------------------------------
-"""
-Dataset Loading Utilities (:mod:`fusionlab.datasets.load`)
-=============================================================
 
+
+"""
 Functions to load sample datasets included with the ``fusionlab``
 package, suitable for demonstrating and testing forecasting models
 and utilities. Datasets are returned as pandas DataFrames or structured
 Bunch objects.
 """
+
 from __future__ import annotations
 
 import os
 import textwrap
 import warnings
-import joblib 
+import joblib
 import pandas as pd
 import numpy as np
-from typing import Optional, Union, Tuple
 
+from typing import (
+    Optional,
+    Union,
+    Tuple,
+    List,
+    Dict,
+    Any
+)
+
+from sklearn.preprocessing import (
+    MinMaxScaler,
+    StandardScaler,
+    OneHotEncoder
+)
+
+from .._fusionlog import fusionlog
 from ..api.bunch import XBunch
 from ._property import (
-    get_data, download_file_if, RemoteMetadata,
-    FLAB_DMODULE, FLAB_REMOTE_DATA_URL
-    )
-# Import spatial sampling utility
+    get_data,
+    download_file_if,
+    RemoteMetadata,
+    FLAB_DMODULE,
+    FLAB_REMOTE_DATA_URL
+)
+from ._config import CITY_CONFIGS 
+
 try:
+    from ..utils.geo_utils import augment_city_spatiotemporal_data
+    from ..utils.geo_utils import generate_dummy_pinn_data
+    from ..utils.io_utils import fetch_joblib_data
+    from ..nn.utils import reshape_xtft_data
+    from ..utils.data_utils import nan_ops
     from ..utils.spatial_utils import spatial_sampling
 except ImportError:
-    # Fallback if spatial_utils doesn't exist at expected location
-    warnings.warn("Could not import spatial_sampling from fusionlab.utils."
-                  " Sampling functionality will be limited.")
-    def spatial_sampling(*args, **kwargs): # Dummy function
-        warnings.warn("spatial_sampling is unavailable. Returning full data.")
-        # Return the dataframe passed (usually the first arg)
+    warnings.warn(
+        "Could not import augment_city_spatiotemporal_data from "
+        "fusionlab.utils.geo_utils. Data augmentation will not be "
+        "available."
+    )
+    warnings.warn(
+        "Could not import spatial_sampling from fusionlab.utils. "
+        "Sampling functionality will be limited."
+    )
+    def spatial_sampling(*args, **kwargs):
+        warnings.warn(
+            "spatial_sampling is unavailable. Returning full data."
+        )
         return args[0] if args else None
 
+    def augment_city_spatiotemporal_data(df, **kwargs):
+        warnings.warn(
+            "augment_city_spatiotemporal_data is unavailable. "
+            "Skipping augmentation."
+        )
+        return df
 
-from sklearn.preprocessing import MinMaxScaler, StandardScaler, OneHotEncoder
-
-try:
-    from fusionlab.nn.utils import reshape_xtft_data 
-    from fusionlab.utils.data_utils import nan_ops 
-except ImportError:
     def nan_ops(df, **kwargs):
         warnings.warn("nan_ops function not found. Skipping NaN handling.")
         return df
+
     def reshape_xtft_data(*args, **kwargs):
         warnings.warn(
-            "reshape_xtft_data currently operates with tensorflow as backend."
-            " Make sure to have tensorflow installed.")
-        raise ModuleNotFoundError 
-        
-try:
-    from fusionlab.utils.io_utils import fetch_joblib_data 
-except ImportError:
+            "reshape_xtft_data currently operates with tensorflow as "
+            "backend. Make sure to have tensorflow installed."
+        )
+        raise ModuleNotFoundError
+
     def fetch_joblib_data(*args, **kwargs):
         warnings.warn("fetch_joblib_data not found. Caching disabled.")
-        raise FileNotFoundError # Mimic cache miss
+        raise FileNotFoundError  # Mimic cache miss
 
 
-__all__ = [
-    "fetch_zhongshan_data",
-    "fetch_nansha_data",
-    "load_processed_subsidence_data"
-    ]
+logger = fusionlog().get_fusionlab_logger(__name__)
 
 # --- Metadata Definition ---
 _ZHONGSHAN_METADATA = RemoteMetadata(
-    file='zhongshan_2000.csv', # The already sampled file
+    file='zhongshan_2000.csv',  # The already sampled file
     url=FLAB_REMOTE_DATA_URL,
-    checksum=None, # TODO: Add checksum
+    checksum=None,  # TODO: Add checksum
     descr_module=None,
     data_module=FLAB_DMODULE
 )
@@ -83,12 +105,724 @@ _ZHONGSHAN_METADATA = RemoteMetadata(
 _NANSHA_METADATA = RemoteMetadata(
     file='nansha_2000.csv',
     url=FLAB_REMOTE_DATA_URL,
-    checksum=None, # TODO: Add checksum
+    checksum=None,  # TODO: Add checksum
     descr_module=None,
     data_module=FLAB_DMODULE
 )
 
-# --- Loading Functions ---
+CITY_CONFIGS["zhongshan"]['metadata'] = _ZHONGSHAN_METADATA
+CITY_CONFIGS["nansha"]['metadata'] = _NANSHA_METADATA
+
+__all__ = [
+    "fetch_zhongshan_data",
+    "fetch_nansha_data",
+    "load_processed_subsidence_data",
+    "load_subsidence_pinn_data"
+]
+
+def load_subsidence_pinn_data(
+    data_name: str = 'zhongshan',
+    strategy: str = "load",
+    n_samples: Optional[int] = None,
+    include_coords: bool = True,
+    include_target: bool = True,
+    encode_categoricals: bool = True,
+    scale_numericals: bool = True,
+    scaler_type: str = "minmax",
+    return_dataframe: bool = False,
+    data_home: Optional[str] = None,
+    use_cache: bool = True,
+    save_cache: bool = False,
+    cache_suffix: str = "",
+    augment_data: bool = False,
+    augment_mode: str = 'both',
+    group_by_cols: Optional[List[str]] = None,
+    time_col: Optional[str] = None,
+    value_cols_interpolate: Optional[List[str]] = None,
+    feature_cols_augment: Optional[List[str]] = None,
+    interpolation_config: Optional[Dict[str, Any]] = None,
+    feature_config: Optional[Dict[str, Any]] = None,
+    target_name: Optional[str] = None,  # Default will be subsidence_col
+    interpolate_target: bool = False,
+    coordinate_precision: Optional[int] = 4,  # Default precision,
+    year_range: Union [Tuple [float, float] ,  None] = None,
+    coords_range: Union [
+        Tuple[Tuple[float, float], Tuple[float, float]],
+        None] = None,
+
+    vars_range = None,
+    verbose: int = 1
+) -> Union[pd.DataFrame, XBunch]:
+
+    if data_name.lower() not in CITY_CONFIGS:
+        raise ValueError(
+            f"Unknown data_name: '{data_name}'. "
+            f"Choose from {list(CITY_CONFIGS.keys())}."
+        )
+
+    cfg = CITY_CONFIGS[data_name.lower()]
+    metadata = cfg["metadata"]
+
+    # Resolve local file path, downloading if necessary
+    # get_data typically returns a path within the package or data_home
+    # download_file_if_missing handles the download logic
+    data_path_resolved = os.path.join(
+        get_data(data_home),
+        metadata.file
+    )
+    try:
+        # Ensure the file is downloaded if it's from a remote URL and
+        # doesn't exist
+        if metadata.url and not os.path.exists(data_path_resolved):
+            if verbose >= 1:
+                logger.info(
+                    f"Attempting to download {data_name} data"
+                    f" from {metadata.url} to "
+                    f"{data_path_resolved}..."
+                )
+            download_file_if(
+                data_path_resolved,
+                metadata.url,
+                checksum=metadata.checksum
+            )
+    except Exception as e:
+        if strategy == "load":
+            raise FileNotFoundError(
+                f"Failed to download or find required data file "
+                f"'{metadata.file}' for {data_name}: {e}"
+            ) from e
+
+        logger.warning(
+            f"Could not download data for {data_name}: {e}. "
+            "Will proceed based on strategy."
+        )
+        # If strategy is fallback or generate, df will be None and
+        # handled later
+
+    # --- Caching Logic ---
+    cache_dir = get_data(data_home)  # Specific cache subdir
+    # Include data_name in cache filename
+    base_name = f"{data_name}_{os.path.splitext(metadata.file)[0]}"
+    proc_fname = f"{base_name}_processed{cache_suffix}.joblib"
+    proc_fpath = os.path.join(cache_dir, proc_fname)
+
+    df = None
+    encoder_info: Dict[str, Any] = {}
+    scaler_info: Dict[str, Any] = {}
+
+    if use_cache:
+        try:
+            cached = joblib.load(proc_fpath)
+            if isinstance(cached, dict) and "data" in cached:
+                df = cached["data"]
+                encoder_info = cached.get("encoder_info", {})
+                scaler_info = cached.get("scaler_info", {})
+                if verbose >= 1:
+                    logger.info(f"Loaded cached data from: {proc_fpath}")
+            else:  # Cache file is invalid
+                if verbose >= 1:
+                    logger.info(
+                        f"Cache file {proc_fpath} is invalid or malformed."
+                    )
+                df = None  # Force reload/generation
+        except FileNotFoundError:
+            if verbose >= 1:
+                logger.info(f"No cache file found at: {proc_fpath}")
+        except Exception as e:
+            warnings.warn(
+                f"Error loading cache ({proc_fpath}: {e}); will reprocess."
+            )
+            df = None  # Force reload/generation
+
+    # --- Data Loading / Generation ---
+    if df is None:  # If not loaded from cache
+        if strategy == "generate":
+            df = None  # Force dummy generation
+
+        elif strategy == "load":
+            if not os.path.exists(data_path_resolved):
+                raise FileNotFoundError(
+                    f"Data file '{data_path_resolved}' not found and "
+                    "strategy is 'load'."
+                )
+            if verbose >= 1:
+                logger.info(
+                    f"Loading raw data from: {data_path_resolved}"
+                )
+            df = pd.read_csv(data_path_resolved)
+
+        elif strategy == "fallback":
+            try:
+                if verbose >= 1:
+                    logger.info(
+                        f"Attempting to load from: {data_path_resolved}"
+                    )
+                df = pd.read_csv(data_path_resolved)
+            except Exception:
+                if verbose >= 1:
+                    logger.info(
+                        f"Failed to load '{data_path_resolved}', "
+                        "generating dummy data."
+                    )
+                df = None  # Trigger dummy generation
+
+        else:
+            raise ValueError(
+                f"Invalid strategy '{strategy}'. Choose 'load', "
+                "'generate', or 'fallback'."
+            )
+
+        if df is None:  # Generate dummy data
+            n_samples = n_samples or 500_000
+            if verbose >= 1:
+                logger.info(
+                    f"Generating {n_samples} dummy samples "
+                    f"for {data_name}..."
+                )
+
+            dummy_data_dict = generate_dummy_pinn_data(
+                n_samples=n_samples,
+                year_range=year_range,
+                coords_range=coords_range,
+                vars_range=vars_range,
+            )
+
+            # Add city-specific categorical and numerical features
+            for cat_col in cfg["categorical_cols"]:
+                # Simplified dummy categories
+                dummy_data_dict[cat_col] = np.random.choice(
+                    [f"{cat_col}_A", f"{cat_col}_B", f"{cat_col}_C"],
+                    size=n_samples
+                )
+            for num_col in cfg["numerical_main"]:
+                if num_col not in dummy_data_dict:
+                    dummy_data_dict[num_col] = np.random.rand(n_samples)
+            if data_name == 'nansha' and 'soil_thickness' in cfg[
+                "numerical_main"
+            ]:
+                dummy_data_dict['soil_thickness'] = np.random.uniform(
+                    1, 10, n_samples
+                )
+
+            df = pd.DataFrame(dummy_data_dict)
+
+        if verbose >= 1:
+            logger.info(f"Data loaded/generated. Initial shape: {df.shape}")
+
+        # --- Preprocessing ---
+        # Ensure essential columns exist
+        essential_for_core_processing = [
+            cfg["time_col"],
+            cfg["lon_col"],
+            cfg["lat_col"],
+            cfg["subsidence_col"],
+            cfg["gwl_col"]
+        ]
+        missing_essentials = [
+            c for c in essential_for_core_processing if c not in df.columns
+        ]
+        if missing_essentials:
+            raise ValueError(
+                f"DataFrame for {data_name} is missing essential columns: "
+                f"{missing_essentials}"
+            )
+
+        df = df.dropna(subset=essential_for_core_processing).copy()
+
+        # Datetime conversion
+        try:
+            time_column_to_convert = cfg["time_col"]
+            if pd.api.types.is_numeric_dtype(df[time_column_to_convert]) and \
+               all(df[time_column_to_convert].apply(
+                   lambda x: 1900 < x < 2100
+               )):  # Heuristic for year int
+                df[cfg["dt_col_name"]] = pd.to_datetime(
+                    df[time_column_to_convert], format="%Y"
+                )
+            else:
+                df[cfg["dt_col_name"]] = pd.to_datetime(
+                    df[time_column_to_convert]
+                )
+        except Exception as e:
+            raise ValueError(
+                f"Error parsing '{cfg['time_col']}' to datetime: {e}"
+            )
+        df = df.dropna(subset=[cfg["dt_col_name"]])
+        if verbose >= 2:
+            logger.debug(
+                f"Shape after datetime conversion & NA drop: {df.shape}"
+            )
+
+        # One-Hot Encode
+        current_encoder_info = {
+            "columns": {}, "names": {}, "encoder_instance": None
+        }
+        if encode_categoricals:
+            cats_to_encode = [
+                c for c in cfg["categorical_cols"] if c in df.columns
+            ]
+            if cats_to_encode:
+                if verbose >= 1:
+                    logger.info(f"One-Hot encoding: {cats_to_encode}")
+                encoder = OneHotEncoder(
+                    sparse_output=False,
+                    handle_unknown='ignore',
+                    dtype=np.float32
+                )
+                enc_data = encoder.fit_transform(df[cats_to_encode])
+                ohe_cols = encoder.get_feature_names_out(cats_to_encode)
+                enc_df = pd.DataFrame(
+                    enc_data,
+                    columns=ohe_cols,
+                    index=df.index
+                )
+                df = df.drop(columns=cats_to_encode)
+                df = pd.concat([df, enc_df], axis=1)
+                for i, col_cat in enumerate(cats_to_encode):
+                    current_encoder_info["columns"][col_cat] = [
+                        name for name in ohe_cols
+                        if name.startswith(col_cat + "_")
+                    ]
+                    current_encoder_info["names"][col_cat] = list(
+                        encoder.categories_[i]
+                    )
+                current_encoder_info["encoder_instance"] = encoder
+                encoder_info = current_encoder_info
+            elif verbose >= 2:
+                logger.debug("No categorical columns found for encoding.")
+        elif verbose >= 1:
+            logger.info("Skipping categorical encoding.")
+
+        # Numerical Time Coordinate (must be done AFTER all rows are fixed)
+        df[cfg["time_col"] + "_numeric"] = (
+            df[cfg["dt_col_name"]].dt.year
+            + (df[cfg["dt_col_name"]].dt.dayofyear - 1)
+            / (365 + df[cfg["dt_col_name"]].dt.is_leap_year.astype(int))
+        )
+
+        # Scale Numerical Features
+        current_scaler_info = {"columns": [], "scaler_instance": None}
+        if scale_numericals:
+            # Scale only the main numerical features, not coords, time, or targets.
+            cols_to_scale = [
+                c for c in cfg["numerical_main"] if c in df.columns
+            ]
+            if cols_to_scale:
+                if verbose >= 1:
+                    logger.info(
+                        f"Scaling numerical features: {cols_to_scale} "
+                        f"with {scaler_type} scaler."
+                    )
+                if scaler_type == "minmax":
+                    scaler = MinMaxScaler()
+                elif scaler_type == "standard":
+                    scaler = StandardScaler()
+                else:
+                    raise ValueError(f"Unknown scaler_type: {scaler_type}")
+
+                df[cols_to_scale] = scaler.fit_transform(df[cols_to_scale])
+                current_scaler_info["columns"] = cols_to_scale
+                current_scaler_info["scaler_instance"] = scaler
+                scaler_info = current_scaler_info
+            elif verbose >= 2:
+                logger.debug(
+                    "No numerical features found/specified for scaling."
+                )
+        elif verbose >= 1:
+            logger.info("Skipping numerical scaling.")
+
+        # Save to cache if enabled
+        if save_cache:
+            os.makedirs(cache_dir, exist_ok=True)
+            save_obj = {
+                "data": df,
+                "encoder_info": encoder_info,
+                "scaler_info": scaler_info
+            }
+            try:
+                joblib.dump(save_obj, proc_fpath)
+                if verbose >= 1:
+                    logger.info(
+                        f"Saved processed cache to: {proc_fpath}"
+                    )
+            except Exception as e:
+                warnings.warn(
+                    f"Failed to save cache to {proc_fpath}: {e}"
+                )
+
+    # --- Data Augmentation Step ---
+    if augment_data:
+        if verbose >= 1:
+            logger.info(
+                f"Applying data augmentation (mode: {augment_mode})..."
+            )
+
+        # Set defaults for augmentation parameters if not provided by user
+        aug_group_cols = group_by_cols or [
+            cfg["lon_col"], cfg["lat_col"]
+        ]
+        aug_time_col = time_col or cfg["time_col"]  # Original time col
+
+        aug_val_cols_interp = value_cols_interpolate
+        if aug_val_cols_interp is None:
+            aug_val_cols_interp = cfg["default_value_cols_interpolate"]
+        # Conditionally add target to interpolation
+        _aug_target_name = target_name or cfg["subsidence_col"]
+        if interpolate_target and _aug_target_name not in aug_val_cols_interp:
+            aug_val_cols_interp.append(_aug_target_name)
+
+        aug_feat_cols_noise = feature_cols_augment
+        if aug_feat_cols_noise is None:
+            aug_feat_cols_noise = cfg["default_feature_cols_augment"]
+            # Ensure target is not in noise augmentation list by default
+            if _aug_target_name in aug_feat_cols_noise:
+                aug_feat_cols_noise = [
+                    c for c in aug_feat_cols_noise
+                    if c != _aug_target_name
+                ]
+
+        interp_conf = interpolation_config or {
+            'freq': 'AS', 'method': 'linear'
+        }
+        aug_conf = feature_config or {
+            'noise_level': 0.01, 'noise_type': 'gaussian'
+        }
+
+        df = augment_city_spatiotemporal_data(  # Call the geo_utils function
+            df=df,
+            city=data_name,  # Pass city to the underlying augmentation
+            mode=augment_mode,
+            group_by_cols=aug_group_cols,
+            time_col=aug_time_col,  # Original time col for datetime ops
+            value_cols_interpolate=aug_val_cols_interp,
+            feature_cols_augment=aug_feat_cols_noise,
+            interpolation_config=interp_conf,
+            augmentation_config=aug_conf,
+            target_name=_aug_target_name,
+            interpolate_target=interpolate_target,
+            verbose=verbose > 1,  # Pass down a boolean verbose
+            coordinate_precision=coordinate_precision,
+            # savefile parameter is not used here, augmentation in-memory
+        )
+        if verbose >= 1:
+            logger.info(f"Data augmentation complete. New shape: {df.shape}")
+
+    if return_dataframe:
+        return df.copy()
+
+    # --- Build XBunch for output ---
+    feature_cols = [
+        c for c in df.columns
+        if c not in [
+            cfg["dt_col_name"],
+            cfg["subsidence_col"],
+            cfg["gwl_col"]
+        ]
+    ]
+    if not include_coords:
+        feature_cols = [
+            c for c in feature_cols
+            if c not in [cfg["lon_col"], cfg["lat_col"]]
+        ]
+
+    target_cols_bunch: list[str] = []
+    if include_target:
+        target_cols_bunch = [cfg["subsidence_col"], cfg["gwl_col"]]
+        # Ensure target columns exist before trying to access them
+        missing_targets = [
+            tc for tc in target_cols_bunch if tc not in df.columns
+        ]
+        if missing_targets:
+            logger.warning(
+                f"Target columns {missing_targets} not found in DataFrame "
+                "for XBunch. Target array will be None."
+            )
+            target_array = None
+            target_cols_bunch = [
+                tc for tc in target_cols_bunch
+                if tc in df.columns
+            ]
+        else:
+            target_array = df[target_cols_bunch].values
+    else:
+        target_array = None
+
+    data_array = (
+        df[feature_cols].values
+        if feature_cols
+        else np.array([[] for _ in range(len(df))])
+    )
+
+    descr = (
+        f"Processed {data_name.capitalize()} PINN data.\n"
+        f"Load Strategy: {strategy}.\n"
+        f"Cache Used: {'Yes' if use_cache else 'No'}, "
+        f"Cache Path: {proc_fpath if use_cache else 'N/A'}.\n"
+        f"Categorical Encoding: {'Applied' if encode_categoricals else 'Skipped'}.\n"
+        f"Numerical Scaling: {scaler_type if scale_numericals else 'Skipped'}.\n"
+        f"Augmentation: {'Applied' if augment_data else 'None'} "
+        f"(Mode: {augment_mode if augment_data else 'N/A'}).\n"
+        f"Rows: {len(df)}, Features: {len(feature_cols)} "
+        f"(in 'data' array).\n"
+        f"Targets: {target_cols_bunch if include_target else 'None'}.\n"
+        f"Coordinate Precision: {coordinate_precision} decimal places.\n"
+        f"Time Column (numeric): {cfg['time_col'] + '_numeric'}."
+    )
+
+    bunch_dict: Dict[str, Any] = {
+        "frame": df.copy(),  # Return a copy
+        "data": data_array,
+        "feature_names": feature_cols,
+        "target_names": target_cols_bunch,
+        "target": target_array,
+        "DESCR": descr,
+        "encoder_info": encoder_info,  # From cache or fresh processing
+        "scaler_info": scaler_info     # From cache or fresh processing
+    }
+    if include_coords:
+        if cfg["lon_col"] in df.columns:
+            bunch_dict["longitude"] = df[cfg["lon_col"]].values
+        if cfg["lat_col"] in df.columns:
+            bunch_dict["latitude"] = df[cfg["lat_col"]].values
+
+    return XBunch(**bunch_dict)
+
+load_subsidence_pinn_data.__doc__="""\
+Load and preprocess subsidence‐focused PINN data for Zhongshan or Nansha.
+
+This function handles data retrieval (from local CSV or remote),
+optional dummy‐data generation, caching, preprocessing (datetime
+conversion, one‐hot encoding, numeric scaling), and optional
+spatio‐temporal augmentation.  When `return_dataframe=False`, it
+returns an XBunch object suitable for downstream modeling.
+
+Parameters
+----------
+data_name : str, default='zhongshan'
+    Which city dataset to load.  Supported values: 'zhongshan',
+    'nansha'.  Case‐insensitive.  Used to select city‐specific
+    metadata (file names, feature lists, etc.).
+strategy : {'load', 'generate', 'fallback'}, default='load'
+    - 'load': strictly attempt to read the CSV from a local or
+      downloaded location; raise an error if not found.
+    - 'generate': skip CSV loading and always generate randomized
+      “dummy” data matching the schema.
+    - 'fallback': attempt CSV load; if loading fails (file missing
+      or corrupted), generate dummy data instead.
+n_samples : int or None, default=None
+    Number of dummy rows to generate when `strategy` is 'generate'
+    or when generation is triggered under 'fallback'.  If None,
+    defaults to 500 000 samples.
+include_coords : bool, default=True
+    If True, include `'longitude'` and `'latitude'` arrays in the
+    returned XBunch (under keys `"longitude"` and `"latitude"`).
+    If False, drop those coordinate columns from the feature set.
+include_target : bool, default=True
+    If True, include subsidence and GWL as targets in the XBunch
+    (`"target_names"` and `"target"`).  If False, return an XBunch
+    with no `"target"` array.
+encode_categoricals : bool, default=True
+    If True, One‐Hot Encode any city‐specific categorical columns
+    (e.g., `'geology'`, `'density_tier'`).  Otherwise, skip encoding.
+scale_numericals : bool, default=True
+    If True, apply MinMaxScaler or StandardScaler (see `scaler_type`)
+    to the city’s “main” numeric features (e.g., rainfall, density,
+    seismic risk).  Coordinates and targets are not scaled here.
+scaler_type : {'minmax', 'standard'}, default='minmax'
+    Which scaler to apply when `scale_numericals=True`.  - 'minmax'
+    uses `sklearn.preprocessing.MinMaxScaler`.  - 'standard' uses
+    `sklearn.preprocessing.StandardScaler`.
+return_dataframe : bool, default=False
+    If True, return the processed `pd.DataFrame` directly.  Otherwise,
+    pack results into an `XBunch` with fields:
+      - `"frame"`: the processed DataFrame
+      - `"data"`: feature matrix (numpy array)
+      - `"feature_names"`: list of column names in `"data"`
+      - `"target_names"`: list of target column names (or `[]`)
+      - `"target"`: target array (or `None`)
+      - `"DESCR"`: textual description
+      - `"longitude"`, `"latitude"` (if `include_coords=True`)
+      - `"encoder_info"`: dict of one‐hot encoder details
+      - `"scaler_info"`: dict of scaler details
+data_home : str or None, default=None
+    Root directory for caching and for locating local data files.
+    Passed to `fusionlab.datasets.get_data()`.  If None, uses the
+    package’s default data directory.
+use_cache : bool, default=True
+    If True, attempt to load a previously processed `.joblib` cache
+    (filename includes `data_name` and `cache_suffix`).  If the cache
+    exists and is valid, skip reprocessing and return cached results.
+save_cache : bool, default=False
+    If True, after successful processing, save the processed DataFrame
+    and encoder/scaler info to a `.joblib` file under `data_home`.
+    Subsequent calls with `use_cache=True` will load from this cache.
+cache_suffix : str, default=''
+    Suffix to append to the cache filename (before `.joblib`).  Useful
+    to distinguish different processing parameters or versions.
+augment_data : bool, default=False
+    If True, apply spatio‐temporal augmentation via
+    `augment_city_spatiotemporal_data`.  This can interpolate missing
+    values, add noise to features, and upsample the time dimension.
+augment_mode : str, default='both'
+    Passed to the augmentation routine.  Typical options include
+    `'both'` (interpolate + noise), `'interpolate_only'`,
+    `'noise_only'`.  See `fusionlab.utils.geo_utils.augment_city_spatiotemporal_data`
+    for full details.
+group_by_cols : list[str] or None, default=None
+    Which columns to group by during augmentation (e.g., coordinates).
+    If None, defaults to the city’s spatial columns (`lon_col`, `lat_col`).
+time_col : str or None, default=None
+    Time column name (string) to pass to augmentation.  If None,
+    uses the city’s configured `"time_col"`.
+value_cols_interpolate : list[str] or None, default=None
+    Which numeric columns to interpolate during augmentation (e.g.,
+    `"GWL"`, `"rainfall_mm"`).  If None, uses the city’s
+    `"default_value_cols_interpolate"` list.
+feature_cols_augment : list[str] or None, default=None
+    Which columns to add noise to during augmentation.  If None,
+    uses the city’s `"default_feature_cols_augment"` list.  Note that
+    the target column is never noise‐augmented by default.
+interpolation_config : dict or None, default=None
+    Configuration passed to the interpolation step of augmentation
+    (e.g., `{'freq': 'AS', 'method': 'linear'}`).  If None, defaults
+    to `{'freq': 'AS', 'method': 'linear'}`.
+feature_config : dict or None, default=None
+    Configuration for adding noise, e.g., `{'noise_level': 0.01,
+    'noise_type': 'gaussian'}`.  If None, sensible defaults are used.
+target_name : str or None, default=None
+    If `interpolate_target=True`, this names the column to interpolate
+    (default is the city’s `"subsidence_col"`).  If not provided,
+    the function uses the configured subsidence column.
+interpolate_target : bool, default=False
+    If True, include the target column itself in the interpolation
+    pass.  (Useful when filling gaps in observed subsidence values.)
+coordinate_precision : int or None, default=4
+    Number of decimal places to round latitude/longitude to.  After
+    rounding, spatial grouping (e.g., augmentation) will treat points
+    at the same rounded coordinate as identical.  Set to None to skip
+    coordinate rounding.
+year_range : tuple[int, int] or None, default=None
+    If dummy data generation is used, the `(min_year, max_year)` range
+    for uniformly sampling integer years.  If None, defaults to `(2000, 2025)`.
+coords_range : tuple[tuple[float, float], tuple[float, float]] or None, default=None
+    If dummy generation is used, spatial bounds as
+    `((lon_min, lon_max), (lat_min, lat_max))`.  If None, defaults to
+    `((113.0, 113.8), (22.3, 22.8))` for Zhongshan and a similar range
+    for Nansha.
+vars_range : dict or None, default=None
+    If dummy generation is used, a dictionary specifying ranges for
+    other variables.  For example:
+    `{"rainfall_mm": (500, 2500), "GWL": (1.0, 4.0)}`.  If a variable
+    is omitted, its default distribution is used.
+verbose : {0, 1, 2}, default=1
+    Controls verbosity of console output:
+    - 0: silent (except for exceptions).
+    - 1: high‐level info messages.
+    - 2: debug‐level messages (detailed shape/log prints).
+
+Returns
+-------
+Union[pd.DataFrame, XBunch]
+    If `return_dataframe=True`, returns the processed DataFrame.
+    Otherwise, returns an XBunch with the following keys:
+      - frame: pandas DataFrame of processed data
+      - data: numpy array (rows × features) ready for modeling
+      - feature_names: list of column names corresponding to `data`
+      - target_names: list of target column names (or empty list)
+      - target: numpy array of target values (or None if `include_target=False`)
+      - DESCR: a multi‐line description string summarizing processing steps
+      - longitude, latitude: numpy arrays if `include_coords=True`
+      - encoder_info: dict containing one‐hot encoder metadata
+      - scaler_info: dict containing scaler metadata
+
+Notes
+-----
+1. **Caching**: When `use_cache=True`, the function looks for a
+   `.joblib` file named `{data_name}_{basename}_processed{cache_suffix}.joblib`
+   under `data_home`.  If found and valid, this file is loaded to
+   skip reprocessing.  If `save_cache=True`, the final processed
+   DataFrame is saved to the same path for future reuse.
+2. **Dummy Generation**: When `strategy='generate'` or when
+   fallback generation is triggered under `'fallback'`, the function
+   calls `generate_dummy_pinn_data(...)` to produce a synthetic
+   dataset.  Users can override `year_range`, `coords_range`, and
+   `vars_range` to control the random distributions.  See the
+   `fusionlab.utils.geo_utils.generate_dummy_pinn_data` docstring
+   for details on default behavior.
+3. **Augmentation**: When `augment_data=True`, the function invokes
+   `augment_city_spatiotemporal_data(...)` with parameters:
+     - `group_by_cols`: columns used to group points (spatially)
+     - `time_col`: column used for temporal interpolation
+     - `value_cols_interpolate`: numeric columns to interpolate
+     - `feature_cols_augment`: columns to which noise is added
+     - `interpolation_config`: interpolation parameters (freq/method)
+     - `feature_config`: noise configuration (level/type)
+     - `coordinate_precision`: precision used to round coords before grouping
+   Ensure that `fusionlab.utils.geo_utils.augment_city_spatiotemporal_data`
+   is available in your installation if using augmentation.
+4. **One‐Hot Encoding**: Only the configured categorical columns
+   (e.g., `'geology'`, `'density_tier'`) are encoded.  All other
+   string columns remain unchanged.
+5. **Numeric Scaling**: Only the city’s `numerical_main` features
+   (e.g., rainfall, density, seismic risk) are passed through the
+   chosen scaler.  Coordinates, time numeric columns, and targets
+   are not scaled here; downstream models or sequence preprocessors
+   may handle those separately.
+
+Examples
+--------
+**1. Simple load of processed Zhongshan data (no caching, no augmentation):**
+
+>>> from fusionlab.datasets.load import load_subsidence_pinn_data
+>>> zbunch = load_subsidence_pinn_data(
+...     data_name='zhongshan',
+...     strategy='load',
+...     use_cache=False,
+...     encode_categoricals=True,
+...     scale_numericals=True,
+...     scaler_type='minmax',
+...     return_dataframe=False,
+...     verbose=1
+... )
+>>> print(zbunch.frame.head())
+     year  longitude  latitude  GWL  rainfall_mm  density_tier_...  ...
+     2000   113.05     22.35    3.2  1200.0     ...
+
+**2. Force generation of 100 000 dummy Nansha samples, skip encoding:**
+
+>>> nbunch = load_subsidence_pinn_data(
+...     data_name='nansha',
+...     strategy='generate',
+...     n_samples=100000,
+...     encode_categoricals=False,
+...     scale_numericals=True,
+...     scaler_type='standard',
+...     save_cache=True,
+...     cache_suffix='_v1',
+...     verbose=2
+... )
+>>> print(nbunch.data.shape)
+(100000, 5)  # e.g., 5 numeric features
+
+**3. Load Zhongshan data, but fallback to dummy if file missing, then
+apply augmentation with yearly interpolation and Gaussian noise:**
+
+>>> zbunch_aug = load_subsidence_pinn_data(
+...     data_name='zhongshan',
+...     strategy='fallback',
+...     use_cache=False,
+...     augment_data=True,
+...     augment_mode='both',
+...     interpolation_config={'freq':'YS','method':'linear'},
+...     feature_config={'noise_level':0.02,'noise_type':'gaussian'},
+...     verbose=1
+... )
+>>> print(zbunch_aug.frame.shape)
+(e.g., 550000, 12)  # Augmented rows added after interpolation
+
+"""
+
+
 def fetch_zhongshan_data(
     *,
     n_samples: Optional[Union[int, str]] = None, 

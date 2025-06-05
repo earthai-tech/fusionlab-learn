@@ -991,84 +991,129 @@ _pinn_tuner_common_params = dict(
     fixed_model_params="""
 fixed_model_params : dict
     Dictionary of parameters that are fixed for this tuning session.
-    These typically include input/output dimensions (static, dynamic,
-    future), output dimensions for subsidence and GWL, the
-    forecast_horizon, quantiles, etc. Passed verbatim to the underlying
-    model constructor so that only hyperparameters are searched over.
-    Required (no default).
+    These parameters are *not* searched over by the tuner but are passed
+    directly to the model constructor. Typical entries include:
+      - `static_input_dim`: dimensionality of static (time‐invariant) inputs.
+      - `dynamic_input_dim`: dimensionality of dynamic (time‐varying) inputs.
+      - `future_input_dim`: dimensionality of future covariates (if any).
+      - `output_subsidence_dim`: output dimension for subsidence predictions.
+      - `output_gwl_dim`: output dimension for groundwater level predictions.
+      - `forecast_horizon`: number of time steps ahead to predict.
+      - `quantiles`: list of quantiles (e.g. [0.1, 0.5, 0.9]) for quantile loss.
+      - Any other model‐specific settings (e.g., `use_vsn`, `use_batch_norm`).
+    These values are required; there is no default. The tuner will treat
+    them as constants while varying only the hyperparameters in `param_space`.
 """,
 
     param_space="""
 param_space : dict, optional
-    A mapping from hyperparameter names to search-space definitions
-    understood by Keras Tuner (e.g. hp.Choice, hp.Int, hp.Float). When
-    *None*, the tuner will use a built-in default space defined by the
-    subclass’s `build(hp)` method.
+    A mapping from hyperparameter names (strings) to search‐space
+    definitions understood by Keras Tuner. For example:
+      - For integer ranges: `{"embed_dim": {"min_value": 32,
+        "max_value": 128, "step": 32}}`
+      - For choices:     `{"activation": ["relu", "gelu"]}`
+      - For floats:      `{"dropout_rate": {"min_value": 0.05,
+        "max_value": 0.3, "step": 0.05}}`
+    When set to `None`, the tuner will rely on defaults defined in the
+    subclass’s `build(hp)` method. Users may omit this to use built‐in
+    defaults or supply a custom search space dictionary here.
 """,
 
     objective="""
 objective : str or keras_tuner.Objective, optional
-    The metric name (e.g. “val_loss” or “val_total_loss”) that the tuner
-    should optimize. If passed as a raw string, any name containing
-    “loss” will be minimized, otherwise maximized. Users may also supply
-    a full `keras_tuner.Objective(...)` instance to override direction or
-    other settings. Defaults to “val_total_loss” in `PIHALTuner` and
-    “val_loss” in `PINNTunerBase`.
+    The metric that the tuner should optimize. Examples:
+      - `"val_loss"`: minimize validation loss.
+      - `"val_total_loss"`: minimize combined validation loss
+        if the model reports multiple loss terms.
+    If passed as a raw string, any name containing `"loss"` is treated
+    as a minimization objective; otherwise it is maximized. For more
+    control (e.g. to override direction or specify a threshold), supply
+    a `keras_tuner.Objective("metric_name", direction="max")` instance.
+    Defaults:
+      - `"val_loss"` in `PINNTunerBase`.
+      - `"val_total_loss"` in `PIHALTuner`.
 """,
 
     max_trials="""
 max_trials : int, optional
-    The maximum number of hyperparameter combinations (trials) to
-    explore. Must be a positive integer. Defaults to 20 in
-    `PIHALTuner` and 10 in `PINNTunerBase`.
+    The maximum number of hyperparameter combinations (trials) to explore
+    during the search. Each trial corresponds to one sampled set of
+    hyperparameters, built, trained, and evaluated. Must be a positive
+    integer. Defaults:
+      - 10 in `PINNTunerBase`.
+      - 20 in `PIHALTuner`.
+    Larger values increase search coverage but proportionally increase
+    total computation time.
 """,
 
     project_name="""
 project_name : str, optional
-    Name of the folder under `directory` in which tuner artifacts are
-    stored (trial summaries, checkpoints, logs). If omitted, a slug
-    derived from the class name and run description is generated.
+    Name of the subdirectory under `directory` in which tuner artifacts
+    are stored (trial summaries, checkpoints, logs). If omitted, the tuner
+    will generate a slug from the class name and a timestamp. This folder
+    will contain model checkpoints, best‐hyperparameters logs, and any
+    JSON summaries for each trial.
 """,
 
     directory="""
 directory : str, optional
     Root directory where Keras Tuner stores results for this project.
-    If omitted, defaults to “pinn_tuner_results” for `PINNTunerBase` and
-    “pihalnet_tuner_results” for `PIHALTuner`.
+    All tuner artifacts (checkpoints, logs, JSON summaries) for every
+    trial are saved under `directory/project_name`. Defaults:
+      - `"pinn_tuner_results"` for `PINNTunerBase`.
+      - `"pihalnet_tuner_results"` for `PIHALTuner`.
+    Specify a writable path if you wish to archive or inspect tuning runs.
 """,
 
     executions_per_trial="""
 executions_per_trial : int, optional
-    Number of models to build and fit for each trial (to reduce
-    variance). Defaults to 1.
+    Number of models to build and fit for each trial. Each execution will
+    initialize and train a separate model with the same hyperparameters,
+    then compute the average (or aggregated) objective to reduce variance
+    due to random initialization. Defaults to 1. Setting >1 is useful
+    when each trial’s performance is noisy and you want more robust
+    ranking of hyperparameter sets.
 """,
 
     tuner_type="""
 tuner_type : str, optional
-    Search strategy to use. Supported values include “randomsearch”
-    (uniform random) and “bayesianoptimization”. Defaults to
-    “randomsearch”.
+    Search strategy to use. Supported values:
+      - `"randomsearch"`: sample uniformly at random.
+      - `"bayesianoptimization"`: use Bayesian optimization to propose
+        hyperparameters based on past trial results.
+      - `"hyperband"`: use Hyperband to adaptively allocate resources
+        among trials based on early performance.
+    Defaults to `"randomsearch"`. Choose `"bayesianoptimization"` if you
+    want more sample‐efficient search (may require specifying a prior).
 """,
 
     seed="""
 seed : int, optional
-    Random seed for reproducibility. If None, Keras Tuner’s default
-    seeding is used.
+    Random seed for reproducibility. Controls:
+      - Hyperparameter sampling (for random search).
+      - Initial model weight initialization.
+    If `None`, Keras Tuner’s default seeding logic is used. Setting a
+    fixed seed ensures that repeated runs with the same configuration
+    produce identical trial order and model initializations.
 """,
 
     overwrite_tuner="""
 overwrite_tuner : bool, optional
-    If True, any existing tuner directory with the same
-    `project_name` under `directory` will be overwritten. Defaults to
-    True.
+    If `True`, any existing tuner directory with the same `project_name`
+    under `directory` will be removed and replaced. Use this to restart a
+    fresh tuning run without retaining previous trials. Defaults to `True`.
+    If set to `False`, existing trial results may be reused if present.
 """,
 
     tuner_kwargs="""
 **tuner_kwargs : dict
-    Any additional keyword arguments to pass to the internal Keras Tuner
-    constructor. For example, `beta` for BayesianOptimization or
-    `hyperband_iterations` for Hyperband.
-""",
+    Additional keyword arguments to pass directly to the chosen Keras
+    Tuner constructor. Examples:
+      - For `BayesianOptimization`: `{"beta": 2.0}` to control exploration.
+      - For `Hyperband`: `{"hyperband_iterations": 3}` to set bracket depth.
+      - For `RandomSearch`: `{"overwrite": False}` or other tuner‐specific
+        flags. Any argument accepted by the underlying tuner API is valid.
+"""
 )
 
 

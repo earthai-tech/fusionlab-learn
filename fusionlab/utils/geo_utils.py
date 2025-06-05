@@ -2,6 +2,7 @@
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
 
+from __future__ import annotations 
 import os
 from typing import List, Optional, Dict, Any
 import warnings 
@@ -783,7 +784,7 @@ def augment_city_spatiotemporal_data(
     augmentation_config: Optional[Dict[str, Any]] = None,
     target_name: Optional[str] = None,
     interpolate_target: bool = False,
-    verbose: bool = False,  # Changed default to False for less noisy library use
+    verbose: bool = True,  
     coordinate_precision: Optional[int] = None,
     savefile: Optional[str] = None,
 ) -> pd.DataFrame:
@@ -1084,3 +1085,118 @@ def augment_city_spatiotemporal_data(
             f"An unexpected error occurred during core augmentation: {e}"
         )
         raise
+
+def generate_dummy_pinn_data(
+    n_samples: int,
+    *,
+    year_range: tuple[float, float] | None = None,
+    coords_range: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    subs_range: tuple[float, float] | None = None,
+    gwl_range: tuple[float, float] | None = None,
+    rainfall_range: tuple[float, float] | None = None,
+    vars_range: dict | None = None
+) -> dict[str, np.ndarray]:
+    """
+    Generate dummy PINN data dictionary with specified or default ranges.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of samples to generate.
+    year_range : tuple[float, float], optional
+        (min_year, max_year) for integer years. Default (2000, 2025).
+    coords_range : tuple[tuple[float, float], tuple[float, float]], optional
+        ((lon_min, lon_max), (lat_min, lat_max)). Default ((113.0, 113.8),
+        (22.3, 22.8)).
+    subs_range : tuple[float, float], optional
+        (mean_subsidence, std_subsidence) for normal distribution. Default
+        (-20, 15).
+    gwl_range : tuple[float, float], optional
+        (mean_gwl, std_gwl) for normal distribution. Default (2.5, 1.0).
+    rainfall_range : tuple[float, float], optional
+        (min_rain, max_rain) for uniform distribution. Default (500, 2500).
+    vars_range : dict, optional
+        Dictionary that may contain any of the keys:
+        'year_range', 'coords_range', 'subs_range', 'gwl_range',
+        'rainfall_range'. Missing keys will fall back to defaults or to
+        explicitly passed arguments.
+
+    Returns
+    -------
+    dummy_data_dict : dict[str, np.ndarray]
+        Dictionary with keys:
+            - "year" : integer years array
+            - "longitude" : float longitudes array
+            - "latitude" : float latitudes array
+            - "subsidence" : float subsidence values array
+            - "GWL" : float groundwater level values array
+            - "rainfall_mm" : float rainfall values array
+    """
+    # Default ranges
+    _def_year = (2000, 2025)
+    _def_coords = ((113.0, 113.8), (22.3, 22.8))
+    _def_subs = (-20.0, 15.0)
+    _def_gwl = (2.5, 1.0)
+    _def_rain = (500.0, 2500.0)
+
+    # Merge vars_range if provided
+    vr = vars_range or {}
+    yr_rng = (year_range
+              if year_range is not None
+              else vr.get("year_range", _def_year))
+    crd_rng = (coords_range
+               if coords_range is not None
+               else vr.get("coords_range", _def_coords))
+    sbs_rng = (subs_range
+               if subs_range is not None
+               else vr.get("subs_range", _def_subs))
+    gwl_rng = (gwl_range
+               if gwl_range is not None
+               else vr.get("gwl_range", _def_gwl))
+    rnf_rng = (rainfall_range
+               if rainfall_range is not None
+               else vr.get("rainfall_range", _def_rain))
+
+    # Unpack ranges
+    yr_min, yr_max = float(yr_rng[0]), float(yr_rng[1])
+    (lon_min, lon_max), (lat_min, lat_max) = crd_rng
+    subs_mean, subs_std = sbs_rng
+    gwl_mean, gwl_std = gwl_rng
+    rain_min, rain_max = rnf_rng
+
+    # Generate year integers
+    years = np.random.randint(
+        int(yr_min), int(yr_max), size=n_samples
+    )
+
+    # Generate coordinates uniformly
+    longitudes = np.random.uniform(
+        float(lon_min), float(lon_max), size=n_samples
+    )
+    latitudes = np.random.uniform(
+        float(lat_min), float(lat_max), size=n_samples
+    )
+
+    # Generate subsidence via normal distribution
+    subsidence = np.random.normal(
+        float(subs_mean), float(subs_std), size=n_samples
+    )
+
+    # Generate GWL via normal distribution
+    gwl = np.random.normal(
+        float(gwl_mean), float(gwl_std), size=n_samples
+    )
+
+    # Generate rainfall uniformly
+    rainfall_mm = np.random.uniform(
+        float(rain_min), float(rain_max), size=n_samples
+    )
+
+    return {
+        "year": years,
+        "longitude": longitudes.astype(np.float32),
+        "latitude": latitudes.astype(np.float32),
+        "subsidence": subsidence.astype(np.float32),
+        "GWL": gwl.astype(np.float32),
+        "rainfall_mm": rainfall_mm.astype(np.float32),
+    }

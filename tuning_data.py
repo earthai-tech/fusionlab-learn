@@ -49,6 +49,7 @@ GWL_COL = "GWL"
 CATEGORICAL_COLS = ['geology'] # Example
 NUMERICAL_COLS_FOR_MAIN_SCALING = [ # Features to scale before sequence prep
     'rainfall_mm', 
+    'seismic_risk_score'
     # Add other numerical features specific to Zhongshan data that need scaling
     # e.g., 'pumping_rate', 'temperature', etc.
     # DO NOT include LON_COL, LAT_COL, TIME_COL_NUMERIC_PINN, SUBSIDENCE_COL, GWL_COL here
@@ -61,7 +62,7 @@ FORECAST_HORIZON = 3 # Prediction horizon (e.g., 3 years)
 OUT_S_DIM = 1
 OUT_G_DIM = 1
 
-BATCH_SIZE =256#32 
+BATCH_SIZE =32#32 
 
 # Splitting Data
 # Example: Use data up to year X for training/validation, rest for a final hold-out test
@@ -338,7 +339,8 @@ if __name__ == "__main__":
             subsidence_col=SUBSIDENCE_COL, 
             gwl_col=GWL_COL,
             dynamic_cols=[ # Define explicitly based on available scaled columns
-                c for c in [GWL_COL, 'rainfall_mm', 'normalized_density', 'normalized_seismic_risk_score'] 
+                c for c in [GWL_COL, 'rainfall_mm', 'normalized_density', 
+                            'normalized_seismic_risk_score'] 
                 if c in df_tune_train.columns
             ],
             static_cols=list(encoded_feature_names_list), # From global
@@ -377,12 +379,12 @@ if __name__ == "__main__":
             output_gwl_dim=OUT_G_DIM,
             normalize_coords=True, # Apply same normalization strategy
             return_coord_scaler=False, # Not strictly needed from validation
+            cols_to_scale="auto", 
             verbose=1
         )
     
     if inputs_val_dict['coords'].shape[0] == 0:
         raise ValueError("Sequence generation produced no validation samples for the tuner.")
-
 
 #%
     # 4. Define Fixed Model Parameters and Hyperparameter Space for PIHALTuner
@@ -408,20 +410,66 @@ if __name__ == "__main__":
     # PIHALTuner's _get_hp_* methods will use these if provided,
     # otherwise they use their own defaults.
     param_space_config = {
-        'embed_dim': {'min_value': 32, 'max_value': 128, 'step': 32},
-        'hidden_units': {'min_value': 64, 'max_value': 256, 'step': 64},
-        'lstm_units': {'min_value': 64, 'max_value': 256, 'step': 64},
-        'attention_units': {'min_value': 32, 'max_value': 128, 'step': 32},
-        'num_heads': [2, 4], # Choices
-        'dropout_rate': {'min_value': 0.05, 'max_value': 0.3, 'step': 0.05},
-        'vsn_units': {'min_value': 16, 'max_value': 64, 'step': 16},
-        'activation': ['relu', 'gelu'], # Choices
-        'learning_rate': [1e-4, 5e-4, 1e-3], # Choices
-        #'lambda_pde': {'min_value': 1, 'max_value': 10, 'step': 0.05, 'sampling': 'log'}, # Tune PDE weight
-        'pinn_coefficient_C_type': ['learnable',],
-        # 'pinn_coefficient_C_value': {'min_value': 1, 'max_value': 5, 'sampling': 'log'},
-        'pde_mode': ['consolidation', 'none'], # Example: tune if PDE is used
-    }
+    # Each Int‐valued hyperparameter uses hp.Int(name, min_value, max_value, step)
+    # Each Choice hyperparameter uses hp.Choice(name, choices_list)
+    # Each Float hyperparameter uses hp.Float(name, min_value, max_value, [step or sampling])
+
+    'embed_dim': {
+        'min_value': 32,
+        'max_value': 64,
+        'step': 32
+    },
+    'hidden_units': {
+        'min_value': 32,
+        'max_value': 128,
+        'step': 32
+    },
+    'lstm_units': {
+        'min_value':32, # 64,
+        'max_value': 128, #256,
+        'step': 32, #64
+    },
+    'attention_units': {
+        'min_value': 16, #32,
+        'max_value': 64, #128,
+        'step': 16, #32
+    },
+    'num_heads': [2, 4],                     # hp.Choice( name, [2,4] )
+
+    'dropout_rate': {
+        'min_value': 0.05,
+        'max_value': 0.30,
+        'step': 0.05
+    },
+    'vsn_units': {
+        'min_value': 16,
+        'max_value': 64,
+        'step': 16
+    },
+    'activation': ['relu', 'gelu'],         # hp.Choice( name, ["relu","gelu"] )
+    'learning_rate': [1e-4, 5e-5, 1e-5],     # hp.Choice( name, [1e-4,5e-4,1e-3] )
+
+    # If you want lambda_pde on a linear grid including zero:
+    'lambda_pde': {
+        'min_value': 0.1,
+        'max_value': 0.5, #1.0,
+        'step': 0.05, 
+        # ↓ DO NOT add 'sampling': 'log' here,
+        #   because min_value=0.0 is invalid for log sampling.
+        'sampling': 'linear'
+    },
+
+    # If you prefer a logarithmic search for C, start strictly > 0:
+    'pinn_coefficient_C_type': ['learnable', 'fixed'],
+    'pinn_coefficient_C_value': {
+        'min_value': 1e-3,
+        'max_value': 1e-1,
+        'sampling': 'log'   # OK because min_value=1e-5 > 0
+    },
+
+    'pde_mode': ['consolidation', 'none']
+}
+
 #%
     # 5. Instantiate PIHALTuner
     logger.info("Instantiating PIHALTuner...")
@@ -440,7 +488,16 @@ if __name__ == "__main__":
 
     # 6. Run Hyperparameter Search
     logger.info("Creating TensorFlow datasets for Keras Tuner...")
-
+    
+    from fusionlab.utils.generic_utils import rename_dict_keys 
+    targets_val_dict = rename_dict_keys(
+        targets_val_dict, 
+        param_to_rename= {"subsidence": 'subs_pred', 'gwl': "gwl_pred"}
+    )
+    targets_train_dict = rename_dict_keys(
+        targets_train_dict, 
+        param_to_rename= {"subsidence": 'subs_pred', 'gwl': "gwl_pred"}
+    )
     # Create tf.data.Dataset for training
     if not inputs_train_dict or not targets_train_dict:
         raise ValueError("inputs_train_dict or targets_train_dict is None"

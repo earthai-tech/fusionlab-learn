@@ -223,7 +223,8 @@ class KerasDependencies:
             'where':('tensorflow', 'where'), 
             'log': ('tensorflow.math', 'log'), 
             'exp': ('tensorflow', 'exp'), 
-            'name_scope': ('tensorflow', 'name_scope')
+            'name_scope': ('tensorflow', 'name_scope'), 
+            'random': ('tensorflow', 'random')
             
             
         }

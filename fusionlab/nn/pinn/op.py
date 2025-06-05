@@ -37,7 +37,7 @@ def compute_consolidation_residual(
     h_pred: Tensor,
     time_steps: Tensor,
     C: Union[float, Tensor], 
-    eps: float  = 1e-9
+    eps: float  = 1e-5
 ) -> Tensor:
     """
     Computes the residual of a simplified consolidation equation.
@@ -64,7 +64,7 @@ def compute_consolidation_residual(
         A learnable coefficient representing physical properties
         like compressibility (:math:`m_v`). Can be a scalar float,
         a tensor, or a trainable ``tf.Variable``.
-    eps: float, default=1e-9
+    eps: float, default=1e-5
        Epsilon to prevent division by zero for static time
        
     Returns
@@ -611,3 +611,141 @@ def compute_gw_flow_derivatives(
         logger.warning("d2h/dy2 is None in compute_gw_flow_derivatives.")
         
     return dh_dt, d2h_dx2, d2h_dy2
+
+    # XXX TODO: For future release with gwl_flow config 
+    # def _create_log_coefficient(
+    #     self, config_value: Union[str, float, None],
+    #     default_initial_value: float, name: str
+    #     ) -> Optional[Variable]:
+    #     """
+    #     Helper to create a learnable (log-space) or fixed coefficient.
+    #     If fixed, it's stored as log(value) for consistent exp() access.
+    #     Returns None if config_value is None.
+    #     """
+    #     if config_value == 'learnable':
+    #         return self.add_weight(
+    #             name=f"log_{name}", shape=(),
+    #             initializer=Constant(
+    #                 tf_log(default_initial_value)
+    #             ),
+    #             trainable=True, dtype=tf_float32
+    #         )
+    #     elif isinstance(config_value, (float, int)):
+    #         if config_value <= 0:
+    #             logger.warning(
+    #                 f"Coefficient for '{name}' received fixed value {config_value}."
+    #                 " PINN coefficients like K, Ss, C are typically positive. "
+    #                 "Using log(abs(value) + epsilon) for stability."
+    #             )
+    #             # Store log of the (abs + epsilon) value, non-trainable
+    #             val_to_log = abs(config_value) + 1e-9 # ensure positive for log
+    #         else:
+    #             val_to_log = float(config_value)
+                
+    #         return tf_constant(tf_log(val_to_log), dtype=tf_float32)
+        
+    #     elif config_value is None:
+    #         return None # Explicitly no coefficient defined by user
+    #     else:
+    #         raise ValueError(
+    #             f"Invalid config for {name}: {config_value}. "
+    #             "Expected 'learnable', a number, or None."
+    #         )
+            
+    # def _create_direct_coefficient(
+    #     self, config_value: Union[str, float, None],
+    #     default_initial_value: float, name: str
+    #     ) -> Optional[Union[Variable, Tensor]]:
+    #     """
+    #     Helper to create a learnable or fixed coefficient directly (not in log-space).
+    #     Returns None if config_value is None.
+    #     """
+    #     if config_value == 'learnable':
+    #         return self.add_weight(
+    #             name=name, shape=(),
+    #             initializer=Constant(default_initial_value),
+    #             trainable=True, dtype=tf_float32
+    #         )
+    #     elif isinstance(config_value, (float, int)):
+    #         return tf_constant(float(config_value), dtype=tf_float32)
+        
+    #     elif config_value is None:
+    #         return None
+    #     else:
+    #         raise ValueError(
+    #             f"Invalid config for {name}: {config_value}. "
+    #             "Expected 'learnable', a number, or None."
+    #         )
+
+    # def __build_pinn_components(self):
+    #     """
+    #     Instantiates trainable/fixed physical coefficients based on config.
+    #     """
+    #     self._is_unique_consolidation =False 
+    #     # --- Coefficient C for Consolidation ---
+    #     if 'consolidation' in self.pde_modes_active:
+    #         self.log_C_consolidation_var = self._create_log_coefficient(
+    #             config_value=self.pinn_coefficient_C_config,
+    #             default_initial_value=0.01, # C ~ 0.01
+    #             name="coeff_C_consolidation"
+    #         )
+    #     else:
+    #         self.log_C_consolidation_var = None
+    #     # --- Coefficients K, Ss, Q for Groundwater Flow ---
+    #     if 'gw_flow' in self.pde_modes_active:
+    #         # Use defaults if gw_flow_coeffs_config is empty or keys are missing
+    #         k_config = self.gw_flow_coeffs_config.get('K', 'learnable')
+    #         ss_config = self.gw_flow_coeffs_config.get('Ss', 'learnable')
+    #         q_config = self.gw_flow_coeffs_config.get('Q', 0.0) # Default Q = 0.0
+
+    #         self.log_K_gwflow_var = self._create_log_coefficient(
+    #             config_value=k_config,
+    #             default_initial_value=1e-4, # K ~ 1e-4 m/s
+    #             name="coeff_K_gwflow"
+    #         )
+    #         self.log_Ss_gwflow_var = self._create_log_coefficient(
+    #             config_value=ss_config,
+    #             default_initial_value=1e-5, # Ss ~ 1e-5 1/m
+    #             name="coeff_Ss_gwflow"
+    #         )
+    #         self.Q_gwflow_var = self._create_direct_coefficient(
+    #             config_value=q_config,
+    #             default_initial_value=0.0,
+    #             name="coeff_Q_gwflow"
+    #         )
+    #     else:
+    #         self.log_K_gwflow_var = None
+    #         self.log_Ss_gwflow_var = None
+    #         self.Q_gwflow_var = None
+    #         self._is_unique_consolidation =True 
+
+    # # --- Getter Methods for Physical Coefficients ---
+    # def get_C_consolidation(self) -> Optional[Tensor]:
+    #     """Returns the positive physical coefficient C for consolidation."""
+    #     if self.log_C_consolidation_var is None:
+    #         if self._is_unique_consolidation:
+    #             # Physics is disabled, C is effectively 1 but will not be used
+    #             # if lambda_pde is 0 in compile()
+    #             return tf_constant(1.0, dtype=tf_float32)
+            
+    #         return None
+        
+    #     return tf_exp(self.log_C_consolidation_var)
+
+    # def get_K_gwflow(self) -> Optional[Tensor]:
+    #     """Returns positive Hydraulic Conductivity K for groundwater flow."""
+    #     if self.log_K_gwflow_var is None:
+    #         return None
+    #     return tf_exp(self.log_K_gwflow_var)
+
+    # def get_Ss_gwflow(self) -> Optional[Tensor]:
+    #     """Returns positive Specific Storage Ss for groundwater flow."""
+    #     if self.log_Ss_gwflow_var is None:
+    #         return None
+    #     return tf_exp(self.log_Ss_gwflow_var)
+
+    # def get_Q_gwflow(self) -> Optional[Tensor]:
+    #     """Returns Source/Sink term Q for groundwater flow."""
+    #     return self.Q_gwflow_var
+
+    # XXX TODO : End groundwater flow config 

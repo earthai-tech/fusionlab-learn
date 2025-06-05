@@ -169,8 +169,8 @@ def test_pihaltuner_build_method_from_create():
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB, 
     reason="PIHALNet or KerasTuner not available"
  )
-def test_pihaltuner_fit_calls_search(mocker):
-    """Tests that PIHALTuner.fit() correctly calls super().search()."""
+def test_pihaltuner_run_calls_search(mocker):
+    """Tests that PIHALTuner.runt() correctly calls super().search()."""
     fixed_params = DEFAULT_PIHALNET_FIXED_PARAMS.copy()
     fixed_params.update({
         "static_input_dim": S_DIM_TUNER,
@@ -183,7 +183,7 @@ def test_pihaltuner_fit_calls_search(mocker):
     tuner = PIHALTuner(
         fixed_model_params=fixed_params,
         objective='val_loss', max_trials=1,
-        project_name="test_fit_calls_search"
+        project_name="test_run_calls_search"
     )
     
     raw_inputs_np, raw_targets_np = generate_raw_numpy_data_for_tuner()
@@ -192,7 +192,7 @@ def test_pihaltuner_fit_calls_search(mocker):
     mocked_base_search = mocker.patch.object(PINNTunerBase, 'search', autospec=True)
     mocked_base_search.return_value = (None, None, None) # Mock its return
 
-    tuner.fit(
+    tuner.run(
         inputs=raw_inputs_np,
         y=raw_targets_np,
         # forecast_horizon and quantiles are now part of fixed_model_params
@@ -212,8 +212,8 @@ def test_pihaltuner_fit_calls_search(mocker):
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB,
     reason="PIHALNet or KerasTuner not available"
  )
-def test_pihaltuner_fit_short_search_smoke_test():
-    """Smoke test for a minimal PIHALTuner.fit() run."""
+def test_pihaltuner_run_short_search_smoke_test():
+    """Smoke test for a minimal PIHALTuner.run() run."""
     raw_inputs_np, raw_targets_np = generate_raw_numpy_data_for_tuner(
         s_dim=S_DIM_TUNER, d_dim=D_DIM_TUNER, f_dim=F_DIM_TUNER
     )
@@ -235,7 +235,7 @@ def test_pihaltuner_fit_short_search_smoke_test():
     )
     
     try:
-        best_model, best_hps, _ = tuner.fit(
+        best_model, best_hps, _ = tuner.run(
             inputs=raw_inputs_np, # Data for creating tf.data.Dataset
             y=raw_targets_np,
             validation_data=(val_inputs_np, val_targets_np),
@@ -248,7 +248,7 @@ def test_pihaltuner_fit_short_search_smoke_test():
     except Exception as e:
         import traceback
         traceback.print_exc()
-        pytest.fail(f"PIHALTuner smoke test (fit method) failed: {e}")
+        pytest.fail(f"PIHALTuner smoke test (run method) failed: {e}")
 
 if __name__ == '__main__':
     if FUSIONLAB_AVAILABLE and HAS_KT_LIB:
