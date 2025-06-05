@@ -25,6 +25,7 @@ search process.
 
    forecast_tuner
    forecast_tuner_class_based
+   pihal_tuner 
 
 .. toctree::
    :maxdepth: 1
@@ -32,6 +33,7 @@ search process.
    
    tuning_examples
    tuning_xtft
+   tuning_pihalnet 
 
 .. note::
    The tuning examples use small search spaces and few trials for
