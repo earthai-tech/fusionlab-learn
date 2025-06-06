@@ -208,7 +208,8 @@ We split the synthetic data and use ``prepare_pinn_data_sequences``
 to create the input/target dictionaries for ``PIHALNet``.
 
 .. code-block:: python
-
+   :linenos: 
+   
    # Split synthetic data (can use all for train/val in this simple case or split by location)
    synth_unique_locs = df_synthetic_processed[[SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL]].drop_duplicates()
    synth_train_locs, synth_val_locs = train_test_split(
@@ -266,9 +267,8 @@ to create the input/target dictionaries for ``PIHALNet``.
 
 .. code-block:: text
 
-   ...(logger messages about data shapes)...
-   Num training sequences: ...
-   Num validation sequences: ...
+   Num training sequences: 658
+   Num validation sequences: 282
 
 Step 1.4: Configure and Run PIHALTuner with Synthetic Data
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -276,7 +276,8 @@ We set up ``PIHALTuner`` with fixed parameters derived from our synthetic
 data and a simplified hyperparameter search space.
 
 .. code-block:: python
-
+   :linenos: 
+   
    # Define fixed parameters for PIHALTuner using synthetic data shapes
    fixed_params_synth = {
        "static_input_dim": inputs_train_np_s.get('static_features', np.zeros((0,0))).shape[-1],
