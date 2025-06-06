@@ -409,7 +409,6 @@ class GWFlowPINN(Model, NNLearner):
         return instance
 
 
-
 class GWResidual:
     """
     Manages and provides physical coefficients (K, Ss, Q) for groundwater
@@ -533,7 +532,8 @@ class GWResidual:
                         f"Using small epsilon (1e-9) instead."
                     )
                     initial_val_for_var = 1e-9 # Ensure positivity for log
-                initial_val_for_var = tf_log(tf_cast(initial_val_for_var, dtype=tf_float32))
+                initial_val_for_var = tf_log(
+                    tf_cast(initial_val_for_var, dtype=tf_float32))
             
             return Variable(
                 initial_value=initial_val_for_var,
@@ -646,8 +646,6 @@ class GWResidual:
             f"{self.__class__.__name__}("
             f"K={k_repr}, Ss={ss_repr}, Q={q_repr})"
         )
-
-# --- New Keras Layer for Groundwater Flow PDE Residual ---
 
 class GroundwaterFlowPDEResidual(Layer):
     """
