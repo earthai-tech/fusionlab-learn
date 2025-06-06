@@ -73,7 +73,8 @@ Core Components and Workflow
     other fixed parameters directly from your data arrays.
 
     .. code-block:: python
-
+       :linenos:
+       
        from fusionlab.nn.pinn.tuning import PIHALTuner
        import numpy as np # For dummy data
        import tensorflow as tf # For EarlyStopping

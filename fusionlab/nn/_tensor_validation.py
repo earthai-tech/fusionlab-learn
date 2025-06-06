@@ -4,6 +4,8 @@
 
 import warnings
 from typing import List, Tuple, Optional, Union, Dict, Any
+
+from .._fusionlog import fusionlog 
 from ..utils.deps_utils import ensure_pkg 
 from ..compat.tf import ( 
     optional_tf_function, 
@@ -23,6 +25,7 @@ if KERAS_BACKEND:
     tf_int32=KERAS_DEPS.int32
     tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
     tf_cast=KERAS_DEPS.cast 
+    tf_cond =KERAS_DEPS.cond
     tf_reduce_all=KERAS_DEPS.reduce_all
     tf_equal=KERAS_DEPS.equal 
     tf_debugging= KERAS_DEPS.debugging 
@@ -75,6 +78,7 @@ if HAS_TF:
 #     # Enable compatibility mode for ndim
 #     config.compat_ndim_enabled = True 
 
+_logger = fusionlog().get_fusionlab_logger(__name__)
 # --------------------------- tensor validation -------------------------------
 
 def set_anomaly_config(
@@ -1451,7 +1455,7 @@ def validate_batch_sizes_eager(
             f"``future_covariate_input`` batch_size={future_batch_size}."
         )
 
-
+# @optional_tf_function 
 def align_temporal_dimensions(
     tensor_ref: Tensor,
     tensor_to_align: Tensor,
@@ -1563,31 +1567,72 @@ def align_temporal_dimensions(
         output_tensor_to_align = tensor_to_align[tuple(slicers)]
 
     elif mode == 'pad_to_ref':
-        if current_align_time_steps < target_time_steps:
-            # Calculate padding needed for the time dimension
-            padding_needed = target_time_steps - current_align_time_steps
-            # Construct paddings argument for tf_pad
-            # It's a list of pairs for each dimension: [[before, after], ...]
+        def _pad():
+            pad_len = target_time_steps - current_align_time_steps
             paddings = [[0, 0]] * rank_align
-            paddings[align_time_dim_index] = [0, padding_needed]
-            output_tensor_to_align = tf_pad(
-                tensor_to_align, paddings, mode="CONSTANT",
-                constant_values=padding_value
+            paddings[align_time_dim_index] = [0, pad_len]
+            return tf_pad(
+                tensor_to_align,
+                paddings,
+                mode="CONSTANT",
+                constant_values=padding_value,
             )
-        elif current_align_time_steps > target_time_steps:
-            # Slice if tensor_to_align is longer
+
+        def _slice():
             slicers = [slice(None)] * rank_align
             slicers[align_time_dim_index] = slice(None, target_time_steps)
-            output_tensor_to_align = tensor_to_align[tuple(slicers)]
+            return tensor_to_align[tuple(slicers)]
+
+        def _identity():
+            return tensor_to_align
+
+        output_tensor_to_align = tf_cond(
+            current_align_time_steps < target_time_steps,
+            true_fn=_pad,
+            false_fn=lambda: tf_cond(
+                current_align_time_steps > target_time_steps,
+                true_fn=_slice,
+                false_fn=_identity,
+            ),
+        )
+        
+        # if current_align_time_steps < target_time_steps:
+        #     # Calculate padding needed for the time dimension
+        #     padding_needed = target_time_steps - current_align_time_steps
+        #     # Construct paddings argument for tf_pad
+        #     # It's a list of pairs for each dimension: [[before, after], ...]
+        #     paddings = [[0, 0]] * rank_align
+        #     paddings[align_time_dim_index] = [0, padding_needed]
+        #     output_tensor_to_align = tf_pad(
+        #         tensor_to_align, paddings, mode="CONSTANT",
+        #         constant_values=padding_value
+        #     )
+        # elif current_align_time_steps > target_time_steps:
+        #     # Slice if tensor_to_align is longer
+        #     slicers = [slice(None)] * rank_align
+        #     slicers[align_time_dim_index] = slice(None, target_time_steps)
+        #     output_tensor_to_align = tensor_to_align[tuple(slicers)]
         # If equal, no change needed for output_tensor_to_align
 
     elif mode == 'truncate_ref_if_shorter':
-        # "truncate tensor_ref if tensor_to_align is shorter"
-        if current_align_time_steps < target_time_steps:
-            # Truncate tensor_ref to match tensor_to_align's time length
-            slicers_ref = [slice(None)] * rank_ref
-            slicers_ref[ref_time_dim_index] = slice(None, current_align_time_steps)
-            output_tensor_ref = tensor_ref[tuple(slicers_ref)]
+        def _truncate():
+            slicers = [slice(None)] * rank_ref
+            slicers[ref_time_dim_index] = slice(None, current_align_time_steps)
+            return tensor_ref[tuple(slicers)]
+
+        output_tensor_to_align = tf_cond(
+            current_align_time_steps < target_time_steps,
+            true_fn=_truncate,
+            false_fn=lambda: tensor_ref,
+        )
+
+
+        # # "truncate tensor_ref if tensor_to_align is shorter"
+        # if current_align_time_steps < target_time_steps:
+        #     # Truncate tensor_ref to match tensor_to_align's time length
+        #     slicers_ref = [slice(None)] * rank_ref
+        #     slicers_ref[ref_time_dim_index] = slice(None, current_align_time_steps)
+        #     output_tensor_ref = tensor_ref[tuple(slicers_ref)]
             # output_tensor_to_align remains as is
         # If tensor_to_align is not shorter, both are returned as is in this mode.
 
@@ -2856,3 +2901,219 @@ def validate_model_inputs(
     # Return in the order: static, dynamic, future
     return static_p, dynamic_p, future_p
 
+def check_inputs(
+    dynamic_inputs: Optional[np.ndarray],
+    static_inputs: Optional[np.ndarray] | None = None,
+    future_inputs: Optional[np.ndarray] | None = None,
+    static_input_dim: Optional[int] | None = None,
+    dynamic_input_dim: Optional[int] | None = None,
+    future_input_dim: Optional[int] | None = None,
+    time_steps: Optional [int] = None, 
+    forecast_horizon: Optional[int] | None = None,
+    coords: Optional[np.ndarray] | None = None,
+    mode: str = "strict",
+    verbose: int = 0,
+) -> None:
+    r"""
+    Validate shapes and consistency of input arrays for sequence‑to‑sequence
+    models.
+
+    The function performs a series of consistency checks on dynamic,
+    static, future, and coordinate inputs typically used in temporal
+    forecasting networks.  It raises a :class:`ValueError` if any check
+    fails.  No value is returned.
+
+    Parameters
+    ----------
+    dynamic_inputs : Optional[np.ndarray]
+        Tensor of shape ``(batch_size, time_steps, dynamic_input_dim)``.
+        Mandatory in both *strict* and *soft* modes.
+    static_inputs : Optional[np.ndarray], default=None
+        Tensor of shape ``(batch_size, static_input_dim)``.  Required in
+        *strict* mode; optional in *soft* mode.
+    future_inputs : Optional[np.ndarray], default=None
+        Tensor of shape ``(batch_size, forecast_horizon,
+        future_input_dim)``.  Required in *strict* mode; optional in
+        *soft* mode.
+    static_input_dim : Optional[int], default=None
+        Expected feature dimension of *static_inputs*.
+    dynamic_input_dim : Optional[int], default=None
+        Expected feature dimension of *dynamic_inputs*.  Inferred if
+        *None*.
+    future_input_dim : Optional[int], default=None
+        Expected feature dimension of *future_inputs*.
+    time_steps : int, optional 
+        Number of historical timesteps expected in *dynamic_inputs* and
+        *coords*. Inferred from dynamic inputs if *None*. 
+    forecast_horizon : Optional[int], default=None
+        Number of future timesteps; required if *future_inputs* is given.
+    coords : Optional[np.ndarray], default=None
+        Coordinate tensor of shape ``(batch_size, time_steps, 3)``.
+    mode : {'strict', 'soft'}, default='strict'
+        Validation policy.  *strict* requires all optional arrays and
+        their dimensions; *soft* allows omissions but demands that any
+        provided array has an explicit dimension.
+    verbose : int, default=0
+        Verbosity level (0–5).  A higher value prints additional debug
+        information to *stdout* and writes to the module logger.
+
+    Raises
+    ------
+    ValueError
+        If any check fails.
+    Notes
+    -----
+    * When *mode* is ``'soft'`` and a dimension is omitted, the function
+      will attempt to infer the dimension and emit a
+      :class:`UserWarning`.
+    * Verbose levels  
+      ``0`` – silent (errors only)  
+      ``1`` – high‑level messages  
+      ``2+`` – progressively more fine‑grained diagnostics.
+    Examples
+    --------
+    >>> from fusionlab.nn._tensor_validation import check_inputs 
+    >>> batch, t, h = 32, 24, 12
+    >>> dyn = np.random.rand(batch, t, 8)
+    >>> fut = np.random.rand(batch, h, 4)
+    >>> stat = np.random.rand(batch, 3)
+    >>> check_inputs(
+    ...     time_steps=t,
+    ...     dynamic_inputs=dyn,
+    ...     static_inputs=stat,
+    ...     future_inputs=fut,
+    ...     static_input_dim=3,
+    ...     forecast_horizon=h,
+    ...     future_input_dim=4,
+    ...     mode='strict',
+    ... )
+    """
+    
+    # Helper: emit message according to verbosity level.
+    def _vmsg(level: int, message: str) -> None:
+        if verbose >= level:
+            print(message)
+            _logger.debug(message)
+
+    _vmsg(1, f"Validation started in '{mode}' mode.")
+
+    #  mode check -
+    if mode not in {"strict", "soft"}:
+        raise ValueError(f"Invalid mode '{mode}'. Must be 'strict' or 'soft'.")
+
+    #  mandatory tensors -
+    if dynamic_inputs is None:
+        raise ValueError("`dynamic_inputs` must be provided.")
+
+ 
+    if mode == "strict" and forecast_horizon is None:
+        raise ValueError("`forecast_horizon` required in strict mode.")
+
+    if mode == "soft" and future_inputs is not None and forecast_horizon is None:
+        raise ValueError(
+            "`forecast_horizon` required when `future_inputs` "
+            "provided in soft mode."
+        )
+
+    # -strict policy -
+    if mode == "strict":
+        if static_inputs is None:
+            raise ValueError("`static_inputs` required in strict mode.")
+        if future_inputs is None:
+            raise ValueError("`future_inputs` required in strict mode.")
+        if static_input_dim is None:
+            raise ValueError("`static_input_dim` required in strict mode.")
+        if future_input_dim is None:
+            raise ValueError("`future_input_dim` required in strict mode.")
+
+    # -- soft‑mode inference --
+    if mode == "soft":
+        if static_inputs is not None and static_input_dim is None:
+            if static_inputs.ndim == 2:
+                static_input_dim = static_inputs.shape[1]
+                # warnings.warn(
+                #     f"Inferred `static_input_dim`={static_input_dim}.",
+                #     UserWarning,
+                # )
+                _vmsg(2, "Inferred static_input_dim in soft mode.")
+            else:
+                raise ValueError("Cannot infer `static_input_dim`; "
+                                 "static_inputs must be 2‑D.")
+        if future_inputs is not None and future_input_dim is None:
+            if future_inputs.ndim == 3:
+                future_input_dim = future_inputs.shape[2]
+                # warnings.warn(
+                #     f"Inferred `future_input_dim`={future_input_dim}.",
+                #     UserWarning,
+                # )
+                _vmsg(2, "Inferred future_input_dim in soft mode.")
+            else:
+                raise ValueError("Cannot infer `future_input_dim`; "
+                                 "future_inputs must be 3‑D.")
+
+    # -- batch sizes ---
+    batch_size = dynamic_inputs.shape[0] 
+    _vmsg(3, f"Batch size detected: {batch_size}")
+    infered_time_steps = dynamic_inputs.shape [1] 
+    
+    # -- dynamic_inputs checks --
+    if dynamic_input_dim is None:
+        if dynamic_inputs.ndim == 3:
+            dynamic_input_dim = dynamic_inputs.shape[2]
+            _vmsg(2, f"Inferred dynamic_input_dim={dynamic_input_dim}")
+        else:
+            raise ValueError("`dynamic_inputs` must be 3‑D.")
+            
+    if time_steps is None:
+        _vmsg(
+            2, f"Inferred time_steps={infered_time_steps}"
+        )
+        # raise ValueError("`time_steps` or `max_window_size` must be provided.")
+        time_steps = infered_time_steps 
+        
+    if (dynamic_inputs.ndim != 3
+            or dynamic_inputs.shape[1] != time_steps
+            or dynamic_inputs.shape[2] != dynamic_input_dim):
+        raise ValueError(
+            f"`dynamic_inputs` must have shape "
+            f"(batch_size, {time_steps}, {dynamic_input_dim}); "
+            f"got {dynamic_inputs.shape}."
+        )
+
+    # -- static_inputs checks --
+    if static_inputs is not None:
+        if (static_inputs.ndim != 2
+                or static_inputs.shape != (batch_size, static_input_dim)):
+            raise ValueError(
+                f"`static_inputs` must have shape "
+                f"(batch_size, {static_input_dim}); got {static_inputs.shape}."
+            )
+
+    # -- future_inputs checks --
+    if future_inputs is not None:
+        expanded_len = forecast_horizon + time_steps
+        valid_lengths = {forecast_horizon, expanded_len}
+        
+        if future_inputs.ndim != 3:
+            raise ValueError("`future_inputs` must be 3‑D.")
+        
+        batch_ok   = future_inputs.shape[0] == batch_size
+        length_ok  = future_inputs.shape[1] in valid_lengths
+        featdim_ok = future_inputs.shape[2] == future_input_dim
+        
+        if not (batch_ok and length_ok and featdim_ok):
+            raise ValueError(
+                "`future_inputs` must have shape "
+                f"(batch_size, {{forecast_horizon | forecast_horizon + time_steps}}, "
+                f"{future_input_dim}); got {future_inputs.shape}."
+            )
+
+    # -- coords checks --
+    if coords is not None:
+        if coords.shape != (batch_size, time_steps, 3):
+            raise ValueError(
+                f"`coords` must have shape (batch_size, {time_steps}, 3); "
+                f"got {coords.shape}."
+            )
+
+    _vmsg(1, "All input checks passed successfully.")

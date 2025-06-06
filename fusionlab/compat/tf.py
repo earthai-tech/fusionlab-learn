@@ -247,6 +247,7 @@ class KerasDependencies:
             'LSTM': ('layers', 'LSTM'),
             'LSTMCell':('layers', 'LSTMCell'), 
             'Input': ('layers', 'Input'),
+            'InputLayer': ('layers', 'InputLayer'), 
             'Conv2D': ('layers', 'Conv2D'),
             'Conv1D': ('layers', 'Conv1D'),
             'Constant': ('initializers', 'Constant'), 

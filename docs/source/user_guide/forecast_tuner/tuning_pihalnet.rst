@@ -4,37 +4,421 @@
 Example: Tuning PIHALNet with PIHALTuner
 =========================================
 
-This page provides a practical example of how to use the
+This page provides practical examples of how to use the
 :class:`~fusionlab.nn.pinn.tuning.PIHALTuner` to perform
 hyperparameter tuning for the :class:`~fusionlab.nn.pinn.models.PIHALNet`
 model. We'll cover the typical workflow, from data preparation to
-retrieving the best model.
+retrieving the best model, first with synthetic data for a clear
+demonstration, and then outlining the steps for a real application.
 
 Prerequisites
 -------------
 Ensure you have ``fusionlab`` installed with its dependencies, including
-``tensorflow`` and ``keras-tuner``. You will also need your dataset
-(e.g., Zhongshan or Nansha subsidence data).
+``tensorflow`` and ``keras-tuner``.
 
 .. code-block:: python
-
+   :linenos:
+   
+   # Common imports for the examples
    import os
+   import logging
    import numpy as np
    import pandas as pd
    import tensorflow as tf
    from sklearn.model_selection import train_test_split # For splitting data
    import joblib # For saving/loading scalers/encoders
 
-   # FusionLab imports (adjust paths based on your project structure)
    from fusionlab.nn.pinn.tuning import PIHALTuner
    from fusionlab.nn.pinn.models import PIHALNet # PIHALTuner needs to build this
    from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
-   # from fusionlab.datasets.load import load_subsidence_pinn_data # If using this loader
+   # from fusionlab.datasets.load import load_subsidence_pinn_data # For real data
    # from fusionlab.nn.losses import combined_quantile_loss # If using custom quantile loss
-   from fusionlab._fusionlog import fusionlog # Assuming your logger
 
-   logger = fusionlog().get_fusionlog_logger(__name__)
+   # Basic configuration for logging 
+   logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+
+Section 1: Tuning with Synthetic Data
+-------------------------------------
+This section walks through the process using synthetically generated
+data. This allows you to understand the mechanics of ``PIHALTuner``
+without needing a specific large dataset immediately. Each step includes
+code to run and a placeholder for its expected output.
+
+Step 1.1: Configuration for Synthetic Data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+First, we define configurations for our synthetic data generation and
+the tuning process. These are simplified for demonstration.
+
+.. code-block:: python
+   :linenos: 
+   
+   # --- Configuration for Synthetic Data Example ---
+   SYNTHETIC_CITY_NAME = "SyntheticCity"
+   SYNTHETIC_RUN_OUTPUT_PATH = f"{SYNTHETIC_CITY_NAME}_tuning_synthetic_output"
+   SYNTHETIC_MODEL_NAME_TUNED = f"PIHALNet_{SYNTHETIC_CITY_NAME}_TunedSynthetic"
+
+   # Synthetic Data Parameters
+   SYNTHETIC_N_SAMPLES_TOTAL = 1000  # Total raw data points to generate
+   SYNTHETIC_N_LOCATIONS = 10     # Number of unique spatial locations
+   SYNTHETIC_YEARS_PER_LOCATION = SYNTHETIC_N_SAMPLES_TOTAL // SYNTHETIC_N_LOCATIONS
+
+   # Column names for synthetic data
+   SYNTHETIC_TIME_COL = "year"
+   SYNTHETIC_DT_COL_NAME_TEMP = "datetime_temp_synth"
+   SYNTHETIC_LON_COL = "longitude"
+   SYNTHETIC_LAT_COL = "latitude"
+   SYNTHETIC_SUBSIDENCE_COL = "subsidence"
+   SYNTHETIC_GWL_COL = "gwl"
+   SYNTHETIC_CAT_COL = ['geology_s'] # Using a different name to avoid global conflicts
+   SYNTHETIC_NUM_DRIVER_COLS = ['rainfall_s', 'pumping_s']
+
+   # Sequence Parameters for PIHALNet (can be small for synthetic example)
+   SYNTHETIC_TIME_STEPS = 5
+   SYNTHETIC_FORECAST_HORIZON = 2
+   SYNTHETIC_OUTPUT_S_DIM = 1
+   SYNTHETIC_OUTPUT_G_DIM = 1
+
+   # Data Splitting & Batching for Tuner
+   SYNTHETIC_TRAIN_VAL_END_YEAR = 2020 # Not strictly needed if all data is used
+   SYNTHETIC_VAL_SPLIT = 0.25
+   SYNTHETIC_BATCH_SIZE = 16 # Smaller batch size for smaller data
+
+   # Tuner Configuration (minimal for quick example)
+   SYNTHETIC_TUNER_OBJECTIVE = 'val_total_loss'
+   SYNTHETIC_MAX_TRIALS = 3 # Very few trials for a quick run
+   SYNTHETIC_EPOCHS_PER_TRIAL = 2 # Very few epochs
+   SYNTHETIC_TUNER_TYPE = 'randomsearch' # Faster than hyperband for few trials
+   SYNTHETIC_TUNER_SEED = 123
+
+   print("Synthetic data configurations set.")
+   # Ensure output directory exists
+   os.makedirs(SYNTHETIC_RUN_OUTPUT_PATH, exist_ok=True)
+
+**Expected Output:**
+
+.. code-block:: text
+
+   Synthetic data configurations set.
+
+Step 1.2: Synthetic Data Generation and Preprocessing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Now, we generate a simple synthetic dataset that mimics the structure
+needed by ``PIHALNet``. This includes time series for multiple locations,
+categorical features, and numerical features. We also perform basic
+preprocessing like encoding and scaling.
+
+.. code-block:: python
+   :linenos: 
+   
+   def generate_synthetic_city_data(
+       n_locations: int,
+       years_per_location: int,
+       time_col: str,
+       dt_col_name: str,
+       lon_col: str, lat_col: str,
+       subs_col: str, gwl_col: str,
+       cat_col_names: List[str],
+       num_driver_col_names: List[str],
+       output_path: str,
+       city_name: str
+   ) -> pd.DataFrame:
+       logger.info(f"Generating synthetic data for {n_locations} locations, "
+                   f"{years_per_location} years each.")
+       all_rows = []
+       start_year = 2000
+       for i in range(n_locations):
+           loc_lon = 113.0 + i * 0.01
+           loc_lat = 22.0 + i * 0.01
+           for year_offset in range(years_per_location):
+               current_year = start_year + year_offset
+               row = {
+                   time_col: current_year,
+                   lon_col: loc_lon, lat_col: loc_lat,
+                   subs_col: -10 - i*0.5 - year_offset * 0.2 + np.random.randn()*2,
+                   gwl_col: 5 - i*0.1 + year_offset * 0.1 + np.random.randn()*0.5,
+               }
+               for cat_c in cat_col_names:
+                   row[cat_c] = f"Type{np.random.choice(['A', 'B'])}"
+               for num_c in num_driver_col_names:
+                   row[num_c] = np.random.rand() * 100
+               all_rows.append(row)
+       
+       df = pd.DataFrame(all_rows)
+       df[dt_col_name] = pd.to_datetime(df[time_col], format='%Y')
+       
+       # Encode Categorical
+       global synthetic_encoded_feature_names
+       synthetic_encoded_feature_names = []
+       cats_to_encode = [c for c in cat_col_names if c in df.columns]
+       if cats_to_encode:
+           encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore', dtype=np.float32)
+           encoded_data = encoder.fit_transform(df[cats_to_encode])
+           ohe_cols = encoder.get_feature_names_out(cats_to_encode)
+           synthetic_encoded_feature_names.extend(ohe_cols)
+           enc_df = pd.DataFrame(encoded_data, columns=ohe_cols, index=df.index)
+           df = pd.concat([df.drop(columns=cats_to_encode), enc_df], axis=1)
+           joblib.dump(encoder, os.path.join(output_path, f"{city_name}_synth_ohe.joblib"))
+
+       # Scale Numerical Drivers
+       num_to_scale = [c for c in num_driver_col_names if c in df.columns]
+       if num_to_scale:
+           scaler = MinMaxScaler()
+           df[num_to_scale] = scaler.fit_transform(df[num_to_scale])
+           joblib.dump(scaler, os.path.join(output_path, f"{city_name}_synth_scaler.joblib"))
+
+       global SYNTHETIC_TIME_COL_NUMERIC_PINN
+       SYNTHETIC_TIME_COL_NUMERIC_PINN = f"{time_col}_numeric_pinn_synth"
+       df[SYNTHETIC_TIME_COL_NUMERIC_PINN] = (
+           df[dt_col_name].dt.year +
+           (df[dt_col_name].dt.dayofyear - 1) /
+           (365 + df[dt_col_name].dt.is_leap_year.astype(int))
+       )
+       logger.info(f"Synthetic data generated and preprocessed. Shape: {df.shape}")
+       return df
+
+   df_synthetic_processed = generate_synthetic_city_data(
+       SYNTHETIC_N_LOCATIONS, SYNTHETIC_YEARS_PER_LOCATION,
+       SYNTHETIC_TIME_COL, SYNTHETIC_DT_COL_NAME_TEMP,
+       SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL,
+       SYNTHETIC_SUBSIDENCE_COL, SYNTHETIC_GWL_COL,
+       SYNTHETIC_CAT_COL, SYNTHETIC_NUM_DRIVER_COLS,
+       SYNTHETIC_RUN_OUTPUT_PATH, SYNTHETIC_CITY_NAME
+   )
+   print(df_synthetic_processed.head())
+
+**Expected Output (will vary due to randomness):**
+
+.. code-block:: text
+
+   Synthetic data generated and preprocessed. Shape: (100, 12)
+      year  longitude  ...  geology_s_TypeB  year_numeric_pinn_synth
+   0  2000      113.0  ...              1.0                   2000.0
+   1  2001      113.0  ...              0.0                   2001.0
+   2  2002      113.0  ...              1.0                   2002.0
+   3  2003      113.0  ...              1.0                   2003.0
+   4  2004      113.0  ...              1.0                   2004.0
+
+   [5 rows x 11 columns]
+
+Step 1.3: Prepare Synthetic Data for Tuner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We split the synthetic data and use ``prepare_pinn_data_sequences``
+to create the input/target dictionaries for ``PIHALNet``.
+
+.. code-block:: python
+
+   # Split synthetic data (can use all for train/val in this simple case or split by location)
+   synth_unique_locs = df_synthetic_processed[[SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL]].drop_duplicates()
+   synth_train_locs, synth_val_locs = train_test_split(
+       synth_unique_locs, test_size=SYNTHETIC_VAL_SPLIT, random_state=SYNTHETIC_TUNER_SEED
+   )
+   df_synth_tuner_train = df_synthetic_processed.merge(
+       synth_train_locs, on=[SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL], how='inner'
+   )
+   df_synth_tuner_val = df_synthetic_processed.merge(
+       synth_val_locs, on=[SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL], how='inner'
+   )
+
+   logger.info(f"Synthetic tuner training data part shape: {df_synth_tuner_train.shape}")
+   logger.info(f"Synthetic tuner validation data part shape: {df_synth_tuner_val.shape}")
+
+   # Define feature lists for synthetic data
+   synth_static_features_list = list(synthetic_encoded_feature_names)
+   synth_dynamic_features_list = [SYNTHETIC_GWL_COL] + [
+       c for c in SYNTHETIC_NUM_DRIVER_COLS if c in df_synth_tuner_train.columns
+   ]
+   synth_future_features_list = [ # Example: use one of the drivers as a "known future"
+       c for c in SYNTHETIC_NUM_DRIVER_COLS[:1] if c in df_synth_tuner_train.columns
+   ]
+
+   # Prepare training sequences
+   inputs_train_np_s, targets_train_np_s = prepare_pinn_data_sequences(
+       df=df_synth_tuner_train, time_col=SYNTHETIC_TIME_COL_NUMERIC_PINN,
+       lon_col=SYNTHETIC_LON_COL, lat_col=SYNTHETIC_LAT_COL,
+       subsidence_col=SYNTHETIC_SUBSIDENCE_COL, gwl_col=SYNTHETIC_GWL_COL,
+       dynamic_cols=synth_dynamic_features_list, static_cols=synth_static_features_list,
+       future_cols=synth_future_features_list, group_id_cols=[SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL],
+       time_steps=SYNTHETIC_TIME_STEPS, forecast_horizon=SYNTHETIC_FORECAST_HORIZON,
+       output_subsidence_dim=SYNTHETIC_OUTPUT_S_DIM, output_gwl_dim=SYNTHETIC_OUTPUT_G_DIM,
+       normalize_coords=True, return_coord_scaler=False, verbose=0
+   )
+
+   # Prepare validation sequences
+   inputs_val_np_s, targets_val_np_s = prepare_pinn_data_sequences(
+       df=df_synth_tuner_val, time_col=SYNTHETIC_TIME_COL_NUMERIC_PINN,
+       lon_col=SYNTHETIC_LON_COL, lat_col=SYNTHETIC_LAT_COL,
+       subsidence_col=SYNTHETIC_SUBSIDENCE_COL, gwl_col=SYNTHETIC_GWL_COL,
+       dynamic_cols=synth_dynamic_features_list, static_cols=synth_static_features_list,
+       future_cols=synth_future_features_list, group_id_cols=[SYNTHETIC_LON_COL, SYNTHETIC_LAT_COL],
+       time_steps=SYNTHETIC_TIME_STEPS, forecast_horizon=SYNTHETIC_FORECAST_HORIZON,
+       output_subsidence_dim=SYNTHETIC_OUTPUT_S_DIM, output_gwl_dim=SYNTHETIC_OUTPUT_G_DIM,
+       normalize_coords=True, return_coord_scaler=False, verbose=0
+   )
+
+   print(f"Num training sequences: {inputs_train_np_s['coords'].shape[0]}")
+   print(f"Num validation sequences: {inputs_val_np_s['coords'].shape[0]}")
+   if inputs_train_np_s['coords'].shape[0] == 0 or inputs_val_np_s['coords'].shape[0] == 0:
+       print("WARNING: Empty train or val sequences for synthetic data. Adjust generation params.")
+
+**Expected Output (will vary based on sequence generation success):**
+
+.. code-block:: text
+
+   ...(logger messages about data shapes)...
+   Num training sequences: ...
+   Num validation sequences: ...
+
+Step 1.4: Configure and Run PIHALTuner with Synthetic Data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We set up ``PIHALTuner`` with fixed parameters derived from our synthetic
+data and a simplified hyperparameter search space.
+
+.. code-block:: python
+
+   # Define fixed parameters for PIHALTuner using synthetic data shapes
+   fixed_params_synth = {
+       "static_input_dim": inputs_train_np_s.get('static_features', np.zeros((0,0))).shape[-1],
+       "dynamic_input_dim": inputs_train_np_s['dynamic_features'].shape[-1],
+       "future_input_dim": inputs_train_np_s.get('future_features', np.zeros((0,0,0))).shape[-1],
+       "output_subsidence_dim": SYNTHETIC_OUTPUT_S_DIM,
+       "output_gwl_dim": SYNTHETIC_OUTPUT_G_DIM,
+       "forecast_horizon": SYNTHETIC_FORECAST_HORIZON,
+       "quantiles": None, # Point predictions for simpler synthetic example
+       "max_window_size": SYNTHETIC_TIME_STEPS,
+       "pde_mode": "none", # No PDE for simple synthetic example
+       "pinn_coefficient_C": None,
+       "loss_weights": {'subs_pred': 1.0, 'gwl_pred': 1.0},
+       "use_vsn": False, # Simpler model without VSN for quick test
+       "scales": [1], # Single scale LSTM
+       "memory_size": 10, # Small memory
+   }
+
+   # Simplified hyperparameter space for synthetic example
+   param_space_synth = {
+       'embed_dim': {'min_value': 8, 'max_value': 16, 'step': 8},
+       'hidden_units': {'min_value': 16, 'max_value': 32, 'step': 16},
+       'lstm_units': {'min_value': 16, 'max_value': 32, 'step': 16},
+       'attention_units': {'min_value': 8, 'max_value': 16, 'step': 8},
+       'num_heads': [1, 2],
+       'dropout_rate': [0.0, 0.1],
+       'learning_rate': [1e-3, 5e-3],
+       # 'lambda_pde': [0.0] # Not tuning if pde_mode is none
+   }
+
+   logger.info("Instantiating PIHALTuner for synthetic data...")
+   synthetic_tuner = PIHALTuner(
+       fixed_model_params=fixed_params_synth,
+       param_space=param_space_synth,
+       objective=SYNTHETIC_TUNER_OBJECTIVE,
+       max_trials=SYNTHETIC_MAX_TRIALS,
+       project_name=SYNTHETIC_MODEL_NAME_TUNED,
+       directory=os.path.join(SYNTHETIC_RUN_OUTPUT_PATH, "tuner_synth_results"),
+       executions_per_trial=1,
+       tuner_type=SYNTHETIC_TUNER_TYPE,
+       seed=SYNTHETIC_TUNER_SEED,
+       overwrite_tuner=True
+   )
+
+   # Callbacks
+   synthetic_early_stopping = tf.keras.callbacks.EarlyStopping(
+       monitor=SYNTHETIC_TUNER_OBJECTIVE, patience=2, restore_best_weights=True, verbose=0
+   )
+
+   logger.info(f"Starting synthetic data hyperparameter search ({SYNTHETIC_TUNER_TYPE})...")
+   
+   if inputs_train_np_s['coords'].shape[0] > 0 and inputs_val_np_s['coords'].shape[0] > 0:
+       synthetic_tuner.run(
+           inputs=inputs_train_np_s,
+           y=targets_train_np_s,
+           validation_data=(inputs_val_np_s, targets_val_np_s),
+           epochs=SYNTHETIC_EPOCHS_PER_TRIAL,
+           batch_size=SYNTHETIC_BATCH_SIZE,
+           callbacks=[synthetic_early_stopping],
+           verbose=1
+       )
+       logger.info("Synthetic data hyperparameter search completed.")
+   else:
+       logger.error("Cannot start tuner search: training or validation sequences are empty for synthetic data.")
+
+**Expected Output (will be verbose from Keras Tuner):**
+
+.. code-block:: text
+
+   ...(logger messages for instantiation)...
+   Starting synthetic data hyperparameter search (randomsearch)...
+   Trial 1 Complete [...]
+   Best val_total_loss So Far: ...
+   ...(more trials)...
+   Synthetic data hyperparameter search completed.
+
+Step 1.5: Retrieve and Interpret Results (Synthetic Data)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+After the search, we inspect the best hyperparameters found for our
+synthetic data tuning run.
+
+.. code-block:: python
+
+   try:
+       best_hps_list_s = synthetic_tuner.get_best_hyperparameters(num_trials=1)
+       if not best_hps_list_s:
+           logger.error("Synthetic tuner could not retrieve best hyperparameters.")
+       else:
+           best_hps_s = best_hps_list_s[0]
+           logger.info("\n--- Best Hyperparameters (Synthetic Data) ---")
+           for param_name, value in best_hps_s.values.items():
+               logger.info(f"  {param_name}: {value}")
+
+           best_models_s = synthetic_tuner.get_best_models(num_models=1)
+           if best_models_s and best_models_s[0] is not None:
+               logger.info("Best model from synthetic tuning retrieved.")
+               # best_models_s[0].summary() # Optional: print summary
+           else:
+               logger.error("Synthetic tuner could not retrieve the best model instance.")
+   except Exception as e_results_s:
+       logger.error(f"Error during synthetic result retrieval: {e_results_s}")
+
+   logger.info(
+       f"Synthetic tuning finished. Check results in: "
+       f"{os.path.join(SYNTHETIC_RUN_OUTPUT_PATH, 'tuner_synth_results')}"
+   )
+
+**Expected Output:**
+
+.. code-block:: text
+
+   ...(logger messages)...
+   --- Best Hyperparameters (Synthetic Data) ---
+     embed_dim: ...
+     hidden_units: ...
+     ...(other hyperparameters and their values)...
+   Best model from synthetic tuning retrieved.
+   Synthetic tuning finished. Check results in: SyntheticCity_tuning_synthetic_output/tuner_synth_results
+
+This completes the synthetic data example. It demonstrates the full pipeline,
+allowing users to test ``PIHALTuner`` and understand its operation with
+controllable data.
+
+Section 2: Real Application Case - Example Workflow
+---------------------------------------------------
+For tuning ``PIHALNet`` on a real-world dataset like Zhongshan or Nansha,
+the workflow follows the same fundamental steps as the synthetic data example,
+but with careful attention to actual data characteristics, more extensive
+preprocessing, and a more thorough hyperparameter search.
+
+The detailed steps, as previously outlined (and which formed the original content
+of this page), would involve:
+1.  **Configuration**: Setting up paths, city-specific parameters, feature definitions, sequence parameters, and tuner settings appropriate for the real dataset.
+2.  **Data Loading and Preprocessing**: Loading the actual city data (e.g., from a CSV file), performing robust cleaning, handling missing values, encoding categorical features (e.g., 'geology'), and scaling numerical driver features. This step is crucial and dataset-specific.
+3.  **Prepare Data for Tuner**: Splitting the processed data into training and validation sets suitable for the tuner (e.g., using a time-based or location-aware split to prevent data leakage) and then using ``prepare_pinn_data_sequences`` to generate the sequence dictionaries.
+4.  **Configure and Run PIHALTuner**: Defining the ``fixed_model_params`` (with dimensions inferred from the real prepared data) and a comprehensive ``param_space_config`` for the hyperparameters. Instantiating and running ``PIHALTuner`` for a significant number of trials and epochs.
+5.  **Retrieve, Analyze, and Use Results**: Extracting the best hyperparameters, retrieving the best model, saving these artifacts, and potentially retraining the best model on a larger portion of the data before deployment or further evaluation.
+
+Please refer to the code blocks from Step 1 to Step 5 in the initial version of this
+document for a detailed code structure for a real application. The key is to adapt
+the data loading, preprocessing, feature engineering, and fixed/hyperparameter
+configurations to the specifics of your chosen real-world dataset.
 
 Step 1: Configuration
 ---------------------

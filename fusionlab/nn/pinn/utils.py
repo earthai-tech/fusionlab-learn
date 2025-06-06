@@ -31,7 +31,12 @@ from .. import KERAS_BACKEND, KERAS_DEPS
 if KERAS_BACKEND:
     Model = KERAS_DEPS.Model
     Tensor = KERAS_DEPS.Tensor
+    
     tf_shape = KERAS_DEPS.shape
+    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
+    tf_float32 = KERAS_DEPS.float32 
+    tf_cast =KERAS_DEPS.cast 
+    tf_expand_dims =KERAS_DEPS.expand_dims 
 else:
     class Model: pass
     Tensor = type("Tensor", (), {})
@@ -1706,3 +1711,122 @@ def normalize_for_pinn(
                 )
 
     return df_scaled, coord_scaler, other_scaler
+
+
+def extract_txy(
+    inputs: Union[Tensor, np.ndarray, Dict[str, Union[Tensor, np.ndarray]]],
+    coord_slice_map: Optional[Dict[str, int]] = None
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """
+    Extracts t, x, y tensors from `inputs`, which may be:
+      - A single 3D tensor of shape (batch, time_steps, 3)
+      - A dict containing a key 'coords' with such a tensor
+      - A dict containing separate keys 't', 'x', and 'y'
+    
+    Parameters
+    ----------
+    inputs : tf.Tensor or np.ndarray or dict
+        If tensor/array: expected shape is (batch, time_steps, 3).
+        If dict:
+          - If 'coords' in dict: dict['coords'] must be (batch, time_steps, 3).
+          - Otherwise, dict must have keys 't', 'x', 'y' each of shape
+            (batch, time_steps, 1) or (batch, time_steps).
+    coord_slice_map : dict, optional
+        Mapping from 't', 'x', 'y' to their index in the last dimension of
+        the coords tensor. Defaults to {'t': 0, 'x': 1, 'y': 2}.
+    
+    Returns
+    -------
+    t : tf.Tensor
+        Tensor of shape (batch, time_steps, 1) corresponding to time coordinate.
+    x : tf.Tensor
+        Tensor of shape (batch, time_steps, 1) corresponding to x coordinate.
+    y : tf.Tensor
+        Tensor of shape (batch, time_steps, 1) corresponding to y coordinate.
+    
+    Raises
+    ------
+    ValueError
+        If `inputs` is not in one of the supported formats, or dimensions
+        are inconsistent.
+    """
+    
+    # Default slice map
+    if coord_slice_map is None:
+        coord_slice_map = {'t': 0, 'x': 1, 'y': 2}
+
+    # Helper to ensure output is a tf.Tensor with a final singleton dim
+    def _ensure_tensor_with_last_dim(inp: Union[Tensor, np.ndarray]) -> Tensor:
+        if isinstance(inp, np.ndarray):
+            inp = tf_convert_to_tensor(inp)
+        if not isinstance(inp, Tensor):
+            raise ValueError(f"Expected tf.Tensor or np.ndarray, got {type(inp)}")
+        # If shape is (batch, time_steps), add last dimension
+        if inp.ndim == 2:
+            inp = tf_expand_dims(inp, axis=-1)
+        # Now expect (batch, time_steps, 1)
+        if inp.ndim != 3 or inp.shape[-1] != 1:
+            raise ValueError(
+                "Coordinate array must have shape "
+                f"(batch, time_steps, 1); got {inp.shape}")
+        return inp
+
+    # Case 1: inputs is a dict
+    if isinstance(inputs, dict):
+        # If 'coords' key is present
+        if 'coords' in inputs:
+            coords_tensor = inputs['coords']
+            if isinstance(coords_tensor, np.ndarray):
+                coords_tensor = tf_convert_to_tensor(coords_tensor)
+            if not isinstance(coords_tensor, Tensor):
+                raise ValueError(f"Expected tensor/array for 'coords';"
+                                 f" got {type(coords_tensor)}")
+            # Expect shape (batch, time_steps, 3)
+            if coords_tensor.ndim != 3 or coords_tensor.shape[-1] < 3:
+                raise ValueError(
+                    f"'coords' must have shape (batch, time_steps, ≥3);"
+                    f" got {coords_tensor.shape}"
+                )
+            # Slice out t, x, y
+            t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t'] + 1]
+            x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x'] + 1]
+            y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y'] + 1]
+            return tf_cast(
+                t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
+
+        # If keys 't','x','y' exist separately
+        if all(k in inputs for k in ('t', 'x', 'y')):
+            t = _ensure_tensor_with_last_dim(inputs['t'])
+            x = _ensure_tensor_with_last_dim(inputs['x'])
+            y = _ensure_tensor_with_last_dim(inputs['y'])
+            return ( 
+                tf_cast(t, tf_float32), tf_cast(x, tf_float32),
+                tf_cast(y, tf_float32)
+                )
+        
+        raise ValueError(
+            "Dict `inputs` must contain either key 'coords' or keys 't', 'x', 'y'."
+        )
+
+    # Case 2: inputs is a single tensor/array
+    if isinstance(inputs, (Tensor, np.ndarray)):
+        coords_tensor = inputs
+        if isinstance(coords_tensor, np.ndarray):
+            coords_tensor = tf_convert_to_tensor(coords_tensor)
+        # Expect shape (batch, time_steps, 3)
+        if coords_tensor.ndim != 3 or coords_tensor.shape[-1] < 3:
+            raise ValueError(
+                f"Tensor `inputs` must have shape (batch, time_steps, 3);"
+                f" got {coords_tensor.shape}"
+            )
+        t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t'] + 1]
+        x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x'] + 1]
+        y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y'] + 1]
+        return ( 
+            tf_cast(t, tf_float32), tf_cast(x, tf_float32),
+            tf_cast(y, tf_float32)
+            )
+
+    raise ValueError(
+        f"`inputs` must be a tensor/array or dict; got {type(inputs)}"
+    )

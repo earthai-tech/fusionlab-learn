@@ -76,6 +76,7 @@ if KERAS_BACKEND:
     
     from .._tensor_validation import validate_model_inputs
     from .._tensor_validation import align_temporal_dimensions
+    from .._tensor_validation import check_inputs 
     
 
     from ..utils import set_default_params, squeeze_last_dim_if #noqa
@@ -601,7 +602,17 @@ class PIHALNet(Model, NNLearner):
         logger.debug("PIHALNet call: Processing PINN inputs.")
         t, x, y, static_features, dynamic_features, future_features = \
             process_pinn_inputs(inputs, mode='as_dict')
-
+        
+        # basic tensors checks. 
+        check_inputs(
+            dynamic_inputs= dynamic_features, 
+            static_inputs= static_features, 
+            future_inputs= future_features, 
+            dynamic_input_dim= self.dynamic_input_dim,
+            static_input_dim = self.static_input_dim, 
+            future_input_dim= self.future_input_dim,
+            forecast_horizon= self.forecast_horizon 
+        )
         # `validate_model_inputs` can provide a secondary, more detailed
         # check on the unpacked feature tensors.
         static_p, dynamic_p, future_p = validate_model_inputs(
@@ -894,7 +905,7 @@ class PIHALNet(Model, NNLearner):
         _, future_for_embedding = align_temporal_dimensions(
             tensor_ref=dynamic_processed,
             tensor_to_align=future_processed,
-            mode='slice_to_ref',
+            mode='pad_to_ref',
             name="future_for_embedding"
         )
         
@@ -911,7 +922,7 @@ class PIHALNet(Model, NNLearner):
                     lambda: future_for_embedding,  # If valid, use future_for_embedding
                     # If future features are absent, append zeros to keep shape consistent
                     # for the residual connection later.
-                    lambda: tf_zeros_like(dynamic_processed)  # Otherwise, append zeros
+                    lambda: tf_zeros_like(future_for_embedding)  # Otherwise, append zeros
                 )
             )
  

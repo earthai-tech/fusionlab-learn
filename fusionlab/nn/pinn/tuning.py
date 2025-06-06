@@ -956,32 +956,147 @@ class PIHALTuner(PINNTunerBase):
             **kwargs
         )
 
-    def _get_hp_int(
-        self, hp, name, default_min, default_max, step=1, **kwargs
-    ):
-        config = self.param_space.get(name, {})
-        return hp.Int(
-            name,
-            min_value=config.get('min_value', default_min),
-            max_value=config.get('max_value', default_max),
-            step=config.get('step', step),
-            **kwargs
-        )
+    # def _get_hp_int(
+    #     self, hp, name, default_min, default_max, step=1, **kwargs
+    # ):
+    #     config = self.param_space.get(name, {})
+    #     return hp.Int(
+    #         name,
+    #         min_value=config.get('min_value', default_min),
+    #         max_value=config.get('max_value', default_max),
+    #         step=config.get('step', step),
+    #         **kwargs
+    #     )
 
-    def _get_hp_float(
-        self, hp, name, default_min, default_max,
-        default_sampling=None, **kwargs
+    # def _get_hp_float(
+    #     self, hp, name, default_min, default_max,
+    #     default_sampling=None, **kwargs
+    # ):
+    #     print(self.param_space)
+    #     config = self.param_space.get(name, {})
+    #     return hp.Float(
+    #         name,
+    #         min_value=config.get('min_value', default_min),
+    #         max_value=config.get('max_value', default_max),
+    #         sampling=config.get(
+    #             'sampling', kwargs.pop('sampling', default_sampling)
+    #         ),
+    #         **kwargs
+    #     )
+    def _parse_hp_config(
+        self,
+        hp,
+        name,
+        default_min,
+        default_max,
+        default_step_or_sampling,
+        hp_type
     ):
-        config = self.param_space.get(name, {})
+        """
+        Helper to interpret `param_space[name]` which may be:
+          - A list of explicit values (use hp.Choice).
+          - A dict with keys 'min_value', 'max_value', and for ints 'step', for
+            floats 'sampling'.
+          - None or other (fallback to defaults).
+        """
+        config = self.param_space.get(name, None)
+    
+        # If user provided a list of discrete values, use Choice
+        if isinstance(config, list):
+            return hp.Choice(name, config)
+    
+        # If user provided a dict with min/max settings
+        if isinstance(config, dict):
+            min_val = config.get('min_value', default_min)
+            max_val = config.get('max_value', default_max)
+    
+            if hp_type == 'int':
+                step_val = config.get('step', default_step_or_sampling)
+                return hp.Int(
+                    name,
+                    min_value=min_val,
+                    max_value=max_val,
+                    step=step_val
+                )
+            # hp_type == 'float'
+            sampling_val = config.get(
+                'sampling',
+                default_step_or_sampling
+            )
+            return hp.Float(
+                name,
+                min_value=min_val,
+                max_value=max_val,
+                sampling=sampling_val
+            )
+    
+        # Fallback: no config or unexpected type, use defaults
+        if hp_type == 'int':
+            return hp.Int(
+                name,
+                min_value=default_min,
+                max_value=default_max,
+                step=default_step_or_sampling
+            )
         return hp.Float(
             name,
-            min_value=config.get('min_value', default_min),
-            max_value=config.get('max_value', default_max),
-            sampling=config.get(
-                'sampling', kwargs.pop('sampling', default_sampling)
-            ),
-            **kwargs
+            min_value=default_min,
+            max_value=default_max,
+            sampling=default_step_or_sampling
         )
+
+    
+    def _get_hp_int(
+            self,
+            hp,
+            name,
+            default_min,
+            default_max,
+            step=1,
+            **kwargs
+        ):
+        """
+        Retrieves or creates an integer hyperparameter.  The user may define in
+        `param_space[name]` either:
+          - A list of discrete integer values → uses hp.Choice
+          - A dict with 'min_value', 'max_value', 'step'
+          - None → fallback to default_min, default_max, step
+        """
+        return self._parse_hp_config(
+            hp,
+            name,
+            default_min,
+            default_max,
+            step,
+            hp_type='int'
+        )
+    
+    
+    def _get_hp_float(
+            self,
+            hp,
+            name,
+            default_min,
+            default_max,
+            default_sampling=None,
+            **kwargs
+        ):
+        """
+        Retrieves or creates a float hyperparameter.  The user may define in
+        `param_space[name]` either:
+          - A list of discrete float values → uses hp.Choice
+          - A dict with 'min_value', 'max_value', 'sampling'
+          - None → fallback to default_min, default_max, default_sampling
+        """
+        return self._parse_hp_config(
+            hp,
+            name,
+            default_min,
+            default_max,
+            default_sampling,
+            hp_type='float'
+        )
+
 
     
 

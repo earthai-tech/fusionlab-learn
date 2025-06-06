@@ -1,33 +1,25 @@
 # -*- coding: utf-8 -*-
 # Author: LKouadio <etanoyau@gmail.com>
 # License: BSD-3-Clause
-# -------------------------------------------------------------------
-# Contains base classes and utilities for PINN components.
-# -------------------------------------------------------------------
+
 from __future__ import annotations
 
-import warnings
-from typing import Optional, Union, Dict, Any, List, Tuple  
-import numpy as np
+from typing import Optional, Union, Dict,List, Tuple  
+
+from ..._fusionlog import fusionlog 
+from ...api.property import NNLearner, BaseClass  
+from ...params import ( 
+    LearnableK, 
+    LearnableSs, 
+    LearnableQ, 
+    resolve_physical_param
+)
+from ...utils.deps_utils import ensure_pkg 
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from ...api.property import NNLearner, BaseClass   
+from .op import compute_gw_flow_residual 
+from .utils import extract_txy 
 
-try:
-    from ..._fusionlog import fusionlog # Adjust path if this lives deeper
-    logger = fusionlog().get_fusionlog_logger(__name__)
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
-    if not logger.hasHandlers():
-        logger.addHandler(logging.NullHandler())
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        logger.info(
-            "fusionlog not found for GWResidualCalculator. Using standard Python logging."
-        )
-
+logger = fusionlog().get_fusionlab_logger(__name__)
 
 if KERAS_BACKEND: 
     Variable =KERAS_DEPS.Variable 
@@ -36,6 +28,9 @@ if KERAS_BACKEND:
     Dense =KERAS_DEPS.Dense 
     Layer =KERAS_DEPS.Layer
     Model =KERAS_DEPS.Model 
+    InputLayer= KERAS_DEPS.InputLayer
+    Sequential =KERAS_DEPS.Sequential 
+    Adam =KERAS_DEPS.Adam
     
     tf_log = KERAS_DEPS.log 
     tf_cast =KERAS_DEPS.cast 
@@ -45,21 +40,375 @@ if KERAS_BACKEND:
     tf_constant =KERAS_DEPS.constant 
     tf_zeros_like = KERAS_DEPS.zeros_like
     tf_random = KERAS_DEPS.random 
-    tf_concat =KERAS_DEPS.concat 
+    tf_concat =KERAS_DEPS.concat
+    tf_reduce_mean=KERAS_DEPS.reduce_mean
+    tf_square =KERAS_DEPS.square
     
+
+DEP_MSG = dependency_message('nn.pinn.base') 
+
+class GWFlowPINN(Model, NNLearner):
+    """
+    A small PINN for 2D transient groundwater‐flow:
+      h = h(t, x, y) predicted by an MLP, plus a PDE‐residual method.
+
+    Usage:
+      >>> from fusionlab.nn.pinn.base import GWFlowPINN
+      >> model = GWFlowPINN(
+      ...     hidden_units=[32, 32],
+      ...     learning_rate=1e-3,
+      ...     K=LearnableK(initial_value=0.5),
+      ...     Ss=LearnableSs(initial_value=1e-4),
+      ...     Q=LearnableQ(initial_value=0.0)
+      ... )
+      >> # Build on a dummy input batch to initialize weights:
+      >> dummy = tf.random.normal((1, 3))  # shape = (batch, [t,x,y])
+      >> _ = model(dummy)
+      >> # Now compute residual on real collocation points:
+      >> coords = {
+      ...     "t": tf.Variable(tf.random.uniform((16,1)), trainable=True),
+      ...     "x": tf.Variable(tf.random.uniform((16,1)), trainable=True),
+      ...     "y": tf.Variable(tf.random.uniform((16,1)), trainable=True)
+      ... }
+      >> residual = model.compute_residual(coords=coords)
+      >>> from fusionlab.params import ( 
+          LearnableK, 
+          LearnableSs, 
+          LearnableQ, 
+          resolve_physical_param
+      )
+      >>> from fusionlab.nn.pinn.base import GWFlowPINN
+      >>> model = GWFlowPINN(
+      ...     hidden_units=[32, 32],
+      ...     learning_rate=1e-3,
+      ...     K=LearnableK(initial_value=0.5),
+      ...     Ss=LearnableSs(initial_value=1e-4),
+      ...     Q=LearnableQ(initial_value=0.0)
+      ... )
+      >>> dummy = tf.random.normal((1, 3))  # shape = (batch, [t,x,y])
+
+      >>> _ = model(dummy)
+      >>> coords = {
+      ...     "t": tf.Variable(tf.random.uniform((16,1)), trainable=True),
+      ...     "x": tf.Variable(tf.random.uniform((16,1)), trainable=True),
+      ...     "y": tf.Variable(tf.random.uniform((16,1)), trainable=True)
+      ... }
+
+      residual = model.compute_residual(coords=coords)
+    """
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
+    def __init__(
+        self,
+        hidden_units: Optional[list[int]] = None,
+        activation: str = "tanh",
+        learning_rate: float = 1e-3,
+        K: Union[float, LearnableK] = 1.0,
+        Ss: Union[float, LearnableSs] = 1e-4,
+        Q: Union[float, LearnableQ] = 0.0,
+        name: str = "GWFlowPINN",
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+
+        # Store physical parameters (float or Learnable)
+        self.K_param = K
+        self.Ss_param = Ss
+        self.Q_param = Q
+
+        if hidden_units is None:
+            hidden_units = [32, 32]
+
+        # Build a small MLP to predict h = h(t,x,y)
+        self._layers_list = []
+        # We do not use an InputLayer explicitly because we will
+        # build when the first call comes in. Still, for clarity:
+        self._layers_list.append(InputLayer(input_shape=(3,)))
+
+        for units in hidden_units:
+            self._layers_list.append(
+                Dense(units, activation=activation)
+            )
+
+        # Final output layer: single scalar prediction h
+        self._layers_list.append(
+            Dense(1, activation="linear", name="h_pred"))
+
+        # Create a tf.keras.Sequential internally
+        self.net = Sequential(
+            self._layers_list, name="GWFlow_Net")
+
+        # Optimizer for training the network parameters
+        self.optimizer = Adam(
+            learning_rate=learning_rate
+        )
+
+        # Compile with a dummy loss—actual training
+        # will minimize the PDE residual
+        self.compile(
+            optimizer=self.optimizer,
+            loss="mse",  # placeholder (we’ll override in train_step)
+            metrics=[]
+        )
+
+    def call(self, inputs:Tensor, training: bool = False) -> Tensor:
+        """
+        Forward pass of the network: (t, x, y) → h_pred.
+
+        Parameters
+        ----------
+        inputs : tf.Tensor
+            A 2D tensor of shape (batch_size, 3), where each row is
+            [t, x, y]. Dtype must be float32 or compatible.
+        training : bool
+            Whether the network is in training mode (unused here but required
+            by the Keras Model API).
+
+        Returns
+        -------
+        tf.Tensor
+            A tensor of shape (batch_size, 1) containing predicted
+            hydraulic head values.
+        """
+        # Basic shape‐check: inputs must be (batch, 3)
+        if inputs.ndim != 2 or inputs.shape[-1] != 3:
+            raise ValueError(
+                f"`inputs` must be a 2D tensor of shape (batch,3). "
+                f"Received shape: {inputs.shape}"
+            )
+        return self.net(inputs, training=training)
+
+    def compute_residual(
+        self,
+        coords: Dict[str, Tensor],
+        K: Union[float, Tensor, LearnableK, None] = None,
+        Ss: Union[float, Tensor, LearnableSs, None] = None,
+        Q: Union[float, Tensor, LearnableQ, None] = None,
+        h_pred: Optional[Tensor] = None
+    ) -> Tensor:
+        """
+        Compute the 2D transient groundwater‐flow residual:
+          R = K*(h_xx + h_yy) + Q – Ss * (∂h/∂t)
+
+        Parameters
+        ----------
+        coords : dict
+            Must contain keys 't', 'x', and 'y'. Each value is a tf.Tensor
+            (shape = (batch_size, 1)) that is watched by GradientTape.
+        K : float, tf.Tensor, or LearnableK, optional
+            Hydraulic conductivity or a learnable variable. Defaults to
+            the instance’s `self.K_param`.
+        Ss : float, tf.Tensor, or LearnableSs, optional
+            Specific storage coefficient. Defaults to `self.Ss_param`.
+        Q : float, tf.Tensor, or LearnableQ, optional
+            Source/sink term. Defaults to `self.Q_param`.
+        h_pred : tf.Tensor, optional
+            If provided, skip calling the model and use this precomputed
+            head prediction of shape (batch_size, 1). Otherwise, the method
+            will call `self(...)` internally.
+
+        Returns
+        -------
+        tf.Tensor
+            The PDE residual at each sample; shape = (batch_size, 1).
+
+        Raises
+        ------
+        ValueError
+            If coords does not contain 't', 'x', or 'y', or if gradients
+            cannot be computed (e.g. because coords were not watched).
+        """
+        
+        # Validate coords dictionary
+        if isinstance (coords, dict): 
+            if 'coords' in coords : 
+                t, x, y = extract_txy(inputs = coords )
+            else: 
+                if not all(k in coords for k in ("t", "x", "y")):
+                    raise ValueError("`coords` must contain keys 't', 'x', and 'y'.")
+        
+                t = coords["t"]
+                x = coords["x"]
+                y = coords["y"]
+        else: 
+            # extract analyways if tensor is given 
+            t, x, y = extract_txy(inputs = coords ) 
+
+        # Determine physical parameters: use passed or defaults
+        K_val = resolve_physical_param(
+            K) if K is not None else resolve_physical_param(self.K_param)
+        Ss_val = resolve_physical_param(
+            Ss) if Ss is not None else resolve_physical_param(self.Ss_param)
+        Q_val = resolve_physical_param(
+            Q) if Q is not None else resolve_physical_param(self.Q_param)
+
+        # Use the helper from fusionlab to compute the residual
+        return compute_gw_flow_residual(
+            model=self,
+            coords={"t": t, "x": x, "y": y},
+            K=K_val,
+            Ss=Ss_val,
+            Q=Q_val,
+            h_pred=h_pred
+        )
+
+    def train_step(
+        self,
+        data: tuple[Dict[str, Tensor], Tensor]
+    ) -> Dict[str, Tensor]:
+        """
+        Custom training step that minimizes PDE residual MSE at collocation points.
+
+        Expects `data` to be a tuple (coords_dict, dummy_targets). We ignore
+        dummy_targets because PINNs often have separate data‐loss terms. Here
+        we only drive PDE residual → 0.
+
+        Parameters
+        ----------
+        data : (inputs, _)
+            - inputs: a dict {"t": tf.Tensor, "x": tf.Tensor, "y": tf.Tensor}
+              each of shape (batch_size, 1).
+            - _: ignored placeholder.
+
+        Returns
+        -------
+        metrics : dict
+            Dictionary with key "pde_loss" = mean squared PDE residual.
+        """
+        coords_batch, _ = data
+
+        with GradientTape() as tape:
+            # Compute the PDE residual for this batch using instance parameters
+            R = self.compute_residual(
+                coords=coords_batch,
+                K=coords_batch.get("K", None),
+                Ss=coords_batch.get("Ss", None),
+                Q=coords_batch.get("Q", None),
+                h_pred=None
+            )
+            # PDE‐loss = MSE( R, 0 )
+            pde_loss = tf_reduce_mean(tf_square(R))
+
+        # Compute gradients w.r.t. network trainable variables
+        grads = tape.gradient(pde_loss, self.trainable_variables)
+        self.optimizer.apply_gradients(zip(grads, self.trainable_variables))
+
+        return {"pde_loss": pde_loss}
+
+    def test_step(
+        self,
+        data: tuple[Dict[str,Tensor], Tensor]
+    ) -> Dict[str, Tensor]:
+        """
+        Custom validation/inference step. Computes PDE‐residual on validation coords.
+
+        Parameters
+        ----------
+        data : (coords_dict, _)
+            coords_dict: same as in train_step.
+
+        Returns
+        -------
+        metrics : dict
+            {"pde_loss": MSE of residual on val batch}
+        """
+        coords_batch, _ = data
+        R = self.compute_residual(
+            coords=coords_batch,
+            K=coords_batch.get("K", None),
+            Ss=coords_batch.get("Ss", None),
+            Q=coords_batch.get("Q", None),
+            h_pred=None
+        )
+        val_loss = tf_reduce_mean(tf_square(R))
+        return {"pde_loss": val_loss}
     
-# Placeholder for fusionlab.params if they are simple dataclasses or similar
-# If they are more complex, their definitions would be needed.
-# For this class, we'll directly use the string 'learnable' or float from gw_flow_coeffs.
-# class LearnableParam: # Example
-#     def __init__(self, initial_value):
-#         self.initial_value = initial_value
-# class FixedParam: # Example
-#     def __init__(self, value):
-#         self.value = value
-# class DisabledParam: # Example
-#     pass
-# -*- coding: utf-8 -*-
+    def get_config(self) -> dict:
+        """
+        Returns the configuration of the GWFlowPINN for serialization.
+    
+        The returned dict contains all arguments necessary to reconstruct
+        this instance via `from_config`.  Physical parameters (K, Ss, Q)
+        are stored either as raw floats or, if they are learnable instances,
+        with their `initial_value` and a flag indicating learnability.
+        """
+        base_config = super().get_config()
+        # Serialize hidden_units, activation, learning_rate
+        config = {
+            "hidden_units": self._layers_list[1].units
+                             if self._layers_list and isinstance(
+                                 self._layers_list[1], Dense
+                             ) else None,
+            "activation": self._layers_list[1].activation.__name__
+                           if self._layers_list and isinstance(
+                               self._layers_list[1], Dense
+                           ) else None,
+            "learning_rate": float(self.optimizer.learning_rate.numpy()),
+        }
+    
+        # Helper to serialize a physical parameter (float or Learnable*)
+        def _serialize_param(param, cls_name: str):
+            if hasattr(param, "initial_value"):
+                return {
+                    "learnable": True,
+                    "initial_value": float(param.initial_value),
+                    "class": cls_name
+                }
+            else:
+                return {"learnable": False, "initial_value": float(param)}
+    
+        config["K"] = _serialize_param(self.K_param, "LearnableK")
+        config["Ss"] = _serialize_param(self.Ss_param, "LearnableSs")
+        config["Q"] = _serialize_param(self.Q_param, "LearnableQ")
+    
+        # Include name (Model base class already serializes name)
+        config["name"] = self.name
+    
+        base_config.update(config)
+        return base_config
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "GWFlowPINN":
+        """
+        Reconstructs a GWFlowPINN instance from its `config` dictionary.
+    
+        Expects exactly the format produced by `get_config`.  Re‐instantiates
+        any learnable physical parameters as LearnableK, LearnableSs, or LearnableQ.
+        """
+        # Pop fields specific to this class
+        hidden_units = config.pop("hidden_units", None)
+        activation = config.pop("activation", "tanh")
+        learning_rate = config.pop("learning_rate", 1e-3)
+    
+        def _deserialize_param(param_dict, learnable_cls):
+            if param_dict.get("learnable", False):
+                return learnable_cls(initial_value=param_dict["initial_value"])
+            else:
+                return float(param_dict["initial_value"])
+    
+        K_dict = config.pop("K", {"learnable": False, "initial_value": 1.0})
+        Ss_dict = config.pop("Ss", {"learnable": False, "initial_value": 1e-4})
+        Q_dict = config.pop("Q", {"learnable": False, "initial_value": 0.0})
+    
+        K_param = _deserialize_param(K_dict, LearnableK)
+        Ss_param = _deserialize_param(Ss_dict, LearnableSs)
+        Q_param = _deserialize_param(Q_dict, LearnableQ)
+    
+        # The remaining keys in config are passed to super().from_config
+        name = config.pop("name", "GWFlowPINN")
+        # Build the instance
+        instance = cls(
+            hidden_units=hidden_units,
+            activation=activation,
+            learning_rate=learning_rate,
+            K=K_param,
+            Ss=Ss_param,
+            Q=Q_param,
+            name=name,
+            **config
+        )
+        return instance
+
+
 
 class GWResidual:
     """
@@ -688,152 +1037,3 @@ class GWResidualCalculator (BaseClass):
             ")"
         )
 
-if __name__ == '__main__':
-    # Example Usage:
-    print("--- Example 1: All learnable ---")
-    gw_coeffs_config1 = {'K': 'learnable', 'Ss': 'learnable', 'Q': 'learnable'}
-    calculator1 = GWResidualCalculator(gw_flow_coeffs=gw_coeffs_config1)
-    print(calculator1)
-    print(f"  K: {calculator1.get_K()}")
-    print(f"  Ss: {calculator1.get_Ss()}")
-    print(f"  Q: {calculator1.get_Q()}")
-    print(f"  All: {calculator1.get_all_coeffs()}")
-    if isinstance(calculator1.log_K_var, Variable):
-        print(f"  log_K_var name: {calculator1.log_K_var.name}")
-
-
-    print("\n--- Example 2: Mixed fixed and learnable ---")
-    gw_coeffs_config2 = {'K': 1.2e-4, 'Ss': 'learnable', 'Q': -0.001}
-    calculator2 = GWResidualCalculator(gw_coeffs_config2, default_Ss=5e-6)
-    print(calculator2)
-    print(f"  K: {calculator2.get_K()}")
-    print(f"  Ss: {calculator2.get_Ss()}")
-    print(f"  Q: {calculator2.get_Q()}")
-
-    print("\n--- Example 3: Some coefficients disabled (None) ---")
-    gw_coeffs_config3 = {'K': 'learnable', 'Ss': None, 'Q': 0.0005}
-    calculator3 = GWResidualCalculator(gw_coeffs_config3)
-    print(calculator3)
-    print(f"  K: {calculator3.get_K()}")
-    print(f"  Ss (should be None): {calculator3.get_Ss()}")
-    print(f"  Q: {calculator3.get_Q()}")
-
-    print("\n--- Example 4: Default configuration (all learnable with defaults) ---")
-    calculator4 = GWResidualCalculator() # Uses default_K, default_Ss, default_Q
-    print(calculator4)
-    print(f"  K: {calculator4.get_K()}")
-    print(f"  Ss: {calculator4.get_Ss()}")
-    print(f"  Q: {calculator4.get_Q()}")
-
-    print("\n--- Example 5: Fixed negative K (should warn and use abs for log) ---")
-    # This will trigger a warning for K being non-positive for log-space.
-    gw_coeffs_config5 = {'K': -2e-4, 'Ss': 1e-5}
-    calculator5 = GWResidualCalculator(gw_coeffs_config5)
-    print(calculator5)
-    print(f"  K (from log(abs(K_fixed)+eps)): {calculator5.get_K()}")
-
-    # Example for integration into a Keras model (conceptual)
-    # class MyPINNModel(tf.keras.Model):
-    #     def __init__(self, gw_flow_coeffs_config, **kwargs):
-    #         super().__init__(**kwargs)
-    #         self.gw_calculator = GWResidualCalculator(gw_flow_coeffs_config)
-    #         # If you want these variables to be part of the model's trainable_variables:
-    #         # You would need to either:
-    #         # 1. Manually add them to self._trainable_weights if they are Variable
-    #         #    (this is more manual and Keras might not always pick them up easily
-    #         #     for optimizers unless done carefully in build()).
-    #         # 2. Or, if GWResidualCalculator itself was a Keras Layer/Model, it would be automatic.
-    #         # Since it's a plain class, the variables it creates are standalone.
-    #         # If the PINN model itself needs to own these, it might create them
-    #         # using self.add_weight() and pass the configs to GWResidualCalculator
-    #         # which then just holds the logic to get the values (fixed or from these weights).
-    #         # For now, GWResidualCalculator owns its Variables if learnable.
-
-    #     def call(self, inputs):
-    #         K = self.gw_calculator.get_K()
-    #         Ss = self.gw_calculator.get_Ss()
-    #         # ... use K, Ss in PDE calculation ...
-    #         return ...
-
-    # --- GWResidualCalculator Examples (from previous) ---
-    print("--- GWResidualCalculator Examples ---")
-    gw_coeffs_config_ex = {'K': 1e-3, 'Ss': 'learnable', 'Q': 0.0}
-    calculator_ex = GWResidualCalculator(gw_flow_coeffs=gw_coeffs_config_ex)
-    print(calculator_ex)
-    print(f"  K: {calculator_ex.get_K()}, Ss: {calculator_ex.get_Ss()}, Q: {calculator_ex.get_Q()}")
-    print("-" * 30)
-
-    # --- GroundwaterFlowPDEResidual Layer Example ---
-    print("\n--- GroundwaterFlowPDEResidual Layer Example ---")
-    batch_s = 2
-    num_pts = 10 # Number of collocation points
-
-    # Dummy coordinates (these would be inputs to the part of PIHALNet that predicts h)
-    t_input = tf_random.uniform((batch_s, num_pts, 1), dtype=tf_float32)
-    x_input = tf_random.uniform((batch_s, num_pts, 1), dtype=tf_float32)
-    y_input = tf_random.uniform((batch_s, num_pts, 1), dtype=tf_float32)
-
-    # A simple dummy model that predicts h from t, x, y
-    # This simulates the part of PIHALNet that would generate gwl_pred_mean_for_pde
-    class SimpleHeadModel(Model):
-        def __init__(self):
-            super().__init__()
-            self.dense1 = Dense(20, activation='tanh')
-            self.dense2 = Dense(20, activation='tanh')
-            self.out = Dense(1)
-        def call(self, t,x,y):
-            # Concatenate t,x,y to form input features for this simple model
-            coords_concat = tf_concat([t,x,y], axis=-1) # (batch, num_pts, 3)
-            # Pass through some dense layers
-            temp = self.dense1(coords_concat)
-            temp = self.dense2(temp)
-            return self.out(temp) # (batch, num_pts, 1)
-
-    head_predictor_model = SimpleHeadModel()
-
-    # Instantiate the PDE residual layer
-    pde_layer_coeffs_config = {
-        'K': 'learnable', 
-        'Ss': 1e-5,       # Fixed Ss
-        'Q': 0.001        # Fixed Q
-    }
-    pde_residual_layer = GroundwaterFlowPDEResidual(
-        gw_flow_coeffs_config=pde_layer_coeffs_config
-    )
-
-    # To compute gradients correctly, h_pred must be computed within a tape
-    # that also watches the coordinates, OR the graph must be traceable.
-    # Here, we simulate how it might be called if PIHALNet's call method
-    # computes h_pred from t,x,y using a sub-model/layers.
-
-    # Method 1: Pass the model and coords to a wrapper (more complex for PIHALNet integration)
-    # Method 2: Assume h_pred is passed, and its differentiability is maintained
-    # For this test, let's use a GradientTape to get h_pred and then pass to pde_layer
-    with GradientTape(persistent=True, watch_accessed_variables=False) as pde_tape:
-        pde_tape.watch(t_input)
-        pde_tape.watch(x_input)
-        pde_tape.watch(y_input)
-        # The head_predictor_model is called *inside* the tape watching the coordinates
-        h_predictions_for_pde = head_predictor_model(t_input, x_input, y_input)
-    
-    # Now, pass these to the PDE residual layer
-    # The pde_residual_layer will create its own tapes internally for differentiation
-    # of h_predictions_for_pde w.r.t t_input, x_input, y_input
-    residual_output = pde_residual_layer((h_predictions_for_pde, t_input, x_input, y_input))
-    del pde_tape # Clean up the outer tape used for generating h_pred for this test
-
-    print(f"h_predictions_for_pde shape: {h_predictions_for_pde.shape}")
-    print(f"Residual output shape: {residual_output.shape}")
-    print(f"Sample residual values:\n{residual_output[0, :3, :]}")
-
-    print("\nTrainable variables in PDE Residual Layer (should include K from calculator):")
-    for var in pde_residual_layer.trainable_variables:
-        print(f"  {var.name}: {var.shape}")
-    
-    # Test get_config / from_config
-    layer_config = pde_residual_layer.get_config()
-    print(f"\nLayer config: {layer_config}")
-    reloaded_layer = GroundwaterFlowPDEResidual.from_config(layer_config)
-    print(f"Reloaded layer calculator: {reloaded_layer.coeff_calculator}")
-    assert reloaded_layer.coeff_calculator.gw_flow_coeffs_config == \
-           pde_residual_layer.coeff_calculator.gw_flow_coeffs_config
