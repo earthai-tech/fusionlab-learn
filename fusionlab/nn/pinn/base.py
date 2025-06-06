@@ -149,7 +149,8 @@ class GWFlowPINN(Model, NNLearner):
             loss="mse",  # placeholder (we’ll override in train_step)
             metrics=[]
         )
-
+    # call can accept tensors, inputs dict with(coords as key )or 3d with shape (batch_size, time_step, 3)
+    # or dict with keys t, x, y  or 2d (batch_size, 3) # excluding time_steps ? 
     def call(self, inputs:Tensor, training: bool = False) -> Tensor:
         """
         Forward pass of the network: (t, x, y) → h_pred.
@@ -169,7 +170,8 @@ class GWFlowPINN(Model, NNLearner):
             A tensor of shape (batch_size, 1) containing predicted
             hydraulic head values.
         """
-        # Basic shape‐check: inputs must be (batch, 3)
+        
+        # Basic shape‐check: inputs must be (batch, 3) # no, 
         if inputs.ndim != 2 or inputs.shape[-1] != 3:
             raise ValueError(
                 f"`inputs` must be a 2D tensor of shape (batch,3). "
@@ -221,7 +223,7 @@ class GWFlowPINN(Model, NNLearner):
         # Validate coords dictionary
         if isinstance (coords, dict): 
             if 'coords' in coords : 
-                t, x, y = extract_txy(inputs = coords )
+                t, x, y = extract_txy(inputs = coords)
             else: 
                 if not all(k in coords for k in ("t", "x", "y")):
                     raise ValueError("`coords` must contain keys 't', 'x', and 'y'.")
@@ -230,7 +232,8 @@ class GWFlowPINN(Model, NNLearner):
                 x = coords["x"]
                 y = coords["y"]
         else: 
-            # extract analyways if tensor is given 
+            # extract anyway if tensor is given, extract will handle when 
+            # bad values are passed. 
             t, x, y = extract_txy(inputs = coords ) 
 
         # Determine physical parameters: use passed or defaults
