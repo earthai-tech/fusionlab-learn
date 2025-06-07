@@ -76,7 +76,7 @@ the tuning process. These are simplified for demonstration.
 
    # Sequence Parameters for PIHALNet (can be small for synthetic example)
    SYNTHETIC_TIME_STEPS = 5
-   SYNTHETIC_FORECAST_HORIZON = 2
+   SYNTHETIC_FORECAST_HORIZON = 5
    SYNTHETIC_OUTPUT_S_DIM = 1
    SYNTHETIC_OUTPUT_G_DIM = 1
 
@@ -402,7 +402,7 @@ allowing users to test ``PIHALTuner`` and understand its operation with
 controllable data.
 
 Section 2: Real Application Case - Example Workflow
----------------------------------------------------
+-------------------------------------------------------
 For tuning ``PIHALNet`` on a real-world dataset like Zhongshan or Nansha,
 the workflow follows the same fundamental steps as the synthetic data example,
 but with careful attention to actual data characteristics, more extensive
@@ -421,8 +421,9 @@ document for a detailed code structure for a real application. The key is to ada
 the data loading, preprocessing, feature engineering, and fixed/hyperparameter
 configurations to the specifics of your chosen real-world dataset.
 
-Step 1: Configuration
----------------------
+Step 2.1: Configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 Define essential configurations for your tuning run.
 
 .. code-block:: python
@@ -471,8 +472,9 @@ Define essential configurations for your tuning run.
    TUNER_TYPE = 'hyperband' # 'randomsearch', 'bayesianoptimization', or 'hyperband'
    TUNER_SEED = 42
 
-Step 2: Data Loading and Preprocessing
---------------------------------------
+Step 2.2: Data Loading and Preprocessing
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 Load your dataset and perform necessary preprocessing steps like cleaning,
 encoding categorical features, and scaling numerical features. The
 ``load_subsidence_pinn_data`` function (if you're using it from
@@ -559,8 +561,9 @@ manual example.
        RUN_OUTPUT_PATH, CITY_NAME
    )
 
-Step 3: Prepare Data for Tuner
---------------------------------
+Step 2.3: Prepare Data for Tuner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 Split the processed data into training and validation sets for the tuner.
 Then, use ``prepare_pinn_data_sequences`` to format this data into the
 structure required by ``PIHALNet``.
@@ -652,8 +655,9 @@ structure required by ``PIHALNet``.
    if inputs_train_np['coords'].shape[0] == 0 or inputs_val_np['coords'].shape[0] == 0:
        raise ValueError("Sequence preparation resulted in empty training or validation data for the tuner.")
 
-Step 4: Configure and Run PIHALTuner
-------------------------------------
+Step 2.4: Configure and Run PIHALTuner
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 Define the fixed parameters for ``PIHALNet`` (many are inferred from data)
 and the hyperparameter search space. Then, instantiate and run ``PIHALTuner``.
 
@@ -731,8 +735,9 @@ and the hyperparameter search space. Then, instantiate and run ``PIHALTuner``.
    )
    logger.info("Hyperparameter search completed.")
 
-Step 5: Retrieve and Use Results
---------------------------------
+Step 2.5: Retrieve and Use Results
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 After the search, you can get the best hyperparameters and the
 best model instance.
 

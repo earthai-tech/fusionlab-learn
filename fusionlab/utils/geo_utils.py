@@ -3,6 +3,7 @@
 #   Author: LKouadio <etanoyau@gmail.com>
 
 from __future__ import annotations 
+
 import os
 from typing import List, Optional, Dict, Any
 import warnings 
@@ -21,9 +22,10 @@ from ..core.io import SaveFile
 logger = fusionlog().get_fusionlab_logger(__name__)
 
 __all__ = [
-    "resolve_spatial_columns", "interpolate_temporal_gaps", 
-    "augment_spatiotemporal_data"]
-
+    'augment_city_spatiotemporal_data','augment_series_features',
+    'augment_spatiotemporal_data','generate_dummy_pinn_data',
+    'interpolate_temporal_gaps', 'resolve_spatial_columns'
+    ]
 
 def resolve_spatial_columns(
     df,

@@ -1,19 +1,823 @@
+# -*- coding: utf-8 -*-
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
 
+"""
+Data utilities.
+"""
+import os
+import re
 import warnings 
-from typing import Any, Optional, List, Union
+from typing import Any, Optional, List, Union, Tuple 
 import numpy as np 
 import pandas as pd 
 
+from .._fusionlog import fusionlog 
 from ..core.array_manager import drop_nan_in, array_preserver, to_array 
-from ..core.checks import check_empty, ensure_same_shape
+from ..core.checks import check_empty, ensure_same_shape, check_spatial_columns
+from ..core.handlers import columns_manager 
 from ..core.io import is_data_readable, SaveFile  
 from ..core.utils import error_policy 
+from ..decorators import Dataify, isdf 
 
-from ..decorators import Dataify 
-from ..utils.base_utils import fill_NaN 
+from .base_utils import fill_NaN 
+from .generic_utils import vlog 
+from .validator import is_frame 
 
+logger = fusionlog().get_fusionlab_logger(__name__)
+
+
+__all__=[
+     'format_forecast_dataframe',
+     'mask_by_reference',
+     'nan_ops',
+     'pivot_forecast_dataframe',
+     'widen_temporal_columns'
+     ]
+
+@SaveFile
+@is_data_readable 
+@check_empty(['df']) 
+def widen_temporal_columns(
+    data: pd.DataFrame,
+    dt_col: str,
+    spatial_cols: Optional[Tuple[str, str]] = None,
+    target_name: Optional[str] = None,
+    round_dt: bool = True,
+    ignore_cols: Optional[List[str]] = None,
+    nan_op: Optional[str] = None,
+    nan_thresh: Optional[float] = None,
+    savefile: Optional[str] =None, 
+    verbose: int = 0,
+) -> pd.DataFrame:
+    r"""
+    Convert a **long** PIHALNet prediction table into a **wide** format
+    where each temporal slice becomes a dedicated column.
+
+    The routine pivots columns whose names follow the pattern ::
+
+        <base>           deterministic forecast
+        <base>_qXX       quantile forecast (e.g., ``subsidence_q10``)
+        <base>_actual    ground‑truth column
+
+    and produces columns of the form ::
+
+        <base>_<year>            point forecast
+        <base>_<year>_qXX        quantile forecast
+        <base>_<year>_actual     ground‑truth value
+
+    If duplicate ``(spatial, year)`` pairs are found, values are
+    aggregated with :pyfunc:`pandas.Series.groupby(mean)
+    <pandas.core.series.Series.groupby>` prior to pivoting to avoid
+    *“Index contains duplicate entries”* errors.
+
+    Parameters
+    ----------
+    data : PathLike object or pandas.DataFrame
+        Long‑format DataFrame returned by
+        :pyfunc:`fusionlab.utils.format_pihalnet_predictions`.
+    dt_col : str
+        Column holding the temporal coordinate (e.g., ``'coord_t'``).
+        Must be numeric or datetime‑coercible.  When *round_dt* is
+        *True*, values are rounded to integers.
+    spatial_cols : (str, str) or None, default=None
+        Names of *x* and *y* spatial coordinates.  These are retained as
+        leading columns in the output.  If *None*, the function falls
+        back to ``'sample_idx'`` or an auto‑generated ``'row_id'``.
+    target_name : str or None, default=None
+        Restrict pivoting to a specific base (e.g., ``'subsidence'``).
+        When *None* every base present in *df* is widened.
+    round_dt : bool, default=True
+        Round *dt_col* to the nearest integer (helpful for fractional
+        years such as *2020.0001*).
+    ignore_cols : list[str] or None, default=None
+        Additional columns to carry through unchanged.  Values are
+        propagated per spatial location using the first non‑null entry.
+    nan_op : {'drop', 'fill', 'both', None}, default=None
+        Strategy for NaN handling after pivot:
+
+        * ``'fill'``  – forward‑fill then back‑fill missing values.
+        * ``'drop'``  – drop rows containing NaNs (see *nan_thresh*).
+        * ``'both'``  – fill then drop according to *nan_thresh*.
+        * ``None``    – leave NaNs untouched.
+    nan_thresh : float or None, default=None
+        When *nan_op* contains ``'drop'``, rows are dropped if the
+        proportion of missing values exceeds *nan_thresh*.  Set
+        *nan_thresh* = 0 to require **no** NaNs, 0.5 to allow *≤ 50 %*
+        missing, etc.
+
+        .. math::
+
+           \text{row kept} \;\Longleftrightarrow\;
+           \frac{\text{NaNs in row}}{\text{row width}}
+           \le \text{nan\_thresh}
+    savefile : str, optional
+        If a file path is provided, the final wide-format DataFrame
+        will be saved as a CSV file.
+    verbose : int, default=0
+        Diagnostic verbosity from *0* (silent) to *5* (trace every step).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Wide‑format frame with spatial identifiers first, followed by
+        year‑wise forecast, quantile, and actual columns.
+
+    Raises
+    ------
+    KeyError
+        *dt_col* missing from *df* or *spatial_cols* absent.
+    ValueError
+        No columns match *target_name* or *nan_thresh* is outside
+        :math:`[0, 1]`.
+
+    Notes
+    -----
+    * Duplicate indices are aggregated with the arithmetic mean before
+      pivoting.  Modify the aggregation lambda inside the function for
+      alternative choices.
+    * If *ignore_cols* is provided, their first non‑null value per
+      spatial location is appended to the output.
+
+    Examples
+    --------
+
+    Minimal usage on a tiny synthetic set
+
+    >>> import pandas as pd
+    >>> from fusionlab.utils.data_utils import widen_temporal_columns
+    >>>
+    >>> df_long = pd.DataFrame(
+    ...     {
+    ...         "coord_x": [113.15, 113.15, 113.15, 113.15],
+    ...         "coord_y": [22.63, 22.63, 22.63, 22.63],
+    ...         "coord_t": [2019, 2020, 2019, 2020],
+    ...         "subsidence_q50": [0.09, 0.10, 0.12, 0.13],
+    ...         "subsidence_actual": [0.08, 0.11, 0.10, 0.14],
+    ...     }
+    ... )
+    >>>
+    >>> wide = widen_temporal_columns(
+    ...     df_long,
+    ...     dt_col="coord_t",
+    ...     spatial_cols=("coord_x", "coord_y"),
+    ...     verbose=2,
+    ... )
+    [INFO] Initial rows: 4, columns: 2
+    [INFO] Widening base 'subsidence' (2 columns)
+    [DONE] Final wide shape: (1, 4)
+    >>> wide
+       coord_x  coord_y  subsidence_2019_actual  subsidence_2020_actual  \
+    0   113.15    22.63                   0.08                   0.11   
+    
+       subsidence_2019_q50  subsidence_2020_q50  
+    0                 0.12                 0.13  
+    
+    End‑to‑end example with NaN handling, ignored columns, and two targets
+    
+    >>> import numpy as np
+    >>> rng = pd.date_range("2018", periods=3, freq="Y").year
+    >>> n = 5  # five spatial locations
+    >>>
+    >>> # build synthetic long DataFrame
+    >>> df_long = pd.DataFrame(
+    ...     {
+    ...         "sample_idx": np.repeat(np.arange(n), len(rng)),
+    ...         "coord_x": np.repeat(np.linspace(113.4, 113.5, n), len(rng)),
+    ...         "coord_y": np.repeat(np.linspace(22.1, 22.2, n), len(rng)),
+    ...         "coord_t": np.tile(rng, n),
+    ...         "region": np.repeat(["A", "B", "A", "B", "A"], len(rng)),
+    ...         "subsidence_q10": np.random.rand(n * len(rng)),
+    ...         "subsidence_q50": np.random.rand(n * len(rng)),
+    ...         "subsidence_q90": np.random.rand(n * len(rng)),
+    ...         "subsidence_actual": np.random.rand(n * len(rng)),
+    ...         "GWL_q50": np.random.rand(n * len(rng)),
+    ...     }
+    ... )
+    >>>
+    >>> # introduce NaNs for demonstration
+    >>> df_long.loc[df_long.sample(frac=0.2).index, "subsidence_q50"] = np.nan
+    >>>
+    >>> wide = widen_temporal_columns(
+    ...     df_long,
+    ...     dt_col="coord_t",
+    ...     spatial_cols=("coord_x", "coord_y"),
+    ...     ignore_cols=["region"],
+    ...     target_name=None,      # widen both 'subsidence' and 'GWL'
+    ...     nan_op="both",         # fill then drop rows with many NaNs
+    ...     nan_thresh=0.4,        # allow at most 40 % missing
+    ...     verbose=3,
+    ... )
+    [INFO] Initial rows: 15, columns: 7
+    [INFO] Widening base 'GWL' (1 columns)
+      └─ 0 duplicate rows in 'GWL_q50' → aggregated
+    [INFO] Widening base 'subsidence' (4 columns)
+      └─ 0 duplicate rows in 'subsidence_q10' → aggregated
+      └─ 0 duplicate rows in 'subsidence_q50' → aggregated
+      └─ 0 duplicate rows in 'subsidence_q90' → aggregated
+      └─ 0 duplicate rows in 'subsidence_actual' → aggregated
+    [INFO] Missing values filled (ffill+bfill).
+    [INFO] Rows with >40% NaN dropped.
+    [DONE] Final wide shape: (5, 19)
+    >>> wide.iloc[:2, :8]  # show first 8 columns
+       coord_x  coord_y  GWL_2018_q50  GWL_2019_q50  GWL_2020_q50  \
+    0  113.400       ...         ...          ...          ...
+    1  113.425       ...         ...          ...          ...   
+    
+       subsidence_2018_actual  subsidence_2019_actual  subsidence_2020_actual  
+    0                    ...                     ...                     ...
+    1                    ...                     ...                     ...
+
+    See Also
+    --------
+    pandas.DataFrame.unstack : Core pivoting method used internally.
+    fusionlab.plot.forecast.forecast_view : Visualisation routine that
+      consumes the resulting wide frame.
+    """
+    # basic presence check
+    if dt_col not in data.columns:
+        raise KeyError(f"'{dt_col}' not present in DataFrame.")
+
+    ignore_cols = list(ignore_cols or [])
+    df_proc = data.copy()
+
+    if round_dt:
+        df_proc[dt_col] = df_proc[dt_col].round().astype(int)
+
+    # choose index columns
+    if spatial_cols and set(spatial_cols).issubset(df_proc.columns):
+        idx_cols = list(spatial_cols) + [dt_col]
+    elif "sample_idx" in df_proc.columns:
+        idx_cols = ["sample_idx", dt_col]
+    else:
+        df_proc = df_proc.reset_index(names="row_id")
+        idx_cols = ["row_id", dt_col]
+
+    df_proc = df_proc.set_index(idx_cols)
+
+    if verbose >= 1:
+        print(
+            f"[INFO] Initial rows: {df_proc.shape[0]}, "
+            f"columns: {df_proc.shape[1]}"
+        )
+
+    # recognise prediction columns
+    pat = re.compile(r"^(?P<base>[A-Za-z0-9_]+?)(?:_(q\d+|actual))?$")
+    bases, col_map = set(), {}
+    for col in df_proc.columns:
+        if col in ignore_cols:
+            continue
+        m = pat.match(col)
+        if m:
+            base = m.group("base")
+            if target_name is None or base == target_name:
+                bases.add(base)
+                col_map[col] = (base, col[len(base) :])
+
+    if not bases:
+        raise ValueError("No matching target columns found.")
+
+    wide_parts: List[pd.DataFrame] = []
+
+    for base in sorted(bases):
+        base_cols = [c for c, (b, _) in col_map.items() if b == base]
+        sub_df = df_proc[base_cols]
+
+        if verbose >= 3:
+            print(f"[INFO] Widening base '{base}' ({len(base_cols)} columns)")
+
+        for col in base_cols:
+            base_name, suffix = col_map[col]
+            series = sub_df[col]
+
+            # Deduplicate index by aggregating duplicates (mean by default)
+            if series.index.duplicated().any():
+                dup_count = series.index.duplicated().sum()
+                if verbose >= 2:
+                    print(f"  └─ {dup_count} duplicate rows in '{col}' → aggregated")
+                series = series.groupby(level=series.index.names).mean()
+
+            # Pivot into wide format
+            wide_piece = series.unstack(level=dt_col)
+            wide_piece.columns = [
+                f"{base_name}_{yr}{suffix}" for yr in wide_piece.columns
+            ]
+            wide_parts.append(wide_piece)
+
+    wide_df = pd.concat(wide_parts, axis=1)
+
+    # add ignored/static columns (first non‑NaN per spatial group)
+    if ignore_cols:
+        group_lvls = [lvl for lvl in wide_df.index.names if lvl != dt_col]
+        static_df = (
+            df_proc[ignore_cols]
+            .groupby(level=group_lvls, dropna=False)
+            .first()
+        )
+        wide_df = wide_df.join(static_df)
+
+    # optional NaN handling
+    if nan_op:
+        nan_op = nan_op.lower()
+        if nan_op in {"fill", "both"}:
+            wide_df = wide_df.sort_index().ffill().bfill()
+            if verbose >= 2:
+                print("[INFO] Missing values filled (ffill+bfill).")
+        if nan_op in {"drop", "both"}:
+            if nan_thresh is None:
+                wide_df = wide_df.dropna(how="any")
+            else:
+                if not 0.0 <= nan_thresh <= 1.0:
+                    raise ValueError("nan_thresh must be between 0 and 1.")
+                min_non_na = int(np.ceil((1 - nan_thresh) * wide_df.shape[1]))
+                wide_df = wide_df.dropna(thresh=min_non_na)
+            if verbose >= 2:
+                print("[INFO] Rows with excessive NaNs dropped.")
+
+    # reset index so spatial/sample identifiers become columns
+    if spatial_cols and set(spatial_cols).issubset(wide_df.index.names):
+        wide_df = wide_df.reset_index()
+        lead_cols = list(spatial_cols)
+    elif "sample_idx" in wide_df.index.names:
+        wide_df = wide_df.reset_index()
+        lead_cols = ["sample_idx"]
+    else:
+        wide_df = wide_df.reset_index(drop=True)
+        lead_cols = []
+
+    wide_df = wide_df[lead_cols + [
+        c for c in wide_df.columns if c not in lead_cols]]
+
+    if verbose >= 1:
+        print(f"[DONE] Final wide shape: {wide_df.shape}")
+
+    return wide_df
+
+@isdf
+def format_forecast_dataframe(
+    df: pd.DataFrame,
+    to_wide: bool = True,
+    time_col: str = 'coord_t',
+    spatial_cols: Tuple[str]=('coord_x', 'coord_y'), 
+    value_prefixes: Optional[List[str]] = None,
+    **pivot_kwargs
+) -> Union[pd.DataFrame, str]:
+    """Auto-detects DataFrame format and conditionally pivots to wide format.
+
+    This function serves as a smart wrapper. It first determines if the
+    input DataFrame is in a 'long' or 'wide' forecast format based on
+    its column structure. If `to_wide` is True and the format is
+    'long', it calls :func:`pivot_forecast_dataframe` to perform the
+    transformation.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame to check and potentially transform.
+    to_wide : bool, default True
+        - If ``True``, the function's goal is to return a wide-format
+          DataFrame. It will pivot a long-format frame or return a
+          wide-format frame as is.
+        - If ``False``, the function only performs detection and
+          returns a string ('wide', 'long', or 'unknown').
+    time_col : str, default 'coord_t'
+        The name of the column that indicates the time step. Its
+        presence is a primary indicator of a long-format DataFrame.
+    value_prefixes : list of str, optional
+        A list of prefixes for the value columns (e.g., ['subsidence',
+        'GWL']). If ``None``, the function will attempt to infer them
+        from column names that do not match common ID columns.
+    **pivot_kwargs
+        Additional keyword arguments to pass down to the
+        :func:`pivot_forecast_dataframe` function if it is called.
+        Common arguments include `id_vars`, `static_actuals_cols`,
+        `verbose`, etc.
+
+    Returns
+    -------
+    pd.DataFrame or str
+        - If `to_wide` is ``True``, returns the (potentially pivoted)
+          wide-format ``pd.DataFrame``.
+        - If `to_wide` is ``False``, returns a string: 'wide', 'long',
+          or 'unknown'.
+
+    See Also
+    --------
+    pivot_forecast_dataframe : The underlying function that performs
+                               the pivot operation.
+
+    Examples
+    --------
+    >>> # df_long is a typical long-format forecast output
+    >>> df_long.columns
+    Index(['sample_idx', 'forecast_step', 'coord_t', 'coord_x', ...])
+    >>> # Detect format
+    >>> format_str = format_forecast_dataframe(df_long, to_wide=False)
+    >>> print(format_str)
+    'long'
+    >>>
+    >>> # Convert to wide format
+    >>> df_wide = format_forecast_dataframe(
+    ...     df_long,
+    ...     to_wide=True,
+    ...     id_vars=['sample_idx', 'coord_x', 'coord_y'],
+    ...     value_prefixes=['subsidence', 'GWL'],
+    ...     static_actuals_cols=['subsidence_actual']
+    ... )
+    >>> # print(df_wide.columns)
+    # Index(['sample_idx', 'coord_x', 'coord_y', 'subsidence_actual',
+    #        'GWL_2018_q50', ...], dtype='object')
+    """
+    # --- Format Detection Logic ---
+    # Heuristic 1: If time_col exists, it's very likely 'long' format.
+    is_long_format = time_col in df.columns
+
+    # Heuristic 2: Check for wide-format columns like 'prefix_YYYY_suffix'
+    # Use a regex to look for (prefix)_(4-digit year)_...
+    if spatial_cols is not None: 
+        spatial_cols = columns_manager (spatial_cols)
+        check_spatial_columns(df, spatial_cols=spatial_cols)
+        coord_x, coord_y = spatial_cols 
+        
+    if value_prefixes is None:
+        # Auto-infer prefixes if not provided
+        # Exclude common ID columns
+        non_value_cols = {
+            'sample_idx', coord_x, coord_y, 'forecast_step', time_col
+            }
+        value_prefixes = sorted(list(set(
+            [c.split('_')[0] for c in df.columns
+             if c not in non_value_cols]
+        )))
+
+    wide_col_pattern = re.compile(
+        r'(' + '|'.join(re.escape(p) for p in value_prefixes) + 
+        r')_(\d{4})_?.*'
+    )
+    has_wide_columns = any(wide_col_pattern.match(col) for col in df.columns)
+
+    detected_format = 'unknown'
+    if is_long_format:
+        detected_format = 'long'
+    elif has_wide_columns:
+        detected_format = 'wide'
+    
+    verbose = pivot_kwargs.get('verbose', 0)
+    vlog(f"Auto-detected DataFrame format: '{detected_format}'",
+         level=1, verbose=verbose)
+
+    # --- Action based on mode ---
+    if to_wide:
+        if detected_format == 'long':
+            vlog("`to_wide` is True and format is 'long'. "
+                 "Pivoting DataFrame...", level=1, verbose=verbose)
+            # Pass necessary args to the pivot function
+            pivot_args = {
+                'time_col': time_col,
+                'value_prefixes': value_prefixes,
+                **pivot_kwargs # Pass through other args
+            }
+            if 'id_vars' not in pivot_args:
+                # Provide a sensible default for id_vars if not given
+                pivot_args['id_vars'] = [
+                    c for c in ['sample_idx', coord_x, coord_y]
+                    if c in df.columns
+                ]
+                vlog(f"Using default id_vars: {pivot_args['id_vars']}",
+                     level=2, verbose=verbose)
+
+            return pivot_forecast_dataframe(df.copy(), **pivot_args)
+        
+        elif detected_format == 'wide':
+            vlog("`to_wide` is True but DataFrame is already in wide "
+                 "format. Returning as is.", level=1, verbose=verbose)
+            return df
+        else: # 'unknown'
+            vlog("Warning: DataFrame format is 'unknown'. "
+                 "Cannot pivot. Returning original DataFrame.",
+                 level=1, verbose=verbose)
+            return df
+    else: # to_wide is False
+        return detected_format
+
+@isdf
+def get_value_prefixes(
+    df: pd.DataFrame,
+    exclude_cols: Optional[List[str]] = None, 
+    spatial_cols: Tuple[str, str] = ('coord_x', 'coord_y'), 
+    time_col: str ='coord_t'
+) -> List[str]:
+    """
+    Automatically detects the prefixes of value columns from a DataFrame.
+
+    This utility inspects the column names to infer the base names of
+    the metrics being forecasted (e.g., 'subsidence', 'GWL'),
+    excluding common ID and coordinate columns. It works with both
+    long and wide format forecast DataFrames.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame from which to detect value prefixes.
+    exclude_cols : list of str, optional
+        A list of columns to explicitly ignore during detection. If
+        None, a default list of common ID/coordinate columns is
+        used (e.g., 'sample_idx', 'coord_x', 'coord_t', etc.).
+
+    Returns
+    -------
+    list of str
+        A sorted list of unique prefixes found in the column names.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.data_utils import get_values_prefixes
+    >>> # For a long-format DataFrame
+    >>> long_cols = ['sample_idx', 'coord_t', 'subsidence_q50', 'GWL_q50']
+    >>> df_long = pd.DataFrame(columns=long_cols)
+    >>> get_value_prefixes(df_long)
+    ['GWL', 'subsidence']
+
+    >>> # For a wide-format DataFrame
+    >>> wide_cols = ['sample_idx', 'coord_x', 'subsidence_2022_q90', 'GWL_2022_q50']
+    >>> df_wide = pd.DataFrame(columns=wide_cols)
+    >>> get_value_prefixes(df_wide)
+    ['GWL', 'subsidence']
+    """
+    if exclude_cols is None:
+        # Default set of columns that are not value columns
+        exclude_cols = {
+            'sample_idx', 'forecast_step', time_col,
+            *spatial_cols
+        }
+    else:
+        exclude_cols = set(exclude_cols)
+
+    prefixes = set()
+    for col in df.columns:
+        if col in exclude_cols:
+            continue
+        # The prefix is assumed to be the part before the first underscore
+        prefix = col.split('_')[0]
+        prefixes.add(prefix)
+    
+    return sorted(list(prefixes))
+
+
+@check_empty(['data']) 
+@is_data_readable 
+def pivot_forecast_dataframe(
+    data: pd.DataFrame,
+    id_vars: List[str],
+    time_col: str,
+    value_prefixes: List[str],
+    static_actuals_cols: Optional[List[str]] = None,
+    time_col_is_float_year: Union[bool, str] = 'auto',
+    round_time_col: bool = False,
+    verbose: int = 0,
+    savefile: Optional[str] = None
+) -> pd.DataFrame:
+    """Transforms a long-format forecast DataFrame to a wide format.
+    
+    This utility reshapes time series prediction data from a "long"
+    format, where each row represents a single time step for a given
+    sample, to a "wide" format, where each row represents a single
+    sample and columns correspond to values at different time steps.
+    
+    Parameters
+    ----------
+    data : pd.DataFrame
+        The input long-format DataFrame. It must contain the columns
+        specified in `id_vars` and `time_col`, as well as value
+        columns that start with the strings in `value_prefixes`.
+    
+    id_vars : list of str
+        A list of column names that uniquely identify each sample
+        or group. These columns will be preserved in the wide-format
+        output. For example: ``['sample_idx', 'coord_x', 'coord_y']``.
+    
+    time_col : str
+        The name of the column that represents the time step or year
+        of the forecast (e.g., 'coord_t' or 'forecast_step').
+        This column's values will become part of the new column names.
+    
+    value_prefixes : list of str
+        A list of prefixes for the value columns that need to be
+        pivoted. The function identifies columns starting with
+        these prefixes. For instance, ``['subsidence', 'GWL']``
+        would match 'subsidence_q10', 'GWL_q50', etc.
+    
+    static_actuals_cols : list of str, optional
+        A list of columns containing static "actual" or ground truth
+        values for each sample. These values are assumed to be
+        constant for each unique `sample_idx` and are merged back
+        into the wide DataFrame after pivoting.
+        Example: ``['subsidence_actual']``.
+    
+    time_col_is_float_year : bool or 'auto', default 'auto'
+        Controls how the `time_col` values are formatted into new
+        column names.
+        - If ``'auto'``, automatically detects if `time_col` has a
+          float dtype.
+        - If ``True``, treats `time_col` values (e.g., 2018.0) as
+          years and converts them to integer strings ('2018').
+        - If ``False``, uses the string representation of the value
+          as is.
+    
+    round_time_col : bool, default False
+        If ``True`` and `time_col` is a float type, its values will
+        be rounded to the nearest integer before being used in
+        column names. This is useful for cleaning up float years
+        (e.g., 2018.0001 -> 2018).
+    
+    verbose : int, default 0
+        Controls the verbosity of logging messages. `0` is silent.
+        Higher values print more details about the process.
+    
+    savefile : str, optional
+        If a file path is provided, the final wide-format DataFrame
+        will be saved as a CSV file to that location.
+    
+    Returns
+    -------
+    pd.DataFrame
+        A wide-format DataFrame with one row per unique combination
+        of `id_vars`. New columns are created in the format
+        `{prefix}_{time_str}{_suffix}` (e.g., 'subsidence_2018_q10').
+    
+    See Also
+    --------
+    pandas.pivot_table : The core function used for reshaping data.
+    pandas.merge : Used to re-join static columns after pivoting.
+    
+    Notes
+    -----
+    - The combination of columns in `id_vars` and `time_col` must
+      uniquely identify each row in `df_long` for the pivot to
+      succeed without data loss.
+    - If using `static_actuals_cols`, the `id_vars` list must
+      contain 'sample_idx' to correctly merge the static data back.
+    
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.utils.data_utils import pivot_forecast_dataframe
+    >>> data = {
+    ...     'sample_idx':      [0, 0, 1, 1],
+    ...     'coord_t':         [2018.0, 2019.0, 2018.0, 2019.0],
+    ...     'coord_x':         [0.1, 0.1, 0.5, 0.5],
+    ...     'coord_y':         [0.2, 0.2, 0.6, 0.6],
+    ...     'subsidence_q50':  [-8, -9, -13, -14],
+    ...     'subsidence_actual': [-8.5, -8.5, -13.2, -13.2],
+    ...     'GWL_q50':         [1.2, 1.3, 2.2, 2.3],
+    ... }
+    >>> df_long_example = pd.DataFrame(data)
+    >>> df_wide = pivot_forecast_dataframe(
+    ...     data=df_long_example,
+    ...     id_vars=['sample_idx', 'coord_x', 'coord_y'],
+    ...     time_col='coord_t',
+    ...     value_prefixes=['subsidence', 'GWL'],
+    ...     static_actuals_cols=['subsidence_actual'],
+    ...     verbose=0
+    ... )
+    >>> print(df_wide.columns)
+    Index(['sample_idx', 'coord_x', 'coord_y', 'subsidence_actual',
+           'GWL_2018_q50', 'GWL_2019_q50', 'subsidence_2018_q50',
+           'subsidence_2019_q50'],
+          dtype='object')
+    """
+    is_frame(data, df_only= True) 
+    
+    df_processed = data.copy()
+    
+    vlog(f"Starting pivot operation. Initial shape: {df_processed.shape}",
+         level=2, verbose=verbose)
+
+    if not isinstance(df_processed, pd.DataFrame):
+        raise TypeError(
+            "`df_long` must be a pandas DataFrame."
+        )
+
+    value_cols_to_pivot = [
+        col for col in df_processed.columns
+        if any(col.startswith(prefix) for prefix in value_prefixes)
+    ]
+    
+    required_cols = id_vars + [time_col] + value_cols_to_pivot
+    missing_cols = [
+        col for col in required_cols if col not in df_processed.columns
+    ]
+    if missing_cols:
+        raise ValueError(
+            f"Missing required columns in DataFrame: {missing_cols}"
+        )
+
+    # Determine if the time column should be treated as a float year
+    is_float_year = False
+    if time_col_is_float_year == 'auto':
+        if pd.api.types.is_float_dtype(df_processed[time_col]):
+            is_float_year = True
+            vlog(f"'{time_col}' auto-detected as float year.",
+                 level=2, verbose=verbose)
+    elif time_col_is_float_year is True:
+        is_float_year = True
+    
+    # Round the time column before pivoting if requested
+    if round_time_col and is_float_year:
+        vlog(f"Rounding time column '{time_col}'.",
+             level=1, verbose=verbose)
+        df_processed[time_col] = df_processed[time_col].round().astype(int)
+        # After rounding, it's no longer a float year
+        is_float_year = False
+    elif round_time_col and not is_float_year:
+        vlog(f"Warning: `round_time_col` is True but '{time_col}' "
+             "is not a float year. Skipping rounding.",
+             level=1, verbose=verbose)
+
+    static_df = None
+    if static_actuals_cols:
+        if 'sample_idx' not in df_processed.columns:
+            raise ValueError(
+                "'sample_idx' must be in df_long to handle "
+                "static_actuals_cols."
+            )
+        vlog(f"Extracting static columns: {static_actuals_cols}",
+             level=2, verbose=verbose)
+        static_df = df_processed[
+            ['sample_idx'] + static_actuals_cols
+        ].drop_duplicates(
+            subset=['sample_idx']
+        ).set_index('sample_idx')
+
+    pivot_index = list(set(id_vars) & set(df_processed.columns))
+    pivot_columns = [time_col]
+    pivot_values = value_cols_to_pivot
+
+    vlog(f"Pivoting data with index={pivot_index}, "
+         f"columns='{time_col}'.", level=2, verbose=verbose)
+    try:
+        df_pivoted = df_processed.pivot_table(
+            index=pivot_index,
+            columns=pivot_columns,
+            values=pivot_values,
+            aggfunc='first'
+        )
+    except Exception as e:
+        raise RuntimeError(
+            "Pandas pivot_table failed. Check if `id_vars` and "
+            f"`time_col` uniquely identify rows. Error: {e}"
+        )
+
+    vlog("Flattening pivoted column names.", level=2, verbose=verbose)
+    new_columns = []
+    for value_col, time_val in df_pivoted.columns:
+        parts = value_col.split('_', 1)
+        prefix = parts[0]
+        suffix = f"_{parts[1]}" if len(parts) > 1 else ""
+        
+        time_str = str(time_val)
+        if is_float_year:
+            try:
+                time_str = str(int(time_val))
+            except (ValueError, TypeError):
+                pass 
+        
+        new_col_name = f"{prefix}_{time_str}{suffix}"
+        new_columns.append(new_col_name)
+
+    df_pivoted.columns = new_columns
+    df_pivoted = df_pivoted.reset_index()
+
+    if static_df is not None:
+        vlog("Merging static columns back into the wide DataFrame.",
+             level=2, verbose=verbose)
+        df_wide = pd.merge(
+            df_pivoted, static_df, on='sample_idx', how='left'
+        )
+        cols_order = id_vars + static_actuals_cols + [
+            c for c in df_wide.columns 
+            if c not in id_vars + static_actuals_cols
+        ]
+        df_wide = df_wide[cols_order]
+    else:
+        df_wide = df_pivoted
+    
+    vlog(f"Pivot complete. Final shape: {df_wide.shape}",
+         level=1, verbose=verbose)
+
+    if savefile:
+        try:
+            vlog(f"Saving DataFrame to '{savefile}'.",
+                 level=1, verbose=verbose)
+            save_dir = os.path.dirname(savefile)
+            if save_dir and not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+            df_wide.to_csv(savefile, index=False)
+            vlog("Save successful.", level=2, verbose=verbose)
+        except Exception as e:
+            logger.error(f"Failed to save file to '{savefile}': {e}")
+
+    return df_wide
 
 
 @SaveFile

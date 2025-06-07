@@ -21,7 +21,7 @@ from ...core.checks import (
 from ...core.io import SaveFile 
 from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
-from ...utils.validator import validate_positive_integer #, is_frame
+from ...utils.validator import validate_positive_integer 
 from ...decorators import isdf 
 from ...utils.generic_utils import print_box, vlog
 from ...utils.geo_utils import resolve_spatial_columns 
@@ -42,7 +42,6 @@ else:
     Tensor = type("Tensor", (), {})
     def tf_shape(tensor): return np.array(tensor).shape # Basic fallback
 
-# Dummy coverage_score if not available, for example purposes
 try:
     from ...metrics import coverage_score
     HAS_COVERAGE_SCORE = True
@@ -76,7 +75,7 @@ def format_pihalnet_predictions(
     scaler_info: Optional[Dict[str, Dict[str, Any]]] = None,
     # e.g., {'subsidence': {'scaler': scaler_obj, 
     #                       'all_features': ['f1', 'subs', 'f3'], 'idx': 1}}
-    coord_scaler: Optional[Any] = None, # <-- ADD THIS NEW PARAMETER
+    coord_scaler: Optional[Any] = None, 
     evaluate_coverage: bool = False,
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: str = None, 
@@ -92,8 +91,148 @@ def format_pihalnet_predictions(
     optionally include true target values, coordinate information,
     additional identifiers, perform inverse scaling, and evaluate
     quantile coverage.
+    
+    Structure PIHALNet predictions, targets, coordinates, and user
+    metadata into a **long‑format** :pyclass:`pandas.DataFrame`
+    ready for post‑processing, plotting, or export.
 
-    (Full docstring parameters, returns, raises, examples would go here)
+    The routine accepts either a pre‑computed output dictionary
+    from :class:`~fusionlab.nn.pinn.PIHALNet` **or** a compiled model
+    and its inputs.  It supports single‑point as well as quantile
+    forecasts, dual‑target learning (subsidence / ground‑water level),
+    optional inverse scaling, coordinate recovery, quantile‑coverage
+    diagnostics, and the injection of arbitrary static ID columns.
+
+    Parameters
+    ----------
+    pihalnet_outputs : dict[str, Tensor] or None, default=None
+        Dictionary returned by ``PIHALNet.predict``.  Keys should
+        include ``'subs_pred'`` and/or ``'gwl_pred'``; a
+        ``'pde_residual'`` key is silently ignored.  If *None*,
+        predictions are generated from *model* and *model_inputs*.
+    model : keras.Model or None, default=None
+        A compiled PIHALNet instance used to generate predictions
+        when *pihalnet_outputs* is *None*.
+    model_inputs : dict[str, Tensor] or None, default=None
+        Input dictionary matching the signature of
+        :pymeth:`PIHALNet.call`.  Required with *model*.
+    y_true_dict : dict[str, ndarray | Tensor] or None, default=None
+        Ground‑truth arrays keyed by ``'subsidence'`` / ``'gwl'`` or
+        by their prediction keys.  Shapes must match
+        ``(N, H, O)``.
+    target_mapping : dict[str, str] or None, default=None
+        Custom mapping between network output keys and column base
+        names.  Example: ``{'subs_pred': 'subs', 'gwl_pred': 'gwl'}``.
+    include_gwl_in_df, include_coords_in_df : bool, default=True
+        Toggles the export of GWL predictions and coordinate columns.
+    quantiles : list[float] or None, default=None
+        Sorted quantile levels *q* such that
+        :math:`0 < q_1 < \dots < q_Q < 1`.
+    forecast_horizon : int or None, default=None
+        Overrides the horizon inferred from prediction shape.
+    output_dims : dict[str, int] or None, default=None
+        Explicit feature dimension per target.  If *None*, each
+        target’s last axis defines :math:`O`.
+    ids_data_array : ndarray | DataFrame | Tensor or None, default=None
+        Static identifiers (e.g. well ID, lithology) of shape
+        ``(N, P)``.
+    ids_cols : list[str] or None, default=None
+        Column names for *ids_data_array* (DataFrame or ndarray).
+    ids_cols_indices : list[int] or None, default=None
+        Subset of columns to retain from an *ids_data_array* ndarray.
+    scaler_info : dict[str, dict] or None, default=None
+        Per‑target inverse‑scaling metadata.  Each sub‑dict must
+        contain ``'scaler'``, ``'all_features'``, and ``'idx'``.
+    coord_scaler : object or None, default=None
+        Scikit‑learn‑compatible scaler used to denormalize the
+        coordinate triplet *(t, x, y)*.
+    evaluate_coverage : bool, default=False
+        Compute unconditional coverage of the central quantile band
+        defined by *coverage_quantile_indices*.
+    coverage_quantile_indices : tuple[int, int], default=(0, -1)
+        Indices ``(L, U)`` pointing to the lower and upper
+        quantile columns used in the coverage test.
+
+        .. math::
+
+           \text{Coverage} \;=\;
+           \frac{1}{n}\sum_{i=1}^{n}
+           \mathbb{1}\!\bigl[
+               y_i \in \bigl[\hat{y}^{(L)}_i,
+                              \hat{y}^{(U)}_i\bigr]
+           \bigr]
+    savefile : str or None, default=None
+        If given, ``final_df.to_csv(savefile, index=False)`` is called.
+    verbose : int, default=0
+        Verbosity from *0* (silent) to *5* (trace every step).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Long‑format frame with one row per sample–step pair and
+        columns
+
+        * ``sample_idx`` – original sample index :math:`n`.
+        * ``forecast_step`` – lead time :math:`h\;(\ge 1)`.
+        * ``coord_t``, ``coord_x``, ``coord_y`` – coordinates
+          (optional).
+        * Prediction columns ``<base>[_<k>]`` or
+          ``<base>_q<q%>``.
+        * ``<base>_actual`` – ground‑truth targets (optional).
+        * Extra ID columns supplied via *ids_data_array*.
+
+    Raises
+    ------
+    ValueError
+        Missing mandatory inputs or shape mismatches.
+    RuntimeError
+        Model prediction failures.
+    TypeError
+        Unsupported tensor type in *pihalnet_outputs*.
+    Warning
+        Non‑fatal issues are logged when *verbose* > 0.
+
+    Notes
+    -----
+    * The exported DataFrame is **column‑aligned** across targets,
+      enabling straightforward melt/merge operations.
+    * If *quantiles* is provided and predictions are shape
+      ``(N, H, Q, O)``, columns are named
+      ``<base>_q{int(q*100)}``.
+    * Inverse transforms are applied **after concatenation** to avoid
+      duplicate scaler calls.
+
+    Examples
+    --------
+    >>> from fusionlab.nn.pinn.utils import format_pihalnet_predictions
+    >>> df = format_pihalnet_predictions(
+    ...     model=pihalnet,
+    ...     model_inputs=batch,
+    ...     y_true_dict={'subsidence': y_true},
+    ...     quantiles=[0.05, 0.50, 0.95],
+    ...     ids_data_array=meta_df[['well_id', 'region']],
+    ...     ids_cols=['well_id', 'region'],
+    ...     verbose=3,
+    ... )
+    >>> df.head()
+       sample_idx  forecast_step  subs_q5  subs_q50  subs_q95  subs_actual
+    0           0              1    -2.11     -1.34     -0.54        -1.20
+    1           0              2    -2.35     -1.62     -0.80        -1.58
+    2           0              3    -2.58     -1.91     -1.01        -1.85
+    3           1              1    -3.05     -2.40     -1.72        -2.55
+    4           1              2    -3.29     -2.67     -1.99        -2.81
+
+    See Also
+    --------
+    fusionlab.metrics.coverage_score
+    fusionlab.nn.pinn.PIHALNet.predict
+    fusionlab.nn.pinn.utils._format_target_predictions
+
+    References
+    ----------
+    .. [1] Kouadio M. K. *et al.* “Physics‑Informed Heterogeneous
+       Attention Learning for Spatio‑Temporal Subsidence Prediction,”
+       *IEEE T‑PAMI*, 2025 (in press).
     """
     vlog(f"Starting PIHALNet prediction formatting (verbose={verbose}).",
          level=3, verbose=verbose, logger=logger)
@@ -537,7 +676,6 @@ def format_pihalnet_predictions(
     
     return final_df
 
-
 def _format_target_predictions(
     predictions_np: np.ndarray,
     num_samples: int,
@@ -633,10 +771,10 @@ def prepare_pinn_data_sequences(
     group_id_cols: Optional[List[str]] = None,
     time_steps: int = 12,
     forecast_horizon: int = 3,
-    output_subsidence_dim: int = 1, # Typically 1 for subsidence value
-    output_gwl_dim: int = 1,       # Typically 1 for GWL value
+    output_subsidence_dim: int = 1, 
+    output_gwl_dim: int = 1,       
     datetime_format: Optional[str] = None,
-    normalize_coords: bool = True, # Option to normalize t,x,y
+    normalize_coords: bool = True, 
     cols_to_scale: Union[List[str], str, None] = None,
     return_coord_scaler: bool =False, 
     savefile: Optional[str] = None,
@@ -879,40 +1017,6 @@ def prepare_pinn_data_sequences(
         cols_to_scale =cols_to_scale, 
         verbose =verbose 
     )
-    # coord_scaler = None # ADDED
-   
-    # if normalize_coords: 
-    #     vlog("Applying global normalization to t, x, y coordinates...",
-    #          verbose=verbose, level=2)
-    #     if verbose >=2:
-    #         logger.debug(
-    #             "Applying global MinMaxScaler to t,x,y coordinates.")
-
-    #     coord_cols_to_scale = [numerical_time_col, lon_col, lat_col]
-    #     # Ensure these columns exist and are numeric before scaling
-    #     for col in coord_cols_to_scale:
-    #         if col not in df_proc.columns:
-    #             raise ValueError(
-    #                 f"Coordinate column '{col}' not found for normalization.")
-    #         if not pd.api.types.is_numeric_dtype(df_proc[col]):
-    #             try:
-    #                 df_proc[col] = pd.to_numeric(df_proc[col])
-    #             except ValueError as e:
-    #                 raise ValueError(
-    #                     f"Coordinate column '{col}' could not be converted to numeric"
-    #                     f" for normalization. Error: {e}")
-
-    #     coord_scaler = MinMaxScaler() 
-    #     df_proc[coord_cols_to_scale] = coord_scaler.fit_transform(
-    #         df_proc[coord_cols_to_scale]
-    #     )
-    #     if verbose >= 3:
-    #         logger.debug(
-    #             f"  Min values used for scaling (t,x,y): {coord_scaler.data_min_}")
-    #         logger.debug(
-    #             f"  Max values used for scaling (t,x,y): {coord_scaler.data_max_}")
-            
-
     # --- 2. Group and Sort Data ---
     vlog("Grouping and sorting data...",
          verbose=verbose, level=2)
@@ -992,7 +1096,6 @@ def prepare_pinn_data_sequences(
              verbose=verbose, 
              level=6
             )
-        
         
     if total_sequences == 0:
         raise ValueError(
@@ -1074,9 +1177,7 @@ def prepare_pinn_data_sequences(
         # These are now only for reference if normalize_coords was False,
         # or for potential debugging. The actual normalization happens globally if enabled.
         t_min_group, t_max_group = group_t_coords.min(), group_t_coords.max() 
-        # x_min_group, x_max_group = group_x_coords.min(), group_x_coords.max() # Renamed
-        # y_min_group, y_max_group = group_y_coords.min(), group_y_coords.max() # Renamed
-            
+
         if verbose >= 3:
             print()
             time_scale_info = f"{t_min_group:.4f}-{t_max_group:.4f}"
@@ -1155,7 +1256,6 @@ def prepare_pinn_data_sequences(
             ][gwl_col].values.reshape(
                 forecast_horizon, output_gwl_dim).astype(np.float32)
 
-            
             
             if verbose >= 7: # Very detailed trace
                 logger.debug(f"  Sequence {current_seq_idx}:")

@@ -1,8 +1,8 @@
 .. _exercise_experimental_super_tft:
 
-==================================================
+====================================================
 Exercise: Forecasting with Experimental SuperXTFT
-==================================================
+====================================================
 
 Welcome to this exercise on using the experimental
 :class:`~fusionlab.nn.SuperXTFT` model from ``fusionlab-learn``.

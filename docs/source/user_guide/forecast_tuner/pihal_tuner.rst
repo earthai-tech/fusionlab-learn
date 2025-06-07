@@ -34,7 +34,7 @@ Key Responsibilities
     search mechanism (from ``PINNTunerBase``).
 
 Core Components and Workflow
-----------------------------
+-------------------------------
 
 1.  **Initialization (`__init__`)**:
     When you create a ``PIHALTuner`` instance, you typically provide:

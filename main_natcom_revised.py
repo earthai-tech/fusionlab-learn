@@ -68,7 +68,7 @@ try:
     from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
     from fusionlab.nn.pinn.utils import format_pihalnet_predictions
-    from fusionlab.plot.forecast import plot_forecasts
+    from fusionlab.plot.forecast import plot_forecasts, forecast_view 
     from fusionlab.utils.data_utils import nan_ops
     from fusionlab.utils.io_utils import save_job #, fetch_joblib_data
     from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column 
@@ -918,7 +918,22 @@ else:
 # ==================================================================
 # ** Step 10: Save All Generated Figures **
 # ==================================================================
-print(f"\n{'='*20} Step 10: Save All Figures {'='*20}")
+print(f"\n{'='*20} Step 10: Forecast View & Save All Figures {'='*20}")
+try: 
+    forecast_view (
+        forecast_df_pihalnet, 
+        spatial_cols = ('coord_x', 'coord_y'), 
+        time_col ='coord_t', 
+        value_prefixes=['subsidence'], # view subisidence only
+        verbose =7,  
+        view_quantiles =[0.5], 
+        savefig=os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_forecast_comparison_plot_"), 
+        save_fmts=['.png', '.pdf'] 
+      )
+    print(f"Forecast view figures saved to: {RUN_OUTPUT_PATH}")
+except Exception as e : 
+    print(f"Could not plot forecast view: {e}")
+
 try:
     save_all_figures(
         output_dir=RUN_OUTPUT_PATH,
@@ -929,5 +944,6 @@ try:
 except Exception as e_save_fig:
     print(f"Could not save all figures: {e_save_fig}")
 
+print("fo")
 print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} {MODEL_NAME} SCRIPT COMPLETED.\n"
       f"Outputs are in: {RUN_OUTPUT_PATH}\n{'-'*_TW}")
