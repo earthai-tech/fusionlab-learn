@@ -46,6 +46,7 @@ Explore the sections below to learn how to effectively use
    forecast_tuner/index
    evaluation/index
    visualizing_with_kdiagram
+   forecast_plots 
 
 .. toctree::
    :maxdepth: 2

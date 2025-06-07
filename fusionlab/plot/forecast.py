@@ -353,13 +353,28 @@ def forecast_view(
                 ax=axes, orientation='vertical', fraction=0.02, pad=0.04
              )
 
+        # if savefig:
+        #     fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
+        #     base, _ = os.path.splitext(savefig)
+        #     for fmt in fmts:
+        #         fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
+        #         vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
+        #         fig.savefig(fname, dpi=300, bbox_inches='tight')
+
         if savefig:
             fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
             base, _ = os.path.splitext(savefig)
+        
             for fmt in fmts:
                 fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
+
+                # --- ensure output directory exists ---------------------------
+                out_dir = os.path.dirname(fname)
+                if out_dir and not os.path.exists(out_dir):
+                    os.makedirs(out_dir, exist_ok=True)
                 vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-                fig.savefig(fname, dpi=300, bbox_inches='tight')
+                fig.savefig(fname, dpi=300, bbox_inches="tight")
+
 
         plt.show()
 
@@ -593,7 +608,7 @@ def plot_forecasts(
     Examples
     --------
     >>> from fusionlab.nn.utils import format_predictions_to_dataframe
-    >>> from fusionlab.plot.forecast import visualize_forecasts
+    >>> from fusionlab.plot.forecast import plot_forecasts
     >>> import pandas as pd
     >>> import numpy as np
     
