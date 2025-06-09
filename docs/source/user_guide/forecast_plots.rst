@@ -61,7 +61,7 @@ for the q10, q50, and q90 quantiles.
 
    import pandas as pd
    from fusionlab.plot.forecast import forecast_view
-   from fusionlab.utils.data_utils import get_value_prefixes
+   from fusionlab.utils.forecast_utils import get_value_prefixes
 
    # Example 1: 
    # Assume `df_forecast_long` is a long-format DataFrame from a model
@@ -162,6 +162,87 @@ for the q10, q50, and q90 quantiles.
    forecasts. Each row represents a forecast year, and columns show the
    actual ground truth alongside predictions for different quantiles (q10,
    q50, q90).
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+plot_forecast_by_step
+=====================
+:API Reference: :func:`~fusionlab.plot.forecast.plot_forecast_by_step`
+
+This function is tailored to visualize forecast data by organizing
+plots based on the `forecast_step` (e.g., 1-step ahead, 2-steps
+ahead). It is particularly useful for analyzing how a model's
+performance changes over the forecast horizon.
+
+Key Features
+------------
+* **Step-Based Organization**: Creates a grid of plots where each
+  row corresponds to a forecast step.
+* **Flexible Plotting**: Automatically generates spatial scatter plots
+  if `spatial_cols` are provided and valid. If not, it gracefully
+  falls back to creating temporal line plots.
+* **Custom Step Naming**: Allows custom labels for each step via the
+  `step_names` parameter, making plots more interpretable (e.g.,
+  mapping Step 1 to 'Year 2023').
+* **Comprehensive Customization**: Includes the same rich set of
+  customization options as ``forecast_view``, such as `kind`, `cmap`,
+  `cbar_type`, `savefig`, etc.
+
+When to Use
+-----------
+Use ``plot_forecast_by_step`` when your primary goal is to analyze
+the model's predictive capability at each step into the future. It
+helps answer questions like: "Does the model's accuracy degrade as
+it predicts further out?" or "Are there spatial patterns in the error
+at specific forecast horizons?"
+
+Example
+~~~~~~~
+.. code-block:: python
+   :linenos:
+
+   import pandas as pd
+   import numpy as np
+   from fusionlab.plot.forecast import plot_forecast_by_step
+
+   # Create a dummy long-format DataFrame
+   n_samples_per_step = 100
+   steps = [1, 2, 3]
+   df_list = []
+   for step in steps:
+       df_list.append(pd.DataFrame({
+           'sample_idx': np.arange(n_samples_per_step),
+           'forecast_step': step,
+           'coord_x': np.random.rand(n_samples_per_step),
+           'coord_y': np.random.rand(n_samples_per_step),
+           'subsidence_pred': np.random.randn(n_samples_per_step) * step,
+           'subsidence_actual': np.random.randn(n_samples_per_step) * step + 0.5
+       }))
+   df_step_example = pd.concat(df_list, ignore_index=True)
+
+   # Visualize the forecast by step
+   # plot_forecast_by_step(
+   #     df=df_step_example,
+   #     value_prefixes=['subsidence'],
+   #     spatial_cols=('coord_x', 'coord_y'),
+   #     step_names={1: '1-Year Ahead', 2: '2-Years Ahead', 3: '3-Years Ahead'},
+   #     kind='dual',
+   #     max_cols=2 # Show 'Actual' and 'Prediction'
+   # )
+
+**Example Output Plot:**
+
+.. figure:: ../images/plot_forecast_by_step_example.png
+   :alt: Example grid plot from plot_forecast_by_step
+   :align: center
+   :width: 70%
+
+   Example output from ``plot_forecast_by_step``. Each row shows the
+   spatial distribution of the forecast for a specific step into the
+   future (e.g., 1-Year Ahead, 2-Years Ahead), allowing for direct
+   comparison of performance over the forecast horizon.
 
 .. raw:: html
 

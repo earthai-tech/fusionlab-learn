@@ -6,7 +6,7 @@ import warnings
 from fusionlab.compat.tf import HAS_TF # nOQA
 
 # Core model definitions
-from ._models import HALNet
+from ._halnet import HALNet
 
 __all__ = [
     "HALNet",

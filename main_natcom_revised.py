@@ -82,7 +82,7 @@ except ImportError as e:
 #%
 # --- Configuration Parameters ---
 CITY_NAME = 'zhongshan'
-MODEL_NAME = 'PIHALNet' # Using our new model name
+MODEL_NAME = 'PIHALNet' # Using our PINN model name
 
 # Data loading: Prioritize 500k sample file
 # For Code Ocean, data is typically in ../data or /data
@@ -95,8 +95,8 @@ ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 # Training and Forecasting Periods
 TRAIN_END_YEAR = 2022        # Example: Use data up to 2020 for training
 FORECAST_START_YEAR = 2023   # Example: Start forecasting for 2021
-FORECAST_HORIZON_YEARS = 4   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
-TIME_STEPS = 4               # Lookback window (in years) for dynamic features
+FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
+TIME_STEPS = 5               # Lookback window (in years) for dynamic features
 
 # PINN Configuration
 PDE_MODE_CONFIG = 'consolidation' # Focus on consolidation
@@ -113,7 +113,7 @@ BATCH_SIZE = 256 # Adjusted for potentially larger dataset
 
 NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not enough data
                                 # in df_test_master, auto extract all batches.  
-AGG = True # Set this to True or False as needed for your specific test case
+AGG = True # Set this to True or False as needed for  specific test case
 
 # Output Directories
 BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn") # For Code Ocean compatibility
@@ -330,14 +330,14 @@ TIME_COL_NUMERIC_PINN = f"{TIME_COL}_numeric_coord"
 # All numerical features including targets and coordinates might be scaled
 # `prepare_pinn_data_sequences` has its own `normalize_coords` option.
 # Here, we scale features that go into the data-driven part.
-# XXX TO FIX : Optimize
+
 numerical_cols_for_scaling_model = [
-    # LON_COL, 
+    # LON_COL, # handling in prepare_pinn_data_sequences
     # LAT_COL, 
     GWL_COL, 
     'rainfall_mm',
     # 'soil_thickness', # If Nanshan
-    'normalized_density', # If present and numerical # because not use in Nansha
+    'normalized_density', # If present and numerical # because not used in Nansha
     'normalized_seismic_risk_score',
     SUBSIDENCE_COL, # Scale target as well for stable training
     # TIME_COL_NUMERIC_PINN # Scale numeric time
@@ -840,7 +840,7 @@ if inputs_test_dict is not None:
         quantiles=QUANTILES,
         forecast_horizon=FORECAST_HORIZON_YEARS,
         output_dims={'subs_pred': OUT_S_DIM, 'gwl_pred': OUT_G_DIM},
-        include_coords_in_df=True,
+        include_coords=True,
         model_inputs=inputs_test_dict,
         evaluate_coverage=True if QUANTILES else False,
         coord_scaler= test_coord_scaler or coord_scaler, # either test is passed or not
@@ -878,19 +878,28 @@ if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
 
     # Plot for Subsidence
     print("\n--- Plotting Subsidence Forecasts ---")
+    horizon_steps = [1, FORECAST_HORIZON_YEARS] if FORECAST_HORIZON_YEARS > 1 else [1]
+    view_years = [FORECAST_YEARS_LIST[idx -1] for idx in horizon_steps]
+    
     plot_forecasts(
         forecast_df=forecast_df_pihalnet,
         target_name=SUBSIDENCE_COL, # Use the base name used in format_pihalnet_predictions
         quantiles=QUANTILES,
         output_dim=OUT_S_DIM,
         kind="spatial", # Or "temporal"
-        horizon_steps=[1, FORECAST_HORIZON_YEARS] if FORECAST_HORIZON_YEARS > 1 else 1,
+        horizon_steps=horizon_steps,
         spatial_cols=coord_plot_cols if all(
             c in forecast_df_pihalnet.columns for c in coord_plot_cols) else None,
-        sample_ids="first_n", num_samples=min(3, BATCH_SIZE), # For temporal
+        sample_ids="first_n", 
+        num_samples=min(3, BATCH_SIZE), # For temporal
         max_cols=2, # For spatial or temporal multi-sample
         figsize_per_subplot=(7, 5.5), # Adjusted for potentially 2 plots
-        # titles=[f'Subsidence: Year {y}' for y in FORECAST_YEARS_LIST[:2]], # Example
+        # titles=[f'Subsidence: Year {y}' for y in view_years], # Example
+        cbar="uniform", # for uniformize color bar for comparison
+        step_names = {
+            f"step {step}":  f'Subsidence: Year {y}' 
+            for step, y in zip (horizon_steps, view_years)
+            }, 
         verbose=1
     )
     # Plot for GWL
@@ -903,14 +912,16 @@ if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
             quantiles=QUANTILES,
             output_dim=OUT_G_DIM,
             kind="spatial",
-            horizon_steps=[1, FORECAST_HORIZON_YEARS] if FORECAST_HORIZON_YEARS > 1 else 1,
+            horizon_steps=horizon_steps,
             spatial_cols=coord_plot_cols if all(
                 c in forecast_df_pihalnet.columns for c in coord_plot_cols) else None,
-            sample_ids="first_n", num_samples=min(3, BATCH_SIZE),
+            sample_ids="first_n",
+            num_samples=min(3, BATCH_SIZE),
             max_cols=2,
             figsize_per_subplot=(7, 5.5),
-            # titles=[f'GWL: Year {y}' for y in FORECAST_YEARS_LIST[:2]],
-            verbose=1
+            titles=[f'GWL: Year {y}' for y in view_years],
+            verbose=1, 
+            cbar =None, 
         )
 else:
     print("No PIHALNet forecast data to visualize.")

@@ -7,10 +7,18 @@ Forecast utilities.
 """
 from __future__ import annotations
 import os 
-import pandas as pd
 import re
-from typing import List, Optional, Union, Tuple 
-
+from collections.abc import Mapping, Sequence
+from typing import ( 
+    Dict, 
+    Iterable, 
+    List, 
+    Union, 
+    Any, 
+    Optional,
+    Tuple 
+)
+import pandas as pd
 from .._fusionlog import fusionlog 
 from ..core.handlers import columns_manager 
 from ..core.checks import check_spatial_columns, check_empty  
@@ -27,8 +35,132 @@ __all__= [
      'format_forecast_dataframe',
      'get_value_prefixes',
      'get_value_prefixes_in',
-     'pivot_forecast_dataframe'
+     'pivot_forecast_dataframe', 
+     'get_step_names'
      ]
+
+_DIGIT_RE = re.compile(r"\d+")
+
+
+def get_step_names(
+    forecast_steps: Iterable[int],
+    step_names:Optional[
+        Union[ Mapping[Any, str], Sequence[str], None]] = None,
+    default_name: str = "",
+) -> Dict[int, str]:
+    
+    r"""
+    Build a *step → label* mapping for multi‑horizon plots.
+
+    The helper reconciles an integer list ``forecast_steps`` with an
+    optional *alias* container (*dict* or *sequence*) and returns a
+    dictionary whose keys are the integer steps and whose values are
+    human‑readable labels.
+
+    Matching is **case‑insensitive** and tolerant to common
+    delimiters—e.g. ``"Step 1"``, ``"step‑1"``, or ``"forecast step 1"``
+    will all map to integer step ``1``.
+
+    Parameters
+    ----------
+    forecast_steps : Iterable[int]
+        Ordered steps, e.g. ``[1, 2, 3]``.
+    step_names : dict | list | tuple | None, default=None
+        Custom labels.  Accepted forms
+
+        * **dict** – keys may be ``int`` or *any* string
+          representation of the step.
+        * **sequence** – positional, where the *k*‑th element labels
+          step ``k+1``.
+        * **None** – no custom mapping.
+    default_name : str, default=""
+        Fallback label for steps missing from *step_names*.  If
+        empty, the step number itself is used (as a string).
+
+    Returns
+    -------
+    dict[int, str]
+        Mapping ``{step : label}`` for every element of
+        *forecast_steps*.
+
+    Notes
+    -----
+    * Dictionary keys are normalised with
+      ``int(re.sub(r"[^0-9]", "", str(key)))`` before matching.
+    * Duplicate keys in *step_names* are resolved by **last‐one wins**
+      semantics.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.forecast_utils import get_step_names
+    >>> get_step_names(
+    ...     forecast_steps=[1, 2, 3],
+    ...     step_names={"1": "Year 2021", 2: "2022", "step 3": "2023"},
+    ... )
+    {1: 'Year 2021', 2: '2022', 3: '2023'}
+
+    >>> get_step_names(
+    ...     forecast_steps=[1, 2, 3, 4],
+    ...     step_names={"1": "2021", "2": "2022"},
+    ... )
+    {1: '2021', 2: '2022', 3: '3', 4: '4'}
+
+    >>> get_step_names(
+    ...     [1, 2, 3, 4],
+    ...     step_names=None,
+    ...     default_name="step with no name",
+    ... )
+    {1: 'step with no name', 2: 'step with no name',
+     3: 'step with no name', 4: 'step with no name'}
+
+    See Also
+    --------
+    fusionlab.utils.data_utils.widen_temporal_columns :
+        Converts long format to wide; often used with
+        *forecast_steps* when plotting.
+    """
+    # Ensure we have a concrete list to preserve order and allow
+    # multiple passes.
+    forecast_steps = columns_manager( forecast_steps , empty_as_none= False)
+    steps: List[int] = [int(s) for s in forecast_steps]
+    lookup: Dict[int, str] = {}
+
+    if step_names is None:
+        pass # remain empty
+    elif isinstance(step_names, Mapping):
+        for k, v in step_names.items():
+            idx = _to_int_key(k) 
+            # Skip keys that cannot be coerced to int (e.g. None, dict)
+            if idx is not None:
+                lookup[idx] = str(v)
+    elif isinstance(step_names, Sequence) and not isinstance(
+            step_names, (str, bytes)):
+        for idx, v in enumerate(step_names, start=1):
+            lookup[idx] = str(v)
+    else:
+        raise TypeError(
+            "`step_names` must be a mapping, a sequence, or None "
+            f"(got {type(step_names).__name__})."
+        )
+
+    # Build the final mapping, applying defaults where necessary.
+    result: Dict[int, str] = {}
+    for step in steps:
+        if step in lookup:
+            result[step] = lookup[step]
+        elif default_name:
+            result[step] = default_name
+        else:
+            result[step] = str(step)
+    return result
+
+def _to_int_key(key: Any) -> int | None:
+    """Try to coerce a mapping key to int by stripping non‑digits."""
+    if isinstance(key, int):
+        return key
+    digits = "".join(_DIGIT_RE.findall(str(key)))
+    return int(digits) if digits else None
+
 
 @isdf
 def format_forecast_dataframe(
