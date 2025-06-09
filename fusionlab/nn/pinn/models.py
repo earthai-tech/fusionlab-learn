@@ -32,7 +32,7 @@ if KERAS_BACKEND:
     Concatenate=KERAS_DEPS.Concatenate 
     Tensor=KERAS_DEPS.Tensor
     Variable =KERAS_DEPS.Variable 
-    AddLayer =KERAS_DEPS.Add
+    Add =KERAS_DEPS.Add
     Constant =KERAS_DEPS.Constant 
     GradientTape =KERAS_DEPS.GradientTape 
     
@@ -75,7 +75,7 @@ if KERAS_BACKEND:
     tf_autograph.set_verbosity(0)
     
     from .._tensor_validation import validate_model_inputs
-    from .._tensor_validation import align_temporal_dimensions
+    # from .._tensor_validation import align_temporal_dimensions
     from .._tensor_validation import check_inputs 
     
 
@@ -86,16 +86,16 @@ if KERAS_BACKEND:
             DynamicTimeWindow,
             GatedResidualNetwork,
             HierarchicalAttention,
-            LearnedNormalization,
+            # LearnedNormalization,
             MemoryAugmentedAttention,
             MultiDecoder,
-            MultiModalEmbedding,
+            # MultiModalEmbedding,
             MultiResolutionAttentionFusion,
             MultiScaleLSTM,
             QuantileDistributionModeling,
             VariableSelectionNetwork,
             PositionalEncoding, 
-            aggregate_multiscale, 
+            # aggregate_multiscale, 
             aggregate_time_window_output, 
             aggregate_multiscale_on_3d
         )
@@ -193,7 +193,8 @@ class PIHALNet(Model, NNLearner):
             'array-like', None 
         ],
         "pinn_coefficient_C": [
-            str, Real,None, StrOptions({"learnable"}) 
+            str, Real, None, StrOptions({"learnable"}),
+            LearnableC, FixedC, DisabledC
         ], 
         "gw_flow_coeffs": [dict, type(None)], 
         'use_vsn': [bool, int], 
@@ -277,326 +278,417 @@ class PIHALNet(Model, NNLearner):
         self.pinn_coefficient_C_config = self._normalize_C_descriptor(
             pinn_coefficient_C)
 
-        self.gw_flow_coeffs_config = gw_flow_coeffs if gw_flow_coeffs is not None else {}
+        self.gw_flow_coeffs_config = ( 
+            gw_flow_coeffs if gw_flow_coeffs is not None else {}
+            )
 
         self._build_halnet_layers()
         self._build_pinn_components()
 
-    def _normalize_C_descriptor(
+    def run_halnet_core(
         self,
-        raw: Union[LearnableC, FixedC, DisabledC, str, float, None]
-    ):
-        """
-        Internal helper: turn the user‐passed `raw` into exactly one of
-        our three classes (LearnableC, FixedC, DisabledC).
-
-        Raises
-        ------
-        ValueError
-            If `raw` is an unrecognized string or negative float.
-        TypeError
-            If `raw` is not one of the expected types.
-        """
-        # 1) Already one of our classes?
-        if isinstance(raw, (LearnableC, FixedC, DisabledC)):
-            return raw
-
-        # 2) If user passed a bare float or int: treat as FixedC(value=raw)
-        if isinstance(raw, (float, int)):
-            if raw < 0:
-                raise ValueError(
-                    "Numeric pinn_coefficient_C must"
-                    f" be non‐negative, got {raw}"
-                )
-            # Nonzero means 'fixed to that value'
-            return FixedC(value=float(raw))
-
-        # 3) If user passed a string, allow the legacy
-        # values "learnable" or "fixed"
-        if isinstance(raw, str):
-            low = raw.strip().lower()
-            if low == "learnable":
-                # Default initial value = 0.01 is built into LearnableC
-                return LearnableC(initial_value=0.01)
-            if low == "fixed":
-                # Default fixed value = 1.0
-                return FixedC(value=1.0)
-            if low in ("none", "disabled", "off"):
-                return DisabledC()
-
-            raise ValueError(
-                f"Unrecognized pinn_coefficient_C string: '{raw}'. "
-                "Expected 'learnable', 'fixed', 'none', or use"
-                " a LearnableC/FixedC/DisabledC instance."
-            )
-
-        # 4) If user passed None, treat as DisabledC()
-        if raw is None:
-            return DisabledC()
-
-        raise TypeError(
-            f"pinn_coefficient_C must be LearnableC, FixedC, DisabledC, "
-            f"str, float, or None; got {type(raw).__name__}."
-        )
-
-    def _build_pinn_components(self):
-        """
-        Instantiates components required for the physics‐informed module.
-        Specifically, sets up how we obtain C:
-          - If LearnableC, create a trainable variable log_C.
-          - If FixedC, store a lambda that returns a fixed tf.constant(value).
-          - If DisabledC, store a lambda that returns tf.constant(1.0).
-        """
-        # Check which descriptor we have:
-        desc = self.pinn_coefficient_C_config
-
-        if isinstance(desc, LearnableC):
-            # We learn log(C) so that C = exp(log_C) is always > 0
-            self.log_C_coefficient = self.add_weight(
-                name="log_pinn_coefficient_C",
-                shape=(),  # scalar
-                initializer=Constant(tf_log(desc.initial_value)),
-                trainable=True
-            )
-            self._get_C = lambda: tf_exp(self.log_C_coefficient)
-
-        elif isinstance(desc, FixedC):
-            # Fixed value, non‐trainable
-            val = desc.value
-            self._get_C = lambda: tf_constant(val, dtype=tf_float32)
-
-        elif isinstance(desc, DisabledC):
-            # Physics disabled => C internally 1.0 but not used if lambda_pde==0
-            # in compile()
-            self._get_C = lambda: tf_constant(1.0, dtype=tf_float32)
-
-        else:
-            # Should never happen if _normalize_C_descriptor is correct
-            raise RuntimeError(
-                "Internal error: pinn_coefficient_C_config is not a recognized type."
-            )
-
-    def get_pinn_coefficient_C(self) -> Tensor:
-        """Returns the physical coefficient C."""
-        return self._get_C()
+        static_input:Tensor,
+        dynamic_input: Tensor,
+        future_input: Tensor,
+        training: bool
+    ) -> Tensor:
+        r"""
+        Execute the core **encoder–decoder** data‑driven pipeline of
+        :class:`~fusionlab.nn.pinn.PIHALNet`.
         
-    def _build_halnet_layers(self):
-        """
-        Instantiates all layers for the core data-driven HALNet architecture,
-        optionally including VariableSelectionNetworks.
-        """
-        if self.use_vsn:
-            if self.static_input_dim > 0:
-                self.static_vsn = VariableSelectionNetwork(
-                    num_inputs=self.static_input_dim,
-                    units=self.vsn_units, 
-                    dropout_rate=self.dropout_rate,
-                    activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm, 
-                    name="static_vsn"
-                )
-                # GRN after static VSN 
-                # (common in TFT to refine VSN output)
-                self.static_vsn_grn = GatedResidualNetwork(
-                    units=self.hidden_units, 
-                    dropout_rate=self.dropout_rate,
-                    activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm,
-                    name="static_vsn_grn"
-                )
-            else:
-                self.static_vsn = None
-                self.static_vsn_grn = None
-
-            if self.dynamic_input_dim > 0:
-                self.dynamic_vsn = VariableSelectionNetwork(
-                    num_inputs=self.dynamic_input_dim,
-                    units=self.vsn_units,
-                    dropout_rate=self.dropout_rate,
-                    use_time_distributed=True,
-                    activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm,
-                    name="dynamic_vsn"
-                )
-                # GRN for dynamic VSN output
-                # (optional, but good for consistency)
-                self.dynamic_vsn_grn = GatedResidualNetwork(
-                    units=self.embed_dim, 
-                    dropout_rate=self.dropout_rate,
-                    activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm,
-                    name="dynamic_vsn_grn"
-                )
-
-            else: 
-                # Should not happen as dynamic_input_dim must be > 0
-                self.dynamic_vsn = None
-                self.dynamic_vsn_grn = None
-
-
-            if self.future_input_dim > 0:
-                self.future_vsn = VariableSelectionNetwork(
-                    num_inputs=self.future_input_dim,
-                    units=self.vsn_units,
-                    dropout_rate=self.dropout_rate,
-                    use_time_distributed=True,
-                    activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm,
-                    name="future_vsn"
-                )
-                # GRN for future VSN output
-                self.future_vsn_grn = GatedResidualNetwork(
-                    units=self.embed_dim, # Target dim for MME/Attention
-                    dropout_rate=self.dropout_rate,
-                    activation=self.activation_fn_str,
-                    use_batch_norm=self.use_batch_norm,
-                    name="future_vsn_grn"
-                )
-            else:
-                self.future_vsn = None
-                self.future_vsn_grn = None
-            
-                    # If VSNs are handling the embedding, we might not need MME.
-            # Its attribute can be set to None, and the `run_halnet_core` method
-            # will use the VSN outputs directly.
-            self.multi_modal_embedding = None
-            
-            logger.info(
-                " VSN is enabled. MultiModalEmbedding"
-                " for dynamic/future inputs will be bypassed."
-                )
-        else: # If not using VSNs
-            self.static_vsn, self.static_vsn_grn = None, None
-            self.dynamic_vsn, self.dynamic_vsn_grn = None, None
-            self.future_vsn, self.future_vsn_grn = None, None
-            # If not using VSN, initial processing for static features
-            if self.static_input_dim > 0:
-                 self.static_dense_initial = Dense( # Renamed to avoid clash
-                    self.hidden_units, activation=self.activation_fn_str
-                )
-            else:
-                self.static_dense_initial = None
-
-        # --- Subsequent Layers (Inputs to these might change based on VSN usage) ---
-        # MultiModalEmbedding now takes outputs of dynamic_vsn_grn and future_vsn_grn
-        # Or, if VSNs are not used, it takes raw (or simply Densed) dynamic/future inputs.
-        # The VSN outputs are already "embedded" to vsn_units or embed_dim.
-        # So, MultiModalEmbedding might become redundant or need to adapt.
-        # For TFT, VSN outputs (after GRN) directly feed into LSTM/attention.
-        # Let's assume VSN outputs (after GRN) are the new "embedded" inputs.
-        # So, we might not need self.multi_modal_embedding if VSNs are used
-        # and their output GRNs project to self.embed_dim.
-        if not self.use_vsn or (
-                self.dynamic_vsn_grn is None and self.future_vsn_grn is None) :
-            # If VSNs are not used for dynamic/future, or not fully configured,
-            # keep MME for raw inputs.
-            # If no VSN, we need MME for initial feature processing.
-           self.multi_modal_embedding = MultiModalEmbedding(self.embed_dim)
-           logger.info(
-               "VSN is disabled. MultiModalEmbedding"
-               " will be used for raw inputs.")
-        else:
-            # If VSNs are used and their GRNs output embed_dim, MME might be skipped
-            # for dynamic/future as they are already processed.
-            # Or MME could take these processed VSN outputs if they are of different dims.
-            # For simplicity, let's assume if VSNs are used, their outputs (after GRN)
-            # are what we use, and MME might be for other modalities if any.
-            # If dynamic_vsn_grn and future_vsn_grn output embed_dim, we can
-            # directly concatenate them if needed.
-            self.multi_modal_embedding = None # Or adapt its usage
-
-        self.positional_encoding = PositionalEncoding()
-        self.multi_scale_lstm = MultiScaleLSTM(
-            lstm_units=self.lstm_units,
-            scales=self.scales,
-            return_sequences=self.lstm_return_sequences
-        )
-        self.hierarchical_attention = HierarchicalAttention(
-            units=self.attention_units, num_heads=self.num_heads
-        )
-        self.cross_attention = CrossAttention(
-            units=self.attention_units, num_heads=self.num_heads
-        )
-        self.memory_augmented_attention = MemoryAugmentedAttention(
-            units=self.attention_units, memory_size=self.memory_size,
-            num_heads=self.num_heads
-        )
-        self.multi_resolution_attention_fusion = MultiResolutionAttentionFusion(
-            units=self.attention_units, num_heads=self.num_heads
-        )
-        self.dynamic_time_window = DynamicTimeWindow(
-            max_window_size=self.max_window_size
-        )
-        self.multi_decoder = MultiDecoder(
-            output_dim=self._combined_output_target_dim,
-            num_horizons=self.forecast_horizon
-        )
-        self.quantile_distribution_modeling = QuantileDistributionModeling(
-            quantiles=self.quantiles,
-            output_dim=self._combined_output_target_dim
-        )
+        The method ingests *static*, *dynamic* (past), and *future*
+        covariates, passes them through Variable Selection Networks
+        (VSNs) or dense projections, and then processes them with a
+        multi‑scale LSTM encoder and a hierarchical attention‑augmented
+        decoder to produce a single latent vector per sample.  This
+        vector is subsequently fed to the model’s task‑specific output
+        head (not shown here).
         
-        # LearnedNormalization might be applied to VSN inputs or outputs,
-        # or raw inputs if VSN not used.
-        # We have option to apply to raw inputs before VSN if VSN is used.
-        # Or, it could be part of the VSN's internal GRN processing.
-        # For now, we keep it as a general layer.
-        self.learned_normalization = LearnedNormalization()
+        Parameters
+        ----------
+        static_input : Tensor
+            Tensor of shape ``(B, S)`` containing time‑invariant
+            features such as lithology or well depth, where *B* is the
+            batch size and *S* is ``static_input_dim``.
+        dynamic_input : Tensor
+            Past time‑series of length :math:`T_\mathrm{past}` with
+            shape ``(B, T_past, D_in)``.  Typical examples are
+            historical groundwater levels or precipitation.
+        future_input : Tensor
+            Known future covariates of length
+            :pyattr:`forecast_horizon` with shape
+            ``(B, T_future, F_in)``.
+        training : bool
+            Flag forwarded to Keras layers to enable dropout and other
+            training‑only behaviour.
+        
+        Returns
+        -------
+        Tensor
+            A 2‑D tensor of shape ``(B, A)``, where *A* is
+            ``attention_units``.  This latent representation encodes the
+            fused historical context, static descriptors, and known
+            future information.
+        
+        Notes
+        -----
+        * If :pyattr:`use_vsn` is *True*, each input type is first passed
+          through a Variable Selection Network that outputs both
+          feature‑wise importance weights and transformed features.
+        * Duplicate temporal resolutions produced by
+          :pyclass:`~fusionlab.layers.MultiScaleLSTM` are aggregated with
+          :pyfunc:`fusionlab.ops.aggregate_multiscale_on_3d`.
+        * Duplicate residual connections follow the original TFT design
+          but employ GRN‑based :math:`\mathrm{Add}\!\!+\!\!
+          \mathrm{LayerNorm}` blocks for improved stability.
+ 
+        """
 
-        # Static processing if VSN is NOT used for static features
-        if not self.use_vsn or self.static_vsn is None:
-            self.static_dense = Dense( # This was self.static_dense_initial before
-                self.hidden_units, activation=self.activation_fn_str
-            )
-            self.static_dropout = Dropout(self.dropout_rate)
-            if self.use_batch_norm:
-                self.static_batch_norm = LayerNormalization()
-            else:
-                self.static_batch_norm = None
-            self.grn_static = GatedResidualNetwork( 
-                units=self.hidden_units, dropout_rate=self.dropout_rate,
-                activation=self.activation_fn_str,
-                use_batch_norm=self.use_batch_norm
-            )
-        else: # If static_vsn is used, these specific layers might not be needed
-              # as static_vsn_grn produces the final static context
-            self.static_dense = None
-            self.static_dropout = None
-            self.static_batch_norm = None
-            self.grn_static = None # static_vsn_grn takes this role
-            
+        # --- 1. Initial Feature Processing ---
+        # Process each input type through VSNs or simple dense layers to
+        # create initial representations.
+        static_context = None
+        if self.use_vsn and self.static_vsn is not None:
+            vsn_static_out = self.static_vsn(
+                static_input, training=training)
+            static_context = self.static_vsn_grn(
+                vsn_static_out, training=training)
+        elif self.static_dense is not None:  # Non-VSN path
+            processed_static = self.static_dense(static_input)
+            # Note: here the GRN's output dim might differ from the
+            # VSN path. This is handled by the decoder_input_projection.
+            static_context = self.grn_static_non_vsn(
+                processed_static, training=training)
     
-        self.residual_dense = Dense(
-            2 * self.embed_dim # This was tied to MME output usually
-        ) if self.use_residuals else None
+        dynamic_processed = dynamic_input
+        if self.use_vsn and self.dynamic_vsn is not None:
+            dynamic_processed = self.dynamic_vsn(
+                dynamic_input, training=training)
+            dynamic_processed = self.dynamic_vsn_grn(
+                dynamic_processed, training=training)
+    
+        future_processed = future_input
+        if self.use_vsn and self.future_vsn is not None:
+            future_processed = self.future_vsn(
+                future_input, training=training)
+            future_processed = self.future_vsn_grn(
+                future_processed, training=training)
         
-  
+        logger.debug(f"Shape after VSN/initial processing: "
+                     f"Dynamic={getattr(dynamic_processed, 'shape', 'N/A')}, "
+                     f"Future={getattr(future_processed, 'shape', 'N/A')}")
+    
+        # --- 2. Encoder Path (Processes Past Data) ---
+        # The encoder processes `dynamic_processed` to summarize the history.
+        encoder_input = self.positional_encoding(
+            dynamic_processed, training=training)
+        lstm_output_raw = self.multi_scale_lstm(
+            encoder_input, training=training)
+        
+        # Aggregate multi-scale sequences into a single 3D tensor.
+        encoder_sequences = aggregate_multiscale_on_3d(
+            lstm_output_raw, mode='concat')
+        
+        if self.dynamic_time_window is not None:
+            encoder_sequences = self.dynamic_time_window(
+                encoder_sequences, training=training)
+        
+        logger.debug(f"Encoder output sequence shape: {encoder_sequences.shape}")
+    
+        # --- 3. Decoder Path (Prepares Context for Forecasting) ---
+        # The decoder's context is built from static and future inputs
+        # over the `forecast_horizon`.
+        static_context_expanded = None
+        if static_context is not None:
+            static_context_expanded = tf_expand_dims(static_context, 1)
+            static_context_expanded = tf_tile(
+                static_context_expanded, [1, self.forecast_horizon, 1]
+            )
+    
+        future_with_pos = self.positional_encoding(
+            future_processed, training=training)
+    
+        decoder_input_parts = []
+        if static_context_expanded is not None:
+            decoder_input_parts.append(static_context_expanded)
+        if self.future_input_dim > 0:
+            decoder_input_parts.append(future_with_pos)
+    
+        if not decoder_input_parts:
+            batch_size = tf_shape(dynamic_input)[0]
+            raw_decoder_input = tf_zeros(
+                (batch_size, self.forecast_horizon, self.attention_units))
+        else:
+            raw_decoder_input = tf_concat(decoder_input_parts, axis=-1)
+    
+        # Project the raw decoder input to a consistent feature dimension.
+        projected_decoder_input = self.decoder_input_projection(
+            raw_decoder_input)
+        logger.debug(f"Projected decoder input shape: "
+                     f"{projected_decoder_input.shape}")
+    
+        # --- 4. Attention-based Fusion (Encoder-Decoder Interaction) ---
+        cross_attention_output = self.cross_attention(
+            [projected_decoder_input, encoder_sequences], training=training)
+        
+        cross_attention_processed = self.attention_processing_grn(
+            cross_attention_output, training=training)
+    
+        # First residual connection within the decoder block.
+        if self.use_residuals and self.decoder_add_norm is not None:
+            decoder_context_with_attention = self.decoder_add_norm[0](
+                [projected_decoder_input, cross_attention_processed])
+            decoder_context_with_attention = self.decoder_add_norm[1](
+                decoder_context_with_attention)
+        else:
+            # If no residual, the processed attention output becomes the context.
+            decoder_context_with_attention = cross_attention_processed
+        
+        hierarchical_att_output = self.hierarchical_attention(
+            [decoder_context_with_attention, decoder_context_with_attention],
+            training=training
+        )
+        memory_attention_output = self.memory_augmented_attention(
+            hierarchical_att_output, training=training
+        )
+        
+        # --- 5. Final Feature Combination for Decoding ---
+        final_features = self.multi_resolution_attention_fusion(
+             memory_attention_output, training=training
+        )
+        
+        if self.use_residuals and self.final_add_norm:
+            # The `residual_base` must have the same dimension as `final_features`
+            residual_base = self.residual_dense(
+                decoder_context_with_attention)
+            final_features = self.final_add_norm[0](
+                [final_features, residual_base])
+            final_features = self.final_add_norm[1](final_features)
+        
+        logger.debug(f"Shape after final fusion: {final_features.shape}")
+    
+        # Collapse the time dimension to get a single vector per sample.
+        final_features_for_decode = aggregate_time_window_output(
+            final_features, self.final_agg
+        )
+        logger.debug(f"Final features for decoder shape: "
+                     f"{final_features_for_decode.shape}")
+        
+        return final_features_for_decode
+
+    def split_outputs(
+        self, 
+        predictions_combined: Tensor, 
+        decoded_outputs_for_mean: Tensor
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        
+        r"""
+        Separate the **combined output tensor** into individual
+        subsidence and groundwater‑level (GWL) components and return
+        both the *final* and *mean* predictions needed for the two loss
+        terms used in PIHALNet (data loss and physics/PDE loss).
+        
+        The method supports two output shapes:
+        
+        * **Quantile mode**  
+          ``(B, H, Q, C)`` where *Q* is the number of quantiles and
+          *C* = ``output_subsidence_dim + output_gwl_dim``.
+        * **Deterministic mode**  
+          ``(B, H, C)`` when quantiles are disabled.
+        
+        Parameters
+        ----------
+        predictions_combined : Tensor
+            Network output after the
+            :class:`~fusionlab.nn.pinn.QuantileDistributionModeling`
+            stage.  Shape is ``(B, H, C)`` or ``(B, H, Q, C)``.
+        decoded_outputs_for_mean : Tensor
+            Decoder output *before* quantile distribution, used to
+            compute the PDE residual.  Shape is ``(B, H, C)``.
+        training : bool, optional
+            *Inherited from the calling context.*  Present only in
+            TensorFlow graph mode; not used explicitly here.
+        
+        Returns
+        -------
+        s_pred_final : Tensor
+            Subsidence predictions ready for the data‑fidelity loss.
+            Shape matches ``predictions_combined`` minus the *C* split.
+        gwl_pred_final : Tensor
+            GWL predictions ready for the data‑fidelity loss.
+        s_pred_mean_for_pde : Tensor
+            Mean (deterministic) subsidence predictions used when
+            computing physics‑based derivatives.
+        gwl_pred_mean_for_pde : Tensor
+            Mean GWL predictions for the PDE residual term.
+        
+        Notes
+        -----
+        * Mean predictions are extracted *only* from
+          ``decoded_outputs_for_mean`` because applying the quantile
+          mapping first would break the differentiability required for
+          spatial–temporal derivatives.
+        * When TensorFlow executes in graph mode and the rank of
+          *predictions_combined* is dynamic, the function falls back to
+          :pyfunc:`tf.rank` for shape inspection.
+        
+        Examples
+        --------
+        >>> outputs = model(...)                       # forward pass
+        >>> s_final, gwl_final, s_mean, gwl_mean = (
+        ...     model.split_outputs(
+        ...         predictions_combined=outputs["pred"],
+        ...         decoded_outputs_for_mean=outputs["dec_mean"],
+        ...     )
+        ... )
+        >>> s_final.shape
+        TensorShape([32, 24, 3])          # e.g. B=32, H=24, Q=3
+        >>> gwl_mean.shape
+        TensorShape([32, 24, 1])          # deterministic mean
+        
+        See Also
+        --------
+        fusionlab.nn.pinn.QuantileDistributionModeling :
+            Layer that adds the quantile dimension.
+        fusionlab.nn.pinn.PIHALNet.run_halnet_core :
+            Produces ``decoded_outputs_for_mean``.
+        """
+
+        # --- 1. Extract Mean Predictions (for PDE Loss) ---
+        # These come from the decoder output *before* quantile distribution.
+        # This provides a stable point forecast for derivative calculation.
+        s_pred_mean_for_pde = decoded_outputs_for_mean[
+            ..., :self.output_subsidence_dim
+        ]
+        gwl_pred_mean_for_pde = decoded_outputs_for_mean[
+            ..., self.output_subsidence_dim:
+        ]
+
+        # --- 2. Extract Final Predictions (for Data Loss) ---
+        # These may or may not include a quantile dimension.
+        # We check the tensor's rank to decide how to slice.
+        # Keras may return a known static rank during build time,
+        # or we can use tf.rank for dynamic graph execution.
+        if self.quantiles and hasattr(
+                predictions_combined, 'shape') and len(
+                    predictions_combined.shape) == 4:
+            # Case: Quantiles are present.
+            # Shape is (Batch, Horizon, NumQuantiles, CombinedOutputDim)
+            s_pred_final = predictions_combined[
+                ..., :self.output_subsidence_dim
+            ]
+            gwl_pred_final = predictions_combined[
+                ..., self.output_subsidence_dim:
+            ]
+        elif ( 
+                hasattr(predictions_combined, 'shape') 
+                and len(predictions_combined.shape) == 3
+            ):
+            # Case: No quantiles. Shape is (Batch, Horizon, CombinedOutputDim)
+            s_pred_final = predictions_combined[
+                ..., :self.output_subsidence_dim
+            ]
+            gwl_pred_final = predictions_combined[
+                ..., self.output_subsidence_dim:
+            ]
+        else:
+            # This case handles dynamic shapes during graph execution
+            # and acts as a fallback.
+            if self.quantiles and tf_rank(predictions_combined) == 4:
+                s_pred_final = predictions_combined[..., :self.output_subsidence_dim]
+                gwl_pred_final = predictions_combined[..., self.output_subsidence_dim:]
+                
+            elif tf_rank(predictions_combined) == 3:
+                 s_pred_final = predictions_combined[..., :self.output_subsidence_dim]
+                 gwl_pred_final = predictions_combined[..., self.output_subsidence_dim:]
+            else:
+                # This case should ideally not be reached if QDM is consistent
+                 raise ValueError(
+                    f"Unexpected shape from QuantileDistributionModeling: "
+                    f"Rank is {tf_rank(predictions_combined)}"
+                )
+            
+        return (s_pred_final, gwl_pred_final,
+                s_pred_mean_for_pde, gwl_pred_mean_for_pde)
+    
     @tf_autograph.experimental.do_not_convert
     def call(
         self,
         inputs: Dict[str, Optional[Tensor]],
         training: bool = False
     ) -> Dict[str, Tensor]:
-        """
-        Forward pass for PIHALNet, computes predictions and PDE residual.
+        r"""
+        Forward pass for :class:`~fusionlab.nn.pinn.PIHALNet`.
         
-        This method orchestrates the data flow through the data-driven
-        HALNet core and then computes the physics-based residual on the
-        model's mean predictions.
-
-        Args:
-            inputs (Dict[str, tf.Tensor]): A dictionary of input tensors.
-                It is processed by `process_pinn_inputs` and is expected
-                to contain keys like 'coords', 'static_features', 
-                'dynamic_features', and 'future_features'.
-            training (bool): Python boolean indicating training mode.
-
-        Returns:
-            Dict[str, tf.Tensor]: A dictionary containing:
-                - 'subs_pred': Subsidence predictions (potentially with quantiles).
-                - 'gwl_pred': GWL predictions (potentially with quantiles).
-                - 'pde_residual': The calculated physics residual tensor.
+        This method orchestrates the full **physics‑informed** workflow:
+        
+        1. Validate and split the input dictionary into static, dynamic,
+           future, and coordinate tensors.
+        2. Run the HALNet encoder–decoder core to obtain a latent
+           representation.
+        3. Produce mean forecasts with the multi‑horizon decoder.
+        4. Optionally expand those means into quantile predictions.
+        5. Separate combined outputs into subsidence and GWL streams for
+           both data‑loss and physics‑loss branches.
+        6. Compute the consolidation PDE residual on the mean series.
+        7. Return a dictionary ready for the model’s composite loss.
+        
+        Parameters
+        ----------
+        inputs : dict[str, Tensor]
+            Dictionary containing at least the following keys
+            (created by :pyfunc:`fusionlab.nn.pinn.process_pinn_inputs`):
+        
+            * ``'coords'`` – tensor ``(B, H, 3)`` with
+              *(t, x, y)* coordinates.
+            * ``'static_features'`` – tensor ``(B, S)``.
+            * ``'dynamic_features'`` – tensor ``(B, T_past, D)``.
+            * ``'future_features'`` – tensor ``(B, H, F)``.
+        
+        training : bool, default=False
+            Standard Keras flag indicating training or inference mode.
+        
+        Returns
+        -------
+        dict[str, Tensor]
+            * ``'subs_pred'`` – subsidence predictions, shape
+              ``(B, H, Q, O_s)`` or ``(B, H, O_s)``.
+            * ``'gwl_pred'`` – GWL predictions, same layout for *O_g*.
+            * ``'pde_residual'`` – physics residual,
+              shape ``(B, H, 1)`` (all zeros if *H = 1*).
+        
+        Notes
+        -----
+        * Quantile outputs are produced only when the model’s
+          ``quantiles`` attribute is not *None*.
+        * The PDE residual is based on a discrete‑time consolidation
+          equation evaluated with finite differences; therefore a
+          forecast horizon > 1 is required.
+        
+        Examples
+        --------
+        >>> out = pihalnet(
+        ...     {
+        ...         "coords": coords,
+        ...         "static_features": s,
+        ...         "dynamic_features": d,
+        ...         "future_features": f,
+        ...     },
+        ...     training=True,
+        ... )
+        >>> out["subs_pred"].shape
+        TensorShape([32, 24, 3, 1])  # B=32, H=24, Q=3, O_s=1
+        >>> out["pde_residual"].shape
+        TensorShape([32, 24, 1])
+        
+        See Also
+        --------
+        fusionlab.nn.pinn.PIHALNet.run_halnet_core :
+            Feature‑extraction backbone called internally.
+        fusionlab.nn.pinn.PIHALNet.split_outputs :
+            Helper that separates subsidence and GWL channels.
         """
+
         # --- 1. Process and Validate All Inputs ---
         # The `process_pinn_inputs` helper unpacks the input dict and
         # isolates the coordinate tensors for later use.
@@ -706,56 +798,110 @@ class PIHALNet(Model, NNLearner):
             pde_residual = tf_zeros_like(s_pred_mean_for_pde)
         
         logger.debug(f"Shape of PDE residual: {pde_residual.shape}")
-   
-        # XXX TODO: Implement GW flow
+  
         # --- 6. Return All Components for Loss Calculation ---
         return {
             "subs_pred": s_pred_final,
             "gwl_pred": gwl_pred_final,
             "pde_residual": pde_residual,
         }
-        
+    
     def compile(
-        self, 
-        optimizer, 
-        loss, 
-        metrics=None, 
+        self,
+        optimizer,
+        loss,
+        metrics=None,
         loss_weights=None,
-        lambda_pde=1.0, 
-        **kwargs
+        lambda_pde: float = 1.0,
+        **kwargs,
     ):
-        """
-        Configures the model for training with a composite PINN loss.
+        r"""
+        Configure PIHALNet for training with a **composite PINN loss**.
 
-        Args:
-            optimizer: Keras optimizer instance.
-            loss (Dict[str, any]): A dictionary mapping output names 
-                ('subs_pred', 'gwl_pred') to Keras loss functions or
-                their string identifiers (e.g., 'mse').
-            metrics (Dict[str, any], optional): A dictionary mapping 
-                output names to a list of metrics to track for each output.
-            loss_weights (Dict[str, float], optional): A dictionary
-                mapping output names to scalar coefficients to weight the
-                data loss contributions. Defaults to 1.0 for each.
-            lambda_pde (float, optional): The weight for the physics-based
-                PDE residual loss. Defaults to 1.0.
-            **kwargs: Additional arguments for `tf.keras.Model.compile`.
+        The total loss optimised during :pyfunc:`train_step`
+        is
+
+        .. math::
+
+           L_\text{total} \;=\;
+           \sum_i w_i\,L_{\text{data},i}
+           + \lambda_\text{pde}\,L_\text{pde}
+
+        where *i* indexes the outputs (subsidence, GWL).
+
+        Parameters
+        ----------
+        optimizer : tf.keras.optimizers.Optimizer | str
+            Optimiser instance or Keras alias (e.g., ``"adam"``).
+        loss : dict
+            Mapping ``{"subs_pred": loss_fn, "gwl_pred": loss_fn}``.
+            Each value can be a Keras loss object or a string such
+            as ``"mse"``.
+        metrics : dict, optional
+            Mapping from output keys to a list of Keras metric objects
+            (or their aliases) that will be tracked during training and
+            evaluation.
+        loss_weights : dict, optional
+            Scalar weights :math:`w_i` for each *data* loss term.
+            Defaults to 1 for every output.
+        lambda_pde : float, default=1.0
+            Weight applied to :math:`L_\text{pde}` (physics residual).
+        **kwargs
+            Additional keywords forwarded to
+            :pyfunc:`tf.keras.Model.compile`.
+
+        Notes
+        -----
+        * The physics‑residual term is added manually in
+          :pyfunc:`train_step`; therefore ``lambda_pde`` is stored as an
+          attribute rather than passed to ``loss_weights``.
         """
         # Call the parent's compile method. It will handle the setup of
         # losses, metrics, and weights for our named outputs.
         super().compile(
-            optimizer=optimizer, 
-            loss=loss, 
-            metrics=metrics, 
+            optimizer=optimizer,
+            loss=loss,
+            metrics=metrics,
             loss_weights=loss_weights,
-            **kwargs
+            **kwargs,
         )
         # Store the PINN-specific loss weight
         self.lambda_pde = lambda_pde
-        
+
+
     def train_step(self, data: Tuple[Dict, Dict]) -> Dict[str, Tensor]:
-        """
-        Custom training step to handle the composite PINN loss.
+        r"""
+        Single optimisation step implementing the composite loss.
+
+        The procedure is:
+
+        1. Forward pass → ``self.call`` to obtain
+           ``{"subs_pred", "gwl_pred", "pde_residual"}``.
+        2. Compute data‑fidelity loss via
+           :pyfunc:`tf.keras.Model.compute_loss`.
+        3. Compute physics residual loss  
+           :math:`L_\text{pde} = \langle r^2\rangle` where
+           ``r = outputs["pde_residual"]``.
+        4. Form  
+           :math:`L_\text{total}=L_\text{data} +
+           \lambda_\text{pde}\,L_\text{pde}` and back‑propagate.
+        5. Update Keras metrics and return a results dictionary.
+
+        Parameters
+        ----------
+        data : tuple(dict, dict)
+            Tuple ``(inputs, targets)`` produced by the data pipeline.
+
+        Returns
+        -------
+        dict[str, Tensor]
+            Includes user‑defined metrics plus ``"total_loss"``,
+            ``"data_loss"``, and ``"physics_loss"``.
+
+        Raises
+        ------
+        ValueError
+            If *data* is not a two‑element tuple of dictionaries.
         """
         # Unpack the data. Keras provides it as a tuple of (inputs, targets).
         # We expect both to be dictionaries.
@@ -765,13 +911,16 @@ class PIHALNet(Model, NNLearner):
             )
         inputs, targets = data
 
-        # Open a GradientTape to record operations for automatic differentiation.
+        # Open a GradientTape to record operations 
+        # for automatic differentiation.
         with GradientTape() as tape:
             # 1. Forward pass to get model outputs
-            # The `call` method returns a dict: {'subs_pred', 'gwl_pred', 'pde_residual'}
+            # The `call` method returns a dict:
+                #   {'subs_pred', 'gwl_pred', 'pde_residual'}
             outputs = self(inputs, training=True)
 
-            # Structure predictions to match the 'loss' dictionary from compile()
+            # Structure predictions to match the 
+            # 'loss' dictionary from compile()
             y_pred_for_loss = {
                 'subs_pred': outputs['subs_pred'],
                 'gwl_pred': outputs['gwl_pred']
@@ -799,20 +948,281 @@ class PIHALNet(Model, NNLearner):
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
 
         # 6. Update and Return Metrics
-        # Update the metrics passed in compile() (e.g., 'mae', 'rmse' for each output)
+        # Update the metrics passed in compile() 
+        # (e.g., 'mae', 'rmse' for each output)
         self.compiled_metrics.update_state(targets, y_pred_for_loss)
 
         # Build a dictionary of results to be displayed by Keras.
         results = {m.name: m.result() for m in self.metrics}
         results.update({
-            # "loss": total_loss, # nust keep it for API consistency 
             "total_loss": total_loss,    # The main loss we optimized
             "data_loss": data_loss,      # The part of the loss from data
             "physics_loss": loss_pde,    # The part of the loss from physics
         })
         return results
 
+    def _normalize_C_descriptor(
+        self,
+        raw: Union[LearnableC, FixedC, DisabledC, str, float, None]
+    ):
+        """
+        Internal helper: turn the user‐passed `raw` into exactly one of
+        our three classes (LearnableC, FixedC, DisabledC).
 
+        Raises
+        ------
+        ValueError
+            If `raw` is an unrecognized string or negative float.
+        TypeError
+            If `raw` is not one of the expected types.
+        """
+        # 1) Already one of our classes?
+        if isinstance(raw, (LearnableC, FixedC, DisabledC)):
+            return raw
+
+        # 2) If user passed a bare float or int: treat as FixedC(value=raw)
+        if isinstance(raw, (float, int)):
+            if raw < 0:
+                raise ValueError(
+                    "Numeric pinn_coefficient_C must"
+                    f" be non‐negative, got {raw}"
+                )
+            # Nonzero means 'fixed to that value'
+            return FixedC(value=float(raw))
+
+        # 3) If user passed a string, allow the legacy
+        # values "learnable" or "fixed"
+        if isinstance(raw, str):
+            low = raw.strip().lower()
+            if low == "learnable":
+                # Default initial value = 0.01 is built into LearnableC
+                return LearnableC(initial_value=0.01)
+            if low == "fixed":
+                # Default fixed value = 1.0
+                return FixedC(value=1.0)
+            if low in ("none", "disabled", "off"):
+                return DisabledC()
+
+            raise ValueError(
+                f"Unrecognized pinn_coefficient_C string: '{raw}'. "
+                "Expected 'learnable', 'fixed', 'none', or use"
+                " a LearnableC/FixedC/DisabledC instance."
+            )
+
+        # 4) If user passed None, treat as DisabledC()
+        if raw is None:
+            return DisabledC()
+
+        raise TypeError(
+            f"pinn_coefficient_C must be LearnableC, FixedC, DisabledC, "
+            f"str, float, or None; got {type(raw).__name__}."
+        )
+
+    def _build_pinn_components(self):
+        """
+        Instantiates components required for the physics‐informed module.
+        Specifically, sets up how we obtain C:
+          - If LearnableC, create a trainable variable log_C.
+          - If FixedC, store a lambda that returns a fixed tf.constant(value).
+          - If DisabledC, store a lambda that returns tf.constant(1.0).
+        """
+        # Check which descriptor we have:
+        desc = self.pinn_coefficient_C_config
+
+        if isinstance(desc, LearnableC):
+            # We learn log(C) so that C = exp(log_C) is always > 0
+            self.log_C_coefficient = self.add_weight(
+                name="log_pinn_coefficient_C",
+                shape=(),  # scalar
+                initializer=Constant(tf_log(desc.initial_value)),
+                trainable=True
+            )
+            self._get_C = lambda: tf_exp(self.log_C_coefficient)
+
+        elif isinstance(desc, FixedC):
+            # Fixed value, non‐trainable
+            val = desc.value
+            self._get_C = lambda: tf_constant(val, dtype=tf_float32)
+
+        elif isinstance(desc, DisabledC):
+            # Physics disabled => C internally 1.0 but not used if lambda_pde==0
+            # in compile()
+            self._get_C = lambda: tf_constant(1.0, dtype=tf_float32)
+
+        else:
+            # Should never happen if _normalize_C_descriptor is correct
+            raise RuntimeError(
+                "Internal error: pinn_coefficient_C_config is not a recognized type."
+            )
+
+    def get_pinn_coefficient_C(self) -> Tensor:
+        """Returns the physical coefficient C."""
+        return self._get_C()
+        
+    def _build_halnet_layers(self):
+        """Instantiates all layers for the HALNet architecture.
+    
+        This method sets up all necessary components, including conditional
+        Variable Selection Networks (VSNs) and the core layers for the
+        encoder-decoder structure like LSTMs and attention mechanisms.
+        """
+        # --- 1. Variable Selection Networks (Conditional) ---
+        # These layers are created only if `self.use_vsn` is True.
+        # They serve to select the most relevant input features and embed
+        # them into a common feature space.
+        if self.use_vsn:
+            if self.static_input_dim > 0:
+                self.static_vsn = VariableSelectionNetwork(
+                    num_inputs=self.static_input_dim,
+                    units=self.vsn_units,
+                    dropout_rate=self.dropout_rate,
+                    name="static_vsn"
+                )
+                self.static_vsn_grn = GatedResidualNetwork(
+                    units=self.hidden_units,
+                    dropout_rate=self.dropout_rate,
+                    name="static_vsn_grn"
+                )
+            else:
+                self.static_vsn, self.static_vsn_grn = None, None
+    
+            if self.dynamic_input_dim > 0:
+                self.dynamic_vsn = VariableSelectionNetwork(
+                    num_inputs=self.dynamic_input_dim,
+                    units=self.vsn_units,
+                    dropout_rate=self.dropout_rate,
+                    use_time_distributed=True,
+                    name="dynamic_vsn"
+                )
+                self.dynamic_vsn_grn = GatedResidualNetwork(
+                    units=self.embed_dim,
+                    dropout_rate=self.dropout_rate,
+                    name="dynamic_vsn_grn"
+                )
+            else:
+                self.dynamic_vsn, self.dynamic_vsn_grn = None, None
+    
+            if self.future_input_dim > 0:
+                self.future_vsn = VariableSelectionNetwork(
+                    num_inputs=self.future_input_dim,
+                    units=self.vsn_units,
+                    dropout_rate=self.dropout_rate,
+                    use_time_distributed=True,
+                    name="future_vsn"
+                )
+                self.future_vsn_grn = GatedResidualNetwork(
+                    units=self.embed_dim,
+                    dropout_rate=self.dropout_rate,
+                    name="future_vsn_grn"
+                )
+            else:
+                self.future_vsn, self.future_vsn_grn = None, None
+        else:
+            # If not using VSNs, ensure all related attributes are None.
+            self.static_vsn, self.static_vsn_grn = None, None
+            self.dynamic_vsn, self.dynamic_vsn_grn = None, None
+            self.future_vsn, self.future_vsn_grn = None, None
+    
+        # --- 2. Shared & Non-VSN Path Layers ---
+        # These layers are essential for processing attention outputs or
+        # initial features if VSNs are disabled.
+    
+        # This GRN is used to process static features (if not using VSN)
+        # and to refine the output of the cross-attention layer. Its
+        # output dimension is set to `attention_units` for consistency
+        # within the attention block.
+        self.attention_processing_grn = GatedResidualNetwork(
+            units=self.attention_units,
+            dropout_rate=self.dropout_rate,
+            activation=self.activation_fn_str,
+            name="attention_processing_grn"
+        )
+    
+        # This layer projects the combined decoder context into a
+        # consistent feature space (`attention_units`) before it's used
+        # in attention mechanisms and residual connections.
+        self.decoder_input_projection = Dense(
+            self.attention_units,
+            activation=self.activation_fn_str,
+            name="decoder_input_projection"
+        )
+        
+        # These layers are only created if VSN is NOT used.
+        if not self.use_vsn and self.static_input_dim > 0:
+            self.static_dense = Dense(
+                self.hidden_units, activation=self.activation_fn_str
+            )
+            # This GRN is specifically for the non-VSN static path. Its
+            # dimensionality matches the static context (`hidden_units`).
+            self.grn_static_non_vsn = GatedResidualNetwork(
+                units=self.hidden_units, dropout_rate=self.dropout_rate,
+                activation=self.activation_fn_str, name="grn_static_non_vsn"
+            )
+        else:
+            self.static_dense = None
+            self.grn_static_non_vsn = None
+        
+    
+        # Initial dense layer for static features, only created if VSN
+        # is disabled and static features are present.
+        # if not self.use_vsn and self.static_input_dim > 0:
+        #     self.static_dense = Dense(
+        #         self.hidden_units,
+        #         activation=self.activation_fn_str
+        #     )
+        # else:
+        #     self.static_dense = None
+    
+        # --- 3. Core Architectural Layers (Always Created) ---
+        self.positional_encoding = PositionalEncoding()
+        self.multi_scale_lstm = MultiScaleLSTM(
+            lstm_units=self.lstm_units,
+            scales=self.scales,
+            return_sequences=True  # Critical for the encoder path
+        )
+        self.hierarchical_attention = HierarchicalAttention(
+            units=self.attention_units, num_heads=self.num_heads
+        )
+        self.cross_attention = CrossAttention(
+            units=self.attention_units, num_heads=self.num_heads
+        )
+        self.memory_augmented_attention = MemoryAugmentedAttention(
+            units=self.attention_units,
+            memory_size=self.memory_size,
+            num_heads=self.num_heads
+        )
+        self.multi_resolution_attention_fusion = \
+            MultiResolutionAttentionFusion(
+                units=self.attention_units,
+                num_heads=self.num_heads
+            )
+        self.dynamic_time_window = DynamicTimeWindow(
+            max_window_size=self.max_window_size
+        )
+        self.multi_decoder = MultiDecoder(
+            output_dim=self._combined_output_target_dim,
+            num_horizons=self.forecast_horizon
+        )
+        self.quantile_distribution_modeling = QuantileDistributionModeling(
+            quantiles=self.quantiles,
+            output_dim=self._combined_output_target_dim
+        )
+    
+        # --- 4. Layers for Residual Connections (Conditional) ---
+        # Instantiate Add and LayerNormalization layers here to avoid
+        # re-creation inside the `call` method, which is incompatible
+        # with tf.function.
+        if self.use_residuals:
+            self.residual_dense = Dense(self.attention_units)
+            # Layers for the first residual connection in the decoder
+            self.decoder_add_norm = [Add(), LayerNormalization()]
+            # Layers for the final residual connection
+            self.final_add_norm = [Add(), LayerNormalization()]
+        else:
+            self.residual_dense = None
+            self.decoder_add_norm = None
+            self.final_add_norm = None
+            
     def get_config(self):
         config = super().get_config()
         base_config = {
@@ -842,8 +1252,6 @@ class PIHALNet(Model, NNLearner):
            'vsn_units': self.vsn_units,
            'name': self.name, 
            'pde_mode': self.pde_modes_active, 
-           # 'pde_mode': self.pde_modes_active if len(
-           #     self.pde_modes_active) > 1 else self.pde_modes_active[0], 
            'gw_flow_coeffs': self.gw_flow_coeffs_config,
         }
         config.update(base_config)
@@ -851,616 +1259,8 @@ class PIHALNet(Model, NNLearner):
 
     @classmethod
     def from_config(cls, config, custom_objects=None):
-        return cls(**config)
-
-    def run_halnet_core0(
-        self,
-        static_input: Tensor,
-        dynamic_input: Tensor,
-        future_input: Tensor,
-        training: bool
-    ) -> Tensor:
-        """
-        Executes the core data-driven feature extraction pipeline.
-
-        This method processes static, dynamic, and future inputs through
-        VSNs (if enabled), LSTMs, and various attention mechanisms to
-        produce a final set of features ready for decoding.
-
-        Args:
-            static_input (tf.Tensor): Processed static features.
-            dynamic_input (tf.Tensor): Processed dynamic historical features.
-            future_input (tf.Tensor): Processed known future features.
-            training (bool): Python boolean indicating training mode.
-
-        Returns:
-            tf.Tensor: Features processed by the core, ready for the
-                       MultiDecoder.
-        """
-        # --- 1. Initial Feature Processing (VSN or simple Dense) ---
-        
-        # A. Process Static Features
-        static_features_grn_out = None
-        if self.use_vsn and self.static_vsn is not None:
-            # VSN path for static features
-            static_context = self.static_vsn(static_input, training=training)
-            static_features_grn_out = self.static_vsn_grn(
-                static_context, training=training
-            )
-        elif self.static_input_dim > 0:
-            # Non-VSN path for static features
-            # self.static_dense_initial is created in _build_halnet_layers
-            processed_static = self.static_dense_initial(static_input) 
-            static_features_grn_out = self.grn_static(
-                processed_static, training=training
-            )
-        
-        # B. Process Dynamic and Future Time-Varying Features
-        dynamic_processed = dynamic_input
-        future_processed = future_input
-
-        if self.use_vsn:
-            if self.dynamic_vsn is not None:
-                dynamic_processed = self.dynamic_vsn(
-                    dynamic_input, training=training
-                )
-                dynamic_processed = self.dynamic_vsn_grn(
-                    dynamic_processed, training=training
-                )
-            if self.future_vsn is not None:
-                future_processed = self.future_vsn(
-                    future_input, training=training
-                )
-                future_processed = self.future_vsn_grn(
-                    future_processed, training=training
-                )
-
-        # --- 2. Temporal Feature Alignment & Embedding ---
-        # Align future features to the same past time steps as dynamic features
-        _, future_for_embedding = align_temporal_dimensions(
-            tensor_ref=dynamic_processed,
-            tensor_to_align=future_processed,
-            mode='pad_to_ref',
-            name="future_for_embedding"
-        )
-        
-        # VSN path logic
-        if self.multi_modal_embedding is None:
-            # Use tf.cond to handle the condition check for symbolic tensors
-            future_input_is_valid = tf_shape(future_for_embedding)[-1] > 0
-            # Create a tensor to append based on whether future_for_embedding is valid
-            # We must ensure the concatenated tensor has a consistent shape.
-            inputs_to_concat = [dynamic_processed]
-            inputs_to_concat.append(
-                tf_cond(
-                    future_input_is_valid,
-                    lambda: future_for_embedding,  # If valid, use future_for_embedding
-                    # If future features are absent, append zeros to keep shape consistent
-                    # for the residual connection later.
-                    lambda: tf_zeros_like(future_for_embedding)  # Otherwise, append zeros
-                )
-            )
- 
-            embeddings = Concatenate(axis=-1)(inputs_to_concat)
-        else: 
-            # Non-VSN path
-            # Similar logic for MultiModalEmbedding if it accepts zero-dim tensors
-            # or we ensure its inputs are consistent.
-            # Assuming MME path works as intended for now.
-            embeddings = self.multi_modal_embedding(
-                [dynamic_processed, future_for_embedding], training=training
-            )
+        return cls(**config)         
     
-        embeddings = self.positional_encoding(embeddings, training=training)
-    
-        if self.use_residuals and self.residual_dense is not None:
-            # Now, `embeddings` will consistently have shape (..., 2 * embed_dim)
-            # because we concatenate with zeros if future features are absent.
-            # The AddLayer() should no longer fail.
-            embeddings = AddLayer()([embeddings, self.residual_dense(embeddings)])
-    
-
-        # --- 3. LSTM and Attention Mechanisms ---
-        lstm_output_raw = self.multi_scale_lstm(
-            dynamic_processed, training=training # Use VSN-processed dynamic feats
-        )
-        lstm_features = aggregate_multiscale(
-            lstm_output_raw, mode=self.multi_scale_agg_mode
-        )
-        
-        time_steps_dyn = tf_shape(dynamic_processed)[1]
-        lstm_features_tiled = tf_tile(
-            tf_expand_dims(lstm_features, axis=1), [1, time_steps_dyn, 1]
-        )
-        
-        # Hierarchical Attention inputs need to be of compatible dimension.
-        # Assuming they are already at embed_dim after VSN-GRN path.
-        hierarchical_att = self.hierarchical_attention(
-           [dynamic_processed, future_for_embedding], training=training
-        )
-        cross_attention_output = self.cross_attention(
-            [dynamic_processed, embeddings], training=training
-        )
-        memory_attention_output = self.memory_augmented_attention(
-            hierarchical_att, training=training
-        )
-        
-        # Tile static context to match temporal dimension for combination
-        static_features_expanded = None
-        if static_features_grn_out is not None:
-            static_features_expanded = tf_tile(
-                tf_expand_dims(static_features_grn_out, axis=1), 
-                [1, time_steps_dyn, 1]
-            )
-        
-        # --- 4. Feature Fusion and Final Processing ---
-        features_to_combine = [
-            lstm_features_tiled,
-            cross_attention_output,
-            hierarchical_att,
-            memory_attention_output,
-        ]
-        if static_features_expanded is not None:
-            features_to_combine.insert(0, static_features_expanded)
-            
-        combined_features = Concatenate(axis=-1)(features_to_combine)
-        
-        attention_fusion_output = self.multi_resolution_attention_fusion(
-            combined_features, training=training
-        )
-        time_window_output = self.dynamic_time_window(
-            attention_fusion_output, training=training
-        )
-        final_features_for_decode = aggregate_time_window_output(
-            time_window_output, self.final_agg
-        )
-        
-        return final_features_for_decode
-        
-    def run_halnet_core(
-        self,
-        static_input: Tensor,
-        dynamic_input: Tensor,
-        future_input: Tensor,
-        training: bool
-    ) -> Tensor:
-        """
-        Executes the core data-driven feature extraction pipeline.
-    
-        This method processes static, dynamic, and future inputs through
-        VSNs (if enabled), LSTMs, and various attention mechanisms to
-        produce a final set of features ready for decoding. This revised
-        version follows an encoder-decoder pattern to correctly handle
-        inputs with different temporal lengths (`time_steps` and
-        `forecast_horizon`).
-    
-        Args:
-            static_input (tf.Tensor): Processed static features.
-            dynamic_input (tf.Tensor): Processed dynamic historical features.
-                                       Shape: (batch, time_steps, features).
-            future_input (tf.Tensor): Processed known future features.
-                                      Shape: (batch, forecast_horizon, features).
-            training (bool): Python boolean indicating training mode.
-    
-        Returns:
-            tf.Tensor: A feature tensor for the forecast horizon, ready for
-                       the MultiDecoder. Shape: (batch, forecast_horizon, features).
-        """
-        # --- 1. Initial Feature Processing (VSN or simple Dense) ---
-        # This part processes each input type to a common feature space.
-        static_context = None
-        if self.use_vsn and self.static_vsn is not None:
-            vsn_static_out = self.static_vsn(
-                static_input, training=training)
-            static_context = self.static_vsn_grn(
-                vsn_static_out, training=training)
-        elif self.static_input_dim > 0 and self.grn_static is not None:
-            processed_static = self.static_dense(static_input)
-            static_context = self.grn_static(
-                processed_static, training=training)
-        
-        dynamic_processed = dynamic_input
-        if self.use_vsn and self.dynamic_vsn is not None:
-            dynamic_processed = self.dynamic_vsn(
-                dynamic_input, training=training)
-            dynamic_processed = self.dynamic_vsn_grn(
-                dynamic_processed, training=training)
-    
-        future_processed = future_input
-        if self.use_vsn and self.future_vsn is not None:
-            future_processed = self.future_vsn(
-                future_input, training=training)
-            future_processed = self.future_vsn_grn(
-                future_processed, training=training)
-        
-        # --- 2. Encoder Path (Processes Past Data) ---
-        # The encoder summarizes the `dynamic_input` from `time_steps`.
-        encoder_input = self.positional_encoding(
-            dynamic_processed, training=training)
-        
-        # Multi-scale LSTM processes the historical features.
-        # It must return sequences for attention.
-        lstm_output_raw = self.multi_scale_lstm(
-            encoder_input, training=training)
-        
-        # If multi_scale_agg is None, lstm_output is (B, units * len(scales))
-        # If multi_scale_agg is not None, lstm_output is a list of full 
-        # sequences: [ (B, T', units), ... ]
-        # lstm_features = aggregate_multiscale(
-        #     lstm_output_raw, mode= self.multi_scale_agg_mode 
-        # )
-        # # Since we are concatenating along the time dimension, we need 
-        # # all tensors to have the same shape along that dimension.
-        # time_steps = tf_shape(dynamic_processed)[1]
-        # # Expand lstm_features to (B, 1, features)
-        # lstm_features = tf_expand_dims(lstm_features, axis=1)
-        # # Tile to match tf_time steps: (B, T, features)
-        # encoder_output = tf_tile(lstm_features, [1, time_steps, 1])
-        
-
-        # # `encoder_output` now holds the history summary.
-        # # Shape: (batch, time_steps, lstm_units * num_scales)
-        encoder_output = aggregate_multiscale_on_3d(
-            lstm_output_raw, mode='concat' 
-        )
-        
-        # Apply dynamic time window to the historical encoder output if desired.
-        if self.dynamic_time_window is not None:
-             encoder_output = self.dynamic_time_window(
-                 encoder_output, training=training)
-             
-    
-        # --- 3. Decoder Path (Prepares Context for Forecasting) ---
-        # The decoder's context is built from static and future inputs
-        # over the `forecast_horizon`.
-        
-        # Tile static context to match the `forecast_horizon`.
-        static_context_expanded = None
-        if static_context is not None:
-            static_context_expanded = tf_expand_dims(static_context, 1)
-            static_context_expanded = tf_tile(
-                static_context_expanded, [1, self.forecast_horizon, 1]
-            )
-    
-        # Add positional encoding to the known future features.
-        future_processed_with_pos = self.positional_encoding(
-            future_processed, training=training)
-    
-        # Combine static and future features to form the initial decoder context.
-        decoder_input_parts = []
-        if static_context_expanded is not None:
-            decoder_input_parts.append(static_context_expanded)
-        if self.future_input_dim > 0:
-            decoder_input_parts.append(future_processed_with_pos)
-    
-        # If no static or future inputs, create a zero-tensor as placeholder.
-        if not decoder_input_parts:
-            # Determine batch size from dynamic_input.
-            batch_size = tf_shape(dynamic_input)[0]
-            # Use `embed_dim` or another consistent feature dimension.
-            decoder_input = tf_zeros(
-                (batch_size, self.forecast_horizon, self.embed_dim)
-            )
-        else:
-            decoder_input = tf_concat(decoder_input_parts, axis=-1)
-    
-        # --- 4. Attention-based Fusion (Encoder-Decoder Interaction) ---
-        # The decoder context queries the encoder's historical summary.
-        cross_attention_output = self.cross_attention(
-            [decoder_input, encoder_output], # Query, Value( Key)
-            training=training
-        )
-    
-        # A GRN to process the output of cross-attention.
-        cross_attention_processed = self.grn_static(cross_attention_output)
-    
-        # A residual connection for the decoder part.
-        decoder_context_with_attention = AddLayer()(
-            [decoder_input, cross_attention_processed]
-        )
-    
-        # Additional attention mechanisms can refine this context further.
-        # HierarchicalAttention might now be used on the decoder context.
-        hierarchical_att_output = self.hierarchical_attention(
-            [decoder_context_with_attention, decoder_context_with_attention],
-            training=training
-        )
-    
-        memory_attention_output = self.memory_augmented_attention(
-            hierarchical_att_output, training=training
-        )
-        
-        # --- 5. Final Feature Combination for Decoding ---
-        # The output of this stage should have shape 
-        # (batch, forecast_horizon, features).
-        # We aggregate all the refined context information.
-        final_features = self.multi_resolution_attention_fusion(
-             memory_attention_output, training=training
-        )
-        
-        # Another residual connection to stabilize the final block.
-        if self.use_residuals:
-            final_features = AddLayer()(
-                [final_features, decoder_context_with_attention])
-            final_features = LayerNormalization()(final_features)
-        
-        # `final_agg` can aggregate features over the time dimension if needed,
-        # but for MultiDecoder, we typically want to preserve the forecast_horizon.
-        # We will assume `final_agg` is 'last' or 'average' 
-        # which is handled after the decoder.
-        # The result here should be passed to the MultiDecoder.
-        
-        final_features_for_decode = aggregate_time_window_output(
-            final_features, self.final_agg
-        )
-        
-        return final_features_for_decode
-    
-        def _run_halnet_core(
-            self,
-            static_input: Tensor,
-            dynamic_input: Tensor,
-            future_input: Tensor,
-            training: bool
-        ) ->Tensor:
-            """
-            Executes the core data-driven feature extraction pipeline.
-    
-            This method processes static, dynamic, and future inputs through
-            VSNs (if enabled), LSTMs, and various attention mechanisms to
-            produce a final set of features ready for decoding. This revised
-            version follows an encoder-decoder pattern to correctly handle
-            inputs with different temporal lengths (`time_steps` and
-            `forecast_horizon`).
-    
-            Args:
-                static_input (tf.Tensor): Processed static features.
-                dynamic_input (tf.Tensor): Processed dynamic historical features.
-                                           Shape: (batch, time_steps, features).
-                future_input (tf.Tensor): Processed known future features.
-                                          Shape: (batch, forecast_horizon, features).
-                training (bool): Python boolean indicating training mode.
-    
-            Returns:
-                tf.Tensor: A single feature vector per sample, ready for the
-                           MultiDecoder. Shape: (batch, final_features).
-            """
-            # --- 1. Initial Feature Processing (VSN or simple Dense) ---
-            # This part processes each input type to a common feature space.
-            
-            # A. Process Static Features
-            static_context = None
-            if self.use_vsn and self.static_vsn is not None:
-                vsn_static_out = self.static_vsn(static_input, training=training)
-                static_context = self.static_vsn_grn(vsn_static_out, training=training)
-            elif self.static_input_dim > 0 and self.static_dense is not None:
-                processed_static = self.static_dense(static_input)
-                static_context = self.grn_static(processed_static, training=training)
-            
-            # B. Process Time-Varying Features
-            dynamic_processed = dynamic_input
-            future_processed = future_input
-            if self.use_vsn:
-                if self.dynamic_vsn is not None:
-                    dynamic_processed = self.dynamic_vsn(dynamic_input, training=training)
-                    dynamic_processed = self.dynamic_vsn_grn(dynamic_processed, training=training)
-                if self.future_vsn is not None:
-                    future_processed = self.future_vsn(future_input, training=training)
-                    future_processed = self.future_vsn_grn(future_processed, training=training)
-            elif self.multi_modal_embedding is not None:
-                # Non-VSN path: embed raw inputs. Must have same time dimension.
-                # This path is now conceptually difficult if time_steps != forecast_horizon.
-                # We will proceed assuming VSN is used, or inputs have been aligned.
-                # The architectural change below assumes separate processing paths.
-                # --- 2. Temporal Feature Alignment & Embedding ---
-                # Align future features to the same past time steps as dynamic features
-                _, future_for_embedding = align_temporal_dimensions(
-                    tensor_ref=dynamic_processed,
-                    tensor_to_align=future_processed,
-                    mode='pad_to_ref',
-                    name="future_for_embedding"
-                )
-                # Non-VSN path
-                # Similar logic for MultiModalEmbedding if it accepts zero-dim tensors
-                # or we ensure its inputs are consistent.
-                # Assuming MME path works as intended for now.
-                dynamic_processed = self.multi_modal_embedding(
-                    [dynamic_processed, future_for_embedding], training=training
-                )
-                
-                # pass
-    
-            # --- 2. Encoder Path (Processes Past Data) ---
-            # The encoder summarizes the `dynamic_input`.
-            encoder_input = self.positional_encoding(
-                dynamic_processed, training=training)
-            
-            # Multi-scale LSTM processes the historical features
-            lstm_output_raw = self.multi_scale_lstm(encoder_input, training=training)
-            
-            # `encoder_output` now holds the history. Shape: (batch, time_steps, lstm_units)
-            # Assuming `lstm_return_sequences` is True.
-            encoder_output = aggregate_multiscale(
-                lstm_output_raw, mode='concat' if isinstance(lstm_output_raw, list) else 'last'
-            )
-    
-            # Optional: Apply dynamic time window to focus on most recent history
-            if self.dynamic_time_window is not None:
-                 encoder_output = self.dynamic_time_window(
-                     encoder_output, training=training)
-    
-    
-            # --- 3. Decoder Path (Prepares Context for Forecasting) ---
-            # The decoder's initial state is built from static and future inputs.
-            
-            # Tile static context to match the `forecast_horizon`
-            static_context_expanded = None
-            if static_context is not None:
-                static_context_expanded = tf_expand_dims(static_context, 1)
-                static_context_expanded = tf_tile(
-                    static_context_expanded, [1, self.forecast_horizon, 1]
-                )
-    
-            # The known `future_features` are a core part of the decoder context.
-            # Add positional encoding to them.
-            future_processed_with_pos = self.positional_encoding(
-                future_processed, training=training)
-    
-            # Combine static and future features to form the initial decoder input
-            decoder_input_parts = []
-            if static_context_expanded is not None:
-                decoder_input_parts.append(static_context_expanded)
-            if self.future_input_dim > 0:
-                decoder_input_parts.append(future_processed_with_pos)
-    
-            if not decoder_input_parts:
-                # Create a fallback decoder input if no static/future data,
-                # using zeros in the expected shape.
-                decoder_input = tf_zeros(
-                    (tf_shape(dynamic_input)[0], self.forecast_horizon, self.embed_dim)
-                )
-            else:
-                decoder_input = tf_concat(decoder_input_parts, axis=-1)
-    
-            # --- 4. Attention-based Fusion Mechanisms ---
-            # Here, the decoder context queries the encoder output.
-    
-            # Cross-Attention: Decoder context queries encoder history
-            cross_attention_output = self.cross_attention(
-                [decoder_input, encoder_output], training=training
-            )
-    
-            # Hierarchical Self-Attention: Refines the decoder context itself
-            # Now takes only one input, which must be a list of one tensor for self-attention.
-            # Let's use it on the output of cross-attention to refine it.
-            # Note: If HierarchicalAttention expects two distinct inputs, its usage must be re-evaluated.
-            # Assuming for now it can perform self-attention on one context.
-            hierarchical_att_input = [cross_attention_output, cross_attention_output]
-            hierarchical_att_output = self.hierarchical_attention(
-                hierarchical_att_input, training=training
-            )
-    
-            # Memory-Augmented Attention: Further refines the context
-            memory_attention_output = self.memory_augmented_attention(
-                hierarchical_att_output, training=training
-            )
-    
-            # --- 5. Final Feature Combination and Aggregation ---
-            # Combine all processed features before the final decoder step.
-            features_to_combine = [
-                decoder_input, # The original context
-                cross_attention_output,
-                memory_attention_output
-            ]
-            
-            combined_features = tf_concat(features_to_combine, axis=-1)
-            
-            # Multi-Resolution Fusion can be applied here to
-            # create the final unified representation
-            fused_features = self.multi_resolution_attention_fusion(
-                combined_features, training=training
-            )
-    
-            # Add residual connection if enabled
-            if self.use_residuals and self.residual_dense is not None:
-                # Project original decoder input to match fused_features shape for residual connection
-                # This is a common pattern to stabilize deep attention models.
-                projected_decoder_input = self.residual_dense(decoder_input)
-                fused_features = AddLayer()([fused_features, projected_decoder_input])
-                fused_features = LayerNormalization()(fused_features)
-    
-            # Finally, aggregate the temporal features (from forecast_horizon)
-            # into a single vector ready for the MultiDecoder.
-            final_features_for_decode = aggregate_time_window_output(
-                fused_features, mode=self.final_agg
-            )
-            
-            return final_features_for_decode
-
-
-    def split_outputs(
-        self, 
-        predictions_combined: Tensor, 
-        decoded_outputs_for_mean: Tensor
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        """
-        Splits combined model predictions into subsidence and GWL components.
-
-        Also extracts mean predictions suitable for PDE residual calculation
-        if quantiles are used.
-
-        Args:
-            predictions_combined (tf.Tensor): The final output tensor, 
-                potentially with a quantile dimension.
-            decoded_outputs_for_mean (tf.Tensor): The output from MultiDecoder,
-                representing mean predictions before quantile distribution.
-                Shape: (Batch, Horizon, CombinedTargetsDim).
-
-        Returns:
-            Tuple[Tensor, Tensor, Tensor, Tensor]: A tuple containing:
-                - `s_pred_final`: Subsidence predictions for data loss.
-                - `gwl_pred_final`: GWL predictions for data loss.
-                - `s_pred_mean_for_pde`: Mean subsidence for physics loss.
-                - `gwl_pred_mean_for_pde`: Mean GWL for physics loss.
-        """
-        # --- 1. Extract Mean Predictions (for PDE Loss) ---
-        # These come from the decoder output *before* quantile distribution.
-        # This provides a stable point forecast for derivative calculation.
-        s_pred_mean_for_pde = decoded_outputs_for_mean[
-            ..., :self.output_subsidence_dim
-        ]
-        gwl_pred_mean_for_pde = decoded_outputs_for_mean[
-            ..., self.output_subsidence_dim:
-        ]
-
-        # --- 2. Extract Final Predictions (for Data Loss) ---
-        # These may or may not include a quantile dimension.
-        # We check the tensor's rank to decide how to slice.
-        # Keras may return a known static rank during build time,
-        # or we can use tf.rank for dynamic graph execution.
-        if self.quantiles and hasattr(
-                predictions_combined, 'shape') and len(
-                    predictions_combined.shape) == 4:
-            # Case: Quantiles are present.
-            # Shape is (Batch, Horizon, NumQuantiles, CombinedOutputDim)
-            s_pred_final = predictions_combined[
-                ..., :self.output_subsidence_dim
-            ]
-            gwl_pred_final = predictions_combined[
-                ..., self.output_subsidence_dim:
-            ]
-        elif ( 
-                hasattr(predictions_combined, 'shape') 
-                and len(predictions_combined.shape) == 3
-            ):
-            # Case: No quantiles. Shape is (Batch, Horizon, CombinedOutputDim)
-            s_pred_final = predictions_combined[
-                ..., :self.output_subsidence_dim
-            ]
-            gwl_pred_final = predictions_combined[
-                ..., self.output_subsidence_dim:
-            ]
-        else:
-            # This case handles dynamic shapes during graph execution
-            # and acts as a fallback.
-            if self.quantiles and tf_rank(predictions_combined) == 4:
-                s_pred_final = predictions_combined[..., :self.output_subsidence_dim]
-                gwl_pred_final = predictions_combined[..., self.output_subsidence_dim:]
-                
-            elif tf_rank(predictions_combined) == 3:
-                 s_pred_final = predictions_combined[..., :self.output_subsidence_dim]
-                 gwl_pred_final = predictions_combined[..., self.output_subsidence_dim:]
-            else:
-                # This case should ideally not be reached if QDM is consistent
-                 raise ValueError(
-                    f"Unexpected shape from QuantileDistributionModeling: "
-                    f"Rank is {tf_rank(predictions_combined)}"
-                )
-            
-        return (s_pred_final, gwl_pred_final,
-                s_pred_mean_for_pde, gwl_pred_mean_for_pde)
-    
- 
 PIHALNet.__doc__+=r"""\n
 The architecture can operate in two modes for its physical coefficient “C”:
 1. **Parameter Specification:** Use a user-supplied constant value.

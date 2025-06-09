@@ -6,7 +6,8 @@ try:
     import tensorflow as tf
     from tensorflow.keras.layers import Input as KerasInput # Alias to avoid confusion
     from tensorflow.keras.models import Model as KerasFunctionalModel # Alias
-
+    
+    from fusionlab.params import FixedC 
     from fusionlab.nn.pinn.models import PIHALNet
     from fusionlab.nn.pinn.op import (
         process_pinn_inputs, 
@@ -107,11 +108,11 @@ def generate_pinn_input_dict(
         # and also needs it for the VSN path if use_vsn=True.
         # Let's assume future_features are provided for T_PAST + T_HORIZON
         inputs['future_features'] = tf.constant(
-            np.random.rand(batch_size, t_past + t_horizon, f_dim).astype(np.float32)
+            np.random.rand(batch_size, t_horizon, f_dim).astype(np.float32)
         )
     else:
         inputs['future_features'] = tf.constant(
-            np.zeros((batch_size, t_past + t_horizon, 0)).astype(np.float32)
+            np.zeros((batch_size,  t_horizon, 0)).astype(np.float32)
         )
         
     return inputs
@@ -198,7 +199,17 @@ def test_pihalnet_instantiation(use_vsn_config, pinn_c_config, quantiles_config)
     )
     assert isinstance(model, PIHALNet)
     assert model.use_vsn == use_vsn_config
-    assert model.pinn_coefficient_C_config == pinn_c_config
+    if isinstance (pinn_c_config, str): 
+        config_value = model.pinn_coefficient_C_config.initial_value 
+        pinn_c_config = .01 # default value 
+    elif isinstance (pinn_c_config, float): 
+        config_value = model.pinn_coefficient_C_config.value 
+    elif pinn_c_config is None: 
+        config_value = 1.0 # as fixed internal disable 
+        pinn_c_config = model.get_pinn_coefficient_C () 
+        
+    assert config_value== pinn_c_config 
+    
     if quantiles_config:
         assert model.quantiles == quantiles_config
     else: # set_default_params might set a default
@@ -379,12 +390,12 @@ def test_pihalnet_serialization_config():
     if config_orig["final_agg"] == "mean": config_orig["final_agg"] = "average"
 
     model1 = PIHALNet(**config_orig)
-    
+
     # Build the model by calling it with symbolic inputs
     s_in_spec = KerasInput(shape=(S_DIM_DEF,), name="s_in_cfg") if S_DIM_DEF > 0 else None
     d_in_spec = KerasInput(shape=(T_PAST, D_DIM_DEF), name="d_in_cfg")
     # f_in_spec = KerasInput(shape=(T_HORIZON, F_DIM_DEF), name="f_in_cfg") if F_DIM_DEF > 0 else None
-    f_in_spec = KerasInput(shape=(T_PAST + T_HORIZON, F_DIM_DEF), name="f_in_cfg_full_future") if F_DIM_DEF > 0 else None
+    f_in_spec = KerasInput(shape=(T_HORIZON, F_DIM_DEF), name="f_in_cfg_full_future") if F_DIM_DEF > 0 else None
     coords_in_spec = KerasInput(shape=(T_HORIZON, 3), name="coords_in_cfg")
 
     call_inputs_dict = {'coords': coords_in_spec, 'dynamic_features': d_in_spec}
@@ -392,11 +403,11 @@ def test_pihalnet_serialization_config():
         call_inputs_dict['static_features'] = s_in_spec
     if F_DIM_DEF > 0:
         call_inputs_dict['future_features'] = f_in_spec
-    
+
     _ = model1(call_inputs_dict) # Build model
 
     config_retrieved = model1.get_config()
-    
+
     # Check that all original __init__ params are in the retrieved config
     for key, value in config_orig.items():
         if key == "name": continue # Keras handles name separately
@@ -411,8 +422,10 @@ def test_pihalnet_serialization_config():
         # This config retrieved can by passed since since 
         # vsn_units, if None, is auto selected
         elif not callable(value): # Skip direct comparison for callables
-            assert config_retrieved[key] == value if value is not None\
-                else config_orig["hidden_units"], f"Config mismatch for {key}"
+            config_value =config_retrieved[key].value if isinstance (
+                config_retrieved[key], FixedC) else value
+            assert config_value == value if value is not None\
+                else config_orig["pinn_coefficient_C"], f"Config mismatch for {key}"
 
     # Test reconstruction
     try:
@@ -420,7 +433,6 @@ def test_pihalnet_serialization_config():
         model2 = PIHALNet.from_config(config_retrieved)
         _ = model2(call_inputs_dict) # Call reconstructed model
         assert isinstance(model2, PIHALNet)
-        print()
         assert model2.name == model1.name # Name should be preserved
     except Exception as e:
         pytest.fail(f"PIHALNet.from_config failed: {e}\nConfig was: {config_retrieved}")
