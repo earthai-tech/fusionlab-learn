@@ -2,6 +2,8 @@
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
 
+from __future__ import annotations 
+
 import warnings
 from typing import List, Tuple, Optional, Union, Dict, Any
 
@@ -2833,15 +2835,16 @@ def validate_model_inputs(
         t_past_dyn = tf_shape(dynamic_p)[1]
         t_span_fut = tf_shape(future_p)[1]
         
-        tf_debugging.assert_greater_equal(
-            t_span_fut, t_past_dyn,
-            message=(
-               "Future input time span must be >= dynamic input time span: "
-               f"future span = {t_span_fut}, past dynamic span = {t_past_dyn}."
-           ),
-            # data=[t_span_fut, t_past_dyn], 
-            summarize=10
-        )
+        # tf_debugging.assert_greater_equal(
+        #     t_span_fut, t_past_dyn,
+        #     message=(
+        #        "Future input time span must be >= dynamic input time span: "
+        #        f"future span = {t_span_fut}, past dynamic span = {t_past_dyn}."
+        #    ),
+        #     # data=[t_span_fut, t_past_dyn], 
+        #     summarize=10
+        # )
+        
         # if forecast_horizon is not None:
             # fh_tensor = tf_cast(forecast_horizon, dtype=t_span_fut.dtype)
             # req_fut_span = t_past_dyn + fh_tensor

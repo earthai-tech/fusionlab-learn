@@ -79,6 +79,8 @@ if KERAS_BACKEND:
     tf_int32=KERAS_DEPS.int32 
     tf_debugging =KERAS_DEPS.debugging 
     tf_autograph=KERAS_DEPS.autograph
+    tf_pad =KERAS_DEPS.pad 
+    tf_maximum =KERAS_DEPS.maximum 
     
     tf_newaxis = KERAS_DEPS.newaxis 
     tf_pow = KERAS_DEPS.pow
@@ -138,7 +140,8 @@ __all__ = [
      'PositionalEncodingTF', 
      'aggregate_multiscale', 
      'aggregate_time_window_output', 
-     'create_causal_mask'
+     'create_causal_mask',
+     'aggregate_multiscale_on_3d'
     ]
 
 
@@ -4435,6 +4438,108 @@ def aggregate_multiscale(lstm_output, mode="auto"):
         )  # (B, units * len(scales))
     
     return lstm_features 
+
+def aggregate_multiscale_on_3d(
+    lstm_output: Union[Tensor, List[Tensor]],
+    mode: str = "auto"
+) -> Tensor:
+    r"""Aggregate multi-scale LSTM outputs using a specified strategy.
+
+    This function combines outputs from `MultiScaleLSTM`. It is designed
+    to either produce a single 3D sequence tensor (for attention
+    mechanisms) or a single 2D context vector (by collapsing the
+    time dimension).
+
+    Parameters
+    ----------
+    lstm_output : list of tf.Tensor or tf.Tensor
+        The output from `MultiScaleLSTM`.
+        - If a list: Expected to be from an LSTM with
+          `return_sequences=True`. Each element is a 3D tensor
+          `(B, T_scale, U)` where `T_scale` can vary.
+        - If a single tensor: Assumed to be from an LSTM with
+          `return_sequences=False`, shape `(B, U * num_scales)`.
+          In this case, it's returned as is.
+
+    mode : {'auto', 'sum', 'average', 'flatten', 'concat', 'last'}, optional
+        Aggregation strategy:
+        - **'concat'**: (For 3D output) Pads sequences to the max
+          length and concatenates along the feature axis. This is the
+          primary mode for creating a rich sequence representation for
+          downstream attention layers. Result shape: `(B, T_max, U*S)`.
+        - **'last'** or **'auto'**: (For 2D output) Takes the last
+          time step from each sequence in the list and concatenates
+          them. Result shape: `(B, U*S)`.
+        - **'average'**: (For 2D output) Averages each sequence over
+          its time dimension and concatenates the results.
+        - **'sum'**: (For 2D output) Sums each sequence over its
+          time dimension and concatenates the results.
+        - **'flatten'**: (For 2D output) Concatenates and flattens all
+          dimensions except the batch. Requires sequences to have the
+          same length.
+
+    Returns
+    -------
+    tf.Tensor
+        The aggregated feature tensor, either 2D or 3D depending on the mode.
+    """
+    if not isinstance(lstm_output, list):
+        # Input is likely already a 2D tensor, return as is.
+        return lstm_output
+    
+    if not lstm_output:
+        raise ValueError("Input `lstm_output` list cannot be empty.")
+
+    # --- New 'concat' behavior to produce a single 3D tensor ---
+    if mode == "concat":
+        # This mode pads sequences to the same length and concatenates
+        # on the feature axis, preserving the time dimension.
+        
+        # 1. Find the maximum sequence length in the list of tensors.
+        max_len = 0
+        for tensor in lstm_output:
+            if tensor.shape.ndims != 3:
+                raise ValueError(
+                    "For 'concat' mode, all items in `lstm_output` must be "
+                    f"3D tensors, but found shape {tensor.shape}"
+                )
+            max_len = tf_maximum(max_len, tf_shape(tensor)[1])
+            
+        # 2. Pad each tensor to the max length.
+        padded_tensors = []
+        for tensor in lstm_output:
+            current_len = tf_shape(tensor)[1]
+            # Paddings format: [[dim1_before, dim1_after], [dim2_before, dim2_after], ...]
+            paddings = [[0, 0], [0, max_len - current_len], [0, 0]]
+            padded_tensors.append(tf_pad(tensor, paddings, "CONSTANT"))
+        
+        # 3. Concatenate along the feature axis (-1).
+        return tf_concat(padded_tensors, axis=-1)
+
+    # --- Existing modes that reduce to a 2D tensor ---
+    elif mode == "average":
+        averaged_outputs = [
+            tf_reduce_mean(o, axis=1) for o in lstm_output
+        ]
+        return tf_concat(averaged_outputs, axis=-1)
+
+    elif mode == "sum":
+        summed_outputs = [
+            tf_reduce_sum(o, axis=1) for o in lstm_output
+        ]
+        return tf_concat(summed_outputs, axis=-1)
+
+    elif mode == "flatten":
+        # This mode requires all sequences to have the same length.
+        concatenated = tf_concat(lstm_output, axis=-1)
+        shape = tf_shape(concatenated)
+        batch_size, time_dim, feat_dim = shape[0], shape[1], shape[2]
+        return tf_reshape(concatenated, [batch_size, time_dim * feat_dim])
+        
+    else:  # Default for "last" or "auto"
+        # Takes the last time step from each sequence and concatenates.
+        last_outputs = [o[:, -1, :] for o in lstm_output]
+        return tf_concat(last_outputs, axis=-1)
 
 @register_keras_serializable(
     'fusionlab.nn.components', 

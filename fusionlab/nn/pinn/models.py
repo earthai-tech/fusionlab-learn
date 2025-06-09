@@ -96,7 +96,8 @@ if KERAS_BACKEND:
             VariableSelectionNetwork,
             PositionalEncoding, 
             aggregate_multiscale, 
-            aggregate_time_window_output
+            aggregate_time_window_output, 
+            aggregate_multiscale_on_3d
         )
     from .op import process_pinn_inputs, compute_consolidation_residual 
     from .utils import process_pde_modes 
@@ -611,7 +612,9 @@ class PIHALNet(Model, NNLearner):
             dynamic_input_dim= self.dynamic_input_dim,
             static_input_dim = self.static_input_dim, 
             future_input_dim= self.future_input_dim,
-            forecast_horizon= self.forecast_horizon 
+            forecast_horizon= self.forecast_horizon, 
+            verbose=0 # Set to >0 for  detailed logging from checks
+            
         )
         # `validate_model_inputs` can provide a secondary, more detailed
         # check on the unpacked feature tensors.
@@ -671,6 +674,18 @@ class PIHALNet(Model, NNLearner):
              decoded_outputs_for_mean=decoded_outputs
          )
         # --- 5. Calculate Physics Residual ---
+        # Let's verify the shape and slice if needed
+        # (this is a patch, not the ideal fix)
+        if t.shape[1] != self.forecast_horizon:
+             # This indicates a data pipeline issue, but we can patch it here
+             # by assuming the last `forecast_horizon` steps of `t` are the correct ones.
+             # This assumption may be incorrect depending on your sequence prep.
+             t_for_pde = t[:, -self.forecast_horizon:, :]
+             # A better approach is to fix the data pipeline so `inputs['coords']`
+             # has the shape (batch, forecast_horizon, 3) from the start.
+        else:
+            t_for_pde = t
+         
         # The PDE residual is calculated on the mean predictions using
         # finite differences, which is suitable for sequence outputs.
         # This does NOT require a GradientTape in the call method.
@@ -679,7 +694,7 @@ class PIHALNet(Model, NNLearner):
             pde_residual = compute_consolidation_residual(
                 s_pred=s_pred_mean_for_pde,
                 h_pred=gwl_pred_mean_for_pde,
-                time_steps=t, # Assumes `t` holds the forecast time sequence
+                time_steps=t_for_pde, #  `t` holds the forecast time sequence
                 C=self.get_pinn_coefficient_C()
             )
         else:
@@ -838,7 +853,7 @@ class PIHALNet(Model, NNLearner):
     def from_config(cls, config, custom_objects=None):
         return cls(**config)
 
-    def run_halnet_core(
+    def run_halnet_core0(
         self,
         static_input: Tensor,
         dynamic_input: Tensor,
@@ -1001,6 +1016,367 @@ class PIHALNet(Model, NNLearner):
         )
         
         return final_features_for_decode
+        
+    def run_halnet_core(
+        self,
+        static_input: Tensor,
+        dynamic_input: Tensor,
+        future_input: Tensor,
+        training: bool
+    ) -> Tensor:
+        """
+        Executes the core data-driven feature extraction pipeline.
+    
+        This method processes static, dynamic, and future inputs through
+        VSNs (if enabled), LSTMs, and various attention mechanisms to
+        produce a final set of features ready for decoding. This revised
+        version follows an encoder-decoder pattern to correctly handle
+        inputs with different temporal lengths (`time_steps` and
+        `forecast_horizon`).
+    
+        Args:
+            static_input (tf.Tensor): Processed static features.
+            dynamic_input (tf.Tensor): Processed dynamic historical features.
+                                       Shape: (batch, time_steps, features).
+            future_input (tf.Tensor): Processed known future features.
+                                      Shape: (batch, forecast_horizon, features).
+            training (bool): Python boolean indicating training mode.
+    
+        Returns:
+            tf.Tensor: A feature tensor for the forecast horizon, ready for
+                       the MultiDecoder. Shape: (batch, forecast_horizon, features).
+        """
+        # --- 1. Initial Feature Processing (VSN or simple Dense) ---
+        # This part processes each input type to a common feature space.
+        static_context = None
+        if self.use_vsn and self.static_vsn is not None:
+            vsn_static_out = self.static_vsn(
+                static_input, training=training)
+            static_context = self.static_vsn_grn(
+                vsn_static_out, training=training)
+        elif self.static_input_dim > 0 and self.grn_static is not None:
+            processed_static = self.static_dense(static_input)
+            static_context = self.grn_static(
+                processed_static, training=training)
+        
+        dynamic_processed = dynamic_input
+        if self.use_vsn and self.dynamic_vsn is not None:
+            dynamic_processed = self.dynamic_vsn(
+                dynamic_input, training=training)
+            dynamic_processed = self.dynamic_vsn_grn(
+                dynamic_processed, training=training)
+    
+        future_processed = future_input
+        if self.use_vsn and self.future_vsn is not None:
+            future_processed = self.future_vsn(
+                future_input, training=training)
+            future_processed = self.future_vsn_grn(
+                future_processed, training=training)
+        
+        # --- 2. Encoder Path (Processes Past Data) ---
+        # The encoder summarizes the `dynamic_input` from `time_steps`.
+        encoder_input = self.positional_encoding(
+            dynamic_processed, training=training)
+        
+        # Multi-scale LSTM processes the historical features.
+        # It must return sequences for attention.
+        lstm_output_raw = self.multi_scale_lstm(
+            encoder_input, training=training)
+        
+        # If multi_scale_agg is None, lstm_output is (B, units * len(scales))
+        # If multi_scale_agg is not None, lstm_output is a list of full 
+        # sequences: [ (B, T', units), ... ]
+        # lstm_features = aggregate_multiscale(
+        #     lstm_output_raw, mode= self.multi_scale_agg_mode 
+        # )
+        # # Since we are concatenating along the time dimension, we need 
+        # # all tensors to have the same shape along that dimension.
+        # time_steps = tf_shape(dynamic_processed)[1]
+        # # Expand lstm_features to (B, 1, features)
+        # lstm_features = tf_expand_dims(lstm_features, axis=1)
+        # # Tile to match tf_time steps: (B, T, features)
+        # encoder_output = tf_tile(lstm_features, [1, time_steps, 1])
+        
+
+        # # `encoder_output` now holds the history summary.
+        # # Shape: (batch, time_steps, lstm_units * num_scales)
+        encoder_output = aggregate_multiscale_on_3d(
+            lstm_output_raw, mode='concat' 
+        )
+        
+        # Apply dynamic time window to the historical encoder output if desired.
+        if self.dynamic_time_window is not None:
+             encoder_output = self.dynamic_time_window(
+                 encoder_output, training=training)
+             
+    
+        # --- 3. Decoder Path (Prepares Context for Forecasting) ---
+        # The decoder's context is built from static and future inputs
+        # over the `forecast_horizon`.
+        
+        # Tile static context to match the `forecast_horizon`.
+        static_context_expanded = None
+        if static_context is not None:
+            static_context_expanded = tf_expand_dims(static_context, 1)
+            static_context_expanded = tf_tile(
+                static_context_expanded, [1, self.forecast_horizon, 1]
+            )
+    
+        # Add positional encoding to the known future features.
+        future_processed_with_pos = self.positional_encoding(
+            future_processed, training=training)
+    
+        # Combine static and future features to form the initial decoder context.
+        decoder_input_parts = []
+        if static_context_expanded is not None:
+            decoder_input_parts.append(static_context_expanded)
+        if self.future_input_dim > 0:
+            decoder_input_parts.append(future_processed_with_pos)
+    
+        # If no static or future inputs, create a zero-tensor as placeholder.
+        if not decoder_input_parts:
+            # Determine batch size from dynamic_input.
+            batch_size = tf_shape(dynamic_input)[0]
+            # Use `embed_dim` or another consistent feature dimension.
+            decoder_input = tf_zeros(
+                (batch_size, self.forecast_horizon, self.embed_dim)
+            )
+        else:
+            decoder_input = tf_concat(decoder_input_parts, axis=-1)
+    
+        # --- 4. Attention-based Fusion (Encoder-Decoder Interaction) ---
+        # The decoder context queries the encoder's historical summary.
+        cross_attention_output = self.cross_attention(
+            [decoder_input, encoder_output], # Query, Value( Key)
+            training=training
+        )
+    
+        # A GRN to process the output of cross-attention.
+        cross_attention_processed = self.grn_static(cross_attention_output)
+    
+        # A residual connection for the decoder part.
+        decoder_context_with_attention = AddLayer()(
+            [decoder_input, cross_attention_processed]
+        )
+    
+        # Additional attention mechanisms can refine this context further.
+        # HierarchicalAttention might now be used on the decoder context.
+        hierarchical_att_output = self.hierarchical_attention(
+            [decoder_context_with_attention, decoder_context_with_attention],
+            training=training
+        )
+    
+        memory_attention_output = self.memory_augmented_attention(
+            hierarchical_att_output, training=training
+        )
+        
+        # --- 5. Final Feature Combination for Decoding ---
+        # The output of this stage should have shape 
+        # (batch, forecast_horizon, features).
+        # We aggregate all the refined context information.
+        final_features = self.multi_resolution_attention_fusion(
+             memory_attention_output, training=training
+        )
+        
+        # Another residual connection to stabilize the final block.
+        if self.use_residuals:
+            final_features = AddLayer()(
+                [final_features, decoder_context_with_attention])
+            final_features = LayerNormalization()(final_features)
+        
+        # `final_agg` can aggregate features over the time dimension if needed,
+        # but for MultiDecoder, we typically want to preserve the forecast_horizon.
+        # We will assume `final_agg` is 'last' or 'average' 
+        # which is handled after the decoder.
+        # The result here should be passed to the MultiDecoder.
+        
+        final_features_for_decode = aggregate_time_window_output(
+            final_features, self.final_agg
+        )
+        
+        return final_features_for_decode
+    
+        def _run_halnet_core(
+            self,
+            static_input: Tensor,
+            dynamic_input: Tensor,
+            future_input: Tensor,
+            training: bool
+        ) ->Tensor:
+            """
+            Executes the core data-driven feature extraction pipeline.
+    
+            This method processes static, dynamic, and future inputs through
+            VSNs (if enabled), LSTMs, and various attention mechanisms to
+            produce a final set of features ready for decoding. This revised
+            version follows an encoder-decoder pattern to correctly handle
+            inputs with different temporal lengths (`time_steps` and
+            `forecast_horizon`).
+    
+            Args:
+                static_input (tf.Tensor): Processed static features.
+                dynamic_input (tf.Tensor): Processed dynamic historical features.
+                                           Shape: (batch, time_steps, features).
+                future_input (tf.Tensor): Processed known future features.
+                                          Shape: (batch, forecast_horizon, features).
+                training (bool): Python boolean indicating training mode.
+    
+            Returns:
+                tf.Tensor: A single feature vector per sample, ready for the
+                           MultiDecoder. Shape: (batch, final_features).
+            """
+            # --- 1. Initial Feature Processing (VSN or simple Dense) ---
+            # This part processes each input type to a common feature space.
+            
+            # A. Process Static Features
+            static_context = None
+            if self.use_vsn and self.static_vsn is not None:
+                vsn_static_out = self.static_vsn(static_input, training=training)
+                static_context = self.static_vsn_grn(vsn_static_out, training=training)
+            elif self.static_input_dim > 0 and self.static_dense is not None:
+                processed_static = self.static_dense(static_input)
+                static_context = self.grn_static(processed_static, training=training)
+            
+            # B. Process Time-Varying Features
+            dynamic_processed = dynamic_input
+            future_processed = future_input
+            if self.use_vsn:
+                if self.dynamic_vsn is not None:
+                    dynamic_processed = self.dynamic_vsn(dynamic_input, training=training)
+                    dynamic_processed = self.dynamic_vsn_grn(dynamic_processed, training=training)
+                if self.future_vsn is not None:
+                    future_processed = self.future_vsn(future_input, training=training)
+                    future_processed = self.future_vsn_grn(future_processed, training=training)
+            elif self.multi_modal_embedding is not None:
+                # Non-VSN path: embed raw inputs. Must have same time dimension.
+                # This path is now conceptually difficult if time_steps != forecast_horizon.
+                # We will proceed assuming VSN is used, or inputs have been aligned.
+                # The architectural change below assumes separate processing paths.
+                # --- 2. Temporal Feature Alignment & Embedding ---
+                # Align future features to the same past time steps as dynamic features
+                _, future_for_embedding = align_temporal_dimensions(
+                    tensor_ref=dynamic_processed,
+                    tensor_to_align=future_processed,
+                    mode='pad_to_ref',
+                    name="future_for_embedding"
+                )
+                # Non-VSN path
+                # Similar logic for MultiModalEmbedding if it accepts zero-dim tensors
+                # or we ensure its inputs are consistent.
+                # Assuming MME path works as intended for now.
+                dynamic_processed = self.multi_modal_embedding(
+                    [dynamic_processed, future_for_embedding], training=training
+                )
+                
+                # pass
+    
+            # --- 2. Encoder Path (Processes Past Data) ---
+            # The encoder summarizes the `dynamic_input`.
+            encoder_input = self.positional_encoding(
+                dynamic_processed, training=training)
+            
+            # Multi-scale LSTM processes the historical features
+            lstm_output_raw = self.multi_scale_lstm(encoder_input, training=training)
+            
+            # `encoder_output` now holds the history. Shape: (batch, time_steps, lstm_units)
+            # Assuming `lstm_return_sequences` is True.
+            encoder_output = aggregate_multiscale(
+                lstm_output_raw, mode='concat' if isinstance(lstm_output_raw, list) else 'last'
+            )
+    
+            # Optional: Apply dynamic time window to focus on most recent history
+            if self.dynamic_time_window is not None:
+                 encoder_output = self.dynamic_time_window(
+                     encoder_output, training=training)
+    
+    
+            # --- 3. Decoder Path (Prepares Context for Forecasting) ---
+            # The decoder's initial state is built from static and future inputs.
+            
+            # Tile static context to match the `forecast_horizon`
+            static_context_expanded = None
+            if static_context is not None:
+                static_context_expanded = tf_expand_dims(static_context, 1)
+                static_context_expanded = tf_tile(
+                    static_context_expanded, [1, self.forecast_horizon, 1]
+                )
+    
+            # The known `future_features` are a core part of the decoder context.
+            # Add positional encoding to them.
+            future_processed_with_pos = self.positional_encoding(
+                future_processed, training=training)
+    
+            # Combine static and future features to form the initial decoder input
+            decoder_input_parts = []
+            if static_context_expanded is not None:
+                decoder_input_parts.append(static_context_expanded)
+            if self.future_input_dim > 0:
+                decoder_input_parts.append(future_processed_with_pos)
+    
+            if not decoder_input_parts:
+                # Create a fallback decoder input if no static/future data,
+                # using zeros in the expected shape.
+                decoder_input = tf_zeros(
+                    (tf_shape(dynamic_input)[0], self.forecast_horizon, self.embed_dim)
+                )
+            else:
+                decoder_input = tf_concat(decoder_input_parts, axis=-1)
+    
+            # --- 4. Attention-based Fusion Mechanisms ---
+            # Here, the decoder context queries the encoder output.
+    
+            # Cross-Attention: Decoder context queries encoder history
+            cross_attention_output = self.cross_attention(
+                [decoder_input, encoder_output], training=training
+            )
+    
+            # Hierarchical Self-Attention: Refines the decoder context itself
+            # Now takes only one input, which must be a list of one tensor for self-attention.
+            # Let's use it on the output of cross-attention to refine it.
+            # Note: If HierarchicalAttention expects two distinct inputs, its usage must be re-evaluated.
+            # Assuming for now it can perform self-attention on one context.
+            hierarchical_att_input = [cross_attention_output, cross_attention_output]
+            hierarchical_att_output = self.hierarchical_attention(
+                hierarchical_att_input, training=training
+            )
+    
+            # Memory-Augmented Attention: Further refines the context
+            memory_attention_output = self.memory_augmented_attention(
+                hierarchical_att_output, training=training
+            )
+    
+            # --- 5. Final Feature Combination and Aggregation ---
+            # Combine all processed features before the final decoder step.
+            features_to_combine = [
+                decoder_input, # The original context
+                cross_attention_output,
+                memory_attention_output
+            ]
+            
+            combined_features = tf_concat(features_to_combine, axis=-1)
+            
+            # Multi-Resolution Fusion can be applied here to
+            # create the final unified representation
+            fused_features = self.multi_resolution_attention_fusion(
+                combined_features, training=training
+            )
+    
+            # Add residual connection if enabled
+            if self.use_residuals and self.residual_dense is not None:
+                # Project original decoder input to match fused_features shape for residual connection
+                # This is a common pattern to stabilize deep attention models.
+                projected_decoder_input = self.residual_dense(decoder_input)
+                fused_features = AddLayer()([fused_features, projected_decoder_input])
+                fused_features = LayerNormalization()(fused_features)
+    
+            # Finally, aggregate the temporal features (from forecast_horizon)
+            # into a single vector ready for the MultiDecoder.
+            final_features_for_decode = aggregate_time_window_output(
+                fused_features, mode=self.final_agg
+            )
+            
+            return final_features_for_decode
+
 
     def split_outputs(
         self, 

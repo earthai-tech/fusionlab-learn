@@ -64,8 +64,8 @@ def format_pihalnet_predictions(
     model_inputs: Optional[Dict[str, Tensor]] = None,
     y_true_dict: Optional[Dict[str, Union[np.ndarray, Tensor]]] = None,
     target_mapping: Optional[Dict[str, str]] = None,
-    include_gwl_in_df: bool = True,
-    include_coords_in_df: bool = True,
+    include_gwl: bool = True,
+    include_coords: bool = True,
     quantiles: Optional[List[float]] = None,
     forecast_horizon: Optional[int] = None,
     output_dims: Optional[Dict[str, int]] = None,
@@ -123,7 +123,7 @@ def format_pihalnet_predictions(
     target_mapping : dict[str, str] or None, default=None
         Custom mapping between network output keys and column base
         names.  Example: ``{'subs_pred': 'subs', 'gwl_pred': 'gwl'}``.
-    include_gwl_in_df, include_coords_in_df : bool, default=True
+    include_gwl, include_coords_in_df : bool, default=True
         Toggles the export of GWL predictions and coordinate columns.
     quantiles : list[float] or None, default=None
         Sorted quantile levels *q* such that
@@ -298,7 +298,7 @@ def format_pihalnet_predictions(
         targets_to_process['subs_pred'] = target_mapping.get(
             'subs_pred', 'subsidence'
             )
-    if include_gwl_in_df and 'gwl_pred' in processed_outputs:
+    if include_gwl and 'gwl_pred' in processed_outputs:
         targets_to_process['gwl_pred'] = target_mapping.get(
             'gwl_pred', 'gwl'
             )
@@ -339,7 +339,7 @@ def format_pihalnet_predictions(
     ]
     
     # --- 4. Add Coordinates if Requested ---
-    if include_coords_in_df:
+    if include_coords:
         if model_inputs and 'coords' in model_inputs and \
            model_inputs['coords'] is not None:
             coords_arr = model_inputs['coords']
@@ -1284,9 +1284,11 @@ def prepare_pinn_data_sequences(
          verbose=verbose, level=1)
     
     inputs_dict = {
-        'coords': coords_horizon_arr,
+        'coords': coords_horizon_arr, # Shape: (N, forecast_horizon, 3)
         'static_features': static_features_arr if num_static_feats > 0 else None,
+        # Shape: (N, time_steps, ...)
         'dynamic_features': dynamic_features_arr,
+        # Shape: (N, forecast_horizon, ...)
         'future_features': future_features_arr if num_future_feats > 0 else None,
     }
     # Filter out None entries from inputs_dict if model call expects only present keys

@@ -956,33 +956,7 @@ class PIHALTuner(PINNTunerBase):
             **kwargs
         )
 
-    # def _get_hp_int(
-    #     self, hp, name, default_min, default_max, step=1, **kwargs
-    # ):
-    #     config = self.param_space.get(name, {})
-    #     return hp.Int(
-    #         name,
-    #         min_value=config.get('min_value', default_min),
-    #         max_value=config.get('max_value', default_max),
-    #         step=config.get('step', step),
-    #         **kwargs
-    #     )
 
-    # def _get_hp_float(
-    #     self, hp, name, default_min, default_max,
-    #     default_sampling=None, **kwargs
-    # ):
-    #     print(self.param_space)
-    #     config = self.param_space.get(name, {})
-    #     return hp.Float(
-    #         name,
-    #         min_value=config.get('min_value', default_min),
-    #         max_value=config.get('max_value', default_max),
-    #         sampling=config.get(
-    #             'sampling', kwargs.pop('sampling', default_sampling)
-    #         ),
-    #         **kwargs
-    #     )
     def _parse_hp_config(
         self,
         hp,
@@ -1097,8 +1071,6 @@ class PIHALTuner(PINNTunerBase):
             hp_type='float'
         )
 
-
-    
 
 PIHALTuner.__doc__ = """
 Hyperparameter tuner for the PIHALNet model, which jointly predicts

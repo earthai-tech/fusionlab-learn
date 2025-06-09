@@ -20,7 +20,7 @@ examples, please consult the :doc:`User Guide </user_guide/index>`.
    enabled in your `conf.py` with `autosummary_generate = True`.
 
 Datasets (`fusionlab.datasets`)
--------------------------------
+---------------------------------
 Utilities for loading included sample datasets and generating synthetic
 time series data for testing and demonstration.
 
@@ -33,6 +33,7 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.load.fetch_zhongshan_data
    ~fusionlab.datasets.load.fetch_nansha_data
    ~fusionlab.datasets.load.load_processed_subsidence_data
+   ~fusionlab.datasets.load.load_subsidence_pinn_data
 
 **Generation Functions** (`fusionlab.datasets.make`)
 
@@ -45,6 +46,7 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.make.make_anomaly_data
    ~fusionlab.datasets.make.make_trend_seasonal_data
    ~fusionlab.datasets.make.make_multivariate_target_data
+   
 
 Metrics (`fusionlab.metrics`)
 -------------------------------
@@ -77,11 +79,33 @@ Core implementations of the Temporal Fusion Transformer and its variants.
 
    ~fusionlab.nn.transformers.TemporalFusionTransformer
    ~fusionlab.nn.transformers.TFT
-   ~fusionlab.nn.transformers.XTFT
    ~fusionlab.nn.transformers.DummyTFT
-   ~fusionlab.nn.transformers.SuperXTFT
 
+Fusion-Attentive Models (`fusionlab.nn.models`)
+-------------------------------------------------
+Core implementations of the Hybrid-Attentive Fusion and its variants.
 
+.. autosummary::
+   :toctree: _autosummary/models
+   :nosignatures:
+
+   ~fusionlab.nn.models.HALNet 
+   ~fusionlab.nn.models.XTFT
+   ~fusionlab.nn.models.SuperXTFT
+
+Physic-Informed Models (`fusionlab.nn.pinn.models`)
+--------------------------------------------------------
+Core implementations of Physic-Informed Models and its variants.
+
+.. autosummary::
+   :toctree: _autosummary/models
+   :nosignatures:
+
+   ~fusionlab.nn.pinn.base.GWFlowPINN
+   ~fusionlab.nn.pinn.base.GWFlowPDEResidual
+   ~fusionlab.nn.pinn.models.GWFlowPINN2D
+   ~fusionlab.nn.pinn.models.PIHALNet 
+   
 Core Model Components (`fusionlab.nn.components`)
 -------------------------------------------------
 Reusable building blocks used within the forecasting models.
@@ -95,7 +119,6 @@ Reusable building blocks used within the forecasting models.
    ~fusionlab.nn.components.PositionalEncoding
    ~fusionlab.nn.components.StaticEnrichmentLayer
    ~fusionlab.nn.components.LearnedNormalization
-
 
 Sequence Processing Components (`fusionlab.nn.components`)
 -----------------------------------------------------------
@@ -185,6 +208,7 @@ Utilities for optimizing model hyperparameters using Keras Tuner.
    ~fusionlab.nn.forecast_tuner.tft_tuner
    ~fusionlab.nn.forecast_tuner.XTFTTuner
    ~fusionlab.nn.forecast_tuner.TFTTuner
+   ~fusionlab.nn.forecast_tuner.PIHALTuner
 
 
 Neural Network Utilities (`fusionlab.nn.utils`)
@@ -206,8 +230,11 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.forecast_single_step
    ~fusionlab.nn.utils.forecast_multi_step
    ~fusionlab.nn.utils.step_to_long
+   ~fusionlab.nn.utils.format_predictions
    ~fusionlab.nn.utils.format_predictions_to_dataframe 
-   ~fusionlab.nn.utils.prepare_model_inputs  
+   ~fusionlab.nn.utils.prepare_model_inputs
+   ~fusionlab.nn.pinn.utils.format_pihalnet_predictions 
+   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences 
 
 
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
@@ -248,10 +275,11 @@ side‑by‑side figures for rapid inspection.
 
    ~fusionlab.plot.forecast.plot_forecasts
    ~fusionlab.plot.forecast.visualize_forecasts
+   ~fusionlab.plot.forecast.forecast_view
 
    
 Time Series Utilities (`fusionlab.utils.ts_utils`)
----------------------------------------------------
+-----------------------------------------------------
 General utilities for time series data processing, analysis, and feature engineering.
 
 .. autosummary::

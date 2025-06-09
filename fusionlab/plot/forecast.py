@@ -27,23 +27,356 @@ from ..core.checks import (
     is_in_if
 )
 from ..core.handlers import columns_manager
-from ..utils.data_utils import ( 
+from ..utils.forecast_utils import ( 
     format_forecast_dataframe, 
     get_value_prefixes, 
+    get_value_prefixes_in, 
+    detect_forecast_type
 )
 from ..utils.generic_utils import ( 
     get_actual_column_name,
     vlog
 )
 from ..utils.ts_utils import filter_by_period
-from ..utils.validator import assert_xy_in, is_frame
+from ..utils.validator import ( 
+    assert_xy_in, is_frame, 
+    validate_positive_integer 
+)
 
-__all__= ["plot_forecasts", "visualize_forecasts", "forecast_view"]
+__all__= [
+    "plot_forecasts", 
+    "visualize_forecasts", 
+    "forecast_view",
+    "plot_forecast_by_step"
+ ]
 
 
+def _get_metrics_from_cols(
+    columns: List[str], prefixes: List[str]
+) -> List[str]:
+    """Extracts metric suffixes (e.g., q10, actual) from column names."""
+    metrics = set()
+    for col in columns:
+        for p in prefixes:
+            if col.startswith(p + '_'):
+                metrics.add(col[len(p)+1:])
+    return sorted(list(metrics))
 
+
+def plot_forecast_by_step(
+    df: pd.DataFrame,
+    value_prefixes: Optional[List[str]] = None,
+    kind: str = "dual",
+    steps: Optional[int] =None, # step to plot 
+    step_names: Optional[Union[Dict[int, str], List[str]]] = None,
+    spatial_cols: Optional[Tuple[str, str]] = None,
+    max_cols: Union[int, str] = "auto",
+    cmap: str = "viridis",
+    cbar_type: str = "uniform",
+    axis_off: bool = False,
+    show_grid: bool = True,
+    grid_props: Optional[Dict] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    savefig: Optional[str] = None,
+    save_fmts: Union[str, List[str]] = ".png",
+    verbose: int = 1,
+):
+    """Plots forecast data, organizing subplots by forecast step.
+
+    This function creates a grid of plots to visualize forecast
+    data from a long-format DataFrame. Each row in the grid
+    corresponds to a unique `forecast_step`.
+
+    It robustly handles both spatial scatter plots (if `spatial_cols`
+    are provided and found) and temporal line plots (as a fallback),
+    making it versatile for different types of forecast data.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input long-format DataFrame. Must contain a 'forecast_step'
+        column and value columns (e.g., 'subsidence_q50').
+    value_prefixes : list of str, optional
+        The base names of metrics to plot (e.g., ``['subsidence']``).
+        If ``None``, prefixes are auto-detected from column names.
+        A separate figure is generated for each prefix.
+    kind : {'dual', 'pred_only'}, default 'dual'
+        Determines what to plot:
+        - ``'dual'``: Plots both actual values and predictions
+          side-by-side for comparison.
+        - ``'pred_only'``: Plots only the predicted values.
+    steps : int or list of int, optional
+        A specific forecast step or list of steps to visualize. If
+        ``None``, all unique steps found in the DataFrame are plotted.
+    step_names : dict or list, optional
+        Custom labels for the forecast steps in plot titles.
+        - If a dict, maps step numbers to names (e.g., ``{1: 'Year 1'}``).
+        - If a list, maps step index to names (e.g., ``['Y1', 'Y2']``,
+          where index 0 corresponds to step 1).
+    spatial_cols : tuple of str, optional
+        Tuple of column names for spatial coordinates, e.g.,
+        ``('coord_x', 'coord_y')``. If provided and found, spatial
+        scatter plots are created. If ``None`` or columns are not found,
+        the function falls back to temporal line plots.
+    max_cols : int or 'auto', default 'auto'
+        Controls the number of subplots per row. If ``'auto'``, it's
+        determined by the number of metrics (e.g., actual + quantiles)
+        being plotted for each prefix.
+    cmap : str, default 'viridis'
+        The Matplotlib colormap for spatial plots.
+    cbar_type : {'uniform', 'individual'}, default 'uniform'
+        Controls color bar scaling for spatial plots.
+        - ``'uniform'``: All subplots share a single color scale.
+        - ``'individual'``: Each subplot has its own color scale.
+    axis_off : bool, default False
+        If ``True``, turns off plot axes, ticks, and labels.
+    show_grid : bool, default True
+        If ``True`` and `axis_off` is ``False``, displays a grid on
+        the subplots.
+    grid_props : dict, optional
+        Properties for the grid, e.g., ``{'linestyle': '--'}``.
+    figsize : tuple of (float, float), optional
+        The size of the figure for each `value_prefix`. If ``None``,
+        the size is automatically calculated based on the layout.
+    savefig : str, optional
+        Path to save the figure(s). The prefix name and '_by_step'
+        will be appended (e.g., 'my_plot_subsidence_by_step.png').
+    save_fmts : str or list of str, default '.png'
+        Format(s) to save the figure, e.g., ``['.png', '.pdf']``.
+    verbose : int, default 1
+        Controls the verbosity of logging messages.
+
+    Returns
+    -------
+    None
+        This function displays and/or saves Matplotlib figures and
+        does not return any value.
+
+    See Also
+    --------
+    forecast_view : A related function that plots by year/time
+                    instead of by step index.
+
+    Notes
+    -----
+    - The function expects a long-format DataFrame where each row is a
+      unique combination of a sample and a forecast step.
+    - If `spatial_cols` are not found, temporal line plots are
+      generated by plotting values against the DataFrame's index. This
+      is most meaningful when the DataFrame is sorted by a relevant
+      variable (e.g., a spatial coordinate) for each step.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> # from fusionlab.plot.forecast import plot_forecast_by_step
+    >>> data = {
+    ...     'sample_idx':      list(range(4)) * 2,
+    ...     'forecast_step':   [1] * 4 + [2] * 4,
+    ...     'coord_x':         np.random.rand(8),
+    ...     'coord_y':         np.random.rand(8),
+    ...     'subsidence_q50':  np.random.randn(8),
+    ...     'subsidence_actual': np.random.randn(8),
+    ... }
+    >>> df_step_example = pd.DataFrame(data)
+    >>> # plot_forecast_by_step(
+    ... #     df=df_step_example,
+    ... #     value_prefixes=['subsidence'],
+    ... #     spatial_cols=('coord_x', 'coord_y'),
+    ... #     step_names={1: 'Year 1 Forecast', 2: 'Year 2 Forecast'},
+    ... #     kind='dual'
+    ... # )
+
+    """
+    # 1. Detect prefixes if not provided.
+    if value_prefixes is None:
+        vlog("Auto-detecting value prefixes…",
+             level=1, verbose=verbose)
+        
+        # Define default columns to exclude from prefix detection.
+        exclude_from_prefix = ['sample_idx', 'forecast_step']
+        if spatial_cols:
+            exclude_from_prefix.extend(spatial_cols)
+        
+        value_prefixes = get_value_prefixes_in(df, exclude_cols=exclude_from_prefix)
+        if not value_prefixes:
+            raise ValueError("Could not auto-detect value prefixes.")
+        vlog(f"Detected prefixes: {value_prefixes}",
+             level=2, verbose=verbose)
+
+    # Ensure forecast_step column exists.
+    if "forecast_step" not in df.columns:
+        raise ValueError("DataFrame must contain 'forecast_step'.")
+
+    # Collect metric suffixes found in columns.
+    metrics = _get_metrics_from_cols(df.columns, value_prefixes)
+    actual_metrics = sorted([m for m in metrics if "actual" in m])
+    pred_metrics = sorted([m for m in metrics if "actual" not in m])
+    
+    # Determine if actuals will be plotted.
+    plot_actuals = kind == "dual" and bool(actual_metrics)
+    # Check for spatial plotting capability.
+    has_spatial_coords = spatial_cols and all(
+        c in df.columns for c in spatial_cols)
+    if kind == 'spatial' and not has_spatial_coords:
+        warnings.warn(
+            f"kind='spatial' but columns {spatial_cols} not found. "
+            "Falling back to temporal line plots."
+        )
+        kind = 'temporal' # Fallback kind
+    elif kind == 'spatial':
+        vlog("Plotting spatial data.", level=2, verbose=verbose)
+    else: # kind is 'temporal'
+        vlog("Plotting temporal data.", level=2, verbose=verbose)
+
+
+    # Unique steps to visualize.
+    steps_to_plot = sorted(df["forecast_step"].unique())
+    if steps is not None: 
+        steps = columns_manager( steps, empty_as_none= False)
+        steps = [validate_positive_integer(v, f"Step {v}") 
+                 for v in steps ]
+        steps = sorted (is_in_if(
+            steps_to_plot, steps, 
+            return_intersect= True,
+            )
+        )
+    n_rows = len(steps_to_plot)
+    if n_rows == 0:
+        vlog("No forecast steps to plot.", level=0, verbose=verbose)
+        return
+
+    # 2. Compute global color limits if cbar_type is 'uniform'.
+    vmin, vmax = None, None
+    if cbar_type == "uniform":
+        cols_for_cbar = [
+            f"{p}_{m}" for p in value_prefixes for m in metrics
+            if f"{p}_{m}" in df.columns
+        ]
+        if cols_for_cbar:
+            vmin = df[cols_for_cbar].dropna().min().min()
+            vmax = df[cols_for_cbar].dropna().max().max()
+
+    # Shared kwargs for plotting helpers.
+    plot_kwargs = dict(
+        cmap=cmap, vmin=vmin, vmax=vmax, axis_off=axis_off,
+        show_grid=show_grid,
+        grid_props=grid_props or {"linestyle": ":", "alpha": 0.7},
+        verbose=verbose,
+    )
+
+    # 3. Loop over each prefix and produce a grid of sub-plots.
+    for prefix in value_prefixes:
+        # Select relevant metrics for this prefix.
+        prefix_preds = [
+            m for m in pred_metrics if f"{prefix}_{m}" in df.columns
+        ]
+        prefix_actual = next(
+            (m for m in actual_metrics if f"{prefix}_{m}" in df.columns),
+            None,
+        )
+
+        # Determine number of columns for the grid.
+        if max_cols == "auto":
+            n_cols = len(prefix_preds) + (
+                1 if plot_actuals and prefix_actual else 0
+            )
+        else:
+            n_cols = int(max_cols)
+
+        if n_cols == 0:
+            continue
+
+        # Create figure and axes grid.
+        fig_size = figsize or (n_cols * 4, n_rows * 3.5)
+        fig, axes = plt.subplots(
+            n_rows, n_cols, figsize=fig_size, squeeze=False,
+            constrained_layout=True,
+        )
+        fig.suptitle(
+            f"Forecast for '{prefix.upper()}' by Step",
+            fontsize=16, weight='bold'
+        )
+
+        # Iterate over each forecast step (row).
+        for r_idx, step in enumerate(steps_to_plot):
+            step_df = df[df["forecast_step"] == step]
+            step_lbl = f"Step {step}"
+            # Custom label overrides.
+            if isinstance(step_names, dict):
+                step_lbl = step_names.get(step, step_lbl)
+            elif isinstance(step_names, list) and step - 1 < len(step_names):
+                step_lbl = f"Step {step}: {step_names[step - 1]}"
+
+            c_idx = 0
+            # Plot actuals if requested and available.
+            if plot_actuals and prefix_actual:
+                ax = axes[r_idx][c_idx]
+                plot_kwargs["title"] = f"Actual ({step_lbl})"
+                plot_col = f"{prefix}_{prefix_actual}"
+                if kind == 'spatial':
+                    _plot_spatial_subplot(
+                        ax, step_df, *spatial_cols, plot_col, **plot_kwargs
+                    )
+                else:
+                    _plot_temporal_subplot(
+                        ax, step_df, plot_col, **plot_kwargs
+                    )
+                c_idx += 1
+
+            # Plot prediction metrics.
+            for metric in prefix_preds:
+                if c_idx >= n_cols: break
+                ax = axes[r_idx][c_idx]
+                plot_kwargs["title"] = (
+                    f"{metric.replace('_', ' ').title()} ({step_lbl})"
+                )
+                plot_col = f"{prefix}_{metric}"
+                if kind == 'spatial':
+                    _plot_spatial_subplot(
+                        ax, step_df, *spatial_cols, plot_col, **plot_kwargs
+                    )
+                else:
+                    _plot_temporal_subplot(
+                        ax, step_df, plot_col, **plot_kwargs
+                    )
+                c_idx += 1
+
+            # Blank unused axes in this row.
+            for j in range(c_idx, n_cols):
+                axes[r_idx][j].axis("off")
+
+        # Add a single color-bar if using uniform scaling.
+        if cbar_type == "uniform" and vmin is not None and vmax is not None:
+            fig.colorbar(
+                ScalarMappable(
+                    norm=mcolors.Normalize(vmin=vmin, vmax=vmax),
+                    cmap=cmap
+                ),
+                ax=axes.ravel().tolist(), orientation="vertical",
+                shrink=0.8, pad=0.04
+            )
+
+        # 4. Save figure to disk if requested.
+        if savefig:
+            fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
+            base, _ = os.path.splitext(savefig)
+            for fmt in fmts:
+                fname = (
+                    f"{base}_{prefix}_by_step"
+                    f"{fmt if fmt.startswith('.') else '.' + fmt}"
+                )
+                out_dir = os.path.dirname(fname)
+                if out_dir and not os.path.exists(out_dir):
+                    os.makedirs(out_dir, exist_ok=True)
+                vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
+                fig.savefig(fname, dpi=300, bbox_inches="tight")
+
+        plt.show()
+        
+    
 @check_non_emptiness 
-def forecast_view(
+def forecast_view_in(
     forecast_df: pd.DataFrame,
     value_prefixes: Optional[List[str]]=None, 
     kind: str = 'dual',
@@ -353,14 +686,6 @@ def forecast_view(
                 ax=axes, orientation='vertical', fraction=0.02, pad=0.04
              )
 
-        # if savefig:
-        #     fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-        #     base, _ = os.path.splitext(savefig)
-        #     for fmt in fmts:
-        #         fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
-        #         vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-        #         fig.savefig(fname, dpi=300, bbox_inches='tight')
-
         if savefig:
             fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
             base, _ = os.path.splitext(savefig)
@@ -368,7 +693,7 @@ def forecast_view(
             for fmt in fmts:
                 fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
 
-                # --- ensure output directory exists ---------------------------
+                # --- ensure output directory exists --
                 out_dir = os.path.dirname(fname)
                 if out_dir and not os.path.exists(out_dir):
                     os.makedirs(out_dir, exist_ok=True)
@@ -385,26 +710,455 @@ def _parse_wide_df_columns(
     """Parses wide-format columns into a structured dictionary."""
     plot_structure = {prefix: {} for prefix in value_prefixes}
     
-    # Regex to capture prefix, year, and suffix (like q10, actual)
-    pattern = re.compile(
+    # Regex for columns with years, e.g., GWL_2022_q10 or GWL_2022_actual
+    pattern_year = re.compile(
         r'(' + '|'.join(re.escape(p) for p in value_prefixes) +
         r')_(\d{4})_?(.*)'
     )
+    # Regex for columns without years, e.g., GWL_q10 or GWL_pred
+    pattern_no_year = re.compile(
+        r'(' + '|'.join(re.escape(p) for p in value_prefixes) +
+        r')_([a-zA-Z].*)'
+    )
     
     for col in df_wide.columns:
-        match = pattern.match(col)
-        if match:
-            prefix, year, suffix = match.groups()
+        match_year = pattern_year.match(col)
+        match_no_year = pattern_no_year.match(col)
+
+        if match_year:
+            prefix, year, suffix = match_year.groups()
+            # If suffix is empty, it's a point prediction
+            suffix = suffix or 'pred' 
             if year not in plot_structure[prefix]:
                 plot_structure[prefix][year] = {}
-            plot_structure[prefix][year][suffix or 'pred'] = col
-        # Capture general actual columns without a year
-        elif any(col == f"{p}_actual" for p in value_prefixes):
-            prefix = col.split('_')[0]
-            if "static_actual" not in plot_structure[prefix]:
-                plot_structure[prefix]["static_actual"] = col
-
+            plot_structure[prefix][year][suffix] = col
+        elif match_no_year: 
+            # Handles columns like 'subsidence_q10',
+            # 'subsidence_actual'
+            prefix, suffix = match_no_year.groups()
+            if "static" not in plot_structure[prefix]:
+                 plot_structure[prefix]["static"] = {}
+            plot_structure[prefix]["static"][suffix] = col
+        elif any(col == p for p in value_prefixes): 
+            # Handles base prefix column e.g. 'subsidence'
+             if "static" not in plot_structure[col]:
+                 plot_structure[col]["static"] ={}
+             plot_structure[col]['static']['pred'] = col
+             
     return plot_structure
+
+def _plot_spatial_subplot(ax, df, x_col, y_col, c_col, **kwargs):
+    """Helper to create a single scatter subplot."""
+    if c_col is None or c_col not in df.columns:
+        ax.set_title(f"{kwargs.get('title', '')}\n(Data not found)",
+                     fontsize=10, color='red')
+        ax.axis('off')
+        return None
+        
+    plot_df = df[[x_col, y_col, c_col]].dropna()
+    if plot_df.empty:
+        ax.set_title(f"{kwargs.get('title', '')}\n(No valid data)", 
+                     fontsize=10)
+        ax.axis('off')
+        return None
+        
+    scatter = ax.scatter(
+        plot_df[x_col], plot_df[y_col], c=plot_df[c_col],
+        cmap=kwargs.get('cmap'), vmin=kwargs.get('vmin'),
+        vmax=kwargs.get('vmax'), s=10,
+        edgecolors='k', linewidths=0.1, alpha=0.8
+    )
+    ax.set_title(kwargs.get('title', ''), fontsize=10)
+    
+    if kwargs.get('axis_off'):
+        ax.axis('off')
+    else:
+        ax.tick_params(axis='both', which='major', labelsize=8)
+        if kwargs.get('show_grid'):
+            ax.grid(**kwargs.get('grid_props'))
+    return scatter
+
+def _plot_temporal_subplot(ax, df, value_col, title, **kwargs):
+    """Helper to create a single line plot (fallback)."""
+    if value_col is None or value_col not in df.columns:
+        ax.set_title(f"{title}\n(Data not found)", fontsize=10, color='red')
+        ax.axis('off')
+        return
+        
+    plot_df = df[[value_col]].dropna()
+    if plot_df.empty:
+        ax.set_title(f"{title}\n(No valid data)", fontsize=10)
+        ax.axis('off')
+        return
+
+    ax.plot(plot_df.index, plot_df[value_col])
+    ax.set_title(title, fontsize=10)
+    if not kwargs.get('axis_off'):
+        ax.tick_params(axis='both', which='major', labelsize=8)
+        if kwargs.get('show_grid'):
+            ax.grid(**kwargs.get('grid_props'))
+
+def _plot_forecast_grid(
+    fig, axes, df_wide, plot_structure, years_to_plot,
+    quantiles_to_plot, prefix, kind, spatial_cols, plot_kwargs
+):
+    # Check if spatial coordinates are available for plotting.
+    has_spatial_coords = all(
+        c in df_wide.columns for c in spatial_cols
+    )
+    # Log a fallback message if spatial coordinates are not found.
+    if not has_spatial_coords:
+        vlog(
+            f"Spatial columns {spatial_cols} not found. "
+            "Falling back to temporal line plots.",
+            level=1, verbose=plot_kwargs.get('verbose', 0)
+        )
+
+    # Get the last known static actual column for fallback.
+    last_known_actual_col = plot_structure[prefix].get(
+        "static", {}).get("actual")
+
+    # Iterate through each year to create a row of plots.
+    for row_idx, year in enumerate(years_to_plot):
+        ax_row = axes[row_idx]
+        col_idx = 0
+        
+        # Plot actual data if 'dual' mode is enabled.
+        if kind == 'dual':
+            actual_col = plot_structure[prefix].get(
+                year, {}).get('actual', last_known_actual_col)
+            
+            if actual_col:
+                last_known_actual_col = actual_col
+            
+            title = f"Actual ({year})"
+            plot_kwargs['title'] = title
+            
+            # Choose plotting function based on coordinate availability.
+            if has_spatial_coords:
+                _plot_spatial_subplot(
+                    ax_row[col_idx], df_wide, *spatial_cols,
+                    actual_col, **plot_kwargs
+                )
+            else:
+                _plot_temporal_subplot(
+                    ax_row[col_idx], df_wide, actual_col, **plot_kwargs
+                )
+            col_idx += 1
+        
+        # Plot each requested prediction/quantile.
+        for q_suffix in quantiles_to_plot:
+            if col_idx >= len(ax_row): continue
+            
+            pred_col = plot_structure[prefix].get(year, {}).get(q_suffix)
+            
+            # Format the title for the subplot.
+            title_suffix = (
+                q_suffix.replace('q', 'Q').capitalize() 
+                if 'q' in q_suffix else "Prediction"
+            )
+            title = f"{title_suffix} ({year})"
+            plot_kwargs['title'] = title
+            
+            # Choose plotting function based on coordinate availability.
+            if has_spatial_coords:
+                _plot_spatial_subplot(
+                    ax_row[col_idx], df_wide, *spatial_cols,
+                    pred_col, **plot_kwargs
+                )
+            else:
+                _plot_temporal_subplot(
+                    ax_row[col_idx], df_wide, pred_col, **plot_kwargs
+                )
+            col_idx += 1
+        
+        # Turn off any remaining unused axes in the current row.
+        for i in range(col_idx, len(ax_row)):
+            ax_row[i].axis('off')
+
+@check_non_emptiness 
+def forecast_view(
+    forecast_df: pd.DataFrame,
+    value_prefixes: Optional[List[str]] = None,
+    kind: str = 'dual',
+    view_quantiles: Optional[List[Union[str, float]]] = None,
+    view_years: Optional[List[Union[str, int]]] = None,
+    spatial_cols: Tuple[str, str] = None,
+    time_col: str = 'coord_t',
+    max_cols: Union[int, str] = 'auto',
+    cmap: str = 'viridis',
+    cbar_type: str = 'uniform',
+    axis_off: bool = False,
+    show_grid: bool = True,
+    grid_props: Optional[Dict] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    savefig: Optional[str] = None,
+    save_fmts: Union[str, List[str]] = '.png',
+    verbose: int = 1
+):
+    """Generates and displays spatial forecast visualizations.
+
+    This function creates a grid of scatter plots to visualize
+    spatio-temporal forecast data. It can handle both long-format
+    and wide-format DataFrames, automatically arranging plots by
+    year and metric (e.g., different quantiles).
+
+    Parameters
+    ----------
+    forecast_df : pd.DataFrame
+        Input DataFrame containing forecast data. The function
+        auto-detects if the format is long or wide.
+
+    value_prefixes : list of str, optional
+        The base names of the metrics to plot (e.g.,
+        ``['subsidence', 'GWL']``). If ``None``, the function
+        will attempt to automatically infer these from the
+        DataFrame's column names. A separate figure is generated
+        for each prefix.
+
+    kind : {'dual', 'pred_only'}, default 'dual'
+        Determines what to plot:
+        - ``'dual'``: Plots both actual values and predictions
+          side-by-side for comparison, if actuals are available.
+        - ``'pred_only'``: Plots only the predicted values.
+
+    view_quantiles : list of str or float, optional
+        A list to filter which quantiles are displayed. Values can be
+        floats (e.g., ``[0.1, 0.5]``) or strings (e.g.,
+        ``['q10', 'q50']``). If ``None``, all detected quantiles
+        are plotted.
+
+    view_years : list of str or int, optional
+        A list of years to display. If ``None``, all detected years
+        in the forecast are plotted.
+
+    spatial_cols : tuple of str, default ('coord_x', 'coord_y')
+        A tuple containing the names of the columns to be used for
+        the x and y axes of the scatter plots.
+
+    time_col : str, default 'coord_t'
+        The name of the column representing the time dimension in a
+        long-format DataFrame. Used by the internal format detector.
+
+    max_cols : int or 'auto', default 'auto'
+        Controls the number of subplots per row.
+        - If ``'auto'``, the number of columns is automatically set
+          to the number of quantiles being plotted (plus one if
+          `kind='dual'`).
+        - If an integer, sets a fixed number of columns for the
+          prediction plots. If `kind='dual'`, an additional column
+          for the actuals is added, potentially exceeding this number.
+
+    cmap : str, default 'viridis'
+        The Matplotlib colormap to use for the scatter plots.
+
+    cbar_type : {'uniform', 'individual'}, default 'uniform'
+        Controls the color bar scaling:
+        - ``'uniform'``: All subplots in a figure share a single,
+          uniform color scale, determined by the global min/max of
+          all plotted data. A single color bar is displayed for the
+          entire figure.
+        - ``'individual'``: Each subplot has its own color bar scaled
+          to its own data range. (Note: Current implementation
+          defaults to uniform; individual color bars would be a
+          future enhancement).
+
+    axis_off : bool, default False
+        If ``True``, turns off the axes (ticks, labels, spines) for
+        all subplots.
+
+    show_grid : bool, default True
+        If ``True`` and `axis_off` is ``False``, a grid is displayed
+        on the subplots.
+
+    grid_props : dict, optional
+        A dictionary of properties to pass to `ax.grid()` (e.g.,
+        ``{'linestyle': ':', 'alpha': 0.7}``).
+
+    figsize : tuple of (float, float), optional
+        The size of the figure for each `value_prefix`. If ``None``,
+        the size is automatically calculated based on the number of
+        rows and columns.
+
+    savefig : str, optional
+        If a file path is provided (e.g., 'my_forecast.png'), the
+        figure(s) will be saved. The prefix name will be appended
+        to the filename (e.g., 'my_forecast_subsidence.png').
+
+    save_fmts : str or list of str, default '.png'
+        The format(s) to save the figure in (e.g., ``['.png', '.pdf']``).
+
+    verbose : int, default 1
+        Controls the verbosity of logging messages. `0` is silent,
+        `1` provides basic info, and higher values provide more detail.
+
+    Returns
+    -------
+    None
+        This function does not return any value. It displays and/or
+        saves Matplotlib figures directly.
+
+    See Also
+    --------
+    format_forecast_dataframe : The utility used to detect and pivot
+                                the input DataFrame.
+    get_value_prefixes : The utility used to auto-detect metric prefixes.
+
+    Notes
+    -----
+    - The function creates a grid where each row corresponds to a year
+      from `view_years`, and columns correspond to the actuals (if
+      `kind='dual'`) and each of the selected quantiles.
+    - If an actual value for a specific year is not available, the
+      function will attempt to fill that plot using the most recent
+      known 'actual' value to facilitate comparison across the row.
+    - Currently, a separate figure is generated for each prefix in
+      `value_prefixes`.
+    """
+    _spatial_cols = spatial_cols or []
+    
+    is_q = detect_forecast_type(forecast_df, value_prefixes=value_prefixes)
+    
+    if is_q =='deterministic': 
+        warnings.warn (
+            "Deterministic prediction is detected. It is recommended" 
+            " to use 'fusionlab.plot.forecast.plot_forecast_by_step'"
+            " instead. Use at your own risk."
+        )
+        
+    if value_prefixes is None:
+        vlog("`value_prefixes` not provided. Auto-detecting...",
+             level=1, verbose=verbose)
+        value_prefixes = get_value_prefixes(
+            forecast_df,
+            exclude_cols=['sample_idx', *_spatial_cols,
+                          time_col, 'forecast_step']
+        )
+        if not value_prefixes:
+            raise ValueError(
+                "Could not auto-detect any value prefixes. "
+                "Please provide them explicitly."
+            )
+        vlog(f"Detected prefixes: {value_prefixes}",
+             level=2, verbose=verbose)
+             
+    df_wide = format_forecast_dataframe(
+        forecast_df, to_wide=True, value_prefixes=value_prefixes,
+        id_vars=[c for c in ['sample_idx', *_spatial_cols]
+                 if c in forecast_df.columns],
+        time_col=time_col,
+        static_actuals_cols=[
+            c for c in forecast_df.columns
+            if c.endswith('_actual') and c.count('_') == 1
+        ],
+        spatial_cols = _spatial_cols, 
+        verbose=verbose
+    )
+
+    plot_structure = _parse_wide_df_columns(df_wide, value_prefixes)
+    
+    all_years = sorted([
+        y for p_data in plot_structure.values() for y in p_data
+        if y.isdigit()
+    ])
+    years_to_plot = [str(y) for y in view_years] if view_years else all_years
+    
+    all_quantiles = sorted(list(set(
+        s for p in plot_structure.values()
+        for y in p.values() if isinstance(y, dict)
+        for s in y if s.startswith('q')
+    )))
+    
+    if view_quantiles:
+        req_q_norm = [
+            f"q{int(q*100)}" if isinstance(q, float) 
+            else (q if q.startswith('q') else f"q{q}")
+            for q in view_quantiles
+        ]
+        quantiles_to_plot = [q for q in all_quantiles if q in req_q_norm]
+    else:
+        quantiles_to_plot = all_quantiles
+
+    if not quantiles_to_plot:
+        quantiles_to_plot = ['pred']
+        vlog("No quantiles found. Assuming deterministic forecast.",
+             level=1, verbose=verbose)
+    
+    n_rows = len(years_to_plot)
+    if n_rows == 0:
+        vlog("No years to plot after filtering.", level=0, verbose=verbose)
+        return
+
+    vmin, vmax = None, None
+    if cbar_type == 'uniform':
+        all_plot_cols = [
+            c for p in plot_structure.values()
+            for y in p.values()
+            for c in (y.values() if isinstance(y, dict) else [y])
+            if c in df_wide
+        ]
+        if all_plot_cols:
+            min_vals = [df_wide[c].dropna().min() for c in all_plot_cols]
+            max_vals = [df_wide[c].dropna().max() for c in all_plot_cols]
+            if any(pd.notna(v) for v in min_vals):
+                vmin = min(v for v in min_vals if pd.notna(v))
+            if any(pd.notna(v) for v in max_vals):
+                vmax = max(v for v in max_vals if pd.notna(v))
+    
+    plot_kwargs = dict(
+        cmap=cmap, vmin=vmin, vmax=vmax, axis_off=axis_off,
+        show_grid=show_grid,
+        grid_props=(grid_props or {'linestyle': ':', 'alpha': 0.7}),
+        verbose=verbose
+    )
+
+    for prefix in value_prefixes:
+        num_pred_cols = len(quantiles_to_plot)
+        num_actual_cols = 1 if kind == 'dual' else 0
+        if max_cols == 'auto':
+            n_cols = num_pred_cols + num_actual_cols
+        else:
+            n_cols = int(max_cols)
+
+        if n_cols == 0: 
+            continue
+
+        fig_size = figsize or (n_cols * 3.5, n_rows * 3)
+        fig, axes = plt.subplots(
+            n_rows, n_cols, figsize=fig_size, squeeze=False,
+            constrained_layout=True
+        )
+        fig.suptitle(
+            f"Forecast Visualization for '{prefix.upper()}'",
+            fontsize=14, weight='bold'
+        )
+
+        _plot_forecast_grid(
+            fig, axes, df_wide, plot_structure, years_to_plot,
+            quantiles_to_plot, prefix, kind, spatial_cols, plot_kwargs
+        )
+        
+        if cbar_type == 'uniform' and vmin is not None and vmax is not None:
+             fig.colorbar(
+                ScalarMappable(
+                    norm=mcolors.Normalize(vmin=vmin, vmax=vmax), cmap=cmap),
+                ax=axes.ravel().tolist(), orientation='vertical',
+                shrink=0.8, pad=0.04
+             )
+
+        if savefig:
+            fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
+            base, _ = os.path.splitext(savefig)
+            for fmt in fmts:
+                fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
+                out_dir = os.path.dirname(fname)
+                if out_dir and not os.path.exists(out_dir):
+                    os.makedirs(out_dir, exist_ok=True)
+                vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
+                fig.savefig(fname, dpi=300, bbox_inches="tight")
+
+        plt.show()
+
 
 def _plot_single_scatter(
     ax, df, x_col, y_col, c_col, cmap, vmin, vmax, title, 

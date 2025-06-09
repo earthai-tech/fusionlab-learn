@@ -54,7 +54,7 @@ DEP_MSG = dependency_message('nn.pinn.base')
 
 
 
-class GWFlowPINN2(Model, NNLearner):
+class GWFlowPINN(Model, NNLearner):
     """
     A self-contained PINN for 2D transient groundwater flow.
 
@@ -307,7 +307,7 @@ class GWFlowPINN2(Model, NNLearner):
         
         return cls(**config)
 
-class GWFlowPINN(Model, NNLearner):
+class GWFlowPINN2D(Model, NNLearner):
     """
     A small PINN for 2D transient groundwater‐flow:
       h = h(t, x, y) predicted by an MLP, plus a PDE‐residual method.

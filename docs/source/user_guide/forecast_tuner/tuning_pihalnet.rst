@@ -40,7 +40,7 @@ Ensure you have ``fusionlab`` installed with its dependencies, including
 
 
 Section 1: Tuning with Synthetic Data
--------------------------------------
+---------------------------------------
 This section walks through the process using synthetically generated
 data. This allows you to understand the mechanics of ``PIHALTuner``
 without needing a specific large dataset immediately. Each step includes

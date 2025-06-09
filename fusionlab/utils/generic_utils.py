@@ -34,7 +34,6 @@ __all__ =[
     'normalize_time_column'
  ]
 
-
 class ExistenceChecker:
     """
     A utility class for checking and ensuring the existence of files

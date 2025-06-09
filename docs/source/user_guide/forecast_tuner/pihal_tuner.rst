@@ -170,7 +170,7 @@ Core Components and Workflow
            best_model.summary()
 
 Default Fixed Parameters and Case Information
----------------------------------------------
+-----------------------------------------------
 ``PIHALTuner`` relies on ``DEFAULT_PIHALNET_FIXED_PARAMS`` for fallback values
 if certain fixed parameters are not provided or inferred. This dictionary includes
 sensible defaults for aspects like output dimensions, horizon, aggregation methods,

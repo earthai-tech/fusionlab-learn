@@ -2,7 +2,6 @@
 # Author: LKouadio <etanoyau@gmail.com>
 # License: BSD-3-Clause
 
-
 """
 Functions to load sample datasets included with the ``fusionlab``
 package, suitable for demonstrating and testing forecasting models
