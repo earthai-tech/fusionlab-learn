@@ -1117,6 +1117,155 @@ overwrite_tuner : bool, optional
 )
 
 
+_halnet_core_params = dict(
+    static_input_dim="""
+static_input_dim : int
+    Dimensionality of the static (time-invariant) input features.
+    These are features that do not change over time for a given
+    sample, such as a sensor's location ID, soil type, or a product
+    category. If 0, no static features are used.
+""",
+    dynamic_input_dim="""
+dynamic_input_dim : int
+    Dimensionality of the dynamic (time-varying) input features
+    that are known in the past (the "lookback" window). This is a
+    required parameter and typically includes the target variable
+    itself (lagged) and other historical drivers like rainfall,
+    temperature, or sales figures.
+""",
+    future_input_dim="""
+future_input_dim : int
+    Dimensionality of the time-varying features for which values
+    are known in advance for the forecast period. Examples include
+    holidays, scheduled promotions, or day-of-week indicators.
+    If 0, no future features are used.
+""",
+    embed_dim="""
+embed_dim : int, default 32
+    The base dimensionality for the internal feature space of the
+    model. Various input features (static, dynamic, future) are
+    projected into this common dimension to allow for meaningful
+    interactions within downstream layers like LSTMs and attention
+    mechanisms. It's a key parameter for controlling model capacity.
+""",
+    hidden_units="""
+hidden_units : int, default 64
+    The number of units in the hidden layers of the Gated Residual
+    Networks (GRNs). GRNs are core components used for non-linear
+    transformations throughout the architecture. A larger value
+    increases the model's capacity to learn complex patterns.
+""",
+    lstm_units="""
+lstm_units : int, default 64
+    The number of hidden units in each LSTM layer within the
+    :class:`~fusionlab.nn.components.MultiScaleLSTM` block. This
+    parameter determines the memory capacity of the recurrent cells
+    processing the historical sequence data.
+""",
+    attention_units="""
+attention_units : int, default 32
+    The dimensionality of the output space for the various attention
+    mechanisms (e.g., `CrossAttention`, `HierarchicalAttention`).
+    This is also often referred to as the model's dimension, :math:`d_{model}`.
+    It must be divisible by `num_heads`.
+""",
+    num_heads="""
+num_heads : int, default 4
+    The number of attention heads in each `MultiHeadAttention`
+    sub-layer. Using multiple heads allows the model to jointly
+    attend to information from different representation subspaces at
+    different positions, which can improve learning.
+""",
+    dropout_rate="""
+dropout_rate : float, default 0.1
+    The dropout rate applied within various components like Gated
+    Residual Networks (GRNs) and after some attention layers to
+    prevent overfitting. It must be a float between 0.0 and 1.0.
+""",
+    max_window_size="""
+max_window_size : int, default 10
+    The number of past time steps (the lookback window) that the
+    model considers. This should directly correspond to the
+    `time_steps` parameter used during data preparation and is used by
+    components like :class:`~fusionlab.nn.components.DynamicTimeWindow`.
+""",
+    memory_size="""
+memory_size : int, default 100
+    The number of memory slots in the
+    :class:`~fusionlab.nn.components.MemoryAugmentedAttention` layer.
+    This external memory allows the model to learn and access
+    patterns over very long-range dependencies that might be missed
+    by standard LSTMs or attention.
+""",
+    scales="""
+scales : list of int, optional
+    A list of scale factors for the
+    :class:`~fusionlab.nn.components.MultiScaleLSTM`. Each scale
+    `s` creates an LSTM that processes the input sequence by taking
+    every `s`-th time step. For example, `scales=[1, 3]` would
+    process the sequence at its original resolution and at a coarser,
+    every-third-timestep resolution. If `None` or 'auto', defaults to `[1]`.
+""",
+    multi_scale_agg="""
+multi_scale_agg : {'last', 'average', 'concat', ...}, default 'last'
+    The strategy used by the aggregation function to combine the
+    outputs from the different LSTMs in `MultiScaleLSTM`.
+    - ``'concat'``: (For 3D output) Pads sequences from different
+      scales to the same length and concatenates them along the
+      feature axis. This is the primary mode for creating a rich
+      sequence representation for downstream attention layers in an
+      encoder-decoder setup.
+    - ``'last'`` or ``'auto'``: (For 2D output) Creates a context
+      vector by taking the last hidden state from each LSTM scale and
+      concatenating them.
+    - ``'average'`` or ``'sum'``: Create a 2D context vector by
+      averaging or summing over the time dimension for each scale.
+""",
+    final_agg="""
+final_agg : {'last', 'average', 'flatten'}, default 'last'
+    The aggregation strategy used to collapse the final temporal
+    feature map (which has a time dimension equal to `forecast_horizon`)
+    into a single feature vector before the final decoding step.
+""",
+    activation="""
+activation : str, default 'relu'
+    The name of the activation function to use in Dense layers and
+    Gated Residual Networks (GRNs) throughout the model. Common
+    choices include 'relu', 'gelu', 'swish', and 'tanh'.
+""",
+    use_residuals="""
+use_residuals : bool, default True
+    If `True`, enables residual "add & norm" connections after key
+    sub-layers (like attention and GRNs). These shortcut connections
+    are crucial for training very deep networks as they help prevent
+    vanishing gradients and ease the optimization process.
+""",
+    use_batch_norm="""
+use_batch_norm : bool, default False
+    If `True`, `BatchNormalization` is used within Gated Residual
+    Networks (GRNs). If `False` (default), `LayerNormalization` is
+    used instead. `LayerNormalization` is often more stable and
+    effective for time series data with varying sequence lengths.
+""",
+    use_vsn="""
+use_vsn : bool, default True
+    If `True`, the model uses
+    :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSN)
+    layers at the input stage. VSNs perform intelligent, learnable
+    feature selection, allowing the model to up-weight or down-weight
+    the importance of each input variable. This can improve performance
+    and provide insights into which features are most impactful. If
+    `False`, simpler `Dense` layers are used for initial projection.
+""",
+    vsn_units="""
+vsn_units : int, optional
+    The number of units in the internal Gated Residual Networks (GRNs)
+    of the Variable Selection Networks. This parameter controls the
+    capacity of the feature selection sub-networks. If `None`, it often
+    defaults to a value based on `hidden_units`.
+"""
+)
+
 #---------------------------------Share docs ----------------------------------
 
 _shared_docs: dict[str, str] = {}

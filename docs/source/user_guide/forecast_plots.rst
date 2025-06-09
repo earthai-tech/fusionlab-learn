@@ -168,7 +168,7 @@ for the q10, q50, and q90 quantiles.
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 plot_forecast_by_step
-=====================
+=======================
 :API Reference: :func:`~fusionlab.plot.forecast.plot_forecast_by_step`
 
 This function is tailored to visualize forecast data by organizing

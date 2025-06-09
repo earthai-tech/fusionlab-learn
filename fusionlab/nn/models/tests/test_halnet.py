@@ -130,8 +130,8 @@ def test_call_shapes_quantile_prediction(
     expected_shape = (
         batch_size,
         params["forecast_horizon"],
+        len(my_quantiles), 
         params["output_dim"],
-        len(my_quantiles)
     )
     assert outputs.shape == expected_shape, \
         f"Expected quantile prediction shape {expected_shape}, but got {outputs.shape}"

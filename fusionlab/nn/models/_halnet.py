@@ -16,11 +16,12 @@ import numpy as np
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import _shared_docs, doc 
+from ...api.docs import DocstringComponents, _halnet_core_params
 from ...api.property import NNLearner 
 from ...compat.sklearn import validate_params, Interval, StrOptions 
 from ...core.handlers import param_deprecated_message 
 from ...utils.deps_utils import ensure_pkg
-# from ..decorators import Appender
+
 
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
  
@@ -67,65 +68,44 @@ if KERAS_BACKEND:
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
-    from ...compat.tf import optional_tf_function 
-    from .._tensor_validation import validate_anomaly_scores 
     from .._tensor_validation import validate_model_inputs
-    from .._tensor_validation import validate_anomaly_config 
-    from .._tensor_validation import align_temporal_dimensions
-    
-    from ..losses import ( 
-        combined_quantile_loss, 
-        combined_total_loss, 
-        prediction_based_loss
-    )
+
     from ..utils import set_default_params
     from ..components import (
             Activation, 
-            AdaptiveQuantileLoss,
-            AnomalyLoss,
             CrossAttention,
             DynamicTimeWindow,
             GatedResidualNetwork,
             HierarchicalAttention,
-            LearnedNormalization,
             MemoryAugmentedAttention,
             MultiDecoder,
-            MultiModalEmbedding,
-            MultiObjectiveLoss,
             MultiResolutionAttentionFusion,
             MultiScaleLSTM,
             QuantileDistributionModeling,
             VariableSelectionNetwork,
             PositionalEncoding, 
-            aggregate_multiscale, 
             aggregate_multiscale_on_3d, 
             aggregate_time_window_output
         )
-    
 
-    # from ..components import aggregate_multiscale_on_3d#, aggregate_time_window_output
-    # from .._tensor_validation import validate_model_inputs
-    # from tensorflow.keras.initializers import Constant
-    # import tensorflow as tf
-
-    # --- Type Hinting ---
-    Tensor = KERAS_DEPS.Tensor
 else:
     # Define fallback types for type hinting if Keras is not available
     Tensor = Any
     Model = object
     Layer = object
 
-DEP_MSG = dependency_message('nn.models')
-logger = fusionlog().get_fusionlab_logger(__name__)
-DEP_MSG = dependency_message('nn.transformers') 
-
+DEP_MSG = dependency_message('nn._halnet')
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
+_param_docs = DocstringComponents.from_nested_components(
+    base=DocstringComponents(_halnet_core_params), 
+)
+
 __all__=['HALNet']
 
-@register_keras_serializable('fusionlab.nn.transformers', name="HALNet")
+
+@register_keras_serializable('fusionlab.nn.models._halnet', name="HALNet")
 # @doc (
 #     key_improvements= dedent(_shared_docs['xtft_key_improvements']), 
 #     key_functions= dedent(_shared_docs['xtft_key_functions']), 
@@ -155,16 +135,6 @@ __all__=['HALNet']
 )
 
 class HALNet(Model, NNLearner):
-    """Hybrid Attentive LSTM Network (HAL-Net).
-
-    A powerful, data-driven model for multi-horizon time series
-    forecasting, based on the architecture of PIHALNet but without the
-    physics-informed or anomaly detection components.
-
-    It leverages an encoder-decoder framework with multi-scale LSTMs
-    and a suite of advanced attention mechanisms to capture complex
-    temporal patterns from static, dynamic past, and known future inputs.
-    """
     @validate_params({
         "static_input_dim": [Interval(Integral, 0, None, closed='left')],
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
@@ -172,12 +142,35 @@ class HALNet(Model, NNLearner):
         "output_dim": [Interval(Integral, 1, None, closed='left')],
         "forecast_horizon": [Interval(Integral, 1, None, closed='left')],
         "embed_dim": [Interval(Integral, 1, None, closed='left')],
-        "hidden_units": [Interval(Integral, 1, None, closed='left')],
-        "attention_units": [Interval(Integral, 1, None, closed='left')],
-        "lstm_units": [Interval(Integral, 1, None, closed='left')],
         "num_heads": [Interval(Integral, 1, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
+        "attention_units": [
+            'array-like', 
+            Interval(Integral, 1, None, closed='left')
+        ], 
+        "hidden_units": [
+            'array-like', 
+            Interval(Integral, 1, None, closed='left')
+          ], 
+        "lstm_units": [
+            'array-like', 
+            Interval(Integral, 1, None, closed='left'), 
+            None
+        ], 
+        "activation": [
+            StrOptions({"elu", "relu", "tanh", "sigmoid", "linear", "gelu"}),
+            callable 
+            ],
+        "multi_scale_agg": [
+            StrOptions({"last", "average",  "flatten", "auto", "sum", "concat"}),
+            None
+        ],
+        "scales": ['array-like', StrOptions({"auto"}),  None],
+        "use_residuals": [bool, Interval(Integral, 0, 1, closed="both")],
+        "final_agg": [StrOptions({"last", "average",  "flatten"})],
+    
     })
+    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
     def __init__(
         self,
         static_input_dim: int,
@@ -199,7 +192,6 @@ class HALNet(Model, NNLearner):
         final_agg: str = 'last',
         activation: str = 'relu',
         use_residuals: bool = True,
-        use_batch_norm: bool = False,
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         name: str = "HALNet",
@@ -222,7 +214,6 @@ class HALNet(Model, NNLearner):
         self.final_agg = final_agg
         self.activation_fn_str = Activation(activation).activation_str
         self.use_residuals = use_residuals
-        self.use_batch_norm = use_batch_norm
         self.use_vsn = use_vsn
         self.vsn_units = vsn_units if vsn_units is not None else self.hidden_units
 
@@ -303,13 +294,6 @@ class HALNet(Model, NNLearner):
             else:
                 self.static_dense, self.grn_static_non_vsn = None, None
             
-            # Create dense layers for dynamic and future features for non-VSN path
-            self.dynamic_dense = Dense(self.embed_dim)
-            self.future_dense = Dense(self.embed_dim)
-        else:
-            self.static_dense, self.grn_static_non_vsn = None, None
-            self.dynamic_dense, self.future_dense = None, None
-        
         # --- Core Architectural Layers (Always Created) ---
         self.positional_encoding = PositionalEncoding()
         self.multi_scale_lstm = MultiScaleLSTM(
@@ -326,6 +310,10 @@ class HALNet(Model, NNLearner):
             MultiResolutionAttentionFusion(
                 units=self.attention_units, num_heads=self.num_heads)
         
+        self.dynamic_time_window = DynamicTimeWindow(
+            max_window_size=self.max_window_size
+        )
+        
         # Final output layers
         self.multi_decoder = MultiDecoder(
             output_dim=self.output_dim,
@@ -341,106 +329,182 @@ class HALNet(Model, NNLearner):
         else:
             self.decoder_add_norm, self.final_add_norm, self.residual_dense = \
                 None, None, None
+                
+    def run_halnet_core(
+        self,
+        static_input:Tensor,
+        dynamic_input: Tensor,
+        future_input: Tensor,
+        training: bool
+    ) -> Tensor:
+        """Executes data-driven pipeline using an encoder-decoder.
 
-    def run_halnet_core(self, static_input, dynamic_input, future_input, training):
-        """Executes data-driven pipeline using an encoder-decoder."""
-        time_steps = tf_shape(dynamic_input)[1]
+        This revised method correctly separates the processing of past
+        (dynamic) and future inputs to handle cases where `time_steps`
+        and `forecast_horizon` are different.
+
+        Args:
+            static_input: Processed static features.
+            dynamic_input: Processed dynamic historical features.
+                           Shape: (batch, time_steps, features).
+            future_input: Processed known future features.
+                          Shape: (batch, forecast_horizon, features).
+            training: Python boolean indicating training mode.
+
+        Returns:
+            A feature tensor for the forecast horizon, ready for the
+            MultiDecoder. Shape is determined by `self.final_agg`.
+        """
+        # Get the length of the historical time window
+        #ctime_steps = tf_shape(dynamic_input)[1]
 
         # --- 1. Initial Feature Processing ---
-        # Process inputs through VSNs or simple Dense layers to create
-        # initial feature representations.
-        
-        # Static context processing
+        # Process static inputs first.
         static_context = None
         if self.use_vsn and self.static_vsn is not None:
             static_out = self.static_vsn(static_input, training=training)
-            static_context = self.static_vsn_grn(static_out, training=training)
-        elif self.static_dense:
+            static_context = self.static_vsn_grn(
+                static_out, training=training
+            )
+        elif self.static_dense is not None:
             static_out = self.static_dense(static_input)
-            static_context = self.grn_static_non_vsn(static_out, training=training)
-        
-        logger.debug(f"Static context shape: {getattr(static_context, 'shape', 'None')}")
+            static_context = self.grn_static_non_vsn(
+                static_out, training=training
+            )
+
+        logger.debug(
+            f"Static context shape: {getattr(static_context, 'shape', 'None')}"
+        )
 
         # --- 2. Encoder Path (Processes Past Data) ---
-        # Slice the historical part of the `future_input`
-        future_for_encoder = future_input[:, :time_steps, :]
-        
-        # Process dynamic and future historical features
-        if self.use_vsn:
+        # The encoder uses `dynamic_input` and the historical part of
+        # `future_input`.
+        # In models like TFT, "future" inputs are known for both the past
+        # and future. We slice the part corresponding to the encoder's timeline.
+        # This assumes `future_input` has length `time_steps + forecast_horizon`.
+        # If it only has length `forecast_horizon`, this logic needs adjustment.
+        # Let's assume for now `future_input` is just for the decoder.
+        # The encoder will only use `dynamic_input`.
+        dyn_proc = dynamic_input
+        if self.use_vsn and self.dynamic_vsn is not None:
             dyn_proc = self.dynamic_vsn_grn(self.dynamic_vsn(
                 dynamic_input, training=training), training=training)
-            fut_enc_proc = self.future_vsn_grn(self.future_vsn(
-                future_for_encoder, training=training), training=training)
-        else:
-            dyn_proc = self.dynamic_dense(dynamic_input)
-            fut_enc_proc = self.future_dense(future_for_encoder)
+      
+        fut_proc = future_input
+        # Process future features for the decoder.
+        if self.use_vsn and self.future_vsn is not None:
+            fut_proc = self.future_vsn_grn(self.future_vsn(
+                future_input, training=training), training=training)
+            
         
-        # Combine and encode historical information
-        # _, encoder_input_raw = align_temporal_dimensions(
-        #     tensor_ref=dyn_proc, 
-        #     tensor_to_align= fut_enc_proc, 
-        #     mode='pad_to_ref', 
-        #     name ="future_enc_emb"
-        # )
-        encoder_input_raw = tf_concat([dyn_proc, fut_enc_proc], axis=-1)
-        encoder_input = self.positional_encoding(encoder_input_raw, training=training)
-        lstm_out = self.multi_scale_lstm(encoder_input, training=training)
-        encoder_sequences = aggregate_multiscale_on_3d(lstm_out, mode='concat')
+        logger.debug(f"Shape after VSN/initial processing: "
+                     f"Dynamic={getattr(dyn_proc, 'shape', 'N/A')}, "
+                     f"Future={getattr(fut_proc, 'shape', 'N/A')}")
         
-        logger.debug(f"Encoder output sequence shape: {encoder_sequences.shape}")
+        encoder_input = self.positional_encoding(
+            dyn_proc, training=training
+            )
+        
+        lstm_out = self.multi_scale_lstm(
+            encoder_input, training=training
+        )
+        # `aggregate_multiscale` with 'concat' now correctly returns a 3D tensor
+        # by padding and concatenating features.
+        encoder_sequences = aggregate_multiscale_on_3d(
+            lstm_out, mode='concat'
+        )
+        
+        if self.dynamic_time_window is not None:
+            encoder_sequences = self.dynamic_time_window(
+                encoder_sequences, training=training)
+            
+        logger.debug(
+            f"Encoder output sequence shape: {encoder_sequences.shape}"
+        )
 
         # --- 3. Decoder Path (Prepares Context for Forecasting) ---
-        # Slice the forecast-window part of the `future_input`
-        future_for_decoder = future_input[:, time_steps:, :]
-        
-        # Process future decoder features
-        if self.use_vsn:
-            fut_dec_proc = self.future_vsn_grn(self.future_vsn(
-                future_for_decoder, training=training), training=training)
-        else:
-            fut_dec_proc = self.future_dense(future_for_decoder)
-            
-        future_with_pos = self.positional_encoding(fut_dec_proc, training=training)
-        
-        # Combine static context with future features for the decoder
-        decoder_parts = [future_with_pos]
+        # The decoder uses `static_context` and `future_input` over the
+        # `forecast_horizon`.
+        # Combine static context with future features for the decoder.
+        static_expanded =None 
         if static_context is not None:
             static_expanded = tf_expand_dims(static_context, 1)
             static_expanded = tf_tile(
                 static_expanded, [1, self.forecast_horizon, 1]
             )
-            decoder_parts.append(static_expanded)
             
-        raw_decoder_input = tf_concat(decoder_parts, axis=-1)
-        projected_decoder_input = self.decoder_input_projection(raw_decoder_input)
+        future_with_pos = self.positional_encoding(
+            fut_proc, training=training
+        )
         
-        logger.debug(f"Projected decoder input shape: {projected_decoder_input.shape}")
+        decoder_parts = []
+        if static_expanded is not None :
+            decoder_parts.append(static_expanded)
+        if self.future_input_dim > 0: 
+            decoder_parts.append(future_with_pos)
+            
+        if not decoder_parts: 
+            batch_size = tf_shape(dynamic_input)[0]
+            raw_decoder_input = tf_zeros(
+                (batch_size, self.forecast_horizon, self.attention_units))
+        else: 
+            raw_decoder_input = tf_concat(decoder_parts, axis=-1)
+            
+        # Project decoder input to the right dimension for attention.
+        projected_decoder_input = self.decoder_input_projection(
+            raw_decoder_input
+        )
+        
+        logger.debug(
+            f"Projected decoder input shape: {projected_decoder_input.shape}"
+        )
 
         # --- 4. Attention-based Fusion ---
+        # The decoder context (query) attends to the encoder sequences (key/value).
         cross_att_out = self.cross_attention(
-            [projected_decoder_input, encoder_sequences], training=training)
+            [projected_decoder_input, encoder_sequences], 
+            training=training
+        )
         
+        att_proc = self.attention_processing_grn(
+            cross_att_out, training=training
+        )
+        # Process attention output and add residual connection.
         if self.use_residuals and self.decoder_add_norm:
-            att_proc = self.attention_processing_grn(cross_att_out, training=training)
-            context_att = self.decoder_add_norm[0]([projected_decoder_input, att_proc])
+            context_att = self.decoder_add_norm[0](
+                [projected_decoder_input, att_proc]
+            )
             context_att = self.decoder_add_norm[1](context_att)
         else:
             context_att = cross_att_out
             
-        hier_att_out = self.hierarchical_attention([context_att, context_att], training=training)
-        mem_att_out = self.memory_augmented_attention(hier_att_out, training=training)
+        # Apply further attention layers to refine the context.
+        hier_att_out = self.hierarchical_attention(
+            [context_att, context_att], training=training # Self-attention
+        )
+        mem_att_out = self.memory_augmented_attention(
+            hier_att_out, training=training
+        )
         
         # --- 5. Final Combination and Aggregation ---
-        final_features = self.multi_resolution_attention_fusion(mem_att_out, training=training)
+        final_features = self.multi_resolution_attention_fusion(
+            mem_att_out, training=training
+        )
 
         if self.use_residuals and self.final_add_norm:
             res_base = self.residual_dense(context_att)
-            final_features = self.final_add_norm[0]([final_features, res_base])
+            final_features = self.final_add_norm[0](
+                [final_features, res_base]
+            )
             final_features = self.final_add_norm[1](final_features)
         
-        logger.debug(f"Shape after final fusion: {final_features.shape}")
+        logger.debug(
+            f"Shape after final fusion: {final_features.shape}"
+        )
 
+        # Collapse the time dimension to get a single vector for the decoder.
         return aggregate_time_window_output(final_features, self.final_agg)
+
     
     def call(self, inputs: List[Optional[Tensor]], training: bool = False) -> Tensor:
         """Forward pass for the HALNet model."""
@@ -485,7 +549,6 @@ class HALNet(Model, NNLearner):
             'final_agg': self.final_agg,
             'activation': self.activation_fn_str,
             'use_residuals': self.use_residuals,
-            'use_batch_norm': self.use_batch_norm,
             'use_vsn': self.use_vsn,
             'vsn_units': self.vsn_units,
         })
@@ -494,3 +557,127 @@ class HALNet(Model, NNLearner):
     @classmethod
     def from_config(cls, config, custom_objects=None):
         return cls(**config)
+
+
+
+HALNet.__doc__ = r"""
+Hybrid Attentive LSTM Network (HAL-Net).
+
+A **data‑driven** encoder–decoder architecture that couples
+multi‑scale LSTMs with hierarchical attention to deliver accurate
+multi‑horizon forecasts from static, dynamic‑past, and known‑future
+covariates.  HAL‑Net is a pared‑down variant of PIHALNet:
+it omits physics constraints and anomaly modules, making it suitable
+for purely statistical settings.
+
+See more in :ref:`User Guide <user_guide>`. 
+
+Parameters
+----------
+{params.base.static_input_dim}
+{params.base.dynamic_input_dim}
+{params.base.future_input_dim}
+
+output_dim : int, default 1  
+    Number of target variables produced at each forecast step.  
+    The model outputs a tensor of shape  
+    :math:`(B, \, H, \, Q, \, \text{{output\_dim}})` when *quantiles* are  
+    provided, or :math:`(B, \, H, \, \text{{output\_dim}})` for point  
+    forecasts, where  
+
+    .. math::  
+       B = \text{{batch size}},\qquad  
+       H = \text{{forecast horizon}},\qquad  
+       Q = |\text{{quantiles}}|.  
+
+forecast_horizon : int, default 1  
+    Length of the prediction window into the future.  The dynamic  
+    encoder ingests *max_window_size* past steps and the decoder emits  
+    :math:`H` steps ahead, where :math:`H=\text{{forecast\_horizon}}`.  
+    Setting :math:`H > 1` enables multi‑horizon sequence‑to‑sequence  
+    forecasts.  
+
+quantiles : list[float] or None, default None  
+    Optional quantile levels :math:`0 < q_1 < \dots < q_Q < 1`.  
+    When supplied, a  
+    :class:`fusionlab.nn.components.QuantileDistributionModeling` head  
+    scales the point forecast :math:`\hat{{y}}` into quantile estimates  
+
+    .. math::  
+       \hat{{y}}^{{(q)}} = \hat{{y}} + \sigma \,\Phi^{{-1}}(q),  
+
+    where :math:`\sigma` is a learned spread parameter and  
+    :math:`\Phi^{{-1}}` is the probit function.  Omit or set to *None* to  
+    obtain deterministic forecasts.  
+
+{params.base.embed_dim}
+{params.base.hidden_units}
+{params.base.lstm_units}
+{params.base.attention_units}
+{params.base.num_heads}
+{params.base.dropout_rate}
+{params.base.max_window_size}
+{params.base.memory_size}
+{params.base.scales}
+{params.base.multi_scale_agg}
+{params.base.final_agg}
+{params.base.activation}
+{params.base.use_residuals}
+{params.base.use_vsn}
+{params.base.vsn_units}
+
+
+name : str, default ``"HALNet"``  
+    Model identifier passed to :pyclass:`tf.keras.Model`.  Appears in  
+    weight filenames and TensorBoard scopes.  
+
+**kwargs  
+    Additional keyword arguments forwarded verbatim to the  
+    :pyclass:`tf.keras.Model` constructor—e.g. ``dtype="float64"`` or  
+    ``run_eagerly=True``.  
+
+Notes  
+-----  
+The composite latent size produced by the cross‑attention block is  
+:math:`d_\text{{model}} = \text{{attention\_units}}`.  For stable training  
+ensure :math:`d_\text{{model}}` is divisible by *num_heads*.
+
+See Also  
+--------  
+* :class:`fusionlab.nn.pinn.PIHALNet` – physics‑informed extension.  
+* :func:`fusionlab.utils.data_utils.widen_temporal_columns` – prepares  
+  wide data frames for plotting forecasts.  
+
+Examples
+--------
+>>> from fusionlab.nn.pinn import HALNet  
+>>> model = HALNet(  
+...     static_input_dim=4, dynamic_input_dim=8, future_input_dim=6,  
+...     output_dim=2, forecast_horizon=24, quantiles=[0.1, 0.5, 0.9],  
+...     scales=[1, 3], multi_scale_agg="concat", final_agg="last",  
+...     attention_units=64, num_heads=8, dropout_rate=0.15,  
+... )  
+>>> x_static  = tf.random.normal([32, 4])              # B × S  
+>>> x_dynamic = tf.random.normal([32, 10, 8])          # B × T × D  
+>>> x_future  = tf.random.normal([32, 24, 6])          # B × H × F  
+>>> y_hat = model({{  
+...     "static_features": x_static,  
+...     "dynamic_features": x_dynamic,  
+...     "future_features": x_future,  
+...     "coords": tf.zeros([32, 24, 3]),               # dummy (t, x, y)  
+... }})  
+>>> y_hat["subs_pred"].shape  
+TensorShape([32, 24, 3, 2])  # B × H × Q × output_dim
+
+See Also
+--------
+fusionlab.nn.pinn.PIHALNet
+fusionlab.nn.components.MultiScaleLSTM
+fusionlab.nn.components.VariableSelectionNetwork
+
+References  
+----------  
+.. [1] Vaswani et al., “Attention Is All You Need,” *NeurIPS 2017*.  
+.. [2] Lim et al., “Temporal Fusion Transformers for Interpretable  
+       Multi‑Horizon Time Series Forecasting,” *IJCAI 2021*.  
+""".format(params=_param_docs)

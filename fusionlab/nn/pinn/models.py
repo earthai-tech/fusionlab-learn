@@ -75,27 +75,23 @@ if KERAS_BACKEND:
     tf_autograph.set_verbosity(0)
     
     from .._tensor_validation import validate_model_inputs
-    # from .._tensor_validation import align_temporal_dimensions
     from .._tensor_validation import check_inputs 
     
 
-    from ..utils import set_default_params, squeeze_last_dim_if #noqa
+    from ..utils import set_default_params
     from ..components import (
             Activation, 
             CrossAttention,
             DynamicTimeWindow,
             GatedResidualNetwork,
             HierarchicalAttention,
-            # LearnedNormalization,
             MemoryAugmentedAttention,
             MultiDecoder,
-            # MultiModalEmbedding,
             MultiResolutionAttentionFusion,
             MultiScaleLSTM,
             QuantileDistributionModeling,
             VariableSelectionNetwork,
             PositionalEncoding, 
-            # aggregate_multiscale, 
             aggregate_time_window_output, 
             aggregate_multiscale_on_3d
         )

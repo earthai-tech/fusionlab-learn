@@ -19,6 +19,7 @@ from typing import (
     Tuple 
 )
 import pandas as pd
+
 from .._fusionlog import fusionlog 
 from ..core.handlers import columns_manager 
 from ..core.checks import check_spatial_columns, check_empty  
@@ -373,7 +374,6 @@ def get_value_prefixes(
         prefixes.add(prefix)
     
     return sorted(list(prefixes))
-
 
 @check_empty(['data']) 
 @is_data_readable 
@@ -760,36 +760,5 @@ def detect_forecast_type(
     # If neither format is detected, return 'unknown'.
     return 'unknown'
 
-if __name__ == '__main__':
-    # --- Example Usage with the Revised Function ---
-    
-    # Example 1: Quantile DataFrame (long format)
-    df_long_quant = pd.DataFrame(columns=[
-        'sample_idx', 'subsidence_q10', 'subsidence_q50', 'GWL_q90'
-    ])
-    print(f"Format for df_long_quant: '{detect_forecast_type(df_long_quant)}'")
 
-    # Example 2: Deterministic DataFrame (long format)
-    df_long_determ = pd.DataFrame(columns=[
-        'sample_idx', 'subsidence_pred', 'GWL_actual'
-    ])
-    print(f"Format for df_long_determ: '{detect_forecast_type(df_long_determ)}'")
-
-    # Example 3: Wide-format Quantile DataFrame
-    df_wide_quant = pd.DataFrame(columns=[
-        'sample_idx', 'subsidence_2022_q50', 'GWL_2023_q90'
-    ])
-    print(f"Format for df_wide_quant: '{detect_forecast_type(df_wide_quant)}'")
-    
-    # Example 4: Wide-format Deterministic DataFrame
-    df_wide_determ = pd.DataFrame(columns=['sample_idx', 'subsidence_2022_pred'])
-    print(f"Format for df_wide_determ: '{detect_forecast_type(df_wide_determ)}'")
-
-    # Example 5: DataFrame with only a base prefix
-    df_just_prefix = pd.DataFrame(columns=['sample_idx', 'subsidence'])
-    print(f"Format for df_just_prefix: '{detect_forecast_type(df_just_prefix)}'")
-    
-    # Example 6: Unknown format
-    df_unknown = pd.DataFrame(columns=['sample_idx', 'coord_x', 'coord_y'])
-    print(f"Format for df_unknown: '{detect_forecast_type(df_unknown)}'")
 

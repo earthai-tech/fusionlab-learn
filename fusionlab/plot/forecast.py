@@ -60,7 +60,7 @@ def plot_forecast_by_step(
     spatial_cols: Optional[Tuple[str, str]] = None,
     max_cols: Union[int, str] = "auto",
     cmap: str = "viridis",
-    cbar_type: str = "uniform",
+    cbar: str = "uniform",
     axis_off: bool = False,
     show_grid: bool = True,
     grid_props: Optional[Dict] = None,
@@ -112,7 +112,7 @@ def plot_forecast_by_step(
         being plotted for each prefix.
     cmap : str, default 'viridis'
         The Matplotlib colormap for spatial plots.
-    cbar_type : {'uniform', 'individual'}, default 'uniform'
+    cbar : {'uniform', 'individual'}, default 'uniform'
         Controls color bar scaling for spatial plots.
         - ``'uniform'``: All subplots share a single color scale.
         - ``'individual'``: Each subplot has its own color scale.
@@ -224,7 +224,7 @@ def plot_forecast_by_step(
         steps = columns_manager( steps, empty_as_none= False)
         steps = [validate_positive_integer(v, f"Step {v}") 
                  for v in steps ]
-        steps = sorted (is_in_if(
+        steps_to_plot = sorted (is_in_if(
             steps_to_plot, steps, 
             return_intersect= True,
             )
@@ -234,9 +234,9 @@ def plot_forecast_by_step(
         vlog("No forecast steps to plot.", level=0, verbose=verbose)
         return
 
-    # 2. Compute global color limits if cbar_type is 'uniform'.
+    # 2. Compute global color limits if cbar is 'uniform'.
     vmin, vmax = None, None
-    if cbar_type == "uniform":
+    if cbar == "uniform":
         cols_for_cbar = [
             f"{p}_{m}" for p in value_prefixes for m in metrics
             if f"{p}_{m}" in df.columns
@@ -335,7 +335,7 @@ def plot_forecast_by_step(
                 axes[r_idx][j].axis("off")
 
         # Add a single color-bar if using uniform scaling.
-        if cbar_type == "uniform" and vmin is not None and vmax is not None:
+        if cbar == "uniform" and vmin is not None and vmax is not None:
             fig.colorbar(
                 ScalarMappable(
                     norm=mcolors.Normalize(vmin=vmin, vmax=vmax),
@@ -374,7 +374,7 @@ def forecast_view_in(
     time_col='coord_t', 
     max_cols: Union[int, str] = 'auto',
     cmap: str = 'viridis',
-    cbar_type: str = 'uniform',
+    cbar: str = 'uniform',
     axis_off: bool = False,
     show_grid: bool = True,
     grid_props: Optional[Dict] = None,
@@ -439,7 +439,7 @@ def forecast_view_in(
     cmap : str, default 'viridis'
         The Matplotlib colormap to use for the scatter plots.
 
-    cbar_type : {'uniform', 'individual'}, default 'uniform'
+    cbar : {'uniform', 'individual'}, default 'uniform'
         Controls the color bar scaling:
         - ``'uniform'``: All subplots in a figure share a single,
           uniform color scale, determined by the global min/max of
@@ -587,7 +587,7 @@ def forecast_view_in(
     
     # Determine uniform color range if needed
     vmin, vmax = None, None
-    if cbar_type == 'uniform':
+    if cbar == 'uniform':
         all_plot_cols = []
         # Collect every column-reference that actually exists in df_wide
         def _collect_cols(node):
@@ -667,7 +667,7 @@ def forecast_view_in(
             for i in range(col_idx, n_cols_prefix):
                 ax_row[i].axis('off')
 
-        if cbar_type == 'uniform' and vmin is not None and vmax is not None:
+        if cbar == 'uniform' and vmin is not None and vmax is not None:
              fig.colorbar(
                 ScalarMappable(
                     norm=mcolors.Normalize(vmin=vmin, vmax=vmax), cmap=cmap),
@@ -703,7 +703,7 @@ def forecast_view(
     time_col: str = 'coord_t',
     max_cols: Union[int, str] = 'auto',
     cmap: str = 'viridis',
-    cbar_type: str = 'uniform',
+    cbar: str = 'uniform',
     axis_off: bool = False,
     show_grid: bool = True,
     grid_props: Optional[Dict] = None,
@@ -768,7 +768,7 @@ def forecast_view(
     cmap : str, default 'viridis'
         The Matplotlib colormap to use for the scatter plots.
 
-    cbar_type : {'uniform', 'individual'}, default 'uniform'
+    cbar : {'uniform', 'individual'}, default 'uniform'
         Controls the color bar scaling:
         - ``'uniform'``: All subplots in a figure share a single,
           uniform color scale, determined by the global min/max of
@@ -906,7 +906,7 @@ def forecast_view(
         return
 
     vmin, vmax = None, None
-    if cbar_type == 'uniform':
+    if cbar == 'uniform':
         all_plot_cols = [
             c for p in plot_structure.values()
             for y in p.values()
@@ -954,7 +954,7 @@ def forecast_view(
             quantiles_to_plot, prefix, kind, spatial_cols, plot_kwargs
         )
         
-        if cbar_type == 'uniform' and vmin is not None and vmax is not None:
+        if cbar == 'uniform' and vmin is not None and vmax is not None:
              fig.colorbar(
                 ScalarMappable(
                     norm=mcolors.Normalize(vmin=vmin, vmax=vmax), cmap=cmap),
