@@ -5,17 +5,17 @@ from typing import Tuple, List
 from ..._fusionlog import fusionlog 
 from ...api.docs import DocstringComponents, _pinn_tuner_common_params 
 from ...utils.generic_utils import ( 
-    vlog, rename_dict_keys, cast_multiple_bool_params  )
+    vlog, rename_dict_keys, cast_multiple_bool_params
+   )
 from ...core.handlers import _get_valid_kwargs 
 
 from .. import KERAS_BACKEND, KERAS_DEPS 
-
-from ._tuning import PINNTunerBase 
-from .models import PIHALNet 
-from .utils import  ( # noqa
+from ..pinn.models import PIHALNet 
+from ..pinn.utils import  ( # noqa
     prepare_pinn_data_sequences, 
     check_required_input_keys
 )
+from ._base_tuner import PINNTunerBase 
 import numpy as np 
 
 try:
