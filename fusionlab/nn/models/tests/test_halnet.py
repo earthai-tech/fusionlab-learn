@@ -46,6 +46,7 @@ def default_model_params() -> Dict[str, Any]:
         "num_heads": 2,
         "dropout_rate": 0.0,
         "vsn_units": 8,
+        "mode": 'tft_like', # use future_span (time_steps + forecast_hirizon)
     }
 
 @pytest.fixture
@@ -53,8 +54,13 @@ def dummy_input_data(default_model_params: Dict[str, Any]) -> Tuple[List[tf.Tens
     """Generates dummy input data for HALNet."""
     batch_size = 4
     time_steps = default_model_params["max_window_size"]
-    # Note: For HALNet, future input spans the full range needed by the model
-    future_span = default_model_params["forecast_horizon"]
+    
+    if default_model_params['mode'] =='pihal_like': 
+        future_span = default_model_params["forecast_horizon"]
+    else: 
+        # Note: For HALNet, future input spans the full range needed by the model
+        # in tft_like
+        future_span = time_steps + default_model_params["forecast_horizon"]
 
     static_features = tf.random.normal(
         (batch_size, default_model_params["static_input_dim"]))

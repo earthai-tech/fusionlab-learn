@@ -67,6 +67,7 @@ try:
     )
     from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
+    from fusionlab.nn.models.utils import plot_history_in 
     from fusionlab.nn.pinn.utils import format_pihalnet_predictions
     from fusionlab.plot.forecast import plot_forecasts, forecast_view 
     from fusionlab.utils.data_utils import nan_ops
@@ -627,6 +628,22 @@ history = pihal_model_inst.fit(
 )
 print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
+
+pihalnet_metrics = {
+    "Loss Components": ["total_loss", "data_loss", "physics_loss"],
+    "Subsidence MAE": ["subs_pred_mae"]
+}
+
+# PIHALNet data on separate subplots
+print("\n---PIHALNet History on Separate Subplots ---")
+plot_history_in(
+    history.history,
+    metrics=pihalnet_metrics,
+    layout='subplots',
+    title='PIHALNet Training History', 
+    savefig=os.path.join(
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_pihalnet_training_history_plot_"), 
+)
 # %
 # Load the best model saved by ModelCheckpoint
 print(f"\nLoading best model from checkpoint: {model_checkpoint_path}")

@@ -281,6 +281,7 @@ class KerasDependencies:
             'EarlyStopping': ('callbacks', 'EarlyStopping'),
             'ModelCheckpoint': ('callbacks', 'ModelCheckpoint'),
             'Callback': ('callbacks', 'Callback'), 
+            'History': ('callbacks', 'History'), 
             'TensorBoard': ('callbacks', 'TensorBoard'),
             'LearningRateScheduler': ('callbacks', 'LearningRateScheduler'),
             'ReduceLROnPlateau': ('callbacks', 'ReduceLROnPlateau'), 
