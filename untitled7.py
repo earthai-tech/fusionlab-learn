@@ -121,12 +121,21 @@ dataset = Dataset.from_tensor_slices((inputs, targets)).batch(batch_size)
 
 print("Running model.fit() on corrected toy data for 1 epoch…")
 # This should now run without shape errors
-model.fit(dataset, epochs=1)
+history = model.fit(dataset, epochs=50)
 
 print("\nModel training step completed successfully.")
+from fusionlab.nn.models.utils import plot_history_in 
 
-
-
+pihalnet_metrics = {
+    "Loss Components": ["total_loss", "data_loss", "physics_loss"],
+    "Subsidence MAE": ["subs_pred_mae", "gwl_pred_mae"]
+}
+plot_history_in(
+    history,
+    metrics=pihalnet_metrics,
+    layout='subplots',
+    title='PIHALNet Training History'
+)
 
 # import numpy as np
 # import tensorflow as tf
