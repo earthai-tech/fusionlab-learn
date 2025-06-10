@@ -44,6 +44,7 @@ def default_fixed_params() -> Dict[str, Any]:
         "num_heads": 2,
         "dropout_rate": 0.0,
         "vsn_units": 8,
+        "mode": 'tft_like'
     }
 
 def generate_dummy_data(

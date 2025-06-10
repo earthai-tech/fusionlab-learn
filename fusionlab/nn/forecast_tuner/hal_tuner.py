@@ -125,6 +125,11 @@ class HALTuner(PINNTunerBase):
         param_space: Optional[Dict[str, Any]] = None,
         objective: Union[str, kt.Objective] = 'val_loss',
         max_trials: int = 20,
+        directory: str = "hal_tuner_results",
+        executions_per_trial: int = 1,
+        tuner_type: str = 'randomsearch',
+        seed: Optional[int] = None,
+        overwrite_tuner: bool = True,
         project_name: str = "HALNet_Tuning",
         **tuner_kwargs
     ):
@@ -132,6 +137,11 @@ class HALTuner(PINNTunerBase):
             objective=objective,
             max_trials=max_trials,
             project_name=project_name,
+            directory = directory,
+            executions_per_trial= executions_per_trial,
+            tuner_type= tuner_type,
+            seed= seed,
+            overwrite_tuner= overwrite_tuner,
             **tuner_kwargs
         )
         self.fixed_model_params = fixed_model_params
@@ -157,7 +167,9 @@ class HALTuner(PINNTunerBase):
         Builds and compiles a HALNet model for a given trial.
         """
         verbose = self.tuner_kwargs.get('verbose', 1)
-        vlog(f"Building trial {hp.trial.trial_id}...", level=2,
+        # Try to retrieve the trial‑id if it exists
+        trial_id = getattr(getattr(hp, "trial", None), "trial_id", "manual")
+        vlog(f"Building trial {trial_id}...", level=2,
              verbose=verbose)
         
         # --- Sample Architectural Hyperparameters ---
@@ -169,7 +181,7 @@ class HALTuner(PINNTunerBase):
         )
         num_heads = self._get_hp_choice(hp, 'num_heads', [2, 4])
         dropout_rate = self._get_hp_float(
-            hp, 'dropout_rate', 0.0, 0.3, 0.1
+            hp, 'dropout_rate', 0.0, 0.3, step=0.1
         )
         use_vsn = self._get_hp_choice(hp, 'use_vsn', [True, False])
 
@@ -211,7 +223,7 @@ class HALTuner(PINNTunerBase):
             loss=loss,
             metrics=[MeanAbsoluteError()]
         )
-        vlog(f"Trial {hp.trial.trial_id} model built and compiled.",
+        vlog(f"Trial {trial_id} model built and compiled.",
              level=3, verbose=verbose)
         
         return model
@@ -222,7 +234,7 @@ class HALTuner(PINNTunerBase):
         inputs_data: List[np.ndarray],
         targets_data: np.ndarray,
         fixed_model_params: Optional[Dict[str, Any]] = None,
-        verbose: int =0, 
+        verbose: int =1, 
         **kwargs
     ) -> "HALTuner":
         """
@@ -287,4 +299,125 @@ class HALTuner(PINNTunerBase):
             validation_data=val_dataset,
             epochs=epochs,
             **search_kwargs
+        )
+
+    def _get_hp_choice(self, hp, name, default_choices, **kwargs):
+        return hp.Choice(
+            name,
+            self.param_space.get(name, default_choices),
+            **kwargs
+        )
+
+    def _parse_hp_config(
+        self,
+        hp,
+        name,
+        default_min,
+        default_max,
+        default_step_or_sampling,
+        hp_type
+    ):
+        """
+        Helper to interpret `param_space[name]` which may be:
+          - A list of explicit values (use hp.Choice).
+          - A dict with keys 'min_value', 'max_value', and for ints 'step', for
+            floats 'sampling'.
+          - None or other (fallback to defaults).
+        """
+        config = self.param_space.get(name, None)
+    
+        # If user provided a list of discrete values, use Choice
+        if isinstance(config, list):
+            return hp.Choice(name, config)
+    
+        # If user provided a dict with min/max settings
+        if isinstance(config, dict):
+            min_val = config.get('min_value', default_min)
+            max_val = config.get('max_value', default_max)
+    
+            if hp_type == 'int':
+                step_val = config.get('step', default_step_or_sampling)
+                return hp.Int(
+                    name,
+                    min_value=min_val,
+                    max_value=max_val,
+                    step=step_val
+                )
+            # hp_type == 'float'
+            sampling_val = config.get(
+                'sampling',
+                default_step_or_sampling
+            )
+            return hp.Float(
+                name,
+                min_value=min_val,
+                max_value=max_val,
+                sampling=sampling_val
+            )
+    
+        # Fallback: no config or unexpected type, use defaults
+        if hp_type == 'int':
+            return hp.Int(
+                name,
+                min_value=default_min,
+                max_value=default_max,
+                step=default_step_or_sampling
+            )
+        return hp.Float(
+            name,
+            min_value=default_min,
+            max_value=default_max,
+            sampling=default_step_or_sampling
+        )
+
+    
+    def _get_hp_int(
+            self,
+            hp,
+            name,
+            default_min,
+            default_max,
+            step=1,
+            **kwargs
+        ):
+        """
+        Retrieves or creates an integer hyperparameter.  The user may define in
+        `param_space[name]` either:
+          - A list of discrete integer values → uses hp.Choice
+          - A dict with 'min_value', 'max_value', 'step'
+          - None → fallback to default_min, default_max, step
+        """
+        return self._parse_hp_config(
+            hp,
+            name,
+            default_min,
+            default_max,
+            step,
+            hp_type='int'
+        )
+    
+    
+    def _get_hp_float(
+            self,
+            hp,
+            name,
+            default_min,
+            default_max,
+            default_sampling=None,
+            **kwargs
+        ):
+        """
+        Retrieves or creates a float hyperparameter.  The user may define in
+        `param_space[name]` either:
+          - A list of discrete float values → uses hp.Choice
+          - A dict with 'min_value', 'max_value', 'sampling'
+          - None → fallback to default_min, default_max, default_sampling
+        """
+        return self._parse_hp_config(
+            hp,
+            name,
+            default_min,
+            default_max,
+            default_sampling,
+            hp_type='float'
         )
