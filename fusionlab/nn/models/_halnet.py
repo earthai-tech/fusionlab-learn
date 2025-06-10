@@ -164,7 +164,7 @@ class HALNet(Model, NNLearner):
         "final_agg": [StrOptions({"last", "average",  "flatten"})],
         "mode": [
             StrOptions({'tft', 'pihal', 'tft_like', 'pihal_like'}), 
-            None # if None, behave like tft
+            None
             ]
     
     })
