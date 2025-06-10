@@ -280,7 +280,7 @@ into `data_loss` and `physics_loss`.
    :linenos:
 
    print("\nStarting model training for 3 epochs...")
-   history = model.fit(dataset, epochs=3, verbose=1)
+   history = model.fit(dataset, epochs=50, verbose=1)
    print("\nModel training finished.")
 
 
@@ -295,12 +295,150 @@ into `data_loss` and `physics_loss`.
    1/1 [==============================] - 0s 13ms/step - loss: 0.4192 - gwl_pred_loss: 0.2649 - subs_pred_loss: 0.2074 - gwl_pred_mae: 0.4738 - subs_pred_mae: 0.3993 - total_loss: 0.4267 - data_loss: 0.4192 - physics_loss: 0.0741
    Epoch 3/3
    1/1 [==============================] - 0s 13ms/step - loss: 0.3390 - gwl_pred_loss: 0.2192 - subs_pred_loss: 0.1636 - gwl_pred_mae: 0.4294 - subs_pred_mae: 0.3502 - total_loss: 0.3439 - data_loss: 0.3390 - physics_loss: 0.0491
+   ...
+   Epoch 50/50
+   1/1 [==============================] - 0s 14ms/step - loss: 0.1769 - gwl_pred_loss: 0.1212 - subs_pred_loss: 0.0800 - gwl_pred_mae: 0.2914 - subs_pred_mae: 0.2367 - total_loss: 0.1811 - data_loss: 0.1769 - physics_loss: 0.0422
 
    Model training finished.
 
+Step 6: Visualize Training History
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Use the ``plot_history_in`` utility to visualize the loss curves.
 
-Step 6: Make Predictions and Format for Visualization
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: python
+   :linenos:
+   
+   from fusionlab.nn.models.utils import plot_history_in 
+   print("\\nPlotting training history...")
+   
+   pihalnet_metrics = {
+       "Loss Components": ["total_loss", "data_loss", "physics_loss"],
+       "Subsidence MAE": ["subs_pred_mae", "gwl_pred_mae"]
+   }
+   plot_history_in(
+       history,
+       metrics=pihalnet_metrics,
+       layout='subplots',
+       title='PIHALNet Training History'
+
+
+**Example Output Plot:**
+
+.. figure:: ../images/pihalnet_history_plot.png
+   :alt: PIHALNet Training History Plot
+   :align: center
+   :width: 90%
+
+   An example plot showing the training and validation loss and Mean
+   Absolute Error (MAE) over epochs. This helps in diagnosing model
+   fit and convergence.
+
+
+In many cases you will want to monitor how well the network generalises
+while it trains.  
+Below we create a *second* PIHALNet instance (`model_val`), split the
+synthetic dataset into an 80 / 20 train‑validation split, run
+`model.fit` with the ``validation_data`` argument, and finally plot both
+training **and** validation curves.
+
+.. code-block:: python
+   :linenos:
+   
+
+   # 1. Prepare an explicit train / validation split
+   from tensorflow.data import AUTOTUNE
+
+   total_batches = int(
+       tf.data.experimental.cardinality(dataset).numpy()
+   )
+   if total_batches < 2:
+       # Not enough batches to split → fall back to 1 batch train + 1 batch val
+       warnings.warn(
+           "Dataset has a single batch; duplicating it for validation.",
+           RuntimeWarning,
+       )
+       train_ds = dataset
+       valid_ds = dataset.take(1).prefetch(AUTOTUNE)
+   else:
+       val_batches = max(1, int(0.2 * total_batches))          # 20 % → validation
+       train_ds = dataset.take(total_batches - val_batches)
+       valid_ds = dataset.skip(total_batches - val_batches).prefetch(AUTOTUNE)
+
+   # 2. Instantiate a new PIHALNet model (identical hyper‑params)
+   model_val = PIHALNet(**fixed_model_params, **architectural_params)
+
+   model_val.compile(
+       optimizer=Adam(learning_rate=1e-3, clipnorm=1.0),
+       loss={
+           "subs_pred": MeanSquaredError(name="subs_data_loss"),
+           "gwl_pred":  MeanSquaredError(name="gwl_data_loss"),
+       },
+       metrics={
+           "subs_pred": ["mae"],
+           "gwl_pred":  ["mae"],
+       },
+       loss_weights={"subs_pred": 1.0, "gwl_pred": 0.8},
+       lambda_pde=0.1,
+   )
+
+   # 3. Fit with validation_data; keep the History object
+   print("\nTraining model with validation monitoring...")
+   history_val = model_val.fit(
+       train_ds,
+       validation_data=valid_ds,
+       epochs=50,
+       verbose=1,
+   )
+   print("\nTraining finished.")
+
+   # 4. Plot both training and validation curves
+   from fusionlab.nn.models.utils import plot_history_in
+
+   print("\nPlotting training + validation history ...")
+
+   # Extend the metric groups to include their 'val_' counterparts
+   pihalnet_metrics_val = {
+       "Loss Components": [
+          "loss",  "total_loss", "data_loss", "physics_loss", 
+           "val_loss",'val_gwl_pred_loss', 'val_subs_pred_loss'
+       ],
+       "Subsidence MAE": [
+           "subs_pred_mae", "gwl_pred_mae",
+           "val_subs_pred_mae", "val_gwl_pred_mae",
+           ]
+   }
+
+   plot_history_in(
+       history_val,
+       metrics=pihalnet_metrics_val,
+       layout="subplots",
+       title="PIHALNet Train & Valid History",
+   )
+
+
+**Example Output Plot:**
+
+.. figure:: ../images/pihalnet_history_val_plot.png
+   :alt: PIHALNet Training History Plot
+   :align: center
+   :width: 90%
+
+   An example plot showing the training and validation loss and Mean
+   Absolute Error (MAE) over epochs.
+
+   
+**What you should see**
+
+* Left panel – total, data, and physics losses for both training
+  (solid) and validation (dashed) sets.
+* Right panel – MAE for subsidence and GWL; dashed curves represent
+  validation MAE.
+
+A widening gap between the solid and dashed curves would indicate
+over‑fitting; closely tracking curves suggest good generalisation.
+
+Step 7: Make Predictions and Format for Visualization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 After training, we use `model.predict()` and then structure the
 results into a long-format DataFrame suitable for `forecast_view`.
 

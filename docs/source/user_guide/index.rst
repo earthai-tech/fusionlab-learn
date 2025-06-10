@@ -26,6 +26,7 @@ Explore the sections below to learn how to effectively use
    :caption: Core Concepts & Models
 
    models
+   halnet
    pin_models
    components
    losses

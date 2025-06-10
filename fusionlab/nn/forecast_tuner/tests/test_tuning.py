@@ -9,7 +9,7 @@ try:
     import keras_tuner as kt # Renamed from kt to avoid conflict with local kt var
     
     from fusionlab.nn.pinn.models import PIHALNet
-    from fusionlab.nn.pinn.tuning import PIHALTuner, PINNTunerBase, DEFAULT_PIHALNET_FIXED_PARAMS
+    from fusionlab.nn.forecast_tuner.pihal_tuner import PIHALTuner, PINNTunerBase, DEFAULT_PIHALNET_FIXED_PARAMS
     from fusionlab.utils.generic_utils import rename_dict_keys
     from fusionlab.core.checks import exist_features
 

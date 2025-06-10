@@ -1,8 +1,8 @@
 .. _exercise_tft_required_inputs:
 
-=============================================================
+===============================================================
 Exercise: Forecasting with Stricter TFT (All Inputs Required)
-=============================================================
+===============================================================
 
 Welcome to this exercise on using the stricter version of the
 Temporal Fusion Transformer, :class:`~fusionlab.nn.transformers.TFT`,

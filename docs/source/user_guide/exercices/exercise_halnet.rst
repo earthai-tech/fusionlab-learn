@@ -136,12 +136,14 @@ features, which is the structure ``HALNet`` is designed for.
 
    Generated raw data shape: (297, 7)
    Sample of generated data:
-             Date  ItemID StaticCategory  DayOfWeek  FutureEvent      Value  ValueLag1
-   0 2022-01-02  item_0     Category_A          6            1  31.522621  29.988183
-   1 2022-01-03  item_0     Category_A          0            0  38.718818  31.522621
-   2 2022-01-04  item_0     Category_A          1            0  41.528994  38.718818
-   3 2022-01-05  item_0     Category_A          2            0  43.684139  41.528994
-   4 2022-01-06  item_0     Category_A          3            0  42.595982  43.684139
+           Date  ItemID StaticCategory  ...  FutureEvent      Value  ValueLag1
+   0 2022-01-02  item_0     Category_A  ...            1  31.408924  31.490142
+   1 2022-01-03  item_0     Category_A  ...            0  35.561494  31.408924
+   2 2022-01-04  item_0     Category_A  ...            0  39.924808  35.561494
+   3 2022-01-05  item_0     Category_A  ...            0  36.305882  39.924808
+   4 2022-01-06  item_0     Category_A  ...            0  37.848368  36.305882
+
+   [5 rows x 7 columns]
 
 Step 3: Define Features and Preprocess Data
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -241,7 +243,8 @@ derived from our prepared data, compile it, and train for a few epochs.
 
 .. code-block:: python
    :linenos:
-
+   
+   OUTPUT_DIM =1
    # Split data into training and validation sets
    train_inputs = [arr[:-20] for arr in [static_data, dynamic_data, future_data]]
    val_inputs = [arr[-20:] for arr in [static_data, dynamic_data, future_data]]
@@ -273,7 +276,7 @@ derived from our prepared data, compile it, and train for a few epochs.
        train_inputs,
        train_targets,
        validation_data=(val_inputs, val_targets),
-       epochs=10,
+       epochs=50,
        batch_size=32,
        verbose=1
    )
@@ -290,12 +293,39 @@ derived from our prepared data, compile it, and train for a few epochs.
    Epoch 2/10
    7/7 [==============================] - 0s 19ms/step - loss: 0.3957 - val_loss: 0.5841
    ...
-   Epoch 10/10
-   7/7 [==============================] - 0s 19ms/step - loss: 0.1706 - val_loss: 0.2818
+   Epoch 50/50
+   7/7 [==============================] - 0s 14ms/step - loss: 0.1322 - val_loss: 0.4004
    Training complete.
 
+Step 6: Visualize Training History
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Use the ``plot_history_in`` utility to visualize the loss curves.
 
-Step 6: Visualize the Forecast
+.. code-block:: python
+   :linenos:
+   
+   from fusionlab.nn.models.utils import plot_history_in 
+   
+   print("\\nPlotting training history...")
+   plot_history_in(
+       history,
+       metrics={"Loss": ["loss"]},
+       layout='single',
+       title="HALNet Training and Validation History"
+   )
+
+
+**Example Output Plot:**
+
+.. figure:: ../../images/halnet_exercice_history_plot.png
+   :alt: HALNet Training History Plot
+   :align: center
+   :width: 90%
+
+   An example plot showing the training and validation loss over epochs. 
+   
+
+Step 7: Visualize the Forecast
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Finally, we make predictions on the validation set and plot the
 results against the actual values for a single item.

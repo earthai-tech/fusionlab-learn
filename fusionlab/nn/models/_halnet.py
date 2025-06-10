@@ -19,48 +19,21 @@ from ...compat.sklearn import validate_params, Interval, StrOptions
 from ...core.handlers import param_deprecated_message 
 from ...utils.deps_utils import ensure_pkg
 
-
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from .utils import select_mode 
 
 if KERAS_BACKEND:
-    LSTM = KERAS_DEPS.LSTM
     Dense = KERAS_DEPS.Dense
-    Flatten = KERAS_DEPS.Flatten
-    Dropout = KERAS_DEPS.Dropout 
-    Layer = KERAS_DEPS.Layer 
     LayerNormalization = KERAS_DEPS.LayerNormalization 
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
     Model= KERAS_DEPS.Model 
-    Input=KERAS_DEPS.Input
-    Concatenate=KERAS_DEPS.Concatenate 
     Tensor=KERAS_DEPS.Tensor
     Add = KERAS_DEPS.Add 
-    Constant =KERAS_DEPS.Constant
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     
-    tf_reduce_sum = KERAS_DEPS.reduce_sum
-    tf_stack = KERAS_DEPS.stack
     tf_expand_dims = KERAS_DEPS.expand_dims
     tf_tile = KERAS_DEPS.tile
-    tf_range_=KERAS_DEPS.range 
     tf_concat = KERAS_DEPS.concat
     tf_shape = KERAS_DEPS.shape
-    tf_reshape=KERAS_DEPS.reshape
-    tf_add = KERAS_DEPS.add
-    tf_maximum = KERAS_DEPS.maximum
-    tf_reduce_mean = KERAS_DEPS.reduce_mean
-    tf_add_n = KERAS_DEPS.add_n
-    tf_float32=KERAS_DEPS.float32
-    tf_constant=KERAS_DEPS.constant 
-    tf_square=KERAS_DEPS.square 
-    tf_GradientTape=KERAS_DEPS.GradientTape
-    tf_unstack =KERAS_DEPS.unstack
-    tf_errors=KERAS_DEPS.errors 
-    tf_is_nan =KERAS_DEPS.is_nan 
-    tf_reduce_all=KERAS_DEPS.reduce_all
-    tf_zeros_like=KERAS_DEPS.zeros_like
-    tf_squeeze = KERAS_DEPS.squeeze
     tf_zeros =KERAS_DEPS.zeros
     tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
     tf_assert_equal=KERAS_DEPS.assert_equal
@@ -69,30 +42,29 @@ if KERAS_BACKEND:
     tf_autograph.set_verbosity(0)
     
     from .._tensor_validation import validate_model_inputs
-
     from ..utils import set_default_params
     from ..components import (
-            Activation, 
-            CrossAttention,
-            DynamicTimeWindow,
-            GatedResidualNetwork,
-            HierarchicalAttention,
-            MemoryAugmentedAttention,
-            MultiDecoder,
-            MultiResolutionAttentionFusion,
-            MultiScaleLSTM,
-            QuantileDistributionModeling,
-            VariableSelectionNetwork,
-            PositionalEncoding, 
-            aggregate_multiscale_on_3d, 
-            aggregate_time_window_output
-        )
+        Activation, 
+        CrossAttention,
+        DynamicTimeWindow,
+        GatedResidualNetwork,
+        HierarchicalAttention,
+        MemoryAugmentedAttention,
+        MultiDecoder,
+        MultiResolutionAttentionFusion,
+        MultiScaleLSTM,
+        QuantileDistributionModeling,
+        VariableSelectionNetwork,
+        PositionalEncoding, 
+        aggregate_multiscale_on_3d, 
+        aggregate_time_window_output
+    )
     
 else:
-    # Define fallback types for type hinting if Keras is not available
+    # Define fallback types for type
+    # hinting if Keras is not available
     Tensor = Any
     Model = object
-    Layer = object
 
 DEP_MSG = dependency_message('nn._halnet')
 
@@ -164,7 +136,7 @@ class HALNet(Model, NNLearner):
         "final_agg": [StrOptions({"last", "average",  "flatten"})],
         "mode": [
             StrOptions({'tft', 'pihal', 'tft_like', 'pihal_like'}), 
-            None # if None, behave like tft
+            None
             ]
     
     })
@@ -222,12 +194,36 @@ class HALNet(Model, NNLearner):
         )
         self.mode= select_mode(mode, default='tft_like')
         
-        self.multi_scale_agg_mode = multi_scale_agg
+        self.multi_scale_agg = multi_scale_agg
         
         self._build_halnet_layers()
-
+    
     def _build_halnet_layers(self):
-        """Instantiates all layers for the HALNet architecture."""
+        r"""
+        Instantiate and attach **all** Keras layers required by the
+        HALNet architecture.
+    
+        The method is called **once** inside ``__init__`` so that every
+        layer lives in a known scope, avoiding repeated graph
+        compilations when the model is traced by
+        :pyfunc:`tf.function`.
+    
+        Notes
+        -----
+        * Layer creation switches on the attributes set in the
+          constructor, notably ``use_vsn`` and ``use_residuals``.
+        * When ``use_vsn`` is *False* the code falls back to simple
+          dense layers for static, dynamic, and future covariates.
+        * Residual connections use ``Add`` + ``LayerNormalization`` in
+          the same spirit as the Temporal Fusion Transformer.
+    
+        See Also
+        --------
+        fusionlab.nn.layers.VariableSelectionNetwork
+        fusionlab.nn.layers.GatedResidualNetwork
+        fusionlab.nn.layers.MultiScaleLSTM
+        fusionlab.nn.layers.HierarchicalAttention
+        """
         # This is where all Keras layers are created to avoid issues
         # with tf.function recompilation.
         if self.use_vsn:
@@ -235,32 +231,46 @@ class HALNet(Model, NNLearner):
                 self.static_vsn = VariableSelectionNetwork(
                     num_inputs=self.static_input_dim,
                     units=self.vsn_units,
-                    dropout_rate=self.dropout_rate, name="static_vsn")
+                    dropout_rate=self.dropout_rate,
+                    name="static_vsn",
+                )
                 self.static_vsn_grn = GatedResidualNetwork(
                     units=self.hidden_units,
-                    dropout_rate=self.dropout_rate, name="static_vsn_grn")
+                    dropout_rate=self.dropout_rate,
+                    name="static_vsn_grn",
+                )
             else:
                 self.static_vsn, self.static_vsn_grn = None, None
-
+    
             if self.dynamic_input_dim > 0:
                 self.dynamic_vsn = VariableSelectionNetwork(
                     num_inputs=self.dynamic_input_dim,
-                    units=self.vsn_units, use_time_distributed=True,
-                    dropout_rate=self.dropout_rate, name="dynamic_vsn")
+                    units=self.vsn_units,
+                    use_time_distributed=True,
+                    dropout_rate=self.dropout_rate,
+                    name="dynamic_vsn",
+                )
                 self.dynamic_vsn_grn = GatedResidualNetwork(
                     units=self.embed_dim,
-                    dropout_rate=self.dropout_rate, name="dynamic_vsn_grn")
+                    dropout_rate=self.dropout_rate,
+                    name="dynamic_vsn_grn",
+                )
             else:
                 self.dynamic_vsn, self.dynamic_vsn_grn = None, None
-
+    
             if self.future_input_dim > 0:
                 self.future_vsn = VariableSelectionNetwork(
                     num_inputs=self.future_input_dim,
-                    units=self.vsn_units, use_time_distributed=True,
-                    dropout_rate=self.dropout_rate, name="future_vsn")
+                    units=self.vsn_units,
+                    use_time_distributed=True,
+                    dropout_rate=self.dropout_rate,
+                    name="future_vsn",
+                )
                 self.future_vsn_grn = GatedResidualNetwork(
                     units=self.embed_dim,
-                    dropout_rate=self.dropout_rate, name="future_vsn_grn")
+                    dropout_rate=self.dropout_rate,
+                    name="future_vsn_grn",
+                )
             else:
                 self.future_vsn, self.future_vsn_grn = None, None
         else:
@@ -268,33 +278,38 @@ class HALNet(Model, NNLearner):
             self.static_vsn, self.static_vsn_grn = None, None
             self.dynamic_vsn, self.dynamic_vsn_grn = None, None
             self.future_vsn, self.future_vsn_grn = None, None
-
+    
         # A GRN for processing attention outputs.
         self.attention_processing_grn = GatedResidualNetwork(
             units=self.attention_units,
             dropout_rate=self.dropout_rate,
             activation=self.activation_fn_str,
-            name="attention_processing_grn")
-            
+            name="attention_processing_grn",
+        )
+    
         # A projection layer for the decoder input.
         self.decoder_input_projection = Dense(
             self.attention_units,
             activation=self.activation_fn_str,
-            name="decoder_input_projection")
-
+            name="decoder_input_projection",
+        )
+    
         if not self.use_vsn:
             # Create dense layers for non-VSN path.
             if self.static_input_dim > 0:
                 self.static_dense = Dense(
-                    self.hidden_units, activation=self.activation_fn_str)
+                    self.hidden_units,
+                    activation=self.activation_fn_str,
+                )
                 self.grn_static_non_vsn = GatedResidualNetwork(
                     units=self.hidden_units,
                     dropout_rate=self.dropout_rate,
                     activation=self.activation_fn_str,
-                    name="grn_static_non_vsn")
+                    name="grn_static_non_vsn",
+                )
             else:
                 self.static_dense, self.grn_static_non_vsn = None, None
-                
+    
             # Create dense layers for dynamic and future features
             # for non-VSN path
             self.dynamic_dense = Dense(self.embed_dim)
@@ -302,233 +317,244 @@ class HALNet(Model, NNLearner):
         else:
             self.static_dense, self.grn_static_non_vsn = None, None
             self.dynamic_dense, self.future_dense = None, None
-            
+    
         # --- Core Architectural Layers (Always Created) ---
         self.positional_encoding = PositionalEncoding()
         self.multi_scale_lstm = MultiScaleLSTM(
-            lstm_units=self.lstm_units, scales=self.scales,
-            return_sequences=True)
+            lstm_units=self.lstm_units,
+            scales=self.scales,
+            return_sequences=True,
+        )
         self.cross_attention = CrossAttention(
-            units=self.attention_units, num_heads=self.num_heads)
+            units=self.attention_units,
+            num_heads=self.num_heads,
+        )
         self.hierarchical_attention = HierarchicalAttention(
-            units=self.attention_units, num_heads=self.num_heads)
+            units=self.attention_units,
+            num_heads=self.num_heads,
+        )
         self.memory_augmented_attention = MemoryAugmentedAttention(
             units=self.attention_units,
-            memory_size=self.memory_size, num_heads=self.num_heads)
-        self.multi_resolution_attention_fusion = \
+            memory_size=self.memory_size,
+            num_heads=self.num_heads,
+        )
+        self.multi_resolution_attention_fusion = (
             MultiResolutionAttentionFusion(
-                units=self.attention_units, num_heads=self.num_heads)
-        
+                units=self.attention_units,
+                num_heads=self.num_heads,
+            )
+        )
+    
         self.dynamic_time_window = DynamicTimeWindow(
             max_window_size=self.max_window_size
         )
-        
+    
         # Final output layers
         self.multi_decoder = MultiDecoder(
             output_dim=self.output_dim,
-            num_horizons=self.forecast_horizon)
-        self.quantile_distribution_modeling = QuantileDistributionModeling(
-            quantiles=self.quantiles, output_dim=self.output_dim)
-
+            num_horizons=self.forecast_horizon,
+        )
+        self.quantile_distribution_modeling = (
+            QuantileDistributionModeling(
+                quantiles=self.quantiles,
+                output_dim=self.output_dim,
+            )
+        )
+    
         # --- Layers for Residual Connections ---
         if self.use_residuals:
             self.decoder_add_norm = [Add(), LayerNormalization()]
             self.final_add_norm = [Add(), LayerNormalization()]
             self.residual_dense = Dense(self.attention_units)
         else:
-            self.decoder_add_norm, self.final_add_norm, self.residual_dense = \
-                None, None, None
-                
-    def run_halnet_core_(
+            (
+                self.decoder_add_norm,
+                self.final_add_norm,
+                self.residual_dense,
+            ) = (None, None, None)
+
+    def run_halnet_core(
         self,
-        static_input:Tensor,
-        dynamic_input: Tensor,
-        future_input: Tensor,
-        training: bool
-    ) -> Tensor:
-        """Executes data-driven pipeline using an encoder-decoder.
+        static_input,
+        dynamic_input,
+        future_input,
+        training,
+    ):
+        r"""
+        Execute the data‑driven **encoder–decoder** backbone of HALNet.
 
-        This revised method correctly separates the processing of past
-        (dynamic) and future inputs to handle cases where `time_steps`
-        and `forecast_horizon` are different.
+        The routine handles three covariate blocks—static,
+        past‑dynamic, and known‑future—then applies multi‑scale LSTM
+        encoding, several attention modules, and an optional residual
+        fusion before returning a single representation per
+        sample–horizon pair.
 
-        Args:
-            static_input: Processed static features.
-            dynamic_input: Processed dynamic historical features.
-                           Shape: (batch, time_steps, features).
-            future_input: Processed known future features.
-                          Shape: (batch, forecast_horizon, features).
-            training: Python boolean indicating training mode.
+        The behaviour of *future_input* depends on
+        :pyattr:`self.mode`:
 
-        Returns:
-            A feature tensor for the forecast horizon, ready for the
-            MultiDecoder. Shape is determined by `self.final_agg`.
+        ``'tft_like'``
+            ``future_input.shape[1]`` must equal
+            :math:`T_\text{past} + H`.  The first
+            :math:`T_\text{past}` rows join the encoder; the last
+            :math:`H` rows feed the decoder, mirroring the original
+            Temporal Fusion Transformer.
+        ``'pihal_like'``
+            ``future_input.shape[1]`` must equal
+            :math:`H`.  Future covariates are used only in the decoder
+            (PIHALNet style).
+
+        Parameters
+        ----------
+        static_input : Tensor
+            Batch of time‑invariant features,
+            ``(B, static_input_dim)``.
+        dynamic_input : Tensor
+            Historical covariates,
+            ``(B, T_past, dynamic_input_dim)``.
+        future_input : Tensor
+            Known future covariates whose temporal span is dictated
+            by *mode* (see above).
+        training : bool
+            Keras training flag passed to all dropout‑bearing layers.
+
+        Returns
+        -------
+        Tensor
+            Collapsed decoder context,
+            ``(B, forecast_horizon, attention_units)`` if
+            ``self.final_agg is None`` or
+            ``(B, attention_units)`` when an aggregator such as
+            ``'mean'`` is selected.
+
+        Notes
+        -----
+        * Variable Selection Networks (VSNs) are applied only when
+          :pyattr:`self.use_vsn` is *True*.
+        * Residual connections and their normalisations are created
+          when :pyattr:`self.use_residuals` is *True*.
+        * The final call to
+          :pyfunc:`fusionlab.ops.aggregate_time_window_output`
+          collapses or pools along the horizon dimension according to
+          :pyattr:`self.final_agg`.
+
+        See Also
+        --------
+        fusionlab.layers.VariableSelectionNetwork
+        fusionlab.layers.MultiScaleLSTM
+        fusionlab.layers.CrossAttention
         """
-        # Get the length of the historical time window
-        #ctime_steps = tf_shape(dynamic_input)[1]
+        # Executes data-driven pipeline using an encoder-decoder.
+        # Get the lookback window size from the dynamic input tensor.
+        time_steps = tf_shape(dynamic_input)[1]
 
-        # --- 1. Initial Feature Processing ---
-        # Process static inputs first.
-        static_context = None
-        if self.use_vsn and self.static_vsn is not None:
-            static_out = self.static_vsn(static_input, training=training)
-            static_context = self.static_vsn_grn(
-                static_out, training=training
-            )
-        elif self.static_dense is not None:
-            static_out = self.static_dense(static_input)
-            static_context = self.grn_static_non_vsn(
-                static_out, training=training
-            )
+        # 1. Initial Feature Processing & Slicing based on mode
+        static_context, dyn_proc, fut_enc_proc, fut_dec_proc = (
+            None, dynamic_input, None, future_input,
+        )
+        if self.use_vsn:
+            if self.static_vsn:
+                static_context = self.static_vsn_grn(
+                    self.static_vsn(static_input, training=training),
+                    training=training,
+                )
+            if self.dynamic_vsn:
+                dyn_proc = self.dynamic_vsn_grn(
+                    self.dynamic_vsn(dynamic_input, training=training),
+                    training=training,
+                )
+            if self.future_vsn:
+                # Process the entire future tensor first
+                future_processed = self.future_vsn_grn(
+                    self.future_vsn(future_input, training=training),
+                    training=training,
+                )
+        else:  # Non‑VSN path
+            if self.static_dense:
+                static_context = self.grn_static_non_vsn(
+                    self.static_dense(static_input), training=training
+                )
+            dyn_proc = self.dynamic_dense(dynamic_input)
+            future_processed = self.future_dense(future_input)
 
         logger.debug(
-            f"Static context shape: {getattr(static_context, 'shape', 'None')}"
+            "Static context shape: %s",
+            getattr(static_context, "shape", "N/A"),
         )
 
-        # --- 2. Encoder Path (Processes Past Data) ---
-        # The encoder uses `dynamic_input` and the historical part of
-        # `future_input`.
-        
-        if self.mode =='tft_like': 
-            # In models like TFT, "future" inputs are known for both the past
-            # and future. We slice the part corresponding to the encoder's timeline.
-            # This assumes `future_input` has length `time_steps + forecast_horizon`.
-            # If it only has length `forecast_horizon`, this logic needs adjustment.
-            # Let's assume for now `future_input` is just for the decoder.
-            # The encoder will only use `dynamic_input`.
-            future_for_encoder = None
-            time_steps = tf_shape(dynamic_input)[1]
-            # For TFT-style, slice the historical part of future inputs
-            future_for_encoder = future_input[:, :time_steps, :]
-        
-            dyn_proc = self.dynamic_dense(
-                dynamic_input) if not self.use_vsn else self.dynamic_vsn_grn(
-                    self.dynamic_vsn(dynamic_input))
-            
-            encoder_input_parts = [dyn_proc]
-            if future_for_encoder is not None:
-                fut_enc_proc = self.future_dense(
-                    future_for_encoder) if not self.use_vsn else self.future_vsn_grn(
-                        self.future_vsn(future_for_encoder))
-                        
-                encoder_input_parts.append(fut_enc_proc)
-                
-            encoder_inputs = tf_concat(encoder_input_parts, axis=-1)
-        
-            fut_proc = None
-            if self.future_input_dim > 0:
-                # For TFT-style, slice the forecast part of future inputs
-                fut_proc = future_input[:, time_steps:, :]
-            else:
-                # For standard encoder-decoder, 
-                # the entire future_input is for the decoder
-                fut_proc = future_input
-        else: 
-            
-            dyn_proc = dynamic_input
-            if self.use_vsn and self.dynamic_vsn is not None:
-                dyn_proc = self.dynamic_vsn_grn(self.dynamic_vsn(
-                    dynamic_input, training=training), training=training)
-          
-            fut_proc = future_input
-            # Process future features for the decoder.
-            if self.use_vsn and self.future_vsn is not None:
-                fut_proc = self.future_vsn_grn(self.future_vsn(
-                    future_input, training=training), training=training)
-                
-            encoder_inputs = dyn_proc # Self encoder-decoder architecture. 
-           
-        logger.debug(f"Shape after VSN/initial processing: "
-                     f"Dynamic={getattr(dyn_proc, 'shape', 'N/A')}, "
-                     f"Future={getattr(fut_proc, 'shape', 'N/A')}")
-        
+        # Handle TFT‑like input slicing
+        if self.mode == "tft_like":
+            fut_enc_proc = future_processed[:, :time_steps, :]
+            fut_dec_proc = future_processed[:, time_steps:, :]
+        else:  # For pihal_like, encoder does not use future inputs
+            fut_enc_proc = None
+            fut_dec_proc = future_processed
+
+        # 2. Encoder Path (Processes Past Data)
+        encoder_input_parts = [dyn_proc]
+        if fut_enc_proc is not None:
+            encoder_input_parts.append(fut_enc_proc)
+        encoder_raw = tf_concat(encoder_input_parts, axis=-1)
         encoder_input = self.positional_encoding(
-            encoder_inputs, training=training
-            )
-        
-        lstm_out = self.multi_scale_lstm(
-            encoder_input, training=training
+            encoder_raw, training=training
         )
-        # `aggregate_multiscale` with 'concat' now correctly returns a 3D tensor
-        # by padding and concatenating features.
+        lstm_out = self.multi_scale_lstm(encoder_input, training=training)
         encoder_sequences = aggregate_multiscale_on_3d(
-            lstm_out, mode='concat'
+            lstm_out, mode="concat"
         )
-        
-        if self.dynamic_time_window is not None:
-            encoder_sequences = self.dynamic_time_window(
-                encoder_sequences, training=training)
-            
-        logger.debug(
-            f"Encoder output sequence shape: {encoder_sequences.shape}"
-        )
-        # --- 3. Decoder Path (Prepares Context for Forecasting) ---
-        # The decoder uses `static_context` and `future_input` over the
-        # `forecast_horizon`.
-        # Combine static context with future features for the decoder.
-        static_expanded =None 
+
+        # 3. Decoder Path (Prepares Context for Forecasting)
+        static_expanded = None
         if static_context is not None:
             static_expanded = tf_expand_dims(static_context, 1)
             static_expanded = tf_tile(
                 static_expanded, [1, self.forecast_horizon, 1]
             )
-            
         future_with_pos = self.positional_encoding(
-            fut_proc, training=training
+            fut_dec_proc, training=training
         )
-        
-        decoder_parts = []
-        if static_expanded is not None :
+
+        decoder_parts = [future_with_pos]
+        if static_expanded is not None:
             decoder_parts.append(static_expanded)
-        if self.future_input_dim > 0: 
-            decoder_parts.append(future_with_pos)
-            
-        if not decoder_parts: 
-            batch_size = tf_shape(dynamic_input)[0]
-            raw_decoder_input = tf_zeros(
-                (batch_size, self.forecast_horizon, self.attention_units))
-        else: 
-            raw_decoder_input = tf_concat(decoder_parts, axis=-1)
-            
-        # Project decoder input to the right dimension for attention.
+        raw_decoder_input = tf_concat(decoder_parts, axis=-1)
         projected_decoder_input = self.decoder_input_projection(
             raw_decoder_input
         )
-        
+
         logger.debug(
-            f"Projected decoder input shape: {projected_decoder_input.shape}"
+            "Projected decoder input shape: %s",
+            projected_decoder_input.shape,
         )
 
-        # --- 4. Attention-based Fusion ---
-        # The decoder context (query) attends to the encoder sequences (key/value).
+        # 4. Attention Fusion
         cross_att_out = self.cross_attention(
-            [projected_decoder_input, encoder_sequences], 
-            training=training
+            [projected_decoder_input, encoder_sequences],
+            training=training,
         )
-        
         att_proc = self.attention_processing_grn(
             cross_att_out, training=training
         )
-        # Process attention output and add residual connection.
+
         if self.use_residuals and self.decoder_add_norm:
             context_att = self.decoder_add_norm[0](
                 [projected_decoder_input, att_proc]
             )
             context_att = self.decoder_add_norm[1](context_att)
         else:
-            context_att = cross_att_out
-            
+            context_att = att_proc
+
+        # 5. Final Processing
         # Apply further attention layers to refine the context.
         hier_att_out = self.hierarchical_attention(
-            [context_att, context_att], training=training # Self-attention
+            [context_att, context_att],  # Self‑attention
+            training=training,
         )
         mem_att_out = self.memory_augmented_attention(
             hier_att_out, training=training
         )
-        
-        # --- 5. Final Combination and Aggregation ---
+
         final_features = self.multi_resolution_attention_fusion(
-            mem_att_out, training=training
+            mem_att_out
         )
 
         if self.use_residuals and self.final_add_norm:
@@ -537,140 +563,96 @@ class HALNet(Model, NNLearner):
                 [final_features, res_base]
             )
             final_features = self.final_add_norm[1](final_features)
-        
+
         logger.debug(
-            f"Shape after final fusion: {final_features.shape}"
+            "Shape after final fusion: %s", final_features.shape
         )
 
-        # Collapse the time dimension to get a single vector for the decoder.
-        return aggregate_time_window_output(final_features, self.final_agg)
-
-
+        return aggregate_time_window_output(
+            final_features, self.final_agg
+        )
     
-    def call_(self, inputs: List[Optional[Tensor]], training: bool = False) -> Tensor:
-        """Forward pass for the HALNet model."""
-        static_p, dynamic_p, future_p = validate_model_inputs(
-            inputs=inputs, static_input_dim=self.static_input_dim,
-            dynamic_input_dim=self.dynamic_input_dim,
-            future_covariate_dim=self.future_input_dim,
-            mode='strict', 
-            model_name='xtft' # Re-use strict validation
-        )
-        
-        final_features = self.run_halnet_core(
-            static_p, dynamic_p, future_p, training=training)
-        
-        decoded_outputs = self.multi_decoder(final_features, training=training)
-        
-        if self.quantiles is not None:
-            return self.quantile_distribution_modeling(decoded_outputs)
-        
-        return decoded_outputs
-    
-    def run_halnet_core(self, static_input, dynamic_input, future_input, training):
-        """Executes data-driven pipeline using an encoder-decoder."""
-        time_steps = tf_shape(dynamic_input)[1]
-
-        # 1. Initial Feature Processing & Slicing based on mode
-        static_context, dyn_proc, fut_enc_proc, fut_dec_proc = (
-            None, dynamic_input, None, future_input
-        )
-        if self.use_vsn:
-            if self.static_vsn:
-                static_context = self.static_vsn_grn(self.static_vsn(
-                    static_input, training=training), training=training)
-            if self.dynamic_vsn:
-                dyn_proc = self.dynamic_vsn_grn(self.dynamic_vsn(
-                    dynamic_input, training=training), training=training)
-            if self.future_vsn:
-                # Process the entire future tensor first
-                future_processed = self.future_vsn_grn(self.future_vsn(
-                    future_input, training=training), training=training)
-        else: # Non-VSN path
-            if self.static_dense:
-                static_context = self.grn_static_non_vsn(self.static_dense(
-                    static_input), training=training)
-            dyn_proc = self.dynamic_dense(dynamic_input)
-            future_processed = self.future_dense(future_input)
-
-        # Handle TFT-like input slicing
-        if self.mode == 'tft_like':
-            fut_enc_proc = future_processed[:, :time_steps, :]
-            fut_dec_proc = future_processed[:, time_steps:, :]
-        else: # For pihal_like, encoder does not use future inputs
-            fut_enc_proc = None
-            fut_dec_proc = future_processed
-            
-        # 2. Encoder Path
-        encoder_input_parts = [dyn_proc]
-        if fut_enc_proc is not None:
-            encoder_input_parts.append(fut_enc_proc)
-        encoder_raw = tf_concat(encoder_input_parts, axis=-1)
-        encoder_input = self.positional_encoding(encoder_raw, training=training)
-        lstm_out = self.multi_scale_lstm(encoder_input, training=training)
-        encoder_sequences = aggregate_multiscale_on_3d(lstm_out, mode='concat')
-        
-        # 3. Decoder Path
-        static_expanded = None
-        if static_context is not None:
-            static_expanded = tf_expand_dims(static_context, 1)
-            static_expanded = tf_tile(
-                static_expanded, [1, self.forecast_horizon, 1])
-        future_with_pos = self.positional_encoding(fut_dec_proc, training=training)
-        
-        decoder_parts = [future_with_pos]
-        if static_expanded is not None:
-            decoder_parts.append(static_expanded)
-        raw_decoder_input = tf_concat(decoder_parts, axis=-1)
-        projected_decoder_input = self.decoder_input_projection(raw_decoder_input)
-
-        # 4. Attention Fusion
-        cross_att_out = self.cross_attention(
-            [projected_decoder_input, encoder_sequences], training=training)
-        att_proc = self.attention_processing_grn(cross_att_out, training=training)
-        
-        if self.use_residuals and self.decoder_add_norm:
-            context_att = self.decoder_add_norm[0]([projected_decoder_input, att_proc])
-            context_att = self.decoder_add_norm[1](context_att)
-        else:
-            context_att = att_proc
-            
-        # 5. Final Processing
-        # Apply further attention layers to refine the context.
-        hier_att_out = self.hierarchical_attention(
-            [context_att, context_att], training=training # Self-attention
-        )
-        mem_att_out = self.memory_augmented_attention(
-            hier_att_out, training=training
-        )
-        
-        final_features = self.multi_resolution_attention_fusion(mem_att_out)
-        
-        if self.use_residuals and self.final_add_norm:
-            res_base = self.residual_dense(context_att)
-            final_features = self.final_add_norm[0]([final_features, res_base])
-            final_features = self.final_add_norm[1](final_features)
-        
-        return aggregate_time_window_output(final_features, self.final_agg)
-
     def call(
-            self, inputs: List[Optional[Tensor]], training: bool = False) -> Tensor:
-        """Forward pass for the HALNet model."""
-        # Adjust validation based on mode
+        self, inputs: List[Optional[Tensor]], training: bool = False
+    ) -> Tensor:
+        r"""
+        Forward pass of **HALNet** that produces point or quantile
+        forecasts.
+
+        The method
+
+        1.  Validates and casts the ``static``, ``dynamic`` and
+            ``future`` input blocks via
+            :pyfunc:`validate_model_inputs`.
+        2.  Verifies that the temporal length of *future_input* matches
+            the requirement imposed by :pyattr:`self.mode`
+            (``'tft_like'`` or ``'pihal_like'``) using the
+            graph‑compatible
+            :pyfunc:`tf.debugging.assert_equal`.
+        3.  Extracts high‑level features with
+            :pyfunc:`run_halnet_core`.
+        4.  Decodes those features into either a deterministic forecast
+            or a full quantile distribution.
+
+        Parameters
+        ----------
+        inputs : list[Tensor | None]
+            Ordered list ``[static, dynamic, future]`` that originates
+            from :pyfunc:`process_pinn_inputs`.
+        training : bool, default=False
+            Keras training flag propagated to every dropout‑bearing
+            layer.
+
+        Returns
+        -------
+        Tensor
+            * If :pyattr:`self.quantiles` is *None*:  
+              ``(B, H, output_dim)`` – mean forecast.
+            * Otherwise:  
+              ``(B, H, Q, output_dim)`` – stacked quantile forecasts.
+
+        Raises
+        ------
+        tf.errors.InvalidArgumentError
+            When the time dimension of *future_input* is inconsistent
+            with the selected mode.
+        ValueError
+            When ``validate_model_inputs`` rejects the shape signature.
+
+        Notes
+        -----
+        The function is decorated with
+        ``@tf_autograph.experimental.do_not_convert`` higher up in the
+        class to keep the eager semantics intact.
+
+        Examples
+        --------
+        >>> preds = model([s, d, f], training=False)
+        >>> preds.shape
+        TensorShape([32, 24, 3, 1])
+
+        See Also
+        --------
+        fusionlab.nn.pinn.HALNet.run_halnet_core
+        fusionlab.utils.validate_model_inputs
+        """
+        # Forward pass for the HALNet model.                        
         expected_future_span = None
-        if self.mode == 'tft_like':
-            expected_future_span = self.max_window_size + self.forecast_horizon
-        else: # pihal_like
+        if self.mode == "tft_like":
+            expected_future_span = \
+                self.max_window_size + self.forecast_horizon
+        else:  # pihal_like
             expected_future_span = self.forecast_horizon
 
         static_p, dynamic_p, future_p = validate_model_inputs(
-            inputs=inputs, static_input_dim=self.static_input_dim,
+            inputs=inputs,
+            static_input_dim=self.static_input_dim,
             dynamic_input_dim=self.dynamic_input_dim,
             future_covariate_dim=self.future_input_dim,
             # Pass the expected span to the validator if it supports it
             # Or perform a check here.
-            mode='strict', 
-            model_name='xtft'
+            mode="strict",
+            model_name="xtft",
         )
         # Convert the Python int to a tensor so the comparison is graph‑safe
         # Check future_input shape based on mode
@@ -678,66 +660,110 @@ class HALNet(Model, NNLearner):
         expected_span_tensor = tf_convert_to_tensor(
             expected_future_span, dtype=actual_future_span.dtype
         )
-    
-        tf_assert_equal(   # raises InvalidArgumentError in graph mode
+
+        tf_assert_equal(  # raises InvalidArgumentError in graph mode
             actual_future_span,
-            expected_span_tensor ,
+            expected_span_tensor,
             message=(
                 f"For mode='{self.mode}', `future_input` time dimension "
                 f"must be {expected_future_span} but is "
                 f"{actual_future_span}."
             ),
         )
-        
-        # if actual_future_span != expected_future_span:
-        #     raise ValueError(
-        #         f"For mode='{self.mode}', `future_input` time dimension must be "
-        #         f"{expected_future_span}, but got {actual_future_span}."
-        #     )
-        
+
         final_features = self.run_halnet_core(
-            static_p, dynamic_p, future_p, training=training)
+            static_p, dynamic_p, future_p, training=training
+        )
         decoded_outputs = self.multi_decoder(
-            final_features, training=training)
-        
+            final_features, training=training
+        )
+
         if self.quantiles is not None:
             return self.quantile_distribution_modeling(decoded_outputs)
-        
+
         return decoded_outputs
 
     def get_config(self):
-        """Returns the configuration of the HALNet model."""
+        r"""
+        Serialize the **HALNet** configuration for
+        :pyfunc:`tf.keras.models.clone_model` or model saving.
+
+        All hyper‑parameters required to reconstruct the network are
+        returned as plain Python types compatible with JSON/YAML
+        serialization.
+
+        Returns
+        -------
+        dict
+            A mapping that can be fed to
+            :pyfunc:`from_config` to recreate an identical model.
+
+        Examples
+        --------
+        >>> cfg = model.get_config()
+        >>> clone = HALNet.from_config(cfg)
+        >>> np.allclose(
+        ...     model(np.random.rand(1, 5, 3)),
+        ...     clone(np.random.rand(1, 5, 3)),
+        ...     atol=1e-5,
+        ... )
+        True
+        """
         config = super().get_config()
-        config.update({
-            'static_input_dim': self.static_input_dim,
-            'dynamic_input_dim': self.dynamic_input_dim,
-            'future_input_dim': self.future_input_dim,
-            'output_dim': self.output_dim,
-            'forecast_horizon': self.forecast_horizon,
-            'quantiles': self.quantiles,
-            'embed_dim': self.embed_dim,
-            'hidden_units': self.hidden_units,
-            'lstm_units': self.lstm_units,
-            'attention_units': self.attention_units,
-            'num_heads': self.num_heads,
-            'dropout_rate': self.dropout_rate,
-            'max_window_size': self.max_window_size,
-            'memory_size': self.memory_size,
-            'scales': self.scales,
-            'multi_scale_agg': self.multi_scale_agg_mode,
-            'final_agg': self.final_agg,
-            'activation': self.activation_fn_str,
-            'use_residuals': self.use_residuals,
-            'use_vsn': self.use_vsn,
-            'vsn_units': self.vsn_units,
-            'mode': self.mode 
-        })
+        config.update(
+            {
+                "static_input_dim": self.static_input_dim,
+                "dynamic_input_dim": self.dynamic_input_dim,
+                "future_input_dim": self.future_input_dim,
+                "output_dim": self.output_dim,
+                "forecast_horizon": self.forecast_horizon,
+                "quantiles": self.quantiles,
+                "embed_dim": self.embed_dim,
+                "hidden_units": self.hidden_units,
+                "lstm_units": self.lstm_units,
+                "attention_units": self.attention_units,
+                "num_heads": self.num_heads,
+                "dropout_rate": self.dropout_rate,
+                "max_window_size": self.max_window_size,
+                "memory_size": self.memory_size,
+                "scales": self.scales,
+                "multi_scale_agg": self.multi_scale_agg,
+                "final_agg": self.final_agg,
+                "activation": self.activation_fn_str,
+                "use_residuals": self.use_residuals,
+                "use_vsn": self.use_vsn,
+                "vsn_units": self.vsn_units,
+                "mode": self.mode,
+            }
+        )
         return config
 
     @classmethod
     def from_config(cls, config, custom_objects=None):
-        return cls(**config)
+        r"""
+        Re‑instantiate a **HALNet** object from a configuration
+        dictionary produced by :pyfunc:`get_config`.
 
+        Parameters
+        ----------
+        config : dict
+            Dictionary returned by :pyfunc:`get_config`.
+        custom_objects : dict or None, default=None
+            Optional mapping for resolving custom layers or functions
+            during deserialization (passed through to
+            :pyfunc:`tf.keras.Model.from_config`).
+
+        Returns
+        -------
+        HALNet
+            A new model instance built from *config*.
+
+        Examples
+        --------
+        >>> cfg = model.get_config()
+        >>> new_model = HALNet.from_config(cfg)
+        """
+        return cls(**config)
 
 
 HALNet.__doc__ = r"""
@@ -805,6 +831,15 @@ quantiles : list[float] or None, default None
 {params.base.use_residuals}
 {params.base.use_vsn}
 {params.base.vsn_units}
+
+
+mode : {{'pihal_like', 'tft_like'}}, default ``'tft_like'``
+    Controls how *future_features* are sliced and routed.  ``'pihal_like'``
+    expects ``future_input.shape[1] == forecast_horizon`` and feeds the
+    tensor only to the decoder.  ``'tft_like'`` expects
+    ``time_steps + forecast_horizon`` rows, sending the first
+    *time_steps* rows to the encoder and the remaining rows to the
+    decoder, emulating the Temporal Fusion Transformer.
 
 
 name : str, default ``"HALNet"``  

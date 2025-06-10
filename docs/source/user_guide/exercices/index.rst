@@ -15,9 +15,11 @@ Work through these tutorials to build your skills and understanding.
 
    exercise_basic_forecasting 
    exercise_advanced_xtft   
-   exercise_tft_required 
+   exercise_tft_required_inputs
    exercise_quantile_forecast 
    exercise_experimental_super_tft
+   exercice_halnet 
+   exercice_pihalnet
    anomaly_detection_exercise 
    exercise_case_history_data_prep 
    

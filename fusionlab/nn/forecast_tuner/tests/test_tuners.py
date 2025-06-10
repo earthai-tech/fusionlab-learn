@@ -12,7 +12,7 @@ import pytest
 
 # --- Attempt to import tuner functions and dependencies ---
 try:
-    from fusionlab.nn.forecast_tuner import XTFTTuner, TFTTuner
+    from fusionlab.nn.forecast_tuner.tft_tuner import XTFTTuner, TFTTuner
     # from fusionlab.core.io import _get_valid_kwargs # Not used in this test file
     import keras_tuner as kt
     FUSIONLAB_INSTALLED = True

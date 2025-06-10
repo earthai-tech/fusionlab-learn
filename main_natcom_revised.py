@@ -630,12 +630,13 @@ print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
 
 pihalnet_metrics = {
-    "Loss Components": ["total_loss", "data_loss", "physics_loss"],
-    "Subsidence MAE": ["subs_pred_mae"]
+    "Loss Components": ["total_loss", "data_loss", "physics_loss", "val_loss"],
+    "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
 }
 
 # PIHALNet data on separate subplots
 print("\n---PIHALNet History on Separate Subplots ---")
+
 plot_history_in(
     history.history,
     metrics=pihalnet_metrics,
