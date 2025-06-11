@@ -23,6 +23,7 @@ from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
 from ...utils.validator import validate_positive_integer 
 from ...decorators import isdf 
+from ...utils.deps_utils import ensure_pkg 
 from ...utils.generic_utils import print_box, vlog, select_mode 
 from ...utils.geo_utils import resolve_spatial_columns 
 from ...utils.io_utils import save_job  
@@ -35,7 +36,8 @@ if KERAS_BACKEND:
     tf_shape = KERAS_DEPS.shape
     tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
     tf_float32 = KERAS_DEPS.float32 
-    tf_cast =KERAS_DEPS.cast 
+    tf_cast =KERAS_DEPS.cast
+    tf_concat =KERAS_DEPS.concat
     tf_expand_dims =KERAS_DEPS.expand_dims 
 else:
     class Model: pass
@@ -762,7 +764,6 @@ def _format_target_predictions(
         
     return pred_cols_names, pred_df_part
 
-# XXX TO OPTIMIZE 
 @isdf 
 def prepare_pinn_data_sequences(
     df: pd.DataFrame,
@@ -1072,19 +1073,19 @@ def prepare_pinn_data_sequences(
         name="Dynamic feature column(s)"
     )
     
-    static_cols = columns_manager(static_cols) # Allows None
+    static_cols = columns_manager(static_cols) 
     if static_cols:
         exist_features(
             df_proc, features=static_cols,
             name="Static feature column(s)")
     
-    future_cols = columns_manager(future_cols) # Allows None
+    future_cols = columns_manager(future_cols) 
     if future_cols:
         exist_features(
             df_proc, features=future_cols, 
             name="Future feature column(s)")
 
-    group_id_cols = columns_manager(group_id_cols) # Allows None
+    group_id_cols = columns_manager(group_id_cols) 
     if group_id_cols:
         exist_features(
             df_proc, features=group_id_cols, 
@@ -1974,10 +1975,9 @@ def normalize_for_pinn(
 
     return df_scaled, coord_scaler, other_scaler
 
-
-def extract_txy(
+def _extract_txy_in(
     inputs: Union[Tensor, np.ndarray, Dict[str, Union[Tensor, np.ndarray]]],
-    coord_slice_map: Optional[Dict[str, int]] = None
+    coord_slice_map: Optional[Dict[str, int]] = None, 
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """
     Extracts t, x, y tensors from `inputs`, which may be:
@@ -2092,3 +2092,283 @@ def extract_txy(
     raise ValueError(
         f"`inputs` must be a tensor/array or dict; got {type(inputs)}"
     )
+
+
+@ensure_pkg(
+    KERAS_BACKEND or "tensorflow",
+    extra="TensorFlow is required for this function."
+   )
+def extract_txy_in(
+    inputs: Union[Tensor, np.ndarray, Dict[str, Union[Tensor, np.ndarray]]],
+    coord_slice_map: Optional[Dict[str, int]] = None,
+    expect_dim: Optional[str] = None,
+    verbose: int = 0,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """
+    Extracts t, x, y tensors from various input formats.
+
+    This utility standardizes coordinate inputs, accepting a single
+    tensor or a dictionary, and handling both 2D (spatial/static)
+    and 3D (spatio-temporal) data. It ensures a consistent 3D
+    output format for robust downstream processing.
+
+    Parameters
+    ----------
+    inputs : tf.Tensor, np.ndarray, or dict
+        The input data containing coordinates.
+        - If a single tensor/array: Can be 2D `(batch, 3)` or 3D
+          `(batch, time_steps, 3)`.
+        - If a dict: Can contain a 'coords' key with the tensor, or
+          separate 't', 'x', 'y' keys.
+
+    coord_slice_map : dict, optional
+        Mapping for 't', 'x', 'y' to their index in the last
+        dimension of a coordinate tensor.
+        Defaults to `{'t': 0, 'x': 1, 'y': 2}`.
+
+    expect_dim : {'2d', '3d'}, optional
+        If provided, enforces that the input resolves to the
+        specified dimension.
+        - '2d': Input must be `(batch, 3)` or dict of `(batch, 1)`.
+        - '3d': Input must be `(batch, time, 3)` or dict of `(batch, time, 1)`.
+        If None (default), both are accepted and 2D is expanded to 3D.
+
+    verbose : int, default 0
+        Controls the verbosity of logging messages. `0` is silent,
+        `1` provides basic info, and higher values provide more detail.
+
+    Returns
+    -------
+    t, x, y : Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+        The extracted t, x, and y coordinate tensors, each reshaped
+        to be 3D with a singleton last dimension, e.g.,
+        `(batch, time_steps, 1)`.
+
+    Raises
+    ------
+    ValueError
+        If input format is unsupported, dimensions are inconsistent,
+        or `expect_dim` constraint is violated.
+    """
+    vlog("Extracting (t, x, y) coordinates from inputs...",
+         level=2, verbose=verbose)
+         
+    if expect_dim and expect_dim not in ['2d', '3d']:
+        raise ValueError("`expect_dim` must be None, '2d', or '3d'.")
+
+    if coord_slice_map is None:
+        coord_slice_map = {'t': 0, 'x': 1, 'y': 2}
+
+    def _ensure_3d_and_validate(tensor, name):
+        """Helper to convert to tensor, ensure 3D, and validate."""
+        if not isinstance(tensor, Tensor):
+            tensor = tf_convert_to_tensor(tensor, dtype=tf_float32)
+        
+        if expect_dim == '2d' and tensor.ndim != 2:
+             raise ValueError(
+                f"Input '{name}' must be 2D (expect_dim='2d'), "
+                f"but got rank {tensor.ndim}."
+            )
+        elif expect_dim == '3d' and tensor.ndim != 3:
+             raise ValueError(
+                f"Input '{name}' must be 3D (expect_dim='3d'), "
+                f"but got rank {tensor.ndim}."
+            )
+
+        # For consistency, always expand 2D tensors to 3D.
+        if tensor.ndim == 2:
+            vlog(f"Expanding 2D input '{name}' to 3D for consistency.",
+                 level=3, verbose=verbose)
+            return tf_expand_dims(tensor, axis=1)
+        elif tensor.ndim == 3:
+            return tensor
+        else:
+            raise ValueError(
+                f"Input '{name}' must be a 2D or 3D tensor, but got "
+                f"rank {tensor.ndim} with shape {tensor.shape}."
+            )
+
+    # --- Main Logic ---
+    if isinstance(inputs, dict):
+        if 'coords' in inputs:
+            coords_tensor = _ensure_3d_and_validate(
+                inputs['coords'], 'coords')
+        elif all(k in inputs for k in ('t', 'x', 'y')):
+            t = _ensure_3d_and_validate(inputs['t'], 't')
+            x = _ensure_3d_and_validate(inputs['x'], 'x')
+            y = _ensure_3d_and_validate(inputs['y'], 'y')
+            # The shapes are now guaranteed to be 3D.
+            return tf_cast(t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
+        else:
+            raise ValueError(
+                "Dict `inputs` must contain either 'coords' key "
+                "or all of 't', 'x', 'y' keys."
+            )
+    elif isinstance(inputs, (Tensor, np.ndarray)):
+        coords_tensor = _ensure_3d_and_validate(inputs, 'inputs')
+    else:
+        raise TypeError(
+            f"`inputs` must be a tensor/array or dict; got {type(inputs)}"
+        )
+
+    # Slice the now-guaranteed 3D coords_tensor
+    if tf_shape(coords_tensor)[-1] < 3:
+        raise ValueError(
+            "Coordinate tensor must have at least 3 features (t,x,y) "
+            f"in the last dimension, but got shape {coords_tensor.shape}"
+        )
+        
+    t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t'] + 1]
+    x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x'] + 1]
+    y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y'] + 1]
+
+    vlog(f"Successfully extracted t:{t.shape}, x:{x.shape}, "
+         f"y:{y.shape}", level=2, verbose=verbose)
+         
+    return tf_cast(t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
+
+@ensure_pkg(
+    KERAS_BACKEND or "tensorflow",
+    extra="TensorFlow is required for this function."
+   )
+def extract_txy(
+    inputs: Union[Tensor, np.ndarray, Dict[str, Union[Tensor, np.ndarray]]],
+    coord_slice_map: Optional[Dict[str, int]] = None,
+    expect_dim: Optional[str] = None,
+    verbose: int = 0,
+) -> Tuple[Tensor, Tensor, Tensor]:
+    """
+    Extracts t, x, y tensors from various input formats.
+
+    This utility standardizes coordinate inputs, accepting a single
+    tensor or a dictionary, and handling both 2D (spatial/static)
+    and 3D (spatio-temporal) data with flexible dimension validation.
+
+    Parameters
+    ----------
+    inputs : tf.Tensor, np.ndarray, or dict
+        The input data containing coordinates. Can be a single tensor
+        or a dictionary with 'coords' or 't', 'x', 'y' keys.
+
+    coord_slice_map : dict, optional
+        Mapping for 't', 'x', 'y' to their index in the last
+        dimension of a coordinate tensor.
+        Defaults to `{'t': 0, 'x': 1, 'y': 2}`.
+
+    expect_dim : {'2d', '3d', '3d_only'}, optional
+        Enforces a constraint on the input's dimension.
+        - ``'2d'``: Input must resolve to a 2D shape like `(batch, 3)`.
+        - ``'3d'``: Accepts 3D input. If 2D is given, it's expanded
+          to 3D with a time dimension of 1.
+        - ``'3d_only'``: Input must be 3D; raises an error for 2D input.
+        - ``None`` (default): Accepts both 2D and 3D inputs without
+          changing their rank.
+
+    verbose : int, default 0
+        Controls logging verbosity.
+
+    Returns
+    -------
+    t, x, y : Tuple[tf.Tensor, tf.Tensor, tf.Tensor]
+        The extracted t, x, and y coordinate tensors. Their rank (2D
+        or 3D) depends on the input and the `expect_dim` mode.
+
+    Raises
+    ------
+    ValueError
+        If input format is unsupported, dimensions are inconsistent,
+        or `expect_dim` constraint is violated.
+    """
+    vlog("Extracting (t, x, y) coordinates from inputs...",
+         level=2, verbose=verbose)
+         
+    if expect_dim and expect_dim not in ['2d', '3d', '3d_only']:
+        raise ValueError(
+            "`expect_dim` must be None, '2d', '3d', or '3d_only'."
+        )
+
+    if coord_slice_map is None:
+        coord_slice_map = {'t': 0, 'x': 1, 'y': 2}
+
+    def _process_tensor(tensor, name):
+        """Helper to convert to tensor and validate dimension."""
+        if not isinstance(tensor, Tensor):
+            tensor = tf_convert_to_tensor(tensor, dtype=tf_float32)
+
+        input_ndim = tensor.ndim
+        
+        # Validate against expect_dim
+        if expect_dim == '2d' and input_ndim != 2:
+            raise ValueError(
+                f"Input '{name}' must be 2D for expect_dim='2d', "
+                f"but got rank {input_ndim}."
+            )
+        elif expect_dim == '3d_only' and input_ndim != 3:
+             raise ValueError(
+                f"Input '{name}' must be 3D for expect_dim='3d_only', "
+                f"but got rank {input_ndim}."
+            )
+        
+        # Handle expansion for '3d' mode
+        if expect_dim == '3d' and input_ndim == 2:
+            vlog(f"Expanding 2D input '{name}' to 3D for expect_dim='3d'.",
+                 level=3, verbose=verbose)
+            return tf_expand_dims(tensor, axis=1)
+
+        # For all other cases, including `expect_dim=None`, return as is
+        # after basic rank validation.
+        if input_ndim not in [2, 3]:
+            raise ValueError(
+                f"Input '{name}' must be a 2D or 3D tensor, but got "
+                f"rank {input_ndim} with shape {tensor.shape}."
+            )
+        return tensor
+
+    # --- Main Logic ---
+    if isinstance(inputs, dict):
+        if 'coords' in inputs:
+            coords_tensor = _process_tensor(inputs['coords'], 'coords')
+        elif all(k in inputs for k in ('t', 'x', 'y')):
+            # When t,x,y are separate, they are typically 1D or 2D.
+            # We process them and then concatenate.
+            t_p = _process_tensor(inputs['t'], 't')
+            x_p = _process_tensor(inputs['x'], 'x')
+            y_p = _process_tensor(inputs['y'], 'y')
+            
+            return tf_cast(
+                t_p, tf_float32), tf_cast(
+                    x_p, tf_float32), tf_cast(y_p, tf_float32)
+                    
+            # The individual tensors might be 2D or 3D. Concat will work if
+            # their ranks match, which is handled by _process_tensor.
+            # coords_tensor = tf_concat([t_p, x_p, y_p], axis=-1)
+        else:
+            raise ValueError(
+                "Dict `inputs` must contain either 'coords' key "
+                "or all of 't', 'x', 'y' keys."
+            )
+    elif isinstance(inputs, (Tensor, np.ndarray)):
+        coords_tensor = _process_tensor(inputs, 'inputs')
+    else:
+        raise TypeError(
+            f"`inputs` must be a tensor/array or dict; got {type(inputs)}"
+        )
+
+    # Slice the processed coords_tensor
+    if tf_shape(coords_tensor)[-1] < 3:
+        raise ValueError(
+            "Coordinate tensor must have at least 3 features (t,x,y) "
+            f"in the last dimension, but got shape {coords_tensor.shape}"
+        )
+        
+    # Slicing keeps the original number of dimensions
+    t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t'] + 1]
+    x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x'] + 1]
+    y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y'] + 1]
+
+    vlog(f"Successfully extracted t:{t.shape}, x:{x.shape}, "
+         f"y:{y.shape}", level=2, verbose=verbose)
+         
+    return tf_cast(t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
+
+

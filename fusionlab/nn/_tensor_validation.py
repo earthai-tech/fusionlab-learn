@@ -3120,3 +3120,235 @@ def check_inputs(
             )
 
     _vmsg(1, "All input checks passed successfully.")
+
+
+def ensure_2d_and_slice(
+    tensor: Union[np.ndarray, Tensor],
+    slice_axis: int = 0,
+    enforce_2d: bool = False,
+    error ="raise", 
+    verbose: bool = False, 
+) -> Union[np.ndarray, Tensor]:
+    """
+    Ensure a tensor has shape (None, 1), optionally slicing along an axis.
+
+    Parameters
+    ----------
+    tensor : np.ndarray or tf.Tensor
+        Input array or tensor. Expected to be 1D or 2D.
+    slice_axis : int, default 0
+        Which column to extract if tensor is 2D with width > 1.
+        Must satisfy 0 <= slice_axis < tensor.shape[-1].
+        If None, slicing is disallowed and will raise an error
+        unless the tensor is already (N, 1).
+    enforce_2d : bool, default False
+        If True and input is 1D (shape (N,)), will convert to (N, 1).
+    error : {'raise', 'warn', 'ignore'}, default 'raise'
+        Policy when slicing is needed but `slice_axis` is None, or
+        when `slice_axis` is out of bounds:
+        - 'raise' : raise ValueError (default)
+        - 'warn'  : emit a warning, then proceed using slice_axis=0
+        - 'ignore': silently proceed using slice_axis=0
+    verbose : bool, default False
+        If True, prints messages about expansions or slicing.
+
+    Returns
+    -------
+    np.ndarray or tf.Tensor
+        Tensor of shape (N, 1), either unchanged, expanded, or sliced.
+
+    Raises
+    ------
+    TypeError
+        If `tensor` is not a NumPy array or TensorFlow tensor.
+    ValueError
+        If rank > 2, or slice_axis is out of bounds.
+    """
+    # Determine backend and shape
+    if isinstance(tensor, np.ndarray):
+        shape = tensor.shape
+        backend = "numpy"
+    elif isinstance(tensor, Tensor):
+        shape = tensor.shape.as_list()
+        backend = "tensorflow"
+    else:
+        raise TypeError(
+            f"`tensor` must be np.ndarray or tf.Tensor, got {type(tensor)}"
+        )
+
+    # Get number of dimensions
+    ndims = len(shape)
+
+    # Enforce 2D if requested
+    if enforce_2d and ndims == 1:
+        if verbose:
+            print(f"Expanding 1D input of shape {shape} to (N,1).")
+        if backend == "numpy":
+            tensor = tensor[..., np.newaxis]
+        else:
+            tensor = tf_expand_dims(tensor, axis=-1)
+        shape = tensor.shape if backend == "numpy" else tensor.shape.as_list()
+        ndims = 2
+
+    # If already (N,1), return as is
+    if ndims == 2 and shape[1] == 1:
+        if verbose:
+            print(f"Input already has shape (N,1): {shape}.")
+        return tensor
+
+    # 2D with width > 1: need to slice
+    if ndims == 2 and shape[1] > 1:
+        # No slice_axis specified
+        if slice_axis is None:
+            msg = (
+                f"Input has shape (N, >1) -> {shape}. "
+                "Falling back to slice_axis=0."
+            )
+            if error == 'raise':
+                raise ValueError(
+                    f"Expect input shape ({shape[0]}, 1)."
+                    f" Got shape (N, >1) : {shape}."
+                    " Extract one column, or reshape to (N,1)"
+                    " before calling."
+                )
+            if error == 'warn':
+                warnings.warn(msg, UserWarning)
+            # if 'ignore', do nothing but fall through using slice_axis=0
+            slice_axis = 0
+
+        # Check bounds
+        if not (0 <= slice_axis < shape[1]):
+            msg = (
+                f"`slice_axis`={slice_axis} out of bounds for width={shape[1]}. "
+                "Falling back to slice_axis=0."
+            )
+            if error == 'raise':
+                raise ValueError(msg)
+            if error == 'warn':
+                warnings.warn(msg, UserWarning)
+            slice_axis = 0
+
+        if verbose:
+            print(
+                f"[ensure_2d_and_slice] Slicing axis=1 at index={slice_axis} "
+                f"from shape={shape} → result shape (N,1)"
+            )
+        if backend == "numpy":
+            return tensor[:, slice_axis : slice_axis + 1]
+        else:
+            col = tensor[:, slice_axis]
+            return tf_expand_dims(col, axis=-1)
+
+    # Anything else is unsupported
+    raise ValueError(
+        f"Unsupported tensor rank or shape={shape}. "
+        "Expected 1D or 2D inputs."
+    )
+
+def validate_tensors(
+    *tensors: Union[np.ndarray, Tensor],
+    last_dim: int = 1,
+    check_N: bool = False,
+    check_symmetry: bool = False,
+    deep_check: bool = False,
+    verbose: bool = False
+) -> None:
+    """
+    Validates a group of tensors against shape requirements.
+
+    Parameters
+    ----------
+    *tensors : array-like or tf.Tensor
+        One or more tensors/arrays to validate.
+    last_dim : int, default=1
+        Required size of the last dimension.
+    check_N : bool, default=False
+        If True, enforce that the batch size (first dim) is equal
+        across all tensors.
+    check_symmetry : bool, default=False
+        If True, enforce that all tensors have the same number of
+        dimensions.
+    deep_check : bool, default=False
+        If True, in addition to symmetry, enforce that each
+        intermediate dimension (except first and last) is equal
+        across all tensors.
+    verbose : bool, default=False
+        If True, print informative messages about each check.
+    
+    Returns 
+    --------
+    tensors: array-like or tf.Tensor, 
+        Return validated tensors 
+        
+    
+    Raises
+    ------
+    ValueError
+        If any of the requested checks fail.
+    TypeError
+        If an object in `tensors` is not an ndarray or tf.Tensor.
+    """
+    # Extract shapes
+    shapes = []
+    for idx, t in enumerate(tensors):
+        if isinstance(t, np.ndarray):
+            shape = list(t.shape)
+        elif isinstance(t, Tensor):
+            shape = t.shape.as_list()
+        else:
+            raise TypeError(
+                f"Tensor #{idx} must be np.ndarray or tf.Tensor, "
+                f"got {type(t).__name__}"
+            )
+        shapes.append(shape)
+        if verbose:
+            print(f"[validate_tensors] Tensor #{idx} shape: {shape}")
+
+    # Check last dimension
+    for idx, shape in enumerate(shapes):
+        if shape == []:
+            raise ValueError(f"Tensor #{idx} is scalar, expected at least 1D.")
+        if shape[-1] != last_dim:
+            raise ValueError(
+                f"Tensor #{idx} last dim = {shape[-1]}, "
+                f"expected {last_dim}."
+            )
+    if verbose:
+        print(f"[validate_tensors] All tensors have last_dim = {last_dim}")
+
+    # Check batch size (first dimension) consistency
+    if check_N:
+        Ns = [shape[0] for shape in shapes]
+        if len(set(Ns)) != 1:
+            raise ValueError(
+                f"Batch sizes differ across tensors: {Ns}"
+            )
+        if verbose:
+            print(f"[validate_tensors] All tensors share batch size = {Ns[0]}")
+
+    # Check symmetry of ranks
+    if check_symmetry or deep_check:
+        ranks = [len(shape) for shape in shapes]
+        if len(set(ranks)) != 1:
+            raise ValueError(
+                f"Tensors have differing ranks: {ranks}"
+            )
+        if verbose:
+            print(f"[validate_tensors] All tensors have rank = {ranks[0]}")
+
+    # Deep check of intermediate dimensions
+    if deep_check:
+        # skip first (batch) and last dims
+        mids = [tuple(shape[1:-1]) for shape in shapes]
+        if len(set(mids)) != 1:
+            raise ValueError(
+                f"Intermediate dims differ across tensors: {mids}"
+            )
+        if verbose:
+            print(
+                f"[validate_tensors] All tensors share intermediate "
+                f"dims = {mids[0]}"
+            )
+    if len(tensors)==1: 
+        tensors = tensors [0] # solo return 
+    return tensors 

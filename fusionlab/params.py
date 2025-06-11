@@ -4,7 +4,7 @@
 
 """
 Module `fusionlab.params` provides simple, self-documenting classes to
-specify how the PINN’s physical coefficient :math:`C` should be handled:
+specify how the PINN's physical coefficient :math:`C` should be handled:
 
 - `LearnableC`: learn :math:`C` (i.e., trainable), initialized via
   `initial_value`.
@@ -16,21 +16,146 @@ These classes make the model signature clearer than passing bare strings
 or floats.  When building the PINN, one checks `isinstance(..., LearnableC)`,
 etc., and sets up trainable weights accordingly.
 """
-
-
-from typing import Union
+from __future__ import annotations
 import importlib
+from typing import Any, Union, Optional, Dict
+from abc import ABC, abstractmethod
 
-# Attempt to import TensorFlow, else fall back to NumPy
-_tf_spec = importlib.util.find_spec("tensorflow")
+# Attempt to import TensorFlow, else fall
+# back to NumPy
+_tf_spec = importlib.util.find_spec(
+    "tensorflow"
+)
 if _tf_spec is not None:
     import tensorflow as tf
     _BACKEND = "tensorflow"
+    Tensor = tf.Tensor
+    Variable = tf.Variable
 else:
     import numpy as np
+
     _BACKEND = "numpy"
-    
-__all__ = ["LearnableC", "FixedC", "DisabledC"]
+    class _DummyTF:
+        pass
+
+    class tf:
+        Tensor = _DummyTF
+    # Fallback types for type hinting
+    Tensor = Any
+    Variable = Any
+
+
+__all__ = ["LearnableC", "FixedC", "DisabledC", "LearnableK", "LearnableSs", 
+           "LearnableQ"
+           ]
+
+
+
+class BaseLearnableParam(ABC):
+    """
+    Abstract base for learnable physical parameters.
+
+    Parameters
+    ----------
+    initial_value : float
+        Initial numeric value for the parameter.
+    name : str
+        Unique identifier for the variable.
+    log_transform : bool, optional
+        If True, store in log-space for positivity
+        constraint, by default False.
+    trainable : bool, optional
+        If True, make variable trainable, by
+        default True.
+
+    Attributes
+    ----------
+    initial_value : float
+        The original provided value.
+    name : str
+        Variable name in the computation graph.
+    log_transform : bool
+        Whether to apply log transform.
+    trainable : bool
+        Trainable flag for optimization.
+
+    Examples
+    --------
+    >>> param = LearnableK(initial_value=0.5)
+    >>> value = param.get_value()
+    """
+    def __init__(
+        self,
+        initial_value: float,
+        name: str,
+        log_transform: bool = False,
+        trainable: bool = True,
+    ):
+        if not isinstance(
+            initial_value, (float, int)
+        ):
+            raise TypeError(
+                f"Initial value for {self.__class__.__name__} "
+                f"must be a float, got {type(initial_value).__name__}"
+            )
+        if log_transform and initial_value <= 0:
+            raise ValueError(
+                f"{self.__class__.__name__} initial value must be "
+                "strictly positive for log transform."
+            )
+        self.initial_value = float(initial_value)
+        self.name = name
+        self.log_transform = log_transform
+        self.trainable = trainable
+        self._variable = self._create_variable()
+
+    def _create_variable(self) -> Union[Variable, Tensor, float]:
+        """
+        Internal: create tf.Variable or fallback value.
+
+        Returns
+        -------
+        Union[Variable, Tensor, float]
+            Configured variable or numeric.
+        """
+        if _BACKEND == "tensorflow":
+            value = self.initial_value
+            if self.log_transform:
+                value = tf.math.log(value)
+            return tf.Variable(
+                initial_value=tf.cast(
+                    value, dtype=tf.float32
+                ),
+                trainable=self.trainable,
+                name=self.name
+            )
+        return (
+            np.log(self.initial_value)
+            if self.log_transform else
+            self.initial_value
+        )
+
+    @abstractmethod
+    def get_value(
+        self
+    ) -> Union[Tensor, float]:
+        """
+        Retrieve parameter value.
+
+        Returns
+        -------
+        Union[Tensor, float]
+            Transformed parameter, e.g.,
+            :math:`\exp(log\_param)` if
+            log_transform is True.
+        """
+        pass
+
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(initial_value="
+            f"{self.initial_value}, trainable={self.trainable})"
+        )
 
 
 class LearnableC:
@@ -122,8 +247,10 @@ class DisabledC:
         pass
 
 
-class LearnableK:
+class LearnableK(BaseLearnableParam):
     """
+    Learnable Hydraulic Conductivity (K).
+
     Indicates that the PINN’s hydraulic conductivity :math:`K` should be
     learned (trainable) if TensorFlow is available; otherwise behaves as
     a fixed NumPy‐based parameter. We learn :math:`\log(K)` to ensure
@@ -133,75 +260,54 @@ class LearnableK:
     .. math::
        \log K \;=\; \log(\text{initial\_value}).
 
-    Attributes
-    ----------
-    initial_value : float
-        The positive starting value for :math:`K`. Must be strictly
-        positive.
-    log_K : tf.Variable or float
-        - If TensorFlow is available: a trainable tf.Variable representing
-          \(\log(K)\), initialized to \(\log(\text{initial_value})\).
-        - If TensorFlow is not available: a Python float equal to
-          \(\log(\text{initial_value})\).
+
+    Ensures positivity via log-space.
+
+    See Also
+    --------
+    BaseLearnableParam
 
     Examples
     --------
-    >>> from fusionlab.params import LearnableK
-    >>> # TensorFlow installed: LearnableK uses tf.Variable internally
-    >>> learn_K = LearnableK(initial_value=1.0)
-    >>> learn_K.get_K()  # returns tf.Tensor
-    <tf.Tensor: shape=(), dtype=float32, numpy=1.0>
-    >>> 
-    >>> # If TensorFlow is not installed: LearnableK uses NumPy internally
-    >>> learn_K_np = LearnableK(initial_value=2.0)
-    >>> print(learn_K_np.get_K())  # returns numpy.float32
-    2.0
+    >>> k = LearnableK(1.2)
+    >>> :math:`K = k.get_value()`
     """
-    def __init__(self, initial_value: float = 1.0):
-        # Validate type
-        if not isinstance(initial_value, (float, int)):
-            raise TypeError(
-                f"LearnableK.initial_value must be a float, got "
-                f"{type(initial_value).__name__}"
-            )
-        # Validate positivity
-        if initial_value <= 0:
-            raise ValueError(
-                "LearnableK.initial_value must be strictly positive."
-            )
-        self.initial_value = float(initial_value)
+    def __init__(
+        self,
+        initial_value: float = 1.0, 
+        name: Optional[str] =None, 
+    ):
+        super().__init__(
+            initial_value=initial_value,
+            name= name or "learnable_K",
+            log_transform=True
+        )
 
-        if _BACKEND == "tensorflow":
-            # Create a trainable variable for log(K)
-            self.log_K = tf.Variable(
-                initial_value=tf.math.log(self.initial_value),
-                trainable=True,
-                dtype=tf.float32,
-                name="log_K"
-            )
-        else:
-            # Fall back to NumPy: store log(K) as float
-            self.log_K = np.log(self.initial_value)  # type: ignore
-
-    def get_K(self) -> Union["tf.Tensor", float]:
+    def get_value(
+        self
+    ) -> Union[Tensor, float]:
         """
-        Returns the positive conductivity K by exponentiating log_K.
+        Return :math:`K = \exp(log\_K)`.
 
         Returns
         -------
-        tf.Tensor or float
-            - If TensorFlow backend: A scalar tf.Tensor representing K > 0.
-            - Otherwise: A NumPy float representing K > 0.
+        Union[Tensor, float]
+            Positive conductivity.
         """
         if _BACKEND == "tensorflow":
-            return tf.exp(self.log_K)
-        else:
-            return float(np.exp(self.log_K))  # type: ignore
+            return tf.exp(self._variable)
+        return float(
+            __import__("numpy").exp(
+                self._variable
+            )
+        )
 
 
-class LearnableSs:
+class LearnableSs(BaseLearnableParam):
     """
-    Indicates that the PINN’s specific storage coefficient :math:`S_s`
+    Learnable Specific Storage (Ss).
+    
+    Indicates that the PINN's specific storage coefficient :math:`S_s`
     should be learned (trainable) if TensorFlow is available; otherwise acts
     as a fixed NumPy‐based parameter. We learn :math:`\log(S_s)` to ensure
     :math:`S_s > 0`. The user supplies an `initial_value`, and the object
@@ -210,75 +316,49 @@ class LearnableSs:
     .. math::
        \log S_s \;=\; \log(\text{initial\_value}).
 
-    Attributes
-    ----------
-    initial_value : float
-        The positive starting value for :math:`S_s`. Must be strictly
-        positive.
-    log_Ss : tf.Variable or float
-        - If TensorFlow is available: a trainable tf.Variable representing
-          \(\log(S_s)\), initialized to \(\log(\text{initial_value})\).
-        - If TensorFlow is not available: a Python float equal to
-          \(\log(\text{initial_value})\).
+    Returns positive values via exp transform.
+    
 
     Examples
     --------
-    >>> from fusionlab.params import LearnableSs
-    >>> # TensorFlow installed: LearnableSs uses tf.Variable
-    >>> learn_Ss = LearnableSs(initial_value=1e-4)
-    >>> learn_Ss.get_Ss().numpy()
-    0.0001
-    >>> 
-    >>> # If TensorFlow not installed: uses NumPy
-    >>> learn_Ss_np = LearnableSs(initial_value=1e-3)
-    >>> print(learn_Ss_np.get_Ss())
-    0.001
+    >>> ss = LearnableSs(1e-3)
+    >>> value = ss.get_value()
     """
-    def __init__(self, initial_value: float = 1e-4):
-        # Validate type
-        if not isinstance(initial_value, (float, int)):
-            raise TypeError(
-                f"LearnableSs.initial_value must be a float, got "
-                f"{type(initial_value).__name__}"
-            )
-        # Validate positivity
-        if initial_value <= 0:
-            raise ValueError(
-                "LearnableSs.initial_value must be strictly positive."
-            )
-        self.initial_value = float(initial_value)
+    def __init__(
+        self,
+        initial_value: float = 1e-4, 
+        name: Optional[str] =None, 
+    ):
+        super().__init__(
+            initial_value=initial_value,
+            name= name or "learnable_Ss",
+            log_transform=True
+        )
 
-        if _BACKEND == "tensorflow":
-            # Create a trainable variable for log(Ss)
-            self.log_Ss = tf.Variable(
-                initial_value=tf.math.log(self.initial_value),
-                trainable=True,
-                dtype=tf.float32,
-                name="log_Ss"
-            )
-        else:
-            # Fall back to NumPy: store log(Ss) as float
-            self.log_Ss = np.log(self.initial_value)  # type: ignore
-
-    def get_Ss(self) -> Union["tf.Tensor", float]:
+    def get_value(
+        self
+    ) -> Union[Tensor, float]:
         """
-        Returns the positive storage coefficient Ss by exponentiating log_Ss.
+        Return :math:`Ss = \exp(log\_Ss)`.
 
         Returns
         -------
-        tf.Tensor or float
-            - If TensorFlow backend: A scalar tf.Tensor representing Ss > 0.
-            - Otherwise: A NumPy float representing Ss > 0.
+        Union[Tensor, float]
+            Positive storage coefficient.
         """
         if _BACKEND == "tensorflow":
-            return tf.exp(self.log_Ss)
-        else:
-            return float(np.exp(self.log_Ss))  # type: ignore
+            return tf.exp(self._variable)
+        return float(
+            __import__("numpy").exp(
+                self._variable
+            )
+        )
 
-
-class LearnableQ:
+class LearnableQ(BaseLearnableParam):
     """
-    Indicates that the PINN’s source/sink term :math:`Q` should be
+    Learnable Source/Sink term (Q).
+
+    Indicates that the PINN's source/sink term :math:`Q` should be
     learned (trainable) if TensorFlow is available; otherwise acts as a
     fixed NumPy‐based parameter. Unlike K and Ss, Q may be positive or
     negative, so we learn it directly (no log‐transform). The user supplies
@@ -286,106 +366,100 @@ class LearnableQ:
 
     .. math::
        Q \;=\; \text{initial\_value}.
-
-    Attributes
-    ----------
-    initial_value : float
-        The starting value for :math:`Q`. May be positive, negative, or zero.
-    Q_var : tf.Variable or float
-        - If TensorFlow is available: a trainable tf.Variable representing Q.
-        - Otherwise: a Python float equal to the initial value.
+       
+    Unconstrained: may be positive or
+    negative.
 
     Examples
     --------
-    >>> from fusionlab.params import LearnableQ
-    >>> # TensorFlow installed: LearnableQ uses tf.Variable
-    >>> learn_Q = LearnableQ(initial_value=0.1)
-    >>> learn_Q.get_Q().numpy()
-    0.1
-    >>> 
-    >>> # If TensorFlow not installed: uses NumPy
-    >>> learn_Q_np = LearnableQ(initial_value=-0.05)
-    >>> print(learn_Q_np.get_Q())
-    -0.05
+    >>> q = LearnableQ(0.0)
+    >>> q.get_value()
+    0.0
     """
-    def __init__(self, initial_value: float = 0.0):
-        # Validate type
-        if not isinstance(initial_value, (float, int)):
-            raise TypeError(
-                f"LearnableQ.initial_value must be a float, got "
-                f"{type(initial_value).__name__}"
-            )
-        self.initial_value = float(initial_value)
+    def __init__(
+        self,
+        initial_value: float = 0.0, 
+        name: Optional[str] =None, 
+    ):
+        super().__init__(
+            initial_value=initial_value,
+            name= name or "learnable_Q",
+            log_transform=False
+        )
 
-        if _BACKEND == "tensorflow":
-            # Create a trainable variable for Q (no log‐transform)
-            self.Q_var = tf.Variable(
-                initial_value=tf.convert_to_tensor(
-                    self.initial_value, dtype=tf.float32
-                ),
-                trainable=True,
-                name="Q"
-            )
-        else:
-            # Fall back to NumPy: store Q as float
-            self.Q_var = float(self.initial_value)
-
-    def get_Q(self) -> Union["tf.Tensor", float]:
+    def get_value(
+        self
+    ) -> Union[Tensor, float]:
         """
-        Returns the trainable Q coefficient.
+        Return raw :math:`Q` value.
 
         Returns
         -------
-        tf.Tensor or float
-            - If TensorFlow backend: A scalar tf.Tensor for Q.
-            - Otherwise: A NumPy float for Q.
+        Union[Tensor, float]
+            Source/sink strength.
         """
-        if _BACKEND == "tensorflow":
-            return tf.identity(self.Q_var)
-        else:
-            return float(self.Q_var)  # type: ignore
+        return self._variable
 
 
 def resolve_physical_param(
-    param: Union[float, LearnableK, LearnableSs, LearnableQ]
-) -> Union["tf.Tensor", float]:
+    param: Any,
+    name: Optional[str] = None,
+    serialize: bool = False
+) -> Union[Tensor, float, Dict]:
     """
-    Helper that returns a scalar (tf.Tensor or float) given either a raw float
-    or a learnable parameter instance (LearnableK, LearnableSs, LearnableQ).
+    Convert parameter to tensor, float, or dict.
 
     Parameters
     ----------
-    param : Union[float, LearnableK, LearnableSs, LearnableQ]
-        If float, simply returns as:
-          - `tf.constant(param, dtype=tf.float32)` if TensorFlow backend.
-          - `float(param)` if NumPy backend.
-        If instance, calls its `get_<...>()` method to obtain the tensor/float.
+    param : Any
+        Numeric or BaseLearnableParam instance.
+    name : str, optional
+        Unused: name handled by class.
+    serialize : bool, optional
+        If True, return serializable dict.
 
     Returns
     -------
-    tf.Tensor or float
-        The scalar representing the requested parameter.
+    Union[Tensor, float, Dict]
+        Resolved parameter or metadata.
 
     Raises
     ------
     TypeError
-        If `param` is not a float or one of the Learnable* classes.
-    """
-    if isinstance(param, LearnableK):
-        return param.get_K()
-    if isinstance(param, LearnableSs):
-        return param.get_Ss()
-    if isinstance(param, LearnableQ):
-        return param.get_Q()
+        If param type is unsupported.
 
-    # Plain float or int
+    Examples
+    --------
+    >>> resolve_physical_param(5.0)
+    5.0
+    >>> resolve_physical_param(
+    ...     LearnableK(0.5), serialize=True
+    ... )
+    {'learnable': True, 'initial_value': 0.5, 'class': 'LearnableK'}
+    """
+    if serialize:
+        if isinstance(param, BaseLearnableParam):
+            return {
+                "learnable": param.trainable,
+                "initial_value": param.initial_value,
+                "class": param.__class__.__name__
+            }
+        return {
+            "learnable": False,
+            "initial_value": float(param)
+        }
+
+    if isinstance(param, BaseLearnableParam):
+        return param.get_value()
+
     if isinstance(param, (float, int)):
         if _BACKEND == "tensorflow":
-            return tf.cast(param, tf.float32)
-        else:
-            return float(param)
+            return tf.constant(
+                float(param), dtype=tf.float32
+            )
+        return float(param)
 
     raise TypeError(
-        f"Parameter must be float, LearnableK, LearnableSs, or LearnableQ; "
+        "Parameter must be a float, int, or BaseLearnableParam; "
         f"got {type(param).__name__}"
     )

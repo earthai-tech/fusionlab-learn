@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Tuple, Union, Callable
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...utils.deps_utils import ensure_pkg 
 from .. import KERAS_DEPS, KERAS_BACKEND,dependency_message 
+from .utils import extract_txy_in 
 
 if KERAS_BACKEND:
     Model = KERAS_DEPS.Model
@@ -214,14 +215,15 @@ def compute_gw_flow_residual(
         involving nonlinear partial differential equations.
     """
     # Validate coords keys
-    if not all(k in coords for k in ('t', 'x', 'y')):
-        raise ValueError(
-            "coords must contain 't', 'x', and 'y' keys"
-        )
+    # if not all(k in coords for k in ('t', 'x', 'y')):
+    #     raise ValueError(
+    #         "coords must contain 't', 'x', and 'y' keys"
+    #     )
 
-    t = coords['t']
-    x = coords['x']
-    y = coords['y']
+    # t = coords['t']
+    # x = coords['x']
+    # y = coords['y']
+    t, x, y = extract_txy_in(coords)
 
     # Persistent tape for first- and second-order grads
     # Use a persistent tape to compute multiple gradients
