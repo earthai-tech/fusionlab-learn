@@ -200,43 +200,38 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
                 Returns (None, None, self.tuner_) if search encounters issues or
                 no best HPs are found.
         """
-        def _rename_target_dict(original_target_dict):
-            """
-            Accepts a Python dict of numpy/TF tensors. Renames keys as needed.
-
-            - "subsidence" → "subs_pred"
-            - "gwl"        → "gwl_pred"
-            - All other keys pass through unmodified.
-
-            Returns a brand-new dict.
-            """
-            return rename_dict_keys(
-                original_target_dict,
-                param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"}
+        # ------------------------------------------------------------------
+        # Rename target‑dict keys *only if* each element’s target component
+        # is a Python dict produced by PIHALNet.  For HALNet the target is
+        # already a Tensor, so we leave it unchanged.
+        # ------------------------------------------------------------------
+        def _maybe_rename_targets(tgts):
+            # tgts is either a dict of tensors or a single/tuple Tensor
+            return (
+                rename_dict_keys(
+                    tgts,
+                    param_to_rename={"subsidence": "subs_pred",
+                                     "gwl": "gwl_pred"},
+                )
+                if isinstance(tgts, dict)
+                else tgts
             )
-
         # STEP 1: If train_data is not None, wrap it so that any target dict
         #          inside gets its keys renamed.  We assume each element of
         #          train_data is (input_dict, target_dict).
         
         if train_data is not None:
             train_data = train_data.map(
-                lambda inputs_dict, targets_dict: (
-                    inputs_dict,
-                    _rename_target_dict(targets_dict)
-                ),
-                num_parallel_calls=AUTOTUNE
+                lambda in_dict, tgts: (in_dict, _maybe_rename_targets(tgts)),
+                num_parallel_calls=AUTOTUNE,
             )
         # STEP 2: Do the same for validation_data, if provided.
         if validation_data is not None:
             validation_data = validation_data.map(
-                lambda inputs_dict, targets_dict: (
-                    inputs_dict,
-                    _rename_target_dict(targets_dict)
-                ),
-                num_parallel_calls=AUTOTUNE
+                lambda in_dict, tgts: (in_dict, _maybe_rename_targets(tgts)),
+                num_parallel_calls=AUTOTUNE,
             )
-            
+ 
         tuner_class_map = {
             'randomsearch': kt.RandomSearch,
             'bayesianoptimization': kt.BayesianOptimization,

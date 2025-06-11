@@ -31,7 +31,7 @@ __all__ =[
     'exclude_duplicate_kwargs', 'reorder_columns',
     'find_id_column', 'check_group_column_validity', 
     'save_all_figures', 'rename_dict_keys', 
-    'normalize_time_column'
+    'normalize_time_column', 'select_mode'
  ]
 
 class ExistenceChecker:
@@ -2789,3 +2789,88 @@ def normalize_time_column(
         
     return df_norm
 
+def select_mode(
+    mode: Union[str, None] = None,
+    default: str = "pihal_like",
+) -> str:
+    r"""
+    Resolve a user‑supplied *mode* string to the canonical value
+    ``'pihal'`` or ``'tft'``.
+
+    The helper is used throughout
+    ``fusionlab.nn.models.utils`` to decide whether the model should
+    follow the PIHALNet or the Temporal Fusion Transformer (TFT)
+    convention for handling :pydata:`future_features`.
+
+    Parameters
+    ----------
+    mode : Union[str, None], optional
+        Case‑insensitive keyword.  Accepted values are
+
+        * ``'pihal'``        or ``'pihal_like'``
+        * ``'tft'``          or ``'tft_like'``
+        * *None*             – fall back to *default*.
+    default : {'pihal', 'tft'}, default ``'pihal'``
+        Canonical value returned when *mode* is *None*.
+
+    Returns
+    -------
+    str
+        ``'pihal_like'`` or ``'tft_like'``.
+
+    Raises
+    ------
+    ValueError
+        If *mode* is not *None* and does not match any accepted
+        keyword.
+
+    Notes
+    -----
+    * ``'..._like'`` aliases are provided for backward compatibility
+      with earlier API versions.
+    * The function strips whitespace and converts *mode* to lower
+      case before matching.
+
+    Examples
+    --------
+    >>> select_mode('TFT_like')
+    'tft'
+    >>> select_mode(None, default='tft')
+    'tft'
+    >>> select_mode('invalid')
+    Traceback (most recent call last):
+        ...
+    ValueError: Invalid mode 'invalid'. Choose one of: pihal, ...
+
+    See Also
+    --------
+    fusionlab.nn.pinn.PIHALNet.call
+        Uses the resolved mode to slice *future_features*.
+    fusionlab.nn.pinn.HLNet
+        High‑level model wrapper that exposes the *mode* argument.
+
+    References
+    ----------
+    * Lim, B. et al. *Temporal Fusion Transformers for
+      Interpretable Multi‑horizon Time Series Forecasting.*
+      NeurIPS 2021.
+    * Kouadio, L. K. et al. *Physics‑Informed Heterogeneous Attention
+      Learning for Spatio‑Temporal Subsidence Prediction.*
+      IEEE T‑PAMI 2025 (in press).
+    """
+
+    canonical = {"pihal": "pihal_like", "pihal_like": "pihal_like",
+                 "tft": "tft_like", "tft_like": "tft_like", 
+                 "tft-like": "tft_like","pihal-like": "pihal_like",
+                 }
+
+    if mode is None:
+        return canonical[default]
+
+    try:
+        return canonical[str(mode).lower().strip()]
+    except KeyError:  # unknown keyword
+        valid = ", ".join(sorted(canonical.keys()))
+        raise ValueError(
+            f"Invalid mode '{mode}'. Choose one of: {valid} or None."
+        ) from None

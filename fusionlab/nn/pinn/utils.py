@@ -23,7 +23,7 @@ from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
 from ...utils.validator import validate_positive_integer 
 from ...decorators import isdf 
-from ...utils.generic_utils import print_box, vlog
+from ...utils.generic_utils import print_box, vlog, select_mode 
 from ...utils.geo_utils import resolve_spatial_columns 
 from ...utils.io_utils import save_job  
 from .. import KERAS_BACKEND, KERAS_DEPS
@@ -762,7 +762,7 @@ def _format_target_predictions(
         
     return pred_cols_names, pred_df_part
 
-
+# XXX TO OPTIMIZE 
 @isdf 
 def prepare_pinn_data_sequences(
     df: pd.DataFrame,
@@ -784,6 +784,7 @@ def prepare_pinn_data_sequences(
     normalize_coords: bool = True, 
     cols_to_scale: Union[List[str], str, None] = None,
     return_coord_scaler: bool =False, 
+    mode: Optional[str] =None, 
     savefile: Optional[str] = None,
     verbose: int = 0,
 ) -> Union[
@@ -798,47 +799,70 @@ def prepare_pinn_data_sequences(
     It creates sequences of dynamic features, future known features,
     static features, target variables (subsidence and GWL), and importantly,
     spatio-temporal coordinates corresponding to the forecast horizon.
-
+    
     Parameters
     ----------
-    df : pd.DataFrame
-        Input DataFrame containing all necessary time-series data.
+    df : :class:`pandas.DataFrame`
+        Tidy time‑series table in **long** format.  Each row must
+        correspond to *exactly one* time stamp and (optionally) one
+        spatial/entity identifier.  All feature and target columns listed
+        below must already exist in *df*.
     time_col : str
-        Name of the column representing time (e.g., 'year', 'date').
-        This will be converted to a numerical representation for PINN.
-    lon_col : str
-        Name of the column for longitude.
-    lat_col : str
-        Name of the column for latitude.
-    subsidence_col : str
-        Name of the target column for subsidence.
-    gwl_col : str
-        Name of the target column for Groundwater Level (GWL).
-    dynamic_cols : List[str]
-        List of column names for dynamic (past observed) features.
-    static_cols : List[str], optional
-        List of column names for static (time-invariant) features.
-        If None, no static features are used. Default is None.
-    future_cols : List[str], optional
-        List of column names for known future features.
-        If None, no future features are used. Default is None.
-    group_id_cols : List[str], optional
-        List of column names to group the data by (e.g., site ID,
-        borehole ID). Sequences are generated independently for each group.
-        If None, the entire DataFrame is treated as a single group.
-        Default is None.
+        Column holding the observation time.  May be numeric
+        (year‑fraction, ordinal day, seconds since epoch, …) or any
+        pandas‑recognised datetime dtype; non‑numeric values are converted
+        to a numeric “year + fraction‑of‑year” scale.
+    subsidence_col, gwl_col : str
+        Column names of the **target variables**: vertical land movement
+        (subsidence) and ground‑water level (GWL).  Values are sliced to
+        produce the horizon targets with shapes  
+        ``(N, forecast_horizon, output_✱_dim)``.
+    dynamic_cols : list[str]
+        Names of **past‑covariate** columns sampled over the look‑back
+        window of length :pydata:`time_steps`.  All columns are stacked in
+        the order supplied to form  
+        ``dynamic_features`` → shape  
+        ``(N, time_steps, len(dynamic_cols))``.
+    static_cols : list[str] or None, default None
+        Columns that are *constant within a group* (e.g. soil type,
+        aquifer class).  Only the first value in each group is stored,
+        resulting in ``static_features`` of shape  
+        ``(N, len(static_cols))``.  Pass *None* if the data set has no
+        static covariates.
+    future_cols : list[str] or None, default None
+        Known‑future covariates such as weather forecasts.  Their temporal
+        span depends on :pydata:`mode`:
+    
+        * ``'pihal_like'`` → length = ``forecast_horizon``  
+          (decoder only)
+        * ``'tft_like'`` → length = ``time_steps + forecast_horizon``  
+          (encoder + decoder)
+    
+        When *None* an empty ``future_features`` tensor is returned. 
+    spatial_cols : (str, str) or None, default None
+        Tuple ``(lon, lat)`` if longitude and latitude are already named
+        explicitly.  Overrides *lon_col* / *lat_col*.  Required unless the
+        spatial columns are supplied separately.
+    lon_col, lat_col : str or None, default None
+        Fallback column names for longitude and latitude when
+        *spatial_cols* is *None*.  Both must be provided together.
+    group_id_cols : list[str] or None, default None
+        Keys that identify independent trajectories (e.g.
+        ``['site_id']`` or ``['site', 'layer']``).  Each group is treated
+        as an isolated time‑series for rolling‑window extraction.  If
+        *None* the entire DataFrame is processed as one group.
     time_steps : int, default 12
-        Number of past time steps to use for dynamic features (lookback).
+        Length of the look‑back window :math:`T_\text{past}` supplied to
+        the encoder.  Must be ≥ 1.
     forecast_horizon : int, default 3
-        Number of future time steps to predict.
-    output_subsidence_dim : int, default 1
-        The feature dimension of the subsidence target. Typically 1.
-    output_gwl_dim : int, default 1
-        The feature dimension of the GWL target. Typically 1.
-    datetime_format : str, optional
-        Format string for parsing the `time_col` if it's not already
-        in datetime format. If None, attempts automatic parsing.
-        Default is None.
+        Prediction length :math:`H`.  Determines the time dimension of the
+        decoder outputs and of ``coords``.
+    output_subsidence_dim, output_gwl_dim : int, default 1
+        Final dimension of each target tensor.  Use > 1 when predicting
+        several layers simultaneously.
+    datetime_format : str or None, default None
+        Custom parsing string forwarded to :pyfunc:`pandas.to_datetime`
+        when *time_col* is a string column.
     normalize_coords : bool, default True
         If True, normalizes the 't', 'x', 'y' coordinate values
         (derived from `time_col`, `lon_col`, `lat_col`) to the [0, 1]
@@ -850,7 +874,37 @@ def prepare_pinn_data_sequences(
           * Exclude `time_col`, `lon_col`, `lat_col` if `scale_coords=False`.
           * Exclude any columns whose values are only \{0,1\} (assumed one-hot).
         - If None: no extra columns are scaled.
-        
+    return_coord_scaler : bool, default False
+        When enabled the function returns a three‑tuple
+        ``(inputs_dict, targets_dict, coord_scaler)`` where
+        *coord_scaler* is the fitted scaler instance or *None* when
+        scaling was disabled.  
+    mode : {'pihal_like', 'tft_like'} or None, default None  
+        Selects the temporal schema used to construct the *future_features*
+        window and consequently how the downstream model will consume it.
+    
+        * **'pihal_like'** – builds future tensors with length equal to the
+          forecast horizon :math:`H` only.  These tensors are intended for
+          models that feed known‑future covariates exclusively to the
+          decoder (PIHALNet convention).
+    
+        * **'tft_like'** – builds future tensors whose time dimension is
+          :math:`T_\text{past} + H`, i.e. the look‑back window
+          (*time_steps*) followed by the horizon.  This matches the
+          Temporal Fusion Transformer, where the encoder ingests the
+          overlapping first segment and the decoder receives the horizon
+          segment.
+    
+        * **None** – treated as ``'pihal_like'`` for backward
+          compatibility.
+    
+        The setting affects the allocated size of
+        ``future_features_arr`` and the slice indices used during rolling
+        window extraction; make sure it matches the *mode* expected by the
+        target model.
+    savefile : str or None, default None
+        Path to a ``.joblib`` file.  When provided, all produced arrays and
+        meta‑data are serialised for reproducibility and faster reloads.
     verbose : int, default 0
         Verbosity level for logging (0-10).
         - 0: Silent.
@@ -858,7 +912,6 @@ def prepare_pinn_data_sequences(
         - 2: More details on shapes and processing.
         - 5: Per-group processing info.
         - 7: Per-sequence sample data (use with caution for large data).
-
     Returns
     -------
     Union[
@@ -887,7 +940,6 @@ def prepare_pinn_data_sequences(
             and `coord_scaler`. `coord_scaler` is the `MinMaxScaler` instance
             used if `normalize_coords` was True (and thus coordinates were
             normalized), otherwise it's `None`.
- 
     Raises
     ------
     ValueError
@@ -895,7 +947,79 @@ def prepare_pinn_data_sequences(
         to create any sequences.
     TypeError
         If `df` is not a Pandas DataFrame.
+        
+    Notes
+    -----
+    * A sequence is generated only if a group contains at least  
+    
+      .. math::  
+         T_\text{past} + H
+    
+      consecutive observations without gaps.
+    * The function is **stateless**; call it each time the configuration
+      changes.
+    
+    Examples
+    --------
+    Generate rolling windows for two sites with a 6‑step look‑back
+    (:pydata:`time_steps=6`) and a 3‑step horizon
+    (:pydata:`forecast_horizon=3`).  
+    Future covariates are prepared *TFT‑style* (length = ``6 + 3``).
+    
+    >>> import numpy as np, pandas as pd
+    >>> from fusionlab.nn.utils import prepare_pinn_data_sequences
+    >>>
+    >>> rng = np.random.default_rng(42)
+    >>> dates = pd.date_range("2022‑01‑31", periods=18, freq="M")
+    >>>
+    >>> df = pd.DataFrame({
+    ...     "date":        np.tile(dates, 2),
+    ...     "site":        ["A"] * 18 + ["B"] * 18,
+    ...     "lon":         np.repeat([113.10, 113.25], 18),
+    ...     "lat":         np.repeat([22.60,  22.75], 18),
+    ...     "subs":        rng.normal(size=36),
+    ...     "gwl":         rng.normal(size=36),
+    ...     "rain":        rng.random(36),
+    ...     "evap":        rng.random(36),
+    ...     "forecast_rain": rng.random(36),
+    ...     "soil_type":   ["sand"] * 18 + ["clay"] * 18,     # static covariate
+    ... })
+    >>>
+    >>> inputs, targets = prepare_pinn_data_sequences(
+    ...     df,
+    ...     time_col="date",
+    ...     subsidence_col="subs",
+    ...     gwl_col="gwl",
+    ...     dynamic_cols=["rain", "evap"],
+    ...     static_cols=["soil_type"],
+    ...     future_cols=["forecast_rain"],
+    ...     spatial_cols=("lon", "lat"),
+    ...     group_id_cols=["site"],
+    ...     time_steps=6,
+    ...     forecast_horizon=3,
+    ...     mode="tft_like",
+    ...     verbose=0,
+    ... )
+    >>>
+    >>> # Inspect a few key tensors
+    >>> inputs["dynamic_features"].shape       # N × 6 × 2
+    (24, 6, 2)
+    >>> inputs["future_features"].shape        # N × (6+3) × 1
+    (24, 9, 1)
+    >>> targets["subsidence"].shape            # N × 3 × 1
+    (24, 3, 1)
+    >>> len(inputs["coords"]) == len(targets["gwl"])
+    True
+
+    See Also
+    --------
+    fusionlab.nn.utils.reshape_xtft_data  
+        Reshapes arrays for TFT‑style input pipelines.
+    fusionlab.nn.utils.create_sequences  
+        Generic sliding‑window generator used internally.
+    
     """
+    
     # Entry log
     vlog("Starting PINN data sequence preparation...",
          verbose=verbose, level=1)
@@ -1013,6 +1137,10 @@ def prepare_pinn_data_sequences(
                 f" Error: {e}"
             )
    
+    mode = select_mode(mode, default='pihal_like')
+    vlog(f"Operating in '{mode}' data preparation mode.",
+         level=1, verbose=verbose)
+
     # Initialize coord_scaler
     # --- Apply Global Coordinate Normalization (if enabled) ---
     df_proc, coord_scaler, cols_scaler = normalize_for_pinn(
@@ -1138,8 +1266,22 @@ def prepare_pinn_data_sequences(
         (total_sequences, time_steps, num_dynamic_feats),
         dtype=np.float32
     )
+    # Determine the required length of the future features sequence
+    if mode == 'tft_like':
+        # For TFT style, we need future values for both the lookback
+        # and forecast periods.
+        future_window_len = time_steps + forecast_horizon
+        vlog(f"Allocating future features array for 'tft_like' mode "
+             f"with time dimension: {future_window_len}",
+             level=2, verbose=verbose
+            )
+    else: # 'pihal_like' mode
+        # For PIHALNet's encoder-decoder, we only need future values
+        # for the forecast horizon.
+        future_window_len = forecast_horizon
+    
     future_features_arr = np.zeros(
-        (total_sequences, forecast_horizon, num_future_feats),
+        (total_sequences, future_window_len, num_future_feats),
         dtype=np.float32
     )
     target_subsidence_arr = np.zeros(
@@ -1232,8 +1374,19 @@ def prepare_pinn_data_sequences(
             horizon_end_idx = i + time_steps + forecast_horizon
             
             if future_cols and num_future_feats > 0:
+                if future_cols and num_future_feats > 0:
+                    if mode == 'tft_like':
+                        # For TFT mode, we need the full window:
+                        # from the start of the dynamic window to the end of the horizon.
+                        future_start_idx = i
+                        future_end_idx = i + time_steps + forecast_horizon
+                    else: # 'pihal_like' mode
+                        # For PIHAL mode, we only need the horizon window.
+                        future_start_idx = horizon_start_idx
+                        future_end_idx = horizon_end_idx
+                
                 future_features_arr[current_seq_idx] = group_df.iloc[
-                    horizon_start_idx:horizon_end_idx
+                    future_start_idx:future_end_idx
                 ][future_cols].values.astype(np.float32)
 
             # Coordinates for the forecast horizon
@@ -1332,8 +1485,8 @@ def prepare_pinn_data_sequences(
             'forecast_horizon': forecast_horizon,
             'cols_scaler': cols_scaler, 
             'coord_scaler': coord_scaler, 
-            'normalize_coords_flag': normalize_coords, # ADDED for context
-            'saved_coord_scaler_flag':coord_scaler is not None, # ADDED
+            'normalize_coords_flag': normalize_coords, 
+            'saved_coord_scaler_flag':coord_scaler is not None, 
 
         }
         # Add version information if available

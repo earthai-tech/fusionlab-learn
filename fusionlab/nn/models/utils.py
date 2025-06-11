@@ -99,7 +99,8 @@ def select_mode(
     """
 
     canonical = {"pihal": "pihal_like", "pihal_like": "pihal_like",
-                 "tft": "tft_like", "tft_like": "tft_like"}
+                 "tft": "tft_like", "tft_like": "tft_like", 
+                 "tft-like": "tft_like","pihal-like": "pihal_like",}
 
     if mode is None:
         return canonical[default]

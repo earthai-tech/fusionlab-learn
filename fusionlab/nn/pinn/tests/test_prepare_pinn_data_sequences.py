@@ -257,6 +257,6 @@ class TestPreparePinnDataSequences:
         # assert 'targets_dict' in loaded_data
 
 # This allows running the test file directly
-if __name__ == '__main__':
+if __name__ == '__main__': # pragma: no cover 
     # This will run all tests in the current file
     pytest.main([__file__])

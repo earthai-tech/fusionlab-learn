@@ -135,7 +135,8 @@ class HALNet(Model, NNLearner):
         "use_residuals": [bool, Interval(Integral, 0, 1, closed="both")],
         "final_agg": [StrOptions({"last", "average",  "flatten"})],
         "mode": [
-            StrOptions({'tft', 'pihal', 'tft_like', 'pihal_like'}), 
+            StrOptions({'tft', 'pihal', 'tft_like', 'pihal_like',
+                        "tft-like", "pihal-like"}), 
             None
             ]
     
@@ -319,7 +320,12 @@ class HALNet(Model, NNLearner):
             self.dynamic_dense, self.future_dense = None, None
     
         # --- Core Architectural Layers (Always Created) ---
-        self.positional_encoding = PositionalEncoding()
+        # *** FIX: Create two separate instances of PositionalEncoding ***
+        self.encoder_positional_encoding = PositionalEncoding(
+            name="encoder_pos_encoding")
+        self.decoder_positional_encoding = PositionalEncoding(
+            name="decoder_pos_encoding")
+        
         self.multi_scale_lstm = MultiScaleLSTM(
             lstm_units=self.lstm_units,
             scales=self.scales,
@@ -494,7 +500,7 @@ class HALNet(Model, NNLearner):
         if fut_enc_proc is not None:
             encoder_input_parts.append(fut_enc_proc)
         encoder_raw = tf_concat(encoder_input_parts, axis=-1)
-        encoder_input = self.positional_encoding(
+        encoder_input = self.encoder_positional_encoding(
             encoder_raw, training=training
         )
         lstm_out = self.multi_scale_lstm(encoder_input, training=training)
@@ -509,7 +515,7 @@ class HALNet(Model, NNLearner):
             static_expanded = tf_tile(
                 static_expanded, [1, self.forecast_horizon, 1]
             )
-        future_with_pos = self.positional_encoding(
+        future_with_pos = self.decoder_positional_encoding(
             fut_dec_proc, training=training
         )
 

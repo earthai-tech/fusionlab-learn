@@ -16,6 +16,7 @@ from ...api.property import NNLearner
 from ...core.handlers import param_deprecated_message 
 from ...compat.sklearn import validate_params, Interval, StrOptions 
 from ...utils.deps_utils import ensure_pkg
+from ...utils.generic_utils import select_mode 
 
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
  
@@ -70,6 +71,9 @@ if KERAS_BACKEND:
     tf_log =KERAS_DEPS.log 
     tf_exp =KERAS_DEPS.exp 
     tf_rank =KERAS_DEPS.rank 
+    tf_assert_equal = KERAS_DEPS.assert_equal 
+    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
+    
     
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
@@ -192,6 +196,11 @@ class PIHALNet(Model, NNLearner):
             str, Real, None, StrOptions({"learnable"}),
             LearnableC, FixedC, DisabledC
         ], 
+        "mode": [
+            StrOptions({'tft', 'pihal', 'tft_like', 'pihal_like',
+                        "tft-like", "pihal-like"}), 
+            None
+            ], 
         "gw_flow_coeffs": [dict, type(None)], 
         'use_vsn': [bool, int], 
         'vsn_units': [Interval(Integral, 0, None, closed="left"), None]
@@ -227,6 +236,7 @@ class PIHALNet(Model, NNLearner):
         gw_flow_coeffs: Optional[Dict[str, Union[str, float, None]]] = None,
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
+        mode: Optional[str]=None, 
         name: str = "PIHALNet",
         **kwargs
     ):
@@ -254,7 +264,7 @@ class PIHALNet(Model, NNLearner):
         self.use_residuals = use_residuals
         self.use_batch_norm = use_batch_norm
         
-
+        self.mode = select_mode (mode ) # default to pihal-like 
         self.use_vsn = use_vsn
         self.vsn_units = vsn_units if vsn_units is not None else self.hidden_units
 
@@ -280,10 +290,10 @@ class PIHALNet(Model, NNLearner):
 
         self._build_halnet_layers()
         self._build_pinn_components()
-
+            
     def run_halnet_core(
         self,
-        static_input:Tensor,
+        static_input: Tensor,
         dynamic_input: Tensor,
         future_input: Tensor,
         training: bool
@@ -291,6 +301,8 @@ class PIHALNet(Model, NNLearner):
         r"""
         Execute the core **encoder–decoder** data‑driven pipeline of
         :class:`~fusionlab.nn.pinn.PIHALNet`.
+        
+        Executes data-driven pipeline with flexible encoder-decoder logic.
         
         The method ingests *static*, *dynamic* (past), and *future*
         covariates, passes them through Variable Selection Networks
@@ -339,83 +351,88 @@ class PIHALNet(Model, NNLearner):
           \mathrm{LayerNorm}` blocks for improved stability.
  
         """
+        time_steps = tf_shape(dynamic_input)[1]
 
-        # --- 1. Initial Feature Processing ---
-        # Process each input type through VSNs or simple dense layers to
-        # create initial representations.
-        static_context = None
-        if self.use_vsn and self.static_vsn is not None:
-            vsn_static_out = self.static_vsn(
-                static_input, training=training)
-            static_context = self.static_vsn_grn(
-                vsn_static_out, training=training)
-        elif self.static_dense is not None:  # Non-VSN path
-            processed_static = self.static_dense(static_input)
-            # Note: here the GRN's output dim might differ from the
-            # VSN path. This is handled by the decoder_input_projection.
-            static_context = self.grn_static_non_vsn(
-                processed_static, training=training)
-    
-        dynamic_processed = dynamic_input
-        if self.use_vsn and self.dynamic_vsn is not None:
-            dynamic_processed = self.dynamic_vsn(
-                dynamic_input, training=training)
-            dynamic_processed = self.dynamic_vsn_grn(
-                dynamic_processed, training=training)
-    
-        future_processed = future_input
-        if self.use_vsn and self.future_vsn is not None:
-            future_processed = self.future_vsn(
-                future_input, training=training)
-            future_processed = self.future_vsn_grn(
-                future_processed, training=training)
+        # 1. Initial Feature Processing
+        static_context, dyn_proc, fut_proc = None, dynamic_input, future_input
+        if self.use_vsn:
+            if self.static_vsn is not None:
+                vsn_static_out = self.static_vsn(
+                    static_input, training=training)
+                static_context = self.static_vsn_grn(
+                    vsn_static_out, training=training)
+            if self.dynamic_vsn is not None:
+                dyn_proc = self.dynamic_vsn_grn(self.dynamic_vsn(
+                    dynamic_input, training), training)
+            if self.future_vsn is not None:
+                fut_proc = self.future_vsn_grn(self.future_vsn(
+                    future_input, training), training)
+                
+        else: # Non-VSN path
+            if self.static_dense is not None:
+                processed_static = self.static_dense(static_input)
+                # Note: here the GRN's output dim might differ from the
+                # VSN path. This is handled by the decoder_input_projection.
+                static_context = self.grn_static_non_vsn(
+                    processed_static, training=training) 
+                
+            dyn_proc = self.dynamic_dense(dynamic_input)
+            fut_proc = self.future_dense(future_input)
         
         logger.debug(f"Shape after VSN/initial processing: "
-                     f"Dynamic={getattr(dynamic_processed, 'shape', 'N/A')}, "
-                     f"Future={getattr(future_processed, 'shape', 'N/A')}")
-    
-        # --- 2. Encoder Path (Processes Past Data) ---
-        # The encoder processes `dynamic_processed` to summarize the history.
-        encoder_input = self.positional_encoding(
-            dynamic_processed, training=training)
-        lstm_output_raw = self.multi_scale_lstm(
-            encoder_input, training=training)
+                     f"Dynamic={getattr(dyn_proc, 'shape', 'N/A')}, "
+                     f"Future={getattr(fut_proc, 'shape', 'N/A')}")
         
-        # Aggregate multi-scale sequences into a single 3D tensor.
+        logger.debug(f"Initial processed shapes: Dynamic={dyn_proc.shape}, "
+                     f"Future={fut_proc.shape}")
+
+        # 2. Encoder Path
+        encoder_input_parts = [dyn_proc]
+        if self.mode == 'tft_like':
+            # For TFT mode, slice historical part of future features
+            # and add to the encoder input.
+            fut_enc_proc = fut_proc[:, :time_steps, :]
+            encoder_input_parts.append(fut_enc_proc)
+        
+        encoder_raw = tf_concat(encoder_input_parts, axis=-1)
+        encoder_input = self.encoder_positional_encoding(encoder_raw)
+        lstm_out = self.multi_scale_lstm(
+            encoder_input, training=training 
+            )
         encoder_sequences = aggregate_multiscale_on_3d(
-            lstm_output_raw, mode='concat')
+            lstm_out, mode='concat')
         
         if self.dynamic_time_window is not None:
             encoder_sequences = self.dynamic_time_window(
                 encoder_sequences, training=training)
-        
-        logger.debug(f"Encoder output sequence shape: {encoder_sequences.shape}")
-    
-        # --- 3. Decoder Path (Prepares Context for Forecasting) ---
-        # The decoder's context is built from static and future inputs
-        # over the `forecast_horizon`.
-        static_context_expanded = None
+            
+        logger.debug(f"Encoder sequences shape: {encoder_sequences.shape}")
+
+        # 3. Decoder Path
+        if self.mode == 'tft_like':
+            # For TFT mode, slice the forecast part of future features.
+            fut_dec_proc = fut_proc[:, time_steps:, :]
+        else: # For pihal_like mode, use the whole future tensor.
+            fut_dec_proc = fut_proc
+
+        decoder_parts = []
         if static_context is not None:
-            static_context_expanded = tf_expand_dims(static_context, 1)
-            static_context_expanded = tf_tile(
-                static_context_expanded, [1, self.forecast_horizon, 1]
-            )
-    
-        future_with_pos = self.positional_encoding(
-            future_processed, training=training)
-    
-        decoder_input_parts = []
-        if static_context_expanded is not None:
-            decoder_input_parts.append(static_context_expanded)
+            static_expanded = tf_expand_dims(static_context, 1)
+            static_expanded = tf_tile(
+                static_expanded, [1, self.forecast_horizon, 1])
+            decoder_parts.append(static_expanded)
+        
         if self.future_input_dim > 0:
-            decoder_input_parts.append(future_with_pos)
-    
-        if not decoder_input_parts:
+            future_with_pos = self.decoder_positional_encoding(
+                fut_dec_proc)
+            decoder_parts.append(future_with_pos)
+
+        if not decoder_parts:
             batch_size = tf_shape(dynamic_input)[0]
             raw_decoder_input = tf_zeros(
                 (batch_size, self.forecast_horizon, self.attention_units))
         else:
-            raw_decoder_input = tf_concat(decoder_input_parts, axis=-1)
+            raw_decoder_input = tf_concat(decoder_parts, axis=-1)
     
         # Project the raw decoder input to a consistent feature dimension.
         projected_decoder_input = self.decoder_input_projection(
@@ -684,14 +701,14 @@ class PIHALNet(Model, NNLearner):
         fusionlab.nn.pinn.PIHALNet.split_outputs :
             Helper that separates subsidence and GWL channels.
         """
-
-        # --- 1. Process and Validate All Inputs ---
+        # 1. Unpack and Validate Inputs
+        # - Process and Validate All Inputs ---
         # The `process_pinn_inputs` helper unpacks the input dict and
         # isolates the coordinate tensors for later use.
         logger.debug("PIHALNet call: Processing PINN inputs.")
         t, x, y, static_features, dynamic_features, future_features = \
             process_pinn_inputs(inputs, mode='as_dict')
-        
+            
         # basic tensors checks. 
         check_inputs(
             dynamic_inputs= dynamic_features, 
@@ -721,7 +738,26 @@ class PIHALNet(Model, NNLearner):
             f"D={getattr(dynamic_p, 'shape', 'None')},"
             f" F={getattr(future_p, 'shape', 'None')}"
         )
+        
+        # ***  Validate future_p shape based on mode ***
+        if self.mode == 'tft_like':
+            expected_future_span = self.max_window_size + self.forecast_horizon
+        else:  # pihal_like
+            expected_future_span = self.forecast_horizon
 
+        actual_future_span = tf_shape(future_p)[1]
+        expected_span_tensor = tf_convert_to_tensor(
+            expected_future_span, dtype=actual_future_span.dtype)
+        
+        tf_assert_equal(
+            actual_future_span, expected_span_tensor,
+            message=(
+                f"Incorrect 'future_features' tensor length for "
+                f"mode='{self.mode}'. Expected time dimension of "
+                f"{expected_future_span}, but got {actual_future_span}."
+            )
+        )
+    
         # --- 2. Run Core Data-Driven Feature Extraction ---
         # This self-contained method performs the complex feature engineering
         # using LSTMs and attention mechanisms.
@@ -801,7 +837,8 @@ class PIHALNet(Model, NNLearner):
             "gwl_pred": gwl_pred_final,
             "pde_residual": pde_residual,
         }
-    
+ 
+
     def compile(
         self,
         optimizer,
@@ -1144,43 +1181,54 @@ class PIHALNet(Model, NNLearner):
         )
         
         # These layers are only created if VSN is NOT used.
-        if not self.use_vsn and self.static_input_dim > 0:
-            self.static_dense = Dense(
-                self.hidden_units, activation=self.activation_fn_str
-            )
-            # This GRN is specifically for the non-VSN static path. Its
-            # dimensionality matches the static context (`hidden_units`).
-            self.grn_static_non_vsn = GatedResidualNetwork(
-                units=self.hidden_units, dropout_rate=self.dropout_rate,
-                activation=self.activation_fn_str, name="grn_static_non_vsn"
-            )
-        else:
-            self.static_dense = None
-            self.grn_static_non_vsn = None
+        if not self.use_vsn: 
+            if self.static_input_dim > 0:
+                self.static_dense = Dense(
+                    self.hidden_units, activation=self.activation_fn_str
+                )
+                # This GRN is specifically for the non-VSN static path. Its
+                # dimensionality matches the static context (`hidden_units`).
+                self.grn_static_non_vsn = GatedResidualNetwork(
+                    units=self.hidden_units, 
+                    dropout_rate=self.dropout_rate,
+                    activation=self.activation_fn_str,
+                    name="grn_static_non_vsn"
+                )
+            else:
+                self.static_dense = None
+                self.grn_static_non_vsn = None
         
+            # Create dense layers for dynamic and future features
+            # for non-VSN path
+            self.dynamic_dense = Dense(self.embed_dim)
+            self.future_dense = Dense(self.embed_dim)
+        else: 
+            self.static_dense =None 
+            self.grn_static_non_vsn = None
+            self.dynamic_dense =None
+            self.future_dense = None
+            
+     
+        # --- 3. Core Architectural Layers ---
+        # self.positional_encoding = PositionalEncoding()
+        # *** FIX: Create two separate instances of PositionalEncoding ***
+        self.encoder_positional_encoding = PositionalEncoding(
+            name="encoder_pos_encoding")
+        self.decoder_positional_encoding = PositionalEncoding(
+            name="decoder_pos_encoding")
     
-        # Initial dense layer for static features, only created if VSN
-        # is disabled and static features are present.
-        # if not self.use_vsn and self.static_input_dim > 0:
-        #     self.static_dense = Dense(
-        #         self.hidden_units,
-        #         activation=self.activation_fn_str
-        #     )
-        # else:
-        #     self.static_dense = None
-    
-        # --- 3. Core Architectural Layers (Always Created) ---
-        self.positional_encoding = PositionalEncoding()
         self.multi_scale_lstm = MultiScaleLSTM(
             lstm_units=self.lstm_units,
             scales=self.scales,
             return_sequences=True  # Critical for the encoder path
         )
         self.hierarchical_attention = HierarchicalAttention(
-            units=self.attention_units, num_heads=self.num_heads
+            units=self.attention_units,
+            num_heads=self.num_heads
         )
         self.cross_attention = CrossAttention(
-            units=self.attention_units, num_heads=self.num_heads
+            units=self.attention_units, 
+            num_heads=self.num_heads
         )
         self.memory_augmented_attention = MemoryAugmentedAttention(
             units=self.attention_units,
@@ -1247,6 +1295,7 @@ class PIHALNet(Model, NNLearner):
            'use_vsn': self.use_vsn, 
            'vsn_units': self.vsn_units,
            'name': self.name, 
+           'mode': self.mode, 
            'pde_mode': self.pde_modes_active, 
            'gw_flow_coeffs': self.gw_flow_coeffs_config,
         }

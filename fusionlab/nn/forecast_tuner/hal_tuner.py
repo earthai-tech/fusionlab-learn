@@ -279,19 +279,48 @@ class HALTuner(PINNTunerBase):
         vlog("Preparing tf.data.Dataset objects for tuning...", level=1,
              verbose=verbose)
         
-        train_dataset = Dataset.from_tensor_slices((inputs, y))
-        train_dataset = train_dataset.batch(batch_size).prefetch(AUTOTUNE)
-
+        # ------------------------------------------------------------------
+        # 1. Wrap numpy arrays so tf.data can slice them sample‑wise
+        # ------------------------------------------------------------------
+        # `inputs` is a list like [static, dynamic, future].  We convert it
+        # to a *tuple* so that `from_tensor_slices` interprets it as
+        #   (x1, x2, x3)  paired with  y,
+        # producing elements of the form  ((x1_i, x2_i, x3_i), y_i).
+        # A Python list would be treated as a single ragged object and
+        # trigger "non‑rectangular sequence" errors.
+        train_dataset = (
+            Dataset.from_tensor_slices((tuple(inputs), y))
+                   .batch(batch_size)
+                   .prefetch(AUTOTUNE)
+        )
         vlog(f"Training dataset created with {len(y)} samples.",
              level=2, verbose=verbose)
         
         val_dataset = None
-        if validation_data:
+        if validation_data is not None:
             val_inputs, val_y = validation_data
-            val_dataset = Dataset.from_tensor_slices((val_inputs, val_y))
-            val_dataset = val_dataset.batch(batch_size).prefetch(AUTOTUNE)
+            val_dataset = (
+                Dataset.from_tensor_slices((tuple(val_inputs), val_y))
+                       .batch(batch_size)
+                       .prefetch(AUTOTUNE)
+            )
             vlog(f"Validation dataset created with {len(val_y)} samples.",
                  level=2, verbose=verbose)
+
+
+        # train_dataset = Dataset.from_tensor_slices((inputs, y))
+        # train_dataset = train_dataset.batch(batch_size).prefetch(AUTOTUNE)
+
+        # vlog(f"Training dataset created with {len(y)} samples.",
+        #      level=2, verbose=verbose)
+        
+        # val_dataset = None
+        # if validation_data:
+        #     val_inputs, val_y = validation_data
+        #     val_dataset = Dataset.from_tensor_slices((val_inputs, val_y))
+        #     val_dataset = val_dataset.batch(batch_size).prefetch(AUTOTUNE)
+        #     vlog(f"Validation dataset created with {len(val_y)} samples.",
+        #          level=2, verbose=verbose)
 
 
         return super().search(

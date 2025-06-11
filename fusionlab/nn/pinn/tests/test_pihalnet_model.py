@@ -3,17 +3,27 @@ import pytest
 import tempfile 
 import os
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
 
-# --- Adjust these imports based on your project structure ---
-# Assuming PIHALNet and its components are in fusionlab.nn.pinn
-from fusionlab.nn.pinn.models import PIHALNet 
-from fusionlab.nn.losses import combined_quantile_loss # If you use a custom one
-from fusionlab.nn.components import HierarchicalAttention, MultiHeadAttention # etc.
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Model
+    from tensorflow.keras.optimizers import Adam
+    from tensorflow.keras.losses import MeanSquaredError
+    from fusionlab.nn.pinn.models import PIHALNet 
+    from fusionlab.nn.losses import combined_quantile_loss # If you use a custom one
+    from fusionlab.nn.components import HierarchicalAttention, MultiHeadAttention # etc.
 
+    from fusionlab.nn import KERAS_BACKEND
+except ImportError as e:
+    print(f"Skipping combine_temporal_inputs_for_lstm tests due to"
+          f" import error: {e}")
+    KERAS_BACKEND = False
+# --- End Imports ---
+
+# Skip all tests in this file if TensorFlow/Keras backend is not available
+pytestmark = pytest.mark.skipif(
+    not KERAS_BACKEND, reason="TensorFlow/Keras backend not available"
+)
 
 # --- Fixtures ---
 

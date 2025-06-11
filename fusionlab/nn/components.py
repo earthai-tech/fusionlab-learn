@@ -45,6 +45,7 @@ if KERAS_BACKEND:
     register_keras_serializable=KERAS_DEPS.register_keras_serializable
     Tensor=KERAS_DEPS.Tensor
     Sequential =KERAS_DEPS.Sequential
+    TensorShape =KERAS_DEPS.TensorShape 
 
     tf_Assert= KERAS_DEPS.Assert
     tf_TensorShape= KERAS_DEPS.TensorShape
@@ -86,10 +87,13 @@ if KERAS_BACKEND:
     tf_pow = KERAS_DEPS.pow
     tf_sin = KERAS_DEPS.sin
     tf_cos = KERAS_DEPS.cos
+    tf_exp = KERAS_DEPS.exp 
+    tf_log = KERAS_DEPS.log
     tf_ones = KERAS_DEPS.ones 
     tf_linalg = KERAS_DEPS.linalg
     tf_floordiv = KERAS_DEPS.floordiv
     tf_greater =KERAS_DEPS.greater 
+    tf_float32 = KERAS_DEPS.float32
     
 
     try:
@@ -336,7 +340,7 @@ class Activation(Layer, NNLearner):
     'fusionlab.nn.transformers', 
     name="TransformerEncoderLayer"
 )
-class TransformerEncoderLayer(Layer):
+class TransformerEncoderLayer(Layer, NNLearner):
     """
     A single layer of the Transformer Encoder.
 
@@ -408,7 +412,7 @@ class TransformerEncoderLayer(Layer):
 
 @register_keras_serializable(
     'fusionlab.nn.transformers', name="TransformerDecoderLayer")
-class TransformerDecoderLayer(Layer):
+class TransformerDecoderLayer(Layer, NNLearner):
     """
     A single layer of the Transformer Decoder.
     (Arguments similar to TransformerEncoderLayer)
@@ -493,11 +497,178 @@ class TransformerDecoderLayer(Layer):
             "layer_norm_epsilon": self.layer_norm_epsilon,
         })
         return config
+ 
+# -------------------- TFT components ----------------------------------------
+
+@register_keras_serializable(
+    'fusionlab.nn.components', name='PositionalEncoding')
+class PositionalEncoding(Layer, NNLearner):
+    r"""Injects positional information into an input tensor.
+
+    This layer adds a positional encoding to the input, allowing models
+    like Transformers to understand the order of the sequence. It uses
+    the standard sinusoidal encoding from the "Attention Is All You
+    Need" paper [1]_.
+
+    The positional encoding :math:`PE` is defined as:
+
+    .. math::
+        PE_{(pos, 2i)} = \sin\left(\frac{pos}{10000^{2i/d_{\text{model}}}}\right)
+
+    .. math::
+        PE_{(pos, 2i+1)} = \cos\left(\frac{pos}{10000^{2i/d_{\text{model}}}}\right)
+
+    where :math:`pos` is the position in the sequence, :math:`i` is the
+    dimension index, and :math:`d_{\text{model}}` is the feature dimension.
+
+    Parameters
+    ----------
+    max_length : int, default 2048
+        The maximum possible sequence length. The encoding matrix will be
+        pre-calculated up to this length.
+    **kwargs
+        Standard Keras Layer keyword arguments.
+
+    Examples 
+    --------
+    >>> import tensorflow as tf 
+    >>> from fusionlab.nn.components import PositionalEncoding
+    >>> batch_size = 4
+    >>> sequence_length = 50
+    >>> feature_dimension = 128
+
+    >>> # Create dummy input tensor
+    >>> input_tensor = tf.random.normal(
+    ...    (batch_size, sequence_length, feature_dimension)
+    ... )
+
+    >>> # Instantiate and apply the layer
+    >>> pos_encoding_layer = PositionalEncoding(max_length=5000)
+    >>> output_tensor = pos_encoding_layer(input_tensor)
+
+    >>> print("Input Tensor Shape:", input_tensor.shape)
+    >>> print("Output Tensor Shape:", output_tensor.shape)
+    >>> # The shape should be unchanged.
+    >>> assert input_tensor.shape == output_tensor.shape
+
+    >>> # You can visualize the encoding if you wish
+    >>> import matplotlib.pyplot as plt
+    >>> pe_matrix = pos_encoding_layer.positional_encoding[0, :, :].numpy()
+    >>> plt.figure(figsize=(10, 5))
+    >>> cax = plt.matshow(pe_matrix, fignum=1, aspect='auto', cmap='viridis')
+    >>> plt.gcf().colorbar(cax)
+    >>> plt.title("Sinusoidal Positional Encoding Matrix")
+    >>> plt.xlabel("Feature Dimension")
+    >>> plt.ylabel("Position in Sequence")
+    >>> plt.show()
+    
+    References
+    ----------
+    .. [1] Vaswani, A., et al. (2017). "Attention is all you need."
+           *Advances in Neural Information Processing Systems*, 30.
+    """
+    def __init__(self, max_length: int = 2048, **kwargs):
+        super().__init__(**kwargs)
+        self.max_length = max_length
+        self.positional_encoding = None
+
+    def build(self, input_shape: TensorShape):
+        """Pre-calculates the positional encoding matrix."""
+        # The input shape is (batch, sequence_length, feature_dim)
+        _, _, feature_dim = input_shape
         
+        if self.positional_encoding is None:
+            # The calculation is done once and stored.
+            # Ensure feature_dim is a concrete value for matrix creation.
+            if feature_dim is None:
+                raise ValueError(
+                    "The feature dimension of the input to "
+                    "PositionalEncoding cannot be `None`. Please "
+                    "ensure the input has a defined feature dimension."
+                )
+
+            # Cast to float for calculations
+            d_model = tf_cast(feature_dim, tf_float32)
+
+            # Create a matrix of positions (max_length, 1)
+            positions = tf_range(
+                self.max_length, dtype=tf_float32)[:, tf_newaxis]
+
+            # Create the division term for the sine/cosine functions
+            # Shape: (feature_dim / 2)
+            div_term = tf_exp(
+                tf_range(0, feature_dim, 2, dtype=tf_float32) * \
+                (-tf_log(10000.0) / d_model)
+            )
+
+            # Calculate sinusoidal values for even and odd indices
+            # Shape of each: (max_length, feature_dim / 2)
+            pe_sin = tf_sin(positions * div_term)
+            pe_cos = tf_cos(positions * div_term)
+
+            # Interleave sin and cos values to get final encoding
+            # Resulting shape: (max_length, feature_dim)
+            pe_interleaved = tf_reshape(
+                tf_stack([pe_sin, pe_cos], axis=-1),
+                shape=[self.max_length, feature_dim]
+            )
+
+            # Add an extra dimension for broadcasting across the batch
+            # Shape: (1, max_length, feature_dim)
+            self.positional_encoding = pe_interleaved[tf_newaxis, :, :]
+
+        super().build(input_shape)
+
+    def call(self, inputs: Tensor, training=False ) -> Tensor:
+        r"""Adds positional encoding to the input tensor.
+        
+        The 'training' argument is accepted but not used.
+        This ensures API compatibility with Keras.
+        
+        Parameters
+        ----------
+        inputs : tf.Tensor
+            A 3D tensor of shape :math:`(B, T, D)`, where ``B`` is
+            the batch size, ``T`` is the sequence length, and ``D``
+            is the feature dimension.
+
+        Returns
+        -------
+        tf.Tensor
+            The input tensor with positional encodings added.
+            Shape: :math:`(B, T, D)`.
+        Notes 
+        ------
+        The Positional encoding does not depends on training. 
+        The sinusoidal PositionalEncoding layer performs a deterministic 
+        mathematical operation. It calculates a fixed matrix of sine and 
+        cosine values based on position and feature dimension and simply 
+        adds it to the input. This calculation is the same whether you are 
+        training the model or running it for inference. Unlike layers such 
+        as Dropout or BatchNormalization, PositionalEncoding has no different
+        behavior during training.
+        
+        """
+        # Get the sequence length of the current input batch.
+        seq_len = tf_shape(inputs)[1]
+        
+        # Slice the pre-calculated encoding matrix to match the input
+        # sequence length and add it to the input tensor.
+        # The broadcasting mechanism will handle the batch dimension.
+        return inputs + self.positional_encoding[:, :seq_len, :]
+
+    def get_config(self) -> dict:
+        """Returns the configuration of the layer."""
+        config = super().get_config()
+        config.update({
+            'max_length': self.max_length,
+        })
+        return config
+
     
 @register_keras_serializable(
     'fusionlab.nn.components', name="PositionalEncodingTF")
-class PositionalEncodingTF(Layer):
+class PositionalEncodingTF(Layer, NNLearner):
     """
     Standard Transformer Positional Encoding using sine and cosine functions.
     Adds positional information to input embeddings.
@@ -512,7 +683,8 @@ class PositionalEncodingTF(Layer):
         self.max_position = max_position
         self.embed_dim = embed_dim
         # self.pos_encoding is created once and stored.
-        self.pos_encoding = self._build_positional_encoding(max_position, embed_dim)
+        self.pos_encoding = self._build_positional_encoding(
+            max_position, embed_dim)
 
     def _build_positional_encoding(
             self, position: int, d_model: int) -> Tensor:
@@ -583,8 +755,11 @@ class PositionalEncodingTF(Layer):
         # and finally apply to pos (cast pos to float32 if needed)
         return tf_cast(pos, tf_float32) * angle_rates
 
-    def call(self, x):
-        """Adds positional encoding to the input tensor `x`."""
+    def call(self, x, training=False):
+        """Adds positional encoding to the input tensor `x`.
+        The 'training' argument is accepted but not used.
+        This ensures API compatibility with Keras.
+        """
         if not KERAS_BACKEND:
             raise RuntimeError(
                 "PositionalEncodingTF layer requires "
@@ -603,11 +778,8 @@ class PositionalEncodingTF(Layer):
         return config
 
 
-# -------------------- TFT components ----------------------------------------
-
-
 @register_keras_serializable('fusionlab.nn.components', name='PositionalEncoding')
-class PositionalEncoding(Layer, NNLearner):
+class LinearPositionalEncoding(Layer, NNLearner):
     r"""
     Positional Encoding layer that incorporates temporal 
     positions into an input sequence by adding positional 

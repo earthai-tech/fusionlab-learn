@@ -116,6 +116,7 @@ NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not eno
                                 # in df_test_master, auto extract all batches.  
 AGG = True # Set this to True or False as needed for  specific test case
 
+MODE ='pihal' # Mode that Model should operate 
 # Output Directories
 BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
@@ -223,8 +224,8 @@ selected_features_base = [
     LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, 'rainfall_mm',
     'geology', # Will be one-hot encoded
     # 'soil_thickness', # Not in Zhongshan sample, add if for Nansha dataset
-    'normalized_density', # Example, might be building density
-    'normalized_seismic_risk_score',
+    'normalized_density', # Example,  building density
+    # 'normalized_seismic_risk_score',
     # Add other features for nansha_dataset  500k dataset
 ]
 selected_features = [
@@ -338,8 +339,8 @@ numerical_cols_for_scaling_model = [
     GWL_COL, 
     'rainfall_mm',
     # 'soil_thickness', # If Nanshan
-    'normalized_density', # If present and numerical # because not used in Nansha
-    'normalized_seismic_risk_score',
+    'normalized_density', # no need to normalize again. Exclude in Nansha
+    # 'normalized_seismic_risk_score',
     SUBSIDENCE_COL, # Scale target as well for stable training
     # TIME_COL_NUMERIC_PINN # Scale numeric time
 ]
@@ -388,7 +389,7 @@ static_features_list = encoded_feature_names_list # Geology, etc.
 # Dynamic features: vary over `time_steps` (past observed)
 dynamic_features_list = [
     GWL_COL, 'rainfall_mm', 'normalized_density', 
-    'normalized_seismic_risk_score'
+    # 'normalized_seismic_risk_score'
     # Add other dynamic features from df_scaled.columns
 ]
 dynamic_features_list = [
@@ -463,6 +464,7 @@ inputs_train_dict, targets_train_dict, coord_scaler = prepare_pinn_data_sequence
     normalize_coords=True, # Recommended for PINN coordinates
     savefile=sequence_file_path_train, # Save the prepared sequences
     return_coord_scaler= True, # return corrd-scaler for inverse_transform. 
+    mode=MODE, # Operate with the determined mode 
     verbose=7 # High verbosity for sequence generation
 )
 
@@ -706,6 +708,7 @@ try:
         output_gwl_dim=OUT_G_DIM,
         normalize_coords=True, # Match training
         return_coord_scaler= True, 
+        mode=MODE, 
         verbose=1
     )
 
