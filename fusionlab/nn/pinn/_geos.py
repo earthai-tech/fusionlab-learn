@@ -55,6 +55,8 @@ if KERAS_BACKEND:
 
 DEP_MSG = dependency_message('nn.pinn._geos') 
 
+__all__=['PITGWFlow']
+
 class PITGWFlow(Model, NNLearner):
     """
     Physic Informed Transient Grounwwater Flow.

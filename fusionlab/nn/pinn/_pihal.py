@@ -5,86 +5,64 @@
 """
 Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
 """
+from __future__ import annotations
+from numbers import Integral, Real 
+from typing import List, Optional, Union, Dict, Any, Tuple 
 
-from textwrap import dedent # noqa 
-from numbers import Real, Integral  
-from typing import List, Optional, Union, Dict, Tuple  
-
-from ..._fusionlog import fusionlog, OncePerMessageFilter
-from ...api.property import NNLearner 
+from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...core.handlers import param_deprecated_message 
 from ...compat.sklearn import validate_params, Interval, StrOptions 
-from ...params import LearnableC, FixedC, DisabledC 
+from ...params import LearnableC, FixedC, DisabledC
 from ...utils.deps_utils import ensure_pkg
-from ...utils.generic_utils import select_mode 
 
-from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
- 
-if KERAS_BACKEND: 
-    LSTM = KERAS_DEPS.LSTM
-    Dense = KERAS_DEPS.Dense
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    Model= KERAS_DEPS.Model 
-    Tensor=KERAS_DEPS.Tensor
-    Variable =KERAS_DEPS.Variable 
-    Add =KERAS_DEPS.Add
+from .. import KERAS_BACKEND, KERAS_DEPS,  dependency_message
+from .._base_attentive import BaseAttentive 
+
+if KERAS_BACKEND:
+    
+    MeanSquaredError = KERAS_DEPS.Adam 
+    Adam =KERAS_DEPS.Adam 
+    Tensor = KERAS_DEPS.Tensor
     Constant =KERAS_DEPS.Constant 
-    GradientTape =KERAS_DEPS.GradientTape 
+    GradientTape = KERAS_DEPS.GradientTape
     
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
-    tf_zeros_like= KERAS_DEPS.zeros_like
-    tf_zeros =KERAS_DEPS.zeros
-    tf_reduce_mean =KERAS_DEPS.reduce_mean
-    tf_square =KERAS_DEPS.square
+    tf_exp = KERAS_DEPS.exp
+    tf_square = KERAS_DEPS.square
+    tf_reduce_mean = KERAS_DEPS.reduce_mean
+    tf_zeros_like = KERAS_DEPS.zeros_like
+    tf_rank =KERAS_DEPS.rank 
+    tf_exp =KERAS_DEPS.exp 
     tf_constant =KERAS_DEPS.constant 
     tf_log = KERAS_DEPS.log
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
+    tf_constant =KERAS_DEPS.constant
     tf_float32=KERAS_DEPS.float32
-    tf_exp =KERAS_DEPS.exp 
-    tf_rank =KERAS_DEPS.rank 
-    tf_assert_equal = KERAS_DEPS.assert_equal 
-    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
     
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
-    from .._tensor_validation import validate_model_inputs
-    from .._tensor_validation import check_inputs 
-    
-    from ..utils import set_default_params
-    from ..components import (
-            Activation, 
-            CrossAttention,
-            DynamicTimeWindow,
-            GatedResidualNetwork,
-            HierarchicalAttention,
-            MemoryAugmentedAttention,
-            MultiDecoder,
-            MultiResolutionAttentionFusion,
-            MultiScaleLSTM,
-            QuantileDistributionModeling,
-            VariableSelectionNetwork,
-            PositionalEncoding, 
-            aggregate_time_window_output, 
-            aggregate_multiscale_on_3d
-        )
-    from .op import process_pinn_inputs, compute_consolidation_residual 
+    from .._tensor_validation import check_inputs
+    from .op import process_pinn_inputs, compute_consolidation_residual
     from .utils import process_pde_modes 
-    
-    
-DEP_MSG = dependency_message('nn.pinn.models') 
 
+else:
+    class Model: pass
+    class Layer: pass
+    class _DummyRegister_keras_serializable: 
+        pass 
+    class KERAS_DEPS: 
+        register_keras_serializable = _DummyRegister_keras_serializable
+        
+    Tensor = Any
+
+DEP_MSG = dependency_message('nn.pinn.models') 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
-__all__ =["PiHALNet"] 
+__all__ = ["PIHALNet"]
 
-
-@register_keras_serializable('fusionlab.nn.pinn', name="PIHALNet")
+@KERAS_DEPS.register_keras_serializable(
+    'fusionlab.nn.pinn', name="PIHALNet"
+)
 @param_deprecated_message(
     conditions_params_mappings=[
         {
@@ -116,7 +94,7 @@ __all__ =["PiHALNet"]
     warning_category=UserWarning 
 )
 
-class PiHALNet(Model, NNLearner):
+class PIHALNet(BaseAttentive):
     """
     Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
 
@@ -135,32 +113,10 @@ class PiHALNet(Model, NNLearner):
         variables to be learned during training (default).
     """
     @validate_params({
-        "static_input_dim": [Interval(Integral, 0, None, closed='left')],
-        "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
-        "future_input_dim": [Interval(Integral, 0, None, closed='left')],
-        "output_subsidence_dim": [Interval(Integral, 1, None, closed='left')],
-        "output_gwl_dim": [Interval(Integral, 1, None, closed='left')],
-        
-        "embed_dim": [Interval(Integral, 1, None, closed='left')],
-        "hidden_units": [Interval(Integral, 1, None, closed='left')],
-        "lstm_units": [Interval(Integral, 1, None, closed='left'), None],
-        "attention_units": [Interval(Integral, 1, None, closed='left')],
-        "num_heads": [Interval(Integral, 1, None, closed='left')],
-        "dropout_rate": [Interval(Real, 0, 1, closed="both")],
-        
-        "forecast_horizon": [Interval(Integral, 1, None, closed='left')], 
-        "quantiles": ['array-like', StrOptions({'auto'}), None],
-        "max_window_size": [Interval(Integral, 1, None, closed='left')],
-        "memory_size": [Interval(Integral, 1, None, closed='left')], 
-        "scales": ['array-like', StrOptions({'auto'}), None],
-        "multi_scale_agg": [StrOptions({
-            "last", "average", "flatten", "auto", "sum", "concat"}), None],
-        "final_agg": [StrOptions({"last", "average", "flatten"})],
-
-        "activation": [str, callable],
-        "use_residuals": [bool],
-        "use_batch_norm": [bool],
-        
+        'output_subsidence_dim': [
+            Interval(Integral,1, None, closed="left")], 
+        'output_gwl_dim': [
+            Interval(Integral,1, None, closed="left"),], 
         "pde_mode": [
             StrOptions({'consolidation', 'gw_flow', 'both', 'none'}), 
             'array-like', None 
@@ -169,15 +125,8 @@ class PiHALNet(Model, NNLearner):
             str, Real, None, StrOptions({"learnable"}),
             LearnableC, FixedC, DisabledC
         ], 
-        "mode": [
-            StrOptions({'tft', 'pihal', 'tft_like', 'pihal_like',
-                        "tft-like", "pihal-like"}), 
-            None
-            ], 
         "gw_flow_coeffs": [dict, type(None)], 
-        'use_vsn': [bool, int], 
-        'vsn_units': [Interval(Integral, 0, None, closed="left"), None]
-    })
+        })
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
     def __init__(
         self,
@@ -210,43 +159,48 @@ class PiHALNet(Model, NNLearner):
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         mode: Optional[str]=None, 
+        attention_levels:Optional[Union[str, List[str]]]=None, 
         name: str = "PIHALNet",
         **kwargs
     ):
-        super().__init__(name=name, **kwargs)
-
-        self.static_input_dim = static_input_dim
-        self.dynamic_input_dim = dynamic_input_dim
-        self.future_input_dim = future_input_dim
-        self.output_subsidence_dim = output_subsidence_dim
-        self.output_gwl_dim = output_gwl_dim
+        # The output_dim for the base attentive model is the sum of
+        # the two target dimensions.
         self._combined_output_target_dim = (
             output_subsidence_dim + output_gwl_dim
         )
-        self.embed_dim = embed_dim 
-        self.hidden_units = hidden_units 
-        self.lstm_units = lstm_units
-        self.attention_units = attention_units
-        self.num_heads = num_heads
-        self.dropout_rate = dropout_rate
-        self.forecast_horizon = forecast_horizon
-        self.max_window_size = max_window_size
-        self.memory_size = memory_size
-        self.final_agg = final_agg
-        self.activation_fn_str = Activation(activation).activation_str
-        self.use_residuals = use_residuals
-        self.use_batch_norm = use_batch_norm
-        
-        self.mode = select_mode (mode ) # default to pihal-like 
-        self.use_vsn = use_vsn
-        self.vsn_units = vsn_units if vsn_units is not None else self.hidden_units
-
-        (self.quantiles, self.scales,
-         self.lstm_return_sequences) = set_default_params(
-            quantiles, scales, multi_scale_agg
+        # Pass all shared parameters to the BaseAttentive parent class.
+        super().__init__(
+           static_input_dim=static_input_dim, 
+           dynamic_input_dim=dynamic_input_dim, 
+           future_input_dim=future_input_dim, 
+           output_dim= self._combined_output_target_dim,
+           forecast_horizon=forecast_horizon,
+           mode=mode, 
+           quantiles=quantiles,
+           embed_dim=embed_dim,
+           hidden_units=hidden_units,
+           lstm_units=lstm_units,
+           attention_units=attention_units,
+           num_heads=num_heads,
+           dropout_rate=dropout_rate,
+           max_window_size=max_window_size,
+           memory_size=memory_size,
+           scales=scales,
+           multi_scale_agg=multi_scale_agg,
+           final_agg=final_agg,
+           activation=activation,
+           use_residuals=use_residuals,
+           use_vsn=use_vsn,
+           use_batch_norm =use_batch_norm, 
+           vsn_units=vsn_units,
+           attention_levels =attention_levels,
+           name=name,
+            **kwargs
         )
-        self.multi_scale_agg_mode = multi_scale_agg
-
+        # Initialize only PINN-specific attributes
+        self.output_subsidence_dim = output_subsidence_dim
+        self.output_gwl_dim = output_gwl_dim
+        
         # --- Store PINN Configuration ---
         self.pde_modes_active = process_pde_modes(
             pde_mode, enforce_consolidation=True,
@@ -261,214 +215,9 @@ class PiHALNet(Model, NNLearner):
             gw_flow_coeffs if gw_flow_coeffs is not None else {}
             )
 
-        self._build_halnet_layers()
+        
+        # Build the physics-related components
         self._build_pinn_components()
-            
-    def run_halnet_core(
-        self,
-        static_input: Tensor,
-        dynamic_input: Tensor,
-        future_input: Tensor,
-        training: bool
-    ) -> Tensor:
-        r"""
-        Execute the core **encoder–decoder** data‑driven pipeline of
-        :class:`~fusionlab.nn.pinn.PIHALNet`.
-        
-        Executes data-driven pipeline with flexible encoder-decoder logic.
-        
-        The method ingests *static*, *dynamic* (past), and *future*
-        covariates, passes them through Variable Selection Networks
-        (VSNs) or dense projections, and then processes them with a
-        multi‑scale LSTM encoder and a hierarchical attention‑augmented
-        decoder to produce a single latent vector per sample.  This
-        vector is subsequently fed to the model’s task‑specific output
-        head (not shown here).
-        
-        Parameters
-        ----------
-        static_input : Tensor
-            Tensor of shape ``(B, S)`` containing time‑invariant
-            features such as lithology or well depth, where *B* is the
-            batch size and *S* is ``static_input_dim``.
-        dynamic_input : Tensor
-            Past time‑series of length :math:`T_\mathrm{past}` with
-            shape ``(B, T_past, D_in)``.  Typical examples are
-            historical groundwater levels or precipitation.
-        future_input : Tensor
-            Known future covariates of length
-            :pyattr:`forecast_horizon` with shape
-            ``(B, T_future, F_in)``.
-        training : bool
-            Flag forwarded to Keras layers to enable dropout and other
-            training‑only behaviour.
-        
-        Returns
-        -------
-        Tensor
-            A 2‑D tensor of shape ``(B, A)``, where *A* is
-            ``attention_units``.  This latent representation encodes the
-            fused historical context, static descriptors, and known
-            future information.
-        
-        Notes
-        -----
-        * If :pyattr:`use_vsn` is *True*, each input type is first passed
-          through a Variable Selection Network that outputs both
-          feature‑wise importance weights and transformed features.
-        * Duplicate temporal resolutions produced by
-          :pyclass:`~fusionlab.layers.MultiScaleLSTM` are aggregated with
-          :pyfunc:`fusionlab.ops.aggregate_multiscale_on_3d`.
-        * Duplicate residual connections follow the original TFT design
-          but employ GRN‑based :math:`\mathrm{Add}\!\!+\!\!
-          \mathrm{LayerNorm}` blocks for improved stability.
- 
-        """
-        time_steps = tf_shape(dynamic_input)[1]
-
-        # 1. Initial Feature Processing
-        static_context, dyn_proc, fut_proc = None, dynamic_input, future_input
-        if self.use_vsn:
-            if self.static_vsn is not None:
-                vsn_static_out = self.static_vsn(
-                    static_input, training=training)
-                static_context = self.static_vsn_grn(
-                    vsn_static_out, training=training)
-            if self.dynamic_vsn is not None:
-                dyn_context = self.dynamic_vsn(
-                    dynamic_input, training=training 
-                    )
-                dyn_proc = self.dynamic_vsn_grn(
-                    dyn_context, training=training
-                )
-            if self.future_vsn is not None:
-                fut_context = self.future_vsn(
-                    future_input, training=training 
-                )
-                fut_proc = self.future_vsn_grn(
-                    fut_context,  training=training
-                )
-                
-        else: # Non-VSN path
-            if self.static_dense is not None:
-                processed_static = self.static_dense(static_input)
-                # Note: here the GRN's output dim might differ from the
-                # VSN path. This is handled by the decoder_input_projection.
-                static_context = self.grn_static_non_vsn(
-                    processed_static, training=training) 
-                
-            dyn_proc = self.dynamic_dense(dynamic_input)
-            fut_proc = self.future_dense(future_input)
-        
-        logger.debug(f"Shape after VSN/initial processing: "
-                     f"Dynamic={getattr(dyn_proc, 'shape', 'N/A')}, "
-                     f"Future={getattr(fut_proc, 'shape', 'N/A')}")
-        
-        logger.debug(f"Initial processed shapes: Dynamic={dyn_proc.shape}, "
-                     f"Future={fut_proc.shape}")
-
-        # 2. Encoder Path
-        encoder_input_parts = [dyn_proc]
-        if self.mode == 'tft_like':
-            # For TFT mode, slice historical part of future features
-            # and add to the encoder input.
-            fut_enc_proc = fut_proc[:, :time_steps, :]
-            encoder_input_parts.append(fut_enc_proc)
-        
-        encoder_raw = tf_concat(encoder_input_parts, axis=-1)
-        encoder_input = self.encoder_positional_encoding(encoder_raw)
-        lstm_out = self.multi_scale_lstm(
-            encoder_input, training=training 
-            )
-        encoder_sequences = aggregate_multiscale_on_3d(
-            lstm_out, mode='concat')
-        
-        if self.dynamic_time_window is not None:
-            encoder_sequences = self.dynamic_time_window(
-                encoder_sequences, training=training)
-            
-        logger.debug(f"Encoder sequences shape: {encoder_sequences.shape}")
-
-        # 3. Decoder Path
-        if self.mode == 'tft_like':
-            # For TFT mode, slice the forecast part of future features.
-            fut_dec_proc = fut_proc[:, time_steps:, :]
-        else: # For pihal_like mode, use the whole future tensor.
-            fut_dec_proc = fut_proc
-
-        decoder_parts = []
-        if static_context is not None:
-            static_expanded = tf_expand_dims(static_context, 1)
-            static_expanded = tf_tile(
-                static_expanded, [1, self.forecast_horizon, 1])
-            decoder_parts.append(static_expanded)
-        
-        if self.future_input_dim > 0:
-            future_with_pos = self.decoder_positional_encoding(
-                fut_dec_proc)
-            decoder_parts.append(future_with_pos)
-
-        if not decoder_parts:
-            batch_size = tf_shape(dynamic_input)[0]
-            raw_decoder_input = tf_zeros(
-                (batch_size, self.forecast_horizon, self.attention_units))
-        else:
-            raw_decoder_input = tf_concat(decoder_parts, axis=-1)
-    
-        # Project the raw decoder input to a consistent feature dimension.
-        projected_decoder_input = self.decoder_input_projection(
-            raw_decoder_input)
-        logger.debug(f"Projected decoder input shape: "
-                     f"{projected_decoder_input.shape}")
-    
-        # --- 4. Attention-based Fusion (Encoder-Decoder Interaction) ---
-        cross_attention_output = self.cross_attention(
-            [projected_decoder_input, encoder_sequences], training=training)
-        
-        cross_attention_processed = self.attention_processing_grn(
-            cross_attention_output, training=training)
-    
-        # First residual connection within the decoder block.
-        if self.use_residuals and self.decoder_add_norm is not None:
-            decoder_context_with_attention = self.decoder_add_norm[0](
-                [projected_decoder_input, cross_attention_processed])
-            decoder_context_with_attention = self.decoder_add_norm[1](
-                decoder_context_with_attention)
-        else:
-            # If no residual, the processed attention output becomes the context.
-            decoder_context_with_attention = cross_attention_processed
-        
-        hierarchical_att_output = self.hierarchical_attention(
-            [decoder_context_with_attention, decoder_context_with_attention],
-            training=training
-        )
-        memory_attention_output = self.memory_augmented_attention(
-            hierarchical_att_output, training=training
-        )
-        
-        # --- 5. Final Feature Combination for Decoding ---
-        final_features = self.multi_resolution_attention_fusion(
-             memory_attention_output, training=training
-        )
-        
-        if self.use_residuals and self.final_add_norm:
-            # The `residual_base` must have the same dimension as `final_features`
-            residual_base = self.residual_dense(
-                decoder_context_with_attention)
-            final_features = self.final_add_norm[0](
-                [final_features, residual_base])
-            final_features = self.final_add_norm[1](final_features)
-        
-        logger.debug(f"Shape after final fusion: {final_features.shape}")
-    
-        # Collapse the time dimension to get a single vector per sample.
-        final_features_for_decode = aggregate_time_window_output(
-            final_features, self.final_agg
-        )
-        logger.debug(f"Final features for decoder shape: "
-                     f"{final_features_for_decode.shape}")
-        
-        return final_features_for_decode
 
     def split_outputs(
         self, 
@@ -604,7 +353,7 @@ class PiHALNet(Model, NNLearner):
             
         return (s_pred_final, gwl_pred_final,
                 s_pred_mean_for_pde, gwl_pred_mean_for_pde)
-    
+
     @tf_autograph.experimental.do_not_convert
     def call(
         self,
@@ -683,7 +432,6 @@ class PiHALNet(Model, NNLearner):
             Helper that separates subsidence and GWL channels.
         """
         # 1. Unpack and Validate Inputs
-        # - Process and Validate All Inputs ---
         # The `process_pinn_inputs` helper unpacks the input dict and
         # isolates the coordinate tensors for later use.
         logger.debug("PIHALNet call: Processing PINN inputs.")
@@ -702,73 +450,30 @@ class PiHALNet(Model, NNLearner):
             verbose=0 # Set to >0 for  detailed logging from checks
             
         )
-        # `validate_model_inputs` can provide a secondary, more detailed
-        # check on the unpacked feature tensors.
-        static_p, dynamic_p, future_p = validate_model_inputs(
-            inputs=[static_features, dynamic_features, future_features],
-            static_input_dim=self.static_input_dim,
-            dynamic_input_dim=self.dynamic_input_dim,
-            future_covariate_dim=self.future_input_dim,
-            #forecast_horizon=self.forecast_horizon,
-            mode='strict',
-            verbose=0 # Set to 1 for more detailed logging from validator
-        )
+         
         logger.debug(
             "Input shapes after validation:"
-            f" S={getattr(static_p, 'shape', 'None')}, "
-            f"D={getattr(dynamic_p, 'shape', 'None')},"
-            f" F={getattr(future_p, 'shape', 'None')}"
+            f" S={getattr(static_features, 'shape', 'None')}, "
+            f"D={getattr(dynamic_features, 'shape', 'None')},"
+            f" F={getattr(future_features, 'shape', 'None')}"
         )
         
-        # ***  Validate future_p shape based on mode ***
-        if self.mode == 'tft_like':
-            expected_future_span = self.max_window_size + self.forecast_horizon
-        else:  # pihal_like
-            expected_future_span = self.forecast_horizon
-
-        actual_future_span = tf_shape(future_p)[1]
-        expected_span_tensor = tf_convert_to_tensor(
-            expected_future_span, dtype=actual_future_span.dtype)
+        # 2. Get the data-driven predictions from the base model
+        # The base call handles validation and the core encoder-decoder
+        #  Get the data-driven predictions from the base model
+        # The base call handles validation and the core encoder-decoder
+        # outputs the decoder final predictions 
+        predictions_final_targets = super().call(
+            [static_features, dynamic_features, future_features], 
+            training=training)
         
-        tf_assert_equal(
-            actual_future_span, expected_span_tensor,
-            message=(
-                f"Incorrect 'future_features' tensor length for "
-                f"mode='{self.mode}'. Expected time dimension of "
-                f"{expected_future_span}, but got {actual_future_span}."
-            )
-        )
-    
-        # --- 2. Run Core Data-Driven Feature Extraction ---
-        # This self-contained method performs the complex feature engineering
-        # using LSTMs and attention mechanisms.
-        logger.debug("Running HALNet core for feature extraction.")
-        final_features_for_decode = self.run_halnet_core(
-            static_input=static_p,
-            dynamic_input=dynamic_p,
-            future_input=future_p,
-            training=training
-        )
+        # `base_outputs` contains the combined predictions.
+        # We need both the final (potentially quantile) predictions for
+        # data loss and the mean predictions for the PDE residual.
+       
         logger.debug(
-            f"Shape of features for decoder: {final_features_for_decode.shape}"
-        )
-
-        # --- 3. Generate Predictions ---
-        # Get mean predictions (for PDE) from the multi-horizon decoder
-        decoded_outputs = self.multi_decoder(
-            final_features_for_decode, training=training
-        )
-        logger.debug(f"Shape of decoded outputs (means): {decoded_outputs.shape}")
-
-        # Get final predictions (potentially with quantiles, for data loss)
-        predictions_final_targets = decoded_outputs
-        if self.quantiles is not None:
-            predictions_final_targets = self.quantile_distribution_modeling(
-                decoded_outputs, training=training
-            )
-        logger.debug(
-            f"Shape of final quantile outputs: {predictions_final_targets.shape}"
-        )
+            f"Shape of decoded outputs (means):"
+            f" {predictions_final_targets.shape}")
 
         # --- 4. Split and Organize Outputs ---
         # Use helper to separate subsidence and GWL predictions for both
@@ -776,21 +481,23 @@ class PiHALNet(Model, NNLearner):
         (s_pred_final, gwl_pred_final, 
          s_pred_mean_for_pde, gwl_pred_mean_for_pde) = self.split_outputs(
              predictions_combined=predictions_final_targets,
-             decoded_outputs_for_mean=decoded_outputs
+             decoded_outputs_for_mean=self._decoded_outputs
          )
         # --- 5. Calculate Physics Residual ---
         # Let's verify the shape and slice if needed
         # (this is a patch, not the ideal fix)
         if t.shape[1] != self.forecast_horizon:
              # This indicates a data pipeline issue, but we can patch it here
-             # by assuming the last `forecast_horizon` steps of `t` are the correct ones.
+             # by assuming the last `forecast_horizon` steps of `t`
+             # are the correct ones.
              # This assumption may be incorrect depending on your sequence prep.
              t_for_pde = t[:, -self.forecast_horizon:, :]
              # A better approach is to fix the data pipeline so `inputs['coords']`
              # has the shape (batch, forecast_horizon, 3) from the start.
         else:
             t_for_pde = t
-         
+        
+        # 3. Compute the physics residual 
         # The PDE residual is calculated on the mean predictions using
         # finite differences, which is suitable for sequence outputs.
         # This does NOT require a GradientTape in the call method.
@@ -812,13 +519,12 @@ class PiHALNet(Model, NNLearner):
         
         logger.debug(f"Shape of PDE residual: {pde_residual.shape}")
   
-        # --- 6. Return All Components for Loss Calculation ---
+        #  4. Return the combined dictionary for the loss function
         return {
             "subs_pred": s_pred_final,
             "gwl_pred": gwl_pred_final,
             "pde_residual": pde_residual,
         }
- 
 
     def compile(
         self,
@@ -1072,222 +778,79 @@ class PiHALNet(Model, NNLearner):
     def get_pinn_coefficient_C(self) -> Tensor:
         """Returns the physical coefficient C."""
         return self._get_C()
-        
-    def _build_halnet_layers(self):
-        """Instantiates all layers for the HALNet architecture.
-    
-        This method sets up all necessary components, including conditional
-        Variable Selection Networks (VSNs) and the core layers for the
-        encoder-decoder structure like LSTMs and attention mechanisms.
-        """
-        # --- 1. Variable Selection Networks (Conditional) ---
-        # These layers are created only if `self.use_vsn` is True.
-        # They serve to select the most relevant input features and embed
-        # them into a common feature space.
-        if self.use_vsn:
-            if self.static_input_dim > 0:
-                self.static_vsn = VariableSelectionNetwork(
-                    num_inputs=self.static_input_dim,
-                    units=self.vsn_units,
-                    dropout_rate=self.dropout_rate,
-                    name="static_vsn"
-                )
-                self.static_vsn_grn = GatedResidualNetwork(
-                    units=self.hidden_units,
-                    dropout_rate=self.dropout_rate,
-                    name="static_vsn_grn"
-                )
-            else:
-                self.static_vsn, self.static_vsn_grn = None, None
-    
-            if self.dynamic_input_dim > 0:
-                self.dynamic_vsn = VariableSelectionNetwork(
-                    num_inputs=self.dynamic_input_dim,
-                    units=self.vsn_units,
-                    dropout_rate=self.dropout_rate,
-                    use_time_distributed=True,
-                    name="dynamic_vsn"
-                )
-                self.dynamic_vsn_grn = GatedResidualNetwork(
-                    units=self.embed_dim,
-                    dropout_rate=self.dropout_rate,
-                    name="dynamic_vsn_grn"
-                )
-            else:
-                self.dynamic_vsn, self.dynamic_vsn_grn = None, None
-    
-            if self.future_input_dim > 0:
-                self.future_vsn = VariableSelectionNetwork(
-                    num_inputs=self.future_input_dim,
-                    units=self.vsn_units,
-                    dropout_rate=self.dropout_rate,
-                    use_time_distributed=True,
-                    name="future_vsn"
-                )
-                self.future_vsn_grn = GatedResidualNetwork(
-                    units=self.embed_dim,
-                    dropout_rate=self.dropout_rate,
-                    name="future_vsn_grn"
-                )
-            else:
-                self.future_vsn, self.future_vsn_grn = None, None
-        else:
-            # If not using VSNs, ensure all related attributes are None.
-            self.static_vsn, self.static_vsn_grn = None, None
-            self.dynamic_vsn, self.dynamic_vsn_grn = None, None
-            self.future_vsn, self.future_vsn_grn = None, None
-    
-        # --- 2. Shared & Non-VSN Path Layers ---
-        # These layers are essential for processing attention outputs or
-        # initial features if VSNs are disabled.
-    
-        # This GRN is used to process static features (if not using VSN)
-        # and to refine the output of the cross-attention layer. Its
-        # output dimension is set to `attention_units` for consistency
-        # within the attention block.
-        self.attention_processing_grn = GatedResidualNetwork(
-            units=self.attention_units,
-            dropout_rate=self.dropout_rate,
-            activation=self.activation_fn_str,
-            name="attention_processing_grn"
-        )
-    
-        # This layer projects the combined decoder context into a
-        # consistent feature space (`attention_units`) before it's used
-        # in attention mechanisms and residual connections.
-        self.decoder_input_projection = Dense(
-            self.attention_units,
-            activation=self.activation_fn_str,
-            name="decoder_input_projection"
-        )
-        
-        # These layers are only created if VSN is NOT used.
-        if not self.use_vsn: 
-            if self.static_input_dim > 0:
-                self.static_dense = Dense(
-                    self.hidden_units, activation=self.activation_fn_str
-                )
-                # This GRN is specifically for the non-VSN static path. Its
-                # dimensionality matches the static context (`hidden_units`).
-                self.grn_static_non_vsn = GatedResidualNetwork(
-                    units=self.hidden_units, 
-                    dropout_rate=self.dropout_rate,
-                    activation=self.activation_fn_str,
-                    name="grn_static_non_vsn"
-                )
-            else:
-                self.static_dense = None
-                self.grn_static_non_vsn = None
-        
-            # Create dense layers for dynamic and future features
-            # for non-VSN path
-            self.dynamic_dense = Dense(self.embed_dim)
-            self.future_dense = Dense(self.embed_dim)
-        else: 
-            self.static_dense =None 
-            self.grn_static_non_vsn = None
-            self.dynamic_dense =None
-            self.future_dense = None
-            
-     
-        # --- 3. Core Architectural Layers ---
-        # self.positional_encoding = PositionalEncoding()
-        # *** FIX: Create two separate instances of PositionalEncoding ***
-        self.encoder_positional_encoding = PositionalEncoding(
-            name="encoder_pos_encoding")
-        self.decoder_positional_encoding = PositionalEncoding(
-            name="decoder_pos_encoding")
-    
-        self.multi_scale_lstm = MultiScaleLSTM(
-            lstm_units=self.lstm_units,
-            scales=self.scales,
-            return_sequences=True  # Critical for the encoder path
-        )
-        self.hierarchical_attention = HierarchicalAttention(
-            units=self.attention_units,
-            num_heads=self.num_heads
-        )
-        self.cross_attention = CrossAttention(
-            units=self.attention_units, 
-            num_heads=self.num_heads
-        )
-        self.memory_augmented_attention = MemoryAugmentedAttention(
-            units=self.attention_units,
-            memory_size=self.memory_size,
-            num_heads=self.num_heads
-        )
-        self.multi_resolution_attention_fusion = \
-            MultiResolutionAttentionFusion(
-                units=self.attention_units,
-                num_heads=self.num_heads
-            )
-        self.dynamic_time_window = DynamicTimeWindow(
-            max_window_size=self.max_window_size
-        )
-        self.multi_decoder = MultiDecoder(
-            output_dim=self._combined_output_target_dim,
-            num_horizons=self.forecast_horizon
-        )
-        self.quantile_distribution_modeling = QuantileDistributionModeling(
-            quantiles=self.quantiles,
-            output_dim=self._combined_output_target_dim
-        )
-    
-        # --- 4. Layers for Residual Connections (Conditional) ---
-        # Instantiate Add and LayerNormalization layers here to avoid
-        # re-creation inside the `call` method, which is incompatible
-        # with tf.function.
-        if self.use_residuals:
-            self.residual_dense = Dense(self.attention_units)
-            # Layers for the first residual connection in the decoder
-            self.decoder_add_norm = [Add(), LayerNormalization()]
-            # Layers for the final residual connection
-            self.final_add_norm = [Add(), LayerNormalization()]
-        else:
-            self.residual_dense = None
-            self.decoder_add_norm = None
-            self.final_add_norm = None
-            
-    def get_config(self):
-        config = super().get_config()
-        base_config = {
-           'static_input_dim': self.static_input_dim,
-           'dynamic_input_dim': self.dynamic_input_dim,
-           'future_input_dim': self.future_input_dim,
-           'output_subsidence_dim': self.output_subsidence_dim,
-           'output_gwl_dim': self.output_gwl_dim,
-           'embed_dim': self.embed_dim,
-           'hidden_units': self.hidden_units,
-           'lstm_units': self.lstm_units,
-           'attention_units': self.attention_units,
-           'num_heads': self.num_heads,
-           'dropout_rate': self.dropout_rate,
-           'forecast_horizon': self.forecast_horizon,
-           'quantiles': self.quantiles,
-           'max_window_size': self.max_window_size,
-           'memory_size': self.memory_size,
-           'scales': self.scales,
-           'multi_scale_agg': self.multi_scale_agg_mode,
-           'final_agg': self.final_agg,
-           'activation': self.activation_fn_str,
-           'use_residuals': self.use_residuals,
-           'use_batch_norm': self.use_batch_norm,
-           'pinn_coefficient_C': self.pinn_coefficient_C_config,
-           'use_vsn': self.use_vsn, 
-           'vsn_units': self.vsn_units,
-           'name': self.name, 
-           'mode': self.mode, 
-           'pde_mode': self.pde_modes_active, 
-           'gw_flow_coeffs': self.gw_flow_coeffs_config,
-        }
-        config.update(base_config)
-        return config
 
+    def get_config(self):
+        """Returns the full configuration of the PIHALNet model."""
+        # Get the config from the base class first
+        base_config = super().get_config()
+        # Add PIHALNet-specific parameters
+        base_config.update({
+            "output_subsidence_dim": self.output_subsidence_dim,
+            "output_gwl_dim": self.output_gwl_dim,
+            "pde_mode": self.pde_modes_active,
+            "pinn_coefficient_C": self.pinn_coefficient_C_config,
+            "gw_flow_coeffs": self.gw_flow_coeffs_config, 
+            "name": self.name # for consistency 
+        })
+        # The base config already contains all other necessary params
+        return base_config
+    
     @classmethod
     def from_config(cls, config, custom_objects=None):
-        return cls(**config)         
+        """
+        Instantiates the class from a configuration dictionary.
     
-PiHALNet.__doc__+=r"""\n
+        This method is a factory method for creating an instance of the class 
+        from a dictionary containing the configuration. The `output_dim` is 
+        removed from the configuration since it is computed dynamically based 
+        on other parameters (e.g., `output_subsidence_dim + output_gwl_dim`), 
+        ensuring that it is not redundant in the configuration.
+    
+        Parameters
+        ----------
+        config : dict
+            A dictionary containing the configuration parameters for the class.
+            The dictionary should contain all the required parameters except for 
+            `output_dim`, which is computed internally.
+        
+        custom_objects : dict, optional
+            A dictionary of custom objects that might be needed to interpret 
+            the configuration, such as custom layers, activation functions, 
+            or other components.
+    
+        Returns
+        -------
+        object
+            An instance of the class, initialized with the parameters from 
+            the `config` dictionary.
+    
+        Notes
+        -----
+        - The method removes the `'output_dim'` key from the configuration 
+          because it is derived from the sum of `output_subsidence_dim` and 
+          `output_gwl_dim`, and including it would result in redundancy.
+        - This method is typically used for loading a model or initializing 
+          an object from a saved configuration, which is common in model 
+          serialization/deserialization.
+        
+        Example
+        -------
+        >>> config = {
+        >>>     'output_subsidence_dim': 2,
+        >>>     'output_gwl_dim': 3,
+        >>>     'other_param': 42
+        >>> }
+        >>> model = MyModel.from_config(config)
+        >>> print(model.output_dim)  # Will be computed as 5, not directly passed.
+        """
+        if 'output_dim' in config: 
+            config.pop('output_dim')  # Remove 'output_dim' since it is computed
+                                      # from output_subsidence_dim + output_gwl_dim.
+        return cls(**config)
+   
+
+    
+PIHALNet.__doc__+=r"""\n
 The architecture can operate in two modes for its physical coefficient “C”:
 1. **Parameter Specification:** Use a user-supplied constant value.
 2. **Parameter Discovery:** Treat the coefficient as trainable (default),

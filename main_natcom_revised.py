@@ -116,7 +116,7 @@ NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not eno
                                 # in df_test_master, auto extract all batches.  
 AGG = True # Set this to True or False as needed for  specific test case
 
-MODE ='pihal' # Mode that Model should operate 
+MODE ='pihal' # kind that Model operation mode .
 # Output Directories
 BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
@@ -548,7 +548,8 @@ pihalnet_params = {
     'use_residuals': True,
     'use_batch_norm': False,
     'use_vsn': True, # Enable VSN
-    'vsn_units': 32, # Units for VSN internal GRNs
+    'vsn_units': 32, # Units for VSN internal GRNs, 
+    'mode': MODE, 
 }
 
 pihal_model_inst = PIHALNet(
@@ -633,8 +634,9 @@ print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
 
 pihalnet_metrics = {
-    "Loss Components": ["total_loss", "data_loss", "physics_loss", "val_loss"],
-    "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
+    "Loss Components": [
+        "total_loss", "data_loss", "physics_loss", "val_loss"],
+    # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
 }
 
 # PIHALNet data on separate subplots
@@ -643,7 +645,7 @@ print("\n---PIHALNet History on Separate Subplots ---")
 plot_history_in(
     history.history,
     metrics=pihalnet_metrics,
-    layout='subplots',
+    layout='single',
     title='PIHALNet Training History', 
     savefig=os.path.join(
         RUN_OUTPUT_PATH, f"{CITY_NAME}_pihalnet_training_history_plot_"), 

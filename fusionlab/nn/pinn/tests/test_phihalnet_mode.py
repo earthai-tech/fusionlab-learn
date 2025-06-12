@@ -6,7 +6,7 @@ from typing import Dict, Any,Tuple
 
 try:
     # import tensorflow as tf
-    from fusionlab.nn.pinn.models import PIHALNet
+    from fusionlab.nn.pinn._pihal import PIHALNet
     from tensorflow.keras.losses import MeanSquaredError
     from tensorflow.keras.optimizers import Adam
     from tensorflow.data import Dataset

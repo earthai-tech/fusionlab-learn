@@ -51,7 +51,7 @@ __all__ = ["LearnableC", "FixedC", "DisabledC", "LearnableK", "LearnableSs",
 
 
 
-class BaseLearnableParam(ABC):
+class BaseLearnable(ABC):
     """
     Abstract base for learnable physical parameters.
 
@@ -247,7 +247,7 @@ class DisabledC:
         pass
 
 
-class LearnableK(BaseLearnableParam):
+class LearnableK(BaseLearnable):
     """
     Learnable Hydraulic Conductivity (K).
 
@@ -303,7 +303,7 @@ class LearnableK(BaseLearnableParam):
         )
 
 
-class LearnableSs(BaseLearnableParam):
+class LearnableSs(BaseLearnable):
     """
     Learnable Specific Storage (Ss).
     
@@ -354,7 +354,7 @@ class LearnableSs(BaseLearnableParam):
             )
         )
 
-class LearnableQ(BaseLearnableParam):
+class LearnableQ(BaseLearnable):
     """
     Learnable Source/Sink term (Q).
 
@@ -438,7 +438,7 @@ def resolve_physical_param(
     {'learnable': True, 'initial_value': 0.5, 'class': 'LearnableK'}
     """
     if serialize:
-        if isinstance(param, BaseLearnableParam):
+        if isinstance(param, BaseLearnable):
             return {
                 "learnable": param.trainable,
                 "initial_value": param.initial_value,
@@ -449,7 +449,7 @@ def resolve_physical_param(
             "initial_value": float(param)
         }
 
-    if isinstance(param, BaseLearnableParam):
+    if isinstance(param, BaseLearnable):
         return param.get_value()
 
     if isinstance(param, (float, int)):
