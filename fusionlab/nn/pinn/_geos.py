@@ -370,8 +370,6 @@ class PITGWFlow(Model, NNLearner):
         return cls(**config)
 
 
-
-
 class GWResidual:
     """
     Manages and provides physical coefficients (K, Ss, Q) for groundwater
