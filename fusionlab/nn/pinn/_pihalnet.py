@@ -361,11 +361,19 @@ class PIHALNet(Model, NNLearner):
                 static_context = self.static_vsn_grn(
                     vsn_static_out, training=training)
             if self.dynamic_vsn is not None:
-                dyn_proc = self.dynamic_vsn_grn(self.dynamic_vsn(
-                    dynamic_input, training), training)
+                dyn_context = self.dynamic_vsn(
+                    dynamic_input, training=training 
+                    )
+                dyn_proc = self.dynamic_vsn_grn(
+                    dyn_context, training=training
+                )
             if self.future_vsn is not None:
-                fut_proc = self.future_vsn_grn(self.future_vsn(
-                    future_input, training), training)
+                fut_context = self.future_vsn(
+                    future_input, training=training 
+                )
+                fut_proc = self.future_vsn_grn(
+                    fut_context,  training=training
+                )
                 
         else: # Non-VSN path
             if self.static_dense is not None:
@@ -727,7 +735,7 @@ class PIHALNet(Model, NNLearner):
             static_input_dim=self.static_input_dim,
             dynamic_input_dim=self.dynamic_input_dim,
             future_covariate_dim=self.future_input_dim,
-            # forecast_horizon=self.forecast_horizon,
+            #forecast_horizon=self.forecast_horizon,
             mode='strict',
             verbose=0 # Set to 1 for more detailed logging from validator
         )
