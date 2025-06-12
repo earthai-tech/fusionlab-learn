@@ -562,6 +562,7 @@ pihal_model_inst = PIHALNet(
     pde_mode=PDE_MODE_CONFIG,
     pinn_coefficient_C=PINN_COEFF_C_CONFIG,
     gw_flow_coeffs=None, # Keep None for consolidation focus
+    mode =MODE, 
     **pihalnet_params
 )
 
