@@ -2792,6 +2792,7 @@ def normalize_time_column(
 def select_mode(
     mode: Union[str, None] = None,
     default: str = "pihal_like",
+    canonical: Optional[Dict[str, Any], List[Any]] =None, # New parameter added  
 ) -> str:
     r"""
     Resolve a user‑supplied *mode* string to the canonical value
@@ -2863,7 +2864,7 @@ def select_mode(
                  "tft": "tft_like", "tft_like": "tft_like", 
                  "tft-like": "tft_like","pihal-like": "pihal_like",
                  }
-
+    # if canonycak is a list , probably you can create dict with that to perform 
     if mode is None:
         return canonical[default]
 
