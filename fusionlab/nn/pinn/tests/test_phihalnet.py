@@ -2,49 +2,22 @@ import pytest
 import numpy as np
 from typing import Dict 
 # Attempt to import PIHALNet and its dependencies
-try:
-    import tensorflow as tf
-    from tensorflow.keras.layers import Input as KerasInput # Alias to avoid confusion
-    from tensorflow.keras.models import Model as KerasFunctionalModel # Alias
-    
-    from fusionlab.params import FixedC 
-    from fusionlab.nn.pinn.models import PIHALNet
-    from fusionlab.nn.pinn.op import (
-        process_pinn_inputs, 
-        compute_consolidation_residual
-    )
-    from fusionlab.nn._tensor_validation import validate_model_inputs 
-    # Import other components PIHALNet uses if they are not automatically
-    # registered or if needed for type checking/mocking (usually not needed for tests)
-    FUSIONLAB_AVAILABLE = True
-except ImportError as e:
-    print(f"Could not import PIHALNet or dependencies: {e}")
-    FUSIONLAB_AVAILABLE = False
-    # Dummy PIHALNet for test collection if imports fail
-    class PIHALNet(tf.keras.Model):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            # Store key params to avoid attribute errors in test structure
-            self.output_subsidence_dim = kwargs.get('output_subsidence_dim', 1)
-            self.output_gwl_dim = kwargs.get('output_gwl_dim', 1)
-            self.forecast_horizon = kwargs.get('forecast_horizon', 1)
-            self.quantiles = kwargs.get('quantiles', None)
-        def call(self, inputs, training=False):
-            # Simplified dummy output for placeholder
-            batch_size = tf.shape(inputs['coords'])[0]
-            h = self.forecast_horizon
-            s_dim, g_dim = self.output_subsidence_dim, self.output_gwl_dim
-            q_len = len(self.quantiles) if self.quantiles else 0
+# try:
+import tensorflow as tf
+from tensorflow.keras.layers import Input as KerasInput # Alias to avoid confusion
+from tensorflow.keras.models import Model as KerasFunctionalModel # Alias
 
-            s_shape = (batch_size, h, q_len, s_dim) if q_len else (batch_size, h, s_dim)
-            g_shape = (batch_size, h, q_len, g_dim) if q_len else (batch_size, h, g_dim)
-            
-            return {
-                "subs_pred": tf.zeros(s_shape, dtype=tf.float32),
-                "gwl_pred": tf.zeros(g_shape, dtype=tf.float32),
-                "pde_residual": tf.zeros((batch_size, h -1 if h > 1 else 1, s_dim), dtype=tf.float32)
-            }
-        def get_pinn_coefficient_C(self): return tf.constant(0.01)
+from fusionlab.params import FixedC 
+from fusionlab.nn.pinn._pihal import PIHALNet
+from fusionlab.nn.pinn.op import (
+    process_pinn_inputs, 
+    compute_consolidation_residual
+)
+FUSIONLAB_AVAILABLE = True
+# except ImportError as e:
+#     print(f"Could not import PIHALNet or dependencies: {e}")
+#     FUSIONLAB_AVAILABLE = False
+
 
 pytestmark = pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE,
@@ -138,40 +111,6 @@ def generate_pinn_target_dict(
     )
     return targets
 
-# def generate_pinn_target_dict(
-#     batch_size=BATCH_SIZE,
-#     t_horizon=T_HORIZON,
-#     out_s_dim=OUT_S_DIM,
-#     out_g_dim=OUT_G_DIM,
-#     quantiles=None
-# ) -> Dict[str, tf.Tensor]:
-#     """Generates a dictionary of dummy target tensors for PIHALNet."""
-#     targets = {}
-#     # CORRECTED: y_true should NOT have a quantile dimension.
-#     # Its shape is (Batch, Horizon, Output_Dim_Per_Target)
-    
-#     targets['subsidence'] = tf.constant(
-#         np.random.rand(batch_size, t_horizon, out_s_dim).astype(np.float32)
-#     )
-#     targets['gwl'] = tf.constant(
-#         np.random.rand(batch_size, t_horizon, out_g_dim).astype(np.float32)
-#     )
-#     if quantiles:
-#         num_q = len(quantiles)
-#         targets['subs_pred'] = tf.constant(
-#             np.random.rand(batch_size, t_horizon, num_q, out_s_dim).astype(np.float32)
-#         )
-#         targets['gwl_pred'] = tf.constant(
-#             np.random.rand(batch_size, t_horizon, num_q, out_g_dim).astype(np.float32)
-#         )
-#     else:
-#         targets['subs_pred'] = tf.constant(
-#             np.random.rand(batch_size, t_horizon, out_s_dim).astype(np.float32)
-#         )
-#         targets['gwl_pred'] = tf.constant(
-#             np.random.rand(batch_size, t_horizon, out_g_dim).astype(np.float32)
-#         )
-#     return targets
 
 # --- Pytest Test Functions ---
 @pytest.mark.skipif(not FUSIONLAB_AVAILABLE, reason="fusionlab PIHALNet not available")

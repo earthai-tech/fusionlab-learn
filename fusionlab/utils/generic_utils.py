@@ -2792,7 +2792,7 @@ def normalize_time_column(
 def select_mode(
     mode: Union[str, None] = None,
     default: str = "pihal_like",
-    canonical: Optional[Dict[str, Any], List[Any]] =None, # New parameter added  
+    canonical: Optional[Union[Dict[str, Any], List[Any]]] = None,
 ) -> str:
     r"""
     Resolve a user‑supplied *mode* string to the canonical value
@@ -2813,10 +2813,20 @@ def select_mode(
         * *None*             – fall back to *default*.
     default : {'pihal', 'tft'}, default ``'pihal'``
         Canonical value returned when *mode* is *None*.
-
+    canonical : dict or list, optional
+        A custom mapping from user input to canonical value.
+        - If a dictionary is provided, it must map input strings to
+          their canonical representation.
+        - If a list is provided, it will be converted to a dictionary 
+          where each element is a key, and the value will be the
+          same as the key.
+        - By default, the function uses a predefined dictionary
+          for mode resolution.
+        
     Returns
     -------
     str
+        Canonical string corresponding to the mode, either 
         ``'pihal_like'`` or ``'tft_like'``.
 
     Raises
@@ -2860,13 +2870,26 @@ def select_mode(
       IEEE T‑PAMI 2025 (in press).
     """
 
-    canonical = {"pihal": "pihal_like", "pihal_like": "pihal_like",
-                 "tft": "tft_like", "tft_like": "tft_like", 
-                 "tft-like": "tft_like","pihal-like": "pihal_like",
-                 }
-    # if canonycak is a list , probably you can create dict with that to perform 
+    default_canonical = {
+        "pihal": "pihal_like", 
+        "pihal_like": "pihal_like",
+        "tft": "tft_like", 
+        "tft_like": "tft_like", 
+        "tft-like": "tft_like", 
+        "pihal-like": "pihal_like"
+    }
+    # Use provided canonical map or fall back to the default
+    if canonical is None:
+        canonical = default_canonical
+        
+    elif isinstance(canonical, list):
+        # Convert list to dictionary where each element is both key and value
+        canonical = {
+            str(mode).lower(): str(mode).lower() for mode in canonical
+        }
+        
     if mode is None:
-        return canonical[default]
+        return canonical.get(default, default)
 
     try:
         return canonical[str(mode).lower().strip()]
