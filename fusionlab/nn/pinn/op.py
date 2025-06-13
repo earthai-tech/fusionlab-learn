@@ -614,6 +614,109 @@ def compute_gw_flow_derivatives(
         
     return dh_dt, d2h_dx2, d2h_dy2
 
+# def __compute_consolidation_residual(
+#     self,
+#     coords: Dict[str, Tensor],
+#     s_pred: Tensor,
+#     h_pred: Tensor
+# ) -> Tensor:
+#     """
+#     Computes the consolidation PDE residual.
+
+#     This implementation uses a simplified form relating the rate of
+#     subsidence to the Laplacian of the hydraulic head, representing
+#     the coupling between the two processes.
+#     PDE form: ds/dt - C * (d²h/dx² + d²h/dy²) = 0
+#     """
+#     # Return zeros if this PDE mode is not active.
+#     if 'consolidation' not in self.pde_modes_active:
+#         return tf_zeros_like(s_pred)
+#     # this function extract tebso
+#     # A persistent tape is needed to compute multiple gradients,
+#     # especially second-order derivatives.
+#     with GradientTape(persistent=True) as tape:
+#         # Watch the coordinate and prediction tensors that need
+#         # to be differentiated.
+#         tape.watch([
+#             coords['t'], coords['x'], coords['y'], s_pred, h_pred
+#         ])
+#         # First-order derivative of subsidence w.r.t. time.
+#         ds_dt = tape.gradient(s_pred, coords['t']) # ∂s/∂t
+
+#         # First-order spatial derivatives of head.
+#         print("h_pred.shape=", h_pred.shape)
+#         print("coords['x'].shape=",coords['x'].shape) 
+#         print("coords['y'].shape=",coords['y'].shape)
+#         dh_dx = tape.gradient(h_pred, coords['x']) # ∂h/∂x
+#         dh_dy = tape.gradient(h_pred, coords['y']) # ∂h/∂y
+        
+ 
+#     print(f"dh_dx shape: {dh_dx.shape}")
+#     print(f"coords['x'] shape: {coords['x'].shape}")
+#     # Second-order spatial derivatives of head.
+#     d2h_dx2 = tape.gradient(dh_dx, coords['x']) # ∂²h/∂x²
+#     d2h_dy2 = tape.gradient(dh_dy, coords['y']) # ∂²h/∂y²
+
+#     # Release the tape from memory once all gradients are computed.
+#     del tape
+
+#     # Validate that all necessary gradients were computed.
+#     if any(g is None for g in [ds_dt, d2h_dx2, d2h_dy2]):
+#         raise ValueError(
+#             "Failed to compute consolidation gradients. Ensure all "
+#             "input coordinates influence the predictions."
+#         )
+
+#     # Assemble the residual for the consolidation equation.
+#     laplacian_h = d2h_dx2 + d2h_dy2
+#     residual = ds_dt - (self.C * laplacian_h)
+#     return residual
+
+# def __compute_gw_flow_residual(
+#     self,
+#     coords: Dict[str, Tensor],
+#     h_pred: Tensor
+# ) -> Tensor:
+#     """
+#     Computes the transient groundwater flow PDE residual.
+
+#     This implements the 2D transient groundwater flow equation.
+#     PDE form: Ss * dh/dt - K * (d²h/dx² + d²h/dy²) - Q = 0
+#     """
+#     # Return zeros if this PDE mode is not active.
+#     if 'gw_flow' not in self.pde_modes_active:
+#         return tf_zeros_like(h_pred)
+
+#     # Use a persistent tape for calculating multiple derivatives.
+#     with GradientTape(persistent=True) as tape:
+#         tape.watch([
+#             coords['t'], coords['x'], coords['y'], h_pred
+#         ])
+
+#         # First-order derivatives.
+#         dh_dt = tape.gradient(h_pred, coords['t'])
+#         dh_dx = tape.gradient(h_pred, coords['x'])
+#         dh_dy = tape.gradient(h_pred, coords['y'])
+
+#     # Second-order spatial derivatives.
+#     d2h_dx2 = tape.gradient(dh_dx, coords['x'])
+#     d2h_dy2 = tape.gradient(dh_dy, coords['y'])
+    
+#     # Release the tape.
+#     del tape
+
+#     # Validate gradients.
+#     if any(g is None for g in [dh_dt, d2h_dx2, d2h_dy2]):
+#         raise ValueError(
+#             "Failed to compute groundwater flow gradients. Ensure all "
+#             "input coordinates influence the head prediction."
+#         )
+
+#     # Assemble the residual for the groundwater flow equation.
+#     laplacian_h = d2h_dx2 + d2h_dy2
+#     residual = (self.Ss * dh_dt) - (self.K * laplacian_h) - self.Q
+#     return residual
+
     # XXX TODO: For future release with gwl_flow config 
     # def _create_log_coefficient(
     #     self, config_value: Union[str, float, None],

@@ -7,11 +7,12 @@ from numbers import Integral, Real
 from typing import Optional, Union, Dict, List, Any, Tuple
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
+from ...api.docs import DocstringComponents, _halnet_core_params
 from ...compat.sklearn import validate_params, Interval, StrOptions 
 from ...utils.deps_utils import ensure_pkg 
 from ...params import (
     LearnableK, LearnableSs, LearnableQ, LearnableC,
-    FixedC, DisabledC, resolve_physical_param
+    FixedC, DisabledC
 )
 
 from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message 
@@ -22,12 +23,14 @@ if KERAS_BACKEND:
     
     from .._tensor_validation import check_inputs, validate_model_inputs 
     from .op import process_pinn_inputs
-    from .utils import process_pde_modes 
+    from .utils import process_pde_modes, extract_txy_in 
     from ..comp_utils import resolve_gw_coeffs, normalize_C_descriptor
     
     LSTM = KERAS_DEPS.LSTM
     Dense = KERAS_DEPS.Dense
     LayerNormalization = KERAS_DEPS.LayerNormalization 
+    Sequential =KERAS_DEPS.Sequential
+    InputLayer =KERAS_DEPS.InputLayer
     Model= KERAS_DEPS.Model 
     Tensor=KERAS_DEPS.Tensor
     Variable =KERAS_DEPS.Variable 
@@ -51,6 +54,8 @@ if KERAS_BACKEND:
     tf_assert_equal = KERAS_DEPS.assert_equal 
     tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
     
+    deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
+    
     tf_autograph=KERAS_DEPS.autograph
     tf_autograph.set_verbosity(0)
     
@@ -72,17 +77,16 @@ DEP_MSG = dependency_message('nn.pinn.models')
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
+_param_docs = DocstringComponents.from_nested_components(
+    base=DocstringComponents(_halnet_core_params)
+)
+
+
 __all__ = ["TransFlowSubsNet"]
 
 @KERAS_DEPS.register_keras_serializable(
     'fusionlab.nn.pinn', name="TransFlowSubsNet") 
 class TransFlowSubsNet(BaseAttentive):
-    """Transient Groundwater Flow-Driven Subsidence Network.
-
-    This class inherits the data-driven architecture from
-    BaseAttentive and adds a physics-informed module for coupled
-    groundwater flow and consolidation processes.
-    """
     @validate_params({
         'output_subsidence_dim': [Interval(Integral,1, None, closed="left")], 
         'output_gwl_dim': [Interval(Integral,1, None, closed="left"),], 
@@ -94,9 +98,9 @@ class TransFlowSubsNet(BaseAttentive):
             str, Real, None, StrOptions({"learnable"}),
             LearnableC, FixedC, DisabledC
         ], 
-        "K": [Real, None, StrOptions({"learnable"}),LearnableK], 
-        "Ss": [Real, None, StrOptions({"learnable"}),LearnableSs], 
-        "Q": [Real, None, StrOptions({"learnable"}),LearnableQ,], 
+        "K": [Real, None, StrOptions({"learnable", "fixed"}),LearnableK], 
+        "Ss": [Real, None, StrOptions({"learnable", "fixed"}),LearnableSs], 
+        "Q": [Real, None, StrOptions({"learnable", "fixed"}),LearnableQ], 
         "gw_flow_coeffs": [dict, None], }
     )
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
@@ -107,10 +111,6 @@ class TransFlowSubsNet(BaseAttentive):
         future_input_dim: int,
         output_subsidence_dim: int = 1,
         output_gwl_dim: int = 1,
-        pde_mode: Union[str, List[str]] = 'both',
-        K: Union[float, LearnableK] = 1e-4,
-        Ss: Union[float, LearnableSs] = 1e-5,
-        Q: Union[float, LearnableQ] = 0.0,
         embed_dim: int = 32,
         hidden_units: int = 64,
         lstm_units: int = 64,
@@ -127,6 +127,13 @@ class TransFlowSubsNet(BaseAttentive):
         activation: str = 'relu',
         use_residuals: bool = True,
         use_batch_norm: bool = False,
+        pde_mode: Union[str, List[str]] = 'both',
+        K: Union[str, float, LearnableK
+                 ] = LearnableK(initial_value=1e-4), 
+        Ss: Union[float, LearnableSs, str
+                  ] = LearnableSs(initial_value =1e-5), 
+        Q: Union[float, LearnableQ, str
+                 ] = LearnableQ(initial_value =0.0), 
         pinn_coefficient_C: Union[
             LearnableC, FixedC, DisabledC, str, float, None
         ] = LearnableC(initial_value=0.01),
@@ -144,7 +151,6 @@ class TransFlowSubsNet(BaseAttentive):
         self._combined_output_dim = (
             output_subsidence_dim + output_gwl_dim
         )
-        # Pass all shared architectural parameters to the parent class.
         super().__init__(
             static_input_dim=static_input_dim,
             dynamic_input_dim=dynamic_input_dim,
@@ -174,21 +180,20 @@ class TransFlowSubsNet(BaseAttentive):
             name=name,
             **kwargs
         )
-        # Initialize PINN-specific attributes.
+  
         self.output_subsidence_dim = output_subsidence_dim
         self.output_gwl_dim = output_gwl_dim
         self.pde_modes_active = process_pde_modes(pde_mode)
         
-        # Store configurations for serialization.
-        # Normalize pinn_coefficient_C into one of our  legacy
+        self.pinn_coefficient_C =pinn_coefficient_C 
         self.pinn_coefficient_C_config = normalize_C_descriptor(
             pinn_coefficient_C
         )
-        # This shows how the helper simplifies the logic.
+  
+        self.gw_flow_coeffs = gw_flow_coeffs 
         K, Ss, Q = resolve_gw_coeffs(
-            gw_flow_coeffs=gw_flow_coeffs,
+            gw_flow_coeffs=self.gw_flow_coeffs,
             K=K, Ss=Ss, Q=Q, 
-            param_status="learnable"
         )
 
         logger.info(f"Initialized with K={K}, Ss={Ss}, Q={Q}")
@@ -196,9 +201,87 @@ class TransFlowSubsNet(BaseAttentive):
         self.K_config = K
         self.Ss_config = Ss
         self.Q_config = Q
-
-        # Build the physics-related components.
+        
+        self._init_coordinate_corrections()
+        
         self._build_pinn_components()
+        
+    def _init_coordinate_corrections(
+        self,
+        gwl_units: Union [int,  None] = None,
+        subs_units: Union [int, None] = None,
+        hidden: Tuple[int, int] = (32, 16),
+        act: str = "gelu",
+    ) -> None:
+        r"""
+        Build two compact MLPs that transform coordinates into
+        additive corrections for the model's head and subsidence
+        predictions.
+    
+        Parameters
+        ----------
+        gwl_units : int | None, default ``self.output_gwl_dim``  
+            Output width of the groundwater‐head branch.  Pass *None* to
+            reuse ``self.output_gwl_dim``.
+    
+        subs_units : int | None, default ``self.output_subsidence_dim``  
+            Output width of the subsidence branch.  Pass *None* to reuse
+            ``self.output_subsidence_dim``.
+    
+        hidden : tuple[int, int], default ``(32, 16)``  
+            Widths of the two hidden dense layers *shared by both* MLPs.
+    
+        act : str, default ``"gelu"``  
+            Activation applied after each hidden layer.
+    
+        Notes
+        -----
+        Let the prediction network output  
+    
+        .. math::
+           h^{\text{net}}(t,x,y),\qquad s^{\text{net}}(t,x,y).
+    
+        This helper adds two learnable corrections
+    
+        .. math::
+           \Delta h = f_{\theta_h}(t,x,y), \qquad
+           \Delta s = f_{\theta_s}(t,x,y),
+    
+        where :math:`f_{\theta_*}` are shallow MLPs.
+        The final quantities used in the PDE terms become  
+    
+        .. math::
+           h = h^{\text{net}} + \Delta h, \qquad
+           s = s^{\text{net}} + \Delta s.
+    
+        The two branches are exposed on the instance as
+        ``self.coord_mlp`` and ``self.subs_coord_mlp`` and are trained
+        jointly with the rest of the network.
+    
+        The models are stored on the instance as  
+        ``self.coord_mlp`` and ``self.subs_coord_mlp``.  They are **not**
+        compiled; they inherit the parent model’s optimizer and are trained
+        end-to-end inside :py:meth:`train_step`.
+        """
+        # fallback to instance-level defaults
+        gwl_units = gwl_units or self.output_gwl_dim
+        subs_units = subs_units or self.output_subsidence_dim
+    
+        def _branch(out_units: int, name: str) -> Sequential:
+            return Sequential(
+                [
+                    InputLayer(input_shape=(None, 3)),
+                    Dense(hidden[0], activation=act),
+                    Dense(hidden[1], activation=act),
+                    Dense(out_units),
+                ],
+                name=name,
+            )
+    
+        # Ground-water head and subsidence correction heads
+        self.coord_mlp = _branch(gwl_units, "coord_mlp")
+        self.subs_coord_mlp = _branch(subs_units, "subs_coord_mlp")
+
         
     def _build_C_components(self):
         """
@@ -227,8 +310,8 @@ class TransFlowSubsNet(BaseAttentive):
             self._get_C = lambda: tf_constant(val, dtype=tf_float32)
 
         elif isinstance(desc, DisabledC):
-            # Physics disabled => C internally 1.0 but not used if lambda_pde==0
-            # in compile()
+            # Physics disabled => C internally 1.0 
+            # but not used if lambda_cons==0 in compile
             self._get_C = lambda: tf_constant(1.0, dtype=tf_float32)
 
         else:
@@ -242,18 +325,6 @@ class TransFlowSubsNet(BaseAttentive):
         """Returns the physical coefficient C."""
         return self._get_C()
 
-    def _resolve_pinn_components(self):
-        """Instantiates trainable/fixed physical coefficients."""
-        # Create tf.Variables as direct attributes for Keras to track.
-        self.C = self.get_pinn_coefficient_C() 
-        self.K = resolve_physical_param(
-            self.K_config, name="param_K")
-        self.Ss = resolve_physical_param(
-            self.Ss_config, name="param_Ss")
-        self.Q = resolve_physical_param(
-            self.Q_config, name="param_Q")
-        
-
     def _build_pinn_components(self):
         """
         Instantiates trainable/fixed physical coefficients using the
@@ -266,8 +337,7 @@ class TransFlowSubsNet(BaseAttentive):
         # This getter now correctly accesses the learnable variable.
         self.C = self.get_pinn_coefficient_C()
     
-        # --- FIX: Create K, Ss, and Q using self.add_weight ---
-        # This ensures they are registered as trainable variables.
+        # Create K, Ss, and Q using self.add_weight ---
     
         # Handle Hydraulic Conductivity (K)
         if isinstance(self.K_config, LearnableK):
@@ -310,12 +380,46 @@ class TransFlowSubsNet(BaseAttentive):
         else:  # Fixed value
             self.Q = tf_constant(float(self.Q_config), dtype=tf_float32)
             
-            
-    # In your TransFlowSubsNet 
-    def call(self, inputs: Dict[str, Optional[Tensor]], training: bool = False):
-        """
-        Orchestrates the forward pass for the PINN, combining the data-driven
-        and physics-informed modules.
+
+    def call(
+        self, inputs: Dict[str, Optional[Tensor]],
+        training: bool = False
+    ):
+        r"""
+        Single forward sweep mixing data and physics paths.
+    
+        The routine
+    
+        1. extracts :tmath:`t,x,y` and covariate tensors from *inputs*;
+        2. runs sanity checks on dimensionality;
+        3. feeds the validated features through the inherited
+           encoder–decoder stack; and
+        4. splits the decoder output into mean and final
+           predictions that will later enter the data‐ and
+           PDE‐loss terms.
+    
+        Returns
+        -------
+        dict
+            ``{"subs_pred": s, "gwl_pred": h, 
+            "subs_pred_mean": \bar s, "gwl_pred_mean": \bar h}``
+            with shapes  
+    
+            .. math::
+               s,\;h &\in \mathbb R^{B\times H\times d},\\
+               \bar s,\;\bar h &\in \mathbb R^{B\times H\times d}.
+    
+            Here *B* is the batch size, *H* the forecast horizon and
+            *d* each target's width.
+    
+        Notes
+        -----
+        * All coordinate tensors are **not** differentiated here;
+          their gradients are taken in :py:meth:`train_step`.
+        * The method remains side‐effect free: no weights are updated,
+          no losses are added.  It purely produces tensors needed by the
+          custom training loop that follows.
+    
         """
         # --- 1. Unpack and Validate All Inputs ---
         # The `process_pinn_inputs` helper unpacks the input dict and
@@ -354,10 +458,10 @@ class TransFlowSubsNet(BaseAttentive):
             dynamic_input_dim=self.dynamic_input_dim,
             future_covariate_dim=self.future_input_dim,
             mode='strict',
-            verbose= 0 # 1 if logger.level <= 10 else 0
+            verbose= 0 
         )
         
-        # ***  Validate future_p shape based on mode ***
+        # Validate future_p shape based on mode 
         if self.mode == 'tft_like':
             expected_future_span = self.max_window_size + self.forecast_horizon
         else:  # pihal_like
@@ -404,83 +508,176 @@ class TransFlowSubsNet(BaseAttentive):
              predictions_combined=final_predictions,
              decoded_outputs_for_mean=decoded_means
          )
-    
-        # --- 5. Calculate Physics Residuals ---
+ 
         logger.debug("Computing PDE residuals from mean predictions.")
         
-        # *** FIX: Access coordinates explicitly by key, not by index. ***
-        # The `coords` used for the PDE must be the same ones passed in the
-        # main `inputs` dictionary.
-        try: 
-            coords_for_pde = inputs['coords']
-        except : 
-            # reconstruct input for coordinate 
-            coords_for_pde = {'t': t, 'x': x, 'y': y}
-    
-        # Compute the residual for each active PDE mode.
-        cons_res = self._compute_consolidation_residual(
-            coords_for_pde, s_pred_mean, gwl_pred_mean
-        )
-        gw_res = self._compute_gw_flow_residual(
-            coords_for_pde, gwl_pred_mean
-        )
-    
-        # --- 6. Return All Components for the Loss Function ---
+        # --- 5. Return All Predictions ---
+        # The call method now returns all necessary prediction tensors.
+        # The train_step will be responsible for using these to compute
+        # the final composite loss.
+        # Return All Components for the Loss Function ---
         return {
             "subs_pred": s_pred_final,
             "gwl_pred": gwl_pred_final,
-            "consolidation_residual": cons_res,
-            "gw_flow_residual": gw_res,
+            "subs_pred_mean": s_pred_mean,
+            "gwl_pred_mean": gwl_pred_mean,
         }
 
-    def train_step(self, data):
-        """Custom training step for the composite PINN loss."""
-        inputs, targets = data
+    def compute_physics_loss(
+        self, inputs: Dict[str, Tensor]
+    ) -> Tuple[Tensor, Tensor]:
+        """
+        Computes the physics-based loss terms for both consolidation
+        and groundwater flow.
+        """
+        # This method uses its own tape to calculate the gradients
+        # required for the PDE residuals.
+        with GradientTape(persistent=True) as tape:
+            # Watch the coordinate tensor and the model's predictions.
+            coords = inputs['coords']
+            tape.watch(coords)
+            
+            # Re-run the forward pass *within this tape's context*
+            # to get predictions that are differentiable wrt coords.
+            predictions = self(inputs, training=True)
+            s_pred_mean = predictions['subs_pred_mean']
+            h_pred_mean = predictions['gwl_pred_mean']
+            
+            # Explicitly watch the prediction tensors too
+            tape.watch(s_pred_mean)
+            tape.watch(h_pred_mean)
+
+            # Unpack coordinates for differentiation
+            t, x, y = coords[..., 0:1], coords[..., 1:2], coords[..., 2:3]
+
+            # --- First-Order Derivatives ---
+            ds_dt = tape.gradient(s_pred_mean, t)
+            dh_dt = tape.gradient(h_pred_mean, t)
+            dh_dx = tape.gradient(h_pred_mean, x)
+            dh_dy = tape.gradient(h_pred_mean, y)
+
+        # --- Second-Order Derivatives ---
+        d2h_dx2 = tape.gradient(dh_dx, x)
+        d2h_dy2 = tape.gradient(dh_dy, y)
         
-        with GradientTape() as tape:
-            # All operations within this block are recorded for differentiation.
+        # Clean up the persistent tape
+        del tape
+
+        # Validate gradients
+        if any(g is None for g in [ds_dt, dh_dt, d2h_dx2, d2h_dy2]):
+             raise ValueError("Failed to compute one or more PDE gradients.")
+             
+        # Assemble residuals using stateless helpers
+        cons_res = self._compute_consolidation_residual(ds_dt, d2h_dx2, d2h_dy2)
+        gw_res = self._compute_gw_flow_residual(dh_dt, d2h_dx2, d2h_dy2)
+        
+        # Calculate the loss for each residual
+        loss_cons = tf_reduce_mean(tf_square(cons_res))
+        loss_gw = tf_reduce_mean(tf_square(gw_res))
+        
+        return loss_cons, loss_gw
+
+    def train_step(self, data):
+        """
+        One optimization step uniting data and physics terms.
+    
+        Uses a single :class:`tf.GradientTape` to obtain all
+        first- and second-order coordinate derivatives required
+        by the groundwater-flow and consolidation PDEs.
+    
+        Data loss: any Keras loss supplied in :py:meth:`compile`.
+    
+        PDE losses:
+        .. math::
+           S_s \,\partial_t h
+           \;-\; K (\partial_{xx} h + \partial_{yy} h) - Q &= 0 \\
+           \partial_t s
+           \;-\; C (\partial_{xx} h + \partial_{yy} h) &= 0
+    
+        The final objective is
+        :math:`\mathcal L = L_\text{data}
+        + \lambda_c L_\text{cons} + \lambda_g L_\text{gw}`.
+    
+        On return the method updates built-in metrics and
+        provides a dict with total, data and PDE losses.
+        """
+        inputs, targets = data
+        with GradientTape(persistent=True) as tape:
+            # The tape must watch the input coordinates to compute
+            # gradients of the model's output with respect to them.
+            coords = inputs['coords']
+            t, x, y = extract_txy_in(coords)
+            tape.watch([t, x, y,])
+    
+            # --- FORWARD PASS & DATA LOSS ---
             outputs = self(inputs, training=True)
             
-            # --- 1. Data Fidelity Loss ---
-            # Create a dictionary of predictions that matches the keys
-            # expected by the loss functions provided in `compile`.
+            # Same t,x,y that the tape watches → gradients exist
+            coords_flat = tf_concat([t, x, y], axis=-1)          # [B,T,3]
+            mlp_corr = self.coord_mlp(coords_flat, training=True)
+            s_corr = self.subs_coord_mlp(coords_flat, training=True)
+            
+            # inject the correction into the head that feeds the PDE
+            h_pred_mean = outputs["gwl_pred_mean"] + mlp_corr
+            s_pred_mean  = outputs["subs_pred_mean"] + s_corr
+            # save a copy for the data loss dictionary
+            outputs["gwl_pred_mean"] = h_pred_mean
+            outputs["subs_pred_mean"] = s_pred_mean
+            
             y_pred_for_loss = {
                 'subs_pred': outputs['subs_pred'],
                 'gwl_pred': outputs['gwl_pred']
             }
-            # Keras's internal `compute_loss` handles the dictionary,
-            # loss weights, and regularization losses automatically.
-            data_loss = self.compute_loss(
-                y=targets,
-                y_pred=y_pred_for_loss,
+            
+            data_loss = self.compiled_loss(
+                y_true=targets, y_pred=y_pred_for_loss,
                 regularization_losses=self.losses
             )
+    
+            # --- PDE RESIDUAL CALCULATION ---
+            s_pred_mean = outputs['subs_pred_mean']
+            # h_pred_mean = outputs['gwl_pred_mean']
             
-            # --- 2. Physics-Based Loss ---
-            # Calculate the mean of the squared residuals to force them to zero.
-            loss_cons = tf_reduce_mean(tf_square(
-                outputs['consolidation_residual']))
-            loss_gw = tf_reduce_mean(tf_square(
-                outputs['gw_flow_residual']))
-            
-            # --- 3. Combine Losses ---
-            # Create the final composite loss that will be differentiated.
+            tape.watch([s_pred_mean , h_pred_mean]) 
+            # --- First-order derivatives ---
+            ds_dt = tape.gradient(s_pred_mean, t)
+            dh_dt = tape.gradient(h_pred_mean, t)
+            dh_dx = tape.gradient(h_pred_mean, x)
+            dh_dy = tape.gradient(h_pred_mean, y)
+    
+            # --- Second-order derivatives ---
+            d2h_dx2 = tape.gradient(dh_dx, x)
+            d2h_dy2 = tape.gradient(dh_dy, y)
+    
+            # Validate that all necessary gradients were computed.
+            if any(g is None for g in [ds_dt, dh_dt, d2h_dx2, d2h_dy2]):
+                raise ValueError(
+                    "One or more PDE gradients are missing; "
+                    "check t, x, y in the forward graph and "
+                    "ensure they influence the model's predictions."
+                )
+    
+            # Assemble residuals using the stateless helpers.
+            cons_res = self._compute_consolidation_residual(
+                ds_dt, d2h_dx2, d2h_dy2)
+            gw_res = self._compute_gw_flow_residual(
+                dh_dt, d2h_dx2, d2h_dy2)
+        
+            # --- COMPOSITE LOSS ---
+            loss_cons = tf_reduce_mean(tf_square(cons_res))
+            loss_gw = tf_reduce_mean(tf_square(gw_res))
             total_loss = (data_loss
                           + self.lambda_cons * loss_cons
                           + self.lambda_gw * loss_gw)
-
-        # Compute gradients of the total loss with respect to all
-        # trainable variables (network weights and physical parameters).
+    
+        # --- APPLY GRADIENTS ---
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
-        
-        # Apply the gradients to update the variables.
+        del tape                              # free memory
         self.optimizer.apply_gradients(zip(grads, trainable_vars))
-        
-        # Update the metrics passed in `compile` (e.g., MAE).
+    
+        # --- METRICS & RETURN ---
         self.compiled_metrics.update_state(targets, y_pred_for_loss)
-        
-        # Return a dictionary of all computed values for logging.
         results = {m.name: m.result() for m in self.metrics}
         results.update({
             "total_loss": total_loss,
@@ -489,104 +686,32 @@ class TransFlowSubsNet(BaseAttentive):
             "gw_flow_loss": loss_gw,
         })
         return results
-
-    # In your TransFlowSubsNet class in fusionlab/nn/pinn/_geos.py
-    def _compute_consolidation_residual(
-        self,
-        coords: Dict[str, Tensor],
-        s_pred: Tensor,
-        h_pred: Tensor
-    ) -> Tensor:
-        """Computes the consolidation PDE residual.
-
-        This implementation uses a simplified form relating the rate of
-        subsidence to the Laplacian of the hydraulic head, representing
-        the coupling between the two processes.
-        PDE form: ds/dt - C * (d²h/dx² + d²h/dy²) = 0
-        """
-        # Return zeros if this PDE mode is not active.
-        if 'consolidation' not in self.pde_modes_active:
-            return tf_zeros_like(s_pred)
-
-        # A persistent tape is needed to compute multiple gradients,
-        # especially second-order derivatives.
-        with GradientTape(persistent=True) as tape:
-            # Watch the coordinate and prediction tensors that need
-            # to be differentiated.
-            tape.watch([
-                coords['t'], coords['x'], coords['y'], s_pred, h_pred
-            ])
-
-            # First-order derivative of subsidence w.r.t. time.
-            ds_dt = tape.gradient(s_pred, coords['t'])
-
-            # First-order spatial derivatives of head.
-            dh_dx = tape.gradient(h_pred, coords['x'])
-            dh_dy = tape.gradient(h_pred, coords['y'])
-
-        # Second-order spatial derivatives of head.
-        d2h_dx2 = tape.gradient(dh_dx, coords['x'])
-        d2h_dy2 = tape.gradient(dh_dy, coords['y'])
-
-        # Release the tape from memory once all gradients are computed.
-        del tape
-
-        # Validate that all necessary gradients were computed.
-        if any(g is None for g in [ds_dt, d2h_dx2, d2h_dy2]):
-            raise ValueError(
-                "Failed to compute consolidation gradients. Ensure all "
-                "input coordinates influence the predictions."
-            )
-
-        # Assemble the residual for the consolidation equation.
-        laplacian_h = d2h_dx2 + d2h_dy2
-        residual = ds_dt - (self.C * laplacian_h)
-        return residual
-
-    def _compute_gw_flow_residual(
-        self,
-        coords: Dict[str, Tensor],
-        h_pred: Tensor
-    ) -> Tensor:
-        """Computes the transient groundwater flow PDE residual.
-
-        This implements the 2D transient groundwater flow equation.
-        PDE form: Ss * dh/dt - K * (d²h/dx² + d²h/dy²) - Q = 0
-        """
-        # Return zeros if this PDE mode is not active.
-        if 'gw_flow' not in self.pde_modes_active:
-            return tf_zeros_like(h_pred)
-
-        # Use a persistent tape for calculating multiple derivatives.
-        with GradientTape(persistent=True) as tape:
-            tape.watch([
-                coords['t'], coords['x'], coords['y'], h_pred
-            ])
-
-            # First-order derivatives.
-            dh_dt = tape.gradient(h_pred, coords['t'])
-            dh_dx = tape.gradient(h_pred, coords['x'])
-            dh_dy = tape.gradient(h_pred, coords['y'])
-
-        # Second-order spatial derivatives.
-        d2h_dx2 = tape.gradient(dh_dx, coords['x'])
-        d2h_dy2 = tape.gradient(dh_dy, coords['y'])
-        
-        # Release the tape.
-        del tape
-
-        # Validate gradients.
-        if any(g is None for g in [dh_dt, d2h_dx2, d2h_dy2]):
-            raise ValueError(
-                "Failed to compute groundwater flow gradients. Ensure all "
-                "input coordinates influence the head prediction."
-            )
-
-        # Assemble the residual for the groundwater flow equation.
-        laplacian_h = d2h_dx2 + d2h_dy2
-        residual = (self.Ss * dh_dt) - (self.K * laplacian_h) - self.Q
-        return residual
     
+    def _compute_consolidation_residual(
+            self, ds_dt, d2h_dx2, d2h_dy2):
+        """
+        Residual of the consolidation balance.
+    
+        .. math::
+           R_c = \partial_t s - C(\partial_{xx} h + \partial_{yy} h)
+        """
+        if 'consolidation' not in self.pde_modes_active:
+            return tf_zeros_like(ds_dt)
+        return ds_dt - self.C * (d2h_dx2 + d2h_dy2)
+    
+    def _compute_gw_flow_residual(
+            self, dh_dt, d2h_dx2, d2h_dy2):
+        """
+        Residual of the transient groundwater flow.
+    
+        .. math::
+           R_g = S_s \,\partial_t h
+           - K(\partial_{xx} h + \partial_{yy} h) - Q
+        """
+        if 'gw_flow' not in self.pde_modes_active:
+            return tf_zeros_like(dh_dt)
+        return (self.Ss * dh_dt) - self.K * (d2h_dx2 + d2h_dy2) - self.Q
+
     def split_outputs(
         self, 
         predictions_combined: Tensor, 
@@ -811,7 +936,7 @@ class TransFlowSubsNet(BaseAttentive):
             "output_subsidence_dim": self.output_subsidence_dim,
             "output_gwl_dim": self.output_gwl_dim,
             "pde_mode": self.pde_modes_active,
-            "pinn_coefficient_C": self.pinn_coefficient_C_config,
+            "pinn_coefficient_C": self.pinn_coefficient_C ,
             "gw_flow_coeffs": self.gw_flow_coeffs, 
             "K": self.K_config,
             "Ss": self.Ss_config,
@@ -822,7 +947,7 @@ class TransFlowSubsNet(BaseAttentive):
         return base_config
 
     @classmethod
-    def from_config(cls, config: dict, custom_objects=None) -> "TransFlowSubsNet":
+    def from_config(cls, config: dict, custom_objects=None):
         """Reconstructs a model instance from its configuration.
 
         Args:
@@ -841,4 +966,212 @@ class TransFlowSubsNet(BaseAttentive):
         if 'output_dim' in config: 
             config.pop('output_dim') 
             
+        # Re-create model and nested learnable parameters.
+        if custom_objects is None:
+            # ensure all helper classes are available to the deserializer
+            custom_objects = {
+                "LearnableK": LearnableK,
+                "LearnableSs": LearnableSs,
+                "LearnableQ": LearnableQ,
+                "LearnableC": LearnableC,
+                "FixedC":     FixedC,
+                "DisabledC":  DisabledC,
+            }
+    
+        # keys that may be nested serialisable dicts
+        for key in ("K", "Ss", "Q", "pinn_coefficient_C"):
+            obj = config.get(key)
+            if isinstance(obj, dict) and "class_name" in obj:
+                # turn the JSON blob back into a live object
+                config[key] = deserialize_keras_object(obj, custom_objects)
+    
         return cls(**config)
+
+# ------------------------------------ docstring-------------------------------
+TransFlowSubsNet.__doc__ = r"""
+Transient Ground-Water–Driven Subsidence Network
+
+TransFlowSubsNet fuses deep-learning encoder–decoder with two
+physics losses so that the network **learns** a forecast **and**
+honours the governing PDEs at once.
+
+*   **Consolidation** loss forces surface settlement :math:`s`
+    to balance the Laplacian of hydraulic head :math:`h`.
+*   **Transient ground-water flow** loss constrains head
+    to obey the diffusivity equation with source/sink term.
+
+Both terms vanish when *pde_mode* switches them off.
+
+See :ref:`User Guide <user_guide_transflowsubsnet>` for a walkthrough.
+
+Parameters
+----------
+{params.base.static_input_dim}
+{params.base.dynamic_input_dim}
+{params.base.future_input_dim}
+
+output_subsidence_dim : int, default 1  
+    How many subsidence series are produced at each horizon
+    step.  A multi-well scenario with *n* Digital Leveling
+    benchmarks would use ``n``.
+
+output_gwl_dim : int, default 1  
+    How many head series are produced.  Use >1 for multi-aquifer
+    or multi-well settings.
+
+forecast_horizon : int, default 1  
+    Horizon length :math:`H`.  The decoder emits :math:`H`
+    steps; the physics terms are evaluated for every emitted
+    step.
+
+quantiles : list[float] | None, default None  
+    Optional list of quantile levels; enables the
+    Quantile-Distribution head.
+
+{params.base.embed_dim}
+{params.base.hidden_units}
+{params.base.lstm_units}
+{params.base.attention_units}
+{params.base.num_heads}
+{params.base.dropout_rate}
+{params.base.max_window_size}
+{params.base.memory_size}
+{params.base.scales}
+{params.base.multi_scale_agg}
+{params.base.final_agg}
+{params.base.activation}
+{params.base.use_residuals}
+{params.base.use_batch_norm}
+{params.base.use_vsn}
+{params.base.vsn_units}
+
+pde_mode : {{'consolidation', 'gw_flow', 'both', 'none'}}, \
+default ``'both'``  
+    Select which PDE residuals participate in the loss:  
+    ┌─────────────────┬────────────────────────────────────────┐  
+    │ 'consolidation' │ only :math:`s`–balance term            │  
+    │ 'gw_flow'       │ only flow equation for :math:`h`       │  
+    │ 'both'          │ both residuals (recommended)           │  
+    │ 'none'          │ pure data-driven; behaves like HAL-Net │  
+    └─────────────────┴────────────────────────────────────────┘
+
+K, Ss, Q : float | str | Learnable*, defaults 1e-4, 1e-5, 0.  
+    Hydraulic conductivity :math:`K`, specific storage
+    :math:`S_s`, and volumetric source/sink :math:`Q`.  
+    Accepted forms:  
+    * **float / int** → fixed numeric.  
+    * ``'learnable'`` → wrap into the corresponding
+      :class:`LearnableK` / *Ss* / *Q*.  Initial seed is taken
+      from the numeric value given *in the same call* or falls
+      back to 1e-4 / 1e-5 / 0.  
+    * ``'fixed'`` → force numeric even if
+      *param_status='learnable'* in
+      :func:`resolve_gw_coeffs`.  
+    * **Learnable* instance** → forwarded unchanged.
+
+pinn_coefficient_C : float | str | LearnableC | FixedC | DisabledC, \
+default ``LearnableC(0.01)``  
+    Coefficient in the consolidation PDE:  
+
+    .. math:: \partial_t s - C\,\nabla^2 h = 0  
+
+    * ``float`` – fixed.  
+    * ``'learnable'`` or :class:`LearnableC` – optimised in log-space
+      to keep :math:`C>0`.  
+    * :class:`DisabledC` – disables consolidation regardless of
+      *pde_mode*.
+
+gw_flow_coeffs : dict | None, default None  
+    Convenience container overriding *K/Ss/Q* in one go, e.g. ::
+
+        gw_flow_coeffs = {{'K': 'learnable',
+                           'Ss': 1e-6,
+                           'Q': 'fixed'}}
+
+    Dict entries win over the individual keyword arguments.
+
+mode : {{'pihal_like', 'tft_like'}}, default ``None``  
+    Routing for *future_features*:  
+    * **pihal_like** – decoder gets all :math:`H` rows, encoder none.  
+    * **tft_like**  – first *max_window_size* rows to encoder,  
+      next :math:`H` rows to decoder, matching the original
+      Temporal Fusion Transformer.  ``None`` inherits
+      BaseAttentive default ('tft_like').
+
+objective : {{'hybrid', 'transformer'}}, default ``'hybrid'``  
+    Selects the backbone architecture that processes dynamic-past  
+    and (optionally) known-future covariates before the decoding stage.  
+
+    * ``'hybrid'`` – **Multi-scale LSTM -> Transformer**.  
+      The encoder first extracts multi-resolution temporal features  
+      with a stack of LSTMs (one per *scale*), then refines these  
+      features with hierarchical/cross attention blocks.  
+      This configuration balances the strong sequence-memory capability  
+      of recurrent networks with the global-context modelling power of  
+      Transformers and is recommended for most tabular time-series data.  
+
+    * ``'transformer'`` – **Pure Transformer**.  
+      Bypasses the LSTM stack and feeds the embeddings directly into the  
+      attention encoder, resulting in a lightweight, fully self-attention  
+      model.  Choose this if your data exhibit long-range dependencies  
+      for which an LSTM adds little benefit, or when you need faster  
+      training/inference at the cost of some short-term pattern capture.  
+
+    In future release: 
+        
+    Shortcut for common loss presets.  Should be recognised:  
+    * ``'nse'`` – Nash–Sutcliffe model-efficiency score.  
+    * ``'rmse'`` – root-mean-square error.  
+    When *None* we will supply losses via :py:meth:`compile`.
+
+attention_levels : str | list[str] | None  
+    Which hierarchical attention outputs are returned when the
+    model is called with ``training=False``.  Use ``'all'`` or a
+    subset such as ``['scale', 'cross']`` for interpretability.
+
+name : str, default ``"TransFlowSubsNet"``  
+    Model scope as registered in Keras.
+
+**kwargs  
+    Forwarded verbatim to :class:`tf.keras.Model`.
+
+Notes
+-----
+Physics loss is added **outside** the Keras loss container inside
+``train_step``; compile with ``lambda_cons`` and ``lambda_gw`` to
+scale them.  When any parameter is *learnable* its
+:pyattr:`tf.Variable` automatically appears in ``model.trainable_variables``.
+
+See Also
+--------
+fusionlab.nn.models.HALNet
+    Purely data-driven encoder–decoder (no physics terms).
+
+fusionlab.nn.pinn.models.PIHALNet
+    Physics-informed HAL-Net that couples consolidation PDEs 
+    and adds an anomaly module.
+
+fusionlab.nn.pinn.models.PiTGWFlow
+    Stand-alone PINN that solves 2-D / 3-D transient groundwater-flow
+    equations without subsidence coupling.
+
+Examples
+--------
+>>> model = TransFlowSubsNet(
+...     static_input_dim=3, dynamic_input_dim=8, future_input_dim=4,
+...     output_subsidence_dim=1, output_gwl_dim=1,
+...     K='learnable', Ss=1e-5, Q='fixed',
+...     pde_mode='both', scales=[1, 3], multi_scale_agg='concat'
+... )
+>>> batch = {{
+...     "static_features":  tf.zeros([8, 3]),
+...     "dynamic_features": tf.zeros([8, 12, 8]),
+...     "future_features":  tf.zeros([8, 6, 4]),
+...     "coords":           tf.zeros([8, 6, 3]),
+... }}
+>>> pred = model(batch, training=False)
+>>> list(pred)
+['subs_pred', 'gwl_pred', 'subs_pred_mean', 'gwl_pred_mean']
+""".format (params =_param_docs)
+
+

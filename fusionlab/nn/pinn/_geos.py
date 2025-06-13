@@ -55,9 +55,9 @@ if KERAS_BACKEND:
 
 DEP_MSG = dependency_message('nn.pinn._geos') 
 
-__all__=['PITGWFlow']
+__all__=['PiTGWFlow']
 
-class PITGWFlow(Model, NNLearner):
+class PiTGWFlow(Model, NNLearner):
     """
     Physic Informed Transient Grounwwater Flow.
     
@@ -363,7 +363,7 @@ class PITGWFlow(Model, NNLearner):
         return base_config
     
     @classmethod
-    def from_config(cls, config: dict, custom_objects=None) -> "PITGWFlow":
+    def from_config(cls, config: dict, custom_objects=None) -> "PiTGWFlow":
         """Reconstructs a model from its config."""
         # Keras automatically handles deserialization of registered
         # custom objects (like LearnableK) if they are passed directly.

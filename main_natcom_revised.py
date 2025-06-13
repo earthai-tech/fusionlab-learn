@@ -59,12 +59,13 @@ if hasattr(tf, 'autograph') and hasattr(tf.autograph, 'set_verbosity'):
 try:
     from fusionlab.api.util import get_table_size
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
-    from fusionlab.nn.pinn.models import PIHALNet      # Our PINN model
+    from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet   # Our PINN model
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences # PINN data prep
     from fusionlab.nn.pinn.op import ( # PINN physics helpers : Noqa
         compute_consolidation_residual, 
         # calculate_gw_flow_pde_residual_from_derivs # For future use
     )
+    from fusionlab.params import LearnableK, LearnableSs, LearnableQ 
     from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
     from fusionlab.nn.models.utils import plot_history_in 
@@ -74,6 +75,8 @@ try:
     from fusionlab.utils.io_utils import save_job #, fetch_joblib_data
     from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column 
     from fusionlab.utils.generic_utils import ensure_directory_exists
+    
+    
 
     print("Successfully imported fusionlab modules.")
 except ImportError as e:
@@ -83,7 +86,7 @@ except ImportError as e:
 #%
 # --- Configuration Parameters ---
 CITY_NAME = 'zhongshan'
-MODEL_NAME = 'PIHALNet' # Using our PINN model name
+MODEL_NAME ='TransFlowSubsNet'# 'PIHALNet' # Using our PINN model name
 
 # Data loading: Prioritize 500k sample file
 # For Code Ocean, data is typically in ../data or /data
@@ -103,6 +106,8 @@ TIME_STEPS = 5               # Lookback window (in years) for dynamic features
 PDE_MODE_CONFIG = 'consolidation' # Focus on consolidation
 PINN_COEFF_C_CONFIG = 'learnable' # Learn the consolidation coefficient
 LAMBDA_PDE_CONFIG = 1.0           # Weight for the PDE loss term in compile
+LAMBDA_PDE_CONS= 1.0
+LAMBDA_PDE_GW = 1.0
 
 # Model Hyperparameters (can be tuned later with PIHALTuner)
 QUANTILES = [0.1, 0.5, 0.9] # For probabilistic forecast
@@ -117,6 +122,15 @@ NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not eno
 AGG = True # Set this to True or False as needed for  specific test case
 
 MODE ='pihal' # kind that Model operation mode .
+
+# Transient Gwrounwdater Flow init Parameters 
+GWFLOW_INIT_K = 1e-4 
+GWFLOW_INIT_Ss =1e-5
+GWFLOW_INIT_Q =0.
+
+# Attention levels to use for the model # see more the documentation 
+ATTENTION_LEVELS = ['1', '2', '3'] # means -> use all 
+
 # Output Directories
 BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
@@ -550,9 +564,29 @@ pihalnet_params = {
     'use_vsn': True, # Enable VSN
     'vsn_units': 32, # Units for VSN internal GRNs, 
     'mode': MODE, 
+    'attention_levels': ATTENTION_LEVELS
 }
 
-pihal_model_inst = PIHALNet(
+
+if MODEL_NAME =="TransFlowSubsNet": 
+    SubsModel = TransFlowSubsNet 
+    pihalnet_params.update ({ 
+        "K": LearnableK ( initial_value = GWFLOW_INIT_K), 
+        "Q": LearnableQ (initial_value= GWFLOW_INIT_Q), 
+        "Ss": LearnableSs(initial_value= GWFLOW_INIT_Ss), 
+        })
+    
+    physics_loss_weights ={
+        "lambda_cons": LAMBDA_PDE_CONS,  
+        "lambda_gw": LAMBDA_PDE_GW
+    }
+else: 
+    SubsModel = PIHALNet
+    physics_loss_weights ={
+        "lambda_pde": LAMBDA_PDE_CONFIG # Weight for the physics loss component
+    }
+    
+pihal_model_inst = SubsModel(
     static_input_dim=s_dim_model,
     dynamic_input_dim=d_dim_model,
     future_input_dim=f_dim_model,
@@ -563,7 +597,6 @@ pihal_model_inst = PIHALNet(
     pde_mode=PDE_MODE_CONFIG,
     pinn_coefficient_C=PINN_COEFF_C_CONFIG,
     gw_flow_coeffs=None, # Keep None for consolidation focus
-    mode =MODE, 
     **pihalnet_params
 )
 
@@ -590,12 +623,15 @@ loss_weights_dict = { # Weights for the data loss terms
     'gwl_pred': 0.5 # Example: GWL data loss is half as important
 }
 
+
 pihal_model_inst.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
     loss=loss_dict,
     metrics=metrics_dict,
     loss_weights=loss_weights_dict,
-    lambda_pde=LAMBDA_PDE_CONFIG # Weight for the physics loss component
+    **physics_loss_weights
+    
+    #lambda_pde=LAMBDA_PDE_CONFIG # Weight for the physics loss component
 )
 print("PIHALNet model compiled successfully.")
 
@@ -646,9 +682,9 @@ plot_history_in(
     history.history,
     metrics=pihalnet_metrics,
     layout='single',
-    title='PIHALNet Training History', 
+    title=f'{MODEL_NAME} Training History', 
     savefig=os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_pihalnet_training_history_plot_"), 
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot_"), 
 )
 # %
 # Load the best model saved by ModelCheckpoint

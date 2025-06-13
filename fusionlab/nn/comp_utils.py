@@ -17,14 +17,42 @@ if KERAS_BACKEND:
 else:
     Tensor = object
 
+
+_GW_NUMERIC_FALLBACK = dict(K=1e-4, Ss=1e-5, Q=0.0)       
+
+def _wrap_learnable(cls, numeric, name):
+    """Turn *numeric* into Learnable*, or forward an existing wrapper."""
+    if isinstance(numeric, cls):           # already wrapped
+        return numeric
+    return cls(initial_value=float(numeric), name=name)
+
+def _unwrap_if_fixed(value):
+    """Return float for Learnable*, otherwise forward value"
+    "float (keeps float / int / str as-is)."""
+    if hasattr(value, "initial_value"):
+        return float(value.initial_value)
+    return value
+
+def _directive_to_numeric(label, fallback_numeric):
+    """
+    Map string directives ``"fixed"`` / ``"learnable"`` to a numeric seed.
+    If *fallback_numeric* is itself a string directive, fall back to the
+    hard-coded constant in ``_NUMERIC_FALLBACK``.
+    """
+    if isinstance(fallback_numeric, str):
+        fallback_numeric = _GW_NUMERIC_FALLBACK[label]
+    return float(fallback_numeric)
+
 def resolve_gw_coeffs(
     gw_flow_coeffs: Optional[Dict[str, Any]] = None,
-    K: Optional[Union[Any, 'LearnableK']] = 1e-4,
-    Ss: Optional[Union[Any, 'LearnableSs']] = 1e-5,
-    Q: Optional[Union[Any, 'LearnableQ']] = 0.0,
-    param_status: Optional[str] = None  # 'learnable', 'fixed', or 'auto'
+    K: Union[float, str, "LearnableK"] = 1e-4,
+    Ss: Union[float, str, "LearnableSs"] = 1e-5,
+    Q: Union[float, str, "LearnableQ"] = 0.0,
+    param_status: Optional[str] = None  
 ) -> Tuple[Any, Any, Any]:
     """
+    Resolve (K, Ss, Q) into either floats or learnable objects.
+    
     Resolves hydraulic conductivity (K), specific storage (Ss), and 
     source/sink term (Q) from a dictionary, with fallbacks to default values.
 
@@ -34,137 +62,156 @@ def resolve_gw_coeffs(
     also resolves whether the parameters are learnable or fixed, depending 
     on the `param_status`.
 
-    Parameters
-    ----------
-    gw_flow_coeffs : dict, optional
-        A dictionary containing the coefficients for hydraulic conductivity (`K`), 
-        specific storage (`Ss`), and the source/sink term (`Q`). If provided, 
-        these values will override the default ones.
-        
-    K : Any, optional
-        The default value for hydraulic conductivity (K), if not provided in 
-        `gw_flow_coeffs`. Default is :math:`1e-4`.
-    
-    Ss : Any, optional
-        The default value for specific storage (Ss), if not provided in 
-        `gw_flow_coeffs`. Default is :math:`1e-5`.
-    
-    Q : Any, optional
-        The default value for the source/sink term (Q), if not provided in 
-        `gw_flow_coeffs`. Default is :math:`0.0`.
+    *gw_flow_coeffs* overrides the individual defaults.  Behaviour of
+    returned types is controlled by *param_status*:
 
-    param_status : str, optional
-        Defines how the parameters are handled:
-        - `'learnable'`: Treat all parameters as learnable variables.
-        - `'fixed'`: Keep parameters fixed (as constants).
-        - `'auto'`: Automatically detect whether parameters are fixed or 
-          learnable. If `gw_flow_coeffs` contains instances of learnable 
-          parameters (e.g., `LearnableK`), they will be treated as learnable.
+    ┌────────────┬──────────────────────────────────────────────────────┐
+    │ None/auto  │ leave every value "as-is".                           │
+    │ learnable  │ wrap numeric values in Learnable* wrappers.          │
+    │ fixed      │ unwrap Learnable* objects to their .initial_value.   │
+    └────────────┴──────────────────────────────────────────────────────┘
 
-    Returns
-    -------
-    Tuple[Any, Any, Any]
-        A tuple containing the resolved values for `(K, Ss, Q)`. These can 
-        either be fixed values (e.g., `float`) or learnable instances 
-        (e.g., `LearnableK`, `LearnableSs`, `LearnableQ`).
-
-    Raises
-    ------
-    ValueError
-        If `param_status` is invalid or if the conversion of string values 
-        to float fails.
-
-    Notes
-    -----
-    - If `param_status` is `'learnable'`, all parameters are treated as 
-      learnable.
-    - If `param_status` is `'fixed'`, the parameters are treated as fixed 
-      constants.
-    - If `param_status` is `'auto'`, the function checks if the parameters 
-      are instances of `LearnableK`, `LearnableSs`, or `LearnableQ`, and 
-      treats them as learnable if so.
-    
-    Examples
-    --------
-    >>> resolve_gw_coeffs(None, K=1e-4, Ss=1e-5, Q=0.0)
-    (1e-4, 1e-5, 0.0)
-    
-    >>> coeffs = {'K': 99, 'Ss': 88, 'Q': 77}
-    >>> resolve_gw_coeffs(gw_flow_coeffs=coeffs)
-    (99, 88, 77)
-    
-    >>> coeffs_partial = {'K': 99}
-    >>> resolve_gw_coeffs(gw_flow_coeffs=coeffs_partial, Ss=1e-5, Q=0.0)
-    (99, 1e-5, 0.0)
-    
-    >>> resolve_gw_coeffs(K='1e-4', Ss='1e-5', Q='0.0')
-    (0.0001, 1e-05, 0.0)
-    
-    .. math::
-        K = \text{{hydraulic conductivity}} \quad \text{{(e.g., }} K = 1e-4\text{{)}}
-        
-        Ss = \text{{specific storage}} \quad \text{{(e.g., }} Ss = 1e-5\text{{)}}
-        
-        Q = \text{{source/sink term}} \quad \text{{(e.g., }} Q = 0.0\text{{)}}
-
-    References
-    ----------
-    - Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., 
-      Gomez, A., Kaiser, Ł., Polosukhin, I. (2017). Attention is all you 
-      need. *NeurIPS 2017*, 30, 6000-6010.
-    - Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural Machine 
-      Translation by Jointly Learning to Align and Translate. *ICLR 2015*.
+    Same public contract, but – unlike the previous version – a
+    *"learnable"* directive originating from ``gw_flow_coeffs`` now uses
+    the numeric value that was supplied in the keyword argument (if any)
+    instead of falling back to the hard-coded default.
     """
-    
-    def _resolve_param(param, default_value, param_name):
-        """Helper function to handle parameter resolution logic."""
-        if isinstance(param, str):
-            if param_status == 'learnable':
-                # Treat it as learnable if specified
-                param = default_value
-            try:
-                # Attempt to convert to float
-                param = float(param)
-            except ValueError:
-                raise ValueError(
-                    f"Invalid value for {param_name}:"
-                    f" cannot convert '{param}' to float.")
-        
-        elif isinstance(param, (int, float)):
-            # Fixed value, convert to float
-            param = float(param)
-        
-        elif isinstance(param, (LearnableK, LearnableSs, LearnableQ)):
-            # If param is already a learnable instance, keep as is
-            pass
-        
-        else:
-            raise ValueError(
-                f"Invalid type for {param_name}: {type(param).__name__}")
-        
-        return param
 
-    # Default Learnable Parameters if not provided
-    default_K = LearnableK(
-        initial_value=K, name="param_K") if isinstance(K, (int, float)) else K
-    default_Ss = LearnableSs(
-        initial_value=Ss, name="param_Ss") if isinstance(Ss, (int, float)) else Ss
-    default_Q = LearnableQ(
-        initial_value=Q, name="param_Q") if isinstance(Q, (int, float)) else Q
-
-    # Resolve the parameters (K, Ss, Q) using the provided dictionary or default values
+    # --- 1.  keep kwargs intact; overlay dict if present --------------
+    kwargs_vals = dict(K=K or 1e-4, Ss=Ss or 1e-5, Q=Q or 0.)      # numeric seeds from call-site
+    raw_vals    = dict(kwargs_vals)          # copy
     if isinstance(gw_flow_coeffs, dict):
-        K = gw_flow_coeffs.get('K', default_K)
-        Ss = gw_flow_coeffs.get('Ss', default_Ss)
-        Q = gw_flow_coeffs.get('Q', default_Q)
+        raw_vals.update({k: gw_flow_coeffs[k]
+                         for k in ("K", "Ss", "Q") if k in gw_flow_coeffs})
 
-    # Apply the learned parameter logic based on param_status
-    K = _resolve_param(K, default_value=default_K, param_name='K')
-    Ss = _resolve_param(Ss, default_value=default_Ss, param_name='Ss')
-    Q = _resolve_param(Q, default_value=default_Q, param_name='Q')
+    # --- 2.  per-parameter resolution  -------------------------------
+    resolved = {}
+    for label, value in raw_vals.items():
+        seed_numeric = kwargs_vals[label]    #  numeric (or str) given via kwarg
+        if isinstance(seed_numeric, str):    # kwarg itself might be directive
+            seed_numeric = _GW_NUMERIC_FALLBACK[label]
 
-    return K, Ss, Q
+        # handle directives BEFORE global param_status 
+        if isinstance(value, str):
+            low = value.lower()
+            if low == "learnable":
+                cls = {"K": LearnableK, "Ss": LearnableSs, "Q": LearnableQ}[label]
+                value = _wrap_learnable(cls, seed_numeric, f"param_{label}")
+            elif low == "fixed":
+                value = float(seed_numeric)
+            else:  # numeric-literal string
+                try:
+                    value = float(value)
+                except ValueError as e:
+                    raise ValueError(
+                        f"{label}={value!r} cannot be parsed."
+                        ) from e
 
+        resolved[label] = value
+
+    # --- 3.  enforce global *param_status* ---------------------------
+    if param_status == "learnable":
+        for lbl, val in resolved.items():
+            cls = {"K": LearnableK, "Ss": LearnableSs, "Q": LearnableQ}[lbl]
+            resolved[lbl] = _wrap_learnable(
+                cls, _unwrap_if_fixed(val), f"param_{lbl}")
+
+    elif param_status == "fixed":
+        for lbl in resolved:
+            resolved[lbl] = _unwrap_if_fixed(resolved[lbl])
+
+    elif param_status not in (None, "auto"):
+        raise ValueError(
+            "param_status must be 'learnable', 'fixed', 'auto', or None; "
+            f"got {param_status!r}"
+        )
+
+    return resolved["K"], resolved["Ss"], resolved["Q"]
+
+resolve_gw_coeffs.__doc__ +="""\n
+Parameters
+----------
+gw_flow_coeffs : dict, optional
+    A dictionary containing the coefficients for hydraulic conductivity (`K`), 
+    specific storage (`Ss`), and the source/sink term (`Q`). If provided, 
+    these values will override the default ones.
+    
+K : Any, optional
+    The default value for hydraulic conductivity (K), if not provided in 
+    `gw_flow_coeffs`. Default is :math:`1e-4`.
+
+Ss : Any, optional
+    The default value for specific storage (Ss), if not provided in 
+    `gw_flow_coeffs`. Default is :math:`1e-5`.
+
+Q : Any, optional
+    The default value for the source/sink term (Q), if not provided in 
+    `gw_flow_coeffs`. Default is :math:`0.0`.
+
+param_status : str, optional
+    Defines how the parameters are handled:
+    - `'learnable'`: Treat all parameters as learnable variables.
+    - `'fixed'`: Keep parameters fixed (as constants).
+    - `'auto'`: Automatically detect whether parameters are fixed or 
+      learnable. If `gw_flow_coeffs` contains instances of learnable 
+      parameters (e.g., `LearnableK`), they will be treated as learnable.
+
+Returns
+-------
+Tuple[Any, Any, Any]
+    A tuple containing the resolved values for `(K, Ss, Q)`. These can 
+    either be fixed values (e.g., `float`) or learnable instances 
+    (e.g., `LearnableK`, `LearnableSs`, `LearnableQ`).
+
+Raises
+------
+ValueError
+    If `param_status` is invalid or if the conversion of string values 
+    to float fails.
+
+Notes
+-----
+- If `param_status` is `'learnable'`, all parameters are treated as 
+  learnable.
+- If `param_status` is `'fixed'`, the parameters are treated as fixed 
+  constants.
+- If `param_status` is `'auto'`, the function checks if the parameters 
+  are instances of `LearnableK`, `LearnableSs`, or `LearnableQ`, and 
+  treats them as learnable if so.
+
+Examples
+--------
+>>> from fusionlab.nn.comp_utils import resolve_gw_coeffs
+>>> resolve_gw_coeffs(None, K=1e-4, Ss=1e-5, Q=0.0)
+(1e-4, 1e-5, 0.0)
+
+>>> coeffs = {'K': 99, 'Ss': 88, 'Q': 77}
+>>> resolve_gw_coeffs(gw_flow_coeffs=coeffs)
+(99, 88, 77)
+
+>>> coeffs_partial = {'K': 99}
+>>> resolve_gw_coeffs(gw_flow_coeffs=coeffs_partial, Ss=1e-5, Q=0.0)
+(99, 1e-5, 0.0)
+
+>>> resolve_gw_coeffs(K='1e-4', Ss='1e-5', Q='0.0')
+(0.0001, 1e-05, 0.0)
+
+.. math::
+    K = \text{{hydraulic conductivity}} \quad \text{{(e.g., }} K = 1e-4\text{{)}}
+    
+    Ss = \text{{specific storage}} \quad \text{{(e.g., }} Ss = 1e-5\text{{)}}
+    
+    Q = \text{{source/sink term}} \quad \text{{(e.g., }} Q = 0.0\text{{)}}
+
+References
+----------
+- Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., 
+  Gomez, A., Kaiser, Ł., Polosukhin, I. (2017). Attention is all you 
+  need. *NeurIPS 2017*, 30, 6000-6010.
+- Bahdanau, D., Cho, K., & Bengio, Y. (2015). Neural Machine 
+  Translation by Jointly Learning to Align and Translate. *ICLR 2015*.
+"""
+    
 def split_decoder_outputs(
     predictions_combined: Tensor,
     decoded_outputs_for_mean: Tensor,

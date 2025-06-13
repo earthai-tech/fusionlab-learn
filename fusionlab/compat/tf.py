@@ -291,6 +291,7 @@ class KerasDependencies:
             'RepeatVector': ('layers', 'RepeatVector'), 
             'Bidirectional': ('layers', 'Bidirectional'), 
             "register_keras_serializable": (saving_module, "register_keras_serializable"),
+            "deserialize_keras_object": (saving_module, "deserialize_keras_object"),
         }
 
         if name in mapping:

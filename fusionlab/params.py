@@ -18,7 +18,7 @@ etc., and sets up trainable weights accordingly.
 """
 from __future__ import annotations
 import importlib
-from typing import Any, Union, Optional, Dict
+from typing import Any, Union, Optional, Dict, Type
 from abc import ABC, abstractmethod
 
 # Attempt to import TensorFlow, else fall
@@ -39,18 +39,212 @@ else:
         pass
 
     class tf:
-        Tensor = _DummyTF
+        Tensor   = _DummyTF
+        Variable = _DummyTF
     # Fallback types for type hinting
     Tensor = Any
     Variable = Any
 
+
+# Keras serialisable base-class
+if _BACKEND =='tensorflow': 
+    from tensorflow.keras.saving import register_keras_serializable
+else:         # TF missing → no serialisation
+    def register_keras_serializable(*_a, **_kw):            # type: ignore
+        def decorator(cls):                                 # pragma: no cover
+            return cls
+        return decorator
+    
 
 __all__ = ["LearnableC", "FixedC", "DisabledC", "LearnableK", "LearnableSs", 
            "LearnableQ"
            ]
 
 
+@register_keras_serializable("fusionlab.params", name="_BaseC")
+class _BaseC(ABC):
+    r"""
+    Parent class for :math:`C` descriptors.
 
+    Each subclass provides :pyattr:`value`
+    (``float`` in NumPy mode, ``tf.Variable`` in TF mode)
+    and declares whether it is *trainable*.
+
+    The class supports Keras JSON round-trip via
+    :py:meth:`get_config` / :py:meth:`from_config`.
+    """
+
+    trainable: bool = False      #: overridden by concrete classes
+
+    
+    def __init__(self, **kwargs: Any):
+        self.value = self._make_value(**kwargs)
+
+    # Keras (de)serialisation 
+    def get_config(self) -> Dict[str, Any]:
+        cfg: Dict[str, Any] = dict(self._export_kw)          # type: ignore
+        cfg["class_name"] = self.__class__.__name__
+        return cfg
+
+    @classmethod
+    def from_config(cls: Type["_BaseC"], cfg: Dict[str, Any]) -> "_BaseC":
+        cfg = dict(cfg)
+        cfg.pop("class_name", None)
+        return cls(**cfg)
+
+    #  utilities -
+    def __repr__(self) -> str:                               # noqa: D401
+        nm = self.__class__.__name__
+        return f"<{nm} trainable={self.trainable}, value={self.value!r}>"
+
+    # - must be implemented by subclasses -
+    @abstractmethod
+    def _make_value(self, **kwargs: Any) -> Any:             # noqa: D401
+        ...
+
+@register_keras_serializable("fusionlab.params", name="LearnableC")
+class LearnableC(_BaseC):
+    r"""
+
+    Indicates that the PINN’s physical coefficient :math:`C` should be
+    learned (trainable).  We actually learn :math:`\log(C)` to ensure
+    :math:`C > 0`.  The user supplies an `initial_value`, and the model
+    initializes:
+
+    Trainable :math:`C`.
+
+    In TF mode we keep :math:`\log C` as a
+    :class:`tf.Variable`, ensuring :math:`C>0`.
+
+    In NumPy mode the coefficient *cannot be trained*,
+    so it degrades gracefully to a fixed float.
+    
+    .. math::
+       \log C \;=\; \log(\text{initial\_value}).
+
+    Parameters
+    ----------
+    initial_value : float
+        Strictly positive initial :math:`C`.
+    
+    Attributes
+    ----------
+    initial_value : float
+        The positive starting value for :math:`C`.  Must be strictly
+        positive.
+
+    Examples
+    --------
+    >>> from fusionlab.params import LearnableC
+    >>> # Learn C, starting from C = 0.01
+    >>> pinn_coeff = LearnableC(initial_value=0.01)
+    >>> # Learn C, starting from C = 0.001
+    >>> pinn_coeff_small = LearnableC(initial_value=0.001)
+  
+    
+    """
+    def __init__(self, initial_value: float = 0.01, **kwargs ): 
+        super().__init__(
+            initial_value=initial_value, **kwargs
+        )
+
+    def _make_value(self,  initial_value: float = 0.01) -> Any:
+        if not isinstance(initial_value, (float, int)):
+            raise TypeError(
+                f"LearnableC.initial_value must be a float, got "
+                f"{type(initial_value).__name__}"
+            )
+        if initial_value <= 0:
+            raise ValueError(
+                "LearnableC.initial_value must be strictly positive."
+            )
+        self.initial_value = float(initial_value) 
+        self._export_kw = {"initial_value": self.initial_value}  # type: ignore
+        
+        if _BACKEND == "tensorflow":
+            self.trainable = True
+            log_c0 = tf.math.log(tf.constant(float(initial_value), tf.float32))
+            return tf.Variable(log_c0, dtype=tf.float32,
+                               name="log_pinn_coefficient_C")
+        # NumPy branch --> behave as a *fixed* coefficient
+        self.trainable = False
+        return float(initial_value)
+
+
+@register_keras_serializable("fusionlab.params", name="FixedC")
+class FixedC(_BaseC):
+    r"""
+    Non-trainable, constant :math:`C`.
+    
+    Indicates that the PINN's physical coefficient :math:`C` should be
+    held fixed (non-trainable) at a specified `value`.
+
+    .. math::
+       C = \text{value}, \qquad \text{non-trainable}.
+
+    Parameters
+    ----------
+    value : float
+        Constant :math:`C \ge 0`.
+        
+    Attributes
+    ----------
+    value : float
+        The non-negative, constant value of :math:`C`.
+
+    Examples
+    --------
+    >>> from fusionlab.params import FixedC
+    >>> # Use a fixed C = 0.5
+    >>> pinn_coeff = FixedC(value=0.5)
+
+    """
+    def __init__(self, value: float, **kwargs):
+        super().__init__(value = value, **kwargs)
+     
+    def _make_value(self,  value: float) -> float:
+        if not isinstance(value, (float, int)):
+            raise TypeError(
+                f"FixedC.value must be a float, got {type(value).__name__}"
+            )
+        if value < 0:
+            raise ValueError(
+                "LearnableC.initial_value must be strictly positive."
+            )
+        self._value = float(value) 
+        self._export_kw = {"value": self._value}             # type: ignore
+        return float(value)
+
+
+@register_keras_serializable("fusionlab.params", name="DisabledC")
+class DisabledC(_BaseC):
+    r"""
+    Disable physics – :math:`C` is ignored.
+    
+    Indicates that physics should be disabled.  In practice, :math:`C` is
+    irrelevant (defaults to 1.0 internally, but is never used if
+    `lambda_pde == 0` when compiling).
+
+    Attributes
+    ----------
+    None
+
+    Examples
+    --------
+    >>> from fusionlab.params import DisabledC
+    >>> pinn_coeff = DisabledC()
+    
+    """
+    
+    def __init__(self):
+        # No parameters needed.  Presence of this class signals “disable”.
+        super().__init__()
+    
+    def _make_value(self) -> float:                          # noqa: D401
+        self._export_kw = {}                                 # type: ignore
+        # return 1.0  # placeholder
+        
+@register_keras_serializable("fusionlab.params", name ="BaseLearnable")
 class BaseLearnable(ABC):
     """
     Abstract base for learnable physical parameters.
@@ -90,6 +284,7 @@ class BaseLearnable(ABC):
         name: str,
         log_transform: bool = False,
         trainable: bool = True,
+        **kws # for future extension
     ):
         if not isinstance(
             initial_value, (float, int)
@@ -150,103 +345,48 @@ class BaseLearnable(ABC):
             log_transform is True.
         """
         pass
+    
+    def get_config(self) -> Dict[str, Any]:
+        """
+        Return a JSON-serialisable dict for tf.keras.
+
+        Notes
+        -----
+        Keras looks for this method during ``model.save()``
+        and ``keras.saving.serialization_lib.serialize_keras_object``.
+        """
+        return {
+            "initial_value": self.initial_value,
+            "name":          self.name,
+            "log_transform": self.log_transform,
+            "trainable":     self.trainable,
+            # we also store the concrete subclass path for clarity
+            "__class_name__": self.__class__.__name__,
+        }
+
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> "BaseLearnable":
+        """
+        Re-instantiate from :py:meth:`get_config`.
+
+        Keras passes *config* exactly as returned above.
+        """
+        # Guard against stray keys Keras might inject
+        kwargs = {
+            k: v for k, v in config.items()
+            if k in {"initial_value", "name",
+                     "log_transform", "trainable"}
+        }
+        return cls(**kwargs)
 
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(initial_value="
-            f"{self.initial_value}, trainable={self.trainable})"
+            f"{self.initial_value}, trainable={self.trainable}, "
+            f"name={self.name})"
         )
 
-
-class LearnableC:
-    """
-    Indicates that the PINN’s physical coefficient :math:`C` should be
-    learned (trainable).  We actually learn :math:`\log(C)` to ensure
-    :math:`C > 0`.  The user supplies an `initial_value`, and the model
-    initializes:
-
-    .. math::
-       \log C \;=\; \log(\text{initial\_value}).
-
-    Attributes
-    ----------
-    initial_value : float
-        The positive starting value for :math:`C`.  Must be strictly
-        positive.
-
-    Examples
-    --------
-    >>> from fusionlab.params import LearnableC
-    >>> # Learn C, starting from C = 0.01
-    >>> pinn_coeff = LearnableC(initial_value=0.01)
-    >>> # Learn C, starting from C = 0.001
-    >>> pinn_coeff_small = LearnableC(initial_value=0.001)
-    """
-    def __init__(self, initial_value: float = 0.01):
-        # Validate type
-        if not isinstance(initial_value, (float, int)):
-            raise TypeError(
-                f"LearnableC.initial_value must be a float, got "
-                f"{type(initial_value).__name__}"
-            )
-        # Validate positivity
-        if initial_value <= 0:
-            raise ValueError(
-                "LearnableC.initial_value must be strictly positive."
-            )
-        self.initial_value = float(initial_value)
-
-
-class FixedC:
-    """
-    Indicates that the PINN’s physical coefficient :math:`C` should be
-    held fixed (non-trainable) at a specified `value`.
-
-    .. math::
-       C = \text{value}, \qquad \text{non-trainable}.
-
-    Attributes
-    ----------
-    value : float
-        The non-negative, constant value of :math:`C`.
-
-    Examples
-    --------
-    >>> from fusionlab.params import FixedC
-    >>> # Use a fixed C = 0.5
-    >>> pinn_coeff = FixedC(value=0.5)
-    """
-    def __init__(self, value: float):
-        # Validate type
-        if not isinstance(value, (float, int)):
-            raise TypeError(
-                f"FixedC.value must be a float, got {type(value).__name__}"
-            )
-        # Validate non-negativity
-        if value < 0:
-            raise ValueError("FixedC.value must be non-negative.")
-        self.value = float(value)
-
-class DisabledC:
-    """
-    Indicates that physics should be disabled.  In practice, :math:`C` is
-    irrelevant (defaults to 1.0 internally, but is never used if
-    `lambda_pde == 0` when compiling).
-
-    Attributes
-    ----------
-    None
-
-    Examples
-    --------
-    >>> from fusionlab.params import DisabledC
-    >>> pinn_coeff = DisabledC()
-    """
-    def __init__(self):
-        # No parameters needed.  Presence of this class signals “disable”.
-        pass
-
-
+@register_keras_serializable("fusionlab.params", name ="LearnableK")
 class LearnableK(BaseLearnable):
     """
     Learnable Hydraulic Conductivity (K).
@@ -275,12 +415,18 @@ class LearnableK(BaseLearnable):
     def __init__(
         self,
         initial_value: float = 1.0, 
-        name: Optional[str] =None, 
+        log_transform: bool=True, 
+        name: Optional[str] =None,
+        trainable: bool=True, 
+        **kws
+        
     ):
         super().__init__(
             initial_value=initial_value,
+            log_transform=log_transform, 
             name= name or "learnable_K",
-            log_transform=True
+            trainable= trainable, 
+            **kws
         )
 
     def get_value(
@@ -302,7 +448,7 @@ class LearnableK(BaseLearnable):
             )
         )
 
-
+@register_keras_serializable("fusionlab.params", name ="LearnableSs")
 class LearnableSs(BaseLearnable):
     """
     Learnable Specific Storage (Ss).
@@ -327,12 +473,17 @@ class LearnableSs(BaseLearnable):
     def __init__(
         self,
         initial_value: float = 1e-4, 
-        name: Optional[str] =None, 
+        log_transform: bool=True, 
+        name: Optional[str] =None,
+        trainable: bool=True, 
+        **kws
     ):
         super().__init__(
             initial_value=initial_value,
             name= name or "learnable_Ss",
-            log_transform=True
+            log_transform=log_transform, 
+            trainable= trainable, 
+            **kws
         )
 
     def get_value(
@@ -354,6 +505,7 @@ class LearnableSs(BaseLearnable):
             )
         )
 
+@register_keras_serializable("fusionlab.params", name ="LearnableQ")
 class LearnableQ(BaseLearnable):
     """
     Learnable Source/Sink term (Q).
@@ -378,13 +530,19 @@ class LearnableQ(BaseLearnable):
     """
     def __init__(
         self,
-        initial_value: float = 0.0, 
-        name: Optional[str] =None, 
+        initial_value: float = 0.0,
+        # log_transform: bool=False, 
+        name: Optional[str] =None,
+        trainable: bool=True, 
+        **kws
     ):
         super().__init__(
             initial_value=initial_value,
             name= name or "learnable_Q",
-            log_transform=False
+            # log_transform=log_transform, 
+            trainable= trainable, 
+            **kws
+            
         )
 
     def get_value(
@@ -400,7 +558,7 @@ class LearnableQ(BaseLearnable):
         """
         return self._variable
 
-
+@register_keras_serializable("fusionlab.params", name ="resolve_physical_param")
 def resolve_physical_param(
     param: Any,
     name: Optional[str] = None,

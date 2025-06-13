@@ -9,6 +9,7 @@ Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
 from textwrap import dedent # noqa 
 from numbers import Real, Integral  
 from typing import List, Optional, Union, Dict, Tuple  
+import warnings 
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.property import NNLearner 
@@ -260,7 +261,23 @@ class PiHALNet(Model, NNLearner):
         self.gw_flow_coeffs_config = ( 
             gw_flow_coeffs if gw_flow_coeffs is not None else {}
             )
-
+        
+        # ------------------------------------------------------------------
+        # PIHALNet is designed for 1-D consolidation only.  If the user
+        # supplies coefficients for the transient 2-D/3-D groundwater-flow
+        # equation (K, Ss, Q) they probably meant to instantiate
+        # TransFlowSubsNet, which couples consolidation and groundwater flow.
+        # ------------------------------------------------------------------
+        if self.gw_flow_coeffs_config:
+            warnings.warn(
+                "PIHALNet ignores groundwater-flow coefficients "
+                "(K, Ss, Q).  The model minimises only the 1-D "
+                "consolidation residual.  For joint head–subsidence "
+                "modelling use `TransFlowSubsNet` instead.",
+                UserWarning,
+                stacklevel=2,
+            )
+     
         self._build_halnet_layers()
         self._build_pinn_components()
             

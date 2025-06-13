@@ -38,7 +38,8 @@ if KERAS_BACKEND:
     tf_float32 = KERAS_DEPS.float32 
     tf_cast =KERAS_DEPS.cast
     tf_concat =KERAS_DEPS.concat
-    tf_expand_dims =KERAS_DEPS.expand_dims 
+    tf_expand_dims =KERAS_DEPS.expand_dims
+    tf_debugging =KERAS_DEPS.debugging
 else:
     class Model: pass
     Tensor = type("Tensor", (), {})
@@ -2212,11 +2213,21 @@ def extract_txy_in(
         )
 
     # Slice the now-guaranteed 3D coords_tensor
-    if tf_shape(coords_tensor)[-1] < 3:
-        raise ValueError(
-            "Coordinate tensor must have at least 3 features (t,x,y) "
-            f"in the last dimension, but got shape {coords_tensor.shape}"
-        )
+    tf_debugging.assert_greater_equal(
+       tf_shape(coords_tensor)[-1],
+       3,
+       message=(
+           "Coordinate tensor must carry at least three features "
+           "(t, x, y) in the last dimension,"
+           f" but got shape {coords_tensor.shape}"
+       )
+   )
+    
+    # if tf_shape(coords_tensor)[-1] < 3:
+    #     raise ValueError(
+    #         "Coordinate tensor must have at least 3 features (t,x,y) "
+    #         f"in the last dimension, but got shape {coords_tensor.shape}"
+    #     )
         
     t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t'] + 1]
     x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x'] + 1]

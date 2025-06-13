@@ -4,28 +4,27 @@ import numpy as np
 
 import tempfile
 import os
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any,  Tuple
 
-# try: 
-import tensorflow as tf
-from tensorflow.keras.models import load_model
+try: 
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
+    
+    from fusionlab.nn.pinn._transflow_subnet import TransFlowSubsNet
+    from fusionlab.params import LearnableK, LearnableSs, LearnableQ, LearnableC
+    from tensorflow.keras.optimizers import Adam
 
-from fusionlab.nn.pinn._transflow_subnet import TransFlowSubsNet
-from fusionlab.params import LearnableK, LearnableSs, LearnableQ, LearnableC
-from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.losses import MeanSquaredError
+    from fusionlab.nn import KERAS_BACKEND 
+except Exception as e : 
+    print(f"Skipping combine_temporal_inputs_for_lstm tests due to"
+          f" import error: {e}")
+    KERAS_BACKEND = False
+# --- End Imports ---
 
-from fusionlab.nn import KERAS_BACKEND 
-# except Exception as e : 
-#     print(f"Skipping combine_temporal_inputs_for_lstm tests due to"
-#           f" import error: {e}")
-#     KERAS_BACKEND = False
-# # --- End Imports ---
-
-# # Skip all tests in this file if TensorFlow/Keras backend is not available
-# pytestmark = pytest.mark.skipif(
-#     not KERAS_BACKEND, reason="TensorFlow/Keras backend not available"
-# )
+# Skip all tests in this file if TensorFlow/Keras backend is not available
+pytestmark = pytest.mark.skipif(
+    not KERAS_BACKEND, reason="TensorFlow/Keras backend not available"
+)
 
 # --- Pytest Fixtures ---
 
@@ -141,8 +140,8 @@ def test_transflowsubsnet_call_forward_pass(
         assert isinstance(outputs, dict)
         assert "subs_pred" in outputs
         assert "gwl_pred" in outputs
-        assert "consolidation_residual" in outputs
-        assert "gw_flow_residual" in outputs
+        assert "gwl_pred_mean" in outputs
+        assert "subs_pred_mean" in outputs
         
         # Check output shapes
         expected_shape = (
@@ -189,7 +188,7 @@ def test_serialization(default_model_params, dummy_data_generator):
     """Tests that the model can be saved, reloaded, and still used."""
     params = default_model_params.copy()
     params["K"] = LearnableK(0.8) # Mix learnable and fixed
-    
+    params["Ss"] = 1e-7 
     model1 = TransFlowSubsNet(**params)
     inputs_dict, _ = dummy_data_generator(params)
     _ = model1(inputs_dict) # Build model
@@ -218,5 +217,48 @@ def test_serialization(default_model_params, dummy_data_generator):
         assert "subs_pred" in predictions
         assert predictions['subs_pred'].shape[0] == inputs_dict['coords'].shape[0]
 
+def test_serialization_2(default_model_params, dummy_data_generator):
+    """Tests that the model can be saved, reloaded, and still used."""
+    params = default_model_params.copy()
+    params["K"] = LearnableK(0.8) # Learnable only
+    params["Ss"] = LearnableSs(0.8)
+    params["Q"] = LearnableQ(0.8)
+    params["pinn_coefficient_C"]="learnable"
+    
+    model1 = TransFlowSubsNet(**params)
+    inputs_dict, _ = dummy_data_generator(params)
+    _ = model1(inputs_dict) # Build model
+
+    config = model1.get_config()
+    assert isinstance(config, dict)
+    assert isinstance(config['K'], LearnableK)
+    assert isinstance(config['Ss'], LearnableSs)
+    assert isinstance(config['Q'], LearnableQ)
+    assert isinstance(config["pinn_coefficient_C"], str) # learnable 
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        model_path = os.path.join(tmpdir, "tgwdsnet_model.keras")
+        model1.save(model_path)
+        
+        reloaded_model = load_model(
+            model_path,
+            custom_objects={
+                "TransFlowSubsNet": TransFlowSubsNet, 
+                "LearnableK":       LearnableK,
+                "LearnableSs":      LearnableSs,
+                "LearnableQ":       LearnableQ,
+                }
+        )
+        assert isinstance(reloaded_model, TransFlowSubsNet)
+        
+        # Check a parameter
+        assert isinstance(reloaded_model.K_config, LearnableK)
+        assert np.isclose(reloaded_model.K_config.initial_value, 0.8)
+
+        # Check prediction
+        predictions = reloaded_model.predict(inputs_dict, verbose=0)
+        assert "subs_pred" in predictions
+        assert predictions['subs_pred'].shape[0] == inputs_dict['coords'].shape[0]
+        
 if __name__ =='__main__': # pragma : no cover 
     pytest.main( [__file__,  "--maxfail=1 ", "--disable-warnings",  "-q"])
