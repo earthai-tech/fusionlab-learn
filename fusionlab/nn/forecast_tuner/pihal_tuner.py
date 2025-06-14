@@ -10,7 +10,7 @@ from ...utils.generic_utils import (
 from ...core.handlers import _get_valid_kwargs 
 
 from .. import KERAS_BACKEND, KERAS_DEPS 
-from ..pinn.models import PIHALNet 
+from ..pinn.models import PiHALNet 
 from ..pinn.utils import  ( # noqa
     prepare_pinn_data_sequences, 
     check_required_input_keys
@@ -82,7 +82,7 @@ DEFAULT_PIHAL_CASE_INFO = {
     "description": "PIHALNet {} forecast",
 }
 
-class PIHALTuner(PINNTunerBase):
+class PiHALTuner(PINNTunerBase):
     def __init__(
         self,
         fixed_model_params: Dict[str, Any], 
@@ -334,9 +334,9 @@ class PIHALTuner(PINNTunerBase):
         param_space: Optional[Dict[str, Any]] = None,
         verbose: int = 0,
         **tuner_init_kwargs
-    ) -> 'PIHALTuner':
+    ) -> 'PiHALTuner':
         """
-        Creates a PIHALTuner instance.
+        Creates a PiHALTuner instance.
     
         Fixed model parameters for PIHALNet are determined with the
         following priority:
@@ -345,7 +345,7 @@ class PIHALTuner(PINNTunerBase):
           3. Default values from `DEFAULT_PIHALNET_FIXED_PARAMS`.
     
         After computing the final `fixed_model_params`, this method
-        instantiates and returns a `PIHALTuner` with all required
+        instantiates and returns a `PiHALTuner` with all required
         configuration for hyperparameter search.
     
         Parameters
@@ -393,7 +393,7 @@ class PIHALTuner(PINNTunerBase):
             A mapping from hyperparameter names to search-space definitions
             understood by Keras Tuner (e.g. hp.Choice, hp.Int, hp.Float).
             When None, the tuner will use the built-in default space
-            defined in `PIHALTuner.build()`.
+            defined in `PiHALTuner.build()`.
     
         verbose : int, default=0
             Logging verbosity level. `0` = silent; `1` = info; `>=2` = debug.
@@ -405,8 +405,8 @@ class PIHALTuner(PINNTunerBase):
     
         Returns
         -------
-        PIHALTuner
-            An instance of `PIHALTuner` with `fixed_model_params` fully
+        PiHALTuner
+            An instance of `PiHALTuner` with `fixed_model_params` fully
             populated and ready to run hyperparameter search.
     
         Examples
@@ -422,7 +422,7 @@ class PIHALTuner(PINNTunerBase):
         ...     "subsidence": np.random.rand(100, 2, 1),
         ...     "gwl": np.random.rand(100, 2, 1)
         ... }
-        >>> tuner = PIHALTuner.create(
+        >>> tuner = PiHALTuner.create(
         ...     inputs_data=inputs,
         ...     targets_data=targets,
         ...     forecast_horizon=2,
@@ -434,7 +434,7 @@ class PIHALTuner(PINNTunerBase):
         ... )
     
         """
-        vlog("Creating PIHALTuner instance via from_config_and_data...",
+        vlog("Creating PiHALTuner instance via from_config_and_data...",
              verbose=verbose, level=1)
     
         actual_fixed_params = cls._infer_dims_and_prepare_fixed_params(
@@ -635,8 +635,8 @@ class PIHALTuner(PINNTunerBase):
                 'use_batch_norm', False
             ),
         }
-        model_params = _get_valid_kwargs(PIHALNet, model_params)
-        model = PIHALNet(**model_params)
+        model_params = _get_valid_kwargs(PiHALNet, model_params)
+        model = PiHALNet(**model_params)
 
         loss_dict = {
             'subs_pred': MeanSquaredError(name='subs_data_loss'),
@@ -799,7 +799,7 @@ class PIHALTuner(PINNTunerBase):
         Notes
         -----
         - This method replaces the usual `fit(...)` interface; users should
-          call `PIHALTuner.run(...)` (or `tuner.fit(...)` if aliased)
+          call `PiHALTuner.run(...)` (or `tuner.fit(...)` if aliased)
           instead of directly calling `search(...)`.
         - After this returns, `self.best_hps_`, `self.best_model_`, etc. are
           populated and `self._save_tuning_summary()` is called internally.
@@ -808,7 +808,7 @@ class PIHALTuner(PINNTunerBase):
         --------
         >>> # Suppose `inputs_train` and `targets_train` are dicts of NumPy
         >>> # arrays:
-        >>> tuner = PIHALTuner(
+        >>> tuner = PiHALTuner(
         ...     fixed_model_params={'static_input_dim': 5,
         ...                         'dynamic_input_dim': 4,
         ...                         'future_input_dim': 1,
@@ -832,14 +832,14 @@ class PIHALTuner(PINNTunerBase):
         """
 
         vlog(
-            f"PIHALTuner: Executing `fit` for project: "
+            f"PiHALTuner: Executing `fit` for project: "
             f"{self.project_name}",
             verbose=verbose, level=1
         )
 
         # If fixed_model_params were not provided at __init__ or are incomplete,
         # infer them now using the data and explicit args to fit.
-        # This allows PIHALTuner() then tuner.fit(data...) workflow.
+        # This allows PiHALTuner() then tuner.fit(data...) workflow.
         if not self.fixed_model_params or not all(
             k in self.fixed_model_params for k in [
                 "static_input_dim", "dynamic_input_dim",
@@ -1072,12 +1072,12 @@ class PIHALTuner(PINNTunerBase):
         )
 
 
-PIHALTuner.__doc__ = """
+PiHALTuner.__doc__ = """
 Hyperparameter tuner for the PIHALNet model, which jointly predicts
 land subsidence and groundwater level (GWL) via a physics-informed
 neural network (PINN) framework.
 
-PIHALTuner leverages Keras Tuner (e.g., RandomSearch or
+PiHALTuner leverages Keras Tuner (e.g., RandomSearch or
 BayesianOptimization) to search over architectural and PINN-specific
 hyperparameters—embedding dimension, hidden units, LSTM layers,
 attention heads, dropout, activation functions, PDE coefficients,
@@ -1154,7 +1154,7 @@ validation_data : tuple, optional
 
 forecast_horizon : int, optional
     Horizon length for multi-step forecasting. If not provided in
-    ``fixed_model_params``, PIHALTuner will attempt to infer from
+    ``fixed_model_params``, PiHALTuner will attempt to infer from
     the second dimension of ``y['subs_pred']`` or ``y['gwl_pred']``.
 
 quantiles : list[float], optional
@@ -1197,7 +1197,7 @@ Examples
 --------
 # 1) Create and run a tuning session using raw NumPy data:
 >>> import numpy as np
->>> from fusionlab.nn.pinn.tuning import PIHALTuner
+>>> from fusionlab.nn.pinn.tuning import PiHALTuner
 >>> B, T, Sdim, Ddim, Fdim, O = 128, 12, 5, 3, 2, 1
 >>> rng = np.random.default_rng(123)
 >>> inputs = {{
@@ -1219,7 +1219,7 @@ Examples
 ...     "forecast_horizon":    T,
 ...     "quantiles":           [0.1, 0.5, 0.9],
 ... }}
->>> tuner = PIHALTuner(
+>>> tuner = PiHALTuner(
 ...     fixed_model_params=fixed_params,
 ...     param_space={{
 ...         "learning_rate": {{
@@ -1244,7 +1244,7 @@ Examples
 ... )
 
 # 2) Alternative: Use `create()` to infer dimensions automatically:
->>> tuner2 = PIHALTuner.create(
+>>> tuner2 = PiHALTuner.create(
 ...     inputs_data=inputs,
 ...     targets_data=targets,
 ...     forecast_horizon=None,        # will be inferred as T=12

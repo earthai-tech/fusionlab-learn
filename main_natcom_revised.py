@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 # License : BSD-3-Clause
-# Author: LKouadio <etanoyau@gmail.com> & Gemini AI
+# Author: LKouadio <etanoyau@gmail.com> 
 """
-main_zhongshan_pihalnet.py: Zhongshan Land Subsidence Forecasting with PIHALNet
+main_zhongshan_pihalnet.py: Zhongshan Land Subsidence Forecasting with SubsModel
 
 This script performs physics-informed, quantile-based subsidence and GWL
-prediction for Zhongshan City using the PIHALNet model from the
+prediction for Zhongshan City using the SubsModel model from the
 fusionlab-learn library.
 
 Dataset Notes for Reproducibility (Zhongshan - 500k samples):
@@ -24,7 +24,7 @@ Workflow:
 5. Split Master Data by Year (Train/Test).
 6. Sequence Generation for PINN using `prepare_pinn_data_sequences`.
 7. Create tf.data.Dataset for training and validation.
-8. PIHALNet Model Definition, Compilation, and Training with PINN loss.
+8. PIHALNet/TransFlowSubsNet Model Definition, Compilation, and Training with PINN loss.
 9. Forecasting on Test Data Sequences.
 10. Formatting Predictions and Visualization.
 11. Saving Artifacts.
@@ -59,7 +59,7 @@ if hasattr(tf, 'autograph') and hasattr(tf.autograph, 'set_verbosity'):
 try:
     from fusionlab.api.util import get_table_size
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
-    from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet   # Our PINN model
+    from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet   # Our PINN models
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences # PINN data prep
     from fusionlab.nn.pinn.op import ( # PINN physics helpers : Noqa
         compute_consolidation_residual, 
@@ -86,7 +86,7 @@ except ImportError as e:
 #%
 # --- Configuration Parameters ---
 CITY_NAME = 'zhongshan'
-MODEL_NAME ='TransFlowSubsNet'# 'PIHALNet' # Using our PINN model name
+MODEL_NAME ='TransFlowSubsNet'# or 'PIHALNet' # Using our PINN model name
 
 # Data loading: Prioritize 500k sample file
 # For Code Ocean, data is typically in ../data or /data
@@ -109,7 +109,7 @@ LAMBDA_PDE_CONFIG = 1.0           # Weight for the PDE loss term in compile
 LAMBDA_PDE_CONS= 1.0
 LAMBDA_PDE_GW = 1.0
 
-# Model Hyperparameters (can be tuned later with PIHALTuner)
+# Model Hyperparameters (can be tuned later with PIHALTuner/HydroTuner)
 QUANTILES = [0.1, 0.5, 0.9] # For probabilistic forecast
 # QUANTILES = None # For point forecast
 
@@ -221,7 +221,7 @@ print(f"\n{'='*20} Step 2: Preprocessing - Initial Steps {'='*20}")
 #  'subsidence_intensity', 'density_concentration',
 #  'normalized_seismic_risk_score', 'rainfall_category', 'subsidence']
 
-# For PIHALNet, we need distinct coordinate columns for the `coords` input.
+# For SubsModel, we need distinct coordinate columns for the `coords` input.
 # The model also needs `subsidence` and `GWL` as targets.
 # Other features will be dynamic, static, or future.
 
@@ -392,12 +392,12 @@ if SAVE_INTERMEDIATE_ARTEFACTS:
 # ==================================================================
 print(f"\n{'='*20} Step 4: Define Feature Sets for PINN Data Prep {'='*20}")
 
-# Static features for PIHALNet (after VSN, these become context)
+# Static features for SubsModel (after VSN, these become context)
 # These are features that do NOT change over the `time_steps` for a given sample.
 # If grouping by lon/lat, geology might be static per group.
 static_features_list = encoded_feature_names_list # Geology, etc.
 # Add other known static features if any, e.g. soil_thickness if it's one value per (lon,lat)
-# For PIHALNet, static_features are per-sample, not per-timestep.
+# For SubsModel, static_features are per-sample, not per-timestep.
 # If `group_id_cols` are lon/lat, these static features are those constant per lon/lat.
 
 # Dynamic features: vary over `time_steps` (past observed)
@@ -437,7 +437,7 @@ print(f"\n{'='*20} Step 5: Split Master Data & PINN Sequence Generation {'='*20}
 df_train_master = df_scaled[
     df_scaled[TIME_COL] <= TRAIN_END_YEAR
 ].copy()
-# For test data, PIHALNet needs future knowns for its "future_features" input
+# For test data, SubsModel needs future knowns for its "future_features" input
 # and also target coords for its "coords" input.
 # The `prepare_pinn_data_sequences` will handle slicing.
 df_test_master = df_scaled[
@@ -473,8 +473,8 @@ inputs_train_dict, targets_train_dict, coord_scaler = prepare_pinn_data_sequence
     group_id_cols=GROUP_ID_COLS_SEQ,
     time_steps=TIME_STEPS,
     forecast_horizon=FORECAST_HORIZON_YEARS,
-    output_subsidence_dim=OUT_S_DIM, # PIHALNet default is 1
-    output_gwl_dim=OUT_G_DIM,       # PIHALNet default is 1
+    output_subsidence_dim=OUT_S_DIM, # SubsModel default is 1
+    output_gwl_dim=OUT_G_DIM,       # SubsModel default is 1
     normalize_coords=True, # Recommended for PINN coordinates
     savefile=sequence_file_path_train, # Save the prepared sequences
     return_coord_scaler= True, # return corrd-scaler for inverse_transform. 
@@ -507,7 +507,7 @@ dataset_inputs = {
     'future_features': inputs_train_dict.get('future_features') if inputs_train_dict.get('future_features') is not None \
                        else np.zeros((num_train_samples, FORECAST_HORIZON_YEARS, 0), dtype=np.float32)
 }
-# Ensure keys in targets_train_dict match PIHALNet.compile loss keys
+# Ensure keys in targets_train_dict match SubsModel.compile loss keys
 dataset_targets = {
     'subs_pred': targets_train_dict['subsidence'], # Key for subsidence output
     'gwl_pred': targets_train_dict['gwl']          # Key for GWL output
@@ -538,16 +538,16 @@ for x_batch, y_batch in train_dataset.take(1):
     break
 #%
 # ==================================================================
-# ** Step 7: PIHALNet Model Definition, Compilation & Training **
+# ** Step 7: SubsModel Model Definition, Compilation & Training **
 # ==================================================================
-print(f"\n{'='*20} Step 7: PIHALNet Model Training {'='*20}")
+print(f"\n{'='*20} Step 7: SubsModel Model Training {'='*20}")
 
-# Infer input dimensions from the prepared data for PIHALNet __init__
+# Infer input dimensions from the prepared data for SubsModel __init__
 s_dim_model = dataset_inputs['static_features'].shape[-1]
 d_dim_model = dataset_inputs['dynamic_features'].shape[-1]
 f_dim_model = dataset_inputs['future_features'].shape[-1]
 
-pihalnet_params = {
+subsmodel_params = {
     'embed_dim': 32,
     'hidden_units': 64,
     'lstm_units': 64,
@@ -570,7 +570,7 @@ pihalnet_params = {
 
 if MODEL_NAME =="TransFlowSubsNet": 
     SubsModel = TransFlowSubsNet 
-    pihalnet_params.update ({ 
+    subsmodel_params.update ({ 
         "K": LearnableK ( initial_value = GWFLOW_INIT_K), 
         "Q": LearnableQ (initial_value= GWFLOW_INIT_Q), 
         "Ss": LearnableSs(initial_value= GWFLOW_INIT_Ss), 
@@ -586,7 +586,7 @@ else:
         "lambda_pde": LAMBDA_PDE_CONFIG # Weight for the physics loss component
     }
     
-pihal_model_inst = SubsModel(
+subs_model_inst = SubsModel(
     static_input_dim=s_dim_model,
     dynamic_input_dim=d_dim_model,
     future_input_dim=f_dim_model,
@@ -597,17 +597,17 @@ pihal_model_inst = SubsModel(
     pde_mode=PDE_MODE_CONFIG,
     pinn_coefficient_C=PINN_COEFF_C_CONFIG,
     gw_flow_coeffs=None, # Keep None for consolidation focus
-    **pihalnet_params
+    **subsmodel_params
 )
 
 # Build the model with a sample batch to initialize weights and allow summary
 for x_sample_build, _ in train_dataset.take(1):
-    pihal_model_inst(x_sample_build) 
+    subs_model_inst(x_sample_build) 
     break # Only need one batch to build
-pihal_model_inst.summary(line_length=110, expand_nested=True)
+subs_model_inst.summary(line_length=110, expand_nested=True)
 
-# Compile PIHALNet
-# Loss dictionary keys MUST match the keys PIHALNet.call() output dict for predictions
+# Compile SubsModel
+# Loss dictionary keys MUST match the keys SubsModel.call() output dict for predictions
 loss_dict = {
     'subs_pred': tf.keras.losses.MeanSquaredError() if QUANTILES is None \
                  else combined_quantile_loss(QUANTILES),
@@ -624,7 +624,7 @@ loss_weights_dict = { # Weights for the data loss terms
 }
 
 
-pihal_model_inst.compile(
+subs_model_inst.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
     loss=loss_dict,
     metrics=metrics_dict,
@@ -633,11 +633,11 @@ pihal_model_inst.compile(
     
     #lambda_pde=LAMBDA_PDE_CONFIG # Weight for the physics loss component
 )
-print("PIHALNet model compiled successfully.")
+print("SubsModel model compiled successfully.")
 
 # Callbacks
 early_stopping_cb = EarlyStopping(
-    monitor='val_total_loss', # PIHALNet train_step returns 'total_loss'
+    monitor='val_total_loss', # SubsModel train_step returns 'total_loss'
     patience=15, # Increased patience
     restore_best_weights=True,
     verbose=1
@@ -659,7 +659,7 @@ model_checkpoint_cb = ModelCheckpoint(
 print(f"Model checkpoints will be saved to: {model_checkpoint_path}")
 
 print(f"\nStarting {MODEL_NAME} model training...")
-history = pihal_model_inst.fit(
+history = subs_model_inst.fit(
     train_dataset,
     validation_data=val_dataset,
     epochs=EPOCHS,
@@ -669,18 +669,18 @@ history = pihal_model_inst.fit(
 print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
 
-pihalnet_metrics = {
+subsmodel_metrics = {
     "Loss Components": [
         "total_loss", "data_loss", "physics_loss", "val_loss"],
     # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
 }
 
-# PIHALNet data on separate subplots
-print("\n---PIHALNet History on Separate Subplots ---")
+# SubsModel data on separate subplots
+print("\n---SubsModel History on Separate Subplots ---")
 
 plot_history_in(
     history.history,
-    metrics=pihalnet_metrics,
+    metrics=subsmodel_metrics,
     layout='single',
     title=f'{MODEL_NAME} Training History', 
     savefig=os.path.join(
@@ -695,28 +695,28 @@ try:
     # If combined_quantile_loss is a function used directly
     # custom_objects_load['combined_quantile_loss'] = combined_quantile_loss
     # If it's part of a Keras Loss class that's registered, not needed.
-    # For PIHALNet, the losses are applied in compile.
+    # For SubsModel, the losses are applied in compile.
     custom_objects_load = {}
     if QUANTILES:
         # If combined_quantile_loss is a function used directly
         # custom_objects_load['combined_quantile_loss'] = combined_quantile_loss
         # If it's part of a Keras Loss class that's registered, not needed.
-        # For PIHALNet, the losses are applied in compile.
+        # For SubsModel, the losses are applied in compile.
         custom_objects_load = {'combined_quantile_loss': loss_to_use} 
         
     with custom_object_scope(custom_objects_load):
-        pihal_model_loaded = load_model(model_checkpoint_path)
-    print("Best PIHALNet model loaded successfully for forecasting.")
+        subs_model_loaded = load_model(model_checkpoint_path)
+    print("Best SubsModel model loaded successfully for forecasting.")
 except Exception as e_load:
-    print(f"Error loading saved PIHALNet model: {e_load}. "
+    print(f"Error loading saved SubsModel model: {e_load}. "
           "Using model from end of training.")
-    pihal_model_loaded = pihal_model_inst
+    subs_model_loaded = subs_model_inst
 #%
 # =============================================================================
 # ** Step 8: Forecasting on Test Data **
 # =============================================================================
 print(f"\n{'='*20} Step 8: Forecasting on Test Data {'='*20}")
-# For PIHALNet, we need to prepare test inputs similar to training
+# For SubsModel, we need to prepare test inputs similar to training
 # This includes 'coords', 'static_features', 'dynamic_features', 'future_features'
 # Initialize variables
 inputs_test_dict = None
@@ -881,10 +881,10 @@ except Exception as e:
 
 # 3. Proceed with forecasting if input data (from test or validation) is available
 if inputs_test_dict is not None:
-    print(f"\nGenerating PIHALNet predictions on: {dataset_name_for_forecast}...")
+    print(f"\nGenerating SubsModel predictions on: {dataset_name_for_forecast}...")
     
     # Get model predictions
-    pihalnet_test_outputs = pihal_model_loaded.predict(inputs_test_dict, verbose=0)
+    subsmodel_test_outputs = subs_model_loaded.predict(inputs_test_dict, verbose=0)
     
     # Format true values for comparison
     y_true_for_format = {
@@ -894,7 +894,7 @@ if inputs_test_dict is not None:
 
     # Format predictions into a clear DataFrame
     forecast_df_pihalnet = format_pihalnet_predictions(
-        pihalnet_outputs=pihalnet_test_outputs,
+        pihalnet_outputs=subsmodel_test_outputs,
         y_true_dict=y_true_for_format,
         target_mapping={'subs_pred': SUBSIDENCE_COL, 'gwl_pred': GWL_COL},
         quantiles=QUANTILES,
@@ -915,20 +915,20 @@ if inputs_test_dict is not None:
         )
         forecast_csv_path = os.path.join(RUN_OUTPUT_PATH, forecast_csv_filename)
         forecast_df_pihalnet.to_csv(forecast_csv_path, index=False)
-        print(f"\nPIHALNet forecast results for {dataset_name_for_forecast} saved to: {forecast_csv_path}")
-        print("\nSample of PIHALNet forecast DataFrame:")
+        print(f"\nSubsModel forecast results for {dataset_name_for_forecast} saved to: {forecast_csv_path}")
+        print("\nSample of SubsModel forecast DataFrame:")
         print(forecast_df_pihalnet.head())
     else:
-        print("\nNo final PIHALNet forecast DataFrame was generated.")
+        print("\nNo final SubsModel forecast DataFrame was generated.")
 else:
     print("\nSkipping forecasting as no valid test or validation input sequences could be prepared.")
 
 # ==================================================================
 # ** Step 9: Visualize Forecasts **
 # ==================================================================
-print(f"\n{'='*20} Step 9: Visualize PIHALNet Forecasts {'='*20}")
+print(f"\n{'='*20} Step 9: Visualize SubsModel Forecasts {'='*20}")
 if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
-    print(f"Visualizing PIHALNet forecasts for {dataset_name_for_forecast}...")
+    print(f"Visualizing SubsModel forecasts for {dataset_name_for_forecast}...")
     
     # Check if coordinate columns exist for spatial plot
     coord_plot_cols = ['coord_x', 'coord_y'] # From format_pihalnet_predictions
@@ -984,7 +984,7 @@ if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
             cbar =None, 
         )
 else:
-    print("No PIHALNet forecast data to visualize.")
+    print("No SubsModel forecast data to visualize.")
 
 # ==================================================================
 # ** Step 10: Save All Generated Figures **

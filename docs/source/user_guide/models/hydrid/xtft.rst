@@ -1,5 +1,31 @@
+.. _hybrid_transformer_models_guide:
 
+==============================================
+Hybrid Transformer Models: XTFT & SuperXTFT
+==============================================
 
+This section of the user guide covers the ``XTFT`` (Extreme Temporal
+Fusion Transformer) family of models. These are advanced, hybrid
+architectures designed for the most demanding multi-horizon time
+series forecasting tasks.
+
+Building upon the foundational concepts of the original Temporal Fusion
+Transformer (TFT), these models integrate multi-scale recurrent
+processing using LSTMs with a sophisticated, multi-layered attention
+framework. This hybrid approach allows them to capture an exceptionally
+rich set of temporal patterns, from short-term dependencies to very
+long-range, complex interactions.
+
+This guide details two models in this family:
+
+* **XTFT**: The main, stable implementation, which includes numerous
+    enhancements over the standard TFT, such as advanced attention
+    mechanisms and integrated anomaly detection.
+* **SuperXTFT**: An experimental variant of ``XTFT`` that introduces
+    additional feature selection and processing layers.
+
+.. toctree::
+   :hidden:
 
 
 .. _xtft_model:

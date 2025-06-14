@@ -9,7 +9,7 @@ import warnings
 from fusionlab.compat.tf import HAS_TF
 
 # Always provide core transformer
-from ._transformers import TimeSeriesTransformer
+from ._ts_transformers import TimeSeriesTransformer
 
 # Warn if TF missing
 if not HAS_TF:

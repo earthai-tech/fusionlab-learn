@@ -8,7 +8,7 @@ try:
     import tensorflow as tf
     import keras_tuner as kt # Renamed from kt to avoid conflict with local kt var
     
-    from fusionlab.nn.pinn.models import PIHALNet
+    from fusionlab.nn.pinn.models import PiHALNet
     from fusionlab.nn.forecast_tuner.pihal_tuner import PIHALTuner, PINNTunerBase, DEFAULT_PIHALNET_FIXED_PARAMS
     from fusionlab.utils.generic_utils import rename_dict_keys
     from fusionlab.core.checks import exist_features
@@ -23,7 +23,7 @@ except ImportError as e:
          
 pytestmark = pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE,
-    reason="fusionlab.nn.pinn.models.PIHALNet or dependencies not found"
+    reason="fusionlab.nn.pinn.models.PiHALNet or dependencies not found"
 )
 
 # --- Test Parameters ---
@@ -54,10 +54,10 @@ def generate_raw_numpy_data_for_tuner(
             (batch_size, 0), dtype=np.float32)
         
     if f_dim > 0:
-        # Assuming future_features for PIHALNet.call (via run_halnet_core)
+        # Assuming future_features for PiHALNet.call (via run_halnet_core)
         # are the full span that align_temporal_dimensions will slice from.
         # However, prepare_pinn_data_sequences outputs future_features of length T_HORIZON.
-        # The _infer_dims logic needs to be consistent with what PIHALNet.call expects.
+        # The _infer_dims logic needs to be consistent with what PiHALNet.call expects.
         # For PIHALTuner.create, inputs_data is what prepare_pinn_data_sequences outputs.
         inputs_np['future_features'] = np.random.rand(
             batch_size, t_horizon, f_dim).astype(np.float32)
@@ -80,7 +80,7 @@ def generate_raw_numpy_data_for_tuner(
 
 @pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB, 
-    reason="PIHALNet or KerasTuner not available")
+    reason="PiHALNet or KerasTuner not available")
 def test_pihaltuner_create_with_data_inference():
     """Tests PIHALTuner.create() with data inference for fixed_model_params."""
     raw_inputs, raw_targets = generate_raw_numpy_data_for_tuner(
@@ -106,7 +106,7 @@ def test_pihaltuner_create_with_data_inference():
 
 @pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB,
-    reason="PIHALNet or KerasTuner not available"
+    reason="PiHALNet or KerasTuner not available"
    )
 def test_pihaltuner_create_with_explicit_fixed_params():
     """Tests PIHALTuner.create() with explicitly provided fixed_model_params."""
@@ -127,7 +127,7 @@ def test_pihaltuner_create_with_explicit_fixed_params():
 
 @pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB, 
-    reason="PIHALNet or KerasTuner not available"
+    reason="PiHALNet or KerasTuner not available"
 )
 def test_pihaltuner_init_direct_with_fixed_params():
     """Tests direct PIHALTuner instantiation with fixed_model_params."""
@@ -149,7 +149,7 @@ def test_pihaltuner_init_direct_with_fixed_params():
 
 @pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB, 
-    reason="PIHALNet or KerasTuner not available"
+    reason="PiHALNet or KerasTuner not available"
   )
 def test_pihaltuner_build_method_from_create():
     """Tests the build method after instantiation via `create`."""
@@ -162,12 +162,12 @@ def test_pihaltuner_build_method_from_create():
     )
     hp = kt.HyperParameters() # Keras Tuner provides this
     model = tuner.build(hp)
-    assert isinstance(model, PIHALNet)
+    assert isinstance(model, PiHALNet)
     assert model.optimizer is not None
 
 @pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB, 
-    reason="PIHALNet or KerasTuner not available"
+    reason="PiHALNet or KerasTuner not available"
  )
 def test_pihaltuner_run_calls_search(mocker):
     """Tests that PIHALTuner.runt() correctly calls super().search()."""
@@ -210,7 +210,7 @@ def test_pihaltuner_run_calls_search(mocker):
 @pytest.mark.slow
 @pytest.mark.skipif(
     not FUSIONLAB_AVAILABLE or not HAS_KT_LIB,
-    reason="PIHALNet or KerasTuner not available"
+    reason="PiHALNet or KerasTuner not available"
  )
 def test_pihaltuner_run_short_search_smoke_test():
     """Smoke test for a minimal PIHALTuner.run() run."""
@@ -244,7 +244,7 @@ def test_pihaltuner_run_short_search_smoke_test():
         )
         assert best_model is not None
         assert best_hps is not None
-        assert isinstance(best_model, PIHALNet)
+        assert isinstance(best_model, PiHALNet)
     except Exception as e:
         import traceback
         traceback.print_exc()

@@ -370,7 +370,7 @@ forecasting land subsidence and GWL.
 If you use `PIHALNet` or this physics-informed approach in your research,
 please cite our paper:
 
-> \[Your Names/Group]. (2025). Forecasting Urban Land Subsidence in the Era
+> Laurent Kouadio & Liu Rong. (2025). Forecasting Urban Land Subsidence in the Era
 > of Rapid Urbanization and Climate Stress. *Submitted to Nature
 > Communications*.
 

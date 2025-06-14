@@ -219,7 +219,7 @@ You can also create variants of an existing model using the
    Instantiating with deprecated 'objective' key...
 
 Complete Usage Example
-----------------------
+-------------------------
 This example shows the end-to-end workflow for using the
 ``BaseAttentive`` model (or any of its children).
 

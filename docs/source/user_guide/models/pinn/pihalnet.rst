@@ -1,229 +1,394 @@
-.. _pinn_models_guide:
+.. _pihalnet_guide:
 
-===========================================
-Physics-Informed Neural Networks (PINNs)
-===========================================
+=======================================================
+Hybrid Physics-Data Models: PiHALNet & PIHALNet
+=======================================================
 
-This section of the user guide delves into the Physics-Informed
-Neural Networks (PINNs) available within the ``fusionlab`` library.
-These models uniquely combine data-driven deep learning architectures
-with physical laws, expressed as Partial Differential Equations (PDEs),
-to produce forecasts that are not only accurate but also physically
-consistent.
+This guide delves into the ``PiHALNet`` family of models, a suite
+of sophisticated hybrid architectures designed for complex, coupled
+geophysical forecasting. These models uniquely combine a powerful,
+data-driven deep learning engine with the physical laws of soil
+mechanics and groundwater flow.
 
-The primary PINN model currently featured is PIHALNet, designed for
-complex spatio-temporal forecasting tasks like land subsidence,
-where understanding and respecting the underlying geohydrological
-processes is crucial.
+The primary goal of these models is to produce forecasts for land
+subsidence and groundwater levels that are not only accurate with
+respect to observational data but are also physically consistent.
+This page details the two evolutionary versions of this concept,
+highlighting their shared principles and key differences.
 
-.. toctree::
-   :hidden:
 
-PIHALNet (Physics-Informed Hybrid Attentive LSTM Network)
------------------------------------------------------------
+Common Key Features
+-------------------
+Both versions of ``PiHALNet`` are built upon the same core
+principles, offering a powerful set of common features that make
+them uniquely suited for complex geophysical forecasting tasks.
+
+* **Hybrid Data-Physics Architecture**
+    The models integrate a powerful data-driven forecasting core
+    (the Hybrid Attentive LSTM Network, or HALNet, engine) with a
+    physics-informed module. This means they learn from both
+    observational data and the governing physical laws, with the PDE
+    residual being a key component of the loss function.
+
+* **Coupled Multi-Target Prediction**
+    They are designed to simultaneously forecast multiple, physically
+    linked variables. The primary use case is predicting land
+    subsidence (:math:`s`) and groundwater levels (:math:`h`) in a
+    coupled manner.
+
+* **Advanced Input Handling**
+    The architecture natively processes three distinct types of time
+    series inputs:
+    * **Static features:** Time-invariant metadata (e.g., sensor
+        location, soil type).
+    * **Dynamic past features:** Time-varying data observed up to the
+        present (e.g., historical rainfall, past measurements).
+    * **Known future features:** Time-varying data known in advance
+        (e.g., day of the week, scheduled pumping).
+    This is enhanced by an optional
+    :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSN)
+    for intelligent, learnable feature selection.
+
+* **Sophisticated Temporal Processing**
+    To capture complex time-dependencies, the models employ:
+    * A :class:`~fusionlab.nn.components.MultiScaleLSTM` that processes
+        the input sequence at various user-defined temporal
+        resolutions, capturing both short-term and long-term patterns.
+    * A rich suite of attention mechanisms that work together to fuse
+        information from all sources, including
+        :class:`~fusionlab.nn.components.CrossAttention` (for
+        encoder-decoder interaction) and various self-attention layers
+        like :class:`~fusionlab.nn.components.HierarchicalAttention`.
+
+* **Flexible Physics-Informed Constraints**
+    The physics module is highly configurable:
+    * The specific physical law to enforce can be selected via the
+        ``pde_mode`` parameter, with the primary focus being on
+        ``'consolidation'``.
+    * Key physical coefficients in the PDEs (like the consolidation
+        coefficient :math:`C` or hydraulic conductivity :math:`K`) can
+        be either **fixed** as known constants or made **learnable**.
+        This allows the model to perform *parameter inversion*—
+        discovering the values of physical constants directly from the
+        observational data.
+
+* **Probabilistic Forecasting for Uncertainty**
+    The models can produce probabilistic forecasts to quantify
+    prediction uncertainty. By specifying a list of ``quantiles``, the
+    :class:`~fusionlab.nn.components.QuantileDistributionModeling` head
+    is activated, generating prediction intervals alongside the point
+    forecast.
+
+* **Multi-Horizon Output Structure**
+    Using a :class:`~fusionlab.nn.components.MultiDecoder`, the models
+    generate predictions for each step in the forecast horizon in a
+    sequence-to-sequence manner, making them true multi-step-ahead
+    forecasters.
+    
+
+Physical Formulation and Hybrid Loss
+---------------------------------------
+The power of the ``PIHALNet`` family lies in its **hybrid formulation**,
+which forces the data-driven predictions to conform to physical laws.
+This is achieved by integrating the governing equations of groundwater
+hydrology and soil mechanics directly into the model's training
+objective.
+
+Governing Equations
+~~~~~~~~~~~~~~~~~~~
+The models are designed to understand and simulate two coupled
+physical processes. The specific equations activated during training
+depend on the ``pde_mode`` setting.
+
+**1. Transient Groundwater Flow**
+
+This equation, a form of the diffusion equation, enforces the
+conservation of mass for groundwater moving through a porous medium. It
+describes how the hydraulic head :math:`h` changes in time and space.
+The 2D residual form used by the model is:
+
+.. math::
+   \mathcal{R}_{gw} = S_s \frac{\partial h}{\partial t} - K \left( \frac{\partial^2 h}{\partial x^2} + \frac{\partial^2 h}{\partial y^2} \right) - Q
+
+Here, :math:`K` is the hydraulic conductivity, :math:`S_s` is the
+specific storage, and :math:`Q` is a source/sink term.
+
+**2. Aquifer-System Consolidation**
+
+This principle links the rate of land subsidence (:math:`s`) to
+changes in the hydraulic head field. As the head :math:`h` declines,
+pressure within the aquifer system changes, causing fine-grained
+clay layers to compact, which results in subsidence at the surface.
+The residual form of this relationship is:
+
+.. math::
+   \mathcal{R}_{c} = \frac{\partial s}{\partial t} - C \left( \frac{\partial^2 h}{\partial x^2} + \frac{\partial^2 h}{\partial y^2} \right)
+
+Here, :math:`C` is the consolidation coefficient, a parameter that
+encapsulates the mechanical properties of the aquifer system.
+
+Operational Workflow: From Data to Physics
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The model's custom ``train_step`` seamlessly integrates the data-driven
+and physics-informed components in a three-stage process:
+
+**1. Data-Driven Prediction**
+
+First, the model acts as a powerful data-driven forecaster. It uses
+its internal ``BaseAttentive`` engine to process the rich set of
+static, dynamic, and future features. This stage produces initial,
+highly accurate "mean" predictions for the target variables, denoted
+as :math:`\bar{s}_{net}` and :math:`\bar{h}_{net}`. These predictions
+are used to calculate the data-fidelity portion of the loss.
+
+**2. Physics Residual Calculation**
+
+Next, the physics module is activated. The model takes the mean
+predictions (:math:`\bar{s}_{net}`, :math:`\bar{h}_{net}`) and their
+corresponding spatio-temporal coordinates (:math:`t, x, y`). Using
+TensorFlow's ``GradientTape`` for automatic differentiation, it
+computes all the necessary derivatives (e.g.,
+:math:`\frac{\partial \bar{s}_{net}}{\partial t}`,
+:math:`\frac{\partial^2 \bar{h}_{net}}{\partial x^2}`). These derivatives
+are then plugged into the governing equations to calculate the
+physics residuals, :math:`\mathcal{R}_{gw}` and/or :math:`\mathcal{R}_{c}`.
+
+**3. Composite Loss Function**
+
+Finally, the total loss function, :math:`\mathcal{L}_{total}`, is
+assembled as a weighted sum of the data and physics components.
+
+.. math::
+   \mathcal{L}_{total} = \mathcal{L}_{data} + \sum_{i \in \{gw, c\}} \lambda_{i} \mathcal{L}_{physics, i}
+
+* **:math:`\mathcal{L}_{data}`**: This is the supervised loss (e.g.,
+    Mean Squared Error or a Quantile Loss) calculated between the
+    model's final forecast and the true observational data.
+* **:math:`\mathcal{L}_{physics, i}`**: This is the Mean Squared Error
+    of a specific PDE residual (e.g., :math:`\text{mean}(\mathcal{R}_c^2)`).
+    It quantifies how much the predictions violate that physical law.
+* **:math:`\lambda_{i}`**: These are user-defined hyperparameters
+    (e.g., ``lambda_gw``, ``lambda_cons``) passed to ``.compile()`` that
+    control the influence of each physical constraint on the total loss.
+
+This composite loss is then used to update all trainable parameters in
+the model, ensuring that the network learns to be accurate to both the
+data and the underlying physics simultaneously.
+
+
+Architectural & Feature Differences
+------------------------------------------
+While both models in the ``PIHALNet`` family aim to solve the same
+problem, they represent a significant evolution in software design
+and capability. Understanding their differences is key to leveraging
+the full power of the library.
+
+The Legacy `PiHALNet`
+~~~~~~~~~~~~~~~~~~~~~
+The original ``PiHALNet`` is a monolithic, self-contained class that
+inherits directly from ``tf.keras.Model``. Its data-driven components,
+such as the LSTMs and attention layers, were implemented specifically
+for its own use case. While effective, this design meant that the
+architecture was relatively rigid. Configuration was handled via a
+long list of parameters in the ``__init__`` method, and the sequence
+of internal operations (like the application of attention) was largely
+fixed.
+
+The Modern `PIHALNet` (BaseAttentive-based)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The modern ``PIHALNet`` represents a paradigm shift towards
+modularity and flexibility.
+
+* **Inheritance from BaseAttentive:** Its most important feature is
+    that it inherits from the :class:`~fusionlab.nn.models.BaseAttentive`
+    class. It does not reinvent the data-driven forecasting engine;
+    instead, it inherits a powerful, tested, and highly configurable
+    one. This means any improvements to ``BaseAttentive`` are
+    immediately available to ``PIHALNet``.
+
+* **Smart Configuration:** Architectural choices are no longer
+    controlled by numerous, disconnected parameters. Instead, they
+    are defined in a single, clean ``architecture_config``
+    dictionary. This allows for clear and explicit control over key
+    components like the ``encoder_type`` ('hybrid' vs. 'transformer')
+    or ``feature_processing`` ('vsn' vs. 'dense'). This makes
+    experimenting with different architectures trivial.
+
+* **Modular Attention Stack:** The sequence of attention mechanisms
+    in the decoder is no longer hardcoded. It is now controlled by the
+    ``decoder_attention_stack`` key in the configuration dictionary,
+    allowing the user to easily add, remove, or reorder attention
+    layers (e.g., `['cross', 'hierarchical']`) to tailor the model
+    to a specific problem.
+
+In essence, the modern design separates the **"what"** (the physics
+of subsidence and groundwater flow, handled by ``PIHALNet``) from the
+**"how"** (the data-driven sequence processing, handled by
+``BaseAttentive``).
+
+**Comparison Summary**
+
+.. table:: Comparison of PiHALNet Model Versions
+   :widths: 20 40 40
+   :header-rows: 1
+
+   * - Feature
+     - `PiHALNet` (Legacy)
+     - `PIHALNet` (Modern, `BaseAttentive`-based)
+   * - **Base Class**
+     - Inherits directly from `tf.keras.Model`.
+     - Inherits from the powerful and modular :class:`~fusionlab.nn.models.BaseAttentive` class.
+   * - **Core Architecture**
+     - Data-driven components are implemented internally and are specific to this class.
+     - Leverages the full, tested, and highly-configurable `BaseAttentive` engine.
+   * - **Configuration**
+     - Primarily configured via a long list of individual ``__init__`` parameters.
+     - Uses the modern ``architecture_config`` dictionary for clear, flexible control over internal structure.
+   * - **Attention Mechanism**
+     - The sequence of attention layers is largely hardcoded within the `call` method.
+     - The decoder's attention stack is fully configurable via the ``decoder_attention_stack`` key in the config.
+   * - **Feature Selection**
+     - Control over VSNs is a simple boolean flag (`use_vsn`).
+     - Controlled via the ``feature_processing`` key, allowing easy switching between `'vsn'` and `'dense'`.
+
+For all new projects, the modern, ``BaseAttentive``-based **PIHALNet**
+is the recommended choice due to its modularity,
+configurability, and alignment with the latest architectural patterns
+in the library. The legacy version is maintained for backward
+compatibility.
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
+PIHALNet (Modern, BaseAttentive-based)
+-----------------------------------------
 :API Reference: :class:`~fusionlab.nn.pinn.models.PIHALNet`
 
-The ``PIHALNet`` model is a sophisticated hybrid architecture tailored
-for multi-horizon probabilistic forecasting of coupled geophysical
-phenomena, such as land subsidence and groundwater level changes.
-It leverages the strengths of deep learning for pattern recognition
-from data while constraining its predictions with physical knowledge.
+The modern ``PIHALNet`` is a powerful and flexible implementation built
+upon the modular :class:`~fusionlab.nn.models.BaseAttentive`
+architecture. It combines a state-of-the-art data-driven forecasting
+engine with physics-based regularization, making it the recommended
+choice for all new projects.
 
-**Key Features:**
+This version inherits all the advanced features of its parent class,
+including the smart configuration system, which allows for precise
+control over the model's internal structure.
 
-* **Hybrid Architecture:** Integrates a data-driven forecasting core
-  (HALNet - Hybrid Attentive LSTM Network) with a physics-informed
-  module that incorporates PDE residuals into the loss function.
-* **Dual-Target Prediction:** Simultaneously predicts multiple related
-  variables (e.g., subsidence and groundwater levels).
-* **Input Handling:** Accepts static, dynamic (past observed), and
-  future known inputs. It can utilize:
-    * :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSN)
-      for intelligent feature selection and embedding of different
-      input types.
-    * If VSNs are not used,
-      :class:`~fusionlab.nn.components.MultiModalEmbedding` can
-      process raw dynamic and future inputs.
-* **Advanced Temporal Processing:**
-    * :class:`~fusionlab.nn.components.MultiScaleLSTM` captures
-      temporal dependencies at various user-defined scales.
-    * A suite of attention mechanisms enhances contextual understanding:
-        * :class:`~fusionlab.nn.components.HierarchicalAttention`
-        * :class:`~fusionlab.nn.components.CrossAttention`
-        * :class:`~fusionlab.nn.components.MemoryAugmentedAttention`
-        * :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`
-* **Physics-Informed Constraints:**
-    * Supports different PDE modes (via ``pde_mode``), such as
-      'consolidation' (Terzaghi's theory), 'gw_flow' (groundwater
-      flow equation), or 'both' (coupled).
-    * Physical coefficients (e.g., consolidation coefficient `C`,
-      hydraulic conductivity `K`, specific storage `Ss`) can be:
-        * **Learnable:** Treated as trainable parameters, allowing
-          the model to discover them from data (default for some).
-        * **Fixed:** Specified as known constants.
-    * The PDE residual is computed based on model outputs and
-      incorporated into the total loss function, weighted by
-      ``lambda_pde``.
-* **Probabilistic Forecasting:** Employs
-  :class:`~fusionlab.nn.components.QuantileDistributionModeling`
-  to output forecasts for specified ``quantiles``, enabling
-  uncertainty estimation. Point forecasts are produced if
-  ``quantiles`` is ``None``.
-* **Flexible Output Structure:** Uses a
-  :class:`~fusionlab.nn.components.MultiDecoder` to generate
-  horizon-specific predictions.
-
-**When to Use PIHALNet:**
-
-``PIHALNet`` is particularly well-suited for:
-
-* Forecasting spatio-temporal phenomena governed by known (or
-  partially known) physical laws.
-* Problems where data might be sparse or noisy, and incorporating
-  physical constraints can improve model robustness and generalization.
-* Situations requiring predictions for coupled physical processes
-  (e.g., subsidence and groundwater).
-* Tasks where discovering or refining physical parameters from
-  observational data is of interest.
-* Generating probabilistic forecasts to quantify prediction uncertainty.
-
-Formulation
-~~~~~~~~~~~~~
-
-PIHALNet's operation involves two main conceptual parts:
-
-1.  **Data-Driven Forecasting (HALNet Core):**
-    This part processes the input features (static, dynamic, future)
-    to produce initial forecasts for the target variables (e.g.,
-    subsidence :math:`s` and groundwater level :math:`h`).
-
-    * **Input Processing:** Inputs are optionally processed by
-      Variable Selection Networks (VSNs) and Gated Residual
-      Networks (GRNs) or by a MultiModalEmbedding layer.
-      Positional encoding is added.
-    * **Temporal Encoding:** The
-      :class:`~fusionlab.nn.components.MultiScaleLSTM` processes
-      dynamic features.
-    * **Attention Mechanisms:** A series of attention layers
-      (Hierarchical, Cross, Memory-Augmented, Multi-Resolution
-      Fusion) refine and integrate features from different
-      sources and contexts.
-    * **Decoding:** The
-      :class:`~fusionlab.nn.components.MultiDecoder` generates
-      horizon-specific outputs.
-    * **Output Layer:**
-      :class:`~fusionlab.nn.components.QuantileDistributionModeling`
-      produces the final data-driven predictions
-      (:math:`\hat{s}_{data}, \hat{h}_{data}`), potentially across
-      multiple quantiles. The mean of these predictions
-      (:math:`\bar{s}_{data}, \bar{h}_{data}`) is also available for
-      PDE calculation.
-
-2.  **Physics-Informed Module:**
-    * **PDE Residual Calculation:** The mean predictions from the
-      data-driven core (:math:`\bar{s}_{data}, \bar{h}_{data}`) and
-      the input coordinates (:math:`t, x, y`) are used to compute
-      the residual of the specified PDE(s).
-        * For **consolidation** (Terzaghi's 1D theory):
-          A common simplified form relates head change to its
-          second spatial derivative.
-            .. math::
-                \mathcal{R}_{cv} = \frac{\partial \bar{h}_{data}}{\partial t} - C_v \frac{\partial^2 \bar{h}_{data}}{\partial z^2}
-          ``PIHALNet`` offers a flexible implementation where this
-          can be adapted.
-        * For **groundwater flow** (2D horizontal, isotropic):
-            .. math::
-                \mathcal{R}_{gw} = S_s \frac{\partial \bar{h}_{data}}{\partial t} - K \left( \frac{\partial^2 \bar{h}_{data}}{\partial x^2} + \frac{\partial^2 \bar{h}_{data}}{\partial y^2} \right) + Q
-          This residual would be computed by a component like
-          :class:`~fusionlab.nn.pinn.base.GroundwaterFlowPDEResidual`.
-    * The model stores these residuals as :math:`\text{pde_residual}`
-      in its output dictionary.
-
-3.  **Loss Function:**
-    The total loss function during training is a weighted sum of the
-    data fidelity loss (:math:`\mathcal{L}_{data}`) and the physics
-    loss (:math:`\mathcal{L}_{physics}`):
-
-    .. math::
-        \mathcal{L}_{total} = \mathcal{L}_{data} + \lambda_{PDE} \mathcal{L}_{physics}
-
-    * :math:`\mathcal{L}_{data}`: Calculated using specified loss
-      functions (e.g., MSE or a quantile loss like
-      :func:`~fusionlab.nn.losses.combined_quantile_loss`).
-    * :math:`\mathcal{L}_{physics}`: Typically the mean squared error
-      of the :math:`\text{pde_residual}`, e.g.,
-      :math:`\frac{1}{N} \sum (\mathcal{R})^2`.
-    * :math:`\lambda_{PDE}`: A hyperparameter controlling the
-      influence of the physics-based loss term.
-
-**Code Example (Instantiation):**
+Usage Example: Standard Hybrid Model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This example demonstrates a typical use case for ``PIHALNet``, where
+we use the default hybrid architecture (LSTM + Attention) and configure
+it to learn the physical consolidation coefficient :math:`C` from data.
 
 .. code-block:: python
    :linenos:
 
-   import numpy as np
    import tensorflow as tf
-   from fusionlab.nn.pinn.models import PIHALNet
+   from fusionlab.nn.pinn import PIHALNet
+   from fusionlab.params import LearnableC
 
-   # Example Configuration
-   static_dim, dynamic_dim, future_dim = 5, 4, 2
-   horizon = 3
-   time_steps = 7
+   # 1. Define Model & Data Dimensions
+   BATCH_SIZE = 16
+   PAST_STEPS = 10
+   HORIZON = 5
+   STATIC_DIM, DYNAMIC_DIM, FUTURE_DIM = 4, 6, 3
 
-   my_quantiles = [0.1, 0.5, 0.9]
+   # 2. Prepare Dummy Input Data
+   # Feature-based inputs for the data-driven core
+   static_features = tf.random.normal([BATCH_SIZE, STATIC_DIM])
+   dynamic_features = tf.random.normal([BATCH_SIZE, PAST_STEPS, DYNAMIC_DIM])
+   # For 'pihal_like' mode, future features span the horizon
+   future_features = tf.random.normal([BATCH_SIZE, HORIZON, FUTURE_DIM])
 
-   # Fixed parameters are typically inferred from data
-   fixed_params = {
-       "static_input_dim": static_dim,
-       "dynamic_input_dim": dynamic_dim,
-       "future_input_dim": future_dim,
-       "output_subsidence_dim": 1,
-       "output_gwl_dim": 1,
-       "forecast_horizon": horizon,
-       "quantiles": my_quantiles,
-       "max_window_size": time_steps,
-       "pde_mode": "consolidation",
-       "pinn_coefficient_C": "learnable",
-       "gw_flow_coeffs": {'K': 'learnable', 'Ss': 1e-5}
+   # Coordinate inputs for the PINN module
+   coords = tf.random.normal([BATCH_SIZE, HORIZON, 3]) # (t, x, y)
+
+   # Assemble the full input dictionary
+   inputs = {
+       "static_features": static_features,
+       "dynamic_features": dynamic_features,
+       "future_features": future_features,
+       "coords": coords,
    }
 
-   # Architectural hyperparameters (tuned by PIHALTuner)
-   arch_params = {
-       "embed_dim": 64, "hidden_units": 64, "lstm_units": 64,
-       "attention_units": 32, "num_heads": 4, "dropout_rate": 0.1,
-       "vsn_units": 32, "use_vsn": True, "scales": [1, 2],
-       "memory_size": 50
+   # Prepare dummy target data
+   true_subsidence = tf.random.normal([BATCH_SIZE, HORIZON, 1])
+   true_gwl = tf.random.normal([BATCH_SIZE, HORIZON, 1])
+   targets = {
+       "subs_pred": true_subsidence,
+       "gwl_pred": true_gwl
    }
 
-   # Instantiate PIHALNet
-   pihalnet_model = PIHALNet(**fixed_params, **arch_params)
-
-   # Example dummy input data
-   batch_size = 2
-   dummy_inputs = {
-       'coords': tf.random.normal((batch_size, horizon, 3)),
-       'static_features': tf.random.normal((batch_size, static_dim)),
-       'dynamic_features': tf.random.normal((batch_size, time_steps,
-                                              dynamic_dim)),
-       'future_features': tf.random.normal((batch_size, horizon,
-                                             future_dim)),
-   }
-
-   # Compile the model
-   from tensorflow.keras.losses import MeanSquaredError
-   from tensorflow.keras.optimizers import Adam
-
-   # A real quantile loss function would be used here
-   loss_fns = {'subs_pred': MeanSquaredError(), 'gwl_pred': MeanSquaredError()}
-
-   pihalnet_model.compile(
-       optimizer=Adam(learning_rate=1e-3),
-       loss=loss_fns,
-       metrics={'subs_pred': ['mae'], 'gwl_pred': ['mae']},
-       lambda_pde=0.1
+   # 3. Instantiate the Model
+   model = PIHALNet(
+       static_input_dim=STATIC_DIM,
+       dynamic_input_dim=DYNAMIC_DIM,
+       future_input_dim=FUTURE_DIM,
+       output_subsidence_dim=1,
+       output_gwl_dim=1,
+       forecast_horizon=HORIZON,
+       max_window_size=PAST_STEPS,
+       mode='pihal_like',
+       # Ask the model to discover the consolidation coefficient
+       pinn_coefficient_C=LearnableC(initial_value=0.01),
    )
 
-   pihalnet_model.summary(line_length=110)
+   # 4. Compile the model with data losses and a physics weight
+   model.compile(
+       optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+       loss={'subs_pred': 'mse', 'gwl_pred': 'mse'},
+       lambda_physics=0.1 # Weight for the consolidation loss
+   )
+
+   # 5. Display the model summary
+   model.summary(line_length=110)
+
+Advanced Configuration Example
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This example demonstrates the power and flexibility of the smart
+configuration system. We will create a `PIHALNet` variant that uses a
+pure **transformer** encoder and a simplified attention stack in the
+decoder, showcasing how easily the internal architecture can be modified.
+
+.. code-block:: python
+   :linenos:
+
+   # 1. Define a custom architecture using the config dictionary
+   transformer_pinn_config = {
+       'encoder_type': 'transformer',
+       'decoder_attention_stack': ['cross', 'hierarchical'], # Simpler stack
+       'feature_processing': 'dense' # Use dense layers instead of VSN
+   }
+
+   # 2. Instantiate the model with the custom architecture
+   tfmr_pinn_model = PIHALNet(
+       static_input_dim=STATIC_DIM,
+       dynamic_input_dim=DYNAMIC_DIM,
+       future_input_dim=FUTURE_DIM,
+       output_subsidence_dim=1,
+       output_gwl_dim=1,
+       forecast_horizon=HORIZON,
+       max_window_size=PAST_STEPS,
+       mode='pihal_like',
+       pinn_coefficient_C=0.05, # Use a fixed physical constant
+       architecture_config=transformer_pinn_config # Pass the config
+   )
+
+   # 3. Compile the model as before
+   tfmr_pinn_model.compile(
+       optimizer='adam',
+       loss='mae', # Use a different data loss
+       lambda_physics=0.2
+   )
+
+   # 4. Train for a single step to demonstrate it works
+   print("\nTraining a Transformer-based PIHALNet for one step...")
+   history = tfmr_pinn_model.fit(
+       inputs, targets, epochs=1, verbose=1
+   )
+   print("\nTraining step complete.")
 
 
 .. raw:: html
@@ -231,86 +396,82 @@ PIHALNet's operation involves two main conceptual parts:
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 
-PINN Utilities
-----------------
+PiHALNet (Legacy Version)
+---------------------------
+:API Reference: :class:`~fusionlab.nn.pinn.models.legacy.PiHALNet`
 
-These are base classes and utilities that support the construction and
-operation of Physics-Informed Neural Networks within ``fusionlab``.
+This section documents the original, legacy version of ``PiHALNet``. It
+is maintained primarily for backward compatibility. For all new
+projects, using the modern, :class:`~fusionlab.nn.pinn.models.PIHALNet`
+(which inherits from ``BaseAttentive``) is strongly recommended due to
+its superior flexibility and modularity.
 
-GWResidualCalculator
-~~~~~~~~~~~~~~~~~~~~~~~
-:API Reference: :class:`~fusionlab.nn.pinn.base.GWResidualCalculator`
+The legacy ``PiHALNet`` is a self-contained, monolithic class that
+implements its data-driven components (LSTMs, attention) internally.
+Its architecture is configured via a long list of individual parameters
+in its constructor, making it less flexible than the modern version's
+smart configuration system.
 
-The ``GWResidualCalculator`` is a helper class designed to manage the
-physical coefficients required for groundwater flow PDE (Partial Differential
-Equation) calculations. It is not a Keras layer itself but is intended to be
-used within Keras layers or models (like the
-:class:`~fusionlab.nn.pinn.base.GroundwaterFlowPDEResidual` layer)
-that need to access these coefficients.
-
-**Key Features:**
-
-* **Coefficient Management:** Handles the initialization and retrieval of key
-    groundwater flow parameters:
-    * **K (Hydraulic Conductivity):** Can be learnable or fixed.
-    * **Ss (Specific Storage):** Can be learnable or fixed.
-    * **Q (Source/Sink Term):** Can be learnable or fixed.
-* **Learnable Parameters:** If a coefficient is set to ``'learnable'``,
-    the class creates a ``tf.Variable`` for it, allowing the coefficient
-    to be optimized during model training.
-    * `K` and `Ss` are typically positive, so they are managed in log-space
-        internally if learnable (i.e., :math:`\log(K)` and :math:`\log(S_s)`
-        are learned) to ensure positivity when :math:`\exp()` is applied.
-* **Fixed Parameters:** Coefficients can also be set to fixed floating-point
-    values.
-* **Tensor Output:** Getter methods (``get_K()``, ``get_Ss()``, ``get_Q()``)
-    return the coefficients as TensorFlow tensors, suitable for use in PDE
-    computations within a TensorFlow graph.
-* **Name Scoping:** Allows a ``name_prefix`` for created ``tf.Variable``s,
-    helping to avoid name collisions in complex models.
-
-**When to Use:**
-
-Use ``GWResidualCalculator`` when you need a structured way to define, store,
-and access physical parameters for a groundwater flow PDE within a PINN:
-
-* When building a custom Keras layer (like
-    :class:`~fusionlab.nn.pinn.base.GroundwaterFlowPDEResidual`) that computes
-    the PDE residual.
-* Inside a Keras model's ``call`` or ``train_step`` method if you are
-    directly implementing the PDE residual calculation there.
-* To centralize the definition of these physical parameters, making it
-    easier to switch between learnable and fixed values or to experiment
-    with different initializations.
-
-**Code Example (Instantiation and Usage):**
+Usage Example
+~~~~~~~~~~~~~~~
+The instantiation and compilation process is similar to the modern
+version, but it relies on direct keyword arguments like ``objective``
+and ``attention_levels`` instead of the ``architecture_config``
+dictionary.
 
 .. code-block:: python
    :linenos:
 
-   from fusionlab.nn.pinn.base import GWResidualCalculator
    import tensorflow as tf
+   from fusionlab.nn.pinn.models.legacy import PiHALNet
 
-   # Example 1: All learnable coefficients
-   gw_config1 = {'K': 'learnable', 'Ss': 'learnable', 'Q': 'learnable'}
-   calculator1 = GWResidualCalculator(gw_flow_coeffs=gw_config1, name_prefix="my_model_gw")
-   
-   K1 = calculator1.get_K()
-   Ss1 = calculator1.get_Ss()
-   Q1 = calculator1.get_Q()
-   # print(f"K1 (learnable): {K1}, Ss1 (learnable): {Ss1}, Q1 (learnable): {Q1}")
-   # print(f"Calculator 1 Trainable Variables: {calculator1.trainable_variables}")
+   # 1. Define Model & Data Dimensions
+   BATCH_SIZE = 16
+   PAST_STEPS = 10
+   HORIZON = 5
+   STATIC_DIM, DYNAMIC_DIM, FUTURE_DIM = 4, 6, 3
 
+   # 2. Prepare Dummy Input Data (same as modern version)
+   inputs = {
+       "static_features": tf.random.normal([BATCH_SIZE, STATIC_DIM]),
+       "dynamic_features": tf.random.normal([BATCH_SIZE, PAST_STEPS, DYNAMIC_DIM]),
+       "future_features": tf.random.normal([BATCH_SIZE, HORIZON, FUTURE_DIM]),
+       "coords": tf.random.normal([BATCH_SIZE, HORIZON, 3]),
+   }
+   targets = {
+       "subs_pred": tf.random.normal([BATCH_SIZE, HORIZON, 1]),
+       "gwl_pred": tf.random.normal([BATCH_SIZE, HORIZON, 1])
+   }
 
-   # Example 2: Mixed fixed and learnable coefficients
-   gw_config2 = {'K': 1.5e-4, 'Ss': 'learnable', 'Q': 0.001}
-   calculator2 = GWResidualCalculator(
-       gw_flow_coeffs=gw_config2,
-       default_Ss=2e-5 # Initial value if Ss is learnable
+   # 3. Instantiate the Legacy Model
+   # Note the direct use of parameters like `objective`
+   legacy_model = PiHALNet(
+       static_input_dim=STATIC_DIM,
+       dynamic_input_dim=DYNAMIC_DIM,
+       future_input_dim=FUTURE_DIM,
+       output_subsidence_dim=1,
+       output_gwl_dim=1,
+       forecast_horizon=HORIZON,
+       max_window_size=PAST_STEPS,
+       objective='hybrid', # Configured directly
+       pinn_coefficient_C='learnable'
    )
-   K2 = calculator2.get_K() # tf.Tensor (constant)
-   Ss2 = calculator2.get_Ss() # tf.Tensor (from tf.Variable)
-   # print(f"K2 (fixed): {K2.numpy()}, Ss2 (learnable): {Ss2}")
 
+   # 4. Compile and train as usual
+   legacy_model.compile(
+       optimizer='adam',
+       loss='mse',
+       lambda_physics=0.1
+   )
+   print("Successfully instantiated and compiled the legacy PiHALNet model.")
 
+Next Steps
+------------
 
+.. note::
+
+   Now that you are familiar with the architecture and features of
+   the ``PIHALNet`` models, you can put them into practice.
+
+   Proceed to the exercises for a hands-on guide:
+   :ref:`user_guide/exercices/exercises_pihalnet.rst`

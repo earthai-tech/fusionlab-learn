@@ -1,4 +1,4 @@
-.. _forecast_plots_guide:
+.. _advanced_forecast_plots_guide:
 
 ==========================
 Forecast Visualization

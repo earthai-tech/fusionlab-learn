@@ -668,10 +668,14 @@ class TransFlowSubsNet(BaseAttentive):
             # --- COMPOSITE LOSS ---
             loss_cons = tf_reduce_mean(tf_square(cons_res))
             loss_gw = tf_reduce_mean(tf_square(gw_res))
-            physics_loss = (+ self.lambda_cons * loss_cons
-                          + self.lambda_gw * loss_gw)
-            total_loss = data_loss + physics_loss
-    
+            # physics_loss = (+ self.lambda_cons * loss_cons
+            #               + self.lambda_gw * loss_gw)
+            total_loss = (
+                        data_loss 
+                        + self.lambda_cons * loss_cons 
+                        + self.lambda_gw * loss_gw
+                    )
+                        
         # --- APPLY GRADIENTS ---
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
@@ -684,7 +688,8 @@ class TransFlowSubsNet(BaseAttentive):
         results.update({
             "total_loss": total_loss,
             "data_loss": data_loss,
-            "physics_loss"     : physics_loss,    
+            "physics_loss": (
+                self.lambda_cons * loss_cons + self.lambda_gw * loss_gw),    
             "consolidation_loss": loss_cons,
             "gw_flow_loss": loss_gw,
         })
