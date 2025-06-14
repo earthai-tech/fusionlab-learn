@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from typing import List, Tuple, Optional, Union, Dict, Any
 import warnings # noqa 
+import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable  
 from sklearn.preprocessing import MinMaxScaler
 
 from ..._fusionlog import fusionlog
@@ -40,6 +42,9 @@ if KERAS_BACKEND:
     tf_concat =KERAS_DEPS.concat
     tf_expand_dims =KERAS_DEPS.expand_dims
     tf_debugging =KERAS_DEPS.debugging
+    tf_fill = KERAS_DEPS.fill 
+    tf_reshape = KERAS_DEPS.reshape 
+    
 else:
     class Model: pass
     Tensor = type("Tensor", (), {})
@@ -65,6 +70,7 @@ all__= [
         'format_pihalnet_predictions',
         'normalize_for_pinn',
         'prepare_pinn_data_sequences',
+        'plot_hydraulic_head', 
 ]
 
 @SaveFile 
@@ -2383,3 +2389,234 @@ def extract_txy(
     return tf_cast(t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
 
 
+
+@ensure_pkg(
+    KERAS_BACKEND or "tensorflow",
+    extra="TensorFlow is required for this function."
+   )
+def plot_hydraulic_head(
+    model: Model,
+    t_slice: float,
+    x_bounds: Tuple[float, float],
+    y_bounds: Tuple[float, float],
+    resolution: int = 100,
+    ax: Optional[plt.Axes] = None,
+    title: Optional[str] = None,
+    cmap: str = 'viridis',
+    colorbar_label: str = 'Hydraulic Head (h)',
+    save_path: Optional[str] = None,
+    show_plot: bool = True,
+    **contourf_kwargs: Any
+) -> Tuple[plt.Axes, ScalarMappable]:
+    """Generate and plot a 2D contour map of a hydraulic head solution.
+
+    This utility visualizes the output of a Physics-Informed Neural
+    Network (PINN) that solves for the hydraulic head
+    :math:`h(t, x, y)`. It automates the process of creating a
+    spatial grid, running model predictions, and generating a
+    publication-quality contour plot for a specific slice in time.
+
+    Parameters
+    ----------
+    model : tf.keras.Model
+        The trained PINN model. It is expected to have a ``.predict()``
+        method that accepts a dictionary of tensors with keys
+        ``{'t', 'x', 'y'}``.
+    t_slice : float
+        The specific point in time :math:`t` for which to plot the
+        2D spatial solution.
+    x_bounds : tuple of float
+        A tuple ``(x_min, x_max)`` defining the spatial domain for
+        the x-axis.
+    y_bounds : tuple of float
+        A tuple ``(y_min, y_max)`` defining the spatial domain for
+        the y-axis.
+    resolution : int, optional
+        The number of points to sample along each spatial axis,
+        creating a grid of ``resolution x resolution`` points for
+        prediction. Higher values result in a smoother plot.
+        Default is 100.
+    ax : matplotlib.axes.Axes, optional
+        A pre-existing Matplotlib Axes object to plot on. If ``None``,
+        a new figure and axes are created internally. This is useful
+        for embedding this plot within a larger figure arrangement.
+        Default is ``None``.
+    title : str, optional
+        A custom title for the plot. If ``None``, a default title
+        is generated using the value of `t_slice`. Default is ``None``.
+    cmap : str, optional
+        The name of the Matplotlib colormap to use for the contour
+        plot. Default is ``'viridis'``.
+    colorbar_label : str, optional
+        The text label for the color bar. Default is
+        ``'Hydraulic Head (h)'``.
+    save_path : str, optional
+        If provided, the path (including filename and extension)
+        where the generated plot will be saved. This is only active
+        when the function creates its own figure (i.e., when `ax`
+        is ``None``). Default is ``None``.
+    show_plot : bool, optional
+        If ``True``, calls ``plt.show()`` to display the plot. This
+        is only active when the function creates its own figure.
+        Default is ``True``.
+    **contourf_kwargs : any
+        Additional keyword arguments that are passed directly to the
+        ``matplotlib.pyplot.contourf`` function. This allows for
+        advanced customization (e.g., ``levels=20``, ``extend='both'``).
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The Matplotlib Axes object on which the contour plot was drawn.
+    contour : matplotlib.cm.ScalarMappable
+        The contour plot object, which can be used for further
+        customizations, such as modifying the color bar.
+
+    See Also
+    --------
+    fusionlab.nn.pinn.PiTGWFlow : The PINN model this function is
+                                 designed to visualize.
+
+    Notes
+    -----
+    The core mechanism of this function involves creating a 2D
+    meshgrid of :math:`(x, y)` coordinates. These grid points are then
+    "flattened" into a long list of points, as the PINN model expects
+    a batch of individual coordinates for prediction, not a grid.
+
+    The prediction process is as follows:
+
+    1.  A grid of shape ``(resolution, resolution)`` is created for
+        :math:`x` and :math:`y`.
+    2.  These grids are reshaped into column vectors of shape
+        ``(resolution*resolution, 1)``.
+    3.  A time vector of the same shape, filled with `t_slice`, is
+        created.
+    4.  The model's ``.predict()`` method is called on these flat
+        tensors.
+    5.  The resulting flat prediction vector is reshaped back to the
+        original ``(resolution, resolution)`` grid shape for plotting.
+
+    If a custom `ax` is provided, the user is responsible for calling
+    ``plt.show()`` or saving the parent figure.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import tensorflow as tf
+    >>> import matplotlib.pyplot as plt
+    >>> # This is a mock model for demonstration purposes.
+    >>> # In practice, you would use a trained PiTGWFlow model.
+    >>> class MockPINN(tf.keras.Model):
+    ...     def call(self, inputs):
+    ...         # A simple analytical function for demonstration
+    ...         t, x, y = inputs['t'], inputs['x'], inputs['y']
+    ...         return tf.sin(np.pi * x) * tf.cos(np.pi * y) * tf.exp(-t)
+    ...
+    >>> mock_model = MockPINN()
+
+    **1. Simple Plotting Example**
+
+    This example creates a single plot and saves it to a file.
+
+    >>> ax, contour = plot_hydraulic_head(
+    ...     model=mock_model,
+    ...     t_slice=0.5,
+    ...     x_bounds=(-1, 1),
+    ...     y_bounds=(-1, 1),
+    ...     resolution=50,
+    ...     save_path="hydraulic_head_t0.5.png",
+    ...     show_plot=False  # Do not display interactively
+    ... )
+    Plot saved to hydraulic_head_t0.5.png
+
+    **2. Advanced Example with Subplots**
+
+    This example shows how to use the `ax` parameter to draw the
+    solution at two different times side-by-side in one figure.
+
+    >>> fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    >>> fig.suptitle('Hydraulic Head at Different Times', fontsize=16)
+    ...
+    >>> # Plot solution at t = 0.1
+    >>> plot_hydraulic_head(
+    ...     model=mock_model, t_slice=0.1, x_bounds=(-1, 1),
+    ...     y_bounds=(-1, 1), ax=ax1, show_plot=False
+    ... )
+    ...
+    >>> # Plot solution at t = 1.0
+    >>> plot_hydraulic_head(
+    ...     model=mock_model, t_slice=1.0, x_bounds=(-1, 1),
+    ...     y_bounds=(-1, 1), ax=ax2, show_plot=False
+    ... )
+    ...
+    >>> plt.tight_layout(rect=[0, 0, 1, 0.96])
+    >>> plt.show()
+    """
+    # ... function implementation follows ...
+    # --- 1. Handle Matplotlib Figure and Axes ---
+    if ax is None:
+        # Create a new figure only if no axes are provided
+        fig, current_ax = plt.subplots(figsize=(9, 7))
+        # Flag to indicate we have control over the figure object
+        fig_created = True
+    else:
+        current_ax = ax
+        fig = current_ax.figure
+        fig_created = False
+
+    # --- 2. Create Prediction Grid ---
+    x_range = np.linspace(x_bounds[0], x_bounds[1], resolution)
+    y_range = np.linspace(y_bounds[0], y_bounds[1], resolution)
+    X, Y = np.meshgrid(x_range, y_range)
+
+    # Flatten the grid to a list of points for model prediction
+    x_flat = tf_convert_to_tensor(X.ravel(), dtype=tf_float32)
+    y_flat = tf_convert_to_tensor(Y.ravel(), dtype=tf_float32)
+    t_flat = tf_fill(x_flat.shape, t_slice)
+
+    # Reshape to column vectors (N, 1) as expected by the model
+    grid_coords = {
+        't': tf_reshape(t_flat, (-1, 1)),
+        'x': tf_reshape(x_flat, (-1, 1)),
+        'y': tf_reshape(y_flat, (-1, 1))
+    }
+
+    # --- 3. Run Model Prediction ---
+    h_pred_flat = model.predict(grid_coords)
+    # Reshape the flat predictions back to the grid shape for plotting
+    h_pred_grid = tf_reshape(h_pred_flat, X.shape)
+
+    # --- 4. Plotting ---
+    # Set default contour levels if not provided
+    if 'levels' not in contourf_kwargs:
+        contourf_kwargs['levels'] = 100
+
+    contour = current_ax.contourf(
+        X, Y, h_pred_grid, cmap=cmap, **contourf_kwargs
+    )
+
+    # Add color bar
+    fig.colorbar(contour, ax=current_ax, label=colorbar_label)
+
+    # Set plot labels and title
+    if title is None:
+        title = f'Learned Hydraulic Head Solution at t = {t_slice}'
+    current_ax.set_title(title, fontsize=14)
+    current_ax.set_xlabel('x-coordinate')
+    current_ax.set_ylabel('y-coordinate')
+    current_ax.set_aspect('equal')
+
+    # --- 5. Save and Show ---
+    if fig_created:
+        if save_path:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"Plot saved to {save_path}")
+
+        if show_plot:
+            plt.show()
+        else:
+            # If not showing, close the figure to free up memory
+            plt.close(fig)
+
+    return current_ax, contour

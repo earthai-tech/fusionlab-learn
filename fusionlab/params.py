@@ -562,62 +562,105 @@ class LearnableQ(BaseLearnable):
 def resolve_physical_param(
     param: Any,
     name: Optional[str] = None,
-    serialize: bool = False
+    *,
+    serialize: bool = False,
+    status: Optional[str] = None,
 ) -> Union[Tensor, float, Dict]:
     """
-    Convert parameter to tensor, float, or dict.
+    Normalise a physical-parameter descriptor.
+
+    The helper converts *param* into
+
+    * a concrete value (``float`` / ``tf.Tensor``) for use at run-time,
+    * a :class:`~fusionlab.params.BaseLearnable` wrapper when the
+      parameter should be trainable, or
+    * a JSON-serialisable dict when ``serialize=True``.
 
     Parameters
     ----------
-    param : Any
-        Numeric or BaseLearnableParam instance.
+    param : float | int | BaseLearnable | str
+        Raw descriptor.  A plain number is treated as fixed; a wrapped
+        :class:`BaseLearnable` is forwarded; the strings ``"learnable"``
+        / ``"fixed"`` are honoured when *status='learnable'*.
     name : str, optional
-        Unused: name handled by class.
-    serialize : bool, optional
-        If True, return serializable dict.
+        Camel-case label (``"K"``, ``"Ss"``, or ``"Q"``) required only
+        when *status='learnable'* and *param* is numeric.
+    serialize : bool, default False
+        Return a configuration dict instead of a concrete value.  Used
+        by :pyclass:`tf.keras.Model` when saving.
+    status : {{'learnable', 'fixed', None}}, optional
+        Global override.  ``'learnable'`` forces numeric inputs to be
+        wrapped; ``'fixed'`` unwraps to raw numbers; *None* leaves each
+        parameter untouched.
 
     Returns
     -------
-    Union[Tensor, float, Dict]
-        Resolved parameter or metadata.
+    Tensor | float | Dict
+        Concrete value for computation or a serialisable mapping.
 
     Raises
     ------
     TypeError
-        If param type is unsupported.
+        If *param* is of an unsupported type.
+    ValueError
+        If *status='learnable'* but *name* is not one of ``'K'``, ``'Ss'``,
+        or ``'Q'``.
 
     Examples
     --------
-    >>> resolve_physical_param(5.0)
-    5.0
-    >>> resolve_physical_param(
-    ...     LearnableK(0.5), serialize=True
-    ... )
+    >>> from fusionlab.params import resolve_physical_param
+    >>> resolve_physical_param(1e-4, name="K", status="learnable")
+    LearnableK(initial_value=0.0001, trainable=True)
+
+    >>> k = LearnableK(0.5)
+    >>> resolve_physical_param(k, serialize=True)
     {'learnable': True, 'initial_value': 0.5, 'class': 'LearnableK'}
     """
+    # serialisation branch
     if serialize:
         if isinstance(param, BaseLearnable):
             return {
                 "learnable": param.trainable,
                 "initial_value": param.initial_value,
-                "class": param.__class__.__name__
+                "class": param.__class__.__name__,
             }
-        return {
-            "learnable": False,
-            "initial_value": float(param)
-        }
+        return {"learnable": False, "initial_value": float(param)}
 
+    # force-learnable branch
+    if status == "learnable":
+        # already wrapped → nothing to do
+        if isinstance(param, BaseLearnable):
+            return param
+    
+        # canonical key -> wrapper class
+        wrapper_map = {"K": LearnableK, "Ss": LearnableSs, "Q": LearnableQ}
+    
+        # find first canonical key that appears inside *name*
+        try:
+            canon_key = next(k for k in wrapper_map if k in (name or ""))
+        except StopIteration:
+            raise ValueError(
+                "Could not infer parameter type from name "
+                f"'{name}'.  Expected substring 'K', 'Ss', or 'Q'."
+            ) from None
+    
+        return wrapper_map[canon_key](
+            initial_value=float(param),
+            name=name or f"learnable_{canon_key}",
+        )
+
+    # fixed/auto branch
     if isinstance(param, BaseLearnable):
         return param.get_value()
 
     if isinstance(param, (float, int)):
-        if _BACKEND == "tensorflow":
-            return tf.constant(
-                float(param), dtype=tf.float32
-            )
-        return float(param)
+        return (
+            tf.constant(float(param), dtype=tf.float32)
+            if _BACKEND == "tensorflow"
+            else float(param)
+        )
 
     raise TypeError(
-        "Parameter must be a float, int, or BaseLearnableParam; "
+        "Parameter must be a float, int, str, or BaseLearnable; "
         f"got {type(param).__name__}"
     )

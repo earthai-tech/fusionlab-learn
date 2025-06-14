@@ -141,7 +141,7 @@ __all__ = [
      'Activation', 
      'TransformerEncoderLayer', 
      'TransformerDecoderLayer', 
-     'PositionalEncodingTF', 
+     'TSPositionalEncoding', 
      'aggregate_multiscale', 
      'aggregate_time_window_output', 
      'create_causal_mask',
@@ -667,8 +667,8 @@ class PositionalEncoding(Layer, NNLearner):
 
     
 @register_keras_serializable(
-    'fusionlab.nn.components', name="PositionalEncodingTF")
-class PositionalEncodingTF(Layer, NNLearner):
+    'fusionlab.nn.components', name="TSPositionalEncoding")
+class TSPositionalEncoding(Layer, NNLearner):
     """
     Standard Transformer Positional Encoding using sine and cosine functions.
     Adds positional information to input embeddings.

@@ -52,7 +52,7 @@ if KERAS_BACKEND:
     tf_int32 =KERAS_DEPS.int32
 
     from ..components import (
-        PositionalEncodingTF, 
+        TSPositionalEncoding, 
         QuantileDistributionModeling,
         GatedResidualNetwork,  
         TransformerEncoderLayer, 
@@ -162,10 +162,10 @@ class TimeSeriesTransformer(Model, NNLearner):
                     name="static_dense_processor"
                 )
 
-        self.pos_encoding_encoder = PositionalEncodingTF(
+        self.pos_encoding_encoder = TSPositionalEncoding(
             max_seq_len_encoder, embed_dim, name="pos_encoder"
         )
-        self.pos_encoding_decoder = PositionalEncodingTF(
+        self.pos_encoding_decoder = TSPositionalEncoding(
             max_seq_len_decoder, embed_dim, name="pos_decoder"
         )
         self.input_dropout = Dropout(input_dropout_rate)

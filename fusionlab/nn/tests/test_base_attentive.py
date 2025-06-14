@@ -114,7 +114,7 @@ def test_mode_parameter(objective):
     )
     
     # Test that the objective is correctly set
-    assert model._objective == objective
+    assert model.architecture_config['encoder_type']== objective
 
 # Test for the `att_levels` functionality (cross, hierarchical, memory)
 @pytest.mark.parametrize(
@@ -131,9 +131,9 @@ def test_attention_levels(att_levels):
     
     # Validate that attention levels are properly assigned
     if att_levels is None or att_levels == "use_all":
-        assert model._attention_levels == ["cross", "hierarchical", "memory"]
+        assert model.architecture_config['decoder_attention_stack'] == ["cross", "hierarchical", "memory"]
     else:
-        assert model._attention_levels == [att_levels]
+        assert model.architecture_config['decoder_attention_stack'] == [att_levels]
         
 # Test for the hybrid and transformer architecture setting
 @pytest.mark.parametrize("objective", ["hybrid", "transformer"])
@@ -148,7 +148,7 @@ def test_architecture_setting(objective):
     )
     
     # Ensure the architecture is correctly set
-    assert model._objective == objective
+    assert model.architecture_config['encoder_type'] == objective
 
 # Test for model's `call` method with example inputs
 def test_call(example_inputs):

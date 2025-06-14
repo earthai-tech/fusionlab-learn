@@ -8,8 +8,9 @@ like HALNet and PIHALNet and more.
 """
 
 from __future__ import annotations
+import warnings 
 from numbers import Integral, Real 
-from typing import List, Optional, Union, Any
+from typing import List, Optional, Union, Any, Dict
 
 from .._fusionlog import fusionlog, OncePerMessageFilter
 from ..api.docs import DocstringComponents, _halnet_core_params
@@ -73,6 +74,12 @@ DEP_MSG = dependency_message('nn.models')
 _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_halnet_core_params), 
 )
+
+DEFAULT_ARCHITECTURE = {
+    'encoder_type': 'hybrid',
+    'decoder_attention_stack': ['cross', 'hierarchical', 'memory'],
+    'feature_processing': 'vsn', 
+}
 
 @KERAS_DEPS.register_keras_serializable(
     'fusionlab.nn.models', name="BaseAttentive"
@@ -145,9 +152,10 @@ class BaseAttentive(Model, NNLearner):
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         use_batch_norm: bool=False, 
-        apply_dtw : bool = True, # Apply DTW 
+        apply_dtw : bool = True, 
         attention_levels : Optional [Union[str, List[str]]]=None,
         objective: str = 'hybrid',
+        architecture_config: Optional[Dict] = None,
         name: str = "BaseAttentiveModel",
         **kwargs
     ):
@@ -184,20 +192,102 @@ class BaseAttentive(Model, NNLearner):
         self.multi_scale_agg_mode = multi_scale_agg
         self.apply_dtw =apply_dtw 
         
-        self.objective = mode 
-        self._objective = select_mode(
-            objective, default='hybrid',
-            canonical=['hybrid', 'transformer'])
-        
         self.mode = mode 
         self._mode = select_mode(mode, default='pihal')
         
-        # Resolve the attention levels using the helper function
-        self.attention_levels= attention_levels 
-        self._attention_levels = resolve_attention_levels(
-            attention_levels)
+        # This single call handles all architectural logic.
+        self.objective = objective 
+        self.attention_levels = attention_levels 
+        self.architecture_config = self._configure_architecture(
+            objective=objective,
+            use_vsn=use_vsn,
+            attention_levels=attention_levels,
+            architecture_config=architecture_config
+        )
+        # ---------------------------------------------------
         
         self._build_attentive_layers()
+        
+    def _configure_architecture(
+        self,
+        objective: Optional[str],
+        use_vsn: bool,
+        attention_levels: Optional[Union[str, List[str]]],
+        architecture_config: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Initializes and validates the model's architectural configuration.
+    
+        This helper method centralizes the logic for setting up the
+        model's internal architecture. It merges default settings with
+        user-provided keyword arguments and the `architecture_config`
+        dictionary, ensuring a consistent and valid final configuration.
+    
+        The order of precedence is:
+        1. Default architecture settings.
+        2. Explicit keyword arguments (`objective`, `use_vsn`, etc.).
+        3. User-provided `architecture_config` dictionary (overrides others).
+    
+        Args:
+            objective (str): The high-level objective ('hybrid' or 'transformer').
+            use_vsn (bool): Whether to use Variable Selection Networks.
+            attention_levels (Union[str, List[str]]): The desired attention layers.
+            architecture_config (Dict, optional): A dictionary of specific
+                architectural settings provided by the user.
+    
+        Returns:
+            Dict[str, Any]: A finalized dictionary holding the complete
+                            architectural configuration.
+        """
+        # Define the default architecture.
+        final_config = {
+            'encoder_type': 'hybrid',
+            'decoder_attention_stack': ['cross', 'hierarchical', 'memory'],
+            'feature_processing': 'vsn'
+        }
+    
+        # 1. Apply settings from explicit keyword arguments.
+        # The `objective` kwarg directly sets the `encoder_type`.
+        
+        final_config['encoder_type'] = select_mode(
+            objective, default='hybrid', canonical=['hybrid', 'transformer']
+        )
+        # The `use_vsn` kwarg sets the default `feature_processing` method.
+        if not use_vsn:
+            final_config['feature_processing'] = 'dense'
+            
+        # The `attention_levels` kwarg sets the `decoder_attention_stack`.
+    
+        final_config['decoder_attention_stack'] = resolve_attention_levels(
+            attention_levels
+        )
+        
+        # 2. Merge and override with the user-provided dictionary.
+        if architecture_config:
+            user_config = architecture_config.copy()
+            
+            # Handle the deprecated 'objective' key for backward compatibility.
+            if 'objective' in user_config:
+                warnings.warn(
+                    "The 'objective' key-role in `architecture_config` is"
+                    " deprecated and will be rename in a future version."
+                    " Please use 'encoder_type' instead.",
+                    FutureWarning
+                )
+                # The new key takes precedence.
+                user_config['encoder_type'] = user_config.pop('objective')
+                
+            final_config.update(user_config)
+    
+        # 3. Final validation and reconciliation.
+        # Ensure `feature_processing` is consistent with `use_vsn`.
+        if not use_vsn and final_config.get('feature_processing') == 'vsn':
+            logger.info(
+                "`use_vsn=False` was passed, but `architecture_config` specified"
+                " `feature_processing='vsn'`. Reverting to 'dense'."
+            )
+            final_config['feature_processing'] = 'dense'
+            
+        return final_config
 
     def _build_attentive_layers(self):
         """
@@ -243,8 +333,9 @@ class BaseAttentive(Model, NNLearner):
           Translation by Jointly Learning to Align and Translate. *ICLR 2015*.
         """
 
+        
         # VSN Layers
-        if self.use_vsn:
+        if self.architecture_config.get('feature_processing') == 'vsn':
             if self.static_input_dim > 0:
                 self.static_vsn = VariableSelectionNetwork(
                     num_inputs=self.static_input_dim,
@@ -322,7 +413,7 @@ class BaseAttentive(Model, NNLearner):
         )
 
         # These layers are only created if VSN is NOT used.
-        if not self.use_vsn: 
+        if self.architecture_config.get('feature_processing') == 'dense': 
             if self.static_input_dim > 0:
                 self.static_dense = Dense(
                     self.hidden_units, activation=self.activation_fn_str
@@ -351,7 +442,7 @@ class BaseAttentive(Model, NNLearner):
 
 
         # Encoder-specific Layers
-        if self._objective == 'hybrid':
+        if self.architecture_config['encoder_type'] == 'hybrid':
             self.multi_scale_lstm = MultiScaleLSTM(
             lstm_units=self.lstm_units,
             scales=self.scales,
@@ -359,7 +450,7 @@ class BaseAttentive(Model, NNLearner):
             )
             self.encoder_self_attention = None
             
-        elif self._objective == 'transformer':
+        elif self.architecture_config['encoder_type'] == 'transformer':
             self.encoder_self_attention = [
                 (MultiHeadAttention(
                     num_heads=self.num_heads, 
@@ -494,7 +585,7 @@ class BaseAttentive(Model, NNLearner):
         static_context, dyn_proc, fut_proc = None, dynamic_input, future_input
         
         # 1. Initial Feature Processing
-        if self.use_vsn:
+        if self.architecture_config.get('feature_processing') == 'vsn':
             if self.static_vsn is not None:
                 vsn_static_out = self.static_vsn(
                     static_input, training=training)
@@ -541,7 +632,7 @@ class BaseAttentive(Model, NNLearner):
         encoder_raw = tf_concat(encoder_input_parts, axis=-1)
         encoder_input = self.encoder_positional_encoding(encoder_raw)
 
-        if self._objective == 'hybrid':
+        if self.architecture_config['encoder_type'] == 'hybrid':
             lstm_out = self.multi_scale_lstm(
             encoder_input, training=training 
             )
@@ -599,7 +690,8 @@ class BaseAttentive(Model, NNLearner):
         # --- 4. Attention-based Fusion (Encoder-Decoder Interaction) ---
         final_features = self.apply_attention_levels(
             projected_decoder_input, encoder_sequences, 
-            training=training, att_levels= self._attention_levels  
+            training=training, 
+            # att_levels= self.architecture_config['decoder_attention_stack'] 
         )
        
         logger.debug(f"Shape after final fusion: {final_features.shape}")
@@ -612,7 +704,7 @@ class BaseAttentive(Model, NNLearner):
         projected_decoder_input: Tensor,
         encoder_sequences: Tensor,
         training: bool,
-        att_levels: Union[str, List[str], int, None]
+        # att_levels: Union[str, List[str], int, None]
     ) -> Tensor:
         """
         Applies attention mechanisms in the order specified by `att_levels`,
@@ -654,12 +746,12 @@ class BaseAttentive(Model, NNLearner):
         """
         
         # resolve attention levels 
-        self._attention_levels = self._attention_levels or resolve_attention_levels(
-            att_levels or self.attention_levels ) 
+        # self._attention_levels = self._attention_levels or resolve_attention_levels(
+        #     att_levels or self.architecture_config['decoder_attention_stack']) 
         
         # Step 4: Attention Fusion (Encoder-Decoder Interaction)
         
-        if 'cross' in self._attention_levels:
+        if 'cross' in self.architecture_config['decoder_attention_stack'] :
             cross_att_out = self.cross_attention(
                 [projected_decoder_input, encoder_sequences], 
                 training=training)
@@ -681,7 +773,7 @@ class BaseAttentive(Model, NNLearner):
             context_att = projected_decoder_input
     
         # Apply hierarchical attention if needed
-        if 'hierarchical' in self._attention_levels:
+        if 'hierarchical' in self.architecture_config['decoder_attention_stack']:
             hierarchical_att_output = self.hierarchical_attention(
                 [context_att, context_att],
                 training=training
@@ -691,7 +783,7 @@ class BaseAttentive(Model, NNLearner):
             hierarchical_att_output = context_att  
     
         # Apply memory-augmented attention if needed
-        if 'memory' in self._attention_levels:
+        if 'memory' in self.architecture_config['decoder_attention_stack']:
             memory_attention_output = self.memory_augmented_attention(
                 hierarchical_att_output, 
                 training=training
@@ -871,12 +963,68 @@ class BaseAttentive(Model, NNLearner):
             "apply_dtw": self.apply_dtw, 
             "attention_levels": self.attention_levels, 
             "use_batch_norm": self.use_batch_norm, 
+            "architecture_config": self.architecture_config,
             "name": self.name 
         })
         return config
     
+    @classmethod
+    def from_config(cls, config):
+        """Creates a model from its config.
+        
+        This method is the reverse of get_config, capable of handling
+        the nested architecture_config dictionary.
+        """
+        # Separate architecture_config from the main config
+        arch_config = config.pop("architecture_config", None)
+        # Re-add it as a keyword argument for __init__
+        return cls(**config, architecture_config=arch_config)
+    
+    def reconfigure(
+        self,
+        architecture_config: Dict[str, Any]
+    ) -> "BaseAttentive":
+        """Creates a new model instance with a modified architecture.
+    
+        This method takes the configuration of the current model, updates
+        the architectural components with the provided dictionary, and
+        returns a new, un-trained model instance with the specified
+        changes.
+    
+        Parameters 
+        ------------
+        architecture_config (Dict[str, Any]):
+            A dictionary with new architectural settings, such as
+            {'encoder_type': 'transformer'}.
+    
+        Returns
+        ----------
+        BaseAttentive:
+            A new model instance with the updated architecture.
+        """
+        # 1. Get the full configuration of the existing model
+        config = self.get_config()
+        
+        # 2. Update the architecture configuration
+        # get_config will have stored it as a nested dictionary
+        config['architecture_config'].update(architecture_config)
+        
+        # 3. Create a new model from the modified config
+        return self.__class__.from_config(config)
+    
+
 BaseAttentive.__doc__ = r"""
 Base Attentive Model.
+
+A foundational blueprint for building powerful, data-driven,
+sequence-to-sequence time series forecasting models.
+
+This class provides a sophisticated and highly configurable
+encoder-decoder architecture. It is designed to process three
+distinct types of inputs—static, dynamic past, and known future
+features—and fuse them using a modular stack of attention
+mechanisms. It serves as the core engine for models like ``HALNet``
+and ``PIHALNet``.
 
 A **data-driven** model architecture that can be used for both hybrid 
 and transformer-based forecasting models. This model processes static, 
@@ -888,6 +1036,10 @@ using quantiles, and dynamic time warping (DTW) for time-series alignment.
 The model offers flexibility through various options for configuration, 
 residual connections, and feature selection mechanisms, making it suitable 
 for both statistical and physics-informed settings.
+
+The architecture can be configured to operate as a hybrid model,
+combining the temporal feature extraction power of LSTMs with
+attention, or as a pure transformer model.
 
 See more in :ref:`User Guide <user_guide>`.
 
@@ -914,6 +1066,18 @@ forecast_horizon : int, default 1
     steps ahead, where :math:`H=\text{{forecast_horizon}}`. Setting :math:`H > 1` 
     enables multi‑horizon sequence‑to‑sequence forecasts.  
 
+mode : {{'pihal_like', 'tft_like'}}, default 'tft_like'  
+    Controls how *future_features* are sliced and routed.  
+    ``'pihal_like'`` expects ``future_input.shape[1] == forecast_horizon`` 
+    and feeds the tensor only to the decoder.  
+    ``'tft_like'`` expects ``time_steps + forecast_horizon`` rows, 
+    sending the first *time_steps* rows to the encoder and the remaining 
+    rows to the decoder, emulating the Temporal Fusion Transformer.
+    
+num_encoder_layers : int, default=2
+    The number of self-attention blocks to stack in the encoder when
+    using the `'transformer'` architecture.
+    
 quantiles : list[float] or None, default None  
     Optional quantile levels :math:`0 < q_1 < \dots < q_Q < 1`. When supplied, 
     a :class:`fusionlab.nn.components.QuantileDistributionModeling` head scales 
@@ -924,7 +1088,7 @@ quantiles : list[float] or None, default None
 
     where :math:`\sigma` is a learned spread parameter and :math:`\Phi^{{-1}}` 
     is the probit function. Omit or set to *None* to obtain deterministic forecasts.  
-
+    
 {params.base.embed_dim}
 {params.base.hidden_units}
 {params.base.lstm_units}
@@ -941,25 +1105,37 @@ quantiles : list[float] or None, default None
 {params.base.use_vsn}
 {params.base.vsn_units}
 
-mode : {{'pihal_like', 'tft_like'}}, default 'tft_like'  
-    Controls how *future_features* are sliced and routed.  
-    ``'pihal_like'`` expects ``future_input.shape[1] == forecast_horizon`` 
-    and feeds the tensor only to the decoder.  
-    ``'tft_like'`` expects ``time_steps + forecast_horizon`` rows, 
-    sending the first *time_steps* rows to the encoder and the remaining 
-    rows to the decoder, emulating the Temporal Fusion Transformer.
-
-objective : str, default 'hybrid'  
-    Defines the underlying architecture of the model. The configuration 
-    can be either 'hybrid' (combining LSTM and attention mechanisms) 
-    or 'transformer' (using only transformer-based attention mechanisms).
-
+use_batch_norm : bool, default=False
+    If ``True``, applies batch normalization.
+    
 apply_dtw : bool, default True  
     Whether to apply **Dynamic Time Warping (DTW)** for time-series alignment.  
     DTW is a technique used to align sequences that may be misaligned 
     in time. It is particularly useful when the time steps in the dynamic 
     and future features are not synchronized. Setting this to **True** 
     enables DTW, while setting it to **False** disables it.
+    If ``True``, applies a `DynamicTimeWindow` layer to the encoder
+    output, allowing the model to learn an optimal, data-dependent
+    lookback window.
+    
+attention_levels : str or list[str], optional
+    Legacy parameter. Controls the attention layers used in the
+    decoder. It is recommended to use
+    `architecture_config={{'decoder_attention_stack': [...]}}` instead.
+
+objective : str, default 'hybrid' 
+    Legacy parameter. Defines the underlying architecture of the model. 
+    The configuration  can be either 'hybrid' 
+    (combining LSTM and attention mechanisms) or 'transformer' 
+    (using only transformer-based attention mechanisms).It is
+    recommended to use `architecture_config={{'encoder_type': 'hybrid'}}`
+    instead.
+    
+architecture_config : dict, optional
+    A dictionary for fine-grained control over the model's internal
+    architecture. This is the recommended way to configure the model.
+    See the Notes section for details on keys like ``encoder_type``,
+    ``decoder_attention_stack``, and ``feature_processing``.
     
 name : str, default "BaseAttentiveModel"  
     Model identifier passed to :pyclass:`tf.keras.Model`. Appears in weight 
@@ -983,11 +1159,44 @@ Notes
 - The attention mechanism allows for both cross-attention (between encoder 
   and decoder) and self-attention within the decoder.
 
+
 See Also  
 --------
 * :class:`fusionlab.nn.pinn.PIHALNet` – physics-informed extension.  
 * :func:`fusionlab.utils.data_utils.widen_temporal_columns` – prepares 
   wide data frames for plotting forecasts.
+
+**Smart Configuration**
+
+The recommended way to define the model's structure is via the
+``architecture_config`` dictionary. It provides clear, explicit
+control over the most important architectural choices:
+
+* **`encoder_type`**: Defines the encoder's core mechanism.
+    * ``'hybrid'`` (default): Uses the ``MultiScaleLSTM`` for rich
+      temporal feature extraction.
+    * ``'transformer'``: Uses a pure self-attention stack, ideal for
+      capturing very long-range dependencies.
+
+* **`decoder_attention_stack`**: A ``list`` of strings that defines
+    the sequence of attention layers in the decoder. The available
+    layers are:
+    * ``'cross'``: The crucial cross-attention between decoder
+      queries and encoder memory.
+    * ``'hierarchical'``: A self-attention layer that helps find
+      structural patterns in the context.
+    * ``'memory'``: A memory-augmented self-attention layer for
+      long-term dependencies.
+    * Example: ``['cross', 'hierarchical']`` creates a simpler decoder.
+
+* **`feature_processing`**: Controls the initial feature embedding.
+    * ``'vsn'`` (default): Uses ``VariableSelectionNetwork`` for
+      learnable feature selection.
+    * ``'dense'``: Uses standard ``Dense`` layers.
+
+The legacy parameters (`objective`, `use_vsn`, `attention_levels`)
+are maintained for backward compatibility but will be overridden by
+any settings provided in ``architecture_config``.
 
 Examples
 --------
@@ -1006,11 +1215,48 @@ Examples
 >>> y_hat.shape  
 TensorShape([32, 24, 3, 2])  # B × H × Q × output_dim
 
-See Also  
+>>> from fusionlab.nn.models import BaseAttentive
+>>> import tensorflow as tf
+
+>>> # Example using the recommended architecture_config
+>>> transformer_config = {{
+...     'encoder_type': 'transformer',
+...     'decoder_attention_stack': ['cross', 'hierarchical'],
+...     'feature_processing': 'dense'
+... }}
+>>> model = BaseAttentive(
+...     static_input_dim=4,
+...     dynamic_input_dim=8,
+...     future_input_dim=6,
+...     output_dim=2,
+...     forecast_horizon=24,
+...     max_window_size=10,
+...     mode='tft_like',
+...     quantiles=[0.1, 0.5, 0.9],
+...     architecture_config=transformer_config
+... )
+
+>>> # Prepare dummy input data
+>>> BATCH_SIZE = 32
+>>> x_static  = tf.random.normal([BATCH_SIZE, 4])
+>>> x_dynamic = tf.random.normal([BATCH_SIZE, 10, 8])
+>>> x_future  = tf.random.normal([BATCH_SIZE, 10 + 24, 6])
+
+>>> # Get model output
+>>> y_hat = model([x_static, x_dynamic, x_future])
+>>> y_hat.shape
+TensorShape([32, 24, 3, 2])
+
+See Also
 --------
 fusionlab.nn.pinn.PIHALNet
+    A physics-informed extension of this architecture.
 fusionlab.nn.components.MultiScaleLSTM
+    The multi-resolution LSTM component used in the hybrid encoder.
 fusionlab.nn.components.VariableSelectionNetwork
+    The learnable feature-selection component.
+fusionlab.nn.models.HALNet
+    A direct, data-driven implementation of ``BaseAttentive``.
 
 References  
 ----------

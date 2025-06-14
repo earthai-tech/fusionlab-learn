@@ -7,9 +7,12 @@ from fusionlab.compat.tf import HAS_TF
 
 # Core model definitions
 from ._halnet import HALNet
-from .utils import plot_history_in 
+from .utils import plot_history_in
+from .._base_attentive import BaseAttentive
+ 
 __all__ = [
     "HALNet",
+    "BaseAttentive", 
     "plot_history_in", 
 ]
 

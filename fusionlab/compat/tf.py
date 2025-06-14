@@ -224,7 +224,8 @@ class KerasDependencies:
             'log': ('tensorflow.math', 'log'), 
             'exp': ('tensorflow', 'exp'), 
             'name_scope': ('tensorflow', 'name_scope'), 
-            'random': ('tensorflow', 'random')
+            'random': ('tensorflow', 'random'), 
+            'fill': ('tensorflow', 'fill')
             
             
         }
