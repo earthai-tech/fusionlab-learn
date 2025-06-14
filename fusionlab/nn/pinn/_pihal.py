@@ -66,7 +66,7 @@ __all__ = ["PIHALNet"]
 @param_deprecated_message(
     conditions_params_mappings=[
         {
-            'param': 'pde_mode', # The __init__ parameter name
+            'param': 'pde_mode', 
             'condition': lambda p_value: (
                 p_value == 'gw_flow' or
                 p_value == 'both' or
@@ -160,6 +160,7 @@ class PIHALNet(BaseAttentive):
         vsn_units: Optional[int] = None,
         mode: Optional[str]=None, 
         attention_levels:Optional[Union[str, List[str]]]=None, 
+        architecture_config: Optional[Dict] = None,
         name: str = "PIHALNet",
         **kwargs
     ):
@@ -194,6 +195,7 @@ class PIHALNet(BaseAttentive):
            use_batch_norm =use_batch_norm, 
            vsn_units=vsn_units,
            attention_levels =attention_levels,
+           architecture_config=architecture_config,
            name=name,
             **kwargs
         )

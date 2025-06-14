@@ -143,6 +143,7 @@ class TransFlowSubsNet(BaseAttentive):
         mode: Optional[str]=None, 
         objective: Optional[str]=None, 
         attention_levels:Optional[Union[str, List[str]]]=None, 
+        architecture_config: Optional[Dict] = None,
         name: str = "TransFlowSubsNet",
         **kwargs
     ):
@@ -177,6 +178,7 @@ class TransFlowSubsNet(BaseAttentive):
             vsn_units=vsn_units,
             attention_levels =attention_levels,
             objective=objective, 
+            architecture_config=architecture_config, 
             name=name,
             **kwargs
         )
@@ -666,9 +668,9 @@ class TransFlowSubsNet(BaseAttentive):
             # --- COMPOSITE LOSS ---
             loss_cons = tf_reduce_mean(tf_square(cons_res))
             loss_gw = tf_reduce_mean(tf_square(gw_res))
-            total_loss = (data_loss
-                          + self.lambda_cons * loss_cons
+            physics_loss = (+ self.lambda_cons * loss_cons
                           + self.lambda_gw * loss_gw)
+            total_loss = data_loss + physics_loss
     
         # --- APPLY GRADIENTS ---
         trainable_vars = self.trainable_variables
@@ -682,6 +684,7 @@ class TransFlowSubsNet(BaseAttentive):
         results.update({
             "total_loss": total_loss,
             "data_loss": data_loss,
+            "physics_loss"     : physics_loss,    
             "consolidation_loss": loss_cons,
             "gw_flow_loss": loss_gw,
         })
