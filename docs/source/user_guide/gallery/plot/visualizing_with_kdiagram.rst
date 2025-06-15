@@ -149,7 +149,7 @@ Imagine you have point forecasts from a ``fusionlab-learn`` model.
    ...
    Plot saved to docs/source/images/fusionlab_kdiag_actual_vs_pred.png
 
-.. figure:: ../../images/fusionlab_kdiag_actual_vs_pred.png
+.. figure:: ../../../images/fusionlab_kdiag_actual_vs_pred.png
    :alt: Actual vs. Predicted Plot using K-Diagram with FusionLab Output
    :align: center
    :width: 70%
@@ -231,7 +231,7 @@ You have quantile forecasts (e.g., q10, q50, q90) from a ``fusionlab-learn`` mod
    ...
    Plot saved to docs/source/images/fusionlab_kdiag_coverage.png
 
-.. figure:: ../../images/fusionlab_kdiag_coverage.png
+.. figure:: ../../../images/fusionlab_kdiag_coverage.png
    :alt: Coverage Diagnostic Plot using K-Diagram
    :align: center
    :width: 70%
@@ -308,7 +308,7 @@ Data is in a wide format where each horizon's quantiles are columns.
    1          3.575947          6.010909          4.975008          8.061101
    Plot saved to docs/source/images/fusionlab_kdiag_model_drift.png
 
-.. figure:: ../images/../fusionlab_kdiag_model_drift.png
+.. figure:: ../../../images/fusionlab_kdiag_model_drift.png
    :alt: Model Drift Plot using K-Diagram
    :align: center
    :width: 70%
@@ -379,7 +379,7 @@ Data is wide, with median forecasts for different horizons as columns.
    1          1     8.900599     9.887309     9.900808     9.969413
    Plot saved to docs/source/images/fusionlab_kdiag_velocity.png
 
-.. figure:: ../../images/fusionlab_kdiag_velocity.png
+.. figure:: ../../../images/fusionlab_kdiag_velocity.png
    :alt: Prediction Velocity Plot using K-Diagram
    :align: center
    :width: 70%
@@ -440,7 +440,7 @@ Comparing point predictions from two ``fusionlab-learn`` models.
 
    Plot saved to docs/source/images/fusionlab_kdiag_taylor.png
 
-.. figure:: ../../images/fusionlab_kdiag_taylor.png
+.. figure:: ../../../images/fusionlab_kdiag_taylor.png
    :alt: Taylor Diagram using K-Diagram for FusionLab Models
    :align: center
    :width: 70%

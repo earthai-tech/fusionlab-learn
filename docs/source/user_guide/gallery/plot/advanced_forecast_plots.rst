@@ -153,7 +153,7 @@ for the q10, q50, and q90 quantiles.
    
 **Example Output Plot:**
 
-.. figure:: ../images/forecast_view_example.png
+.. figure:: ../../../images/forecast_view_example.png
    :alt: Example grid plot from forecast_view
    :align: center
    :width: 90%
@@ -234,7 +234,7 @@ Example
 
 **Example Output Plot:**
 
-.. figure:: ../images/plot_forecast_by_step_example.png
+.. figure:: ../../../images/plot_forecast_by_step_example.png
    :alt: Example grid plot from plot_forecast_by_step
    :align: center
    :width: 70%
@@ -304,7 +304,7 @@ Example
 
 **Example Output Plot:**
 
-.. figure:: ../images/plot_forecasts_temporal_example.png
+.. figure:: ../../../images/plot_forecasts_temporal_example.png
    :alt: Temporal forecast plot with quantile shading
    :align: center
    :width: 90%
@@ -399,7 +399,7 @@ Example
 
 **Example Output Plot:**
 
-.. figure:: ../images/visualize_forecasts_spatial_example.png
+.. figure:: ../../../images/visualize_forecasts_spatial_example.png
    :alt: Spatial forecast plot from visualize_forecasts
    :align: center
    :width: 90%

@@ -32,25 +32,26 @@ and comparing the performance of different model components.
 Key Parameters Explained
 --------------------------
 
-* **`history`**: This is the primary input, which is the object
-    returned by the ``model.fit()`` method. It contains the metric
-    values for each epoch.
+* **history**: This is the primary input, which is the object
+  returned by the ``model.fit()`` method. It contains the metric
+  values for each epoch.
 
-* **`metrics`**: A dictionary that gives you fine-grained control
-    over which metrics to plot and how to group them. The dictionary
-    keys become the titles for subplots, and the values are lists of
-    metric names from the history object. If you don't provide this,
-    the function will intelligently plot all available metrics.
+* **metrics**: A dictionary that gives you fine-grained control
+  over which metrics to plot and how to group them. The dictionary
+  keys become the titles for subplots, and the values are lists of
+  metric names from the history object. If you don't provide this,
+  the function will intelligently plot all available metrics.
 
-* **`layout`**: This string argument controls the overall structure
-    of the figure.
-    * Use ``'subplots'`` (the default) to give each metric group
-        its own dedicated plot. This is ideal for a clear, detailed
-        view of each metric.
-    * Use ``'single'`` to plot all specified metric curves on a
-        single set of axes. This is very useful for comparing the
-        trends of different loss components together, such as for a
-        PINN with data loss and physics loss.
+* **layout**: This string argument controls the overall structure
+  of the figure.
+  
+  * Use ``'subplots'`` (the default) to give each metric group
+    its own dedicated plot. This is ideal for a clear, detailed
+    view of each metric.
+  * Use ``'single'`` to plot all specified metric curves on a
+    single set of axes. This is very useful for comparing the
+    trends of different loss components together, such as for a
+    PINN with data loss and physics loss.
 
 Usage Examples
 ----------------
@@ -86,9 +87,9 @@ This will generate a figure with two subplots: "Loss" and "Mae",
 each containing the training (solid line) and validation (dashed
 line) curves.
 
-Expected Output:
+**Expected Output:**
 
-.. figure:: ../../images/plot_history_standard.png
+.. figure:: ../../../images/plot_history_standard.png
    :alt: Standard Training History Plot
    :align: center
    :width: 90%
@@ -134,7 +135,7 @@ trends of the total, data, and physics losses together.
 
 **Expected Output:**
 
-.. figure:: ../../images/plot_history_pinn_breakdown.png
+.. figure:: ../../../images/plot_history_pinn_breakdown.png
    :alt: PINN Loss Breakdown Plot
    :align: center
    :width: 75%
@@ -162,21 +163,21 @@ Key Parameters Explained
 ------------------------
 
 * **`model`**: The trained PINN model that you want to visualize.
-    It must have a ``.predict()`` method that accepts a dictionary
-    of coordinates.
+  It must have a ``.predict()`` method that accepts a dictionary
+  of coordinates.
 
 * **`t_slice`**: A single float value representing the time at
-    which you want to see the spatial solution.
+  which you want to see the spatial solution.
 
-* **`x_bounds`**, **`y_bounds`**, **`resolution`**: These
-    parameters define the visualization domain and the quality of
-    the plot. The function will create a grid of
-    ``resolution x resolution`` points within these spatial bounds.
+* **x_bounds**, **y_bounds**, **resolution**: These
+  parameters define the visualization domain and the quality of
+  the plot. The function will create a grid of
+  ``resolution x resolution`` points within these spatial bounds.
 
 * **`ax`**: This powerful optional parameter allows you to pass a
-    pre-existing Matplotlib ``Axes`` object. This is perfect for
-    creating complex figures with multiple subplots, such as
-    comparing the solution at different times side-by-side.
+  pre-existing Matplotlib ``Axes`` object. This is perfect for
+  creating complex figures with multiple subplots, such as
+  comparing the solution at different times side-by-side.
 
 Usage Example
 -------------
@@ -214,7 +215,7 @@ distribution of the hydraulic head at the specified time.
 
 **Expected Output:**
 
-.. figure:: ../../images/plot_hydraulic_head_example.png
+.. figure:: ../../../images/plot_hydraulic_head_example.png
    :alt: Hydraulic Head Contour Plot
    :align: center
    :width: 70%
