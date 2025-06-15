@@ -68,6 +68,7 @@ Making Changes
     function signatures or behavior change.
 
 4.  **Testing:** ``fusionlab-learn`` uses `pytest` for testing.
+
     * Add new tests for any new features you implement in the relevant
       `tests/` directory.
     * Add or update tests to cover any bug fixes, ensuring the bug
