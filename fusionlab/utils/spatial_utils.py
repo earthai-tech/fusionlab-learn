@@ -879,7 +879,6 @@ def _visualize_negative_sampling(
         df_combined, base_points, strategy, spatial_cols, 
         target_col, buffer_km=10, s=50, title=None, 
         ):
-    import matplotlib.pyplot as plt
     
 
     lon_col, lat_col = spatial_cols

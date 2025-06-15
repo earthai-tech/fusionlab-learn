@@ -24,66 +24,69 @@ principles, offering a powerful set of common features that make
 them uniquely suited for complex geophysical forecasting tasks.
 
 * **Hybrid Data-Physics Architecture**
-    The models integrate a powerful data-driven forecasting core
-    (the Hybrid Attentive LSTM Network, or HALNet, engine) with a
-    physics-informed module. This means they learn from both
-    observational data and the governing physical laws, with the PDE
-    residual being a key component of the loss function.
+  The models integrate a powerful data-driven forecasting core
+  (the Hybrid Attentive LSTM Network, or HALNet, engine) with a
+  physics-informed module. This means they learn from both
+  observational data and the governing physical laws, with the PDE
+  residual being a key component of the loss function.
 
 * **Coupled Multi-Target Prediction**
-    They are designed to simultaneously forecast multiple, physically
-    linked variables. The primary use case is predicting land
-    subsidence (:math:`s`) and groundwater levels (:math:`h`) in a
-    coupled manner.
+  They are designed to simultaneously forecast multiple, physically
+  linked variables. The primary use case is predicting land
+  subsidence (:math:`s`) and groundwater levels (:math:`h`) in a
+  coupled manner.
 
 * **Advanced Input Handling**
-    The architecture natively processes three distinct types of time
-    series inputs:
-    * **Static features:** Time-invariant metadata (e.g., sensor
-        location, soil type).
-    * **Dynamic past features:** Time-varying data observed up to the
-        present (e.g., historical rainfall, past measurements).
-    * **Known future features:** Time-varying data known in advance
-        (e.g., day of the week, scheduled pumping).
-    This is enhanced by an optional
-    :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSN)
-    for intelligent, learnable feature selection.
+  The architecture natively processes three distinct types of time
+  series inputs:
+  
+  * **Static features:** Time-invariant metadata (e.g., sensor
+    location, soil type).
+  * **Dynamic past features:** Time-varying data observed up to the
+    present (e.g., historical rainfall, past measurements).
+  * **Known future features:** Time-varying data known in advance
+    (e.g., day of the week, scheduled pumping).
+  This is enhanced by an optional
+  :class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSN)
+  for intelligent, learnable feature selection.
 
 * **Sophisticated Temporal Processing**
-    To capture complex time-dependencies, the models employ:
-    * A :class:`~fusionlab.nn.components.MultiScaleLSTM` that processes
-        the input sequence at various user-defined temporal
-        resolutions, capturing both short-term and long-term patterns.
-    * A rich suite of attention mechanisms that work together to fuse
-        information from all sources, including
-        :class:`~fusionlab.nn.components.CrossAttention` (for
-        encoder-decoder interaction) and various self-attention layers
-        like :class:`~fusionlab.nn.components.HierarchicalAttention`.
+  To capture complex time-dependencies, the models employ:
+  
+  * A :class:`~fusionlab.nn.components.MultiScaleLSTM` that processes
+    the input sequence at various user-defined temporal
+    resolutions, capturing both short-term and long-term patterns.
+  * A rich suite of attention mechanisms that work together to fuse
+    information from all sources, including
+    :class:`~fusionlab.nn.components.CrossAttention` (for
+    encoder-decoder interaction) and various self-attention layers
+    ike :class:`~fusionlab.nn.components.HierarchicalAttention`.
 
 * **Flexible Physics-Informed Constraints**
-    The physics module is highly configurable:
-    * The specific physical law to enforce can be selected via the
-        ``pde_mode`` parameter, with the primary focus being on
-        ``'consolidation'``.
-    * Key physical coefficients in the PDEs (like the consolidation
-        coefficient :math:`C` or hydraulic conductivity :math:`K`) can
-        be either **fixed** as known constants or made **learnable**.
-        This allows the model to perform *parameter inversion*—
-        discovering the values of physical constants directly from the
-        observational data.
+  The physics module is highly configurable:
+    
+  * The specific physical law to enforce can be selected via the
+    ``pde_mode`` parameter, with the primary focus being on
+    ``'consolidation'``.
+  * Key physical coefficients in the PDEs (like the consolidation
+    coefficient :math:`C` or hydraulic conductivity :math:`K`) can
+    be either **fixed** as known constants or made **learnable**.
+    This allows the model to perform *parameter inversion*—
+    discovering the values of physical constants directly from the
+    observational data.
 
 * **Probabilistic Forecasting for Uncertainty**
-    The models can produce probabilistic forecasts to quantify
-    prediction uncertainty. By specifying a list of ``quantiles``, the
-    :class:`~fusionlab.nn.components.QuantileDistributionModeling` head
-    is activated, generating prediction intervals alongside the point
-    forecast.
+  The models can produce probabilistic forecasts to quantify
+  prediction uncertainty. By specifying a list of ``quantiles``, the
+  :class:`~fusionlab.nn.components.QuantileDistributionModeling` head
+  is activated, generating prediction intervals alongside the point
+  forecast.
 
 * **Multi-Horizon Output Structure**
-    Using a :class:`~fusionlab.nn.components.MultiDecoder`, the models
-    generate predictions for each step in the forecast horizon in a
-    sequence-to-sequence manner, making them true multi-step-ahead
-    forecasters.
+  Using a :class:`~fusionlab.nn.components.MultiDecoder`, the models
+  generate predictions for each step in the forecast horizon in a
+  sequence-to-sequence manner, making them true multi-step-ahead
+  forecasters.
     
 
 Physical Formulation and Hybrid Loss
@@ -161,15 +164,15 @@ assembled as a weighted sum of the data and physics components.
 .. math::
    \mathcal{L}_{total} = \mathcal{L}_{data} + \sum_{i \in \{gw, c\}} \lambda_{i} \mathcal{L}_{physics, i}
 
-* **:math:`\mathcal{L}_{data}`**: This is the supervised loss (e.g.,
-    Mean Squared Error or a Quantile Loss) calculated between the
-    model's final forecast and the true observational data.
-* **:math:`\mathcal{L}_{physics, i}`**: This is the Mean Squared Error
-    of a specific PDE residual (e.g., :math:`\text{mean}(\mathcal{R}_c^2)`).
-    It quantifies how much the predictions violate that physical law.
-* **:math:`\lambda_{i}`**: These are user-defined hyperparameters
-    (e.g., ``lambda_gw``, ``lambda_cons``) passed to ``.compile()`` that
-    control the influence of each physical constraint on the total loss.
+* :math:`\mathcal{L}_{data}`: This is the supervised loss (e.g.,
+  Mean Squared Error or a Quantile Loss) calculated between the
+  model's final forecast and the true observational data.
+* :math:`\mathcal{L}_{physics, i}`: This is the Mean Squared Error
+  of a specific PDE residual (e.g., :math:`\text{mean}(\mathcal{R}_c^2)`).
+  It quantifies how much the predictions violate that physical law.
+* :math:`\lambda_{i}`: These are user-defined hyperparameters
+  (e.g., ``lambda_gw``, ``lambda_cons``) passed to ``.compile()`` that
+  control the influence of each physical constraint on the total loss.
 
 This composite loss is then used to update all trainable parameters in
 the model, ensuring that the network learns to be accurate to both the
@@ -200,26 +203,26 @@ The modern ``PIHALNet`` represents a paradigm shift towards
 modularity and flexibility.
 
 * **Inheritance from BaseAttentive:** Its most important feature is
-    that it inherits from the :class:`~fusionlab.nn.models.BaseAttentive`
-    class. It does not reinvent the data-driven forecasting engine;
-    instead, it inherits a powerful, tested, and highly configurable
-    one. This means any improvements to ``BaseAttentive`` are
-    immediately available to ``PIHALNet``.
+  that it inherits from the :class:`~fusionlab.nn.models.BaseAttentive`
+  class. It does not reinvent the data-driven forecasting engine;
+  instead, it inherits a powerful, tested, and highly configurable
+  one. This means any improvements to ``BaseAttentive`` are
+  immediately available to ``PIHALNet``.
 
 * **Smart Configuration:** Architectural choices are no longer
-    controlled by numerous, disconnected parameters. Instead, they
-    are defined in a single, clean ``architecture_config``
-    dictionary. This allows for clear and explicit control over key
-    components like the ``encoder_type`` ('hybrid' vs. 'transformer')
-    or ``feature_processing`` ('vsn' vs. 'dense'). This makes
-    experimenting with different architectures trivial.
+  controlled by numerous, disconnected parameters. Instead, they
+  are defined in a single, clean ``architecture_config``
+  dictionary. This allows for clear and explicit control over key
+  components like the ``encoder_type`` ('hybrid' vs. 'transformer')
+  or ``feature_processing`` ('vsn' vs. 'dense'). This makes
+  experimenting with different architectures trivial.
 
 * **Modular Attention Stack:** The sequence of attention mechanisms
-    in the decoder is no longer hardcoded. It is now controlled by the
-    ``decoder_attention_stack`` key in the configuration dictionary,
-    allowing the user to easily add, remove, or reorder attention
-    layers (e.g., `['cross', 'hierarchical']`) to tailor the model
-    to a specific problem.
+  in the decoder is no longer hardcoded. It is now controlled by the
+  ``decoder_attention_stack`` key in the configuration dictionary,
+  allowing the user to easily add, remove, or reorder attention
+  layers (e.g., `['cross', 'hierarchical']`) to tailor the model
+  to a specific problem.
 
 In essence, the modern design separates the **"what"** (the physics
 of subsidence and groundwater flow, handled by ``PIHALNet``) from the
@@ -474,4 +477,4 @@ Next Steps
    the ``PIHALNet`` models, you can put them into practice.
 
    Proceed to the exercises for a hands-on guide:
-   :ref:`user_guide/exercices/exercises_pihalnet.rst`
+   :doc:`../../exercises/exercise_pihalnet`

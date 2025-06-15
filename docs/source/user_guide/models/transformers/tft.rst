@@ -301,7 +301,7 @@ TFT (Stricter Implementation - All Inputs Required)
 fusionlab that enforces stricter input requirements compared to the
 more flexible* ``TemporalFusionTransformer`` *described above. It assumes
 static, dynamic past, and known future inputs are always provided and
-are not* ``None``*).*
+are not* ``None``).
 
 This class implements the Temporal Fusion Transformer (TFT)
 architecture, closely following the structure described in the
@@ -618,8 +618,19 @@ The main distinctions in the formulation are:
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 
+Next Steps
+----------
 
+.. note::
 
+   You now understand the theory and the complete workflow for 
+   ``TFT`` and its variants, you can proceed to the exercises for more hands-on practice:
+   
+   * :doc:`../../exercises/exercise_tft_required_inputs`
+   * :doc:`../../exercises/exercise_basic_forecasting`
+   * :doc:`../../exercises/exercise_quantile_forecast`.
+   
+   
 .. rubric:: References
 
 .. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).

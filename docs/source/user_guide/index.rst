@@ -6,9 +6,9 @@ User Guide
 
 Welcome to the ``fusionlab-learn`` User Guide!
 
-This guide provides detailed information on using the library,
-from core concepts and model architectures to specific features,
-utilities, data handling, and practical examples.
+This guide provides detailed information on using the library, from
+core concepts and model architectures to specific features, utilities,
+data handling, and practical examples.
 
 Explore the sections below to learn how to effectively use
 ``fusionlab-learn`` for your time series forecasting tasks.
@@ -18,27 +18,22 @@ Explore the sections below to learn how to effectively use
    :caption: Getting Started
 
    introduction
-   installation
-   quickstart
 
 .. toctree::
    :maxdepth: 2
    :caption: Core Concepts & Models
 
-   models
-   halnet
-   pin_models
+   models/index
    components
    losses
-   anomaly_detection
 
 .. toctree::
    :maxdepth: 2
    :caption: Data Handling & Utilities
 
    datasets
+   data_preparation_workflow
    utils/index
-   data_preparation_workflow 
 
 .. toctree::
    :maxdepth: 2
@@ -46,26 +41,23 @@ Explore the sections below to learn how to effectively use
 
    forecast_tuner/index
    evaluation/index
-   visualizing_with_kdiagram
-   forecast_plots 
+   anomaly_detection
 
 .. toctree::
    :maxdepth: 2
-   :caption: Examples & Case Studies
+   :caption: Gallery & Case Studies
 
-   gallery/index    
+   gallery/index
    case_histories
 
 .. toctree::
    :maxdepth: 2
    :caption: Exercices
 
-   exercices/index    
-
+   exercises/index    
+   
 .. toctree::
    :maxdepth: 2
-   :caption: Advanced & Tools
+   :caption: Advanced Topics
 
    tools
-   command_line_usage 
-

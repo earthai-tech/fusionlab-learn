@@ -67,12 +67,178 @@ logger = fusionlog().get_fusionlab_logger(__name__)
 _TW = get_table_size()
 
 all__= [
-        'extract_txy',
         'format_pihalnet_predictions',
-        'normalize_for_pinn',
+        'normalize_for_pinn', 
         'prepare_pinn_data_sequences',
+        'format_pinn_predictions', 
+        'extract_txy_in', 
+        'extract_txy', 
         'plot_hydraulic_head', 
 ]
+
+def format_pinn_predictions(
+    predictions: Optional[Dict[str, 'Tensor']] = None,
+    model: Optional['Model'] = None,
+    model_inputs: Optional[Dict[str, 'Tensor']] = None,
+    y_true_dict: Optional[Dict[str, Union[np.ndarray, 'Tensor']]] = None,
+    target_mapping: Optional[Dict[str, str]] = None,
+    include_gwl: bool = True,
+    include_coords: bool = True,
+    quantiles: Optional[List[float]] = None,
+    forecast_horizon: Optional[int] = None,
+    output_dims: Optional[Dict[str, int]] = None,
+    ids_data_array: Optional[Union[np.ndarray, 'pd.DataFrame']] = None,
+    ids_cols: Optional[List[str]] = None,
+    ids_cols_indices: Optional[List[int]] = None,
+    scaler_info: Optional[Dict[str, Dict[str, Any]]] = None,
+    coord_scaler: Optional[Any] = None,
+    evaluate_coverage: bool = False,
+    coverage_quantile_indices: Tuple[int, int] = (0, -1),
+    savefile: Optional[str] = None,
+    verbose: int = 0,
+    **kwargs
+) -> 'pd.DataFrame':
+    """Formats PINN model predictions into a structured pandas DataFrame.
+
+    This is a general-purpose utility for transforming raw model outputs
+    (from models like PIHALNet or TransFlowSubsNet) into a long-format
+    DataFrame suitable for analysis, visualization, or export.
+
+    This is a powerful, general-purpose utility for transforming raw
+    model outputs into a long-format DataFrame suitable for analysis,
+    visualization, or export. It handles multi-target outputs (e.g.,
+    subsidence and GWL), point or quantile forecasts, and can
+    optionally include true values, coordinate information, and other
+    metadata. It also supports inverse-scaling of predictions and
+    evaluation of quantile coverage.
+
+    Parameters
+    ----------
+    predictions : dict of Tensors, optional
+        The dictionary of prediction tensors, typically returned by a
+        model's ``.predict()`` method. Keys should match the model's
+        output layer names (e.g., ``'subs_pred'``, ``'gwl_pred'``).
+        If ``None``, predictions are generated internally using the
+        `model` and `model_inputs` arguments. Default is ``None``.
+    model : keras.Model, optional
+        A compiled Keras model instance used to generate predictions
+        if the `predictions` dictionary is not provided.
+        Default is ``None``.
+    model_inputs : dict of Tensors, optional
+        A dictionary of input tensors matching the model's signature,
+        required only if `predictions` is ``None``. Default is ``None``.
+    y_true_dict : dict, optional
+        A dictionary containing the ground-truth target arrays, keyed
+        by their base names (e.g., ``'subsidence'``, ``'gwl'``).
+        If provided, an ``<target>_actual`` column will be added to
+        the output DataFrame for comparison. Default is ``None``.
+    target_mapping : dict, optional
+        A custom mapping from model output keys to desired base names in
+        the DataFrame columns. For example:
+        ``{'subs_pred': 'subsidence_mm', 'gwl_pred': 'head_m'}``.
+        Default is ``None``.
+    include_gwl : bool, default=True
+        Toggles the inclusion of groundwater level (GWL) predictions
+        in the final DataFrame.
+    include_coords : bool, default=True
+        Toggles the inclusion of the spatio-temporal coordinate columns
+        (``coord_t``, ``coord_x``, ``coord_y``) in the final DataFrame.
+    quantiles : list of float, optional
+        The list of quantile levels (e.g., ``[0.1, 0.5, 0.9]``) that
+        the model predicted. This is crucial for correctly parsing
+        probabilistic forecasts. Default is ``None``.
+    forecast_horizon : int, optional
+        The length of the forecast horizon. If ``None``, it is inferred
+        from the shape of the prediction tensors. Default is ``None``.
+    output_dims : dict of str, optional
+        A dictionary specifying the feature dimension of each target,
+        e.g., ``{'subs_pred': 1, 'gwl_pred': 1}``. If ``None``, it's
+        inferred from the tensor shapes. Default is ``None``.
+    ids_data_array : np.ndarray or pd.DataFrame, optional
+        An array or DataFrame containing static identifiers (e.g., well
+        IDs, site categories) for each sample. Its length must match
+        the number of samples in the prediction. Default is ``None``.
+    ids_cols : list of str, optional
+        A list of column names for the `ids_data_array`. Required if
+        `ids_data_array` is a NumPy array. Default is ``None``.
+    ids_cols_indices : list of int, optional
+        A list of column indices to select from `ids_data_array` if it
+        is a NumPy array. Default is ``None``.
+    scaler_info : dict, optional
+        A dictionary providing the necessary information to perform
+        inverse scaling on a per-target basis. Each key should be a
+        target name (e.g., 'subsidence') and its value a dictionary
+        containing ``{'scaler': obj, 'all_features': list, 'idx': int}``.
+        Default is ``None``.
+    coord_scaler : object, optional
+        A fitted scikit-learn-like scaler object used to perform an
+        inverse transform on the coordinate columns. Default is ``None``.
+    evaluate_coverage : bool, default=False
+        If ``True`` and quantile predictions are present, calculates the
+        unconditional coverage of the prediction interval.
+    coverage_quantile_indices : tuple of (int, int), default=(0, -1)
+        The indices of the lower and upper quantiles in the sorted
+        `quantiles` list to use for the coverage calculation. Default
+        is ``(0, -1)``, which corresponds to the full range.
+    savefile : str, optional
+        If a file path is provided, the final DataFrame is saved to a
+        CSV file at this location. Default is ``None``.
+    verbose : int, default=0
+        The verbosity level, from 0 (silent) to 5 (trace every step).
+    **kwargs: dict,  
+        Additional keyword arguments for future extensions. 
+        
+    Returns
+    -------
+    pd.DataFrame
+        A long-format DataFrame where each row represents a single
+        forecast step for a single sample. Columns include sample and
+        step identifiers, coordinates, predictions, and optionally
+        actuals and metadata.
+
+    Notes
+    -----
+    - The function returns a column-aligned DataFrame, which simplifies
+      subsequent analysis and plotting.
+    - For quantile forecasts, prediction columns are named using the
+      pattern ``<target_name>_q<quantile*100>``, e.g., ``subsidence_q5``,
+      ``subsidence_q50``, ``subsidence_q95``.
+    - For point forecasts, the column is named ``<target_name>_pred``.
+
+    See Also
+    --------
+    fusionlab.plot.forecast.plot_forecasts : A powerful utility for
+        visualizing the DataFrame produced by this function.
+    """
+    #
+    # >>> ALL OF THE EXISTING LOGIC FROM `format_pihalnet_predictions` GOES HERE. <<<
+    # The only change is that it now operates on the `predictions` variable
+    # instead of `pihalnet_outputs`.
+  
+    # Call the original function, passing all arguments explicitly.
+    # This acts as a backward-compatible wrapper.
+    return format_pihalnet_predictions(
+        pihalnet_outputs=predictions,
+        model=model,
+        model_inputs=model_inputs,
+        y_true_dict=y_true_dict,
+        target_mapping=target_mapping,
+        include_gwl=include_gwl,
+        include_coords=include_coords,
+        quantiles=quantiles,
+        forecast_horizon=forecast_horizon,
+        output_dims=output_dims,
+        ids_data_array=ids_data_array,
+        ids_cols=ids_cols,
+        ids_cols_indices=ids_cols_indices,
+        scaler_info=scaler_info,
+        coord_scaler=coord_scaler,
+        evaluate_coverage=evaluate_coverage,
+        coverage_quantile_indices=coverage_quantile_indices,
+        savefile=savefile,
+        verbose=verbose,
+        **kwargs 
+    )
 
 @SaveFile 
 def format_pihalnet_predictions(
@@ -96,7 +262,8 @@ def format_pihalnet_predictions(
     evaluate_coverage: bool = False,
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: str = None, 
-    verbose: int = 0
+    verbose: int = 0, 
+    **kwargs
 ) -> pd.DataFrame:
     """
     Formats PIHALNet predictions into a structured pandas DataFrame.

@@ -18,7 +18,8 @@ from .make import (
 from .load import (
     fetch_zhongshan_data,
     fetch_nansha_data,
-    load_processed_subsidence_data
+    load_processed_subsidence_data, 
+    load_subsidence_pinn_data
     )
 
 __all__ = [

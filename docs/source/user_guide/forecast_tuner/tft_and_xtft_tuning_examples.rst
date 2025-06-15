@@ -1,8 +1,8 @@
 . _example_hyperparameter_tuning:
 
-======================
-Tuning Examples
-======================
+===============================
+TFT & XTFT Tuning Examples
+===============================
 
 Finding optimal hyperparameters is crucial for maximizing the
 performance of complex models like

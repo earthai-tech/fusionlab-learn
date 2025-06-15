@@ -1,8 +1,8 @@
 .. _user_guide_forecast_tuner:
 
-=======================
-Forecast Tuner Guide
-=======================
+==========================
+TFT Forecast Tuner Guide
+==========================
 
 Finding the optimal set of hyperparameters for deep learning models
 like :class:`~fusionlab.nn.transformers.TemporalFusionTransformer`,

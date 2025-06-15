@@ -18,14 +18,14 @@ This section covers two main categories of transformer architectures available
 in the library:
 
 * **Pure Transformers**: These models, like the ``TimeSeriesTransformer``,
-    adhere to the original "Attention Is All You Need" paradigm, relying
-    exclusively on self-attention and cross-attention to process
-    temporal information.
+  adhere to the original "Attention Is All You Need" paradigm, relying
+  exclusively on self-attention and cross-attention to process
+  temporal information.
 
 * **Temporal Fusion Transformers (TFTs)**: While these are technically
-    hybrid models because they also use LSTMs, their core innovation lies
-    in their specialized attention mechanisms and gating layers. They are
-    grouped here due to their strong reliance on transformer principles.
+  hybrid models because they also use LSTMs, their core innovation lies
+  in their specialized attention mechanisms and gating layers. They are
+  grouped here due to their strong reliance on transformer principles.
 
 Please select a model guide below to learn more.
 

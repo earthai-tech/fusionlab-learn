@@ -22,13 +22,13 @@ Key Features
 ------------
 * **Flexible Encoder-Decoder Architecture**: The model can operate
   in two distinct modes via the ``mode`` parameter:
-    * **`pihal_like`**: A standard sequence-to-sequence architecture
-      where the encoder processes past data and the decoder uses
-      future data.
-    * **`tft_like`**: An architecture inspired by the Temporal
-      Fusion Transformer where known future inputs are used to enrich
-      both the historical context (encoder) and the future context
-      (decoder).
+  
+  * **pihal_like**: A standard sequence-to-sequence architecture
+    where the encoder processes past data and the decoder uses future data.
+  * **`tft_like`**: An architecture inspired by the Temporal
+    Fusion Transformer where known future inputs are used to enrich
+    both the historical context (encoder) and the future context
+    (decoder).
 
 * **Encoder-Decoder Architecture:** Correctly processes historical
   data (in the encoder) and future context (in the decoder)
@@ -49,14 +49,15 @@ Key Features
   
 * **Rich Attention Mechanisms:** Uses a suite of attention layers to
   effectively fuse information from different sources:
-    * :class:`~fusionlab.nn.components.CrossAttention` allows the
-      decoder to focus on the most relevant parts of the encoded
-      historical context.
-    * :class:`~fusionlab.nn.components.HierarchicalAttention` and
-      :class:`~fusionlab.nn.components.MemoryAugmentedAttention`
-      further refine the decoder's context.
-    * :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`
-      integrates the final set of features before prediction.
+  
+  * :class:`~fusionlab.nn.components.CrossAttention` allows the
+    decoder to focus on the most relevant parts of the encoded
+    historical context.
+  * :class:`~fusionlab.nn.components.HierarchicalAttention` and
+    :class:`~fusionlab.nn.components.MemoryAugmentedAttention`
+    further refine the decoder's context.
+  * :class:`~fusionlab.nn.components.MultiResolutionAttentionFusion`
+    integrates the final set of features before prediction.
       
 * **Probabilistic Forecasting:** Employs
   :class:`~fusionlab.nn.components.QuantileDistributionModeling`
@@ -84,28 +85,30 @@ Architectural Workflow
 structure. The key difference between its operational modes lies in
 how it handles the ``future_input`` tensor.
 
-**Input Modes: `tft_like` vs. `pihal_like`**
+**Input Modes:** ``tft_like`` vs. ``pihal_like``
 
-* **`mode='pihal_like'` (Standard Encoder-Decoder):**
-    * In this mode, ``future_input`` is expected to have a time
-      dimension equal to the ``forecast_horizon``.
-    * **Encoder**: Processes only the `dynamic_input` (of length
-      :math:`T_{past}`) to create a summary of the past.
-    * **Decoder**: Uses the encoder's summary along with the
-      `static_input` and the entire `future_input` to generate
-      the forecast. This is a clean and robust separation of concerns.
+* ``mode='pihal_like'`` **(Standard Encoder-Decoder):**
 
-* **`mode='tft_like'` (TFT-Style Inputs):**
-    * This mode requires the ``future_input`` tensor to span both
-      the lookback and forecast periods, with a time dimension of
-      :math:`T_{past} + T_{future}`.
-    * **Encoder**: The `future_input` is sliced. Its historical part
-      (length :math:`T_{past}`) is concatenated with the
-      `dynamic_input` and fed into the encoder. This provides the
-      encoder with richer context about past events.
-    * **Decoder**: The future part of the `future_input` (length
-      :math:`T_{future}`) is used as context for generating the
-      prediction.
+  * In this mode, ``future_input`` is expected to have a time
+    dimension equal to the ``forecast_horizon``.
+  * **Encoder**: Processes only the `dynamic_input` (of length
+    :math:`T_{past}`) to create a summary of the past.
+  * **Decoder**: Uses the encoder's summary along with the
+    `static_input` and the entire `future_input` to generate
+    the forecast. This is a clean and robust separation of concerns.
+
+* ``mode='tft_like'`` **(TFT-Style Inputs):**
+
+  * This mode requires the ``future_input`` tensor to span both
+    the lookback and forecast periods, with a time dimension of
+    :math:`T_{past} + T_{future}`.
+  * **Encoder**: The `future_input` is sliced. Its historical part
+    (length :math:`T_{past}`) is concatenated with the
+    `dynamic_input` and fed into the encoder. This provides the
+    encoder with richer context about past events.
+  * **Decoder**: The future part of the `future_input` (length
+    :math:`T_{future}`) is used as context for generating the
+    prediction.
 
 **Subsequent Steps (Common to Both Modes):**
 
@@ -157,26 +160,29 @@ how it handles the ``future_input`` tensor.
     * **Cross-Attention:** The decoder context :math:`\mathbf{D}_{init}`
       acts as the *query* to attend to the encoded history
       :math:`\mathbf{E}` (which serves as the *key* and *value*).
+      
       .. math::
           \mathbf{A}_{cross} = \text{CrossAttention}(\mathbf{D}_{init}, \mathbf{E})
 
     * **Context Refinement:** The output of the cross-attention is
-        further processed through residual connections, normalization, and
-        other self-attention layers (`HierarchicalAttention`,
-        `MemoryAugmentedAttention`, `MultiResolutionAttentionFusion`) to
-        build a highly refined feature representation for the forecast period.
+      further processed through residual connections, normalization, and
+      other self-attention layers (`HierarchicalAttention`,
+      `MemoryAugmentedAttention`, `MultiResolutionAttentionFusion`) to
+      build a highly refined feature representation for the forecast period.
         
-        * **Residual Connection:** The output of the cross-attention is added
-          to the initial decoder input and normalized, a standard technique
-          for stabilizing deep models.
-          .. math::
+      * **Residual Connection:** The output of the cross-attention is added
+        to the initial decoder input and normalized, a standard technique
+        for stabilizing deep models.
+        
+        .. math::
               \mathbf{D}' = \text{LayerNorm}(\mathbf{D}_{init} + \text{GRN}(\mathbf{A}_{cross}))
     
-        * **Self-Attention:** Further attention layers (Hierarchical, Memory,
-          Multi-Resolution Fusion) refine this fused context :math:`\mathbf{D}'`
-          through self-attention mechanisms.
+      * **Self-Attention:** Further attention layers (Hierarchical, Memory,
+        Multi-Resolution Fusion) refine this fused context :math:`\mathbf{D}'`
+        through self-attention mechanisms.
 
 5.  **Final Aggregation and Output:**
+
     * The final feature tensor from the attention blocks, which has a
       shape of :math:`(B, T_{future}, D_{feat})`, is aggregated along the
       time dimension using the specified ``final_agg`` strategy (e.g.,
@@ -193,8 +199,8 @@ Complete Example
 This example demonstrates a complete workflow for ``HALNet`` using the
 `tft_like` mode, which has the more complex data requirement.
 
-Step 1: Imports and Setup
-~~~~~~~~~~~~~~~~~~~~~~~~~
+**Step 1: Imports and Setup**
+
 First, we import all necessary libraries and set up the environment.
 
 .. code-block:: python
@@ -222,8 +228,8 @@ First, we import all necessary libraries and set up the environment.
    os.makedirs(EXERCISE_OUTPUT_DIR, exist_ok=True)
 
 
-Step 2: Generate and Prepare Synthetic Data
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Step 2: Generate and Prepare Synthetic Data**
+
 We generate a synthetic dataset and use `reshape_xtft_data` to create
 the three required input arrays (`static`, `dynamic`, `future`).
 
@@ -260,8 +266,8 @@ the three required input arrays (`static`, `dynamic`, `future`).
    print(f"  Target:  {targets.shape}")
 
 
-Step 3: Define, Compile, and Train HALNet
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Step 3: Define, Compile, and Train HALNet**
+
 We instantiate the model, specifying `mode='tft_like'`, and then
 compile and train it.
 
@@ -301,8 +307,8 @@ compile and train it.
    print("Training complete.")
 
 
-Step 4: Visualize Training History
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+**Step 4: Visualize Training History**
+
 Use the ``plot_history_in`` utility to visualize the loss curves.
 
 .. code-block:: python
@@ -319,7 +325,7 @@ Use the ``plot_history_in`` utility to visualize the loss curves.
 
 **Example Output Plot:**
 
-.. figure:: ../images/halnet_history_plot.png
+.. figure:: ../../../images/halnet_history_plot.png
    :alt: HALNet Training History Plot
    :align: center
    :width: 90%

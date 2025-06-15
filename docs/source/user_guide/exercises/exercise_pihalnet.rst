@@ -48,7 +48,7 @@ installed.
 
 
 Step 1: Imports and Setup
-----------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 First, we import all necessary libraries and set up our environment for
 reproducibility and clean output.
@@ -84,7 +84,7 @@ reproducibility and clean output.
    Libraries imported and setup complete for PIHALNet exercise.
 
 Step 2: Generate Synthetic Hybrid Data
-----------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This is the most critical step. ``PIHALNet`` requires a dataset that
 contains both standard time series features and spatio-temporal
@@ -132,7 +132,7 @@ plausible.
    print(f"Generated data with {N_SAMPLES} samples.")
 
 Step 3: Structure Inputs and Targets
-----------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 We now assemble the generated data into the nested dictionary format
 required by `PIHALNet` for both its inputs and targets, and then we
@@ -175,7 +175,7 @@ create a training and validation split.
    Number of validation samples: 200
 
 Step 4: Define, Compile, and Train PIHALNet
-----------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 We will now instantiate `PIHALNet`. We will use the `architecture_config`
 to define a custom internal structure and configure the model to
@@ -242,7 +242,7 @@ the weight for the physics loss, `lambda_physics`.
    Training complete.
 
 Step 5: Visualize Training History
-----------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 We can use the `plot_history_in` utility to view the different
 components of our composite loss, which helps in diagnosing how the
@@ -275,7 +275,7 @@ model balanced the data and physics objectives during training.
    level predictions.
 
 Step 6: Visualize the Forecast
-----------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Finally, we'll make predictions on the validation set and plot the
 forecasted subsidence against the actual values for a few samples.

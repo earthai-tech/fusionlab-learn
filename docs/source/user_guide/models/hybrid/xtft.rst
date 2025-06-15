@@ -19,10 +19,10 @@ long-range, complex interactions.
 This guide details two models in this family:
 
 * **XTFT**: The main, stable implementation, which includes numerous
-    enhancements over the standard TFT, such as advanced attention
-    mechanisms and integrated anomaly detection.
+  enhancements over the standard TFT, such as advanced attention
+  mechanisms and integrated anomaly detection.
 * **SuperXTFT**: An experimental variant of ``XTFT`` that introduces
-    additional feature selection and processing layers.
+  additional feature selection and processing layers.
 
 .. toctree::
    :hidden:
@@ -355,3 +355,14 @@ Use with caution.)*
    Temporal fusion transformers for interpretable multi-horizon
    time series forecasting. *International Journal of Forecasting*,
    37(4), 1748-1764. (Also arXiv:1912.09363)
+
+Next Steps
+----------
+
+.. note::
+
+   You now clearly understand the theory and the complete workflow for
+   ``XTFT`` and ``SuperXTFT``, you may go ahead to the exercises for more hands-on practice:
+   
+   * :doc:`../../exercises/exercise_experimental_super_tft` 
+   * :doc:`../../exercises/exercise_advanced_xtft`

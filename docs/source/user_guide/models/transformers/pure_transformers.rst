@@ -30,32 +30,33 @@ Key Features
 --------------
 
 * **Classic Encoder-Decoder Architecture:** Faithfully implements the
-    standard transformer structure with separate stacks of encoder and
-    decoder layers, providing a strong and well-understood foundation.
+  standard transformer structure with separate stacks of encoder and
+  decoder layers, providing a strong and well-understood foundation.
 
 * **Solely Attention-Based:** Relies entirely on self-attention and
-    cross-attention to model temporal dependencies, making it distinct
-    from recurrent or convolutional approaches.
+  cross-attention to model temporal dependencies, making it distinct
+  from recurrent or convolutional approaches.
 
 * **Multi-Feature Input:** Natively handles three distinct input streams:
-    * **Static features:** Time-invariant context.
-    * **Dynamic past features:** Historical time series data.
-    * **Known future features:** Covariates with known future values.
+
+  * **Static features:** Time-invariant context.
+  * **Dynamic past features:** Historical time series data.
+  * **Known future features:** Covariates with known future values.
 
 * **Flexible Static Feature Integration:** Provides multiple strategies
-    (via ``static_integration_mode``) for injecting static context
-    into the model, either at the encoder input, the decoder input, or
-    not at all.
+  (via ``static_integration_mode``) for injecting static context
+  into the model, either at the encoder input, the decoder input, or
+  not at all.
 
 * **Causal Masking for Autoregressive Decoding:** Correctly applies a
-    look-ahead mask in the decoder's self-attention layer to ensure
-    that predictions for a given time step are only conditioned on
-    previous steps, which is crucial for preventing data leakage during
-    training.
+  look-ahead mask in the decoder's self-attention layer to ensure
+  that predictions for a given time step are only conditioned on
+  previous steps, which is crucial for preventing data leakage during
+  training.
 
 * **Probabilistic Forecasting:** Can be configured to produce
-    quantile forecasts by providing a list of ``quantiles``, enabling
-    the model to output prediction intervals and quantify uncertainty.
+  quantile forecasts by providing a list of ``quantiles``, enabling
+  the model to output prediction intervals and quantify uncertainty.
 
 Architectural Deep Dive
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -67,15 +68,16 @@ of an encoder, a decoder, and input processing layers.
 Before entering the main transformer blocks, each input tensor is
 processed to have the same core dimensionality, :math:`d_{model}`
 (defined by ``embed_dim``).
+
 * **Dynamic and Future Inputs:** Are passed through separate
-    :class:`~keras.layers.Dense` layers to project them into the
-    :math:`d_{model}` space.
+  :class:`~keras.layers.Dense` layers to project them into the
+  :math:`d_{model}` space.
 * **Static Inputs:** Are processed by either a `Dense` layer or a
-    :class:`~fusionlab.nn.components.GatedResidualNetwork` (GRN).
+  :class:`~fusionlab.nn.components.GatedResidualNetwork` (GRN).
 * **Positional Encoding:** Crucially, sinusoidal positional encodings
-    are added to the dynamic and future embeddings to provide the
-    model with information about the order of the sequence, since the
-    attention mechanism itself has no inherent sense of position.
+  are added to the dynamic and future embeddings to provide the
+  model with information about the order of the sequence, since the
+  attention mechanism itself has no inherent sense of position.
 
 .. math::
    \mathbf{X}_{emb} = \text{Embedding}(\mathbf{X}_{input}) + \text{PositionalEncoding}
@@ -87,11 +89,11 @@ the historical (dynamic past) input sequence. It consists of a stack
 of ``num_encoder_layers``, where each layer performs two main operations:
 
 * **Multi-Head Self-Attention:** This allows every time step in the
-    input sequence to "look at" and weigh the importance of every other
-    time step in the sequence. This is how the model captures long-range
-    dependencies and complex interactions within the historical data.
+  input sequence to "look at" and weigh the importance of every other
+  time step in the sequence. This is how the model captures long-range
+  dependencies and complex interactions within the historical data.
 * **Position-wise Feed-Forward Network (FFN):** A simple, fully
-    connected feed-forward network applied independently to each time step.
+  connected feed-forward network applied independently to each time step.
 
 A residual connection followed by layer normalization is applied after
 each operation to ensure stable training.
@@ -104,21 +106,21 @@ a stack of ``num_decoder_layers``, where each layer has **three** main
 operations:
 
 * **Masked Multi-Head Self-Attention:** This layer performs self-attention
-    on the decoder's inputs (the known future features). A **causal
-    (look-ahead) mask** is applied to ensure that the prediction for
-    time step :math:`i` can only attend to outputs at positions less than
-    :math:`i`. This prevents the model from cheating by looking at future
-    answers during training and preserves the autoregressive property.
+  on the decoder's inputs (the known future features). A **causal
+  (look-ahead) mask** is applied to ensure that the prediction for
+  time step :math:`i` can only attend to outputs at positions less than
+  :math:`i`. This prevents the model from cheating by looking at future
+  answers during training and preserves the autoregressive property.
 
 * **Multi-Head Cross-Attention:** This is the bridge between the
-    encoder and decoder. Here, the decoder's output from the previous
-    sub-layer acts as the *query*, while the encoder's output memory serves
-    as the *keys* and *values*. This allows the decoder to "focus" on the
-    most relevant parts of the historical input sequence for generating
-    each step of the forecast.
+  encoder and decoder. Here, the decoder's output from the previous
+  sub-layer acts as the *query*, while the encoder's output memory serves
+  as the *keys* and *values*. This allows the decoder to "focus" on the
+  most relevant parts of the historical input sequence for generating
+  each step of the forecast.
 
 * **Position-wise Feed-Forward Network (FFN):** Identical in structure
-    to the FFN in the encoder.
+  to the FFN in the encoder.
 
 **4. Final Output Layer**
 
@@ -189,3 +191,12 @@ This example demonstrates a complete workflow for using the
 
    Model Output Shape: (16, 10, 3)
    (Batch, Horizon, Quantiles)
+   
+Next Steps
+----------
+
+.. note::
+
+   Now that you understand the theory and the complete workflow for
+   ``TimeSeriesTransformer``, you can proceed to the exercises for more hands-on practice:
+   :doc:`../../exercises/exercise_pure_transformer`

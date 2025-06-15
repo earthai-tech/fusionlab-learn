@@ -22,12 +22,12 @@ Incorporating anomaly detection into forecasting workflows can:
 ``fusionlab`` provides components and integrates strategies (especially
 within :class:`~fusionlab.nn.XTFT`) to leverage anomaly information.
 
-Anomaly Detection Components (`fusionlab.nn.anomaly_detection`)
-----------------------------------------------------------------
+Anomaly Detection Components 
+-------------------------------
 
 These are neural network layers designed specifically for anomaly
-detection tasks, often intended to be used within or alongside
-forecasting models.
+detection ((:func:`fusionlab.nn.anomaly_detection`) tasks, often intended 
+to be used within or alongside forecasting models.
 
 .. _lstm_autoencoder_anomaly:
 

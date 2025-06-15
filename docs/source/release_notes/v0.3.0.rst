@@ -12,57 +12,46 @@ attentive model architecture and introduces a powerful, flexible new
 generation of Physics-Informed Neural Networks (PINNs). The focus has
 been on modularity, robustness, and providing users with greater
 control over the model architecture to tackle a wider range of
-complex forecasting problems.
+complex forecasting problems. This new foundation enables 
+a state-of-the-art generation of PINNs and is complemented by a 
+unified hyperparameter tuner, ``HydroTuner``, designed for all 
+hydrogeological models.
 
 Enhancements & Improvements
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-* **New Flexible Base Architecture**:
-    * |New| Introduced :class:`~fusionlab.nn.models.BaseAttentive`,
-      a powerful base class that encapsulates the entire
-      encoder-decoder and attention logic. This new class supports
-      two distinct encoder architectures, selectable via the
-      ``architecture`` parameter:
-        * ``'hybrid'`` (default): Uses the :class:`~fusionlab.nn.components.MultiScaleLSTM`
-          for sequence encoding.
-        * ``'transformer'``: Uses a stack of pure self-attention
-          layers for encoding, bypassing the LSTM.
-    * |New| The base architecture now includes a ``mode`` parameter
-      (``'tft_like'`` or ``'pihal_like'``) to control how known
-      future features are handled, allowing for both TFT-style input
-      enrichment and standard encoder-decoder data flows.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* **New Generation of Models**:
-    * |New| **`TransFlowSubsNet`**: A new, state-of-the-art PINN for
-      coupled geophysics, the
-      :class:`~fusionlab.nn.pinn.TransFlowSubsNet`, is introduced.
-      It inherits from `BaseAttentive` and is designed to model both
-      groundwater flow and consolidation simultaneously.
-    * |New| **`HALNet`**: The data-driven core,
-      :class:`~fusionlab.nn.models.HALNet`, is now a standalone
-      model inheriting from `BaseAttentive`. It provides a powerful,
-      general-purpose forecasting tool without PINN components.
-    * |New| **`PITGWFlow`**: A self-contained PINN for solving the
-      2D transient groundwater flow equation using an MLP and a custom
-      training step to minimize the PDE residual.
-
-* **New and Improved Utilities**:
-    * |New| Added :class:`~fusionlab.nn.forecast_tuner.HALTuner`, a
-      dedicated tuner for the new ``HALNet`` model.
-    * |Enhancement| Introduced a new visualization utility,
-      :func:`~fusionlab.plot.forecast.plot_forecast_by_step`, which
-      organizes plots by forecast step, making it easy to analyze
-      model performance over the horizon. It gracefully falls back
-      from spatial to temporal plots if coordinate data is missing.
-    * |Enhancement| The :func:`~fusionlab.plot.forecast.forecast_view`
-      and :func:`~fusionlab.plot.forecast.plot_forecasts` functions
-      have been made more robust with improved color bar handling and
-      auto-detection of value prefixes.
-    * |Enhancement| The data preparation utility
-      :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences`
-      is now mode-aware and can generate correctly shaped `future_features`
-      for both `pihal_like` and `tft_like` architectures.
-
-* **Code Example (New Flexible `HALNet`):**
+* |New| Introduced :class:`~fusionlab.nn.models.BaseAttentive`,
+  a powerful and flexible base class that encapsulates the
+  entire encoder-decoder and attention logic. This provides a
+  consistent, modular foundation for all advanced forecasting
+  models in the library.
+* |New| The base architecture includes a ``mode`` parameter
+  (``'tft_like'`` or ``'pihal_like'``) to control how known
+  future features are handled, allowing for both TFT-style input
+  enrichment and standard encoder-decoder data flows.
+* |New| :class:`~fusionlab.nn.pinn.models.TransFlowSubsNet`:
+  A state-of-the-art, fully-coupled PINN that simultaneously
+  models both **transient groundwater flow** and **aquifer-system
+  consolidation**. This is the new flagship model for complex
+  hydrogeological forecasting.
+* |New| :class:`~fusionlab.nn.models.HALNet`: The powerful,
+  data-driven Hybrid Attentive LSTM Network is now available as
+  a standalone model, serving as a robust, general-purpose
+  forecasting tool without physics components.
+* |New| :class:`~fusionlab.nn.pinn.PiTGWFlow`: A self-contained,
+  pure-physics PINN for solving the 2D transient groundwater
+  flow equation, ideal for forward and inverse problems.
+* |Enhancement| The legacy **:class:`~fusionlab.nn.pinn.models.PIHALNet`**
+  has also been re-architected to inherit from `BaseAttentive`,
+  benefiting from the new configuration system and modularity.
+* |New| Introduced :class:`~fusionlab.nn.forecast_tuner.HydroTuner`:
+  A flexible, model-agnostic tuner for all hydrogeological PINNs.
+  By simply passing the model class (`PIHALNet` or
+  `TransFlowSubsNet`), it dynamically adapts its search space.
+* |New| Added :class:`~fusionlab.nn.forecast_tuner.HALTuner`, a
+  dedicated tuner for the new standalone ``HALNet`` model.
+  
+* **Code Example (New Flexible** ``HALNet``):
 
   .. code-block:: python
      :linenos:
@@ -105,40 +94,123 @@ Enhancements & Improvements
      output_pihal = halnet_pihal(inputs_pihal)
      print(f"PIHAL-like mode output shape: {output_pihal.shape}")
 
+* |New| A suite of PINN-specific utilities have been added,
+  including the critical
+  :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences`
+  function for handling complex input requirements.
+* |New| New spatial utilities in :mod:`~fusionlab.utils.spatial_utils`,
+  including `create_spatial_clusters` and `batch_spatial_sampling`,
+  have been introduced to aid in geospatial feature engineering.
+  
+* |Enhancement| Visualization functions like
+  :func:`~fusionlab.plot.forecast.plot_forecast_by_step` and
+  :func:`~fusionlab.plot.forecast.forecast_view` have been added
+  and improved for more insightful analysis of forecast results.
+* |Enhancement| This new base class is highly configurable via an
+  **architecture_config** dictionary, supporting:
+  
+  * Two distinct encoder architectures: ``'hybrid'`` (default),
+    which uses :class:`~fusionlab.nn.components.MultiScaleLSTM`,
+    and ``'transformer'``, which uses a pure self-attention stack.
+  * A fully modular ``decoder_attention_stack``, giving users
+    fine-grained control over the attention mechanisms.
+* |Enhancement| The new tuners' ``.create()`` factory method can
+  **automatically infer** data-dependent parameters (like
+  input/output dimensions) directly from NumPy arrays,
+  significantly simplifying the setup process.
+  
+* **Code Example (New** ``HydroTuner`` **Workflow):**
+
+  .. code-block:: python
+     :linenos:
+
+     from fusionlab.nn.forecast_tuner import HydroTuner
+     from fusionlab.nn.pinn.models import TransFlowSubsNet
+     # Assume 'inputs' and 'targets' are pre-prepared NumPy dicts
+
+     # 1. Define a search space for the model
+     search_space = {
+         "embed_dim": [32, 64],
+         "dropout_rate": {"type": "float", "min_value": 0.1, "max_value": 0.3},
+         "K": ["learnable", 1e-4],  # Physics HP for TransFlowSubsNet
+         "learning_rate": [1e-3, 5e-4]
+     }
+
+     # 2. Instantiate the Tuner using the .create() factory method
+     tuner = HydroTuner.create(
+         model_name_or_cls=TransFlowSubsNet, # Specify the model to tune
+         inputs_data=inputs,
+         targets_data=targets,
+         search_space=search_space,
+         max_trials=10,
+         project_name="New_TransFlow_Tuning"
+     )
+
+     # 3. Run the search
+     print("Starting tuning with the new HydroTuner...")
+     best_model, best_hps, _ = tuner.run(
+         inputs=inputs,
+         y=targets,
+         epochs=20,
+         callbacks=[tf.keras.callbacks.EarlyStopping('val_loss', patience=5)]
+     )
+
+
 Fixes
 ~~~~~
 * |Fix| **Architectural Overhaul**: Completely refactored the internal
-  logic of `PIHALNet` (now `BaseAttentive`) to use a robust
+  logic of :class:`~fusionlab.nn.pinn.models.PIHALNet` 
+  (now :class:`~fusionlab.nn.pinn.BaseAttentive`) to use a robust
   encoder-decoder architecture. This permanently fixes a series of
   `ValueError` and `InvalidArgumentError` exceptions related to
   shape mismatches that occurred when `time_steps` and
   `forecast_horizon` were different.
 * |Fix| **Residual Connections**: Corrected the logic for residual
   connections (`Add` + `LayerNormalization`) to handle the
-  `use_residuals=False` case correctly, preventing `TypeError`
+  ``use_residuals=False`` case correctly, preventing `TypeError`
   exceptions. All feature dimensions within the attention blocks are
   now consistent, resolving shape mismatches.
 * |Fix| **Positional Encoding**: Replaced the naive linear positional
   encoding with the standard, robust sinusoidal implementation from
-  "Attention Is All You Need". Fixed an issue where a single
+  `"Attention Is All You Need"`. Fixed an issue where a single
   instance was incorrectly used on tensors with different feature
   dimensions.
-* |Fix| **PINN Gradient Calculation**: Refactored `PITGWFlow` to
+* |Fix| **PINN Gradient Calculation**: Refactored :class:`~fusionlab.nn.pinn.models.PiTGWFlow` to
   decouple prediction from residual calculation. The `train_step` now
-  manages a single `GradientTape` context, fixing a `ValueError` where
+  manages a single ``GradientTape`` context, fixing a `ValueError` where
   gradients could not be computed due to a broken computational path.
+
+* |Fix| Corrected the gradient flow in PINN models to improve
+  stability, especially when training with very low physics-loss
+  weights.
+* |Fix| Enhanced the :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences` 
+  utility to better handle edge cases with single-group time series.
+* |Fix| The `search` method in ``PINNTunerBase`` now correctly handles
+  TensorFlow Datasets where the target `y` is already a tensor,
+  improving compatibility with non-PINN models.
+
 
 Tests
 ~~~~~
-* |Tests| Added a comprehensive Pytest suite for the new `HALNet`
-  and `TransFlowSubsNet` models, validating both `'tft_like'` and
-  `'pihal_like'` modes.
-* |Tests| Created a robust test suite for `PITGWFlow`, covering
+* |Tests| Added a comprehensive Pytest suite for the new :class:`~fusionlab.nn.mdoels.HALNet`
+  and :class:`~fusionlab.nn.pinn.TransFlowSubsNet` models, validating both ``'tft_like'`` and
+  ``'pihal_like'`` modes.
+* |Tests| Created a robust test suite for :class:`~fusionlab.nn.pinn.PiTGWFlow`, covering
   instantiation, learnable parameter tracking, forward pass with
   multiple input formats, and the custom `train_step`.
-* |Tests| Added a Pytest suite for the `PositionalEncoding` layer
+* |Tests| Added a Pytest suite for the :class:`~fusionlab.nn.components.PositionalEncoding` layer
   to ensure numerical stability, shape consistency, and serialization.
 
+* |Tests| Added a comprehensive test suite for the new :class:`~fusionlab.nn.forecast_tuner.HydroTuner`,
+  covering instantiation, the `.create()` factory method, and
+  end-to-end runs for both `PIHALNet` and `TransFlowSubsNet`.
+* |Tests| Implemented unit tests for all new data utilities,
+  including :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences`,
+  :func:`~fusionlab.utils.data_utils.widen_temporal_columns`,
+  and the spatial utilities.
+* |Tests| Expanded model tests to validate the new
+  ``architecture_config`` functionality in ``BaseAttentive``.
+  
 Documentation
 ~~~~~~~~~~~~~
 * |Docs| Added a new User Guide page, :doc:`/user_guide/models/halnet`,
@@ -151,7 +223,18 @@ Documentation
   ``forecast_view``, ``plot_forecast_by_step``, and ``plot_history_in``.
 * |Docs| Added an exercise page, :doc:`/user_guide/exercices/exercise_halnet`,
   to provide a hands-on tutorial for using the new `HALNet` model.
+* |Docs| Completely reorganized the User Guide for improved clarity
+  and navigation. The guide is now structured thematically around
+  `Models`, `Utilities`, `Tuning`, and `Exercises`.
+* |Docs| Added new, in-depth documentation pages for all PINN
+  models: :doc:`/user_guide/models/pinn/pihalnet`,
+  :doc:`/user_guide/models/pinn/transflow_subnet`, and
+  :doc:`/user_guide/models/pinn/pitgwflow`.
+* |Docs| Added a new, comprehensive guide for the
+  :doc:`/user_guide/forecast_tuner/hydro_tuner`.
+* |Docs| Created new hands-on tutorials for all major models and
+  utilities in the :doc:`/user_guide/exercises/index`.
 
-Contributors
+Contributor
 ~~~~~~~~~~~~~
 * `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)

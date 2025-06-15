@@ -1,109 +1,126 @@
 .. _user_guide_introduction:
 
-==============
-Introduction
-==============
+===============
+Introduction 
+===============
 
-Welcome to the ``fusionlab-learn`` user guide! This section provides a
-conceptual overview of the models and techniques implemented in the
-library, focusing on advanced time series forecasting.
+Welcome to the ``fusionlab-learn`` user guide! This library is a
+comprehensive, research-oriented toolkit for building, training, and
+experimenting with advanced deep learning models for time series
+forecasting.
 
-The Challenge of Time Series Forecasting
-------------------------------------------
+This introduction provides a high-level overview of the challenges in
+modern forecasting and the core philosophies and capabilities that
+``fusionlab-learn`` offers to address them.
 
-Predicting the future based on the past is a fundamental challenge
-across many domains, from finance and retail to weather and IoT.
-Real-world time series data often presents significant hurdles:
+The Modern Forecasting Challenge
+----------------------------------
+Real-world time series data presents significant hurdles that go
+beyond simple trend extrapolation:
 
-* **Complex Patterns:** Data can exhibit intricate seasonality,
-    trends, and irregular cycles that are hard to model.
-* **Multiple Inputs:** Effective forecasting often requires using
-    various types of features:
+* **Complex Temporal Patterns:** Data often exhibits a mix of intricate
+  seasonality, long-term trends, and irregular, hard-to-modelcycles.
+* **Heterogeneous Data Sources:** Effective forecasting requires fusing
+  information from various input types:
     
-    * *Past Values:* Historical target values and covariates.
-    * *Known Future Inputs:* Events or values known in advance (e.g., holidays, promotions).
-    * *Static Metadata:* Time-invariant features (e.g., store ID,
-      sensor location).
-* **Multi-Horizon Needs:** Often, predictions are needed for
-    multiple steps into the future, not just the next one.
-* **Uncertainty:** Providing not just a single point forecast, but
-    also an estimate of the prediction uncertainty (prediction
-    intervals) is crucial for decision-making.
+  * **Dynamic Past Inputs:** Historical target values and observed covariates.
+  * **Known Future Inputs:** Events or values known in advance,
+    such as holidays, promotions, or weather forecasts.
+  * **Static Metadata:** Time-invariant features that provide
+    context, like a sensor's location or a product's category.
+* **Multi-Horizon Requirements:** Predictions are often needed for an
+  entire sequence of future steps, not just the very next one.
+* **Quantifying Uncertainty:** A single point forecast is often
+  insufficient. For robust decision-making, it's crucial to
+  understand the forecast's uncertainty by generating prediction
+  intervals.
 
-Enter the Temporal Fusion Transformer (TFT)
----------------------------------------------
+Our Philosophy: A Unified and Modular Approach
+------------------------------------------------
+``fusionlab-learn`` is built on a philosophy of **modularity** and
+**architectural diversity**.
 
-The Temporal Fusion Transformer (TFT) [1]_ was a significant
-advancement designed specifically to address these challenges. It
-combines ideas from sequence-to-sequence learning (like LSTMs and
-attention) with specialized components for time series:
+1.  **A Spectrum of Architectures:** We believe there is no
+    one-size-fits-all model. The library provides state-of-the-art
+    implementations across the three main paradigms of modern deep
+    learning for time series.
 
-* **Gated Residual Networks (GRNs):** Flexible blocks for
-    processing features.
-* **Variable Selection Networks (VSNs):** To identify and weight
-    the importance of different input features (static, past,
-    future).
-* **Static Enrichment:** Mechanisms to effectively incorporate static
-    metadata into the temporal dynamics.
-* **Temporal Self-Attention:** To learn long-range dependencies
-    across time steps, inspired by Transformers, but adapted for
-    time series interpretability.
-* **Multi-Horizon Forecasting:** Directly outputs predictions for
-    multiple future steps simultaneously.
-* **Quantile Regression:** Natively supports predicting multiple
-    quantiles to estimate uncertainty intervals.
+2.  **Modular Components:** The models are constructed from a rich set
+    of reusable, interchangeable building blocks (available in
+    :doc:`components`). This design allows researchers and
+    practitioners to easily experiment with novel architectures and
+    build custom models tailored to specific problems.
 
-``fusionlab``: Beyond the Standard TFT
-----------------------------------------
+A Spectrum of Forecasting Architectures
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``fusionlab-learn`` provides expert implementations of three distinct
+families of models, allowing you to choose the right tool for your task.
 
-While TFT provides a powerful baseline, real-world data can push
-its limits. ``fusionlab-learn`` provides robust implementations of TFT
-and goes further by offering **XTFT (Extreme Temporal Fusion
-Transformer)**, an enhanced architecture designed for even greater
-complexity and performance.
+**1. Pure Transformer Models**
+********************************
+Based on the original "Attention Is All You Need" paper [1]_, these
+models rely exclusively on self-attention and cross-attention
+mechanisms. They excel at capturing very long-range dependencies and
+complex inter-feature relationships without the inductive biases of
+recurrent layers.
 
-XTFT builds upon TFT by incorporating several advanced modules:
+.. seealso::
+   See the :doc:`models/transformers/index` guide for details.
 
-* **Enhanced Attention:** Uses more sophisticated attention layers
-    like Hierarchical Attention, Cross-Attention, and
-    Memory-Augmented Attention to capture intricate relationships
-    across different inputs and time scales.
-* **Multi-Scale Processing:** Employs techniques like Multi-Scale
-    LSTMs and Multi-Resolution Attention Fusion to analyze temporal
-    patterns at different frequencies (e.g., daily, weekly).
-* **Dynamic Time Windowing:** Adapts the focus on recent history
-    dynamically.
-* **Integrated Anomaly Detection:** Includes mechanisms to identify
-    and optionally incorporate information about anomalies directly
-    into the forecasting process.
+**2. Hybrid Models**
+**********************
+These models, including the Temporal Fusion Transformer (TFT) [2]_
+and its advanced successor ``XTFT``, represent a powerful fusion of
+architectures. They combine the strengths of **Recurrent Neural
+Networks (LSTMs)** for processing local sequential information with
+the **global context** provided by transformer-based attention. This
+makes them exceptionally powerful and robust general-purpose
+forecasters.
 
-Modularity at its Core
-------------------------
+.. seealso::
+   See the :doc:`models/hybrid/index` guide for details.
 
-A key philosophy of ``fusionlab-learn`` is **modularity**. Both TFT and
-XTFT are constructed from reusable building blocks (available in
-:doc:`components`). This design allows researchers and practitioners
-to:
+**3. Physics-Informed Neural Networks (PINNs)**
+**************************************************
+This is the most advanced category, designed for scientific machine
+learning. PINNs are hybrid models that are regularized by physical
+laws. They integrate **Partial Differential Equations (PDEs)** into
+the loss function, forcing the model to produce predictions that are
+not only accurate with respect to data but also physically consistent.
+This approach can dramatically improve generalization in data-scarce
+environments and even allow for the discovery of physical parameters.
 
-* Understand the contribution of each part of the model.
-* Easily experiment by swapping or modifying components.
-* Build custom variants tailored to specific problems.
+.. seealso::
+   See the :doc:`models/pinn/index` guide for details.
+
+Key Cross-Cutting Features
+-----------------------------
+Across these architectures, ``fusionlab-learn`` emphasizes a common set
+of powerful features:
+
+* **Multi-Step-Ahead Forecasting:** All primary models are designed as
+  sequence-to-sequence architectures capable of producing
+  multi-horizon forecasts in a single forward pass.
+* **Probabilistic Outputs:** Native support for quantile regression
+  allows models to output prediction intervals, providing a crucial
+  measure of forecast uncertainty.
+* **Flexible Input Handling:** A unified data pipeline allows all
+  models to seamlessly handle static, dynamic past, and known future inputs.
 
 Next Steps
 ------------
+Now that you have a conceptual overview, we recommend you proceed to:
 
-Now that you have a conceptual overview, you can explore:
-
-* :doc:`models`: Details on the specific model classes available
-    (``TemporalFusionTransformer``, ``XTFT``, etc.).
-* :doc:`components`: A closer look at the building blocks used
-    within the models.
-* Or dive into the :doc:`/quickstart` for a hands-on example.
+* :doc:`../installation` to set up your environment.
+* :doc:`../quickstart` for a fast, hands-on example.
+* :doc:`models/index` to take a deep dive into the specific model
+  architectures.
 
 References
-------------
-
-.. [1] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2019).
-   Temporal Fusion Transformers for Interpretable Multi-horizon
-   Time Series Forecasting. arXiv preprint arXiv:1912.09363.
-   https://arxiv.org/abs/1912.09363
+----------
+.. [1] Vaswani, A., et al. (2017). "Attention Is All You Need."
+   *Advances in Neural Information Processing Systems 30*.
+.. [2] Lim, B., Arık, S. Ö., Loeff, N., & Pfister, T. (2021).
+   "Temporal Fusion Transformers for interpretable multi-horizon
+   time series forecasting." *International Journal of Forecasting,
+   37*(4), 1748-1764.

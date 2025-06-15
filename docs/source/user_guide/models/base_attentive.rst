@@ -30,9 +30,10 @@ Key Features
 
 * **Configurable Encoder Architecture:** The internal encoder can
   be dynamically configured to operate in two modes:
-  * **`hybrid`**: A powerful combination of LSTMs and attention,
+  
+  * **hybrid**: A powerful combination of LSTMs and attention,
     ideal for capturing patterns at multiple time scales.
-  * **`transformer`**: A pure self-attention architecture,
+  * **transformer**: A pure self-attention architecture,
     excellent for problems with very long-range dependencies.
 
 * **Modular Attention Stack:** The decoder uses a sequence of
@@ -57,7 +58,7 @@ Architectural Deep Dive
 The ``BaseAttentive`` architecture is organized into a five-stage
 encoder-decoder pipeline.
 
-**1. Initial Feature Processing**
+1. Initial Feature Processing
 ----------------------------------
 Each of the three input streams (static, dynamic, future) is first
 passed through a feature processing block. This can be configured
@@ -76,7 +77,7 @@ via the `architecture_config`.
   If VSN is disabled, features are processed through standard
   :class:`~keras.layers.Dense` layers.
 
-**2. The Encoder Path**
+2. The Encoder Path
 --------------------------
 The encoder's role is to create a rich, contextualized summary of all
 past information. First, positional information is added to the time-
@@ -97,10 +98,11 @@ Then, the core processing begins, as defined by `encoder_type`.
   processed by a stack of standard transformer encoder blocks, each
   consisting of a :class:`~fusionlab.nn.components.MultiHeadAttention`
   layer followed by a residual connection and layer normalization.
+  
   .. math::
      \mathbf{X}' = \text{LayerNorm}(\mathbf{X} + \text{MultiHeadAttention}(\mathbf{X}))
 
-**3. The Decoder Path & Context Preparation**
+3. The Decoder Path & Context Preparation
 -------------------------------------------------
 The decoder prepares the context for the forecast window. The static
 context vector (from Step 1) is tiled (repeated) across the forecast
@@ -108,7 +110,7 @@ horizon. This is combined with the processed known future features to
 form the initial decoder input, which serves as the **query** for the
 attention mechanisms.
 
-**4. The Attention Stack**
+4. The Attention Stack
 -----------------------------
 This is the heart of the model, where information from the past (encoder)
 and future (decoder) is intelligently fused. The `decoder_attention_stack`
@@ -119,10 +121,11 @@ config controls which layers are used and in what order.
   while the encoder's output memory (from Step 2) serves as the
   *keys* and *values*. The model learns to "pay attention" to the most
   relevant historical time steps for each future step it needs to predict.
+  
   .. math::
      \mathbf{A}_{cross} = \text{Attention}(\mathbf{Q}_{decoder}, \mathbf{K}_{encoder}, \mathbf{V}_{encoder})
 
-* **Self-Attention (`'hierarchical'`, `'memory'`)**: After cross-attention,
+* **Self-Attention** (``'hierarchical'``, ``'memory'``): After cross-attention,
   the resulting context is further refined using self-attention
   mechanisms. Hierarchical attention helps find structural patterns, while
   memory-augmented attention is designed to capture very long-range
@@ -132,7 +135,7 @@ config controls which layers are used and in what order.
   connections are used to ensure stable training of this deep
   architecture.
 
-**5. Final Output Generation**
+5. Final Output Generation
 -------------------------------
 The highly-refined feature tensor from the attention stack is passed
 to a :class:`~fusionlab.nn.components.MultiDecoder`, which has separate
@@ -150,9 +153,9 @@ architectural choices.
 
 The primary keys are:
 
-* **`encoder_type`**: `'hybrid'` (default) or `'transformer'`.
-* **`decoder_attention_stack`**: A list from `['cross', 'hierarchical', 'memory']`.
-* **`feature_processing`**: `'vsn'` (default) or `'dense'`.
+* **encoder_type**: ``'hybrid'`` (default) or ``'transformer'``.
+* **decoder_attention_stack**: A list from ``['cross', 'hierarchical', 'memory']``.
+* **feature_processing**: ``'vsn'`` (default) or ``'dense'``.
 
 You can also create variants of an existing model using the
 ``.reconfigure()`` method.
@@ -218,8 +221,8 @@ You can also create variants of an existing model using the
 
    Instantiating with deprecated 'objective' key...
 
-Complete Usage Example
--------------------------
+**Complete Usage Example:**
+
 This example shows the end-to-end workflow for using the
 ``BaseAttentive`` model (or any of its children).
 

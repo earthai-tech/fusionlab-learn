@@ -5,7 +5,7 @@ Neural Network Utilities
 ==========================
 
 The ``fusionlab.nn.utils`` module provides helpful functions for
-working specifically with the neural network models in ``fusionlab``.
+working specifically with the neural network models in ``fusionlab-learn``.
 These utilities assist with tasks such as data preprocessing tailored
 for models like TFT and XTFT, computing anomaly scores, generating
 forecasts, and reshaping data arrays.
@@ -186,7 +186,7 @@ extracting static values:
 static and dynamic columns) when you need to separate them into the
 distinct static and dynamic input arrays required by models like
 :class:`~fusionlab.nn.TemporalFusionTransformer` or
-:class:`~fusionlab.nn.NTemporalFusionTransformer`. It assumes static
+:class:`~fusionlab.nn.DummyTFT`. It assumes static
 values are repeated across time in the input sequence.
 
 **Code Example:**

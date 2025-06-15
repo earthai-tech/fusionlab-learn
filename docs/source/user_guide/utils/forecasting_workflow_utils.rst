@@ -36,10 +36,12 @@ installed. For visualizations, `matplotlib` is also needed.
 
    pip install fusionlab-learn matplotlib scikit-learn
 
----
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 Common Setup for Examples
--------------------------
+----------------------------
 We'll start with common imports and generate some basic dummy data
 that simulates static, dynamic, and future features, along with
 target values.
@@ -111,7 +113,9 @@ target values.
      Future shape : (5, 16, 2)
      Target shape : (5, 4, 1)
 
----
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 Step 1: Preparing Model Inputs with `prepare_model_inputs`
 ----------------------------------------------------------
@@ -200,10 +204,9 @@ models expect for their `call` method.
      prepare_model_inputs (flexible): Passing inputs as is (Static: <class 'NoneType'>, Dynamic: <class 'tensorflow.python.framework.ops.EagerTensor'>, Future: <class 'NoneType'>)
    Flexible (dynamic only): S=None, D=(5, 12, 3), F=None
 
----
 
 Step 2: Simulate Model Prediction
----------------------------------
+------------------------------------
 For this exercise, we won't train a full model. Instead, we'll simulate
 the kind of output a forecasting model might produce.
 Let's assume we are doing a quantile forecast.
@@ -225,7 +228,6 @@ Let's assume we are doing a quantile forecast.
 
    Simulated quantile predictions shape: (5, 4, 3)
 
----
 
 Step 3: Format Predictions with `format_predictions_to_dataframe`
 -----------------------------------------------------------------
@@ -290,7 +292,6 @@ pass to plotting functions.
    Formatted DataFrame shape: (20, 6)
    Formatted DataFrame columns: ['sample_idx', 'forecast_step', 'sales_q10', 'sales_q50', 'sales_q90', 'sales_actual']
 
----
 
 Step 4: Visualizing Formatted Predictions with `plot_forecasts`
 ---------------------------------------------------------------
@@ -403,7 +404,9 @@ visualize them.
    Spatial plot showing point forecast values across coordinates for a
    specific horizon step.
 
----
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 Conclusion
 ----------
