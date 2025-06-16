@@ -261,7 +261,7 @@ model balanced the data and physics objectives during training.
 
 **Expected Plot:**
 
-.. figure:: ../../images/pihalnet_exercise_history.png
+.. figure:: ../../images/pihalnet_exercise_history_in.png
    :alt: PIHALNet Training History
    :align: center
    :width: 95%
@@ -307,7 +307,7 @@ forecasted subsidence against the actual values for a few samples.
 .. figure:: ../../images/pihalnet_exercise_forecast.png
    :alt: PIHALNet Forecast Results
    :align: center
-   :width: 80%
+   :width: 70%
 
    A plot comparing the model's multi-step forecasts for land subsidence
    against the true values for several validation samples.

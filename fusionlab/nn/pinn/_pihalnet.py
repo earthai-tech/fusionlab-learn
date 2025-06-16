@@ -119,7 +119,7 @@ __all__ =["PiHALNet"]
 
 class PiHALNet(Model, NNLearner):
     """
-    Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
+    Physics-Informed Hybrid Attentive LSTM Network (PiHALNet).
 
     This model integrates a data-driven forecasting architecture, based on
     LSTMs and multiple attention mechanisms, with physics-informed
@@ -211,7 +211,7 @@ class PiHALNet(Model, NNLearner):
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         mode: Optional[str]=None, 
-        name: str = "PIHALNet",
+        name: str = "PiHALNet",
         **kwargs
     ):
         super().__init__(name=name, **kwargs)

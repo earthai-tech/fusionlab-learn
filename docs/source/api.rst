@@ -28,16 +28,16 @@ Datasets (`fusionlab.datasets`)
 Utilities for loading included sample datasets and generating synthetic
 time series data for testing and demonstration.
 
-**Loading Functions** (`fusionlab.datasets.load`)
+**Loading Functions** (`fusionlab.datasets`)
 
 .. autosummary::
    :toctree: _autosummary/datasets_load
    :nosignatures:
 
-   ~fusionlab.datasets.load.fetch_zhongshan_data
-   ~fusionlab.datasets.load.fetch_nansha_data
-   ~fusionlab.datasets.load.load_processed_subsidence_data
-   ~fusionlab.datasets.load.load_subsidence_pinn_data
+   ~fusionlab.datasets.fetch_zhongshan_data
+   ~fusionlab.datasets.fetch_nansha_data
+   ~fusionlab.datasets.load_processed_subsidence_data
+   ~fusionlab.datasets.load_subsidence_pinn_data
 
 **Generation Functions** (`fusionlab.datasets.make`)
 
@@ -45,11 +45,11 @@ time series data for testing and demonstration.
    :toctree: _autosummary/datasets_make
    :nosignatures:
 
-   ~fusionlab.datasets.make.make_multi_feature_time_series
-   ~fusionlab.datasets.make.make_quantile_prediction_data
-   ~fusionlab.datasets.make.make_anomaly_data
-   ~fusionlab.datasets.make.make_trend_seasonal_data
-   ~fusionlab.datasets.make.make_multivariate_target_data
+   ~fusionlab.datasets.make_multi_feature_time_series
+   ~fusionlab.datasets.make_quantile_prediction_data
+   ~fusionlab.datasets.make_anomaly_data
+   ~fusionlab.datasets.make_trend_seasonal_data
+   ~fusionlab.datasets.make_multivariate_target_data
    
 Metrics (`fusionlab.metrics`)
 -------------------------------
@@ -74,7 +74,7 @@ time-series forecasting.
    
 .. raw:: html
 
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   <hr>
    
 
 Transformer Models (`fusionlab.nn.transformers`)
@@ -112,7 +112,7 @@ Fusion models that integrate physical laws into the training process.
    :nosignatures:
 
    ~fusionlab.nn.pinn.models.TransFlowSubsNet
-   ~fusionlab.nn.pinn.models.PIHALNet
+   ~fusionlab.nn.pinn.PIHALNet
    ~fusionlab.nn.pinn.models.PiHALNet
    ~fusionlab.nn.pinn.models.PiTGWFlow
    
@@ -134,6 +134,7 @@ attention, and output generation used within the forecasting models.
    ~fusionlab.nn.components.PositionalEncoding
    ~fusionlab.nn.components.StaticEnrichmentLayer
    ~fusionlab.nn.components.LearnedNormalization
+   ~fusionlab.nn.components.PositionwiseFeedForward
 
 Sequence Processing Components (`fusionlab.nn.components`)
 -----------------------------------------------------------
@@ -146,7 +147,9 @@ Components primarily focused on processing temporal sequences.
    ~fusionlab.nn.components.MultiScaleLSTM
    ~fusionlab.nn.components.DynamicTimeWindow
    ~fusionlab.nn.components.aggregate_multiscale
+   ~fusionlab.nn.components.aggregate_multiscale_on_3d
    ~fusionlab.nn.components.aggregate_time_window_output
+   ~fusionlab.nn.components.create_causal_mask
 
 
 Attention Mechanisms (`fusionlab.nn.components`)
@@ -185,6 +188,9 @@ Loss functions tailored for time series forecasting and anomaly detection.
    :toctree: _autosummary/losses
    :nosignatures:
 
+   ~fusionlab.nn.components.AdaptiveQuantileLoss
+   ~fusionlab.nn.components.AnomalyLoss
+   ~fusionlab.nn.components.MultiObjectiveLoss
    ~fusionlab.nn.losses.combined_quantile_loss
    ~fusionlab.nn.losses.prediction_based_loss
    ~fusionlab.nn.losses.combined_total_loss
@@ -192,10 +198,7 @@ Loss functions tailored for time series forecasting and anomaly detection.
    ~fusionlab.nn.losses.quantile_loss
    ~fusionlab.nn.losses.quantile_loss_multi
    ~fusionlab.nn.losses.anomaly_loss
-   ~fusionlab.nn.components.AdaptiveQuantileLoss
-   ~fusionlab.nn.components.AnomalyLoss
-   ~fusionlab.nn.components.MultiObjectiveLoss
-
+   
 Anomaly Detection (`fusionlab.nn.anomaly_detection`)
 -----------------------------------------------------
 Components specifically designed for anomaly detection tasks.

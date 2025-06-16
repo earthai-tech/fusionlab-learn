@@ -280,13 +280,13 @@ tuning workflow for an advanced physics-informed model. In this exercise,
 you have learned to:
 
 * Define a flexible `search_space` to control which parameters are
-    tuned.
+  tuned.
 * Use the high-level `HydroTuner.create()` and `.run()` methods for a
-    convenient, automated workflow with NumPy data.
+  convenient, automated workflow with NumPy data.
 * (Advanced) Understand the lower-level process of manually creating
-    datasets and using the core `.search()` method.
+  datasets and using the core `.search()` method.
 * Retrieve the final, optimized model and its hyperparameters from the
-    tuner instance.
+  tuner instance.
 
 This process is fundamental to achieving peak performance with complex
 deep learning architectures and allows you to systematically find the

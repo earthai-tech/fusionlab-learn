@@ -254,9 +254,11 @@ extracts:
     sequence.
     
     * **Single-step** (`forecast_horizon=None` or 1): Target is
-      :math:`\text{target_{value}}_{i+T}`.
+      :math:`\text{target}_{\text{value},\, i+T}`.
+
     * **Multi-step** (`forecast_horizon=H`): Target is the sequence
-      :math:`[\text{target}_{value}_{i+T}, ..., \text{target}_{value}_{i+T+H-1}]`.
+      :math:`[\text{target}_{\text{value},\, i+T}, \ldots, \text{target}_{\text{value},\, i+T+H-1}]`.
+  
 
 The function iterates through the DataFrame with a given `step` size
 (stride=1 creates overlapping sequences). The `drop_last` parameter
@@ -406,7 +408,10 @@ to construct model inputs for time steps beyond the training data range.
     forward from the last known state.
 
     .. math::
-       scaled_{\test{future}}_{time} = \frac{\text{future}_{time} - \mu_{time}}{\sigma_{time} + \epsilon}
+
+      \text{scaled}_{\text{future},\, \text{time}} =
+      \frac{\text{future}_{\text{time}} - \mu_{\text{time}}}{\sigma_{\text{time}} + \epsilon}
+
 
 **Output:** Returns prepared NumPy arrays for static and future dynamic
 inputs, ready for the model's `.predict()` method, along with metadata

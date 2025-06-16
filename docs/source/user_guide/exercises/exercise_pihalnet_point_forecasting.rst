@@ -562,13 +562,13 @@ Discussion of Exercise
 In this exercise, you successfully:
 * Configured and instantiated a complex `PIHALNet` model.
 * Generated synthetic data that correctly separates past inputs
-    (dynamic features) from the future prediction window (coords,
-    future features, targets).
+  (dynamic features) from the future prediction window (coords,
+  future features, targets).
 * Understood the importance of providing the model with `coords`
-    that have a time dimension equal to the `forecast_horizon`.
+  that have a time dimension equal to the `forecast_horizon`.
 * Trained the model and observed the data and physics loss components.
 * Formatted predictions into a DataFrame and used `forecast_view`
-    to visualize the results.
+  to visualize the results.
 
 This workflow provides a solid foundation for applying `PIHALNet`
 and its associated tools to real-world spatio-temporal forecasting

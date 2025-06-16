@@ -29,7 +29,6 @@ __all__ = [
     'make_anomaly_data',
     'make_trend_seasonal_data',
     'make_multivariate_target_data',
-    
     'fetch_zhongshan_data',
     'fetch_nansha_data',
     'load_processed_subsidence_data', 

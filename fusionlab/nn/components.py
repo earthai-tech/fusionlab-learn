@@ -498,8 +498,139 @@ class TransformerDecoderLayer(Layer, NNLearner):
         })
         return config
  
+
 # -------------------- TFT components ----------------------------------------
 
+@register_keras_serializable(
+    "fusionlab.nn.components", 
+    name='PositionwiseFeedForward')
+class PositionwiseFeedForward(Layer, NNLearner):
+    """Implements the Position-wise Feed-Forward Network (FFN) layer.
+
+    This layer is a core component of a standard Transformer block,
+    typically applied after the multi-head attention sub-layer. Its
+    purpose is to process the context-rich output from the attention
+    mechanism at each position independently, adding non-linearity
+    and transformative capacity to the model.
+
+    The network consists of two fully-connected (Dense) layers with a
+    non-linear activation function in between. The first layer expands
+    the input dimensionality, and the second layer projects it back down.
+
+    Parameters
+    ----------
+    embed_dim : int
+        The input and output dimensionality of the layer. This must match
+        the embedding dimension of the Transformer, often denoted as
+        :math:`d_{model}`.
+    ffn_dim : int
+        The dimensionality of the inner, expanded hidden layer. It is
+        common practice in Transformer architectures to set this to four
+        times the `embed_dim`.
+    activation : str, optional
+        The activation function to use in the inner layer. Any valid
+        Keras activation string is accepted. Defaults to ``"relu"``.
+    dropout_rate : float, optional
+        The dropout rate applied for regularization, typically after the
+        first activation function. Defaults to ``0.1``.
+    **kwargs
+        Standard keyword arguments for a Keras ``Layer``.
+
+    Notes
+    -----
+    The "position-wise" nature of this layer is its defining
+    characteristic. The same instance of this layer, with the exact
+    same set of learned weights (:math:`W_1, b_1, W_2, b_2`), is applied
+    to the feature vector at every single position (e.g., time step)
+    in the input sequence. It does not mix information between positions;
+    that task is handled by the preceding self-attention layer.
+
+    The mathematical operation for a single position vector :math:`x` is:
+    
+    .. math::
+       \text{FFN}(x) = \text{Linear}_2(\text{activation}(\text{Linear}_1(x)))
+
+    The residual connection (:math:`x + \text{Dropout}(\text{FFN}(x))`)
+    is typically applied outside this layer, within the main
+    Transformer block.
+
+    See Also
+    --------
+    fusionlab.nn.components.TransformerEncoderLayer : A typical consumer of this layer.
+    tf.keras.layers.Dense : The core building block of the FFN.
+
+    References
+    ----------
+    .. [1] Vaswani, A., et al. "Attention Is All You Need." *NeurIPS 2017*.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> # Create a dummy input tensor (batch, sequence_length, embed_dim)
+    >>> input_tensor = tf.random.normal((32, 50, 128))
+    ...
+    >>> # Instantiate the FFN layer
+    >>> ffn_layer = PositionwiseFeedForward(embed_dim=128, ffn_dim=512)
+    ...
+    >>> # Pass the input through the layer
+    >>> output_tensor = ffn_layer(input_tensor, training=True)
+    ...
+    >>> # The output shape remains the same as the input shape
+    >>> print(f"Input Shape: {input_tensor.shape}")
+    >>> print(f"Output Shape: {output_tensor.shape}")
+    Input Shape: (32, 50, 128)
+    Output Shape: (32, 50, 128)
+    """
+    def __init__(
+        self,
+        embed_dim: int,
+        ffn_dim: int,
+        activation: str = "relu",
+        dropout_rate: float = 0.1,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        # Store configuration for serialization
+        self.embed_dim = embed_dim
+        self.ffn_dim = ffn_dim
+        self.activation_str = activation
+        self.dropout_rate = dropout_rate
+
+        # Define the internal layers once in the constructor
+        self.dense_1 = Dense(
+            units=ffn_dim,
+            name="ffn_dense_1"
+        )
+        self.activation = Activation(activation).activation_fn
+        self.dense_2 = Dense(
+            units=embed_dim,
+            name="ffn_dense_2"
+        )
+        self.dropout = Dropout(rate=dropout_rate)
+
+    def call(self, x: Tensor, training: bool = False) -> Tensor:
+        """Defines the forward pass for the FFN layer."""
+        # Project to the intermediate dimension
+        x = self.dense_1(x)
+        # Apply the non-linear activation function
+        x = self.activation(x)
+        # Apply dropout for regularization
+        x = self.dropout(x, training=training)
+        # Project back to the original embedding dimension
+        x = self.dense_2(x)
+        return x
+
+    def get_config(self):
+        """Returns the configuration of the layer for serialization."""
+        config = super().get_config()
+        config.update({
+            "embed_dim": self.embed_dim,
+            "ffn_dim": self.ffn_dim,
+            "activation": self.activation_str,
+            "dropout_rate": self.dropout_rate,
+        })
+        return config
+    
 @register_keras_serializable(
     'fusionlab.nn.components', name='PositionalEncoding')
 class PositionalEncoding(Layer, NNLearner):

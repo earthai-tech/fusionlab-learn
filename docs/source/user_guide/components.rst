@@ -186,7 +186,7 @@ It is designed to perform three key tasks simultaneously:
 3.  **Controlled Information Flow:** To learn when to apply or skip
     the transformation entirely.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The power of the GRN comes from the combination of several well-established
 deep learning concepts into a single, reusable component.
@@ -337,7 +337,7 @@ which to ignore for each individual forecast, improving model performance
 by filtering out noise and providing valuable insights into which
 variables are driving the predictions.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The VSN is much more sophisticated than a simple feature-dropping
 mechanism. It learns to create a weighted sum of **rich, non-linear
@@ -399,6 +399,7 @@ future features. This allows the models to perform intelligent feature
 selection at every stage of the pipeline.
 
 **Code Example:**
+
 This example demonstrates how to use the VSN and, importantly, how to
 inspect the learned feature importances after a forward pass.
 
@@ -463,6 +464,163 @@ inspect the learned feature importances after a forward pass.
      Feature 7: 0.497
      Feature 8: 0.005
      
+
+Position-wise Feed-Forward Network (FFN)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:API Reference: :class:`~fusionlab.nn.components.PositionwiseFeedForward`
+
+The Position-wise Feed-Forward Network is a core component of the standard
+Transformer block, as introduced in the "Attention Is All You Need"
+paper. It is applied after the multi-head attention sub-layer and serves
+two primary purposes:
+
+1.  To introduce non-linearity, allowing the model to learn more complex
+    functions.
+2.  To process and transform the context-rich representation of each
+    position (or time step) independently.
+
+**How it Works**
+
+The "position-wise" nature is its defining characteristic. The exact
+same FFN, with the same learned weights, is applied to the feature
+vector at every single position in the input sequence. It does not mix
+information between positions; that task is handled by the preceding
+attention layer.
+
+The network itself is a simple two-layer fully-connected network. The
+first layer expands the dimensionality of the input, and the second
+layer projects it back down.
+
+.. math::
+   \text{FFN}(x) = \text{Linear}_2(\text{activation}(\text{Linear}_1(x)))
+
+**Key Parameters**
+
+* **`embed_dim`**: The input and output dimensionality of the layer,
+  which must match the model's main embedding dimension (:math:`d_{model}`).
+* **`ffn_dim`**: The dimensionality of the inner, expanded hidden layer.
+  A common practice is to set this to `4 * embed_dim`.
+* **`activation`**: The non-linear activation function (e.g., `'relu'` or
+  `'gelu'`) applied after the first linear transformation.
+* **`dropout_rate`**: The dropout rate for regularization.
+
+**Usage Example**
+
+.. code-block:: python
+   :linenos:
+
+   import tensorflow as tf
+   from fusionlab.nn.components import PositionwiseFeedForward
+
+   # 1. Create a dummy input tensor from a previous layer
+   # (batch_size, sequence_length, embed_dim)
+   input_tensor = tf.random.normal((32, 50, 128))
+
+   # 2. Instantiate the FFN layer
+   ffn_layer = PositionwiseFeedForward(
+       embed_dim=128,  # Must match input's last dimension
+       ffn_dim=512     # The expanded inner dimension
+   )
+
+   # 3. Pass the input through the layer
+   output_tensor = ffn_layer(input_tensor)
+
+   # The output shape is always the same as the input shape
+   print(f"Input Shape: {input_tensor.shape}")
+   print(f"Output Shape: {output_tensor.shape}")
+
+**Expected Output:**
+
+.. code-block:: text
+
+   Input Shape: (32, 50, 128)
+   Output Shape: (32, 50, 128)
+   
+
+Gated Residual Network (GRN) vs. Position-wise FFN
+******************************************************
+
+In the :class:`~fusionlab.nn.components.XTFT` architecture and the broader 
+Temporal Fusion Transformer family, the standard Position-wise Feed-Forward 
+Network(FFN) found in classic Transformers is deliberately replaced by a more
+sophisticated component: the **Gated Residual Network (GRN)**. This
+choice is critical for handling the complexity and noise inherent in
+real-world time series data.
+
+While an FFN provides essential non-linear transformation, a GRN
+enhances this process with two key mechanisms. First, it incorporates a
+**gating mechanism**, which acts like an intelligent information filter.
+This gate dynamically learns to control how much information flows
+through the layer, allowing the model to suppress noise or ignore
+irrelevant features at a specific time step. Second, the GRN has a
+**built-in residual connection**, which provides a direct path for
+information to bypass the transformation block. This stabilizes the
+training of deep networks by preventing the vanishing gradient problem
+and ensures the transformation is only applied if it is beneficial. By
+combining non-linear processing with learnable filtering and stable
+gradient flow, the GRN provides a much more robust and expressive
+building block than a standard FFN.
+
+**Comparison Table: FFN vs. GRN**
+
+.. list-table:: Comparison Table: FFN vs. GRN
+   :widths: 20 40 40 40
+   :header-rows: 1
+
+   * - Feature
+     - Position-wise Feed-Forward Network (FFN)
+     - Gated Residual Network (GRN)
+     - Significance & Benefit
+   * - **Core Purpose**
+     - To apply a non-linear transformation to each position's
+       vector after attention.
+     - To apply a **controlled**, non-linear transformation to each
+       position's vector.
+     - **GRN is more adaptive.** Both add complexity, but the GRN's
+       transformation is conditional and can be skipped if not useful.
+   * - **Basic Structure**
+     - Two linear (Dense) layers with a simple activation function
+       (e.g., ReLU).
+     - Two linear layers combined with a **Gating Layer (GLU)** and a
+       **residual (skip) connection**.
+     - **GRN is more complex and powerful.** The gating and skip
+       connections are what give it superior performance.
+   * - **Information Flow**
+     - Input data is always fully transformed by the network.
+     - A gating mechanism learns to **filter** the input, deciding how
+       much of the transformation to apply.
+     - **GRN can ignore noise.** This is a major advantage in time
+       series. The FFN lacks this dynamic filtering.
+   * - **Residual Connections**
+     - Relies on an **external** residual connection applied *after*
+       the layer in the main Transformer block.
+     - The residual connection is an **integral part** of the GRN's
+       internal structure.
+     - **GRN has better gradient flow.** Integrating the skip
+       connection makes the component more robust and stable,
+       especially in very deep networks.
+   * - **Context Integration**
+     - Has no explicit mechanism to incorporate external context.
+     - Explicitly designed to accept an optional **context vector**,
+       which influences the gating behavior.
+     - **GRN is context-aware.** This allows static features to
+       directly influence the temporal processing at every time step,
+       a key feature of the TFT architecture.
+   * - **Origin**
+     - "Attention Is All You Need" (The original Transformer)
+     - "Temporal Fusion Transformers for Interpretable Multi-horizon
+       Time Series Forecasting"
+     - The GRN is a specific innovation designed to overcome the
+       limitations of a standard FFN for heterogeneous time series data.
+   * - **When to Use**
+     - Excellent for general-purpose sequence processing where the
+       main goal is transformation (e.g., NLP).
+     - Superior for complex, noisy time series forecasting where
+       filtering, context integration, and training stability are critical.
+     - ``XTFT`` uses GRNs because they are better suited for the
+       challenges of real-world forecasting data.
+       
+       
 StaticEnrichmentLayer
 ~~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :class:`~fusionlab.nn.components.StaticEnrichmentLayer`
@@ -478,20 +636,21 @@ conditional relationships. It creates an "enriched" representation of
 the time series where the temporal dynamics are modulated by the static
 properties of the entity being forecast.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer performs a three-step process to combine the two distinct types
 of information into a single, powerful representation.
 
 1.  **Input Tensors:** The layer takes two inputs:
+
     * **Temporal Features** (:math:`\mathbf{X}`): A 3D tensor of shape
-        ``(Batch, TimeSteps, Units)``, typically the output of a
-        sequence encoder like an LSTM. It contains information about
-        "what is happening over time."
+      ``(Batch, TimeSteps, Units)``, typically the output of a
+      sequence encoder like an LSTM. It contains information about
+      "what is happening over time."
     * **Static Context** (:math:`\mathbf{c}`): A 2D tensor of shape
-        ``(Batch, Units)``, typically the output of processing static
-        metadata. It contains information about "what entity we are
-        looking at."
+      ``(Batch, Units)``, typicallythe output of processing static
+      metadata. It contains information about "what entity we are
+      looking at."
 
 2.  **Broadcasting the Static Context:**
     The static context vector, which lacks a time dimension, must be
@@ -523,7 +682,7 @@ encoder (like an LSTM) and before the temporal self-attention layer. It serves
 as the primary mechanism for injecting static information deep into the
 temporal processing pipeline.
 
-### Code Example
+**Code Example**
 
 .. code-block:: python
    :linenos:
@@ -591,7 +750,7 @@ This approach gives the model the flexibility to adaptively determine the
 most suitable scale and shift for its input features based on what best
 minimizes the final loss function.
 
-**Benefits and Trade-offs**
+Benefits and Trade-offs
 ****************************
 * **Adaptability:** If the data distribution is expected to shift between
   training and inference (a common issue known as data drift), a fixed
@@ -609,8 +768,8 @@ minimizes the final loss function.
   scaler is often sufficient and computationally lighter. `LearnedNormalization`
   is best suited for complex problems where you want to give the model
   maximum flexibility to control its internal representations.
-
-**How it Works**
+  
+How it Works
 ****************
 The layer is simple yet powerful. During its `build` phase, it creates two
 trainable weight vectors whose size matches the input feature dimension
@@ -635,7 +794,7 @@ This layer is used in the :class:`~fusionlab.nn.transformers.XTFT` model as
 an initial processing step for static input features, giving the model
 adaptive control over how it normalizes this crucial context.
 
-** Code Example: **
+**Code Example:**
 
 .. code-block:: python
    :linenos:
@@ -713,7 +872,7 @@ layer is the component responsible for projecting each of these disparate
 modalities into a common, high-dimensional **embedding space** before
 they are fused together for downstream processing.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer follows a simple yet powerful three-step process:
 
@@ -748,7 +907,7 @@ time-varying inputs before they are passed to components like
 :class:`~fusionlab.nn.components.PositionalEncoding` or the main model
 encoder.
 
-**Code Example**
+**Code Example:**
 
 This example demonstrates how to embed two different input modalities
 (e.g., dynamic past features and known future features) into a single,
@@ -826,7 +985,7 @@ sub-sampled versions of the input, it allows the model to concurrently
 learn short-term, medium-term, and long-term dynamics, creating a rich,
 multi-resolution summary of the temporal features.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer internally manages a collection of standard Keras LSTM layers
 and processes the input sequence through them in parallel.
@@ -866,9 +1025,9 @@ and processes the input sequence through them in parallel.
       dynamics across all scales.
         
       .. math::
-           \text{Output} \in \mathbb{R}^{B, \text{lstm\_units} \times |\text{scales}|}
+           \text{Output} \in \mathbb{R}^{B, \text{lstm}_{units} \times |\text{scales}|}
 
-    * **Encoder Mode (`return_sequences=True`):**
+    * **Encoder Mode** (`return_sequences=True`):
       In this mode, each LSTM returns the **full sequence of hidden
       states** for its sub-sampled input. Because each sequence has a
       different length (:math:`\approx T/s`), the layer returns a
@@ -884,7 +1043,7 @@ like :class:`~fusionlab.nn.models.HALNet` and :class:`~fusionlab.nn.models.XTFT`
 subsequently to combine the list of tensors produced when
 ``return_sequences=True``.
 
-**Code Example**
+**Code Example:**
 
 .. code-block:: python
    :linenos:
@@ -954,16 +1113,17 @@ DynamicTimeWindow
 
 **Purpose:** To apply a "recency filter" to a sequence, selecting a
 fixed-size window containing only the most recent time steps. In deep,
-multi-stage forecasting models like ``XTFT``, information from the
+multi-stage forecasting models like :class:`~fusionlab.nn.models.XTFT`, information from the
 distant past is often already processed and summarized by earlier
-layers (e.g., ``MultiScaleLSTM`` or ``MemoryAugmentedAttention``).
+layers (e.g., :class:`~fusionlab.nn.components.MultiScaleLSTM` or 
+:ref:`MemoryAugmentedAttention <memory_augmented_attention>` ).
 
 The ``DynamicTimeWindow`` layer allows the final prediction stages of
 the model to focus on the most immediate and often most relevant
 temporal context, ensuring that the final output is not overwhelmed by
 older, already-processed information.
 
-**How It Works**
+How It Works
 ****************
 Architecturally, this is one of the simplest layers, but it serves an
 important strategic role. It performs a single, highly-optimized slicing
@@ -994,7 +1154,7 @@ recent, highly-contextualized features just before generating the
 final forecast. It provides a mechanism to balance long-term context
 with short-term recency.
 
-**Code Example: **
+**Code Example:**
 
 .. code-block:: python
    :linenos:
@@ -1034,7 +1194,6 @@ with short-term recency.
    Output windowed shape: (4, 10, 8)
 
 
-
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
@@ -1055,7 +1214,7 @@ often based on the core concepts described below.
 **Core Concept: Scaled Dot-Product Attention**
 
 The fundamental building block for many attention mechanisms is the
-scaled dot-product attention [Vaswani17]_. It operates on three sets of
+scaled dot-product attention [1]_. It operates on three sets of
 vectors: Queries (:math:`\mathbf{Q}`), Keys (:math:`\mathbf{K}`), and
 Values (:math:`\mathbf{V}`).
 
@@ -1075,7 +1234,7 @@ Values (:math:`\mathbf{V}`).
 The formula is:
 
 .. math::
-   Attention(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^T}{\sqrt{d_k}}\right)\mathbf{V}
+   \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^T}{\sqrt{d_k}}\right)\mathbf{V}
 
 Here, :math:`\mathbf{Q} \in \mathbb{R}^{T_q \times d_q}`,
 :math:`\mathbf{K} \in \mathbb{R}^{T_k \times d_k}`, and
@@ -1086,7 +1245,7 @@ The output has dimensions :math:`\mathbb{R}^{T_q \times d_v}`.
 **Multi-Head Attention**
 
 Instead of performing a single attention calculation, Multi-Head
-Attention [Vaswani17]_ allows the model to jointly attend to information
+Attention [1]_ allows the model to jointly attend to information
 from different representational subspaces at different positions.
 
 1.  **Projection:** The original Queries, Keys, and Values are
@@ -1099,7 +1258,7 @@ from different representational subspaces at different positions.
     different output vectors (:math:`head_i`).
 
     .. math::
-       head_i = Attention(\mathbf{Q}\mathbf{W}^Q_i, \mathbf{K}\mathbf{W}^K_i, \mathbf{V}\mathbf{W}^V_i)
+       head_i = \text{Attention}(\mathbf{Q}\mathbf{W}^Q_i, \mathbf{K}\mathbf{W}^K_i, \mathbf{V}\mathbf{W}^V_i)
 
 3.  **Concatenation:** The outputs from all heads are concatenated
     together.
@@ -1108,7 +1267,7 @@ from different representational subspaces at different positions.
     final Multi-Head Attention output.
 
 .. math::
-   MultiHead(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{Concat}(head_1, ..., head_h)\mathbf{W}^O
+   \text{MultiHead}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{Concat}(head_1, ..., head_h)\mathbf{W}^O
 
 This allows each head to potentially focus on different aspects or
 relationships within the data.
@@ -1123,7 +1282,7 @@ relationships within the data.
   relationships between past inputs and future inputs, or between
   dynamic and static features).
 
-The specific attention components provided by ``fusionlab`` build upon
+The specific attention components provided by ``fusionlab-learn`` build upon
 or adapt these fundamental concepts for various purposes within time
 series modeling.
 
@@ -1141,7 +1300,7 @@ Its goal is to directly answer the question: *"For a given time step,
 which other time steps did the model focus on?"* This provides a direct
 path to understanding the model's reasoning and debugging its behavior.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 This layer is a very thin wrapper around the standard Keras
 :class:`~tf.keras.layers.MultiHeadAttention` layer, with a crucial change
@@ -1184,7 +1343,7 @@ With the output attention scores, you can:
   visualizing the attention scores can reveal if it was "looking" at
   irrelevant or noisy parts of the input history.
 
-**Code Example**
+**Code Example:**
 
 This example demonstrates how to get the attention scores for a sequence
 attending to itself.
@@ -1252,12 +1411,13 @@ context sequence**. This is the fundamental mechanism that allows an
 encoder-decoder model to work, enabling the decoder to focus on the
 most important parts of the encoded input when generating an output.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer takes two sequences, `source1` and `source2`, and performs
 the following steps:
 
 1.  **Input Projections:**
+
     Since the two input sequences, :math:`\mathbf{S}_1` (from `source1`)
     and :math:`\mathbf{S}_2` (from `source2`), may have different feature
     dimensions, they are first passed through independent ``Dense`` layers
@@ -1274,6 +1434,7 @@ the following steps:
     Value are shared, meaning :math:`\mathbf{W}_k = \mathbf{W}_v`.
 
 2.  **Scaled Dot-Product Attention:**
+
     The core attention mechanism is now applied. For each element (e.g.,
     time step) in the query sequence :math:`\mathbf{Q}`, a similarity
     score is computed against every element in the key sequence
@@ -1296,7 +1457,7 @@ the following steps:
     the two sequences simultaneously. The final outputs from all heads
     are then concatenated and linearly projected to produce the final result.
 
-**Self-Attention vs. Cross-Attention**
+Self-Attention vs. Cross-Attention
 **************************************
 The following table clarifies the key differences between these two
 fundamental attention types.
@@ -1398,12 +1559,12 @@ steps to find relevant information, but the "way" it looks (i.e., the
 *query* it forms) is dynamically influenced by static, time-invariant
 context.
 
-This allows the model to answer sophisticated questions like: *"Given
+This allows the model to answer questions like: *"Given
 that I am forecasting for `Store_A` in the `Northeast_Region` (static
 context), which historical sales days are most relevant for predicting
 next week's sales?"*
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The ``TemporalAttentionLayer`` encapsulates the functionality of one
 full "decoder" block from the original TFT paper. It seamlessly combines
@@ -1518,6 +1679,7 @@ instances can be stacked to form a deep temporal decoder.
    Input static context shape: (4, 64)
    Output enriched shape: (4, 20, 64)
 
+.. _memory_augmented_attention:
 
 MemoryAugmentedAttention
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1539,7 +1701,7 @@ different time series in the dataset. The model can then learn to "read"
 from this shared, global memory to augment and improve its understanding
 of the specific sequence it is currently processing.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer's operation is a form of cross-attention, where the input
 sequence attends to the external memory.
@@ -1549,6 +1711,7 @@ sequence attends to the external memory.
     The core of this component is a trainable weight matrix, the
     **memory**, denoted as :math:`\mathbf{M}`. This matrix has a shape of
     ``(memory_size, units)``.
+    
     * `memory_size` (:math:`M`) defines the number of "slots" or
         "concepts" the memory can store.
     * `units` (:math:`D`) defines the dimensionality of each memory slot.
@@ -1671,7 +1834,7 @@ has been independently refined are their representations combined.
    a different level of temporal abstraction (e.g., short-term vs.
    long-term) than the other.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer implements two parallel, independent self-attention pathways
 that are fused at the end via simple addition.
@@ -1773,7 +1936,7 @@ concatenated. It is the final, powerful fusion step that allows the
 different "resolutions" or "views" of the data (e.g., short-term LSTM
 patterns, long-term memory context) to be intelligently integrated.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 Despite its name, the layer's internal architecture is a standard and
 powerful **self-attention block**. The "Multi-Resolution" aspect comes
@@ -1781,6 +1944,7 @@ from the *nature of the input it is designed to process*, not from a
 complex internal mechanism with multiple scales.
 
 The workflow is straightforward:
+
 1.  **Input:** The layer receives a single, fused input tensor,
     :math:`\mathbf{X}_{fused}`, of shape `(Batch, TimeSteps, Features)`.
     This tensor is the result of concatenating outputs from previous
@@ -1806,7 +1970,7 @@ from the static context, ``MultiScaleLSTM``, ``CrossAttention``, and
 comprehensive feature tensor. It creates the final, fully-contextualized
 representation that is then passed to the decoder.
 
-### Code Example
+**Code Example:**
 
 .. code-block:: python
    :linenos:
@@ -1859,7 +2023,7 @@ guide to quickly identify the right component for your needs based on its
 purpose, inputs, and typical use case.
 
 .. list-table:: Comparison of Attention Components
-   :widths: 18 30 18 20 30
+   :widths: 18 30 18 20 50
    :header-rows: 1
 
    * - Component
@@ -1946,7 +2110,7 @@ individual step in the forecast horizon. This allows the model to learn
 a unique and specialized mapping from its learned context to each
 specific forecast horizon.
 
-**Architectural Deep Dive & Benefits**
+Architectural Deep Dive & Benefits
 **************************************
 The layer's architecture is a parallel set of independent output layers.
 
@@ -2050,7 +2214,7 @@ approach is highly flexible and can capture complex, non-symmetrical
 uncertainty distributions. This layer serves as the final head of the
 network that produces these values.
 
-**Architectural Deep Dive**
+Architectural Deep Dive
 ****************************
 The layer operates in two distinct modes depending on whether the
 ``quantiles`` parameter is provided during initialization.
@@ -2070,6 +2234,7 @@ prediction head for point forecasting.
 **2. Probabilistic Mode (`quantiles` is a list)**
 
 This is the core functionality for probabilistic forecasting.
+
 * The layer creates a **separate, independent ``Dense`` layer for
   each requested quantile**.
 * The *same* input feature tensor is fed in parallel to each of
@@ -2099,8 +2264,8 @@ models (`HALNet`, `XTFT`, etc.). It takes the final, processed feature
 tensor from the preceding layers and transforms it into the actual
 forecast values that are used by the loss function.
 
-Code Examples
-****************
+**Code Examples:**
+
 
 **Example 1: Quantile Output**
 
@@ -2179,10 +2344,6 @@ producing a standard deterministic forecast.
    Input decoder features shape: (4, 6, 32)
    Point predictions shape: (4, 6, 1)
 
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-   
 
 .. raw:: html
 
@@ -2211,7 +2372,7 @@ This allows a model to not just provide a single best guess, but to
 outline a full range of likely outcomes, which is crucial for robust
 decision-making and understanding forecast uncertainty.
 
-**How It Works: The "Pinball Loss" Intuition**
+How It Works: The "Pinball Loss" Intuition
 **********************************************
 The power of quantile loss comes from its **asymmetric penalty**. For a
 given quantile :math:`q \in (0, 1)`, it penalizes over-prediction and
@@ -2253,8 +2414,8 @@ during model initialization). It must be paired with an output layer like
 expects the `y_pred` tensor to have an explicit quantile dimension. It is
 typically passed to `model.compile()` as the `loss` argument.
 
-Code Example
-********************
+**Code Example:**
+
 
 .. code-block:: python
    :linenos:
@@ -2314,7 +2475,7 @@ component to the main forecasting loss, we regularize the model, guiding
 it to learn what constitutes normalcy while simultaneously optimizing for
 predictive accuracy.
 
-**Architectural Deep Dive & How It Works**
+Architectural Deep Dive & How It Works
 ******************************************
 The layer is a simple but effective implementation of a Keras ``Loss``
 layer that operates on a tensor of anomaly scores.
@@ -2360,8 +2521,7 @@ objective function.
   :func:`~fusionlab.nn.losses.combined_total_loss` function to create
   a single, unified loss that is passed to `model.compile()`.
 
-Code Example
-**************
+**Code Example:**
 
 .. code-block:: python
    :linenos:
@@ -2474,8 +2634,7 @@ This is the primary mechanism for implementing the `'from_config'` and
 jointly optimized on both its forecasting accuracy and its ability to
 assign low scores to normal data or high scores to anomalous predictions.
 
-Code Example
-**************
+**Code Example:**
 
 The first example shows how to instantiate the layer. The second,
 conceptual example shows how it would be used inside a model's custom
@@ -2543,8 +2702,8 @@ This non-parametric approach is highly flexible and provides a rich
 measure of forecast uncertainty, which is crucial for risk management
 and robust decision-making.
 
-**How It Works: The "Pinball Loss" Intuition**
-**********************************************
+How It Works
+*************
 The power of quantile regression comes from its unique loss function, often
 called the **pinball loss**, which asymmetrically penalizes prediction
 errors. For a given quantile :math:`q \in (0, 1)`, the loss for a single
@@ -2584,8 +2743,7 @@ be passed to `model.compile()` when training any model that is
 configured to output quantile predictions. It requires that the model's
 `y_pred` tensor has an explicit quantile dimension.
 
-Code Example
-***************
+**Code Example:**
 
 .. code-block:: python
    :linenos:
@@ -2662,6 +2820,7 @@ potentially having a different length in the time dimension due to
 different scaling factors.
 
 **Functionality / Modes:**
+
 The function takes the `lstm_output` (a list of 3D tensors
 :math:`(B, T'_s, U)` where :math:`T'_s` can vary with scale :math:`s`)
 and applies an aggregation strategy specified by the `mode`:
@@ -2772,7 +2931,7 @@ multi-resolution tensors into a **single, unified tensor** that can be
 processed by subsequent layers in the network.
 
 **Functionality & Aggregation Modes**
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 The function's behavior is controlled by the `mode` parameter, which
 specifies the aggregation strategy.
 
@@ -2801,8 +2960,8 @@ specifies the aggregation strategy.
   sequence (averaging or summing) and then concatenate the resulting
   vectors, similar to the `'last'` mode.
 
-Code Example
-^^^^^^^^^^^^^^^^^^
+**Code Example:**
+
 This example shows how to use the function to handle a typical output
 from `MultiScaleLSTM`.
 
@@ -2867,7 +3026,7 @@ applied inside an attention layer, enforces this rule by preventing
 each position from attending to any subsequent positions.
 
 **How It Works**
-^^^^^^^^^^^^^^^^^^^
+
 The function creates a square matrix that explicitly defines which
 connections are allowed. For a sequence of length :math:`T`, it generates
 a :math:`(T, T)` mask where the value at position :math:`(i, j)`
@@ -2888,8 +3047,8 @@ self-attention layer to ensure that the prediction of each time step in
 the forecast horizon is only conditioned on the previously generated
 steps.
 
-Code Example
-^^^^^^^^^^^^^^^^^^^
+**Code Example:**
+
 This example creates a small 4x4 causal mask to make its structure clear.
 
 .. code-block:: python
@@ -2936,7 +3095,7 @@ fixed-size context vector** for each sample in the batch.
 This function provides several common strategies for performing this
 critical pooling or aggregation operation across the time dimension.
 
-**Architectural Deep Dive & Aggregation Strategies**
+Architectural Deep Dive & Aggregation Strategies
 ****************************************************
 The function takes a 3D tensor and reduces it to a 2D tensor by applying
 a specific aggregation method specified by the `mode` parameter. Each
@@ -2989,8 +3148,8 @@ block of a forecasting model, applied after all temporal fusion has occurred
 vector that is then passed to the :class:`~fusionlab.nn.components.MultiDecoder`
 to generate the multi-horizon forecast.
 
-Code Example
-********************
+**Code Example:**
+
 This example demonstrates how the different aggregation modes affect the
 output shape of a sample tensor.
 

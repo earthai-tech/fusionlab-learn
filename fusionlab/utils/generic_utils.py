@@ -2906,7 +2906,7 @@ def _coerce_dt_kw(
     *,        
     dt_col: Any = _SENTINEL,
     time_col: Any = _SENTINEL,
-    _time_default: str | None = None,
+    _time_default: Optional[str]= None,
     **kwargs
 ) -> Dict[str, Any]:
     r"""

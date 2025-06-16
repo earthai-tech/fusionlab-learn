@@ -95,7 +95,7 @@ __all__ = ["PIHALNet"]
 
 class PIHALNet(BaseAttentive):
     """
-    Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
+    Physics-Informed Hybrid Attentive-based LSTM Network (PIHALNet).
 
     This model integrates a data-driven forecasting architecture, based on
     LSTMs and multiple attention mechanisms, with physics-informed
@@ -124,7 +124,7 @@ class PIHALNet(BaseAttentive):
             str, Real, None, StrOptions({"learnable"}),
             LearnableC, FixedC, DisabledC
         ], 
-        "gw_flow_coeffs": [dict, type(None)], 
+        "gw_flow_coeffs": [dict, None], 
         })
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
     def __init__(
