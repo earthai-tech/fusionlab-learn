@@ -18,17 +18,17 @@ to configure its unique, composite loss function.
 **Learning Objectives:**
 
 * Generate a synthetic dataset with features, spatio-temporal
-    coordinates, and two physically-linked target variables.
+  coordinates, and two physically-linked target variables.
 * Structure the inputs and targets into the required nested
-    dictionary format.
+  dictionary format.
 * Instantiate the modern ``PIHALNet`` using the smart
-    ``architecture_config`` for custom internal structures.
+  ``architecture_config`` for custom internal structures.
 * Configure the model to treat a physical coefficient as a
-    **learnable** parameter, to be discovered during training.
+  **learnable** parameter, to be discovered during training.
 * Compile the model with both a data-fidelity loss and a weight
-    for the physics-based loss (:math:`\lambda_{physics}`).
+  for the physics-based loss (:math:`\lambda_{physics}`).
 * Train the model and interpret the multi-component loss from the
-    training logs.
+  training logs.
 * Visualize both the training history and the final forecast results.
 
 Let's get started!
@@ -41,10 +41,6 @@ installed.
 .. code-block:: bash
 
    pip install fusionlab-learn matplotlib scikit-learn
-
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 
 Step 1: Imports and Setup

@@ -13,13 +13,13 @@ multi-horizon quantile forecasts.
 **Learning Objectives:**
 
 * Understand the data preparation steps for XTFT, including feature
-    definition and sequence generation.
+  definition and sequence generation.
 * Learn how to instantiate, compile, and train an XTFT model for
-    quantile forecasting using all three input types (static, dynamic, future).
+  quantile forecasting using all three input types (static, dynamic, future).
 * Practice making multi-step predictions and interpreting the
-    quantile outputs.
+  quantile outputs.
 * Visualize probabilistic forecasts to understand prediction
-    uncertainty.
+  uncertainty.
 
 Let's begin!
 

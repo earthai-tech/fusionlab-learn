@@ -194,5 +194,5 @@ def test_serialization(default_model_params, dummy_inputs):
     except Exception as e:
         pytest.fail(f"Prediction with reloaded model failed: {e}")
 
-if __name__ == '__main__':
+if __name__ == '__main__': # pragma: no cover 
     pytest.main([__file__, '-vv'])

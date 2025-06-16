@@ -18,15 +18,15 @@ physics-informed components of the model.
 **Learning Objectives:**
 
 * Generate a synthetic dataset with features, coordinates, and two
-    target variables (subsidence and groundwater level).
+  target variables (subsidence and groundwater level).
 * Structure the inputs into the required dictionary format,
-    separating feature inputs from coordinate inputs.
+  separating feature inputs from coordinate inputs.
 * Instantiate ``TransFlowSubsNet`` with both data-driven and
-    physics-informed configurations.
+  physics-informed configurations.
 * Compile the model with a composite data loss and physics-loss
-    weights (:math:`\lambda_{gw}`, :math:`\lambda_{c}`).
+  weights (:math:`\lambda_{gw}`, :math:`\lambda_{c}`).
 * Train the model and interpret the multi-component loss in the
-    training log.
+  training log.
 * Visualize the forecast results against the true values.
 
 Let's begin!
@@ -41,7 +41,7 @@ installed.
 
    pip install fusionlab-learn matplotlib
 
----
+
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -311,11 +311,11 @@ Congratulations! You have successfully trained a hybrid
 physics-data model. In this exercise, you have learned to:
 
 * Create a complex dataset suitable for a hybrid model that
-    requires both feature and coordinate inputs.
+  requires both feature and coordinate inputs.
 * Structure the data into the dictionary format required by
-    ``TransFlowSubsNet``.
+  ``TransFlowSubsNet``.
 * Compile the model with a composite loss function, balancing data
-    fidelity and physical consistency using loss weights.
+  fidelity and physical consistency using loss weights.
 * Train the model and interpret its multi-component loss log.
 
 This workflow is a powerful paradigm for building more robust and

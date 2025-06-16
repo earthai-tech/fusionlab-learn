@@ -231,7 +231,7 @@ of subsidence and groundwater flow, handled by ``PIHALNet``) from the
 
 **Comparison Summary**
 
-.. table:: Comparison of PiHALNet Model Versions
+.. list-table:: Comparison of PiHALNet Model Versions
    :widths: 20 40 40
    :header-rows: 1
 
@@ -240,20 +240,28 @@ of subsidence and groundwater flow, handled by ``PIHALNet``) from the
      - `PIHALNet` (Modern, `BaseAttentive`-based)
    * - **Base Class**
      - Inherits directly from `tf.keras.Model`.
-     - Inherits from the powerful and modular :class:`~fusionlab.nn.models.BaseAttentive` class.
+     - Inherits from the powerful and modular
+       :class:`~fusionlab.nn.models.BaseAttentive` class.
    * - **Core Architecture**
-     - Data-driven components are implemented internally and are specific to this class.
-     - Leverages the full, tested, and highly-configurable `BaseAttentive` engine.
+     - Data-driven components are implemented internally and are
+       specific to this class.
+     - Leverages the full, tested, and highly-configurable
+       `BaseAttentive` engine.
    * - **Configuration**
-     - Primarily configured via a long list of individual ``__init__`` parameters.
-     - Uses the modern ``architecture_config`` dictionary for clear, flexible control over internal structure.
+     - Primarily configured via a long list of individual ``__init__``
+       parameters.
+     - Uses the modern ``architecture_config`` dictionary for clear,
+       flexible control over internal structure.
    * - **Attention Mechanism**
-     - The sequence of attention layers is largely hardcoded within the `call` method.
-     - The decoder's attention stack is fully configurable via the ``decoder_attention_stack`` key in the config.
+     - The sequence of attention layers is largely hardcoded within the
+       `call` method.
+     - The decoder's attention stack is fully configurable via the
+       ``decoder_attention_stack`` key in the config.
    * - **Feature Selection**
      - Control over VSNs is a simple boolean flag (`use_vsn`).
-     - Controlled via the ``feature_processing`` key, allowing easy switching between `'vsn'` and `'dense'`.
-
+     - Controlled via the ``feature_processing`` key, allowing easy
+       switching between `'vsn'` and `'dense'`.
+       
 For all new projects, the modern, ``BaseAttentive``-based **PIHALNet**
 is the recommended choice due to its modularity,
 configurability, and alignment with the latest architectural patterns

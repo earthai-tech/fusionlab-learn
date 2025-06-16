@@ -32,7 +32,7 @@ from ..compat.sklearn import Interval, StrOptions, validate_params
 from ..core.array_manager import smart_ts_detector
 from ..core.checks import exist_features, validate_ratio
 from ..core.checks import is_in_if, check_params
-from ..core.handlers import columns_manager
+from ..core.handlers import _get_valid_kwargs, columns_manager
 from ..core.io import to_frame_if
 from ..utils.base_utils import validate_target_in, select_features
 from ..utils.deps_utils import ensure_pkg
@@ -1723,6 +1723,7 @@ def visual_inspection(
 
     # Plot 1: Original Time Series
     plot_idx = 0
+    kwargs = _get_valid_kwargs(axes[plot_idx].plot, kwargs)
     axes[plot_idx].plot(
         df.index,
         ts,
@@ -3253,6 +3254,7 @@ def ts_corr_analysis(
     # ACF/PACF placeholders
     acf_values = None
     pacf_values = None
+    ax_cross_corr =None
 
     # Step 5: Plot ACF/PACF if requested.
     if view_acf_pacf:

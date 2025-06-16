@@ -232,6 +232,13 @@ alongside two predicted quantiles.
        'subsidence_q90': np.random.randn(n_points_per_year * 2) * 1.2,
    }
    df_yearly = pd.DataFrame(data)
+   
+   # 2. add the `sample_idx` column (one id per row here; adjust as needed)
+   df_yearly["sample_idx"] = np.arange(len(df_yearly))
+   # ── or, if you have repeated measurements per point:
+   # df_yearly["sample_idx"] = (df_yearly["coord_x"].round(3).astype(str)
+   #                            + "_" +
+   #                            df_yearly["coord_y"].round(3).astype(str))
 
    # 2. Generate the plot
    forecast_view(
@@ -243,6 +250,8 @@ alongside two predicted quantiles.
        # Specify which years and quantiles to visualize
        view_years=[2023, 2024],
        view_quantiles=[0.1, 0.9],
+       cmap ='seismic', 
+       s=100, 
        cbar='uniform'
    )
 
@@ -312,7 +321,8 @@ comparison.
        kind="spatial",
        x="longitude",
        y="latitude",
-       max_cols=1
+       max_cols=1, 
+       s=100,
    )
 
 **Expected Output:**

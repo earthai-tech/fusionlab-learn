@@ -13,9 +13,6 @@ the specialized models within the library.
 This guide covers the primary utilities for plotting training history
 and visualizing the outputs of physics-informed models.
 
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 Training History Visualization (`plot_history_in`)
 ==================================================

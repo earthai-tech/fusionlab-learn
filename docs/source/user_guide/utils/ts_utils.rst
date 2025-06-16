@@ -39,7 +39,7 @@ specific years, months, days, weeks).
     Conceptually:
 
     .. math::
-       filtered\_df = df[\text{format}(dt_{col}).isin(\text{eval\_periods})]
+       \text{filtered}_df = df[\text{format}(dt_{col}).isin(\text{eval}_{periods})]
 
     where :math:`\text{format}` depends on the detected granularity.
 
@@ -139,23 +139,25 @@ cross-validation splits. This prevents lookahead bias.
 
 Takes a DataFrame `df` and parameters controlling the split type.
 
-* **`split_type='simple'`**: Performs a single chronological split.
-    * **Date-Based:** Splits using `train_start`/`train_end` dates.
-    * **Ratio-Based:** Splits using `test_ratio`, taking the last
-      fraction as the test set. Conceptually, splits at
-      :math:`k = N \times (1 - \text{test_ratio})`:
+* **split_type='simple'**: Performs a single chronological split.
 
-      .. math::
-         \text{Train} = \{X_t | t \le k \}, \quad \text{Test} = \{X_t | t > k \}
+  * **Date-Based:** Splits using `train_start`/`train_end` dates.
+  * **Ratio-Based:** Splits using `test_ratio`, taking the last
+    fraction as the test set. Conceptually, splits at
+    :math:`k = N \times (1 - \text{test_ratio})`:
 
-    * Returns `(train_df, test_df)`.
+    .. math::
+       \text{Train} = \{X_t | t \le k \}, \quad \text{Test} = \{X_t | t > k \}
 
-* **`split_type='cv'`**: Creates time series cross-validation splits
-    using :class:`sklearn.model_selection.TimeSeriesSplit`.
-    * Generates `n_splits` pairs of `(train_indices, test_indices)`.
-    * Uses expanding windows by default.
-    * Supports a `gap` between train and test sets.
-    * Returns a *generator* yielding index pairs.
+  * **Returns** `(train_df, test_df)`.
+
+* **split_type='cv'**: Creates time series cross-validation splits
+  using :class:`sklearn.model_selection.TimeSeriesSplit`.
+    
+  * Generates `n_splits` pairs of `(train_indices, test_indices)`.
+  * Uses expanding windows by default.
+  * Supports a `gap` between train and test sets.
+  * Returns a *generator* yielding index pairs.
 
 **Usage Context:** Essential for evaluating time series models correctly.
 Use `'simple'` for hold-out validation. Use `'cv'` for robust
@@ -234,13 +236,13 @@ series column (`value_col`) using standard statistical methods
 
 Uses one of two methods based on the `method` parameter:
 
-* **`method='zscore'`:** Calculates Z-scores
+* **method='zscore':** Calculates Z-scores
   (:math:`Z_t = (X_t - \mu)/\sigma`). Flags points where
-  :math:`|Z_t| > threshold` (default 3). Assumes approximate normality.
+  :math:`|Z_t| > \text{threshold}` (default 3). Assumes approximate normality.
 
-* **`method='iqr'`:** Uses Interquartile Range (:math:`IQR = Q3 - Q1`).
-  Calculates bounds: Lower = :math:`Q1 - threshold \times IQR`,
-  Upper = :math:`Q3 + threshold \times IQR`. Flags points outside these
+* **method='iqr':** Uses Interquartile Range (:math:`IQR = Q3 - Q1`).
+  Calculates bounds: Lower = :math:`Q1 - \text{threshold} \times IQR`,
+  Upper = :math:`Q3 + \text{threshold} \times IQR`. Flags points outside these
   bounds (default threshold 1.5). More robust to skewed data.
 
 The function adds an ``'is_outlier'`` boolean column. If `drop=True`,
@@ -391,12 +393,14 @@ internally using :func:`trend_analysis`.
 1.  **Trend Detection:** Calls :func:`trend_analysis` to find the
     trend ('upward', 'downward', 'stationary').
 2.  **Transformation:** Based on detected `trend` and specified `ops`:
+
     * `'remove_upward'`, `'remove_downward'`, `'remove_both'`: If trend
       matches, subtracts the fitted OLS linear trend
       :math:`Y'_{t} = Y_t - \hat{Y}_t`.
     * `'detrend'`: If 'non-stationary' detected, applies first-order
       differencing :math:`\nabla Y_t = Y_t - Y_{t-1}`.
     * `'none'`: No transformation.
+    
 3.  **Update:** Modifies the `value_col` in the DataFrame in-place (or
     returns a modified copy depending on implementation details).
 
@@ -506,11 +510,19 @@ the plots if run interactively, but output is not captured here.)*
        show_seasonal=True,
        show_acf=True,
        show_decomposition=True,
-       view=True # Set False to suppress plot display
    )
    print("Visual inspection call complete.")
 
 
+**Expected Output:**
+
+.. figure:: ../../images/ts_visual_inspection.png
+   :alt: Visual Inspection Plot
+   :align: center
+   :width: 90%
+
+   Plot visual panels for time-series analysis including decomposition.
+   
 .. _get_decomposition_method_util:
 
 get_decomposition_method
@@ -522,6 +534,7 @@ decomposition model type ('additive' or 'multiplicative') and a
 basic guess for the seasonal period.
 
 **Functionality:**
+
 1.  Takes DataFrame `df`, `value_col`.
 2.  **Method Inference (`method='auto'`):** Suggests `'multiplicative'`
     if all values > 0, otherwise suggests `'additive'`. Can be
@@ -614,6 +627,14 @@ correct `period` is known. Requires :mod:`statsmodels`.
    print(f"Best method by variance comparison: '{best_method}'")
    # Expected: Often 'additive' for this data, but noise can influence
 
+**Expected Output:**
+
+.. figure:: ../../images/ts_infer_decomposition_method.png
+   :alt: Decomposition Method Inferred
+   :align: center
+   :width: 80%
+
+   Decomposition method inferred.
 
 .. _decompose_ts_util:
 
@@ -632,6 +653,7 @@ and Residual (:math:`R_t`) components using `statsmodels` methods
    'multiplicative' for SDT), `strategy` ('STL' or 'SDT'),
    `seasonal_period`.
 2. Selects Algorithm:
+
    * `'STL'`: Uses `statsmodels.tsa.seasonal.STL` (robust, flexible).
    * `'SDT'`: Uses `statsmodels.tsa.seasonal.seasonal_decompose`
      (classical additive/multiplicative).
@@ -640,6 +662,7 @@ and Residual (:math:`R_t`) components using `statsmodels` methods
    'residual' columns.
 
 **Mathematical Models:**
+
 * Additive: :math:`Y_t = T_t + S_t + R_t`
 * Multiplicative: :math:`Y_t = T_t \times S_t \times R_t`
 
@@ -703,13 +726,14 @@ improving time series stationarity (stabilizing mean/variance).
 
 Applies a transformation to ``value_col`` based on ``method``:
 
-* **`'differencing'`:** Applies differencing of `order` or uses
+* **'differencing':** Applies differencing of `order` or uses
   `seasonal_period`. :math:`\nabla Y_t = Y_t - Y_{t-1}`.
-* **`'log'`:** Applies :math:`\ln(Y_t)` (requires :math:`Y_t > 0`).
-* **`'sqrt'`:** Applies :math:`\sqrt{Y_t}` (requires :math:`Y_t \ge 0`).
+* **'log':** Applies :math:`\ln(Y_t)` (requires :math:`Y_t > 0`).
+* **'sqrt':** Applies :math:`\sqrt{Y_t}` (requires :math:`Y_t \ge 0`).
 * **`'detrending'`:** Removes trend using:
-    * `'linear'`: Subtracts OLS linear fit :math:`Y_t - (\beta_0 + \beta_1 t)`.
-    * `'stl'`: Returns residual component :math:`R_t` from STL decomposition.
+
+  * `'linear'`: Subtracts OLS linear fit :math:`Y_t - (\beta_0 + \beta_1 t)`.
+  * `'stl'`: Returns residual component :math:`R_t` from STL decomposition.
 
 Adds transformed series as ``'<value_col>_transformed'``. Optionally
 drops original (`drop_original`) or plots (`view`).
@@ -761,12 +785,21 @@ variance stabilization. Requires `statsmodels` for STL detrending.
        value_col='Value',
        method='detrending',
        detrend_method='linear',
-       view=False
+       view=True
    )
    print("\n--- Linear Detrending Output ---")
    print(df_detrend[['Value_transformed']].head())
 
 
+**Expected Output:**
+
+.. figure:: ../../images/ts_transform_stationary.png
+   :alt: Transform Stationary
+   :align: center
+   :width: 80%
+
+   Stationary transformed plot.
+   
 .. _ts_corr_analysis_util:
 
 ts_corr_analysis
@@ -778,6 +811,7 @@ autocorrelation (ACF), partial autocorrelation (PACF), and
 cross-correlation with external features.
 
 **Functionality:**
+
 1.  **ACF/PACF:** Optional plots (`view_acf_pacf=True`) using `statsmodels`.
     ACF: :math:`\rho(h) = \frac{Cov(Y_t, Y_{t-h})}{\dots}`.
     Helps identify MA/AR orders for ARIMA.
@@ -814,7 +848,7 @@ identify potential external predictors (cross-correlation). Requires
        value_col='Sales',
        lags=10, # Lags for ACF/PACF calculation (if viewed)
        features=['Promo'], # Check correlation with Promo
-       view_acf_pacf=False, # Suppress ACF/PACF plots
+       view_acf_pacf=True, # False to suppress ACF/PACF plots
        view_cross_corr=False # Suppress cross-corr plot
    )
 
@@ -824,6 +858,15 @@ identify potential external predictors (cross-correlation). Requires
    # Note: ACF/PACF values are not returned, only plotted if view=True
 
 
+**Expected Output:**
+
+.. figure:: ../../images/ts_corr_analysis.png
+   :alt: Time-Series Correlation Analysis
+   :align: center
+   :width: 80%
+
+   Time-Series Correlation Analysis
+   
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
@@ -919,6 +962,7 @@ series columns in a DataFrame. Lag features represent past values and
 are fundamental predictors for many time series models.
 
 **Functionality:**
+
 1. Takes `df`, `value_col`, optional `dt_col`, optional list
    `lag_features`, and list of integer `lags`.
 2. Ensures datetime index (using `ts_validator`).
@@ -1000,20 +1044,23 @@ features or reduce dimensionality using Principal Component Analysis (PCA).
 **Functionality:**
 Takes `df`, optional `target_col`/`exclude_cols`. Operates based on `method`:
 
-* **`method='corr'`:** Removes features highly correlated with others.
-    1. Calculates pairwise Pearson correlation matrix for numeric features.
-    2. Identifies pairs exceeding `corr_threshold`.
-    3. Drops one feature from each highly correlated pair.
-* **`method='pca'`:** Uses Principal Component Analysis.
-    1. Optionally standardizes features (`scale_data=True`). Requires `scikit-learn`.
-    2. Applies `sklearn.decomposition.PCA` to keep `n_components`
-        (either an `int` count or a `float` variance ratio).
-    3. Replaces original features with principal components (PCs).
+* **method='corr':** Removes features highly correlated with others.
 
-    .. math::
-       \text{ExplainedVarianceRatio}(PC_i) = \frac{\lambda_i}{\sum_j \lambda_j}
+  1. Calculates pairwise Pearson correlation matrix for numeric features.
+  2. Identifies pairs exceeding `corr_threshold`.
+  3. Drops one feature from each highly correlated pair.
+  
+* **method='pca':** Uses Principal Component Analysis.
 
-    where :math:`\lambda_i` are eigenvalues.
+  1. Optionally standardizes features (`scale_data=True`). Requires `scikit-learn`.
+  2. Applies `sklearn.decomposition.PCA` to keep `n_components`
+     (either an `int` count or a `float` variance ratio).
+  3. Replaces original features with principal components (PCs).
+
+  .. math::
+     \text{ExplainedVarianceRatio}(PC_i) = \frac{\lambda_i}{\sum_j \lambda_j}
+
+  where :math:`\lambda_i` are eigenvalues.
 
 Returns transformed DataFrame (optionally with target). Can also return
 the fitted PCA model (`return_pca=True`).

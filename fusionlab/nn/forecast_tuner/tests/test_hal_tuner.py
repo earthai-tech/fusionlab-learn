@@ -12,7 +12,7 @@ try:
     import keras_tuner as kt
     import tensorflow as tf
     # Adjust import paths based on your project structure
-    from fusionlab.nn.forecast_tuner.hal_tuner import HALTuner
+    from fusionlab.nn.forecast_tuner._hal_tuner import HALTuner
     from fusionlab.nn.models import HALNet
     from tensorflow.keras.losses import MeanSquaredError
     HAS_KT=True 

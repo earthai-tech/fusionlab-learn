@@ -3255,14 +3255,17 @@ class MultiObjectiveLoss(Loss, NNLearner):
         self,
         quantile_loss_fn,
         anomaly_loss_fn, 
+        anomaly_scores =None, 
         name="MultiObjectiveLoss"
     ):
         super().__init__(name=name)
+        
         self.quantile_loss_fn = quantile_loss_fn
         self.anomaly_loss_fn = anomaly_loss_fn
+        self.anomaly_scores = anomaly_scores 
 
     @tf_autograph.experimental.do_not_convert
-    def call(self, y_true, y_pred, anomaly_scores=None):
+    def call(self, y_true, y_pred):
              
         r"""
         Compute combined quantile and anomaly loss.
@@ -3292,9 +3295,10 @@ class MultiObjectiveLoss(Loss, NNLearner):
             y_true,
             y_pred
         )
-        if anomaly_scores is not None:
+        
+        if self.anomaly_scores  is not None:
             anomaly_loss = self.anomaly_loss_fn(
-                anomaly_scores
+                self.anomaly_scores 
             )
             return quantile_loss + anomaly_loss
         return quantile_loss

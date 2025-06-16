@@ -153,4 +153,4 @@ def test_serialization_and_reloading(default_model_params, collocation_points_di
         pytest.fail(f"Prediction with reloaded model failed: {e}")
 
 if __name__ == '__main__':
-    pytest.main([__file__, '-vv'])
+    pytest.main( [__file__,  "--maxfail=1 ", "--disable-warnings",  "-q"])

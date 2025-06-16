@@ -225,7 +225,9 @@ class KerasDependencies:
             'exp': ('tensorflow', 'exp'), 
             'name_scope': ('tensorflow', 'name_scope'), 
             'random': ('tensorflow', 'random'), 
-            'fill': ('tensorflow', 'fill')
+            'fill': ('tensorflow', 'fill'), 
+            'print': ('tensorflow', 'print'), 
+            'no_op': ('tensorflow', 'no_op')
             
             
         }

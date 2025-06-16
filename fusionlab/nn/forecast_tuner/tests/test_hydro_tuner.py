@@ -8,7 +8,7 @@ from typing import Dict, Any
 try:
     import tensorflow as tf
     from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet
-    from fusionlab.nn.forecast_tuner import HydroTuner
+    from fusionlab.nn.forecast_tuner._hydro_tuner import HydroTuner
     KERAS_BACKEND = True
 except ImportError:
     KERAS_BACKEND = False

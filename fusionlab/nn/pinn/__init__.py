@@ -7,7 +7,8 @@ from .models import (
 )
 
 __all__=[
-    "PiHALNet", "PIHALNet", 
+    "PiHALNet",
+    "PIHALNet", 
     "TransFlowSubsNet", 
     "PiTGWFlow"
    ]

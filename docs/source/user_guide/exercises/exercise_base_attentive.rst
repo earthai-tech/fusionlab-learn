@@ -19,15 +19,15 @@ We will focus on two key aspects:
 **Learning Objectives:**
 
 * Generate a synthetic dataset with static, dynamic past, and
-    known future features.
+  known future features.
 * Use the ``architecture_config`` dictionary to define the model's
-    internal structure.
+  internal structure.
 * Prepare and reshape the data into the three separate input arrays
-    required by ``BaseAttentive``.
+  required by ``BaseAttentive``.
 * Instantiate, compile, and train the model for probabilistic
-    (quantile) forecasting.
+  (quantile) forecasting.
 * Visualize the multi-step forecast results, including the
-    uncertainty bounds.
+  uncertainty bounds.
 
 Let's begin!
 

@@ -35,6 +35,7 @@ from ..utils.forecast_utils import (
     get_step_names 
 )
 from ..utils.generic_utils import ( 
+    _coerce_dt_kw, 
     get_actual_column_name,
     vlog
 )
@@ -710,7 +711,9 @@ def forecast_view(
     figsize: Optional[Tuple[float, float]] = None,
     savefig: Optional[str] = None,
     save_fmts: Union[str, List[str]] = '.png',
-    verbose: int = 1
+    dt_col: Optional[str] = None,
+    verbose: int = 1, 
+    **kws
 ):
     """Generates and displays spatial forecast visualizations.
 
@@ -755,6 +758,9 @@ def forecast_view(
     time_col : str, default 'coord_t'
         The name of the column representing the time dimension in a
         long-format DataFrame. Used by the internal format detector.
+        
+        ..note::
+            'time_col' and 'dt_col' can be used interchangeability. 
 
     max_cols : int or 'auto', default 'auto'
         Controls the number of subplots per row.
@@ -807,7 +813,10 @@ def forecast_view(
     verbose : int, default 1
         Controls the verbosity of logging messages. `0` is silent,
         `1` provides basic info, and higher values provide more detail.
-
+        
+    kws: dict, 
+       Keywords arguments for feature extensions. 
+       
     Returns
     -------
     None
@@ -831,6 +840,11 @@ def forecast_view(
     - Currently, a separate figure is generated for each prefix in
       `value_prefixes`.
     """
+    # canonicalise column name
+    kw = _coerce_dt_kw(
+        dt_col=dt_col,time_col=time_col, _time_default=time_col)
+    time_col = kw.pop("dt_col")        # adopt canonical name
+        
     _spatial_cols = spatial_cols or []
     
     is_q = detect_forecast_type(forecast_df, value_prefixes=value_prefixes)
@@ -951,7 +965,9 @@ def forecast_view(
 
         _plot_forecast_grid(
             fig, axes, df_wide, plot_structure, years_to_plot,
-            quantiles_to_plot, prefix, kind, spatial_cols, plot_kwargs
+            quantiles_to_plot, prefix, kind, spatial_cols, 
+            s = kws.pop('s', 10), 
+            plot_kwargs=plot_kwargs
         )
         
         if cbar == 'uniform' and vmin is not None and vmax is not None:
@@ -2117,7 +2133,7 @@ def _parse_wide_df_columns(
              
     return plot_structure
 
-def _plot_spatial_subplot(ax, df, x_col, y_col, c_col, **kwargs):
+def _plot_spatial_subplot(ax, df, x_col, y_col, c_col, s= 10,  **kwargs):
     """Helper to create a single scatter subplot."""
     if c_col is None or c_col not in df.columns:
         ax.set_title(f"{kwargs.get('title', '')}\n(Data not found)",
@@ -2135,7 +2151,7 @@ def _plot_spatial_subplot(ax, df, x_col, y_col, c_col, **kwargs):
     scatter = ax.scatter(
         plot_df[x_col], plot_df[y_col], c=plot_df[c_col],
         cmap=kwargs.get('cmap'), vmin=kwargs.get('vmin'),
-        vmax=kwargs.get('vmax'), s=10,
+        vmax=kwargs.get('vmax'), s=s,
         edgecolors='k', linewidths=0.1, alpha=0.8
     )
     ax.set_title(kwargs.get('title', ''), fontsize=10)
@@ -2170,7 +2186,7 @@ def _plot_temporal_subplot(ax, df, value_col, title, **kwargs):
 
 def _plot_forecast_grid(
     fig, axes, df_wide, plot_structure, years_to_plot,
-    quantiles_to_plot, prefix, kind, spatial_cols, plot_kwargs
+    quantiles_to_plot, prefix, kind, spatial_cols, s, plot_kwargs
 ):
     # Check if spatial coordinates are available for plotting.
     has_spatial_coords = all(
@@ -2208,7 +2224,7 @@ def _plot_forecast_grid(
             if has_spatial_coords:
                 _plot_spatial_subplot(
                     ax_row[col_idx], df_wide, *spatial_cols,
-                    actual_col, **plot_kwargs
+                    actual_col, s =s, **plot_kwargs
                 )
             else:
                 _plot_temporal_subplot(
@@ -2234,7 +2250,7 @@ def _plot_forecast_grid(
             if has_spatial_coords:
                 _plot_spatial_subplot(
                     ax_row[col_idx], df_wide, *spatial_cols,
-                    pred_col, **plot_kwargs
+                    pred_col, s=s,  **plot_kwargs
                 )
             else:
                 _plot_temporal_subplot(

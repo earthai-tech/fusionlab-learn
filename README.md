@@ -4,65 +4,48 @@
 
 -----------------------------------------------------
 
-<h1 align="center">Igniting Next-Generation Fusion Models</h1>
+<h1 align="center">fusionlab-learn</h1>
 
-<p align="center"><em>🔥🧪 A Modular Library for Temporal Fusion Transformer (TFT) Variants &amp; Beyond</em></p>
+<p align="center"><em>🔥🧪 A Research-Oriented Library for Advanced Time Series Forecasting with Hybrid, Transformer, and Physics-Informed Models</em></p>
 
+<p align="center">
+  <a href="https://pypi.org/project/fusionlab-learn/"><img src="https://img.shields.io/pypi/v/fusionlab-learn" alt="PyPI Version"></a>
+  <a href="https://fusion-lab.readthedocs.io/en/latest/?badge=latest"><img src="https://readthedocs.org/projects/fusion-lab/badge/?version=latest" alt="Documentation Status"></a>
+  <a href="https://github.com/earthai-tech/fusionlab/actions"><img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/.github%2Fworkflows%2Fpython-package-conda.yml" alt="Build Status"></a>
+  <a href="https://www.python.org/downloads/release/python-390/"><img src="https://img.shields.io/badge/Python-3.9%2B-blue" alt="Python Version"></a>
+  <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE"><img src="https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&color=cyan" alt="License"></a>
+</p>
 
-![PyPI - Version](https://img.shields.io/pypi/v/fusionlab-learn)
-[![Documentation Status](https://readthedocs.org/projects/fusion-lab/badge/?version=latest)](https://fusion-lab.readthedocs.io/en/latest/?badge=latest)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/.github%2Fworkflows%2Fpython-package-conda.yml)
-[![Python Version](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
-![GitHub License](https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&logo=BSD-3-Clause&color=cyan)
-![GitHub commits since latest release](https://img.shields.io/github/commits-since/earthai-tech/fusionlab/latest?color=purple)
+**fusionlab-learn** is a flexible and extensible Python framework for building and experimenting with state-of-the-art time series models. It provides robust, research-grade implementations of advanced architectures, from powerful data-driven forecasters to novel Physics-Informed Neural Networks (PINNs).
 
-*Extend, experiment, and fuse time-series predictions with state-of-the-art architectures.*
-
----
-
-<!-- [![Build Status](https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/main.yml?branch=main)](https://github.com/earthai-tech/fusionlab/actions) -->
-
-**FusionLab** provides a flexible and extensible framework in Python
-for working with advanced time-series forecasting models. It focuses
-on the **Temporal Fusion Transformer (TFT)** architecture and its
-powerful extensions like the **Extreme Temporal Fusion Transformer (XTFT)**,
-offering reusable components and pre-configured models.
-
-Whether you're a researcher exploring novel architectures or a
-practitioner building robust forecasting systems, FusionLab provides
-tools built on top of **TensorFlow/Keras** to accelerate your work.
+Whether you're a researcher exploring new architectures or a practitioner building production-grade forecasting systems, `fusionlab-learn` provides tools built on **TensorFlow/Keras** to accelerate your work.
 
 ---
 
 ## ✨ Key Features
 
-### 🔧 **Modular Architecture**
-- **Reusable Neural Blocks** for custom model building:
-  - Gated Residual Networks (GRNs)
-  - Variable Selection Networks (VSNs)
-  - Specialized Attention Layers (Temporal, Cross, Hierarchical, Memory-Augmented)
-  - Multi-Scale LSTMs, Fusion Mechanisms
-  - Learned Normalization & Positional Encoding
+### 🏛️ A Spectrum of Advanced Architectures
+The library provides expert implementations across three major families of forecasting models.
 
-### 🧠 **Implemented Architectures**
-- `TemporalFusionTransformer` – Standard TFT model
-- `DummyTFT` – Point forecast variant with structured inputs
-- `XTFT` – *Extreme TFT* with advanced attention and anomaly tools
-- `SuperXTFT` – Experimental, VSN-enhanced 
+* **[Hybrid Models](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/hybrid/index.html):** Architectures like `HALNet` and `XTFT` that fuse the sequential processing power of LSTMs with the long-range context modeling of attention mechanisms.
+* **[Pure Transformers](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/transformers/index.html):** Implementations of the standard "Attention Is All You Need" encoder-decoder architecture, adapted for time series forecasting.
+* **[Physics-Informed Models (PINNs)](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/pinn/index.html):** State-of-the-art hybrid models like `TransFlowSubsNet` that integrate physical laws (PDEs) directly into the training process to produce physically consistent and robust forecasts.
 
-### 🚨 **Anomaly Detection**
-- Integrated within `XTFT`
-- Based on features or predictions
-- Supports loss weighting and anomaly-aware learning
+### 🧩 Modular & Reusable Components
+Build custom models with a rich set of well-tested neural network blocks, including:
+* [Gated Residual Networks (GRNs) & Variable Selection Networks (VSNs)](https://fusion-lab.readthedocs.io/en/latest/user_guide/components.html)
+* Specialized Attention Layers: `CrossAttention`, `HierarchicalAttention`, and `MemoryAugmentedAttention`
+* [Multi-Scale LSTMs](https://fusion-lab.readthedocs.io/en/latest/user_guide/components.html) for capturing temporal patterns at various resolutions.
 
-### 🛠️ **Utility Functions**
-- Time series tools: `ts_utils`, `create_sequences`, `reshape_xtft_data`
-- Forecast prep and visualization: `prepare_spatial_future_data`, `generate_forecast`, `visualize_forecasts`
-- Hyperparameter tuning: `forecast_tuner` (via Keras Tuner)
+### ⚛️ Powerful PINN Capabilities
+-   Solve coupled-physics problems with models like **[TransFlowSubsNet](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/pinn/transflow_subnet.html)**.
+-   Perform **inverse modeling** by configuring physical coefficients (`K`, `Ss`, `C`) as learnable parameters.
+-   Utilize specialized **[PINN data utilities](https://fusion-lab.readthedocs.io/en/latest/user_guide/utils/pinn_utils.html)** for the unique sequence and coordinate preparation required by these models.
 
-### ⚙️ **Framework**
-- Built on **TensorFlow/Keras**
-- **Planned support** for PyTorch and JAX in future updates
+### 🛠️ Unified Hyperparameter Tuning
+-   Leverage the **[HydroTuner](https://fusion-lab.readthedocs.io/en/latest/user_guide/forecast_tuner/hydro_tuner_guide.html)** to automatically find optimal hyperparameters for all hydrogeological PINN models.
+-   Use dedicated tuners for data-driven models like `HALNet` and `XTFT`.
+-   The tuner's `.create()` factory method automatically infers data dimensions, making setup fast and easy.
 
 ---
 
@@ -72,23 +55,18 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 
 1.  **Prerequisites:**
     * Python 3.9+
-    * TensorFlow 2.x (See [TensorFlow Installation Guide](https://www.tensorflow.org/install))
+    * [TensorFlow >=2.15](https://www.tensorflow.org/install)
 
 2.  **Install from PyPI (Recommended):**
     ```bash
     pip install fusionlab-learn
     ```
-    *(TensorFlow might need separate installation depending on your system)*
 
 3.  **Install from Source (for Development):**
     ```bash
-
     git clone [https://github.com/earthai-tech/fusionlab-learn.git](https://github.com/earthai-tech/fusionlab-learn.git)
     cd fusionlab-learn
-
     pip install -e .
-    # Optional: Install dev dependencies
-    # pip install -e .[dev]
     ```
 
 ### Quick Example
@@ -96,35 +74,34 @@ tools built on top of **TensorFlow/Keras** to accelerate your work.
 ```python
 import numpy as np
 import tensorflow as tf
-from fusionlab.nn import TemporalFusionTransformer # Or XTFT etc.
+from fusionlab.nn.models import HALNet # Or any other model
 
 # --- 1. Prepare Dummy Data ---
 # (Replace with your actual preprocessed & sequenced data)
 B, T, D_dyn = 16, 10, 3  # Batch, TimeSteps, DynamicFeatures
-D_stat = 2              # StaticFeatures
-D_fut = 1               # FutureFeatures
-H = 5                   # Forecast Horizon
+D_stat = 2               # StaticFeatures
+D_fut = 1                # FutureFeatures
+H = 5                    # Forecast Horizon
 
-# Model expects list: [Static, Dynamic, Future] (if available)
+# Model expects list: [Static, Dynamic, Future]
 dummy_static = np.random.rand(B, D_stat).astype(np.float32)
 dummy_dynamic = np.random.rand(B, T, D_dyn).astype(np.float32)
-dummy_future = np.random.rand(B, T + H, D_fut).astype(np.float32) # Needs horizon length
-dummy_target = np.random.rand(B, H, 1).astype(np.float32) # Point forecast
+# For 'tft_like' mode, future input spans past + horizon
+dummy_future = np.random.rand(B, T + H, D_fut).astype(np.float32)
+dummy_target = np.random.rand(B, H, 1).astype(np.float32)
 
-# Prepare inputs list (adjust if not using all input types)
-# Note: Real data prep involves tools like reshape_xtft_data
 model_inputs = [dummy_static, dummy_dynamic, dummy_future]
 
 # --- 2. Instantiate Model ---
-# (Using simple TFT for this example)
-model = TemporalFusionTransformer(
+model = HALNet(
     static_input_dim=D_stat,
     dynamic_input_dim=D_dyn,
     future_input_dim=D_fut,
     forecast_horizon=H,
+    max_window_size=T,
+    output_dim=1,
     hidden_units=16, # Smaller units for quick example
     num_heads=2
-    # quantiles=None # for point forecast (default)
 )
 
 # --- 3. Compile & Train ---
@@ -134,13 +111,12 @@ model.fit(model_inputs, dummy_target, epochs=2, batch_size=4, verbose=0)
 print("Training finished.")
 
 # --- 4. Predict ---
-# (Use appropriately prepared inputs for prediction)
-# For simplicity, predict on same inputs (not recommended practice)
 print("Making predictions...")
 predictions = model.predict(model_inputs)
 print("Prediction shape:", predictions.shape)
 # Expected: (16, 5, 1) -> (Batch, Horizon, NumOutputs)
-````
+
+```
 
 *(See the* [*Quickstart Guide*](https://fusion-lab.readthedocs.io/en/latest/quickstart.html) *for a more detailed walkthrough.)*
 

@@ -17,15 +17,15 @@ advanced forecasting model.
 **Learning Objectives:**
 
 * Generate synthetic multi-item time series data with distinct
-    static, dynamic, and future features.
+  static, dynamic, and future features.
 * Understand how to define feature roles and prepare the data
-    for a model with three separate input streams.
+  for a model with three separate input streams.
 * Utilize a data preparation utility (like
-    :func:`~fusionlab.nn.utils.reshape_xtft_data`) to create the
-    three required input arrays.
+  :func:`~fusionlab.nn.utils.reshape_xtft_data`) to create the
+  three required input arrays.
 * Correctly structure the input list ``[static_features,
-    dynamic_features, future_features]`` for training and prediction
-    with ``HALNet``.
+  dynamic_features, future_features]`` for training and prediction
+  with ``HALNet``.
 * Define, compile, and train the ``HALNet`` model.
 * Make predictions and visualize the results.
 
@@ -41,7 +41,7 @@ installed. For visualizations, `matplotlib` is also needed.
 
    pip install fusionlab-learn matplotlib scikit-learn
 
----
+
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~

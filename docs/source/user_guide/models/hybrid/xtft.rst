@@ -32,7 +32,7 @@ This guide details two models in this family:
 
 XTFT (Extreme Temporal Fusion Transformer)
 --------------------------------------------
-:API Reference: :class:`~fusionlab.nn.transformers.XTFT`
+:API Reference: :class:`~fusionlab.nn.models.XTFT`
 
 The ``XTFT`` model represents a significant evolution of the Temporal
 Fusion Transformer, designed to tackle highly complex time series
@@ -86,8 +86,8 @@ learning, multi-scale analysis, and integrated anomaly detection.
   to produce multi-horizon forecasts for specified ``quantiles``
   (or point forecasts if ``quantiles`` is ``None``).
 
-**When to Use:**
-
+When to Use XTFT
+~~~~~~~~~~~~~~~~~~
 XTFT is designed for challenging forecasting problems where:
 
 * Underlying temporal dynamics are highly complex and potentially
@@ -176,7 +176,7 @@ and the documentation of individual components (linked above).
 
    import numpy as np
    # Assuming XTFT is importable
-   from fusionlab.nn.transformers import XTFT
+   from fusionlab.nn.models import XTFT
 
    # Example Configuration
    static_dim, dynamic_dim, future_dim = 5, 7, 3
@@ -231,123 +231,149 @@ and the documentation of individual components (linked above).
 
 .. _superxtft_model:
 
-SuperXTFT
------------
-:API Reference: :class:`~fusionlab.nn.transformers.SuperXTFT`
+SuperXTFT: An Enhanced Hybrid Transformer
+------------------------------------------
+:API Reference: :class:`~fusionlab.nn.models.SuperXTFT`
 
-.. warning::
-   ``SuperXTFT`` is currently considered **experimental** and may be
-   subject to significant changes or removal in future versions.
-   It is **not recommended for production use** at this time. Please
-   use the standard :class:`~fusionlab.nn.XTFT` for stable
-   deployments.
+The ``SuperXTFT`` is the most advanced and powerful implementation in the
+TFT family available in ``fusionlab-learn``. It inherits the entire
+robust feature set of the standard :class:`~fusionlab.nn.transformers.XTFT`
+and enhances it with two significant architectural modifications, designed
+to maximize representation learning and predictive performance.
 
-The ``SuperXTFT`` class inherits from :class:`~fusionlab.nn.XTFT` and
-introduces specific architectural modifications aimed at potentially
-enhancing feature representation and the internal processing flow.
+It should be considered the expert choice for tackling the most complex
+forecasting problems where fine-grained feature selection and deep
+contextual processing are paramount.
 
-**Key Features & Differences (from XTFT):**
+Key Architectural Enhancements (from XTFT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``SuperXTFT`` improves upon the standard ``XTFT`` architecture in two
+primary ways:
 
-* **Inherits XTFT Features:** Includes all the advanced components
-  and capabilities of the base ``XTFT`` model (Multi-Scale LSTM,
-  advanced attention, anomaly detection capabilities, etc.).
-* **Adds Input Variable Selection Networks (VSNs):** Unlike ``XTFT``
-  which processes inputs via embeddings/normalization first,
-  ``SuperXTFT`` re-introduces VSNs applied directly to the *raw*
-  static, dynamic (past), and future inputs at the beginning of
-  the forward pass. The outputs of these VSNs (selected/weighted
-  features) are then fed into the subsequent stages inherited from
-  the XTFT architecture.
-* **Adds Post-Processing GRNs:** Integrates dedicated
-  :class:`~fusionlab.nn.components.GatedResidualNetwork` (GRN)
-  layers immediately following several key attention/decoder
-  components (Hierarchical Attention, Cross Attention,
-  Memory-Augmented Attention, Multi-Decoder). These apply further
-  non-linear processing to the outputs of these specific stages.
+**1. Integrated Input Variable Selection (VSNs)**
 
-**When to Use:**
+Unlike the standard ``XTFT`` which processes inputs directly into
+embeddings, ``SuperXTFT`` first passes all three raw input streams
+(static, dynamic past, and future) through their own dedicated
+:class:`~fusionlab.nn.components.VariableSelectionNetwork` (VSN) layers.
 
-* **Currently:** Primarily for internal development, testing, or
-  research purposes within the ``fusionlab`` project itself due to
-  its experimental status.
-* **Future:** Intended as a potentially enhanced alternative to
-  ``XTFT`` once development stabilizes.
-* **Avoid for production or general use until officially recommended.**
+.. math::
+   \mathbf{s}' = VSN_{static}(\mathbf{s}) \\
+   \mathbf{x}'_t = VSN_{dynamic}(\mathbf{x}_t) \\
+   \mathbf{z}'_t = VSN_{future}(\mathbf{z}_t)
 
-Formulation
-~~~~~~~~~~~~~
+**Benefit:** This allows the model to learn the relative importance
+of each input feature *at the very beginning* of the pipeline, before
+they are mixed and processed by downstream components. This can lead to
+more robust and interpretable feature representations, especially in
+datasets with a large number of potentially redundant or noisy features.
+The selected features (:math:`\mathbf{s}', \mathbf{x}'_t, \mathbf{z}'_t`)
+are then fed into the rest of the standard XTFT architecture.
 
-``SuperXTFT`` modifies the data flow of the base ``XTFT`` model in
-two main ways:
+**2. Post-Component Gated Processing (GRNs)**
 
-1.  **Input Variable Selection:**
-    Inputs (:math:`s, x_t, z_t`) are first processed through dedicated
-    :class:`~fusionlab.nn.components.VariableSelectionNetwork` layers
-    *before* subsequent XTFT components like normalization or embedding.
+``SuperXTFT`` strategically inserts additional
+:class:`~fusionlab.nn.components.GatedResidualNetwork` (GRN) layers
+immediately after each major attention and decoder block. A GRN is
+applied to the outputs of:
 
-    .. math::
-       s' = VSN_{static}(s) \\
-       x'_t = VSN_{dynamic}(x_t) \\
-       z'_t = VSN_{future}(z_t)
+* Hierarchical Attention
+* Cross-Attention
+* Memory-Augmented Attention
+* The Multi-Decoder layer
 
-    These *selected* features (:math:`s', x'_t, z'_t`) then replace the
-    original inputs in the downstream XTFT pipeline (e.g., :math:`s'`
-    goes to Learned Normalization, :math:`x'_t` / :math:`z'_t` go to
-    MultiModal Embedding).
+.. math::
+   Output'_{component} = GRN_{component}(Output_{component})
 
-2.  **Integrated Post-Processing GRNs:**
-    After specific intermediate outputs (:math:`Attn_{...}` or
-    :math:`Dec_{out}`) are computed within the main XTFT flow,
-    ``SuperXTFT`` applies an additional GRN transformation before the
-    result is used in subsequent steps.
+**Benefit:** This adds another layer of deep, non-linear processing
+and feature gating at critical junctures within the architecture. It
+allows the model to further refine the contextual representations
+generated by each attention mechanism before they are fused together,
+potentially capturing more complex and subtle interactions.
 
-    .. math::
-       Output'_{component} = GRN_{component}(Output_{component})
+When to Use SuperXTFT 
+~~~~~~~~~~~~~~~~~~~~~~~~
+``SuperXTFT`` is the recommended choice for challenging forecasting
+problems where:
 
-    This adds extra non-linear processing within the architecture.
+* You are working with a **large number of input features** of
+  varying importance and want the model to learn which ones to
+  prioritize (leveraging the input VSNs).
+* You hypothesize that there are **complex, non-linear interactions**
+  between the different contexts (static, temporal, memory) that
+  could benefit from the additional deep processing offered by the
+  post-component GRNs.
+* You are aiming for **maximum predictive performance** and have the
+  computational resources for a deeper, more parameter-rich model.
+* For standard use cases, the :class:`~fusionlab.nn.transformers.XTFT`
+  remains a powerful and efficient baseline.
 
-These modifications aim to potentially improve feature selection and
-refine representations, but require further validation.
+Code Example
+~~~~~~~~~~~~
 
-**Code Example (Instantiation Only):**
-
-*(Note: Due to the experimental status, only instantiation is shown.
-Use with caution.)*
+The instantiation of ``SuperXTFT`` is identical to ``XTFT``. The
+additional VSN and GRN layers are created and integrated automatically
+within the model's constructor and forward pass.
 
 .. code-block:: python
    :linenos:
 
    import numpy as np
-   # Assuming SuperXTFT is importable
-   from fusionlab.nn.transformers import SuperXTFT
+   from fusionlab.nn.models import SuperXTFT
 
-   # Example Configuration (must provide all required dims)
+   # Configuration is the same as for XTFT
    static_dim, dynamic_dim, future_dim = 5, 7, 3
    horizon = 12
    output_dim = 1
 
-   # Instantiate SuperXTFT
-   # Uses the same parameters as XTFT
-   try:
-       super_xtft_model = SuperXTFT(
-           static_input_dim=static_dim,
-           dynamic_input_dim=dynamic_dim,
-           future_input_dim=future_dim,
-           forecast_horizon=horizon,
-           output_dim=output_dim,
-           hidden_units=32, # Example other params
-           num_heads=4
-       )
-       print("SuperXTFT model instantiated successfully.")
-       # super_xtft_model.summary() # Can view summary after building
-   except Exception as e:
-       print(f"Error instantiating SuperXTFT: {e}")
+   # Instantiate the SuperXTFT model
+   super_xtft_model = SuperXTFT(
+       static_input_dim=static_dim,
+       dynamic_input_dim=dynamic_dim,
+       future_input_dim=future_dim,
+       forecast_horizon=horizon,
+       output_dim=output_dim,
+       # Other architectural parameters
+       hidden_units=32,
+       num_heads=4,
+       lstm_units=32,
+       attention_units=16
+   )
 
+   print("SuperXTFT model instantiated successfully.")
+   # You can view the deeper architecture with .summary() after building
+   # super_xtft_model.summary(line_length=110)
+
+
+.. note::
+
+   ``SuperXTFT`` is a production-ready model and represents the most
+   powerful, feature-rich version in the TFT family.
+
+   It also serves as a development platform where new, cutting-edge
+   features may be introduced first. Future releases might include
+   experimental options aimed at lightening the architecture or
+   improving computational efficiency. While any such new features may be
+   subject to change, the core ``SuperXTFT`` architecture is stable,
+   has been thoroughly tested, and can be confidently used in
+   production environments where maximum performance is desired.
 
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
+Next Steps
+----------
+
+.. note::
+
+   You now have a deep understanding of the theory and architecture
+   of the ``XTFT`` and ``SuperXTFT`` models. To apply these concepts,
+   you can proceed to the hands-on exercises:
+
+   * :doc:`../../exercises/exercise_advanced_xtft`
+   * :doc:`../../exercises/exercise_experimental_super_tft`
+   
 
 .. rubric:: References
 
@@ -355,14 +381,3 @@ Use with caution.)*
    Temporal fusion transformers for interpretable multi-horizon
    time series forecasting. *International Journal of Forecasting*,
    37(4), 1748-1764. (Also arXiv:1912.09363)
-
-Next Steps
-----------
-
-.. note::
-
-   You now clearly understand the theory and the complete workflow for
-   ``XTFT`` and ``SuperXTFT``, you may go ahead to the exercises for more hands-on practice:
-   
-   * :doc:`../../exercises/exercise_experimental_super_tft` 
-   * :doc:`../../exercises/exercise_advanced_xtft`

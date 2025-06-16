@@ -352,8 +352,8 @@ to call ``.compile()`` to set up the optimizer.
    learned_k = [v for v in pinn_model.trainable_variables if 'param_K' in v.name]
    if learned_k:
        # The model learns log(K), so we take the exp()
-       final_k_value = tf.exp(learned_k[0]).numpy()
-       print(f"Final Learned K: {final_k_value:.4f}")
+       final_k_value = tf.exp(learned_k[0]).numpy().mean()
+       print(f"Final Learned K: {final_k_value.mean():.4f}")
 
 **Step 4: Visualize Training History**
 
@@ -415,7 +415,7 @@ specific moment in time.
 
    # 4. Plot the contour of the solution
    plt.figure(figsize=(9, 7))
-   contour = plt.contourf(X, Y, h_pred_grid, 100, cmap='viridis')
+   contour = plt.contourf(X, Y, h_pred_grid, 100, cmap='jet_r')
    plt.colorbar(contour, label='Hydraulic Head (h)')
    plt.title(f'Learned Hydraulic Head Solution at t = {t_slice}')
    plt.xlabel('x-coordinate')

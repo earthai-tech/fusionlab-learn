@@ -107,7 +107,7 @@ metadata about the columns.
    print(df_raw.info())
 
 **Expected Output 2.2:**
-   *(Details will match the `zhongshan_2000.csv` structure)*
+  *(Details will match the `zhongshan_2000.csv` structure)*
 
 .. code-block:: text
 
@@ -393,7 +393,7 @@ model.
    print(df_final_scaled[cols_to_show].head())
 
 **Expected Output 6.6:**
-   *(Column lists and sample data will reflect the processing)*
+  *(Column lists and sample data will reflect the processing)*
 
 .. code-block:: text
 

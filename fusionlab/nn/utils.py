@@ -98,8 +98,13 @@ if KERAS_BACKEND:
     tf_control_dependencies= KERAS_DEPS.control_dependencies
     tf_identity =KERAS_DEPS.identity
     tf_greater_equal =KERAS_DEPS.greater_equal
+    tf_logical_and =KERAS_DEPS.logical_and 
+    tf_cond = KERAS_DEPS.cond 
+    tf_stack =KERAS_DEPS.stack 
+    tf_no_op = KERAS_DEPS.no_op
+    tf_print = KERAS_DEPS.print 
     
-    from ..compat.tf import optional_tf_function 
+    from ..compat.tf import optional_tf_function # Noqa E:404
 
 else:
     class Tensor: pass
@@ -1341,7 +1346,7 @@ def prepare_model_inputs(
     'forecast_horizon': [Interval(Integral, 0, None, closed='left'), None], 
     'model_type': [StrOptions({'strict', 'flexible'})]
     })
-@optional_tf_function 
+# @optional_tf_function 
 def prepare_model_inputs_in(
     dynamic_input: Union[np.ndarray, Tensor],
     static_input: Optional[Union[np.ndarray, Tensor]] = None,
@@ -1406,13 +1411,23 @@ def prepare_model_inputs_in(
     with tf_control_dependencies([assert_op_dyn_rank]):
         processed_dynamic_input = tf_identity(processed_dynamic_input)
 
-    if tf_rank(processed_dynamic_input) == 2 and verbose > 0:
+    # if tf_rank(processed_dynamic_input) == 2 and verbose > 0:
+    #     logger.warning(
+    #         "dynamic_input was 2D. For sequence models, it's "
+    #         "typically expected to be 3D (Batch, TimeSteps, Features). "
+    #         "Proceeding, but ensure this is intended."
+    #     )
+    
+    # static: None or an int
+    static_rank = processed_dynamic_input.shape.rank
+    
+    if static_rank == 2 and verbose > 0:
         logger.warning(
             "dynamic_input was 2D. For sequence models, it's "
             "typically expected to be 3D (Batch, TimeSteps, Features). "
             "Proceeding, but ensure this is intended."
         )
-
+    
     if processed_static_input is not None:
         rank_static = tf_rank(processed_static_input)
         assert_op_stat_rank = tf_Assert(
@@ -1433,78 +1448,107 @@ def prepare_model_inputs_in(
         with tf_control_dependencies([assert_op_fut_rank]):
             processed_future_input = tf_identity(processed_future_input)
 
-    shape_dynamic = tf_shape(processed_dynamic_input)
-    batch_size_dyn = shape_dynamic[0]
-    past_time_steps = shape_dynamic[1] if \
-        tf_rank(processed_dynamic_input) == 3 else \
-            tf_constant(1, dtype=tf_int32)
-    
-    if verbose >= 2:
-        logger.debug(
-             f"prepare_model_inputs: Derived batch_size={batch_size_dyn}, "
-             f"past_time_steps={past_time_steps}"
-             )
 
-    s_to_pass: Optional[Tensor] = processed_static_input
+    # XXX TO OPTIMIZE with tf.function : Graph compatible 
+    # ------------------ START: GRAPH-COMPATIBLE OPTIMIZATION --------------------
+    
     d_to_pass: Tensor = processed_dynamic_input
+    s_to_pass: Optional[Tensor] = processed_static_input
     f_to_pass: Optional[Tensor] = processed_future_input
 
-    if model_type == 'strict':
-        if s_to_pass is None:
-            s_to_pass = tf_zeros(
-                (tf_cast(batch_size_dyn, tf_int32), 
-                 tf_constant(0, dtype=tf_int32)), 
-                dtype=tf_float32
-            )
-            if verbose >= 1:
-                logger.info(
-                    f"prepare_model_inputs (strict): Created dummy "
-                    f"static input with shape {tf_shape(s_to_pass)}"
-                    )
-        # ... (rest of dummy tensor creation for static and future as before) ...
-        elif tf_rank(s_to_pass) == 2 and tf_shape(s_to_pass)[-1] == 0 \
-            and verbose >=1:
-             logger.info(
-                 f"prepare_model_inputs (strict): Static input "
-                 f"provided with 0 features, shape {tf_shape(s_to_pass)}"
-                 )
+    # Use tf.cond for conditional logic on tensors
+    past_time_steps = tf_cond(
+        tf_equal(tf_rank(d_to_pass), 3),
+        lambda: tf_shape(d_to_pass)[1],
+        lambda: tf_constant(1, dtype=tf_int32)
+    )
 
+    if verbose >= 2:
+        # tf.print is the graph-compatible way to print tensor values
+        tf_print(
+            "prepare_model_inputs: Derived batch_size=", tf_shape(d_to_pass)[0],
+            " past_time_steps=", past_time_steps
+        )
+
+    # Logic for handling 'strict' mode where all inputs must be tensors
+    if model_type == 'strict':
+        
+        # --- Handle Static Input ---
+        if s_to_pass is None:
+            # Create a dummy static tensor if one is not provided
+            # FIX: Construct the shape as a single tensor using tf.stack
+            batch_size = tf_shape(d_to_pass)[0]
+            # shape_tensor = tf_stack([batch_size, 0]) # Creates a tensor like [B, 0]
+            # s_to_pass = tf_zeros(shape_tensor, dtype=tf_float32)
+           
+            # batch_size = tf_shape(d_to_pass)[0]
+            # s_to_pass = tf_zeros((batch_size, 0), dtype=tf_float32)
+            s_to_pass = tf_zeros(
+                        (batch_size, tf_constant(0, dtype=tf_int32)),
+                        dtype=tf_float32
+                    )
+            if verbose >= 1:
+                tf_print(
+                    "prepare_model_inputs (strict): Created dummy"
+                    " static input with shape", tf_shape(s_to_pass))
+        
+        elif verbose >=1:
+             # Use tf.cond to conditionally 
+             # print a message if the input has 0 features
+            tf_cond(
+                tf_equal(tf_shape(s_to_pass)[-1], 0),
+                lambda: tf_print(
+                    "prepare_model_inputs (strict): Static input"
+                    " provided with 0 features, shape", tf_shape(s_to_pass)),
+                lambda: tf_no_op()
+            )
+
+        # --- Handle Future Input ---
         if f_to_pass is None:
-            num_future_timesteps = tf_cast(past_time_steps, tf_int32)
-            if forecast_horizon is not None and forecast_horizon > 0:
-                fh_tensor = tf_cast(forecast_horizon, tf_int32)
-                num_future_timesteps += fh_tensor 
+            # batch_size = tf_shape(d_to_pass)[0]
+            shape_dynamic = tf_shape(d_to_pass)
+            batch_size = shape_dynamic[0]
+            past_time_steps = tf_cond(
+                tf_equal(tf_rank(d_to_pass), 3),
+                lambda: tf_shape(d_to_pass)[1],
+                lambda: tf_constant(1, dtype=tf_int32)
+            )
             
+            # Conditionally add forecast_horizon to the sequence length
+            num_future_timesteps = past_time_steps
+            if forecast_horizon is not None and forecast_horizon > 0:
+                num_future_timesteps = past_time_steps + tf_cast(
+                    forecast_horizon, dtype=tf_int32)
+    
             f_to_pass = tf_zeros(
-                (tf_cast(batch_size_dyn, tf_int32),  
-                 tf_cast(num_future_timesteps, tf_int32), 
-                 tf_constant(0, dtype=tf_int32)),      
+                (batch_size, num_future_timesteps,  
+                 tf_constant(0, dtype=tf_int32)),
                 dtype=tf_float32
             )
+
             if verbose >= 1:
-                logger.info(
-                    f"prepare_model_inputs (strict): Created dummy "
-                    f"future input with shape {tf_shape(f_to_pass)}"
-                    )
-        elif tf_rank(f_to_pass) == 3 and tf_shape(f_to_pass)[-1] == 0 \
-            and verbose >=1:
-            logger.info(
-                f"prepare_model_inputs (strict): Future input "
-                f"provided with 0 features, shape {tf_shape(f_to_pass)}"
-                )
-                
-    elif model_type == 'flexible':
-        if verbose >= 1:
-            logger.info(
-                f"prepare_model_inputs (flexible): Passing inputs "
-                f"as is (Static: {type(s_to_pass)}, "
-                f"Dynamic: {type(d_to_pass)}, Future: {type(f_to_pass)})"
-                )
-    else: # Should be caught by @validate_params if active for this function
-        raise ValueError(
-            f"Invalid `model_type`: '{model_type}'. "
-            "Must be 'strict' or 'flexible'."
-        )
+                tf_print(
+                    "prepare_model_inputs (strict): Created dummy"
+                    " future input with shape", tf_shape(f_to_pass))
+
+        elif verbose >= 1:
+            # Conditionally print a message if the input has 0 features
+            tf_cond(
+                tf_equal(tf_shape(f_to_pass)[-1], 0),
+                lambda: tf_print(
+                    "prepare_model_inputs (strict): Future input provided"
+                    " with 0 features, shape", tf_shape(f_to_pass)),
+                lambda: tf_no_op()
+            )
+            
+    # --- Logic for 'flexible' mode ---
+    elif model_type == 'flexible' and verbose >= 1:
+         tf_print(
+             "prepare_model_inputs (flexible): Passing inputs as is."
+      )
+
+    # ------------------ END: GRAPH-COMPATIBLE OPTIMIZATION --------------------
+    
     return [s_to_pass, d_to_pass, f_to_pass]
 
 

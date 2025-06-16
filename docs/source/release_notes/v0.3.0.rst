@@ -17,8 +17,8 @@ a state-of-the-art generation of PINNs and is complemented by a
 unified hyperparameter tuner, ``HydroTuner``, designed for all 
 hydrogeological models.
 
-Enhancements & Improvements
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+New Features
+~~~~~~~~~~~~~~~
 
 * |New| Introduced :class:`~fusionlab.nn.models.BaseAttentive`,
   a powerful and flexible base class that encapsulates the
@@ -38,12 +38,9 @@ Enhancements & Improvements
   data-driven Hybrid Attentive LSTM Network is now available as
   a standalone model, serving as a robust, general-purpose
   forecasting tool without physics components.
-* |New| :class:`~fusionlab.nn.pinn.PiTGWFlow`: A self-contained,
+* |New| :class:`~fusionlab.nn.pinn.models.PiTGWFlow`: A self-contained,
   pure-physics PINN for solving the 2D transient groundwater
   flow equation, ideal for forward and inverse problems.
-* |Enhancement| The legacy **:class:`~fusionlab.nn.pinn.models.PIHALNet`**
-  has also been re-architected to inherit from `BaseAttentive`,
-  benefiting from the new configuration system and modularity.
 * |New| Introduced :class:`~fusionlab.nn.forecast_tuner.HydroTuner`:
   A flexible, model-agnostic tuner for all hydrogeological PINNs.
   By simply passing the model class (`PIHALNet` or
@@ -101,7 +98,13 @@ Enhancements & Improvements
 * |New| New spatial utilities in :mod:`~fusionlab.utils.spatial_utils`,
   including `create_spatial_clusters` and `batch_spatial_sampling`,
   have been introduced to aid in geospatial feature engineering.
-  
+
+Improvements
+~~~~~~~~~~~~~~~
+
+* |Enhancement| The legacy :class:`~fusionlab.nn.pinn.models.PIHALNet`
+  has also been re-architected to inherit from `BaseAttentive`,
+  benefiting from the new configuration system and modularity.
 * |Enhancement| Visualization functions like
   :func:`~fusionlab.plot.forecast.plot_forecast_by_step` and
   :func:`~fusionlab.plot.forecast.forecast_view` have been added
@@ -158,6 +161,7 @@ Enhancements & Improvements
 
 Fixes
 ~~~~~
+
 * |Fix| **Architectural Overhaul**: Completely refactored the internal
   logic of :class:`~fusionlab.nn.pinn.models.PIHALNet` 
   (now :class:`~fusionlab.nn.pinn.BaseAttentive`) to use a robust
@@ -195,14 +199,14 @@ Tests
 * |Tests| Added a comprehensive Pytest suite for the new :class:`~fusionlab.nn.mdoels.HALNet`
   and :class:`~fusionlab.nn.pinn.TransFlowSubsNet` models, validating both ``'tft_like'`` and
   ``'pihal_like'`` modes.
-* |Tests| Created a robust test suite for :class:`~fusionlab.nn.pinn.PiTGWFlow`, covering
+* |Tests| Created a robust test suite for :class:`~fusionlab.nn.pinn.models.PiTGWFlow`, covering
   instantiation, learnable parameter tracking, forward pass with
   multiple input formats, and the custom `train_step`.
 * |Tests| Added a Pytest suite for the :class:`~fusionlab.nn.components.PositionalEncoding` layer
   to ensure numerical stability, shape consistency, and serialization.
 
 * |Tests| Added a comprehensive test suite for the new :class:`~fusionlab.nn.forecast_tuner.HydroTuner`,
-  covering instantiation, the `.create()` factory method, and
+  covering instantiation, the ``.create()`` factory method, and
   end-to-end runs for both `PIHALNet` and `TransFlowSubsNet`.
 * |Tests| Implemented unit tests for all new data utilities,
   including :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences`,
@@ -213,12 +217,12 @@ Tests
   
 Documentation
 ~~~~~~~~~~~~~
-* |Docs| Added a new User Guide page, :doc:`/user_guide/models/halnet`,
+* |Docs| Added a new User Guide page, :doc:`/user_guide/models/hybrid/halnet`,
   to detail the flexible new `HALNet` model and its dual-mode
   architecture.
-* |Docs| Updated the :doc:`/user_guide/pinn_models` page to reflect
+* |Docs| Updated the :doc:`/user_guide/models/pinn/index` page to reflect
   the new, more powerful `TransFlowSubsNet` and `PITGWFlow` models.
-* |Docs| Added the :doc:`/user_guide/forecast_plots` page to
+* |Docs| Added the :doc:`/user_guide/gallery/plot/forecast` page to
   document the new and improved visualization utilities, including
   ``forecast_view``, ``plot_forecast_by_step``, and ``plot_history_in``.
 * |Docs| Added an exercise page, :doc:`/user_guide/exercices/exercise_halnet`,
@@ -235,6 +239,6 @@ Documentation
 * |Docs| Created new hands-on tutorials for all major models and
   utilities in the :doc:`/user_guide/exercises/index`.
 
-Contributor
+Contributors
 ~~~~~~~~~~~~~
 * `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)

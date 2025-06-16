@@ -19,13 +19,13 @@ its task will be to discover the hydraulic head field,
 **Learning Objectives:**
 
 * Generate a set of "collocation points" within a defined
-    spatio-temporal domain.
+  spatio-temporal domain.
 * Understand how to configure ``PiTGWFlow`` with both fixed and
-    learnable physical parameters.
+  learnable physical parameters.
 * Create a ``tf.data.Dataset`` suitable for a PINN, including the
-    use of dummy targets for Keras API compatibility.
+  use of dummy targets for Keras API compatibility.
 * Define, compile, and train the ``PiTGWFlow`` model using its
-    custom, physics-based training loop.
+  custom, physics-based training loop.
 * Visualize the training progress by plotting the PDE loss.
 * Visualize the final, continuous solution learned by the network.
 
@@ -41,7 +41,6 @@ installed. For visualizations, `matplotlib` is also needed.
 
    pip install fusionlab-learn matplotlib
 
----
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~

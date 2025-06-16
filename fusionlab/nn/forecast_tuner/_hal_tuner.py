@@ -146,7 +146,10 @@ class HALTuner(PINNTunerBase):
         )
         self.fixed_model_params = fixed_model_params
         self.param_space = param_space or {}
-
+        
+        if 'search_space' in tuner_kwargs: 
+            self.param_space = tuner_kwargs.pop('search_space')
+            
         # Validate that essential data-dependent dimensions are provided.
         required_fixed = [
             "static_input_dim", "dynamic_input_dim", "future_input_dim",

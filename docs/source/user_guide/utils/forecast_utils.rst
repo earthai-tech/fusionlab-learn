@@ -22,26 +22,26 @@ This is the core utility for transforming time series forecast data. It
 converts a **long-format** DataFrame into a **wide-format** DataFrame.
 
 * **Long Format**: Each row represents a single observation at a
-    specific time for a specific sample (e.g., one row for the
-    forecast of "site A" at "step 1", another for "site A" at "step 2").
+  specific time for a specific sample (e.g., one row for the
+  forecast of "site A" at "step 1", another for "site A" at "step 2").
 * **Wide Format**: Each row represents a single unique sample, and the
-    time steps are spread across the columns (e.g., one row for "site A"
-    with columns like `prediction_step1`, `prediction_step2`, etc.).
+  time steps are spread across the columns (e.g., one row for "site A"
+  with columns like `prediction_step1`, `prediction_step2`, etc.).
 
 This transformation is often necessary for certain types of analysis or
 for plotting libraries that expect data in a wide structure.
 
 **Key Parameters:**
 
-* **`data`**: The input long-format DataFrame.
-* **`id_vars`**: The list of columns that uniquely identify each
-    sample (e.g., `['sample_idx', 'longitude', 'latitude']`). These
-    remain as index-like columns in the output.
-* **`time_col`**: The name of the column whose values will become the
-    new column headers (e.g., `forecast_step` or `year`).
-* **`value_prefixes`**: A list of base names (e.g., `['subsidence', 'GWL']`)
-    that the function uses to identify all the value columns that need
-    to be pivoted.
+* **data**: The input long-format DataFrame.
+* **id_vars**: The list of columns that uniquely identify each
+  sample (e.g., `['sample_idx', 'longitude', 'latitude']`). These
+  remain as index-like columns in the output.
+* **time_col**: The name of the column whose values will become the
+  new column headers (e.g., `forecast_step` or `year`).
+* **value_prefixes**: A list of base names (e.g., `['subsidence', 'GWL']`)
+  that the function uses to identify all the value columns that need
+  to be pivoted.
 
 **Usage Example:**
 

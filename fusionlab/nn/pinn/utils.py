@@ -1322,8 +1322,8 @@ def prepare_pinn_data_sequences(
     df_proc, coord_scaler, cols_scaler = normalize_for_pinn(
         df=df_proc, 
         time_col= numerical_time_col, 
-        lon_col=lon_col, 
-        lat_col=lat_col, 
+        coord_x=lon_col, 
+        coord_y=lat_col, 
         scale_coords= normalize_coords, 
         cols_to_scale =cols_to_scale, 
         verbose =verbose 
@@ -1923,8 +1923,8 @@ def check_required_input_keys(inputs, y=None, message=None ):
 def normalize_for_pinn(
     df: pd.DataFrame,
     time_col: str,
-    lon_col: str,
-    lat_col: str,
+    coord_x: str,
+    coord_y: str,
     cols_to_scale: Union[List[str], str, None] = "auto",
     scale_coords: bool = True,
     verbose: int = 1
@@ -1952,9 +1952,9 @@ def normalize_for_pinn(
         Input DataFrame with at least `time_col`, `lon_col`, `lat_col`.
     time_col : str
         Name of the numeric time column (e.g., year as numeric or datetime).
-    lon_col : str
+    coord_x : str
         Name of the longitude column.
-    lat_col : str
+    coord_y : str
         Name of the latitude column.
     cols_to_scale : list of str or "auto" or None, default "auto"
         - If a list of column names: scale exactly those columns.
@@ -2005,8 +2005,8 @@ def normalize_for_pinn(
     >>> df_scaled, coord_scl, feat_scl = normalize_for_pinn(
     ...     df,
     ...     time_col="year_num",
-    ...     lon_col="lon",
-    ...     lat_col="lat",
+    ...     coord_x="lon",
+    ...     coord_y="lat",
     ...     cols_to_scale="auto",
     ...     scale_coords=True,
     ...     verbose=2
@@ -2037,7 +2037,7 @@ def normalize_for_pinn(
                         f"{type(df).__name__}")
 
     # --- Validate core column names ---
-    for name in (time_col, lon_col, lat_col):
+    for name in (time_col, coord_x, coord_y):
         if not isinstance(name, str):
             raise TypeError(f"Column names must be strings, got {name}")
         if name not in df.columns:
@@ -2060,7 +2060,7 @@ def normalize_for_pinn(
 
     if scale_coords:
         vlog("Scaling time, lon, lat columns...", verbose=verbose, level=2)
-        coord_cols = [time_col, lon_col, lat_col]
+        coord_cols = [time_col, coord_x, coord_y]
         for col in coord_cols:
             if not pd.api.types.is_numeric_dtype(df_scaled[col]):
                 try:
@@ -2093,7 +2093,7 @@ def normalize_for_pinn(
 
         # Exclude coordinate columns if not scaling them 
         # if not scale_coords :
-        for c in (time_col, lon_col, lat_col):
+        for c in (time_col, coord_x, coord_y):
             if c in numeric_cols:
                 numeric_cols.remove(c)
 

@@ -18,16 +18,16 @@ complex data requirements of these advanced hybrid models.
 
 * Load and preprocess a complex, real-world style dataset.
 * Perform feature engineering, including one-hot encoding and numerical
-    scaling.
+  scaling.
 * Use the ``prepare_pinn_data_sequences`` utility to transform a flat
-    DataFrame into the specialized sequence format required by PINNs.
+  DataFrame into the specialized sequence format required by PINNs.
 * Configure and train a hybrid model (``PIHALNet`` or ``TransFlowSubsNet``)
-    with both a data-driven loss and a physics-informed loss component.
+  with both a data-driven loss and a physics-informed loss component.
 * Set up callbacks for model checkpointing and early stopping.
 * Generate predictions on new data and format them into an
-    interpretable DataFrame.
+  interpretable DataFrame.
 * Visualize the multi-target, multi-horizon forecast results using
-    the library's specialized plotting functions.
+  the library's specialized plotting functions.
 
 Let's get started!
 
@@ -39,7 +39,6 @@ Ensure you have ``fusionlab-learn`` and its dependencies installed.
 
    pip install fusionlab-learn "keras-tuner>=1.4.0" matplotlib scikit-learn
 
----
 
 Step 0: Preamble & Configuration
 -----------------------------------------
@@ -71,8 +70,8 @@ hyperparameters for your own tests.
    MODEL_NAME = 'TransFlowSubsNet'  # or 'PIHALNet'
    TRAIN_END_YEAR = 2022
    FORECAST_START_YEAR = 2023
-   FORECAST_HORIZON_YEARS = 3
-   TIME_STEPS = 5  # Lookback window
+   FORECAST_HORIZON_YEARS = 2
+   TIME_STEPS = 4  # Lookback window
    QUANTILES = [0.1, 0.5, 0.9]
    EPOCHS = 20 # Use more epochs (e.g., 100+) for real results
    BATCH_SIZE = 256
@@ -88,6 +87,13 @@ hyperparameters for your own tests.
    print(f"Configuration set for model: {MODEL_NAME}")
    print(f"Output artifacts will be saved in: {RUN_OUTPUT_PATH}")
 
+**Expected Output 0:**
+
+.. code-block:: text
+
+   Configuration set for model: TransFlowSubsNet
+   Output artifacts will be saved in: ./pihalnet_exercise_outputs/TransFlowSubsNet_run
+   
 Step 1: Load and Inspect the Dataset
 -----------------------------------------
 We will load the Zhongshan dataset. The logic first tries to find a
@@ -108,6 +114,25 @@ smaller, built-in version if it's not found.
    
    print(df_raw.head())
 
+**Expected Output 1:**
+
+.. code-block:: text
+
+   Fetching Zhongshan dataset...
+   Dataset 'zhongshan_2000.csv' found in package resource: fusionlab.datasets.data
+   Using cached version (also found in package): C:\Users\Daniel\fusionlab_data\zhongshan_2000.csv
+   Successfully loaded full data (1999 rows) from: C:\Users\Daniel\fusionlab_data\zhongshan_2000.csv
+   Loading full dataset (n_samples is None or '*').
+   Successfully loaded dataset. Shape: (1999, 14)
+       longitude   latitude  ...  rainfall_category  subsidence
+   0  113.240334  22.476652  ...             Medium       15.51
+   1  113.215866  22.510025  ...             Medium       31.60
+   2  113.237984  22.494591  ...             Medium        8.09
+   3  113.219109  22.513433  ...             Medium       15.49
+   4  113.210678  22.536232  ...             Medium       14.02
+
+   [5 rows x 14 columns]
+   
 Step 2: Preprocessing - Feature Selection & Cleaning
 -------------------------------------------------------------
 We select the features relevant to our model and handle any missing
@@ -132,6 +157,13 @@ covariates.
    df_cleaned = nan_ops(df_selected, ops='sanitize', action='fill')
    print(f"NaNs after cleaning: {df_cleaned.isna().sum().sum()}")
 
+
+**Expected Output 2:**
+
+.. code-block:: text
+
+   NaNs after cleaning: 0
+   
 Step 3: Preprocessing - Encoding & Scaling
 -----------------------------------------------
 Next, we convert categorical features like `geology` into a numerical
@@ -160,6 +192,14 @@ common range (0-1) using `MinMaxScaler` for stable training.
    print("Categorical features encoded and numerical features scaled.")
    print(f"Final processed data shape: {df_scaled.shape}")
 
+
+**Expected Output 3:**
+
+.. code-block:: text
+
+   Categorical features encoded and numerical features scaled.
+   Final processed data shape: (1999, 13)
+   
 Step 4: Define Feature Sets & Generate Sequences
 -------------------------------------------------------
 This is a critical step where we tell our data preparation utility,
@@ -179,7 +219,7 @@ stream (static, dynamic, etc.) and then generate the sequences.
    future_features_list = ['rainfall_mm'] # Assume rainfall forecast is known
 
    # 3. Generate sequences
-   inputs_train, targets_train, _ = prepare_pinn_data_sequences(
+   inputs_train, targets_train = prepare_pinn_data_sequences(
        df=df_train_master,
        time_col=TIME_COL_NUMERIC,
        lon_col=LON_COL, lat_col=LAT_COL,
@@ -187,7 +227,7 @@ stream (static, dynamic, etc.) and then generate the sequences.
        dynamic_cols=dynamic_features_list,
        static_cols=static_features_list,
        future_cols=future_features_list,
-       group_id_cols=[LON_COL, LAT_COL],
+       group_id_cols=None, # [LON_COL, LAT_COL] Disable a group to treat as a big series
        time_steps=TIME_STEPS,
        forecast_horizon=FORECAST_HORIZON_YEARS,
    )
@@ -195,6 +235,16 @@ stream (static, dynamic, etc.) and then generate the sequences.
    for name, arr in inputs_train.items():
        print(f"  Train Input '{name}' shape: {arr.shape if arr is not None else 'None'}")
 
+**Expected Output 4:**
+
+.. code-block:: text
+
+   Training sequences generated.
+     Train Input 'coords' shape: (1791, 2, 3)
+     Train Input 'static_features' shape: (1791, 5)
+     Train Input 'dynamic_features' shape: (1791, 4, 3)
+     Train Input 'future_features' shape: (1791, 2, 1)
+   
 Step 5: Create tf.data.Dataset
 -----------------------------------------
 We convert our NumPy sequence arrays into ``tf.data.Dataset`` objects
@@ -222,6 +272,13 @@ for efficient, high-performance training with TensorFlow.
    
    print(f"\nCreated training dataset ({train_size} samples) and validation dataset ({val_size} samples).")
 
+
+**Expected Output 5:**
+
+.. code-block:: text
+
+   Created training dataset (1433 samples) and validation dataset (358 samples).
+     
 Step 6: Model Training
 ----------------------------
 We now instantiate our chosen model, compile it with our composite loss
@@ -268,6 +325,20 @@ function, and begin training.
        callbacks=[EarlyStopping('val_loss', patience=10, restore_best_weights=True)]
    )
 
+**Expected Output 6:**
+
+.. code-block:: text
+
+   Starting TransFlowSubsNet training...
+   Epoch 1/20
+   6/6 [==============================] - 30s 422ms/step - loss: 0.5286 - gwl_pred_loss: 0.4087 - subs_pred_loss: 0.3243 - total_loss: 0.5063 - data_loss: 0.5022 - physics_loss: 0.0041 - consolidation_loss: 0.0041 - gw_flow_loss: 2.9738e-07 - val_loss: 0.1235 - val_gwl_pred_loss: 0.2469 - val_subs_pred_loss: 0.0000e+00
+   Epoch 2/20
+   6/6 [==============================] - 0s 49ms/step - loss: 0.1974 - gwl_pred_loss: 0.1396 - subs_pred_loss: 0.1276 - total_loss: 0.1798 - data_loss: 0.1788 - physics_loss: 9.3386e-04 - consolidation_loss: 9.3376e-04 - gw_flow_loss: 1.0276e-07 - val_loss: 0.0356 - val_gwl_pred_loss: 0.0711 - val_subs_pred_loss: 0.0000e+00
+   ...
+   Epoch 20/20
+   6/6 [==============================] - 0s 53ms/step - loss: 0.0295 - gwl_pred_loss: 0.0122 - subs_pred_loss: 0.0234 - total_loss: 0.0293 - data_loss: 0.0293 - physics_loss: 2.1400e-05 - consolidation_loss: 2.1400e-05 - gw_flow_loss: 2.2128e-11 - val_loss: 0.0043 - val_gwl_pred_loss: 0.0086 - val_subs_pred_loss: 0.0000e+00
+   
+   
 Step 7: Visualize Results
 -----------------------------
 Finally, we can use the plotting utilities to visualize the training
@@ -302,6 +373,15 @@ history and the forecast results.
            num_samples=4
        )
 
+**Expected Plot 7:**
+
+.. figure:: ../../images/transflow_subsnet_training_history.png
+   :alt: Training Loss History
+   :align: center
+   :width: 80%
+
+   Visualization of TransFlowSubsNet traing loss history .
+   
 Discussion of Exercise
 --------------------------
 Congratulations! You have completed a full end-to-end workflow for a
@@ -309,11 +389,11 @@ complex, hybrid physics-informed model. You have learned how to:
 
 * Take raw, tabular data and perform all necessary preprocessing steps.
 * Use the specialized ``prepare_pinn_data_sequences`` utility to create
-    the multi-part input required by the models.
+  the multi-part input required by the models.
 * Configure, compile, and train a ``PIHALNet`` or ``TransFlowSubsNet``
-    model with a composite loss function.
+  model with a composite loss function.
 * Evaluate the training process and visualize the final probabilistic
-    forecasts.
+  forecasts.
 
 This comprehensive process is a powerful template for applying these
 advanced models to your own scientific machine learning challenges.

@@ -37,39 +37,39 @@ The function acts as a wrapper for three distinct algorithms, each
 suited for different scenarios:
 
 * **KMeans (`algorithm='kmeans'`)**: This is a partitioning algorithm
-    that aims to divide data points into a pre-defined number of
-    clusters (:math:`k`). It works by minimizing the within-cluster
-    sum of squares. It is fast and effective for finding well-separated,
-    spherical-shaped clusters.
+  that aims to divide data points into a pre-defined number of
+  clusters (:math:`k`). It works by minimizing the within-cluster
+  sum of squares. It is fast and effective for finding well-separated,
+  spherical-shaped clusters.
 
 * **DBSCAN (`algorithm='dbscan'`)**: A density-based algorithm that
-    groups together points that are closely packed, marking as outliers
-    points that lie alone in low-density regions. It is excellent for
-    discovering clusters of **arbitrary shape** and does not require
-    the number of clusters to be specified beforehand. Its behavior is
-    controlled by the `eps` (neighborhood distance) and `min_samples`
-    parameters.
+  groups together points that are closely packed, marking as outliers
+  points that lie alone in low-density regions. It is excellent for
+  discovering clusters of **arbitrary shape** and does not require
+  the number of clusters to be specified beforehand. Its behavior is
+  controlled by the `eps` (neighborhood distance) and `min_samples`
+  parameters.
 
 * **Agglomerative Clustering (`algorithm='agglo'`)**: A hierarchical
-    clustering method that starts with each data point as its own
-    cluster and iteratively merges the closest pairs of clusters until
-    the desired number of clusters is reached. It is useful for
-    understanding nested structures in the data.
+  clustering method that starts with each data point as its own
+  cluster and iteratively merges the closest pairs of clusters until
+  the desired number of clusters is reached. It is useful for
+  understanding nested structures in the data.
 
 **Key Features**
 
 * **Multiple Algorithms:** Easily switch between KMeans, DBSCAN, and
-    Agglomerative clustering via the `algorithm` parameter.
+  Agglomerative clustering via the `algorithm` parameter.
 * **Automatic `k` Detection:** For KMeans, if you do not specify
-    ``n_clusters``, the function can automatically estimate the optimal
-    number of clusters using silhouette and elbow analysis.
+  ``n_clusters``, the function can automatically estimate the optimal
+  number of clusters using silhouette and elbow analysis.
 * **Automatic Coordinate Scaling:** Clustering algorithms are sensitive
-    to feature scales. With ``auto_scale=True`` (the default), the
-    function automatically standardizes your coordinate data before
-    clustering to ensure distances are weighted equally.
+  to feature scales. With ``auto_scale=True`` (the default), the
+  function automatically standardizes your coordinate data before
+  clustering to ensure distances are weighted equally.
 * **Integrated Visualization:** Setting ``view=True`` provides immediate
-    visual feedback by generating a scatter plot of the data points,
-    colored by their newly assigned cluster labels.
+  visual feedback by generating a scatter plot of the data points,
+  colored by their newly assigned cluster labels.
 
 Usage Example 1: KMeans with a Fixed Number of Clusters
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -218,8 +218,9 @@ accurately reflects the characteristics of the full dataset.
 This utility extends `spatial_sampling` by dividing the total desired
 sample into **multiple, non-overlapping batches**. This is extremely
 useful for:
+
 * Training models on datasets that are too large to fit into memory at
-    once.
+  once.
 * Creating stratified folds for a robust cross-validation scheme.
 
 Usage Example 1: Creating a Single Stratified Sample
@@ -341,15 +342,15 @@ to select rows from a DataFrame that correspond to a specific geographic
 point of interest. It offers two powerful modes for matching:
 
 * **Exact Matching (`find_closest=False`):** This mode is useful when
-    you need to retrieve data for a known, precise location, such as a
-    specific monitoring well or sensor with exact coordinates.
+  you need to retrieve data for a known, precise location, such as a
+  specific monitoring well or sensor with exact coordinates.
 
 * **Approximate Matching (`find_closest=True`):** This is the more
-    advanced feature. It is designed for situations where an exact
-    coordinate match might not exist in your dataset. It finds the data
-    point that is numerically closest to your target coordinate, as long
-    as it falls within a given `threshold` distance. This is ideal for
-    querying gridded data or aligning with points from a different source.
+  advanced feature. It is designed for situations where an exact
+  coordinate match might not exist in your dataset. It finds the data
+  point that is numerically closest to your target coordinate, as long
+  as it falls within a given `threshold` distance. This is ideal for
+  querying gridded data or aligning with points from a different source.
 
 Usage Example
 ^^^^^^^^^^^^^^

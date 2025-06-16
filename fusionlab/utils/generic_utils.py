@@ -24,6 +24,9 @@ from typing import (
 import numpy as np 
 import pandas as pd 
 
+
+_SENTINEL = object()     
+
 __all__ =[
     'ExistenceChecker', 'ensure_directory_exists', 
     'verify_identical_items', 'vlog', 'detect_dt_format',
@@ -2898,3 +2901,102 @@ def select_mode(
         raise ValueError(
             f"Invalid mode '{mode}'. Choose one of: {valid} or None."
         ) from None
+
+def _coerce_dt_kw(
+    *,        
+    dt_col: Any = _SENTINEL,
+    time_col: Any = _SENTINEL,
+    _time_default: str | None = None,
+    **kwargs
+) -> Dict[str, Any]:
+    r"""
+    Harmonise the interchangeable ``dt_col`` / ``time_col`` keywords.
+
+    Exactly **one** of *dt_col* or *time_col* must be supplied *after
+    accounting for defaults*.  The helper returns a new mapping where the
+    canonical key ``"dt_col"`` holds the resolved column name and all other
+    keyword arguments are forwarded unchanged.
+
+    Parameters
+    ----------
+    dt_col : str or None, optional
+        User-supplied datetime column.  If omitted, *time_col* is used
+        instead.
+    time_col : str or None, optional
+        Alias for *dt_col*.  Many public APIs historically expose this
+        keyword—this helper allows both to coexist.
+    _time_default : str or None, default ``None``
+        Pass the *function-level* default for *time_col* (for example
+        ``'coord_t'``).  If *time_col* equals this default and *dt_col* is
+        supplied, the default is silently ignored **without** triggering the
+        “both supplied” error.
+    **kwargs
+        Arbitrary additional keyword arguments that will be preserved in the
+        returned dictionary.
+
+    Returns
+    -------
+    dict
+        Shallow copy of *kwargs* plus the resolved key::
+
+            {"dt_col": <chosen_name>, ...}
+
+    Raises
+    ------
+    ValueError
+        * If neither *dt_col* nor *time_col* is supplied.
+        * If **both** are supplied **and** *time_col* differs from
+          *_time_default* (i.e. the user explicitly provided two conflicting
+          names).
+
+    Notes
+    -----
+    Use this helper at the very top of public API functions, e.g.::
+
+        def forecast_view(..., time_col='coord_t', dt_col=None, ...):
+            kw = _coerce_dt_kw(dt_col=dt_col,
+                               time_col=time_col,
+                               _time_default='coord_t')
+            time_col = kw.pop("dt_col")
+
+    Doing so keeps internal code agnostic to which alias the caller picked.
+
+    Examples
+    --------
+    >>> _coerce_dt_kw(dt_col='date')
+    {'dt_col': 'date'}
+    >>> _coerce_dt_kw(time_col='timestamp')
+    {'dt_col': 'timestamp'}
+    >>> _coerce_dt_kw(dt_col='d', time_col='coord_t', _time_default='coord_t')
+    {'dt_col': 'd'}          # default 'coord_t' safely ignored
+    >>> _coerce_dt_kw(dt_col='d', time_col='t', _time_default='coord_t')
+    Traceback (most recent call last):
+        ...
+    ValueError: Supply **exactly one** of 'dt_col' or 'time_col'.
+    """
+    # ­──────────────────────── detect “omitted” vs “provided None” ──
+    dt_provided   = dt_col   is not _SENTINEL
+    time_provided = time_col is not _SENTINEL
+
+    # ­──────────────────────── three legal scenarios ───────────────
+    if not dt_provided and not time_provided:
+        raise ValueError(
+            "You must supply either 'dt_col' or its alias 'time_col'."
+        )
+    if dt_provided and time_provided:
+        # allow the benign case where time_col is *just* the default
+        if str(time_col) != str(_time_default):
+            raise ValueError(
+                "Supply **exactly one** of 'dt_col' or 'time_col', not both "
+                f"({'dt_col='+str(dt_col)!r}, {'time_col='+str(time_col)!r})."
+            )
+        # user gave dt_col; time_col was default -> ignore default
+        chosen = dt_col
+    else:
+        chosen = dt_col if dt_provided else time_col
+
+    # ­──────────────────────── assemble output mapping ──────────────
+    out = dict(kwargs)
+    out["dt_col"] = chosen
+    return out
+

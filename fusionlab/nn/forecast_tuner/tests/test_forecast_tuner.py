@@ -10,7 +10,7 @@ from pathlib import Path
 # --- Attempt to import tuner functions and dependencies ---
 try:
     import tensorflow as tf
-    from fusionlab.nn.forecast_tuner.tft_tuner import xtft_tuner, tft_tuner
+    from fusionlab.nn.forecast_tuner._tft_tuner import xtft_tuner, tft_tuner
     from fusionlab.nn.utils import prepare_model_inputs 
     from fusionlab.nn.transformers import (
         XTFT, SuperXTFT,

@@ -52,7 +52,7 @@ Explore the sections below to learn how to effectively use
 
 .. toctree::
    :maxdepth: 2
-   :caption: Exercices
+   :caption: Exercises
 
    exercises/index    
    

@@ -31,34 +31,36 @@ tensors and the crucial **`coords`** tensor needed by the physics module.
 
 **Key Parameters:**
 
-* **`df`**: The input DataFrame containing all features, targets, and
-    coordinates in a long format.
-* **`group_id_cols`**: A list of columns (e.g., `['longitude', 'latitude']`)
-    used to identify and separate individual time series within the
-    DataFrame. The function generates sequences independently for each group.
-* **`time_steps`**: The length of the historical lookback window for the
-    dynamic features.
-* **`forecast_horizon`**: The number of future steps to predict.
-* **`*_cols` arguments**: Various arguments (`dynamic_cols`,
-    `static_cols`, `future_cols`, `subsidence_col`, etc.) that map
-    column names in the DataFrame to their respective roles.
-* **`normalize_coords`**: A boolean flag that, when ``True``, scales the
-    spatio-temporal coordinate values (:math:`t, x, y`) to a 0-1 range,
-    which is highly recommended for stable gradient calculations in the
-    PINN loss.
+* **df**: The input DataFrame containing all features, targets, and
+  coordinates in a long format.
+* **group_id_cols**: A list of columns (e.g., `['longitude', 'latitude']`)
+  used to identify and separate individual time series within the
+  DataFrame. The function generates sequences independently for each group.
+* **time_steps**: The length of the historical lookback window for the
+  dynamic features.
+* **forecast_horizon**: The number of future steps to predict.
+* **_cols arguments**: Various arguments (`dynamic_cols`,
+  ``static_cols``, ``future_cols``, ``subsidence_col``, etc.) that map
+  column names in the DataFrame to their respective roles.
+* **normalize_coords**: A boolean flag that, when ``True``, scales the
+  spatio-temporal coordinate values (:math:`t, x, y`) to a 0-1 range,
+  which is highly recommended for stable gradient calculations in the
+  PINN loss.
 
 **Workflow and Outputs:**
 
 The function returns two dictionaries containing NumPy arrays:
 
-1.  **`inputs_dict`**: Contains all the input tensors required by the
+1.  **inputs_dict**: Contains all the input tensors required by the
     model's ``call`` method.
+    
     * ``'coords'``: The spatio-temporal coordinates for the forecast
         horizon, shape: :math:`(N, H, 3)`.
     * ``'static_features'``: Shape: :math:`(N, D_s)`.
     * ``'dynamic_features'``: Shape: :math:`(N, T, D_d)`.
     * ``'future_features'``: Shape: :math:`(N, H, D_f)`.
-2.  **`targets_dict`**: Contains the ground-truth target tensors.
+2.  **targets_dict**: Contains the ground-truth target tensors.
+
     * ``'subsidence'``: Shape: :math:`(N, H, O_s)`.
     * ``'gwl'``: Shape: :math:`(N, H, O_g)`.
 
@@ -151,8 +153,8 @@ and other static metadata for a complete results summary.
 
 .. note::
    The function ``format_pihalnet_predictions`` is a deprecated alias
-   for ``format_pinn_outputs`` and is maintained for backward
-   compatibility. New code should use ``format_pinn_outputs``.
+   for :func:`~fusionlab.nn.pinn.utils.format_pinn_predictions` and is maintained for backward
+   compatibility. New code should use ``format_pinn_predictions``.
 
 **Usage Example:**
 
@@ -161,7 +163,7 @@ and other static metadata for a complete results summary.
 
    import pandas as pd
    import numpy as np
-   from fusionlab.nn.pinn.utils import format_pinn_outputs
+   from fusionlab.nn.pinn.utils import format_pinn_predictions
 
    # 1. Create dummy model outputs and true values
    B, H, Q_len = 4, 3, 3 # Batch, Horizon, Num Quantiles
@@ -180,7 +182,7 @@ and other static metadata for a complete results summary.
    ids = pd.DataFrame({'site_id': [f'site_{i}' for i in range(B)]})
 
    # 2. Format the predictions into a DataFrame
-   df_results = format_pinn_outputs(
+   df_results = format_pinn_predictions(
        predictions=predictions,
        y_true_dict=y_true,
        quantiles=quantiles,
@@ -196,12 +198,14 @@ and other static metadata for a complete results summary.
 
 .. code-block:: text
 
-      sample_idx  forecast_step   coord_t   coord_x   coord_y     site_id  subsidence_q10  subsidence_q50  subsidence_q90  subsidence_actual   gwl_q10   gwl_q50   gwl_q90  gwl_actual
-   0           0              1  0.722839  0.906981  0.887213      site_0        0.038539        0.155893        0.521225           0.822144  0.518956  0.957137  0.301275    0.287298
-   1           0              2  0.648172  0.439833  0.413819      site_0        0.839845        0.536343        0.995442           0.199451  0.347561  0.569412  0.607545    0.409383
-   2           0              3  0.944208  0.343521  0.364445      site_0        0.398938        0.473836        0.472256           0.024223  0.395424  0.787321  0.523829    0.231295
-   3           1              1  0.592753  0.134589  0.334085      site_1        0.784036        0.563038        0.286823           0.917769  0.923229  0.182537  0.425501    0.984734
-   4           1              2  0.340941  0.933219  0.030580      site_1        0.201277        0.875417        0.053173           0.755497  0.775355  0.871836  0.536763    0.159397
+         sample_idx  forecast_step   coord_t  ...   gwl_q50   gwl_q90 gwl_actual
+      0           0              1  0.834251  ...  0.376958  0.417579   0.625352
+      1           0              2  0.591587  ...  0.749004  0.635746   0.368460
+      2           0              3  0.990352  ...  0.103313  0.513108   0.789334
+      3           1              1  0.057251  ...  0.231552  0.739546   0.087821
+      4           1              2  0.581780  ...  0.551159  0.279155   0.791243
+
+      [5 rows x 14 columns]
 
 
 .. raw:: html
@@ -219,12 +223,12 @@ gradients are well-behaved and stable.
 
 This utility function provides a centralized way to handle this scaling.
 
-* **`scale_coords=True`**: This primary option applies a ``MinMaxScaler``
-    to the `time_col`, `lon_col`, and `lat_col` together, preserving
-    their relative relationships while scaling them to the [0, 1] range.
-* **`cols_to_scale='auto'`**: This feature automatically detects all other
-    numerical columns in the DataFrame (excluding booleans/one-hot
-    encoded columns) and applies a separate scaler to them.
+* **scale_coords=True**: This primary option applies a ``MinMaxScaler``
+  to the `time_col`, `coord_x`, and `coord_y` together, preserving
+  their relative relationships while scaling them to the [0, 1] range.
+* **cols_to_scale='auto'**: This feature automatically detects all other
+  numerical columns in the DataFrame (excluding booleans/one-hot
+  encoded columns) and applies a separate scaler to them.
 
 **Usage Example:**
 
@@ -247,8 +251,8 @@ This utility function provides a centralized way to handle this scaling.
    df_scaled, coord_scaler, other_scaler = normalize_for_pinn(
        df,
        time_col='time',
-       lon_col='lon',
-       lat_col='lat',
+       coord_x='lon',
+       coord_y='lat',
        scale_coords=True,
        cols_to_scale='auto' # Auto-detect 'rainfall'
    )
@@ -265,20 +269,25 @@ This utility function provides a centralized way to handle this scaling.
 
 .. code-block:: text
 
-   --- Original DataFrame ---
-       time     lon    lat  rainfall  is_event
-   0  2020.0  -122.4   37.7       500         0
-   1  2021.0  -122.3   37.8       600         1
-   2  2022.0  -122.2   37.9       550         0
+       [INFO] Scaling time, lon, lat columns...
+        [INFO] Auto-selecting numeric columns to scale...
+    [INFO] Excluding one-hot/boolean column 'is_event' from auto-scaling.
+        [INFO] Auto-selected columns: ['rainfall']
+        [INFO] Scaling additional columns: ['rainfall']
+    --- Original DataFrame ---
+         time    lon   lat  rainfall  is_event
+    0  2020.0 -122.4  37.7       500         0
+    1  2021.0 -122.3  37.8       600         1
+    2  2022.0 -122.2  37.9       550         0
+    
+    --- Scaled DataFrame ---
+       time  lon  lat  rainfall  is_event
+    0   0.0  0.0  0.0       0.0         0
+    1   0.5  0.5  0.5       1.0         1
+    2   1.0  1.0  1.0       0.5         0
 
-   --- Scaled DataFrame ---
-      time   lon   lat  rainfall  is_event
-   0   0.0   0.0   0.0       0.0         0
-   1   0.5   0.5   0.5       1.0         1
-   2   1.0   1.0   1.0       0.5         0
-
-   Coordinate Scaler Range: [2.  0.2 0.2]
-   Feature Scaler Range: [100.]
+Coordinate Scaler Range: [2.  0.2 0.2]
+Feature Scaler Range: [100.]
 
 .. raw:: html
 

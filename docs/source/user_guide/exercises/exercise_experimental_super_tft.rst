@@ -1,37 +1,35 @@
 .. _exercise_experimental_super_tft:
 
-====================================================
-Exercise: Forecasting with Experimental SuperXTFT
-====================================================
+==============================================
+Exercise: Advanced Forecasting with SuperXTFT
+==============================================
 
-Welcome to this exercise on using the experimental
-:class:`~fusionlab.nn.SuperXTFT` model from ``fusionlab-learn``.
-`SuperXTFT` builds upon the :class:`~fusionlab.nn.XTFT` architecture
-by incorporating additional components like input Variable Selection
-Networks (VSNs) and post-processing Gated Residual Networks (GRNs)
-for several internal stages.
+Welcome to this exercise on using the advanced
+:class:`~fusionlab.nn.transformers.SuperXTFT` model from ``fusionlab-learn``.
+`SuperXTFT` enhances the powerful :class:`~fusionlab.nn.transformers.XTFT`
+architecture by incorporating additional components, such as input
+Variable Selection Networks (VSNs) and post-processing Gated
+Residual Networks (GRNs), to maximize representation learning.
 
-.. warning::
-   ``SuperXTFT`` is currently considered **experimental**. Its API and
-   behavior may change in future releases, or it might be merged into
-   the main ``XTFT`` or deprecated. It is **not recommended for
-   production use** at this time. This exercise is for exploration
-   and understanding its structure. For stable deployments, please use
-   :class:`~fusionlab.nn.XTFT`.
+.. note::
+
+   ``SuperXTFT`` is a production-ready model and represents the most
+   powerful, feature-rich version in the TFT family. It is the
+   recommended choice when you are aiming for maximum predictive
+   performance and have the computational resources for a deeper, more
+   parameter-rich model.
 
 **Learning Objectives:**
 
-* Understand how to instantiate and use the `SuperXTFT` model.
-* Recognize that the data preparation and overall workflow are very
-  similar to those for `XTFT`.
-* Perform a multi-step quantile forecast using `SuperXTFT`.
-* Visualize the probabilistic forecasts.
+* Leverage the advanced ``SuperXTFT`` model for a complex forecasting task.
+* Understand that the data preparation workflow is identical to that for ``XTFT``.
+* Perform a multi-step quantile forecast to generate probabilistic predictions.
+* Visualize the forecast results, including their uncertainty intervals.
 
 Let's begin!
 
-
 Prerequisites
--------------
+---------------
 
 Ensure you have ``fusionlab-learn`` and its common dependencies
 installed.
@@ -59,7 +57,7 @@ We start by importing necessary libraries and ``fusionlab`` components.
    import warnings
 
    # FusionLab imports
-   from fusionlab.nn.transformers import SuperXTFT # Import SuperXTFT
+   from fusionlab.nn.transformers import SuperXTFT 
    from fusionlab.nn.utils import reshape_xtft_data
    from fusionlab.nn.losses import combined_quantile_loss
    from fusionlab.datasets.make import make_multi_feature_time_series
@@ -379,22 +377,27 @@ a sample item, similar to the XTFT example.
    interval) against actual validation data.
 
 Discussion of Exercise
--------------------------
-This exercise demonstrated the usage of the experimental
-:class:`~fusionlab.nn.SuperXTFT` model. You observed that:
-* The data preparation steps (feature definition, scaling, sequence
-  generation with `reshape_xtft_data`) are identical to those for
-  the standard `XTFT` model, as `SuperXTFT` expects the same
-  `[static, dynamic, future]` input structure.
-* Instantiation and compilation are also very similar, using the
-  same set of core hyperparameters.
-* The main differences of `SuperXTFT` (input VSNs, additional GRNs)
-  are internal to its architecture. From a user's perspective, the
-  interaction pattern for training and prediction is largely the same
-  as with `XTFT`.
+----------------------
+Congratulations! You have successfully completed the end-to-end
+workflow for using the advanced ``SuperXTFT`` model.
 
-Remember that `SuperXTFT` is experimental. For production or stable
-research, :class:`~fusionlab.nn.XTFT` is the recommended choice. This
-exercise serves to illustrate how one might explore such experimental
-variants within the ``fusionlab-learn`` framework.
+This exercise has demonstrated several key points:
 
+* The data preparation steps (feature definition, scaling, and
+  sequence generation) are **identical** to those for the standard
+  ``XTFT`` model. This makes it easy to upgrade your workflow to
+  use this more powerful architecture without changing your data pipeline.
+* Instantiation and compilation follow the same familiar pattern, using
+  a consistent set of core hyperparameters.
+* The key enhancements of ``SuperXTFT``—its input Variable Selection
+  Networks for feature selection and its post-attention Gated
+  Residual Networks for deeper processing—are seamlessly integrated
+  within its internal architecture. This allows you to leverage its
+  additional power without altering your core training and prediction code.
+
+You have successfully trained the most powerful model in the ``fusionlab-learn``
+TFT family. For new projects, it is often a good strategy to start
+with the standard :class:`~fusionlab.nn.models.XTFT` as a robust baseline, and
+then upgrade to ``SuperXTFT`` when you need to push for the highest
+possible performance, especially on datasets with many features or
+complex underlying dynamics.

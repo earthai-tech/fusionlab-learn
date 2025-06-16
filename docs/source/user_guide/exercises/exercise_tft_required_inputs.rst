@@ -41,8 +41,6 @@ installed. For visualizations, `matplotlib` is also needed.
 
    pip install fusionlab-learn matplotlib scikit-learn
 
----
-
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 First, we import all necessary libraries.

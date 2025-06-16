@@ -19,16 +19,16 @@ forecast domain.
 **Learning Objectives:**
 
 * Generate synthetic spatio-temporal data with static, dynamic
-    (past), and future known features.
+  (past), and future known features.
 * Correctly structure the input data dictionary for ``PIHALNet``,
-    ensuring the ``coords`` input matches the ``forecast_horizon``.
+  ensuring the ``coords`` input matches the ``forecast_horizon``.
 * Instantiate and compile a ``PIHALNet`` model with a basic
-    configuration.
+  configuration.
 * Train the model on the synthetic dataset for a few epochs.
 * Make predictions using the trained model.
 * Format the model's output predictions into a pandas DataFrame.
 * Use the :func:`~fusionlab.plot.forecast.forecast_view` utility
-    to create a spatial visualization of the forecast results.
+  to create a spatial visualization of the forecast results.
 
 Let's begin!
 
@@ -42,7 +42,6 @@ installed. For visualizations, `matplotlib` is also required.
 
    pip install fusionlab-learn matplotlib
 
----
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

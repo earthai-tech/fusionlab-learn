@@ -17,19 +17,19 @@ forecasts that capture prediction uncertainty.
 **Learning Objectives:**
 
 * Generate a synthetic time series dataset with static, dynamic
-    past, and known future features.
+  past, and known future features.
 * Prepare and shape the data into the list format required by the
-    model: ``[static_data, dynamic_data, future_data]``.
+  model: ``[static_data, dynamic_data, future_data]``.
 * Instantiate the ``TimeSeriesTransformer`` and configure it for
-    probabilistic (quantile) forecasting.
+  probabilistic (quantile) forecasting.
 * Implement a custom quantile loss function and compile the model.
 * Train the model and visualize the results, including the forecast
-    distribution and uncertainty bounds.
+  distribution and uncertainty bounds.
 
 Let's get started!
 
 Prerequisites
--------------
+---------------
 
 Ensure you have ``fusionlab-learn`` and its common dependencies
 installed.
@@ -40,7 +40,7 @@ installed.
 
 
 TimeSeriesTransformer
-----------------------==
+-----------------------
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -165,7 +165,7 @@ This requires a corresponding quantile loss function for training.
    print("\nStarting TimeSeriesTransformer training...")
    history = model.fit(
        train_inputs,
-       train_inputs[1], # Use dynamic features as dummy targets
+       train_targets, 
        validation_data=(val_inputs, val_targets),
        epochs=15,
        batch_size=128,
@@ -181,7 +181,7 @@ This requires a corresponding quantile loss function for training.
 
    Starting TimeSeriesTransformer training...
    Training complete.
-   Final validation loss: 0.2345
+   Final validation loss: 0.4041
 
 Step 4: Visualize the Probabilistic Forecast
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

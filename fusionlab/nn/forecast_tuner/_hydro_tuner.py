@@ -147,8 +147,8 @@ class HydroTuner(PINNTunerBase):
         A dictionary defining the hyperparameter search space. The keys
         are the names of the parameters to tune, and the values define
         their search range or choices.
-        - For discrete choices, provide a list:
-          ``{'num_heads': [2, 4, 8]}``
+        
+        - For discrete choices, provide a list:``{'num_heads': [2, 4, 8]}``
         - For ranges, provide a dictionary with a ``type`` key:
           ``{'dropout_rate': {'type': 'float', 'min_value': 0.1, 'max_value': 0.4}}``
           Supported types are ``'int'``, ``'float'``, ``'bool'``, and ``'choice'``.
@@ -204,8 +204,8 @@ class HydroTuner(PINNTunerBase):
                         instance by inferring dimensions from data.
     HydroTuner.build : The method that constructs a model for a single trial.
     HydroTuner.run : The main method to start the hyperparameter search.
-    fusionlab.nn.pinn.PIHALNet : One of the target models for this tuner.
-    fusionlab.nn.pinn.TransFlowSubsNet : The other primary target model.
+    fusionlab.nn.pinn.models.PIHALNet : One of the target models for this tuner.
+    fusionlab.nn.pinn.models.TransFlowSubsNet : The other primary target model.
 
     Examples
     --------
@@ -265,7 +265,6 @@ class HydroTuner(PINNTunerBase):
         overwrite: bool = True,
         # Legacy parameter for backward compatibility
         param_space: Optional[Dict[str, Any]] = None,
-        # Catch-all for other Keras-Tuner specific arguments
         **kwargs
     ):
         # 1. Initialize the parent Keras Tuner HyperModel
@@ -955,134 +954,3 @@ class HydroTuner(PINNTunerBase):
             hp_type='float'
         )
     
-# I have renamed
-class HydroTuner(PINNTunerBase):
-    """
-    A robust hyperparameter tuner for hydrogeological PINN models like
-    PIHALNet and TransFlowSubsNet.
-    """
-    def __init__(
-        self,
-        model_class: Union[Type[PIHALNet], Type[TransFlowSubsNet]], # make it so it can accept str or class 
-        # Do you thinnk it is good idea to have fixed params ? if not then remove and keep 
-        # only param_space for configuration . 
-        fixed_model_params: Dict[str, Any],#
-        param_space: Optional[Dict[str, Any]] = None,
-        # ... other standard tuner args like objective, max_trials, etc.
-        **tuner_kwargs
-    ):
-        """
-        Initializes the HydroPINNTuner.
-
-        Args:
-            model_class: The model class to be tuned (either PIHALNet or
-                         TransFlowSubsNet). This is the key parameter that
-                         controls the tuner's behavior.
-            fixed_model_params: Dictionary of parameters that will not be tuned.
-            param_space: Optional dictionary defining the search space.
-            **tuner_kwargs: Standard arguments for the Keras Tuner backend.
-        """
-        # Pass tuner-specific kwargs to the base class
-        super().__init__(**tuner_kwargs)
-
-        if model_class.__name__ not in {"PIHALNet", "TransFlowSubsNet"}:
-            raise ValueError(
-                "model_class must be either PIHALNet or TransFlowSubsNet."
-            )
-
-        self.model_class = model_class
-        self.fixed_model_params = fixed_model_params
-        self.param_space = param_space or {}
-        # ... (validation of required fixed_params would go here) ...
-
-
-    def build(self, hp: kt.HyperParameters) -> Model:
-        """
-        Builds and compiles the specified model (PIHALNet or TransFlowSubsNet)
-        with a given set of hyperparameters.
-        """
-        # --- 1. Define Common Architectural Hyperparameters ---
-        # These are shared by both models as they inherit from BaseAttentive.
-        model_params = {
-            **self.fixed_model_params,
-            'embed_dim': self._get_hp_int(hp, 'embed_dim', 16, 64, step=16),
-            'hidden_units': self._get_hp_int(hp, 'hidden_units', 32, 128, step=32),
-            'lstm_units': self._get_hp_int(hp, 'lstm_units', 32, 128, step=32),
-            'attention_units': self._get_hp_int(hp, 'attention_units', 32, 128, step=32),
-            'num_heads': self._get_hp_choice(hp, 'num_heads', [1, 2, 4]),
-            'dropout_rate': self._get_hp_float(hp, 'dropout_rate', 0.0, 0.3),
-        }
-
-        # --- 2. Define Model-Specific PINN Hyperparameters ---
-        compile_params = {}
-        
-        # Hyperparameters specific to TransFlowSubsNet
-        if self.model_class.__name__ == 'TransFlowSubsNet':
-            # Tune K, Ss, Q for groundwater flow
-            k_type = self._get_hp_choice(hp, 'K_type', ['learnable', 'fixed'])
-            model_params['K'] = 'learnable' if k_type == 'learnable' else \
-                self._get_hp_float(hp, 'K_value', 1e-6, 1e-3, sampling='log')
-
-            ss_type = self._get_hp_choice(hp, 'Ss_type', ['learnable', 'fixed'])
-            model_params['Ss'] = 'learnable' if ss_type == 'learnable' else \
-                self._get_hp_float(hp, 'Ss_value', 1e-6, 1e-4, sampling='log')
-
-            q_type = self._get_hp_choice(hp, 'Q_type', ['learnable', 'fixed'])
-            model_params['Q'] = 'learnable' if q_type == 'learnable' else \
-                self._get_hp_float(hp, 'Q_value', -0.1, 0.1)
-
-            # Tune the two physics loss weights
-            compile_params['lambda_gw'] = self._get_hp_float(
-                hp, 'lambda_gw', 0.1, 2.0)
-            compile_params['lambda_cons'] = self._get_hp_float(
-                hp, 'lambda_cons', 0.1, 2.0)
-
-        # Hyperparameter for consolidation coefficient C (used by both)
-        c_type = self._get_hp_choice(
-            hp, 'pinn_coefficient_C_type', ['learnable', 'fixed'])
-        model_params['pinn_coefficient_C'] = 'learnable' if c_type == 'learnable' else \
-            self._get_hp_float(hp, 'pinn_coefficient_C_value', 1e-4, 1e-1, sampling='log')
-        
-        # --- 3. Instantiate and Compile the Correct Model ---
-        
-        # Filter for valid kwargs before instantiation
-        valid_model_params = _get_valid_kwargs(self.model_class, model_params)
-        model = self.model_class(**valid_model_params)
-
-        # Standard loss and metrics dictionaries
-        loss_dict = {
-            'subs_pred': 'mse',
-            'gwl_pred': 'mse'
-        }
-        metrics_dict = {
-            'subs_pred': ['mae'],
-            'gwl_pred': ['mae']
-        }
-        
-        learning_rate_hp = self._get_hp_choice(
-            hp, 'learning_rate', [1e-3, 5e-4, 1e-4])
-        optimizer = Adam(learning_rate=learning_rate_hp, clipnorm=1.0)
-        
-        # Compile with the correct, model-specific parameters
-        model.compile(
-            optimizer=optimizer,
-            loss=loss_dict,
-            metrics=metrics_dict,
-            **compile_params # This passes lambda_gw/lambda_cons or is empty
-        )
-        
-        return model
-        
-    # The `create` classmethod would also need to accept model_class
-    @classmethod
-    def create(
-        cls,
-        model_class: Union[Type[PIHALNet], Type[TransFlowSubsNet]],
-        # ... other args like fixed_model_params, inputs_data, etc.
-        **kwargs
-    ) -> 'HydroPINNTuner':
-        # ... (logic to infer dimensions) ...
-        # Then instantiate with the provided model_class
-        return cls(model_class=model_class, **kwargs)
-
-    # Note: _get_hp_int, _get_hp_float, etc. helper methods would be included here.

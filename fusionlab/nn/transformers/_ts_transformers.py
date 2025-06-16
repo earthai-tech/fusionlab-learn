@@ -241,9 +241,12 @@ class TimeSeriesTransformer(Model, NNLearner):
             future_covariate_dim= self.future_input_dim, 
             forecast_horizon= self.forecast_horizon, 
             mode='soft', 
-            model_name="tft_flex"
+            model_name="tft_flex", 
+            verbose = 7 
         )
-
+        # print( "_static_in", getattr(_static_in, 'shape', 'N/A'))
+        # print( "_dynamic_in", getattr(_dynamic_in, 'shape', 'N/A'))
+        # print( "_future_in", getattr(_future_in, 'shape', 'N/A'))
         # Use the utility to prepare and validate inputs
         # Note: `prepare_model_inputs` expects (dynamic, static, future)
 

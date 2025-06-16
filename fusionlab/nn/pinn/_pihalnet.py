@@ -3,7 +3,7 @@
 #   Author: LKouadio <etanoyau@gmail.com>
 
 """
-Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
+Legacy Physics-Informed Hybrid Attentive LSTM Network (PiHALNet).
 """
 
 from textwrap import dedent # noqa 
@@ -104,7 +104,7 @@ __all__ =["PiHALNet"]
                 "includes options ('gw_flow', 'both', 'none') which are "
                 "intended for future development or are not the primary "
                 "focus of the current physics-informed implementation. "
-                "This version of PIHALNet is optimized for and defaults to "
+                "This version of PiHALNet is optimized for and defaults to "
                 "'consolidation' mode to ensure robust physical constraints "
                 "based on Terzaghi's theory with finite differences. "
                 "The model will proceed using 'consolidation' mode. Full "
@@ -1583,8 +1583,8 @@ Notes
 Examples
 --------
 # 1) Instantiate PIHALNet for point forecasts (no quantiles):
->>> from fusionlab.nn.pinn.models import PIHALNet
->>> model = PIHALNet(
+>>> from fusionlab.nn.pinn.models import PiHALNet
+>>> model = PiHALNet(
 ...     static_input_dim=5,
 ...     dynamic_input_dim=3,
 ...     future_input_dim=2,

@@ -79,14 +79,13 @@ __all__ = ["PIHALNet"]
             'message': (
                 "Warning: The 'pde_mode' parameter received a value that "
                 "includes options ('gw_flow', 'both', 'none') which are "
-                "intended for future development or are not the primary "
-                "focus of the current physics-informed implementation. "
+                "the primary focus of the current physics-informed implementation. "
                 "This version of PIHALNet is optimized for and defaults to "
                 "'consolidation' mode to ensure robust physical constraints "
                 "based on Terzaghi's theory with finite differences. "
                 "The model will proceed using 'consolidation' mode. Full "
                 "support for other PDE modes and their specific derivative "
-                "requirements will be explored in future releases."
+                "can be explored in 'fusionlab.nn.pinn.TransFlowSubsNet' instead."
             ),
             'default': 'consolidation', 
         }

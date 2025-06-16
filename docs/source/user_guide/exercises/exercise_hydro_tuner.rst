@@ -18,17 +18,17 @@ the lower-level core API.
 **Learning Objectives:**
 
 * Generate a synthetic hybrid dataset with features and coordinates suitable
-    for a PINN model.
+  for a PINN model.
 * Define a custom hyperparameter ``search_space``, including architectural,
-    physical, and optimization parameters.
+  physical, and optimization parameters.
 * Use the recommended ``HydroTuner.create()`` factory method to
-    automatically infer data dimensions and configure the tuner.
+  automatically infer data dimensions and configure the tuner.
 * Launch the tuning process with the high-level ``.run()`` method, which
-    accepts NumPy arrays directly.
+  accepts NumPy arrays directly.
 * (Advanced) Understand how to manually prepare a ``tf.data.Dataset`` and
-    use the lower-level ``.search()`` method.
+  use the lower-level ``.search()`` method.
 * Retrieve the best hyperparameters and the best-performing model
-    after the search is complete.
+  after the search is complete.
 
 Let's begin!
 
@@ -42,7 +42,7 @@ Ensure you have ``fusionlab-learn`` and its dependencies, including
 
    pip install fusionlab-learn "keras-tuner>=1.4.0" matplotlib scikit-learn
 
----
+
 
 Step 1: Imports and Setup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
