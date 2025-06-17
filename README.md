@@ -6,7 +6,7 @@
 
 <h1 align="center">fusionlab-learn</h1>
 
-<p align="center"><em>🔥🧪 A Research-Oriented Library for Advanced Time Series Forecasting with Hybrid, Transformer, and Physics-Informed Models</em></p>
+<p align="center"><em>A Research-Oriented Library for Advanced Time Series Forecasting with Hybrid, Transformer, and Physics-Informed Models</em></p>
 
 <p align="center">
   <a href="https://pypi.org/project/fusionlab-learn/"><img src="https://img.shields.io/pypi/v/fusionlab-learn" alt="PyPI Version"></a>
