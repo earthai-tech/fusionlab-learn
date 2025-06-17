@@ -46,46 +46,6 @@ from ._property import (
 )
 from ._config import CITY_CONFIGS 
 
-try:
-    from ..utils.data_utils import nan_ops
-    from ..utils.geo_utils import augment_city_spatiotemporal_data
-    from ..utils.geo_utils import generate_dummy_pinn_data
-    from ..utils.generic_utils import ExistenceChecker 
-    from ..utils.spatial_utils import spatial_sampling
-    from ..utils.io_utils import fetch_joblib_data
-    
-except ImportError:
-    warnings.warn(
-        "Could not import augment_city_spatiotemporal_data from "
-        "fusionlab.utils.geo_utils. Data augmentation will not be "
-        "available."
-    )
-    warnings.warn(
-        "Could not import spatial_sampling from fusionlab.utils. "
-        "Sampling functionality will be limited."
-    )
-    def spatial_sampling(*args, **kwargs):
-        warnings.warn(
-            "spatial_sampling is unavailable. Returning full data."
-        )
-        return args[0] if args else None
-
-    def augment_city_spatiotemporal_data(df, **kwargs):
-        warnings.warn(
-            "augment_city_spatiotemporal_data is unavailable. "
-            "Skipping augmentation."
-        )
-        return df
-
-    def nan_ops(df, **kwargs):
-        warnings.warn("nan_ops function not found. Skipping NaN handling.")
-        return df
-
-    def fetch_joblib_data(*args, **kwargs):
-        warnings.warn("fetch_joblib_data not found. Caching disabled.")
-        raise FileNotFoundError  # Mimic cache miss
-
-
 logger = fusionlog().get_fusionlab_logger(__name__)
 
 # --- Metadata Definition ---
@@ -149,6 +109,9 @@ def load_subsidence_pinn_data(
     vars_range = None,
     verbose: int = 1, 
 ) -> Union[pd.DataFrame, XBunch]:
+    
+    from ..utils.geo_utils import augment_city_spatiotemporal_data
+    from ..utils.geo_utils import generate_dummy_pinn_data
 
     if data_name.lower() not in CITY_CONFIGS:
         raise ValueError(
@@ -874,6 +837,9 @@ def fetch_zhongshan_data(
     .. [Liu24] Liu, J., et al. (2024). Machine learning-based techniques...
                *Journal of Environmental Management*, 352, 120078.
     """
+
+    from ..utils.spatial_utils import spatial_sampling
+    
     # --- Step 1: Obtain filepath using helper ---
     filepath_to_load = download_file_if(
         metadata=_ZHONGSHAN_METADATA, data_home=data_home,
@@ -1087,6 +1053,8 @@ def fetch_nansha_data(
     OSError
         If there is an error reading the dataset file.
     """
+    from ..utils.spatial_utils import spatial_sampling
+    
     # --- Step 1: Obtain filepath using helper ---
     filepath_to_load = download_file_if(
         metadata=_NANSHA_METADATA, # Use Nansha metadata
@@ -1453,7 +1421,9 @@ def load_processed_subsidence_data(
     >>> print(f"Loaded and processed sample shape: {df_proc_sample.shape}")
 
     """
+    from ..utils.io_utils import fetch_joblib_data
     from ..nn.utils import reshape_xtft_data
+    from ..utils.data_utils import nan_ops
     
     # --- Configuration based on dataset name ---
     if dataset_name == 'zhongshan':
@@ -1948,6 +1918,8 @@ def _resolve_data_path(
     >>> # path would be '.../my_data_other/unique_file.csv'
     >>> # meta.file would become 'unique_file.csv'
     """
+    from ..utils.generic_utils import ExistenceChecker 
+    
     if data_home is None:
         # Case 1: No data_home provided. Use default fusionlab cache.
         resolved_home = get_data()

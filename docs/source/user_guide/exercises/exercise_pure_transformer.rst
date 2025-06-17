@@ -123,7 +123,8 @@ known future features.
      Training Inputs (static, dynamic, future): [(900, 3), (900, 30, 4), (900, 12, 2)]
      Training Targets: (900, 12, 1)
 
-### Step 3: Define, Compile, and Train the Model
+Step 3: Define, Compile, and Train the Model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Now, we instantiate the ``TimeSeriesTransformer``. We will configure it
 for probabilistic forecasting by setting the `quantiles` parameter.
 This requires a corresponding quantile loss function for training.

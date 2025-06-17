@@ -444,26 +444,27 @@ Step 9: Visualize Forecast for One Item
    Visualization of the XTFT quantile forecast (median and interval)
    against actual validation data for a sample item.
 
-**Discussion of Exercise:**
+Discussion of Exercise:
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This exercise walked through a complete workflow for using the
+:class:`~fusionlab.nn.XTFT` model for multi-step quantile
+forecasting using all three input types: static, dynamic, and future
+features. Key takeaways include:
 
-   This exercise walked through a complete workflow for using the
-   :class:`~fusionlab.nn.XTFT` model for multi-step quantile
-   forecasting using all three input types: static, dynamic, and future
-   features. Key takeaways include:
-   * The use of :func:`~fusionlab.datasets.make.make_multi_feature_time_series`
-     to generate rich synthetic data.
-   * The importance of defining feature roles and appropriately scaling
-     numerical inputs.
-   * Ensuring that static features (like `series_id` and `base_level`
-     from `make_multi_feature_time_series`) are included when calling
-     :func:`~fusionlab.nn.utils.reshape_xtft_data` if they are to be
-     used by the model. This results in `static_input_dim > 0`.
-   * Configuring XTFT for quantile output and using
-     :func:`~fusionlab.nn.losses.combined_quantile_loss`.
-   * The ability to inverse-transform predictions for interpretation.
-   * Visualizing quantile forecasts to assess prediction uncertainty.
+* The use of :func:`~fusionlab.datasets.make.make_multi_feature_time_series`
+  to generate rich synthetic data.
+* The importance of defining feature roles and appropriately scaling
+  numerical inputs.
+* Ensuring that static features (like `series_id` and `base_level`
+  from `make_multi_feature_time_series`) are included when calling
+  :func:`~fusionlab.nn.utils.reshape_xtft_data` if they are to be
+  used by the model. This results in `static_input_dim > 0`.
+* Configuring XTFT for quantile output and using
+  :func:`~fusionlab.nn.losses.combined_quantile_loss`.
+* The ability to inverse-transform predictions for interpretation.
+* Visualizing quantile forecasts to assess prediction uncertainty.
 
-   For real-world applications, extensive hyperparameter tuning (see
-   :doc:`../hyperparameter_tuning/index`) and more sophisticated
-   validation strategies would be necessary.
+For real-world applications, extensive hyperparameter tuning (see
+:doc:`../hyperparameter_tuning/index`) and more sophisticated
+validation strategies would be necessary.
 

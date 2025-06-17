@@ -152,6 +152,27 @@ if __name__ + ".kdiagram" not in sys.modules:
     _dummy_kd = types.ModuleType(__name__ + ".kdiagram")
     sys.modules[__name__ + ".kdiagram"] = _dummy_kd
 
+# In Make Module Public for Doc build
+from . import api 
+from . import compat 
+from . import core 
+from . import metrics # noqa
+from . import nn  # noqa
+from . import utils # noqa
+from . import plot # noqa
+from . import params  # noqa
+from . import datasets # noqa
+
+__all__.extend ([
+    "metrics",
+    "nn",
+    "utils",
+    "datasets",
+    "plot", 
+    "params"
+    ]
+)
+
 def __getattr__(name: str):
     """
     Called when someone does `fusionlab.<name>` and <name> isn't found
