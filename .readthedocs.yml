@@ -15,7 +15,8 @@ python:
     - requirements: docs/requirements.txt
     # then install your package so Sphinx can import it
     - method: pip
-      path: .
+      path: . 
+      extra_args: ["--upgrade", "--force-reinstall"]
 
 sphinx:
   configuration: docs/source/conf.py
