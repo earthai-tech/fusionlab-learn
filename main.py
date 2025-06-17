@@ -1,757 +1,660 @@
-
+# -*- coding: utf-8 -*-
+# License : BSD-3-Clause
 """
-nansha_forecast_2022_2025.py
+main.py: Nansha Land Subsidence Forecasting with XTFT
 
-This script performs quantile-based subsidence prediction for the years
-2022-2025 using the XTFT deep learning model. The dataset for Nansha
-is used. For training, data up to 2021 is used, while 2022 might be
-reserved for validation if a train/test split on the original DataFrame
-is performed before sequencing. The model forecasts subsidence for
-2022-2025 with a forecast horizon of 4 years.
+This script performs quantile-based subsidence prediction for the
+Nansha district using the XTFT deep learning model from the
+fusionlab-learn library.
 
-Note on Data Import: This script (main.py) is primarily used for
-reproducibility purposes and loads a subset of 2,000 samples from the
-full Nansha subsidence data. The complete dataset is available upon
-request. The 2,000 samples are sufficient for demonstrating the
-forecasting process.
+The Nansha dataset typically spans multiple years (e.g., 2015-2022).
+For this demonstration with sampled data:
+- Training data: Up to and including TRAIN_END_YEAR.
+- Test/Validation data for forecast generation: Year FORECAST_START_YEAR.
+- Forecasting period: Configurable, e.g., 2-year horizon for sample.
+
+Note on Data Import:
+This script is designed for reproducibility.
+1. It first attempts to load the Nansha dataset using
+   `fusionlab.datasets.fetch_nansha_data()` (which provides a
+   2,000-sample subset by default).
+2. If that fails, it tries to load 'nansha_500_000.csv' from a local
+   'data/' or '../data/' directory.
+3. If that also fails, it tries to load 'nansha_2000.csv' from
+   local 'data/' or '../data/' directory.
+For the full dataset, please contact the authors.
 
 Workflow:
 ---------
-1. Data preprocessing and feature engineering.
-2. Encoding categorical features and normalizing numerical data.
-3. Splitting the dataset into training and testing sets (conceptually,
-   actual split happens after sequencing).
-4. Reshaping data for XTFT model input using `reshape_xtft_data`.
-5. Splitting the sequence data into train-validation sets.
-6. Training and evaluating the XTFT model.
-7. Generating forecasts for the specified future years.
-8. Visualizing the actual versus predicted subsidence.
+1. Configuration and Library Imports.
+2. Load and Inspect Nansha Dataset with fallbacks.
+3. Preprocessing: Feature Selection, Cleaning, Encoding, Scaling.
+4. Define Feature Sets (Static, Dynamic, Future).
+5. Split Master Data by Year (Train/Test).
+6. Sequence Generation for Training Data using `reshape_xtft_data`.
+7. Train/Validation Split of Sequence Data.
+8. XTFT Model Definition, Compilation, and Training.
+9. Forecasting on Test Data Sequences (if available).
+10. Visualization of Forecasts (if forecasts generated).
+11. Saving All Generated Figures.
 
-Author: LKouadio
+Paper Reference:
+XTFT: A Next-Generation Temporal Fusion Transformer for
+Uncertainty-Rich Time Series Forecasting (Submitted to IEEE PAMI)
 
+Author: [Anonymous] for Double-blind review
 """
 
 # ==========================================
-#  SECTION 1: LIBRARY IMPORTS & CONFIG
+#  SECTION 0: PREAMBLE & CONFIGURATION
 # ==========================================
 import os
 import shutil
-import time
-from datetime import datetime
 import joblib
 import pandas as pd
-import matplotlib.pyplot as plt
-import numpy as np # Ensure numpy is imported
+import numpy as np
+
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+import warnings
 
-# FusionLab - Custom Modules
-try:
-    from fusionlab.api.util import get_table_size
-    from fusionlab.datasets import fetch_nansha_data 
-    from fusionlab.datasets._property import get_data
-    from fusionlab.nn.losses import combined_quantile_loss
-    from fusionlab.nn.transformers import SuperXTFT, XTFT
-    from fusionlab.nn.utils import (
-        forecast_multi_step,
-        reshape_xtft_data_in,
-    )
-    from fusionlab.plot.forecast import visualize_forecasts
-    from fusionlab.utils.data_utils import nan_ops
-    from fusionlab.utils.io_utils import fetch_joblib_data
-except ImportError as e:
-    print(f"Error importing fusionlab modules: {e}. "
-          "Please ensure fusionlab-learn is installed correctly.")
-    raise
-
-# Suppress TensorFlow/Keras logs for cleaner output
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Suppress C++ level logs
+# Suppress common warnings for cleaner output
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', category=FutureWarning)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' # Suppress C++ TF logs
 tf.get_logger().setLevel('ERROR')
 if hasattr(tf, 'autograph') and hasattr(tf.autograph, 'set_verbosity'):
     tf.autograph.set_verbosity(0)
 
-# Get terminal width for pretty printing, default to 80
+# FusionLab Imports
 try:
-    _TW = get_table_size()
-except Exception:
-    _TW = 80
+    from fusionlab.api.util import get_table_size
+    from fusionlab.datasets import fetch_nansha_data
+    # from fusionlab.datasets._property import get_data # Not used if path is explicit
+    from fusionlab.nn.losses import combined_quantile_loss
+    from fusionlab.nn.transformers import XTFT, SuperXTFT 
+    from fusionlab.nn.utils import (
+        reshape_xtft_data,
+        format_predictions_to_dataframe,
+    )
+    from fusionlab.plot.forecast import plot_forecasts
+    from fusionlab.utils.data_utils import nan_ops
+    from fusionlab.utils.io_utils import fetch_joblib_data, save_job # noqa ( can use for robust saver)
+    from fusionlab.utils.generic_utils import save_all_figures
+except ImportError as e:
+    print(f"Critical Error: Failed to import fusionlab modules: {e}. "
+          "Please ensure 'fusionlab-learn' (version >= 0.2.1) is "
+          "installed correctly in your environment.")
+    raise
 
-# =================== CONFIGURATION PARAMETERS ===================
-# Toggle to use the SuperXTFT variant; if False, use standard XTFT.
-USE_SUPER = False
+# --- Configuration Parameters ---
+CITY_NAME = 'nansha'
+USE_SUPER_XTFT = False # Set to False for standard XTFT for the paper
+MODEL_SUFFIX = '_super' if USE_SUPER_XTFT else ''
+TRANSFORMER_CLASS = SuperXTFT if USE_SUPER_XTFT else XTFT
 
-# Suffix for file naming based on transformer type.
-super_ext = '_super' if USE_SUPER else ''
+TRAIN_END_YEAR = 2021
+FORECAST_START_YEAR = 2022
+# For the paper with FULL data, use FORECAST_HORIZON_YEARS = 4.
+# For SAMPLE data (2k or 500k), a shorter horizon is more robust.
+FORECAST_HORIZON_YEARS = 3
+TIME_STEPS = 2 # Lookback window (in years)
+# Min length needed per group = TIME_STEPS + FORECAST_HORIZON_YEARS
 
-# Transformer model selection.
-TRANSFORMER_ = SuperXTFT if USE_SUPER else XTFT
+FORECAST_YEARS = [
+    FORECAST_START_YEAR + i for i in range(FORECAST_HORIZON_YEARS)
+    ]
+print(f"Configuration: TIME_STEPS={TIME_STEPS}, "
+      f"FORECAST_HORIZON={FORECAST_HORIZON_YEARS} years.")
+print(f"Forecasting for years: {FORECAST_YEARS}")
 
-# Years to forecast.
-forecast_years = [2022, 2023, 2024, 2025] # Nansha forecast period
+SPATIAL_COLS = ['longitude', 'latitude']
+QUANTILES = [0.1, 0.5, 0.9]
+# QUANTILES = None # For point forecast
 
-# Number of past time steps for input sequence length.
-# This should be carefully chosen based on data characteristics.
-# For this example, using 3 as per the script's original setting.
-time_steps = 3
+EPOCHS = 50 # For demo; increase for paper (e.g., 100-200)
+LEARNING_RATE = 0.001
+BATCH_SIZE = 32
 
-# Spatial columns for grouping data. Set to None if not applicable
-# or if data is already for a single spatial entity.
-spatial_cols = None # Example: ["longitude", "latitude"]
+BASE_OUTPUT_DIR = "results" # For Code Ocean
+os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
+RUN_OUTPUT_PATH = os.path.join(
+    BASE_OUTPUT_DIR, f"{CITY_NAME}_xtft_run{MODEL_SUFFIX}"
+    )
+if os.path.isdir(RUN_OUTPUT_PATH): shutil.rmtree(RUN_OUTPUT_PATH)
+os.makedirs(RUN_OUTPUT_PATH, exist_ok=True)
+print(f"Output artifacts will be saved in: {RUN_OUTPUT_PATH}")
 
-# Quantile values for probabilistic forecasting.
-# Set to None for deterministic (point) forecasts.
-quantiles = [0.1, 0.5, 0.9]
+SAVE_INTERMEDIATE_ARTEFACTS = True
+SAVE_MODEL_AS_SINGLE_FILE = True # .keras format
 
-# Anomaly detection strategy.
-# Options: None, 'feature_based', 'prediction_based', 'from_config'.
-anomaly_detection_strategy = None
-
-# Training hyperparameters
-EPOCHS = 50 # Number of epochs for training
-LEARNING_RATE = 0.001 # Learning rate for the Adam optimizer
-BATCH_SIZE = 32 # Batch size for training
-
-city_name ='nansha'
-
-# Paths
-# Default data path from fusionlab.datasets._property
-# This is typically ~/fusionlab_data when using #get_data()
-data_path = get_data() #'/results/' # get_data() # use it for fetching nansha data remotely and use software path  to save results 
-# Create a subdirectory within data_path for this specific run's artifacts
-run_output_path = os.path.join(data_path,  f"nansha_forecast_run{super_ext}")
-
-# Clean any previous contents for a fresh run
-if os.path.isdir(run_output_path):
-    shutil.rmtree(run_output_path)
-
-os.makedirs(run_output_path, exist_ok=True)
-print(f"Output artifacts will be saved in: {run_output_path}")
-
-# ------------------------------------------------------------------
-# RUNTIME OPTIONS
-# ------------------------------------------------------------------
-# save_intermediate_artefacts  –  If True, the script exports all
-#     mid‑pipeline artefacts (cleaned/encoded dataframe, train–test
-#     master CSVs, fitted scaler) to the current run directory.  
-#     Enables easy debugging and guarantees full reproducibility.
-
-save_intermediate_artefacts = True
-
-# save_single_file_archive     –  Governs the checkpoint format:  
-#       - True   →  write a compact single‑file “.keras” archive  
-#                   (portable, but omits variables/ and assets/ dirs).  
-#       - False  →  write a full TensorFlow SavedModel directory  
-#                   containing saved_model.pb, variables/, assets/, etc.
-
-save_single_file_archive    = True
+try: _TW = get_table_size()
+except: _TW = 80
+print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} XTFT FORECASTING (IEEE PAMI)\n{'-'*_TW}")
 
 # ==================================================================
 # ** Step 1: Load Nansha Dataset **
-# ------------------------------------------------------------------
+# ==================================================================
 print(f"\n{'='*20} Step 1: Load Nansha Dataset {'='*20}")
-# First, attempt to fetch the Nansha data using the original method.
+nansha_df_raw = None
 try:
-    nansha_df = fetch_nansha_data(as_frame=True, verbose=1)
-    print(f"Nansha data loaded successfully. Shape: {nansha_df.shape}")
-except Exception as e:
-    print(f"ERROR: Failed to load Nansha data via fetch_nansha_data: {e}")
-    print("Attempting to load the dataset from the 'data/' folder...")
+    # to fallback to 500_000_samples for testing  
+    # Attempt 1: Fetch from fusionlab.datasets (default 2000 samples)
+    print("Attempt 1: Fetching Nansha data via fusionlab.datasets...")
+    nansha_df_raw = fetch_nansha_data(as_frame=True, verbose=1,
+                                      download_if_missing=True)
+    print(f"  Nansha data loaded via fetch_nansha_data. Shape: {nansha_df_raw.shape}")
+    
+except Exception as e_fetch:
+    print(f"  Warning: Failed to load via fetch_nansha_data: {e_fetch}")
+    # Fallback paths for Code Ocean or local setup
+    # Assumes data folder is at the root of the capsule or project
+    paths_to_try = [
+        # os.path.join("data", "nansha_500_000.csv"),
+        # os.path.join("..", "data", "nansha_500_000.csv"), # If script is in a subdir
+        # os.path.join("data", "nansha_2000.csv"),
+        # os.path.join("..", "data", "nansha_2000.csv"),
+        os.path.join( r'J:\nature_data\final', "nansha_500_000.csv") # test this sample of data 
+    ]
+    for local_path in paths_to_try:
+        print(f"Attempt 2: Trying local path '{local_path}'...")
+        if os.path.exists(local_path):
+            try:
+                nansha_df_raw = pd.read_csv(local_path)
+                print(f"  Nansha data loaded from local CSV '{local_path}'. "
+                      f"Shape: {nansha_df_raw.shape}")
+                break # Stop if successfully loaded
+            except Exception as e_local:
+                print(f"  ERROR: Failed to load from '{local_path}': {e_local}")
+        else:
+            print(f"  Path not found: '{local_path}'")
 
-    # Fallback to loading the data from the local 'data/nansha_2000.csv' in the Code Ocean capsule
-    import os
-    print(f"Current working directory: {os.getcwd()}")
-    try:
-        nansha_df = pd.read_csv('../data/nansha_2000.csv')
-        print(f"Nansha data loaded from local CSV. Shape: {nansha_df.shape}")
-    except Exception as e:
-        print(f"ERROR: Failed to load Nansha data from local CSV: {e}")
-        raise  # Raising error to stop execution if the dataset cannot be loaded
-
-# Backup original dataset (optional, for reference)
-# nansha_data_original = nansha_df.copy()
+if nansha_df_raw is None or nansha_df_raw.empty:
+    raise FileNotFoundError(
+        "Nansha data CSV could not be loaded from any specified path. "
+        "Please ensure the data is available."
+    )
+# ...  save artefacts  ...
+if SAVE_INTERMEDIATE_ARTEFACTS:
+    raw_data_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_01_raw_data.csv")
+    nansha_df_raw.to_csv(raw_data_path, index=False)
+    print(f"  Raw data saved to: {raw_data_path}")
 
 # ==================================================================
-# ** Step 2: Feature Selection & Initial Cleaning **
-# ------------------------------------------------------------------
-print(f"\n{'='*20} Step 2: Feature Selection & Cleaning {'='*20}")
-# Define features to be used based on the Nansha dataset description
-# Ensure these column names match exactly those in nansha_2000.csv
+# ** Step 2: Preprocessing - Feature Selection & Initial Cleaning **
+# ==================================================================
+print(f"\n{'='*20} Step 2: Preprocessing - Initial Steps {'='*20}")
 selected_features = [
-    'longitude', 'latitude', 'year',
-    'GWL', 'rainfall_mm', 'geology', # 'geological_category' was renamed
-    'soil_thickness', 'building_concentration',
-    'normalized_seismic_risk_score', 'subsidence' # Target
+    'longitude', 'latitude', 'year', 'subsidence', 'GWL', 'rainfall_mm',
+    'geology', 'soil_thickness', 'building_concentration',
+    'normalized_seismic_risk_score'
 ]
-# Check if all selected features exist
-missing_cols = [f for f in selected_features if f not in nansha_df.columns]
-if missing_cols:
-    print(f"Warning: The following selected columns are missing "
-          f"from the loaded data: {missing_cols}")
-    print(f"Available columns: {nansha_df.columns.tolist()}")
-    # Filter selected_features to only include available columns
-    selected_features = [f for f in selected_features if f in nansha_df.columns]
-    if not selected_features:
-        raise ValueError("No selected features remain after checking availability.")
+nansha_df_selected = nansha_df_raw[[
+    col for col in selected_features if col in nansha_df_raw.columns
+    ]].copy()
 
-nansha_df_selected = nansha_df[selected_features].copy()
-print(f"Selected features. Shape: {nansha_df_selected.shape}")
-
-# Check and handle NaN values
-print(f"NaN exists before processing? "
-      f"{nansha_df_selected.isna().any().any()}")
-# Using nan_ops to fill NaNs (e.g., ffill then bfill)
-nansha_df_cleaned = nan_ops(
-    nansha_df_selected, ops='sanitize',
-    action='fill', process="do_anyway"
-    )
-print(f"NaN exists after processing? "
-      f"{nansha_df_cleaned.isna().any().any()}")
+DT_COL_NAME = 'Date'
+nansha_df_selected[DT_COL_NAME] = pd.to_datetime(
+    nansha_df_selected['year'], format='%Y')
+print(f"NaNs before cleaning: {nansha_df_selected.isna().sum().sum()}")
+nansha_df_cleaned = nan_ops(nansha_df_selected, ops='sanitize', action='fill', verbose=0)
+print(f"NaNs after cleaning: {nansha_df_cleaned.isna().sum().sum()}")
+if SAVE_INTERMEDIATE_ARTEFACTS:
+    cleaned_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_02_cleaned_data.csv")
+    nansha_df_cleaned.to_csv(cleaned_path, index=False)
+    print(f"  Cleaned data saved to: {cleaned_path}")
 
 # ==================================================================
-# ** Step 3: Feature Engineering & Normalization **
-# ------------------------------------------------------------------
-print(f"\n{'='*20} Step 3: Feature Engineering & Normalization {'='*20}")
+# ** Step 3: Preprocessing - Encoding & Scaling **
+# ==================================================================
+print(f"\n{'='*20} Step 3: Preprocessing - Encoding & Scaling {'='*20}")
+df_for_processing = nansha_df_cleaned.copy()
+TARGET_COL_NAME = 'subsidence'
+# ...  encoding and scaling  ...
+categorical_cols_to_encode = ['geology']
+if 'building_concentration' in df_for_processing.columns and \
+   df_for_processing['building_concentration'].dtype == 'object':
+    categorical_cols_to_encode.append('building_concentration')
 
-# 3a. Encode Categorical Features
-# 'geology' is categorical. 'building_concentration' might be if it's binned.
-# The script uses OneHotEncoder for 'geology' and 'building_concentration'.
-# Let's assume 'building_concentration' in nansha_2000.csv is numerical
-# and was intended to be binned or is treated as such by OHE.
-# If it's already numerical and continuous, it shouldn't be one-hot encoded.
-# For this script, we follow the original logic.
-
-df_for_encoding = nansha_df_cleaned.copy()
-encoded_dfs = []
-categorical_to_encode = ['geology'] # Explicitly from Nansha columns
-# Add 'building_concentration' if it's meant to be categorical
-# For now, assume it is for consistency with script's OHE usage
-if 'building_concentration' in df_for_encoding.columns:
-    categorical_to_encode.append('building_concentration')
-
-encoder_info = {} # To store fitted encoders or column names
-
-for col in categorical_to_encode:
-    if col in df_for_encoding.columns:
-        encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore',
-                                dtype=np.float32)
-        encoded_data = encoder.fit_transform(df_for_encoding[[col]])
-        new_cols = [f"{col}_{cat}" for cat in encoder.categories_[0]]
-        encoded_df = pd.DataFrame(
-            encoded_data, columns=new_cols, index=df_for_encoding.index
-            )
-        encoded_dfs.append(encoded_df)
-        encoder_info[col] = {'encoder': encoder, 'columns': new_cols}
-        print(f"  Encoded '{col}' into {len(new_cols)} columns.")
-    else:
-        print(f"  Warning: Categorical column '{col}' not found for encoding.")
-
-# Drop original categorical columns and concatenate encoded ones
-df_processed = df_for_encoding.drop(columns=categorical_to_encode, errors='ignore')
-if encoded_dfs:
-    df_processed = pd.concat([df_processed] + encoded_dfs, axis=1)
-
-print(f"Shape after encoding: {df_processed.shape}")
-
-# 3b. Normalize Numerical Features
-# Exclude coordinates, year, and already one-hot encoded features.
-# Target ('subsidence') should also be scaled.
-cols_to_scale = [
-    'GWL', 'rainfall_mm', 'normalized_seismic_risk_score',
-    'soil_thickness', 'subsidence'
-]
-# If 'building_concentration' was NOT one-hot encoded and is numerical:
-if 'building_concentration' in df_processed.columns and \
-   'building_concentration' not in categorical_to_encode:
-    cols_to_scale.append('building_concentration')
-
-# Filter to only columns present in df_processed
-cols_to_scale = [col for col in cols_to_scale if col in df_processed.columns]
-
-if cols_to_scale:
-    scaler = MinMaxScaler() # As per script
-    df_processed[cols_to_scale] = scaler.fit_transform(
-        df_processed[cols_to_scale]
+encoded_feature_names_list = []
+if categorical_cols_to_encode:
+    encoder_ohe = OneHotEncoder(
+        sparse_output=False, 
+        handle_unknown='ignore', 
+        dtype=np.float32
+    )
+    encoded_data_parts = encoder_ohe.fit_transform(
+        df_for_processing[categorical_cols_to_encode]
         )
-    # Save the scaler
-    scaler_path = os.path.join(run_output_path, "nansha_minmax_scaler.joblib")
-    joblib.dump(scaler, scaler_path)
-    print(f"Numerical features scaled and scaler saved to: {scaler_path}")
-else:
-    print("No numerical columns found or specified for scaling.")
+    new_ohe_cols = encoder_ohe.get_feature_names_out(categorical_cols_to_encode)
+    encoded_feature_names_list.extend(new_ohe_cols)
+    encoded_df_part = pd.DataFrame(
+        encoded_data_parts, columns=new_ohe_cols,
+        index=df_for_processing.index
+    )
+    df_for_processing = pd.concat(
+        [df_for_processing.drop(
+            columns=categorical_cols_to_encode), 
+            encoded_df_part], axis=1
+    )
+    print(f"  Encoded features: {new_ohe_cols.tolist()}")
 
+numerical_cols_to_scale = [
+    'longitude', 'latitude', 'GWL', 'rainfall_mm', 'soil_thickness',
+    'normalized_seismic_risk_score', TARGET_COL_NAME
+]
+if 'building_concentration' in df_for_processing.columns and \
+   'building_concentration' not in categorical_cols_to_encode:
+    numerical_cols_to_scale.append('building_concentration')
+numerical_cols_to_scale = [
+    col for col in numerical_cols_to_scale 
+    if col in df_for_processing.columns]
+
+df_scaled = df_for_processing.copy()
+scaler_main = MinMaxScaler()
+if numerical_cols_to_scale:
+    df_scaled[numerical_cols_to_scale] = scaler_main.fit_transform(
+        df_scaled[numerical_cols_to_scale]
+        )
+    scaler_path = os.path.join(
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_main_scaler.joblib"
+        )
+    joblib.dump(scaler_main, scaler_path)
+    print(f"  Numerical features scaled. Scaler saved to: {scaler_path}")
+
+if SAVE_INTERMEDIATE_ARTEFACTS:
+    scaled_path = os.path.join(
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_03_processed_scaled_data.csv")
+    df_scaled.to_csv(scaled_path, index=False)
+    print(f"  Processed and scaled data saved to: {scaled_path}")
 
 # ==================================================================
-# ** Step 4: Define Feature Sets for Reshaping **
-# ------------------------------------------------------------------
+# ** Step 4: Define Feature Sets for Model Input **
+# ==================================================================
 print(f"\n{'='*20} Step 4: Define Feature Sets {'='*20}")
+# ... (rest of step 4: defining static_features_model etc. as before) ...
+static_features_model = ['longitude', 'latitude'] + encoded_feature_names_list
+static_features_model = [
+    c for c in static_features_model if c in df_scaled.columns]
+dynamic_features_model = [
+    'GWL', 
+    'rainfall_mm', 
+    'soil_thickness', 
+    'normalized_seismic_risk_score'
+   ]
+if ( 
+        'building_concentration' in numerical_cols_to_scale 
+        and 'building_concentration' not in categorical_cols_to_encode
+    ):
+    dynamic_features_model.append('building_concentration')
+dynamic_features_model = [
+    c for c in dynamic_features_model if c in df_scaled.columns]
+future_features_model = ['rainfall_mm']
+future_features_model = [
+    c for c in future_features_model if c in df_scaled.columns]
 
-target_col_name = 'subsidence'
-dt_col_name = 'year' # 'year' acts as the time index
-
-# Static features: coordinates + encoded categoricals
-static_feature_names = ['longitude', 'latitude']
-for col_info in encoder_info.values():
-    static_feature_names.extend(col_info['columns'])
-# Ensure only existing columns are included
-static_feature_names = [c for c in static_feature_names if c in df_processed.columns]
-
-# Dynamic features: scaled numericals (excluding target) + time-varying like 'year'
-# The script logic implies 'year' itself is not a dynamic input feature for the sequence,
-# but rather the time index for creating sequences.
-dynamic_feature_names = [
-    'GWL', 'rainfall_mm', 'normalized_seismic_risk_score',
-    'soil_thickness'
-    # Add 'building_concentration' if it was scaled and not encoded
-]
-if 'building_concentration' in cols_to_scale and \
-   'building_concentration' not in categorical_to_encode:
-    dynamic_feature_names.append('building_concentration')
-dynamic_feature_names = [c for c in dynamic_feature_names if c in df_processed.columns]
-
-# Future features: rainfall_mm (as per script)
-future_feature_names = ['rainfall_mm']
-future_feature_names = [c for c in future_feature_names if c in df_processed.columns]
-
-print(f"  Static features for model: {static_feature_names}")
-print(f"  Dynamic features for model: {dynamic_feature_names}")
-print(f"  Future features for model: {future_feature_names}")
+print(f"  Static features: {static_features_model}")
+print(f"  Dynamic features: {dynamic_features_model}")
+print(f"  Future features: {future_features_model}")
 
 # ==================================================================
-# ** Step 5: Data Splitting (Conceptual) & Sequencing **
-# ------------------------------------------------------------------
-print(f"\n{'='*20} Step 5: Data Splitting & Sequencing {'='*20}")
-# The script splits by year: train <= 2021, test = 2022 for Nansha.
-# We apply this split on df_processed BEFORE reshaping.
+# ** Step 5: Split Master Data & Generate Sequences for Training **
+# ==================================================================
+print(f"\n{'='*20} Step 5: Split Master Data & Sequence Generation {'='*20}")
+# ... (rest of step 5: splitting df_scaled into df_train_master, df_test_master) ...
+df_train_master = df_scaled[df_scaled['year'] <= TRAIN_END_YEAR].copy()
+df_test_master = df_scaled[df_scaled['year'] == FORECAST_START_YEAR].copy()
+print(f"Master train data shape (<= {TRAIN_END_YEAR}): {df_train_master.shape}")
+print(f"Master test data shape ({FORECAST_START_YEAR}): {df_test_master.shape}")
 
-df_train_master = df_processed[df_processed['year'] <= 2021].copy()
-df_test_master = df_processed[df_processed['year'] == 2022].copy()
+if df_train_master.empty:
+    raise ValueError(
+        f"Training data empty after split at year {TRAIN_END_YEAR}.")
 
-print(f"Master train data shape (years <= 2021): {df_train_master.shape}")
-print(f"Master test data shape (year 2022): {df_test_master.shape}")
-
-if save_intermediate_artefacts:
-    # --------------------------------------------------------------
-    # Persist intermediate artefacts for debugging / reuse
-    # --------------------------------------------------------------
-    print("Saving intermediate artefacts …")
-
-    #  Cleaned & encoded frame used for the split
-    cleaned_csv = os.path.join(data_path, f"{city_name}_processed_full.csv")
-    df_processed.to_csv(cleaned_csv, index=False)
-
-    # Train / test master sets
-    train_csv = os.path.join(data_path, f"{city_name}_train_master.csv")
-    test_csv  = os.path.join(data_path, f"{city_name}_test_master.csv")
-    df_train_master.to_csv(train_csv, index=False)
-    df_test_master.to_csv(test_csv,  index=False)
-
-    # Scaler object (re‑dump in case user skipped earlier cell)
-    scaler_path = os.path.join(data_path, f"{city_name}_minmax_scaler.joblib")
-    if not os.path.isfile(scaler_path):
-        joblib.dump(scaler, scaler_path)
-
-    # Log summary
-    print(f"    Processed data  ➜ {cleaned_csv}")
-    print(f"    Train master    ➜ {train_csv}")
-    print(f"    Test  master    ➜ {test_csv}")
-    print(f"    Scaler object   ➜ {scaler_path}")
-    print(" Artefact saving complete.")
-
-# Sequence generation parameters
-# forecast_horizon derived from forecast_years
-current_forecast_horizon = len(forecast_years)
-# time_steps is defined in CONFIG
-current_time_steps = time_steps
-
-print(f"Reshaping training data (T={current_time_steps}, H={current_forecast_horizon})...")
-
-# Attempt to load cached sequences first
-sequence_file = os.path.join(
-    run_output_path,
-    f'nansha_sequences_T{current_time_steps}_H{current_forecast_horizon}{super_ext}.joblib'
+sequence_file_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f'{CITY_NAME}_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}{MODEL_SUFFIX}.joblib'
 )
-
-if os.path.isfile(sequence_file):
-    print(f"Loading preprocessed sequences from: {sequence_file}")
-    (X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq
-     ) = fetch_joblib_data(
-        sequence_file,
-        'static_data', 'dynamic_data', 'future_data', 'target_data',
-        verbose=1,
-    )
-else:
-    print("Generating sequences from scratch...")
-    X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq = reshape_xtft_data_in(
-        df_train_master, # Use the master training data
-        dt_col=dt_col_name,
-        target_col=target_col_name,
-        static_cols=static_feature_names,
-        dynamic_cols=dynamic_feature_names,
-        future_cols=future_feature_names,
-        time_steps=current_time_steps,
-        forecast_horizons=current_forecast_horizon,
-        spatial_cols=spatial_cols, # None in this script's config
-        # savefile=sequence_file, # Save the generated sequences ; NOTE: uncomment this for Python>=3.10 ( more robust) to auto-save file and comment the explicit saved data;
-        verbose=1
-    )
-    #  Explicitly save with joblib (avoids importlib.metadata) # Comment this for Python 3>=3.10 
-    seq_dict = {
-        "static":  X_static_seq,
-        "dynamic": X_dynamic_seq,
-        "future":  X_future_seq,
-        "target":  y_target_seq,
-    }
-    joblib.dump(seq_dict, sequence_file)
-    print(f"[INFO] Sequences saved to: {sequence_file}")
-
-print("\nSequence shapes for training input:")
-print(f"  Static : {X_static_seq.shape if X_static_seq is not None else 'None'}")
-print(f"  Dynamic: {X_dynamic_seq.shape}")
-print(f"  Future : {X_future_seq.shape if X_future_seq is not None else 'None'}")
-print(f"  Target : {y_target_seq.shape}")
-
-# ==================================================================
-# ** Step 6: Train-Validation Split of Sequences **
-# ------------------------------------------------------------------
-print(f"\n{'='*20} Step 6: Train-Validation Split {'='*20}")
-# Split the generated sequences for model training
-X_static_train, X_static_val, \
-X_dynamic_train, X_dynamic_val, \
-X_future_train, X_future_val, \
-y_train, y_val = train_test_split(
-    X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq,
-    test_size=0.2, # 20% for validation
-    random_state=42, # For reproducibility
-    shuffle=True # Shuffle sequences, as they are already time-ordered windows
+# Always generate for this script to ensure consistency with parameters
+print(f"Generating training sequences (T={TIME_STEPS}, H={FORECAST_HORIZON_YEARS})...")
+X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq = reshape_xtft_data(
+    df=df_train_master, 
+    dt_col=DT_COL_NAME, 
+    target_col=TARGET_COL_NAME,
+    static_cols=static_features_model,
+    dynamic_cols=dynamic_features_model,
+    future_cols=future_features_model, 
+    time_steps=TIME_STEPS,
+    forecast_horizons=FORECAST_HORIZON_YEARS,
+    spatial_cols=SPATIAL_COLS,
+    savefile=sequence_file_path,
+    verbose=7 # or 1 for minimum verbosity
 )
-
-print("Training set shapes:")
-print(f"  Static: {X_static_train.shape if X_static_train is not None else 'None'}")
-print(f"  Dynamic: {X_dynamic_train.shape}")
-print(f"  Future: {X_future_train.shape if X_future_train is not None else 'None'}")
-print(f"  Target: {y_train.shape}")
-print("\nValidation set shapes:")
-print(f"  Static: {X_static_val.shape if X_static_val is not None else 'None'}")
-print(f"  Dynamic: {X_dynamic_val.shape}")
-print(f"  Future: {X_future_val.shape if X_future_val is not None else 'None'}")
-print(f"  Target: {y_val.shape}")
-
-# Package inputs for model.fit
-train_inputs = [X_static_train, X_dynamic_train, X_future_train]
-val_inputs = [X_static_val, X_dynamic_val, X_future_val]
+if y_target_seq is None or X_dynamic_seq is None or y_target_seq.shape[0] == 0:
+    min_len_needed = TIME_STEPS + FORECAST_HORIZON_YEARS
+    raise ValueError(
+        "Sequence generation failed or produced no sequences for training. "
+        "Check data length per spatial group vs."
+        f" (TIME_STEPS + FORECAST_HORIZON_YEARS = {min_len_needed}). "
+        "For sampled data, ensure TIME_STEPS and"
+        " FORECAST_HORIZON_YEARS are small enough."
+    )
+print(f"Training Sequences: S={X_static_seq.shape}, D={X_dynamic_seq.shape}, "
+      f"F={X_future_seq.shape}, Y={y_target_seq.shape}")
 
 # ==================================================================
-# ** Step 7: Model Training **
-# ------------------------------------------------------------------
+# ** Step 6: Train-Validation Split of Sequence Data **
+# ==================================================================
+print(f"\n{'='*20} Step 6: Train-Validation Split of Sequences {'='*20}")
+# ... train_test_split  ...
+X_s_train, X_s_val, X_d_train, X_d_val, X_f_train, X_f_val, y_train, y_val = \
+    train_test_split(
+        X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq,
+        test_size=0.2, random_state=42, shuffle=True
+    )
+train_inputs = [X_s_train, X_d_train, X_f_train]
+val_inputs = [X_s_val, X_d_val, X_f_val]
+print(f"Train inputs: S={X_s_train.shape}, D={X_d_train.shape},"
+      f" F={X_f_train.shape}, Y={y_train.shape}")
+print(f"Val inputs  : S={X_s_val.shape}, D={X_d_val.shape},"
+      " F={X_f_val.shape}, Y={y_val.shape}")
+
+# ==================================================================
+# ** Step 7: XTFT Model Definition, Compilation & Training **
+# ==================================================================
 print(f"\n{'='*20} Step 7: Model Training {'='*20}")
-
-# Best hyperparameters (example, should be from tuning)
-best_params = {
+# ...  model definition, compile, fit ...
+xtft_params = {
     'embed_dim': 32,
-    'max_window_size': current_time_steps, # Match data prep
-    'memory_size': 100,
-    'num_heads': 4,
-    'dropout_rate': 0.1,
-    'lstm_units': 64,
-    'attention_units': 64,
-    'hidden_units': 32,
-    'multi_scale_agg': 'auto',
-    'anomaly_detection_strategy': anomaly_detection_strategy,
-    'use_residuals': True,
-    'use_batch_norm': True, # As per script's example
+    'max_window_size': TIME_STEPS, 
+    'memory_size': 50,
+    'num_heads': 2, 
+    'dropout_rate': 0.1, 
+    'lstm_units': 32,
+    'attention_units': 32, 
+    'hidden_units': 32, 
+    'scales': None,
+    'multi_scale_agg': 'last', 
     'final_agg': 'last',
+    'use_residuals': True,
+    'use_batch_norm': False,
+    'anomaly_detection_strategy': None
 }
-
-# Instantiate the selected XTFT model (XTFT or SuperXTFT)
-xtft_model = TRANSFORMER_(
-    static_input_dim=X_static_train.shape[-1] if X_static_train is not None else 0,
-    dynamic_input_dim=X_dynamic_train.shape[-1],
-    future_input_dim=X_future_train.shape[-1] if X_future_train is not None else 0,
-    forecast_horizon=current_forecast_horizon,
-    quantiles=quantiles,
-    output_dim=y_train.shape[-1], # Should be 1 for subsidence
-    **best_params
+model_output_dim = y_train.shape[-1]
+xtft_model_inst = TRANSFORMER_CLASS(
+    static_input_dim=X_s_train.shape[-1], 
+    dynamic_input_dim=X_d_train.shape[-1],
+    future_input_dim=X_f_train.shape[-1],
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+    quantiles=QUANTILES, 
+    output_dim=model_output_dim,
+    **xtft_params
 )
-
-# Select appropriate loss
-if quantiles is not None:
-    loss_fn = combined_quantile_loss(quantiles)
-else:
-    loss_fn = 'mse' # For point forecasts
-
-# Compile the model
-xtft_model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
-    loss=loss_fn
-)
-
-# Dummy call to build the model and print summary
-# Ensure inputs match expected structure (list of 3, some can be None if model handles)
-# For XTFT, all three are typically expected by default constructor after validation
-dummy_call_inputs = [
-    tf.zeros_like(X_static_train[:1]) if X_static_train is not None else None,
-    tf.zeros_like(X_dynamic_train[:1]),
-    tf.zeros_like(X_future_train[:1]) if X_future_train is not None else None,
-]
-# Filter out None inputs if the model's call method expects only non-None
-# For XTFT/SuperXTFT, the call method expects a list of 3.
-# The internal `validate_xtft_inputs` handles None checks based on *_input_dim.
-if dummy_call_inputs[0] is None and xtft_model.static_input_dim is not None:
-    print("Warning: Static input is None but model expects static_input_dim.")
-if dummy_call_inputs[2] is None and xtft_model.future_input_dim is not None:
-    print("Warning: Future input is None but model expects future_input_dim.")
-
+loss_to_use = combined_quantile_loss(QUANTILES) if QUANTILES else 'mse'
+xtft_model_inst.compile(
+    optimizer=tf.keras.optimizers.Adam(
+        learning_rate=LEARNING_RATE), loss=loss_to_use)
 try:
-    xtft_model(dummy_call_inputs) # Build the model
-    xtft_model.summary(line_length=90)
-except Exception as e:
-    print(f"Error during model build/summary: {e}")
-
-
-# Callbacks
-early_stopping = EarlyStopping(
-    monitor='val_loss', patience=10, # Increased patience
-    restore_best_weights=True, verbose=1
-)
-# -----------------------------------------------------------------
-# Model‑checkpoint path
-#   - If you append **“.keras”** (or “.h5”), Keras writes a single‑file
-#     archive.  Handy for quick portability, but it omits the standard
-#     SavedModel sub‑folders (`variables/`, `assets/`, `fingerprint.pb`).
-#   - Leaving **no extension** (or adding a trailing slash) tells Keras
-#     to save a full TensorFlow SavedModel directory that includes:
-#         saved_model.pb
-#         variables/            ← all trainable / non‑trainable weights
-#         assets/ (optional)    ← vocab files, lookup tables, etc.
-#         fingerprint.pb        ← integrity hash (TF ≥ 2.14)
-#   • The paper’s reproducibility package expects the *directory* form
-#     so that downstream scripts (e.g., TFLite, TF‑Serving) can load
-#     the model without extra conversion steps.
-# -----------------------------------------------------------------
-if save_single_file_archive:
-    # single portable file  →  *.keras
-    model_checkpoint_path = os.path.join(
-        run_output_path,
-        f"nansha_xtft_model_H{current_forecast_horizon}{super_ext}.keras"
+    dummy_s = tf.zeros((1, X_s_train.shape[-1]), dtype=tf.float32)
+    dummy_d = tf.zeros((1, TIME_STEPS, X_d_train.shape[-1]), 
+                       dtype=tf.float32)
+    dummy_f_shape_time = TIME_STEPS + FORECAST_HORIZON_YEARS
+    dummy_f = tf.zeros((1, dummy_f_shape_time, X_f_train.shape[-1]),
+                       dtype=tf.float32)
+    xtft_model_inst([dummy_s, dummy_d, dummy_f])
+    xtft_model_inst.summary(line_length=100)
+except Exception as e_build: 
+    print(f"Error during model build/summary: {e_build}")
+    
+early_stopping_cb = EarlyStopping(
+    monitor='val_loss',
+    patience=10, 
+    restore_best_weights=True, 
+    verbose=1
+  )
+checkpoint_filename = ( 
+    f"{CITY_NAME}_xtft_model_H{FORECAST_HORIZON_YEARS}{MODEL_SUFFIX}"
     )
-else:
-    # full TensorFlow SavedModel directory  →  no extension
-    model_checkpoint_path = os.path.join(
-        run_output_path,
-        f"nansha_xtft_model_H{current_forecast_horizon}{super_ext}"
-    )
+if SAVE_MODEL_AS_SINGLE_FILE:
+    checkpoint_filename += ".keras"
+    
+model_checkpoint_path = os.path.join(RUN_OUTPUT_PATH, checkpoint_filename)
 
+model_checkpoint_cb = ModelCheckpoint(
+    filepath=model_checkpoint_path,
+    monitor='val_loss', 
+    save_best_only=True, 
+    save_weights_only=False,
+    verbose=1
+   )
 
-model_checkpoint = ModelCheckpoint(
-    filepath=model_checkpoint_path, monitor='val_loss',
-    save_best_only=True, save_weights_only=False,
-    verbose=1, 
-    save_format='tf' # Save entire model in TF format # commnent
-)
-
-print("\nTraining the XTFT model...")
-start_time = time.time()
-history = xtft_model.fit(
-    train_inputs,
-    y_train,
+print(f"Model checkpoints will be saved to: {model_checkpoint_path}")
+print("\nStarting XTFT model training...")
+history = xtft_model_inst.fit(
+    train_inputs, 
+    y_train, 
     validation_data=(val_inputs, y_val),
     epochs=EPOCHS,
     batch_size=BATCH_SIZE,
-    callbacks=[early_stopping, model_checkpoint],
+    callbacks=[early_stopping_cb, model_checkpoint_cb], 
     verbose=1
 )
-training_time = (time.time() - start_time) / 60
-print(f"Training completed in {training_time:.2f} minutes.")
-print(f"Best validation loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
+print("Best validation loss achieved:"
+      f" {min(history.history.get('val_loss', [np.inf])):.4f}")
+print(f"\nLoading best model from checkpoint: {model_checkpoint_path}")
 
-# Load the best model saved by checkpoint
-print(f"\nLoading best model from: {model_checkpoint_path}")
 try:
-    with custom_object_scope({'combined_quantile_loss': loss_fn} if quantiles else {}):
-        loaded_model = load_model(model_checkpoint_path)
-    print("Best model loaded successfully.")
-    xtft_model = loaded_model # Use the best saved model
-except Exception as e:
-    print(f"Error loading saved model: {e}. Using model from end of training.")
+    custom_objects = {
+        'combined_quantile_loss': loss_to_use} if QUANTILES else {}
+    with custom_object_scope(custom_objects):
+        xtft_model_loaded = load_model(model_checkpoint_path)
+    print("Best model loaded successfully for forecasting.") 
+    
+except Exception as e_load:
+    print(f"Error loading saved model: {e_load}."
+          " Using model from end of training.")
+    xtft_model_loaded = xtft_model_inst
+
+# =============================================================================
+# ** Step 8: Forecasting on Test Data (or Validation Data if Test is Empty) **
+# =============================================================================
+print(f"\n{'='*20} Step 8: Forecasting {'='*20}")
+forecast_df_final = None
+s_test_seq, d_test_seq, f_test_seq, y_test_actual_seq = None, None, None, None
+inputs_for_final_forecast = val_inputs # Default to validation inputs
+actuals_for_final_forecast = y_val     # Default to validation actuals
+dataset_name_for_forecast = "ValidationSet"
+
+if not df_test_master.empty:
+    print(f"Attempting to generate sequences from test data (year {FORECAST_START_YEAR})...")
+    try:
+        s_test_seq, d_test_seq, f_test_seq, y_test_actual_seq = reshape_xtft_data(
+            df=df_test_master, 
+            dt_col=DT_COL_NAME, 
+            target_col=TARGET_COL_NAME,
+            static_cols=static_features_model, 
+            dynamic_cols=dynamic_features_model,
+            future_cols=future_features_model, 
+            spatial_cols=SPATIAL_COLS,
+            time_steps=TIME_STEPS, 
+            forecast_horizons=FORECAST_HORIZON_YEARS,
+            verbose=0 # Suppress logs for this reshape
+        )
+        if ( 
+                y_test_actual_seq is not None 
+                and d_test_seq is not None 
+                and y_test_actual_seq.shape[0] > 0
+        ):
+            print(f"  Test sequences generated: S={s_test_seq.shape},"
+                  f" D={d_test_seq.shape},F={f_test_seq.shape}"
+                  f", Y={y_test_actual_seq.shape}")
+            # Ensure dummy arrays have correct batch size for test sequences
+            s_dummy_test = ( 
+                s_test_seq if s_test_seq is not None 
+                else np.zeros((d_test_seq.shape[0], 0), 
+                              dtype=np.float32)
+            )
+            f_dummy_test = ( 
+                f_test_seq if f_test_seq is not None 
+                else np.zeros(
+                    (d_test_seq.shape[0], 
+                     d_test_seq.shape[1] + FORECAST_HORIZON_YEARS, 0), 
+                    dtype=np.float32)
+                )
+            inputs_for_final_forecast = [
+                s_dummy_test, d_test_seq, f_dummy_test]
+            actuals_for_final_forecast = y_test_actual_seq
+            dataset_name_for_forecast = f"TestSet (Year {FORECAST_START_YEAR})"
+        else:
+            print("  Warning: No sequences generated from test"
+                  f" data (year {FORECAST_START_YEAR}). "
+                  "This can happen if the test year has insufficient"
+                  " data points per spatial group "
+                  f"for T={TIME_STEPS}, H={FORECAST_HORIZON_YEARS}. "
+                  "Forecasting on validation set instead.")
+    except ValueError as e_reshape_test: # Catch error from reshape_xtft_data
+        print("  Warning: Could not generate sequences"
+              f" from test data: {e_reshape_test}. "
+              "Forecasting on validation set instead.")
+else:
+    print(f"Test data (df_test_master for year {FORECAST_START_YEAR}) is empty. "
+          "Forecasting on validation set.")
+
+print(f"Generating predictions on {dataset_name_for_forecast} sequences...")
+predictions_scaled = xtft_model_loaded.predict(
+    inputs_for_final_forecast, verbose=0)
+
+# Format predictions into a DataFrame
+# Prepare spatial_data_array for format_predictions_to_dataframe
+# It should correspond to the samples being predicted (inputs_for_final_forecast[0])
+spatial_data_for_formatting = inputs_for_final_forecast[0] # This is s_test_seq or X_s_val
+
+forecast_df_final = format_predictions_to_dataframe(
+    predictions=predictions_scaled,
+    y_true_sequences=actuals_for_final_forecast,
+    target_name=TARGET_COL_NAME,
+    quantiles=QUANTILES,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+    output_dim=model_output_dim,
+    spatial_data_array=spatial_data_for_formatting,
+    spatial_cols_names=SPATIAL_COLS,
+    spatial_cols_indices=[
+        static_features_model.index(col) 
+        for col in SPATIAL_COLS 
+        if col in static_features_model
+        ],
+    scaler= scaler_main if scaler_main is not None else None,
+    scaler_feature_names=( 
+        numerical_cols_to_scale 
+        if numerical_cols_to_scale is not None else None),
+    target_idx_in_scaler=(
+        numerical_cols_to_scale.index(TARGET_COL_NAME) 
+        if numerical_cols_to_scale is not None 
+        and TARGET_COL_NAME in numerical_cols_to_scale 
+        else None),
+    evaluate_coverage = True if QUANTILES else False,
+    verbose=1
+)
+if forecast_df_final is not None and not forecast_df_final.empty:
+    forecast_csv_filename = ( 
+        f"{CITY_NAME}_forecast_{dataset_name_for_forecast.replace(' ', '_')}"
+        f"_{FORECAST_YEARS[0]}-{FORECAST_YEARS[-1]}{MODEL_SUFFIX}.csv"
+        )
+    forecast_csv_path = os.path.join(
+        RUN_OUTPUT_PATH, forecast_csv_filename)
+    forecast_df_final.to_csv(forecast_csv_path, index=False)
+    print(f"Forecast results for {dataset_name_for_forecast}"
+          f" saved to: {forecast_csv_path}")
+    print("\nSample of final forecast DataFrame:")
+    print(forecast_df_final.head())
+else:
+    print("No final forecast DataFrame generated.")
 
 #%
 # ==================================================================
-# ** Step 8: Forecasting & Evaluation **
-# ------------------------------------------------------------------
-print(f"\n{'='*20} Step 8: Forecasting & Evaluation {'='*20}")
+# ** Step 9: Visualize Forecasts **
+# ==================================================================
+print(f"\n{'='*20} Step 9: Visualize Forecasts {'='*20}")
+if forecast_df_final is not None and not forecast_df_final.empty:
+    print(f"Visualizing forecasts for {dataset_name_for_forecast}"
+          f" (spatial plot for first forecast year)...")
+    # Ensure SPATIAL_COLS are present for plotting
+    if not all(col in forecast_df_final.columns for col in SPATIAL_COLS):
+        print(f"Warning: Spatial columns {SPATIAL_COLS}"
+              " not found in final forecast DataFrame. "
+              "Spatial plot might be incorrect or fail."
+             )
+        
+        # Attempt to add them if they were part of the static features used for prediction
+        if inputs_for_final_forecast[0] is not None and \
+           all(scol in static_features_model for scol in SPATIAL_COLS):
+            s_indices_viz = [
+                static_features_model.index(col) for col in SPATIAL_COLS]
+            spatial_vals_from_s_input = inputs_for_final_forecast[0][:, s_indices_viz]
+            
+            # We need to repeat these spatial values for each forecast step
+            # The forecast_df_final is long: (num_samples * horizon_steps, features)
+            # The spatial_vals_from_s_input is (num_samples, num_spatial_features)
+            if ( 
+                len(spatial_vals_from_s_input) * FORECAST_HORIZON_YEARS == len(forecast_df_final)
+                ):
+                repeated_spatial_vals = ( 
+                    np.repeat(spatial_vals_from_s_input, 
+                              FORECAST_HORIZON_YEARS, axis=0)
+                    )
+                for i, col_name in enumerate(SPATIAL_COLS):
+                    forecast_df_final[col_name] = repeated_spatial_vals[:, i]
+                print("  Added spatial columns to"
+                      " forecast_df_final from prediction inputs.")
+            else:
+                 print("  Could not align spatial data"
+                       f" (len {len(spatial_vals_from_s_input)}) "
+                       f"with forecast_df_final (len {len(forecast_df_final)}).")
+        else:
+            print("  Cannot add spatial columns as static input"
+                  " data is missing or incomplete for SPATIAL_COLS.")
 
-# Ensure the last_train_date is a proper datetime object
-last_train_date = pd.to_datetime(df_train_master[dt_col_name].max(), format='%Y')
-# forecast_start_date should now work correctly with DateOffset
-forecast_start_date = last_train_date + pd.DateOffset(years=1)  # Since dt_col is 'year'
-
-# Print to check the forecast start date
-print(f"Forecast start date: {forecast_start_date}")
-
-# Generate forecast dates based on horizon and original data frequency
-# forecast_years is predefined as the list [2022, 2023, 2024, 2025]
-forecast_years = [forecast_start_date.year + i for i in range(current_forecast_horizon)]
-
-print(f"Generating forecasts for years: {forecast_years}")
-
-forecast_csv_path = os.path.join(
-    run_output_path, f"nansha_forecast_{forecast_years[0]}-{forecast_years[-1]}{super_ext}.csv"
-)
-
-# The `inputs` for forecast_multi_step should be the complete set of
-# sequences you want to predict on (e.g., X_static_seq, X_dynamic_seq, X_future_seq).
-# The `y` argument is for evaluation against true values.
-# Here, we'll use the full `y_target_seq` for evaluation.
-
-# If `df_test_master` is the hold-out set, we'd need to reshape it too.
-# For this example, let's predict on the validation sequences `val_inputs`
-# and evaluate against `y_val`.
-
-# To evaluate on the conceptual "test_data" (year 2022):
-# Reshape df_test_master into sequences
-if not df_test_master.empty:
-    print("Reshaping master test data (year 2022) for evaluation...")
-    s_test_master, d_test_master, f_test_master, y_test_master = reshape_xtft_data_in(
-       df_test_master, dt_col=dt_col_name, target_col=target_col_name,
-       static_cols=static_feature_names, dynamic_cols=dynamic_feature_names,
-       future_cols=future_feature_names, spatial_cols=spatial_cols,
-       time_steps=current_time_steps, forecast_horizons=current_forecast_horizon,
-       verbose=0 # Suppress verbose for this internal reshape
+    plot_forecasts(
+        forecast_df=forecast_df_final,
+        target_name=TARGET_COL_NAME,
+        quantiles=QUANTILES,
+        output_dim=model_output_dim,
+        kind="spatial",
+        horizon_steps=[1, 2,],  # 1/2 Plot for the first/second year of the horizon
+                                # [1, 2] # Plot the two as subplots row1/row2
+        spatial_cols=SPATIAL_COLS,
+        max_cols=1,
+        figsize_per_subplot=(8, 7),
+        titles = [
+            f'Forecast_step{i+1}: year = {y}' 
+            for i, y in enumerate(FORECAST_YEARS)], 
+        verbose=1,
+        s=20, 
+        cmap="jet", 
+        
     )
-    test_inputs_for_forecast = [s_test_master, d_test_master, f_test_master]
-    y_for_eval = y_test_master
-    eval_forecast_years = [df_test_master[dt_col_name].unique()[0]] * current_forecast_horizon
-    # This assumes forecast_horizon matches the number of years in test set.
-    # For multi-year test set, forecast_dt needs careful construction.
-    # For single year 2022 test, horizon 1:
-    if current_forecast_horizon == 1 and len(df_test_master[dt_col_name].unique()) == 1:
-        eval_forecast_years = [df_test_master[dt_col_name].unique()[0]]
-    else: # For multi-horizon prediction on 2022 data, need to define future years
-        # This logic is tricky if test_data is only one year but horizon is > 1
-        # For now, let's assume we are forecasting from the end of training data
-        print("Using validation set for multi-step forecast demonstration.")
-        test_inputs_for_forecast = val_inputs
-        y_for_eval = y_val
-        # Create future dates for the validation set's forecast
-        # This requires knowing the last date of the *input sequences* for val_inputs
-        # For simplicity, we'll use the global forecast_years for output formatting.
-
 else:
-    print("Skipping visualization as test_data (year 2022) is empty.")
-
-forecast_df = forecast_multi_step(
-    xtft_model=xtft_model,
-    inputs=test_inputs_for_forecast,  # Predict on validation or test sequences
-    forecast_horizon=current_forecast_horizon,
-    y=y_for_eval,  # Evaluate against corresponding true values
-    dt_col=dt_col_name,  # For output DataFrame structure
-    mode="quantile" if quantiles else "point",
-    q=quantiles,
-    tname=target_col_name,
-    forecast_dt=forecast_years,  # For labeling output columns if needed by step_to_long
-    apply_mask=False,  # Example:  No masking ; if 'True', consider masking the delta river locations
-    # mask_values=0, 
-    # mask_fill_value=0.0, # ignore the delta river part.
-    savefile=forecast_csv_path,
-    spatial_cols=spatial_cols,  # Pass spatial_cols for correct DataFrame structure
-    verbose=7
-)
-
-print(f"Forecast results saved to: {forecast_csv_path}")
+    print("No forecast data to visualize.")
 
 # ==================================================================
-# ** Step 9: Visualize Forecasts **
-# ------------------------------------------------------------------
-print(f"\n{'='*20} Step 9: Visualize Forecasts {'='*20}")
-# Visualize the forecasts against actuals (if available in test_data for eval_periods)
-# `forecast_df` from forecast_multi_step is already in long format.
-# `test_data` for visualize_forecasts should be the original unsequenced test data
-# for the periods being visualized.
+# ** Step 10: Save All Generated Figures **
+# ==================================================================
+print(f"\n{'='*20} Step 10: Save All Figures {'='*20}")
+# ... (save_all_figures logic as before) ...
+try:
+    save_all_figures(
+        output_dir=RUN_OUTPUT_PATH,
+        prefix=f"{CITY_NAME}_xtft_plot_",
+        fmts=['.png', '.pdf'] # Save as PNG and PDF
+        )
+    print(f"All open Matplotlib figures saved to: {RUN_OUTPUT_PATH}")
+except Exception as e_save_fig:
+    print(f"Could not save all figures: {e_save_fig}")
 
-# For visualization, we need to merge original test data features with predictions
-# or ensure visualize_forecasts can handle the long format from forecast_multi_step.
-# The current visualize_forecasts expects a forecast_df that might need
-# coordinates if kind='spatial'. The forecast_df from forecast_multi_step
-# should already include spatial_cols if they were passed.
+print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} XTFT FORECASTING SCRIPT COMPLETED.\n"
+      f"Outputs are in: {RUN_OUTPUT_PATH}\n{'-'*_TW}")
 
-# We need the original df_test_master for actual values if evaluating visually
-if not df_test_master.empty:
-    print("Visualizing forecasts against actual test data (year 2022)...")
-    # Ensure forecast_df has longitude and latitude columns for visualization
-    ll_df = pd.DataFrame(test_inputs_for_forecast[0][:, :2], columns=["longitude", "latitude"])
-    ll_dupl = pd.concat([ll_df] * len(forecast_years), ignore_index=True)
-    assert len(ll_dupl) == len(forecast_df), " Mismatch in coordinate and forecast length."
-
-    # Merge coordinates with forecast
-    forecast_df_full = pd.concat([ll_dupl, forecast_df], axis=1)
-
-    # Optional: visualize coordinate grid (for sanity check)
-    plt.scatter(forecast_df_full["longitude"], forecast_df_full["latitude"], alpha=0.5)
-    plt.title("Forecast Coordinate Grid")
-    plt.xlabel("Longitude")
-    plt.ylabel("Latitude")
-    plt.grid(True)
-    plt.show()
-
-    # Visualize final spatial-temporal forecast
-    print("Visualizing forecast results...\n")
-    visualize_forecasts(
-        forecast_df_full,  # Already merged with coordinates
-        dt_col="year",
-        tname="subsidence",
-        eval_periods=forecast_years,
-        test_data=df_test_master,
-        mode="quantile" if quantiles else "point",
-        kind="spatial",
-        x="longitude",
-        y="latitude",
-        max_cols=2,
-        axis="off",
-        verbose=7, 
-        cmap="jet_r", 
-        s=10, 
-    )
-else:
-    print("Skipping visualization as test_data (year 2022) is empty.")
-
-print("\n" + "=" * _TW)
-print("Nansha Case Study Workflow Completed.")
-print("WARNING: This script uses sampled data (nansha_2000.csv) for "
-      "demonstration.")
-print("For optimal results and research, use the full dataset and "
-      "perform thorough hyperparameter tuning.")
-print("=" * _TW)
-
-try: 
-    from fusionlab.utils.generic_utils import save_all_figures 
-except ImportError: # for previous version 
-
-    # Dummy Function to catch and save all figures automatically
-    def save_all_figures():
-        # Get the list of all open figure numbers
-        all_figs = plt.get_fignums()
-        
-        for fig_num in all_figs:
-            # Set the current figure by figure number
-            fig = plt.figure(fig_num)
-            
-            # Define the path to save the figure
-            filename = f"figure_{fig_num}.png"  # You can customize the filename format
-            plot_path = os.path.join(run_output_path, filename)
-            
-            # Save the current figure
-            fig.savefig(plot_path)
-            print(f"Figure {fig_num} saved to: {plot_path}")
-            
-            # Close the figure to free up memory
-            plt.close(fig)
-finally: 
-    save_all_figures () 
-    
-
-
-save_all_figures()

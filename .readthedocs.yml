@@ -1,4 +1,4 @@
-# .readthedocs.yml  -- Read the Docs build configuration ------------------
+# .readthedocs.yml — Read the Docs build configuration
 version: 2
 
 build:
@@ -6,26 +6,15 @@ build:
   tools:
     python: "3.10"
 
-  # Optional: run extra commands *before* the documentation build.
-  # Uncomment if you want to regenerate API .rst files every build.
-  # jobs:
-  #   pre_build:
-  #     - >
-  #       sphinx-apidoc -o docs/source/api/ -e -M -f fusionlab \
-  #                     fusionlab/tests/* fusionlab/data/* ;
-  #       echo "API stubs refreshed."
-
 python:
   install:
-    - requirements: docs/requirements.txt 
+    # first install your documentation dependencies
+    - requirements: docs/requirements.txt
+    # then install your package so Sphinx can import it
     - method: pip
-      path: . # Installs the fusionlab package itself if required for docs
-    #   extra_requirements:
-    #     - dev # Installs dev dependencies if specified in setup.py/pyproject.toml
+      path: .
+
 sphinx:
   configuration: docs/source/conf.py
-  fail_on_warning: false   # flip to true to make warnings fatal
-
-# formats:
-#   - pdf
-#   - epub
+  # make this true once things are stable, to catch warnings
+  fail_on_warning: false
