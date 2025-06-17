@@ -152,31 +152,6 @@ if __name__ + ".kdiagram" not in sys.modules:
     _dummy_kd = types.ModuleType(__name__ + ".kdiagram")
     sys.modules[__name__ + ".kdiagram"] = _dummy_kd
 
-# In Make Module Public for Doc build
-from . import api # noqa
-from . import compat # noqa
-from . import core # noqa
-from . import metrics # noqa
-from . import nn  # noqa
-from . import utils # noqa
-from . import plot # noqa
-from . import params  # noqa
-from . import datasets # noqa
-
-
-__all__.extend ([
-    "api", 
-    "compat", 
-    "core", 
-    "metrics",
-    "nn",
-    "utils",
-    "datasets",
-    "plot", 
-    "params", 
-
-    ]
-)
 
 def __getattr__(name: str):
     """

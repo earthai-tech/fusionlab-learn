@@ -516,7 +516,7 @@ def load_subsidence_pinn_data(
 
     return XBunch(**bunch_dict)
 
-load_subsidence_pinn_data.__doc__="""\
+load_subsidence_pinn_data.__doc__=r"""
 Load and preprocess subsidence‐focused PINN data for Zhongshan or Nansha.
 
 This function handles data retrieval (from local CSV or remote),
@@ -2024,6 +2024,3 @@ def _resolve_data_path(
         
     return data_path_resolved, metadata
 
-__all__.extend([ 
-    "load_processed_subsidence_data",
-    ])

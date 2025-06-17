@@ -16,6 +16,7 @@ scikit-learn>=1.0 # Used for preprocessing (scalers), metrics, model_selection
 statsmodels>=0.13 # Used for ts_utils analysis (ACF/PACF, Decomp, Tests)
 matplotlib>=3.5 # Used for visualization utilities and examples
 joblib>=1.1 # Used for saving/loading scalers, models
+pyyaml
 
 # Documentation Tools (Sphinx & Extensions)
 # -----------------------------------------

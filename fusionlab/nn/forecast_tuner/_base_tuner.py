@@ -371,7 +371,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
             
 
 PINNTunerBase.__doc__=(
-    """
+    r"""
     Base class for hyperparameter tuning of Physics‐Informed Neural
     Networks (PINNs) like PIHALNet, using Keras Tuner.
     
