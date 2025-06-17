@@ -1,9 +1,6 @@
 # .readthedocs.yml — Read the Docs build configuration
 version: 2
 
-checkout:
-  version: main
-  
 build:
   os: ubuntu-22.04
   tools:
