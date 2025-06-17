@@ -52,11 +52,11 @@ from ._tft_base_tuner import(
     BaseTuner
 )
 from ..transformers import (
-    XTFT,
-    SuperXTFT,
     TemporalFusionTransformer as TFTFlexible, 
     TFT as TFTStricter 
 )
+from ..models import XTFT, SuperXTFT 
+
 HAS_KT = False
 try:
     import keras_tuner as kt

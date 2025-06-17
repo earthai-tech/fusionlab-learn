@@ -75,6 +75,7 @@ def time_weighted_interval_score(
     (where :math:`\alpha_k` is the nominal coverage level for the k-th
     interval, meaning the interval is :math:`[q_{\alpha_k/2}, q_{1-\alpha_k/2}]`)
     is given by:
+        
     .. math::
         \mathrm{WIS}(y, m, \text{intervals}) = \frac{1}{K+1} \left(
             |y-m| + \sum_{k=1}^K \mathrm{IS}_{\alpha_k}(y, l_k, u_k)
