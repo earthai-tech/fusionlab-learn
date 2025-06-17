@@ -42,11 +42,10 @@ from ..__init__ import config
 from ..losses import combined_quantile_loss
 # from .keras_validator import validate_keras_model
 from ..transformers import (
-    XTFT,
-    SuperXTFT,
     TemporalFusionTransformer as TFTFlexible,
     TFT as TFTStricter,
 )
+from ..models import XTFT, SuperXTFT 
 
 HAS_KT = False
 try:

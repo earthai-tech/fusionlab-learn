@@ -75,7 +75,6 @@ time-series forecasting.
 .. raw:: html
 
    <hr>
-   
 
 Transformer Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
@@ -111,10 +110,10 @@ Fusion models that integrate physical laws into the training process.
    :toctree: _autosummary/models
    :nosignatures:
 
-   ~fusionlab.nn.pinn.models.TransFlowSubsNet
-   ~fusionlab.nn.pinn.PIHALNet
-   ~fusionlab.nn.pinn.models.PiHALNet
-   ~fusionlab.nn.pinn.models.PiTGWFlow
+   ~fusionlab.nn.pinn.TransFlowSubsNet
+   ~fusionlab.nn.pinn.models.PIHALNet
+   ~fusionlab.nn.pinn.PiHALNet
+   ~fusionlab.nn.pinn.PiTGWFlow
    
 .. raw:: html
 

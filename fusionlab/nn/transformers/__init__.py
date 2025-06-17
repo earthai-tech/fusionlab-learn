@@ -16,7 +16,7 @@ if not HAS_TF:
     warnings.warn(
         "TensorFlow not installed. "
         "TemporalFusionTransformer, DummyTFT, "
-        "TFT, XTFT, SuperXTFT require TF.",
+        "TFT, require tensorflow.",
         ImportWarning
     )
 else:
@@ -31,35 +31,33 @@ __all__ = [
     "TemporalFusionTransformer",
     "DummyTFT",
     "TFT",
-    "XTFT",
-    "SuperXTFT",
 ]
 
 
-def __getattr__(name):
-    """
-    Lazy import and warn relocation only when users
-    access XTFT or SuperXTFT.
-    """
-    if name in ("XTFT", "SuperXTFT"):
-        if not HAS_TF:
-            raise ImportError(
-                f"Cannot import {name}: TensorFlow is missing."
-            )
-        warnings.warn(
-            "XTFT and SuperXTFT will be moved to "
-            "'fusionlab.nn.models' in future releases.",
-            FutureWarning
-        )
-        # Lazy import
-        from ..models._xtft import XTFT as _XT, \
-            SuperXTFT as _SuperXT
-        return _XT if name == "XTFT" else _SuperXT
-    raise AttributeError(
-        f"module {__name__!r} has no attribute {name!r}"
-    )
+# def __getattr__(name):
+#     """
+#     Lazy import and warn relocation only when users
+#     access XTFT or SuperXTFT.
+#     """
+#     if name in ("XTFT", "SuperXTFT"):
+#         if not HAS_TF:
+#             raise ImportError(
+#                 f"Cannot import {name}: TensorFlow is missing."
+#             )
+#         warnings.warn(
+#             "XTFT and SuperXTFT will be moved to "
+#             "'fusionlab.nn.models' in future releases.",
+#             FutureWarning
+#         )
+#         # Lazy import
+#         from ..models._xtft import XTFT as _XT, \
+#             SuperXTFT as _SuperXT
+#         return _XT if name == "XTFT" else _SuperXT
+#     raise AttributeError(
+#         f"module {__name__!r} has no attribute {name!r}"
+#     )
 
 
-def __dir__():
-    """Include lazy attributes in dir()."""
-    return sorted(__all__ + list(globals().keys()))
+# def __dir__():
+#     """Include lazy attributes in dir()."""
+#     return sorted(__all__ + list(globals().keys()))
