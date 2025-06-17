@@ -47,13 +47,12 @@ from ._property import (
 from ._config import CITY_CONFIGS 
 
 try:
+    from ..utils.data_utils import nan_ops
     from ..utils.geo_utils import augment_city_spatiotemporal_data
     from ..utils.geo_utils import generate_dummy_pinn_data
-    from ..utils.io_utils import fetch_joblib_data
-    from ..nn.utils import reshape_xtft_data
-    from ..utils.data_utils import nan_ops
-    from ..utils.spatial_utils import spatial_sampling
     from ..utils.generic_utils import ExistenceChecker 
+    from ..utils.spatial_utils import spatial_sampling
+    from ..utils.io_utils import fetch_joblib_data
     
 except ImportError:
     warnings.warn(
@@ -82,13 +81,6 @@ except ImportError:
         warnings.warn("nan_ops function not found. Skipping NaN handling.")
         return df
 
-    def reshape_xtft_data(*args, **kwargs):
-        warnings.warn(
-            "reshape_xtft_data currently operates with tensorflow as "
-            "backend. Make sure to have tensorflow installed."
-        )
-        raise ModuleNotFoundError
-
     def fetch_joblib_data(*args, **kwargs):
         warnings.warn("fetch_joblib_data not found. Caching disabled.")
         raise FileNotFoundError  # Mimic cache miss
@@ -98,7 +90,7 @@ logger = fusionlog().get_fusionlab_logger(__name__)
 
 # --- Metadata Definition ---
 _ZHONGSHAN_METADATA = RemoteMetadata(
-    file='zhongshan_2000.csv',  # The already sampled file
+    file='zhongshan_2000.csv', 
     url=FLAB_REMOTE_DATA_URL,
     checksum=None,  # TODO: Add checksum
     descr_module=None,
@@ -1231,7 +1223,6 @@ def fetch_nansha_data(
 def load_processed_subsidence_data(
     dataset_name: str = 'zhongshan',
     *,
-    # --- Keep all parameters as defined previously ---
     n_samples: Optional[Union[int, str]] = None,
     as_frame: bool = False,
     include_coords: bool = True, 
@@ -1462,6 +1453,8 @@ def load_processed_subsidence_data(
     >>> print(f"Loaded and processed sample shape: {df_proc_sample.shape}")
 
     """
+    from ..nn.utils import reshape_xtft_data
+    
     # --- Configuration based on dataset name ---
     if dataset_name == 'zhongshan':
         fetch_func = fetch_zhongshan_data
