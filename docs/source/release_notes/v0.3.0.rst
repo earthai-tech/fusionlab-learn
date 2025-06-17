@@ -7,7 +7,7 @@ Version 0.3.0
 
 **Focus: Advanced PINNs and Flexible Attentive Architectures**
 
-This is a milestone release that significantly refactors the core
+This is a release that significantly refactors the core
 attentive model architecture and introduces a powerful, flexible new
 generation of Physics-Informed Neural Networks (PINNs). The focus has
 been on modularity, robustness, and providing users with greater
@@ -91,7 +91,7 @@ New Features
      output_pihal = halnet_pihal(inputs_pihal)
      print(f"PIHAL-like mode output shape: {output_pihal.shape}")
 
-* |New| A suite of PINN-specific utilities have been added,
+* |New| A suite of **PINN-specific utilities** have been added,
   including the critical
   :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences`
   function for handling complex input requirements.
@@ -185,7 +185,24 @@ Improvements
   been optimized for performance, resulting in a significant speed-up
   (up to 30%) when generating sequences from very large DataFrames.
 
- 
+API Changes
+~~~~~~~~~~~~~
+* |API Change| The **`BaseAttentive`** class is now the recommended
+  base for all hybrid and PINN models. Its ``__init__`` signature
+  introduces the **`architecture_config`** dictionary as the new
+  standard for controlling model structure.
+* |API Change| The legacy :class:`~fusionlab.nn.forecast_tuner.PiHALTuner` is now shadowed by the 
+  flexible **`HydroTuner`**, which requires a ``model_name_or_cls``
+  argument to specify the model to tune.
+* |API Change| The primary argument for defining the search space in new
+  tuners is now **`search_space`**. The old `param_space` argument is
+  maintained for backward compatibility but raises a `FutureWarning`.
+* |API Change| The refactored ``PIHALNet`` now takes a single physics
+  loss weight, **`lambda_pde`**, in its `.compile()` method.
+* |API Change| The :class:`~fusionlab.nn.components.MultiObjectiveLoss` component was refactored to
+  accept `anomaly_scores` during `__init__`, making its ``call()``
+  signature standard and compatible with the default ``model.fit()``.
+  
 Fixes
 ~~~~~
 

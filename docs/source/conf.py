@@ -95,6 +95,36 @@ bibtex_default_style = 'plain' # (or 'unsrt', 'alpha', etc.)
 # Defines roles like |Feature|, |Fix|, etc., using CSS classes for styling.
 # Allow shorthand references for main function interface
 #rst_prolog = wx_rst_epilog
+# rst_epilog = """
+# .. role:: bdg-success(raw)
+#    :format: html
+
+# .. role:: bdg-danger(raw)
+#    :format: html
+
+# .. role:: bdg-info(raw)
+#    :format: html
+
+# .. role:: bdg-warning(raw)
+#    :format: html
+
+# .. role:: bdg-primary(raw)
+#    :format: html
+
+# .. role:: bdg-secondary(raw)
+#    :format: html
+
+# .. |Feature| replace:: :bdg-success:`Feature`
+# .. |New| replace:: :bdg-success:`New`
+# .. |Fix| replace:: :bdg-danger:`Fix`
+# .. |Enhancement| replace:: :bdg-info:`Enhancement`
+# .. |Breaking| replace:: :bdg-warning:`Breaking`
+# .. |API Change| replace:: :bdg-warning:`API Change`
+# .. |Docs| replace:: :bdg-secondary:`Docs`
+# .. |Build| replace:: :bdg-primary:`Build`
+# .. |Tests| replace:: :bdg-primary:`Tests`
+
+# """
 rst_epilog = """
 .. role:: bdg-success(raw)
    :format: html
@@ -114,11 +144,17 @@ rst_epilog = """
 .. role:: bdg-secondary(raw)
    :format: html
 
+.. role:: bdg-purple(raw)
+   :format: html
+
+.. role:: bdg-fix(raw)
+   :format: html
+   
 .. |Feature| replace:: :bdg-success:`Feature`
-.. |New| replace:: :bdg-success:`Feature`
-.. |Fix| replace:: :bdg-danger:`Fix`
+.. |New| replace:: :bdg-success:`New`
+.. |Fix| replace:: :bdg-fix:`Fix`
 .. |Enhancement| replace:: :bdg-info:`Enhancement`
-.. |Breaking| replace:: :bdg-warning:`Breaking`
+.. |Breaking| replace:: :bdg-danger:`Breaking`
 .. |API Change| replace:: :bdg-warning:`API Change`
 .. |Docs| replace:: :bdg-secondary:`Docs`
 .. |Build| replace:: :bdg-primary:`Build`

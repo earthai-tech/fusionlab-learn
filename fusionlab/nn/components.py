@@ -3236,8 +3236,7 @@ class AnomalyLoss(Loss, NNLearner):
         self.weight = weight
 
     @tf_autograph.experimental.do_not_convert
-    def call(self, anomaly_scores: Tensor, y_pred=None 
-             ): 
+    def call(self, anomaly_scores: Tensor, y_pred=None): 
         r"""
         Forward pass that computes the mean squared
         anomaly score multiplied by `weight`.
@@ -3429,7 +3428,9 @@ class MultiObjectiveLoss(Loss, NNLearner):
         
         if self.anomaly_scores  is not None:
             anomaly_loss = self.anomaly_loss_fn(
-                self.anomaly_scores 
+                # Avoid Keras signature to raise error then 
+                # pass y_pred as None,
+                self.anomaly_scores, y_pred =None, 
             )
             return quantile_loss + anomaly_loss
         return quantile_loss
