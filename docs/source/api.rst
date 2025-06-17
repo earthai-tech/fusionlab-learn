@@ -23,34 +23,7 @@ examples, please consult the :doc:`User Guide </user_guide/index>`.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-Datasets (`fusionlab.datasets`)
----------------------------------
-Utilities for loading included sample datasets and generating synthetic
-time series data for testing and demonstration.
 
-**Loading Functions** (`fusionlab.datasets`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_load
-   :nosignatures:
-
-   ~fusionlab.datasets.load.fetch_zhongshan_data
-   ~fusionlab.datasets.load.fetch_nansha_data
-   ~fusionlab.datasets.load.load_processed_subsidence_data
-   ~fusionlab.datasets.load.load_subsidence_pinn_data
-
-**Generation Functions** (`fusionlab.datasets.make`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_make
-   :nosignatures:
-
-   ~fusionlab.datasets.make.make_multi_feature_time_series
-   ~fusionlab.datasets.make.make_quantile_prediction_data
-   ~fusionlab.datasets.make.make_anomaly_data
-   ~fusionlab.datasets.make.make_trend_seasonal_data
-   ~fusionlab.datasets.make.make_multivariate_target_data
-   
 Metrics (`fusionlab.metrics`)
 -------------------------------
 A collection of metrics for evaluating forecast accuracy, calibration,
