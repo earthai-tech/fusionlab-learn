@@ -1,10 +1,6 @@
 # .readthedocs.yml — Corrected and Recommended Configuration
 version: 2
 
-# Specifies which version of your repository to build
-checkout:
-  version: main
-  
 # Specifies the build environment
 build:
   os: ubuntu-22.04
