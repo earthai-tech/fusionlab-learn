@@ -138,9 +138,9 @@ Usage Example
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
-Formatting Model Outputs (`format_pinn_outputs`)
-------------------------------------------------
-:API Reference: :func:`~fusionlab.nn.pinn.utils.format_pinn_outputs`
+Formatting Model Outputs (`format_pinn_predictions`)
+--------------------------------------------------------
+:API Reference: :func:`~fusionlab.nn.pinn.utils.format_pinn_predictions`
 
 This function is the counterpart to the preparation utility. It takes
 the raw dictionary of prediction tensors from a model's `.predict()`

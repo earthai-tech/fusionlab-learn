@@ -2573,72 +2573,77 @@ MultiObjectiveLoss
 
 **Purpose:** To enable **multi-task learning** by combining multiple,
 distinct loss functions into a single, callable objective. In many
-advanced scenarios, we want a model to learn more than just a single
-task. For instance, we might want it to be accurate at **forecasting**
-(primary task) while also becoming good at **anomaly detection**
-(auxiliary task).
+advanced scenarios, we want a model to be trained on more than one
+objective simultaneously. For instance, a model should be accurate at
+its primary **forecasting** task while also being regularized by an
+auxiliary **anomaly detection** task.
 
-The ``MultiObjectiveLoss`` layer acts as a container and calculator for
-a composite loss function that drives this multi-task training. It
-combines the loss from the primary forecasting task with the loss from
-one or more auxiliary tasks into a single scalar value that the
-optimizer can then minimize.
+The ``MultiObjectiveLoss`` layer acts as a stateful container that
+achieves this. It combines the loss from the primary task (like
+quantile forecasting) with the loss from an auxiliary task into a
+single scalar value that a standard optimizer can then minimize.
 
-**Architectural Deep Dive & Crucial Usage Pattern**
-***************************************************
-This component is a Keras ``Loss`` layer, but with a non-standard API
-that makes it uniquely suited for custom training workflows.
+Architectural Deep Dive & How It Works
+******************************************
+This component is a Keras ``Loss`` layer that elegantly manages the
+combination of different training objectives.
 
-**1. Initialization with Loss Components**
-The layer is initialized with instances of other Keras loss layers. For
-example, it takes a `quantile_loss_fn` (like an instance of
-``AdaptiveQuantileLoss``) and an `anomaly_loss_fn` (like an instance of
-``AnomalyLoss``).
+**1. Initialization with Loss Components and Data**
 
-**2. The Non-Standard `call` Signature**
-The core of this layer's functionality is its `call` method, which has
-a custom signature:
+The layer is a "stateful" container. When you create an instance of
+it, you provide it with all the necessary components:
 
-`call(self, y_true, y_pred, anomaly_scores=None)`
+* **`quantile_loss_fn`**: An instance of a forecasting loss, like
+  :class:`~fusionlab.nn.components.AdaptiveQuantileLoss`.
+* **`anomaly_loss_fn`**: An instance of the auxiliary loss, like
+  :class:`~fusionlab.nn.components.AnomalyLoss`.
+* **`anomaly_scores`**: The actual tensor of pre-computed anomaly
+  scores that the `anomaly_loss_fn` will operate on.
 
-.. warning::
-   This signature with three arguments (`y_true`, `y_pred`,
-   `anomaly_scores`) is **not compatible** with the standard Keras
-   ``model.fit()`` loop. A standard ``.fit()`` only knows how to pass
-   `y_true` and `y_pred` to the loss function provided in `.compile()`.
+By accepting the `anomaly_scores` during initialization, these scores
+become part of the loss function's internal state.
 
-**3. Intended Use: Inside a Custom `train_step`**
-This loss object is designed to be called **manually from within a
-custom `train_step`** of a model (like ``XTFT``). The workflow inside
-the training step is as follows:
+**2. Standard Keras `call` Signature**
 
-* The model performs its forward pass and generates multiple outputs,
-  typically a dictionary containing the main forecast (`y_pred`) and
-  any auxiliary outputs (like `anomaly_scores`).
-* The ``MultiObjectiveLoss`` instance is then called manually with all
-  the necessary components.
-* It calculates each individual loss internally and returns their sum.
+This stateful design allows the layer's `call` method to use the
+**standard Keras Loss signature**: `call(self, y_true, y_pred)`.
 
-The mathematical formulation is simple and additive:
+This is a critical feature because it makes ``MultiObjectiveLoss``
+**fully compatible with the standard ``model.compile()`` and
+``model.fit()`` workflow**. You do not need a custom `train_step` to
+use this component.
+
+**3. Internal Calculation**
+
+When called by Keras during training, the layer performs the following:
+
+* It computes the primary forecasting loss by passing the `y_true`
+  and `y_pred` arguments to its internal `quantile_loss_fn`.
+* It computes the auxiliary anomaly loss by calling its internal
+  `anomaly_loss_fn`, using the `anomaly_scores` that were stored
+  during its initialization.
+* It returns the simple sum of these two loss values.
+
+The mathematical formulation is clear and additive:
 
 .. math::
-   \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{quantile}}(y_{true}, y_{pred}) + \mathcal{L}_{\text{anomaly}}(\mathbf{s}_{anomaly})
+   \mathcal{L}_{\text{total}}(y_{\text{true}}, y_{\text{pred}}) = \mathcal{L}_{\text{quantile}}(y_{\text{true}}, y_{\text{pred}}) + \mathcal{L}_{\text{anomaly}}(\mathbf{s}_{\text{anomaly}})
 
-This combined loss value is then what is used to compute the gradients
-for backpropagation.
+where :math:`\mathbf{s}_{\text{anomaly}}` is the tensor of anomaly
+scores provided when the loss function was created.
 
 **Usage Context:**
-This is the primary mechanism for implementing the `'from_config'` and
-`'prediction_based'` anomaly detection strategies in
-:class:`~fusionlab.nn.transformers.XTFT`. It allows the model to be
-jointly optimized on both its forecasting accuracy and its ability to
-assign low scores to normal data or high scores to anomalous predictions.
+This layer is the primary mechanism for implementing the `'from_config'`
+anomaly detection strategy in models like
+:class:`~fusionlab.nn.transformers.XTFT`. It provides a clean and simple
+way to create a composite loss function that can be passed directly to
+`model.compile()`, enabling complex multi-task learning without custom
+training loops.
 
 **Code Example:**
 
-The first example shows how to instantiate the layer. The second,
-conceptual example shows how it would be used inside a model's custom
-training loop.
+This example shows how to instantiate the layer and then use it as a
+standard Keras loss object.
 
 .. code-block:: python
    :linenos:
@@ -2648,39 +2653,48 @@ training loop.
        MultiObjectiveLoss, AdaptiveQuantileLoss, AnomalyLoss
    )
 
-   # --- 1. Instantiate individual loss components ---
-   quantile_loss_fn = AdaptiveQuantileLoss(quantiles=[0.1, 0.5, 0.9])
-   anomaly_loss_fn = AnomalyLoss(weight=0.05)
+   # --- Configuration ---
+   quantiles = [0.1, 0.5, 0.9]
+   anomaly_weight = 0.05
+   batch_size, horizon, output_dim = 4, 10, 1
 
-   # --- 2. Conceptual usage inside a custom train_step ---
-   # This is for demonstration and would be inside a model's method.
-   
-   # Dummy data
-   y_true = tf.random.normal((4, 10, 1))
-   y_pred_quantiles = tf.random.normal((4, 10, 3, 1))
-   anomaly_scores = tf.random.uniform((4, 10, 1))
-   
-   # --- 3. Instantiate the multi-objective loss container ---
+   # --- 1. Create Dummy Data ---
+   y_true = tf.random.normal((batch_size, horizon, output_dim))
+   # Model prediction for 3 quantiles
+   y_pred_quantiles = tf.random.normal((batch_size, horizon, len(quantiles), output_dim))
+   # Pre-computed anomaly scores to be stored in the loss function
+   precomputed_anomaly_scores = tf.random.uniform((batch_size, horizon, 1))
+
+   # --- 2. Instantiate Individual Loss Components ---
+   quantile_loss_fn = AdaptiveQuantileLoss(quantiles=quantiles)
+   anomaly_loss_fn = AnomalyLoss(weight=anomaly_weight)
+
+   # --- 3. Instantiate the Multi-Objective Loss ---
+   # Pass the pre-computed scores during initialization.
    multi_loss = MultiObjectiveLoss(
        quantile_loss_fn=quantile_loss_fn,
-       anomaly_loss_fn=anomaly_loss_fn, 
-       anomaly_scores=anomaly_scores
+       anomaly_loss_fn=anomaly_loss_fn,
+       anomaly_scores=precomputed_anomaly_scores
    )
    print("MultiObjectiveLoss instantiated successfully.")
 
-   # Manually call the loss function with all required arguments
-   total_loss_value = multi_loss(
-       y_true, y_pred_quantiles, 
-   )
+   # --- 4. Use it like a standard Keras loss ---
+   # The call only requires y_true and y_pred.
+   total_loss_value = multi_loss(y_true, y_pred_quantiles)
    print(f"\nExample combined loss value: {total_loss_value.numpy():.4f}")
+
+   # Conceptual usage in a model:
+   # model.compile(optimizer='adam', loss=multi_loss)
+   # model.fit(x_train, y_train, ...)
 
 **Expected Output:**
 
 .. code-block:: text
 
    MultiObjectiveLoss instantiated successfully.
-   Example combined loss value: 0.4681
 
+   Example combined loss value: 0.5279
+   
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
@@ -2915,6 +2929,26 @@ preferred for its robustness to varying sequence lengths.
    agg_flatten = aggregate_multiscale(lstm_outputs_same_t, mode='flatten')
    print(f"Output shape (mode='flatten'): {agg_flatten.shape}")
    # Expected: (B, T' * U * N_scales) -> (4, 10 * 16 * 3) = (4, 480)
+   
+
+**Expected Output:**
+
+.. code-block:: text
+
+   Input is a list of 3 tensors with shapes:
+     Scale 1: (4, 20, 16)
+     Scale 2: (4, 10, 16)
+     Scale 3: (4, 5, 16)
+
+   Output shape (mode='last'): (4, 48)
+   Output shape (mode='average'): (4, 48)
+   Output shape (mode='sum'): (4, 48)
+
+   --- Testing modes requiring same T' ---
+   Input tensors shape: (4, 10, 16)
+   Output shape (mode='concat'): (4, 48)
+   Output shape (mode='flatten'): (4, 480)
+   
    
 Aggregating Multi-Scale Outputs (`aggregate_multiscale_on_3d`)
 ******************************************************************
@@ -3220,7 +3254,7 @@ can be assembled to create sophisticated, state-of-the-art architectures.
 Now that you are familiar with the building blocks, we recommend you
 explore:
 
-* **:doc:`../models/index`**: See how these components are assembled
+* :doc:`./models/index`: See how these components are assembled
   into complete, end-to-end models like ``XTFT`` and ``PIHALNet``.
-* **:doc:`../exercises/index`**: Apply this knowledge in hands-on
+* :doc:`./exercises/index`: Apply this knowledge in hands-on
   tutorials that walk you through building and training these models.

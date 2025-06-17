@@ -29,20 +29,10 @@ from __future__ import annotations
 import os
 import shutil
 import warnings
-from importlib import resources # Used in download_file_if # noqa 
+from importlib import resources 
 from collections import namedtuple
 from typing import Optional, Union
 from urllib.parse import urljoin
-
-try:
-    from ..utils.base_utils import check_file_exists, fancier_downloader 
-except ImportError:
-    warnings.warn("Could not import IO utilities from fusionlab.utils.io")
-    # Define dummy functions if needed for
-    # static analysis, but runtime will fail
-    def check_file_exists(*args, **kwargs): return False
-    def fancier_downloader(*args, **kwargs): raise NotImplementedError
-
 
 FLAB_DMODULE = "fusionlab.datasets.data" 
 KD_DESCR = "fusionlab.datasets.descr" 
@@ -211,6 +201,7 @@ def download_file_if_missing(
     TypeError
         If `metadata` is not a string or `RemoteMetadata` instance.
     """
+    from ..utils.base_utils import check_file_exists, fancier_downloader 
     # Validate error parameter
     if error not in ['warn', 'raise', 'ignore']:
         raise ValueError(
@@ -392,6 +383,7 @@ def download_file_if(
     TypeError
         If `metadata` is not a string or `RemoteMetadata` instance.
     """
+    from ..utils.base_utils import fancier_downloader 
     # 1. Validate inputs and resolve metadata
     if error not in ['warn', 'raise', 'ignore']:
         raise ValueError(
