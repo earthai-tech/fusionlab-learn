@@ -2,6 +2,11 @@
 # Requirements for building fusionlab documentation & development
 # -----------------------------------------------------------------
 
+# Neural Network Backend
+# ----------------------
+# FusionLab currently relies heavily on TensorFlow/Keras.
+tensorflow==2.15 #>=2.8,<2.16 # Specify a compatible range
+
 # Core Dependencies (for running fusionlab code)
 # ---------------------------------------------
 numpy>=1.20, <2 # Used throughout for numerical operations
@@ -11,11 +16,6 @@ scikit-learn>=1.0 # Used for preprocessing (scalers), metrics, model_selection
 statsmodels>=0.13 # Used for ts_utils analysis (ACF/PACF, Decomp, Tests)
 matplotlib>=3.5 # Used for visualization utilities and examples
 joblib>=1.1 # Used for saving/loading scalers, models
-
-# Neural Network Backend
-# ----------------------
-# FusionLab currently relies heavily on TensorFlow/Keras.
-tensorflow==2.15 # Specify a compatible range
 
 # Documentation Tools (Sphinx & Extensions)
 # -----------------------------------------
