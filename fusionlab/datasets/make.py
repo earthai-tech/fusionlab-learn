@@ -22,11 +22,8 @@ import numpy as np
 import pandas as pd
 from typing import Optional, List, Union, Tuple
 
-try:
-    from ..api.bunch import XBunch
-except ImportError:
-    class XBunch(dict): pass # Fallback
-    warnings.warn("Could not import Bunch from fusionlab.ai.structures.")
+from ..api.bunch import XBunch
+
 
 __all__ = [
     "make_multi_feature_time_series", 

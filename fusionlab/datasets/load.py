@@ -50,7 +50,7 @@ logger = fusionlog().get_fusionlab_logger(__name__)
 
 # --- Metadata Definition ---
 _ZHONGSHAN_METADATA = RemoteMetadata(
-    file='zhongshan_2000.csv',  # The already sampled file
+    file='zhongshan_2000.csv', 
     url=FLAB_REMOTE_DATA_URL,
     checksum=None,  # TODO: Add checksum
     descr_module=None,
@@ -1191,7 +1191,6 @@ def fetch_nansha_data(
 def load_processed_subsidence_data(
     dataset_name: str = 'zhongshan',
     *,
-    # --- Keep all parameters as defined previously ---
     n_samples: Optional[Union[int, str]] = None,
     as_frame: bool = False,
     include_coords: bool = True, 
