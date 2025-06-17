@@ -211,11 +211,6 @@ def format_pinn_predictions(
         visualizing the DataFrame produced by this function.
     """
     #
-    # >>> ALL OF THE EXISTING LOGIC FROM `format_pihalnet_predictions` GOES HERE. <<<
-    # The only change is that it now operates on the `predictions` variable
-    # instead of `pihalnet_outputs`.
-  
-    # Call the original function, passing all arguments explicitly.
     # This acts as a backward-compatible wrapper.
     return format_pihalnet_predictions(
         pihalnet_outputs=predictions,

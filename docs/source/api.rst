@@ -9,16 +9,6 @@ Welcome to the ``fusionlab-learn`` API reference. This section provides detailed
 specifications for the public functions, classes, and modules included
 in the package.
 
-The documentation here is largely auto-generated from the docstrings
-within the ``fusionlab-learn`` source code. For narrative explanations and usage
-examples, please consult the :doc:`User Guide </user_guide/index>`.
-
-.. note::
-   Ensure ``fusionlab-learn`` is installed in your documentation build
-   environment (see :doc:`installation`) for these links and summaries
-   to be generated correctly. You also need `sphinx.ext.autosummary`
-   enabled in your `conf.py` with `autosummary_generate = True`.
-
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">

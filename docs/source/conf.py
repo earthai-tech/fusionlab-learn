@@ -21,8 +21,8 @@ try:
 except ImportError:
     print("Warning: Could not import fusionlab to determine version.")
     print("Setting version and release to defaults.")
-    release = '0.1.1' # Default fallback
-    version = '0.1'   # Default fallback
+    release = '0.3.0' # Default fallback
+    version = '0.3'   # Default fallback
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -53,9 +53,9 @@ extensions = [
     'myst_parser',              # Allow parsing Markdown files (like README.md)
     'sphinx_design',            # Enable design elements like cards, buttons, grids
                                 # e.g., 'sphinx_gallery.gen_gallery'
-    # 'sphinxcontrib.bibtex',   # Add BibTeX support <--- ADD THIS LINE
+    # 'sphinxcontrib.bibtex',   # Add BibTeX support 
 ]
-
+autosummary_generate = True
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
