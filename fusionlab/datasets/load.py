@@ -15,6 +15,8 @@ import os
 import textwrap
 import warnings
 import joblib
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 
@@ -51,6 +53,8 @@ try:
     from ..nn.utils import reshape_xtft_data
     from ..utils.data_utils import nan_ops
     from ..utils.spatial_utils import spatial_sampling
+    from ..utils.generic_utils import ExistenceChecker 
+    
 except ImportError:
     warnings.warn(
         "Could not import augment_city_spatiotemporal_data from "
@@ -119,6 +123,7 @@ __all__ = [
     "load_subsidence_pinn_data"
 ]
 
+
 def load_subsidence_pinn_data(
     data_name: str = 'zhongshan',
     strategy: str = "load",
@@ -128,7 +133,7 @@ def load_subsidence_pinn_data(
     encode_categoricals: bool = True,
     scale_numericals: bool = True,
     scaler_type: str = "minmax",
-    return_dataframe: bool = False,
+    as_frame: bool = False,
     data_home: Optional[str] = None,
     use_cache: bool = True,
     save_cache: bool = False,
@@ -141,16 +146,16 @@ def load_subsidence_pinn_data(
     feature_cols_augment: Optional[List[str]] = None,
     interpolation_config: Optional[Dict[str, Any]] = None,
     feature_config: Optional[Dict[str, Any]] = None,
-    target_name: Optional[str] = None,  # Default will be subsidence_col
+    target_name: Optional[str] = None,  
     interpolate_target: bool = False,
-    coordinate_precision: Optional[int] = 4,  # Default precision,
+    coordinate_precision: Optional[int] = 4, 
     year_range: Union [Tuple [float, float] ,  None] = None,
     coords_range: Union [
         Tuple[Tuple[float, float], Tuple[float, float]],
         None] = None,
 
     vars_range = None,
-    verbose: int = 1
+    verbose: int = 1, 
 ) -> Union[pd.DataFrame, XBunch]:
 
     if data_name.lower() not in CITY_CONFIGS:
@@ -161,49 +166,19 @@ def load_subsidence_pinn_data(
 
     cfg = CITY_CONFIGS[data_name.lower()]
     metadata = cfg["metadata"]
-
-    # Resolve local file path, downloading if necessary
-    # get_data typically returns a path within the package or data_home
-    # download_file_if_missing handles the download logic
-    data_path_resolved = os.path.join(
-        get_data(data_home),
-        metadata.file
+    
+    # --- Step 0 - Validate user-provided data_home path ---
+    data_path_resolved, metadata =_resolve_data_path (
+        data_home, metadata=metadata, data_name=data_name, 
+        strategy=strategy, verbose =verbose, 
     )
-    try:
-        # Ensure the file is downloaded if it's from a remote URL and
-        # doesn't exist
-        if metadata.url and not os.path.exists(data_path_resolved):
-            if verbose >= 1:
-                logger.info(
-                    f"Attempting to download {data_name} data"
-                    f" from {metadata.url} to "
-                    f"{data_path_resolved}..."
-                )
-            download_file_if(
-                data_path_resolved,
-                metadata.url,
-                checksum=metadata.checksum
-            )
-    except Exception as e:
-        if strategy == "load":
-            raise FileNotFoundError(
-                f"Failed to download or find required data file "
-                f"'{metadata.file}' for {data_name}: {e}"
-            ) from e
-
-        logger.warning(
-            f"Could not download data for {data_name}: {e}. "
-            "Will proceed based on strategy."
-        )
-        # If strategy is fallback or generate, df will be None and
-        # handled later
-
     # --- Caching Logic ---
-    cache_dir = get_data(data_home)  # Specific cache subdir
-    # Include data_name in cache filename
+    cache_dir = get_data(data_home)
+    # Include data_name in cache filename for uniqueness
     base_name = f"{data_name}_{os.path.splitext(metadata.file)[0]}"
     proc_fname = f"{base_name}_processed{cache_suffix}.joblib"
     proc_fpath = os.path.join(cache_dir, proc_fname)
+
 
     df = None
     encoder_info: Dict[str, Any] = {}
@@ -506,7 +481,7 @@ def load_subsidence_pinn_data(
         if verbose >= 1:
             logger.info(f"Data augmentation complete. New shape: {df.shape}")
 
-    if return_dataframe:
+    if as_frame:
         return df.copy()
 
     # --- Build XBunch for output ---
@@ -631,7 +606,7 @@ scaler_type : {'minmax', 'standard'}, default='minmax'
     Which scaler to apply when `scale_numericals=True`.  - 'minmax'
     uses `sklearn.preprocessing.MinMaxScaler`.  - 'standard' uses
     `sklearn.preprocessing.StandardScaler`.
-return_dataframe : bool, default=False
+as_frame : bool, default=False
     If True, return the processed `pd.DataFrame` directly.  Otherwise,
     pack results into an `XBunch` with fields:
       - `"frame"`: the processed DataFrame
@@ -821,7 +796,6 @@ apply augmentation with yearly interpolation and Gaussian noise:**
 
 """
 
-
 def fetch_zhongshan_data(
     *,
     n_samples: Optional[Union[int, str]] = None, 
@@ -956,8 +930,7 @@ def fetch_zhongshan_data(
             df = spatial_sampling(
                 df,
                 sample_size=n_samples,
-                x_coord='longitude', # Assuming standard names
-                y_coord='latitude',
+                spatial_cols=('longitude','latitude'), 
                 random_state=random_state,
                 verbose=sample_verbose
             )
@@ -1171,8 +1144,7 @@ def fetch_nansha_data(
             df = spatial_sampling(
                 df,
                 sample_size=n_samples,
-                x_coord='longitude',
-                y_coord='latitude',
+                spatial_cols=('longitude','latitude'),
                 random_state=random_state,
                 verbose=sample_verbose
             )
@@ -1275,9 +1247,10 @@ def load_processed_subsidence_data(
     scaler_type: str = 'minmax',
     return_sequences: bool = False,
     time_steps: int = 4,
-    forecast_horizons: int = 4,
+    forecast_horizon: int = 4,
     target_col: str = 'subsidence',
     scale_target: bool=False, 
+    group_by_cols: bool =True, 
     use_processed_cache: bool = True,
     use_sequence_cache: bool = True,
     save_processed_frame: bool = False,
@@ -1376,13 +1349,22 @@ def load_processed_subsidence_data(
     time_steps : int, default=4
         Lookback window size (number of past time steps) for sequence
         generation. Only used if ``return_sequences=True``.
-    forecast_horizons : int, default=4
+    forecast_horizon : int, default=4
         Prediction horizon (number of future steps) for sequence
         generation. Only used if ``return_sequences=True``.
     target_col : str, default='subsidence'
         Name of the target variable column used for sequence generation.
     scale_target: bool, default=False 
         Whether to scale the target or not. 
+    group_by_cols : bool or list of str, default True
+        Controls how the data is partitioned before sequence generation.
+        
+        - False (default): do not group by any columns; the entire dataset
+          is treated as a single continuous time series.
+        - list of str: names of one or more DataFrame columns (e.g.
+          ['longitude', 'latitude']) to group by; each unique group will
+          produce its own set of sequences.
+        - None: equivalent to False (no grouping).
     use_processed_cache : bool, default=True
         If ``True`` and ``return_sequences=False``, attempts to load a
         previously saved processed DataFrame (and scaler/encoder info)
@@ -1518,7 +1500,7 @@ def load_processed_subsidence_data(
     data_dir = get_data(data_home)
     processed_fname = f"{dataset_name}_processed{cache_suffix}.joblib"
     processed_fpath = os.path.join(data_dir, processed_fname)
-    seq_fname = (f"{dataset_name}_sequences_T{time_steps}_H{forecast_horizons}"
+    seq_fname = (f"{dataset_name}_sequences_T{time_steps}_H{forecast_horizon}"
                  f"{cache_suffix}.joblib")
     seq_fpath = os.path.join(data_dir, seq_fname)
 
@@ -1825,18 +1807,37 @@ def load_processed_subsidence_data(
                          f" {df_processed.columns.tolist()}")
 
     # Call reshape_xtft_data on the fully processed DataFrame
-    static_data, dynamic_data, future_data, target_data = reshape_xtft_data(
-        df=df_processed,
-        dt_col=dt_col, # Use 'year' as the time index column
-        target_col=target_col,
-        static_cols=final_static_cols,
-        dynamic_cols=final_dynamic_cols,
-        future_cols=final_future_cols,
-        spatial_cols=spatial_cols,
-        time_steps=time_steps,
-        forecast_horizons=forecast_horizons,
-        verbose=verbose > 0
-    )
+    # Call reshape_xtft_data on the fully processed DataFrame
+    try:
+        static_data, dynamic_data, future_data, target_data = reshape_xtft_data(
+            df=df_processed,
+            dt_col=dt_col,  # Use 'year' as the time index column
+            target_col=target_col,
+            static_cols=final_static_cols,
+            dynamic_cols=final_dynamic_cols,
+            future_cols=final_future_cols,
+            spatial_cols=None if not group_by_cols else spatial_cols,
+            time_steps=time_steps,
+            forecast_horizon=forecast_horizon,
+            verbose=verbose > 0
+        )
+    except ValueError as ve:
+        required_len = time_steps + forecast_horizon
+        msg = (
+            f"{ve}\n\n"
+            f"It looks like you're using the built-in {dataset_name} dataset (≈2000 samples),\n"
+            f"but no (lon, lat) group has at least {required_len} time points.\n"
+            "You have a few options:\n"
+            "  1. Treat the entire dataset as one long sequence by passing\n"
+            "     `group_by_cols=None`.\n"
+            "  2. Reduce `time_steps` or `forecast_horizon` so that each location\n"
+            f"     needs fewer than {required_len} data points.\n"
+            "  3. Augment your city spatio-temporal data (e.g.\n"
+            "     via `fusionlab.utils.geo_utils.augment_city_spatiotemporal_data`)\n"
+            "     to create more samples per location.\n"
+        )
+        raise ValueError(msg) from None
+    
 
     # Save sequences if requested
     if save_sequences:
@@ -1851,6 +1852,212 @@ def load_processed_subsidence_data(
               warnings.warn(f"Failed to save sequences: {e}")
 
     return static_data, dynamic_data, future_data, target_data
+
+
+def _resolve_data_path(
+    data_home: Optional[str],
+    metadata: "RemoteMetadata",
+    data_name: str,
+    strategy: str,
+    verbose: int = 0
+) -> Tuple[str, "RemoteMetadata"]:
+    """Validates data path and resolves the final path to a raw data file.
+
+    This internal helper encapsulates the complex logic for finding the
+    correct dataset file. It provides a robust and flexible mechanism
+    that can handle a user-provided path as a direct file, a directory
+    to search, or fall back to the default package cache and download
+    mechanisms.
+
+    Parameters
+    ----------
+    data_home : str or None
+        The user-provided path for locating the data. It can be:
+        - A direct path to a specific file (e.g., './data/my_data.csv').
+        - A path to a directory where the data file is located.
+        - ``None``, in which case the default fusionlab cache directory
+          is used.
+    metadata : RemoteMetadata
+        The default metadata object for the dataset, containing the
+        expected filename (``metadata.file``) and download URL
+        (``metadata.url``).
+    data_name : str
+        The name of the dataset (e.g., 'zhongshan'), used primarily for
+        logging and creating unique cache filenames.
+    strategy : {'load', 'fallback', 'generate'}
+        The loading strategy, which informs the error handling behavior
+        if a file cannot be found or downloaded.
+    verbose : int, default=0
+        The verbosity level for logging messages during the resolution
+        process.
+
+    Returns
+    -------
+    tuple of (str, RemoteMetadata)
+        A tuple containing:
+        - ``data_path_resolved``: The final, absolute path to the data
+          file that should be loaded.
+        - ``updated_metadata``: The metadata object, which may have been
+          updated with a new filename if a non-default file was used.
+
+    Raises
+    ------
+    FileNotFoundError
+        If `data_home` points to an invalid directory or if a required
+        file cannot be found or downloaded when ``strategy='load'``.
+    ValueError
+        If `data_home` is a directory containing multiple potential data
+        files, creating an ambiguous situation.
+
+    Notes
+    -----
+    The function follows a strict resolution order to find the data:
+
+    1.  If ``data_home`` is a direct path to a file, it is used, and the
+        default metadata is updated accordingly.
+    2.  If ``data_home`` is a directory, the function first searches for
+        the default filename specified in ``metadata.file``.
+    3.  If the default file is not found, it then scans the directory
+        for a **single, unique** alternative ``.csv`` or ``.xlsx`` file.
+    4.  If no local file is found through the steps above, it constructs
+        the default path in the cache and attempts to download the file
+        from ``metadata.url`` if ``download_if_missing`` is enabled
+        in the calling context.
+
+    See Also
+    --------
+    load_subsidence_pinn_data : The main user-facing function that uses this helper.
+    fusionlab.datasets._property.get_data : Utility to get the default cache path.
+    fusionlab.datasets._property.download_file_if : Utility to handle file downloads.
+
+    Examples
+    --------
+    >>> # Assume metadata.file = 'default_data.csv'
+    >>> # Case 1: data_home points directly to a file
+    >>> # path, meta = _resolve_data_path(
+    ... #     './my_data/custom.csv', metadata, ...
+    ... # )
+    >>> # path would be '.../my_data/custom.csv'
+    >>> # meta.file would be 'custom.csv'
+
+    >>> # Case 2: data_home is a directory containing 'default_data.csv'
+    >>> # path, meta = _resolve_data_path(
+    ... #     './my_data/', metadata, ...
+    ... # )
+    >>> # path would be '.../my_data/default_data.csv'
+    >>> # meta.file would remain 'default_data.csv'
+
+    >>> # Case 3: data_home is a directory with one other unique csv file
+    >>> # (and 'default_data.csv' is absent)
+    >>> # path, meta = _resolve_data_path(
+    ... #     './my_data_other/', metadata, ...
+    ... # )
+    >>> # path would be '.../my_data_other/unique_file.csv'
+    >>> # meta.file would become 'unique_file.csv'
+    """
+    if data_home is None:
+        # Case 1: No data_home provided. Use default fusionlab cache.
+        resolved_home = get_data()
+        data_path_resolved = os.path.join(resolved_home, metadata.file)
+        if verbose >= 1:
+            logger.info(f"No `data_home` provided. Using default path:"
+                        f" {data_path_resolved}")
+    else:
+        # Case 2: A data_home path is provided.
+        path_obj = Path(data_home)
+        
+        if path_obj.is_file():
+            # Subcase 2a: data_home is a direct path to a file.
+            if verbose >= 1:
+                logger.info(f"Provided `data_home` is a file. Using it directly:"
+                            f" {data_home}")
+            data_path_resolved = str(path_obj.resolve())
+            # Update metadata to reflect the user-provided file.
+            metadata = metadata._replace(
+                file=path_obj.name,
+                url=None # Local file has no download URL
+            )
+            return data_path_resolved, metadata
+
+        else:
+            # Subcase 2b: data_home is a directory. Validate and search it.
+            try:
+                resolved_home = str(ExistenceChecker.ensure_directory(path_obj))
+            except (TypeError, FileExistsError, OSError) as e:
+                raise FileNotFoundError(
+                    f"The provided `data_home` directory '{data_home}' is "
+                    f"invalid. Please check the path. Original error: {e}"
+                )
+            
+            default_file_path = os.path.join(resolved_home, metadata.file)
+            if os.path.exists(default_file_path):
+                data_path_resolved = default_file_path
+                if verbose >= 1:
+                    logger.info(f"Found default dataset '{metadata.file}'"
+                                f" in `data_home`.")
+            else:
+                # Default file not found, search for other data files.
+                if verbose >= 2:
+                    logger.debug(
+                        f"Default file '{metadata.file}' not found in"
+                        f" '{resolved_home}'. Searching for other data files..."
+                        )
+                
+                other_files = [
+                    f for f in os.listdir(resolved_home)
+                    if f.endswith(('.csv', '.xlsx')) and not f.startswith('~')
+                ]
+                
+                if len(other_files) == 1:
+                    # Exactly one other file found, use it.
+                    new_filename = other_files[0]
+                    data_path_resolved = os.path.join(resolved_home, new_filename)
+                    metadata = metadata._replace(file=new_filename, url=None)
+                    if verbose >= 1:
+                        logger.info(
+                            f"Using auto-detected data file: {new_filename}")
+                elif len(other_files) > 1:
+                    # Ambiguous situation.
+                    raise ValueError(
+                        f"Default data file '{metadata.file}' not found in "
+                        f"'{resolved_home}', but multiple other data files were "
+                        f"found: {other_files}. Ambiguous which one to use. "
+                        "Please specify the full file path in `data_home`."
+                    )
+                else:
+                    # No files found, will proceed to download logic.
+                    data_path_resolved = default_file_path
+                    if verbose >= 2:
+                        logger.debug(
+                            "No other data files found. Will attempt"
+                            " download if possible."
+                        )
+
+    # --- Download Logic ---
+    # This block runs if the resolved_path points to a file that doesn't exist.
+    try:
+        if metadata.url and not os.path.exists(data_path_resolved):
+            if verbose >= 1:
+                logger.info(
+                    f"Data not found locally. Attempting to download {data_name} "
+                    f"data from {metadata.url} to {data_path_resolved}..."
+                )
+            download_file_if( # This function should handle the download
+                metadata,
+                data_home=os.path.dirname(data_path_resolved)
+            )
+    except Exception as e:
+        if strategy == "load":
+            raise FileNotFoundError(
+                f"Failed to download or find required data file "
+                f"'{metadata.file}' for {data_name}: {e}"
+            ) from e
+        logger.warning(
+            f"Could not download data for {data_name}: {e}. "
+            "Will proceed based on strategy."
+        )
+        
+    return data_path_resolved, metadata
 
 __all__.extend([ 
     "load_processed_subsidence_data",

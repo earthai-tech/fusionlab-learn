@@ -1018,7 +1018,7 @@ and processes the input sequence through them in parallel.
     * **Feature Extraction (`return_sequences=False`):**
       In this mode, each LSTM processes its sub-sampled sequence and
       returns only its **final hidden state**, a single vector of
-      shape :math:`(B, \text{lstm\_units})` that summarizes the
+      shape :math:`(B, \text{lstm_{units}})` that summarizes the
       patterns found at that scale. All of these summary vectors are
       then **concatenated** along the feature dimension. This creates a
       single, rich feature vector that represents the temporal

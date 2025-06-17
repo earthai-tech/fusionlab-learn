@@ -11,12 +11,12 @@
 <p align="center">
   <a href="https://pypi.org/project/fusionlab-learn/"><img src="https://img.shields.io/pypi/v/fusionlab-learn" alt="PyPI Version"></a>
   <a href="https://fusion-lab.readthedocs.io/en/latest/?badge=latest"><img src="https://readthedocs.org/projects/fusion-lab/badge/?version=latest" alt="Documentation Status"></a>
-  <a href="https://github.com/earthai-tech/fusionlab/actions"><img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab/.github%2Fworkflows%2Fpython-package-conda.yml" alt="Build Status"></a>
+  <a href="https://github.com/earthai-tech/fusionlab-learn/actions"><img src="https://img.shields.io/github/actions/workflow/status/earthai-tech/fusionlab-learn/.github%2Fworkflows%2Fpython-package-conda.yml" alt="Build Status"></a>
   <a href="https://www.python.org/downloads/release/python-390/"><img src="https://img.shields.io/badge/Python-3.9%2B-blue" alt="Python Version"></a>
-  <a href="https://github.com/earthai-tech/fusionlab/blob/main/LICENSE"><img src="https://img.shields.io/github/license/earthai-tech/fusionlab?style=flat&color=cyan" alt="License"></a>
+  <a href="https://github.com/earthai-tech/fusionlab-learn/blob/main/LICENSE"><img src="https://img.shields.io/github/license/earthai-tech/fusionlab-learn?style=flat&color=cyan" alt="License"></a>
 </p>
 
-**fusionlab-learn** is a flexible and extensible Python framework for building and experimenting with state-of-the-art time series models. It provides robust, research-grade implementations of advanced architectures, from powerful data-driven forecasters to novel Physics-Informed Neural Networks (PINNs).
+**fusionlab-learn** is a flexible and extensible Python package for building and experimenting with state-of-the-art time series models. It provides robust, research-grade implementations of advanced architectures, from data-driven forecasters to novel Physics-Informed Neural Networks (PINNs).
 
 Whether you're a researcher exploring new architectures or a practitioner building production-grade forecasting systems, `fusionlab-learn` provides tools built on **TensorFlow/Keras** to accelerate your work.
 
@@ -25,7 +25,7 @@ Whether you're a researcher exploring new architectures or a practitioner buildi
 ## ✨ Key Features
 
 ### 🏛️ A Spectrum of Advanced Architectures
-The library provides expert implementations across three major families of forecasting models.
+The library provides implementations across three major families of forecasting models.
 
 * **[Hybrid Models](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/hybrid/index.html):** Architectures like `HALNet` and `XTFT` that fuse the sequential processing power of LSTMs with the long-range context modeling of attention mechanisms.
 * **[Pure Transformers](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/transformers/index.html):** Implementations of the standard "Attention Is All You Need" encoder-decoder architecture, adapted for time series forecasting.
@@ -34,10 +34,10 @@ The library provides expert implementations across three major families of forec
 ### 🧩 Modular & Reusable Components
 Build custom models with a rich set of well-tested neural network blocks, including:
 * [Gated Residual Networks (GRNs) & Variable Selection Networks (VSNs)](https://fusion-lab.readthedocs.io/en/latest/user_guide/components.html)
-* Specialized Attention Layers: `CrossAttention`, `HierarchicalAttention`, and `MemoryAugmentedAttention`
-* [Multi-Scale LSTMs](https://fusion-lab.readthedocs.io/en/latest/user_guide/components.html) for capturing temporal patterns at various resolutions.
+* Specialized [Attention Layers](https://fusion-lab.readthedocs.io/en/latest/user_guide/user_guide/components.html#attention-mechanisms): `CrossAttention`, `HierarchicalAttention`, and `MemoryAugmentedAttention`
+* [Multi-Scale LSTMs](https://fusion-lab.readthedocs.io/en/latest/user_guide/components.html#multiscalelstm) for capturing temporal patterns at various resolutions.
 
-### ⚛️ Powerful PINN Capabilities
+### ⚛️ PINN Capabilities
 -   Solve coupled-physics problems with models like **[TransFlowSubsNet](https://fusion-lab.readthedocs.io/en/latest/user_guide/models/pinn/transflow_subnet.html)**.
 -   Perform **inverse modeling** by configuring physical coefficients (`K`, `Ss`, `C`) as learnable parameters.
 -   Utilize specialized **[PINN data utilities](https://fusion-lab.readthedocs.io/en/latest/user_guide/utils/pinn_utils.html)** for the unique sequence and coordinate preparation required by these models.
@@ -64,7 +64,7 @@ Build custom models with a rich set of well-tested neural network blocks, includ
 
 3.  **Install from Source (for Development):**
     ```bash
-    git clone [https://github.com/earthai-tech/fusionlab-learn.git](https://github.com/earthai-tech/fusionlab-learn.git)
+    git clone https://github.com/earthai-tech/fusionlab-learn.git
     cd fusionlab-learn
     pip install -e .
     ```

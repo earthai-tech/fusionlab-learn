@@ -88,45 +88,61 @@ coordinates. We will generate a dataset where the targets (`h` and `s`)
 are based on a known analytical function, ensuring they are physically
 plausible.
 
+
 .. code-block:: python
    :linenos:
 
    # Configuration
-   N_SAMPLES = 1000
-   PAST_STEPS = 15
-   HORIZON = 7
-   SEED = 42
+   N_SAMPLES   = 1000
+   PAST_STEPS  = 15
+   HORIZON     = 7
+   SEED        = 42
    np.random.seed(SEED)
    tf.random.set_seed(SEED)
 
    # --- 1. Generate Spatio-Temporal Coordinates ---
-   t = tf.random.uniform((N_SAMPLES, HORIZON, 1), 0, 5)
-   x = tf.random.uniform((N_SAMPLES, HORIZON, 1), -1, 1)
-   y = tf.random.uniform((N_SAMPLES, HORIZON, 1), -1, 1)
-   coords = tf.concat([t, x, y], axis=-1)
+   # Separate past vs. future time grids
+   t_past   = tf.random.uniform((N_SAMPLES, PAST_STEPS, 1), 0, 5)     # (1000, 15, 1)
+   t_future = tf.random.uniform((N_SAMPLES, HORIZON,    1), 0, 5)     # (1000,  7, 1)
+   x_past   = tf.random.uniform((N_SAMPLES, PAST_STEPS, 1), -1, 1)   # (1000, 15, 1)
+   x_future = tf.random.uniform((N_SAMPLES, HORIZON,    1), -1, 1)   # (1000,  7, 1)
+   y_past   = tf.random.uniform((N_SAMPLES, PAST_STEPS, 1), -1, 1)   # (1000, 15, 1)
+   y_future = tf.random.uniform((N_SAMPLES, HORIZON,    1), -1, 1)   # (1000,  7, 1)
+
+   coords_past   = tf.concat([t_past,   x_past,   y_past],   axis=-1)  # (1000, 15, 3)
+   coords_future = tf.concat([t_future, x_future, y_future], axis=-1)  # (1000,  7, 3)
 
    # --- 2. Generate Physically-Plausible Targets ---
-   # Groundwater level (h) based on a simple decaying wave
-   h_true = tf.sin(np.pi * x) * tf.cos(np.pi * y) * tf.exp(-0.2 * t)
-   # Subsidence (s) as an integrated function of head decline plus noise
-   s_true = (1 - tf.exp(-0.2 * t)) * tf.cos(np.pi * x)**2 + h_true * 0.1 \
-            + tf.random.normal(h_true.shape, stddev=0.05)
+   # Use future coords for targets
+   h_true = tf.sin(np.pi * x_future) * tf.cos(np.pi * y_future) * tf.exp(-0.2 * t_future)
+   # s_true shape: (1000, 7, 1)
+   s_true = (
+       (1 - tf.exp(-0.2 * t_future)) * tf.cos(np.pi * x_future)**2
+       + h_true * 0.1
+       + tf.random.normal(h_true.shape, stddev=0.05)
+   )
 
    # --- 3. Generate Correlated Time Series Features ---
-   static_features = tf.random.normal([N_SAMPLES, 2]) # e.g., location type
-   # Dynamic features correlated with the physics (e.g., past rainfall)
-   dynamic_features = tf.concat([
-       tf.sin(t[:, :PAST_STEPS, :] * 2),
-       tf.random.normal([N_SAMPLES, PAST_STEPS, 4])
-   ], axis=-1)
-   # Future features (e.g., known pumping schedules)
-   future_features = tf.concat([
-       tf.cast(t > 2.5, tf.float32),
-       tf.random.normal([N_SAMPLES, HORIZON, 2])
-   ], axis=-1)
+   static_features = tf.random.normal([N_SAMPLES, 2])               # (1000, 2)
+
+   # Dynamic features correlated with physics (using past window)
+   dyn_physics = tf.sin(t_past * 2)                                 # (1000, 15, 1)
+   dyn_noise   = tf.random.normal([N_SAMPLES, PAST_STEPS, 4])       # (1000, 15, 4)
+   dynamic_features = tf.concat([dyn_physics, dyn_noise], axis=-1) # (1000, 15, 5)
+
+   # Future features (e.g., pumping schedule + noise)
+   fut_schedule = tf.cast(t_future > 2.5, tf.float32)               # (1000,  7, 1)
+   fut_noise    = tf.random.normal([N_SAMPLES, HORIZON, 2])         # (1000,  7, 2)
+   future_features = tf.concat([fut_schedule, fut_noise], axis=-1) # (1000,  7, 3)
 
    print(f"Generated data with {N_SAMPLES} samples.")
 
+**Expected Output:**
+
+.. code-block:: text
+
+   Generated data with 1000 samples.
+   
 Step 3: Structure Inputs and Targets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -208,7 +224,7 @@ the weight for the physics loss, `lambda_physics`.
    model.compile(
        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
        loss={'subs_pred': 'mse', 'gwl_pred': 'mse'}, # Data losses
-       lambda_physics=0.2 # Weight for the consolidation physics
+       lambda_pde=0.2 # Weight for the consolidation physics
    )
 
    # Train the model
@@ -229,12 +245,12 @@ the weight for the physics loss, `lambda_physics`.
 
    Starting PIHALNet training...
    Epoch 1/10
-   13/13 [==============================] - 22s 300ms/step - total_loss: 1.12 - data_loss: 0.85 - physics_loss: 1.35 ...
+   13/13 [==============================] - 7s 72ms/step - loss: 3.9772 - gwl_pred_loss: 1.0878 - subs_pred_loss: 2.8894 - total_loss: 367.5720 - data_loss: 3.9803 - physics_loss: 1817.9586 - val_loss: 0.7371 - val_gwl_pred_loss: 0.7371 - val_subs_pred_loss: 0.0000e+00
    Epoch 2/10
-   13/13 [==============================] - 1s 55ms/step - total_loss: 0.65 - data_loss: 0.51 - physics_loss: 0.70 ...
+   13/13 [==============================] - 0s 16ms/step - loss: 3.1833 - gwl_pred_loss: 0.7940 - subs_pred_loss: 2.3893 - total_loss: 1825.8313 - data_loss: 3.0913 - physics_loss: 9113.6998 - val_loss: 1.1084 - val_gwl_pred_loss: 1.1084 - val_subs_pred_loss: 0.0000e+00
    ...
    Epoch 10/10
-   13/13 [==============================] - 1s 58ms/step - total_loss: 0.21 - data_loss: 0.18 - physics_loss: 0.15 ...
+   13/13 [==============================] - 0s 15ms/step - loss: 0.8129 - gwl_pred_loss: 0.6270 - subs_pred_loss: 0.1859 - total_loss: 10.7931 - data_loss: 0.8096 - physics_loss: 49.9174 - val_loss: 0.6465 - val_gwl_pred_loss: 0.6465 - val_subs_pred_loss: 0.0000e+00
    Training complete.
 
 Step 5: Visualize Training History
@@ -319,12 +335,12 @@ Congratulations! You have successfully trained a sophisticated hybrid
 physics-data model. In this exercise, you have learned how to:
 
 * Create a complex dataset with both time series features and
-    spatio-temporal coordinates.
+  spatio-temporal coordinates.
 * Structure data into the dictionary format required by ``PIHALNet``.
 * Use the `architecture_config` to customize the model's powerful
-    data-driven core.
+  data-driven core.
 * Compile and train the model with a composite loss function,
-    effectively balancing data accuracy and physical consistency.
+  effectively balancing data accuracy and physical consistency.
 
 This powerful workflow is at the cutting edge of scientific machine
 learning, enabling the development of robust models that can provide

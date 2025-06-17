@@ -21,7 +21,7 @@ local cache, package data, and optionally downloading).
 .. _fetch_zhongshan_data_doc:
 
 fetch_zhongshan_data
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :func:`~fusionlab.datasets.fetch_zhongshan_data`
 
 Loads the sampled Zhongshan land subsidence dataset
@@ -148,7 +148,169 @@ to speed up repeated calls.
    print(f"Future shape: {future.shape}")
    print(f"Target shape: {target.shape}")
 
+.. _load_subsidence_pinn_data_guide:
 
+load_subsidence_pinn_data
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+:API Reference: :func:`~fusionlab.datasets.load.load_subsidence_pinn_data`
+
+This function is the recommended **all-in-one data preparation
+pipeline** for any project using the library's PINN models,
+such as ``PIHALNet`` and ``TransFlowSubsNet``.
+
+It is designed to handle the entire data ingestion and preprocessing
+workflow, which is particularly complex for physics-informed models.
+By abstracting away common steps like data loading, cleaning, encoding,
+scaling, and optional augmentation, it saves a significant amount of
+boilerplate code and helps prevent common errors, allowing you to focus
+on the modeling itself.
+
+**End-to-End Workflow**
+
+The function executes a comprehensive, multi-stage workflow, with each
+stage being configurable through the function's parameters.
+
+**1. Data Sourcing & Caching**
+
+The first step is to get the data. The function employs an
+efficient strategy:
+
+* **Caching:** If ``use_cache=True``, it first checks for a pre-processed
+  version of the data in your local cache directory. If found, it loads
+  this file instantly, skipping all subsequent processing steps and
+  saving significant time on repeated runs.
+* **Data Loading:** If no cache is found, it proceeds to load the raw
+  data according to the ``strategy`` parameter: ``'load'`` (requires the
+  file to exist), ``'fallback'`` (loads the file if present, otherwise
+  generates dummy data), or ``'generate'`` (always creates a new dummy
+  dataset, great for testing).
+* **Saving Cache:** After processing the data for the first time, you
+  can set ``save_cache=True`` to save the fully processed results,
+  including the DataFrame and any fitted scalers/encoders, for fast
+  retrieval in the future.
+
+**2. Automated Core Preprocessing**
+
+Once the raw data is loaded, the function performs a full preprocessing
+pipeline:
+
+* It ensures essential columns (coordinates, time, targets) exist and
+  drops rows where they are missing.
+* It robustly converts the time column (e.g., integer years) into a
+  proper datetime object for internal calculations.
+* It **one-hot encodes** specified categorical columns (like `geology`).
+* It creates a continuous **numerical time coordinate**, which is
+  essential for computing derivatives in the PINN loss function.
+* It **scales** specified numerical features to a [0, 1] range to ensure
+  stable model training. The fitted `scaler` and `encoder` objects are
+  saved along with the data.
+
+**3. Optional Data Augmentation**
+
+By setting ``augment_data=True``, you can invoke the
+:func:`~fusionlab.utils.geo_utils.augment_city_spatiotemporal_data`
+pipeline. This can perform two types of augmentation on the data before
+it is returned:
+
+* **Temporal Interpolation:** Fills in missing time steps in your data
+  (e.g., missing years) for each location.
+* **Feature Augmentation:** Adds a small amount of random noise to
+  feature columns to create a larger, more diverse training set, which
+  can improve model robustness.
+
+**4. Flexible Output Format**
+
+The function can return its results in two convenient formats,
+controlled by ``return_dataframe``:
+
+* A single, fully processed ``pandas.DataFrame``.
+* A :mod:`~fusionlab.api.bunch` **``XBunch``** object. This is often the preferred
+  output, as it's a self-contained object that bundles the processed
+  DataFrame (`.frame`) with crucial metadata like feature names
+  (`.feature_names`), target names (`.target_names`), and a
+  human-readable description of all the processing steps that were
+  applied (`.DESCR`).
+
+**Usage Example**
+
+This example demonstrates how to use the function to load, process,
+and augment a dataset in a single call. For reproducibility, we first
+create a dummy CSV file to simulate a raw data source.
+
+.. code-block:: python
+   :linenos:
+
+   import pandas as pd
+   import numpy as np
+   import os
+   from fusionlab.datasets.load import load_subsidence_pinn_data
+   from fusionlab.utils.geo_utils import generate_dummy_pinn_data
+
+   # --- 1. Create a dummy raw data file for the example ---
+   DUMMY_DATA_DIR = "./dummy_data"
+   # The function will look inside a 'data' subdirectory of data_home
+   os.makedirs(DUMMY_DATA_DIR, exist_ok=True)
+   dummy_data_path = os.path.join(DUMMY_DATA_DIR, "zhongshan_2000.csv")
+
+   dummy_dict = generate_dummy_pinn_data(n_samples=100)
+   dummy_dict['geology'] = np.random.choice(['Clay', 'Sand'], 100)
+   pd.DataFrame(dummy_dict).to_csv(dummy_data_path, index=False)
+   print(f"Dummy data created at: {dummy_data_path}")
+
+   # --- 2. Use the pipeline to load and process the data ---
+   # We will load from the file, encode 'geology', scale numericals,
+   # and perform augmentation, returning a rich Bunch object.
+   processed_bunch = load_subsidence_pinn_data(
+       data_name='zhongshan',        # This configures internal column names
+       strategy='load',              # Explicitly load from file
+       data_home=DUMMY_DATA_DIR,     # Tell the function where to look
+       encode_categoricals=True,     # Enable one-hot encoding
+       scale_numericals=True,        # Enable MinMax scaling
+       augment_data=True,            # Enable augmentation
+       augment_mode='interpolate',   # Specify interpolation mode
+       use_cache=False,              # Disable caching for this demo
+       as_frame=False                # Return the rich XBunch object
+   )
+
+   # --- 3. Inspect the output ---
+   print("\n--- Processed DataFrame (from Bunch) ---")
+   # The XBunch contains the processed DataFrame in the 'frame' attribute
+   print(processed_bunch.frame.head())
+
+   print("\n--- Description of Processing (from Bunch) ---")
+   print(processed_bunch.DESCR)
+
+
+**Expected Output:**
+
+.. code-block:: text
+
+   Dummy data created at: ./dummy_data/data/zhongshan_2000.csv
+   ... (Log messages from the function will appear here) ...
+
+   --- Processed DataFrame (from Bunch) ---
+           year  longitude  latitude  ...  geology_Clay  geology_Sand  year_numeric
+   0 2008-01-01   113.0084   22.3616  ...           1.0           0.0        2008.0
+   1 2017-01-01   113.0172   22.3231  ...           1.0           0.0        2017.0
+   2 2010-01-01   113.0226   22.7769  ...           1.0           0.0        2010.0
+   3 2008-01-01   113.0289   22.4596  ...           1.0           0.0        2008.0
+   4 2021-01-01   113.0308   22.7131  ...           0.0           1.0        2021.0
+
+   [5 rows x 10 columns]
+
+   --- Description of Processing (from Bunch) ---
+   Processed Zhongshan PINN data.
+   Load Strategy: load.
+   Cache Used: No, Cache Path: N/A.
+   Categorical Encoding: Applied.
+   Numerical Scaling: minmax.
+   Augmentation: Applied (Mode: interpolate).
+   Rows: 100, Features: 7 (in 'data' array).
+   Targets: ['subsidence', 'GWL'].
+   Coordinate Precision: 4 decimal places.
+   Time Column (numeric): year_numeric.
+   ...
+   
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
@@ -233,6 +395,7 @@ steps ahead.
 
 **Functionality:** Creates a DataFrame in a "wide" format where columns
 represent different forecast horizons (:math:`h`) and quantiles (:math:`q`).
+
 * Target columns: `target_h1`, `target_h2`, ...
 * Prediction columns: `pred_qX_h1`, `pred_qY_h1`, ..., `pred_qX_h2`, ...
 Actual values are drawn from a normal distribution, and predictions are
@@ -384,6 +547,7 @@ variables** that may exhibit some interdependencies.
 Extends the logic of :func:`make_multi_feature_time_series` to
 generate `n_targets` distinct target columns (e.g., 'target_1',
 'target_2', ...). The generation process includes:
+
 * A base signal incorporating trend and seasonality.
 * Noise specific to each target.
 * An optional lagged dependency where `target_N` is influenced by

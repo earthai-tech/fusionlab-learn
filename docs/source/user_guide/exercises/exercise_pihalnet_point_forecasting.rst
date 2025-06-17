@@ -288,15 +288,13 @@ into `data_loss` and `physics_loss`.
 .. code-block:: text
 
    Starting model training for 3 epochs...
-   Epoch 1/3
-   1/1 [==============================] - 15s 15s/step - loss: 0.5261 - gwl_pred_loss: 0.3161 - subs_pred_loss: 0.2732 - gwl_pred_mae: 0.5168 - subs_pred_mae: 0.4599 - total_loss: 0.5401 - data_loss: 0.5261 - physics_loss: 0.1406
-   Epoch 2/3
-   1/1 [==============================] - 0s 13ms/step - loss: 0.4192 - gwl_pred_loss: 0.2649 - subs_pred_loss: 0.2074 - gwl_pred_mae: 0.4738 - subs_pred_mae: 0.3993 - total_loss: 0.4267 - data_loss: 0.4192 - physics_loss: 0.0741
-   Epoch 3/3
-   1/1 [==============================] - 0s 13ms/step - loss: 0.3390 - gwl_pred_loss: 0.2192 - subs_pred_loss: 0.1636 - gwl_pred_mae: 0.4294 - subs_pred_mae: 0.3502 - total_loss: 0.3439 - data_loss: 0.3390 - physics_loss: 0.0491
+   Epoch 1/50
+   1/1 [==============================] - 14s 14s/step - loss: 3.2426 - gwl_pred_loss: 1.4587 - subs_pred_loss: 2.0757 - gwl_pred_mae: 1.0282 - subs_pred_mae: 1.1943 - total_loss: 3.7428 - data_loss: 3.2426 - physics_loss: 5.0017
+   Epoch 2/50
+   1/1 [==============================] - 0s 19ms/step - loss: 2.8974 - gwl_pred_loss: 1.1237 - subs_pred_loss: 1.9985 - gwl_pred_mae: 0.9409 - subs_pred_mae: 1.1585 - total_loss: 3.0105 - data_loss: 2.8974 - physics_loss: 1.1308
    ...
    Epoch 50/50
-   1/1 [==============================] - 0s 14ms/step - loss: 0.1769 - gwl_pred_loss: 0.1212 - subs_pred_loss: 0.0800 - gwl_pred_mae: 0.2914 - subs_pred_mae: 0.2367 - total_loss: 0.1811 - data_loss: 0.1769 - physics_loss: 0.0422
+   1/1 [==============================] - 0s 14ms/step - loss: 0.6317 - gwl_pred_loss: 0.4577 - subs_pred_loss: 0.2656 - gwl_pred_mae: 0.5523 - subs_pred_mae: 0.4584 - total_loss: 0.6387 - data_loss: 0.6317 - physics_loss: 0.0702
 
    Model training finished.
 
@@ -319,11 +317,12 @@ Use the ``plot_history_in`` utility to visualize the loss curves.
        metrics=pihalnet_metrics,
        layout='subplots',
        title='PIHALNet Training History'
+      )
 
 
 **Example Output Plot:**
 
-.. figure:: ../images/pihalnet_history_plot.png
+.. figure:: ../../images/pihalnet_history_plot_basic.png
    :alt: PIHALNet Training History Plot
    :align: center
    :width: 90%
@@ -417,7 +416,7 @@ training **and** validation curves.
 
 **Example Output Plot:**
 
-.. figure:: ../images/pihalnet_history_val_plot.png
+.. figure:: ../../images/pihalnet_history_val_plot_basic.png
    :alt: PIHALNet Training History Plot
    :align: center
    :width: 90%
@@ -521,8 +520,8 @@ distribution of our predictions and compare them with the actuals.
    from fusionlab.nn.pinn.utils import format_pihalnet_predictions
    from fusionlab.plot.forecast import plot_forecast_by_step 
    
-   df_results = format_pihalnet_predictions (predictions) 
-   plot_forecast_by_step(df_resuls, steps = [1, 2, 3], value_prefixes =['subsidence'])
+   # df_results = format_pihalnet_predictions (predictions) 
+   # plot_forecast_by_step(df_results, steps = [1, 2, 3], value_prefixes =['subsidence'])
 
 
 **Expected Output:**
@@ -538,28 +537,20 @@ distribution of our predictions and compare them with the actuals.
 
 **Expected Plot:**
 
-.. figure:: ../../images/pihalnet_exercise_forecast.png
+.. figure:: ../../images/pihalnet_exercise_forecast_basic.png
    :alt: PIHALNet Exercise Forecast Visualization
    :align: center
-   :width: 80%
+   :width: 90%
 
    A grid of plots showing the spatial distribution of actual
    subsidence vs. predicted subsidence for each step in the
    forecast horizon.
 
-**Expected Plot:**
 
-.. figure:: ../../images/temporal_exercise_forecast.png
-   :alt: PIHALNet Exercise Forecast Visualization
-   :align: center
-   :width: 80%
-
-   A temporal plots showing the  of predicted subsidence for each step in the
-   forecast horizon step.
-   
 Discussion of Exercise
 ----------------------
 In this exercise, you successfully:
+
 * Configured and instantiated a complex `PIHALNet` model.
 * Generated synthetic data that correctly separates past inputs
   (dynamic features) from the future prediction window (coords,

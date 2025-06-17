@@ -47,10 +47,10 @@ except ImportError:
 FLAB_DMODULE = "fusionlab.datasets.data" 
 KD_DESCR = "fusionlab.datasets.descr" 
 FLAB_REMOTE_DATA_URL = ( 
-    'https://raw.githubusercontent.com/earthai-tech/fusionlab/main/'
-    'fusionlab/datasets/data/'
+    #'https://raw.githubusercontent.com/earthai-tech/fusionlab-learn/main/fusionlab/datasets/data/'
+    'https://raw.githubusercontent.com/earthai-tech/fusionlab-learn/refs/'
+    'heads/main/fusionlab/datasets/data/'
 )
-
 RemoteMetadata = namedtuple(
     "RemoteMetadata",
     ["file", "url", "checksum", "descr_module", "data_module"]
@@ -327,7 +327,8 @@ def download_file_if(
     download_if_missing: bool = True,
     force_download: bool = False, # Added force_download
     error: str = 'raise',
-    verbose: bool = True
+    verbose: bool = True, 
+    **kwargs, 
 ) -> Optional[str]:
     """Find, cache, or download a dataset file.
 

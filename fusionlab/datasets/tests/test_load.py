@@ -126,7 +126,7 @@ def test_fetch_data_sampling(dataset_name):
         fetch_func(as_frame=True, n_samples=-10)
     with pytest.raises(ValueError):
         fetch_func(as_frame=True, n_samples=0)
-    with pytest.raises(TypeError): # Or ValueError depending on validation
+    with pytest.raises(ValueError): # Or ValueError depending on validation
         fetch_func(as_frame=True, n_samples='abc')
     print(f"Sampling OK for {dataset_name}")
 
@@ -213,13 +213,14 @@ def test_load_processed_sequences(dataset_name):
     try:
         sequences = load_processed_subsidence_data(
             dataset_name=dataset_name,
-            return_sequences=True,
+            return_sequences=True, # To check sequences 
             time_steps=T,
-            forecast_horizons=H,
+            forecast_horizon=H,
             use_sequence_cache=False, # Disable caching for this test
             save_sequences=False,
             verbose=False,
-            download_if_missing=False # Assume file exists
+            download_if_missing=False, # Assume file exists, 
+            group_by_cols =None, # No enough samples, so set to None 
         )
     except Exception as e:
         pytest.fail(f"load_processed failed (return_sequences=True, "
@@ -234,15 +235,16 @@ def test_load_processed_sequences(dataset_name):
     assert isinstance(t, np.ndarray)
 
     # Check shapes (batch size N depends on data after processing/dropna)
+    # for one long sequences 
     N = s.shape[0]
     assert N > 0
     assert s.shape[0] == d.shape[0] == f.shape[0] == t.shape[0]
     assert d.shape[1] == T
-    assert f.shape[1] == H # reshape_xtft_data output for future is H
+    assert f.shape[1] == T+ H # reshape_xtft_data output for future; H+T spanned
     assert t.shape[1] == H
     assert s.ndim >= 2 # (N, StaticFeatures)
     assert d.ndim == 3 # (N, T, DynFeatures)
-    assert f.ndim == 3 # (N, H, FutFeatures)
+    assert f.ndim == 3 # (N, H+T, FutFeatures)
     assert t.ndim == 3 # (N, H, TargetFeatures=1)
     print(f"Load Sequences OK: dataset={dataset_name}")
 
@@ -281,9 +283,10 @@ def test_load_processed_cache(dataset_name, tmp_path):
     # 3. Run once, saving sequences
     _ = load_processed_subsidence_data(
         dataset_name=dataset_name, data_home=str(cache_dir),
-        return_sequences=True, time_steps=T, forecast_horizons=H,
+        return_sequences=True, time_steps=T, forecast_horizon=H,
         save_sequences=True, use_sequence_cache=False,
-        cache_suffix=suffix, verbose=False, download_if_missing=False
+        cache_suffix=suffix, verbose=False, group_by_cols=None, 
+        download_if_missing=False
     )
     seq_cache_file = cache_dir / (f"{dataset_name}_sequences_T{T}_H{H}"
                                   f"{suffix}.joblib")
@@ -293,7 +296,7 @@ def test_load_processed_cache(dataset_name, tmp_path):
     with pytest.warns(None) as record_seq:
         seq_loaded = load_processed_subsidence_data(
             dataset_name=dataset_name, data_home=str(cache_dir),
-            return_sequences=True, time_steps=T, forecast_horizons=H,
+            return_sequences=True, time_steps=T, forecast_horizon=H,
             save_sequences=False, use_sequence_cache=True, # Use cache
             cache_suffix=suffix, verbose=False, download_if_missing=False
         )

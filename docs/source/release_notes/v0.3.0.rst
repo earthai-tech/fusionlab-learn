@@ -3,7 +3,7 @@
 ===============
 Version 0.3.0
 ===============
-*(Release Date: June 15, 2025)*
+*(Release Date: June 17, 2025)*
 
 **Focus: Advanced PINNs and Flexible Attentive Architectures**
 
@@ -99,6 +99,16 @@ New Features
   including `create_spatial_clusters` and `batch_spatial_sampling`,
   have been introduced to aid in geospatial feature engineering.
 
+* |New| **Feature Engineering Utility:** Added a new utility function,
+  :func:`~fusionlab.utils.ts_utils.create_time_features`, which can
+  generate a rich set of features (e.g., day of week, month, week of
+  year) directly from a datetime column.
+
+* |New| **Tuning Summary Visualization:** The ``HydroTuner`` and other
+  tuners now automatically generate and save a plot of the tuning
+  trials vs. objective scores upon completion, providing immediate
+  visual insight into the search process.
+  
 Improvements
 ~~~~~~~~~~~~~~~
 
@@ -158,7 +168,24 @@ Improvements
          callbacks=[tf.keras.callbacks.EarlyStopping('val_loss', patience=5)]
      )
 
+* |Enhancement| **Tuner Usability:** The ``HydroTuner`` and other class-based
+  tuners now have a ``refit_best_model`` argument in their `.run()`
+  method. Setting this to ``False`` allows users to quickly find the
+  best hyperparameters without waiting for the final, potentially
+  time-consuming model retraining step. Ideal for rapid experimentation.
 
+* |Enhancement| **PINN Model Control:** The ``TransFlowSubsNet`` and
+  ``PIHALNet`` models now accept a ``correction_mlp_config``
+  parameter. This allows users to customize the architecture (number of
+  layers and units) of the coordinate-based correction MLPs, offering
+  finer control over the physics-informed component.
+
+* |Enhancement| **Performance:** The
+  :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences` utility has
+  been optimized for performance, resulting in a significant speed-up
+  (up to 30%) when generating sequences from very large DataFrames.
+
+ 
 Fixes
 ~~~~~
 
@@ -183,7 +210,6 @@ Fixes
   decouple prediction from residual calculation. The `train_step` now
   manages a single ``GradientTape`` context, fixing a `ValueError` where
   gradients could not be computed due to a broken computational path.
-
 * |Fix| Corrected the gradient flow in PINN models to improve
   stability, especially when training with very low physics-loss
   weights.
@@ -192,7 +218,21 @@ Fixes
 * |Fix| The `search` method in ``PINNTunerBase`` now correctly handles
   TensorFlow Datasets where the target `y` is already a tensor,
   improving compatibility with non-PINN models.
-
+* |Fix| **PINN Gradient Stability:** Fixed a critical bug where setting a
+  physics loss weight (e.g., ``lambda_cons``) to exactly `0.0` could
+  lead to `None` gradients during backpropagation in `tf.function`
+  mode. The training step now correctly handles zero-weighted losses.
+* |Fix| **Data Preparation:** Corrected an issue in
+  :func:`~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences` where
+  datasets containing only a single time series group could cause
+  shape errors during processing.
+* |Fix| **Hyperparameter Tuner:** Resolved a bug in `HydroTuner.create`
+  where explicitly passing ``quantiles=None`` in `fixed_params` was
+  not being correctly recognized, causing it to fall back to defaults.
+* |Fix| **Plotting Utilities:** The ``forecast_view`` function no longer
+  raises an error when ``view_years`` contains years that are not
+  present in the data, it now correctly ignores them and prints a
+  warning.
 
 Tests
 ~~~~~
@@ -204,7 +244,6 @@ Tests
   multiple input formats, and the custom `train_step`.
 * |Tests| Added a Pytest suite for the :class:`~fusionlab.nn.components.PositionalEncoding` layer
   to ensure numerical stability, shape consistency, and serialization.
-
 * |Tests| Added a comprehensive test suite for the new :class:`~fusionlab.nn.forecast_tuner.HydroTuner`,
   covering instantiation, the ``.create()`` factory method, and
   end-to-end runs for both `PIHALNet` and `TransFlowSubsNet`.
@@ -214,6 +253,13 @@ Tests
   and the spatial utilities.
 * |Tests| Expanded model tests to validate the new
   ``architecture_config`` functionality in ``BaseAttentive``.
+* |Tests| Added new tests for the ``HydroTuner`` to validate the new
+  ``refit_best_model=False`` workflow.
+* |Tests| Implemented regression tests to ensure PINN models train
+  correctly when one or more ``lambda`` weights are set to zero.
+* |Tests| Expanded test coverage for all data utilities
+  (e.g., ``nan_ops``, ``widen_temporal_columns``) with edge-case
+  DataFrames, including those with all-NaN columns or a single row.
   
 Documentation
 ~~~~~~~~~~~~~
@@ -225,20 +271,28 @@ Documentation
 * |Docs| Added the :doc:`/user_guide/gallery/plot/forecast` page to
   document the new and improved visualization utilities, including
   ``forecast_view``, ``plot_forecast_by_step``, and ``plot_history_in``.
-* |Docs| Added an exercise page, :doc:`/user_guide/exercices/exercise_halnet`,
+* |Docs| Added an exercise page, :doc:`/user_guide/exercises/exercise_halnet`,
   to provide a hands-on tutorial for using the new `HALNet` model.
 * |Docs| Completely reorganized the User Guide for improved clarity
   and navigation. The guide is now structured thematically around
   `Models`, `Utilities`, `Tuning`, and `Exercises`.
 * |Docs| Added new, in-depth documentation pages for all PINN
-  models: :doc:`/user_guide/models/pinn/pihalnet`,
+  models: :doc:`/user_guide/models/pinn/pihalnet`.
   :doc:`/user_guide/models/pinn/transflow_subnet`, and
   :doc:`/user_guide/models/pinn/pitgwflow`.
 * |Docs| Added a new, comprehensive guide for the
   :doc:`/user_guide/forecast_tuner/hydro_tuner`.
 * |Docs| Created new hands-on tutorials for all major models and
   utilities in the :doc:`/user_guide/exercises/index`.
-
+* |Docs| Added a new "Tips & Tricks" page to the User Guide with
+  practical advice on setting ``lambda`` weights for PINN models and
+  choosing between `'hybrid'` and `'transformer'` architectures.
+* |Docs| Updated the ``HydroTuner`` guide with an advanced section on
+  defining custom hyperparameter search spaces and interpreting the
+  newly generated tuning results plot.
+* |Docs| All `fusionlab.utils` modules now have more detailed API
+  docstrings with runnable examples for every public function.
+  
 Contributors
 ~~~~~~~~~~~~~
 * `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)
