@@ -12,7 +12,7 @@ python:
     - requirements: docs/requirements.txt
     # then install your package so Sphinx can import it
     - method: pip
-      path: ..
+      path: .
 
 sphinx:
   configuration: docs/source/conf.py
