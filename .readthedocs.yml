@@ -11,13 +11,13 @@ build:
 
 python:
   install:
-    # first install your documentation dependencies
-    - requirements: docs/requirements.txt
-    # then install your package so Sphinx can import it
+    # Install package so Sphinx can import it
     - method: pip
       path: . 
       extra_args: ["--upgrade", "--force-reinstall"]
-
+      # first install your documentation dependencies
+    - requirements: docs/requirements.txt
+    
 sphinx:
   configuration: docs/source/conf.py
   # make this true once things are stable, to catch warnings
