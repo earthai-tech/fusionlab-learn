@@ -1,21 +1,30 @@
-# .readthedocs.yml — Read the Docs build configuration
+# .readthedocs.yml — Corrected and Recommended Configuration
 version: 2
 
+# Specifies which version of your repository to build
+checkout:
+  version: main
+  
+# Specifies the build environment
 build:
   os: ubuntu-22.04
   tools:
     python: "3.10"
 
-python:
-  install:
-    # Install package so Sphinx can import it
-    - method: pip
-      path: . 
-      extra_args: ["--upgrade", "--force-reinstall"]
-      # first install your documentation dependencies
-    - requirements: docs/requirements.txt
-    
+# Specifies the Sphinx configuration
 sphinx:
   configuration: docs/source/conf.py
-  # make this true once things are stable, to catch warnings
+  # Set to true to fail on warnings once your build is stable
   fail_on_warning: false
+
+# Defines the Python package installation steps
+python:
+  install:
+    # Step 1: Install all documentation dependencies first.
+    # This ensures all required packages are available.
+    - requirements: docs/requirements.txt
+    
+    # Step 2: Install your project itself so Sphinx can import it.
+    # The `extra_args` key is removed as it's invalid.
+    - method: pip
+      path: .
