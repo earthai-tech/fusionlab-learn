@@ -9,20 +9,37 @@ Welcome to the ``fusionlab-learn`` API reference. This section provides detailed
 specifications for the public functions, classes, and modules included
 in the package.
 
-The documentation here is largely auto-generated from the docstrings
-within the ``fusionlab-learn`` source code. For narrative explanations and usage
-examples, please consult the :doc:`User Guide </user_guide/index>`.
-
-.. note::
-   Ensure ``fusionlab-learn`` is installed in your documentation build
-   environment (see :doc:`installation`) for these links and summaries
-   to be generated correctly. You also need `sphinx.ext.autosummary`
-   enabled in your `conf.py` with `autosummary_generate = True`.
-
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
+Datasets (`fusionlab.datasets`)
+---------------------------------
+Utilities for loading included sample datasets and generating synthetic
+time series data for testing and demonstration.
+
+**Loading Functions** (`fusionlab.datasets`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets_load
+   :nosignatures:
+
+   ~fusionlab.datasets.load.fetch_zhongshan_data
+   ~fusionlab.datasets.load.fetch_nansha_data
+   ~fusionlab.datasets.load.load_processed_subsidence_data
+   ~fusionlab.datasets.load.load_subsidence_pinn_data
+
+**Generation Functions** (`fusionlab.datasets.make`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets_make
+   :nosignatures:
+
+   ~fusionlab.datasets.make.make_multi_feature_time_series
+   ~fusionlab.datasets.make.make_quantile_prediction_data
+   ~fusionlab.datasets.make.make_anomaly_data
+   ~fusionlab.datasets.make.make_trend_seasonal_data
+   ~fusionlab.datasets.make.make_multivariate_target_data
 
 Metrics (`fusionlab.metrics`)
 -------------------------------
