@@ -75,7 +75,6 @@ time-series forecasting.
 .. raw:: html
 
    <hr>
-   
 
 Transformer Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
