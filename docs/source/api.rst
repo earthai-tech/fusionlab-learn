@@ -41,29 +41,6 @@ time series data for testing and demonstration.
    <hr>
 
 
-Neural Network Utilities (`fusionlab.nn.utils`)
-------------------------------------------------
-Utilities specifically for preparing data for or interacting with neural network models.
-
-.. autosummary::
-   :toctree: _autosummary/nn_utils
-   :nosignatures:
-
-   ~fusionlab.nn.utils.create_sequences
-   ~fusionlab.nn.utils.split_static_dynamic
-   ~fusionlab.nn.utils.reshape_xtft_data
-   ~fusionlab.nn.utils.compute_forecast_horizon
-   ~fusionlab.nn.utils.prepare_spatial_future_data
-   ~fusionlab.nn.utils.compute_anomaly_scores
-   ~fusionlab.nn.utils.generate_forecast
-   ~fusionlab.nn.utils.generate_forecast_with
-   ~fusionlab.nn.utils.forecast_single_step
-   ~fusionlab.nn.utils.forecast_multi_step
-   ~fusionlab.nn.utils.step_to_long
-   ~fusionlab.nn.utils.format_predictions
-   ~fusionlab.nn.utils.format_predictions_to_dataframe 
-   ~fusionlab.nn.utils.prepare_model_inputs
-
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
 ------------------------------------------------------
 A curated set of plotting utilities that turn the raw numbers returned  
