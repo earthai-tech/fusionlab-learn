@@ -25,9 +25,10 @@ except ImportError:
     version = '0.3'   # Default fallback
 
 # -- Project information -----------------------------------------------------
+
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'fusionlab'
+project = 'fusionlab-learn'
 # Use current year automatically
 copyright = f'{date.today().year}, earthai-tech'
 author = 'earthai-tech' # Or your preferred author name
