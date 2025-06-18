@@ -34,14 +34,280 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.make_trend_seasonal_data
    ~fusionlab.datasets.make_multivariate_target_data
    
+Metrics (`fusionlab.metrics`)
+-------------------------------
+A collection of metrics for evaluating forecast accuracy, calibration,
+sharpness, and stability, particularly suited for probabilistic and
+time-series forecasting.
 
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
 
+   ~fusionlab.metrics.coverage_score
+   ~fusionlab.metrics.continuous_ranked_probability_score
+   ~fusionlab.metrics.mean_interval_width_score
+   ~fusionlab.metrics.prediction_stability_score
+   ~fusionlab.metrics.quantile_calibration_error
+   ~fusionlab.metrics.theils_u_score
+   ~fusionlab.metrics.time_weighted_accuracy_score
+   ~fusionlab.metrics.time_weighted_interval_score
+   ~fusionlab.metrics.time_weighted_mean_absolute_error
+   ~fusionlab.metrics.weighted_interval_score
+   
 .. raw:: html
 
    <hr>
 
+Transformer Models (`fusionlab.nn.transformers`)
+-------------------------------------------------
+Implementations of pure-transformer and Temporal Fusion Transformer architectures.
+
+.. autosummary::
+   :toctree: _autosummary/models
+   :nosignatures:
+
+   ~fusionlab.nn.transformers.TimeSeriesTransformer
+   ~fusionlab.nn.transformers.TemporalFusionTransformer
+   ~fusionlab.nn.transformers.TFT
+   ~fusionlab.nn.transformers.DummyTFT
+
+Fusion-Attentive Models (`fusionlab.nn.models`)
+-------------------------------------------------
+Core implementations of the Hybrid-Attentive Fusion and its variants.
+
+.. autosummary::
+   :toctree: _autosummary/models
+   :nosignatures:
+
+   ~fusionlab.nn.models.BaseAttentive
+   ~fusionlab.nn.models.HALNet
+   ~fusionlab.nn.models.XTFT
+   ~fusionlab.nn.models.SuperXTFT
+
+Physic-Informed Models (`fusionlab.nn.pinn`)
+--------------------------------------------------------
+Fusion models that integrate physical laws into the training process.
+
+.. autosummary::
+   :toctree: _autosummary/models
+   :nosignatures:
+
+   ~fusionlab.nn.pinn.TransFlowSubsNet
+   ~fusionlab.nn.pinn.models.PIHALNet
+   ~fusionlab.nn.pinn.PiHALNet
+   ~fusionlab.nn.pinn.PiTGWFlow
+   
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
+Core Neural Network Components (`fusionlab.nn.components`)
+-----------------------------------------------------------
+Reusable building blocks for feature selection, sequence processing,
+attention, and output generation used within the forecasting models.
+
+.. autosummary::
+   :toctree: _autosummary/components_core
+   :nosignatures:
+
+   ~fusionlab.nn.components.GatedResidualNetwork
+   ~fusionlab.nn.components.VariableSelectionNetwork
+   ~fusionlab.nn.components.PositionalEncoding
+   ~fusionlab.nn.components.StaticEnrichmentLayer
+   ~fusionlab.nn.components.LearnedNormalization
+   ~fusionlab.nn.components.PositionwiseFeedForward
+
+Sequence Processing Components (`fusionlab.nn.components`)
+-----------------------------------------------------------
+Components primarily focused on processing temporal sequences.
+
+.. autosummary::
+   :toctree: _autosummary/components_seq
+   :nosignatures:
+
+   ~fusionlab.nn.components.MultiScaleLSTM
+   ~fusionlab.nn.components.DynamicTimeWindow
+   ~fusionlab.nn.components.aggregate_multiscale
+   ~fusionlab.nn.components.aggregate_multiscale_on_3d
+   ~fusionlab.nn.components.aggregate_time_window_output
+   ~fusionlab.nn.components.create_causal_mask
 
 
+Attention Mechanisms (`fusionlab.nn.components`)
+-------------------------------------------------
+Various attention layers used in Fusion Model architectures.
+
+.. autosummary::
+   :toctree: _autosummary/components_attn
+   :nosignatures:
+
+   ~fusionlab.nn.components.TemporalAttentionLayer
+   ~fusionlab.nn.components.CrossAttention
+   ~fusionlab.nn.components.HierarchicalAttention
+   ~fusionlab.nn.components.MemoryAugmentedAttention
+   ~fusionlab.nn.components.MultiResolutionAttentionFusion
+   ~fusionlab.nn.components.ExplainableAttention
+
+
+Embedding & Output Components (`fusionlab.nn.components`)
+---------------------------------------------------------
+Layers for input embedding and generating final model outputs.
+
+.. autosummary::
+   :toctree: _autosummary/components_io
+   :nosignatures:
+
+   ~fusionlab.nn.components.MultiModalEmbedding
+   ~fusionlab.nn.components.MultiDecoder
+   ~fusionlab.nn.components.QuantileDistributionModeling
+
+Loss Functions (`fusionlab.nn.losses` & `fusionlab.nn.components`)
+--------------------------------------------------------------------
+Loss functions tailored for time series forecasting and anomaly detection.
+
+.. autosummary::
+   :toctree: _autosummary/losses
+   :nosignatures:
+
+   ~fusionlab.nn.components.AdaptiveQuantileLoss
+   ~fusionlab.nn.components.AnomalyLoss
+   ~fusionlab.nn.components.MultiObjectiveLoss
+   ~fusionlab.nn.losses.combined_quantile_loss
+   ~fusionlab.nn.losses.prediction_based_loss
+   ~fusionlab.nn.losses.combined_total_loss
+   ~fusionlab.nn.losses.objective_loss
+   ~fusionlab.nn.losses.quantile_loss
+   ~fusionlab.nn.losses.quantile_loss_multi
+   ~fusionlab.nn.losses.anomaly_loss
+   
+Anomaly Detection (`fusionlab.nn.anomaly_detection`)
+-----------------------------------------------------
+Components specifically designed for anomaly detection tasks.
+
+.. autosummary::
+   :toctree: _autosummary/anomaly
+   :nosignatures:
+
+   ~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly
+   ~fusionlab.nn.anomaly_detection.SequenceAnomalyScoreLayer
+   ~fusionlab.nn.anomaly_detection.PredictionErrorAnomalyScore
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
+Hyperparameter Tuning (`fusionlab.nn.forecast_tuner`)
+------------------------------------------------------
+Utilities for optimizing model hyperparameters using Keras Tuner.
+
+.. autosummary::
+   :toctree: _autosummary/tuning
+   :nosignatures:
+
+   ~fusionlab.nn.forecast_tuner.HydroTuner
+   ~fusionlab.nn.forecast_tuner.HALTuner
+   ~fusionlab.nn.forecast_tuner.XTFTTuner
+   ~fusionlab.nn.forecast_tuner.TFTTuner
+   ~fusionlab.nn.forecast_tuner.PiHALTuner
+   ~fusionlab.nn.forecast_tuner.xtft_tuner
+   ~fusionlab.nn.forecast_tuner.tft_tuner
+   
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
+Neural Network Utilities (`fusionlab.nn.utils`)
+------------------------------------------------
+Utilities specifically for preparing data for or interacting with neural network models.
+
+.. autosummary::
+   :toctree: _autosummary/nn_utils
+   :nosignatures:
+
+   ~fusionlab.nn.utils.create_sequences
+   ~fusionlab.nn.utils.split_static_dynamic
+   ~fusionlab.nn.utils.reshape_xtft_data
+   ~fusionlab.nn.utils.compute_forecast_horizon
+   ~fusionlab.nn.utils.prepare_spatial_future_data
+   ~fusionlab.nn.utils.compute_anomaly_scores
+   ~fusionlab.nn.utils.generate_forecast
+   ~fusionlab.nn.utils.generate_forecast_with
+   ~fusionlab.nn.utils.forecast_single_step
+   ~fusionlab.nn.utils.forecast_multi_step
+   ~fusionlab.nn.utils.step_to_long
+   ~fusionlab.nn.utils.format_predictions
+   ~fusionlab.nn.utils.format_predictions_to_dataframe 
+   ~fusionlab.nn.utils.prepare_model_inputs
+   ~fusionlab.nn.pinn.utils.format_pihalnet_predictions 
+   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences 
+
+
+Visual‑metric helpers (`fusionlab.plot.evaluation`)
+------------------------------------------------------
+A curated set of plotting utilities that turn the raw numbers returned  
+by `fusionlab.metrics` into clear, publication‑quality figures.  
+They cover point‑forecast accuracy, interval **sharpness & coverage**,  
+ensemble calibration, temporal stability, and more – all tailored to  
+time‑series / probabilistic‑forecast workflows.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.plot.evaluation.plot_coverage
+   ~fusionlab.plot.evaluation.plot_crps
+   ~fusionlab.plot.evaluation.plot_forecast_comparison
+   ~fusionlab.plot.evaluation.plot_mean_interval_width
+   ~fusionlab.plot.evaluation.plot_metric_over_horizon
+   ~fusionlab.plot.evaluation.plot_metric_radar
+   ~fusionlab.plot.evaluation.plot_prediction_stability
+   ~fusionlab.plot.evaluation.plot_quantile_calibration
+   ~fusionlab.plot.evaluation.plot_theils_u_score
+   ~fusionlab.plot.evaluation.plot_time_weighted_metric
+   ~fusionlab.plot.evaluation.plot_weighted_interval_score
+   ~fusionlab.nn.models.utils.plot_history_in
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
+Quick‑look forecast helpers (`fusionlab.plot.forecast`)
+---------------------------------------------------------
+Light‑weight plotting utilities that turn a long‑format forecast
+DataFrame (as returned by
+:func:fusionlab.nn.utils.format_predictions_to_dataframe) into clear,
+side‑by‑side figures for rapid inspection.
+ 
+.. autosummary::
+   :toctree: _autosummary/forecast
+   :nosignatures:
+
+   ~fusionlab.plot.forecast.forecast_view
+   ~fusionlab.plot.forecast.plot_forecasts
+   ~fusionlab.plot.forecast.plot_forecast_by_step
+   ~fusionlab.plot.forecast.visualize_forecasts
+
+Data Processing Utilities (`fusionlab.utils`)
+-------------------------------------------------
+A collection of helpers for data manipulation, feature engineering,
+and preparing data for models.
+
+.. autosummary::
+   :toctree: _autosummary/utils
+   :nosignatures:
+
+   ~fusionlab.utils.data_utils.nan_ops
+   ~fusionlab.utils.data_utils.widen_temporal_columns
+   ~fusionlab.utils.forecast_utils.pivot_forecast_dataframe
+   ~fusionlab.utils.spatial_utils.create_spatial_clusters
+   ~fusionlab.utils.spatial_utils.batch_spatial_sampling
+   ~fusionlab.utils.spatial_utils.spatial_sampling
+   ~fusionlab.nn.utils.create_sequences
+   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences
+   ~fusionlab.nn.pinn.utils.format_pinn_predictions
    
 Command-Line Tools (`fusionlab.tools`)
 ---------------------------------------
