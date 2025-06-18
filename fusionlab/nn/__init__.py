@@ -89,6 +89,12 @@ if KERAS_BACKEND:
         TransFlowSubsNet,
         PiTGWFlow
      )
+    from .anomaly_detection import ( 
+        LSTMAutoencoderAnomaly, 
+        SequenceAnomalyScoreLayer, 
+        PredictionErrorAnomalyScore, 
+    )
+    
     __all__=[ 
         'HALNet',
         'XTFT',
@@ -102,7 +108,11 @@ if KERAS_BACKEND:
         'PIHALNet',
         'TransFlowSubsNet',
         'PiTGWFlow',
-
+        
+        "LSTMAutoencoderAnomaly",
+        "SequenceAnomalyScoreLayer", 
+        "PredictionErrorAnomalyScore", 
+        
     ]
 
 if _HAS_KT: 
