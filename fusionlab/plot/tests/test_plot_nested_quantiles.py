@@ -11,7 +11,7 @@ import warnings
 
 # Attempt to import the plotting function and required utilities
 try:
-    from fusionlab.plot._evaluation import ( 
+    from fusionlab.plot._metrics import ( 
         plot_nested_quantiles, 
         _calculate_qce_miscalibrations 
     )

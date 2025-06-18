@@ -10,7 +10,7 @@ import warnings
 from typing import Optional
 
 try:
-    from fusionlab.plot._evaluation import (
+    from fusionlab.plot._metrics import (
         plot_coverage,
         plot_crps,
         plot_mean_interval_width,

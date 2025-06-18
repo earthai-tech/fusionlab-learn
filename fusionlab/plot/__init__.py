@@ -10,13 +10,16 @@ from .evaluation import (
     plot_weighted_interval_score, 
     plot_metric_radar, 
     plot_forecast_comparison, 
-    plot_metric_over_horizon 
-    )
+    plot_metric_over_horizon, 
+ )
 
 from .forecast import ( 
-    plot_forecasts, 
-    visualize_forecasts 
- )
+     plot_forecast_by_step, 
+     plot_forecasts, 
+     visualize_forecasts ,
+     forecast_view, 
+   )
+       
 __all__=[
      'plot_coverage',
      'plot_crps',
@@ -30,5 +33,7 @@ __all__=[
      'plot_forecast_comparison', 
      'plot_metric_over_horizon', 
      'plot_forecasts', 
-     'visualize_forecasts'
+     'visualize_forecasts', 
+     'plot_forecast_by_step', 
+     'forecast_view'
 ]

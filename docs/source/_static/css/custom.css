@@ -521,3 +521,36 @@ html[data-theme="dark"] body {
     box-shadow: 0 0 5px #6366f1, 0 0 10px #6366f1, 0 0 15px #a5b4fc;
   }
 }
+
+/* --- New Version Badge Styling --- */
+
+/* Make the card body the positioning parent, which is more reliable. */
+.sd-card.sparkle-link .sd-card-body {
+  position: relative;
+  overflow: visible; /* Ensure the badge isn't clipped */
+}
+
+/* Style the badge itself. This selector is more specific and robust. */
+.sd-card.sparkle-link .version-badge {
+  position: absolute;
+  top: -10px;      /* Position it slightly above the card body's top edge */
+  right: -10px;    /* Position it slightly outside the card body's right edge */
+  z-index: 10;    /* Ensure the badge appears on top of other content */
+  
+  background-color: #ef4444; /* A nice, bright red */
+  color: white !important; /* Use !important to force color override against theme */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.65rem;
+  font-weight: bold;
+  line-height: 1;
+  
+  padding: 4px 7px; /* Slightly increased padding for better look */
+  border-radius: 9999px; /* Creates a pill shape */
+  border: 2px solid white; /* Adds a clean white outline */
+  
+  /* A subtle transform to make it pop */
+  transform: rotate(10deg);
+  
+  /* Prevent text selection */
+  user-select: none;
+}
