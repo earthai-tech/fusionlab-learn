@@ -74,7 +74,6 @@ and preparing data for models.
    :toctree: _autosummary/utils
    :nosignatures:
 
-   ~fusionlab.utils.forecast_utils.pivot_forecast_dataframe
    ~fusionlab.utils.spatial_utils.create_spatial_clusters
    ~fusionlab.utils.spatial_utils.batch_spatial_sampling
    ~fusionlab.utils.spatial_utils.spatial_sampling
