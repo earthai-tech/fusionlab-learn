@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 """ 
-xtft_determinic_p.py
+xtft_point_p.py
 ====================
 
 **Description:**
@@ -50,43 +50,63 @@ gofast
 Author: Daniel Date: 2024-12-17 
 
 """
-import os
-import logging
-from typing import List, Union, Tuple
 
-import pandas as pd
-import numpy as np
+
+import os
+import sys
+import logging
+import warnings
 import joblib
+from typing import List, Tuple
+import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.model_selection import train_test_split
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
-# Suppress warnings for clarity
-import warnings
-import sklearn
-import gofast as gf
-from fusionlab.utils.data_utils import pop_labels_in 
-from fusionlab.nn.tft import XTFT
-# Versioning of packages for reproducibility
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+try:
+    from fusionlab.nn import KERAS_BACKEND, KERAS_DEPS
+    from fusionlab.nn.models import XTFT
+    from fusionlab._fusionlog import fusionlog
+    
+    EarlyStopping = KERAS_DEPS.EarlyStopping
+    ModelCheckpoint = KERAS_DEPS.ModelCheckpoint
+    logger = fusionlog().get_fusionlab_logger(__name__)
+
+except ImportError as e:
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.error(
+        f"Error importing fusionlab modules: {e}. "
+        "Please ensure 'fusionlab-learn' is correctly installed."
+    )
+    sys.exit(1)
+
+warnings.filterwarnings('ignore', category=UserWarning)
+# Safely get package versions for reference
 pkgs_versions = {
     "numpy": np.__version__,
     "pandas": pd.__version__,
-    "scikit-learn": sklearn.__version__,
+    "scikit-learn": "N/A",
     "joblib": joblib.__version__,
-    "tensorflow": tf.__version__,
-    "gofast": gf.__version__,
+    "tensorflow": "N/A",
     "matplotlib": mpl.__version__,
-    "scikeras": "Not Used",  # Not used in this script
 }
+try:
+    import sklearn
+    import fusionlab
+    pkgs_versions["scikit-learn"] = sklearn.__version__
+    pkgs_versions["fusionlab"] = fusionlab.__version__
+    if KERAS_BACKEND:
+        import tensorflow as tf
+        pkgs_versions["tensorflow"] = tf.__version__
+except ImportError:
+    pass
 
-# =============================================================================
+
 # Logging Configuration
-# =============================================================================
-
 def setup_logging(verbose: int = 0):
     """
     Configure the logging settings based on verbosity level.
@@ -516,9 +536,6 @@ def visualize_predictions(
     logging.info(f"Prediction visualization saved to {output_path}")
     plt.show()
 
-# =============================================================================
-# Main Function
-# =============================================================================
 
 def main(verbose: int = 1):
     """
@@ -529,10 +546,21 @@ def main(verbose: int = 1):
     verbose : int, optional
         Verbosity level (0: WARNING, 1: INFO, 2: DEBUG), by default 1.
     """
+    """Main function to run the XTFT point prediction workflow."""
+    # Guard clause: Ensure the required TensorFlow backend is available.
+    if not KERAS_BACKEND:
+        logger.error(
+            "This script requires TensorFlow to be installed, but it was not "
+            "found. Please install the necessary dependencies to proceed."
+        )
+        return  # Exit gracefully
+
+    logger.info("Starting XTFT point prediction script...")
+    logger.info(f"Using package versions: {pkgs_versions}")
+    
     # Setup logging
     setup_logging(verbose)
-    
-    logging.info("Starting XTFT prediction script")
+
     
     # Define paths
     data_path = r'J:\first_data\Nansha\new\xtft\new'
@@ -812,7 +840,7 @@ def main(verbose: int = 1):
     # =============================================================================
     
     logging.info("Starting model training")
-    history = model.fit(
+    model.fit(
         [static_train, dynamic_train, encoded_cats[:static_train.shape[0]]], y_train,
         validation_data=([static_val, dynamic_val, encoded_cats[-static_val.shape[0]:]], y_val),
         epochs=100,  # Change this as needed for deep training
@@ -888,7 +916,7 @@ def main(verbose: int = 1):
         logging_enabled=True
     )
     
-    logging.info("XTFT prediction script completed successfully")
+    logger.info("XTFT point prediction script finished successfully.")
 
 # =============================================================================
 # Entry Point

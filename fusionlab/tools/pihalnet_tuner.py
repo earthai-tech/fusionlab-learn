@@ -1,11 +1,10 @@
-# pihalnet_tuner.py
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
-
+# Author: L. Kouadio <etanoyau@gmail.com>
 
 """
-This script runs a hyperparameter tuning session for PIHALNet (a
-Physics-Informed HalNet) on Zhongshan data. It handles:
+This script runs a hyperparameter tuning session for the legacy PIHALNet
+model on a given dataset. It handles:
   1. Data loading and preprocessing
   2. Sequence generation for training and validation
   3. Defining the search space and fixed parameters
@@ -15,39 +14,44 @@ Physics-Informed HalNet) on Zhongshan data. It handles:
 Usage:
     python pihalnet_tuner.py
 
-All long lines have been wrapped at ~70 characters for readability.
 """
 
 import os
+import sys
+import joblib
+import logging
+
 import numpy as np
 import pandas as pd
 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 from sklearn.model_selection import train_test_split
-import joblib
-import logging
 
 try:
-    import tensorflow as tf
-    from fusionlab.nn.pinn.models import PIHALTuner
+    from fusionlab._fusionlog import fusionlog
+    
+    from fusionlab.nn import KERAS_DEPS, KERAS_BACKEND
+    from fusionlab.nn.forecast_tuner import PiHALTuner as LegacyPiHALTuner
+
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
-    # from fusionlab.nn.losses import combined_quantile_loss  # optional
     from fusionlab.utils.generic_utils import rename_dict_keys
-    logger = logging.getLogger(__name__)
+    
+    Dataset = KERAS_DEPS.Dataset
+    AUTOTUNE = KERAS_DEPS.AUTOTUNE
+    EarlyStopping = KERAS_DEPS.EarlyStopping
+    
+    # Set up logger from fusionlab's system if available
+    logger = fusionlog().get_fusionlab_logger(__name__)
+
 except ImportError as e:
-    print(f"Error importing fusionlab modules: {e}. "
-          "Ensure fusionlab is in PYTHONPATH.")
-    print("Using placeholder functions/classes for critical missing parts.")
-    # If needed, you can define dummy placeholders here.
-
-# --- Basic Logger Setup (if not using fusionlog) ---
-if not hasattr(logger, 'handlers') or not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(name)s - '
-               '%(message)s'
-    )
-
+    # This block will run if `fusionlab-learn` itself is not installed
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.error(f"Error importing fusionlab modules: {e}. "
+                 "Please ensure 'fusionlab-learn' is correctly installed in your"
+                 " Python environment.")
+    # Exit since the script cannot run without the library
+    sys.exit(1)
 
 # --- Configuration Constants ---
 # In pihalnet_tuner.py, replace the hard‐coded DATA_FILE_PATH with:
@@ -296,7 +300,15 @@ def load_and_preprocess_zhongshan_data(file_path: str) -> pd.DataFrame:
 
 
 # --- Main Tuning Script ---
-if __name__ == "__main__":
+def main():
+    if not KERAS_BACKEND:
+        logger.error(
+            "This script requires TensorFlow and Keras to be installed, "
+            "but they were not found. Please install the necessary "
+            "dependencies."
+        )
+        return # Exit gracefully
+    
     logger.info(f"--- Starting PIHALNet Tuning for {CITY_NAME} ---")
 
     # 1. Load & preprocess Zhongshan data
@@ -505,7 +517,7 @@ if __name__ == "__main__":
 
     # 5. Instantiate PIHALTuner
     logger.info("Instantiating PIHALTuner...")
-    tuner = PIHALTuner(
+    tuner = LegacyPiHALTuner(
         fixed_model_params=current_fixed_params,
         param_space=param_space_config,
         objective=TUNER_OBJECTIVE,
@@ -540,9 +552,9 @@ if __name__ == "__main__":
             "or empty before creating datasets."
         )
 
-    train_tf_dataset = tf.data.Dataset.from_tensor_slices(
+    train_tf_dataset = Dataset.from_tensor_slices(
         (inputs_train_dict, targets_train_dict)
-    ).batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+    ).batch(BATCH_SIZE).prefetch(AUTOTUNE)
     logger.info(
         f"Training dataset created. Cardinality: "
         f"{train_tf_dataset.cardinality().numpy()}"
@@ -550,10 +562,10 @@ if __name__ == "__main__":
 
     val_tf_dataset = None
     if inputs_val_dict and targets_val_dict:
-        val_tf_dataset = tf.data.Dataset.from_tensor_slices(
+        val_tf_dataset = Dataset.from_tensor_slices(
             (inputs_val_dict, targets_val_dict)
         ).batch(BATCH_SIZE).prefetch(
-            tf.data.AUTOTUNE
+            AUTOTUNE
         )
         logger.info(
             f"Validation dataset created. Cardinality: "
@@ -567,7 +579,7 @@ if __name__ == "__main__":
     logger.info(
         f"Starting hyperparameter search with {TUNER_TYPE} tuner..."
     )
-    early_stopping_cb = tf.keras.callbacks.EarlyStopping(
+    early_stopping_cb = EarlyStopping(
         monitor=TUNER_OBJECTIVE,
         patience=8,
         restore_best_weights=True,
@@ -646,3 +658,6 @@ if __name__ == "__main__":
         f"Results & artifacts in: "
         f"{os.path.join(RUN_OUTPUT_PATH, 'tuner_dir_zhongshan')}"
     )
+
+if __name__=="__main__": 
+    main()

@@ -49,12 +49,10 @@ Dependencies:
 - Python 3.7+
 - pandas
 - numpy
-- scikeras
 - scikit-learn
 - tensorflow
 - matplotlib
 - joblib
-- gofast
 
 Ensure all dependencies are installed before running the application.
 
@@ -65,29 +63,59 @@ import sys
 import argparse
 import warnings
 import logging
-
-import pandas as pd
-import numpy as np
 import joblib
+import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import sklearn 
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
 from sklearn.model_selection import train_test_split
-import tensorflow as tf
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-import gofast as gf
-from fusionlab.core.io import read_data, print_script_info, show_usage 
-from fusionlab.nn.tft import XTFT
+try:
+    from fusionlab.nn import KERAS_BACKEND, KERAS_DEPS
+    from fusionlab.nn.models import XTFT
+    from fusionlab.core.io import read_data, print_script_info, show_usage
+    from fusionlab._fusionlog import fusionlog
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
+    EarlyStopping = KERAS_DEPS.EarlyStopping
+    ModelCheckpoint = KERAS_DEPS.ModelCheckpoint
+    
+    logger = fusionlog().get_fusionlab_logger(__name__)
+
+except ImportError as e:
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.error(
+        f"Error importing fusionlab modules: {e}. "
+        "Please ensure 'fusionlab-learn' is correctly installed."
+    )
+    sys.exit(1)
+
+# Script Configuration & Versioning
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore', category=UserWarning)
+
+# Safely get package versions for reference
+pkgs_versions = {
+    "numpy": np.__version__,
+    "pandas": pd.__version__,
+    "scikit-learn": "N/A",
+    "joblib": joblib.__version__,
+    "tensorflow": "N/A",
+    "matplotlib": mpl.__version__,
+}
+try:
+    import sklearn
+    import fusionlab
+    pkgs_versions["scikit-learn"] = sklearn.__version__
+    pkgs_versions["fusionlab"] = fusionlab.__version__
+    if KERAS_BACKEND:
+        import tensorflow as tf
+        pkgs_versions["tensorflow"] = tf.__version__
+except ImportError:
+    pass
+
 
 # A module-level flag to ensure docstring is printed only once
 _DOCSTRING_PRINTED = False
@@ -112,9 +140,9 @@ def load_data(main_data_file):
 def preprocess_data(
         final_data, 
         data_path, 
-        # cat_data_file,
-        categorical_features,
-        numerical_features, target):
+    # cat_data_file,
+    categorical_features,
+    numerical_features, target):
     """
     Preprocess the data by encoding categorical variables and scaling numerical features.
 
@@ -233,24 +261,13 @@ def preprocess_data(
         logger.info("Numerical and longitude-latitude scalers saved to: %s and %s",
                     numerical_scaler_path, lonlat_scaler_path)
 
-        # Save combined scalers and versions
-        pkg_versions = {
-            "numpy": np.__version__,
-            "pandas": pd.__version__,
-            "scikit-learn": sklearn.__version__,
-            "joblib": joblib.__version__,
-            "tensorflow": tf.__version__,
-            "gofast": gf.__version__,
-            "matplotlib": mpl.__version__,
-            # "scikeras": scikeras.__version__,  # Uncomment if scikeras is used
-        }
         target_scaler_path = os.path.join(data_path, 'xtft_target_scaler.joblib')
         dict_scalers = {
             "target_scaler": target_scaler,
             "numerical_scaler": numerical_scaler,
             "categorical_scaler": encoder,
             "lonlat_scaler": long_lat_scaler,
-            "__version__": pkg_versions
+            "__version__": pkgs_versions
         }
         joblib.dump(dict_scalers, target_scaler_path)
         logger.info("Combined scalers and package versions saved to: %s", target_scaler_path)
@@ -602,6 +619,18 @@ def main(args):
     :param args: Command-line arguments.
     :type args: argparse.Namespace
     """
+    """Main function to run the XTFT probabilistic prediction workflow."""
+    # Guard clause to ensure backend is available
+    if not KERAS_BACKEND:
+        logger.error(
+            "This script requires TensorFlow to be installed, but it was not found. "
+            "Please install the necessary dependencies."
+        )
+        return
+
+    logger.info("Starting XTFT probabilistic forecasting script...")
+    logger.info(f"Using package versions: {pkgs_versions}")
+    
     global _DOCSTRING_PRINTED
     if not _DOCSTRING_PRINTED:
         print_script_info(__doc__)
