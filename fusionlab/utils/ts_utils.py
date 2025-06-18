@@ -5,6 +5,7 @@
 """
 Times-series utilities (ts_utils).
 """
+from __future__ import annotations 
 
 import warnings
 from numbers import Real, Integral
@@ -20,9 +21,6 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.decomposition import PCA
 
 from .._deps import check_backends 
-
-
-
 from ..api.summary import ResultSummary
 from ..compat.sklearn import Interval, StrOptions, validate_params
 from ..core.array_manager import smart_ts_detector
@@ -33,7 +31,6 @@ from ..core.io import to_frame_if
 from ..utils.base_utils import validate_target_in, select_features
 from ..utils.deps_utils import ensure_pkg
 from ..utils.validator import is_time_series, is_frame
-
 
 HAS_STATS = check_backends('statsmodels').get('statsmodels')
 
@@ -52,7 +49,6 @@ __all__= [
     'select_and_reduce_features', 'get_decomposition_method', 
     'filter_by_period', 'to_dt', 'compute_group_window_counts'
  ]
-
 
 def compute_group_window_counts(
     group_lengths: Dict[str, int],
@@ -4761,3 +4757,4 @@ def select_and_reduce_features(
             f"Invalid method: {method}. "
             "Choose 'corr' (or 'correlation') or 'pca'."
         )
+        
