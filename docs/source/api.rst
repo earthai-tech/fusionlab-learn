@@ -45,7 +45,6 @@ time-series forecasting.
    :nosignatures:
 
    ~fusionlab.metrics.coverage_score
-   ~fusionlab.metrics.continuous_ranked_probability_score
    ~fusionlab.metrics.mean_interval_width_score
    ~fusionlab.metrics.prediction_stability_score
    ~fusionlab.metrics.quantile_calibration_error
