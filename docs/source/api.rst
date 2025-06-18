@@ -89,22 +89,6 @@ Components primarily focused on processing temporal sequences.
    ~fusionlab.nn.components.create_causal_mask
 
 
-Attention Mechanisms (`fusionlab.nn.components`)
--------------------------------------------------
-Various attention layers used in Fusion Model architectures.
-
-.. autosummary::
-   :toctree: _autosummary/components_attn
-   :nosignatures:
-
-   ~fusionlab.nn.components.TemporalAttentionLayer
-   ~fusionlab.nn.components.CrossAttention
-   ~fusionlab.nn.components.HierarchicalAttention
-   ~fusionlab.nn.components.MemoryAugmentedAttention
-   ~fusionlab.nn.components.MultiResolutionAttentionFusion
-   ~fusionlab.nn.components.ExplainableAttention
-
-
 Embedding & Output Components (`fusionlab.nn.components`)
 ---------------------------------------------------------
 Layers for input embedding and generating final model outputs.
