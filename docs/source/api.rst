@@ -135,18 +135,7 @@ Loss functions tailored for time series forecasting and anomaly detection.
    ~fusionlab.nn.losses.quantile_loss
    ~fusionlab.nn.losses.quantile_loss_multi
    ~fusionlab.nn.losses.anomaly_loss
-   
-Anomaly Detection (`fusionlab.nn.anomaly_detection`)
------------------------------------------------------
-Components specifically designed for anomaly detection tasks.
 
-.. autosummary::
-   :toctree: _autosummary/anomaly
-   :nosignatures:
-
-   ~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly
-   ~fusionlab.nn.anomaly_detection.SequenceAnomalyScoreLayer
-   ~fusionlab.nn.anomaly_detection.PredictionErrorAnomalyScore
 
 .. raw:: html
 
