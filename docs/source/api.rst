@@ -24,10 +24,10 @@ time series data for testing and demonstration.
    :toctree: _autosummary/datasets_load
    :nosignatures:
 
-   ~fusionlab.datasets.load.fetch_zhongshan_data
-   ~fusionlab.datasets.load.fetch_nansha_data
-   ~fusionlab.datasets.load.load_processed_subsidence_data
-   ~fusionlab.datasets.load.load_subsidence_pinn_data
+   ~fusionlab.datasets.fetch_zhongshan_data
+   ~fusionlab.datasets.fetch_nansha_data
+   ~fusionlab.datasets.load_processed_subsidence_data
+   ~fusionlab.datasets.load_subsidence_pinn_data
 
 **Generation Functions** (`fusionlab.datasets.make`)
 
@@ -35,11 +35,11 @@ time series data for testing and demonstration.
    :toctree: _autosummary/datasets_make
    :nosignatures:
 
-   ~fusionlab.datasets.make.make_multi_feature_time_series
-   ~fusionlab.datasets.make.make_quantile_prediction_data
-   ~fusionlab.datasets.make.make_anomaly_data
-   ~fusionlab.datasets.make.make_trend_seasonal_data
-   ~fusionlab.datasets.make.make_multivariate_target_data
+   ~fusionlab.datasets.make_multi_feature_time_series
+   ~fusionlab.datasets.make_quantile_prediction_data
+   ~fusionlab.datasets.make_anomaly_data
+   ~fusionlab.datasets.make_trend_seasonal_data
+   ~fusionlab.datasets.make_multivariate_target_data
 
 Metrics (`fusionlab.metrics`)
 -------------------------------
