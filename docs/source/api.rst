@@ -117,24 +117,6 @@ Layers for input embedding and generating final model outputs.
    ~fusionlab.nn.components.MultiDecoder
    ~fusionlab.nn.components.QuantileDistributionModeling
 
-Loss Functions (`fusionlab.nn.losses` & `fusionlab.nn.components`)
---------------------------------------------------------------------
-Loss functions tailored for time series forecasting and anomaly detection.
-
-.. autosummary::
-   :toctree: _autosummary/losses
-   :nosignatures:
-
-   ~fusionlab.nn.components.AdaptiveQuantileLoss
-   ~fusionlab.nn.components.AnomalyLoss
-   ~fusionlab.nn.components.MultiObjectiveLoss
-   ~fusionlab.nn.losses.combined_quantile_loss
-   ~fusionlab.nn.losses.prediction_based_loss
-   ~fusionlab.nn.losses.combined_total_loss
-   ~fusionlab.nn.losses.objective_loss
-   ~fusionlab.nn.losses.quantile_loss
-   ~fusionlab.nn.losses.quantile_loss_multi
-   ~fusionlab.nn.losses.anomaly_loss
 
 
 .. raw:: html
