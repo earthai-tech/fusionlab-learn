@@ -63,9 +63,6 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.format_predictions
    ~fusionlab.nn.utils.format_predictions_to_dataframe 
    ~fusionlab.nn.utils.prepare_model_inputs
-   ~fusionlab.nn.pinn.utils.format_pihalnet_predictions 
-   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences 
-
 
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
 ------------------------------------------------------
@@ -151,9 +148,8 @@ and preparing data for models.
    ~fusionlab.utils.spatial_utils.create_spatial_clusters
    ~fusionlab.utils.spatial_utils.batch_spatial_sampling
    ~fusionlab.utils.spatial_utils.spatial_sampling
-   ~fusionlab.nn.utils.create_sequences
-   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences
-   ~fusionlab.nn.pinn.utils.format_pinn_predictions
+ 
+
    
 Command-Line Tools (`fusionlab.tools`)
 ---------------------------------------
