@@ -62,22 +62,7 @@ Fusion models that integrate physical laws into the training process.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-Hyperparameter Tuning (`fusionlab.nn.forecast_tuner`)
-------------------------------------------------------
-Utilities for optimizing model hyperparameters using Keras Tuner.
 
-.. autosummary::
-   :toctree: _autosummary/tuning
-   :nosignatures:
-
-   ~fusionlab.nn.forecast_tuner.HydroTuner
-   ~fusionlab.nn.forecast_tuner.HALTuner
-   ~fusionlab.nn.forecast_tuner.XTFTTuner
-   ~fusionlab.nn.forecast_tuner.TFTTuner
-   ~fusionlab.nn.forecast_tuner.PiHALTuner
-   ~fusionlab.nn.forecast_tuner.xtft_tuner
-   ~fusionlab.nn.forecast_tuner.tft_tuner
-   
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
