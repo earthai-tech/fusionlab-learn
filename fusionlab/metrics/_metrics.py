@@ -2,26 +2,20 @@
 #   License: BSD-3-Clause
 #   Author: LKouadio <etanoyau@gmail.com>
 
+""" Metrics """
+
 from __future__ import annotations 
 from numbers import Real, Integral 
-from typing import  ( 
-    Sequence, Optional, 
-    Literal, 
-    Union
-)
+from typing import  Sequence, Optional, Literal, Union
+
 import warnings
 import numpy as np 
 
 from sklearn.utils.validation import check_array, check_consistent_length 
 
-from .api.types import MultioutputLiteral, NanPolicyLiteral
-from .compat.sklearn import ( 
-    StrOptions, 
-    validate_params,
-    
-)
-from .utils.generic_utils import are_all_values_in_bounds 
-
+from ..api.types import MultioutputLiteral, NanPolicyLiteral
+from ..compat.sklearn import StrOptions, validate_params
+from ..utils.generic_utils import are_all_values_in_bounds 
 
 __all__ = [
     'coverage_score',

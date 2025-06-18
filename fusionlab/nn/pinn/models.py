@@ -6,7 +6,8 @@ from ._transflow_subnet import TransFlowSubsNet
 from ._gw_models import PiTGWFlow
 
 __all__=[
-    "PiHALNet", "PIHALNet", 
+    "PiHALNet",
+    "PIHALNet", 
     "TransFlowSubsNet", 
     "PiTGWFlow"
    ]

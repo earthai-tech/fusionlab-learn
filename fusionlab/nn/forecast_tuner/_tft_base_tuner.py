@@ -35,14 +35,8 @@ from ...utils.validator import validate_positive_integer
 
 from .._tensor_validation import validate_model_inputs
 from .. import KERAS_DEPS
-from ..__init__ import config
+from .._config  import Config
 from ..losses import combined_quantile_loss
-
-from ..transformers import (
-    TemporalFusionTransformer as TFTFlexible,
-    TFT as TFTStricter,
-)
-from ..models import XTFT, SuperXTFT 
 
 from . import KT_DEPS, HAS_KT
 
@@ -111,8 +105,8 @@ class BaseTuner:
     @ensure_pkg(
         "keras_tuner",
         extra="'keras_tuner' is required for model tuning.",
-        auto_install=config.INSTALL_DEPS,
-        use_conda=config.USE_CONDA,
+        auto_install=Config.INSTALL_DEPS,
+        use_conda=Config.USE_CONDA,
     )
     @check_params(
         {
@@ -412,6 +406,14 @@ class BaseTuner:
         This method uses `self.model_name` to select the model class and
         `self._run_case_info` for configuration.
         """
+        # ****************************************************
+        from ..models import XTFT, SuperXTFT 
+        from ..transformers import (
+            TemporalFusionTransformer as TFTFlexible,
+            TFT as TFTStricter,
+        )
+        # ****************************************************
+        
         model_name_lower = self.model_name.lower()
         case_info_param = self._run_case_info  # Use prepared case_info
 

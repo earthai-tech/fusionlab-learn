@@ -14,8 +14,8 @@ of this refactor is to eliminate a class of circular import errors that
 were causing build failures in clean environments like Read the Docs,
 and to make the entire codebase more maintainable and scalable.
 
-Enhancements & Improvements
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Improvements
+~~~~~~~~~~~~~~~
 * |Enhancement| **Centralized Configuration:** Introduced a new internal
   module, **fusionlab/_configs.py**, which now serves as the single
   source of truth for all backend dependency mappings. Hardcoded
@@ -39,6 +39,18 @@ Enhancements & Improvements
   local dummy class definitions in individual model and utility files,
   making the codebase significantly cleaner.
 
+* |Enhancement| **Decorator Refactoring:** The multi-purpose
+  ``_scigofast_set_X_compat`` decorator has been refactored into smaller,
+  focused components. The new **`adapt_sklearn_input`** decorator now has
+  the single responsibility of reshaping a 2D scikit-learn style array
+  into the multi-input list required by `fusionlab` models.
+
+* |Enhancement| **New Utility Function:** The "concat" functionality from the
+  old decorator has been extracted into a new, public utility function,
+  ``concatenate_fusionlab_inputs``, for converting a ``fusionlab``
+  multi-input list back into a single 2D array for use in standard
+  scikit-learn pipelines.
+  
 API Changes
 ~~~~~~~~~~~
 * |API Change| The internal logic for handling optional dependencies has
@@ -47,6 +59,10 @@ API Changes
   is now centralized. This change is internal but represents a major
   architectural shift towards a more robust and scalable design.
 
+* |API Change| The internal decorator for scikit-learn compatibility has
+  been renamed and simplified from ``_scigofast_set_X_compat`` to
+  ``adapt_sklearn_input``, with a more focused scope.
+  
 Fixes
 ~~~~~
 * |Fix| **Resolved Circular Import Errors:** The primary motivation for

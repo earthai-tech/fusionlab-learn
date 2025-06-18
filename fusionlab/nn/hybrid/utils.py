@@ -11,14 +11,13 @@ import warnings
 import os
 
 from typing import List, Optional, Union, Dict
-
 import matplotlib.pyplot as plt
+
 from ...core.handlers import _get_valid_kwargs 
 from .. import KERAS_DEPS, KERAS_BACKEND
 
 if KERAS_BACKEND:
-   History =KERAS_DEPS.History 
-   
+    History =KERAS_DEPS.History 
 else:
     class History:
         def __init__(self):
