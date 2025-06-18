@@ -144,8 +144,8 @@ except ImportError:
     # dont need to warn just ignore ..
     pass 
 
-from . import metrics 
-__all__.extend (['metrics']) 
+from . import metrics , datasets
+__all__.extend (['metrics', 'datasets']) 
 # If kdiagram import failed, we set up a dummy module entry so
 # that `import fusionlab.kdiagram` doesn’t immediately crash,
 # but accessing it does:
