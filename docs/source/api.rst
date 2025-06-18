@@ -162,9 +162,17 @@ Layers for input embedding and generating final model outputs.
    ~fusionlab.nn.components.MultiDecoder
    ~fusionlab.nn.components.QuantileDistributionModeling
 
-Loss Functions (`fusionlab.nn.losses` & `fusionlab.nn.components`)
---------------------------------------------------------------------
-Loss functions tailored for time series forecasting and anomaly detection.
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
+Losses (`fusionlab.nn.components` & `fusionlab.nn.losses`)
+-------------------------------------------------------------
+Losses tailored for time series forecasting and anomaly detection.
+
+**Loss Components** (`fusionlab.nn.components`)
+
+These classes implement composite or parameterized loss behaviors.
 
 .. autosummary::
    :toctree: _autosummary/losses
@@ -173,6 +181,16 @@ Loss functions tailored for time series forecasting and anomaly detection.
    ~fusionlab.nn.components.AdaptiveQuantileLoss
    ~fusionlab.nn.components.AnomalyLoss
    ~fusionlab.nn.components.MultiObjectiveLoss
+
+
+**Loss Functions** (`fusionlab.nn.losses`)
+
+Pure functions for computing scalar losses on predictions.
+
+.. autosummary::
+   :toctree: _autosummary/losses
+   :nosignatures:
+
    ~fusionlab.nn.losses.combined_quantile_loss
    ~fusionlab.nn.losses.prediction_based_loss
    ~fusionlab.nn.losses.combined_total_loss
@@ -180,6 +198,10 @@ Loss functions tailored for time series forecasting and anomaly detection.
    ~fusionlab.nn.losses.quantile_loss
    ~fusionlab.nn.losses.quantile_loss_multi
    ~fusionlab.nn.losses.anomaly_loss
+  
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
 Anomaly Detection (`fusionlab.nn.anomaly_detection`)
 -----------------------------------------------------
@@ -240,10 +262,10 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.format_predictions
    ~fusionlab.nn.utils.format_predictions_to_dataframe 
    ~fusionlab.nn.utils.prepare_model_inputs
-   ~fusionlab.nn.pinn.utils.format_pihalnet_predictions 
-   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences 
-
-
+   ~fusionlab.nn.utils.format_pihalnet_predictions 
+   ~fusionlab.nn.utils.prepare_pinn_data_sequences
+   ~fusionlab.nn.utils.format_pinn_predictions 
+   
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
 ------------------------------------------------------
 A curated set of plotting utilities that turn the raw numbers returned  
@@ -267,7 +289,6 @@ time‑series / probabilistic‑forecast workflows.
    ~fusionlab.plot.evaluation.plot_theils_u_score
    ~fusionlab.plot.evaluation.plot_time_weighted_metric
    ~fusionlab.plot.evaluation.plot_weighted_interval_score
-   ~fusionlab.nn.models.utils.plot_history_in
 
 .. raw:: html
 
@@ -323,15 +344,17 @@ and preparing data for models.
    :toctree: _autosummary/utils
    :nosignatures:
 
-   ~fusionlab.utils.data_utils.nan_ops
-   ~fusionlab.utils.data_utils.widen_temporal_columns
-   ~fusionlab.utils.forecast_utils.pivot_forecast_dataframe
-   ~fusionlab.utils.spatial_utils.create_spatial_clusters
-   ~fusionlab.utils.spatial_utils.batch_spatial_sampling
-   ~fusionlab.utils.spatial_utils.spatial_sampling
-   ~fusionlab.nn.utils.create_sequences
-   ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences
-   ~fusionlab.nn.pinn.utils.format_pinn_predictions
+   ~fusionlab.utils.nan_ops
+   ~fusionlab.utils.widen_temporal_columns
+   ~fusionlab.utils.pivot_forecast_dataframe
+   ~fusionlab.utils.create_spatial_clusters
+   ~fusionlab.utils.spatial_sampling
+   ~fusionlab.utils.augment_series_features 
+   ~fusionlab.utils.generate_dummy_pinn_data 
+   ~fusionlab.utils.augment_spatiotemporal_data
+   ~fusionlab.utils.mask_by_reference
+   ~fusionlab.utils.fetch_joblib_data 
+   ~fusionlab.utils.save_job 
    
 Command-Line Tools (`fusionlab.tools`)
 ---------------------------------------

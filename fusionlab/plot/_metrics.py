@@ -35,18 +35,7 @@ from ..core.io import _get_valid_kwargs
 from ..core.checks import exist_features
 from ..core.diagnose_q import validate_quantiles
 
-from ..metrics import (
-    coverage_score,
-    weighted_interval_score,
-    prediction_stability_score,
-    time_weighted_mean_absolute_error,
-    quantile_calibration_error,
-    mean_interval_width_score,
-    theils_u_score,
-    time_weighted_accuracy_score, 
-    time_weighted_interval_score, 
-    continuous_ranked_probability_score, 
-)
+from ..metrics._registry import get_metric
 
 from ..utils.generic_utils import are_all_values_in_bounds 
 
@@ -87,7 +76,10 @@ def plot_theils_u_score(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
-
+    
+    # *********************************************************
+    theils_u_score = get_metric("theils_u_score")
+    # *********************************************************
     # --- 1. Input Validation and Preparation ---
     # y_true, y_pred: (T,), (N,T), or (N,O,T)
     # Metric function handles detailed shape validation.
@@ -442,6 +434,10 @@ def plot_weighted_interval_score(
     **kwargs: Any
 ) -> plt.Axes:
 
+    # ****************************************************************
+    weighted_interval_score = get_metric("weighted_interval_score")
+    # ****************************************************************
+    
     # --- 1. Input Validation and Preparation ---
     y_true_arr = check_array(
         y_true, ensure_2d=False, dtype="numeric",
@@ -848,12 +844,13 @@ def _get_metric_function(
     metric_type: MetricType
 ) -> MetricFunctionType:
     """Helper to retrieve the appropriate metric function."""
+
     if metric_type == 'mae':
-        return time_weighted_mean_absolute_error
+        return get_metric("time_weighted_mean_absolute_error")
     elif metric_type == 'accuracy':
-        return time_weighted_accuracy_score
+        return get_metric("time_weighted_accuracy_score")
     elif metric_type == 'interval_score':
-        return time_weighted_interval_score
+        return get_metric("time_weighted_interval_score")
     else:
         # This case should ideally be caught by Literal type hinting
         # or earlier validation.
@@ -1573,6 +1570,10 @@ def plot_quantile_calibration(
     **kwargs: Any 
 ) -> plt.Axes:
     
+    # *************************************************************************
+    quantile_calibration_error = get_metric("quantile_calibration_error")
+    # **************************************************************************
+    
     # --- Input Validation and Preparation ---
     # y_true: (N,), (N,O)
     # y_pred_quantiles: (N,Q) or (N,O,Q)
@@ -2008,6 +2009,10 @@ def plot_coverage(
     **kwargs: Any 
 ) -> plt.Axes:
 
+    # ************************************************
+    coverage_score = get_metric("coverage_score")
+    # ************************************************
+    
     # --- Input Validation and Preparation ---
     y_true_arr = check_array(
         y_true, ensure_2d=False, force_all_finite=False,
@@ -2402,6 +2407,10 @@ def plot_crps(
     verbose: int = 0,
     **kwargs: Any 
 ) -> plt.Axes:
+    # *************************************************
+    continuous_ranked_probability_score = get_metric(
+        "continuous_ranked_probability_score")
+    # *************************************************
     
     # --- Input Validation and Preparation ---
     # y_true: (N,), (N,O)
@@ -2838,6 +2847,11 @@ def plot_mean_interval_width(
     **kwargs: Any 
 ) -> plt.Axes:
 
+    # *************************************************
+    mean_interval_width_score = get_metric(
+        "mean_interval_width_score")
+    # *************************************************
+    
     # --- Input Validation and Preparation ---
     # y_lower, y_upper: (N,), (N,O)
     y_lower_arr = check_array(
@@ -3191,6 +3205,10 @@ def plot_prediction_stability(
     **kwargs: Any 
 ) -> plt.Axes:
 
+    # **********************************************************************
+    prediction_stability_score = get_metric("prediction_stability_score")
+    # **********************************************************************
+    
     # --- Input Validation and Preparation ---
     # y_pred: (T,), (N,T), or (N,O,T)
     y_pred_arr = check_array(

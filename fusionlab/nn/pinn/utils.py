@@ -23,7 +23,6 @@ from ...core.checks import (
 from ...core.io import SaveFile 
 from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
-from ...metrics import coverage_score
 from ...utils.validator import validate_positive_integer 
 from ...decorators import isdf 
 from ...utils.deps_utils import ensure_pkg 
@@ -396,6 +395,10 @@ def format_pihalnet_predictions(
        Attention Learning for Spatio‑Temporal Subsidence Prediction,”
        *IEEE T‑PAMI*, 2025 (in press).
     """
+    # **********************************************************
+    from ..metrics import coverage_score
+    # **********************************************************
+    
     vlog(f"Starting PIHALNet prediction formatting (verbose={verbose}).",
          level=3, verbose=verbose, logger=logger)
 

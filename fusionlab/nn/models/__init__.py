@@ -3,30 +3,27 @@
 #   Author: LKouadio <etanoyau@gmail.com>
 
 import warnings
-from fusionlab.compat.tf import HAS_TF 
+from .. import KERAS_BACKEND 
 
-# Core model definitions
-from ._halnet import HALNet
-from .utils import plot_history_in
-from .._base_attentive import BaseAttentive
- 
-__all__ = [
-    "HALNet",
-    "BaseAttentive", 
-    "plot_history_in", 
-]
-
-# XTFT variants relocated to models package
-if HAS_TF:
-    # Import and expose XTFT and SuperXTFT
+if KERAS_BACKEND:
+    from .._base_attentive import BaseAttentive # noqa
+    from ._halnet import HALNet
     from ._xtft import XTFT, SuperXTFT  # noqa: F401
-    __all__.extend([
-        "XTFT",
-        "SuperXTFT",
-    ])
+    from .utils import plot_history_in
+    
 else:
     warnings.warn(
         "TensorFlow not installed. XTFT and SuperXTFT "
         "require TF and will not be available.",
         ImportWarning
     )
+    
+__all__=[
+    "BaseAttentive", 
+    "HALNet", 
+    "XTFT",
+    "SuperXTFT",
+    "HALNet",
+    "BaseAttentive", 
+    "plot_history_in"
+]
