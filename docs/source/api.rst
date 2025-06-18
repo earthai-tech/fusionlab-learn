@@ -29,7 +29,7 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.load_processed_subsidence_data
    ~fusionlab.datasets.load_subsidence_pinn_data
 
-**Generation Functions** (`fusionlab.datasets.make`)
+**Generation Functions** (`fusionlab.datasets`)
 
 .. autosummary::
    :toctree: _autosummary/datasets_make
