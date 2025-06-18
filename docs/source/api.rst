@@ -41,24 +41,6 @@ time series data for testing and demonstration.
    <hr>
 
 
-Physic-Informed Models (`fusionlab.nn.pinn`)
---------------------------------------------------------
-Fusion models that integrate physical laws into the training process.
-
-.. autosummary::
-   :toctree: _autosummary/models
-   :nosignatures:
-
-   ~fusionlab.nn.pinn.TransFlowSubsNet
-   ~fusionlab.nn.pinn.models.PIHALNet
-   ~fusionlab.nn.pinn.PiHALNet
-   ~fusionlab.nn.pinn.PiTGWFlow
-   
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
-
 Neural Network Utilities (`fusionlab.nn.utils`)
 ------------------------------------------------
 Utilities specifically for preparing data for or interacting with neural network models.
