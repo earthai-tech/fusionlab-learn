@@ -11,8 +11,7 @@ in the package.
 
 .. raw:: html
 
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
+   <hr>
 
 Transformer Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
@@ -88,7 +87,6 @@ Components primarily focused on processing temporal sequences.
    ~fusionlab.nn.components.aggregate_time_window_output
    ~fusionlab.nn.components.create_causal_mask
 
-
 Attention Mechanisms (`fusionlab.nn.components`)
 -------------------------------------------------
 Various attention layers used in Fusion Model architectures.
@@ -104,7 +102,6 @@ Various attention layers used in Fusion Model architectures.
    ~fusionlab.nn.components.MultiResolutionAttentionFusion
    ~fusionlab.nn.components.ExplainableAttention
 
-
 Embedding & Output Components (`fusionlab.nn.components`)
 ---------------------------------------------------------
 Layers for input embedding and generating final model outputs.
@@ -117,7 +114,6 @@ Layers for input embedding and generating final model outputs.
    ~fusionlab.nn.components.MultiDecoder
    ~fusionlab.nn.components.QuantileDistributionModeling
 
-
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
@@ -126,8 +122,8 @@ Losses (`fusionlab.nn.components` & `fusionlab.nn.losses`)
 -------------------------------------------------------------
 Losses tailored for time series forecasting and anomaly detection.
 
-**Loss Components** (`fusionlab.nn.components`)
-
+Loss Components (`fusionlab.nn.components`)
+********************************************
 These classes implement composite or parameterized loss behaviors.
 
 .. autosummary::
@@ -138,8 +134,8 @@ These classes implement composite or parameterized loss behaviors.
    ~fusionlab.nn.components.AnomalyLoss
    ~fusionlab.nn.components.MultiObjectiveLoss
 
-**Loss Functions** (`fusionlab.nn.losses`)
-
+Loss Functions** (`fusionlab.nn.losses`)
+******************************************
 Pure functions for computing scalar losses on predictions.
 
 .. autosummary::
@@ -248,7 +244,6 @@ parameters to be discovered during training.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-   
 Metrics (`fusionlab.metrics`)
 -------------------------------
 A collection of metrics for evaluating forecast accuracy, calibration,
@@ -274,9 +269,14 @@ time-series forecasting.
 
    <hr>
    
+Visualization (`fusionlab.plot`)
+------------------------------------
+A suite of plotting functions for visualizing time-series forecasts—enabling
+easy comparison of predictions with actual observations and detailed inspection
+of results at each forecast step or over specified horizons.
 
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
-------------------------------------------------------
+*********************************************************
 A curated set of plotting utilities that turn the raw numbers returned  
 by `fusionlab.metrics` into clear, publication‑quality figures.  
 They cover point‑forecast accuracy, interval **sharpness & coverage**,  
@@ -299,13 +299,8 @@ time‑series / probabilistic‑forecast workflows.
    ~fusionlab.plot.evaluation.plot_time_weighted_metric
    ~fusionlab.plot.evaluation.plot_weighted_interval_score
 
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
-
 Quick‑look forecast helpers (`fusionlab.plot.forecast`)
----------------------------------------------------------
+*********************************************************
 Light‑weight plotting utilities that turn a long‑format forecast
 DataFrame (as returned by
 :func:fusionlab.nn.utils.format_predictions_to_dataframe) into clear,
@@ -320,8 +315,13 @@ side‑by‑side figures for rapid inspection.
    ~fusionlab.plot.forecast.plot_forecast_by_step
    ~fusionlab.plot.forecast.visualize_forecasts
 
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+
 Data Processing Utilities (`fusionlab.utils`)
--------------------------------------------------
+------------------------------------------------------
 A collection of helpers for data manipulation, feature engineering,
 and preparing data for models.
 
