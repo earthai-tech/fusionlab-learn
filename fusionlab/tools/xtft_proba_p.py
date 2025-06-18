@@ -36,42 +36,70 @@ Dependencies:
 - Python 3.7+
 - pandas
 - numpy
-- scikeras
 - scikit-learn
 - tensorflow
 - matplotlib
 - joblib
-- gofast
+
 
 Ensure all dependencies are installed before running the script.
 
 """
 
 import os
+import sys
 import argparse
 import warnings
 import logging
-
-import pandas as pd
-import numpy as np
 import joblib
+import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
-import tensorflow as tf
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from fusionlab.nn.tft import XTFT
-import gofast as gf
+try:
+    from fusionlab.nn import KERAS_BACKEND, KERAS_DEPS
+    from fusionlab.nn.models import XTFT
+    from fusionlab._fusionlog import fusionlog
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger(__name__)
+    EarlyStopping = KERAS_DEPS.EarlyStopping
+    ModelCheckpoint = KERAS_DEPS.ModelCheckpoint
+    
+    logger = fusionlog().get_fusionlab_logger(__name__)
+
+except ImportError as e:
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.error(
+        f"Error importing fusionlab modules: {e}. "
+        "Please ensure 'fusionlab-learn' is correctly installed."
+    )
+    sys.exit(1)
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore', category=UserWarning)
+
+# Safely get package versions for reference
+pkgs_versions = {
+    "numpy": np.__version__,
+    "pandas": pd.__version__,
+    "scikit-learn": "N/A",
+    "joblib": joblib.__version__,
+    "tensorflow": "N/A",
+    "matplotlib": mpl.__version__,
+}
+try:
+    import sklearn
+    import fusionlab
+    pkgs_versions["scikit-learn"] = sklearn.__version__
+    pkgs_versions["fusionlab"] = fusionlab.__version__
+    if KERAS_BACKEND:
+        import tensorflow as tf 
+        pkgs_versions["tensorflow"] = tf.__version__
+except ImportError:
+    pass
 
 target = 'subsidence'
 
@@ -184,17 +212,11 @@ def preprocess_data(final_data, data_path):
             "numerical_scaler": numerical_scaler,
             "categorical_scaler": encoder,
             'lonlat_scaler': long_lat_scaler,
-            "__version__": {
-                "numpy": np.__version__,
-                "pandas": pd.__version__,
-                "scikit-learn": gf.__version__,
-                "joblib": joblib.__version__,
-                "tensorflow": tf.__version__,
-                "gofast": gf.__version__,
-                "matplotlib": mpl.__version__,
-                # "scikeras": scikeras.__version__,
-            }
+            "__version__": pkgs_versions 
+            
         }
+        
+        
         joblib.dump(dict_scalers, target_scaler_path)
         logger.info("Combined scalers saved to: %s", target_scaler_path)
 
@@ -532,16 +554,30 @@ def main(args):
     :param args: Command-line arguments.
     :type args: argparse.Namespace
     """
+    # Guard clause: Ensure the required TensorFlow backend is available.
+    if not KERAS_BACKEND:
+        logger.error(
+            "This script requires TensorFlow to be installed, but it was not "
+            "found. Please install the necessary dependencies."
+        )
+        return  # Exit gracefully
+
+    logger.info("Starting XTFT probabilistic forecasting script...")
+    logger.info(f"Using package versions: {pkgs_versions}")
+    
+    if args.verbose == 0:
+        logger.setLevel(logging.WARNING)
+    elif args.verbose == 2:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
+        
     data_path = args.data_path
     epochs = args.epochs
     batch_size = args.batch_size
     time_steps = args.time_steps
     forecast_horizon = args.forecast_horizon
     quantiles = args.quantiles
-
-    # Suppress warnings for clarity
-    warnings.filterwarnings('ignore')
-    tf.get_logger().setLevel('ERROR')
 
     # Load data
     final_data = load_data(data_path)
@@ -556,7 +592,7 @@ def main(args):
     ]
     static_features = ['longitude', 'latitude'] + encoded_cat_columns
     dynamic_features = ['GWL', 'soil_thickness', 'soil_quality', 'subsidence']
-    target = 'subsidence'
+
 
     # Create sequences
     static_input, dynamic_input, future_covariate_input, target_output = create_sequences(
@@ -587,7 +623,7 @@ def main(args):
     )
 
     # Train model
-    history = train_model(
+    train_model(
         model,
         [X_train_static, X_train_dynamic, X_train_future_covariate],
         y_train,
@@ -640,9 +676,14 @@ def main(args):
     visualize_predictions(future_data, quantiles, data_path)
 
 if __name__ == "__main__":
+    # --- Argument Parser for verbosity ---
     parser = argparse.ArgumentParser(
-        description="XTFT Probabilistic Prediction Tool using Quantiles."
+        description="XTFT Probabilistic Forecasting Script.")
+    parser.add_argument(
+        "--verbose", type=int, default=1, choices=[0, 1, 2],
+        help="Set the verbosity level (0: WARNING, 1: INFO, 2: DEBUG)."
     )
+
     parser.add_argument(
         '--data_path',
         type=str,

@@ -1,3 +1,7 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: Daniel
+
 """
 tft_batch_prediction.py
 ========================
@@ -41,54 +45,71 @@ perform TFT-based subsidence predictions.
 **Date:** 2024-12-17
 """
 
-# =============================================================================
-# Importing necessary libraries
-# =============================================================================
 import os
+import sys
 import warnings
-from typing import List, Union, Tuple
-
-import pandas as pd
-import numpy as np
 import joblib
+import logging
+import numpy as np
+import pandas as pd
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import scikeras
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler
+from typing import List, Tuple, Union  
+
 from sklearn.model_selection import train_test_split
-from sklearn.model_selection import RandomizedSearchCV
-import tensorflow as tf
-from tensorflow.keras.models import load_model
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, MinMaxScaler
 
-import fusionlab as flab
-from fusionlab.nn.tft import TemporalFusionTransformer
-from fusionlab.utils.spatial_utils import spatial_sampling, batch_spatial_sampling
-from fusionlab.utils.data_utils import pop_labels_in
+from fusionlab._deps import check_backends 
+SKERAS_BACKEND = check_backends('scikeras').get('scikeras')
 
-# =============================================================================
-# Suppress warnings for clarity
-# =============================================================================
-warnings.filterwarnings('ignore')
-tf.get_logger().setLevel('ERROR')
+try:
+    from fusionlab.nn import KERAS_BACKEND, KERAS_DEPS
+    from fusionlab.nn.transformers import TemporalFusionTransformer
+    from fusionlab.utils.spatial_utils import  batch_spatial_sampling
+    from fusionlab.utils.data_utils import pop_labels_in
+    from fusionlab._fusionlog import fusionlog
+    
+    EarlyStopping = KERAS_DEPS.EarlyStopping
+    ModelCheckpoint = KERAS_DEPS.ModelCheckpoint
+    logger = fusionlog().get_fusionlab_logger(__name__)
 
-# =============================================================================
+except ImportError as e:
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    logger.error(
+        f"Error importing fusionlab modules: {e}. "
+        "Please ensure 'fusionlab-learn' is correctly installed."
+    )
+    sys.exit(1)
+
+# Suppress warnings for cleaner output
+warnings.filterwarnings('ignore', category=UserWarning)
+
 # Package versions for reference
-# =============================================================================
 pkgs_versions = {
     "numpy": np.__version__,
     "pandas": pd.__version__,
-    "scikit-learn": flab.__version__,  # Corrected scikit-learn version
+    "scikit-learn": "N/A", 
     "joblib": joblib.__version__,
-    "tensorflow": flab.__version__,
-    "gofast": flab.__version__,
+    "tensorflow": "N/A", 
     "matplotlib": mpl.__version__,
-    'scikeras': scikeras.__version__,
+    "scikeras": 'N/A'
 }
+try:
+    import sklearn
+    pkgs_versions["scikit-learn"] = sklearn.__version__
+    if KERAS_BACKEND:
+        import tensorflow as tf
+        pkgs_versions["tensorflow"] = tf.__version__
+        
+except ImportError:
+    pass
 
-# =============================================================================
-# Data Loading and Encoding Functions
-# =============================================================================
+if SKERAS_BACKEND: 
+    import scikeras 
+    pkgs_versions ['scikeras'] = scikeras.__version__, 
+
+
 def load_final_data(data_path: str) -> pd.DataFrame:
     """
     Load the main dataset into a pandas DataFrame.
@@ -579,6 +600,15 @@ def main():
     """
     Main function to execute the TFT batch prediction workflow.
     """
+    # Guard clause: Check if the required backend is available.
+    if not KERAS_BACKEND:
+        logger.error(
+            "This script requires TensorFlow and Keras to be installed, "
+            "but they were not found. Please install the necessary "
+            "dependencies to proceed."
+        )
+        return # Exit gracefully if the backend is not available
+    
     # Define paths
     data_path = r'C:\Users\Daniel\Documents\zongshan_codes\tft_prediction_ok\new\error_pred_2023'
     n_batches = 5

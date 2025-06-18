@@ -13,7 +13,14 @@ import pandas as pd
 
 from .._fusionlog import fusionlog 
 from ..core.array_manager import drop_nan_in, array_preserver, to_array 
-from ..core.checks import check_empty, ensure_same_shape
+from ..core.checks import ( 
+    check_empty, 
+    ensure_same_shape, 
+    is_valid_dtypes, 
+    exist_labels, 
+    exist_features 
+)
+from ..core.handlers import columns_manager 
 from ..core.io import is_data_readable, SaveFile  
 from ..core.utils import error_policy 
 from ..decorators import Dataify
@@ -26,7 +33,8 @@ logger = fusionlog().get_fusionlab_logger(__name__)
 __all__=[
      'mask_by_reference',
      'nan_ops',
-     'widen_temporal_columns'
+     'widen_temporal_columns', 
+     'pop_labels_in'
      ]
 
 @SaveFile
@@ -1107,3 +1115,164 @@ def mask_by_reference(
         print(f"[mask_by_reference] Distinct matched rows: {distinct_count}")
 
     return df
+
+
+@SaveFile 
+def pop_labels_in(
+    df: pd.DataFrame, 
+    columns: Union[str, List[Any]], 
+    labels: Union [str, List[Any]], 
+    inplace: bool=False, 
+    ignore_missing: bool =False, 
+    as_categories: bool =False, 
+    sort_columns: bool =False, 
+    savefile: str = None, 
+    ):
+    """
+    Remove specific categories (labels) from columns in a dataframe.
+    
+    Parameters:
+    -----------
+    df : pandas.DataFrame
+        The dataframe from which labels will be removed.
+        The DataFrame must contain columns matching the specified
+        `categories` parameter to remove the corresponding labels.
+
+    columns : str or list of str
+        The category column(s) to check for labels and remove them.
+        This can be a single column name or a list of column names.
+
+    labels : str or list of str
+        The labels (categories) to be removed from the specified
+        `categories` columns. These will be matched exactly as values 
+        within the columns.
+
+    inplace : bool, optional, default=False
+        If ``True``, the dataframe will be modified in place and no new 
+        dataframe will be returned. Otherwise, a new dataframe with 
+        the labels removed will be returned.
+
+    ignore_missing : bool, optional, default=False
+        If ``True``, missing category columns or labels will be ignored and 
+        no error will be raised. If ``False``, an error will be raised if 
+        a specified column or label is missing in the DataFrame.
+
+    as_categories : bool, optional, default=False
+        If ``True``, the selected category columns will be converted to 
+        pandas `Categorical` type before removing the labels.
+
+    sort_categories : bool, optional, default=False
+        If ``True``, the categories will be sorted in ascending order 
+        before processing.
+
+    Returns
+    --------
+    pandas.DataFrame
+        A DataFrame with the specified labels removed from the category columns.
+        If ``inplace=True``, the original DataFrame will be modified and 
+        no DataFrame will be returned.
+
+    Notes
+    ------
+    - The `pop_labels_in` function removes the specified labels from the 
+      `categories` column(s) in the DataFrame. If ``inplace=True``, the 
+      DataFrame will be modified directly.
+    - This function checks if the columns exist before removing the labels, 
+      unless `ignore_missing=True` is specified.
+    - If ``as_categories=True``, the columns are first converted to 
+      pandas `Categorical` type before proceeding with label removal.
+
+    Let the input DataFrame be represented as `df`, with columns 
+    represented by `C_1, C_2, ..., C_n`. Each of these columns 
+    contains labels, some of which may need to be removed.
+
+    If `labels = {l_1, l_2, ..., l_k}` is the set of labels to remove, 
+    for each column `C_i` in `categories`, the process is:
+    
+    .. math::
+        C_i := C_i \setminus \{ l_1, l_2, ..., l_k \}
+    
+    Where `\setminus` represents the set difference operation.
+
+    Examples:
+    ---------
+    >>> import pandas as pd 
+    >>> from gofast.utils.data_utils import pop_labels_in
+    >>> df = pd.DataFrame({'category': ['A', 'B', 'C', 'A', 'D']})
+    >>> df_result = pop_labels_in(df, 'category', 'A')
+    >>> print(df_result)
+       category
+    0        B
+    1        C
+    2        D
+
+    See Also:
+    ---------
+    - `columns_manager`: For managing category columns.
+    - `are_all_frames_valid`: Ensures the dataframe is valid.
+    
+    References:
+    ----------
+    .. [1] John Doe, "Data Processing for Machine Learning," 
+          Journal of Data Science, 2023.
+    """
+
+    # Step 1: Validate the input dataframe and check whether it is valid.
+    are_all_frames_valid(df, df_only=True)  # Ensure that the dataframe is valid.
+    
+    # Step 2: Ensure that categories and labels are formatted correctly as lists.
+    columns = columns_manager(columns, empty_as_none=False)
+    labels = columns_manager(labels, empty_as_none=False)
+    
+    # Step 3: Optionally sort the categories in ascending order
+    if sort_columns:
+        columns = sorted(columns)
+    
+    # Step 4: Create a copy of the dataframe if not modifying in place
+    df_copy = df.copy() if not inplace else df
+    
+    # Step 5: Ensure the columns provided for categories exist in the dataframe
+    # and that the labels are present in these columns.
+    exist_features(df, features=columns, name="Category columns")
+    exist_labels(
+        df, labels=labels, 
+        features=columns, 
+        as_categories=as_categories, 
+        name="Label columns"
+    )
+    if columns is None: 
+        columns = is_valid_dtypes(
+            df, features=df.columns,
+            dtypes='category', 
+            treat_obj_dtype_as_category=True, 
+            ops='validate', 
+            ).get('category')
+        
+        if not columns: 
+            raise TypeError("No categorical columns detected.")
+            
+    # Step 6: If `as_categories` is True, convert the categories columns 
+    # to pandas 'category' dtype
+    original_dtype = df[columns].dtypes
+    if as_categories:
+        df[columns] = df[columns].astype('category')
+        
+    # Step 7: Process each column in categories and filter out rows 
+    # with the specified labels
+    for col in columns:
+        # Check if the column exists in the dataframe
+        if col not in df_copy.columns:
+            if not ignore_missing:
+                raise ValueError(f"Column '{col}' not found in dataframe.")
+            continue
+        
+        # Remove rows with any of the specified labels from the column
+        for category in labels:
+            df_copy = df_copy[df_copy[col] != category]
+    
+    if as_categories : 
+        # fall-back to original dtypes 
+        df_copy[columns] = df_copy[columns].astype(original_dtype)
+        
+    # Step 8: Return the modified dataframe
+    return df_copy
