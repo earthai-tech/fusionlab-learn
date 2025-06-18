@@ -108,7 +108,6 @@ time‑series / probabilistic‑forecast workflows.
    ~fusionlab.plot.evaluation.plot_theils_u_score
    ~fusionlab.plot.evaluation.plot_time_weighted_metric
    ~fusionlab.plot.evaluation.plot_weighted_interval_score
-   ~fusionlab.nn.models.utils.plot_history_in
 
 .. raw:: html
 
