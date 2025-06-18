@@ -65,19 +65,6 @@ General utilities for time series data processing, analysis, and feature enginee
    ~fusionlab.utils.ts_utils.ts_outlier_detector
    ~fusionlab.utils.ts_utils.select_and_reduce_features
 
-Data Processing Utilities (`fusionlab.utils`)
--------------------------------------------------
-A collection of helpers for data manipulation, feature engineering,
-and preparing data for models.
-
-.. autosummary::
-   :toctree: _autosummary/utils
-   :nosignatures:
-
-   ~fusionlab.utils.spatial_utils.create_spatial_clusters
-   ~fusionlab.utils.spatial_utils.batch_spatial_sampling
-   ~fusionlab.utils.spatial_utils.spatial_sampling
- 
 
    
 Command-Line Tools (`fusionlab.tools`)
