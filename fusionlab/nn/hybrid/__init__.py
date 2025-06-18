@@ -6,7 +6,6 @@ import warnings
 from .. import KERAS_BACKEND 
 
 if KERAS_BACKEND:
-    from .._base_attentive import BaseAttentive # noqa
     from ._halnet import HALNet
     from ._xtft import XTFT, SuperXTFT  # noqa: F401
     from .utils import plot_history_in
@@ -19,7 +18,6 @@ else:
     )
     
 __all__=[
-    "BaseAttentive", 
     "HALNet", 
     "XTFT",
     "SuperXTFT",

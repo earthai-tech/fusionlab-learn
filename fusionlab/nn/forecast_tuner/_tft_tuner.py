@@ -34,7 +34,6 @@ from typing import (
 )
 import numpy as np
 
-from ..__init__ import config
 from ...api.docs import _tuner_common_params, DocstringComponents 
 from ...api.summary import ResultSummary 
 from ...compat.sklearn import validate_params, Interval
@@ -44,15 +43,11 @@ from ...core.io import _get_valid_kwargs
 from ...utils.deps_utils import ensure_pkg
 from ...utils.generic_utils import vlog
 
+from .._config import Config
 from .._tensor_validation import validate_model_inputs
 from .. import KERAS_DEPS, dependency_message
 from ..losses import combined_quantile_loss
 from ._tft_base_tuner import CASE_INFO, DEFAULT_PS, BaseTuner
-from ..transformers import (
-    TemporalFusionTransformer as TFTFlexible, 
-    TFT as TFTStricter 
-)
-from ..models import XTFT, SuperXTFT 
 
 from . import KT_DEPS, HAS_KT
 
@@ -368,8 +363,8 @@ References
 @ensure_pkg(
     'keras_tuner',
     extra="'keras_tuner' is required for model tuning.",
-    auto_install=config.INSTALL_DEPS,
-    use_conda=config.USE_CONDA
+    auto_install=Config.INSTALL_DEPS,
+    use_conda=Config.USE_CONDA
 )
 @param_deprecated_message(
     conditions_params_mappings=[
@@ -824,7 +819,7 @@ def tft_tuner(
     )
 
 def _model_builder_factory(
-    hp: "kt.HyperParameters",
+    hp: "HyperParameters",
     model_name_lower: str, # Expects lowercase
     # These are the validated inputs in S, D, F order
     X_static_val: Optional[Tensor],
@@ -837,6 +832,14 @@ def _model_builder_factory(
     Builds and compiles a model instance for Keras Tuner.
     (Full docstring omitted for brevity)
     """
+    # ******************************************************
+    from ..transformers import (
+        TemporalFusionTransformer as TFTFlexible, 
+        TFT as TFTStricter 
+    )
+    from ..models import XTFT, SuperXTFT 
+    # ******************************************************
+    
     # --- Base parameters common to most models ---
     params = {
         "forecast_horizon": case_info_param.get("forecast_horizon"),

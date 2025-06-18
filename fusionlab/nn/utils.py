@@ -23,7 +23,7 @@ from ._utils import (
     step_to_long
     )
 
-from .models.utils import plot_history_in 
+from .hybrid.utils import plot_history_in 
 from .pinn.utils import ( 
     prepare_pinn_data_sequences, 
     format_pinn_predictions, 

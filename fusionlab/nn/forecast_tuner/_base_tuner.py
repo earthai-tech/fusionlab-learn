@@ -17,7 +17,8 @@ from ...api.property import BaseClass
 from ...utils.generic_utils import vlog, rename_dict_keys  
 from ...utils.deps_utils import ensure_pkg
  
-from .. import KERAS_DEPS, config 
+from .. import KERAS_DEPS
+from .._config import Config 
 from . import KT_DEPS, HAS_KT
 
 HyperModel = KT_DEPS.HyperModel
@@ -46,8 +47,8 @@ class PINNTunerBase(HyperModel, BaseClass):
     @ensure_pkg(
         "keras_tuner",
         extra="'keras_tuner' is required for model tuning.",
-        auto_install=config.INSTALL_DEPS, 
-        use_conda=config.USE_CONDA
+        auto_install=Config.INSTALL_DEPS, 
+        use_conda=Config.USE_CONDA
     )
     def __init__(
         self,

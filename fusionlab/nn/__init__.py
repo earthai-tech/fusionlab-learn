@@ -27,6 +27,8 @@ from ._config import (
     configure_dependencies, 
     Config as config
 )
+from .._deps import check_backends 
+_HAS_KT= check_backends('keras_tuner')['keras_tuner']
 
 # Set default configuration
 config.INSTALL_DEPS = False
@@ -38,10 +40,12 @@ EXTRA_MSG = (
     " `keras` library to be installed."
     )
 # Configure and install dependencies if needed
-configure_dependencies(install_dependencies=config.INSTALL_DEPS)
+configure_dependencies(
+    install_dependencies=config.INSTALL_DEPS)
 
 # Lazy-load Keras dependencies
-KERAS_DEPS = import_keras_dependencies(extra_msg=EXTRA_MSG, error='ignore')
+KERAS_DEPS = import_keras_dependencies(
+    extra_msg=EXTRA_MSG, error='ignore')
 
 # Check if TensorFlow or Keras is installed
 KERAS_BACKEND = check_keras_backend(error='ignore')
@@ -61,9 +65,64 @@ def dependency_message(module_name):
         A message indicating the required dependencies.
     """
     return (
-        f"`{module_name}` needs either the `tensorflow` or `keras` package to be "
-        "installed. Please install one of these packages to use this function."
+        f"`{module_name}` needs either the `tensorflow`"
+        " or `keras` package to be installed. Please install"
+        " one of these packages to use this function."
     )
 
+__all__=[]
 
+if KERAS_BACKEND:
+    from .hybrid import ( 
+        HALNet, 
+        XTFT, 
+        SuperXTFT
+     )
+    from .transformers import (
+        TimeSeriesTransformer,
+        TemporalFusionTransformer,
+        TFT,
+        DummyTFT
+     )
+    from .pinn import (
+        PIHALNet,
+        TransFlowSubsNet,
+        PiTGWFlow
+     )
+    __all__=[ 
+        'HALNet',
+        'XTFT',
+        'SuperXTFT',
+
+        'TimeSeriesTransformer',
+        'TemporalFusionTransformer',
+        'TFT',
+        'DummyTFT',
+
+        'PIHALNet',
+        'TransFlowSubsNet',
+        'PiTGWFlow',
+
+    ]
+
+if _HAS_KT: 
+    from .forecast_tuner._tft_tuner import (  # noqa 
+        XTFTTuner,  
+        TFTTuner, 
+    )
+    from .forecast_tuner._pihal_tuner import( # noqa 
+        PiHALTuner as LegacyPiHALTuner  
+        )
+    from .forecast_tuner._hal_tuner import HALTuner # noqa 
+    from .forecast_tuner._hydro_tuner import HydroTuner # noqa 
+    
+    __all__.extend([
+        'HydroTuner',
+        'HALTuner',
+        'XTFTTuner',
+        'TFTTuner',
+        'LegacyPiHALTuner',
+       ]
+     )
+    
     

@@ -23,6 +23,8 @@ from . import KERAS_BACKEND, KERAS_DEPS, dependency_message
 from .comp_utils import resolve_attention_levels 
 
 if KERAS_BACKEND:
+    from .utils import set_default_params
+    from ._tensor_validation import validate_model_inputs
     from .components import (
         Activation, 
         CrossAttention, 
@@ -40,33 +42,22 @@ if KERAS_BACKEND:
         aggregate_multiscale_on_3d, 
         aggregate_time_window_output
     )
-    from .utils import set_default_params
-    from ._tensor_validation import validate_model_inputs
-  
-    Add =KERAS_DEPS.Add 
-    Dense= KERAS_DEPS.Dense 
-    Tensor = KERAS_DEPS.Tensor
-    Layer=KERAS_DEPS.Layer
-    LayerNormalization=KERAS_DEPS.LayerNormalization
-    LSTM=KERAS_DEPS.LSTM
-    Model=KERAS_DEPS.Model
-    tf_shape = KERAS_DEPS.shape
-    tf_concat = KERAS_DEPS.concat
-    tf_zeros = KERAS_DEPS.zeros
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
-    tf_assert_equal = KERAS_DEPS.debugging.assert_equal
-else:
-    class Model: pass
-    class Layer: pass
-    class _DummyRegister_keras_serializable: 
-        def __init__(self, *args, **kwargs): 
-            pass
-    class KERAS_DEPS: 
-        register_keras_serializable = _DummyRegister_keras_serializable
-        
-    Tensor = Any
+    
+Add =KERAS_DEPS.Add 
+Dense= KERAS_DEPS.Dense 
+Tensor = KERAS_DEPS.Tensor
+Layer=KERAS_DEPS.Layer
+LayerNormalization=KERAS_DEPS.LayerNormalization
+register_keras_serializable= KERAS_DEPS.register_keras_serializable 
+LSTM=KERAS_DEPS.LSTM
+Model=KERAS_DEPS.Model
+tf_shape = KERAS_DEPS.shape
+tf_concat = KERAS_DEPS.concat
+tf_zeros = KERAS_DEPS.zeros
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+tf_assert_equal = KERAS_DEPS.debugging.assert_equal
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
