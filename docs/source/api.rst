@@ -56,51 +56,6 @@ Fusion models that integrate physical laws into the training process.
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-   
-Core Neural Network Components (`fusionlab.nn.components`)
------------------------------------------------------------
-Reusable building blocks for feature selection, sequence processing,
-attention, and output generation used within the forecasting models.
-
-.. autosummary::
-   :toctree: _autosummary/components_core
-   :nosignatures:
-
-   ~fusionlab.nn.components.GatedResidualNetwork
-   ~fusionlab.nn.components.VariableSelectionNetwork
-   ~fusionlab.nn.components.PositionalEncoding
-   ~fusionlab.nn.components.StaticEnrichmentLayer
-   ~fusionlab.nn.components.LearnedNormalization
-   ~fusionlab.nn.components.PositionwiseFeedForward
-
-Sequence Processing Components (`fusionlab.nn.components`)
------------------------------------------------------------
-Components primarily focused on processing temporal sequences.
-
-.. autosummary::
-   :toctree: _autosummary/components_seq
-   :nosignatures:
-
-   ~fusionlab.nn.components.MultiScaleLSTM
-   ~fusionlab.nn.components.DynamicTimeWindow
-   ~fusionlab.nn.components.aggregate_multiscale
-   ~fusionlab.nn.components.aggregate_multiscale_on_3d
-   ~fusionlab.nn.components.aggregate_time_window_output
-   ~fusionlab.nn.components.create_causal_mask
-
-
-Embedding & Output Components (`fusionlab.nn.components`)
----------------------------------------------------------
-Layers for input embedding and generating final model outputs.
-
-.. autosummary::
-   :toctree: _autosummary/components_io
-   :nosignatures:
-
-   ~fusionlab.nn.components.MultiModalEmbedding
-   ~fusionlab.nn.components.MultiDecoder
-   ~fusionlab.nn.components.QuantileDistributionModeling
-
 
 
 .. raw:: html
