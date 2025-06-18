@@ -153,7 +153,8 @@ if __name__ + ".kdiagram" not in sys.modules:
     sys.modules[__name__ + ".kdiagram"] = _dummy_kd
 
 from . import metrics 
-__all__.extend (['metrics']) 
+from . import datasets 
+__all__.extend (['metrics', 'datasets']) 
 
 def __getattr__(name: str):
     """
