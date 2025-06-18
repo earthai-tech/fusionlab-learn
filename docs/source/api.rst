@@ -41,22 +41,6 @@ time series data for testing and demonstration.
    <hr>
 
 
-Quick‑look forecast helpers (`fusionlab.plot.forecast`)
----------------------------------------------------------
-Light‑weight plotting utilities that turn a long‑format forecast
-DataFrame (as returned by
-:func:fusionlab.nn.utils.format_predictions_to_dataframe) into clear,
-side‑by‑side figures for rapid inspection.
- 
-.. autosummary::
-   :toctree: _autosummary/forecast
-   :nosignatures:
-
-   ~fusionlab.plot.forecast.forecast_view
-   ~fusionlab.plot.forecast.plot_forecasts
-   ~fusionlab.plot.forecast.plot_forecast_by_step
-   ~fusionlab.plot.forecast.visualize_forecasts
-
 Time Series Utilities (`fusionlab.utils.ts_utils`)
 -----------------------------------------------------
 General utilities for time series data processing, analysis, and feature engineering.
