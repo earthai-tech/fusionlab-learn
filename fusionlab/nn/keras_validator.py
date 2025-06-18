@@ -12,13 +12,12 @@ from typing import Any, Callable, Optional
 
 from ..utils.validator import has_required_attributes
 from ..utils.deps_utils import ensure_pkg
-from . import KERAS_DEPS,  KERAS_BACKEND, dependency_message
+from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 
-if KERAS_BACKEND: 
-    Layer=KERAS_DEPS.Layer
-    Loss=KERAS_DEPS.Loss 
-    Model= KERAS_DEPS.Model 
-    Sequential=KERAS_DEPS.Sequential
+Layer=KERAS_DEPS.Layer
+Loss=KERAS_DEPS.Loss 
+Model= KERAS_DEPS.Model 
+Sequential=KERAS_DEPS.Sequential
     
 DEP_MSG = dependency_message('nn.keras_validator') 
     

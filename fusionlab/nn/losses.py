@@ -13,34 +13,32 @@ from typing import List, Optional
 
 from .._fusionlog import fusionlog
 from ..compat.sklearn import Interval
-from ..compat.tf import optional_tf_function
+
 from ..core.checks import ParamsValidator, check_params
 from ..core.diagnose_q import validate_quantiles_in 
 from ..utils.deps_utils import ensure_pkg
 from ..utils.validator import check_consistent_length 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from .keras_validator import validate_keras_loss 
-from .utils import squeeze_last_dim_if 
 
-if KERAS_BACKEND:
-    K = KERAS_DEPS.backend
-    Loss=KERAS_DEPS.Loss
-    Tensor=KERAS_DEPS.Tensor 
-    tf_abs=KERAS_DEPS.abs
-    tf_reduce_mean=KERAS_DEPS.reduce_mean 
-    tf_square=KERAS_DEPS.square 
-    tf_reshape=KERAS_DEPS.reshape 
-    tf_convert_to_tensor=KERAS_DEPS.convert_to_tensor 
-    tf_expand_dims=KERAS_DEPS.expand_dims
-    tf_maximum=KERAS_DEPS.maximum
-    tf_rank=KERAS_DEPS.rank 
-    tf_cond =KERAS_DEPS.cond 
-    tf_constant =KERAS_DEPS.constant 
-    tf_equal = KERAS_DEPS.equal 
-    tf_cast=KERAS_DEPS.cast 
-    tf_zeros_like=KERAS_DEPS.zeros_like
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
+K = KERAS_DEPS.backend
+Loss=KERAS_DEPS.Loss
+Tensor=KERAS_DEPS.Tensor 
+
+tf_abs=KERAS_DEPS.abs
+tf_reduce_mean=KERAS_DEPS.reduce_mean 
+tf_square=KERAS_DEPS.square 
+tf_reshape=KERAS_DEPS.reshape 
+tf_convert_to_tensor=KERAS_DEPS.convert_to_tensor 
+tf_expand_dims=KERAS_DEPS.expand_dims
+tf_maximum=KERAS_DEPS.maximum
+tf_rank=KERAS_DEPS.rank 
+tf_cond =KERAS_DEPS.cond 
+tf_constant =KERAS_DEPS.constant 
+tf_equal = KERAS_DEPS.equal 
+tf_cast=KERAS_DEPS.cast 
+tf_zeros_like=KERAS_DEPS.zeros_like
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
     
 DEP_MSG = dependency_message('nn.losses') 
 

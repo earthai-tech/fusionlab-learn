@@ -16,9 +16,9 @@ import numpy as np
 from functools import wraps
 from contextlib import contextmanager 
 from typing import Callable, Optional, Any, Union 
+from .._configs import TENSORFLOW_CONFIG
 
 # --- TensorFlow Setup ---
-
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 # 0 = all messages are logged (default)
@@ -111,7 +111,6 @@ __all__ = [
     'has_wrappers'
 ]
 
-
 class KerasDependencies:
     def __init__(
         self,
@@ -149,165 +148,27 @@ class KerasDependencies:
         self,
         name
     ):
-        standalone_mapping = {
-            'Assert': ('tensorflow', 'Assert'), 
-            'TensorShape': ('tensorflow', 'TensorShape'), 
-            'Tensor': ('tensorflow', 'Tensor'), 
-            'Variable': ('tensorflow', 'Variable'), 
-            'GradientTape':('tensorflow', 'GradientTape'),
-            'Dataset': ('tensorflow.data', 'Dataset'),
-            'AUTOTUNE': ('tensorflow.data', 'AUTOTUNE'),
-            
-            'reduce_mean': ('tensorflow', 'reduce_mean'),
-            'reduce_sum': ('tensorflow', 'reduce_sum'),
-            'reduce_all': ('tensorflow', 'reduce_all'),
-            'reduce_max': ('tensorflow', 'reduce_max'),
-            'repeat': ('tensorflow', 'repeat'), 
-            'rank': ('tensorflow', 'rank'), 
-            'zeros': ('tensorflow', 'zeros'),
-            'zeros_like': ('tensorflow', 'zeros_like'), 
-            'stack': ('tensorflow', 'stack'), 
-            'reshape': ('tensorflow', 'reshape'), 
-            'tile': ('tensorflow', 'tile'), 
-            'concat': ('tensorflow', 'concat'),
-            'unstack': ('tensorflow', 'unstack'), 
-            'errors': ('tensorflow', 'errors'), 
-            'expand_dims': ('tensorflow', 'expand_dims'), 
-            'shape': ('tensorflow', 'shape'), 
-            'square': ('tensorflow.math', 'square'),
-            'is_nan': ('tensorflow.math', 'is_nan'), 
-            'set_seed':('tensorflow.random', 'set_seed'), 
-            'add_n': ('tensorflow.math', 'add_n'), 
-            'maximum':('tensorflow.math', 'maximum'),
-            'minimum':('tensorflow.math', 'minimum'), 
-            'backend': ('tensorflow.keras', 'backend'), 
-            'activations': ('tensorflow.keras', 'activations'), 
-            'add': ('tensorflow.math', 'add'), 
-            'range':('tensorflow', 'range'), 
-            'convert_to_tensor': ('tensorflow', 'convert_to_tensor'), 
-            'transpose': ('tensorflow', 'transpose'), 
-            'cast': ('tensorflow', 'cast'), 
-            'pad': ('tensorflow', 'pad'), 
-            'abs': ('tensorflow', 'abs'), 
-            'float32': ('tensorflow', 'float32'), 
-            'int32': ('tensorflow', 'int32'), 
-            'less': ('tensorflow', 'less'), 
-            'autograph': ('tensorflow', 'autograph'), 
-            'zeros': ('tensorflow', 'zeros'),
-            'multiply': ('tensorflow', 'multiply'), 
-            'get_static_value':('tensorflow', 'get_static_value'),
-            'equal': ('tensorflow', 'equal'), 
-            'debugging': ('tensorflow', 'debugging'), 
-            'assert_equal': ('tensorflow', 'assert_equal'), 
-            'constant': ('tensorflow', 'constant'), 
-            'subtract': ('tensorflow', 'subtract'), 
-            'regularizers': ('tensorflow.keras', 'regularizers'), 
-            'split': ('tensorflow', 'split'),
-            'gather': ('tensorflow', 'gather'), 
-            'squeeze': ('tensorflow', 'squeeze'), 
-            'control_dependencies': ('tensorflow', 'control_dependencies'), 
-            'cond': ('tensorflow', 'cond'), 
-            'logical_and': ('tensorflow', 'logical_and'), 
-            'logical_not': ('tensorflow', 'logical_not'), 
-            'logical_or': ('tensorflow', 'logical_or'), 
-            'newaxis': ('tensorflow', 'newaxis'), 
-            'sin': ('tensorflow', 'sin'), 
-            'cos': ('tensorflow', 'cos'), 
-            'pow': ('tensorflow', 'pow'), 
-            'linalg':('tensorflow', 'linalg'), 
-            'floordiv': ('tensorflow.math', 'floordiv'), 
-            'identity':('tensorflow', 'identity'), 
-            'greater_equal': ('tensorflow', 'greater_equal'), 
-            'greater': ('tensorflow', 'greater'), 
-            'bool': ('tensorflow', 'bool'), 
-            'where':('tensorflow', 'where'), 
-            'log': ('tensorflow.math', 'log'), 
-            'exp': ('tensorflow', 'exp'), 
-            'name_scope': ('tensorflow', 'name_scope'), 
-            'random': ('tensorflow', 'random'), 
-            'fill': ('tensorflow', 'fill'), 
-            'print': ('tensorflow', 'print'), 
-            'no_op': ('tensorflow', 'no_op')
-            
-            
-        }
+        """Imports a dependency using the central TENSORFLOW_CONFIG."""
+        if name in TENSORFLOW_CONFIG:
+            module_info = TENSORFLOW_CONFIG[name]
 
-        mapping = {
-            **standalone_mapping,
-            'Model': ('models', 'Model'),
-            'Add': ('layers', 'Add'), 
-            'Activation': ('layers', 'Activation'), 
-            'Layer': ('layers', 'Layer'), 
-            'ELU': ('layers', 'ELU'), 
-            'LayerNormalization': ('layers', 'LayerNormalization'), 
-            'TimeDistributed': ('layers', 'TimeDistributed'),
-            'Softmax': ('layers', 'Softmax'), 
-            'MultiHeadAttention': ('layers', 'MultiHeadAttention'), 
-            'Sequential': ('models', 'Sequential'),
-            'Dense': ('layers', 'Dense'),
-            'Dropout': ('layers', 'Dropout'),
-            'BatchNormalization': ('layers', 'BatchNormalization'),
-            'LSTM': ('layers', 'LSTM'),
-            'LSTMCell':('layers', 'LSTMCell'), 
-            'Input': ('layers', 'Input'),
-            'InputLayer': ('layers', 'InputLayer'), 
-            'Conv2D': ('layers', 'Conv2D'),
-            'Conv1D': ('layers', 'Conv1D'),
-            'Constant': ('initializers', 'Constant'), 
-            'Optimizer':('optimizers', 'Optimizer'), 
-            'Metric': ('metrics', 'Metric'), 
-            'MaxPooling2D': ('layers', 'MaxPooling2D'),
-            'MaxPooling1D': ('layers', 'MaxPooling1D'),
-            'GlobalAveragePooling1D': ('layers', 'GlobalAveragePooling1D'), 
-            'GlobalAveragePooling2D': ('layers', 'GlobalAveragePooling2D'), 
-            'Flatten': ('layers', 'Flatten'),
-            'Attention': ('layers', 'Attention'),
-            'Concatenate': ('layers', 'Concatenate'),
-            'Adam': ('optimizers', 'Adam'),
-            'SGD': ('optimizers', 'SGD'),
-            'RMSprop': ('optimizers', 'RMSprop'),
-            'mnist': ('datasets', 'mnist'),
-            'cifar10': ('datasets', 'cifar10'),
-            'Loss': ('losses', 'Loss'),
-            'mean_squared_error': ('losses', 'mean_squared_error'),
-            'categorical_crossentropy': ('losses', 'categorical_crossentropy'),
-            'binary_crossentropy': ('losses', 'binary_crossentropy'),
-            'MeanSquaredError': ('losses', 'MeanSquaredError'), 
-            'MeanAbsoluteError': ('metrics', 'MeanAbsoluteError'), 
-            'K': ('backend', 'K'), 
-            'sum': ('backend', 'sum'),
-            'ones': ('backend', 'ones'),
-            'zeros': ('backend', 'zeros'),
-            'constant': ('backend', 'constant'),
-            'random_normal': ('initializers', 'random_normal'),
-            'glorot_uniform': ('initializers', 'glorot_uniform'),
-            'EarlyStopping': ('callbacks', 'EarlyStopping'),
-            'ModelCheckpoint': ('callbacks', 'ModelCheckpoint'),
-            'Callback': ('callbacks', 'Callback'), 
-            'History': ('callbacks', 'History'), 
-            'TensorBoard': ('callbacks', 'TensorBoard'),
-            'LearningRateScheduler': ('callbacks', 'LearningRateScheduler'),
-            'ReduceLROnPlateau': ('callbacks', 'ReduceLROnPlateau'), 
-            'Embedding': ('layers', 'Embedding'), 
-            'clone_model': ('models', 'clone_model'),
-            'load_model': ('models', 'load_model'),
-            'RepeatVector': ('layers', 'RepeatVector'), 
-            'Bidirectional': ('layers', 'Bidirectional'), 
-            "register_keras_serializable": (saving_module, "register_keras_serializable"),
-            "deserialize_keras_object": (saving_module, "deserialize_keras_object"),
-        }
+            # If the entry is a single tuple, it has one path.
+            # If it's a tuple of tuples, it has multiple fallback paths.
+            if isinstance(
+                    module_info, tuple
+                    ) and isinstance(module_info[0], str):
+                module_name, function_name = module_info
+                return import_keras_function(
+                    module_name, function_name, error=self.error)
+            else: # It's a tuple of potential paths
+                 return import_keras_function(
+                     module_info, name, error=self.error)
 
-        if name in mapping:
-            module_name, function_name = mapping[name]
-            return import_keras_function(
-                module_name,
-                function_name,
-                error=self.error
-            )
         raise AttributeError(
-            f"'KerasDependencies' object has no attribute '{name}'"
+            f"'KerasDependencies' object has no attribute '{name}'. "
+            "Ensure it is defined in `fusionlab/_configs.py`."
         )
-  
+        
 class TFConfig:
     """
     A configuration class that manages TensorFlow's dimension compatibility 
@@ -451,6 +312,55 @@ Config = TFConfig()
 # ------------------------------------------------
 
 def import_keras_function(
+        module_path_info, 
+        function_name,
+        error='warn'
+    ):
+    """
+    Attempts to import a function from a list of possible module paths.
+    """
+    if isinstance(module_path_info, str):
+        # If only one path is provided, wrap it in a list
+        paths_to_try = [(module_path_info, function_name)]
+    elif isinstance(module_path_info, tuple) and isinstance(
+            module_path_info[0], str):
+        # Handle single tuple case
+        paths_to_try = [module_path_info]
+    else: # It's a tuple of tuples
+        paths_to_try = module_path_info
+
+    for module_name, func_name in paths_to_try:
+        try:
+            # Handle standalone TensorFlow functions
+            if module_name.startswith('tensorflow'):
+                tf_module = importlib.import_module(module_name)
+                return getattr(tf_module, func_name)
+            
+            # Try importing from tensorflow.keras first
+            tf_keras_module = importlib.import_module(
+                f'tensorflow.keras.{module_name}')
+            return getattr(tf_keras_module, func_name)
+            
+        except ImportError:
+            # Fallback to standalone Keras
+            try:
+                keras_module = importlib.import_module(
+                    f'keras.{module_name}')
+                return getattr(keras_module, func_name)
+            except ImportError:
+                continue # Try the next path in the list
+                
+    # If all paths fail
+    msg = (f"Cannot import '{function_name}' from any of the specified paths:"
+           f" {paths_to_try}. Ensure TensorFlow or Keras is installed.")
+    if error == 'raise':
+        raise ImportError(msg)
+    elif error == 'warn':
+        warnings.warn(msg)
+    return None
+
+
+def _import_keras_function(
     module_name,
     function_name,
     error='warn'

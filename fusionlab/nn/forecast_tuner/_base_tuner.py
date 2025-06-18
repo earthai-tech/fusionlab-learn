@@ -17,69 +17,32 @@ from ...api.property import BaseClass
 from ...utils.generic_utils import vlog, rename_dict_keys  
 from ...utils.deps_utils import ensure_pkg
  
-from .. import KERAS_BACKEND, KERAS_DEPS, config 
+from .. import KERAS_DEPS, config 
+from . import KT_DEPS, HAS_KT
 
-# Keras Tuner is an optional dependency
-HAS_KT = False
-try:
-    import keras_tuner as kt
-    HAS_KT = True
-except ImportError:
-    # Define dummy kt.HyperModel for type hinting and structure
-    # if keras_tuner is not installed. The ensure_pkg decorator
-    # will handle the runtime error if it's actually used.
-    class HyperModel:
-        def __init__(self, *args, **kwargs): pass
-        def build(self, hp): raise NotImplementedError()
+HyperModel = KT_DEPS.HyperModel
+Tuner = KT_DEPS.Tuner
+RandomSearch = KT_DEPS.RandomSearch
+KT_DEPS.BayesianOptimization
+BayesianOptimization = KT_DEPS.Hyperband
+HyperParameters = KT_DEPS.HyperParameters
+Objective = KT_DEPS.Objective
+Hyperband = KT_DEPS.Hyperband
 
-    class Tuner: # Dummy base for kt.Tuner
-        def __init__(self, *args, **kwargs): pass
-        def search(self, *args, **kwargs): pass
-        def results_summary(self, *args, **kwargs): pass
-        def get_best_hyperparameters(self, *args, **kwargs): 
-            return [kt.HyperParameters()]
-        def get_best_models(self, *args, **kwargs): 
-            return [None]
-
-    class RandomSearch(Tuner): pass
-    class BayesianOptimization(Tuner): pass
-    class Hyperband(Tuner): pass
-    class HyperParameters: pass # Dummy
-    class Objective: pass # Dummy
-
-    # Assign to kt namespace
-    kt = type("KT", (), {
-        "HyperModel": HyperModel,
-        "Tuner": Tuner,
-        "RandomSearch": RandomSearch,
-        "BayesianOptimization": BayesianOptimization,
-        "Hyperband": Hyperband,
-        "HyperParameters": HyperParameters,
-        "Objective": Objective
-    })() 
-
-
-if KERAS_BACKEND:
-    Model = KERAS_DEPS.Model
-    Callback = KERAS_DEPS.Callback
-    Dataset = KERAS_DEPS.Dataset 
-    Adam = KERAS_DEPS.Adam
-    EarlyStopping = KERAS_DEPS.EarlyStopping
-    AUTOTUNE =KERAS_DEPS.AUTOTUNE 
+Model = KERAS_DEPS.Model
+Callback = KERAS_DEPS.Callback
+Dataset = KERAS_DEPS.Dataset 
+Adam = KERAS_DEPS.Adam
+EarlyStopping = KERAS_DEPS.EarlyStopping
+AUTOTUNE =KERAS_DEPS.AUTOTUNE 
     
-else:
-    class Model: pass 
-    class Callback: pass 
-    class Adam: pass 
-    class EarlyStopping: pass 
-
 _pinn_tuner_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_pinn_tuner_common_params)
 )
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 
-class PINNTunerBase(kt.HyperModel, BaseClass):
+class PINNTunerBase(HyperModel, BaseClass):
     @ensure_pkg(
         "keras_tuner",
         extra="'keras_tuner' is required for model tuning.",
@@ -88,7 +51,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
     )
     def __init__(
         self,
-        objective: Union[str, kt.Objective] = 'val_loss',
+        objective: Union[str, Objective] = 'val_loss',
         max_trials: int = 10,
         project_name: str = "PINN_Tuning",
         directory: str = "pinn_tuner_results",
@@ -115,9 +78,9 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
         self.overwrite_tuner = overwrite_tuner
         self.tuner_kwargs = tuner_kwargs
 
-        self.best_hps_: Optional[kt.HyperParameters] = None
+        self.best_hps_: Optional[HyperParameters] = None
         self.best_model_: Optional[Model] = None
-        self.tuner_: Optional[kt.Tuner] = None
+        self.tuner_: Optional[Tuner] = None
         
         self.tuning_summary_: Dict[str, Any] = {}
         self.fixed_model_params: Dict[str, Any] = {}
@@ -126,7 +89,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
         if isinstance(self.objective, str):
             # Default: any metric name containing "loss" is minimized
             direction = "min" if "loss" in self.objective else "max"
-            self.objective = kt.Objective(self.objective, direction=direction)
+            self.objective = Objective(self.objective, direction=direction)
 
 
     def _validate_tuner_type(self, tuner_type: str) -> str:
@@ -148,7 +111,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
         
         return tt_lower
 
-    def build(self, hp: kt.HyperParameters) -> Model:
+    def build(self, hp: HyperParameters) -> Model:
         """
         Builds and compiles the Keras model with hyperparameters.
 
@@ -176,7 +139,7 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
         verbose: int = 1, 
         patience: int = 10,
         **additional_search_kwargs
-    ) -> Tuple[Optional[Model], Optional[kt.HyperParameters], Optional[kt.Tuner]]:
+    ) -> Tuple[Optional[Model], Optional[HyperParameters], Optional[Tuner]]:
         """
         Performs the hyperparameter search using Keras Tuner.
 
@@ -233,9 +196,9 @@ class PINNTunerBase(kt.HyperModel, BaseClass):
             )
  
         tuner_class_map = {
-            'randomsearch': kt.RandomSearch,
-            'bayesianoptimization': kt.BayesianOptimization,
-            'hyperband': kt.Hyperband
+            'randomsearch': RandomSearch,
+            'bayesianoptimization': BayesianOptimization,
+            'hyperband': Hyperband
         }
         TunerClass = tuner_class_map[self.tuner_type]
         

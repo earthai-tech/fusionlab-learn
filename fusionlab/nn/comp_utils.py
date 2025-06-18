@@ -9,13 +9,10 @@ from __future__ import annotations
 from typing import Union, Dict, List, Optional, Tuple, Any
 from ..params import LearnableC, FixedC, DisabledC
 from ..params import LearnableK, LearnableSs, LearnableQ 
-from . import KERAS_BACKEND, KERAS_DEPS
+from . import KERAS_DEPS
 
-if KERAS_BACKEND:
-    Tensor = KERAS_DEPS.Tensor
-    tf_rank = KERAS_DEPS.rank
-else:
-    Tensor = object
+Tensor = KERAS_DEPS.Tensor
+tf_rank = KERAS_DEPS.rank
 
 
 _GW_NUMERIC_FALLBACK = dict(K=1e-4, Ss=1e-5, Q=0.0)       

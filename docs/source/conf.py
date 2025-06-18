@@ -211,6 +211,10 @@ html_css_files = [
     'css/custom.css', # Your custom styles including variable overrides
 ]
 
+html_js_files = [
+    'custom.js',
+]
+
 # The name of an image file (relative to this directory, within _static path)
 # Place your logo file at 'docs/source/_static/fusionlab.png'
 html_logo = '_static/fusionlab_b.png'

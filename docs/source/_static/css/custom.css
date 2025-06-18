@@ -499,3 +499,25 @@ html[data-theme="dark"] body {
   font-weight: 600;
   vertical-align: middle; 
 }
+
+/* -- Sparkle/Glow effect for new release announcements -- */
+
+.sparkle-link {
+  /* Apply the animation */
+  animation: sparkle-glow 2s infinite ease-in-out;
+  position: relative; /* Needed for pseudo-elements if used */
+  z-index: 1;
+}
+
+/* Define the keyframe animation */
+@keyframes sparkle-glow {
+  0% {
+    box-shadow: 0 0 5px #6366f1, 0 0 10px #6366f1, 0 0 15px #a5b4fc;
+  }
+  50% {
+    box-shadow: 0 0 20px #4f46e5, 0 0 30px #818cf8, 0 0 40px #c7d2fe;
+  }
+  100% {
+    box-shadow: 0 0 5px #6366f1, 0 0 10px #6366f1, 0 0 15px #a5b4fc;
+  }
+}

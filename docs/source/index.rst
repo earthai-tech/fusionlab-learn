@@ -88,7 +88,7 @@ temporal architectures, FusionLab aims to provide the necessary tools.
        .. grid-item-card:: What’s New?
           :link: /release_notes/index
           :link-type: doc
-          :class-item: button-link-primary
+          :class-item: button-link-primary sparkle-link
 
 
 .. topic:: Key Features

@@ -10,7 +10,7 @@ architecture for multi-horizon time-series forecasting.
 from __future__ import annotations
 
 from numbers import Real, Integral  
-from typing import List, Optional, Any  
+from typing import List, Optional
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
@@ -23,24 +23,6 @@ from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from .utils import select_mode 
 
 if KERAS_BACKEND:
-    Dense = KERAS_DEPS.Dense
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    Model= KERAS_DEPS.Model 
-    Tensor=KERAS_DEPS.Tensor
-    Add = KERAS_DEPS.Add 
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
-    tf_zeros =KERAS_DEPS.zeros
-    tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
-    tf_assert_equal=KERAS_DEPS.assert_equal
-    
-    tf_autograph=KERAS_DEPS.autograph
-    tf_autograph.set_verbosity(0)
-    
     from .._tensor_validation import validate_model_inputs
     from ..utils import set_default_params
     from ..components import (
@@ -60,12 +42,24 @@ if KERAS_BACKEND:
         aggregate_time_window_output
     )
     
-else:
-    # Define fallback types for type
-    # hinting if Keras is not available
-    Tensor = Any
-    Model = object
+Dense = KERAS_DEPS.Dense
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+Model= KERAS_DEPS.Model 
+Tensor=KERAS_DEPS.Tensor
+Add = KERAS_DEPS.Add 
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
 
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_concat = KERAS_DEPS.concat
+tf_shape = KERAS_DEPS.shape
+tf_zeros =KERAS_DEPS.zeros
+tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
+tf_assert_equal=KERAS_DEPS.assert_equal
+
+tf_autograph=KERAS_DEPS.autograph
+tf_autograph.set_verbosity(0)
+   
 DEP_MSG = dependency_message('nn._halnet')
 
 logger = fusionlog().get_fusionlab_logger(__name__)

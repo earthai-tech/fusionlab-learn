@@ -8,57 +8,41 @@ Provides a dedicated Keras Tuner class for hyperparameter
 optimization of the HALNet model.
 """
 from __future__ import annotations
-from typing import Dict, Optional, Any, Union, List, Tuple, TYPE_CHECKING
+from typing import Dict, Optional, Any, Union, List, Tuple
+
+import numpy as np 
+
 from ...api.docs import DocstringComponents, _pinn_tuner_common_params 
 from ..._fusionlog import fusionlog
 from ...core.handlers import _get_valid_kwargs
 from ...utils.generic_utils import ( 
     vlog,  cast_multiple_bool_params
    )
-from .. import KERAS_BACKEND, KERAS_DEPS
+from ._base_tuner import PINNTunerBase
+from ..models import HALNet
+from ..losses import combined_quantile_loss
 
-import numpy as np 
+from .. import KERAS_DEPS
+from . import KT_DEPS
 
-try:
-    import keras_tuner as kt
-    HAS_KT = True
-except ImportError:
-    # fallback *only* for runtime
-    class _DummyTuner:  
-        pass
-    class _DummyHyperParameters: 
-        pass 
-    # minimal fake module
-    class _DummyKT: 
-        Tuner = _DummyTuner
-        HyperParameters = _DummyHyperParameters
-        
-    kt = _DummyKT()  # type: ignore[misc]
+HyperParameters = KT_DEPS.HyperParameters
+Objective = KT_DEPS.Objective
 
-# ---- for static type‑checkers ----
-if TYPE_CHECKING:
-    # mypy / pyright will see the real names
-    import keras_tuner as kt  # noqa: F811  (shadowing on purpose)
+Model = KERAS_DEPS.Model
+Callback = KERAS_DEPS.Callback
+Dataset = KERAS_DEPS.Dataset 
+Adam = KERAS_DEPS.Adam
+EarlyStopping = KERAS_DEPS.EarlyStopping
+AUTOTUNE =KERAS_DEPS.AUTOTUNE 
+    
+Model = KERAS_DEPS.Model
+Adam = KERAS_DEPS.Adam
+MeanSquaredError = KERAS_DEPS.MeanSquaredError
+MeanAbsoluteError = KERAS_DEPS.MeanAbsoluteError
+Dataset = KERAS_DEPS.Dataset
+AUTOTUNE = KERAS_DEPS.AUTOTUNE
+Tensor = KERAS_DEPS.Tensor
 
-if KERAS_BACKEND:
-    from ._base_tuner import PINNTunerBase
-    from ..models import HALNet
-    from ..losses import combined_quantile_loss
-
-    Model = KERAS_DEPS.Model
-    Adam = KERAS_DEPS.Adam
-    MeanSquaredError = KERAS_DEPS.MeanSquaredError
-    MeanAbsoluteError = KERAS_DEPS.MeanAbsoluteError
-    Dataset = KERAS_DEPS.Dataset
-    AUTOTUNE = KERAS_DEPS.AUTOTUNE
-    Tensor = KERAS_DEPS.Tensor
-else:
-    # Dummy classes for type hinting if Keras is not available
-    from ._base_tuner import PINNTunerBase as PINNTunerBase_
-    PINNTunerBase = PINNTunerBase_
-    class HALNet: pass
-    class Model: pass
-    Tensor = Any
 
 # Wrap into a DocstringComponents object once
 _pinn_tuner_docs = DocstringComponents.from_nested_components(
@@ -123,7 +107,7 @@ class HALTuner(PINNTunerBase):
         self,
         fixed_model_params: Dict[str, Any],
         param_space: Optional[Dict[str, Any]] = None,
-        objective: Union[str, kt.Objective] = 'val_loss',
+        objective: Union[str, Objective] = 'val_loss',
         max_trials: int = 20,
         directory: str = "hal_tuner_results",
         executions_per_trial: int = 1,
@@ -165,7 +149,7 @@ class HALTuner(PINNTunerBase):
              f"'{self.project_name}'.", level=1,
              verbose=self.tuner_kwargs.get('verbose', 1))
 
-    def build(self, hp: kt.HyperParameters) -> Model:
+    def build(self, hp: HyperParameters) -> Model:
         """
         Builds and compiles a HALNet model for a given trial.
         """

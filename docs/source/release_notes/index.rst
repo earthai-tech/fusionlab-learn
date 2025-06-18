@@ -11,6 +11,7 @@ fixes for each release of the ``fusionlab-learn`` library.
    :maxdepth: 1
    :caption: Releases:
 
+   v0.3.1
    v0.3.0
    v0.2.3
    v0.2.2

@@ -1,0 +1,67 @@
+.. _release_v0.3.1:
+
+===============
+Version 0.3.1
+===============
+*(Release Date: June 17, 2025)*
+
+**Focus: Backend Dependency Management**
+
+This is a maintenance release that completely
+overhauls how the library handles its optional heavy dependencies,
+particularly `TensorFlow`, `Keras`, and `KerasTuner`. The primary goal
+of this refactor is to eliminate a class of circular import errors that
+were causing build failures in clean environments like Read the Docs,
+and to make the entire codebase more maintainable and scalable.
+
+Enhancements & Improvements
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+* |Enhancement| **Centralized Configuration:** Introduced a new internal
+  module, **fusionlab/_configs.py**, which now serves as the single
+  source of truth for all backend dependency mappings. Hardcoded
+  dictionaries have been removed from individual modules.
+
+* |Enhancement| **Config-Driven Dependency Loaders:** The dependency
+  loaders in ``fusionlab/compat/``, such as `KerasDependencies`, now
+  read directly from the central configuration. This makes them more
+  robust and easier to maintain.
+
+* |Enhancement| **Smart Dummy Objects:** Introduced a new internal
+  module, **fusionlab/_dummies.py**, which dynamically generates
+  placeholder objects for uninstalled dependencies. This dummy system
+  is also driven by the central configuration, ensuring it is always
+  perfectly in sync with the real dependency loader.
+
+* |Enhancement| **Simplified Module Imports:** The `__init__.py` files for
+  the `nn` and `forecast_tuner` subpackages now perform a single check for
+  dependencies and create a single, authoritative `KERAS_DEPS` or `KT_DEPS`
+  object. This eliminates the need for redundant `if/else` blocks and
+  local dummy class definitions in individual model and utility files,
+  making the codebase significantly cleaner.
+
+API Changes
+~~~~~~~~~~~
+* |API Change| The internal logic for handling optional dependencies has
+  been completely refactored. While the public-facing API for models
+  and functions remains the same, the mechanism for importing them
+  is now centralized. This change is internal but represents a major
+  architectural shift towards a more robust and scalable design.
+
+Fixes
+~~~~~
+* |Fix| **Resolved Circular Import Errors:** The primary motivation for
+  this release. The new centralized dependency system, combined with
+  the standard practice of using local imports for internal modules,
+  definitively resolves the `ImportExceptionGroup` and `ExtensionError`
+  failures that were occurring during documentation builds on Read the
+  Docs.
+
+Tests
+~~~~~
+* |Tests| The internal test suite has been updated to validate the
+  new dependency loading mechanism, ensuring that both the real and
+  dummy objects are created and accessed correctly.
+
+Contributors
+~~~~~~~~~~~~~
+* `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)
