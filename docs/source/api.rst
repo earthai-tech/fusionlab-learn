@@ -27,18 +27,6 @@ Implementations of pure-transformer and Temporal Fusion Transformer architecture
    ~fusionlab.nn.transformers.TFT
    ~fusionlab.nn.transformers.DummyTFT
 
-Fusion-Attentive Models (`fusionlab.nn.models`)
--------------------------------------------------
-Core implementations of the Hybrid-Attentive Fusion and its variants.
-
-.. autosummary::
-   :toctree: _autosummary/models
-   :nosignatures:
-
-   ~fusionlab.nn.models.BaseAttentive
-   ~fusionlab.nn.models.HALNet
-   ~fusionlab.nn.models.XTFT
-   ~fusionlab.nn.models.SuperXTFT
 
 Physic-Informed Models (`fusionlab.nn.pinn`)
 --------------------------------------------------------
