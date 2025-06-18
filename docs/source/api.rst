@@ -72,18 +72,6 @@ Implementations of pure-transformer and Temporal Fusion Transformer architecture
    ~fusionlab.nn.transformers.TFT
    ~fusionlab.nn.transformers.DummyTFT
 
-Fusion-Attentive Models (`fusionlab.nn.models`)
--------------------------------------------------
-Core implementations of the Hybrid-Attentive Fusion and its variants.
-
-.. autosummary::
-   :toctree: _autosummary/models
-   :nosignatures:
-
-   ~fusionlab.nn.models.BaseAttentive
-   ~fusionlab.nn.models.HALNet
-   ~fusionlab.nn.models.XTFT
-   ~fusionlab.nn.models.SuperXTFT
 
 Physic-Informed Models (`fusionlab.nn.pinn`)
 --------------------------------------------------------
@@ -101,118 +89,13 @@ Fusion models that integrate physical laws into the training process.
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-   
-Core Neural Network Components (`fusionlab.nn.components`)
------------------------------------------------------------
-Reusable building blocks for feature selection, sequence processing,
-attention, and output generation used within the forecasting models.
 
-.. autosummary::
-   :toctree: _autosummary/components_core
-   :nosignatures:
-
-   ~fusionlab.nn.components.GatedResidualNetwork
-   ~fusionlab.nn.components.VariableSelectionNetwork
-   ~fusionlab.nn.components.PositionalEncoding
-   ~fusionlab.nn.components.StaticEnrichmentLayer
-   ~fusionlab.nn.components.LearnedNormalization
-   ~fusionlab.nn.components.PositionwiseFeedForward
-
-Sequence Processing Components (`fusionlab.nn.components`)
------------------------------------------------------------
-Components primarily focused on processing temporal sequences.
-
-.. autosummary::
-   :toctree: _autosummary/components_seq
-   :nosignatures:
-
-   ~fusionlab.nn.components.MultiScaleLSTM
-   ~fusionlab.nn.components.DynamicTimeWindow
-   ~fusionlab.nn.components.aggregate_multiscale
-   ~fusionlab.nn.components.aggregate_multiscale_on_3d
-   ~fusionlab.nn.components.aggregate_time_window_output
-   ~fusionlab.nn.components.create_causal_mask
-
-
-Attention Mechanisms (`fusionlab.nn.components`)
--------------------------------------------------
-Various attention layers used in Fusion Model architectures.
-
-.. autosummary::
-   :toctree: _autosummary/components_attn
-   :nosignatures:
-
-   ~fusionlab.nn.components.TemporalAttentionLayer
-   ~fusionlab.nn.components.CrossAttention
-   ~fusionlab.nn.components.HierarchicalAttention
-   ~fusionlab.nn.components.MemoryAugmentedAttention
-   ~fusionlab.nn.components.MultiResolutionAttentionFusion
-   ~fusionlab.nn.components.ExplainableAttention
-
-
-Embedding & Output Components (`fusionlab.nn.components`)
----------------------------------------------------------
-Layers for input embedding and generating final model outputs.
-
-.. autosummary::
-   :toctree: _autosummary/components_io
-   :nosignatures:
-
-   ~fusionlab.nn.components.MultiModalEmbedding
-   ~fusionlab.nn.components.MultiDecoder
-   ~fusionlab.nn.components.QuantileDistributionModeling
-
-Loss Functions (`fusionlab.nn.losses` & `fusionlab.nn.components`)
---------------------------------------------------------------------
-Loss functions tailored for time series forecasting and anomaly detection.
-
-.. autosummary::
-   :toctree: _autosummary/losses
-   :nosignatures:
-
-   ~fusionlab.nn.components.AdaptiveQuantileLoss
-   ~fusionlab.nn.components.AnomalyLoss
-   ~fusionlab.nn.components.MultiObjectiveLoss
-   ~fusionlab.nn.losses.combined_quantile_loss
-   ~fusionlab.nn.losses.prediction_based_loss
-   ~fusionlab.nn.losses.combined_total_loss
-   ~fusionlab.nn.losses.objective_loss
-   ~fusionlab.nn.losses.quantile_loss
-   ~fusionlab.nn.losses.quantile_loss_multi
-   ~fusionlab.nn.losses.anomaly_loss
-   
-Anomaly Detection (`fusionlab.nn.anomaly_detection`)
------------------------------------------------------
-Components specifically designed for anomaly detection tasks.
-
-.. autosummary::
-   :toctree: _autosummary/anomaly
-   :nosignatures:
-
-   ~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly
-   ~fusionlab.nn.anomaly_detection.SequenceAnomalyScoreLayer
-   ~fusionlab.nn.anomaly_detection.PredictionErrorAnomalyScore
 
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-Hyperparameter Tuning (`fusionlab.nn.forecast_tuner`)
-------------------------------------------------------
-Utilities for optimizing model hyperparameters using Keras Tuner.
 
-.. autosummary::
-   :toctree: _autosummary/tuning
-   :nosignatures:
-
-   ~fusionlab.nn.forecast_tuner.HydroTuner
-   ~fusionlab.nn.forecast_tuner.HALTuner
-   ~fusionlab.nn.forecast_tuner.XTFTTuner
-   ~fusionlab.nn.forecast_tuner.TFTTuner
-   ~fusionlab.nn.forecast_tuner.PiHALTuner
-   ~fusionlab.nn.forecast_tuner.xtft_tuner
-   ~fusionlab.nn.forecast_tuner.tft_tuner
-   
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
