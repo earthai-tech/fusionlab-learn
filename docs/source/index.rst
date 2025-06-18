@@ -85,11 +85,11 @@ temporal architectures, FusionLab aims to provide the necessary tools.
           :link-type: doc
           :class-item: button-link-secondary
 
-       .. grid-item-card:: What’s New?
+       .. grid-item-card:: What's New?
           :link: /release_notes/index
           :link-type: doc
           :class-item: button-link-primary sparkle-link
-
+          
 
 .. topic:: Key Features
    :class: sd-rounded-lg
