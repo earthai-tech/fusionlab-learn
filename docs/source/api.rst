@@ -319,7 +319,6 @@ side‑by‑side figures for rapid inspection.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
-
 Data Processing Utilities (`fusionlab.utils`)
 ------------------------------------------------------
 A collection of helpers for data manipulation, feature engineering,

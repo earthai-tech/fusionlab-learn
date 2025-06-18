@@ -311,14 +311,14 @@ Congratulations! In this exercise, you have successfully used the
 ``PiTGWFlow`` model to solve a forward physics problem:
 
 * You correctly generated collocation points to define the problem
-    domain instead of using labeled data.
+  domain instead of using labeled data.
 * You prepared a ``tf.data.Dataset`` compatible with the Keras API
-    for an unsupervised, physics-driven task.
+  for an unsupervised, physics-driven task.
 * You instantiated, trained, and evaluated the ``PiTGWFlow`` model,
-    observing the decrease in the physics-based PDE loss.
+  observing the decrease in the physics-based PDE loss.
 * You visualized the final output, demonstrating that the model
-    learned a continuous solution to the governing equation across
-    the entire domain.
+  learned a continuous solution to the governing equation across
+  the entire domain.
 
 This exercise provides a solid foundation for using PINNs to tackle
 more complex scientific and engineering problems.
