@@ -41,35 +41,6 @@ time series data for testing and demonstration.
    <hr>
 
 
-Visual‑metric helpers (`fusionlab.plot.evaluation`)
-------------------------------------------------------
-A curated set of plotting utilities that turn the raw numbers returned  
-by `fusionlab.metrics` into clear, publication‑quality figures.  
-They cover point‑forecast accuracy, interval **sharpness & coverage**,  
-ensemble calibration, temporal stability, and more – all tailored to  
-time‑series / probabilistic‑forecast workflows.
-
-.. autosummary::
-   :toctree: _autosummary/metrics
-   :nosignatures:
-
-   ~fusionlab.plot.evaluation.plot_coverage
-   ~fusionlab.plot.evaluation.plot_crps
-   ~fusionlab.plot.evaluation.plot_forecast_comparison
-   ~fusionlab.plot.evaluation.plot_mean_interval_width
-   ~fusionlab.plot.evaluation.plot_metric_over_horizon
-   ~fusionlab.plot.evaluation.plot_metric_radar
-   ~fusionlab.plot.evaluation.plot_prediction_stability
-   ~fusionlab.plot.evaluation.plot_quantile_calibration
-   ~fusionlab.plot.evaluation.plot_theils_u_score
-   ~fusionlab.plot.evaluation.plot_time_weighted_metric
-   ~fusionlab.plot.evaluation.plot_weighted_interval_score
-
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
-
 Quick‑look forecast helpers (`fusionlab.plot.forecast`)
 ---------------------------------------------------------
 Light‑weight plotting utilities that turn a long‑format forecast
