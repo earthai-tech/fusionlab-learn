@@ -29,7 +29,7 @@ import logging
 
 try:
     import tensorflow as tf
-    from fusionlab.nn.pinn.tuning import PIHALTuner
+    from fusionlab.nn.pinn.models import PIHALTuner
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
     # from fusionlab.nn.losses import combined_quantile_loss  # optional
     from fusionlab.utils.generic_utils import rename_dict_keys
