@@ -12,52 +12,7 @@ in the package.
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-   
-Datasets (`fusionlab.datasets`)
----------------------------------
-Utilities for loading included sample datasets and generating synthetic
-time series data for testing and demonstration.
 
-**Loading Functions** (`fusionlab.datasets`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets
-   :nosignatures:
-
-   ~fusionlab.datasets.fetch_zhongshan_data
-   ~fusionlab.datasets.fetch_nansha_data
-   ~fusionlab.datasets.load_processed_subsidence_data
-   ~fusionlab.datasets.load_subsidence_pinn_data
-   ~fusionlab.datasets.make_multi_feature_time_series
-   ~fusionlab.datasets.make_quantile_prediction_data
-   ~fusionlab.datasets.make_anomaly_data
-   ~fusionlab.datasets.make_trend_seasonal_data
-   ~fusionlab.datasets.make_multivariate_target_data
-   
-Metrics (`fusionlab.metrics`)
--------------------------------
-A collection of metrics for evaluating forecast accuracy, calibration,
-sharpness, and stability, particularly suited for probabilistic and
-time-series forecasting.
-
-.. autosummary::
-   :toctree: _autosummary/metrics
-   :nosignatures:
-
-   ~fusionlab.metrics.coverage_score
-   ~fusionlab.metrics.continuous_ranked_probability_score
-   ~fusionlab.metrics.mean_interval_width_score
-   ~fusionlab.metrics.prediction_stability_score
-   ~fusionlab.metrics.quantile_calibration_error
-   ~fusionlab.metrics.theils_u_score
-   ~fusionlab.metrics.time_weighted_accuracy_score
-   ~fusionlab.metrics.time_weighted_interval_score
-   ~fusionlab.metrics.time_weighted_mean_absolute_error
-   ~fusionlab.metrics.weighted_interval_score
-   
-.. raw:: html
-
-   <hr>
 
 Transformer Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
@@ -149,6 +104,7 @@ Various attention layers used in Fusion Model architectures.
    ~fusionlab.nn.components.MultiResolutionAttentionFusion
    ~fusionlab.nn.components.ExplainableAttention
 
+
 Embedding & Output Components (`fusionlab.nn.components`)
 ---------------------------------------------------------
 Layers for input embedding and generating final model outputs.
@@ -160,6 +116,7 @@ Layers for input embedding and generating final model outputs.
    ~fusionlab.nn.components.MultiModalEmbedding
    ~fusionlab.nn.components.MultiDecoder
    ~fusionlab.nn.components.QuantileDistributionModeling
+
 
 .. raw:: html
 
@@ -180,7 +137,6 @@ These classes implement composite or parameterized loss behaviors.
    ~fusionlab.nn.components.AdaptiveQuantileLoss
    ~fusionlab.nn.components.AnomalyLoss
    ~fusionlab.nn.components.MultiObjectiveLoss
-
 
 **Loss Functions** (`fusionlab.nn.losses`)
 
@@ -218,7 +174,27 @@ Components specifically designed for anomaly detection tasks.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
+Hyperparameter Tuning (`fusionlab.nn.forecast_tuner`)
+------------------------------------------------------
+Utilities for optimizing model hyperparameters using Keras Tuner.
 
+.. autosummary::
+   :toctree: _autosummary/tuning
+   :nosignatures:
+
+   ~fusionlab.nn.forecast_tuner.HydroTuner
+   ~fusionlab.nn.forecast_tuner.HALTuner
+   ~fusionlab.nn.forecast_tuner.XTFTTuner
+   ~fusionlab.nn.forecast_tuner.TFTTuner
+   ~fusionlab.nn.forecast_tuner.PiHALTuner
+   ~fusionlab.nn.forecast_tuner.xtft_tuner
+   ~fusionlab.nn.forecast_tuner.tft_tuner
+   
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
+   
 Neural Network Utilities (`fusionlab.nn.utils`)
 ------------------------------------------------
 Utilities specifically for preparing data for or interacting with neural network models.
@@ -248,6 +224,7 @@ Utilities specifically for preparing data for or interacting with neural network
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
    
 PINN Parameter Descriptors (`fusionlab.params`)
 --------------------------------------------------
@@ -271,6 +248,33 @@ parameters to be discovered during training.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
+   
+Metrics (`fusionlab.metrics`)
+-------------------------------
+A collection of metrics for evaluating forecast accuracy, calibration,
+sharpness, and stability, particularly suited for probabilistic and
+time-series forecasting.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.metrics.coverage_score
+   ~fusionlab.metrics.continuous_ranked_probability_score
+   ~fusionlab.metrics.mean_interval_width_score
+   ~fusionlab.metrics.prediction_stability_score
+   ~fusionlab.metrics.quantile_calibration_error
+   ~fusionlab.metrics.theils_u_score
+   ~fusionlab.metrics.time_weighted_accuracy_score
+   ~fusionlab.metrics.time_weighted_interval_score
+   ~fusionlab.metrics.time_weighted_mean_absolute_error
+   ~fusionlab.metrics.weighted_interval_score
+   
+.. raw:: html
+
+   <hr>
+   
+
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
 ------------------------------------------------------
 A curated set of plotting utilities that turn the raw numbers returned  
@@ -316,30 +320,6 @@ side‑by‑side figures for rapid inspection.
    ~fusionlab.plot.forecast.plot_forecast_by_step
    ~fusionlab.plot.forecast.visualize_forecasts
 
-Time Series Utilities (`fusionlab.utils.ts_utils`)
------------------------------------------------------
-General utilities for time series data processing, analysis, and feature engineering.
-
-.. autosummary::
-   :toctree: _autosummary/ts_utils
-   :nosignatures:
-
-   ~fusionlab.utils.ts_utils.ts_validator
-   ~fusionlab.utils.ts_utils.to_dt
-   ~fusionlab.utils.ts_utils.filter_by_period
-   ~fusionlab.utils.ts_utils.ts_engineering
-   ~fusionlab.utils.ts_utils.create_lag_features
-   ~fusionlab.utils.ts_utils.trend_analysis
-   ~fusionlab.utils.ts_utils.trend_ops
-   ~fusionlab.utils.ts_utils.decompose_ts
-   ~fusionlab.utils.ts_utils.get_decomposition_method
-   ~fusionlab.utils.ts_utils.infer_decomposition_method
-   ~fusionlab.utils.ts_utils.ts_corr_analysis
-   ~fusionlab.utils.ts_utils.transform_stationarity
-   ~fusionlab.utils.ts_utils.ts_split
-   ~fusionlab.utils.ts_utils.ts_outlier_detector
-   ~fusionlab.utils.ts_utils.select_and_reduce_features
-
 Data Processing Utilities (`fusionlab.utils`)
 -------------------------------------------------
 A collection of helpers for data manipulation, feature engineering,
@@ -360,6 +340,35 @@ and preparing data for models.
    ~fusionlab.utils.mask_by_reference
    ~fusionlab.utils.fetch_joblib_data 
    ~fusionlab.utils.save_job 
+
+.. raw:: html
+
+   <hr>
+      
+Datasets (`fusionlab.datasets`)
+---------------------------------
+Utilities for loading included sample datasets and generating synthetic
+time series data for testing and demonstration.
+
+**Loading Functions** (`fusionlab.datasets`)
+
+.. autosummary::
+   :toctree: _autosummary/datasets
+   :nosignatures:
+
+   ~fusionlab.datasets.fetch_zhongshan_data
+   ~fusionlab.datasets.fetch_nansha_data
+   ~fusionlab.datasets.load_processed_subsidence_data
+   ~fusionlab.datasets.load_subsidence_pinn_data
+   ~fusionlab.datasets.make_multi_feature_time_series
+   ~fusionlab.datasets.make_quantile_prediction_data
+   ~fusionlab.datasets.make_anomaly_data
+   ~fusionlab.datasets.make_trend_seasonal_data
+   ~fusionlab.datasets.make_multivariate_target_data
+   
+.. raw:: html
+
+   <hr>
    
 Command-Line Tools (`fusionlab.tools`)
 ---------------------------------------
