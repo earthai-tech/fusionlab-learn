@@ -65,7 +65,7 @@ from ..utils.generic_utils import (
 )
 from ..utils.io_utils import save_job
 from ..utils.sys_utils import BatchDataFrameBuilder, build_large_df 
-from ..utils.ts_utils import ts_validator
+
 from ..utils.validator import ( 
     validate_sequences, 
     check_consistent_length, 
@@ -3554,6 +3554,9 @@ def reshape_xtft_data(
     (`time_steps`) and prediction (`forecast_horizons`) windows.
 
     """
+    # *************************************************************
+    from ..utils.ts_utils import ts_validator
+    # *************************************************************
     # Backward‐compatibility: accept `forecast_horizons` (deprecated)
     if forecast_horizons is not None:
        warnings.warn(
@@ -4025,6 +4028,10 @@ def reshape_xtft_data_in(
         Checks for the existence of specified columns in a DataFrame.
 
     """
+    # *************************************************************
+    from ..utils.ts_utils import ts_validator
+    # *************************************************************
+    
     # Backward‐compatibility: accept `forecast_horizons` (deprecated)
     if forecast_horizons is not None:
        warnings.warn(

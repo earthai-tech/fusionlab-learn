@@ -97,7 +97,7 @@ class _BaseC(ABC):
         nm = self.__class__.__name__
         return f"<{nm} trainable={self.trainable}, value={self.value!r}>"
 
-    # - must be implemented by subclasses -
+    # - Implemented by subclasses -
     @abstractmethod
     def _make_value(self, **kwargs: Any) -> Any:             # noqa: D401
         ...
@@ -242,7 +242,7 @@ class DisabledC(_BaseC):
     
     def _make_value(self) -> float:                          # noqa: D401
         self._export_kw = {}                                 # type: ignore
-        # return 1.0  # placeholder
+        # return 1.0  # No need
         
 @register_keras_serializable("fusionlab.params", name ="BaseLearnable")
 class BaseLearnable(ABC):

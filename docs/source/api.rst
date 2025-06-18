@@ -149,7 +149,6 @@ Various attention layers used in Fusion Model architectures.
    ~fusionlab.nn.components.MultiResolutionAttentionFusion
    ~fusionlab.nn.components.ExplainableAttention
 
-
 Embedding & Output Components (`fusionlab.nn.components`)
 ---------------------------------------------------------
 Layers for input embedding and generating final model outputs.
@@ -245,6 +244,32 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.format_pihalnet_predictions 
    ~fusionlab.nn.utils.prepare_pinn_data_sequences
    ~fusionlab.nn.utils.format_pinn_predictions 
+   
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
+PINN Parameter Descriptors (`fusionlab.params`)
+--------------------------------------------------
+Classes for specifying how physical coefficients in PINN models should be
+handled, allowing them to be defined as fixed constants or as learnable
+parameters to be discovered during training.
+
+.. autosummary::
+   :toctree: _autosummary/params
+   :nosignatures:
+
+   ~fusionlab.params.LearnableK
+   ~fusionlab.params.LearnableSs
+   ~fusionlab.params.LearnableQ
+   ~fusionlab.params.LearnableC
+   ~fusionlab.params.FixedC
+   ~fusionlab.params.DisabledC
+   ~fusionlab.params.resolve_physical_param
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
 Visual‑metric helpers (`fusionlab.plot.evaluation`)
 ------------------------------------------------------

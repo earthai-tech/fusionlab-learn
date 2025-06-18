@@ -39,7 +39,6 @@ from ..utils.generic_utils import (
     get_actual_column_name,
     vlog
 )
-from ..utils.ts_utils import filter_by_period
 from ..utils.validator import ( 
     assert_xy_in, is_frame, 
     validate_positive_integer 
@@ -1881,6 +1880,9 @@ def visualize_forecasts(
     .. [1] Kouadio L. et al., "Gofast Forecasting Model", Journal of
        Advanced Forecasting, 2025. (In review)
     """
+    # ******************************************************
+    from ..utils.ts_utils import filter_by_period
+    # *********************************************************
 
     # Check that forecast_df is a valid DataFrame
     is_frame (

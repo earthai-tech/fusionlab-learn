@@ -19,13 +19,9 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.decomposition import PCA
 
-try:
-    import statsmodels.api as sm
-    from statsmodels.tsa.stattools import adfuller, kpss
-    from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-    from statsmodels.tsa.seasonal import STL, seasonal_decompose
-except ImportError:
-    pass
+from .._deps import check_backends 
+
+
 
 from ..api.summary import ResultSummary
 from ..compat.sklearn import Interval, StrOptions, validate_params
@@ -38,6 +34,14 @@ from ..utils.base_utils import validate_target_in, select_features
 from ..utils.deps_utils import ensure_pkg
 from ..utils.validator import is_time_series, is_frame
 
+
+HAS_STATS = check_backends('statsmodels').get('statsmodels')
+
+if HAS_STATS: 
+    import statsmodels.api as sm
+    from statsmodels.tsa.stattools import adfuller, kpss
+    from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+    from statsmodels.tsa.seasonal import STL, seasonal_decompose
 
 __all__= [ 
     'decompose_ts','infer_decomposition_method',
