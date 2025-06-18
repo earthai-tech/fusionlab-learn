@@ -45,7 +45,7 @@ def widen_temporal_columns(
     verbose: int = 0,
 ) -> pd.DataFrame:
     r"""
-    Convert a **long** PIHALNet prediction table into a **wide** format
+    Convert a long PIHALNet prediction table into a wide format
     where each temporal slice becomes a dedicated column.
 
     The routine pivots columns whose names follow the pattern ::

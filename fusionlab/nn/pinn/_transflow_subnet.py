@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 from numbers import Integral, Real 
-from typing import Optional, Union, Dict, List, Any, Tuple
+from typing import Optional, Union, Dict, List, Tuple
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
@@ -20,59 +20,46 @@ from .._base_attentive import BaseAttentive
 
 
 if KERAS_BACKEND:
-    
     from .._tensor_validation import check_inputs, validate_model_inputs 
     from .op import process_pinn_inputs
     from .utils import process_pde_modes, extract_txy_in 
     from ..comp_utils import resolve_gw_coeffs, normalize_C_descriptor
     
-    LSTM = KERAS_DEPS.LSTM
-    Dense = KERAS_DEPS.Dense
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    Sequential =KERAS_DEPS.Sequential
-    InputLayer =KERAS_DEPS.InputLayer
-    Model= KERAS_DEPS.Model 
-    Tensor=KERAS_DEPS.Tensor
-    Variable =KERAS_DEPS.Variable 
-    Add =KERAS_DEPS.Add
-    Constant =KERAS_DEPS.Constant 
-    GradientTape =KERAS_DEPS.GradientTape 
+LSTM = KERAS_DEPS.LSTM
+Dense = KERAS_DEPS.Dense
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+Sequential =KERAS_DEPS.Sequential
+InputLayer =KERAS_DEPS.InputLayer
+Model= KERAS_DEPS.Model 
+Tensor=KERAS_DEPS.Tensor
+Variable =KERAS_DEPS.Variable 
+Add =KERAS_DEPS.Add
+Constant =KERAS_DEPS.Constant 
+GradientTape =KERAS_DEPS.GradientTape 
 
-    tf_zeros_like= KERAS_DEPS.zeros_like
-    tf_zeros =KERAS_DEPS.zeros
-    tf_reduce_mean =KERAS_DEPS.reduce_mean
-    tf_square =KERAS_DEPS.square
-    tf_constant =KERAS_DEPS.constant 
-    tf_log = KERAS_DEPS.log
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
-    tf_float32=KERAS_DEPS.float32
-    tf_exp =KERAS_DEPS.exp 
-    tf_rank =KERAS_DEPS.rank 
-    tf_assert_equal = KERAS_DEPS.assert_equal 
-    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
-    
-    deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
-    
-    tf_autograph=KERAS_DEPS.autograph
-    tf_autograph.set_verbosity(0)
-    
-    Model = KERAS_DEPS.Model
-    Tensor = KERAS_DEPS.Tensor
-    GradientTape = KERAS_DEPS.GradientTape
-    
-else:
-    class Model: pass
-    class Layer: pass
-    class _DummyRegister_keras_serializable: 
-        pass 
-    class KERAS_DEPS: 
-        register_keras_serializable = _DummyRegister_keras_serializable
-        
-    Tensor = Any
-    
+tf_zeros_like= KERAS_DEPS.zeros_like
+tf_zeros =KERAS_DEPS.zeros
+tf_reduce_mean =KERAS_DEPS.reduce_mean
+tf_square =KERAS_DEPS.square
+tf_constant =KERAS_DEPS.constant 
+tf_log = KERAS_DEPS.log
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_concat = KERAS_DEPS.concat
+tf_shape = KERAS_DEPS.shape
+tf_float32=KERAS_DEPS.float32
+tf_exp =KERAS_DEPS.exp 
+tf_rank =KERAS_DEPS.rank 
+tf_assert_equal = KERAS_DEPS.assert_equal 
+tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
+
+register_keras_serializable = KERAS_DEPS.register_keras_serializable
+deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
+
+tf_autograph=KERAS_DEPS.autograph
+tf_autograph.set_verbosity(0)
+  
+
 DEP_MSG = dependency_message('nn.pinn.models') 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
@@ -84,7 +71,7 @@ _param_docs = DocstringComponents.from_nested_components(
 
 __all__ = ["TransFlowSubsNet"]
 
-@KERAS_DEPS.register_keras_serializable(
+@register_keras_serializable(
     'fusionlab.nn.pinn', name="TransFlowSubsNet") 
 class TransFlowSubsNet(BaseAttentive):
     @validate_params({

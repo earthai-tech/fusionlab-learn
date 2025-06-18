@@ -19,41 +19,6 @@ from ...utils.validator import validate_positive_integer
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message 
 
 if KERAS_BACKEND:
-    LSTM = KERAS_DEPS.LSTM
-    LSTMCell=KERAS_DEPS.LSTMCell
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    TimeDistributed = KERAS_DEPS.TimeDistributed
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Model = KERAS_DEPS.Model 
-    BatchNormalization = KERAS_DEPS.BatchNormalization
-    Input = KERAS_DEPS.Input
-    Softmax = KERAS_DEPS.Softmax
-    Flatten = KERAS_DEPS.Flatten
-    Dropout = KERAS_DEPS.Dropout 
-    Dense = KERAS_DEPS.Dense
-    Embedding =KERAS_DEPS.Embedding 
-    Concatenate=KERAS_DEPS.Concatenate 
-    Layer = KERAS_DEPS.Layer 
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
-    tf_reduce_sum =KERAS_DEPS.reduce_sum
-    tf_stack =KERAS_DEPS.stack
-    tf_expand_dims =KERAS_DEPS.expand_dims
-    tf_tile =KERAS_DEPS.tile
-    tf_range =KERAS_DEPS.range
-    tf_rank = KERAS_DEPS.rank
-    tf_squeeze= KERAS_DEPS.squeeze 
-    tf_concat =KERAS_DEPS.concat
-    tf_shape =KERAS_DEPS.shape
-    tf_zeros=KERAS_DEPS.zeros
-    tf_float32=KERAS_DEPS.float32
-    tf_reshape=KERAS_DEPS.reshape
-    tf_autograph=KERAS_DEPS.autograph
-    tf_multiply=KERAS_DEPS.multiply
-    tf_reduce_mean = KERAS_DEPS.reduce_mean
-    tf_get_static_value=KERAS_DEPS.get_static_value
-    tf_gather=KERAS_DEPS.gather 
-    
     from .._tensor_validation import ( 
         validate_model_inputs, combine_temporal_inputs_for_lstm
         )
@@ -65,18 +30,53 @@ if KERAS_BACKEND:
         TemporalAttentionLayer, 
     )
 
+LSTM = KERAS_DEPS.LSTM
+LSTMCell=KERAS_DEPS.LSTMCell
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+TimeDistributed = KERAS_DEPS.TimeDistributed
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Model = KERAS_DEPS.Model 
+BatchNormalization = KERAS_DEPS.BatchNormalization
+Input = KERAS_DEPS.Input
+Softmax = KERAS_DEPS.Softmax
+Flatten = KERAS_DEPS.Flatten
+Dropout = KERAS_DEPS.Dropout 
+Dense = KERAS_DEPS.Dense
+Embedding =KERAS_DEPS.Embedding 
+Concatenate=KERAS_DEPS.Concatenate 
+Layer = KERAS_DEPS.Layer 
+
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
+
+tf_reduce_sum =KERAS_DEPS.reduce_sum
+tf_stack =KERAS_DEPS.stack
+tf_expand_dims =KERAS_DEPS.expand_dims
+tf_tile =KERAS_DEPS.tile
+tf_range =KERAS_DEPS.range
+tf_rank = KERAS_DEPS.rank
+tf_squeeze= KERAS_DEPS.squeeze 
+tf_concat =KERAS_DEPS.concat
+tf_shape =KERAS_DEPS.shape
+tf_zeros=KERAS_DEPS.zeros
+tf_float32=KERAS_DEPS.float32
+tf_reshape=KERAS_DEPS.reshape
+tf_autograph=KERAS_DEPS.autograph
+tf_multiply=KERAS_DEPS.multiply
+tf_reduce_mean = KERAS_DEPS.reduce_mean
+tf_get_static_value=KERAS_DEPS.get_static_value
+tf_gather=KERAS_DEPS.gather 
     
 DEP_MSG = dependency_message('transformers.tft') 
 logger = fusionlog().get_fusionlab_logger(__name__) 
 
 __all__= ['TFT']
 
-# ------------------------ TFT implementation --------------------------------
 
 @register_keras_serializable('fusionlab.nn.transformers', name="TFT")
 class TFT(Model, NNLearner): 
-    """Temporal Fusion Transformer (TFT) requiring static, dynamic(past), and future inputs. """
-
+    """ Temporal Fusion Transformer (TFT) required static, dynamic(past)
+    and future inputs."""
+    
     @validate_params({
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
         "static_input_dim": [Interval(Integral, 0, None, closed='left')],

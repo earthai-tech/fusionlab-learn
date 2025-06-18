@@ -23,6 +23,7 @@ from ...core.checks import (
 from ...core.io import SaveFile 
 from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
+from ...metrics import coverage_score
 from ...utils.validator import validate_positive_integer 
 from ...decorators import isdf 
 from ...utils.deps_utils import ensure_pkg 
@@ -32,36 +33,18 @@ from ...utils.io_utils import save_job
 
 from .. import KERAS_BACKEND, KERAS_DEPS
 
-if KERAS_BACKEND:
-    Model = KERAS_DEPS.Model
-    Tensor = KERAS_DEPS.Tensor
-    
-    tf_shape = KERAS_DEPS.shape
-    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
-    tf_float32 = KERAS_DEPS.float32 
-    tf_cast =KERAS_DEPS.cast
-    tf_concat =KERAS_DEPS.concat
-    tf_expand_dims =KERAS_DEPS.expand_dims
-    tf_debugging =KERAS_DEPS.debugging
-    tf_fill = KERAS_DEPS.fill 
-    tf_reshape = KERAS_DEPS.reshape 
-    
-else:
-    class Model: pass
-    Tensor = type("Tensor", (), {})
-    def tf_shape(tensor): return np.array(tensor).shape # Basic fallback
+Model = KERAS_DEPS.Model
+Tensor = KERAS_DEPS.Tensor
 
-try:
-    from ...metrics import coverage_score
-    HAS_COVERAGE_SCORE = True
-except ImportError:
-    HAS_COVERAGE_SCORE = False
-    def coverage_score(*args, **kwargs):
-        warnings.warn(
-            "coverage_score not found. Quantile coverage evaluation "
-            "will be skipped.", UserWarning
-        )
-        return np.nan
+tf_shape = KERAS_DEPS.shape
+tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
+tf_float32 = KERAS_DEPS.float32 
+tf_cast =KERAS_DEPS.cast
+tf_concat =KERAS_DEPS.concat
+tf_expand_dims =KERAS_DEPS.expand_dims
+tf_debugging =KERAS_DEPS.debugging
+tf_fill = KERAS_DEPS.fill 
+tf_reshape = KERAS_DEPS.reshape 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 _TW = get_table_size()
@@ -793,8 +776,13 @@ def format_pihalnet_predictions(
                      level=3, verbose=verbose, logger=logger)
 
         # --- 6d. Coverage Score (applied per target) ---
-        if evaluate_coverage and quantiles and y_true_target is not None and \
-           HAS_COVERAGE_SCORE and len(quantiles) >= 2 and O_target == 1:
+        if ( 
+                evaluate_coverage 
+                and quantiles 
+                and y_true_target is not None 
+                and len(quantiles) >= 2 
+                and O_target == 1
+            ):
             # Assume quantiles_sorted is available if quantiles is not None   
             quantiles_sorted = sorted (
                 validate_quantiles(quantiles, dtype=np.float64)

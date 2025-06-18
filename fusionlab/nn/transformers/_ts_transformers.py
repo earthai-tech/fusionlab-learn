@@ -9,7 +9,6 @@ time-series forecasting.
 from __future__ import annotations
 
 from numbers import Real, Integral 
-from textwrap import dedent # noqa
 from typing import List, Optional, Union, Tuple
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
@@ -19,38 +18,6 @@ from ...api.property import NNLearner
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message 
 
 if KERAS_BACKEND:
-    Layer = KERAS_DEPS.Layer
-    Model = KERAS_DEPS.Model
-    Input = KERAS_DEPS.Input 
-    Dense = KERAS_DEPS.Dense
-    Dropout = KERAS_DEPS.Dropout
-    LayerNormalization = KERAS_DEPS.LayerNormalization
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Concatenate = KERAS_DEPS.Concatenate
-    Add = KERAS_DEPS.Add
-    Tensor = KERAS_DEPS.Tensor
-    register_keras_serializable = KERAS_DEPS.register_keras_serializable
-    
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_shape = KERAS_DEPS.shape
-    tf_squeeze = KERAS_DEPS.squeeze
-    tf_cast = KERAS_DEPS.cast
-    tf_float32 = KERAS_DEPS.float32
-    tf_ones = KERAS_DEPS.ones 
-    tf_zeros =KERAS_DEPS.zeros
-    tf_linalg = KERAS_DEPS.linalg
-    tf_autograph =KERAS_DEPS.autograph 
-    tf_logical_and = KERAS_DEPS.logical_and 
-    tf_greater =KERAS_DEPS.greater 
-    tf_constant =KERAS_DEPS.constant 
-    tf_bool = KERAS_DEPS.bool 
-    tf_cond =KERAS_DEPS.cond 
-    tf_rank = KERAS_DEPS.rank
-    tf_where =KERAS_DEPS.where
-    tf_stack =KERAS_DEPS.stack 
-    tf_int32 =KERAS_DEPS.int32
-
     from ..components import (
         TSPositionalEncoding, 
         QuantileDistributionModeling,
@@ -62,6 +29,37 @@ if KERAS_BACKEND:
     from ..utils import prepare_model_inputs_in
     from .._tensor_validation import validate_model_inputs
 
+Layer = KERAS_DEPS.Layer
+Model = KERAS_DEPS.Model
+Input = KERAS_DEPS.Input 
+Dense = KERAS_DEPS.Dense
+Dropout = KERAS_DEPS.Dropout
+LayerNormalization = KERAS_DEPS.LayerNormalization
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Concatenate = KERAS_DEPS.Concatenate
+Add = KERAS_DEPS.Add
+Tensor = KERAS_DEPS.Tensor
+register_keras_serializable = KERAS_DEPS.register_keras_serializable
+
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_shape = KERAS_DEPS.shape
+tf_squeeze = KERAS_DEPS.squeeze
+tf_cast = KERAS_DEPS.cast
+tf_float32 = KERAS_DEPS.float32
+tf_ones = KERAS_DEPS.ones 
+tf_zeros =KERAS_DEPS.zeros
+tf_linalg = KERAS_DEPS.linalg
+tf_autograph =KERAS_DEPS.autograph 
+tf_logical_and = KERAS_DEPS.logical_and 
+tf_greater =KERAS_DEPS.greater 
+tf_constant =KERAS_DEPS.constant 
+tf_bool = KERAS_DEPS.bool 
+tf_cond =KERAS_DEPS.cond 
+tf_rank = KERAS_DEPS.rank
+tf_where =KERAS_DEPS.where
+tf_stack =KERAS_DEPS.stack 
+tf_int32 =KERAS_DEPS.int32
 
 DEP_MSG = dependency_message('nn._transformers') 
 

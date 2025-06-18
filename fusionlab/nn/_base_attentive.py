@@ -61,7 +61,8 @@ else:
     class Model: pass
     class Layer: pass
     class _DummyRegister_keras_serializable: 
-        pass 
+        def __init__(self, *args, **kwargs): 
+            pass
     class KERAS_DEPS: 
         register_keras_serializable = _DummyRegister_keras_serializable
         

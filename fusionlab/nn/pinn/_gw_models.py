@@ -20,26 +20,24 @@ from .._tensor_validation import validate_tensors
 from ..comp_utils import resolve_gw_coeffs 
 from .utils import extract_txy_in 
 
+Tensor = KERAS_DEPS.Tensor 
+GradientTape =KERAS_DEPS.GradientTape
+Dense =KERAS_DEPS.Dense 
+Model =KERAS_DEPS.Model 
+InputLayer= KERAS_DEPS.InputLayer
+Sequential =KERAS_DEPS.Sequential 
+Adam =KERAS_DEPS.Adam
 
-logger = fusionlog().get_fusionlab_logger(__name__)
-
-if KERAS_BACKEND: 
-    Tensor = KERAS_DEPS.Tensor 
-    GradientTape =KERAS_DEPS.GradientTape
-    Dense =KERAS_DEPS.Dense 
-    Model =KERAS_DEPS.Model 
-    InputLayer= KERAS_DEPS.InputLayer
-    Sequential =KERAS_DEPS.Sequential 
-    Adam =KERAS_DEPS.Adam
-    
-    tf_concat =KERAS_DEPS.concat
-    tf_reduce_mean=KERAS_DEPS.reduce_mean
-    tf_square =KERAS_DEPS.square
-    tf_shape =KERAS_DEPS.shape 
-    tf_reshape = KERAS_DEPS.reshape 
+tf_concat =KERAS_DEPS.concat
+tf_reduce_mean=KERAS_DEPS.reduce_mean
+tf_square =KERAS_DEPS.square
+tf_shape =KERAS_DEPS.shape 
+tf_reshape = KERAS_DEPS.reshape 
     
 
 DEP_MSG = dependency_message('nn.pinn') 
+
+logger = fusionlog().get_fusionlab_logger(__name__)
 
 __all__=['PiTGWFlow']
 

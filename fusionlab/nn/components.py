@@ -26,76 +26,6 @@ from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from ..compat.tf import standalone_keras
 
 if KERAS_BACKEND:
-
-    LSTM = KERAS_DEPS.LSTM
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    TimeDistributed = KERAS_DEPS.TimeDistributed
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Model = KERAS_DEPS.Model 
-    BatchNormalization = KERAS_DEPS.BatchNormalization
-    Input = KERAS_DEPS.Input
-    Softmax = KERAS_DEPS.Softmax
-    Flatten = KERAS_DEPS.Flatten
-    Dropout = KERAS_DEPS.Dropout 
-    Dense = KERAS_DEPS.Dense
-    Embedding =KERAS_DEPS.Embedding 
-    Concatenate=KERAS_DEPS.Concatenate 
-    Layer = KERAS_DEPS.Layer 
-    Loss=KERAS_DEPS.Loss
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    Tensor=KERAS_DEPS.Tensor
-    Sequential =KERAS_DEPS.Sequential
-    TensorShape =KERAS_DEPS.TensorShape 
-
-    tf_Assert= KERAS_DEPS.Assert
-    tf_TensorShape= KERAS_DEPS.TensorShape
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
-    tf_reshape=KERAS_DEPS.reshape
-    tf_repeat =KERAS_DEPS.repeat
-    tf_add = KERAS_DEPS.add
-    tf_cast=KERAS_DEPS.cast
-    tf_maximum = KERAS_DEPS.maximum
-    tf_reduce_mean = KERAS_DEPS.reduce_mean
-    tf_add_n = KERAS_DEPS.add_n
-    tf_float32=KERAS_DEPS.float32
-    tf_constant=KERAS_DEPS.constant 
-    tf_square=KERAS_DEPS.square 
-    tf_transpose=KERAS_DEPS.transpose 
-    tf_logical_and=KERAS_DEPS.logical_and 
-    tf_logical_not = KERAS_DEPS.logical_not 
-    tf_logical_or = KERAS_DEPS.logical_or
-    tf_get_static_value =KERAS_DEPS.get_static_value
-    tf_reduce_sum = KERAS_DEPS.reduce_sum
-    tf_stack = KERAS_DEPS.stack
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_range=KERAS_DEPS.range 
-    tf_rank=KERAS_DEPS.rank
-    tf_split = KERAS_DEPS.split
-    tf_multiply=KERAS_DEPS.multiply
-    tf_cond=KERAS_DEPS.cond
-    tf_constant =KERAS_DEPS.constant 
-    tf_equal =KERAS_DEPS.equal 
-    tf_int32=KERAS_DEPS.int32 
-    tf_debugging =KERAS_DEPS.debugging 
-    tf_autograph=KERAS_DEPS.autograph
-    tf_pad =KERAS_DEPS.pad 
-    tf_maximum =KERAS_DEPS.maximum 
-    
-    tf_newaxis = KERAS_DEPS.newaxis 
-    tf_pow = KERAS_DEPS.pow
-    tf_sin = KERAS_DEPS.sin
-    tf_cos = KERAS_DEPS.cos
-    tf_exp = KERAS_DEPS.exp 
-    tf_log = KERAS_DEPS.log
-    tf_ones = KERAS_DEPS.ones 
-    tf_linalg = KERAS_DEPS.linalg
-    tf_floordiv = KERAS_DEPS.floordiv
-    tf_greater =KERAS_DEPS.greater 
-    tf_float32 = KERAS_DEPS.float32
-    
-
     try:
         # Equivalent to: from tensorflow.keras import activations
         activations = KERAS_DEPS.activations  
@@ -112,6 +42,75 @@ if KERAS_BACKEND:
                 "or standalone Keras is installed and the"
                 " module exists."
         )
+
+LSTM = KERAS_DEPS.LSTM
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+TimeDistributed = KERAS_DEPS.TimeDistributed
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Model = KERAS_DEPS.Model 
+BatchNormalization = KERAS_DEPS.BatchNormalization
+Input = KERAS_DEPS.Input
+Softmax = KERAS_DEPS.Softmax
+Flatten = KERAS_DEPS.Flatten
+Dropout = KERAS_DEPS.Dropout 
+Dense = KERAS_DEPS.Dense
+Embedding =KERAS_DEPS.Embedding 
+Concatenate=KERAS_DEPS.Concatenate 
+Layer = KERAS_DEPS.Layer 
+Loss=KERAS_DEPS.Loss
+Tensor=KERAS_DEPS.Tensor
+Sequential =KERAS_DEPS.Sequential
+TensorShape =KERAS_DEPS.TensorShape 
+
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
+
+tf_Assert= KERAS_DEPS.Assert
+tf_TensorShape= KERAS_DEPS.TensorShape
+tf_concat = KERAS_DEPS.concat
+tf_shape = KERAS_DEPS.shape
+tf_reshape=KERAS_DEPS.reshape
+tf_repeat =KERAS_DEPS.repeat
+tf_add = KERAS_DEPS.add
+tf_cast=KERAS_DEPS.cast
+tf_maximum = KERAS_DEPS.maximum
+tf_reduce_mean = KERAS_DEPS.reduce_mean
+tf_add_n = KERAS_DEPS.add_n
+tf_float32=KERAS_DEPS.float32
+tf_constant=KERAS_DEPS.constant 
+tf_square=KERAS_DEPS.square 
+tf_transpose=KERAS_DEPS.transpose 
+tf_logical_and=KERAS_DEPS.logical_and 
+tf_logical_not = KERAS_DEPS.logical_not 
+tf_logical_or = KERAS_DEPS.logical_or
+tf_get_static_value =KERAS_DEPS.get_static_value
+tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_stack = KERAS_DEPS.stack
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_range=KERAS_DEPS.range 
+tf_rank=KERAS_DEPS.rank
+tf_split = KERAS_DEPS.split
+tf_multiply=KERAS_DEPS.multiply
+tf_cond=KERAS_DEPS.cond
+tf_constant =KERAS_DEPS.constant 
+tf_equal =KERAS_DEPS.equal 
+tf_int32=KERAS_DEPS.int32 
+tf_debugging =KERAS_DEPS.debugging 
+tf_autograph=KERAS_DEPS.autograph
+tf_pad =KERAS_DEPS.pad 
+tf_maximum =KERAS_DEPS.maximum 
+
+tf_newaxis = KERAS_DEPS.newaxis 
+tf_pow = KERAS_DEPS.pow
+tf_sin = KERAS_DEPS.sin
+tf_cos = KERAS_DEPS.cos
+tf_exp = KERAS_DEPS.exp 
+tf_log = KERAS_DEPS.log
+tf_ones = KERAS_DEPS.ones 
+tf_linalg = KERAS_DEPS.linalg
+tf_floordiv = KERAS_DEPS.floordiv
+tf_greater =KERAS_DEPS.greater 
+tf_float32 = KERAS_DEPS.float32
     
 
 _logger = fusionlog().get_fusionlab_logger(__name__)

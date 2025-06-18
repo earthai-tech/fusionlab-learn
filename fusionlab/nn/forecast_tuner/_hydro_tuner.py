@@ -1,7 +1,12 @@
-# This would be in a new file, e.g., fusionlab/nn/pinn/tuning/_hydro_tuner.py
+# -*- coding: utf-8 -*-
+#   License: BSD-3-Clause
+#   Author: LKouadio <etanoyau@gmail.com>
+
 import warnings
-from typing import Dict, Optional, Any , Union, Type,  TYPE_CHECKING 
+from typing import Dict, Optional, Any , Union, Type
 from typing import Tuple, List 
+
+import numpy as np 
 
 from ..._fusionlog import fusionlog 
 from ...api.docs import DocstringComponents, _pinn_tuner_common_params 
@@ -10,51 +15,36 @@ from ...utils.generic_utils import (
    )
 from ...core.handlers import _get_valid_kwargs 
 
-from .. import KERAS_BACKEND, KERAS_DEPS 
 from ..pinn.models import PIHALNet , TransFlowSubsNet 
 from ..pinn.utils import  ( # noqa
     prepare_pinn_data_sequences, 
     check_required_input_keys
 )
+from .. import KERAS_DEPS 
+
+from . import KT_DEPS
 from ._base_tuner import PINNTunerBase 
-import numpy as np 
 
-try:
-    import keras_tuner as kt
-    HAS_KT = True
-except ImportError:
-    # fallback *only* for runtime
-    class _DummyTuner:  
-        pass
-    # minimal fake module
-    class _DummyKT: 
-        Tuner = _DummyTuner
+HyperParameters = KT_DEPS.HyperParameters
+Objective = KT_DEPS.Objective
+Tuner = KT_DEPS.Tuner 
 
-    kt = _DummyKT()  # type: ignore[misc]
+AUTOTUNE = KERAS_DEPS.AUTOTUNE
+Model =KERAS_DEPS.Model 
+Adam =KERAS_DEPS.Adam
+MeanSquaredError =KERAS_DEPS.MeanSquaredError
+MeanAbsoluteError =KERAS_DEPS.MeanAbsoluteError
+Callback =KERAS_DEPS.Callback 
+Dataset =KERAS_DEPS.Dataset 
 
-# ---- for static type‑checkers ----
-if TYPE_CHECKING:
-    # mypy / pyright will see the real names
-    import keras_tuner as kt  # noqa: F811  (shadowing on purpose)
-
-if KERAS_BACKEND: 
-    Model =KERAS_DEPS.Model 
-    Adam =KERAS_DEPS.Adam
-    MeanSquaredError =KERAS_DEPS.MeanSquaredError
-    MeanAbsoluteError =KERAS_DEPS.MeanAbsoluteError
-    Callback =KERAS_DEPS.Callback 
-    Dataset =KERAS_DEPS.Dataset 
-    AUTOTUNE =KERAS_DEPS.AUTOTUNE
-    
 logger = fusionlog().get_fusionlab_logger(__name__) 
 
-# Wrap into a DocstringComponents object once
 _pinn_tuner_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_pinn_tuner_common_params)
 )
 
-# --- 1. Common Default Parameters for all BaseAttentive-based models ---
-# These settings are shared by both PIHALNet and TransFlowSubsNet.
+# --- 1. Common Default Parameters 
+# for all BaseAttentive-based models ---
 DEFAULT_COMMON_FIXED_PARAMS = {
     "output_subsidence_dim": 1,
     "output_gwl_dim": 1,
@@ -73,10 +63,8 @@ DEFAULT_COMMON_FIXED_PARAMS = {
         'feature_processing': 'vsn'
     }
 }
-
 # --- 2. Model-Specific Default Parameters ---
 # Inherits from common and adds/overrides specific settings.
-
 DEFAULT_PIHALNET_PARAMS = {
     **DEFAULT_COMMON_FIXED_PARAMS,
     "pde_mode": "consolidation",
@@ -109,7 +97,8 @@ DEFAULT_CASE_INFO = {
 }
 
 class HydroTuner(PINNTunerBase):
-    """A robust and flexible hyperparameter tuner for hydrogeological PINN models.
+    """A robust and flexible hyperparameter tuner for
+    hydrogeological PINN models.
 
     This class provides a unified interface to perform hyperparameter
     optimization for complex physics-informed models like ``PIHALNet`` and
@@ -255,7 +244,7 @@ class HydroTuner(PINNTunerBase):
         fixed_params: Dict[str, Any],
         search_space: Optional[Dict[str, Any]] = None,
         # Keras-Tuner specific arguments with defaults
-        objective: Union[str, 'kt.Objective'] = 'val_loss',
+        objective: Union[str, 'Objective'] = 'val_loss',
         max_trials: int = 10,
         project_name: str = "HydroTuner_Project",
         directory: str = "hydrotuner_results",
@@ -330,7 +319,7 @@ class HydroTuner(PINNTunerBase):
                 )
 
     def _create_hyperparameter(
-        self, hp: 'kt.HyperParameters', name: str, definition: Any
+        self, hp: 'HyperParameters', name: str, definition: Any
     ) -> Union[int, float, str, bool]:
         """Dynamically creates a hyperparameter from its definition.
     
@@ -494,7 +483,7 @@ class HydroTuner(PINNTunerBase):
             **tuner_kwargs
         )
 
-    def build(self, hp: 'kt.HyperParameters') -> 'Model':
+    def build(self, hp: 'HyperParameters') -> 'Model':
         """Builds and compiles a model for a single hyperparameter trial.
     
         This method is called internally by the Keras Tuner for each trial
@@ -610,7 +599,7 @@ class HydroTuner(PINNTunerBase):
         case_info: Optional[Dict[str, Any]] = None,
         verbose: int = 1,
         **search_kwargs
-    ) -> Tuple[Optional['Model'], Optional['kt.HyperParameters'], Optional['kt.Tuner']]:
+    ) -> Tuple[Optional['Model'], Optional['HyperParameters'], Optional['Tuner']]:
         """Executes the end-to-end hyperparameter search workflow.
     
         This is the primary method to start the tuning process. It

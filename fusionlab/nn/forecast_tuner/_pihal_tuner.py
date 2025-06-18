@@ -1,57 +1,46 @@
+ # -*- coding: utf-8 -*-
+ #   License: BSD-3-Clause
+ #   Author: LKouadio <etanoyau@gmail.com>
  
-from typing import Dict, Optional, Any , Union,  TYPE_CHECKING 
+from typing import Dict, Optional, Any , Union
 from typing import Tuple, List 
+import numpy as np 
 
 from ..._fusionlog import fusionlog 
 from ...api.docs import DocstringComponents, _pinn_tuner_common_params 
 from ...utils.generic_utils import ( 
-    vlog, rename_dict_keys, cast_multiple_bool_params
-   )
+    vlog, 
+    rename_dict_keys, 
+    cast_multiple_bool_params
+)
 from ...core.handlers import _get_valid_kwargs 
 
-from .. import KERAS_BACKEND, KERAS_DEPS 
+from .. import KERAS_DEPS 
 from ..pinn.models import PiHALNet 
 from ..pinn.utils import  ( # noqa
     prepare_pinn_data_sequences, 
     check_required_input_keys
 )
 from ._base_tuner import PINNTunerBase 
-import numpy as np 
+from . import KT_DEPS
 
-try:
-    import keras_tuner as kt
-    HAS_KT = True
-except ImportError:
-    # fallback *only* for runtime
-    class _DummyTuner:  
-        pass
-    # minimal fake module
-    class _DummyKT: 
-        Tuner = _DummyTuner
+HyperParameters = KT_DEPS.HyperParameters
+Objective = KT_DEPS.Objective
+Tuner = KT_DEPS.Tuner 
 
-    kt = _DummyKT()  # type: ignore[misc]
-
-# ---- for static type‑checkers ----
-if TYPE_CHECKING:
-    # mypy / pyright will see the real names
-    import keras_tuner as kt  # noqa: F811  (shadowing on purpose)
-
-if KERAS_BACKEND: 
-    Model =KERAS_DEPS.Model 
-    Adam =KERAS_DEPS.Adam
-    MeanSquaredError =KERAS_DEPS.MeanSquaredError
-    MeanAbsoluteError =KERAS_DEPS.MeanAbsoluteError
-    Callback =KERAS_DEPS.Callback 
-    Dataset =KERAS_DEPS.Dataset 
-    AUTOTUNE =KERAS_DEPS.AUTOTUNE
+Model =KERAS_DEPS.Model 
+Adam =KERAS_DEPS.Adam
+MeanSquaredError =KERAS_DEPS.MeanSquaredError
+MeanAbsoluteError =KERAS_DEPS.MeanAbsoluteError
+Callback =KERAS_DEPS.Callback 
+Dataset =KERAS_DEPS.Dataset 
+AUTOTUNE =KERAS_DEPS.AUTOTUNE
     
 logger = fusionlog().get_fusionlab_logger(__name__) 
 
-# Wrap into a DocstringComponents object once
 _pinn_tuner_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_pinn_tuner_common_params)
 )
-
 
 DEFAULT_PIHALNET_FIXED_PARAMS = {
     "output_subsidence_dim": 1,
@@ -87,7 +76,7 @@ class PiHALTuner(PINNTunerBase):
         self,
         fixed_model_params: Dict[str, Any], 
         param_space: Optional[Dict[str, Any]] = None, 
-        objective: Union[str, kt.Objective] = 'val_loss',
+        objective: Union[str, Objective] = 'val_loss',
         max_trials: int = 20,
         project_name: str = "PIHALNet_Tuning",
         executions_per_trial: int =1, 
@@ -330,7 +319,7 @@ class PiHALTuner(PINNTunerBase):
         targets_data: Optional[Dict[str, np.ndarray]] = None,
         forecast_horizon: Optional[int] = None,
         quantiles: Optional[List[float]] = None,
-        objective: Union[str, kt.Objective] = 'val_loss',
+        objective: Union[str, Objective] = 'val_loss',
         max_trials: int = 20,
         project_name: str = "PIHALNet_Tuning_From_Config",
         directory: str = "pihalnet_tuner_results",
@@ -461,7 +450,7 @@ class PiHALTuner(PINNTunerBase):
         )
 
    
-    def build(self, hp: kt.HyperParameters) -> Model:
+    def build(self, hp: HyperParameters) -> Model:
         """
         Builds and compiles a PIHALNet model given a set of hyperparameters.
     

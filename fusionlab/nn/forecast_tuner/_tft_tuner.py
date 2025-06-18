@@ -26,74 +26,57 @@ import warnings
 import json
 from numbers import Real, Integral
 from typing import (
-    Union, Dict, Any, Optional, Callable, List, Tuple, 
-    TYPE_CHECKING
-)
+    Union, Dict, Any, 
+    Optional, Callable,
+    List, 
+    Tuple, 
 
+)
 import numpy as np
 
 from ..__init__ import config
 from ...api.docs import _tuner_common_params, DocstringComponents 
 from ...api.summary import ResultSummary 
 from ...compat.sklearn import validate_params, Interval
-from ...core.checks import (
-    check_params, check_non_emptiness
-    )
+from ...core.checks import check_params, check_non_emptiness
 from ...core.handlers import param_deprecated_message
 from ...core.io import _get_valid_kwargs 
 from ...utils.deps_utils import ensure_pkg
 from ...utils.generic_utils import vlog
-from .._tensor_validation import validate_model_inputs
 
-from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
+from .._tensor_validation import validate_model_inputs
+from .. import KERAS_DEPS, dependency_message
 from ..losses import combined_quantile_loss
-from ._tft_base_tuner import( 
-    CASE_INFO, DEFAULT_PS,
-    BaseTuner
-)
+from ._tft_base_tuner import CASE_INFO, DEFAULT_PS, BaseTuner
 from ..transformers import (
     TemporalFusionTransformer as TFTFlexible, 
     TFT as TFTStricter 
 )
 from ..models import XTFT, SuperXTFT 
 
-HAS_KT = False
-try:
-    import keras_tuner as kt
-    HAS_KT = True
-except ImportError:
-    # fallback *only* for runtime
-    class _DummyTuner:  
-        pass
-
-    # minimal fake module
-    class _DummyKT: 
-        Tuner = _DummyTuner
-
-    kt = _DummyKT()  # type: ignore[misc]
+from . import KT_DEPS, HAS_KT
 
 # ---- for static type‑checkers ----
-if TYPE_CHECKING:
-    # mypy / pyright will see the real names
-    import keras_tuner as kt  # noqa: F811  (shadowing on purpose)
+# if TYPE_CHECKING:
+#     # mypy / pyright will see the real names
+#     import keras_tuner as kt  # noqa: F811  (shadowing on purpose)
 
-if KERAS_BACKEND:
-    Adam = KERAS_DEPS.Adam
-    Model = KERAS_DEPS.Model
-    Tensor = KERAS_DEPS.Tensor
-    EarlyStopping = KERAS_DEPS.EarlyStopping
-    tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
-    tf_float32 = KERAS_DEPS.float32
-    tf_zeros = KERAS_DEPS.zeros 
-    tf_shape =KERAS_DEPS.shape 
+HyperParameters = KT_DEPS.HyperParameters
+Objective = KT_DEPS.Objective
+Tuner = KT_DEPS.Tuner 
+BayesianOptimization =KT_DEPS.BayesianOptimization
+RandomSearch =KT_DEPS.RandomSearch
+
+Adam = KERAS_DEPS.Adam
+Model = KERAS_DEPS.Model
+Tensor = KERAS_DEPS.Tensor
+EarlyStopping = KERAS_DEPS.EarlyStopping
+tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+tf_float32 = KERAS_DEPS.float32
+tf_zeros = KERAS_DEPS.zeros 
+tf_shape =KERAS_DEPS.shape 
     
-else:
-    class Model: pass
-    class Tensor: pass
-    class Adam: pass
-    class EarlyStopping: pass
-
-DEP_MSG = dependency_message('nn.forecast_tuner')
+DEP_MSG = dependency_message('nn.forecast_tuner.tuners')
 
 _tuner_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_tuner_common_params)
@@ -382,8 +365,6 @@ References
 """.format(params=_tuner_docs)
 
 
-
-
 @ensure_pkg(
     'keras_tuner',
     extra="'keras_tuner' is required for model tuning.",
@@ -444,7 +425,7 @@ def xtft_tuner(
     model_name: str = "xtft",
     verbose: int = 1, 
     **kws
-) -> Tuple[Optional[Dict], Optional[Model], Optional[kt.Tuner]]:
+) -> Tuple[Optional[Dict], Optional[Model], Optional[Tuner]]:
     """
     Fine-tunes XTFT, SuperXTFT, or TFT (stricter) models.
 
@@ -684,9 +665,9 @@ def xtft_tuner(
         "overwrite": True # Start fresh each time for tests
     }
     if tuner_type == "bayesian":
-        tuner = kt.BayesianOptimization(**common_tuner_args)
+        tuner = BayesianOptimization(**common_tuner_args)
     elif tuner_type == "random":
-        tuner = kt.RandomSearch(**common_tuner_args)
+        tuner = RandomSearch(**common_tuner_args)
     else:
         raise ValueError(f"Unsupported tuner_type: {tuner_type}")
     vlog("Tuner initialized.", level=2, verbose=verbose)

@@ -20,7 +20,6 @@ from typing import (
     Tuple,
     TYPE_CHECKING,
 )
-
 import numpy as np
 
 from ...api.docs import DocstringComponents, _tuner_common_params
@@ -33,68 +32,37 @@ from ...core.io import _get_valid_kwargs
 from ...utils.deps_utils import ensure_pkg
 from ...utils.generic_utils import vlog
 from ...utils.validator import validate_positive_integer
+
 from .._tensor_validation import validate_model_inputs
-from .. import (
-    KERAS_DEPS,
-    KERAS_BACKEND,
-)
+from .. import KERAS_DEPS
 from ..__init__ import config
 from ..losses import combined_quantile_loss
-# from .keras_validator import validate_keras_model
+
 from ..transformers import (
     TemporalFusionTransformer as TFTFlexible,
     TFT as TFTStricter,
 )
 from ..models import XTFT, SuperXTFT 
 
-HAS_KT = False
-try:
-    import keras_tuner as kt
-
-    HAS_KT = True
-except ImportError:
-    class _DummyTuner:
-        pass
-
-    class _DummyKT:
-        Tuner = _DummyTuner
-
-    kt = _DummyKT()
+from . import KT_DEPS, HAS_KT
 
 if TYPE_CHECKING:
-    import keras_tuner as kt  # type: ignore
-    import tensorflow as tf
+    import keras_tuner as kt  # type: ignore, E404 Noqa
 
-    Tensor = tf.Tensor
-    Model = tf.keras.Model
-else:
-    class Tensor:
-        pass
+Model = KERAS_DEPS.Model
+Tensor = KERAS_DEPS.Tensor
+Adam = KERAS_DEPS.Adam
+EarlyStopping = KERAS_DEPS.EarlyStopping
+tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+tf_float32 = KERAS_DEPS.float32
+tf_zeros = KERAS_DEPS.zeros
+tf_shape = KERAS_DEPS.shape
 
-    class Model:
-        pass
-
-
-if KERAS_BACKEND:
-    Adam = KERAS_DEPS.Adam
-    EarlyStopping = KERAS_DEPS.EarlyStopping
-    tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
-    tf_float32 = KERAS_DEPS.float32
-    tf_zeros = KERAS_DEPS.zeros
-    tf_shape = KERAS_DEPS.shape
-else:
-    class Adam:
-        pass
-
-    class EarlyStopping:
-        pass
-
-    tf_convert_to_tensor = (
-        lambda x, dtype: np.asarray(x, dtype=str(dtype).split(".")[-1])
-    )
-    tf_float32 = np.float32  # type: ignore
-    tf_zeros = np.zeros
-    tf_shape = np.shape
+# And for KerasTuner objects
+Tuner = KT_DEPS.Tuner
+HyperParameters = KT_DEPS.HyperParameters
+BayesianOptimization = KT_DEPS.BayesianOptimization
+RandomSearch =KT_DEPS.RandomSearch
 
 _tuner_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_tuner_common_params)
@@ -208,7 +176,7 @@ class BaseTuner:
 
         self.best_hps_: Optional[Dict[str, Any]] = None
         self.best_model_: Optional[Model] = None
-        self.tuner_: Optional[kt.Tuner] = None
+        self.tuner_: Optional[Tuner] = None
         self.tuning_log_: List[Dict[str, Any]] = []
         self._run_case_info: Dict[str, Any] = {}
         
@@ -432,7 +400,7 @@ class BaseTuner:
     
     def _model_builder_factory(
         self,
-        hp: kt.HyperParameters,
+        hp: HyperParameters,
         # Pass validated (non-dummy) tensors to determine actual
         # feature dimensions
         X_static_validated: Optional[Tensor],
@@ -675,7 +643,7 @@ class BaseTuner:
     ) -> Tuple[
         Optional[Dict[str, Any]],
         Optional[Model],
-        Optional[kt.Tuner],
+        Optional[Tuner],
     ]:
         """
         Execute the complete tuning workflow.
@@ -840,9 +808,9 @@ class BaseTuner:
             "overwrite": True,
         }
         if self.tuner_type == "bayesian":
-            self.tuner_ = kt.BayesianOptimization(**common_tuner_args)
+            self.tuner_ = BayesianOptimization(**common_tuner_args)
         else:
-            self.tuner_ = kt.RandomSearch(**common_tuner_args)
+            self.tuner_ = RandomSearch(**common_tuner_args)
         vlog(
             f"Keras Tuner initialized: {self.tuner_type.upper()} "
             f"for {project_name}",

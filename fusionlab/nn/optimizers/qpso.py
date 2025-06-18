@@ -10,41 +10,40 @@ from numbers import Integral, Real
 import numpy as np
 import matplotlib.pyplot as plt
 
-from ..api.property import NNLearner
-from ..compat.sklearn import validate_params, Interval, Hidden 
-from ..utils.deps_utils import ensure_pkg 
-from ..utils.validator import check_consistent_length 
-from ..utils.validator import check_is_fitted
-from ..metrics import get_scorer 
+from ...api.property import NNLearner
+from ...compat.sklearn import validate_params, Interval, Hidden 
+from ...utils.deps_utils import ensure_pkg 
+from ...utils.validator import check_consistent_length 
+from ...utils.validator import check_is_fitted
+from ...metrics import get_scorer 
 
-from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
-from .keras_validator import validate_keras_model
+from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
+from ..keras_validator import validate_keras_model
+from ..utils import extract_callbacks_from 
 
-if KERAS_BACKEND: 
-    Callback=KERAS_DEPS.Callback 
-    LSTM = KERAS_DEPS.LSTM
-    Conv1D=KERAS_DEPS.Conv1D 
-    Adam=KERAS_DEPS.Adam
-    SGD=KERAS_DEPS.SGD 
-    MaxPooling1D=KERAS_DEPS.MaxPooling1D
-    GlobalAveragePooling1D=KERAS_DEPS.GlobalAveragePooling1D
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    EarlyStopping = KERAS_DEPS.EarlyStopping
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Model = KERAS_DEPS.Model 
-    BatchNormalization = KERAS_DEPS.BatchNormalization
-    Input = KERAS_DEPS.Input
-    Softmax = KERAS_DEPS.Softmax
-    Flatten = KERAS_DEPS.Flatten
-    Dropout = KERAS_DEPS.Dropout 
-    Dense = KERAS_DEPS.Dense
-    ReduceLROnPlateau =KERAS_DEPS.ReduceLROnPlateau 
-    Layer = KERAS_DEPS.Layer 
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    Concatenate=KERAS_DEPS.Concatenate
-    tf_set_seed=KERAS_DEPS.set_seed
+Callback=KERAS_DEPS.Callback 
+LSTM = KERAS_DEPS.LSTM
+Conv1D=KERAS_DEPS.Conv1D 
+Adam=KERAS_DEPS.Adam
+SGD=KERAS_DEPS.SGD 
+MaxPooling1D=KERAS_DEPS.MaxPooling1D
+GlobalAveragePooling1D=KERAS_DEPS.GlobalAveragePooling1D
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+EarlyStopping = KERAS_DEPS.EarlyStopping
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Model = KERAS_DEPS.Model 
+BatchNormalization = KERAS_DEPS.BatchNormalization
+Input = KERAS_DEPS.Input
+Softmax = KERAS_DEPS.Softmax
+Flatten = KERAS_DEPS.Flatten
+Dropout = KERAS_DEPS.Dropout 
+Dense = KERAS_DEPS.Dense
+ReduceLROnPlateau =KERAS_DEPS.ReduceLROnPlateau 
+Layer = KERAS_DEPS.Layer 
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
+Concatenate=KERAS_DEPS.Concatenate
+tf_set_seed=KERAS_DEPS.set_seed
     
-    from .utils import extract_callbacks_from 
     
 DEP_MSG = dependency_message('nn.optimize') 
 

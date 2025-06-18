@@ -6,8 +6,7 @@
 # demonstrating and testing fusionlab models.
 # -------------------------------------------------------------------
 """
-Synthetic Dataset Generation Utilities (:mod:`fusionlab.datasets.make`)
-======================================================================
+Synthetic Dataset Generation Utilities.
 
 This module provides functions to create synthetic datasets tailored
 for demonstrating and testing the various models and utilities within

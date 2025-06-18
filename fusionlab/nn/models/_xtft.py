@@ -20,53 +20,13 @@ from ...utils.deps_utils import ensure_pkg
 from ...decorators import Appender
 
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
- 
+
 if KERAS_BACKEND:
-    LSTM = KERAS_DEPS.LSTM
-    Dense = KERAS_DEPS.Dense
-    Flatten = KERAS_DEPS.Flatten
-    Dropout = KERAS_DEPS.Dropout 
-    Layer = KERAS_DEPS.Layer 
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Model= KERAS_DEPS.Model 
-    Input=KERAS_DEPS.Input
-    Concatenate=KERAS_DEPS.Concatenate 
-    Tensor=KERAS_DEPS.Tensor
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
-    tf_reduce_sum = KERAS_DEPS.reduce_sum
-    tf_stack = KERAS_DEPS.stack
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_range_=KERAS_DEPS.range 
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
-    tf_reshape=KERAS_DEPS.reshape
-    tf_add = KERAS_DEPS.add
-    tf_maximum = KERAS_DEPS.maximum
-    tf_reduce_mean = KERAS_DEPS.reduce_mean
-    tf_add_n = KERAS_DEPS.add_n
-    tf_float32=KERAS_DEPS.float32
-    tf_constant=KERAS_DEPS.constant 
-    tf_square=KERAS_DEPS.square 
-    tf_GradientTape=KERAS_DEPS.GradientTape
-    tf_unstack =KERAS_DEPS.unstack
-    tf_errors=KERAS_DEPS.errors 
-    tf_is_nan =KERAS_DEPS.is_nan 
-    tf_reduce_all=KERAS_DEPS.reduce_all
-    tf_zeros_like=KERAS_DEPS.zeros_like
-    tf_squeeze = KERAS_DEPS.squeeze
-    
-    tf_autograph=KERAS_DEPS.autograph
-    tf_autograph.set_verbosity(0)
-    
     from ...compat.tf import optional_tf_function 
     from .._tensor_validation import validate_anomaly_scores 
     from .._tensor_validation import validate_model_inputs
     from .._tensor_validation import validate_anomaly_config 
     from .._tensor_validation import align_temporal_dimensions
-    
     from ..losses import ( 
         combined_quantile_loss, 
         combined_total_loss, 
@@ -74,27 +34,66 @@ if KERAS_BACKEND:
     )
     from ..utils import set_default_params
     from ..components import (
-            Activation, 
-            AdaptiveQuantileLoss,
-            AnomalyLoss,
-            CrossAttention,
-            DynamicTimeWindow,
-            GatedResidualNetwork,
-            HierarchicalAttention,
-            LearnedNormalization,
-            MemoryAugmentedAttention,
-            MultiDecoder,
-            MultiModalEmbedding,
-            MultiObjectiveLoss,
-            MultiResolutionAttentionFusion,
-            MultiScaleLSTM,
-            QuantileDistributionModeling,
-            VariableSelectionNetwork,
-            PositionalEncoding, 
-            aggregate_multiscale, 
-            aggregate_time_window_output
+        Activation, 
+        AdaptiveQuantileLoss,
+        AnomalyLoss,
+        CrossAttention,
+        DynamicTimeWindow,
+        GatedResidualNetwork,
+        HierarchicalAttention,
+        LearnedNormalization,
+        MemoryAugmentedAttention,
+        MultiDecoder,
+        MultiModalEmbedding,
+        MultiObjectiveLoss,
+        MultiResolutionAttentionFusion,
+        MultiScaleLSTM,
+        QuantileDistributionModeling,
+        VariableSelectionNetwork,
+        PositionalEncoding, 
+        aggregate_multiscale, 
+        aggregate_time_window_output
         )
-    
+         
+LSTM = KERAS_DEPS.LSTM
+Dense = KERAS_DEPS.Dense
+Flatten = KERAS_DEPS.Flatten
+Dropout = KERAS_DEPS.Dropout 
+Layer = KERAS_DEPS.Layer 
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Model= KERAS_DEPS.Model 
+Input=KERAS_DEPS.Input
+Concatenate=KERAS_DEPS.Concatenate 
+Tensor=KERAS_DEPS.Tensor
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
+
+tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_stack = KERAS_DEPS.stack
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_range_=KERAS_DEPS.range 
+tf_concat = KERAS_DEPS.concat
+tf_shape = KERAS_DEPS.shape
+tf_reshape=KERAS_DEPS.reshape
+tf_add = KERAS_DEPS.add
+tf_maximum = KERAS_DEPS.maximum
+tf_reduce_mean = KERAS_DEPS.reduce_mean
+tf_add_n = KERAS_DEPS.add_n
+tf_float32=KERAS_DEPS.float32
+tf_constant=KERAS_DEPS.constant 
+tf_square=KERAS_DEPS.square 
+tf_GradientTape=KERAS_DEPS.GradientTape
+tf_unstack =KERAS_DEPS.unstack
+tf_errors=KERAS_DEPS.errors 
+tf_is_nan =KERAS_DEPS.is_nan 
+tf_reduce_all=KERAS_DEPS.reduce_all
+tf_zeros_like=KERAS_DEPS.zeros_like
+tf_squeeze = KERAS_DEPS.squeeze
+
+tf_autograph=KERAS_DEPS.autograph
+tf_autograph.set_verbosity(0)
+
 DEP_MSG = dependency_message('nn.transformers') 
 
 logger = fusionlog().get_fusionlab_logger(__name__)

@@ -10,24 +10,19 @@ from typing import Dict, List, Optional, Tuple, Union, Callable
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...utils.deps_utils import ensure_pkg 
-from .. import KERAS_DEPS, KERAS_BACKEND,dependency_message 
+from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message 
 from .utils import extract_txy_in 
 
-if KERAS_BACKEND:
-    Model = KERAS_DEPS.Model
-    Tensor = KERAS_DEPS.Tensor
-    GradientTape = KERAS_DEPS.GradientTape
-    
-    tf_concat = KERAS_DEPS.concat
-    tf_square = KERAS_DEPS.square 
-    tf_name_scope = KERAS_DEPS.name_scope
-    tf_float32 =KERAS_DEPS.float32 
-    tf_constant = KERAS_DEPS.constant 
-    
-else:
-    class Model:
-        pass
-    Tensor = type("Tensor", (), {})
+Model = KERAS_DEPS.Model
+Tensor = KERAS_DEPS.Tensor
+GradientTape = KERAS_DEPS.GradientTape
+
+tf_concat = KERAS_DEPS.concat
+tf_square = KERAS_DEPS.square 
+tf_name_scope = KERAS_DEPS.name_scope
+tf_float32 =KERAS_DEPS.float32 
+tf_constant = KERAS_DEPS.constant 
+
 
 DEP_MSG = dependency_message('nn.transformers') 
 logger = fusionlog().get_fusionlab_logger(__name__)

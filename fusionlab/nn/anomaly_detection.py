@@ -18,32 +18,31 @@ from ..utils.validator import validate_positive_integer
 
 from . import KERAS_DEPS, KERAS_BACKEND, dependency_message
 
-if KERAS_BACKEND:
-    Layer = KERAS_DEPS.Layer
-    Model = KERAS_DEPS.Model
-    LSTM = KERAS_DEPS.LSTM
-    Dense = KERAS_DEPS.Dense
-    Dropout = KERAS_DEPS.Dropout
-    RepeatVector = KERAS_DEPS.RepeatVector
-    TimeDistributed = KERAS_DEPS.TimeDistributed
-    Dense = KERAS_DEPS.Dense
-    Dropout = KERAS_DEPS.Dropout
-    Bidirectional = KERAS_DEPS.Bidirectional
-    LayerNormalization = KERAS_DEPS.LayerNormalization
-    BatchNormalization = KERAS_DEPS.BatchNormalization 
-    regularizers = KERAS_DEPS.regularizers
-    
-    tf_reduce_mean = KERAS_DEPS.reduce_mean
-    tf_square = KERAS_DEPS.square
-    tf_subtract = KERAS_DEPS.subtract
-    tf_concat = KERAS_DEPS.concat 
-    tf_reduce_max = KERAS_DEPS.reduce_max 
-    tf_abs = KERAS_DEPS.abs 
-    tf_expand_dims=KERAS_DEPS.expand_dims 
-    tf_shape = KERAS_DEPS.shape 
-    tf_minimum =KERAS_DEPS.minimum
-    register_keras_serializable = KERAS_DEPS.register_keras_serializable
-    Tensor = KERAS_DEPS.Tensor 
+Layer = KERAS_DEPS.Layer
+Model = KERAS_DEPS.Model
+LSTM = KERAS_DEPS.LSTM
+Dense = KERAS_DEPS.Dense
+Dropout = KERAS_DEPS.Dropout
+RepeatVector = KERAS_DEPS.RepeatVector
+TimeDistributed = KERAS_DEPS.TimeDistributed
+Dense = KERAS_DEPS.Dense
+Dropout = KERAS_DEPS.Dropout
+Bidirectional = KERAS_DEPS.Bidirectional
+LayerNormalization = KERAS_DEPS.LayerNormalization
+BatchNormalization = KERAS_DEPS.BatchNormalization 
+regularizers = KERAS_DEPS.regularizers
+
+tf_reduce_mean = KERAS_DEPS.reduce_mean
+tf_square = KERAS_DEPS.square
+tf_subtract = KERAS_DEPS.subtract
+tf_concat = KERAS_DEPS.concat 
+tf_reduce_max = KERAS_DEPS.reduce_max 
+tf_abs = KERAS_DEPS.abs 
+tf_expand_dims=KERAS_DEPS.expand_dims 
+tf_shape = KERAS_DEPS.shape 
+tf_minimum =KERAS_DEPS.minimum
+register_keras_serializable = KERAS_DEPS.register_keras_serializable
+Tensor = KERAS_DEPS.Tensor 
 
 
 DEP_MSG = dependency_message('nn.anomaly_detection')

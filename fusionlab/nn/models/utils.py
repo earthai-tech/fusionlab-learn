@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import warnings
 import os
-import numpy as np
 
 from typing import List, Optional, Union, Dict
 

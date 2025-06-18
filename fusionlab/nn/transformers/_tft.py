@@ -26,34 +26,6 @@ from ...utils.deps_utils import ensure_pkg
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 
 if KERAS_BACKEND:
-    LSTM = KERAS_DEPS.LSTM
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    TimeDistributed = KERAS_DEPS.TimeDistributed
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Model = KERAS_DEPS.Model 
-    BatchNormalization = KERAS_DEPS.BatchNormalization
-    Input = KERAS_DEPS.Input
-    Softmax = KERAS_DEPS.Softmax
-    Flatten = KERAS_DEPS.Flatten
-    Dropout = KERAS_DEPS.Dropout 
-    Dense = KERAS_DEPS.Dense
-    Embedding =KERAS_DEPS.Embedding 
-    Concatenate=KERAS_DEPS.Concatenate 
-    Layer = KERAS_DEPS.Layer 
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
-    tf_reduce_sum = KERAS_DEPS.reduce_sum
-    tf_stack = KERAS_DEPS.stack
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_range=KERAS_DEPS.range 
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
-    tf_rank=KERAS_DEPS.rank
-    
-    tf_autograph=KERAS_DEPS.autograph
-    tf_autograph.set_verbosity(0)
-    
     from .._tensor_validation import ( 
         validate_model_inputs, 
         align_temporal_dimensions
@@ -66,7 +38,35 @@ if KERAS_BACKEND:
         TemporalAttentionLayer, 
     )
     
-DEP_MSG = dependency_message('transformers.tft') 
+LSTM = KERAS_DEPS.LSTM
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+TimeDistributed = KERAS_DEPS.TimeDistributed
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Model = KERAS_DEPS.Model 
+BatchNormalization = KERAS_DEPS.BatchNormalization
+Input = KERAS_DEPS.Input
+Softmax = KERAS_DEPS.Softmax
+Flatten = KERAS_DEPS.Flatten
+Dropout = KERAS_DEPS.Dropout 
+Dense = KERAS_DEPS.Dense
+Embedding =KERAS_DEPS.Embedding 
+Concatenate=KERAS_DEPS.Concatenate 
+Layer = KERAS_DEPS.Layer 
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
+
+tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_stack = KERAS_DEPS.stack
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_range=KERAS_DEPS.range 
+tf_concat = KERAS_DEPS.concat
+tf_shape = KERAS_DEPS.shape
+tf_rank=KERAS_DEPS.rank
+
+tf_autograph=KERAS_DEPS.autograph
+tf_autograph.set_verbosity(0)
+
+DEP_MSG = dependency_message('transformers') 
 
 __all__ = ["TemporalFusionTransformer", "DummyTFT"]
 

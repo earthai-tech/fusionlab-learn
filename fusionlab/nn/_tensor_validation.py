@@ -7,6 +7,8 @@ from __future__ import annotations
 import warnings
 from typing import List, Tuple, Optional, Union, Dict, Any
 
+import numpy as np 
+
 from .._fusionlog import fusionlog 
 from ..utils.deps_utils import ensure_pkg 
 from ..compat.tf import ( 
@@ -17,70 +19,47 @@ from ..compat.tf import (
 from ..compat.tf import  HAS_TF, TFConfig 
 from . import KERAS_DEPS, KERAS_BACKEND
 
-import numpy as np 
-
-if KERAS_BACKEND:
-    Tensor=KERAS_DEPS.Tensor
-
-    tf_shape = KERAS_DEPS.shape
-    tf_float32=KERAS_DEPS.float32
-    tf_int32=KERAS_DEPS.int32
-    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
-    tf_cast=KERAS_DEPS.cast 
-    tf_cond =KERAS_DEPS.cond
-    tf_reduce_all=KERAS_DEPS.reduce_all
-    tf_equal=KERAS_DEPS.equal 
-    tf_debugging= KERAS_DEPS.debugging 
-    tf_pad = KERAS_DEPS.pad 
-    tf_rank= KERAS_DEPS.rank 
-    tf_less =KERAS_DEPS.less
-    tf_constant =KERAS_DEPS.constant
-    tf_assert_equal=KERAS_DEPS.assert_equal
-    tf_autograph=KERAS_DEPS.autograph
-    tf_concat = KERAS_DEPS.concat
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    tf_expand_dims=KERAS_DEPS.expand_dims
-    tf_control_dependencies=KERAS_DEPS.control_dependencies
-    tf_get_static_value = KERAS_DEPS.get_static_value
-    
-    if hasattr(tf_autograph, 'set_verbosity'):
-        tf_autograph.set_verbosity(0) 
-    
-else: 
-   # Warn the user that TensorFlow
-   # is required for this module
-    warnings.warn(
-        "TensorFlow is not installed. Please install"
-        " TensorFlow to use this module.",
-        ImportWarning
-    )
-
-    class Tensor: pass 
-    def tf_shape(t): return np.array(t.shape)
-    def tf_concat(t, axis): return np.concatenate(t, axis=axis)
-    def tf_expand_dims(t, axis): return np.expand_dims(t, axis=axis)
-    def tf_pad(tensor, paddings, mode="CONSTANT", constant_values=0):
-        return np.pad(tensor, paddings, mode=mode, constant_values=constant_values)
-    class tf_debugging:
-        @staticmethod
-        def assert_greater_equal(a,b,message): assert a >= b, message
-
-    tf_float32 = np.float32
-    tf_int32 = np.int32
-    def tf_convert_to_tensor(x, dtype=None): return np.array(x, dtype=dtype)
-    def tf_cast(x, dtype): return x.astype(dtype)
-    def tf_equal(x, y): return np.equal(x, y)
-
-    def tf_rank(x): return np.ndim(x)
-    def tf_less(x,y): return np.less(x,y)
 
 
-if HAS_TF:
-    config = TFConfig()
-#     # Enable compatibility mode for ndim
-#     config.compat_ndim_enabled = True 
+if not HAS_TF:
+    # Warn the user that TensorFlow
+    # is required for this module
+     warnings.warn(
+         "TensorFlow is not installed. Please install"
+         " TensorFlow to use this module.",
+         ImportWarning
+     )
+     config = TFConfig()
+     # Enable compatibility mode for ndim
+     #config.compat_ndim_enabled = True 
+
+Tensor=KERAS_DEPS.Tensor
+tf_shape = KERAS_DEPS.shape
+tf_float32=KERAS_DEPS.float32
+tf_int32=KERAS_DEPS.int32
+tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
+tf_cast=KERAS_DEPS.cast 
+tf_cond =KERAS_DEPS.cond
+tf_reduce_all=KERAS_DEPS.reduce_all
+tf_equal=KERAS_DEPS.equal 
+tf_debugging= KERAS_DEPS.debugging 
+tf_pad = KERAS_DEPS.pad 
+tf_rank= KERAS_DEPS.rank 
+tf_less =KERAS_DEPS.less
+tf_constant =KERAS_DEPS.constant
+tf_assert_equal=KERAS_DEPS.assert_equal
+tf_autograph=KERAS_DEPS.autograph
+tf_concat = KERAS_DEPS.concat
+
+tf_expand_dims=KERAS_DEPS.expand_dims
+tf_control_dependencies=KERAS_DEPS.control_dependencies
+tf_get_static_value = KERAS_DEPS.get_static_value
+
+if hasattr(tf_autograph, 'set_verbosity'):
+    tf_autograph.set_verbosity(0) 
 
 _logger = fusionlog().get_fusionlab_logger(__name__)
+
 # --------------------------- tensor validation -------------------------------
 
 def set_anomaly_config(

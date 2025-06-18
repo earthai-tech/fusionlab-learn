@@ -22,40 +22,8 @@ from ...utils.generic_utils import select_mode
 from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
  
 if KERAS_BACKEND: 
-    LSTM = KERAS_DEPS.LSTM
-    Dense = KERAS_DEPS.Dense
-    LayerNormalization = KERAS_DEPS.LayerNormalization 
-    Model= KERAS_DEPS.Model 
-    Tensor=KERAS_DEPS.Tensor
-    Variable =KERAS_DEPS.Variable 
-    Add =KERAS_DEPS.Add
-    Constant =KERAS_DEPS.Constant 
-    GradientTape =KERAS_DEPS.GradientTape 
-    
-    register_keras_serializable=KERAS_DEPS.register_keras_serializable
-    
-    tf_zeros_like= KERAS_DEPS.zeros_like
-    tf_zeros =KERAS_DEPS.zeros
-    tf_reduce_mean =KERAS_DEPS.reduce_mean
-    tf_square =KERAS_DEPS.square
-    tf_constant =KERAS_DEPS.constant 
-    tf_log = KERAS_DEPS.log
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-    tf_concat = KERAS_DEPS.concat
-    tf_shape = KERAS_DEPS.shape
-    tf_float32=KERAS_DEPS.float32
-    tf_exp =KERAS_DEPS.exp 
-    tf_rank =KERAS_DEPS.rank 
-    tf_assert_equal = KERAS_DEPS.assert_equal 
-    tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
-    
-    tf_autograph=KERAS_DEPS.autograph
-    tf_autograph.set_verbosity(0)
-    
     from .._tensor_validation import validate_model_inputs
     from .._tensor_validation import check_inputs 
-    
     from ..utils import set_default_params
     from ..components import (
             Activation, 
@@ -76,14 +44,43 @@ if KERAS_BACKEND:
     from .op import process_pinn_inputs, compute_consolidation_residual 
     from .utils import process_pde_modes 
     
-    
+LSTM = KERAS_DEPS.LSTM
+Dense = KERAS_DEPS.Dense
+LayerNormalization = KERAS_DEPS.LayerNormalization 
+Model= KERAS_DEPS.Model 
+Tensor=KERAS_DEPS.Tensor
+Variable =KERAS_DEPS.Variable 
+Add =KERAS_DEPS.Add
+Constant =KERAS_DEPS.Constant 
+GradientTape =KERAS_DEPS.GradientTape 
+
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
+
+tf_zeros_like= KERAS_DEPS.zeros_like
+tf_zeros =KERAS_DEPS.zeros
+tf_reduce_mean =KERAS_DEPS.reduce_mean
+tf_square =KERAS_DEPS.square
+tf_constant =KERAS_DEPS.constant 
+tf_log = KERAS_DEPS.log
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+tf_concat = KERAS_DEPS.concat
+tf_shape = KERAS_DEPS.shape
+tf_float32=KERAS_DEPS.float32
+tf_exp =KERAS_DEPS.exp 
+tf_rank =KERAS_DEPS.rank 
+tf_assert_equal = KERAS_DEPS.assert_equal 
+tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
+
+tf_autograph=KERAS_DEPS.autograph
+tf_autograph.set_verbosity(0)   
+
 DEP_MSG = dependency_message('nn.pinn.models') 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
 __all__ =["PiHALNet"] 
-
 
 @register_keras_serializable('fusionlab.nn.pinn', name="PIHALNet")
 @param_deprecated_message(

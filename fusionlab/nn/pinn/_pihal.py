@@ -7,7 +7,7 @@ Physics-Informed Hybrid Attentive LSTM Network (PIHALNet).
 """
 from __future__ import annotations
 from numbers import Integral, Real 
-from typing import List, Optional, Union, Dict, Any, Tuple 
+from typing import List, Optional, Union, Dict, Tuple 
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...core.handlers import param_deprecated_message 
@@ -19,48 +19,40 @@ from .. import KERAS_BACKEND, KERAS_DEPS,  dependency_message
 from .._base_attentive import BaseAttentive 
 
 if KERAS_BACKEND:
-    
-    MeanSquaredError = KERAS_DEPS.Adam 
-    Adam =KERAS_DEPS.Adam 
-    Tensor = KERAS_DEPS.Tensor
-    Constant =KERAS_DEPS.Constant 
-    GradientTape = KERAS_DEPS.GradientTape
-    
-    tf_exp = KERAS_DEPS.exp
-    tf_square = KERAS_DEPS.square
-    tf_reduce_mean = KERAS_DEPS.reduce_mean
-    tf_zeros_like = KERAS_DEPS.zeros_like
-    tf_rank =KERAS_DEPS.rank 
-    tf_exp =KERAS_DEPS.exp 
-    tf_constant =KERAS_DEPS.constant 
-    tf_log = KERAS_DEPS.log
-    tf_constant =KERAS_DEPS.constant
-    tf_float32=KERAS_DEPS.float32
-    
-    tf_autograph=KERAS_DEPS.autograph
-    tf_autograph.set_verbosity(0)
-    
     from .._tensor_validation import check_inputs
     from .op import process_pinn_inputs, compute_consolidation_residual
     from .utils import process_pde_modes 
+  
+MeanSquaredError = KERAS_DEPS.Adam 
+Adam =KERAS_DEPS.Adam 
+Tensor = KERAS_DEPS.Tensor
+Constant =KERAS_DEPS.Constant 
+GradientTape = KERAS_DEPS.GradientTape
 
-else:
-    class Model: pass
-    class Layer: pass
-    class _DummyRegister_keras_serializable: 
-        pass 
-    class KERAS_DEPS: 
-        register_keras_serializable = _DummyRegister_keras_serializable
-        
-    Tensor = Any
+tf_exp = KERAS_DEPS.exp
+tf_square = KERAS_DEPS.square
+tf_reduce_mean = KERAS_DEPS.reduce_mean
+tf_zeros_like = KERAS_DEPS.zeros_like
+tf_rank =KERAS_DEPS.rank 
+tf_exp =KERAS_DEPS.exp 
+tf_constant =KERAS_DEPS.constant 
+tf_log = KERAS_DEPS.log
+tf_constant =KERAS_DEPS.constant
+tf_float32=KERAS_DEPS.float32
+
+tf_autograph=KERAS_DEPS.autograph
+tf_autograph.set_verbosity(0)
+ 
+register_keras_serializable =KERAS_DEPS.register_keras_serializable
 
 DEP_MSG = dependency_message('nn.pinn.models') 
+
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
 __all__ = ["PIHALNet"]
 
-@KERAS_DEPS.register_keras_serializable(
+@register_keras_serializable(
     'fusionlab.nn.pinn', name="PIHALNet"
 )
 @param_deprecated_message(
@@ -163,12 +155,9 @@ class PIHALNet(BaseAttentive):
         name: str = "PIHALNet",
         **kwargs
     ):
-        # The output_dim for the base attentive model is the sum of
-        # the two target dimensions.
         self._combined_output_target_dim = (
             output_subsidence_dim + output_gwl_dim
         )
-        # Pass all shared parameters to the BaseAttentive parent class.
         super().__init__(
            static_input_dim=static_input_dim, 
            dynamic_input_dim=dynamic_input_dim, 
