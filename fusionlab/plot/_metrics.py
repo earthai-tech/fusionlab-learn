@@ -34,9 +34,6 @@ from ..core.handlers import columns_manager
 from ..core.io import _get_valid_kwargs 
 from ..core.checks import exist_features
 from ..core.diagnose_q import validate_quantiles
-
-from ..metrics._registry import get_metric
-
 from ..utils.generic_utils import are_all_values_in_bounds 
 
 __all__= [
@@ -78,6 +75,7 @@ def plot_theils_u_score(
 ) -> plt.Axes:
     
     # *********************************************************
+    from ..metrics._registry import get_metric
     theils_u_score = get_metric("theils_u_score")
     # *********************************************************
     # --- 1. Input Validation and Preparation ---
@@ -435,6 +433,7 @@ def plot_weighted_interval_score(
 ) -> plt.Axes:
 
     # ****************************************************************
+    from ..metrics._registry import get_metric
     weighted_interval_score = get_metric("weighted_interval_score")
     # ****************************************************************
     
@@ -844,7 +843,8 @@ def _get_metric_function(
     metric_type: MetricType
 ) -> MetricFunctionType:
     """Helper to retrieve the appropriate metric function."""
-
+    from ..metrics._registry import get_metric
+    
     if metric_type == 'mae':
         return get_metric("time_weighted_mean_absolute_error")
     elif metric_type == 'accuracy':
@@ -1571,6 +1571,7 @@ def plot_quantile_calibration(
 ) -> plt.Axes:
     
     # *************************************************************************
+    from ..metrics._registry import get_metric
     quantile_calibration_error = get_metric("quantile_calibration_error")
     # **************************************************************************
     
@@ -2010,6 +2011,7 @@ def plot_coverage(
 ) -> plt.Axes:
 
     # ************************************************
+    from ..metrics._registry import get_metric
     coverage_score = get_metric("coverage_score")
     # ************************************************
     
@@ -2408,6 +2410,7 @@ def plot_crps(
     **kwargs: Any 
 ) -> plt.Axes:
     # *************************************************
+    from ..metrics._registry import get_metric
     continuous_ranked_probability_score = get_metric(
         "continuous_ranked_probability_score")
     # *************************************************
@@ -2848,6 +2851,7 @@ def plot_mean_interval_width(
 ) -> plt.Axes:
 
     # *************************************************
+    from ..metrics._registry import get_metric
     mean_interval_width_score = get_metric(
         "mean_interval_width_score")
     # *************************************************
@@ -3206,6 +3210,7 @@ def plot_prediction_stability(
 ) -> plt.Axes:
 
     # **********************************************************************
+    from ..metrics._registry import get_metric
     prediction_stability_score = get_metric("prediction_stability_score")
     # **********************************************************************
     
