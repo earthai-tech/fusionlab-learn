@@ -11,7 +11,7 @@ import warnings
 # Attempt to import plotting functions and required utilities
 # In a real test environment, these imports should succeed.
 try:
-    from fusionlab.plot._evaluation import (
+    from fusionlab.plot._metrics import (
         plot_radar_scores,            
         plot_qce_donut                
     )
