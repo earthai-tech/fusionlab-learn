@@ -14,8 +14,8 @@ of this refactor is to eliminate a class of circular import errors that
 were causing build failures in clean environments like Read the Docs,
 and to make the entire codebase more maintainable and scalable.
 
-Enhancements & Improvements
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Improvements
+~~~~~~~~~~~~~~~
 * |Enhancement| **Centralized Configuration:** Introduced a new internal
   module, **fusionlab/_configs.py**, which now serves as the single
   source of truth for all backend dependency mappings. Hardcoded
