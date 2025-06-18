@@ -29,8 +29,9 @@ sphinx-gallery # To automatically generate example galleries (optional)
 sphinx-issues # To link to GitHub issues (optional)
 sphinx-prompt # For nicely formatted shell examples (optional)
 sphinx-design # For advanced layouts, grids, cards etc.
-# sphinxcontrib-bibtex
+sphinxcontrib-bibtex
 
+k-diagram 
 # Optional/Development Tools
 # --------------------------
 keras-tuner==1.4.7 # Required for hyperparameter tuning utilities (forecast_tuner)
