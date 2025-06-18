@@ -190,7 +190,6 @@ Utilities for optimizing model hyperparameters using Keras Tuner.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
-   
 Neural Network Utilities (`fusionlab.nn.utils`)
 ------------------------------------------------
 Utilities specifically for preparing data for or interacting with neural network models.
