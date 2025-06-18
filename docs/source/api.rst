@@ -134,7 +134,7 @@ These classes implement composite or parameterized loss behaviors.
    ~fusionlab.nn.components.AnomalyLoss
    ~fusionlab.nn.components.MultiObjectiveLoss
 
-Loss Functions** (`fusionlab.nn.losses`)
+Loss Functions (`fusionlab.nn.losses`)
 ******************************************
 Pure functions for computing scalar losses on predictions.
 
