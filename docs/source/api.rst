@@ -13,58 +13,6 @@ in the package.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-Datasets (`fusionlab.datasets`)
----------------------------------
-Utilities for loading included sample datasets and generating synthetic
-time series data for testing and demonstration.
-
-**Loading Functions** (`fusionlab.datasets`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_load
-   :nosignatures:
-
-   ~fusionlab.datasets.fetch_zhongshan_data
-   ~fusionlab.datasets.fetch_nansha_data
-   ~fusionlab.datasets.load_processed_subsidence_data
-   ~fusionlab.datasets.load_subsidence_pinn_data
-
-**Generation Functions** (`fusionlab.datasets`)
-
-.. autosummary::
-   :toctree: _autosummary/datasets_make
-   :nosignatures:
-
-   ~fusionlab.datasets.make_multi_feature_time_series
-   ~fusionlab.datasets.make_quantile_prediction_data
-   ~fusionlab.datasets.make_anomaly_data
-   ~fusionlab.datasets.make_trend_seasonal_data
-   ~fusionlab.datasets.make_multivariate_target_data
-
-Metrics (`fusionlab.metrics`)
--------------------------------
-A collection of metrics for evaluating forecast accuracy, calibration,
-sharpness, and stability, particularly suited for probabilistic and
-time-series forecasting.
-
-.. autosummary::
-   :toctree: _autosummary/metrics
-   :nosignatures:
-
-   ~fusionlab.metrics.coverage_score
-   ~fusionlab.metrics.continuous_ranked_probability_score
-   ~fusionlab.metrics.mean_interval_width_score
-   ~fusionlab.metrics.prediction_stability_score
-   ~fusionlab.metrics.quantile_calibration_error
-   ~fusionlab.metrics.theils_u_score
-   ~fusionlab.metrics.time_weighted_accuracy_score
-   ~fusionlab.metrics.time_weighted_interval_score
-   ~fusionlab.metrics.time_weighted_mean_absolute_error
-   ~fusionlab.metrics.weighted_interval_score
-   
-.. raw:: html
-
-   <hr>
 
 Transformer Models (`fusionlab.nn.transformers`)
 -------------------------------------------------
