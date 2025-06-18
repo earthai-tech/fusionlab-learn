@@ -26,6 +26,7 @@ Explore the sections below to learn how to effectively use
    models/index
    components
    losses
+   params
 
 .. toctree::
    :maxdepth: 2

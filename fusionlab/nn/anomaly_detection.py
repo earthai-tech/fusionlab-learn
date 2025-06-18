@@ -65,7 +65,7 @@ class LSTMAutoencoderAnomaly(Model, NNLearner):
         "num_encoder_layers": [Interval(Integral, 1, None, closed="left")],
         "num_decoder_layers": [Interval(Integral, 1, None, closed="left")],
         "n_features": [Interval(Integral, 1, None, closed="left"), None],
-        "n_repeats": [Interval(Integral, 1, None, closed="left"), None], # Added
+        "n_repeats": [Interval(Integral, 1, None, closed="left"), None], 
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "recurrent_dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "use_bidirectional_encoder": [bool],
