@@ -34,6 +34,27 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.make_trend_seasonal_data
    ~fusionlab.datasets.make_multivariate_target_data
    
+Metrics (`fusionlab.metrics`)
+-------------------------------
+A collection of metrics for evaluating forecast accuracy, calibration,
+sharpness, and stability, particularly suited for probabilistic and
+time-series forecasting.
+
+.. autosummary::
+   :toctree: _autosummary/metrics
+   :nosignatures:
+
+   ~fusionlab.metrics.coverage_score
+   ~fusionlab.metrics.continuous_ranked_probability_score
+   ~fusionlab.metrics.mean_interval_width_score
+   ~fusionlab.metrics.prediction_stability_score
+   ~fusionlab.metrics.quantile_calibration_error
+   ~fusionlab.metrics.theils_u_score
+   ~fusionlab.metrics.time_weighted_accuracy_score
+   ~fusionlab.metrics.time_weighted_interval_score
+   ~fusionlab.metrics.time_weighted_mean_absolute_error
+   ~fusionlab.metrics.weighted_interval_score
+   
 .. raw:: html
 
    <hr>
@@ -128,69 +149,7 @@ Various attention layers used in Fusion Model architectures.
    ~fusionlab.nn.components.MultiResolutionAttentionFusion
    ~fusionlab.nn.components.ExplainableAttention
 
-Sequence Processing Components (`fusionlab.nn.components`)
------------------------------------------------------------
-Components primarily focused on processing temporal sequences.
 
-.. autosummary::
-   :toctree: _autosummary/components_seq
-   :nosignatures:
-
-   ~fusionlab.nn.components.MultiScaleLSTM
-   ~fusionlab.nn.components.DynamicTimeWindow
-   ~fusionlab.nn.components.aggregate_multiscale
-   ~fusionlab.nn.components.aggregate_multiscale_on_3d
-   ~fusionlab.nn.components.aggregate_time_window_output
-   ~fusionlab.nn.components.create_causal_mask
-
-
-Attention Mechanisms (`fusionlab.nn.components`)
--------------------------------------------------
-Various attention layers used in Fusion Model architectures.
-
-.. autosummary::
-   :toctree: _autosummary/components_attn
-   :nosignatures:
-
-   ~fusionlab.nn.components.TemporalAttentionLayer
-   ~fusionlab.nn.components.CrossAttention
-   ~fusionlab.nn.components.HierarchicalAttention
-   ~fusionlab.nn.components.MemoryAugmentedAttention
-   ~fusionlab.nn.components.MultiResolutionAttentionFusion
-   ~fusionlab.nn.components.ExplainableAttention
-
-
-Embedding & Output Components (`fusionlab.nn.components`)
----------------------------------------------------------
-Layers for input embedding and generating final model outputs.
-
-.. autosummary::
-   :toctree: _autosummary/components_io
-   :nosignatures:
-
-   ~fusionlab.nn.components.MultiModalEmbedding
-   ~fusionlab.nn.components.MultiDecoder
-   ~fusionlab.nn.components.QuantileDistributionModeling
-
-Loss Functions (`fusionlab.nn.losses` & `fusionlab.nn.components`)
---------------------------------------------------------------------
-Loss functions tailored for time series forecasting and anomaly detection.
-
-.. autosummary::
-   :toctree: _autosummary/losses
-   :nosignatures:
-
-   ~fusionlab.nn.components.AdaptiveQuantileLoss
-   ~fusionlab.nn.components.AnomalyLoss
-   ~fusionlab.nn.components.MultiObjectiveLoss
-   ~fusionlab.nn.losses.combined_quantile_loss
-   ~fusionlab.nn.losses.prediction_based_loss
-   ~fusionlab.nn.losses.combined_total_loss
-   ~fusionlab.nn.losses.objective_loss
-   ~fusionlab.nn.losses.quantile_loss
-   ~fusionlab.nn.losses.quantile_loss_multi
-   ~fusionlab.nn.losses.anomaly_loss
-   
 Embedding & Output Components (`fusionlab.nn.components`)
 ---------------------------------------------------------
 Layers for input embedding and generating final model outputs.
@@ -207,7 +166,6 @@ Layers for input embedding and generating final model outputs.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-
 Losses (`fusionlab.nn.components` & `fusionlab.nn.losses`)
 -------------------------------------------------------------
 Losses tailored for time series forecasting and anomaly detection.
@@ -244,39 +202,6 @@ Pure functions for computing scalar losses on predictions.
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-   
-Anomaly Detection (`fusionlab.nn.anomaly_detection`)
------------------------------------------------------
-Components specifically designed for anomaly detection tasks.
-
-.. autosummary::
-   :toctree: _autosummary/anomaly
-   :nosignatures:
-
-   ~fusionlab.nn.anomaly_detection.LSTMAutoencoderAnomaly
-   ~fusionlab.nn.anomaly_detection.SequenceAnomalyScoreLayer
-   ~fusionlab.nn.anomaly_detection.PredictionErrorAnomalyScore
-
-Hyperparameter Tuning (`fusionlab.nn.forecast_tuner`)
-------------------------------------------------------
-Utilities for optimizing model hyperparameters using Keras Tuner.
-
-.. autosummary::
-   :toctree: _autosummary/tuning
-   :nosignatures:
-
-   ~fusionlab.nn.forecast_tuner.HydroTuner
-   ~fusionlab.nn.forecast_tuner.HALTuner
-   ~fusionlab.nn.forecast_tuner.XTFTTuner
-   ~fusionlab.nn.forecast_tuner.TFTTuner
-   ~fusionlab.nn.forecast_tuner.PiHALTuner
-   ~fusionlab.nn.forecast_tuner.xtft_tuner
-   ~fusionlab.nn.forecast_tuner.tft_tuner
-   
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
 
 Neural Network Utilities (`fusionlab.nn.utils`)
 ------------------------------------------------
@@ -348,6 +273,30 @@ side‑by‑side figures for rapid inspection.
    ~fusionlab.plot.forecast.plot_forecasts
    ~fusionlab.plot.forecast.plot_forecast_by_step
    ~fusionlab.plot.forecast.visualize_forecasts
+
+Time Series Utilities (`fusionlab.utils.ts_utils`)
+-----------------------------------------------------
+General utilities for time series data processing, analysis, and feature engineering.
+
+.. autosummary::
+   :toctree: _autosummary/ts_utils
+   :nosignatures:
+
+   ~fusionlab.utils.ts_utils.ts_validator
+   ~fusionlab.utils.ts_utils.to_dt
+   ~fusionlab.utils.ts_utils.filter_by_period
+   ~fusionlab.utils.ts_utils.ts_engineering
+   ~fusionlab.utils.ts_utils.create_lag_features
+   ~fusionlab.utils.ts_utils.trend_analysis
+   ~fusionlab.utils.ts_utils.trend_ops
+   ~fusionlab.utils.ts_utils.decompose_ts
+   ~fusionlab.utils.ts_utils.get_decomposition_method
+   ~fusionlab.utils.ts_utils.infer_decomposition_method
+   ~fusionlab.utils.ts_utils.ts_corr_analysis
+   ~fusionlab.utils.ts_utils.transform_stationarity
+   ~fusionlab.utils.ts_utils.ts_split
+   ~fusionlab.utils.ts_utils.ts_outlier_detector
+   ~fusionlab.utils.ts_utils.select_and_reduce_features
 
 Data Processing Utilities (`fusionlab.utils`)
 -------------------------------------------------
