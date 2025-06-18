@@ -32,6 +32,7 @@ try:
     
     from fusionlab.nn import KERAS_DEPS, KERAS_BACKEND
     from fusionlab.nn.forecast_tuner import PiHALTuner as LegacyPiHALTuner
+
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
     from fusionlab.utils.generic_utils import rename_dict_keys
     
