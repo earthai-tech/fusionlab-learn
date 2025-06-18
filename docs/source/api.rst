@@ -34,27 +34,6 @@ time series data for testing and demonstration.
    ~fusionlab.datasets.make_trend_seasonal_data
    ~fusionlab.datasets.make_multivariate_target_data
    
-Metrics (`fusionlab.metrics`)
--------------------------------
-A collection of metrics for evaluating forecast accuracy, calibration,
-sharpness, and stability, particularly suited for probabilistic and
-time-series forecasting.
-
-.. autosummary::
-   :toctree: _autosummary/metrics
-   :nosignatures:
-
-   ~fusionlab.metrics.coverage_score
-   ~fusionlab.metrics.continuous_ranked_probability_score
-   ~fusionlab.metrics.mean_interval_width_score
-   ~fusionlab.metrics.prediction_stability_score
-   ~fusionlab.metrics.quantile_calibration_error
-   ~fusionlab.metrics.theils_u_score
-   ~fusionlab.metrics.time_weighted_accuracy_score
-   ~fusionlab.metrics.time_weighted_interval_score
-   ~fusionlab.metrics.time_weighted_mean_absolute_error
-   ~fusionlab.metrics.weighted_interval_score
-   
 .. raw:: html
 
    <hr>
@@ -242,32 +221,6 @@ Utilities specifically for preparing data for or interacting with neural network
    ~fusionlab.nn.utils.prepare_model_inputs
    ~fusionlab.nn.pinn.utils.format_pihalnet_predictions 
    ~fusionlab.nn.pinn.utils.prepare_pinn_data_sequences 
-
-
-Visual‑metric helpers (`fusionlab.plot.evaluation`)
-------------------------------------------------------
-A curated set of plotting utilities that turn the raw numbers returned  
-by `fusionlab.metrics` into clear, publication‑quality figures.  
-They cover point‑forecast accuracy, interval **sharpness & coverage**,  
-ensemble calibration, temporal stability, and more – all tailored to  
-time‑series / probabilistic‑forecast workflows.
-
-.. autosummary::
-   :toctree: _autosummary/metrics
-   :nosignatures:
-
-   ~fusionlab.plot.evaluation.plot_coverage
-   ~fusionlab.plot.evaluation.plot_crps
-   ~fusionlab.plot.evaluation.plot_forecast_comparison
-   ~fusionlab.plot.evaluation.plot_mean_interval_width
-   ~fusionlab.plot.evaluation.plot_metric_over_horizon
-   ~fusionlab.plot.evaluation.plot_metric_radar
-   ~fusionlab.plot.evaluation.plot_prediction_stability
-   ~fusionlab.plot.evaluation.plot_quantile_calibration
-   ~fusionlab.plot.evaluation.plot_theils_u_score
-   ~fusionlab.plot.evaluation.plot_time_weighted_metric
-   ~fusionlab.plot.evaluation.plot_weighted_interval_score
-   ~fusionlab.nn.models.utils.plot_history_in
 
 .. raw:: html
 
