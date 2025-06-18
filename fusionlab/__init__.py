@@ -152,9 +152,11 @@ if __name__ + ".kdiagram" not in sys.modules:
     _dummy_kd = types.ModuleType(__name__ + ".kdiagram")
     sys.modules[__name__ + ".kdiagram"] = _dummy_kd
 
+
+from . import nn
 from . import metrics 
 from . import datasets 
-__all__.extend (['metrics', 'datasets']) 
+__all__.extend ([ 'nn', 'metrics', 'datasets']) 
 
 def __getattr__(name: str):
     """
