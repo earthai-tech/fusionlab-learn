@@ -16,6 +16,7 @@ import datetime
 from numbers import Integral, Real 
 from textwrap import dedent 
 import warnings
+import logging
 from typing import ( 
     List, Tuple, Optional,
     Union, Dict, Callable, 
@@ -425,6 +426,7 @@ def format_predictions(
     scaler_feature_names: Optional[List[str]] = None,
     target_idx_in_scaler: Optional[int] = None,
     verbose: int = 0,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **kwargs: Any
 ) -> pd.DataFrame:
 
@@ -630,7 +632,7 @@ def format_predictions(
     from ..metrics import coverage_score
     
     vlog("Starting prediction formatting to DataFrame.",
-         level=3, verbose=verbose)
+         level=3, verbose=verbose, logger = _logger)
 
     # --- 1. Validate and Obtain Predictions ---
     if predictions is None:
@@ -640,7 +642,7 @@ def format_predictions(
                 "'inputs' must be provided to generate predictions."
             )
         vlog("  Predictions not provided, generating from model...",
-             level=4, verbose=verbose)
+             level=4, verbose=verbose, logger = _logger)
         try:
             # Ensure inputs is a list for Keras predict
             # The prepare_inputs util should have done this.
@@ -674,7 +676,7 @@ def format_predictions(
             f"Got shape: {predictions_np.shape}"
         )
     vlog(f"  Raw predictions shape: {predictions_np.shape}",
-         level=5, verbose=verbose)
+         level=5, verbose=verbose, logger=_logger)
 
     # --- 2. Infer Shapes and Parameters ---
     num_samples = predictions_np.shape[0]
@@ -752,7 +754,8 @@ def format_predictions(
                 num_samples, H, num_quantiles_actual, O
             )
             vlog(f"  Reshaped predictions for multi-output quantiles to "
-                 f"{predictions_np.shape}", level=5, verbose=verbose)
+                 f"{predictions_np.shape}", level=5, verbose=verbose, 
+                 logger=_logger )
         except ValueError as e:
             raise ValueError(
                 f"Could not reshape predictions from (B,H,Q*O) to "
@@ -762,7 +765,7 @@ def format_predictions(
 
     vlog(f"  Inferred/Validated: Samples={num_samples}, Horizon={H}, "
          f"OutputDim={O}, NumQuantiles={num_quantiles_actual}",
-         level=4, verbose=verbose)
+         level=4, verbose=verbose, logger=_logger)
 
     # --- 3. Prepare Base DataFrame (Long Format) ---
     # Index for each sample and each forecast step
@@ -801,7 +804,7 @@ def format_predictions(
                         )
                     df_list.append(spatial_df_part)
                     vlog(f"  Added spatial columns: {cols}",
-                         level=4, verbose=verbose)
+                         level=4, verbose=verbose, logger=_logger)
                 except KeyError as e:
                     warnings.warn(f"Spatial columns not found in "
                                   f"spatial_data_array: {e}. Skipping.")
@@ -833,7 +836,7 @@ def format_predictions(
                         )
                     df_list.append(spatial_df_part)
                     vlog(f"  Added spatial columns from array: {names}",
-                         level=4, verbose=verbose)
+                         level=4, verbose=verbose, logger=_logger)
                 except IndexError as e:
                     warnings.warn(
                         f"Spatial indices out of bounds for "
@@ -903,7 +906,7 @@ def format_predictions(
             )
     df_list.append(pred_df_part)
     vlog(f"  Added prediction columns: {pred_cols_names}",
-         level=4, verbose=verbose)
+         level=4, verbose=verbose, logger=_logger)
 
     # --- 6. Inverse Transform Predictions (if scaler provided) ---
     
@@ -944,7 +947,7 @@ def format_predictions(
                 )
             df_list.append(actual_df_part)
             vlog(f"  Added actual value columns: {actual_cols_names}",
-                 level=4, verbose=verbose)
+                 level=4, verbose=verbose, logger=_logger)
 
     # --- Concatenate all parts ---
     final_df = pd.concat(df_list, axis=1)
@@ -974,7 +977,7 @@ def format_predictions(
                                       f"column '{col}': {e}")
         else: # Targeted inverse transform
             vlog("  Applying inverse transformation using scaler...",
-                 level=4, verbose=verbose)
+                 level=4, verbose=verbose, logger=_logger)
             # Create dummy array for inverse transform
             dummy_array_shape = (len(final_df), len(scaler_feature_names))
 
@@ -1010,7 +1013,8 @@ def format_predictions(
                     dummy[:, target_idx_in_scaler] = final_df[actual_col_name]
                     final_df[actual_col_name] = scaler.inverse_transform(
                         dummy)[:, target_idx_in_scaler]
-            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
+            vlog("    Inverse transformation applied.", level=5, 
+                 verbose=verbose, logger=_logger)
 
     # --- 9. Evaluate Coverage (if requested for quantiles) ---
     if ( 
@@ -1049,7 +1053,8 @@ def format_predictions(
                 # Add as a global attribute or print
                 # For DataFrame, it's harder to add a single score. Print for now.
                 vlog(f"  Coverage Score ({quantiles[0]}-{quantiles[-1]}): "
-                     f"{coverage:.4f}", level=3, verbose=verbose)
+                     f"{coverage:.4f}", level=3, verbose=verbose, 
+                     logger=_logger)
                 # Could add to df.attrs if desired: final_df.attrs['coverage_score'] = coverage
             else:
                 warnings.warn(
@@ -1061,7 +1066,7 @@ def format_predictions(
                        "Skipping coverage evaluation.", ImportWarning)
 
     vlog("Prediction formatting to DataFrame complete.",
-         level=3, verbose=verbose)
+         level=3, verbose=verbose, logger=_logger)
     
     return final_df
 

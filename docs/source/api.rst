@@ -319,8 +319,15 @@ side‑by‑side figures for rapid inspection.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
+
 Data Processing Utilities (`fusionlab.utils`)
 ------------------------------------------------------
+A grab-bag of utilities for cleaning, reshaping, and enriching raw
+time-series or spatial measurements before they enter the modelling
+pipeline
+
+Core preprocessing helpers (`fusionlab.utils`)
+*************************************************
 A collection of helpers for data manipulation, feature engineering,
 and preparing data for models.
 
@@ -340,6 +347,30 @@ and preparing data for models.
    ~fusionlab.utils.fetch_joblib_data 
    ~fusionlab.utils.save_job 
 
+Time Series Utilities (`fusionlab.utils.ts_utils`)
+***************************************************
+General utilities for time series data processing, analysis, and feature engineering.
+
+.. autosummary::
+   :toctree: _autosummary/ts_utils
+   :nosignatures:
+
+   ~fusionlab.utils.ts_utils.ts_validator
+   ~fusionlab.utils.ts_utils.to_dt
+   ~fusionlab.utils.ts_utils.filter_by_period
+   ~fusionlab.utils.ts_utils.ts_engineering
+   ~fusionlab.utils.ts_utils.create_lag_features
+   ~fusionlab.utils.ts_utils.trend_analysis
+   ~fusionlab.utils.ts_utils.trend_ops
+   ~fusionlab.utils.ts_utils.decompose_ts
+   ~fusionlab.utils.ts_utils.get_decomposition_method
+   ~fusionlab.utils.ts_utils.infer_decomposition_method
+   ~fusionlab.utils.ts_utils.ts_corr_analysis
+   ~fusionlab.utils.ts_utils.transform_stationarity
+   ~fusionlab.utils.ts_utils.ts_split
+   ~fusionlab.utils.ts_utils.ts_outlier_detector
+   ~fusionlab.utils.ts_utils.select_and_reduce_features
+   
 .. raw:: html
 
    <hr>

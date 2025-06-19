@@ -8,6 +8,7 @@ Forecast utilities.
 from __future__ import annotations
 import os 
 import re
+import logging 
 from collections.abc import Mapping, Sequence
 from typing import ( 
     Dict, 
@@ -16,7 +17,8 @@ from typing import (
     Union, 
     Any, 
     Optional,
-    Tuple 
+    Tuple , 
+    Callable
 )
 import pandas as pd
 
@@ -170,6 +172,7 @@ def format_forecast_dataframe(
     time_col: str = 'coord_t',
     spatial_cols: Tuple[str]=('coord_x', 'coord_y'), 
     value_prefixes: Optional[List[str]] = None,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **pivot_kwargs
 ) -> Union[pd.DataFrame, str]:
     """Auto-detects DataFrame format and conditionally pivots to wide format.
@@ -276,13 +279,15 @@ def format_forecast_dataframe(
     
     verbose = pivot_kwargs.get('verbose', 0)
     vlog(f"Auto-detected DataFrame format: '{detected_format}'",
-         level=1, verbose=verbose)
+         level=1, verbose=verbose, logger = _logger 
+         )
 
     # --- Action based on mode ---
     if to_wide:
         if detected_format == 'long':
             vlog("`to_wide` is True and format is 'long'. "
-                 "Pivoting DataFrame...", level=1, verbose=verbose)
+                 "Pivoting DataFrame...", level=1, verbose=verbose, 
+                 logger = _logger )
             # Pass necessary args to the pivot function
             pivot_args = {
                 'time_col': time_col,
@@ -296,18 +301,22 @@ def format_forecast_dataframe(
                     if c in df.columns
                 ]
                 vlog(f"Using default id_vars: {pivot_args['id_vars']}",
-                     level=2, verbose=verbose)
+                     level=2, verbose=verbose, logger = _logger 
+                     )
 
             return pivot_forecast_dataframe(df.copy(), **pivot_args)
         
         elif detected_format == 'wide':
             vlog("`to_wide` is True but DataFrame is already in wide "
-                 "format. Returning as is.", level=1, verbose=verbose)
+                 "format. Returning as is.", level=1, verbose=verbose, 
+                 logger = _logger 
+                 )
             return df
         else: # 'unknown'
             vlog("Warning: DataFrame format is 'unknown'. "
                  "Cannot pivot. Returning original DataFrame.",
-                 level=1, verbose=verbose)
+                 level=1, verbose=verbose, logger = _logger 
+                 )
             return df
     else: # to_wide is False
         return detected_format
@@ -386,7 +395,9 @@ def pivot_forecast_dataframe(
     time_col_is_float_year: Union[bool, str] = 'auto',
     round_time_col: bool = False,
     verbose: int = 0,
-    savefile: Optional[str] = None
+    savefile: Optional[str] = None, 
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
 ) -> pd.DataFrame:
     """Transforms a long-format forecast DataFrame to a wide format.
     
@@ -502,7 +513,7 @@ def pivot_forecast_dataframe(
     df_processed = data.copy()
     
     vlog(f"Starting pivot operation. Initial shape: {df_processed.shape}",
-         level=2, verbose=verbose)
+         level=2, verbose=verbose, logger = _logger )
 
     if not isinstance(df_processed, pd.DataFrame):
         raise TypeError(
@@ -529,21 +540,23 @@ def pivot_forecast_dataframe(
         if pd.api.types.is_float_dtype(df_processed[time_col]):
             is_float_year = True
             vlog(f"'{time_col}' auto-detected as float year.",
-                 level=2, verbose=verbose)
+                 level=2, verbose=verbose, logger = _logger 
+                 )
     elif time_col_is_float_year is True:
         is_float_year = True
     
     # Round the time column before pivoting if requested
     if round_time_col and is_float_year:
         vlog(f"Rounding time column '{time_col}'.",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger = _logger 
+             )
         df_processed[time_col] = df_processed[time_col].round().astype(int)
         # After rounding, it's no longer a float year
         is_float_year = False
     elif round_time_col and not is_float_year:
         vlog(f"Warning: `round_time_col` is True but '{time_col}' "
              "is not a float year. Skipping rounding.",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger = _logger  )
 
     static_df = None
     if static_actuals_cols:
@@ -553,7 +566,7 @@ def pivot_forecast_dataframe(
                 "static_actuals_cols."
             )
         vlog(f"Extracting static columns: {static_actuals_cols}",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger = _logger )
         static_df = df_processed[
             ['sample_idx'] + static_actuals_cols
         ].drop_duplicates(
@@ -565,7 +578,8 @@ def pivot_forecast_dataframe(
     pivot_values = value_cols_to_pivot
 
     vlog(f"Pivoting data with index={pivot_index}, "
-         f"columns='{time_col}'.", level=2, verbose=verbose)
+         f"columns='{time_col}'.", level=2, verbose=verbose, 
+         logger = _logger  )
     try:
         df_pivoted = df_processed.pivot_table(
             index=pivot_index,
@@ -579,7 +593,8 @@ def pivot_forecast_dataframe(
             f"`time_col` uniquely identify rows. Error: {e}"
         )
 
-    vlog("Flattening pivoted column names.", level=2, verbose=verbose)
+    vlog("Flattening pivoted column names.", level=2, verbose=verbose, 
+         logger = _logger  )
     new_columns = []
     for value_col, time_val in df_pivoted.columns:
         parts = value_col.split('_', 1)
@@ -601,7 +616,7 @@ def pivot_forecast_dataframe(
 
     if static_df is not None:
         vlog("Merging static columns back into the wide DataFrame.",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger = _logger  )
         df_wide = pd.merge(
             df_pivoted, static_df, on='sample_idx', how='left'
         )

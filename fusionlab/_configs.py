@@ -40,6 +40,7 @@ _STANDARD_ALONE_MAP = {
     'equal': ('tensorflow', 'equal'),
     'exp': ('tensorflow', 'exp'),
     'expand_dims': ('tensorflow', 'expand_dims'),
+    'experimental':('tensorflow.data', 'experimental'), 
     'fill': ('tensorflow', 'fill'),
     'float32': ('tensorflow', 'float32'),
     'floordiv': ('tensorflow.math', 'floordiv'),
@@ -144,6 +145,7 @@ TENSORFLOW_CONFIG = {
     'categorical_crossentropy': ('losses', 'categorical_crossentropy'),
     'cifar10': ('datasets', 'cifar10'),
     'clone_model': ('models', 'clone_model'),
+    'custom_object_scope': ('utils', 'custom_object_scope'), 
     'deserialize_keras_object': (
         ('saving', 'deserialize_keras_object'), 
         ('utils', 'deserialize_keras_object')
@@ -159,8 +161,8 @@ TENSORFLOW_CONFIG = {
         ('utils', 'register_keras_serializable')
     ),
     'sum': ('backend', 'sum'),
+    
 }
-
 # Configuration for KerasTuner
 KERAS_TUNER_CONFIG = {
     'BayesianOptimization': ('keras_tuner', 'BayesianOptimization'),

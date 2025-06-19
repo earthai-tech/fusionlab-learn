@@ -5,14 +5,15 @@
 """
 Physics-Informed Neural Network (PINN) Utility functions.
 """
-import numpy as np
-import pandas as pd
-from typing import List, Tuple, Optional, Union, Dict, Any
+import logging 
+from typing import List, Tuple, Optional, Union, Dict, Any, Callable
 import warnings # noqa 
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable  
-from sklearn.preprocessing import MinMaxScaler
 
+from sklearn.preprocessing import MinMaxScaler
+import numpy as np
+import pandas as pd
 from ..._fusionlog import fusionlog
 from ...api.util import get_table_size 
 from ...core.checks import ( 
@@ -240,6 +241,7 @@ def format_pihalnet_predictions(
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: str = None, 
     verbose: int = 0, 
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **kwargs
 ) -> pd.DataFrame:
     """
@@ -396,11 +398,11 @@ def format_pihalnet_predictions(
        *IEEE T‑PAMI*, 2025 (in press).
     """
     # **********************************************************
-    from ..metrics import coverage_score
+    from ...metrics import coverage_score
     # **********************************************************
     
     vlog(f"Starting PIHALNet prediction formatting (verbose={verbose}).",
-         level=3, verbose=verbose, logger=logger)
+         level=3, verbose=verbose, logger=_logger)
 
     # --- 1. Obtain Model Predictions if not provided ---
     if pihalnet_outputs is None:
@@ -410,7 +412,7 @@ def format_pihalnet_predictions(
                 "'model_inputs' must be provided."
             )
         vlog("  Predictions not provided, generating from model...",
-             level=4, verbose=verbose, logger=logger)
+             level=4, verbose=verbose, logger=_logger)
         try:
             # model.predict expects a format that its call method understands
             # For PIHALNet, it's a dictionary.
@@ -422,7 +424,7 @@ def format_pihalnet_predictions(
                      "Model output is not a dictionary"
                      " as expected from PIHALNet.")
             vlog("  Model predictions generated.", level=5,
-                 verbose=verbose, logger=logger)
+                 verbose=verbose, logger=_logger)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to generate predictions from model: {e}"
@@ -451,7 +453,7 @@ def format_pihalnet_predictions(
     if not processed_outputs:
         vlog("  No 'subs_pred' or 'gwl_pred'"
              " found in outputs. Returning empty DF.",
-             level=1, verbose=verbose, logger=logger)
+             level=1, verbose=verbose, logger=_logger)
         return pd.DataFrame()
 
     # --- 2. Define Targets to Process and Their Names ---
@@ -471,7 +473,7 @@ def format_pihalnet_predictions(
     if not targets_to_process:
         vlog("  No valid targets to process after"
              " filtering. Returning empty DF.",
-             level=1, verbose=verbose, logger=logger)
+             level=1, verbose=verbose, logger=_logger)
         return pd.DataFrame()
 
     # --- 3. Prepare Base DataFrame (Sample Index and Forecast Step) ---
@@ -485,12 +487,12 @@ def format_pihalnet_predictions(
     if num_samples == 0 or H_inferred == 0:
         vlog("  No samples or zero forecast horizon."
              " Returning empty DF.",
-              level=1, verbose=verbose, logger=logger)
+              level=1, verbose=verbose, logger=_logger)
         return pd.DataFrame()
 
     vlog(f"  Formatting for {num_samples} samples,"
          f" Horizon={H_inferred}.",
-         level=4, verbose=verbose, logger=logger)
+         level=4, verbose=verbose, logger=_logger)
 
     sample_indices = np.repeat(np.arange(num_samples), H_inferred)
     forecast_steps = np.tile(np.arange(1, H_inferred + 1), num_samples)
@@ -517,29 +519,29 @@ def format_pihalnet_predictions(
                 # --- INSERT THE INVERSE TRANSFORM LOGIC HERE ---
                 if coord_scaler is not None:
                     vlog("  Applying inverse transform to t,x,y coordinates...",
-                         level=4, verbose=verbose, logger=logger)
+                         level=4, verbose=verbose, logger=_logger)
                     try:
                         # Overwrite the reshaped coordinates with their original scale
                         coords_reshaped = coord_scaler.inverse_transform(coords_reshaped)
                     except Exception as e:
                         vlog(f"  WARNING: Could not inverse transform coordinates: {e}."
                              " Using normalized coordinates instead.",
-                             level=1, verbose=verbose, logger=logger)
+                             level=1, verbose=verbose, logger=_logger)
                 # --- END OF NEW LOGIC ---
                 coord_names = ['coord_t', 'coord_x', 'coord_y']
                 all_data_dfs.append(
                     pd.DataFrame(coords_reshaped, columns=coord_names)
                 )
                 vlog(f"  Added coordinate columns: {coord_names}",
-                     level=4, verbose=verbose, logger=logger)
+                     level=4, verbose=verbose, logger=_logger)
             else:
                 vlog("  'coords' shape mismatch or not found."
                      " Skipping coordinate columns.",
-                     level=2, verbose=verbose, logger=logger)
+                     level=2, verbose=verbose, logger=_logger)
         else:
             vlog("  `model_inputs['coords']` not available."
                  " Skipping coordinate columns.",
-                 level=2, verbose=verbose, logger=logger)
+                 level=2, verbose=verbose, logger=_logger)
 
     # --- 5. Add Additional Static/ID Columns ---
     # These are static per original sample, so they need to be
@@ -549,7 +551,7 @@ def format_pihalnet_predictions(
     
     if ids_data_array is not None:
         vlog("  Processing additional static/ID columns...",
-             level=4, verbose=verbose, logger=logger)
+             level=4, verbose=verbose, logger=_logger)
         
         # Ensure ids_data_array is a NumPy array for consistent indexing
         ids_np_array: np.ndarray
@@ -674,7 +676,7 @@ def format_pihalnet_predictions(
                     )
                     all_data_dfs.append(ids_df_part)
                     vlog(f"    Added additional static/ID columns: {ids_cols_to_use}",
-                         level=5, verbose=verbose, logger=logger)
+                         level=5, verbose=verbose, logger=_logger)
                 else:
                     logger.warning(
                         "Mismatch between number of resolved ID column names "
@@ -685,11 +687,11 @@ def format_pihalnet_predictions(
                 vlog(
                     f"  `ids_data_array` has {num_id_samples} samples, but "
                     f"predictions have {num_samples} samples. Skipping ID columns.",
-                    level=2, verbose=verbose, logger=logger
+                    level=2, verbose=verbose, logger=_logger
                 )
     elif verbose >= 4:
         vlog("  No `ids_data_array` provided, skipping additional static/ID columns.",
-             level=4, verbose=verbose, logger=logger)
+             level=4, verbose=verbose, logger=_logger)
 
     # --- 6. Process Each Target Variable (Subsidence, GWL) ---
     for pred_key, base_name in targets_to_process.items():
@@ -734,12 +736,12 @@ def format_pihalnet_predictions(
                 all_data_dfs.append(pd.DataFrame(
                     y_true_reshaped, columns=actual_cols_target))
                 vlog(f"    Added actuals for {base_name}: {actual_cols_target}",
-                     level=5, verbose=verbose, logger=logger)
+                     level=5, verbose=verbose, logger=_logger)
             else:
                 vlog(f"    y_true shape for {base_name} ({y_true_target.shape}) "
                      f"mismatched expected ({num_samples},"
                      f"{H_inferred},{O_target}). Skipping actuals.",
-                     level=2, verbose=verbose, logger=logger)
+                     level=2, verbose=verbose, logger=_logger)
         
         # --- 6c. Inverse Scaling (applied per target) ---
         if scaler_info and base_name in scaler_info:
@@ -750,7 +752,7 @@ def format_pihalnet_predictions(
 
             if scaler and all_feat and target_idx is not None:
                 vlog(f"  Applying inverse transform for {base_name}...",
-                     level=4, verbose=verbose, logger=logger)
+                     level=4, verbose=verbose, logger=_logger)
                 # Create combined list of columns to transform for this target
                 cols_to_transform_for_target = pred_cols_target + actual_cols_target
                 
@@ -776,7 +778,7 @@ def format_pihalnet_predictions(
             else:
                 vlog(f"  Scaler info incomplete for {base_name}."
                      " Skipping inverse transform.",
-                     level=3, verbose=verbose, logger=logger)
+                     level=3, verbose=verbose, logger=_logger)
 
         # --- 6d. Coverage Score (applied per target) ---
         if ( 
@@ -812,14 +814,14 @@ def format_pihalnet_predictions(
                 vlog(f"  Coverage Score for {base_name} "
                      f"({quantiles_sorted[l_idx]}-"
                      f"{quantiles_sorted[u_idx]}): {coverage:.4f}",
-                     level=3, verbose=verbose, logger=logger)
+                     level=3, verbose=verbose, logger=_logger)
                 # Store it if needed: e.g. 
                 # final_df.attrs[f'{base_name}_coverage'] = coverage
             else:
                  vlog(
                      "  Required columns for coverage for"
                      f" {base_name} not found. Skipping.",
-                      level=2, verbose=verbose, logger=logger
+                      level=2, verbose=verbose, logger=_logger
                      )
 
     # --- 7. Concatenate all DataFrames ---
@@ -838,11 +840,11 @@ def format_pihalnet_predictions(
                     if col_name in final_df:
                         final_df[col_name] = inversed_values
                 vlog(f"  Final inverse transform applied for {base_name}.",
-                     level=4, verbose=verbose, logger=logger)
+                     level=4, verbose=verbose, logger=_logger)
 
 
     vlog("PIHALNet prediction formatting to DataFrame complete.",
-         level=3, verbose=verbose, logger=logger)
+         level=3, verbose=verbose, logger=_logger)
     
     return final_df
 
@@ -949,6 +951,8 @@ def prepare_pinn_data_sequences(
     mode: Optional[str] =None, 
     savefile: Optional[str] = None,
     verbose: int = 0,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
 ) -> Union[
     Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]],
     Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Optional[MinMaxScaler]]
@@ -1184,7 +1188,7 @@ def prepare_pinn_data_sequences(
     
     # Entry log
     vlog("Starting PINN data sequence preparation...",
-         verbose=verbose, level=1)
+         verbose=verbose, level=1, logger=_logger)
     
     if verbose >= 1:
         logger.info("Starting PINN data sequence preparation...")
@@ -1196,7 +1200,7 @@ def prepare_pinn_data_sequences(
 
     # Validate essential columns
     vlog("Validating essential columns...",
-         verbose=verbose, level=2)
+         verbose=verbose, level=2, logger=_logger)
     
     lon_col, lat_col = resolve_spatial_columns(
         df_proc, spatial_cols =spatial_cols, 
@@ -1212,7 +1216,7 @@ def prepare_pinn_data_sequences(
     # check datetime since we are refering to time series data 
     # Check dt_col data type
     vlog("Validating time-series dataset...",
-         verbose=verbose, level=2)
+         verbose=verbose, level=2, logger=_logger)
     
     check_datetime(
         df_proc,
@@ -1224,7 +1228,7 @@ def prepare_pinn_data_sequences(
     )
     
     vlog("Managing feature column lists...",
-         verbose=verbose, level=3)
+         verbose=verbose, level=3, logger=_logger)
     
     dynamic_cols = columns_manager(
         dynamic_cols, empty_as_none=False
@@ -1254,18 +1258,18 @@ def prepare_pinn_data_sequences(
             )
 
     vlog("Validating time_steps and forecast_horizon...",
-         verbose=verbose, level=3)
+         verbose=verbose, level=3, logger=_logger)
     
     time_steps = validate_positive_integer(
         time_steps, "time_steps")
     forecast_horizon = validate_positive_integer(
-        forecast_horizon, "forecast_horizon")
+        forecast_horizon, "forecast_horizon", )
     
     # Convert time column to numerical representation
     # (e.g., days since epoch, or normalized year)
     # This is crucial for PINN as 't' is an input for differentiation.
     vlog("Converting time column to numeric values...",
-         verbose=verbose, level=4)
+         verbose=verbose, level=4, logger=_logger)
     # Check if the provided time column is already numeric
     if pd.api.types.is_numeric_dtype(df_proc[time_col]):
         numerical_time_col = time_col
@@ -1291,7 +1295,7 @@ def prepare_pinn_data_sequences(
                     f" to numerical '{numerical_time_col}'."
                 )
             vlog(f"Time column converted to '{numerical_time_col}'",
-                 verbose=verbose, level=5)
+                 verbose=verbose, level=5, logger=_logger)
         except Exception as e:
             raise ValueError(
                 f"Failed to convert or process time column '{time_col}'. "
@@ -1301,7 +1305,7 @@ def prepare_pinn_data_sequences(
    
     mode = select_mode(mode, default='pihal_like')
     vlog(f"Operating in '{mode}' data preparation mode.",
-         level=1, verbose=verbose)
+         level=1, verbose=verbose, logger=_logger)
 
     # Initialize coord_scaler
     # --- Apply Global Coordinate Normalization (if enabled) ---
@@ -1314,13 +1318,10 @@ def prepare_pinn_data_sequences(
         cols_to_scale =cols_to_scale, 
         verbose =verbose 
     )
-    # --- 2. Group and Sort Data ---
-    vlog("Grouping and sorting data...",
-         verbose=verbose, level=2)
 
     # --- 2. Group and Sort Data ---
     vlog("Grouping and sorting data...",
-        verbose=verbose, level=2)
+        verbose=verbose, level=2, logger=_logger)
     
     if verbose >= 2:
         logger.debug(
@@ -1356,7 +1357,7 @@ def prepare_pinn_data_sequences(
     valid_group_dfs = [] # Store dataframes of groups that are long enough
 
     vlog("Counting valid sequences in groups...",
-        verbose=verbose, level=4)
+        verbose=verbose, level=4, logger=_logger)
      
     if verbose >= 2:
         logger.debug(
@@ -1376,7 +1377,7 @@ def prepare_pinn_data_sequences(
                 )
             vlog(f"Group {key_str} too small:"
                  f" {len(group_df)} < {min_len_per_group}",
-                 verbose=verbose, level=6)
+                 verbose=verbose, level=6, logger=_logger)
             
             continue
         
@@ -1391,7 +1392,7 @@ def prepare_pinn_data_sequences(
         vlog(
             f"Group {key_str} yields {total_sequences} seqs.",
              verbose=verbose, 
-             level=6
+             level=6, logger=_logger
             )
         
     if total_sequences == 0:
@@ -1405,11 +1406,11 @@ def prepare_pinn_data_sequences(
             f" generated: {total_sequences}.")
 
     vlog(f"Total sequences: {total_sequences}",
-        verbose=verbose, level=1)
+        verbose=verbose, level=1, logger=_logger)
      
     # --- 4. Pre-allocate NumPy Arrays ---
     vlog("Pre-allocating arrays...",
-         verbose=verbose, level=2)
+         verbose=verbose, level=2, logger=_logger)
     
     # Feature dimensions
     num_dynamic_feats = len(dynamic_cols)
@@ -1435,7 +1436,7 @@ def prepare_pinn_data_sequences(
         future_window_len = time_steps + forecast_horizon
         vlog(f"Allocating future features array for 'tft_like' mode "
              f"with time dimension: {future_window_len}",
-             level=2, verbose=verbose
+             level=2, verbose=verbose, logger=_logger
             )
     else: # 'pihal_like' mode
         # For PIHALNet's encoder-decoder, we only need future values
@@ -1455,7 +1456,7 @@ def prepare_pinn_data_sequences(
         dtype=np.float32
     )
     vlog("Arrays shapes set.",
-         verbose=verbose, level=5)
+         verbose=verbose, level=5, logger=_logger)
     
     if verbose >= 2:
         logger.debug("Pre-allocated NumPy arrays for sequence data:")
@@ -1472,7 +1473,7 @@ def prepare_pinn_data_sequences(
         logger.debug("Second pass: Populating sequence arrays...")
     
     vlog("Populating arrays with data...",
-        verbose=verbose, level=2)
+        verbose=verbose, level=2, logger=_logger)
     
     for group_df in valid_group_dfs: # Iterate over pre-filtered valid groups
         group_t_coords = group_df[numerical_time_col].values
@@ -1594,7 +1595,7 @@ def prepare_pinn_data_sequences(
                 f"Seq {current_seq_idx}:"
                 f" dyn {dynamic_start_idx}-{dynamic_end_idx-1},"
                 f"hzn {horizon_start_idx}-{horizon_end_idx-1}",
-                verbose=verbose, level=7
+                verbose=verbose, level=7, logger=_logger
             )
             
             current_seq_idx += 1
@@ -1603,7 +1604,7 @@ def prepare_pinn_data_sequences(
         logger.info("Successfully populated sequence arrays.")
     
     vlog("Data population complete.",
-         verbose=verbose, level=1)
+         verbose=verbose, level=1, logger=_logger)
     
     inputs_dict = {
         'coords': coords_horizon_arr, # Shape: (N, forecast_horizon, 3)
@@ -1625,7 +1626,7 @@ def prepare_pinn_data_sequences(
     # --- Save to File (Optional) ---
     if savefile:
         vlog(f"\nPreparing to save sequence data to '{savefile}'...", 
-             verbose=verbose, level=3
+             verbose=verbose, level=3, logger=_logger
              )
         job_dict = {
             'static_data': static_features_arr,
@@ -1656,7 +1657,7 @@ def prepare_pinn_data_sequences(
             job_dict.update(get_versions())
         except NameError: # If get_versions is not defined/imported
             vlog("\n  `get_versions` not found, version info not saved.", 
-                 verbose=verbose, level =1 )
+                 verbose=verbose, level =1, logger=_logger)
 
         try:
             # save_job to be a wrapper around joblib.dump
@@ -1665,11 +1666,12 @@ def prepare_pinn_data_sequences(
             if verbose >= 1:
                 vlog(f"Sequence data dictionary successfully "
                       f"saved to '{savefile}'.", 
-                      verbose=verbose, level=1
+                      verbose=verbose, level=1, logger=_logger
             )
         except Exception as e:
             vlog(f"Failed to save job dictionary to "
-                  f"'{savefile}': {e}", verbose=verbose, level=1)
+                  f"'{savefile}': {e}", verbose=verbose, level=1, 
+                  logger=_logger)
                 
     if verbose >= 1:
         logger.info("PINN data sequence preparation completed.")
@@ -1682,7 +1684,7 @@ def prepare_pinn_data_sequences(
                     f"  Final target '{key}' shape: {arr.shape}")
     
     vlog("PINN data sequence preparation successfully completed.",
-         verbose=verbose, level=3)
+         verbose=verbose, level=3, logger=_logger)
     
     if return_coord_scaler: 
         return inputs_dict, targets_dict, coord_scaler 
@@ -1913,7 +1915,9 @@ def normalize_for_pinn(
     coord_y: str,
     cols_to_scale: Union[List[str], str, None] = "auto",
     scale_coords: bool = True,
-    verbose: int = 1
+    verbose: int = 1, 
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
 ) -> Tuple[pd.DataFrame, Optional[MinMaxScaler], Optional[MinMaxScaler]]:
     r"""
     Apply Min-Max normalization to spatial–temporal coordinates and
@@ -2045,14 +2049,16 @@ def normalize_for_pinn(
     # --- 1. Scale coordinates if requested ---
 
     if scale_coords:
-        vlog("Scaling time, lon, lat columns...", verbose=verbose, level=2)
+        vlog("Scaling time, lon, lat columns...",
+             verbose=verbose, level=2, logger=_logger
+             )
         coord_cols = [time_col, coord_x, coord_y]
         for col in coord_cols:
             if not pd.api.types.is_numeric_dtype(df_scaled[col]):
                 try:
                     df_scaled[col] = pd.to_numeric(df_scaled[col])
                     vlog(f"Converted '{col}' to numeric.", 
-                         verbose=verbose, level=3)
+                         verbose=verbose, level=3, logger=_logger)
                 except Exception as e:
                     raise ValueError(
                         f"Cannot convert '{col}' to numeric: {e}"
@@ -2072,7 +2078,7 @@ def normalize_for_pinn(
     # --- 2. Determine `other_cols_to_scale` ---
     if cols_to_scale == "auto":
         vlog("Auto-selecting numeric columns to scale...", 
-             verbose=verbose, level=2)
+             verbose=verbose, level=2, logger=_logger)
         # Start with all numeric columns
         numeric_cols = df_scaled.select_dtypes(
             include=[np.number]).columns.tolist()
@@ -2089,13 +2095,13 @@ def normalize_for_pinn(
             uniq = pd.unique(df_scaled[c])
             if set(np.unique(uniq)) <= {0, 1}:
                 vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
-                     verbose=verbose, level=3)
+                     verbose=verbose, level=3, logger=_logger)
                 continue
             auto_cols.append(c)
 
         other_cols_to_scale = auto_cols
         vlog(f"Auto-selected columns: {other_cols_to_scale}", 
-             verbose=verbose, level=2)
+             verbose=verbose, level=2, logger=_logger)
     elif isinstance(cols_to_scale, list):
         other_cols_to_scale = cols_to_scale.copy()
     else:  # cols_to_scale is None
@@ -2104,7 +2110,7 @@ def normalize_for_pinn(
     # --- 3. Scale `other_cols_to_scale` if any ---
     if other_cols_to_scale:
         vlog(f"Scaling additional columns: {other_cols_to_scale}", 
-             verbose=verbose, level=2)
+             verbose=verbose, level=2, logger=_logger)
         # Verify existence and numeric type
         valid_cols = []
         for col in other_cols_to_scale:
@@ -2114,7 +2120,7 @@ def normalize_for_pinn(
                 try:
                     df_scaled[col] = pd.to_numeric(df_scaled[col])
                     vlog(f"Converted '{col}' to numeric.", 
-                         verbose=verbose, level=3)
+                         verbose=verbose, level=3, logger=_logger)
                 except Exception as e:
                     raise ValueError(
                         f"Cannot convert '{col}' to numeric: {e}"
@@ -2264,6 +2270,8 @@ def extract_txy_in(
     coord_slice_map: Optional[Dict[str, int]] = None,
     expect_dim: Optional[str] = None,
     verbose: int = 0,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """
     Extracts t, x, y tensors from various input formats.
@@ -2312,7 +2320,7 @@ def extract_txy_in(
         or `expect_dim` constraint is violated.
     """
     vlog("Extracting (t, x, y) coordinates from inputs...",
-         level=2, verbose=verbose)
+         level=2, verbose=verbose, logger=_logger)
          
     if expect_dim and expect_dim not in ['2d', '3d']:
         raise ValueError("`expect_dim` must be None, '2d', or '3d'.")
@@ -2339,7 +2347,7 @@ def extract_txy_in(
         # For consistency, always expand 2D tensors to 3D.
         if tensor.ndim == 2:
             vlog(f"Expanding 2D input '{name}' to 3D for consistency.",
-                 level=3, verbose=verbose)
+                 level=3, verbose=verbose, logger=_logger)
             return tf_expand_dims(tensor, axis=1)
         elif tensor.ndim == 3:
             return tensor
@@ -2394,7 +2402,7 @@ def extract_txy_in(
     y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y'] + 1]
 
     vlog(f"Successfully extracted t:{t.shape}, x:{x.shape}, "
-         f"y:{y.shape}", level=2, verbose=verbose)
+         f"y:{y.shape}", level=2, verbose=verbose, logger=_logger)
          
     return tf_cast(t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
 
@@ -2407,6 +2415,8 @@ def extract_txy(
     coord_slice_map: Optional[Dict[str, int]] = None,
     expect_dim: Optional[str] = None,
     verbose: int = 0,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
 ) -> Tuple[Tensor, Tensor, Tensor]:
     """
     Extracts t, x, y tensors from various input formats.
@@ -2451,7 +2461,7 @@ def extract_txy(
         or `expect_dim` constraint is violated.
     """
     vlog("Extracting (t, x, y) coordinates from inputs...",
-         level=2, verbose=verbose)
+         level=2, verbose=verbose, logger=_logger)
          
     if expect_dim and expect_dim not in ['2d', '3d', '3d_only']:
         raise ValueError(
@@ -2483,7 +2493,7 @@ def extract_txy(
         # Handle expansion for '3d' mode
         if expect_dim == '3d' and input_ndim == 2:
             vlog(f"Expanding 2D input '{name}' to 3D for expect_dim='3d'.",
-                 level=3, verbose=verbose)
+                 level=3, verbose=verbose, logger=_logger)
             return tf_expand_dims(tensor, axis=1)
 
         # For all other cases, including `expect_dim=None`, return as is
@@ -2538,7 +2548,7 @@ def extract_txy(
     y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y'] + 1]
 
     vlog(f"Successfully extracted t:{t.shape}, x:{x.shape}, "
-         f"y:{y.shape}", level=2, verbose=verbose)
+         f"y:{y.shape}", level=2, verbose=verbose, logger=_logger)
          
     return tf_cast(t, tf_float32), tf_cast(x, tf_float32), tf_cast(y, tf_float32)
 
