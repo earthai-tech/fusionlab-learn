@@ -74,9 +74,6 @@ __all__= ['TFT']
 
 @register_keras_serializable('fusionlab.nn.transformers', name="TFT")
 class TFT(Model, NNLearner): 
-    """ Temporal Fusion Transformer (TFT) required static, dynamic(past)
-    and future inputs."""
-    
     @validate_params({
         "dynamic_input_dim": [Interval(Integral, 1, None, closed='left')],
         "static_input_dim": [Interval(Integral, 0, None, closed='left')],
@@ -528,7 +525,10 @@ class TFT(Model, NNLearner):
     def from_config(cls, config):
         return cls(**config)
    
-TFT.__doc__+=r"""\
+TFT.__doc__=r"""
+Temporal Fusion Transformer (TFT) required static, dynamic(past)
+and future inputs. 
+
 This class implements the Temporal Fusion Transformer (TFT)
 architecture, closely following the structure described in the
 original paper [Lim21]_. It is designed for multi-horizon time

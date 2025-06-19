@@ -406,170 +406,169 @@ class TimeSeriesTransformer(Model, NNLearner):
     def from_config(cls, config, custom_objects=None):
         return cls(**config)
 
-TimeSeriesTransformer.__doc__ = r"""\
-    A standard Transformer model for multi-horizon time series forecasting.
+TimeSeriesTransformer.__doc__ = r"""
+A standard Transformer model for multi-horizon time series forecasting.
 
-    This class implements the classic encoder-decoder Transformer
-    architecture, as introduced by Vaswani et al., but specifically
-    tailored for multi-variate, multi-horizon time series forecasting.
-    It leverages self-attention and cross-attention mechanisms to
-    capture complex long-range dependencies in sequential data.
+This class implements the classic encoder-decoder Transformer
+architecture, as introduced by Vaswani et al., but specifically
+tailored for multi-variate, multi-horizon time series forecasting.
+It leverages self-attention and cross-attention mechanisms to
+capture complex long-range dependencies in sequential data.
 
-    The model is "pure" in the sense that it does not use any recurrent
-    (LSTM/GRU) or convolutional layers, relying solely on attention
-to
-    process temporal information. It is designed to handle three
-    distinct types of input features: static, dynamic past-observed,
-    and known future covariates.
+The model is "pure" in the sense that it does not use any recurrent
+(LSTM/GRU) or convolutional layers, relying solely on attention
+to process temporal information. It is designed to handle three
+distinct types of input features: static, dynamic past-observed,
+and known future covariates.
 
-    Parameters
-    ----------
-    static_input_dim : int
-        The number of features in the static input tensor. These are
-        time-invariant features like sensor ID or location. Can be 0
-        if no static features are used.
-    dynamic_input_dim : int
-        The number of features in the dynamic input tensor, which
-        contains past-observed, time-varying data.
-    future_input_dim : int
-        The number of features in the future input tensor, containing
-        covariates with known values in the forecast horizon, such as
-        day of the week or scheduled events.
-    embed_dim : int, default=64
-        The core dimensionality of the model, :math:`d_{model}`. This
-        is the size of all embedding vectors and the internal dimension
-        of the attention layers.
-    num_heads : int, default=4
-        The number of attention heads in each multi-head attention
-        layer. `embed_dim` must be divisible by `num_heads`.
-    ffn_dim : int, default=128
-        The dimensionality of the inner layer of the feed-forward
-        network (FFN) that follows the attention mechanism in each
-        encoder and decoder block.
-    num_encoder_layers : int, default=3
-        The number of identical encoder layers to stack.
-    num_decoder_layers : int, default=3
-        The number of identical decoder layers to stack.
-    forecast_horizon : int, default=1
-        The number of future time steps to predict (:math:`H`). This
-        defines the length of the output sequence.
-    output_dim : int, default=1
-        The number of target variables to forecast at each time step.
-    dropout_rate : float, default=0.1
-        The dropout rate applied within the attention mechanisms and
-        feed-forward networks for regularization.
-    input_dropout_rate : float, default=0.1
-        The dropout rate applied to the sum of the input embeddings
-        and positional encodings.
-    max_seq_len_encoder : int, default=100
-        The maximum expected sequence length for the encoder's input.
-        Used to pre-compute positional encodings.
-    max_seq_len_decoder : int, default=50
-        The maximum expected sequence length for the decoder's input
-        (typically `forecast_horizon`). Used for positional encodings.
-    quantiles : list of float, optional
-        A list of quantiles (e.g., ``[0.1, 0.5, 0.9]``) for
-        probabilistic forecasting. If ``None``, the model produces
-        deterministic point forecasts.
-    use_grn_for_static : bool, default=False
-        If ``True``, processes the static features through a
-        :class:`~fusionlab.nn.components.GatedResidualNetwork` (GRN).
-        If ``False``, uses a standard :class:`~keras.layers.Dense` layer.
-    static_integration_mode : {{'add_to_encoder_input', 'add_to_decoder_input', 'none'}}, default='add_to_decoder_input'
-        Defines how the processed static context vector is integrated
-        into the model:
-        * ``'add_to_encoder_input'``: Adds it to the encoder's input embeddings.
-        * ``'add_to_decoder_input'``: Adds it to the decoder's input embeddings.
-        * ``'none'``: The static context is not explicitly injected.
-    activation : str or callable, default='relu'
-        The activation function for the feed-forward networks.
-    layer_norm_epsilon : float, default=1e-6
-        The epsilon value for the Layer Normalization layers to prevent
-        division by zero.
-    name : str, optional
-        The name of the Keras model.
-    **kwargs
-        Additional keyword arguments passed to the ``tf.keras.Model``
-        constructor.
+Parameters
+----------
+static_input_dim : int
+    The number of features in the static input tensor. These are
+    time-invariant features like sensor ID or location. Can be 0
+    if no static features are used.
+dynamic_input_dim : int
+    The number of features in the dynamic input tensor, which
+    contains past-observed, time-varying data.
+future_input_dim : int
+    The number of features in the future input tensor, containing
+    covariates with known values in the forecast horizon, such as
+    day of the week or scheduled events.
+embed_dim : int, default=64
+    The core dimensionality of the model, :math:`d_{model}`. This
+    is the size of all embedding vectors and the internal dimension
+    of the attention layers.
+num_heads : int, default=4
+    The number of attention heads in each multi-head attention
+    layer. `embed_dim` must be divisible by `num_heads`.
+ffn_dim : int, default=128
+    The dimensionality of the inner layer of the feed-forward
+    network (FFN) that follows the attention mechanism in each
+    encoder and decoder block.
+num_encoder_layers : int, default=3
+    The number of identical encoder layers to stack.
+num_decoder_layers : int, default=3
+    The number of identical decoder layers to stack.
+forecast_horizon : int, default=1
+    The number of future time steps to predict (:math:`H`). This
+    defines the length of the output sequence.
+output_dim : int, default=1
+    The number of target variables to forecast at each time step.
+dropout_rate : float, default=0.1
+    The dropout rate applied within the attention mechanisms and
+    feed-forward networks for regularization.
+input_dropout_rate : float, default=0.1
+    The dropout rate applied to the sum of the input embeddings
+    and positional encodings.
+max_seq_len_encoder : int, default=100
+    The maximum expected sequence length for the encoder's input.
+    Used to pre-compute positional encodings.
+max_seq_len_decoder : int, default=50
+    The maximum expected sequence length for the decoder's input
+    (typically `forecast_horizon`). Used for positional encodings.
+quantiles : list of float, optional
+    A list of quantiles (e.g., ``[0.1, 0.5, 0.9]``) for
+    probabilistic forecasting. If ``None``, the model produces
+    deterministic point forecasts.
+use_grn_for_static : bool, default=False
+    If ``True``, processes the static features through a
+    :class:`~fusionlab.nn.components.GatedResidualNetwork` (GRN).
+    If ``False``, uses a standard :class:`~keras.layers.Dense` layer.
+static_integration_mode : {{'add_to_encoder_input', 'add_to_decoder_input', 'none'}}, default='add_to_decoder_input'
+    Defines how the processed static context vector is integrated
+    into the model:
+    * ``'add_to_encoder_input'``: Adds it to the encoder's input embeddings.
+    * ``'add_to_decoder_input'``: Adds it to the decoder's input embeddings.
+    * ``'none'``: The static context is not explicitly injected.
+activation : str or callable, default='relu'
+    The activation function for the feed-forward networks.
+layer_norm_epsilon : float, default=1e-6
+    The epsilon value for the Layer Normalization layers to prevent
+    division by zero.
+name : str, optional
+    The name of the Keras model.
+**kwargs
+    Additional keyword arguments passed to the ``tf.keras.Model``
+    constructor.
 
-    Notes
-    -----
-    This model adheres to the standard Transformer architecture, which
-    consists of an encoder-decoder stack.
+Notes
+-----
+This model adheres to the standard Transformer architecture, which
+consists of an encoder-decoder stack.
 
-    **Encoder**
-        The encoder is composed of a stack of ``num_encoder_layers``.
-        Each layer contains two sub-layers: a multi-head
-        self-attention mechanism and a position-wise feed-forward
-        network. It processes the entire sequence of past dynamic
-        features, allowing each position to attend to all other
-        positions to build a rich contextual representation.
+**Encoder**
+    The encoder is composed of a stack of ``num_encoder_layers``.
+    Each layer contains two sub-layers: a multi-head
+    self-attention mechanism and a position-wise feed-forward
+    network. It processes the entire sequence of past dynamic
+    features, allowing each position to attend to all other
+    positions to build a rich contextual representation.
 
-    **Decoder**
-        The decoder is similarly composed of a stack of
-        ``num_decoder_layers``. Each decoder layer has three sub-layers:
-        1.  **Masked Multi-Head Self-Attention:** This is the key to
-            autoregressive generation. It applies a causal mask to the
-            decoder's inputs to ensure that the prediction for a time
-            step :math:`i` can only depend on known outputs at steps
-            less than :math:`i`, preventing the model from looking ahead.
-        2.  **Multi-Head Cross-Attention:** This layer allows the
-            decoder to attend to the output of the encoder. It acts as
-            the bridge between the processed past information and the
-            future forecast, allowing the decoder to focus on the most
-            relevant parts of the historical context.
-        3.  **Feed-Forward Network:** The same type of FFN as in the
-            encoder.
+**Decoder**
+    The decoder is similarly composed of a stack of
+    ``num_decoder_layers``. Each decoder layer has three sub-layers:
+    1.  **Masked Multi-Head Self-Attention:** This is the key to
+        autoregressive generation. It applies a causal mask to the
+        decoder's inputs to ensure that the prediction for a time
+        step :math:`i` can only depend on known outputs at steps
+        less than :math:`i`, preventing the model from looking ahead.
+    2.  **Multi-Head Cross-Attention:** This layer allows the
+        decoder to attend to the output of the encoder. It acts as
+        the bridge between the processed past information and the
+        future forecast, allowing the decoder to focus on the most
+        relevant parts of the historical context.
+    3.  **Feed-Forward Network:** The same type of FFN as in the
+        encoder.
 
-    Residual connections and layer normalization are applied around each
-    sub-layer to ensure stable training.
+Residual connections and layer normalization are applied around each
+sub-layer to ensure stable training.
 
-    See Also
-    --------
-    fusionlab.nn.components.TransformerEncoderLayer : The core encoder block.
-    fusionlab.nn.components.TransformerDecoderLayer : The core decoder block.
-    fusionlab.nn.models.BaseAttentive : A more complex hybrid model foundation.
+See Also
+--------
+fusionlab.nn.components.TransformerEncoderLayer : The core encoder block.
+fusionlab.nn.components.TransformerDecoderLayer : The core decoder block.
+fusionlab.nn.models.BaseAttentive : A more complex hybrid model foundation.
 
-    References
-    ----------
-    .. [1] Vaswani et al., "Attention Is All You Need," *NeurIPS 2017*.
+References
+----------
+.. [1] Vaswani et al., "Attention Is All You Need," *NeurIPS 2017*.
 
-    Examples
-    --------
-    >>> import tensorflow as tf
-    >>> from fusionlab.nn.transformers import TimeSeriesTransformer
+Examples
+--------
+>>> import tensorflow as tf
+>>> from fusionlab.nn.transformers import TimeSeriesTransformer
 
-    >>> # 1. Model Configuration
-    >>> BATCH_SIZE = 32
-    >>> PAST_STEPS = 24
-    >>> HORIZON = 12
-    >>> STATIC_DIM, DYNAMIC_DIM, FUTURE_DIM = 5, 6, 4
+>>> # 1. Model Configuration
+>>> BATCH_SIZE = 32
+>>> PAST_STEPS = 24
+>>> HORIZON = 12
+>>> STATIC_DIM, DYNAMIC_DIM, FUTURE_DIM = 5, 6, 4
 
-    >>> model = TimeSeriesTransformer(
-    ...     static_input_dim=STATIC_DIM,
-    ...     dynamic_input_dim=DYNAMIC_DIM,
-    ...     future_input_dim=FUTURE_DIM,
-    ...     embed_dim=32,
-    ...     num_heads=4,
-    ...     ffn_dim=64,
-    ...     num_encoder_layers=2,
-    ...     num_decoder_layers=2,
-    ...     forecast_horizon=HORIZON,
-    ...     output_dim=1,
-    ...     quantiles=[0.1, 0.5, 0.9]
-    ... )
+>>> model = TimeSeriesTransformer(
+...     static_input_dim=STATIC_DIM,
+...     dynamic_input_dim=DYNAMIC_DIM,
+...     future_input_dim=FUTURE_DIM,
+...     embed_dim=32,
+...     num_heads=4,
+...     ffn_dim=64,
+...     num_encoder_layers=2,
+...     num_decoder_layers=2,
+...     forecast_horizon=HORIZON,
+...     output_dim=1,
+...     quantiles=[0.1, 0.5, 0.9]
+... )
 
-    >>> # 2. Prepare Dummy Input Data
-    >>> static_input = tf.random.normal([BATCH_SIZE, STATIC_DIM])
-    >>> dynamic_input = tf.random.normal([BATCH_SIZE, PAST_STEPS, DYNAMIC_DIM])
-    >>> future_input = tf.random.normal([BATCH_SIZE, HORIZON, FUTURE_DIM])
+>>> # 2. Prepare Dummy Input Data
+>>> static_input = tf.random.normal([BATCH_SIZE, STATIC_DIM])
+>>> dynamic_input = tf.random.normal([BATCH_SIZE, PAST_STEPS, DYNAMIC_DIM])
+>>> future_input = tf.random.normal([BATCH_SIZE, HORIZON, FUTURE_DIM])
 
-    >>> # 3. Get Model Output
-    >>> # Inputs are passed as a list: [static, dynamic, future]
-    >>> predictions = model([static_input, dynamic_input, future_input])
+>>> # 3. Get Model Output
+>>> # Inputs are passed as a list: [static, dynamic, future]
+>>> predictions = model([static_input, dynamic_input, future_input])
 
-    >>> # 4. Check Output Shape
-    >>> # Shape is (Batch, Horizon, Quantiles) since output_dim=1
-    >>> print(f"Output prediction shape: {predictions.shape}")
-    Output prediction shape: (32, 12, 3)
+>>> # 4. Check Output Shape
+>>> # Shape is (Batch, Horizon, Quantiles) since output_dim=1
+>>> print(f"Output prediction shape: {predictions.shape}")
+Output prediction shape: (32, 12, 3)
 """
