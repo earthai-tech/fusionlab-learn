@@ -325,7 +325,7 @@ A grab-bag of utilities for cleaning, reshaping, and enriching raw
 time-series or spatial measurements before they enter the modelling
 pipeline
 
-Core preprocessing helpers (`fusionlab.utils`)
+Preprocessing helpers (`fusionlab.utils`)
 *************************************************
 A collection of helpers for data manipulation, feature engineering,
 and preparing data for models.
