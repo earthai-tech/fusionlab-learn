@@ -25,9 +25,10 @@ except ImportError:
     version = '0.3'   # Default fallback
 
 # -- Project information -----------------------------------------------------
+
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'fusionlab'
+project = 'fusionlab-learn'
 # Use current year automatically
 copyright = f'{date.today().year}, earthai-tech'
 author = 'earthai-tech' # Or your preferred author name
@@ -55,7 +56,7 @@ extensions = [
                                 # e.g., 'sphinx_gallery.gen_gallery'
     # 'sphinxcontrib.bibtex',   # Add BibTeX support 
 ]
-autosummary_generate = True
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 

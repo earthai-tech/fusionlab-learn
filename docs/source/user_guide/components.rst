@@ -2191,11 +2191,6 @@ layer to produce the final probabilistic forecast.
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
 
-.. raw:: html
-
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
-
 QuantileDistributionModeling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 :API Reference: :class:`~fusionlab.nn.components.QuantileDistributionModeling`
@@ -2804,10 +2799,7 @@ configured to output quantile predictions. It requires that the model's
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
    
-.. raw:: html
 
-   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-   
 Utility Functions
 --------------------
 
