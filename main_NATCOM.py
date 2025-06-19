@@ -68,7 +68,7 @@ try:
     from fusionlab.params import LearnableK, LearnableSs, LearnableQ 
     from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
-    from fusionlab.nn.models.utils import plot_history_in 
+    from fusionlab.nn.utils import plot_history_in 
     from fusionlab.nn.pinn.utils import format_pihalnet_predictions
     from fusionlab.plot.forecast import plot_forecasts, forecast_view 
     from fusionlab.utils.data_utils import nan_ops
@@ -240,7 +240,6 @@ selected_features_base = [
     # 'soil_thickness', # Not in Zhongshan sample, add if for Nansha dataset
     'normalized_density', # Example,  building density
     # 'normalized_seismic_risk_score',
-    # Add other features for nansha_dataset  500k dataset
 ]
 selected_features = [
     col for col in selected_features_base if col in available_cols

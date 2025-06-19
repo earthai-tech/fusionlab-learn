@@ -841,8 +841,8 @@ def forecast_view(
     """
     # canonicalise column name
     kw = _coerce_dt_kw(
-        dt_col=dt_col,time_col=time_col, _time_default=time_col)
-    time_col = kw.pop("dt_col")        # adopt canonical name
+        dt_col=dt_col, time_col=time_col, _time_default=time_col)
+    time_col = kw.get("dt_col", time_col)        # adopt canonical name
         
     _spatial_cols = spatial_cols or []
     
@@ -885,7 +885,7 @@ def forecast_view(
     )
 
     plot_structure = _parse_wide_df_columns(df_wide, value_prefixes)
-    
+
     all_years = sorted([
         y for p_data in plot_structure.values() for y in p_data
         if y.isdigit()

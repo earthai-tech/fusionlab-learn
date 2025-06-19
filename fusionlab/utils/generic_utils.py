@@ -11,6 +11,7 @@ import re
 import warnings
 import inspect
 import textwrap
+import logging
 from numbers import Real 
 from pathlib import Path
 
@@ -925,7 +926,8 @@ def vlog(
     depth: Union[int, str] = "auto",
     mode:Optional[str]=None,
     vp: bool=True, 
-    logger=None, 
+    logger=None,
+    **kws
 ):
     """
     Log or naive messages with optional indentation and
@@ -984,7 +986,17 @@ def vlog(
         bracketed tags (e.g. [INFO]) unless the message
         already contains one of [INFO], [DEBUG], [ERROR],
         [WARNING], or [TRACE].
-    logger: Logging instance, optional 
+    logger : logging.Logger or Callable[[str], None], optional
+        Custom sink that receives the *already-formatted* message string.
+        
+        * If you pass a standard :pyclass:`logging.Logger` instance,
+          the message is routed through ``logger.info``.
+        * If you supply any ``callable`` that accepts a single ``str``
+          (e.g. a GUI text-append function), that callable is invoked
+          directly.
+        * Defaults to :pyfunc:`print`, which writes to *stdout*.
+    
+    kws: Logging instance, optional 
        For future extensions.
        
     Returns
@@ -1021,6 +1033,12 @@ def vlog(
         value if not explicitly passed.
 
     """
+    logger = logger or print
+    if isinstance(logger, logging.Logger):
+        _emit = logger.info          # unify interface → Callable[[str], None]
+    else:
+        _emit = logger               # assume it's already a callable
+    
     verbosity_labels = {
         1: "[ERROR]",
         2: "[WARNING]",
@@ -1054,7 +1072,7 @@ def vlog(
         if actual_verbose >= level:
             # Indent and prefix with the label from `level`.
             indent = " " * (depth * 2)
-            print(f"{indent}{verbosity_labels[level]} {message}")
+            _emit(f"{indent}{verbosity_labels[level]} {message}")
         # Nothing else for mode='log' if verbosity is too low.
         return
 
@@ -1084,17 +1102,17 @@ def vlog(
         # If 3 < verbose < 5 => prefix with [DEBUG] if vp is True and not already tagged
         if 3 < actual_verbose < 5:
             if vp and not already_tagged:
-                print(f"{indent}[DEBUG] {message}")
+                _emit(f"{indent}[DEBUG] {message}")
             else:
-                print(f"{indent}{message}")
+                _emit(f"{indent}{message}")
             return
 
         # If verbose >= 5 => prefix with [TRACE] if vp is True and not already tagged
         if actual_verbose >= 5:
             if vp and not already_tagged:
-                print(f"{indent}[TRACE] {message}")
+                _emit(f"{indent}[TRACE] {message}")
             else:
-                print(f"{indent}{message}")
+                _emit(f"{indent}{message}")
             return
 
 def get_actual_column_name(
@@ -2963,6 +2981,7 @@ def _coerce_dt_kw(
 
     Examples
     --------
+    >>> from fusionlab.utils.generic_utils import _coerce_dt_kw
     >>> _coerce_dt_kw(dt_col='date')
     {'dt_col': 'date'}
     >>> _coerce_dt_kw(time_col='timestamp')
@@ -2975,8 +2994,8 @@ def _coerce_dt_kw(
     ValueError: Supply **exactly one** of 'dt_col' or 'time_col'.
     """
     # ­──────────────────────── detect “omitted” vs “provided None” ──
-    dt_provided   = dt_col   is not _SENTINEL
-    time_provided = time_col is not _SENTINEL
+    dt_provided   = (dt_col   is not _SENTINEL) and (dt_col   is not None)
+    time_provided = time_col is not _SENTINEL and (time_col is not None)
 
     # ­──────────────────────── three legal scenarios ───────────────
     if not dt_provided and not time_provided:
