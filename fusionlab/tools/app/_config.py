@@ -1,4 +1,3 @@
-# fusionlab/tools/app/_config.py
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: L. Kouadio <etanoyau@gmail.com>

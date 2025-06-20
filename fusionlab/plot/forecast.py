@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import os
 import re
+import logging 
 import warnings
-from typing import Any, List, Optional, Tuple, Union, Dict
+from typing import Any, List, Optional, Tuple, Union, Dict, Callable 
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -67,6 +68,7 @@ def plot_forecast_by_step(
     figsize: Optional[Tuple[float, float]] = None,
     savefig: Optional[str] = None,
     save_fmts: Union[str, List[str]] = ".png",
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     verbose: int = 1,
 ):
     """Plots forecast data, organizing subplots by forecast step.
@@ -179,7 +181,7 @@ def plot_forecast_by_step(
     # 1. Detect prefixes if not provided.
     if value_prefixes is None:
         vlog("Auto-detecting value prefixes…",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger =_logger)
         
         # Define default columns to exclude from prefix detection.
         exclude_from_prefix = ['sample_idx', 'forecast_step']
@@ -190,7 +192,7 @@ def plot_forecast_by_step(
         if not value_prefixes:
             raise ValueError("Could not auto-detect value prefixes.")
         vlog(f"Detected prefixes: {value_prefixes}",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger =_logger)
 
     # Ensure forecast_step column exists.
     if "forecast_step" not in df.columns:
@@ -213,9 +215,11 @@ def plot_forecast_by_step(
         )
         kind = 'temporal' # Fallback kind
     elif kind == 'spatial':
-        vlog("Plotting spatial data.", level=2, verbose=verbose)
+        vlog("Plotting spatial data.", level=2, verbose=verbose,
+             logger =_logger)
     else: # kind is 'temporal'
-        vlog("Plotting temporal data.", level=2, verbose=verbose)
+        vlog("Plotting temporal data.", level=2, verbose=verbose,
+             logger =_logger)
 
 
     # Unique steps to visualize.
@@ -231,7 +235,8 @@ def plot_forecast_by_step(
         )
     n_rows = len(steps_to_plot)
     if n_rows == 0:
-        vlog("No forecast steps to plot.", level=0, verbose=verbose)
+        vlog("No forecast steps to plot.", level=0, verbose=verbose, 
+             logger =_logger)
         return
 
     # 2. Compute global color limits if cbar is 'uniform'.
@@ -711,7 +716,9 @@ def forecast_view(
     savefig: Optional[str] = None,
     save_fmts: Union[str, List[str]] = '.png',
     dt_col: Optional[str] = None,
-    verbose: int = 1, 
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    verbose: int = 1,
+    
     **kws
 ):
     """Generates and displays spatial forecast visualizations.
@@ -857,7 +864,7 @@ def forecast_view(
         
     if value_prefixes is None:
         vlog("`value_prefixes` not provided. Auto-detecting...",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger =_logger)
         value_prefixes = get_value_prefixes(
             forecast_df,
             exclude_cols=['sample_idx', *_spatial_cols,
@@ -869,7 +876,7 @@ def forecast_view(
                 "Please provide them explicitly."
             )
         vlog(f"Detected prefixes: {value_prefixes}",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger =_logger)
              
     df_wide = format_forecast_dataframe(
         forecast_df, to_wide=True, value_prefixes=value_prefixes,
@@ -911,11 +918,12 @@ def forecast_view(
     if not quantiles_to_plot:
         quantiles_to_plot = ['pred']
         vlog("No quantiles found. Assuming deterministic forecast.",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger =_logger)
     
     n_rows = len(years_to_plot)
     if n_rows == 0:
-        vlog("No years to plot after filtering.", level=0, verbose=verbose)
+        vlog("No years to plot after filtering.", level=0, verbose=verbose, 
+             logger =_logger)
         return
 
     vmin, vmax = None, None
@@ -965,8 +973,8 @@ def forecast_view(
         _plot_forecast_grid(
             fig, axes, df_wide, plot_structure, years_to_plot,
             quantiles_to_plot, prefix, kind, spatial_cols, 
-            s = kws.pop('s', 10), 
-            plot_kwargs=plot_kwargs
+            s = kws.pop('s', 10), plot_kwargs=plot_kwargs,
+            _logger=_logger, 
         )
         
         if cbar == 'uniform' and vmin is not None and vmax is not None:
@@ -985,7 +993,9 @@ def forecast_view(
                 out_dir = os.path.dirname(fname)
                 if out_dir and not os.path.exists(out_dir):
                     os.makedirs(out_dir, exist_ok=True)
-                vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
+                vlog(f"Saving figure to {fname}", level=1,
+                     verbose=verbose, logger=_logger
+                     )
                 fig.savefig(fname, dpi=300, bbox_inches="tight")
 
         plt.show()
@@ -1015,6 +1025,7 @@ def plot_forecasts(
     show_grid: bool = True, # new
     grid_props: Optional[Dict] = None, # new
     verbose: int = 0,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **plot_kwargs: Any
     ) -> None:
     """
@@ -1219,7 +1230,7 @@ def plot_forecasts(
     """
 
     vlog(f"Starting forecast visualization (kind='{kind}')...",
-         level=3, verbose=verbose)
+         level=3, verbose=verbose, logger=_logger)
 
     if not isinstance(forecast_df, pd.DataFrame):
         raise TypeError("`forecast_df` must be a pandas DataFrame, typically "
@@ -1281,10 +1292,11 @@ def plot_forecasts(
         if pred_cols_found:
             pred_col_names_in_df = pred_cols_found
             vlog(f"  Auto-detected prediction columns: {pred_col_names_in_df}",
-                 level=2, verbose=verbose)
+                 level=2, verbose=verbose,logger=_logger)
         else:
             vlog("  No prediction columns could be auto-detected. "
-                 "Plotting may be limited.", level=2, verbose=verbose)
+                 "Plotting may be limited.", level=2, verbose=verbose, 
+                 logger=_logger)
 
     # Apply inverse transform if scaler is provided
     if scaler is not None:
@@ -1297,7 +1309,7 @@ def plot_forecasts(
             )
         else:
             vlog("  Applying inverse transformation using provided scaler...",
-                 level=4, verbose=verbose)
+                 level=4, verbose=verbose, logger=_logger)
             cols_to_inverse_transform = pred_col_names_in_df + actual_col_names_in_df
             dummy_array_shape = (len(df_to_plot), len(scaler_feature_names))
 
@@ -1314,7 +1326,9 @@ def plot_forecasts(
                             f"Failed to inverse transform column '{col_to_inv}'. "
                             f"Plotting scaled value. Error: {e}"
                             )
-            vlog("    Inverse transformation applied.", level=5, verbose=verbose)
+            vlog("    Inverse transformation applied.", 
+                 level=5, verbose=verbose, logger=_logger
+                 )
 
     # --- Select Samples/Items to Plot ---
     unique_sample_ids = df_to_plot['sample_idx'].unique()
@@ -1341,20 +1355,21 @@ def plot_forecasts(
             ]
     if len(selected_ids_for_plot) ==0:
         vlog("No valid sample_idx found to plot. Defaulting to first available.",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger=_logger)
         selected_ids_for_plot = unique_sample_ids[:1]
     if len(selected_ids_for_plot) ==0 : # check if is empty
         vlog ("No sample to plot. Returning ...", level =1, verbose=verbose)
         return
 
     vlog(f"  Plotting for sample_idx: {selected_ids_for_plot}",
-         level=4, verbose=verbose)
+         level=4, verbose=verbose, logger=_logger)
 
     # --- Plotting Logic ---
     if kind == "temporal":
         num_plots = len(selected_ids_for_plot) * output_dim
         if num_plots == 0:
-            vlog("No data to plot for temporal type.", level=2, verbose=verbose)
+            vlog("No data to plot for temporal type.", level=2, 
+                 verbose=verbose, logger=_logger)
             return
 
         n_cols_plot = min(max_cols, num_plots)
@@ -1500,14 +1515,14 @@ def plot_forecasts(
         num_plots = len(steps_to_plot) * output_dim
         if num_plots == 0:
             vlog("No data/steps to plot for spatial type.",
-                 level=2, verbose=verbose)
+                 level=2, verbose=verbose, logger=_logger)
             return
         
         vmin, vmax = None, None
         
         if cbar=="uniform": 
             vlog("Calculating uniform color scale for all subplots...",
-                 level=2, verbose=verbose)
+                 level=2, verbose=verbose, logger=_logger)
                  
             #  Filter DataFrame to only the steps being plotted 
             df_for_scaling = df_to_plot[
@@ -1551,7 +1566,7 @@ def plot_forecasts(
                 
                 if vmin is not None and vmax is not None:
                     vlog(f"Uniform color range set: vmin={vmin:.2f}, vmax={vmax:.2f}",
-                         level=3, verbose=verbose)
+                         level=3, verbose=verbose, logger=_logger)
 
             
         n_cols_plot = min(max_cols, num_plots)
@@ -1692,7 +1707,8 @@ def plot_forecasts(
             f"Unsupported `kind`: '{kind}'. "
             "Choose 'temporal' or 'spatial'."
             )
-    vlog("Forecast visualization complete.", level=3, verbose=verbose)
+    vlog("Forecast visualization complete.", level=3, 
+         verbose=verbose, logger=_logger)
     
 
 @check_non_emptiness
@@ -2188,7 +2204,8 @@ def _plot_temporal_subplot(ax, df, value_col, title, **kwargs):
 
 def _plot_forecast_grid(
     fig, axes, df_wide, plot_structure, years_to_plot,
-    quantiles_to_plot, prefix, kind, spatial_cols, s, plot_kwargs
+    quantiles_to_plot, prefix, kind, spatial_cols, s, plot_kwargs, 
+    _logger
 ):
     # Check if spatial coordinates are available for plotting.
     has_spatial_coords = all(
@@ -2199,7 +2216,8 @@ def _plot_forecast_grid(
         vlog(
             f"Spatial columns {spatial_cols} not found. "
             "Falling back to temporal line plots.",
-            level=1, verbose=plot_kwargs.get('verbose', 0)
+            level=1, verbose=plot_kwargs.get('verbose', 0), 
+            logger=_logger
         )
 
     # Get the last known static actual column for fallback.

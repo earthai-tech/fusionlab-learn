@@ -7,12 +7,9 @@ workflow. It integrates data loading, preprocessing, model training,
 and visualization into a single, interactive tool.
 """
 
-# 1. Core System & Library Imports
 import sys
 import os
 import time
-# import shutil
-# import pandas as pd
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -20,38 +17,28 @@ from PyQt5.QtWidgets import (
     QTextEdit, QFrame, QGridLayout, QFormLayout, QSpinBox,
     QDoubleSpinBox, QCheckBox
 )
-from PyQt5.QtGui import  QIcon, QPixmap#, QFont,
+from PyQt5.QtGui import  QIcon, QPixmap #, QFont,
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
-# 2. Application-Specific & FusionLab Imports
-# This block handles the crucial import of the application's backend logic.
-# It checks for both the `fusionlab` library and the necessary backend
-# (TensorFlow) before proceeding.
 try:
-    # First, import the environment setup utility
-    from fusionlab.tools.app._config import setup_environment
 
-    # Run the dependency check immediately. This will raise an ImportError
-    # with a helpful message if TensorFlow is not installed, preventing
-    # the rest of the application from attempting to load.
+    from fusionlab.tools.app._config import setup_environment
     setup_environment()
 
-    # If the setup succeeds, proceed to import the processing classes
-    from fusionlab.tools.app._processing import (
-        SubsConfig, DataProcessor, SequenceGenerator,
-        ModelTrainer, Forecaster, ResultsVisualizer
-    )
+    from fusionlab.tools.app.config import SubsConfig 
+    from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
+    from fusionlab.tools.app.modeling import ModelTrainer, Forecaster  
+    from fusionlab.tools.app.view import ResultsVisualizer 
+
 except (ImportError, ModuleNotFoundError) as e:
-    # This catch block handles errors if the script can't find its own
-    # modules or if the setup_environment() raises an ImportError.
+
     print("CRITICAL ERROR: Could not start the application.")
     print("Please ensure 'fusionlab-learn' and its dependencies (like "
           "TensorFlow) are correctly installed.")
     print(f"Details: {e}")
-    # A simple GUI-less exit for a critical failure
+    
     sys.exit(1)
 
-# 3. GUI Styling and Worker Thread Definition
 
 # --- Style Sheet for a modern dark theme ---
 APP_STYLESHEET = """
@@ -132,7 +119,7 @@ APP_STYLESHEET = """
     }
 """
 
-# --- Worker Thread to Run the Backend Processing ---
+
 class ProcessingWorker(QThread):
     """
     Runs the entire forecasting workflow in a separate thread to keep
@@ -151,78 +138,79 @@ class ProcessingWorker(QThread):
         self.file_path = file_path
 
     def run(self):
-        try:
-            # Link the worker's log signal to the config object so that all
-            # backend classes can emit logs directly to the GUI.
-            self.config.log = self.log_updated.emit
-            self.config.progress_callback = self.progress_updated.emit
-            
-            # --- Execute the entire workflow step-by-step ---
-            self.status_updated.emit("Starting Data Processing...")
-            data_processor = DataProcessor(
-                self.config, self.config.log
-                )
-            # Override data path with the file selected by the user in the GUI
-            processed_df = data_processor.run()
-
-            self.status_updated.emit("Generating Sequences for Training...")
-            sequence_gen = SequenceGenerator(
-                self.config, self.config.log )
-            (
-                train_dataset, val_dataset
-            ) = sequence_gen.run(
-                processed_df, data_processor.static_features_encoded
+        # try:
+        # Link the worker's log signal to the config object so that all
+        # backend classes can emit logs directly to the GUI.
+        self.config.log = self.log_updated.emit
+        self.config.progress_callback = self.progress_updated.emit
+        self.config.save_format = 'tf' # block to save tensorflow format.
+        self.config.bypass_loading =True # by pass loading and save only 
+        
+        # --- Execute the entire workflow step-by-step ---
+        self.status_updated.emit("Starting Data Processing...")
+        data_processor = DataProcessor(
+            self.config, self.config.log
             )
+        # Override data path with the file selected by the user in the GUI
+        processed_df = data_processor.run()
 
-            self.status_updated.emit("Training Model...")
-            # We need the input shapes to build the model for the first time
-            sample_inputs, _ = next(iter(train_dataset))
-            input_shapes = {
-                name: tensor.shape for name, tensor in sample_inputs.items()
-            }
+        self.status_updated.emit("Generating Sequences for Training...")
+        sequence_gen = SequenceGenerator(
+            self.config, log_callback=self.config.log )
+        (
+            train_dataset, val_dataset
+        ) = sequence_gen.run(
+            processed_df, data_processor.static_features_encoded
+        )
 
-            trainer = ModelTrainer(self.config, self.config.log)
-            best_model = trainer.run(train_dataset, val_dataset, input_shapes)
+        self.status_updated.emit("Training Model...")
+        # We need the input shapes to build the model for the first time
+        sample_inputs, _ = next(iter(train_dataset))
+        input_shapes = {
+            name: tensor.shape for name, tensor in sample_inputs.items()
+        }
 
-            self.status_updated.emit("Generating Forecasts...")
-            forecaster = Forecaster(self.config, self.config.log)
-            forecast_df = forecaster.run(
-                model=best_model,
-                test_df=sequence_gen.test_df,
-                val_dataset=val_dataset,
-                static_features_encoded=data_processor.static_features_encoded,
-                coord_scaler=sequence_gen.coord_scaler
-            )
+        trainer = ModelTrainer(self.config, log_callback=self.config.log)
+        best_model = trainer.run(train_dataset, val_dataset, input_shapes)
 
-            self.status_updated.emit("Visualizing Results...")
-            visualizer = ResultsVisualizer(
-                self.config, self.config.log )
-            visualizer.run(forecast_df)
+        self.status_updated.emit("Generating Forecasts...")
+        forecaster = Forecaster(self.config, log_callback=self.config.log)
+        forecast_df = forecaster.run(
+            model=best_model,
+            test_df=sequence_gen.test_df,
+            val_dataset=val_dataset,
+            static_features_encoded=data_processor.static_features_encoded,
+            coord_scaler=sequence_gen.coord_scaler
+        )
 
-            self.status_updated.emit("Workflow Finished Successfully!")
-            self.processing_finished.emit({
-                "dataframe": forecast_df.to_string(
-                    ) if forecast_df is not None else "No forecast data.",
-                "plots": [
-                    os.path.join(
-                        self.config.run_output_path,
-                        (
-                            f"{self.config.city_name}_{self.config.model_name}"
-                            "_training_history_plot_.png"
-                        )
-                    ),
-                    # Add paths to other plots as they are saved
-                ]
-            })
+        self.status_updated.emit("Visualizing Results...")
+        visualizer = ResultsVisualizer(
+            self.config, log_callback=self.config.log )
+        visualizer.run(forecast_df)
 
-        except Exception as e:
-            # If any part of the workflow fails, emit an error signal
-            self.error_occurred.emit(
-                f"An error occurred during processing: {e}\n\n"
-                "Please check the log for more details."
-            )
+        self.status_updated.emit("Workflow Finished Successfully!")
+        self.processing_finished.emit({
+            "dataframe": forecast_df.to_string(
+                ) if forecast_df is not None else "No forecast data.",
+            "plots": [
+                os.path.join(
+                    self.config.run_output_path,
+                    (
+                        f"{self.config.city_name}_{self.config.model_name}"
+                        "_training_history_plot_.png"
+                    )
+                ),
+                # Add paths to other plots as they are saved
+            ]
+        })
 
-# --- Main Application Window ---
+        # except Exception as e:
+        #     # If any part of the workflow fails, emit an error signal
+        #     self.error_occurred.emit(
+        #         f"An error occurred during processing: {e}\n\n"
+        #         "Please check the log for more details."
+        #     )
+
 class SubsidenceForecasterApp(QMainWindow):
     """
     The main application window for the Subsidence Forecasting Tool.
@@ -330,7 +318,7 @@ class SubsidenceForecasterApp(QMainWindow):
         return header_widget
     
 
-    # Data-input card  ------------------------------------------------------
+    # Data-input card  --------
     def _create_data_input_card(self) -> QFrame:
         """Return a stylised card that lets the user pick a CSV file."""
         card   = QFrame()
@@ -346,7 +334,8 @@ class SubsidenceForecasterApp(QMainWindow):
     
         # File picker widgets
         self.file_button = QPushButton("Select File…")
-        self.file_button.clicked.connect(self._on_select_file)
+        # self.file_button.clicked.connect(self._on_select_file)
+        self.file_button.clicked.connect(self.handle_file_change)
     
         self.file_label  = QLabel("No file selected.")
         self.file_label.setStyleSheet("font-style: italic; color: #64748b;")
@@ -375,7 +364,7 @@ class SubsidenceForecasterApp(QMainWindow):
             self.file_label.setText("No file selected.")
     
     
-    # Workflow-config card  -----------------------------------------------
+    # Workflow-config card  ----
     def _create_workflow_config_card(self) -> QFrame:
         """Return a card with the main model & training parameters."""
         card   = QFrame()
@@ -420,9 +409,7 @@ class SubsidenceForecasterApp(QMainWindow):
         layout.addLayout(form)
         return card
 
-    # ------------------------------------------------------------------
     # Data / feature-mapping card
-    # ------------------------------------------------------------------
     def _create_data_config_card(self) -> QFrame:
         """Return a card that lets the user map CSV columns to roles."""
         card   = QFrame()
@@ -477,8 +464,6 @@ class SubsidenceForecasterApp(QMainWindow):
         layout.addLayout(form)
         return card
     
-    # Model / training-hyper-param card
-    # 
     def _create_model_config_card(self) -> QFrame:
         """Return a card with advanced model & training settings."""
         card   = QFrame()
@@ -521,7 +506,8 @@ class SubsidenceForecasterApp(QMainWindow):
         self.patience_spin = QSpinBox()
         self.patience_spin.setRange(1, 100)
     
-        self.quantiles_input = QLineEdit(); self.quantiles_input.setPlaceholderText("0.1, 0.5, 0.9")
+        self.quantiles_input = QLineEdit()
+        self.quantiles_input.setPlaceholderText("0.1, 0.5, 0.9")
     
         # Assemble form
         form.addRow("PDE mode:",              self.pde_mode_combo)
@@ -565,7 +551,7 @@ class SubsidenceForecasterApp(QMainWindow):
         card.setObjectName("card")
         layout = QVBoxLayout(card)
     
-        # -- header -------------------------------------------------------------
+        # -- header ---------
         title = QLabel("Workflow Configuration")
         title.setObjectName("cardTitle")
         desc  = QLabel("Adjust model, training, and physics parameters.")
@@ -575,7 +561,7 @@ class SubsidenceForecasterApp(QMainWindow):
         layout.addWidget(desc)
         layout.addWidget(self._create_hline())
     
-        # -- form ---------------------------------------------------------------
+        # -- form ---------
         form_layout = QFormLayout()
         form_layout.setSpacing(10)
     
@@ -585,7 +571,7 @@ class SubsidenceForecasterApp(QMainWindow):
         form_layout.addRow("Model:", self.model_combo)
         form_layout.addRow(self._create_hline())
     
-        # Year / horizon controls ----------------------------------------------
+        # Year / horizon controls ----
         self.train_end_year_spin = QSpinBox()
         self.train_end_year_spin.setRange(1980, 2050)
     
@@ -604,7 +590,7 @@ class SubsidenceForecasterApp(QMainWindow):
         form_layout.addRow("Time Steps (Look-back):", self.time_steps_spin)
         form_layout.addRow(self._create_hline())
     
-        # PDE mode & lambdas ----------------------------------------------------
+        # PDE mode & lambdas ---------
         self.pde_mode_combo = QComboBox()
         self.pde_mode_combo.addItems(['both', 'consolidation', 'gw_flow', 'none'])
     
@@ -623,7 +609,7 @@ class SubsidenceForecasterApp(QMainWindow):
         form_layout.addRow("Lambda GW Flow:",        self.lambda_gw_spin)
         form_layout.addRow(self._create_hline())
     
-        # Optimisation hyper-params --------------------------------------------
+        # Optimisation hyper-params ----
         self.lr_input = QLineEdit()
     
         self.epochs_spin = QSpinBox()
@@ -637,7 +623,6 @@ class SubsidenceForecasterApp(QMainWindow):
         form_layout.addRow("Epochs:",        self.epochs_spin)
         form_layout.addRow("Batch Size:",    self.batch_size_spin)
     
-        # -----------------------------------------------------------------------
         layout.addLayout(form_layout)
         return card
 
@@ -653,7 +638,8 @@ class SubsidenceForecasterApp(QMainWindow):
 
         title = QLabel("Processing Log & Results")
         title.setObjectName("cardTitle")
-        self.status_label = QLabel("Ready. Configure and upload a file to start.")
+        self.status_label = QLabel(
+            "Ready. Configure and upload a file to start.")
         self.status_label.setObjectName("cardDescription")
         
         self.log_output = QTextEdit()
@@ -723,7 +709,7 @@ class SubsidenceForecasterApp(QMainWindow):
         # --- Main action buttons ---
         self.run_button.clicked.connect(self.handle_run_workflow)
         self.reset_button.clicked.connect(self.handle_reset)
-        self.file_button.clicked.connect(self.handle_file_change)
+        # self.file_button.clicked.connect(self.handle_file_change)
 
         # --- Workflow Config widgets ---
         self.model_combo.currentTextChanged.connect(self.handle_config_change)

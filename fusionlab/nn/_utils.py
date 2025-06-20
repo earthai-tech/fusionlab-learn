@@ -20,7 +20,7 @@ import logging
 from typing import ( 
     List, Tuple, Optional,
     Union, Dict, Callable, 
-    Any
+    Any, Sequence
 )
 import numpy as np
 import pandas as pd
@@ -6637,8 +6637,6 @@ def squeeze_last_dim_if(tensors, output_dims):
         f"`tensors` must be a tf.Tensor, list, or dict, got {type(tensors).__name__}"
     )
 
-
-
 @Deprecated(
     reason=(
         "`format_predictions_to_dataframe` is **deprecated** and will be removed "
@@ -6698,6 +6696,113 @@ def format_predictions_to_dataframe(
         verbose=verbose,
         **kwargs
     )
+
+def make_dict_to_tuple_fn(
+    feature_keys: Sequence[str],
+    target_keys: Optional[Sequence[str]] = None,
+    *,
+    allow_missing_optional: bool = True,
+) -> Callable[
+    [Dict[str, Tensor], Union[Tensor, Dict[str, Tensor], None]],
+    Tuple[Tuple[Tensor, ...], Union[Tensor, Dict[str, Tensor], None]],
+]:
+    """
+    Create a `tf.data.Dataset.map` function that converts a *feature
+    dictionary* into a **positional tuple** expected by a sub-classed
+    Keras model.
+
+    Parameters
+    ----------
+    feature_keys : Sequence[str]
+        Keys – **in the exact positional order required by the model** –
+        that will populate the tuple.  For your PINN:
+
+        >>> feature_keys = [
+        ...     "coords",           # (B, T, 3)
+        ...     "static_features",  # (B, S)
+        ...     "dynamic_features", # (B, T, D)
+        ...     "future_features",  # (B, H, F)
+        ... ]
+
+    target_keys : Sequence[str] or None, default ``None``
+        * ``None`` – pass through the dataset’s existing target element.
+        * sequence – extract those keys (from *features* **or** *targets*
+          if it is a dict) and return them as:
+            * a single tensor  if `len(target_keys) == 1`;
+            * a dict `{key: tensor}` otherwise.
+
+    allow_missing_optional : bool, default ``True``
+        Whether to substitute ``None`` for missing *optional* feature or
+        target keys.  If ``False``, a missing key raises ``KeyError``.
+
+    Returns
+    -------
+    Callable
+        A map-function you can plug into a `tf.data.Dataset`:
+
+        >>> mapper = make_dict_to_tuple_fn(feature_keys, ["subsidence", "gwl"])
+        >>> train_ds = train_ds.map(mapper, num_parallel_calls=tf.data.AUTOTUNE)
+
+    Notes
+    -----
+    * Duplicate names in `feature_keys` are rejected so the positional
+      tuple cannot be ambiguous.
+    * The function is fully Autograph-compatible; TensorFlow will stage
+      it as part of the dataset pipeline.
+    """
+
+    # Sanity checks
+    feature_keys = list(feature_keys)
+    if len(feature_keys) != len(set(feature_keys)):
+        raise ValueError(
+            "`feature_keys` contain duplicates"
+            " – tuple order would be ambiguous.")
+
+    target_keys = list(target_keys) if target_keys is not None else None
+
+    # Map-function returned to the caller
+    def _dict_to_tuple(
+        features: Dict[str, Tensor],
+        targets: Union[Tensor, Dict[str, Tensor], None] = None,
+    ):
+        # Build positional feature tuple 
+        positional: List[Optional[Tensor]] = []
+        for k in feature_keys:
+            if k in features:
+                positional.append(features[k])
+            elif allow_missing_optional:
+                positional.append(None)
+            else:
+                raise KeyError(f"Missing required feature key '{k}'")
+        inputs_tuple: Tuple[Tensor, ...] = tuple(positional)
+
+        # Derive targets_out 
+        if target_keys is None:
+            targets_out = targets  # pass through
+        else:
+            def _grab(src, key):
+                if isinstance(src, dict) and key in src:
+                    return src[key]
+                if allow_missing_optional:
+                    return None
+                raise KeyError(f"Target key '{key}' not found.")
+
+            if isinstance(targets, dict):
+                collected = {
+                    k: _grab(features, k) or _grab(
+                        targets, k) for k in target_keys}
+            else:
+                collected = {
+                    k: _grab(features, k) for k in target_keys}
+
+            targets_out = next(
+                iter(collected.values())) if len(
+                    collected) == 1 else collected
+
+        return inputs_tuple, targets_out
+
+    return _dict_to_tuple
+
 
 step_to_long.__doc__=r"""
 Convert a multi-step forecast DataFrame from wide to long format.

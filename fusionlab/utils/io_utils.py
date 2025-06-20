@@ -3159,6 +3159,7 @@ def to_txt(
     header=None,
     footer=None,
     serializer=None,
+    savepath = None, 
     verbose=1,
     **kwargs
 ):
@@ -3282,9 +3283,18 @@ def to_txt(
         ext = 'json' if format == 'json' else 'txt'
         filename = f"output_{timestamp}.{ext}"
     
+    # Use the savepath if provided
+    if savepath:
+        # Ensure directory exists
+        if not os.path.exists(savepath):
+            os.makedirs(savepath)
+        # Join the savepath and filename
+        filename = os.path.join(savepath, filename)
+
     # Check file existence if overwrite disabled
     if not overwrite and os.path.exists(filename):
-        raise FileExistsError(f"File '{filename}' exists. Set overwrite=True to override.")
+        raise FileExistsError(
+            f"File '{filename}' exists. Set overwrite=True to override.")
 
     original_format = format.lower()
     success = False

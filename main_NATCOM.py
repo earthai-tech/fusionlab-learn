@@ -30,9 +30,6 @@ Workflow:
 11. Saving Artifacts.
 """
 
-# ==========================================
-#  SECTION 0: PREAMBLE & CONFIGURATION
-# ==========================================
 import os
 import shutil
 import joblib
@@ -61,10 +58,6 @@ try:
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
     from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet   # Our PINN models
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences # PINN data prep
-    from fusionlab.nn.pinn.op import ( # PINN physics helpers : Noqa
-        compute_consolidation_residual, 
-        # calculate_gw_flow_pde_residual_from_derivs # For future use
-    )
     from fusionlab.params import LearnableK, LearnableSs, LearnableQ 
     from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
@@ -75,14 +68,13 @@ try:
     from fusionlab.utils.io_utils import save_job #, fetch_joblib_data
     from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column 
     from fusionlab.utils.generic_utils import ensure_directory_exists
-    
-    
 
     print("Successfully imported fusionlab modules.")
 except ImportError as e:
     print(f"Critical Error: Failed to import fusionlab modules: {e}. "
           "Please ensure 'fusionlab-learn' is correctly installed.")
     raise
+    
 #%
 # --- Configuration Parameters ---
 CITY_NAME = 'zhongshan'

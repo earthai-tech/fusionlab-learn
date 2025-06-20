@@ -7,6 +7,8 @@ Physics-Informed Neural Network (PINN) Operations
 and Helpers.
 """
 from typing import Dict, List, Optional, Tuple, Union, Callable
+from typing import Mapping, Sequence
+import collections.abc as cabc
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...utils.deps_utils import ensure_pkg 
@@ -353,6 +355,10 @@ def process_pinn_inputs(
     static_features: Optional[Tensor] = None
     dynamic_features: Optional[Tensor] = None
     future_features: Optional[Tensor] = None
+    
+    # 0 — auto-detect the mode if requested
+    if mode == "auto":
+        mode = infer_pinn_mode(inputs)
 
     if mode == 'as_dict':
         if not isinstance(inputs, dict):
@@ -407,6 +413,46 @@ def process_pinn_inputs(
         static_features,
         dynamic_features,
         future_features
+    )
+
+def infer_pinn_mode(
+    inputs: Union[
+        Mapping[str, Tensor],
+        Sequence[Tensor]
+    ]
+) -> str:
+    """
+    Infer the proper ``mode`` for :pyfunc:`process_pinn_inputs`.
+
+    Parameters
+    ----------
+    inputs :
+        * **Mapping**  – a dict-like object whose *values* are tensors
+          (e.g. ``{'coords': …, 'dynamic_features': …}``).  
+          → returns ``'as_dict'``.
+        * **Sequence** – a list **or** tuple whose *items* are tensors
+          in the prescribed order  
+          ``[coords, dynamic, static?, future?]``.  
+          → returns ``'as_list'``.
+
+    Returns
+    -------
+    str
+        Either ``'as_dict'`` or ``'as_list'``.
+
+    Raises
+    ------
+    TypeError
+        If *inputs* is neither a mapping nor a sequence.
+    """
+    if isinstance(inputs, cabc.Mapping):
+        return "as_dict"
+    if isinstance(inputs, cabc.Sequence) and not isinstance(inputs, (str, bytes)):
+        return "as_list"
+    raise TypeError(
+        "Could not infer PINN input mode: expected a mapping (dict-like) "
+        "or a sequence (list/tuple) of tensors; got "
+        f"{type(inputs).__name__}."
     )
 
 def calculate_gw_flow_pde_residual_from_derivs(
