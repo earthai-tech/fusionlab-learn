@@ -44,7 +44,7 @@ class ResultsVisualizer:
         self._run_forecast_view(forecast_df)
         self._save_all_figures()
         
-        self.log("\n--- SCRIPT COMPLETED ---")
+        self.log("\n--- WORKFLOW COMPLETED ---")
         self.log(f"All outputs are in: {self.config.run_output_path}")
 
     def _plot_main_forecasts(self, df: pd.DataFrame):

@@ -62,6 +62,14 @@ class ModelTrainer:
         """Defines the model architecture and compiles it."""
         self.log("  Defining model architecture...")
         
+        def _check_physic_params (param_value, learnable_state): 
+            if isinstance(param_value, str):# and v.lower() in ['learnable', 'fixed']:
+                # either fixed or 'learnable',
+                # model will handle it internally 
+                return param_value.lower()
+            # return learnable_state
+            return learnable_state(initial_value= param_value) 
+                
         # Determine which model class to use
         ModelClass = ( 
             TransFlowSubsNet if self.config.model_name == 'TransFlowSubsNet'
@@ -84,10 +92,14 @@ class ModelTrainer:
         
         physics_loss_weights = {}
         if ModelClass is TransFlowSubsNet:
+            
             model_params.update({
-                "K": LearnableK(initial_value=self.config.gwflow_init_k),
-                "Ss": LearnableSs(initial_value=self.config.gwflow_init_ss),
-                "Q": LearnableQ(initial_value=self.config.gwflow_init_q),
+                "K": _check_physic_params(
+                    self.config.gwflow_init_k, LearnableK),
+                "Ss": _check_physic_params(
+                    self.config.gwflow_init_ss, LearnableSs),
+                "Q": _check_physic_params (
+                    self.config.gwflow_init_q, LearnableQ),
             })
             physics_loss_weights = {
                 "lambda_cons": self.config.lambda_cons,
@@ -385,6 +397,8 @@ class Forecaster:
                 ), 
             model_inputs=inputs_test,
             coord_scaler= coord_scaler, 
+            _logger = self.config.log, 
+            savepath = self.config.run_output_path, 
         )
 
         if forecast_df is not None and not forecast_df.empty:

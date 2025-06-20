@@ -5,6 +5,7 @@
 """
 Physics-Informed Neural Network (PINN) Utility functions.
 """
+import os 
 import logging 
 from typing import List, Tuple, Optional, Union, Dict, Any
 from typing import Sequence,  Callable
@@ -30,7 +31,7 @@ from ...decorators import isdf
 from ...utils.deps_utils import ensure_pkg 
 from ...utils.generic_utils import print_box, vlog, select_mode 
 from ...utils.geo_utils import resolve_spatial_columns 
-from ...utils.io_utils import save_job  
+from ...utils.io_utils import save_job, to_txt   
 
 from .. import KERAS_BACKEND, KERAS_DEPS
 
@@ -819,7 +820,40 @@ def format_pihalnet_predictions(
                      f"({quantiles_sorted[l_idx]}-"
                      f"{quantiles_sorted[u_idx]}): {coverage:.4f}",
                      level=3, verbose=verbose, logger=_logger)
-                # Store it if needed: e.g. 
+                
+                
+                try:
+                    
+                    
+                    # Define savepath
+                    savepath = kwargs.pop('savepath', None)
+                    # If savefile is provided, get the directory path for saving
+                    if savefile is not None:
+                        savepath = os.path.dirname(savefile)
+                    
+                    # Verbose log for where the file will be saved
+                    vlog(
+                        ( f"Saving file to: {savepath}") 
+                        if savepath is not None else (
+                        "No savepath specified, using"
+                        " current working directory."),
+                         level=1, verbose=verbose, logger=_logger)
+                    # Save the coverage result in JSON format
+                    to_txt(
+                        {"coverage_result": coverage}, 
+                        format='json', 
+                        indent=4, 
+                        filename="coverage_result.json", 
+                        savepath=savepath,
+                    )
+                    
+                except Exception as e:
+                    # Handle any exceptions and print the error
+                    vlog(
+                        f"An error occurred while saving the file: {e}", 
+                        level=1, verbose=verbose, logger=_logger
+                        )
+                    
                 # final_df.attrs[f'{base_name}_coverage'] = coverage
             else:
                  vlog(

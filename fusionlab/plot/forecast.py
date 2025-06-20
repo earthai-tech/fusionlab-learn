@@ -181,7 +181,7 @@ def plot_forecast_by_step(
     # 1. Detect prefixes if not provided.
     if value_prefixes is None:
         vlog("Auto-detecting value prefixes…",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger =_logger)
         
         # Define default columns to exclude from prefix detection.
         exclude_from_prefix = ['sample_idx', 'forecast_step']
@@ -192,7 +192,7 @@ def plot_forecast_by_step(
         if not value_prefixes:
             raise ValueError("Could not auto-detect value prefixes.")
         vlog(f"Detected prefixes: {value_prefixes}",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger =_logger)
 
     # Ensure forecast_step column exists.
     if "forecast_step" not in df.columns:
@@ -215,9 +215,11 @@ def plot_forecast_by_step(
         )
         kind = 'temporal' # Fallback kind
     elif kind == 'spatial':
-        vlog("Plotting spatial data.", level=2, verbose=verbose)
+        vlog("Plotting spatial data.", level=2, verbose=verbose,
+             logger =_logger)
     else: # kind is 'temporal'
-        vlog("Plotting temporal data.", level=2, verbose=verbose)
+        vlog("Plotting temporal data.", level=2, verbose=verbose,
+             logger =_logger)
 
 
     # Unique steps to visualize.
@@ -233,7 +235,8 @@ def plot_forecast_by_step(
         )
     n_rows = len(steps_to_plot)
     if n_rows == 0:
-        vlog("No forecast steps to plot.", level=0, verbose=verbose)
+        vlog("No forecast steps to plot.", level=0, verbose=verbose, 
+             logger =_logger)
         return
 
     # 2. Compute global color limits if cbar is 'uniform'.
@@ -861,7 +864,7 @@ def forecast_view(
         
     if value_prefixes is None:
         vlog("`value_prefixes` not provided. Auto-detecting...",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger =_logger)
         value_prefixes = get_value_prefixes(
             forecast_df,
             exclude_cols=['sample_idx', *_spatial_cols,
@@ -873,7 +876,7 @@ def forecast_view(
                 "Please provide them explicitly."
             )
         vlog(f"Detected prefixes: {value_prefixes}",
-             level=2, verbose=verbose)
+             level=2, verbose=verbose, logger =_logger)
              
     df_wide = format_forecast_dataframe(
         forecast_df, to_wide=True, value_prefixes=value_prefixes,
@@ -915,11 +918,12 @@ def forecast_view(
     if not quantiles_to_plot:
         quantiles_to_plot = ['pred']
         vlog("No quantiles found. Assuming deterministic forecast.",
-             level=1, verbose=verbose)
+             level=1, verbose=verbose, logger =_logger)
     
     n_rows = len(years_to_plot)
     if n_rows == 0:
-        vlog("No years to plot after filtering.", level=0, verbose=verbose)
+        vlog("No years to plot after filtering.", level=0, verbose=verbose, 
+             logger =_logger)
         return
 
     vmin, vmax = None, None

@@ -15,9 +15,10 @@ class SubsConfig:
     the backend processing logic.
     """
     def __init__(
-            self, log_callback: Optional[callable] = None, 
-            progress_callback: Optional[Callable[[int], None]] = None,
-        **kwargs):
+        self, log_callback: Optional[callable] = None, 
+        progress_callback: Optional[Callable[[int], None]] = None,
+        **kwargs
+    ):
         """
         Initializes the configuration with default values, which can be
         overridden by keyword arguments.

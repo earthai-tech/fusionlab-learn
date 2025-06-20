@@ -11,12 +11,13 @@ Mini Subsidence-Forecasting GUI (academic showcase)
 
 from __future__ import annotations 
 import os, sys, time
-from PyQt5.QtCore    import Qt, pyqtSignal
+from PyQt5.QtCore    import Qt,QThread,  pyqtSignal
 from PyQt5.QtGui     import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QFrame, QPushButton, QLabel, QSpinBox, QDoubleSpinBox,
-    QComboBox, QTextEdit, QFileDialog, QProgressBar, QLineEdit
+    QComboBox, QTextEdit, QFileDialog, QProgressBar, QLineEdit, 
+    QCheckBox
 )
 
 from pathlib import Path
@@ -82,7 +83,6 @@ def hline() -> QFrame:
     ln.setStyleSheet(f"color:{PRIMARY}")
     return ln
 
-from PyQt5.QtCore import QThread
 
 class Worker(QThread):
     status_msg   = pyqtSignal(str)
@@ -138,7 +138,7 @@ class MiniForecaster(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("fusionlab-learn – PINN Mini GUI")
+        self.setWindowTitle("Fusionlab-learn – PINN Mini GUI")
         self.setFixedSize(780, 560)
         self.file_path: Path | None = None
 
@@ -167,13 +167,6 @@ class MiniForecaster(QMainWindow):
         L.addWidget(logo); L.addWidget(title)
 
         # 1) CSV selector row 
-        # row = QHBoxLayout()
-        # self.file_btn   = QPushButton("Select CSV…")
-        # self.file_btn.clicked.connect(self._choose_file)
-        # self.file_label = QLabel("No file selected")
-        # self.file_label.setStyleSheet("font-style:italic;")
-        # row.addWidget(self.file_btn)
-        # row.addWidget(self.file_label, 1)
         row = QHBoxLayout()
         row.setSpacing(8)
         
@@ -201,6 +194,7 @@ class MiniForecaster(QMainWindow):
         cards = QHBoxLayout(); L.addLayout(cards, 1)
 
         cards.addWidget(self._model_card(), 1)
+        cards.addWidget(self._training_card(), 1)
         cards.addWidget(self._physics_card(), 1)
         # ▼ NEW feature card spans full width
         L.addWidget(self._feature_card())
@@ -226,6 +220,7 @@ class MiniForecaster(QMainWindow):
         # ── full-width progress bar 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(18)
+        self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
         bottom.addWidget(self.progress_bar)
     
@@ -254,6 +249,45 @@ class MiniForecaster(QMainWindow):
         
         bottom.addLayout(footer)
 
+    def _training_card(self) -> QFrame:
+        card = QFrame(); card.setObjectName("card")
+        lay  = QVBoxLayout(card)
+        lay.addWidget(self._title("Training Parameters"))
+        lay.addWidget(hline())
+    
+        form = QFormLayout()
+    
+        # Train End Year
+        self.train_end_year_spin = QSpinBox()
+        self.train_end_year_spin.setRange(1980, 2050)
+        self.train_end_year_spin.setValue(2022)
+        form.addRow("Train End Year:", self.train_end_year_spin)
+    
+        # Forecast Start Year
+        self.forecast_start_year_spin = QSpinBox()
+        self.forecast_start_year_spin.setRange(1980, 2050)
+        self.forecast_start_year_spin.setValue(2023)
+        form.addRow("Forecast Start Year:", self.forecast_start_year_spin)
+    
+        # Forecast Horizon (years)
+        self.forecast_horizon_spin = QSpinBox()
+        self.forecast_horizon_spin.setRange(1, 20)
+        self.forecast_horizon_spin.setValue(3)
+        form.addRow("Forecast Horizon (years):", self.forecast_horizon_spin)
+    
+        # Time Steps
+        self.time_steps_spin = QSpinBox()
+        self.time_steps_spin.setRange(1, 50)
+        self.time_steps_spin.setValue(5)
+        form.addRow("Time Steps (look-back):", self.time_steps_spin)
+    
+        # Quantiles
+        self.quantiles_input = QLineEdit()
+        self.quantiles_input.setText("0.1, 0.5, 0.9")
+        form.addRow("Quantiles (comma-separated):", self.quantiles_input)
+    
+        lay.addLayout(form)
+        return card
 
     def _model_card(self) -> QFrame:
         card = QFrame(); card.setObjectName("card")
@@ -271,12 +305,33 @@ class MiniForecaster(QMainWindow):
         form.addRow("Epochs:", self.epochs)
 
         self.batch = QSpinBox(); self.batch.setRange(8, 1024)
-        self.batch.setValue(256)
+        self.batch.setValue(32)
         form.addRow("Batch size:", self.batch)
 
         self.lr = QDoubleSpinBox(); self.lr.setDecimals(4)
         self.lr.setValue(0.001)
         form.addRow("Learning rate:", self.lr)
+        
+        # Model Configuration
+        model_row = QHBoxLayout()
+        # Model type selection
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItems(["pihal", "tft"])
+        model_row.addWidget(QLabel("Model Type:"))
+        model_row.addWidget(self.model_type_combo)
+        
+        # Coverage Evaluation checkbox
+        self.coverage_checkbox = QCheckBox("Evaluate Coverage")
+        self.coverage_checkbox.setChecked(True)  # Default is checked
+        model_row.addWidget(self.coverage_checkbox)
+        
+        form.addRow(model_row)  # Add to the form layout
+        
+        # Attention Levels
+        self.attention_levels_input = QLineEdit()
+        self.attention_levels_input.setText("1, 2, 3")
+        form.addRow("Attention Levels (comma-separated):",
+                    self.attention_levels_input)
 
         lay.addLayout(form)
         return card
@@ -288,6 +343,10 @@ class MiniForecaster(QMainWindow):
         lay.addWidget(hline())
 
         form = QFormLayout()
+        self.pinn_coeff_c_input = QComboBox()
+        self.pinn_coeff_c_input.addItems(["learnable", "fixed"])
+        form.addRow("Pinn Coeff C:", self.pinn_coeff_c_input)
+    
         self.lambda_cons = QDoubleSpinBox()
         self.lambda_cons.setRange(0, 10)
         self.lambda_cons.setValue(1)
@@ -301,6 +360,46 @@ class MiniForecaster(QMainWindow):
         self.pde_mode = QComboBox()
         self.pde_mode.addItems(["both", "consolidation", "gw_flow", "none"])
         form.addRow("PDE mode:", self.pde_mode)
+        
+        # Physical Parameters
+        flow_params_row = QHBoxLayout()
+        
+        # K (learnable/fixed)
+        self.gwflow_k_type_combo = QComboBox()
+        self.gwflow_k_type_combo.addItems(["learnable", "fixed"])
+        flow_params_row.addWidget(QLabel("K:"))
+        flow_params_row.addWidget(self.gwflow_k_type_combo)
+        
+        # Ss (learnable/fixed)
+        self.gwflow_ss_type_combo = QComboBox()
+        self.gwflow_ss_type_combo.addItems(["learnable", "fixed"])
+        flow_params_row.addWidget(QLabel("Ss:"))
+        flow_params_row.addWidget(self.gwflow_ss_type_combo)
+        
+        # Q (learnable/fixed)
+        self.gwflow_q_type_combo = QComboBox()
+        self.gwflow_q_type_combo.addItems(["learnable", "fixed"])
+        flow_params_row.addWidget(QLabel("Q:"))
+        flow_params_row.addWidget(self.gwflow_q_type_combo)
+        
+        form.addRow(flow_params_row)  # Add to the form layou
+
+        # Weights Row (Subsidence and GWL)
+        weights_row = QHBoxLayout()
+        # Weight for Subsidence
+        self.weight_subs_spin = QDoubleSpinBox()
+        self.weight_subs_spin.setRange(0.0, 10.0)
+        self.weight_subs_spin.setValue(1.0)
+        weights_row.addWidget(self.weight_subs_spin)
+    
+        # Weight for GWL
+        self.weight_gwl_spin = QDoubleSpinBox()
+        self.weight_gwl_spin.setRange(0.0, 10.0)
+        self.weight_gwl_spin.setValue(0.5)
+        weights_row.addWidget(self.weight_gwl_spin)
+    
+        # Add the combined weights row
+        form.addRow("Weights (Subs. / GWL):", weights_row)
 
         lay.addLayout(form)
         return card
@@ -394,8 +493,30 @@ class MiniForecaster(QMainWindow):
             lambda_cons   = self.lambda_cons.value(),
             lambda_gw     = self.lambda_gw.value(),
             pde_mode      = self.pde_mode.currentText(),
+     
+            # New parameters for training and forecasting
+            train_end_year         = self.train_end_year_spin.value(),
+            forecast_start_year    = self.forecast_start_year_spin.value(),
+            forecast_horizon_years = self.forecast_horizon_spin.value(),
+            time_steps             = self.time_steps_spin.value(),
+            quantiles             = [float(q) for q in self.quantiles_input.text().split(',')],
+            
+            # New physical parameters for Pinn Coeff C and weights
+            pinn_coeff_c           = self.pinn_coeff_c_input.currentText(),
+            weight_subs_pred       = self.weight_subs_spin.value(),
+            weight_gwl_pred        = self.weight_gwl_spin.value(),
+            
+            # New parameters for flow initialization and coverage evaluation
+            gwflow_init_k          = self.gwflow_k_type_combo.currentText(),  
+            gwflow_init_ss         = self.gwflow_ss_type_combo.currentText(), 
+            gwflow_init_q          = self.gwflow_q_type_combo.currentText(),
+            
+            # Coverage evaluation and model mode
+            evaluate_coverage      = self.coverage_checkbox.isChecked(),
+            mode                   = self.model_type_combo.currentText(),  
+            
             verbose       = 1,
-            # log_callback  = self._log
+    
         )
         # hand the Qt emitters to the config
         cfg.log               = self.log_updated.emit

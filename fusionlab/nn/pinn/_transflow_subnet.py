@@ -83,7 +83,7 @@ class TransFlowSubsNet(BaseAttentive):
             'array-like', None 
         ],
         "pinn_coefficient_C": [
-            str, Real, None, StrOptions({"learnable"}),
+            str, Real, None, StrOptions({"learnable", "fixed"}),
             LearnableC, FixedC, DisabledC
         ], 
         "K": [Real, None, StrOptions({"learnable", "fixed"}),LearnableK], 
