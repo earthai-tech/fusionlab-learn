@@ -20,7 +20,8 @@ from ._utils import (
     set_default_params,
     split_static_dynamic,
     squeeze_last_dim_if,
-    step_to_long
+    step_to_long, 
+    make_dict_to_tuple_fn
     )
 
 from .hybrid.utils import plot_history_in 
@@ -63,5 +64,6 @@ __all__=[
      'format_pinn_predictions', 
      'extract_txy', 
      'plot_hydraulic_head', 
+     'make_dict_to_tuple_fn'
      
  ]

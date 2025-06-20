@@ -4,10 +4,10 @@ import sys
 import time
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QComboBox, QFileDialog,
+    QPushButton, QLabel, QComboBox, QFileDialog,
     QTextEdit, QFrame, QGridLayout, QFormLayout, QSpinBox
 )
-from PyQt5.QtGui import QFont, QIcon, QPixmap
+from PyQt5.QtGui import  QPixmap
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 # --- Style Sheet for a modern dark theme ---
@@ -137,7 +137,6 @@ class ForecastWorker(QThread):
             "plots": result_plots
         })
 
-# --- Main Application Window ---
 class SubsidenceForecasterApp(QMainWindow):
     def __init__(self):
         super().__init__()

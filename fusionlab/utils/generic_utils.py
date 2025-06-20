@@ -1094,9 +1094,9 @@ def vlog(
         # If >=3 => prefix with [INFO] if vp is True and not already tagged
         if actual_verbose <=3:
             if vp and not already_tagged:
-                print(f"{indent}[INFO] {message}")
+                _emit(f"{indent}[INFO] {message}")
             else:
-                print(f"{indent}{message}")
+                _emit(f"{indent}{message}")
             return 
 
         # If 3 < verbose < 5 => prefix with [DEBUG] if vp is True and not already tagged

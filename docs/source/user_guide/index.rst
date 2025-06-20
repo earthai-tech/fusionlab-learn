@@ -62,3 +62,4 @@ Explore the sections below to learn how to effectively use
    :caption: Advanced Topics
 
    tools
+   pinn_gui_guide

@@ -10,6 +10,7 @@ from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
 from ...compat.sklearn import validate_params, Interval, StrOptions 
 from ...utils.deps_utils import ensure_pkg 
+from ...utils.generic_utils import rename_dict_keys 
 from ...params import (
     LearnableK, LearnableSs, LearnableQ, LearnableC,
     FixedC, DisabledC
@@ -22,7 +23,7 @@ from .._base_attentive import BaseAttentive
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs 
     from .op import process_pinn_inputs
-    from .utils import process_pde_modes, extract_txy_in 
+    from .utils import process_pde_modes, extract_txy_in, _get_coords 
     from ..comp_utils import resolve_gw_coeffs, normalize_C_descriptor
     
 LSTM = KERAS_DEPS.LSTM
@@ -369,7 +370,7 @@ class TransFlowSubsNet(BaseAttentive):
         else:  # Fixed value
             self.Q = tf_constant(float(self.Q_config), dtype=tf_float32)
             
-
+    @tf_autograph.experimental.do_not_convert
     def call(
         self, inputs: Dict[str, Optional[Tensor]],
         training: bool = False
@@ -417,7 +418,7 @@ class TransFlowSubsNet(BaseAttentive):
         logger.debug("TransFlowSubsNet call: Unpacking and validating inputs.")
         (t, x, y, static_features,
          dynamic_features, future_features) = process_pinn_inputs(
-             inputs, mode='as_dict'
+             inputs, mode='auto'
         )
         
         # basic tensors checks. 
@@ -590,14 +591,26 @@ class TransFlowSubsNet(BaseAttentive):
         On return the method updates built-in metrics and
         provides a dict with total, data and PDE losses.
         """
+
         inputs, targets = data
+        if isinstance (targets, dict): 
+            # For consistency, map targets if users explicitely 
+            # provide 'subsidence', and 'gwl' as keys .
+            targets = rename_dict_keys(
+                targets.copy(),
+                param_to_rename={
+                    "subsidence": "subs_pred", 
+                    "gwl": "gwl_pred"
+                }
+        )
         with GradientTape(persistent=True) as tape:
             # The tape must watch the input coordinates to compute
             # gradients of the model's output with respect to them.
-            coords = inputs['coords']
+            coords = _get_coords(inputs)
+            # coords = inputs['coords']
             t, x, y = extract_txy_in(coords)
             tape.watch([t, x, y,])
-    
+ 
             # --- FORWARD PASS & DATA LOSS ---
             outputs = self(inputs, training=True)
             

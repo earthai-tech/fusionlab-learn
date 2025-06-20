@@ -6,7 +6,8 @@
 Physics-Informed Neural Network (PINN) Utility functions.
 """
 import logging 
-from typing import List, Tuple, Optional, Union, Dict, Any, Callable
+from typing import List, Tuple, Optional, Union, Dict, Any
+from typing import Sequence,  Callable
 import warnings # noqa 
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable  
@@ -78,7 +79,9 @@ def format_pinn_predictions(
     evaluate_coverage: bool = False,
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: Optional[str] = None,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     verbose: int = 0,
+    
     **kwargs
 ) -> 'pd.DataFrame':
     """Formats PINN model predictions into a structured pandas DataFrame.
@@ -215,6 +218,7 @@ def format_pinn_predictions(
         coverage_quantile_indices=coverage_quantile_indices,
         savefile=savefile,
         verbose=verbose,
+        _logger = _logger, 
         **kwargs 
     )
 
@@ -2260,6 +2264,99 @@ def _extract_txy_in(
         f"`inputs` must be a tensor/array or dict; got {type(inputs)}"
     )
 
+def _get_coords(
+    inputs: Union[Dict[str, Any], Sequence[Any], Tensor],
+    *,
+    check_shape: bool = False,
+    is_time_dependent: bool = True,
+) -> Tensor:
+    """
+    Extract the **coords** tensor from any input layout.
+
+    Parameters
+    ----------
+    inputs : dict, sequence or tensor
+        * **Dict** – must contain a ``"coords"`` key.  
+        * **Sequence** – coords are expected at index 0.  
+        * **Tensor** – interpreted as coords directly.
+    check_shape : bool, default ``False``
+        If ``True``, validate that the last dimension equals 3 and that
+        the rank matches *is_time_dependent*.
+    is_time_dependent : bool, default ``True``
+        * ``True``  → expect a 3-D shape ``(B, T, 3)``  
+        * ``False`` → allow a 2-D shape ``(B, 3)``; a 3-D shape is also
+          accepted (useful when the model ignores time).
+
+    Returns
+    -------
+    tf.Tensor
+        The extracted coords tensor.
+
+    Raises
+    ------
+    KeyError
+        If a dict is missing the ``"coords"`` key.
+    TypeError
+        If *inputs* is not dict, sequence or tensor.
+    ValueError
+        If ``check_shape`` is ``True`` and the tensor shape is invalid.
+
+    Notes
+    -----
+    The function is lightweight and executes outside any
+    ``tf.function`` context; use it freely inside the model’s
+    ``train_step`` or data-pipe helpers.
+    """
+    # ── 1. locate the tensor 
+    if isinstance(inputs, Tensor):
+        coords = inputs
+    elif isinstance(inputs, (tuple, list)):
+        coords = inputs[0]
+    elif isinstance(inputs, dict):
+        try:
+            coords = inputs["coords"]
+        except KeyError as err:
+            raise KeyError("Input dict lacks a 'coords' entry.") from err
+    else:
+        raise TypeError(
+            "inputs must be a dict, sequence, or Tensor; "
+            f"got {type(inputs).__name__}"
+        )
+
+    # ── 2. validate shape if requested 
+    if check_shape:
+        shape = coords.shape           # static if known, else dynamic
+        # last dim must be 3
+        if shape.rank is not None:
+            if shape[-1] != 3:
+                raise ValueError(
+                    "coords[..., -1] must equal 3 (t, x, y); "
+                    f"found {shape[-1]}"
+                )
+            # rank check when static
+            if is_time_dependent and shape.rank != 3:
+                raise ValueError(
+                    "Expected coords rank 3 (B, T, 3) for time-dependent "
+                    "data; received rank "
+                    f"{shape.rank}"
+                )
+            if not is_time_dependent and shape.rank not in (2, 3):
+                raise ValueError(
+                    "Expected coords rank 2 or 3 for static data; "
+                    f"received rank {shape.rank}"
+                )
+        else:  # dynamic shapes (inside tf.function)
+            tf_debugging.assert_equal(
+                tf_shape(coords)[-1],
+                3,
+                message="coords[..., -1] must equal 3 (t, x, y)",
+            )
+            if is_time_dependent:
+                tf_debugging.assert_rank(coords, 3)
+            else:
+                tf_debugging.assert_rank_in(coords, (2, 3))
+
+    return coords
 
 @ensure_pkg(
     KERAS_BACKEND or "tensorflow",
