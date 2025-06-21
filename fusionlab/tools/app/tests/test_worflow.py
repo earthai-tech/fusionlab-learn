@@ -16,7 +16,7 @@ def test_fwd_worflow ():
     # 1. Configure the workflow
     # For this test, point to the sample data that comes with the library
     config = SubsConfig(
-        data_dir='_pinn_works/test_data', #'../../fusionlab/datasets/data',
+        data_dir='data/', #'_pinn_works/test_data', #'../../fusionlab/datasets/data',
         data_filename='zhongshan_500k.csv',
         epochs=3, # Use a small number of epochs for a quick test run
         save_intermediate=True,
@@ -44,7 +44,7 @@ def test_fwd_worflow ():
     forecaster = Forecaster(config=config)
     forecast_df = forecaster.run(
         model=best_model,
-        test_df=sequence_gen.test_df,
+        test_df=sequence_gen.test_df, # test_df,
         val_dataset=val_dataset,
         static_features_encoded=processor.static_features_encoded,
         coord_scaler=sequence_gen.coord_scaler

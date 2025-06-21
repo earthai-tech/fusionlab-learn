@@ -6,6 +6,8 @@
 Provides common helper functions and for validation, 
 comparison, and other generic operations
 """
+from __future__ import annotations
+
 import os
 import re
 import warnings
@@ -14,13 +16,14 @@ import textwrap
 import logging
 from numbers import Real 
 from pathlib import Path
-
+from itertools import chain
 import matplotlib.pyplot as plt
 from datetime import datetime
 from typing import ( 
     Union, Optional, 
     Dict, Any, List,
-    Literal, Tuple
+    Literal, Tuple, 
+    Sequence,Iterable
 )
 import numpy as np 
 import pandas as pd 
@@ -3109,3 +3112,96 @@ def save_figure(
     #     vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
     #     fig.savefig(fname, dpi=300, bbox_inches="tight")
             
+def ensure_cols_exist(
+    df: pd.DataFrame,
+    *cols: Union[str, Sequence[str]],
+    strict: bool = False,
+    error: str = "warn",
+    return_as_flatten: bool = True,
+) -> List[str] | List[List[str]]:
+    """
+    Validate that *every* requested column is present in a DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame you intend to slice.
+    *cols : str | Sequence[str]
+        A loose collection of column names (strings **or**
+        iterables of strings).  Examples::
+
+            ensure_cols_exist(df, "foo", "bar")
+            ensure_cols_exist(df, ["foo", "bar"], "baz")
+
+    strict : bool, default ``False``
+        * ``True``  – all requested columns **must** exist or the
+          function triggers `error='raise'` automatically.
+        * ``False`` – missing columns can be tolerated depending on
+          *error*.
+
+    error : {'warn', 'raise', 'ignore'}, default ``'warn'``
+        Behaviour when *some* columns are missing:
+
+        * ``'warn'``   – emit a :class:`UserWarning`
+        * ``'raise'``  – raise :class:`ValueError`
+        * ``'ignore'`` – stay silent
+
+        If *strict* is ``True`` the function behaves as
+        ``error='raise'`` regardless of this argument.
+
+    return_as_flatten : bool, default ``True``
+        * ``True``  → return **one** flat list with every *valid* column.
+        * ``False`` → keep the original grouping:
+          ``[["foo", "bar"], ["baz"]]``
+
+    Returns
+    -------
+    list
+        Either a flat list or a list-of-lists containing only the
+        columns that really exist in *df* (order preserved).
+
+    Raises
+    ------
+    ValueError
+        If *strict* is ``True`` **or** ``error='raise'`` **and**
+        at least one column is missing.
+
+    Examples
+    --------
+    >>> ensure_cols_exist(df, "lon", ["lat", "depth"])
+    ['lon', 'lat', 'depth']
+
+    >>> ensure_cols_exist(df, "x", strict=True)
+    ValueError: missing columns: ['x']
+    """
+    # ---- 1 • normalise cols
+    def _to_list(obj: Union[str, Iterable[str]]) -> List[str]:
+        return [obj] if isinstance(obj, str) else list(obj)
+
+    grouped: List[List[str]] = [_to_list(c) for c in cols]
+    flat: List[str] = list(chain.from_iterable(grouped))
+
+    if not flat:  # nothing to check
+        return [] if return_as_flatten else grouped
+
+    #  membership test 
+    present = [c for c in flat if c in df.columns]
+    missing = [c for c in flat if c not in df.columns]
+
+    if missing:
+        msg = f"Missing columns: {missing} (DataFrame has {len(df.columns)})"
+        if strict or error == "raise":
+            raise ValueError(msg)
+        if error == "warn":
+            warnings.warn(msg, stacklevel=2)
+
+    #  return
+    if return_as_flatten:
+        # keep original order but drop the missing ones
+        return list(set ([c for c in flat if c in present]))
+
+    # keep original grouping, dropping any missing names
+    filtered_grouped: List[List[str]] = [
+        [c for c in grp if c in present] for grp in grouped
+    ]
+    return filtered_grouped

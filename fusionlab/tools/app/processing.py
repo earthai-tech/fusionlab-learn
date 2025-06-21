@@ -16,6 +16,7 @@ from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 from fusionlab.utils.generic_utils import ensure_directory_exists
 from fusionlab.utils.generic_utils import normalize_time_column 
+from fusionlab.utils.generic_utils import ensure_cols_exist 
 from fusionlab.datasets import fetch_zhongshan_data
 from fusionlab.utils.data_utils import nan_ops
 from fusionlab.utils.io_utils import save_job
@@ -85,8 +86,10 @@ class DataProcessor:
                         f" Error: {e}"
                     )
         if self.config.save_intermediate:
-            ensure_directory_exists(self.config.run_output_path)
-            save_path = os.path.join(self.config.run_output_path, "01_raw_data.csv")
+            ensure_directory_exists(
+                self.config.run_output_path)
+            save_path = os.path.join(
+                self.config.run_output_path, "01_raw_data.csv")
             self.raw_df.to_csv(save_path, index=False)
             self.log(f"  Saved raw data artifact to: {save_path}")
             
@@ -124,6 +127,8 @@ class DataProcessor:
         fut_cols = _as_list(self.config.future_features)
         
         all_cols = base_cols + cat_cols + num_cols + fut_cols
+        
+        ensure_cols_exist(self.raw_df, *all_cols, error ='raise')
 
         # all_cols = base_cols + (self.config.categorical_cols or []) + \
         #             (self.config.numerical_cols or []) + (self.config.future_features or [])

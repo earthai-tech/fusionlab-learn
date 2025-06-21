@@ -263,31 +263,43 @@ class Worker(QThread):
     def __init__(self, cfg, edited_df=None, parent=None):
         super().__init__(parent)
         self.cfg = cfg
-        self.edited_df  = edited_df          
+        self.edited_df  = edited_df   
+        
+        self._p = lambda frac, lo, hi: int(lo + (hi - lo) * frac)
 
     def run(self):
         try:
             self.status_msg.emit("📊 Pre-processing…")
+            self.progress_val.emit(self._p(0, 0, 10))       # 0 %
             processor = DataProcessor(
                 self.cfg, self.log_msg.emit, 
                 raw_df=self.edited_df  
             )
             df_proc   = processor.run()
+            self.progress_val.emit(self._p(1, 0, 10))       # 10 %
 
             self.status_msg.emit("🌀 Generating sequences…")
+            self.progress_val.emit(self._p(0, 10, 30))      # 10 %
             seq_gen   = SequenceGenerator(self.cfg, self.log_msg.emit)
             train_ds, val_ds = seq_gen.run(
                 df_proc, processor.static_features_encoded
             )
-
+            self.progress_val.emit(self._p(1, 10, 30))      # 30 %
+            
             self.status_msg.emit("🔧 Training…")
+            train_range = (30, 90)
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, *train_range)
+            )
             sample_inputs, _ = next(iter(train_ds))
             shapes = {k: v.shape for k, v in sample_inputs.items()}
             model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
                 train_ds, val_ds, shapes
             )
+            self.progress_val.emit(train_range[1])          # 90 %
 
             self.status_msg.emit("🔮 Forecasting…")
+            self.progress_val.emit(self._p(0, 90, 100))
             forecast_df = Forecaster(self.cfg, self.log_msg.emit).run(
                 model=model,
                 test_df=seq_gen.test_df,
@@ -472,6 +484,7 @@ class MiniForecaster(QMainWindow):
         footer.addWidget(about)
         
         bottom.addLayout(footer)
+        self.progress_updated.connect(self.progress_bar.setValue)
 
     def _training_card(self) -> QFrame:
         card = QFrame(); card.setObjectName("card")
@@ -525,7 +538,7 @@ class MiniForecaster(QMainWindow):
         form.addRow("Architecture:", self.model_select)
 
         self.epochs = QSpinBox(); self.epochs.setRange(1, 1000)
-        self.epochs.setValue(200)
+        self.epochs.setValue(50)
         form.addRow("Epochs:", self.epochs)
 
         self.batch = QSpinBox(); self.batch.setRange(8, 1024)
