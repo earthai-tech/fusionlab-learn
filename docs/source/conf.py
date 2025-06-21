@@ -21,7 +21,7 @@ try:
 except ImportError:
     print("Warning: Could not import fusionlab to determine version.")
     print("Setting version and release to defaults.")
-    release = '0.3.0' # Default fallback
+    release = '0.3.1' # Default fallback
     version = '0.3'   # Default fallback
 
 # -- Project information -----------------------------------------------------

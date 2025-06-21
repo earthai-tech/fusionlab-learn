@@ -46,6 +46,43 @@ installed.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
+Prerequisites: Data Format Requirements
+---------------------------------------
+
+.. important::
+   The **Subsidence PINN Mini GUI** is designed to work with a
+   specific data structure. To ensure the workflow runs correctly,
+   your uploaded CSV file **must** contain the following columns with these
+   **exact names**:
+
+   * ``longitude``: The spatial x-coordinate.
+   * ``latitude``: The spatial y-coordinate.
+   * ``year``: The time dimension column.
+   * ``subsidence``: The primary target variable for land subsidence.
+   * ``GWL``: The secondary target variable for Groundwater Level.
+
+   The underlying PINN models (`TransFlowSubsNet` and `PIHALNet`) are
+   specifically designed to model the coupled physical relationship
+   between subsidence and groundwater levels. The workflow **will fail** if
+   these two target columns are missing or named differently. For more 
+   theoretical details, please see the :doc:`PINN Models guide
+   </user_guide/models/pinn/index>`.
+
+   **How to Fix Naming Issues:**
+   If your dataset uses different names (e.g., `Lat`, `Lon`, `Date`), you
+   **must** use the **"CSV Preview & Editing"** window that appears after
+   loading your file to rename the columns to match the required names
+   before running the workflow.
+
+   **Feature Columns:**
+   Similarly, any columns you specify in the **Feature Selection** panel
+   (for Dynamic, Static, and Future features) must exist in your dataset.
+   These should be provided as comma-separated lists.
+   
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+
 User Interface Guide
 --------------------
 

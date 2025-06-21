@@ -1,8 +1,19 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
 import os 
 from typing import List, Callable, Optional, Dict, Any 
 
 import pandas as pd 
 import numpy as np   
+
+from fusionlab.tools.app._config import setup_environment as _setup_env   # noqa: E402
+
+if not globals().get("_FUSIONLAB_ENV_READY", False):
+    _setup_env()                           
+    globals()["_FUSIONLAB_ENV_READY"] = True
+
 
 class SubsConfig:
     """

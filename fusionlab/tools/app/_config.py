@@ -20,7 +20,8 @@ def _install_package(package_name: str, version: str = "2.15"):
         )
         logging.info(f"Successfully installed {full_package}.")
     except subprocess.CalledProcessError as e:
-        logging.error(f"Failed to install {full_package}. Please install it manually.")
+        logging.error(f"Failed to install {full_package}."
+                      " Please install it manually.")
         raise e
 
 def setup_environment(required_tf_version: str = "2.15"):
@@ -41,11 +42,13 @@ def setup_environment(required_tf_version: str = "2.15"):
     tf_spec = importlib.util.find_spec("tensorflow")
     if tf_spec is None:
         print(
-            "--> TensorFlow is not installed, which is required for this application."
+            "--> TensorFlow is not installed,"
+            " which is required for this application."
         )
         try:
             # Ask user for confirmation before installing
-            response = input("    Would you like to try installing it now? (y/n): ").lower()
+            response = input(
+                "    Would you like to try installing it now? (y/n): ").lower()
             if response == 'y':
                 _install_package("tensorflow", version=required_tf_version)
                 # Re-check after installation
@@ -61,6 +64,8 @@ def setup_environment(required_tf_version: str = "2.15"):
             logging.error(error_message)
             raise ImportError(error_message) from e
     else:
-        logging.info(f"TensorFlow found (version: {tf_spec.loader.load_module().__version__})."
-                     " Environment is correctly configured.")
+        logging.info(
+            f"TensorFlow found (version: {tf_spec.loader.load_module().__version__})."
+             " Environment is correctly configured."
+         )
 

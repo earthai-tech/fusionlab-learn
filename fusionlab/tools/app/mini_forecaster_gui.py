@@ -1,18 +1,12 @@
 """
 Mini Subsidence-Forecasting GUI (academic showcase)
-
-• PyQt5 only
-• Two cards:
-    1) Model configuration
-    2) Physical parameters
-• Live log viewer
-• Fusionlab colour scheme
 """
 
 from __future__ import annotations 
 import os, sys, time
 import json 
 import pandas as pd 
+from pathlib import Path
 
 from PyQt5.QtCore    import Qt,QThread,  pyqtSignal, QAbstractTableModel, QModelIndex
 from PyQt5.QtGui     import QIcon, QPixmap
@@ -23,23 +17,19 @@ from PyQt5.QtWidgets import (
     QCheckBox
 )
 from PyQt5.QtWidgets import (
-    QDialog,   QTableView, QMessageBox, QAction, QToolBar,  QInputDialog
-    
+    QDialog, QTableView, QMessageBox, QAction, QToolBar, QInputDialog
 )
 
-from pathlib import Path
-# add to the existing import block
 from fusionlab.tools.app.config      import SubsConfig
 from fusionlab.tools.app.processing  import DataProcessor, SequenceGenerator
 from fusionlab.tools.app.modeling    import ModelTrainer, Forecaster
 from fusionlab.tools.app.view        import ResultsVisualizer
-
-from fusionlab.tools.app.view import VIS_SIGNALS
+from fusionlab.tools.app.view        import VIS_SIGNALS
 from fusionlab.tools.app.gui_popups  import ImagePreviewDialog   
 
-# ── Fusionlab palette ────────────────────────────────────────────────
-PRIMARY   = "#2E3191"   # deep indigo
-SECONDARY = "#F28620"   # orange
+# Fusionlab-learn palette 
+PRIMARY   = "#2E3191"   
+SECONDARY = "#F28620"   
 BG_LIGHT  = "#fafafa"
 FG_DARK   = "#1e1e1e"
 
@@ -85,9 +75,7 @@ QTextEdit {{
 }}
 """
 
-
-
-# ---------- tiny editable DataFrame model -------
+#-- tiny editable DataFrame model 
 class _PandasModel(QAbstractTableModel):
     """Qt-model that exposes a *pandas* DataFrame (read / write)."""
 
@@ -132,11 +120,9 @@ class _PandasModel(QAbstractTableModel):
 
     # exposed to outside world
     @property
-    def dataframe(self) -> pd.DataFrame:           # view slice!
+    def dataframe(self) -> pd.DataFrame:
         return self._df
 
-
-# -main dialog -
 class CsvEditDialog(QDialog):
     """
     Lightweight viewer / editor for CSV files.
@@ -151,10 +137,9 @@ class CsvEditDialog(QDialog):
     def __init__(self, csv_path: str,
                  parent=None, *, preview_rows: int = 200):
         super().__init__(parent)
-        self.setWindowTitle("CSV preview & editing")
+        self.setWindowTitle("Preview & Editing Data")
         self.resize(720, 300) # 820, 500)
 
-        # ── 1)  read full data (no row-limit !) --------------------
         try:
             self._df_full = pd.read_csv(csv_path)
         except Exception as e:
@@ -166,7 +151,6 @@ class CsvEditDialog(QDialog):
         self._view_rows = min(preview_rows, len(self._df_full))
         self._df_view   = self._df_full.head(self._view_rows)
 
-        # ── 2)  build UI ------------------------------------------
         vbox = QVBoxLayout(self)
 
         # toolbar
@@ -201,7 +185,6 @@ class CsvEditDialog(QDialog):
         btn_save  .clicked.connect(self.accept)
         btn_cancel.clicked.connect(self.reject)
 
-    # -------------- editing helpers --------------------------------
     def _delete_rows(self):
         rows = {ix.row() for ix in self.table.selectionModel().selectedIndexes()}
         if not rows: return
