@@ -59,13 +59,46 @@ These are the primary controls for managing the workflow.
 * **Select CSV...**: Click this button to open a file dialog. Navigate
   to and select the `.csv` file containing your spatiotemporal data.
   The filename will appear next to the button upon successful selection.
+
+* **City / Dataset**: This text field allows you to specify a name for
+  your dataset (e.g., 'zhongshan', 'nansha'). This name is used
+  internally to manage configurations and to create uniquely named
+  output directories for saving results, preventing runs from
+  overwriting each other.
+
 * **Run**: Located at the bottom left, this button starts the
   end-to-end workflow using the current configuration. It becomes
   disabled while a process is running.
 * **Reset**: Located at the top right, this button clears all logs and
   results and resets all configuration options to their default values.
 
-**2. Model Configuration**
+**2. Data Preview and Editing**
+*******************************
+After a CSV file is selected, a new **"Preview & Edit Data"** button
+will appear. Clicking this opens a data preview window, allowing you to
+perform basic cleaning and preparation steps directly within the GUI
+before running the main workflow.
+
+.. figure:: ../images/gui_data_editor.png
+   :alt: Screenshot of the Data Preview and Editing window
+   :align: center
+   :width: 75%
+
+   The data editor allows for quick modifications to the loaded dataset.
+
+This window provides several useful tools:
+
+* **Table Preview**: Displays the first several rows of your dataset,
+  allowing you to verify that it was loaded correctly.
+* **Delete row(s)**: Allows you to select and remove specific rows
+  from the dataset.
+* **Delete col(s)**: Allows you to select and remove unwanted columns.
+* **Rename column**: Provides a dialog to rename a selected column.
+* **Save / Apply**: Saves all changes you've made and closes the window,
+  updating the dataset that will be used by the main workflow.
+* **Cancel**: Closes the window without saving any changes.
+
+**3. Model Configuration**
 **************************
 This panel allows you to configure the model's core architecture.
 
@@ -83,7 +116,7 @@ This panel allows you to configure the model's core architecture.
 * **Evaluate Coverage**: A checkbox to enable the calculation of quantile
   coverage score after prediction. 
 
-**3. Training Parameters**
+**4. Training Parameters**
 **************************
 This panel controls the temporal aspects of the training and forecasting
 process.
@@ -96,7 +129,7 @@ process.
 * **Quantiles (comma-separated)**: A list of quantiles for probabilistic
   forecasting (e.g., `0.1, 0.5, 0.9`). Leave blank for point forecasting.
 
-**4. Physical Parameters**
+**5. Physical Parameters**
 **************************
 This panel gives you fine-grained control over the physics-informed components.
 
@@ -110,7 +143,7 @@ This panel gives you fine-grained control over the physics-informed components.
 * **Weights (Subs. / GWL)**: Sets the relative importance of the data-fidelity
   loss for the two main targets (subsidence and groundwater level).
 
-**5. Feature Selection**
+**6. Feature Selection**
 ************************
 This panel allows you to specify which columns from your input data
 should be used for the different feature streams.
@@ -120,7 +153,8 @@ should be used for the different feature streams.
   and **Future** features. Leaving a field as ``auto`` will let the
   application attempt to automatically detect the appropriate columns.
   
-**6. Log and Output Panel**
+  
+**7. Log and Output Panel**
 ***************************
 The large text area at the bottom of the window is the Log Panel.
 This is your primary window into the workflow's progress. It provides
@@ -133,7 +167,29 @@ Once the workflow is complete, this panel will also display the head of
 the final results DataFrame and any generated plots, giving you an
 immediate preview of the outcome.
 
-**7. Saving Results and Artifacts**
+**8. Viewing the Results**
+**************************
+Once the workflow is complete, the GUI will update to show the final
+results.
+
+.. figure:: ../images/gui_results_view.png
+   :alt: Screenshot of the GUI after a successful run
+   :align: center
+   :width: 80%
+
+   The application interface after a forecast has successfully completed.
+
+* **Status Indicator**: A checkmark and the text "Forecast finished."
+  will appear next to the "Select CSV" button, confirming that the
+  process completed without errors.
+* **Coverage Score**: If the **"Evaluate Coverage"** checkbox in the
+  Model Configuration panel was ticked, the calculated coverage score
+  (e.g., `cov-result: 0.792`) will be displayed in the bottom status bar.
+* **Final Log Messages**: The log panel will show the final messages,
+  including confirmation that all figures have been saved and the path
+  to the final output directory.
+  
+**8. Saving Results and Artifacts**
 ************************************
 Upon successful completion of a run, the application automatically saves all
 generated artifacts and plots to a dedicated output directory. This ensures that your

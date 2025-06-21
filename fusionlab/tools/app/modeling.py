@@ -400,7 +400,7 @@ class Forecaster:
             _logger = self.config.log, 
             savepath = self.config.run_output_path, 
         )
-
+        
         if forecast_df is not None and not forecast_df.empty:
             if self.config.save_intermediate:
                 save_path = os.path.join(
