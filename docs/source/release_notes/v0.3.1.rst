@@ -3,17 +3,29 @@
 ===============
 Version 0.3.1
 ===============
-*(Release Date: June 17, 2025)*
+*(Release Date: June 21, 2025)*
 
-**Focus: Backend Dependency Management**
+**Focus: Backend Dependency Management & New GUI Application**
 
-This is a maintenance release that completely
-overhauls how the library handles its optional heavy dependencies,
-particularly `TensorFlow`, `Keras`, and `KerasTuner`. The primary goal
-of this refactor is to eliminate a class of circular import errors that
-were causing build failures in clean environments like Read the Docs,
-and to make the entire codebase more maintainable and scalable.
+This is a significant maintenance and usability release. It completely
+overhauls how the library handles its optional heavy dependencies to
+eliminate build errors and improve robustness. Furthermore, this
+version introduces the first version of the **Subsidence PINN Mini GUI**,
+a standalone desktop application designed to make the library's 
+PINN workflows accessible to a broader audience.
 
+New Features
+~~~~~~~~~~~~
+* |New| **Subsidence PINN Mini GUI:** A new desktop application for
+  end-to-end forecasting. Located in `fusionlab.tools.app`, this GUI
+  allows users to load data, configure all model and training
+  parameters, run the workflow, and visualize results without writing
+  any code. It can be launched via: 
+  
+  .. code-block:: bash 
+  
+       python -m fusionlab.tools.app.mini_forecaster_gui 
+  
 Improvements
 ~~~~~~~~~~~~~~~
 * |Enhancement| **Centralized Configuration:** Introduced a new internal
@@ -78,6 +90,12 @@ Tests
   new dependency loading mechanism, ensuring that both the real and
   dummy objects are created and accessed correctly.
 
+Documentation
+~~~~~~~~~~~~~
+* |Docs| Added a new, comprehensive guide for the
+  :doc:`/user_guide/pinn_gui_guide`, providing a walkthrough
+  of the new desktop application.
+  
 Contributors
 ~~~~~~~~~~~~~
 * `Laurent Kouadio <https://earthai-tech.github.io/>`_ (Lead Developer)
