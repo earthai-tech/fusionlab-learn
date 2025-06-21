@@ -13,7 +13,7 @@ load their own data, configure model parameters, run a full
 training and forecasting pipeline, and view the results, all from a
 simple graphical interface.
 
-.. figure:: ../images/pinn_gui_screenshot.png
+.. figure:: ../images/gui_overview.png
    :alt: Screenshot of Subsidence PINN Mini GUI
    :align: center
    :width: 80%
@@ -167,29 +167,53 @@ Once the workflow is complete, this panel will also display the head of
 the final results DataFrame and any generated plots, giving you an
 immediate preview of the outcome.
 
+
 **8. Viewing the Results**
 **************************
-Once the workflow is complete, the GUI will update to show the final
-results.
+Once the workflow finishes successfully, the GUI provides the results in
+two main ways: status updates on the main window and an interactive plot viewer.
 
-.. figure:: ../images/gui_results_view.png
-   :alt: Screenshot of the GUI after a successful run
-   :align: center
-   :width: 80%
+.. grid:: 1 2 2 2
+   :gutter: 2
 
-   The application interface after a forecast has successfully completed.
+   .. grid-item-card::
+      :shadow: none
+      :class-card: no-border
 
-* **Status Indicator**: A checkmark and the text "Forecast finished."
-  will appear next to the "Select CSV" button, confirming that the
-  process completed without errors.
-* **Coverage Score**: If the **"Evaluate Coverage"** checkbox in the
+      .. figure:: ../images/gui_results_view.png
+         :alt: GUI after run completion
+         :align: center
+
+         **(a)** The main application window showing the 'Forecast finished'
+         status and the final coverage score in the status bar.
+
+   .. grid-item-card::
+      :shadow: none
+      :class-card: no-border
+
+      .. figure:: ../images/gui_plot_viewer.png
+         :alt: Plot visualization window
+         :align: center
+
+         **(b)** The interactive plot viewer window that opens automatically
+         to display all generated visualizations.
+
+* **Main Window Updates (a):** A checkmark and "Forecast finished"
+  message appear at the top.If the **"Evaluate Coverage"** checkbox in the
   Model Configuration panel was ticked, the calculated coverage score
   (e.g., `cov-result: 0.792`) will be displayed in the bottom status bar.
+
+* **Interactive Plot Viewer (b):** A new window opens to display all
+  plots generated during the run, such as the training history and
+  forecast visualizations. This viewer allows you to inspect the
+  visuals closely and provides options to "Save as..." or "Copy to
+  clipboard" for easy export.
+  
 * **Final Log Messages**: The log panel will show the final messages,
   including confirmation that all figures have been saved and the path
   to the final output directory.
   
-**8. Saving Results and Artifacts**
+**9. Saving Results and Artifacts**
 ************************************
 Upon successful completion of a run, the application automatically saves all
 generated artifacts and plots to a dedicated output directory. This ensures that your

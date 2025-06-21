@@ -38,7 +38,7 @@ from ..utils.forecast_utils import (
 from ..utils.generic_utils import ( 
     _coerce_dt_kw, 
     get_actual_column_name,
-    vlog
+    vlog, save_figure 
 )
 from ..utils.validator import ( 
     assert_xy_in, is_frame, 
@@ -352,24 +352,15 @@ def plot_forecast_by_step(
 
         # 4. Save figure to disk if requested.
         if savefig:
-            fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-            base, _ = os.path.splitext(savefig)
-            for fmt in fmts:
-                fname = (
-                    f"{base}_{prefix}_by_step"
-                    f"{fmt if fmt.startswith('.') else '.' + fmt}"
-                )
-                out_dir = os.path.dirname(fname)
-                if out_dir and not os.path.exists(out_dir):
-                    os.makedirs(out_dir, exist_ok=True)
-                vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-                fig.savefig(fname, dpi=300, bbox_inches="tight")
-            
-            plt.close (fig)
+            save_figure (
+                fig, savefile = savefig, 
+                save_fmts= save_fmts, 
+                dpi=300, bbox_inches="tight" 
+              )
+            plt.close(fig) 
         else: 
             plt.show()
         
-    
 @check_non_emptiness 
 def forecast_view_in(
     forecast_df: pd.DataFrame,
@@ -991,24 +982,17 @@ def forecast_view(
              )
 
         if savefig:
-            fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-            base, _ = os.path.splitext(savefig)
-            for fmt in fmts:
-                fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
-                out_dir = os.path.dirname(fname)
-                if out_dir and not os.path.exists(out_dir):
-                    os.makedirs(out_dir, exist_ok=True)
-                vlog(f"Saving figure to {fname}", level=1,
-                     verbose=verbose, logger=_logger
-                     )
-                fig.savefig(fname, dpi=300, bbox_inches="tight")
-            plt.close (fig)
-            
-        else:
-            if show:                           
-                plt.show()                     # used during notebook debugging
+            save_figure (
+                fig, savefile = savefig, save_fmts= save_fmts, 
+                dpi=300, bbox_inches="tight" 
+              )
+            plt.close(fig) 
+        else: 
+            if show:                          
+                plt.show()                     # for notebook debugging
             else:
-                plt.close(fig)               
+                plt.close(fig)     
+                                 
 
 @check_non_emptiness 
 def plot_forecasts(
@@ -1485,7 +1469,7 @@ def plot_forecasts(
         for i in range(plot_idx, len(axes_flat)):
             axes_flat[i].set_visible(False)
         fig.tight_layout()
-        plt.show()
+        # plt.show()
 
     elif kind == "spatial":
         
@@ -1717,32 +1701,23 @@ def plot_forecasts(
             f"Unsupported `kind`: '{kind}'. "
             "Choose 'temporal' or 'spatial'."
             )
+        
     vlog("Forecast visualization complete.", level=3, 
          verbose=verbose, logger=_logger)
     
     # 4. Save figure to disk if requested.
     if savefig:
-        fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-        base, _ = os.path.splitext(savefig)
-        for fmt in fmts:
-            fname = (
-                f"{base}_{target_name}_by_step"
-                f"{fmt if fmt.startswith('.') else '.' + fmt}"
-            )
-            out_dir = os.path.dirname(fname)
-            if out_dir and not os.path.exists(out_dir):
-                os.makedirs(out_dir, exist_ok=True)
-            vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-            fig.savefig(fname, dpi=300, bbox_inches="tight")
-            
-            plt.close(fig) 
+        save_figure (
+            fig, savefile = savefig, save_fmts= save_fmts, 
+            dpi=300, bbox_inches="tight" 
+          )
+        plt.close(fig) 
     else: 
         if show:                          
-            plt.show()                     # for notebook debugging
+            plt.show() # for notebook debugging
         else:
             plt.close(fig)               
    
-    
 
 @check_non_emptiness
 def visualize_forecasts(
@@ -2131,26 +2106,15 @@ def visualize_forecasts(
     plt.tight_layout()
     
     if savefig:
-        fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-        base, _ = os.path.splitext(savefig)
-        for fmt in fmts:
-            fname = (
-                f"{base}_{tname}_{mode}"
-                f"{fmt if fmt.startswith('.') else '.' + fmt}"
-            )
-            out_dir = os.path.dirname(fname)
-            if out_dir and not os.path.exists(out_dir):
-                os.makedirs(out_dir, exist_ok=True)
-            vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-            fig.savefig(fname, dpi=300, bbox_inches="tight")
-  
-    if savefig: 
+        save_figure (
+            fig, savefile = savefig, 
+            save_fmts= save_fmts, 
+            dpi=300, bbox_inches="tight" 
+          )
         plt.close(fig) 
-        
-    else:
-        plt.show()
-
-
+    else: 
+        plt.show() 
+      
 def _get_metrics_from_cols(
     columns: List[str], prefixes: List[str]
 ) -> List[str]:

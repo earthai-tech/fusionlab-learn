@@ -145,7 +145,7 @@ class ResultsVisualizer:
             
             save_base = os.path.join(
                 self.config.run_output_path,
-                f"{self.config.city_name}_forecast_comparison_plot_"
+                f"{self.config.city_name}_forecast_comparison_plot"
             )
             forecast_view(
                 df,
