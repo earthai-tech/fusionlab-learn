@@ -44,7 +44,7 @@ def test_fwd_worflow ():
     forecaster = Forecaster(config=config)
     forecast_df = forecaster.run(
         model=best_model,
-        test_df=sequence_gen.test_df, # test_df,
+        test_df=sequence_gen.test_df,
         val_dataset=val_dataset,
         static_features_encoded=processor.static_features_encoded,
         coord_scaler=sequence_gen.coord_scaler

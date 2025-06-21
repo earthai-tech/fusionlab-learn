@@ -51,7 +51,7 @@ def _lazy_import(module_name, alias=None):
 try:
     from ._version import version as __version__
 except ImportError:
-    __version__ = "0.3.0"
+    __version__ = "0.3.1"
 
 # Core dependencies
 _required_dependencies = [
