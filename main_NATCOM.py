@@ -300,7 +300,8 @@ if categorical_cols_to_encode:
         df_for_processing[categorical_cols_to_encode]
     )
     # Save encoder
-    encoder_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_ohe_encoder.joblib")
+    encoder_path = os.path.join(
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_ohe_encoder.joblib")
     try: 
         save_job(encoder_ohe, encoder_path, append_versions=True, 
             append_date=True)
@@ -723,7 +724,7 @@ try:
 
     print(f"Attempting to generate PINN sequences from test data (year {FORECAST_START_YEAR})...")
     inputs_test_dict, targets_test_dict_raw, test_coord_scaler = prepare_pinn_data_sequences(
-        df=df_train_master, #df_test_master,
+        df=df_train_master, #df_test_master, # use df_train_master for testing purpose. 
         time_col=TIME_COL_NUMERIC_PINN,
         lon_col=LON_COL, lat_col=LAT_COL,
         subsidence_col=SUBSIDENCE_COL,

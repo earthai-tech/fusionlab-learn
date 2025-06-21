@@ -6,6 +6,8 @@
 Provides common helper functions and for validation, 
 comparison, and other generic operations
 """
+from __future__ import annotations
+
 import os
 import re
 import warnings
@@ -14,13 +16,14 @@ import textwrap
 import logging
 from numbers import Real 
 from pathlib import Path
-
+from itertools import chain
 import matplotlib.pyplot as plt
 from datetime import datetime
 from typing import ( 
     Union, Optional, 
     Dict, Any, List,
-    Literal, Tuple
+    Literal, Tuple, 
+    Sequence,Iterable
 )
 import numpy as np 
 import pandas as pd 
@@ -3019,3 +3022,186 @@ def _coerce_dt_kw(
     out["dt_col"] = chosen
     return out
 
+
+def save_figure(
+    figure: plt.Figure,  
+    savefile: Optional[str] = None,  
+    save_fmts: Union[str, List[str]] = ['.png'],  
+    overwrite: bool = True,  
+    verbose: int = 1,  
+    **kwargs
+):
+    """
+    Save the given matplotlib figure to disk, automatically handling
+    the filename, extension, and format.
+
+    Parameters
+    ----------
+    figure : plt.Figure
+        The matplotlib figure object to save.
+    savefile : str, optional
+        The target file path or name. If None, a default name is generated.
+    save_fmts : list of str or str, optional
+        The formats to save the figure in (e.g., '.png', '.pdf').
+        Default is '.png'.
+    overwrite : bool, optional
+        Whether to overwrite the existing file if it already exists. 
+        Default is True.
+    verbose : int, optional
+        Verbosity level: 0 for silent, 1 for basic info, 2 for detailed info.
+    **kwargs : additional arguments
+        Additional keyword arguments passed to `plt.savefig()` 
+        (e.g., dpi, bbox_inches).
+
+    Returns
+    -------
+    str
+        The final filename used to save the figure.
+    """
+    # Step 1: Handle filename logic
+    if savefile is None:
+        # Generate a timestamped filename if none is provided
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        savefile = f"output_{timestamp}.png"
+
+    # Step 2: Check if the filename has an extension, 
+    # if not, use the default format
+    if not os.path.splitext(savefile)[1]:
+        savefile = f"{savefile}.png"  # Default to PNG if no extension is found
+
+    # Ensure the directory exists before saving the figure
+    out_dir = os.path.dirname(savefile)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    # Step 3: Handle file formats (multiple formats or single format)
+    if isinstance(save_fmts, str):
+        save_fmts = [save_fmts]  # Convert to list if a single string is provided
+    save_fmts = [f".{ext.replace('.', '')}" for ext in save_fmts]  
+
+    # Step 4: Check if the file exists and handle overwrite behavior
+    if not overwrite and os.path.exists(savefile):
+        raise FileExistsError(
+            f"File '{savefile}' already exists."
+            " Set 'overwrite=True' to overwrite."
+        )
+
+    # Step 5: Save the figure
+    try:
+        for fmt in save_fmts:
+            final_filename = f"{os.path.splitext(savefile)[0]}{fmt}"
+            figure.savefig(final_filename, **kwargs)
+            if verbose > 0:
+                print(f"Saved figure to {final_filename}")
+        return savefile  # Return the final save path
+    except Exception as e:
+        if verbose > 0:
+            print(f"Error saving figure: {e}")
+        return None
+    
+    # fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
+    # base, _ = os.path.splitext(savefig)
+    # for fmt in fmts:
+    #     fname = (
+    #         f"{base}_{target_name}_by_step"
+    #         f"{fmt if fmt.startswith('.') else '.' + fmt}"
+    #     )
+    #     out_dir = os.path.dirname(fname)
+    #     if out_dir and not os.path.exists(out_dir):
+    #         os.makedirs(out_dir, exist_ok=True)
+    #     vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
+    #     fig.savefig(fname, dpi=300, bbox_inches="tight")
+            
+def ensure_cols_exist(
+    df: pd.DataFrame,
+    *cols: Union[str, Sequence[str]],
+    strict: bool = False,
+    error: str = "warn",
+    return_as_flatten: bool = True,
+) -> List[str] | List[List[str]]:
+    """
+    Validate that *every* requested column is present in a DataFrame.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame you intend to slice.
+    *cols : str | Sequence[str]
+        A loose collection of column names (strings **or**
+        iterables of strings).  Examples::
+
+            ensure_cols_exist(df, "foo", "bar")
+            ensure_cols_exist(df, ["foo", "bar"], "baz")
+
+    strict : bool, default ``False``
+        * ``True``  – all requested columns **must** exist or the
+          function triggers `error='raise'` automatically.
+        * ``False`` – missing columns can be tolerated depending on
+          *error*.
+
+    error : {'warn', 'raise', 'ignore'}, default ``'warn'``
+        Behaviour when *some* columns are missing:
+
+        * ``'warn'``   – emit a :class:`UserWarning`
+        * ``'raise'``  – raise :class:`ValueError`
+        * ``'ignore'`` – stay silent
+
+        If *strict* is ``True`` the function behaves as
+        ``error='raise'`` regardless of this argument.
+
+    return_as_flatten : bool, default ``True``
+        * ``True``  → return **one** flat list with every *valid* column.
+        * ``False`` → keep the original grouping:
+          ``[["foo", "bar"], ["baz"]]``
+
+    Returns
+    -------
+    list
+        Either a flat list or a list-of-lists containing only the
+        columns that really exist in *df* (order preserved).
+
+    Raises
+    ------
+    ValueError
+        If *strict* is ``True`` **or** ``error='raise'`` **and**
+        at least one column is missing.
+
+    Examples
+    --------
+    >>> ensure_cols_exist(df, "lon", ["lat", "depth"])
+    ['lon', 'lat', 'depth']
+
+    >>> ensure_cols_exist(df, "x", strict=True)
+    ValueError: missing columns: ['x']
+    """
+    # ---- 1 • normalise cols
+    def _to_list(obj: Union[str, Iterable[str]]) -> List[str]:
+        return [obj] if isinstance(obj, str) else list(obj)
+
+    grouped: List[List[str]] = [_to_list(c) for c in cols]
+    flat: List[str] = list(chain.from_iterable(grouped))
+
+    if not flat:  # nothing to check
+        return [] if return_as_flatten else grouped
+
+    #  membership test 
+    present = [c for c in flat if c in df.columns]
+    missing = [c for c in flat if c not in df.columns]
+
+    if missing:
+        msg = f"Missing columns: {missing} (DataFrame has {len(df.columns)})"
+        if strict or error == "raise":
+            raise ValueError(msg)
+        if error == "warn":
+            warnings.warn(msg, stacklevel=2)
+
+    #  return
+    if return_as_flatten:
+        # keep original order but drop the missing ones
+        return list(set ([c for c in flat if c in present]))
+
+    # keep original grouping, dropping any missing names
+    filtered_grouped: List[List[str]] = [
+        [c for c in grp if c in present] for grp in grouped
+    ]
+    return filtered_grouped

@@ -38,7 +38,7 @@ from ..utils.forecast_utils import (
 from ..utils.generic_utils import ( 
     _coerce_dt_kw, 
     get_actual_column_name,
-    vlog
+    vlog, save_figure 
 )
 from ..utils.validator import ( 
     assert_xy_in, is_frame, 
@@ -352,22 +352,15 @@ def plot_forecast_by_step(
 
         # 4. Save figure to disk if requested.
         if savefig:
-            fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-            base, _ = os.path.splitext(savefig)
-            for fmt in fmts:
-                fname = (
-                    f"{base}_{prefix}_by_step"
-                    f"{fmt if fmt.startswith('.') else '.' + fmt}"
-                )
-                out_dir = os.path.dirname(fname)
-                if out_dir and not os.path.exists(out_dir):
-                    os.makedirs(out_dir, exist_ok=True)
-                vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-                fig.savefig(fname, dpi=300, bbox_inches="tight")
-
-        plt.show()
+            save_figure (
+                fig, savefile = savefig, 
+                save_fmts= save_fmts, 
+                dpi=300, bbox_inches="tight" 
+              )
+            plt.close(fig) 
+        else: 
+            plt.show()
         
-    
 @check_non_emptiness 
 def forecast_view_in(
     forecast_df: pd.DataFrame,
@@ -696,7 +689,6 @@ def forecast_view_in(
 
         plt.show()
 
-
 @check_non_emptiness 
 def forecast_view(
     forecast_df: pd.DataFrame,
@@ -716,6 +708,7 @@ def forecast_view(
     savefig: Optional[str] = None,
     save_fmts: Union[str, List[str]] = '.png',
     dt_col: Optional[str] = None,
+    show: bool =True, 
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     verbose: int = 1,
     
@@ -853,7 +846,9 @@ def forecast_view(
         
     _spatial_cols = spatial_cols or []
     
-    is_q = detect_forecast_type(forecast_df, value_prefixes=value_prefixes)
+    is_q = detect_forecast_type(
+        forecast_df, value_prefixes=value_prefixes
+    )
     
     if is_q =='deterministic': 
         warnings.warn (
@@ -888,7 +883,8 @@ def forecast_view(
             if c.endswith('_actual') and c.count('_') == 1
         ],
         spatial_cols = _spatial_cols, 
-        verbose=verbose
+        verbose=verbose, 
+        _logger =_logger, 
     )
 
     plot_structure = _parse_wide_df_columns(df_wide, value_prefixes)
@@ -986,19 +982,17 @@ def forecast_view(
              )
 
         if savefig:
-            fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-            base, _ = os.path.splitext(savefig)
-            for fmt in fmts:
-                fname = f"{base}_{prefix}{fmt if fmt.startswith('.') else '.' + fmt}"
-                out_dir = os.path.dirname(fname)
-                if out_dir and not os.path.exists(out_dir):
-                    os.makedirs(out_dir, exist_ok=True)
-                vlog(f"Saving figure to {fname}", level=1,
-                     verbose=verbose, logger=_logger
-                     )
-                fig.savefig(fname, dpi=300, bbox_inches="tight")
-
-        plt.show()
+            save_figure (
+                fig, savefile = savefig, save_fmts= save_fmts, 
+                dpi=300, bbox_inches="tight" 
+              )
+            plt.close(fig) 
+        else: 
+            if show:                          
+                plt.show()                     # for notebook debugging
+            else:
+                plt.close(fig)     
+                                 
 
 @check_non_emptiness 
 def plot_forecasts(
@@ -1020,10 +1014,13 @@ def plot_forecasts(
     scaler_feature_names: Optional[List[str]] = None,
     target_idx_in_scaler: Optional[int] = None,
     titles: Optional[List[str]] = None,
-    cbar: Optional[str] = None, #new
-    step_names : Dict[int, Any] =None, # new
-    show_grid: bool = True, # new
-    grid_props: Optional[Dict] = None, # new
+    cbar: Optional[str] = None, 
+    step_names : Dict[int, Any] =None, 
+    show_grid: bool = True, 
+    grid_props: Optional[Dict] = None,
+    savefig: Optional [str]=None, 
+    save_fmts : Optional [Union[str, List[str]]]=".png",
+    show: bool=True, 
     verbose: int = 0,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **plot_kwargs: Any
@@ -1472,7 +1469,7 @@ def plot_forecasts(
         for i in range(plot_idx, len(axes_flat)):
             axes_flat[i].set_visible(False)
         fig.tight_layout()
-        plt.show()
+        # plt.show()
 
     elif kind == "spatial":
         
@@ -1699,17 +1696,28 @@ def plot_forecasts(
                 pad=0.04
             )
     
-        
-        plt.show()
-
     else:
         raise ValueError(
             f"Unsupported `kind`: '{kind}'. "
             "Choose 'temporal' or 'spatial'."
             )
+        
     vlog("Forecast visualization complete.", level=3, 
          verbose=verbose, logger=_logger)
     
+    # 4. Save figure to disk if requested.
+    if savefig:
+        save_figure (
+            fig, savefile = savefig, save_fmts= save_fmts, 
+            dpi=300, bbox_inches="tight" 
+          )
+        plt.close(fig) 
+    else: 
+        if show:                          
+            plt.show() # for notebook debugging
+        else:
+            plt.close(fig)               
+   
 
 @check_non_emptiness
 def visualize_forecasts(
@@ -1728,7 +1736,9 @@ def visualize_forecasts(
     axis="on",  
     s=2, 
     show_grid=True,
-    grid_props=None,           
+    grid_props=None, 
+    savefig=None, 
+    save_fmts =None,           
     verbose=1,
     **kw
 ):
@@ -2091,11 +2101,20 @@ def visualize_forecasts(
             ax_pred.grid(True, **grid_props)
 
         fig.colorbar(sc_pred, ax=ax_pred, label=pred_label)
-
+        
+    # 4. Save figure to disk if requested.
     plt.tight_layout()
-    plt.show()
-
-
+    
+    if savefig:
+        save_figure (
+            fig, savefile = savefig, 
+            save_fmts= save_fmts, 
+            dpi=300, bbox_inches="tight" 
+          )
+        plt.close(fig) 
+    else: 
+        plt.show() 
+      
 def _get_metrics_from_cols(
     columns: List[str], prefixes: List[str]
 ) -> List[str]:

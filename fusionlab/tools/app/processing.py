@@ -16,6 +16,7 @@ from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 from fusionlab.utils.generic_utils import ensure_directory_exists
 from fusionlab.utils.generic_utils import normalize_time_column 
+from fusionlab.utils.generic_utils import ensure_cols_exist 
 from fusionlab.datasets import fetch_zhongshan_data
 from fusionlab.utils.data_utils import nan_ops
 from fusionlab.utils.io_utils import save_job
@@ -34,7 +35,9 @@ class DataProcessor:
     """
     def __init__(
             self, config: SubsConfig, 
-            log_callback: Optional[callable] = None):
+            log_callback: Optional[callable] = None, 
+            raw_df: Optional[pd.DataFrame] = None       
+            ):
         """
         Initializes the processor with a configuration object.
 
@@ -43,7 +46,7 @@ class DataProcessor:
             log_callback (callable, optional): A function to receive log messages.
         """
         self.config = config
-        self.raw_df: Optional[pd.DataFrame] = None
+        self.raw_df: Optional[pd.DataFrame] = raw_df
         self.processed_df: Optional[pd.DataFrame] = None
         self.train_df: Optional[pd.DataFrame] = None
         self.test_df: Optional[pd.DataFrame] = None
@@ -57,32 +60,36 @@ class DataProcessor:
         """
         Handles Step 1: Loading the dataset from a file or by fetching it.
         """
-        self.log("Step 1: Loading Dataset...")
-        data_path = os.path.join(
-            self.config.data_dir, self.config.data_filename)
-        
-        if os.path.exists(data_path):
-            try:
-                self.raw_df = pd.read_csv(data_path)
-                self.log(f"  Successfully loaded '{self.config.data_filename}'."
-                         f" Shape: {self.raw_df.shape}")
-            except Exception as e:
-                raise IOError(f"Error loading data from '{data_path}': {e}")
-        else:
-            self.log("  Local file not found. Attempting to fetch sample data...")
-            try:
-                data_bunch = fetch_zhongshan_data()
-                self.raw_df = data_bunch.frame
-                self.log(f"  Successfully fetched sample data. Shape: {self.raw_df.shape}")
-            except Exception as e:
-                raise FileNotFoundError(
-                    "Data could not be loaded from local paths or fetched."
-                    f" Error: {e}"
-                )
-        
+        if self.raw_df is not None:
+            self.log(f"Step 1: Using in-memory DataFrame – shape {self.raw_df.shape}")
+        else: 
+            self.log("Step 1: Loading Dataset...")
+            data_path = os.path.join(
+                self.config.data_dir, self.config.data_filename)
+            
+            if os.path.exists(data_path):
+                try:
+                    self.raw_df = pd.read_csv(data_path)
+                    self.log(f"  Successfully loaded '{self.config.data_filename}'."
+                             f" Shape: {self.raw_df.shape}")
+                except Exception as e:
+                    raise IOError(f"Error loading data from '{data_path}': {e}")
+            else:
+                self.log("  Local file not found. Attempting to fetch sample data...")
+                try:
+                    data_bunch = fetch_zhongshan_data()
+                    self.raw_df = data_bunch.frame
+                    self.log(f"  Successfully fetched sample data. Shape: {self.raw_df.shape}")
+                except Exception as e:
+                    raise FileNotFoundError(
+                        "Data could not be loaded from local paths or fetched."
+                        f" Error: {e}"
+                    )
         if self.config.save_intermediate:
-            ensure_directory_exists(self.config.run_output_path)
-            save_path = os.path.join(self.config.run_output_path, "01_raw_data.csv")
+            ensure_directory_exists(
+                self.config.run_output_path)
+            save_path = os.path.join(
+                self.config.run_output_path, "01_raw_data.csv")
             self.raw_df.to_csv(save_path, index=False)
             self.log(f"  Saved raw data artifact to: {save_path}")
             
@@ -120,6 +127,8 @@ class DataProcessor:
         fut_cols = _as_list(self.config.future_features)
         
         all_cols = base_cols + cat_cols + num_cols + fut_cols
+        
+        ensure_cols_exist(self.raw_df, *all_cols, error ='raise')
 
         # all_cols = base_cols + (self.config.categorical_cols or []) + \
         #             (self.config.numerical_cols or []) + (self.config.future_features or [])

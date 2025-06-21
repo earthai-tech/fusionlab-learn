@@ -5,6 +5,7 @@ from typing import List, Optional, Dict, Any
 from typing import Tuple
 import shutil # noqa
 
+from fusionlab.utils.generic_utils import rename_dict_keys 
 from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences, format_pinn_predictions
 from fusionlab.nn.utils import make_dict_to_tuple_fn
 from fusionlab.nn import KERAS_DEPS
@@ -347,8 +348,20 @@ class Forecaster:
             )
             if targets['subsidence'].shape[0] == 0:
                 raise ValueError("No test sequences were generated.")
-            
+            # If successful, prepare the target dictionary for evaluation
+            # for consistency , rename keys for consistency
+            targets = rename_dict_keys(
+                targets.copy(),
+                    param_to_rename={
+                        "subsidence": "subs_pred", 
+                        "gwl": "gwl_pred"
+                    }
+                 )
             self.log("  Test sequences generated successfully.")
+            
+            # If successful, prepare the target dictionary for evaluation
+            print("Test sequences generated successfully.")
+            
             return inputs, targets
 
         except Exception as e:
@@ -400,7 +413,7 @@ class Forecaster:
             _logger = self.config.log, 
             savepath = self.config.run_output_path, 
         )
-
+        
         if forecast_df is not None and not forecast_df.empty:
             if self.config.save_intermediate:
                 save_path = os.path.join(

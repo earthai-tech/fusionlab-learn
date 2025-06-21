@@ -676,7 +676,8 @@ def get_value_prefixes_in(
 @isdf 
 def detect_forecast_type(
     df: pd.DataFrame,
-    value_prefixes: Optional[List[str]] = None
+    value_prefixes: Optional[List[str]] = None, 
+    
 ) -> str:
     """
     Auto-detects whether a DataFrame contains deterministic or
