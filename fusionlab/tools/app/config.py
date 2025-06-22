@@ -193,8 +193,6 @@ class SubsConfig:
             ]
             self.log(f"  Auto-set dynamic features: {self.dynamic_features}")
         
-
-
     def __repr__(self) -> str:
         """Provides a string representation of the configuration."""
         params = "\n".join(f"  {key}: {value}" for key, value in self.__dict__.items())
