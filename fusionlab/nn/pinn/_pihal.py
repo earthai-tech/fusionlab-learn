@@ -14,6 +14,7 @@ from ...core.handlers import param_deprecated_message
 from ...compat.sklearn import validate_params, Interval, StrOptions 
 from ...params import LearnableC, FixedC, DisabledC
 from ...utils.deps_utils import ensure_pkg
+from ...utils.generic_utils import rename_dict_keys 
 
 from .. import KERAS_BACKEND, KERAS_DEPS,  dependency_message
 from .._base_attentive import BaseAttentive 
@@ -21,7 +22,7 @@ from .._base_attentive import BaseAttentive
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs
     from .op import process_pinn_inputs, compute_consolidation_residual
-    from .utils import process_pde_modes 
+    from .utils import process_pde_modes, _get_coords  
   
 MeanSquaredError = KERAS_DEPS.Adam 
 Adam =KERAS_DEPS.Adam 
@@ -426,7 +427,7 @@ class PIHALNet(BaseAttentive):
         # isolates the coordinate tensors for later use.
         logger.debug("PIHALNet call: Processing PINN inputs.")
         t, x, y, static_features, dynamic_features, future_features = \
-            process_pinn_inputs(inputs, mode='as_dict')
+            process_pinn_inputs(inputs, mode='auto')
             
         # basic tensors checks. 
         check_inputs(
@@ -620,6 +621,16 @@ class PIHALNet(BaseAttentive):
                 "Expected data to be a tuple of (inputs_dict, targets_dict)."
             )
         inputs, targets = data
+        if isinstance (targets, dict): 
+            # For consistency, map targets if users explicitely 
+            # provide 'subsidence', and 'gwl' as keys .
+            targets = rename_dict_keys(
+                targets.copy(),
+                param_to_rename={
+                    "subsidence": "subs_pred", 
+                    "gwl": "gwl_pred"
+                }
+        )
 
         # Open a GradientTape to record operations 
         # for automatic differentiation.
