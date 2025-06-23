@@ -379,7 +379,7 @@ class MiniForecaster(QMainWindow):
         super().__init__()
         self._log_cache: list[str] = []
         self.setWindowTitle("Fusionlab-learn – PINN Mini GUI")
-        self.setFixedSize(880, 660)
+        self.setFixedSize(980, 660)
         self.file_path: Path | None = None
         
         # --- app icon (title-bar & task-bar) -----------------------------
