@@ -2,10 +2,13 @@
 # License: BSD-3-Clause
 # Author: L. Kouadio <etanoyau@gmail.com>
 
+
 """
 Defines the 'view' command group for the fusionlab-learn CLI, providing
 tools for visualizing forecast results and data.
 """
+from __future__ import annotations 
+
 import click
 import pandas as pd
 from typing import Dict, Any
