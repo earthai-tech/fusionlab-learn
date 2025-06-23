@@ -41,7 +41,7 @@ FG_DARK   = "#1e1e1e"
 PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
 SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
 
-STYLE_SHEET = f"""
+FLAB_STYLE_SHEET = f"""
 QMainWindow {{
     background: {BG_LIGHT};
     color: {FG_DARK};
@@ -110,10 +110,181 @@ QToolTip {{
 }}
 
 """
+# --- Color Palette Definition ---
+# Using a central palette makes themes easier to manage.
+# Inspired by common UI color systems.
+PALETTE = {
+    # Primary Brand Colors
+    "primary": "#2E3191",    # Deep Blue
+    "secondary": "#F28620",  # Orange
+    
+    # Dark Theme Colors
+    "dark_bg": "#1e293b",       # slate-800
+    "dark_card_bg": "#334155",  # slate-700
+    "dark_input_bg": "#0f172a",  # slate-900
+    "dark_border": "#475569",     # slate-600
+    "dark_text": "#cbd5e1",      # slate-300
+    "dark_text_title": "#ffffff",
+    "dark_text_muted": "#94a3b8",   # slate-400
+    "dark_reset_bg": "#475569",  # slate-600
 
+    # Light Theme Colors
+    "light_bg": "#f8fafc",      # slate-50
+    "light_card_bg": "#ffffff",
+    "light_input_bg": "#f1f5f9", # slate-100
+    "light_border": "#cbd5e1",    # slate-300
+    "light_text": "#0f172a",      # slate-900
+    "light_text_title": "#2E3191", # Primary color for titles
+    "light_text_muted": "#64748b",  # slate-500
+    "light_reset_bg": "#e2e8f0", # slate-200
+}
+
+# --- Dark Theme Stylesheet ---
+DARK_THEME_STYLESHEET = f"""
+    QMainWindow, QWidget {{
+        background-color: {PALETTE['dark_bg']};
+        color: {PALETTE['dark_text']};
+        font-family: 'Segoe UI', sans-serif;
+    }}
+    QFrame#card {{
+        background-color: {PALETTE['dark_card_bg']};
+        border: 1px solid {PALETTE['dark_border']};
+        border-radius: 8px;
+    }}
+    QLabel#title {{
+        font-size: 28px; font-weight: bold;
+        color: {PALETTE['dark_text_title']};
+    }}
+    QLabel#cardTitle {{
+        font-size: 18px; font-weight: 600;
+        color: {PALETTE['dark_text_title']};
+    }}
+    QLabel#description, QLabel#cardDescription {{
+        color: {PALETTE['dark_text_muted']};
+    }}
+    QPushButton {{
+        background-color: {PALETTE['primary']};
+        color: white; border: none;
+        padding: 8px; border-radius: 6px;
+        font-weight: bold;
+    }}
+    QPushButton:hover {{
+        background-color: #4338ca; /* A slightly lighter primary for hover */
+    }}
+    QPushButton:disabled {{
+        background-color: #334155; 
+        color: {PALETTE['dark_text_muted']};
+    }}
+    QPushButton#resetButton {{
+        background-color: {PALETTE['dark_reset_bg']};
+        color: {PALETTE['dark_text']};
+    }}
+    QPushButton#resetButton:hover {{
+        background-color: {PALETTE['dark_border']};
+    }}
+    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+        background-color: {PALETTE['dark_input_bg']};
+        border: 1px solid {PALETTE['dark_border']};
+        padding: 6px; border-radius: 6px; color: white;
+    }}
+    QTextEdit {{
+        background-color: #020617; /* Near black */
+        border: 1px solid {PALETTE['dark_border']};
+        font-family: "Courier New", monospace;
+    }}
+    QFrame#hLine {{ border: 1px solid {PALETTE['dark_border']}; }}
+    QToolTip {{
+        background-color: {PALETTE['secondary']}; color: white;
+        border: 1px solid white; padding: 4px; border-radius: 4px;
+    }}
+"""
+
+# --- Light Theme Stylesheet ---
+LIGHT_THEME_STYLESHEET = f"""
+    QMainWindow, QWidget {{
+        background-color: {PALETTE['light_bg']};
+        color: {PALETTE['light_text']};
+        font-family: 'Segoe UI', sans-serif;
+    }}
+    QFrame#card {{
+        background-color: {PALETTE['light_card_bg']};
+        border: 1px solid {PALETTE['light_border']};
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }}
+    QLabel#title {{
+        font-size: 28px; font-weight: bold;
+        
+        color: {PALETTE['light_text_title']};
+    }}
+    QLabel#cardTitle {{
+        font-size: 18px; font-weight: 600; 
+        color: {PALETTE['light_text_title']};
+    }}
+    QLabel#description, QLabel#cardDescription {{
+        color: {PALETTE['light_text_muted']};
+    }}
+    QPushButton {{
+        background-color: {PALETTE['primary']};
+        color: white; border: none;
+        padding: 8px; border-radius: 6px;
+        font-weight: bold;
+    }}
+    QPushButton:hover {{
+        background-color: {PALETTE['secondary']};
+    }}
+    QPushButton:disabled {{
+        background-color: #e2e8f0; color: #94a3b8;
+    }}
+    QPushButton#resetButton {{
+        background-color: {PALETTE['light_reset_bg']};
+        color: {PALETTE['light_text']};
+    }}
+     QPushButton#resetButton:hover {{
+        background-color: #cbd5e1;
+    }}
+    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+        background-color: {PALETTE['light_input_bg']};
+        border: 1px solid {PALETTE['light_border']};
+        padding: 6px; border-radius: 6px;
+        color: {PALETTE['light_text']};
+    }}
+    QTextEdit {{
+        background-color: {PALETTE['light_card_bg']};
+        border: 1px solid {PALETTE['light_border']};
+        font-family: "Courier New", monospace;
+    }}
+    QFrame#hLine {{ border: 1px solid {PALETTE['light_input_bg']}; }}
+    QToolTip {{
+        background-color: {PALETTE['dark_bg']}; color: white;
+        border: none; padding: 4px; border-radius: 4px;
+    }}
+"""
 
 class _PandasModel(QAbstractTableModel):
-    """Qt-model that exposes a *pandas* DataFrame (read / write)."""
+    """A Qt Table Model for exposing a pandas DataFrame.
+
+    This class acts as a bridge between the data model (a pandas
+    DataFrame) and the view component (a QTableView). It provides
+    the necessary interface that allows Qt to read, display, and
+    modify the data from the DataFrame in a table widget.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame to be displayed and managed by the model.
+    parent : QObject, optional
+        The parent Qt object for this model, by default None.
+
+    Attributes
+    ----------
+    _df : pandas.DataFrame
+        The internal reference to the DataFrame being managed.
+
+    See Also
+    --------
+    PyQt5.QtCore.QAbstractTableModel : The base class for custom table models.
+    """
 
     def __init__(self, df: pd.DataFrame, parent=None):
         super().__init__(parent)
@@ -160,14 +331,37 @@ class _PandasModel(QAbstractTableModel):
         return self._df
 
 class CsvEditDialog(QDialog):
-    """
-    Lightweight viewer / editor for CSV files.
+    """A dialog window for previewing and editing a CSV file.
+
+    This class provides a lightweight, non-destructive editing
+    environment for a loaded dataset. It displays a preview of the
+    data in a table and offers tools to delete rows, delete columns,
+    and rename columns.
+
+    Changes are made to an internal copy of the DataFrame and are only
+    finalized and returned if the user clicks "Save / Apply".
 
     Parameters
     ----------
-    csv_path      : str
-    parent        : QWidget | None
-    preview_rows  : int        – maximum rows to *display* (rest stays hidden)
+    csv_path : str
+        The absolute path to the CSV file to be loaded.
+    parent : QWidget, optional
+        The parent widget for this dialog, by default None.
+    preview_rows : int, default=200
+        The maximum number of rows to display in the table view. This
+        is a performance optimization to prevent lag with very large
+        files, while still allowing edits on the complete, underlying
+        DataFrame.
+
+    Methods
+    -------
+    edited_dataframe()
+        Returns the full DataFrame with all user edits applied.
+
+    See Also
+    --------
+    PyQt5.QtWidgets.QDialog : The base class for dialog windows.
+    _PandasModel : The data model used to populate the table view.
     """
 
     def __init__(self, csv_path: str,
@@ -265,8 +459,18 @@ class CsvEditDialog(QDialog):
         """
         return self._df_full.copy()
 
-# helper widgets
 def hline() -> QFrame:
+    """Creates and returns a styled horizontal separator line.
+
+    This is a simple helper function to generate a QFrame configured
+    as a horizontal line, useful for visually separating sections
+    in a GUI layout.
+
+    Returns
+    -------
+    PyQt5.QtWidgets.QFrame
+        A QFrame widget styled as a horizontal line.
+    """
     ln = QFrame()
     ln.setFrameShape(QFrame.HLine)
     ln.setStyleSheet(f"color:{PRIMARY}")
@@ -274,6 +478,57 @@ def hline() -> QFrame:
 
 
 class Worker(QThread):
+    """Executes the forecasting workflow in a background thread.
+
+    This QThread subclass is designed to run the entire data
+    processing and model training pipeline without freezing the main
+    GUI thread. It orchestrates the instantiation and execution of
+    the various processing classes (`DataProcessor`, `SequenceGenerator`,
+    etc.) and emits signals to update the GUI with progress, logs,
+    and final results.
+
+    Parameters
+    ----------
+    cfg : SubsConfig
+        A configuration object containing all parameters required for
+        the workflow, gathered from the GUI.
+    edited_df : pd.DataFrame, optional
+        If the user has edited the data in the preview dialog, this
+        DataFrame is passed to bypass the initial file loading step.
+        If None, the workflow will load data from the file path
+        specified in the `cfg` object.
+    parent : QObject, optional
+        The parent Qt object, by default None.
+
+    Attributes
+    ----------
+    status_msg : pyqtSignal(str)
+        Emits status updates for the main status label in the GUI.
+    progress_val : pyqtSignal(int)
+        Emits progress updates (0-100) for the progress bar.
+    log_msg : pyqtSignal(str)
+        Emits detailed log messages to be displayed in the log panel.
+    coverage_val : pyqtSignal(float)
+        Emits the final calculated coverage score to be displayed in
+        the status bar.
+
+    Methods
+    -------
+    run()
+        The main entry point for the thread. Executes the entire
+        data processing and forecasting pipeline sequentially.
+    _write_coverage_result()
+        A helper method to read the saved coverage score from a JSON
+        file and emit it via the `coverage_val` signal.
+
+    See Also
+    --------
+    DataProcessor : Handles the data loading and preprocessing stage.
+    SequenceGenerator : Handles sequence generation and dataset creation.
+    ModelTrainer : Handles model definition, compilation, and training.
+    Forecaster : Handles prediction on new data.
+    ResultsVisualizer : Handles the final visualization of results.
+    """
     status_msg   = pyqtSignal(str)
     progress_val = pyqtSignal(int)
     log_msg      = pyqtSignal(str)
@@ -367,6 +622,55 @@ class Worker(QThread):
                     f"[WARN] Could not read coverage file: {e}")
 
 class MiniForecaster(QMainWindow):
+    """The main application window for the Subsidence PINN Mini GUI.
+
+    This class constructs and manages the entire graphical user
+    interface. It is responsible for initializing all UI components
+    (buttons, input fields, display panels), connecting user actions
+    (signals) to their corresponding handler functions (slots), and
+    managing the application's state, including the backend `Worker`
+    thread that runs the forecasting process.
+
+    Attributes
+    ----------
+    log_updated : pyqtSignal(str)
+        A signal connected to the `_log` slot for updating the UI log.
+    status_updated : pyqtSignal(str)
+        A signal connected to the status label for displaying current
+        workflow status.
+    progress_updated : pyqtSignal(int)
+        A signal connected to the progress bar for updates.
+    coverage_ready : pyqtSignal(float)
+        A signal connected to the coverage label for displaying the
+        final coverage score.
+    worker : Worker
+        An instance of the background thread that executes the main
+        processing logic.
+
+    Methods
+    -------
+    _build_ui()
+        Constructs and assembles all widgets into the main layout.
+    _on_run()
+        Initiates the forecasting workflow by creating and starting
+        the `Worker` thread.
+    _on_reset()
+        Resets the GUI fields and logs to their default state.
+    _choose_file()
+        Opens a file dialog and handles the selection of a CSV file.
+    _stop_worker()
+        Requests a graceful interruption of the running `Worker` thread.
+    _worker_done()
+        A slot that performs cleanup actions after the worker thread
+        has finished.
+    _log(msg)
+        A slot that appends a timestamped message to the UI log panel.
+
+    See Also
+    --------
+    Worker : The QThread subclass that performs the backend processing.
+    CsvEditDialog : The dialog for previewing and editing the input data.
+    """
     
     # Qt signals that the backend can emit
     log_updated      = pyqtSignal(str)
@@ -424,6 +728,36 @@ class MiniForecaster(QMainWindow):
         #self.coverage_lbl.setText(f"cov-result: <b>{cv:.3f}</b>")
     
     def _build_ui(self):
+        """Constructs and assembles the entire GUI layout.
+
+        This method acts as the main orchestrator for building the user
+        interface. It is called once during the `__init__` process to
+        create all the necessary widgets and arrange them into a
+        cohesive layout.
+
+        It follows a structured approach:
+        1.  It calls the various private factory methods (`_create_header`,
+            `_model_card`, etc.) to instantiate all the individual UI
+            panels.
+        2.  It creates the main vertical and horizontal layout managers
+            that define the overall structure of the application window.
+        3.  It adds each created panel and widget into the appropriate
+            layout, organizing the configuration controls on the left and
+            the log/output panel on the right.
+        4.  It sets up the main application footer containing informational
+            links and the results display area.
+
+        This method modifies the `self` instance by attaching all created
+        UI components as attributes.
+
+        See Also
+        --------
+        _create_header : Creates the top banner with the logo and title.
+        _model_card : Creates the panel for model architecture settings.
+        _training_card : Creates the panel for training run parameters.
+        _physics_card : Creates the panel for PINN-specific parameters.
+        _feature_card : Creates the panel for feature selection inputs.
+        """
         root = QWidget(); self.setCentralWidget(root)
         L = QVBoxLayout(root)
 
@@ -549,6 +883,14 @@ class MiniForecaster(QMainWindow):
         self.progress_updated.connect(self.progress_bar.setValue)
 
     def _stop_worker(self):
+        """Requests a graceful shutdown of the background worker thread.
+
+        This method is connected to the "Stop" button's `clicked` signal.
+        It calls `requestInterruption()` on the running `Worker` instance,
+        which sets a flag that the worker can check periodically to exit
+        its `run` loop cleanly. It also updates the GUI status to
+        reflect the stopping action.
+        """
         if self.worker and self.worker.isRunning():
             self.worker.requestInterruption()
             self.status_updated.emit("⏹ Stopping workflow …")
@@ -561,6 +903,19 @@ class MiniForecaster(QMainWindow):
         #     self.worker.wait(500)               # give it 0.5 s
 
     def _training_card(self) -> QFrame:
+        """Creates and returns the 'Training Parameters' UI panel.
+
+        This is a private factory method responsible for constructing
+        the `QFrame` that holds all widgets related to defining the
+        temporal aspects of the training and forecasting process.
+
+        Returns
+        -------
+        PyQt5.QtWidgets.QFrame
+            A fully populated `QFrame` widget containing the input fields
+            for 'Train End Year', 'Forecast Start Year', 'Forecast Horizon',
+            'Time Steps', 'Quantiles', and 'Checkpoint format'.
+        """
         card = QFrame(); card.setObjectName("card")
         lay  = QVBoxLayout(card)
         lay.addWidget(self._title("Training Parameters"))
@@ -609,6 +964,31 @@ class MiniForecaster(QMainWindow):
         return card
 
     def _model_card(self) -> QFrame:
+        """Creates and returns the 'Model Configuration' UI panel.
+
+        This private factory method is responsible for constructing the
+        QFrame widget that holds all UI controls related to the core
+        model architecture and main training loop settings. It gathers
+        high-level choices that define the experiment.
+
+        The created panel includes widgets for:
+        - Selecting the model architecture (e.g., 'TransFlowSubsNet').
+        - Setting the number of training Epochs.
+        - Defining the Batch Size.
+        - Specifying the Learning Rate.
+        - Choosing the internal model mode ('pihal' or 'tft').
+        - Configuring attention levels and evaluation metrics.
+
+        Returns
+        -------
+        PyQt5.QtWidgets.QFrame
+            A fully populated QFrame widget containing all the necessary
+            UI elements for model configuration.
+
+        See Also
+        --------
+        SubsConfig : The configuration object that these UI settings populate.
+        """
         card = QFrame(); card.setObjectName("card")
         lay  = QVBoxLayout(card)
         lay.addWidget(self._title("Model Configuration"))
@@ -628,6 +1008,8 @@ class MiniForecaster(QMainWindow):
         form.addRow("Batch size:", self.batch)
 
         self.lr = QDoubleSpinBox(); self.lr.setDecimals(4)
+        self.lr.setRange(0.0, 1.0)    # Sets the valid range from 0.0 to 1.0
+        self.lr.setSingleStep(0.0001) # Optional: allows fine adjustments
         self.lr.setValue(0.001)
         form.addRow("Learning rate:", self.lr)
         
@@ -656,6 +1038,33 @@ class MiniForecaster(QMainWindow):
         return card
 
     def _physics_card(self) -> QFrame:
+        """Creates and returns the 'Physical Parameters' UI panel.
+
+        This private factory method constructs the QFrame containing all
+        widgets that allow the user to control the physics-informed
+        components of the PINN models. It is the primary interface for
+        injecting domain knowledge or enabling inverse modeling.
+
+        The created panel includes widgets for:
+        - Setting the PDE mode ('both', 'consolidation', etc.).
+        - Defining the behavior of physical coefficients (C, K, Ss, Q)
+          as either 'learnable' or a fixed value.
+        - Adjusting the lambda weights for the consolidation and
+          groundwater flow physics loss terms.
+        - Setting the relative data loss weights between the subsidence
+          and GWL prediction targets.
+
+        Returns
+        -------
+        PyQt5.QtWidgets.QFrame
+            A fully populated QFrame widget containing all the necessary
+            UI elements for configuring the model's physics.
+
+        See Also
+        --------
+        fusionlab.params : The module containing the `Learnable` classes.
+        TransFlowSubsNet.compile : Where the lambda weights are used.
+        """
         card = QFrame(); card.setObjectName("card")
         lay  = QVBoxLayout(card)
         lay.addWidget(self._title("Physical Parameters"))
@@ -724,6 +1133,30 @@ class MiniForecaster(QMainWindow):
         return card
 
     def _feature_card(self) -> QFrame:
+        """Creates and returns the 'Feature Selection' UI panel.
+
+        This private factory method constructs the QFrame that allows the
+        user to map columns from their input dataset to the distinct
+        feature roles required by the underlying forecasting models.
+
+        The panel provides three QLineEdit widgets for the user to input
+        comma-separated lists of column names for:
+        1. Dynamic past features.
+        2. Static (time-invariant) features.
+        3. Known future features.
+
+        Each field can also be set to 'auto' to trigger the automatic
+        feature detection logic in the backend `SubsConfig` class.
+
+        Returns
+        -------
+        PyQt5.QtWidgets.QFrame
+            A fully populated QFrame widget for defining feature roles.
+
+        See Also
+        --------
+        SubsConfig.auto_detect_columns : The backend logic for 'auto' mode.
+        """
         card = QFrame(); card.setObjectName("card")
         lay  = QVBoxLayout(card)
         lay.addWidget(self._title("Feature Selection"))
@@ -746,7 +1179,6 @@ class MiniForecaster(QMainWindow):
         lay.addLayout(form)
         return card
 
-    # helper
     def _title(self, txt): 
         l = QLabel(txt); l.setObjectName("cardTitle"); return l
         
@@ -788,7 +1220,22 @@ class MiniForecaster(QMainWindow):
             self._log("CSV preview canceled – keeping original file.")
         
     def _on_reset(self):
-        """Clear fields, log and progress bar (does not delete the CSV path)."""
+        """Resets the user interface to its default state.
+
+        This method is the slot connected to the `Reset` button's
+        `clicked` signal. It provides a convenient way for the user
+        to clear all current inputs and results and start a new
+        configuration from scratch.
+
+        Specifically, it performs the following actions:
+        - Clears the main log panel.
+        - Resets the progress bar to zero.
+        - Clears the file path selection and updates the label.
+        - Resets all configuration widgets in the different panels
+          (e.g., `Model Configuration`, `Training Parameters`) to
+          their initial default values.
+        - Clears the coverage score label in the footer.
+        """
         # reset feature inputs
         self.dyn_feat.setText("auto")
         self.stat_feat.setText("auto")
@@ -806,6 +1253,28 @@ class MiniForecaster(QMainWindow):
         # self.file_path = None
 
     def _on_run(self):
+        """Initiates the end-to-end forecasting workflow.
+
+        This method is the slot connected to the `Run` button's
+        `clicked` signal. It serves as the primary action trigger
+        for the entire application.
+
+        The method orchestrates the following steps:
+        1.  Performs a pre-flight check to ensure a data file has
+            been selected by the user.
+        2.  Gathers all current settings from the various UI input
+            widgets (e.g., spin boxes, combo boxes, text fields).
+        3.  Parses these settings and instantiates a `SubsConfig`
+            object, creating a complete configuration for the run.
+        4.  Disables the 'Run' button and enables the 'Stop' button
+            to manage the UI state during processing.
+        5.  Instantiates the `Worker` background thread, passing it
+            the configuration object and the path to the user's data.
+        6.  Connects the worker's signals (e.g., for logging,
+            progress) to the appropriate UI update slots.
+        7.  Starts the worker thread to begin the processing pipeline
+            without freezing the GUI.
+        """
         self.progress_bar.setValue(0)
         if self.file_path is None:
             self._log("⚠ No CSV selected.")
@@ -925,23 +1394,51 @@ class MiniForecaster(QMainWindow):
             self.status_updated.emit("⚪ Idle")
         
 
-def launch_cli() -> None:
+def launch_cli(theme: str = 'fusionlab') -> None:
+    """Initializes and launches the main GUI application.
+
+    This function is the main entry point for the entire desktop
+    tool. It is responsible for setting up the PyQt5 application
+    environment, applying the custom visual style, creating the main
+    window instance, and starting the Qt event loop, which makes the
+    application visible and interactive.
+
+    The sequence of operations is:
+    1.  Creates a ``QApplication`` instance, the core of any Qt GUI.
+    2.  Sets a custom font for tooltips for better readability.
+    3.  Loads the custom CSS from the ``STYLE_SHEET`` constant to give
+        the application its modern, branded look and feel.
+    4.  Instantiates the main window class, :class:`MiniForecaster`.
+    5.  Shows the main window to the user.
+    6.  Starts the application's event loop by calling `sys.exit(app.exec_())`,
+        which keeps the application running until the user closes it.
+    
+    Parameters
+    ------------
+    theme (str, optional): The visual theme to apply. Can be
+        'light' or 'dark'. Defaults to 'light'.
+        
+    """
     app = QApplication(sys.argv)
     
     QToolTip.setFont(QFont("Helvetica Neue", 9))
 
     if os.path.exists("style.qss"):
         with open("style.qss", "r", encoding="utf-8") as f:
-            css = f.read()
+            selected_stylesheet = f.read()
     else:
-        css = STYLE_SHEET                  # ← your in-code palette
+        if theme.lower() == 'dark':
+            selected_stylesheet = DARK_THEME_STYLESHEET
+        elif theme =='light':
+            selected_stylesheet = LIGHT_THEME_STYLESHEET
+        else: 
+            selected_stylesheet = FLAB_STYLE_SHEET                  
 
-    app.setStyleSheet(css)
+    app.setStyleSheet(selected_stylesheet)
 
     gui = MiniForecaster()
     gui.show()
     sys.exit(app.exec_())
-
 
 
 if __name__ == "__main__":
