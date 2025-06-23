@@ -145,8 +145,13 @@ class DataProcessor:
         df_processed = df_cleaned
         if self.config.categorical_cols:
             self.log(f"  One-hot encoding: {self.config.categorical_cols}")
-            self.encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore', dtype=np.float32)
-            encoded_data = self.encoder.fit_transform(df_cleaned[self.config.categorical_cols])
+            self.encoder = OneHotEncoder(
+                sparse_output=False,handle_unknown='ignore', 
+                dtype=np.float32
+            )
+            encoded_data = self.encoder.fit_transform(
+                df_cleaned[self.config.categorical_cols]
+            )
             # encoded_cols = self.encoder.get_feature_names_out(self.config.categorical_cols)
             
             self.static_features_encoded = self.encoder.get_feature_names_out(
@@ -253,7 +258,9 @@ class SequenceGenerator:
     Handles sequence generation and dataset creation (Steps 5-6).
     """
     def __init__(
-            self, config: SubsConfig, log_callback: Optional[callable] = None):
+            self, config: SubsConfig, 
+            log_callback: Optional[callable] = None
+        ):
         """
         Initializes the generator with a configuration object.
         """
@@ -369,7 +376,7 @@ class SequenceGenerator:
             normalize_coords=True,
             return_coord_scaler=True,
             mode=self.config.mode,
-            verbose=self.config.verbose,  # Can be linked to a config verbose level, 
+            verbose=self.config.verbose,  
             _logger = self.log 
         )
 
