@@ -614,8 +614,6 @@ def validate_tft_inputs(
     # 5) Return the triple (past_inputs, future_inputs, static_inputs)
     return past_inputs, future_inputs, static_inputs
 
-
-
 @optional_tf_function
 def validate_xtft_inputs(
     inputs: List[Optional[Union[np.ndarray, Tensor]]],
@@ -1249,9 +1247,10 @@ def validate_xtft_inputs_in(
                     future_covariate_input,
                     dtype=tf_float32
                 )
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError) as e: 
                 raise ValueError(
-                    f"Failed to convert ``future_covariate_input`` to a TensorFlow tensor: {e}"
+                    "Failed to convert ``future_covariate_input``"
+                    f"  to a TensorFlow tensor: {e}"
                 )
         else:
             # Ensure dtype is float32

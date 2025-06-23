@@ -162,9 +162,12 @@ class DataProcessor:
         if self.config.categorical_cols:
             self.log(f"  One-hot encoding: {self.config.categorical_cols}")
             self.encoder = OneHotEncoder(
-                sparse_output=False, handle_unknown='ignore', dtype=np.float32)
+                sparse_output=False,handle_unknown='ignore', 
+                dtype=np.float32
+            )
             encoded_data = self.encoder.fit_transform(
-                df_cleaned[self.config.categorical_cols])
+                df_cleaned[self.config.categorical_cols]
+            )
             # encoded_cols = self.encoder.get_feature_names_out(self.config.categorical_cols)
             
             self.static_features_encoded = self.encoder.get_feature_names_out(
