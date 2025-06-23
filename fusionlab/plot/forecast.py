@@ -530,7 +530,7 @@ def forecast_view_in(
             c for c in forecast_df.columns 
             if c.endswith('_actual') and c.count('_') == 1
         ],
-        verbose=verbose
+        verbose=verbose,
     )
 
     vlog("Parsing wide DataFrame columns to build plot structure.",

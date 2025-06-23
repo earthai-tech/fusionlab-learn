@@ -3,7 +3,7 @@
 # Author: L. Kouadio <etanoyau@gmail.com>
 
 import os 
-from typing import List, Callable, Optional, Dict, Any 
+from typing import List, Callable, Optional, Dict, Any, cast
 
 import pandas as pd 
 import numpy as np   
@@ -105,7 +105,8 @@ class SubsConfig:
         # --- Progress & logging hooks -----------------------------------
         self.log: Callable[[str], None]       = log_callback or print
         self.progress_callback: Callable[[int], None] = (
-            progress_callback or (lambda *_: None)   # ← safe no-op default
+            progress_callback
+            or cast(Callable[[int], None], lambda *_: None)
         )
         self.verbose = 1 
         

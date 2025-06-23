@@ -452,7 +452,7 @@ class TransFlowSubsNet(BaseAttentive):
         )
         
         # Validate future_p shape based on mode 
-        if self.mode == 'tft_like':
+        if self._mode == 'tft_like':
             expected_future_span = self.max_window_size + self.forecast_horizon
         else:  # pihal_like
             expected_future_span = self.forecast_horizon

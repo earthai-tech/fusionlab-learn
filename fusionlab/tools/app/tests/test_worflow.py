@@ -105,6 +105,7 @@ def test_inference ():
     
     print("\n--- Training Workflow Finished Successfully ---")
     
+    # XXXXX THE INFERENCE WORK FLOW. 
     # ==================================================================
     # Part 2: Inference Workflow using PredictionPipeline
     # ==================================================================

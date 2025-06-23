@@ -18,6 +18,7 @@ class PredictionPipeline:
     Handles the end-to-end workflow for making predictions on a new
     dataset using a pre-trained model and its associated artifacts.
     """
+    _range = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo)*frac))
     def __init__(
         self,
         config: SubsConfig,
@@ -50,38 +51,105 @@ class PredictionPipeline:
         self.scaler = None
         self.coord_scaler = None
 
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+    
+    # NEW – checks the artefacts and column compatibility -------------
+    def _check_if_trained(self, validation_df: pd.DataFrame) -> None:
+        """
+        Safeguard:  ensure the model & artefacts exist **and** the
+        validation file has (at least) the columns that were present
+        during training.
+        """
+        missing: List[str] = []
+
+        if self.model is None:
+            missing.append("model")
+        if self.encoder is None:
+            missing.append("encoder")
+        if self.scaler is None:
+            missing.append("scaler")
+        if self.coord_scaler is None:
+            missing.append("coord_scaler")
+
+        if missing:
+            raise RuntimeError(
+                "[PredictionPipeline] The following artefacts have *not* "
+                f"been loaded: {', '.join(missing)}"
+            )
+
+        trained_cols = (
+            list(self.encoder.feature_names_in_) +
+            list(self.scaler.feature_names_in_) +
+            self.config.dynamic_features +
+            (self.config.future_features or [])
+        )
+        not_found = [c for c in trained_cols if c not in validation_df.columns]
+        if not_found:
+            raise ValueError(
+                "[PredictionPipeline] Validation file is missing "
+                f"{len(not_found)} column(s) that were present in training:\n"
+                f"{', '.join(not_found[:10])}{' …' if len(not_found) > 10 else ''}"
+            )
+
+            
     def run(self, validation_data_path: str):
         """
         Executes the full prediction workflow on a new validation dataset.
         """
+        self._tick(0)
         self.log("--- Starting Prediction Pipeline ---")
         
         # 1. Load all necessary artifacts
         self._load_artifacts()
+        self._tick(10)
         
         # 2. Process the new validation data
         processed_val_df, static_features_encoded = self._process_validation_data(
             validation_data_path)
+        self._tick(30)
         
         # 3. Generate sequences for the validation data
+        self.log("Generating validation sequences …")
+        seq_cb = lambda p: self._tick(
+                self._range(p/100, 30, 80)        # smooth 30→80 %
+            )
+        self.config.progress_callback = seq_cb
+        
         val_inputs, val_targets = self._generate_validation_sequences(
             processed_val_df, static_features_encoded
         )
+        self._tick(80)
         
         # 4. Run forecasting
+        # 4. forecast     (80-95 %)
+        fc_cb = lambda p: self._tick(
+            self._range(p/100, 80, 95)
+        )
+        self.config.progress_callback = fc_cb
+        
         forecaster = Forecaster(self.config, self.log)
         forecast_df = forecaster._predict_and_format(
             self.model, val_inputs, val_targets, self.coord_scaler
         )
+        self._tick(95)
         
         # 5. Visualize results
         visualizer = ResultsVisualizer(self.config, self.log)
         visualizer.run(forecast_df)
-
+          
         self.log("--- Prediction Pipeline Finished Successfully ---")
+        self._tick(100)
 
     def _load_artifacts(self):
         """Loads the trained model and preprocessing objects."""
+        
         self.log("Loading trained model and preprocessing artifacts...")
         try:
             self.model = load_model(self.model_path, custom_objects={
@@ -93,12 +161,13 @@ class PredictionPipeline:
             self.log("  All artifacts loaded successfully.")
         except Exception as e:
             raise IOError(f"Failed to load a required artifact. Error: {e}")
-
+        
     def _process_validation_data(
         self, validation_data_path: str
     ) -> Tuple[pd.DataFrame, List[str]]:
         """Loads and processes the new validation data using saved scalers."""
         self.log(f"Processing new validation data from: {validation_data_path}")
+        
         val_df = pd.read_csv(validation_data_path)
         
         # Use a temporary DataProcessor to apply transformations
@@ -132,6 +201,7 @@ class PredictionPipeline:
                 df_processed[existing_cols])
 
         self.log("  Validation data processed successfully.")
+        
         return df_processed, static_features
 
     def _generate_validation_sequences(
@@ -140,9 +210,9 @@ class PredictionPipeline:
         """Generates sequences from the processed validation data."""
         self.log("  Generating validation sequences...")
         
-        dynamic_features = [
-            c for c in [self.config.gwl_col, 'rainfall_mm'] 
-            if c in df.columns]
+        # dynamic_features = [
+        #     c for c in [self.config.gwl_col, 'rainfall_mm'] 
+        #     if c in df.columns]
         
         inputs, targets = prepare_pinn_data_sequences(
             df=df,
@@ -151,7 +221,7 @@ class PredictionPipeline:
             lat_col=self.config.lat_col,
             subsidence_col=self.config.subsidence_col,
             gwl_col=self.config.gwl_col,
-            dynamic_cols=dynamic_features,
+            dynamic_cols=self.config.dynamic_features,
             static_cols=static_features,
             future_cols=self.config.future_features,
             group_id_cols=[self.config.lon_col, self.config.lat_col],

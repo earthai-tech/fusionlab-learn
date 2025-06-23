@@ -8,7 +8,12 @@ import json
 import pandas as pd 
 from pathlib import Path
 
-from PyQt5.QtCore    import Qt,QThread,  pyqtSignal, QAbstractTableModel, QModelIndex
+from PyQt5.QtCore    import ( 
+    Qt, QThread,  pyqtSignal, 
+    QAbstractTableModel, 
+    QModelIndex, 
+    pyqtSlot
+)
 from PyQt5.QtGui     import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -74,6 +79,21 @@ QTextEdit {{
     border: 1px solid #cccccc;
 }}
 """
+
+def launch_cli() -> None:
+    """
+    Console-entry wrapper that simply runs the QApplication
+    without printing debug noise.
+    """
+    from PyQt5.QtWidgets import QApplication
+    import sys
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(open("style.qss").read() if os.path.exists("style.qss") else "")
+    gui = MiniForecaster()
+    gui.show()
+    sys.exit(app.exec_())
+
 
 #-- tiny editable DataFrame model 
 class _PandasModel(QAbstractTableModel):
@@ -221,7 +241,7 @@ class CsvEditDialog(QDialog):
         self.model._df = self._df_view
         self.model.endResetModel()
 
-    # -public API -------------------------------------
+    # -public API 
     def edited_dataframe(self) -> pd.DataFrame:
         """
         Return the **full** (possibly edited) DataFrame.
@@ -253,27 +273,31 @@ class Worker(QThread):
     def run(self):
         try:
             self.status_msg.emit("📊 Pre-processing…")
-            self.progress_val.emit(self._p(0, 0, 10))       # 0 %
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, 0, 10) 
+            )
             processor = DataProcessor(
                 self.cfg, self.log_msg.emit, 
                 raw_df=self.edited_df  
             )
             df_proc   = processor.run()
-            self.progress_val.emit(self._p(1, 0, 10))       # 10 %
+            self.progress_val.emit(10)
 
             self.status_msg.emit("🌀 Generating sequences…")
-            self.progress_val.emit(self._p(0, 10, 30))      # 10 %
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+               self._p(p / 100, 10, 30)           # ← divide by 100!
+            )      
             seq_gen   = SequenceGenerator(self.cfg, self.log_msg.emit)
             train_ds, val_ds = seq_gen.run(
                 df_proc, processor.static_features_encoded
             )
-            self.progress_val.emit(self._p(1, 10, 30))      # 30 %
+            self.progress_val.emit(30)
             
             self.status_msg.emit("🔧 Training…")
             train_range = (30, 90)
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p / 100, *train_range)
-            )
+                self._p(p/100, *train_range))    # ← same here
+            
             sample_inputs, _ = next(iter(train_ds))
             shapes = {k: v.shape for k, v in sample_inputs.items()}
             model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
@@ -282,7 +306,10 @@ class Worker(QThread):
             self.progress_val.emit(train_range[1])          # 90 %
 
             self.status_msg.emit("🔮 Forecasting…")
-            self.progress_val.emit(self._p(0, 90, 100))
+            forecast_range = (90, 100)
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, *forecast_range)          
+            )
             forecast_df = Forecaster(self.cfg, self.log_msg.emit).run(
                 model=model,
                 test_df=seq_gen.test_df,
@@ -335,22 +362,20 @@ class MiniForecaster(QMainWindow):
         self.log_updated.connect(self._log)
         self.status_updated.connect(self.file_label.setText)
         self.progress_updated.connect(self.progress_bar.setValue)
-        self.coverage_ready.connect(self._update_coverage_label)
+        self.coverage_ready.connect(self._set_coverage)
         
         VIS_SIGNALS.figure_saved.connect(self._show_image_popup)
 
     def _show_image_popup(self, png_path: str) -> None:
         ImagePreviewDialog(png_path, parent=self).exec_()
         
-    def _update_coverage_label(self, cv: float):
-        """
-        Slot connected to `coverage_ready(float)`.
-        Shows “cov-result: 0.803”, where the number is orange (SECONDARY).
-        """
+    @pyqtSlot(float)
+    def _set_coverage(self, value: float):
+        # orange & bold *value* only
         self.coverage_lbl.setText(
-                f'cov-result: <span style="color:{SECONDARY};'
-                f'font-weight:bold;">{cv:.3f}</span>'
-            )
+            f"cov-result:&nbsp;<span style='color:{SECONDARY}; "
+            f"font-weight:bold'>{value:.3f}</span>"
+        )
 
         #self.coverage_lbl.setText(f"cov-result: <b>{cv:.3f}</b>")
     
@@ -358,7 +383,7 @@ class MiniForecaster(QMainWindow):
         root = QWidget(); self.setCentralWidget(root)
         L = QVBoxLayout(root)
 
-        # 0) logo + title ------------------------------------------
+        # 0) logo + title
         logo = QLabel()
         logo.setPixmap(QPixmap("fusionlab_logo.png").scaled(
             72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -452,6 +477,7 @@ class MiniForecaster(QMainWindow):
         
         # ❶ coverage label starts empty – will be filled later
         self.coverage_lbl = QLabel("")
+        self.coverage_lbl.setObjectName("covLabel") 
         self.coverage_lbl.setStyleSheet("font-size:10px;")
         footer.addWidget(self.coverage_lbl)
         
@@ -694,7 +720,7 @@ class MiniForecaster(QMainWindow):
                                 else f"Selected: {self.file_path.name}")
         self.progress_bar.setValue(0)
         self.city_input.clear()
-
+        self.coverage_lbl.clear() 
         self._log("ℹ Interface reset.")
         
         # self.file_path = None

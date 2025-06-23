@@ -316,13 +316,23 @@ class Forecaster:
 
         return self._predict_and_format(
             model, inputs_test, targets_test, coord_scaler)
-
+    
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+            
     def _prepare_test_sequences(
         self, test_df, val_dataset, static_features, coord_scaler
     ) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
         Prepares test sequences, with a fallback to the validation set.
         """
+        self._tick(0)
         try:
             if test_df.empty:
                 raise ValueError("Test DataFrame is empty.")
@@ -379,6 +389,7 @@ class Forecaster:
             except Exception as fallback_e:
                 self.log(f"  [ERROR] Critical fallback failed: {fallback_e}")
                 return None, None
+        self._tick(80)
 
     def _predict_and_format(
         self, model, inputs_test, targets_test, coord_scaler
@@ -423,4 +434,5 @@ class Forecaster:
             return forecast_df
         
         self.log("  Warning: No final forecast DataFrame was generated.")
+        self._tick(100)
         return None

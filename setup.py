@@ -70,6 +70,9 @@ setup_kwargs = {
     'entry_points': {
         'console_scripts': [
             'fusionlab=fusionlab.cli:main',
+            
+            # NEW – launches the PyQt mini GUI
+            'fusionlab-mini-forecaster = fusionlab.tools.app.mini_forecaster_gui:launch_cli',
         ]
     },
     'packages': find_packages(exclude=['docs', 'tests', 'examples']), 

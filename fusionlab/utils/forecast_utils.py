@@ -304,7 +304,9 @@ def format_forecast_dataframe(
                      level=2, verbose=verbose, logger = _logger 
                      )
 
-            return pivot_forecast_dataframe(df.copy(), **pivot_args)
+            return pivot_forecast_dataframe(
+                df.copy(), _logger =_logger,  
+                **pivot_args)
         
         elif detected_format == 'wide':
             vlog("`to_wide` is True but DataFrame is already in wide "

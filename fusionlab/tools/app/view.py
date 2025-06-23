@@ -34,7 +34,7 @@ class ResultsVisualizer:
         """
         self.config = config
         self.log = log_callback or print
-
+    
     def run(self, forecast_df: Optional[pd.DataFrame]):
         """
         Executes the full visualization and saving pipeline.
@@ -108,6 +108,7 @@ class ResultsVisualizer:
         png_png = f"{png_base_subs}.png"          
         VIS_SIGNALS.figure_saved.emit(png_png)
         
+        
         # Plot for GWL if configured
         gwl_pred_col = f"{self.config.gwl_col}_q50" if self.config.quantiles \
             else f"{self.config.gwl_col}_pred"
@@ -137,7 +138,7 @@ class ResultsVisualizer:
             )
             png_gwl_png  = f"{png_base_gwl}.png"
             VIS_SIGNALS.figure_saved.emit(png_gwl_png)  
-           
+        
     def _run_forecast_view(self, df: pd.DataFrame):
         """Runs the yearly comparison plot."""
         try:
@@ -164,7 +165,7 @@ class ResultsVisualizer:
             self.log(f"  Forecast view figures saved to: {self.config.run_output_path}")
         except Exception as e:
             self.log(f"  [Warning] Could not generate forecast view plot: {e}")
-
+            
     def _save_all_figures(self):
         """Saves all open matplotlib figures."""
         try:
