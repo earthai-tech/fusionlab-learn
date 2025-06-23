@@ -547,7 +547,18 @@ def save_predictions(future_data, data_path):
         logger.error("Failed to save predictions: %s", e)
         raise
 
-def main(args):
+def run_workflow ( 
+    data_path: str,
+    epochs: int = 100,
+    batch_size: int = 32,
+    time_steps: int = 4,
+    forecast_horizon: int = 4,
+    quantiles: list = [0.1, 0.5, 0.9],
+    verbose: int = 1,
+    save : bool = True, 
+    show : bool =False, 
+    **kwargs 
+    ): 
     """
     Main function to execute the XTFT probabilistic prediction workflow.
 
@@ -565,19 +576,19 @@ def main(args):
     logger.info("Starting XTFT probabilistic forecasting script...")
     logger.info(f"Using package versions: {pkgs_versions}")
     
-    if args.verbose == 0:
+    if verbose == 0:
         logger.setLevel(logging.WARNING)
-    elif args.verbose == 2:
+    elif verbose == 2:
         logger.setLevel(logging.DEBUG)
     else:
         logger.setLevel(logging.INFO)
         
-    data_path = args.data_path
-    epochs = args.epochs
-    batch_size = args.batch_size
-    time_steps = args.time_steps
-    forecast_horizon = args.forecast_horizon
-    quantiles = args.quantiles
+    # data_path = args.data_path
+    # epochs = args.epochs
+    # batch_size = args.batch_size
+    # time_steps = args.time_steps
+    # forecast_horizon = args.forecast_horizon
+    # quantiles = args.quantiles
 
     # Load data
     final_data = load_data(data_path)
@@ -675,52 +686,52 @@ def main(args):
     # Visualize predictions
     visualize_predictions(future_data, quantiles, data_path)
 
-if __name__ == "__main__":
-    # --- Argument Parser for verbosity ---
-    parser = argparse.ArgumentParser(
-        description="XTFT Probabilistic Forecasting Script.")
-    parser.add_argument(
-        "--verbose", type=int, default=1, choices=[0, 1, 2],
-        help="Set the verbosity level (0: WARNING, 1: INFO, 2: DEBUG)."
-    )
+# if __name__ == "__main__":
+#     # --- Argument Parser for verbosity ---
+#     parser = argparse.ArgumentParser(
+#         description="XTFT Probabilistic Forecasting Script.")
+#     parser.add_argument(
+#         "--verbose", type=int, default=1, choices=[0, 1, 2],
+#         help="Set the verbosity level (0: WARNING, 1: INFO, 2: DEBUG)."
+#     )
 
-    parser.add_argument(
-        '--data_path',
-        type=str,
-        required=True,
-        help='Path to the data directory.'
-    )
-    parser.add_argument(
-        '--epochs',
-        type=int,
-        default=100,
-        help='Number of training epochs.'
-    )
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=32,
-        help='Training batch size.'
-    )
-    parser.add_argument(
-        '--time_steps',
-        type=int,
-        default=4,
-        help='Number of time steps in each sequence.'
-    )
-    parser.add_argument(
-        '--forecast_horizon',
-        type=int,
-        default=4,
-        help='Number of future steps to predict.'
-    )
-    parser.add_argument(
-        '--quantiles',
-        type=float,
-        nargs='+',
-        default=[0.1, 0.5, 0.9],
-        help='List of quantiles for probabilistic prediction.'
-    )
+#     parser.add_argument(
+#         '--data_path',
+#         type=str,
+#         required=True,
+#         help='Path to the data directory.'
+#     )
+#     parser.add_argument(
+#         '--epochs',
+#         type=int,
+#         default=100,
+#         help='Number of training epochs.'
+#     )
+#     parser.add_argument(
+#         '--batch_size',
+#         type=int,
+#         default=32,
+#         help='Training batch size.'
+#     )
+#     parser.add_argument(
+#         '--time_steps',
+#         type=int,
+#         default=4,
+#         help='Number of time steps in each sequence.'
+#     )
+#     parser.add_argument(
+#         '--forecast_horizon',
+#         type=int,
+#         default=4,
+#         help='Number of future steps to predict.'
+#     )
+#     parser.add_argument(
+#         '--quantiles',
+#         type=float,
+#         nargs='+',
+#         default=[0.1, 0.5, 0.9],
+#         help='List of quantiles for probabilistic prediction.'
+#     )
 
-    args = parser.parse_args()
-    main(args)
+#     args = parser.parse_args()
+#     main(args)

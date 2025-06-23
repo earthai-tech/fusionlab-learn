@@ -106,9 +106,14 @@ These are the primary controls for managing the workflow.
 * **Run**: Located at the bottom left, this button starts the
   end-to-end workflow using the current configuration. It becomes
   disabled while a process is running.
+  
 * **Reset**: Located at the top right, this button clears all logs and
   results and resets all configuration options to their default values.
-
+  
+* **Stop**: Appears next to *Reset* once the workflow is running.  
+  Click to gracefully interrupt the current process (sequence generation,
+  training, or forecasting). The button is disabled when the GUI is idle.
+  
 **2. Data Preview and Editing**
 *******************************
 After a CSV file is selected, a new **"Preview & Edit Data"** button
@@ -165,7 +170,9 @@ process.
   input for the model's encoder.
 * **Quantiles (comma-separated)**: A list of quantiles for probabilistic
   forecasting (e.g., `0.1, 0.5, 0.9`). Leave blank for point forecasting.
-
+* **Checkpoint Format**: Select the file format used when saving model
+  checkpoints—``weights`` (recommended for the GUI), ``keras``, or ``tf``.
+  
 **5. Physical Parameters**
 **************************
 This panel gives you fine-grained control over the physics-informed components.
@@ -245,6 +252,12 @@ two main ways: status updates on the main window and an interactive plot viewer.
   forecast visualizations. This viewer allows you to inspect the
   visuals closely and provides options to "Save as..." or "Copy to
   clipboard" for easy export.
+
+* **Zoom & Pan Controls:** The viewer includes a translucent floating
+  toolbar in the upper-left corner with **“+”** (zoom in),
+  **“–”** (zoom out) and **“□”** (fit view) buttons.
+  You can also scroll the mouse wheel to zoom and drag with the left
+  mouse button to pan the image for detailed inspection.
   
 * **Final Log Messages**: The log panel will show the final messages,
   including confirmation that all figures have been saved and the path

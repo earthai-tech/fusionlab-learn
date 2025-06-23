@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Dict, Any
-from typing import Tuple
+from typing import Tuple, Callable  
 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
@@ -33,11 +33,12 @@ class DataProcessor:
     """
     Handles the data loading and preprocessing workflow (Steps 1-5).
     """
+    
     def __init__(
-            self, config: SubsConfig, 
-            log_callback: Optional[callable] = None, 
-            raw_df: Optional[pd.DataFrame] = None       
-            ):
+        self, config: SubsConfig, 
+        log_callback: Optional[callable] = None, 
+        raw_df: Optional[pd.DataFrame] = None       
+        ):
         """
         Initializes the processor with a configuration object.
 
@@ -56,10 +57,21 @@ class DataProcessor:
         self.encoder = None
         self.scaler = None
 
+    # PRIVATE helper: emit progress locally (0-100 %)
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+            
     def load_data(self) -> pd.DataFrame:
         """
         Handles Step 1: Loading the dataset from a file or by fetching it.
         """
+        self._tick(0)  
         if self.raw_df is not None:
             self.log(f"Step 1: Using in-memory DataFrame – shape {self.raw_df.shape}")
         else: 
@@ -92,7 +104,9 @@ class DataProcessor:
                 self.config.run_output_path, "01_raw_data.csv")
             self.raw_df.to_csv(save_path, index=False)
             self.log(f"  Saved raw data artifact to: {save_path}")
-            
+        
+        self._tick(20) 
+        
         return self.raw_df
 
     def preprocess_data(self) -> pd.DataFrame:
@@ -141,6 +155,8 @@ class DataProcessor:
         self.log("  Cleaning NaN values...")
         df_cleaned = nan_ops(df_selected, ops='sanitize', action='fill')
         
+        self._tick(40)
+        
         # --- Encoding ---
         df_processed = df_cleaned
         if self.config.categorical_cols:
@@ -165,7 +181,9 @@ class DataProcessor:
                 # pd.DataFrame(
                 #     encoded_data, columns=encoded_cols, index=df_cleaned.index)
             ], axis=1)
-
+        
+        self._tick(60)
+        
         # --- Time Coordinate and Normalization ---
         self.log("  Creating and normalizing time coordinate...")
         # Ensure time column is datetime for processing
@@ -204,6 +222,7 @@ class DataProcessor:
         
         self.processed_df = df_processed
         self.log("  Data preprocessing complete.")
+        self._tick(80)
         
         if self.config.save_intermediate:
             # Save artifacts
@@ -218,7 +237,8 @@ class DataProcessor:
             if self.scaler:
                 save_job(self.scaler, os.path.join(
                     self.config.run_output_path, "main_scaler.joblib"))
-                
+        
+        self._tick(100)
         return self.processed_df
 
     def split_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -257,9 +277,10 @@ class SequenceGenerator:
     """
     Handles sequence generation and dataset creation (Steps 5-6).
     """
+    ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(
-            self, config: SubsConfig, 
-            log_callback: Optional[callable] = None
+        self, config: SubsConfig, 
+        log_callback: Optional[callable] = None, 
         ):
         """
         Initializes the generator with a configuration object.
@@ -272,9 +293,20 @@ class SequenceGenerator:
         self.train_df = None
         self.test_df = None
 
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+            
     def run(
             self, processed_df: pd.DataFrame, 
-            static_features_encoded: List[str]) -> Tuple[Any, Any]:
+            static_features_encoded: List[str], 
+            stop_check: Callable[[], bool] = None,
+            ) -> Tuple[Any, Any]:
         """
         Executes the full sequence and dataset creation pipeline.
         
@@ -282,7 +314,10 @@ class SequenceGenerator:
             A tuple of (train_dataset, validation_dataset).
         """
         self._split_data(processed_df)
-        self._generate_sequences(self.train_df, static_features_encoded)
+        self._generate_sequences(
+            self.train_df, static_features_encoded, 
+            stop_check= stop_check 
+        )
         return self._create_tf_datasets()
 
 
@@ -292,6 +327,7 @@ class SequenceGenerator:
         Handles Step 5: Splitting the data into training and test sets
         robustly.
         """
+        self._tick(0)
         if df is None:
             raise RuntimeError("Data must be preprocessed before splitting.")
 
@@ -324,6 +360,7 @@ class SequenceGenerator:
         test_mask = year_series >= self.config.forecast_start_year
         
         self.train_df = df[train_mask].copy()
+        
         # For the test set, we need to include a lookback period
         # for sequence generation. The `prepare_pinn_data_sequences`
         # handles the windowing, so we just need to provide the data
@@ -339,12 +376,13 @@ class SequenceGenerator:
                 f"Training data is empty after splitting on year <="
                 f" {self.config.train_end_year}."
             )
-            
+        self._tick(10)
         return self.train_df, self.test_df
     
     def _generate_sequences(
             self, train_master_df: pd.DataFrame, 
-            static_features: List[str]
+            static_features: List[str], 
+            stop_check =None, 
         ):
         """Generates PINN-compatible sequences from the training data."""
         self.log("  Generating PINN training sequences...")
@@ -358,6 +396,11 @@ class SequenceGenerator:
         dynamic_features = [
             c for c in dynamic_features if c in train_master_df.columns]
         
+        self._tick(30)
+        
+        lo, hi = 30, 80                      # global slice for seq-gen
+        hook = lambda f: self._tick(self.ZOOM(f, lo, hi))
+    
         inputs, targets, scaler = prepare_pinn_data_sequences(
             df=train_master_df,
             time_col='time_numeric',
@@ -376,10 +419,12 @@ class SequenceGenerator:
             normalize_coords=True,
             return_coord_scaler=True,
             mode=self.config.mode,
-            verbose=self.config.verbose,  
+            progress_hook=hook, 
+            stop_check= stop_check, 
+            verbose=self.config.verbose,  # Can be linked to a config verbose level, 
             _logger = self.log 
         )
-
+        self._tick(80)
         if targets['subsidence'].shape[0] == 0:
             raise ValueError(
                 "Sequence generation produced no training samples.")
@@ -438,7 +483,7 @@ class SequenceGenerator:
         
         self.log(f"  Training dataset created with {train_size} samples.")
         self.log(f"  Validation dataset created with {val_size} samples.")
-        
+        self._tick(100)
         return train_dataset, val_dataset
 
 

@@ -988,6 +988,8 @@ def prepare_pinn_data_sequences(
     return_coord_scaler: bool =False, 
     mode: Optional[str] =None, 
     savefile: Optional[str] = None,
+    progress_hook: Optional[Callable[[float], None]] = None,
+    stop_check: Callable[[], bool] = None, 
     verbose: int = 0,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **kws
@@ -1109,6 +1111,11 @@ def prepare_pinn_data_sequences(
     savefile : str or None, default None
         Path to a ``.joblib`` file.  When provided, all produced arrays and
         meta‑data are serialised for reproducibility and faster reloads.
+        
+    progress_hook : callable, optional
+        Function that receives a float in [0,1] each time a chunk
+        of work is finished.  When None (default) no progress is sent.
+        
     verbose : int, default 0
         Verbosity level for logging (0-10).
         - 0: Silent.
@@ -1223,6 +1230,11 @@ def prepare_pinn_data_sequences(
         Generic sliding‑window generator used internally.
     
     """
+    # -------------------------------------------------------------------------
+    # tiny helper – maps a 0‒1 fraction into an arbitrary range
+    _to_range = lambda f, lo, hi: lo + (hi - lo) * f          # noqa: E731
+    #                 ^fraction      ^global range
+    # -------------------------------------------------------------------------
     
     # Entry log
     vlog("Starting PINN data sequence preparation...",
@@ -1354,7 +1366,8 @@ def prepare_pinn_data_sequences(
         coord_y=lat_col, 
         scale_coords= normalize_coords, 
         cols_to_scale =cols_to_scale, 
-        verbose =verbose 
+        verbose =verbose, 
+        _logger = _logger, 
     )
 
     # --- 2. Group and Sort Data ---
@@ -1403,10 +1416,18 @@ def prepare_pinn_data_sequences(
             f" length per group: {min_len_per_group}."
         )
 
-    for group_key in group_keys:
+    n_groups = len(group_keys) or 1          # avoid div/0 if no grouping
+    for g_idx, group_key in enumerate(group_keys):
         group_df = grouped_data.get_group(group_key) if group_id_cols else df_proc
         
+        if stop_check and stop_check():
+            raise InterruptedError("Sequence generation aborted by user")
+        
         key_str = group_key if group_key is not None else "<Full Dataset>"
+        # ── progress: 0 → 50 %
+        if progress_hook is not None:
+            progress_hook(_to_range((g_idx + 1) / n_groups, 0.0, 0.50))
+                          
         if len(group_df) < min_len_per_group:
             if verbose >= 5: # More detailed per-group logging
                 logger.info(
@@ -1432,6 +1453,8 @@ def prepare_pinn_data_sequences(
              verbose=verbose, 
              level=6, logger=_logger
             )
+        
+        
         
     if total_sequences == 0:
         raise ValueError(
@@ -1513,11 +1536,16 @@ def prepare_pinn_data_sequences(
     vlog("Populating arrays with data...",
         verbose=verbose, level=2, logger=_logger)
     
+    total_seq = sum(len(gdf) - min_len_per_group + 1
+                for gdf in valid_group_dfs) or 1
+    done_seq  = 0   
+    
     for group_df in valid_group_dfs: # Iterate over pre-filtered valid groups
         group_t_coords = group_df[numerical_time_col].values
         group_x_coords = group_df[lon_col].values
         group_y_coords = group_df[lat_col].values
 
+        
         # # Normalization parameters for coordinates (per group if grouped)
         # t_min, t_max = group_t_coords.min(), group_t_coords.max()
         # x_min, x_max = group_x_coords.min(), group_x_coords.max()
@@ -1559,6 +1587,15 @@ def prepare_pinn_data_sequences(
 
         num_seq_in_this_group = len(group_df) - min_len_per_group + 1
         for i in range(num_seq_in_this_group):
+            
+            # ­­­ existing sequence logic …
+            done_seq += 1
+            if progress_hook is not None:
+                # from 50% to 100%
+                progress_hook(_to_range(done_seq / total_seq, 0.5, 1.00))
+                
+            if stop_check and stop_check():
+                raise InterruptedError("Sequence generation aborted by user")
             # --- Static Features ---
             if static_cols and num_static_feats > 0:
                 static_features_arr[current_seq_idx] = group_static_vals

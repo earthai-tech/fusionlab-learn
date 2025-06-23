@@ -1247,7 +1247,7 @@ def validate_xtft_inputs_in(
                     future_covariate_input,
                     dtype=tf_float32
                 )
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError) as e: 
                 raise ValueError(
                     "Failed to convert ``future_covariate_input``"
                     f"  to a TensorFlow tensor: {e}"

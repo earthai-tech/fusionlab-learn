@@ -8,8 +8,13 @@ import json
 import pandas as pd 
 from pathlib import Path
 
-from PyQt5.QtCore    import Qt,QThread,  pyqtSignal, QAbstractTableModel, QModelIndex
-from PyQt5.QtGui     import QIcon, QPixmap
+from PyQt5.QtCore    import ( 
+    Qt, QThread,  pyqtSignal, 
+    QAbstractTableModel, 
+    QModelIndex, 
+    pyqtSlot
+)
+from PyQt5.QtGui     import QIcon, QPixmap,  QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QFrame, QPushButton, QLabel, QSpinBox, QDoubleSpinBox,
@@ -17,7 +22,8 @@ from PyQt5.QtWidgets import (
     QCheckBox
 )
 from PyQt5.QtWidgets import (
-    QDialog, QTableView, QMessageBox, QAction, QToolBar, QInputDialog
+    QDialog, QTableView, QMessageBox, QAction, QToolBar, QInputDialog, 
+    QToolTip
 )
 
 from fusionlab.tools.app.config      import SubsConfig
@@ -32,6 +38,8 @@ PRIMARY   = "#2E3191"
 SECONDARY = "#F28620"   
 BG_LIGHT  = "#fafafa"
 FG_DARK   = "#1e1e1e"
+PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
+SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
 
 STYLE_SHEET = f"""
 QMainWindow {{
@@ -73,9 +81,37 @@ QTextEdit {{
     background: #f6f6f6;
     border: 1px solid #cccccc;
 }}
+
+QPushButton#reset, QPushButton#stop {{
+    background: #dadada;
+    color: #333;
+}}
+QPushButton#reset:hover:enabled,
+QPushButton#stop:hover:enabled {{
+    background: {SECONDARY};
+    color: white;
+}}
+
+QToolTip {{
+    /* translucent orange bubble, white text, subtle outline */
+    background: {SECONDARY_T70};
+    color: white;
+    border: 1px solid {SECONDARY};
+    border-radius: 4px;
+    padding: 4px 6px;
+}}
+
+QToolTip {{
+    background: {SECONDARY_T70};   /* translucent SECONDARY */
+    color: white;
+    border: 1px solid {SECONDARY};
+    padding: 4px;
+    border-radius: 4px;
+}}
+
 """
 
-#-- tiny editable DataFrame model 
+
 class _PandasModel(QAbstractTableModel):
     """Qt-model that exposes a *pandas* DataFrame (read / write)."""
 
@@ -138,7 +174,7 @@ class CsvEditDialog(QDialog):
                  parent=None, *, preview_rows: int = 200):
         super().__init__(parent)
         self.setWindowTitle("Preview & Editing Data")
-        self.resize(720, 300) # 820, 500)
+        self.resize(820, 400) # 820, 500)
 
         try:
             self._df_full = pd.read_csv(csv_path)
@@ -221,7 +257,7 @@ class CsvEditDialog(QDialog):
         self.model._df = self._df_view
         self.model.endResetModel()
 
-    # -public API -------------------------------------
+    # -public API 
     def edited_dataframe(self) -> pd.DataFrame:
         """
         Return the **full** (possibly edited) DataFrame.
@@ -253,27 +289,41 @@ class Worker(QThread):
     def run(self):
         try:
             self.status_msg.emit("📊 Pre-processing…")
-            self.progress_val.emit(self._p(0, 0, 10))       # 0 %
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, 0, 10) 
+            )
             processor = DataProcessor(
                 self.cfg, self.log_msg.emit, 
                 raw_df=self.edited_df  
             )
             df_proc   = processor.run()
-            self.progress_val.emit(self._p(1, 0, 10))       # 10 %
+            self.progress_val.emit(10)
 
+            if self.isInterruptionRequested():          # ← CHECK #1
+                return
             self.status_msg.emit("🌀 Generating sequences…")
-            self.progress_val.emit(self._p(0, 10, 30))      # 10 %
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+               self._p(p / 100, 10, 30)           # ← divide by 100!
+            )      
             seq_gen   = SequenceGenerator(self.cfg, self.log_msg.emit)
-            train_ds, val_ds = seq_gen.run(
-                df_proc, processor.static_features_encoded
-            )
-            self.progress_val.emit(self._p(1, 10, 30))      # 30 %
+            try: 
+                train_ds, val_ds = seq_gen.run(
+                    df_proc, processor.static_features_encoded, 
+                    stop_check=self.isInterruptionRequested
+                )
+            except InterruptedError:
+                return
+              
+            self.progress_val.emit(30)
+            
+            if self.isInterruptionRequested():          # ← CHECK #2
+                return
             
             self.status_msg.emit("🔧 Training…")
             train_range = (30, 90)
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p / 100, *train_range)
-            )
+                self._p(p/100, *train_range))    # ← same here
+            
             sample_inputs, _ = next(iter(train_ds))
             shapes = {k: v.shape for k, v in sample_inputs.items()}
             model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
@@ -281,8 +331,13 @@ class Worker(QThread):
             )
             self.progress_val.emit(train_range[1])          # 90 %
 
+            if self.isInterruptionRequested():          # ← CHECK #3
+                return
             self.status_msg.emit("🔮 Forecasting…")
-            self.progress_val.emit(self._p(0, 90, 100))
+            forecast_range = (90, 100)
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, *forecast_range)          
+            )
             forecast_df = Forecaster(self.cfg, self.log_msg.emit).run(
                 model=model,
                 test_df=seq_gen.test_df,
@@ -291,17 +346,16 @@ class Worker(QThread):
                 coord_scaler=seq_gen.coord_scaler,
             )
             self._write_coverage_result () 
-            
-            ResultsVisualizer(self.cfg, self.log_msg.emit).run(forecast_df)
             self.status_msg.emit("✔ Forecast finished.")
             self.progress_val.emit(100)
-
+            
+            ResultsVisualizer(self.cfg, self.log_msg.emit).run(forecast_df)
+            
         except Exception as e:
             self.log_msg.emit(f"❌ {e}")
             
     def _write_coverage_result(self) :
         if self.cfg.evaluate_coverage and self.cfg.quantiles:
-            # the helper wrote '…/coverage_result.json'
             json_path = os.path.join(self.cfg.run_output_path,
                                      "coverage_result.json")
             try:
@@ -323,34 +377,49 @@ class MiniForecaster(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self._log_cache: list[str] = []
         self.setWindowTitle("Fusionlab-learn – PINN Mini GUI")
-        self.setFixedSize(780, 560)
+        self.setFixedSize(880, 660)
         self.file_path: Path | None = None
-
-        logo = QIcon(os.path.join(os.path.dirname(__file__),
-                                  "fusionlab_learn_logo.png"))
-        self.setWindowIcon(logo)
         
+        # --- app icon (title-bar & task-bar) -----------------------------
+        icon_path = os.path.join(os.path.dirname(__file__),
+                                 "fusionlab_learn_logo.ico")
+        app_icon  = QIcon(icon_path)          # QIcon silently handles “file not found”
+        self.setWindowIcon(app_icon)
+        
+        # --- in-window logo (top of GUI) 
+        logo_lbl  = QLabel()
+        pix_path  = os.path.join(os.path.dirname(__file__), "fusionlab_learn_logo.png")
+        pix_logo  = QPixmap(pix_path)
+        
+        if not pix_logo.isNull():             # only set the pixmap if the file exists
+            logo_lbl.setPixmap(
+                pix_logo.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        else:
+            logo_lbl.setText("Fusionlab-learn") # graceful fallback (optional)
+        
+        logo_lbl.setAlignment(Qt.AlignCenter)
+
         self._build_ui()
         self.log_updated.connect(self._log)
         self.status_updated.connect(self.file_label.setText)
         self.progress_updated.connect(self.progress_bar.setValue)
-        self.coverage_ready.connect(self._update_coverage_label)
+        self.coverage_ready.connect(self._set_coverage)
         
         VIS_SIGNALS.figure_saved.connect(self._show_image_popup)
 
     def _show_image_popup(self, png_path: str) -> None:
         ImagePreviewDialog(png_path, parent=self).exec_()
         
-    def _update_coverage_label(self, cv: float):
-        """
-        Slot connected to `coverage_ready(float)`.
-        Shows “cov-result: 0.803”, where the number is orange (SECONDARY).
-        """
+    @pyqtSlot(float)
+    def _set_coverage(self, value: float):
+        # orange & bold *value* only
         self.coverage_lbl.setText(
-                f'cov-result: <span style="color:{SECONDARY};'
-                f'font-weight:bold;">{cv:.3f}</span>'
-            )
+            f"cov-result:&nbsp;<span style='color:{SECONDARY}; "
+            f"font-weight:bold'>{value:.3f}</span>"
+        )
 
         #self.coverage_lbl.setText(f"cov-result: <b>{cv:.3f}</b>")
     
@@ -358,7 +427,7 @@ class MiniForecaster(QMainWindow):
         root = QWidget(); self.setCentralWidget(root)
         L = QVBoxLayout(root)
 
-        # 0) logo + title ------------------------------------------
+        # 0) logo + title
         logo = QLabel()
         logo.setPixmap(QPixmap("fusionlab_logo.png").scaled(
             72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
@@ -382,11 +451,20 @@ class MiniForecaster(QMainWindow):
         self.file_label.setStyleSheet("font-style:italic;")
         row.addWidget(self.file_label, 1)          # stretch-factor = 1
         
+        # row with Run / log already exists …
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setObjectName("stop")   
+        self.stop_btn.setEnabled(False) 
+        self.stop_btn.setToolTip("Abort the running workflow")                
+        self.stop_btn.clicked.connect(self._stop_worker)
+        row.addWidget(self.stop_btn)
+
         # right-hand Reset button
         self.reset_btn = QPushButton("Reset")
+        self.reset_btn.setObjectName("reset")   
         self.reset_btn.setToolTip("Clear selections & log")
         self.reset_btn.setFixedWidth(70)
-        self.reset_btn.setStyleSheet("background:#dadada; color:#333;")
+
         self.reset_btn.clicked.connect(self._on_reset)
         row.addWidget(self.reset_btn)
         
@@ -452,6 +530,7 @@ class MiniForecaster(QMainWindow):
         
         # ❶ coverage label starts empty – will be filled later
         self.coverage_lbl = QLabel("")
+        self.coverage_lbl.setObjectName("covLabel") 
         self.coverage_lbl.setStyleSheet("font-size:10px;")
         footer.addWidget(self.coverage_lbl)
         
@@ -468,6 +547,18 @@ class MiniForecaster(QMainWindow):
         
         bottom.addLayout(footer)
         self.progress_updated.connect(self.progress_bar.setValue)
+
+    def _stop_worker(self):
+        if self.worker and self.worker.isRunning():
+            self.worker.requestInterruption()
+            self.status_updated.emit("⏹ Stopping workflow …")
+            self.stop_btn.setEnabled(False)      # grey it out
+            self.worker.requestInterruption()  
+        
+        # if hasattr(self, "worker") and self.worker.isRunning():
+        #     self._log("⏹ Stopping workflow …")
+        #     self.worker.requestInterruption()   # graceful
+        #     self.worker.wait(500)               # give it 0.5 s
 
     def _training_card(self) -> QFrame:
         card = QFrame(); card.setObjectName("card")
@@ -505,6 +596,14 @@ class MiniForecaster(QMainWindow):
         self.quantiles_input = QLineEdit()
         self.quantiles_input.setText("0.1, 0.5, 0.9")
         form.addRow("Quantiles (comma-separated):", self.quantiles_input)
+        
+        self.save_format_combo = QComboBox()
+        self.save_format_combo.addItems(["weights", "keras", "tf"])
+        self.save_format_combo.setCurrentText("weights")
+        self.save_format_combo.setToolTip(
+            "On-GUI training only supports 'weights' reliably.\n"
+            "Select 'keras' or 'tf' if you plan to train outside the GUI.")
+        form.addRow("Checkpoint format:", self.save_format_combo)
     
         lay.addLayout(form)
         return card
@@ -651,8 +750,15 @@ class MiniForecaster(QMainWindow):
     def _title(self, txt): 
         l = QLabel(txt); l.setObjectName("cardTitle"); return l
         
-    def _log(self, msg):  
-        self.log.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+    def _log(self, msg): 
+        """
+        Print one line in the QTextEdit **and** keep a copy in memory
+        so we can dump everything to disk when the worker stops.
+        """
+        ts = time.strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        self._log_cache.append(line)                         # (2) cache
+        self.log.append(line)
         self.log.verticalScrollBar().setValue(
             self.log.verticalScrollBar().maximum())
         # QApplication.processEvents()  
@@ -694,7 +800,7 @@ class MiniForecaster(QMainWindow):
                                 else f"Selected: {self.file_path.name}")
         self.progress_bar.setValue(0)
         self.city_input.clear()
-
+        self.coverage_lbl.clear() 
         self._log("ℹ Interface reset.")
         
         # self.file_path = None
@@ -717,6 +823,11 @@ class MiniForecaster(QMainWindow):
         dyn_list  = _parse(self.dyn_feat.text())
         stat_list = _parse(self.stat_feat.text())
         fut_list  = _parse(self.fut_feat.text())
+        
+        save_fmt = self.save_format_combo.currentText().lower()
+        if save_fmt != "weights":
+            self._log(f"⚠ You selected save_format='{save_fmt}'. "
+                      "GUI mode is battle-tested only with 'weights'.")
 
         cfg = SubsConfig(
             city_name     = self.city_input.text().strip() or "unnamed",
@@ -751,6 +862,7 @@ class MiniForecaster(QMainWindow):
             evaluate_coverage      = self.coverage_checkbox.isChecked(),
             mode                   = self.model_type_combo.currentText(),  
             
+            save_format       = save_fmt,
             verbose       = 1,
     
         )
@@ -763,6 +875,9 @@ class MiniForecaster(QMainWindow):
         cfg.static_features  = stat_list
         cfg.future_features  = fut_list
         
+        self.run_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+    
         # ------- start worker --------------------------------------
         self.worker = Worker(
             cfg, 
@@ -773,14 +888,61 @@ class MiniForecaster(QMainWindow):
         self.worker.status_msg.connect(self.status_updated.emit)
         self.worker.progress_val.connect(self.progress_updated.emit)
         self.worker.coverage_val.connect(self.coverage_ready.emit)
-        self.worker.finished.connect(lambda: self.run_btn.setEnabled(True))
+        self.worker.finished.connect(self._worker_done)
+
+        # **Stop** button: one-shot lambda that tells the worker to stop
+        self.stop_btn.clicked.connect(
+            lambda: (self.worker.requestInterruption(),
+                     self.status_updated.emit("⏹ Stopping…"))
+        )
+        
         self.worker.start()
+        
+    def _worker_done(self):
+        """
+        Called from `self.worker.finished`.  
+        Saves the whole cached log to
+        <run-output-path>/gui_log_YYYYMMDD_HHMMSS.txt
+        and re-enables the buttons.
+        """
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        
+        # decide where to write
+        out_dir = getattr(self.worker.cfg, "run_output_path", ".")
+        ts      = time.strftime("%Y%m%d_%H%M%S")
+        fname   = os.path.join(out_dir, f"gui_log_{ts}.txt")
 
+        try:                                                 # limit size
+            MAX_LINES = 10_000          # ≈ a few MB; change at will
+            lines     = self._log_cache[-MAX_LINES:]
+            with open(fname, "w", encoding="utf-8") as fp:
+                fp.write("\n".join(lines))
+            self._log(f"📝 Log saved to: {fname}")
+        except Exception as err:
+            self._log(f"⚠ Could not write log file ({err})")
+    
+            self.status_updated.emit("⚪ Idle")
+        
 
-# ── entry point ─────
-if __name__ == "__main__":
+def launch_cli() -> None:
     app = QApplication(sys.argv)
-    app.setStyleSheet(open("style.qss").read() if os.path.exists("style.qss") else "")
-    app.setStyleSheet(STYLE_SHEET)  # in case STYLE_SHEET already loaded globally
-    gui = MiniForecaster(); gui.show()
+    
+    QToolTip.setFont(QFont("Helvetica Neue", 9))
+
+    if os.path.exists("style.qss"):
+        with open("style.qss", "r", encoding="utf-8") as f:
+            css = f.read()
+    else:
+        css = STYLE_SHEET                  # ← your in-code palette
+
+    app.setStyleSheet(css)
+
+    gui = MiniForecaster()
+    gui.show()
     sys.exit(app.exec_())
+
+
+
+if __name__ == "__main__":
+    launch_cli()

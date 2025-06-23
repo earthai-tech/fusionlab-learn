@@ -17,6 +17,7 @@ statsmodels==0.14.1 # Used for ts_utils analysis (ACF/PACF, Decomp, Tests)
 matplotlib>=3.5 # Used for visualization utilities and examples
 joblib>=1.1 # Used for saving/loading scalers, models
 pyyaml>=6.0
+click >=8.0
 
 # Documentation Tools (Sphinx & Extensions)
 # -----------------------------------------
