@@ -989,6 +989,7 @@ def prepare_pinn_data_sequences(
     mode: Optional[str] =None, 
     savefile: Optional[str] = None,
     progress_hook: Optional[Callable[[float], None]] = None,
+    stop_check: Callable[[], bool] = None, 
     verbose: int = 0,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     **kws
@@ -1419,6 +1420,9 @@ def prepare_pinn_data_sequences(
     for g_idx, group_key in enumerate(group_keys):
         group_df = grouped_data.get_group(group_key) if group_id_cols else df_proc
         
+        if stop_check and stop_check():
+            raise InterruptedError("Sequence generation aborted by user")
+        
         key_str = group_key if group_key is not None else "<Full Dataset>"
         # ── progress: 0 → 50 %
         if progress_hook is not None:
@@ -1590,6 +1594,8 @@ def prepare_pinn_data_sequences(
                 # from 50% to 100%
                 progress_hook(_to_range(done_seq / total_seq, 0.5, 1.00))
                 
+            if stop_check and stop_check():
+                raise InterruptedError("Sequence generation aborted by user")
             # --- Static Features ---
             if static_cols and num_static_feats > 0:
                 static_features_arr[current_seq_idx] = group_static_vals

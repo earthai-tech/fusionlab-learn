@@ -114,7 +114,6 @@ class _ZoomableView(QGraphicsView):
         super().mouseDoubleClickEvent(ev)
 
 
-#  Image preview dialog with floating zoom bar
 class ImagePreviewDialog(QDialog):
     """
     Zoomable preview pane with
@@ -128,11 +127,17 @@ class ImagePreviewDialog(QDialog):
     def __init__(self, png_path: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle(os.path.basename(png_path))
-        self.setMinimumSize(720, 480)
+        self.setMinimumSize(920, 680)
         self.png_path = png_path
 
         # central graphics view 
         self.view  = _ZoomableView()
+        # self.view.setRenderHints(
+        #         self.view.renderHints()
+        #         | QPainter.SmoothPixmapTransform
+        #         | QPainter.Antialiasing
+        # )
+                    
         scene      = QGraphicsScene(self)
         pix        = QPixmap(png_path)
 
@@ -215,7 +220,6 @@ class ImagePreviewDialog(QDialog):
         btn_fit_sc   = QShortcut(QKeySequence("Ctrl+0"),  self)
         btn_fit_sc.activated.connect(tb_fit.click)
 
-    # 
     def _save_as(self):
         dst, _ = QFileDialog.getSaveFileName(
             self, "Save figure as…", self.png_path,

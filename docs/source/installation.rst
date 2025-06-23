@@ -19,7 +19,7 @@ Before installing ``fusionlab-learn``, ensure you have the following:
 
 * **TensorFlow:** ``fusionlab-learn``'s core neural network models (like
   TFT, XTFT) currently rely heavily on TensorFlow. You need a
-  working installation of TensorFlow (version 2.10 or higher is
+  working installation of TensorFlow (version 2.15 or higher is
   recommended for compatibility with recent features and Python versions).
 
 Installation from PyPI (Recommended)
@@ -146,3 +146,43 @@ you can try:
        print(f"k-diagram not available via fusionlab.kdiagram: {e}")
        print("You might need to install it: pip install fusionlab-learn[kdiagram]")
 
+Using Command-Line Tools
+--------------------------
+
+After a successful installation, `pip` creates command-line entry points
+that allow you to use the library's tools directly from your terminal.
+
+**Main CLI Dispatcher**
+***********************
+The primary entry point is the ``fusionlab-learn`` command, which gives
+you access to all the modular tools like data processing, forecasting,
+and tuning.
+
+.. code-block:: bash
+
+   # See all available command groups
+   fusionlab-learn --help
+
+   # Get help for a specific command group, e.g., 'process'
+   fusionlab-learn process --help
+
+   # Run a specific command
+   fusionlab-learn process pivot-forecast --input-file ...
+
+.. seealso::
+   For a complete guide to all the available CLI commands and their
+   options, please refer to the :doc:`/user_guide/tools`.
+
+**Standalone GUI Application**
+******************************
+The installation also creates a direct command to launch the **Subsidence
+PINN Mini GUI**. This is a standalone desktop application for running the
+entire forecasting workflow without writing any code.
+
+.. code-block:: bash
+
+   fusionlab-learn-pinn-mini-forecaster
+
+Running this command will open the application window directly. For a
+detailed guide on using the GUI, please see the
+:doc:`/user_guide/pinn_gui_guide`.

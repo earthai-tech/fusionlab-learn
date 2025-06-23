@@ -274,6 +274,7 @@ class Forecaster:
     Handles generating predictions from a trained model and formatting
     the results into a DataFrame.
     """
+    ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(self, config: SubsConfig, log_callback: Optional[callable] = None):
         """
         Initializes the forecaster with a configuration object.
@@ -336,7 +337,8 @@ class Forecaster:
         try:
             if test_df.empty:
                 raise ValueError("Test DataFrame is empty.")
-            
+        
+            hook = lambda f: self._tick(self.ZOOM(f, 10, 80))
             self.log("  Attempting to generate PINN sequences from test data...")
             inputs, targets = prepare_pinn_data_sequences(
                 df=test_df,
@@ -353,6 +355,7 @@ class Forecaster:
                 forecast_horizon=self.config.forecast_horizon_years,
                 normalize_coords=True,
                 # return_coord_scaler= True, # we will use train scaler
+                progress_hook= hook,  
                 mode=self.config.mode, 
                 _logger = self.log 
             )
@@ -375,6 +378,7 @@ class Forecaster:
             return inputs, targets
 
         except Exception as e:
+            self._tick(10)
             self.log(f"\n  [WARNING] Could not generate test sequences: {e}")
             self.log("  Falling back to use the validation dataset for forecasting.")
             

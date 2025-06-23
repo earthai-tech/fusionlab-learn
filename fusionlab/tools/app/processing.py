@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Dict, Any
-from typing import Tuple
+from typing import Tuple, Callable  
 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
@@ -276,7 +276,9 @@ class SequenceGenerator:
     """
     ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(
-            self, config: SubsConfig, log_callback: Optional[callable] = None):
+        self, config: SubsConfig, 
+        log_callback: Optional[callable] = None, 
+        ):
         """
         Initializes the generator with a configuration object.
         """
@@ -299,7 +301,9 @@ class SequenceGenerator:
             
     def run(
             self, processed_df: pd.DataFrame, 
-            static_features_encoded: List[str]) -> Tuple[Any, Any]:
+            static_features_encoded: List[str], 
+            stop_check: Callable[[], bool] = None,
+            ) -> Tuple[Any, Any]:
         """
         Executes the full sequence and dataset creation pipeline.
         
@@ -307,7 +311,10 @@ class SequenceGenerator:
             A tuple of (train_dataset, validation_dataset).
         """
         self._split_data(processed_df)
-        self._generate_sequences(self.train_df, static_features_encoded)
+        self._generate_sequences(
+            self.train_df, static_features_encoded, 
+            stop_check= stop_check 
+        )
         return self._create_tf_datasets()
 
 
@@ -371,7 +378,8 @@ class SequenceGenerator:
     
     def _generate_sequences(
             self, train_master_df: pd.DataFrame, 
-            static_features: List[str]
+            static_features: List[str], 
+            stop_check =None, 
         ):
         """Generates PINN-compatible sequences from the training data."""
         self.log("  Generating PINN training sequences...")
@@ -409,6 +417,7 @@ class SequenceGenerator:
             return_coord_scaler=True,
             mode=self.config.mode,
             progress_hook=hook, 
+            stop_check= stop_check, 
             verbose=self.config.verbose,  # Can be linked to a config verbose level, 
             _logger = self.log 
         )
