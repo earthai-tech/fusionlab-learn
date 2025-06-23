@@ -24,6 +24,13 @@ try:
     from fusionlab.utils.generic_utils import ExistenceChecker
     from fusionlab.utils.forecast_utils import pivot_forecast_dataframe
     from fusionlab.utils.forecast_utils import format_forecast_dataframe
+    from fusionlab.tools.app.config import SubsConfig
+    from fusionlab.tools.app.processing import (
+        DataProcessor, SequenceGenerator, ModelTrainer, 
+        Forecaster, ResultsVisualizer
+    )
+    from fusionlab.tools.app.inference import PredictionPipeline
+    
 except ImportError:
     print("Error: Could not import fusionlab utilities. "
           "Please ensure fusionlab-learn is installed correctly.", file=sys.stderr)
@@ -170,3 +177,126 @@ def run_dummy_data_generation(
     
     _save_csv_safely(dummy_df, output_file)
 
+
+
+@handle_cli_workflow_errors
+def run_training_workflow(
+    data_file: str,
+    model_name: str,
+    output_dir: str,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    patience: int,
+    verbose: int,
+    **kwargs
+):
+    """
+    Orchestrates the end-to-end PINN model training and evaluation workflow.
+
+    This function initializes the configuration, runs the data processing
+    pipeline, trains the model, generates forecasts, and visualizes the
+    results. It is designed to be called by a CLI command.
+    """
+    print("🚀 Initializing workflow configuration...")
+    
+    config = SubsConfig(
+        data_dir=os.path.dirname(data_file),
+        data_filename=os.path.basename(data_file),
+        model_name=model_name,
+        output_dir=output_dir,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        patience=patience,
+        verbose=verbose,
+        save_intermediate=True,
+        **kwargs # Pass any other CLI options through
+    )
+    print(f"Configuration loaded for model '{config.model_name}'.")
+
+    # The rest of the logic is identical to your test script
+    processor = DataProcessor(config=config)
+    processed_df = processor.run()
+    
+    sequence_gen = SequenceGenerator(config=config)
+    train_dataset, val_dataset = sequence_gen.run(
+        processed_df, processor.static_features_encoded
+    )
+    
+    sample_inputs, _ = next(iter(train_dataset))
+    input_shapes = {name: tensor.shape for name, tensor in sample_inputs.items()}
+    
+    trainer = ModelTrainer(config=config)
+    best_model = trainer.run(train_dataset, val_dataset, input_shapes)
+    
+    forecaster = Forecaster(config=config)
+    forecast_df = forecaster.run(
+        model=best_model,
+        test_df=sequence_gen.test_df,
+        val_dataset=val_dataset,
+        static_features_encoded=processor.static_features_encoded,
+        coord_scaler=sequence_gen.coord_scaler
+    )
+    
+    visualizer = ResultsVisualizer(config=config)
+    visualizer.run(forecast_df)
+    print("\n--- Workflow Finished Successfully ---")
+    
+
+@handle_cli_workflow_errors
+def run_inference_workflow(
+    model_path: str,
+    encoder_path: str,
+    scaler_path: str,
+    coord_scaler_path: str,
+    data_file: str,
+    output_dir: str,
+    model_name: str,
+    city_name: str,
+    **kwargs
+):
+    """
+    Orchestrates the end-to-end PINN inference workflow.
+
+    This function loads a pre-trained model and its associated
+    preprocessing artifacts, applies them to a new dataset, and
+    generates forecasts and visualizations.
+    """
+    print("Initializing inference workflow configuration...")
+    
+    # Use a base config, as most settings are derived from the artifacts
+    # or are not needed for pure prediction.
+    config = SubsConfig(
+        data_dir=os.path.dirname(data_file),
+        data_filename=os.path.basename(data_file),
+        model_name=model_name,
+        city_name=city_name,
+        output_dir=output_dir,
+        save_intermediate=True,
+        **kwargs # Pass through any other relevant options
+    )
+    print(f"Configuration loaded for model '{config.model_name}'.")
+    
+    # Check if all required artifacts exist before proceeding
+    required_artifacts = [
+        model_path, encoder_path, scaler_path, coord_scaler_path
+    ]
+    if not all(os.path.exists(p) for p in required_artifacts):
+        raise FileNotFoundError(
+            "One or more required artifacts (model, encoder, scalers) "
+            "were not found. Please provide valid paths."
+        )
+        
+    # Instantiate the prediction pipeline with the paths to the artifacts
+    prediction_pipeline = PredictionPipeline(
+        config=config,
+        model_path=model_path,
+        encoder_path=encoder_path,
+        scaler_path=scaler_path,
+        coord_scaler_path=coord_scaler_path
+    )
+    
+    # Run the entire prediction and visualization workflow
+    prediction_pipeline.run(validation_data_path=data_file)
+    print("\n--- Workflow Finished Successfully ---")
