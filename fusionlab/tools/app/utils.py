@@ -27,7 +27,6 @@ _CUSTOM_OBJECTS = {
     "FixedC":     FixedC,     "DisabledC":   DisabledC,
 }
 
-
 class GuiProgress(Callback):
     """
     Emit percentage updates while `model.fit` runs.
@@ -115,7 +114,7 @@ def _locate_manifest(csv_path: Path, max_up: int = 3) -> Optional[Path]:
     # nothing found
     return None
 
-def rebuild_from_arch_cfg(arch_cfg: dict):
+def _rebuild_from_arch_cfg(arch_cfg: dict):
     """Turn the manifest’s JSON back into a live Keras model."""
     # 1. de-serialise nested Learnable… objects
     for key in ("K", "Ss", "Q", "pinn_coefficient_C"):
@@ -167,75 +166,75 @@ def safe_model_loader(
         raise IOError(f"[safe_model_loader] Path does not exist: {path}")
 
     ext = path.suffix.lower()
-    try:
-        # ---- full-graph formats --
-        if ext in {".keras", ".h5"} and not path.name.endswith(".weights.h5"):
-            log(f"[loader] reading full model from {path.name}")
-            try: 
-                model = load_model(path, custom_objects=custom_objects)
-            except: 
-                with custom_object_scope(custom_objects):
-                    model = load_model(path)
-                    
-            log("  Model loaded successfully.")
-            
-            return model
+    # try:
+    # ---- full-graph formats --
+    # if ext in {".keras", ".h5"} and not path.name.endswith(".weights.h5"):
+    #     log(f"[loader] reading full model from {path.name}")
+    #     try: 
+    #         model = load_model(path, custom_objects=custom_objects)
+    #     except: 
+    #         with custom_object_scope(custom_objects):
+    #             model = load_model(path)
+                
+    #     log("  Model loaded successfully.")
         
-        # ---- SavedModel directory ------------------------------------
-        # if path.is_dir():
-        #     log(f"[loader] reading TensorFlow SavedModel at {path}")
-        #     model =  load_model(path, custom_objects=custom_objects)
-        #     log("  Best model loaded successfully.")
-        #     return model 
+    #     return model
+    
+    # ---- SavedModel directory ------------------------------------
+    # if path.is_dir():
+    #     log(f"[loader] reading TensorFlow SavedModel at {path}")
+    #     model =  load_model(path, custom_objects=custom_objects)
+    #     log("  Best model loaded successfully.")
+    #     return model 
 
-        # ---- weights-only case ---------------------------------------
-        if path.name.endswith(".weights.h5"):
-            if build_fn is None:
-                raise ValueError("weights file requires a `build_fn`.")
-            log(f"[loader] rebuilding architecture then "
-                f"loading weights from {path.name}")
-            
-            model = build_fn()          # un-compiled model
-            
-            # ----------  NEW  ---------------------------------------
-            # force variable creation so the weight names exist
-            if not model.built:
-                #  a) if the model implements `.build(input_shape)`:
-                try:
-                    # retrieve the input shapes stored in the manifest
-                    ish = arch_cfg.get("input_shapes")  # save this during training!
-                    if ish is not None:
-                        model.build(ish)
-                except Exception:
-                    pass
+    # ---- weights-only case ---------------------------------------
+    if path.name.endswith(".weights.h5"):
+        if build_fn is None:
+            raise ValueError("weights file requires a `build_fn`.")
+        log(f"[loader] rebuilding architecture then "
+            f"loading weights from {path.name}")
         
-                # #  b) fall back to a dummy forward-pass
-                # if not model.built:
-                #     import tensorflow as tf
-                #     dummy = {
-                #         "coords":           tf.zeros(
-                #             (1, arch_cfg["max_window_size"], 3)),
-                #         "dynamic_features": tf.zeros(
-                #             (1, arch_cfg["max_window_size"], arch_cfg["dynamic_input_dim"])),
-                #         "static_features":  tf.zeros(
-                #             (1, arch_cfg["static_input_dim"])),
-                #         "future_features":  tf.zeros(
-                #             (1, arch_cfg["forecast_horizon"], arch_cfg["future_input_dim"])),
-                #     }
-                #     _ = model(dummy, training=False)
-            # --------------------------------------------------------
+        model = build_fn()          # un-compiled model
         
-            # model.load_weights(path)                # (2) now succeeds
-            # return model
+        # ----------  NEW  ---------------------------------------
+        # force variable creation so the weight names exist
+        if not model.built:
+            #  a) if the model implements `.build(input_shape)`:
+            try:
+                # retrieve the input shapes stored in the manifest
+                ish = arch_cfg.get("input_shapes")  # save this during training!
+                if ish is not None:
+                    model.build(ish)
+            except Exception:
+                pass
+    
+            # #  b) fall back to a dummy forward-pass
+            # if not model.built:
+            #     import tensorflow as tf
+            #     dummy = {
+            #         "coords":           tf.zeros(
+            #             (1, arch_cfg["max_window_size"], 3)),
+            #         "dynamic_features": tf.zeros(
+            #             (1, arch_cfg["max_window_size"], arch_cfg["dynamic_input_dim"])),
+            #         "static_features":  tf.zeros(
+            #             (1, arch_cfg["static_input_dim"])),
+            #         "future_features":  tf.zeros(
+            #             (1, arch_cfg["forecast_horizon"], arch_cfg["future_input_dim"])),
+            #     }
+            #     _ = model(dummy, training=False)
+        # --------------------------------------------------------
+    
+        # model.load_weights(path)                # (2) now succeeds
+        # return model
 
-            
-            model.load_weights(path)
-            return model
+        
+        model.load_weights(path)
+        return model
 
-        raise ValueError(f"unknown model format: {path}")
+    #     raise ValueError(f"unknown model format: {path}")
 
-    except Exception as err:
-        raise IOError(f"[safe_model_loader] failed to load: {err}") from err
+    # except Exception as err:
+    #     raise IOError(f"[safe_model_loader] failed to load: {err}") from err
 
 
 def json_ready(obj: Any, *, mode: str = "literal") -> Any:
