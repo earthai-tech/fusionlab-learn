@@ -2,13 +2,15 @@
 import pytest 
 import os 
 import shutil 
-
+import tempfile, json
+from pathlib import Path
+from fusionlab.utils.deps_utils import get_versions 
 from fusionlab.tools.app.config import SubsConfig 
 from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
 from fusionlab.tools.app.modeling import ModelTrainer, Forecaster  
 from fusionlab.tools.app.view import ResultsVisualizer 
 from fusionlab.tools.app.inference import PredictionPipeline 
-
+#%
 def test_fwd_worflow ():
     print("--- Starting Subsidence Forecasting Workflow ---")
     
@@ -73,8 +75,8 @@ def test_inference ():
     config = SubsConfig(
         # For a quick test, we can use the smaller built-in dataset
         # by pointing to a non-existent file and letting it fallback.
-        data_dir='./dummy_data_for_test', 
-        data_filename='non_existent_file.csv',
+        data_dir='./data', 
+        data_filename='zhongshan_500k.csv',
         epochs=3, # Use a small number of epochs for a quick test
         output_dir=output_directory,
         save_intermediate=True, # Ensure artifacts are saved
@@ -145,6 +147,80 @@ def test_inference ():
         
         # Run the entire prediction and visualization workflow
         prediction_pipeline.run(validation_data_path=validation_data_path)
+        
+
+def test_inference2():
+    print("\n=== 1) TRAINING WORKFLOW =========================================")
+
+    # 
+    # 0. scratch directory – every test run is self-contained 
+    work_dir = Path(tempfile.mkdtemp(prefix="flab_gui_test_"))
+    print(f"[tmp]  all artefacts go to:  {work_dir}")
+
+    #
+    # 1. configuration (tiny run – just to exercise the pipeline) 
+    cfg = SubsConfig(
+        data_dir='./data', 
+        data_filename='zhongshan_500k.csv',
+        output_dir    = str(work_dir),
+        epochs        = 3,
+        batch_size    = 64,
+        save_intermediate = True,
+        verbose       = 0,
+    )
+
+    # 
+    manifest_path = (
+    Path(cfg.run_output_path) / "run_manifest.json"
+    )
+    # ①  full static dump of the SubsConfig
+    cfg.to_json(
+        manifest_path,
+        extra={"git": get_versions()},        # optional extras
+    )
+
+    # 2. end-to-end training
+    processor  = DataProcessor(cfg) 
+    df  = processor.run()
+    seq_gen    = SequenceGenerator(cfg)
+    tr_ds, va_ds = seq_gen.run(df, processor.static_features_encoded)
+    sample_inp, _ = next(iter(tr_ds))
+    shapes = {k: v.shape for k, v in sample_inp.items()}
+
+    trainer    = ModelTrainer(cfg)
+    _          = trainer.run(tr_ds, va_ds, shapes)
+
+    print("✔ training finished")
+
+    # ----------------------------------------------------------------------
+    # 3. verify that the *manifest* was written ----------------------------
+    manifest_path = Path(cfg.run_output_path) / "run_manifest.json"
+    assert manifest_path.exists(), "manifest missing after training !"
+
+    print("\n=== 2) INFERENCE WORKFLOW =======================================")
+
+    # ----------------------------------------------------------------------
+    # 4. use only the manifest + a 'new' CSV for prediction ----------------
+    # here we just reuse the same raw CSV saved by the processor
+    new_csv = Path(cfg.run_output_path) / "01_raw_data.csv"
+    assert new_csv.exists(), "no raw CSV found – cannot test inference"
+
+    pipe = PredictionPipeline(
+        manifest_path = manifest_path,             # <── all paths auto-filled
+        log_callback  = print,
+    )
+    pipe.run(str(new_csv))
+
+    print("\n✔ inference completed OK")
+
+    # (optional) inspect what was appended to the manifest
+    with open(manifest_path, "r", encoding="utf-8") as fp:
+        print("\n--- manifest tail ---")
+        print(json.dumps(json.load(fp)["inference"], indent=2))
+
+    # ----------------------------------------------------------------------
+    # 5. clean-up  (comment out if you want to keep the artefacts) ----------
+    shutil.rmtree(work_dir, ignore_errors=True)
 
 if __name__== "__main__": 
     pytest.main( [__file__,  "--maxfail=1 ", "--disable-warnings",  "-q"])

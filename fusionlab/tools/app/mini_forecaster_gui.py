@@ -26,12 +26,15 @@ from PyQt5.QtWidgets import (
     QToolTip
 )
 
+from fusionlab.utils.deps_utils import get_versions
 from fusionlab.tools.app.config      import SubsConfig
 from fusionlab.tools.app.processing  import DataProcessor, SequenceGenerator
 from fusionlab.tools.app.modeling    import ModelTrainer, Forecaster
 from fusionlab.tools.app.view        import ResultsVisualizer
 from fusionlab.tools.app.view        import VIS_SIGNALS
 from fusionlab.tools.app.gui_popups  import ImagePreviewDialog   
+from fusionlab.tools.app.inference import PredictionPipeline
+from fusionlab.tools.app.utils import _locate_manifest 
 
 # Fusionlab-learn palette 
 PRIMARY   = "#2E3191"   
@@ -40,6 +43,11 @@ BG_LIGHT  = "#fafafa"
 FG_DARK   = "#1e1e1e"
 PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
 SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
+# ------------------------------------------------------------------ #
+#  Inference-mode toggle
+# ------------------------------------------------------------------ #
+INFERENCE_ON  = PRIMARY
+INFERENCE_OFF = "#dadada"        # greyed-out (disabled)
 
 FLAB_STYLE_SHEET = f"""
 QMainWindow {{
@@ -109,7 +117,20 @@ QToolTip {{
     border-radius: 4px;
 }}
 
+QPushButton#inference {{
+    background: {PRIMARY};      /* overwritten at runtime */
+    color: white;
+    border-radius: 6px;
+    padding: 6px 14px;   /* a tad wider than Stop / Reset */
+}} 
+
+QPushButton#inference:disabled {{
+    background: {INFERENCE_OFF};      /* grey when no manifest yet      */
+    color: #666;
+}}
+
 """
+
 # --- Color Palette Definition ---
 # Using a central palette makes themes easier to manage.
 # Inspired by common UI color systems.
@@ -260,6 +281,7 @@ LIGHT_THEME_STYLESHEET = f"""
         border: none; padding: 4px; border-radius: 4px;
     }}
 """
+
 
 class _PandasModel(QAbstractTableModel):
     """A Qt Table Model for exposing a pandas DataFrame.
@@ -459,22 +481,6 @@ class CsvEditDialog(QDialog):
         """
         return self._df_full.copy()
 
-def hline() -> QFrame:
-    """Creates and returns a styled horizontal separator line.
-
-    This is a simple helper function to generate a QFrame configured
-    as a horizontal line, useful for visually separating sections
-    in a GUI layout.
-
-    Returns
-    -------
-    PyQt5.QtWidgets.QFrame
-        A QFrame widget styled as a horizontal line.
-    """
-    ln = QFrame()
-    ln.setFrameShape(QFrame.HLine)
-    ln.setStyleSheet(f"color:{PRIMARY}")
-    return ln
 
 
 class Worker(QThread):
@@ -705,6 +711,9 @@ class MiniForecaster(QMainWindow):
             logo_lbl.setText("Fusionlab-learn") # graceful fallback (optional)
         
         logo_lbl.setAlignment(Qt.AlignCenter)
+        
+        self._inference_mode = False     # True → Run button will run inference
+        self._manifest_path  = None      # filled automatically once detected
 
         self._build_ui()
         self.log_updated.connect(self._log)
@@ -792,6 +801,14 @@ class MiniForecaster(QMainWindow):
         self.stop_btn.setToolTip("Abort the running workflow")                
         self.stop_btn.clicked.connect(self._stop_worker)
         row.addWidget(self.stop_btn)
+        
+        # ── inference toggle  (disabled until a manifest is found)
+        self.inf_btn = QPushButton("Inference")
+        self.inf_btn.setObjectName("inference")
+        self.inf_btn.setEnabled(False)                       # default: grey
+        self.inf_btn.setToolTip("Load an existing run_manifest.json first.")
+        self.inf_btn.clicked.connect(self._toggle_inference_mode)
+        row.addWidget(self.inf_btn)
 
         # right-hand Reset button
         self.reset_btn = QPushButton("Reset")
@@ -1219,6 +1236,44 @@ class MiniForecaster(QMainWindow):
             self.edited_df = None        # fall back to on-disk CSV
             self._log("CSV preview canceled – keeping original file.")
         
+        # --------------------------------------------------------------
+        # look for a manifest near the selected CSV  → enables inference
+        manifest = _locate_manifest(self.file_path)
+        
+        if manifest is not None:
+            self._manifest_path = str(manifest)
+            self.inf_btn.setEnabled(True)
+            self.inf_btn.setStyleSheet(f"background:{INFERENCE_ON};")
+            self.inf_btn.setToolTip(
+                "Trained model detected– click to switch to inference."
+            )
+        else:
+            self._manifest_path = None
+            self.inf_btn.setEnabled(False)
+            self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
+            self.inf_btn.setToolTip(
+                "Inference is available once a trained run is found nearby."
+            )
+        self.progress_bar.setValue(0)
+    # --------------------------------------------------------------
+    def _toggle_inference_mode(self):
+        """Flip the GUI between *training* and *inference* modes."""
+        self._inference_mode = not self._inference_mode
+    
+        if self._inference_mode:                 # → ON
+            self.inf_btn.setStyleSheet("background:%s;" % SECONDARY)
+            self.inf_btn.setEnabled(False)       # frozen while active
+            self.inf_btn.setToolTip("Inference mode active.")
+            self.run_btn.setText("Run Inference")
+            self._log("ℹ GUI switched to *Inference* mode – "
+                      "Run will now load the saved model.")
+        else:                                    # → OFF  (rare, only after run)
+            self.inf_btn.setStyleSheet("background:%s;" % PRIMARY)
+            self.inf_btn.setEnabled(True)
+            self.inf_btn.setToolTip(
+                "Click to switch the GUI into inference mode.")
+            self.run_btn.setText("Run")
+
     def _on_reset(self):
         """Resets the user interface to its default state.
 
@@ -1279,6 +1334,11 @@ class MiniForecaster(QMainWindow):
         if self.file_path is None:
             self._log("⚠ No CSV selected.")
             return
+        # ------------------------------------------------------------------
+        if self._inference_mode:
+            self._run_inference()
+            return                       # *do not* go through the training path
+        # ------------------------------------------------------------------
 
         self.run_btn.setEnabled(False)
         self._log("▶ launch workflow …")
@@ -1344,6 +1404,11 @@ class MiniForecaster(QMainWindow):
         cfg.static_features  = stat_list
         cfg.future_features  = fut_list
         
+        # I GUESS IN training the manifest is not created like this 
+        manifest_path = os.path.join(cfg.run_output_path, "run_manifest.json")
+        cfg.to_json(manifest_path, extra={
+            "git": get_versions()})
+
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
     
@@ -1367,6 +1432,42 @@ class MiniForecaster(QMainWindow):
         
         self.worker.start()
         
+    # --------------------------------------------------------------
+    def _run_inference(self):
+        """Kick off the PredictionPipeline inside the same progress machinery."""
+        if not self._manifest_path or not Path(self._manifest_path).exists():
+            QMessageBox.warning(self, "Inference",
+                                "run_manifest.json not found – aborting.")
+            self._toggle_inference_mode()        # reset button colours
+            return
+    
+        self._log("▶ launching *inference* …")
+        self.run_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)          # inference is fast; no stop
+        self.progress_bar.setValue(0)
+        self.progress_bar.repaint() 
+    
+        # wire fake progress bar (PredictionPipeline reports 0-100)
+        cfg = SubsConfig()                       # dummy – overwritten by manifest
+        cfg.progress_callback = self.progress_updated.emit
+    
+        pipe = PredictionPipeline(
+            manifest_path=self._manifest_path,
+            log_callback = self.log_updated.emit,
+        )
+        pipe.config.progress_callback = self.progress_updated.emit
+    
+        try:
+            pipe.run(validation_data_path=str(self.file_path))
+            self.progress_bar.setValue(100)
+            self._log("✔ inference finished.")
+        except Exception as err:
+            self._log(f"❌ inference error: {err}")
+            QMessageBox.critical(self, "Inference failed", str(err))
+    
+        self.run_btn.setEnabled(True)
+        self._toggle_inference_mode()            # back to training mode
+
     def _worker_done(self):
         """
         Called from `self.worker.finished`.  
@@ -1393,6 +1494,31 @@ class MiniForecaster(QMainWindow):
     
             self.status_updated.emit("⚪ Idle")
         
+        # reset inference toggle (if it was active)
+        if self._inference_mode:
+            self._inference_mode = False
+            self.inf_btn.setStyleSheet("background:%s;" % PRIMARY)
+            self.inf_btn.setEnabled(True)
+            self.inf_btn.setToolTip(
+                "Click to switch the GUI into inference mode.")
+            self.run_btn.setText("Run")
+    
+def hline() -> QFrame:
+    """Creates and returns a styled horizontal separator line.
+
+    This is a simple helper function to generate a QFrame configured
+    as a horizontal line, useful for visually separating sections
+    in a GUI layout.
+
+    Returns
+    -------
+    PyQt5.QtWidgets.QFrame
+        A QFrame widget styled as a horizontal line.
+    """
+    ln = QFrame()
+    ln.setFrameShape(QFrame.HLine)
+    ln.setStyleSheet(f"color:{PRIMARY}")
+    return ln          
 
 def launch_cli(theme: str = 'fusionlab') -> None:
     """Initializes and launches the main GUI application.

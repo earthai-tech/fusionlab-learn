@@ -135,8 +135,12 @@ class TransFlowSubsNet(BaseAttentive):
         name: str = "TransFlowSubsNet",
         **kwargs
     ):
+        
         # The total output dimension for the base data-driven model
         # is the sum of the subsidence and GWL dimensions.
+        if 'output_dim' in kwargs: 
+            kwargs.pop ('output_dim') # delegate it from combinason 
+            
         self._combined_output_dim = (
             output_subsidence_dim + output_gwl_dim
         )
@@ -170,7 +174,9 @@ class TransFlowSubsNet(BaseAttentive):
             name=name,
             **kwargs
         )
-  
+        
+        
+            
         self.output_subsidence_dim = output_subsidence_dim
         self.output_gwl_dim = output_gwl_dim
         self.pde_modes_active = process_pde_modes(pde_mode)

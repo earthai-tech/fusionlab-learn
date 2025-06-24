@@ -6,7 +6,10 @@ from typing import Tuple
 import shutil # noqa
 
 from fusionlab.utils.generic_utils import rename_dict_keys 
-from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences, format_pinn_predictions
+from fusionlab.utils.io_utils import _update_manifest 
+from fusionlab.nn.pinn.utils import ( 
+    prepare_pinn_data_sequences, format_pinn_predictions
+)
 from fusionlab.nn.utils import make_dict_to_tuple_fn
 from fusionlab.nn import KERAS_DEPS
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ
@@ -14,7 +17,9 @@ from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.nn.models import PIHALNet, TransFlowSubsNet
 
 from fusionlab.tools.app.config import SubsConfig 
-from fusionlab.tools.app.utils import GuiProgress 
+from fusionlab.tools.app.utils import ( 
+    GuiProgress, safe_model_loader, json_ready
+)
 
 Callback =KERAS_DEPS.Callback 
 Dataset = KERAS_DEPS.Dataset
@@ -162,7 +167,14 @@ class ModelTrainer:
         self.log(
             "  Model checkpoints will be saved to:"
             f" {checkpoint_path}  (format = {fmt})")
-    
+        
+        _update_manifest(
+            self.config.run_output_path, "training",
+            {
+                "checkpoint": ckpt_name,
+                "save_format": fmt,
+            },
+        )
         # -Keras housekeeping callbacks --
         early_stopping = EarlyStopping(
             monitor="val_loss",
@@ -177,6 +189,8 @@ class ModelTrainer:
             **ckpt_kwargs,              # ← inject format if 'tf'
         )
         self.log(f"  Model checkpoints will be saved to: {checkpoint_path}")
+        
+        self.checkpoint_path = checkpoint_path 
         
         # if none the skip the gui_cb and use verbose = self.config.fit_verbose  
         # else use the Gui
@@ -214,14 +228,66 @@ class ModelTrainer:
         )
         self.log("  Model training complete.")
         
+        raw_cfg = self.model.get_config()
+        safe_cfg = json_ready(raw_cfg, mode="config")      # or "config"
+        _update_manifest(
+            self.config.run_output_path, "training",
+            {
+                "config": safe_cfg,
+            },
+        )
+        # -------- save history & update manifest ----------------------- NEW
+        try:
+            hist_file = f"{self.config.model_name}.training_history.csv"
+            pd.DataFrame(self.history.history).to_csv(
+                os.path.join(self.config.run_output_path, hist_file),
+                index=False
+            )
+            _update_manifest(self.config.run_output_path,
+                             "training",
+                             {"history": hist_file,
+                              "epochs_run": len(self.history.history["loss"])}
+                )
+        except Exception as err:
+            self.log(f"  [WARN] Could not write history file: {err}")
 
     def _load_best_model(self) -> Any:
+        """Return the best model (or current one if loading fails)."""
+        ckpt = self.checkpoint_path              # ← already stored above
+        # try:
+        custom = {}
+        if self.config.quantiles:
+            custom["combined_quantile_loss"] = combined_quantile_loss(
+                self.config.quantiles
+            )
+        # build_fn only needed if *.weights.h5
+        build_fn = None
+        if ckpt.endswith(".weights.h5"):
+            # reuse the same constructor we used earlier
+            ModelClass = (TransFlowSubsNet if
+                          self.config.model_name == "TransFlowSubsNet"
+                          else PIHALNet)
+            build_fn = lambda: ModelClass(**self.model.get_config())
+
+        best = safe_model_loader(
+            ckpt, build_fn=build_fn, custom_objects=custom, log=self.log
+        )
+        self.log("  Best model loaded successfully.")
+        return best
+        
+        # except Exception as e:
+        #     self.log(
+        #         f"  ⚠ best-model load failed: {e} – using in-memory model.")
+        #     return self.model
+
+    def __load_best_model(self) -> Any:
         """Loads the best performing model saved by ModelCheckpoint."""
         self.log("  Loading best model from checkpoint...")
-        
-        checkpoint_path = os.path.join(
-            self.config.run_output_path, f"{self.config.model_name}.keras")
-        
+        # checkpoint_path = os.path.join(
+        #     self.config.run_output_path, f"{self.config.model_name}.keras")
+        _update_manifest(self.config.run_output_path,         # NEW
+                 "training",
+                 {"best_model_loaded": os.path.basename(self.checkpoint_path)})
         try:
             custom_objects = {}
             if self.config.quantiles:
@@ -229,7 +295,7 @@ class ModelTrainer:
                     self.config.quantiles)}
             
             with custom_object_scope(custom_objects):
-                best_model = load_model(checkpoint_path)
+                best_model = load_model(self.checkpoint_path)
             self.log("  Best model loaded successfully.")
             return best_model
         except Exception as e:
@@ -260,11 +326,27 @@ class ModelTrainer:
         val_dataset   = val_dataset.map(
             dict_to_tuple,   num_parallel_calls=AUTOTUNE
         )
-        
         # 3.  (Optional) force one trace so tf.function captures the tuple shape
-        # ------------------------------------------------------------------
+        # ----------------------------------------------------------------------
+        sample_inputs, _ = next(iter(train_dataset))
+        # sample_inputs is now a tuple → convert back to a dict
+        if isinstance(sample_inputs, (tuple, list)):
+            sample_inputs = {
+                k: t for k, t in zip(feature_keys, sample_inputs)
+            }
+        
+        shapes = {k: v.shape for k, v in sample_inputs.items()}
+
+        #  NEW 
+        # persist shapes so safe_model_loader can do model.build(input_shapes)
+        _update_manifest(
+            self.config.run_output_path,
+            "training",
+            {                     # make JSON-friendly
+                "input_shapes": {k: list(s) for k, s in shapes.items()}
+            },
+        )
         if not self.model.built:
-            sample_inputs, _ = next(iter(train_dataset))
             self.model(sample_inputs, training=False)   # forward pass
         
         return train_dataset, val_dataset 
@@ -347,7 +429,8 @@ class Forecaster:
                 lat_col=self.config.lat_col,
                 subsidence_col=self.config.subsidence_col,
                 gwl_col=self.config.gwl_col,
-                dynamic_cols=[c for c in self.config.dynamic_features if c in test_df.columns],
+                dynamic_cols=[c for c in self.config.dynamic_features 
+                              if c in test_df.columns],
                 static_cols=static_features,
                 future_cols=self.config.future_features,
                 group_id_cols=[self.config.lon_col, self.config.lat_col],
@@ -405,6 +488,7 @@ class Forecaster:
         predictions = model.predict(inputs_test, verbose=0)
 
         # Standardize target keys for formatting
+        
         y_true_for_format = {
             'subsidence': targets_test['subs_pred'],
             'gwl': targets_test['gwl_pred']
@@ -440,3 +524,4 @@ class Forecaster:
         self.log("  Warning: No final forecast DataFrame was generated.")
         self._tick(100)
         return None
+    

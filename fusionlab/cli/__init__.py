@@ -28,6 +28,7 @@ from .process import process_group
 from .tune import tune_group
 from .view import view_group
 from .geotools import geotools_group
+from .inference import inference_group 
 
 @click.group()
 def cli():
@@ -45,3 +46,4 @@ cli.add_command(process_group, name='process')
 cli.add_command(tune_group, name='tune')
 cli.add_command(view_group, name='view')
 cli.add_command(geotools_group, name='geotools')
+cli.add_command(inference_group,   name='inference')   

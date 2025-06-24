@@ -5,7 +5,8 @@ import pandas as pd
 from typing import Optional
 from PyQt5.QtCore import pyqtSignal, QObject
 
-from fusionlab.utils.generic_utils import save_all_figures 
+from fusionlab.utils.generic_utils import save_all_figures
+from fusionlab.utils.io_utils import _update_manifest          
 from fusionlab.plot.forecast import plot_forecasts, forecast_view 
 from fusionlab.tools.app.config import SubsConfig 
 
@@ -34,7 +35,19 @@ class ResultsVisualizer:
         """
         self.config = config
         self.log = log_callback or print
-    
+        
+    def _note(self, fname: str) -> None:
+        """
+        Append <fname> to the “figures” list in run_manifest.json
+        (creates the list on first call).
+        """
+        _update_manifest(
+            self.config.run_output_path,
+            "figures",
+            fname,                      # value
+            as_list=True                # <- append, don’t overwrite
+        )
+
     def run(self, forecast_df: Optional[pd.DataFrame]):
         """
         Executes the full visualization and saving pipeline.
@@ -105,7 +118,8 @@ class ResultsVisualizer:
             savefig=png_base_subs, 
             save_fmts=['.png', '.pdf']
         )
-        png_png = f"{png_base_subs}.png"          
+        png_png = f"{png_base_subs}.png" 
+        self._note(os.path.basename(png_png))  
         VIS_SIGNALS.figure_saved.emit(png_png)
         
         
@@ -137,6 +151,7 @@ class ResultsVisualizer:
                 save_fmts= ['.png', '.pdf'], 
             )
             png_gwl_png  = f"{png_base_gwl}.png"
+            self._note(os.path.basename(png_gwl_png))  
             VIS_SIGNALS.figure_saved.emit(png_gwl_png)  
         
     def _run_forecast_view(self, df: pd.DataFrame):
@@ -160,6 +175,7 @@ class ResultsVisualizer:
                 _logger = self.config.log
             )
             png_forecast_save= f"{save_base}.png"
+            self._note(os.path.basename(png_forecast_save))  
             VIS_SIGNALS.figure_saved.emit(png_forecast_save)
             
             self.log(f"  Forecast view figures saved to: {self.config.run_output_path}")

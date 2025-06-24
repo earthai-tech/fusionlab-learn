@@ -3,11 +3,13 @@
 # Author: L. Kouadio <etanoyau@gmail.com>
 
 import os 
+import json 
 from typing import List, Callable, Optional, Dict, Any, cast
 
 import pandas as pd 
 import numpy as np   
 
+from fusionlab.utils.generic_utils import ensure_directory_exists
 from fusionlab.tools.app._config import setup_environment as _setup_env   # noqa: E402
 
 if not globals().get("_FUSIONLAB_ENV_READY", False):
@@ -122,6 +124,7 @@ class SubsConfig:
         self.run_output_path = os.path.join(
             self.output_dir, f"{self.city_name}_{self.model_name}_run"
         )
+        ensure_directory_exists(self.run_output_path)
 
     def update_from_gui(self, gui_config: Dict[str, Any]):
         """Updates configuration from a dictionary, e.g., from the GUI state."""
@@ -193,7 +196,40 @@ class SubsConfig:
                 col for col in self.numerical_cols if col not in exclude_cols
             ]
             self.log(f"  Auto-set dynamic features: {self.dynamic_features}")
-        
+            
+    def to_json(self, path: str, extra: Optional[dict] = None) -> None:
+        """
+        Serialise the current configuration to *path* (JSON).
+    
+        Parameters
+        ----------
+        path   : str | Path
+            Destination file.  Parent folders are **not** created automatically.
+        extra  : dict, optional
+            Extra top-level keys to merge into the JSON – e.g. Git metadata or
+            package versions.  These keys **override** duplicates from the config.
+        """
+        # 1) flat copy of all PUBLIC attributes
+        cfg_dict = {
+            k: v
+            for k, v in self.__dict__.items()
+            if not k.startswith("_")                      # skip private internals
+            and isinstance(v, (int, float, str, bool, list, dict))
+        }
+    
+        # 2) allow caller to tack on arbitrary metadata
+        if extra:
+            cfg_dict.update(extra)
+    
+        # 3) write pretty JSON
+        content = {"configuration": cfg_dict}
+        with open(path, "w", encoding="utf-8") as fp:
+            json.dump(content, fp, indent=2)
+    
+        # 4) friendly console / GUI log – only if a logger has been set
+        if callable(getattr(self, "log", None)):
+            self.log(f"   JSON export successful: {path}")
+
     def __repr__(self) -> str:
         """Provides a string representation of the configuration."""
         params = "\n".join(f"  {key}: {value}" for key, value in self.__dict__.items())

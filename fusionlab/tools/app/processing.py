@@ -19,7 +19,7 @@ from fusionlab.utils.generic_utils import normalize_time_column
 from fusionlab.utils.generic_utils import ensure_cols_exist 
 from fusionlab.datasets import fetch_zhongshan_data
 from fusionlab.utils.data_utils import nan_ops
-from fusionlab.utils.io_utils import save_job
+from fusionlab.utils.io_utils import save_job, _update_manifest 
 
 from fusionlab.nn import KERAS_DEPS
 from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
@@ -104,6 +104,11 @@ class DataProcessor:
                 self.config.run_output_path, "01_raw_data.csv")
             self.raw_df.to_csv(save_path, index=False)
             self.log(f"  Saved raw data artifact to: {save_path}")
+            
+            _update_manifest(
+                self.config.run_output_path,               # NEW
+                "artifacts",
+                {"raw_csv": os.path.basename(save_path)})   # NEW
         
         self._tick(20) 
         
@@ -211,6 +216,21 @@ class DataProcessor:
         self.log("  Scaling numerical features...")
         cols_to_scale = [self.config.subsidence_col, self.config.gwl_col] + \
                         (self.config.future_features or [])
+                      
+        # persist the resolved column choices to the manifest
+        _update_manifest(
+            run_dir=self.config.run_output_path,
+            section="configuration",
+            item={
+                "time_col":          self.config.time_col,
+                "categorical_cols":  self.config.categorical_cols,
+                "numerical_cols":    self.config.numerical_cols,
+                "static_features":   self.config.static_features,
+                "dynamic_features":  self.config.dynamic_features,
+                "future_features":   self.config.future_features,
+            },
+        )
+        
         self.scaler = MinMaxScaler()
         # Filter to only scale columns that actually exist
         existing_cols_to_scale = [
@@ -231,12 +251,28 @@ class DataProcessor:
                 )
             self.processed_df.to_csv(save_path, index=False)
             self.log(f"  Saved processed data to: {save_path}")
+            
+            artefacts = {"processed_csv": os.path.basename(save_path)}
+            
             if self.encoder:
+                enc_name = f"{self.config.model_name}.ohe_encoder.joblib"
                 save_job(self.encoder, os.path.join(
-                    self.config.run_output_path, "ohe_encoder.joblib"))
+                    self.config.run_output_path, enc_name
+                    ), 
+                    append_date= False, append_versions= False, # leave manifest track it 
+                    )
+                artefacts["encoder"] = enc_name 
             if self.scaler:
+                sc_name = f"{self.config.model_name}.main_scaler.joblib"
                 save_job(self.scaler, os.path.join(
-                    self.config.run_output_path, "main_scaler.joblib"))
+                    self.config.run_output_path, sc_name), 
+                    append_date= False, append_versions= False, 
+                    )
+                artefacts["main_scaler"] = sc_name
+            
+            _update_manifest(
+                self.config.run_output_path, "artifacts", artefacts)    
+            
         
         self._tick(100)
         return self.processed_df
@@ -421,7 +457,7 @@ class SequenceGenerator:
             mode=self.config.mode,
             progress_hook=hook, 
             stop_check= stop_check, 
-            verbose=self.config.verbose,  # Can be linked to a config verbose level, 
+            verbose=self.config.verbose,  
             _logger = self.log 
         )
         self._tick(80)
@@ -434,6 +470,16 @@ class SequenceGenerator:
         self.coord_scaler = scaler
         self.log(
             "  Training sequences generated successfully."
+            )
+        if self.config.save_intermediate and self.coord_scaler is not None:
+            coord_sc_name = f"{self.config.model_name}.coord_scaler.joblib"
+            save_job(self.coord_scaler,
+                     os.path.join(self.config.run_output_path, coord_sc_name), 
+                     append_date=False, append_versions=False )
+
+            _update_manifest(
+                self.config.run_output_path, "artifacts", 
+                {"coord_scaler": coord_sc_name}
             )
 
     def _create_tf_datasets(self) -> Tuple[Any, Any]:
