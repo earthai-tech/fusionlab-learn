@@ -1,5 +1,4 @@
 from __future__ import annotations 
-
 import os 
 from pathlib import Path 
 import json 
@@ -30,106 +29,120 @@ load_model = KERAS_DEPS.load_model
 Model =KERAS_DEPS.Model 
 
 class PredictionPipeline:
-    _range = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo)*frac))
+    """
+    Orchestrates an end-to-end inference workflow.
 
+    This class is designed to be instantiated after a model has been
+    trained. It loads a trained model, its configuration, and all
+    necessary preprocessing artifacts (scalers, encoders) from a
+    run manifest file. It then uses these artifacts to process a new
+    dataset, generate predictions, and visualize the results.
+
+    Parameters
+    ----------
+    manifest_path : str or pathlib.Path
+        The path to the 'run_manifest.json' file generated during a
+        training run. This file contains all the paths and
+        configurations needed for inference.
+    log_callback : callable, optional
+        A function to receive and handle log messages, such as
+        updating a GUI log panel. Defaults to `print`.
+    """
+    _range = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo)*frac))
     def __init__(
         self,
-        manifest_path: str | os.PathLike | None = None,   # <- NEW
+        manifest_path: str | os.PathLike,
         *,
-        # the “manual” arguments keep working as before
-        config: SubsConfig | None = None,
-        model_path: str | None = None,
-        encoder_path: str | None = None,
-        scaler_path: str | None = None,
-        coord_scaler_path: str | None = None,
         log_callback: Optional[callable] = None,
     ):
-        # --
-        self.log = log_callback or print                 # we need it early
+        self.log = log_callback or print
+        self.manifest_path = Path(manifest_path)
+        
+        if not self.manifest_path.exists():
+            raise FileNotFoundError(
+                f"Manifest file not found at: {self.manifest_path}"
+            )
+            
+        self.log(f"Initializing prediction pipeline from manifest: {self.manifest_path}")
+        self._manifest = json.loads(
+            self.manifest_path.read_text("utf-8"))
 
-        # try to load the JSON manifest
-        manifest = {}
-        if manifest_path and Path(manifest_path).exists():
-            self.log(f"[Prediction] Reading manifest: {manifest_path}")
-            manifest = json.loads(Path(manifest_path).read_text("utf-8"))
+        # The manifest is the single source of truth.
+        # Create a config object from the manifest's 'configuration' section.
+        self.config = SubsConfig(**self._manifest.get("configuration", {}))
+        
+        # Resolve all artifact paths relative to the manifest's location
+        self.run_dir = self.manifest_path.parent
+        self._resolve_artifact_paths()
+        
+        # Holders for loaded objects
+        self.model = None
+        self.encoder= None
+        self.scaler= None
+        self.coord_scaler= None
 
-        #  Config --------------------------------------------------------
-        if config is None:
-            cfg_dict = manifest.get("configuration", {})
-            if not cfg_dict:
-                raise ValueError("No SubsConfig provided and manifest "
-                                 "contains no 'config' section.")
-            config = SubsConfig(**cfg_dict)
-        self.config = config
+    def _resolve_artifact_paths(self):
+        """Resolves full paths to all artifacts from the manifest."""
+        artifacts = self._manifest.get("artifacts", {})
+        training_info = self._manifest.get("training", {})
+        
+        # Helper to construct full path from relative filename in manifest
+        def _get_path(key, default_name):
+            filename = artifacts.get(key) or training_info.get(key) or default_name
+            return self.run_dir / filename
 
-        # decide the *expected* checkpoint name from the chosen save_format
-        fmt  = self.config.save_format or "weights"
-        ckpt = (f"{self.config.model_name}.weights.h5"
-                if fmt == "weights"
-                else f"{self.config.model_name}.keras")          # default / .keras
-        
-        arte   = manifest.get("artefacts", {})
-        train  = manifest.get("training", {})
-        
-        self.model_path        = (model_path
-                                  or self._dflt(train.get("model"))
-                                  or self._dflt(ckpt))
-        
-        self.encoder_path      = (encoder_path
-                                  or self._dflt(arte.get("encoder"))
-                                  or self._dflt(
-                                         f"{self.config.model_name}.ohe_encoder.joblib"))
-        
-        self.scaler_path       = (scaler_path
-                                  or self._dflt(arte.get("scaler"))
-                                  or self._dflt(
-                                         f"{self.config.model_name}.main_scaler.joblib"))
-        
-        self.coord_scaler_path = (coord_scaler_path
-                                  or self._dflt(arte.get("coord_scaler"))
-                                  or self._dflt(
-                                         f"{self.config.model_name}.coord_scaler.joblib"))
+        self.model_path = _get_path("checkpoint", "model.keras")
+        self.encoder_path = _get_path("encoder", "ohe_encoder.joblib")
+        self.scaler_path = _get_path("main_scaler", "main_scaler.joblib")
+        self.coord_scaler_path = _get_path("coord_scaler", "coord_scaler.joblib")
 
-        # since the check point has the model name 
-        # ④  runtime-holders
-        self.model = self.encoder = self.scaler = self.coord_scaler = None
-        # make a cony of Manifest config 
-        self._cfg = manifest.copy() # from manifest 
-        
-
-    def _dflt(self, candidate: str | None) -> str | None:
+    def _load_artifacts(self) -> None:
         """
-        Smart-resolve *candidate* into a **full path**.
-
-        Rules
-        -----
-        1. ``None``  →  returns ``None`` (caller will try the next option).
-        2. *Absolute* path  →  returned unchanged.
-        3. *Relative* path **with a directory part**  
-           (e.g. ``"checkpoints/ckpt.h5"``) → resolved against *cwd*.
-        4. *Bare filename* (no “/”)  →  prefixed with
-           ``self.config.run_output_path``.
-        5. *Directory only* (ends with “/” or has no filename) → **error** –
-           the caller must supply a filename.
+        Loads the trained model and all preprocessing objects from disk.
+        
+        This method uses the `safe_model_loader` utility to handle
+        different Keras save formats, including weights-only files
+        which require rebuilding the model architecture from the manifest.
         """
-        if candidate is None:
-            return None
+        self.log("Loading trained model and preprocessing artifacts...")
+        
+        # --- 1. Prepare for Model Loading ---
+        custom_objects = _CUSTOM_OBJECTS.copy()
+        if self.config.quantiles:
+            custom_objects["combined_quantile_loss"] = combined_quantile_loss(
+                self.config.quantiles
+            )
+            
+        build_fn = None
+        model_cfg = None
+        # Check if we need to rebuild the model for weights-only loading
+        if str(self.model_path).endswith((".weights.h5", ".weights.keras")):
+            self.log("Weights-only file detected. Rebuilding model from manifest...")
+            model_cfg = self._manifest.get("training", {})
+            arch_cfg = model_cfg.get("config")
+            if not arch_cfg:
+                raise ValueError("Manifest is missing 'training.config' section"
+                                 " required to rebuild model for weights-only file.")
+            # The build function will use the architecture config
+            build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
+        
+        # --- 2. Load the Model ---
+        self.model = safe_model_loader(
+            model_path=self.model_path,
+            build_fn=build_fn,
+            custom_objects=custom_objects,
+            log=self.log,
+            model_cfg=model_cfg  # Pass model_cfg for model.build() hint
+        )
 
-        p = Path(candidate)
-
-        # 1) absolute → done
-        if p.is_absolute():
-            return str(p)
-
-        # 2) ‘dir / file’
-        if p.parent != Path("."):
-            if p.name == "":                 # “dir/” without file
-                raise ValueError(
-                    f"[Prediction] Expected a filename in '{candidate}'.")
-            return str(p.resolve())
-
-        # 3) bare filename → prepend run_output_path
-        return str(Path(self.config.run_output_path) / p)
+        # --- 3. Load Preprocessing Artifacts ---
+        try:
+            self.encoder = joblib.load(self.encoder_path)
+            self.scaler = joblib.load(self.scaler_path)
+            self.coord_scaler = joblib.load(self.coord_scaler_path)
+            self.log("  All artifacts loaded successfully.")
+        except Exception as e:
+            raise IOError(f"Failed to load a required preprocessing artifact. Error: {e}")
 
     def _tick(self, percent: int) -> None:
         cb = getattr(self.config, "progress_callback", None)
@@ -234,63 +247,6 @@ class PredictionPipeline:
         self.log("--- Prediction Pipeline Finished Successfully ---")
         self._tick(100)
         
-    def _load_artifacts(self) -> None:
-        """Loads the trained model and preprocessing objects."""
-        self.log("Loading trained model ...")
-        # 
-        custom = {}
-        if self.config.quantiles:
-            custom["combined_quantile_loss"] = combined_quantile_loss(
-                self.config.quantiles)
-    
-        # if weights-only: rebuild from manifest → Keras can revive from config
-        build_fn = None
-        if str(self.model_path).endswith(".weights.h5"):
-            # self._config  = json.loads(Path(self.manifest_path).read_text("utf-8"))
-            arch_cfg = self._cfg ["training"]["config"]         # saved earlier
-            try: 
-                build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
-            except:
-                # This will never reach but let keep it anyway. 
-                class_name = self._cfg ["configuration"]["model_name"]
-                cls = ( 
-                    TransFlowSubsNet if class_name == "TransFlowSubsNet" 
-                    else PIHALNet
-                )
-                build_fn = lambda: cls.from_config(arch_cfg)
-             
-        self.model = safe_model_loader(
-            self.model_path,
-            build_fn=build_fn,
-            custom_objects={ **custom,** _CUSTOM_OBJECTS} ,
-            log=self.log,
-        )
-        self.log("Loading preprocessing artifacts...")
-        
-        try:
-            self.encoder = joblib.load(self.encoder_path)
-            self.scaler = joblib.load(self.scaler_path)
-            self.coord_scaler = joblib.load(self.coord_scaler_path)
-            self.log("  All artifacts loaded successfully.")
-        except Exception as e:
-            raise IOError(
-                f"Failed to load a required artifact. Error: {e}")
-            
-    def __load_artifacts(self):
-        """Loads the trained model and preprocessing objects."""
-        
-        self.log("Loading trained model and preprocessing artifacts...")
-        try:
-            self.model = load_model(self.model_path, custom_objects={
-                'combined_quantile_loss': combined_quantile_loss(
-                    self.config.quantiles)
-            } if self.config.quantiles else {})
-            self.encoder = joblib.load(self.encoder_path)
-            self.scaler = joblib.load(self.scaler_path)
-            self.coord_scaler = joblib.load(self.coord_scaler_path)
-            self.log("  All artifacts loaded successfully.")
-        except Exception as e:
-            raise IOError(f"Failed to load a required artifact. Error: {e}")
         
     def _process_validation_data(
         self, validation_data_path: str

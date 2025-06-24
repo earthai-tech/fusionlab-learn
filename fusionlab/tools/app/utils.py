@@ -1,31 +1,51 @@
+
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
+"""
+Provides high-level utility functions for the GUI application,
+such as a robust model loader that can handle multiple Keras/TF
+saving formats.
+"""
+from __future__ import annotations 
+
 import os
 import json
 from typing import Callable, Optional, Any, Dict, List 
 from pathlib import Path
 import math 
 
-from fusionlab.params      import (
-    LearnableK, LearnableSs, LearnableQ,
-    LearnableC, FixedC, DisabledC,
-)
-from fusionlab.nn.models import TransFlowSubsNet, PIHALNet
-from fusionlab.nn import KERAS_DEPS 
+try:
+    from fusionlab.nn import KERAS_DEPS
+    from fusionlab.params import (
+        LearnableK, LearnableSs, LearnableQ,
+        LearnableC, FixedC, DisabledC,
+    )
+    from fusionlab.nn.models import TransFlowSubsNet, PIHALNet
+    
+except ImportError as e:
+    raise ImportError(
+        "This utility requires the `fusionlab` library and its"
+        f" dependencies to be installed. Error: {e}"
+    )
 
-_LEARNABLE_TYPES = (LearnableK, LearnableSs, LearnableQ)
-
-Callback =KERAS_DEPS.Callback 
-load_model = KERAS_DEPS.load_model
-Model      = KERAS_DEPS.Model            # type alias
-custom_object_scope = KERAS_DEPS.custom_object_scope
-deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
-serialize_keras_object =KERAS_DEPS.serialize_keras_object
-
-
+# Define custom objects needed for model deserialization
 _CUSTOM_OBJECTS = {
     "LearnableK": LearnableK, "LearnableSs": LearnableSs,
     "LearnableQ": LearnableQ, "LearnableC":  LearnableC,
     "FixedC":     FixedC,     "DisabledC":   DisabledC,
 }
+
+_LEARNABLE_TYPES = (LearnableK, LearnableSs, LearnableQ)
+
+Callback =KERAS_DEPS.Callback 
+load_model = KERAS_DEPS.load_model
+Model = KERAS_DEPS.Model            # type alias
+custom_object_scope = KERAS_DEPS.custom_object_scope
+deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
+serialize_keras_object =KERAS_DEPS.serialize_keras_object
+
 
 class GuiProgress(Callback):
     """
@@ -73,6 +93,113 @@ class GuiProgress(Callback):
             pct = math.floor(self._seen_batches / total_batches * 100)
             self.update_fn(pct)
 
+def locate_and_load_manifest(
+    manifest_path: Optional[str | os.PathLike] = None,
+    validation_data_path: Optional[str | os.PathLike] = None,
+    log: Callable[[str], None] = print
+) -> Dict[str, Any]:
+    """
+    Locates and loads a run_manifest.json file.
+
+    This function provides a robust way to find the correct manifest
+    file for an inference run. It can be given a direct path to the
+    manifest or a path to a new data file, from which it will
+    heuristically search for the most recent, relevant manifest.
+
+    Parameters
+    ----------
+    manifest_path : str or pathlib.Path, optional
+        A direct path to the `run_manifest.json` file. If provided,
+        this path is used directly.
+    validation_data_path : str or pathlib.Path, optional
+        A path to the new data file for prediction. This is used as
+        the starting point for a heuristic search if `manifest_path`
+        is not provided.
+    log : callable, default=print
+        A logging function to output status messages during the search.
+
+    Returns
+    -------
+    dict
+        The parsed content of the found JSON manifest file.
+
+    Raises
+    ------
+    ValueError
+        If neither `manifest_path` nor `validation_data_path` is provided.
+    FileNotFoundError
+        If no manifest file can be found from the given paths.
+    """
+    if not manifest_path and not validation_data_path:
+        raise ValueError(
+            "Must provide either a `manifest_path` or a "
+            "`validation_data_path` to find the run manifest."
+        )
+
+    if manifest_path:
+        found_manifest_path = Path(manifest_path)
+    else:
+        # If no direct path, search heuristically from the data path
+        found_manifest_path = _locate_manifest(
+            Path(validation_data_path), log=log
+        )
+
+    if not found_manifest_path or not found_manifest_path.exists():
+        raise FileNotFoundError(
+            f"Could not find a valid `run_manifest.json` at or near the "
+            f"provided path: {manifest_path or validation_data_path}"
+        )
+
+    log(f"Loading configuration from manifest: {found_manifest_path}")
+    return json.loads(found_manifest_path.read_text("utf-8"))
+
+
+def _find_manifests_in(dir_: Path) -> List[Path]:
+    """Return every run_manifest.json inside a directory or its sub-folders."""
+    return list(dir_.glob("**/run_manifest.json"))
+
+def locate_manifest(
+    start_path: Path, max_up: int = 3, log: Callable[[str], None] = print
+) -> Optional[Path]:
+    """
+    Heuristically search for the most recent `run_manifest.json` file.
+
+    This function performs a structured search to find the most relevant
+    manifest file associated with a given data path. It is designed to be
+    called from the GUI to enable the inference workflow.
+
+    Args:
+        start_path (Path): The file or directory to start the search from.
+        max_up (int): The maximum number of parent directories to traverse.
+        log (callable): A logging function for status updates.
+
+    Returns:
+        Optional[Path]: The path to the most recently modified manifest, or None.
+    """
+    log("  Searching for a suitable `run_manifest.json` file...")
+    search_dirs = [start_path.parent if start_path.is_file() else start_path]
+    
+    for i in range(max_up):
+        try:
+            parent = start_path.parents[i]
+            search_dirs.append(parent)
+            if (parent / "results_pinn").is_dir():
+                search_dirs.append(parent / "results_pinn")
+        except IndexError:
+            break
+    
+    found_manifests = []
+    for dir_ in set(search_dirs):
+        found_manifests.extend(_find_manifests_in(dir_))
+        
+    if not found_manifests:
+        log("  No manifest files found.")
+        return None
+        
+    latest_manifest = max(found_manifests, key=lambda p: p.stat().st_mtime)
+    log(f"  Found latest manifest: {latest_manifest}")
+    return latest_manifest
+
 def _find_manifest_in(dir_: Path) -> List[Path]:
     """Return every run_manifest.json inside *dir_/**_run/ sub-folders."""
     return list(dir_.glob("*_run/run_manifest.json"))
@@ -114,37 +241,35 @@ def _locate_manifest(csv_path: Path, max_up: int = 3) -> Optional[Path]:
     # nothing found
     return None
 
-def _rebuild_from_arch_cfg(arch_cfg: dict):
-    """Turn the manifest’s JSON back into a live Keras model."""
-    # 1. de-serialise nested Learnable… objects
+
+def _rebuild_from_arch_cfg(arch_cfg: dict) -> Model:
+    """
+    Rebuilds an un-compiled model instance from an architecture config dict.
+    
+    This helper de-serializes any custom `Learnable` parameter objects
+    and instantiates the correct model class (`TransFlowSubsNet` or
+    `PIHALNet`) from the configuration.
+    """
+    # 1. De-serialize nested Learnable parameter objects
     for key in ("K", "Ss", "Q", "pinn_coefficient_C"):
-        if isinstance(arch_cfg.get(key), dict) and "class_name" in arch_cfg[key]:
+        param_config = arch_cfg.get(key)
+        if isinstance(param_config, dict) and "class_name" in param_config:
             arch_cfg[key] = deserialize_keras_object(
-                arch_cfg[key],  custom_objects=_CUSTOM_OBJECTS
+                param_config, custom_objects=_CUSTOM_OBJECTS
             )
 
-    # 2. decide which concrete model class to instantiate
+    # 2. Decide which concrete model class to instantiate
     cls_name = arch_cfg.get("name", "TransFlowSubsNet")
-    ModelCls = TransFlowSubsNet if cls_name == "TransFlowSubsNet" else PIHALNet
+    ModelCls = {
+        "TransFlowSubsNet": TransFlowSubsNet,
+        "PIHALNet": PIHALNet
+    }.get(cls_name)
+    
+    if ModelCls is None:
+        raise ValueError(f"Unknown model class '{cls_name}' in manifest config.")
 
-    # 3. build **un-compiled** model
+    # 3. Build and return the un-compiled model from its config
     return ModelCls.from_config(arch_cfg)
-
-# def _rebuild_from_arch_cfg(arch_cfg: dict):
-#     """Return a *compiled* model recreated from the JSON architecture dict."""
-#     cls_name = arch_cfg.get("name")               # 'TransFlowSubsNet' / 'PIHALNet'
-#     model_cls = {"TransFlowSubsNet": TransFlowSubsNet,
-#                  "PIHALNet":        PIHALNet}.get(cls_name)
-#     if model_cls is None:
-#         raise ValueError(f"Unknown model class '{cls_name}' in manifest")
-
-#     # re-hydrate possible Learnable-objects stored as {"class_name": …}
-#     for key in ("K", "Ss", "Q", "pinn_coefficient_C"):
-#         obj = arch_cfg.get(key)
-#         if isinstance(obj, dict) and ( "class_name" in obj or "__class_name__" in obj):
-#             arch_cfg[key] = deserialize_keras_object(obj, _CUSTOM_OBJECTS)
-
-#     return model_cls.from_config(arch_cfg)
 
 def safe_model_loader(
     model_path: str | os.PathLike,
@@ -152,90 +277,113 @@ def safe_model_loader(
     build_fn: Optional[Callable[[], Model]] = None,
     custom_objects: Optional[dict] = None,
     log: Callable[[str], None] = print,
-    arch_cfg=None, 
+    model_cfg: Optional[Dict[str, Any]] = None,
 ) -> Model:
-    """
-    Load a Keras / TF model saved as **.keras**, **SavedModel dir**,
-    legacy **.h5**, or **weights-only .weights.h5**.
+    """Loads a Keras/TF model saved in various formats.
 
-    If the file is weights-only you *must* pass `build_fn` that returns
-    a fresh, **un-compiled** model with the *same* architecture.
+    This function provides a single, robust entry point for loading models
+    saved as:
+    - The modern Keras v3 format (``.keras``)
+    - The legacy HDF5 format (``.h5``)
+    - The TensorFlow SavedModel directory format
+    - Weights-only files (e.g., ``.weights.h5``)
+
+    For weights-only files, this function requires a build function or an
+    architecture configuration from a manifest to reconstruct the model
+    before loading the weights.
+
+    Parameters
+    ----------
+    model_path : str or pathlib.Path
+        The path to the model file or directory.
+    build_fn : callable, optional
+        A callable function that returns a fresh, un-compiled model
+        instance. Required if `model_path` points to a weights-only
+        file and `arch_cfg` is not provided.
+    custom_objects : dict, optional
+        A dictionary mapping names to custom classes or functions required
+        for loading the model. Merged with default PINN custom objects.
+    log : callable, default=print
+        A logging function to output status messages.
+    model_cfg : dict, optional
+        The trained model configuration. It encompasses the architecture 
+         configuration dictionary, typically from a manifest
+        file. Used with `build_fn` to reconstruct a model for
+        weights-only loading.
+
+    Returns
+    -------
+    keras.Model
+        The loaded Keras model.
+
+    Raises
+    ------
+    IOError
+        If the model path does not exist or if loading fails for other reasons.
+    ValueError
+        If a weights-only file is provided without a way to reconstruct the
+        model (i.e., missing `build_fn` or `arch_cfg`).
     """
     path = Path(model_path)
     if not path.exists():
         raise IOError(f"[safe_model_loader] Path does not exist: {path}")
 
-    ext = path.suffix.lower()
-    # try:
-    # ---- full-graph formats --
-    # if ext in {".keras", ".h5"} and not path.name.endswith(".weights.h5"):
-    #     log(f"[loader] reading full model from {path.name}")
-    #     try: 
-    #         model = load_model(path, custom_objects=custom_objects)
-    #     except: 
-    #         with custom_object_scope(custom_objects):
-    #             model = load_model(path)
-                
-    #     log("  Model loaded successfully.")
-        
-    #     return model
+    # Combine user custom objects with the default ones for PINN params
+    final_custom_objects = _CUSTOM_OBJECTS.copy()
+    if custom_objects:
+        final_custom_objects.update(custom_objects)
     
-    # ---- SavedModel directory ------------------------------------
-    # if path.is_dir():
-    #     log(f"[loader] reading TensorFlow SavedModel at {path}")
-    #     model =  load_model(path, custom_objects=custom_objects)
-    #     log("  Best model loaded successfully.")
-    #     return model 
+    arch_cfg = model_cfg.get("config")
+    try:
+        # --- Case 1: Full Model (directory or .keras/.h5 file) ---
+        if path.is_dir() or (path.suffix in {".keras", ".h5"} and not
+                             path.name.endswith(".weights.h5")):
+            log(f"[loader] Reading full model from: {path.name}")
+            with custom_object_scope(final_custom_objects):
+                model = load_model(path)
+            log("  Model loaded successfully.")
+            return model
 
-    # ---- weights-only case ---------------------------------------
-    if path.name.endswith(".weights.h5"):
-        if build_fn is None:
-            raise ValueError("weights file requires a `build_fn`.")
-        log(f"[loader] rebuilding architecture then "
-            f"loading weights from {path.name}")
-        
-        model = build_fn()          # un-compiled model
-        
-        # ----------  NEW  ---------------------------------------
-        # force variable creation so the weight names exist
-        if not model.built:
-            #  a) if the model implements `.build(input_shape)`:
-            try:
-                # retrieve the input shapes stored in the manifest
-                ish = arch_cfg.get("input_shapes")  # save this during training!
-                if ish is not None:
-                    model.build(ish)
-            except Exception:
-                pass
-    
-            # #  b) fall back to a dummy forward-pass
-            # if not model.built:
-            #     import tensorflow as tf
-            #     dummy = {
-            #         "coords":           tf.zeros(
-            #             (1, arch_cfg["max_window_size"], 3)),
-            #         "dynamic_features": tf.zeros(
-            #             (1, arch_cfg["max_window_size"], arch_cfg["dynamic_input_dim"])),
-            #         "static_features":  tf.zeros(
-            #             (1, arch_cfg["static_input_dim"])),
-            #         "future_features":  tf.zeros(
-            #             (1, arch_cfg["forecast_horizon"], arch_cfg["future_input_dim"])),
-            #     }
-            #     _ = model(dummy, training=False)
-        # --------------------------------------------------------
-    
-        # model.load_weights(path)                # (2) now succeeds
-        # return model
+        # --- Case 2: Weights-only file ---
+        elif path.name.endswith((".weights.h5", ".weights.keras")):
+            log(f"[loader] Loading weights from: {path.name}")
+            
+            # Rebuild the model architecture first
+            if build_fn:
+                model = build_fn()
+                log("  Rebuilding model from provided build_fn...")
+            elif arch_cfg:
+                model = _rebuild_from_arch_cfg(arch_cfg)
+                log("  Rebuilding model from manifest architecture config...")
+            else:
+                raise ValueError(
+                    "A `build_fn` or `arch_cfg` must be provided to load a "
+                    "weights-only file."
+                )
 
-        
-        model.load_weights(path)
-        return model
+            # Build the model to create its weights before loading
+            if not model.built and arch_cfg and "input_shapes" in model_cfg:
+                log("  Building model with input shapes from manifest...")
+                try:
+                    # The `input_shapes` from the manifest will be a dict
+                    model.build(model_cfg["input_shapes"])
+                except Exception as e:
+                    log(f"  [Warning] Failed to build model with manifest"
+                        f" shapes: {e}. Model will build on first call.")
 
-    #     raise ValueError(f"unknown model format: {path}")
+            # Load the weights into the reconstructed architecture
+            model.load_weights(str(path))
+            log("  Weights loaded successfully into reconstructed model.")
+            return model
 
-    # except Exception as err:
-    #     raise IOError(f"[safe_model_loader] failed to load: {err}") from err
+        else:
+            raise ValueError(f"Unknown model format for path: {path}")
 
+    except Exception as err:
+        raise IOError(
+            f"[safe_model_loader] Failed to load model from {path}. "
+            f"Ensure custom objects are registered or provided. Error: {err}"
+        ) from err
 
 def json_ready(obj: Any, *, mode: str = "literal") -> Any:
     """

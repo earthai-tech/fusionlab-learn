@@ -1236,7 +1236,6 @@ class MiniForecaster(QMainWindow):
             self.edited_df = None        # fall back to on-disk CSV
             self._log("CSV preview canceled – keeping original file.")
         
-        # --------------------------------------------------------------
         # look for a manifest near the selected CSV  → enables inference
         manifest = _locate_manifest(self.file_path)
         
@@ -1255,7 +1254,7 @@ class MiniForecaster(QMainWindow):
                 "Inference is available once a trained run is found nearby."
             )
         self.progress_bar.setValue(0)
-    # --------------------------------------------------------------
+
     def _toggle_inference_mode(self):
         """Flip the GUI between *training* and *inference* modes."""
         self._inference_mode = not self._inference_mode

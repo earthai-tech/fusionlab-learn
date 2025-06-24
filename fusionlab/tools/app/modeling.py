@@ -1,8 +1,18 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
+"""
+Provides the core classes for the data processing, model training, and
+forecasting workflow of the subsidence GUI application.
+"""
 
 import os
 import pandas as pd
 from typing import List, Optional, Dict, Any
 from typing import Tuple
+from pathlib import Path
+import json  
 import shutil # noqa
 
 from fusionlab.utils.generic_utils import rename_dict_keys 
@@ -18,7 +28,8 @@ from fusionlab.nn.models import PIHALNet, TransFlowSubsNet
 
 from fusionlab.tools.app.config import SubsConfig 
 from fusionlab.tools.app.utils import ( 
-    GuiProgress, safe_model_loader, json_ready
+    GuiProgress, safe_model_loader, json_ready, 
+    _rebuild_from_arch_cfg
 )
 
 Callback =KERAS_DEPS.Callback 
@@ -243,42 +254,64 @@ class ModelTrainer:
                 os.path.join(self.config.run_output_path, hist_file),
                 index=False
             )
-            _update_manifest(self.config.run_output_path,
-                             "training",
-                             {"history": hist_file,
-                              "epochs_run": len(self.history.history["loss"])}
-                )
+            _update_manifest(
+                self.config.run_output_path, "training",
+                  {
+                      "history": hist_file,
+                      "epochs_run": len(self.history.history["loss"])
+                }
+            )
         except Exception as err:
             self.log(f"  [WARN] Could not write history file: {err}")
-
+            
     def _load_best_model(self) -> Any:
-        """Return the best model (or current one if loading fails)."""
-        ckpt = self.checkpoint_path              # ← already stored above
-        # try:
-        custom = {}
-        if self.config.quantiles:
-            custom["combined_quantile_loss"] = combined_quantile_loss(
-                self.config.quantiles
-            )
-        # build_fn only needed if *.weights.h5
-        build_fn = None
-        if ckpt.endswith(".weights.h5"):
-            # reuse the same constructor we used earlier
-            ModelClass = (TransFlowSubsNet if
-                          self.config.model_name == "TransFlowSubsNet"
-                          else PIHALNet)
-            build_fn = lambda: ModelClass(**self.model.get_config())
-
-        best = safe_model_loader(
-            ckpt, build_fn=build_fn, custom_objects=custom, log=self.log
-        )
-        self.log("  Best model loaded successfully.")
-        return best
+        """
+        Loads the best model from the checkpoint after training. This method
+        is robust to different Keras saving formats.
+        """
+        self.log("  Loading best model from checkpoint...")
         
-        # except Exception as e:
-        #     self.log(
-        #         f"  ⚠ best-model load failed: {e} – using in-memory model.")
-        #     return self.model
+        build_fn = None
+        arch_cfg = None
+        model_cfg =None 
+        
+        # If we only saved weights, we need to rebuild the model architecture
+        # by reading the configuration that was just saved to the manifest.
+        if self.config.save_format == "weights":
+            self.log(
+                "  Weights-only format detected. Rebuilding model from manifest...")
+            
+            # 1. Load the manifest file created during the training run.
+            manifest_path = Path(self.config.run_output_path) / "run_manifest.json"
+            if not manifest_path.exists():
+                raise FileNotFoundError(
+                    "Cannot load weights-only model: 'run_manifest.json' not found."
+                )
+            self.manifest = json.loads(manifest_path.read_text("utf-8"))
+            
+            # 2. Extract the architecture and input shape configurations.
+            arch_cfg = self.manifest.get("training", {}).get("config")
+            if not arch_cfg:
+                raise ValueError("Manifest is missing 'training.config' section"
+                                 " required to rebuild model.")
+            
+            # Add input_shapes to the arch_cfg so the loader can build the model
+            model_cfg= self.manifest.get(
+                "training", {})#.get("input_shapes")
+            
+            # 3. Create a build function that reconstructs the model.
+            build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
+
+        # Call the safe loader utility
+        best_model = safe_model_loader(
+            self.checkpoint_path,
+            build_fn=build_fn,
+            model_cfg=model_cfg,  # Pass config for building with input shape
+            log=self.log
+        )
+        
+        self.log("  Best model loaded successfully.")
+        return best_model
 
     def __load_best_model(self) -> Any:
         """Loads the best performing model saved by ModelCheckpoint."""
