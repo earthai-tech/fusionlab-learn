@@ -16,27 +16,16 @@ from functools import wraps
 from typing import List, Optional, Dict, Any
 import pandas as pd
 
-try:
-    from fusionlab.utils.geo_utils import (
-        augment_spatiotemporal_data,
-        generate_dummy_pinn_data
-    )
-    from fusionlab.utils.generic_utils import ExistenceChecker
-    from fusionlab.utils.forecast_utils import pivot_forecast_dataframe
-    from fusionlab.utils.forecast_utils import format_forecast_dataframe
-    from fusionlab.tools.app.config import SubsConfig
-    from fusionlab.tools.app.processing import (
-        DataProcessor, SequenceGenerator, ModelTrainer, 
-        Forecaster, ResultsVisualizer
-    )
-    from fusionlab.tools.app.inference import PredictionPipeline
-    
-except ImportError:
-    print("Error: Could not import fusionlab utilities. "
-          "Please ensure fusionlab-learn is installed correctly.", file=sys.stderr)
-    sys.exit(1)
-
-# --- Private Helper Functions for I/O and Error Handling ---
+from fusionlab.tools.app.config import SubsConfig
+from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
+from fusionlab.tools.app.modeling import ModelTrainer, Forecaster 
+from fusionlab.tools.app.view import ResultsVisualizer 
+from fusionlab.tools.app.inference import PredictionPipeline
+from fusionlab.utils.forecast_utils import pivot_forecast_dataframe
+from fusionlab.utils.forecast_utils import format_forecast_dataframe
+from fusionlab.utils.generic_utils import ExistenceChecker
+from fusionlab.utils.geo_utils import augment_spatiotemporal_data
+from fusionlab.utils.geo_utils import generate_dummy_pinn_data
 
 def _read_csv_safely(file_path: str) -> pd.DataFrame:
     """Reads a CSV file with standardized error handling."""

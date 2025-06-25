@@ -131,6 +131,18 @@ QPushButton#inference:disabled {{
 }}
 
 """
+# Fusionlab-learn palette 
+PRIMARY   = "#2E3191"   
+SECONDARY = "#F28620"   
+BG_LIGHT  = "#fafafa"
+FG_DARK   = "#1e1e1e"
+PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
+SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
+# ------------------------------------------------------------------ #
+#  Inference-mode toggle
+# ------------------------------------------------------------------ #
+INFERENCE_ON  = PRIMARY
+INFERENCE_OFF = "#dadada"        # greyed-out (disabled)
 
 # --- Color Palette Definition ---
 # Using a central palette makes themes easier to manage.
@@ -161,128 +173,215 @@ PALETTE = {
     "light_reset_bg": "#e2e8f0", # slate-200
 }
 
-# --- Dark Theme Stylesheet ---
+# --- Polished Dark Theme Stylesheet ---
 DARK_THEME_STYLESHEET = f"""
+    /* Main Window and General Widgets */
     QMainWindow, QWidget {{
         background-color: {PALETTE['dark_bg']};
         color: {PALETTE['dark_text']};
-        font-family: 'Segoe UI', sans-serif;
+        font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
     }}
+    /* Main Title Label */
+    QLabel#title {{
+        font-size: 28px;
+        font-weight: bold;
+        color: {PALETTE['dark_text_title']};
+        padding: 10px;
+    }}
+    /* General Description Label */
+    QLabel#description {{
+        font-size: 14px;
+        color: {PALETTE['dark_text_muted']};
+    }}
+    /* Card Frame Styling */
     QFrame#card {{
         background-color: {PALETTE['dark_card_bg']};
         border: 1px solid {PALETTE['dark_border']};
-        border-radius: 8px;
+        border-radius: 12px;
     }}
-    QLabel#title {{
-        font-size: 28px; font-weight: bold;
-        color: {PALETTE['dark_text_title']};
-    }}
+    /* Card Title Label */
     QLabel#cardTitle {{
-        font-size: 18px; font-weight: 600;
+        font-size: 18px;
+        font-weight: 600;
         color: {PALETTE['dark_text_title']};
+        padding-bottom: 5px;
     }}
-    QLabel#description, QLabel#cardDescription {{
+    /* Card Description Label */
+    QLabel#cardDescription {{
+        font-size: 13px;
         color: {PALETTE['dark_text_muted']};
     }}
+    /* Main Action Buttons (Run, Select File) */
     QPushButton {{
         background-color: {PALETTE['primary']};
-        color: white; border: none;
-        padding: 8px; border-radius: 6px;
+        color: white;
+        border: none;
+        padding: 10px 15px;
+        border-radius: 6px;
         font-weight: bold;
+        outline: none; /* Remove outline on focus */
     }}
     QPushButton:hover {{
-        background-color: #4338ca; /* A slightly lighter primary for hover */
+        background-color: #4338ca; /* Lighter shade of primary for hover */
     }}
     QPushButton:disabled {{
-        background-color: #334155; 
+        background-color: #334155;
         color: {PALETTE['dark_text_muted']};
     }}
-    QPushButton#resetButton {{
+    /* Special Buttons (Reset, Stop) */
+    QPushButton#resetButton, QPushButton#stopButton {{
         background-color: {PALETTE['dark_reset_bg']};
         color: {PALETTE['dark_text']};
     }}
-    QPushButton#resetButton:hover {{
+    QPushButton#resetButton:hover, QPushButton#stopButton:hover {{
         background-color: {PALETTE['dark_border']};
     }}
+    /* Input Fields (QLineEdit, QSpinBox, etc.) */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {PALETTE['dark_input_bg']};
         border: 1px solid {PALETTE['dark_border']};
-        padding: 6px; border-radius: 6px; color: white;
+        padding: 8px;
+        border-radius: 6px;
+        color: white;
     }}
+    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+        border: 1px solid {PALETTE['primary']}; /* Highlight on focus */
+    }}
+    /* Log Output Area */
     QTextEdit {{
-        background-color: #020617; /* Near black */
+        background-color: #020617; /* Near black for contrast */
+        color: #e2e8f0;
         border: 1px solid {PALETTE['dark_border']};
-        font-family: "Courier New", monospace;
+        font-family: "Consolas", "Courier New", monospace;
+        font-size: 13px;
     }}
-    QFrame#hLine {{ border: 1px solid {PALETTE['dark_border']}; }}
+    /* Horizontal Separator Line */
+    QFrame#hLine {{
+        border: none;
+        border-top: 1px solid {PALETTE['dark_border']};
+    }}
+    /* Tooltip Styling */
     QToolTip {{
-        background-color: {PALETTE['secondary']}; color: white;
-        border: 1px solid white; padding: 4px; border-radius: 4px;
+        background-color: {PALETTE['secondary']};
+        color: white;
+        border: none;
+        padding: 5px;
+        border-radius: 4px;
+        font-size: 12px;
     }}
 """
-
-# --- Light Theme Stylesheet ---
+# --- Theme Stylesheet (FusionLab Theme) ---
 LIGHT_THEME_STYLESHEET = f"""
+    /* --- Main Window and General Widgets --- */
     QMainWindow, QWidget {{
         background-color: {PALETTE['light_bg']};
         color: {PALETTE['light_text']};
-        font-family: 'Segoe UI', sans-serif;
+        font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     }}
+
+    /* --- Header Elements --- */
+    QLabel#title {{
+        font-size: 28px;
+        font-weight: bold;
+        color: {PALETTE['light_text_title']};
+        padding: 10px 0;
+    }}
+    QLabel#description {{
+        font-size: 14px;
+        color: {PALETTE['light_text_muted']};
+    }}
+
+    /* --- Card Styling --- */
     QFrame#card {{
         background-color: {PALETTE['light_card_bg']};
         border: 1px solid {PALETTE['light_border']};
         border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }}
-    QLabel#title {{
-        font-size: 28px; font-weight: bold;
-        
-        color: {PALETTE['light_text_title']};
     }}
     QLabel#cardTitle {{
-        font-size: 18px; font-weight: 600; 
+        font-size: 18px;
+        font-weight: 600;
         color: {PALETTE['light_text_title']};
+        padding-bottom: 5px;
     }}
-    QLabel#description, QLabel#cardDescription {{
+    QLabel#cardDescription {{
+        font-size: 13px;
         color: {PALETTE['light_text_muted']};
     }}
+
+    /* --- Button Styling --- */
     QPushButton {{
         background-color: {PALETTE['primary']};
-        color: white; border: none;
-        padding: 8px; border-radius: 6px;
+        color: white;
+        border: none;
+        padding: 9px 15px;
+        border-radius: 6px;
         font-weight: bold;
+        outline: none;
     }}
     QPushButton:hover {{
         background-color: {PALETTE['secondary']};
     }}
     QPushButton:disabled {{
-        background-color: #e2e8f0; color: #94a3b8;
+        background-color: #e2e8f0; /* slate-200 */
+        color: #94a3b8; /* slate-400 */
     }}
-    QPushButton#resetButton {{
+    QPushButton#resetButton, QPushButton#stopButton {{
         background-color: {PALETTE['light_reset_bg']};
         color: {PALETTE['light_text']};
+        font-weight: normal;
     }}
-     QPushButton#resetButton:hover {{
-        background-color: #cbd5e1;
+    QPushButton#resetButton:hover, QPushButton#stopButton:hover {{
+        background-color: #cbd5e1; /* slate-300 */
     }}
+
+    /* --- Input Field Styling --- */
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
         background-color: {PALETTE['light_input_bg']};
         border: 1px solid {PALETTE['light_border']};
-        padding: 6px; border-radius: 6px;
+        padding: 7px;
+        border-radius: 6px;
         color: {PALETTE['light_text']};
     }}
+    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+        border: 2px solid {PALETTE['primary']}; /* Use a thicker, colored border for focus */
+        padding: 6px; /* Adjust padding to keep size consistent */
+    }}
+    QComboBox::drop-down {{
+        border: none;
+    }}
+
+    /* --- Log Output Area --- */
     QTextEdit {{
         background-color: {PALETTE['light_card_bg']};
         border: 1px solid {PALETTE['light_border']};
-        font-family: "Courier New", monospace;
+        font-family: "Consolas", "Courier New", monospace;
+        color: #334155;
     }}
-    QFrame#hLine {{ border: 1px solid {PALETTE['light_input_bg']}; }}
+
+    /* --- Miscellaneous --- */
+    QFrame#hLine {{
+        border: none;
+        border-top: 1px solid {PALETTE['light_input_bg']};
+    }}
     QToolTip {{
-        background-color: {PALETTE['dark_bg']}; color: white;
-        border: none; padding: 4px; border-radius: 4px;
+        background-color: {PALETTE['dark_bg']};
+        color: white;
+        border: none;
+        padding: 5px;
+        border-radius: 4px;
+        font-size: 12px;
+    }}
+    QProgressBar {{
+        border: 1px solid {PALETTE['light_border']};
+        border-radius: 4px;
+        text-align: center;
+        background-color: {PALETTE['light_input_bg']};
+    }}
+    QProgressBar::chunk {{
+        background-color: {PALETTE['primary']};
+        border-radius: 3px;
     }}
 """
-
 
 class _PandasModel(QAbstractTableModel):
     """A Qt Table Model for exposing a pandas DataFrame.
@@ -1547,19 +1646,21 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     app = QApplication(sys.argv)
     
     QToolTip.setFont(QFont("Helvetica Neue", 9))
-
+    
+    selected_stylesheet = None
     if os.path.exists("style.qss"):
         with open("style.qss", "r", encoding="utf-8") as f:
             selected_stylesheet = f.read()
     else:
         if theme.lower() == 'dark':
             selected_stylesheet = DARK_THEME_STYLESHEET
-        elif theme =='light':
+        elif theme.lower() =='light':
             selected_stylesheet = LIGHT_THEME_STYLESHEET
-        else: 
-            selected_stylesheet = FLAB_STYLE_SHEET                  
-
-    app.setStyleSheet(selected_stylesheet)
+        elif theme.lower() =='fusionlab': 
+            selected_stylesheet = FLAB_STYLE_SHEET   
+       
+    if selected_stylesheet:
+        app.setStyleSheet(selected_stylesheet)
 
     gui = MiniForecaster()
     gui.show()
