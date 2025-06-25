@@ -29,23 +29,57 @@ Launching the Application
 
 The GUI is a tool within the ``fusionlab-learn`` library. To run it,
 you must have the library and its dependencies (especially `PyQt5`)
-installed.
+installed. There are three ways to launch the application, each suited
+for different needs.
+
+**Method 1: Direct Command (Recommended)**
+
+Once `fusionlab-learn` is installed, a direct command is added to your
+system's path. This is the simplest and recommended way to start the GUI.
+
+.. code-block:: bash
+
+   pinn-mini-forecaster
+
+This will launch the main application window.
+
+**Method 2: Using the Main [fusionlab-learn] CLI**
+
+The GUI can also be launched via the main `fusionlab-learn` command-line
+interface. This is useful for users who are already working with the
+other CLI tools.
+
+.. code-block:: bash
+
+   fusionlab-learn app launch-mini-forecaster
+
+.. tip::
+   You can also pass the ``--theme`` option to this command to change
+   the appearance, for example:
+   
+   .. code-block:: bash 
+   
+      fusionlab-learn app launch-mini-forecaster --theme dark
+   
+**Method 3: Running as a Python Module (for Developers)**
+
+If you are developing the library or need to run the GUI directly from
+the source code without a full installation, you can execute it as a
+Python module from the root directory of the project.
 
 1.  Navigate to the root directory of the `fusionlab-learn` project
     in your terminal.
 2.  Run the application using the following command:
 
-    .. code-block:: bash
+.. code-block:: bash
 
-       python -m fusionlab.tools.app.mini_forecaster_gui
-
-    This will launch the main application window.
+   python -m fusionlab.tools.app.mini_forecaster_gui
 
 
 .. raw:: html
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
-
+   
 Prerequisites: Data Format Requirements
 ---------------------------------------
 
@@ -289,6 +323,10 @@ Inside this directory, you will find:
 * **Coverage Results:** If ``Evaluate Coverage`` is enabled, the coverage
   score results will also be included in the output.
   
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
 .. _pinn_gui_inference_guide:
 
 Running Inference with a Trained Model
