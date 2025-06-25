@@ -29,7 +29,7 @@ try:
     @app_group.command(name='launch-mini-forecaster')
     @click.option(
         '--theme',
-        default='light',
+        default='fusionlab',
         type=click.Choice(['dark', 'light', 'fusionlab'], case_sensitive=False),
         help='The visual theme to apply to the GUI.'
     )

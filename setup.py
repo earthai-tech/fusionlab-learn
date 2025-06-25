@@ -72,7 +72,7 @@ setup_kwargs = {
     'entry_points': {
         'console_scripts': [
             'fusionlab-learn=fusionlab.cli:cli',
-            'fusionlab-learn-pinn-mini-forecaster=fusionlab.tools.app.mini_forecaster_gui:launch_cli'
+            'pinn-mini-forecaster=fusionlab.tools.app.mini_forecaster_gui:launch_cli'
             
         ]
     },
