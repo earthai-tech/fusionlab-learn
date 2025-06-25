@@ -536,8 +536,14 @@ def visualize_predictions(
     logging.info(f"Prediction visualization saved to {output_path}")
     plt.show()
 
-
-def main(verbose: int = 1):
+def run_point_workflow(
+    data_path: str,
+    epochs: int = 100,
+    batch_size: int = 32,
+    time_steps: int = 4,
+    forecast_horizon: int = 4,
+    verbose: int = 1
+):
     """
     Main function to execute the XTFT batch prediction workflow.
 
@@ -684,9 +690,7 @@ def main(verbose: int = 1):
     )
     logging.debug(f"Scaled target shape: {scaled_target_df.shape}")
     
-    # =============================================================================
     # 7. Combine Processed Features
-    # =============================================================================
     
     # Combine all processed data: numerical features, encoded categories, and target
     final_processed_data = pd.concat([scaled_numerical_df, encoded_cat_df, scaled_target_df], axis=1)
@@ -701,9 +705,7 @@ def main(verbose: int = 1):
     logging.info(f"Numerical scaler saved to: {numerical_scaler_path}")
     logging.info(f"Longitude and latitude scaler saved to: {lonlat_path}")
     
-    # =============================================================================
     # 8. Save Combined Scalers Dictionary
-    # =============================================================================
     
     # Save the combined dictionary of scalers (numerical, categorical, target)
     target_scaler_path = os.path.join(data_path, 'xtft.target_scaler.joblib')
@@ -717,17 +719,14 @@ def main(verbose: int = 1):
     joblib.dump(dict_scalers, target_scaler_path)
     logging.info(f"Combined scalers saved to: {target_scaler_path}")
     
-    # =============================================================================
+
     # 9. Sort Data by Year
-    # =============================================================================
     
     # Ensure the data is sorted by 'year'
     final_processed_data.sort_values('year', inplace=True)
     logging.debug("Final processed data sorted by year")
     
-    # =============================================================================
     # 10. Prepare Sequences for Model Training
-    # =============================================================================
     
     # Define sequence length and forecast horizon
     sequence_length = 4  # Corresponds to 2015 to 2018
@@ -745,9 +744,7 @@ def main(verbose: int = 1):
         target_col
     )
     
-    # =============================================================================
     # 11. Split Data into Train and Validation Sets
-    # =============================================================================
     
     logging.info("Splitting data into training and validation sets")
     X_train, X_val, y_train, y_val = train_test_split(
@@ -756,9 +753,7 @@ def main(verbose: int = 1):
     logging.debug(f"Training set shape: X_train={X_train.shape}, y_train={y_train.shape}")
     logging.debug(f"Validation set shape: X_val={X_val.shape}, y_val={y_val.shape}")
     
-    # =============================================================================
     # 12. Split Sequences into Static and Dynamic Inputs
-    # =============================================================================
     
     # Identify static and dynamic feature indices
     static_feature_names = ['longitude', 'latitude'] + encoded_cat_columns
@@ -781,9 +776,7 @@ def main(verbose: int = 1):
     logging.debug(f"Reshaped y_train shape: {y_train.shape}")
     logging.debug(f"Reshaped y_val shape: {y_val.shape}")
     
-    # =============================================================================
     # 13. Define and Compile the XTFT Model
-    # =============================================================================
     
     # XTFT Model Parameters
     static_input_dim = 1  # Each static feature has a single value
@@ -817,9 +810,7 @@ def main(verbose: int = 1):
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     logging.info("XTFT model compiled")
     
-    # =============================================================================
     # 14. Define Callbacks for Training
-    # =============================================================================
     
     early_stopping = EarlyStopping(
         monitor='val_loss', 
@@ -835,9 +826,7 @@ def main(verbose: int = 1):
         verbose=1 if verbose else 0
     )
     
-    # =============================================================================
     # 15. Train the XTFT Model
-    # =============================================================================
     
     logging.info("Starting model training")
     model.fit(
@@ -849,17 +838,13 @@ def main(verbose: int = 1):
         verbose=1 if verbose else 0
     )
     
-    # =============================================================================
     # 16. Make Predictions on Validation Set
-    # =============================================================================
     
     logging.info("Making predictions on the validation set")
     predictions_scaled = model.predict([static_val, dynamic_val, encoded_cats[-static_val.shape[0]:]])
     logging.debug(f"Predictions scaled shape: {predictions_scaled.shape}")
     
-    # =============================================================================
     # 17. Reverse Scaling of Predictions
-    # =============================================================================
     
     # Reshape predictions to 2D for inverse scaling (flattening the last two dimensions)
     predictions_reshaped = predictions_scaled.reshape(-1, predictions_scaled.shape[-1])
@@ -873,18 +858,13 @@ def main(verbose: int = 1):
     predictions = predictions_inverse.reshape(-1, forecast_horizon)
     logging.debug(f"Predictions reshaped shape: {predictions.shape}")
     
-    # =============================================================================
     # 18. Reverse Scaling for Longitude and Latitude
-    # =============================================================================
     
     # Reverse scaling for longitude and latitude using the longitude-latitude scaler
     longitude_latitude_scaled = static_val[:, :2]  # Assuming first two columns are longitude and latitude
     longitude_latitude_original = joblib.load(os.path.join(data_path, 'xtft.lonlat.joblib')).inverse_transform(longitude_latitude_scaled)
     
-    # =============================================================================
-    # 19. Create DataFrame for the Predicted Data (For 2023–2026)
-    # =============================================================================
-    
+    # 19. Create DataFrame for the Predicted Data (For 2023–2026) 
     future_data = pd.DataFrame({
         'longitude': longitude_latitude_original[:, 0],
         'latitude': longitude_latitude_original[:, 1],
@@ -895,17 +875,13 @@ def main(verbose: int = 1):
     })
     logging.info(f"Future data shape: {future_data.shape}")
     
-    # =============================================================================
     # 20. Save Future Predictions to CSV
-    # =============================================================================
     
     future_predictions_path = os.path.join(data_path, 'xtft_prediction_val_2023_2026.csv')
     future_data.to_csv(future_predictions_path, index=False)
     logging.info(f"Future predictions saved to {future_predictions_path}")
-    
-    # =============================================================================
+
     # 21. Visualize Predictions
-    # =============================================================================
     
     visualize_predictions(
         future_data, 
@@ -918,23 +894,21 @@ def main(verbose: int = 1):
     
     logger.info("XTFT point prediction script finished successfully.")
 
-# =============================================================================
-# Entry Point
-# =============================================================================
 
-if __name__ == "__main__":
-    import argparse
+
+# if __name__ == "__main__":
+#     import argparse
     
-    # Argument parser for command-line options
-    parser = argparse.ArgumentParser(description="XTFT Deterministic Prediction Script")
-    parser.add_argument(
-        '--verbose', 
-        type=int, 
-        default=1, 
-        choices=[0, 1, 2],
-        help='Verbosity level: 0=WARNING, 1=INFO, 2=DEBUG'
-    )
+#     # Argument parser for command-line options
+#     parser = argparse.ArgumentParser(description="XTFT Deterministic Prediction Script")
+#     parser.add_argument(
+#         '--verbose', 
+#         type=int, 
+#         default=1, 
+#         choices=[0, 1, 2],
+#         help='Verbosity level: 0=WARNING, 1=INFO, 2=DEBUG'
+#     )
     
-    args = parser.parse_args()
+#     args = parser.parse_args()
     
-    main(verbose=args.verbose)
+#     main(verbose=args.verbose)

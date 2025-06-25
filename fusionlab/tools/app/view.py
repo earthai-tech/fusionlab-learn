@@ -5,7 +5,9 @@ import pandas as pd
 from typing import Optional
 from PyQt5.QtCore import pyqtSignal, QObject
 
-from fusionlab.utils.generic_utils import save_all_figures 
+from fusionlab.utils._manifest_registry import ManifestRegistry, _update_manifest 
+from fusionlab.utils.generic_utils import save_all_figures
+         
 from fusionlab.plot.forecast import plot_forecasts, forecast_view 
 from fusionlab.tools.app.config import SubsConfig 
 
@@ -34,7 +36,23 @@ class ResultsVisualizer:
         """
         self.config = config
         self.log = log_callback or print
-
+        
+    def _note(self, fname: str) -> None:
+        """
+        Append <fname> to the “figures” list in run_manifest.json
+        (creates the list on first call).
+        """
+        try: 
+            _update_manifest(
+                self.config.registry_path, "figures", fname, # value
+                as_list=True                # <- append, don’t overwrite
+            )
+        except: 
+            _update_manifest(
+                ManifestRegistry().latest_manifest(), "figures",
+                fname, # value
+                as_list=True  # <- append, don’t overwrite
+            )
     def run(self, forecast_df: Optional[pd.DataFrame]):
         """
         Executes the full visualization and saving pipeline.
@@ -105,8 +123,10 @@ class ResultsVisualizer:
             savefig=png_base_subs, 
             save_fmts=['.png', '.pdf']
         )
-        png_png = f"{png_base_subs}.png"          
+        png_png = f"{png_base_subs}.png" 
+        self._note(os.path.basename(png_png))  
         VIS_SIGNALS.figure_saved.emit(png_png)
+        
         
         # Plot for GWL if configured
         gwl_pred_col = f"{self.config.gwl_col}_q50" if self.config.quantiles \
@@ -136,8 +156,9 @@ class ResultsVisualizer:
                 save_fmts= ['.png', '.pdf'], 
             )
             png_gwl_png  = f"{png_base_gwl}.png"
+            self._note(os.path.basename(png_gwl_png))  
             VIS_SIGNALS.figure_saved.emit(png_gwl_png)  
-           
+        
     def _run_forecast_view(self, df: pd.DataFrame):
         """Runs the yearly comparison plot."""
         try:
@@ -159,12 +180,13 @@ class ResultsVisualizer:
                 _logger = self.config.log
             )
             png_forecast_save= f"{save_base}.png"
+            self._note(os.path.basename(png_forecast_save))  
             VIS_SIGNALS.figure_saved.emit(png_forecast_save)
             
             self.log(f"  Forecast view figures saved to: {self.config.run_output_path}")
         except Exception as e:
             self.log(f"  [Warning] Could not generate forecast view plot: {e}")
-
+            
     def _save_all_figures(self):
         """Saves all open matplotlib figures."""
         try:

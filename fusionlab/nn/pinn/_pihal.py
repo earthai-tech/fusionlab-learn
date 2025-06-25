@@ -159,6 +159,9 @@ class PIHALNet(BaseAttentive):
         self._combined_output_target_dim = (
             output_subsidence_dim + output_gwl_dim
         )
+        if 'output_dim' in kwargs: 
+            kwargs.pop ('output_dim')
+            
         super().__init__(
            static_input_dim=static_input_dim, 
            dynamic_input_dim=dynamic_input_dim, 

@@ -32,9 +32,11 @@ _required_dependencies = [
     "tqdm",
     "scikit-learn",
     "statsmodels",
-    "tensorflow>=2.15", 
+    "tensorflow>=2.15", #preferably 2.15
     "joblib",
-    "pyyaml"
+    "pyyaml", 
+    "click", 
+    "platformdirs"
 ]
 
 # Optional dependencies
@@ -69,7 +71,9 @@ PACKAGE_DATA = {
 setup_kwargs = {
     'entry_points': {
         'console_scripts': [
-            'fusionlab=fusionlab.cli:main',
+            'fusionlab-learn=fusionlab.cli:cli',
+            'fusionlab-learn-pinn-mini-forecaster=fusionlab.tools.app.mini_forecaster_gui:launch_cli'
+            
         ]
     },
     'packages': find_packages(exclude=['docs', 'tests', 'examples']), 

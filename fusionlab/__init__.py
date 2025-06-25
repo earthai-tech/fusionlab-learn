@@ -68,6 +68,8 @@ _required_dependencies = [
     ("statsmodels", None),
     ("pyyaml", None)
     # ("torch", "torch"),
+    ("platformdirs", None), 
+    ("click", None)
 ]
 
 _missing = []

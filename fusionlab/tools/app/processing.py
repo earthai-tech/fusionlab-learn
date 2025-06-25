@@ -10,7 +10,7 @@ import os
 import numpy as np
 import pandas as pd
 from typing import List, Optional, Dict, Any
-from typing import Tuple
+from typing import Tuple, Callable  
 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
@@ -19,7 +19,7 @@ from fusionlab.utils.generic_utils import normalize_time_column
 from fusionlab.utils.generic_utils import ensure_cols_exist 
 from fusionlab.datasets import fetch_zhongshan_data
 from fusionlab.utils.data_utils import nan_ops
-from fusionlab.utils.io_utils import save_job
+from fusionlab.utils.io_utils import save_job, _update_manifest 
 
 from fusionlab.nn import KERAS_DEPS
 from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
@@ -33,11 +33,12 @@ class DataProcessor:
     """
     Handles the data loading and preprocessing workflow (Steps 1-5).
     """
+    
     def __init__(
-            self, config: SubsConfig, 
-            log_callback: Optional[callable] = None, 
-            raw_df: Optional[pd.DataFrame] = None       
-            ):
+        self, config: SubsConfig, 
+        log_callback: Optional[callable] = None, 
+        raw_df: Optional[pd.DataFrame] = None       
+        ):
         """
         Initializes the processor with a configuration object.
 
@@ -56,10 +57,21 @@ class DataProcessor:
         self.encoder = None
         self.scaler = None
 
+    # PRIVATE helper: emit progress locally (0-100 %)
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+            
     def load_data(self) -> pd.DataFrame:
         """
         Handles Step 1: Loading the dataset from a file or by fetching it.
         """
+        self._tick(0)  
         if self.raw_df is not None:
             self.log(f"Step 1: Using in-memory DataFrame – shape {self.raw_df.shape}")
         else: 
@@ -93,6 +105,13 @@ class DataProcessor:
             self.raw_df.to_csv(save_path, index=False)
             self.log(f"  Saved raw data artifact to: {save_path}")
             
+            _update_manifest(
+                self.config.registry_path,               # NEW
+                "artifacts",
+                {"raw_csv": os.path.basename(save_path)})   # NEW
+        
+        self._tick(20) 
+        
         return self.raw_df
 
     def preprocess_data(self) -> pd.DataFrame:
@@ -141,12 +160,19 @@ class DataProcessor:
         self.log("  Cleaning NaN values...")
         df_cleaned = nan_ops(df_selected, ops='sanitize', action='fill')
         
+        self._tick(40)
+        
         # --- Encoding ---
         df_processed = df_cleaned
         if self.config.categorical_cols:
             self.log(f"  One-hot encoding: {self.config.categorical_cols}")
-            self.encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore', dtype=np.float32)
-            encoded_data = self.encoder.fit_transform(df_cleaned[self.config.categorical_cols])
+            self.encoder = OneHotEncoder(
+                sparse_output=False,handle_unknown='ignore', 
+                dtype=np.float32
+            )
+            encoded_data = self.encoder.fit_transform(
+                df_cleaned[self.config.categorical_cols]
+            )
             # encoded_cols = self.encoder.get_feature_names_out(self.config.categorical_cols)
             
             self.static_features_encoded = self.encoder.get_feature_names_out(
@@ -160,7 +186,9 @@ class DataProcessor:
                 # pd.DataFrame(
                 #     encoded_data, columns=encoded_cols, index=df_cleaned.index)
             ], axis=1)
-
+        
+        self._tick(60)
+        
         # --- Time Coordinate and Normalization ---
         self.log("  Creating and normalizing time coordinate...")
         # Ensure time column is datetime for processing
@@ -188,6 +216,21 @@ class DataProcessor:
         self.log("  Scaling numerical features...")
         cols_to_scale = [self.config.subsidence_col, self.config.gwl_col] + \
                         (self.config.future_features or [])
+                      
+        # persist the resolved column choices to the manifest
+        _update_manifest(
+            run_dir=self.config.registry_path,
+            section="configuration",
+            item={
+                "time_col":          self.config.time_col,
+                "categorical_cols":  self.config.categorical_cols,
+                "numerical_cols":    self.config.numerical_cols,
+                "static_features":   self.config.static_features,
+                "dynamic_features":  self.config.dynamic_features,
+                "future_features":   self.config.future_features,
+            },
+        )
+        
         self.scaler = MinMaxScaler()
         # Filter to only scale columns that actually exist
         existing_cols_to_scale = [
@@ -199,6 +242,7 @@ class DataProcessor:
         
         self.processed_df = df_processed
         self.log("  Data preprocessing complete.")
+        self._tick(80)
         
         if self.config.save_intermediate:
             # Save artifacts
@@ -207,13 +251,30 @@ class DataProcessor:
                 )
             self.processed_df.to_csv(save_path, index=False)
             self.log(f"  Saved processed data to: {save_path}")
+            
+            artefacts = {"processed_csv": os.path.basename(save_path)}
+            
             if self.encoder:
+                enc_name = f"{self.config.model_name}.ohe_encoder.joblib"
                 save_job(self.encoder, os.path.join(
-                    self.config.run_output_path, "ohe_encoder.joblib"))
+                    self.config.run_output_path, enc_name
+                    ), 
+                    append_date= False, append_versions= False, # leave manifest track it 
+                    )
+                artefacts["encoder"] = enc_name 
             if self.scaler:
+                sc_name = f"{self.config.model_name}.main_scaler.joblib"
                 save_job(self.scaler, os.path.join(
-                    self.config.run_output_path, "main_scaler.joblib"))
-                
+                    self.config.run_output_path, sc_name), 
+                    append_date= False, append_versions= False, 
+                    )
+                artefacts["main_scaler"] = sc_name
+            
+            _update_manifest(
+                self.config.registry_path, "artifacts", artefacts)    
+            
+        
+        self._tick(100)
         return self.processed_df
 
     def split_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -252,8 +313,11 @@ class SequenceGenerator:
     """
     Handles sequence generation and dataset creation (Steps 5-6).
     """
+    ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(
-            self, config: SubsConfig, log_callback: Optional[callable] = None):
+        self, config: SubsConfig, 
+        log_callback: Optional[callable] = None, 
+        ):
         """
         Initializes the generator with a configuration object.
         """
@@ -265,9 +329,20 @@ class SequenceGenerator:
         self.train_df = None
         self.test_df = None
 
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+            
     def run(
             self, processed_df: pd.DataFrame, 
-            static_features_encoded: List[str]) -> Tuple[Any, Any]:
+            static_features_encoded: List[str], 
+            stop_check: Callable[[], bool] = None,
+            ) -> Tuple[Any, Any]:
         """
         Executes the full sequence and dataset creation pipeline.
         
@@ -275,7 +350,10 @@ class SequenceGenerator:
             A tuple of (train_dataset, validation_dataset).
         """
         self._split_data(processed_df)
-        self._generate_sequences(self.train_df, static_features_encoded)
+        self._generate_sequences(
+            self.train_df, static_features_encoded, 
+            stop_check= stop_check 
+        )
         return self._create_tf_datasets()
 
 
@@ -285,6 +363,7 @@ class SequenceGenerator:
         Handles Step 5: Splitting the data into training and test sets
         robustly.
         """
+        self._tick(0)
         if df is None:
             raise RuntimeError("Data must be preprocessed before splitting.")
 
@@ -317,6 +396,7 @@ class SequenceGenerator:
         test_mask = year_series >= self.config.forecast_start_year
         
         self.train_df = df[train_mask].copy()
+        
         # For the test set, we need to include a lookback period
         # for sequence generation. The `prepare_pinn_data_sequences`
         # handles the windowing, so we just need to provide the data
@@ -332,12 +412,13 @@ class SequenceGenerator:
                 f"Training data is empty after splitting on year <="
                 f" {self.config.train_end_year}."
             )
-            
+        self._tick(10)
         return self.train_df, self.test_df
     
     def _generate_sequences(
             self, train_master_df: pd.DataFrame, 
-            static_features: List[str]
+            static_features: List[str], 
+            stop_check =None, 
         ):
         """Generates PINN-compatible sequences from the training data."""
         self.log("  Generating PINN training sequences...")
@@ -351,6 +432,11 @@ class SequenceGenerator:
         dynamic_features = [
             c for c in dynamic_features if c in train_master_df.columns]
         
+        self._tick(30)
+        
+        lo, hi = 30, 80                      # global slice for seq-gen
+        hook = lambda f: self._tick(self.ZOOM(f, lo, hi))
+    
         inputs, targets, scaler = prepare_pinn_data_sequences(
             df=train_master_df,
             time_col='time_numeric',
@@ -369,10 +455,12 @@ class SequenceGenerator:
             normalize_coords=True,
             return_coord_scaler=True,
             mode=self.config.mode,
-            verbose=self.config.verbose,  # Can be linked to a config verbose level, 
+            progress_hook=hook, 
+            stop_check= stop_check, 
+            verbose=self.config.verbose,  
             _logger = self.log 
         )
-
+        self._tick(80)
         if targets['subsidence'].shape[0] == 0:
             raise ValueError(
                 "Sequence generation produced no training samples.")
@@ -382,6 +470,16 @@ class SequenceGenerator:
         self.coord_scaler = scaler
         self.log(
             "  Training sequences generated successfully."
+            )
+        if self.config.save_intermediate and self.coord_scaler is not None:
+            coord_sc_name = f"{self.config.model_name}.coord_scaler.joblib"
+            save_job(self.coord_scaler,
+                     os.path.join(self.config.run_output_path, coord_sc_name), 
+                     append_date=False, append_versions=False )
+
+            _update_manifest(
+                self.config.registry_path, "artifacts", 
+                {"coord_scaler": coord_sc_name}
             )
 
     def _create_tf_datasets(self) -> Tuple[Any, Any]:
@@ -431,7 +529,7 @@ class SequenceGenerator:
         
         self.log(f"  Training dataset created with {train_size} samples.")
         self.log(f"  Validation dataset created with {val_size} samples.")
-        
+        self._tick(100)
         return train_dataset, val_dataset
 
 

@@ -405,6 +405,65 @@ class FileManager(BaseClass):
                 f"Copied {file_path} to {target_path}"
             )
 
+def _update_manifest(
+    run_dir: str,
+    section: str,
+    item: Union [Any, Dict[str, Any]],
+    *,
+    as_list: bool = False,
+    name: str = "run_manifest.json",
+) -> None:
+    """
+    Update <run_dir>/<name>  (=  *run_manifest.json* by default).
+
+    Parameters
+    ----------
+    run_dir
+        Folder that holds the manifest.
+    section
+        Top-level key inside the JSON file.
+    item
+        • If *dict*: merged **deep-update** style into `section`
+          (same behaviour as before).
+
+        • Otherwise: treated as a *value* to be stored under **`_`
+          (underscore)** inside the `section` –  
+          If *as_list* is ``True`` the value is **appended** to a list
+          (created on first call).
+    as_list
+        Only meaningful when *item* is **not** a dict.
+    name
+        File name (default ``run_manifest.json``).
+    """
+    p = Path(run_dir) / name
+    if p.exists():
+        data: Dict[str, Any] = json.loads(p.read_text(encoding="utf-8"))
+    else:
+        data = {}
+
+    # make sure the section exists
+    sec = data.setdefault(section, {})
+
+    # ------------------------------------------------------------------
+    if isinstance(item, dict):
+        # old behaviour – deep update
+        sec.update(item)
+
+    else:  # scalar / list / str …
+        if as_list:
+            # keep a list under the magic "_" key
+            lst = sec.setdefault("_", [])
+            if item not in lst:           # avoid duplicates
+                lst.append(item)
+        else:
+            # overwrite scalar value
+            sec["_"] = item
+
+    # write back atomically (simple way)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, p)              # atomic on POSIX & NTFS
+
 def zip_extractor(
     zip_file, 
     samples: Union[int, str] = '*', 

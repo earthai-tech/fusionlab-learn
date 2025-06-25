@@ -160,6 +160,10 @@ TENSORFLOW_CONFIG = {
         ('saving', 'register_keras_serializable'), 
         ('utils', 'register_keras_serializable')
     ),
+    'serialize_keras_object': (
+        ('saving', 'serialize_keras_object'), 
+        # ('utils', 'serialize_keras_object')
+    ),
     'sum': ('backend', 'sum'),
     
 }

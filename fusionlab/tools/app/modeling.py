@@ -1,12 +1,24 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
+"""
+Provides the core classes for the data processing, model training, and
+forecasting workflow of the subsidence GUI application.
+"""
 
 import os
 import pandas as pd
 from typing import List, Optional, Dict, Any
 from typing import Tuple
-import shutil # noqa
+from pathlib import Path
+import json  
 
 from fusionlab.utils.generic_utils import rename_dict_keys 
-from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences, format_pinn_predictions
+from fusionlab.utils._manifest_registry import _update_manifest 
+from fusionlab.nn.pinn.utils import ( 
+    prepare_pinn_data_sequences, format_pinn_predictions
+)
 from fusionlab.nn.utils import make_dict_to_tuple_fn
 from fusionlab.nn import KERAS_DEPS
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ
@@ -14,7 +26,10 @@ from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.nn.models import PIHALNet, TransFlowSubsNet
 
 from fusionlab.tools.app.config import SubsConfig 
-from fusionlab.tools.app.utils import GuiProgress 
+from fusionlab.tools.app.utils import ( 
+    GuiProgress, safe_model_loader, json_ready, 
+    _rebuild_from_arch_cfg
+)
 
 Callback =KERAS_DEPS.Callback 
 Dataset = KERAS_DEPS.Dataset
@@ -64,7 +79,7 @@ class ModelTrainer:
         self.log("  Defining model architecture...")
         
         def _check_physic_params (param_value, learnable_state): 
-            if isinstance(param_value, str):# and v.lower() in ['learnable', 'fixed']:
+            if isinstance(param_value, str):
                 # either fixed or 'learnable',
                 # model will handle it internally 
                 return param_value.lower()
@@ -156,13 +171,20 @@ class ModelTrainer:
             ckpt_kwargs = {"save_weights_only": True}
         else:                                 # default .keras (functional only)
             ckpt_name   = f"{self.config.model_name}.keras"
-            ckpt_kwargs = {}                  # beware: subclassed models fail
+            ckpt_kwargs = {}        # beware: subclassed models fail using GUI
             
         checkpoint_path = os.path.join(self.config.run_output_path, ckpt_name)
         self.log(
             "  Model checkpoints will be saved to:"
             f" {checkpoint_path}  (format = {fmt})")
-    
+        
+        _update_manifest(
+            self.config.registry_path, "training",
+            {
+                "checkpoint": ckpt_name,
+                "save_format": fmt,
+            },
+        )
         # -Keras housekeeping callbacks --
         early_stopping = EarlyStopping(
             monitor="val_loss",
@@ -177,6 +199,8 @@ class ModelTrainer:
             **ckpt_kwargs,              # ← inject format if 'tf'
         )
         self.log(f"  Model checkpoints will be saved to: {checkpoint_path}")
+        
+        self.checkpoint_path = checkpoint_path 
         
         # if none the skip the gui_cb and use verbose = self.config.fit_verbose  
         # else use the Gui
@@ -210,36 +234,85 @@ class ModelTrainer:
             validation_data=val_dataset,
             epochs=self.config.epochs,
             callbacks=callbacks,
-            verbose=fit_verbose,   # if none          # silence default ASCII bar
+            verbose=fit_verbose,  
         )
         self.log("  Model training complete.")
         
-
+        raw_cfg = self.model.get_config()
+        safe_cfg = json_ready(raw_cfg, mode="config")      
+        _update_manifest(
+            self.config.registry_path, "training",
+            {
+                "config": safe_cfg,
+            },
+        )
+        # save history & update manifest 
+        try:
+            hist_file = f"{self.config.model_name}.training_history.csv"
+            pd.DataFrame(self.history.history).to_csv(
+                os.path.join(self.config.run_output_path, hist_file),
+                index=False
+            )
+            _update_manifest(
+                self.config.registry_path, "training",
+                  {
+                      "history": hist_file,
+                      "epochs_run": len(self.history.history["loss"])
+                }
+            )
+        except Exception as err:
+            self.log(f"  [WARN] Could not write history file: {err}")
+            
     def _load_best_model(self) -> Any:
-        """Loads the best performing model saved by ModelCheckpoint."""
+        """
+        Loads the best model from the checkpoint after training. This method
+        is robust to different Keras saving formats.
+        """
         self.log("  Loading best model from checkpoint...")
         
-        checkpoint_path = os.path.join(
-            self.config.run_output_path, f"{self.config.model_name}.keras")
+        build_fn = None
+        arch_cfg = None
+  
+        # 1. Load the manifest file created during the training run.
+        manifest_path = Path(self.config.registry_path) / "run_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                "Cannot load weights-only model: 'run_manifest.json' not found."
+            )
+        self.manifest = json.loads(manifest_path.read_text("utf-8"))
         
-        try:
-            custom_objects = {}
-            if self.config.quantiles:
-                custom_objects = {'combined_quantile_loss': combined_quantile_loss(
-                    self.config.quantiles)}
+        model_cfg= self.manifest.get("training", {})
+        
+        # If we only saved weights, we need to rebuild the model architecture
+        # by reading the configuration that was just saved to the manifest.
+        if self.config.save_format == "weights":
+            self.log(
+                "  Weights-only format detected. Rebuilding model from manifest...")
+           
+            # Extract the architecture and input shape configurations.
+            arch_cfg = self.manifest.get("training", {}).get("config")
+            if not arch_cfg:
+                raise ValueError("Manifest is missing 'training.config' section"
+                                 " required to rebuild model.")
             
-            with custom_object_scope(custom_objects):
-                best_model = load_model(checkpoint_path)
-            self.log("  Best model loaded successfully.")
-            return best_model
-        except Exception as e:
-            self.log(f"  Warning: Could not load best model from checkpoint: {e}. "
-                     "Returning the model from the end of training.")
-            return self.model
+            # Add input_shapes to the arch_cfg so the loader can build the model
+            # Create a build function that reconstructs the model.
+            build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
+
+        # Call the safe loader utility
+        best_model = safe_model_loader(
+            self.checkpoint_path,
+            build_fn=build_fn,
+            model_cfg=model_cfg,  
+            log=self.log
+        )
         
+        self.log("  Best model loaded successfully.")
+        return best_model
+
+
     def _build_tensor_inputs (self, train_dataset, val_dataset ): 
-        # 1.  Build mapper once – right after you know the dict keys
-        
+        #  Build mapper once – right after you know the dict keys
         feature_keys = [
             "coords",            # (B, T, 3)
             "static_features",   # (B, D_stat)               – may be None
@@ -260,11 +333,25 @@ class ModelTrainer:
         val_dataset   = val_dataset.map(
             dict_to_tuple,   num_parallel_calls=AUTOTUNE
         )
+        # force one trace so tf.function captures the tuple shape
+        sample_inputs, _ = next(iter(train_dataset))
+        # sample_inputs is now a tuple → convert back to a dict
+        if isinstance(sample_inputs, (tuple, list)):
+            sample_inputs = {
+                k: t for k, t in zip(feature_keys, sample_inputs)
+            }
         
-        # 3.  (Optional) force one trace so tf.function captures the tuple shape
-        # ------------------------------------------------------------------
+        shapes = {k: v.shape for k, v in sample_inputs.items()}
+
+        # persist shapes so safe_model_loader can do model.build(input_shapes)
+        _update_manifest(
+            self.config.registry_path,
+            "training",
+            {                     # make JSON-friendly
+                "input_shapes": {k: list(s) for k, s in shapes.items()}
+            },
+        )
         if not self.model.built:
-            sample_inputs, _ = next(iter(train_dataset))
             self.model(sample_inputs, training=False)   # forward pass
         
         return train_dataset, val_dataset 
@@ -274,6 +361,7 @@ class Forecaster:
     Handles generating predictions from a trained model and formatting
     the results into a DataFrame.
     """
+    ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(self, config: SubsConfig, log_callback: Optional[callable] = None):
         """
         Initializes the forecaster with a configuration object.
@@ -316,17 +404,28 @@ class Forecaster:
 
         return self._predict_and_format(
             model, inputs_test, targets_test, coord_scaler)
-
+    
+    def _tick(self, percent: int) -> None:
+        """
+        Emit <percent> through the SubsConfig.progress_callback
+        if that callback exists and is callable.
+        """
+        cb = getattr(self.config, "progress_callback", None)
+        if callable(cb):
+            cb(percent)
+            
     def _prepare_test_sequences(
         self, test_df, val_dataset, static_features, coord_scaler
     ) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
         Prepares test sequences, with a fallback to the validation set.
         """
+        self._tick(0)
         try:
             if test_df.empty:
                 raise ValueError("Test DataFrame is empty.")
-            
+        
+            hook = lambda f: self._tick(self.ZOOM(f, 10, 80))
             self.log("  Attempting to generate PINN sequences from test data...")
             inputs, targets = prepare_pinn_data_sequences(
                 df=test_df,
@@ -335,7 +434,8 @@ class Forecaster:
                 lat_col=self.config.lat_col,
                 subsidence_col=self.config.subsidence_col,
                 gwl_col=self.config.gwl_col,
-                dynamic_cols=[c for c in self.config.dynamic_features if c in test_df.columns],
+                dynamic_cols=[c for c in self.config.dynamic_features 
+                              if c in test_df.columns],
                 static_cols=static_features,
                 future_cols=self.config.future_features,
                 group_id_cols=[self.config.lon_col, self.config.lat_col],
@@ -343,6 +443,7 @@ class Forecaster:
                 forecast_horizon=self.config.forecast_horizon_years,
                 normalize_coords=True,
                 # return_coord_scaler= True, # we will use train scaler
+                progress_hook= hook,  
                 mode=self.config.mode, 
                 _logger = self.log 
             )
@@ -365,6 +466,7 @@ class Forecaster:
             return inputs, targets
 
         except Exception as e:
+            self._tick(10)
             self.log(f"\n  [WARNING] Could not generate test sequences: {e}")
             self.log("  Falling back to use the validation dataset for forecasting.")
             
@@ -379,6 +481,7 @@ class Forecaster:
             except Exception as fallback_e:
                 self.log(f"  [ERROR] Critical fallback failed: {fallback_e}")
                 return None, None
+        self._tick(80)
 
     def _predict_and_format(
         self, model, inputs_test, targets_test, coord_scaler
@@ -390,6 +493,7 @@ class Forecaster:
         predictions = model.predict(inputs_test, verbose=0)
 
         # Standardize target keys for formatting
+        
         y_true_for_format = {
             'subsidence': targets_test['subs_pred'],
             'gwl': targets_test['gwl_pred']
@@ -410,7 +514,7 @@ class Forecaster:
                 ), 
             model_inputs=inputs_test,
             coord_scaler= coord_scaler, 
-            _logger = self.config.log, 
+            _logger = self.log, 
             savepath = self.config.run_output_path, 
         )
         
@@ -423,4 +527,6 @@ class Forecaster:
             return forecast_df
         
         self.log("  Warning: No final forecast DataFrame was generated.")
+        self._tick(100)
         return None
+    

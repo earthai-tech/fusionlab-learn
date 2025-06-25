@@ -853,7 +853,7 @@ class BaseAttentive(Model, NNLearner):
             static_input_dim=self.static_input_dim,
             dynamic_input_dim=self.dynamic_input_dim,
             future_covariate_dim=self.future_input_dim,
-            #forecast_horizon=self.forecast_horizon,
+            forecast_horizon=self.forecast_horizon,
             mode='strict',
             verbose=0 # Set to 1 for more detailed logging from validator
         )
@@ -865,7 +865,7 @@ class BaseAttentive(Model, NNLearner):
         )
         
         # ***  Validate future_p shape based on mode ***
-        if self.mode == 'tft_like':
+        if self._mode == 'tft_like':
             expected_future_span = self.max_window_size + self.forecast_horizon
         else:  # pihal_like
             expected_future_span = self.forecast_horizon

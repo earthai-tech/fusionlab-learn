@@ -2,18 +2,43 @@
 # License: BSD-3-Clause
 # Author: L. Kouadio <etanoyau@gmail.com>
 
+"""
+Configuration and Environment Setup for the GUI Application.
+
+This module serves as the primary configuration and setup utility
+for the `fusionlab` desktop application. It contains the central
+`SubsConfig` class, which holds all parameters for the end-to-end
+forecasting workflow.
+
+Crucially, this module also performs an initial environment check.
+It imports and runs the `_setup_env` function to ensure that all
+heavy dependencies, particularly TensorFlow, are installed in the
+user's environment before any other application modules are imported.
+This prevents `ImportError` exceptions downstream and ensures the
+application can start gracefully or fail with a clear, informative
+message.
+"""
+
 import os 
-from typing import List, Callable, Optional, Dict, Any 
+import json 
+from pathlib import Path 
+from typing import ( 
+    List, Callable,
+    Dict, Any, 
+    cast, 
+    Optional, 
+    Union 
+)
 
 import pandas as pd 
 import numpy as np   
-
-from fusionlab.tools.app._config import setup_environment as _setup_env   # noqa: E402
+from fusionlab.utils.deps_utils import get_versions
+from fusionlab.utils.generic_utils import ensure_directory_exists
+from fusionlab.tools.app._config import setup_environment as _setup_env   
 
 if not globals().get("_FUSIONLAB_ENV_READY", False):
     _setup_env()                           
     globals()["_FUSIONLAB_ENV_READY"] = True
-
 
 class SubsConfig:
     """
@@ -105,7 +130,8 @@ class SubsConfig:
         # --- Progress & logging hooks -----------------------------------
         self.log: Callable[[str], None]       = log_callback or print
         self.progress_callback: Callable[[int], None] = (
-            progress_callback or (lambda *_: None)   # ← safe no-op default
+            progress_callback
+            or cast(Callable[[int], None], lambda *_: None)
         )
         self.verbose = 1 
         
@@ -115,12 +141,16 @@ class SubsConfig:
                 setattr(self, key, value)
 
         self._build_paths()
+        
+        # save registry 
+        self._registry_path =None 
 
     def _build_paths(self):
         """Constructs the full run output path based on current config."""
         self.run_output_path = os.path.join(
             self.output_dir, f"{self.city_name}_{self.model_name}_run"
         )
+        ensure_directory_exists(self.run_output_path)
 
     def update_from_gui(self, gui_config: Dict[str, Any]):
         """Updates configuration from a dictionary, e.g., from the GUI state."""
@@ -192,9 +222,102 @@ class SubsConfig:
                 col for col in self.numerical_cols if col not in exclude_cols
             ]
             self.log(f"  Auto-set dynamic features: {self.dynamic_features}")
+  
+    def to_json(
+        self,
+        path: Optional[Union[str, os.PathLike]] = None,
+        extra: Optional[dict] = None
+    ) -> Path:
+        """Serializes the configuration to a JSON manifest file.
+
+        This method intelligently handles the creation and saving of
+        the run manifest.
+
+        - If `path` is None, it creates a new, timestamped run
+          directory within the central manifest registry and saves a new
+          `run_manifest.json` file inside it.
+        - If `path` is provided, it imports the existing manifest from
+          that path into the registry, creating a new run directory
+          to store a copy of it.
+
+        This ensures that every training run, whether new or imported,
+        is self-contained and managed by the registry.
+
+        Parameters
+        ----------
+        path : str or pathlib.Path, optional
+            An explicit path to an existing JSON manifest file to be
+            imported into the registry. If None, a new run is created.
+            Default is None.
+        extra : dict, optional
+            Extra top-level keys to merge into the JSON, such as Git
+            metadata or package versions. These keys will override any
+            duplicates from the main configuration.
+
+        Returns
+        -------
+        pathlib.Path
+            The absolute path to the saved manifest file *inside* the
+            central registry.
+        """
+        from fusionlab.utils._manifest_registry import ManifestRegistry
         
+        registry = ManifestRegistry()
+        manifest_path: Path
+
+        if path is None:
+            # Case 1: No path provided. Create a new run directory.
+            run_dir = registry.new_run_dir(
+                city=self.city_name, model=self.model_name
+            )
+            
+        else:
+            # Case 2: User provided an external manifest. Import it.
+            # The import_manifest method copies the file into a new
+            # run directory within the registry and returns the new path.
+            self.log(f"Importing external manifest from '{path}' into registry.")
+            run_dir = registry.import_manifest(path)
+            # No need to Update config's run_output_path to point to the new location
+            # self.run_output_path = str(manifest_path.parent)
+            
+        # Keep the registry path as property 
+        self._registry_path = run_dir 
+        
+        # save manifest file absolute path 
+        manifest_path = run_dir / registry._MANIFEST_FILENAME
+        
+        # 1. Create a flat copy of all public attributes for serialization.
+        cfg_dict = {
+            k: v for k, v in self.__dict__.items()
+            if not k.startswith("_") and not callable(v)
+            # skip private internals
+            # and isinstance(v, (int, float, str, bool, list, dict))
+        }
+        # 2. Allow the caller to add extra metadata.
+        content = {"configuration": cfg_dict, 'git': get_versions() }
+        if extra:
+            content.update(extra)
+    
+        # 3. Write the content to the JSON file using an atomic write.
+        tmp_path = manifest_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(
+            content, indent=2), encoding="utf-8")
+        os.replace(tmp_path, manifest_path)
+
+        # 4. Log the successful export.
+        if callable(getattr(self, "log", None)):
+            self.log(
+                f"  JSON manifest saved successfully: {manifest_path}")
+  
+        return manifest_path
+    
+    @property
+    def registry_path(self) -> Path:
+        return self._registry_path
+    
     def __repr__(self) -> str:
         """Provides a string representation of the configuration."""
-        params = "\n".join(f"  {key}: {value}" for key, value in self.__dict__.items())
+        params = "\n".join(
+            f"  {key}: {value}" for key, value in self.__dict__.items())
         return f"SubsConfig(\n{params}\n)"
     

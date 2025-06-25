@@ -142,7 +142,8 @@ def get_versions(
 
     # Base distribution mapping for known discrepancies
     base_mapping = {
-        "sklearn": "scikit-learn"
+        "sklearn": "scikit-learn", 
+        "fusionlab": "fusionlab-learn", 
     }
     # Merge user-provided distribution mapping, if any
     if distribution_mapping is not None:
