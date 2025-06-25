@@ -66,7 +66,7 @@ _required_dependencies = [
     ("tensorflow", "tensorflow"),
     ("joblib", None), 
     ("statsmodels", None),
-    ("pyyaml", None)
+    ("pyyaml", None),
     # ("torch", "torch"),
     ("platformdirs", None), 
     ("click", None)
