@@ -4,7 +4,19 @@
 Command-Line Interface (CLI)
 ==============================
 
-``fusionlab-learn`` includes a powerful and extensible Command-Line
+.. admonition:: Under Active Development
+   :class: warning
+
+   The Command-Line Interface is currently undergoing a significant
+   reorganization to make it more powerful and intuitive. As a result,
+   some of the commands documented on this page may be renamed, have
+   their options changed, or be moved to different command groups in a
+   future release.
+
+   We appreciate your patience as we work to improve these tools!
+
+
+``fusionlab-learn`` includes an extensible Command-Line
 Interface (CLI) for executing common workflows directly from your
 terminal. This allows you to run forecasting pipelines, data
 processing tasks, and launch applications without writing any
@@ -251,6 +263,69 @@ making it a quick way to run a predefined tuning experiment.
 
    <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
 
+PINN Workflow Tools
+-----------------------
+This set of tools provides a complete pipeline for training a
+Physics-Informed Neural Network from scratch and then using the
+trained model to run inference on new data.
+
+**train-pinn**
+******************
+This command orchestrates the **full end-to-end training
+workflow**. It takes a single raw data file, runs the entire
+data processing, sequence generation, model training, and
+forecasting pipeline, and saves all resulting artifacts (the
+trained model, scalers, plots, and a forecast CSV) to a unique
+output directory.
+
+**Usage:**
+
+.. code-block:: bash
+
+    fusionlab-learn forecast train-pinn --data-file <PATH_TO_CSV> [OPTIONS]
+
+**Key Options:**
+
+* ``--data-file`` (Required): The path to your input CSV data.
+* ``--model-name``: Choose between ``TransFlowSubsNet`` and ``PIHALNet``.
+* ``--output-dir``: The root directory where a new, timestamped
+  run folder will be created.
+* ``--epochs``, ``--lr``, ``--batch-size``, ``--patience``: Standard training
+  hyperparameters.
+* ``--train-end-year``, ``--horizon``, ``--time-steps``:
+  Parameters to control the temporal split and sequence length.
+* ``--pde-mode``, ``--lambda-cons``, ``--lambda-gw``: Fine-grained
+  control over the physics-informed components of the model.
+
+**infer-pinn**
+****************
+This command runs **inference only**. It is designed to be used
+*after* a model has been trained. It takes a pre-trained model and
+its associated artifacts (like scalers and encoders) and applies
+them to a new, unseen data file to generate a new forecast.
+
+**Usage:**
+
+.. code-block:: bash
+
+    fusionlab.tools forecast infer-pinn --data-file <NEW_DATA.csv> --model-path <MODEL.keras> --artifacts-dir <PATH>
+
+**Key Options:**
+
+* ``--data-file`` (Required): Path to the **new** CSV file you
+  want to run predictions on.
+* ``--model-path`` (Required): Direct path to the trained ``.keras``
+  model file saved from the `train-pinn` command.
+* ``--artifacts-dir`` (Required): Path to the directory containing
+  the other saved training artifacts (e.g.,
+  ``ohe_encoder.joblib``, ``main_scaler.joblib``).
+* ``--output-dir``: A new directory where the inference results
+  (forecast CSV and plots) will be saved.
+  
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
 Mini-GUI Applications (`app`)
 ---------------------------------
 This group contains commands for launching graphical user interfaces,

@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: LKouadio <etanoyau@gmail.com>
 
 """
 Run an *already-trained* model (described by a run_manifest.json)
@@ -6,7 +9,6 @@ on a fresh CSV and produce forecasts + figures.
 
 from __future__ import annotations
 import sys
-# import json
 import pathlib
 import click
 
@@ -16,7 +18,6 @@ from fusionlab.tools.app.config    import SubsConfig
 
 def _echo(msg: str, *, stream=sys.stdout) -> None:
     click.echo(msg, file=stream, nl=True)
-
 
 class _ClickLogger:
     """Log-sink handed to PredictionPipeline – optionally writes a file and
@@ -42,14 +43,7 @@ class _ClickLogger:
     def close(self) -> None:
         if self._fp: self._fp.close()
 
-
 @click.command("inference")
-@click.option(
-    "-m", "--manifest", "manifest_path",
-    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
-    required=True,
-    help="Path to *run_manifest.json* created during training."
-)
 @click.option(
     "-c", "--csv", "csv_path",
     type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
@@ -57,7 +51,18 @@ class _ClickLogger:
     help="CSV file with new data to forecast."
 )
 @click.option(
-    "--log-file", type=click.Path(dir_okay=False, writable=True, path_type=pathlib.Path),
+    "-m", "--manifest", "manifest_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=pathlib.Path),
+    required=False,  
+    help=(
+        "Optional path to a specific 'run_manifest.json'. If not "
+        "provided, the latest run from the manifest registry will be "
+        "used automatically."
+    )
+)
+@click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, writable=True, path_type=pathlib.Path),
     help="Duplicate console output to this file."
 )
 @click.option(
@@ -65,21 +70,23 @@ class _ClickLogger:
     help="Render a simple progress bar in stderr (default: on)."
 )
 def inference_group(
-    manifest_path: pathlib.Path,
+    manifest_path: pathlib.Path | None,  # <-- Type hint updated to Optional
     csv_path: pathlib.Path,
     log_file: pathlib.Path | None,
     progress: bool,
 ) -> None:
-    """Top-level *inference* sub-command attached to `fusionlab-learn`."""
+    """Runs inference using a pre-trained model and its artifacts."""
     logger = _ClickLogger(str(log_file) if log_file else None, progress)
 
     try:
+        # The logic here is now much cleaner. If manifest_path is None,
+        # the PredictionPipeline will handle finding the latest one.
         pipe = PredictionPipeline(
-            manifest_path=str(manifest_path),
+            manifest_path=str(manifest_path) if manifest_path else None,
             log_callback=logger,
         )
 
-        # feed GUI-style progress updates into our bar
+        # Feed GUI-style progress updates into our bar
         cfg: SubsConfig = pipe.config
         cfg.progress_callback = logger.progress
 

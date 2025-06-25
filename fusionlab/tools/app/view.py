@@ -5,8 +5,9 @@ import pandas as pd
 from typing import Optional
 from PyQt5.QtCore import pyqtSignal, QObject
 
+from fusionlab.utils._manifest_registry import ManifestRegistry, _update_manifest 
 from fusionlab.utils.generic_utils import save_all_figures
-from fusionlab.utils.io_utils import _update_manifest          
+         
 from fusionlab.plot.forecast import plot_forecasts, forecast_view 
 from fusionlab.tools.app.config import SubsConfig 
 
@@ -41,13 +42,17 @@ class ResultsVisualizer:
         Append <fname> to the “figures” list in run_manifest.json
         (creates the list on first call).
         """
-        _update_manifest(
-            self.config.run_output_path,
-            "figures",
-            fname,                      # value
-            as_list=True                # <- append, don’t overwrite
-        )
-
+        try: 
+            _update_manifest(
+                self.config.registry_path, "figures", fname, # value
+                as_list=True                # <- append, don’t overwrite
+            )
+        except: 
+            _update_manifest(
+                ManifestRegistry().latest_manifest(), "figures",
+                fname, # value
+                as_list=True  # <- append, don’t overwrite
+            )
     def run(self, forecast_df: Optional[pd.DataFrame]):
         """
         Executes the full visualization and saving pipeline.

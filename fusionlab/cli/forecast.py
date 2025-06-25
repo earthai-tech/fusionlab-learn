@@ -60,10 +60,14 @@ def _parse_quantiles(ctx, param, value: str) -> List[float]:
             "comma-separated list of numbers (e.g., '0.1,0.5,0.9')."
         )
 
+def _parse_list(ctx, param, value):
+    if value is None: return None
+    return [item.strip() for item in value.split(',') if item.strip()]
+
 def _add_pinn_workflow_options(f):
     """
-    A decorator that applies a standard set of command-line options
-    for the PINN forecasting workflows to a click command.
+    A decorator that applies a comprehensive set of command-line
+    options for the PINN forecasting workflows to a click command.
 
     This promotes consistency and reduces code duplication between
     related commands like training and inference.
@@ -86,12 +90,24 @@ def _add_pinn_workflow_options(f):
             help='Name of the city/dataset for naming output files.'
         ),
 
-        # --- Model and Training Configuration ---
+        # --- Model Architecture ---
         click.option(
             '--model-name', default='TransFlowSubsNet', show_default=True,
             type=click.Choice(['TransFlowSubsNet', 'PIHALNet']),
             help='The name of the model architecture to use.'
         ),
+        click.option(
+            '--mode', default='pihal', show_default=True,
+            type=click.Choice(['pihal', 'tft']),
+            help="Model operating mode for handling future features."
+        ),
+        click.option(
+            '--attn-levels', 'attention_levels', default='1,2,3',
+            show_default=True, callback=_parse_list,
+            help='Comma-separated attention levels to use (e.g., "1,2").'
+        ),
+
+        # --- Training Hyperparameters ---
         click.option(
             '--epochs', default=50, show_default=True, type=int,
             help='Number of training epochs.'
@@ -102,29 +118,31 @@ def _add_pinn_workflow_options(f):
         ),
         click.option(
             '--lr', '--learning-rate', 'learning_rate', default=0.001,
-            show_default=True, type=float, help='Optimizer learning rate.'
+            show_default=True, type=float,
+            help='Optimizer learning rate.'
         ),
         click.option(
             '--patience', default=15, show_default=True, type=int,
             help='Patience for early stopping callback.'
         ),
-
+        click.option(
+            '--quantiles', default='0.1,0.5,0.9', show_default=True,
+            callback=_parse_quantiles,
+            help='Comma-separated quantiles for probabilistic forecast.'
+        ),
+        
         # --- Time and Horizon Configuration ---
         click.option(
             '--train-end-year', default=2022, show_default=True, type=int,
             help="Last year of data to include in the training set."
         ),
         click.option(
-            '--forecast-start-year', default=2023, show_default=True, type=int,
-            help="First year for which to generate forecasts."
+            '--time-steps', default=5, show_default=True, type=int,
+            help="Number of look-back time steps for the model's encoder."
         ),
         click.option(
             '--horizon', 'forecast_horizon_years', default=3, show_default=True,
             type=int, help="Number of future years to predict."
-        ),
-        click.option(
-            '--time-steps', default=5, show_default=True, type=int,
-            help="Number of look-back time steps for the model's encoder."
         ),
 
         # --- PINN Physics Configuration ---
@@ -134,6 +152,10 @@ def _add_pinn_workflow_options(f):
             help='Which physics loss components to activate.'
         ),
         click.option(
+            '--pinn-coeff-c', default='learnable', show_default=True,
+            help='Consolidation coeff C: "learnable" or a float value.'
+        ),
+        click.option(
             '--lambda-cons', default=1.0, show_default=True, type=float,
             help='Weight for the consolidation physics loss.'
         ),
@@ -141,10 +163,27 @@ def _add_pinn_workflow_options(f):
             '--lambda-gw', default=1.0, show_default=True, type=float,
             help='Weight for the groundwater flow physics loss.'
         ),
-        
+        click.option(
+            '--k', 'gwflow_init_k', default='learnable', show_default=True,
+            help='Hydraulic conductivity (K): "learnable" or a float value.'
+        ),
+        click.option(
+            '--ss', 'gwflow_init_ss', default='learnable', show_default=True,
+            help='Specific storage (Ss): "learnable" or a float value.'
+        ),
+        click.option(
+            '--q', 'gwflow_init_q', default='0.0', show_default=True,
+            help='Source/sink term (Q): "learnable" or a float value.'
+        ),
+
         # --- General Options ---
         click.option(
-            '--verbose', default=1, type=click.IntRange(0, 2), show_default=True,
+            '--seed', default=42, show_default=True, type=int,
+            help='Random seed for reproducibility.'
+        ),
+        click.option(
+            '--verbose', default=1, type=click.IntRange(0, 2),
+            show_default=True,
             help="Verbosity level for logging (0: quiet, 1: info, 2: debug)."
         )
     ]

@@ -1,8 +1,16 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
+"""
+Provides the PredictionPipeline class for running a full inference
+workflow using artifacts from a previous training run.
+"""
 from __future__ import annotations 
 import os 
 from pathlib import Path 
 import json 
-from typing import Optional, List, Tuple, Dict  
+from typing import Optional, List, Tuple, Dict, Callable   
 import joblib 
 import pandas as pd 
 
@@ -12,6 +20,7 @@ from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.utils.generic_utils import ( 
     normalize_time_column, rename_dict_keys 
 )
+from fusionlab.utils._manifest_registry import ManifestRegistry
 from fusionlab.utils.io_utils import _update_manifest
 from fusionlab.nn.models import TransFlowSubsNet, PIHALNet  # noqa 
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ # Noqa 
@@ -49,37 +58,68 @@ class PredictionPipeline:
         updating a GUI log panel. Defaults to `print`.
     """
     _range = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo)*frac))
+
     def __init__(
         self,
-        manifest_path: str | os.PathLike,
+        manifest_path: Optional[str | os.PathLike] = None,
         *,
-        log_callback: Optional[callable] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+        **kws, 
     ):
+        """
+        Initializes the pipeline by loading a manifest file.
+
+        The manifest can be provided directly or auto-detected as the
+        most recent run from the central `ManifestRegistry`.
+
+        Parameters
+        ----------
+        manifest_path : str or pathlib.Path, optional
+            A direct path to a specific `run_manifest.json` file. If
+            None, the pipeline will automatically find the most recent
+            run. Default is None.
+        log_callback : callable, optional
+            A function to receive and handle log messages. Defaults to `print`.
+        """
         self.log = log_callback or print
-        self.manifest_path = Path(manifest_path)
+        
+        registry = ManifestRegistry()
+        if manifest_path is None:
+            self.log("No manifest path provided. Locating the latest run...")
+            
+            self.manifest_path = registry.latest_manifest()
+            if not self.manifest_path:
+                raise FileNotFoundError(
+                    "No training runs found in the manifest registry. "
+                    "Please run a training session first."
+                )
+        else:
+            # here user provide explicity manifest file. so make a copy 
+            # and kekedp into registry 
+            manifest_path = Path(manifest_path)
+            self.manifest_path = registry.import_manifest(manifest_path)
         
         if not self.manifest_path.exists():
             raise FileNotFoundError(
                 f"Manifest file not found at: {self.manifest_path}"
             )
-            
-        self.log(f"Initializing prediction pipeline from manifest: {self.manifest_path}")
-        self._manifest = json.loads(
-            self.manifest_path.read_text("utf-8"))
+        
+        self._load_from_manifest()
 
-        # The manifest is the single source of truth.
-        # Create a config object from the manifest's 'configuration' section.
+    def _load_from_manifest(self):
+        """Loads configuration and resolves artifact paths from the manifest."""
+        self.log(f"Initializing prediction pipeline from: {self.manifest_path}")
+        self._manifest = json.loads(self.manifest_path.read_text("utf-8"))
+        
+        # The manifest is the single source of truth for configuration.
         self.config = SubsConfig(**self._manifest.get("configuration", {}))
         
-        # Resolve all artifact paths relative to the manifest's location
-        self.run_dir = self.manifest_path.parent
+        # The key is to use the run_output_path stored *inside* the manifest,
+        # as this is where the training artifacts were actually saved.
+        self.artifacts_dir = Path(self.config.run_output_path)
         self._resolve_artifact_paths()
         
-        # Holders for loaded objects
-        self.model = None
-        self.encoder= None
-        self.scaler= None
-        self.coord_scaler= None
+        self.model = self.encoder = self.scaler = self.coord_scaler = None
 
     def _resolve_artifact_paths(self):
         """Resolves full paths to all artifacts from the manifest."""
@@ -89,7 +129,7 @@ class PredictionPipeline:
         # Helper to construct full path from relative filename in manifest
         def _get_path(key, default_name):
             filename = artifacts.get(key) or training_info.get(key) or default_name
-            return self.run_dir / filename
+            return self.artifacts_dir / filename
 
         self.model_path = _get_path("checkpoint", "model.keras")
         self.encoder_path = _get_path("encoder", "ohe_encoder.joblib")
@@ -114,11 +154,11 @@ class PredictionPipeline:
             )
             
         build_fn = None
-        model_cfg = None
+        model_cfg = self._manifest.get("training", {})
         # Check if we need to rebuild the model for weights-only loading
         if str(self.model_path).endswith((".weights.h5", ".weights.keras")):
             self.log("Weights-only file detected. Rebuilding model from manifest...")
-            model_cfg = self._manifest.get("training", {})
+            
             arch_cfg = model_cfg.get("config")
             if not arch_cfg:
                 raise ValueError("Manifest is missing 'training.config' section"
@@ -150,8 +190,6 @@ class PredictionPipeline:
         if callable(cb) and cb is not self._tick:
             cb(percent)
     
-        
-    # NEW – checks the artefacts and column compatibility -------------
     def _check_if_trained(self, validation_df: pd.DataFrame) -> None:
         """
         Safeguard:  ensure the model & artefacts exist **and** the
@@ -234,19 +272,19 @@ class PredictionPipeline:
         self._tick(95)
         
         # 5. Visualize results
-        visualizer = ResultsVisualizer(self.config, self.log)
+        visualizer = ResultsVisualizer(
+            self.config, self.log
+        )
         visualizer.run(forecast_df)
         if self.model_path: 
             _update_manifest(
-                run_dir = Path(self.model_path).parent,      
+                run_dir = os.path.dirname (str(self.manifest_path)),      
                 section = "inference",
                 item = {"validation_file": validation_data_path},
             )
 
-          
         self.log("--- Prediction Pipeline Finished Successfully ---")
         self._tick(100)
-        
         
     def _process_validation_data(
         self, validation_data_path: str

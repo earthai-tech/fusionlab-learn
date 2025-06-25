@@ -152,7 +152,19 @@ def test_inference ():
 def test_inference2():
     print("\n=== 1) TRAINING WORKFLOW =========================================")
 
-    # 
+    
+    import pytest 
+    import os 
+    import shutil 
+    import tempfile, json
+    from pathlib import Path
+    from fusionlab.utils.deps_utils import get_versions 
+    from fusionlab.tools.app.config import SubsConfig 
+    from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
+    from fusionlab.tools.app.modeling import ModelTrainer, Forecaster  
+    from fusionlab.tools.app.view import ResultsVisualizer 
+    from fusionlab.tools.app.inference import PredictionPipeline 
+
     # 0. scratch directory – every test run is self-contained 
     work_dir = Path(tempfile.mkdtemp(prefix="flab_gui_test_"))
     print(f"[tmp]  all artefacts go to:  {work_dir}")
@@ -169,13 +181,12 @@ def test_inference2():
         verbose       = 0,
     )
 
-    # 
-    manifest_path = (
-    Path(cfg.run_output_path) / "run_manifest.json"
-    )
+    # No need to create will do it automatically 
+    # manifest_path = (
+    # Path(cfg.run_output_path) / "run_manifest.json"
+    # )
     # ①  full static dump of the SubsConfig
     cfg.to_json(
-        manifest_path,
         extra={"git": get_versions()},        # optional extras
     )
 
@@ -194,8 +205,8 @@ def test_inference2():
 
     # ----------------------------------------------------------------------
     # 3. verify that the *manifest* was written ----------------------------
-    manifest_path = Path(cfg.run_output_path) / "run_manifest.json"
-    assert manifest_path.exists(), "manifest missing after training !"
+    # manifest_path = Path(cfg.run_output_path) / "run_manifest.json"
+    # assert manifest_path.exists(), "manifest missing after training !"
 
     print("\n=== 2) INFERENCE WORKFLOW =======================================")
 
@@ -203,10 +214,15 @@ def test_inference2():
     # 4. use only the manifest + a 'new' CSV for prediction ----------------
     # here we just reuse the same raw CSV saved by the processor
     new_csv = Path(cfg.run_output_path) / "01_raw_data.csv"
+    
     assert new_csv.exists(), "no raw CSV found – cannot test inference"
-
+    manifest_path = (
+        Path(cfg.registry_path) / "run_manifest.json"
+        )
+    assert manifest_path.exists(), "manisfer file – cannot test inference"
+    
     pipe = PredictionPipeline(
-        manifest_path = manifest_path,             # <── all paths auto-filled
+        # manifest_path = manifest_path,             # <── all paths auto-filled
         log_callback  = print,
     )
     pipe.run(str(new_csv))

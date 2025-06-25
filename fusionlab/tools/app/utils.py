@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: L. Kouadio <etanoyau@gmail.com>
@@ -16,14 +15,15 @@ from typing import Callable, Optional, Any, Dict, List
 from pathlib import Path
 import math 
 
+
 try:
-    from fusionlab.nn import KERAS_DEPS
     from fusionlab.params import (
         LearnableK, LearnableSs, LearnableQ,
         LearnableC, FixedC, DisabledC,
     )
+    from fusionlab.utils._manifest_registry import ManifestRegistry
+    from fusionlab.nn import KERAS_DEPS
     from fusionlab.nn.models import TransFlowSubsNet, PIHALNet
-    
 except ImportError as e:
     raise ImportError(
         "This utility requires the `fusionlab` library and its"
@@ -152,53 +152,6 @@ def locate_and_load_manifest(
 
     log(f"Loading configuration from manifest: {found_manifest_path}")
     return json.loads(found_manifest_path.read_text("utf-8"))
-
-
-def _find_manifests_in(dir_: Path) -> List[Path]:
-    """Return every run_manifest.json inside a directory or its sub-folders."""
-    return list(dir_.glob("**/run_manifest.json"))
-
-def locate_manifest(
-    start_path: Path, max_up: int = 3, log: Callable[[str], None] = print
-) -> Optional[Path]:
-    """
-    Heuristically search for the most recent `run_manifest.json` file.
-
-    This function performs a structured search to find the most relevant
-    manifest file associated with a given data path. It is designed to be
-    called from the GUI to enable the inference workflow.
-
-    Args:
-        start_path (Path): The file or directory to start the search from.
-        max_up (int): The maximum number of parent directories to traverse.
-        log (callable): A logging function for status updates.
-
-    Returns:
-        Optional[Path]: The path to the most recently modified manifest, or None.
-    """
-    log("  Searching for a suitable `run_manifest.json` file...")
-    search_dirs = [start_path.parent if start_path.is_file() else start_path]
-    
-    for i in range(max_up):
-        try:
-            parent = start_path.parents[i]
-            search_dirs.append(parent)
-            if (parent / "results_pinn").is_dir():
-                search_dirs.append(parent / "results_pinn")
-        except IndexError:
-            break
-    
-    found_manifests = []
-    for dir_ in set(search_dirs):
-        found_manifests.extend(_find_manifests_in(dir_))
-        
-    if not found_manifests:
-        log("  No manifest files found.")
-        return None
-        
-    latest_manifest = max(found_manifests, key=lambda p: p.stat().st_mtime)
-    log(f"  Found latest manifest: {latest_manifest}")
-    return latest_manifest
 
 def _find_manifest_in(dir_: Path) -> List[Path]:
     """Return every run_manifest.json inside *dir_/**_run/ sub-folders."""

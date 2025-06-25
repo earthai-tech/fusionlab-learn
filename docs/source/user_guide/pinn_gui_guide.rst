@@ -114,6 +114,10 @@ These are the primary controls for managing the workflow.
   Click to gracefully interrupt the current process (sequence generation,
   training, or forecasting). The button is disabled when the GUI is idle.
   
+* **Inference**: This button becomes active only if a completed
+  training run (a ``run_manifest.json`` file) is detected near the
+  selected CSV file. Clicking it launches the inference workflow.
+  
 **2. Data Preview and Editing**
 *******************************
 After a CSV file is selected, a new **"Preview & Edit Data"** button
@@ -284,3 +288,52 @@ Inside this directory, you will find:
   maps) saved as `.png` and `.pdf` files.
 * **Coverage Results:** If ``Evaluate Coverage`` is enabled, the coverage
   score results will also be included in the output.
+  
+.. _pinn_gui_inference_guide:
+
+Running Inference with a Trained Model
+----------------------------------------
+The GUI is not just for training; it's also a powerful tool for
+running **inference**. This allows you to take a model you have
+already trained and apply it to a new, unseen dataset to generate
+predictions.
+
+The inference workflow is automatically enabled when the application
+detects that a model has already been trained.
+
+.. figure:: ../images/gui_inference_enabled.png
+   :alt: Screenshot of the GUI with the Inference button enabled.
+   :align: center
+   :width: 80%
+
+   After a training run is found, the "Inference" button becomes
+   active, allowing you to run predictions with the trained model.
+
+**How it Works:**
+
+1.  **Automatic Detection:** When you select a CSV file using the
+    **"Select CSV..."** button, the application automatically searches
+    the surrounding directories for a ``run_manifest.json`` file. This
+    file, created at the end of a successful training run, contains all
+    the information about the trained model and its artifacts.
+
+2.  **Enabling the "Inference" Button:** If a manifest file is found,
+    the **"Inference"** button at the top right of the window will
+    become active and turn blue, as shown in the screenshot above. Its
+    tooltip will confirm that a trained model has been detected.
+
+3.  **Launching the Inference Workflow:**
+
+    * Click the **"Inference"** button.
+    * You will be prompted to select a **new CSV file** containing the
+      data you want to run predictions on. This should be a file with
+      the same structure as your original training data.
+    * The application will then use the ``PredictionPipeline`` to:
+    
+      * Load the pre-trained model and its specific scalers/encoders.
+      * Process your new data using these loaded artifacts.
+      * Generate a forecast.
+      * Display the results and visualizations in the output panel.
+
+This workflow provides a seamless way to apply your trained models to
+new data without having to re-run the entire training process.

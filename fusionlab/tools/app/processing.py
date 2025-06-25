@@ -106,7 +106,7 @@ class DataProcessor:
             self.log(f"  Saved raw data artifact to: {save_path}")
             
             _update_manifest(
-                self.config.run_output_path,               # NEW
+                self.config.registry_path,               # NEW
                 "artifacts",
                 {"raw_csv": os.path.basename(save_path)})   # NEW
         
@@ -219,7 +219,7 @@ class DataProcessor:
                       
         # persist the resolved column choices to the manifest
         _update_manifest(
-            run_dir=self.config.run_output_path,
+            run_dir=self.config.registry_path,
             section="configuration",
             item={
                 "time_col":          self.config.time_col,
@@ -271,7 +271,7 @@ class DataProcessor:
                 artefacts["main_scaler"] = sc_name
             
             _update_manifest(
-                self.config.run_output_path, "artifacts", artefacts)    
+                self.config.registry_path, "artifacts", artefacts)    
             
         
         self._tick(100)
@@ -478,7 +478,7 @@ class SequenceGenerator:
                      append_date=False, append_versions=False )
 
             _update_manifest(
-                self.config.run_output_path, "artifacts", 
+                self.config.registry_path, "artifacts", 
                 {"coord_scaler": coord_sc_name}
             )
 

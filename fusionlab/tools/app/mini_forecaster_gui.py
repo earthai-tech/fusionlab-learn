@@ -26,7 +26,6 @@ from PyQt5.QtWidgets import (
     QToolTip
 )
 
-from fusionlab.utils.deps_utils import get_versions
 from fusionlab.tools.app.config      import SubsConfig
 from fusionlab.tools.app.processing  import DataProcessor, SequenceGenerator
 from fusionlab.tools.app.modeling    import ModelTrainer, Forecaster
@@ -34,7 +33,9 @@ from fusionlab.tools.app.view        import ResultsVisualizer
 from fusionlab.tools.app.view        import VIS_SIGNALS
 from fusionlab.tools.app.gui_popups  import ImagePreviewDialog   
 from fusionlab.tools.app.inference import PredictionPipeline
-from fusionlab.tools.app.utils import _locate_manifest 
+from fusionlab.utils._manifest_registry import ( 
+    ManifestRegistry, locate_manifest 
+)
 
 # Fusionlab-learn palette 
 PRIMARY   = "#2E3191"   
@@ -712,6 +713,10 @@ class MiniForecaster(QMainWindow):
         
         logo_lbl.setAlignment(Qt.AlignCenter)
         
+        # --- Instantiate the Manifest Registry in session-only mode ---
+        # This is the only change required to enable self-cleaning.
+        self.registry = ManifestRegistry(session_only=True)
+        
         self._inference_mode = False     # True → Run button will run inference
         self._manifest_path  = None      # filled automatically once detected
 
@@ -794,14 +799,6 @@ class MiniForecaster(QMainWindow):
         self.file_label.setStyleSheet("font-style:italic;")
         row.addWidget(self.file_label, 1)          # stretch-factor = 1
         
-        # row with Run / log already exists …
-        self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setObjectName("stop")   
-        self.stop_btn.setEnabled(False) 
-        self.stop_btn.setToolTip("Abort the running workflow")                
-        self.stop_btn.clicked.connect(self._stop_worker)
-        row.addWidget(self.stop_btn)
-        
         # ── inference toggle  (disabled until a manifest is found)
         self.inf_btn = QPushButton("Inference")
         self.inf_btn.setObjectName("inference")
@@ -809,7 +806,14 @@ class MiniForecaster(QMainWindow):
         self.inf_btn.setToolTip("Load an existing run_manifest.json first.")
         self.inf_btn.clicked.connect(self._toggle_inference_mode)
         row.addWidget(self.inf_btn)
-
+        
+        # row with Run / log already exists …
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setObjectName("stop")   
+        self.stop_btn.setEnabled(False) 
+        self.stop_btn.setToolTip("Abort the running workflow")                
+        self.stop_btn.clicked.connect(self._stop_worker)
+        row.addWidget(self.stop_btn)
         # right-hand Reset button
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.setObjectName("reset")   
@@ -1236,9 +1240,9 @@ class MiniForecaster(QMainWindow):
             self.edited_df = None        # fall back to on-disk CSV
             self._log("CSV preview canceled – keeping original file.")
         
-        # look for a manifest near the selected CSV  → enables inference
-        manifest = _locate_manifest(self.file_path)
-        
+        # look for a manifest in registry  → enables inference
+        manifest = locate_manifest(self._log) 
+    
         if manifest is not None:
             self._manifest_path = str(manifest)
             self.inf_btn.setEnabled(True)
@@ -1260,14 +1264,14 @@ class MiniForecaster(QMainWindow):
         self._inference_mode = not self._inference_mode
     
         if self._inference_mode:                 # → ON
-            self.inf_btn.setStyleSheet("background:%s;" % SECONDARY)
+            self.inf_btn.setStyleSheet(f"background:{SECONDARY}" )
             self.inf_btn.setEnabled(False)       # frozen while active
             self.inf_btn.setToolTip("Inference mode active.")
             self.run_btn.setText("Run Inference")
             self._log("ℹ GUI switched to *Inference* mode – "
                       "Run will now load the saved model.")
         else:                                    # → OFF  (rare, only after run)
-            self.inf_btn.setStyleSheet("background:%s;" % PRIMARY)
+            self.inf_btn.setStyleSheet(f"background:{PRIMARY}")
             self.inf_btn.setEnabled(True)
             self.inf_btn.setToolTip(
                 "Click to switch the GUI into inference mode.")
@@ -1403,11 +1407,8 @@ class MiniForecaster(QMainWindow):
         cfg.static_features  = stat_list
         cfg.future_features  = fut_list
         
-        # I GUESS IN training the manifest is not created like this 
-        manifest_path = os.path.join(cfg.run_output_path, "run_manifest.json")
-        cfg.to_json(manifest_path, extra={
-            "git": get_versions()})
-
+        # Register the manifest.
+        cfg.to_json()
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
     
@@ -1451,7 +1452,6 @@ class MiniForecaster(QMainWindow):
         cfg.progress_callback = self.progress_updated.emit
     
         pipe = PredictionPipeline(
-            manifest_path=self._manifest_path,
             log_callback = self.log_updated.emit,
         )
         pipe.config.progress_callback = self.progress_updated.emit

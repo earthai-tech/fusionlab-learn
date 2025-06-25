@@ -13,10 +13,9 @@ from typing import List, Optional, Dict, Any
 from typing import Tuple
 from pathlib import Path
 import json  
-import shutil # noqa
 
 from fusionlab.utils.generic_utils import rename_dict_keys 
-from fusionlab.utils.io_utils import _update_manifest 
+from fusionlab.utils._manifest_registry import _update_manifest 
 from fusionlab.nn.pinn.utils import ( 
     prepare_pinn_data_sequences, format_pinn_predictions
 )
@@ -80,7 +79,7 @@ class ModelTrainer:
         self.log("  Defining model architecture...")
         
         def _check_physic_params (param_value, learnable_state): 
-            if isinstance(param_value, str):# and v.lower() in ['learnable', 'fixed']:
+            if isinstance(param_value, str):
                 # either fixed or 'learnable',
                 # model will handle it internally 
                 return param_value.lower()
@@ -172,7 +171,7 @@ class ModelTrainer:
             ckpt_kwargs = {"save_weights_only": True}
         else:                                 # default .keras (functional only)
             ckpt_name   = f"{self.config.model_name}.keras"
-            ckpt_kwargs = {}                  # beware: subclassed models fail
+            ckpt_kwargs = {}        # beware: subclassed models fail using GUI
             
         checkpoint_path = os.path.join(self.config.run_output_path, ckpt_name)
         self.log(
@@ -180,7 +179,7 @@ class ModelTrainer:
             f" {checkpoint_path}  (format = {fmt})")
         
         _update_manifest(
-            self.config.run_output_path, "training",
+            self.config.registry_path, "training",
             {
                 "checkpoint": ckpt_name,
                 "save_format": fmt,
@@ -235,19 +234,19 @@ class ModelTrainer:
             validation_data=val_dataset,
             epochs=self.config.epochs,
             callbacks=callbacks,
-            verbose=fit_verbose,   # if none          # silence default ASCII bar
+            verbose=fit_verbose,  
         )
         self.log("  Model training complete.")
         
         raw_cfg = self.model.get_config()
-        safe_cfg = json_ready(raw_cfg, mode="config")      # or "config"
+        safe_cfg = json_ready(raw_cfg, mode="config")      
         _update_manifest(
-            self.config.run_output_path, "training",
+            self.config.registry_path, "training",
             {
                 "config": safe_cfg,
             },
         )
-        # -------- save history & update manifest ----------------------- NEW
+        # save history & update manifest 
         try:
             hist_file = f"{self.config.model_name}.training_history.csv"
             pd.DataFrame(self.history.history).to_csv(
@@ -255,7 +254,7 @@ class ModelTrainer:
                 index=False
             )
             _update_manifest(
-                self.config.run_output_path, "training",
+                self.config.registry_path, "training",
                   {
                       "history": hist_file,
                       "epochs_run": len(self.history.history["loss"])
@@ -273,72 +272,47 @@ class ModelTrainer:
         
         build_fn = None
         arch_cfg = None
-        model_cfg =None 
+  
+        # 1. Load the manifest file created during the training run.
+        manifest_path = Path(self.config.registry_path) / "run_manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                "Cannot load weights-only model: 'run_manifest.json' not found."
+            )
+        self.manifest = json.loads(manifest_path.read_text("utf-8"))
+        
+        model_cfg= self.manifest.get("training", {})
         
         # If we only saved weights, we need to rebuild the model architecture
         # by reading the configuration that was just saved to the manifest.
         if self.config.save_format == "weights":
             self.log(
                 "  Weights-only format detected. Rebuilding model from manifest...")
-            
-            # 1. Load the manifest file created during the training run.
-            manifest_path = Path(self.config.run_output_path) / "run_manifest.json"
-            if not manifest_path.exists():
-                raise FileNotFoundError(
-                    "Cannot load weights-only model: 'run_manifest.json' not found."
-                )
-            self.manifest = json.loads(manifest_path.read_text("utf-8"))
-            
-            # 2. Extract the architecture and input shape configurations.
+           
+            # Extract the architecture and input shape configurations.
             arch_cfg = self.manifest.get("training", {}).get("config")
             if not arch_cfg:
                 raise ValueError("Manifest is missing 'training.config' section"
                                  " required to rebuild model.")
             
             # Add input_shapes to the arch_cfg so the loader can build the model
-            model_cfg= self.manifest.get(
-                "training", {})#.get("input_shapes")
-            
-            # 3. Create a build function that reconstructs the model.
+            # Create a build function that reconstructs the model.
             build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
 
         # Call the safe loader utility
         best_model = safe_model_loader(
             self.checkpoint_path,
             build_fn=build_fn,
-            model_cfg=model_cfg,  # Pass config for building with input shape
+            model_cfg=model_cfg,  
             log=self.log
         )
         
         self.log("  Best model loaded successfully.")
         return best_model
 
-    def __load_best_model(self) -> Any:
-        """Loads the best performing model saved by ModelCheckpoint."""
-        self.log("  Loading best model from checkpoint...")
-        # checkpoint_path = os.path.join(
-        #     self.config.run_output_path, f"{self.config.model_name}.keras")
-        _update_manifest(self.config.run_output_path,         # NEW
-                 "training",
-                 {"best_model_loaded": os.path.basename(self.checkpoint_path)})
-        try:
-            custom_objects = {}
-            if self.config.quantiles:
-                custom_objects = {'combined_quantile_loss': combined_quantile_loss(
-                    self.config.quantiles)}
-            
-            with custom_object_scope(custom_objects):
-                best_model = load_model(self.checkpoint_path)
-            self.log("  Best model loaded successfully.")
-            return best_model
-        except Exception as e:
-            self.log(f"  Warning: Could not load best model from checkpoint: {e}. "
-                     "Returning the model from the end of training.")
-            return self.model
-        
+
     def _build_tensor_inputs (self, train_dataset, val_dataset ): 
-        # 1.  Build mapper once – right after you know the dict keys
-        
+        #  Build mapper once – right after you know the dict keys
         feature_keys = [
             "coords",            # (B, T, 3)
             "static_features",   # (B, D_stat)               – may be None
@@ -359,8 +333,7 @@ class ModelTrainer:
         val_dataset   = val_dataset.map(
             dict_to_tuple,   num_parallel_calls=AUTOTUNE
         )
-        # 3.  (Optional) force one trace so tf.function captures the tuple shape
-        # ----------------------------------------------------------------------
+        # force one trace so tf.function captures the tuple shape
         sample_inputs, _ = next(iter(train_dataset))
         # sample_inputs is now a tuple → convert back to a dict
         if isinstance(sample_inputs, (tuple, list)):
@@ -370,10 +343,9 @@ class ModelTrainer:
         
         shapes = {k: v.shape for k, v in sample_inputs.items()}
 
-        #  NEW 
         # persist shapes so safe_model_loader can do model.build(input_shapes)
         _update_manifest(
-            self.config.run_output_path,
+            self.config.registry_path,
             "training",
             {                     # make JSON-friendly
                 "input_shapes": {k: list(s) for k, s in shapes.items()}
@@ -542,7 +514,7 @@ class Forecaster:
                 ), 
             model_inputs=inputs_test,
             coord_scaler= coord_scaler, 
-            _logger = self.config.log, 
+            _logger = self.log, 
             savepath = self.config.run_output_path, 
         )
         

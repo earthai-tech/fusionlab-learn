@@ -35,7 +35,8 @@ _required_dependencies = [
     "tensorflow>=2.15", #preferably 2.15
     "joblib",
     "pyyaml", 
-    "click"
+    "click", 
+    "platformdirs"
 ]
 
 # Optional dependencies
