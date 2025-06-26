@@ -824,11 +824,18 @@ class MiniForecaster(QMainWindow):
         self.status_updated.connect(self.file_label.setText)
         self.progress_updated.connect(self.progress_bar.setValue)
         self.coverage_ready.connect(self._set_coverage)
+        self._refresh_manifest_state() 
         
+        self._preview_windows: list[QDialog] = []        # ← keep refs
         VIS_SIGNALS.figure_saved.connect(self._show_image_popup)
 
     def _show_image_popup(self, png_path: str) -> None:
-        ImagePreviewDialog(png_path, parent=self).exec_()
+        dlg = ImagePreviewDialog(png_path, parent=self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)             # frees memory on close
+        dlg.show()                                        # modeless – *no* exec_()
+        self._preview_windows.append(dlg)                 # keep it alive
+        
+        #ImagePreviewDialog(png_path, parent=self).exec_()
         
     @pyqtSlot(float)
     def _set_coverage(self, value: float):
@@ -875,14 +882,15 @@ class MiniForecaster(QMainWindow):
         L = QVBoxLayout(root)
 
         # 0) logo + title
-        logo = QLabel()
-        logo.setPixmap(QPixmap("fusionlab_logo.png").scaled(
-            72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        logo.setAlignment(Qt.AlignCenter)
+        # logo = QLabel()
+        # logo.setPixmap(QPixmap("fusionlab_learn_logo.ico").scaled(
+        #     72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # logo.setAlignment(Qt.AlignCenter)
         title = QLabel("Subsidence PINN")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"font-size:22px; color:{PRIMARY}")
-        L.addWidget(logo); L.addWidget(title)
+        # L.addWidget(logo)
+        L.addWidget(title)
 
         # 1) CSV selector row 
         row = QHBoxLayout()
@@ -1339,24 +1347,46 @@ class MiniForecaster(QMainWindow):
             self.edited_df = None        # fall back to on-disk CSV
             self._log("CSV preview canceled – keeping original file.")
         
-        # look for a manifest in registry  → enables inference
-        manifest = locate_manifest(self._log) 
+        # # look for a manifest in registry  → enables inference
+        # manifest = locate_manifest(self._log) 
     
-        if manifest is not None:
+        # if manifest is not None:
+        #     self._manifest_path = str(manifest)
+        #     self.inf_btn.setEnabled(True)
+        #     self.inf_btn.setStyleSheet(f"background:{INFERENCE_ON};")
+        #     self.inf_btn.setToolTip(
+        #         "Trained model detected– click to switch to inference."
+        #     )
+        # else:
+        #     self._manifest_path = None
+        #     self.inf_btn.setEnabled(False)
+        #     self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
+        #     self.inf_btn.setToolTip(
+        #         "Inference is available once a trained run is found nearby."
+        #     )
+        self.progress_bar.setValue(0)
+        
+
+    def _refresh_manifest_state(self) -> None:
+        """
+        Check whether a trained run exists *in the registry* and toggle the
+        Inference button accordingly.  Call this
+          • once at start-up
+          • again every time a training run finishes.
+        """
+        # manifest = self.registry.latest_manifest()
+        manifest = locate_manifest() #(self._log) # will tract log
+        if manifest:
             self._manifest_path = str(manifest)
             self.inf_btn.setEnabled(True)
-            self.inf_btn.setStyleSheet(f"background:{INFERENCE_ON};")
-            self.inf_btn.setToolTip(
-                "Trained model detected– click to switch to inference."
-            )
+            self.inf_btn.setStyleSheet(f"background:{PRIMARY};")
+            self.inf_btn.setToolTip("Click to switch to inference mode.")
         else:
             self._manifest_path = None
             self.inf_btn.setEnabled(False)
             self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
             self.inf_btn.setToolTip(
-                "Inference is available once a trained run is found nearby."
-            )
-        self.progress_bar.setValue(0)
+                "Inference becomes available after you train a model.")
 
     def _toggle_inference_mode(self):
         """Flip the GUI between *training* and *inference* modes."""
@@ -1366,7 +1396,7 @@ class MiniForecaster(QMainWindow):
             self.inf_btn.setStyleSheet(f"background:{SECONDARY}" )
             self.inf_btn.setEnabled(False)       # frozen while active
             self.inf_btn.setToolTip("Inference mode active.")
-            self.run_btn.setText("Run Inference")
+            self.run_btn.setText("RunI")
             self._log("ℹ GUI switched to *Inference* mode – "
                       "Run will now load the saved model.")
         else:                                    # → OFF  (rare, only after run)
@@ -1441,7 +1471,7 @@ class MiniForecaster(QMainWindow):
             self._run_inference()
             return                       # *do not* go through the training path
         # ------------------------------------------------------------------
-
+        self.coverage_lbl.clear()   
         self.run_btn.setEnabled(False)
         self._log("▶ launch workflow …")
         QApplication.processEvents()
@@ -1546,25 +1576,46 @@ class MiniForecaster(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.repaint() 
     
-        # wire fake progress bar (PredictionPipeline reports 0-100)
-        cfg = SubsConfig()                       # dummy – overwritten by manifest
-        cfg.progress_callback = self.progress_updated.emit
+        # # wire fake progress bar (PredictionPipeline reports 0-100)
+        # cfg = SubsConfig()                       # dummy – overwritten by manifest
+        # cfg.progress_callback = self.progress_updated.emit
     
-        pipe = PredictionPipeline(
-            log_callback = self.log_updated.emit,
+        # pipe = PredictionPipeline(
+        #     log_callback = self.log_updated.emit,
+        # )
+        # pipe.config.progress_callback = self.progress_updated.emit
+    
+        # try:
+        #     pipe.run(validation_data_path=str(self.file_path))
+        #     self.progress_bar.setValue(100)
+        #     self._log("✔ inference finished.")
+        # except Exception as err:
+        #     self._log(f"❌ inference error: {err}")
+        #     QMessageBox.critical(self, "Inference failed", str(err))
+        
+        # --- launch thread ---------------------------------------------
+        self.infer_thr = InferenceThread(
+            manifest_path = self._manifest_path,
+            csv_path      = str(self.file_path),
+            parent        = self,
         )
-        pipe.config.progress_callback = self.progress_updated.emit
+        self.infer_thr.log_msg.connect(self.log_updated.emit)
+        self.infer_thr.progress_val.connect(self.progress_updated.emit)
+        self.infer_thr.finished.connect(self._inference_finished)
     
-        try:
-            pipe.run(validation_data_path=str(self.file_path))
-            self.progress_bar.setValue(100)
-            self._log("✔ inference finished.")
-        except Exception as err:
-            self._log(f"❌ inference error: {err}")
-            QMessageBox.critical(self, "Inference failed", str(err))
+        # Stop button just interrupts the thread
+        self.stop_btn.clicked.connect(self.infer_thr.requestInterruption)
     
+        self.infer_thr.start()
+    
+    def _inference_finished(self):
         self.run_btn.setEnabled(True)
-        self._toggle_inference_mode()            # back to training mode
+        self.stop_btn.setEnabled(False)
+        self.progress_bar.setValue(100)
+        self._toggle_inference_mode()          # back to training mode
+
+        # self.run_btn.setEnabled(True)
+        # self._toggle_inference_mode()            # back to training mode
 
     def _worker_done(self):
         """
@@ -1600,7 +1651,48 @@ class MiniForecaster(QMainWindow):
             self.inf_btn.setToolTip(
                 "Click to switch the GUI into inference mode.")
             self.run_btn.setText("Run")
+        
+        self._refresh_manifest_state()  
+        
+class InferenceThread(QThread):
+    log_msg      = pyqtSignal(str)
+    progress_val = pyqtSignal(int)
+
+    def __init__(self, manifest_path: str, csv_path: str, parent=None):
+        super().__init__(parent)
+        self.manifest_path = manifest_path
+        self.csv_path      = csv_path
+
+    def run(self):
+        # wire fake progress bar (PredictionPipeline reports 0-100)
+        cfg = SubsConfig()                       # dummy – overwritten by manifest
+        cfg.progress_callback = self.progress_updated.emit
     
+        pipe = PredictionPipeline(
+            log_callback = self.log_updated.emit,
+        )
+        pipe.config.progress_callback = self.progress_updated.emit
+    
+        try:
+            pipe.run(validation_data_path=str(self.file_path))
+            self.progress_bar.setValue(100)
+            self._log("✔ inference finished.")
+        except Exception as err:
+            self._log(f"❌ inference error: {err}")
+            QMessageBox.critical(self, "Inference failed", str(err))
+        
+        
+        
+        # try:
+        #     pipe = PredictionPipeline(
+        #         log_callback = self.log_msg.emit,
+        #     )
+        #     pipe.config.progress_callback = self.progress_val.emit
+        #     pipe.run(validation_data_path=self.csv_path)
+        # except Exception as err:
+        #     self.log_msg.emit(f"❌ inference error: {err}")
+            
+
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.
 
