@@ -14,9 +14,12 @@ from typing import Tuple, Callable
 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
-from fusionlab.utils.generic_utils import ensure_directory_exists
-from fusionlab.utils.generic_utils import normalize_time_column 
-from fusionlab.utils.generic_utils import ensure_cols_exist 
+from fusionlab.utils.generic_utils import ( 
+    split_train_test_by_time, 
+    ensure_directory_exists, 
+    normalize_time_column, 
+    ensure_cols_exist
+) 
 from fusionlab.datasets import fetch_zhongshan_data
 from fusionlab.utils.data_utils import nan_ops
 from fusionlab.utils.io_utils import save_job, _update_manifest 
@@ -37,7 +40,8 @@ class DataProcessor:
     def __init__(
         self, config: SubsConfig, 
         log_callback: Optional[callable] = None, 
-        raw_df: Optional[pd.DataFrame] = None       
+        raw_df: Optional[pd.DataFrame] = None, 
+        kind: Optional[str] =None, 
         ):
         """
         Initializes the processor with a configuration object.
@@ -45,6 +49,10 @@ class DataProcessor:
         Args:
             config (SubsConfig): The configuration object with all parameters.
             log_callback (callable, optional): A function to receive log messages.
+            kind, str, the kind of data that us used , can be for training or inference
+            this is usefull for append in the processing file that is generated 
+            if inference, then append .infer to the processing otherwise is None. 
+            
         """
         self.config = config
         self.raw_df: Optional[pd.DataFrame] = raw_df
@@ -52,6 +60,7 @@ class DataProcessor:
         self.train_df: Optional[pd.DataFrame] = None
         self.test_df: Optional[pd.DataFrame] = None
         self.log = log_callback or print
+        self.kind = kind or '' 
         
         # To store fitted objects
         self.encoder = None
@@ -247,7 +256,7 @@ class DataProcessor:
         if self.config.save_intermediate:
             # Save artifacts
             save_path = os.path.join(
-                self.config.run_output_path, "02_processed_data.csv"
+                self.config.run_output_path, f"02_processed_data{self.kind}.csv"
                 )
             self.processed_df.to_csv(save_path, index=False)
             self.log(f"  Saved processed data to: {save_path}")
@@ -286,13 +295,18 @@ class DataProcessor:
         
         # Use the config to perform the split using the configured time column
         time_col = self.config.time_col
-        self.train_df = self.processed_df[
-            self.processed_df[time_col] <= self.config.train_end_year
-        ].copy()
         
-        self.test_df = self.processed_df[
-            self.processed_df[time_col] >= self.config.train_end_year
-        ].copy()
+        self.train_df , self.test_df = split_train_test_by_time( 
+            self.processed_df , time_col = time_col, 
+            cutoff=self.config.train_end_year 
+        )
+        # self.train_df = self.processed_df[
+        #     self.processed_df[time_col] <= self.config.train_end_year
+        # ].copy()
+        
+        # self.test_df = self.processed_df[
+        #     self.processed_df[time_col] >= self.config.train_end_year
+        # ].copy()
         
         self.log(f"  Data split complete. Train shape: {self.train_df.shape},"
                  f" Test shape: {self.test_df.shape}")
@@ -305,8 +319,8 @@ class DataProcessor:
         """
         self.load_data()
         return self.preprocess_data()
+        # Henceforth manage by SequenceGenerator 
         # self.split_data()
-        
         # return self.train_df, self.test_df
 
 class SequenceGenerator:
@@ -339,10 +353,10 @@ class SequenceGenerator:
             cb(percent)
             
     def run(
-            self, processed_df: pd.DataFrame, 
-            static_features_encoded: List[str], 
-            stop_check: Callable[[], bool] = None,
-            ) -> Tuple[Any, Any]:
+        self, processed_df: pd.DataFrame, 
+        static_features_encoded: List[str], 
+        stop_check: Callable[[], bool] = None,
+        ) -> Tuple[Any, Any]:
         """
         Executes the full sequence and dataset creation pipeline.
         
@@ -355,7 +369,6 @@ class SequenceGenerator:
             stop_check= stop_check 
         )
         return self._create_tf_datasets()
-
 
     def _split_data(
             self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -375,34 +388,44 @@ class SequenceGenerator:
                 f"Time column '{time_col}' not found in DataFrame.")
 
         # --- Robust time conversion for comparison ---
-        # Convert the column to datetime objects, coercing any errors to NaT
-        datetime_series = pd.to_datetime(df[time_col], errors='coerce')
-        
-        # Extract the year as a numerical series for reliable comparison
-        year_series = datetime_series.dt.year
-        
-        # Check if conversion resulted in NaNs, which indicates a format issue
-        if year_series.isnull().any():
-            self.log(f"  [Warning] Could not parse all values in time column"
-                     f" '{time_col}' as dates. Rows with invalid date formats"
-                     " will be dropped.")
-            # Create a mask to keep only valid rows
-            valid_mask = year_series.notna()
-            df = df[valid_mask].copy()
-            year_series = year_series[valid_mask]
-
-        # Use the numerical year series for the split
-        train_mask = year_series <= self.config.train_end_year
-        test_mask = year_series >= self.config.forecast_start_year
-        
-        self.train_df = df[train_mask].copy()
-        
-        # For the test set, we need to include a lookback period
-        # for sequence generation. The `prepare_pinn_data_sequences`
-        # handles the windowing, so we just need to provide the data
-        # from the start of the forecast period. The sequence generator
-        # will look back from there.
-        self.test_df = df[test_mask].copy()
+        try: 
+            self.train_df, _ = split_train_test_by_time(
+                df, time_col = time_col , 
+                cutoff=self.config.train_end_year )
+            _, self.test_df = split_train_test_by_time(
+                df, time_col= time_col , 
+                cutoff= self.config.forecast_start_year
+            )
+        except: 
+            # do it manually 
+            # Convert the column to datetime objects, coercing any errors to NaT
+            datetime_series = pd.to_datetime(df[time_col], errors='coerce')
+            
+            # Extract the year as a numerical series for reliable comparison
+            year_series = datetime_series.dt.year
+            
+            # Check if conversion resulted in NaNs, which indicates a format issue
+            if year_series.isnull().any():
+                self.log(f"  [Warning] Could not parse all values in time column"
+                         f" '{time_col}' as dates. Rows with invalid date formats"
+                         " will be dropped.")
+                # Create a mask to keep only valid rows
+                valid_mask = year_series.notna()
+                df = df[valid_mask].copy()
+                year_series = year_series[valid_mask]
+    
+            # Use the numerical year series for the split
+            train_mask = year_series <= self.config.train_end_year
+            test_mask = year_series >= self.config.forecast_start_year
+            
+            self.train_df = df[train_mask].copy()
+            
+            # For the test set, we need to include a lookback period
+            # for sequence generation. The `prepare_pinn_data_sequences`
+            # handles the windowing, so we just need to provide the data
+            # from the start of the forecast period. The sequence generator
+            # will look back from there.
+            self.test_df = df[test_mask].copy()
         
         self.log(f"  Data split complete. Train shape: {self.train_df.shape},"
                  f" Test shape: {self.test_df.shape}")
@@ -413,6 +436,7 @@ class SequenceGenerator:
                 f" {self.config.train_end_year}."
             )
         self._tick(10)
+        
         return self.train_df, self.test_df
     
     def _generate_sequences(

@@ -10,7 +10,7 @@ from __future__ import annotations
 import os 
 from pathlib import Path 
 import json 
-from typing import Optional, List, Tuple, Dict, Callable   
+from typing import Optional, List, Tuple, Dict, Callable, Union   
 import joblib 
 import pandas as pd 
 
@@ -20,8 +20,9 @@ from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.utils.generic_utils import ( 
     normalize_time_column, rename_dict_keys 
 )
-from fusionlab.utils._manifest_registry import ManifestRegistry
-from fusionlab.utils.io_utils import _update_manifest
+from fusionlab.utils._manifest_registry import ( 
+    ManifestRegistry, _update_manifest
+)
 from fusionlab.nn.models import TransFlowSubsNet, PIHALNet  # noqa 
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ # Noqa 
 from fusionlab.utils.data_utils import nan_ops 
@@ -56,6 +57,9 @@ class PredictionPipeline:
     log_callback : callable, optional
         A function to receive and handle log messages, such as
         updating a GUI log panel. Defaults to `print`.
+    kind: str, 
+       Name of the pipeline. If provided, name should be used for append 
+       the plot that generated.
     """
     _range = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo)*frac))
 
@@ -64,6 +68,7 @@ class PredictionPipeline:
         manifest_path: Optional[str | os.PathLike] = None,
         *,
         log_callback: Optional[Callable[[str], None]] = None,
+        kind : Optional[str]=None, 
         **kws, 
     ):
         """
@@ -82,12 +87,13 @@ class PredictionPipeline:
             A function to receive and handle log messages. Defaults to `print`.
         """
         self.log = log_callback or print
+        self.kind = kind 
         
         registry = ManifestRegistry()
         if manifest_path is None:
             self.log("No manifest path provided. Locating the latest run...")
             
-            self.manifest_path = registry.latest_manifest()
+            self.manifest_path =registry.latest_manifest()
             if not self.manifest_path:
                 raise FileNotFoundError(
                     "No training runs found in the manifest registry. "
@@ -104,6 +110,9 @@ class PredictionPipeline:
                 f"Manifest file not found at: {self.manifest_path}"
             )
         
+        for key in list(kws.keys()): 
+            setattr (self, key, kws[key]) 
+            
         self._load_from_manifest()
 
     def _load_from_manifest(self):
@@ -227,7 +236,7 @@ class PredictionPipeline:
                 f"{', '.join(not_found[:10])}{' …' if len(not_found) > 10 else ''}"
             )
 
-    def run(self, validation_data_path: str):
+    def run(self, validation_data: Union [str, pd.DataFrame] ):
         """
         Executes the full prediction workflow on a new validation dataset.
         """
@@ -240,7 +249,7 @@ class PredictionPipeline:
         
         # 2. Process the new validation data
         processed_val_df, static_features_encoded = self._process_validation_data(
-            validation_data_path)
+            validation_data)
         self._tick(30)
         
         # 3. Generate sequences for the validation data
@@ -257,7 +266,8 @@ class PredictionPipeline:
         self._tick(80)
         
         # 4. Run forecasting
-        forecaster = Forecaster(self.config, self.log)
+        forecaster = Forecaster(
+            self.config, self.log, kind = self.kind)
         # rename target to fit the exact subsudence value. 
         val_targets = rename_dict_keys(
             val_targets.copy(),
@@ -273,30 +283,46 @@ class PredictionPipeline:
         
         # 5. Visualize results
         visualizer = ResultsVisualizer(
-            self.config, self.log
+            self.config, self.log, 
+            kind = self.kind
         )
         visualizer.run(forecast_df)
         if self.model_path: 
+            inference_ref = 'unset'
+            if isinstance(validation_data, str): 
+                inference_ref = validation_data # assume a file path 
+                
             _update_manifest(
                 run_dir = os.path.dirname (str(self.manifest_path)),      
                 section = "inference",
-                item = {"validation_file": validation_data_path},
+                item = {"validation_file": str(inference_ref)},
             )
 
         self.log("--- Prediction Pipeline Finished Successfully ---")
         self._tick(100)
         
     def _process_validation_data(
-        self, validation_data_path: str
+        self, validation_data: str
     ) -> Tuple[pd.DataFrame, List[str]]:
         """Loads and processes the new validation data using saved scalers."""
-        self.log(f"Processing new validation data from: {validation_data_path}")
-        
-        val_df = pd.read_csv(validation_data_path)
+        msg ="Processing new validation "
+        val_df = validation_data
+        if isinstance ( val_df, str): 
+            self.log(f"{msg} from {self.validation_data}")
+            # assume a file path 
+            val_df = pd.read_csv(val_df)
+        elif isinstance (val_df, pd.DataFrame): 
+            self.log(msg)
+
+        else: 
+            raise ValueError(
+                "Inference/Validation data *must* be either a Pathlike object"
+                f"or a dataframe. Got {type(validation_data).__name__!r}"
+            )
         
         # Use a temporary DataProcessor to apply transformations
         # This assumes DataProcessor can be initialized and used this way.
-        temp_processor = DataProcessor(self.config)
+        temp_processor = DataProcessor(self.config, kind =self.kind)
         temp_processor.encoder = self.encoder
         temp_processor.scaler = self.scaler
         

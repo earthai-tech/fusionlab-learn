@@ -581,8 +581,6 @@ class CsvEditDialog(QDialog):
         """
         return self._df_full.copy()
 
-
-
 class Worker(QThread):
     """Executes the forecasting workflow in a background thread.
 
@@ -718,10 +716,10 @@ class Worker(QThread):
     def _write_coverage_result(self) :
         if self.cfg.evaluate_coverage and self.cfg.quantiles:
             json_path = os.path.join(self.cfg.run_output_path,
-                                     "coverage_result.json")
+                                     "diagnostics_results.json")
             try:
                 with open(json_path, "r", encoding="utf-8") as fp:
-                    cv = json.load(fp)["coverage_result"]
+                    cv = json.load(fp)["coverage"]
                     self.coverage_val.emit(float(cv))
             except Exception as e:
                 self.log_msg.emit(
@@ -803,7 +801,7 @@ class MiniForecaster(QMainWindow):
         pix_path  = os.path.join(os.path.dirname(__file__), "fusionlab_learn_logo.png")
         pix_logo  = QPixmap(pix_path)
         
-        if not pix_logo.isNull():             # only set the pixmap if the file exists
+        if not pix_logo.isNull():   # only set the pixmap if the file exists
             logo_lbl.setPixmap(
                 pix_logo.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
@@ -845,8 +843,6 @@ class MiniForecaster(QMainWindow):
             f"font-weight:bold'>{value:.3f}</span>"
         )
 
-        #self.coverage_lbl.setText(f"cov-result: <b>{cv:.3f}</b>")
-    
     def _build_ui(self):
         """Constructs and assembles the entire GUI layout.
 
@@ -881,11 +877,7 @@ class MiniForecaster(QMainWindow):
         root = QWidget(); self.setCentralWidget(root)
         L = QVBoxLayout(root)
 
-        # 0) logo + title
-        # logo = QLabel()
-        # logo.setPixmap(QPixmap("fusionlab_learn_logo.ico").scaled(
-        #     72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        # logo.setAlignment(Qt.AlignCenter)
+        # 0) title
         title = QLabel("Subsidence PINN")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"font-size:22px; color:{PRIMARY}")
@@ -1025,10 +1017,6 @@ class MiniForecaster(QMainWindow):
             self.stop_btn.setEnabled(False)      # grey it out
             self.worker.requestInterruption()  
         
-        # if hasattr(self, "worker") and self.worker.isRunning():
-        #     self._log("⏹ Stopping workflow …")
-        #     self.worker.requestInterruption()   # graceful
-        #     self.worker.wait(500)               # give it 0.5 s
 
     def _training_card(self) -> QFrame:
         """Creates and returns the 'Training Parameters' UI panel.
@@ -1053,7 +1041,7 @@ class MiniForecaster(QMainWindow):
     
         # Train End Year
         self.train_end_year_spin = QSpinBox()
-        self.train_end_year_spin.setRange(1980, 2050)
+        self.train_end_year_spin.setRange(1980, 2099)
         self.train_end_year_spin.setValue(2022)
         form.addRow("Train End Year:", self.train_end_year_spin)
     
@@ -1347,23 +1335,6 @@ class MiniForecaster(QMainWindow):
             self.edited_df = None        # fall back to on-disk CSV
             self._log("CSV preview canceled – keeping original file.")
         
-        # # look for a manifest in registry  → enables inference
-        # manifest = locate_manifest(self._log) 
-    
-        # if manifest is not None:
-        #     self._manifest_path = str(manifest)
-        #     self.inf_btn.setEnabled(True)
-        #     self.inf_btn.setStyleSheet(f"background:{INFERENCE_ON};")
-        #     self.inf_btn.setToolTip(
-        #         "Trained model detected– click to switch to inference."
-        #     )
-        # else:
-        #     self._manifest_path = None
-        #     self.inf_btn.setEnabled(False)
-        #     self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
-        #     self.inf_btn.setToolTip(
-        #         "Inference is available once a trained run is found nearby."
-        #     )
         self.progress_bar.setValue(0)
         
 
@@ -1374,8 +1345,7 @@ class MiniForecaster(QMainWindow):
           • once at start-up
           • again every time a training run finishes.
         """
-        # manifest = self.registry.latest_manifest()
-        manifest = locate_manifest() #(self._log) # will tract log
+        manifest = locate_manifest() 
         if manifest:
             self._manifest_path = str(manifest)
             self.inf_btn.setEnabled(True)
@@ -1436,10 +1406,33 @@ class MiniForecaster(QMainWindow):
         self.city_input.clear()
         self.coverage_lbl.clear() 
         self._log("ℹ Interface reset.")
-        
-        # self.file_path = None
-
+  
     def _on_run(self):
+        """
+        Acts as the main dispatcher for the 'Run' button.
+
+        Checks if the GUI is in training or inference mode and calls the
+        appropriate workflow launcher.
+    
+        """
+    
+        # First, ensure a file has been loaded and prepared.
+        if self.file_path is None:
+            self._log("⚠ Please select a CSV file first.")
+            QMessageBox.warning(
+                self, "No Data", "Please select a CSV data file"
+                " before running a workflow.")
+            return
+            
+        self.coverage_lbl.clear()
+        
+        # Dispatch to the correct workflow based on the UI mode
+        if self._inference_mode:
+            self._run_inference()
+        else:
+            self._run_training() # A new helper for clarity
+            
+    def _run_training(self):
         """Initiates the end-to-end forecasting workflow.
 
         This method is the slot connected to the `Run` button's
@@ -1466,14 +1459,14 @@ class MiniForecaster(QMainWindow):
         if self.file_path is None:
             self._log("⚠ No CSV selected.")
             return
-        # ------------------------------------------------------------------
-        if self._inference_mode:
-            self._run_inference()
-            return                       # *do not* go through the training path
-        # ------------------------------------------------------------------
-        self.coverage_lbl.clear()   
+        # # ------------------------------------------------------------------
+        # if self._inference_mode:
+        #     self._run_inference()
+        #     return               # *do not* go through the training path
+        # # ------------------------------------------------------------------
+        # self.coverage_lbl.clear()   
         self.run_btn.setEnabled(False)
-        self._log("▶ launch workflow …")
+        self._log("▶ launch TRAINING workflow …")
         QApplication.processEvents()
         
         def _parse(txt):
@@ -1507,7 +1500,8 @@ class MiniForecaster(QMainWindow):
             forecast_start_year    = self.forecast_start_year_spin.value(),
             forecast_horizon_years = self.forecast_horizon_spin.value(),
             time_steps             = self.time_steps_spin.value(),
-            quantiles             = [float(q) for q in self.quantiles_input.text().split(',')],
+            quantiles             = [
+                float(q) for q in self.quantiles_input.text().split(',')],
             
             # New physical parameters for Pinn Coeff C and weights
             pinn_coeff_c           = self.pinn_coeff_c_input.currentText(),
@@ -1561,61 +1555,53 @@ class MiniForecaster(QMainWindow):
         
         self.worker.start()
         
-    # --------------------------------------------------------------
     def _run_inference(self):
-        """Kick off the PredictionPipeline inside the same progress machinery."""
-        if not self._manifest_path or not Path(self._manifest_path).exists():
-            QMessageBox.warning(self, "Inference",
-                                "run_manifest.json not found – aborting.")
-            self._toggle_inference_mode()        # reset button colours
+        """Launches the inference workflow using the pre-loaded data.
+
+        This method assumes that a manifest has been found and that the
+        user has already selected and potentially edited a CSV file via
+        the `_choose_file` method.
+        """
+        # Pre-flight check: ensure data is actually loaded and ready.
+        # This can be from the original file or the CsvEditDialog.
+        inference_data = ( 
+            self.edited_df if self.edited_df is not None 
+            else pd.read_csv(self.file_path)
+        )
+        if inference_data is None or inference_data.empty:
+            QMessageBox.warning(
+                self, "Inference Error",
+                "No valid data available to run inference on."
+            )
             return
-    
-        self._log("▶ launching *inference* …")
+
+        self._log("▶ Launching INFERENCE workflow…")
         self.run_btn.setEnabled(False)
-        self.stop_btn.setEnabled(False)          # inference is fast; no stop
+        self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.progress_bar.repaint() 
-    
-        # # wire fake progress bar (PredictionPipeline reports 0-100)
-        # cfg = SubsConfig()                       # dummy – overwritten by manifest
-        # cfg.progress_callback = self.progress_updated.emit
-    
-        # pipe = PredictionPipeline(
-        #     log_callback = self.log_updated.emit,
-        # )
-        # pipe.config.progress_callback = self.progress_updated.emit
-    
-        # try:
-        #     pipe.run(validation_data_path=str(self.file_path))
-        #     self.progress_bar.setValue(100)
-        #     self._log("✔ inference finished.")
-        # except Exception as err:
-        #     self._log(f"❌ inference error: {err}")
-        #     QMessageBox.critical(self, "Inference failed", str(err))
-        
-        # --- launch thread ---------------------------------------------
+        self.progress_bar.repaint()
+
+        # --- Launch the InferenceThread ---
+        # It receives the manifest path found by `_refresh_manifest_state`
+        # and the in-memory DataFrame prepared by `_choose_file`.
         self.infer_thr = InferenceThread(
-            manifest_path = self._manifest_path,
-            csv_path      = str(self.file_path),
-            parent        = self,
+            manifest_path=self._manifest_path,
+            edited_df=inference_data,
+            parent=self,
         )
         self.infer_thr.log_msg.connect(self.log_updated.emit)
         self.infer_thr.progress_val.connect(self.progress_updated.emit)
         self.infer_thr.finished.connect(self._inference_finished)
-    
-        # Stop button just interrupts the thread
+
         self.stop_btn.clicked.connect(self.infer_thr.requestInterruption)
-    
         self.infer_thr.start()
-    
+        
     def _inference_finished(self):
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setValue(100)
         self._toggle_inference_mode()          # back to training mode
 
-        # self.run_btn.setEnabled(True)
-        # self._toggle_inference_mode()            # back to training mode
 
     def _worker_done(self):
         """
@@ -1655,42 +1641,115 @@ class MiniForecaster(QMainWindow):
         self._refresh_manifest_state()  
         
 class InferenceThread(QThread):
+    """
+    Run the end-to-end *inference* workflow in a background
+    thread so the Qt main-loop (GUI) remains responsive.
+
+    Why a separate thread?
+    ----------------------
+    • Prediction can still take a few seconds (model + I/O);  
+      moving it off the GUI thread prevents the application
+      from “freezing” and keeps the progress-bar animating.  
+    • All status / log / progress signals are emitted back to
+      the main window, which updates widgets in a thread-safe
+      way (Qt’s signal/slot mechanism).
+
+    Parameters
+    ----------
+    manifest_path : str
+        Absolute path to the *run_manifest.json* that contains
+        all artefact locations of a previously-trained run
+        (model weights, encoders, scalers, …).
+    edited_df : pandas.DataFrame
+        The pre-processed **validation** dataframe that the user
+        may have edited in the CSV preview dialog.  
+        Passing it directly avoids re-loading the CSV from disk.
+    parent : QObject, optional
+        Parent widget; used only so that
+        ``QMessageBox.critical()`` has the correct owner.
+
+    Signals
+    -------
+    log_msg(str)
+        One log line ready to be appended to the GUI console.
+    progress_val(int)
+        0 – 100 progress updates for the progress-bar.
+    finished_with_results
+        Can be connected if the caller needs to know when the
+        full pipeline finished successfully (no payload here;
+        extend as needed).
+
+    Notes
+    -----
+    *Never* create or touch Qt widgets inside the thread itself;
+    Qt objects must live in the GUI thread.  Here we only emit
+    signals.
+    """
+    
     log_msg      = pyqtSignal(str)
     progress_val = pyqtSignal(int)
+    # This signal can be used if you need to pass 
+     # back results, otherwise it's optional
+    finished_with_results = pyqtSignal() 
 
-    def __init__(self, manifest_path: str, csv_path: str, parent=None):
+    def __init__(
+        self,
+        manifest_path: str,
+        edited_df: pd.DataFrame, 
+        parent=None
+    ):
         super().__init__(parent)
         self.manifest_path = manifest_path
-        self.csv_path      = csv_path
+        self.edited_df     = edited_df 
+        self.parent_widget = parent
 
     def run(self):
-        # wire fake progress bar (PredictionPipeline reports 0-100)
-        cfg = SubsConfig()                       # dummy – overwritten by manifest
-        cfg.progress_callback = self.progress_updated.emit
-    
-        pipe = PredictionPipeline(
-            log_callback = self.log_updated.emit,
-        )
-        pipe.config.progress_callback = self.progress_updated.emit
-    
+        """
+        Spin up :class:`PredictionPipeline`, wire its callbacks to
+        our Qt signals, and execute the inference pass.
+
+        Workflow
+        --------
+        1.  Build the pipeline from *run_manifest.json*  
+            → all artefact paths are resolved automatically.
+        2.  Redirect pipeline logs to ``log_msg`` so the GUI gets
+            real-time messages.
+        3.  Attach the GUI’s progress-bar callback to the pipeline’s
+            config so every internal step reports its percentage.
+        4.  Call ``pipe.run(validation_data=edited_df)``, which
+            returns only when the full prediction + visualisation
+            logic is done.
+        5.  On success: emit *100 %* and log a final line.  
+            On failure: emit an error line **and** show a critical
+            message-box on the GUI thread.
+
+        Any uncaught exception is converted to a user-visible
+        message while keeping the application alive.
+        """
         try:
-            pipe.run(validation_data_path=str(self.file_path))
-            self.progress_bar.setValue(100)
-            self._log("✔ inference finished.")
+            # Create the pipeline using the manifest path.
+            # The log callback is now passed during initialization.
+            pipe = PredictionPipeline(
+                manifest_path=self.manifest_path,
+                log_callback=self.log_msg.emit,
+                kind ='infer', 
+            )
+            # The config object's progress callback can be linked
+            # to the GUI's progress bar.
+            cfg: SubsConfig = pipe.config
+            cfg.progress_callback = self.progress_val.emit
+
+            # Execute the pipeline with the in-memory DataFrame.
+            # We assume the `run` method is updated to accept a DataFrame.
+            pipe.run(validation_data=self.edited_df)
+            
+            self.progress_val.emit(100)
+            self.log_msg.emit("✔ Inference finished.")
+
         except Exception as err:
-            self._log(f"❌ inference error: {err}")
-            QMessageBox.critical(self, "Inference failed", str(err))
-        
-        
-        
-        # try:
-        #     pipe = PredictionPipeline(
-        #         log_callback = self.log_msg.emit,
-        #     )
-        #     pipe.config.progress_callback = self.progress_val.emit
-        #     pipe.run(validation_data_path=self.csv_path)
-        # except Exception as err:
-        #     self.log_msg.emit(f"❌ inference error: {err}")
+            self.log_msg.emit(f"❌ Inference error: {err}")
+            QMessageBox.critical(
+                self.parent_widget, "Inference Failed", str(err))
             
 
 def hline() -> QFrame:

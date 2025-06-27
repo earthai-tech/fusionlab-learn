@@ -17,9 +17,10 @@ import json
 from fusionlab.utils.generic_utils import rename_dict_keys 
 from fusionlab.utils._manifest_registry import _update_manifest 
 from fusionlab.nn.pinn.utils import ( 
-    prepare_pinn_data_sequences, format_pinn_predictions
+    prepare_pinn_data_sequences, format_pinn_predictions, 
 )
-from fusionlab.nn.utils import make_dict_to_tuple_fn
+from fusionlab.nn.pinn.op import extract_physical_parameters 
+from fusionlab.nn.utils import make_dict_to_tuple_fn, export_keras_losses
 from fusionlab.nn import KERAS_DEPS
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ
 from fusionlab.nn.losses import combined_quantile_loss
@@ -262,7 +263,23 @@ class ModelTrainer:
             )
         except Exception as err:
             self.log(f"  [WARN] Could not write history file: {err}")
+        
+        # Export physical parameters
+        try: 
+            extract_physical_parameters (
+                self.model, filename = os.path.join (
+                    self.config.run_output_path, 
+                    f'{self.config.model_name}.physical_parameters.csv'
+                    ) 
+            )
             
+            self.log("Successfully exported parameters to:"
+                  f"{self.config.run_output_path}")
+            
+        except Exception as err: 
+            self.log(f"  [WARN] Failed to export physical parameters: {err}")
+            
+   
     def _load_best_model(self) -> Any:
         """
         Loads the best model from the checkpoint after training. This method
@@ -362,12 +379,17 @@ class Forecaster:
     the results into a DataFrame.
     """
     ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
-    def __init__(self, config: SubsConfig, log_callback: Optional[callable] = None):
+    def __init__(
+            self, config: SubsConfig, 
+            log_callback: Optional[callable] = None, 
+            kind: Optional[str]=None 
+        ):
         """
         Initializes the forecaster with a configuration object.
         """
         self.config = config
         self.log = log_callback or print
+        self.kind = kind or ''
 
     def run(
         self,
@@ -516,12 +538,13 @@ class Forecaster:
             coord_scaler= coord_scaler, 
             _logger = self.log, 
             savepath = self.config.run_output_path, 
+            name = self.kind 
         )
         
         if forecast_df is not None and not forecast_df.empty:
             if self.config.save_intermediate:
                 save_path = os.path.join(
-                    self.config.run_output_path, "03_forecast_results.csv")
+                    self.config.run_output_path, f"03_forecast_results{self.kind}.csv")
                 forecast_df.to_csv(save_path, index=False)
                 self.log(f"  Saved forecast results to: {save_path}")
             return forecast_df

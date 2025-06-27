@@ -1709,7 +1709,8 @@ def plot_forecasts(
     if savefig:
         save_figure (
             fig, savefile = savefig, save_fmts= save_fmts, 
-            dpi=300, bbox_inches="tight" 
+            dpi=300, bbox_inches="tight" , 
+            _logger = _logger, 
           )
         plt.close(fig) 
     else: 

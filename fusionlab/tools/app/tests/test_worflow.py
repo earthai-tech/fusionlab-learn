@@ -173,12 +173,18 @@ def test_inference2():
     # 1. configuration (tiny run – just to exercise the pipeline) 
     cfg = SubsConfig(
         data_dir='./data', 
-        data_filename='zhongshan_500k.csv',
+        data_filename='nansha_500k.csv',
         output_dir    = str(work_dir),
         epochs        = 3,
         batch_size    = 64,
         save_intermediate = True,
         verbose       = 0,
+        
+        time_steps = 4, 
+        train_end_year = 2021, 
+        forecast_start_year = 2022,
+        forecast_horizon_years = 3,
+    
     )
 
     # No need to create will do it automatically 

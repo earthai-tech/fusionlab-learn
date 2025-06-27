@@ -5,7 +5,6 @@
 """
 Physics-Informed Neural Network (PINN) Utility functions.
 """
-import os 
 import logging 
 from typing import List, Tuple, Optional, Union, Dict, Any
 from typing import Sequence,  Callable
@@ -24,14 +23,14 @@ from ...core.checks import (
     check_empty
 )
 from ...core.io import SaveFile 
-from ...core.diagnose_q import validate_quantiles
 from ...core.handlers import columns_manager
 from ...utils.validator import validate_positive_integer 
+from ...metrics.utils import compute_quantile_diagnostics 
 from ...decorators import isdf 
 from ...utils.deps_utils import ensure_pkg 
-from ...utils.generic_utils import print_box, vlog, select_mode 
+from ...utils.generic_utils import print_box, vlog, select_mode
 from ...utils.geo_utils import resolve_spatial_columns 
-from ...utils.io_utils import save_job, to_txt   
+from ...utils.io_utils import save_job 
 
 from .. import KERAS_BACKEND, KERAS_DEPS
 
@@ -245,8 +244,9 @@ def format_pihalnet_predictions(
     evaluate_coverage: bool = False,
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: str = None, 
+    name: Optional[str]=None, 
     verbose: int = 0, 
-    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None, 
     **kwargs
 ) -> pd.DataFrame:
     """
@@ -331,6 +331,10 @@ def format_pihalnet_predictions(
            \bigr]
     savefile : str or None, default=None
         If given, ``final_df.to_csv(savefile, index=False)`` is called.
+    name: str or None 
+        Name of the prediction. Name is used to format the output of 
+        the data and coverage result if applicable. 
+    
     verbose : int, default=0
         Verbosity from *0* (silent) to *5* (trace every step).
 
@@ -402,10 +406,6 @@ def format_pihalnet_predictions(
        Attention Learning for Spatio‑Temporal Subsidence Prediction,”
        *IEEE T‑PAMI*, 2025 (in press).
     """
-    # **********************************************************
-    from ...metrics import coverage_score
-    # **********************************************************
-    
     vlog(f"Starting PIHALNet prediction formatting (verbose={verbose}).",
          level=3, verbose=verbose, logger=_logger)
 
@@ -793,74 +793,24 @@ def format_pihalnet_predictions(
                 and len(quantiles) >= 2 
                 and O_target == 1
             ):
-            # Assume quantiles_sorted is available if quantiles is not None   
-            quantiles_sorted = sorted (
-                validate_quantiles(quantiles, dtype=np.float64)
-            )
-            l_idx, u_idx = coverage_quantile_indices
-            lower_q_col = f"{base_name}_q{int(quantiles_sorted[l_idx]*100)}"
-            upper_q_col = f"{base_name}_q{int(quantiles_sorted[u_idx]*100)}"
-            actual_col = f"{base_name}_actual" # Assumes O_target=1 for actual
-
-            # Access from the currently forming DataFrame parts
-            temp_df_for_coverage = pd.concat(all_data_dfs, axis=1)
-
-            if ( 
-                    lower_q_col in temp_df_for_coverage and 
-                    upper_q_col in temp_df_for_coverage and 
-                    actual_col in temp_df_for_coverage
-               ):
-                
-                coverage = coverage_score(
-                    temp_df_for_coverage[actual_col],
-                    temp_df_for_coverage[lower_q_col],
-                    temp_df_for_coverage[upper_q_col]
+            # try:
+            compute_quantile_diagnostics (
+                *all_data_dfs, 
+                base_name= base_name, 
+                quantiles= quantiles, 
+                coverage_quantile_indices=coverage_quantile_indices, 
+                savefile=savefile, 
+                savepath= kwargs.pop('savepath', None), 
+                filename= 'diagnostics_results.json', 
+                name=name, 
+                verbose=verbose, 
+                logger =_logger,  
                 )
-                vlog(f"  Coverage Score for {base_name} "
-                     f"({quantiles_sorted[l_idx]}-"
-                     f"{quantiles_sorted[u_idx]}): {coverage:.4f}",
-                     level=3, verbose=verbose, logger=_logger)
-                
-                
-                try:
-                    
-                    
-                    # Define savepath
-                    savepath = kwargs.pop('savepath', None)
-                    # If savefile is provided, get the directory path for saving
-                    if savefile is not None:
-                        savepath = os.path.dirname(savefile)
-                    
-                    # Verbose log for where the file will be saved
-                    vlog(
-                        ( f"Saving file to: {savepath}") 
-                        if savepath is not None else (
-                        "No savepath specified, using"
-                        " current working directory."),
-                         level=1, verbose=verbose, logger=_logger)
-                    # Save the coverage result in JSON format
-                    to_txt(
-                        {"coverage_result": coverage}, 
-                        format='json', 
-                        indent=4, 
-                        filename="coverage_result.json", 
-                        savepath=savepath,
-                    )
-                    
-                except Exception as e:
-                    # Handle any exceptions and print the error
-                    vlog(
-                        f"An error occurred while saving the file: {e}", 
-                        level=1, verbose=verbose, logger=_logger
-                        )
-                    
                 # final_df.attrs[f'{base_name}_coverage'] = coverage
-            else:
-                 vlog(
-                     "  Required columns for coverage for"
-                     f" {base_name} not found. Skipping.",
-                      level=2, verbose=verbose, logger=_logger
-                     )
+            # except Exception as e:
+            #      vlog(f"Skipping coverage computation due to: {e}",
+            #           level=2, verbose=verbose, logger=_logger
+            #     )
 
     # --- 7. Concatenate all DataFrames ---
     final_df = pd.concat(all_data_dfs, axis=1)
@@ -1453,9 +1403,7 @@ def prepare_pinn_data_sequences(
              verbose=verbose, 
              level=6, logger=_logger
             )
-        
-        
-        
+
     if total_sequences == 0:
         raise ValueError(
             "No group has enough data points to create sequences with "

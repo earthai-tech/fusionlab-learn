@@ -21,10 +21,12 @@ from ._utils import (
     split_static_dynamic,
     squeeze_last_dim_if,
     step_to_long, 
-    make_dict_to_tuple_fn
+    make_dict_to_tuple_fn, 
+    export_keras_losses
     )
 
-from .hybrid.utils import plot_history_in 
+from .hybrid.utils import plot_history_in
+from .pinn.op import extract_physical_parameters 
 from .pinn.utils import ( 
     prepare_pinn_data_sequences, 
     format_pinn_predictions, 
@@ -55,6 +57,7 @@ __all__=[
      'split_static_dynamic',
      'squeeze_last_dim_if',
      'step_to_long', 
+     'export_keras_losses', 
      
      'plot_history_in', 
      
@@ -64,6 +67,7 @@ __all__=[
      'format_pinn_predictions', 
      'extract_txy', 
      'plot_hydraulic_head', 
-     'make_dict_to_tuple_fn'
+     'make_dict_to_tuple_fn', 
+     'extract_physical_parameters'
      
  ]

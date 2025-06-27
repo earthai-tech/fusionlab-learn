@@ -18,8 +18,9 @@ from typing import (
     Any, 
     Optional,
     Tuple , 
-    Callable
+    Callable, 
 )
+import numpy as np 
 import pandas as pd
 
 from .._fusionlog import fusionlog 
@@ -39,11 +40,60 @@ __all__= [
      'get_value_prefixes',
      'get_value_prefixes_in',
      'pivot_forecast_dataframe', 
-     'get_step_names'
+     'get_step_names', 
+     'stack_quantile_predictions'
      ]
 
 _DIGIT_RE = re.compile(r"\d+")
 
+def stack_quantile_predictions(
+    q_lower:   Union[np.ndarray, Sequence],
+    q_median:  Union[np.ndarray, Sequence],
+    q_upper:   Union[np.ndarray, Sequence],
+) -> np.ndarray:
+    """
+    Stack three quantile trajectories into a single y_pred array
+    of shape (n_samples, 3, n_timesteps), ready for PSS.
+
+    Parameters
+    ----------
+    q_lower, q_median, q_upper : array-like
+        Each is either
+        - 1D: (n_timesteps,) → interpreted as a single sample, or
+        - 2D: (n_samples, n_timesteps)
+
+    Returns
+    -------
+    y_pred : np.ndarray, shape (n_samples, 3, n_timesteps)
+        Where axis=1 indexes [lower, median, upper].
+
+    Raises
+    ------
+    ValueError
+        If the three inputs (after promotion) do not share the same shape.
+    """
+    def _ensure_2d(arr):
+        a = np.asarray(arr)
+        if a.ndim == 1:
+            return a.reshape(1, -1)
+        if a.ndim == 2:
+            return a
+        raise ValueError(
+            f"Each quantile array must be 1D or 2D, got shape {a.shape}")
+
+    lower = _ensure_2d(q_lower)
+    median = _ensure_2d(q_median)
+    upper = _ensure_2d(q_upper)
+
+    if not (lower.shape == median.shape == upper.shape):
+        raise ValueError(
+            "All three quantile arrays must have the same shape "
+            f"after promotion, got {lower.shape}, {median.shape}, {upper.shape}"
+        )
+
+    # Stack along new axis=1 → (n_samples, 3, n_timesteps)
+    y_pred = np.stack([lower, median, upper], axis=1)
+    return y_pred
 
 def get_step_names(
     forecast_steps: Iterable[int],
@@ -631,17 +681,20 @@ def pivot_forecast_dataframe(
         df_wide = df_pivoted
     
     vlog(f"Pivot complete. Final shape: {df_wide.shape}",
-         level=1, verbose=verbose)
+         level=1, verbose=verbose, logger = _logger 
+         )
 
     if savefile:
         try:
             vlog(f"Saving DataFrame to '{savefile}'.",
-                 level=1, verbose=verbose)
+                 level=1, verbose=verbose, logger = _logger )
             save_dir = os.path.dirname(savefile)
             if save_dir and not os.path.exists(save_dir):
                 os.makedirs(save_dir, exist_ok=True)
             df_wide.to_csv(savefile, index=False)
-            vlog("Save successful.", level=2, verbose=verbose)
+            vlog("Save successful.", level=2, verbose=verbose, 
+                 logger = _logger 
+                 )
         except Exception as e:
             logger.error(f"Failed to save file to '{savefile}': {e}")
 

@@ -3028,7 +3028,8 @@ def save_figure(
     savefile: Optional[str] = None,  
     save_fmts: Union[str, List[str]] = ['.png'],  
     overwrite: bool = True,  
-    verbose: int = 1,  
+    verbose: int = 1, 
+    _logger =None,  
     **kwargs
 ):
     """
@@ -3092,11 +3093,15 @@ def save_figure(
             final_filename = f"{os.path.splitext(savefile)[0]}{fmt}"
             figure.savefig(final_filename, **kwargs)
             if verbose > 0:
-                print(f"Saved figure to {final_filename}")
+                vlog(f"Saved figure to {final_filename}", 
+                     verbose = verbose, level=2, logger= _logger 
+                    )
         return savefile  # Return the final save path
     except Exception as e:
         if verbose > 0:
-            print(f"Error saving figure: {e}")
+            vlog(f"Error saving figure: {e}",
+                 verbose=verbose, level =2, logger =_logger 
+                )
         return None
     
     # fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
@@ -3205,3 +3210,274 @@ def ensure_cols_exist(
         [c for c in grp if c in present] for grp in grouped
     ]
     return filtered_grouped
+
+def apply_affix(
+    value: Any,
+    label: Optional[str] = None,
+    *,
+    mode: str = "suffix",
+    affix_prefix: str = "",
+    separator: str = "",
+    include_date: bool = False,
+    date_format: str = "%Y%m%d",
+    version: Optional[str] = None,
+    version_prefix: str = "v",
+    part_separator: str = "",
+) -> str:
+    """
+    Apply either a prefix or suffix (with optional version, date, and custom label)
+    to the string form of `value`.
+
+    Parameters
+    ----------
+    value : Any
+        The base value, converted to str().
+    label : str, optional
+        Custom label to include.
+    mode : {'suffix', 'prefix'}, default 'suffix'
+        Whether to append ('suffix') or prepend ('prefix') the affix block.
+    affix_prefix : str, default ""
+        Characters to prepend to the combined affix block (e.g. ".", "_").
+    separator : str, default ""
+        Characters to insert between base and affix block.
+    include_date : bool, default False
+        If True, include current date in the affix block.
+    date_format : str, default "%Y%m%d"
+        strftime format for the date.
+    version : str, optional
+        Version string to include (e.g. "1.2.3").
+    version_prefix : str, default "v"
+        Characters to prepend to the version.
+    part_separator : str, default ""
+        Separator for joining version, date, and label parts.
+
+    Returns
+    -------
+    str
+        The resulting string with prefix or suffix as specified.
+
+    Raises
+    ------
+    ValueError
+        If `mode` is not 'suffix' or 'prefix'.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.generic_utils import apply_affix
+    >>> apply_affix("file", "txt")
+    'filetxt'
+
+    >>> apply_affix("file", "txt", affix_prefix=".", separator="")
+    'file.txt'
+
+    >>> apply_affix("data", None, include_date=True, separator="_")
+    'data_20250627'
+
+    >>> apply_affix("app", None, version="1.0.0", part_separator=".")
+    'appv1.0.0'
+
+    >>> apply_affix(
+    ...     "log",
+    ...     "backup",
+    ...     mode="prefix",
+    ...     affix_prefix="_",
+    ...     separator="-",
+    ...     include_date=True,
+    ...     date_format="%Y-%m-%d",
+    ...     version="2.5",
+    ...     version_prefix="v",
+    ...     part_separator="."
+    ... )
+    '_v2.5.2025-06-27-backup-log'
+    """
+    base = str(value)
+    parts = []
+
+    if version is not None:
+        parts.append(f"{version_prefix}{version}")
+    if include_date:
+        parts.append(datetime.now().strftime(date_format))
+    if label:
+        parts.append(label)
+
+    if not parts:
+        combined = ""
+    else:
+        combined = part_separator.join(parts)
+        if affix_prefix:
+            combined = f"{affix_prefix}{combined}"
+
+    if not combined:
+        return base
+
+    if mode == "suffix":
+        return f"{base}{separator}{combined}" if separator else f"{base}{combined}"
+    elif mode == "prefix":
+        return f"{combined}{separator}{base}" if separator else f"{combined}{base}"
+    else:
+        raise ValueError("mode must be 'suffix' or 'prefix'")
+
+def insert_affix_in(
+    filepath: Union[str, Path],
+    affix: str,
+    *,
+    separator: str = ""
+) -> str:
+    """
+    Insert an affix between the base name and extension of a filename.
+
+    Parameters
+    ----------
+    filepath : str or Path
+        Original file path or name (e.g. "diagnostic.json" or "/tmp/report.txt").
+    affix : str
+        Text to insert before the extension (e.g. "test").
+    separator : str, default ""
+        Text to place between the base name and the affix (e.g. "_").
+
+    Returns
+    -------
+    str
+        New filename with the affix inserted (path preserved).
+
+    Examples
+    --------
+    >>> insert_affix_in_filename("diagnostic.json", "test")
+    'diagnostictest.json'
+
+    >>> insert_affix_in_filename("diagnostic.json", "v1", separator="_")
+    'diagnostic_v1.json'
+
+    >>> insert_affix_in_filename("/tmp/log.tar.gz", "backup", separator=".")
+    '/tmp/log.tar.backup.gz'
+    """
+    p = Path(filepath)
+    base = p.stem         # name without last suffix
+    ext = p.suffix        # last suffix, including the dot
+    if affix is None or str(affix) =='': 
+        separator = ''
+    new_name = f"{base}{separator}{affix}{ext}"
+    return str(p.with_name(new_name))
+
+def split_train_test_by_time(
+    df: pd.DataFrame,
+    time_col: str,
+    cutoff: Union[int, float, str, pd.Timestamp],
+    *,
+    parse_time_col: bool = True
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split a DataFrame into train/test based on a time cutoff,
+    robust to different time formats.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data containing `time_col`.
+    time_col : str
+        Name of the column to use for splitting.
+    cutoff : int or str or pd.Timestamp
+        If int: treated as a year (e.g. 2022).
+        If str: parsed as date (e.g. "2022-06-30") or, if 4-digit, as year.
+        If pd.Timestamp: used directly.
+    parse_time_col : bool, default True
+        If True and `df[time_col]` is non-datetime, attempt to parse it.
+
+    Returns
+    -------
+    train_df, test_df : Tuple[pd.DataFrame, pd.DataFrame]
+        Rows where time <= cutoff go to train, >= cutoff to test.
+
+    Raises
+    ------
+    ValueError
+        If types are incompatible or parsing fails.
+        
+    Example 
+    --------
+    >>> import numpy as np ; import pandas as pd
+    >>> from fusionlab.utils.generic_utils import split_train_test_by_time 
+
+    >>> # 1. datetime column vs integer year cutoff
+    >>> df = pd.DataFrame({
+        'year': ['2017-01-01','2018-01-01','2019-01-01'], 
+        'value': [1,2,3]
+    })
+    >>> train, test = split_train_test_by_time(df, 'year', 2018)
+
+    >>> # 2. datetime column vs date-string cutoff
+    >>> train, test = split_train_test_by_time(df, 'year', '2018-06-30')
+
+    >>> # 3. integer column vs integer cutoff
+    >>> df2 = pd.DataFrame({'year': [2015,2016,2017,2018], 'v':[4,5,6,7]})
+    >>> train, test = split_train_test_by_time(df2, 'year', 2017)
+
+    >>> # 4. disable parsing (if already datetime)
+    >>> df['year'] = pd.to_datetime(df['year'])
+    >>> train, test = split_train_test_by_time(df, 'year', pd.Timestamp('2019-01-01'))
+    
+    """
+    if not isinstance (df, pd.DataFrame): 
+        raise TypeError (
+            f"Expect dataframe for 'df'. Got {type(df).__name__!r}")
+        
+    if time_col not in df.columns: 
+        raise ValueError (f"Time column is missing in df: {time_col}")
+        
+    # 2. Rewrap into DataFrame copy
+    working = df.copy()
+    series = working[time_col]
+    # 1. Detect a “numeric-year” column:
+    is_int   = pd.api.types.is_integer_dtype(series)
+    is_float = pd.api.types.is_float_dtype(
+        series) and np.all(series.dropna() % 1 == 0)
+    numeric_year_col = is_int or is_float
+
+    # 2. Branch on column type
+    if numeric_year_col:
+        # Convert floats→int if needed
+        years = series.astype(int)
+        # Cutoff must also be numeric
+        if not isinstance(cutoff, (int, float)):
+            raise ValueError(
+                "Cannot compare numeric-year column"
+                " to non-numeric cutoff"
+            )
+        cut_val = int(cutoff)
+        train_mask = years <= cut_val
+        test_mask  = years >= cut_val
+
+    else:
+        # Expect a datetime-like column
+        if parse_time_col and not pd.api.types.is_datetime64_any_dtype(series):
+            try:
+                series = pd.to_datetime(series, errors='coerce')
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to parse `{time_col}` to datetime: {e}")
+        if not pd.api.types.is_datetime64_any_dtype(series):
+            raise ValueError(
+                f"Column `{time_col}` is not datetime or numeric-year.")
+
+        # Now handle cutoff as year or full date
+        if isinstance(cutoff, (int, float)):
+            # Year-based split
+            years = series.dt.year
+            cut_val = int(cutoff)
+            train_mask = years <= cut_val
+            test_mask  = years >= cut_val
+
+        else:
+            # Parse cutoff to Timestamp if needed
+            if not isinstance(cutoff, pd.Timestamp):
+                try:
+                    cutoff = pd.to_datetime(cutoff)
+                except Exception as e:
+                    raise ValueError(f"Failed to parse cutoff {cutoff!r}: {e}")
+            train_mask = series <= cutoff
+            test_mask  = series >= cutoff
+
+    # 3. Return splits
+    train_df = working.loc[train_mask].copy()
+    test_df  = working.loc[test_mask].copy()
+    return train_df, test_df

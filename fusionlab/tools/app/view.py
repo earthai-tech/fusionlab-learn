@@ -4,14 +4,13 @@ import pandas as pd
 
 from typing import Optional
 from PyQt5.QtCore import pyqtSignal, QObject
+import matplotlib
 
 from fusionlab.utils._manifest_registry import ManifestRegistry, _update_manifest 
-from fusionlab.utils.generic_utils import save_all_figures
+from fusionlab.utils.generic_utils import save_all_figures, apply_affix 
          
 from fusionlab.plot.forecast import plot_forecasts, forecast_view 
 from fusionlab.tools.app.config import SubsConfig 
-
-import matplotlib
 
 if os.environ.get("FUSIONLAB_HEADLESS", "1") == "1":
     matplotlib.use("Agg")        # production / in-GUI mode
@@ -30,12 +29,15 @@ class ResultsVisualizer:
     """
     Handles the visualization and final saving of forecast results.
     """
-    def __init__(self, config: SubsConfig, log_callback: Optional[callable] = None):
+    def __init__(self, config: SubsConfig,
+                 log_callback: Optional[callable] = None, 
+                 kind: Optional [str]=None, ):
         """
         Initializes the visualizer with a config uration object.
         """
         self.config = config
         self.log = log_callback or print
+        self.kind = str (kind or '')
         
     def _note(self, fname: str) -> None:
         """
@@ -104,6 +106,8 @@ class ResultsVisualizer:
             self.config.run_output_path,
             f"{self.config.city_name}_{self.config.model_name}_plot_subs"
         )
+        png_base_subs = apply_affix(
+            png_base_subs, label=self.kind, separator='.')
   
         plot_forecasts(
             forecast_df=df,
@@ -119,7 +123,7 @@ class ResultsVisualizer:
                 f"step {step}": f'Subsidence: Year {year}'
                 for step, year in zip(horizon_steps, view_years)
             },
-            _logger= self.config.log , 
+            _logger= self.log , 
             savefig=png_base_subs, 
             save_fmts=['.png', '.pdf']
         )
@@ -139,6 +143,8 @@ class ResultsVisualizer:
                 self.config.run_output_path,
                 f"{self.config.city_name}_{self.config.model_name}_plot_gwl"
             )
+            png_base_gwl =apply_affix(
+                png_base_gwl, label=self.kind, separator='.')
             
             plot_forecasts(
                 forecast_df=df,
@@ -151,7 +157,7 @@ class ResultsVisualizer:
                 verbose=self.config.verbose,
                 cbar="uniform", # Can be set differently if desired
                 titles=[f'GWL: Year {y}' for y in view_years], 
-                _logger = self.config.log , 
+                _logger = self.log , 
                 savefig= png_base_gwl,  
                 save_fmts= ['.png', '.pdf'], 
             )
@@ -168,6 +174,8 @@ class ResultsVisualizer:
                 self.config.run_output_path,
                 f"{self.config.city_name}_forecast_comparison_plot"
             )
+            save_base =apply_affix(
+                save_base, label=self.kind, separator='.')
             forecast_view(
                 df,
                 spatial_cols=('coord_x', 'coord_y'),
@@ -177,7 +185,7 @@ class ResultsVisualizer:
                 savefig=save_base, 
                 save_fmts=['.png', '.pdf'], 
                 verbose=self.config.verbose, 
-                _logger = self.config.log
+                _logger = self.log
             )
             png_forecast_save= f"{save_base}.png"
             self._note(os.path.basename(png_forecast_save))  

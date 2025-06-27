@@ -65,7 +65,7 @@ class ManifestRegistry:
     ...     print(f"Latest run found: {latest}")
 
     >>> # Clean up all stored runs
-    >>> # registry.purge_all()
+    >>> # registry.purge_session()
     """
     _instance = None
     _initialized = False
@@ -81,8 +81,9 @@ class ManifestRegistry:
     _MANIFEST_FILENAME = "run_manifest.json"
 
     def __init__(
-            self, session_only: bool = False, 
-            log_callback: Optional[callable] = None,
+        self, session_only: bool = False, 
+        log_callback: Optional[callable] = None,
+        debug_mode : Optional[str] =None, 
         ) -> None:
         """Initializes the registry and ensures the root directory exists."""
         # The singleton pattern ensures __init__ is only run once.
@@ -90,24 +91,41 @@ class ManifestRegistry:
             return 
         
         self.log = log_callback or print 
+        self._debug_mode =debug_mode or 'silence'
+        
+        # Always know the persistent cache path
+        default_persistent_root = Path(
+            user_cache_dir("fusionlab-learn", "earthai-tech")
+        ) / self._RUNS_SUBDIR
+        self.persistent_root = Path(os.getenv(
+            self._ENV_VAR, default_persistent_root))
+        
+        self.session_root = None
+        
         if session_only:
-            # Create a unique temporary directory for this session.
-            # The directory name will have a 'fusionlab_run_' prefix.
-            self.root_dir = Path(tempfile.mkdtemp(prefix="fusionlab_run_"))
-            # Register the cleanup function to be called on program exit.
-            atexit.register(self.purge_all)
-            self.log("[Registry] Initialized in session-only mode.")
+            # Session mode: create a temp dir and set it as active
+            self.session_root = Path(
+                tempfile.mkdtemp(prefix="fusionlab_run_"))
+            self.root_dir = self.session_root
+            atexit.register(self.purge_session)
+            
+            if self._debug_mode =='debug': 
+                self.log(f"[Registry] Initialized in session-only mode."
+                          f" Active dir: {self.root_dir}")
         else:
-            # Use the persistent cache directory.
-            default_root = Path(
-                user_cache_dir("fusionlab-learn", "earthai-tech")
-            ) / self._RUNS_SUBDIR
-            self.root_dir = Path(os.getenv(self._ENV_VAR, default_root))
-
+            # Persistent mode: set the cache as active
+            self.root_dir = self.persistent_root
+            if self._debug_mode =="debug": 
+                self.log(f"[Registry] Initialized in persistent mode."
+                         f" Active dir: {self.root_dir}") 
+                
         # Ensure the root directory exists.
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.persistent_root.mkdir(parents=True, exist_ok=True)
+        
         self._initialized = True
         self._run_registry_path =None 
+        
         
     def new_run_dir(self, *, city: str = "unset", model: str = "unset") -> Path:
         """Creates a fresh, timestamped run directory.
@@ -159,7 +177,21 @@ class ManifestRegistry:
         FileNotFoundError
             If the `source_manifest_path` does not exist or is not a JSON file.
         """
-        source_path = Path(source_manifest_path)
+        source_path = Path(source_manifest_path).resolve() 
+        
+        # Check if the file is already inside any known registry
+        if (
+            source_path.is_relative_to(self.persistent_root) or
+            (self.session_root and source_path.is_relative_to(
+                self.session_root))
+        ):
+            if self._debug_mode=='debug': 
+                self.log(
+                    f"Manifest '{source_path.name}' "
+                    "is already in the registry."
+                )
+            return source_path # Already managed, do nothing.
+        
         if (
             not source_path.is_file() or
             source_path.suffix.lower() != ".json"
@@ -172,17 +204,23 @@ class ManifestRegistry:
         # We can try to get city/model name from the manifest if it exists
         try:
             content = json.loads(source_path.read_text("utf-8"))
-            city = content.get("configuration", {}).get("city_name", "imported")
-            model = content.get("configuration", {}).get("model_name", "run")
+            city = content.get(
+                "configuration", {}).get("city_name", "imported")
+            model = content.get(
+                "configuration", {}).get("model_name", "run")
         except Exception:
             city, model = "imported", "run"
             
+        
         new_run_dir = self.new_run_dir(city=city, model=model)
         
         # Copy the user's manifest into the new directory
         destination_path = new_run_dir / self._MANIFEST_FILENAME
         shutil.copyfile(source_path, destination_path)
         self._run_registry_path = destination_path
+        if self._debug_mode=='debug': 
+            self.log(f"Imported manifest to new run directory: {new_run_dir}")
+            
         return destination_path
     
     def latest_manifest(self) -> Optional[Path]:
@@ -199,10 +237,37 @@ class ManifestRegistry:
             The path to the most recent manifest file, or None if no
             runs are found in the registry.
         """
-        manifests = list(self.root_dir.glob(f"*/{self._MANIFEST_FILENAME}"))
-        if not manifests:
+
+        all_manifests = []
+        if self._debug_mode =='debug':
+            self.log("Searching for the latest training run...")
+
+        # 1. Search in the persistent cache directory
+        # Instantiate the registry in default (persistent) mode to get the path
+
+        if self._debug_mode =='debug':
+            self.log(f"  -> Checking persistent cache: {self.persistent_root}")
+        all_manifests.extend(
+            self.persistent_root.glob("*/{self._MANIFEST_FILENAME}"))
+
+        # Search session cache if it exists
+        if self.session_root:
+            if self._debug_mode =='debug':
+                self.log(f"  -> Checking session cache: {self.session_root}")
+            all_manifests.extend(
+                self.session_root.glob(f"*/{self._MANIFEST_FILENAME}"))
+            
+        # 3. Find the most recent manifest among all found files
+        if not all_manifests:
+            if self._debug_mode =='debug':
+                self.log("  -> No manifest files found in any known location.")
             return None
-        return max(manifests, key=lambda p: p.stat().st_mtime)
+
+        latest_manifest = max(all_manifests, key=lambda p: p.stat().st_mtime)
+        if self._debug_mode =='debug':
+            self.log(f"  -> Found latest manifest: {latest_manifest}")
+        
+        return latest_manifest 
 
     def update(
         self,
@@ -239,19 +304,20 @@ class ManifestRegistry:
             name=self._MANIFEST_FILENAME
         )
 
-    def purge_all(self) -> None:
+    def purge_session(self) -> None:
         """Deletes the entire run registry directory.
 
         Warning: This is a destructive operation and will permanently
         remove all saved training runs and artifacts. It is primarily
         intended for cleanup during testing.
         """
-        if self.root_dir and self.root_dir.exists():
-            self.log(
-                f"[Registry] Cleaning up session directory: {self.root_dir}")
-            shutil.rmtree(self.root_dir, ignore_errors=True)
+        if self.session_root and self.session_root.exists():
+            if self._debug_mode =='debug': 
+                self.log(
+                    f"[Registry] Cleaning up session"
+                    f" directory: {self.session_root}")
+            shutil.rmtree(self.session_root, ignore_errors=True)
             
-    
     @property
     def registry_path(self) -> Path:
         return self._run_registry_path
@@ -322,7 +388,8 @@ def _update_manifest(
 def _locate_manifest(
     start_path: Optional[Path] = None, # Kept for signature compatibility but ignored
     max_up: int = 3,                   # Kept for signature compatibility but ignored
-    log: Callable[[str], None] = print
+    log: Callable[[str], None] = print, 
+    _KIND ="debug", 
 ) -> Optional[Path]:
     """Finds the most recent `run_manifest.json` file from the central registry.
 
@@ -340,7 +407,11 @@ def _locate_manifest(
         This parameter is ignored.
     log : callable, default=print
         A logging function to output status messages.
-
+    
+    _KIND: str, optional 
+       Whether for debugging (``'debug'``) or mute (``'silence'``). 
+       Default is ``'silence'``. 
+ 
     Returns
     -------
     Optional[Path]
@@ -355,18 +426,22 @@ def _locate_manifest(
         latest_manifest = registry.latest_manifest()
 
         if latest_manifest:
-            log(f"  Found latest manifest: {latest_manifest}")
+            if _KIND =='debug': 
+                log(f"  Found latest manifest: {latest_manifest}")
         else:
-            log("  No manifest files found in the registry.")
+            if _KIND =='debug':
+                log("  No manifest files found in the registry.")
             
         return latest_manifest
 
     except Exception as e:
-        log(f"[Error] Could not access the manifest registry: {e}")
+        if _KIND=="debug":
+            log(f"[Error] Could not access the manifest registry: {e}")
         return None
     
 def locate_manifest(
-    log: Callable[[str], None] = print
+    log: Callable[[str], None] = print, 
+    _KIND ="silence", 
 ) -> Optional[Path]:
     """Finds the most recent `run_manifest.json` across all possible locations.
 
@@ -388,7 +463,9 @@ def locate_manifest(
     ----------
     log : callable, default=print
         A logging function to output status messages during the search.
-
+    _KIND: str, optional 
+       Whether for debugging (``'debug'``) or mute (``'silence'``). 
+       Default is ``'silence'``.  
     Returns
     -------
     Optional[Path]
@@ -400,22 +477,25 @@ def locate_manifest(
     fusionlab.utils.manifest_registry.ManifestRegistry : The class that manages
         the creation of these run directories.
     """
-    import tempfile
-    from fusionlab.utils._manifest_registry import ManifestRegistry
+    
 
-    log("Searching for the latest training run...")
+
+    if _KIND =='debug':
+        log("Searching for the latest training run...")
     all_manifests = []
 
     # 1. Search in the persistent cache directory
     # Instantiate the registry in default (persistent) mode to get the path
     persistent_registry = ManifestRegistry(log_callback=lambda *a: None)
     persistent_path = persistent_registry.root_dir
-    log(f"  -> Checking persistent cache: {persistent_path}")
+    if _KIND =='debug':
+        log(f"  -> Checking persistent cache: {persistent_path}")
     all_manifests.extend(persistent_path.glob("*/run_manifest.json"))
 
     # 2. Search in any active temporary session directories
     temp_dir = Path(tempfile.gettempdir())
-    log(f"  -> Checking for session directories in: {temp_dir}")
+    if _KIND =='debug':
+        log(f"  -> Checking for session directories in: {temp_dir}")
     # The prefix 'fusionlab_run_' matches what ManifestRegistry creates
     temp_run_dirs = temp_dir.glob("fusionlab_run_*")
     for run_dir in temp_run_dirs:
@@ -424,11 +504,13 @@ def locate_manifest(
 
     # 3. Find the most recent manifest among all found files
     if not all_manifests:
-        log("  -> No manifest files found in any known location.")
+        if _KIND =='debug':
+            log("  -> No manifest files found in any known location.")
         return None
 
     latest_manifest = max(all_manifests, key=lambda p: p.stat().st_mtime)
-    log(f"  -> Found latest manifest: {latest_manifest}")
+    if _KIND =='debug':
+        log(f"  -> Found latest manifest: {latest_manifest}")
 
     return latest_manifest
 
