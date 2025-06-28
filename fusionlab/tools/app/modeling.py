@@ -14,14 +14,14 @@ from typing import Tuple
 from pathlib import Path
 import json  
 
-from fusionlab.utils.generic_utils import rename_dict_keys 
+from fusionlab.utils.generic_utils import rename_dict_keys, apply_affix 
 from fusionlab.utils._manifest_registry import _update_manifest 
 from fusionlab.nn.pinn.utils import ( 
     prepare_pinn_data_sequences, format_pinn_predictions, 
 )
-from fusionlab.nn.pinn.op import extract_physical_parameters 
-from fusionlab.nn.utils import make_dict_to_tuple_fn, export_keras_losses
 from fusionlab.nn import KERAS_DEPS
+from fusionlab.nn.pinn.op import extract_physical_parameters 
+from fusionlab.nn.utils import make_dict_to_tuple_fn
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ
 from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.nn.models import PIHALNet, TransFlowSubsNet
@@ -542,9 +542,17 @@ class Forecaster:
         )
         
         if forecast_df is not None and not forecast_df.empty:
+    
+            base_name  = "03_forecast_results"
+            base_name = apply_affix(
+                base_name , self.kind, affix_prefix='.'
+            )
+            
             if self.config.save_intermediate:
                 save_path = os.path.join(
-                    self.config.run_output_path, f"03_forecast_results{self.kind}.csv")
+                    self.config.run_output_path, 
+                    f"{base_name}.csv"
+                )
                 forecast_df.to_csv(save_path, index=False)
                 self.log(f"  Saved forecast results to: {save_path}")
             return forecast_df

@@ -80,6 +80,7 @@ def format_pinn_predictions(
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: Optional[str] = None,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    name: Optional[str]=None, 
     verbose: int = 0,
     
     **kwargs
@@ -169,6 +170,9 @@ def format_pinn_predictions(
     savefile : str, optional
         If a file path is provided, the final DataFrame is saved to a
         CSV file at this location. Default is ``None``.
+    name: str or None 
+        Name of the prediction. Name is used to format the output of 
+        the data and coverage result if applicable. 
     verbose : int, default=0
         The verbosity level, from 0 (silent) to 5 (trace every step).
     **kwargs: dict,  
@@ -217,6 +221,7 @@ def format_pinn_predictions(
         evaluate_coverage=evaluate_coverage,
         coverage_quantile_indices=coverage_quantile_indices,
         savefile=savefile,
+        name =name, 
         verbose=verbose,
         _logger = _logger, 
         **kwargs 
@@ -406,7 +411,7 @@ def format_pihalnet_predictions(
        Attention Learning for Spatio‑Temporal Subsidence Prediction,”
        *IEEE T‑PAMI*, 2025 (in press).
     """
-    vlog(f"Starting PIHALNet prediction formatting (verbose={verbose}).",
+    vlog(f"Starting model prediction formatting (verbose={verbose}).",
          level=3, verbose=verbose, logger=_logger)
 
     # --- 1. Obtain Model Predictions if not provided ---
@@ -793,24 +798,24 @@ def format_pihalnet_predictions(
                 and len(quantiles) >= 2 
                 and O_target == 1
             ):
-            # try:
-            compute_quantile_diagnostics (
-                *all_data_dfs, 
-                base_name= base_name, 
-                quantiles= quantiles, 
-                coverage_quantile_indices=coverage_quantile_indices, 
-                savefile=savefile, 
-                savepath= kwargs.pop('savepath', None), 
-                filename= 'diagnostics_results.json', 
-                name=name, 
-                verbose=verbose, 
-                logger =_logger,  
-                )
+            try:
+                compute_quantile_diagnostics (
+                    *all_data_dfs, 
+                    base_name= base_name, 
+                    quantiles= quantiles, 
+                    coverage_quantile_indices=coverage_quantile_indices, 
+                    savefile=savefile, 
+                    savepath= kwargs.pop('savepath', None), 
+                    filename= 'diagnostics_results.json', 
+                    name=name, 
+                    verbose=verbose, 
+                    logger =_logger,  
+                    )
                 # final_df.attrs[f'{base_name}_coverage'] = coverage
-            # except Exception as e:
-            #      vlog(f"Skipping coverage computation due to: {e}",
-            #           level=2, verbose=verbose, logger=_logger
-            #     )
+            except Exception as e:
+                  vlog(f"Skipping coverage computation due to: {e}",
+                      level=2, verbose=verbose, logger=_logger
+                )
 
     # --- 7. Concatenate all DataFrames ---
     final_df = pd.concat(all_data_dfs, axis=1)
@@ -831,7 +836,7 @@ def format_pihalnet_predictions(
                      level=4, verbose=verbose, logger=_logger)
 
 
-    vlog("PIHALNet prediction formatting to DataFrame complete.",
+    vlog("Model prediction formatting to DataFrame complete.",
          level=3, verbose=verbose, logger=_logger)
     
     return final_df

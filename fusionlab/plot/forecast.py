@@ -355,7 +355,8 @@ def plot_forecast_by_step(
             save_figure (
                 fig, savefile = savefig, 
                 save_fmts= save_fmts, 
-                dpi=300, bbox_inches="tight" 
+                dpi=300, bbox_inches="tight", 
+                _logger=_logger, 
               )
             plt.close(fig) 
         else: 
@@ -984,7 +985,8 @@ def forecast_view(
         if savefig:
             save_figure (
                 fig, savefile = savefig, save_fmts= save_fmts, 
-                dpi=300, bbox_inches="tight" 
+                dpi=300, bbox_inches="tight" , 
+                _logger=_logger, 
               )
             plt.close(fig) 
         else: 
@@ -1708,7 +1710,8 @@ def plot_forecasts(
     # 4. Save figure to disk if requested.
     if savefig:
         save_figure (
-            fig, savefile = savefig, save_fmts= save_fmts, 
+            fig, savefile = savefig, 
+            save_fmts= save_fmts, 
             dpi=300, bbox_inches="tight" , 
             _logger = _logger, 
           )

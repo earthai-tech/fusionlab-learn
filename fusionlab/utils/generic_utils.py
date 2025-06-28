@@ -3022,87 +3022,217 @@ def _coerce_dt_kw(
     out["dt_col"] = chosen
     return out
 
-
 def save_figure(
-    figure: plt.Figure,  
-    savefile: Optional[str] = None,  
-    save_fmts: Union[str, List[str]] = ['.png'],  
-    overwrite: bool = True,  
-    verbose: int = 1, 
-    _logger =None,  
+    figure: plt.Figure,
+    savefile: Optional[str] = None,
+    save_fmts: Union[str, List[str]] = '.png',
+    overwrite: bool = True,
+    verbose: int = 1,
+    _logger=None,
     **kwargs
 ):
     """
-    Save the given matplotlib figure to disk, automatically handling
-    the filename, extension, and format.
+    Save the given matplotlib figure to disk in one or more formats.
+
+    This function robustly handles file naming, directory creation,
+    and multiple format exporting.
 
     Parameters
     ----------
     figure : plt.Figure
         The matplotlib figure object to save.
     savefile : str, optional
-        The target file path or name. If None, a default name is generated.
-    save_fmts : list of str or str, optional
-        The formats to save the figure in (e.g., '.png', '.pdf').
-        Default is '.png'.
-    overwrite : bool, optional
-        Whether to overwrite the existing file if it already exists. 
-        Default is True.
-    verbose : int, optional
-        Verbosity level: 0 for silent, 1 for basic info, 2 for detailed info.
-    **kwargs : additional arguments
-        Additional keyword arguments passed to `plt.savefig()` 
-        (e.g., dpi, bbox_inches).
+        The target file path or name. If an extension is provided
+        (e.g., '.png', '.pdf'), it is used as the base name. If no
+        extension is provided or it's not a recognized image
+        format, the whole string is used as the base name. If None,
+        a default timestamped name is generated.
+    save_fmts : str or list of str, optional
+        The format(s) to save the figure in. Default is '.png'.
+    overwrite : bool, default=True
+        If False, raises a FileExistsError if the output file
+        already exists.
+    verbose : int, default=1
+        Verbosity level for logging.
+    _logger : logging.Logger, optional
+        A logger instance to use for messages. Defaults to `print`.
+    **kwargs :
+        Additional keyword arguments passed to `plt.savefig()`
+        (e.g., `dpi`, `bbox_inches`).
 
     Returns
     -------
-    str
-        The final filename used to save the figure.
+    str or list[str] or None
+        The path to the saved file if one format was requested, a list
+        of paths if multiple formats were requested, or None if saving
+        failed.
     """
-    # Step 1: Handle filename logic
+    # Define a set of common, valid image extensions for checking.
+    VALID_EXTENSIONS = {
+        '.png', '.jpg', '.jpeg', '.pdf', '.svg', '.eps', '.tiff'
+    }
+
+    # --- Step 1: Determine the base output path and name ---
     if savefile is None:
-        # Generate a timestamped filename if none is provided
+        # Generate a default timestamped filename if none is provided.
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        savefile = f"output_{timestamp}.png"
+        base_name = f"figure_{timestamp}"
+        output_dir = Path.cwd()
+    else:
+        p = Path(savefile)
+        # Check if the provided savefile has a valid image extension.
+        if p.suffix.lower() in VALID_EXTENSIONS:
+            # If yes, use the part before the extension as the base name.
+            base_name = p.stem
+            output_dir = p.parent
+        else:
+            # If not, treat the entire string as the base name.
+            base_name = p.name
+            output_dir = p.parent
 
-    # Step 2: Check if the filename has an extension, 
-    # if not, use the default format
-    if not os.path.splitext(savefile)[1]:
-        savefile = f"{savefile}.png"  # Default to PNG if no extension is found
-
-    # Ensure the directory exists before saving the figure
-    out_dir = os.path.dirname(savefile)
-    if out_dir and not os.path.exists(out_dir):
-        os.makedirs(out_dir, exist_ok=True)
-
-    # Step 3: Handle file formats (multiple formats or single format)
+    # --- Step 2: Prepare the list of formats to save ---
     if isinstance(save_fmts, str):
-        save_fmts = [save_fmts]  # Convert to list if a single string is provided
-    save_fmts = [f".{ext.replace('.', '')}" for ext in save_fmts]  
+        save_fmts = [save_fmts] # Ensure it's a list for iteration.
+    
+    # Clean up formats to ensure they start with a dot.
+    formats_to_save = [f".{fmt.lstrip('.')}" for fmt in save_fmts]
 
-    # Step 4: Check if the file exists and handle overwrite behavior
-    if not overwrite and os.path.exists(savefile):
-        raise FileExistsError(
-            f"File '{savefile}' already exists."
-            " Set 'overwrite=True' to overwrite."
-        )
-
-    # Step 5: Save the figure
+    # --- Step 3: Save the figure in each requested format ---
+    saved_paths = []
     try:
-        for fmt in save_fmts:
-            final_filename = f"{os.path.splitext(savefile)[0]}{fmt}"
-            figure.savefig(final_filename, **kwargs)
+        # Ensure the output directory exists before saving.
+        ExistenceChecker.ensure_directory(output_dir)
+        
+        for fmt in set(formats_to_save): # Use set to avoid duplicates
+            # Construct the final, full path for the current format.
+            final_path = (output_dir / base_name).with_suffix(fmt)
+            
+            # Handle overwrite logic.
+            if not overwrite and final_path.exists():
+                raise FileExistsError(
+                    f"File '{final_path}' already exists. "
+                    "Set 'overwrite=True' to overwrite."
+                )
+            
+            # Save the figure with any extra keyword arguments.
+            figure.savefig(final_path, **kwargs)
+            
             if verbose > 0:
-                vlog(f"Saved figure to {final_filename}", 
-                     verbose = verbose, level=2, logger= _logger 
-                    )
-        return savefile  # Return the final save path
+                vlog(
+                    f"Saved figure to {final_path}",
+                    verbose=verbose, level=2, logger=_logger
+                )
+            saved_paths.append(str(final_path))
+
+        # Return a single path if only one file was saved, else the list.
+        return saved_paths[0] if len(saved_paths) == 1 else saved_paths
+
     except Exception as e:
         if verbose > 0:
             vlog(f"Error saving figure: {e}",
-                 verbose=verbose, level =2, logger =_logger 
-                )
+                 verbose=verbose, level=0, logger=_logger)
         return None
+
+# def save_figure(
+#     figure: plt.Figure,  
+#     savefile: Optional[str] = None,  # if extension is not among the conventional figure 
+#     # format , it can b consider as suffix of figure. 
+#     # for instance test_figure.inference , is the name of file ".inference", should 
+#     # not tread as extension. For that you can list the common figure extebsion 
+#     # then if not , consider that extension is not set . 
+#     save_fmts: Union[str, List[str]] = ['.png'],  
+#     overwrite: bool = True,  
+#     verbose: int = 1, 
+#     _logger =None,  
+#     **kwargs
+# ):
+#     """
+#     Save the given matplotlib figure to disk, automatically handling
+#     the filename, extension, and format.
+
+#     Parameters
+#     ----------
+#     figure : plt.Figure
+#         The matplotlib figure object to save.
+#     savefile : str, optional
+#         The target file path or name. If None, a default name is generated.
+#     save_fmts : list of str or str, optional
+#         The formats to save the figure in (e.g., '.png', '.pdf').
+#         Default is '.png'.
+#     overwrite : bool, optional
+#         Whether to overwrite the existing file if it already exists. 
+#         Default is True.
+#     verbose : int, optional
+#         Verbosity level: 0 for silent, 1 for basic info, 2 for detailed info.
+#     **kwargs : additional arguments
+#         Additional keyword arguments passed to `plt.savefig()` 
+#         (e.g., dpi, bbox_inches).
+
+#     Returns
+#     -------
+#     str
+#         The final filename used to save the figure.
+#     """
+#     # make all comments format. 
+    
+    
+#     # Step 1: Handle filename logic
+#     if savefile is None:
+#         # Generate a timestamped filename if none is provided
+#         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+#         savefile = f"output_{timestamp}.png"
+
+#     # Step 2: Check if the filename has an extension, 
+#     # if not, use the default format
+    
+#     # check here 
+#     # if extension is not among the conventional figure 
+#     # format , it can b consider as suffix of figure. 
+#     # for instance test_figure.inference , is the name of file ".inference", should 
+#     # not tread as extension. For that you can list the common figure extebsion 
+#     # then if not , consider that extension is not set .
+#     # here it wont reach the loop because for instance test_figure.inference 
+#     # should be treat as 'inference' as extension which is not true. 
+#     # so revise. 
+    
+#     if not os.path.splitext(savefile)[1] :
+#         savefile = f"{savefile}.png"  # Default to PNG if no extension is found
+
+#     # Ensure the directory exists before saving the figure
+#     out_dir = os.path.dirname(savefile)
+#     if out_dir and not os.path.exists(out_dir):
+#         os.makedirs(out_dir, exist_ok=True)
+
+#     # Step 3: Handle file formats (multiple formats or single format)
+#     if isinstance(save_fmts, str):
+#         save_fmts = [save_fmts]  # Convert to list if a single string is provided
+#     # for conistency , make sure that extension start with . 
+#     save_fmts = [f".{ext.replace('.', '')}" for ext in save_fmts]  
+
+#     # Step 4: Check if the file exists and handle overwrite behavior
+#     if not overwrite and os.path.exists(savefile):
+#         raise FileExistsError(
+#             f"File '{savefile}' already exists."
+#             " Set 'overwrite=True' to overwrite."
+#         )
+
+#     # Step 5: Save the figure
+#     try:
+#         for fmt in save_fmts:
+#             # why split again , what not use the first part of savefile. 
+#             final_filename = f"{os.path.splitext(savefile)[0]}{fmt}"
+#             figure.savefig(final_filename, **kwargs)
+#             if verbose > 0:
+#                 vlog(f"Saved figure to {final_filename}", 
+#                      verbose = verbose, level=2, logger= _logger 
+#                     )
+#         return savefile  # Return the final save path
+#     except Exception as e:
+#         if verbose > 0:
+#             vlog(f"Error saving figure: {e}",
+#                  verbose=verbose, level =2, logger =_logger 
+#                 )
+#         return None
     
     # fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
     # base, _ = os.path.splitext(savefig)

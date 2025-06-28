@@ -1289,60 +1289,70 @@ class MiniForecaster(QMainWindow):
             self._manifest_path = str(manifest)
             self.inf_btn.setEnabled(True)
             self.inf_btn.setStyleSheet(f"background:{PRIMARY};")
-            self.inf_btn.setToolTip("Click to switch to inference mode.")
+            self.inf_btn.setToolTip("Click to switch to inference mode")
         else:
             self._manifest_path = None
             self.inf_btn.setEnabled(False)
             self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
             self.inf_btn.setToolTip(
                 "Inference becomes available after you train a model.")
-
+            
     def _toggle_inference_mode(self):
-        """Flip the GUI between *training* and *inference* modes."""
+        """Flips the GUI between *training* and *inference* modes.
+
+        This method acts as a toggle switch. It updates the internal
+        state, provides visual feedback via a toast notification and
+        by changing button/panel styles, and updates tooltips to guide
+        the user.
+        """
         self._inference_mode = not self._inference_mode
-    
+
         # 1. Show the toast notification for clear feedback
-        # 1. Show the theme-aware toast notification
-        message = ("Inference Mode Activated" if self._inference_mode 
-                   else "Training Mode Activated")
+        message = (
+            "Inference Mode Activated"
+            if self._inference_mode
+            else "Training Mode Activated"
+        )
         toast = ToastNotification(message, self, theme=self.theme)
         toast.show_toast()
-       
-        if self._inference_mode:     
-            # → ON
-            self.inf_btn.setStyleSheet(f"background:{SECONDARY}" )
-            self.inf_btn.setEnabled(False)       # frozen while active
-            self.inf_btn.setToolTip("Inference mode active.")
+
+        # 2. Update button styles and tooltips based on the new mode
+        if self._inference_mode:
+            # --- Inference Mode is ON ---
+            # Style the button to look "active" (e.g., orange)
+            self.inf_btn.setStyleSheet(
+                f"background-color: {SECONDARY}; color: white;")
+            self.inf_btn.setToolTip(
+                "Inference mode is active. Click again to switch back to Training."
+            )
             self.run_btn.setText("RunI")
-            self._log("ℹ GUI switched to *Inference* mode – "
-                      "Run will now load the saved model.")
             run_tooltip = (
                 "Launch the inference pipeline using the detected model "
-                 "and the selected CSV file"
-                )
-            
-        else:                                    # → OFF  (rare, only after run)
-            self.inf_btn.setStyleSheet(f"background:{PRIMARY}")
-            self.inf_btn.setEnabled(True)
+                "and the selected CSV file."
+            )
+        else:
+            # --- Inference Mode is OFF (back to training) ---
+            # Revert the button to its normal "enabled" style
+            self.inf_btn.setStyleSheet(
+                f"background-color: {PRIMARY}; color: white;")
             self.inf_btn.setToolTip(
-                "Click to switch the GUI into inference mode")
+                "Click to switch to Inference mode (requires a trained model)."
+            )
             self.run_btn.setText("Run")
-            run_tooltip = "Launch the full training and forecasting pipeline"
-        
+            run_tooltip = "Launch the full training and forecasting pipeline."
+
         self.run_btn.setToolTip(run_tooltip)
-        
-        # 3. Update card borders using a dynamic property for styling
+
+        # 3. Update card borders using the dynamic property
         cards_to_style = [
-            self.model_card, self.training_card, 
+            self.model_card, self.training_card,
             self.physics_card, self.feature_card
         ]
         for card in cards_to_style:
-            # Set a boolean property that the stylesheet can target
             card.setProperty("inferenceMode", self._inference_mode)
-            # Force Qt to re-evaluate the stylesheet for this widget
             card.style().unpolish(card)
             card.style().polish(card)
-            
+         
     def _on_reset(self):
         """Resets the user interface to its default state.
 
@@ -1372,6 +1382,13 @@ class MiniForecaster(QMainWindow):
         self.progress_bar.setValue(0)
         self.city_input.clear()
         self.coverage_lbl.clear() 
+        
+        # --- ADD THIS BLOCK ---
+        # If the GUI is in inference mode when reset is clicked,
+        # toggle it back to training mode to ensure a clean state.
+        if self._inference_mode:
+            self._toggle_inference_mode()
+        # --- END ADDITION ---
         self._log("ℹ Interface reset.")
   
     def _on_run(self):
@@ -1554,8 +1571,7 @@ class MiniForecaster(QMainWindow):
         self.active_worker.log_msg.connect(self.log_updated.emit)
         self.active_worker.progress_val.connect(self.progress_updated.emit)
         self.active_worker.error_occurred.connect(self._on_worker_error)
-        # self.active_worker.finished.connect(self._inference_finished)
-        
+ 
         # Connect the 'finished' signal to the SAME cleanup method
         # as the training worker.
         self.active_worker.finished.connect(self._worker_done)
@@ -1563,7 +1579,6 @@ class MiniForecaster(QMainWindow):
         self.stop_btn.clicked.connect(self.active_worker.requestInterruption)
         self.active_worker.start()
         
-
     def _worker_done(self):
         """
         Called from `self.worker.finished`.  
@@ -1710,7 +1725,7 @@ class InferenceThread(QThread):
             pipe = PredictionPipeline(
                 manifest_path=self.manifest_path,
                 log_callback=self.log_msg.emit,
-                kind ='infer', 
+                kind ='inference', 
             )
             # The config object's progress callback can be linked
             # to the GUI's progress bar.
@@ -1725,10 +1740,7 @@ class InferenceThread(QThread):
             self.progress_val.emit(100)
 
         except Exception as err:
-            # self.log_msg.emit(f"❌ Inference error: {err}")
             self.error_occurred.emit(str(err))
-            # QMessageBox.critical(
-            #     self.parent_widget, "Inference Failed", str(err))
 
 
 class ToastNotification(QLabel):
@@ -1741,15 +1753,16 @@ class ToastNotification(QLabel):
             Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
+        # FIX: Explicitly tell the QLabel to paint its background
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_DeleteOnClose)
 
-        # --- REVISED: Theme-aware stylesheet ---
         if theme == 'dark':
-            # Use secondary color for dark theme
-            bg_color = "rgba(242, 134, 32, 0.9)"  # Orange with transparency
+            # Use a more opaque orange for better visibility
+            bg_color = "rgba(242, 134, 32, 0.9)"
         else:
-            # Use primary color for light theme
-            bg_color = "rgba(46, 49, 145, 0.9)" # Blue with transparency
+            # Use a more opaque blue for better visibility
+            bg_color = "rgba(46, 49, 145, 0.9)"
 
         self.setStyleSheet(f"""
             QLabel {{
@@ -1765,7 +1778,6 @@ class ToastNotification(QLabel):
         self.adjustSize()
         self.center_on_parent()
 
-        # Set up the fade-out animation
         self.opacity_effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.opacity_effect)
         
@@ -1839,18 +1851,14 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     app = QApplication(sys.argv)
     
     QToolTip.setFont(QFont("Helvetica Neue", 9))
-    # This dynamic property rule will be appended to the selected theme.
+
+    selected_stylesheet = None
+    # Add the dynamic property rule to the selected stylesheet
     inference_border_style = f"""
         QFrame#card[inferenceMode="true"] {{
             border: 2px solid {PRIMARY};
         }}
-     """
-    
-    selected_stylesheet = None
-    # Add the dynamic property rule to your stylesheets
-    inference_border_style = ( 
-        f"QFrame#card[inferenceMode=\"true\"] {{ border: 2px solid {PRIMARY}; }}"
-        )
+    """
     
     if os.path.exists("style.qss"):
         with open("style.qss", "r", encoding="utf-8") as f:

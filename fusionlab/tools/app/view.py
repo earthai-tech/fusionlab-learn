@@ -37,7 +37,7 @@ class ResultsVisualizer:
         """
         self.config = config
         self.log = log_callback or print
-        self.kind = str (kind or '')
+        self.kind = kind
         
     def _note(self, fname: str) -> None:
         """
@@ -46,7 +46,8 @@ class ResultsVisualizer:
         """
         try: 
             _update_manifest(
-                self.config.registry_path, "figures", fname, # value
+                self.config.registry_path, "figures", 
+                fname, # value
                 as_list=True                # <- append, don’t overwrite
             )
         except: 
@@ -55,6 +56,7 @@ class ResultsVisualizer:
                 fname, # value
                 as_list=True  # <- append, don’t overwrite
             )
+            
     def run(self, forecast_df: Optional[pd.DataFrame]):
         """
         Executes the full visualization and saving pipeline.
@@ -107,7 +109,7 @@ class ResultsVisualizer:
             f"{self.config.city_name}_{self.config.model_name}_plot_subs"
         )
         png_base_subs = apply_affix(
-            png_base_subs, label=self.kind, separator='.')
+            png_base_subs, label=self.kind, affix_prefix='.')
   
         plot_forecasts(
             forecast_df=df,
@@ -128,6 +130,7 @@ class ResultsVisualizer:
             save_fmts=['.png', '.pdf']
         )
         png_png = f"{png_base_subs}.png" 
+        # self.log (f"PNG: png_base_subs= {png_base_subs}")
         self._note(os.path.basename(png_png))  
         VIS_SIGNALS.figure_saved.emit(png_png)
         
@@ -144,7 +147,7 @@ class ResultsVisualizer:
                 f"{self.config.city_name}_{self.config.model_name}_plot_gwl"
             )
             png_base_gwl =apply_affix(
-                png_base_gwl, label=self.kind, separator='.')
+                png_base_gwl, label=self.kind, affix_prefix='.')
             
             plot_forecasts(
                 forecast_df=df,
@@ -175,7 +178,8 @@ class ResultsVisualizer:
                 f"{self.config.city_name}_forecast_comparison_plot"
             )
             save_base =apply_affix(
-                save_base, label=self.kind, separator='.')
+                save_base, label=self.kind, affix_prefix='.'
+            )
             forecast_view(
                 df,
                 spatial_cols=('coord_x', 'coord_y'),

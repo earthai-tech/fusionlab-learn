@@ -182,8 +182,10 @@ def compute_quantile_diagnostics(
             results,
             format='json',
             indent=4,
-            filename=insert_affix_in(filename, affix=name, separator='_'),
+            filename=insert_affix_in(filename, affix=name, separator='.'),
             savepath=savepath,
+            verbose=verbose, 
+            logger=logger, 
         )
     except Exception as e:
         vlog(
