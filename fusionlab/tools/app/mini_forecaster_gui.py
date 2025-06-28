@@ -12,14 +12,17 @@ from PyQt5.QtCore    import (
     Qt, QThread,  pyqtSignal, 
     QAbstractTableModel, 
     QModelIndex, 
-    pyqtSlot
+    pyqtSlot, 
+    QPropertyAnimation, 
+    QEasingCurve, 
+    QTimer
 )
 from PyQt5.QtGui     import QIcon, QPixmap,  QFont
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QFrame, QPushButton, QLabel, QSpinBox, QDoubleSpinBox,
     QComboBox, QTextEdit, QFileDialog, QProgressBar, QLineEdit, 
-    QCheckBox
+    QCheckBox, QGraphicsOpacityEffect
 )
 from PyQt5.QtWidgets import (
     QDialog, QTableView, QMessageBox, QAction, QToolBar, QInputDialog, 
@@ -48,7 +51,37 @@ SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
 #  Inference-mode toggle
 # ------------------------------------------------------------------ #
 INFERENCE_ON  = PRIMARY
-INFERENCE_OFF = "#dadada"        # greyed-out (disabled)
+INFERENCE_OFF = "#dadada"        
+
+# --- Color Palette Definition ---
+# Using a central palette makes themes easier to manage.
+# Inspired by common UI color systems.
+PALETTE = {
+    # Primary Brand Colors
+    "primary": "#2E3191",    # Deep Blue
+    "primary_hover": "#4338ca",
+    "secondary": "#F28620",  # Orange
+    
+    # Dark Theme Colors
+    "dark_bg": "#1e293b",       # slate-800
+    "dark_card_bg": "#334155",  # slate-700
+    "dark_input_bg": "#0f172a",  # slate-900
+    "dark_border": "#475569",     # slate-600
+    "dark_text": "#cbd5e1",      # slate-300
+    "dark_text_title": "#ffffff",
+    "dark_text_muted": "#94a3b8",   # slate-400
+    "dark_reset_bg": "#475569",  # slate-600
+
+    # Light Theme Colors
+    "light_bg": "#f8fafc",      # slate-50
+    "light_card_bg": "#ffffff",
+    "light_input_bg": "#f1f5f9", # slate-100
+    "light_border": "#cbd5e1",    # slate-300
+    "light_text": "#0f172a",      # slate-900
+    "light_text_title": "#2E3191", # Primary color for titles
+    "light_text_muted": "#64748b",  # slate-500
+    "light_reset_bg": "#e2e8f0", # slate-200
+}
 
 FLAB_STYLE_SHEET = f"""
 QMainWindow {{
@@ -130,49 +163,34 @@ QPushButton#inference:disabled {{
     color: #666;
 }}
 
+QFrame#card[inferenceMode="true"] {{
+    border: 2px solid #2E3191; /* Primary blue color */
+}}
+
+# Add this to your main stylesheet string (e.g., at the end)
+
+
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['dark_card_bg']}; 
+}}
+QMessageBox QLabel {{ 
+    color: {PALETTE['dark_text_title']};
+    font-size: 16px;
+}}
+QMessageBox QPushButton {{ /* Styles the "OK" button */
+    background-color: {PALETTE['primary']};
+    color: white;
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px; /* Give the button a decent size */
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {PALETTE['primary_hover']};
+}}
+
 """
-# Fusionlab-learn palette 
-PRIMARY   = "#2E3191"   
-SECONDARY = "#F28620"   
-BG_LIGHT  = "#fafafa"
-FG_DARK   = "#1e1e1e"
-PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
-SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
-# ------------------------------------------------------------------ #
-#  Inference-mode toggle
-# ------------------------------------------------------------------ #
-INFERENCE_ON  = PRIMARY
-INFERENCE_OFF = "#dadada"        # greyed-out (disabled)
-
-# --- Color Palette Definition ---
-# Using a central palette makes themes easier to manage.
-# Inspired by common UI color systems.
-PALETTE = {
-    # Primary Brand Colors
-    "primary": "#2E3191",    # Deep Blue
-    "secondary": "#F28620",  # Orange
-    
-    # Dark Theme Colors
-    "dark_bg": "#1e293b",       # slate-800
-    "dark_card_bg": "#334155",  # slate-700
-    "dark_input_bg": "#0f172a",  # slate-900
-    "dark_border": "#475569",     # slate-600
-    "dark_text": "#cbd5e1",      # slate-300
-    "dark_text_title": "#ffffff",
-    "dark_text_muted": "#94a3b8",   # slate-400
-    "dark_reset_bg": "#475569",  # slate-600
-
-    # Light Theme Colors
-    "light_bg": "#f8fafc",      # slate-50
-    "light_card_bg": "#ffffff",
-    "light_input_bg": "#f1f5f9", # slate-100
-    "light_border": "#cbd5e1",    # slate-300
-    "light_text": "#0f172a",      # slate-900
-    "light_text_title": "#2E3191", # Primary color for titles
-    "light_text_muted": "#64748b",  # slate-500
-    "light_reset_bg": "#e2e8f0", # slate-200
-}
-
+#
 # --- Polished Dark Theme Stylesheet ---
 DARK_THEME_STYLESHEET = f"""
     /* Main Window and General Widgets */
@@ -269,118 +287,30 @@ DARK_THEME_STYLESHEET = f"""
         border-radius: 4px;
         font-size: 12px;
     }}
-"""
-# --- Theme Stylesheet (FusionLab Theme) ---
-LIGHT_THEME_STYLESHEET = f"""
-    /* --- Main Window and General Widgets --- */
-    QMainWindow, QWidget {{
-        background-color: {PALETTE['light_bg']};
-        color: {PALETTE['light_text']};
-        font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    
+    QFrame#card[inferenceMode="true"] {{
+        border: 2px solid #F28620; /* Secondary orange color */
     }}
 
-    /* --- Header Elements --- */
-    QLabel#title {{
-        font-size: 28px;
-        font-weight: bold;
-        color: {PALETTE['light_text_title']};
-        padding: 10px 0;
+    /* --- QMessageBox Styling --- */
+    QMessageBox {{
+        background-color: {PALETTE['dark_card_bg']}; 
     }}
-    QLabel#description {{
-        font-size: 14px;
-        color: {PALETTE['light_text_muted']};
+    QMessageBox QLabel {{ 
+        color: {PALETTE['dark_text_title']};
+        font-size: 16px;
     }}
-
-    /* --- Card Styling --- */
-    QFrame#card {{
-        background-color: {PALETTE['light_card_bg']};
-        border: 1px solid {PALETTE['light_border']};
-        border-radius: 8px;
-    }}
-    QLabel#cardTitle {{
-        font-size: 18px;
-        font-weight: 600;
-        color: {PALETTE['light_text_title']};
-        padding-bottom: 5px;
-    }}
-    QLabel#cardDescription {{
-        font-size: 13px;
-        color: {PALETTE['light_text_muted']};
-    }}
-
-    /* --- Button Styling --- */
-    QPushButton {{
+    QMessageBox QPushButton {{ /* Styles the "OK" button */
         background-color: {PALETTE['primary']};
         color: white;
-        border: none;
-        padding: 9px 15px;
-        border-radius: 6px;
-        font-weight: bold;
-        outline: none;
-    }}
-    QPushButton:hover {{
-        background-color: {PALETTE['secondary']};
-    }}
-    QPushButton:disabled {{
-        background-color: #e2e8f0; /* slate-200 */
-        color: #94a3b8; /* slate-400 */
-    }}
-    QPushButton#resetButton, QPushButton#stopButton {{
-        background-color: {PALETTE['light_reset_bg']};
-        color: {PALETTE['light_text']};
-        font-weight: normal;
-    }}
-    QPushButton#resetButton:hover, QPushButton#stopButton:hover {{
-        background-color: #cbd5e1; /* slate-300 */
-    }}
-
-    /* --- Input Field Styling --- */
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-        background-color: {PALETTE['light_input_bg']};
-        border: 1px solid {PALETTE['light_border']};
-        padding: 7px;
-        border-radius: 6px;
-        color: {PALETTE['light_text']};
-    }}
-    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
-        border: 2px solid {PALETTE['primary']}; /* Use a thicker, colored border for focus */
-        padding: 6px; /* Adjust padding to keep size consistent */
-    }}
-    QComboBox::drop-down {{
-        border: none;
-    }}
-
-    /* --- Log Output Area --- */
-    QTextEdit {{
-        background-color: {PALETTE['light_card_bg']};
-        border: 1px solid {PALETTE['light_border']};
-        font-family: "Consolas", "Courier New", monospace;
-        color: #334155;
-    }}
-
-    /* --- Miscellaneous --- */
-    QFrame#hLine {{
-        border: none;
-        border-top: 1px solid {PALETTE['light_input_bg']};
-    }}
-    QToolTip {{
-        background-color: {PALETTE['dark_bg']};
-        color: white;
-        border: none;
-        padding: 5px;
         border-radius: 4px;
-        font-size: 12px;
+        padding: 8px 20px;
+        min-width: 80px; /* Give the button a decent size */
     }}
-    QProgressBar {{
-        border: 1px solid {PALETTE['light_border']};
-        border-radius: 4px;
-        text-align: center;
-        background-color: {PALETTE['light_input_bg']};
+    QMessageBox QPushButton:hover {{
+        background-color: {PALETTE['primary_hover']};
     }}
-    QProgressBar::chunk {{
-        background-color: {PALETTE['primary']};
-        border-radius: 3px;
-    }}
+
 """
 
 class _PandasModel(QAbstractTableModel):
@@ -783,7 +713,7 @@ class MiniForecaster(QMainWindow):
     
     coverage_ready = pyqtSignal(float) 
 
-    def __init__(self):
+    def __init__(self, theme: str = 'light'):
         super().__init__()
         self._log_cache: list[str] = []
         self.setWindowTitle("Fusionlab-learn – PINN Mini GUI")
@@ -816,6 +746,11 @@ class MiniForecaster(QMainWindow):
         
         self._inference_mode = False     # True → Run button will run inference
         self._manifest_path  = None      # filled automatically once detected
+        
+        # --- Store the active theme ---
+        self.theme = ( 
+            "dark" if str(theme).lower() =='dark' else'fusionlab'
+        )
 
         self._build_ui()
         self.log_updated.connect(self._log)
@@ -936,12 +871,18 @@ class MiniForecaster(QMainWindow):
 
         # 2) config cards --
         cards = QHBoxLayout(); L.addLayout(cards, 1)
-
-        cards.addWidget(self._model_card(), 1)
-        cards.addWidget(self._training_card(), 1)
-        cards.addWidget(self._physics_card(), 1)
+        
+        # Store the returned QFrame widgets as instance attributes ---
+        self.model_card = self._model_card()
+        self.training_card = self._training_card()
+        self.physics_card = self._physics_card()
+        self.feature_card = self._feature_card()
+        
+        cards.addWidget(self.model_card, 1)
+        cards.addWidget(self.training_card, 1)
+        cards.addWidget(self.physics_card, 1)
         # ▼ NEW feature card spans full width
-        L.addWidget(self._feature_card())
+        L.addWidget(self.feature_card)
 
         # 3)  Run row  +  Log pane  +  Progress bar  
         bottom = QVBoxLayout()
@@ -990,7 +931,7 @@ class MiniForecaster(QMainWindow):
         
         footer.addStretch(1)
 
-        # ② copyright / licence at the **right**
+        # ② copyright / licence 
         about = QLabel(
             '© 2025 <a href="https://earthai-tech.github.io/" '
             'style="color:#2E3191;text-decoration:none;">earthai-tech</a> – BSD-3 Clause'
@@ -1017,7 +958,6 @@ class MiniForecaster(QMainWindow):
             self.stop_btn.setEnabled(False)      # grey it out
             self.worker.requestInterruption()  
         
-
     def _training_card(self) -> QFrame:
         """Creates and returns the 'Training Parameters' UI panel.
 
@@ -1308,8 +1248,7 @@ class MiniForecaster(QMainWindow):
         self._log_cache.append(line)                         # (2) cache
         self.log.append(line)
         self.log.verticalScrollBar().setValue(
-            self.log.verticalScrollBar().maximum())
-        # QApplication.processEvents()  
+            self.log.verticalScrollBar().maximum()) 
  
     def _choose_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1362,20 +1301,48 @@ class MiniForecaster(QMainWindow):
         """Flip the GUI between *training* and *inference* modes."""
         self._inference_mode = not self._inference_mode
     
-        if self._inference_mode:                 # → ON
+        # 1. Show the toast notification for clear feedback
+        # 1. Show the theme-aware toast notification
+        message = ("Inference Mode Activated" if self._inference_mode 
+                   else "Training Mode Activated")
+        toast = ToastNotification(message, self, theme=self.theme)
+        toast.show_toast()
+       
+        if self._inference_mode:     
+            # → ON
             self.inf_btn.setStyleSheet(f"background:{SECONDARY}" )
             self.inf_btn.setEnabled(False)       # frozen while active
             self.inf_btn.setToolTip("Inference mode active.")
             self.run_btn.setText("RunI")
             self._log("ℹ GUI switched to *Inference* mode – "
                       "Run will now load the saved model.")
+            run_tooltip = (
+                "Launch the inference pipeline using the detected model "
+                 "and the selected CSV file"
+                )
+            
         else:                                    # → OFF  (rare, only after run)
             self.inf_btn.setStyleSheet(f"background:{PRIMARY}")
             self.inf_btn.setEnabled(True)
             self.inf_btn.setToolTip(
-                "Click to switch the GUI into inference mode.")
+                "Click to switch the GUI into inference mode")
             self.run_btn.setText("Run")
-
+            run_tooltip = "Launch the full training and forecasting pipeline"
+        
+        self.run_btn.setToolTip(run_tooltip)
+        
+        # 3. Update card borders using a dynamic property for styling
+        cards_to_style = [
+            self.model_card, self.training_card, 
+            self.physics_card, self.feature_card
+        ]
+        for card in cards_to_style:
+            # Set a boolean property that the stylesheet can target
+            card.setProperty("inferenceMode", self._inference_mode)
+            # Force Qt to re-evaluate the stylesheet for this widget
+            card.style().unpolish(card)
+            card.style().polish(card)
+            
     def _on_reset(self):
         """Resets the user interface to its default state.
 
@@ -1459,12 +1426,7 @@ class MiniForecaster(QMainWindow):
         if self.file_path is None:
             self._log("⚠ No CSV selected.")
             return
-        # # ------------------------------------------------------------------
-        # if self._inference_mode:
-        #     self._run_inference()
-        #     return               # *do not* go through the training path
-        # # ------------------------------------------------------------------
-        # self.coverage_lbl.clear()   
+     
         self.run_btn.setEnabled(False)
         self._log("▶ launch TRAINING workflow …")
         QApplication.processEvents()
@@ -1536,24 +1498,24 @@ class MiniForecaster(QMainWindow):
         self.stop_btn.setEnabled(True)
     
         # ------- start worker --------------------------------------
-        self.worker = Worker(
+        self.active_worker = Worker(
             cfg, 
             edited_df=getattr(self, "edited_df", None), 
             parent=self 
         )
-        self.worker.log_msg.connect(self.log_updated.emit)
-        self.worker.status_msg.connect(self.status_updated.emit)
-        self.worker.progress_val.connect(self.progress_updated.emit)
-        self.worker.coverage_val.connect(self.coverage_ready.emit)
-        self.worker.finished.connect(self._worker_done)
+        self.active_worker.log_msg.connect(self.log_updated.emit)
+        self.active_worker.status_msg.connect(self.status_updated.emit)
+        self.active_worker.progress_val.connect(self.progress_updated.emit)
+        self.active_worker.coverage_val.connect(self.coverage_ready.emit)
+        self.active_worker.finished.connect(self._worker_done)
 
         # **Stop** button: one-shot lambda that tells the worker to stop
         self.stop_btn.clicked.connect(
-            lambda: (self.worker.requestInterruption(),
+            lambda: (self.active_worker.requestInterruption(),
                      self.status_updated.emit("⏹ Stopping…"))
         )
         
-        self.worker.start()
+        self.active_worker.start()
         
     def _run_inference(self):
         """Launches the inference workflow using the pre-loaded data.
@@ -1584,24 +1546,23 @@ class MiniForecaster(QMainWindow):
         # --- Launch the InferenceThread ---
         # It receives the manifest path found by `_refresh_manifest_state`
         # and the in-memory DataFrame prepared by `_choose_file`.
-        self.infer_thr = InferenceThread(
+        self.active_worker = InferenceThread(
             manifest_path=self._manifest_path,
             edited_df=inference_data,
             parent=self,
         )
-        self.infer_thr.log_msg.connect(self.log_updated.emit)
-        self.infer_thr.progress_val.connect(self.progress_updated.emit)
-        self.infer_thr.finished.connect(self._inference_finished)
-
-        self.stop_btn.clicked.connect(self.infer_thr.requestInterruption)
-        self.infer_thr.start()
+        self.active_worker.log_msg.connect(self.log_updated.emit)
+        self.active_worker.progress_val.connect(self.progress_updated.emit)
+        self.active_worker.error_occurred.connect(self._on_worker_error)
+        # self.active_worker.finished.connect(self._inference_finished)
         
-    def _inference_finished(self):
-        self.run_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.progress_bar.setValue(100)
-        self._toggle_inference_mode()          # back to training mode
-
+        # Connect the 'finished' signal to the SAME cleanup method
+        # as the training worker.
+        self.active_worker.finished.connect(self._worker_done)
+        
+        self.stop_btn.clicked.connect(self.active_worker.requestInterruption)
+        self.active_worker.start()
+        
 
     def _worker_done(self):
         """
@@ -1613,32 +1574,48 @@ class MiniForecaster(QMainWindow):
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         
-        # decide where to write
-        out_dir = getattr(self.worker.cfg, "run_output_path", ".")
-        ts      = time.strftime("%Y%m%d_%H%M%S")
-        fname   = os.path.join(out_dir, f"gui_log_{ts}.txt")
-
-        try:                                                 # limit size
-            MAX_LINES = 10_000          # ≈ a few MB; change at will
-            lines     = self._log_cache[-MAX_LINES:]
-            with open(fname, "w", encoding="utf-8") as fp:
-                fp.write("\n".join(lines))
-            self._log(f"📝 Log saved to: {fname}")
-        except Exception as err:
-            self._log(f"⚠ Could not write log file ({err})")
-    
-            self.status_updated.emit("⚪ Idle")
+        # Use the generic active_worker attribute
+        if ( 
+                hasattr(self.active_worker, 'cfg') 
+                and self.active_worker is not None
+            ):
         
+            # decide where to write
+            out_dir = getattr(self.active_worker.cfg, "run_output_path", ".")
+            ts      = time.strftime("%Y%m%d_%H%M%S")
+            fname   = os.path.join(out_dir, f"gui_log_{ts}.txt")
+    
+            try:                                                 # limit size
+                MAX_LINES = 10_000          # ≈ a few MB; change at will
+                lines     = self._log_cache[-MAX_LINES:]
+                with open(fname, "w", encoding="utf-8") as fp:
+                    fp.write("\n".join(lines))
+                self._log(f"📝 Log saved to: {fname}")
+            except Exception as err:
+                self._log(f"⚠ Could not write log file ({err})")
+        
+                self.status_updated.emit("⚪ Idle")
+            
+            # Clean up the active worker reference
+            self.active_worker = None
+            
         # reset inference toggle (if it was active)
         if self._inference_mode:
-            self._inference_mode = False
-            self.inf_btn.setStyleSheet("background:%s;" % PRIMARY)
-            self.inf_btn.setEnabled(True)
-            self.inf_btn.setToolTip(
-                "Click to switch the GUI into inference mode.")
-            self.run_btn.setText("Run")
-        
+            self._toggle_inference_mode()
+
         self._refresh_manifest_state()  
+    
+    @pyqtSlot(str)
+    def _on_worker_error(self, error_message: str):
+        """
+        A slot that handles errors emitted from a worker thread.
+        It displays a critical error message box to the user.
+        """
+        msg= "Inference" if self._inference_mode else "Training"
+        self._log(f"❌ Worflow failed - {msg}: {error_message}")
+        QMessageBox.critical(self, "Workflow Error", error_message)
+        # Re-enable buttons since the process has stopped
+        self._worker_done()
         
 class InferenceThread(QThread):
     """
@@ -1688,6 +1665,7 @@ class InferenceThread(QThread):
     
     log_msg      = pyqtSignal(str)
     progress_val = pyqtSignal(int)
+    error_occurred = pyqtSignal(str) 
     # This signal can be used if you need to pass 
      # back results, otherwise it's optional
     finished_with_results = pyqtSignal() 
@@ -1701,7 +1679,7 @@ class InferenceThread(QThread):
         super().__init__(parent)
         self.manifest_path = manifest_path
         self.edited_df     = edited_df 
-        self.parent_widget = parent
+        # self.parent_widget = parent
 
     def run(self):
         """
@@ -1742,15 +1720,76 @@ class InferenceThread(QThread):
             # Execute the pipeline with the in-memory DataFrame.
             # We assume the `run` method is updated to accept a DataFrame.
             pipe.run(validation_data=self.edited_df)
-            
-            self.progress_val.emit(100)
+        
             self.log_msg.emit("✔ Inference finished.")
+            self.progress_val.emit(100)
 
         except Exception as err:
-            self.log_msg.emit(f"❌ Inference error: {err}")
-            QMessageBox.critical(
-                self.parent_widget, "Inference Failed", str(err))
-            
+            # self.log_msg.emit(f"❌ Inference error: {err}")
+            self.error_occurred.emit(str(err))
+            # QMessageBox.critical(
+            #     self.parent_widget, "Inference Failed", str(err))
+
+
+class ToastNotification(QLabel):
+    """
+    A temporary, fading pop-up widget with theme-aware styling.
+    """
+    def __init__(self, message: str, parent=None, theme: str = 'light'):
+        super().__init__(message, parent)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+
+        # --- REVISED: Theme-aware stylesheet ---
+        if theme == 'dark':
+            # Use secondary color for dark theme
+            bg_color = "rgba(242, 134, 32, 0.9)"  # Orange with transparency
+        else:
+            # Use primary color for light theme
+            bg_color = "rgba(46, 49, 145, 0.9)" # Blue with transparency
+
+        self.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 15px 25px;
+                border-radius: 18px;
+            }}
+        """)
+        
+        self.adjustSize()
+        self.center_on_parent()
+
+        # Set up the fade-out animation
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        
+        self.animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.animation.setDuration(500)
+        self.animation.setStartValue(1.0)
+        self.animation.setEndValue(0.0)
+        self.animation.setEasingCurve(QEasingCurve.InQuad)
+        self.animation.finished.connect(self.close)
+
+    def center_on_parent(self):
+        if self.parent():
+            parent_rect = self.parent().geometry()
+            self.move(
+                parent_rect.x() + (parent_rect.width() - self.width()) // 2,
+                parent_rect.y() + (parent_rect.height() - self.height()) // 2
+            )
+
+    def show_toast(self, duration_ms=1500):
+        """Shows the toast and schedules it to fade out."""
+        self.opacity_effect.setOpacity(1.0)
+        self.show()
+        QTimer.singleShot(duration_ms, self.animation.start)
+
 
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.
@@ -1794,26 +1833,42 @@ def launch_cli(theme: str = 'fusionlab') -> None:
         'light' or 'dark'. Defaults to 'light'.
         
     """
+    if theme in ('light', 'fusionlab'): 
+        theme = 'fusionlab'
+        
     app = QApplication(sys.argv)
     
     QToolTip.setFont(QFont("Helvetica Neue", 9))
+    # This dynamic property rule will be appended to the selected theme.
+    inference_border_style = f"""
+        QFrame#card[inferenceMode="true"] {{
+            border: 2px solid {PRIMARY};
+        }}
+     """
     
     selected_stylesheet = None
+    # Add the dynamic property rule to your stylesheets
+    inference_border_style = ( 
+        f"QFrame#card[inferenceMode=\"true\"] {{ border: 2px solid {PRIMARY}; }}"
+        )
+    
     if os.path.exists("style.qss"):
         with open("style.qss", "r", encoding="utf-8") as f:
             selected_stylesheet = f.read()
     else:
         if theme.lower() == 'dark':
-            selected_stylesheet = DARK_THEME_STYLESHEET
-        elif theme.lower() =='light':
-            selected_stylesheet = LIGHT_THEME_STYLESHEET
-        elif theme.lower() =='fusionlab': 
-            selected_stylesheet = FLAB_STYLE_SHEET   
+            selected_stylesheet = DARK_THEME_STYLESHEET 
+        # elif theme.lower() =='light':
+            #selected_stylesheet = LIGHT_THEME_STYLESHEET
+        else: #  =='fusionlab': 
+            selected_stylesheet = FLAB_STYLE_SHEET 
        
     if selected_stylesheet:
-        app.setStyleSheet(selected_stylesheet)
+        # Append the dynamic border style to the chosen theme
+        final_stylesheet = selected_stylesheet + inference_border_style
+        app.setStyleSheet(final_stylesheet)
 
-    gui = MiniForecaster()
+    gui = MiniForecaster(theme=theme)
     gui.show()
     sys.exit(app.exec_())
 

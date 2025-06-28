@@ -127,7 +127,10 @@ class ManifestRegistry:
         self._run_registry_path =None 
         
         
-    def new_run_dir(self, *, city: str = "unset", model: str = "unset") -> Path:
+    def new_run_dir(
+        self, *, city: str = "unset", 
+        model: str = "unset"
+        ) -> Path:
         """Creates a fresh, timestamped run directory.
 
         The directory name is generated using the current timestamp and
@@ -384,7 +387,6 @@ def _update_manifest(
     tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp_path, manifest_path)
     
-
 def _locate_manifest(
     start_path: Optional[Path] = None, # Kept for signature compatibility but ignored
     max_up: int = 3,                   # Kept for signature compatibility but ignored
