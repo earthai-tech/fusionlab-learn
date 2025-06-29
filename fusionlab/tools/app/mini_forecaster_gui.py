@@ -1277,7 +1277,6 @@ class MiniForecaster(QMainWindow):
         
         self.progress_bar.setValue(0)
         
-
     def _refresh_manifest_state(self) -> None:
         """
         Check whether a trained run exists *in the registry* and toggle the
