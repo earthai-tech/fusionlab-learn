@@ -720,23 +720,25 @@ class MiniForecaster(QMainWindow):
         self.setFixedSize(980, 660)
         self.file_path: Path | None = None
         
-        # --- app icon (title-bar & task-bar) -----------------------------
+        # app icon (title-bar & task-bar) 
         icon_path = os.path.join(os.path.dirname(__file__),
                                  "fusionlab_learn_logo.ico")
-        app_icon  = QIcon(icon_path)          # QIcon silently handles “file not found”
+        app_icon  = QIcon(icon_path)          
         self.setWindowIcon(app_icon)
         
         # --- in-window logo (top of GUI) 
         logo_lbl  = QLabel()
-        pix_path  = os.path.join(os.path.dirname(__file__), "fusionlab_learn_logo.png")
+        pix_path  = os.path.join(os.path.dirname(__file__), 
+                                 "fusionlab_learn_logo.png")
         pix_logo  = QPixmap(pix_path)
         
-        if not pix_logo.isNull():   # only set the pixmap if the file exists
+        if not pix_logo.isNull():   
             logo_lbl.setPixmap(
-                pix_logo.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pix_logo.scaled(72, 72, Qt.KeepAspectRatio,
+                                Qt.SmoothTransformation)
             )
         else:
-            logo_lbl.setText("Fusionlab-learn") # graceful fallback (optional)
+            logo_lbl.setText("Fusionlab-learn") # graceful fallback 
         
         logo_lbl.setAlignment(Qt.AlignCenter)
         
@@ -768,7 +770,6 @@ class MiniForecaster(QMainWindow):
         dlg.show()                                        # modeless – *no* exec_()
         self._preview_windows.append(dlg)                 # keep it alive
         
-        #ImagePreviewDialog(png_path, parent=self).exec_()
         
     @pyqtSlot(float)
     def _set_coverage(self, value: float):
@@ -1319,6 +1320,7 @@ class MiniForecaster(QMainWindow):
         # 2. Update button styles and tooltips based on the new mode
         if self._inference_mode:
             # --- Inference Mode is ON ---
+            self._set_panels_disabled(True)
             # Style the button to look "active" (e.g., orange)
             self.inf_btn.setStyleSheet(
                 f"background-color: {SECONDARY}; color: white;")
@@ -1333,6 +1335,7 @@ class MiniForecaster(QMainWindow):
         else:
             # --- Inference Mode is OFF (back to training) ---
             # Revert the button to its normal "enabled" style
+            self._set_panels_disabled(False)
             self.inf_btn.setStyleSheet(
                 f"background-color: {PRIMARY}; color: white;")
             self.inf_btn.setToolTip(
@@ -1352,7 +1355,23 @@ class MiniForecaster(QMainWindow):
             card.setProperty("inferenceMode", self._inference_mode)
             card.style().unpolish(card)
             card.style().polish(card)
-         
+            
+    def _set_panels_disabled(self, disable: bool):
+        """Disables or enables the panels and inputs based on inference mode."""
+        panels = [
+            self.model_card, self.training_card, 
+            self.physics_card, self.feature_card
+        ]
+        
+        for panel in panels:
+            panel.setEnabled(not disable)  # Disable the panel's interaction
+            
+            # Change color to gray to indicate it's disabled
+            if disable:
+                panel.setStyleSheet("background-color: #cccccc;")  # Light gray background
+            else:
+                panel.setStyleSheet("")  # Reset to normal style
+                
     def _on_reset(self):
         """Resets the user interface to its default state.
 
@@ -1383,12 +1402,11 @@ class MiniForecaster(QMainWindow):
         self.city_input.clear()
         self.coverage_lbl.clear() 
         
-        # --- ADD THIS BLOCK ---
         # If the GUI is in inference mode when reset is clicked,
         # toggle it back to training mode to ensure a clean state.
         if self._inference_mode:
             self._toggle_inference_mode()
-        # --- END ADDITION ---
+
         self._log("ℹ Interface reset.")
   
     def _on_run(self):
@@ -1514,7 +1532,7 @@ class MiniForecaster(QMainWindow):
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
     
-        # ------- start worker --------------------------------------
+        # start worker 
         self.active_worker = Worker(
             cfg, 
             edited_df=getattr(self, "edited_df", None), 
@@ -1576,7 +1594,8 @@ class MiniForecaster(QMainWindow):
         # as the training worker.
         self.active_worker.finished.connect(self._worker_done)
         
-        self.stop_btn.clicked.connect(self.active_worker.requestInterruption)
+        self.stop_btn.clicked.connect(
+            self.active_worker.requestInterruption)
         self.active_worker.start()
         
     def _worker_done(self):
@@ -1742,7 +1761,6 @@ class InferenceThread(QThread):
         except Exception as err:
             self.error_occurred.emit(str(err))
 
-
 class ToastNotification(QLabel):
     """
     A temporary, fading pop-up widget with theme-aware styling.
@@ -1753,17 +1771,19 @@ class ToastNotification(QLabel):
             Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
-        # FIX: Explicitly tell the QLabel to paint its background
+        # Explicitly tell the QLabel to paint its background
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_DeleteOnClose)
 
+        # Set background color based on the theme
         if theme == 'dark':
             # Use a more opaque orange for better visibility
-            bg_color = "rgba(242, 134, 32, 0.9)"
+            bg_color = "rgba(242, 134, 32, 0.9)"  # Light orange
         else:
             # Use a more opaque blue for better visibility
-            bg_color = "rgba(46, 49, 145, 0.9)"
+            bg_color = "rgba(46, 49, 145, 0.9)"  # Light blue
 
+        # Style for the toast container (background box)
         self.setStyleSheet(f"""
             QLabel {{
                 background-color: {bg_color};
@@ -1774,21 +1794,25 @@ class ToastNotification(QLabel):
                 border-radius: 18px;
             }}
         """)
-        
+
+        # Adjust the size of the widget to fit the content
         self.adjustSize()
         self.center_on_parent()
 
+        # Effect for the text opacity, not the whole widget
         self.opacity_effect = QGraphicsOpacityEffect(self)
         self.setGraphicsEffect(self.opacity_effect)
-        
-        self.animation = QPropertyAnimation(self.opacity_effect, b"opacity")
-        self.animation.setDuration(500)
+
+        self.animation = QPropertyAnimation(
+            self.opacity_effect, b"opacity")
+        self.animation.setDuration(1500)
         self.animation.setStartValue(1.0)
         self.animation.setEndValue(0.0)
         self.animation.setEasingCurve(QEasingCurve.InQuad)
         self.animation.finished.connect(self.close)
 
     def center_on_parent(self):
+        """Centers the toast on the parent widget."""
         if self.parent():
             parent_rect = self.parent().geometry()
             self.move(
@@ -1802,6 +1826,67 @@ class ToastNotification(QLabel):
         self.show()
         QTimer.singleShot(duration_ms, self.animation.start)
 
+
+# class ToastNotification(QLabel):
+#     """
+#     A temporary, fading pop-up widget with theme-aware styling.
+#     """
+#     def __init__(self, message: str, parent=None, theme: str = 'light'):
+#         super().__init__(message, parent)
+#         self.setWindowFlags(
+#             Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
+#         )
+#         self.setAttribute(Qt.WA_TranslucentBackground)
+#         # Explicitly tell the QLabel to paint its background
+#         self.setAttribute(Qt.WA_StyledBackground, True)
+#         self.setAttribute(Qt.WA_DeleteOnClose)
+
+#         if theme == 'dark':
+#             # Use a more opaque orange for better visibility
+#             bg_color = "rgba(242, 134, 32, 0.9)"
+#         else:
+#             # Use a more opaque blue for better visibility
+#             bg_color = "rgba(46, 49, 145, 0.9)"
+
+#         self.setStyleSheet(f"""
+#             QLabel {{
+#                 background-color: {bg_color};
+#                 color: white;
+#                 font-size: 16px;
+#                 font-weight: bold;
+#                 padding: 15px 25px;
+#                 border-radius: 18px;
+#             }}
+#         """
+#     )
+        
+#         self.adjustSize()
+#         self.center_on_parent()
+
+#         self.opacity_effect = QGraphicsOpacityEffect(self)
+#         self.setGraphicsEffect(self.opacity_effect)
+        
+#         self.animation = QPropertyAnimation(
+#             self.opacity_effect, b"opacity")
+#         self.animation.setDuration(1500)
+#         self.animation.setStartValue(1.0)
+#         self.animation.setEndValue(0.0)
+#         self.animation.setEasingCurve(QEasingCurve.InQuad)
+#         self.animation.finished.connect(self.close)
+
+#     def center_on_parent(self):
+#         if self.parent():
+#             parent_rect = self.parent().geometry()
+#             self.move(
+#                 parent_rect.x() + (parent_rect.width() - self.width()) // 2,
+#                 parent_rect.y() + (parent_rect.height() - self.height()) // 2
+#             )
+
+#     def show_toast(self, duration_ms=1500):
+#         """Shows the toast and schedules it to fade out."""
+#         self.opacity_effect.setOpacity(1.0)
+#         self.show()
+#         QTimer.singleShot(duration_ms, self.animation.start)
 
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.

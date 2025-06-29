@@ -1773,7 +1773,7 @@ def process_pde_modes(
     if isinstance(pde_mode, str):
         pde_modes_active = [pde_mode.lower()]
     elif isinstance(pde_mode, list):
-        pde_modes_active = [p_type.lower() for p_type in pde_mode]
+        pde_modes_active = [str(p_type).lower() for p_type in pde_mode]
     elif pde_mode is None:
         pde_modes_active = ['none']  # Explicitly 'none' if None is provided
     else:
@@ -1803,9 +1803,9 @@ def process_pde_modes(
         logger.info(
             f"Unsupported pde_mode '{pde_mode}' "
             "selected without 'consolidation'. "
-            "PIHALNet will use 'consolidation' mode."
+            "Model will use 'consolidation' mode."
         )
-        pde_modes_active = ['consolidation']
+        # pde_modes_active = ['consolidation']
 
     if solo_return: 
         pde_modes_active = pde_modes_active[0]

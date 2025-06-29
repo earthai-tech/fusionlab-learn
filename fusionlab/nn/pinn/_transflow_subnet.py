@@ -139,7 +139,7 @@ class TransFlowSubsNet(BaseAttentive):
         # The total output dimension for the base data-driven model
         # is the sum of the subsidence and GWL dimensions.
         if 'output_dim' in kwargs: 
-            kwargs.pop ('output_dim') # delegate it from combinason 
+            kwargs.pop ('output_dim') # delegate it from combination 
             
         self._combined_output_dim = (
             output_subsidence_dim + output_gwl_dim
@@ -175,8 +175,6 @@ class TransFlowSubsNet(BaseAttentive):
             **kwargs
         )
         
-        
-            
         self.output_subsidence_dim = output_subsidence_dim
         self.output_gwl_dim = output_gwl_dim
         self.pde_modes_active = process_pde_modes(pde_mode)
@@ -278,7 +276,6 @@ class TransFlowSubsNet(BaseAttentive):
         self.coord_mlp = _branch(gwl_units, "coord_mlp")
         self.subs_coord_mlp = _branch(subs_units, "subs_coord_mlp")
 
-        
     def _build_C_components(self):
         """
         Instantiates components required for the physics‐informed module.
@@ -926,7 +923,6 @@ class TransFlowSubsNet(BaseAttentive):
         # Store the weights for the physics loss components
         self.lambda_cons = lambda_cons
         self.lambda_gw = lambda_gw
-
 
     def get_config(self) -> dict:
         """Returns the full configuration of the model.
