@@ -65,8 +65,92 @@ __all__ = [
      'gen_negative_samples', 
      'gen_buffered_negative_samples', 
      'gen_negative_samples_plus', 
-     
  ]
+
+@SaveFile
+@isdf 
+def extract_spatial_roi(
+    df: pd.DataFrame,
+    x_range: Tuple[float, float],
+    y_range: Tuple[float, float],
+    x_col: str = 'longitude',
+    y_col: str = 'latitude',
+    snap_to_closest: bool = True,
+    savefile: Optional[str] = None,
+    **kwargs
+) -> pd.DataFrame:
+    """Extracts a spatial Region of Interest (ROI) from a DataFrame.
+
+    This function filters a DataFrame to include only the data points
+    that fall within a specified rectangular bounding box defined by
+    x and y coordinate ranges.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing the spatial data.
+    x_range : tuple of (float, float)
+        A tuple containing the minimum and maximum desired values for
+        the x-coordinate (e.g., longitude). The order does not matter.
+    y_range : tuple of (float, float)
+        A tuple containing the minimum and maximum desired values for
+        the y-coordinate (e.g., latitude). The order does not matter.
+    x_col : str, default='longitude'
+        The name of the column in `df` that contains the x-coordinates.
+    y_col : str, default='latitude'
+        The name of the column in `df` that contains the y-coordinates.
+    snap_to_closest : bool, default=True
+        If True, and a value in `x_range` or `y_range` does not
+        exist in the data, the function will "snap" to the nearest
+        available coordinate in the dataset. If False, it will use
+        the exact boundaries provided.
+    savefile : str, optional
+        The path to save the resulting DataFrame as a CSV file.
+    Returns
+    -------
+    pd.DataFrame
+        A new DataFrame containing only the rows that fall within the
+        specified spatial bounding box.
+
+    Raises
+    ------
+    ValueError
+        If `x_col` or `y_col` are not found in the DataFrame, or if the
+        range tuples are not provided correctly.
+    """
+    if not all(c in df.columns for c in [x_col, y_col]):
+        raise ValueError(
+            f"Columns '{x_col}' and/or '{y_col}' not found in DataFrame."
+        )
+    from fusionlab.core.checks import check_numeric_dtype 
+    # this check the whether the xcol and y_col are numeric valid 
+    check_numeric_dtype(
+        df[[x_col, y_col]], 
+        param_names={"X": "df[x_col, y_col]]"}
+    )
+    # Ensure ranges are correctly ordered (min, max)
+    x_min, x_max = min(x_range), max(x_range)
+    y_min, y_max = min(y_range), max(y_range)
+
+    # Optionally snap the boundaries to the closest available data points
+    if snap_to_closest:
+        x_min = _find_closest_value(df[x_col], x_min)
+        x_max = _find_closest_value(df[x_col], x_max)
+        y_min = _find_closest_value(df[y_col], y_min)
+        y_max = _find_closest_value(df[y_col], y_max)
+
+    # Create boolean masks for the x and y ranges
+    x_mask = (df[x_col] >= x_min) & (df[x_col] <= x_max)
+    y_mask = (df[y_col] >= y_min) & (df[y_col] <= y_max)
+
+    # Filter the DataFrame using the combined mask
+    roi_df = df[x_mask & y_mask].copy()
+
+    return roi_df
+
+def _find_closest_value(series: pd.Series, value: float) -> float:
+    """Finds the value in a Series closest to a target value."""
+    return series.iloc[(series - value).abs().argmin()]
 
 @SaveFile 
 @isdf  

@@ -20,12 +20,11 @@ from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.utils.generic_utils import ( 
     normalize_time_column, rename_dict_keys 
 )
-from fusionlab.utils._manifest_registry import ( 
-    ManifestRegistry, _update_manifest
-)
 from fusionlab.nn.models import TransFlowSubsNet, PIHALNet  # noqa 
-from fusionlab.params import LearnableK, LearnableSs, LearnableQ # Noqa 
-from fusionlab.utils.data_utils import nan_ops 
+from fusionlab.params import LearnableK, LearnableSs, LearnableQ # Noqa
+from fusionlab.registry import  ManifestRegistry, _update_manifest 
+from fusionlab.utils.data_utils import nan_ops
+from fusionlab.utils.ts_utils import ts_validator 
 from fusionlab.tools.app.config import SubsConfig 
 from fusionlab.tools.app.processing import DataProcessor 
 from fusionlab.tools.app.modeling import Forecaster 
@@ -254,11 +253,7 @@ class PredictionPipeline:
         
         # 3. Generate sequences for the validation data
         self.log("Generating validation sequences …")
-        # seq_cb = lambda p: self._tick(
-        #         self._range(p/100, 30, 80)        # smooth 30→80 %
-        #     )
-        # self.config.progress_callback = seq_cb
-        
+    
         val_inputs, val_targets = self._generate_validation_sequences(
             processed_val_df, static_features_encoded 
             
@@ -308,7 +303,7 @@ class PredictionPipeline:
         msg ="Processing new validation "
         val_df = validation_data
         if isinstance ( val_df, str): 
-            self.log(f"{msg} from {self.validation_data}")
+            self.log(f"{msg} from {validation_data}")
             # assume a file path 
             val_df = pd.read_csv(val_df)
         elif isinstance (val_df, pd.DataFrame): 
@@ -319,7 +314,16 @@ class PredictionPipeline:
                 "Inference/Validation data *must* be either a Pathlike object"
                 f"or a dataframe. Got {type(validation_data).__name__!r}"
             )
-        
+        # check when dataframe contain date time. 
+        val_df= ts_validator(
+            val_df.copy(),
+            dt_col=self.config.time_col,
+            to_datetime='auto',
+            as_index=False,
+            error="raise",
+            return_dt_col=False,
+            verbose=0
+        )
         # Use a temporary DataProcessor to apply transformations
         # This assumes DataProcessor can be initialized and used this way.
         temp_processor = DataProcessor(self.config, kind =self.kind)
@@ -359,7 +363,6 @@ class PredictionPipeline:
                 year_col= self.config.time_col,
                 drop_orig= True 
             )
-        
         # df_processed['time_numeric'] = df_processed[
         #     self.config.time_col] - df_processed[self.config.time_col].min()
         cols_to_scale = [

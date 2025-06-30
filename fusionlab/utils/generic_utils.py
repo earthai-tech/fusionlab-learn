@@ -3080,16 +3080,15 @@ def save_figure(
         output_dir = Path.cwd()
     else:
         p = Path(savefile)
+        output_dir = p.parent
         # Check if the provided savefile has a valid image extension.
         if p.suffix.lower() in VALID_EXTENSIONS:
             # If yes, use the part before the extension as the base name.
-            base_name = p.stem
-            output_dir = p.parent
+            base_name = p.stem # str(p.with_suffix(''))#
         else:
             # If not, treat the entire string as the base name.
-            base_name = p.name
-            output_dir = p.parent
-
+            base_name = p.name # str(savefile) # p.name
+  
     # --- Step 2: Prepare the list of formats to save ---
     if isinstance(save_fmts, str):
         save_fmts = [save_fmts] # Ensure it's a list for iteration.
@@ -3105,7 +3104,7 @@ def save_figure(
         
         for fmt in set(formats_to_save): # Use set to avoid duplicates
             # Construct the final, full path for the current format.
-            final_path = (output_dir / base_name).with_suffix(fmt)
+            final_path = (output_dir / f"{base_name}{fmt}") # .with_suffix(fmt)
             
             # Handle overwrite logic.
             if not overwrite and final_path.exists():
@@ -3132,121 +3131,7 @@ def save_figure(
             vlog(f"Error saving figure: {e}",
                  verbose=verbose, level=0, logger=_logger)
         return None
-
-# def save_figure(
-#     figure: plt.Figure,  
-#     savefile: Optional[str] = None,  # if extension is not among the conventional figure 
-#     # format , it can b consider as suffix of figure. 
-#     # for instance test_figure.inference , is the name of file ".inference", should 
-#     # not tread as extension. For that you can list the common figure extebsion 
-#     # then if not , consider that extension is not set . 
-#     save_fmts: Union[str, List[str]] = ['.png'],  
-#     overwrite: bool = True,  
-#     verbose: int = 1, 
-#     _logger =None,  
-#     **kwargs
-# ):
-#     """
-#     Save the given matplotlib figure to disk, automatically handling
-#     the filename, extension, and format.
-
-#     Parameters
-#     ----------
-#     figure : plt.Figure
-#         The matplotlib figure object to save.
-#     savefile : str, optional
-#         The target file path or name. If None, a default name is generated.
-#     save_fmts : list of str or str, optional
-#         The formats to save the figure in (e.g., '.png', '.pdf').
-#         Default is '.png'.
-#     overwrite : bool, optional
-#         Whether to overwrite the existing file if it already exists. 
-#         Default is True.
-#     verbose : int, optional
-#         Verbosity level: 0 for silent, 1 for basic info, 2 for detailed info.
-#     **kwargs : additional arguments
-#         Additional keyword arguments passed to `plt.savefig()` 
-#         (e.g., dpi, bbox_inches).
-
-#     Returns
-#     -------
-#     str
-#         The final filename used to save the figure.
-#     """
-#     # make all comments format. 
-    
-    
-#     # Step 1: Handle filename logic
-#     if savefile is None:
-#         # Generate a timestamped filename if none is provided
-#         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-#         savefile = f"output_{timestamp}.png"
-
-#     # Step 2: Check if the filename has an extension, 
-#     # if not, use the default format
-    
-#     # check here 
-#     # if extension is not among the conventional figure 
-#     # format , it can b consider as suffix of figure. 
-#     # for instance test_figure.inference , is the name of file ".inference", should 
-#     # not tread as extension. For that you can list the common figure extebsion 
-#     # then if not , consider that extension is not set .
-#     # here it wont reach the loop because for instance test_figure.inference 
-#     # should be treat as 'inference' as extension which is not true. 
-#     # so revise. 
-    
-#     if not os.path.splitext(savefile)[1] :
-#         savefile = f"{savefile}.png"  # Default to PNG if no extension is found
-
-#     # Ensure the directory exists before saving the figure
-#     out_dir = os.path.dirname(savefile)
-#     if out_dir and not os.path.exists(out_dir):
-#         os.makedirs(out_dir, exist_ok=True)
-
-#     # Step 3: Handle file formats (multiple formats or single format)
-#     if isinstance(save_fmts, str):
-#         save_fmts = [save_fmts]  # Convert to list if a single string is provided
-#     # for conistency , make sure that extension start with . 
-#     save_fmts = [f".{ext.replace('.', '')}" for ext in save_fmts]  
-
-#     # Step 4: Check if the file exists and handle overwrite behavior
-#     if not overwrite and os.path.exists(savefile):
-#         raise FileExistsError(
-#             f"File '{savefile}' already exists."
-#             " Set 'overwrite=True' to overwrite."
-#         )
-
-#     # Step 5: Save the figure
-#     try:
-#         for fmt in save_fmts:
-#             # why split again , what not use the first part of savefile. 
-#             final_filename = f"{os.path.splitext(savefile)[0]}{fmt}"
-#             figure.savefig(final_filename, **kwargs)
-#             if verbose > 0:
-#                 vlog(f"Saved figure to {final_filename}", 
-#                      verbose = verbose, level=2, logger= _logger 
-#                     )
-#         return savefile  # Return the final save path
-#     except Exception as e:
-#         if verbose > 0:
-#             vlog(f"Error saving figure: {e}",
-#                  verbose=verbose, level =2, logger =_logger 
-#                 )
-#         return None
-    
-    # fmts = [save_fmts] if isinstance(save_fmts, str) else save_fmts
-    # base, _ = os.path.splitext(savefig)
-    # for fmt in fmts:
-    #     fname = (
-    #         f"{base}_{target_name}_by_step"
-    #         f"{fmt if fmt.startswith('.') else '.' + fmt}"
-    #     )
-    #     out_dir = os.path.dirname(fname)
-    #     if out_dir and not os.path.exists(out_dir):
-    #         os.makedirs(out_dir, exist_ok=True)
-    #     vlog(f"Saving figure to {fname}", level=1, verbose=verbose)
-    #     fig.savefig(fname, dpi=300, bbox_inches="tight")
-            
+       
 def ensure_cols_exist(
     df: pd.DataFrame,
     *cols: Union[str, Sequence[str]],

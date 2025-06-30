@@ -5,6 +5,7 @@ Mini Subsidence-Forecasting GUI (academic showcase)
 from __future__ import annotations 
 import os, sys, time
 import json 
+import warnings
 import pandas as pd 
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from PyQt5.QtWidgets import (
     QDialog, QTableView, QMessageBox, QAction, QToolBar, QInputDialog, 
     QToolTip
 )
-
+from fusionlab.registry import ManifestRegistry, _locate_manifest
 from fusionlab.tools.app.config      import SubsConfig
 from fusionlab.tools.app.processing  import DataProcessor, SequenceGenerator
 from fusionlab.tools.app.modeling    import ModelTrainer, Forecaster
@@ -36,9 +37,7 @@ from fusionlab.tools.app.view        import ResultsVisualizer
 from fusionlab.tools.app.view        import VIS_SIGNALS
 from fusionlab.tools.app.gui_popups  import ImagePreviewDialog   
 from fusionlab.tools.app.inference import PredictionPipeline
-from fusionlab.utils._manifest_registry import ( 
-    ManifestRegistry, locate_manifest 
-)
+
 
 # Fusionlab-learn palette 
 PRIMARY   = "#2E3191"   
@@ -568,16 +567,18 @@ class Worker(QThread):
     log_msg      = pyqtSignal(str)
     coverage_val = pyqtSignal(float)
 
-    def __init__(self, cfg, edited_df=None, parent=None):
+    def __init__(self, cfg, edited_df=None, parent=None, run_btn=None):
         super().__init__(parent)
         self.cfg = cfg
-        self.edited_df  = edited_df   
+        self.edited_df  = edited_df
+        self.run_btn = run_btn 
         
         self._p = lambda frac, lo, hi: int(lo + (hi - lo) * frac)
 
     def run(self):
         try:
             self.status_msg.emit("📊 Pre-processing…")
+            self.run_btn.setText("Pre-processing…") 
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
                 self._p(p / 100, 0, 10) 
             )
@@ -591,6 +592,7 @@ class Worker(QThread):
             if self.isInterruptionRequested():          # ← CHECK #1
                 return
             self.status_msg.emit("🌀 Generating sequences…")
+            self.run_btn.setText("Generating sequences…") 
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
                self._p(p / 100, 10, 30)           # ← divide by 100!
             )      
@@ -609,6 +611,7 @@ class Worker(QThread):
                 return
             
             self.status_msg.emit("🔧 Training…")
+            self.run_btn.setText("Training…") 
             train_range = (30, 90)
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
                 self._p(p/100, *train_range))    # ← same here
@@ -623,6 +626,7 @@ class Worker(QThread):
             if self.isInterruptionRequested():          # ← CHECK #3
                 return
             self.status_msg.emit("🔮 Forecasting…")
+            self.run_btn.setText("Forecasting…") 
             forecast_range = (90, 100)
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
                 self._p(p / 100, *forecast_range)          
@@ -893,7 +897,7 @@ class MiniForecaster(QMainWindow):
         row = QHBoxLayout()
         
         self.run_btn = QPushButton("Run")
-        self.run_btn.setFixedWidth(60)
+        self.run_btn.setFixedWidth(80)
         self.run_btn.clicked.connect(self._on_run)
         row.addWidget(self.run_btn)
         
@@ -902,7 +906,6 @@ class MiniForecaster(QMainWindow):
         row.addWidget(self.log, 1)          # stretch
         bottom.addLayout(row)               # ← add FIRST
         
-
         # ── full-width progress bar 
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(18)
@@ -1284,7 +1287,7 @@ class MiniForecaster(QMainWindow):
           • once at start-up
           • again every time a training run finishes.
         """
-        manifest = locate_manifest() 
+        manifest = _locate_manifest() 
         if manifest:
             self._manifest_path = str(manifest)
             self.inf_btn.setEnabled(True)
@@ -1295,7 +1298,7 @@ class MiniForecaster(QMainWindow):
             self.inf_btn.setEnabled(False)
             self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
             self.inf_btn.setToolTip(
-                "Inference becomes available after you train a model.")
+                "Inference becomes available after you train a model")
             
     def _toggle_inference_mode(self):
         """Flips the GUI between *training* and *inference* modes.
@@ -1324,12 +1327,12 @@ class MiniForecaster(QMainWindow):
             self.inf_btn.setStyleSheet(
                 f"background-color: {SECONDARY}; color: white;")
             self.inf_btn.setToolTip(
-                "Inference mode is active. Click again to switch back to Training."
+                "Inference mode is active. Click again to switch back to Training"
             )
             self.run_btn.setText("RunI")
             run_tooltip = (
                 "Launch the inference pipeline using the detected model "
-                "and the selected CSV file."
+                "and the selected CSV file"
             )
         else:
             # --- Inference Mode is OFF (back to training) ---
@@ -1338,13 +1341,13 @@ class MiniForecaster(QMainWindow):
             self.inf_btn.setStyleSheet(
                 f"background-color: {PRIMARY}; color: white;")
             self.inf_btn.setToolTip(
-                "Click to switch to Inference mode (requires a trained model)."
+                "Click to switch to Inference mode - requires a trained model"
             )
             self.run_btn.setText("Run")
-            run_tooltip = "Launch the full training and forecasting pipeline."
-
+            run_tooltip = "Launch the full training and forecasting pipeline"
+        
         self.run_btn.setToolTip(run_tooltip)
-
+    
         # 3. Update card borders using the dynamic property
         cards_to_style = [
             self.model_card, self.training_card,
@@ -1405,7 +1408,10 @@ class MiniForecaster(QMainWindow):
         # toggle it back to training mode to ensure a clean state.
         if self._inference_mode:
             self._toggle_inference_mode()
-
+        
+        self.run_btn.setStyleSheet("")
+        self.stop_btn.setStyleSheet("") 
+        
         self._log("ℹ Interface reset.")
   
     def _on_run(self):
@@ -1462,6 +1468,10 @@ class MiniForecaster(QMainWindow):
             return
      
         self.run_btn.setEnabled(False)
+        self.run_btn.setText("Configuring…") # Optional: Update text
+        # disabled-looking style.
+        self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
+        
         self._log("▶ launch TRAINING workflow …")
         QApplication.processEvents()
         
@@ -1530,12 +1540,15 @@ class MiniForecaster(QMainWindow):
         cfg.to_json()
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-    
+        # Visually activate the stop button
+        self.stop_btn.setStyleSheet(f"background-color: {SECONDARY}; color: white;")
+
         # start worker 
         self.active_worker = Worker(
             cfg, 
             edited_df=getattr(self, "edited_df", None), 
-            parent=self 
+            parent=self, 
+            run_btn= self.run_btn 
         )
         self.active_worker.log_msg.connect(self.log_updated.emit)
         self.active_worker.status_msg.connect(self.status_updated.emit)
@@ -1573,7 +1586,12 @@ class MiniForecaster(QMainWindow):
 
         self._log("▶ Launching INFERENCE workflow…")
         self.run_btn.setEnabled(False)
+        self.run_btn.setText("Inferring…") 
+        self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
+        
         self.stop_btn.setEnabled(True)
+        self.stop_btn.setStyleSheet(
+            f"background-color: {SECONDARY}; color: white;")
         self.progress_bar.setValue(0)
         self.progress_bar.repaint()
 
@@ -1635,7 +1653,10 @@ class MiniForecaster(QMainWindow):
         # reset inference toggle (if it was active)
         if self._inference_mode:
             self._toggle_inference_mode()
-
+        
+        self.run_btn.setStyleSheet("")
+        self.stop_btn.setStyleSheet("") 
+        
         self._refresh_manifest_state()  
     
     @pyqtSlot(str)
@@ -1648,7 +1669,8 @@ class MiniForecaster(QMainWindow):
         self._log(f"❌ Worflow failed - {msg}: {error_message}")
         QMessageBox.critical(self, "Workflow Error", error_message)
         # Re-enable buttons since the process has stopped
-        self._worker_done()
+        # self._worker_done()
+        self._on_reset()
         
 class InferenceThread(QThread):
     """
@@ -1760,7 +1782,7 @@ class InferenceThread(QThread):
         except Exception as err:
             self.error_occurred.emit(str(err))
 
-class ToastNotification(QLabel):
+class _ToastNotification(QLabel):
     """
     A temporary, fading pop-up widget with theme-aware styling.
     """
@@ -1825,67 +1847,89 @@ class ToastNotification(QLabel):
         self.show()
         QTimer.singleShot(duration_ms, self.animation.start)
 
+class ToastNotification(QFrame):
+    """A temporary, fading pop-up widget for non-blocking feedback.
 
-# class ToastNotification(QLabel):
-#     """
-#     A temporary, fading pop-up widget with theme-aware styling.
-#     """
-#     def __init__(self, message: str, parent=None, theme: str = 'light'):
-#         super().__init__(message, parent)
-#         self.setWindowFlags(
-#             Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
-#         )
-#         self.setAttribute(Qt.WA_TranslucentBackground)
-#         # Explicitly tell the QLabel to paint its background
-#         self.setAttribute(Qt.WA_StyledBackground, True)
-#         self.setAttribute(Qt.WA_DeleteOnClose)
+    This class creates a self-contained, frameless window that
+    displays a message in the center of a parent widget. It is
+    designed to appear briefly and then automatically fade out of
+    view, providing users with theme-aware status updates without
+    interrupting their workflow.
 
-#         if theme == 'dark':
-#             # Use a more opaque orange for better visibility
-#             bg_color = "rgba(242, 134, 32, 0.9)"
-#         else:
-#             # Use a more opaque blue for better visibility
-#             bg_color = "rgba(46, 49, 145, 0.9)"
+    Parameters
+    ----------
+    message : str
+        The text message to display in the notification.
+    parent : QWidget, optional
+        The parent widget, used for centering the notification.
+        Default is None.
+    theme : {'light', 'dark'}, default='light'
+        The visual theme to apply, which determines the background
+        and border colors of the notification box.
+    """
+    def __init__(self, message: str, parent=None, theme: str = 'light'):
+        super().__init__(parent)
+        self.setWindowFlags(
+            Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_DeleteOnClose)
 
-#         self.setStyleSheet(f"""
-#             QLabel {{
-#                 background-color: {bg_color};
-#                 color: white;
-#                 font-size: 16px;
-#                 font-weight: bold;
-#                 padding: 15px 25px;
-#                 border-radius: 18px;
-#             }}
-#         """
-#     )
+        # Create the label that will have the visible style
+        self.label = QLabel(message, self)
         
-#         self.adjustSize()
-#         self.center_on_parent()
+        # --- Theme-Aware Styling for the Label ---
+        if theme == 'dark':
+            bg_color = "rgba(242, 134, 32, 0.9)"  # Orange with opacity
+            border_color = "rgba(255, 165, 0, 0.95)"
+        else: # Light theme
+            bg_color = "rgba(46, 49, 145, 0.9)" # Blue with opacity
+            border_color = "rgba(67, 56, 202, 0.95)"
 
-#         self.opacity_effect = QGraphicsOpacityEffect(self)
-#         self.setGraphicsEffect(self.opacity_effect)
+        self.label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 15px 25px;
+                border-radius: 18px;
+                border: 1px solid {border_color};
+            }}
+        """)
         
-#         self.animation = QPropertyAnimation(
-#             self.opacity_effect, b"opacity")
-#         self.animation.setDuration(1500)
-#         self.animation.setStartValue(1.0)
-#         self.animation.setEndValue(0.0)
-#         self.animation.setEasingCurve(QEasingCurve.InQuad)
-#         self.animation.finished.connect(self.close)
+        # Main layout for the QFrame container
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0,0,0,0)
+        layout.addWidget(self.label)
+        
+        self.adjustSize()
+        self.center_on_parent()
 
-#     def center_on_parent(self):
-#         if self.parent():
-#             parent_rect = self.parent().geometry()
-#             self.move(
-#                 parent_rect.x() + (parent_rect.width() - self.width()) // 2,
-#                 parent_rect.y() + (parent_rect.height() - self.height()) // 2
-#             )
+        # --- Set up the Fade-Out Animation ---
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        
+        self.animation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.animation.setDuration(500)
+        self.animation.setStartValue(1.0)
+        self.animation.setEndValue(0.0)
+        self.animation.setEasingCurve(QEasingCurve.InQuad)
+        self.animation.finished.connect(self.close)
 
-#     def show_toast(self, duration_ms=1500):
-#         """Shows the toast and schedules it to fade out."""
-#         self.opacity_effect.setOpacity(1.0)
-#         self.show()
-#         QTimer.singleShot(duration_ms, self.animation.start)
+    def center_on_parent(self):
+        if self.parent():
+            parent_rect = self.parent().geometry()
+            self.move(
+                parent_rect.x() + (parent_rect.width() - self.width()) // 2,
+                parent_rect.y() + (parent_rect.height() - self.height()) // 2
+            )
+
+    def show_toast(self, duration_ms=1500):
+        """Shows the toast and schedules it to fade out."""
+        self.opacity_effect.setOpacity(1.0)
+        self.show()
+        QTimer.singleShot(duration_ms, self.animation.start)
 
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.
@@ -1904,66 +1948,84 @@ def hline() -> QFrame:
     ln.setStyleSheet(f"color:{PRIMARY}")
     return ln          
 
+
 def launch_cli(theme: str = 'fusionlab') -> None:
     """Initializes and launches the main GUI application.
 
-    This function is the main entry point for the entire desktop
+    This function serves as the primary entry point for the desktop
     tool. It is responsible for setting up the PyQt5 application
-    environment, applying the custom visual style, creating the main
-    window instance, and starting the Qt event loop, which makes the
-    application visible and interactive.
+    environment, applying the selected visual theme, creating the
+    main window instance, and starting the Qt event loop.
 
-    The sequence of operations is:
-    1.  Creates a ``QApplication`` instance, the core of any Qt GUI.
-    2.  Sets a custom font for tooltips for better readability.
-    3.  Loads the custom CSS from the ``STYLE_SHEET`` constant to give
-        the application its modern, branded look and feel.
-    4.  Instantiates the main window class, :class:`MiniForecaster`.
-    5.  Shows the main window to the user.
-    6.  Starts the application's event loop by calling `sys.exit(app.exec_())`,
-        which keeps the application running until the user closes it.
-    
     Parameters
-    ------------
-    theme (str, optional): The visual theme to apply. Can be
-        'light' or 'dark'. Defaults to 'light'.
-        
+    ----------
+    theme : {'fusionlab', 'light', 'dark', 'geoscience', 'native'}, default='fusionlab'
+        The visual theme to apply to the application.
+        - 'fusionlab' or 'light': Applies the default clean, light theme.
+        - 'dark': Applies a modern dark theme for reduced eye strain.
+        - 'geoscience': Applies a custom theme with an earth-toned
+          palette loaded from an external `style.qss` file.
+        - 'native': Uses the default, unstyled look of the operating
+          system without applying any custom stylesheets.
+
+    Notes
+    -----
+    The function prioritizes loading a `style.qss` file from the
+    current directory if ``theme='geoscience'`` is selected. If this
+    file is not found, it issues a warning and falls back to the
+    default 'fusionlab' theme.
     """
-    if theme in ('light', 'fusionlab'): 
-        theme = 'fusionlab'
-        
+   
     app = QApplication(sys.argv)
-    
     QToolTip.setFont(QFont("Helvetica Neue", 9))
 
-    selected_stylesheet = None
-    # Add the dynamic property rule to the selected stylesheet
-    inference_border_style = f"""
-        QFrame#card[inferenceMode="true"] {{
-            border: 2px solid {PRIMARY};
-        }}
-    """
-    
-    if os.path.exists("style.qss"):
-        with open("style.qss", "r", encoding="utf-8") as f:
-            selected_stylesheet = f.read()
-    else:
-        if theme.lower() == 'dark':
-            selected_stylesheet = DARK_THEME_STYLESHEET 
-        # elif theme.lower() =='light':
-            #selected_stylesheet = LIGHT_THEME_STYLESHEET
-        else: #  =='fusionlab': 
-            selected_stylesheet = FLAB_STYLE_SHEET 
-       
+    # Normalize theme aliases
+    if theme.lower() in ('light', 'fusionlab', 'fusionlab-learn'):
+        theme = 'fusionlab'
+
+    # --- Theme and Stylesheet Selection ---
+    # Define available built-in themes
+    theme_stylesheets = {
+        "fusionlab": FLAB_STYLE_SHEET,
+        "dark": DARK_THEME_STYLESHEET,
+    }
+
+    selected_stylesheet = ""
+    # Special handling for the external 'geoscience' theme
+    if theme.lower() in ('geoscience', 'geo'):
+        if os.path.exists("style.qss"):
+            with open("style.qss", "r", encoding="utf-8") as f:
+                selected_stylesheet = f.read()
+        else:
+            # Provide a clear warning and fall back to the default theme
+            warnings.warn(
+                "Theme 'geoscience' was selected, but 'style.qss' was not "
+                "found in the current directory. Falling back to the "
+                "default 'fusionlab' theme.",
+                UserWarning,
+                stacklevel=2
+            )
+            theme = 'fusionlab' # Set the theme name for the next step
+
+    # Select from built-in themes if no external file was loaded
+    if not selected_stylesheet and theme.lower() != 'native':
+        selected_stylesheet = theme_stylesheets.get(theme.lower())
+
+    # Apply the stylesheet only if one was selected
     if selected_stylesheet:
-        # Append the dynamic border style to the chosen theme
+        # Add the dynamic property rule for the inference mode border
+        inference_border_style = f"""
+            QFrame#card[inferenceMode="true"] {{
+                border: 2px solid {PRIMARY};
+            }}
+        """
         final_stylesheet = selected_stylesheet + inference_border_style
         app.setStyleSheet(final_stylesheet)
-
+    
+    # --- Instantiate and Run the Application ---
     gui = MiniForecaster(theme=theme)
     gui.show()
     sys.exit(app.exec_())
-
-
+    
 if __name__ == "__main__":
     launch_cli()

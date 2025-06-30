@@ -984,8 +984,11 @@ def forecast_view(
 
         if savefig:
             save_figure (
-                fig, savefile = savefig, save_fmts= save_fmts, 
-                dpi=300, bbox_inches="tight" , 
+                fig, savefile = savefig, 
+                save_fmts= save_fmts, 
+                dpi=300,
+                bbox_inches="tight" , 
+                verbose = verbose, 
                 _logger=_logger, 
               )
             plt.close(fig) 
@@ -1692,7 +1695,7 @@ def plot_forecasts(
                 mappable, 
                 cax=cax,
                # ax=axes.ravel().tolist(), # Associate with all axes
-                label=f"{target_name} ({plot_title_suffix.strip()})",
+                label=f"{target_name} {plot_title_suffix.strip()}",
                 orientation='vertical',
                 shrink=0.8, 
                 pad=0.04

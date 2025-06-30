@@ -22,7 +22,6 @@ def _parse_list(ctx, param, value):
             f"Could not parse '{value}'. Please provide a comma-separated list."
         )
         
-# --- Define the 'geotools' command group ---
 @click.group()
 def geotools_group():
     """Commands for geospatial data generation and augmentation."""
@@ -48,49 +47,65 @@ try:
                           case_sensitive=False),
         help='The augmentation mode to apply.'
     )
-    @click.option('--group-by',
+    @click.option('--group-by', callback=_parse_list,
                   help='Comma-separated columns to group by (for interpolation).')
     @click.option('--time-col', 
                   help='Name of the time column (for interpolation).')
-    @click.option('--interp-cols',
+    @click.option('--interp-cols', callback=_parse_list,
                   help='Comma-separated columns to interpolate.')
-    @click.option('--augment-cols',
+    @click.option('--augment-cols',callback=_parse_list,
                   help='Comma-separated columns for noise augmentation.')
     @click.option('--interp-kwargs',
                   help='JSON string for interpolation args (e.g., \'{"freq":"D"}\').')
     @click.option('--augment-kwargs',
                   help='JSON string for augmentation args (e.g., \'{"noise_level":0.05}\').')
+    @click.option(
+        '--verbose', is_flag=True, default=True,
+        help='Enable verbose progress messages.'
+    )
     def augment_command(
         input_file, output_file, mode, group_by, time_col,
-        interp_cols, augment_cols, interp_kwargs, augment_kwargs
+        interp_cols, augment_cols, interp_kwargs, augment_kwargs, 
+        verbose
     ):
         """Applies temporal interpolation and/or feature augmentation."""
         click.echo(f"🔄 Starting data augmentation (mode: {mode})...")
         try:
-            group_list = [c.strip() for c in group_by.split(',')] if group_by else None
-            interp_list = [c.strip() for c in interp_cols.split(',')] if interp_cols else None
-            augment_list = [c.strip() for c in augment_cols.split(',')] if augment_cols else None
+            # group_list = [c.strip() for c in group_by.split(',')] if group_by else None
+            # interp_list = [c.strip() for c in interp_cols.split(',')] if interp_cols else None
+            # augment_list = [c.strip() for c in augment_cols.split(',')] if augment_cols else None
             interp_dict = json.loads(interp_kwargs) if interp_kwargs else None
             augment_dict = json.loads(augment_kwargs) if augment_kwargs else None
             
             run_augmentation_workflow(
-                input_file=input_file, output_file=output_file, mode=mode,
-                group_by_cols=group_list, time_col=time_col,
-                value_cols_interpolate=interp_list, feature_cols_augment=augment_list,
-                interpolation_kwargs=interp_dict, augmentation_kwargs=augment_dict,
-                verbose=True
+                input_file=input_file,
+                output_file=output_file, 
+                mode=mode,
+                group_by_cols=group_by, 
+                time_col=time_col,
+                value_cols_interpolate=interp_cols, 
+                feature_cols_augment=augment_cols,
+                interpolation_kwargs=interp_dict, 
+                augmentation_kwargs=augment_dict,
+                verbose=verbose
             )
-            click.secho("✅ Augmented data saved successfully.", fg='green')
+            click.secho(
+            f"✅ Augmented data saved successfully to: {output_file}",
+            fg='green'
+        )
         except Exception as e:
             click.secho(f"❌ An error occurred: {e}", fg='red', err=True)
 
 except ImportError:
     @geotools_group.command(name='augment')
-    def augment_command_dummy(**kwargs):
-        click.secho("Error: The `_export` tool is missing.", fg='red')
+    def augment_data_command_dummy(**kwargs):
+        """Shows an error message if dependencies are missing."""
+        click.secho(
+            "Error: The `augment-data` tool requires geo_utils from "
+            "fusionlab.utils, which could not be imported.",
+            fg='red'
+        )
 
-
-# --- Command for `generate_dummy_pinn_data` ---
 try:
     from ._export import run_dummy_data_generation
 
@@ -113,8 +128,6 @@ except ImportError:
     def generate_dummy_command_dummy(**kwargs):
         click.secho("Error: The `_export` tool is missing.", fg='red')
 
-
-# --- Command for `spatial_sampling` ---
 try:
     from ..utils.spatial_utils import spatial_sampling
 

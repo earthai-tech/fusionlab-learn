@@ -1132,7 +1132,7 @@ def smart_ts_detector(
 
         # If we have dt_format and to_datetime='auto' or explicit format,
         # convert if possible
-        if to_datetime is not None and to_datetime!='auto':
+        if to_datetime is not None and to_datetime=='auto':
             # Try convert based on dt_format
             # Let's implement a simple converter:
             # if dt_format='years' and numeric: convert as year: pd.to_datetime(series, format='%Y')

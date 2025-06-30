@@ -14,8 +14,7 @@ from typing import Tuple
 from pathlib import Path
 import json  
 
-from fusionlab.utils.generic_utils import rename_dict_keys, apply_affix 
-from fusionlab.utils._manifest_registry import _update_manifest 
+
 from fusionlab.nn.pinn.utils import ( 
     prepare_pinn_data_sequences, format_pinn_predictions, 
 )
@@ -25,12 +24,13 @@ from fusionlab.nn.utils import make_dict_to_tuple_fn
 from fusionlab.params import LearnableK, LearnableSs, LearnableQ
 from fusionlab.nn.losses import combined_quantile_loss
 from fusionlab.nn.models import PIHALNet, TransFlowSubsNet
-
+from fusionlab.registry import _update_manifest 
 from fusionlab.tools.app.config import SubsConfig 
 from fusionlab.tools.app.utils import ( 
-    GuiProgress, safe_model_loader, json_ready, 
-    _rebuild_from_arch_cfg
+    GuiProgress, safe_model_loader, 
+    json_ready, _rebuild_from_arch_cfg
 )
+from fusionlab.utils.generic_utils import rename_dict_keys, apply_affix 
 
 Callback =KERAS_DEPS.Callback 
 Dataset = KERAS_DEPS.Dataset
@@ -154,7 +154,6 @@ class ModelTrainer:
         )
         self.log("  Model compiled successfully.")
 
-    
     def _train_model(self, train_dataset, val_dataset):
         self.log(f"  Starting model training for {self.config.epochs} epochs...")
     
@@ -279,7 +278,6 @@ class ModelTrainer:
         except Exception as err: 
             self.log(f"  [WARN] Failed to export physical parameters: {err}")
             
-   
     def _load_best_model(self) -> Any:
         """
         Loads the best model from the checkpoint after training. This method
@@ -525,7 +523,7 @@ class Forecaster:
         forecast_df = format_pinn_predictions(
             predictions=predictions,
             y_true_dict=y_true_for_format,
-            target_mapping={
+            target_mapping={ 
                 'subs_pred': self.config.subsidence_col,
                 'gwl_pred': self.config.gwl_col
             },
@@ -537,7 +535,7 @@ class Forecaster:
             model_inputs=inputs_test,
             coord_scaler= coord_scaler, 
             _logger = self.log, 
-            savepath = self.config.run_output_path, 
+            savefile = self.config.run_output_path, 
             name = self.kind 
         )
         

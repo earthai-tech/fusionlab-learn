@@ -27,25 +27,6 @@ from fusionlab.utils.generic_utils import ExistenceChecker
 from fusionlab.utils.geo_utils import augment_spatiotemporal_data
 from fusionlab.utils.geo_utils import generate_dummy_pinn_data
 
-def _read_csv_safely(file_path: str) -> pd.DataFrame:
-    """Reads a CSV file with standardized error handling."""
-    print(f"Reading data from: {file_path}")
-    try:
-        return pd.read_csv(file_path)
-    except FileNotFoundError:
-        print(f"Error: Input file not found at '{file_path}'", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error reading file '{file_path}': {e}", file=sys.stderr)
-        sys.exit(1)
-
-def _save_csv_safely(df: pd.DataFrame, file_path: str):
-    """Ensures output directory exists and saves a DataFrame to CSV."""
-    output_path = Path(file_path).resolve()
-    ExistenceChecker.ensure_directory(output_path.parent)
-    df.to_csv(output_path, index=False)
-    print(f"Successfully saved data to: {output_path}")
-
 def handle_cli_workflow_errors(func):
     """Decorator to provide a standard try/except block for CLI workflows."""
     @wraps(func)
@@ -53,11 +34,10 @@ def handle_cli_workflow_errors(func):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            print(f"An unexpected error occurred during the workflow: {e}", file=sys.stderr)
+            print(f"An unexpected error occurred during the workflow: {e}", 
+                  file=sys.stderr)
             sys.exit(1)
     return wrapper
-
-# --- Public Workflow Functions ---
 
 @handle_cli_workflow_errors
 def run_format_forecast(
@@ -125,10 +105,14 @@ def run_augmentation_workflow(
     feature_cols_augment: Optional[List[str]],
     interpolation_kwargs: Optional[Dict[str, Any]],
     augmentation_kwargs: Optional[Dict[str, Any]],
+    savefile: Optional [str], 
     verbose: bool
 ):
     """
-    Reads a CSV, runs the augmentation pipeline, and saves the result.
+    Orchestrates the data augmentation workflow.
+
+    Reads a CSV file, applies spatiotemporal augmentation (interpolation
+    and/or feature noise), and saves the resulting DataFrame.
     """
     df = _read_csv_safely(input_file)
     
@@ -146,6 +130,7 @@ def run_augmentation_workflow(
     )
     
     _save_csv_safely(augmented_df, output_file)
+
 
 @handle_cli_workflow_errors
 def run_dummy_data_generation(
@@ -232,7 +217,6 @@ def run_training_workflow(
     visualizer.run(forecast_df)
     print("\n--- Workflow Finished Successfully ---")
     
-
 @handle_cli_workflow_errors
 def run_inference_workflow(
     model_path: str,
@@ -289,3 +273,25 @@ def run_inference_workflow(
     # Run the entire prediction and visualization workflow
     prediction_pipeline.run(validation_data_path=data_file)
     print("\n--- Workflow Finished Successfully ---")
+
+
+# Utilities 
+def _read_csv_safely(file_path: str) -> pd.DataFrame:
+    """Reads a CSV file with standardized error handling."""
+    print(f"Reading data from: {file_path}")
+    try:
+        return pd.read_csv(file_path)
+    except FileNotFoundError:
+        print(f"Error: Input file not found at '{file_path}'", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading file '{file_path}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+def _save_csv_safely(df: pd.DataFrame, file_path: str):
+    """Ensures output directory exists and saves a DataFrame to CSV."""
+    output_path = Path(file_path).resolve()
+    ExistenceChecker.ensure_directory(output_path.parent)
+    df.to_csv(output_path, index=False)
+    print(f"Successfully saved data to: {output_path}")
+

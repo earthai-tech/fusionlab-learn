@@ -1,29 +1,64 @@
 # -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: L. Kouadio <etanoyau@gmail.com>
+
+"""
+Handles visualization and output for the forecasting application.
+
+This module acts as the presentation layer for the backend workflow.
+It contains the `ResultsVisualizer` class, which uses plotting
+functions from `fusionlab.plot` to generate figures from the final
+forecast data.
+
+A key feature of this module is the `VIS_SIGNALS` object, a global
+`QObject` with a `figure_saved` signal. This provides a robust,
+decoupled mechanism for the visualization logic to notify the main
+GUI thread whenever a plot has been saved to disk. This enables
+features like the pop-up image previewer without creating tight
+dependencies between components.
+
+The module also intelligently configures the `matplotlib` backend.
+By default, it uses the non-interactive "Agg" backend, which is
+ideal for saving figures without attempting to open a display window.
+This behavior can be overridden for interactive debugging by setting
+the environment variable ``FUSIONLAB_HEADLESS=0``.
+
+Attributes
+----------
+VIS_SIGNALS : _VisualizerSignals
+    A global instance of a QObject subclass that emits signals related
+    to the visualization process, such as `figure_saved`.
+
+Classes
+-------
+ResultsVisualizer
+    An orchestrator class that takes a configuration and a forecast
+    DataFrame and generates all the required plots and visualizations.
+"""
+
 import os 
 import pandas as pd 
 
 from typing import Optional
 from PyQt5.QtCore import pyqtSignal, QObject
 import matplotlib
+import matplotlib.pyplot as plt # noqa 
 
-from fusionlab.utils._manifest_registry import ManifestRegistry, _update_manifest 
+from fusionlab.registry import  ManifestRegistry, _update_manifest 
 from fusionlab.utils.generic_utils import save_all_figures, apply_affix 
-         
 from fusionlab.plot.forecast import plot_forecasts, forecast_view 
 from fusionlab.tools.app.config import SubsConfig 
 
+# FUSIONLAB_HEADLESS=0 python my_script.py
 if os.environ.get("FUSIONLAB_HEADLESS", "1") == "1":
     matplotlib.use("Agg")        # production / in-GUI mode
 else:
     matplotlib.use("Qt5Agg")     # debugging outside the GUI
 
-import matplotlib.pyplot as plt # noqa 
-# FUSIONLAB_HEADLESS=0 python my_script.py
 
 class _VisualizerSignals(QObject):                   
     figure_saved = pyqtSignal(str)                   
 VIS_SIGNALS = _VisualizerSignals()                  
-
 
 class ResultsVisualizer:
     """
@@ -45,6 +80,9 @@ class ResultsVisualizer:
         (creates the list on first call).
         """
         try: 
+            if self.config is None: 
+                # fallback to manifest registery loc
+                raise 
             _update_manifest(
                 self.config.registry_path, "figures", 
                 fname, # value
@@ -110,7 +148,6 @@ class ResultsVisualizer:
         )
         png_base_subs = apply_affix(
             png_base_subs, label=self.kind, affix_prefix='.')
-  
         plot_forecasts(
             forecast_df=df,
             target_name=self.config.subsidence_col,
@@ -130,7 +167,7 @@ class ResultsVisualizer:
             save_fmts=['.png', '.pdf']
         )
         png_png = f"{png_base_subs}.png" 
-        # self.log (f"PNG: png_base_subs= {png_base_subs}")
+        self.log (f"PNG: png_base_subs= {png_png}")
         self._note(os.path.basename(png_png))  
         VIS_SIGNALS.figure_saved.emit(png_png)
         

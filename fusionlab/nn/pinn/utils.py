@@ -801,11 +801,10 @@ def format_pihalnet_predictions(
             try:
                 compute_quantile_diagnostics (
                     *all_data_dfs, 
-                    base_name= base_name, 
+                    target_name= base_name, 
                     quantiles= quantiles, 
                     coverage_quantile_indices=coverage_quantile_indices, 
-                    savefile=savefile, 
-                    savepath= kwargs.pop('savepath', None), 
+                    savefile=savefile or kwargs.pop('savepath', None), 
                     filename= 'diagnostics_results.json', 
                     name=name, 
                     verbose=verbose, 

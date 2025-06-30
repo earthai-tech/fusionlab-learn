@@ -32,6 +32,8 @@ from typing import (
 
 import pandas as pd 
 import numpy as np   
+
+from fusionlab.registry import ManifestRegistry
 from fusionlab.utils.deps_utils import get_versions
 from fusionlab.utils.generic_utils import ensure_directory_exists
 from fusionlab.tools.app._config import setup_environment as _setup_env   
@@ -159,7 +161,7 @@ class SubsConfig:
                 setattr(self, key, value)
         self._build_paths() # Re-build paths in case model name changed
         
-    def auto_detect_columns(self, df: pd.DataFrame ):
+    def auto_detect_columns(self, df: pd.DataFrame):
         """
         Automatically detects and sets column lists (categorical, numerical,
         static, dynamic) if they are set to 'auto'. This method respects
@@ -260,8 +262,6 @@ class SubsConfig:
             The absolute path to the saved manifest file *inside* the
             central registry.
         """
-        from fusionlab.utils._manifest_registry import ManifestRegistry
-        
         registry = ManifestRegistry()
         manifest_path: Path
 

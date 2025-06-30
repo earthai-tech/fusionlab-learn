@@ -30,7 +30,9 @@ try:
     @click.option(
         '--theme',
         default='fusionlab',
-        type=click.Choice(['dark', 'light', 'fusionlab'], case_sensitive=False),
+        type=click.Choice(
+            ['fusionlab', 'light', 'dark', 'geoscience', 'native'], 
+            case_sensitive=False),
         help='The visual theme to apply to the GUI.'
     )
     def launch_forecaster_command(theme):

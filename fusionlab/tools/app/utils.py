@@ -21,7 +21,6 @@ try:
         LearnableK, LearnableSs, LearnableQ,
         LearnableC, FixedC, DisabledC,
     )
-    from fusionlab.utils._manifest_registry import ManifestRegistry
     from fusionlab.nn import KERAS_DEPS
     from fusionlab.nn.models import TransFlowSubsNet, PIHALNet
 except ImportError as e:
@@ -140,7 +139,7 @@ def locate_and_load_manifest(
         found_manifest_path = Path(manifest_path)
     else:
         # If no direct path, search heuristically from the data path
-        found_manifest_path = _locate_manifest(
+        found_manifest_path = __locate_manifest(
             Path(validation_data_path), log=log
         )
 
@@ -157,7 +156,7 @@ def _find_manifest_in(dir_: Path) -> List[Path]:
     """Return every run_manifest.json inside *dir_/**_run/ sub-folders."""
     return list(dir_.glob("*_run/run_manifest.json"))
 
-def _locate_manifest(csv_path: Path, max_up: int = 3) -> Optional[Path]:
+def __locate_manifest(csv_path: Path, max_up: int = 3) -> Optional[Path]:
     """
     Heuristic search for the `run_manifest.json` that matches *csv_path*.
 

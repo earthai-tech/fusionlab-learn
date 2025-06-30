@@ -21,13 +21,13 @@ from fusionlab.utils.generic_utils import (
     ensure_cols_exist
 ) 
 from fusionlab.datasets import fetch_zhongshan_data
-from fusionlab.utils.data_utils import nan_ops
-from fusionlab.utils.io_utils import save_job, _update_manifest 
-
 from fusionlab.nn import KERAS_DEPS
 from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
-
+from fusionlab.registry import _update_manifest 
 from fusionlab.tools.app.config import SubsConfig 
+from fusionlab.utils.data_utils import nan_ops
+from fusionlab.utils.io_utils import save_job
+from fusionlab.utils.ts_utils import ts_validator 
 
 Dataset = KERAS_DEPS.Dataset
 AUTOTUNE = KERAS_DEPS.AUTOTUNE
@@ -136,6 +136,15 @@ class DataProcessor:
         if self.config.time_col == 'auto' or self.config.categorical_cols == 'auto':
             self.config.auto_detect_columns(self.raw_df)
         
+        self.raw_df= ts_validator(
+            self.raw_df.copy(),
+            dt_col=self.config.time_col,
+            to_datetime='auto',
+            as_index=False,
+            error="raise",
+            return_dt_col=False,
+            verbose=0
+        )
         # --- Feature Selection ---
         base_cols = [
             self.config.lon_col, self.config.lat_col, self.config.time_col,
@@ -160,7 +169,6 @@ class DataProcessor:
 
         # all_cols = base_cols + (self.config.categorical_cols or []) + \
         #             (self.config.numerical_cols or []) + (self.config.future_features or [])
-        
         df_selected = self.raw_df[[
             col for col in set(all_cols) if col in self.raw_df.columns
         ]].copy()
@@ -168,7 +176,7 @@ class DataProcessor:
         # --- Cleaning ---
         self.log("  Cleaning NaN values...")
         df_cleaned = nan_ops(df_selected, ops='sanitize', action='fill')
-        
+
         self._tick(40)
         
         # --- Encoding ---
@@ -203,7 +211,6 @@ class DataProcessor:
         # Ensure time column is datetime for processing
         temp_dt_col = 'datetime_temp'
         try: 
-            
             df_processed[temp_dt_col] = pd.to_datetime(
                 df_processed[self.config.time_col], errors='coerce')
             df_processed['time_numeric'] = (
