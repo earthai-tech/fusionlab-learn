@@ -3,7 +3,7 @@
 # conda env create -f environment.yml
 # Or update an existing environment with:
 # conda env update -f environment.yml --prune
-name: fusionlab
+name: fusionlab-env
 
 channels:
   - conda-forge # Prioritize conda-forge for many data science packages
@@ -22,15 +22,17 @@ dependencies:
   - cython>=0.29        # Often needed for building other packages
 
   # --- Machine Learning & Stats ---
-  - scikit-learn>=1.1   # Core ML tools (preprocessing, model selection)
+  - scikit-learn>=1.2   # Core ML tools (preprocessing, model selection)
   - statsmodels>=0.13   # Time series analysis tools (ACF, Decomp, Tests)
 
   # --- Neural Network Backend ---
-  - tensorflow>=2.10,<2.16 # TF/Keras backend (adjust range as needed)
+  - tensorflow=2.15 # TF/Keras backend (adjust range as needed)
                           # Note: Installs CPU version by default.
                           # For GPU, manual CUDA setup or specific conda packages might be needed.
+                         
   - keras-tuner         # For hyperparameter tuning (forecast_tuner)
   - h5py>=3.2           # For saving Keras models in HDF5 format
+  - pyqt=5.15
 
   # --- Utilities & Plotting ---
   - joblib>=1.2         # For saving/loading scalers/models
@@ -38,6 +40,9 @@ dependencies:
   - seaborn>=0.12       # Statistical plotting (optional, for examples/analysis)
   - tqdm>=4.64          # Progress bars
   - threadpoolctl>=3.1  # Used by scikit-learn etc.
+  - platformdirs
+  # --- CLI and Other Utilities ---
+  - click
 
   # --- Development & Testing ---
   - pytest              # For running tests
@@ -48,3 +53,4 @@ dependencies:
     # - gofast>=...
     # Add any other pip-only dependencies here
     #- <other-pip-package>
+    - -e .

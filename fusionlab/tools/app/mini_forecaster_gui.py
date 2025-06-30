@@ -578,7 +578,7 @@ class Worker(QThread):
     def run(self):
         try:
             self.status_msg.emit("📊 Pre-processing…")
-            self.run_btn.setText("Pre-processing…") 
+            self.run_btn.setText("Preprocessing…") 
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
                 self._p(p / 100, 0, 10) 
             )
@@ -592,7 +592,7 @@ class Worker(QThread):
             if self.isInterruptionRequested():          # ← CHECK #1
                 return
             self.status_msg.emit("🌀 Generating sequences…")
-            self.run_btn.setText("Generating sequences…") 
+            self.run_btn.setText("Sequencing…") 
             self.cfg.progress_callback = lambda p: self.progress_val.emit(
                self._p(p / 100, 10, 30)           # ← divide by 100!
             )      
