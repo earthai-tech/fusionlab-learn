@@ -14,23 +14,24 @@ from typing import Tuple
 from pathlib import Path
 import json  
 
-
-from fusionlab.nn.pinn.utils import ( 
+from ...nn import KERAS_DEPS
+from ...nn.losses import combined_quantile_loss
+from ...nn.models import PIHALNet, TransFlowSubsNet 
+from ...nn.pinn.utils import ( 
     prepare_pinn_data_sequences, format_pinn_predictions, 
 )
-from fusionlab.nn import KERAS_DEPS
-from fusionlab.nn.pinn.op import extract_physical_parameters 
-from fusionlab.nn.utils import make_dict_to_tuple_fn
-from fusionlab.params import LearnableK, LearnableSs, LearnableQ
-from fusionlab.nn.losses import combined_quantile_loss
-from fusionlab.nn.models import PIHALNet, TransFlowSubsNet
-from fusionlab.registry import _update_manifest 
-from fusionlab.tools.app.config import SubsConfig 
-from fusionlab.tools.app.utils import ( 
+from ...nn.pinn.op import extract_physical_parameters 
+from ...nn.utils import make_dict_to_tuple_fn
+from ...params import LearnableK, LearnableSs, LearnableQ
+from ...registry import _update_manifest 
+
+from ...utils.generic_utils import rename_dict_keys, apply_affix 
+
+from .config import SubsConfig 
+from .utils import ( 
     GuiProgress, safe_model_loader, 
     json_ready, _rebuild_from_arch_cfg
 )
-from fusionlab.utils.generic_utils import rename_dict_keys, apply_affix 
 
 Callback =KERAS_DEPS.Callback 
 Dataset = KERAS_DEPS.Dataset

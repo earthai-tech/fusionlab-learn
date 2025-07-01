@@ -105,7 +105,6 @@ def run_augmentation_workflow(
     feature_cols_augment: Optional[List[str]],
     interpolation_kwargs: Optional[Dict[str, Any]],
     augmentation_kwargs: Optional[Dict[str, Any]],
-    savefile: Optional [str], 
     verbose: bool
 ):
     """

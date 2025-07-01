@@ -14,20 +14,19 @@ from typing import Tuple, Callable
 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
-from fusionlab.utils.generic_utils import ( 
-    split_train_test_by_time, 
-    ensure_directory_exists, 
-    normalize_time_column, 
-    ensure_cols_exist
+from ...datasets import fetch_zhongshan_data
+from ...nn import KERAS_DEPS
+from ...nn.pinn.utils import prepare_pinn_data_sequences
+from ...registry import _update_manifest 
+from ...utils.data_utils import nan_ops
+from ...utils.generic_utils import ( 
+    split_train_test_by_time, ensure_directory_exists, 
+    normalize_time_column, ensure_cols_exist
 ) 
-from fusionlab.datasets import fetch_zhongshan_data
-from fusionlab.nn import KERAS_DEPS
-from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
-from fusionlab.registry import _update_manifest 
-from fusionlab.tools.app.config import SubsConfig 
-from fusionlab.utils.data_utils import nan_ops
-from fusionlab.utils.io_utils import save_job
-from fusionlab.utils.ts_utils import ts_validator 
+from ...utils.io_utils import save_job
+from ...utils.ts_utils import ts_validator 
+
+from .config import SubsConfig 
 
 Dataset = KERAS_DEPS.Dataset
 AUTOTUNE = KERAS_DEPS.AUTOTUNE

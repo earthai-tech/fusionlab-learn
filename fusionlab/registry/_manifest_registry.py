@@ -761,6 +761,7 @@ def locate_manifest(
 def _locate_manifest(
     log: Callable[[str], None] = print, 
     _debug_mode: Optional[str] ="silence", 
+    name: Optional[str] = None, 
 ) -> Optional[Path]:
     """Finds the most recent `run_manifest.json` across all possible locations.
 
@@ -800,14 +801,15 @@ def _locate_manifest(
     if _debug_mode =='debug':
         log("Searching for the latest training run...")
     all_manifests = []
-
+    
+    manifest_json = name or "run_manifest.json"
     # 1. Search in the persistent cache directory
     # Instantiate the registry in default (persistent) mode to get the path
     persistent_registry = ManifestRegistry(log_callback=lambda *a: None)
     persistent_path = persistent_registry.root_dir
     if _debug_mode =='debug':
         log(f"  -> Checking persistent cache: {persistent_path}")
-    all_manifests.extend(persistent_path.glob("*/run_manifest.json"))
+    all_manifests.extend(persistent_path.glob(f"*/{manifest_json}"))
 
     # 2. Search in any active temporary session directories
     temp_dir = Path(tempfile.gettempdir())
@@ -817,7 +819,7 @@ def _locate_manifest(
     temp_run_dirs = temp_dir.glob("fusionlab_run_*")
     for run_dir in temp_run_dirs:
         if run_dir.is_dir():
-            all_manifests.extend(run_dir.glob("**/run_manifest.json"))
+            all_manifests.extend(run_dir.glob(f"**/{manifest_json}"))
 
     # 3. Find the most recent manifest among all found files
     if not all_manifests:

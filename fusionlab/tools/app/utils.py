@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import json
 from typing import Callable, Optional, Any, Dict, List 
+import subprocess, sys, platform
 from pathlib import Path
 import math 
 
@@ -91,6 +92,61 @@ class GuiProgress(Callback):
             total_batches = self.total_epochs * self.batches_per_epoch
             pct = math.floor(self._seen_batches / total_batches * 100)
             self.update_fn(pct)
+
+class GUILoggerCallback(Callback):
+    """
+    Simple Keras / Keras-Tuner callback that streams log lines &
+    progress percentages back to the Qt GUI via signals supplied at init.
+    """
+    def __init__(self, log_sig, prog_sig, max_trials: int):
+        super().__init__()
+        self._log = log_sig
+        self._prog = prog_sig
+        self._max_trials = max_trials
+        self._trial_idx = -1           # updated in on_trial_begin
+
+    # ---- Keras-Tuner hooks --------------------------------------------------
+    def on_trial_begin(self, trial):
+        self._trial_idx = trial.trial_id
+        self._log.emit(f"\n── Trial {self._trial_idx + 1}/{self._max_trials} "
+                       f"• HPs: {trial.hyperparameters.values}")
+        # reset intra-trial progress
+        self._prog.emit(int(self._trial_idx * 100 / self._max_trials))
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        msg = (f"      epoch {epoch + 1:>3d} → "
+               f"loss={logs.get('loss', 0):.4f} | "
+               f"val_loss={logs.get('val_loss', 0):.4f}")
+        self._log.emit(msg)
+
+        # coarse progress = finished trials + epoch-fraction of current trial
+        epochs = self.params.get("epochs", 1)
+        percent = ((self._trial_idx +
+                    (epoch + 1) / max(1, epochs)) * 100 / self._max_trials)
+        self._prog.emit(int(percent))
+      
+
+def _detect_gpu() -> str | None:
+    """
+    Very light-weight GPU detection.  Returns a short string or None.
+      • Tries NVIDIA via `nvidia-smi` 
+      • Falls back to Apple Metal (macOS) or ROCm (linux-AMD) heuristics
+    """
+    # NVIDIA 
+    try:
+        out = subprocess.check_output(["nvidia-smi", "--query-gpu=name",
+                                       "--format=csv,noheader"],
+                                       stderr=subprocess.DEVNULL,
+                                       timeout=2, encoding="utf-8")
+        return out.splitlines()[0].strip()
+    except Exception:
+        pass
+    # Apple Metal (M-series) 
+    if sys.platform == "darwin" and platform.machine() == "arm64":
+        return "Apple-Silicon GPU"
+    # Other heuristics could go here …
+    return None
 
 def locate_and_load_manifest(
     manifest_path: Optional[str | os.PathLike] = None,

@@ -33,10 +33,11 @@ from typing import (
 import pandas as pd 
 import numpy as np   
 
-from fusionlab.registry import ManifestRegistry
-from fusionlab.utils.deps_utils import get_versions
-from fusionlab.utils.generic_utils import ensure_directory_exists
-from fusionlab.tools.app._config import setup_environment as _setup_env   
+from ...registry import ManifestRegistry
+from ...utils.deps_utils import get_versions
+from ...utils.generic_utils import ensure_directory_exists
+
+from ._config import setup_environment as _setup_env   
 
 if not globals().get("_FUSIONLAB_ENV_READY", False):
     _setup_env()                           
@@ -228,7 +229,8 @@ class SubsConfig:
     def to_json(
         self,
         path: Optional[Union[str, os.PathLike]] = None,
-        extra: Optional[dict] = None
+        extra: Optional[dict] = None, 
+        name : Optional[str]=None, 
     ) -> Path:
         """Serializes the configuration to a JSON manifest file.
 
@@ -263,6 +265,9 @@ class SubsConfig:
             central registry.
         """
         registry = ManifestRegistry()
+        if name is not None: 
+            registry._MANIFEST_FILENAME =  name 
+            
         manifest_path: Path
 
         if path is None:

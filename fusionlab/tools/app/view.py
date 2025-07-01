@@ -37,23 +37,22 @@ ResultsVisualizer
 """
 
 import os 
-import pandas as pd 
-
 from typing import Optional
+
+import pandas as pd 
 from PyQt5.QtCore import pyqtSignal, QObject
 import matplotlib
 import matplotlib.pyplot as plt # noqa 
 
-from fusionlab.registry import  ManifestRegistry, _update_manifest 
-from fusionlab.utils.generic_utils import save_all_figures, apply_affix 
-from fusionlab.plot.forecast import plot_forecasts, forecast_view 
-from fusionlab.tools.app.config import SubsConfig 
+from ...registry import  ManifestRegistry, _update_manifest 
+from ...utils.generic_utils import save_all_figures, apply_affix 
+from ...plot.forecast import plot_forecasts, forecast_view 
+from .config import SubsConfig 
 
-# FUSIONLAB_HEADLESS=0 python my_script.py
 if os.environ.get("FUSIONLAB_HEADLESS", "1") == "1":
-    matplotlib.use("Agg")        # production / in-GUI mode
+    matplotlib.use("Agg")       
 else:
-    matplotlib.use("Qt5Agg")     # debugging outside the GUI
+    matplotlib.use("Qt5Agg")     
 
 
 class _VisualizerSignals(QObject):                   
@@ -255,3 +254,12 @@ class ResultsVisualizer:
             self.log("  All figures saved successfully.")
         except Exception as e:
             self.log(f"  [Warning] Could not save all figures: {e}")
+
+
+# if __name__=="__main__": # pragma: no-cover 
+#     # FUSIONLAB_HEADLESS=0 python my_script.py
+#     if os.environ.get("FUSIONLAB_HEADLESS", "1") == "1":
+#         matplotlib.use("Agg")        # production / in-GUI mode
+#     else:
+#         matplotlib.use("Qt5Agg")     # debugging outside the GUI
+

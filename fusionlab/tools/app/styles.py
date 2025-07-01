@@ -1,0 +1,340 @@
+# Fusionlab-learn palette 
+PRIMARY   = "#2E3191"   
+SECONDARY = "#F28620"   
+BG_LIGHT  = "#fafafa"
+FG_DARK   = "#1e1e1e"
+PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
+SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
+# ------------------------------------------------------------------ #
+#  Inference-mode toggle
+# ------------------------------------------------------------------ #
+INFERENCE_ON  = PRIMARY
+INFERENCE_OFF = "#dadada"        
+
+# --- Color Palette Definition ---
+# Using a central palette makes themes easier to manage.
+# Inspired by common UI color systems.
+PALETTE = {
+    # Primary Brand Colors
+    "primary": "#2E3191",    # Deep Blue
+    "primary_hover": "#4338ca",
+    "secondary": "#F28620",  # Orange
+    
+    # Dark Theme Colors
+    "dark_bg": "#1e293b",       # slate-800
+    "dark_card_bg": "#334155",  # slate-700
+    "dark_input_bg": "#0f172a",  # slate-900
+    "dark_border": "#475569",     # slate-600
+    "dark_text": "#cbd5e1",      # slate-300
+    "dark_text_title": "#ffffff",
+    "dark_text_muted": "#94a3b8",   # slate-400
+    "dark_reset_bg": "#475569",  # slate-600
+
+    # Light Theme Colors
+    "light_bg": "#f8fafc",      # slate-50
+    "light_card_bg": "#ffffff",
+    "light_input_bg": "#f1f5f9", # slate-100
+    "light_border": "#cbd5e1",    # slate-300
+    "light_text": "#0f172a",      # slate-900
+    "light_text_title": "#2E3191", # Primary color for titles
+    "light_text_muted": "#64748b",  # slate-500
+    "light_reset_bg": "#e2e8f0", # slate-200
+}
+
+FLAB_STYLE_SHEET = f"""
+QMainWindow {{
+    background: {BG_LIGHT};
+    color: {FG_DARK};
+    font-family: 'Helvetica Neue', sans-serif;
+}}
+
+QFrame#card {{
+    background: white;
+    border: 2px solid {PRIMARY};
+    border-radius: 12px;
+}}
+
+QLabel#cardTitle {{
+    font-size: 18px;
+    font-weight: 600;
+    color: {PRIMARY};
+}}
+
+QPushButton {{
+    background: {PRIMARY};
+    color: white;
+    border-radius: 6px;
+    padding: 6px 12px;
+}}
+QPushButton:hover {{
+    background: {SECONDARY};
+}}
+
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+    background: #f0f3ff;
+    border: 1px solid {PRIMARY};
+    border-radius: 4px;
+    padding: 4px;
+}}
+
+QTextEdit {{
+    background: #f6f6f6;
+    border: 1px solid #cccccc;
+}}
+
+QPushButton#reset, QPushButton#stop {{
+    background: #dadada;
+    color: #333;
+}}
+QPushButton#reset:hover:enabled,
+QPushButton#stop:hover:enabled {{
+    background: {SECONDARY};
+    color: white;
+}}
+
+QToolTip {{
+    /* translucent orange bubble, white text, subtle outline */
+    background: {SECONDARY_T70};
+    color: white;
+    border: 1px solid {SECONDARY};
+    border-radius: 4px;
+    padding: 4px 6px;
+}}
+
+QToolTip {{
+    background: {SECONDARY_T70};   /* translucent SECONDARY */
+    color: white;
+    border: 1px solid {SECONDARY};
+    padding: 4px;
+    border-radius: 4px;
+}}
+
+QPushButton#inference {{
+    background: {PRIMARY};      /* overwritten at runtime */
+    color: white;
+    border-radius: 6px;
+    padding: 6px 14px;   /* a tad wider than Stop / Reset */
+}} 
+
+QPushButton#inference:disabled {{
+    background: {INFERENCE_OFF};      /* grey when no manifest yet      */
+    color: #666;
+}}
+
+QFrame#card[inferenceMode="true"] {{
+    border: 2px solid #2E3191; /* Primary blue color */
+}}
+
+# Add this to your main stylesheet string (e.g., at the end)
+
+
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['dark_card_bg']}; 
+}}
+QMessageBox QLabel {{ 
+    color: {PALETTE['dark_text_title']};
+    font-size: 16px;
+}}
+QMessageBox QPushButton {{ /* Styles the "OK" button */
+    background-color: {PALETTE['primary']};
+    color: white;
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px; /* Give the button a decent size */
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {PALETTE['primary_hover']};
+}}
+
+
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['light_bg']};
+}}
+QMessageBox QLabel {{ /* Styles the main text */
+    color: {PALETTE['light_text']};
+    font-size: 14px;
+}}
+QMessageBox QPushButton {{ /* Styles the "Yes" and "No" buttons */
+    background-color: {PALETTE['light_reset_bg']};
+    color: {PALETTE['light_text']};
+    border: 1px solid {PALETTE['light_border']};
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: #d1d5db; /* A slightly darker grey */
+}}
+QMessageBox QPushButton:pressed {{
+    background-color: {PALETTE['primary']};
+    color: white;
+}}
+
+"""
+#
+
+DARK_THEME_STYLESHEET = f"""
+/* Main Window and General Widgets */
+QMainWindow, QWidget {{
+    background-color: {PALETTE['dark_bg']};
+    color: {PALETTE['dark_text']};
+    font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+}}
+/* Main Title Label */
+QLabel#title {{
+    font-size: 28px;
+    font-weight: bold;
+    color: {PALETTE['dark_text_title']};
+    padding: 10px;
+}}
+/* General Description Label */
+QLabel#description {{
+    font-size: 14px;
+    color: {PALETTE['dark_text_muted']};
+}}
+/* Card Frame Styling */
+QFrame#card {{
+    background-color: {PALETTE['dark_card_bg']};
+    border: 1px solid {PALETTE['dark_border']};
+    border-radius: 12px;
+}}
+/* Card Title Label */
+QLabel#cardTitle {{
+    font-size: 18px;
+    font-weight: 600;
+    color: {PALETTE['dark_text_title']};
+    padding-bottom: 5px;
+}}
+/* Card Description Label */
+QLabel#cardDescription {{
+    font-size: 13px;
+    color: {PALETTE['dark_text_muted']};
+}}
+/* Main Action Buttons (Run, Select File) */
+QPushButton {{
+    background-color: {PALETTE['primary']};
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    font-weight: bold;
+    outline: none; /* Remove outline on focus */
+}}
+QPushButton:hover {{
+    background-color: #4338ca; /* Lighter shade of primary for hover */
+}}
+QPushButton:disabled {{
+    background-color: #334155;
+    color: {PALETTE['dark_text_muted']};
+}}
+/* Special Buttons (Reset, Stop) */
+QPushButton#resetButton, QPushButton#stopButton {{
+    background-color: {PALETTE['dark_reset_bg']};
+    color: {PALETTE['dark_text']};
+}}
+QPushButton#resetButton:hover, QPushButton#stopButton:hover {{
+    background-color: {PALETTE['dark_border']};
+}}
+/* Input Fields (QLineEdit, QSpinBox, etc.) */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+    background-color: {PALETTE['dark_input_bg']};
+    border: 1px solid {PALETTE['dark_border']};
+    padding: 8px;
+    border-radius: 6px;
+    color: white;
+}}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+    border: 1px solid {PALETTE['primary']}; /* Highlight on focus */
+}}
+/* Log Output Area */
+QTextEdit {{
+    background-color: #020617; /* Near black for contrast */
+    color: #e2e8f0;
+    border: 1px solid {PALETTE['dark_border']};
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 13px;
+}}
+/* Horizontal Separator Line */
+QFrame#hLine {{
+    border: none;
+    border-top: 1px solid {PALETTE['dark_border']};
+}}
+/* Tooltip Styling */
+QToolTip {{
+    background-color: {PALETTE['secondary']};
+    color: white;
+    border: none;
+    padding: 5px;
+    border-radius: 4px;
+    font-size: 12px;
+}}
+
+QFrame#card[inferenceMode="true"] {{
+    border: 2px solid #F28620; /* Secondary orange color */
+}}
+
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['dark_card_bg']}; 
+}}
+QMessageBox QLabel {{ 
+    color: {PALETTE['dark_text_title']};
+    font-size: 16px;
+}}
+QMessageBox QPushButton {{ /* Styles the "OK" button */
+    background-color: {PALETTE['primary']};
+    color: white;
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px; /* Give the button a decent size */
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {PALETTE['primary_hover']};
+}}
+
+ 
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['dark_card_bg']};
+}}
+QMessageBox QLabel {{ /* Styles the main text */
+    color: {PALETTE['dark_text']};
+    font-size: 14px;
+}}
+QMessageBox QPushButton {{ /* Styles the "Yes" and "No" buttons */
+    background-color: {PALETTE['dark_reset_bg']};
+    color: {PALETTE['dark_text']};
+    border: 1px solid {PALETTE['dark_border']};
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {PALETTE['dark_border']};
+}}
+QMessageBox QPushButton:pressed {{
+    background-color: {PALETTE['primary']};
+    color: white;
+}}
+
+"""
+
+TAB_STYLES = f"""
+QTabBar::tab           {{             
+    background : #F9F7F5;
+    color      : black;
+    padding    : 6px 14px;             
+    border-top-left-radius  : 4px;
+    border-top-right-radius : 4px;
+}}
+QTabBar::tab:selected {{              
+    background : {SECONDARY};
+    color      : white;
+}}
+QTabBar::tab:hover    {{             
+    background : {SECONDARY};
+    color      : white;
+}}
+"""
