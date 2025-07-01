@@ -76,7 +76,7 @@ class DataProcessor:
         if callable(cb):
             cb(percent)
             
-    def load_data(self) -> pd.DataFrame:
+    def load_data(self, stop_check=None ) -> pd.DataFrame:
         """
         Handles Step 1: Loading the dataset from a file or by fetching it.
         """
@@ -119,11 +119,14 @@ class DataProcessor:
                 "artifacts",
                 {"raw_csv": os.path.basename(save_path)})   # NEW
         
+        if stop_check and stop_check():
+            raise InterruptedError("Data loading aborted.")
+            
         self._tick(20) 
         
         return self.raw_df
 
-    def preprocess_data(self) -> pd.DataFrame:
+    def preprocess_data(self, stop_check =None ) -> pd.DataFrame:
         """
         Handles Steps 2-4: Feature selection, cleaning, encoding, and scaling.
         """
@@ -145,6 +148,9 @@ class DataProcessor:
             return_dt_col=False,
             verbose=0
         )
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Date time series checking aborted.")
         # --- Feature Selection ---
         base_cols = [
             self.config.lon_col, self.config.lat_col, self.config.time_col,
@@ -166,6 +172,9 @@ class DataProcessor:
         all_cols = base_cols + cat_cols + num_cols + fut_cols
         
         ensure_cols_exist(self.raw_df, *all_cols, error ='raise')
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Columns checking aborted.")
 
         # all_cols = base_cols + (self.config.categorical_cols or []) + \
         #             (self.config.numerical_cols or []) + (self.config.future_features or [])
@@ -204,6 +213,9 @@ class DataProcessor:
                 #     encoded_data, columns=encoded_cols, index=df_cleaned.index)
             ], axis=1)
         
+        if stop_check and stop_check():
+            raise InterruptedError("Data preprocessing aborted.")
+            
         self._tick(60)
         
         # --- Time Coordinate and Normalization ---
@@ -247,6 +259,9 @@ class DataProcessor:
             },
         )
         
+        if stop_check and stop_check():
+            raise InterruptedError("Data scaling aborted.")
+            
         self.scaler = MinMaxScaler()
         # Filter to only scale columns that actually exist
         existing_cols_to_scale = [
@@ -290,6 +305,9 @@ class DataProcessor:
                 self.config.registry_path, "artifacts", artefacts)    
             
         
+        if stop_check and stop_check():
+            raise InterruptedError("Processing aborted.")
+            
         self._tick(100)
         return self.processed_df
 
@@ -320,12 +338,12 @@ class DataProcessor:
                  
         return self.train_df, self.test_df
 
-    def run(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def run(self, stop_check =None ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Executes the full data processing pipeline from loading to splitting.
         """
-        self.load_data()
-        return self.preprocess_data()
+        self.load_data(stop_check = stop_check) 
+        return self.preprocess_data(stop_check = stop_check)
         # Henceforth manage by SequenceGenerator 
         # self.split_data()
         # return self.train_df, self.test_df
@@ -370,15 +388,16 @@ class SequenceGenerator:
         Returns:
             A tuple of (train_dataset, validation_dataset).
         """
-        self._split_data(processed_df)
+        self._split_data(processed_df, stop_check = stop_check)
         self._generate_sequences(
             self.train_df, static_features_encoded, 
             stop_check= stop_check 
         )
-        return self._create_tf_datasets()
+        return self._create_tf_datasets(stop_check = stop_check )
 
     def _split_data(
-            self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+            self, df: pd.DataFrame, stop_check =None 
+            ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Handles Step 5: Splitting the data into training and test sets
         robustly.
@@ -442,6 +461,9 @@ class SequenceGenerator:
                 f"Training data is empty after splitting on year <="
                 f" {self.config.train_end_year}."
             )
+        if stop_check and stop_check():
+            raise InterruptedError("Split data process aborted.")
+            
         self._tick(10)
         
         return self.train_df, self.test_df
@@ -512,8 +534,10 @@ class SequenceGenerator:
                 self.config.registry_path, "artifacts", 
                 {"coord_scaler": coord_sc_name}
             )
+        if stop_check and stop_check():
+            raise InterruptedError("Sequence generation aborted.")
 
-    def _create_tf_datasets(self) -> Tuple[Any, Any]:
+    def _create_tf_datasets(self, stop_check =None ) -> Tuple[Any, Any]:
         """Creates and splits tf.data.Dataset objects."""
         if self.inputs_train is None:
             raise RuntimeError("Sequences must be generated before creating datasets.")
@@ -560,6 +584,10 @@ class SequenceGenerator:
         
         self.log(f"  Training dataset created with {train_size} samples.")
         self.log(f"  Validation dataset created with {val_size} samples.")
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Train/Val datasets creation aborted.")
+            
         self._tick(100)
         return train_dataset, val_dataset
 

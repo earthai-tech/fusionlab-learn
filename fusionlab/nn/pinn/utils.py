@@ -81,6 +81,7 @@ def format_pinn_predictions(
     savefile: Optional[str] = None,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     name: Optional[str]=None, 
+    stop_check: Callable[[], bool] = None, 
     verbose: int = 0,
     
     **kwargs
@@ -224,6 +225,7 @@ def format_pinn_predictions(
         name =name, 
         verbose=verbose,
         _logger = _logger, 
+        stop_check = stop_check, 
         **kwargs 
     )
 
@@ -252,6 +254,7 @@ def format_pihalnet_predictions(
     name: Optional[str]=None, 
     verbose: int = 0, 
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None, 
+    stop_check : Callable [[], bool] =None, 
     **kwargs
 ) -> pd.DataFrame:
     """
@@ -440,6 +443,9 @@ def format_pihalnet_predictions(
                 f"Failed to generate predictions from model: {e}"
             ) from e
     
+        if stop_check and stop_check():
+            raise InterruptedError("Model prediction aborted.")
+        
     # Ensure predictions are NumPy arrays
     processed_outputs = {}
     for key, val_tensor in pihalnet_outputs.items():
@@ -485,7 +491,10 @@ def format_pihalnet_predictions(
              " filtering. Returning empty DF.",
              level=1, verbose=verbose, logger=_logger)
         return pd.DataFrame()
-
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Target confifuration aborted.")
+        
     # --- 3. Prepare Base DataFrame (Sample Index and Forecast Step) ---
     # Infer num_samples and horizon from the first available target
     first_pred_key = list(targets_to_process.keys())[0]
@@ -552,6 +561,10 @@ def format_pihalnet_predictions(
             vlog("  `model_inputs['coords']` not available."
                  " Skipping coordinate columns.",
                  level=2, verbose=verbose, logger=_logger)
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Coordinates transformation aborted.")
+            
 
     # --- 5. Add Additional Static/ID Columns ---
     # These are static per original sample, so they need to be
@@ -699,6 +712,9 @@ def format_pihalnet_predictions(
                     f"predictions have {num_samples} samples. Skipping ID columns.",
                     level=2, verbose=verbose, logger=_logger
                 )
+        if stop_check and stop_check():
+            raise InterruptedError("Dyn/Stat/Fut arrays processing aborted.")
+            
     elif verbose >= 4:
         vlog("  No `ids_data_array` provided, skipping additional static/ID columns.",
              level=4, verbose=verbose, logger=_logger)
@@ -789,7 +805,10 @@ def format_pihalnet_predictions(
                 vlog(f"  Scaler info incomplete for {base_name}."
                      " Skipping inverse transform.",
                      level=3, verbose=verbose, logger=_logger)
-
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Target processing aborted.")
+            
         # --- 6d. Coverage Score (applied per target) ---
         if ( 
                 evaluate_coverage 
@@ -815,7 +834,9 @@ def format_pihalnet_predictions(
                   vlog(f"Skipping coverage computation due to: {e}",
                       level=2, verbose=verbose, logger=_logger
                 )
-
+            
+            if stop_check and stop_check():
+                raise InterruptedError("Metric calculus aborted.")
     # --- 7. Concatenate all DataFrames ---
     final_df = pd.concat(all_data_dfs, axis=1)
 
@@ -837,6 +858,9 @@ def format_pihalnet_predictions(
 
     vlog("Model prediction formatting to DataFrame complete.",
          level=3, verbose=verbose, logger=_logger)
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Format prediction generation aborted.")
     
     return final_df
 
@@ -1375,7 +1399,7 @@ def prepare_pinn_data_sequences(
         group_df = grouped_data.get_group(group_key) if group_id_cols else df_proc
         
         if stop_check and stop_check():
-            raise InterruptedError("Sequence generation aborted by user")
+            raise InterruptedError("Sequence generation aborted.")
         
         key_str = group_key if group_key is not None else "<Full Dataset>"
         # ── progress: 0 → 50 %

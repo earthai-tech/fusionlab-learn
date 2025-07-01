@@ -711,6 +711,7 @@ def forecast_view(
     dt_col: Optional[str] = None,
     show: bool =True, 
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    stop_check: Callable [[], bool] =None, 
     verbose: int = 1,
     
     **kws
@@ -851,6 +852,9 @@ def forecast_view(
         forecast_df, value_prefixes=value_prefixes
     )
     
+    if stop_check and stop_check():
+        raise InterruptedError("View configuration aborted.")
+        
     if is_q =='deterministic': 
         warnings.warn (
             "Deterministic prediction is detected. It is recommended" 
@@ -887,6 +891,9 @@ def forecast_view(
         verbose=verbose, 
         _logger =_logger, 
     )
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Format plot dataframe aborted.")
 
     plot_structure = _parse_wide_df_columns(df_wide, value_prefixes)
 
@@ -945,8 +952,12 @@ def forecast_view(
         grid_props=(grid_props or {'linestyle': ':', 'alpha': 0.7}),
         verbose=verbose
     )
-
+    
     for prefix in value_prefixes:
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Forecast visualization aborted.")
+            
         num_pred_cols = len(quantiles_to_plot)
         num_actual_cols = 1 if kind == 'dual' else 0
         if max_cols == 'auto':
@@ -1028,6 +1039,7 @@ def plot_forecasts(
     show: bool=True, 
     verbose: int = 0,
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    stop_check: Callable [[], bool] =None, 
     **plot_kwargs: Any
     ) -> None:
     """
@@ -1244,7 +1256,10 @@ def plot_forecasts(
             "`forecast_df` must contain 'sample_idx' and 'forecast_step' "
             "columns."
         )
-
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Plotting aborted.")
+        
     # --- Data Preparation & Inverse Transform ---
     # Work on a copy to avoid modifying the original DataFrame
     df_to_plot = forecast_df.copy()
@@ -1331,7 +1346,9 @@ def plot_forecasts(
             vlog("    Inverse transformation applied.", 
                  level=5, verbose=verbose, logger=_logger
                  )
-
+        if stop_check and stop_check():
+            raise InterruptedError("Quantile plot configuration aborted.")
+            
     # --- Select Samples/Items to Plot ---
     unique_sample_ids = df_to_plot['sample_idx'].unique()
     selected_ids_for_plot = []
@@ -1394,6 +1411,9 @@ def plot_forecasts(
             for o_idx in range(output_dim):
                 if plot_idx >= len(axes_flat): break # Should not happen
                 ax = axes_flat[plot_idx]
+                
+                if stop_check and stop_check():
+                    raise InterruptedError("Temporal plot aborted.")
 
                 title = f"Sample ID: {s_idx}"
                 if output_dim > 1:
@@ -1477,7 +1497,7 @@ def plot_forecasts(
         # plt.show()
 
     elif kind == "spatial":
-        
+    
         spatial_x_col = None 
         spatial_y_col =None 
         
@@ -1590,6 +1610,10 @@ def plot_forecasts(
         grid_props = grid_props or {'linestyle': ':', 'alpha': 0.7}
         for step in steps_to_plot:
             step_df = df_to_plot[df_to_plot['forecast_step'] == step]
+            
+            if stop_check and stop_check():
+                raise InterruptedError("Spatial plot aborted.")
+                
             if step_df.empty:
                 continue
             for o_idx in range(output_dim):
@@ -1706,6 +1730,9 @@ def plot_forecasts(
             f"Unsupported `kind`: '{kind}'. "
             "Choose 'temporal' or 'spatial'."
             )
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Plot forecast aborted.")
         
     vlog("Forecast visualization complete.", level=3, 
          verbose=verbose, logger=_logger)

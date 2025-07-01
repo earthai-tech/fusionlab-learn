@@ -95,7 +95,7 @@ class ResultsVisualizer:
                 as_list=True  # <- append, don’t overwrite
             )
             
-    def run(self, forecast_df: Optional[pd.DataFrame]):
+    def run(self, forecast_df: Optional[pd.DataFrame], stop_check =None ):
         """
         Executes the full visualization and saving pipeline.
 
@@ -110,16 +110,16 @@ class ResultsVisualizer:
             return
 
         self.log("Step 9: Visualizing Forecasts...")
-        self._plot_main_forecasts(forecast_df)
+        self._plot_main_forecasts(forecast_df, stop_check=stop_check )
 
         self.log("Step 10: Finalizing and Saving All Figures...")
-        self._run_forecast_view(forecast_df)
+        self._run_forecast_view(forecast_df, stop_check =stop_check  )
         # self._save_all_figures() # get the exact name
         
         self.log("\n--- WORKFLOW COMPLETED ---")
         self.log(f"All outputs are in: {self.config.run_output_path}")
 
-    def _plot_main_forecasts(self, df: pd.DataFrame):
+    def _plot_main_forecasts(self, df: pd.DataFrame, stop_check =None ):
         """Generates the primary spatial plots for subsidence and GWL."""
         
         coord_cols = ['coord_x', 'coord_y']
@@ -148,6 +148,10 @@ class ResultsVisualizer:
         )
         png_base_subs = apply_affix(
             png_base_subs, label=self.kind, affix_prefix='.')
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Forecasting plot configuration aborted.")
+            
         plot_forecasts(
             forecast_df=df,
             target_name=self.config.subsidence_col,
@@ -164,7 +168,8 @@ class ResultsVisualizer:
             },
             _logger= self.log , 
             savefig=png_base_subs, 
-            save_fmts=['.png', '.pdf']
+            save_fmts=['.png', '.pdf'], 
+            stop_check = stop_check, 
         )
         png_png = f"{png_base_subs}.png" 
         self.log (f"PNG: png_base_subs= {png_png}")
@@ -200,12 +205,13 @@ class ResultsVisualizer:
                 _logger = self.log , 
                 savefig= png_base_gwl,  
                 save_fmts= ['.png', '.pdf'], 
+                stop_check = stop_check 
             )
             png_gwl_png  = f"{png_base_gwl}.png"
             self._note(os.path.basename(png_gwl_png))  
             VIS_SIGNALS.figure_saved.emit(png_gwl_png)  
         
-    def _run_forecast_view(self, df: pd.DataFrame):
+    def _run_forecast_view(self, df: pd.DataFrame, stop_check =None ):
         """Runs the yearly comparison plot."""
         try:
             self.log("  Generating yearly forecast comparison view...")
@@ -226,7 +232,8 @@ class ResultsVisualizer:
                 savefig=save_base, 
                 save_fmts=['.png', '.pdf'], 
                 verbose=self.config.verbose, 
-                _logger = self.log
+                _logger = self.log, 
+                stop_check= stop_check 
             )
             png_forecast_save= f"{save_base}.png"
             self._note(os.path.basename(png_forecast_save))  

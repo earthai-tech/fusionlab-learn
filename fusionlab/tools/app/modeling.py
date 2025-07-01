@@ -9,7 +9,7 @@ forecasting workflow of the subsidence GUI application.
 
 import os
 import pandas as pd
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable 
 from typing import Tuple
 from pathlib import Path
 import json  
@@ -62,20 +62,22 @@ class ModelTrainer:
         self,
         train_dataset: Any,
         val_dataset: Any,
-        input_shapes: Dict[str, Tuple]
+        input_shapes: Dict[str, Tuple], 
+        stop_check: Callable [[], bool]=None, 
     ) -> Any:
         """
         Executes the full model training pipeline.
         """
         self.log("Step 7: Defining, Compiling, and Training the Model...")
-        self._define_and_compile_model(input_shapes)
-        self._train_model(train_dataset, val_dataset)
+        self._define_and_compile_model(input_shapes, stop_check = stop_check )
+        self._train_model(train_dataset, val_dataset, stop_check =stop_check )
         if self.config.bypass_loading: 
             return self.model  # dont load the best model 
         else: 
-           return self._load_best_model()
+           return self._load_best_model(stop_check = stop_check )
 
-    def _define_and_compile_model(self, input_shapes: Dict[str, Tuple]):
+    def _define_and_compile_model(
+            self, input_shapes: Dict[str, Tuple], stop_check=None ):
         """Defines the model architecture and compiles it."""
         self.log("  Defining model architecture...")
         
@@ -107,6 +109,9 @@ class ModelTrainer:
             'max_window_size': self.config.time_steps,
         }
         
+        if stop_check and stop_check():
+            raise InterruptedError("Model parameters configuration aborted.")
+            
         physics_loss_weights = {}
         if ModelClass is TransFlowSubsNet:
             
@@ -145,6 +150,9 @@ class ModelTrainer:
             'gwl_pred': self.config.weight_gwl_pred
         }
         
+        if stop_check and stop_check():
+            raise InterruptedError("Model compilation aborted.")
+            
         self.model.compile(
             optimizer=Adam(learning_rate=self.config.learning_rate),
             loss=loss_dict,
@@ -154,7 +162,7 @@ class ModelTrainer:
         )
         self.log("  Model compiled successfully.")
 
-    def _train_model(self, train_dataset, val_dataset):
+    def _train_model(self, train_dataset, val_dataset, stop_check =None ):
         self.log(f"  Starting model training for {self.config.epochs} epochs...")
     
         # ── 1.  Decide checkpoint format / path....
@@ -198,6 +206,9 @@ class ModelTrainer:
             monitor="val_loss",
             **ckpt_kwargs,              # ← inject format if 'tf'
         )
+        if stop_check and stop_check():
+            raise InterruptedError("Model checkpoint configuration  aborted.")
+            
         self.log(f"  Model checkpoints will be saved to: {checkpoint_path}")
         
         self.checkpoint_path = checkpoint_path 
@@ -225,9 +236,14 @@ class ModelTrainer:
         else:
                 #   b) no GUI → honour user's requested verbosity
             fit_verbose = self.config.fit_verbose
-
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Tensor building aborted.")
+            
         train_dataset , val_dataset = self._build_tensor_inputs(
             train_dataset, val_dataset)
+        
+            
         #  launch training --
         self.history = self.model.fit(
             train_dataset,
@@ -246,6 +262,8 @@ class ModelTrainer:
                 "config": safe_cfg,
             },
         )
+        if stop_check and stop_check():
+            raise InterruptedError("Model reconfiguration aborted.")
         # save history & update manifest 
         try:
             hist_file = f"{self.config.model_name}.training_history.csv"
@@ -264,6 +282,8 @@ class ModelTrainer:
             self.log(f"  [WARN] Could not write history file: {err}")
         
         # Export physical parameters
+        if stop_check and stop_check():
+            raise InterruptedError("Physical parameters extraction aborted.")
         try: 
             extract_physical_parameters (
                 self.model, filename = os.path.join (
@@ -274,11 +294,13 @@ class ModelTrainer:
             
             self.log("Successfully exported parameters to:"
                   f"{self.config.run_output_path}")
-            
+   
         except Exception as err: 
             self.log(f"  [WARN] Failed to export physical parameters: {err}")
+        
+        
             
-    def _load_best_model(self) -> Any:
+    def _load_best_model(self, stop_check =None ) -> Any:
         """
         Loads the best model from the checkpoint after training. This method
         is robust to different Keras saving formats.
@@ -313,7 +335,10 @@ class ModelTrainer:
             # Add input_shapes to the arch_cfg so the loader can build the model
             # Create a build function that reconstructs the model.
             build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
-
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Model load mechanism aborted.")
+            
         # Call the safe loader utility
         best_model = safe_model_loader(
             self.checkpoint_path,
@@ -326,8 +351,9 @@ class ModelTrainer:
         return best_model
 
 
-    def _build_tensor_inputs (self, train_dataset, val_dataset ): 
+    def _build_tensor_inputs (self, train_dataset, val_dataset): 
         #  Build mapper once – right after you know the dict keys
+        
         feature_keys = [
             "coords",            # (B, T, 3)
             "static_features",   # (B, D_stat)               – may be None
@@ -357,7 +383,7 @@ class ModelTrainer:
             }
         
         shapes = {k: v.shape for k, v in sample_inputs.items()}
-
+      
         # persist shapes so safe_model_loader can do model.build(input_shapes)
         _update_manifest(
             self.config.registry_path,
@@ -395,7 +421,8 @@ class Forecaster:
         test_df: pd.DataFrame,
         val_dataset: Any,
         static_features_encoded: List[str],
-        coord_scaler: Any
+        coord_scaler: Any, 
+        stop_check =None, 
     ) -> Optional[pd.DataFrame]:
         """
         Executes the full forecasting and results formatting pipeline.
@@ -414,7 +441,8 @@ class Forecaster:
         self.log("Step 8: Forecasting on Test Data...")
         
         inputs_test, targets_test = self._prepare_test_sequences(
-            test_df, val_dataset, static_features_encoded, coord_scaler
+            test_df, val_dataset, static_features_encoded, coord_scaler, 
+            stop_check = stop_check 
         )
 
         if inputs_test is None:
@@ -423,7 +451,9 @@ class Forecaster:
             return None
 
         return self._predict_and_format(
-            model, inputs_test, targets_test, coord_scaler)
+            model, inputs_test, targets_test, coord_scaler, 
+            stop_check = stop_check 
+            )
     
     def _tick(self, percent: int) -> None:
         """
@@ -435,7 +465,8 @@ class Forecaster:
             cb(percent)
             
     def _prepare_test_sequences(
-        self, test_df, val_dataset, static_features, coord_scaler
+        self, test_df, val_dataset, static_features, coord_scaler, 
+        stop_check =None 
     ) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
         Prepares test sequences, with a fallback to the validation set.
@@ -465,7 +496,8 @@ class Forecaster:
                 # return_coord_scaler= True, # we will use train scaler
                 progress_hook= hook,  
                 mode=self.config.mode, 
-                _logger = self.log 
+                _logger = self.log , 
+                stop_check= stop_check, 
             )
             if targets['subsidence'].shape[0] == 0:
                 raise ValueError("No test sequences were generated.")
@@ -504,7 +536,8 @@ class Forecaster:
         self._tick(80)
 
     def _predict_and_format(
-        self, model, inputs_test, targets_test, coord_scaler
+        self, model, inputs_test, targets_test, coord_scaler, 
+        stop_check = None, 
     ) -> Optional[pd.DataFrame]:
         """
         Runs model prediction and formats the output into a DataFrame.
@@ -536,7 +569,8 @@ class Forecaster:
             coord_scaler= coord_scaler, 
             _logger = self.log, 
             savefile = self.config.run_output_path, 
-            name = self.kind 
+            name = self.kind, 
+            stop_check= stop_check, 
         )
         
         if forecast_df is not None and not forecast_df.empty:

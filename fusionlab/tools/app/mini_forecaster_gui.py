@@ -1524,7 +1524,8 @@ class TrainingThread(QThread):
                 self.cfg, self.log_msg.emit, 
                 raw_df=self.edited_df  
             )
-            df_proc   = processor.run()
+            df_proc   = processor.run(
+                stop_check=self.isInterruptionRequested) 
             self.progress_val.emit(10)
 
             if self.isInterruptionRequested():          # ← CHECK #1
@@ -1555,7 +1556,8 @@ class TrainingThread(QThread):
             sample_inputs, _ = next(iter(train_ds))
             shapes = {k: v.shape for k, v in sample_inputs.items()}
             model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
-                train_ds, val_ds, shapes
+                train_ds, val_ds, shapes, 
+                stop_check = self.isInterruptionRequested
             )
             self.progress_val.emit(train_range[1])          # 90 %
 
@@ -1572,12 +1574,15 @@ class TrainingThread(QThread):
                 val_dataset=val_ds,
                 static_features_encoded=processor.static_features_encoded,
                 coord_scaler=seq_gen.coord_scaler,
+                stop_check= self.isInterruptionRequested
             )
             self._write_coverage_result () 
             self.status_msg.emit("✔ Forecast finished.")
             self.progress_val.emit(100)
             
-            ResultsVisualizer(self.cfg, self.log_msg.emit).run(forecast_df)
+            ResultsVisualizer(self.cfg, self.log_msg.emit).run(
+                forecast_df, stop_check= self.isInterruptionRequested 
+            )
             
         except Exception as e:
             self.log_msg.emit(f"❌ {e}")
@@ -1656,7 +1661,7 @@ class InferenceThread(QThread):
         super().__init__(parent)
         self.manifest_path = manifest_path
         self.edited_df     = edited_df 
-        # self.parent_widget = parent
+        
 
     def run(self):
         """
@@ -1681,11 +1686,15 @@ class InferenceThread(QThread):
         Any uncaught exception is converted to a user-visible
         message while keeping the application alive.
         """
+        msg = "✔ Inference finished."
         try:
             # Create the pipeline using the manifest path.
             # The log callback is now passed during initialization.
             self.status_msg.emit("🤖 Inferring...")
             self.log_msg.emit("⏳ Prediction Pipeline triggered...")
+            if self.isInterruptionRequested():          # ← CHECK #2
+                return
+            
             pipe = PredictionPipeline(
                 manifest_path=self.manifest_path,
                 log_callback=self.log_msg.emit,
@@ -1698,13 +1707,20 @@ class InferenceThread(QThread):
 
             # Execute the pipeline with the in-memory DataFrame.
             # We assume the `run` method is updated to accept a DataFrame.
-            pipe.run(validation_data=self.edited_df)
-        
-            self.status_msg.emit("✔ Inference finished.")
-            self.log_msg.emit("✔ Inference finished.")
+            pipe.run(
+                validation_data=self.edited_df,
+                stop_check = self.isInterruptionRequested 
+                )
+            
+            if self.isInterruptionRequested():          # ← CHECK #2
+                return
+            
+            self.status_msg.emit(msg)
+            self.log_msg.emit(msg)
             self.progress_val.emit(100)
 
         except Exception as err:
+            self.log_msg.emit(f"❌ {err}")
             self.error_occurred.emit(str(err))
 
 class ToastNotification(QFrame):

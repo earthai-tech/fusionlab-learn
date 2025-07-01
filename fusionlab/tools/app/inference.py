@@ -235,7 +235,9 @@ class PredictionPipeline:
                 f"{', '.join(not_found[:10])}{' …' if len(not_found) > 10 else ''}"
             )
 
-    def run(self, validation_data: Union [str, pd.DataFrame] ):
+    def run(self, validation_data: Union [str, pd.DataFrame], 
+            stop_check =None 
+        ):
         """
         Executes the full prediction workflow on a new validation dataset.
         """
@@ -248,15 +250,16 @@ class PredictionPipeline:
         
         # 2. Process the new validation data
         processed_val_df, static_features_encoded = self._process_validation_data(
-            validation_data)
+            validation_data, stop_check = stop_check, 
+            )
         self._tick(30)
         
         # 3. Generate sequences for the validation data
         self.log("Generating validation sequences …")
     
         val_inputs, val_targets = self._generate_validation_sequences(
-            processed_val_df, static_features_encoded 
-            
+            processed_val_df, static_features_encoded,
+            stop_check = stop_check,  
         )
         self._tick(80)
         
@@ -272,7 +275,8 @@ class PredictionPipeline:
                 }
              )
         forecast_df = forecaster._predict_and_format(
-            self.model, val_inputs, val_targets, self.coord_scaler
+            self.model, val_inputs, val_targets, self.coord_scaler, 
+            stop_check = stop_check , 
         )
         self._tick(95)
         
@@ -281,7 +285,7 @@ class PredictionPipeline:
             self.config, self.log, 
             kind = self.kind
         )
-        visualizer.run(forecast_df)
+        visualizer.run(forecast_df, stop_check = stop_check )
         if self.model_path: 
             inference_ref = 'unset'
             if isinstance(validation_data, str): 
@@ -297,7 +301,8 @@ class PredictionPipeline:
         self._tick(100)
         
     def _process_validation_data(
-        self, validation_data: str
+        self, validation_data: str,
+        stop_check = None, 
     ) -> Tuple[pd.DataFrame, List[str]]:
         """Loads and processes the new validation data using saved scalers."""
         msg ="Processing new validation "
@@ -324,12 +329,16 @@ class PredictionPipeline:
             return_dt_col=False,
             verbose=0
         )
+        
         # Use a temporary DataProcessor to apply transformations
         # This assumes DataProcessor can be initialized and used this way.
         temp_processor = DataProcessor(self.config, kind =self.kind)
         temp_processor.encoder = self.encoder
         temp_processor.scaler = self.scaler
         
+        if stop_check and stop_check():
+            raise InterruptedError("Preprocessing aborted.")
+            
         # A simplified transform-only logic
         df_cleaned = nan_ops(val_df, ops='sanitize', action='fill')
         
@@ -363,6 +372,8 @@ class PredictionPipeline:
                 year_col= self.config.time_col,
                 drop_orig= True 
             )
+        if stop_check and stop_check():
+            raise InterruptedError("Processing aborted.")
         # df_processed['time_numeric'] = df_processed[
         #     self.config.time_col] - df_processed[self.config.time_col].min()
         cols_to_scale = [
