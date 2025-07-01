@@ -217,11 +217,18 @@ class TunerDialog(QDialog):
         bar          = QHBoxLayout()
         self.dev_btn = QPushButton("Developer")
         self.easy_btn = QPushButton("Easy Setup")
-    
-        # ‣ make them the same size
-        for b in (self.dev_btn, self.easy_btn):
-            b.setMinimumWidth(120)        # pick any width you like
-            b.setCheckable(True)
+        
+        # Tool-tips
+        self.dev_btn.setToolTip(
+            "Power-user view • Write or paste any"
+            " valid Python dictionary for the "
+            "search-space and adjust every tuner knob manually."
+        )
+        self.easy_btn.setToolTip(
+            "Wizard-style assistant • Fill in a few"
+            " ranges and let the GUI generate "
+            "the full search-space and tuner settings for you."
+        )
     
         # ‣ colour logic: PRIMARY when *not* selected, SECONDARY when selected
         sheet = f"""
@@ -237,10 +244,13 @@ class TunerDialog(QDialog):
             background : {SECONDARY};
         }}
         """
+        # fixed width & checkable styling
+        for btn in (self.dev_btn, self.easy_btn):
+            btn.setMinimumWidth(120)
+            btn.setCheckable(True)
+            btn.setStyleSheet(sheet)
+            bar.addWidget(btn)
 
-        self.dev_btn.setStyleSheet(sheet)
-        self.easy_btn.setStyleSheet(sheet)
-    
         # ‣ mutual exclusivity
         grp = QButtonGroup(self)
         grp.setExclusive(True)
