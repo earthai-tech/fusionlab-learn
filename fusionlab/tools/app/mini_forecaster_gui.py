@@ -1692,7 +1692,7 @@ class InferenceThread(QThread):
             # The log callback is now passed during initialization.
             self.status_msg.emit("🤖 Inferring...")
             self.log_msg.emit("⏳ Prediction Pipeline triggered...")
-            if self.isInterruptionRequested():          # ← CHECK #2
+            if self.isInterruptionRequested():          # ← CHECK #1
                 return
             
             pipe = PredictionPipeline(

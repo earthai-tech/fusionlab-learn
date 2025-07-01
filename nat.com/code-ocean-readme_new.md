@@ -142,8 +142,9 @@ The `main_script.py` is configured to find the Zhongshan data:
     `fusionlab.datasets.fetch_zhongshan_data()` to download a smaller,
     representative sample.
 
-> **For Reviewers:** To use the full dataset from the paper, please
-> upload it as `zhongshan_500k.csv` to the root `data/` folder.
+> **For Reviewers:** The full dataset (≈ 4 million records) can be obtained 
+> by contacting the corresponding author. A 500 k-row sample is included—please
+> place it in the project root as `data/zhongshan_500k.csv`.
 
 ### Running the Script
 
