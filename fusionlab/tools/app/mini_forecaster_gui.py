@@ -188,476 +188,180 @@ QMessageBox QPushButton:hover {{
     background-color: {PALETTE['primary_hover']};
 }}
 
+
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['light_bg']};
+}}
+QMessageBox QLabel {{ /* Styles the main text */
+    color: {PALETTE['light_text']};
+    font-size: 14px;
+}}
+QMessageBox QPushButton {{ /* Styles the "Yes" and "No" buttons */
+    background-color: {PALETTE['light_reset_bg']};
+    color: {PALETTE['light_text']};
+    border: 1px solid {PALETTE['light_border']};
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: #d1d5db; /* A slightly darker grey */
+}}
+QMessageBox QPushButton:pressed {{
+    background-color: {PALETTE['primary']};
+    color: white;
+}}
+
 """
 #
-# --- Polished Dark Theme Stylesheet ---
-DARK_THEME_STYLESHEET = f"""
-    /* Main Window and General Widgets */
-    QMainWindow, QWidget {{
-        background-color: {PALETTE['dark_bg']};
-        color: {PALETTE['dark_text']};
-        font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
-    }}
-    /* Main Title Label */
-    QLabel#title {{
-        font-size: 28px;
-        font-weight: bold;
-        color: {PALETTE['dark_text_title']};
-        padding: 10px;
-    }}
-    /* General Description Label */
-    QLabel#description {{
-        font-size: 14px;
-        color: {PALETTE['dark_text_muted']};
-    }}
-    /* Card Frame Styling */
-    QFrame#card {{
-        background-color: {PALETTE['dark_card_bg']};
-        border: 1px solid {PALETTE['dark_border']};
-        border-radius: 12px;
-    }}
-    /* Card Title Label */
-    QLabel#cardTitle {{
-        font-size: 18px;
-        font-weight: 600;
-        color: {PALETTE['dark_text_title']};
-        padding-bottom: 5px;
-    }}
-    /* Card Description Label */
-    QLabel#cardDescription {{
-        font-size: 13px;
-        color: {PALETTE['dark_text_muted']};
-    }}
-    /* Main Action Buttons (Run, Select File) */
-    QPushButton {{
-        background-color: {PALETTE['primary']};
-        color: white;
-        border: none;
-        padding: 10px 15px;
-        border-radius: 6px;
-        font-weight: bold;
-        outline: none; /* Remove outline on focus */
-    }}
-    QPushButton:hover {{
-        background-color: #4338ca; /* Lighter shade of primary for hover */
-    }}
-    QPushButton:disabled {{
-        background-color: #334155;
-        color: {PALETTE['dark_text_muted']};
-    }}
-    /* Special Buttons (Reset, Stop) */
-    QPushButton#resetButton, QPushButton#stopButton {{
-        background-color: {PALETTE['dark_reset_bg']};
-        color: {PALETTE['dark_text']};
-    }}
-    QPushButton#resetButton:hover, QPushButton#stopButton:hover {{
-        background-color: {PALETTE['dark_border']};
-    }}
-    /* Input Fields (QLineEdit, QSpinBox, etc.) */
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-        background-color: {PALETTE['dark_input_bg']};
-        border: 1px solid {PALETTE['dark_border']};
-        padding: 8px;
-        border-radius: 6px;
-        color: white;
-    }}
-    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
-        border: 1px solid {PALETTE['primary']}; /* Highlight on focus */
-    }}
-    /* Log Output Area */
-    QTextEdit {{
-        background-color: #020617; /* Near black for contrast */
-        color: #e2e8f0;
-        border: 1px solid {PALETTE['dark_border']};
-        font-family: "Consolas", "Courier New", monospace;
-        font-size: 13px;
-    }}
-    /* Horizontal Separator Line */
-    QFrame#hLine {{
-        border: none;
-        border-top: 1px solid {PALETTE['dark_border']};
-    }}
-    /* Tooltip Styling */
-    QToolTip {{
-        background-color: {PALETTE['secondary']};
-        color: white;
-        border: none;
-        padding: 5px;
-        border-radius: 4px;
-        font-size: 12px;
-    }}
-    
-    QFrame#card[inferenceMode="true"] {{
-        border: 2px solid #F28620; /* Secondary orange color */
-    }}
 
-    /* --- QMessageBox Styling --- */
-    QMessageBox {{
-        background-color: {PALETTE['dark_card_bg']}; 
-    }}
-    QMessageBox QLabel {{ 
-        color: {PALETTE['dark_text_title']};
-        font-size: 16px;
-    }}
-    QMessageBox QPushButton {{ /* Styles the "OK" button */
-        background-color: {PALETTE['primary']};
-        color: white;
-        border-radius: 4px;
-        padding: 8px 20px;
-        min-width: 80px; /* Give the button a decent size */
-    }}
-    QMessageBox QPushButton:hover {{
-        background-color: {PALETTE['primary_hover']};
-    }}
+DARK_THEME_STYLESHEET = f"""
+/* Main Window and General Widgets */
+QMainWindow, QWidget {{
+    background-color: {PALETTE['dark_bg']};
+    color: {PALETTE['dark_text']};
+    font-family: 'Segoe UI', 'Helvetica Neue', sans-serif;
+}}
+/* Main Title Label */
+QLabel#title {{
+    font-size: 28px;
+    font-weight: bold;
+    color: {PALETTE['dark_text_title']};
+    padding: 10px;
+}}
+/* General Description Label */
+QLabel#description {{
+    font-size: 14px;
+    color: {PALETTE['dark_text_muted']};
+}}
+/* Card Frame Styling */
+QFrame#card {{
+    background-color: {PALETTE['dark_card_bg']};
+    border: 1px solid {PALETTE['dark_border']};
+    border-radius: 12px;
+}}
+/* Card Title Label */
+QLabel#cardTitle {{
+    font-size: 18px;
+    font-weight: 600;
+    color: {PALETTE['dark_text_title']};
+    padding-bottom: 5px;
+}}
+/* Card Description Label */
+QLabel#cardDescription {{
+    font-size: 13px;
+    color: {PALETTE['dark_text_muted']};
+}}
+/* Main Action Buttons (Run, Select File) */
+QPushButton {{
+    background-color: {PALETTE['primary']};
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 6px;
+    font-weight: bold;
+    outline: none; /* Remove outline on focus */
+}}
+QPushButton:hover {{
+    background-color: #4338ca; /* Lighter shade of primary for hover */
+}}
+QPushButton:disabled {{
+    background-color: #334155;
+    color: {PALETTE['dark_text_muted']};
+}}
+/* Special Buttons (Reset, Stop) */
+QPushButton#resetButton, QPushButton#stopButton {{
+    background-color: {PALETTE['dark_reset_bg']};
+    color: {PALETTE['dark_text']};
+}}
+QPushButton#resetButton:hover, QPushButton#stopButton:hover {{
+    background-color: {PALETTE['dark_border']};
+}}
+/* Input Fields (QLineEdit, QSpinBox, etc.) */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+    background-color: {PALETTE['dark_input_bg']};
+    border: 1px solid {PALETTE['dark_border']};
+    padding: 8px;
+    border-radius: 6px;
+    color: white;
+}}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
+    border: 1px solid {PALETTE['primary']}; /* Highlight on focus */
+}}
+/* Log Output Area */
+QTextEdit {{
+    background-color: #020617; /* Near black for contrast */
+    color: #e2e8f0;
+    border: 1px solid {PALETTE['dark_border']};
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 13px;
+}}
+/* Horizontal Separator Line */
+QFrame#hLine {{
+    border: none;
+    border-top: 1px solid {PALETTE['dark_border']};
+}}
+/* Tooltip Styling */
+QToolTip {{
+    background-color: {PALETTE['secondary']};
+    color: white;
+    border: none;
+    padding: 5px;
+    border-radius: 4px;
+    font-size: 12px;
+}}
+
+QFrame#card[inferenceMode="true"] {{
+    border: 2px solid #F28620; /* Secondary orange color */
+}}
+
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['dark_card_bg']}; 
+}}
+QMessageBox QLabel {{ 
+    color: {PALETTE['dark_text_title']};
+    font-size: 16px;
+}}
+QMessageBox QPushButton {{ /* Styles the "OK" button */
+    background-color: {PALETTE['primary']};
+    color: white;
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px; /* Give the button a decent size */
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {PALETTE['primary_hover']};
+}}
+
+ 
+/* --- QMessageBox Styling --- */
+QMessageBox {{
+    background-color: {PALETTE['dark_card_bg']};
+}}
+QMessageBox QLabel {{ /* Styles the main text */
+    color: {PALETTE['dark_text']};
+    font-size: 14px;
+}}
+QMessageBox QPushButton {{ /* Styles the "Yes" and "No" buttons */
+    background-color: {PALETTE['dark_reset_bg']};
+    color: {PALETTE['dark_text']};
+    border: 1px solid {PALETTE['dark_border']};
+    border-radius: 4px;
+    padding: 8px 20px;
+    min-width: 80px;
+}}
+QMessageBox QPushButton:hover {{
+    background-color: {PALETTE['dark_border']};
+}}
+QMessageBox QPushButton:pressed {{
+    background-color: {PALETTE['primary']};
+    color: white;
+}}
 
 """
 
-class _PandasModel(QAbstractTableModel):
-    """A Qt Table Model for exposing a pandas DataFrame.
-
-    This class acts as a bridge between the data model (a pandas
-    DataFrame) and the view component (a QTableView). It provides
-    the necessary interface that allows Qt to read, display, and
-    modify the data from the DataFrame in a table widget.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        The DataFrame to be displayed and managed by the model.
-    parent : QObject, optional
-        The parent Qt object for this model, by default None.
-
-    Attributes
-    ----------
-    _df : pandas.DataFrame
-        The internal reference to the DataFrame being managed.
-
-    See Also
-    --------
-    PyQt5.QtCore.QAbstractTableModel : The base class for custom table models.
-    """
-
-    def __init__(self, df: pd.DataFrame, parent=None):
-        super().__init__(parent)
-        self._df = df                
-
-    # -- basic shape -------
-    def rowCount   (self, _=QModelIndex()): return len(self._df)
-    def columnCount(self, _=QModelIndex()): return self._df.shape[1]
-
-    # -- data ↔ Qt -
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid(): return None
-        if role in (Qt.DisplayRole, Qt.EditRole):
-            return str(self._df.iat[index.row(), index.column()])
-        return None
-
-    def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.EditRole:
-            self._df.iat[index.row(), index.column()] = value
-            self.dataChanged.emit(index, index, [role]); return True
-        return False
-
-    def flags(self, index):
-        return Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
-
-    # -- header labels 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role != Qt.DisplayRole: return None
-        return (self._df.columns[section] if orientation == Qt.Horizontal
-                else str(section))
-
-    # helper for column rename
-    def rename_column(self, col_ix: int, new_name: str):
-        self.beginResetModel()
-        self._df.columns = (
-            list(self._df.columns[:col_ix]) + [new_name] +
-            list(self._df.columns[col_ix + 1 :])
-        )
-        self.endResetModel()
-
-    # exposed to outside world
-    @property
-    def dataframe(self) -> pd.DataFrame:
-        return self._df
-
-class CsvEditDialog(QDialog):
-    """A dialog window for previewing and editing a CSV file.
-
-    This class provides a lightweight, non-destructive editing
-    environment for a loaded dataset. It displays a preview of the
-    data in a table and offers tools to delete rows, delete columns,
-    and rename columns.
-
-    Changes are made to an internal copy of the DataFrame and are only
-    finalized and returned if the user clicks "Save / Apply".
-
-    Parameters
-    ----------
-    csv_path : str
-        The absolute path to the CSV file to be loaded.
-    parent : QWidget, optional
-        The parent widget for this dialog, by default None.
-    preview_rows : int, default=200
-        The maximum number of rows to display in the table view. This
-        is a performance optimization to prevent lag with very large
-        files, while still allowing edits on the complete, underlying
-        DataFrame.
-
-    Methods
-    -------
-    edited_dataframe()
-        Returns the full DataFrame with all user edits applied.
-
-    See Also
-    --------
-    PyQt5.QtWidgets.QDialog : The base class for dialog windows.
-    _PandasModel : The data model used to populate the table view.
-    """
-
-    def __init__(self, csv_path: str,
-                 parent=None, *, preview_rows: int = 200):
-        super().__init__(parent)
-        self.setWindowTitle("Preview & Editing Data")
-        self.resize(820, 400) # 820, 500)
-
-        try:
-            self._df_full = pd.read_csv(csv_path)
-        except Exception as e:
-            QMessageBox.critical(self, "CSV error", str(e))
-            self._df_full = pd.DataFrame()
-            self.reject();  return
-
-        # slice for the *table* only (view)
-        self._view_rows = min(preview_rows, len(self._df_full))
-        self._df_view   = self._df_full.head(self._view_rows)
-
-        vbox = QVBoxLayout(self)
-
-        # toolbar
-        tb = QToolBar()
-        act_del_row = QAction("Delete row(s)", self)
-        act_del_col = QAction("Delete col(s)", self)
-        act_rename  = QAction("Rename column", self)
-        tb.addAction(act_del_row); tb.addAction(act_del_col); tb.addAction(act_rename)
-        vbox.addWidget(tb)
-
-        # table
-        self.table = QTableView()
-        self.model = _PandasModel(self._df_view)
-        self.table.setModel(self.model)
-        self.table.setSelectionMode(QTableView.ExtendedSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        vbox.addWidget(self.table, 1)
-
-        # buttons
-        hbtn = QHBoxLayout()
-        hbtn.addStretch(1)
-        btn_save   = QPushButton("Save / Apply")
-        btn_cancel = QPushButton("Cancel")
-        hbtn.addWidget(btn_save); hbtn.addWidget(btn_cancel)
-        vbox.addLayout(hbtn)
-
-        # signals
-        act_del_row.triggered.connect(self._delete_rows)
-        act_del_col.triggered.connect(self._delete_cols)
-        act_rename .triggered.connect(self._rename_col)
-        btn_save  .clicked.connect(self.accept)
-        btn_cancel.clicked.connect(self.reject)
-
-    def _delete_rows(self):
-        rows = {ix.row() for ix in self.table.selectionModel().selectedIndexes()}
-        if not rows: return
-        # translate view-index → full-df index
-        full_idx = self._df_full.index[list(rows)]
-        self._df_full.drop(index=full_idx, inplace=True)
-        self._refresh_view()
-
-    def _delete_cols(self):
-        cols = {ix.column() for ix in self.table.selectionModel().selectedIndexes()}
-        if not cols: return
-        cols_to_drop = self._df_full.columns[list(cols)]
-        self._df_full.drop(columns=cols_to_drop, inplace=True)
-        self._refresh_view()
-
-    def _rename_col(self):
-        cols = {ix.column() for ix in self.table.selectionModel().selectedIndexes()}
-        if len(cols) != 1:
-            QMessageBox.information(self, "Rename column",
-                                     "Select exactly one column.")
-            return
-        col_ix = cols.pop()
-        old = self._df_full.columns[col_ix]
-        new, ok = QInputDialog.getText(self, "Rename column",
-                                       f"New name for “{old}”:")
-        if ok and new:
-            self._df_full.rename(columns={old: new}, inplace=True)
-            self._refresh_view()
-
-    def _refresh_view(self):
-        """Re-slice top N rows *after* edits and refresh model."""
-        self._df_view = self._df_full.head(self._view_rows)
-        self.model.beginResetModel()
-        self.model._df = self._df_view
-        self.model.endResetModel()
-
-    # -public API 
-    def edited_dataframe(self) -> pd.DataFrame:
-        """
-        Return the **full** (possibly edited) DataFrame.
-        Caller should copy if it wants to keep a private version.
-        """
-        return self._df_full.copy()
-
-class Worker(QThread):
-    """Executes the forecasting workflow in a background thread.
-
-    This QThread subclass is designed to run the entire data
-    processing and model training pipeline without freezing the main
-    GUI thread. It orchestrates the instantiation and execution of
-    the various processing classes (`DataProcessor`, `SequenceGenerator`,
-    etc.) and emits signals to update the GUI with progress, logs,
-    and final results.
-
-    Parameters
-    ----------
-    cfg : SubsConfig
-        A configuration object containing all parameters required for
-        the workflow, gathered from the GUI.
-    edited_df : pd.DataFrame, optional
-        If the user has edited the data in the preview dialog, this
-        DataFrame is passed to bypass the initial file loading step.
-        If None, the workflow will load data from the file path
-        specified in the `cfg` object.
-    parent : QObject, optional
-        The parent Qt object, by default None.
-
-    Attributes
-    ----------
-    status_msg : pyqtSignal(str)
-        Emits status updates for the main status label in the GUI.
-    progress_val : pyqtSignal(int)
-        Emits progress updates (0-100) for the progress bar.
-    log_msg : pyqtSignal(str)
-        Emits detailed log messages to be displayed in the log panel.
-    coverage_val : pyqtSignal(float)
-        Emits the final calculated coverage score to be displayed in
-        the status bar.
-
-    Methods
-    -------
-    run()
-        The main entry point for the thread. Executes the entire
-        data processing and forecasting pipeline sequentially.
-    _write_coverage_result()
-        A helper method to read the saved coverage score from a JSON
-        file and emit it via the `coverage_val` signal.
-
-    See Also
-    --------
-    DataProcessor : Handles the data loading and preprocessing stage.
-    SequenceGenerator : Handles sequence generation and dataset creation.
-    ModelTrainer : Handles model definition, compilation, and training.
-    Forecaster : Handles prediction on new data.
-    ResultsVisualizer : Handles the final visualization of results.
-    """
-    status_msg   = pyqtSignal(str)
-    progress_val = pyqtSignal(int)
-    log_msg      = pyqtSignal(str)
-    coverage_val = pyqtSignal(float)
-
-    def __init__(self, cfg, edited_df=None, parent=None, run_btn=None):
-        super().__init__(parent)
-        self.cfg = cfg
-        self.edited_df  = edited_df
-        self.run_btn = run_btn 
-        
-        self._p = lambda frac, lo, hi: int(lo + (hi - lo) * frac)
-
-    def run(self):
-        try:
-            self.status_msg.emit("📊 Pre-processing…")
-            self.run_btn.setText("Preprocessing…") 
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p / 100, 0, 10) 
-            )
-            processor = DataProcessor(
-                self.cfg, self.log_msg.emit, 
-                raw_df=self.edited_df  
-            )
-            df_proc   = processor.run()
-            self.progress_val.emit(10)
-
-            if self.isInterruptionRequested():          # ← CHECK #1
-                return
-            self.status_msg.emit("🌀 Generating sequences…")
-            self.run_btn.setText("Sequencing…") 
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-               self._p(p / 100, 10, 30)           # ← divide by 100!
-            )      
-            seq_gen   = SequenceGenerator(self.cfg, self.log_msg.emit)
-            try: 
-                train_ds, val_ds = seq_gen.run(
-                    df_proc, processor.static_features_encoded, 
-                    stop_check=self.isInterruptionRequested
-                )
-            except InterruptedError:
-                return
-              
-            self.progress_val.emit(30)
-            
-            if self.isInterruptionRequested():          # ← CHECK #2
-                return
-            
-            self.status_msg.emit("🔧 Training…")
-            self.run_btn.setText("Training…") 
-            train_range = (30, 90)
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p/100, *train_range))    # ← same here
-            
-            sample_inputs, _ = next(iter(train_ds))
-            shapes = {k: v.shape for k, v in sample_inputs.items()}
-            model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
-                train_ds, val_ds, shapes
-            )
-            self.progress_val.emit(train_range[1])          # 90 %
-
-            if self.isInterruptionRequested():          # ← CHECK #3
-                return
-            self.status_msg.emit("🔮 Forecasting…")
-            self.run_btn.setText("Forecasting…") 
-            forecast_range = (90, 100)
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p / 100, *forecast_range)          
-            )
-            forecast_df = Forecaster(self.cfg, self.log_msg.emit).run(
-                model=model,
-                test_df=seq_gen.test_df,
-                val_dataset=val_ds,
-                static_features_encoded=processor.static_features_encoded,
-                coord_scaler=seq_gen.coord_scaler,
-            )
-            self._write_coverage_result () 
-            self.status_msg.emit("✔ Forecast finished.")
-            self.progress_val.emit(100)
-            
-            ResultsVisualizer(self.cfg, self.log_msg.emit).run(forecast_df)
-            
-        except Exception as e:
-            self.log_msg.emit(f"❌ {e}")
-            
-    def _write_coverage_result(self) :
-        if self.cfg.evaluate_coverage and self.cfg.quantiles:
-            json_path = os.path.join(self.cfg.run_output_path,
-                                     "diagnostics_results.json")
-            try:
-                with open(json_path, "r", encoding="utf-8") as fp:
-                    cv = json.load(fp)["coverage"]
-                    self.coverage_val.emit(float(cv))
-            except Exception as e:
-                self.log_msg.emit(
-                    f"[WARN] Could not read coverage file: {e}")
 
 class MiniForecaster(QMainWindow):
     """The main application window for the Subsidence PINN Mini GUI.
@@ -947,21 +651,7 @@ class MiniForecaster(QMainWindow):
         bottom.addLayout(footer)
         self.progress_updated.connect(self.progress_bar.setValue)
 
-    def _stop_worker(self):
-        """Requests a graceful shutdown of the background worker thread.
 
-        This method is connected to the "Stop" button's `clicked` signal.
-        It calls `requestInterruption()` on the running `Worker` instance,
-        which sets a flag that the worker can check periodically to exit
-        its `run` loop cleanly. It also updates the GUI status to
-        reflect the stopping action.
-        """
-        if self.worker and self.worker.isRunning():
-            self.worker.requestInterruption()
-            self.status_updated.emit("⏹ Stopping workflow …")
-            self.stop_btn.setEnabled(False)      # grey it out
-            self.worker.requestInterruption()  
-        
     def _training_card(self) -> QFrame:
         """Creates and returns the 'Training Parameters' UI panel.
 
@@ -1253,32 +943,70 @@ class MiniForecaster(QMainWindow):
         self.log.append(line)
         self.log.verticalScrollBar().setValue(
             self.log.verticalScrollBar().maximum()) 
- 
+        
     def _choose_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open CSV file", "", "CSV Files (*.csv)")
-        if not path: 
-            return 
-        
-        self.file_path = Path(path)
-        self.file_label.setStyleSheet(f"color:{SECONDARY};")
-        self.file_label.setText(f"Selected: {self.file_path.name}")
-        self._log(f"CSV chosen → {self.file_path}")
-        
+        if not path:
+            return
+        try:
+            # The CsvEditDialog constructor now tries to read the file,
+            # which might fail.
+            dlg = CsvEditDialog(str(path), self)
+            if dlg.exec_() == QDialog.Accepted:
+                self.edited_df = dlg.edited_dataframe()
+                self._log(
+                    f"CSV preview accepted – {len(self.edited_df)} rows retained."
+                )
+                self.file_path = Path(path) # Set file_path only on success
+                self.file_label.setStyleSheet(f"color:{SECONDARY};")
+                self.file_label.setText(f"Selected: {self.file_path.name}")
+                self._log(f"CSV chosen → {self.file_path}")
+            else:
+                self.edited_df = None
+                self._log("CSV preview canceled – keeping original file.")
+
+        except Exception as e:
+            # If CsvEditDialog fails to load the file, catch the error
+            # and use our new central dialog to show it.
+            self._show_error_dialog(
+                "File Load Error",
+                f"Could not read or process the selected CSV file.\n\n"
+                f"Details: {e}"
+            )
+            return
+
         if not self.city_input.text().strip():
             self.city_input.setText(self.file_path.stem)
-        
-        # 2) pop-up preview / editor  (only now!)
-        dlg = CsvEditDialog(str(self.file_path), self)
-        if dlg.exec_() == QDialog.Accepted:
-            self.edited_df = dlg.edited_dataframe()
-            self._log(
-                f"CSV preview accepted – {len(self.edited_df)} rows retained.")
-        else:
-            self.edited_df = None        # fall back to on-disk CSV
-            self._log("CSV preview canceled – keeping original file.")
-        
+            
         self.progress_bar.setValue(0)
+        self._refresh_manifest_state()
+        
+    # def _choose_file(self):
+    #     path, _ = QFileDialog.getOpenFileName(
+    #         self, "Open CSV file", "", "CSV Files (*.csv)")
+    #     if not path: 
+    #         return 
+        
+    #     self.file_path = Path(path)
+    #     self.file_label.setStyleSheet(f"color:{SECONDARY};")
+    #     self.file_label.setText(f"Selected: {self.file_path.name}")
+    #     self._log(f"CSV chosen → {self.file_path}")
+        
+    #     if not self.city_input.text().strip():
+    #         self.city_input.setText(self.file_path.stem)
+        
+    #     # 2) pop-up preview / editor  (only now!)
+    #     dlg = CsvEditDialog(str(self.file_path), self)
+    #     if dlg.exec_() == QDialog.Accepted:
+    #         self.edited_df = dlg.edited_dataframe()
+    #         self._log(
+    #             f"CSV preview accepted – {len(self.edited_df)} rows retained.")
+    #     else:
+    #         self.edited_df = None        # fall back to on-disk CSV
+    #         self._log("CSV preview canceled – keeping original file.")
+        
+    #     self.progress_bar.setValue(0)
         
     def _refresh_manifest_state(self) -> None:
         """
@@ -1413,7 +1141,45 @@ class MiniForecaster(QMainWindow):
         self.stop_btn.setStyleSheet("") 
         
         self._log("ℹ Interface reset.")
-  
+        
+    def _stop_worker(self):
+        """
+        Prompts the user for confirmation and then gracefully stops
+        the active background worker thread.
+        """
+        # First, check if there is actually a worker to stop.
+        if not (hasattr(self, 'active_worker') and 
+                self.active_worker and self.active_worker.isRunning()):
+            return
+
+        # Create and display a confirmation dialog.
+        # The question method is modal and returns the button that was clicked.
+        reply = QMessageBox.question(
+            self,
+            'Confirm Stop',
+            "Are you sure you want to stop the current workflow?\n\n"
+            "This action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No  # Default button is 'No'
+        )
+
+        # Only proceed if the user confirms.
+        if reply == QMessageBox.Yes:
+            self._log("⏹️ Workflow stop requested by user.")
+            self.status_updated.emit("⏹️ Stopping workflow…")
+            
+            # Request the interruption. The thread will stop when it
+            # next checks the isInterruptionRequested() flag.
+            self.active_worker.requestInterruption()
+            
+            # Immediately provide visual feedback by resetting the UI state.
+            self.stop_btn.setEnabled(False)
+            self.run_btn.setEnabled(True)
+            self.run_btn.setText("Run")
+            self.run_btn.setStyleSheet("") # Revert to default style
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("Stopped")
+            
     def _on_run(self):
         """
         Acts as the main dispatcher for the 'Run' button.
@@ -1468,7 +1234,7 @@ class MiniForecaster(QMainWindow):
             return
      
         self.run_btn.setEnabled(False)
-        self.run_btn.setText("Configuring…") # Optional: Update text
+        self.run_btn.setText("Running…") # Optional: Update text
         # disabled-looking style.
         self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
         
@@ -1544,11 +1310,10 @@ class MiniForecaster(QMainWindow):
         self.stop_btn.setStyleSheet(f"background-color: {SECONDARY}; color: white;")
 
         # start worker 
-        self.active_worker = Worker(
+        self.active_worker = TrainingThread(
             cfg, 
             edited_df=getattr(self, "edited_df", None), 
             parent=self, 
-            run_btn= self.run_btn 
         )
         self.active_worker.log_msg.connect(self.log_updated.emit)
         self.active_worker.status_msg.connect(self.status_updated.emit)
@@ -1561,7 +1326,6 @@ class MiniForecaster(QMainWindow):
             lambda: (self.active_worker.requestInterruption(),
                      self.status_updated.emit("⏹ Stopping…"))
         )
-        
         self.active_worker.start()
         
     def _run_inference(self):
@@ -1604,6 +1368,7 @@ class MiniForecaster(QMainWindow):
             parent=self,
         )
         self.active_worker.log_msg.connect(self.log_updated.emit)
+        self.active_worker.status_msg.connect(self.status_updated.emit)
         self.active_worker.progress_val.connect(self.progress_updated.emit)
         self.active_worker.error_occurred.connect(self._on_worker_error)
  
@@ -1659,19 +1424,177 @@ class MiniForecaster(QMainWindow):
         
         self._refresh_manifest_state()  
     
+    def _show_error_dialog(self, title: str, message: str):
+        """
+        Displays a standardized, styled critical error message box.
+
+        This method centralizes all user-facing error notifications,
+        ensuring a consistent look and feel.
+
+        Args:
+            title (str): The title for the message box window.
+            message (str): The main error text to display.
+        """
+        self._log(f"❌ ERROR: {title} - {message}")
+        QMessageBox.critical(self, title, message)
+        # After the user acknowledges the error, always reset the UI
+        # to a safe, clean state.
+        self._on_reset()
+        
     @pyqtSlot(str)
     def _on_worker_error(self, error_message: str):
         """
         A slot that handles errors emitted from a worker thread.
-        It displays a critical error message box to the user.
         """
-        msg= "Inference" if self._inference_mode else "Training"
-        self._log(f"❌ Worflow failed - {msg}: {error_message}")
-        QMessageBox.critical(self, "Workflow Error", error_message)
-        # Re-enable buttons since the process has stopped
-        # self._worker_done()
-        self._on_reset()
-        
+        mode = "Inference" if self._inference_mode else "Training"
+        # Call the central error dialog handler
+        self._show_error_dialog(f"{mode} Workflow Failed", error_message)
+  
+class TrainingThread(QThread):
+    """Executes the forecasting workflow in a background thread.
+
+    This QThread subclass is designed to run the entire data
+    processing and model training pipeline without freezing the main
+    GUI thread. It orchestrates the instantiation and execution of
+    the various processing classes (`DataProcessor`, `SequenceGenerator`,
+    etc.) and emits signals to update the GUI with progress, logs,
+    and final results.
+
+    Parameters
+    ----------
+    cfg : SubsConfig
+        A configuration object containing all parameters required for
+        the workflow, gathered from the GUI.
+    edited_df : pd.DataFrame, optional
+        If the user has edited the data in the preview dialog, this
+        DataFrame is passed to bypass the initial file loading step.
+        If None, the workflow will load data from the file path
+        specified in the `cfg` object.
+    parent : QObject, optional
+        The parent Qt object, by default None.
+
+    Attributes
+    ----------
+    status_msg : pyqtSignal(str)
+        Emits status updates for the main status label in the GUI.
+    progress_val : pyqtSignal(int)
+        Emits progress updates (0-100) for the progress bar.
+    log_msg : pyqtSignal(str)
+        Emits detailed log messages to be displayed in the log panel.
+    coverage_val : pyqtSignal(float)
+        Emits the final calculated coverage score to be displayed in
+        the status bar.
+
+    Methods
+    -------
+    run()
+        The main entry point for the thread. Executes the entire
+        data processing and forecasting pipeline sequentially.
+    _write_coverage_result()
+        A helper method to read the saved coverage score from a JSON
+        file and emit it via the `coverage_val` signal.
+
+    See Also
+    --------
+    DataProcessor : Handles the data loading and preprocessing stage.
+    SequenceGenerator : Handles sequence generation and dataset creation.
+    ModelTrainer : Handles model definition, compilation, and training.
+    Forecaster : Handles prediction on new data.
+    ResultsVisualizer : Handles the final visualization of results.
+    """
+    status_msg   = pyqtSignal(str)
+    progress_val = pyqtSignal(int)
+    log_msg      = pyqtSignal(str)
+    coverage_val = pyqtSignal(float)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, cfg, edited_df=None, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.edited_df  = edited_df
+        self._p = lambda frac, lo, hi: int(lo + (hi - lo) * frac)
+
+    def run(self):
+        try:
+            self.status_msg.emit("📊 Pre-processing…")
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, 0, 10) 
+            )
+            processor = DataProcessor(
+                self.cfg, self.log_msg.emit, 
+                raw_df=self.edited_df  
+            )
+            df_proc   = processor.run()
+            self.progress_val.emit(10)
+
+            if self.isInterruptionRequested():          # ← CHECK #1
+                return
+            self.status_msg.emit("🌀 Generating sequences…")
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+               self._p(p / 100, 10, 30)           # ← divide by 100!
+            )      
+            seq_gen   = SequenceGenerator(self.cfg, self.log_msg.emit)
+            try: 
+                train_ds, val_ds = seq_gen.run(
+                    df_proc, processor.static_features_encoded, 
+                    stop_check=self.isInterruptionRequested
+                )
+            except InterruptedError:
+                return
+              
+            self.progress_val.emit(30)
+            
+            if self.isInterruptionRequested():          # ← CHECK #2
+                return
+            
+            self.status_msg.emit("🔧 Training…")
+            train_range = (30, 90)
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p/100, *train_range))    # ← same here
+            
+            sample_inputs, _ = next(iter(train_ds))
+            shapes = {k: v.shape for k, v in sample_inputs.items()}
+            model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
+                train_ds, val_ds, shapes
+            )
+            self.progress_val.emit(train_range[1])          # 90 %
+
+            if self.isInterruptionRequested():          # ← CHECK #3
+                return
+            self.status_msg.emit("🔮 Forecasting…")
+            forecast_range = (90, 100)
+            self.cfg.progress_callback = lambda p: self.progress_val.emit(
+                self._p(p / 100, *forecast_range)          
+            )
+            forecast_df = Forecaster(self.cfg, self.log_msg.emit).run(
+                model=model,
+                test_df=seq_gen.test_df,
+                val_dataset=val_ds,
+                static_features_encoded=processor.static_features_encoded,
+                coord_scaler=seq_gen.coord_scaler,
+            )
+            self._write_coverage_result () 
+            self.status_msg.emit("✔ Forecast finished.")
+            self.progress_val.emit(100)
+            
+            ResultsVisualizer(self.cfg, self.log_msg.emit).run(forecast_df)
+            
+        except Exception as e:
+            self.log_msg.emit(f"❌ {e}")
+            self.error_occurred.emit(str(e))
+            
+    def _write_coverage_result(self) :
+        if self.cfg.evaluate_coverage and self.cfg.quantiles:
+            json_path = os.path.join(self.cfg.run_output_path,
+                                     "diagnostics_results.json")
+            try:
+                with open(json_path, "r", encoding="utf-8") as fp:
+                    cv = json.load(fp)["coverage"]
+                    self.coverage_val.emit(float(cv))
+            except Exception as e:
+                self.log_msg.emit(
+                    f"[WARN] Could not read coverage file: {e}")
+     
 class InferenceThread(QThread):
     """
     Run the end-to-end *inference* workflow in a background
@@ -1719,10 +1642,9 @@ class InferenceThread(QThread):
     """
     
     log_msg      = pyqtSignal(str)
+    status_msg   = pyqtSignal(str)
     progress_val = pyqtSignal(int)
     error_occurred = pyqtSignal(str) 
-    # This signal can be used if you need to pass 
-     # back results, otherwise it's optional
     finished_with_results = pyqtSignal() 
 
     def __init__(
@@ -1762,6 +1684,8 @@ class InferenceThread(QThread):
         try:
             # Create the pipeline using the manifest path.
             # The log callback is now passed during initialization.
+            self.status_msg.emit("🤖 Inferring...")
+            self.log_msg.emit("⏳ Prediction Pipeline triggered...")
             pipe = PredictionPipeline(
                 manifest_path=self.manifest_path,
                 log_callback=self.log_msg.emit,
@@ -1776,76 +1700,12 @@ class InferenceThread(QThread):
             # We assume the `run` method is updated to accept a DataFrame.
             pipe.run(validation_data=self.edited_df)
         
+            self.status_msg.emit("✔ Inference finished.")
             self.log_msg.emit("✔ Inference finished.")
             self.progress_val.emit(100)
 
         except Exception as err:
             self.error_occurred.emit(str(err))
-
-class _ToastNotification(QLabel):
-    """
-    A temporary, fading pop-up widget with theme-aware styling.
-    """
-    def __init__(self, message: str, parent=None, theme: str = 'light'):
-        super().__init__(message, parent)
-        self.setWindowFlags(
-            Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        # Explicitly tell the QLabel to paint its background
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setAttribute(Qt.WA_DeleteOnClose)
-
-        # Set background color based on the theme
-        if theme == 'dark':
-            # Use a more opaque orange for better visibility
-            bg_color = "rgba(242, 134, 32, 0.9)"  # Light orange
-        else:
-            # Use a more opaque blue for better visibility
-            bg_color = "rgba(46, 49, 145, 0.9)"  # Light blue
-
-        # Style for the toast container (background box)
-        self.setStyleSheet(f"""
-            QLabel {{
-                background-color: {bg_color};
-                color: white;
-                font-size: 16px;
-                font-weight: bold;
-                padding: 15px 25px;
-                border-radius: 18px;
-            }}
-        """)
-
-        # Adjust the size of the widget to fit the content
-        self.adjustSize()
-        self.center_on_parent()
-
-        # Effect for the text opacity, not the whole widget
-        self.opacity_effect = QGraphicsOpacityEffect(self)
-        self.setGraphicsEffect(self.opacity_effect)
-
-        self.animation = QPropertyAnimation(
-            self.opacity_effect, b"opacity")
-        self.animation.setDuration(1500)
-        self.animation.setStartValue(1.0)
-        self.animation.setEndValue(0.0)
-        self.animation.setEasingCurve(QEasingCurve.InQuad)
-        self.animation.finished.connect(self.close)
-
-    def center_on_parent(self):
-        """Centers the toast on the parent widget."""
-        if self.parent():
-            parent_rect = self.parent().geometry()
-            self.move(
-                parent_rect.x() + (parent_rect.width() - self.width()) // 2,
-                parent_rect.y() + (parent_rect.height() - self.height()) // 2
-            )
-
-    def show_toast(self, duration_ms=1500):
-        """Shows the toast and schedules it to fade out."""
-        self.opacity_effect.setOpacity(1.0)
-        self.show()
-        QTimer.singleShot(duration_ms, self.animation.start)
 
 class ToastNotification(QFrame):
     """A temporary, fading pop-up widget for non-blocking feedback.
@@ -1931,6 +1791,206 @@ class ToastNotification(QFrame):
         self.show()
         QTimer.singleShot(duration_ms, self.animation.start)
 
+
+class _PandasModel(QAbstractTableModel):
+    """A Qt Table Model for exposing a pandas DataFrame.
+
+    This class acts as a bridge between the data model (a pandas
+    DataFrame) and the view component (a QTableView). It provides
+    the necessary interface that allows Qt to read, display, and
+    modify the data from the DataFrame in a table widget.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The DataFrame to be displayed and managed by the model.
+    parent : QObject, optional
+        The parent Qt object for this model, by default None.
+
+    Attributes
+    ----------
+    _df : pandas.DataFrame
+        The internal reference to the DataFrame being managed.
+
+    See Also
+    --------
+    PyQt5.QtCore.QAbstractTableModel : The base class for custom table models.
+    """
+
+    def __init__(self, df: pd.DataFrame, parent=None):
+        super().__init__(parent)
+        self._df = df                
+
+    # -- basic shape -------
+    def rowCount   (self, _=QModelIndex()): return len(self._df)
+    def columnCount(self, _=QModelIndex()): return self._df.shape[1]
+
+    # -- data ↔ Qt -
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid(): return None
+        if role in (Qt.DisplayRole, Qt.EditRole):
+            return str(self._df.iat[index.row(), index.column()])
+        return None
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role == Qt.EditRole:
+            self._df.iat[index.row(), index.column()] = value
+            self.dataChanged.emit(index, index, [role]); return True
+        return False
+
+    def flags(self, index):
+        return Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
+
+    # -- header labels 
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role != Qt.DisplayRole: return None
+        return (self._df.columns[section] if orientation == Qt.Horizontal
+                else str(section))
+
+    # helper for column rename
+    def rename_column(self, col_ix: int, new_name: str):
+        self.beginResetModel()
+        self._df.columns = (
+            list(self._df.columns[:col_ix]) + [new_name] +
+            list(self._df.columns[col_ix + 1 :])
+        )
+        self.endResetModel()
+
+    # exposed to outside world
+    @property
+    def dataframe(self) -> pd.DataFrame:
+        return self._df
+
+class CsvEditDialog(QDialog):
+    """A dialog window for previewing and editing a CSV file.
+
+    This class provides a lightweight, non-destructive editing
+    environment for a loaded dataset. It displays a preview of the
+    data in a table and offers tools to delete rows, delete columns,
+    and rename columns.
+
+    Changes are made to an internal copy of the DataFrame and are only
+    finalized and returned if the user clicks "Save / Apply".
+
+    Parameters
+    ----------
+    csv_path : str
+        The absolute path to the CSV file to be loaded.
+    parent : QWidget, optional
+        The parent widget for this dialog, by default None.
+    preview_rows : int, default=200
+        The maximum number of rows to display in the table view. This
+        is a performance optimization to prevent lag with very large
+        files, while still allowing edits on the complete, underlying
+        DataFrame.
+
+    Methods
+    -------
+    edited_dataframe()
+        Returns the full DataFrame with all user edits applied.
+
+    See Also
+    --------
+    PyQt5.QtWidgets.QDialog : The base class for dialog windows.
+    _PandasModel : The data model used to populate the table view.
+    """
+
+    def __init__(self, csv_path: str,
+                 parent=None, *, preview_rows: int = 200):
+        super().__init__(parent)
+        self.setWindowTitle("Preview & Editing Data")
+        self.resize(820, 400) # 820, 500)
+
+        try:
+            self._df_full = pd.read_csv(csv_path)
+        except Exception as e:
+            QMessageBox.critical(self, "CSV error", str(e))
+            self._df_full = pd.DataFrame()
+            self.reject();  return
+
+        # slice for the *table* only (view)
+        self._view_rows = min(preview_rows, len(self._df_full))
+        self._df_view   = self._df_full.head(self._view_rows)
+
+        vbox = QVBoxLayout(self)
+
+        # toolbar
+        tb = QToolBar()
+        act_del_row = QAction("Delete row(s)", self)
+        act_del_col = QAction("Delete col(s)", self)
+        act_rename  = QAction("Rename column", self)
+        tb.addAction(act_del_row); tb.addAction(act_del_col); tb.addAction(act_rename)
+        vbox.addWidget(tb)
+
+        # table
+        self.table = QTableView()
+        self.model = _PandasModel(self._df_view)
+        self.table.setModel(self.model)
+        self.table.setSelectionMode(QTableView.ExtendedSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        vbox.addWidget(self.table, 1)
+
+        # buttons
+        hbtn = QHBoxLayout()
+        hbtn.addStretch(1)
+        btn_save   = QPushButton("Save / Apply")
+        btn_cancel = QPushButton("Cancel")
+        hbtn.addWidget(btn_save); hbtn.addWidget(btn_cancel)
+        vbox.addLayout(hbtn)
+
+        # signals
+        act_del_row.triggered.connect(self._delete_rows)
+        act_del_col.triggered.connect(self._delete_cols)
+        act_rename .triggered.connect(self._rename_col)
+        btn_save  .clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+    def _delete_rows(self):
+        rows = {ix.row() for ix in self.table.selectionModel().selectedIndexes()}
+        if not rows: return
+        # translate view-index → full-df index
+        full_idx = self._df_full.index[list(rows)]
+        self._df_full.drop(index=full_idx, inplace=True)
+        self._refresh_view()
+
+    def _delete_cols(self):
+        cols = {ix.column() for ix in self.table.selectionModel().selectedIndexes()}
+        if not cols: return
+        cols_to_drop = self._df_full.columns[list(cols)]
+        self._df_full.drop(columns=cols_to_drop, inplace=True)
+        self._refresh_view()
+
+    def _rename_col(self):
+        cols = {ix.column() for ix in self.table.selectionModel().selectedIndexes()}
+        if len(cols) != 1:
+            QMessageBox.information(self, "Rename column",
+                                     "Select exactly one column.")
+            return
+        col_ix = cols.pop()
+        old = self._df_full.columns[col_ix]
+        new, ok = QInputDialog.getText(self, "Rename column",
+                                       f"New name for “{old}”:")
+        if ok and new:
+            self._df_full.rename(columns={old: new}, inplace=True)
+            self._refresh_view()
+
+    def _refresh_view(self):
+        """Re-slice top N rows *after* edits and refresh model."""
+        self._df_view = self._df_full.head(self._view_rows)
+        self.model.beginResetModel()
+        self.model._df = self._df_view
+        self.model.endResetModel()
+
+    # -public API 
+    def edited_dataframe(self) -> pd.DataFrame:
+        """
+        Return the **full** (possibly edited) DataFrame.
+        Caller should copy if it wants to keep a private version.
+        """
+        return self._df_full.copy()
+
+
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.
 
@@ -1947,7 +2007,6 @@ def hline() -> QFrame:
     ln.setFrameShape(QFrame.HLine)
     ln.setStyleSheet(f"color:{PRIMARY}")
     return ln          
-
 
 def launch_cli(theme: str = 'fusionlab') -> None:
     """Initializes and launches the main GUI application.
@@ -1975,7 +2034,6 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     file is not found, it issues a warning and falls back to the
     default 'fusionlab' theme.
     """
-   
     app = QApplication(sys.argv)
     QToolTip.setFont(QFont("Helvetica Neue", 9))
 
@@ -1992,9 +2050,10 @@ def launch_cli(theme: str = 'fusionlab') -> None:
 
     selected_stylesheet = ""
     # Special handling for the external 'geoscience' theme
+    s_qss = os.path.join(os.path.dirname(__file__), "style.qss")
     if theme.lower() in ('geoscience', 'geo'):
-        if os.path.exists("style.qss"):
-            with open("style.qss", "r", encoding="utf-8") as f:
+        if os.path.exists(s_qss):
+            with open(s_qss, "r", encoding="utf-8") as f:
                 selected_stylesheet = f.read()
         else:
             # Provide a clear warning and fall back to the default theme
@@ -2005,8 +2064,8 @@ def launch_cli(theme: str = 'fusionlab') -> None:
                 UserWarning,
                 stacklevel=2
             )
-            theme = 'fusionlab' # Set the theme name for the next step
-
+            theme = 'fusionlab' 
+    
     # Select from built-in themes if no external file was loaded
     if not selected_stylesheet and theme.lower() != 'native':
         selected_stylesheet = theme_stylesheets.get(theme.lower())

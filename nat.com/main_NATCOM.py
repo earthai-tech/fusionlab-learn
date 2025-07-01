@@ -87,7 +87,7 @@ MODEL_NAME ='TransFlowSubsNet'
 # JUPYTER_PROJECT_ROOT can be set as an environment variable
 # For local runs, adjust DATA_DIR as needed.
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..") # Go up one level from script if not set
-ZHONGSHAN_500K_FILENAME = "zhongshan_p_800k.csv" # Target file
+ZHONGSHAN_500K_FILENAME = "zhongshan_p.csv" # Target file
 ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 
 
@@ -131,9 +131,9 @@ LAMBDA_PDE_GW = 1.0
 QUANTILES = [0.1, 0.5, 0.9] # For probabilistic forecast
 # QUANTILES = None # For point forecast
 
-EPOCHS = 50 # For demonstration; increase for robust results (e.g., 100-200)
+EPOCHS = 200 # For demonstration; increase for robust results (e.g., 100-200)
 LEARNING_RATE = 0.001
-BATCH_SIZE = 256 # Adjusted for potentially larger dataset
+BATCH_SIZE = 32 # 256 # Adjusted for potentially larger dataset
 
 NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not enough data
                                 # in df_test_master, auto extract all batches.  
@@ -150,7 +150,7 @@ GWFLOW_INIT_Q =0.
 ATTENTION_LEVELS = ['1', '2', '3'] # means -> use all 
 
 # Output Directories
-BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_co") # For Code Ocean compatibility
+BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_4M") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
 RUN_OUTPUT_PATH = os.path.join(
     BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_run"
@@ -751,7 +751,7 @@ try:
 
     print(f"Attempting to generate PINN sequences from test data (year {FORECAST_START_YEAR})...")
     inputs_test_dict, targets_test_dict_raw, test_coord_scaler = prepare_pinn_data_sequences(
-        df=df_scaled,# df_train_master, #df_test_master, # use df_scaled for testing purpose. 
+        df=df_scaled, # df_train_master, #df_test_master, # use df_scaled for testing purpose. 
         time_col=TIME_COL_NUMERIC_PINN,
         lon_col=LON_COL, lat_col=LAT_COL,
         subsidence_col=SUBSIDENCE_COL,

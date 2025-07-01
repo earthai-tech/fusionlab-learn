@@ -3,13 +3,6 @@ import pytest
 import shutil 
 import tempfile, json
 from pathlib import Path
-# from fusionlab.registry  import _locate_manifest 
-# from fusionlab.utils.deps_utils import get_versions 
-# from fusionlab.tools.app.config import SubsConfig 
-# from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
-# from fusionlab.tools.app.modeling import ModelTrainer #, Forecaster  
-# # from fusionlab.tools.app.view import ResultsVisualizer 
-# from fusionlab.tools.app.inference import PredictionPipeline 
 
 def test_app_workflow ():
 
@@ -18,8 +11,7 @@ def test_app_workflow ():
     from fusionlab.utils.deps_utils import get_versions 
     from fusionlab.tools.app.config import SubsConfig 
     from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator 
-    from fusionlab.tools.app.modeling import ModelTrainer #, Forecaster  
-    # from fusionlab.tools.app.view import ResultsVisualizer 
+    from fusionlab.tools.app.modeling import ModelTrainer  
     from fusionlab.tools.app.inference import PredictionPipeline 
     
     print("\n=== 1) TRAINING WORKFLOW =========================================")
