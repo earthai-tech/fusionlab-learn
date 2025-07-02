@@ -10,12 +10,20 @@ saving formats.
 from __future__ import annotations 
 
 import os
+import time 
+from numbers import Integral, Real
 import json
 from typing import Callable, Optional, Any, Dict, List 
 import subprocess, sys, platform
 from pathlib import Path
 import math 
 
+try:
+    import ast                                # -– std-lib in every CPython build
+    _AST_AVAILABLE = True
+except Exception:                             # extremely rare / embedded builds
+    _AST_AVAILABLE = False
+    # import json
 
 try:
     from fusionlab.params import (
@@ -29,6 +37,12 @@ except ImportError as e:
         "This utility requires the `fusionlab` library and its"
         f" dependencies to be installed. Error: {e}"
     )
+
+
+_ALLOWED_KEYS = {
+    "min_value", "max_value", "step",          
+    "sampling",                                
+}
 
 # Define custom objects needed for model deserialization
 _CUSTOM_OBJECTS = {
@@ -95,38 +109,210 @@ class GuiProgress(Callback):
 
 class GUILoggerCallback(Callback):
     """
-    Simple Keras / Keras-Tuner callback that streams log lines &
-    progress percentages back to the Qt GUI via signals supplied at init.
-    """
-    def __init__(self, log_sig, prog_sig, max_trials: int):
-        super().__init__()
-        self._log = log_sig
-        self._prog = prog_sig
-        self._max_trials = max_trials
-        self._trial_idx = -1           # updated in on_trial_begin
+    Streams textual log lines *and* a global 0-100 % progress value
+    back to the Qt GUI.
 
-    # ---- Keras-Tuner hooks --------------------------------------------------
+    Parameters
+    ----------
+    log_sig   : QtCore.pyqtSignal(str)
+    prog_sig  : QtCore.pyqtSignal(int)
+    max_trials: int        # value from `HydroTuner(..., max_trials=N)`
+    epochs    : int        # same epochs you pass to tuner.search()
+    """
+    def __init__(self, *, log_sig, prog_sig,
+                 trial_sig, max_trials: int, epochs: int):
+        super().__init__()
+        self._log     = log_sig
+        self._prog    = prog_sig
+        self._trial   = trial_sig          #  <<< new
+        self._max_trials = max_trials
+        self._epochs     = epochs
+        self._trial_idx  = 0
+        self._t0_trial   = None            # wall-clock start of current trial
+        # tell the GUI we are still idle
+        self._trial.emit(0, self._max_trials, "--:--")
+
+    # ---------------- Keras-Tuner hooks ----------------
     def on_trial_begin(self, trial):
-        self._trial_idx = trial.trial_id
-        self._log.emit(f"\n── Trial {self._trial_idx + 1}/{self._max_trials} "
-                       f"• HPs: {trial.hyperparameters.values}")
-        # reset intra-trial progress
-        self._prog.emit(int(self._trial_idx * 100 / self._max_trials))
+        self._trial_idx = trial.trial_id + 1          # human-friendly 1-based
+        if self._t0_trial is None:
+            self._t0_trial = time.time()
+            
+        self._log.emit(f"\n── Trial {self._trial_idx}/{self._max_trials} …")
+        self._trial.emit(self._trial_idx,
+                         self._max_trials,
+                         "--:--")                     # ETA not known yet
+        # reset progress bar for this trial
+        self._prog.emit(int((self._trial_idx-1) * 100 / self._max_trials))
 
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
-        msg = (f"      epoch {epoch + 1:>3d} → "
-               f"loss={logs.get('loss', 0):.4f} | "
-               f"val_loss={logs.get('val_loss', 0):.4f}")
-        self._log.emit(msg)
+        if self._t0_trial is None:          # extra belt-and-braces
+            self._t0_trial = time.time()
+        
+        self._log.emit(
+            f"      epoch {epoch + 1:>3d} → "
+            f"loss={logs.get('loss', 0):.4f} | "
+            f"val_loss={logs.get('val_loss', 0):.4f}"
+        )
+                # --- progress & ETA -------------------------------------------------
+        epochs_done = epoch + 1
+        elapsed     = time.time() - self._t0_trial
+        eta_secs    = (elapsed / epochs_done) * (self._epochs - epochs_done)
+        eta_str     = time.strftime("%M:%S", time.gmtime(max(0, eta_secs)))
+        self._trial.emit(self._trial_idx, self._max_trials, eta_str)
 
-        # coarse progress = finished trials + epoch-fraction of current trial
-        epochs = self.params.get("epochs", 1)
-        percent = ((self._trial_idx +
-                    (epoch + 1) / max(1, epochs)) * 100 / self._max_trials)
+        percent = ((self._trial_idx-1) +
+                   epochs_done / self._epochs) * 100 / self._max_trials
         self._prog.emit(int(percent))
-      
 
+    def on_trial_end(self, trial):
+        """
+        Ensure the progress bar snaps exactly to the next tick when a trial
+        finishes.  This matters for very short trials (e.g. 1-epoch) and for
+        the final 100 % update at the end of the search.
+        """
+        # Final ETA for this trial is always zero
+        self._trial.emit(self._trial_idx, self._max_trials, "00:00")
+
+        pct = int(self._trial_idx * 100 / self._max_trials)
+        self._prog.emit(pct)
+        
+    def __deepcopy__(self, memo):
+        """
+        Keras-Tuner deep-copies the callbacks list for every trial.
+        Qt signal objects cannot be copied, so we just return *self*.
+        That is perfectly fine because the tuner resets internal
+        callback state at the start of each trial.
+        """
+        return self
+
+class _GUILoggerCallback(Callback):
+    """
+    Streams textual log lines *and* a global 0-100 % progress value
+    back to the Qt GUI.
+
+    Parameters
+    ----------
+    log_sig   : QtCore.pyqtSignal(str)
+    prog_sig  : QtCore.pyqtSignal(int)
+    max_trials: int        # value from `HydroTuner(..., max_trials=N)`
+    epochs    : int        # same epochs you pass to tuner.search()
+    """
+    def __init__(self, log_sig, prog_sig, *, max_trials: int, epochs: int):
+        super().__init__()
+        self._log        = log_sig
+        self._prog       = prog_sig
+        self._max_trials = max_trials
+        self._epochs     = epochs
+
+        self._trial_no   = 0          # 1-based
+        self._epoch_in_t = 0          # per-trial epoch counter
+
+    # --------------------------------------------------------------------- #
+    #  Keras-Tuner hooks
+    # --------------------------------------------------------------------- #
+    def on_trial_begin(self, trial):
+        # start a *new* trial
+        self._trial_no  += 1
+        self._epoch_in_t = 0
+
+        self._log.emit(
+            f"\n── Trial {self._trial_no}/{self._max_trials} "
+            f"• HPs: {trial.hyperparameters.values}"
+        )
+        # start-of-trial → jump bar to the left edge of this trial
+        pct = int((self._trial_no - 1) / self._max_trials * 100)
+        self._prog.emit(pct)
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        self._epoch_in_t += 1
+
+        self._log.emit(
+            f"      epoch {epoch + 1:>3d} → "
+            f"loss={logs.get('loss', 0):.4f} | "
+            f"val_loss={logs.get('val_loss', 0):.4f}"
+        )
+
+        # finished-fraction of *all* trials
+        frac = ((self._trial_no - 1) + self._epoch_in_t / self._epochs)
+        pct  = int(frac / self._max_trials * 100)
+        self._prog.emit(pct)
+
+    def on_trial_end(self, trial):
+        # make sure we land *exactly* on the next tick (useful for short runs)
+        pct = int(self._trial_no / self._max_trials * 100)
+        self._prog.emit(pct)
+
+#     # --------------------------------------------------------------------- #
+#     #  Make the callback deep-copyable (keras-tuner requirement)
+#     # --------------------------------------------------------------------- #
+#     def __deepcopy__(self, _):
+#         return self
+
+# class GUILoggerCallback(Callback):
+#     """
+#     Simple Keras / Keras-Tuner callback that streams log lines &
+#     progress percentages back to the Qt GUI via signals supplied at init.
+#     """
+#     def __init__(self, log_sig, prog_sig, max_trials: int):
+#         super().__init__()
+#         self._log = log_sig
+#         self._prog = prog_sig
+#         self._max_trials = max_trials
+#         self._trial_idx = -1          
+
+#     # ---- Keras-Tuner hooks --------------------------------------------------
+#     def on_trial_begin(self, trial):
+#         self._trial_idx = trial.trial_id
+#         self._log.emit(f"\n── Trial {self._trial_idx + 1}/{self._max_trials} "
+#                        f"• HPs: {trial.hyperparameters.values}")
+#         # reset intra-trial progress
+#         self._prog.emit(int(self._trial_idx * 100 / self._max_trials))
+
+#     def on_epoch_end(self, epoch, logs=None):
+#         logs = logs or {}
+#         msg = (f"      epoch {epoch + 1:>3d} → "
+#                f"loss={logs.get('loss', 0):.4f} | "
+#                f"val_loss={logs.get('val_loss', 0):.4f}")
+#         self._log.emit(msg)
+
+#         # coarse progress = finished trials + epoch-fraction of current trial
+#         epochs = self.params.get("epochs", 1)
+#         percent = ((self._trial_idx +
+#                     (epoch + 1) / max(1, epochs)) * 100 / self._max_trials)
+#         self._prog.emit(int(percent))
+      
+    def __deepcopy__(self, memo):
+        """
+        Keras-Tuner deep-copies the callbacks list for every trial.
+        Qt signal objects cannot be copied, so we just return *self*.
+        That is perfectly fine because the tuner resets internal
+        callback state at the start of each trial.
+        """
+        return self
+    
+    # def __getstate__(self):
+    #    """
+    #    Return a dict that *can be pickled*.
+    #    Qt signals (`pyqtBoundSignal`) are not picklable, so we exclude them.
+    #    """
+    #    state = self.__dict__.copy()
+    #    state["_log"]  = ''           # or a string placeholder
+    #    state["_prog"] = None
+    #    return state
+
+    # def __setstate__(self, state):
+    #     """
+    #     Re-hydrate the instance after unpickling.
+    
+    #     We restore the simple fields and leave the Qt signals as `None`
+    #     (they won’t be used in a background process created via unpickling
+    #     anyway).
+    #     """
+    #     self.__dict__.update(state)
+        
 def _detect_gpu() -> str | None:
     """
     Very light-weight GPU detection.  Returns a short string or None.
@@ -445,3 +631,81 @@ def json_ready(obj: Any, *, mode: str = "literal") -> Any:
     # 4) anything else → unsupported
     raise TypeError(f"Object of type {type(obj).__name__} "
                     "is not JSON serialisable")
+
+
+def _safe_eval(txt: str):
+    """
+    Return the Python literal contained in *txt* without using eval().
+
+    * First choice  : ast.literal_eval  (fast, safe, built-in)
+    * Fallback      : json.loads       (more restrictive – strings must use "")
+    """
+    if _AST_AVAILABLE:
+        return ast.literal_eval(txt)
+    return json.loads(txt)
+
+def _is_number(x):               # (int OR float, but NOT bool)
+    return isinstance(x, (Integral, Real)) and not isinstance(x, bool)
+
+def _convert_if_path(obj):
+    """Turn any pathlib.Path into its string form so json.dumps will work."""
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _convert_if_path(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return type(obj)(_convert_if_path(v) for v in obj)
+    return obj
+
+def parse_search_space(text: str) -> dict:
+    """
+    Safely parse the user-supplied Python-like dict and return a clean,
+    JSON-serialisable dictionary that HydroTuner can consume.
+
+    Raises ValueError / TypeError with descriptive messages on bad input.
+    """
+    try:
+        space = _safe_eval(text.strip())
+    except Exception as err:
+        raise ValueError(f"Not valid Python literal: {err}") from None
+
+    if not isinstance(space, dict):
+        raise TypeError("The top-level object must be a dictionary")
+
+    cleaned = {}
+    for hp_name, spec in space.items():
+
+        #  Case A : list / tuple → hp.Choice 
+        if isinstance(spec, (list, tuple)):
+            if not spec:
+                raise ValueError(f"{hp_name}: choice list cannot be empty")
+            cleaned[hp_name] = [_convert_if_path(v) for v in spec]
+            continue
+
+        #  Case B : {min_value, max_value, …} 
+        if isinstance(spec, dict):
+            if not _ALLOWED_KEYS.issuperset(spec):
+                extra = set(spec) - _ALLOWED_KEYS
+                raise ValueError(
+                    f"{hp_name}: unknown keys in range spec: {extra}"
+                )
+            lo, hi = spec.get("min_value"), spec.get("max_value")
+            if lo is None or hi is None or not (_is_number(lo) and _is_number(hi)):
+                raise TypeError(f"{hp_name}: min/max must be numbers")
+            if lo >= hi:
+                raise ValueError(f"{hp_name}: min_value must be < max_value")
+            step = spec.get("step")
+            if step is not None and (not _is_number(step) or step <= 0):
+                raise ValueError(f"{hp_name}: step must be a positive number")
+
+            # everything OK – deep-copy & convert Paths to str just in case
+            cleaned[hp_name] = _convert_if_path(spec)
+            continue
+
+        # ---------- Anything else ------------------------------------------------
+        raise TypeError(
+            f"{hp_name}: expected list/tuple for choices or dict "
+            "{min_value, max_value, …} for a range; got {type(spec).__name__}"
+        )
+
+    return cleaned

@@ -21,7 +21,7 @@ from fusionlab.tools.app.config import SubsConfig
 from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator
 
 from fusionlab.utils.generic_utils import ensure_directory_exists
-from fusionlab.tools.app.utils import safe_model_loader # _rebuild_from_arch_cfg, s    
+from fusionlab.tools.app.utils import safe_model_loader
 
 Callback = KERAS_DEPS.Callback
 Dataset  = KERAS_DEPS.Dataset
@@ -45,9 +45,9 @@ class TunerApp:
         self._tuner_kwargs = tuner_kwargs or {}
 
         # ── Manifest bootstrap ──────────────────────────────────────────
-        reg = ManifestRegistry(log_callback=self.log)
-        reg._MANIFEST_FILENAME ='tuner_run_manifest.json'
-        
+        reg = ManifestRegistry(
+            log_callback=self.log, manifest_kind='tuning')
+
         if manifest_path:
             # user passed an existing one ⇒ import into registry
             self._manifest_path = reg.import_manifest(manifest_path)
@@ -59,10 +59,10 @@ class TunerApp:
             run_dir = reg.new_run_dir(city=cfg.city_name,
                                       model=cfg.model_name)
             self._manifest_path = (
-                run_dir / ManifestRegistry._MANIFEST_FILENAME
+                run_dir / reg._manifest_filename
             )
             # prime it with the current cfg
-            cfg.to_json(name = 'tuner_run_manifest.json')  # writes inside run_dir
+            cfg.to_json(manifest_kind='tuning')  # writes inside run_dir
 
         self._run_dir = self._manifest_path.parent                 # ← NEW
 
@@ -83,8 +83,7 @@ class TunerApp:
         stop_check: Optional[Callable[[], bool]] = None,
         callbacks: Optional[list[Callback]] = None,
     ):
-        self._tick("TunerApp ▸ preprocessing …")
-
+    
         # 1 ▸ Data processing ------------------------------------------------
         self._processor = DataProcessor(self.cfg, self.log)
         processed_df = self._processor.run(stop_check=stop_check)
@@ -133,9 +132,10 @@ class TunerApp:
                 "fixed_params": fixed_params,
                 "tuner_kwargs": self._tuner_kwargs,
             },
-            name ='tuner_run_manifest.json'
+            manifest_kind='tuning', 
         )
-
+        patience = self._tuner_kwargs.pop("patience", 8)
+        self._num_cpus = self._tuner_kwargs.pop ('num_cpus', 1)
         # 4 ▸ Instantiate HydroTuner ---------------------
         self._tuner = HydroTuner(
             model_name_or_cls=self.cfg.model_name,
@@ -149,13 +149,18 @@ class TunerApp:
         val_tf   = val_ds.prefetch(AUTOTUNE)
 
         # 6 ▸ Run search --------------------------------
+        monitor_name = (
+            self._tuner.objective
+            if isinstance(self._tuner.objective, str)
+            else getattr(self._tuner.objective, "name", str(self._tuner.objective))
+        )
+                
         early_stop = EarlyStopping(
-            monitor=self._tuner.objective,
-            patience=8,
+            monitor=str(monitor_name), 
+            patience=patience,
             restore_best_weights=True,
             verbose=1,
         )
-        
         
         self._tick("TunerApp ▸ hyper-parameter search …")
 
@@ -218,7 +223,7 @@ class TunerApp:
                 "save_format": save_fmt,
                 "input_shapes": input_shapes,
             },
-            name="tuner_run_manifest.json",
+            manifest_kind="tuning",
         )
 
         self._tick(f"Search complete → {model_path}")

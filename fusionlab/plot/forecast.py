@@ -1382,7 +1382,8 @@ def plot_forecasts(
 
     vlog(f"  Plotting for sample_idx: {selected_ids_for_plot}",
          level=4, verbose=verbose, logger=_logger)
-
+    
+    cmap = plot_kwargs.get('cmap', 'viridis')
     # --- Plotting Logic ---
     if kind == "temporal":
         num_plots = len(selected_ids_for_plot) * output_dim
@@ -1660,7 +1661,7 @@ def plot_forecasts(
                 else: 
                     norm=None # norm will be applied for uniform scale
                 
-                cmap = plot_kwargs.get('cmap', 'viridis')
+                
                 step_name = step_names.get(step, '{}') # for consistency
 
                 sc = ax.scatter(

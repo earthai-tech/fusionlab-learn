@@ -48,9 +48,11 @@ from PyQt5.QtWidgets import (
     QStackedWidget, 
     QButtonGroup
 )
+
+from .notifications import show_resource_warning
 from .styles import PRIMARY, SECONDARY, TAB_STYLES 
 from .tables import _PandasModel 
-from .notifications import show_resource_warning 
+from .utils import parse_search_space  
 
 __all__= ["CsvEditDialog", "TunerDialog", "ModelChoiceDialog"]
 
@@ -189,7 +191,7 @@ class TunerDialog(QDialog):
     One-stop Hyper-parameter Tuning dialog
 
     ┌────────────────────── Tuner  ──────────────────────┐
-    │  [ Developer ▸ ]   [ Easy Setup ]                  │  ← toggle bar
+    │  [ Developer ▸ ]   [ Easy Setup ]                  │  
     ├────────────────────────────────────────────────────┤
     │  page widgets go here …                            │
     └────────────────────────────────────────────────────┘
@@ -398,9 +400,8 @@ class _DeveloperPage(QWidget):
     def get_config(self) -> dict:
         """Returns the configured tuning parameters if the dialog is accepted."""
         try:
-            # Use eval to parse the Python dictionary string.
-            # This is generally safe in a controlled desktop app context.
-            search_space = eval(self.search_space_edit.toPlainText())
+            search_space = parse_search_space(
+                self.search_space_edit.toPlainText())
             if not isinstance(search_space, dict):
                 raise TypeError("Search space must be a valid dictionary.")
         except Exception as e:
@@ -409,11 +410,13 @@ class _DeveloperPage(QWidget):
             return None
 
         return {
-            "tuner_type": self.tuner_type_combo.currentText(),
-            "max_trials": self.max_trials_spin.value(),
+        "search_space": search_space,
+        "tuner_settings": {
+            "tuner_type":        self.tuner_type_combo.currentText(),
+            "max_trials":        self.max_trials_spin.value(),
             "executions_per_trial": self.executions_spin.value(),
-            "search_space": search_space
-        }
+        },
+    }
 
 
 class _EasyPage(QWidget):
@@ -459,8 +462,76 @@ class _EasyPage(QWidget):
 
         # ? System 
         self._build_system_tab()
+        
+    def _build_model_tab(self) -> None:
+        t_model = QWidget()
+        grid = QGridLayout(t_model)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+    
+        # ── basic widgets ────────────────────────────────────────────────
+        self.time_steps   = QSpinBox(minimum=1,  maximum=20,  value=4)
+        self.horizon      = QSpinBox(minimum=1,  maximum=10,  value=3)
+        self.batch_size   = QSpinBox(minimum=8,  maximum=1024, value=256)
+        self.objective    = QLineEdit("val_loss")
+    
+        self.mode_combo   = QComboBox(); self.mode_combo.addItems(["pihal", "tft"])
+        self.activation   = QComboBox(); self.activation.addItems(
+            ["relu", "gelu", "swish", "elu", "tanh", "sigmoid", "linear"]
+        )
+        self.memory_size  = QSpinBox(minimum=10, maximum=500, value=100)
+    
+        self.use_residuals = QCheckBox("Residuals");  self.use_residuals.setChecked(True)
+        self.use_bn        = QCheckBox("Batch-norm")
+    
+        self.patience_spin = QSpinBox(minimum=1, maximum=100, value=8)   # ← NEW
+    
+        self.multi_scale_agg = QComboBox(); self.multi_scale_agg.addItems(
+            ["last", "average", "flatten", "auto", "sum"]
+        )
+        self.final_agg   = QComboBox(); self.final_agg.addItems(["last", "average", "flatten"])
+        self.encoder_type= QComboBox(); self.encoder_type.addItems(["hybrid", "transformer"])
+        self.decoder_stack = QComboBox(); self.decoder_stack.addItems(
+            ["cross", "hierarchical", "memory"]
+        )
+        self.feature_proc = QComboBox(); self.feature_proc.addItems(["vsn", "norm", "none"])
+    
+        # helper to add one logical row ------------------------------------------------
+        def add_row(r: int, label1: str, w1, label2: str, w2):
+            grid.addWidget(QLabel(label1), r, 0, Qt.AlignRight)
+            grid.addWidget(w1,            r, 1)
+            grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
+            grid.addWidget(w2,            r, 3)
+    
+        add_row(0, "Time-steps (look-back):", self.time_steps,
+                "Forecast horizon:",          self.horizon)
+        add_row(1, "Batch size:",             self.batch_size,
+                "Tuner objective:",           self.objective)
+        add_row(2, "Mode:",                   self.mode_combo,
+                "Activation:",                self.activation)
+        add_row(3, "Memory size:",            self.memory_size,
+                "Multi-scale agg:",           self.multi_scale_agg)
+        add_row(4, "Final agg:",              self.final_agg,
+                "Encoder type:",              self.encoder_type)
+        add_row(5, "Decoder stack:",          self.decoder_stack,
+                "Feature processing:",        self.feature_proc)
+    
+        # ── combined check-boxes + patience ----------------------------------------
+        cb_box = QHBoxLayout()
+        cb_box.addWidget(self.use_residuals)
+        cb_box.addWidget(self.use_bn)
+        cb_widget = QWidget(); cb_widget.setLayout(cb_box)
+    
+        grid.addWidget(cb_widget,       6, 1)              # same column (col-1)
+        grid.addWidget(QLabel("Patience:"), 6, 2, Qt.AlignRight)
+        grid.addWidget(self.patience_spin,  6, 3)
+    
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+    
+        self.tabs.addTab(t_model, "Model")
 
-    def _build_model_tab(self):
+    def __build_model_tab(self):
         # ?  Model / data-driven parameters  ––– now a 2-column grid
         t_model = QWidget()
         grid     = QGridLayout(t_model)
@@ -476,7 +547,8 @@ class _EasyPage(QWidget):
         self.mode_combo  = QComboBox()
         self.mode_combo.addItems(["pihal", "tft"])
         self.activation  = QComboBox()
-        self.activation.addItems(["relu", "gelu", "swish"])
+        self.activation.addItems(
+            ["relu", "gelu", "swish", "elu", "tanh", "sigmoid", "linear",])
         self.memory_size = QSpinBox(minimum=10, maximum=500, value=100)
         
         self.use_residuals = QCheckBox()
@@ -575,89 +647,200 @@ class _EasyPage(QWidget):
         self.tabs.addTab(t, "Search Space")
 
     # ---------------- Physics search-space tab ------------------------
-    def _build_physics_tab(self):
-        t = QWidget(); l = QFormLayout(t)
 
-        # ?-pde
-        self.lpd_lo = QDoubleSpinBox(
-            decimals=3, value=0.1, minimum=0.0, maximum=10.0, singleStep=0.05)
-        self.lpd_hi = QDoubleSpinBox(
-            decimals=3, value=0.5, minimum=0.0, maximum=10.0, singleStep=0.05)
-
-        # C
-        self.c_type = QComboBox(); self.c_type.addItems(
-            ["learnable", "fixed"])
-        self.c_val_lo = QDoubleSpinBox(
-            decimals=5, value=1e-3, minimum=1e-6, maximum=1.0, 
-            singleStep=1e-5)
-        self.c_val_hi = QDoubleSpinBox(
-            decimals=5, value=1e-1, minimum=1e-6, maximum=1.0, 
-            singleStep=1e-5)
-
-        # K / Ss / Q
-        def phys_widget(default):
-            wlo = QDoubleSpinBox(
-                decimals=6,value=default,minimum=1e-6,maximum=1.0,singleStep=1e-5)
-            whi = QDoubleSpinBox(
-                decimals=6,value=default*10,minimum=1e-6,maximum=1.0,singleStep=1e-5)
-            return wlo, whi
-
-        self.k_lo,  self.k_hi  = phys_widget(1e-4)
-        self.ss_lo, self.ss_hi = phys_widget(1e-5)
-        self.q_lo,  self.q_hi  = phys_widget(0.0)
-
+    def _build_physics_tab(self) -> None:
+        t      = QWidget()
+        layout = QFormLayout(t)
+    
+        # ── λ-PDE range ---------------------------------------------------------
+        self.lpd_lo = QDoubleSpinBox(decimals=3, value=0.10,
+                                     minimum=0.0, maximum=10.0, singleStep=0.05)
+        self.lpd_hi = QDoubleSpinBox(decimals=3, value=0.50,
+                                     minimum=0.0, maximum=10.0, singleStep=0.05)
+        _hbox = QHBoxLayout(); _hbox.addWidget(self.lpd_lo); _hbox.addWidget(self.lpd_hi)
+        layout.addRow("λ-PDE", _hbox)
+    
+        # helper that builds   [ learnable/fixed ▼ |  loSpin | hiSpin ]
+        def _scalar_param_row(label: str, default: float):
+            box   = QHBoxLayout()
+            combo = QComboBox(); combo.addItems(["learnable", "fixed", "range"])
+            lo    = QDoubleSpinBox(decimals=6, value=default,
+                                   minimum=1e-6, maximum=1.0, singleStep=1e-5)
+            hi    = QDoubleSpinBox(decimals=6, value=default*10,
+                                   minimum=1e-6, maximum=1.0, singleStep=1e-5)
+    
+            # when mode ≠ “range” disable the second spinbox
+            def _sync(idx: int):
+                is_range = combo.currentText() == "range"
+                lo.setEnabled(is_range or combo.currentText() == "fixed")
+                hi.setEnabled(is_range)
+            combo.currentIndexChanged.connect(_sync)
+            _sync(0)                     # initialise
+    
+            box.addWidget(combo); box.addWidget(lo); box.addWidget(hi)
+            layout.addRow(label, box)
+            return combo, lo, hi
+    
+        # ── C coefficient -------------------------------------------------------
+        self.c_type = QComboBox(); self.c_type.addItems(["learnable", "fixed"])
+        self.c_lo   = QDoubleSpinBox(decimals=5, value=1e-3,
+                                     minimum=1e-6, maximum=1.0, singleStep=1e-5)
+        self.c_hi   = QDoubleSpinBox(decimals=5, value=1e-1,
+                                     minimum=1e-6, maximum=1.0, singleStep=1e-5)
+        _cbox = QHBoxLayout()
+        _cbox.addWidget(self.c_type); _cbox.addWidget(self.c_lo); _cbox.addWidget(self.c_hi)
+        self.c_lo.setEnabled(False); self.c_hi.setEnabled(False)          # (learnable) default
+        def _sync_c(idx):                                          # enable both spins only
+            is_fixed = self.c_type.currentText() == "fixed"        # when “fixed” selected
+            self.c_lo.setEnabled(is_fixed); self.c_hi.setEnabled(False)
+        self.c_type.currentIndexChanged.connect(_sync_c)
+        layout.addRow("Coefficient C", _cbox)
+    
+        # ── K , Ss , Q ----------------------------------------------------------
+        (self.k_mode,  self.k_lo,  self.k_hi)  = _scalar_param_row("K",  1e-4)
+        (self.ss_mode, self.ss_lo, self.ss_hi) = _scalar_param_row("Ss", 1e-5)
+        (self.q_mode,  self.q_lo,  self.q_hi)  = _scalar_param_row("Q",  0.0)
+    
+        # ── PDE-mode & loss weights --------------------------------------------
         self.pde_mode = QComboBox(); self.pde_mode.addItems(
-            ["both","consolidation","gw_flow","none"])
-
-        # loss weights
-        self.lw_subs = QDoubleSpinBox(
-            value=1.0, minimum=0.0, maximum=10.0, 
-            singleStep=0.1)
-        self.lw_gwl  = QDoubleSpinBox(
-            value=1.0, minimum=0.0, maximum=10.0, 
-             singleStep=0.1)
-
-        # layout
-        def row(lbl, w1, w2=None): 
-            box = QHBoxLayout(); box.addWidget(w1); 
-            if w2: box.addWidget(w2)
-            l.addRow(lbl, box)
-
-        row("?-PDE", self.lpd_lo, self.lpd_hi)
-        box_c = QHBoxLayout(); 
-        box_c.addWidget(self.c_type); box_c.addWidget(
-            self.c_val_lo); box_c.addWidget(self.c_val_hi)
-        l.addRow("Coefficient C", box_c)
-        row("K range",  self.k_lo,  self.k_hi)
-        row("Ss range", self.ss_lo, self.ss_hi)
-        row("Q range",  self.q_lo,  self.q_hi)
-        l.addRow("PDE mode",  self.pde_mode)
-
-        box_w = QHBoxLayout(); box_w.addWidget(
-            self.lw_subs); box_w.addWidget(self.lw_gwl)
-        l.addRow("Loss weights (Subs/ GWL)", box_w)
-
+            ["both", "consolidation", "gw_flow", "none"])
+    
+        layout.addRow("PDE mode", self.pde_mode)
+    
+        self.lw_subs = QDoubleSpinBox(value=1.0, minimum=0.0, maximum=10.0, singleStep=0.1)
+        self.lw_gwl  = QDoubleSpinBox(value=1.0, minimum=0.0, maximum=10.0, singleStep=0.1)
+        _w = QHBoxLayout(); _w.addWidget(self.lw_subs); _w.addWidget(self.lw_gwl)
+        layout.addRow("Loss weights (Subs / GWL)", _w)
+    
         self.tabs.addTab(t, "Physics")
 
-    def _build_system_tab(self):
-        t = QWidget(); l = QFormLayout(t)
+    # def __build_physics_tab(self):
+    #     t = QWidget(); l = QFormLayout(t)
 
+    #     # ?-pde
+    #     self.lpd_lo = QDoubleSpinBox(
+    #         decimals=3, value=0.1, minimum=0.0, maximum=10.0, singleStep=0.05)
+    #     self.lpd_hi = QDoubleSpinBox(
+    #         decimals=3, value=0.5, minimum=0.0, maximum=10.0, singleStep=0.05)
+
+    #     # C
+    #     self.c_type = QComboBox(); self.c_type.addItems(
+    #         ["learnable", "fixed"])
+    #     self.c_val_lo = QDoubleSpinBox(
+    #         decimals=5, value=1e-3, minimum=1e-6, maximum=1.0, 
+    #         singleStep=1e-5)
+    #     self.c_val_hi = QDoubleSpinBox(
+    #         decimals=5, value=1e-1, minimum=1e-6, maximum=1.0, 
+    #         singleStep=1e-5)
+
+    #     # K / Ss / Q
+    #     def phys_widget(default):
+    #         wlo = QDoubleSpinBox(
+    #             decimals=6,value=default,minimum=1e-6,maximum=1.0,singleStep=1e-5)
+    #         whi = QDoubleSpinBox(
+    #             decimals=6,value=default*10,minimum=1e-6,maximum=1.0,singleStep=1e-5)
+    #         return wlo, whi
+
+    #     self.k_lo,  self.k_hi  = phys_widget(1e-4)
+    #     self.ss_lo, self.ss_hi = phys_widget(1e-5)
+    #     self.q_lo,  self.q_hi  = phys_widget(0.0)
+
+    #     self.pde_mode = QComboBox(); self.pde_mode.addItems(
+    #         ["both","consolidation","gw_flow","none"])
+
+    #     # loss weights
+    #     self.lw_subs = QDoubleSpinBox(
+    #         value=1.0, minimum=0.0, maximum=10.0, 
+    #         singleStep=0.1)
+    #     self.lw_gwl  = QDoubleSpinBox(
+    #         value=1.0, minimum=0.0, maximum=10.0, 
+    #          singleStep=0.1)
+
+    #     # layout
+    #     def row(lbl, w1, w2=None): 
+    #         box = QHBoxLayout(); box.addWidget(w1); 
+    #         if w2: box.addWidget(w2)
+    #         l.addRow(lbl, box)
+
+    #     row("λ-PDE", self.lpd_lo, self.lpd_hi)
+    #     box_c = QHBoxLayout(); 
+    #     box_c.addWidget(self.c_type); box_c.addWidget(
+    #         self.c_val_lo); box_c.addWidget(self.c_val_hi)
+    #     l.addRow("Coefficient C", box_c)
+    #     # XXXX FIX HERE ---------------------
+    #     # TOFIX . can behave like C , K, SS, Q range can be also ['learnable', 'fixed'] or 
+    #     # a range of number, so fixed . 
+    #     row("K range",  self.k_lo,  self.k_hi)
+    #     row("Ss range", self.ss_lo, self.ss_hi)
+    #     row("Q range",  self.q_lo,  self.q_hi)
+    #     # ---------------------------------------------------
+    #     l.addRow("PDE mode",  self.pde_mode)
+
+    #     box_w = QHBoxLayout(); box_w.addWidget(
+    #         self.lw_subs); box_w.addWidget(self.lw_gwl)
+    #     l.addRow("Loss weights (Subs/ GWL)", box_w)
+
+    #     self.tabs.addTab(t, "Physics")
+
+        
+    # ---------------- System tab -------------------------------------------------
+    def _build_system_tab(self) -> None:
+        import platform, psutil
+        try:                            # GPU detection (≈ TensorFlow ≥ 2.1)
+            import tensorflow as tf
+            gpus = tf.config.list_physical_devices("GPU")
+            gpu_info = ", ".join(d.name.split("/")[-1] for d in gpus) or "— none —"
+        except Exception:
+            gpu_info = "— unavailable —"
+    
+        t      = QWidget()
+        layout = QFormLayout(t)
+    
+        # user-editable knobs ----------------------------------------------------
         self.tuner_algo = QComboBox(); self.tuner_algo.addItems(
-            ["randomsearch","bayesian","hyperband"])
+            ["randomsearch", "bayesian", "hyperband"])
         self.max_trials = QSpinBox(value=20, minimum=1, maximum=1000)
         self.execs      = QSpinBox(value=1, minimum=1, maximum=10)
-        self.cpu_spin   = QSpinBox(
-            value=mpo.cpu_count(), minimum=1,
-            maximum=mpo.cpu_count())
-        self.seed_spin  = QSpinBox(
-            value=42, minimum=0, maximum=99999)
-
-        l.addRow("Tuner algorithm",   self.tuner_algo)
-        l.addRow("Max trials",        self.max_trials)
-        l.addRow("Executions / trial",self.execs)
-        l.addRow("CPUs",              self.cpu_spin)
-        l.addRow("Random seed",       self.seed_spin)
-
+        self.cpu_spin   = QSpinBox(value=mpo.cpu_count(), minimum=1,
+                                   maximum=mpo.cpu_count())
+        self.seed_spin  = QSpinBox(value=42, minimum=0, maximum=99999)
+    
+        layout.addRow("Tuner algorithm:",    self.tuner_algo)
+        layout.addRow("Max trials:",         self.max_trials)
+        layout.addRow("Executions / trial:", self.execs)
+        layout.addRow("CPUs to use:",        self.cpu_spin)
+        layout.addRow("Random seed:",        self.seed_spin)
+    
+        # ------------------------------------------------------------------------
+        # auto-detected machine summary (read-only)
+        # ------------------------------------------------------------------------
+        sys_box   = QFrame(); sys_box.setObjectName("card")
+        sys_layout= QVBoxLayout(sys_box); sys_layout.setContentsMargins(8, 6, 8, 6)
+    
+        title = QLabel("<b>Machine summary</b>")
+        title.setObjectName("cardTitle")
+        
+        logical  = psutil.cpu_count(logical=True)   # all hardware threads
+        physical = psutil.cpu_count(logical=False)  # real cores (None → fallback)
+        
+        if physical is None:                        # psutil couldn’t detect
+            physical = logical
+            
+        info = QLabel(
+            f"<pre>"
+            f"OS      : {platform.system()} {platform.release()}<br>"
+            f"CPU     : {platform.processor() or 'unknown'}<br>"
+            f"Cores   : {logical} ({physical} physical)<br>"
+            f"RAM     : {round(psutil.virtual_memory().total/2**30,1)} GB<br>"
+            f"GPU(s)  : {gpu_info}"
+            f"</pre>"
+        )     
+        
+        info.setTextInteractionFlags(Qt.TextSelectableByMouse)  # allow copy-&-paste
+        sys_layout.addWidget(title)
+        sys_layout.addWidget(info)
+    
+        layout.addRow(sys_box)           # add the summary as the last row
         self.tabs.addTab(t, "System")
 
     def get_config(self) -> dict | None:
@@ -670,6 +853,8 @@ class _EasyPage(QWidget):
             if is_float:
                 return {"min_value": lo, "max_value": hi}
             return {"min_value": lo, "max_value": hi}
+        
+
 
         search_model = {
             "embed_dim":       hp_range(self.embed_lo,  self.embed_hi, 8),
@@ -687,19 +872,43 @@ class _EasyPage(QWidget):
         }
 
         # physics search-space ----------------------------------------
+        def _scalar_choice(mode_cmb, lo_spin, hi_spin):
+            mode = mode_cmb.currentText()
+            if mode == "learnable":
+                return ["learnable"]
+            if mode == "fixed":
+                return [lo_spin.value()]          # single fixed value
+            # mode == "range"
+            return {
+                "min_value": lo_spin.value(),
+                "max_value": hi_spin.value(),
+                "sampling":  "log" if lo_spin.value() > 0 else "linear",
+            }
+        
         search_phys = {
-            "lambda_pde":     hp_range(self.lpd_lo, self.lpd_hi, is_float=True),
+            "lambda_pde":   hp_range(self.lpd_lo, self.lpd_hi, is_float=True),
             "pinn_coefficient_C_type": [self.c_type.currentText()],
-            "pinn_coefficient_C_value": {
-                "min_value": self.c_val_lo.value(),
-                "max_value": self.c_val_hi.value(),
-                "sampling":  "log",
-            },
-            "K": hp_range(self.k_lo, self.k_hi, is_float=True),
-            "Ss": hp_range(self.ss_lo, self.ss_hi, is_float=True),
-            "Q":  hp_range(self.q_lo, self.q_hi, is_float=True),
+            "pinn_coefficient_C_value": _scalar_choice(self.c_type,
+                                                       self.c_lo, self.c_hi),
+            "K":  _scalar_choice(self.k_mode,  self.k_lo,  self.k_hi),
+            "Ss": _scalar_choice(self.ss_mode, self.ss_lo, self.ss_hi),
+            "Q":  _scalar_choice(self.q_mode,  self.q_lo,  self.q_hi),
             "pde_mode": [self.pde_mode.currentText()],
         }
+        
+        # search_phys = {
+        #     "lambda_pde":     hp_range(self.lpd_lo, self.lpd_hi, is_float=True),
+        #     "pinn_coefficient_C_type": [self.c_type.currentText()],
+        #     "pinn_coefficient_C_value": {
+        #         "min_value": self.c_val_lo.value(),
+        #         "max_value": self.c_val_hi.value(),
+        #         "sampling":  "log",
+        #     },
+        #     "K": hp_range(self.k_lo, self.k_hi, is_float=True),
+        #     "Ss": hp_range(self.ss_lo, self.ss_hi, is_float=True),
+        #     "Q":  hp_range(self.q_lo, self.q_hi, is_float=True),
+        #     "pde_mode": [self.pde_mode.currentText()],
+        # }
 
         # fixed params update -----------------------------------------
         fixed_upd = {
@@ -734,6 +943,7 @@ class _EasyPage(QWidget):
                 "objective":         self.objective.text().strip(),
                 "seed":              self.seed_spin.value(),
                 "num_cpus":          self.cpu_spin.value(),
+                "patience":     self.patience_spin.value(), 
             },
             "fixed_params":  fixed_upd,
             "search_space":  {**search_model, **search_phys},

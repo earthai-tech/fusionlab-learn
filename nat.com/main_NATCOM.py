@@ -94,7 +94,7 @@ ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 # Training and Forecasting Periods
 TRAIN_END_YEAR = 2022        # Example: Use data up to 2020 for training
 FORECAST_START_YEAR = 2023   # Example: Start forecasting for 2021
-FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
+FORECAST_HORIZON_YEARS = 4   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
 
 # --- Time Series Sequence Configuration ---
 # The look-back window (`TIME_STEPS`) is a critical hyperparameter.
@@ -897,7 +897,8 @@ except Exception as e:
                 "batches from the validation dataset even with .take(1)."
             )
             # inputs_test_dict and targets_test_dict_for_eval will remain None
-#%%
+#%
+from fusionlab.plot.forecast import plot_forecasts 
 # 3. Proceed with forecasting if input data (from test or validation) is available
 if inputs_test_dict is not None:
     print(f"\nGenerating SubsModel predictions on: {dataset_name_for_forecast}...")

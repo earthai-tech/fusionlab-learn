@@ -22,6 +22,8 @@ from typing import (
     Dict,
     Union,
     Final,
+    Literal,
+    Tuple,  
     final,
 )
 
@@ -54,12 +56,16 @@ class ManifestRegistry:
         "log",
         "_debug_mode",
         "_run_registry_path",
+        "_manifest_filename",
+        
     )
 
     _instance: Final[Optional["ManifestRegistry"]] = None
     _ENV_VAR: Final[str] = "FUSIONLAB_RUN_DIR"
     _RUNS_SUBDIR: Final[str] = "runs"
-    _MANIFEST_FILENAME: Final[str] = "run_manifest.json"
+    _TRAIN_FILE_NAME : Final[str] = "run_manifest.json"
+    _TUNER_FILE_NAME : Final[str] = "tuner_run_manifest.json"
+
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
@@ -72,15 +78,25 @@ class ManifestRegistry:
     def __init__(
         self,
         session_only: bool = False,
+        manifest_kind: Literal["training","tuning"] = "training",
         log_callback: Optional[Callable[[str], None]] = None,
         debug_mode: Optional[str] = None,
     ) -> None:
+        super().__setattr__("_initialized", False) 
+        
         if getattr(self, "_initialized", False):
             return
 
         super().__setattr__("log", log_callback or print)
         super().__setattr__("_debug_mode", debug_mode or "silence")
-
+        
+        # pick correct file‐name once, use everywhere else
+        _manifest_filename = (
+            self._TRAIN_FILE_NAME if manifest_kind == "training"
+            else self._TUNER_FILE_NAME
+        )
+        super().__setattr__("_manifest_filename", _manifest_filename)
+        
         default_root = Path(
             user_cache_dir("fusionlab-learn", "earthai-tech")
         ) / self._RUNS_SUBDIR
@@ -111,6 +127,16 @@ class ManifestRegistry:
         super().__setattr__("_initialized", True)
 
     def __setattr__(self, name: str, value: Any):
+        # if getattr(self, "_initialized", False):
+        #     raise AttributeError(
+        #         f"{self.__class__.__name__} is immutable; cannot assign {name!r}"
+        #     )
+        # super().__setattr__(name, value)
+        # allow the very first write to `_initialized`
+        if name == "_initialized":
+            super().__setattr__(name, value)
+            return
+    
         if getattr(self, "_initialized", False):
             raise AttributeError(
                 f"{self.__class__.__name__} is immutable; cannot assign {name!r}"
@@ -143,7 +169,7 @@ class ManifestRegistry:
         except Exception:
             city, model = "imported", "run"
         new_dir = self.new_run_dir(city=city, model=model)
-        dest = new_dir / self._MANIFEST_FILENAME
+        dest = new_dir / self._manifest_filename
         shutil.copyfile(source, dest)
         super().__setattr__("_run_registry_path", dest)
         if self._debug_mode == "debug":
@@ -155,13 +181,13 @@ class ManifestRegistry:
         if self._debug_mode == "debug":
             self.log("Searching for latest manifest...")
         all_manifests.extend(
-            self.persistent_root.glob(f"*/{self._MANIFEST_FILENAME}")
+            self.persistent_root.glob(f"*/{self._manifest_filename}")
         )
         if self.session_root:
             if self._debug_mode == "debug":
                 self.log(f"Checking session cache: {self.session_root}")
             all_manifests.extend(
-                self.session_root.glob(f"*/{self._MANIFEST_FILENAME}")
+                self.session_root.glob(f"*/{self._manifest_filename}")
             )
         if not all_manifests:
             if self._debug_mode == "debug":
@@ -185,7 +211,7 @@ class ManifestRegistry:
             section=section,
             item=item,
             as_list=as_list,
-            name=self._MANIFEST_FILENAME,
+            name=self._manifest_filename,
         )
 
     def purge_session(self) -> None:
@@ -197,6 +223,15 @@ class ManifestRegistry:
     @property
     def registry_path(self) -> Path:
         return self._run_registry_path
+    
+    @classmethod
+    def manifest_filename(cls) -> str:
+        #e.g. run_dir / ManifestRegistry.manifest_filename()
+        return ( 
+            cls._TRAIN_FILE_NAME if cls._kind == "training" 
+            else cls._TUNER_FILE_NAME
+            )
+
 
 ManifestRegistry.__doc__ = """
 Manages training runs in a centralized cache directory.
@@ -585,21 +620,44 @@ class _ManifestRegistry:
     @property
     def registry_path(self) -> Path:
         return self._run_registry_path
-    
+  
+
 def _update_manifest(
     run_dir: Union[str, Path],
     section: str,
     item: Union[Any, Dict[str, Any]],
     *,
     as_list: bool = False,
+    manifest_kind:  Literal["training","tuning"] = None,
     name: str = "run_manifest.json",
+    check_manifest : bool=True, 
 ) -> None:
     """
     Safely reads, updates, and writes a JSON manifest file.
+    Read, update and atomically write a *training* or *tuning* manifest.
 
     This function is robust to the `run_dir` argument being either a
     directory path or a direct path to the manifest file itself.
     """
+    # ── 1.  Decide the target file-name 
+    kind_to_name = {
+        "training": "run_manifest.json",
+        "tuning":   "tuner_run_manifest.json",
+    }
+    if manifest_kind is not None:
+        if manifest_kind not in kind_to_name:
+            raise ValueError(
+                f"manifest_kind must be 'training' or 'tuning' "
+                f"(got {manifest_kind!r})"
+            )
+        name = kind_to_name[manifest_kind]
+
+    if check_manifest and name not in kind_to_name.values():
+        raise ValueError(
+            f"Illegal manifest file name {name!r}. "
+            "Allowed: 'run_manifest.json', 'tuner_run_manifest.json'"
+        )
+        
     # --- Robust Path Handling ---
     path_obj = Path(run_dir)
     manifest_path: Path
@@ -643,7 +701,8 @@ def _update_manifest(
             sec["_"] = item
 
     # --- Atomic Write ---
-    # Write to a temporary file, then replace the original to prevent corruption.
+    # Write to a temporary file, then 
+    # replace the original to prevent corruption.
     tmp_path = manifest_path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     os.replace(tmp_path, manifest_path)
@@ -761,8 +820,11 @@ def locate_manifest(
 def _locate_manifest(
     log: Callable[[str], None] = print, 
     _debug_mode: Optional[str] ="silence", 
-    name: Optional[str] = None, 
-) -> Optional[Path]:
+    *, 
+    manifest_kind : Literal["training", "tuning"] | None = None,
+    name          : Optional[str] = None,
+    locate_both   : bool = False,
+) -> Optional[Path] | Tuple[Optional[Path], Optional[Path]]:
     """Finds the most recent `run_manifest.json` across all possible locations.
 
     This function provides the definitive way to find the latest
@@ -786,50 +848,79 @@ def _locate_manifest(
     _debug_mode: str, optional 
        Whether for debugging (``'debug'``) or mute (``'silence'``). 
        Default is ``'silence'``.  
+    manifest_kind :
+        `"training"` → look for ``run_manifest.json``  
+        `"tuning"`   → look for ``tuner_run_manifest.json``  
+        `None`       → honour *name* (back-compat, default='run_manifest.json'
+    name :
+        Custom file-name when *manifest_kind* is *None*.
+    locate_both :
+        When *True* return a **pair** *(latest_training, latest_tuning)*.
+        Useful for GUIs that want to ask which one to use.
+        
     Returns
     -------
-    Optional[Path]
+    Path | None  *or*  (Path | None, Path | None)
         The absolute path to the most recently modified manifest file found,
         or None if no runs exist in any location.
 
+    Notes
+    -----
+    • Searches the persistent cache *and* all temp “session-only” runs.  
+    • Chooses the file with the newest *mtime*.
+    
     See Also
     --------
     fusionlab.utils.manifest_registry.ManifestRegistry : The class that manages
         the creation of these run directories.
+
     """
+    kind_to_name = {
+        "training": "run_manifest.json",
+        "tuning":   "tuner_run_manifest.json",
+    }
+    if manifest_kind is not None:
+        name = kind_to_name[manifest_kind]
+    name = name or "run_manifest.json"
 
-    if _debug_mode =='debug':
-        log("Searching for the latest training run...")
-    all_manifests = []
-    
-    manifest_json = name or "run_manifest.json"
-    # 1. Search in the persistent cache directory
-    # Instantiate the registry in default (persistent) mode to get the path
-    persistent_registry = ManifestRegistry(log_callback=lambda *a: None)
-    persistent_path = persistent_registry.root_dir
-    if _debug_mode =='debug':
-        log(f"  -> Checking persistent cache: {persistent_path}")
-    all_manifests.extend(persistent_path.glob(f"*/{manifest_json}"))
-
-    # 2. Search in any active temporary session directories
-    temp_dir = Path(tempfile.gettempdir())
-    if _debug_mode =='debug':
-        log(f"  -> Checking for session directories in: {temp_dir}")
-    # The prefix 'fusionlab_run_' matches what ManifestRegistry creates
-    temp_run_dirs = temp_dir.glob("fusionlab_run_*")
-    for run_dir in temp_run_dirs:
-        if run_dir.is_dir():
-            all_manifests.extend(run_dir.glob(f"**/{manifest_json}"))
-
-    # 3. Find the most recent manifest among all found files
-    if not all_manifests:
+    def _find_latest(target_name: str) -> Optional[Path]:
         if _debug_mode =='debug':
-            log("  -> No manifest files found in any known location.")
-        return None
+            log("Searching for the latest training run...")
+        all_manifests = []
+        
+        # 1. Search in the persistent cache directory
+        # Instantiate the registry in default (persistent) mode to get the path
+        persistent_registry = ManifestRegistry(log_callback=lambda *a: None)
+        persistent_path = persistent_registry.root_dir
+        if _debug_mode =='debug':
+            log(f"  -> Checking persistent cache: {persistent_path}")
+        all_manifests.extend(persistent_path.glob(f"*/{target_name}"))
+    
+        # 2. Search in any active temporary session directories
+        temp_dir = Path(tempfile.gettempdir())
+        if _debug_mode =='debug':
+            log(f"  -> Checking for session directories in: {temp_dir}")
+        # The prefix 'fusionlab_run_' matches what ManifestRegistry creates
+        temp_run_dirs = temp_dir.glob("fusionlab_run_*")
+        for run_dir in temp_run_dirs:
+            if run_dir.is_dir():
+                all_manifests.extend(run_dir.glob(f"**/{target_name}"))
+    
+        # 3. Find the most recent manifest among all found files
+        if not all_manifests:
+            if _debug_mode =='debug':
+                log("  -> No manifest files found in any known location.")
+            return None
+    
+        latest_manifest = max(all_manifests, key=lambda p: p.stat().st_mtime)
+        if _debug_mode =='debug':
+            log(f"  -> Found latest manifest: {latest_manifest}")
+    
+        return latest_manifest
+    
+    if locate_both:
+        return (_find_latest(kind_to_name["training"]),
+                _find_latest(kind_to_name["tuning"]))
 
-    latest_manifest = max(all_manifests, key=lambda p: p.stat().st_mtime)
-    if _debug_mode =='debug':
-        log(f"  -> Found latest manifest: {latest_manifest}")
-
-    return latest_manifest
+    return _find_latest(name)
 

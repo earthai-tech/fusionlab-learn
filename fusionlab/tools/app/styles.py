@@ -338,3 +338,41 @@ QTabBar::tab:hover    {{
     color      : white;
 }}
 """
+
+
+LOG_STYLES = f"""
+/* ─────────────────────  Frame & shadow ─────────────────────────────── */
+QDockWidget#logDock {{
+    border        : 1px solid rgba(0,0,0,0.25);   /* light outline      */
+    border-radius : 4px;
+    background    : #ffffff;
+}}
+
+QDockWidget#logDock::separator {{
+    width  : 0px;   /* hide default splitter handle (optional)          */
+    height : 0px;
+}}
+
+/* ─────────────────────  Title-bar (normal + hover) ─────────────────── */
+QDockWidget#logDock::title {{
+    background    : {PRIMARY};
+    color         : white;
+    padding       : 4px 10px;
+    font-weight   : 600;
+    border-top-left-radius  : 4px;
+    border-top-right-radius : 4px;
+}}
+
+QDockWidget#logDock::title:hover {{
+    background : {SECONDARY};         /* on-hover accent                 */
+}}
+
+/* ─────────────────────  The QTextEdit inside ───────────────────────── */
+QDockWidget#logDock QTextEdit {{
+    border        : none;
+    background    : #fafafa;
+    font-family   : Consolas, monospace;
+    font-size     : 11px;
+    padding       : 6px;
+}}
+"""

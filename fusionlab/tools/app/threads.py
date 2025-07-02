@@ -295,7 +295,6 @@ class InferenceThread(QThread):
             self.log_msg.emit(f"❌ {err}")
             self.error_occurred.emit(str(err))
 
-
 class TunerThread(QThread):
     """
     Background worker that runs an HydroTuner hyper-parameter search
@@ -306,6 +305,7 @@ class TunerThread(QThread):
     status_updated   = pyqtSignal(str)     # one-line status bar
     progress_updated = pyqtSignal(int)     # 0-100%
     tuning_finished  = pyqtSignal()        # emitted on graceful completion
+    finished         = pyqtSignal() 
     error_occurred   = pyqtSignal(str)     # emitted on any exception
 
     def __init__(
@@ -324,14 +324,15 @@ class TunerThread(QThread):
         self.edited_df     = edited_df      # None ⇒ DataProcessor loads from disk
 
         # give SubsConfig live hooks so DataProcessor & friends update the GUI
+        self.progress_val = 0   
         self.cfg.log               = self.log_updated.emit
         self.cfg.progress_callback = self.progress_updated.emit
+        self.progress_updated.connect(lambda v: setattr(self, "progress_val", v))
 
-    # ---------------------------------------------------------------------
     def run(self):
         try:
-            self.status_updated.emit("🔍 Preparing data for tuning…")
-            # Instantiate & run the high-level TunerApp ------------------
+            self.status_updated.emit("🔍 Tuning…")
+            # Instantiate & run the high-level TunerApp 
             tuner_app = TunerApp(
                 cfg=self.cfg,
                 search_space=self.search_space,
@@ -342,10 +343,12 @@ class TunerThread(QThread):
             # Wrap our GUI logger so we get live trial / epoch updates
             max_trials = self.tuner_kwargs.get("max_trials", 10)
             gui_cb = GUILoggerCallback(
-                self.log_updated, self.progress_updated,
-                 max_trials=max_trials
-            )
-
+                    log_sig   = self.log_updated,
+                    prog_sig  = self.progress_updated,
+                    trial_sig = self.parent().trial_updated,   
+                    max_trials= max_trials,
+                    epochs    = self.cfg.epochs,
+                )
             tuner_app.run(
                 stop_check=self.isInterruptionRequested,
                 callbacks=[gui_cb],
@@ -353,13 +356,17 @@ class TunerThread(QThread):
 
             self.status_updated.emit("✅ tuning finished")
             self.progress_updated.emit(100)
-            self.tuning_finished.emit()
+            # self.tuning_finished.emit()
 
         except Exception as exc:
             self.status_updated.emit("❌ tuning failed")
             self.error_occurred.emit(str(exc))
-
-    # ------------------------------------------------------------------
+        finally: 
+            # let MiniForecaster know we're done
+            self.tuning_finished.emit()
+            # # also trigger the standard QThread signal
+            # self.finished.emit()          
+            
     def requestInterruption(self):
         """
         Overridden just to emit a log line; real stop-check flag is read

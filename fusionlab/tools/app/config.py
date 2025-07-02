@@ -230,7 +230,7 @@ class SubsConfig:
         self,
         path: Optional[Union[str, os.PathLike]] = None,
         extra: Optional[dict] = None, 
-        name : Optional[str]=None, 
+        manifest_kind : Optional[str]=None, 
     ) -> Path:
         """Serializes the configuration to a JSON manifest file.
 
@@ -264,10 +264,9 @@ class SubsConfig:
             The absolute path to the saved manifest file *inside* the
             central registry.
         """
-        registry = ManifestRegistry()
-        if name is not None: 
-            registry._MANIFEST_FILENAME =  name 
-            
+        registry = ManifestRegistry(
+            manifest_kind= manifest_kind or 'training') 
+        
         manifest_path: Path
 
         if path is None:
@@ -289,7 +288,7 @@ class SubsConfig:
         self._registry_path = run_dir 
         
         # save manifest file absolute path 
-        manifest_path = run_dir / registry._MANIFEST_FILENAME
+        manifest_path = run_dir / registry._manifest_filename
         
         # 1. Create a flat copy of all public attributes for serialization.
         cfg_dict = {

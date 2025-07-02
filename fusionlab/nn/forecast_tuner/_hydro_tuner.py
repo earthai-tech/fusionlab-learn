@@ -3,8 +3,9 @@
 #   Author: LKouadio <etanoyau@gmail.com>
 
 import warnings
+import logging 
 from typing import Dict, Optional, Any , Union, Type
-from typing import Tuple, List 
+from typing import Tuple, List, Callable 
 
 import numpy as np 
 
@@ -254,8 +255,10 @@ class HydroTuner(PINNTunerBase):
         overwrite: bool = True,
         # Legacy parameter for backward compatibility
         param_space: Optional[Dict[str, Any]] = None,
+        _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
         **kwargs
     ):
+        self._logger = _logger or print 
         # 1. Initialize the parent Keras Tuner HyperModel
         # We explicitly pass all tuner-related arguments to the superclass.
         super().__init__(
@@ -266,7 +269,8 @@ class HydroTuner(PINNTunerBase):
             executions_per_trial=executions_per_trial,
             tuner_type=tuner_type,
             seed=seed,
-            overwrite_tuner=overwrite, # PINNTunerBase uses overwrite_tuner
+            overwrite_tuner=overwrite, 
+            _logger= self._logger, 
             **kwargs
         )
 
@@ -537,6 +541,12 @@ class HydroTuner(PINNTunerBase):
             else:
                 model_init_params[name] = sampled_value
     
+        # Cast HPs that *must* be integers back to int
+        for _k in ("embed_dim", "hidden_units", "lstm_units",
+                   "attention_units", "vsn_units", "num_heads"):
+            if _k in model_init_params:
+                model_init_params[_k] = int(model_init_params[_k])
+
         # 3. Instantiate the specified model class.
         # We filter the dictionary to only pass valid arguments to the model's
         # constructor, preventing errors from extraneous keys.
@@ -584,7 +594,6 @@ class HydroTuner(PINNTunerBase):
         )
     
         return model
-    
     
     def run(
         self,
@@ -654,7 +663,7 @@ class HydroTuner(PINNTunerBase):
         """
         vlog(
             f"HydroTuner: Starting run for project '{self.project_name}'...",
-            verbose=verbose, level=1
+            verbose=verbose, level=1, logger=self._logger
         )
     
         # 1. Infer and finalize fixed parameters if not fully provided at init.
@@ -667,7 +676,7 @@ class HydroTuner(PINNTunerBase):
         if not all(k in self.fixed_params for k in required_keys):
             vlog(
                 "Inferring missing fixed parameters from provided data.",
-                verbose=verbose, level=2
+                verbose=verbose, level=2, logger=self._logger
             )
             self.fixed_params = self._infer_and_merge_params(
                 model_name=self.model_class.__name__,
@@ -712,7 +721,8 @@ class HydroTuner(PINNTunerBase):
             self._current_run_case_info.update(case_info)
     
         # 6. Execute the search by calling the parent's search method.
-        vlog("Handing off to Keras Tuner search...", verbose=verbose, level=2)
+        vlog("Handing off to Keras Tuner search...", verbose=verbose, level=2, 
+             logger=self._logger )
         return super().search(
             train_data=train_dataset,
             epochs=epochs,

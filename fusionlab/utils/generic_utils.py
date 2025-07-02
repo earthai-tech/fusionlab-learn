@@ -3370,7 +3370,7 @@ def insert_affix_in(
     base = p.stem         # name without last suffix
     ext = p.suffix        # last suffix, including the dot
     if affix is None or str(affix) =='': 
-        separator = ''
+        separator = ''; affix=''
     new_name = f"{base}{separator}{affix}{ext}"
     return str(p.with_name(new_name))
 

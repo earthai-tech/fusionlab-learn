@@ -4,6 +4,7 @@ Mini Subsidence-Forecasting GUI (academic showcase)
 
 from __future__ import annotations 
 import os, sys, time
+import math 
 import warnings
 import pandas as pd 
 from pathlib import Path
@@ -19,7 +20,8 @@ from PyQt5.QtWidgets import (
     QFormLayout, 
     QFrame, 
     QPushButton, 
-    QLabel, QSpinBox, 
+    QLabel,
+    QSpinBox, 
     QDoubleSpinBox,
     QComboBox, 
     QTextEdit, 
@@ -29,7 +31,12 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog, 
     QMessageBox,
-    QToolTip
+    QToolTip, 
+    # QDockWidget, 
+    # QStylePainter, 
+    # QGridLayout, 
+    # QToolButton
+
 )
 
 from ...registry import ManifestRegistry, _locate_manifest
@@ -41,7 +48,8 @@ from .styles import (
     PRIMARY, SECONDARY, 
     FLAB_STYLE_SHEET,
     INFERENCE_OFF, 
-    DARK_THEME_STYLESHEET, 
+    DARK_THEME_STYLESHEET,
+    LOG_STYLES
     )
 from .threads import TrainingThread, InferenceThread, TunerThread 
 from .view import VIS_SIGNALS
@@ -101,8 +109,8 @@ class MiniForecaster(QMainWindow):
     log_updated      = pyqtSignal(str)
     status_updated   = pyqtSignal(str)
     progress_updated = pyqtSignal(int)
-    
     coverage_ready = pyqtSignal(float) 
+    trial_updated    = pyqtSignal(int, int, str)  
 
     def __init__(self, theme: str = 'light'):
         super().__init__()
@@ -134,7 +142,6 @@ class MiniForecaster(QMainWindow):
         logo_lbl.setAlignment(Qt.AlignCenter)
         
         # --- Instantiate the Manifest Registry in session-only mode ---
-        # This is the only change required to enable self-cleaning.
         self.registry = ManifestRegistry(session_only=True)
         
         self._inference_mode = False     # True → Run button will run inference
@@ -150,6 +157,7 @@ class MiniForecaster(QMainWindow):
         self.status_updated.connect(self.file_label.setText)
         self.progress_updated.connect(self.progress_bar.setValue)
         self.coverage_ready.connect(self._set_coverage)
+        self.progress_updated.connect(self._update_progress)
         self._refresh_manifest_state() 
         
         self._preview_windows: list[QDialog] = []        # ← keep refs
@@ -205,7 +213,7 @@ class MiniForecaster(QMainWindow):
         L = QVBoxLayout(root)
 
         # 0) title
-        title = QLabel("Subsidence PINN")
+        title = QLabel("<b>Subsidence PINN</b>")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"font-size:22px; color:{PRIMARY}")
         # L.addWidget(logo)
@@ -245,8 +253,6 @@ class MiniForecaster(QMainWindow):
         # (pick any width or copy one from the other)
         same_w = self.inf_btn.sizeHint().width()      
         self.tune_btn.setFixedWidth(same_w)
-        # self.inf_btn.setFixedWidth(same_w)
-                
         # row with Run / log already exists …
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setObjectName("stop")   
@@ -278,7 +284,7 @@ class MiniForecaster(QMainWindow):
         # 2) config cards --
         cards = QHBoxLayout(); L.addLayout(cards, 1)
         
-        # Store the returned QFrame widgets as instance attributes ---
+        # Store the returned QFrame widgets as instance attributes ------------
         self.model_card = self._model_card()
         self.training_card = self._training_card()
         self.physics_card = self._physics_card()
@@ -304,17 +310,35 @@ class MiniForecaster(QMainWindow):
         
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        row.addWidget(self.log, 1)          # stretch
-        bottom.addLayout(row)               # ← add FIRST
+        row.addWidget(self.log, 1)       # stretch
+        bottom.addLayout(row)            # ← add FIRST
         
-        # ── full-width progress bar 
+    
+        # ── full-width progress bar ------------------------------------------
+        
+        # self.progress_bar = QProgressBar()
+        # self.progress_bar.setFixedHeight(18)
+        # self.progress_bar.setValue(0)
+        # self.progress_bar.setTextVisible(True)
+        
+        # bottom.addWidget(self.progress_bar)
+        # ── full-width progress bar  +  trial label  ------------------------------
+        row_pb       = QHBoxLayout()                 # add this instead of
+        self.trialLb = QLabel("")                    # … bottom.addWidget(progress_bar)
+        self.trialLb.setFixedWidth(70)               # just wide enough for “Trial 12/99”
+        self.trialLb.setAlignment(Qt.AlignRight|Qt.AlignVCenter)
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(18)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        bottom.addWidget(self.progress_bar)
+        self.progress_bar.setTextVisible(True)       # still shows “47 %”
+        
+        row_pb.addWidget(self.trialLb)               # label first (left)
+        row_pb.addWidget(self.progress_bar, 1)       # bar stretches
+        bottom.addLayout(row_pb)
+        # 
     
-        # ── single-row footer  
+        # ── single-row footer  -----------------------------------------------
         footer = QHBoxLayout()
         
         # Learn more” link
@@ -346,8 +370,32 @@ class MiniForecaster(QMainWindow):
         footer.addWidget(about)
         
         bottom.addLayout(footer)
+        
+        self.trial_updated.connect(self._set_trial_label)
         self.progress_updated.connect(self.progress_bar.setValue)
 
+    def _set_trial_label(self, cur: int, total: int, eta: str):
+        if cur == 0:                       # still waiting for on_trial_begin
+            self.trialLb.setText("--/--")
+        else:
+            self.trialLb.setText(f"Trial {cur}/{total}  ETA {eta}")
+
+    def _update_progress(self, pct: int):
+        self.progress_bar.setValue(pct)
+        
+    # def _update_progress(self, pct: int):
+    #     """Slot used by *all* workflows."""
+    #     self.progress_bar.setValue(pct)
+    
+    #     # If a tuner is active we also refresh the “Trial x/N” label
+    #     if getattr(self, "_tuning_max_trials", None):
+    #         # ceil so “Trial 1/8” appears as soon as pct>0
+    #         cur = min(self._tuning_max_trials,
+    #                   max(1, math.ceil(pct / 100 * self._tuning_max_trials)))
+    #         self.trialLb.setText(f"Trial {cur}/{self._tuning_max_trials}")
+    #     else:
+    #         self.trialLb.setText("")             # hide in training / inference
+    
 
     def _training_card(self) -> QFrame:
         """Creates and returns the 'Training Parameters' UI panel.
@@ -682,32 +730,7 @@ class MiniForecaster(QMainWindow):
         self.progress_bar.setValue(0)
         self._refresh_manifest_state()
         
-    # def _choose_file(self):
-    #     path, _ = QFileDialog.getOpenFileName(
-    #         self, "Open CSV file", "", "CSV Files (*.csv)")
-    #     if not path: 
-    #         return 
-        
-    #     self.file_path = Path(path)
-    #     self.file_label.setStyleSheet(f"color:{SECONDARY};")
-    #     self.file_label.setText(f"Selected: {self.file_path.name}")
-    #     self._log(f"CSV chosen → {self.file_path}")
-        
-    #     if not self.city_input.text().strip():
-    #         self.city_input.setText(self.file_path.stem)
-        
-    #     # 2) pop-up preview / editor  (only now!)
-    #     dlg = CsvEditDialog(str(self.file_path), self)
-    #     if dlg.exec_() == QDialog.Accepted:
-    #         self.edited_df = dlg.edited_dataframe()
-    #         self._log(
-    #             f"CSV preview accepted – {len(self.edited_df)} rows retained.")
-    #     else:
-    #         self.edited_df = None        # fall back to on-disk CSV
-    #         self._log("CSV preview canceled – keeping original file.")
-        
-    #     self.progress_bar.setValue(0)
-        
+
     def _refresh_manifest_state(self) -> None:
         """
         Sync GUI buttons with the registry status.
@@ -718,7 +741,7 @@ class MiniForecaster(QMainWindow):
           • after the user picks a CSV file
         """
         # ---------- 1.  regular training manifest  ---------------------------
-        manifest = _locate_manifest()            # looks for run_manifest.json
+        manifest, tuner_manifest = _locate_manifest(locate_both=True)            
         if manifest:
             self._manifest_path = str(manifest)
             self.inf_btn.setEnabled(True)
@@ -733,7 +756,7 @@ class MiniForecaster(QMainWindow):
             )
     
         # ---------- 2.  tuner manifest  --------------------------------------
-        tuner_manifest = _locate_manifest(name="tuner_run_manifest.json")
+        # tuner_manifest = _locate_manifest(name="tuner_run_manifest.json")
     
         # The Tune button is enabled if the user has a CSV **or** a tuner manifest
         tune_available = (tuner_manifest is not None) or (
@@ -753,36 +776,6 @@ class MiniForecaster(QMainWindow):
             self.tune_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
             self.tune_btn.setToolTip("Select a CSV first to enable tuning")
 
-
-    # def _refresh_manifest_state(self) -> None:
-    #     """
-    #     Check whether a trained run exists *in the registry* and toggle the
-    #     Inference button accordingly.  Call this
-    #       • once at start-up
-    #       • again every time a training run finishes.
-    #     """
-    #     manifest = _locate_manifest() 
-    #     if manifest:
-    #         self._manifest_path = str(manifest)
-    #         self.inf_btn.setEnabled(True)
-    #         self.inf_btn.setStyleSheet(f"background:{PRIMARY};")
-    #         self.inf_btn.setToolTip("Click to switch to inference mode")
-            
-    #     else:
-    #         self._manifest_path = None
-    #         self.inf_btn.setEnabled(False)
-    #         self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
-    #         self.inf_btn.setToolTip(
-    #             "Inference becomes available after you train a model")
-            
-    #     tuner_manifest = _locate_manifest(
-    #         name = 'tuner_run_manifest.json')
-    #     if tuner_manifest:
-    #         self.tune_btn.setEnabled(True)
-    #         self.tune_btn.setStyleSheet(f"background:{PRIMARY};")
-    #     else:
-    #         self.tune_btn.setEnabled(False)
-    #         self.tune_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
 
     def _pick_manifest_for_inference(self) -> str | None:
         """
@@ -932,6 +925,7 @@ class MiniForecaster(QMainWindow):
         # First, check if there is actually a worker to stop.
         if not (hasattr(self, 'active_worker') and 
                 self.active_worker and self.active_worker.isRunning()):
+            self._refresh_stop_button() 
             return
 
         # Create and display a confirmation dialog.
@@ -961,7 +955,28 @@ class MiniForecaster(QMainWindow):
             self.run_btn.setStyleSheet("") # Revert to default style
             self.progress_bar.setValue(0)
             self.progress_bar.setFormat("Stopped")
-            
+        
+            # disconnect the *signal*, not the int buffer
+            try:
+                self.active_worker.progress_updated.disconnect(self.progress_updated)
+            except (TypeError, RuntimeError):
+                # already disconnected or never connected – safe to ignore
+                pass
+
+            self.active_worker.requestInterruption()
+            self.progress_bar.setValue(0)
+            self._refresh_stop_button()
+
+    def _refresh_stop_button(self):
+        busy = getattr(self, "active_worker", None) and \
+               self.active_worker.isRunning()
+        if busy:
+            self.stop_btn.setEnabled(True)
+            self.stop_btn.setToolTip("Abort the running workflow")
+        else:
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setToolTip("Nothing to stop – no workflow running")
+
     def _on_run(self):
         """
         Acts as the main dispatcher for the 'Run' button.
@@ -1115,6 +1130,7 @@ class MiniForecaster(QMainWindow):
                      self.status_updated.emit("⏹ Stopping…"))
         )
         self.active_worker.start()
+        self._refresh_stop_button() 
         
     def _run_inference(self):
         """Launches the inference workflow using the pre-loaded data.
@@ -1168,6 +1184,7 @@ class MiniForecaster(QMainWindow):
         self.stop_btn.clicked.connect(
             self.active_worker.requestInterruption)
         self.active_worker.start()
+        self._refresh_stop_button() 
     
     def _open_tuner_dialog(self):
         if self.file_path is None:
@@ -1194,7 +1211,13 @@ class MiniForecaster(QMainWindow):
             return  # should not happen
     
         # ---------- 2. build a *fresh* SubsConfig for the tuner ---------
-        #    (don’t re-use the training cfg; tuner will re-infer dims)
+
+       # MiniForecaster._open_tuner_dialog()
+        max_trials = cfg_dict["tuner_settings"]["max_trials"]
+        self._tuning_max_trials = max_trials
+        self.trialLb.setText("--/--")          # ← show placeholder from the very start
+
+
         tune_cfg = SubsConfig(
             city_name = self.city_input.text() or "unnamed",
             model_name = self.model_select.currentText(),
@@ -1219,11 +1242,6 @@ class MiniForecaster(QMainWindow):
             cfg           = tune_cfg,
             search_space  = cfg_dict["search_space"],
             tuner_kwargs  = cfg_dict["tuner_settings"],
-            # {
-                # "tuner_type": cfg_dict["tuner_type"],
-                # "max_trials": cfg_dict["max_trials"],
-                # "executions_per_trial": cfg_dict["executions_per_trial"],
-            #}
             edited_df = getattr(self, "edited_df", None),
             parent = self,
         )
@@ -1232,14 +1250,17 @@ class MiniForecaster(QMainWindow):
         w.status_updated.connect(self.status_updated.emit)
         w.progress_updated.connect(self.progress_updated.emit)
         w.tuning_finished.connect(self._worker_done)
-        w.error_occurred.connect(self._on_worker_error)
-    
+        w.error_occurred.connect(lambda msg: (
+                self._on_worker_error(msg),         
+                self._worker_done()                 
+        ))
+
         # Stop-button handling
         self.stop_btn.clicked.connect(w.requestInterruption)
     
         w.start()
+        self._refresh_stop_button() 
         
-
 
     def _worker_done(self):
         """
@@ -1283,7 +1304,10 @@ class MiniForecaster(QMainWindow):
         self.run_btn.setStyleSheet("")
         self.stop_btn.setStyleSheet("") 
         self.tune_btn.setEnabled(True) 
-        
+        self._tuning_max_trials = None
+        self.trialLb.setText("")
+        self.progress_bar.setValue(0)
+
         self._refresh_manifest_state()  
     
     def _show_error_dialog(self, title: str, message: str):
@@ -1311,6 +1335,8 @@ class MiniForecaster(QMainWindow):
         mode = "Inference" if self._inference_mode else "Training"
         # Call the central error dialog handler
         self._show_error_dialog(f"{mode} Workflow Failed", error_message)
+
+
 
 
 def hline() -> QFrame:
@@ -1400,7 +1426,9 @@ def launch_cli(theme: str = 'fusionlab') -> None:
                 border: 2px solid {PRIMARY};
             }}
         """
-        final_stylesheet = selected_stylesheet + inference_border_style
+        final_stylesheet = ( 
+            selected_stylesheet + inference_border_style + LOG_STYLES 
+        )
         app.setStyleSheet(final_stylesheet)
     
     # --- Instantiate and Run the Application ---
