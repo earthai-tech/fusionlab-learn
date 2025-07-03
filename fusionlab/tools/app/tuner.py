@@ -9,19 +9,24 @@ from __future__ import annotations
 import time
 import json 
 import numpy as np
+import pandas as pd 
 
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable
 
-from fusionlab.nn import KERAS_DEPS 
-from fusionlab.nn.forecast_tuner import HydroTuner
-from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet 
-from fusionlab.registry import ManifestRegistry, _update_manifest
-from fusionlab.tools.app.config import SubsConfig
-from fusionlab.tools.app.processing import DataProcessor, SequenceGenerator
-
-from fusionlab.utils.generic_utils import ensure_directory_exists
-from fusionlab.tools.app.utils import safe_model_loader
+from ...nn import KERAS_DEPS 
+from ...nn.forecast_tuner import HydroTuner
+from ...nn.pinn.models import PIHALNet, TransFlowSubsNet 
+from ...registry import ManifestRegistry, _update_manifest
+from ...utils.generic_utils import ensure_directory_exists
+from .components import TunerProgress 
+from .config import SubsConfig
+from .processing import DataProcessor, SequenceGenerator
+from .utils import ( 
+    GUILoggerCallback, 
+    StopCheckCallback, 
+    safe_model_loader,
+)
 
 Callback = KERAS_DEPS.Callback
 Dataset  = KERAS_DEPS.Dataset
@@ -37,12 +42,19 @@ class TunerApp:
         *,
         log_callback: Optional[Callable[[str], None]] = None,
         tuner_kwargs: Optional[Dict[str, Any]] = None,
-        manifest_path: Optional[str | Path] = None,                    # ← NEW
+        manifest_path: Optional[str | Path] = None,  
+        progress_manager = None,   #  ← NEW
+        edited_df: Optional[pd.DataFrame] = None,            #  ← NEW (optional)
+        trial_info : None, 
     ):
         self.cfg = cfg
         self.log = log_callback or print
         self.search_space = search_space or {}
         self._tuner_kwargs = tuner_kwargs or {}
+        self._trial_info = trial_info 
+        
+        self._pm         = progress_manager                  
+        self._edited_df  = edited_df                       
 
         # ── Manifest bootstrap ──────────────────────────────────────────
         reg = ManifestRegistry(
@@ -83,14 +95,24 @@ class TunerApp:
         stop_check: Optional[Callable[[], bool]] = None,
         callbacks: Optional[list[Callback]] = None,
     ):
-    
+        self.stop_check = stop_check or (lambda: False)
         # 1 ▸ Data processing ------------------------------------------------
-        self._processor = DataProcessor(self.cfg, self.log)
+        if self.stop_check(): 
+            raise InterruptedError("Tuning cancelled by user.")
+            
+        self._processor = DataProcessor(
+            self.cfg, self.log, raw_df= self._edited_df 
+            )
         processed_df = self._processor.run(stop_check=stop_check)
+        
+        self.stop_check = stop_check or (lambda: False)
         if stop_check and stop_check():
             raise InterruptedError("Aborted during preprocessing")
 
         # 2 ▸ Sequence generation -------------------------------------------
+        if self.stop_check(): 
+            raise InterruptedError("Aborted during sequence generation")
+            
         self._seq_gen = SequenceGenerator(self.cfg, self.log)
         train_ds, val_ds = self._seq_gen.run(
             processed_df,
@@ -99,8 +121,8 @@ class TunerApp:
             ),
             stop_check=stop_check,
         )
-        if stop_check and stop_check():
-            raise InterruptedError("Aborted during sequence generation")
+        if self.stop_check(): 
+            raise InterruptedError("Tuning params configuration aborted.")
 
         # 3 ▸ Build fixed-param dict for HydroTuner --------------------------
         inputs  = self._seq_gen.inputs_train
@@ -141,6 +163,7 @@ class TunerApp:
             model_name_or_cls=self.cfg.model_name,
             fixed_params=fixed_params,
             search_space=self.search_space,
+            _logger = self._tick, 
             **self._tuner_kwargs,
         )
 
@@ -149,6 +172,18 @@ class TunerApp:
         val_tf   = val_ds.prefetch(AUTOTUNE)
 
         # 6 ▸ Run search --------------------------------
+        if self.stop_check(): 
+            raise InterruptedError("Model params setting cancelled.")
+            
+        search_callbacks = callbacks or []
+        # 1. Add the custom StopCheckCallback to the list.
+        #    This will be checked by Keras after every epoch of every trial.
+        stop_callback = StopCheckCallback(
+            stop_check_fn=self.stop_check,
+            log_callback=self.log
+        )
+        search_callbacks.append(stop_callback)
+        
         monitor_name = (
             self._tuner.objective
             if isinstance(self._tuner.objective, str)
@@ -159,22 +194,47 @@ class TunerApp:
             monitor=str(monitor_name), 
             patience=patience,
             restore_best_weights=True,
-            verbose=1,
+            verbose=self.cfg.verbose, 
         )
+        search_callbacks.append(early_stop)
         
         self._tick("TunerApp ▸ hyper-parameter search …")
-
-        self._tuner.search(
+        # inside TunerApp.run()
+        epochs     = self.cfg.epochs
+        max_trials = self._tuner_kwargs.get("max_trials", 10)
+        
+        # Ignore just for textual purpose.
+        gui_cb = GUILoggerCallback(
+            log_sig   = self.cfg.log,
+            prog_sig  = lambda _pct: None,   # ignore – ProgressManager takes over
+            trial_sig = self._trial_info,
+            max_trials=max_trials,
+            epochs    = epochs,
+        )
+        search_callbacks.append(gui_cb)
+        tuner_prog = TunerProgress(
+            pm         = self._pm,   # pass the SAME instance
+            max_trials = max_trials,
+            epochs     = epochs,
+        )
+        search_callbacks.append(tuner_prog)
+        self.cfg.progress_callback = self._pm.update
+        
+        self._best_model, self._best_hps,  self._tuner = self._tuner.search(
             train_data=train_tf,
             validation_data=val_tf,
             epochs=self.cfg.epochs,
-            callbacks=[early_stop, *(callbacks or [])],
+            callbacks=search_callbacks, # [early_stop, gui_cb, *(callbacks or [])],
             verbose=self.cfg.fit_verbose,
         )
+        # 4. After the search, check if it was stopped by our callback.
+        #    If so, raise an error to halt the rest of the script.
+        if stop_callback.was_stopped:
+            raise InterruptedError("Tuning process was stopped by the user.")
 
         # 7 ▸ Persist results ------------------------------------------------
-        self._best_hps   = self._tuner.get_best_hyperparameters(1)[0]
-        self._best_model = self._tuner.get_best_models(1)[0]
+        # self._best_hps   = self._tuner.get_best_hyperparameters(1)[0]
+        # self._best_model = self._tuner.get_best_models(1)[0]
 
         out_dir = self._run_dir / "tuner_results"
         ensure_directory_exists(out_dir)

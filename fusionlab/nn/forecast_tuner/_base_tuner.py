@@ -334,7 +334,7 @@ class PINNTunerBase(HyperModel, BaseClass):
             with open(log_file_path, "w") as f:
                 json.dump(summary_data, f, indent=4, default=str)
             vlog(f"Tuning summary saved to {log_file_path}",
-                 verbose=verbose, level=1, logger= self._logger, )
+                 verbose=verbose, level=1, logger= self._logger,)
         except Exception as e:
             logger.warning(
                 f"Could not save tuning summary log to {log_file_path}: {e}"

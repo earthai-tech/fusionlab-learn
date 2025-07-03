@@ -29,8 +29,11 @@ from ...utils.generic_utils import rename_dict_keys, apply_affix
 
 from .config import SubsConfig 
 from .utils import ( 
-    GuiProgress, safe_model_loader, 
-    json_ready, _rebuild_from_arch_cfg
+    GuiProgress, 
+    StopCheckCallback, 
+    safe_model_loader, 
+    json_ready, 
+    _rebuild_from_arch_cfg, 
 )
 
 Callback =KERAS_DEPS.Callback 
@@ -218,9 +221,13 @@ class ModelTrainer:
         # else use the Gui
         # GUI progress callback -
         # 1. decide the UI update function
-        # ── 2. Optional GUI progress callback ───────
         
-        callbacks = [early_stopping, model_checkpoint]
+        stop_callback = StopCheckCallback(
+            stop_check_fn=stop_check,
+            log_callback=self.log
+        )
+     
+        callbacks = [early_stopping, model_checkpoint, stop_callback]
      
         if callable(getattr(self.config, "progress_callback", None)):
             #   a) create the progress-aware Keras callback
@@ -299,8 +306,7 @@ class ModelTrainer:
         except Exception as err: 
             self.log(f"  [WARN] Failed to export physical parameters: {err}")
         
-        
-            
+
     def _load_best_model(self, stop_check =None ) -> Any:
         """
         Loads the best model from the checkpoint after training. This method

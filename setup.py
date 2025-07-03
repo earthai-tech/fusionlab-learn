@@ -36,7 +36,8 @@ _required_dependencies = [
     "joblib",
     "pyyaml", 
     "click", 
-    "platformdirs"
+    "platformdirs", 
+    "PyQt>=5.15"
 ]
 
 # Optional dependencies

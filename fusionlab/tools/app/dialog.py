@@ -714,75 +714,6 @@ class _EasyPage(QWidget):
     
         self.tabs.addTab(t, "Physics")
 
-    # def __build_physics_tab(self):
-    #     t = QWidget(); l = QFormLayout(t)
-
-    #     # ?-pde
-    #     self.lpd_lo = QDoubleSpinBox(
-    #         decimals=3, value=0.1, minimum=0.0, maximum=10.0, singleStep=0.05)
-    #     self.lpd_hi = QDoubleSpinBox(
-    #         decimals=3, value=0.5, minimum=0.0, maximum=10.0, singleStep=0.05)
-
-    #     # C
-    #     self.c_type = QComboBox(); self.c_type.addItems(
-    #         ["learnable", "fixed"])
-    #     self.c_val_lo = QDoubleSpinBox(
-    #         decimals=5, value=1e-3, minimum=1e-6, maximum=1.0, 
-    #         singleStep=1e-5)
-    #     self.c_val_hi = QDoubleSpinBox(
-    #         decimals=5, value=1e-1, minimum=1e-6, maximum=1.0, 
-    #         singleStep=1e-5)
-
-    #     # K / Ss / Q
-    #     def phys_widget(default):
-    #         wlo = QDoubleSpinBox(
-    #             decimals=6,value=default,minimum=1e-6,maximum=1.0,singleStep=1e-5)
-    #         whi = QDoubleSpinBox(
-    #             decimals=6,value=default*10,minimum=1e-6,maximum=1.0,singleStep=1e-5)
-    #         return wlo, whi
-
-    #     self.k_lo,  self.k_hi  = phys_widget(1e-4)
-    #     self.ss_lo, self.ss_hi = phys_widget(1e-5)
-    #     self.q_lo,  self.q_hi  = phys_widget(0.0)
-
-    #     self.pde_mode = QComboBox(); self.pde_mode.addItems(
-    #         ["both","consolidation","gw_flow","none"])
-
-    #     # loss weights
-    #     self.lw_subs = QDoubleSpinBox(
-    #         value=1.0, minimum=0.0, maximum=10.0, 
-    #         singleStep=0.1)
-    #     self.lw_gwl  = QDoubleSpinBox(
-    #         value=1.0, minimum=0.0, maximum=10.0, 
-    #          singleStep=0.1)
-
-    #     # layout
-    #     def row(lbl, w1, w2=None): 
-    #         box = QHBoxLayout(); box.addWidget(w1); 
-    #         if w2: box.addWidget(w2)
-    #         l.addRow(lbl, box)
-
-    #     row("λ-PDE", self.lpd_lo, self.lpd_hi)
-    #     box_c = QHBoxLayout(); 
-    #     box_c.addWidget(self.c_type); box_c.addWidget(
-    #         self.c_val_lo); box_c.addWidget(self.c_val_hi)
-    #     l.addRow("Coefficient C", box_c)
-    #     # XXXX FIX HERE ---------------------
-    #     # TOFIX . can behave like C , K, SS, Q range can be also ['learnable', 'fixed'] or 
-    #     # a range of number, so fixed . 
-    #     row("K range",  self.k_lo,  self.k_hi)
-    #     row("Ss range", self.ss_lo, self.ss_hi)
-    #     row("Q range",  self.q_lo,  self.q_hi)
-    #     # ---------------------------------------------------
-    #     l.addRow("PDE mode",  self.pde_mode)
-
-    #     box_w = QHBoxLayout(); box_w.addWidget(
-    #         self.lw_subs); box_w.addWidget(self.lw_gwl)
-    #     l.addRow("Loss weights (Subs/ GWL)", box_w)
-
-    #     self.tabs.addTab(t, "Physics")
-
-        
     # ---------------- System tab -------------------------------------------------
     def _build_system_tab(self) -> None:
         import platform, psutil
@@ -888,8 +819,7 @@ class _EasyPage(QWidget):
         search_phys = {
             "lambda_pde":   hp_range(self.lpd_lo, self.lpd_hi, is_float=True),
             "pinn_coefficient_C_type": [self.c_type.currentText()],
-            "pinn_coefficient_C_value": _scalar_choice(self.c_type,
-                                                       self.c_lo, self.c_hi),
+            "pinn_coefficient_C": _scalar_choice(self.c_type, self.c_lo, self.c_hi),
             "K":  _scalar_choice(self.k_mode,  self.k_lo,  self.k_hi),
             "Ss": _scalar_choice(self.ss_mode, self.ss_lo, self.ss_hi),
             "Q":  _scalar_choice(self.q_mode,  self.q_lo,  self.q_hi),

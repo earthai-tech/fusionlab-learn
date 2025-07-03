@@ -61,6 +61,65 @@ deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
 serialize_keras_object =KERAS_DEPS.serialize_keras_object
 
 
+class StopCheckCallback(Callback):
+    """A Keras callback to gracefully interrupt training or tuning.
+
+    This callback is designed to be used within a Keras `.fit()` or
+    Keras Tuner `.search()` loop. At the end of each epoch, it calls a
+    provided `stop_check` function. If this function returns `True`,
+    the callback sets `model.stop_training = True`, which tells Keras
+    to halt the current process cleanly.
+
+    This provides a robust mechanism for a GUI's "Stop" button to
+    interrupt a long-running backend task.
+
+    Parameters
+    ----------
+    stop_check_fn : callable
+        A function with no arguments that returns `True` if an
+        interruption has been requested, and `False` otherwise. This is
+        typically connected to a `QThread.isInterruptionRequested`.
+    log_callback : callable, optional
+        A logging function to output a message when the interruption
+        is triggered. Defaults to `print`.
+
+    Attributes
+    ----------
+    was_stopped : bool
+        A flag that is set to `True` if the training process was
+        successfully stopped by this callback. This can be checked
+        after the `.fit()` or `.search()` call completes.
+
+    Examples
+    --------
+    >>> from fusionlab.tools.app.utils import StopCheckCallback
+    >>> stop_requested = False
+    >>> def check_if_stopped():
+    ...     # In a real app, this would check a thread's state.
+    ...     return stop_requested
+    ...
+    >>> stop_callback = StopCheckCallback(check_if_stopped)
+    >>> # model.fit(..., callbacks=[stop_callback])
+    """
+    def __init__(
+        self,
+        stop_check_fn: Callable[[], bool],
+        log_callback: Optional[Callable[[str], None]] = None
+    ):
+        super().__init__()
+        self.stop_check = stop_check_fn
+        self.log = log_callback or print
+        self.was_stopped = False
+
+    def on_epoch_end(self, epoch, logs=None):
+        """
+        Called by Keras at the end of each training epoch.
+        """
+        if self.stop_check():
+            self.model.stop_training = True
+            self.was_stopped = True
+            self.log("  [Callback] Interruption requested. Halting process...")
+
 class GuiProgress(Callback):
     """
     Emit percentage updates while `model.fit` runs.
@@ -122,49 +181,56 @@ class GUILoggerCallback(Callback):
     def __init__(self, *, log_sig, prog_sig,
                  trial_sig, max_trials: int, epochs: int):
         super().__init__()
-        self._log     = log_sig
-        self._prog    = prog_sig
-        self._trial   = trial_sig          #  <<< new
+        def _mk_emit(obj):
+            """Return a 0-cost callable whether *obj* is a Qt-signal or func."""
+            return obj.emit if hasattr(obj, "emit") else obj
+
+        self._log   = _mk_emit(log_sig)
+        self._prog  = _mk_emit(prog_sig)
+        self._trial = _mk_emit(trial_sig)
+        
         self._max_trials = max_trials
         self._epochs     = epochs
         self._trial_idx  = 0
         self._t0_trial   = None            # wall-clock start of current trial
-        # tell the GUI we are still idle
-        self._trial.emit(0, self._max_trials, "--:--")
+     
+        self._trial(0, self._max_trials, "--:--")
 
-    # ---------------- Keras-Tuner hooks ----------------
+
+    # Keras-Tuner hooks 
     def on_trial_begin(self, trial):
-        self._trial_idx = trial.trial_id + 1          # human-friendly 1-based
-        if self._t0_trial is None:
-            self._t0_trial = time.time()
-            
-        self._log.emit(f"\n── Trial {self._trial_idx}/{self._max_trials} …")
-        self._trial.emit(self._trial_idx,
-                         self._max_trials,
-                         "--:--")                     # ETA not known yet
-        # reset progress bar for this trial
-        self._prog.emit(int((self._trial_idx-1) * 100 / self._max_trials))
-
+        try:
+            idx = int(trial.trial_id)
+        except Exception:                             # fallback – should not happen
+            idx = 0
+        self._trial_idx = idx + 1
+        # (re-)start the per-trial stopwatch for ETA calculation
+        self._t0_trial = time.time()
+        
+        self._log(f"\n── Trial {self._trial_idx}/{self._max_trials} …")
+        self._trial(self._trial_idx, self._max_trials, "--:--")
+        self._prog(int((self._trial_idx-1) * 100 / self._max_trials))  
+        
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         if self._t0_trial is None:          # extra belt-and-braces
             self._t0_trial = time.time()
         
-        self._log.emit(
+        self._log(
             f"      epoch {epoch + 1:>3d} → "
             f"loss={logs.get('loss', 0):.4f} | "
             f"val_loss={logs.get('val_loss', 0):.4f}"
         )
-                # --- progress & ETA -------------------------------------------------
+                
         epochs_done = epoch + 1
         elapsed     = time.time() - self._t0_trial
         eta_secs    = (elapsed / epochs_done) * (self._epochs - epochs_done)
         eta_str     = time.strftime("%M:%S", time.gmtime(max(0, eta_secs)))
-        self._trial.emit(self._trial_idx, self._max_trials, eta_str)
-
+        self._trial(self._trial_idx, self._max_trials, eta_str)
+       
         percent = ((self._trial_idx-1) +
                    epochs_done / self._epochs) * 100 / self._max_trials
-        self._prog.emit(int(percent))
+        self._prog(int(percent))
 
     def on_trial_end(self, trial):
         """
@@ -173,10 +239,8 @@ class GUILoggerCallback(Callback):
         the final 100 % update at the end of the search.
         """
         # Final ETA for this trial is always zero
-        self._trial.emit(self._trial_idx, self._max_trials, "00:00")
-
-        pct = int(self._trial_idx * 100 / self._max_trials)
-        self._prog.emit(pct)
+        self._trial(self._trial_idx, self._max_trials, "00:00")
+        self._prog(int(self._trial_idx * 100 / self._max_trials))
         
     def __deepcopy__(self, memo):
         """
@@ -187,132 +251,6 @@ class GUILoggerCallback(Callback):
         """
         return self
 
-class _GUILoggerCallback(Callback):
-    """
-    Streams textual log lines *and* a global 0-100 % progress value
-    back to the Qt GUI.
-
-    Parameters
-    ----------
-    log_sig   : QtCore.pyqtSignal(str)
-    prog_sig  : QtCore.pyqtSignal(int)
-    max_trials: int        # value from `HydroTuner(..., max_trials=N)`
-    epochs    : int        # same epochs you pass to tuner.search()
-    """
-    def __init__(self, log_sig, prog_sig, *, max_trials: int, epochs: int):
-        super().__init__()
-        self._log        = log_sig
-        self._prog       = prog_sig
-        self._max_trials = max_trials
-        self._epochs     = epochs
-
-        self._trial_no   = 0          # 1-based
-        self._epoch_in_t = 0          # per-trial epoch counter
-
-    # --------------------------------------------------------------------- #
-    #  Keras-Tuner hooks
-    # --------------------------------------------------------------------- #
-    def on_trial_begin(self, trial):
-        # start a *new* trial
-        self._trial_no  += 1
-        self._epoch_in_t = 0
-
-        self._log.emit(
-            f"\n── Trial {self._trial_no}/{self._max_trials} "
-            f"• HPs: {trial.hyperparameters.values}"
-        )
-        # start-of-trial → jump bar to the left edge of this trial
-        pct = int((self._trial_no - 1) / self._max_trials * 100)
-        self._prog.emit(pct)
-
-    def on_epoch_end(self, epoch, logs=None):
-        logs = logs or {}
-        self._epoch_in_t += 1
-
-        self._log.emit(
-            f"      epoch {epoch + 1:>3d} → "
-            f"loss={logs.get('loss', 0):.4f} | "
-            f"val_loss={logs.get('val_loss', 0):.4f}"
-        )
-
-        # finished-fraction of *all* trials
-        frac = ((self._trial_no - 1) + self._epoch_in_t / self._epochs)
-        pct  = int(frac / self._max_trials * 100)
-        self._prog.emit(pct)
-
-    def on_trial_end(self, trial):
-        # make sure we land *exactly* on the next tick (useful for short runs)
-        pct = int(self._trial_no / self._max_trials * 100)
-        self._prog.emit(pct)
-
-#     # --------------------------------------------------------------------- #
-#     #  Make the callback deep-copyable (keras-tuner requirement)
-#     # --------------------------------------------------------------------- #
-#     def __deepcopy__(self, _):
-#         return self
-
-# class GUILoggerCallback(Callback):
-#     """
-#     Simple Keras / Keras-Tuner callback that streams log lines &
-#     progress percentages back to the Qt GUI via signals supplied at init.
-#     """
-#     def __init__(self, log_sig, prog_sig, max_trials: int):
-#         super().__init__()
-#         self._log = log_sig
-#         self._prog = prog_sig
-#         self._max_trials = max_trials
-#         self._trial_idx = -1          
-
-#     # ---- Keras-Tuner hooks --------------------------------------------------
-#     def on_trial_begin(self, trial):
-#         self._trial_idx = trial.trial_id
-#         self._log.emit(f"\n── Trial {self._trial_idx + 1}/{self._max_trials} "
-#                        f"• HPs: {trial.hyperparameters.values}")
-#         # reset intra-trial progress
-#         self._prog.emit(int(self._trial_idx * 100 / self._max_trials))
-
-#     def on_epoch_end(self, epoch, logs=None):
-#         logs = logs or {}
-#         msg = (f"      epoch {epoch + 1:>3d} → "
-#                f"loss={logs.get('loss', 0):.4f} | "
-#                f"val_loss={logs.get('val_loss', 0):.4f}")
-#         self._log.emit(msg)
-
-#         # coarse progress = finished trials + epoch-fraction of current trial
-#         epochs = self.params.get("epochs", 1)
-#         percent = ((self._trial_idx +
-#                     (epoch + 1) / max(1, epochs)) * 100 / self._max_trials)
-#         self._prog.emit(int(percent))
-      
-    def __deepcopy__(self, memo):
-        """
-        Keras-Tuner deep-copies the callbacks list for every trial.
-        Qt signal objects cannot be copied, so we just return *self*.
-        That is perfectly fine because the tuner resets internal
-        callback state at the start of each trial.
-        """
-        return self
-    
-    # def __getstate__(self):
-    #    """
-    #    Return a dict that *can be pickled*.
-    #    Qt signals (`pyqtBoundSignal`) are not picklable, so we exclude them.
-    #    """
-    #    state = self.__dict__.copy()
-    #    state["_log"]  = ''           # or a string placeholder
-    #    state["_prog"] = None
-    #    return state
-
-    # def __setstate__(self, state):
-    #     """
-    #     Re-hydrate the instance after unpickling.
-    
-    #     We restore the simple fields and leave the Qt signals as `None`
-    #     (they won’t be used in a background process created via unpickling
-    #     anyway).
-    #     """
-    #     self.__dict__.update(state)
-        
 def _detect_gpu() -> str | None:
     """
     Very light-weight GPU detection.  Returns a short string or None.

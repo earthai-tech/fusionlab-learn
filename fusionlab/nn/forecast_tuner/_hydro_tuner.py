@@ -10,11 +10,12 @@ from typing import Tuple, List, Callable
 import numpy as np 
 
 from ..._fusionlog import fusionlog 
-from ...api.docs import DocstringComponents, _pinn_tuner_common_params 
+from ...api.docs import DocstringComponents, _pinn_tuner_common_params
+from ...core.handlers import _get_valid_kwargs  
 from ...utils.generic_utils import ( 
     vlog, rename_dict_keys, cast_multiple_bool_params
    )
-from ...core.handlers import _get_valid_kwargs 
+from ...utils.validator import get_estimator_name 
 
 from ..pinn.models import PIHALNet , TransFlowSubsNet 
 from ..pinn.utils import  ( # noqa
@@ -255,7 +256,7 @@ class HydroTuner(PINNTunerBase):
         overwrite: bool = True,
         # Legacy parameter for backward compatibility
         param_space: Optional[Dict[str, Any]] = None,
-        _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+        _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None, 
         **kwargs
     ):
         self._logger = _logger or print 
@@ -525,6 +526,12 @@ class HydroTuner(PINNTunerBase):
         tuner's ``search()`` loop. Its generic design allows it to build
         any model whose parameters are defined in the ``search_space``.
         """
+        _COMPILE_ONLY_HPS = {
+            "learning_rate",
+            "lambda_gw",
+            "lambda_cons",
+            "lambda_pde",
+        }
         # 1. Initialize parameters with the fixed, non-tunable values.
         model_init_params = self.fixed_params.copy()
         compile_hps = {}
@@ -536,11 +543,12 @@ class HydroTuner(PINNTunerBase):
     
             # Separate compile-time HPs from model __init__ HPs.
             # This makes the tuner agnostic to the model's compile signature.
-            if name in ['learning_rate', 'lambda_gw', 'lambda_cons', 'lambda_physics']:
+            if name in _COMPILE_ONLY_HPS:
                 compile_hps[name] = sampled_value
+                
             else:
                 model_init_params[name] = sampled_value
-    
+ 
         # Cast HPs that *must* be integers back to int
         for _k in ("embed_dim", "hidden_units", "lstm_units",
                    "attention_units", "vsn_units", "num_heads"):
@@ -551,7 +559,8 @@ class HydroTuner(PINNTunerBase):
         # We filter the dictionary to only pass valid arguments to the model's
         # constructor, preventing errors from extraneous keys.
         valid_init_params = _get_valid_kwargs(
-            self.model_class.__init__, model_init_params
+            self.model_class.__init__, model_init_params, 
+            error ='ignore', # ignore unexpected params silencly
         )
         cast_multiple_bool_params(
             valid_init_params,
@@ -579,7 +588,7 @@ class HydroTuner(PINNTunerBase):
         # ones to the model's compile method. This automatically handles
         # the difference between PIHALNet and TransFlowSubsNet.
         valid_compile_params = _get_valid_kwargs(
-            model.compile, compile_hps
+            model.compile, compile_hps, error ='ignore'
         )
     
         model.compile(
