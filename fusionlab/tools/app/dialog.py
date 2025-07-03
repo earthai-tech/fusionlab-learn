@@ -473,6 +473,7 @@ class _EasyPage(QWidget):
         self.time_steps   = QSpinBox(minimum=1,  maximum=20,  value=4)
         self.horizon      = QSpinBox(minimum=1,  maximum=10,  value=3)
         self.batch_size   = QSpinBox(minimum=8,  maximum=1024, value=256)
+        self.epochs       = QSpinBox(minimum=1,  maximum=100, value=50)  
         self.objective    = QLineEdit("val_loss")
     
         self.mode_combo   = QComboBox(); self.mode_combo.addItems(["pihal", "tft"])
@@ -497,16 +498,30 @@ class _EasyPage(QWidget):
         self.feature_proc = QComboBox(); self.feature_proc.addItems(["vsn", "norm", "none"])
     
         # helper to add one logical row ------------------------------------------------
-        def add_row(r: int, label1: str, w1, label2: str, w2):
+        # def add_row(r: int, label1: str, w1, label2: str, w2, label3: str = None, w3 = None):
+        #     grid.addWidget(QLabel(label1), r, 0, Qt.AlignRight)
+        #     grid.addWidget(w1,            r, 1)
+        #     grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
+        #     grid.addWidget(w2,            r, 3)
+        
+        # helper to add one logical row ------------------------------------------------
+        def add_row(r: int, label1: str, w1, label2: str, w2, label3: str = None, w3 = None):
             grid.addWidget(QLabel(label1), r, 0, Qt.AlignRight)
             grid.addWidget(w1,            r, 1)
-            grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
-            grid.addWidget(w2,            r, 3)
-    
+            if label3 and w3:
+                grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
+                grid.addWidget(w2,            r, 3)
+                grid.addWidget(QLabel(label3), r, 4, Qt.AlignRight)
+                grid.addWidget(w3,            r, 5)
+            else:
+                grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
+                grid.addWidget(w2,            r, 3)
+        
         add_row(0, "Time-steps (look-back):", self.time_steps,
                 "Forecast horizon:",          self.horizon)
         add_row(1, "Batch size:",             self.batch_size,
-                "Tuner objective:",           self.objective)
+                   "Epoch:",                   self.epochs,  
+                   "Tuner objective:", self.objective)
         add_row(2, "Mode:",                   self.mode_combo,
                 "Activation:",                self.activation)
         add_row(3, "Memory size:",            self.memory_size,
@@ -529,75 +544,6 @@ class _EasyPage(QWidget):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
     
-        self.tabs.addTab(t_model, "Model")
-
-    def __build_model_tab(self):
-        # ?  Model / data-driven parameters  ––– now a 2-column grid
-        t_model = QWidget()
-        grid     = QGridLayout(t_model)
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(8)
-        
-    
-        self.time_steps  = QSpinBox(minimum=1, maximum=20, value=4)
-        self.horizon     = QSpinBox(minimum=1, maximum=10, value=3)
-        self.batch_size  = QSpinBox(minimum=8, maximum=1024, value=256)
-        self.objective   = QLineEdit("val_loss")
-        
-        self.mode_combo  = QComboBox()
-        self.mode_combo.addItems(["pihal", "tft"])
-        self.activation  = QComboBox()
-        self.activation.addItems(
-            ["relu", "gelu", "swish", "elu", "tanh", "sigmoid", "linear",])
-        self.memory_size = QSpinBox(minimum=10, maximum=500, value=100)
-        
-        self.use_residuals = QCheckBox()
-        self.use_residuals.setChecked(True)
-        self.use_bn        = QCheckBox()
-        self.use_bn.setChecked(False)
-        
-        self.multi_scale_agg = QComboBox()
-        self.multi_scale_agg.addItems(["last", "average",  "flatten", "auto", "sum", ])
-        
-        self.final_agg  = QComboBox()
-        self.final_agg.addItems(["last", "average",  "flatten"])
-        
-        self.encoder_type = QComboBox()
-        self.encoder_type.addItems(["hybrid", "transformer"])
-        
-        self.decoder_stack = QComboBox()
-        self.decoder_stack.addItems(["cross", "hierarchical", "memory"])
-        
-        self.feature_proc  = QComboBox()
-        self.feature_proc.addItems(["vsn", "norm", "none"])
-        
-        # helper to cut boiler-plate
-        def add_row(row: int, col0_lbl: str, w0, col1_lbl: str, w1):
-            grid.addWidget(QLabel(col0_lbl), row, 0, Qt.AlignRight)
-            grid.addWidget(w0,                row, 1)
-            grid.addWidget(QLabel(col1_lbl),  row, 2, Qt.AlignRight)
-            grid.addWidget(w1,                row, 3)
-        
-        add_row(0, "Time-steps (look-back):",  self.time_steps,
-                "Forecast horizon:",           self.horizon)
-        add_row(1, "Batch size:",             self.batch_size,
-                "Tuner objective:",            self.objective)
-        add_row(2, "Mode:",                   self.mode_combo,
-                "Activation:",                 self.activation)
-        add_row(3, "Memory size:",            self.memory_size,
-                "Multi-scale agg:",            self.multi_scale_agg)
-        add_row(4, "Final agg:",              self.final_agg,
-                "Encoder type:",               self.encoder_type)
-        add_row(5, "Decoder stack:",          self.decoder_stack,
-                "Feature processing:",         self.feature_proc)
-        add_row(6,"Use residuals:",              self.use_residuals, 
-                "Use batch-norm:",         self.use_bn ) 
-                
-        
-        # stretch so the grid uses available width nicely
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-        
         self.tabs.addTab(t_model, "Model")
 
     # ---------------- Model search-space tab -------------------------
@@ -786,7 +732,6 @@ class _EasyPage(QWidget):
             return {"min_value": lo, "max_value": hi}
         
 
-
         search_model = {
             "embed_dim":       hp_range(self.embed_lo,  self.embed_hi, 8),
             "hidden_units":    hp_range(self.hidden_lo, self.hidden_hi, 32),
@@ -826,26 +771,14 @@ class _EasyPage(QWidget):
             "pde_mode": [self.pde_mode.currentText()],
         }
         
-        # search_phys = {
-        #     "lambda_pde":     hp_range(self.lpd_lo, self.lpd_hi, is_float=True),
-        #     "pinn_coefficient_C_type": [self.c_type.currentText()],
-        #     "pinn_coefficient_C_value": {
-        #         "min_value": self.c_val_lo.value(),
-        #         "max_value": self.c_val_hi.value(),
-        #         "sampling":  "log",
-        #     },
-        #     "K": hp_range(self.k_lo, self.k_hi, is_float=True),
-        #     "Ss": hp_range(self.ss_lo, self.ss_hi, is_float=True),
-        #     "Q":  hp_range(self.q_lo, self.q_hi, is_float=True),
-        #     "pde_mode": [self.pde_mode.currentText()],
-        # }
-
-        # fixed params update -----------------------------------------
+        # fixed params update 
         fixed_upd = {
             **self.fixed_params,                # keep original
             "max_window_size": self.time_steps.value(),
             "forecast_horizon": self.horizon.value(),
             "memory_size":     self.memory_size.value(),
+            "batch_size":      self.batch_size.value(),
+            "epochs":          self.epochs.value(),
             "multi_scale_agg": self.multi_scale_agg.currentText(),
             "final_agg":       self.final_agg.currentText(),
             "use_residuals":   self.use_residuals.isChecked(),

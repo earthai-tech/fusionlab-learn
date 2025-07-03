@@ -1197,22 +1197,30 @@ class MiniForecaster(QMainWindow):
     
         # ---------- 2. build a *fresh* SubsConfig for the tuner ---------
 
-       # MiniForecaster._open_tuner_dialog()
+        # MiniForecaster._open_tuner_dialog()
         max_trials = cfg_dict["tuner_settings"]["max_trials"]
+        fixed_up = cfg_dict["fixed_params"].copy() 
+    
+        time_steps = fixed_up.pop("max_window_size", self.time_steps_spin.value()) 
+        forecast_horizon = fixed_up.pop(
+            "forecast_horizon", self.time_steps_spin.value()
+        )
         self._tuning_max_trials = max_trials
-        # self.trialLb.setText("--/--")          # ← show placeholder from the very start
-
+        # self.trialLb.setText("--/--")   # ← show placeholder from the very start
 
         tune_cfg = SubsConfig(
             city_name = self.city_input.text() or "unnamed",
             model_name = self.model_select.currentText(),
             data_dir   = str(self.file_path.parent),
             data_filename = self.file_path.name,
-            forecast_horizon_years = self.forecast_horizon_spin.value(),
-            time_steps = self.time_steps_spin.value(),
+            forecast_horizon_years = forecast_horizon,
+            time_steps = time_steps,
             save_format = "keras",
             bypass_loading = True,          # no need while tuning
             verbose = 0,
+            
+            **fixed_up
+            
         )
         tune_cfg.log  = self.log_updated.emit
         

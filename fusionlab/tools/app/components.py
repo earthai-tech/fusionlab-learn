@@ -5,8 +5,6 @@
 Centralised, thread‑safe controller for the (ETA‑aware) progress bar used
 throughout the Mini‑Subsidence GUI and CLI tools.
 
-Key responsibilities
---------------------
 * Provide a single, reusable API for **all** workflows (training, tuning, 
   inference, visualisation …).
 * Compute and display **ETA** based on wall‑clock time.
@@ -15,26 +13,6 @@ Key responsibilities
   :py:meth:`update` directly; GUI updates always happen in the Qt main thread
   via queued signals.
 
-Typical usage
--------------
->>> pm = ProgressManager(progress_bar, label)
->>> pm.start_step("Pre‑processing")
->>> for i, item in enumerate(expensive_loop, 1):
-...     ...           # do work
-...     pm.update(i, len(expensive_loop))
->>> pm.finish_step()
-
-For training epochs / tuner trials:
->>> pm.set_epoch_context(epoch=3, total=50)
->>> pm.set_trial_context(trial=2, total=8)
-
-Notes
------
-* **Do not** touch the underlying Qt widgets from worker threads – always
-  use the high‑level API; internal signals take care of the hand‑off.
-* If *total_value* is unknown at the beginning of a step you may call
-  :py:meth:`update` with ``total_value=-1`` (the bar switches to indeterminate
-  / busy mode).
 """
 from __future__ import annotations
 
@@ -75,7 +53,8 @@ Callback = KERAS_DEPS.Callback
 __all__ = [
     "ProgressManager", "WorkerController",
     "ErrorManager", "ExitController", 
-    "ModeSwitch", "TunerProgress"
+    "ModeSwitch", "TunerProgress", 
+    "TuningProgress"
   ]
 
 class ProgressManager(QObject):
@@ -300,6 +279,90 @@ class TunerProgress(Callback):
         """
         return self
     
+class TuningProgress(Callback):
+    """Custom callback to update progress during hyperparameter tuning."""
+    
+    def __init__(self, pm: ProgressManager, max_trials: int, epochs: int):
+        """
+        Initialize the progress update for tuning.
+        
+        Parameters
+        ----------
+        pm : ProgressManager
+            The shared instance that controls the progress bar.
+        max_trials : int
+            The total number of trials in the tuning process.
+        epochs : int
+            The number of epochs per trial.
+        """
+        self._pm = pm
+        self.max_trials = max_trials
+        self.epochs = epochs
+        self.current_trial = 0
+        self.current_epoch = 0
+        self.start_time = None  # To calculate ETA for each trial
+
+    def on_trial_begin(self, trial):
+        """Called at the beginning of each trial."""
+        self.current_trial = trial.trial_id + 1  # 1-based index
+        self.current_epoch = 0
+        self.start_time = time.time()  # Reset the timer at the start of each trial
+        
+        # Update progress bar with the trial context
+        self._pm.set_trial_context(trial=self.current_trial, total=self.max_trials)
+        self._update_progress_bar()
+
+    def on_epoch_end(self, epoch, logs=None):
+        """Called at the end of each epoch."""
+        self.current_epoch = epoch + 1  # 1-based index
+        self._update_progress_bar()
+
+    def on_trial_end(self, trial):
+        """Called at the end of each trial."""
+        self._update_progress_bar()
+    
+    def _update_progress_bar(self):
+        """Update the progress bar with current trial, epoch, and ETA."""
+        # elapsed_time = time.time() - self.start_time if self.start_time else 0
+        # eta = (elapsed_time / self.current_epoch) * (
+        #     self.epochs - self.current_epoch) if self.current_epoch > 0 else 0
+        # eta_str = self._format_eta(eta)
+
+        # Calculate global progress
+        completed_epochs = (self.current_trial - 1) * self.epochs + self.current_epoch
+        total_epochs = self.max_trials * self.epochs
+        # progress = (completed_epochs / total_epochs) * 100
+        
+        # Update the progress bar
+        self._pm.update(completed_epochs, total_epochs)
+        
+        # Update the trial and ETA information
+        self._pm.set_trial_context(
+            trial=self.current_trial, total=self.max_trials)
+        # self._pm.set_epoch_context(
+        #     epoch=self.current_epoch, total=self.epochs)
+        # self._pm.set_label(
+        #     f"Trial {self.current_trial}/{self.max_trials} - ETA: {eta_str}")
+        
+    @staticmethod
+    def _format_eta(seconds: float) -> str:
+        """Format ETA to HH:MM:SS."""
+        if seconds < 0 or seconds == float("inf"):
+            return "--:--"
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+    
+    def __deepcopy__(self, memo):
+        """
+        Keras-Tuner deep-copies the callbacks list for every trial.
+        Qt signal objects cannot be copied, so we just return *self*.
+        That is perfectly fine because the tuner resets internal
+        callback state at the start of each trial.
+        """
+        return self
+
+
 class WorkerController(QObject):
     """
     Central Stop-button handler with Yes/No confirmation.

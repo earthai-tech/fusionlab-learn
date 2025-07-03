@@ -19,11 +19,10 @@ from ...nn.forecast_tuner import HydroTuner
 from ...nn.pinn.models import PIHALNet, TransFlowSubsNet 
 from ...registry import ManifestRegistry, _update_manifest
 from ...utils.generic_utils import ensure_directory_exists
-from .components import TunerProgress 
+from .components import TunerProgress, TuningProgress 
 from .config import SubsConfig
 from .processing import DataProcessor, SequenceGenerator
 from .utils import ( 
-    GUILoggerCallback, 
     StopCheckCallback, 
     safe_model_loader,
 )
@@ -96,23 +95,35 @@ class TunerApp:
         callbacks: Optional[list[Callback]] = None,
     ):
         self.stop_check = stop_check or (lambda: False)
-        # 1 ▸ Data processing ------------------------------------------------
+        # 1 ▸ Data processing 
         if self.stop_check(): 
             raise InterruptedError("Tuning cancelled by user.")
             
+        #---------------------------------------
+        self._pct = lambda p: self._pm.update(p, 100)
+        self._pm.reset()
+        self._pm.start_step("Pre‑processing")
+        self.cfg.progress_callback = self._pct
+        
         self._processor = DataProcessor(
             self.cfg, self.log, raw_df= self._edited_df 
             )
         processed_df = self._processor.run(stop_check=stop_check)
+        self._pm.finish_step("Pre‑processing ✓")
+        
+        #------------------------------------------------------
         
         self.stop_check = stop_check or (lambda: False)
         if stop_check and stop_check():
             raise InterruptedError("Aborted during preprocessing")
 
-        # 2 ▸ Sequence generation -------------------------------------------
+        # 2 ▸ Sequence generation 
         if self.stop_check(): 
             raise InterruptedError("Aborted during sequence generation")
             
+        self._pm.start_step("Sequencing")
+        self.cfg.progress_callback = self._pct
+        
         self._seq_gen = SequenceGenerator(self.cfg, self.log)
         train_ds, val_ds = self._seq_gen.run(
             processed_df,
@@ -121,6 +132,8 @@ class TunerApp:
             ),
             stop_check=stop_check,
         )
+        self._pm.finish_step("Sequencing ✓")
+        # -------------------------------------------------------------------
         if self.stop_check(): 
             raise InterruptedError("Tuning params configuration aborted.")
 
@@ -203,20 +216,19 @@ class TunerApp:
         epochs     = self.cfg.epochs
         max_trials = self._tuner_kwargs.get("max_trials", 10)
         
-        # Ignore just for textual purpose.
-        gui_cb = GUILoggerCallback(
-            log_sig   = self.cfg.log,
-            prog_sig  = lambda _pct: None,   # ignore – ProgressManager takes over
-            trial_sig = self._trial_info,
-            max_trials=max_trials,
-            epochs    = epochs,
-        )
-        search_callbacks.append(gui_cb)
-        tuner_prog = TunerProgress(
-            pm         = self._pm,   # pass the SAME instance
+        # XXX 
+        tuner_prog = TuningProgress(
+            pm=self._pm, 
             max_trials = max_trials,
-            epochs     = epochs,
+            epochs=epochs
         )
+        search_callbacks.append(tuner_prog)
+
+        # tuner_prog = TunerProgress(
+        #     pm         = self._pm,   # pass the SAME instance
+        #     max_trials = max_trials,
+        #     epochs     = epochs,
+        # )
         search_callbacks.append(tuner_prog)
         self.cfg.progress_callback = self._pm.update
         
@@ -225,7 +237,7 @@ class TunerApp:
             validation_data=val_tf,
             epochs=self.cfg.epochs,
             callbacks=search_callbacks, # [early_stop, gui_cb, *(callbacks or [])],
-            verbose=self.cfg.fit_verbose,
+            verbose=0, #self.cfg.fit_verbose,
         )
         # 4. After the search, check if it was stopped by our callback.
         #    If so, raise an error to halt the rest of the script.
