@@ -192,6 +192,7 @@ class ProgressManager(QObject):
         h, m = divmod(m, 60)
         return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
+
 class TunerProgress(Callback):
     """
     Drive ``ProgressManager`` during a HydroTuner search.

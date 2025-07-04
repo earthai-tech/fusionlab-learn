@@ -119,7 +119,16 @@ class StopCheckCallback(Callback):
             self.model.stop_training = True
             self.was_stopped = True
             self.log("  [Callback] Interruption requested. Halting process...")
-
+            
+    def __deepcopy__(self, memo):
+        """
+        Keras-Tuner deep-copies the callbacks list for every trial.
+        Qt signal objects cannot be copied, so we just return *self*.
+        That is perfectly fine because the tuner resets internal
+        callback state at the start of each trial.
+        """
+        return self
+    
 class GuiProgress(Callback):
     """
     Emit percentage updates while `model.fit` runs.
@@ -272,6 +281,63 @@ def _detect_gpu() -> str | None:
     # Other heuristics could go here …
     return None
 
+class TunerProgressCallback(Callback):
+    """A Keras callback to provide detailed progress during tuning.
+
+    This callback integrates with the `ProgressManager` to update the
+    GUI's progress bar and contextual text label during a Keras Tuner
+    search. It tracks the overall progress across all trials and updates
+    the label with the current trial number and ETA.
+
+    Parameters
+    ----------
+    progress_manager : ProgressManager
+        The central progress management object from the main GUI.
+    max_trials : int
+        The total number of trials in the tuning search.
+    epochs_per_trial : int
+        The maximum number of epochs for each individual trial.
+    """
+    def __init__(
+        self,
+        progress_manager, 
+        max_trials: int,
+        epochs_per_trial: int,
+    ):
+        super().__init__()
+        self.pm = progress_manager
+        self.max_trials = max_trials
+        self.epochs_per_trial = epochs_per_trial
+        self.current_trial = 0
+        self.total_epochs_in_search = self.max_trials * self.epochs_per_trial
+
+    def on_trial_begin(self, trial):
+        """Called by Keras Tuner at the beginning of a new trial."""
+        # Keras Tuner trial_id is a string, but we want a simple number
+        self.current_trial += 1
+        # Use the progress manager to set the contextual text
+        self.pm.set_trial_context(
+            trial=self.current_trial, total=self.max_trials
+        )
+
+    def on_epoch_end(self, epoch, logs=None):
+        """Called by Keras at the end of each epoch within a trial."""
+        # Calculate the total number of epochs completed so far across all trials
+        epochs_in_past_trials = (self.current_trial - 1) * self.epochs_per_trial
+        total_epochs_so_far = epochs_in_past_trials + (epoch + 1)
+        
+        # Update the progress manager with the overall progress
+        self.pm.update(total_epochs_so_far, self.total_epochs_in_search)
+        
+    def __deepcopy__(self, memo):
+        """
+        Keras-Tuner deep-copies the callbacks list for every trial.
+        Qt signal objects cannot be copied, so we just return *self*.
+        That is perfectly fine because the tuner resets internal
+        callback state at the start of each trial.
+        """
+        return self
+    
 def locate_and_load_manifest(
     manifest_path: Optional[str | os.PathLike] = None,
     validation_data_path: Optional[str | os.PathLike] = None,

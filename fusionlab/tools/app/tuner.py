@@ -12,19 +12,20 @@ import numpy as np
 import pandas as pd 
 
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Tuple
 
 from ...nn import KERAS_DEPS 
 from ...nn.forecast_tuner import HydroTuner
 from ...nn.pinn.models import PIHALNet, TransFlowSubsNet 
 from ...registry import ManifestRegistry, _update_manifest
 from ...utils.generic_utils import ensure_directory_exists
-from .components import TunerProgress, TuningProgress 
+# from .components import TunerProgress, TuningProgress, 
 from .config import SubsConfig
 from .processing import DataProcessor, SequenceGenerator
 from .utils import ( 
     StopCheckCallback, 
     safe_model_loader,
+    TunerProgressCallback
 )
 
 Callback = KERAS_DEPS.Callback
@@ -44,7 +45,7 @@ class TunerApp:
         manifest_path: Optional[str | Path] = None,  
         progress_manager = None,   #  ← NEW
         edited_df: Optional[pd.DataFrame] = None,            #  ← NEW (optional)
-        trial_info : None, 
+        trial_info = None, 
     ):
         self.cfg = cfg
         self.log = log_callback or print
@@ -88,7 +89,7 @@ class TunerApp:
         ts = time.strftime("%H:%M:%S")
         self.log(f"[{ts}] {msg}")
 
-    def run(
+    def _run(
         self,
         *,
         stop_check: Optional[Callable[[], bool]] = None,
@@ -102,7 +103,7 @@ class TunerApp:
         #---------------------------------------
         self._pct = lambda p: self._pm.update(p, 100)
         self._pm.reset()
-        self._pm.start_step("Pre‑processing")
+        self._pm.start_step("Pre‑processing...")
         self.cfg.progress_callback = self._pct
         
         self._processor = DataProcessor(
@@ -115,13 +116,13 @@ class TunerApp:
         
         self.stop_check = stop_check or (lambda: False)
         if stop_check and stop_check():
-            raise InterruptedError("Aborted during preprocessing")
+            raise InterruptedError("Aborted during pre-processing")
 
         # 2 ▸ Sequence generation 
         if self.stop_check(): 
             raise InterruptedError("Aborted during sequence generation")
             
-        self._pm.start_step("Sequencing")
+        self._pm.start_step("Sequencing...")
         self.cfg.progress_callback = self._pct
         
         self._seq_gen = SequenceGenerator(self.cfg, self.log)
@@ -189,48 +190,46 @@ class TunerApp:
             raise InterruptedError("Model params setting cancelled.")
             
         search_callbacks = callbacks or []
-        # 1. Add the custom StopCheckCallback to the list.
-        #    This will be checked by Keras after every epoch of every trial.
+        # a) Instantiate the StopCheckCallback with our stop_check function
         stop_callback = StopCheckCallback(
             stop_check_fn=self.stop_check,
             log_callback=self.log
         )
         search_callbacks.append(stop_callback)
         
-        monitor_name = (
-            self._tuner.objective
-            if isinstance(self._tuner.objective, str)
-            else getattr(self._tuner.objective, "name", str(self._tuner.objective))
-        )
-                
-        early_stop = EarlyStopping(
-            monitor=str(monitor_name), 
-            patience=patience,
-            restore_best_weights=True,
-            verbose=self.cfg.verbose, 
-        )
-        search_callbacks.append(early_stop)
+     
+        # 3. Add a default EarlyStopping callback if not provided.
+        if not any(isinstance(cb, EarlyStopping) for cb in search_callbacks):
+            monitor_name = (
+                self._tuner.objective
+                if isinstance(self._tuner.objective, str)
+                else getattr(self._tuner.objective, "name", str(self._tuner.objective))
+            )
+            
+            early_stop = EarlyStopping(
+                monitor=str(monitor_name), 
+                patience=patience,
+                restore_best_weights=True,
+                verbose=self.cfg.verbose, 
+            )
+            search_callbacks.append(early_stop)
         
         self._tick("TunerApp ▸ hyper-parameter search …")
-        # inside TunerApp.run()
+
         epochs     = self.cfg.epochs
         max_trials = self._tuner_kwargs.get("max_trials", 10)
         
-        # XXX 
-        tuner_prog = TuningProgress(
-            pm=self._pm, 
-            max_trials = max_trials,
-            epochs=epochs
-        )
-        search_callbacks.append(tuner_prog)
-
-        # tuner_prog = TunerProgress(
-        #     pm         = self._pm,   # pass the SAME instance
-        #     max_trials = max_trials,
-        #     epochs     = epochs,
-        # )
-        search_callbacks.append(tuner_prog)
-        self.cfg.progress_callback = self._pm.update
+        if self._pm: # Only add if a progress manager was provided
+            tuner_progress_cb = TunerProgressCallback(
+                progress_manager=self._pm,
+                max_trials=max_trials,
+                epochs_per_trial=epochs
+            )
+            search_callbacks.append(tuner_progress_cb)
+ 
+        self.log("Handing off to Keras Tuner search...")
+        if self._pm:
+            self._pm.start_step("Tuning")
         
         self._best_model, self._best_hps,  self._tuner = self._tuner.search(
             train_data=train_tf,
@@ -244,6 +243,9 @@ class TunerApp:
         if stop_callback.was_stopped:
             raise InterruptedError("Tuning process was stopped by the user.")
 
+        if self._pm:
+            self._pm.finish_step("Tuning Complete ✓")
+            
         # 7 ▸ Persist results ------------------------------------------------
         # self._best_hps   = self._tuner.get_best_hyperparameters(1)[0]
         # self._best_model = self._tuner.get_best_models(1)[0]
@@ -300,6 +302,185 @@ class TunerApp:
 
         self._tick(f"Search complete → {model_path}")
         return self._best_model, self._best_hps, self._tuner
+    
+
+    def run(
+        self,
+        *,
+        stop_check: Optional[Callable[[], bool]] = None,
+        callbacks: Optional[list[Callback]] = None,
+    ):
+        """End-to-end hyper-parameter search."""
+        self.stop_check = stop_check or (lambda: False)
+
+        self._prepare_progress_manager()
+        processed_df = self._preprocess_data()
+        train_ds, val_ds = self._generate_sequences(processed_df)
+        self._build_fixed_params(train_ds, val_ds)
+        search_callbacks = self._build_callbacks(callbacks)
+        self._run_tuner(train_ds, val_ds, search_callbacks)
+        self._persist_results()
+
+        return self._best_model, self._best_hps, self._tuner
+
+    def _prepare_progress_manager(self):
+        self._pct = lambda p: self._pm.update(p, 100)
+        self._pm.reset()
+        self.cfg.progress_callback = self._pct
+
+    def _preprocess_data(self) -> pd.DataFrame:
+        if self.stop_check():
+            raise InterruptedError("Tuning cancelled by user.")
+
+        self._pm.start_step("Pre-processing…")
+        self._processor = DataProcessor(
+            self.cfg, self.log, raw_df=self._edited_df
+        )
+        df = self._processor.run(stop_check=self.stop_check)
+        self._pm.finish_step("Pre-processing ✓")
+        return df
+
+    def _generate_sequences(self, processed_df) -> Tuple[Dataset, Dataset]:
+        if self.stop_check():
+            raise InterruptedError("Aborted during sequence generation.")
+
+        self._pm.start_step("Sequencing…")
+        self._seq_gen = SequenceGenerator(self.cfg, self.log)
+        train_ds, val_ds = self._seq_gen.run(
+            processed_df,
+            static_features_encoded=getattr(
+                self._processor, "static_features_encoded", []
+            ),
+            stop_check=self.stop_check,
+        )
+        self._pm.finish_step("Sequencing ✓")
+        return train_ds, val_ds
+
+    def _build_fixed_params(self, train_ds, val_ds):
+        inputs = self._seq_gen.inputs_train
+        targets = self._seq_gen.targets_train
+        self._fixed_params = {
+            "static_input_dim": inputs.get(
+                "static_features", np.zeros((0, 0))
+            ).shape[-1],
+            "dynamic_input_dim": inputs["dynamic_features"].shape[-1],
+            "future_input_dim": inputs.get(
+                "future_features", np.zeros((0, 0, 0))
+            ).shape[-1],
+            "output_subsidence_dim": targets["subsidence"].shape[-1],
+            "output_gwl_dim": targets["gwl"].shape[-1],
+            "forecast_horizon": targets["subsidence"].shape[1],
+            "quantiles": self.cfg.quantiles,
+            "pde_mode": self.cfg.pde_mode,
+            "pinn_coefficient_C": self.cfg.pinn_coeff_c,
+            "lambda_cons": self.cfg.lambda_cons,
+            "lambda_gw": self.cfg.lambda_gw,
+        }
+
+        _update_manifest(
+            self._run_dir,
+            section="tuner",
+            item={
+                "search_space": self.search_space,
+                "fixed_params": self._fixed_params,
+                "tuner_kwargs": self._tuner_kwargs,
+            },
+            manifest_kind="tuning",
+        )
+
+        self._train_tf = train_ds.prefetch(AUTOTUNE)
+        self._val_tf = val_ds.prefetch(AUTOTUNE)
+
+    def _build_callbacks(
+            self, extra: Optional[list[Callback]]) -> list[Callback]:
+        
+        patience = self._tuner_kwargs.pop("patience", 8)
+        self._num_cpus = self._tuner_kwargs.pop ('num_cpus', 1)
+        
+        self._tuner = HydroTuner(
+            model_name_or_cls=self.cfg.model_name,
+            fixed_params=self._fixed_params,
+            search_space=self.search_space,
+            _logger=self._tick,
+            **self._tuner_kwargs,
+        )
+        
+        cb = list(extra or [])
+
+        stop_cb = StopCheckCallback(
+            stop_check_fn=self.stop_check, log_callback=self.log
+        )
+        cb.append(stop_cb)
+        
+        if not any(isinstance(x, EarlyStopping) for x in cb):
+            objective = (
+                self._tuner.objective
+                if isinstance(self._tuner.objective, str)
+                else getattr(self._tuner.objective, "name", str(self._tuner.objective))
+            )
+            cb.append(
+                EarlyStopping(
+                    monitor=objective,
+                    patience=patience,
+                    restore_best_weights=True,
+                    verbose=self.cfg.verbose,
+                )
+            )
+
+        max_trials = self._tuner_kwargs.get("max_trials", 10)
+        cb.append(
+            TunerProgressCallback(
+                progress_manager=self._pm,
+                max_trials=max_trials,
+                epochs_per_trial=self.cfg.epochs,
+            )
+        )
+        return cb
+
+    def _run_tuner(self, train_ds, val_ds, callbacks):
+        if self.stop_check():
+            raise InterruptedError("Model-parameter setting cancelled.")
+
+        self._pm.start_step("Tuning…")
+        self._best_model, self._best_hps, self._tuner = self._tuner.search(
+            train_data=self._train_tf,
+            validation_data=self._val_tf,
+            epochs=self.cfg.epochs,
+            callbacks=callbacks,
+            verbose=0,
+        )
+        self._pm.finish_step("Tuning ✓")
+
+    def _persist_results(self):
+        out_dir = self._run_dir / "tuner_results"
+        ensure_directory_exists(out_dir)
+
+        (out_dir / "best_hyperparameters.json").write_text(
+            json.dumps(self._best_hps.values, indent=2)
+        )
+
+        fmt = (self.cfg.save_format or "keras").lower()
+        if fmt == "tf":
+            best_path = out_dir / f"{self.cfg.model_name}_best"
+            self._best_model.save(best_path, save_format="tf")
+        elif fmt == "weights":
+            best_path = out_dir / f"{self.cfg.model_name}.best.weights.h5"
+            self._best_model.save_weights(best_path)
+        else:
+            best_path = out_dir / f"{self.cfg.model_name}_best.keras"
+            self._best_model.save(best_path)
+
+        _update_manifest(
+            run_dir=self._run_dir,
+            section="tuner_results",
+            item={
+                "best_hyperparameters": self._best_hps.values,
+                "best_model": best_path.name,
+                "save_format": fmt,
+            },
+            manifest_kind="tuning",
+        )
+        self._tick(f"Search complete → {best_path}")
     
     @staticmethod
     def build_model_from_manifest(

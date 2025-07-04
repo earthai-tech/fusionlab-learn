@@ -360,11 +360,10 @@ class TunerThread(QThread):
         self.cfg.log = self.log_updated.emit
         self.cfg.progress_callback = self._pct
         
-
     def run(self) -> None:  # noqa: C901
         # initial bar state
         self.pm.reset()
-        self.pm.start_step("Tuning")
+        # self.pm.start_step("Tuning")
 
         self.status_updated.emit("🔍 Tuning…")
 
@@ -383,9 +382,13 @@ class TunerThread(QThread):
             tuner_app.run(stop_check=self.isInterruptionRequested)
 
             # On success the ProgressManager is already at 100 %
-            self.pm.finish_step("Tuning ✓")
+            # self.pm.finish_step("Tuning ✓")
             self.status_updated.emit("✅ Tuning finished")
-
+        except InterruptedError as e:
+            self.status_updated.emit("⏹️ Tuning stopped by user.")
+            self.log_updated.emit(str(e))
+            self.pm.reset()
+            
         except Exception as exc:
             self.pm.reset()
             self.status_updated.emit("❌ Tuning failed")
@@ -403,7 +406,7 @@ class TunerThread(QThread):
         Percentage updates are handled by ``TunerProgress``.
         """
         self.pm.set_trial_context(trial=cur, total=total)
-        self.pm.set_label(f"Trial {cur}/{total} - ETA: {_eta}")
+        # self.pm.set_label(f"Trial {cur}/{total} - ETA: {_eta}")
         
         # self.pm.set_trial_context(trial=cur, total=total)
 

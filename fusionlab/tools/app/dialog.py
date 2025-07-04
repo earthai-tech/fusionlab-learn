@@ -46,7 +46,9 @@ from PyQt5.QtWidgets import (
     # QToolTip, 
     QTabWidget,
     QStackedWidget, 
-    QButtonGroup
+    QButtonGroup, 
+    QSpacerItem, 
+    QSizePolicy
 )
 
 from .notifications import show_resource_warning
@@ -463,6 +465,7 @@ class _EasyPage(QWidget):
         # ? System 
         self._build_system_tab()
         
+
     def _build_model_tab(self) -> None:
         t_model = QWidget()
         grid = QGridLayout(t_model)
@@ -470,19 +473,24 @@ class _EasyPage(QWidget):
         grid.setVerticalSpacing(8)
     
         # ── basic widgets ────────────────────────────────────────────────
-        self.time_steps   = QSpinBox(minimum=1,  maximum=20,  value=4)
-        self.horizon      = QSpinBox(minimum=1,  maximum=10,  value=3)
-        self.batch_size   = QSpinBox(minimum=8,  maximum=1024, value=256)
-        self.epochs       = QSpinBox(minimum=1,  maximum=100, value=50)  
+        self.time_steps   = QSpinBox(minimum=1,  maximum=50,  value=4)
+        self.horizon      = QSpinBox(minimum=1,  maximum=20,  value=3)
+        self.batch_size   = QSpinBox(minimum=8,  maximum=2048, value=256, singleStep=8)
+        self.epochs       = QSpinBox(minimum=1,  maximum=1000, value=50)  
         self.objective    = QLineEdit("val_loss")
     
-        self.mode_combo   = QComboBox(); self.mode_combo.addItems(["pihal", "tft"])
-        self.activation   = QComboBox(); self.activation.addItems(
+        self.mode_combo   = QComboBox()
+        self.mode_combo.addItems(["pihal", "tft"])
+        
+        self.activation   = QComboBox()
+        self.activation.addItems(
             ["relu", "gelu", "swish", "elu", "tanh", "sigmoid", "linear"]
         )
         self.memory_size  = QSpinBox(minimum=10, maximum=500, value=100)
     
-        self.use_residuals = QCheckBox("Residuals");  self.use_residuals.setChecked(True)
+        self.use_residuals = QCheckBox("Residuals")
+        self.use_residuals.setChecked(True)
+        
         self.use_bn        = QCheckBox("Batch-norm")
     
         self.patience_spin = QSpinBox(minimum=1, maximum=100, value=8)   # ← NEW
@@ -490,38 +498,51 @@ class _EasyPage(QWidget):
         self.multi_scale_agg = QComboBox(); self.multi_scale_agg.addItems(
             ["last", "average", "flatten", "auto", "sum"]
         )
-        self.final_agg   = QComboBox(); self.final_agg.addItems(["last", "average", "flatten"])
-        self.encoder_type= QComboBox(); self.encoder_type.addItems(["hybrid", "transformer"])
-        self.decoder_stack = QComboBox(); self.decoder_stack.addItems(
+        self.final_agg   = QComboBox()
+        self.final_agg.addItems(["last", "average", "flatten"])
+        
+        self.encoder_type= QComboBox()
+        self.encoder_type.addItems(["hybrid", "transformer"])
+        self.decoder_stack = QComboBox()
+        self.decoder_stack.addItems(
             ["cross", "hierarchical", "memory"]
         )
-        self.feature_proc = QComboBox(); self.feature_proc.addItems(["vsn", "norm", "none"])
+        self.feature_proc = QComboBox()
+        self.feature_proc.addItems(["vsn", "norm", "none"])
     
         # helper to add one logical row ------------------------------------------------
-        # def add_row(r: int, label1: str, w1, label2: str, w2, label3: str = None, w3 = None):
-        #     grid.addWidget(QLabel(label1), r, 0, Qt.AlignRight)
-        #     grid.addWidget(w1,            r, 1)
-        #     grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
-        #     grid.addWidget(w2,            r, 3)
+        def add_row(r, lbl1, w1, lbl2, w2, lbl3=None, w3=None):
+           grid.addWidget(QLabel(lbl1), r, 0, Qt.AlignRight)
+           grid.addWidget(w1,            r, 1)
+           grid.addWidget(QLabel(lbl2), r, 2, Qt.AlignRight)
+           grid.addWidget(w2,            r, 3)
+           if lbl3 and w3:
+               grid.addWidget(QLabel(lbl3), r, 4, Qt.AlignRight)
+               grid.addWidget(w3,            r, 5)
         
-        # helper to add one logical row ------------------------------------------------
-        def add_row(r: int, label1: str, w1, label2: str, w2, label3: str = None, w3 = None):
-            grid.addWidget(QLabel(label1), r, 0, Qt.AlignRight)
-            grid.addWidget(w1,            r, 1)
-            if label3 and w3:
-                grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
-                grid.addWidget(w2,            r, 3)
-                grid.addWidget(QLabel(label3), r, 4, Qt.AlignRight)
-                grid.addWidget(w3,            r, 5)
-            else:
-                grid.addWidget(QLabel(label2), r, 2, Qt.AlignRight)
-                grid.addWidget(w2,            r, 3)
-        
+
         add_row(0, "Time-steps (look-back):", self.time_steps,
                 "Forecast horizon:",          self.horizon)
+        # add_row(1, "Batch size:",             self.batch_size,
+        #            "Epoch:",                   self.epochs,  
+        #            "Tuner objective:", self.objective)
+        
+         # ── combined check-boxes + patience ----------------------------------------
+        # bs_box = QHBoxLayout()
+        # bs_box.addWidget(self.batch_size)
+        # bs_box.addWidget(self.epochs)
+        # bs_widget = QWidget(); bs_widget.setLayout(bs_box)
+    
+        # grid.addWidget(bs_widget,       2, 1)              # same column (col-1)
+        # grid.addWidget(QLabel("Tuner objective:"), 2, 2, Qt.AlignRight)
+        # grid.addWidget(self.objective,  2, 3)
+    
+        # grid.setColumnStretch(1, 1)
+        # grid.setColumnStretch(3, 1)
         add_row(1, "Batch size:",             self.batch_size,
-                   "Epoch:",                   self.epochs,  
-                   "Tuner objective:", self.objective)
+               "Epochs:",                 self.epochs,
+               "Tuner objective:",        self.objective)
+        
         add_row(2, "Mode:",                   self.mode_combo,
                 "Activation:",                self.activation)
         add_row(3, "Memory size:",            self.memory_size,
@@ -530,7 +551,7 @@ class _EasyPage(QWidget):
                 "Encoder type:",              self.encoder_type)
         add_row(5, "Decoder stack:",          self.decoder_stack,
                 "Feature processing:",        self.feature_proc)
-    
+        
         # ── combined check-boxes + patience ----------------------------------------
         cb_box = QHBoxLayout()
         cb_box.addWidget(self.use_residuals)
@@ -538,13 +559,27 @@ class _EasyPage(QWidget):
         cb_widget = QWidget(); cb_widget.setLayout(cb_box)
     
         grid.addWidget(cb_widget,       6, 1)              # same column (col-1)
+        # grid.addWidget(QLabel("Patience:"), 6, 2, Qt.AlignRight)
+        # grid.addWidget(self.patience_spin,  6, 3)
         grid.addWidget(QLabel("Patience:"), 6, 2, Qt.AlignRight)
         grid.addWidget(self.patience_spin,  6, 3)
-    
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
+        # grid.setColumnStretch(1, 1)
+        # grid.setColumnStretch(3, 1)
+        # make every value column stretch so fields line-up nicely
+        for col in (1, 3, 5):
+            grid.setColumnStretch(col, 1)
     
         self.tabs.addTab(t_model, "Model")
+        
+        # # the tab should be look like this : 
+        
+        # Time step [                  ]   Forecast horizon  [                  ]
+        # Batch size [    ] Epochs [   ]   Tuner Objectibe   [                  ] 
+        #      Mode [                  ]         Activation  [                  ]
+        # Memory size [                ]    Multi scale Agg  [                  ]
+        # Final agg: [                 ]   Feature processing  [                ]
+        #     [x] Residual [] Batch-norm            Patience   [                ] 
+        
 
     # ---------------- Model search-space tab -------------------------
     def _build_search_tab(self):
