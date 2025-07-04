@@ -167,6 +167,7 @@ class PINNTunerBase(HyperModel, BaseClass):
                 Returns (None, None, self.tuner_) if search encounters issues or
                 no best HPs are found.
         """
+        tuner_verbose = additional_search_kwargs.pop('tuner_verbose', 1)
         # ------------------------------------------------------------------
         # Rename target‑dict keys *only if* each element’s target component
         # is a Python dict produced by PIHALNet.  For HALNet the target is
@@ -262,7 +263,7 @@ class PINNTunerBase(HyperModel, BaseClass):
             epochs=epochs,
             validation_data=validation_data,
             callbacks=search_callbacks,
-            verbose=1 if verbose >=1 else 0, # Keras tuner verbose
+            verbose= tuner_verbose, # 1 if verbose >=1 else 0, # Keras tuner verbose
             **additional_search_kwargs
         )
         

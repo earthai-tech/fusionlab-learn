@@ -272,7 +272,7 @@ class DataProcessor:
         
         self.processed_df = df_processed
         self.log("  Data preprocessing complete.")
-        self._tick(80)
+        self._tick(90)
         
         if self.config.save_intermediate:
             # Save artifacts

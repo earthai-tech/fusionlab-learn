@@ -130,27 +130,6 @@ class TrainingThread(QThread):
         self.progress_manager.finish_step("Sequencing ✓")
         return seq_gen, train_ds, val_ds
 
-    def __run_training(self, train_ds, val_ds):
-        self.status_updated.emit("🔧 Training model…")
-        self.progress_manager.start_step("Training")
-        # Pass bar updates through GuiProgress (inside ModelTrainer)
-        self.cfg.progress_callback = self._pct
-
-        sample_inputs, _ = next(iter(train_ds))
-        input_shapes = {k: v.shape for k, v in sample_inputs.items()}
-
-        trainer = ModelTrainer(self.cfg, self.log_updated.emit)
-        best_model = trainer.run(
-            train_ds,
-            val_ds,
-            input_shapes,
-            stop_check=self.isInterruptionRequested,
-        )
-
-        self.progress_manager.finish_step("Training ✓")
-        return trainer, best_model
-
-
     def _run_training(self, train_ds, val_ds):
         """Runs the model-training stage with live *Epoch x/N* prefix."""
         self.status_updated.emit("🔧 Training model…")
@@ -223,7 +202,6 @@ class TrainingThread(QThread):
         visualiser.run(forecast_df, stop_check=self.isInterruptionRequested)
 
         self.progress_manager.finish_step("Visualising ✓")
-
 
     def _write_coverage_result(self):
         if not (self.cfg.evaluate_coverage and self.cfg.quantiles):
@@ -327,7 +305,7 @@ class TunerThread(QThread):
     `TunerProgress` callback created inside ``TunerApp``.
     """
 
-    # Qt ➜ GUI signals 
+    # GUI signals 
     log_updated      = pyqtSignal(str)
     status_updated   = pyqtSignal(str)
     tuning_finished  = pyqtSignal()          # emitted in *finally*
@@ -374,7 +352,7 @@ class TunerThread(QThread):
                 search_space    = self.search_space,
                 log_callback    = self.log_updated.emit,
                 tuner_kwargs    = self.tuner_kwargs,
-                trial_info      = self._on_trial_update,
+                # trial_info      = self._on_trial_update,
                 progress_manager= self.pm,         
                 edited_df       = self.edited_df,   
             )
