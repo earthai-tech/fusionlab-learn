@@ -96,7 +96,6 @@ class ProgressManager(QObject):
         self._context_prefix: str = ""  # e.g. "Epoch 3/50 – "
         self.reset()
 
-
     def start_step(self, name: str, total: int | None = None) -> None:
         """Begin a new logical step (pre‑processing, training, …).
 
@@ -458,7 +457,6 @@ class WorkerController(QObject):
         self._set_status("⏹ Stopping…")
         self._worker.requestInterruption()
         self._btn.setEnabled(False)
-
 
     def _cleanup(self):
        """Common path for both normal end and error."""

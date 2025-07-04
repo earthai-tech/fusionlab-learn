@@ -1217,8 +1217,7 @@ class MiniForecaster(QMainWindow):
             time_steps = time_steps,
             save_format = "keras",
             bypass_loading = True,          # no need while tuning
-            verbose = 0,
-            
+            verbose = 1, # for minimal logging
             **fixed_up
             
         )

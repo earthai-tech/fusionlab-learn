@@ -15,8 +15,6 @@ from ...core.handlers import _get_valid_kwargs
 from ...utils.generic_utils import ( 
     vlog, rename_dict_keys, cast_multiple_bool_params
    )
-from ...utils.validator import get_estimator_name 
-
 from ..pinn.models import PIHALNet , TransFlowSubsNet 
 from ..pinn.utils import  ( # noqa
     prepare_pinn_data_sequences, 
