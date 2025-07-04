@@ -585,7 +585,7 @@ class _EasyPage(QWidget):
                  "Encoder type:",             self.encoder_type,
                  )
         
-        # ── Train/Forecast years ─────────────────────────────────────────────────
+        # ── Train/Forecast years
         grid.addWidget(QLabel("Decoder stack:"),     5, 0, Qt.AlignRight)
         grid.addWidget(self.decoder_stack,            5, 1)
         grid.addWidget(QLabel("Train end year:"), 5, 2, Qt.AlignRight)
@@ -593,7 +593,7 @@ class _EasyPage(QWidget):
         grid.addWidget(QLabel("Forecast start year:"),         5, 4, Qt.AlignRight)
         grid.addWidget(self.forecast_start,                5, 5)
         
-        # ── Combined checkboxes + patience ──────────────────────────────────────
+        # ── Combined checkboxes + patience
         cb_box = QHBoxLayout()
         cb_box.addWidget(self.use_residuals)
         cb_box.addWidget(self.use_bn)
@@ -606,7 +606,7 @@ class _EasyPage(QWidget):
         grid.addWidget(QLabel("Feature processing:"),6, 4, Qt.AlignRight)
         grid.addWidget(self.feature_proc,     6, 5)
         
-        # ── Stretch value columns so inputs align neatly ──────────────────────
+        # ── Stretch value columns so inputs align neatly 
         for col in (1, 3, 5):
             grid.setColumnStretch(col, 1)
         

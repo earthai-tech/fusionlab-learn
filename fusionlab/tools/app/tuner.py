@@ -22,7 +22,7 @@ from ...utils.generic_utils import ensure_directory_exists
 from .config import SubsConfig
 from .processing import DataProcessor, SequenceGenerator
 from .utils import ( 
-    TunerProgressCallback, 
+    # TunerProgressCallback, 
     GuiTunerProgress, 
     StopCheckCallback, 
     safe_model_loader,
@@ -34,6 +34,7 @@ Dataset  = KERAS_DEPS.Dataset
 AUTOTUNE = KERAS_DEPS.AUTOTUNE
 EarlyStopping = KERAS_DEPS.EarlyStopping 
 Model =KERAS_DEPS.Model 
+experimental =KERAS_DEPS.experimental 
 
 class TunerApp:
     def __init__(
@@ -186,6 +187,7 @@ class TunerApp:
             model_name_or_cls=self.cfg.model_name,
             fixed_params=self._fixed_params,
             search_space=self.search_space,
+            directory= self.cfg.run_output_path, 
             _logger=self._tick,
             **self._tuner_kwargs,
         )
@@ -231,67 +233,55 @@ class TunerApp:
             )
 
         max_trials = self._tuner_kwargs.get("max_trials", 10)
-        
-        # Custom callback for progress tracking during the tuning phase
-        def _pct_tuning(percent: int) -> None:
-            # Regular progress bar update
-            self._pm.update(percent, 100)
-            
-            # Derive trial and epoch indices from the percentage
-            trial = int(percent // (100 / max_trials)) + 1
-            epoch = int((percent % (100 // max_trials)) / (
-                100 // (max_trials * self.cfg.epochs))) + 1
-            
-            # Set the context for trial and epoch in the progress manager
-            self._pm.set_trial_context(trial=trial, total=max_trials)
-            self._pm.set_epoch_context(epoch=epoch, total=self.cfg.epochs)
-    
-        # Assign the custom progress callback to the `tuner`'s search process
-        self.cfg.progress_callback = _pct_tuning
-        
-        # If a progress callback is provided, link it to the update function for tuning
         if callable(getattr(self.cfg, "progress_callback", None)):
-            # Create and configure the GuiTunerProgress callback
-            tuner_progress_callback = GuiTunerProgress(
-                total_trials=max_trials,
-                total_epochs=self.cfg.epochs,
-                update_fn=self.cfg.progress_callback,  # Connect progress callback
-                epoch_level=True,  # Set this to False if you want per-trial updates
-            )
             
-            cb.append(tuner_progress_callback)
+            batches_per_epoch = experimental.cardinality(self._train_tf).numpy()
+            # )
+            cb.append(
+                TunerProgressCallback(
+                    total_trials       = max_trials,
+                    total_epochs       = self.cfg.epochs,
+                    batches_per_epoch  = batches_per_epoch,
+                    progress_manager   = self._pm,
+                    epoch_level        = True,   # per‐epoch updates
+                    trial_batch_level  = True,   # *and* per‐batch updates
+                    log                = self.log,
+                )
+            )
         else: 
             self._tuner_verbose = self.cfg.verbose 
-            
-        # cb.append(
-        #     TunerProgressCallback(
-        #         progress_manager=self._pm,
-        #         total_trials=max_trials,
-        #         total_epochs=self.cfg.epochs,
-        #         log=self.log,  # Custom log callback
-        #         trial_batch_level=True, 
-        #     )
-        # )
+
         return cb
-    
+
     def _run_tuner(self, train_ds, val_ds, callbacks):
         """Runs the hyperparameter tuning process with live 
         *Trial x/N* and *Epoch x/N* prefixes."""
         if self.stop_check():
             raise InterruptedError("Model-parameter setting cancelled.")
-   
-        # Run the tuner with the customized callback
-        self._best_model, self._best_hps, self._tuner = self._tuner.search(
-            train_data=self._train_tf,
-            validation_data=self._val_tf,
-            epochs=self.cfg.epochs,
-            callbacks=callbacks,
-            verbose = self.cfg.verbose, 
-            tuner_verbose=self._tuner_verbose,
-        )
+    
+        self._pm.start_step("Tuning…")
+        try:
+            # this is where StopCheckCallback will raise InterruptedError
+            self._best_model, self._best_hps, self._tuner = (
+                self._tuner.search(
+                    train_data=train_ds,
+                    validation_data=val_ds,
+                    epochs=self.cfg.epochs,
+                    callbacks=callbacks,
+                    verbose=self._tuner_verbose,
+                )
+            )
+        except InterruptedError:
+            # user pressed “Stop” → clean up and return
+            self.log("🔴 Tuning cancelled by user.")
+            self._pm.reset()
+            return
+        finally:
+            # if search completed or was interrupted, end the step
+            self._pm.finish_step("Tuning ✓")
     
     def _persist_results(self):
-        out_dir = self.config.run_output_path # / "tuner_results"
+        out_dir = Path (self.cfg.run_output_path) 
         ensure_directory_exists(out_dir)
 
         (out_dir / "best_hyperparameters.json").write_text(
@@ -335,14 +325,12 @@ class TunerApp:
         processed_df = self._preprocess_data()
         train_ds, val_ds = self._generate_sequences(processed_df)
         
-        self._pm.start_step("Tuning…")
+        # self._pm.start_step("Tuning…")
         self._build_fixed_params(train_ds, val_ds)
         search_callbacks = self._build_callbacks(callbacks)
         self._run_tuner(train_ds, val_ds, search_callbacks)
         self._persist_results()
-        
-        self._pm.finish_step("Tuning ✓")
-
+   
         return self._best_model, self._best_hps, self._tuner
 
     @staticmethod
