@@ -69,7 +69,7 @@ class SubsConfig:
         self.model_name: str = 'TransFlowSubsNet'
         self.data_dir: str = os.getenv("JUPYTER_PROJECT_ROOT", "../..")
         self.data_filename: str = "zhongshan_500k.csv"
-        
+        self.output_dir = os.getcwd() 
         # --- Time and Horizon Configuration ---
         self.train_end_year: int = 2022
         self.forecast_start_year: int = 2023
