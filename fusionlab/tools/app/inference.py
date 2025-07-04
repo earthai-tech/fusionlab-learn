@@ -25,10 +25,11 @@ from ...utils.generic_utils import normalize_time_column, rename_dict_keys
 from ...utils.ts_utils import ts_validator 
 
 from .config import SubsConfig 
-from .modeling import Forecaster 
+from .modeling import Forecaster
 from .processing import DataProcessor 
 from .utils import ( 
     safe_model_loader, _rebuild_from_arch_cfg, 
+    inspect_run_type_from_manifest, 
     _CUSTOM_OBJECTS
 )
 from .view import ResultsVisualizer 
@@ -110,6 +111,10 @@ class PredictionPipeline:
         for key in list(kws.keys()): 
             setattr (self, key, kws[key]) 
             
+        # --- NEW: Auto-detect the run type ---
+        self.run_type = inspect_run_type_from_manifest(self.manifest_path)
+        self.log(f"Detected run type: '{self.run_type}'")
+        
         self._load_from_manifest()
 
     def _load_from_manifest(self):
@@ -129,15 +134,26 @@ class PredictionPipeline:
 
     def _resolve_artifact_paths(self):
         """Resolves full paths to all artifacts from the manifest."""
-        artifacts = self._manifest.get("artifacts", {})
-        training_info = self._manifest.get("training", {})
         
         # Helper to construct full path from relative filename in manifest
         def _get_path(key, default_name):
-            filename = artifacts.get(key) or training_info.get(key) or default_name
+            filename = results_sec.get(key) or training_info.get(key) or default_name
             return self.artifacts_dir / filename
+        
+        if self.run_type == 'tuning':
+            results_sec = self._manifest.get("tuner_results", {})
+            self.model_path = self.artifacts_dir / "tuner_results" / results_sec.get("best_model")
 
-        self.model_path = _get_path("checkpoint", "model.keras")
+        else: # Standard training
+            # training_info = self._manifest.get("training", {})
+            # self.model_path = self.artifacts_dir / training_info.get("checkpoint")
+            
+            results_sec = self._manifest.get("artifacts", {})
+            training_info = self._manifest.get("training", {})
+            self.model_path = _get_path("checkpoint", "model.keras")
+            
+        # XXX TOFIX 
+        
         self.encoder_path = _get_path("encoder", "ohe_encoder.joblib")
         self.scaler_path = _get_path("main_scaler", "main_scaler.joblib")
         self.coord_scaler_path = _get_path("coord_scaler", "coord_scaler.joblib")
@@ -159,27 +175,40 @@ class PredictionPipeline:
                 self.config.quantiles
             )
             
-        build_fn = None
-        model_cfg = self._manifest.get("training", {})
-        # Check if we need to rebuild the model for weights-only loading
-        if str(self.model_path).endswith((".weights.h5", ".weights.keras")):
-            self.log("Weights-only file detected. Rebuilding model from manifest...")
+        # --- THE CORE REFACTORING IS HERE ---
+        if self.run_type == 'tuning':
+            from .tuner import TunerApp 
             
-            arch_cfg = model_cfg.get("config")
-            if not arch_cfg:
-                raise ValueError("Manifest is missing 'training.config' section"
-                                 " required to rebuild model for weights-only file.")
-            # The build function will use the architecture config
-            build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
-        
-        # --- 2. Load the Model ---
-        self.model = safe_model_loader(
-            model_path=self.model_path,
-            build_fn=build_fn,
-            custom_objects=custom_objects,
-            log=self.log,
-            model_cfg=model_cfg  # Pass model_cfg for model.build() hint
-        )
+            # If it's a tuner manifest, use the dedicated static method
+            # to rebuild the best model from the optimal hyperparameters.
+            self.log("Tuner manifest detected. Rebuilding best model...")
+            self.model = TunerApp.build_model_from_manifest(
+                self.manifest_path, 
+                custom_objects=custom_objects, 
+                log=self.log, 
+            )
+        else: 
+            build_fn = None
+            model_cfg = self._manifest.get("training", {})
+            # Check if we need to rebuild the model for weights-only loading
+            if str(self.model_path).endswith((".weights.h5", ".weights.keras")):
+                self.log("Weights-only file detected. Rebuilding model from manifest...")
+                
+                arch_cfg = model_cfg.get("config")
+                if not arch_cfg:
+                    raise ValueError("Manifest is missing 'training.config' section"
+                                     " required to rebuild model for weights-only file.")
+                # The build function will use the architecture config
+                build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
+            
+            # --- 2. Load the Model ---
+            self.model = safe_model_loader(
+                model_path=self.model_path,
+                build_fn=build_fn,
+                custom_objects=custom_objects,
+                log=self.log,
+                model_cfg=model_cfg  # Pass model_cfg for model.build() hint
+            )
 
         # --- 3. Load Preprocessing Artifacts ---
         try:

@@ -17,13 +17,13 @@ from typing import Callable, Optional, Any, Dict, List
 import subprocess, sys, platform
 from pathlib import Path
 import math 
+import warnings 
 
 try:
-    import ast                                # -– std-lib in every CPython build
+    import ast                                
     _AST_AVAILABLE = True
-except Exception:                             # extremely rare / embedded builds
+except Exception:                            
     _AST_AVAILABLE = False
-    # import json
 
 try:
     from fusionlab.params import (
@@ -1127,3 +1127,112 @@ def parse_search_space(text: str) -> dict:
         )
 
     return cleaned
+
+
+def get_safe_output_dir(
+    base_dir: str,
+    run_type: str
+) -> Path:
+    """Creates and returns a safe, structured output directory.
+
+    This helper prevents the application from overwriting user data
+    by creating a dedicated, uniquely named subdirectory for all
+    its outputs.
+
+    Args:
+        base_dir (str): The user-specified root output directory.
+        run_type (str): The type of workflow, e.g., 'training' or 'tuning'.
+
+    Returns:
+        pathlib.Path: The path to the safe, type-specific output directory.
+    """
+    # Create a main, branded directory to avoid conflicts.
+    # Using a dot prefix makes it hidden on Linux/macOS.
+    safe_root = Path(base_dir) / ".fusionlab_runs"
+    
+    # Create a subdirectory for the specific run type.
+    type_specific_dir = safe_root / f"{run_type}_results"
+    
+    # Ensure the full path exists.
+    type_specific_dir.mkdir(parents=True, exist_ok=True)
+    
+    return type_specific_dir
+
+def inspect_run_type_from_manifest(
+    path: str | os.PathLike,
+    delegate: str = 'raise'
+) -> str:
+    """Inspects a path to determine the run type from a manifest.
+
+    This function is to the input `path` being either a direct
+    path to a manifest file or a path to a run directory. It checks
+    for the presence of specific manifest files to determine if a run
+    was from a 'tuning' or 'training' workflow.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        The path to inspect. This can be a directory containing a
+        manifest file or a direct path to a `run_manifest.json` or
+        `tuner_run_manifest.json`.
+    delegate : {'raise', 'warn', 'ignore', 'training'}, default='raise'
+        The behavior to adopt if no manifest file is found at the path.
+        - 'raise': Raises a FileNotFoundError.
+        - 'warn': Issues a warning and defaults to 'training'.
+        - 'ignore': Silently defaults to 'training'.
+        - 'training': Explicitly defaults to 'training' without a warning.
+
+    Returns
+    -------
+    str
+        Returns 'tuning' if a tuner manifest is found or if the manifest
+        content indicates a tuning run. Otherwise, returns 'training'.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no manifest can be found and `delegate` is set to 'raise'.
+    ValueError
+        If the found manifest file is corrupted or not valid JSON.
+    """
+    path_obj = Path(path)
+    manifest_path: Optional[Path] = None
+
+    # --- Step 1: Find the correct manifest file ---
+    if path_obj.is_dir():
+        # If a directory is provided, search inside it.
+        # Prioritize the tuner manifest if it exists.
+        tuner_manifest = path_obj / "tuner_run_manifest.json"
+        run_manifest = path_obj / "run_manifest.json"
+        if tuner_manifest.exists():
+            manifest_path = tuner_manifest
+        elif run_manifest.exists():
+            manifest_path = run_manifest
+    elif path_obj.is_file():
+        # If a file is provided, use it directly.
+        manifest_path = path_obj
+
+    # --- Step 2: Handle cases where no manifest is found ---
+    if not manifest_path or not manifest_path.exists():
+        msg = f"No manifest file found at or in the directory: {path}"
+        if delegate == 'raise':
+            raise FileNotFoundError(msg)
+        if delegate == 'warn':
+            warnings.warn(msg + ". Defaulting to 'training' mode.")
+        # For 'warn', 'ignore', or 'training', we default to training.
+        return 'training'
+
+    # --- Step 3: Inspect the manifest content to determine run type ---
+    try:
+        manifest_data = json.loads(manifest_path.read_text("utf-8"))
+        # The presence of these keys is a definitive sign of a tuning run.
+        if "tuner" in manifest_data or "tuner_results" in manifest_data:
+            return 'tuning'
+        else:
+            return 'training'
+        
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"Failed to parse manifest file at {manifest_path}. "
+            f"It may be corrupted. Error: {e}"
+        )

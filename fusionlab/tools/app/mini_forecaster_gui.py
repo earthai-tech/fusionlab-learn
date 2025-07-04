@@ -772,7 +772,6 @@ class MiniForecaster(QMainWindow):
         self.tune_mode._tt_idle = idle_tt
         self.tune_btn.setToolTip(idle_tt)
 
-
     def _pick_manifest_for_inference(self) -> str | None:
         """
         Called right before launching inference.
@@ -1199,12 +1198,22 @@ class MiniForecaster(QMainWindow):
 
         # MiniForecaster._open_tuner_dialog()
         max_trials = cfg_dict["tuner_settings"]["max_trials"]
-        fixed_up = cfg_dict["fixed_params"].copy() 
-    
-        time_steps = fixed_up.pop("max_window_size", self.time_steps_spin.value()) 
+        fixed_up = cfg_dict.get("fixed_params", {})
+        seq_params = cfg_dict.get ('sequence_params', {})
+        
+        train_end_year = seq_params.get (
+            "train_end_year", self.train_end_year_spin.value()
+            )
+        
+        forecast_start_year = seq_params.get (
+            "forecast_start_year",  self.forecast_start_year_spin.value(),
+            )
+        time_steps = fixed_up.pop(
+            "max_window_size", self.time_steps_spin.value()) 
         forecast_horizon = fixed_up.pop(
-            "forecast_horizon", self.time_steps_spin.value()
+            "forecast_horizon", self.forecast_horizon_spin.value()
         )
+        
         self._tuning_max_trials = max_trials
         # self.trialLb.setText("--/--")   # ← show placeholder from the very start
 
@@ -1215,6 +1224,10 @@ class MiniForecaster(QMainWindow):
             data_filename = self.file_path.name,
             forecast_horizon_years = forecast_horizon,
             time_steps = time_steps,
+            
+            train_end_year         = train_end_year,
+            forecast_start_year    = forecast_start_year,
+
             save_format = "keras",
             bypass_loading = True,          # no need while tuning
             verbose = 1, # for minimal logging

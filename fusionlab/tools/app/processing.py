@@ -160,10 +160,6 @@ class DataProcessor:
                 return []
             return list(x) if not isinstance(x, list) else x
         
-        # self.log("categorical_cols {}".format(self.config.categorical_cols ))
-        # self.log("numerical_cols {}".format(self.config.numerical_cols ))
-        # self.log("future_features {}".format(self.config.future_features ))
-        
         cat_cols = _as_list(self.config.categorical_cols)
         num_cols = _as_list(self.config.numerical_cols)
         fut_cols = _as_list(self.config.future_features)
@@ -175,8 +171,6 @@ class DataProcessor:
         if stop_check and stop_check():
             raise InterruptedError("Columns checking aborted.")
 
-        # all_cols = base_cols + (self.config.categorical_cols or []) + \
-        #             (self.config.numerical_cols or []) + (self.config.future_features or [])
         df_selected = self.raw_df[[
             col for col in set(all_cols) if col in self.raw_df.columns
         ]].copy()
@@ -271,7 +265,7 @@ class DataProcessor:
             )
         
         self.processed_df = df_processed
-        self.log("  Data preprocessing complete.")
+        
         self._tick(90)
         
         if self.config.save_intermediate:
@@ -308,34 +302,8 @@ class DataProcessor:
             raise InterruptedError("Processing aborted.")
             
         self._tick(100)
+        self.log("  Data preprocessing complete.")
         return self.processed_df
-
-    def split_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Handles Step 5: Splitting the data into training and test sets."""
-        if self.processed_df is None:
-            raise RuntimeError("Data must be preprocessed before splitting.")
-
-        self.log("Step 4 & 5: Defining Feature Sets and Splitting Data...")
-        
-        # Use the config to perform the split using the configured time column
-        time_col = self.config.time_col
-        
-        self.train_df , self.test_df = split_train_test_by_time( 
-            self.processed_df , time_col = time_col, 
-            cutoff=self.config.train_end_year 
-        )
-        # self.train_df = self.processed_df[
-        #     self.processed_df[time_col] <= self.config.train_end_year
-        # ].copy()
-        
-        # self.test_df = self.processed_df[
-        #     self.processed_df[time_col] >= self.config.train_end_year
-        # ].copy()
-        
-        self.log(f"  Data split complete. Train shape: {self.train_df.shape},"
-                 f" Test shape: {self.test_df.shape}")
-                 
-        return self.train_df, self.test_df
 
     def run(self, stop_check =None ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -343,10 +311,7 @@ class DataProcessor:
         """
         self.load_data(stop_check = stop_check) 
         return self.preprocess_data(stop_check = stop_check)
-        # Henceforth manage by SequenceGenerator 
-        # self.split_data()
-        # return self.train_df, self.test_df
-
+  
 class SequenceGenerator:
     """
     Handles sequence generation and dataset creation (Steps 5-6).
@@ -477,10 +442,6 @@ class SequenceGenerator:
         
         # Define feature roles for the sequence generator
         dynamic_features = self.config.dynamic_features 
-        # [
-        #     self.config.gwl_col, 'rainfall_mm', 
-        #     # 'normalized_density'
-        # ] or self.config.dynamic_features 
         dynamic_features = [
             c for c in dynamic_features if c in train_master_df.columns]
         

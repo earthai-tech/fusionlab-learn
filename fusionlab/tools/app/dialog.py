@@ -9,9 +9,10 @@ App dialog
 from __future__ import annotations 
 import json 
 import multiprocessing as mpo
+import platform, psutil
 import pandas as pd 
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtGui     import QFont
 from PyQt5.QtWidgets import (
     QVBoxLayout, 
@@ -33,7 +34,8 @@ from PyQt5.QtWidgets import (
     QInputDialog, 
     QGridLayout, 
     QWidget, 
-    # QSpinBox, 
+    # QSpinBox,
+    QDateEdit,
     QDoubleSpinBox,
     # QComboBox, 
     # QTextEdit, 
@@ -47,8 +49,8 @@ from PyQt5.QtWidgets import (
     QTabWidget,
     QStackedWidget, 
     QButtonGroup, 
-    QSpacerItem, 
-    QSizePolicy
+    # QSpacerItem, 
+    # QSizePolicy
 )
 
 from .notifications import show_resource_warning
@@ -429,10 +431,16 @@ class _EasyPage(QWidget):
     def __init__(self, fixed_params: dict, parent=None):
         super().__init__(parent)
         self.fixed_params = fixed_params
+        
+  
+        self._case_info = {
+            "description": fixed_params.pop("description", ""),
+            "project_name": fixed_params.pop("project_name", ""),
+        }
         self._build_ui()
 
     def _build_ui(self):
-        
+    
         root = QVBoxLayout(self)
 
         # ? fixed ----------------------------------------------------
@@ -465,121 +473,144 @@ class _EasyPage(QWidget):
         # ? System 
         self._build_system_tab()
         
-
+        # ? Case Info 
+        self._build_case_info_tab() 
+        
+            
     def _build_model_tab(self) -> None:
+        """Build the “Model” tab with a three-column grid layout."""
         t_model = QWidget()
         grid = QGridLayout(t_model)
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(8)
     
-        # ── basic widgets ────────────────────────────────────────────────
-        self.time_steps   = QSpinBox(minimum=1,  maximum=50,  value=4)
-        self.horizon      = QSpinBox(minimum=1,  maximum=20,  value=3)
-        self.batch_size   = QSpinBox(minimum=8,  maximum=2048, value=256, singleStep=8)
-        self.epochs       = QSpinBox(minimum=1,  maximum=1000, value=50)  
-        self.objective    = QLineEdit("val_loss")
+        # ── Widgets ────────────────────────────────────────────────────────────
+        self.time_steps       = QSpinBox(minimum=1,  maximum=50,   value=4)
+        self.horizon          = QSpinBox(minimum=1,  maximum=20,   value=3)
+        self.model_selector   = QComboBox()
+        self.model_selector.addItems(["TransFlowSubsNet", "PIHALNet"])
     
-        self.mode_combo   = QComboBox()
+        self.batch_size       = QSpinBox(minimum=8,  maximum=2048, value=32,
+                                         singleStep=8)
+        self.epochs           = QSpinBox(minimum=1,  maximum=1000, value=50)
+        self.objective        = QLineEdit("val_loss")
+    
+        self.mode_combo       = QComboBox()
         self.mode_combo.addItems(["pihal", "tft"])
-        
-        self.activation   = QComboBox()
-        self.activation.addItems(
-            ["relu", "gelu", "swish", "elu", "tanh", "sigmoid", "linear"]
+        self.activation       = QComboBox()
+        self.activation.addItems([
+            "relu", "gelu", "swish", "elu", "tanh", "sigmoid", "linear"
+        ])
+        self.quantiles        = QLineEdit(", ".join(map(str, [0.1, 0.5, 0.9])))
+    
+        # self.quantiles = QLineEdit()  # user may leave blank for point forecast
+        # self.quantiles.setPlaceholderText("e.g. 0.1,0.5,0.9")
+   
+        self.memory_size      = QSpinBox(minimum=10,  maximum=500,  value=100)
+        self.multi_scale_agg  = QComboBox()
+        self.multi_scale_agg.addItems(
+            ["last", "average", "flatten", "auto", "sum", "concat"]
         )
-        self.memory_size  = QSpinBox(minimum=10, maximum=500, value=100)
+        # Replace the old `scales` field with a mode + value pair:
+        self.scales_mode  = QComboBox()
+        self.scales_mode.addItems(["auto", "range"])
+        self.scale_value  = QSpinBox(minimum=1, maximum=100, value=1)
+        self.scale_value.setDisabled(True)  # start disabled
     
-        self.use_residuals = QCheckBox("Residuals")
-        self.use_residuals.setChecked(True)
-        
-        self.use_bn        = QCheckBox("Batch-norm")
-    
-        self.patience_spin = QSpinBox(minimum=1, maximum=100, value=8)   # ← NEW
-    
-        self.multi_scale_agg = QComboBox(); self.multi_scale_agg.addItems(
-            ["last", "average", "flatten", "auto", "sum"]
+        # When the mode changes, enable/disable the integer box:
+        self.scales_mode.currentTextChanged.connect(
+            lambda text: self.scale_value.setEnabled(text == "range")
         )
-        self.final_agg   = QComboBox()
+        
+        self.final_agg        = QComboBox()
         self.final_agg.addItems(["last", "average", "flatten"])
         
         self.encoder_type= QComboBox()
         self.encoder_type.addItems(["hybrid", "transformer"])
+        
         self.decoder_stack = QComboBox()
-        self.decoder_stack.addItems(
-            ["cross", "hierarchical", "memory"]
-        )
-        self.feature_proc = QComboBox()
+        self.decoder_stack.addItem("All",             None)
+        self.decoder_stack.addItem("cross",           1)
+        self.decoder_stack.addItem("hierarchical",    2)
+        self.decoder_stack.addItem("memory",          3)
+        
+        self.feature_proc     = QComboBox()
         self.feature_proc.addItems(["vsn", "norm", "none"])
+        self.train_end_year   = QSpinBox(minimum=2000, maximum=2100, value=2022)
     
-        # helper to add one logical row ------------------------------------------------
-        def add_row(r, lbl1, w1, lbl2, w2, lbl3=None, w3=None):
-           grid.addWidget(QLabel(lbl1), r, 0, Qt.AlignRight)
-           grid.addWidget(w1,            r, 1)
-           grid.addWidget(QLabel(lbl2), r, 2, Qt.AlignRight)
-           grid.addWidget(w2,            r, 3)
-           if lbl3 and w3:
-               grid.addWidget(QLabel(lbl3), r, 4, Qt.AlignRight)
-               grid.addWidget(w3,            r, 5)
-        
-
-        add_row(0, "Time-steps (look-back):", self.time_steps,
-                "Forecast horizon:",          self.horizon)
-        # add_row(1, "Batch size:",             self.batch_size,
-        #            "Epoch:",                   self.epochs,  
-        #            "Tuner objective:", self.objective)
-        
-         # ── combined check-boxes + patience ----------------------------------------
-        # bs_box = QHBoxLayout()
-        # bs_box.addWidget(self.batch_size)
-        # bs_box.addWidget(self.epochs)
-        # bs_widget = QWidget(); bs_widget.setLayout(bs_box)
+        self.use_residuals    = QCheckBox("Residuals")
+        self.use_residuals.setChecked(True)
+        self.use_bn           = QCheckBox("Batch-norm")
+        self.patience_spin    = QSpinBox(minimum=1, maximum=100, value=8)
+        self.forecast_start   = QSpinBox(minimum=2000, maximum=2100, value=2023)
     
-        # grid.addWidget(bs_widget,       2, 1)              # same column (col-1)
-        # grid.addWidget(QLabel("Tuner objective:"), 2, 2, Qt.AlignRight)
-        # grid.addWidget(self.objective,  2, 3)
+        # ── Helper for 3-column rows ────────────────────────────────────────────
+        def add_row3(r,
+                     lbl1, w1,
+                     lbl2, w2,
+                     lbl3, w3):
+            grid.addWidget(QLabel(lbl1), r, 0, Qt.AlignRight)
+            grid.addWidget(w1,            r, 1)
+            grid.addWidget(QLabel(lbl2), r, 2, Qt.AlignRight)
+            grid.addWidget(w2,            r, 3)
+            grid.addWidget(QLabel(lbl3), r, 4, Qt.AlignRight)
+            grid.addWidget(w3,            r, 5)
     
-        # grid.setColumnStretch(1, 1)
-        # grid.setColumnStretch(3, 1)
-        add_row(1, "Batch size:",             self.batch_size,
-               "Epochs:",                 self.epochs,
-               "Tuner objective:",        self.objective)
+        # ── Populate rows ──────────────────────────────────────────────────────
+        add_row3(0,
+                 "Model:",                  self.model_selector,
+                 "Time-steps (look-back):", self.time_steps,
+                 "Forecast horizon:",         self.horizon,
+                 )
         
-        add_row(2, "Mode:",                   self.mode_combo,
-                "Activation:",                self.activation)
-        add_row(3, "Memory size:",            self.memory_size,
-                "Multi-scale agg:",           self.multi_scale_agg)
-        add_row(4, "Final agg:",              self.final_agg,
-                "Encoder type:",              self.encoder_type)
-        add_row(5, "Decoder stack:",          self.decoder_stack,
-                "Feature processing:",        self.feature_proc)
+        add_row3(1,
+                 "Batch size:",               self.batch_size,
+                 "Epochs:",                   self.epochs,
+                 "Tuner objective:",          self.objective)
         
-        # ── combined check-boxes + patience ----------------------------------------
+        add_row3(2,
+                 "Mode:",                     self.mode_combo,
+                 "Activation:",               self.activation,
+                 "Quantiles:",                self.quantiles)
+        
+        add_row3(3,
+                 "Memory size:",              self.memory_size,
+                 "Multi-scale agg:",          self.multi_scale_agg,
+                 "Final agg:",               self.final_agg,
+                 )
+        
+        add_row3(4,
+                 "Scales:",                   self.scales_mode, 
+                 "Scale value:",             self.scale_value,
+                 "Encoder type:",             self.encoder_type,
+                 )
+        
+        # ── Train/Forecast years ─────────────────────────────────────────────────
+        grid.addWidget(QLabel("Decoder stack:"),     5, 0, Qt.AlignRight)
+        grid.addWidget(self.decoder_stack,            5, 1)
+        grid.addWidget(QLabel("Train end year:"), 5, 2, Qt.AlignRight)
+        grid.addWidget(self.train_end_year,            5, 3)
+        grid.addWidget(QLabel("Forecast start year:"),         5, 4, Qt.AlignRight)
+        grid.addWidget(self.forecast_start,                5, 5)
+        
+        # ── Combined checkboxes + patience ──────────────────────────────────────
         cb_box = QHBoxLayout()
         cb_box.addWidget(self.use_residuals)
         cb_box.addWidget(self.use_bn)
-        cb_widget = QWidget(); cb_widget.setLayout(cb_box)
-    
-        grid.addWidget(cb_widget,       6, 1)              # same column (col-1)
-        # grid.addWidget(QLabel("Patience:"), 6, 2, Qt.AlignRight)
-        # grid.addWidget(self.patience_spin,  6, 3)
-        grid.addWidget(QLabel("Patience:"), 6, 2, Qt.AlignRight)
-        grid.addWidget(self.patience_spin,  6, 3)
-        # grid.setColumnStretch(1, 1)
-        # grid.setColumnStretch(3, 1)
-        # make every value column stretch so fields line-up nicely
+        cb_widget = QWidget()
+        cb_widget.setLayout(cb_box)
+        
+        grid.addWidget(cb_widget,              6, 1, 1, 2)
+        grid.addWidget(QLabel("Patience:"),   6, 2, Qt.AlignRight)
+        grid.addWidget(self.patience_spin,    6, 3)
+        grid.addWidget(QLabel("Feature processing:"),6, 4, Qt.AlignRight)
+        grid.addWidget(self.feature_proc,     6, 5)
+        
+        # ── Stretch value columns so inputs align neatly ──────────────────────
         for col in (1, 3, 5):
             grid.setColumnStretch(col, 1)
-    
+        
         self.tabs.addTab(t_model, "Model")
-        
-        # # the tab should be look like this : 
-        
-        # Time step [                  ]   Forecast horizon  [                  ]
-        # Batch size [    ] Epochs [   ]   Tuner Objectibe   [                  ] 
-        #      Mode [                  ]         Activation  [                  ]
-        # Memory size [                ]    Multi scale Agg  [                  ]
-        # Final agg: [                 ]   Feature processing  [                ]
-        #     [x] Residual [] Batch-norm            Patience   [                ] 
-        
 
     # ---------------- Model search-space tab -------------------------
     def _build_search_tab(self):
@@ -697,7 +728,7 @@ class _EasyPage(QWidget):
 
     # ---------------- System tab -------------------------------------------------
     def _build_system_tab(self) -> None:
-        import platform, psutil
+        
         try:                            # GPU detection (≈ TensorFlow ≥ 2.1)
             import tensorflow as tf
             gpus = tf.config.list_physical_devices("GPU")
@@ -755,6 +786,73 @@ class _EasyPage(QWidget):
         layout.addRow(sys_box)           # add the summary as the last row
         self.tabs.addTab(t, "System")
 
+    def _build_case_info_tab(self) -> None:
+        """Build the 'Case Info' tab for description, project, and metadata."""
+
+        import fusionlab 
+        
+        t_case = QWidget()
+        grid = QGridLayout(t_case)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+    
+        # ── Prepare default strings (these should have been set in __init__) ──
+        if not hasattr(self, "_case_info"):
+            self._case_info = {
+                "description": "",
+                "project_name": "",
+            }
+        
+        default_desc = self._case_info.get("description", "")
+        default_proj = self._case_info.get("project_name", "")
+    
+        # ── GUI widgets ────────────────────────────────────────────────────────
+        self.description = QLineEdit()
+        self.description.setPlaceholderText("e.g. TuneParams")
+        self.description.setText(default_desc)
+    
+        self.project_name = QLineEdit()
+        self.project_name.setPlaceholderText("e.g. SubsPINN")
+        self.project_name.setText(default_proj)
+    
+        # ── extra metadata fields ─────────────────────────────────────────────
+        self.run_date = QDateEdit(QDate.currentDate())
+        self.run_date.setCalendarPopup(True)
+    
+        self.author = QLineEdit()
+        self.author.setPlaceholderText("e.g. EarthAI-Tech")
+    
+        self.version = QLineEdit(f"v{fusionlab.__version__}")
+        self.notes = QTextEdit()
+        self.notes.setPlaceholderText("Any additional notes or tags…")
+    
+        # ── Helper for 2-column rows ─────────────────────────────────────────
+        def add_row2(r, lbl1, w1, lbl2, w2):
+            grid.addWidget(QLabel(lbl1), r, 0, Qt.AlignRight)
+            grid.addWidget(w1,            r, 1)
+            grid.addWidget(QLabel(lbl2),  r, 2, Qt.AlignRight)
+            grid.addWidget(w2,            r, 3)
+    
+        # ── Populate rows ───────────────────────────────────────────────────
+        add_row2(0,
+                 "Description:",   self.description,
+                 "Project name:",  self.project_name)
+    
+        add_row2(1,
+                 "Run date:",      self.run_date,
+                 "Author:",        self.author)
+    
+        add_row2(2,
+                 "Version:",       self.version,
+                 "Notes:",         self.notes)
+    
+        # ── Stretch the input columns ────────────────────────────────────────
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+    
+        self.tabs.addTab(t_case, "Case Info")
+
+
     def get_config(self) -> dict | None:
 
         # model-search space helper 
@@ -766,7 +864,7 @@ class _EasyPage(QWidget):
                 return {"min_value": lo, "max_value": hi}
             return {"min_value": lo, "max_value": hi}
         
-
+  
         search_model = {
             "embed_dim":       hp_range(self.embed_lo,  self.embed_hi, 8),
             "hidden_units":    hp_range(self.hidden_lo, self.hidden_hi, 32),
@@ -780,6 +878,11 @@ class _EasyPage(QWidget):
                 "max_value": self.lr_hi.value(),
                 "sampling":  "log",
             },
+            "scales": (
+                    ["auto"]
+                    if self.scales_mode.currentText() == "auto"
+                    else [self.scale_value.value()]
+                ),
         }
 
         # physics search-space ----------------------------------------
@@ -807,6 +910,10 @@ class _EasyPage(QWidget):
         }
         
         # fixed params update 
+        # 2) Whenever you want the decoded list:
+        sel = self.decoder_stack.currentData()      
+        decoded_value = parse_decoder_stack(sel)         
+        
         fixed_upd = {
             **self.fixed_params,                # keep original
             "max_window_size": self.time_steps.value(),
@@ -822,17 +929,18 @@ class _EasyPage(QWidget):
             "mode":            self.mode_combo.currentText(),
             "architecture_config": {
                 "encoder_type":          self.encoder_type.currentText(),
-                "decoder_attention_stack": [
-                    s.strip() for s in self.decoder_stack.currentText().split('+')
-                ],
+                "decoder_attention_stack": decoded_value, 
                 "feature_processing":    self.feature_proc.currentText(),
             },
         }
 
+        
         return {
             "sequence_params": {
                 "time_steps":        self.time_steps.value(),
                 "forecast_horizon":  self.horizon.value(),
+                "train_end_year":    self.train_end_year.value(),
+                "forecast_start_year": self.forecast_start.value(),
             },
             "tuner_settings": {
                 "tuner_type":        self.tuner_algo.currentText(),
@@ -845,6 +953,7 @@ class _EasyPage(QWidget):
             },
             "fixed_params":  fixed_upd,
             "search_space":  {**search_model, **search_phys},
+            "case_info": self._case_info,
         }
  
 class ModelChoiceDialog(QMessageBox):
@@ -902,3 +1011,42 @@ class ModelChoiceDialog(QMessageBox):
         if role == QMessageBox.NoRole:
             return "train"
         return None
+
+def parse_decoder_stack(selection) -> list[str]:
+    """
+    Turn a user selection into the list of decoder names.
+    
+    - If selection is None or empty ⇒ return all three.
+    - If a list of ints or comma-string ⇒ map codes 1→"cross",2→"hierarchical",3→"memory".
+    - If a list of strings ⇒ return only those that match.
+    """
+    # master list
+    choices = ["cross", "hierarchical", "memory"]
+    code_map = {1: "cross", 2: "hierarchical", 3: "memory"}
+    
+    if not selection:
+        return choices[:]   # default all
+    
+    # normalize into Python list
+    if isinstance(selection, str):
+        selection = [s.strip() for s in selection.split(",") if s.strip()]
+    
+    result = []
+    for v in selection:
+        # integer (or numeric string)
+        if isinstance(v, int) or (isinstance(v, str) and v.isdigit()):
+            code = int(v)
+            if code in code_map:
+                result.append(code_map[code])
+        # named string
+        elif isinstance(v, str):
+            if v in choices:
+                result.append(v)
+    # preserve order, drop duplicates
+    seen = set()
+    out = []
+    for name in result:
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out

@@ -295,6 +295,7 @@ class InferenceThread(QThread):
             self.error_occurred.emit(str(exc))
             self.pm.reset()
 
+
 class TunerThread(QThread):
     """
     Background worker that drives a HydroTuner hyper-parameter search
@@ -337,6 +338,7 @@ class TunerThread(QThread):
         # Wire cfg callbacks so *all* internal steps reuse the single bar
         self.cfg.log = self.log_updated.emit
         self.cfg.progress_callback = self._pct
+        self.cfg.run_type = 'tuning'
         
     def run(self) -> None:  # noqa: C901
         # initial bar state
@@ -374,6 +376,7 @@ class TunerThread(QThread):
 
         finally:
             self.tuning_finished.emit()
+            self.cfg.run_type ='training' # go on training mode.
 
     def _on_trial_update(self, cur: int, total: int, _eta: str) -> None:
         """

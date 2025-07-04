@@ -38,6 +38,7 @@ from ...utils.deps_utils import get_versions
 from ...utils.generic_utils import ensure_directory_exists
 
 from ._config import setup_environment as _setup_env   
+from .utils import get_safe_output_dir 
 
 if not globals().get("_FUSIONLAB_ENV_READY", False):
     _setup_env()                           
@@ -63,12 +64,12 @@ class SubsConfig:
         overridden by keyword arguments.
         """
         # --- File and Path Configuration ---
+        self.run_type = 'training' 
         self.city_name: str = 'zhongshan'
         self.model_name: str = 'TransFlowSubsNet'
         self.data_dir: str = os.getenv("JUPYTER_PROJECT_ROOT", "../..")
         self.data_filename: str = "zhongshan_500k.csv"
-        self.output_dir: str = os.path.join(os.getcwd(), "results_pinn")
-
+        
         # --- Time and Horizon Configuration ---
         self.train_end_year: int = 2022
         self.forecast_start_year: int = 2023
@@ -137,7 +138,6 @@ class SubsConfig:
             or cast(Callable[[int], None], lambda *_: None)
         )
         self.verbose = 1 
-        
         # Override defaults with any user-provided kwargs
         for key, value in kwargs.items():
             if hasattr(self, key):
@@ -150,10 +150,16 @@ class SubsConfig:
 
     def _build_paths(self):
         """Constructs the full run output path based on current config."""
+        safe_base_dir = get_safe_output_dir(
+            base_dir=self.output_dir,
+            run_type=self.run_type
+        )
+        self.output_dir = str (safe_base_dir )
         self.run_output_path = os.path.join(
             self.output_dir, f"{self.city_name}_{self.model_name}_run"
         )
         ensure_directory_exists(self.run_output_path)
+        
 
     def update_from_gui(self, gui_config: Dict[str, Any]):
         """Updates configuration from a dictionary, e.g., from the GUI state."""
