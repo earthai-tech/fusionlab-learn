@@ -14,6 +14,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, Tuple
 
+from ...core.handlers import _get_valid_kwargs 
 from ...nn import KERAS_DEPS 
 from ...nn.forecast_tuner import HydroTuner
 from ...nn.pinn.models import PIHALNet, TransFlowSubsNet 
@@ -416,8 +417,9 @@ class TunerApp:
         best_model_rel = result_sec.get("best_model")
         input_shapes   = result_sec.get("input_shapes")
 
-        run_dir  = manifest_path.parent
-        model_fp = run_dir / "tuner_results" / best_model_rel
+        run_dir = Path(data["run_output_path"]).resolve()
+        
+        model_fp = run_dir / best_model_rel
 
         # 1. merge fixed params + best HPs
         merged = fixed_params.copy()
@@ -428,8 +430,13 @@ class TunerApp:
                     else PIHALNet
 
         # 3. reconstruction helper
+        
+        valid_merged_kws = _get_valid_kwargs (merged)
+        #  "lambda_cons": 1.0,
+        #  "lambda_gw": 1.0 are used in compile. 
+        
         def _build() -> Model:
-            return model_cls(**merged)
+            return model_cls(**valid_merged_kws)
 
         # 4. load with universal helper
         model = safe_model_loader(
