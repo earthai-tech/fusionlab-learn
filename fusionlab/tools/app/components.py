@@ -122,10 +122,12 @@ class ProgressManager(QObject):
 
     def set_epoch_context(self, *, epoch: int, total: int) -> None:
         """Prepend *Epoch* info to the label during training."""
+        if epoch > total: epoch = total 
         self._context_prefix = f"Epoch {epoch}/{total} – "
 
     def set_trial_context(self, *, trial: int, total: int) -> None:
         """Prepend *Trial* info to the label during a tuner run."""
+        if trial > total: trial =total 
         self._context_prefix = f"Trial {trial}/{total} – "
 
     def update(self, current: int, total: int) -> None:
@@ -166,7 +168,8 @@ class ProgressManager(QObject):
         """Mark the step complete – sets bar to 100 %."""
         self._sig_set_val.emit(100)
         self._sig_set_fmt.emit("%p%")
-        self._sig_set_label.emit(msg)
+        fmsg = f"{msg} ✓" if str(msg).lower() !='done' else msg 
+        self._sig_set_label.emit(fmsg)
         if self._pct_lbl is not None:               # NEW
             self._sig_set_pct.emit("100 %")
 
@@ -684,16 +687,27 @@ class ExitController(QObject):
 
 class ModeSwitch(QObject):
     """
-    Very small state helper that tints a button while a given QThread
+    State helper that tints a button while a given QThread
     is running and reverts it automatically when the thread finishes.
+    Optionally updates the button text as well.
     """
-    def __init__(self, *, button: QPushButton, tint: str,
-                 tooltip_running: str, tooltip_idle: str) -> None:
+    def __init__(
+        self,
+        *,
+        button: QPushButton,
+        tint: str,
+        tooltip_running: str,
+        tooltip_idle: str,
+        text_running: str = None,
+        text_idle:   str = None,
+    ) -> None:
         super().__init__(button)
-        self._btn       = button
-        self._tint      = tint
-        self._tt_run    = tooltip_running
-        self._tt_idle   = tooltip_idle
+        self._btn          = button
+        self._tint         = tint
+        self._tt_run       = tooltip_running
+        self._tt_idle      = tooltip_idle
+        self._text_run     = text_running
+        self._text_idle    = text_idle
 
     def bind(self, worker: Optional[QThread]) -> None:
         """Call every time you launch **or** stop a tuning thread."""
@@ -705,16 +719,19 @@ class ModeSwitch(QObject):
 
         self._worker = worker
         if worker is None:
-            self._revert()
-            return                         # nothing to do
+            return self._revert()
 
-        # activate visual mode
+        # activate running look
         self._btn.setStyleSheet(f"background:{self._tint}; color:white;")
         self._btn.setToolTip(self._tt_run)
+        if self._text_run is not None:
+            self._btn.setText(self._text_run)
+
         worker.finished.connect(self._revert, Qt.QueuedConnection)
 
-    # -----------------------------------------------------------------
     def _revert(self):
         """Return to the idle look."""
-        self._btn.setStyleSheet("")        # reset QSS
+        self._btn.setStyleSheet("")       # reset QSS        
         self._btn.setToolTip(self._tt_idle)
+        if self._text_idle is not None:
+            self._btn.setText(self._text_idle)

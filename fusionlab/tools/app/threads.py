@@ -110,7 +110,7 @@ class TrainingThread(QThread):
         )
         processor.run(stop_check=self.isInterruptionRequested)
 
-        self.progress_manager.finish_step("Pre‑processing ✓")
+        self.progress_manager.finish_step("Pre‑processing")
         return processor
 
     def _run_sequencing(
@@ -127,7 +127,7 @@ class TrainingThread(QThread):
             stop_check=self.isInterruptionRequested,
         )
 
-        self.progress_manager.finish_step("Sequencing ✓")
+        self.progress_manager.finish_step("Sequencing")
         return seq_gen, train_ds, val_ds
 
     def _run_training(self, train_ds, val_ds):
@@ -165,7 +165,7 @@ class TrainingThread(QThread):
             stop_check=self.isInterruptionRequested,
         )
 
-        self.progress_manager.finish_step("Training ✓")
+        self.progress_manager.finish_step("Training")
         return trainer, best_model
     
 
@@ -190,7 +190,7 @@ class TrainingThread(QThread):
             stop_check=self.isInterruptionRequested,
         )
 
-        self.progress_manager.finish_step("Forecasting ✓")
+        self.progress_manager.finish_step("Forecasting")
         return forecaster, forecast_df
 
     def _run_visualisation(self, forecast_df):  # noqa: D401 – keep verb
@@ -201,7 +201,7 @@ class TrainingThread(QThread):
         visualiser = ResultsVisualizer(self.cfg, self.log_updated.emit)
         visualiser.run(forecast_df, stop_check=self.isInterruptionRequested)
 
-        self.progress_manager.finish_step("Visualising ✓")
+        self.progress_manager.finish_step("Visualising")
 
     def _write_coverage_result(self):
         if not (self.cfg.evaluate_coverage and self.cfg.quantiles):
@@ -280,7 +280,7 @@ class InferenceThread(QThread):
             if self.isInterruptionRequested():
                 raise InterruptedError
 
-            self.pm.finish_step("Inference ✓")
+            self.pm.finish_step("Inference")
             self.progress_val.emit(100)
             self.status_msg.emit("✔ Inference finished.")
             self.log_msg.emit("✔ Inference finished.")
@@ -338,7 +338,7 @@ class TunerThread(QThread):
         # Wire cfg callbacks so *all* internal steps reuse the single bar
         self.cfg.log = self.log_updated.emit
         self.cfg.progress_callback = self._pct
-        self.cfg.run_type = 'tuning'
+        self.cfg.run_type = 'tuning' # For consistency
         
     def run(self) -> None:  # noqa: C901
         # initial bar state

@@ -447,7 +447,7 @@ class SequenceGenerator:
         
         self._tick(30)
         
-        lo, hi = 30, 80                      # global slice for seq-gen
+        lo, hi = 30, 90                      # global slice for seq-gen
         hook = lambda f: self._tick(self.ZOOM(f, lo, hi))
     
         inputs, targets, scaler = prepare_pinn_data_sequences(
@@ -473,7 +473,7 @@ class SequenceGenerator:
             verbose=self.config.verbose,  
             _logger = self.log 
         )
-        self._tick(80)
+        self._tick(90)
         if targets['subsidence'].shape[0] == 0:
             raise ValueError(
                 "Sequence generation produced no training samples.")

@@ -134,7 +134,7 @@ class PredictionPipeline:
 
     def _resolve_artifact_paths(self):
         """Resolves full paths to all artifacts from the manifest."""
-        
+        training_info ={}
         # Helper to construct full path from relative filename in manifest
         def _get_path(key, default_name):
             filename = results_sec.get(key) or training_info.get(key) or default_name
@@ -147,13 +147,11 @@ class PredictionPipeline:
         else: # Standard training
             # training_info = self._manifest.get("training", {})
             # self.model_path = self.artifacts_dir / training_info.get("checkpoint")
-            
-            results_sec = self._manifest.get("artifacts", {})
             training_info = self._manifest.get("training", {})
+            results_sec = self._manifest.get("artifacts", {}) 
+            
             self.model_path = _get_path("checkpoint", "model.keras")
             
-        # XXX TOFIX 
-        
         self.encoder_path = _get_path("encoder", "ohe_encoder.joblib")
         self.scaler_path = _get_path("main_scaler", "main_scaler.joblib")
         self.coord_scaler_path = _get_path("coord_scaler", "coord_scaler.joblib")

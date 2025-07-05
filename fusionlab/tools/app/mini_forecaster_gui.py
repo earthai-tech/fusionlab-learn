@@ -31,9 +31,9 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog, 
     QMessageBox,
-    QToolTip, 
+    QToolTip,
+    QSizePolicy
 )
-
 from ...registry import ManifestRegistry, _locate_manifest
 from .components import ( 
     ProgressManager, 
@@ -157,7 +157,6 @@ class MiniForecaster(QMainWindow):
             pre_quit_hook= lambda: self._log("✔ clean-up done"),
             log_fn       = self._log,
         )
-        
         
         # optional: reset progress-bar when an error dialog closes
         self.error_mgr.handled.connect(self.progress_manager.reset)
@@ -337,24 +336,39 @@ class MiniForecaster(QMainWindow):
         
         progress_layout = QHBoxLayout()
     
-        # This label will display ETA, Trial, or Epoch info
-        self.progress_label = QLabel("")
-        self.progress_label.setFixedWidth(120) # Reserve space for text
-        self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        progress_layout.addWidget(self.progress_label)
+        # ProGRESS Bar …
         
+        # left label
+        self.progress_label = QLabel("")
+        self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # size to text only:
+        self.progress_label.setSizePolicy(
+            QSizePolicy.Minimum,    # shrink to min width needed
+            QSizePolicy.Fixed       # fixed height
+        )
+        progress_layout.addWidget(self.progress_label, 0)  # stretch=0
+        
+        # the bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(18)
-        # self.progress_bar.setTextVisible(True)
-        self.progress_bar.setTextVisible(False)     # we now have a separate % label
-        # progress_layout.addWidget(self.progress_label)
-        progress_layout.addWidget(self.progress_bar, 1) 
+        self.progress_bar.setTextVisible(False)
+        # let it expand to fill leftover space:
+        self.progress_bar.setSizePolicy(
+            QSizePolicy.Expanding,  # grabs all extra width
+            QSizePolicy.Fixed
+        )
+        progress_layout.addWidget(self.progress_bar, 1)   # stretch=1
         
-        # Percentage label (right)
+        # right % label
         self.percent_label = QLabel("0 %")
-        self.percent_label.setFixedWidth(30)
         self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        progress_layout.addWidget(self.percent_label)
+        self.percent_label.setSizePolicy(
+            QSizePolicy.Minimum,    # size to its text
+            QSizePolicy.Fixed
+        )
+        progress_layout.addWidget(self.percent_label, 0)   # stretch=0
+        # the bar will resize itself dynamically:
+        #  [ label1 ] [    BAR TAKES ALL LEFTOVER SPACE   ] [ label2 ]
         
         bottom.addLayout(progress_layout)
         # ── single-row footer  -----------------------------------------------
@@ -724,7 +738,6 @@ class MiniForecaster(QMainWindow):
         self.progress_bar.setValue(0)
         self._refresh_manifest_state()
         
-
     def _refresh_manifest_state(self) -> None:
         """
         Sync GUI buttons with the registry status.
@@ -782,9 +795,10 @@ class MiniForecaster(QMainWindow):
         """
         if self._manifest_path is None:
             return None
-    
-        run_dir = Path(self._manifest_path).parent
-        tuner_manifest = run_dir / "tuner_run_manifest.json"
+        
+        manifest, tuner_manifest = _locate_manifest(locate_both=True) 
+        # run_dir = Path(self._manifest_path).parent
+        # tuner_manifest = run_dir / "tuner_run_manifest.json"
         if not tuner_manifest.exists():
             # nothing special – just use the normal manifest
             return self._manifest_path
@@ -793,6 +807,17 @@ class MiniForecaster(QMainWindow):
         choice = dlg.choice()
         if choice is None:          # user cancelled
             return None
+        
+        
+        # if choice == "tuned": 
+        #     if not tuner_manifest.exists():
+        #         # nothing special – just use the normal manifest
+        #         return self._manifest_path
+            
+        #     return str (tuner_manifest)
+        
+        # return self._manifest_path
+        
         return str(tuner_manifest if choice == "tuned" else self._manifest_path)
 
 
@@ -991,6 +1016,7 @@ class MiniForecaster(QMainWindow):
             chosen_manifest = self._pick_manifest_for_inference()
             if chosen_manifest is None:        # user cancelled
                 self._log("ℹ Inference cancelled by user.")
+                self._toggle_inference_mode()
                 return
             self._manifest_path = chosen_manifest
             self._run_inference()              # ← unchanged
@@ -1231,16 +1257,19 @@ class MiniForecaster(QMainWindow):
             save_format = "keras",
             bypass_loading = True,          # no need while tuning
             verbose = 1, # for minimal logging
+            run_type = 'tuning', # eraise the default type 
             **fixed_up
             
         )
         tune_cfg.log  = self.log_updated.emit
-        
+
         # tune_cfg.progress_callback = self.progress_updated.emit
     
         # ---------- 3. spawn the thread --------------------------------
         self._log("▶ launch TUNER workflow …")
         self.run_btn.setEnabled(False)
+        self.run_btn.setText("Running…") 
+        self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
         self.stop_btn.setEnabled(True)
         self.tune_btn.setEnabled(False)
     
@@ -1417,24 +1446,24 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     gui.show()
     sys.exit(app.exec_())
     
-# if __name__ == "__main__":
-#     launch_cli()
-# mini_forecaster_gui.py  – very bottom
 if __name__ == "__main__":
-    import traceback, faulthandler
-    faulthandler.enable()                       # catches segfault-like crashes
+    launch_cli()
+# mini_forecaster_gui.py  – very bottom
+# if __name__ == "__main__":
+#     import traceback, faulthandler
+#     faulthandler.enable()                       # catches segfault-like crashes
 
-    def qt_excepthook(exctype, value, tb):
-        """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
-        traceback.print_exception(exctype, value, tb)
-        # comment the next line if you prefer the GUI to stay open
-        QApplication.quit()
+#     def qt_excepthook(exctype, value, tb):
+#         """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
+#         traceback.print_exception(exctype, value, tb)
+#         # comment the next line if you prefer the GUI to stay open
+#         QApplication.quit()
 
-    sys.excepthook = qt_excepthook              # <<< install *before* exec_()
+#     sys.excepthook = qt_excepthook              # <<< install *before* exec_()
 
-    app = QApplication(sys.argv)
-    # … theme / stylesheet logic …
-    gui = MiniForecaster(theme="fusionlab")
-    gui.show()
+#     app = QApplication(sys.argv)
+#     # … theme / stylesheet logic …
+#     gui = MiniForecaster(theme="fusionlab")
+#     gui.show()
 
-    sys.exit(app.exec_())
+#     sys.exit(app.exec_())

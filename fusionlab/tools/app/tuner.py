@@ -22,8 +22,6 @@ from ...utils.generic_utils import ensure_directory_exists
 from .config import SubsConfig
 from .processing import DataProcessor, SequenceGenerator
 from .utils import ( 
-    # TunerProgressCallback, 
-    GuiTunerProgress, 
     StopCheckCallback, 
     safe_model_loader,
     TunerProgressCallback
@@ -94,28 +92,6 @@ class TunerApp:
         ts = time.strftime("%H:%M:%S")
         self.log(f"[{ts}] {msg}")
 
-    def _run(
-        self,
-        *,
-        stop_check: Optional[Callable[[], bool]] = None,
-        callbacks: Optional[list[Callback]] = None,
-    ):
-        """End-to-end hyper-parameter search."""
-        self.stop_check = stop_check or (lambda: False)
-
-        self._prepare_progress_manager()
-        processed_df = self._preprocess_data()
-        train_ds, val_ds = self._generate_sequences(processed_df)
-        self._build_fixed_params(train_ds, val_ds)
-        
-        self._pm.start_step("Tuning…")
-        search_callbacks = self._build_callbacks(callbacks)
-        self._run_tuner(train_ds, val_ds, search_callbacks)
-        self._persist_results()
-        # Finish the progress bar after tuning completes
-        self._pm.finish_step("Tuning ✓")
-
-        return self._best_model, self._best_hps, self._tuner
 
     def _prepare_progress_manager(self):
         self._pct = lambda p: self._pm.update(p, 100)
@@ -126,19 +102,19 @@ class TunerApp:
         if self.stop_check():
             raise InterruptedError("Tuning cancelled by user.")
 
-        self._pm.start_step("Pre-processing…")
+        self._pm.start_step("Pre-processing")
         self._processor = DataProcessor(
             self.cfg, self.log, raw_df=self._edited_df
         )
         df = self._processor.run(stop_check=self.stop_check)
-        self._pm.finish_step("Pre-processing ✓")
+        self._pm.finish_step("Pre-processing")
         return df
 
     def _generate_sequences(self, processed_df) -> Tuple[Dataset, Dataset]:
         if self.stop_check():
             raise InterruptedError("Aborted during sequence generation.")
 
-        self._pm.start_step("Sequencing…")
+        self._pm.start_step("Sequencing")
 
         self._seq_gen = SequenceGenerator(self.cfg, self.log)
         train_ds, val_ds = self._seq_gen.run(
@@ -148,10 +124,30 @@ class TunerApp:
             ),
             stop_check=self.stop_check,
         )
-        self._pm.finish_step("Sequencing ✓")
+        self._pm.finish_step("Sequencing")
         return train_ds, val_ds
 
     def _build_fixed_params(self, train_ds, val_ds):
+        
+        self._pm.start_step("Building")
+    
+        # 1) Extract input shapes for manifest 
+        # get one example batch: (inputs_dict, targets_dict)
+        sample_inputs, _ = next(iter(train_ds))
+        # if your Dataset yields ((a,b),(c,d)), unpack accordingly:
+        if isinstance(sample_inputs, (tuple, list)):
+            # you could name feature_keys earlier; here we just zip back
+            feature_keys    = list(self._seq_gen.inputs_train.keys())
+            sample_inputs = {
+                k: t for k, t in zip(feature_keys, sample_inputs)
+            }
+
+        # make JSON-friendly lists of ints
+        input_shapes = {
+            k: list(v.shape)
+            for k, v in sample_inputs.items()
+        }
+        
         inputs = self._seq_gen.inputs_train
         targets = self._seq_gen.targets_train
         self._fixed_params = {
@@ -172,32 +168,29 @@ class TunerApp:
             "lambda_gw": self.cfg.lambda_gw,
         }
 
+        # Persist to manifest 
         _update_manifest(
             self._run_dir,
             section="tuner",
             item={
-                "search_space": self.search_space,
-                "fixed_params": self._fixed_params,
-                "tuner_kwargs": self._tuner_kwargs,
+                "search_space":   self.search_space,
+                "fixed_params":   self._fixed_params,
+                "tuner_kwargs":   self._tuner_kwargs,
+                "input_shapes":   input_shapes,
             },
             manifest_kind="tuning",
         )
-
-        self._tuner = HydroTuner(
-            model_name_or_cls=self.cfg.model_name,
-            fixed_params=self._fixed_params,
-            search_space=self.search_space,
-            directory= self.cfg.run_output_path, 
-            _logger=self._tick,
-            **self._tuner_kwargs,
-        )
-
+        
         self._train_tf = train_ds.prefetch(AUTOTUNE)
         self._val_tf = val_ds.prefetch(AUTOTUNE)
 
     def _build_callbacks(
             self, extra: Optional[list[Callback]]) -> list[Callback]:
-    
+        
+        self._tuner_verbose=0 # for consistency
+        if self.stop_check():
+            raise InterruptedError("Params building cancelled by user.")
+            
         patience = self._tuner_kwargs.pop("patience", 8)
         self._num_cpus = self._tuner_kwargs.pop ('num_cpus', 1)
         
@@ -205,6 +198,7 @@ class TunerApp:
             model_name_or_cls=self.cfg.model_name,
             fixed_params=self._fixed_params,
             search_space=self.search_space,
+            directory= self.cfg.run_output_path, 
             _logger=self._tick,
             **self._tuner_kwargs,
         )
@@ -228,7 +222,7 @@ class TunerApp:
                     monitor=objective,
                     patience=patience,
                     restore_best_weights=True,
-                    # verbose=self.cfg.verbose,
+                    verbose=self._tuner_verbose,
                 )
             )
 
@@ -250,6 +244,8 @@ class TunerApp:
             )
         else: 
             self._tuner_verbose = self.cfg.verbose 
+        
+        self._pm.finish_step("Build")
 
         return cb
 
@@ -259,7 +255,7 @@ class TunerApp:
         if self.stop_check():
             raise InterruptedError("Model-parameter setting cancelled.")
     
-        self._pm.start_step("Tuning…")
+        self._pm.start_step("Tuning")
         try:
             # this is where StopCheckCallback will raise InterruptedError
             self._best_model, self._best_hps, self._tuner = (
@@ -268,7 +264,8 @@ class TunerApp:
                     validation_data=val_ds,
                     epochs=self.cfg.epochs,
                     callbacks=callbacks,
-                    verbose=self._tuner_verbose,
+                    verbose=self.cfg.verbose, 
+                    tuner_verbose = self._tuner_verbose,
                 )
             )
         except InterruptedError:
@@ -278,27 +275,62 @@ class TunerApp:
             return
         finally:
             # if search completed or was interrupted, end the step
-            self._pm.finish_step("Tuning ✓")
-    
+            self._pm.finish_step("Tuning")
+
     def _persist_results(self):
-        out_dir = Path (self.cfg.run_output_path) 
+        self._pm.reset()
+        self._pm.start_step("Persisting")
+    
+        out_dir = Path(self.cfg.run_output_path)
         ensure_directory_exists(out_dir)
-
+    
+        # Try building from manifest shapes first 
+        try:
+            manifest = json.loads(self._manifest_path.read_text())
+            shapes = manifest["tuner"].get("input_shapes", {})
+            self._best_model.build(shapes)
+        except Exception as e:
+            self.log(
+                    f"[Warning] Failed to build model from manifest shapes "
+                    f"(falling back to sample-based build): {e}"
+                )
+            # ── Fallback: run a single batch through the model 
+            try:
+                sample_inputs, _ = next(iter(self._train_tf))
+                if isinstance(sample_inputs, (tuple, list)):
+                    keys = list(self._seq_gen.inputs_train.keys())
+                    sample_inputs = {
+                        k: t for k, t in zip(keys, sample_inputs)
+                    }
+                _ = self._best_model(sample_inputs, training=False)
+            except Exception as ee:
+                self.log(
+                    f"[Warning] Sample-based build also failed; model "
+                    f"may not be fully built: {ee}"
+                )
+    
+        #  Save hyperparameters to JSON 
         (out_dir / "best_hyperparameters.json").write_text(
-            json.dumps(self._best_hps.values, indent=2)
+            json.dumps(self._best_hps.values,
+                       indent=2)
         )
-
+    
         fmt = (self.cfg.save_format or "keras").lower()
         if fmt == "tf":
             best_path = out_dir / f"{self.cfg.model_name}_best"
-            self._best_model.save(best_path, save_format="tf")
+            self._best_model.save(
+                best_path,
+                save_format="tf"
+            )
         elif fmt == "weights":
-            best_path = out_dir / f"{self.cfg.model_name}.best.weights.h5"
+            best_path = out_dir / f"{self.cfg.model_name}" \
+                                f".best.weights.h5"
             self._best_model.save_weights(best_path)
         else:
             best_path = out_dir / f"{self.cfg.model_name}_best.keras"
             self._best_model.save(best_path)
-
+    
+        # ── Update manifest with the saved model info ────────────────────
         _update_manifest(
             run_dir=self._run_dir,
             section="tuner_results",
@@ -310,7 +342,7 @@ class TunerApp:
             manifest_kind="tuning",
         )
         self._tick(f"Search complete → {best_path}")
-    
+        self._pm.finish_step("Save")
 
     def run(
         self,

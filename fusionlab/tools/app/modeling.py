@@ -203,7 +203,6 @@ class ModelTrainer:
             patience=self.config.patience,
             restore_best_weights=True,
         )
-        
         model_checkpoint = ModelCheckpoint(
             filepath=checkpoint_path,
             save_best_only=True,
