@@ -40,7 +40,8 @@ from .components import (
     WorkerController, 
     ErrorManager,
     ExitController, 
-    ModeSwitch
+    ModeSwitch, 
+    ResetController
 )
 
 from .config import SubsConfig
@@ -122,8 +123,8 @@ class MiniForecaster(QMainWindow):
         # --- Instantiate the Manifest Registry in session-only mode ---
         self.registry = ManifestRegistry(session_only=True)
         
-        self._inference_mode = False     # True → Run button will run inference
-        self._manifest_path  = None      # filled automatically once detected
+        self._inference_mode = False     
+        self._manifest_path  = None     
         
         # --- Store the active theme ---
         self.theme = ( 
@@ -134,26 +135,25 @@ class MiniForecaster(QMainWindow):
         self.progress_manager = ProgressManager(
                 self.progress_bar, 
                 self.progress_label, 
-                self.percent_label,        # NEW argument
+                self.percent_label,        
             )
       
-        # already have self._log; add after progress_manager
+        
         self.error_mgr = ErrorManager(
             parent_gui = self, log_fn= self._log)
 
         self.worker_ctl = WorkerController(
                 self.stop_btn,
-                parent_gui = self,                 # QMessageBox parent
+                parent= self,                
                 log_fn     = self._log,
-                status_fn  = self.status_updated.emit,   # one-liner status update
+                status_fn  = self.status_updated.emit,   
         )
         self.worker_ctl.stopped.connect(self._worker_done)
         
-        # MiniForecaster.__init__  (just after self.worker_ctl creation)
         self.exit_ctl = ExitController(
-            quit_button  = self.quit_btn,      # may be None if you only want title-bar
-            parent_gui   = self,
-            worker_ctl   = self.worker_ctl,    # so it knows if something's running
+            quit_button  = self.quit_btn,      
+            parent   = self,
+            worker_ctl   = self.worker_ctl,    
             pre_quit_hook= lambda: self._log("✔ clean-up done"),
             log_fn       = self._log,
         )
@@ -167,6 +167,26 @@ class MiniForecaster(QMainWindow):
             tooltip_idle    = "Click to configure hyper-parameter tuning",
         )
         
+        # instantiate the ResetController
+        # we let it auto‐discover the registry cache dir
+        self.reset_ctl = ResetController(
+            reset_button = self.reset_btn,
+            cache_dir    = None,          
+            mode         = "clean",       # or "archive"
+            primary_color   = PRIMARY,
+            disabled_color  = INFERENCE_OFF,
+            parent =self, 
+        )
+    
+        # when *any* run or tuning finishes:
+        self.worker_ctl.stopped.connect(self.reset_ctl.enable)
+        
+        # finally, when ResetController has done its cleanup:
+        self.reset_ctl.reset_done.connect(self._on_full_reset)
+        
+        # initially, no run yet → enable reset so user can clear stale state
+        self.reset_ctl.enable()
+
         self.log_updated.connect(self._log)
         self.status_updated.connect(self.file_label.setText)
         # self.progress_updated.connect(self.progress_bar.setValue)
@@ -274,12 +294,14 @@ class MiniForecaster(QMainWindow):
         csv_row.addWidget(self.stop_btn)
         
         # right-hand Reset button
+        # self.reset_btn = QPushButton("Reset")
+        # self.reset_btn.setObjectName("reset")   
+        # self.reset_btn.setToolTip("Clear selections & log")
+        # right‐hand Reset button
         self.reset_btn = QPushButton("Reset")
-        self.reset_btn.setObjectName("reset")   
-        self.reset_btn.setToolTip("Clear selections & log")
         # self.reset_btn.setFixedWidth(70)
 
-        self.reset_btn.clicked.connect(self._on_reset)
+        # self.reset_btn.clicked.connect(self._on_reset)
         csv_row.addWidget(self.reset_btn)
         
         # >>> NEW Quit button -------------------------------------------------
@@ -844,7 +866,7 @@ class MiniForecaster(QMainWindow):
             self.inf_btn.setToolTip(
                 "Inference mode is active. Click again to switch back to Training"
             )
-            self.run_btn.setText("RunI")
+            self.run_btn.setText("Infer")
             run_tooltip = (
                 "Launch the inference pipeline using the detected model "
                 "and the selected CSV file"
@@ -889,47 +911,47 @@ class MiniForecaster(QMainWindow):
             else:
                 panel.setStyleSheet("")  # Reset to normal style
                 
-    def _on_reset(self):
-        """Resets the user interface to its default state.
+    # def _on_reset(self):
+    #     """Resets the user interface to its default state.
 
-        This method is the slot connected to the `Reset` button's
-        `clicked` signal. It provides a convenient way for the user
-        to clear all current inputs and results and start a new
-        configuration from scratch.
+    #     This method is the slot connected to the `Reset` button's
+    #     `clicked` signal. It provides a convenient way for the user
+    #     to clear all current inputs and results and start a new
+    #     configuration from scratch.
 
-        Specifically, it performs the following actions:
-        - Clears the main log panel.
-        - Resets the progress bar to zero.
-        - Clears the file path selection and updates the label.
-        - Resets all configuration widgets in the different panels
-          (e.g., `Model Configuration`, `Training Parameters`) to
-          their initial default values.
-        - Clears the coverage score label in the footer.
-        """
-        # reset feature inputs
-        self.dyn_feat.setText("auto")
-        self.stat_feat.setText("auto")
-        self.fut_feat.setText("rainfall_mm")
+    #     Specifically, it performs the following actions:
+    #     - Clears the main log panel.
+    #     - Resets the progress bar to zero.
+    #     - Clears the file path selection and updates the label.
+    #     - Resets all configuration widgets in the different panels
+    #       (e.g., `Model Configuration`, `Training Parameters`) to
+    #       their initial default values.
+    #     - Clears the coverage score label in the footer.
+    #     """
+    #     # reset feature inputs
+    #     self.dyn_feat.setText("auto")
+    #     self.stat_feat.setText("auto")
+    #     self.fut_feat.setText("rainfall_mm")
     
-        # clear log + status + progress
-        self.log.clear()
-        self.file_label.setText("No file selected" if self.file_path is None
-                                else f"Selected: {self.file_path.name}")
-        self.progress_bar.setValue(0)
-        self.city_input.clear()
-        self.coverage_lbl.clear() 
+    #     # clear log + status + progress
+    #     self.log.clear()
+    #     self.file_label.setText("No file selected" if self.file_path is None
+    #                             else f"Selected: {self.file_path.name}")
+    #     self.progress_bar.setValue(0)
+    #     self.city_input.clear()
+    #     self.coverage_lbl.clear() 
         
-        # If the GUI is in inference mode when reset is clicked,
-        # toggle it back to training mode to ensure a clean state.
-        if self._inference_mode:
-            self._toggle_inference_mode()
+    #     # If the GUI is in inference mode when reset is clicked,
+    #     # toggle it back to training mode to ensure a clean state.
+    #     if self._inference_mode:
+    #         self._toggle_inference_mode()
         
-        self.run_btn.setStyleSheet("")
-        self.stop_btn.setStyleSheet("") 
-        self.tune_btn.setEnabled(False)
-        self.tune_btn.setStyleSheet("")
+    #     self.run_btn.setStyleSheet("")
+    #     self.stop_btn.setStyleSheet("") 
+    #     self.tune_btn.setEnabled(False)
+    #     self.tune_btn.setStyleSheet("")
 
-        self._log("ℹ Interface reset.")
+    #     self._log("ℹ Interface reset.")
         
     def _stop_worker(self):
         """
@@ -1002,7 +1024,8 @@ class MiniForecaster(QMainWindow):
                 self, "No Data", "Please select a CSV data file"
                 " before running a workflow.")
             return
-            
+        
+        self.reset_ctl.disable()
         self.coverage_lbl.clear()
         
         # Dispatch to the correct workflow based on the UI mode
@@ -1321,15 +1344,13 @@ class MiniForecaster(QMainWindow):
                 self._log(f"📝 Log saved to: {fname}")
             except Exception as err:
                 self._log(f"⚠ Could not write log file ({err})")
-        
-                
-            
+  
             # Clean up the active worker reference
             self.active_worker = None
       
         if self._inference_mode:
             self._toggle_inference_mode()
-        
+            
         self.status_updated.emit("⚪ Idle")
         
         self.run_btn.setStyleSheet("")
@@ -1339,8 +1360,32 @@ class MiniForecaster(QMainWindow):
 
         self.progress_manager.reset() 
         self.worker_ctl.bind(None)  
+   
         self.tune_mode.bind(None) 
+
+        self.reset_ctl.enable()
         self._refresh_manifest_state()  
+    
+    @pyqtSlot()
+    def _on_full_reset(self):
+        """Clears logs, progress, forms, file selections, coverage, etc."""
+        self.log.clear()
+        self.progress_manager.reset()
+        self.file_label.setText("No file selected")
+        self.city_input.clear()
+        self.coverage_lbl.clear()
+        self.dyn_feat.setText("auto")
+        self.stat_feat.setText("auto")
+        self.fut_feat.setText("rainfall_mm")
+        # restore button styles
+        self.tune_btn.setEnabled(False)
+        self.tune_btn.setStyleSheet("")
+        self.inf_btn.setEnabled(False)
+        self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
+        self.run_btn.setEnabled(True)
+        self.run_btn.setStyleSheet("")
+        self._log("ℹ Interface fully reset.")
+
     
 
 def hline() -> QFrame:
@@ -1387,6 +1432,10 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     default 'fusionlab' theme.
     """
     app = QApplication(sys.argv)
+    # 1) Set app-level icon for taskbar / Alt+Tab
+    ico = Path(__file__).parent / "fusionlab_learn_logo.ico"
+    app.setWindowIcon(QIcon(str(ico)))
+
     QToolTip.setFont(QFont("Helvetica Neue", 9))
 
     # Normalize theme aliases

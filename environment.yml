@@ -3,7 +3,7 @@
 # conda env create -f environment.yml
 # Or update an existing environment with:
 # conda env update -f environment.yml --prune
-name: fusionlab-env
+name: fusionlab
 
 channels:
   - conda-forge # Prioritize conda-forge for many data science packages

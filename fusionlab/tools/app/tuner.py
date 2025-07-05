@@ -229,7 +229,7 @@ class TunerApp:
 
         max_trials = self._tuner_kwargs.get("max_trials", 10)
         if callable(getattr(self.cfg, "progress_callback", None)):
-            
+            # from .utils import PerTrialTunerProgress
             batches_per_epoch = experimental.cardinality(self._train_tf).numpy()
             # )
             cb.append(
@@ -242,6 +242,12 @@ class TunerApp:
                     trial_batch_level  = True,   # *and* per‐batch updates
                     log                = self.log,
                 )
+                # PerTrialTunerProgress(
+                #     total_trials    = max_trials,
+                #     total_epochs    = self.cfg.epochs,
+                #     progress_manager= self._pm,
+                #     log             = self.log,
+                # )
             )
         else: 
             self._tuner_verbose = self.cfg.verbose 

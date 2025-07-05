@@ -92,6 +92,21 @@ QPushButton#stop:hover:enabled {{
     color: white;
 }}
 
+/* Disabled state */
+QPushButton#reset:disabled,
+QPushButton#stop:disabled {{
+    background: #dadada;
+    color: #333;
+}}
+
+/* Enabled (normal) state */
+QPushButton#stop:enabled {{
+    background: {PRIMARY};
+    color: white;
+}}
+
+
+
 QToolTip {{
     /* translucent orange bubble, white text, subtle outline */
     background: {SECONDARY_T70};
@@ -130,50 +145,29 @@ QFrame#card[inferenceMode="true"] {{
     border: 2px solid #2E3191; /* Primary blue color */
 }}
 
-
-/* --- QMessageBox Styling --- */
-QMessageBox {{
-    background-color: {PALETTE['dark_card_bg']}; 
-}}
-QMessageBox QLabel {{ 
-    color: {PALETTE['dark_text_title']};
-    font-size: 16px;
-}}
-QMessageBox QPushButton {{ /* Styles the "OK" button */
-    background-color: {PALETTE['primary']};
-    color: white;
-    border-radius: 4px;
-    padding: 8px 20px;
-    min-width: 80px; /* Give the button a decent size */
-}}
-QMessageBox QPushButton:hover {{
-    background-color: {PALETTE['primary_hover']};
-}}
-
-
-/* --- QMessageBox Styling --- */
+/* --- QMessageBox Styling (light theme) --- */
 QMessageBox {{
     background-color: {PALETTE['light_bg']};
 }}
-QMessageBox QLabel {{ /* Styles the main text */
-    color: {PALETTE['light_text']};
+QMessageBox QLabel {{
+    color: {PALETTE['light_text']}; 
     font-size: 14px;
 }}
-QMessageBox QPushButton {{ /* Styles the "Yes" and "No" buttons */
-    background-color: {PALETTE['light_reset_bg']};
-    color: {PALETTE['light_text']};
-    border: 1px solid {PALETTE['light_border']};
+QMessageBox QPushButton {{
+    background-color: {PALETTE['primary']};
+    color: white;
     border-radius: 4px;
     padding: 8px 20px;
     min-width: 80px;
 }}
 QMessageBox QPushButton:hover {{
-    background-color: #d1d5db; /* A slightly darker grey */
+    background-color: {PALETTE['primary_hover']};
 }}
 QMessageBox QPushButton:pressed {{
-    background-color: {PALETTE['primary']};
+    background-color: {PALETTE['secondary']};     
     color: white;
 }}
+
 
 """
 #
@@ -278,47 +272,30 @@ QFrame#card[inferenceMode="true"] {{
     border: 2px solid #F28620; /* Secondary orange color */
 }}
 
-/* --- QMessageBox Styling --- */
+/* --- QMessageBox Styling (dark theme) --- */
 QMessageBox {{
-    background-color: {PALETTE['dark_card_bg']}; 
-}}
-QMessageBox QLabel {{ 
-    color: {PALETTE['dark_text_title']};
-    font-size: 16px;
-}}
-QMessageBox QPushButton {{ /* Styles the "OK" button */
-    background-color: {PALETTE['primary']};
-    color: white;
-    border-radius: 4px;
-    padding: 8px 20px;
-    min-width: 80px; /* Give the button a decent size */
-}}
-QMessageBox QPushButton:hover {{
-    background-color: {PALETTE['primary_hover']};
+    background-color: {PALETTE['dark_card_bg']};  /* e.g. #334155 */
 }}
 
- 
-/* --- QMessageBox Styling --- */
-QMessageBox {{
-    background-color: {PALETTE['dark_card_bg']};
-}}
-QMessageBox QLabel {{ /* Styles the main text */
-    color: {PALETTE['dark_text']};
+/* Main message text */
+QMessageBox QLabel {{
+    color: {PALETTE['dark_text']};   /* e.g. #cbd5e1 */
     font-size: 14px;
 }}
-QMessageBox QPushButton {{ /* Styles the "Yes" and "No" buttons */
-    background-color: {PALETTE['dark_reset_bg']};
-    color: {PALETTE['dark_text']};
-    border: 1px solid {PALETTE['dark_border']};
+
+/* Buttons (Yes / No / OK / Cancel) */
+QMessageBox QPushButton {{
+    background-color: {PALETTE['primary']};      /* keep your brand blue */
+    color: white;
     border-radius: 4px;
     padding: 8px 20px;
     min-width: 80px;
 }}
 QMessageBox QPushButton:hover {{
-    background-color: {PALETTE['dark_border']};
+    background-color: {PALETTE['primary_hover']}; /* lighter on hover */
 }}
 QMessageBox QPushButton:pressed {{
-    background-color: {PALETTE['primary']};
+    background-color: {PALETTE['secondary']};     /* or primary again */
     color: white;
 }}
 
@@ -377,5 +354,20 @@ QDockWidget#logDock QTextEdit {{
     font-family   : Consolas, monospace;
     font-size     : 11px;
     padding       : 6px;
+}}
+"""
+
+# ‣ colour logic: PRIMARY when *not* selected, SECONDARY when selected
+TUNER_STYLES = f"""
+QPushButton {{
+    background      : {PRIMARY};
+    color           : white;
+    padding         : 6px 18px;     /* top/bottom | left/right */
+    border          : none;
+    border-radius   : 4px;
+}}
+
+QPushButton:checked {{
+    background : {SECONDARY};
 }}
 """

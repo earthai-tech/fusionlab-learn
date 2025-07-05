@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from typing import Callable , Optional 
 import time
-# from pathlib import Path
+from pathlib import Path
 from datetime import datetime
 import traceback, textwrap, os
-
+import shutil
 
 from PyQt5.QtCore import ( 
     QObject, 
@@ -31,7 +31,7 @@ from PyQt5.QtCore import (
     QMetaObject, 
     Q_ARG, 
     QEvent,
-    pyqtSlot
+    pyqtSlot, 
 )
 from PyQt5.QtWidgets import (
     QDialog, 
@@ -44,18 +44,22 @@ from PyQt5.QtWidgets import (
     QMessageBox, 
     QProgressBar, 
     QLabel, 
-    QMainWindow, 
+    QMainWindow,
+    QWidget
 )
 
-from ...nn import KERAS_DEPS 
+from ...nn import KERAS_DEPS  
+from ...registry import ManifestRegistry
 Callback = KERAS_DEPS.Callback 
+
 
 __all__ = [
     "ProgressManager", "WorkerController",
     "ErrorManager", "ExitController", 
     "ModeSwitch", "TunerProgress", 
-    "TuningProgress"
+    "TuningProgress", "ResetController"
   ]
+
 
 class ProgressManager(QObject):
     """Thread‑safe progress‑bar wrapper with ETA & contextual prefixes."""
@@ -92,9 +96,15 @@ class ProgressManager(QObject):
 
 
         # Internal state ------------------------------------------------
-        self._step_start_t: float | None = None
-        self._context_prefix: str = ""  # e.g. "Epoch 3/50 – "
+        # self._step_start_t: float | None = None
+        # self._context_prefix: str = ""  # e.g. "Epoch 3/50 – "
+        # self.reset()
+        # --- context fields instead of one single prefix ---
+        self._trial_prefix = ""
+        self._epoch_prefix = ""
+        self._step_start_t = None
         self.reset()
+        
 
     def start_step(self, name: str, total: int | None = None) -> None:
         """Begin a new logical step (pre‑processing, training, …).
@@ -108,8 +118,11 @@ class ProgressManager(QObject):
             first ETA can be estimated immediately.  Leave *None* for
             unknown totals or when the step itself manages percentages.
         """
+        self._trial_prefix = ""
+        self._epoch_prefix = ""
+        
         self._step_start_t = time.time()
-        self._context_prefix = ""  # clear any lingering epoch/trial text
+        # self._context_prefix = ""  # clear any lingering epoch/trial text
 
         # Indeterminate bar if *total* is unknown; switches to % later.
         if total is None or total <= 0:
@@ -121,48 +134,62 @@ class ProgressManager(QObject):
         self._sig_set_label.emit(f"{name}…")
 
     def set_epoch_context(self, *, epoch: int, total: int) -> None:
-        """Prepend *Epoch* info to the label during training."""
-        if epoch > total: epoch = total 
-        self._context_prefix = f"Epoch {epoch}/{total} – "
+        """Remember epoch info but don’t stomp trial info."""
+        epoch = min(epoch, total)
+        self._epoch_prefix = f"Epoch {epoch}/{total} – "
 
     def set_trial_context(self, *, trial: int, total: int) -> None:
-        """Prepend *Trial* info to the label during a tuner run."""
-        if trial > total: trial =total 
-        self._context_prefix = f"Trial {trial}/{total} – "
+        """Remember trial info but don’t stomp epoch info."""
+        # if trial > total: trial =total 
+        # self._context_prefix = f"Trial {trial}/{total} – "
+        trial = min(trial, total)
+        self._trial_prefix = f"Trial {trial}/{total} – "
+        
 
     def update(self, current: int, total: int) -> None:
-        """Update progress (thread‑safe).
-
+        """
+        Update progress (thread-safe), combining trial and epoch contexts,
+        computing ETA, and emitting UI signals.
+    
         Parameters
         ----------
         current : int
-            Work done so far.
+            Completed work count.
         total : int
-            Full amount of work.  If ``total <= 0`` the bar switches to an
-            indeterminate/busy style.
+            Total work count; if <= 0, bar is busy.
         """
+        # Busy mode – animate bar indefinitely
         if total <= 0:
-            # Busy mode – let the bar animate indefinitely.
-            self._sig_set_fmt.emit("")
-            self._sig_set_val.emit(0)
-            self._sig_set_label.emit(self._context_prefix + "Working…")
+            self._sig_set_fmt.emit("")  
+            self._sig_set_val.emit(0)  
+            prefix = self._trial_prefix + self._epoch_prefix
+            self._sig_set_label.emit(prefix + "Working…")
             return
-
+    
+        # Compute fraction completed and percentage
         frac = max(0.0, min(1.0, current / total))
-        pct  = int(frac * 100)
+        pct = int(frac * 100)
+    
+        # Emit progress value and optional pct label
         self._sig_set_val.emit(pct)
-        if self._pct_lbl is not None:               # NEW
-            self._sig_set_pct.emit(f"{pct:3d} %")   # right-hand label
-
-        # ETA 
+        if self._pct_lbl is not None:
+            self._sig_set_pct.emit(f"{pct:3d} %") # right-hand label
+    
+        # Compute ETA
         if self._step_start_t is None:
             eta_str = "--:--"
         else:
             elapsed = time.time() - self._step_start_t
-            eta     = (elapsed / frac) - elapsed if frac > 1e-6 else -1.0
+            eta = (
+                (elapsed / frac) - elapsed
+                if frac > 1e-6
+                else -1.0
+            )
             eta_str = self._format_time(eta)
-
-        self._sig_set_label.emit(f"{self._context_prefix}ETA: {eta_str}")
+    
+        # Combine trial+epoch prefixes and emit final label
+        prefix = self._trial_prefix + self._epoch_prefix
+        self._sig_set_label.emit(f"{prefix}ETA: {eta_str}")
 
     def finish_step(self, msg: str = "Done") -> None:
         """Mark the step complete – sets bar to 100 %."""
@@ -170,7 +197,7 @@ class ProgressManager(QObject):
         self._sig_set_fmt.emit("%p%")
         fmsg = f"{msg} ✓" if str(msg).lower() !='done' else msg 
         self._sig_set_label.emit(fmsg)
-        if self._pct_lbl is not None:               # NEW
+        if self._pct_lbl is not None:               
             self._sig_set_pct.emit("100 %")
 
     def reset(self) -> None:
@@ -180,7 +207,7 @@ class ProgressManager(QObject):
         self._sig_set_fmt.emit("Idle")
         self._sig_set_val.emit(0)
         self._sig_set_label.emit("")
-        if self._pct_lbl is not None:               # NEW
+        if self._pct_lbl is not None:               
             self._sig_set_pct.emit("Idle")
 
     #
@@ -383,14 +410,14 @@ class WorkerController(QObject):
         self,
         stop_button: QPushButton,
         *,
-        parent_gui,                               # needed for QMessageBox
+        parent,                               # needed for QMessageBox
         log_fn:     Callable[[str], None] | None = None,
         status_fn:  Callable[[str], None] | None = None,
         confirm:    bool = True,                  # turn dialog on/off
     ) -> None:
         super().__init__(stop_button)
         self._btn         = stop_button
-        self._parent_gui  = parent_gui
+        self._parent_gui  = parent
         self._log         = log_fn or (lambda *_: None)
         self._set_status  = status_fn or (lambda *_: None)
         self._confirm     = confirm
@@ -618,13 +645,13 @@ class ExitController(QObject):
         self,
         quit_button:   QPushButton | None,
         *,
-        parent_gui:    QMainWindow,
+        parent:    QMainWindow,
         worker_ctl:    "WorkerController | None" = None,
         pre_quit_hook: Callable[[], None] | None = None,
         log_fn:        Callable[[str], None] | None = None,
     ) -> None:
-        super().__init__(parent_gui)
-        self._wnd   = parent_gui
+        super().__init__(parent)
+        self._wnd   = parent
         self._busy_fn     = worker_ctl.is_busy if worker_ctl else (lambda: False)
         self._stop_worker   = worker_ctl._on_stop if worker_ctl else (
             lambda: None)
@@ -735,3 +762,105 @@ class ModeSwitch(QObject):
         self._btn.setToolTip(self._tt_idle)
         if self._text_idle is not None:
             self._btn.setText(self._text_idle)
+
+
+class ResetController(QObject):
+    """
+    Encapsulates all logic around the 'Reset' action:
+      • confirmation prompt
+      • cache cleaning vs. archiving
+      • button enable/disable, styling, tooltip
+      • emits `reset_done` so others can hook in
+    """
+
+    reset_done = pyqtSignal()
+
+    def __init__(
+        self,
+        reset_button: QPushButton,
+        *,
+        cache_dir: Optional[Path] = None,
+        mode: str = "clean",       # "clean" or "archive"
+        primary_color: str = "#2E3191",
+        disabled_color: str = "#cccccc",
+        parent: Optional[QWidget]=None, 
+    ):
+        super().__init__(parent)
+
+        # determine cache_dir if not provided
+        if cache_dir is None:
+            registry = ManifestRegistry(session_only=False)
+            # persistent_root already ends in '/runs'
+            cache_dir = registry.persistent_root
+
+        self._btn       = reset_button
+        self._cache_dir = Path(cache_dir)
+        self.mode       = mode
+        self.primary    = primary_color
+        self.disabled   = disabled_color
+
+        # initial state: disabled until idle
+        self._btn.setEnabled(False)
+        self._btn.setStyleSheet(f"background:{self.disabled};")
+        self._btn.setToolTip("Nothing to reset")
+        self._btn.clicked.connect(self._on_clicked)
+
+    def enable(self):
+        """Enable the Reset button (when GUI is idle)."""
+        self._btn.setEnabled(True)
+        self._btn.setStyleSheet(f"background:{self.primary}; color:white;")
+        verb = "clean cache" if self.mode=="clean" else "archive cache"
+        self._btn.setToolTip(f"Reset UI & {verb}")
+
+    def disable(self):
+        """Disable the Reset button (when workflow is running)."""
+        self._btn.setEnabled(False)
+        self._btn.setStyleSheet(f"background:{self.disabled};")
+        self._btn.setToolTip("Cannot reset while running")
+
+    def _on_clicked(self):
+        """Ask for confirmation, then clean or archive the cache."""
+        verb = "archive" if self.mode=="archive" else "clean"
+        reply = QMessageBox.question(
+            None,
+            "Confirm Reset",
+            f"Are you sure you want to reset the UI and {verb}?\n"
+            "This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if self._cache_dir.exists():
+            if self.mode == "clean":
+                self._clean_cache()
+            else:
+                self._archive_cache()
+
+        # notify listeners to clear forms, logs, progress, etc.
+        self.reset_done.emit()
+
+    def _clean_cache(self):
+        """Delete all files and folders under the cache directory."""
+        for child in self._cache_dir.iterdir():
+            try:
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _archive_cache(self):
+        """
+        Move the cache directory to an archive, then recreate it.
+        e.g. 'runs' → 'runs_archive_20250705_150023'
+        """
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archive = self._cache_dir.parent / f"{self._cache_dir.name}_archive_{ts}"
+        try:
+            shutil.move(str(self._cache_dir), str(archive))
+        except Exception:
+            pass
+        self._cache_dir.mkdir(parents=True, exist_ok=True)

@@ -54,7 +54,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .notifications import show_resource_warning
-from .styles import PRIMARY, SECONDARY, TAB_STYLES 
+from .styles import TAB_STYLES, TUNER_STYLES 
 from .tables import _PandasModel 
 from .utils import parse_search_space  
 
@@ -236,25 +236,11 @@ class TunerDialog(QDialog):
             "the full search-space and tuner settings for you."
         )
     
-        # ‣ colour logic: PRIMARY when *not* selected, SECONDARY when selected
-        sheet = f"""
-        QPushButton {{
-            background      : {PRIMARY};
-            color           : white;
-            padding         : 6px 18px;     /* top/bottom | left/right */
-            border          : none;
-            border-radius   : 4px;
-        }}
-        
-        QPushButton:checked {{
-            background : {SECONDARY};
-        }}
-        """
         # fixed width & checkable styling
         for btn in (self.dev_btn, self.easy_btn):
             btn.setMinimumWidth(120)
             btn.setCheckable(True)
-            btn.setStyleSheet(sheet)
+            btn.setStyleSheet(TUNER_STYLES)
             bar.addWidget(btn)
 
         # ‣ mutual exclusivity

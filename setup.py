@@ -25,19 +25,20 @@ KEYWORDS = "time-series forecasting, machine learning, temporal fusion, deep lea
 
 # Core dependencies
 _required_dependencies = [
-    "numpy<2", 
-    "pandas",
-    "scipy",
-    "matplotlib",
-    "tqdm",
-    "scikit-learn",
-    "statsmodels",
-    "tensorflow>=2.15", #preferably 2.15
-    "joblib",
-    "pyyaml", 
-    "click", 
-    "platformdirs", 
-    "PyQt>=5.15"
+    'numpy<2',
+    'pandas>=1.5',
+    'scipy>=1.9',
+    'matplotlib>=3.6',
+    'tqdm>=4.65',
+    'scikit-learn>=1.2',
+    'statsmodels>=0.14',
+    'tensorflow>=2.15,<3.0' ,    
+    'keras-tuner>=1.4.7,<2.0',
+    'joblib>=1.3',
+    'PyYAML>=6.0',
+    'click>=8.1',
+    'platformdirs>=2.6',
+    'PyQt5>=5.15,<6.0',
 ]
 
 # Optional dependencies
@@ -46,6 +47,7 @@ _extras_require = {
         "pytest",
         "sphinx",
         "flake8",
+        "tensorflow-gpu>=2.15,<3.0",  # or tensorflow-gpu for GPU builds
         # other dev tools like black, isort, mypy can be added
     ],
     "k-diagram": [ 

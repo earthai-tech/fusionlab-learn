@@ -176,5 +176,9 @@ KERAS_TUNER_CONFIG = {
     'Objective': ('keras_tuner', 'Objective'),
     'RandomSearch': ('keras_tuner', 'RandomSearch'),
     'Tuner': ('keras_tuner', 'Tuner'),
+    'TunerCallback': (
+        ('keras_tuner.src.engine.tuner_utils', 'TunerCallback'), 
+        ('keras_tuner.engine.tuner_utils', 'TunerCallback')
+    ),
 }
 

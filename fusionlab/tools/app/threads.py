@@ -143,12 +143,28 @@ class TrainingThread(QThread):
         # ------------------------------------------------------------------
         total_epochs = self.cfg.epochs
 
+        # def _pct_training(percent: int) -> None:
+        #     # 1) regular bar update
+        #     self.progress_manager.update(percent, 100)
+        #     # 2) convert % → epoch number (1-based, clamped)
+        #     ep = max(1, min(total_epochs,
+        #                     int(round((percent / 100) * total_epochs))))
+        #     self.progress_manager.set_epoch_context(
+        #         epoch=ep, total=total_epochs)
+            
         def _pct_training(percent: int) -> None:
-            # 1) regular bar update
-            self.progress_manager.update(percent, 100)
-            # 2) convert % → epoch number (1-based, clamped)
-            ep = max(1, min(total_epochs,
-                            int(round((percent / 100) * total_epochs))))
+            # convert % back into epoch number (1-based)
+            ep = max(1, min(
+                total_epochs,
+                int(round((percent / 100) * total_epochs)),
+            ))
+        
+            # 1) feed the *real* iteration counts to update()
+            #    so ETA = (elapsed / (ep/total_epochs)) - elapsed
+            self.progress_manager.update( 
+                current=ep, total=total_epochs)
+        
+            # 2) now set the “Epoch X/Y – ” prefix
             self.progress_manager.set_epoch_context(
                 epoch=ep, total=total_epochs)
 

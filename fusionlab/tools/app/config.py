@@ -152,7 +152,8 @@ class SubsConfig:
         """Constructs the full run output path based on current config."""
         safe_base_dir = get_safe_output_dir(
             base_dir=self.output_dir,
-            run_type=self.run_type
+            run_type=self.run_type, 
+            log = self.log
         )
         self.output_dir = str (safe_base_dir )
         self.run_output_path = os.path.join(
