@@ -135,7 +135,7 @@ class TunerProgressCallback(TunerCallback, Callback):
         log: Callable[[str], None] = print,
     ):
         # Only initialize the Keras Callback side:
-        Callback.__init__()
+        Callback.__init__(self)
 
         # (do NOT call TunerCallback.__init__ here)
         self.total_trials      = total_trials
