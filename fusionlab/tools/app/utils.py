@@ -117,8 +117,8 @@ class StopCheckCallback(Callback):
         # cannot be deep-copied, so return self.
         return self
   
-
-class TunerProgressCallback(TunerCallback, Callback):
+# XXX TODO
+class OnDEBUGGINGTunerProgressCallback(TunerCallback, Callback):
     """
     Drives a single ProgressManager across all trials / epochs / batches.
     """
@@ -338,7 +338,7 @@ class TunerProgressCallback(TunerCallback, Callback):
 #         # Prevent Qt signal duplication; reuse same instance.
 #         return self
 
-class FallBackTunerProgressCallback(Callback):
+class TunerProgressCallback(Callback):
     """
     Keras-Tuner callback that drives a single ProgressManager bar across
     all trials, epochs, and batches—reporting a true “global” progress.
