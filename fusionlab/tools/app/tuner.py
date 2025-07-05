@@ -17,6 +17,7 @@ from typing import Dict, Any, Optional, Callable, Tuple
 from ...nn import KERAS_DEPS 
 from ...nn.forecast_tuner import HydroTuner
 from ...nn.pinn.models import PIHALNet, TransFlowSubsNet 
+from ...nn.pinn.op import extract_physical_parameters 
 from ...registry import ManifestRegistry, _update_manifest
 from ...utils.generic_utils import ensure_directory_exists
 from .config import SubsConfig
@@ -341,6 +342,22 @@ class TunerApp:
             },
             manifest_kind="tuning",
         )
+        # Export physical parameters
+        if self.stop_check():
+            raise InterruptedError(
+                "Physical parameters extraction aborted.")
+        try: 
+            physic_params_path = ( 
+                out_dir / f'{self.cfg.model_name}.tune.physical_parameters.csv'
+                )
+            extract_physical_parameters (
+                self._best_model, filename = physic_params_path 
+            )
+            self.log(f"Successfully exported parameters to: {out_dir}")
+        except Exception as err: 
+            self.log("  [WARN] Failed to export"
+                     f" physical parameters: {err}")
+            
         self._tick(f"Search complete → {best_path}")
         self._pm.finish_step("Save")
 

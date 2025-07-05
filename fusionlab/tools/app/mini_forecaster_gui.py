@@ -277,7 +277,7 @@ class MiniForecaster(QMainWindow):
         self.reset_btn = QPushButton("Reset")
         self.reset_btn.setObjectName("reset")   
         self.reset_btn.setToolTip("Clear selections & log")
-        self.reset_btn.setFixedWidth(70)
+        # self.reset_btn.setFixedWidth(70)
 
         self.reset_btn.clicked.connect(self._on_reset)
         csv_row.addWidget(self.reset_btn)
@@ -297,7 +297,7 @@ class MiniForecaster(QMainWindow):
         city_row.addWidget(city_label)
         
         self.city_input = QLineEdit()
-        self.city_input.setPlaceholderText("e.g. zhongshan")
+        self.city_input.setPlaceholderText("e.g. Agnibilekrou")
         city_row.addWidget(self.city_input, 1)  # stretch to full width
         L.addLayout(city_row)
 
@@ -787,39 +787,33 @@ class MiniForecaster(QMainWindow):
 
     def _pick_manifest_for_inference(self) -> str | None:
         """
-        Called right before launching inference.
-        If a sibling *tuner_run_manifest.json* exists next to the regular
-        *run_manifest.json*, ask the user which one to use.
-    
-        Returns absolute path to chosen manifest, or None if user aborted.
+        Before launching inference, check for both
+        run_manifest.json and tuner_run_manifest.json
+        in the same directory.  If the tuned manifest exists,
+        ask the user which one to use; otherwise just return
+        the normal one.
         """
         if self._manifest_path is None:
             return None
-        
-        manifest, tuner_manifest = _locate_manifest(locate_both=True) 
-        # run_dir = Path(self._manifest_path).parent
-        # tuner_manifest = run_dir / "tuner_run_manifest.json"
-        if not tuner_manifest.exists():
-            # nothing special – just use the normal manifest
-            return self._manifest_path
     
+        run_dir = Path(self._manifest_path).parent
+        training_manifest = run_dir / "run_manifest.json"
+        tuner_manifest   = run_dir / "tuner_run_manifest.json"
+        print("run_dir","=", run_dir)
+        # If there's no tuned manifest, just use the training one
+        if not tuner_manifest.exists():
+            return str(training_manifest)
+    
+        # Otherwise, ask the user
         dlg = ModelChoiceDialog(theme=self.theme, parent=self)
         choice = dlg.choice()
-        if choice is None:          # user cancelled
-            return None
-        
-        
-        # if choice == "tuned": 
-        #     if not tuner_manifest.exists():
-        #         # nothing special – just use the normal manifest
-        #         return self._manifest_path
-            
-        #     return str (tuner_manifest)
-        
-        # return self._manifest_path
-        
-        return str(tuner_manifest if choice == "tuned" else self._manifest_path)
-
+        if choice == "tuned":
+            return str(tuner_manifest)
+        if choice == "train":
+            return str(training_manifest)
+    
+        # User cancelled
+        return None
 
     def _toggle_inference_mode(self):
         """Flips the GUI between *training* and *inference* modes.
@@ -1220,7 +1214,7 @@ class MiniForecaster(QMainWindow):
         if cfg_dict is None:
             return  # should not happen
     
-        # ---------- 2. build a *fresh* SubsConfig for the tuner ---------
+        # 2. build a *fresh* SubsConfig for the tuner 
 
         # MiniForecaster._open_tuner_dialog()
         max_trials = cfg_dict["tuner_settings"]["max_trials"]

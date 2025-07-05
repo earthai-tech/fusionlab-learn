@@ -32,7 +32,10 @@ from .utils import (
     inspect_run_type_from_manifest, 
     _CUSTOM_OBJECTS
 )
+from .tuner import TunerApp 
 from .view import ResultsVisualizer 
+
+
 load_model = KERAS_DEPS.load_model
 Model =KERAS_DEPS.Model 
 
@@ -142,7 +145,7 @@ class PredictionPipeline:
         
         if self.run_type == 'tuning':
             results_sec = self._manifest.get("tuner_results", {})
-            self.model_path = self.artifacts_dir / "tuner_results" / results_sec.get("best_model")
+            self.model_path = self.artifacts_dir/ results_sec.get("best_model")
 
         else: # Standard training
             # training_info = self._manifest.get("training", {})
@@ -175,7 +178,7 @@ class PredictionPipeline:
             
         # --- THE CORE REFACTORING IS HERE ---
         if self.run_type == 'tuning':
-            from .tuner import TunerApp 
+            
             
             # If it's a tuner manifest, use the dedicated static method
             # to rebuild the best model from the optimal hyperparameters.

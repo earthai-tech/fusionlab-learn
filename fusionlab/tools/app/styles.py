@@ -101,14 +101,6 @@ QToolTip {{
     padding: 4px 6px;
 }}
 
-QToolTip {{
-    background: {SECONDARY_T70};   /* translucent SECONDARY */
-    color: white;
-    border: 1px solid {SECONDARY};
-    padding: 4px;
-    border-radius: 4px;
-}}
-
 QPushButton#inference {{
     background: {PRIMARY};      /* overwritten at runtime */
     color: white;
@@ -121,11 +113,22 @@ QPushButton#inference:disabled {{
     color: #666;
 }}
 
+QPushButton#tune {{
+    background: {PRIMARY};     
+    color: white;
+    border-radius: 6px;
+    padding: 6px 14px;   
+}} 
+
+QPushButton#tune:disabled {{
+    background: {INFERENCE_OFF};    
+    color: #666;
+}}
+
+
 QFrame#card[inferenceMode="true"] {{
     border: 2px solid #2E3191; /* Primary blue color */
 }}
-
-# Add this to your main stylesheet string (e.g., at the end)
 
 
 /* --- QMessageBox Styling --- */

@@ -61,68 +61,6 @@ deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
 serialize_keras_object =KERAS_DEPS.serialize_keras_object
 
 
-class _StopCheckCallback(Callback):
-    """A Keras callback to gracefully interrupt training or tuning.
-
-    This callback is designed to be used within a Keras `.fit()` or
-    Keras Tuner `.search()` loop. At the end of each epoch, it calls a
-    provided `stop_check` function. If this function returns `True`,
-    the callback sets `model.stop_training = True`, which tells Keras
-    to halt the current process cleanly.
-
-    This provides a robust mechanism for a GUI's "Stop" button to
-    interrupt a long-running backend task.
-
-    Parameters
-    ----------
-    stop_check_fn : callable
-        A function with no arguments that returns `True` if an
-        interruption has been requested, and `False` otherwise. This is
-        typically connected to a `QThread.isInterruptionRequested`.
-    log_callback : callable, optional
-        A logging function to output a message when the interruption
-        is triggered. Defaults to `print`.
-
-    Attributes
-    ----------
-    was_stopped : bool
-        A flag that is set to `True` if the training process was
-        successfully stopped by this callback. This can be checked
-        after the `.fit()` or `.search()` call completes.
-
-    Examples
-    --------
-    >>> from fusionlab.tools.app.utils import StopCheckCallback
-    >>> stop_requested = False
-    >>> def check_if_stopped():
-    ...     # In a real app, this would check a thread's state.
-    ...     return stop_requested
-    ...
-    >>> stop_callback = StopCheckCallback(check_if_stopped)
-    >>> # model.fit(..., callbacks=[stop_callback])
-    """
-    def __init__(
-        self,
-        stop_check_fn: Callable[[], bool],
-        log_callback: Optional[Callable[[str], None]] = None
-    ):
-        super().__init__()
-        self.stop_check = stop_check_fn
-        self.log = log_callback or print
-        self.was_stopped = False
-
-    def on_epoch_end(self, epoch, logs=None):
-        """
-        Called by Keras at the end of each training epoch.
-        """
-        if self.stop_check():
-            self.model.stop_training = True
-            self.was_stopped = True
-            self.log("  [Callback] Interruption requested. Halting process...")
-
-    def __deepcopy__(self, memo):
-        return self
-
 class StopCheckCallback(Callback):
     """
     A Keras callback to gracefully interrupt training *or* tuning.
@@ -149,7 +87,7 @@ class StopCheckCallback(Callback):
             # 1) stop the current fit loop
             self.model.stop_training = True
             # 2) abort tuner.search() as well
-            raise InterruptedError("Stop requested by user")
+            # raise InterruptedError("Stop requested by user")
 
     def on_epoch_end(self, epoch, logs=None):
         self._maybe_stop()
@@ -172,7 +110,6 @@ class StopCheckCallback(Callback):
         # cannot be deep-copied, so return self.
         return self
    
-
 class TunerProgressCallback(Callback):
     def __init__(
         self,
@@ -360,7 +297,6 @@ class TunerProgressCallback0(Callback):
         self.log("Hyperparameter tuning completed!")
         self.progress_manager.finish_step("Done")
 
-
     def __deepcopy__(self, memo):
         """
         Keras-Tuner deep-copies the callbacks list for each trial.
@@ -386,108 +322,6 @@ class UnifiedTunerProgress(TunerProgressCallback):
         self.progress_manager.set_epoch_context(epoch=epoch+1,
                                                 total=self.total_epochs)
         self.log(f"[Global] {pct}%")
-
-class _TunerProgressCallback(Callback):
-    """
-    A Keras Callback to track the progress of the hyperparameter tuning process
-    using KerasTuner. It updates the progress bar during training and tuning
-    trials, ensuring smooth updates for each step (trial, epoch, or batch).
-    
-    Parameters
-    ----------
-    total_trials : int
-        Total number of trials to run in the tuning process.
-    
-    total_epochs : int
-        Total number of epochs in each trial.
-    
-    update_fn : Callable[[int], None]
-        A function that receives an integer percentage (0 to 100) to update a progress
-        bar or any other UI component.
-    
-    epoch_level : bool, default=True
-        If True, updates the progress per epoch, else updates per batch.
-    
-    trial_batch_level : bool, default=False
-        If True, updates progress bar per batch for each trial.
-        
-    logger : logging.Logger, optional
-        A logger to capture progress messages.
-    
-    Attributes
-    ----------
-    trial_idx : int
-        Current trial index being executed in the hyperparameter search.
-    """
-
-    def __init__(
-        self, 
-        total_trials,
-        total_epochs, 
-        update_fn,
-        epoch_level=True,
-        trial_batch_level=False, 
-        log_callback=None
-        ):
-        super().__init__()
-        self.total_trials = total_trials
-        self.total_epochs = total_epochs
-        self.update_fn = update_fn
-        self.epoch_level = epoch_level
-        self.trial_batch_level = trial_batch_level
-        self.log = log_callback or print 
-        self.trial_idx = 0
-        self.batch_idx = 0
-        self.epochs_per_trial = total_epochs
-        
-    def on_epoch_end(self, epoch, logs=None):
-        """
-        Update progress at the end of each epoch. This is triggered during each
-        epoch of training within a trial.
-        """
-        if self.epoch_level:
-            pct = (self.trial_idx * self.total_epochs + epoch + 1) / (
-                self.total_trials * self.total_epochs) * 100
-            self.update_fn(int(pct))
-            self.log(
-                f"Trial {self.trial_idx + 1}/{self.total_trials}"
-                " - Epoch {epoch + 1}/{self.total_epochs} - Progress: {pct:.2f}%")
-
-    def on_batch_end(self, batch, logs=None):
-        """
-        Optionally, update progress per batch (useful for fine-grained tracking).
-        """
-        if self.trial_batch_level:
-            pct = (self.trial_idx * self.total_epochs * self.epochs_per_trial + self.batch_idx + 1
-                   ) / (self.total_trials * self.total_epochs * self.epochs_per_trial) * 100
-            self.update_fn(int(pct))
-            self.log(f"Trial {self.trial_idx + 1}/{self.total_trials}"
-                             " - Batch {batch + 1} - Progress: {pct:.2f}%")
-            
-    def on_trial_begin(self, trial):
-        """
-        Initialize and log trial start.
-        """
-        self.trial_idx = trial.trial_id
-        self.batch_idx = 0
-        self.log(f"Trial {self.trial_idx + 1}/{self.total_trials} started.")
-
-    def on_trial_end(self, trial):
-        """
-        Finalize progress and log when a trial finishes.
-        """
-        self.log(f"Trial {self.trial_idx + 1}/{self.total_trials} finished.")
-        pct = (self.trial_idx + 1) / self.total_trials * 100
-        self.update_fn(int(pct))
-        self.log(f"Tuning progress: {pct:.2f}% complete.")
-
-    def on_train_end(self):
-        """
-        Log completion of training.
-        """
-        self.log("Hyperparameter tuning completed!")
-        self.update_fn(100)
-
 
 class GuiProgress(Callback):
     """
