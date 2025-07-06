@@ -498,7 +498,6 @@ class TunerApp:
         self._best_hps    = None
         self._fixed_params: Dict[str, Any] = {}
         
-        
         self._manifest_path = _resolve_manifest(
             cfg            = cfg,
             manifest_path  = manifest_path,
