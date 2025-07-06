@@ -374,6 +374,7 @@ class MiniForecaster(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setFixedHeight(18)
         self.progress_bar.setTextVisible(False)
+        self.progress_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter) 
         # let it expand to fill leftover space:
         self.progress_bar.setSizePolicy(
             QSizePolicy.Expanding,  # grabs all extra width
@@ -1274,7 +1275,8 @@ class MiniForecaster(QMainWindow):
             save_format = "keras",
             bypass_loading = True,          # no need while tuning
             verbose = 1, # for minimal logging
-            run_type = 'tuning', # eraise the default type 
+            run_type = 'tuning', # eraise the default type
+            log_callback = self.log_updated.emit, 
             **fixed_up
             
         )
@@ -1386,7 +1388,6 @@ class MiniForecaster(QMainWindow):
         self.run_btn.setStyleSheet("")
         self._log("ℹ Interface fully reset.")
 
-    
 
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.
@@ -1489,24 +1490,24 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     gui.show()
     sys.exit(app.exec_())
     
-if __name__ == "__main__":
-    launch_cli()
-# mini_forecaster_gui.py  – very bottom
 # if __name__ == "__main__":
-#     import traceback, faulthandler
-#     faulthandler.enable()                       # catches segfault-like crashes
+#     launch_cli()
+# mini_forecaster_gui.py  – very bottom
+if __name__ == "__main__":
+    import traceback, faulthandler
+    faulthandler.enable()                       # catches segfault-like crashes
 
-#     def qt_excepthook(exctype, value, tb):
-#         """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
-#         traceback.print_exception(exctype, value, tb)
-#         # comment the next line if you prefer the GUI to stay open
-#         QApplication.quit()
+    def qt_excepthook(exctype, value, tb):
+        """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
+        traceback.print_exception(exctype, value, tb)
+        # comment the next line if you prefer the GUI to stay open
+        QApplication.quit()
 
-#     sys.excepthook = qt_excepthook              # <<< install *before* exec_()
+    sys.excepthook = qt_excepthook              # <<< install *before* exec_()
 
-#     app = QApplication(sys.argv)
-#     # … theme / stylesheet logic …
-#     gui = MiniForecaster(theme="fusionlab")
-#     gui.show()
+    app = QApplication(sys.argv)
+    # … theme / stylesheet logic …
+    gui = MiniForecaster(theme="fusionlab")
+    gui.show()
 
-#     sys.exit(app.exec_())
+    sys.exit(app.exec_())

@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import json 
 from typing import Optional, Tuple, Dict  
-
+from pathlib import Path 
 import pandas as pd  
 
 from PyQt5.QtCore    import ( 
@@ -17,6 +17,7 @@ from PyQt5.QtCore    import (
     pyqtSignal, 
 )
 
+from ...registry import ManifestRegistry 
 from .config      import SubsConfig
 from .processing  import DataProcessor, SequenceGenerator
 from .modeling    import ModelTrainer, Forecaster
@@ -312,7 +313,7 @@ class InferenceThread(QThread):
             self.pm.reset()
 
 
-class TunerThread(QThread):
+class _TunerThread(QThread):
     """
     Background worker that drives a HydroTuner hyper-parameter search
     while keeping the Qt event-loop responsive.
@@ -413,4 +414,157 @@ class TunerThread(QThread):
             "⏹ Stop requested — will interrupt at next safe point"
         )
         super().requestInterruption()
+
+
+class TunerThread(QThread):
+  
+    log_updated      = pyqtSignal(str)
+    status_updated   = pyqtSignal(str)
+    tuning_finished  = pyqtSignal()
+    error_occurred   = pyqtSignal(str)
+
+    def __init__(
+        self,
+        cfg: SubsConfig,
+        search_space: Dict,
+        tuner_kwargs: Dict,
+        *,
+        progress_manager: ProgressManager,
+        edited_df: Optional[pd.DataFrame] = None,
+        manifest_path : Optional[str]=None, 
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.cfg           = cfg
+        self.search_space  = search_space or {}
+        self.tuner_kwargs  = tuner_kwargs or {}
+        self.pm            = progress_manager
+        self.edited_df     = edited_df
+        self._pct = lambda p: self.pm.update(p, 100)
+
+        self._manifest_boostrap(manifest_path=manifest_path)
+        
+    def run(self):  # noqa: C901
+        self.pm.reset()
+        try:
+            proc  = self._run_preprocessing()
+            if self.isInterruptionRequested():
+                return
+
+            seqg, train_ds, val_ds = self._run_sequencing(proc)
+            if self.isInterruptionRequested():
+                return
+
+            self._run_tuning(proc, seqg, train_ds, val_ds)
+
+            self.status_updated.emit("✅ Tuning finished")
+        except InterruptedError:
+            self.status_updated.emit("⏹️ Tuning stopped by user.")
+            self.log_updated.emit("Tuning was cancelled.")
+            self.pm.reset()
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+            self.pm.reset()
+        finally:
+            self.tuning_finished.emit()
+
+    def _run_preprocessing(self):
+        self.status_updated.emit("📊 Pre-processing…")
+        self.pm.start_step("Pre-processing")
+        self.cfg.progress_callback = self._pct
+
+        proc = DataProcessor(
+            self.cfg,
+            self.log_updated.emit,
+            raw_df=self.edited_df,
+        )
+        proc.run(stop_check=self.isInterruptionRequested)
+
+        self.pm.finish_step("Pre-processing")
+        return proc
+
+    # def _run_sequencing(self, proc):
+    #     self.status_updated.emit("🌀 Generating sequences…")
+    #     self.pm.start_step("Sequencing")
+    #     self.cfg.progress_callback = self._pct
+
+    #     seqg = SequenceGenerator(self.cfg, self.log_updated.emit)
+    #     train, val = seqg.run(
+    #         proc.processed_df,
+    #         proc.static_features_encoded,
+    #         stop_check=self.isInterruptionRequested,
+    #     )
+    #     self.pm.finish_step("Sequencing")
+    #     return seqg, train, val
+
+    def _run_tuning(self, proc, seqg, train_ds, val_ds):
+        self.status_updated.emit("🔍 Tuning…")
+
+        tuner_app = TunerApp(
+            cfg             = self.cfg,
+            search_space    = self.search_space,
+            log_callback    = self.log_updated.emit,
+            tuner_kwargs    = self.tuner_kwargs,
+            progress_manager= self.pm,
+            manifest_path = self._manifest_path, 
+        )
+
+        # hand over objects already built by the thread
+        tuner_app.set_data_context(
+            processor   = proc,
+            seq_gen     = seqg,
+            train_ds    = train_ds,
+            val_ds      = val_ds,
+        )
+
+        tuner_app.execute(stop_check=self.isInterruptionRequested)
+        
+    def _manifest_boostrap (self, manifest_path=None): 
+ 
+        reg = ManifestRegistry(
+            log_callback=self.log_updated.emit,
+            manifest_kind="tuning")
+
+        if manifest_path:                         # import existing
+            self._manifest_path = reg.import_manifest(manifest_path)
+        elif self.cfg.registry_path:                   # cfg already wrote one
+            self._manifest_path = self.cfg.registry_path
+        else:                                     # create fresh run dir
+            run_dir = reg.new_run_dir(
+                city=self.cfg.city_name, model=self.cfg.model_name)
+            self._manifest_path = run_dir / reg._manifest_filename
+            self.cfg.to_json(manifest_kind="tuning")
+            
+    def _run_sequencing(self, proc):
+        self.status_updated.emit("🌀 Generating sequences…")
+        self.pm.start_step("Sequencing")
+        self.cfg.progress_callback = self._pct
+    
+        # ---------- NEW: try cache ------------------------------------
+        # cache_dir = Path(self._manifest_path).parent / "sequence_cache"
+        seqg, train_ds, val_ds = SequenceGenerator.from_cache(
+            cfg      = self.cfg,
+            processed_df = proc.processed_df,
+            static_features_encoded = proc.static_features_encoded,
+            log_fn   = self.log_updated.emit,
+        )
+        if seqg is None:                             # no valid cache → compute
+            seqg = SequenceGenerator(self.cfg, self.log_updated.emit)
+            train_ds, val_ds = seqg.run(
+                proc.processed_df,
+                proc.static_features_encoded,
+                stop_check=self.isInterruptionRequested,
+            )
+            # save for next run
+            seqg.to_cache(
+                proc.processed_df,
+                proc.static_features_encoded,
+                # train_ds, val_ds,
+            )
+        else:
+            self._pct(100)
+            self.log_updated.emit("✅ Re-using cached sequences.")
+    
+        self.pm.finish_step("Sequencing")
+        return seqg, train_ds, val_ds
 

@@ -6,18 +6,27 @@
 Provides a configuration class to manage all parameters for the
 subsidence forecasting GUI and its underlying processing script.
 """
+from __future__ import annotations 
 import os
-import numpy as np
-import pandas as pd
+import json
+import hashlib
+import joblib
+# import inspect
+from pathlib import Path
+# from dataclasses import asdict, is_dataclass   
+
+
 from typing import List, Optional, Dict, Any
 from typing import Tuple, Callable  
 
+import numpy as np
+import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 from ...datasets import fetch_zhongshan_data
 from ...nn import KERAS_DEPS
 from ...nn.pinn.utils import prepare_pinn_data_sequences
-from ...registry import _update_manifest 
+from ...registry import _update_manifest, resolve_sequence_cache 
 from ...utils.data_utils import nan_ops
 from ...utils.generic_utils import ( 
     split_train_test_by_time, ensure_directory_exists, 
@@ -266,7 +275,7 @@ class DataProcessor:
         
         self.processed_df = df_processed
         
-        self._tick(90)
+        self._tick(95)
         
         if self.config.save_intermediate:
             # Save artifacts
@@ -316,7 +325,7 @@ class SequenceGenerator:
     """
     Handles sequence generation and dataset creation (Steps 5-6).
     """
-    ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
+    # ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(
         self, config: SubsConfig, 
         log_callback: Optional[callable] = None, 
@@ -422,13 +431,13 @@ class SequenceGenerator:
                  
         if self.train_df.empty:
             raise ValueError(
-                f"Training data is empty after splitting on year <="
+                f"Data is empty after splitting on year <="
                 f" {self.config.train_end_year}."
             )
         if stop_check and stop_check():
             raise InterruptedError("Split data process aborted.")
             
-        self._tick(10)
+        self._tick(5)
         
         return self.train_df, self.test_df
     
@@ -445,11 +454,42 @@ class SequenceGenerator:
         dynamic_features = [
             c for c in dynamic_features if c in train_master_df.columns]
         
-        self._tick(30)
+        self._tick(10)
         
-        lo, hi = 30, 90                      # global slice for seq-gen
-        hook = lambda f: self._tick(self.ZOOM(f, lo, hi))
+        lo, hi = 10, 95                      # global slice for seq-gen
+        # hook = lambda f: self._tick(self.ZOOM(f, lo, hi))
+        # ── NEW: build a throttled wrapper around self._tick ───────────────
+        def make_throttled_hook(lo: int, hi: int, step_pct: float = 0.5):
+            """
+            Map a 0-1 fraction → lo…hi percent and emit **only** when that integer
+            percent changes by at least `step_pct`.
+            """
+            step_pct = max(step_pct, 0.1)            # sane lower bound
+            last_sent = {"bucket": -1}
+        
+            def hook(frac: float):
+                pct = int(lo + (hi - lo) * frac)     # 30 … 90
+                bucket = int(pct // step_pct)
+                if bucket != last_sent["bucket"]:
+                    self._tick(pct)                  # one ProgressManager.update
+                    last_sent["bucket"] = bucket
+        
+            return hook
+        
+        progress_hook = make_throttled_hook(lo, hi, step_pct=1)   # 1 % buckets
+        # def make_throttled_hook(lo: int, hi: int):
+        #     last_sent = {"pct": -1}         # mutable capture
     
+        #     def hook(frac: float):
+        #         pct = int(lo + (hi - lo) * frac)  # same mapping as before
+        #         if pct != last_sent["pct"]:       # emit only on change
+        #             self._tick(pct)
+        #             last_sent["pct"] = pct
+    
+        #     return hook
+    
+        # hook = make_throttled_hook(lo, hi) 
+        
         inputs, targets, scaler = prepare_pinn_data_sequences(
             df=train_master_df,
             time_col='time_numeric',
@@ -468,12 +508,12 @@ class SequenceGenerator:
             normalize_coords=True,
             return_coord_scaler=True,
             mode=self.config.mode,
-            progress_hook=hook, 
+            progress_hook=progress_hook, 
             stop_check= stop_check, 
             verbose=self.config.verbose,  
             _logger = self.log 
         )
-        self._tick(90)
+        self._tick(95)
         if targets['subsidence'].shape[0] == 0:
             raise ValueError(
                 "Sequence generation produced no training samples.")
@@ -482,7 +522,7 @@ class SequenceGenerator:
         self.targets_train = targets
         self.coord_scaler = scaler
         self.log(
-            "  Training sequences generated successfully."
+            "  Data sequences generated successfully."
             )
         if self.config.save_intermediate and self.coord_scaler is not None:
             coord_sc_name = f"{self.config.model_name}.coord_scaler.joblib"
@@ -551,4 +591,134 @@ class SequenceGenerator:
         self._tick(100)
         return train_dataset, val_dataset
 
+    # return a dict with every value that influences run() 
+    def _signature_dict(self, processed_df_hash, static_feats):
+        cfg = self.config
+        sig = {
+            "df_hash":          processed_df_hash,
+            "time_steps":       cfg.time_steps,
+            "forecast_horizon": cfg.forecast_horizon_years,
+            "dynamic_features": tuple(cfg.dynamic_features),
+            "static_features":  tuple(static_feats),
+            "future_features":  tuple(cfg.future_features),
+            "mode":             cfg.mode,
+            "seed":             cfg.seed,
+            "train_end_year"         :cfg.train_end_year,
+            "forecast_start_year"    : cfg.forecast_start_year,
+            "quantiles": cfg.quantiles
+        }
+        # user parameters you care about
+        return sig
 
+    @staticmethod
+    def _stable_hash(obj) -> str:
+        js = json.dumps(obj, sort_keys=True, default=str)
+        return hashlib.sha1(js.encode("utf-8")).hexdigest()
+
+    # public API 
+    def to_cache(
+        self,
+        processed_df: pd.DataFrame,
+        static_features_encoded: list[str],
+        cache_dir: Optional [str | Path]=None,
+        # train_ds, val_ds,
+    ) -> None:
+        """Save generator state AND datasets to <cache_dir>/<hash>.joblib."""
+        # cache_dir = Path(cache_dir)
+        cache_dir = resolve_sequence_cache(cache_dir, mode="ensure")
+        # cache_dir.mkdir(parents=True, exist_ok=True)
+
+        sig_dict = self._signature_dict(
+            processed_df_hash = self._stable_hash(processed_df.shape),
+            static_feats      = static_features_encoded,
+        )
+        cache_key = self._stable_hash(sig_dict)
+        joblib.dump(
+            {
+                "signature":       sig_dict,
+                "probe_sig": cache_key, 
+                "inputs_train":    self.inputs_train,
+                "targets_train":   self.targets_train,
+                "coord_scaler":    self.coord_scaler,
+            },
+            cache_dir / f"{cache_key}.joblib",
+            compress="lz4"
+        )
+ 
+    @classmethod
+    def from_cache(
+        cls,
+        cfg,
+        processed_df: pd.DataFrame,
+        static_features_encoded: list[str],
+        cache_dir: Optional [str | Path]=None,
+        log_fn=print,
+    ):
+        """Return (seqg, train_ds, val_ds) if a valid cache file is found;
+        otherwise return (None, None, None)."""
+        # cache_dir = Path(cache_dir)
+        cache_dir = resolve_sequence_cache(cache_dir)
+        if cache_dir is None or not cache_dir.exists():
+            return None, None, None
+    
+        probe_sig = cls._stable_hash(
+            cls(cfg)._signature_dict(
+                processed_df_hash = cls._stable_hash(processed_df.shape),
+                static_feats      = static_features_encoded,
+            )
+        )
+
+        cache_fp = cache_dir / f"{probe_sig}.joblib"
+        if not cache_fp.exists(): 
+            return None, None, None
+
+        try:
+            blob = joblib.load(cache_fp)
+            if blob["probe_sig"] != probe_sig:
+         
+                return None, None, None
+            
+            seqg = cls(cfg, log_fn)
+            seqg.inputs_train  = blob["inputs_train"]
+            seqg.targets_train = blob["targets_train"]
+            seqg.coord_scaler  = blob["coord_scaler"]
+            train_ds, val_ds = seqg._make_tf_datasets()
+    
+            return seqg, train_ds, val_ds
+        except Exception as exc:
+            log_fn(f"[WARN] could not load cached sequences ({exc}); "
+                    "regenerating.")
+            return None, None, None
+
+    # (re)build tf.data datasets 
+    def _make_tf_datasets(self):
+        num = self.inputs_train["dynamic_features"].shape[0]
+        static = self.inputs_train.get(
+            "static_features",np.zeros((num, 0), np.float32))
+        
+        future = self.inputs_train.get(
+            "future_features",np.zeros(
+                (num,self.config.forecast_horizon_years, 0
+                 ), np.float32))
+
+        ds_inputs = dict(
+            coords            = self.inputs_train["coords"],
+            dynamic_features  = self.inputs_train["dynamic_features"],
+            static_features   = static,
+            future_features   = future,
+        )
+        ds_targets = dict(
+            subs_pred = self.targets_train["subsidence"],
+            gwl_pred  = self.targets_train["gwl"],
+        )
+
+        full = Dataset.from_tensor_slices((ds_inputs, ds_targets))
+        total = num
+        val_sz = int(self.config.validation_size * total)
+        train_sz = total - val_sz
+        full = full.shuffle(total, seed=self.config.seed)
+        train = full.take(train_sz).batch(
+            self.config.batch_size).prefetch(AUTOTUNE)
+        val   = full.skip(train_sz).batch(
+            self.config.batch_size).prefetch(AUTOTUNE)
+        return train, val

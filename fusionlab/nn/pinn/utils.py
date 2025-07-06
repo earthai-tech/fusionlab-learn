@@ -1212,6 +1212,9 @@ def prepare_pinn_data_sequences(
     # tiny helper – maps a 0‒1 fraction into an arbitrary range
     _to_range = lambda f, lo, hi: lo + (hi - lo) * f          # noqa: E731
     #                 ^fraction      ^global range
+    
+    # progress_hook = hook 
+    
     # -------------------------------------------------------------------------
     
     # Entry log

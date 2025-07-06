@@ -35,7 +35,7 @@ except ImportError as exc:
         "Please install it by running: pip install platformdirs"
     ) from exc
 
-__all__ = ["ManifestRegistry", "_update_manifest"]
+__all__ = ["ManifestRegistry", "_update_manifest", "_resolve_manifest"]
 
 
 
@@ -622,6 +622,71 @@ class _ManifestRegistry:
         return self._run_registry_path
   
 
+def _resolve_manifest(
+    cfg,
+    manifest_path: Union[str, os.PathLike, Path, None] = None,
+    *,
+    manifest_kind: str = "training",
+    log_cb = print,
+) -> Path:
+    """
+    Return a valid manifest *Path*; create one if necessary.
+
+    Parameters
+    ----------
+    cfg : SubsConfig
+        The run configuration object (must expose ``city_name``,
+        ``model_name`` and ``to_json``).
+    manifest_path : str | Path | None, default **None**
+        • *file* or *directory* of an existing manifest → import & use  
+        • *None* → reuse ``cfg.registry_path`` if it exists, otherwise
+          create a brand-new run directory.
+    manifest_kind : {"tuning", "training", …}, default **"tuning"**
+        Passed through to :class:`~fusionlab.registry.ManifestRegistry`.
+    log_cb : callable, default **print**
+        Logger passed to :class:`ManifestRegistry`.
+
+    Raises
+    ------
+    FileNotFoundError
+        If an explicit *manifest_path* does not exist.
+    ValueError
+        If *manifest_path* is not a str/Path/os.PathLike.
+    """
+    reg = ManifestRegistry(log_callback=log_cb, manifest_kind=manifest_kind)
+
+    #  CASE 1
+    if manifest_path is not None:
+        if not isinstance(manifest_path, (str, Path, os.PathLike)):
+            raise ValueError("manifest_path must be str | Path | os.PathLike")
+
+        mpath = Path(manifest_path).expanduser().resolve()
+
+        # Accept a directory containing the manifest file
+        if mpath.is_dir():
+            mpath = mpath / reg._manifest_filename
+
+        if not mpath.exists():
+            raise FileNotFoundError(f"Manifest file not found: {mpath}")
+
+        # Copy/link into the local registry and return the new path
+        return reg.import_manifest(mpath)
+
+    # CASE 2 
+    cfg_path: Optional[Path] = (
+        Path(cfg.registry_path).expanduser().resolve()
+        if getattr(cfg, "registry_path", None)
+        else None
+    )
+    if cfg_path and cfg_path.exists():
+        return cfg_path
+
+    # CASE 3 
+    # Nothing on disk yet → create a fresh run dir + manifest
+    run_dir = reg.new_run_dir(city=cfg.city_name, model=cfg.model_name)
+    cfg.to_json(manifest_kind=manifest_kind)          # writes inside run_dir
+    return run_dir / reg._manifest_filename
+
 def _update_manifest(
     run_dir: Union[str, Path],
     section: str,
@@ -923,4 +988,5 @@ def _locate_manifest(
                 _find_latest(kind_to_name["tuning"]))
 
     return _find_latest(name)
+
 
