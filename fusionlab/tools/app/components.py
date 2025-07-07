@@ -52,8 +52,13 @@ from PyQt5.QtWidgets import (
 )
 
 from ...nn import KERAS_DEPS  
-from ...registry import ManifestRegistry
-from .styles import LOG_STYLES 
+from ...registry import ManifestRegistry, _locate_manifest
+from .styles import ( 
+    LOG_STYLES, 
+    PRIMARY, 
+    INFERENCE_OFF, 
+    SECONDARY
+)
 
 Callback = KERAS_DEPS.Callback 
 
@@ -63,7 +68,8 @@ __all__ = [
     "ErrorManager", "ExitController", 
     "ModeSwitch", "TunerProgress", 
     "TuningProgress", "ResetController", 
-    "Mode", "ModeManager", 
+    "Mode", "ModeManager", "ManifestManager", 
+    "LogManager", 
   ]
 
 
@@ -930,12 +936,11 @@ class LogManager(QObject):
             fp.write("\n".join(self._cache))
         return fname
 
-
 class Mode(Enum):
     TRAIN   = auto()
     INFER   = auto()
     TUNER   = auto()
-    DRY_RUN = auto()                        # ← new custom mode
+    DRY_RUN = auto()
 
 
 class ModeManager(QObject):
@@ -956,6 +961,7 @@ class ModeManager(QObject):
         infer_button:  QPushButton,
         stop_button:   QPushButton,
         panels:        List[QFrame],
+        mode_badge: QLabel,
         parent:        Optional[QObject] = None
     ):
         super().__init__(parent)
@@ -964,6 +970,7 @@ class ModeManager(QObject):
         self._infer = infer_button
         self._stop  = stop_button
         self._panels = panels
+        self._badge = mode_badge
         self.mode   = Mode.TRAIN
 
         # initialize hooks
@@ -980,73 +987,190 @@ class ModeManager(QObject):
             self.set_mode(Mode.INFER)
 
     def toggle_tuning(self):
-        # clicking Tune button always goes into TUNER mode
         if self.mode == Mode.TUNER:
             self.set_mode(Mode.TRAIN)
         else:
             self.set_mode(Mode.TUNER)
 
     def set_mode(self, m: Mode):
-        """Switch to a new mode and update UI."""
         self.mode = m
         self._apply_mode()
         self.mode_changed.emit(m)
 
     def enable_infer(self, allowed: bool):
-        """Enable or disable the Inference button."""
         self._infer.setEnabled(allowed)
-        # if currently in infer but now not allowed, fallback to TRAIN
         if not allowed and self.mode == Mode.INFER:
             self.set_mode(Mode.TRAIN)
 
     def enable_tune(self, allowed: bool):
-        """Enable or disable the Tune button."""
         self._tune.setEnabled(allowed)
         if not allowed and self.mode == Mode.TUNER:
             self.set_mode(Mode.TRAIN)
 
     def _apply_mode(self):
-        """Update all widgets' enabled state, labels, styles, etc."""
-        # Reset panels and basic buttons
+        """Update widget states, labels, styles,
+        and grey-out titles on INFER."""
+        # Reset panels
         for p in self._panels:
             p.setEnabled(True)
             p.setProperty("inferenceMode", False)
             p.style().unpolish(p); p.style().polish(p)
+            # reset title color
+            title = p.findChild(QLabel, 'cardTitle')
+            if title:
+                title.setStyleSheet("")
+
         self._infer.setEnabled(True)
         self._stop.setEnabled(False)
 
         if self.mode == Mode.TRAIN:
             self._run.setText("Run")
             self._run.setToolTip("Launch training workflow")
-            self._run.setStyleSheet("")
+            self._run.setStyleSheet(
+                f"background-color: {PRIMARY}; color: white;")
+
             self._infer.setText("Inference")
             self._infer.setToolTip("Switch to inference mode")
+            self._infer.setStyleSheet(
+                f"background-color: {INFERENCE_OFF}; color: white;")
 
         elif self.mode == Mode.INFER:
             for p in self._panels:
                 p.setEnabled(False)
                 p.setProperty("inferenceMode", True)
                 p.style().unpolish(p); p.style().polish(p)
+                # grey-out title label inside panel
+                title = p.findChild(QLabel, 'cardTitle')
+                if title:
+                    title.setStyleSheet("color: #888888;")
+
             self._run.setText("Infer")
             self._run.setToolTip("Launch inference workflow")
-            self._run.setStyleSheet("background-color: orange; color:white;")
+            self._run.setStyleSheet(
+                f"background-color: {PRIMARY}; color: white;")
+
             self._infer.setText("Training")
-            self._infer.setToolTip("Switch back to training")
-            self._infer.setStyleSheet("background-color: orange; color:white;")
+            self._infer.setToolTip("Switch back to training mode")
+            self._infer.setStyleSheet(
+                f"background-color: {INFERENCE_OFF}; color: white;")
 
         elif self.mode == Mode.TUNER:
-            for p in self._panels:
-                p.setEnabled(False)
+            # for p in self._panels:
+            #     p.setEnabled(False)
             self._run.setText("Tune")
             self._run.setToolTip("Launch hyper-parameter tuning")
-            self._run.setStyleSheet("background-color: gray; color:white;")
+            self._run.setStyleSheet("background-color: gray; color: white;")
             self._infer.setEnabled(False)
             self._stop.setEnabled(True)
 
         elif self.mode == Mode.DRY_RUN:
-            # panels remain interactive, but run is a no-op
             self._run.setText("Dry Run")
             self._run.setToolTip("Execute UI-only dry run")
-            self._run.setStyleSheet("background-color: teal; color:white;")
+            self._run.setStyleSheet("background-color: teal; color: white;")
             self._infer.setEnabled(False)
             self._stop.setEnabled(False)
+
+        # finally, update the badge
+        self._update_mode_badge(self.mode)
+   
+    def _update_mode_badge(self, mode: Mode):
+        """Update the little mode badge’s text, color & hover tooltip."""
+        mapping = {
+            Mode.TRAIN:   (
+                "TRAINING", PRIMARY,   
+                "You are in TRAINING mode: run new models."),
+            Mode.INFER:   (
+                "INFER", "#00aa00", # 
+                "You are in INFERENCE mode: apply existing models."),
+            Mode.TUNER:   (
+                "TUNING", SECONDARY,      #"#888888"
+                "You are in TUNING mode: search for best hyperparameters."),
+            Mode.DRY_RUN: (
+                "DRY RUN", "teal",        
+                "You are in DRY-RUN mode: no real execution."),
+        }
+        text, color, tip = mapping[mode]
+        self._badge.setText(text)
+        self._badge.setStyleSheet(f"""
+            background-color: {color};
+            color: white;
+            border-radius: 4px;
+            padding: 4px 6px;
+            font-size: 10px;
+        """)
+        self._badge.setToolTip(tip)
+
+    
+class ManifestManager(QObject):
+    """
+    Manage detection and UI integration for training/inference manifests.
+
+    - Uses the registry to locate both run_manifest.json and tuner_run_manifest.json
+    - Updates the infer-button's enabled state and styling
+    - Warns the user if inference is attempted without any available model
+    - When multiple manifests exist, prompts the user to choose one
+    """
+    def __init__(
+        self,
+        infer_button: QPushButton,
+        *,
+        parent: Optional[QObject] = None,
+    ):
+        super().__init__(parent)
+        self._infer_btn = infer_button
+        self._locate = _locate_manifest
+        self._primary = PRIMARY
+        self._disabled = INFERENCE_OFF
+
+        # guard clicks
+        self._infer_btn.clicked.connect(self._on_infer_clicked)
+        # initial detection
+        self.refresh()
+
+    def refresh(self) -> None:
+        """
+        Re-scan for manifests using the registry helper.
+        """
+        manifest, tuner = self._locate(locate_both=True)
+        self._run_manifest = Path(manifest) if manifest else None
+        self._tuner_manifest = Path(tuner) if tuner else None
+
+        allowed = bool(self._run_manifest or self._tuner_manifest)
+        self._infer_btn.setEnabled(allowed)
+        color = self._primary if allowed else self._disabled
+        self._infer_btn.setStyleSheet(
+            f"background-color: {color}; color: white;")
+
+    def pick_manifest(self, theme ='light') -> Optional[str]:
+        """
+        If both run and tuner manifests exist, show choice dialog.
+        Returns the chosen manifest path or None if cancelled.
+        """
+        
+        if not (self._run_manifest or self._tuner_manifest):
+            return None
+        if self._run_manifest and not self._tuner_manifest:
+            return str(self._run_manifest)
+        if self._tuner_manifest and not self._run_manifest:
+            return str(self._tuner_manifest)
+        
+        # both exist: ask the user
+        from .dialog import ModelChoiceDialog
+        
+        dlg = ModelChoiceDialog(
+            theme=theme, parent=self._infer_btn.parentWidget())
+        choice = dlg.choice()
+        if choice == 'train':
+            return str(self._run_manifest)
+        if choice == 'tuned': 
+            return str(self._tuner_manifest)
+        return None
+
+    def _on_infer_clicked(self):
+        if not (self._run_manifest or self._tuner_manifest):
+            QMessageBox.warning(
+                self._infer_btn.parentWidget(),
+                "No Model Available",
+                "No trained or tuned model found. Please run training first."
+            )
+        # otherwise ModeManager handles toggling

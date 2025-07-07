@@ -91,7 +91,6 @@ class TunerApp:
         # set by execute() – defaults to “never stop”
         return getattr(self, "_stop_check", lambda: False)
 
-
     def set_data_context(
         self,
         *,
@@ -117,6 +116,7 @@ class TunerApp:
 
         Returns ``(best_model, best_hyperparameters, tuner)``.
         """
+        self._pm.start_step("Preparing")
         # guard: data must have been injected
         if self._train_tf is None or self._val_tf is None:
             raise RuntimeError("Data context not set – "
@@ -124,6 +124,8 @@ class TunerApp:
 
         self._stop_check = stop_check
         self._prepare_progress_manager()
+        
+        self._pm.finish_step("Preparing")
 
         self._build_fixed_params()
         callbacks = self._build_callbacks(extra_callbacks)
@@ -136,10 +138,8 @@ class TunerApp:
     def _prepare_progress_manager(self):
         if not self._pm:
             return
-        self._pct = lambda p: self._pm.update(p, 100)
-        self._pm.reset()
-
-    # 
+        # self._pct = lambda p: self._pm.update(p, 100)
+  
     def _build_fixed_params(self):
         if self.stop_check():
             raise InterruptedError("Tuning cancelled by user.")
@@ -244,6 +244,7 @@ class TunerApp:
 
         if self._pm:
             self._pm.finish_step("Build")
+            self._pm.reset()
         return cb
 
     def _run_tuner(self, callbacks: List[Callback]):

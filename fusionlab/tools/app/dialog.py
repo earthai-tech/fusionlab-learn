@@ -195,7 +195,7 @@ class TunerDialog(QDialog):
     One-stop Hyper-parameter Tuning dialog
 
     ┌────────────────────── Tuner  ──────────────────────┐
-    │  [ Developer ▸ ]   [ Easy Setup ]                  │  
+    │  [ Easy Setup ▸ ]   [ Developer ]                  │  
     ├────────────────────────────────────────────────────┤
     │  page widgets go here …                            │
     └────────────────────────────────────────────────────┘
@@ -221,23 +221,23 @@ class TunerDialog(QDialog):
     
         # ── ❶  Toggle-bar (Developer  /  Easy Setup) ─────────────────────
         bar          = QHBoxLayout()
-        self.dev_btn = QPushButton("Developer")
+        
         self.easy_btn = QPushButton("Easy Setup")
+        self.dev_btn = QPushButton("Developer")
         
         # Tool-tips
-        self.dev_btn.setToolTip(
-            "Power-user view • Write or paste any"
-            " valid Python dictionary for the "
-            "search-space and adjust every tuner knob manually."
-        )
         self.easy_btn.setToolTip(
             "Wizard-style assistant • Fill in a few"
             " ranges and let the GUI generate "
             "the full search-space and tuner settings for you."
         )
-    
+        self.dev_btn.setToolTip(
+            "Power-user view • Write or paste any"
+            " valid Python dictionary for the "
+            "search-space and adjust every tuner knob manually."
+        )
         # fixed width & checkable styling
-        for btn in (self.dev_btn, self.easy_btn):
+        for btn in (self.easy_btn, self.dev_btn):
             btn.setMinimumWidth(120)
             btn.setCheckable(True)
             btn.setStyleSheet(TUNER_STYLES)
@@ -246,12 +246,12 @@ class TunerDialog(QDialog):
         # ‣ mutual exclusivity
         grp = QButtonGroup(self)
         grp.setExclusive(True)
-        grp.addButton(self.dev_btn)
         grp.addButton(self.easy_btn)
+        grp.addButton(self.dev_btn)
     
         # put buttons in the bar
-        bar.addWidget(self.dev_btn)
         bar.addWidget(self.easy_btn)
+        bar.addWidget(self.dev_btn)
         bar.addStretch(1)                 # push them to the left
         root.addLayout(bar)
     
@@ -259,10 +259,10 @@ class TunerDialog(QDialog):
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)     # stretch-factor = 1
     
-        self.dev_page  = _DeveloperPage(self.fixed_params, parent=self)
         self.easy_page = _EasyPage(self.fixed_params,     parent=self)
-        self.stack.addWidget(self.dev_page)
+        self.dev_page  = _DeveloperPage(self.fixed_params, parent=self)
         self.stack.addWidget(self.easy_page)
+        self.stack.addWidget(self.dev_page)
     
         # ── ❸  Dialog buttons (OK / Cancel) --------------------------------
         self.btn_box = QDialogButtonBox(
@@ -272,15 +272,14 @@ class TunerDialog(QDialog):
         root.addWidget(self.btn_box)
     
         # default page
-        self.dev_btn.setChecked(True)
-        self.stack.setCurrentWidget(self.dev_page)
-
+        self.easy_btn.setChecked(True)
+        self.stack.setCurrentWidget(self.easy_page)
 
     def _connect_signals(self):
-        self.dev_btn.toggled.connect(
-            lambda state: self._show_page(self.dev_page) if state else None)
         self.easy_btn.toggled.connect(
             lambda state: self._show_page(self.easy_page) if state else None)
+        self.dev_btn.toggled.connect(
+            lambda state: self._show_page(self.dev_page) if state else None)
 
         self.btn_box.accepted.connect(self._on_accept)
         self.btn_box.rejected.connect(self.reject)
@@ -289,8 +288,8 @@ class TunerDialog(QDialog):
         """Switches the stack and keeps toggle buttons in sync."""
         self.stack.setCurrentWidget(page)
         # ensure exclusive behaviour
-        self.dev_btn.setChecked(page is self.dev_page)
         self.easy_btn.setChecked(page is self.easy_page)
+        self.dev_btn.setChecked(page is self.dev_page)
 
     # 
     # OK-button handler

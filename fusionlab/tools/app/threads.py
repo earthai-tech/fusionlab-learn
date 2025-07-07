@@ -388,7 +388,7 @@ class TunerThread(QThread):
 
     def _run_tuning(self, proc, seqg, train_ds, val_ds):
         self.status_updated.emit("🔍 Tuning…")
-
+        
         tuner_app = TunerApp(
             cfg             = self.cfg,
             search_space    = self.search_space,
@@ -453,7 +453,7 @@ class TunerThread(QThread):
                 # train_ds, val_ds,
             )
         else:
-            self._pct(100)
+            # self._pct(100)
             self.log_updated.emit("✅ Re-using cached sequences.")
     
         self.pm.finish_step("Sequencing")

@@ -11,13 +11,11 @@ from __future__ import annotations
 
 import os
 import time 
-import inspect 
 from numbers import Integral, Real
 import json
 from typing import Callable, Optional, Any, Dict, List 
 import subprocess, sys, platform
 from pathlib import Path
-from types import SimpleNamespace
 import warnings 
 
 try:
@@ -38,9 +36,6 @@ except ImportError as e:
         "This utility requires the `fusionlab` library and its"
         f" dependencies to be installed. Error: {e}"
     )
-
-from ...nn.forecast_tuner import KT_DEPS, HAS_KT 
-
 
 _ALLOWED_KEYS = {
     "min_value", "max_value", "step",          
@@ -63,12 +58,7 @@ custom_object_scope = KERAS_DEPS.custom_object_scope
 deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
 serialize_keras_object =KERAS_DEPS.serialize_keras_object
 
-
-if HAS_KT: 
-    TunerCallback = KT_DEPS.TunerCallback 
-else: 
-    pass  
-    
+ 
 class StopCheckCallback(Callback):
     """
     A Keras callback to gracefully interrupt training *or* tuning.
@@ -95,7 +85,7 @@ class StopCheckCallback(Callback):
             # 1) stop the current fit loop
             self.model.stop_training = True
             # 2) abort tuner.search() as well
-            raise InterruptedError("Stop requested by user")
+            # raise InterruptedError("Stop requested by user")
 
     def on_epoch_end(self, epoch, logs=None):
         self._maybe_stop()
@@ -159,7 +149,7 @@ class TunerProgressCallback(Callback):
         self.global_total  = (
             total_trials * total_epochs * batches_per_epoch
         )
-
+            
     def on_train_begin(self, logs=None):
         """
         Called once at the start of each trial's model.fit().
@@ -245,165 +235,6 @@ class TunerProgressCallback(Callback):
     def __deepcopy__(self, memo):
         # Keras-Tuner deep-copies callbacks per trial —
         # Qt signals can't be copied, so just return self.
-        return self
-
-
-class _TunerProgressCallback(TunerCallback, Callback):
-    """
-    Keras-Tuner callback that drives a single ProgressManager bar across
-    all trials, epochs, and batches—reporting a true “global” progress.
-
-    """
-    def __init__(
-        self,
-        total_trials: int,
-        total_epochs: int,
-        batches_per_epoch: int,
-        progress_manager,
-        *,
-        epoch_level: bool = True,
-        trial_batch_level: bool = False,
-        log: Callable[[str], None] = print,
-    ):
-        # ── 1. call parent ctor in a version-safe way ────────────────
-        tc_sig = inspect.signature(TunerCallback.__init__)
-        if len(tc_sig.parameters) == 1:            # keras-tuner ≥ 1.3
-            TunerCallback.__init__(self)
-        else:                                      # kerastuner ≤ 1.1
-            _dummy = SimpleNamespace(              # has the attrs K-T touches
-                on_epoch_begin = lambda *a, **k: None,
-                on_epoch_end   = lambda *a, **k: None,
-                on_batch_begin = lambda *a, **k: None,
-                on_batch_end   = lambda *a, **k: None,
-                on_train_begin = lambda *a, **k: None,
-                on_train_end   = lambda *a, **k: None,
-            )
-            TunerCallback.__init__(self, _dummy, _dummy)
-
-        Callback.__init__(self)             
-        
-        if min(total_trials, total_epochs, batches_per_epoch) <= 0:
-            raise ValueError(
-                "total_trials, total_epochs and batches_per_epoch "
-                "must all be positive integers."
-            )
-        
-        self.total_trials      = total_trials
-        self.total_epochs      = total_epochs
-        self.batches_per_epoch = batches_per_epoch
-        self.progress_manager  = progress_manager
-        self.epoch_level       = epoch_level
-        self.trial_batch_level = trial_batch_level
-        self.log               = log
- 
-        # track which trial and how many global batches we've seen
-        self.trial_idx    = 0
-        self.global_batch = 0
-
-        # compute the grand total of “steps” across all trials/epochs/batches
-        self.global_total = (
-            total_trials
-            * total_epochs
-            * batches_per_epoch
-        )
-
-    def on_trial_begin(self, trial):
-        """
-        Called at the start of each trial. Sets the trial prefix and
-        initializes the global batch counter for this trial.
-        """
-        self.trial_idx = trial.trial_id
-        # position at the start of this trial’s batches
-        self.global_batch = self.trial_idx * (
-            self.total_epochs * self.batches_per_epoch
-        )
-        self.progress_manager.set_trial_context(
-            trial=self.trial_idx + 1,
-            total=self.total_trials,
-        )
-        self.log(
-            f"Trial {self.trial_idx+1}/"
-            f"{self.total_trials} started."
-        )
-
-    def on_epoch_end(self, epoch, logs=None):
-        """
-        If epoch_level, jump the global counter to the end of this epoch
-        and update the bar once.
-        """
-        if not self.epoch_level:
-            return
-
-        # move to the last batch of this epoch
-        self.global_batch = (
-            (self.trial_idx * self.total_epochs)
-            + (epoch + 1)
-        ) * self.batches_per_epoch
-        self._apply_context_and_update()
-
-    def on_batch_end(self, batch, logs=None):
-        """
-        If trial_batch_level, increment one global batch, re-emit
-        trial/epoch context, and update the bar.
-        """
-        if not self.trial_batch_level:
-            return
-
-        # one more batch done
-        self.global_batch += 1
-
-        # recompute 0-based epoch index for context display
-        epoch = (
-            self.global_batch // self.batches_per_epoch
-        ) - (self.trial_idx * self.total_epochs)
-
-        self.progress_manager.set_trial_context(
-            trial=self.trial_idx + 1,
-            total=self.total_trials,
-        )
-        self.progress_manager.set_epoch_context(
-            epoch=epoch + 1,
-            total=self.total_epochs,
-        )
-        self._apply_context_and_update()
-
-    def _apply_context_and_update(self):
-        """
-        Helper: feed the manager the true global progress count/total,
-        then log a matching message.
-        """
-        self.progress_manager.update(
-            current=self.global_batch,
-            total=self.global_total,
-        )
-        pct = (self.global_batch / self.global_total) * 100
-        self.log(
-            f"Trial {self.trial_idx+1}/"
-            f"{self.total_trials} - "
-            f"Global batch {self.global_batch} – "
-            f"Progress: {pct:.2f}%"
-        )
-
-    def on_trial_end(self, trial):
-        """Final update at the end of a trial."""
-        self._apply_context_and_update()
-        self.log(
-            f"Trial {self.trial_idx+1}/"
-            f"{self.total_trials} done."
-        )
-
-    def on_train_end(self, logs=None):
-        """
-        Once all trials finish, mark the step complete and log.
-        """
-        self.progress_manager.finish_step("Tuning")
-        self.log("Hyperparameter tuning completed!")
-
-    def __deepcopy__(self, memo):
-        """
-        Keras-Tuner will deepcopy callbacks per trial; Qt signals
-        can’t be copied safely, so just return self.
-        """
         return self
 
 class PerTrialTunerProgress(Callback):

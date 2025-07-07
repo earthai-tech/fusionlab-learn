@@ -106,7 +106,6 @@ QPushButton#stop:enabled {{
 }}
 
 
-
 QToolTip {{
     /* translucent orange bubble, white text, subtle outline */
     background: {SECONDARY_T70};
@@ -256,15 +255,6 @@ QTextEdit {{
 QFrame#hLine {{
     border: none;
     border-top: 1px solid {PALETTE['dark_border']};
-}}
-/* Tooltip Styling */
-QToolTip {{
-    background-color: {PALETTE['secondary']};
-    color: white;
-    border: none;
-    padding: 5px;
-    border-radius: 4px;
-    font-size: 12px;
 }}
 
 QFrame#card[inferenceMode="true"] {{
