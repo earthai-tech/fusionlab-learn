@@ -312,7 +312,7 @@ class InferenceThread(QThread):
             self.pm.reset()
 
 
-class _TunerThread(QThread):
+class TunerThread(QThread):
     """
     Background worker that drives a HydroTuner hyper-parameter search
     while keeping the Qt event-loop responsive.
@@ -321,102 +321,6 @@ class _TunerThread(QThread):
     `ProgressManager`; per-trial / per-epoch updates are emitted by the
     `TunerProgress` callback created inside ``TunerApp``.
     """
-
-    # GUI signals 
-    log_updated      = pyqtSignal(str)
-    status_updated   = pyqtSignal(str)
-    tuning_finished  = pyqtSignal()          # emitted in *finally*
-    error_occurred   = pyqtSignal(str)
-
-    def __init__(
-        self,
-        cfg: SubsConfig,
-        search_space: Dict,
-        tuner_kwargs: Dict,
-        *,
-        progress_manager: ProgressManager=None,
-        edited_df: Optional[pd.DataFrame] = None,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-
-        # immutable state 
-        self.cfg           = cfg
-        self.search_space  = search_space or {}
-        self.tuner_kwargs  = tuner_kwargs or {}
-        self.edited_df     = edited_df
-
-        # ProgressManager 
-        # Progress manager hooks 
-        self.pm = progress_manager
-        self._pct = lambda p: self.pm.update(p, 100)
-
-        # Wire cfg callbacks so *all* internal steps reuse the single bar
-        self.cfg.log = self.log_updated.emit
-        self.cfg.progress_callback = self._pct
-        self.cfg.run_type = 'tuning' # For consistency
-        
-    def run(self) -> None:  # noqa: C901
-        # initial bar state
-        self.pm.reset()
-        # self.pm.start_step("Tuning")
-
-        self.status_updated.emit("🔍 Tuning…")
-
-        try:
-            # ── build & execute the tuner application ----------------
-            tuner_app = TunerApp(
-                cfg             = self.cfg,
-                search_space    = self.search_space,
-                log_callback    = self.log_updated.emit,
-                tuner_kwargs    = self.tuner_kwargs,
-                # trial_info      = self._on_trial_update,
-                progress_manager= self.pm,         
-                edited_df       = self.edited_df,   
-            )
-
-            tuner_app.run(stop_check=self.isInterruptionRequested)
-
-            # On success the ProgressManager is already at 100 %
-            # self.pm.finish_step("Tuning ✓")
-            self.status_updated.emit("✅ Tuning finished")
-        except InterruptedError as e:
-            self.status_updated.emit("⏹️ Tuning stopped by user.")
-            self.log_updated.emit(str(e))
-            self.pm.reset()
-            
-        except Exception as exc:
-            self.pm.reset()
-            self.status_updated.emit("❌ Tuning failed")
-            self.error_occurred.emit(str(exc))
-
-        finally:
-            self.tuning_finished.emit()
-            self.cfg.run_type ='training' # go on training mode.
-
-    def _on_trial_update(self, cur: int, total: int, _eta: str) -> None:
-        """
-        Received once at the *start of every trial*.
-
-        We simply change the prefix so the label reads  
-        “Trial 3/20 – ETA: 02:13”.
-        Percentage updates are handled by ``TunerProgress``.
-        """
-        self.pm.set_trial_context(trial=cur, total=total)
-        # self.pm.set_label(f"Trial {cur}/{total} - ETA: {_eta}")
-        
-        # self.pm.set_trial_context(trial=cur, total=total)
-
-    # external request to stop the run
-    def requestInterruption(self) -> None:
-        self.log_updated.emit(
-            "⏹ Stop requested — will interrupt at next safe point"
-        )
-        super().requestInterruption()
-
-
-class TunerThread(QThread):
-  
     log_updated      = pyqtSignal(str)
     status_updated   = pyqtSignal(str)
     tuning_finished  = pyqtSignal()

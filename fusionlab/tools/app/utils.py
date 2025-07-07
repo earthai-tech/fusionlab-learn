@@ -180,7 +180,7 @@ class TunerProgressCallback(Callback):
             trial=self.current_trial,
             total=self.total_trials
         )
-        self.log(f"Trial {self.current_trial}/{self.total_trials} started.")
+        self.log(f"Trial {self.current_trial}/{self.total_trials} started...")
 
     def on_epoch_end(self, epoch, logs=None):
         if not self.epoch_level:

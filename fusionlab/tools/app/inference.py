@@ -152,7 +152,6 @@ class PredictionPipeline:
             # self.model_path = self.artifacts_dir / training_info.get("checkpoint")
             training_info = self._manifest.get("training", {})
             results_sec = self._manifest.get("artifacts", {}) 
-            
             self.model_path = _get_path("checkpoint", "model.keras")
             
         self.encoder_path = _get_path(

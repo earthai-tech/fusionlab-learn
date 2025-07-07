@@ -40,15 +40,17 @@ from .components import (
     WorkerController, 
     ErrorManager,
     ExitController, 
-    ModeSwitch, 
+    # ModeSwitch, 
     ResetController, 
-    LogManager 
+    LogManager , 
+    ModeManager, 
+    Mode 
 )
 
 from .config import SubsConfig
 from .dialog import CsvEditDialog, TunerDialog, ModelChoiceDialog
 from .gui_popups import ImagePreviewDialog 
-from .notifications import ToastNotification 
+# from .notifications import ToastNotification 
 from .styles import ( 
     PRIMARY, SECONDARY, 
     FLAB_STYLE_SHEET,
@@ -125,7 +127,7 @@ class MiniForecaster(QMainWindow):
         # --- Instantiate the Manifest Registry in session-only mode ---
         self.registry = ManifestRegistry(session_only=True)
         
-        self._inference_mode = False     
+        # self._inference_mode = False     
         self._manifest_path  = None     
         
         # --- Store the active theme ---
@@ -134,6 +136,7 @@ class MiniForecaster(QMainWindow):
         )
         
         self._build_ui()
+        
         self.progress_manager = ProgressManager(
                 self.progress_bar, 
                 self.progress_label, 
@@ -156,18 +159,18 @@ class MiniForecaster(QMainWindow):
             quit_button  = self.quit_btn,      
             parent   = self,
             worker_ctl   = self.worker_ctl,    
-            pre_quit_hook= lambda: self._append_log("✔ clean-up done"),
+            pre_quit_hook= lambda: self._log("✔ clean-up done"),
             log_fn       = self._log,
         )
         
         # optional: reset progress-bar when an error dialog closes
         self.error_mgr.handled.connect(self.progress_manager.reset)
-        self.tune_mode = ModeSwitch(
-            button          = self.tune_btn,
-            tint            = SECONDARY,
-            tooltip_running = "Tuning in progress – Inference disabled",
-            tooltip_idle    = "Click to configure hyper-parameter tuning",
-        )
+        # self.tune_mode = ModeSwitch(
+        #     button          = self.tune_btn,
+        #     tint            = SECONDARY,
+        #     tooltip_running = "Tuning in progress – Inference disabled",
+        #     tooltip_idle    = "Click to configure hyper-parameter tuning",
+        # )
         
         # instantiate the ResetController
         # we let it auto‐discover the registry cache dir
@@ -179,7 +182,22 @@ class MiniForecaster(QMainWindow):
             disabled_color  = INFERENCE_OFF,
             parent =self, 
         )
-    
+        
+        cards = [self.model_card,
+                 self.training_card,
+                 self.physics_card,
+                 self.feature_card]
+
+        self.mode_mgr = ModeManager(
+            run_button   = self.run_btn,
+            tune_button  = self.tune_btn,
+            infer_button = self.inf_btn,
+            stop_button  = self.stop_btn,
+            panels       = cards,
+            parent       = self,
+        )
+        self.mode_mgr.mode_changed.connect(self._on_mode_change)
+        
         # when *any* run or tuning finishes:
         self.worker_ctl.stopped.connect(self.reset_ctl.enable)
         
@@ -274,6 +292,7 @@ class MiniForecaster(QMainWindow):
         self.tune_btn.setEnabled(False)
         self.tune_btn.setToolTip("Select a CSV first, then click to open tuner setup")
         self.tune_btn.clicked.connect(self._open_tuner_dialog)
+        self.tune_btn.clicked.connect(lambda: self.mode_mgr.set_mode(Mode.TUNER))
         csv_row.addWidget(self.tune_btn)
 
         # ── inference toggle  (disabled until a manifest is found)
@@ -281,7 +300,8 @@ class MiniForecaster(QMainWindow):
         self.inf_btn.setObjectName("inference")
         self.inf_btn.setEnabled(False)                       # default: grey
         self.inf_btn.setToolTip("Load an existing run_manifest.json first.")
-        self.inf_btn.clicked.connect(self._toggle_inference_mode)
+        # self.inf_btn.clicked.connect(self._toggle_inference_mode)
+        self.inf_btn.clicked.connect(lambda: self.mode_mgr.set_mode(Mode.INFER))
         csv_row.addWidget(self.inf_btn)
         
         # ► Make them the same width  
@@ -296,14 +316,7 @@ class MiniForecaster(QMainWindow):
         csv_row.addWidget(self.stop_btn)
         
         # right-hand Reset button
-        # self.reset_btn = QPushButton("Reset")
-        # self.reset_btn.setObjectName("reset")   
-        # self.reset_btn.setToolTip("Clear selections & log")
-        # right‐hand Reset button
         self.reset_btn = QPushButton("Reset")
-        # self.reset_btn.setFixedWidth(70)
-
-        # self.reset_btn.clicked.connect(self._on_reset)
         csv_row.addWidget(self.reset_btn)
         
         # >>> NEW Quit button -------------------------------------------------
@@ -357,7 +370,7 @@ class MiniForecaster(QMainWindow):
         self.log_widget.setReadOnly(True)
         self.log_mgr = LogManager(
             self.log_widget, parent= self) 
-        self._append_log = self.log_mgr.append
+        self._log = self.log_mgr.append
         row.addWidget(self.log_widget, 1)       # stretch
         bottom.addLayout(row)            # ← add FIRST
         
@@ -713,18 +726,6 @@ class MiniForecaster(QMainWindow):
     def _title(self, txt): 
         l = QLabel(txt); l.setObjectName("cardTitle"); return l
         
-    # def _log(self, msg): 
-    #     """
-    #     Print one line in the QTextEdit **and** keep a copy in memory
-    #     so we can dump everything to disk when the worker stops.
-    #     """
-    #     ts = time.strftime("%H:%M:%S")
-    #     line = f"[{ts}] {msg}"
-    #     self._log_cache.append(line)                         # (2) cache
-    #     self.log.append(line)
-    #     self.log.verticalScrollBar().setValue(
-    #         self.log.verticalScrollBar().maximum()) 
-        
     def _choose_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open CSV file", "", "CSV Files (*.csv)")
@@ -736,19 +737,19 @@ class MiniForecaster(QMainWindow):
             dlg = CsvEditDialog(str(path), self)
             if dlg.exec_() == QDialog.Accepted:
                 self.edited_df = dlg.edited_dataframe()
-                self._append_log(
+                self._log(
                     f"CSV preview accepted – {len(self.edited_df)} rows retained."
                 )
                 self.file_path = Path(path) # Set file_path only on success
                 self.file_label.setStyleSheet(f"color:{SECONDARY};")
                 self.file_label.setText(f"Selected: {self.file_path.name}")
-                self._append_log(f"CSV chosen → {self.file_path}")
+                self._log(f"CSV chosen → {self.file_path}")
                 self.tune_btn.setEnabled(True)
                 self.tune_btn.setStyleSheet(f"background:{PRIMARY};")
 
             else:
                 self.edited_df = None
-                self._append_log("CSV preview canceled – keeping original file.")
+                self._log("CSV preview canceled – keeping original file.")
 
         except Exception as e:
             # If CsvEditDialog fails to load the file, catch the error
@@ -768,50 +769,83 @@ class MiniForecaster(QMainWindow):
         
     def _refresh_manifest_state(self) -> None:
         """
-        Sync GUI buttons with the registry status.
-    
-        Called
-          • at start-up
-          • after a training / tuning run finishes
-          • after the user picks a CSV file
+        Sync tune/infer availability with disk state.
+        Called at startup, after any run/tune finishes,
+        or after picking a CSV.
         """
-        # ---------- 1.  regular training manifest  ---------------------------
-        manifest, tuner_manifest = _locate_manifest(locate_both=True)            
+        manifest, tuner_manifest = _locate_manifest(locate_both=True)
+
+        # Always remember the last valid training manifest
         if manifest:
             self._manifest_path = str(manifest)
-            self.inf_btn.setEnabled(True)
-            self.inf_btn.setStyleSheet(f"background:{PRIMARY};")
-            self.inf_btn.setToolTip("Click to switch to inference mode")
         else:
             self._manifest_path = None
-            self.inf_btn.setEnabled(False)
-            self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
-            self.inf_btn.setToolTip(
-                "Inference becomes available after you train a model"
-            )
-        # The Tune button is enabled if the user has a CSV **or** a tuner manifest
-        tune_available = (tuner_manifest is not None) or (
-            self.file_path is not None)
-    
-        if tune_available:
-            self.tune_btn.setEnabled(True)
-            # self.tune_btn.setStyleSheet(f"background:{PRIMARY};")
-            if tuner_manifest:
-                idle_tt =( 
-                    "Tuner results found – "
-                    "you can retune or inspect them"
-                    )
-            else:
-                idle_tt = (
-                    "CSV loaded – click to configure"
-                    " hyper-parameter tuning")
+
+        # Tell ModeManager whether infer is even allowed
+        self.mode_mgr.enable_infer(bool(manifest))
+
+        # Tune is allowed if we have a CSV file or an existing tuner manifest
+        tune_allowed = bool(self.file_path) or bool(tuner_manifest)
+        self.mode_mgr.enable_tune(tune_allowed)
+
+        # Optionally update the tooltip text 
+        # (ModeManager will apply it to the button)
+        if tuner_manifest:
+            tune_tt = "Tuner results exist – click to re-tune or inspect"
+        elif self.file_path:
+            tune_tt = "CSV loaded – click to configure tuning"
         else:
-            idle_tt = "Select a CSV first to enable tuning"
-            self.tune_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
+            tune_tt = "Select a CSV first to enable tuning"
+
+        self.tune_btn.setToolTip(tune_tt)
+
+
+    # def _refresh_manifest_state(self) -> None:
+    #     """
+    #     Sync GUI buttons with the registry status.
+    
+    #     Called
+    #       • at start-up
+    #       • after a training / tuning run finishes
+    #       • after the user picks a CSV file
+    #     """
+    #     # ---------- 1.  regular training manifest  ---------------------------
+    #     manifest, tuner_manifest = _locate_manifest(locate_both=True)            
+    #     if manifest:
+    #         self._manifest_path = str(manifest)
+    #         self.inf_btn.setEnabled(True)
+    #         self.inf_btn.setStyleSheet(f"background:{PRIMARY};")
+    #         self.inf_btn.setToolTip("Click to switch to inference mode")
+    #     else:
+    #         self._manifest_path = None
+    #         self.inf_btn.setEnabled(False)
+    #         self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
+    #         self.inf_btn.setToolTip(
+    #             "Inference becomes available after you train a model"
+    #         )
+    #     # The Tune button is enabled if the user has a CSV **or** a tuner manifest
+    #     tune_available = (tuner_manifest is not None) or (
+    #         self.file_path is not None)
+    
+    #     if tune_available:
+    #         self.tune_btn.setEnabled(True)
+    #         # self.tune_btn.setStyleSheet(f"background:{PRIMARY};")
+    #         if tuner_manifest:
+    #             idle_tt =( 
+    #                 "Tuner results found – "
+    #                 "you can retune or inspect them"
+    #                 )
+    #         else:
+    #             idle_tt = (
+    #                 "CSV loaded – click to configure"
+    #                 " hyper-parameter tuning")
+    #     else:
+    #         idle_tt = "Select a CSV first to enable tuning"
+    #         self.tune_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
             
-        # make sure the helper has the correct idle tooltip
-        self.tune_mode._tt_idle = idle_tt
-        self.tune_btn.setToolTip(idle_tt)
+    #     # make sure the helper has the correct idle tooltip
+    #     self.tune_mode._tt_idle = idle_tt
+    #     self.tune_btn.setToolTip(idle_tt)
 
     def _pick_manifest_for_inference(self) -> str | None:
         """
@@ -827,7 +861,6 @@ class MiniForecaster(QMainWindow):
         run_dir = Path(self._manifest_path).parent
         training_manifest = run_dir / "run_manifest.json"
         tuner_manifest   = run_dir / "tuner_run_manifest.json"
-        print("run_dir","=", run_dir)
         # If there's no tuned manifest, just use the training one
         if not tuner_manifest.exists():
             return str(training_manifest)
@@ -843,63 +876,64 @@ class MiniForecaster(QMainWindow):
         # User cancelled
         return None
 
-    def _toggle_inference_mode(self):
-        """Flips the GUI between *training* and *inference* modes.
+    # def _toggle_inference_mode(self):
+    #     """Flips the GUI between *training* and *inference* modes.
 
-        This method acts as a toggle switch. It updates the internal
-        state, provides visual feedback via a toast notification and
-        by changing button/panel styles, and updates tooltips to guide
-        the user.
-        """
-        self._inference_mode = not self._inference_mode
+    #     This method acts as a toggle switch. It updates the internal
+    #     state, provides visual feedback via a toast notification and
+    #     by changing button/panel styles, and updates tooltips to guide
+    #     the user.
+    #     """
+    #     self._inference_mode = not self._inference_mode
 
-        # 1. Show the toast notification for clear feedback
-        message = (
-            "Inference Mode Activated"
-            if self._inference_mode
-            else "Training Mode Activated"
-        )
-        toast = ToastNotification(message, self, theme=self.theme)
-        toast.show_toast()
+    #     # 1. Show the toast notification for clear feedback
+    #     # XXX TOAST MESSAGE 
+    #     message = (
+    #         "Inference Mode Activated"
+    #         if self._inference_mode
+    #         else "Training Mode Activated"
+    #     )
+    #     toast = ToastNotification(message, self, theme=self.theme)
+    #     toast.show_toast()
 
-        # 2. Update button styles and tooltips based on the new mode
-        if self._inference_mode:
-            # --- Inference Mode is ON ---
-            self._set_panels_disabled(True)
-            # Style the button to look "active" (e.g., orange)
-            self.inf_btn.setStyleSheet(
-                f"background-color: {SECONDARY}; color: white;")
-            self.inf_btn.setToolTip(
-                "Inference mode is active. Click again to switch back to Training"
-            )
-            self.run_btn.setText("Infer")
-            run_tooltip = (
-                "Launch the inference pipeline using the detected model "
-                "and the selected CSV file"
-            )
-        else:
-            # --- Inference Mode is OFF (back to training) ---
-            # Revert the button to its normal "enabled" style
-            self._set_panels_disabled(False)
-            self.inf_btn.setStyleSheet(
-                f"background-color: {PRIMARY}; color: white;")
-            self.inf_btn.setToolTip(
-                "Click to switch to Inference mode - requires a trained model"
-            )
-            self.run_btn.setText("Run")
-            run_tooltip = "Launch the full training and forecasting pipeline"
+    #     # 2. Update button styles and tooltips based on the new mode
+    #     if self._inference_mode:
+    #         # --- Inference Mode is ON ---
+    #         self._set_panels_disabled(True)
+    #         # Style the button to look "active" (e.g., orange)
+    #         self.inf_btn.setStyleSheet(
+    #             f"background-color: {SECONDARY}; color: white;")
+    #         self.inf_btn.setToolTip(
+    #             "Inference mode is active. Click again to switch back to Training"
+    #         )
+    #         self.run_btn.setText("Infer")
+    #         run_tooltip = (
+    #             "Launch the inference pipeline using the detected model "
+    #             "and the selected CSV file"
+    #         )
+    #     else:
+    #         # --- Inference Mode is OFF (back to training) ---
+    #         # Revert the button to its normal "enabled" style
+    #         self._set_panels_disabled(False)
+    #         self.inf_btn.setStyleSheet(
+    #             f"background-color: {PRIMARY}; color: white;")
+    #         self.inf_btn.setToolTip(
+    #             "Click to switch to Inference mode - requires a trained model"
+    #         )
+    #         self.run_btn.setText("Run")
+    #         run_tooltip = "Launch the full training and forecasting pipeline"
         
-        self.run_btn.setToolTip(run_tooltip)
+    #     self.run_btn.setToolTip(run_tooltip)
     
-        # 3. Update card borders using the dynamic property
-        cards_to_style = [
-            self.model_card, self.training_card,
-            self.physics_card, self.feature_card
-        ]
-        for card in cards_to_style:
-            card.setProperty("inferenceMode", self._inference_mode)
-            card.style().unpolish(card)
-            card.style().polish(card)
+    #     # 3. Update card borders using the dynamic property
+    #     cards_to_style = [
+    #         self.model_card, self.training_card,
+    #         self.physics_card, self.feature_card
+    #     ]
+    #     for card in cards_to_style:
+    #         card.setProperty("inferenceMode", self._inference_mode)
+    #         card.style().unpolish(card)
+    #         card.style().polish(card)
             
     def _set_panels_disabled(self, disable: bool):
         """Disables or enables the panels and inputs based on inference mode."""
@@ -940,7 +974,7 @@ class MiniForecaster(QMainWindow):
 
         # Only proceed if the user confirms.
         if reply == QMessageBox.Yes:
-            self._append_log("⏹️ Workflow stop requested by user.")
+            self._log("⏹️ Workflow stop requested by user.")
             self.status_updated.emit("⏹️ Stopping workflow…")
             
             # Request the interruption. The thread will stop when it
@@ -971,37 +1005,93 @@ class MiniForecaster(QMainWindow):
         
         self.progress_manager.reset()
 
+    # def _on_run(self):
+    #     """
+    #     Acts as the main dispatcher for the 'Run' button.
+
+    #     Checks if the GUI is in training or inference mode and calls the
+    #     appropriate workflow launcher.
+    
+    #     """
+    
+    #     # First, ensure a file has been loaded and prepared.
+    #     if self.file_path is None:
+    #         self._log("⚠ Please select a CSV file first.")
+    #         QMessageBox.warning(
+    #             self, "No Data", "Please select a CSV data file"
+    #             " before running a workflow.")
+    #         return
+        
+    #     self.reset_ctl.disable()
+    #     self.coverage_lbl.clear()
+        
+    #     # Dispatch to the correct workflow based on the UI mode
+        
+    #     mode = self.mode_mgr.mode
+    #     if mode is Mode.INFER:
+    #         chosen = self._pick_manifest_for_inference()
+    #         if chosen is None:
+    #             # cancelled → back to TRAIN
+    #             self.mode_mgr.set_mode(Mode.TRAIN)
+    #             return
+    #         self._manifest_path = chosen
+    #         self._run_inference()
+        
+    #     elif mode is Mode.TUNER:
+    #         # user clicked “Run” while in TUNER → actually open the tuner dialog
+    #         self._open_tuner_dialog()
+        
+    #     else:  # TRAIN or DRY_RUN
+    #         self._run_training()
+            
     def _on_run(self):
         """
-        Acts as the main dispatcher for the 'Run' button.
-
-        Checks if the GUI is in training or inference mode and calls the
-        appropriate workflow launcher.
-    
+        Dispatched by the Run/Tune/Infer button,
+        behavior depends on the current ModeManager.mode.
         """
-    
-        # First, ensure a file has been loaded and prepared.
-        if self.file_path is None:
-            self._append_log("⚠ Please select a CSV file first.")
-            QMessageBox.warning(
-                self, "No Data", "Please select a CSV data file"
-                " before running a workflow.")
+        # sanity: must have data
+        if not self.file_path:
+            self._log("⚠ Please select a CSV file first.")
+            QMessageBox.warning(self, "No Data", "Select a CSV before running.")
             return
-        
+    
+        # disable reset while working
         self.reset_ctl.disable()
         self.coverage_lbl.clear()
-        
-        # Dispatch to the correct workflow based on the UI mode
-        if self._inference_mode:
-            chosen_manifest = self._pick_manifest_for_inference()
-            if chosen_manifest is None:        # user cancelled
-                self._append_log("ℹ Inference cancelled by user.")
-                self._toggle_inference_mode()
+    
+        mode = self.mode_mgr.mode
+        if mode == Mode.INFER:
+            # pick which manifest to use
+            chosen = self._pick_manifest_for_inference()
+            if not chosen:
+                self._log("ℹ Inference cancelled by user.")
+                self.mode_mgr.set_mode(Mode.TRAIN)
                 return
-            self._manifest_path = chosen_manifest
-            self._run_inference()              # ← unchanged
-        else:
-            self._run_training() # A new helper for clarity
+            self._manifest_path = chosen
+            self._run_inference()
+    
+        elif mode == Mode.TUNER:
+            # go straight into the tuner dialog
+            self._open_tuner_dialog()
+    
+        else:  # Mode.TRAIN or Mode.DRY_RUN
+            if mode == Mode.DRY_RUN:
+                self._log("⚙️ Dry run: skipping actual execution.")
+                return
+            self._run_training()
+
+
+        # if self._inference_mode:
+            
+        #     chosen_manifest = self._pick_manifest_for_inference()
+        #     if chosen_manifest is None:        # user cancelled
+        #         self._log("ℹ Inference cancelled by user.")
+        #         self.mode_mgr.set_mode(Mode.TUNER)
+        #         return
+        #     self._manifest_path = chosen_manifest
+        #     self._run_inference()              # ← unchanged
+        # else:
+        #     self._run_training() # A new helper for clarity
             
     def _run_training(self):
         """Initiates the end-to-end forecasting workflow.
@@ -1028,7 +1118,7 @@ class MiniForecaster(QMainWindow):
         """
         self.progress_bar.setValue(0)
         if self.file_path is None:
-            self._append_log("⚠ No CSV selected.")
+            self._log("⚠ No CSV selected.")
             return
      
         self.run_btn.setEnabled(False)
@@ -1036,7 +1126,7 @@ class MiniForecaster(QMainWindow):
         # disabled-looking style.
         self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
         
-        self._append_log("▶ launch TRAINING workflow …")
+        self._log("▶ launch TRAINING workflow …")
         QApplication.processEvents()
         
         def _parse(txt):
@@ -1050,7 +1140,7 @@ class MiniForecaster(QMainWindow):
         
         save_fmt = self.save_format_combo.currentText().lower()
         if save_fmt != "weights":
-            self._append_log(f"⚠ You selected save_format='{save_fmt}'. "
+            self._log(f"⚠ You selected save_format='{save_fmt}'. "
                       "GUI mode is battle-tested only with 'weights'.")
 
         cfg = SubsConfig(
@@ -1125,208 +1215,377 @@ class MiniForecaster(QMainWindow):
         self.active_worker.start()
         self._refresh_stop_button() 
         
+    # def _run_inference(self):
+    #     """Launches the inference workflow using the pre-loaded data.
+
+    #     This method assumes that a manifest has been found and that the
+    #     user has already selected and potentially edited a CSV file via
+    #     the `_choose_file` method.
+    #     """
+
+    #     # Pre-flight check: ensure data is actually loaded and ready.
+    #     # This can be from the original file or the CsvEditDialog.
+    #     inference_data = ( 
+    #         self.edited_df if self.edited_df is not None 
+    #         else pd.read_csv(self.file_path)
+    #     )
+    #     if inference_data is None or inference_data.empty:
+    #         QMessageBox.warning(
+    #             self, "Inference Error",
+    #             "No valid data available to run inference on."
+    #         )
+    #         return
+
+    #     self._log("▶ Launching INFERENCE workflow…")
+    #     self.run_btn.setEnabled(False)
+    #     self.run_btn.setText("Inferring…") 
+    #     self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
+        
+    #     self.stop_btn.setEnabled(True)
+    #     self.stop_btn.setStyleSheet(
+    #         f"background-color: {PRIMARY}; color: white;")
+    #     self.progress_bar.setValue(0)
+    #     self.progress_bar.repaint()
+
+    #     # --- Launch the InferenceThread ---
+    #     # It receives the manifest path found by `_refresh_manifest_state`
+    #     # and the in-memory DataFrame prepared by `_choose_file`.
+    #     self.active_worker = InferenceThread(
+    #         manifest_path=self._manifest_path,
+    #         progress_manager = self.progress_manager,
+    #         edited_df=inference_data,
+    #         parent=self,
+    #     )
+    #     self.active_worker.log_msg.connect(self.log_updated.emit)
+    #     self.active_worker.status_msg.connect(self.status_updated.emit)
+        
+    #     self.active_worker.finished.connect(self._worker_done)
+
+    #     self.active_worker.error_occurred.connect(self.error_mgr.report)
+    #     self.worker_ctl.bind(self.active_worker)     
+    #     self.active_worker.start()
+    #     self._refresh_stop_button() 
+        
     def _run_inference(self):
-        """Launches the inference workflow using the pre-loaded data.
-
-        This method assumes that a manifest has been found and that the
-        user has already selected and potentially edited a CSV file via
-        the `_choose_file` method.
-        """
-
-        # Pre-flight check: ensure data is actually loaded and ready.
-        # This can be from the original file or the CsvEditDialog.
-        inference_data = ( 
-            self.edited_df if self.edited_df is not None 
+        
+        """Launches the inference workflow using the pre-loaded data."""
+        # Make sure we're in INFER mode (this will grey out all panels, etc.)
+        self.mode_mgr.set_mode(Mode.INFER)
+    
+        # Pre-flight check: ensure data is loaded
+        inference_data = (
+            self.edited_df
+            if getattr(self, "edited_df", None) is not None
             else pd.read_csv(self.file_path)
         )
         if inference_data is None or inference_data.empty:
             QMessageBox.warning(
-                self, "Inference Error",
+                self,
+                "Inference Error",
                 "No valid data available to run inference on."
             )
+            # revert back to TRAIN mode if user cancels
+            self.mode_mgr.set_mode(Mode.TRAIN)
             return
-
-        self._append_log("▶ Launching INFERENCE workflow…")
-        self.run_btn.setEnabled(False)
-        self.run_btn.setText("Inferring…") 
-        self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
-        
-        self.stop_btn.setEnabled(True)
-        self.stop_btn.setStyleSheet(
-            f"background-color: {PRIMARY}; color: white;")
+    
+        self._log("▶ Launching INFERENCE workflow…")
+        # Note: ModeManager already handled run_btn styling/text
+        self._stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
         self.progress_bar.repaint()
-
-        # --- Launch the InferenceThread ---
-        # It receives the manifest path found by `_refresh_manifest_state`
-        # and the in-memory DataFrame prepared by `_choose_file`.
+    
         self.active_worker = InferenceThread(
-            manifest_path=self._manifest_path,
+            manifest_path    = self._manifest_path,
             progress_manager = self.progress_manager,
-            edited_df=inference_data,
-            parent=self,
+            edited_df        = inference_data,
+            parent           = self,
         )
         self.active_worker.log_msg.connect(self.log_updated.emit)
         self.active_worker.status_msg.connect(self.status_updated.emit)
-        
         self.active_worker.finished.connect(self._worker_done)
-
         self.active_worker.error_occurred.connect(self.error_mgr.report)
-        self.worker_ctl.bind(self.active_worker)     
+        self.worker_ctl.bind(self.active_worker)
         self.active_worker.start()
-        self._refresh_stop_button() 
     
+        # make sure Stop/Run buttons reflect “inference in progress”
+        self._refresh_stop_button()
+        
     def _open_tuner_dialog(self):
+        """
+        Build the SubsConfig + TunerThread once we know the user wants
+        to tune (ModeManager has already put us into Mode.TUNER).
+        """
+        # 1) Make sure there's data
         if self.file_path is None:
-            QMessageBox.warning(self, "No data",
-                                "Please select a CSV file first.")
+            QMessageBox.warning(
+                self, "No data",
+                "Please select a CSV file before starting tuning."
+            )
+            # fallback to TRAIN
+            self.mode_mgr.set_mode(Mode.TRAIN)
             return
     
-        # infer minimal fixed params …
+        # 2) Ask the user for hyper-params
         fixed_params = {
-            "static_input_dim": 0,
-            "dynamic_input_dim": 1,
-            "future_input_dim": 0,
+            "static_input_dim":      0,
+            "dynamic_input_dim":     1,
+            "future_input_dim":      0,
             "output_subsidence_dim": 1,
-            "output_gwl_dim": 1,
-            "forecast_horizon": self.forecast_horizon_spin.value(),
+            "output_gwl_dim":        1,
+            "forecast_horizon":      self.forecast_horizon_spin.value(),
         }
-    
         dlg = TunerDialog(fixed_params, parent=self)
         if dlg.exec_() != QDialog.Accepted:
+            # user cancelled → back to TRAIN
+            self.mode_mgr.set_mode(Mode.TRAIN)
             return
     
         cfg_dict = dlg.chosen_config()
         if cfg_dict is None:
-            return  # should not happen
+            self.mode_mgr.set_mode(Mode.TRAIN)
+            return  # shouldn't really happen
     
-        # 2. build a *fresh* SubsConfig for the tuner 
-
-        # MiniForecaster._open_tuner_dialog()
-        max_trials = cfg_dict["tuner_settings"]["max_trials"]
-        fixed_up = cfg_dict.get("fixed_params", {})
-        seq_params = cfg_dict.get ('sequence_params', {})
-        
-        train_end_year = seq_params.get (
-            "train_end_year", self.train_end_year_spin.value()
-            )
-        
-        forecast_start_year = seq_params.get (
-            "forecast_start_year",  self.forecast_start_year_spin.value(),
-            )
-        time_steps = fixed_up.pop(
-            "max_window_size", self.time_steps_spin.value()) 
-        forecast_horizon = fixed_up.pop(
-            "forecast_horizon", self.forecast_horizon_spin.value()
-        )
-        
-        self._tuning_max_trials = max_trials
-        # self.trialLb.setText("--/--")   # ← show placeholder from the very start
-
+        # 3) Build the tuning config
+        seq_params = cfg_dict.get("sequence_params", {})
+        fixed_up   = cfg_dict.get("fixed_params", {})
+    
         tune_cfg = SubsConfig(
-            city_name = self.city_input.text() or "unnamed",
-            model_name = self.model_select.currentText(),
-            data_dir   = str(self.file_path.parent),
-            data_filename = self.file_path.name,
-            forecast_horizon_years = forecast_horizon,
-            time_steps = time_steps,
-            
-            train_end_year         = train_end_year,
-            forecast_start_year    = forecast_start_year,
-
-            save_format = "keras",
-            bypass_loading = True,          # no need while tuning
-            verbose = 1, # for minimal logging
-            run_type = 'tuning', # eraise the default type
-            log_callback = self.log_updated.emit, 
+            city_name               = self.city_input.text() or "unnamed",
+            model_name              = self.model_select.currentText(),
+            data_dir                = str(self.file_path.parent),
+            data_filename           = self.file_path.name,
+            forecast_horizon_years  = seq_params.get(
+                                         "forecast_horizon",
+                                         self.forecast_horizon_spin.value(),
+                                     ),
+            time_steps              = seq_params.get(
+                                         "max_window_size",
+                                         self.time_steps_spin.value(),
+                                     ),
+            train_end_year          = seq_params.get(
+                                         "train_end_year",
+                                         self.train_end_year_spin.value(),
+                                     ),
+            forecast_start_year     = seq_params.get(
+                                         "forecast_start_year",
+                                         self.forecast_start_year_spin.value(),
+                                     ),
+            save_format             = "keras",
+            bypass_loading          = True,
+            verbose                 = 1,
+            run_type                = "tuning",
+            log_callback            = self.log_updated.emit,
             **fixed_up
-            
         )
-        tune_cfg.log  = self.log_updated.emit
-
-        # tune_cfg.progress_callback = self.progress_updated.emit
+        tune_cfg.log = self.log_updated.emit
     
-        # ---------- 3. spawn the thread --------------------------------
-        self._append_log("▶ launch TUNER workflow …")
-        self.run_btn.setEnabled(False)
-        self.run_btn.setText("Running…") 
-        self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
-        self.stop_btn.setEnabled(True)
-        self.tune_btn.setEnabled(False)
-    
+        # 4) Spawn the tuner thread
+        self._log("▶ launch HYPERPARAMETER TUNING…")
         self.active_worker = TunerThread(
-            cfg           = tune_cfg,
-            search_space  = cfg_dict["search_space"],
-            tuner_kwargs  = cfg_dict["tuner_settings"],
-            progress_manager = self.progress_manager,
-            edited_df = getattr(self, "edited_df", None),
-            parent = self,
+            cfg             = tune_cfg,
+            search_space    = cfg_dict["search_space"],
+            tuner_kwargs    = cfg_dict["tuner_settings"],
+            progress_manager= self.progress_manager,
+            edited_df       = getattr(self, "edited_df", None),
+            parent          = self,
         )
         w = self.active_worker
         w.log_updated.connect(self.log_updated.emit)
         w.status_updated.connect(self.status_updated.emit)
         w.tuning_finished.connect(self._worker_done)
-        
         w.error_occurred.connect(self.error_mgr.report)
-        self.worker_ctl.bind(self.active_worker)   
-        
-        # **bind** ModeSwitch so the button stays orange while running
-        self.tune_mode.bind(w)
-        # Inference must be greyed while tuning runs
-        self.inf_btn.setEnabled(False)
     
+        self.worker_ctl.bind(w)
         w.start()
-        self._refresh_stop_button() 
+    
+    # leave ModeManager in TUNER mode (so Stop is enabled, Run/Tune/Infer are styled appropriately)
+    # any further UI changes will be driven by ModeManager/_on_mode_change
+
+    # def _open_tuner_dialog(self):
+    #     if self.file_path is None:
+    #         QMessageBox.warning(self, "No data",
+    #                             "Please select a CSV file first.")
+    #         return
+    
+    #     # infer minimal fixed params …
+    #     fixed_params = {
+    #         "static_input_dim": 0,
+    #         "dynamic_input_dim": 1,
+    #         "future_input_dim": 0,
+    #         "output_subsidence_dim": 1,
+    #         "output_gwl_dim": 1,
+    #         "forecast_horizon": self.forecast_horizon_spin.value(),
+    #     }
+    
+    #     dlg = TunerDialog(fixed_params, parent=self)
+    #     if dlg.exec_() != QDialog.Accepted:
+    #         return
+    
+    #     cfg_dict = dlg.chosen_config()
+    #     if cfg_dict is None:
+    #         return  # should not happen
+    
+    #     # 2. build a *fresh* SubsConfig for the tuner 
+
+    #     # MiniForecaster._open_tuner_dialog()
+    #     max_trials = cfg_dict["tuner_settings"]["max_trials"]
+    #     fixed_up = cfg_dict.get("fixed_params", {})
+    #     seq_params = cfg_dict.get ('sequence_params', {})
         
+    #     train_end_year = seq_params.get (
+    #         "train_end_year", self.train_end_year_spin.value()
+    #         )
+        
+    #     forecast_start_year = seq_params.get (
+    #         "forecast_start_year",  self.forecast_start_year_spin.value(),
+    #         )
+    #     time_steps = fixed_up.pop(
+    #         "max_window_size", self.time_steps_spin.value()) 
+    #     forecast_horizon = fixed_up.pop(
+    #         "forecast_horizon", self.forecast_horizon_spin.value()
+    #     )
+        
+    #     self._tuning_max_trials = max_trials
+    #     # self.trialLb.setText("--/--")   # ← show placeholder from the very start
+
+    #     tune_cfg = SubsConfig(
+    #         city_name = self.city_input.text() or "unnamed",
+    #         model_name = self.model_select.currentText(),
+    #         data_dir   = str(self.file_path.parent),
+    #         data_filename = self.file_path.name,
+    #         forecast_horizon_years = forecast_horizon,
+    #         time_steps = time_steps,
+            
+    #         train_end_year         = train_end_year,
+    #         forecast_start_year    = forecast_start_year,
+
+    #         save_format = "keras",
+    #         bypass_loading = True,          # no need while tuning
+    #         verbose = 1, # for minimal logging
+    #         run_type = 'tuning', # eraise the default type
+    #         log_callback = self.log_updated.emit, 
+    #         **fixed_up
+            
+    #     )
+    #     tune_cfg.log  = self.log_updated.emit
+
+    #     # tune_cfg.progress_callback = self.progress_updated.emit
+    
+    #     # ---------- 3. spawn the thread --------------------------------
+    #     self._log("▶ launch TUNER workflow …")
+    #     self.run_btn.setEnabled(False)
+    #     self.run_btn.setText("Running…") 
+    #     self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
+    #     self.stop_btn.setEnabled(True)
+    #     self.tune_btn.setEnabled(False)
+    
+    #     self.active_worker = TunerThread(
+    #         cfg           = tune_cfg,
+    #         search_space  = cfg_dict["search_space"],
+    #         tuner_kwargs  = cfg_dict["tuner_settings"],
+    #         progress_manager = self.progress_manager,
+    #         edited_df = getattr(self, "edited_df", None),
+    #         parent = self,
+    #     )
+    #     w = self.active_worker
+    #     w.log_updated.connect(self.log_updated.emit)
+    #     w.status_updated.connect(self.status_updated.emit)
+    #     w.tuning_finished.connect(self._worker_done)
+        
+    #     w.error_occurred.connect(self.error_mgr.report)
+    #     self.worker_ctl.bind(self.active_worker)   
+        
+    #     # **bind** ModeSwitch so the button stays orange while running
+    #     # self.tune_mode.bind(w)
+    #     # Inference must be greyed while tuning runs
+    #     self.inf_btn.setEnabled(False)
+    
+    #     w.start()
+    #     self._refresh_stop_button() 
+      
     def _worker_done(self):
         """
-        Called from `self.worker.finished`.  
-        Saves the whole cached log to
-        <run-output-path>/gui_log_YYYYMMDD_HHMMSS.txt
-        and re-enables the buttons.
+        Called when the active_worker finishes 
+        (training, tuning, or inference).
+        1) Saves the last ~10k lines of GUI log 
+         to <run_output_path>/_log/gui_log_<ts>.txt
+        2) Resets all buttons and progress UI
+        3) Switches back into TRAIN mode
         """
+        # Re-enable Run, disable Stop
         self.run_btn.setEnabled(True)
-        self.run_btn.setText("Run")  
+        self.run_btn.setText("Run")
         self.stop_btn.setEnabled(False)
-        
-        # Use the generic active_worker attribute
-        if ( 
-                hasattr(self.active_worker, 'cfg') 
-                and self.active_worker is not None
-            ):
-            run_out = self.active_worker.cfg.run_output_path
-            
-            # # decide where to write
-            # out_dir = getattr(self.active_worker.cfg, "run_output_path", ".")
-            # ts      = time.strftime("%Y%m%d_%H%M%S")
-            # fname   = os.path.join(out_dir, '_log',  f"gui_log_{ts}.txt")
-    
-            try:                                                 # limit size
-                log_fp = self.log_mgr.save_cache(run_out)
-                self._append_log(f"📝 Log saved to: {log_fp}")
-            except Exception as err:
-                self._append_log(f"⚠ Could not write log file ({err})")
-  
-            # Clean up the active worker reference
-            self.active_worker = None
-      
-        if self._inference_mode:
-            self._toggle_inference_mode()
-            
+
+        # 1) Save the cached log if we have a run_output_path
+        if hasattr(self, "active_worker") and getattr(
+                self.active_worker, "cfg", None):
+            out_dir = Path(self.active_worker.cfg.run_output_path)
+            try:
+                log_fp = self.log_mgr.save_cache(out_dir)
+                self._log(f"📝 Log saved to: {log_fp}")
+            except Exception as e:
+                self._log(f"⚠ Could not write log file ({e})")
+            finally:
+                # drop the reference
+                self.active_worker = None
+
+        # 2) Reset UI state
         self.status_updated.emit("⚪ Idle")
-        
-        self.run_btn.setStyleSheet("")
-        self.stop_btn.setStyleSheet("") 
-        self.tune_btn.setEnabled(True) 
-        self._tuning_max_trials = None
-
-        self.progress_manager.reset() 
-        self.worker_ctl.bind(None)  
-   
-        self.tune_mode.bind(None) 
-
+        self.progress_manager.reset()
+        self.worker_ctl.bind(None)
         self.reset_ctl.enable()
-        self._refresh_manifest_state()  
+
+        # 3) Go back to TRAIN mode
+        self.mode_mgr.set_mode(Mode.TRAIN)
+        self._refresh_manifest_state()
+        
+    # def _worker_done(self):
+    #     """
+    #     Called from `self.worker.finished`.  
+    #     Saves the whole cached log to
+    #     <run-output-path>/gui_log_YYYYMMDD_HHMMSS.txt
+    #     and re-enables the buttons.
+    #     """
+    #     self.run_btn.setEnabled(True)
+    #     self.run_btn.setText("Run")  
+    #     self.stop_btn.setEnabled(False)
+        
+    #     # Use the generic active_worker attribute
+    #     if ( 
+    #             hasattr(self.active_worker, 'cfg') 
+    #             and self.active_worker is not None
+    #         ):
+    #         run_out = self.active_worker.cfg.run_output_path
+            
+    #         try:                                                 # limit size
+    #             log_fp = self.log_mgr.save_cache(run_out)
+    #             self._log(f"📝 Log saved to: {log_fp}")
+    #         except Exception as err:
+    #             self._log(f"⚠ Could not write log file ({err})")
+    #         # Clean up the active worker reference
+    #         self.active_worker = None
+      
+    #     # if self._inference_mode:
+    #     #     self._toggle_inference_mode()
+        
+    #     self.mode_mgr.set_mode(Mode.TRAIN)
+        
+    #     self.status_updated.emit("⚪ Idle")
+        
+    #     self.run_btn.setStyleSheet("")
+    #     self.stop_btn.setStyleSheet("") 
+    #     self.tune_btn.setEnabled(True) 
+    #     self._tuning_max_trials = None
+
+    #     self.progress_manager.reset() 
+    #     self.worker_ctl.bind(None)  
+   
+    #     self.tune_mode.bind(None) 
+    #     self.mode_mgr.set_mode(Mode.TRAIN)
+
+    #     self.reset_ctl.enable()
+    #     self._refresh_manifest_state()  
     
     @pyqtSlot()
     def _on_full_reset(self):
@@ -1346,7 +1605,44 @@ class MiniForecaster(QMainWindow):
         self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
         self.run_btn.setEnabled(True)
         self.run_btn.setStyleSheet("")
-        self._append_log("ℹ Interface fully reset.")
+        self._log("ℹ Interface fully reset.")
+
+    @pyqtSlot(Mode)
+    def _on_mode_change(self, mode: Mode):
+        """
+        Perform any extra logic when the application mode changes:
+          • swap active_worker behavior
+          • prompt for inference manifest
+          • open tuner dialog
+        """
+        if mode == Mode.TRAIN:
+            # revert any inference-specific state
+            pass
+
+        elif mode == Mode.INFER:
+            # automatically pick manifest if entering inference
+            chosen = self._pick_manifest_for_inference()
+            if chosen is None:
+                # user cancelled → back to TRAIN
+                self.mode_mgr.set_mode(Mode.TRAIN)
+            else:
+                self._manifest_path = chosen
+
+        elif mode == Mode.TUNER:
+            # directly open the tuner dialog
+            self._open_tuner_dialog()
+
+        elif mode == Mode.DRY_RUN:
+            # dry-run: just log and do nothing
+            self._log("⚙️ Dry run: no actions executed.")
+
+        # any time we enter TRAIN, REVERT styling of Run/Stop
+        if mode == Mode.TRAIN:
+            self._refresh_stop_button()
+
+    # Example: trigger dry-run from code:
+    def some_debug_action(self):
+        self.mode_mgr.set_mode(Mode.DRY_RUN)
 
 
 def hline() -> QFrame:
@@ -1458,24 +1754,24 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     gui.show()
     sys.exit(app.exec_())
     
-# if __name__ == "__main__":
-#     launch_cli()
-# mini_forecaster_gui.py  – very bottom
 if __name__ == "__main__":
-    import traceback, faulthandler
-    faulthandler.enable()                       # catches segfault-like crashes
+    launch_cli()
+# # mini_forecaster_gui.py  – very bottom
+# if __name__ == "__main__":
+#     import traceback, faulthandler
+#     faulthandler.enable()                       # catches segfault-like crashes
 
-    def qt_excepthook(exctype, value, tb):
-        """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
-        traceback.print_exception(exctype, value, tb)
-        # comment the next line if you prefer the GUI to stay open
-        QApplication.quit()
+#     def qt_excepthook(exctype, value, tb):
+#         """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
+#         traceback.print_exception(exctype, value, tb)
+#         # comment the next line if you prefer the GUI to stay open
+#         QApplication.quit()
 
-    sys.excepthook = qt_excepthook              # <<< install *before* exec_()
+#     sys.excepthook = qt_excepthook              # <<< install *before* exec_()
 
-    app = QApplication(sys.argv)
-    # … theme / stylesheet logic …
-    gui = MiniForecaster(theme="fusionlab")
-    gui.show()
+#     app = QApplication(sys.argv)
+#     # … theme / stylesheet logic …
+#     gui = MiniForecaster(theme="fusionlab")
+#     gui.show()
 
-    sys.exit(app.exec_())
+#     sys.exit(app.exec_())

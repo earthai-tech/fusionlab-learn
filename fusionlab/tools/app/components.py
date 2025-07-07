@@ -16,9 +16,10 @@ throughout the Mini‑Subsidence GUI and CLI tools.
 """
 from __future__ import annotations
 
-from typing import Callable , Optional 
+from typing import Callable , Optional, List 
 import time
 import errno
+from enum import Enum, auto
 from pathlib import Path
 from datetime import datetime
 import traceback, textwrap, os
@@ -46,7 +47,8 @@ from PyQt5.QtWidgets import (
     QProgressBar, 
     QLabel, 
     QMainWindow,
-    QWidget
+    QWidget, 
+    QFrame,
 )
 
 from ...nn import KERAS_DEPS  
@@ -60,7 +62,8 @@ __all__ = [
     "ProgressManager", "WorkerController",
     "ErrorManager", "ExitController", 
     "ModeSwitch", "TunerProgress", 
-    "TuningProgress", "ResetController"
+    "TuningProgress", "ResetController", 
+    "Mode", "ModeManager", 
   ]
 
 
@@ -926,3 +929,124 @@ class LogManager(QObject):
         with open(fname, "w", encoding="utf-8") as fp:
             fp.write("\n".join(self._cache))
         return fname
+
+
+class Mode(Enum):
+    TRAIN   = auto()
+    INFER   = auto()
+    TUNER   = auto()
+    DRY_RUN = auto()                        # ← new custom mode
+
+
+class ModeManager(QObject):
+    """
+    Centralizes UI state across different application modes:
+      • TRAIN   — full training workflow
+      • INFER   — inference on existing model
+      • TUNER   — hyperparameter tuning
+      • DRY_RUN — no-op, UI only
+    """
+    mode_changed = pyqtSignal(Mode)
+
+    def __init__(
+        self,
+        *,
+        run_button:    QPushButton,
+        tune_button:   QPushButton,
+        infer_button:  QPushButton,
+        stop_button:   QPushButton,
+        panels:        List[QFrame],
+        parent:        Optional[QObject] = None
+    ):
+        super().__init__(parent)
+        self._run   = run_button
+        self._tune  = tune_button
+        self._infer = infer_button
+        self._stop  = stop_button
+        self._panels = panels
+        self.mode   = Mode.TRAIN
+
+        # initialize hooks
+        self._infer.clicked.connect(self.toggle_inference)
+        self._tune.clicked.connect(self.toggle_tuning)
+
+        # Initialize UI to TRAIN mode
+        self._apply_mode()
+
+    def toggle_inference(self):
+        if self.mode == Mode.INFER:
+            self.set_mode(Mode.TRAIN)
+        else:
+            self.set_mode(Mode.INFER)
+
+    def toggle_tuning(self):
+        # clicking Tune button always goes into TUNER mode
+        if self.mode == Mode.TUNER:
+            self.set_mode(Mode.TRAIN)
+        else:
+            self.set_mode(Mode.TUNER)
+
+    def set_mode(self, m: Mode):
+        """Switch to a new mode and update UI."""
+        self.mode = m
+        self._apply_mode()
+        self.mode_changed.emit(m)
+
+    def enable_infer(self, allowed: bool):
+        """Enable or disable the Inference button."""
+        self._infer.setEnabled(allowed)
+        # if currently in infer but now not allowed, fallback to TRAIN
+        if not allowed and self.mode == Mode.INFER:
+            self.set_mode(Mode.TRAIN)
+
+    def enable_tune(self, allowed: bool):
+        """Enable or disable the Tune button."""
+        self._tune.setEnabled(allowed)
+        if not allowed and self.mode == Mode.TUNER:
+            self.set_mode(Mode.TRAIN)
+
+    def _apply_mode(self):
+        """Update all widgets' enabled state, labels, styles, etc."""
+        # Reset panels and basic buttons
+        for p in self._panels:
+            p.setEnabled(True)
+            p.setProperty("inferenceMode", False)
+            p.style().unpolish(p); p.style().polish(p)
+        self._infer.setEnabled(True)
+        self._stop.setEnabled(False)
+
+        if self.mode == Mode.TRAIN:
+            self._run.setText("Run")
+            self._run.setToolTip("Launch training workflow")
+            self._run.setStyleSheet("")
+            self._infer.setText("Inference")
+            self._infer.setToolTip("Switch to inference mode")
+
+        elif self.mode == Mode.INFER:
+            for p in self._panels:
+                p.setEnabled(False)
+                p.setProperty("inferenceMode", True)
+                p.style().unpolish(p); p.style().polish(p)
+            self._run.setText("Infer")
+            self._run.setToolTip("Launch inference workflow")
+            self._run.setStyleSheet("background-color: orange; color:white;")
+            self._infer.setText("Training")
+            self._infer.setToolTip("Switch back to training")
+            self._infer.setStyleSheet("background-color: orange; color:white;")
+
+        elif self.mode == Mode.TUNER:
+            for p in self._panels:
+                p.setEnabled(False)
+            self._run.setText("Tune")
+            self._run.setToolTip("Launch hyper-parameter tuning")
+            self._run.setStyleSheet("background-color: gray; color:white;")
+            self._infer.setEnabled(False)
+            self._stop.setEnabled(True)
+
+        elif self.mode == Mode.DRY_RUN:
+            # panels remain interactive, but run is a no-op
+            self._run.setText("Dry Run")
+            self._run.setToolTip("Execute UI-only dry run")
+            self._run.setStyleSheet("background-color: teal; color:white;")
+            self._infer.setEnabled(False)
+            self._stop.setEnabled(False)

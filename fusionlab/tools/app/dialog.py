@@ -971,7 +971,6 @@ class ModelChoiceDialog(QMessageBox):
         self.addButton("Training model",    QMessageBox.NoRole)
         # cancel = self.addButton(QMessageBox.Cancel)
         self.addButton(QMessageBox.Cancel)
-        # Make it a bit narrower than the error box
         self.setMinimumWidth(360)
 
         # Finally, apply our new tuner-dialog stylesheet:
