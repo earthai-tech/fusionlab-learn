@@ -54,7 +54,7 @@ from PyQt5.QtWidgets import (
 )
 
 from .notifications import show_resource_warning
-from .styles import TAB_STYLES, TUNER_STYLES 
+from .styles import TAB_STYLES, TUNER_STYLES, TUNER_DIALOG_STYLES 
 from .tables import _PandasModel 
 from .utils import parse_search_space  
 
@@ -971,24 +971,12 @@ class ModelChoiceDialog(QMessageBox):
         self.addButton("Training model",    QMessageBox.NoRole)
         # cancel = self.addButton(QMessageBox.Cancel)
         self.addButton(QMessageBox.Cancel)
-        # --- some quick styling so it blends with the app theme ---
-        if theme == "dark":
-            self.setStyleSheet(
-                "QMessageBox {background:#334155;}"
-                "QLabel{color:#e2e8f0;}"
-                "QPushButton{background:#475569;color:white;padding:6px 18px;"
-                "border-radius:4px;}"
-                "QPushButton:hover{background:#64748b;}"
-            )
-        else:  # fusionlab / light
-            self.setStyleSheet(
-                "QMessageBox {background:#ffffff;}"
-                "QLabel{color:#0f172a;}"
-                "QPushButton{background:#2E3191;color:white;padding:6px 18px;"
-                "border-radius:4px;}"
-                "QPushButton:hover{background:#4338ca;}"
-            )
+        # Make it a bit narrower than the error box
+        self.setMinimumWidth(360)
 
+        # Finally, apply our new tuner-dialog stylesheet:
+        self.setStyleSheet(TUNER_DIALOG_STYLES)
+       
     # convenience ------------------------------------------------------
     def choice(self) -> str | None:
         role = self.exec_()

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Callable , Optional 
 import time
+import errno
 from pathlib import Path
 from datetime import datetime
 import traceback, textwrap, os
@@ -50,6 +51,8 @@ from PyQt5.QtWidgets import (
 
 from ...nn import KERAS_DEPS  
 from ...registry import ManifestRegistry
+from .styles import LOG_STYLES 
+
 Callback = KERAS_DEPS.Callback 
 
 
@@ -553,6 +556,7 @@ class ErrorManager(QObject):
     def _popup(self, full_text: str):
         """Runs in the GUI thread – create & exec_() the modal dialog."""
         dlg = QDialog(self._parent)
+        dlg.setObjectName("errorDialog") 
         dlg.setWindowTitle(f"{self._default_ttl}")
         dlg.setModal(True)
         # dlg.setMinimumWidth(self._max_w)
@@ -864,3 +868,61 @@ class ResetController(QObject):
         except Exception:
             pass
         self._cache_dir.mkdir(parents=True, exist_ok=True)
+
+
+class LogManager(QObject):
+    """Central log buffer + widget + on-disk dumping."""
+    # emitted whenever a new line is appended
+    line_appended = pyqtSignal(str)
+
+    def __init__(
+        self,
+        log_widget: QTextEdit,
+        *,
+        cache_limit: int = 10_000,
+        log_dir_name: str = "_log",
+        parent: Optional[QObject] = None
+    ):
+        super().__init__(parent)
+        self._widget     = log_widget
+        self._widget.setObjectName("logWidget")
+        # apply the CSS we defined above
+        self._widget.setStyleSheet(LOG_STYLES)
+
+        self._cache      = []        # type: list[str]
+        self._limit      = cache_limit
+        self._log_dir    = log_dir_name
+
+    def append(self, msg: str) -> None:
+        """Add one line (no timestamp)."""
+        ts   = time.strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        self._cache.append(line)
+        if len(self._cache) > self._limit:
+            self._cache.pop(0)
+
+        # push to QTextEdit
+        self._widget.append(line)
+        self._widget.verticalScrollBar().setValue(
+            self._widget.verticalScrollBar().maximum()
+        )
+        # signal for anyone else listening
+        self.line_appended.emit(line)
+
+    def save_cache(self, run_output_path: str) -> Path:
+        """
+        Dump the cached lines to disk under
+        <run_output_path>/<self._log_dir>/gui_log_<timestamp>.txt
+        Returns the file path.
+        """
+        out_dir = Path(run_output_path) / self._log_dir
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                raise
+
+        fname = out_dir / f"gui_log_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(fname, "w", encoding="utf-8") as fp:
+            fp.write("\n".join(self._cache))
+        return fname

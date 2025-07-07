@@ -11,11 +11,7 @@ import os
 import json
 import hashlib
 import joblib
-# import inspect
 from pathlib import Path
-# from dataclasses import asdict, is_dataclass   
-
-
 from typing import List, Optional, Dict, Any
 from typing import Tuple, Callable  
 
@@ -74,7 +70,6 @@ class DataProcessor:
         self.encoder = None
         self.scaler = None
 
-    # PRIVATE helper: emit progress locally (0-100 %)
     def _tick(self, percent: int) -> None:
         """
         Emit <percent> through the SubsConfig.progress_callback
@@ -104,16 +99,9 @@ class DataProcessor:
                 except Exception as e:
                     raise IOError(f"Error loading data from '{data_path}': {e}")
             else:
-                self.log("  Local file not found. Attempting to fetch sample data...")
-                try:
-                    data_bunch = fetch_zhongshan_data()
-                    self.raw_df = data_bunch.frame
-                    self.log(f"  Successfully fetched sample data. Shape: {self.raw_df.shape}")
-                except Exception as e:
-                    raise FileNotFoundError(
-                        "Data could not be loaded from local paths or fetched."
-                        f" Error: {e}"
-                    )
+                raise FileNotFoundError(
+                    "Data could not be loaded from local paths or fetched."
+                )
         if self.config.save_intermediate:
             ensure_directory_exists(
                 self.config.run_output_path)
@@ -125,7 +113,9 @@ class DataProcessor:
             _update_manifest(
                 self.config.registry_path,               # NEW
                 "artifacts",
-                {"raw_csv": os.path.basename(save_path)})   # NEW
+                {"raw_csv": os.path.basename(save_path)}, 
+                manifest_kind= self.config.run_type
+                )   # NEW
         
         if stop_check and stop_check():
             raise InterruptedError("Data loading aborted.")
@@ -201,8 +191,7 @@ class DataProcessor:
             encoded_data = self.encoder.fit_transform(
                 df_cleaned[self.config.categorical_cols]
             )
-            # encoded_cols = self.encoder.get_feature_names_out(self.config.categorical_cols)
-            
+       
             self.static_features_encoded = self.encoder.get_feature_names_out(
                 self.config.categorical_cols).tolist()
             encoded_df = pd.DataFrame(
@@ -247,7 +236,6 @@ class DataProcessor:
         cols_to_scale = [self.config.subsidence_col, self.config.gwl_col] + \
                         (self.config.future_features or [])
                       
-        # persist the resolved column choices to the manifest
         _update_manifest(
             run_dir=self.config.registry_path,
             section="configuration",
@@ -259,6 +247,7 @@ class DataProcessor:
                 "dynamic_features":  self.config.dynamic_features,
                 "future_features":   self.config.future_features,
             },
+            manifest_kind= self.config.run_type
         )
         
         if stop_check and stop_check():
@@ -304,7 +293,9 @@ class DataProcessor:
                 artefacts["main_scaler"] = sc_name
             
             _update_manifest(
-                self.config.registry_path, "artifacts", artefacts)    
+                self.config.registry_path, "artifacts", artefacts, 
+                manifest_kind= self.config.run_type
+                )    
             
         
         if stop_check and stop_check():
@@ -325,7 +316,6 @@ class SequenceGenerator:
     """
     Handles sequence generation and dataset creation (Steps 5-6).
     """
-    # ZOOM = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo) * frac))
     def __init__(
         self, config: SubsConfig, 
         log_callback: Optional[callable] = None, 
@@ -340,6 +330,8 @@ class SequenceGenerator:
         self.coord_scaler = None
         self.train_df = None
         self.test_df = None
+        
+        self._original_raw  =None # for hashing
 
     def _tick(self, percent: int) -> None:
         """
@@ -354,6 +346,7 @@ class SequenceGenerator:
         self, processed_df: pd.DataFrame, 
         static_features_encoded: List[str], 
         stop_check: Callable[[], bool] = None,
+        processor: Optional [DataProcessor] =None, 
         ) -> Tuple[Any, Any]:
         """
         Executes the full sequence and dataset creation pipeline.
@@ -361,6 +354,9 @@ class SequenceGenerator:
         Returns:
             A tuple of (train_dataset, validation_dataset).
         """
+        if processor is not None: 
+            self._original_raw = getattr (processor, 'raw_df', None)
+            
         self._split_data(processed_df, stop_check = stop_check)
         self._generate_sequences(
             self.train_df, static_features_encoded, 
@@ -477,19 +473,6 @@ class SequenceGenerator:
             return hook
         
         progress_hook = make_throttled_hook(lo, hi, step_pct=1)   # 1 % buckets
-        # def make_throttled_hook(lo: int, hi: int):
-        #     last_sent = {"pct": -1}         # mutable capture
-    
-        #     def hook(frac: float):
-        #         pct = int(lo + (hi - lo) * frac)  # same mapping as before
-        #         if pct != last_sent["pct"]:       # emit only on change
-        #             self._tick(pct)
-        #             last_sent["pct"] = pct
-    
-        #     return hook
-    
-        # hook = make_throttled_hook(lo, hi) 
-        
         inputs, targets, scaler = prepare_pinn_data_sequences(
             df=train_master_df,
             time_col='time_numeric',
@@ -532,7 +515,8 @@ class SequenceGenerator:
 
             _update_manifest(
                 self.config.registry_path, "artifacts", 
-                {"coord_scaler": coord_sc_name}
+                {"coord_scaler": coord_sc_name}, 
+                manifest_kind=self.config.run_type 
             )
         if stop_check and stop_check():
             raise InterruptedError("Sequence generation aborted.")
@@ -590,24 +574,71 @@ class SequenceGenerator:
             
         self._tick(100)
         return train_dataset, val_dataset
-
-    # return a dict with every value that influences run() 
-    def _signature_dict(self, processed_df_hash, static_feats):
+    
+    def _signature_dict(
+        self,
+        processed_df: pd.DataFrame,
+        raw_df: pd.DataFrame | None,
+        static_feats: list[str],
+    ) -> dict:
+        """Everything that might change the output of `run(...)` goes here."""
         cfg = self.config
+
+        def df_hash(obj) -> str:
+            """Hash a DataFrame *or* a filename/string fallback."""
+            # 1) DataFrame → hash its contents
+            if isinstance(obj, pd.DataFrame):
+                arr = pd.util.hash_pandas_object(obj, index=True).values
+                return hashlib.sha1(arr.tobytes()).hexdigest()
+
+            # 2) Path or filename → hash file bytes if exists,
+            # else hash the string
+            if isinstance(obj, (str, Path)):
+                p = Path(obj)
+                if p.is_file():
+                    data = p.read_bytes()
+                else:
+                    data = str(obj).encode("utf-8")
+                return hashlib.sha1(data).hexdigest()
+
+            # 3) Anything else → string‐ify & hash
+            data = str(obj).encode("utf-8")
+            return hashlib.sha1(data).hexdigest()
+
         sig = {
-            "df_hash":          processed_df_hash,
+            # full‐content hash on the *processed* sequences DataFrame:
+            "processed_hash": df_hash(processed_df),
+            # if we had access to the raw input or edited df, hash it too:
+            "raw_hash": df_hash(raw_df) if raw_df is not None else None,
+            # record whether the user actually edited the CSV in the GUI:
+            "edited_flag": bool(
+                raw_df is not None and not raw_df.equals(
+                    self._original_raw)),
+
+            # what parameters control sequence‐cutting:
             "time_steps":       cfg.time_steps,
             "forecast_horizon": cfg.forecast_horizon_years,
             "dynamic_features": tuple(cfg.dynamic_features),
             "static_features":  tuple(static_feats),
             "future_features":  tuple(cfg.future_features),
+
+            # generic experiment identifiers:
             "mode":             cfg.mode,
             "seed":             cfg.seed,
-            "train_end_year"         :cfg.train_end_year,
-            "forecast_start_year"    : cfg.forecast_start_year,
-            "quantiles": cfg.quantiles
+            "train_end_year":   cfg.train_end_year,
+            "forecast_start_year": cfg.forecast_start_year,
+            "quantiles":        tuple(cfg.quantiles),
+
+            # run context
+            "run_type":         cfg.run_type,
+            "city_name":        cfg.city_name,
+            "model_name":       cfg.model_name,
+
+            # even data_dir matters if you load from absolute paths:
+            "data_dir":         cfg.data_dir,
+            "data_filename":    cfg.data_filename,
         }
-        # user parameters you care about
+
         return sig
 
     @staticmethod
@@ -620,6 +651,7 @@ class SequenceGenerator:
         self,
         processed_df: pd.DataFrame,
         static_features_encoded: list[str],
+        raw_df: pd.DataFrame | None = None,
         cache_dir: Optional [str | Path]=None,
         # train_ds, val_ds,
     ) -> None:
@@ -629,7 +661,8 @@ class SequenceGenerator:
         # cache_dir.mkdir(parents=True, exist_ok=True)
 
         sig_dict = self._signature_dict(
-            processed_df_hash = self._stable_hash(processed_df.shape),
+            processed_df= self._stable_hash(processed_df.shape),
+            raw_df=raw_df,
             static_feats      = static_features_encoded,
         )
         cache_key = self._stable_hash(sig_dict)
@@ -651,6 +684,7 @@ class SequenceGenerator:
         cfg,
         processed_df: pd.DataFrame,
         static_features_encoded: list[str],
+        raw_df: pd.DataFrame | None = None,
         cache_dir: Optional [str | Path]=None,
         log_fn=print,
     ):
@@ -663,8 +697,9 @@ class SequenceGenerator:
     
         probe_sig = cls._stable_hash(
             cls(cfg)._signature_dict(
-                processed_df_hash = cls._stable_hash(processed_df.shape),
+                processed_df= cls._stable_hash(processed_df.shape),
                 static_feats      = static_features_encoded,
+                raw_df=raw_df,
             )
         )
 

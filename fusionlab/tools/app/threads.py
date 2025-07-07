@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import json 
 from typing import Optional, Tuple, Dict  
-from pathlib import Path 
 import pandas as pd  
 
 from PyQt5.QtCore    import ( 
@@ -483,20 +482,6 @@ class TunerThread(QThread):
         self.pm.finish_step("Pre-processing")
         return proc
 
-    # def _run_sequencing(self, proc):
-    #     self.status_updated.emit("🌀 Generating sequences…")
-    #     self.pm.start_step("Sequencing")
-    #     self.cfg.progress_callback = self._pct
-
-    #     seqg = SequenceGenerator(self.cfg, self.log_updated.emit)
-    #     train, val = seqg.run(
-    #         proc.processed_df,
-    #         proc.static_features_encoded,
-    #         stop_check=self.isInterruptionRequested,
-    #     )
-    #     self.pm.finish_step("Sequencing")
-    #     return seqg, train, val
-
     def _run_tuning(self, proc, seqg, train_ds, val_ds):
         self.status_updated.emit("🔍 Tuning…")
 
@@ -545,6 +530,7 @@ class TunerThread(QThread):
         seqg, train_ds, val_ds = SequenceGenerator.from_cache(
             cfg      = self.cfg,
             processed_df = proc.processed_df,
+            raw_df= proc.raw_df, 
             static_features_encoded = proc.static_features_encoded,
             log_fn   = self.log_updated.emit,
         )
@@ -559,6 +545,7 @@ class TunerThread(QThread):
             seqg.to_cache(
                 proc.processed_df,
                 proc.static_features_encoded,
+                raw_df= proc.raw_df, 
                 # train_ds, val_ds,
             )
         else:

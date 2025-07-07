@@ -41,7 +41,8 @@ from .components import (
     ErrorManager,
     ExitController, 
     ModeSwitch, 
-    ResetController
+    ResetController, 
+    LogManager 
 )
 
 from .config import SubsConfig
@@ -53,7 +54,8 @@ from .styles import (
     FLAB_STYLE_SHEET,
     INFERENCE_OFF, 
     DARK_THEME_STYLESHEET,
-    LOG_STYLES
+    LOG_STYLES, 
+    ERROR_STYLES
     )
 from .threads import TrainingThread, InferenceThread, TunerThread 
 from .view import VIS_SIGNALS
@@ -93,7 +95,7 @@ class MiniForecaster(QMainWindow):
 
     def __init__(self, theme: str = 'light'):
         super().__init__()
-        self._log_cache: list[str] = []
+ 
         self.setWindowTitle("Fusionlab-learn – PINN Mini GUI")
         self.setFixedSize(980, 660)
         self.file_path: Path | None = None
@@ -154,7 +156,7 @@ class MiniForecaster(QMainWindow):
             quit_button  = self.quit_btn,      
             parent   = self,
             worker_ctl   = self.worker_ctl,    
-            pre_quit_hook= lambda: self._log("✔ clean-up done"),
+            pre_quit_hook= lambda: self._append_log("✔ clean-up done"),
             log_fn       = self._log,
         )
         
@@ -351,9 +353,12 @@ class MiniForecaster(QMainWindow):
         self.run_btn.clicked.connect(self._on_run)
         row.addWidget(self.run_btn)
         
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        row.addWidget(self.log, 1)       # stretch
+        self.log_widget = QTextEdit()
+        self.log_widget.setReadOnly(True)
+        self.log_mgr = LogManager(
+            self.log_widget, parent= self) 
+        self._append_log = self.log_mgr.append
+        row.addWidget(self.log_widget, 1)       # stretch
         bottom.addLayout(row)            # ← add FIRST
         
         progress_layout = QHBoxLayout()
@@ -708,17 +713,17 @@ class MiniForecaster(QMainWindow):
     def _title(self, txt): 
         l = QLabel(txt); l.setObjectName("cardTitle"); return l
         
-    def _log(self, msg): 
-        """
-        Print one line in the QTextEdit **and** keep a copy in memory
-        so we can dump everything to disk when the worker stops.
-        """
-        ts = time.strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}"
-        self._log_cache.append(line)                         # (2) cache
-        self.log.append(line)
-        self.log.verticalScrollBar().setValue(
-            self.log.verticalScrollBar().maximum()) 
+    # def _log(self, msg): 
+    #     """
+    #     Print one line in the QTextEdit **and** keep a copy in memory
+    #     so we can dump everything to disk when the worker stops.
+    #     """
+    #     ts = time.strftime("%H:%M:%S")
+    #     line = f"[{ts}] {msg}"
+    #     self._log_cache.append(line)                         # (2) cache
+    #     self.log.append(line)
+    #     self.log.verticalScrollBar().setValue(
+    #         self.log.verticalScrollBar().maximum()) 
         
     def _choose_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -731,19 +736,19 @@ class MiniForecaster(QMainWindow):
             dlg = CsvEditDialog(str(path), self)
             if dlg.exec_() == QDialog.Accepted:
                 self.edited_df = dlg.edited_dataframe()
-                self._log(
+                self._append_log(
                     f"CSV preview accepted – {len(self.edited_df)} rows retained."
                 )
                 self.file_path = Path(path) # Set file_path only on success
                 self.file_label.setStyleSheet(f"color:{SECONDARY};")
                 self.file_label.setText(f"Selected: {self.file_path.name}")
-                self._log(f"CSV chosen → {self.file_path}")
+                self._append_log(f"CSV chosen → {self.file_path}")
                 self.tune_btn.setEnabled(True)
                 self.tune_btn.setStyleSheet(f"background:{PRIMARY};")
 
             else:
                 self.edited_df = None
-                self._log("CSV preview canceled – keeping original file.")
+                self._append_log("CSV preview canceled – keeping original file.")
 
         except Exception as e:
             # If CsvEditDialog fails to load the file, catch the error
@@ -906,54 +911,11 @@ class MiniForecaster(QMainWindow):
         for panel in panels:
             panel.setEnabled(not disable)  # Disable the panel's interaction
             
-            # Change color to gray to indicate it's disabled
             if disable:
-                panel.setStyleSheet("background-color: #cccccc;")  # Light gray background
+                panel.setStyleSheet("background-color: #cccccc;")  
             else:
                 panel.setStyleSheet("")  # Reset to normal style
                 
-    # def _on_reset(self):
-    #     """Resets the user interface to its default state.
-
-    #     This method is the slot connected to the `Reset` button's
-    #     `clicked` signal. It provides a convenient way for the user
-    #     to clear all current inputs and results and start a new
-    #     configuration from scratch.
-
-    #     Specifically, it performs the following actions:
-    #     - Clears the main log panel.
-    #     - Resets the progress bar to zero.
-    #     - Clears the file path selection and updates the label.
-    #     - Resets all configuration widgets in the different panels
-    #       (e.g., `Model Configuration`, `Training Parameters`) to
-    #       their initial default values.
-    #     - Clears the coverage score label in the footer.
-    #     """
-    #     # reset feature inputs
-    #     self.dyn_feat.setText("auto")
-    #     self.stat_feat.setText("auto")
-    #     self.fut_feat.setText("rainfall_mm")
-    
-    #     # clear log + status + progress
-    #     self.log.clear()
-    #     self.file_label.setText("No file selected" if self.file_path is None
-    #                             else f"Selected: {self.file_path.name}")
-    #     self.progress_bar.setValue(0)
-    #     self.city_input.clear()
-    #     self.coverage_lbl.clear() 
-        
-    #     # If the GUI is in inference mode when reset is clicked,
-    #     # toggle it back to training mode to ensure a clean state.
-    #     if self._inference_mode:
-    #         self._toggle_inference_mode()
-        
-    #     self.run_btn.setStyleSheet("")
-    #     self.stop_btn.setStyleSheet("") 
-    #     self.tune_btn.setEnabled(False)
-    #     self.tune_btn.setStyleSheet("")
-
-    #     self._log("ℹ Interface reset.")
-        
     def _stop_worker(self):
         """
         Prompts the user for confirmation and then gracefully stops
@@ -978,7 +940,7 @@ class MiniForecaster(QMainWindow):
 
         # Only proceed if the user confirms.
         if reply == QMessageBox.Yes:
-            self._log("⏹️ Workflow stop requested by user.")
+            self._append_log("⏹️ Workflow stop requested by user.")
             self.status_updated.emit("⏹️ Stopping workflow…")
             
             # Request the interruption. The thread will stop when it
@@ -1020,7 +982,7 @@ class MiniForecaster(QMainWindow):
     
         # First, ensure a file has been loaded and prepared.
         if self.file_path is None:
-            self._log("⚠ Please select a CSV file first.")
+            self._append_log("⚠ Please select a CSV file first.")
             QMessageBox.warning(
                 self, "No Data", "Please select a CSV data file"
                 " before running a workflow.")
@@ -1033,7 +995,7 @@ class MiniForecaster(QMainWindow):
         if self._inference_mode:
             chosen_manifest = self._pick_manifest_for_inference()
             if chosen_manifest is None:        # user cancelled
-                self._log("ℹ Inference cancelled by user.")
+                self._append_log("ℹ Inference cancelled by user.")
                 self._toggle_inference_mode()
                 return
             self._manifest_path = chosen_manifest
@@ -1066,7 +1028,7 @@ class MiniForecaster(QMainWindow):
         """
         self.progress_bar.setValue(0)
         if self.file_path is None:
-            self._log("⚠ No CSV selected.")
+            self._append_log("⚠ No CSV selected.")
             return
      
         self.run_btn.setEnabled(False)
@@ -1074,7 +1036,7 @@ class MiniForecaster(QMainWindow):
         # disabled-looking style.
         self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
         
-        self._log("▶ launch TRAINING workflow …")
+        self._append_log("▶ launch TRAINING workflow …")
         QApplication.processEvents()
         
         def _parse(txt):
@@ -1088,7 +1050,7 @@ class MiniForecaster(QMainWindow):
         
         save_fmt = self.save_format_combo.currentText().lower()
         if save_fmt != "weights":
-            self._log(f"⚠ You selected save_format='{save_fmt}'. "
+            self._append_log(f"⚠ You selected save_format='{save_fmt}'. "
                       "GUI mode is battle-tested only with 'weights'.")
 
         cfg = SubsConfig(
@@ -1184,7 +1146,7 @@ class MiniForecaster(QMainWindow):
             )
             return
 
-        self._log("▶ Launching INFERENCE workflow…")
+        self._append_log("▶ Launching INFERENCE workflow…")
         self.run_btn.setEnabled(False)
         self.run_btn.setText("Inferring…") 
         self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
@@ -1285,7 +1247,7 @@ class MiniForecaster(QMainWindow):
         # tune_cfg.progress_callback = self.progress_updated.emit
     
         # ---------- 3. spawn the thread --------------------------------
-        self._log("▶ launch TUNER workflow …")
+        self._append_log("▶ launch TUNER workflow …")
         self.run_btn.setEnabled(False)
         self.run_btn.setText("Running…") 
         self.run_btn.setStyleSheet(f"background-color: {INFERENCE_OFF};")
@@ -1332,20 +1294,18 @@ class MiniForecaster(QMainWindow):
                 hasattr(self.active_worker, 'cfg') 
                 and self.active_worker is not None
             ):
-        
-            # decide where to write
-            out_dir = getattr(self.active_worker.cfg, "run_output_path", ".")
-            ts      = time.strftime("%Y%m%d_%H%M%S")
-            fname   = os.path.join(out_dir, f"gui_log_{ts}.txt")
+            run_out = self.active_worker.cfg.run_output_path
+            
+            # # decide where to write
+            # out_dir = getattr(self.active_worker.cfg, "run_output_path", ".")
+            # ts      = time.strftime("%Y%m%d_%H%M%S")
+            # fname   = os.path.join(out_dir, '_log',  f"gui_log_{ts}.txt")
     
             try:                                                 # limit size
-                MAX_LINES = 10_000          # ≈ a few MB; change at will
-                lines     = self._log_cache[-MAX_LINES:]
-                with open(fname, "w", encoding="utf-8") as fp:
-                    fp.write("\n".join(lines))
-                self._log(f"📝 Log saved to: {fname}")
+                log_fp = self.log_mgr.save_cache(run_out)
+                self._append_log(f"📝 Log saved to: {log_fp}")
             except Exception as err:
-                self._log(f"⚠ Could not write log file ({err})")
+                self._append_log(f"⚠ Could not write log file ({err})")
   
             # Clean up the active worker reference
             self.active_worker = None
@@ -1386,7 +1346,7 @@ class MiniForecaster(QMainWindow):
         self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
         self.run_btn.setEnabled(True)
         self.run_btn.setStyleSheet("")
-        self._log("ℹ Interface fully reset.")
+        self._append_log("ℹ Interface fully reset.")
 
 
 def hline() -> QFrame:
@@ -1480,9 +1440,17 @@ def launch_cli(theme: str = 'fusionlab') -> None:
                 border: 2px solid {PRIMARY};
             }}
         """
-        final_stylesheet = ( 
-            selected_stylesheet + inference_border_style + LOG_STYLES 
+        final_stylesheet = (
+            selected_stylesheet
+          + ERROR_STYLES     
+          + inference_border_style
+          + LOG_STYLES
         )
+ 
+
+        # final_stylesheet = ( 
+        #     selected_stylesheet + inference_border_style + LOG_STYLES 
+        # )
         app.setStyleSheet(final_stylesheet)
     
     # --- Instantiate and Run the Application ---

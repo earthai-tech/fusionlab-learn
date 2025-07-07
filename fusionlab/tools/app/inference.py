@@ -155,9 +155,13 @@ class PredictionPipeline:
             
             self.model_path = _get_path("checkpoint", "model.keras")
             
-        self.encoder_path = _get_path("encoder", "ohe_encoder.joblib")
-        self.scaler_path = _get_path("main_scaler", "main_scaler.joblib")
-        self.coord_scaler_path = _get_path("coord_scaler", "coord_scaler.joblib")
+        self.encoder_path = _get_path(
+            "encoder", f"{self.config.model_name}.ohe_encoder.joblib")
+        self.scaler_path = _get_path(
+            "main_scaler", f"{self.config.model_name}.main_scaler.joblib")
+        self.coord_scaler_path = _get_path(
+            "coord_scaler", f"{self.config.model_name}.coord_scaler.joblib"
+            )
 
     def _load_artifacts(self) -> None:
         """

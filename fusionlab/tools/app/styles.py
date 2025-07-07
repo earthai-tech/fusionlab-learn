@@ -168,7 +168,6 @@ QMessageBox QPushButton:pressed {{
     color: white;
 }}
 
-
 """
 #
 
@@ -319,8 +318,19 @@ QTabBar::tab:hover    {{
 }}
 """
 
+LOG_STYLES = """
+/* apply this to your QTextEdit via setObjectName("logWidget") */
+QTextEdit#logWidget {
+    background-color: #1e1e1e;
+    color:           #e2e8f0;
+    font-family:     Consolas, "Courier New", monospace;
+    font-size:       12px;
+    border:          1px solid rgba(0,0,0,0.25);
+    padding:         6px;
+}
+"""
 
-LOG_STYLES = f"""
+_LOG_STYLES = f"""
 /* ─────────────────────  Frame & shadow ─────────────────────────────── */
 QDockWidget#logDock {{
     border        : 1px solid rgba(0,0,0,0.25);   /* light outline      */
@@ -369,5 +379,78 @@ QPushButton {{
 
 QPushButton:checked {{
     background : {SECONDARY};
+}}
+"""
+
+ERROR_STYLES=f"""
+/* --- Error Dialog Styling ----- */
+QDialog#errorDialog {{
+    background: {BG_LIGHT};       /* same as main window */
+    border: 2px solid {PRIMARY};  /* primary brand color */
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 600px;             /* enforce a reasonable width */
+    max-width: 800px;
+}}
+
+QDialog#errorDialog QLabel {{
+    color: {FG_DARK};
+    font-size: 14px;
+}}
+
+QDialog#errorDialog QTextEdit {{
+    background: #f6f6f6;
+    border: 1px solid #cccccc;
+    font-family: Consolas, monospace;
+}}
+
+QDialog#errorDialog QPushButton {{
+    background: {PRIMARY};
+    color: white;
+    border-radius: 4px;
+    padding: 6px 16px;
+    min-width: 80px;
+}}
+
+QDialog#errorDialog QPushButton:hover:enabled {{
+    background: {SECONDARY};
+}}
+
+QDialog#errorDialog QPushButton:disabled {{
+    background: {INFERENCE_OFF};
+    color: #666;
+}}
+
+"""
+
+
+TUNER_DIALOG_STYLES = f"""
+QMessageBox {{
+    background-color: {BG_LIGHT};        /* light backdrop */
+    border-radius: 8px;
+    padding: 12px;
+}}
+QMessageBox QLabel {{
+    color: {FG_DARK};
+    font-size: 13px;                     /* slightly smaller text */
+    qproperty-alignment: AlignLeft;
+}}
+QMessageBox QLabel#qt_msgbox_label {{
+    font-weight: 600;
+    font-size: 14px;                     /* title text a touch bigger */
+}}
+QMessageBox QPushButton {{
+    background-color: {PRIMARY};
+    color: white;
+    border-radius: 4px;
+    padding: 4px 12px;
+    min-width: 70px;
+}}
+QMessageBox QPushButton:hover:enabled {{
+    background-color: {SECONDARY};
+}}
+QMessageBox QPushButton:disabled {{
+    background-color: {INFERENCE_OFF};
+    color: #888;
 }}
 """

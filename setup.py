@@ -39,6 +39,7 @@ _required_dependencies = [
     'click>=8.1',
     'platformdirs>=2.6',
     'PyQt5>=5.15,<6.0',
+    "lz4", 
 ]
 
 # Optional dependencies
