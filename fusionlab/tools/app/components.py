@@ -35,6 +35,7 @@ from PyQt5.QtCore import (
     QEvent,
     pyqtSlot, 
 )
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import (
     QDialog, 
     QTextEdit,
@@ -49,6 +50,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QWidget, 
     QFrame,
+    QCheckBox
 )
 
 from ...nn import KERAS_DEPS  
@@ -212,18 +214,17 @@ class ProgressManager(QObject):
         if self._pct_lbl is not None:               
             self._sig_set_pct.emit("100 %")
 
-    def reset(self) -> None:
+    def reset(self, status ="Idle") -> None:
         """Return the bar to an idle state (0 % and blank label)."""
         self._step_start_t = None
         self._context_prefix = ""
-        self._sig_set_fmt.emit("Idle")
+        self._sig_set_fmt.emit(f"{status}")
         self._sig_set_val.emit(0)
         self._sig_set_label.emit("")
         if self._pct_lbl is not None:               
-            self._sig_set_pct.emit("Idle")
+            self._sig_set_pct.emit(f"{status}")
 
-    #
-    # Helpers 
+ 
     @staticmethod
     def _format_time(seconds: float) -> str:
         """Return *HH:MM:SS* (or *MM:SS* if < 1 h)."""
@@ -903,18 +904,26 @@ class LogManager(QObject):
         self._log_dir    = log_dir_name
 
     def append(self, msg: str) -> None:
-        """Add one line (no timestamp)."""
+        """Add one line (no timestamp), keep scroll at bottom."""
         ts   = time.strftime("%H:%M:%S")
         line = f"[{ts}] {msg}"
         self._cache.append(line)
         if len(self._cache) > self._limit:
             self._cache.pop(0)
-
+    
         # push to QTextEdit
         self._widget.append(line)
-        self._widget.verticalScrollBar().setValue(
-            self._widget.verticalScrollBar().maximum()
-        )
+    
+        # scroll to bottom via scrollbar
+        sb = self._widget.verticalScrollBar()
+        sb.setValue(sb.maximum())
+    
+        # *also* ensure the cursor is at the end and visible
+        c = self._widget.textCursor()
+        c.movePosition(QTextCursor.End)
+        self._widget.setTextCursor(c)
+        self._widget.ensureCursorVisible()
+    
         # signal for anyone else listening
         self.line_appended.emit(line)
 
@@ -1146,7 +1155,7 @@ class ManifestManager(QObject):
         If both run and tuner manifests exist, show choice dialog.
         Returns the chosen manifest path or None if cancelled.
         """
-        
+        self.refresh() 
         if not (self._run_manifest or self._tuner_manifest):
             return None
         if self._run_manifest and not self._tuner_manifest:
@@ -1173,4 +1182,32 @@ class ManifestManager(QObject):
                 "No Model Available",
                 "No trained or tuned model found. Please run training first."
             )
-        # otherwise ModeManager handles toggling
+ 
+class DryRunController(QObject):
+    """
+    Wire a QCheckBox into ModeManager to switch in and out of DRY_RUN.
+    """
+    def __init__(
+        self,
+        checkbox: QCheckBox,
+        mode_mgr: ModeManager,
+        *,
+        parent: QObject | None = None,
+    ):
+        super().__init__(parent)
+        self._cb      = checkbox
+        self._mode_mgr = mode_mgr
+
+        # when user toggles the box, enter or leave DRY_RUN
+        self._cb.stateChanged.connect(self._on_state_change)
+
+        # initial state is unchecked → TRAIN
+        self._cb.setChecked(False)
+
+    def _on_state_change(self, state: int):
+        if state == Qt.Checked:
+            self._mode_mgr.set_mode(Mode.DRY_RUN)
+        else:
+            # if we're in DRY_RUN, go back to TRAIN
+            if self._mode_mgr.mode == Mode.DRY_RUN:
+                self._mode_mgr.set_mode(Mode.TRAIN)

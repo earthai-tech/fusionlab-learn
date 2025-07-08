@@ -10,7 +10,7 @@ import pandas as pd
 from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QIcon, QPixmap,  QFont
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, 
     QMainWindow, 
@@ -31,7 +31,6 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog, 
     QMessageBox,
-    QToolTip,
     QSizePolicy
 )
 from ...registry import ManifestRegistry, _locate_manifest
@@ -44,7 +43,8 @@ from .components import (
     LogManager , 
     ModeManager, 
     Mode, 
-    ManifestManager
+    ManifestManager, 
+    DryRunController
 )
 
 from .config import SubsConfig
@@ -64,6 +64,8 @@ from .threads import (
     InferenceThread, 
     TunerThread 
 )
+from .util_ex import auto_set_ui_fonts 
+from .utils import log_tuning_params
 from .view import VIS_SIGNALS
   
 class MiniForecaster(QMainWindow):
@@ -164,15 +166,14 @@ class MiniForecaster(QMainWindow):
             log_fn       = self._log,
         )
         
-        # optional: reset progress-bar when an error dialog closes
+        # reset progress-bar when an error dialog closes
         self.error_mgr.handled.connect(self.progress_manager.reset)
 
         # instantiate the ResetController
         # we let it auto‐discover the registry cache dir
         self.reset_ctl = ResetController(
-            reset_button = self.reset_btn,
-            cache_dir    = None,          
-            mode         = "clean",       # or "archive"
+            reset_button = self.reset_btn,     
+            mode         = "clean",     
             primary_color   = PRIMARY,
             disabled_color  = INFERENCE_OFF,
             parent =self, 
@@ -192,6 +193,11 @@ class MiniForecaster(QMainWindow):
             mode_badge=self.mode_badge,
             parent       = self,
         )
+        self.dryrun_ctl = DryRunController(
+            checkbox = self.dryrun_chk,
+            mode_mgr = self.mode_mgr,
+            parent   = self,
+        )
         self.manifest_mgr = ManifestManager(
             infer_button=self.inf_btn, parent=self
             )
@@ -205,7 +211,6 @@ class MiniForecaster(QMainWindow):
         
         # finally, when ResetController has done its cleanup:
         self.reset_ctl.reset_done.connect(self._on_full_reset)
-        
         # initially, no run yet → enable reset so user can clear stale state
         self.reset_ctl.enable()
 
@@ -334,14 +339,24 @@ class MiniForecaster(QMainWindow):
         city_row = QHBoxLayout()
         city_label = QLabel("City / Dataset:")
         city_row.addWidget(city_label)
+        
         self.city_input = QLineEdit()
         self.city_input.setPlaceholderText("e.g. Agnibilekrou")
         city_row.addWidget(self.city_input, 1)
+        
+           # ── Dry-Run checkbox
+        self.dryrun_chk = QCheckBox("Dry Run")
+        self.dryrun_chk.setToolTip(
+            "When checked, the GUI will exercise all of the UI logic\n"
+            "without actually training or inferring any model."
+        )
+        city_row.addWidget(self.dryrun_chk)
+
         badge = QLabel()
         badge.setObjectName("modeBadge")
         badge.setAlignment(Qt.AlignCenter)
         # place badge at end, small fixed size
-        badge.setFixedWidth(80)
+        badge.setMinimumWidth(80)
         city_row.addWidget(badge)
         self.mode_badge = badge
         L.addLayout(city_row)
@@ -370,12 +385,22 @@ class MiniForecaster(QMainWindow):
         row = QHBoxLayout()
         
         self.run_btn = QPushButton("Run")
-        self.run_btn.setFixedWidth(80)
+        self.run_btn.setMinimumWidth(80)
         self.run_btn.clicked.connect(self._on_run)
         row.addWidget(self.run_btn)
         
         self.log_widget = QTextEdit()
         self.log_widget.setReadOnly(True)
+        
+        # 1) Tell Qt this widget is happy to expand both horizontally & vertically
+        self.log_widget.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        
+        # 2) Give it a minimum height so  always see at least e.g. 120px of log
+        self.log_widget.setMinimumHeight(170)
+
         self.log_mgr = LogManager(
             self.log_widget, parent= self) 
         self._log = self.log_mgr.append
@@ -398,7 +423,7 @@ class MiniForecaster(QMainWindow):
         
         # the bar
         self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(18)
+        self.progress_bar.setMinimumHeight(18)
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter) 
         # let it expand to fill leftover space:
@@ -852,42 +877,46 @@ class MiniForecaster(QMainWindow):
             self.stop_btn.setToolTip("Nothing to stop – no workflow running")
         
         self.progress_manager.reset()
-
+        
     def _on_run(self):
         """
         Dispatched by the Run/Tune/Infer button,
         behavior depends on the current ModeManager.mode.
         """
-        # sanity: must have data
+    
+        # 0) If we’re in dry-run, immediately return
+        if self.mode_mgr.mode == Mode.DRY_RUN:
+            self._log("⚙️ Dry run: no real execution performed.")
+            return
+    
+        # 1) Sanity: make sure we actually have data
         if not self.file_path:
             self._log("⚠ Please select a CSV file first.")
             QMessageBox.warning(self, "No Data", "Select a CSV before running.")
             return
     
-        # disable reset while working
+        # 2) Disable Reset, clear any old coverage
         self.reset_ctl.disable()
         self.coverage_lbl.clear()
     
+        # 3) Now dispatch based on mode
         mode = self.mode_mgr.mode
         if mode == Mode.INFER:
-            # pick which manifest to use
-            chosen = self.manifest_mgr.pick_manifest(self.theme)
+            chosen = self.manifest_mgr.pick_manifest()
             if not chosen:
                 self._log("ℹ Inference cancelled by user.")
                 self.mode_mgr.set_mode(Mode.TRAIN)
+                self.reset_ctl.enable()
                 return
             self._manifest_path = chosen
             self._run_inference()
     
         elif mode == Mode.TUNER:
-            # go straight into the tuner dialog
             self._open_tuner_dialog()
     
-        else:  # Mode.TRAIN or Mode.DRY_RUN
-            if mode == Mode.DRY_RUN:
-                self._log("⚙️ Dry run: skipping actual execution.")
-                return
+        else:  # Mode.TRAIN
             self._run_training()
+        
 
     def _run_training(self):
         """Initiates the end-to-end forecasting workflow.
@@ -975,11 +1004,11 @@ class MiniForecaster(QMainWindow):
             mode                   = self.model_type_combo.currentText(),  
             
             save_format       = save_fmt,
+            log_callback = self.log_updated.emit, 
             verbose       = 1,
     
         )
         # hand the Qt emitters to the config
-        cfg.log               = self.log_updated.emit
         cfg.save_format       = "weights"      
         cfg.bypass_loading    = True       
         cfg.dynamic_features = dyn_list
@@ -1127,10 +1156,11 @@ class MiniForecaster(QMainWindow):
             log_callback            = self.log_updated.emit,
             **fixed_up
         )
-        tune_cfg.log = self.log_updated.emit
     
         # 4) Spawn the tuner thread
         self._log("▶ launch HYPERPARAMETER TUNING…")
+        log_tuning_params(cfg_dict, log_fn=self._log)
+        
         self.active_worker = TunerThread(
             cfg             = tune_cfg,
             search_space    = cfg_dict["search_space"],
@@ -1139,18 +1169,20 @@ class MiniForecaster(QMainWindow):
             edited_df       = getattr(self, "edited_df", None),
             parent          = self,
         )
-        w = self.active_worker
-        w.log_updated.connect(self.log_updated.emit)
-        w.status_updated.connect(self.status_updated.emit)
-        w.tuning_finished.connect(self._worker_done)
-        w.error_occurred.connect(self.error_mgr.report)
+        # w = self.active_worker
+        self.active_worker.log_updated.connect(self.log_updated.emit)
+        self.active_worker.status_updated.connect(self.status_updated.emit)
+        self.active_worker.tuning_finished.connect(self._worker_done)
+        self.active_worker.error_occurred.connect(self.error_mgr.report)
     
-        self.worker_ctl.bind(w)
+        self.worker_ctl.bind(self.active_worker)
         self.run_btn.setText("Tuning…")
         self.run_btn.setStyleSheet(
             "background-color: gray; color:white;")
 
-        w.start()
+        self.active_worker.start()
+        
+        self._refresh_stop_button()
 
     def _worker_done(self):
         """
@@ -1325,8 +1357,7 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     ico = Path(__file__).parent / "fusionlab_learn_logo.ico"
     app.setWindowIcon(QIcon(str(ico)))
 
-    QToolTip.setFont(QFont("Helvetica Neue", 9))
-
+    auto_set_ui_fonts(app)
     # Normalize theme aliases
     if theme.lower() in ('light', 'fusionlab', 'fusionlab-learn'):
         theme = 'fusionlab'
@@ -1375,10 +1406,6 @@ def launch_cli(theme: str = 'fusionlab') -> None:
           + LOG_STYLES
         )
  
-
-        # final_stylesheet = ( 
-        #     selected_stylesheet + inference_border_style + LOG_STYLES 
-        # )
         app.setStyleSheet(final_stylesheet)
     
     # --- Instantiate and Run the Application ---
@@ -1387,23 +1414,17 @@ def launch_cli(theme: str = 'fusionlab') -> None:
     sys.exit(app.exec_())
     
 if __name__ == "__main__":
+    
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     launch_cli()
-# # mini_forecaster_gui.py  – very bottom
+    
+
 # if __name__ == "__main__":
-#     import traceback, faulthandler
-#     faulthandler.enable()                       # catches segfault-like crashes
-
-#     def qt_excepthook(exctype, value, tb):
-#         """Let uncaught exceptions bubble to the console *and* keep Qt alive."""
-#         traceback.print_exception(exctype, value, tb)
-#         # comment the next line if you prefer the GUI to stay open
-#         QApplication.quit()
-
-#     sys.excepthook = qt_excepthook              # <<< install *before* exec_()
-
+#     from .qt_utils import enable_qt_crash_handler 
 #     app = QApplication(sys.argv)
+#     enable_qt_crash_handler(app, keep_gui_alive=False)
 #     # … theme / stylesheet logic …
 #     gui = MiniForecaster(theme="fusionlab")
 #     gui.show()
-
 #     sys.exit(app.exec_())

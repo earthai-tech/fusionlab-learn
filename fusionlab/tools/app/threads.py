@@ -120,16 +120,46 @@ class TrainingThread(QThread):
         self.progress_manager.start_step("Sequencing")
         self.cfg.progress_callback = self._pct
 
-        seq_gen = SequenceGenerator(self.cfg, self.log_updated.emit)
-        train_ds, val_ds = seq_gen.run(
-            processor.processed_df,
-            processor.static_features_encoded,
-            stop_check=self.isInterruptionRequested,
-        )
+        # seq_gen = SequenceGenerator(self.cfg, self.log_updated.emit)
+        # train_ds, val_ds = seq_gen.run(
+        #     processor.processed_df,
+        #     processor.static_features_encoded,
+        #     stop_check=self.isInterruptionRequested,
+        # )
 
+        # self.progress_manager.finish_step("Sequencing")
+        # return seq_gen, train_ds, val_ds
+    
+        # ---------- NEW: try cache ------------------------------------
+        # cache_dir = Path(self._manifest_path).parent / "sequence_cache"
+        seq_gen, train_ds, val_ds = SequenceGenerator.from_cache(
+            cfg      = self.cfg,
+            processed_df = processor.processed_df,
+            raw_df= processor.raw_df, 
+            static_features_encoded = processor.static_features_encoded,
+            log_fn   = self.log_updated.emit,
+        )
+        if seq_gen is None:                             # no valid cache → compute
+            seq_gen = SequenceGenerator(self.cfg, self.log_updated.emit)
+            train_ds, val_ds = seq_gen.run(
+                processor.processed_df,
+                processor.static_features_encoded,
+                stop_check=self.isInterruptionRequested,
+            )
+            # save for next run
+            seq_gen.to_cache(
+                processor.processed_df,
+                processor.static_features_encoded,
+                raw_df= processor.raw_df, 
+                # train_ds, val_ds,
+            )
+        else:
+            # self._pct(100)
+            self.log_updated.emit("✅ Re-using cached sequences.")
+            
         self.progress_manager.finish_step("Sequencing")
         return seq_gen, train_ds, val_ds
-
+     
     def _run_training(self, train_ds, val_ds):
         """Runs the model-training stage with live *Epoch x/N* prefix."""
         self.status_updated.emit("🔧 Training model…")
@@ -143,28 +173,30 @@ class TrainingThread(QThread):
         # ------------------------------------------------------------------
         total_epochs = self.cfg.epochs
 
-        # def _pct_training(percent: int) -> None:
-        #     # 1) regular bar update
-        #     self.progress_manager.update(percent, 100)
-        #     # 2) convert % → epoch number (1-based, clamped)
-        #     ep = max(1, min(total_epochs,
-        #                     int(round((percent / 100) * total_epochs))))
-        #     self.progress_manager.set_epoch_context(
-        #         epoch=ep, total=total_epochs)
-            
         def _pct_training(percent: int) -> None:
             # convert % back into epoch number (1-based)
-            ep = max(1, min(
-                total_epochs,
-                int(round((percent / 100) * total_epochs)),
-            ))
+            # ep = max(1, min(
+            #     total_epochs,
+            #     int(round((percent / 100) * total_epochs)),
+            # ))
+            
+            
+            # # 1) feed the *real* iteration counts to update()
+            # #    so ETA = (elapsed / (ep/total_epochs)) - elapsed
+            # self.progress_manager.update( 
+            #     current=ep, total=total_epochs)
         
-            # 1) feed the *real* iteration counts to update()
-            #    so ETA = (elapsed / (ep/total_epochs)) - elapsed
-            self.progress_manager.update( 
+            # # 2) now set the “Epoch X/Y – ” prefix
+            # self.progress_manager.set_epoch_context(
+            #     epoch=ep, total=total_epochs)
+            
+            # Map 0–100% back to an integer epoch 1…total_epochs
+            ep = min(total_epochs, max(
+                1, round(percent * total_epochs / 100)))
+            # First update the bar (so it computes ETA)
+            self.progress_manager.update(
                 current=ep, total=total_epochs)
-        
-            # 2) now set the “Epoch X/Y – ” prefix
+            # Then update the “Epoch X/N – ” prefix
             self.progress_manager.set_epoch_context(
                 epoch=ep, total=total_epochs)
 
@@ -184,7 +216,6 @@ class TrainingThread(QThread):
         self.progress_manager.finish_step("Training")
         return trainer, best_model
     
-
     def _run_forecasting(
         self,
         model,

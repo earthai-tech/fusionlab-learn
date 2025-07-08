@@ -529,7 +529,7 @@ class _EasyPage(QWidget):
         self.patience_spin    = QSpinBox(minimum=1, maximum=100, value=8)
         self.forecast_start   = QSpinBox(minimum=2000, maximum=2100, value=2023)
     
-        # ── Helper for 3-column rows ────────────────────────────────────────────
+        # ── Helper for 3-column rows 
         def add_row3(r,
                      lbl1, w1,
                      lbl2, w2,
@@ -541,7 +541,7 @@ class _EasyPage(QWidget):
             grid.addWidget(QLabel(lbl3), r, 4, Qt.AlignRight)
             grid.addWidget(w3,            r, 5)
     
-        # ── Populate rows ──────────────────────────────────────────────────────
+        # ── Populate rows 
         add_row3(0,
                  "Model:",                  self.model_selector,
                  "Time-steps (look-back):", self.time_steps,
@@ -643,13 +643,12 @@ class _EasyPage(QWidget):
 
         self.tabs.addTab(t, "Search Space")
 
-    # ---------------- Physics search-space tab ------------------------
-
+ 
     def _build_physics_tab(self) -> None:
         t      = QWidget()
         layout = QFormLayout(t)
     
-        # ── λ-PDE range ---------------------------------------------------------
+        # ── λ-PDE range 
         self.lpd_lo = QDoubleSpinBox(decimals=3, value=0.10,
                                      minimum=0.0, maximum=10.0, singleStep=0.05)
         self.lpd_hi = QDoubleSpinBox(decimals=3, value=0.50,
@@ -678,7 +677,7 @@ class _EasyPage(QWidget):
             layout.addRow(label, box)
             return combo, lo, hi
     
-        # ── C coefficient -------------------------------------------------------
+        # ── C coefficient 
         self.c_type = QComboBox(); self.c_type.addItems(["learnable", "fixed"])
         self.c_lo   = QDoubleSpinBox(decimals=5, value=1e-3,
                                      minimum=1e-6, maximum=1.0, singleStep=1e-5)
@@ -693,12 +692,12 @@ class _EasyPage(QWidget):
         self.c_type.currentIndexChanged.connect(_sync_c)
         layout.addRow("Coefficient C", _cbox)
     
-        # ── K , Ss , Q ----------------------------------------------------------
+        # ── K , Ss , Q 
         (self.k_mode,  self.k_lo,  self.k_hi)  = _scalar_param_row("K",  1e-4)
         (self.ss_mode, self.ss_lo, self.ss_hi) = _scalar_param_row("Ss", 1e-5)
         (self.q_mode,  self.q_lo,  self.q_hi)  = _scalar_param_row("Q",  0.0)
     
-        # ── PDE-mode & loss weights --------------------------------------------
+        # ── PDE-mode & loss weights 
         self.pde_mode = QComboBox(); self.pde_mode.addItems(
             ["both", "consolidation", "gw_flow", "none"])
     
@@ -711,7 +710,7 @@ class _EasyPage(QWidget):
     
         self.tabs.addTab(t, "Physics")
 
-    # ---------------- System tab -------------------------------------------------
+    # -System tab -
     def _build_system_tab(self) -> None:
         
         try:                            # GPU detection (≈ TensorFlow ≥ 2.1)
@@ -724,7 +723,7 @@ class _EasyPage(QWidget):
         t      = QWidget()
         layout = QFormLayout(t)
     
-        # user-editable knobs ----------------------------------------------------
+        # user-editable knobs 
         self.tuner_algo = QComboBox(); self.tuner_algo.addItems(
             ["randomsearch", "bayesian", "hyperband"])
         self.max_trials = QSpinBox(value=20, minimum=1, maximum=1000)
@@ -739,9 +738,9 @@ class _EasyPage(QWidget):
         layout.addRow("CPUs to use:",        self.cpu_spin)
         layout.addRow("Random seed:",        self.seed_spin)
     
-        # ------------------------------------------------------------------------
+        # 
         # auto-detected machine summary (read-only)
-        # ------------------------------------------------------------------------
+        # 
         sys_box   = QFrame(); sys_box.setObjectName("card")
         sys_layout= QVBoxLayout(sys_box); sys_layout.setContentsMargins(8, 6, 8, 6)
     
@@ -772,7 +771,8 @@ class _EasyPage(QWidget):
         self.tabs.addTab(t, "System")
 
     def _build_case_info_tab(self) -> None:
-        """Build the 'Case Info' tab for description, project, and metadata."""
+        """Build the 'Case Info' tab for description, project,
+        and metadata."""
 
         import fusionlab 
         
@@ -781,7 +781,7 @@ class _EasyPage(QWidget):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(8)
     
-        # ── Prepare default strings (these should have been set in __init__) ──
+        # ── Prepare default strings 
         if not hasattr(self, "_case_info"):
             self._case_info = {
                 "description": "",
@@ -791,7 +791,7 @@ class _EasyPage(QWidget):
         default_desc = self._case_info.get("description", "")
         default_proj = self._case_info.get("project_name", "")
     
-        # ── GUI widgets ────────────────────────────────────────────────────────
+        # ── GUI widgets 
         self.description = QLineEdit()
         self.description.setPlaceholderText("e.g. TuneParams")
         self.description.setText(default_desc)
@@ -800,7 +800,7 @@ class _EasyPage(QWidget):
         self.project_name.setPlaceholderText("e.g. SubsPINN")
         self.project_name.setText(default_proj)
     
-        # ── extra metadata fields ─────────────────────────────────────────────
+        # ── extra metadata fields 
         self.run_date = QDateEdit(QDate.currentDate())
         self.run_date.setCalendarPopup(True)
     
@@ -811,14 +811,14 @@ class _EasyPage(QWidget):
         self.notes = QTextEdit()
         self.notes.setPlaceholderText("Any additional notes or tags…")
     
-        # ── Helper for 2-column rows ─────────────────────────────────────────
+        # ── Helper for 2-column rows 
         def add_row2(r, lbl1, w1, lbl2, w2):
             grid.addWidget(QLabel(lbl1), r, 0, Qt.AlignRight)
             grid.addWidget(w1,            r, 1)
             grid.addWidget(QLabel(lbl2),  r, 2, Qt.AlignRight)
             grid.addWidget(w2,            r, 3)
     
-        # ── Populate rows ───────────────────────────────────────────────────
+        # ── Populate rows
         add_row2(0,
                  "Description:",   self.description,
                  "Project name:",  self.project_name)
@@ -831,7 +831,7 @@ class _EasyPage(QWidget):
                  "Version:",       self.version,
                  "Notes:",         self.notes)
     
-        # ── Stretch the input columns ────────────────────────────────────────
+        # ── Stretch the input columns 
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
     
@@ -870,7 +870,7 @@ class _EasyPage(QWidget):
                 ),
         }
 
-        # physics search-space ----------------------------------------
+        # physics search-space 
         def _scalar_choice(mode_cmb, lo_spin, hi_spin):
             mode = mode_cmb.currentText()
             if mode == "learnable":
@@ -940,7 +940,7 @@ class _EasyPage(QWidget):
             "search_space":  {**search_model, **search_phys},
             "case_info": self._case_info,
         }
- 
+
 class ModelChoiceDialog(QMessageBox):
     """
     Pops up when both a training *run_manifest.json* and a
@@ -957,30 +957,30 @@ class ModelChoiceDialog(QMessageBox):
         self.setIcon(QMessageBox.Question)
         self.setWindowTitle("Which model?")
         self.setText(
-            "A tuned model has been detected for this run.<br><br>"
+            "A tuned model has been detected for this run.\n\n"
             "<b>What do you want to use for inference?</b>"
         )
         self.setInformativeText(
-            "• <b>Tuned model</b> – best hyper-parameters selected by HydroTuner<br>"
+            "• <b>Tuned model</b> – best hyper-parameters selected by HydroTuner\n"
             "• <b>Training model</b> – original model saved after training"
         )
-
-        # Buttons – use Role so we can test clickedRole later
-        self.addButton("Tuned model",       QMessageBox.AcceptRole)
-        self.addButton("Training model",    QMessageBox.NoRole)
+        # keep references so we can test identity later
+        self._tuned_btn  = self.addButton(
+            "Tuned model",    QMessageBox.AcceptRole)
+        self._train_btn  = self.addButton(
+            "Training model", QMessageBox.AcceptRole)
         # cancel = self.addButton(QMessageBox.Cancel)
+        
         self.addButton(QMessageBox.Cancel)
         self.setMinimumWidth(360)
-
-        # Finally, apply our new tuner-dialog stylesheet:
         self.setStyleSheet(TUNER_DIALOG_STYLES)
-       
-    # convenience ------------------------------------------------------
+
     def choice(self) -> str | None:
-        role = self.exec_()
-        if role == QMessageBox.AcceptRole:
+        self.exec_()
+        clicked = self.clickedButton()
+        if clicked is self._tuned_btn:
             return "tuned"
-        if role == QMessageBox.NoRole:
+        if clicked is self._train_btn:
             return "train"
         return None
 

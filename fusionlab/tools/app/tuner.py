@@ -244,7 +244,7 @@ class TunerApp:
 
         if self._pm:
             self._pm.finish_step("Build")
-            self._pm.reset()
+            self._pm.reset("0 %")
         return cb
 
     def _run_tuner(self, callbacks: List[Callback]):
@@ -373,7 +373,8 @@ class TunerApp:
         model_cls = TransFlowSubsNet if merged.get(
             "pde_mode", "both") == "both" else PIHALNet
         
-        valid_kws  = _get_valid_kwargs(model_cls, merged)
+        valid_kws  = _get_valid_kwargs(
+            model_cls, merged, error="ignore")
 
         def _build():
             return model_cls(**valid_kws)

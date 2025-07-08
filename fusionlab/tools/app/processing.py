@@ -19,7 +19,6 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
-from ...datasets import fetch_zhongshan_data
 from ...nn import KERAS_DEPS
 from ...nn.pinn.utils import prepare_pinn_data_sequences
 from ...registry import _update_manifest, resolve_sequence_cache 

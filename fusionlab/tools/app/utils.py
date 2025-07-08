@@ -309,7 +309,7 @@ class UnifiedTunerProgress(TunerProgressCallback):
                                                 total=self.total_epochs)
         self.log(f"[Global] {pct}%")
 
-class GuiProgress(Callback):
+class _GuiProgress(Callback):
     """
     Emit percentage updates while `model.fit` runs.
 
@@ -371,6 +371,49 @@ class GuiProgress(Callback):
         That is perfectly fine because the tuner resets internal
         callback state at the start of each trial.
         """
+        return self
+
+class GuiProgress(Callback):
+    """
+    Emit 0–100% updates while `model.fit` runs, either per‐epoch or
+    per‐batch.  All ETA, labels, prefixes, etc. are handled downstream
+    by your ProgressManager via the progress_callback.
+    """
+    def __init__(
+        self,
+        total_epochs: int,
+        batches_per_epoch: int,
+        update_fn: Callable[[int], None],
+        *,
+        epoch_level: bool = True,
+    ):
+        super().__init__()
+        self.total_epochs = total_epochs
+        self.batches_per_epoch = batches_per_epoch
+        self.update_fn = update_fn
+        self.epoch_level = epoch_level
+        self._seen_batches = 0
+
+    def on_epoch_end(self, epoch, logs=None):
+        if not self.epoch_level:
+            return
+        # epoch is zero‐based; we want (1…total_epochs)
+        ep = epoch + 1
+        pct = int(ep * 100 // self.total_epochs)
+        self.update_fn(pct)
+
+    def on_train_batch_end(self, batch, logs=None):
+        if self.epoch_level:
+            return
+        # count across all epochs
+        self._seen_batches += 1
+        total_batches = self.total_epochs * self.batches_per_epoch
+        pct = int(self._seen_batches * 100 // total_batches)
+        self.update_fn(pct)
+
+    def __deepcopy__(self, memo):
+        # Keras‐Tuner will copy callbacks; Qt signals can't be
+        # so just return self
         return self
 
 class GuiTunerProgress(Callback):
@@ -1062,3 +1105,105 @@ def inspect_run_type_from_manifest(
             f"Failed to parse manifest file at {manifest_path}. "
             f"It may be corrupted. Error: {e}"
         )
+
+def log_tuning_params(
+    cfg_dict: Dict[str, Any],
+    log_fn: Callable[[str], None] = print
+) -> None:
+    """
+    Nicely prints a two-column ASCII table of all the tuning parameters
+    in `cfg_dict`, using `log_fn` for each line (e.g. self._log).
+
+    It flattens three sections:
+      • fixed_params
+      • sequence_params
+      • tuner_settings
+    """
+    sections = [
+        ("Search space", cfg_dict.get ("search_space", {})), 
+        ("Fixed params", cfg_dict.get("fixed_params", {})),
+        ("Sequence params", cfg_dict.get("sequence_params", {})),
+        ("Tuner settings", cfg_dict.get("tuner_settings", {})),
+    ]
+
+    # gather all rows
+    rows = []
+    for title, sub in sections:
+        if not sub:
+            continue
+        rows.append((title, ""))  # section header
+        for k, v in sub.items():
+            rows.append((f"  {k}", v))
+
+    if not rows:
+        log_fn("⚠ No tuning parameters to display.")
+        return
+
+    # compute column widths
+    col1w = max(len(str(r[0])) for r in rows) + 1
+    col2w = max(len(str(r[1])) for r in rows) + 1
+
+    sep = "+" + "-" * (col1w + 2) + "+" + "-" * (col2w + 2) + "+"
+    log_fn(sep)
+    log_fn(f"| {'Parameter'.ljust(col1w)} | {'Value'.ljust(col2w)} |")
+    log_fn(sep)
+    for name, val in rows:
+        if val == "" and not name.startswith("  "):
+            # section header
+            header = name.upper()
+            log_fn(f"| {header.center(col1w)} | {' '.ljust(col2w)} |")
+            log_fn(sep)
+        else:
+            log_fn(f"| {name.ljust(col1w)} | {str(val).ljust(col2w)} |")
+    log_fn(sep)
+
+
+def get_workflow_status(
+    cfg: Any,
+    default: str = "trained"
+) -> str:
+    """
+    Derive a normalized “status” keyword from a config-like object.
+
+    Looks for either `cfg.run_type` or `cfg.mode` and maps common
+    values to human-friendly status strings:
+
+      - training  → trained
+      - tuning    → tuned
+      - inference → inferred
+
+    If neither attribute is present or its value is unrecognized,
+    returns `default`.
+
+    Examples
+    --------
+    >>> class C: run_type = "training"
+    >>> get_workflow_status(C())
+    'trained'
+
+    >>> class C: run_type = "tuning"
+    >>> get_workflow_status(C())
+    'tuned'
+
+    >>> class C: mode = "inference"
+    >>> get_workflow_status(C(), default="done")
+    'inferred'
+
+    >>> class C: pass
+    >>> get_workflow_status(C(), default="idle")
+    'idle'
+    """
+    # try run_type first, then mode
+    raw = getattr(cfg, "run_type", None) or getattr(cfg, "mode", None)
+    if raw is None:
+        return default
+
+    key = str(raw).strip().lower()
+    if key in ("training", "train"):
+        return "trained"
+    if key in ("tuning", "tune"):
+        return "tuned"
+    if key in ("inference", "infer"):
+        return "inferred"
+    # fallback to default for unrecognized
+    return default

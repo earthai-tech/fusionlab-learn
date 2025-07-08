@@ -30,10 +30,11 @@ from ...utils.generic_utils import rename_dict_keys, apply_affix
 from .config import SubsConfig 
 from .utils import ( 
     GuiProgress, 
-    StopCheckCallback, 
+    StopCheckCallback,  
+    _rebuild_from_arch_cfg, 
     safe_model_loader, 
     json_ready, 
-    _rebuild_from_arch_cfg, 
+    get_workflow_status, 
 )
 
 Callback =KERAS_DEPS.Callback 
@@ -72,6 +73,7 @@ class ModelTrainer:
         """
         Executes the full model training pipeline.
         """
+        
         self.log("Step 7: Defining, Compiling, and Training the Model...")
         self._define_and_compile_model(input_shapes, stop_check = stop_check )
         self._train_model(train_dataset, val_dataset, stop_check =stop_check )
@@ -215,7 +217,6 @@ class ModelTrainer:
         self.log(f"  Model checkpoints will be saved to: {checkpoint_path}")
         
         self.checkpoint_path = checkpoint_path 
-        
         # if none the skip the gui_cb and use verbose = self.config.fit_verbose  
         # else use the Gui
         # GUI progress callback -
@@ -526,7 +527,8 @@ class Forecaster:
         except Exception as e:
             self._tick(10)
             self.log(f"\n  [WARNING] Could not generate test sequences: {e}")
-            self.log("  Falling back to use the validation dataset for forecasting.")
+            self.log(
+                "  Falling back to use the validation dataset for forecasting.")
             
             try:
                 # Fallback to extracting the first batch from the validation dataset
@@ -548,11 +550,12 @@ class Forecaster:
         """
         Runs model prediction and formats the output into a DataFrame.
         """
-        self.log("  Generating predictions with the trained model...")
+        model_status = get_workflow_status(self.config)
+        
+        self.log(f"  Generating predictions with the {model_status} model...")
         predictions = model.predict(inputs_test, verbose=0)
 
         # Standardize target keys for formatting
-        
         y_true_for_format = {
             'subsidence': targets_test['subs_pred'],
             'gwl': targets_test['gwl_pred']
@@ -569,7 +572,8 @@ class Forecaster:
             quantiles=self.config.quantiles,
             forecast_horizon=self.config.forecast_horizon_years,
             evaluate_coverage=( 
-                True if ( self.config.evaluate_coverage and self.config.quantiles) else False
+                True if ( self.config.evaluate_coverage and self.config.quantiles
+                         ) else False
                 ), 
             model_inputs=inputs_test,
             coord_scaler= coord_scaler, 
