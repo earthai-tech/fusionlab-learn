@@ -50,7 +50,8 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QWidget, 
     QFrame,
-    QCheckBox
+    QCheckBox, 
+    QPlainTextEdit
 )
 
 from ...nn import KERAS_DEPS  
@@ -880,7 +881,121 @@ class ResetController(QObject):
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
 
+
 class LogManager(QObject):
+    """
+    Central log buffer + widget + on-disk dumping with UI 
+    trimming and optional collapse mode.
+
+    Modes:
+      - "default": full append, trimmed to _max_ui_lines
+      - "collapse": identical consecutive lines are
+        collapsed with a count suffix
+    """
+    line_appended = pyqtSignal(str)
+
+    def __init__(
+        self,
+        log_widget: QPlainTextEdit,
+        mode: str = 'collapse', #"default",
+        *,
+        cache_limit: int = 10_000,
+        ui_limit: int = 500,
+        log_dir_name: str = "_log",
+        parent: Optional[QObject] = None
+    ):
+        super().__init__(parent)
+        self._widget = log_widget
+        self._widget.setObjectName("logWidget")
+        # apply the CSS we defined above
+        self._widget.setStyleSheet(LOG_STYLES)
+        
+        self._cache: list[str] = []
+        self._limit = cache_limit
+        self._ui_limit = ui_limit
+        self._log_dir = log_dir_name
+        self.mode = mode
+        # For collapse mode
+        self._last_line: Optional[str] = None
+        self._repeat_count = 0
+
+    def append(self, msg: str) -> None:
+        """Add one line (no timestamp), keep scroll at bottom."""
+        ts = time.strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        # 1) full in-memory cache
+        self._cache.append(line)
+        if len(self._cache) > self._limit:
+            self._cache.pop(0)
+
+        # 2) UI display
+        if self.mode == "collapse":
+            if line == self._last_line:
+                self._repeat_count += 1
+                display = f"{line}  (×{self._repeat_count})"
+                cursor = self._widget.textCursor()
+                cursor.movePosition(cursor.End)
+                cursor.select(cursor.BlockUnderCursor)
+                cursor.removeSelectedText()
+                cursor.insertText(display)
+            else:
+                self._last_line = line
+                self._repeat_count = 1
+                self._widget.appendPlainText(line)
+        else:
+            self._widget.appendPlainText(line)
+
+        # 3) UI trimming
+        doc = self._widget.document()
+        blocks = doc.blockCount()
+        if blocks > self._ui_limit:
+            cursor = self._widget.textCursor()
+            cursor.movePosition(cursor.Start)
+            for _ in range(blocks - self._ui_limit):
+                cursor.select(cursor.LineUnderCursor)
+                cursor.removeSelectedText()
+                cursor.deleteChar()
+            self._widget.setTextCursor(cursor)
+
+        # 4) scroll to bottom
+        sb = self._widget.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        
+        # # *also* ensure the cursor is at the end and visible
+        c = self._widget.textCursor()
+        c.movePosition(QTextCursor.End)
+        self._widget.setTextCursor(c)
+        self._widget.ensureCursorVisible()
+
+        # 5) signal
+        self.line_appended.emit(line)
+
+    def save_cache(self, run_output_path: str) -> Path:
+        """
+        Dump the cached lines to disk under
+        <run_output_path>/<self._log_dir>/gui_log_<timestamp>.txt
+        Returns the file path.
+        """
+        out_dir = Path(run_output_path) / self._log_dir
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                raise
+
+        fname = out_dir / f"gui_log_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        with open(fname, "w", encoding="utf-8") as fp:
+            fp.write("\n".join(self._cache))
+        return fname
+
+    def clear(self) -> None:
+        """Clear both UI and in-memory cache."""
+        self._cache.clear()
+        self._last_line = None
+        self._repeat_count = 0
+        self._widget.clear()
+
+class _LogManager(QObject):
     """Central log buffer + widget + on-disk dumping."""
     # emitted whenever a new line is appended
     line_appended = pyqtSignal(str)

@@ -24,14 +24,15 @@ from PyQt5.QtWidgets import (
     QSpinBox, 
     QDoubleSpinBox,
     QComboBox, 
-    QTextEdit, 
+    # QTextEdit, 
     QFileDialog, 
     QProgressBar, 
     QLineEdit, 
     QCheckBox,
     QDialog, 
     QMessageBox,
-    QSizePolicy
+    QSizePolicy, 
+    QPlainTextEdit
 )
 from ...registry import ManifestRegistry, _locate_manifest
 from .components import ( 
@@ -64,7 +65,7 @@ from .threads import (
     InferenceThread, 
     TunerThread 
 )
-from .qt_utils import auto_set_ui_fonts 
+from .qt_utils import auto_set_ui_fonts, auto_resize_window 
 from .utils import log_tuning_params
 from .view import VIS_SIGNALS
   
@@ -105,7 +106,8 @@ class MiniForecaster(QMainWindow):
         super().__init__()
  
         self.setWindowTitle("Fusionlab-learn – Mini Forecaster")
-        self.setFixedSize(980, 660)
+        auto_resize_window(self,base_size=(980, 660))
+        # self.setFixedSize(980, 660)
         self.file_path: Path | None = None
         
         icon_path = os.path.join(os.path.dirname(__file__),
@@ -389,7 +391,7 @@ class MiniForecaster(QMainWindow):
         self.run_btn.clicked.connect(self._on_run)
         row.addWidget(self.run_btn)
         
-        self.log_widget = QTextEdit()
+        self.log_widget = QPlainTextEdit()# QTextEdit()
         self.log_widget.setReadOnly(True)
         
         # 1) Tell Qt this widget is happy to expand both horizontally & vertically
@@ -413,7 +415,7 @@ class MiniForecaster(QMainWindow):
         
         # left label
         self.progress_label = QLabel("")
-        self.progress_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.progress_label.setAlignment(Qt.AlignLeft  | Qt.AlignVCenter) #Qt.AlignRight
         # size to text only:
         self.progress_label.setSizePolicy(
             QSizePolicy.Minimum,    # shrink to min width needed
@@ -425,7 +427,7 @@ class MiniForecaster(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimumHeight(18)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter) 
+        # self.progress_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter) 
         # let it expand to fill leftover space:
         self.progress_bar.setSizePolicy(
             QSizePolicy.Expanding,  # grabs all extra width
@@ -1079,6 +1081,7 @@ class MiniForecaster(QMainWindow):
             progress_manager = self.progress_manager,
             edited_df        = inference_data,
             parent           = self,
+            
         )
         self.active_worker.log_msg.connect(self.log_updated.emit)
         self.active_worker.status_msg.connect(self.status_updated.emit)
@@ -1160,7 +1163,10 @@ class MiniForecaster(QMainWindow):
     
         # 4) Spawn the tuner thread
         self._log("▶ launch HYPERPARAMETER TUNING…")
-        log_tuning_params(cfg_dict, log_fn=self._log)
+        log_tuning_params(
+            cfg_dict, log_fn=self._log, mode='wrap', 
+            table_width =70
+         )
         
         self.active_worker = TunerThread(
             cfg             = tune_cfg,

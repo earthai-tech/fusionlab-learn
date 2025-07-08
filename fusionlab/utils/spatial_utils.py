@@ -65,6 +65,7 @@ __all__ = [
      'gen_negative_samples', 
      'gen_buffered_negative_samples', 
      'gen_negative_samples_plus', 
+     'extract_spatial_roi', 
  ]
 
 @SaveFile

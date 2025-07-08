@@ -956,14 +956,28 @@ class ModelChoiceDialog(QMessageBox):
         super().__init__(parent)
         self.setIcon(QMessageBox.Question)
         self.setWindowTitle("Which model?")
+        # self.setText(
+        #     "A tuned model has been detected for this run.\n\n"
+        #     "<b>What do you want to use for inference?</b>"
+        # )
+        # self.setInformativeText(
+        #     "• <b>Tuned model</b> – best hyper-parameters selected by HydroTuner\n"
+        #     "• <b>Training model</b> – original model saved after training"
+        # )
         self.setText(
-            "A tuned model has been detected for this run.\n\n"
+            "<html>"
+            "A tuned model has been detected for this run.<br><br>"
             "<b>What do you want to use for inference?</b>"
+            "</html>"
         )
+        
         self.setInformativeText(
-            "• <b>Tuned model</b> – best hyper-parameters selected by HydroTuner\n"
-            "• <b>Training model</b> – original model saved after training"
+            "<html>"
+            "&bull; <b>Tuned model</b> – best hyper-parameters selected by HydroTuner<br>"
+            "&bull; <b>Training model</b> – original model saved after training"
+            "</html>"
         )
+
         # keep references so we can test identity later
         self._tuned_btn  = self.addButton(
             "Tuned model",    QMessageBox.AcceptRole)

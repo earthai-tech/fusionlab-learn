@@ -17,6 +17,7 @@ from typing import Callable, Optional, Any, Dict, List
 import subprocess, sys, platform
 from pathlib import Path
 import warnings 
+import textwrap
 
 try:
     import ast                                
@@ -1108,55 +1109,95 @@ def inspect_run_type_from_manifest(
 
 def log_tuning_params(
     cfg_dict: Dict[str, Any],
-    log_fn: Callable[[str], None] = print
+    log_fn: Callable[[str], None] = print,
+    table_width: int = 80,
+    mode: str = "truncate"
 ) -> None:
     """
     Nicely prints a two-column ASCII table of all the tuning parameters
     in `cfg_dict`, using `log_fn` for each line (e.g. self._log).
 
-    It flattens three sections:
-      • fixed_params
-      • sequence_params
-      • tuner_settings
+    Sections included:
+      • Search space
+      • Fixed params
+      • Sequence params
+      • Tuner settings
+
+    Parameters
+    ----------
+    cfg_dict : dict
+        Dictionary returned by the tuner dialog, containing sub-dicts:
+        'search_space', 'fixed_params', 'sequence_params', 'tuner_settings'.
+    log_fn : callable
+        Function to call for each line (e.g. logger or print).
+    table_width : int
+        Total width of the ASCII table (including borders).
+    mode : str
+        'truncate' to shorten long values with '...',
+        'wrap' to wrap long values across multiple lines.
     """
     sections = [
-        ("Search space", cfg_dict.get ("search_space", {})), 
-        ("Fixed params", cfg_dict.get("fixed_params", {})),
-        ("Sequence params", cfg_dict.get("sequence_params", {})),
-        ("Tuner settings", cfg_dict.get("tuner_settings", {})),
+        ("Search Space", cfg_dict.get("search_space", {})),
+        ("Fixed Params", cfg_dict.get("fixed_params", {})),
+        ("Sequence Params", cfg_dict.get("sequence_params", {})),
+        ("Tuner Settings", cfg_dict.get("tuner_settings", {})),
     ]
 
-    # gather all rows
-    rows = []
+    # Gather rows
+    rows: List[tuple[str, Any]] = []
     for title, sub in sections:
         if not sub:
             continue
         rows.append((title, ""))  # section header
-        for k, v in sub.items():
-            rows.append((f"  {k}", v))
+        for key, val in sub.items():
+            rows.append((f"  {key}", val))
 
     if not rows:
         log_fn("⚠ No tuning parameters to display.")
         return
 
-    # compute column widths
-    col1w = max(len(str(r[0])) for r in rows) + 1
-    col2w = max(len(str(r[1])) for r in rows) + 1
+    # Compute column widths
+    max_name = max(len(str(r[0])) for r in rows)
+    # Reserve 4 chars for borders/spaces around name column
+    col2w = table_width - (max_name + 6)
+    col2w = max(col2w, 10)
 
-    sep = "+" + "-" * (col1w + 2) + "+" + "-" * (col2w + 2) + "+"
+    def format_value(val: Any) -> List[str]:
+        s = str(val)
+        if mode == "truncate":
+            return [s if len(s) <= col2w else s[:col2w-3] + "..."]
+        # wrap
+        return textwrap.wrap(s, col2w) or [""]
+
+    sep = "+" + "-" * (max_name + 2) + "+" + "-" * (col2w + 2) + "+"
+
+    # Header
     log_fn(sep)
-    log_fn(f"| {'Parameter'.ljust(col1w)} | {'Value'.ljust(col2w)} |")
+    log_fn(
+        f"| {'Parameter'.ljust(max_name)} | {'Value'.ljust(col2w)} |"
+    )
     log_fn(sep)
+
+    # Rows
     for name, val in rows:
         if val == "" and not name.startswith("  "):
-            # section header
-            header = name.upper()
-            log_fn(f"| {header.center(col1w)} | {' '.ljust(col2w)} |")
+            # Section header
+            header = name.center(max_name).upper()
+            log_fn(f"| {header} | {' '.ljust(col2w)} |")
             log_fn(sep)
-        else:
-            log_fn(f"| {name.ljust(col1w)} | {str(val).ljust(col2w)} |")
-    log_fn(sep)
+            continue
 
+        lines = format_value(val)
+        for i, line in enumerate(lines):
+            if i == 0:
+                log_fn(
+                    f"| {name.ljust(max_name)} | {line.ljust(col2w)} |"
+                )
+            else:
+                log_fn(
+                    f"| {' '.ljust(max_name)} | {line.ljust(col2w)} |"
+                )
+        log_fn(sep)
 
 def get_workflow_status(
     cfg: Any,

@@ -480,7 +480,7 @@ class Forecaster:
         """
         self._tick(0)
         try:
-            if test_df.empty:
+            if test_df is None or test_df.empty:
                 raise ValueError("Test DataFrame is empty.")
         
             hook = lambda f: self._tick(self.ZOOM(f, 10, 80))

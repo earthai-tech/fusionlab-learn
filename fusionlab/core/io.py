@@ -494,22 +494,22 @@ class SaveFile:
                     return result
 
                 # Attempt to save the DataFrame
-                try:
-                    writer_func(
-                        savefile,
-                        **self.writer_kws
-                        # index=False
-                    )
-                except Exception as e:
-                    warnings.warn(
-                        f"Failed to save the DataFrame: {e}"
-                    )
-                else: 
-                    if self.verbose:
-                        print(
-                            "[INFO] DataFrame saved to "
-                            f"'{savefile}'."
-                        )
+                # try:
+                writer_func(
+                    savefile,
+                    **self.writer_kws
+                    # index=False
+                )
+                # except Exception as e:
+                #     warnings.warn(
+                #         f"Failed to save the DataFrame: {e}"
+                #     )
+                # else: 
+                #     if self.verbose:
+                #         print(
+                #             "[INFO] DataFrame saved to "
+                #             f"'{savefile}'."
+                #         )
 
             return result
 

@@ -318,6 +318,15 @@ QTextEdit#logWidget {
     border:          1px solid rgba(0,0,0,0.25);
     padding:         6px;
 }
+
+QPlainTextEdit#logWidget {
+    background-color: #1e1e1e;
+    color:           #e2e8f0;
+    font-family:     Consolas, "Courier New", monospace;
+    font-size:       12px;
+    border:          1px solid rgba(0,0,0,0.25);
+    padding:         6px;
+}
 """
 
 _LOG_STYLES = f"""

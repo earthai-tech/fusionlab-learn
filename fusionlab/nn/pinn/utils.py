@@ -28,6 +28,7 @@ from ...utils.validator import validate_positive_integer
 from ...metrics.utils import compute_quantile_diagnostics 
 from ...decorators import isdf 
 from ...utils.deps_utils import ensure_pkg 
+from ...utils.forecast_utils import check_sequence_feasibility 
 from ...utils.generic_utils import print_box, vlog, select_mode
 from ...utils.geo_utils import resolve_spatial_columns 
 from ...utils.io_utils import save_job 
@@ -1213,10 +1214,6 @@ def prepare_pinn_data_sequences(
     _to_range = lambda f, lo, hi: lo + (hi - lo) * f          # noqa: E731
     #                 ^fraction      ^global range
     
-    # progress_hook = hook 
-    
-    # -------------------------------------------------------------------------
-    
     # Entry log
     vlog("Starting PINN data sequence preparation...",
          verbose=verbose, level=1, logger=_logger)
@@ -1287,6 +1284,7 @@ def prepare_pinn_data_sequences(
             df_proc, features=group_id_cols, 
             name="Group ID column(s)"
             )
+        
 
     vlog("Validating time_steps and forecast_horizon...",
          verbose=verbose, level=3, logger=_logger)
@@ -1296,6 +1294,37 @@ def prepare_pinn_data_sequences(
     forecast_horizon = validate_positive_integer(
         forecast_horizon, "forecast_horizon", )
     
+
+    # ── Entry log 
+    vlog(
+        "⏳ Pre-flight: assessing sliding-window feasibility …",
+        verbose=verbose,
+        level=1,
+        logger=_logger,
+    )
+    
+    ok, _ = check_sequence_feasibility(
+        df_proc.copy(),
+        time_col=time_col,
+        group_id_cols=group_id_cols,
+        time_steps=time_steps,
+        forecast_horizon=forecast_horizon,
+        verbose=verbose,
+        error="raise",  # fail fast on impossibility,
+        logger= _logger, 
+    )
+    
+    vlog(
+        "✅ Feasibility check passed — generating sequences...",
+        verbose=verbose,
+        level=1,
+        logger=_logger,
+    )
+    
+    # Entry log
+    vlog("Starting PINN data sequence generation...",
+         verbose=verbose, level=1, logger=_logger)
+
     # Convert time column to numerical representation
     # (e.g., days since epoch, or normalized year)
     # This is crucial for PINN as 't' is an input for differentiation.

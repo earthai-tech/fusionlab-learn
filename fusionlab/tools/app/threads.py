@@ -317,6 +317,7 @@ class InferenceThread(QThread):
                 kind="inference",
             )
             cfg: SubsConfig = pipe.config
+            pipe.config.log = self.log_msg.emit 
             cfg.progress_callback = self._pct  # 0‑100 from internal steps
 
             pipe.run(
