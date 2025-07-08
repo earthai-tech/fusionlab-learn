@@ -64,7 +64,7 @@ from .threads import (
     InferenceThread, 
     TunerThread 
 )
-from .util_ex import auto_set_ui_fonts 
+from .qt_utils import auto_set_ui_fonts 
 from .utils import log_tuning_params
 from .view import VIS_SIGNALS
   
@@ -898,6 +898,7 @@ class MiniForecaster(QMainWindow):
         # 2) Disable Reset, clear any old coverage
         self.reset_ctl.disable()
         self.coverage_lbl.clear()
+        
     
         # 3) Now dispatch based on mode
         mode = self.mode_mgr.mode
@@ -1278,14 +1279,6 @@ class MiniForecaster(QMainWindow):
             pass
 
         elif mode == Mode.INFER:
-            # # automatically pick manifest if entering inference
-            # # chosen = self._pick_manifest_for_inference()
-            # chosen = self.manifest_mgr.pick_manifest()
-            # if chosen is None:
-            #     # user cancelled → back to TRAIN
-            #     self.mode_mgr.set_mode(Mode.TRAIN)
-            # else:
-            #     self._manifest_path = chosen
             pass 
 
         elif mode == Mode.TUNER:
@@ -1303,7 +1296,7 @@ class MiniForecaster(QMainWindow):
         # 5) Refresh manifest state so Tune/Infer
         # buttons update correctly
         self._refresh_manifest_state()
-
+        
     # Example: trigger dry-run from code:
     def some_debug_action(self):
         self.mode_mgr.set_mode(Mode.DRY_RUN)
