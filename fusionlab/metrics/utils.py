@@ -273,7 +273,6 @@ def compute_quantile_diagnostics(
 
     return results
 
-
 def _resolve_metrics(
     metrics: Optional[Union[List[str], List[Callable], Dict[str, Callable]]],
     default_set: Optional[str] = None

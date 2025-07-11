@@ -294,7 +294,8 @@ class ModelTrainer:
             raise InterruptedError("Physical parameters extraction aborted.")
         try: 
             extract_physical_parameters (
-                self.model, filename = os.path.join (
+                self.model, 
+                filename = os.path.join (
                     self.config.run_output_path, 
                     f'{self.config.model_name}.physical_parameters.csv'
                     ) 
@@ -562,6 +563,16 @@ class Forecaster:
         }
         
         self.log("  Formatting predictions into a structured DataFrame...")
+        
+        base_name  = "03_forecast_results"
+        base_name = apply_affix(
+            base_name , self.kind, affix_prefix='.'
+        )
+        save_path = os.path.join(
+            self.config.run_output_path, 
+            f"{base_name}.csv"
+        )
+        
         forecast_df = format_pinn_predictions(
             predictions=predictions,
             y_true_dict=y_true_for_format,
@@ -578,23 +589,13 @@ class Forecaster:
             model_inputs=inputs_test,
             coord_scaler= coord_scaler, 
             _logger = self.log, 
-            savefile = self.config.run_output_path, 
+            savefile = save_path, 
             name = self.kind, 
             stop_check= stop_check, 
         )
         
         if forecast_df is not None and not forecast_df.empty:
-    
-            base_name  = "03_forecast_results"
-            base_name = apply_affix(
-                base_name , self.kind, affix_prefix='.'
-            )
-            
             if self.config.save_intermediate:
-                save_path = os.path.join(
-                    self.config.run_output_path, 
-                    f"{base_name}.csv"
-                )
                 forecast_df.to_csv(save_path, index=False)
                 self.log(f"  Saved forecast results to: {save_path}")
             return forecast_df
