@@ -1036,7 +1036,7 @@ if forecast_df is not None and not forecast_df.empty:
             titles=[f'GWL: Year {y}' for y in view_years],
             verbose=1, 
             cbar =None, 
-        )
+        ) 
 else:
     print("No SubsModel forecast data to visualize.")
 

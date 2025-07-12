@@ -9,7 +9,6 @@ from __future__ import annotations
 import os 
 import re
 import logging 
-import warnings
 from collections.abc import Mapping, Sequence
 from typing import ( 
     Dict, 
@@ -20,7 +19,6 @@ from typing import (
     Optional,
     Tuple , 
     Callable, 
-    Literal
 )
 import numpy as np 
 import pandas as pd
@@ -46,7 +44,6 @@ __all__= [
      'get_step_names', 
      'stack_quantile_predictions', 
      'adjust_time_predictions', 
-     'check_sequence_feasibility'
      
      ]
 
@@ -708,298 +705,6 @@ def adjust_time_predictions(
 
     return df
 
-def check_sequence_feasibility(
-    df: pd.DataFrame,
-    *,
-    time_col: str,
-    group_id_cols: Optional[List[str]] = None,
-    time_steps: int = 12,
-    forecast_horizon: int = 3,
-    engine: Literal["vectorized", "native", "pyarrow"] = "vectorized",
-    mode: Optional[str] = None,  
-    logger: Callable[[str], None] = print,
-    verbose: int = 0,
-    error: Literal["raise", "warn", "ignore"] = "warn",
-) -> Tuple[bool, Dict[Union[str, Tuple], int]]:
-    """
-    Quick pre-flight feasibility check for sliding-window sequence
-    generation
-
-    Checks whether the input table is *long enough*—per group—to yield at
-    least one `(look-back + horizon)` sliding window, **without** allocating
-    large NumPy tensors.  It is typically called immediately before
-    :pyfunc:`prepare_pinn_data_sequences` or similar generators to “fail
-    fast’’ on data shortages.
-    
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Tidy time-series table in **long** format.  Every row represents one
-        observation timestamp (and optionally one entity when
-        *group_id_cols* is given).  The function never mutates *df*.
-    time_col : str
-        Column that defines temporal order inside each trajectory.  Must be
-        sortable; no other assumptions (numeric, datetime, …) are made.
-    group_id_cols : list of str or None, default None
-        Column names that jointly identify independent trajectories
-        (e.g. ``["well_id"]`` or ``["site", "layer_id"]``).  When *None* the
-        whole DataFrame is treated as a single group.
-    time_steps : int, default 12
-        Look-back window :math:`T_\text{past}` consumed by the encoder.
-    forecast_horizon : int, default 3
-        Prediction horizon :math:`H` produced by the decoder.
-    engine : {'vectorized', 'loop', 'pyarrow'}, default 'vectorized'
-        * **'vectorized'** – fastest; single :pymeth:`DataFrame.groupby.size`
-          call (C-level) plus NumPy math.
-        * **'native'** – reproduces the original Python loop for
-          debuggability.
-        * **'pyarrow'** – forces pandas’ Arrow backend, then runs the same
-          vectorised logic; ~20 % faster on very wide frames when
-          *pyarrow* ≥ 14 is installed.
-    mode : {'pihal_like', 'tft_like'} or None, optional
-        Present only for API symmetry.  **Ignored** – feasibility depends
-        *solely* on ``time_steps + forecast_horizon``.
-    logger : callable, default :pyfunc:`print`
-        Sink for human-readable log messages.  Must accept a single `str`.
-    verbose : int, default 0
-        Verbosity level:
-        0 → silent, 1 → summary lines, 2 → per-group detail.
-    error : {'raise', 'warn', 'ignore'}, default 'warn'
-        Action when *no* group is long enough.
-    
-        * ``'raise'`` – raise :class:`SequenceGeneratorError`.
-        * ``'warn'``  – emit :class:`UserWarning`, return ``False``.
-        * ``'ignore'`` – stay silent, return ``False``.
-    
-    Returns
-    -------
-    feasible : bool
-        ``True`` iff *at least one* sequence can be produced,
-        otherwise ``False``.
-    counts : dict
-        Mapping **group key → # sequences**.
-        The key is a tuple of the group values—or *None* when
-        *group_id_cols* is *None*.
-    
-    Raises
-    ------
-    SequenceGeneratorError
-        Raised only when ``error='raise'`` *and* all groups fail the length
-        check.
-    
-    Notes
-    -----
-    A group passes the check iff
-    
-    .. math::
-    
-       \\text{len(group)} \\;\\ge\\; T_\\text{past} + H
-    
-    No validation of time-gaps, duplicates, or NaNs is performed; those are
-    deferred to the full preparation routine.
-    
-    The **Arrow backend** (``engine='pyarrow'``) can accelerate very wide
-    frames because each column is represented as a contiguous Arrow array
-    with cheap zero-copy slicing.
-    
-    Examples
-    --------
-    * Minimal usage
-
-    >>> from fusionlab.utils.forecast_utils import check_sequence_feasibility
-    >>> ok, counts = check_sequence_feasibility(
-    ...     df,
-    ...     time_col="date",
-    ...     group_id_cols=["site"],
-    ...     time_steps=6,
-    ...     forecast_horizon=3,
-    ... )
-    >>> ok
-    True
-    >>> counts            # doctest: +ELLIPSIS
-    {'A': 9, 'B': 9}
-    
-    * Fail-fast behaviour
-
-    >>> check_sequence_feasibility(
-    ...     df_small,
-    ...     time_col="t",
-    ...     time_steps=10,
-    ...     forecast_horizon=5,
-    ...     error="raise",
-    ... )
-    Traceback (most recent call last):
-    ...
-    SequenceGeneratorError: No group is long enough ...
-    
-    * Switching engines
-
-    >>> _ , _ = check_sequence_feasibility(
-    ...     df,
-    ...     time_col="ts",
-    ...     group_id_cols=None,
-    ...     engine="pyarrow",   # requires pandas 2.1+, pyarrow installed
-    ...     verbose=1,
-    ... )
-    ✅ Feasible: 1 234 567 sequences possible.
-    
-    References
-    ----------
-    * McKinney, W. *pandas 2.0 User Guide*, sec. “GroupBy: split-apply-combine’’.
-    * Arrow Project. (2025). *Arrow Columnar Memory Format v2*.
-
-    """
-    # --- tiny inline logger 
-    def _v(msg: str, *, lvl: int = 1) -> None:
-        vlog(msg, verbose=verbose, level=lvl, logger=logger)
-
-    min_len = time_steps + forecast_horizon
-    _v(f"Required length per group: {min_len}", lvl=2)
-
-    # deterministic ordering
-    # or just df; sorting not needed for counts
-    
-    # sort_cols = (group_id_cols or []) + [time_col]
-    # df_sorted = df.sort_values(sort_cols)
-    
-    # inside your feasibility function
-    total_sequences, counts, sizes = get_sequence_counts(
-        df,
-        group_id_cols=group_id_cols,
-        min_len=min_len,
-        engine=engine,        
-        verbose=verbose,
-        logger=logger,    
-    )
-    
-    if total_sequences == 0:
-        longest = int(sizes.max()) if not sizes.empty else 0
-        msg = (
-            "No group is long enough to create any sequence.\n"
-            f"Each trajectory needs ≥ {min_len} consecutive records "
-            f"(time_steps={time_steps}, horizon={forecast_horizon}), "
-            f"but the longest has only {longest}.\n"
-            "→ Reduce `time_steps` / `forecast_horizon`, "
-            "or supply more data."
-        )
-        _v("❌ " + msg.splitlines()[0], lvl=1)
-
-        if error == "raise":
-            raise SequenceGeneratorError(msg)
-        if error == "warn":
-            warnings.warn(msg, UserWarning, stacklevel=2)
-        return False, counts
-
-    _v(f"✅ Feasible: {total_sequences} sequences possible.", lvl=1)
-    return True, counts
-
-def _sequence_counts_fast(
-    df: pd.DataFrame,
-    group_id_cols: Optional[List[str]],
-    min_len: int,
-) -> Tuple[int, Dict[Union[str, Tuple], int], pd.Series]:
-    """Vectorised: one C call → group sizes, then NumPy math."""
-    if group_id_cols:
-        sizes = df.groupby(group_id_cols, sort=False).size()
-    else:
-        sizes = pd.Series([len(df)], index=[None])
-
-    n_seq_series = np.maximum(sizes - min_len + 1, 0)
-    return int(n_seq_series.sum()), n_seq_series.to_dict(), sizes
-
-def _sequence_counts_loop(
-    df: pd.DataFrame,
-    group_id_cols: Optional[List[str]],
-    min_len: int,
-) -> Tuple[int, Dict[Union[str, Tuple], int], pd.Series]:
-    """Original Python loop – slower but easy to single-step."""
-    if group_id_cols:
-        iterator = df.groupby(group_id_cols)
-    else:
-        iterator = [(None, df)]
-
-    counts: Dict[Union[str, Tuple], int] = {}
-    sizes_dict: Dict[Union[str, Tuple], int] = {}
-    total_sequences = 0
-
-    for g_key, g_df in iterator:
-        n_pts = len(g_df)
-        n_seq = max(n_pts - min_len + 1, 0)
-        counts[g_key] = n_seq
-        sizes_dict[g_key] = n_pts
-        total_sequences += n_seq
-
-    sizes = pd.Series(sizes_dict)
-    return total_sequences, counts, sizes
-
-def get_sequence_counts(
-    df: pd.DataFrame,
-    *,
-    group_id_cols: Optional[List[str]],
-    min_len: int,
-    engine: Literal["vectorized", "native", "pyarrow"] = "vectorized",
-    verbose: int = 0,
-    logger=print,
-) -> Tuple[int, Dict[Union[str, Tuple], int], pd.Series]:
-    """
-    Return the **total** number of feasible sliding-window sequences and
-    a mapping *group → count* using the requested execution *engine*.
-
-    Parameters
-    ----------
-    engine : {'vectorized', 'native', 'pyarrow'}, default 'vectorized'
-        Execution backend.
-
-        * **'vectorized'** – fast C-level :pymeth:`DataFrame.groupby.size`
-          (recommended).
-        * **'native'** – original Python loop (easier to debug, slower).
-        * **'pyarrow'** – forces pandas’ Arrow backend *if available*,
-          then runs the vectorised path.  Falls back silently to
-          ``'vectorized'`` when *pyarrow* is not installed.
-    """
-    def _v(msg: str, lvl: int = 1) -> None:
-        vlog(msg, verbose=verbose, level=lvl, logger=logger)
-
-    if engine == "pyarrow":
-        try:
-            import pyarrow  # noqa: F401
-        except ImportError:  # ⇢ graceful fallback
-            _v("⚠️  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
-            engine = "vectorized"
-
-    if engine == "pyarrow":
-        old_backend = pd.options.mode.dtype_backend
-        pd.options.mode.dtype_backend = "pyarrow"
-        try:
-            total, counts, sizes = _sequence_counts_fast(
-                df, group_id_cols, min_len)
-        finally:
-            pd.options.mode.dtype_backend = old_backend
-
-    elif engine == "vectorized":
-        total, counts, sizes = _sequence_counts_fast(
-            df, group_id_cols, min_len)
-
-    elif engine == "native":
-        total, counts, sizes = _sequence_counts_loop(
-            df, group_id_cols, min_len)
-
-    else:  # pragma: no cover
-        raise ValueError(
-            f"Unknown engine='{engine}'. "
-            "Choose 'vectorized', 'loop', or 'pyarrow'."
-        )
-
-    if verbose >= 2:
-        for g_key, n_seq in counts.items():
-            size_str = sizes[g_key]
-            _v(
-                f"Group {g_key if g_key is not None else '<whole>'}: "
-                f"{size_str} pts → {n_seq} seq.",
-                lvl=2,
-            )
-
-    return total, counts, sizes
 
 def stack_quantile_predictions(
     q_lower:   Union[np.ndarray, Sequence],
@@ -1933,9 +1638,5 @@ def detect_forecast_type(
 
     # If neither format is detected, return 'unknown'.
     return 'unknown'
-
-class SequenceGeneratorError(RuntimeError):
-    """Raised when no sequence can be generated with the given settings."""
-
 
 
