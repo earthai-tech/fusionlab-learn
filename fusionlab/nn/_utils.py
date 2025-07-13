@@ -11,6 +11,8 @@ inputs and creating input sequences with corresponding targets for time series
 forecasting.
 
 """
+import os
+import json
 import time
 import datetime 
 from numbers import Integral, Real 
@@ -84,6 +86,7 @@ Callback=KERAS_DEPS.Callback
 Tensor =KERAS_DEPS.Tensor
 Model =KERAS_DEPS.Model
 Dataset =KERAS_DEPS.Dataset 
+History =KERAS_DEPS.History 
 
 tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor
 
@@ -107,7 +110,7 @@ tf_cond = KERAS_DEPS.cond
 tf_stack =KERAS_DEPS.stack 
 tf_no_op = KERAS_DEPS.no_op
 tf_print = KERAS_DEPS.print 
-    
+
    
 DEP_MSG = dependency_message('nn.utils') 
 _TW = get_table_size()
@@ -131,8 +134,104 @@ __all__ = [
     "prepare_model_inputs" , 
     "extract_batches_from_dataset", 
     "format_predictions", 
+    "export_keras_losses"
    ]
 
+def export_keras_losses(
+    history: History,
+    keys: Optional[List[str]] = None,
+    savefile: Optional[str] = None,
+    verbose: int = 0,
+    formats: Tuple[str, ...] = ("json", "csv"),
+) -> dict:
+    """
+    Export loss(es) (and any other metric) from a Keras History object.
+
+    Parameters
+    ----------
+    history
+        The History object returned by model.fit().
+    keys
+        List of history.history keys to export, e.g.
+        ["loss", "val_loss", "physics_loss"]. If None, defaults to
+        all keys ending with "loss".
+    savefile
+        Path (optionally with extension) where to write the output.
+        If extension is:
+         - .json → writes only JSON
+         - .csv  → writes only CSV
+        If no extension given, will write all formats in `formats`
+        using `savefile` as the base name.
+    verbose
+        If >0, prints status messages.
+    formats
+        File formats to write when `savefile` has no extension.
+        Valid entries are "json" and "csv".
+
+    Returns
+    -------
+    result : dict
+        {
+            "epochs_run": int,
+            "<key1>": [ ... ],
+            "<key2>": [ ... ],
+            ...
+        }
+    """
+    if isinstance(history, History):
+        hist = history.history
+    elif isinstance(history, dict):
+        hist = history
+    else:
+        raise TypeError(
+            "`history` must be a Keras History object or a dictionary."
+        )
+  
+    # 1) Determine which keys to export
+    if keys is None:
+        keys = [k for k in hist if k.endswith("loss")]
+    missing = [k for k in keys if k not in hist]
+    if missing:
+        raise ValueError(f"Requested keys not in history: {missing!r}")
+
+    # 2) Build the results dict
+    epochs = len(hist[keys[0]])
+    result = {"epochs_run": epochs}
+    for k in keys:
+        result[k] = hist[k]
+
+    # 3) If savefile provided, write out
+    if savefile:
+        base, ext = os.path.splitext(savefile)
+        # Determine which extensions to write
+        if ext:
+            exts = [ext.lstrip(".").lower()]
+        else:
+            exts = list(formats)
+
+        for e in exts:
+            out_path = (
+                savefile if ext else f"{base}.{e}"
+            )
+            if e == "json":
+                with open(out_path, "w") as f:
+                    json.dump(result, f, indent=4)
+                if verbose:
+                    print(
+                        f"[export_keras_losses] Wrote JSON to {out_path}")
+            elif e == "csv":
+                df = pd.DataFrame(result)
+                df['epochs_run'] = range (1, epochs + 1 ) 
+                df.to_csv(out_path, index=False)
+                if verbose:
+                    print(
+                        f"[export_keras_losses] Wrote CSV to {out_path}")
+            else:
+                if verbose:
+                    print(
+                        f"[export_keras_losses] Skipping unsupported format: {e!r}")
+
+    return result
 
 def extract_batches_from_dataset(
     dataset: Dataset,

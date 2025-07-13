@@ -98,7 +98,7 @@ class BaseAttentive(Model, NNLearner):
             None
         ], 
         "activation": [StrOptions(
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu"}),callable 
+            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu", "swish"}),callable 
             ],
         "multi_scale_agg": [ 
             StrOptions({"last", "average",  "flatten", "auto", "sum", "concat"}),

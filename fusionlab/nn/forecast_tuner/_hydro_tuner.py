@@ -3,18 +3,18 @@
 #   Author: LKouadio <etanoyau@gmail.com>
 
 import warnings
+import logging 
 from typing import Dict, Optional, Any , Union, Type
-from typing import Tuple, List 
+from typing import Tuple, List, Callable 
 
 import numpy as np 
 
 from ..._fusionlog import fusionlog 
-from ...api.docs import DocstringComponents, _pinn_tuner_common_params 
+from ...api.docs import DocstringComponents, _pinn_tuner_common_params
+from ...core.handlers import _get_valid_kwargs  
 from ...utils.generic_utils import ( 
     vlog, rename_dict_keys, cast_multiple_bool_params
    )
-from ...core.handlers import _get_valid_kwargs 
-
 from ..pinn.models import PIHALNet , TransFlowSubsNet 
 from ..pinn.utils import  ( # noqa
     prepare_pinn_data_sequences, 
@@ -254,8 +254,10 @@ class HydroTuner(PINNTunerBase):
         overwrite: bool = True,
         # Legacy parameter for backward compatibility
         param_space: Optional[Dict[str, Any]] = None,
+        _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None, 
         **kwargs
     ):
+        self._logger = _logger or print 
         # 1. Initialize the parent Keras Tuner HyperModel
         # We explicitly pass all tuner-related arguments to the superclass.
         super().__init__(
@@ -266,7 +268,8 @@ class HydroTuner(PINNTunerBase):
             executions_per_trial=executions_per_trial,
             tuner_type=tuner_type,
             seed=seed,
-            overwrite_tuner=overwrite, # PINNTunerBase uses overwrite_tuner
+            overwrite_tuner=overwrite, 
+            _logger= self._logger, 
             **kwargs
         )
 
@@ -521,6 +524,12 @@ class HydroTuner(PINNTunerBase):
         tuner's ``search()`` loop. Its generic design allows it to build
         any model whose parameters are defined in the ``search_space``.
         """
+        _COMPILE_ONLY_HPS = {
+            "learning_rate",
+            "lambda_gw",
+            "lambda_cons",
+            "lambda_pde",
+        }
         # 1. Initialize parameters with the fixed, non-tunable values.
         model_init_params = self.fixed_params.copy()
         compile_hps = {}
@@ -532,16 +541,24 @@ class HydroTuner(PINNTunerBase):
     
             # Separate compile-time HPs from model __init__ HPs.
             # This makes the tuner agnostic to the model's compile signature.
-            if name in ['learning_rate', 'lambda_gw', 'lambda_cons', 'lambda_physics']:
+            if name in _COMPILE_ONLY_HPS:
                 compile_hps[name] = sampled_value
+                
             else:
                 model_init_params[name] = sampled_value
-    
+ 
+        # Cast HPs that *must* be integers back to int
+        for _k in ("embed_dim", "hidden_units", "lstm_units",
+                   "attention_units", "vsn_units", "num_heads"):
+            if _k in model_init_params:
+                model_init_params[_k] = int(model_init_params[_k])
+
         # 3. Instantiate the specified model class.
         # We filter the dictionary to only pass valid arguments to the model's
         # constructor, preventing errors from extraneous keys.
         valid_init_params = _get_valid_kwargs(
-            self.model_class.__init__, model_init_params
+            self.model_class.__init__, model_init_params, 
+            error ='ignore', # ignore unexpected params silencly
         )
         cast_multiple_bool_params(
             valid_init_params,
@@ -569,7 +586,7 @@ class HydroTuner(PINNTunerBase):
         # ones to the model's compile method. This automatically handles
         # the difference between PIHALNet and TransFlowSubsNet.
         valid_compile_params = _get_valid_kwargs(
-            model.compile, compile_hps
+            model.compile, compile_hps, error ='ignore'
         )
     
         model.compile(
@@ -584,7 +601,6 @@ class HydroTuner(PINNTunerBase):
         )
     
         return model
-    
     
     def run(
         self,
@@ -654,7 +670,7 @@ class HydroTuner(PINNTunerBase):
         """
         vlog(
             f"HydroTuner: Starting run for project '{self.project_name}'...",
-            verbose=verbose, level=1
+            verbose=verbose, level=1, logger=self._logger
         )
     
         # 1. Infer and finalize fixed parameters if not fully provided at init.
@@ -667,7 +683,7 @@ class HydroTuner(PINNTunerBase):
         if not all(k in self.fixed_params for k in required_keys):
             vlog(
                 "Inferring missing fixed parameters from provided data.",
-                verbose=verbose, level=2
+                verbose=verbose, level=2, logger=self._logger
             )
             self.fixed_params = self._infer_and_merge_params(
                 model_name=self.model_class.__name__,
@@ -712,7 +728,8 @@ class HydroTuner(PINNTunerBase):
             self._current_run_case_info.update(case_info)
     
         # 6. Execute the search by calling the parent's search method.
-        vlog("Handing off to Keras Tuner search...", verbose=verbose, level=2)
+        vlog("Handing off to Keras Tuner search...", verbose=verbose, level=2, 
+             logger=self._logger )
         return super().search(
             train_data=train_dataset,
             epochs=epochs,

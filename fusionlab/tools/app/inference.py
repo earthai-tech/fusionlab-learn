@@ -10,29 +10,31 @@ from __future__ import annotations
 import os 
 from pathlib import Path 
 import json 
-from typing import Optional, List, Tuple, Dict, Callable   
+from typing import Optional, List, Tuple, Dict, Callable, Union   
 import joblib 
 import pandas as pd 
 
-from fusionlab.nn import KERAS_DEPS 
-from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences 
-from fusionlab.nn.losses import combined_quantile_loss 
-from fusionlab.utils.generic_utils import ( 
-    normalize_time_column, rename_dict_keys 
-)
-from fusionlab.utils._manifest_registry import ManifestRegistry
-from fusionlab.utils.io_utils import _update_manifest
-from fusionlab.nn.models import TransFlowSubsNet, PIHALNet  # noqa 
-from fusionlab.params import LearnableK, LearnableSs, LearnableQ # Noqa 
-from fusionlab.utils.data_utils import nan_ops 
-from fusionlab.tools.app.config import SubsConfig 
-from fusionlab.tools.app.processing import DataProcessor 
-from fusionlab.tools.app.modeling import Forecaster 
-from fusionlab.tools.app.view import ResultsVisualizer 
-from fusionlab.tools.app.utils import ( 
+from ...nn import KERAS_DEPS 
+from ...nn.pinn.utils import prepare_pinn_data_sequences 
+from ...nn.losses import combined_quantile_loss 
+from ...nn.models import TransFlowSubsNet, PIHALNet  # noqa 
+from ...params import LearnableK, LearnableSs, LearnableQ # Noqa: E401
+from ...registry import  ManifestRegistry, _update_manifest
+from ...utils.data_utils import nan_ops
+from ...utils.generic_utils import normalize_time_column, rename_dict_keys 
+from ...utils.ts_utils import ts_validator 
+
+from .config import SubsConfig 
+from .modeling import Forecaster
+from .processing import DataProcessor 
+from .utils import ( 
     safe_model_loader, _rebuild_from_arch_cfg, 
+    inspect_run_type_from_manifest, 
     _CUSTOM_OBJECTS
 )
+from .tuner import TunerApp 
+from .view import ResultsVisualizer 
+
 
 load_model = KERAS_DEPS.load_model
 Model =KERAS_DEPS.Model 
@@ -56,6 +58,9 @@ class PredictionPipeline:
     log_callback : callable, optional
         A function to receive and handle log messages, such as
         updating a GUI log panel. Defaults to `print`.
+    kind: str, 
+       Name of the pipeline. If provided, name should be used for append 
+       the plot that generated.
     """
     _range = staticmethod(lambda frac, lo, hi: int(lo + (hi - lo)*frac))
 
@@ -64,6 +69,7 @@ class PredictionPipeline:
         manifest_path: Optional[str | os.PathLike] = None,
         *,
         log_callback: Optional[Callable[[str], None]] = None,
+        kind : Optional[str]=None, 
         **kws, 
     ):
         """
@@ -82,12 +88,13 @@ class PredictionPipeline:
             A function to receive and handle log messages. Defaults to `print`.
         """
         self.log = log_callback or print
+        self.kind = kind 
         
         registry = ManifestRegistry()
         if manifest_path is None:
             self.log("No manifest path provided. Locating the latest run...")
             
-            self.manifest_path = registry.latest_manifest()
+            self.manifest_path =registry.latest_manifest()
             if not self.manifest_path:
                 raise FileNotFoundError(
                     "No training runs found in the manifest registry. "
@@ -103,6 +110,13 @@ class PredictionPipeline:
             raise FileNotFoundError(
                 f"Manifest file not found at: {self.manifest_path}"
             )
+        
+        for key in list(kws.keys()): 
+            setattr (self, key, kws[key]) 
+            
+        # --- NEW: Auto-detect the run type ---
+        self.run_type = inspect_run_type_from_manifest(self.manifest_path)
+        self.log(f"Detected run type: '{self.run_type}'")
         
         self._load_from_manifest()
 
@@ -123,18 +137,30 @@ class PredictionPipeline:
 
     def _resolve_artifact_paths(self):
         """Resolves full paths to all artifacts from the manifest."""
-        artifacts = self._manifest.get("artifacts", {})
-        training_info = self._manifest.get("training", {})
-        
+        training_info ={}
         # Helper to construct full path from relative filename in manifest
         def _get_path(key, default_name):
-            filename = artifacts.get(key) or training_info.get(key) or default_name
+            filename = results_sec.get(key) or training_info.get(key) or default_name
             return self.artifacts_dir / filename
+        
+        if self.run_type == 'tuning':
+            results_sec = self._manifest.get("tuner_results", {})
+            self.model_path = self.artifacts_dir/ results_sec.get("best_model")
 
-        self.model_path = _get_path("checkpoint", "model.keras")
-        self.encoder_path = _get_path("encoder", "ohe_encoder.joblib")
-        self.scaler_path = _get_path("main_scaler", "main_scaler.joblib")
-        self.coord_scaler_path = _get_path("coord_scaler", "coord_scaler.joblib")
+        else: # Standard training
+            # training_info = self._manifest.get("training", {})
+            # self.model_path = self.artifacts_dir / training_info.get("checkpoint")
+            training_info = self._manifest.get("training", {})
+            results_sec = self._manifest.get("artifacts", {}) 
+            self.model_path = _get_path("checkpoint", "model.keras")
+            
+        self.encoder_path = _get_path(
+            "encoder", f"{self.config.model_name}.ohe_encoder.joblib")
+        self.scaler_path = _get_path(
+            "main_scaler", f"{self.config.model_name}.main_scaler.joblib")
+        self.coord_scaler_path = _get_path(
+            "coord_scaler", f"{self.config.model_name}.coord_scaler.joblib"
+            )
 
     def _load_artifacts(self) -> None:
         """
@@ -153,27 +179,38 @@ class PredictionPipeline:
                 self.config.quantiles
             )
             
-        build_fn = None
-        model_cfg = self._manifest.get("training", {})
-        # Check if we need to rebuild the model for weights-only loading
-        if str(self.model_path).endswith((".weights.h5", ".weights.keras")):
-            self.log("Weights-only file detected. Rebuilding model from manifest...")
+        # --- THE CORE REFACTORING IS HERE ---
+        if self.run_type == 'tuning':
+            # If it's a tuner manifest, use the dedicated static method
+            # to rebuild the best model from the optimal hyperparameters.
+            self.log("Tuner manifest detected. Rebuilding best model...")
+            self.model = TunerApp.build_model_from_manifest(
+                self.manifest_path, 
+                custom_objects=custom_objects, 
+                log=self.log, 
+            )
+        else: 
+            build_fn = None
+            model_cfg = self._manifest.get("training", {})
+            # Check if we need to rebuild the model for weights-only loading
+            if str(self.model_path).endswith((".weights.h5", ".weights.keras")):
+                self.log("Weights-only file detected. Rebuilding model from manifest...")
+                
+                arch_cfg = model_cfg.get("config")
+                if not arch_cfg:
+                    raise ValueError("Manifest is missing 'training.config' section"
+                                     " required to rebuild model for weights-only file.")
+                # The build function will use the architecture config
+                build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
             
-            arch_cfg = model_cfg.get("config")
-            if not arch_cfg:
-                raise ValueError("Manifest is missing 'training.config' section"
-                                 " required to rebuild model for weights-only file.")
-            # The build function will use the architecture config
-            build_fn = lambda: _rebuild_from_arch_cfg(arch_cfg)
-        
-        # --- 2. Load the Model ---
-        self.model = safe_model_loader(
-            model_path=self.model_path,
-            build_fn=build_fn,
-            custom_objects=custom_objects,
-            log=self.log,
-            model_cfg=model_cfg  # Pass model_cfg for model.build() hint
-        )
+            # --- 2. Load the Model ---
+            self.model = safe_model_loader(
+                model_path=self.model_path,
+                build_fn=build_fn,
+                custom_objects=custom_objects,
+                log=self.log,
+                model_cfg=model_cfg  # Pass model_cfg for model.build() hint
+            )
 
         # --- 3. Load Preprocessing Artifacts ---
         try:
@@ -227,7 +264,9 @@ class PredictionPipeline:
                 f"{', '.join(not_found[:10])}{' …' if len(not_found) > 10 else ''}"
             )
 
-    def run(self, validation_data_path: str):
+    def run(self, validation_data: Union [str, pd.DataFrame], 
+            stop_check =None 
+        ):
         """
         Executes the full prediction workflow on a new validation dataset.
         """
@@ -240,24 +279,22 @@ class PredictionPipeline:
         
         # 2. Process the new validation data
         processed_val_df, static_features_encoded = self._process_validation_data(
-            validation_data_path)
+            validation_data, stop_check = stop_check, 
+            )
         self._tick(30)
         
         # 3. Generate sequences for the validation data
         self.log("Generating validation sequences …")
-        # seq_cb = lambda p: self._tick(
-        #         self._range(p/100, 30, 80)        # smooth 30→80 %
-        #     )
-        # self.config.progress_callback = seq_cb
-        
+    
         val_inputs, val_targets = self._generate_validation_sequences(
-            processed_val_df, static_features_encoded 
-            
+            processed_val_df, static_features_encoded,
+            stop_check = stop_check,  
         )
         self._tick(80)
         
         # 4. Run forecasting
-        forecaster = Forecaster(self.config, self.log)
+        forecaster = Forecaster(
+            self.config, self.log, kind = self.kind)
         # rename target to fit the exact subsudence value. 
         val_targets = rename_dict_keys(
             val_targets.copy(),
@@ -267,39 +304,70 @@ class PredictionPipeline:
                 }
              )
         forecast_df = forecaster._predict_and_format(
-            self.model, val_inputs, val_targets, self.coord_scaler
+            self.model, val_inputs, val_targets, self.coord_scaler, 
+            stop_check = stop_check , 
         )
         self._tick(95)
         
         # 5. Visualize results
         visualizer = ResultsVisualizer(
-            self.config, self.log
+            self.config, self.log, 
+            kind = self.kind
         )
-        visualizer.run(forecast_df)
+        visualizer.run(forecast_df, stop_check = stop_check )
         if self.model_path: 
+            inference_ref = 'unset'
+            if isinstance(validation_data, str): 
+                inference_ref = validation_data # assume a file path 
+                
             _update_manifest(
                 run_dir = os.path.dirname (str(self.manifest_path)),      
                 section = "inference",
-                item = {"validation_file": validation_data_path},
+                item = {"validation_file": str(inference_ref)},
             )
 
         self.log("--- Prediction Pipeline Finished Successfully ---")
         self._tick(100)
         
     def _process_validation_data(
-        self, validation_data_path: str
+        self, validation_data: str,
+        stop_check = None, 
     ) -> Tuple[pd.DataFrame, List[str]]:
         """Loads and processes the new validation data using saved scalers."""
-        self.log(f"Processing new validation data from: {validation_data_path}")
-        
-        val_df = pd.read_csv(validation_data_path)
+        msg ="Processing new validation "
+        val_df = validation_data
+        if isinstance ( val_df, str): 
+            self.log(f"{msg} from {validation_data}")
+            # assume a file path 
+            val_df = pd.read_csv(val_df)
+        elif isinstance (val_df, pd.DataFrame): 
+            self.log(msg)
+
+        else: 
+            raise ValueError(
+                "Inference/Validation data *must* be either a Pathlike object"
+                f"or a dataframe. Got {type(validation_data).__name__!r}"
+            )
+        # check when dataframe contain date time. 
+        val_df= ts_validator(
+            val_df.copy(),
+            dt_col=self.config.time_col,
+            to_datetime='auto',
+            as_index=False,
+            error="raise",
+            return_dt_col=False,
+            verbose=0
+        )
         
         # Use a temporary DataProcessor to apply transformations
         # This assumes DataProcessor can be initialized and used this way.
-        temp_processor = DataProcessor(self.config)
+        temp_processor = DataProcessor(self.config, kind =self.kind)
         temp_processor.encoder = self.encoder
         temp_processor.scaler = self.scaler
         
+        if stop_check and stop_check():
+            raise InterruptedError("Preprocessing aborted.")
+            
         # A simplified transform-only logic
         df_cleaned = nan_ops(val_df, ops='sanitize', action='fill')
         
@@ -333,7 +401,8 @@ class PredictionPipeline:
                 year_col= self.config.time_col,
                 drop_orig= True 
             )
-        
+        if stop_check and stop_check():
+            raise InterruptedError("Processing aborted.")
         # df_processed['time_numeric'] = df_processed[
         #     self.config.time_col] - df_processed[self.config.time_col].min()
         cols_to_scale = [

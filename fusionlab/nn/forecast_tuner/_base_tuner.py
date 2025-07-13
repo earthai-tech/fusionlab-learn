@@ -8,7 +8,8 @@ Base classes and utilities for hyperparameter tuning of PINN models.
 import os
 import json
 import warnings
-from typing import Dict, Any, Optional, List, Tuple, Union
+import logging 
+from typing import Dict, Any, Optional, List, Tuple, Union, Callable
 
 from ..._fusionlog import fusionlog 
 from ...api.docs import DocstringComponents
@@ -60,6 +61,7 @@ class PINNTunerBase(HyperModel, BaseClass):
         tuner_type: str = 'randomsearch',
         seed: Optional[int] = None,
         overwrite_tuner: bool = True,
+        _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
         **tuner_kwargs
     ):
         if not HAS_KT:
@@ -78,6 +80,7 @@ class PINNTunerBase(HyperModel, BaseClass):
         self.seed = seed
         self.overwrite_tuner = overwrite_tuner
         self.tuner_kwargs = tuner_kwargs
+        self._logger = _logger or print 
 
         self.best_hps_: Optional[HyperParameters] = None
         self.best_model_: Optional[Model] = None
@@ -164,6 +167,7 @@ class PINNTunerBase(HyperModel, BaseClass):
                 Returns (None, None, self.tuner_) if search encounters issues or
                 no best HPs are found.
         """
+        tuner_verbose = additional_search_kwargs.pop('tuner_verbose', 1)
         # ------------------------------------------------------------------
         # Rename target‑dict keys *only if* each element’s target component
         # is a Python dict produced by PIHALNet.  For HALNet the target is
@@ -225,12 +229,16 @@ class PINNTunerBase(HyperModel, BaseClass):
         
         vlog(
             f"Starting hyperparameter search with {self.tuner_type.upper()}...",
-            verbose=verbose, level=1
+            verbose=verbose, level=1, logger= self._logger, 
         )
         vlog(f"  Project: {self.project_name} (in {self.directory}/)",
-             verbose=verbose, level=2)
-        vlog(f"  Objective: {self.objective}", verbose=verbose, level=2)
-        vlog(f"  Epochs per trial: {epochs}", verbose=verbose, level=2)
+             verbose=verbose, level=2,  logger= self._logger,)
+        vlog(f"  Objective: {self.objective}", verbose=verbose, 
+             level=2, logger= self._logger,
+             )
+        vlog(f"  Epochs per trial: {epochs}", verbose=verbose, level=2, 
+             logger= self._logger 
+             )
  
         search_callbacks = callbacks or []
         if not any(isinstance(cb, EarlyStopping) for cb in search_callbacks):
@@ -248,20 +256,20 @@ class PINNTunerBase(HyperModel, BaseClass):
             search_callbacks.append(early_stopping_search)
 
             vlog("  Added default EarlyStopping callback for search.",
-                 verbose=verbose, level=2, )
+                 verbose=verbose, level=2, logger= self._logger)
 
         self.tuner_.search(
             train_data,
             epochs=epochs,
             validation_data=validation_data,
             callbacks=search_callbacks,
-            verbose=1 if verbose >=1 else 0, # Keras tuner verbose
+            verbose= tuner_verbose, # 1 if verbose >=1 else 0, # Keras tuner verbose
             **additional_search_kwargs
         )
         
         vlog(
             "\nHyperparameter search complete.", 
-            verbose=verbose, level=1 
+            verbose=verbose, level=1, logger= self._logger, 
         )
         try:
             self.tuner_.results_summary(num_trials=10)
@@ -276,13 +284,13 @@ class PINNTunerBase(HyperModel, BaseClass):
             else:
                 self.best_hps_ = best_hps_list[0]
                 vlog("\n--- Best Hyperparameters Found ---", 
-                     verbose=verbose, level=1,)
+                     verbose=verbose, level=1, logger= self._logger,)
                 for hp_name, hp_value in self.best_hps_.values.items():
                     vlog(f"  {hp_name}: {hp_value}",
-                         verbose=verbose, level=2, )
+                         verbose=verbose, level=2, logger= self._logger, )
                 
                 vlog("\nBuilding model with best hyperparameters...",
-                     verbose=verbose, level=1, )
+                     verbose=verbose, level=1, logger= self._logger, )
                 try: 
                     self.best_model_ = self.tuner_.hypermodel.build(
                         self.best_hps_)
@@ -301,7 +309,7 @@ class PINNTunerBase(HyperModel, BaseClass):
     def _save_tuning_summary(self, verbose: int = 1):
         if self.tuner_ is None or self.best_hps_ is None:
             vlog("No tuner or best HPs found to save summary.",
-                 verbose=verbose, level=2)
+                 verbose=verbose, level=2, logger= self._logger,)
             return
 
         summary_data = {
@@ -327,7 +335,7 @@ class PINNTunerBase(HyperModel, BaseClass):
             with open(log_file_path, "w") as f:
                 json.dump(summary_data, f, indent=4, default=str)
             vlog(f"Tuning summary saved to {log_file_path}",
-                 verbose=verbose, level=1, )
+                 verbose=verbose, level=1, logger= self._logger,)
         except Exception as e:
             logger.warning(
                 f"Could not save tuning summary log to {log_file_path}: {e}"

@@ -47,9 +47,224 @@ __all__= [
     'ts_corr_analysis', 'transform_stationarity','ts_split', 
     'ts_outlier_detector', 'create_lag_features', 
     'select_and_reduce_features', 'get_decomposition_method', 
-    'filter_by_period', 'to_dt', 'compute_group_window_counts'
+    'filter_by_period', 'to_dt', 'compute_group_window_counts', 
+    'resolve_time_steps'
  ]
 
+def resolve_time_steps(
+    df: pd.DataFrame,
+    time_col: str,
+    group_id_cols: List[str],
+    time_steps: Optional[int] = None,
+    forecast_horizon: int = 1,
+    mode: str = 'warn'
+) -> int:
+    """Validates or determines a reasonable look-back window (`time_steps`).
+
+    This function analyzes a dataset to determine the maximum possible
+    `time_steps` that can be used for sequence generation, given a
+    specific forecast horizon. It helps prevent silent errors where a
+    chosen look-back window is too large for the available data,
+    resulting in zero training samples.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing the time series data. It should
+        have one row per time point per entity.
+    time_col : str
+        The name of the column containing the time information. This
+        column should be convertible to a datetime object.
+    group_id_cols : list of str
+        A list of column names that uniquely identify each individual
+        time series (e.g., `['longitude', 'latitude']`).
+    time_steps : int, optional
+        The number of look-back time steps to validate. If ``None``,
+        the function will automatically determine and return the
+        maximum possible `time_steps` value. Default is ``None``.
+    forecast_horizon : int, default=1
+        The number of future steps the model is expected to predict.
+        This is subtracted from the series length to find the max
+        look-back window.
+    mode : {'warn', 'strict', 'auto'}, default='warn'
+        The behavior mode if a provided `time_steps` is too large:
+        - 'warn': Issues a warning but returns the user's value.
+        - 'strict': Raises a ValueError.
+        - 'auto': Corrects and returns the maximum possible value.
+
+    Returns
+    -------
+    int
+        The validated or automatically determined number of time steps.
+
+    Raises
+    ------
+    ValueError
+        If a provided `time_steps` is invalid and ``mode='strict'``,
+        or if essential columns are missing from the DataFrame.
+
+    Notes
+    -----
+    The total length required to generate a single sample is
+    `time_steps + forecast_horizon`. This function finds the shortest
+    time series group in the dataset and calculates the maximum allowed
+    `time_steps` as:
+    ``max_steps = min_series_length - forecast_horizon``.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.utils.ts_utils import resolve_time_steps
+    >>> data = {
+    ...     'sensor_id': ['A']*10 + ['B']*15,
+    ...     'time': pd.to_datetime(pd.date_range('2023-01-01', periods=10).tolist() +
+    ...                          pd.date_range('2023-01-01', periods=15).tolist())
+    ... }
+    >>> df = pd.DataFrame(data)
+    >>> # Auto-detection mode: What's the max possible look-back?
+    >>> # Shortest series is 10. 10 - horizon(1) = 9
+    >>> resolve_time_steps(df, 'time', ['sensor_id'], time_steps=None, forecast_horizon=1)
+    Info: `time_steps` is None. Auto-detecting the maximum possible value.
+    9
+
+    >>> # 'strict' mode: User value is too high, will raise an error.
+    >>> try:
+    ...     resolve_time_steps(df, 'time', ['sensor_id'], time_steps=12,
+    ...                         forecast_horizon=1, mode='strict')
+    ... except ValueError as e:
+    ...     print(e)
+    The chosen `time_steps` (12) is too large for the dataset...
+
+    >>> # 'auto' mode: User value is too high, will be corrected.
+    >>> resolve_time_steps(df, 'time', ['sensor_id'], time_steps=12,
+    ...                         forecast_horizon=1, mode='auto')
+    Info: Correcting `time_steps` from 12 to the maximum possible value of 9.
+    9
+
+    >>> # 'warn' mode: User value is too high, prints a warning.
+    >>> resolve_time_steps(df, 'time', ['sensor_id'], time_steps=12,
+    ...                         forecast_horizon=1, mode='warn')
+    <stdin>:1: UserWarning: The chosen `time_steps` (12) is too large...
+    12
+    """
+    
+    is_frame(df, df_only =True, objname="Data 'df'")
+    
+    df = ts_validator(
+        df,
+        dt_col=time_col,
+        to_datetime='auto',
+        as_index=False,
+        error="raise",
+        return_dt_col=False,
+        verbose=0
+    )
+    
+    if not all(col in df.columns for col in group_id_cols + [time_col]):
+        raise ValueError(
+            "One or more specified columns not found in DataFrame."
+        )
+
+    # --- Robust Time Column Handling ---
+    df_temp = df.copy()
+    datetime_series = pd.to_datetime(df_temp[time_col], errors='coerce')
+
+    if datetime_series.isnull().any():
+        warnings.warn(
+            f"Could not parse all values in time column '{time_col}' as "
+            "dates. Rows with invalid formats will be ignored for this check."
+        )
+        df_temp = df_temp[datetime_series.notna()]
+
+    # --- Calculate Maximum Possible Time Steps ---
+    grouped = df_temp.groupby(group_id_cols)
+    series_lengths = grouped.size()
+
+    if series_lengths.empty:
+        warnings.warn("Dataset is empty or contains no valid groups.")
+        return time_steps or 1 # Return 1 if no user value
+
+    max_possible_for_all = (series_lengths - forecast_horizon).min()
+
+    if max_possible_for_all < 1:
+        message = (
+            f"No time series group is long enough to create a sequence "
+            f"with a forecast horizon of {forecast_horizon}. The "
+            f"shortest series has {series_lengths.min()} points."
+        )
+        if mode == 'strict':
+            raise ValueError(message)
+        warnings.warn(message, UserWarning)
+        return 1  # Fallback to a minimum of 1
+
+    # --- Handle Auto-Detection or Validation ---
+    if time_steps is None:
+        print(
+            "Info: `time_steps` is None. Auto-detecting the maximum "
+            "possible value.\n      With a forecast horizon of "
+            f"{forecast_horizon}, the maximum reasonable `time_steps` "
+            f"is {int(max_possible_for_all)}."
+        )
+        return int(max_possible_for_all)
+
+    # --- Compare user value and Act based on Mode ---
+    if time_steps > max_possible_for_all:
+        message = (
+            f"The chosen `time_steps` ({time_steps}) is too large for "
+            f"the dataset. The shortest time series can only support a "
+            f"maximum of {max_possible_for_all} look-back steps for a "
+            f"forecast horizon of {forecast_horizon}."
+        )
+        if mode == 'strict':
+            raise ValueError(message)
+        elif mode == 'warn':
+            warnings.warn(
+                f"{message} Proceeding with the original value, but this"
+                " will likely result in zero training samples.",
+                UserWarning
+            )
+            return time_steps
+        elif mode == 'auto':
+            print(f"Info: Correcting `time_steps` from {time_steps} to "
+                  f"the maximum possible value of {max_possible_for_all}.")
+            return int(max_possible_for_all)
+
+    print(f"Provided `time_steps` ({time_steps}) is valid for this dataset.")
+    return time_steps
+
+def _to_datetime_series(series: pd.Series) -> pd.Series:
+    """
+    Robustly converts a pandas Series to datetime objects.
+
+    This helper handles various formats, including integer years,
+    string years, or standard datetime strings.
+
+    Parameters 
+    ----------
+        series (pd.Series): The input series to convert.
+
+    Returns
+    -------
+        pd.Series: A new series with datetime objects.
+    """
+    # If already in datetime format, do nothing.
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+
+    # Handle numeric types (e.g., integer years like 2022)
+    if pd.api.types.is_numeric_dtype(series):
+        # Heuristic: check if values look like years
+        if series.between(1900, 2100).all():
+            return pd.to_datetime(series, format='%Y', errors='coerce')
+
+    # For object/string types, try standard parsing first.
+    # If that fails, it might be a string year '2022'.
+    try:
+        return pd.to_datetime(series, errors='coerce')
+    except (ValueError, TypeError):
+        # Fallback for string years or other formats
+        return pd.to_datetime(series, format='%Y', errors='coerce')
+    
 def compute_group_window_counts(
     group_lengths: Dict[str, int],
     time_steps: int,

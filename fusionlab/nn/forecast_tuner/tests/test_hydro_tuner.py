@@ -94,7 +94,7 @@ def test_init_with_invalid_model_name(fixed_params, minimal_search_space):
 def test_init_with_missing_fixed_params(minimal_search_space):
     """Tests that tuner raises an error if essential fixed params are missing."""
     incomplete_params = {"static_input_dim": 2} # Missing many keys
-    with pytest.raises(ValueError, match="Missing required key"):
+    with pytest.raises(ValueError, match="The `fixed_params` dictionary is missing the required key: 'dynamic_input_dim'"):
         HydroTuner(
             model_name_or_cls=PIHALNet,
             fixed_params=incomplete_params,
@@ -174,7 +174,7 @@ def test_end_to_end_run(
     assert tuner_instance is not None
     assert os.path.exists(project_dir / "end_to_end_test")
 
-def test_build_with_model_specific_hps(fixed_params, tmp_path):
+def test_build_with_model_specific_hps(fixed_params, dummy_data,    tmp_path):
     """
     Tests that the build method correctly handles hyperparameters specific
     to TransFlowSubsNet.
@@ -184,7 +184,7 @@ def test_build_with_model_specific_hps(fixed_params, tmp_path):
     # Define a search space that includes HPs only used by TransFlowSubsNet
     transflow_search_space = {
         "learning_rate": [1e-3],
-        "K": ["learnable", 1e-4],
+        "K": ["learnable", 'fixed'],
         "lambda_gw": {"type": "float", "min_value": 0.1, "max_value": 1.0}
     }
     
@@ -200,8 +200,8 @@ def test_build_with_model_specific_hps(fixed_params, tmp_path):
     # Run a minimal search to trigger the build method
     try:
         tuner.run(
-            inputs=dummy_data(common_dimensions())["inputs"],
-            y=dummy_data(common_dimensions())["targets"],
+            inputs=dummy_data["inputs"],
+            y=dummy_data["targets"],
             epochs=1
         )
     except Exception as e:
@@ -211,4 +211,5 @@ def test_build_with_model_specific_hps(fixed_params, tmp_path):
         )
         
 if __name__ =='__main__': # pragma : no cover 
-    pytest.main( [__file__,  "--maxfail=1 ", "--disable-warnings",  "-q"])
+    # pytest.main( [__file__,  "--maxfail=1 ", "--disable-warnings",  "-q"])
+    pytest.main([__file__, '-vv'])

@@ -32,9 +32,13 @@ from typing import (
 
 import pandas as pd 
 import numpy as np   
-from fusionlab.utils.deps_utils import get_versions
-from fusionlab.utils.generic_utils import ensure_directory_exists
-from fusionlab.tools.app._config import setup_environment as _setup_env   
+
+from ...registry import ManifestRegistry
+from ...utils.deps_utils import get_versions
+from ...utils.generic_utils import ensure_directory_exists
+
+from ._config import setup_environment as _setup_env   
+from .utils import get_safe_output_dir 
 
 if not globals().get("_FUSIONLAB_ENV_READY", False):
     _setup_env()                           
@@ -60,12 +64,12 @@ class SubsConfig:
         overridden by keyword arguments.
         """
         # --- File and Path Configuration ---
+        self.run_type = 'training' 
         self.city_name: str = 'zhongshan'
         self.model_name: str = 'TransFlowSubsNet'
         self.data_dir: str = os.getenv("JUPYTER_PROJECT_ROOT", "../..")
         self.data_filename: str = "zhongshan_500k.csv"
-        self.output_dir: str = os.path.join(os.getcwd(), "results_pinn")
-
+        self.output_dir = os.getcwd() 
         # --- Time and Horizon Configuration ---
         self.train_end_year: int = 2022
         self.forecast_start_year: int = 2023
@@ -134,7 +138,6 @@ class SubsConfig:
             or cast(Callable[[int], None], lambda *_: None)
         )
         self.verbose = 1 
-        
         # Override defaults with any user-provided kwargs
         for key, value in kwargs.items():
             if hasattr(self, key):
@@ -147,10 +150,17 @@ class SubsConfig:
 
     def _build_paths(self):
         """Constructs the full run output path based on current config."""
+        safe_base_dir = get_safe_output_dir(
+            base_dir=self.output_dir,
+            run_type=self.run_type, 
+            log = self.log
+        )
+        self.output_dir = str (safe_base_dir )
         self.run_output_path = os.path.join(
             self.output_dir, f"{self.city_name}_{self.model_name}_run"
         )
         ensure_directory_exists(self.run_output_path)
+        
 
     def update_from_gui(self, gui_config: Dict[str, Any]):
         """Updates configuration from a dictionary, e.g., from the GUI state."""
@@ -159,7 +169,7 @@ class SubsConfig:
                 setattr(self, key, value)
         self._build_paths() # Re-build paths in case model name changed
         
-    def auto_detect_columns(self, df: pd.DataFrame ):
+    def auto_detect_columns(self, df: pd.DataFrame):
         """
         Automatically detects and sets column lists (categorical, numerical,
         static, dynamic) if they are set to 'auto'. This method respects
@@ -226,7 +236,8 @@ class SubsConfig:
     def to_json(
         self,
         path: Optional[Union[str, os.PathLike]] = None,
-        extra: Optional[dict] = None
+        extra: Optional[dict] = None, 
+        manifest_kind : Optional[str]=None, 
     ) -> Path:
         """Serializes the configuration to a JSON manifest file.
 
@@ -260,9 +271,9 @@ class SubsConfig:
             The absolute path to the saved manifest file *inside* the
             central registry.
         """
-        from fusionlab.utils._manifest_registry import ManifestRegistry
+        registry = ManifestRegistry(
+            manifest_kind= manifest_kind or 'training') 
         
-        registry = ManifestRegistry()
         manifest_path: Path
 
         if path is None:
@@ -284,7 +295,7 @@ class SubsConfig:
         self._registry_path = run_dir 
         
         # save manifest file absolute path 
-        manifest_path = run_dir / registry._MANIFEST_FILENAME
+        manifest_path = run_dir / registry._manifest_filename
         
         # 1. Create a flat copy of all public attributes for serialization.
         cfg_dict = {

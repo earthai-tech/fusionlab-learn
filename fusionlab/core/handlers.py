@@ -1052,7 +1052,8 @@ def get_valid_kwargs(obj_or_func, raise_warning=False, **kwargs):
     return valid_kwargs
 
 def _get_valid_kwargs(
-        callable_obj: Any, kwargs: Dict[str, Any]
+        callable_obj: Any, kwargs: Dict[str, Any], 
+        error: str ='warn', 
     ) -> Dict[str, Any]:
     """
     Filter and return only the valid keyword arguments for a given 
@@ -1103,10 +1104,14 @@ def _get_valid_kwargs(
     # Warn the user about invalid kwargs
     if invalid_kwargs:
         invalid_keys = ', '.join(invalid_kwargs.keys())
-        warnings.warn(
-            f"The following keyword arguments are invalid"
-            f" and will be ignored: {invalid_keys}"
+        msg = ("The following keyword arguments are invalid"
+               f" and will be ignored: {invalid_keys}"
         )
+        if error =='warn': 
+            warnings.warn(msg)
+        elif error =='raise': 
+            raise ValueError(msg ) 
+        # ignore.
     
     return valid_kwargs
 

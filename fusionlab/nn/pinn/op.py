@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
-
+# fusionlab/nn/pinn/op.py 
 """
 Physics-Informed Neural Network (PINN) Operations
 and Helpers.
 """
+import os
+import datetime
+
+
 from typing import Dict, List, Optional, Tuple, Union, Callable
 from typing import Mapping, Sequence
 import collections.abc as cabc
+
+import pandas as pd
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
 from ...utils.deps_utils import ensure_pkg 
@@ -16,6 +22,7 @@ from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from .utils import extract_txy_in 
 
 Model = KERAS_DEPS.Model
+Variable =KERAS_DEPS.Variable 
 Tensor = KERAS_DEPS.Tensor
 GradientTape = KERAS_DEPS.GradientTape
 
@@ -24,11 +31,157 @@ tf_square = KERAS_DEPS.square
 tf_name_scope = KERAS_DEPS.name_scope
 tf_float32 =KERAS_DEPS.float32 
 tf_constant = KERAS_DEPS.constant 
-
+tf_exp =KERAS_DEPS.exp 
 
 DEP_MSG = dependency_message('nn.transformers') 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
+
+
+def extract_physical_parameters(
+    model: Model,
+    to_csv: bool = False,
+    filename: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    verbose: int = 0,
+) -> Dict[str, float]:
+    """Extracts physical parameters from a PINN model.
+
+    This function inspects a trained PINN model (like
+    TransFlowSubsNet or PIHALNet) and extracts the final values
+    of its physical coefficients. It handles both learnable and
+    fixed parameters, including those trained in log-space.
+
+    Parameters
+    ----------
+    model : tf.keras.Model
+        A trained physics-informed model instance, which is expected
+        to have attributes for physical parameters (e.g., `log_K`,
+        `Q`, `get_pinn_coefficient_C`).
+    to_csv : bool, default=False
+        If True, exports the extracted parameters to a CSV file.
+    filename : str, optional
+        The desired filename for the output CSV, e.g.,
+        'nansha_params.csv'. If None, a default name with a
+        timestamp is generated.
+    save_dir : str, optional
+        Directory to save the CSV file. Defaults to the current
+        working directory.
+    verbose : int, default=0
+        Controls the verbosity of the output. Set to 1 to print
+        the extracted parameters to the console.
+
+    Returns
+    -------
+    dict
+        A dictionary containing the names and final floating-point
+        values of the physical parameters found in the model.
+
+    Notes
+    -----
+    The function gracefully handles models with different sets of
+    physical parameters. For example, it will only extract the
+    consolidation coefficient 'C' from a `PIHALNet` model
+    without raising an error for missing `K`, `Ss`, or `Q`.
+
+    See Also
+    --------
+    fusionlab.nn.pinn.TransFlowSubsNet : A fully coupled PINN for
+        subsidence and groundwater flow.
+    fusionlab.nn.pinn.PIHALNet : A PINN focused on the consolidation
+        equation.
+
+    Examples
+    --------
+    >>> # Assuming 'my_model' is a trained TransFlowSubsNet instance
+    >>> # learned_params = extract_physical_parameters(
+    ... #     model=my_model,
+    ... #     to_csv=True,
+    ... #     filename="nansha_learned_params.csv",
+    ... #     verbose=1
+    ... # )
+    >>> # print(learned_params)
+    {'Hydraulic_Conductivity_K': 8.5e-05, 'Specific_Storage_Ss': 6e-06, ...}
+    """
+    params = {}
+    if verbose:
+        print("Extracting physical parameters from the trained model...")
+
+    # A helper function to print verbose messages
+    def _vprint(message):
+        if verbose:
+            print(message)
+
+    # --- Extract Hydraulic Conductivity (K) ---
+    if hasattr(model, 'log_K'):
+        # Parameter was learnable (stored as log(K))
+        value = tf_exp(model.log_K).numpy()
+        params['Hydraulic_Conductivity_K'] = float(value)
+        _vprint(f"  - Found learnable K: {value:.4e}")
+    elif hasattr(model, 'K'):
+        # Parameter was fixed
+        value = model.K.numpy()
+        params['Hydraulic_Conductivity_K'] = float(value)
+        _vprint(f"  - Found fixed K: {value:.4e}")
+
+    # --- Extract Specific Storage (Ss) ---
+    if hasattr(model, 'log_Ss'):
+        # Parameter was learnable (stored as log(Ss))
+        value = tf_exp(model.log_Ss).numpy()
+        params['Specific_Storage_Ss'] = float(value)
+        _vprint(f"  - Found learnable Ss: {value:.4e}")
+    elif hasattr(model, 'Ss'):
+        # Parameter was fixed
+        value = model.Ss.numpy()
+        params['Specific_Storage_Ss'] = float(value)
+        _vprint(f"  - Found fixed Ss: {value:.4e}")
+
+    # --- Extract Source/Sink Term (Q) ---
+    if hasattr(model, 'Q'):
+        q_param = model.Q
+        value = q_param.numpy()
+        params['Source_Sink_Q'] = float(value)
+        if isinstance(q_param, Variable):
+            _vprint(f"  - Found learnable Q: {value:.4e}")
+        else:
+            _vprint(f"  - Found fixed Q: {value:.4e}")
+
+    # --- Extract Consolidation Coefficient (C) ---
+    # Using a getter method is robust if the model defines it
+    if hasattr(model, 'get_pinn_coefficient_C'):
+        value = model.get_pinn_coefficient_C().numpy()
+        params['Consolidation_Coefficient_C'] = float(value)
+        # Check for the underlying log variable to confirm learnability
+        if hasattr(model, 'log_C_coefficient'):
+             _vprint(f"  - Found learnable C: {value:.4e}")
+        else:
+             _vprint(f"  - Found fixed C: {value:.4e}")
+
+    # --- Handle CSV Export ---
+    if to_csv or filename:
+        if filename is None:
+            # Generate a default filename with a timestamp
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"physical_parameters_{timestamp}.csv"
+
+        # Determine save path, default to current directory
+        save_path = os.path.join(
+            save_dir, filename) if save_dir else filename
+
+        try:
+            # Create a DataFrame and save to CSV
+            df = pd.DataFrame(
+                list(params.items()), columns=['Parameter', 'Value'])
+            df.to_csv(save_path, index=False)
+            if verbose:
+                print("\nSuccessfully exported parameters to:"
+                      f" {os.path.abspath(save_path)}")
+        except IOError as e:
+            print(f"\nError: Could not write to file at {save_path}."
+                  " Please check permissions.")
+            raise e
+
+    return params
 
 def compute_consolidation_residual(
     s_pred: Tensor,
@@ -654,3 +807,6 @@ def compute_gw_flow_derivatives(
         logger.warning("d2h/dy2 is None in compute_gw_flow_derivatives.")
         
     return dh_dt, d2h_dx2, d2h_dy2
+
+
+

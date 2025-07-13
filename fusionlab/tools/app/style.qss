@@ -1,0 +1,145 @@
+/*
+ * Geoscience Theme for FusionLab-learn PINN Mini GUI
+ *
+ * This stylesheet provides a clean, professional look with a palette
+ * inspired by geological maps, earth tones, and natural materials.
+ */
+
+/* --- Color Palette --- */
+:root {
+    --primary-color: #A13300;       /* Deep Terracotta for primary actions */
+    --primary-hover-color: #C64100;  /* Brighter Terracotta for hover */
+    --accent-color: #D4A017;         /* Sandstone Gold for highlights */
+    --success-color: #2E7D32;       /* Forest Green for progress/success */
+    --inference-color: #004D40;     /* Deep Ocean Teal for inference mode */
+    
+    --bg-main: #F9F7F5;             /* Light Alabaster/Parchment */
+    --bg-card: #FFFFFF;
+    --bg-input: #F0F2F5;            /* Light Stone Grey */
+    
+    --text-primary: #37474f;         /* Dark Slate for body text */
+    --text-title: #A13300;           /* Primary color for titles */
+    --text-muted: #6c757d;           /* Muted Grey for descriptions */
+    
+    --border-color: #E0E0E0;         /* Soft Grey for borders */
+}
+
+/* --- Main Window and General Styles --- */
+QMainWindow, QWidget {
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* --- Header and Title --- */
+QLabel#title {
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--text-title);
+    padding: 8px 0;
+}
+QLabel#description {
+    font-size: 14px;
+    color: var(--text-muted);
+}
+
+/* --- Panel ("Card") Styling --- */
+QFrame#card {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+QLabel#cardTitle {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-title);
+    padding-bottom: 5px;
+}
+QLabel#cardDescription {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* --- Button Styling --- */
+QPushButton {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 9px 15px;
+    border-radius: 6px;
+    font-weight: bold;
+    outline: none;
+}
+QPushButton:hover {
+    background-color: var(--primary-hover-color);
+}
+QPushButton:disabled {
+    background-color: #e9ecef;
+    color: #adb5bd;
+}
+QPushButton#resetButton, QPushButton#stopButton {
+    background-color: #e9ecef;
+    color: var(--text-primary);
+    font-weight: normal;
+}
+QPushButton#resetButton:hover, QPushButton#stopButton:hover {
+    background-color: #ced4da;
+}
+/* Special style for the Inference button when active */
+QPushButton#inferenceButton:enabled {
+    background-color: var(--inference-color);
+    color: white;
+    font-weight: bold;
+}
+QPushButton#inferenceButton:enabled:hover {
+    background-color: #00695C; /* Lighter Teal */
+}
+
+/* --- Input Field Styling --- */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background-color: var(--bg-input);
+    border: 1px solid var(--border-color);
+    padding: 7px;
+    border-radius: 6px;
+    color: var(--text-primary);
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 2px solid var(--primary-color);
+    padding: 6px; /* Adjust padding to keep size consistent */
+}
+QComboBox::drop-down {
+    border: none;
+}
+
+/* --- Log and Results Panel --- */
+QTextEdit {
+    background-color: #FFFFFF;
+    border: 1px solid var(--border-color);
+    font-family: "Consolas", "Courier New", monospace;
+    color: #495057;
+    font-size: 13px;
+}
+
+/* --- Miscellaneous --- */
+QFrame#hLine {
+    border: none;
+    border-top: 1px solid #f1f3f5;
+}
+QToolTip {
+    background-color: var(--text-primary);
+    color: white;
+    border: none;
+    padding: 5px;
+    border-radius: 4px;
+}
+QProgressBar {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    text-align: center;
+    background-color: var(--bg-input);
+    color: var(--text-primary);
+}
+QProgressBar::chunk {
+    background-color: var(--success-color);
+    border-radius: 3px;
+}

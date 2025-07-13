@@ -58,14 +58,16 @@ try:
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
     from fusionlab.nn.pinn.models import PIHALNet, TransFlowSubsNet   # Our PINN models
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences # PINN data prep
+    from fusionlab.nn.pinn.op import extract_physical_parameters 
     from fusionlab.params import LearnableK, LearnableSs, LearnableQ 
     from fusionlab.nn.utils import extract_batches_from_dataset 
     from fusionlab.nn.losses import combined_quantile_loss
     from fusionlab.nn.utils import plot_history_in 
-    from fusionlab.nn.pinn.utils import format_pihalnet_predictions
+    from fusionlab.nn.pinn.utils import format_pinn_predictions 
     from fusionlab.plot.forecast import plot_forecasts, forecast_view 
     from fusionlab.utils.data_utils import nan_ops
     from fusionlab.utils.io_utils import save_job #, fetch_joblib_data
+    from fusionlab.utils.forecast_utils import get_test_data_from, adjust_time_predictions 
     from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column 
     from fusionlab.utils.generic_utils import ensure_directory_exists
 
@@ -76,26 +78,52 @@ except ImportError as e:
     raise
     
 #%
-# --- Configuration Parameters ---
+# ==================================================================
+# ** Step 0: CONFIGURATION PARAMETERS **
+# ==================================================================
 CITY_NAME = 'zhongshan'
-MODEL_NAME ='TransFlowSubsNet'# or 'PIHALNet' # Using our PINN model name
+MODEL_NAME ='TransFlowSubsNet'
 
 # Data loading: Prioritize 500k sample file
 # For Code Ocean, data is typically in ../data or /data
 # JUPYTER_PROJECT_ROOT can be set as an environment variable
 # For local runs, adjust DATA_DIR as needed.
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..") # Go up one level from script if not set
-ZHONGSHAN_500K_FILENAME = "zhongshan_500k.csv" # Target file
+ZHONGSHAN_500K_FILENAME = "../data/zhongshan_p.csv" # Target file
 ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
+
 
 # Training and Forecasting Periods
 TRAIN_END_YEAR = 2022        # Example: Use data up to 2020 for training
 FORECAST_START_YEAR = 2023   # Example: Start forecasting for 2021
 FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023) (2023, 2024, 2025)
+
+# --- Time Series Sequence Configuration ---
+# The look-back window (`TIME_STEPS`) is a critical hyperparameter.
+# A larger window allows the model to capture longer-term trends
+# and seasonality, but it requires that each individual time series
+# in the dataset (e.g., for each unique longitude/latitude pair)
+# has a sufficient number of historical data points.
+#
+# Dataset Context:
+# - The Nansha dataset spans 8 years (2015-2022).
+# - The Zhongshan dataset spans 9 years (2015-2023).
+#
+# For the full datasets used in our paper, the optimal values
+# were determined through hyperparameter tuning:
+# - Zhongshan (4.5M samples): TIME_STEPS = 6
+# - Nansha (2.4M samples):   TIME_STEPS = 5
+#
+# For your own dataset, you can programmatically find the maximum
+# valid look-back window using the `resolve_time_steps` utility
+# from the library to avoid generating empty training sets: 
+#   >>> from fusionlab.utils.ts_utils import resolve_time_steps
+#
+# The value below is a safe default for the smaller demo datasets.
 TIME_STEPS = 5               # Lookback window (in years) for dynamic features
 
 # PINN Configuration
-PDE_MODE_CONFIG = 'consolidation' # Focus on consolidation
+PDE_MODE_CONFIG ='both'# 'consolidation' # Focus on consolidation
 PINN_COEFF_C_CONFIG = 'learnable' # Learn the consolidation coefficient
 LAMBDA_PDE_CONFIG = 1.0           # Weight for the PDE loss term in compile
 LAMBDA_PDE_CONS= 1.0
@@ -105,15 +133,15 @@ LAMBDA_PDE_GW = 1.0
 QUANTILES = [0.1, 0.5, 0.9] # For probabilistic forecast
 # QUANTILES = None # For point forecast
 
-EPOCHS = 50 # For demonstration; increase for robust results (e.g., 100-200)
-LEARNING_RATE = 0.001
-BATCH_SIZE = 256 # Adjusted for potentially larger dataset
+EPOCHS = 200 # For demonstration; increase for robust results (e.g., 100-200)
+LEARNING_RATE = 0.0001
+BATCH_SIZE = 32 # 256 # Adjusted for potentially larger dataset
 
 NUM_BATCHES_TO_EXTRACT = "auto" # Number of batch to extract if there is not enough data
                                 # in df_test_master, auto extract all batches.  
 AGG = True # Set this to True or False as needed for  specific test case
 
-MODE ='pihal' # kind that Model operation mode .
+MODE ='tft' # kind that Model operation mode: {'pihal', 'tft'}
 
 # Transient Gwrounwdater Flow init Parameters 
 GWFLOW_INIT_K = 1e-4 
@@ -124,7 +152,7 @@ GWFLOW_INIT_Q =0.
 ATTENTION_LEVELS = ['1', '2', '3'] # means -> use all 
 
 # Output Directories
-BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn") # For Code Ocean compatibility
+BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn_test_f3ts5_2") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
 RUN_OUTPUT_PATH = os.path.join(
     BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_run"
@@ -148,6 +176,7 @@ FORECAST_YEARS_LIST = [
     FORECAST_START_YEAR + i for i in range(FORECAST_HORIZON_YEARS)
 ]
 print(f"Forecasting for years: {FORECAST_YEARS_LIST}")
+
 
 # ==================================================================
 # ** Step 1: Load Zhongshan Dataset **
@@ -175,7 +204,7 @@ for path_option in data_paths_to_check + fallback_paths:
             zhongshan_df_raw = pd.read_csv(path_option)
             print(f"  Successfully loaded '{os.path.basename(path_option)}'. "
                   f"Shape: {zhongshan_df_raw.shape}")
-            if ZHONGSHAN_500K_FILENAME in path_option and zhongshan_df_raw.shape[0] < 400000: # Basic check
+            if ZHONGSHAN_500K_FILENAME in path_option and zhongshan_df_raw.shape[0] < 400_000: # Basic check
                 print(f"  Warning: Loaded file named {ZHONGSHAN_500K_FILENAME} but "
                       f"it has only {zhongshan_df_raw.shape[0]} rows.")
             break
@@ -229,7 +258,7 @@ available_cols = zhongshan_df_raw.columns.tolist()
 selected_features_base = [
     LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, 'rainfall_mm',
     'geology', # Will be one-hot encoded
-    # 'soil_thickness', # Not in Zhongshan sample, add if for Nansha dataset
+    'soil_thickness', # Not in Zhongshan sample, add if for Nansha dataset
     'normalized_density', # Example,  building density
     # 'normalized_seismic_risk_score',
 ]
@@ -285,7 +314,8 @@ print(f"\n{'='*20} Step 3: Preprocessing - Encoding & Scaling {'='*20}")
 df_for_processing = df_cleaned.copy()
 
 # --- Encoding Categorical Features ---
-categorical_cols_to_encode = ['geology'] # Add others depend on you for other tests.
+categorical_cols_to_encode = [
+    'geology', 'building_concentration', 'density_concentration'] # others depend on you for other tests.
 # Ensure only existing columns are processed
 categorical_cols_to_encode = [
     c for c in categorical_cols_to_encode if c in df_for_processing.columns
@@ -344,9 +374,9 @@ numerical_cols_for_scaling_model = [
     # LAT_COL, 
     GWL_COL, 
     'rainfall_mm',
-    # 'soil_thickness', # If Nanshan
+    'soil_thickness', # If Nanshan
     'normalized_density', # no need to normalize again. Exclude in Nansha
-    # 'normalized_seismic_risk_score',
+    # 'normalized_seismic_risk_score', 
     SUBSIDENCE_COL, # Scale target as well for stable training
     # TIME_COL_NUMERIC_PINN # Scale numeric time
 ]
@@ -397,6 +427,7 @@ dynamic_features_list = [
     GWL_COL, 'rainfall_mm', 'normalized_density', 
     # 'normalized_seismic_risk_score'
     # Add other dynamic features from df_scaled.columns
+    'soil_thickness'
 ]
 dynamic_features_list = [
     c for c in dynamic_features_list if c in df_scaled.columns
@@ -432,14 +463,24 @@ df_train_master = df_scaled[
 # For test data, SubsModel needs future knowns for its "future_features" input
 # and also target coords for its "coords" input.
 # The `prepare_pinn_data_sequences` will handle slicing.
-df_test_master = df_scaled[
-    df_scaled[TIME_COL] >= FORECAST_START_YEAR - (TIME_STEPS / 12) # Include lookback for test seq
-].copy() 
+df_test_master = get_test_data_from(
+    df_scaled.copy(), 
+    time_col=TIME_COL, 
+    time_steps=TIME_STEPS , 
+    train_end_year= TRAIN_END_YEAR, 
+    forecast_horizon= FORECAST_HORIZON_YEARS , # we have already 2023 
+    verbose = 3, 
+    strategy='onwards',# if not enough data, it will fallback to "lookback", 
+    objective="forecasting", 
+ )
+# df_test_master = df_scaled[
+#     df_scaled[TIME_COL] >= FORECAST_START_YEAR - (TIME_STEPS / 12) # Include lookback for test seq
+# ].copy() 
 # Ensure test master starts early enough to create first sequence including lookback
-
+# print("years tests ", df_test_master[TIME_COL].unique ())
 print(f"Master train data shape (<= {TRAIN_END_YEAR}): {df_train_master.shape}")
 print(f"Master test data shape (for {FORECAST_START_YEAR} onwards): {df_test_master.shape}")
-
+#%
 if df_train_master.empty:
     raise ValueError(f"Training data empty after split at year {TRAIN_END_YEAR}.")
 
@@ -450,6 +491,7 @@ sequence_file_path_train = os.path.join(
 
 print(f"Generating PINN training sequences (T={TIME_STEPS}, H={FORECAST_HORIZON_YEARS})...")
 # Note: `prepare_pinn_data_sequences` requires lon_col, lat_col explicitly
+#%
 OUT_S_DIM =1 
 OUT_G_DIM =1
 inputs_train_dict, targets_train_dict, coord_scaler = prepare_pinn_data_sequences(
@@ -473,7 +515,7 @@ inputs_train_dict, targets_train_dict, coord_scaler = prepare_pinn_data_sequence
     mode=MODE, # Operate with the determined mode 
     verbose=7 # High verbosity for sequence generation
 )
-
+#%
 if targets_train_dict['subsidence'].shape[0] == 0:
     raise ValueError("Sequence generation produced no training samples.")
 
@@ -494,9 +536,11 @@ num_train_samples = inputs_train_dict['dynamic_features'].shape[0]
 dataset_inputs = {
     'coords': inputs_train_dict['coords'],
     'dynamic_features': inputs_train_dict['dynamic_features'],
-    'static_features': inputs_train_dict.get('static_features') if inputs_train_dict.get('static_features') is not None \
+    'static_features': inputs_train_dict.get('static_features') if inputs_train_dict.get(
+        'static_features') is not None \
                        else np.zeros((num_train_samples, 0), dtype=np.float32),
-    'future_features': inputs_train_dict.get('future_features') if inputs_train_dict.get('future_features') is not None \
+    'future_features': inputs_train_dict.get('future_features') if inputs_train_dict.get(
+        'future_features') is not None \
                        else np.zeros((num_train_samples, FORECAST_HORIZON_YEARS, 0), dtype=np.float32)
 }
 # Ensure keys in targets_train_dict match SubsModel.compile loss keys
@@ -556,7 +600,7 @@ subsmodel_params = {
     'use_vsn': True, # Enable VSN
     'vsn_units': 32, # Units for VSN internal GRNs, 
     'mode': MODE, 
-    'attention_levels': ATTENTION_LEVELS
+    'attention_levels': ATTENTION_LEVELS,
 }
 
 
@@ -623,7 +667,6 @@ subs_model_inst.compile(
     loss_weights=loss_weights_dict,
     **physics_loss_weights
     
-    #lambda_pde=LAMBDA_PDE_CONFIG # Weight for the physics loss component
 )
 print("SubsModel model compiled successfully.")
 
@@ -666,21 +709,27 @@ subsmodel_metrics = {
         "total_loss", "data_loss", "physics_loss", "val_loss"],
     # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
 }
-
+#%
 # SubsModel data on separate subplots
 print("\n---SubsModel History on Separate Subplots ---")
 
 plot_history_in(
     history.history,
-    metrics=subsmodel_metrics,
-    layout='single',
+    # metrics=subsmodel_metrics,
+    # layout='single',
     title=f'{MODEL_NAME} Training History', 
     savefig=os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot_"), 
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot"), 
 )
 # %
 # Load the best model saved by ModelCheckpoint
 print(f"\nLoading best model from checkpoint: {model_checkpoint_path}")
+
+extract_physical_parameters (
+    subs_model_inst, to_csv=True, 
+    filename = f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters", 
+    save_dir =RUN_OUTPUT_PATH 
+)
 
 loss_to_use = combined_quantile_loss(QUANTILES) if QUANTILES else 'mse'
 try:
@@ -724,7 +773,7 @@ try:
 
     print(f"Attempting to generate PINN sequences from test data (year {FORECAST_START_YEAR})...")
     inputs_test_dict, targets_test_dict_raw, test_coord_scaler = prepare_pinn_data_sequences(
-        df=df_train_master, #df_test_master, # use df_train_master for testing purpose. 
+        df=df_scaled, # df_train_master, #df_test_master, # use df_scaled for testing purpose. 
         time_col=TIME_COL_NUMERIC_PINN,
         lon_col=LON_COL, lat_col=LAT_COL,
         subsidence_col=SUBSIDENCE_COL,
@@ -870,7 +919,7 @@ except Exception as e:
                 "batches from the validation dataset even with .take(1)."
             )
             # inputs_test_dict and targets_test_dict_for_eval will remain None
-
+# %
 # 3. Proceed with forecasting if input data (from test or validation) is available
 if inputs_test_dict is not None:
     print(f"\nGenerating SubsModel predictions on: {dataset_name_for_forecast}...")
@@ -883,10 +932,14 @@ if inputs_test_dict is not None:
         'subsidence': targets_test_dict_for_eval['subs_pred'],
         'gwl': targets_test_dict_for_eval['gwl_pred']
     }
-
+    forecast_csv_filename = (
+        f"{CITY_NAME}_{MODEL_NAME}_forecast_{dataset_name_for_forecast.replace(' ', '_')}"
+        f"_{FORECAST_YEARS_LIST[0]}-{FORECAST_YEARS_LIST[-1]}.csv"
+    )
+    forecast_csv_path = os.path.join(RUN_OUTPUT_PATH, forecast_csv_filename)
     # Format predictions into a clear DataFrame
-    forecast_df_pihalnet = format_pihalnet_predictions(
-        pihalnet_outputs=subsmodel_test_outputs,
+    forecast_df = format_pinn_predictions(
+        predictions=subsmodel_test_outputs,
         y_true_dict=y_true_for_format,
         target_mapping={'subs_pred': SUBSIDENCE_COL, 'gwl_pred': GWL_COL},
         quantiles=QUANTILES,
@@ -895,36 +948,45 @@ if inputs_test_dict is not None:
         include_coords=True,
         model_inputs=inputs_test_dict,
         evaluate_coverage=True if QUANTILES else False,
+        savefile=forecast_csv_path, 
         coord_scaler= test_coord_scaler or coord_scaler, # either test is passed or not
         verbose=1
     )
 
     # Save the results to a CSV file
-    if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
+    if forecast_df is not None and not forecast_df.empty:
+        forecast_df2 =adjust_time_predictions(
+            forecast_df.copy(), 
+            time_col='coord_t', 
+            forecast_horizon=FORECAST_HORIZON_YEARS,
+            inverse_transformed=True, 
+        )
         forecast_csv_filename = (
             f"{CITY_NAME}_{MODEL_NAME}_forecast_{dataset_name_for_forecast.replace(' ', '_')}"
-            f"_{FORECAST_YEARS_LIST[0]}-{FORECAST_YEARS_LIST[-1]}.csv"
+            f"_{FORECAST_YEARS_LIST[0]}-{FORECAST_YEARS_LIST[-1]}_t_adjusted.csv"
         )
         forecast_csv_path = os.path.join(RUN_OUTPUT_PATH, forecast_csv_filename)
-        forecast_df_pihalnet.to_csv(forecast_csv_path, index=False)
-        print(f"\nSubsModel forecast results for {dataset_name_for_forecast} saved to: {forecast_csv_path}")
+        forecast_df2.to_csv(forecast_csv_path, index=False)
+        print(f"\nSubsModel forecast results for {dataset_name_for_forecast}"
+              f" saved to: {forecast_csv_path}")
         print("\nSample of SubsModel forecast DataFrame:")
-        print(forecast_df_pihalnet.head())
+        print(forecast_df2.head())
     else:
         print("\nNo final SubsModel forecast DataFrame was generated.")
 else:
-    print("\nSkipping forecasting as no valid test or validation input sequences could be prepared.")
+    print("\nSkipping forecasting as no valid test or"
+          " validation input sequences could be prepared.")
 
 # ==================================================================
 # ** Step 9: Visualize Forecasts **
 # ==================================================================
 print(f"\n{'='*20} Step 9: Visualize SubsModel Forecasts {'='*20}")
-if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
+if forecast_df is not None and not forecast_df.empty:
     print(f"Visualizing SubsModel forecasts for {dataset_name_for_forecast}...")
     
     # Check if coordinate columns exist for spatial plot
     coord_plot_cols = ['coord_x', 'coord_y'] # From format_pihalnet_predictions
-    if not all(c in forecast_df_pihalnet.columns for c in coord_plot_cols):
+    if not all(c in forecast_df.columns for c in coord_plot_cols):
         print(f"Warning: Coordinate columns {coord_plot_cols} not in DataFrame. "
               "Spatial plot may fail or be incorrect.")
 
@@ -934,18 +996,18 @@ if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
     view_years = [FORECAST_YEARS_LIST[idx -1] for idx in horizon_steps]
     
     plot_forecasts(
-        forecast_df=forecast_df_pihalnet,
+        forecast_df=forecast_df,
         target_name=SUBSIDENCE_COL, # Use the base name used in format_pihalnet_predictions
         quantiles=QUANTILES,
         output_dim=OUT_S_DIM,
         kind="spatial", # Or "temporal"
         horizon_steps=horizon_steps,
         spatial_cols=coord_plot_cols if all(
-            c in forecast_df_pihalnet.columns for c in coord_plot_cols) else None,
+            c in forecast_df.columns for c in coord_plot_cols) else None,
         sample_ids="first_n", 
         num_samples=min(3, BATCH_SIZE), # For temporal
         max_cols=2, # For spatial or temporal multi-sample
-        figsize_per_subplot=(7, 5.5), # Adjusted for potentially 2 plots
+        figsize=(7, 5.5), # Adjusted for potentially 2 plots
         # titles=[f'Subsidence: Year {y}' for y in view_years], # Example
         cbar="uniform", # for uniformize color bar for comparison
         step_names = {
@@ -955,27 +1017,27 @@ if forecast_df_pihalnet is not None and not forecast_df_pihalnet.empty:
         verbose=1
     )
     # Plot for GWL
-    if INCLUDE_GWL_IN_DF and f"{GWL_COL}_pred" in forecast_df_pihalnet.columns \
-        or (QUANTILES and f"{GWL_COL}_q50" in forecast_df_pihalnet.columns):
+    if INCLUDE_GWL_IN_DF and f"{GWL_COL}_pred" in forecast_df.columns \
+        or (QUANTILES and f"{GWL_COL}_q50" in forecast_df.columns):
         print("\n--- Plotting GWL Forecasts ---")
         plot_forecasts(
-            forecast_df=forecast_df_pihalnet,
+            forecast_df=forecast_df,
             target_name=GWL_COL,
             quantiles=QUANTILES,
             output_dim=OUT_G_DIM,
             kind="spatial",
             horizon_steps=horizon_steps,
             spatial_cols=coord_plot_cols if all(
-                c in forecast_df_pihalnet.columns for c in coord_plot_cols) else None,
+                c in forecast_df.columns for c in coord_plot_cols) else None,
             sample_ids="first_n",
             num_samples=min(3, BATCH_SIZE),
-            max_cols=2,
-            figsize_per_subplot=(7, 5.5),
+            max_cols=2, 
+            figsize=(7, 5.5),
             titles=[f'GWL: Year {y}' for y in view_years],
             verbose=1, 
             cbar =None, 
-        )
-else:
+        ) 
+else: 
     print("No SubsModel forecast data to visualize.")
 
 # ==================================================================
@@ -984,13 +1046,14 @@ else:
 print(f"\n{'='*20} Step 10: Forecast View & Save All Figures {'='*20}")
 try: 
     forecast_view (
-        forecast_df_pihalnet, 
+        forecast_df, 
         spatial_cols = ('coord_x', 'coord_y'), 
         time_col ='coord_t', 
         value_prefixes=['subsidence'], # view subisidence only
         verbose =7,  
         view_quantiles =[0.5], 
-        savefig=os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_forecast_comparison_plot_"), 
+        savefig=os.path.join(
+            RUN_OUTPUT_PATH, f"{CITY_NAME}_forecast_comparison_plot_"), 
         save_fmts=['.png', '.pdf'] 
       )
     print(f"Forecast view figures saved to: {RUN_OUTPUT_PATH}")

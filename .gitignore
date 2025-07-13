@@ -189,3 +189,7 @@ untitled1.py
 untitled2.py 
 untitled3.py 
 main_old.py
+results_4M/
+hydrotuner_results/
+.fusionlab_runs/
+results_pinn_test_f3ts5_2/

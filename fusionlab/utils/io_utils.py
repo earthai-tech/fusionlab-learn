@@ -3220,6 +3220,7 @@ def to_txt(
     serializer=None,
     savepath = None, 
     verbose=1,
+    logger =None, 
     **kwargs
 ):
     """
@@ -3336,6 +3337,8 @@ def to_txt(
     .. [1] van Rossum, Guido, *Python's standard
        library "json" module*, Python Docs.
     """
+    log = logger or print 
+    
     # Generate filename with timestamp if not provided
     if filename is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -3369,10 +3372,10 @@ def to_txt(
             success = True
             file_created = True
             if verbose >= 1:
-                print(f"JSON export successful: {filename}")
+                log(f"JSON export successful: {filename}")
         except Exception as e:
             if verbose >= 1:
-                print(f"JSON export failed ({e}), falling back to TXT")
+                log(f"JSON export failed ({e}), falling back to TXT")
             filename = os.path.splitext(filename)[0] + '.txt'
             format = 'txt'
 
@@ -3385,7 +3388,7 @@ def to_txt(
                 processed_data = serializer(d)
             except Exception as e:
                 if verbose >= 2:
-                    print(f"Serializer error: {e}, using original data")
+                    log(f"Serializer error: {e}, using original data")
 
         # Generate formatted content
         if isinstance(processed_data, str):
@@ -3421,15 +3424,15 @@ def to_txt(
 
     # Verbose reporting
     if verbose >= 1 and file_created:
-        print(f"Created '{filename}' ({format.upper()})")
+        log(f"Created '{filename}' ({format.upper()})")
         if verbose >= 3:
             try:
                 size = os.path.getsize(filename)
-                print(f"Dimensions: {size} bytes | {len(content.splitlines())} lines")
-                print(f"Encoding: {encoding} | Mode: {mode}")
+                log(f"Dimensions: {size} bytes | {len(content.splitlines())} lines")
+                log(f"Encoding: {encoding} | Mode: {mode}")
             except Exception as e:
                 if verbose >= 4:
-                    print(f"Metadata error: {e}")
+                    log(f"Metadata error: {e}")
 
     return filename
 

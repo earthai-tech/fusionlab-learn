@@ -48,29 +48,75 @@ class KerasTunerDependencies:
             self._dependencies[name] = self._import_dependency(name)
         return self._dependencies[name]
 
+    # def _import_dependency(self, name: str):
+    #     """
+    #     Imports a specific Keras Tuner object based on the central
+    #     KERAS_TUNER_CONFIG.
+    #     """
+    #     if name in KERAS_TUNER_CONFIG:
+    #         module_name, function_name = KERAS_TUNER_CONFIG[name]
+    #         try:
+    #             module = importlib.import_module(module_name)
+    #             return getattr(module, function_name)
+    #         except ImportError as e:
+    #             if self.error == 'raise':
+    #                 raise ImportError(
+    #                     f"Failed to import `{name}` from `{module_name}`. "
+    #                     f"{self.extra_msg}"
+    #                 ) from e
+    #             # In 'warn' or 'ignore' mode, we return None if it fails
+    #             return None
+        
+    #     raise AttributeError(
+    #         f"'KerasTunerDependencies' object has no attribute '{name}'. "
+    #         "Ensure it is defined in `fusionlab/_configs.py`."
+    #     )
     def _import_dependency(self, name: str):
         """
         Imports a specific Keras Tuner object based on the central
-        KERAS_TUNER_CONFIG.
+        KERAS_TUNER_CONFIG. Supports either a single (module, attr)
+        tuple or an iterable of such tuples for fallbacks.
         """
-        if name in KERAS_TUNER_CONFIG:
-            module_name, function_name = KERAS_TUNER_CONFIG[name]
+        if name not in KERAS_TUNER_CONFIG:
+            raise AttributeError(
+                f"'KerasTunerDependencies' object has no attribute '{name}'. "
+                "Ensure it is defined in `fusionlab/_configs.py`."
+            )
+        entry = KERAS_TUNER_CONFIG[name]
+        # Normalize to a list of (module_name, function_name) pairs
+        if isinstance(entry[0], (tuple, list)):
+            candidates = entry        # already a sequence of pairs
+        else:
+            candidates = [entry]      # single pair
+    
+        last_err = None
+        for module_name, function_name in candidates:
             try:
                 module = importlib.import_module(module_name)
                 return getattr(module, function_name)
-            except ImportError as e:
-                if self.error == 'raise':
-                    raise ImportError(
-                        f"Failed to import `{name}` from `{module_name}`. "
-                        f"{self.extra_msg}"
-                    ) from e
-                # In 'warn' or 'ignore' mode, we return None if it fails
-                return None
-        
-        raise AttributeError(
-            f"'KerasTunerDependencies' object has no attribute '{name}'. "
-            "Ensure it is defined in `fusionlab/_configs.py`."
-        )
+            except (ImportError, AttributeError) as e:
+                # record the last exception in case we need to raise later
+                last_err = e
+                continue
+    
+        # If we get here, all import attempts failed
+        if self.error == 'raise':
+            raise ImportError(
+                f"Failed to import `{name}`; attempted modules: "
+                f"{', '.join(m for m, _ in candidates)}. {self.extra_msg}"
+            ) from last_err
+    
+        # Warn or ignore mode: return None
+        if self.error == 'warn':
+            warnings.warn(
+                f"Could not import `{name}`; tried: "
+                f"{', '.join(m for m, _ in candidates)}. "
+                f"{self.extra_msg}",
+                ImportWarning,
+                stacklevel=2
+            )
+
+
 
 def import_kt_dependencies(extra_msg=None, error='warn'):
     """

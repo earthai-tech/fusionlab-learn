@@ -4,630 +4,71 @@ Mini Subsidence-Forecasting GUI (academic showcase)
 
 from __future__ import annotations 
 import os, sys, time
-import json 
+
+import warnings
 import pandas as pd 
 from pathlib import Path
 
-from PyQt5.QtCore    import ( 
-    Qt, QThread,  pyqtSignal, 
-    QAbstractTableModel, 
-    QModelIndex, 
-    pyqtSlot
-)
-from PyQt5.QtGui     import QIcon, QPixmap,  QFont
+from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QFormLayout, QFrame, QPushButton, QLabel, QSpinBox, QDoubleSpinBox,
-    QComboBox, QTextEdit, QFileDialog, QProgressBar, QLineEdit, 
-    QCheckBox
+    QApplication, 
+    QMainWindow, 
+    QWidget, 
+    QVBoxLayout, 
+    QHBoxLayout,
+    QFormLayout, 
+    QFrame, 
+    QPushButton, 
+    QLabel,
+    QSpinBox, 
+    QDoubleSpinBox,
+    QComboBox, 
+    # QTextEdit, 
+    QFileDialog, 
+    QProgressBar, 
+    QLineEdit, 
+    QCheckBox,
+    QDialog, 
+    QMessageBox,
+    QSizePolicy, 
+    QPlainTextEdit
 )
-from PyQt5.QtWidgets import (
-    QDialog, QTableView, QMessageBox, QAction, QToolBar, QInputDialog, 
-    QToolTip
+from ...registry import ManifestRegistry, _locate_manifest
+from .components import ( 
+    ProgressManager, 
+    WorkerController, 
+    ErrorManager,
+    ExitController, 
+    ResetController, 
+    LogManager , 
+    ModeManager, 
+    Mode, 
+    ManifestManager, 
+    DryRunController
 )
 
-from fusionlab.tools.app.config      import SubsConfig
-from fusionlab.tools.app.processing  import DataProcessor, SequenceGenerator
-from fusionlab.tools.app.modeling    import ModelTrainer, Forecaster
-from fusionlab.tools.app.view        import ResultsVisualizer
-from fusionlab.tools.app.view        import VIS_SIGNALS
-from fusionlab.tools.app.gui_popups  import ImagePreviewDialog   
-from fusionlab.tools.app.inference import PredictionPipeline
-from fusionlab.utils._manifest_registry import ( 
-    ManifestRegistry, locate_manifest 
+from .config import SubsConfig
+from .dialog import CsvEditDialog, TunerDialog
+from .gui_popups import ImagePreviewDialog 
+from .styles import ( 
+    PRIMARY, 
+    SECONDARY, 
+    FLAB_STYLE_SHEET,
+    INFERENCE_OFF, 
+    DARK_THEME_STYLESHEET,
+    LOG_STYLES, 
+    ERROR_STYLES
+    )
+from .threads import ( 
+    TrainingThread, 
+    InferenceThread, 
+    TunerThread 
 )
-
-# Fusionlab-learn palette 
-PRIMARY   = "#2E3191"   
-SECONDARY = "#F28620"   
-BG_LIGHT  = "#fafafa"
-FG_DARK   = "#1e1e1e"
-PRIMARY_T75    = "rgba(46,49,145,0.75)"      # 75 % alpha
-SECONDARY_T70  = "rgba(242,134,32,0.70)"     # 70 % alpha
-# ------------------------------------------------------------------ #
-#  Inference-mode toggle
-# ------------------------------------------------------------------ #
-INFERENCE_ON  = PRIMARY
-INFERENCE_OFF = "#dadada"        # greyed-out (disabled)
-
-FLAB_STYLE_SHEET = f"""
-QMainWindow {{
-    background: {BG_LIGHT};
-    color: {FG_DARK};
-    font-family: 'Helvetica Neue', sans-serif;
-}}
-
-QFrame#card {{
-    background: white;
-    border: 2px solid {PRIMARY};
-    border-radius: 12px;
-}}
-
-QLabel#cardTitle {{
-    font-size: 18px;
-    font-weight: 600;
-    color: {PRIMARY};
-}}
-
-QPushButton {{
-    background: {PRIMARY};
-    color: white;
-    border-radius: 6px;
-    padding: 6px 12px;
-}}
-QPushButton:hover {{
-    background: {SECONDARY};
-}}
-
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background: #f0f3ff;
-    border: 1px solid {PRIMARY};
-    border-radius: 4px;
-    padding: 4px;
-}}
-
-QTextEdit {{
-    background: #f6f6f6;
-    border: 1px solid #cccccc;
-}}
-
-QPushButton#reset, QPushButton#stop {{
-    background: #dadada;
-    color: #333;
-}}
-QPushButton#reset:hover:enabled,
-QPushButton#stop:hover:enabled {{
-    background: {SECONDARY};
-    color: white;
-}}
-
-QToolTip {{
-    /* translucent orange bubble, white text, subtle outline */
-    background: {SECONDARY_T70};
-    color: white;
-    border: 1px solid {SECONDARY};
-    border-radius: 4px;
-    padding: 4px 6px;
-}}
-
-QToolTip {{
-    background: {SECONDARY_T70};   /* translucent SECONDARY */
-    color: white;
-    border: 1px solid {SECONDARY};
-    padding: 4px;
-    border-radius: 4px;
-}}
-
-QPushButton#inference {{
-    background: {PRIMARY};      /* overwritten at runtime */
-    color: white;
-    border-radius: 6px;
-    padding: 6px 14px;   /* a tad wider than Stop / Reset */
-}} 
-
-QPushButton#inference:disabled {{
-    background: {INFERENCE_OFF};      /* grey when no manifest yet      */
-    color: #666;
-}}
-
-"""
-
-# --- Color Palette Definition ---
-# Using a central palette makes themes easier to manage.
-# Inspired by common UI color systems.
-PALETTE = {
-    # Primary Brand Colors
-    "primary": "#2E3191",    # Deep Blue
-    "secondary": "#F28620",  # Orange
-    
-    # Dark Theme Colors
-    "dark_bg": "#1e293b",       # slate-800
-    "dark_card_bg": "#334155",  # slate-700
-    "dark_input_bg": "#0f172a",  # slate-900
-    "dark_border": "#475569",     # slate-600
-    "dark_text": "#cbd5e1",      # slate-300
-    "dark_text_title": "#ffffff",
-    "dark_text_muted": "#94a3b8",   # slate-400
-    "dark_reset_bg": "#475569",  # slate-600
-
-    # Light Theme Colors
-    "light_bg": "#f8fafc",      # slate-50
-    "light_card_bg": "#ffffff",
-    "light_input_bg": "#f1f5f9", # slate-100
-    "light_border": "#cbd5e1",    # slate-300
-    "light_text": "#0f172a",      # slate-900
-    "light_text_title": "#2E3191", # Primary color for titles
-    "light_text_muted": "#64748b",  # slate-500
-    "light_reset_bg": "#e2e8f0", # slate-200
-}
-
-# --- Dark Theme Stylesheet ---
-DARK_THEME_STYLESHEET = f"""
-    QMainWindow, QWidget {{
-        background-color: {PALETTE['dark_bg']};
-        color: {PALETTE['dark_text']};
-        font-family: 'Segoe UI', sans-serif;
-    }}
-    QFrame#card {{
-        background-color: {PALETTE['dark_card_bg']};
-        border: 1px solid {PALETTE['dark_border']};
-        border-radius: 8px;
-    }}
-    QLabel#title {{
-        font-size: 28px; font-weight: bold;
-        color: {PALETTE['dark_text_title']};
-    }}
-    QLabel#cardTitle {{
-        font-size: 18px; font-weight: 600;
-        color: {PALETTE['dark_text_title']};
-    }}
-    QLabel#description, QLabel#cardDescription {{
-        color: {PALETTE['dark_text_muted']};
-    }}
-    QPushButton {{
-        background-color: {PALETTE['primary']};
-        color: white; border: none;
-        padding: 8px; border-radius: 6px;
-        font-weight: bold;
-    }}
-    QPushButton:hover {{
-        background-color: #4338ca; /* A slightly lighter primary for hover */
-    }}
-    QPushButton:disabled {{
-        background-color: #334155; 
-        color: {PALETTE['dark_text_muted']};
-    }}
-    QPushButton#resetButton {{
-        background-color: {PALETTE['dark_reset_bg']};
-        color: {PALETTE['dark_text']};
-    }}
-    QPushButton#resetButton:hover {{
-        background-color: {PALETTE['dark_border']};
-    }}
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-        background-color: {PALETTE['dark_input_bg']};
-        border: 1px solid {PALETTE['dark_border']};
-        padding: 6px; border-radius: 6px; color: white;
-    }}
-    QTextEdit {{
-        background-color: #020617; /* Near black */
-        border: 1px solid {PALETTE['dark_border']};
-        font-family: "Courier New", monospace;
-    }}
-    QFrame#hLine {{ border: 1px solid {PALETTE['dark_border']}; }}
-    QToolTip {{
-        background-color: {PALETTE['secondary']}; color: white;
-        border: 1px solid white; padding: 4px; border-radius: 4px;
-    }}
-"""
-
-# --- Light Theme Stylesheet ---
-LIGHT_THEME_STYLESHEET = f"""
-    QMainWindow, QWidget {{
-        background-color: {PALETTE['light_bg']};
-        color: {PALETTE['light_text']};
-        font-family: 'Segoe UI', sans-serif;
-    }}
-    QFrame#card {{
-        background-color: {PALETTE['light_card_bg']};
-        border: 1px solid {PALETTE['light_border']};
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }}
-    QLabel#title {{
-        font-size: 28px; font-weight: bold;
-        
-        color: {PALETTE['light_text_title']};
-    }}
-    QLabel#cardTitle {{
-        font-size: 18px; font-weight: 600; 
-        color: {PALETTE['light_text_title']};
-    }}
-    QLabel#description, QLabel#cardDescription {{
-        color: {PALETTE['light_text_muted']};
-    }}
-    QPushButton {{
-        background-color: {PALETTE['primary']};
-        color: white; border: none;
-        padding: 8px; border-radius: 6px;
-        font-weight: bold;
-    }}
-    QPushButton:hover {{
-        background-color: {PALETTE['secondary']};
-    }}
-    QPushButton:disabled {{
-        background-color: #e2e8f0; color: #94a3b8;
-    }}
-    QPushButton#resetButton {{
-        background-color: {PALETTE['light_reset_bg']};
-        color: {PALETTE['light_text']};
-    }}
-     QPushButton#resetButton:hover {{
-        background-color: #cbd5e1;
-    }}
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-        background-color: {PALETTE['light_input_bg']};
-        border: 1px solid {PALETTE['light_border']};
-        padding: 6px; border-radius: 6px;
-        color: {PALETTE['light_text']};
-    }}
-    QTextEdit {{
-        background-color: {PALETTE['light_card_bg']};
-        border: 1px solid {PALETTE['light_border']};
-        font-family: "Courier New", monospace;
-    }}
-    QFrame#hLine {{ border: 1px solid {PALETTE['light_input_bg']}; }}
-    QToolTip {{
-        background-color: {PALETTE['dark_bg']}; color: white;
-        border: none; padding: 4px; border-radius: 4px;
-    }}
-"""
-
-
-class _PandasModel(QAbstractTableModel):
-    """A Qt Table Model for exposing a pandas DataFrame.
-
-    This class acts as a bridge between the data model (a pandas
-    DataFrame) and the view component (a QTableView). It provides
-    the necessary interface that allows Qt to read, display, and
-    modify the data from the DataFrame in a table widget.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        The DataFrame to be displayed and managed by the model.
-    parent : QObject, optional
-        The parent Qt object for this model, by default None.
-
-    Attributes
-    ----------
-    _df : pandas.DataFrame
-        The internal reference to the DataFrame being managed.
-
-    See Also
-    --------
-    PyQt5.QtCore.QAbstractTableModel : The base class for custom table models.
-    """
-
-    def __init__(self, df: pd.DataFrame, parent=None):
-        super().__init__(parent)
-        self._df = df                
-
-    # -- basic shape -------
-    def rowCount   (self, _=QModelIndex()): return len(self._df)
-    def columnCount(self, _=QModelIndex()): return self._df.shape[1]
-
-    # -- data ↔ Qt -
-    def data(self, index, role=Qt.DisplayRole):
-        if not index.isValid(): return None
-        if role in (Qt.DisplayRole, Qt.EditRole):
-            return str(self._df.iat[index.row(), index.column()])
-        return None
-
-    def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.EditRole:
-            self._df.iat[index.row(), index.column()] = value
-            self.dataChanged.emit(index, index, [role]); return True
-        return False
-
-    def flags(self, index):
-        return Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable
-
-    # -- header labels 
-    def headerData(self, section, orientation, role=Qt.DisplayRole):
-        if role != Qt.DisplayRole: return None
-        return (self._df.columns[section] if orientation == Qt.Horizontal
-                else str(section))
-
-    # helper for column rename
-    def rename_column(self, col_ix: int, new_name: str):
-        self.beginResetModel()
-        self._df.columns = (
-            list(self._df.columns[:col_ix]) + [new_name] +
-            list(self._df.columns[col_ix + 1 :])
-        )
-        self.endResetModel()
-
-    # exposed to outside world
-    @property
-    def dataframe(self) -> pd.DataFrame:
-        return self._df
-
-class CsvEditDialog(QDialog):
-    """A dialog window for previewing and editing a CSV file.
-
-    This class provides a lightweight, non-destructive editing
-    environment for a loaded dataset. It displays a preview of the
-    data in a table and offers tools to delete rows, delete columns,
-    and rename columns.
-
-    Changes are made to an internal copy of the DataFrame and are only
-    finalized and returned if the user clicks "Save / Apply".
-
-    Parameters
-    ----------
-    csv_path : str
-        The absolute path to the CSV file to be loaded.
-    parent : QWidget, optional
-        The parent widget for this dialog, by default None.
-    preview_rows : int, default=200
-        The maximum number of rows to display in the table view. This
-        is a performance optimization to prevent lag with very large
-        files, while still allowing edits on the complete, underlying
-        DataFrame.
-
-    Methods
-    -------
-    edited_dataframe()
-        Returns the full DataFrame with all user edits applied.
-
-    See Also
-    --------
-    PyQt5.QtWidgets.QDialog : The base class for dialog windows.
-    _PandasModel : The data model used to populate the table view.
-    """
-
-    def __init__(self, csv_path: str,
-                 parent=None, *, preview_rows: int = 200):
-        super().__init__(parent)
-        self.setWindowTitle("Preview & Editing Data")
-        self.resize(820, 400) # 820, 500)
-
-        try:
-            self._df_full = pd.read_csv(csv_path)
-        except Exception as e:
-            QMessageBox.critical(self, "CSV error", str(e))
-            self._df_full = pd.DataFrame()
-            self.reject();  return
-
-        # slice for the *table* only (view)
-        self._view_rows = min(preview_rows, len(self._df_full))
-        self._df_view   = self._df_full.head(self._view_rows)
-
-        vbox = QVBoxLayout(self)
-
-        # toolbar
-        tb = QToolBar()
-        act_del_row = QAction("Delete row(s)", self)
-        act_del_col = QAction("Delete col(s)", self)
-        act_rename  = QAction("Rename column", self)
-        tb.addAction(act_del_row); tb.addAction(act_del_col); tb.addAction(act_rename)
-        vbox.addWidget(tb)
-
-        # table
-        self.table = QTableView()
-        self.model = _PandasModel(self._df_view)
-        self.table.setModel(self.model)
-        self.table.setSelectionMode(QTableView.ExtendedSelection)
-        self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        vbox.addWidget(self.table, 1)
-
-        # buttons
-        hbtn = QHBoxLayout()
-        hbtn.addStretch(1)
-        btn_save   = QPushButton("Save / Apply")
-        btn_cancel = QPushButton("Cancel")
-        hbtn.addWidget(btn_save); hbtn.addWidget(btn_cancel)
-        vbox.addLayout(hbtn)
-
-        # signals
-        act_del_row.triggered.connect(self._delete_rows)
-        act_del_col.triggered.connect(self._delete_cols)
-        act_rename .triggered.connect(self._rename_col)
-        btn_save  .clicked.connect(self.accept)
-        btn_cancel.clicked.connect(self.reject)
-
-    def _delete_rows(self):
-        rows = {ix.row() for ix in self.table.selectionModel().selectedIndexes()}
-        if not rows: return
-        # translate view-index → full-df index
-        full_idx = self._df_full.index[list(rows)]
-        self._df_full.drop(index=full_idx, inplace=True)
-        self._refresh_view()
-
-    def _delete_cols(self):
-        cols = {ix.column() for ix in self.table.selectionModel().selectedIndexes()}
-        if not cols: return
-        cols_to_drop = self._df_full.columns[list(cols)]
-        self._df_full.drop(columns=cols_to_drop, inplace=True)
-        self._refresh_view()
-
-    def _rename_col(self):
-        cols = {ix.column() for ix in self.table.selectionModel().selectedIndexes()}
-        if len(cols) != 1:
-            QMessageBox.information(self, "Rename column",
-                                     "Select exactly one column.")
-            return
-        col_ix = cols.pop()
-        old = self._df_full.columns[col_ix]
-        new, ok = QInputDialog.getText(self, "Rename column",
-                                       f"New name for “{old}”:")
-        if ok and new:
-            self._df_full.rename(columns={old: new}, inplace=True)
-            self._refresh_view()
-
-    def _refresh_view(self):
-        """Re-slice top N rows *after* edits and refresh model."""
-        self._df_view = self._df_full.head(self._view_rows)
-        self.model.beginResetModel()
-        self.model._df = self._df_view
-        self.model.endResetModel()
-
-    # -public API 
-    def edited_dataframe(self) -> pd.DataFrame:
-        """
-        Return the **full** (possibly edited) DataFrame.
-        Caller should copy if it wants to keep a private version.
-        """
-        return self._df_full.copy()
-
-
-
-class Worker(QThread):
-    """Executes the forecasting workflow in a background thread.
-
-    This QThread subclass is designed to run the entire data
-    processing and model training pipeline without freezing the main
-    GUI thread. It orchestrates the instantiation and execution of
-    the various processing classes (`DataProcessor`, `SequenceGenerator`,
-    etc.) and emits signals to update the GUI with progress, logs,
-    and final results.
-
-    Parameters
-    ----------
-    cfg : SubsConfig
-        A configuration object containing all parameters required for
-        the workflow, gathered from the GUI.
-    edited_df : pd.DataFrame, optional
-        If the user has edited the data in the preview dialog, this
-        DataFrame is passed to bypass the initial file loading step.
-        If None, the workflow will load data from the file path
-        specified in the `cfg` object.
-    parent : QObject, optional
-        The parent Qt object, by default None.
-
-    Attributes
-    ----------
-    status_msg : pyqtSignal(str)
-        Emits status updates for the main status label in the GUI.
-    progress_val : pyqtSignal(int)
-        Emits progress updates (0-100) for the progress bar.
-    log_msg : pyqtSignal(str)
-        Emits detailed log messages to be displayed in the log panel.
-    coverage_val : pyqtSignal(float)
-        Emits the final calculated coverage score to be displayed in
-        the status bar.
-
-    Methods
-    -------
-    run()
-        The main entry point for the thread. Executes the entire
-        data processing and forecasting pipeline sequentially.
-    _write_coverage_result()
-        A helper method to read the saved coverage score from a JSON
-        file and emit it via the `coverage_val` signal.
-
-    See Also
-    --------
-    DataProcessor : Handles the data loading and preprocessing stage.
-    SequenceGenerator : Handles sequence generation and dataset creation.
-    ModelTrainer : Handles model definition, compilation, and training.
-    Forecaster : Handles prediction on new data.
-    ResultsVisualizer : Handles the final visualization of results.
-    """
-    status_msg   = pyqtSignal(str)
-    progress_val = pyqtSignal(int)
-    log_msg      = pyqtSignal(str)
-    coverage_val = pyqtSignal(float)
-
-    def __init__(self, cfg, edited_df=None, parent=None):
-        super().__init__(parent)
-        self.cfg = cfg
-        self.edited_df  = edited_df   
-        
-        self._p = lambda frac, lo, hi: int(lo + (hi - lo) * frac)
-
-    def run(self):
-        try:
-            self.status_msg.emit("📊 Pre-processing…")
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p / 100, 0, 10) 
-            )
-            processor = DataProcessor(
-                self.cfg, self.log_msg.emit, 
-                raw_df=self.edited_df  
-            )
-            df_proc   = processor.run()
-            self.progress_val.emit(10)
-
-            if self.isInterruptionRequested():          # ← CHECK #1
-                return
-            self.status_msg.emit("🌀 Generating sequences…")
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-               self._p(p / 100, 10, 30)           # ← divide by 100!
-            )      
-            seq_gen   = SequenceGenerator(self.cfg, self.log_msg.emit)
-            try: 
-                train_ds, val_ds = seq_gen.run(
-                    df_proc, processor.static_features_encoded, 
-                    stop_check=self.isInterruptionRequested
-                )
-            except InterruptedError:
-                return
-              
-            self.progress_val.emit(30)
-            
-            if self.isInterruptionRequested():          # ← CHECK #2
-                return
-            
-            self.status_msg.emit("🔧 Training…")
-            train_range = (30, 90)
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p/100, *train_range))    # ← same here
-            
-            sample_inputs, _ = next(iter(train_ds))
-            shapes = {k: v.shape for k, v in sample_inputs.items()}
-            model  = ModelTrainer(self.cfg, self.log_msg.emit).run(
-                train_ds, val_ds, shapes
-            )
-            self.progress_val.emit(train_range[1])          # 90 %
-
-            if self.isInterruptionRequested():          # ← CHECK #3
-                return
-            self.status_msg.emit("🔮 Forecasting…")
-            forecast_range = (90, 100)
-            self.cfg.progress_callback = lambda p: self.progress_val.emit(
-                self._p(p / 100, *forecast_range)          
-            )
-            forecast_df = Forecaster(self.cfg, self.log_msg.emit).run(
-                model=model,
-                test_df=seq_gen.test_df,
-                val_dataset=val_ds,
-                static_features_encoded=processor.static_features_encoded,
-                coord_scaler=seq_gen.coord_scaler,
-            )
-            self._write_coverage_result () 
-            self.status_msg.emit("✔ Forecast finished.")
-            self.progress_val.emit(100)
-            
-            ResultsVisualizer(self.cfg, self.log_msg.emit).run(forecast_df)
-            
-        except Exception as e:
-            self.log_msg.emit(f"❌ {e}")
-            
-    def _write_coverage_result(self) :
-        if self.cfg.evaluate_coverage and self.cfg.quantiles:
-            json_path = os.path.join(self.cfg.run_output_path,
-                                     "coverage_result.json")
-            try:
-                with open(json_path, "r", encoding="utf-8") as fp:
-                    cv = json.load(fp)["coverage_result"]
-                    self.coverage_val.emit(float(cv))
-            except Exception as e:
-                self.log_msg.emit(
-                    f"[WARN] Could not read coverage file: {e}")
-
+from .qt_utils import auto_set_ui_fonts, auto_resize_window 
+from .utils import log_tuning_params
+from .view import VIS_SIGNALS
+  
 class MiniForecaster(QMainWindow):
     """The main application window for the Subsidence PINN Mini GUI.
 
@@ -653,83 +94,142 @@ class MiniForecaster(QMainWindow):
     worker : Worker
         An instance of the background thread that executes the main
         processing logic.
-
-    Methods
-    -------
-    _build_ui()
-        Constructs and assembles all widgets into the main layout.
-    _on_run()
-        Initiates the forecasting workflow by creating and starting
-        the `Worker` thread.
-    _on_reset()
-        Resets the GUI fields and logs to their default state.
-    _choose_file()
-        Opens a file dialog and handles the selection of a CSV file.
-    _stop_worker()
-        Requests a graceful interruption of the running `Worker` thread.
-    _worker_done()
-        A slot that performs cleanup actions after the worker thread
-        has finished.
-    _log(msg)
-        A slot that appends a timestamped message to the UI log panel.
-
-    See Also
-    --------
-    Worker : The QThread subclass that performs the backend processing.
-    CsvEditDialog : The dialog for previewing and editing the input data.
     """
     
-    # Qt signals that the backend can emit
     log_updated      = pyqtSignal(str)
     status_updated   = pyqtSignal(str)
-    progress_updated = pyqtSignal(int)
-    
     coverage_ready = pyqtSignal(float) 
+    trial_updated  = pyqtSignal(int, int, str)   
 
-    def __init__(self):
+
+    def __init__(self, theme: str = 'light'):
         super().__init__()
-        self._log_cache: list[str] = []
-        self.setWindowTitle("Fusionlab-learn – PINN Mini GUI")
-        self.setFixedSize(980, 660)
+ 
+        self.setWindowTitle("Fusionlab-learn – Mini Forecaster")
+        auto_resize_window(self,base_size=(980, 660))
+        # self.setFixedSize(980, 660)
         self.file_path: Path | None = None
         
-        # --- app icon (title-bar & task-bar) -----------------------------
         icon_path = os.path.join(os.path.dirname(__file__),
                                  "fusionlab_learn_logo.ico")
-        app_icon  = QIcon(icon_path)          # QIcon silently handles “file not found”
+        app_icon  = QIcon(icon_path)          
         self.setWindowIcon(app_icon)
         
-        # --- in-window logo (top of GUI) 
         logo_lbl  = QLabel()
-        pix_path  = os.path.join(os.path.dirname(__file__), "fusionlab_learn_logo.png")
+        pix_path  = os.path.join(os.path.dirname(__file__), 
+                                 "fusionlab_learn_logo.png")
         pix_logo  = QPixmap(pix_path)
         
-        if not pix_logo.isNull():             # only set the pixmap if the file exists
+        if not pix_logo.isNull():   
             logo_lbl.setPixmap(
-                pix_logo.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pix_logo.scaled(72, 72, Qt.KeepAspectRatio,
+                                Qt.SmoothTransformation)
             )
         else:
-            logo_lbl.setText("Fusionlab-learn") # graceful fallback (optional)
+            logo_lbl.setText("Fusionlab-learn") 
         
         logo_lbl.setAlignment(Qt.AlignCenter)
         
-        # --- Instantiate the Manifest Registry in session-only mode ---
-        # This is the only change required to enable self-cleaning.
         self.registry = ManifestRegistry(session_only=True)
         
-        self._inference_mode = False     # True → Run button will run inference
-        self._manifest_path  = None      # filled automatically once detected
-
+        # self._inference_mode = False     
+        self._manifest_path  = None     
+        
+        # --- Store the active theme ---
+        self.theme = ( 
+            "dark" if str(theme).lower() =='dark' else'fusionlab'
+        )
+        
         self._build_ui()
+        
+        self.progress_manager = ProgressManager(
+                self.progress_bar, 
+                self.progress_label, 
+                self.percent_label,        
+            )
+      
+        
+        self.error_mgr = ErrorManager(
+            parent_gui = self, log_fn= self._log)
+
+        self.worker_ctl = WorkerController(
+                self.stop_btn,
+                parent= self,                
+                log_fn     = self._log,
+                status_fn  = self.status_updated.emit,   
+        )
+        self.worker_ctl.stopped.connect(self._worker_done)
+        
+        self.exit_ctl = ExitController(
+            quit_button  = self.quit_btn,      
+            parent   = self,
+            worker_ctl   = self.worker_ctl,    
+            pre_quit_hook= lambda: self._log("✔ clean-up done"),
+            log_fn       = self._log,
+        )
+        
+        # reset progress-bar when an error dialog closes
+        self.error_mgr.handled.connect(self.progress_manager.reset)
+
+        # instantiate the ResetController
+        # we let it auto‐discover the registry cache dir
+        self.reset_ctl = ResetController(
+            reset_button = self.reset_btn,     
+            mode         = "clean",     
+            primary_color   = PRIMARY,
+            disabled_color  = INFERENCE_OFF,
+            parent =self, 
+        )
+        
+        cards = [self.model_card,
+                 self.training_card,
+                 self.physics_card,
+                 self.feature_card]
+
+        self.mode_mgr = ModeManager(
+            run_button   = self.run_btn,
+            tune_button  = self.tune_btn,
+            infer_button = self.inf_btn,
+            stop_button  = self.stop_btn,
+            panels       = cards,
+            mode_badge=self.mode_badge,
+            parent       = self,
+        )
+        self.dryrun_ctl = DryRunController(
+            checkbox = self.dryrun_chk,
+            mode_mgr = self.mode_mgr,
+            parent   = self,
+        )
+        self.manifest_mgr = ManifestManager(
+            infer_button=self.inf_btn, parent=self
+            )
+        
+        self.mode_mgr.mode_changed.connect(self._on_mode_change)
+        self.mode_mgr.set_mode(Mode.TRAIN)
+        self.manifest_mgr.refresh()
+        
+        # when *any* run or tuning finishes:
+        self.worker_ctl.stopped.connect(self.reset_ctl.enable)
+        
+        # finally, when ResetController has done its cleanup:
+        self.reset_ctl.reset_done.connect(self._on_full_reset)
+        # initially, no run yet → enable reset so user can clear stale state
+        self.reset_ctl.enable()
+
         self.log_updated.connect(self._log)
         self.status_updated.connect(self.file_label.setText)
-        self.progress_updated.connect(self.progress_bar.setValue)
+        # self.progress_updated.connect(self.progress_bar.setValue)
         self.coverage_ready.connect(self._set_coverage)
-        
+        # self.progress_updated.connect(self._update_progress)
+
+        self._preview_windows: list[QDialog] = []        # ← keep refs
         VIS_SIGNALS.figure_saved.connect(self._show_image_popup)
 
     def _show_image_popup(self, png_path: str) -> None:
-        ImagePreviewDialog(png_path, parent=self).exec_()
+        dlg = ImagePreviewDialog(png_path, parent=self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)             # frees memory on close
+        dlg.show()                                        # modeless – *no* exec_()
+        self._preview_windows.append(dlg)                 # keep it alive
         
     @pyqtSlot(float)
     def _set_coverage(self, value: float):
@@ -739,8 +239,6 @@ class MiniForecaster(QMainWindow):
             f"font-weight:bold'>{value:.3f}</span>"
         )
 
-        #self.coverage_lbl.setText(f"cov-result: <b>{cv:.3f}</b>")
-    
     def _build_ui(self):
         """Constructs and assembles the entire GUI layout.
 
@@ -775,74 +273,111 @@ class MiniForecaster(QMainWindow):
         root = QWidget(); self.setCentralWidget(root)
         L = QVBoxLayout(root)
 
-        # 0) logo + title
-        logo = QLabel()
-        logo.setPixmap(QPixmap("fusionlab_logo.png").scaled(
-            72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        logo.setAlignment(Qt.AlignCenter)
+        # 0) title
         title = QLabel("Subsidence PINN")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"font-size:22px; color:{PRIMARY}")
-        L.addWidget(logo); L.addWidget(title)
+        # L.addWidget(logo)
+        L.addWidget(title)
 
         # 1) CSV selector row 
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        csv_row = QHBoxLayout()
+        csv_row.setSpacing(8)
         
         # left-hand “Select file…” button
         self.file_btn = QPushButton("Select CSV…")
         self.file_btn.clicked.connect(self._choose_file)
-        row.addWidget(self.file_btn)
+        csv_row.addWidget(self.file_btn)
         
         # centre: file-name label grows/shrinks with window
         self.file_label = QLabel("No file selected")
         self.file_label.setStyleSheet("font-style:italic;")
-        row.addWidget(self.file_label, 1)          # stretch-factor = 1
+        csv_row.addWidget(self.file_label, 1)          # stretch-factor = 1
         
+        # ── Tune button  (disabled until a CSV + manifest-able params exist)
+        self.tune_btn = QPushButton("Tune")
+        self.tune_btn.setObjectName("tune")
+        self.tune_btn.setEnabled(False)
+        self.tune_btn.setToolTip("Select a CSV first, then click to open tuner setup")
+        # self.tune_btn.clicked.connect(self._open_tuner_dialog)
+        # self.tune_btn.clicked.connect(lambda: self.mode_mgr.set_mode(Mode.TUNER))
+        csv_row.addWidget(self.tune_btn)
+
         # ── inference toggle  (disabled until a manifest is found)
         self.inf_btn = QPushButton("Inference")
         self.inf_btn.setObjectName("inference")
         self.inf_btn.setEnabled(False)                       # default: grey
         self.inf_btn.setToolTip("Load an existing run_manifest.json first.")
-        self.inf_btn.clicked.connect(self._toggle_inference_mode)
-        row.addWidget(self.inf_btn)
+        # self.inf_btn.clicked.connect(self._toggle_inference_mode)
+        # self.inf_btn.clicked.connect(lambda: self.mode_mgr.set_mode(Mode.INFER))
+        csv_row.addWidget(self.inf_btn)
         
-        # row with Run / log already exists …
+        # ► Make them the same width  
+        same_w = self.inf_btn.sizeHint().width()      
+        self.tune_btn.setFixedWidth(same_w)
+
+        # build stop button
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setObjectName("stop")   
         self.stop_btn.setEnabled(False) 
-        self.stop_btn.setToolTip("Abort the running workflow")                
-        self.stop_btn.clicked.connect(self._stop_worker)
-        row.addWidget(self.stop_btn)
+        self.stop_btn.setToolTip("Abort the running workflow")    
+        csv_row.addWidget(self.stop_btn)
+        
         # right-hand Reset button
         self.reset_btn = QPushButton("Reset")
-        self.reset_btn.setObjectName("reset")   
-        self.reset_btn.setToolTip("Clear selections & log")
-        self.reset_btn.setFixedWidth(70)
-
-        self.reset_btn.clicked.connect(self._on_reset)
-        row.addWidget(self.reset_btn)
+        csv_row.addWidget(self.reset_btn)
         
-        L.addLayout(row)
+        # >>> NEW Quit button -------------------------------------------------
+        self.quit_btn = QPushButton("Quit")
+        self.quit_btn.setObjectName("quit")
+        self.quit_btn.setToolTip(
+            "Exit Fusionlab-learn")
+        csv_row.addWidget(self.quit_btn)
+  
+        L.addLayout(csv_row)
         
         # 1-bis)  City / Dataset name row  ← NEW
+        #  1) Create and place the badge label in _build_ui()
         city_row = QHBoxLayout()
         city_label = QLabel("City / Dataset:")
         city_row.addWidget(city_label)
         
         self.city_input = QLineEdit()
-        self.city_input.setPlaceholderText("e.g. zhongshan")
-        city_row.addWidget(self.city_input, 1)  # stretch to full width
+        self.city_input.setPlaceholderText("e.g. Agnibilekrou")
+        city_row.addWidget(self.city_input, 1)
+        
+           # ── Dry-Run checkbox
+        self.dryrun_chk = QCheckBox("Dry Run")
+        self.dryrun_chk.setToolTip(
+            "When checked, the GUI will exercise all of the UI logic\n"
+            "without actually training or inferring any model."
+        )
+        city_row.addWidget(self.dryrun_chk)
+
+        badge = QLabel()
+        badge.setObjectName("modeBadge")
+        badge.setAlignment(Qt.AlignCenter)
+        # place badge at end, small fixed size
+        badge.setMinimumWidth(80)
+        city_row.addWidget(badge)
+        self.mode_badge = badge
         L.addLayout(city_row)
 
         # 2) config cards --
-        cards = QHBoxLayout(); L.addLayout(cards, 1)
-
-        cards.addWidget(self._model_card(), 1)
-        cards.addWidget(self._training_card(), 1)
-        cards.addWidget(self._physics_card(), 1)
+        cards = QHBoxLayout();
+        L.addLayout(cards, 1)
+        
+        # Store the returned QFrame widgets as instance attributes ------------
+        self.model_card = self._model_card()
+        self.training_card = self._training_card()
+        self.physics_card = self._physics_card()
+        self.feature_card = self._feature_card()
+        
+        cards.addWidget(self.model_card, 1)
+        cards.addWidget(self.training_card, 1)
+        cards.addWidget(self.physics_card, 1)
         # ▼ NEW feature card spans full width
-        L.addWidget(self._feature_card())
+        L.addWidget(self.feature_card)
 
         # 3)  Run row  +  Log pane  +  Progress bar  
         bottom = QVBoxLayout()
@@ -852,24 +387,67 @@ class MiniForecaster(QMainWindow):
         row = QHBoxLayout()
         
         self.run_btn = QPushButton("Run")
-        self.run_btn.setFixedWidth(60)
+        self.run_btn.setMinimumWidth(80)
         self.run_btn.clicked.connect(self._on_run)
         row.addWidget(self.run_btn)
         
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        row.addWidget(self.log, 1)          # stretch
-        bottom.addLayout(row)               # ← add FIRST
+        self.log_widget = QPlainTextEdit()# QTextEdit()
+        self.log_widget.setReadOnly(True)
         
+        # 1) Tell Qt this widget is happy to expand both horizontally & vertically
+        self.log_widget.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        
+        # 2) Give it a minimum height so  always see at least e.g. 120px of log
+        self.log_widget.setMinimumHeight(170)
 
-        # ── full-width progress bar 
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setFixedHeight(18)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
-        bottom.addWidget(self.progress_bar)
+        self.log_mgr = LogManager(
+            self.log_widget, parent= self) 
+        self._log = self.log_mgr.append
+        row.addWidget(self.log_widget, 1)       # stretch
+        bottom.addLayout(row)            # ← add FIRST
+        
+        progress_layout = QHBoxLayout()
     
-        # ── single-row footer  
+        # ProGRESS Bar …
+        
+        # left label
+        self.progress_label = QLabel("")
+        self.progress_label.setAlignment(Qt.AlignLeft  | Qt.AlignVCenter) #Qt.AlignRight
+        # size to text only:
+        self.progress_label.setSizePolicy(
+            QSizePolicy.Minimum,    # shrink to min width needed
+            QSizePolicy.Fixed       # fixed height
+        )
+        progress_layout.addWidget(self.progress_label, 0)  # stretch=0
+        
+        # the bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimumHeight(18)
+        self.progress_bar.setTextVisible(False)
+        # self.progress_bar.setAlignment(Qt.AlignLeft | Qt.AlignVCenter) 
+        # let it expand to fill leftover space:
+        self.progress_bar.setSizePolicy(
+            QSizePolicy.Expanding,  # grabs all extra width
+            QSizePolicy.Fixed
+        )
+        progress_layout.addWidget(self.progress_bar, 1)   # stretch=1
+        
+        # right % label
+        self.percent_label = QLabel("0 %")
+        self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.percent_label.setSizePolicy(
+            QSizePolicy.Minimum,    # size to its text
+            QSizePolicy.Fixed
+        )
+        progress_layout.addWidget(self.percent_label, 0)   # stretch=0
+        # the bar will resize itself dynamically:
+        #  [ label1 ] [    BAR TAKES ALL LEFTOVER SPACE   ] [ label2 ]
+        
+        bottom.addLayout(progress_layout)
+        # ── single-row footer  -----------------------------------------------
         footer = QHBoxLayout()
         
         # Learn more” link
@@ -891,7 +469,7 @@ class MiniForecaster(QMainWindow):
         
         footer.addStretch(1)
 
-        # ② copyright / licence at the **right**
+        # ② copyright / licence 
         about = QLabel(
             '© 2025 <a href="https://earthai-tech.github.io/" '
             'style="color:#2E3191;text-decoration:none;">earthai-tech</a> – BSD-3 Clause'
@@ -901,27 +479,7 @@ class MiniForecaster(QMainWindow):
         footer.addWidget(about)
         
         bottom.addLayout(footer)
-        self.progress_updated.connect(self.progress_bar.setValue)
-
-    def _stop_worker(self):
-        """Requests a graceful shutdown of the background worker thread.
-
-        This method is connected to the "Stop" button's `clicked` signal.
-        It calls `requestInterruption()` on the running `Worker` instance,
-        which sets a flag that the worker can check periodically to exit
-        its `run` loop cleanly. It also updates the GUI status to
-        reflect the stopping action.
-        """
-        if self.worker and self.worker.isRunning():
-            self.worker.requestInterruption()
-            self.status_updated.emit("⏹ Stopping workflow …")
-            self.stop_btn.setEnabled(False)      # grey it out
-            self.worker.requestInterruption()  
         
-        # if hasattr(self, "worker") and self.worker.isRunning():
-        #     self._log("⏹ Stopping workflow …")
-        #     self.worker.requestInterruption()   # graceful
-        #     self.worker.wait(500)               # give it 0.5 s
 
     def _training_card(self) -> QFrame:
         """Creates and returns the 'Training Parameters' UI panel.
@@ -946,7 +504,7 @@ class MiniForecaster(QMainWindow):
     
         # Train End Year
         self.train_end_year_spin = QSpinBox()
-        self.train_end_year_spin.setRange(1980, 2050)
+        self.train_end_year_spin.setRange(1980, 2099)
         self.train_end_year_spin.setValue(2022)
         form.addRow("Train End Year:", self.train_end_year_spin)
     
@@ -1203,114 +761,167 @@ class MiniForecaster(QMainWindow):
     def _title(self, txt): 
         l = QLabel(txt); l.setObjectName("cardTitle"); return l
         
-    def _log(self, msg): 
-        """
-        Print one line in the QTextEdit **and** keep a copy in memory
-        so we can dump everything to disk when the worker stops.
-        """
-        ts = time.strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}"
-        self._log_cache.append(line)                         # (2) cache
-        self.log.append(line)
-        self.log.verticalScrollBar().setValue(
-            self.log.verticalScrollBar().maximum())
-        # QApplication.processEvents()  
- 
     def _choose_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open CSV file", "", "CSV Files (*.csv)")
-        if not path: 
-            return 
-        
-        self.file_path = Path(path)
-        self.file_label.setStyleSheet(f"color:{SECONDARY};")
-        self.file_label.setText(f"Selected: {self.file_path.name}")
-        self._log(f"CSV chosen → {self.file_path}")
-        
+        if not path:
+            return
+        try:
+            # The CsvEditDialog constructor now tries to read the file,
+            # which might fail.
+            dlg = CsvEditDialog(str(path), self)
+            if dlg.exec_() == QDialog.Accepted:
+                self.edited_df = dlg.edited_dataframe()
+                self._log(
+                    f"CSV preview accepted – {len(self.edited_df)} rows retained."
+                )
+                self.file_path = Path(path) # Set file_path only on success
+                self.file_label.setStyleSheet(f"color:{SECONDARY};")
+                self.file_label.setText(f"Selected: {self.file_path.name}")
+                self._log(f"CSV chosen → {self.file_path}")
+                self.tune_btn.setEnabled(True)
+                self.tune_btn.setStyleSheet(f"background:{PRIMARY};")
+
+            else:
+                self.edited_df = None
+                self._log("CSV preview canceled – keeping original file.")
+
+        except Exception as e:
+            # If CsvEditDialog fails to load the file, catch the error
+            # and use our new central dialog to show it.
+            self._show_error_dialog(
+                "File Load Error",
+                f"Could not read or process the selected CSV file.\n\n"
+                f"Details: {e}"
+            )
+            return
+
         if not self.city_input.text().strip():
             self.city_input.setText(self.file_path.stem)
-        
-        # 2) pop-up preview / editor  (only now!)
-        dlg = CsvEditDialog(str(self.file_path), self)
-        if dlg.exec_() == QDialog.Accepted:
-            self.edited_df = dlg.edited_dataframe()
-            self._log(
-                f"CSV preview accepted – {len(self.edited_df)} rows retained.")
-        else:
-            self.edited_df = None        # fall back to on-disk CSV
-            self._log("CSV preview canceled – keeping original file.")
-        
-        # look for a manifest in registry  → enables inference
-        manifest = locate_manifest(self._log) 
-    
-        if manifest is not None:
-            self._manifest_path = str(manifest)
-            self.inf_btn.setEnabled(True)
-            self.inf_btn.setStyleSheet(f"background:{INFERENCE_ON};")
-            self.inf_btn.setToolTip(
-                "Trained model detected– click to switch to inference."
-            )
-        else:
-            self._manifest_path = None
-            self.inf_btn.setEnabled(False)
-            self.inf_btn.setStyleSheet(f"background:{INFERENCE_OFF};")
-            self.inf_btn.setToolTip(
-                "Inference is available once a trained run is found nearby."
-            )
+            
         self.progress_bar.setValue(0)
-
-    def _toggle_inference_mode(self):
-        """Flip the GUI between *training* and *inference* modes."""
-        self._inference_mode = not self._inference_mode
-    
-        if self._inference_mode:                 # → ON
-            self.inf_btn.setStyleSheet(f"background:{SECONDARY}" )
-            self.inf_btn.setEnabled(False)       # frozen while active
-            self.inf_btn.setToolTip("Inference mode active.")
-            self.run_btn.setText("Run Inference")
-            self._log("ℹ GUI switched to *Inference* mode – "
-                      "Run will now load the saved model.")
-        else:                                    # → OFF  (rare, only after run)
-            self.inf_btn.setStyleSheet(f"background:{PRIMARY}")
-            self.inf_btn.setEnabled(True)
-            self.inf_btn.setToolTip(
-                "Click to switch the GUI into inference mode.")
-            self.run_btn.setText("Run")
-
-    def _on_reset(self):
-        """Resets the user interface to its default state.
-
-        This method is the slot connected to the `Reset` button's
-        `clicked` signal. It provides a convenient way for the user
-        to clear all current inputs and results and start a new
-        configuration from scratch.
-
-        Specifically, it performs the following actions:
-        - Clears the main log panel.
-        - Resets the progress bar to zero.
-        - Clears the file path selection and updates the label.
-        - Resets all configuration widgets in the different panels
-          (e.g., `Model Configuration`, `Training Parameters`) to
-          their initial default values.
-        - Clears the coverage score label in the footer.
+        
+        self.manifest_mgr.refresh()
+        
+    def _refresh_manifest_state(self):
         """
-        # reset feature inputs
-        self.dyn_feat.setText("auto")
-        self.stat_feat.setText("auto")
-        self.fut_feat.setText("rainfall_mm")
-    
-        # clear log + status + progress
-        self.log.clear()
-        self.file_label.setText("No file selected" if self.file_path is None
-                                else f"Selected: {self.file_path.name}")
-        self.progress_bar.setValue(0)
-        self.city_input.clear()
-        self.coverage_lbl.clear() 
-        self._log("ℹ Interface reset.")
-        
-        # self.file_path = None
+        Sync infer-button availability/color via ManifestManager,
+        and also enable/disable Tune via ModeManager.
+        """
 
+        # now delegated entirely to ManifestManager
+        self.manifest_mgr.refresh()
+        # and we still need to drive “Tune” from your old logic:
+        manifest, tuner_manifest = _locate_manifest(locate_both=True)
+        tune_allowed = bool(self.file_path) or bool(tuner_manifest)
+        self.mode_mgr.enable_tune(tune_allowed)
+        # update only the tooltip for the Tune button:
+        if tuner_manifest:
+            tt = "Tuner results exist – click to (re) tune or inspect"
+        elif self.file_path:
+            tt = "CSV loaded – click to configure tuning"
+        else:
+            tt = "Select a CSV first to enable tuning"
+        self.tune_btn.setToolTip(tt)
+
+    def _stop_worker(self):
+        """
+        Prompts the user for confirmation and then gracefully stops
+        the active background worker thread.
+        """
+        # First, check if there is actually a worker to stop.
+        if not (hasattr(self, 'active_worker') and 
+                self.active_worker and self.active_worker.isRunning()):
+            self._refresh_stop_button() 
+            return
+
+        # Create and display a confirmation dialog.
+        # The question method is modal and returns the button that was clicked.
+        reply = QMessageBox.question(
+            self,
+            'Confirm Stop',
+            "Are you sure you want to stop the current workflow?\n\n"
+            "This action cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No  # Default button is 'No'
+        )
+
+        # Only proceed if the user confirms.
+        if reply == QMessageBox.Yes:
+            self._log("⏹️ Workflow stop requested by user.")
+            self.status_updated.emit("⏹️ Stopping workflow…")
+            
+            # Request the interruption. The thread will stop when it
+            # next checks the isInterruptionRequested() flag.
+            self.active_worker.requestInterruption()
+            
+            # Immediately provide visual feedback by resetting the UI state.
+            self.stop_btn.setEnabled(False)
+            self.run_btn.setEnabled(True)
+            self.run_btn.setText("Run")
+            self.run_btn.setStyleSheet("") # Revert to default style
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("Stopped")
+        
+            self.active_worker.requestInterruption()
+            self.progress_bar.setValue(0)
+            self._refresh_stop_button()
+            self._refresh_manifest_state()
+
+    def _refresh_stop_button(self):
+        busy = getattr(self, "active_worker", None) and \
+               self.active_worker.isRunning()
+        if busy:
+            self.stop_btn.setEnabled(True)
+            self.stop_btn.setToolTip("Abort the running workflow")
+        else:
+            self.stop_btn.setEnabled(False)
+            self.stop_btn.setToolTip("Nothing to stop – no workflow running")
+        
+        self.progress_manager.reset()
+        
     def _on_run(self):
+        """
+        Dispatched by the Run/Tune/Infer button,
+        behavior depends on the current ModeManager.mode.
+        """
+    
+        # 0) If we’re in dry-run, immediately return
+        if self.mode_mgr.mode == Mode.DRY_RUN:
+            self._log("⚙️ Dry run: no real execution performed.")
+            return
+    
+        # 1) Sanity: make sure we actually have data
+        if not self.file_path:
+            self._log("⚠ Please select a CSV file first.")
+            QMessageBox.warning(self, "No Data", "Select a CSV before running.")
+            return
+    
+        # 2) Disable Reset, clear any old coverage
+        self.reset_ctl.disable()
+        self.coverage_lbl.clear()
+        
+    
+        # 3) Now dispatch based on mode
+        mode = self.mode_mgr.mode
+        if mode == Mode.INFER:
+            chosen = self.manifest_mgr.pick_manifest()
+            if not chosen:
+                self._log("ℹ Inference cancelled by user.")
+                self.mode_mgr.set_mode(Mode.TRAIN)
+                self.reset_ctl.enable()
+                return
+            self._manifest_path = chosen
+            self._run_inference()
+    
+        elif mode == Mode.TUNER:
+            self._open_tuner_dialog()
+    
+        else:  # Mode.TRAIN
+            self._run_training()
+        
+
+    def _run_training(self):
         """Initiates the end-to-end forecasting workflow.
 
         This method is the slot connected to the `Run` button's
@@ -1337,14 +948,14 @@ class MiniForecaster(QMainWindow):
         if self.file_path is None:
             self._log("⚠ No CSV selected.")
             return
-        # ------------------------------------------------------------------
-        if self._inference_mode:
-            self._run_inference()
-            return                       # *do not* go through the training path
-        # ------------------------------------------------------------------
-
+     
         self.run_btn.setEnabled(False)
-        self._log("▶ launch workflow …")
+        self.run_btn.setText("Running…") # Optional: Update text
+        # disabled-looking style.
+        self.run_btn.setStyleSheet(
+            "background-color: gray; color:white;")
+        
+        self._log("▶ launch TRAINING workflow …")
         QApplication.processEvents()
         
         def _parse(txt):
@@ -1378,7 +989,8 @@ class MiniForecaster(QMainWindow):
             forecast_start_year    = self.forecast_start_year_spin.value(),
             forecast_horizon_years = self.forecast_horizon_spin.value(),
             time_steps             = self.time_steps_spin.value(),
-            quantiles             = [float(q) for q in self.quantiles_input.text().split(',')],
+            quantiles             = [
+                float(q) for q in self.quantiles_input.text().split(',')],
             
             # New physical parameters for Pinn Coeff C and weights
             pinn_coeff_c           = self.pinn_coeff_c_input.currentText(),
@@ -1395,14 +1007,13 @@ class MiniForecaster(QMainWindow):
             mode                   = self.model_type_combo.currentText(),  
             
             save_format       = save_fmt,
+            log_callback = self.log_updated.emit, 
             verbose       = 1,
     
         )
         # hand the Qt emitters to the config
-        cfg.log               = self.log_updated.emit
-        cfg.progress_callback = self.progress_updated.emit
-        cfg.save_format       = "weights"       # 'tf'if you still want TF SavedModel
-        cfg.bypass_loading    = True       # No need, only for inference.
+        cfg.save_format       = "weights"      
+        cfg.bypass_loading    = True       
         cfg.dynamic_features = dyn_list
         cfg.static_features  = stat_list
         cfg.future_features  = fut_list
@@ -1411,97 +1022,292 @@ class MiniForecaster(QMainWindow):
         cfg.to_json()
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-    
-        # ------- start worker --------------------------------------
-        self.worker = Worker(
-            cfg, 
-            edited_df=getattr(self, "edited_df", None), 
-            parent=self 
-        )
-        self.worker.log_msg.connect(self.log_updated.emit)
-        self.worker.status_msg.connect(self.status_updated.emit)
-        self.worker.progress_val.connect(self.progress_updated.emit)
-        self.worker.coverage_val.connect(self.coverage_ready.emit)
-        self.worker.finished.connect(self._worker_done)
+        # Visually activate the stop button
+        self.stop_btn.setStyleSheet(
+            f"background-color: {PRIMARY}; color: white;")
 
-        # **Stop** button: one-shot lambda that tells the worker to stop
-        self.stop_btn.clicked.connect(
-            lambda: (self.worker.requestInterruption(),
-                     self.status_updated.emit("⏹ Stopping…"))
+        # start worker 
+        self.active_worker = TrainingThread(
+            cfg, 
+            progress_manager = self.progress_manager,
+            edited_df=getattr(self, "edited_df", None), 
+            parent=self, 
         )
+        self.active_worker.log_updated.connect(self.log_updated.emit)
+        self.active_worker.status_updated.connect(self.status_updated.emit)
+        self.active_worker.coverage_ready.connect(self.coverage_ready.emit)
+
+        self.active_worker.finished.connect(self._worker_done)
         
-        self.worker.start()
+        self.active_worker.error_occurred.connect(self.error_mgr.report)
+        self.worker_ctl.bind(self.active_worker)      
+        self.active_worker.start()
+        self._refresh_stop_button() 
         
-    # --------------------------------------------------------------
     def _run_inference(self):
-        """Kick off the PredictionPipeline inside the same progress machinery."""
-        if not self._manifest_path or not Path(self._manifest_path).exists():
-            QMessageBox.warning(self, "Inference",
-                                "run_manifest.json not found – aborting.")
-            self._toggle_inference_mode()        # reset button colours
+        
+        """Launches the inference workflow using the pre-loaded data."""
+        # Make sure we're in INFER mode (this will grey out all panels, etc.)
+        self.mode_mgr.set_mode(Mode.INFER)
+        self.run_btn.setText("Inferring…")
+        self.run_btn.setStyleSheet(
+            "background-color: gray; color:white;")
+
+    
+        # Pre-flight check: ensure data is loaded
+        inference_data = (
+            self.edited_df
+            if getattr(self, "edited_df", None) is not None
+            else pd.read_csv(self.file_path)
+        )
+        if inference_data is None or inference_data.empty:
+            QMessageBox.warning(
+                self,
+                "Inference Error",
+                "No valid data available to run inference on."
+            )
+            # revert back to TRAIN mode if user cancels
+            self.mode_mgr.set_mode(Mode.TRAIN)
             return
     
-        self._log("▶ launching *inference* …")
-        self.run_btn.setEnabled(False)
-        self.stop_btn.setEnabled(False)          # inference is fast; no stop
+        self._log("▶ Launching INFERENCE workflow…")
+        # Note: ModeManager already handled run_btn styling/text
+        self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.progress_bar.repaint() 
+        self.progress_bar.repaint()
     
-        # wire fake progress bar (PredictionPipeline reports 0-100)
-        cfg = SubsConfig()                       # dummy – overwritten by manifest
-        cfg.progress_callback = self.progress_updated.emit
-    
-        pipe = PredictionPipeline(
-            log_callback = self.log_updated.emit,
+        self.active_worker = InferenceThread(
+            manifest_path    = self._manifest_path,
+            progress_manager = self.progress_manager,
+            edited_df        = inference_data,
+            parent           = self,
+            
         )
-        pipe.config.progress_callback = self.progress_updated.emit
+        self.active_worker.log_msg.connect(self.log_updated.emit)
+        self.active_worker.status_msg.connect(self.status_updated.emit)
+        self.active_worker.finished.connect(self._worker_done)
+        self.active_worker.error_occurred.connect(self.error_mgr.report)
+        self.worker_ctl.bind(self.active_worker)
+        self.active_worker.start()
     
-        try:
-            pipe.run(validation_data_path=str(self.file_path))
-            self.progress_bar.setValue(100)
-            self._log("✔ inference finished.")
-        except Exception as err:
-            self._log(f"❌ inference error: {err}")
-            QMessageBox.critical(self, "Inference failed", str(err))
+        # make sure Stop/Run buttons reflect “inference in progress”
+        self._refresh_stop_button()
+        
+    def _open_tuner_dialog(self):
+        """
+        Build the SubsConfig + TunerThread once we know the user wants
+        to tune (ModeManager has already put us into Mode.TUNER).
+        """
+        # 1) Make sure there's data
+        if self.file_path is None:
+            QMessageBox.warning(
+                self, "No data",
+                "Please select a CSV file before starting tuning."
+            )
+            # fallback to TRAIN
+            self.mode_mgr.set_mode(Mode.TRAIN)
+            return
     
-        self.run_btn.setEnabled(True)
-        self._toggle_inference_mode()            # back to training mode
+        # 2) Ask the user for hyper-params
+        fixed_params = {
+            "static_input_dim":      0,
+            "dynamic_input_dim":     1,
+            "future_input_dim":      0,
+            "output_subsidence_dim": 1,
+            "output_gwl_dim":        1,
+            "forecast_horizon":      self.forecast_horizon_spin.value(),
+        }
+        dlg = TunerDialog(fixed_params, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            # user cancelled → back to TRAIN
+            self.mode_mgr.set_mode(Mode.TRAIN)
+            return
+    
+        cfg_dict = dlg.chosen_config()
+        if cfg_dict is None:
+            self.mode_mgr.set_mode(Mode.TRAIN)
+            return  # shouldn't really happen
+    
+        # 3) Build the tuning config
+        seq_params = cfg_dict.get("sequence_params", {})
+        fixed_up   = cfg_dict.get("fixed_params", {})
+    
+        tune_cfg = SubsConfig(
+            city_name               = self.city_input.text() or "unnamed",
+            model_name              = self.model_select.currentText(),
+            data_dir                = str(self.file_path.parent),
+            data_filename           = self.file_path.name,
+            forecast_horizon_years  = seq_params.get(
+                                         "forecast_horizon",
+                                         self.forecast_horizon_spin.value(),
+                                     ),
+            time_steps              = seq_params.get(
+                                         "max_window_size",
+                                         self.time_steps_spin.value(),
+                                     ),
+            train_end_year          = seq_params.get(
+                                         "train_end_year",
+                                         self.train_end_year_spin.value(),
+                                     ),
+            forecast_start_year     = seq_params.get(
+                                         "forecast_start_year",
+                                         self.forecast_start_year_spin.value(),
+                                     ),
+            save_format             = "keras",
+            bypass_loading          = True,
+            verbose                 = 1,
+            run_type                = "tuning",
+            log_callback            = self.log_updated.emit,
+            **fixed_up
+        )
+    
+        # 4) Spawn the tuner thread
+        self._log("▶ launch HYPERPARAMETER TUNING…")
+        log_tuning_params(
+            cfg_dict, log_fn=self._log, mode='wrap', 
+            table_width =70
+         )
+        
+        self.active_worker = TunerThread(
+            cfg             = tune_cfg,
+            search_space    = cfg_dict["search_space"],
+            tuner_kwargs    = cfg_dict["tuner_settings"],
+            progress_manager= self.progress_manager,
+            edited_df       = getattr(self, "edited_df", None),
+            parent          = self,
+        )
+        # w = self.active_worker
+        self.active_worker.log_updated.connect(self.log_updated.emit)
+        self.active_worker.status_updated.connect(self.status_updated.emit)
+        self.active_worker.tuning_finished.connect(self._worker_done)
+        self.active_worker.error_occurred.connect(self.error_mgr.report)
+    
+        self.worker_ctl.bind(self.active_worker)
+        self.run_btn.setText("Tuning…")
+        self.run_btn.setStyleSheet(
+            "background-color: gray; color:white;")
+
+        self.active_worker.start()
+        
+        self._refresh_stop_button()
 
     def _worker_done(self):
         """
-        Called from `self.worker.finished`.  
-        Saves the whole cached log to
-        <run-output-path>/gui_log_YYYYMMDD_HHMMSS.txt
-        and re-enables the buttons.
+        Called when the active_worker finishes 
+        (training, tuning, or inference).
+        1) Saves the last ~10k lines of GUI log 
+         to <run_output_path>/_log/gui_log_<ts>.txt
+        2) Resets all buttons and progress UI
+        3) Switches back into TRAIN mode
         """
+        # Re-enable Run, disable Stop
         self.run_btn.setEnabled(True)
+        self.run_btn.setText("Run")
         self.stop_btn.setEnabled(False)
-        
-        # decide where to write
-        out_dir = getattr(self.worker.cfg, "run_output_path", ".")
-        ts      = time.strftime("%Y%m%d_%H%M%S")
-        fname   = os.path.join(out_dir, f"gui_log_{ts}.txt")
 
-        try:                                                 # limit size
-            MAX_LINES = 10_000          # ≈ a few MB; change at will
-            lines     = self._log_cache[-MAX_LINES:]
-            with open(fname, "w", encoding="utf-8") as fp:
-                fp.write("\n".join(lines))
-            self._log(f"📝 Log saved to: {fname}")
-        except Exception as err:
-            self._log(f"⚠ Could not write log file ({err})")
-    
-            self.status_updated.emit("⚪ Idle")
+        # 1) Save the cached log if we have a run_output_path
+        if hasattr(self, "active_worker") and getattr(
+                self.active_worker, "cfg", None):
+            out_dir = Path(self.active_worker.cfg.run_output_path)
+            try:
+                log_fp = self.log_mgr.save_cache(out_dir)
+                self._log(f"📝 Log saved to: {log_fp}")
+            except Exception as e:
+                self._log(f"⚠ Could not write log file ({e})")
+            finally:
+                # drop the reference
+                self.active_worker = None
+
+        # 2) Reset UI state
+        self.status_updated.emit("⚪ Idle")
+        self.progress_manager.reset()
+        self.worker_ctl.bind(None)
+        self.reset_ctl.enable()
+
+        # 3) Go back to TRAIN mode
+        self.mode_mgr.set_mode(Mode.TRAIN)
+        self._refresh_manifest_state()
         
-        # reset inference toggle (if it was active)
-        if self._inference_mode:
-            self._inference_mode = False
-            self.inf_btn.setStyleSheet("background:%s;" % PRIMARY)
-            self.inf_btn.setEnabled(True)
-            self.inf_btn.setToolTip(
-                "Click to switch the GUI into inference mode.")
-            self.run_btn.setText("Run")
-    
+    @pyqtSlot()
+    def _on_full_reset(self):
+        """Clears logs, progress, forms, file selections,
+        # coverage, etc."""
+        # 1) Clear the QTextEdit log and internal cache
+        self.log_widget.clear()
+        if hasattr(self.log_mgr, "clear"):
+            try:
+                self.log_mgr.clear()
+            except Exception:
+                pass
+
+        # 2) Reset progress bar and status indicator
+        self.progress_manager.reset()
+        self.status_updated.emit("⚪ Idle")
+
+        # 3) Reset file label and inputs
+        self.file_label.setText("No file selected")
+        self.city_input.clear()
+        self.coverage_lbl.clear()
+        self.dyn_feat.setText("auto")
+        self.stat_feat.setText("auto")
+        self.fut_feat.setText("rainfall_mm")
+
+        # 4) Switch back to TRAIN mode 
+        # (re-enables panels and repaints buttons)
+
+        self.mode_mgr.set_mode(Mode.TRAIN)
+
+        # 5) Refresh manifest state so Tune/Infer
+        # buttons update correctly
+        self._refresh_manifest_state()
+
+        # 6) Clear any lingering custom 
+        # styles on the action buttons
+        self.tune_btn.setStyleSheet("")
+        self.inf_btn.setStyleSheet(
+            f"background:{INFERENCE_OFF}; color:white;")
+        self.run_btn.setStyleSheet("")  
+        # 7) Log the reset in the UI
+        ts = time.strftime("%H:%M:%S")
+        self.log_widget.append(f"[{ts}] ℹ Interface fully reset.")
+
+
+    @pyqtSlot(Mode)
+    def _on_mode_change(self, mode: Mode):
+        """
+        Perform any extra logic when the application mode changes:
+          • swap active_worker behavior
+          • prompt for inference manifest
+          • open tuner dialog
+        """
+        if mode == Mode.TRAIN:
+            # revert any inference-specific state
+            pass
+
+        elif mode == Mode.INFER:
+            pass 
+
+        elif mode == Mode.TUNER:
+            # directly open the tuner dialog
+            self._open_tuner_dialog()
+
+        elif mode == Mode.DRY_RUN:
+            # dry-run: just log and do nothing
+            self._log("⚙️ Dry run: no actions executed.")
+
+        # any time we enter TRAIN, REVERT styling of Run/Stop
+        if mode == Mode.TRAIN:
+            self._refresh_stop_button()
+            
+        # 5) Refresh manifest state so Tune/Infer
+        # buttons update correctly
+        self._refresh_manifest_state()
+        
+    # Example: trigger dry-run from code:
+    def some_debug_action(self):
+        self.mode_mgr.set_mode(Mode.DRY_RUN)
+
+
 def hline() -> QFrame:
     """Creates and returns a styled horizontal separator line.
 
@@ -1522,49 +1328,102 @@ def hline() -> QFrame:
 def launch_cli(theme: str = 'fusionlab') -> None:
     """Initializes and launches the main GUI application.
 
-    This function is the main entry point for the entire desktop
+    This function serves as the primary entry point for the desktop
     tool. It is responsible for setting up the PyQt5 application
-    environment, applying the custom visual style, creating the main
-    window instance, and starting the Qt event loop, which makes the
-    application visible and interactive.
+    environment, applying the selected visual theme, creating the
+    main window instance, and starting the Qt event loop.
 
-    The sequence of operations is:
-    1.  Creates a ``QApplication`` instance, the core of any Qt GUI.
-    2.  Sets a custom font for tooltips for better readability.
-    3.  Loads the custom CSS from the ``STYLE_SHEET`` constant to give
-        the application its modern, branded look and feel.
-    4.  Instantiates the main window class, :class:`MiniForecaster`.
-    5.  Shows the main window to the user.
-    6.  Starts the application's event loop by calling `sys.exit(app.exec_())`,
-        which keeps the application running until the user closes it.
-    
     Parameters
-    ------------
-    theme (str, optional): The visual theme to apply. Can be
-        'light' or 'dark'. Defaults to 'light'.
-        
+    ----------
+    theme : {'fusionlab', 'light', 'dark', 'geoscience', 'native'}, default='fusionlab'
+        The visual theme to apply to the application.
+        - 'fusionlab' or 'light': Applies the default clean, light theme.
+        - 'dark': Applies a modern dark theme for reduced eye strain.
+        - 'geoscience': Applies a custom theme with an earth-toned
+          palette loaded from an external `style.qss` file.
+        - 'native': Uses the default, unstyled look of the operating
+          system without applying any custom stylesheets.
+
+    Notes
+    -----
+    The function prioritizes loading a `style.qss` file from the
+    current directory if ``theme='geoscience'`` is selected. If this
+    file is not found, it issues a warning and falls back to the
+    default 'fusionlab' theme.
     """
     app = QApplication(sys.argv)
+    # 1) Set app-level icon for taskbar / Alt+Tab
+    ico = Path(__file__).parent / "fusionlab_learn_logo.ico"
+    app.setWindowIcon(QIcon(str(ico)))
+
+    auto_set_ui_fonts(app)
+    # Normalize theme aliases
+    if theme.lower() in ('light', 'fusionlab', 'fusionlab-learn'):
+        theme = 'fusionlab'
+
+    # --- Theme and Stylesheet Selection ---
+    # Define available built-in themes
+    theme_stylesheets = {
+        "fusionlab": FLAB_STYLE_SHEET,
+        "dark": DARK_THEME_STYLESHEET,
+    }
+
+    selected_stylesheet = ""
+    # Special handling for the external 'geoscience' theme
+    s_qss = os.path.join(os.path.dirname(__file__), "style.qss")
+    if theme.lower() in ('geoscience', 'geo'):
+        if os.path.exists(s_qss):
+            with open(s_qss, "r", encoding="utf-8") as f:
+                selected_stylesheet = f.read()
+        else:
+            # Provide a clear warning and fall back to the default theme
+            warnings.warn(
+                "Theme 'geoscience' was selected, but 'style.qss' was not "
+                "found in the current directory. Falling back to the "
+                "default 'fusionlab' theme.",
+                UserWarning,
+                stacklevel=2
+            )
+            theme = 'fusionlab' 
     
-    QToolTip.setFont(QFont("Helvetica Neue", 9))
+    # Select from built-in themes if no external file was loaded
+    if not selected_stylesheet and theme.lower() != 'native':
+        selected_stylesheet = theme_stylesheets.get(theme.lower())
 
-    if os.path.exists("style.qss"):
-        with open("style.qss", "r", encoding="utf-8") as f:
-            selected_stylesheet = f.read()
-    else:
-        if theme.lower() == 'dark':
-            selected_stylesheet = DARK_THEME_STYLESHEET
-        elif theme =='light':
-            selected_stylesheet = LIGHT_THEME_STYLESHEET
-        else: 
-            selected_stylesheet = FLAB_STYLE_SHEET                  
-
-    app.setStyleSheet(selected_stylesheet)
-
-    gui = MiniForecaster()
+    # Apply the stylesheet only if one was selected
+    if selected_stylesheet:
+        # Add the dynamic property rule for the inference mode border
+        inference_border_style = f"""
+            QFrame#card[inferenceMode="true"] {{
+                border: 2px solid {PRIMARY};
+            }}
+        """
+        final_stylesheet = (
+            selected_stylesheet
+          + ERROR_STYLES     
+          + inference_border_style
+          + LOG_STYLES
+        )
+ 
+        app.setStyleSheet(final_stylesheet)
+    
+    # --- Instantiate and Run the Application ---
+    gui = MiniForecaster(theme=theme)
     gui.show()
     sys.exit(app.exec_())
-
-
+    
 if __name__ == "__main__":
+    
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     launch_cli()
+    
+
+# if __name__ == "__main__":
+#     from .qt_utils import enable_qt_crash_handler 
+#     app = QApplication(sys.argv)
+#     enable_qt_crash_handler(app, keep_gui_alive=False)
+#     # … theme / stylesheet logic …
+#     gui = MiniForecaster(theme="fusionlab")
+#     gui.show()
+#     sys.exit(app.exec_())

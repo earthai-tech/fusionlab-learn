@@ -18,9 +18,11 @@ from typing import (
     Any, 
     Optional,
     Tuple , 
-    Callable
+    Callable, 
 )
+import numpy as np 
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler 
 
 from .._fusionlog import fusionlog 
 from ..core.handlers import columns_manager 
@@ -39,11 +41,719 @@ __all__= [
      'get_value_prefixes',
      'get_value_prefixes_in',
      'pivot_forecast_dataframe', 
-     'get_step_names'
+     'get_step_names', 
+     'stack_quantile_predictions', 
+     'adjust_time_predictions', 
+     
      ]
 
 _DIGIT_RE = re.compile(r"\d+")
 
+
+@check_empty(['df']) 
+def _normalize_for_pinn(
+    df: pd.DataFrame,
+    time_col: str,
+    coord_x: str,
+    coord_y: str,
+    cols_to_scale: Union[List[str], str, None] = "auto",
+    scale_coords: bool = True,
+    verbose: int = 1, 
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
+) -> Tuple[pd.DataFrame, Optional[MinMaxScaler], Optional[MinMaxScaler]]:
+    r"""
+    Apply Min-Max normalization to spatial–temporal coordinates and
+    optionally to other numeric columns. If `cols_to_scale == "auto"`,
+    automatically select numeric columns excluding categorical and
+    one-hot features.
+
+    By default, this function scales the time, longitude, and latitude
+    columns (if `scale_coords=True`). Then, it either scales explicitly
+    provided columns in `cols_to_scale` or automatically infers numeric
+    columns (excluding coordinates if `scale_coords` is False, and
+    excluding one-hot/boolean columns).
+
+    The Min-Max scaling for a feature \(x\) is:
+
+    .. math::
+       x' = \frac{x - \min(x)}{\max(x) - \min(x)}
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame with at least `time_col`, `lon_col`, `lat_col`.
+    time_col : str
+        Name of the numeric time column (e.g., year as numeric or datetime).
+    coord_x : str
+        Name of the longitude column.
+    coord_y : str
+        Name of the latitude column.
+    cols_to_scale : list of str or "auto" or None, default "auto"
+        - If a list of column names: scale exactly those columns.
+        - If "auto": select all numeric columns, then:
+          * Exclude `time_col`, `lon_col`, `lat_col` if `scale_coords=False`.
+          * Exclude any columns whose values are only \{0,1\} (assumed one-hot).
+        - If None: no extra columns are scaled.
+    scale_coords : bool, default True
+        If True, Min-Max scale `[time_col, lon_col, lat_col]`. Otherwise,
+        leave these columns unchanged.
+    verbose : int, default 1
+        Verbosity level via `vlog` (≥2 for detailed debug info).
+
+    Returns
+    -------
+    df_scaled : pd.DataFrame
+        A new DataFrame with specified columns normalized.
+    coord_scaler : MinMaxScaler or None
+        The fitted scaler for `[time_col, lon_col, lat_col]` if
+        `scale_coords=True`, else None.
+    other_scaler : MinMaxScaler or None
+        The fitted scaler for `cols_to_scale` (after auto-selection),
+        or None if no other columns were scaled.
+
+    Raises
+    ------
+    TypeError
+        If `df` is not a DataFrame, or `cols_to_scale` is neither a list
+        nor "auto" nor None, or if any explicitly provided column is not
+        a string.
+    ValueError
+        If required columns (`time_col`, `lon_col`, `lat_col`) or any
+        of `cols_to_scale` do not exist in `df`, or cannot be converted
+        to numeric.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.nn.pinn.utils import normalize_for_pinn
+    >>> data = {
+    ...     "year_num": [0.0, 1.0, 2.0],
+    ...     "lon": [100.0, 101.0, 102.0],
+    ...     "lat": [30.0, 31.0, 32.0],
+    ...     "feat1": [10.0, 20.0, 30.0],
+    ...     "one_hot_A": [0, 1, 0]
+    ... }
+    >>> df = pd.DataFrame(data)
+    >>> df_scaled, coord_scl, feat_scl = normalize_for_pinn(
+    ...     df,
+    ...     time_col="year_num",
+    ...     coord_x="lon",
+    ...     coord_y="lat",
+    ...     cols_to_scale="auto",
+    ...     scale_coords=True,
+    ...     verbose=2
+    ... )
+    >>> # 'year_num','lon','lat','feat1' get scaled; 'one_hot_A' excluded
+    >>> df_scaled["year_num"].tolist()
+    [0.0, 0.5, 1.0]
+    >>> df_scaled["feat1"].tolist()
+    [0.0, 0.5, 1.0]
+
+    Notes
+    -----
+    - When `cols_to_scale="auto"`, numeric columns with only {0,1}
+      values are assumed one-hot and excluded from scaling.
+    - If `scale_coords=False`, coordinate columns remain unchanged,
+      and auto-selection (if used) will exclude them.
+    - Returned `coord_scaler` is None if `scale_coords=False`.
+      Returned `other_scaler` is None if `cols_to_scale` is None or
+      results in an empty set after filtering.
+
+    See Also
+    --------
+    sklearn.preprocessing.MinMaxScaler : Scales features to [0,1].
+    """
+    # --- Validate df ---
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"`df` must be a pandas DataFrame, got "
+                        f"{type(df).__name__}")
+
+    # --- Validate core column names ---
+    for name in (time_col, coord_x, coord_y):
+        if not isinstance(name, str):
+            raise TypeError(f"Column names must be strings, got {name}")
+        if name not in df.columns:
+            raise ValueError(f"Column '{name}' not found in DataFrame")
+
+    # --- Validate cols_to_scale type ---
+    if cols_to_scale is not None and cols_to_scale != "auto":
+        if not isinstance(cols_to_scale, list) or not all(
+            isinstance(c, str) for c in cols_to_scale
+        ):
+            raise TypeError("`cols_to_scale` must be a list of strings, "
+                            "'auto', or None")
+
+    # Make a copy to avoid side effects
+    df_scaled = df.copy(deep=True)
+    coord_scaler: Optional[MinMaxScaler] = None
+    other_scaler: Optional[MinMaxScaler] = None
+
+    # --- 1. Scale coordinates if requested ---
+
+    if scale_coords:
+        vlog("Scaling time, lon, lat columns...",
+             verbose=verbose, level=2, logger=_logger
+             )
+        coord_cols = [time_col, coord_x, coord_y]
+        for col in coord_cols:
+            if not pd.api.types.is_numeric_dtype(df_scaled[col]):
+                try:
+                    df_scaled[col] = pd.to_numeric(df_scaled[col])
+                    vlog(f"Converted '{col}' to numeric.", 
+                         verbose=verbose, level=3, logger=_logger)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot convert '{col}' to numeric: {e}"
+                    )
+        coord_scaler = MinMaxScaler()
+        df_scaled[coord_cols] = coord_scaler.fit_transform(
+            df_scaled[coord_cols]
+        )
+        if verbose >= 3:
+            logger.debug(
+                f" coord_scaler.data_min_: {coord_scaler.data_min_}"
+            )
+            logger.debug(
+                f" coord_scaler.data_max_: {coord_scaler.data_max_}"
+            )
+
+    # --- 2. Determine `other_cols_to_scale` ---
+    if cols_to_scale == "auto":
+        vlog("Auto-selecting numeric columns to scale...", 
+             verbose=verbose, level=2, logger=_logger)
+        # Start with all numeric columns
+        numeric_cols = df_scaled.select_dtypes(
+            include=[np.number]).columns.tolist()
+
+        # Exclude coordinate columns if not scaling them 
+        # if not scale_coords :
+        for c in (time_col, coord_x, coord_y):
+            if c in numeric_cols:
+                numeric_cols.remove(c)
+
+        # Exclude one-hot columns: numeric columns whose unique values ⊆ {0,1}
+        auto_cols = []
+        for c in numeric_cols:
+            uniq = pd.unique(df_scaled[c])
+            if set(np.unique(uniq)) <= {0, 1}:
+                vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
+                     verbose=verbose, level=3, logger=_logger)
+                continue
+            auto_cols.append(c)
+
+        other_cols_to_scale = auto_cols
+        vlog(f"Auto-selected columns: {other_cols_to_scale}", 
+             verbose=verbose, level=2, logger=_logger)
+    elif isinstance(cols_to_scale, list):
+        other_cols_to_scale = cols_to_scale.copy()
+    else:  # cols_to_scale is None
+        other_cols_to_scale = []
+
+    # --- 3. Scale `other_cols_to_scale` if any ---
+    if other_cols_to_scale:
+        vlog(f"Scaling additional columns: {other_cols_to_scale}", 
+             verbose=verbose, level=2, logger=_logger)
+        # Verify existence and numeric type
+        valid_cols = []
+        for col in other_cols_to_scale:
+            if col not in df_scaled.columns:
+                raise ValueError(f"Column '{col}' not found for scaling.")
+            if not pd.api.types.is_numeric_dtype(df_scaled[col]):
+                try:
+                    df_scaled[col] = pd.to_numeric(df_scaled[col])
+                    vlog(f"Converted '{col}' to numeric.", 
+                         verbose=verbose, level=3, logger=_logger)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot convert '{col}' to numeric: {e}"
+                    )
+            valid_cols.append(col)
+
+        if valid_cols:
+            other_scaler = MinMaxScaler()
+            df_scaled[valid_cols] = other_scaler.fit_transform(
+                df_scaled[valid_cols]
+            )
+            if verbose >= 3:
+                logger.debug(
+                    f" other_scaler.data_min_: {other_scaler.data_min_}"
+                )
+                logger.debug(
+                    f" other_scaler.data_max_: {other_scaler.data_max_}"
+                )
+
+    return df_scaled, coord_scaler, other_scaler
+
+@check_empty(['df']) 
+def normalize_for_pinn(
+    df: pd.DataFrame,
+    time_col: str,
+    coord_x: str,
+    coord_y: str,
+    cols_to_scale: Union[List[str], str, None] = "auto",
+    scale_coords: bool = True,
+    verbose: int = 1, 
+    forecast_horizon: Optional[int] = None,  
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    **kws
+) -> Tuple[pd.DataFrame, Optional[MinMaxScaler], Optional[MinMaxScaler]]:
+    """
+    Apply Min-Max normalization to spatial–temporal coordinates and 
+    optionally to other numeric columns. If `cols_to_scale == "auto"`, 
+    automatically select numeric columns excluding categorical and one-hot 
+    features.
+
+    By default, this function scales the time, longitude, and latitude 
+    columns (if `scale_coords=True`). Then, it either scales explicitly 
+    provided columns in `cols_to_scale` or automatically infers numeric 
+    columns (excluding coordinates if `scale_coords` is False, and excluding 
+    one-hot/boolean columns).
+
+    The Min-Max scaling for a feature \(x\) is:
+
+    .. math::
+       x' = \frac{x - \min(x)}{\max(x) - \min(x)}
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing at least `time_col`, `lon_col`, 
+        and `lat_col` columns. The DataFrame should contain temporal 
+        and spatial information to be scaled.
+        
+    time_col : str
+        The name of the numeric time column (e.g., year as numeric 
+        or datetime). This column will be used to adjust and scale 
+        the temporal data.
+        
+    coord_x : str
+        The name of the longitude column in the DataFrame. This column 
+        will be scaled along with the latitude and time columns.
+        
+    coord_y : str
+        The name of the latitude column in the DataFrame. This column 
+        will be scaled along with the longitude and time columns.
+        
+    cols_to_scale : list of str or "auto" or None, default "auto"
+        If a list of column names, scales exactly those columns.
+        If "auto", selects all numeric columns, excluding `time_col`, 
+        `lon_col`, `lat_col` if `scale_coords=False`, and excluding 
+        one-hot encoded columns (values only \{0,1\}).
+        If None, no extra columns are scaled.
+
+    scale_coords : bool, default True
+        If True, scales the `[time_col, lon_col, lat_col]` columns.
+        If False, these columns remain unchanged.
+        
+    verbose : int, default 1
+        Verbosity level for logging. Values higher than 1 provide 
+        more detailed logging information.
+
+    forecast_horizon : Optional[int], default None
+        The number of time steps to shift the time column by. This is 
+        added to the time values before scaling if provided.
+
+    _logger : Optional[Union[logging.Logger, Callable[[str], None]]], default None
+        Logger or function to handle logging messages. If None, the 
+        default logging mechanism is used.
+
+    **kws : Additional keyword arguments
+        These will be passed on to any other internal function used in 
+        the data processing or scaling steps.
+
+    Returns
+    -------
+    df_scaled : pd.DataFrame
+        A new DataFrame with the specified columns normalized.
+        
+    coord_scaler : MinMaxScaler or None
+        The fitted scaler for the `[time_col, lon_col, lat_col]` columns 
+        if `scale_coords=True`, else None.
+        
+    other_scaler : MinMaxScaler or None
+        The fitted scaler for any additional columns that were scaled 
+        (either explicitly provided or auto-selected). None if no 
+        columns were scaled beyond the coordinates.
+
+    Raises
+    ------
+    TypeError
+        If `df` is not a DataFrame, or `cols_to_scale` is neither a list 
+        nor "auto" nor None, or if any explicitly provided column is not 
+        a string.
+        
+    ValueError
+        If required columns (`time_col`, `lon_col`, `lat_col`) or any 
+        of `cols_to_scale` do not exist in `df`, or cannot be converted 
+        to numeric.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.nn.pinn.utils import normalize_for_pinn
+    >>> data = {
+    ...     "year_num": [0.0, 1.0, 2.0],
+    ...     "lon": [100.0, 101.0, 102.0],
+    ...     "lat": [30.0, 31.0, 32.0],
+    ...     "feat1": [10.0, 20.0, 30.0],
+    ...     "one_hot_A": [0, 1, 0]
+    ... }
+    >>> df = pd.DataFrame(data)
+    >>> df_scaled, coord_scl, feat_scl = normalize_for_pinn(
+    ...     df,
+    ...     time_col="year_num",
+    ...     coord_x="lon",
+    ...     coord_y="lat",
+    ...     cols_to_scale="auto",
+    ...     scale_coords=True,
+    ...     verbose=2
+    ... )
+    >>> # 'year_num','lon','lat','feat1' get scaled; 'one_hot_A' excluded
+    >>> df_scaled["year_num"].tolist()
+    [0.0, 0.5, 1.0]
+    >>> df_scaled["feat1"].tolist()
+    [0.0, 0.5, 1.0]
+
+    Notes
+    -----
+    - When `cols_to_scale="auto"`, numeric columns with only {0,1} 
+      values are assumed one-hot and excluded from scaling.
+    - If `scale_coords=False`, coordinate columns remain unchanged, 
+      and auto-selection (if used) will exclude them.
+    - Returned `coord_scaler` is None if `scale_coords=False`. 
+      Returned `other_scaler` is None if `cols_to_scale` is None or 
+      results in an empty set after filtering.
+
+    See Also
+    --------
+    sklearn.preprocessing.MinMaxScaler : Scales features to [0,1].
+    """
+
+    # --- Validate df ---
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"`df` must be a pandas DataFrame, got "
+                        f"{type(df).__name__}")
+
+    # --- Validate core column names ---
+    for name in (time_col, coord_x, coord_y):
+        if not isinstance(name, str):
+            raise TypeError(f"Column names must be strings, got {name}")
+        if name not in df.columns:
+            raise ValueError(f"Column '{name}' not found in DataFrame")
+
+    # --- Validate cols_to_scale type ---
+    if cols_to_scale is not None and cols_to_scale != "auto":
+        if not isinstance(cols_to_scale, list) or not all(
+            isinstance(c, str) for c in cols_to_scale
+        ):
+            raise TypeError("`cols_to_scale` must be a list of strings, "
+                            "'auto', or None")
+
+    # Make a copy to avoid side effects
+    df_scaled = df.copy(deep=True)
+    coord_scaler: Optional[MinMaxScaler] = None
+    other_scaler: Optional[MinMaxScaler] = None
+
+    # --- 1. Adjust time before scaling ---
+    if forecast_horizon is not None:
+        # Check if time_col is integer (year)
+        if pd.api.types.is_integer_dtype(df_scaled[time_col]):
+            # If it's an integer (year), we can simply add the forecast_horizon
+            df_scaled[time_col] = df_scaled[time_col] + forecast_horizon
+            vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+                 verbose=verbose, level=4, logger=_logger)
+        elif pd.api.types.is_datetime64_any_dtype(df_scaled[time_col]):
+            # If time_col is datetime, use the helper function to increment dates
+            df_scaled = increment_dates_by_horizon(
+                df_scaled, time_col, forecast_horizon
+            )
+            vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+                 verbose=verbose, level=4, logger=_logger)
+
+    # --- 2. Scale coordinates if requested ---
+    if scale_coords:
+        vlog("Scaling time, lon, lat columns...",
+             verbose=verbose, level=2, logger=_logger
+             )
+        coord_cols = [time_col, coord_x, coord_y]
+        for col in coord_cols:
+            if not pd.api.types.is_numeric_dtype(df_scaled[col]):
+                try:
+                    df_scaled[col] = pd.to_numeric(df_scaled[col])
+                    vlog(f"Converted '{col}' to numeric.", 
+                         verbose=verbose, level=3, logger=_logger)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot convert '{col}' to numeric: {e}"
+                    )
+        coord_scaler = MinMaxScaler()
+        df_scaled[coord_cols] = coord_scaler.fit_transform(
+            df_scaled[coord_cols]
+        )
+
+    # --- 3. Determine `other_cols_to_scale` ---
+    if cols_to_scale == "auto":
+        vlog("Auto-selecting numeric columns to scale...", 
+             verbose=verbose, level=2, logger=_logger)
+        # Start with all numeric columns
+        numeric_cols = df_scaled.select_dtypes(
+            include=[np.number]).columns.tolist()
+
+        # Exclude coordinate columns if not scaling them 
+        for c in (time_col, coord_x, coord_y):
+            if c in numeric_cols:
+                numeric_cols.remove(c)
+
+        # Exclude one-hot columns: numeric columns whose unique values ⊆ {0,1}
+        auto_cols = []
+        for c in numeric_cols:
+            uniq = pd.unique(df_scaled[c])
+            if set(np.unique(uniq)) <= {0, 1}:
+                vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
+                     verbose=verbose, level=3, logger=_logger)
+                continue
+            auto_cols.append(c)
+
+        other_cols_to_scale = auto_cols
+        vlog(f"Auto-selected columns: {other_cols_to_scale}", 
+             verbose=verbose, level=2, logger=_logger)
+    elif isinstance(cols_to_scale, list):
+        other_cols_to_scale = cols_to_scale.copy()
+    else:  # cols_to_scale is None
+        other_cols_to_scale = []
+
+    # --- 4. Scale `other_cols_to_scale` if any ---
+    if other_cols_to_scale:
+        vlog(f"Scaling additional columns: {other_cols_to_scale}", 
+             verbose=verbose, level=2, logger=_logger)
+        # Verify existence and numeric type
+        valid_cols = []
+        for col in other_cols_to_scale:
+            if col not in df_scaled.columns:
+                raise ValueError(f"Column '{col}' not found for scaling.")
+            if not pd.api.types.is_numeric_dtype(df_scaled[col]):
+                try:
+                    df_scaled[col] = pd.to_numeric(df_scaled[col])
+                    vlog(f"Converted '{col}' to numeric.", 
+                         verbose=verbose, level=3, logger=_logger)
+                except Exception as e:
+                    raise ValueError(
+                        f"Cannot convert '{col}' to numeric: {e}"
+                    )
+            valid_cols.append(col)
+
+        if valid_cols:
+            other_scaler = MinMaxScaler()
+            df_scaled[valid_cols] = other_scaler.fit_transform(
+                df_scaled[valid_cols]
+            )
+            if verbose >= 3:
+                logger.debug(
+                    f" other_scaler.data_min_: {other_scaler.data_min_}"
+                )
+                logger.debug(
+                    f" other_scaler.data_max_: {other_scaler.data_max_}"
+                )
+
+    return df_scaled, coord_scaler, other_scaler
+
+def increment_dates_by_horizon(
+        df: pd.DataFrame, time_col: str, 
+        forecast_horizon: int) -> pd.DataFrame:
+    """
+    Increments the values in a datetime column by the forecast horizon.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame containing the time column to be adjusted.
+    time_col : str
+        The name of the datetime column in the DataFrame.
+    forecast_horizon : int
+        The forecast horizon (number of years or time steps to add).
+
+    Returns
+    -------
+    pd.DataFrame
+        The DataFrame with the adjusted time column.
+    """
+    # Convert the time column to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df[time_col]):
+        df[time_col] = pd.to_datetime(df[time_col])
+
+    # Add the forecast horizon (years)
+    df[time_col] = df[time_col] + pd.DateOffset(years=forecast_horizon)
+    
+    return df
+
+def adjust_time_predictions(
+    df: pd.DataFrame, 
+    time_col: str, 
+    forecast_horizon: int, 
+    coord_scaler: Optional[MinMaxScaler] = None, 
+    inverse_transformed: bool = False,  
+    verbose: int = 1
+) -> pd.DataFrame:
+    """
+    Adjusts time predictions by adding the forecast horizon to inverse
+    normalized time. If the time column has already been inverse-transformed,
+    skip the inverse transformation.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The DataFrame containing the time predictions (inverse scaled).
+        The time column specified by `time_col` should contain the time
+        values that need to be adjusted.
+        
+    time_col : str
+        The name of the time column in the DataFrame. This column will
+        be adjusted by adding the forecast horizon.
+        
+    forecast_horizon : int
+        The forecast horizon (e.g., number of years or time steps)
+        that will be added to the time predictions. This value shifts the
+        time predictions forward.
+        
+    coord_scaler : MinMaxScaler, optional
+        The scaler that was used for the coordinates. It is necessary to
+        reverse the scaling for the time column if it was previously normalized.
+        If not provided, the time column should already be inverse-transformed.
+        
+    inverse_transformed : bool, default False
+        If `True`, skips the inverse transformation of the time column and
+        directly adds the forecast horizon. This is useful when the time column
+        has already been inverse-transformed, and you only need to adjust the
+        time by the forecast horizon.
+        
+    verbose : int, default 1
+        Verbosity level for logging. Higher values (e.g., `verbose=2`) provide
+        more detailed information about the operation.
+
+    Returns
+    -------
+    pd.DataFrame
+        The adjusted DataFrame with the time column updated to reflect the
+        forecast horizon. The time predictions are adjusted by adding the
+        `forecast_horizon` to each entry in the time column.
+        
+    Raises
+    ------
+    ValueError
+        If the time column is not found in the DataFrame or if the scaler is
+        not available when necessary.
+        
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from sklearn.preprocessing import MinMaxScaler
+    >>> # Sample data for illustration
+    >>> df = pd.DataFrame({
+    >>>     'year': [0.0, 0.5, 1.0],
+    >>>     'subsidence': [0.1, 0.2, 0.3]
+    >>> })
+    >>> scaler = MinMaxScaler()
+    >>> df_scaled = df.copy()
+    >>> df_scaled['year'] = scaler.fit_transform(df_scaled[['year']])
+    >>> adjusted_df = adjust_time_predictions(
+    >>>     df_scaled,
+    >>>     time_col='year',
+    >>>     forecast_horizon=4,
+    >>>     coord_scaler=scaler,
+    >>>     inverse_transformed=False,
+    >>>     verbose=2
+    >>> )
+    >>> adjusted_df['year']
+    [0.0, 0.5, 1.0] -> After adjustment, will be shifted to the future.
+    
+    Notes
+    -----
+    - The time column must be in a normalized scale if not already
+      inverse-transformed.
+    - If `inverse_transformed=True`, the time values will directly be adjusted
+      by the `forecast_horizon` without applying the inverse transformation.
+    - The forecast horizon is added directly to the time values after the
+      necessary inverse transformation (if applicable).
+    
+    See Also
+    --------
+    sklearn.preprocessing.MinMaxScaler : Scales features to [0,1].
+    """
+    if time_col not in df.columns:
+        raise ValueError(f"Column '{time_col}' not found in DataFrame.")
+
+    if coord_scaler is None and not inverse_transformed:
+        raise ValueError("coord_scaler is required unless `inverse_transformed` is True.")
+
+    # Apply inverse scaling to the time predictions if they haven't been inverse-transformed yet
+    time_predictions = df[time_col].values
+
+    if not inverse_transformed:
+        # Revert the time predictions from the normalized scale to the original scale
+        time_predictions = coord_scaler.inverse_transform(
+            time_predictions.reshape(-1, 1)).flatten()
+
+    # Add the forecast horizon to the time predictions
+    adjusted_time_predictions = time_predictions + forecast_horizon
+
+    # Update the DataFrame with the adjusted time predictions
+    df[time_col] = adjusted_time_predictions
+
+    if verbose >= 1:
+        logger.info(f"Time predictions adjusted by {forecast_horizon} years.")
+
+    return df
+
+
+def stack_quantile_predictions(
+    q_lower:   Union[np.ndarray, Sequence],
+    q_median:  Union[np.ndarray, Sequence],
+    q_upper:   Union[np.ndarray, Sequence],
+) -> np.ndarray:
+    """
+    Stack three quantile trajectories into a single y_pred array
+    of shape (n_samples, 3, n_timesteps), ready for PSS.
+
+    Parameters
+    ----------
+    q_lower, q_median, q_upper : array-like
+        Each is either
+        - 1D: (n_timesteps,) → interpreted as a single sample, or
+        - 2D: (n_samples, n_timesteps)
+
+    Returns
+    -------
+    y_pred : np.ndarray, shape (n_samples, 3, n_timesteps)
+        Where axis=1 indexes [lower, median, upper].
+
+    Raises
+    ------
+    ValueError
+        If the three inputs (after promotion) do not share the same shape.
+    """
+    def _ensure_2d(arr):
+        a = np.asarray(arr)
+        if a.ndim == 1:
+            return a.reshape(1, -1)
+        if a.ndim == 2:
+            return a
+        raise ValueError(
+            f"Each quantile array must be 1D or 2D, got shape {a.shape}")
+
+    lower = _ensure_2d(q_lower)
+    median = _ensure_2d(q_median)
+    upper = _ensure_2d(q_upper)
+
+    if not (lower.shape == median.shape == upper.shape):
+        raise ValueError(
+            "All three quantile arrays must have the same shape "
+            f"after promotion, got {lower.shape}, {median.shape}, {upper.shape}"
+        )
+
+    # Stack along new axis=1 → (n_samples, 3, n_timesteps)
+    y_pred = np.stack([lower, median, upper], axis=1)
+    return y_pred
 
 def get_step_names(
     forecast_steps: Iterable[int],
@@ -386,6 +1096,154 @@ def get_value_prefixes(
     
     return sorted(list(prefixes))
 
+def get_test_data_from(
+    df: pd.DataFrame, 
+    time_col: str,
+    time_steps: int,  
+    train_end_year: Optional[int] = None,  
+    forecast_horizon: Optional[int] = 1,  
+    strategy: str = 'onwards',  
+    objective: str = "pure" , # for forecasting
+    verbose: int = 1, 
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+) -> pd.DataFrame:
+    r"""
+    Prepares the test data for forecasting by ensuring there is enough 
+    future data.
+    It adjusts the start and end years based on the forecast horizon
+    and strategy provided.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The scaled dataframe containing the time series data.
+    time_col : str
+        The column name for time in the dataframe (e.g., year).
+    time_steps : int
+        The number of steps to look back for generating sequences.
+    train_end_year : int, optional
+        The last year used for training. If not provided, defaults to the last year 
+        in the dataset.
+    forecast_horizon : int, optional
+        The forecast horizon, i.e., the number of years to predict. Default is 1.
+    strategy : {'onwards', 'lookback'}, default 'onwards'
+        - 'onwards': Start the test data from `train_end_year + time_steps`.
+        - 'lookback': Use the available data until `train_end_year`.
+    verbose : int, optional
+        Verbosity level for logging (default 1).
+    _logger : logging.Logger or Callable, optional
+        Logger or callable for logging the messages.
+
+    Returns
+    -------
+    pd.DataFrame
+        The prepared test data, based on the forecast horizon
+        and selected strategy.
+    
+    Notes
+    -----
+    - If `train_end_year` is not provided, it is determined automatically 
+      from the latest year in the `time_col`.
+    - The `strategy` parameter defines how the test data is selected:
+      * `onwards`: Select data starting from `train_end_year + time_steps`.
+      * `lookback`: Select data until `train_end_year`.
+    - If there isn't enough data for the `forecast_horizon`, the function will 
+      adjust and either fetch earlier data or use the `lookback` strategy.
+    
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> df = pd.DataFrame({
+    >>>     'year': [2015, 2016, 2017, 2018, 2019, 2020],
+    >>>     'subsidence': [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    >>> })
+    >>> test_data = get_test_data_from(
+    >>>     df=df, 
+    >>>     time_col='year', 
+    >>>     time_steps=3, 
+    >>>     forecast_horizon=2, 
+    >>>     strategy='onwards', 
+    >>>     verbose=2
+    >>> )
+    >>> print(test_data)
+    """
+    def _v(msg, lvl): 
+        vlog(msg, verbose=verbose, level=lvl, logger=_logger)
+    
+    # Determine the last available year if not explicitly given
+    if train_end_year is None:
+        if pd.api.types.is_numeric_dtype(df[time_col]):
+            train_end_year = df[time_col].max()  # Use the last numeric year
+        elif pd.api.types.is_datetime64_any_dtype(df[time_col]):
+            # Handle various datetime formats
+            if df[time_col].dt.is_year_end.any():
+                train_end_year = df[time_col].dt.year.max()  # Year format
+            elif df[time_col].dt.is_month_end.any():
+                train_end_year = df[time_col].dt.to_period('M').max().year  # Month format
+            elif df[time_col].dt.week.any():
+                train_end_year = df[time_col].dt.to_period('W').max().year  # Week format
+            else:
+                # Default to full datetime handling
+                train_end_year = df[time_col].dt.year.max()
+
+        if verbose >= 1:
+            _v("Train end year not specified."
+               f" Using last available year: {train_end_year}",
+               lvl=1)
+    
+    # Adjust forecast end year based on the datetime frequency
+    forecast_end_year = train_end_year + forecast_horizon
+    forecast_start_year = train_end_year - forecast_horizon
+    if objective =="forecasting": 
+        forecast_end_year= train_end_year + time_steps
+        forecast_start_year = train_end_year - time_steps
+        
+    if verbose >= 2:
+        _v(f"Forecast start year: {forecast_start_year},"
+           f" Forecast end year: {forecast_end_year}", lvl=2)
+    
+    # Handle data based on the specified strategy
+    if strategy == 'onwards':
+        # Get the test data starting from the forecast start year
+        # (train_end_year + time_steps)
+        test_data = df[df[time_col] >= forecast_end_year]
+    elif strategy == 'lookback':
+        # If 'lookback', select data that ends at `train_end_year`
+        #(train_end_year - time_steps)
+        if objective =='forecasting':
+            test_data = df[df[time_col] >= forecast_start_year]
+        else:
+            test_data = df[df[time_col] > forecast_start_year]
+    else:
+        raise ValueError(f"Invalid strategy '{strategy}'."
+                         " Choose either 'onwards' or 'lookback'.")
+    
+    # Check if enough data is available for the forecast horizon
+    if test_data.empty or len(test_data[time_col].unique()) < forecast_horizon:
+        if verbose >= 1:
+            _v(f"Not enough data for the forecast horizon"
+               f" ({forecast_horizon} years). Adjusting test data.", 
+               lvl=1)
+        
+        # Fall back to using a lookback strategy if there
+        # isn't enough data for the forecast horizon
+        # (train_end_year - time_steps)
+        if objective =='forecasting': 
+            test_data = df[df[time_col] >=forecast_start_year]
+        else:
+            test_data = df[df[time_col] > forecast_start_year]
+        
+        if verbose >= 1:
+            _v(f"Using data from {forecast_start_year} onwards.", lvl=1)
+    
+    # Log the years included in the test data
+    if verbose >= 1:
+        _v(f"Test data years: {test_data[time_col].unique()}", lvl=2)
+    
+    # Return the test data
+    return test_data
+
+
 @check_empty(['data']) 
 @is_data_readable 
 def pivot_forecast_dataframe(
@@ -631,17 +1489,20 @@ def pivot_forecast_dataframe(
         df_wide = df_pivoted
     
     vlog(f"Pivot complete. Final shape: {df_wide.shape}",
-         level=1, verbose=verbose)
+         level=1, verbose=verbose, logger = _logger 
+         )
 
     if savefile:
         try:
             vlog(f"Saving DataFrame to '{savefile}'.",
-                 level=1, verbose=verbose)
+                 level=1, verbose=verbose, logger = _logger )
             save_dir = os.path.dirname(savefile)
             if save_dir and not os.path.exists(save_dir):
                 os.makedirs(save_dir, exist_ok=True)
             df_wide.to_csv(savefile, index=False)
-            vlog("Save successful.", level=2, verbose=verbose)
+            vlog("Save successful.", level=2, verbose=verbose, 
+                 logger = _logger 
+                 )
         except Exception as e:
             logger.error(f"Failed to save file to '{savefile}': {e}")
 
@@ -777,6 +1638,5 @@ def detect_forecast_type(
 
     # If neither format is detected, return 'unknown'.
     return 'unknown'
-
 
 

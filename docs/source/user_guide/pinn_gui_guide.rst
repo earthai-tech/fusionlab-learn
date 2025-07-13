@@ -1,11 +1,11 @@
 .. _pinn_gui_guide:
 
-=====================================
-Subsidence PINN Mini GUI Guide
-=====================================
+========================================
+Subsidence PINN: Mini Forecaster Guide
+========================================
 
 This guide provides a complete walkthrough of the **Subsidence PINN
-Mini GUI**, a desktop application designed to provide a user-friendly
+Mini Forecaster**, a desktop application designed to provide a user-friendly
 interface for the complex forecasting workflows in ``fusionlab-learn``.
 
 The application allows users who may not be familiar with Python to
@@ -39,7 +39,7 @@ system's path. This is the simplest and recommended way to start the GUI.
 
 .. code-block:: bash
 
-   pinn-mini-forecaster
+   mini-forecaster
 
 This will launch the main application window.
 
@@ -149,8 +149,64 @@ These are the primary controls for managing the workflow.
   training, or forecasting). The button is disabled when the GUI is idle.
   
 * **Inference**: This button becomes active only if a completed
-  training run (a ``run_manifest.json`` file) is detected near the
+  training run is detected near the
   selected CSV file. Clicking it launches the inference workflow.
+  
+**1. Data Input & Main Controls**
+*********************************
+
+.. figure:: ../images/gui_controls_area.png
+   :alt: Top-bar controls of the Mini Forecaster
+   :align: center
+   :width: 80%
+
+   The top bar now groups every high-level control in a single row.
+
+These buttons and fields let you load data, launch or stop a workflow,
+and switch between *training*, *tuning* and *inference*.
+
+* **Select CSV…** – Opens a file-chooser.  Pick the `.csv` file
+  containing your spatiotemporal data.  The chosen filename is displayed
+  next to the button.
+
+* **Tune** – Enabled as soon as a CSV (or a previous tuner manifest) is
+  detected.  Opens a setup dialog where you define the hyper-parameter
+  search-space and the number of trials.  
+  While tuning is running the button turns *orange*; inference is
+  temporarily disabled.
+
+* **Inference** – A toggle.  
+  It becomes active (blue) when a previously *trained* manifest
+  (`run_manifest.json` or `tuner_run_manifest.json`) is found next to
+  the selected CSV.  
+  Click once to switch the GUI into *inference mode* (button shows
+  orange); click again to return to training.
+
+* **Stop** – Appears in red once a workflow is running.  
+  Sends a graceful interruption request to the background thread
+  (sequence generation, training, tuning or forecasting).
+
+* **Reset** – Clears logs, progress-bar and cached state.  
+  It also deletes the local registry cache (model checkpoints, scalers,
+  sequence cache, …) so the next run starts from a clean slate.
+
+* **Quit** – Closes the application. If a workflow is active you will be
+  asked to confirm the cancellation first.
+
+* **City / Dataset** – A free-text field used to name the current run
+  (e.g. “Agnibilekrou”, “South-Delta”).  The value becomes part of the
+  output-directory path so consecutive runs never overwrite each other.
+
+* **Run / Infer** – Located under the log panel. 
+ 
+  • In *training* mode the button reads **Run** and launches the full
+    end-to-end pipeline.  
+  • In *inference* mode it changes to **Infer** and only executes the
+    prediction pipeline with the existing model.
+
+The **Run** (or **Infer**) button is disabled while any background
+workflow is active; **Stop** and **Reset** reflect the opposite state.
+
   
 **2. Data Preview and Editing**
 *******************************
@@ -351,7 +407,7 @@ detects that a model has already been trained.
 
 1.  **Automatic Detection:** When you select a CSV file using the
     **"Select CSV..."** button, the application automatically searches
-    the surrounding directories for a ``run_manifest.json`` file. This
+    the surrounding directories trained or tuning model manifest file. This
     file, created at the end of a successful training run, contains all
     the information about the trained model and its artifacts.
 
@@ -375,3 +431,166 @@ detects that a model has already been trained.
 
 This workflow provides a seamless way to apply your trained models to
 new data without having to re-run the entire training process.
+
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
+.. _hyperparameter_tuning:
+
+Hyper-parameter Tuning with the Tune Wizard
+--------------------------------------------------
+
+Clicking **Tune** opens a dedicated window that lets you define the
+*Keras-Tuner* search-space and launch a full hyper-parameter search
+without writing code. The wizard offers two entry points:
+
+- **Easy Setup** – a minimal form for non-experts: pick an algorithm,
+  the number of trials and paste a small Python-dict with the search
+  space.
+
+- **Developer** – a multi-tab notebook that exposes *all* knobs of the
+  PINN models (model topology, physics weights, system settings, search
+  limits, etc.). Each field can be fixed or declared “searchable”
+  (e.g. ``hp.Int('batch_size', 16, 128, step=16)``).
+
+.. grid:: 1 2 2 2
+   :gutter: 2
+
+   .. grid-item-card::
+      :shadow: none
+      :class-card: no-border
+
+      .. figure:: ../images/gui_tune_easy.png
+         :alt: Easy-Setup mode of the Tune dialog
+         :align: center
+         :width: 100%
+
+         **(a)** *Easy Setup* – a tabbed interface exposing every
+         hyper-parameter; use the *Search Space* tab to mark which values
+         should be optimised.
+
+   .. grid-item-card::
+      :shadow: none
+      :class-card: no-border
+
+      .. figure:: ../images/gui_tune_developer.png
+         :alt: Developer-mode of the Tune dialog
+         :align: center
+         :width: 100%
+
+         **(b)** *Developer* mode – enter the algorithm, trials and a concise
+         Python dictionary describing the search-space.
+
+
+**1. Wizard Workflow**
+*************************
+
+1. The left-hand panel shows **Fixed Parameters** – dimensions and
+   constants inferred from your dataset; they are *not* tunable.
+
+2. Fill in or edit the search-space:
+
+   - *Developer* – type a plain Python ``dict`` such as:
+
+     .. code-block:: python
+
+        {
+            "learning_rate": [1e-4, 1e-3],
+            "num_heads":    [2, 4],
+            "K":            ["learnable", 1e-5]
+        }
+
+   - *Easy Setup* – open **Search Space** and click the tab next
+     to any field to turn it into a Keras-Tuner definition
+     (``hp.Int``, ``hp.Float``, ``hp.Choice`` …).
+
+3. Choose the tuner algorithm (``randomsearch``, ``bayesian``,
+   ``hyperband`` …), set *Max Trials* and *Executions per Trial*.
+
+4. Press **Start Tuning**.
+   The **Tune** button in the main window turns orange and inference is
+   disabled until all trials finish. The global progress-bar shows
+   “Trial x/N – Epoch y/M – ETA”.
+
+5. When the search completes, the wizard writes:
+
+   - ``tuner_run_manifest.json`` (configuration + best HPs),
+   - ``<model>_best.keras`` or ``.weights.h5``, and
+   - ``best_hyperparameters.json``
+
+   to the run directory and re-enables inference so you can immediately
+   test the tuned model.
+
+The wizard therefore provides a guided, GUI-driven alternative to the
+Python-level ``HydroTuner`` API – perfect for users who prefer point-and-click
+experimentation.
+
+.. _tuning_in_progress:
+
+**2. Tuning in Progress**
+**************************
+
+Once the **Start Tuning** button is pressed, the GUI enters tuning mode,
+as shown in the figure below. During this phase, the system executes a
+series of hyper-parameter trials using the configuration defined in the
+**Tune Wizard**. The main window dynamically reflects the current state of
+training and tuning progress.
+
+.. figure:: ../images/gui_tuning_in_progress.png
+   :alt: Hyper-parameter tuning in progress
+   :align: center
+   :width: 100%
+
+   The application during an active tuning run, showing the console logs,
+   progress bar, and disabled controls to prevent interference.
+
+**Key Elements During Tuning**
+
+- **Tuning Indicator:** The top-right corner shows a glowing orange
+  **TUNING** badge, replacing the Tune button label. This visually
+  indicates that tuning is currently active and other operations like
+  inference are temporarily disabled.
+
+- **Live Logging Console:** The central black terminal pane provides
+  real-time updates of each trial's progress. For instance:
+
+  .. code-block:: text
+
+     Trial 2/3 – Global batch 517 – Progress: 54.18%
+     Trial 2/3 – Global batch 520 – Progress: 55.03%
+
+- **ETA Display:** A real-time ETA estimate is shown below the console
+  to help anticipate when the current trial or tuning session will finish:
+
+  .. code-block:: text
+
+     Trial 2/3 – Epoch 5/7 – ETA: 00:42
+
+- **Progress Bar:** A green bar at the bottom visually represents total
+  completion, updated incrementally as tuning proceeds.
+
+- **Parameter Locking:** All input fields in the configuration area
+  (e.g., model type, training parameters, physical constraints) are
+  disabled to preserve trial consistency.
+
+- **Trial Tracker:** The console output shows the current trial and batch
+  number, giving fine-grained visibility into the internal training loop
+  during each trial.
+
+.. note::
+
+   You may press **Stop** to interrupt the search. If so, partial results
+   (completed trials) will still be saved to the run directory.
+
+**3. Output Files After Completion**
+**************************************
+
+When tuning concludes, the following files are written to disk:
+
+- ``best_hyperparameters.json`` – best trial configuration.
+- ``<model>_best.keras`` or ``.weights.h5`` – saved weights of the
+  optimal model.
+
+These can be reloaded directly for further evaluation or inference without
+re-running the full tuning process.

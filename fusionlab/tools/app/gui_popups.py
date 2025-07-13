@@ -1,14 +1,22 @@
 
 from __future__ import annotations 
-
-from PyQt5.QtCore   import Qt # , QPointF
-from PyQt5.QtGui    import QPixmap, QGuiApplication, QKeySequence, QPainter
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QFileDialog, QMessageBox, QGraphicsView, QGraphicsScene,
-    QGraphicsPixmapItem, QToolButton, QWidget, QShortcut 
-)
 import shutil, os
+
+from PyQt5.QtCore import Qt # , QPointF
+from PyQt5.QtGui import QPixmap, QGuiApplication, QKeySequence, QPainter
+from PyQt5.QtWidgets import (
+    QDialog, QVBoxLayout, 
+    QHBoxLayout, 
+    QLabel, 
+    QPushButton,
+    QFileDialog,
+    QMessageBox, 
+    QGraphicsView,
+    QGraphicsScene,
+    QGraphicsPixmapItem, 
+    QToolButton, QWidget, 
+    QShortcut 
+)
 
 class ImagePopup(QDialog):
     """Simple full-screen preview (no extra actions)."""

@@ -957,7 +957,8 @@ def augment_city_spatiotemporal_data(
 
     # --- Define default parameters ---
     _group_by_cols = group_by_cols or ['longitude', 'latitude']
-
+    
+    _group_by_cols = columns_manager(_group_by_cols, empty_as_none=False)
     # Default columns to exclude from auto-selection
     default_exclude_cols = set(_group_by_cols + [_time_col])
     # Add known categorical or ID-like columns (expand as needed)

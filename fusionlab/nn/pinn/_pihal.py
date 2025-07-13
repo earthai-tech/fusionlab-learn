@@ -22,7 +22,7 @@ from .._base_attentive import BaseAttentive
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs
     from .op import process_pinn_inputs, compute_consolidation_residual
-    from .utils import process_pde_modes, _get_coords  
+    from .utils import process_pde_modes
   
 MeanSquaredError = KERAS_DEPS.Adam 
 Adam =KERAS_DEPS.Adam 
