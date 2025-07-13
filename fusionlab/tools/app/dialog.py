@@ -265,10 +265,11 @@ class TunerDialog(QDialog):
         self.stack.addWidget(self.dev_page)
     
         # ── ❸  Dialog buttons (OK / Cancel) --------------------------------
-        self.btn_box.button(QDialogButtonBox.Ok).setText("Start Tuning")
         self.btn_box = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
+        self.btn_box.button(QDialogButtonBox.Ok).setText("Start Tuning")
+        
         root.addWidget(self.btn_box)
     
         # default page
