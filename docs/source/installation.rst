@@ -176,12 +176,12 @@ and tuning.
 **Standalone GUI Application**
 ******************************
 The installation also creates a direct command to launch the **Subsidence
-PINN Mini GUI**. This is a standalone desktop application for running the
+PINN Mini Forecaster**. This is a standalone desktop application for running the
 entire forecasting workflow without writing any code.
 
 .. code-block:: bash
 
-   fusionlab-learn-pinn-mini-forecaster
+  mini-forecaster
 
 Running this command will open the application window directly. For a
 detailed guide on using the GUI, please see the
