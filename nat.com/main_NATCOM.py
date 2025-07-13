@@ -1037,7 +1037,7 @@ if forecast_df is not None and not forecast_df.empty:
             verbose=1, 
             cbar =None, 
         ) 
-else:
+else: 
     print("No SubsModel forecast data to visualize.")
 
 # ==================================================================

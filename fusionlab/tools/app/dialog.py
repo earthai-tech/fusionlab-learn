@@ -308,7 +308,6 @@ class TunerDialog(QDialog):
         """Call **after** exec_()."""
         return self._chosen_cfg
 
-
 class _DeveloperPage(QWidget):
     """
     Your original two-panel developer view – unchanged except for
