@@ -28,6 +28,15 @@ _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_spatial_params), 
 )
 
+__all__= [ 
+    'plot_spatial', 
+    'plot_spatial_roi', 
+    'plot_spatial_contours', 
+    'plot_hotspots', 
+    'plot_spatial_voronoi', 
+    'plot_spatial_heatmap'
+    ]
+
 @check_empty(['df'])
 @isdf
 def plot_spatial(
@@ -822,7 +831,8 @@ def plot_spatial_voronoi(
                 continue
             poly_pts = vor.vertices[region]
             color = mapper.to_rgba(vals[pt_idx])
-            patch = Polygon(poly_pts, facecolor=color, edgecolor='k', linewidth=0.5)
+            patch = Polygon(poly_pts, facecolor=color, edgecolor='k', 
+                            linewidth=0.5)
             ax.add_patch(patch)
 
         # Overlay points
@@ -920,3 +930,132 @@ plot_spatial_contours : Contour maps at specified quantiles.
 plot_spatial_roi      : Region-of-interest scatter maps.
 """.format(params=_param_docs)
 
+
+@check_empty(['df'])
+@isdf
+def plot_spatial_heatmap(
+    df: pd.DataFrame,
+    value_col: str,
+    spatial_cols: Optional[Tuple[str, str]] = None,
+    dt_col: Optional[str] = None,
+    dt_values: Optional[List[Union[int, str]]] = None,
+    *,
+    grid_res: int = 100,
+    method: str = 'grid',  
+    cmap: str = 'viridis',
+    alpha: float = 0.8,
+    show_points: bool = False,
+    show_grid: bool = True,
+    grid_props: Optional[dict] = None,
+    max_cols: int = 3,
+    savefig: Optional[str] = None,
+    save_fmts: Union[str, List[str]] = '.png',
+    prefix: str = '',
+    verbose: int = 1,
+    cbar: str = 'uniform',
+    show_axis: Union[str, bool] = 'on',
+    _logger: Optional[logging.Logger] = None
+) -> List[plt.Figure]:
+    """
+    Plot a smooth spatial heatmap of `value_col` over a grid, faceted by time.
+    """
+    def _v(msg: str, level: int = 1):
+        vlog(message=msg, verbose=verbose, level=level, logger=_logger)
+
+    exist_features(df, features=value_col, error='raise')
+    spatial_cols = spatial_cols or ('coord_x', 'coord_y')
+    spatial_cols = columns_manager(spatial_cols, empty_as_none=False)
+    check_spatial_columns(df, spatial_cols=spatial_cols)
+    x_col, y_col = spatial_cols
+
+    if dt_col:
+        dt_values = dt_values or sorted(df[dt_col].dropna().unique())
+    elif dt_values is None:
+        raise ValueError("Either 'dt_col' or 'dt_values' must be provided")
+
+    n = len(dt_values)
+    ncols = min(max_cols, n)
+    nrows = (n + ncols - 1) // ncols
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(4 * ncols, 4 * nrows),
+        constrained_layout=True
+    )
+    axes_flat = axes.flatten() if hasattr(axes, 'flatten') else [axes]
+    imaps = []
+
+    for idx, dt in enumerate(dt_values):
+        ax = axes_flat[idx]
+        df_dt = df[df[dt_col] == dt] if dt_col else df
+        x = df_dt[x_col].values
+        y = df_dt[y_col].values
+        z = df_dt[value_col].values
+
+        # define grid
+        xi = np.linspace(x.min(), x.max(), grid_res)
+        yi = np.linspace(y.min(), y.max(), grid_res)
+        Xi, Yi = np.meshgrid(xi, yi)
+
+        if method == 'grid':
+            from scipy.interpolate import griddata
+            Zi = griddata((x, y), z, (Xi, Yi), method='linear')
+        elif method == 'kde':
+            from scipy.stats import gaussian_kde
+            # Shift weights to be non-negative
+            weights = z.copy().astype(float)
+            w_min = weights.min()
+            if w_min < 0:
+                weights = weights - w_min + 1e-6
+            kde = gaussian_kde(np.vstack([x, y]), weights=weights)
+            Zi = kde(np.vstack([Xi.ravel(), Yi.ravel()])).reshape(Xi.shape)
+        else:
+            raise ValueError("Unsupported method: choose 'grid' or 'kde'.")
+
+        # plot heatmap
+        im = ax.pcolormesh(
+            Xi, Yi, Zi,
+            cmap=cmap,
+            shading='auto',
+            alpha=alpha
+        )
+        imaps.append(im)
+
+        if show_points:
+            ax.scatter(x, y, c='k', s=5)
+        if show_grid:
+            gp = grid_props or dict(linestyle=':', alpha=0.7)
+            ax.grid(**gp)
+
+        flag = (show_axis.lower() not in ('off','false')) if isinstance(
+            show_axis, str) else bool(show_axis)
+        if not flag:
+            ax.set_axis_off()
+
+        ax.set_title(f"{value_col} heatmap @ {dt}")
+        ax.set_xlabel(x_col)
+        ax.set_ylabel(y_col)
+
+    # hide unused axes
+    for j in range(idx+1, len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    # colorbar
+    if cbar == 'uniform':
+        fig.colorbar(imaps[0], ax=axes_flat[:idx+1], label=value_col)
+    else:
+        for ax_i, im_i in zip(axes_flat[:idx+1], imaps):
+            fig.colorbar(im_i, ax=ax_i, shrink=0.6, pad=0.02, label=value_col)
+
+    # save
+    if savefig:
+        fmts = [savefig] if isinstance(savefig, str) else save_fmts
+        base, _ = os.path.splitext(savefig)
+        for fmt in (fmts if isinstance(fmts, list) else [fmts]):
+            ext = fmt if fmt.startswith('.') else '.' + fmt
+            out = f"{base}{prefix}{ext}"
+            os.makedirs(os.path.dirname(out) or '.', exist_ok=True)
+            _v(f"Saving heatmap plot to {out}")
+            fig.savefig(out, dpi=300, bbox_inches='tight')
+
+    return [fig]
