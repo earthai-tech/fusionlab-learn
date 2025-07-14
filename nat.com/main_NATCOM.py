@@ -81,7 +81,7 @@ except ImportError as e:
 # ==================================================================
 # ** Step 0: CONFIGURATION PARAMETERS **
 # ==================================================================
-CITY_NAME = 'zhongshan'
+CITY_NAME = 'nansha'
 MODEL_NAME ='TransFlowSubsNet'
 
 # Data loading: Prioritize 500k sample file
@@ -89,7 +89,7 @@ MODEL_NAME ='TransFlowSubsNet'
 # JUPYTER_PROJECT_ROOT can be set as an environment variable
 # For local runs, adjust DATA_DIR as needed.
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..") # Go up one level from script if not set
-ZHONGSHAN_500K_FILENAME = "../data/zhongshan_p.csv" # Target file
+ZHONGSHAN_500K_FILENAME = "../data/nansha_p.csv" # Target file
 ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 
 
@@ -120,7 +120,7 @@ FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023)
 #   >>> from fusionlab.utils.ts_utils import resolve_time_steps
 #
 # The value below is a safe default for the smaller demo datasets.
-TIME_STEPS = 5               # Lookback window (in years) for dynamic features
+TIME_STEPS = 4               # Lookback window (in years) for dynamic features
 
 # PINN Configuration
 PDE_MODE_CONFIG ='both'# 'consolidation' # Focus on consolidation
@@ -133,7 +133,7 @@ LAMBDA_PDE_GW = 1.0
 QUANTILES = [0.1, 0.5, 0.9] # For probabilistic forecast
 # QUANTILES = None # For point forecast
 
-EPOCHS = 200 # For demonstration; increase for robust results (e.g., 100-200)
+EPOCHS = 100 # For demonstration; increase for robust results (e.g., 100-200)
 LEARNING_RATE = 0.0001
 BATCH_SIZE = 32 # 256 # Adjusted for potentially larger dataset
 
@@ -152,7 +152,7 @@ GWFLOW_INIT_Q =0.
 ATTENTION_LEVELS = ['1', '2', '3'] # means -> use all 
 
 # Output Directories
-BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn_test_f3ts5_2") # For Code Ocean compatibility
+BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn_nansha_test_f3ts5_2") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
 RUN_OUTPUT_PATH = os.path.join(
     BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_run"

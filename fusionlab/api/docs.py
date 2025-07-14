@@ -482,6 +482,118 @@ refglossary =type ('refglossary', (), dict (
 
 
 # -------------------------- Share params docs  ------------- -----------------
+# common parameter docs for spatial plotting
+_spatial_params = dict(
+    spatial_cols="""
+    spatial_cols : Optional[Tuple[str, str]]
+        A pair of column names in `df` that represent the x- and
+        y-coordinates to be used for plotting.  If you do not
+        specify this, the default is ('coord_x', 'coord_y').
+        Example: ('longitude', 'latitude').
+    """,
+    dt_col="""
+    dt_col : Optional[str]
+        The name of the column in `df` that holds your time or
+        slice identifier (e.g., year, month).  If provided, the
+        function will group and plot one map per unique value,
+        inferring `dt_values` automatically if you haven’t passed
+        them explicitly.
+    """,
+    dt_values="""
+    dt_values : Optional[List[Union[int, str]]]
+        A list of specific time‐slice identifiers to plot (e.g.,
+        [2020, 2021, 2022]).  If left as None and `dt_col` is
+        given, the function will pull all unique values from
+        `df[dt_col]`.  If neither `dt_col` nor `dt_values` is
+        provided, an error is raised.
+    """,
+    cmap="""
+    cmap : str
+        A Matplotlib colormap name (e.g. 'viridis', 'plasma',
+        'inferno', 'coolwarm').  Determines how your numeric
+        `value_col` is translated into colors on the map.
+    """,
+    marker_size="""
+    marker_size : int
+        The size (area) of each scatter point in the plot.
+        Larger numbers mean bigger dots.
+    """,
+    alpha="""
+    alpha : float
+        Opacity level of the scatter points (0.0 = fully
+        transparent, 1.0 = fully opaque).
+    """,
+    vmin="""
+    vmin : Optional[float]
+        The minimum data value that the colormap will cover.
+        If None, it is set to the minimum of the plotted values
+        (either globally or per‐slice, depending on `cbar`).
+    """,
+    vmax="""
+    vmax : Optional[float]
+        The maximum data value that the colormap will cover.
+        If None, it is set to the maximum of the plotted values.
+    """,
+    show_grid="""
+    show_grid : bool
+        Whether to draw grid lines on each subplot.  Defaults
+        to True.  Grid style can be customized via `grid_props`.
+    """,
+    grid_props="""
+    grid_props : Optional[dict]
+        A dict of keyword arguments passed to `ax.grid()`,
+        e.g. {'linestyle': '--', 'alpha': 0.5}.  If None,
+        defaults to {'linestyle': ':', 'alpha': 0.7}.
+    """,
+    savefig="""
+    savefig : Optional[str]
+        Base filename (with or without extension) used to save
+        the figure(s).  If provided, each resulting figure will
+        be written to disk.
+    """,
+    save_fmts="""
+    save_fmts : Union[str, List[str]]
+        File extension(s) for saving the figure.  Can be a single
+        string like '.png' or a list ['.png', '.pdf'].
+    """,
+    max_cols="""
+    max_cols : int
+        Maximum number of columns in each row of subplots.
+        If you have more `dt_values` than `max_cols`, additional
+        rows will be created.
+    """,
+    prefix="""
+    prefix : str
+        A string inserted between the base of `savefig` and
+        the file extension.  Useful for tagging different runs,
+        e.g. prefix='_roi'.
+    """,
+    verbose="""
+    verbose : int
+        Verbosity level for internal logging via `vlog()`.  0
+        is silent, 1 prints high-level messages, higher values
+        can print more detail.
+    """,
+    cbar="""
+    cbar : str
+        Colorbar mode.  'uniform' draws a single colorbar per
+        figure (spanning all subplots in that figure).  Any
+        other value will draw an individual colorbar on each
+        subplot.
+    """,
+    show_axis="""
+    show_axis : Union[str, bool]
+        Controls axis visibility.  If set to 'off' or False,
+        each subplot’s axis (ticks, spine, labels) is hidden.
+        Otherwise axes remain visible.
+    """,
+    _logger="""
+    _logger : Optional[logging.Logger]
+        A Python `logging.Logger` instance.  If provided,
+        `vlog()` will send its messages there instead of
+        just printing to stdout.
+    """,
+)
 
 _shared_nn_params = dict(
     input_dim = """
