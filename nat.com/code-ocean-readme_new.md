@@ -1,4 +1,4 @@
-# TransFlowSubsNet: A Coupled Physics-Data Model for Land Subsidence & GWL Forecasting
+# TransFlowSubsNet: A Coupled Physics-Data Model for Land Subsidence Forecasting
 
 This Code Ocean capsule provides the code and a demonstration workflow for
 the research paper:
@@ -23,6 +23,7 @@ Subsidence Network (TransFlowSubsNet)** model implemented in the
     * Data (Zhongshan Dataset)
     * Running `main_script.py`
     * Expected Outputs
+    * Graphical User Interface (Subsidence PINN Mini Forecaster)
 5.  [Understanding the Main Workflow](#5-understanding-the-main-workflow)
 6.  [Hyperparameter Tuning (Optional)](#6-hyperparameter-tuning-optional)
 7.  [Short Summary of the Workflow](#7-short-summary-of-the-workflow)
@@ -173,10 +174,10 @@ include:
 * Various plot files (e.g., `zhongshan_TransFlowSubsNet_plot_subsidence_spatial.png`, 
 ` training_history_plot.png`)
 
-### Graphical User Interface (Subsidence PINN Mini GUI)
+### Graphical User Interface (Subsidence PINN Mini Forecaster)
 
 To maximize accessibility and ensure the workflow is easily reproducible, 
-this capsule includes a standalone desktop **Subsidence PINN Mini GUI**. 
+this capsule includes a standalone desktop **Subsidence PINN Mini Forecaster**. 
 The application offers a complete, code-free environment for running the 
 entire forecasting pipeline
 
@@ -205,7 +206,7 @@ fusionlab-learn app launch-mini-forecaster
 —or, if you installed the convenience entry point—
 
 ```bash
-pinn-mini-forecaster
+mini-forecaster
 ```
 
 This will open the main application window. The GUI provides a more
@@ -224,7 +225,7 @@ As shown in the image above, after a run is complete:
 
 > For a complete, step-by-step walkthrough of every panel and feature
 > in the application, please refer to the detailed
-> **[Subsidence PINN Mini GUI Guide](https://fusion-lab.readthedocs.io/en/latest/user_guide/pinn_gui_guide.html)**
+> **[Subsidence PINN Mini Forecaster Guide](https://fusion-lab.readthedocs.io/en/latest/user_guide/pinn_gui_guide.html)**
 > in our full documentation.
 
 ---
@@ -430,7 +431,7 @@ hybrid physics-data forecasting:
     and `lambda_gw`. The model is then trained using its custom `train_step`.
 6.  **Forecasting & Output:** Generates predictions on the test data and
     formats the results into a structured `.csv` file for analysis using
-    `format_pihalnet_predictions`.
+    `format_pinn_predictions`.
 7.  **Visualization:** Creates and saves spatial and temporal plots of the
     forecast results.
 
@@ -453,7 +454,7 @@ your research, please cite our paper:
 ```bibtex
 @article{liurong2025transflowsubsnet,
   title={Forecasting Urban Land Subsidence in the Era of Rapid Urbanization and Climate Stress},
-  author={ Rong Liu and Kouadio, Laurent},
+  author={Rong Liu and Kouadio, Laurent},
   journal={Submitted to Nature Communications},
   year={2025}
 }

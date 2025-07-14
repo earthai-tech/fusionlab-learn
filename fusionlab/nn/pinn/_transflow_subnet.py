@@ -19,7 +19,6 @@ from ...params import (
 from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message 
 from .._base_attentive import BaseAttentive
 
-
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs 
     from .op import process_pinn_inputs
@@ -60,7 +59,6 @@ deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
 tf_autograph=KERAS_DEPS.autograph
 tf_autograph.set_verbosity(0)
   
-
 DEP_MSG = dependency_message('nn.pinn.models') 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())

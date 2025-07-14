@@ -28,13 +28,11 @@ from ...utils.validator import validate_positive_integer
 from ...metrics.utils import compute_quantile_diagnostics 
 from ...decorators import isdf 
 from ...utils.deps_utils import ensure_pkg 
-from ...utils.forecast_utils import ( 
-    check_sequence_feasibility,
-    normalize_for_pinn, 
-)
+from ...utils.forecast_utils import normalize_for_pinn
 from ...utils.generic_utils import print_box, vlog, select_mode
 from ...utils.geo_utils import resolve_spatial_columns 
 from ...utils.io_utils import save_job 
+from ...utils.sequence_utils import check_sequence_feasibility
 
 from .. import KERAS_BACKEND, KERAS_DEPS
 

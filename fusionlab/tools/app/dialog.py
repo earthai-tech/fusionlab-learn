@@ -269,6 +269,7 @@ class TunerDialog(QDialog):
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         )
         self.btn_box.button(QDialogButtonBox.Ok).setText("Start Tuning")
+        
         root.addWidget(self.btn_box)
     
         # default page
@@ -307,7 +308,6 @@ class TunerDialog(QDialog):
     def chosen_config(self) -> dict | None:
         """Call **after** exec_()."""
         return self._chosen_cfg
-
 
 class _DeveloperPage(QWidget):
     """

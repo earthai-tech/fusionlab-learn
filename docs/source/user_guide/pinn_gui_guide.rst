@@ -5,7 +5,7 @@ Subsidence PINN: Mini Forecaster Guide
 ========================================
 
 This guide provides a complete walkthrough of the **Subsidence PINN
-Mini GUI**, a desktop application designed to provide a user-friendly
+Mini Forecaster**, a desktop application designed to provide a user-friendly
 interface for the complex forecasting workflows in ``fusionlab-learn``.
 
 The application allows users who may not be familiar with Python to
@@ -39,7 +39,7 @@ system's path. This is the simplest and recommended way to start the GUI.
 
 .. code-block:: bash
 
-   pinn-mini-forecaster
+   mini-forecaster
 
 This will launch the main application window.
 
@@ -197,7 +197,8 @@ and switch between *training*, *tuning* and *inference*.
   (e.g. “Agnibilekrou”, “South-Delta”).  The value becomes part of the
   output-directory path so consecutive runs never overwrite each other.
 
-* **Run / Infer** – Located under the log panel.  
+* **Run / Infer** – Located under the log panel. 
+ 
   • In *training* mode the button reads **Run** and launches the full
     end-to-end pipeline.  
   • In *inference* mode it changes to **Infer** and only executes the
@@ -431,9 +432,13 @@ detects that a model has already been trained.
 This workflow provides a seamless way to apply your trained models to
 new data without having to re-run the entire training process.
 
+.. raw:: html
+
+   <hr style="margin-top: 1.5em; margin-bottom: 1.5em;">
+   
 .. _hyperparameter_tuning:
 
-Hyper-parameter Tuning with the **Tune** Wizard
+Hyper-parameter Tuning with the Tune Wizard
 --------------------------------------------------
 
 Clicking **Tune** opens a dedicated window that lets you define the
@@ -478,8 +483,8 @@ without writing code. The wizard offers two entry points:
          Python dictionary describing the search-space.
 
 
-Wizard Workflow
-******************
+**1. Wizard Workflow**
+*************************
 
 1. The left-hand panel shows **Fixed Parameters** – dimensions and
    constants inferred from your dataset; they are *not* tunable.
@@ -523,8 +528,8 @@ experimentation.
 
 .. _tuning_in_progress:
 
-Tuning in Progress
-******************
+**2. Tuning in Progress**
+**************************
 
 Once the **Start Tuning** button is pressed, the GUI enters tuning mode,
 as shown in the figure below. During this phase, the system executes a
@@ -540,8 +545,7 @@ training and tuning progress.
    The application during an active tuning run, showing the console logs,
    progress bar, and disabled controls to prevent interference.
 
-Key Elements During Tuning
---------------------------
+**Key Elements During Tuning**
 
 - **Tuning Indicator:** The top-right corner shows a glowing orange
   **TUNING** badge, replacing the Tune button label. This visually
@@ -579,13 +583,12 @@ Key Elements During Tuning
    You may press **Stop** to interrupt the search. If so, partial results
    (completed trials) will still be saved to the run directory.
 
-Output Files After Completion
------------------------------
+**3. Output Files After Completion**
+**************************************
 
 When tuning concludes, the following files are written to disk:
 
 - ``best_hyperparameters.json`` – best trial configuration.
-- ``tuner_run_manifest.json`` – all tuning settings and history.
 - ``<model>_best.keras`` or ``.weights.h5`` – saved weights of the
   optimal model.
 
