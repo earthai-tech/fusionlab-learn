@@ -56,6 +56,7 @@ _extras_require = {
     ],
     "full": [ 
         "k-diagram>=1.0.3",
+        
     ]
 }
 # "full" to include all optional dependencies by default if desired
