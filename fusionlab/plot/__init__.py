@@ -19,7 +19,21 @@ from .forecast import (
      visualize_forecasts ,
      forecast_view, 
    )
-       
+
+from .r2 import ( 
+    plot_r2,
+    plot_r2_in
+)
+ 
+from .spatial import ( 
+    plot_spatial, 
+    plot_spatial_roi, 
+    plot_spatial_contours, 
+    plot_hotspots, 
+    plot_spatial_voronoi, 
+    plot_spatial_heatmap
+    )
+
 __all__=[
      'plot_coverage',
      'plot_crps',
@@ -35,5 +49,16 @@ __all__=[
      'plot_forecasts', 
      'visualize_forecasts', 
      'plot_forecast_by_step', 
-     'forecast_view'
+     'forecast_view', 
+     
+     'plot_r2', 
+     'plot_r2_in',
+     
+     'plot_spatial', 
+     'plot_spatial_roi', 
+     'plot_spatial_contours', 
+     'plot_hotspots', 
+     'plot_spatial_voronoi', 
+     'plot_spatial_heatmap'
+     
 ]

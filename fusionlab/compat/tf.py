@@ -610,7 +610,36 @@ def suppress_tf_warnings():
         finally:
             tf_logger.setLevel(original_level)  # Restore original logging level
          
+def _compat_add_weight(self, *args, **kwargs):
+    
+    if HAS_TF: 
+        import tensorflow as tf
+        from packaging.version import parse
 
+        _TF_V = parse(tf.__version__)
+        _NEEDS_KW = _TF_V >= parse("2.16.0")
+
+        # Grab the original method once
+        _orig_add_weight = tf.keras.layers.Layer.add_weight
+        
+    # TF>=2.16 wants only keyword args for shape/name
+    if _NEEDS_KW and args:
+        # args could be (shape,) or (name, shape)
+        if len(args) == 1:
+            kwargs.setdefault("shape", args[0])
+        elif len(args) == 2 and isinstance(args[0], str):
+            kwargs.setdefault("name", args[0])
+            kwargs.setdefault("shape", args[1])
+        else:
+            raise ValueError(f"Unexpected args for add_weight: {args}")
+        return _orig_add_weight(self, **kwargs)
+    else:
+        # TF≤2.15 works with positional
+        return _orig_add_weight(self, *args, **kwargs)
+
+# if HAS_TF: 
+#     # Monkey‑patch the Layer base class
+#     tf.keras.layers.Layer.add_weight = _compat_add_weight
 
 # --- Compatibility Functions ---
 

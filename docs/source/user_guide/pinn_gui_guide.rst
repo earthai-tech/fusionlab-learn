@@ -358,7 +358,7 @@ Inside this directory, you will find:
 Running Inference with a Trained Model
 ----------------------------------------
 
-The GUI is not just for training; it's also a powerful tool for
+The GUI is not just for training; it's also a tool for
 running **inference**. This allows you to take a model you have
 already trained and apply it to a new, unseen dataset to generate
 predictions.

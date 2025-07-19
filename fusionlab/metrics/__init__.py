@@ -9,7 +9,8 @@ from ._metrics import (
     theils_u_score, 
     time_weighted_accuracy_score, 
     time_weighted_interval_score, 
-    continuous_ranked_probability_score, 
+    continuous_ranked_probability_score,
+    get_scorer, 
 )
 
 from ._registry import get_metric 
@@ -25,5 +26,5 @@ __all__ = [
     'theils_u_score', 
     'time_weighted_accuracy_score', 
     'time_weighted_interval_score', 
-    'get_metric'
+    'get_metric', 'get_scorer'
    ]
