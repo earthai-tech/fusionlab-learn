@@ -1269,7 +1269,12 @@ class MiniForecaster(QMainWindow):
         self.run_btn.setStyleSheet("")  
         # 7) Log the reset in the UI
         ts = time.strftime("%H:%M:%S")
-        self.log_widget.append(f"[{ts}] ℹ Interface fully reset.")
+        
+        try:
+            self.log_mgr.append(f"[{ts}] ℹ Interface fully reset.")
+        except: 
+            # QPlainTextEdit has no append(); use appendPlainText()
+            self.log_widget.appendPlainText(f"[{ts}] ℹ Interface fully reset.")
 
 
     @pyqtSlot(Mode)

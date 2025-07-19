@@ -880,8 +880,6 @@ class ResetController(QObject):
             pass
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
-
-
 class LogManager(QObject):
     """
     Central log buffer + widget + on-disk dumping with UI 

@@ -52,7 +52,6 @@ tf.get_logger().setLevel('ERROR')
 if hasattr(tf, 'autograph') and hasattr(tf.autograph, 'set_verbosity'):
     tf.autograph.set_verbosity(0)
 
-# --- FusionLab Imports ---
 try:
     from fusionlab.api.util import get_table_size
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
@@ -702,32 +701,46 @@ history = subs_model_inst.fit(
 print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
 
-subsmodel_metrics = {
-    "Loss Components": [
-        "total_loss", "data_loss", "physics_loss", "val_loss"],
-    # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
-}
-#%
-# SubsModel data on separate subplots
-print("\n---SubsModel History on Separate Subplots ---")
 
-plot_history_in(
-    history.history,
-    # metrics=subsmodel_metrics,
-    # layout='single',
-    title=f'{MODEL_NAME} Training History', 
-    savefig=os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot"), 
-)
-# %
+# --- Optional Post‑Training Utilities (uncomment to enable) ---
+# 1) Historic Metrics Plotting
+#    View loss components and validation metrics over training epochs.
+#    Adjust `subsmodel_metrics` to customize which time series to display.
+#
+# subsmodel_metrics = {
+#     "Loss Components": [
+#         "total_loss",
+#         "data_loss",
+#         "physics_loss",
+#         "val_loss",
+#     ],
+#     # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
+# }
+#
+# print("\n--- SubsModel Training History on Separate Subplots ---")
+# plot_history_in(
+#     history.history,
+#     metrics=subsmodel_metrics,
+#     layout='single',
+#     title=f"{MODEL_NAME} Training History",
+#     savefig=os.path.join(
+#         RUN_OUTPUT_PATH,
+#         f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot",
+#     ),
+# )
+#
+# 2) Extract Physical Parameters to CSV
+#    Save learned physics coefficients (C, K, Ss, Q) after training.
+#
+# extract_physical_parameters(
+#     subs_model_inst,
+#     to_csv=True,
+#     filename=f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv",
+#     save_dir=RUN_OUTPUT_PATH,
+# )
+
 # Load the best model saved by ModelCheckpoint
 print(f"\nLoading best model from checkpoint: {model_checkpoint_path}")
-
-extract_physical_parameters (
-    subs_model_inst, to_csv=True, 
-    filename = f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv", 
-    save_dir =RUN_OUTPUT_PATH 
-)
 
 loss_to_use = combined_quantile_loss(QUANTILES) if QUANTILES else 'mse'
 try:
