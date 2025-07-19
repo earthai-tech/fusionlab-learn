@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="docs/source/_static/fusionlab.svg" alt="FusionLab Logo" width="200">
+  <img
+    src="https://raw.githubusercontent.com/earthai-tech/fusionlab-learn/main/docs/source/_static/fusionlab.svg"
+    alt="FusionLab Logo"
+    width="200"
+  >
 </p>
 
 -----------------------------------------------------

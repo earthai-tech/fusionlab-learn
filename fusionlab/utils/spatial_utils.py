@@ -39,7 +39,6 @@ from ..core.checks import (
     )
 from ..core.handlers import columns_manager, resolve_label  
 from ..core.io import SaveFile, is_data_readable 
-# from ..core.plot_manager import set_axis_grid  
 from ..decorators import Deprecated, isdf 
 from .generic_utils import find_id_column 
 from .validator import ( 

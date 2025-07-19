@@ -32,14 +32,16 @@ _required_dependencies = [
     'tqdm>=4.65',
     'scikit-learn>=1.2',
     'statsmodels>=0.14',
-    'tensorflow>=2.15,<3.0' ,    
+    'tensorflow==2.15' ,    #'tensorflow>=2.15,<3.0' ,    
     'keras-tuner>=1.4.7,<2.0',
     'joblib>=1.3',
     'PyYAML>=6.0',
     'click>=8.1',
     'platformdirs>=2.6',
     'PyQt5>=5.15,<6.0',
-    "lz4", 
+    'lz4>=4.4',
+    'seaborn>=0.13',
+    'psutil>=7.0' 
 ]
 
 # Optional dependencies
@@ -56,6 +58,7 @@ _extras_require = {
     ],
     "full": [ 
         "k-diagram>=1.0.3",
+        
     ]
 }
 # "full" to include all optional dependencies by default if desired

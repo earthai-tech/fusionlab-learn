@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
-# fusionlab/nn/pinn/op.py 
+
 """
 Physics-Informed Neural Network (PINN) Operations
 and Helpers.
 """
 import os
 import datetime
-
 
 from typing import Dict, List, Optional, Tuple, Union, Callable
 from typing import Mapping, Sequence
@@ -33,7 +32,7 @@ tf_float32 =KERAS_DEPS.float32
 tf_constant = KERAS_DEPS.constant 
 tf_exp =KERAS_DEPS.exp 
 
-DEP_MSG = dependency_message('nn.transformers') 
+DEP_MSG = dependency_message('nn.pinn.op') 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
@@ -93,7 +92,7 @@ def extract_physical_parameters(
 
     Examples
     --------
-    >>> # Assuming 'my_model' is a trained TransFlowSubsNet instance
+    >>> from fusionlab.nn.pinn.op import extract_physical_parameters
     >>> # learned_params = extract_physical_parameters(
     ... #     model=my_model,
     ... #     to_csv=True,

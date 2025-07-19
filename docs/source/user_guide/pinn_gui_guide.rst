@@ -14,7 +14,7 @@ training and forecasting pipeline, and view the results, all from a
 simple graphical interface.
 
 .. figure:: ../images/gui_overview.png
-   :alt: Screenshot of Subsidence PINN Mini GUI
+   :alt: Screenshot of Subsidence PINN Mini Forecaster
    :align: center
    :width: 80%
 
@@ -84,7 +84,7 @@ Prerequisites: Data Format Requirements
 ---------------------------------------
 
 .. important::
-   The **Subsidence PINN Mini GUI** is designed to work with a
+   The **Subsidence PINN Mini Forecaster** is designed to work with a
    specific data structure. To ensure the workflow runs correctly,
    your uploaded CSV file **must** contain the following columns with these
    **exact names**:
@@ -122,35 +122,6 @@ User Interface Guide
 
 The application is divided into several logical panels for configuration
 and results.
-
-**1. Data Input & Main Controls**
-*********************************
-These are the primary controls for managing the workflow.
-
-* **Select CSV...**: Click this button to open a file dialog. Navigate
-  to and select the `.csv` file containing your spatiotemporal data.
-  The filename will appear next to the button upon successful selection.
-
-* **City / Dataset**: This text field allows you to specify a name for
-  your dataset (e.g., 'zhongshan', 'nansha'). This name is used
-  internally to manage configurations and to create uniquely named
-  output directories for saving results, preventing runs from
-  overwriting each other.
-
-* **Run**: Located at the bottom left, this button starts the
-  end-to-end workflow using the current configuration. It becomes
-  disabled while a process is running.
-  
-* **Reset**: Located at the top right, this button clears all logs and
-  results and resets all configuration options to their default values.
-  
-* **Stop**: Appears next to *Reset* once the workflow is running.  
-  Click to gracefully interrupt the current process (sequence generation,
-  training, or forecasting). The button is disabled when the GUI is idle.
-  
-* **Inference**: This button becomes active only if a completed
-  training run is detected near the
-  selected CSV file. Clicking it launches the inference workflow.
   
 **1. Data Input & Main Controls**
 *********************************
@@ -177,14 +148,14 @@ and switch between *training*, *tuning* and *inference*.
 
 * **Inference** – A toggle.  
   It becomes active (blue) when a previously *trained* manifest
-  (`run_manifest.json` or `tuner_run_manifest.json`) is found next to
-  the selected CSV.  
+  is found next to the selected CSV.  
   Click once to switch the GUI into *inference mode* (button shows
   orange); click again to return to training.
 
 * **Stop** – Appears in red once a workflow is running.  
   Sends a graceful interruption request to the background thread
-  (sequence generation, training, tuning or forecasting).
+  (sequence generation, training, tuning or forecasting). The button is 
+  when the GUI is idle.
 
 * **Reset** – Clears logs, progress-bar and cached state.  
   It also deletes the local registry cache (model checkpoints, scalers,
@@ -194,7 +165,7 @@ and switch between *training*, *tuning* and *inference*.
   asked to confirm the cancellation first.
 
 * **City / Dataset** – A free-text field used to name the current run
-  (e.g. “Agnibilekrou”, “South-Delta”).  The value becomes part of the
+  (e.g. “Agnibilekrou”).  The value becomes part of the
   output-directory path so consecutive runs never overwrite each other.
 
 * **Run / Infer** – Located under the log panel. 
@@ -322,8 +293,7 @@ two main ways: status updates on the main window and an interactive plot viewer.
          :alt: GUI after run completion
          :align: center
 
-         **(a)** The main application window showing the 'Forecast finished'
-         status and the final coverage score in the status bar.
+         **(a)** The main application window showing the 'Forecast finished'.
 
    .. grid-item-card::
       :shadow: none
@@ -365,7 +335,7 @@ configuration, processed data, trained model, and results are preserved
 for later analysis and reproducibility.
 
 The output directory is structured using the parameters from your
-configuration: ``results_pinn/<city_name>_<model_name>_run/``
+configuration: ``.fusionlab_runs/training_results/<city_name>_<model_name>_run/``
 
 Inside this directory, you will find:
 
@@ -387,7 +357,8 @@ Inside this directory, you will find:
 
 Running Inference with a Trained Model
 ----------------------------------------
-The GUI is not just for training; it's also a powerful tool for
+
+The GUI is not just for training; it's also a tool for
 running **inference**. This allows you to take a model you have
 already trained and apply it to a new, unseen dataset to generate
 predictions.
@@ -515,7 +486,7 @@ without writing code. The wizard offers two entry points:
 
 5. When the search completes, the wizard writes:
 
-   - ``tuner_run_manifest.json`` (configuration + best HPs),
+   - (configuration + best HPs),
    - ``<model>_best.keras`` or ``.weights.h5``, and
    - ``best_hyperparameters.json``
 

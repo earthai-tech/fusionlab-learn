@@ -52,6 +52,7 @@ from sklearn.utils import resample
 from sklearn.utils.validation import check_is_fitted as sklearn_check_is_fitted
 from sklearn.metrics import get_scorer
 
+
 # Determine the installed scikit-learn version
 SKLEARN_VERSION = parse(sklearn.__version__)
 
@@ -105,6 +106,34 @@ except:
             return getattr(type_, "__qualname__", repr(type_))
         return f"{module}.{getattr(type_, '__qualname__', repr(type_))}"
 
+try:
+    # public API (older versions)
+    from sklearn.metrics import SCORERS as _sk_scorers
+except ImportError:
+    try:
+        # private module (if still present)
+        from sklearn.metrics._scorer import SCORERS as _sk_scorers  # type: ignore
+    except (ImportError, AttributeError):
+        # --- metrics compatibility ---
+        from sklearn.metrics import get_scorer as _sk_get_scorer, get_scorer_names
+        # build fallback mapping dynamically
+        _sk_scorers = {name: _sk_get_scorer(name) for name in get_scorer_names()}
+
+
+def _get_scorer(name):
+    """
+    Wrapper around sklearn.metrics.get_scorer, maintained for compatibility.
+    """
+    try:
+        return _sk_get_scorer(name)
+    except Exception:
+        warnings.warn(
+            f"Scorer '{name}' not found via get_scorer; falling back to SCORERS mapping."
+        )
+        return _sk_scorers.get(name)
+
+# Expose a SCORERS mapping for compatibility
+SCORERS = _sk_scorers
 
 class ListOptions(_Constraint):
     """Constraint representing a list/tuple where each element

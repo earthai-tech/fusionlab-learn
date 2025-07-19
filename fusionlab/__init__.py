@@ -69,7 +69,10 @@ _required_dependencies = [
     ("pyyaml", None),
     # ("torch", "torch"),
     ("platformdirs", None), 
-    ("click", None)
+    ("click", None), 
+    ('lz4', None), 
+    ('psutil', None), 
+    
 ]
 
 _missing = []

@@ -2,7 +2,7 @@
 # License : BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com> 
 """
-main_zhongshan_pihalnet.py: Zhongshan Land Subsidence Forecasting with SubsModel
+main_NATCOM.py: Zhongshan Land Subsidence Forecasting with SubsModel
 
 This script performs physics-informed, quantile-based subsidence and GWL
 prediction for Zhongshan City using the SubsModel model from the
@@ -52,7 +52,6 @@ tf.get_logger().setLevel('ERROR')
 if hasattr(tf, 'autograph') and hasattr(tf.autograph, 'set_verbosity'):
     tf.autograph.set_verbosity(0)
 
-# --- FusionLab Imports ---
 try:
     from fusionlab.api.util import get_table_size
     from fusionlab.datasets import fetch_zhongshan_data # For Zhongshan
@@ -89,7 +88,7 @@ MODEL_NAME ='TransFlowSubsNet'
 # JUPYTER_PROJECT_ROOT can be set as an environment variable
 # For local runs, adjust DATA_DIR as needed.
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..") # Go up one level from script if not set
-ZHONGSHAN_500K_FILENAME = "../data/zhongshan_p.csv" # Target file
+ZHONGSHAN_500K_FILENAME = "../data/zhongshan_500k.csv" # Target file
 ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
 
 
@@ -120,10 +119,10 @@ FORECAST_HORIZON_YEARS = 3   # Example: Predict 3 years ahead (2021, 2022, 2023)
 #   >>> from fusionlab.utils.ts_utils import resolve_time_steps
 #
 # The value below is a safe default for the smaller demo datasets.
-TIME_STEPS = 5               # Lookback window (in years) for dynamic features
+TIME_STEPS = 4               # Lookback window (in years) for dynamic features
 
 # PINN Configuration
-PDE_MODE_CONFIG ='both'# 'consolidation' # Focus on consolidation
+PDE_MODE_CONFIG ='both'# 'consolidation' # Focus on consolidation or "none" for disable PDEs
 PINN_COEFF_C_CONFIG = 'learnable' # Learn the consolidation coefficient
 LAMBDA_PDE_CONFIG = 1.0           # Weight for the PDE loss term in compile
 LAMBDA_PDE_CONS= 1.0
@@ -133,7 +132,7 @@ LAMBDA_PDE_GW = 1.0
 QUANTILES = [0.1, 0.5, 0.9] # For probabilistic forecast
 # QUANTILES = None # For point forecast
 
-EPOCHS = 200 # For demonstration; increase for robust results (e.g., 100-200)
+EPOCHS = 100 # For demonstration; increase for robust results (e.g., 100-200)
 LEARNING_RATE = 0.0001
 BATCH_SIZE = 32 # 256 # Adjusted for potentially larger dataset
 
@@ -152,7 +151,7 @@ GWFLOW_INIT_Q =0.
 ATTENTION_LEVELS = ['1', '2', '3'] # means -> use all 
 
 # Output Directories
-BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results_pinn_test_f3ts5_2") # For Code Ocean compatibility
+BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results") # For Code Ocean compatibility
 ensure_directory_exists(BASE_OUTPUT_DIR)
 RUN_OUTPUT_PATH = os.path.join(
     BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_run"
@@ -376,7 +375,6 @@ numerical_cols_for_scaling_model = [
     'rainfall_mm',
     'soil_thickness', # If Nanshan
     'normalized_density', # no need to normalize again. Exclude in Nansha
-    # 'normalized_seismic_risk_score', 
     SUBSIDENCE_COL, # Scale target as well for stable training
     # TIME_COL_NUMERIC_PINN # Scale numeric time
 ]
@@ -425,8 +423,7 @@ static_features_list = encoded_feature_names_list # Geology, etc.
 # Dynamic features: vary over `time_steps` (past observed)
 dynamic_features_list = [
     GWL_COL, 'rainfall_mm', 'normalized_density', 
-    # 'normalized_seismic_risk_score'
-    # Add other dynamic features from df_scaled.columns
+    # other dynamic features from df_scaled.columns
     'soil_thickness'
 ]
 dynamic_features_list = [
@@ -704,32 +701,46 @@ history = subs_model_inst.fit(
 print(f"Best validation total_loss achieved: "
       f"{min(history.history.get('val_total_loss', [np.inf])):.4f}")
 
-subsmodel_metrics = {
-    "Loss Components": [
-        "total_loss", "data_loss", "physics_loss", "val_loss"],
-    # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"]
-}
-#%
-# SubsModel data on separate subplots
-print("\n---SubsModel History on Separate Subplots ---")
 
-plot_history_in(
-    history.history,
-    # metrics=subsmodel_metrics,
-    # layout='single',
-    title=f'{MODEL_NAME} Training History', 
-    savefig=os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot"), 
-)
-# %
+# --- Optional Post‑Training Utilities (uncomment to enable) ---
+# 1) Historic Metrics Plotting
+#    View loss components and validation metrics over training epochs.
+#    Adjust `subsmodel_metrics` to customize which time series to display.
+#
+# subsmodel_metrics = {
+#     "Loss Components": [
+#         "total_loss",
+#         "data_loss",
+#         "physics_loss",
+#         "val_loss",
+#     ],
+#     # "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
+# }
+#
+# print("\n--- SubsModel Training History on Separate Subplots ---")
+# plot_history_in(
+#     history.history,
+#     metrics=subsmodel_metrics,
+#     layout='single',
+#     title=f"{MODEL_NAME} Training History",
+#     savefig=os.path.join(
+#         RUN_OUTPUT_PATH,
+#         f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot",
+#     ),
+# )
+#
+# 2) Extract Physical Parameters to CSV
+#    Save learned physics coefficients (C, K, Ss, Q) after training.
+#
+# extract_physical_parameters(
+#     subs_model_inst,
+#     to_csv=True,
+#     filename=f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv",
+#     save_dir=RUN_OUTPUT_PATH,
+# )
+
 # Load the best model saved by ModelCheckpoint
 print(f"\nLoading best model from checkpoint: {model_checkpoint_path}")
-
-extract_physical_parameters (
-    subs_model_inst, to_csv=True, 
-    filename = f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters", 
-    save_dir =RUN_OUTPUT_PATH 
-)
 
 loss_to_use = combined_quantile_loss(QUANTILES) if QUANTILES else 'mse'
 try:

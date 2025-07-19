@@ -5,6 +5,7 @@
 """ Metrics """
 
 from __future__ import annotations 
+import inspect
 from numbers import Real, Integral 
 from typing import  Sequence, Optional, Literal, Union
 
@@ -25,7 +26,8 @@ __all__ = [
     'time_weighted_mean_absolute_error', 
     'quantile_calibration_error', 
     'mean_interval_width_score', 
-    'theils_u_score'
+    'theils_u_score',
+    'get_scorer'
    ]
 
 @validate_params({
@@ -3388,7 +3390,74 @@ def coverage_score(
 
     return coverage
 
+SCORERS= {
+    "time_weighted_accuracy_score": time_weighted_accuracy_score, 
+    "theils_u_score": theils_u_score, 
+    "quantile_calibration_error": quantile_calibration_error, 
+    "time_weighted_mean_absolute_error": time_weighted_mean_absolute_error, 
+    "continuous_ranked_probability_score": continuous_ranked_probability_score, 
+    
+    }
 
+def get_scorer(scoring, include_sklearn: bool = True):
+    """
+    Retrieve a scoring callable by name or verify a custom scorer.
+
+    Parameters
+    ----------
+    scoring : str or callable
+        - If str: look up in fusionlab's SCORERS, then optionally in sklearn.
+        - If callable: must accept at least two positional args (y_true, y_pred).
+    include_sklearn : bool, default=True
+        If True, allows falling back to sklearn’s built-in SCORERS.
+
+    Returns
+    -------
+    scorer : callable
+        A function or sklearn “make_scorer” object.
+
+    Raises
+    ------
+    ValueError
+        If the name is not found, or the callable’s signature is invalid.
+    """
+    from ..compat.sklearn import ( 
+        get_scorer as _sk_get_scorer, 
+        SCORERS as _sk_scorers
+    )
+    # 1) If it's already a callable, verify its signature
+    if callable(scoring):
+        sig = inspect.signature(scoring)
+        # require at least y_true, y_pred
+        if len(sig.parameters) < 2:
+            raise ValueError(
+                f"Custom scorer '{scoring.__name__}' must accept at least "
+                "two arguments (y_true, y_pred)."
+            )
+        return scoring
+
+    # 2) If it's a string, first try fusionlab’s registry
+    if isinstance(scoring, str):
+        if scoring in SCORERS:
+            return SCORERS[scoring]
+
+        # 3) Optionally fall back to sklearn
+        if include_sklearn:
+            if scoring in _sk_scorers:
+                return _sk_get_scorer(scoring)
+
+        # 4) Not found anywhere
+        valid = sorted(SCORERS.keys()) + (
+            sorted(_sk_scorers.keys()) if include_sklearn else [])
+        raise ValueError(
+            f"Scorer '{scoring}' not found. Available scorers:\n  "
+            + "\n  ".join(valid)
+        )
+
+    # 5) Anything else is invalid
+    raise ValueError(
+        f"`scoring` must be a string or callable, got {type(scoring).__name__}."
+    )
 
 
 
