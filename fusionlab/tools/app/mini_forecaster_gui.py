@@ -480,7 +480,6 @@ class MiniForecaster(QMainWindow):
         
         bottom.addLayout(footer)
         
-
     def _training_card(self) -> QFrame:
         """Creates and returns the 'Training Parameters' UI panel.
 
