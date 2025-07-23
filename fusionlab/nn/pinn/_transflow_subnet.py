@@ -21,9 +21,9 @@ from .._base_attentive import BaseAttentive
 
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs 
+    from ..comp_utils import resolve_gw_coeffs, normalize_C_descriptor
     from .op import process_pinn_inputs
     from .utils import process_pde_modes, extract_txy_in, _get_coords 
-    from ..comp_utils import resolve_gw_coeffs, normalize_C_descriptor
     
 LSTM = KERAS_DEPS.LSTM
 Dense = KERAS_DEPS.Dense
@@ -1165,6 +1165,8 @@ fusionlab.nn.pinn.models.PiTGWFlow
 
 Examples
 --------
+>>> import tensorflow as tf 
+>>> from fusionlab.nn.pinn import TransFlowSubsNet
 >>> model = TransFlowSubsNet(
 ...     static_input_dim=3, dynamic_input_dim=8, future_input_dim=4,
 ...     output_subsidence_dim=1, output_gwl_dim=1,
