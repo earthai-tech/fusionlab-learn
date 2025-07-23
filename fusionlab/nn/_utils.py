@@ -68,7 +68,6 @@ from ..utils.generic_utils import (
 )
 from ..utils.io_utils import save_job
 from ..utils.sys_utils import BatchDataFrameBuilder, build_large_df 
-
 from ..utils.validator import ( 
     validate_sequences, 
     check_consistent_length, 
