@@ -152,7 +152,7 @@ class XTFT(BaseExtreme):
         logger.debug("XTFT._build_components() start")
         self.activation = Activation(self.activation).activation_str
 
-        # Static branch ------------------------------------------------
+        # Static branch 
         self.learned_normalization = LearnedNormalization()
         self.static_dense = Dense(self.hidden_units,
                                   activation=self.activation)
@@ -200,7 +200,7 @@ class XTFT(BaseExtreme):
                 num_heads=self.num_heads,
             )
         
-        # --------------- Anomaly (feature_based) ---------------
+        # Anomaly (feature_based) 
         if self.anomaly_detection_strategy == "feature_based":
             self.anomaly_attention = MultiHeadAttention(
                 num_heads=1,

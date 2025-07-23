@@ -33,19 +33,19 @@ if KERAS_BACKEND:
         HierarchicalAttention,
         MemoryAugmentedAttention, 
         MultiDecoder, 
-        MultiHeadAttention, 
         MultiResolutionAttentionFusion,
         MultiScaleLSTM, 
         PositionalEncoding, 
         QuantileDistributionModeling, 
         VariableSelectionNetwork, 
         aggregate_multiscale_on_3d, 
-        aggregate_time_window_output
-    )
+        aggregate_time_window_output 
+  )
     
 Add =KERAS_DEPS.Add 
 Dense= KERAS_DEPS.Dense 
 Tensor = KERAS_DEPS.Tensor
+MultiHeadAttention =KERAS_DEPS.MultiHeadAttention
 Layer=KERAS_DEPS.Layer
 LayerNormalization=KERAS_DEPS.LayerNormalization
 register_keras_serializable= KERAS_DEPS.register_keras_serializable 
@@ -98,7 +98,8 @@ class BaseAttentive(Model, NNLearner):
             None
         ], 
         "activation": [StrOptions(
-            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu", "swish"}),callable 
+            {"elu", "relu", "tanh", "sigmoid", "linear", "gelu", "swish"}),
+            callable 
             ],
         "multi_scale_agg": [ 
             StrOptions({"last", "average",  "flatten", "auto", "sum", "concat"}),

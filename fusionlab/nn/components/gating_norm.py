@@ -7,11 +7,18 @@ Gating / normalization building blocks:
 
 from __future__ import annotations
 
+import warnings
+from numbers import Real, Integral
+from typing import Optional
+
+from ...api.property import NNLearner
+from ...core.handlers import param_deprecated_message
+from ...compat.sklearn import validate_params, Interval, StrOptions
+from ...utils.deps_utils import ensure_pkg
 from ._config import (    
     _logger, 
     DEP_MSG,
     KERAS_BACKEND, 
-                  
     activations,
     Layer, Dense, Dropout, 
     BatchNormalization, 
@@ -22,25 +29,16 @@ from ._config import (
     tf_expand_dims, tf_tile,
     tf_add, 
     tf_multiply,
-    tf_stack, tf_reduce_sum,
-    tf_equal, tf_cond,
+    tf_stack, 
+    tf_reduce_sum,
+    tf_equal,
+    tf_cond,
     tf_TensorShape,  
     register_keras_serializable,
     tf_autograph, 
     tf_concat, 
 )
-
-from ..api.property import NNLearner
-from ..core.handlers import param_deprecated_message
-from ..compat.sklearn import validate_params, Interval, StrOptions
-from ..utils.deps_utils import ensure_pkg
-
 from .misc import Activation
-
-# In case you need warnings
-import warnings
-from numbers import Real, Integral
-from typing import Optional
 
 __all__ = [
     "GatedResidualNetwork",

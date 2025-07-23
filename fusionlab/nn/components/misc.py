@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Callable, Union
 
 import numpy as np 
-
+from ...api.property import NNLearner
+from ...utils.deps_utils import ensure_pkg
 from ._config import (
     Layer, Dense, Dropout,
     Tensor, TensorShape,
@@ -31,9 +32,6 @@ from ._config import (
     register_keras_serializable,
     DEP_MSG, KERAS_BACKEND,
 )
-
-from ..api.property import NNLearner
-from ..utils.deps_utils import ensure_pkg
 
 __all__ = [
     "Activation",

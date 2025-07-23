@@ -13,8 +13,13 @@ from typing import Optional
 
 from ._config import (
     Tensor,
-    tf_cast, tf_int32, tf_bool, tf_float32,
-    tf_range, tf_expand_dims, tf_shape, 
+    tf_cast, 
+    tf_int32, 
+    tf_bool, 
+    tf_float32,
+    tf_range, 
+    tf_expand_dims,
+    tf_shape, 
     tf_logical_not,
     tf_reduce_max,
 )

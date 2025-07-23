@@ -39,7 +39,7 @@ _STANDARD_ALONE_MAP = {
     'debugging': ('tensorflow', 'debugging'),
     'errors': ('tensorflow', 'errors'),
     'equal': ('tensorflow', 'equal'),
-    'erf': ('tensorflow', 'erf'), 
+    'erf': ('tensorflow.math', 'erf'), 
     'exp': ('tensorflow', 'exp'),
     'expand_dims': ('tensorflow', 'expand_dims'),
     'experimental':('tensorflow.data', 'experimental'), 
@@ -160,6 +160,7 @@ TENSORFLOW_CONFIG = {
         ('saving', 'deserialize_keras_object'), 
         ('utils', 'deserialize_keras_object')
     ),
+    'get': ('losses', 'get'), 
     'glorot_uniform': ('initializers', 'glorot_uniform'),
     'load_model': ('models', 'load_model'),
     'mean_squared_error': ('losses', 'mean_squared_error'),

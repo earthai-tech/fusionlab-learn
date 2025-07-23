@@ -57,6 +57,7 @@ TensorShape =KERAS_DEPS.TensorShape
 Reduction =KERAS_DEPS.Reduction 
 
 register_keras_serializable=KERAS_DEPS.register_keras_serializable
+get_loss = KERAS_DEPS.get 
 
 tf_Assert= KERAS_DEPS.Assert
 tf_TensorShape= KERAS_DEPS.TensorShape
@@ -116,6 +117,7 @@ tf_linalg = KERAS_DEPS.linalg
 tf_floordiv = KERAS_DEPS.floordiv
 tf_greater =KERAS_DEPS.greater 
 tf_float32 = KERAS_DEPS.float32
+tf_reduce_max = KERAS_DEPS.reduce_max 
 
 
 _logger = fusionlog().get_fusionlab_logger(__name__)
@@ -143,6 +145,7 @@ __all__ = [
     "Sequential",
     "TensorShape",
     "register_keras_serializable",
+    "get_loss", 
     "tf_Assert",
     "tf_TensorShape",
     "tf_concat",
@@ -188,6 +191,15 @@ __all__ = [
     "tf_linalg",
     "tf_floordiv",
     "tf_greater",
+    "tf_erf", 
+    "tf_sqrt", 
+    "tf_sigmoid", 
+    "tf_cumsum", 
+    "tf_reduce_logsumexp", 
+    "tf_softplus", 
+    "tf_ones", 
+    "tf_ones_like", 
+    "tf_unstack", 
     "_logger",
     "DEP_MSG",
     "KERAS_DEPS",

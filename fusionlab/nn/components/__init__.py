@@ -1,12 +1,22 @@
 # -*- coding: utf-8 -*-
-# License: BSD-3-Clause
-# Author: LKouadio <etanoyau@gmail.com>
-
-"""fusionlab.nn.components
-
-Flat public API re-export for all component blocks.
+#   License: BSD-3-Clause
+#   Author: LKouadio <etanoyau@gmail.com>
 """
-
+Provides a collection of specialized Keras-compatible 
+layers and components for constructing advanced time series 
+forecasting and anomaly detection models. It includes building 
+blocks such as attention mechanisms, multi-scale LSTMs, gating 
+and normalization layers, and multi-objective loss functions.
+"""
+from ._attention_utils import (        
+    create_causal_mask,
+    combine_masks,
+)
+from ._temporal_utils import (  
+    aggregate_multiscale,
+    aggregate_multiscale_on_3d,
+    aggregate_time_window_output,
+)
 from .attention import (              
     TemporalAttentionLayer,
     CrossAttention,
@@ -15,17 +25,10 @@ from .attention import (
     ExplainableAttention,
     MultiResolutionAttentionFusion,
 )
-
-from ._attention_utils import (        
-    create_causal_mask,
-    combine_masks,
-)
-
 from .masks import (                   
     pad_mask_from_lengths,
     sequence_mask_3d,
 )
-
 from .gating_norm import (          
     GatedResidualNetwork,
     VariableSelectionNetwork,
@@ -36,13 +39,6 @@ from .temporal import (
     MultiScaleLSTM,
     DynamicTimeWindow, 
 )  
-from .temporal_utils import (  
-    aggregate_multiscale,
-    aggregate_multiscale_on_3d,
-    aggregate_time_window_output,
-)
-)
-
 from .misc import (                    
     MultiModalEmbedding,
     PositionalEncoding,
@@ -54,25 +50,26 @@ from .losses import (
     MultiObjectiveLoss,
     AnomalyLoss,
     CRPSLoss
-    
 )
 from .heads import (            
     QuantileDistributionModeling,
     CombinedHeadLoss,       
     QuantileHead, 
     PointForecastHead, 
-    GaussianHead 
+    GaussianHead, 
     MixtureDensityHead 
-
 )
 from .encoder_decoder import (           
     MultiDecoder,
     TransformerEncoderBlock,   
     TransformerDecoderBlock, 
+    TransformerEncoderLayer,
+    TransformerDecoderLayer,
+    
 )
 
 __all__ = [
-        # attention.py
+
         "TransformerEncoderLayer",
         "TransformerDecoderLayer",
         "TemporalAttentionLayer",
@@ -81,42 +78,42 @@ __all__ = [
         "HierarchicalAttention",
         "ExplainableAttention",
         "MultiResolutionAttentionFusion",
-        # _attention_utils.py
+       
         "create_causal_mask",
         "combine_masks",
-        # masks.py
+
         "pad_mask_from_lengths",
         "sequence_mask_3d",
-        # gating_norm.py
+   
         "GatedResidualNetwork",
         "VariableSelectionNetwork",
         "LearnedNormalization",
         "StaticEnrichmentLayer",
-        # temporal.py
+       
         "MultiScaleLSTM",
         "aggregate_multiscale",
         "aggregate_multiscale_on_3d",
-        # temporal_utils.py
+     
         "DynamicTimeWindow",
         "aggregate_time_window_output",
-        # misc.py
+     
         "MultiModalEmbedding",
         "PositionalEncoding",
         "TSPositionalEncoding",
         "Activation",
-        # _loss_utils.py
+    
         "AdaptiveQuantileLoss",
         "MultiObjectiveLoss",
         "QuantileDistributionModeling",
         "CRPSLoss", 
         "AnomalyLoss",
-        # heads_losses.py
+
         "CombinedHeadLoss",
         "QuantileHead",
         "PointForecastHead",
         "MixtureDensityHead", 
-        
-        # utils_layers.py
+        "GaussianHead", 
+  
         "MultiDecoder",
         "TransformerEncoderBlock",
         "TransformerDecoderBlock",

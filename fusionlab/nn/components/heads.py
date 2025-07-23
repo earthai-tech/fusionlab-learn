@@ -7,9 +7,12 @@ and a combinator loss wrapper that aggregates per-head losses.
 """
 
 from __future__ import annotations
-from numbers import Real 
-from typing import Optional, List, Union,  Dict, Tuple, Mapping
 
+from typing import Optional, List, Union,  Dict, Tuple, Mapping
+from ...api.property import NNLearner
+from ...utils.deps_utils import ensure_pkg
+
+from ._config import KERAS_BACKEND, DEP_MSG
 from ._config import (
     Layer, 
     Dense,
@@ -17,10 +20,9 @@ from ._config import (
     Softmax,
     Tensor, 
     register_keras_serializable,
+    get_loss,
     
     tf_add_n,
-    tf_expand_dims, 
-    tf_concat, 
     tf_float32,  
     tf_expand_dims,
     tf_stack,
@@ -39,11 +41,7 @@ from ._config import (
     tf_reduce_sum
 
 )
-from ...api.property import NNLearner
-from ...utils.deps_utils import ensure_pkg
-from ...compat.sklearn import validate_params, Interval
 
-from ._config import KERAS_BACKEND, DEP_MSG
 
 __all__ = [
     "QuantileHead",
@@ -106,7 +104,6 @@ class GaussianHead(Layer, NNLearner):
         scale = tf_softplus(raw_s) + self.min_scale
 
         return {"mean": mean, "scale": scale}
-
 
     @tf_autograph.experimental.do_not_convert
     def nll(self, y_true: Tensor, mean: Tensor, scale: Tensor
@@ -481,7 +478,6 @@ class CombinedHeadLoss(Loss, NNLearner):
         # prefer to pass already-built object (deserialization logic can be customized).
         sub_cfg = config.pop("heads_losses")
         rebuilt: Dict[str, Tuple[Loss, float]] = {}
-        from tensorflow.keras.losses import get as get_loss  # safe fallback
 
         for k, info in sub_cfg.items():
             # Try generic keras get(); if fails, user must patch here

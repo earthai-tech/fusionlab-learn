@@ -12,6 +12,10 @@ Temporal modules:
 from __future__ import annotations
 from typing import List, Union
 
+from ...api.property import NNLearner
+from ...core.checks import validate_nested_param
+from ...utils.deps_utils import ensure_pkg
+
 from ._config import (
     LSTM, Layer, 
     tf_concat, 
@@ -19,10 +23,6 @@ from ._config import (
     DEP_MSG,
     KERAS_BACKEND,
 )
-
-from ..api.property import NNLearner
-from ..utils.deps_utils import ensure_pkg
-from ..core.checks import validate_nested_param
 
 __all__ = [
     "MultiScaleLSTM",

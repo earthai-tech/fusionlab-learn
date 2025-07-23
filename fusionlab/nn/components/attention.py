@@ -7,27 +7,33 @@ Attention-centric layers for FusionLab.
 
 from __future__ import annotations
 from typing import Optional
-from numbers import Real, Integral 
-from ._config import (                                  # noqa: F401
-    KERAS_BACKEND, KERAS_DEPS, DEP_MSG, _logger,
-    activations,
-    LSTM, LayerNormalization, TimeDistributed,
-    MultiHeadAttention, Model, BatchNormalization, Input,
-    Softmax, Flatten, Dropout, Dense, Embedding, Concatenate,
-    Layer, Loss, Tensor, Sequential, TensorShape,
+from numbers import Real, Integral
+
+from ...api.property import NNLearner
+from ...compat.sklearn import validate_params, Interval
+from ...utils.deps_utils import ensure_pkg
+from ._config import (                                  
+    KERAS_BACKEND, 
+    DEP_MSG, 
+    _logger,
+    LayerNormalization,
+    MultiHeadAttention, 
+    Dropout, 
+    Dense, 
+    Layer, 
+    Tensor, 
     register_keras_serializable,
-    
-    tf_shape, tf_expand_dims, tf_tile, tf_pad, tf_cond,
-    tf_debugging, tf_bool, tf_float32, tf_add, tf_cast,
-    tf_logical_and, tf_logical_not, tf_logical_or,
-    tf_ones_like, tf_ones, tf_constant, tf_equal,
+    tf_shape, 
+    tf_expand_dims, 
+    tf_tile, 
+    tf_bool, 
+    tf_add, 
+    tf_cast,
+    tf_logical_and, 
+    tf_ones_like, 
+    tf_ones, 
     tf_autograph 
 )
-
-from ..utils.deps_utils import ensure_pkg
-from ..compat.sklearn import validate_params, Interval
-from ..api.property import NNLearner
-
 from .gating_norm import GatedResidualNetwork
 from .misc import Activation
 
@@ -229,9 +235,9 @@ class TemporalAttentionLayer(Layer):
 
 @register_keras_serializable(
     'fusionlab.nn.components',
-    name="CrossAttention"
+    name="CrossAttention_"
 )
-class _CrossAttention(Layer, NNLearner):
+class CrossAttention_(Layer, NNLearner):
     r"""
     CrossAttention layer that attends one source
     sequence to another [1]_.
@@ -519,9 +525,9 @@ class CrossAttention(Layer, NNLearner):
 
 @register_keras_serializable(
     'fusionlab.nn.components', 
-    name="MemoryAugmentedAttention"
+    name="MemoryAugmentedAttention_"
 )
-class _MemoryAugmentedAttention(Layer, NNLearner):
+class MemoryAugmentedAttention_(Layer, NNLearner):
     r"""
     Memory-Augmented Attention layer that uses a
     learned memory matrix to enhance temporal
@@ -787,9 +793,9 @@ class MemoryAugmentedAttention(Layer, NNLearner):
 
 @register_keras_serializable(
     'fusionlab.nn.components', 
-    name="HierarchicalAttention"
+    name="HierarchicalAttention_"
 )
-class _HierarchicalAttention(Layer, NNLearner):
+class HierarchicalAttention_(Layer, NNLearner):
     r"""
     Hierarchical Attention layer that processes
     short-term and long-term sequences separately
@@ -1218,6 +1224,7 @@ class ExplainableAttention(Layer, NNLearner):
         """
         return cls(**config)
 
+
 @register_keras_serializable(
     'fusionlab.nn.components', 
     name="MultiResolutionAttentionFusion"
@@ -1372,3 +1379,4 @@ class MultiResolutionAttentionFusion(Layer, NNLearner):
             A new instance of this layer.
         """
         return cls(**config)
+    
