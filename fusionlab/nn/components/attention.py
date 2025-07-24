@@ -417,7 +417,6 @@ class CrossAttention(Layer, NNLearner):
     r"""
     CrossAttention that attends ``source1`` (query) to ``source2``
     (key/value) with optional masks.
-
    
     attention_mask : Tensor, optional
         Bool / 0‑1 mask broadcastable to (B, Tq, Tv). Passed
@@ -988,6 +987,7 @@ class HierarchicalAttention_(Layer, NNLearner):
             specified configuration.
         """
         return cls(**config)
+    
 @register_keras_serializable(
     'fusionlab.nn.components', name="HierarchicalAttention"
 )

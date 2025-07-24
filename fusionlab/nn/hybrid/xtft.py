@@ -53,6 +53,7 @@ if KERAS_BACKEND:
 
 __all__ = ["XTFT"]
 
+_CONFIG_ENCODER_TYPE ={"encoder_type": 'hybrid'} # 
 
 @register_keras_serializable("fusionlab.nn.hybrid", name="XTFT")
 @doc(
@@ -86,12 +87,6 @@ __all__ = ["XTFT"]
     warning_category=UserWarning,
 )
 class XTFT(BaseExtreme):
-    """Extreme Temporal Fusion Transformer (XTFT).
-
-    See :class:`BaseExtreme` for shared parameters. XTFT follows the
-    original flow (no VSN / extra GRN on attentions).
-    """
-
     def __init__(
         self,
         *,
@@ -118,9 +113,11 @@ class XTFT(BaseExtreme):
         anomaly_config: Optional[Dict[str, Any]] = None,
         anomaly_detection_strategy: Optional[str] = None,
         anomaly_loss_weight: float = 0.1,
+        architecture_config: Optional[Dict] = None,
         **kw: Any,
     ) -> None:
         logger.debug("XTFT.__init__() called")
+        
         super().__init__(
             static_input_dim=static_input_dim,
             dynamic_input_dim=dynamic_input_dim,
@@ -145,9 +142,18 @@ class XTFT(BaseExtreme):
             anomaly_config=anomaly_config,
             anomaly_detection_strategy=anomaly_detection_strategy,
             anomaly_loss_weight=anomaly_loss_weight,
+            architecture_config=architecture_config,
             **kw,
         )
-
+        self.architecture_config.update (_CONFIG_ENCODER_TYPE)
+        
+        # Architecture configuration is already handled in Super
+        # and passed directly into self.architecture_config
+        logger.debug(
+            "XTFT initialized with architecture config: %s",
+            self.architecture_config
+        )
+        
     def _build_components(self) -> None:
         logger.debug("XTFT._build_components() start")
         self.activation = Activation(self.activation).activation_str
@@ -305,7 +311,6 @@ class XTFT(BaseExtreme):
         logger.debug("XTFT._encode_inputs() done")
         return static_features, dynamic_input, fut_for_embed, cache
 
-
     @tf_autograph.experimental.do_not_convert
     def _temporal_backbone(
         self,
@@ -317,7 +322,8 @@ class XTFT(BaseExtreme):
     ) -> Tuple[Tensor, Dict[str, Any]]:
         logger.debug("XTFT._temporal_backbone() start")
         embeddings = cache["embeddings"]
-
+    
+        # Multi-scale LSTM processing
         lstm_out = self.multi_scale_lstm(dynamic_encoded, training=training)
         lstm_feats = aggregate_multiscale(
             lstm_out, mode=self.multi_scale_agg
@@ -326,31 +332,127 @@ class XTFT(BaseExtreme):
         lstm_feats = tf_expand_dims(lstm_feats, axis=1)
         lstm_feats = tf_tile(lstm_feats, [1, t_steps, 1])
         logger.debug("lstm_feats shape=%s", lstm_feats.shape)
+    
+        # Initialize attention mask
+        attn_mask = tf_expand_dims(cache["fut_mask"], axis=1)  # (B, 1, T_ref)
+        logger.debug(f"Attention Mask Shape: {attn_mask.shape}")
+    
+        # Initialize context
+        context_att = lstm_feats
+    
+        # Apply Cross Attention if included in architecture config
+        if 'cross' in self.architecture_config['decoder_attention_stack']:
+            logger.debug("Applying Cross Attention")
+            cross_att = self.cross_attention(
+                [dynamic_encoded, embeddings],
+                training=training,
+                attention_mask=attn_mask  # passing the attention mask here
+            )
+            context_att = cross_att  # Update context with cross-attention output
+            logger.debug(f"Cross Attention Output Shape: {cross_att.shape}")
+        
+        # Apply Hierarchical Attention if included in architecture config
+        if 'hierarchical' in self.architecture_config['decoder_attention_stack']:
+            logger.debug("Applying Hierarchical Attention")
+            hier_att = self.hierarchical_attention(
+                [context_att, context_att],  # Hierarchical attention on context
+                training=training,
+                attention_mask=attn_mask  # passing the attention mask here
+            )
+            context_att = hier_att  # Update context with hierarchical attention output
+            logger.debug(f"Hierarchical Attention Shape: {hier_att.shape}")
+        
+        # Apply Memory-Augmented Attention if included in architecture config
+        if 'memory' in self.architecture_config['decoder_attention_stack']:
+            logger.debug("Applying Memory-Augmented Attention")
+            mem_att = self.memory_augmented_attention(
+                context_att, 
+                training=training, 
+                # passing the attention mask to memory-augmented attention
+                attention_mask=attn_mask  
+            )
+            # Update context with memory-augmented attention output
+            context_att = mem_att  
+            logger.debug(f"Memory Augmented Attention Shape: {mem_att.shape}")
+        
+        # Combine the attended features
+        fused = Concatenate()([lstm_feats, context_att])
+        fused = self.multi_resolution_attention_fusion(
+            fused, training=training
+        )
+        logger.debug("Fused shape post-fusion=%s", fused.shape)
+    
+        # Update cache with attention outputs
+        cache.update({
+            "hierarchical_att": ( 
+                context_att if 'hierarchical' in self.architecture_config[
+                    'decoder_attention_stack'] else None
+                ),
+            "cross_att": ( 
+                cross_att if 'cross' in self.architecture_config[
+                    'decoder_attention_stack'] else None
+            ),
+            "memory_att": ( 
+                mem_att if 'memory' in self.architecture_config[
+                    'decoder_attention_stack'] else None
+                ),
+        })
+        logger.debug("XTFT._temporal_backbone() done")
+        return fused, cache
 
-        hier_att = self.hierarchical_attention(
-            [dynamic_encoded, future_encoded], training=training
+    @tf_autograph.experimental.do_not_convert
+    def __temporal_backbone(
+        self,
+        dynamic_encoded: Tensor,
+        future_encoded: Tensor,
+        *,
+        training: bool,
+        cache: Dict[str, Any],
+    ) -> Tuple[Tensor, Dict[str, Any]]:
+        logger.debug("XTFT._temporal_backbone() start")
+        embeddings = cache["embeddings"]
+    
+        # Multi-scale LSTM processing
+        lstm_out = self.multi_scale_lstm(dynamic_encoded, training=training)
+        lstm_feats = aggregate_multiscale(
+            lstm_out, mode=self.multi_scale_agg
         )
-        logger.debug(
-            f"Hierarchical Attention Shape: {hier_att.shape}"
-        )
-        
+        t_steps = tf_shape(dynamic_encoded)[1]
+        lstm_feats = tf_expand_dims(lstm_feats, axis=1)
+        lstm_feats = tf_tile(lstm_feats, [1, t_steps, 1])
+        logger.debug("lstm_feats shape=%s", lstm_feats.shape)
+    
+        # Hierarchical attention
         attn_mask = tf_expand_dims(cache["fut_mask"], axis=1)  # (B,1,Tv)
-        
+        logger.debug(f"Attention Mask Shape: {attn_mask.shape}")
+    
+        # Apply attention mask to hierarchical attention if required
+        hier_att = self.hierarchical_attention(
+            [dynamic_encoded, future_encoded], 
+            training=training,
+            attention_mask=attn_mask  # passing the attention mask here
+        )
+        logger.debug(f"Hierarchical Attention Shape: {hier_att.shape}")
+    
+        # Cross attention
         cross_att = self.cross_attention(
             [dynamic_encoded, embeddings], 
             training=training, 
             attention_mask=attn_mask
         )
-        logger.debug(
-            f"Cross Attention Output Shape: {cross_att.shape}"
-        )
-        
+        logger.debug(f"Cross Attention Output Shape: {cross_att.shape}")
+    
+        # Memory augmented attention
         mem_att = self.memory_augmented_attention(
-            hier_att, training=training
+            hier_att, 
+            training=training, 
+            attention_mask=attn_mask  
+            # passing the attention mask to memory-augmented attention
         )
         logger.debug("att shapes h=%s c=%s m=%s",
                      hier_att.shape, cross_att.shape, mem_att.shape)
-
+    
+        # Combine features
         fused = Concatenate()([
             lstm_feats,
             cross_att,
@@ -361,7 +463,8 @@ class XTFT(BaseExtreme):
             fused, training=training
         )
         logger.debug("fused shape post-fusion=%s", fused.shape)
-
+    
+        # Update cache with attention outputs
         cache.update({
             "hierarchical_att": hier_att,
             "cross_att": cross_att,

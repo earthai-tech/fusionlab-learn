@@ -38,19 +38,18 @@ from ._config import (
 )
 
 K =KERAS_DEPS 
+
 __all__ = [
-
-    "maybe_expand_time",
-    "broadcast_like",
-    "ensure_rank_at_least",
-    "apply_residual",
-    "drop_path",
-
     "ResidualAdd",
     "LayerScale",
     "StochasticDepth",
     "SqueezeExcite1D",
     "Gate",
+    "maybe_expand_time",
+    "broadcast_like",
+    "ensure_rank_at_least",
+    "apply_residual",
+    "drop_path",
 ]
 
 

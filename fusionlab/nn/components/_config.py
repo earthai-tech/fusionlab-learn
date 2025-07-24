@@ -83,6 +83,7 @@ tf_stack = KERAS_DEPS.stack
 tf_unstack =KERAS_DEPS.stack
 tf_expand_dims = KERAS_DEPS.expand_dims
 tf_tile = KERAS_DEPS.tile
+tf_where =KERAS_DEPS.where
 tf_range=KERAS_DEPS.range 
 tf_rank=KERAS_DEPS.rank
 tf_split = KERAS_DEPS.split

@@ -42,7 +42,6 @@ from ._config import (
 
 )
 
-
 __all__ = [
     "QuantileHead",
     "PointForecastHead",

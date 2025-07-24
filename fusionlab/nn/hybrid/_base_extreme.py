@@ -2,17 +2,8 @@
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
 """fusionlab/nn/hybrid/_base_extreme.py
+Parent for XTFT-like models.
 
-BaseExtreme: DRY-friendly parent for XTFT-like models.
-
-Goals
------
-* Centralize param validation, defaults, (de)serialization, compile /
-  train_step logic, anomaly handling, etc.
-* Expose **template hooks** (encode/backbone/decode/anomaly) so children
-  only implement what differs.
-* Provide rich logging (`logger.debug/info/warning`) to ease debugging.
-* Respect ~63 char line width for readability in diffs / terminals.
 """
 from __future__ import annotations
 
@@ -45,14 +36,20 @@ if KERAS_BACKEND:
     )
     from ..utils import set_default_params
     from ..components import (
+        Activation, 
         AnomalyLoss,
         DynamicTimeWindow,
         MultiDecoder,
         QuantileDistributionModeling,
     )
     from ..components import aggregate_time_window_output
+    from ..components.utils import ( 
+        configure_architecture, 
+        resolve_fusion_mode
+    )
 
 Tensor = KERAS_DEPS.Tensor
+Dense = KERAS_DEPS.Dense 
 Model = KERAS_DEPS.Model
 Concatenate = KERAS_DEPS.Concatenate
 LayerNormalization = KERAS_DEPS.LayerNormalization
@@ -111,6 +108,7 @@ _PARAM_SCHEMA: Dict[str, list] = {
         }), None
     ],
     "anomaly_loss_weight": [Real],
+    "architecture_config": [dict, None], 
 }
 
 
@@ -148,10 +146,34 @@ class BaseExtreme(Model, NNLearner):
         anomaly_config: Optional[Dict[str, Any]] = None,
         anomaly_detection_strategy: Optional[str] = None,
         anomaly_loss_weight: float = 0.1,
+        architecture_config: Optional[Dict] = None,
+        fusion_mode: Optional[str] = None, 
         **kw: Any,
     ) -> None:
         super().__init__(**kw)
+        
+        # Set up architecture configuration based on user input
+        self.architecture_config = configure_architecture(
+            objective=architecture_config.get(
+                'encoder_type', None) if architecture_config else None,
+            use_vsn=architecture_config.get(
+                'use_vsn', True) if architecture_config else True,
+            attention_levels=architecture_config.get(
+                'decoder_attention_stack', None) if architecture_config else None,
+            architecture_config=architecture_config
+        )
 
+        # Apply the architecture config to the class attributes
+        self.encoder_type = self.architecture_config['encoder_type']
+        self.decoder_attention_stack = self.architecture_config['decoder_attention_stack']
+        self.feature_processing = self.architecture_config['feature_processing']
+
+        logger.debug("Using architecture config: %s", self.architecture_config)
+        
+        self.fusion_mode = resolve_fusion_mode(fusion_mode)
+        
+        logger.debug("Fusion mode: %s", self.fusion_mode)
+        
         logger.debug("Initializing %s with params:")
         logger.debug(
             "static=%s dynamic=%s future=%s embed=%s horizon=%s",
@@ -190,6 +212,8 @@ class BaseExtreme(Model, NNLearner):
         self.use_batch_norm = use_batch_norm
         self.final_agg = final_agg
         self.return_sequences = return_sequences
+        
+        self.activation_fn_str = Activation(self.activation).activation_str
 
         # anomaly setup
         self.anomaly_detection_strategy = anomaly_detection_strategy
@@ -224,11 +248,19 @@ class BaseExtreme(Model, NNLearner):
         self.multi_decoder = MultiDecoder(
             output_dim=self.output_dim, num_horizons=self.forecast_horizon
         )
-
+        
+        # This layer projects the combined decoder context into a
+        # consistent feature space (`attention_units`) before it's used
+        # in attention mechanisms and residual connections.
+        self.decoder_input_projection = Dense(
+            self.attention_units,
+            activation=self.activation_fn_str,
+            name="decoder_input_projection"
+        )
+        
         # let subclasses register their components
         self._build_components()
         logger.debug("Components built for %s", self.__class__.__name__)
-
 
     # Hooks to override
     def _build_components(self) -> None:
@@ -289,7 +321,6 @@ class BaseExtreme(Model, NNLearner):
         """Subclasses set self.anomaly_scores here if needed."""
         return None
 
-    # Forward pass
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training: bool = False, **kwargs):
         logger.debug("call() on %s, training=%s",
@@ -437,8 +468,7 @@ class BaseExtreme(Model, NNLearner):
                            if self.lstm_units is not None else None),
             'scales': (list(self.scales)
                        if self.scales is not None else None),
-            'activation': (self.activation if isinstance(self.activation, str)
-                           else 'callable'),
+            'activation': self.activation_fn_str,
             'use_residuals': bool(self.use_residuals),
             'use_batch_norm': bool(self.use_batch_norm),
             'final_agg': self.final_agg,

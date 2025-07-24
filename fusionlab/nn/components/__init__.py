@@ -12,6 +12,15 @@ from ._attention_utils import (
     create_causal_mask,
     combine_masks,
 )
+from ._loss_utils import ( 
+    MeanSquaredErrorLoss,
+    QuantileLoss,
+    HuberLoss,
+    WeightedLoss,
+    compute_loss_with_reduction, 
+    compute_quantile_loss 
+)
+
 from ._temporal_utils import (  
     aggregate_multiscale,
     aggregate_multiscale_on_3d,
@@ -68,6 +77,20 @@ from .encoder_decoder import (
     
 )
 
+from .layer_utils import ( 
+    maybe_expand_time,
+    broadcast_like,
+    ensure_rank_at_least,
+    apply_residual,
+    drop_path,
+
+    ResidualAdd,
+    LayerScale,
+    StochasticDepth,
+    SqueezeExcite1D,
+    Gate,
+    )
+
 __all__ = [
 
         "TransformerEncoderLayer",
@@ -78,44 +101,54 @@ __all__ = [
         "HierarchicalAttention",
         "ExplainableAttention",
         "MultiResolutionAttentionFusion",
-       
-        "create_causal_mask",
-        "combine_masks",
-
-        "pad_mask_from_lengths",
-        "sequence_mask_3d",
-   
+        "ResidualAdd",
+        "LayerScale",
+        "StochasticDepth",
+        "SqueezeExcite1D",
+        "Gate",
         "GatedResidualNetwork",
         "VariableSelectionNetwork",
         "LearnedNormalization",
         "StaticEnrichmentLayer",
-       
         "MultiScaleLSTM",
-        "aggregate_multiscale",
-        "aggregate_multiscale_on_3d",
-     
         "DynamicTimeWindow",
-        "aggregate_time_window_output",
-     
         "MultiModalEmbedding",
         "PositionalEncoding",
         "TSPositionalEncoding",
         "Activation",
-    
         "AdaptiveQuantileLoss",
         "MultiObjectiveLoss",
         "QuantileDistributionModeling",
         "CRPSLoss", 
         "AnomalyLoss",
-
         "CombinedHeadLoss",
         "QuantileHead",
         "PointForecastHead",
         "MixtureDensityHead", 
         "GaussianHead", 
-  
         "MultiDecoder",
         "TransformerEncoderBlock",
         "TransformerDecoderBlock",
-    ]
+        "MeanSquaredErrorLoss",
+        "QuantileLoss",
+        "HuberLoss",
+        "WeightedLoss",
+        
+        "compute_loss_with_reduction", 
+        "compute_quantile_loss", 
+        "maybe_expand_time",
+        "broadcast_like",
+        "ensure_rank_at_least",
+        "apply_residual",
+        "drop_path",
+        "create_causal_mask",
+        "combine_masks",
+        "pad_mask_from_lengths",
+        "sequence_mask_3d",
+        "aggregate_multiscale",
+        "aggregate_multiscale_on_3d",
+        "aggregate_time_window_output",
+        
+]
+    
 

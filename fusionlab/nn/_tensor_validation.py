@@ -2778,6 +2778,7 @@ def _validate_tft_flexible_inputs_soft_mode(
 
     return static_p, dynamic_p, future_p
 
+@optional_tf_function 
 def validate_model_inputs(
     inputs: Union[Tensor, np.ndarray,
                  List[Optional[Union[np.ndarray, Tensor]]]],

@@ -86,9 +86,12 @@ class SuperXTFT(XTFT):
         anomaly_config: Optional[Dict[str, Any]] = None,
         anomaly_detection_strategy: Optional[str] = None,
         anomaly_loss_weight: float = 1.0,
+        architecture_config: Optional[Dict] = None,
+        fusion_mode: Optional[str] =None, 
         **kw: Any,
     ) -> None:
         logger.debug("SuperXTFT.__init__() called")
+        
         super().__init__(
             static_input_dim=static_input_dim,
             dynamic_input_dim=dynamic_input_dim,
@@ -113,45 +116,54 @@ class SuperXTFT(XTFT):
             anomaly_config=anomaly_config,
             anomaly_detection_strategy=anomaly_detection_strategy,
             anomaly_loss_weight=anomaly_loss_weight,
+            architecture_config=architecture_config,
+            fusion_mode = fusion_mode, 
             **kw,
         )
-
+    
     # Components (override)
     def _build_components(self) -> None:
         logger.debug("SuperXTFT._build_components() start")
-        # Normalize activation spec
         self.activation = Activation(self.activation).activation_str
 
-        # --------- Variable Selection Networks ---------
-        self.variable_selection_static = VariableSelectionNetwork(
-            num_inputs=self.static_input_dim,
-            units=self.hidden_units,
-            dropout_rate=self.dropout_rate,
-            use_time_distributed=False,
-            activation=self.activation,
-            use_batch_norm=self.use_batch_norm,
-        )
-        self.variable_selection_dynamic = VariableSelectionNetwork(
-            num_inputs=self.dynamic_input_dim,
-            units=self.hidden_units,
-            dropout_rate=self.dropout_rate,
-            use_time_distributed=True,
-            activation=self.activation,
-            use_batch_norm=self.use_batch_norm,
-        )
-        self.variable_future_covariate = VariableSelectionNetwork(
-            num_inputs=self.future_input_dim,
-            units=self.hidden_units,
-            dropout_rate=self.dropout_rate,
-            use_time_distributed=True,
-            activation=self.activation,
-            use_batch_norm=self.use_batch_norm,
-        )
+        # --------- Handle Feature Processing: VSN or Dense ---------
+        if self.feature_processing == 'vsn':  # Variable Selection Network
+            self.variable_selection_static = VariableSelectionNetwork(
+                num_inputs=self.static_input_dim,
+                units=self.hidden_units,
+                dropout_rate=self.dropout_rate,
+                use_time_distributed=False,
+                activation=self.activation,
+                use_batch_norm=self.use_batch_norm,
+            )
+            self.variable_selection_dynamic = VariableSelectionNetwork(
+                num_inputs=self.dynamic_input_dim,
+                units=self.hidden_units,
+                dropout_rate=self.dropout_rate,
+                use_time_distributed=True,
+                activation=self.activation,
+                use_batch_norm=self.use_batch_norm,
+            )
+            self.variable_future_covariate = VariableSelectionNetwork(
+                num_inputs=self.future_input_dim,
+                units=self.hidden_units,
+                dropout_rate=self.dropout_rate,
+                use_time_distributed=True,
+                activation=self.activation,
+                use_batch_norm=self.use_batch_norm,
+            )
+        else:  # Dense layers as fallback
+            self.dense_static = Dense(
+                self.hidden_units, activation=self.activation)
+            self.dense_dynamic = Dense(
+                self.hidden_units, activation=self.activation)
+            self.dense_future_covariate = Dense(
+                self.hidden_units, activation=self.activation)
 
         # --------- Static branch (same as XTFT) ---------
         self.learned_normalization = LearnedNormalization()
-        self.static_dense = Dense(self.hidden_units,
-                                  activation=self.activation)
+        self.static_dense = Dense(
+            self.hidden_units, activation=self.activation)
         self.static_dropout = Dropout(self.dropout_rate)
         self.static_batch_norm = (
             LayerNormalization() if self.use_batch_norm else None
@@ -221,7 +233,8 @@ class SuperXTFT(XTFT):
             activation=self.activation,
             use_batch_norm=self.use_batch_norm,
         )
-                # --------------- Anomaly (feature_based) ---------------
+
+        # --------------- Anomaly (feature_based) ---------------
         if self.anomaly_detection_strategy == 'feature_based':
             self.anomaly_attention = MultiHeadAttention(
                 num_heads=1,
@@ -258,19 +271,26 @@ class SuperXTFT(XTFT):
         logger.debug("SuperXTFT._encode_inputs() start")
         cache: Dict[str, Any] = {}
 
-        sel_static = self.variable_selection_static(
-            static_input, training=training
-        )
-        sel_dynamic = self.variable_selection_dynamic(
-            dynamic_input, training=training
-        )
-        sel_future = self.variable_future_covariate(
-            future_input, training=training
-        )
-        logger.debug("VSN shapes s=%s d=%s f=%s",
-                     sel_static.shape, sel_dynamic.shape, 
-                     sel_future.shape)
+        # Handle static, dynamic, and future input processing (VSN or Dense)
+        if self.feature_processing == 'vsn':
+            sel_static = self.variable_selection_static(
+                static_input, training=training
+            )
+            sel_dynamic = self.variable_selection_dynamic(
+                dynamic_input, training=training
+            )
+            sel_future = self.variable_future_covariate(
+                future_input, training=training
+            )
+        else:
+            sel_static = self.dense_static(static_input)
+            sel_dynamic = self.dense_dynamic(dynamic_input)
+            sel_future = self.dense_future_covariate(future_input)
 
+        logger.debug("VSN/Dense processed shapes s=%s d=%s f=%s",
+                     sel_static.shape, sel_dynamic.shape, sel_future.shape)
+
+        # Continue with encoding, normalization, and embeddings
         norm_static = self.learned_normalization(
             sel_static, training=training
         )
@@ -286,12 +306,16 @@ class SuperXTFT(XTFT):
             static_features, training=training
         )
 
-        _, fut_for_embed = align_temporal_dimensions(
+        _, fut_for_embed, fut_mask = align_temporal_dimensions(
             tensor_ref=sel_dynamic,
             tensor_to_align=sel_future,
-            mode='slice_to_ref',
-            name='future_input_for_mme',
+            mode="auto",
+            return_mask=True,
+            name="future_input_for_mme",
         )
+        cache["fut_mask"] = fut_mask  # shape (B, T_ref)
+
+        
         embeddings = self.multi_modal_embedding(
             [sel_dynamic, fut_for_embed], training=training
         )
@@ -305,8 +329,8 @@ class SuperXTFT(XTFT):
         cache['future_for_embed'] = fut_for_embed
         logger.debug("SuperXTFT._encode_inputs() done")
         return static_features, sel_dynamic, fut_for_embed, cache
-
-
+    
+ 
     @tf_autograph.experimental.do_not_convert
     def _temporal_backbone(
         self,
@@ -318,55 +342,179 @@ class SuperXTFT(XTFT):
     ) -> Tuple[Tensor, Dict[str, Any]]:
         logger.debug("SuperXTFT._temporal_backbone() start")
         embeddings = cache['embeddings']
-
-        lstm_out = self.multi_scale_lstm(
-            dynamic_encoded, training=training)
+    
+        # Multi-scale LSTM processing
+        lstm_out = self.multi_scale_lstm(dynamic_encoded, training=training)
         lstm_feats = aggregate_multiscale(
             lstm_out, mode=self.multi_scale_agg
         )
         t_steps = tf_shape(dynamic_encoded)[1]
         lstm_feats = tf_expand_dims(lstm_feats, axis=1)
         lstm_feats = tf_tile(lstm_feats, [1, t_steps, 1])
-
-        hier_att = self.hierarchical_attention(
-            [dynamic_encoded, future_encoded], training=training
+    
+        # Initialize attention mask
+        attn_mask = tf_expand_dims(cache["fut_mask"], axis=1)  # (B, 1, T_v)
+        logger.debug(f"Attention Mask Shape: {attn_mask.shape}")
+    
+        # Start with lstm_feats as the base context
+        context_att = lstm_feats
+    
+        # Apply attention and GRN processing using the helper method
+        context_att, cache = self._apply_fusion_mode(
+            dynamic_encoded, future_encoded, embeddings, attn_mask, 
+            training, context_att, cache 
         )
-        hier_att = self.grn_attention_hierarchical(
-            hier_att, training=training
-        )
-
-        cross_att = self.cross_attention(
-            [dynamic_encoded, embeddings], training=training
-        )
-        cross_att = self.grn_attention_cross(
-            cross_att, training=training
-        )
-
-        mem_att_raw = self.memory_augmented_attention(
-            hier_att, training=training
-        )
-        mem_att = self.grn_memory_attention(
-            mem_att_raw, training=training
-        )
-
-        fused = Concatenate()([
-            lstm_feats,
-            cross_att,
-            hier_att,
-            mem_att,
-        ])
+    
+        # Final fusion of the attention outputs
         fused = self.multi_resolution_attention_fusion(
-            fused, training=training
+            context_att, training=training
         )
-
+        logger.debug(
+            f"Fused output shape after multi-resolution fusion: {fused.shape}")
+    
+        # Update the cache with attention outputs for possible future use
         cache.update({
-            'hierarchical_att': hier_att,
-            'cross_att': cross_att,
-            'memory_att': mem_att_raw,
+            'hierarchical_att': cache.get('hierarchical_att', None),
+            'cross_att': cache.get('cross_att', None),
+            'memory_att': cache.get('memory_att', None),
         })
+    
         logger.debug("SuperXTFT._temporal_backbone() done")
         return fused, cache
+    
 
+    @tf_autograph.experimental.do_not_convert
+    def _apply_fusion_mode(
+        self,
+        dynamic_encoded: Tensor,
+        future_encoded: Tensor,
+        embeddings: Tensor,
+        attn_mask: Tensor,
+        training: bool,
+        context_att: Tensor,
+        cache: Dict[str, Any],
+    ) -> Tuple[Tensor, Dict[str, Any]]:
+        """
+        Private helper method to apply attention mechanisms with GRNs.
+        
+        Handles both the integrated and separate attention+GRN approaches
+        based on the `fusion_mode` parameter.
+        """
+        
+        # Initialize cache with None to avoid key errors
+        cache['hierarchical_att'] = None
+        cache['cross_att'] = None
+        cache['memory_att'] = None
+    
+        # Check the fusion_mode and apply attention & GRN accordingly
+        if self.fusion_mode == 'integrated':
+            # Gate → Add & Norm → GRN refinement (for decoder output)
+   
+            fused_feats = [context_att]
+            # Apply Hierarchical Attention + GRN if present
+            if 'hierarchical' in self.decoder_attention_stack:
+                hierarchical_att = self.hierarchical_attention(
+                    [dynamic_encoded, future_encoded],
+                    training=training,
+                    attention_mask=attn_mask
+                )
+                hierarchical_att_grn = self.grn_attention_hierarchical(
+                    hierarchical_att,
+                    training=training
+                )
+                logger.debug(f"Hierarchical Attention after GRN Shape: "
+                             f"{hierarchical_att_grn.shape}")
+                cache['hierarchical_att'] = hierarchical_att_grn
+                
+                fused_feats.append(hierarchical_att_grn)
+    
+            # Apply Cross Attention + GRN if present
+            if 'cross' in self.decoder_attention_stack:
+                cross_attention_output = self.cross_attention(
+                    [dynamic_encoded, embeddings],
+                    training=training, 
+                    attention_mask=attn_mask
+                )
+                cross_attention_grn = self.grn_attention_cross(
+                    cross_attention_output,
+                    training=training
+                )
+                logger.debug(f"Cross Attention after GRN Shape: "
+                             f"{cross_attention_grn.shape}")
+                cache['cross_att'] = cross_attention_grn
+                
+                fused_feats.append(cross_attention_grn)
+    
+            # Apply Memory Attention + GRN if present
+            if 'memory' in self.decoder_attention_stack:
+                memory_attention_output = self.memory_augmented_attention(
+                    hierarchical_att_grn,
+                    training=training, 
+                    attention_mask=attn_mask
+                )
+                memory_attention_grn = self.grn_memory_attention(
+                    memory_attention_output,
+                    training=training
+                )
+                logger.debug(f"Memory Attention after GRN Shape: "
+                             f"{memory_attention_grn.shape}")
+             
+                cache['memory_att'] = memory_attention_grn
+                
+                fused_feats.append(memory_attention_grn)
+                
+            # Fallback to hierarchical if no memory attention
+            context_att = Concatenate()(fused_feats)
+    
+        else:
+            # Apply attention and GRN separately
+            # for each attention mechanism
+            if 'cross' in self.decoder_attention_stack:
+                cross_att = self.cross_attention(
+                    [dynamic_encoded, embeddings], 
+                    training=training,
+                    attention_mask=attn_mask
+                )
+                cross_att = self.grn_attention_cross(
+                    cross_att,
+                    training=training
+                )
+                context_att = cross_att
+                logger.debug(f"Cross Attention after GRN Shape: "
+                             f"{cross_att.shape}")
+                cache['cross_att'] = cross_att
+    
+            if 'hierarchical' in self.decoder_attention_stack:
+                hier_att = self.hierarchical_attention(
+                    [dynamic_encoded, future_encoded], 
+                    training=training, 
+                    attention_mask=attn_mask
+                )
+                hier_att = self.grn_attention_hierarchical(
+                    hier_att,
+                    training=training
+                )
+                context_att = hier_att
+                logger.debug(f"Hierarchical Attention after GRN Shape: "
+                             f"{hier_att.shape}")
+                cache['hierarchical_att'] = hier_att
+    
+            if 'memory' in self.decoder_attention_stack:
+                mem_att = self.memory_augmented_attention(
+                    context_att, 
+                    training=training, 
+                    attention_mask=attn_mask
+                )
+                mem_att = self.grn_memory_attention(
+                    mem_att,
+                    training=training
+                )
+                context_att = mem_att
+                logger.debug(f"Memory Attention after GRN Shape: "
+                             f"{mem_att.shape}")
+                cache['memory_att'] = mem_att
+    
+        return context_att, cache
 
     def _aggregate_decode(
         self,
@@ -375,8 +523,16 @@ class SuperXTFT(XTFT):
         training: bool,
         cache: Dict[str, Any],
     ) -> Tensor:
+        """
+        Apply attention to the fused features and pass through GRN
+        (Gate→Add&Norm→GRN pipeline).
+        """
+        
+        # Initialize with fused features as the base context
+        context_att = fused_feats  
+     
         time_window_output = self.dynamic_time_window(
-            fused_feats, training=training
+            context_att, training=training
         )
         final_features = aggregate_time_window_output(
             time_window_output, self.final_agg
@@ -384,12 +540,15 @@ class SuperXTFT(XTFT):
         dec_out = self.multi_decoder(
             final_features, training=training
         )
+    
+        # Apply GRN refinement to the final decoder context
         # Gate
         G = self.grn_decoder.gate_dense(dec_out)
         # Add & Norm
         Z_norm = self.grn_decoder.layer_norm(dec_out + G)
         # GRN
         Z_grn = self.grn_decoder(Z_norm, training=training)
+    
         return Z_grn
 
     def _maybe_compute_anomaly_scores(
@@ -424,8 +583,7 @@ class SuperXTFT(XTFT):
         self.anomaly_scores = self.anomaly_scorer(proj, training=training)
         logger.debug("anomaly_scores shape=%s", self.anomaly_scores.shape)
         return None
-
-
+    
 SuperXTFT.__doc__ = r"""
 An extension of :class:`XTFT` that injects **Variable Selection
 Networks (VSNs)** and a **Gate→Add&Norm→GRN** refinement pipeline
