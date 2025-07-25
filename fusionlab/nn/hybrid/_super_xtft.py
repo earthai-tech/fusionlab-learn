@@ -120,10 +120,13 @@ class SuperXTFT(XTFT):
             fusion_mode = fusion_mode, 
             **kw,
         )
-    
-    # Components (override)
+
     def _build_components(self) -> None:
         logger.debug("SuperXTFT._build_components() start")
+        
+        # Re-sync feature_processing from updated architecture_config
+        self._sync_architecture()
+
         self.activation = Activation(self.activation).activation_str
 
         # --------- Handle Feature Processing: VSN or Dense ---------
@@ -160,7 +163,7 @@ class SuperXTFT(XTFT):
             self.dense_future_covariate = Dense(
                 self.hidden_units, activation=self.activation)
 
-        # --------- Static branch (same as XTFT) ---------
+        # -------------------- Static branch   ----------------------
         self.learned_normalization = LearnedNormalization()
         self.static_dense = Dense(
             self.hidden_units, activation=self.activation)
@@ -234,7 +237,7 @@ class SuperXTFT(XTFT):
             use_batch_norm=self.use_batch_norm,
         )
 
-        # --------------- Anomaly (feature_based) ---------------
+        # --------------- Anomaly ---------------
         if self.anomaly_detection_strategy == 'feature_based':
             self.anomaly_attention = MultiHeadAttention(
                 num_heads=1,

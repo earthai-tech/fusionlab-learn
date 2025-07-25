@@ -10,6 +10,7 @@ import os
 import re
 import logging 
 from collections.abc import Mapping, Sequence
+
 from typing import ( 
     Dict, 
     Iterable, 
@@ -18,8 +19,12 @@ from typing import (
     Any, 
     Optional,
     Tuple , 
-    Callable, 
+    Callable,
+    Literal
 )
+import warnings
+from datetime import datetime, date
+
 import numpy as np 
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler 
@@ -27,7 +32,7 @@ from sklearn.preprocessing import MinMaxScaler
 from .._fusionlog import fusionlog 
 from ..core.handlers import columns_manager 
 from ..core.checks import check_spatial_columns, check_empty  
-from ..core.io import is_data_readable  
+from ..core.io import is_data_readable
 from ..decorators import isdf 
 
 from .generic_utils import vlog 
@@ -44,11 +49,340 @@ __all__= [
      'get_step_names', 
      'stack_quantile_predictions', 
      'adjust_time_predictions', 
-     
-     ]
+     'add_forecast_times', 
+     'pivot_forecast'
+]
 
 _DIGIT_RE = re.compile(r"\d+")
 
+
+@check_empty(["df"])
+@isdf
+def pivot_forecast(
+    df: pd.DataFrame,
+    *,
+    index_col: str = "sample_idx",
+    pivot_col: Optional[str] = None,
+    step_col: str = "forecast_step",
+    time_col: str = "coord_t",
+    value_cols: Optional[Union[str, Sequence[str]]] = None,
+    spatial_cols: Optional[Sequence[str]] = None,
+    aggfunc: Union[str, Callable] = "first",
+    fill_value: Any = np.nan,
+    sep: str = "_",
+    time_formatter: Callable[[Any], str] = lambda t: pd.to_datetime(
+        t).strftime("%Y-%m-%d"),
+    inplace: bool = False,
+    savefile: Optional[str] = None,
+    verbose: int = 0,
+) -> pd.DataFrame:
+    """
+    Pivot a long-format forecast DataFrame into a wide one.
+
+    This will take rows identified by `index_col` + a
+    `step_col` (or datetime `time_col`) and spread each
+    forecast step/time into its own set of columns for each
+    value in `value_cols`, then re-attach the `spatial_cols`.
+
+    Parameters
+    ----------
+    df
+        Long-format forecasts. Must include `index_col` and
+        at least one of `step_col` or `time_col`.
+    index_col
+        Column that identifies each sample (e.g. "sample_idx").
+    pivot_col
+        If provided, pivot on this column instead of
+        auto-detecting. Must be either `step_col` or `time_col`.
+    step_col
+        Name of the integer 1‑based forecast step column.
+    time_col
+        Name of the datetime column (e.g. "coord_t").
+    value_cols
+        Which forecast columns to pivot (e.g. "subsidence_q50"
+        or ["subsidence_q10","subsidence_q50","subsidence_q90"]).
+        If None, will auto-pick all numeric columns except
+        index/pivot/spatial.
+    spatial_cols
+        List of columns holding static spatial info
+        (e.g. ["longitude","latitude"]) to join back once pivoted.
+    aggfunc
+        Aggregation function for pivot (default "first").
+    fill_value
+        What to put where a sample/step is missing (default NaN).
+    sep
+        Separator between value name and step/time in the new
+        column names (default "_").
+    time_formatter
+        How to turn a datetime/timestamp into a string
+        for column names (default "%Y-%m-%d").
+    inplace
+        If True, modifies `df` instead of copying.
+    savefile
+        If given, writes the resulting wide DataFrame
+        to CSV at this path.
+    verbose
+        Passed to `vlog` for logging.
+
+    Returns
+    -------
+    pd.DataFrame
+        Wide-format DataFrame with one row per `index_col`
+        and columns like `<value><sep><step>` or
+        `<value><sep><formatted time>`.
+    Example 
+    --------
+    >>> from fusionlab.utils.forecast_utils import pivot_forecast
+    
+    >>> dff = pivot_forecast(
+    ...    df_,
+    ...    index_col="sample_idx",
+    ...    pivot_col="coord_t",                # ← force pivot on the datetime
+    ...    value_cols=["subsidence_q10","subsidence_q50","subsidence_q90"],
+    ...    spatial_cols=["longitude","latitude"],
+    ...    sep="_",                            # you’ll get subsidence_q50_2022 etc.
+    ...    time_formatter=lambda t: f"{t.year}",
+    ...    verbose=1
+    ... )
+    [INFO] Pivoting on 'coord_t' for values ['subsidence_q10', 'subsidence_q50', 'subsidence_q90']
+    [INFO] Joining back spatial cols ['longitude', 'latitude']
+    
+    >>> dff.columns
+    Out[37]: 
+    Index(['sample_idx', 'subsidence_q10_2022', 'subsidence_q10_2023',
+           'subsidence_q10_2024', 'subsidence_q50_2022', 'subsidence_q50_2023',
+           'subsidence_q50_2024', 'subsidence_q90_2022', 'subsidence_q90_2023',
+           'subsidence_q90_2024', 'longitude', 'latitude'],
+          dtype='object')
+    """
+
+    if not inplace:
+        df = df.copy()
+
+    if time_formatter is not (lambda t: t) and pivot_col is None:
+        pivot_col = time_col
+
+    # 1) Decide pivot column
+    if pivot_col is None:
+        if step_col in df.columns:
+            pivot_col = step_col
+        elif time_col in df.columns:
+            pivot_col = time_col
+        else:
+            raise KeyError(
+                f"Neither '{step_col}' nor '{time_col}' found; "
+                "cannot auto-detect pivot column."
+            )
+    elif pivot_col not in df.columns:
+        raise KeyError(f"pivot_col='{pivot_col}' not in DataFrame")
+
+    # 2) Determine value columns
+    if value_cols is None:
+        excluded = {index_col, step_col, time_col, *(spatial_cols or ())}
+        value_cols = [
+            c for c in df.select_dtypes(include="number").columns
+            if c not in excluded
+        ]
+    elif isinstance(value_cols, str):
+        value_cols = [value_cols]
+
+    # 3) Pivot
+    vlog(f"Pivoting on '{pivot_col}' for values {value_cols}",
+         level=3, verbose=verbose)
+    wide = df.pivot_table(
+        index=index_col,
+        columns=pivot_col,
+        values=value_cols,
+        aggfunc=aggfunc,
+        fill_value=fill_value
+    )
+
+    # 4) Flatten column MultiIndex → single level
+    new_cols = []
+    for val_name, pivot_val in wide.columns:
+        if pivot_col == time_col:
+            pv_str = time_formatter(pivot_val)
+        else:
+            pv_str = str(pivot_val)
+        new_cols.append(f"{val_name}{sep}{pv_str}")
+    wide.columns = new_cols
+
+    # 5) Re-attach spatial columns
+    if spatial_cols:
+        vlog(f"Joining back spatial cols {spatial_cols}",
+             level=3, verbose=verbose)
+        sp = (
+            df[[index_col, *spatial_cols]]
+            .drop_duplicates(index_col)
+            .set_index(index_col)
+        )
+        wide = wide.join(sp, how="left")
+
+    # 6) Reset index so index_col is a column again
+    result = wide.reset_index()
+
+    # 7) Optionally save to CSV
+    if savefile:
+        os.makedirs(os.path.dirname(savefile) or ".", exist_ok=True)
+        result.to_csv(savefile, index=False)
+        vlog(f"Pivoted forecasts saved to: {savefile}", 
+             level=1, verbose=verbose 
+             )
+
+    return result
+
+@check_empty(["df"])
+@isdf
+def add_forecast_times(
+    df: pd.DataFrame,
+    *,
+    forecast_times: Optional[
+        Sequence[Union[int, str, date, datetime, pd.Timestamp]]
+    ] = None,
+    start: Union[int, str, date, datetime, pd.Timestamp, None] = None,
+    freq: str = "YS",
+    step_col: str = "forecast_step",
+    time_col: str = "coord_t",
+    error: Literal["raise", "warn", "ignore"] = "raise",
+    inplace: bool = False,
+    savefile: Optional[str] =None, 
+    verbose: int = 0,
+) -> pd.DataFrame:
+    """
+    Map each 1‑based forecast_step into an explicit calendar time.
+
+    You may either:
+      1. Pass `forecast_times` of length H (one per step), **or**
+      2. Pass a single `start` plus a pandas‐style `freq` to generate H dates.
+
+    If any entry in `forecast_times` is an integer of exactly 4 digits,
+    it will be interpreted as January 1 of that year.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Long‐format forecast table. Must contain an integer
+        column `step_col` with values 1..H.
+    forecast_times : sequence, optional
+        Explicit sequence of length H specifying the target times.
+        Each entry may be:
+        - int (interpreted as January 1 of that year)
+        - str/`pd.Timestamp`/`datetime.date`
+    start : int or str or date or Timestamp, optional
+        Only used if `forecast_times` is None. The first time in the
+        sequence; subsequent times will be generated via `pd.date_range`.
+        If int, treated as a year at Jan 1.
+    freq : str, default "YS"
+        Pandas offset alias for frequency (e.g. "YS"=year start,
+        "MS"=month start, "D"=day, etc.). Only used when `start` is set.
+    step_col : str, default "forecast_step"
+        Name of the 1‑based step index in `df`.
+    time_col : str, default "coord_t"
+        Name of the new column to create with mapped times.
+    error : {'raise','warn','ignore'}, default 'raise'
+        Policy if `df[step_col].max()` > number of provided times:
+        - 'raise': throw ValueError
+        - 'warn': issue warning, then still map what you can (truncate)
+        - 'ignore': silently truncate to available times
+    inplace : bool, default False
+        If True, modify `df` in place; otherwise return a new DataFrame.
+        
+    savefile : str, optional
+        If provided, path to CSV where the resulting DataFrame
+        will be saved.
+        
+    verbose : int, default 0
+        Passed to `vlog` for debug logging.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with an added column `time_col` of dtype datetime64.
+
+    Raises
+    ------
+    ValueError
+        If neither `forecast_times` nor `start` is provided,
+        or if `error='raise'` and there aren’t enough times.
+
+    Examples
+    --------
+    >>> from fusionlab.utils.forecast_utils import add_forecast_times
+    >>> df = pd.DataFrame({
+    ...     "sample_idx": [0]*3 + [1]*3,
+    ...     "forecast_step": [1,2,3]*2
+    ... })
+    >>> add_forecast_times(df,
+    ...     forecast_times=[2022,2023,2024])
+       sample_idx  forecast_step     coord_t
+    0           0              1  2022-01-01
+    1           0              2  2023-01-01
+    2           0              3  2024-01-01
+    3           1              1  2022-01-01
+    4           1              2  2023-01-01
+    5           1              3  2024-01-01
+
+    >>> # Or generate from a start + yearly freq:
+    >>> add_forecast_times(df, start="2022-06-15", freq="YS")
+    """
+    if not inplace:
+        df = df.copy()
+
+    if step_col not in df.columns:
+        raise KeyError(f"'{step_col}' not found in DataFrame")
+
+    # 1. Build raw list of time candidates
+    if forecast_times is not None:
+        raw_times = list(forecast_times)
+    elif start is not None:
+        # interpret 4-digit int or parse otherwise
+        if isinstance(start, int) and 1000 <= start <= 9999:
+            start = pd.Timestamp(year=start, month=1, day=1)
+        raw_times = pd.date_range(
+            start=start, periods=int(df[step_col].max()), freq=freq
+        ).tolist()
+    else:
+        raise ValueError("Must provide either `forecast_times` or `start`")
+
+    # 2. Normalize each entry to pd.Timestamp
+    times: list[pd.Timestamp] = []
+    for t in raw_times:
+        if isinstance(t, int) and 1000 <= t <= 9999:
+            # 4‑digit → Jan 1 of that year
+            times.append(pd.Timestamp(year=t, month=1, day=1))
+        else:
+            # let pandas parse strings/dates/timestamps
+            times.append(pd.to_datetime(t))
+
+    H = len(times)
+    max_step = int(df[step_col].max())
+    if max_step > H:
+        msg = (
+            f"Found {step_col} up to {max_step}, "
+            f"but only {H} forecast times provided"
+        )
+        if error == "raise":
+            raise ValueError(msg)
+        elif error == "warn":
+            warnings.warn(msg, UserWarning)
+        # truncate
+        H = min(H, max_step)
+
+    vlog(f"Mapping steps 1..{H} -> times {times[:H]}", level=3, 
+         verbose=verbose)
+    arr = np.array(times[:H], dtype="datetime64[ns]")
+    # clip to [1,H], subtract 1 for zero-based
+    idx = df[step_col].to_numpy().clip(1, H).astype(int) - 1
+    df[time_col] = arr[idx]
+
+    # 3. Optionally save to CSV
+    if savefile:
+        os.makedirs(os.path.dirname(savefile) or ".", exist_ok=True)
+        df.to_csv(savefile, index=False)
+        vlog(f"Forecast times DataFrame saved to: {savefile}", 
+             level=1, verbose=verbose )
+
+    return df
 
 @check_empty(['df']) 
 def _normalize_for_pinn(

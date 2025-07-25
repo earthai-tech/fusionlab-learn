@@ -4,7 +4,7 @@ import numpy as np
 
 tf = pytest.importorskip("tensorflow", reason="TF required")
 
-from fusionlab.nn.hybrid.xtft import XTFT  # adjust import path
+from fusionlab.nn.hybrid._xtft import XTFT  # adjust import path
 from fusionlab.nn.hybrid._base_extreme import KERAS_BACKEND
 
 
@@ -109,7 +109,7 @@ def test_xtft_from_config_anomaly_scores():
         anomaly_config={"anomaly_scores": scores},
     )
     _ = model([x_static, x_dyn, x_fut], training=False)
-    print(model.anomaly_scores)
+
     assert model.anomaly_scores is not None
 
     # combined_total_loss should be selected

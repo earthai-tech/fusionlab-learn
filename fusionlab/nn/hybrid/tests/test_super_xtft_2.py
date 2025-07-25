@@ -89,7 +89,7 @@ def test_feature_processing(super_xtft_model, feature_processing, expected_outpu
     
     # Apply the configuration
     super_xtft_model._build_components()
-    
+
     # Check that the architecture configuration matches the expected feature processing
     assert super_xtft_model.feature_processing == expected_output
 

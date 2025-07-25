@@ -7,7 +7,8 @@ from .. import KERAS_BACKEND
 
 if KERAS_BACKEND:
     from ._halnet import HALNet
-    from ._xtft import XTFT, SuperXTFT  # noqa: F401
+    from ._xtft import XTFT
+    from ._super_xtft import SuperXTFT  # noqa: F401
     from .utils import plot_history_in
     
 else:
@@ -22,6 +23,5 @@ __all__=[
     "XTFT",
     "SuperXTFT",
     "HALNet",
-    "BaseAttentive", 
     "plot_history_in"
 ]

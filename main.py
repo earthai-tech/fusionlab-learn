@@ -76,7 +76,7 @@ try:
     from fusionlab.datasets import fetch_nansha_data
     # from fusionlab.datasets._property import get_data # Not used if path is explicit
     from fusionlab.nn.losses import combined_quantile_loss
-    from fusionlab.nn.transformers import XTFT, SuperXTFT 
+    from fusionlab.nn.hybrid import XTFT, SuperXTFT 
     from fusionlab.nn.utils import (
         reshape_xtft_data,
         format_predictions_to_dataframe,
@@ -84,7 +84,9 @@ try:
     from fusionlab.plot.forecast import plot_forecasts
     from fusionlab.utils.data_utils import nan_ops
     from fusionlab.utils.io_utils import fetch_joblib_data, save_job # noqa ( can use for robust saver)
-    from fusionlab.utils.generic_utils import save_all_figures
+    from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column
+    from fusionlab.utils.forecast_utils import add_forecast_times 
+    
 except ImportError as e:
     print(f"Critical Error: Failed to import fusionlab modules: {e}. "
           "Please ensure 'fusionlab-learn' (version >= 0.2.1) is "
@@ -93,7 +95,7 @@ except ImportError as e:
 
 # --- Configuration Parameters ---
 CITY_NAME = 'nansha'
-USE_SUPER_XTFT = False # Set to False for standard XTFT for the paper
+USE_SUPER_XTFT = True # Set to False for standard XTFT for the paper
 MODEL_SUFFIX = '_super' if USE_SUPER_XTFT else ''
 TRANSFORMER_CLASS = SuperXTFT if USE_SUPER_XTFT else XTFT
 
@@ -142,6 +144,7 @@ print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} XTFT FORECASTING (IEEE PAMI)\n{'-'*_TW}
 print(f"\n{'='*20} Step 1: Load Nansha Dataset {'='*20}")
 nansha_df_raw = None
 try:
+    raise
     # to fallback to 500_000_samples for testing  
     # Attempt 1: Fetch from fusionlab.datasets (default 2000 samples)
     print("Attempt 1: Fetching Nansha data via fusionlab.datasets...")
@@ -154,11 +157,11 @@ except Exception as e_fetch:
     # Fallback paths for Code Ocean or local setup
     # Assumes data folder is at the root of the capsule or project
     paths_to_try = [
-        # os.path.join("data", "nansha_500_000.csv"),
+        os.path.join("data", "nansha_500k.csv"),
         # os.path.join("..", "data", "nansha_500_000.csv"), # If script is in a subdir
         # os.path.join("data", "nansha_2000.csv"),
         # os.path.join("..", "data", "nansha_2000.csv"),
-        os.path.join( r'J:\nature_data\final', "nansha_500_000.csv") # test this sample of data 
+        # os.path.join( r'J:\nature_data\final', "nansha_500_000.csv") # test this sample of data 
     ]
     for local_path in paths_to_try:
         print(f"Attempt 2: Trying local path '{local_path}'...")
@@ -198,9 +201,20 @@ nansha_df_selected = nansha_df_raw[[
     ]].copy()
 
 DT_COL_NAME = 'Date'
-nansha_df_selected[DT_COL_NAME] = pd.to_datetime(
-    nansha_df_selected['year'], format='%Y')
+TIME_COL ='year'
+
 print(f"NaNs before cleaning: {nansha_df_selected.isna().sum().sum()}")
+
+try: 
+    nansha_df_selected[DT_COL_NAME] = pd.to_datetime(
+        nansha_df_selected[TIME_COL], format='%Y')
+except: 
+    nansha_df_selected = normalize_time_column(
+        nansha_df_selected, time_col= TIME_COL, 
+        datetime_col= DT_COL_NAME, 
+        year_col= TIME_COL,
+        drop_orig= True 
+    )
 nansha_df_cleaned = nan_ops(nansha_df_selected, ops='sanitize', action='fill', verbose=0)
 print(f"NaNs after cleaning: {nansha_df_cleaned.isna().sum().sum()}")
 if SAVE_INTERMEDIATE_ARTEFACTS:
@@ -361,7 +375,7 @@ val_inputs = [X_s_val, X_d_val, X_f_val]
 print(f"Train inputs: S={X_s_train.shape}, D={X_d_train.shape},"
       f" F={X_f_train.shape}, Y={y_train.shape}")
 print(f"Val inputs  : S={X_s_val.shape}, D={X_d_val.shape},"
-      " F={X_f_val.shape}, Y={y_val.shape}")
+      f" F={X_f_val.shape}, Y={y_val.shape}")
 
 # ==================================================================
 # ** Step 7: XTFT Model Definition, Compilation & Training **
@@ -566,7 +580,15 @@ if forecast_df_final is not None and not forecast_df_final.empty:
         )
     forecast_csv_path = os.path.join(
         RUN_OUTPUT_PATH, forecast_csv_filename)
-    forecast_df_final.to_csv(forecast_csv_path, index=False)
+    # forecast_df_final.to_csv(forecast_csv_path, index=False)
+    
+    forecast_df_final = add_forecast_times (
+        forecast_df_final.copy(), 
+        forecast_times= FORECAST_YEARS, 
+        time_col =TIME_COL , 
+        savefile = forecast_csv_path, 
+        verbose =1 
+    )
     print(f"Forecast results for {dataset_name_for_forecast}"
           f" saved to: {forecast_csv_path}")
     print("\nSample of final forecast DataFrame:")

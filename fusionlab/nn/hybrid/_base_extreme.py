@@ -69,7 +69,6 @@ tf_GradientTape = KERAS_DEPS.GradientTape
 tf_autograph = KERAS_DEPS.autograph
 
 
-# ---------------------------------------------------------------------
 DEP_MSG = dependency_message("nn.transformers")
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
@@ -110,7 +109,6 @@ _PARAM_SCHEMA: Dict[str, list] = {
     "anomaly_loss_weight": [Real],
     "architecture_config": [dict, None], 
 }
-
 
 @register_keras_serializable('fusionlab.nn.hybrid', name='BaseExtreme')
 @doc(
@@ -153,27 +151,12 @@ class BaseExtreme(Model, NNLearner):
         super().__init__(**kw)
         
         # Set up architecture configuration based on user input
-        self.architecture_config = configure_architecture(
-            objective=architecture_config.get(
-                'encoder_type', None) if architecture_config else None,
-            use_vsn=architecture_config.get(
-                'use_vsn', True) if architecture_config else True,
-            attention_levels=architecture_config.get(
-                'decoder_attention_stack', None) if architecture_config else None,
-            architecture_config=architecture_config
-        )
+        # stash the raw dict
+        self.architecture_config = architecture_config or {}
+        self.fusion_mode         = fusion_mode
+        # pull everything into instance attributes
+        self._sync_architecture()
 
-        # Apply the architecture config to the class attributes
-        self.encoder_type = self.architecture_config['encoder_type']
-        self.decoder_attention_stack = self.architecture_config['decoder_attention_stack']
-        self.feature_processing = self.architecture_config['feature_processing']
-
-        logger.debug("Using architecture config: %s", self.architecture_config)
-        
-        self.fusion_mode = resolve_fusion_mode(fusion_mode)
-        
-        logger.debug("Fusion mode: %s", self.fusion_mode)
-        
         logger.debug("Initializing %s with params:")
         logger.debug(
             "static=%s dynamic=%s future=%s embed=%s horizon=%s",
@@ -321,6 +304,35 @@ class BaseExtreme(Model, NNLearner):
         """Subclasses set self.anomaly_scores here if needed."""
         return None
 
+    def _sync_architecture(self):
+        """
+        Read self.architecture_config and install:
+          - feature selectors (`variable_selection_*` or `dense_*`)
+          - which attention blocks (cross, hier, memory)
+          - which GRNs to wire up, etc.
+        """
+        # re‑resolve through your existing util
+        self.architecture_config = configure_architecture(
+            objective        = self.architecture_config.get('encoder_type'),
+            use_vsn          = self.architecture_config.get('use_vsn', True),
+            attention_levels = self.architecture_config.get(
+                                   'decoder_attention_stack', None),
+            architecture_config=self.architecture_config
+        )
+        self.encoder_type            = self.architecture_config['encoder_type']
+        self.decoder_attention_stack = (
+            self.architecture_config['decoder_attention_stack']
+        )
+        self.feature_processing      = (
+            self.architecture_config['feature_processing']
+        )
+        
+        logger.debug("Using architecture config: %s", self.architecture_config)
+        
+        self.fusion_mode = resolve_fusion_mode(self.fusion_mode)
+        logger.debug("Fusion mode: %s", self.fusion_mode)
+ 
+    
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training: bool = False, **kwargs):
         logger.debug("call() on %s, training=%s",
@@ -494,7 +506,44 @@ class BaseExtreme(Model, NNLearner):
                 dtype=np.float32,
             )
         logger.debug("from_config building %s", cls.__name__)
-        return cls(**config)
+        # Separate architecture_config from the main config
+        arch_config = config.pop("architecture_config", None)
+        # Re-add it as a keyword argument for __init__
+        return cls(**config,  architecture_config=arch_config)
+    
+
+    def reconfigure(
+        self,
+        architecture_config: Dict[str, Any]
+    ) -> "BaseExtreme":
+        """Creates a new model instance with a modified architecture.
+    
+        This method takes the configuration of the current model, updates
+        the architectural components with the provided dictionary, and
+        returns a new, un-trained model instance with the specified
+        changes.
+    
+        Parameters 
+        ------------
+        architecture_config (Dict[str, Any]):
+            A dictionary with new architectural settings, such as
+            {'encoder_type': 'transformer'}.
+    
+        Returns
+        ----------
+        BaseAttentive:
+            A new model instance with the updated architecture.
+        """
+        # 1. Get the full configuration of the existing model
+        config = self.get_config()
+        
+        # 2. Update the architecture configuration
+        # get_config will have stored it as a nested dictionary
+        config['architecture_config'].update(architecture_config)
+        
+        # 3. Create a new model from the modified config
+        return self.__class__.from_config(config)
+    
 
 BaseExtreme.__doc__ = r"""
 A reusable backbone for Extreme Temporal Fusion Transformer
