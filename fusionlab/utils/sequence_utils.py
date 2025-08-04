@@ -252,6 +252,7 @@ def _sequence_counts_loop(
     sizes = pd.Series(sizes_dict)
     return total_sequences, counts, sizes
 
+@isdf
 def get_sequence_counts(
     df: pd.DataFrame,
     *,

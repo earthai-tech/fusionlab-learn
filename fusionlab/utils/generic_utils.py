@@ -17,6 +17,7 @@ import logging
 from numbers import Real 
 from pathlib import Path
 from itertools import chain
+from collections.abc import Mapping
 import matplotlib.pyplot as plt
 from datetime import datetime
 from typing import ( 
@@ -38,7 +39,8 @@ __all__ =[
     'exclude_duplicate_kwargs', 'reorder_columns',
     'find_id_column', 'check_group_column_validity', 
     'save_all_figures', 'rename_dict_keys', 
-    'normalize_time_column', 'select_mode'
+    'normalize_time_column', 'select_mode', 
+    'normalize_model_inputs'
  ]
 
 class ExistenceChecker:
@@ -203,6 +205,37 @@ class ExistenceChecker:
             raise OSError(f"Unable to create file {file_path}: {exc}") from exc
 
         return file_path
+
+def normalize_model_inputs(
+    *data: Union[pd.DataFrame, Mapping[str, pd.DataFrame], list, tuple]
+) -> Dict[str, pd.DataFrame]:
+    # If single argument
+    if len(data) == 1:
+        single = data[0]
+        # Case: dict-like mapping
+        if isinstance(single, Mapping):
+            return single  # assume Mapping[str, DataFrame]
+        # Case: list/tuple of DataFrames
+        if isinstance(single, (list, tuple)):
+            dfs = single
+            return {f"model_{i+1}": df for i, df in enumerate(dfs)}
+        # Case: single DataFrame
+        if isinstance(single, pd.DataFrame):
+            return {"model": single}
+        raise TypeError(
+            "Expected a DataFrame, a dict[str,DataFrame],"
+            " or a list/tuple of DataFrames"
+        )
+
+    # If multiple arguments, expect each to be a DataFrame
+    if all(isinstance(d, pd.DataFrame) for d in data):
+        return {f"model_{i+1}": df for i, df in enumerate(data)}
+
+    raise TypeError(
+        "When passing multiple arguments,"
+        " each must be a pandas DataFrame"
+    )
+
 
 def check_group_column_validity(
     df: pd.DataFrame,

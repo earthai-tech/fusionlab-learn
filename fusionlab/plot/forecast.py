@@ -13,7 +13,14 @@ import os
 import re
 import logging 
 import warnings
-from typing import Any, List, Optional, Tuple, Union, Dict, Callable 
+from typing import ( 
+    Any, List, Optional, 
+    Tuple, Union, Dict, 
+    Callable, 
+    Literal,  
+    Mapping,
+    Sequence,
+)
 
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -33,12 +40,16 @@ from ..utils.forecast_utils import (
     get_value_prefixes, 
     get_value_prefixes_in, 
     detect_forecast_type, 
-    get_step_names 
+    get_step_names, 
+    calibrate_quantile_forecasts, 
+    calibrate_probability_forecast
+    
 )
 from ..utils.generic_utils import ( 
     _coerce_dt_kw, 
     get_actual_column_name,
-    vlog, save_figure 
+    vlog, save_figure, 
+    normalize_model_inputs
 )
 from ..utils.validator import ( 
     assert_xy_in, is_frame, 
@@ -50,7 +61,587 @@ __all__= [
     "plot_forecast_by_step", 
     "plot_forecasts", 
     "visualize_forecasts", 
+    "plot_reliability_diagram", 
+    "plot_calibration_comparison"
+    
  ]
+
+@check_non_emptiness
+def plot_calibration_comparison(
+    *data: Union[pd.DataFrame, Mapping[str, pd.DataFrame]],
+    quantiles: Optional[Sequence[float]] = None,
+    q_prefix: Optional[str] = None,
+    actual_col: Optional[str] = None,
+    prob_col: Optional[str] = None,
+    method: Literal["isotonic","logistic"] = "isotonic",
+    out_prefix: str = "calib",
+    grid_mode: Literal["unit","range"] = "unit",
+    grid_size: int = 1001,
+    group_by: Optional[str] = None,
+    bins: int = 10,
+    bin_strategy: Literal["uniform","quantile"] = "uniform",
+    show_grid: bool = True,
+    grid_props: Optional[Dict[str, Any]] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    savefig: Optional[str] = None,
+    save_fmts: Union[str, List[str]] = ".png",
+    verbose: int = 1,
+    _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+) -> plt.Axes:
+    """
+    Plot raw vs calibrated reliability curves for one or more models.
+
+    This function overlays the original ("raw") calibration curve
+    and the post-processed ("calibrated") curve on the same axes.
+    It supports both quantile-based forecasts and direct 
+    probability forecasts.
+
+    Parameters
+    ----------
+    *data : DataFrame or dict or list of DataFrames
+        One or more forecast tables.  Each must contain either:
+        - Quantile columns named "{q_prefix}_qXX" plus
+          actuals in `actual_col`, or
+        - A probability column `prob_col` plus binary 
+          outcomes in `actual_col`.
+        You may supply:
+        - A single DataFrame
+        - A dict mapping labels to DataFrames
+        - A list/tuple of DataFrames
+        - Multiple DataFrame args
+    quantiles : sequence of float, optional
+        Nominal quantile levels (e.g. [0.1,0.5,0.9]).  If set,
+        `q_prefix` and `actual_col` must also be provided.
+    q_prefix : str, optional
+        Prefix used to identify quantile columns.  E.g. if
+        q_prefix="subsidence", looks for "subsidence_q10", etc.
+    actual_col : str, optional
+        Name of the column containing true values.  For
+        quantiles this is continuous; for probabilities it
+        should be 0/1 flags.
+    prob_col : str, optional
+        Name of a direct probability forecast column (0–1).
+        If set, `quantiles` is ignored and forecasts are
+        binned into `bins` intervals.
+    grid_mode : {'unit','range'}, default 'unit'
+        Which domain to build the inversion grid over:
+          - 'unit' -> np.linspace(0,1,grid_size)
+          - 'range' -> np.linspace(min(raw), max(raw), grid_size)
+    grid_size : int, default 1001
+        Number of points in the inversion grid.
+    group_by : str, optional
+        If provided, calibrate separately per `df[group_by]`
+        (e.g. 'forecast_step').
+    bins : int, default 10
+        Number of bins when using `prob_col`.
+    bin_strategy : {'uniform','quantile'}, default 'uniform'
+        How to form probability bins: equal-width or 
+        equal-population.
+    show_grid : bool, default True
+        Whether to display grid lines.
+    grid_props : dict, optional
+        Keyword args passed to `Axes.grid()`.  Defaults to
+        {'linestyle':':','alpha':0.7}.
+    figsize : tuple, optional
+        Matplotlib figure size in inches.
+    savefig : str, optional
+        File path (without extension) to save the figure.
+    save_fmts : str or list of str, default '.png'
+        File extension(s) used by `save_figure`.
+    verbose : int, default 1
+        Verbosity level for internal logging via `vlog`.
+    _logger : Logger or callable, optional
+        Logger to receive messages.  If None, module logger
+        is used.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The Axes containing the raw and calibrated curves.
+
+    Notes
+    -----
+    - Raw calibration shows nominal vs empirical coverage
+      directly from model outputs.
+    - Calibrated curves apply isotonic or logistic scaling
+      to align empirical frequencies to nominal levels.
+    - For quantiles, each q-level is treated as a binary
+      classifier; we learn P(actual <= q_pred).
+    - For probabilities, forecasts are binned before
+      comparing mean forecast to observed frequency.
+
+    See Also
+    --------
+    calibrate_quantile_forecasts : Post-process quantile
+        forecasts via monotonic CDF inversion.
+    calibrate_probability_forecast : Calibrate 0–1 forecasts
+        with isotonic or logistic scaling.
+    plot_reliability_diagram : Single-curve reliability plot.
+
+    References
+    ----------
+    Bröcker, J. & Smith, L. A., 2007. Scoring Probabilistic
+      Forecasts: The Importance of Being Proper. 
+      Weather and Forecasting, 22(2), pp.382–388.
+    Wilks, D. S., 2011. Statistical Methods in the 
+      Atmospheric Sciences (3rd ed.). Academic Press.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.plot.forecast import plot_calibration_comparison
+    
+    # 1) Single‐model quantile calibration (default isotonic, unit grid)
+    >>> df = pd.DataFrame({
+    ...     'subsidence_q10': [1, 2, 3, 4],
+    ...     'subsidence_q50': [2, 3, 4, 5],
+    ...     'subsidence_q90': [3, 4, 5, 6],
+    ...     'subsidence_actual': [1.5, 3.5, 4.2, 5.8]
+    ... })
+    >>> plot_calibration_comparison(
+    ...     df,
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual'
+    ... )
+    
+    # 2) Single‐model probability calibration (20 quantile bins)
+    >>> pdf = pd.DataFrame({
+    ...     'p_event': [0.1, 0.4, 0.8, 0.9, 0.3],
+    ...     'event_flag': [0, 1, 1, 1, 0]
+    ... })
+    >>> plot_calibration_comparison(
+    ...     pdf,
+    ...     prob_col='p_event',
+    ...     actual_col='event_flag',
+    ...     bins=20,
+    ...     bin_strategy='quantile'
+    ... )
+    
+    # 3) Compare two models via a dict of DataFrames
+    >>> df2 = df.copy()  # pretend a second model
+    >>> plot_calibration_comparison(
+    ...     {'XTFT': df, 'PINN': df2},
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual'
+    ... )
+    
+    # 4) Multiple unnamed DataFrames as separate models
+    >>> plot_calibration_comparison(
+    ...     df, df2,
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual'
+    ... )
+    
+    # 5) Per‐horizon (step) calibration: different curves for step 1,2,3
+    >>> # assume df_long has 'forecast_step' 1,2,3 for each sample_idx
+    >>> df_long = pd.DataFrame({
+    ...     'sample_idx': [0,0,0,1,1,1],
+    ...     'forecast_step': [1,2,3,1,2,3],
+    ...     'subsidence_q10': [ .1, .2, .3, .1, .2, .3],
+    ...     'subsidence_q50': [ .5, .6, .7, .5, .6, .7],
+    ...     'subsidence_q90': [ .9, 1.0, 1.1, .9, 1.0, 1.1],
+    ...     'subsidence_actual': [ .2, .5, .8, .4, .7, 1.0]
+    ... })
+    >>> plot_calibration_comparison(
+    ...     df_long,
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual',
+    ...     group_by='forecast_step'
+    ... )
+    
+    # 6) Logistic Platt‐scaling & range grid
+    >>> plot_calibration_comparison(
+    ...     df,
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual',
+    ...     method='logistic',
+    ...     grid_mode='range',
+    ...     grid_size=500
+    ... )
+    
+    # 7) List of DataFrames (treated like multiple models)
+    >>> plot_calibration_comparison(
+    ...     [pdf, pdf.copy()],
+    ...     prob_col='p_event',
+    ...     actual_col='event_flag'
+    ... )
+
+    """
+    models = normalize_model_inputs(*data)
+
+    if grid_props is None:
+        grid_props = {"linestyle": ":", "alpha": 0.7}
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot([0, 1], [0, 1], "--", color="gray", label="Perfect")
+
+    for name, df in models.items():
+        vlog(f"Processing model '{name}'", level=verbose,
+             verbose=verbose, _logger=_logger)
+
+        # Quantile-based calibration
+        if quantiles and q_prefix and actual_col:
+            df_calib = calibrate_quantile_forecasts(
+                df, quantiles, q_prefix, actual_col,
+                method=method,
+                out_prefix=out_prefix,
+                grid_mode=grid_mode,
+                grid_size=grid_size,
+                group_by=group_by
+            )
+            nom = list(quantiles)
+            emp_raw = [
+                np.mean(df[actual_col] <= df[f"{q_prefix}_q{int(q*100)}"])
+                for q in quantiles
+            ]
+            emp_cal = [
+                np.mean(df[actual_col] <= df_calib[
+                    f"{out_prefix}_{q_prefix}_q{int(q*100)}"])
+                for q in quantiles
+            ]
+            ax.plot(nom, emp_raw, marker="o", label=f"{name} raw")
+            ax.plot(nom, emp_cal, marker="x", label=f"{name} calib")
+
+        # Probability-based calibration
+        elif prob_col and actual_col:
+            df_calib = calibrate_probability_forecast(
+                df, prob_col, actual_col, method=method
+            )
+            y_pred = df[prob_col].to_numpy()
+            y_cal = df_calib[f"{prob_col}_calib"].to_numpy()
+            y_true = df[actual_col].to_numpy()
+
+            if bin_strategy == "uniform":
+                edges = np.linspace(0, 1, bins + 1)
+            else:
+                edges = np.unique(np.quantile(
+                    y_pred, np.linspace(0, 1, bins + 1)
+                ))
+            centers = (edges[:-1] + edges[1:]) / 2
+
+            def _bin_freq(vals):
+                idx = np.digitize(vals, edges, right=True) - 1
+                return [
+                    np.mean(y_true[idx == i]) if np.any(idx == i) else np.nan
+                    for i in range(len(edges) - 1)
+                ]
+
+            emp_raw = _bin_freq(y_pred)
+            emp_cal = _bin_freq(y_cal)
+
+            ax.plot(centers, emp_raw, marker="o", label=f"{name} raw")
+            ax.plot(centers, emp_cal, marker="x", label=f"{name} calib")
+
+        else:
+            raise ValueError(
+                "Must provide either (quantiles+q_prefix+actual_col) "
+                "or (prob_col+actual_col)"
+            )
+
+    if show_grid:
+        ax.grid(True, **grid_props)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Nominal probability")
+    ax.set_ylabel("Empirical frequency")
+    ax.set_title("Raw vs Calibrated Reliability")
+    ax.legend()
+
+    if savefig:
+        save_figure(
+            fig,
+            savefile=savefig,
+            save_fmts=save_fmts,
+            dpi=300,
+            bbox_inches="tight",
+            verbose=verbose,
+            _logger=_logger,
+        )
+        plt.close(fig)
+    else:
+        plt.show()
+
+    return ax
+
+@check_non_emptiness
+def plot_reliability_diagram(
+    *data: Union[pd.DataFrame, Mapping[str, pd.DataFrame]],
+    quantiles: Optional[Sequence[float]] = None,
+    q_prefix: Optional[str] = None,
+    actual_col: Optional[str] = None,
+    prob_col: Optional[str] = None,
+    bins: int = 10,
+    bin_strategy: Literal["uniform","quantile"] = "uniform",
+    index_col: str = "sample_idx",
+    step_col: str = "forecast_step",
+    time_col: str = "coord_t",
+    xlabel: str = "Nominal probability",
+    ylabel: str = "Empirical frequency",
+    title: str = "Reliability Diagram",
+    dt_col: Optional[str] = None,
+    show_grid: bool = True,
+    grid_props: Optional[Dict[str, Any]] = None,
+    figsize: Optional[Tuple[float, float]] = None,
+    savefig: Optional[str] = None,
+    save_fmts: Union[str, List[str]] = ".png",
+    verbose: int = 1,
+    _logger: Optional[Union[logging.Logger,
+                           Callable[[str], None]]] = None
+) -> plt.Axes:
+    """
+    Plot reliability (calibration) curves for quantile or probability
+    forecasts across one or more models.
+
+    Parameters
+    ----------
+    *data : DataFrame or dict or list of DataFrames
+        One or more forecast tables.  Each table must contain either:
+        - quantile columns named ``{q_prefix}_qXX`` plus
+          ``actual_col`` for true values, or
+        - a probability column ``prob_col`` (0–1) plus
+          ``actual_col`` for binary events.
+        You may pass:
+        - A single DataFrame
+        - A dict mapping model names to DataFrames
+        - A list/tuple of DataFrames
+        - Multiple DataFrame arguments
+    quantiles : list of float, optional
+        Nominal quantile levels (e.g. [0.1,0.5,0.9]).  If provided,
+        ``q_prefix`` and ``actual_col`` must be set.  The curve
+        plots q vs empirical coverage.
+    q_prefix : str, optional
+        Prefix of quantile columns (e.g. 'subsidence' to find
+        'subsidence_q10', 'subsidence_q50', etc.).
+    actual_col : str, optional
+        Column name of true values (continuous for quantiles or
+        binary for probabilities).
+    prob_col : str, optional
+        Name of a direct probability forecast (0–1).  If set,
+        ``quantiles`` is ignored and reliability is computed by
+        binning forecasts into ``bins`` groups.
+    bins : int, default 10
+        Number of bins when ``prob_col`` is used.
+    bin_strategy : {'uniform','quantile'}, default 'uniform'
+        How to choose probability bins:
+        - 'uniform': equal-width in [0,1]
+        - 'quantile': equal-population bins
+    index_col : str, default 'sample_idx'
+        Name of the sample identifier column (unused internally).
+    step_col : str, default 'forecast_step'
+        Name of the integer step column (unused unless dt_col
+        is auto-inferred).
+    time_col : str, default 'coord_t'
+        Name of the datetime column (unused unless dt_col
+        is auto-inferred).
+    xlabel : str, default 'Nominal probability'
+        X-axis label.
+    ylabel : str, default 'Empirical frequency'
+        Y-axis label.
+    title : str, default 'Reliability Diagram'
+        Plot title.
+    dt_col : str, optional
+        Alternate name for the datetime column.  Handled via
+        ``_coerce_dt_kw`` to unify with ``time_col``.
+    show_grid : bool, default True
+        Whether to display the grid.
+    grid_props : dict, optional
+        Passed to ``Axes.grid()``.  Defaults to
+        ``{'linestyle':':','alpha':0.7}``.
+    figsize : (float,float), optional
+        Figure size in inches.
+    savefig : str, optional
+        Path (no extension) to save the figure.  Uses
+        ``save_fmts`` to determine extensions.
+    save_fmts : str or list of str, default '.png'
+        File format(s) for saving (e.g. ['.png','.pdf']).
+    verbose : int, default 1
+        Verbosity level for internal logging via ``vlog``.
+    _logger : Logger or callable, optional
+        Where to send info/warnings.  Defaults to the module
+        logger if None.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The Axes object with the reliability curves.
+
+    Notes
+    -----
+    - When using ``quantiles``, the model is evaluated at each
+      q-level by computing the fraction of true values ≤ predicted
+      q-quantile.
+    - When using ``prob_col``, forecasts are binned and the average
+      forecast vs empirical frequency is plotted.
+    - Multiple models can be compared by passing a dict or list of
+      DataFrames; each appears as a separate line.
+
+    See Also
+    --------
+    compute_quantile_coverage : Calculate empirical coverage for
+        quantile forecasts.
+    pivot_forecast_dataframe : Pivot long-format forecast tables to
+        wide format by step or date.
+    plot_probability_calibration : For continuous-valued models,
+        alternate calibration plot by grouping residuals.
+
+    References
+    ----------
+    Bröcker, J., & Smith, L. A. (2007). Scoring Probabilistic
+    Forecasts: The Importance of Being Proper. Weather and
+    Forecasting, 22(2), 382–388.
+    Wilks, D. S. (2011). Statistical Methods in the Atmospheric
+    Sciences (3rd ed.). Academic Press.
+
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> from fusionlab.plot.forecast import plot_reliability_diagram
+    >>> # 1) Single-model quantiles
+    >>> df = pd.DataFrame({
+    ...     'subsidence_q10': [1,2,3,4],
+    ...     'subsidence_q50': [2,3,4,5],
+    ...     'subsidence_q90': [3,4,5,6],
+    ...     'subsidence_actual': [1.5, 3.5, 4.2, 5.8]
+    ... })
+    >>> plot_reliability_diagram(
+    ...     df,
+    ...     quantiles=[0.1,0.5,0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual'
+    ... )
+    >>> # 2) Probability forecasts, 20 quantile bins
+    >>> pdf = pd.DataFrame({
+    ...     'p_event': [0.1,0.4,0.8,0.9,0.3],
+    ...     'event_flag': [0,1,1,1,0]
+    ... })
+    >>> plot_reliability_diagram(
+    ...     pdf,
+    ...     prob_col='p_event',
+    ...     actual_col='event_flag',
+    ...     bins=20, bin_strategy='quantile'
+    ... )
+    >>> # 3) Compare two models
+    >>> df1 = df.copy()
+    >>> df2 = df.copy()
+    >>> plot_reliability_diagram(
+    ...     {'XTFT': df1, 'PINN': df2},
+    ...     quantiles=[0.1,0.5,0.9],
+    ...     q_prefix='subsidence',
+    ...     actual_col='subsidence_actual',
+    ...     figsize=(8,5)
+    ... )
+
+    """
+    # canonicalise column name
+    kw = _coerce_dt_kw(
+        dt_col=dt_col, time_col=time_col, _time_default=time_col)
+    time_col = kw.get("dt_col", time_col)        # adopt canonical name
+    
+    # normalize input to a dict of {label: df}
+    models = normalize_model_inputs(*data)
+
+    # default grid properties
+    if grid_props is None:
+        grid_props = {"linestyle": ":", "alpha": 0.7}
+
+    # prepare figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # diagonal
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Perfect")
+
+    # iterate models
+    for name, df in models.items():
+        vlog(f"Processing model '{name}'", level=1, verbose=verbose)
+
+        if quantiles is not None:
+            # --- quantile calibration ---
+            if not q_prefix or not actual_col:
+                raise ValueError(
+                    "Must provide q_prefix and actual_col for quantiles")
+
+            nom = []
+            emp = []
+            for q in quantiles:
+                col = f"{q_prefix}_q{int(q*100)}"
+                if col not in df.columns:
+                    raise KeyError(
+                        f"Missing column '{col}' in model '{name}'")
+                y_pred = df[col].to_numpy()
+                y_true = df[actual_col].to_numpy()
+                nom.append(q)
+                emp.append(np.mean(y_true <= y_pred))
+
+            ax.plot(nom, emp, marker="o", label=name)
+
+        elif prob_col is not None:
+            # --- probability forecast calibration ---
+            if prob_col not in df.columns:
+                raise KeyError(f"Missing prob_col '{prob_col}'"
+                               f" in model '{name}'")
+            p = df[prob_col].to_numpy()
+            # if actual_col not provided, try to infer
+            acol = actual_col or get_actual_column_name(df)
+            y = df[acol].to_numpy()
+
+            # choose bins
+            if bin_strategy == "uniform":
+                bins_edges = np.linspace(0, 1, bins + 1)
+            else:  # 'quantile'
+                bins_edges = np.unique(
+                    np.quantile(p, np.linspace(0, 1, bins + 1)))
+
+            bin_idx = np.digitize(p, bins_edges, right=True) - 1
+            # compute mean p and empirical y per bin
+            bin_centers = (bins_edges[:-1] + bins_edges[1:]) / 2
+            p_bar = []
+            y_bar = []
+            for i in range(len(bins_edges) - 1):
+                mask = bin_idx == i
+                if not mask.any():
+                    p_bar.append(np.nan)
+                    y_bar.append(np.nan)
+                else:
+                    p_bar.append(p[mask].mean())
+                    y_bar.append(y[mask].mean())
+            ax.plot(bin_centers, y_bar, marker="s", label=name)
+
+        else:
+            raise ValueError(
+                "Either 'quantiles' or 'prob_col' must be provided")
+
+    # final touches
+    if show_grid:
+        ax.grid(True, **grid_props)
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend()
+
+    # save or show
+    if savefig:
+        save_figure(
+            fig,
+            savefile=savefig,
+            save_fmts=save_fmts,
+            dpi=300,
+            bbox_inches="tight",
+            verbose=verbose,
+            _logger=_logger, 
+        )
+        plt.close(fig)
+    else:
+        plt.show()
+
+    return ax
 
 def plot_forecast_by_step(
     df: pd.DataFrame,

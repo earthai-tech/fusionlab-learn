@@ -44,9 +44,6 @@ from ._config import (
     tf_autograph
 )
 
-
-
-
 __all__ = [
     "AdaptiveQuantileLoss",
     "AnomalyLoss",

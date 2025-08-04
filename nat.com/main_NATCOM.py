@@ -521,7 +521,7 @@ for name, arr in inputs_train_dict.items():
     print(f"  Train Input '{name}' shape: {arr.shape if arr is not None else 'None'}")
 for name, arr in targets_train_dict.items():
     print(f"  Train Target '{name}' shape: {arr.shape}")
-
+#
 # ==================================================================
 # ** Step 6: Create tf.data.Datasets for Training and Validation **
 # ==================================================================
@@ -569,7 +569,7 @@ for x_batch, y_batch in train_dataset.take(1):
     print("  Sample batch target keys:", list(y_batch.keys()))
     for k,v in y_batch.items(): print(f"    {k}: {v.shape}")
     break
-#%
+#
 # ==================================================================
 # ** Step 7: SubsModel Model Definition, Compilation & Training **
 # ==================================================================

@@ -45,7 +45,8 @@ from ..core.checks import (
 from ..core.diagnose_q import ( 
     check_forecast_mode, 
     validate_quantiles, 
-    validate_consistency_q
+    validate_consistency_q, 
+    resolve_quantiles 
 )
 from ..core.handlers import TypeEnforcer, columns_manager 
 from ..core.io import is_data_readable 
@@ -1053,6 +1054,16 @@ def format_predictions(
     # --- 8. Inverse Transform (if scaler provided) ---
     # Now apply inverse transform on the DataFrame columns
     if scaler is not None:
+        # Try to inverse transform all prediction and actual columns
+        # This assumes they were all scaled together, which might be wrong.
+        cols_to_inv = pred_cols_names + actual_cols_names
+        
+        # Also include spatial columns if they were passed
+        if spatial_cols:
+            for sc in spatial_cols:
+                if sc in final_df.columns:
+                    cols_to_inv.append(sc)
+                    
         if scaler_feature_names is None or target_idx_in_scaler is None:
             warnings.warn(
                 "Scaler provided, but `scaler_feature_names` or "
@@ -1111,6 +1122,17 @@ def format_predictions(
                     dummy[:, target_idx_in_scaler] = final_df[actual_col_name]
                     final_df[actual_col_name] = scaler.inverse_transform(
                         dummy)[:, target_idx_in_scaler]
+                    
+            # now spatials:
+            for sc in spatial_cols or []:
+                if sc in final_df:
+                    idx = scaler_feature_names.index(sc)
+                    dummy = np.zeros(dummy_array_shape)
+                    dummy[:, idx] = final_df[sc]
+                    final_df[sc] = scaler.inverse_transform(dummy)[:, idx]
+                    vlog(f"    Inverted spatial column {sc}", level=5,
+                         verbose=verbose, logger=_logger)
+                    
             vlog("    Inverse transformation applied.", level=5, 
                  verbose=verbose, logger=_logger)
 
@@ -3566,8 +3588,10 @@ def set_default_params(
     # Set default quantiles if 'auto'
     if quantiles == 'auto':
         quantiles = [0.1, 0.5, 0.9]
+
     elif quantiles is not None:
-        if not isinstance(quantiles, list):
+        quantiles = resolve_quantiles(quantiles)
+        if not isinstance(quantiles, (list, tuple)):
             raise ValueError(
                 "'quantiles' must be a list of floats or"
                f" 'auto', but got type {type(quantiles).__name__}.")
@@ -3579,6 +3603,7 @@ def set_default_params(
                 f"Each quantile must be a float between 0 and 1 (exclusive). "
                 f"Invalid quantiles: {invalid_quantiles}"
             )
+        quantiles = list(quantiles) # for consistency 
     else:
         # quantiles remains None
         pass
@@ -3586,7 +3611,7 @@ def set_default_params(
     # Set default scales if 'auto' or None
     if scales is None or scales == 'auto':
         scales = [1]
-    elif isinstance(scales, list):
+    elif isinstance(scales, (list,tuple)):
         # Validate each scale
         invalid_scales = [s for s in scales if not isinstance(s, int) or s <= 0]
         if invalid_scales:

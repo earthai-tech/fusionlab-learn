@@ -43,6 +43,8 @@ __all__ = [
     'parse_qcols',
     'validate_qcols',
     'build_qcols_multiple',
+    'resolve_quantiles', 
+    'q_to_names'
 ]
 
 
@@ -2095,3 +2097,141 @@ def build_qcols_multiple(
         tuples = list(zip(qlow_cols, qup_cols))
 
     return [tuple(t) for t in tuples]
+
+def resolve_quantiles(
+    qs: Union[
+        Sequence[Union[int, float, str]],
+        int,
+        float,
+        str
+    ]
+) -> List[float]:
+    """
+    Convert various quantile notations into a list of floats in [0,1].
+    
+    Parameters
+    ----------
+    qs : sequence or scalar
+        Quantile specifiers, e.g. [0.1, "50%", 90, "0.9"].
+    
+    Return 
+    ------
+    List[float]
+        Converted quantiles notations to numeric values.
+    """
+
+    def _convert(val) -> float:
+        # 1) Coerce to string or number
+        if isinstance(val, str):
+            s = val.strip()
+            # Strip trailing '%'
+            if s.endswith('%'):
+                s = s[:-1]
+            v = float(s)
+        elif isinstance(val, (int, float)):
+            v = float(val)
+        else:
+            raise TypeError(
+                f"Unsupported type: {type(val)} for quantile value")
+
+        # 2) If >1, treat as percentage
+        if v > 1:
+            v = v / 100.0
+
+        # 3) Clip into [0,1]
+        return max(0.0, min(1.0, v))
+
+    # Normalize input into a flat list
+    if isinstance(qs, str):
+        # split on commas or whitespace
+        parts = re.split(r"[,\s]+", qs.strip())
+        raw = [p for p in parts if p]
+    elif isinstance(qs, (int, float)):
+        raw = [qs]
+    else:
+        try:
+            raw = list(qs)
+        except TypeError:
+            raise TypeError(
+                "qs must be a sequence, number, or comma-separated string")
+
+    # Convert each entry
+    return [_convert(x) for x in raw]
+
+def q_to_names(
+    qs: Union[Sequence[Union[int, float, str]], int, float, str],
+    prefix: str = "",
+    suffix: str = "",
+    sep: str = "",
+    decimals: Optional[int] = None,
+    percent_sign: bool = False,
+    as_strings: bool = True
+) -> Union[List[str], List[Union[int, float]]]:
+    """
+    Convert quantile levels into labels or numeric percentages.
+
+    Parameters
+    ----------
+    qs : sequence or scalar
+        Quantile specifiers, e.g. [0.1, "50%", 90, "0.9"].
+    prefix : str
+        String to prepend to each label (e.g. "q").
+    suffix : str
+        String to append.
+    sep : str
+        Separator between prefix and number.
+    decimals : int, optional
+        Number of decimal places to round to. If None, auto‑integer.
+    percent_sign : bool
+        If True, append "%" to each label.
+    as_strings : bool
+        Return strings if True, else numeric int/float list.
+
+    Returns
+    -------
+    List[str] or List[int/float]
+        Converted labels or numeric percentages.
+
+    Examples
+    --------
+    >>> from fusionlab.core.diagnose_q import q_to_names
+    >>> q_to_names([0.1, 0.5, 0.9])
+    ['10', '50', '90']
+    >>> q_to_names([0.1, 0.5, 0.9], prefix='q')
+    ['q10', 'q50', 'q90']
+    >>> q_to_names([10, 50, 90], percent_sign=True)
+    ['10%', '50%', '90%']
+    >>> q_to_names('10 50 90', as_strings=False)
+    [10, 50, 90]
+    >>> q_to_names([0.1234, 0.5], decimals=1)
+    ['12.3', '50.0']
+    """
+    qlist = resolve_quantiles(qs)
+    out_labels = []
+    out_nums = []
+
+    for q in qlist:
+        pct = q * 100
+        # round if requested
+        if decimals is not None:
+            pct = round(pct, decimals)
+
+        if as_strings:
+            # build number string
+            if decimals is None:
+                # auto‑int vs float
+                num_str = str(int(pct)) if float(pct).is_integer() else str(pct)
+            else:
+                # fixed decimals
+                num_str = f"{pct:.{decimals}f}"
+            if percent_sign:
+                num_str += '%'
+            out_labels.append(f"{prefix}{sep}{num_str}{suffix}")
+        else:
+            # numeric output
+            if decimals is None and float(pct).is_integer():
+                out_nums.append(int(pct))
+            else:
+                out_nums.append(pct)
+
+    return out_labels if as_strings else out_nums

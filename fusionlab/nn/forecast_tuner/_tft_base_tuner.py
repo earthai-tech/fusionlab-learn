@@ -100,7 +100,6 @@ DEFAULT_PS = {
 }
 
 
-
 class BaseTuner:
     @ensure_pkg(
         "keras_tuner",
@@ -407,7 +406,7 @@ class BaseTuner:
         `self._run_case_info` for configuration.
         """
         # ****************************************************
-        from ..models import XTFT, SuperXTFT 
+        from ..hybrid import XTFT, SuperXTFT 
         from ..transformers import (
             TemporalFusionTransformer as TFTFlexible,
             TFT as TFTStricter,

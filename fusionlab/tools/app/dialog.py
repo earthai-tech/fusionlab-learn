@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
-# Author: L. Kouadio <etanoyau@gmail.com>
+# Author: LKouadio <etanoyau@gmail.com>
 
 """
 App dialog

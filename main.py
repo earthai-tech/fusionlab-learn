@@ -86,6 +86,7 @@ try:
     from fusionlab.utils.io_utils import fetch_joblib_data, save_job # noqa ( can use for robust saver)
     from fusionlab.utils.generic_utils import save_all_figures, normalize_time_column
     from fusionlab.utils.forecast_utils import add_forecast_times 
+    from fusionlab.utils.sequence_utils import check_sequence_feasibility 
     
 except ImportError as e:
     print(f"Critical Error: Failed to import fusionlab modules: {e}. "
@@ -94,8 +95,8 @@ except ImportError as e:
     raise
 
 # --- Configuration Parameters ---
-CITY_NAME = 'nansha'
-USE_SUPER_XTFT = True # Set to False for standard XTFT for the paper
+CITY_NAME = 'zhongshan'
+USE_SUPER_XTFT = False # Set to False for standard XTFT for the paper
 MODEL_SUFFIX = '_super' if USE_SUPER_XTFT else ''
 TRANSFORMER_CLASS = SuperXTFT if USE_SUPER_XTFT else XTFT
 
@@ -103,8 +104,8 @@ TRAIN_END_YEAR = 2021
 FORECAST_START_YEAR = 2022
 # For the paper with FULL data, use FORECAST_HORIZON_YEARS = 4.
 # For SAMPLE data (2k or 500k), a shorter horizon is more robust.
-FORECAST_HORIZON_YEARS = 3
-TIME_STEPS = 2 # Lookback window (in years)
+FORECAST_HORIZON_YEARS = 2
+TIME_STEPS = 5 # Lookback window (in years)
 # Min length needed per group = TIME_STEPS + FORECAST_HORIZON_YEARS
 
 FORECAST_YEARS = [
@@ -115,7 +116,7 @@ print(f"Configuration: TIME_STEPS={TIME_STEPS}, "
 print(f"Forecasting for years: {FORECAST_YEARS}")
 
 SPATIAL_COLS = ['longitude', 'latitude']
-QUANTILES = [0.1, 0.5, 0.9]
+QUANTILES = (.10, .20, .30, .40, .50, .60, .70, .80, .90)#[0.1, 0.5, 0.9]
 # QUANTILES = None # For point forecast
 
 EPOCHS = 50 # For demo; increase for paper (e.g., 100-200)
@@ -141,23 +142,23 @@ print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} XTFT FORECASTING (IEEE PAMI)\n{'-'*_TW}
 # ==================================================================
 # ** Step 1: Load Nansha Dataset **
 # ==================================================================
-print(f"\n{'='*20} Step 1: Load Nansha Dataset {'='*20}")
+print(f"\n{'='*20} Step 1: Load {CITY_NAME.upper()} Dataset {'='*20}")
 nansha_df_raw = None
 try:
     raise
     # to fallback to 500_000_samples for testing  
     # Attempt 1: Fetch from fusionlab.datasets (default 2000 samples)
-    print("Attempt 1: Fetching Nansha data via fusionlab.datasets...")
+    print(f"Attempt 1: Fetching {CITY_NAME.Upper()} data via fusionlab.datasets...")
     nansha_df_raw = fetch_nansha_data(as_frame=True, verbose=1,
                                       download_if_missing=True)
-    print(f"  Nansha data loaded via fetch_nansha_data. Shape: {nansha_df_raw.shape}")
+    print(f"  Nansha data loaded via fetch_{CITY_NAME}_data. Shape: {nansha_df_raw.shape}")
     
 except Exception as e_fetch:
-    print(f"  Warning: Failed to load via fetch_nansha_data: {e_fetch}")
+    print(f"  Warning: Failed to load via fetch_{CITY_NAME}_data: {e_fetch}")
     # Fallback paths for Code Ocean or local setup
     # Assumes data folder is at the root of the capsule or project
     paths_to_try = [
-        os.path.join("data", "nansha_500k.csv"),
+        os.path.join("data", f"{CITY_NAME}_500k.csv"),
         # os.path.join("..", "data", "nansha_500_000.csv"), # If script is in a subdir
         # os.path.join("data", "nansha_2000.csv"),
         # os.path.join("..", "data", "nansha_2000.csv"),
@@ -168,7 +169,7 @@ except Exception as e_fetch:
         if os.path.exists(local_path):
             try:
                 nansha_df_raw = pd.read_csv(local_path)
-                print(f"  Nansha data loaded from local CSV '{local_path}'. "
+                print(f"  {CITY_NAME} data loaded from local CSV '{local_path}'. "
                       f"Shape: {nansha_df_raw.shape}")
                 break # Stop if successfully loaded
             except Exception as e_local:
@@ -178,7 +179,7 @@ except Exception as e_fetch:
 
 if nansha_df_raw is None or nansha_df_raw.empty:
     raise FileNotFoundError(
-        "Nansha data CSV could not be loaded from any specified path. "
+        f"{CITY_NAME} data CSV could not be loaded from any specified path. "
         "Please ensure the data is available."
     )
 # ...  save artefacts  ...
@@ -334,6 +335,16 @@ sequence_file_path = os.path.join(
     f'{CITY_NAME}_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}{MODEL_SUFFIX}.joblib'
 )
 # Always generate for this script to ensure consistency with parameters
+ok, _ = check_sequence_feasibility(
+    df_train_master.copy(),
+    time_col=TIME_COL,
+    group_id_cols=SPATIAL_COLS ,
+    time_steps=TIME_STEPS,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+    verbose=7,
+    error="raise",  # fail fast on impossibility,
+    # logger= _logger, 
+)
 print(f"Generating training sequences (T={TIME_STEPS}, H={FORECAST_HORIZON_YEARS})...")
 X_static_seq, X_dynamic_seq, X_future_seq, y_target_seq = reshape_xtft_data(
     df=df_train_master, 
@@ -541,6 +552,7 @@ else:
 print(f"Generating predictions on {dataset_name_for_forecast} sequences...")
 predictions_scaled = xtft_model_loaded.predict(
     inputs_for_final_forecast, verbose=0)
+#%
 
 # Format predictions into a DataFrame
 # Prepare spatial_data_array for format_predictions_to_dataframe
@@ -555,7 +567,7 @@ forecast_df_final = format_predictions_to_dataframe(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     output_dim=model_output_dim,
     spatial_data_array=spatial_data_for_formatting,
-    spatial_cols_names=SPATIAL_COLS,
+    spatial_cols=SPATIAL_COLS,
     spatial_cols_indices=[
         static_features_model.index(col) 
         for col in SPATIAL_COLS 

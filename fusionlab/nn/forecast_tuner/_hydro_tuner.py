@@ -730,6 +730,7 @@ class HydroTuner(PINNTunerBase):
         # 6. Execute the search by calling the parent's search method.
         vlog("Handing off to Keras Tuner search...", verbose=verbose, level=2, 
              logger=self._logger )
+        
         return super().search(
             train_data=train_dataset,
             epochs=epochs,

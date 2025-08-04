@@ -51,6 +51,7 @@ __all__ = [
     "QuantileDistributionModeling",
 ]
 
+_PI=3.141592653589793
    
 @register_keras_serializable(
     "fusionlab.nn.components", name="GaussianHead"
@@ -118,7 +119,7 @@ class GaussianHead(Layer, NNLearner):
         -------
         scalar Tensor
         """
-        two_pi = tf_constant(2.0 * 3.141592653589793, dtype=tf_float32)
+        two_pi = tf_constant(2.0 * _PI, dtype=tf_float32)
         var = tf_square(scale)
         # log σ + (y-μ)^2 / (2 σ^2) + 0.5 log(2π)
         log_prob = (
@@ -239,7 +240,7 @@ class MixtureDensityHead(Layer, NNLearner):
         -------
         scalar Tensor
         """
-        two_pi = tf_constant(2.0 * 3.141592653589793, dtype=tf_float32)
+        two_pi = tf_constant(2.0 * _PI, dtype=tf_float32)
         var = tf_square(scales)
 
         # log N = -0.5 * [log(2πσ^2) + (y-μ)^2/σ^2]

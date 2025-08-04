@@ -26,7 +26,8 @@ from ...core.io import SaveFile
 from ...core.handlers import columns_manager
 from ...utils.validator import validate_positive_integer 
 from ...metrics.utils import compute_quantile_diagnostics 
-from ...decorators import isdf 
+from ...decorators import isdf
+from ...utils.data_utils import mask_by_reference  
 from ...utils.deps_utils import ensure_pkg 
 from ...utils.forecast_utils import normalize_for_pinn
 from ...utils.generic_utils import print_box, vlog, select_mode
@@ -253,6 +254,12 @@ def format_pihalnet_predictions(
     coverage_quantile_indices: Tuple[int, int] = (0, -1),
     savefile: str = None, 
     name: Optional[str]=None, 
+    # ----new parameters for masking some locations place like riverbed etc ... 
+    # before computing any metrics 
+    apply_mask: bool=False,
+    mask_values: Optional [Union[float, int]]=None,
+    mask_fill_value: Optional[float]=None,
+    # ---------
     verbose: int = 0, 
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None, 
     stop_check : Callable [[], bool] =None, 
@@ -810,41 +817,97 @@ def format_pihalnet_predictions(
         if stop_check and stop_check():
             raise InterruptedError("Target processing aborted.")
             
-        # --- 6d. Coverage Score (applied per target) ---
-        if ( 
-                evaluate_coverage 
-                and quantiles 
-                and y_true_target is not None 
-                and len(quantiles) >= 2 
-                and O_target == 1
-            ):
-            try:
-                cov_savefile = None 
-                if savefile: 
-                    # take the path
-                    cov_savefile = os.path.join(
-                        os.path.dirname(savefile), 'diagnostics_results.json'
-                        )
-                compute_quantile_diagnostics (
-                    *all_data_dfs, 
-                    target_name= base_name, 
-                    quantiles= quantiles, 
-                    coverage_quantile_indices=coverage_quantile_indices, 
-                    savefile=cov_savefile, 
-                    name=name, 
-                    verbose=verbose, 
-                    logger =_logger,  
-                    )
-                # final_df.attrs[f'{base_name}_coverage'] = coverage
-            except Exception as e:
-                  vlog(f"Skipping coverage computation due to: {e}",
-                      level=2, verbose=verbose, logger=_logger
-                )
-            
-            if stop_check and stop_check():
-                raise InterruptedError("Metric calculus aborted.")
     # --- 7. Concatenate all DataFrames ---
     final_df = pd.concat(all_data_dfs, axis=1)
+    
+    # --- 7b. Optional Masking of Predictions by Reference Column ---
+    if apply_mask:
+        if mask_values is None or mask_fill_value is None:
+            raise ValueError(
+                "When apply_mask=True, both mask_values and "
+                "mask_fill_value must be provided."
+            )
+    
+        # we assume you only ever want to mask against your first target:
+        first_base = list(targets_to_process.values())[0]
+        ref_col    = f"{first_base}_actual"
+        if ref_col not in final_df.columns:
+            raise KeyError(f"Reference column '{ref_col}' not in final_df")
+    
+        # collect all the forecast columns you produced
+        mask_cols = []
+        if quantiles:
+            # e.g. ['subsidence_q10','subsidence_q50',...]
+            for base in targets_to_process.values():
+                for q in quantiles:
+                    mask_cols.append(f"{base}_q{int(q*100)}")
+        else:
+            # point forecasts: grab anything ending in '_pred'
+            for c in final_df.columns:
+                if c.endswith("_pred") or "_pred_step" in c:
+                    mask_cols.append(c)
+    
+        # sanity‐check that they exist
+        mask_cols = [c for c in mask_cols if c in final_df.columns]
+        if not mask_cols:
+            raise KeyError("No maskable forecast columns found in final_df")
+    
+        # warn if the mask_value never appears in the actuals
+        missing = set([mask_values]) - set(final_df[ref_col].unique())
+        if missing:
+            import warnings
+            warnings.warn(
+                f"mask_values {missing} not found in '{ref_col}'. "
+                "Skipping masking."
+            )
+        else:
+            final_df = mask_by_reference(
+                data=final_df,
+                ref_col=ref_col,
+                values=mask_values,
+                find_closest=False,
+                fill_value=mask_fill_value,
+                mask_columns=mask_cols,
+                error="ignore",
+                inplace=False
+            )
+
+    
+   
+    # --- XXX TODO 
+    # --- 6d. Coverage Score (applied per target) ---
+    if ( 
+            evaluate_coverage 
+            and quantiles 
+            and y_true_target is not None 
+            and len(quantiles) >= 2 
+            and O_target == 1
+        ):
+        try:
+            cov_savefile = None 
+            if savefile: 
+                # take the path
+                cov_savefile = os.path.join(
+                    os.path.dirname(savefile), 'diagnostics_results.json'
+                    )
+            compute_quantile_diagnostics (
+                final_df, 
+                target_name= base_name, 
+                quantiles= quantiles, 
+                coverage_quantile_indices=coverage_quantile_indices, 
+                savefile=cov_savefile, 
+                name=name, 
+                verbose=verbose, 
+                logger =_logger,  
+                )
+            # final_df.attrs[f'{base_name}_coverage'] = coverage
+        except Exception as e:
+              vlog(f"Skipping coverage computation due to: {e}",
+                  level=2, verbose=verbose, logger=_logger
+            )
+        
+        if stop_check and stop_check():
+            raise InterruptedError("Metric calculus aborted.")
 
     # --- Re-apply Inverse Scaling (if stored) ---
     if scaler_info:
@@ -948,6 +1011,526 @@ def _format_target_predictions(
         )
         
     return pred_cols_names, pred_df_part
+
+
+
+def _get_model_predictions(
+    pihalnet_outputs: Optional[Dict[str, Tensor]],
+    model: Optional[Model],
+    model_inputs: Optional[Dict[str, Tensor]],
+    verbose: int,
+    stop_check: Callable[[], bool],
+    _logger: Any,
+) -> Dict[str, Tensor]:
+    """
+    Obtain model outputs dict, running predict if needed.
+    """
+    if pihalnet_outputs is not None:
+        return pihalnet_outputs
+    if model is None or model_inputs is None:
+        raise ValueError(
+            "If 'pihalnet_outputs' is None, both 'model' and "
+            "'model_inputs' must be provided."
+        )
+    vlog("  Predictions not provided, generating from model...",
+         level=4, verbose=verbose, logger=_logger)
+    try:
+        outputs = model.predict(model_inputs, verbose=0)
+        if not isinstance(outputs, dict):
+            raise ValueError(
+                "Model output is not a dict as expected from PINN models"
+            )
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to generate predictions: {e}"
+        ) from e
+    vlog("  Model predictions generated.", level=5,
+                 verbose=verbose, logger=_logger)
+    
+    if stop_check and stop_check():
+        raise InterruptedError("Model prediction aborted.")
+    return outputs
+
+
+def _convert_outputs_to_numpy(
+    pihalnet_outputs: Dict[str, Any], 
+    verbose: int, _logger, 
+) -> Dict[str, np.ndarray]:
+    """
+    Ensure prediction tensors are NumPy arrays.
+    """
+    proc: Dict[str, np.ndarray] = {}
+    for key, val in pihalnet_outputs.items():
+        if key in ('subs_pred', 'gwl_pred'):
+            if hasattr(val, 'numpy'):
+                proc[key] = val.numpy()
+            elif isinstance(val, np.ndarray):
+                proc[key] = val
+            else:
+                try:
+                    proc[key] = np.array(val)
+                except Exception as e: 
+                    raise TypeError(
+                        f"Could not convert output '{key}' to NumPy. "
+                        f"Type: {type(val)}. Error: {e}"
+                    ) from e
+                    
+        elif key == 'pde_residual':
+            # PDE residual can be handled differently if needed
+            pass # Not typically added to this output DataFrame
+       
+    if not proc:
+        vlog("  No 'subs_pred' or 'gwl_pred'"
+             " found in outputs. Returning empty DF.",
+             level=1, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+        
+    return proc
+
+
+def _define_targets(
+    processed: Dict[str, np.ndarray],
+    include_gwl: bool,
+    target_mapping: Optional[Dict[str, str]] = None,
+    stop_check: Callable[[], bool]=None,
+) -> Dict[str, str]:
+    """
+    Map processed outputs to base target names.
+    """
+    if target_mapping is None:
+        target_mapping = {
+            'subs_pred': 'subsidence',
+            'gwl_pred': 'gwl'
+        }
+    targets: Dict[str, str] = {}
+    if 'subs_pred' in processed:
+        targets['subs_pred'] = target_mapping['subs_pred']
+    if include_gwl and 'gwl_pred' in processed:
+        targets['gwl_pred'] = target_mapping['gwl_pred']
+        
+    if stop_check and stop_check():
+        raise InterruptedError("Target confifuration aborted.")
+        
+    return targets
+
+
+def _infer_dimensions(
+    first_pred: np.ndarray,
+    forecast_horizon: Optional[int], 
+    verbose : int =0, 
+    _logger: Any = print, 
+) -> Tuple[int, int]:
+    """
+    Infer num_samples and horizon (H) from the array.
+    """
+    N = first_pred.shape[0]
+    H = forecast_horizon or first_pred.shape[1]
+    if N == 0 or H == 0:
+        raise ValueError("No samples or zero forecast horizon.")
+        
+    vlog(f"  Formatting for {N} samples,"
+         f" Horizon={H}.",
+         level=4, verbose=verbose, logger=_logger)
+
+    return N, H
+
+
+def _build_sample_df(
+    num_samples: int,
+    H: int
+) -> pd.DataFrame:
+    """
+    Build DataFrame of sample_idx and forecast_step.
+    """
+    idx = np.repeat(np.arange(num_samples), H)
+    steps = np.tile(np.arange(1, H+1), num_samples)
+    return pd.DataFrame({
+        'sample_idx': idx,
+        'forecast_step': steps
+    })
+
+
+def _add_coordinate_columns(
+    base_df: pd.DataFrame,
+    model_inputs: Optional[Dict[str, Any]],
+    coord_scaler: Any,
+    include_coords: bool,
+    stop_check: Callable[[], bool],
+    _logger: Any,
+    verbose: int
+) -> pd.DataFrame:
+    """
+    Extract and inverse-transform coords if requested.
+    """
+    if not include_coords:
+        return pd.DataFrame()
+    coords_arr = None
+    if model_inputs and 'coords' in model_inputs:
+        coords_arr = model_inputs['coords']
+        if hasattr(coords_arr, 'numpy'):
+            coords_arr = coords_arr.numpy()
+    if coords_arr is None:
+        return pd.DataFrame()
+    N = base_df['sample_idx'].nunique()
+    H = base_df['forecast_step'].max()
+    
+    if coords_arr.shape != (N, H, 3):
+        vlog("  'coords' shape mismatch or not found."
+                " Skipping coordinate columns.",
+                level=2, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+    
+    resh = coords_arr.reshape(N*H, 3)
+    if coord_scaler:
+        vlog("  Applying inverse transform to t,x,y coordinates...",
+              level=4, verbose=verbose, logger=_logger)
+        try:
+            resh = coord_scaler.inverse_transform(resh)
+        except Exception:
+            pass
+        
+    if stop_check and stop_check():
+        raise InterruptedError("Coordinates transformation aborted.")
+            
+    return pd.DataFrame(resh, columns=['coord_t','coord_x','coord_y'])
+
+
+def _add_id_columns(
+    base_df: pd.DataFrame,
+    ids_data_array: Any,
+    ids_cols: Optional[List[str]],
+    ids_cols_indices: Optional[List[int]],
+    stop_check: Callable[[], bool],
+    _logger: Any,
+    verbose: int
+) -> pd.DataFrame:
+    """
+    Process and repeat static ID columns per forecast step.
+
+    Converts DataFrame, Series, NumPy array, or Tensor to
+    NumPy, selects requested columns or indices, then uses
+    `sample_idx` from base_df to expand each ID row
+    across all forecast steps.
+    """
+    # Skip if no IDs provided
+    if ids_data_array is None:
+        vlog(
+            "  No `ids_data_array` provided, skipping ID columns.",
+            level=4, verbose=verbose, logger=_logger
+        )
+        return pd.DataFrame()
+
+    vlog(
+        "  Processing additional static/ID columns...",
+        level=4, verbose=verbose, logger=_logger
+    )
+
+    # Convert to NumPy array
+    try:
+        if isinstance(ids_data_array, pd.DataFrame):
+            arr = ids_data_array.values
+            col_names = ids_cols or list(ids_data_array.columns)
+        elif isinstance(ids_data_array, pd.Series):
+            arr = ids_data_array.to_frame().values
+            col_names = ids_cols or [ids_data_array.name or 'id_0']
+            if arr.ndim == 2 and len(col_names) != arr.shape[1]:
+                vlog(
+                    "    Series IDs length mismatch, using first col.",
+                    level=5, verbose=verbose, logger=_logger
+                )
+                col_names = col_names[:1]
+        elif hasattr(ids_data_array, 'numpy'):
+            arr = ids_data_array.numpy()
+            col_names = ids_cols or [f'id_{i}' for i in range(arr.shape[1])]
+        elif isinstance(ids_data_array, np.ndarray):
+            arr = ids_data_array
+            if ids_cols_indices is not None:
+                arr = arr[:, ids_cols_indices]
+            col_names = ids_cols or [f'id_{i}' for i in range(arr.shape[1])]
+        else:
+            _logger.warning(
+                f"Unsupported IDs type {type(ids_data_array)}."
+                " Skipping ID columns."
+            )
+            return pd.DataFrame()
+    except Exception as e:
+        _logger.warning(
+            f"Error converting IDs to array: {e}."
+            " Skipping ID columns."
+        )
+        return pd.DataFrame()
+
+    vlog(
+        f"    Converted IDs to NumPy with shape {arr.shape}",
+        level=5, verbose=verbose, logger=_logger
+    )
+    vlog(
+        f"    Selected ID column names: {col_names}",
+        level=5, verbose=verbose, logger=_logger
+    )
+
+    # Expand rows according to sample_idx
+    sample_indices = base_df['sample_idx'].values
+    if arr.shape[0] != sample_indices.max() + 1:
+        _logger.warning(
+            f"IDs rows ({arr.shape[0]}) != samples "
+            f"({sample_indices.max()+1}). Skipping."
+        )
+        return pd.DataFrame()
+
+    expanded = arr[sample_indices]
+    id_df = pd.DataFrame(expanded, columns=col_names)
+    vlog(
+        f"    Expanded ID DataFrame shape: {id_df.shape}",
+        level=5, verbose=verbose, logger=_logger
+    )
+
+    # User cancellation check
+    if stop_check and stop_check():
+        raise InterruptedError("ID columns processing aborted.")
+
+    return id_df
+
+    # # Logic to convert ids_data_array to 2D NumPy
+    # # and repeat according to base_df indices
+    # # ... (Detailed implementation)
+    # return pd.DataFrame()  # stub for brevity
+
+def _process_target_variable(
+    preds: np.ndarray,
+    pred_key: str,
+    base_name: str,
+    num_samples: int,
+    H: int,
+    quantiles: Optional[List[float]],
+    y_true_dict: Optional[Dict[str, Any]],
+    scaler_info: Optional[Dict[str, Any]],
+    verbose: int,
+    stop_check: Callable[[], bool],
+    _logger: Any
+) -> pd.DataFrame:
+    """
+    Format predictions, attach actuals, and prepare scaling.
+
+    - Calls _format_target_predictions for quantiles
+      or point forecasts.
+    - Reshapes and adds true values if provided.
+    - Records inverse-scaling actions to apply later.
+    """
+    # 1. Format predictions
+    cols_pred, df_pred = _format_target_predictions(
+        preds,
+        num_samples,
+        H,
+        O=(preds.shape[-1] if preds.ndim == 3 else 1),
+        base_target_name=base_name,
+        quantiles=quantiles,
+        verbose=verbose
+    )
+    dfs: List[pd.DataFrame] = [df_pred]
+
+    # 2. Add actual values
+    if y_true_dict:
+        y_true = y_true_dict.get(pred_key)
+        if y_true is None:
+            y_true = y_true_dict.get(base_name)
+        if hasattr(y_true, 'numpy'):
+            y_true = y_true.numpy()
+        if y_true is not None:
+            arr = y_true.reshape(num_samples * H, -1)
+            cols_act = []
+            for i in range(arr.shape[1]):
+                col = base_name
+                if arr.shape[1] > 1:
+                    col += f"_{i}"
+                cols_act.append(f"{col}_actual")
+            dfs.append(pd.DataFrame(arr, columns=cols_act))
+
+    # 3. Prepare inverse-scaling info
+    if scaler_info and base_name in scaler_info:
+        info = scaler_info[base_name]
+        to_transform = cols_pred + cols_act
+        info['_cols_to_inv'] = to_transform
+
+    if stop_check and stop_check():
+        raise InterruptedError(
+            "Target variable processing aborted."
+        )
+
+    return pd.concat(dfs, axis=1)
+
+def _apply_masking(
+    df: pd.DataFrame,
+    targets: Dict[str, str],
+    apply_mask: bool,
+    mask_values: Any,
+    mask_fill_value: float,
+    quantiles: Optional[List[float]]
+) -> pd.DataFrame:
+    """
+    Mask forecasts based on reference column values.
+    """
+    if not apply_mask:
+        return df
+    first_base = list(targets.values())[0]
+    ref = f"{first_base}_actual"
+    if ref not in df:
+        raise KeyError(f"Reference col '{ref}' missing")
+    cols = []
+    if quantiles:
+        for base in targets.values():
+            for q in quantiles:
+                cols.append(f"{base}_q{int(q*100)}")
+    else:
+        cols = [c for c in df if c.endswith("_pred")]
+    return mask_by_reference(
+        data=df,
+        ref_col=ref,
+        values=mask_values,
+        find_closest=False,
+        fill_value=mask_fill_value,
+        mask_columns=cols,
+        error="ignore",
+        inplace=False
+    )
+
+
+def _compute_coverage(
+    df: pd.DataFrame,
+    targets: Dict[str, str],
+    quantiles: List[float],
+    y_true_dict: Dict[str, Any],
+    coverage_quantile_indices: Tuple[int, int],
+    savefile: Optional[str],
+    name: Optional[str],
+    verbose: int,
+    _logger: Any
+) -> None:
+    """
+    Compute quantile diagnostics per target.
+    """
+    for base in targets.values():
+        try:
+            compute_quantile_diagnostics(
+                df,
+                target_name=base,
+                quantiles=quantiles,
+                coverage_quantile_indices=
+                    coverage_quantile_indices,
+                savefile=(os.path.join(
+                    os.path.dirname(savefile),
+                    'diagnostics_results.json'
+                ) if savefile else None),
+                name=name,
+                verbose=verbose,
+                logger=_logger
+            )
+        except Exception as e:
+            vlog(f"Skipping coverage due to {e}",
+                 level=2, verbose=verbose,
+                 logger=_logger)
+
+#XXX : TODO 
+# revise format outputs and apply
+#  mask by reference 
+def format_preds(
+    pihalnet_outputs: Optional[Dict[str, Tensor]] = None,
+    model: Optional[Model] = None,
+    model_inputs: Optional[Dict[str, Tensor]] = None,
+    y_true_dict: Optional[Dict[str, Any]] = None,
+    target_mapping: Optional[Dict[str, str]] = None,
+    include_gwl: bool = True,
+    include_coords: bool = True,
+    quantiles: Optional[List[float]] = None,
+    forecast_horizon: Optional[int] = None,
+    output_dims: Optional[Dict[str, int]] = None,
+    ids_data_array: Optional[Any] = None,
+    ids_cols: Optional[List[str]] = None,
+    ids_cols_indices: Optional[List[int]] = None,
+    scaler_info: Optional[Dict[str, Any]] = None,
+    coord_scaler: Optional[Any] = None,
+    evaluate_coverage: bool = False,
+    coverage_quantile_indices: Tuple[int, int] = (0, -1),
+    savefile: Optional[str] = None,
+    name: Optional[str] = None,
+    apply_mask: bool = False,
+    mask_values: Optional[Any] = None,
+    mask_fill_value: Optional[float] = None,
+    verbose: int = 0,
+    _logger: Any = None,
+    stop_check: Callable[[], bool] = None,
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Main function orchestrating all helper steps.
+    """
+    vlog("Starting formatting", level=3,
+         verbose=verbose, logger=_logger)
+    # Step 1: obtain raw outputs
+    raw_out = _get_model_predictions(
+        pihalnet_outputs, model, model_inputs,
+        verbose, stop_check, _logger
+    )
+    # Step 2: convert to NumPy
+    proc = _convert_outputs_to_numpy(
+        raw_out, verbose, _logger)
+    
+    # Step 3: define targets
+    targets = _define_targets(
+        proc, include_gwl, target_mapping, 
+        stop_check,  
+    )
+    if not targets:
+        vlog("  No valid targets to process after"
+             " filtering. Returning empty DF.",
+             level=1, verbose=verbose, logger=_logger)
+        return pd.DataFrame()
+    
+    # Step 4: infer dims
+    num_samp, H = _infer_dimensions(
+        proc[next(iter(targets))], forecast_horizon, 
+        verbose , _logger, 
+    )
+    # Step 5: build base df
+    base_df = _build_sample_df(num_samp, H)
+    # Step 6: add coords
+    coords_df = _add_coordinate_columns(
+        base_df, model_inputs, coord_scaler,
+        include_coords, stop_check, _logger, verbose
+    )
+    # Step 7: add IDs
+    ids_df = _add_id_columns(
+        base_df, ids_data_array, ids_cols,
+        ids_cols_indices, stop_check, _logger,
+        verbose
+    )
+    # Step 8: process targets
+    dfs = []
+    for key, base in targets.items():
+        dfs.append(_process_target_variable(
+            proc[key], key, base,
+            num_samp, H, quantiles,
+            y_true_dict, scaler_info,
+            verbose, stop_check, _logger
+        ))
+    # Step 9: concat all
+    final_df = pd.concat([base_df, coords_df,
+                          ids_df] + dfs, axis=1)
+    # Step 10: masking
+    final_df = _apply_masking(
+        final_df, targets, apply_mask,
+        mask_values, mask_fill_value, quantiles
+    )
+    # Step 11: coverage
+    if evaluate_coverage and quantiles:
+        _compute_coverage(
+            final_df, targets, quantiles,
+            y_true_dict, coverage_quantile_indices,
+            savefile, name, verbose, _logger
+        )
+    vlog("Formatting complete", level=3,
+         verbose=verbose, logger=_logger)
+    return final_df
 
 @isdf 
 def prepare_pinn_data_sequences(
