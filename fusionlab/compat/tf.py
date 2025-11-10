@@ -77,28 +77,28 @@ except ImportError:
     # os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
     
     # so when value is 0 warnings .warn is triggered below 
-try:
-    tf_spec = importlib.util.find_spec("tensorflow")
-    if tf_spec is not None:
-        tf = importlib.util.module_from_spec(tf_spec)
-        tf_spec.loader.exec_module(tf)
-        if hasattr(tf, 'Tensor'): # Basic check
-            Tensor = tf.Tensor
-        HAS_TF = True
-except ImportError:
-    if not _tf_logs_suppressed:
-        warnings.warn(
-            "TensorFlow is not installed. Some functionalities in "
-            "fusionlab.compat.tf will be limited or fall back to NumPy.",
-            ImportWarning
-        )
-except Exception as e:
-    if not _tf_logs_suppressed:
-        warnings.warn(
-            f"An error occurred during TensorFlow import: {e}. "
-            "TensorFlow-dependent functionalities might not work.",
-            ImportWarning
-        )
+# try:
+#     tf_spec = importlib.util.find_spec("tensorflow")
+#     if tf_spec is not None:
+#         tf = importlib.util.module_from_spec(tf_spec)
+#         tf_spec.loader.exec_module(tf)
+#         if hasattr(tf, 'Tensor'): # Basic check
+#             Tensor = tf.Tensor
+#         HAS_TF = True
+# except ImportError:
+#     if not _tf_logs_suppressed:
+#         warnings.warn(
+#             "TensorFlow is not installed. Some functionalities in "
+#             "fusionlab.compat.tf will be limited or fall back to NumPy.",
+#             ImportWarning
+#         )
+# except Exception as e:
+#     if not _tf_logs_suppressed:
+#         warnings.warn(
+#             f"An error occurred during TensorFlow import: {e}. "
+#             "TensorFlow-dependent functionalities might not work.",
+#             ImportWarning
+#         )
 
 __all__ = [
     'KerasDependencies',

@@ -196,13 +196,14 @@ def check_sequence_feasibility(
         longest = int(sizes.max()) if not sizes.empty else 0
         msg = (
             "No group is long enough to create any sequence.\n"
-            f"Each trajectory needs ≥ {min_len} consecutive records "
+            f"Each trajectory needs >= {min_len} consecutive records "
             f"(time_steps={time_steps}, horizon={forecast_horizon}), "
             f"but the longest has only {longest}.\n"
-            "→ Reduce `time_steps` / `forecast_horizon`, "
+            "-> Reduce `time_steps` / `forecast_horizon`, "
             "or supply more data."
         )
-        _v("❌ " + msg.splitlines()[0], lvl=1)
+        # _v("❌ " + msg.splitlines()[0], lvl=1)
+        _v("" + msg.splitlines()[0], lvl=1)
 
         if error == "raise":
             raise SequenceGeneratorError(msg)
@@ -210,7 +211,8 @@ def check_sequence_feasibility(
             warnings.warn(msg, UserWarning, stacklevel=2)
         return False, counts
 
-    _v(f"✅ Feasible: {total_sequences} sequences possible.", lvl=1)
+    # _v(rf"✅ Feasible: {total_sequences} sequences possible.", lvl=1)
+    _v(f" Feasible: {total_sequences} sequences possible.", lvl=1)
     return True, counts
 
 def _sequence_counts_fast(
@@ -285,7 +287,8 @@ def get_sequence_counts(
         try:
             import pyarrow  # noqa: F401
         except ImportError:  # ⇢ graceful fallback
-            _v("⚠️  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
+            # _v("⚠  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
+            _v("  pyarrow not installed — reverting to 'vectorized'.", lvl=1)
             engine = "vectorized"
 
     if engine == "pyarrow":
@@ -316,7 +319,7 @@ def get_sequence_counts(
             size_str = sizes[g_key]
             _v(
                 f"Group {g_key if g_key is not None else '<whole>'}: "
-                f"{size_str} pts → {n_seq} seq.",
+                f"{size_str} pts -> {n_seq} seq.",
                 lvl=2,
             )
 

@@ -14,6 +14,7 @@ from ._metrics import (
 )
 
 from ._registry import get_metric 
+from ._cas import clustered_anomaly_severity_score 
 
 __all__ = [
     'coverage_score',
@@ -26,5 +27,6 @@ __all__ = [
     'theils_u_score', 
     'time_weighted_accuracy_score', 
     'time_weighted_interval_score', 
-    'get_metric', 'get_scorer'
+    'get_metric', 'get_scorer', 
+    'clustered_anomaly_severity_score'
    ]

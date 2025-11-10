@@ -313,11 +313,14 @@ class BackendSelector(BaseClass):
         """
 
         try:
-            import cupy
-            cupy.array([1])
+            import cupy as _cp
+            _cp.array([1])
             return True
-        except (ImportError, cupy.cuda.runtime.CUDARuntimeError):
+        except ImportError:
             return False
+        except Exception:  # covers CUDA runtime errors
+            return False
+
 
     def is_dask_available(self):
         """

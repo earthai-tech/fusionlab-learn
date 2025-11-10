@@ -124,12 +124,14 @@ class HydroTuner(PINNTunerBase):
         A dictionary containing all parameters that are **not** to be
         tuned. This must include all data-dependent dimensions required
         by the model's constructor, such as:
+            
         - ``static_input_dim``
         - ``dynamic_input_dim``
         - ``future_input_dim``
         - ``output_subsidence_dim``
         - ``output_gwl_dim``
         - ``forecast_horizon``
+        
         It can also include other fixed settings like ``quantiles`` or
         ``mode``.
     search_space : dict, optional

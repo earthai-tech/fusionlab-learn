@@ -18,7 +18,7 @@ from ._base_extreme import (
     KERAS_DEPS,
     logger,
 )
-from .xtft import XTFT  
+from ._xtft import XTFT  
 
 if KERAS_BACKEND:
     tf_autograph = KERAS_DEPS.autograph

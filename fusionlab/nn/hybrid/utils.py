@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import warnings
 import os
+import numpy as np 
 
 from typing import List, Optional, Union, Dict
 import matplotlib.pyplot as plt
@@ -123,9 +124,10 @@ def plot_history_in(
     max_cols: Union[int, str] = 'auto',
     show_grid: bool = True,
     grid_props: Optional[Dict] = None,
+    yscale_settings: Optional[Dict[str, str]] = None,
     **plot_kwargs
 ) -> None:
-    """Visualizes the training and validation history of a Keras model.
+    r"""Visualizes the training and validation history of a Keras model.
 
     This function creates plots for loss and other specified metrics
     from a Keras History object or a dictionary, allowing for easy
@@ -155,6 +157,7 @@ def plot_history_in(
 
     layout : {'single', 'subplots'}, default 'subplots'
         Determines the plot layout:
+            
         - ``'single'``: All specified metrics are plotted on a single
           graph. This is useful for comparing the trends of different
           losses together.
@@ -193,6 +196,19 @@ def plot_history_in(
         A dictionary of properties to pass to ``ax.grid()`` for
         customizing the grid appearance. For example:
         ``{'linestyle': '--', 'alpha': 0.6}``.
+        
+    yscale_settings : dict, optional
+        A dictionary mapping subplot titles (keys from `metrics` dict)
+        to their desired y-axis scale (e.g., 'linear' or 'log').
+        This allows for per-subplot scale control.
+
+        .. code-block:: python
+        
+           yscale_settings = {
+               "Loss Components": "log",
+               "Component Losses": "log",
+               "Subsidence MAE": "linear" 
+           }
 
     **plot_kwargs : dict
         Additional keyword arguments to pass directly to the
@@ -205,7 +221,7 @@ def plot_history_in(
     None
         This function does not return any value. It displays and/or
         saves the Matplotlib figure directly.
-
+        
     See Also
     --------
     fusionlab.plot.forecast.forecast_view : For visualizing predictions.
@@ -255,6 +271,41 @@ def plot_history_in(
     ...      layout='single',
     ...      title='PIHALNet Loss Breakdown'
     ...  )
+    >>> # --- Optional Post-Training Utilities ---
+    >>> subsmodel_metrics = {
+    ...    "Total Loss": ["loss", "val_loss"],
+    ...    "Physics Loss": ["physics_loss", "val_physics_loss"],
+    ...    "Data Loss": ["data_loss", "val_data_loss"],
+    ...    "Component Losses": [
+    ...        "consolidation_loss", "val_consolidation_loss",
+    ...        "gw_flow_loss", "val_gw_flow_loss",
+    ...        "prior_loss", "val_prior_loss",
+    ...        "smooth_loss", "val_smooth_loss"
+    ...    ],
+    ...    "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
+    ...    "GWL MAE": ["gwl_pred_mae", "val_gwl_pred_mae"],
+    ... }
+    >>> # --- NEW: Define the scale for each plot ---
+    >>> plot_scales = {
+    ...    "Total Loss": "log",
+    ...    "Physics Loss": "log",
+    ...    "Data Loss": "log",
+    ...    "Component Losses": "log",
+    ...    "Subsidence MAE": "linear", # Keep MAE linear to see it approach 0
+    ...    "GWL MAE": "linear"        # Keep MAE linear
+    ... }
+    >>> print("\n--- SubsModel Training History on Separate Subplots ---")
+    >>> plot_history_in(
+    ...    history.history,
+    ...    metrics=subsmodel_metrics,
+    ...    layout='single',
+    ...    title=f"{MODEL_NAME} Training History",
+    ...    yscale_settings=plot_scales, # <--- PASS THE NEW PARAMETER HERE
+    ...    savefig=os.path.join(
+    ...        RUN_OUTPUT_PATH,
+    ...        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot",
+    ...    ),
+    ...)
     """
     
     if isinstance(history, History):
@@ -317,6 +368,10 @@ def plot_history_in(
     
     grid_properties = grid_props or {'linestyle': ':', 'alpha': 0.7}
     
+    # --- New yscale_settings logic ---
+    if yscale_settings is None:
+        yscale_settings = {}
+    
     # --- Revised Plotting Logic ---
     if layout == 'single':
         ax = axes_flat[0]
@@ -344,12 +399,21 @@ def plot_history_in(
                     **plot_kwargs
                 )
         
-        ax.set_title(next(iter(metrics.keys())) if n_plots == 1 else "All Metrics")
+        subplot_title = next(iter(metrics.keys())) if n_plots == 1 else "All Metrics"
+        ax.set_title(subplot_title)
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Value")
         ax.legend()
         if show_grid:
             ax.grid(**grid_properties)
+        
+        # --- Apply yscale to single plot ---
+        # Use the scale specified for the first metric group, or default to linear
+        first_group_scale = yscale_settings.get(subplot_title, 'linear')
+        ax.set_yscale(first_group_scale)
+        if first_group_scale == 'log':
+            ax.set_ylabel("Value (log scale)")
+            
     else: # layout == 'subplots'
         plot_idx = 0
         for subplot_title, metric_keys in metrics.items():
@@ -380,6 +444,27 @@ def plot_history_in(
             ax.set_xlabel("Epoch")
             ax.set_ylabel("Value")
             ax.set_title(subplot_title)
+            
+            # --- Apply per-subplot yscale ---
+            scale_type = yscale_settings.get(subplot_title, 'linear')
+            try:
+                ax.set_yscale(scale_type)
+                if scale_type == 'log':
+                    ax.set_ylabel("Value (log scale)")
+                    # Prevent log(0) or negative values from breaking the plot
+                    min_val = min(
+                        np.min(history_dict[m]) for m in metric_keys 
+                        if m in history_dict and len(history_dict[m]) > 0
+                    )
+                    if min_val <= 0:
+                        # Set a small positive minimum for the y-axis
+                        ax.set_ylim(bottom=1e-6) 
+            except Exception as e:
+                warnings.warn(f"Could not set y-scale to '{scale_type}' "
+                              f"for plot '{subplot_title}'."
+                              f" Defaulting to 'linear'. Error: {e}")
+                ax.set_yscale('linear')
+            
             ax.legend()
             if show_grid:
                 ax.grid(**grid_properties)
@@ -402,6 +487,9 @@ def plot_history_in(
         except Exception as e:
             warnings.warn(f"Failed to save figure: {e}")
             
-    plt.show()
-
-
+    if plt.get_fignums():
+        plt.show()
+    
+    # Close the figure if it wasn't shown
+    if savefig and not plt.get_fignums():
+        plt.close(fig)

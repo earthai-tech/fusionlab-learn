@@ -22,7 +22,8 @@ from ._utils import (
     squeeze_last_dim_if,
     step_to_long, 
     make_dict_to_tuple_fn, 
-    export_keras_losses
+    export_keras_losses, 
+    get_tensor_from
     )
 
 from .hybrid.utils import plot_history_in
@@ -58,6 +59,7 @@ __all__=[
      'squeeze_last_dim_if',
      'step_to_long', 
      'export_keras_losses', 
+     'get_tensor_from',
      
      'plot_history_in', 
      
@@ -68,6 +70,7 @@ __all__=[
      'extract_txy', 
      'plot_hydraulic_head', 
      'make_dict_to_tuple_fn', 
-     'extract_physical_parameters'
+     'extract_physical_parameters', 
+     
      
  ]

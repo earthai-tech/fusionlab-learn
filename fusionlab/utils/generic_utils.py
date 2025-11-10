@@ -965,7 +965,7 @@ def vlog(
     logger=None,
     **kws
 ):
-    """
+    r"""
     Log or naive messages with optional indentation and
     bracketed tags.
 
@@ -975,16 +975,16 @@ def vlog(
     it behaves differently depending on whether
     ``mode`` is ``'log'`` or ``'naive'``. When
     :math:`mode = 'log'`, the message is printed only if
-    :math:`\\text{verbose} \\geq \\text{level}`. Otherwise,
+    :math:`\text{verbose} \geq \text{level}`. Otherwise,
     for :math:`mode` in [``None``, ``'naive'``], the
     verbosity threshold leads to various bracketed
     prefixes (e.g. [INFO], [DEBUG], [TRACE]) unless the
     message already contains such a prefix.
 
     .. math::
-       \\text{indentation} = 2 \\times \\text{depth}
+       \text{indentation} = 2 \times \text{depth}
 
-    where :math:`\\text{depth}` is either manually
+    where :math:`\text{depth}` is either manually
     specified or auto-derived based on `<parameter inline>`
     `level` (1 = ERROR, 2 = WARNING, 3 = INFO, 4/5 =
     DEBUG, 6/7 = TRACE).
@@ -1012,7 +1012,7 @@ def vlog(
     mode : str, optional
         Determines logging mode. If set to ``'log'``,
         prints messages only if
-        :math:`\\text{verbose} \\geq \\text{level}`.
+        :math:`\text{verbose} \geq \text{level}`.
         Otherwise (if ``None`` or ``'naive'``), it
         follows a custom logic driven by `<parameter
         inline> verbose`.
@@ -2497,7 +2497,11 @@ def are_all_values_in_bounds(
     else:
         return True
 
-def rename_dict_keys(data, param_to_rename=None):
+def rename_dict_keys(
+       data: dict,
+       param_to_rename: Optional[dict] = None,
+       order: str = "forward",
+    ):
     """
     Renames keys in the `data` dictionary based on 
     the provided `param_to_rename` dictionary.
@@ -2521,7 +2525,19 @@ def rename_dict_keys(data, param_to_rename=None):
         represents an old key that may be found in `data`, and the corresponding 
         value is the new key. If `None`, no renaming is performed. If a key in 
         `data` matches an old key in `param_to_rename`, that key will be renamed.
-
+    order: str, {'forward', 'reverse'}: 
+        Order for renaming keys in a flat dict::
+            
+            forward (default):
+                param_to_rename = {old_key: new_key}
+    
+            reverse:
+              param_to_rename = {
+                canonical_key: alias or (alias1, alias2, ...)
+              }
+              The first alias found in `data` is moved under the
+              canonical key. If the canonical key already exists,
+              nothing is changed for that mapping.
     Returns
     -------
     dict
@@ -2574,14 +2590,52 @@ def rename_dict_keys(data, param_to_rename=None):
     if not isinstance(data, dict):
         raise ValueError(
             f"data must be a dictionary. Got {type(data).__name__!r}")
+    if order not in ("forward", "reverse"):
+        raise ValueError("order must be 'forward' or 'reverse'.")
         
     # Create a copy of data to avoid modifying the original
     updated_data = data.copy()
     
+    if order == "forward":
+        # Rename keys based on param_to_rename mapping
+        for old_key, new_key in param_to_rename.items():
+            if old_key == new_key:
+                continue
+            if old_key in updated_data:
+                # do not clobber an existing canonical value
+                if new_key in updated_data and new_key != old_key:
+                    # keep existing new_key; drop old_key
+                    updated_data.pop(old_key)
+                else:
+                    updated_data[new_key] = updated_data.pop(old_key)
+            return updated_data
+    
+    # reverse mode: canonical -> aliases
+    for canonical, aliases in param_to_rename.items():
+        # normalize aliases to tuple
+        if isinstance(aliases, (list, tuple)):
+            alias_iter = tuple(aliases)
+        elif isinstance(aliases, str):
+            alias_iter = (aliases,)
+        else:
+            raise ValueError(
+                "reverse mode requires alias str or sequence."
+            )
+
+        # if canonical already present, prefer it
+        if canonical in updated_data:
+            continue
+
+        # move first alias found → canonical
+        for a in alias_iter:
+            if a in updated_data:
+                updated_data[canonical] = updated_data.pop(a)
+                break
+            
     # Rename keys based on param_to_rename mapping
-    for old_key, new_key in param_to_rename.items():
-        if old_key in updated_data:
-            updated_data[new_key] = updated_data.pop(old_key)
+    # for old_key, new_key in param_to_rename.items():
+    #     if old_key in updated_data:
+    #         updated_data[new_key] = updated_data.pop(old_key)
     
     return updated_data
 

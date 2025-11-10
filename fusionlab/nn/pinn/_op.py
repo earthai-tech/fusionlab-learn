@@ -13,7 +13,6 @@ from typing import Dict, List, Optional, Tuple, Union, Callable
 from typing import Mapping, Sequence
 import collections.abc as cabc
 
-import numpy as np
 import pandas as pd
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter 
@@ -22,7 +21,6 @@ from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from ...compat.tf import optional_tf_function 
 
 from .utils import extract_txy_in 
-from .._utils import get_tensor_from 
 
 Model = KERAS_DEPS.Model
 Variable =KERAS_DEPS.Variable 
@@ -54,63 +52,11 @@ def positive(x, eps: float = _SMALL):
     return tf_softplus(x) + eps
 
 @optional_tf_function
-def default_scales(
-    h: Tensor, 
-    s: Tensor, 
-    dt: Tensor, 
-    K: Optional[Tensor] = None, 
-    Ss: Optional[Tensor] = None, 
-    Q: Optional[Union[float, Tensor]] = None, 
-    **kws
-) -> Dict[str, Tensor]:
-    r"""
+def default_scales(h, s, dt, K=None, Ss=None, Q=None):
+    """
     Derive simple data-driven scale factors so residuals are O(1).
-
-    This function calculates characteristic *scalar* scales for the entire
-    batch by taking the mean of the absolute values of the input tensors
-    (fields). These scalar scales are then used to non-dimensionalize
-    the PDE loss terms, ensuring they are of a similar magnitude (O(1))
-    and preventing any single loss term from dominating the gradient.
-
-    The scales are computed as:
-    .. math::
-        
-        \text{cons\_scale} = \frac{\text{s\_ref}}{\text{dt\_ref}}\\
-            \approx \text{Scale}(\frac{\partial s}{\partial t})
-            
-        \text{gw\_scale} = \frac{\text{Ss\_ref} \cdot \text{h\_ref}}\\
-            {\text{dt\_ref}} \approx \text{Scale}(S_s \frac{\partial h}{\partial t})
-    
-    All reference values (h_ref, s_ref, dt_ref, Ss_ref) are computed
-    using ``tf.stop_gradient`` to treat them as constants during
-    differentiation.
-
-    Parameters
-    ----------
-    h : tf.Tensor
-        Predicted hydraulic head field, shape `(B, H, 1)`.
-    s : tf.Tensor
-        Predicted subsidence field, shape `(B, H, 1)`.
-    dt : tf.Tensor
-        Time step intervals, shape `(B, H-1, 1)` or similar.
-    K : tf.Tensor, optional
-        Predicted hydraulic conductivity field. Currently unused in
-        this function but included for API consistency.
-    Ss : tf.Tensor, optional
-        Predicted specific storage field, shape `(B, H, 1)`.
-    Q : float or tf.Tensor, optional
-        Source/sink term. Currently unused.
-
-    Returns
-    -------
-    dict
-        A dictionary containing the scalar reference values and the
-        computed scales:
-        - "h_ref": Scalar mean of |h|
-        - "s_ref": Scalar mean of |s|
-        - "dt_ref": Scalar mean of |dt|
-        - "gw_scale": Characteristic scale for the groundwater flow residual.
-        - "cons_scale": Characteristic scale for the consolidation residual.
+    If a value is None, the scale omits that term.
+    Returns a dict with keys: h_ref, s_ref, dt_ref, gw_scale, cons_scale.
     """
     # robust refs (stop gradients to keep them 'constants' during backprop)
     h_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
@@ -119,12 +65,10 @@ def default_scales(
 
     # groundwater residual typical scale ~ Ss * h / dt  (first-order)
     if Ss is not None:
-        # Get the batch-mean of the Ss field
         Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
         gw_scale = Ss_ref * h_ref / dt_ref
     else:
-        # Fallback if Ss is not provided (e.g., gw_flow mode disabled)
-        gw_scale = tf_constant(1.0, dtype=tf_float32)
+        gw_scale = 1.0
 
     # consolidation residual typical scale ~ s / dt
     cons_scale = s_ref / dt_ref
@@ -148,13 +92,9 @@ def extract_physical_parameters(
     to_csv: bool = False,
     filename: Optional[str] = None,
     save_dir: Optional[str] = None,
-    model_name: Optional[str] = None, 
-    inputs: dict | list | None = None,     
-    return_fields: bool = False,           
-    field_stat: str = "mean",              
     verbose: int = 0,
 ) -> Dict[str, float]:
-    r"""Extracts physical parameters from a PINN model.
+    """Extracts physical parameters from a PINN model.
 
     This function inspects a trained PINN model (like
     TransFlowSubsNet or PIHALNet) and extracts the final values
@@ -176,11 +116,6 @@ def extract_physical_parameters(
     save_dir : str, optional
         Directory to save the CSV file. Defaults to the current
         working directory.
-    model_name : str, optional
-        The name of the model to determine which parameters to
-        extract.
-        - 'geoprior' or 'geopriorsubsnet': Extracts mv, kappa, etc.
-        - None or other: Extracts K, Ss, Q, C (old model).
     verbose : int, default=0
         Controls the verbosity of the output. Set to 1 to print
         the extracted parameters to the console.
@@ -197,15 +132,6 @@ def extract_physical_parameters(
     physical parameters. For example, it will only extract the
     consolidation coefficient 'C' from a `PIHALNet` model
     without raising an error for missing `K`, `Ss`, or `Q`.
-    
-    For GeoPrior/GeoPriorSubsNet:
-        
-       - mv, kappa via model.current_mv()/current_kappa()
-         (or log_* / *_fixed fallback)
-       - K, Ss, tau are fields -> if `inputs` is given, 
-         run a forward pass and
-         add summary stats (and optionally the full fields).
-         
 
     See Also
     --------
@@ -227,150 +153,58 @@ def extract_physical_parameters(
     {'Hydraulic_Conductivity_K': 8.5e-05, 'Specific_Storage_Ss': 6e-06, ...}
     """
     params = {}
-    
     if verbose:
         print("Extracting physical parameters from the trained model...")
 
-    def _tofloat(x):
-        try:
-            x = x.numpy()
-        except Exception:
-            pass
-        return float(x) if np.ndim(x) == 0 else x
-    
     # A helper function to print verbose messages
     def _vprint(message):
         if verbose:
             print(message)
 
-    is_geoprior = (
-        str(model_name or "").lower() in {
-        "geoprior", "geopriorsubsnet"}
-        ) or hasattr(
-            model, "current_mv") and hasattr(model, "current_kappa")
-                      
-    # --- Extract Compressibility (mv) ---
-    # if hasattr(model, 'log_mv'):
-    #     value = tf_exp(model.log_mv).numpy()
-    #     params['Compressibility_mv'] = float(value)
-    #     _vprint(f"  - Found learnable mv: {value:.4e}")
-    # elif hasattr(model, 'mv'):
-    #     value = model.mv.numpy()
-    #     params['Compressibility_mv'] = float(value)
-    #     _vprint(f"  - Found fixed mv: {value:.4e}")
-        
-    if hasattr(model, "current_mv"):
-        val = _tofloat(model.current_mv())
-        params["Compressibility_mv"] = val
-        _vprint(f"  - Found learnable mv (current_mv): {val:.4e}")
-    elif hasattr(model, "log_mv"):
-        val = _tofloat(tf_exp(model.log_mv))
-        params["Compressibility_mv"] = val
-        _vprint(f"  - Found learnable mv (log_mv): {val:.4e}")
-    elif hasattr(model, "_mv_fixed"):
-        val = _tofloat(model._mv_fixed)
-        params["Compressibility_mv"] = val
-        _vprint(f"  - Found fixed mv: {val:.4e}")
-        
-    # --- Extract Consistency Prior (kappa) ---
-    # if hasattr(model, 'log_kappa'):
-    #     value = tf_exp(model.log_kappa).numpy()
-    #     params['Consistency_Kappa'] = float(value)
-    #     _vprint(f"  - Found learnable kappa: {value:.4e}")
-    # elif hasattr(model, 'kappa'):
-    #     value = model.kappa.numpy()
-    #     params['Consistency_Kappa'] = float(value)
-    #     _vprint(f"  - Found fixed kappa: {value:.4e}")
+    # --- Extract Hydraulic Conductivity (K) ---
+    if hasattr(model, 'log_K'):
+        # Parameter was learnable (stored as log(K))
+        value = tf_exp(model.log_K).numpy()
+        params['Hydraulic_Conductivity_K'] = float(value)
+        _vprint(f"  - Found learnable K: {value:.4e}")
+    elif hasattr(model, 'K'):
+        # Parameter was fixed
+        value = model.K.numpy()
+        params['Hydraulic_Conductivity_K'] = float(value)
+        _vprint(f"  - Found fixed K: {value:.4e}")
 
-    # ---- kappa ----
-    if hasattr(model, "current_kappa"):
-        val = _tofloat(model.current_kappa())
-        params["Consistency_Kappa"] = val
-        _vprint(f"  - - Found learnable kappa (current_kappa): {val:.4e}")
-    elif hasattr(model, "log_kappa"):
-        val = _tofloat(tf_exp(model.log_kappa))
-        params["Consistency_Kappa"] = val
-        _vprint(f"  - - Found learnable kappa (log_kappa): {val:.4e}")
-    elif hasattr(model, "_kappa_fixed"):
-        val = _tofloat(model._kappa_fixed)
-        params["Consistency_Kappa"] = val
-        _vprint(f"  - Found fixed kappa: {val:.4e}")
-        
-    # --- Extract Fixed Constants ---
-    if hasattr(model, 'gamma_w'):
-        value = model.gamma_w.numpy()
-        params['Unit_Weight_Water_gamma_w'] = float(value)
-        _vprint(f"  - Found fixed gamma_w: {value:.4e}")
-        
-    if hasattr(model, 'h_ref'):
-        value = model.h_ref.numpy()
-        params['Reference_Head_h_ref'] = float(value)
-        _vprint(f"  - Found fixed h_ref: {value:.4e}")
-            
-    # ---- GeoPrior fields (K, Ss, tau) ----
-    if is_geoprior and inputs is not None:
-        # Forward pass to obtain field heads; then split to (s,h,K,Ss,tau)
-        outputs = model(inputs, training=False)
-        s_mean, h_mean, K_field, Ss_field, tau_field = model.split_physics_predictions(
-            outputs)
+    # --- Extract Specific Storage (Ss) ---
+    if hasattr(model, 'log_Ss'):
+        # Parameter was learnable (stored as log(Ss))
+        value = tf_exp(model.log_Ss).numpy()
+        params['Specific_Storage_Ss'] = float(value)
+        _vprint(f"  - Found learnable Ss: {value:.4e}")
+    elif hasattr(model, 'Ss'):
+        # Parameter was fixed
+        value = model.Ss.numpy()
+        params['Specific_Storage_Ss'] = float(value)
+        _vprint(f"  - Found fixed Ss: {value:.4e}")
 
-        # Summary stat (keep minimal: mean | min | max)
-        reducer = {"mean": tf_reduce_mean}.get(field_stat, tf_reduce_mean)
+    # --- Extract Source/Sink Term (Q) ---
+    if hasattr(model, 'Q'):
+        q_param = model.Q
+        value = q_param.numpy()
+        params['Source_Sink_Q'] = float(value)
+        if isinstance(q_param, Variable):
+            _vprint(f"  - Found learnable Q: {value:.4e}")
+        else:
+            _vprint(f"  - Found fixed Q: {value:.4e}")
 
-        params[f"Hydraulic_Conductivity_K_{field_stat}"] = _tofloat(reducer(K_field))
-        params[f"Specific_Storage_Ss_{field_stat}"] = _tofloat(reducer(Ss_field))
-        params[f"Relaxation_Time_tau_{field_stat}"] = _tofloat(reducer(tau_field))
-
-        if return_fields:
-            params["K_field"] = _tofloat(K_field)
-            params["Ss_field"] = _tofloat(Ss_field)
-            params["tau_field"] = _tofloat(tau_field)
-    else:
-        
-        # --- Extract Hydraulic Conductivity (K) ---
-        if hasattr(model, 'log_K'):
-            # Parameter was learnable (stored as log(K))
-            value = tf_exp(model.log_K).numpy()
-            params['Hydraulic_Conductivity_K'] = float(value)
-            _vprint(f"  - Found learnable K: {value:.4e}")
-        elif hasattr(model, 'K'):
-            # Parameter was fixed
-            value = model.K.numpy()
-            params['Hydraulic_Conductivity_K'] = float(value)
-            _vprint(f"  - Found fixed K: {value:.4e}")
-    
-        # --- Extract Specific Storage (Ss) ---
-        if hasattr(model, 'log_Ss'):
-            # Parameter was learnable (stored as log(Ss))
-            value = tf_exp(model.log_Ss).numpy()
-            params['Specific_Storage_Ss'] = float(value)
-            _vprint(f"  - Found learnable Ss: {value:.4e}")
-        elif hasattr(model, 'Ss'):
-            # Parameter was fixed
-            value = model.Ss.numpy()
-            params['Specific_Storage_Ss'] = float(value)
-            _vprint(f"  - Found fixed Ss: {value:.4e}")
-    
-        # --- Extract Source/Sink Term (Q) ---
-        if hasattr(model, 'Q'):
-            q_param = model.Q
-            value = q_param.numpy()
-            params['Source_Sink_Q'] = float(value)
-            if isinstance(q_param, Variable):
-                _vprint(f"  - Found learnable Q: {value:.4e}")
-            else:
-                _vprint(f"  - Found fixed Q: {value:.4e}")
-    
-        # --- Extract Consolidation Coefficient (C) ---
-        # Using a getter method is robust if the model defines it
-        if hasattr(model, 'get_pinn_coefficient_C'):
-            value = model.get_pinn_coefficient_C().numpy()
-            params['Consolidation_Coefficient_C'] = float(value)
-            # Check for the underlying log variable to confirm learnability
-            if hasattr(model, 'log_C_coefficient'):
-                 _vprint(f"  - Found learnable C: {value:.4e}")
-            else:
-                 _vprint(f"  - Found fixed C: {value:.4e}")
+    # --- Extract Consolidation Coefficient (C) ---
+    # Using a getter method is robust if the model defines it
+    if hasattr(model, 'get_pinn_coefficient_C'):
+        value = model.get_pinn_coefficient_C().numpy()
+        params['Consolidation_Coefficient_C'] = float(value)
+        # Check for the underlying log variable to confirm learnability
+        if hasattr(model, 'log_C_coefficient'):
+             _vprint(f"  - Found learnable C: {value:.4e}")
+        else:
+             _vprint(f"  - Found fixed C: {value:.4e}")
 
     # --- Handle CSV Export ---
     if to_csv or filename:
@@ -405,7 +239,7 @@ def compute_consolidation_residual(
     C: Union[float, Tensor], 
     eps: float  = 1e-5
 ) -> Tensor:
-    r"""
+    """
     Computes the residual of a simplified consolidation equation.
 
     This function enforces a simplified form of Terzaghi's 1D
@@ -525,7 +359,7 @@ def compute_gw_flow_residual(
     Q: Union[float, Tensor] = 0.0,
     h_pred: Optional[Tensor] = None
 ) -> Tensor:
-    r"""
+    """
     Compute the residual of the 2D transient groundwater
     flow equation via PINN.
 
@@ -625,8 +459,7 @@ def compute_gw_flow_residual(
     del tape, inner_tape
     if d2h_dx2 is None or d2h_dy2 is None:
         raise ValueError(
-                "Failed to compute one or more"
-                " second-order spatial gradients."
+                "Failed to compute one or more second-order spatial gradients."
         )
 
     # Laplacian and residual
@@ -636,19 +469,15 @@ def compute_gw_flow_residual(
     residual = (K * lap_h) + Q - (Ss * dh_dt)
     return residual
 
-
 def process_pinn_inputs(
     inputs: Union[Dict[str, Optional[Tensor]], List[Optional[Tensor]]],
     mode: str = 'as_dict',
     coord_keys: Tuple[str, str, str] = ('t', 'x', 'y'),
     coord_slice_map: Dict[str, int] = {'t': 0, 'x': 1, 'y': 2},
-    model_name: Optional[str] = None, 
-    h_field_key: Optional[str] = None  
 ) -> Tuple[
-    Tensor, Tensor, Tensor, Optional[Tensor], Optional[Tensor], 
-    Tensor, Optional[Tensor]
+    Tensor, Tensor, Tensor, Optional[Tensor], Tensor, Optional[Tensor]
 ]:
-    r"""
+    """
     Processes and unpacks model inputs for PINN applications.
 
     This utility standardizes the handling of inputs for a PINN model,
@@ -682,14 +511,7 @@ def process_pinn_inputs(
         A dictionary mapping coordinate names to their integer index
         in the last dimension of the `coords` tensor. This defines how
         the `coords` tensor is sliced into individual coordinate tensors.
-    model_name : str, optional
-        If set to 'geoprior' or 'geopriorsubsnet', the function will
-        actively search for and return the `H_field` tensor.
-    h_field_key : str, optional
-        Explicit key for the soil thickness tensor. If None (default)
-        and `model_name` is 'geoprior', it will search for
-        'H_field' or 'soil_thickness'.
-        
+
     Returns
     -------
     Tuple[Tensor, Tensor, Tensor, Optional[Tensor], Tensor, Optional[Tensor]]
@@ -735,12 +557,8 @@ def process_pinn_inputs(
     static_features: Optional[Tensor] = None
     dynamic_features: Optional[Tensor] = None
     future_features: Optional[Tensor] = None
-    H_field: Optional[Tensor] = None 
     
-    # --- NEW: Check model type ---
-    is_geoprior = str(model_name).lower().strip() in (
-        'geoprior', 'geopriorsubsnet')
-    
+    # 0 — auto-detect the mode if requested
     if mode == "auto":
         mode = infer_pinn_mode(inputs)
 
@@ -750,7 +568,7 @@ def process_pinn_inputs(
                 f"Expected `inputs` to be a dictionary for mode='as_dict',"
                 f" but got {type(inputs)}."
             )
-        # Required inputs
+        # Required inputs for dictionary mode
         coords_tensor = inputs.get('coords')
         dynamic_features = inputs.get('dynamic_features')
         if coords_tensor is None or dynamic_features is None:
@@ -761,24 +579,7 @@ def process_pinn_inputs(
         # Optional inputs
         static_features = inputs.get('static_features')
         future_features = inputs.get('future_features')
-        
-        # --- NEW: Conditional Check for H_field ---
-        if is_geoprior:
-            if h_field_key:
-                H_field = inputs.get(h_field_key)
-            else:
-                # Use default keys if no explicit key is given
-                H_field = get_tensor_from (inputs,'H_field','soil_thickness')
-                
-                # H_field = inputs.get('H_field') is not None or inputs.get('soil_thickness')
-            
-            if H_field is None:
-                raise ValueError(
-                    f"model='{model_name}' requires an 'H_field' input, "
-                    "but could not find key 'H_field', 'soil_thickness', "
-                    f"or the provided `h_field_key` ('{h_field_key}')."
-                )
-      
+
     elif mode == 'as_list':
         if not isinstance(inputs, (list, tuple)):
             raise TypeError(
@@ -793,49 +594,28 @@ def process_pinn_inputs(
                 f"Got {num_inputs} elements."
             )
         # Unpack based on the defined order
-        # [coords, dynamic, static, future, H]
         coords_tensor = inputs[0]
-        dynamic_features = inputs[1] # Required
-        static_features = inputs[2] if num_inputs > 2 else None
+        static_features = inputs[1] if num_inputs > 2 else None
+        dynamic_features = inputs[2]
         future_features = inputs[3] if num_inputs > 3 else None
-        
-        # --- NEW: Conditional Check for H_field ---
-        if is_geoprior:
-            if num_inputs > 4:
-                H_field = inputs[4]
-            if H_field is None:
-                raise ValueError(
-                    f"model='{model_name}' requires H_field as the 5th "
-                    "element in the input list, but it was missing or None."
-                )
-        # --- End New Logic ---
 
     else:
         raise ValueError(
-            f"Invalid `mode`: '{mode}'. Must be 'as_dict', 'as_list', or 'auto'."
+            f"Invalid `mode`: '{mode}'. Must be 'as_dict' or 'as_list'."
         )
 
-    # Slice the coordinates tensor
+    # Slice the coordinates tensor to isolate t, x, and y
+    # Keep the last dimension for concatenation or broadcasting later.
     t = coords_tensor[..., coord_slice_map['t']:coord_slice_map['t']+1]
     x = coords_tensor[..., coord_slice_map['x']:coord_slice_map['x']+1]
     y = coords_tensor[..., coord_slice_map['y']:coord_slice_map['y']+1]
 
-    if is_geoprior:
-        return (
-            t, x, y,
-            H_field, 
-            static_features,
-            dynamic_features,
-            future_features
-        )
-    else:
-        return (
-            t, x, y,
-            static_features,
-            dynamic_features,
-            future_features
-        )
-    
+    return (
+        t, x, y,
+        static_features,
+        dynamic_features,
+        future_features
+    )
 
 def infer_pinn_mode(
     inputs: Union[
@@ -849,7 +629,7 @@ def infer_pinn_mode(
     Parameters
     ----------
     inputs :
-        * **Mapping** – a dict-like object whose *values* are tensors
+        * **Mapping**  – a dict-like object whose *values* are tensors
           (e.g. ``{'coords': …, 'dynamic_features': …}``).  
           → returns ``'as_dict'``.
         * **Sequence** – a list **or** tuple whose *items* are tensors
@@ -1076,7 +856,6 @@ def compute_gw_flow_derivatives(
         logger.warning("d2h/dy2 is None in compute_gw_flow_derivatives.")
         
     return dh_dt, d2h_dx2, d2h_dy2
-
 
 
 

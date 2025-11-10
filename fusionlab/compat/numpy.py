@@ -11,10 +11,9 @@ in older versions of NumPy.
 from packaging.version import Version, parse
 import warnings
 import numpy as np
-from .._gofastlog import gofastlog
+from .._fusionlog import fusionlog
+_logger = fusionlog().get_fusionlab_logger(__name__)
 
-# Setup logging
-_logger = gofastlog().get_gofast_logger(__name__)
 
 __all__ = [
     "safe_erf",
