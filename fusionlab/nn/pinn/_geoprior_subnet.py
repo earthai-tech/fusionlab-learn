@@ -130,9 +130,9 @@ class GeoPriorSubsNet(BaseAttentive):
         kappa: Union[LearnableKappa, float] = LearnableKappa(initial_value=1.0),
         gamma_w: Union[FixedGammaW, float] = FixedGammaW(value=9810.0),
         h_ref: Union[FixedHRef, float] = FixedHRef(value=0.0),
-        use_effective_h = False,
-        hd_factor = 1.0 ,  # if Hd = Hd_factor * H
-        kappa_mode = "bar",   # {"bar", "kb"}  # κ̄ vs κ_b
+        use_effective_h: bool = False,
+        hd_factor: float = 1.0 ,  # if Hd = Hd_factor * H
+        kappa_mode: str = "bar",   # {"bar", "kb"}  # κ̄ vs κ_b
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         mode: Optional[str]=None, 
@@ -809,9 +809,11 @@ class GeoPriorSubsNet(BaseAttentive):
             "gwl_pred":  gwl_pred_final,
         }
     
-        # Compute loss + update compiled metrics on the SAME mapping used in training
+        # Compute loss + update compiled metrics on
+        # the SAME mapping used in training
         loss = self.compiled_loss(
-            y_true=targets, y_pred=y_pred_for_eval, regularization_losses=self.losses
+            y_true=targets, y_pred=y_pred_for_eval, 
+            regularization_losses=self.losses
         )
         self.compiled_metrics.update_state(targets, y_pred_for_eval)
     

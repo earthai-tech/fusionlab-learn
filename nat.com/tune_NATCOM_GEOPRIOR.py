@@ -38,7 +38,7 @@ from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
 # --- fusionlab imports ---
 try:
     from fusionlab.utils.generic_utils import ensure_directory_exists
-    # Import your tuner
+    # Import the tuner
     from fusionlab.nn.forecast_tuner import GeoPriorTuner
     from fusionlab.nn.callbacks import NaNGuard 
     
