@@ -563,14 +563,14 @@ ds_eval = tf.data.Dataset.from_tensor_slices((X_fore, y_fore_fmt)).batch(BATCH_S
 
 # --- 2.1 Standard Keras evaluate() ---
 try:
-    eval_results = subs_model_loaded.evaluate(ds_eval, return_dict=True, verbose=1)
+    eval_results = subs_model_inst.evaluate(ds_eval, return_dict=True, verbose=1)
     print("Evaluation:", eval_results)
 except Exception as e:
     print(f"[Warn] Evaluation failed: {e}")
 
 # --- 2.2 Physics diagnostics (optional) ---
 try:
-    phys = subs_model_loaded.evaluate_physics(X_fore)
+    phys = subs_model_inst.evaluate_physics(X_fore)
     phys = {k: float(v.numpy()) for k, v in phys.items()}
     print("Physics diagnostics:", phys)
 except Exception as e:
