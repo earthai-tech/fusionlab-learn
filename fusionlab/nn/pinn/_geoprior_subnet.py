@@ -24,6 +24,13 @@ from .._base_attentive import BaseAttentive
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs
     from .._utils import get_tensor_from 
+    from .io import ( 
+        _maybe_subsample, 
+        default_meta_from_model, 
+        save_physics_payload, 
+        load_physics_payload, 
+        gather_physics_payload
+    ) 
     from .op import ( 
         process_pinn_inputs, default_scales, scale_residual, positive 
     )
@@ -101,6 +108,7 @@ class GeoPriorSubsNet(BaseAttentive):
         
     }
    )
+
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
     def __init__(
         self,
@@ -725,8 +733,16 @@ class GeoPriorSubsNet(BaseAttentive):
             mv_prior_res = self._compute_mv_prior(Ss_field)     
             loss_mv = tf_reduce_mean(tf_square(mv_prior_res))   
             
+            if self._physics_off():
+                # Force all physics terms to zero
+                cons_res = tf_zeros_like(cons_res)
+                gw_res   = tf_zeros_like(gw_res)
+                prior_res   = tf_zeros_like(prior_res)
+                smooth_res  = tf_zeros_like(smooth_res)
+                loss_mv     = tf_zeros_like(loss_mv)
+                
             # --- 6. SCALE RESIDUALS ---
-            if self.scale_pde_residuals:
+            if (not self._physics_off()) and self.scale_pde_residuals:
                 scales = self._compute_scales(
                     t, s_pred_mean_corr, h_pred_mean_corr,
                     K_field, Ss_field, Q=0.0
@@ -821,10 +837,15 @@ class GeoPriorSubsNet(BaseAttentive):
         # results.update({"loss": loss})
     
         # (Optional) quick physics diagnostics during eval — no gradients needed
-        phys = self.evaluate_physics(inputs)  # returns tensors
-        self.eps_prior_metric.update_state(phys["epsilon_prior"])
-        self.eps_cons_metric.update_state(phys["epsilon_cons"])
-        
+        if not self._physics_off():
+            phys = self.evaluate_physics(inputs)  # returns tensors
+            self.eps_prior_metric.update_state(phys["epsilon_prior"])
+            self.eps_cons_metric.update_state(phys["epsilon_cons"])
+        else:
+            # push zeros so logs stay stable
+            self.eps_prior_metric.update_state(0.0)
+            self.eps_cons_metric.update_state(0.0)
+
         # results.update({k: tf.cast(v, tf.float32) for k, v in phys.items()})
         results = {m.name: m.result() for m in self.metrics}
         
@@ -884,7 +905,6 @@ class GeoPriorSubsNet(BaseAttentive):
         
         return ds_dt - relaxation_term
 
-
     def _compute_consistency_prior(
             self, K_field, Ss_field, tau_field, H_field
         ):
@@ -923,7 +943,47 @@ class GeoPriorSubsNet(BaseAttentive):
             )
             
         return log_tau_pred - log_tau_phys
+
+    def get_last_physics_fields(self):
+        """
+        Returns the most recent physics fields and H used by the model call.
+        Shapes: (B, H, 1) each, matching the last forward pass.
+        """
+        return {
+            "tau":  self.tau_field,
+            "K":    self.K_field,
+            "Ss":   self.Ss_field,
+            "H_in": self.H_field,   # raw H passed in inputs
+        }
     
+    def _tau_phys_from_fields(self, K_field, Ss_field, H_field):
+        """
+        Physical time scale from fields, matching _compute_consistency_prior.
+        Returns tau_phys in linear space (
+            no logs), with the same K-mode logic.
+        """
+        pi_squared = tf_constant(np.pi**2, dtype=tf_float32)
+        # same H logic as in _compute_consistency_prior
+        safe_H_eff = (
+            H_field * self.Hd_factor if self.use_effective_thickness else H_field
+        ) + 1e-6
+    
+        if self.kappa_mode == "bar":
+            # τ_phys = (κ * H_eff^2 * Ss) / (π^2 * K)
+            tau_phys = (
+                self._kappa_value() * (safe_H_eff**2) * Ss_field
+                / (pi_squared * K_field)
+            )
+        else:  # "kb"
+            ratio = safe_H_eff / (H_field + 1e-6)
+            tau_phys = (
+                self._kappa_value() * (ratio**2) * (
+                    (H_field + 1e-6) **2) * Ss_field
+                / (pi_squared * K_field)
+            )
+        return tau_phys, safe_H_eff  # return Hd actually used
+
+
     def _compute_smoothness_prior(
         self, dK_dx, dK_dy, dSs_dx, dSs_dy
     ):
@@ -1041,8 +1101,55 @@ class GeoPriorSubsNet(BaseAttentive):
     
         out = {"epsilon_prior": eps_prior, "epsilon_cons": eps_cons}
         if return_maps:
+            # Return maps for residuals
             out.update({"R_prior": R_prior, "R_cons": R_cons})
+    
+            # Also return fields needed for Fig.4 payload
+            tau_phys, Hd_eff = self._tau_phys_from_fields(K_field, Ss_field, H_field)
+            out.update({
+                "K": K_field,
+                "Ss": Ss_field,
+                "H": Hd_eff,          # the effective H actually used
+                # (The tf_exp(tf_log(tau_field)) is a numerically safe no-op to
+                # ensure it’s a tensor and avoids rare autograph tracing surprises.)
+                "tau": tf_exp(tf_log(tau_field)),  # stable pass-through
+                "tau_prior": tau_phys,
+            })
         return out
+
+    def export_physics_payload(
+        self,
+        dataset,
+        max_batches=None,
+        save_path=None,
+        format="npz",
+        overwrite=False,
+        metadata=None,
+        random_subsample=None,
+        float_dtype=np.float32,
+    ):
+        """
+        Gather physics payload from `dataset` and optionally persist to disk.
+        """
+        payload = gather_physics_payload(
+            self, dataset, max_batches=max_batches, float_dtype=float_dtype
+        )
+        if random_subsample is not None:
+            payload = _maybe_subsample(payload, random_subsample)
+    
+        if save_path is not None:
+            meta = default_meta_from_model(self)
+            if metadata:
+                meta.update(metadata)
+            save_physics_payload(
+                payload, meta, save_path, format=format, overwrite=overwrite
+            )
+        return payload
+    
+    @staticmethod
+    def load_physics_payload(path):
+        """Load a previously saved physics payload + metadata."""
+        return load_physics_payload(path)
 
     def split_data_predictions(
         self,
@@ -1110,6 +1217,11 @@ class GeoPriorSubsNet(BaseAttentive):
             scaled.append((g, v))
         return scaled
 
+    def _physics_off(self) -> bool:
+        return isinstance(self.pde_modes_active, (list, tuple)) \
+               and ('none' in self.pde_modes_active)
+
+
     @property
     def mv_lr_mult(self) -> float: 
         return self._mv_lr_mult
@@ -1159,13 +1271,21 @@ class GeoPriorSubsNet(BaseAttentive):
         """
 
         super().compile(**kwargs)
+        
         self.lambda_cons = lambda_cons
         self.lambda_gw = lambda_gw
-        self.lambda_prior = lambda_prior
-        self.lambda_smooth = lambda_smooth
-        self.lambda_mv = lambda_mv
+        
+        if self._physics_off(): 
+            self.lambda_prior=self.lambda_smooth=self.lambda_mv=0.0
+        else:
+            
+            self.lambda_prior = lambda_prior
+            self.lambda_smooth = lambda_smooth
+            self.lambda_mv = lambda_mv
+            
         self._mv_lr_mult = float(mv_lr_mult)
         self._kappa_lr_mult = float(kappa_lr_mult)
+        
 
     def get_config(self) -> dict:
         """Returns the full configuration of the model."""
@@ -1217,6 +1337,7 @@ class GeoPriorSubsNet(BaseAttentive):
         config.pop("pinn_coefficient_C", None)
         config.pop("gw_flow_coeffs", None)
         config.pop('output_dim', None) 
+        config.pop('model_version', None)
     
         return cls(**config)
 

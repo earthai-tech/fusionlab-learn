@@ -250,15 +250,6 @@ def extract_physical_parameters(
             model, "current_mv") and hasattr(model, "current_kappa")
                       
     # --- Extract Compressibility (mv) ---
-    # if hasattr(model, 'log_mv'):
-    #     value = tf_exp(model.log_mv).numpy()
-    #     params['Compressibility_mv'] = float(value)
-    #     _vprint(f"  - Found learnable mv: {value:.4e}")
-    # elif hasattr(model, 'mv'):
-    #     value = model.mv.numpy()
-    #     params['Compressibility_mv'] = float(value)
-    #     _vprint(f"  - Found fixed mv: {value:.4e}")
-        
     if hasattr(model, "current_mv"):
         val = _tofloat(model.current_mv())
         params["Compressibility_mv"] = val
@@ -272,17 +263,7 @@ def extract_physical_parameters(
         params["Compressibility_mv"] = val
         _vprint(f"  - Found fixed mv: {val:.4e}")
         
-    # --- Extract Consistency Prior (kappa) ---
-    # if hasattr(model, 'log_kappa'):
-    #     value = tf_exp(model.log_kappa).numpy()
-    #     params['Consistency_Kappa'] = float(value)
-    #     _vprint(f"  - Found learnable kappa: {value:.4e}")
-    # elif hasattr(model, 'kappa'):
-    #     value = model.kappa.numpy()
-    #     params['Consistency_Kappa'] = float(value)
-    #     _vprint(f"  - Found fixed kappa: {value:.4e}")
-
-    # ---- kappa ----
+    # --- Extract Consistency Prior (kappa) ----
     if hasattr(model, "current_kappa"):
         val = _tofloat(model.current_kappa())
         params["Consistency_Kappa"] = val

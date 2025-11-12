@@ -38,6 +38,9 @@ from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
 # --- fusionlab imports ---
 try:
     from fusionlab.utils.generic_utils import ensure_directory_exists
+    from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+
+    from fusionlab.registry.utils import _find_stage1_manifest
     # Import the tuner
     from fusionlab.nn.forecast_tuner import GeoPriorTuner
     from fusionlab.nn.callbacks import NaNGuard 
@@ -47,15 +50,29 @@ except Exception as e:
     print(f"Failed to import fusionlab modules: {e}")
     raise
 
-
 # =============================================================================
 # 0) Load Stage-1 manifest and arrays
 # =============================================================================
-MANIFEST_PATH = "results/nansha_GeoPriorSubsNet_stage1/manifest.json"
+RESULTS_DIR = default_results_dir()  # auto-resolve
+CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
+MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
+MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
+
+MANIFEST_PATH = _find_stage1_manifest(
+    manual=MANUAL,                   # exact manifest if provided
+    base_dir=RESULTS_DIR,            # where to search
+    city_hint=CITY_HINT,             # filter by city if set
+    model_hint=MODEL_HINT,           # filter by model if set
+    prefer="timestamp",              # or "mtime"
+    required_keys=("model", "stage"),
+    verbose=1,
+)
+
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
+print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
 
-# Resolve paths from manifest (keeps the script relocatable)
+# Resolve NPZ paths from manifest
 train_inputs_npz = M["artifacts"]["numpy"]["train_inputs_npz"]
 train_targets_npz = M["artifacts"]["numpy"]["train_targets_npz"]
 val_inputs_npz   = M["artifacts"]["numpy"]["val_inputs_npz"]
@@ -68,37 +85,66 @@ y_val   = dict(np.load(val_targets_npz))
 
 def _sanitize_inputs(X):
     for k, v in X.items():
-        if v is None: 
+        if v is None:
             continue
         v = np.asarray(v)
         v = np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
-        # Optional: clip extreme outliers to a robust range
-        if v.ndim > 0:
-            p99 = np.percentile(v, 99) if np.isfinite(v).any() else 0.0
+        if v.ndim > 0 and np.isfinite(v).any():
+            p99 = np.percentile(v, 99)
             if p99 > 0:
-                v = np.clip(v, -10*p99, 10*p99)
+                v = np.clip(v, -10 * p99, 10 * p99)
         X[k] = v
-    # Thickness must be positive to avoid divisions later on
     if "H_field" in X:
         X["H_field"] = np.maximum(X["H_field"], 1e-3).astype(np.float32)
+    return X
+
+def _ensure_input_shapes_np(X, mode: str, horizon: int):
+    """Guarantee zero-width placeholders for optional inputs."""
+    X = dict(X)
+    N = X["dynamic_features"].shape[0]
+    T = X["dynamic_features"].shape[1]
+    if X.get("static_features") is None:
+        X["static_features"] = np.zeros((N, 0), dtype=np.float32)
+    if X.get("future_features") is None:
+        t_future = T if mode == "tft_like" else horizon
+        X["future_features"] = np.zeros((N, t_future, 0), dtype=np.float32)
     return X
 
 X_train = _sanitize_inputs(X_train)
 X_val   = _sanitize_inputs(X_val)
 
-# Optional scalers/encoders
-main_scaler = None
-if M["artifacts"]["encoders"].get("main_scaler"):
-    main_scaler = joblib.load(M["artifacts"]["encoders"]["main_scaler"])
-coord_scaler = joblib.load(M["artifacts"]["encoders"]["coord_scaler"])
-scaler_info = M["artifacts"]["encoders"]["scaler_info"]
-
 cfg = M["config"]
-CITY_NAME = M.get("city", "nansha")
+CITY_NAME = M.get("city", "unknown_city")
 MODEL_NAME = M.get("model", "GeoPriorSubsNet")
 TIME_STEPS = cfg["TIME_STEPS"]
 FORECAST_HORIZON_YEARS = cfg["FORECAST_HORIZON_YEARS"]
 MODE = cfg["MODE"]
+CENSOR = cfg.get("censoring", {})
+USE_EFFECTIVE_H = CENSOR.get("use_effective_h_field", True)
+
+# Ensure placeholders exist even if Stage-1 NPZs are from an older run
+X_train = _ensure_input_shapes_np(X_train, MODE, FORECAST_HORIZON_YEARS)
+X_val   = _ensure_input_shapes_np(X_val,   MODE, FORECAST_HORIZON_YEARS)
+
+# Optional encoders/scalers (may be absent)
+enc = M["artifacts"]["encoders"]
+main_scaler = None
+ms_path = enc.get("main_scaler")
+if ms_path and os.path.exists(ms_path):
+    try:
+        main_scaler = joblib.load(ms_path)
+    except Exception:
+        pass
+
+coord_scaler = None
+cs_path = enc.get("coord_scaler")
+if cs_path and os.path.exists(cs_path):
+    try:
+        coord_scaler = joblib.load(cs_path)
+    except Exception:
+        pass
+
+scaler_info = enc.get("scaler_info", {})
 
 # Output directory for Stage-2
 BASE_STAGE2_DIR = os.path.join(M["paths"]["run_dir"], "tuning")
@@ -108,7 +154,6 @@ STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 RUN_OUTPUT_PATH = os.path.join(BASE_STAGE2_DIR, f"run_{STAMP}")
 ensure_directory_exists(RUN_OUTPUT_PATH)
 print(f"\nStage-2 outputs will be written to: {RUN_OUTPUT_PATH}")
-
 
 # =============================================================================
 # 1) Sanity maps & shapes
@@ -199,6 +244,7 @@ fixed_params = {
     "loss_weights": {"subs_pred": 1.0, "gwl_pred": 0.5},
     "pde_mode": PDE_MODE_CONFIG,
     "scale_pde_residuals": True,
+    "use_effective_h": USE_EFFECTIVE_H,  
     "architecture_config": {
         "encoder_type": "hybrid",
         "decoder_attention_stack": ATTENTION_LEVELS,

@@ -61,7 +61,7 @@ try:
         ensure_directory_exists,
     )
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
-    from fusionlab.utils.forecast_utils import get_test_data_from
+    # from fusionlab.utils.forecast_utils import get_test_data_from
     print("Successfully imported fusionlab modules.")
 except Exception as e:
     print(f"Failed to import fusionlab modules: {e}")
@@ -73,10 +73,10 @@ except Exception as e:
 # ==================================================================
 CITY_NAME = "nansha"  # or "zhongshan"
 MODEL_NAME = "GeoPriorSubsNet"
-H_FIELD_COL_NAME = "soil_thickness"  # Required by GeoPriorSubsNet
+
 
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..")
-BIG_FN = f"{CITY_NAME}_500k.csv"
+BIG_FN = f"{CITY_NAME}_final_main_std.harmonized.csv"
 SMALL_FN = f"{CITY_NAME}_2000.csv"
 
 SEARCH_PATHS = [
@@ -95,8 +95,8 @@ FALLBACK_PATHS = [
 # Time windows
 TRAIN_END_YEAR = 2021
 FORECAST_START_YEAR = 2022
-FORECAST_HORIZON_YEARS = 3
-TIME_STEPS = 4                   # lookback
+FORECAST_HORIZON_YEARS = 3  # in years 
+TIME_STEPS = 4                   # lookback in  years 
 MODE = "tft_like"                # {'pihal_like', 'tft_like'}
 
 # Columns
@@ -104,7 +104,62 @@ TIME_COL = "year"
 LON_COL = "longitude"
 LAT_COL = "latitude"
 SUBSIDENCE_COL = "subsidence"
-GWL_COL = "GWL"
+GWL_COL = "GWL_depth_bgs_z" # "GWL"
+H_FIELD_COL_NAME = "soil_thickness"  # Required by GeoPriorSubsNet
+
+# ---------- Feature registry (global knobs) ----------
+
+# Optional numeric (feed into dynamic_features if present)
+OPTIONAL_NUMERIC_FEATURES = [
+    ("rainfall_mm", "rainfall", "rain_mm", "precip_mm"),
+    ("urban_load_global", "normalized_density", "urban_load"),
+    # add more numeric candidates here (or just a string name)
+]
+
+# Optional categorical (will be one-hot encoded into static_features)
+OPTIONAL_CATEGORICAL_FEATURES = [
+    ("lithology", "geology"),
+    "lithology_class",  # will be used only if present
+    # add more categorical candidates here
+]
+
+# Which optional numeric are already normalized to [0,1]?
+# (We will SKIP scaling for these to avoid double-normalization)
+ALREADY_NORMALIZED_FEATURES = [
+    # "normalized_urban_load_proxy",  # put real final column name if present
+    "urban_load_global", 
+    # add more if needed
+]
+
+# Future-known drivers (subset of numeric) to expose as future_features
+FUTURE_DRIVER_FEATURES = [
+    "rainfall_mm"  # any resolved/actual column with this name is used if present
+    # add more if you want multi-driver futures
+]
+
+# ---- CENSORING (generic, config-driven) -----------------------------
+# Each spec describes one potentially censored numeric column.
+CENSORING_SPECS = [
+    {
+        "col": H_FIELD_COL_NAME,      # e.g., "soil_thickness"
+        "direction": "right",         # "right" (>= cap) or "left" (<= cap)
+        "cap": 30.0,                  # instrument/processing cap
+        "tol": 1e-6,                  # closeness tolerance for equality-to-cap
+        "flag_suffix": "_censored",   # boolean indicator column
+        "eff_suffix": "_eff",         # effective value column
+           #  or {"flag_col": "soil_thickness_censored"}
+        # How to form the effective value used by the model:
+        # "clip": min(x, cap) ; "cap_minus_eps": cap*(1-eps) if censored
+        # "nan_if_censored": set NaN then impute (see "impute" block)
+        "eff_mode": "clip",
+        "eps": 0.02,                  # used only for "cap_minus_eps"
+        "impute": {"by": ["year"], "func": "median"},  # used only if eff_mode="nan_if_censored"
+        "flag_threshold": 0.5,
+    },
+]
+INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = True   # add *_censored as a (0/1) driver
+USE_EFFECTIVE_H_FIELD = True             # feed H_field = "<col>_eff" if created
+
 
 # Output base
 BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results")
@@ -159,6 +214,94 @@ def _dataset_to_numpy_pair(ds: tf.data.Dataset, limit: Optional[int] = None
     y_np = {k: np.stack([yi[k] for yi in ys], axis=0) for k in y0}
     return x_np, y_np
 
+def _resolve_optional_columns(df: pd.DataFrame, spec_list) -> tuple[list[str], dict]:
+    """
+    From a list like ["a", ("b","b2"), "c"], return:
+      present_cols: concrete columns found in df (choose first match in tuples)
+      mapping: {chosen_col: original_spec} for traceability
+    """
+    present, mapping = [], {}
+    cols = set(df.columns)
+    for spec in spec_list:
+        if isinstance(spec, (list, tuple, set)):
+            chosen = next((s for s in spec if s in cols), None)
+            if chosen is not None:
+                present.append(chosen)
+                mapping[chosen] = tuple(spec)
+        else:
+            if spec in cols:
+                present.append(spec)
+                mapping[spec] = spec
+    return present, mapping
+
+
+def _drop_missing_keep_order(cands: list[str], df: pd.DataFrame) -> list[str]:
+    """Keep only those in df.columns preserving order."""
+    cols = set(df.columns)
+    return [c for c in cands if c in cols]
+
+def _apply_censoring(df: pd.DataFrame, specs: list[dict]) -> tuple[pd.DataFrame, dict]:
+    """
+    Add <col>_censored (bool) and <col>_eff (float) for each spec.
+    Returns (df, report) with basic rates for the manifest.
+    """
+    report = {}
+    for sp in specs or []:
+        col = sp.get("col")
+        if not col or col not in df.columns:
+            continue
+
+        cap  = sp.get("cap")
+        tol  = float(sp.get("tol", 0.0))
+        dirn = sp.get("direction", "right")
+        fflag = col + sp.get("flag_suffix", "_censored")
+        feff  = col + sp.get("eff_suffix",  "_eff")
+        mode  = sp.get("eff_mode", "clip")
+        eps   = float(sp.get("eps", 0.02))
+
+        x = pd.to_numeric(df[col], errors="coerce").astype(float)
+
+        if dirn == "right":
+            m = np.isfinite(x) & (x >= (cap - tol))
+        elif dirn == "left":
+            m = np.isfinite(x) & (x <= (cap + tol))
+        else:
+            raise ValueError("Censoring 'direction' must be 'left' or 'right'.")
+
+        df[fflag] = m.astype(bool)
+
+        if mode == "clip" and cap is not None:
+            eff = np.minimum(x, cap)
+        elif mode == "cap_minus_eps" and cap is not None:
+            eff = np.where(m, cap * (1.0 - eps), x)
+        elif mode == "nan_if_censored":
+            eff = x.copy()
+            eff[m] = np.nan
+            imp = sp.get("impute") or {}
+            by  = imp.get("by", [])
+            func = imp.get("func", "median")
+            if by:
+                df[feff] = eff
+                grp = df.groupby(by)[feff]
+                if func == "median":
+                    df[feff] = grp.transform(lambda s: s.fillna(s.median()))
+                elif func == "mean":
+                    df[feff] = grp.transform(lambda s: s.fillna(s.mean()))
+                eff = df[feff].to_numpy(dtype=float)
+        else:
+            eff = x  # fallback
+
+        df[feff] = eff
+
+        report[col] = {
+            "direction": dirn,
+            "cap": cap,
+            "flag_col": fflag,
+            "eff_col": feff,
+            "eff_mode": mode,
+            "censored_rate": float(np.mean(m)),
+        }
+    return df, report
 
 # ==================================================================
 # Step 1: Load dataset
@@ -194,18 +337,40 @@ print(f"  Saved: {raw_csv}")
 # ==================================================================
 # Step 2: Initial preprocessing
 # ==================================================================
+
 print(f"\n{'='*18} Step 2: Initial Preprocessing {'='*18}")
 avail = df_raw.columns.tolist()
+
+# 2.1 Resolve optional columns (as-declared in config)
+opt_num_cols, opt_num_map = _resolve_optional_columns(
+    df_raw, OPTIONAL_NUMERIC_FEATURES
+    )
+opt_cat_cols, opt_cat_map = _resolve_optional_columns(
+    df_raw, OPTIONAL_CATEGORICAL_FEATURES
+    )
+
+# 2.2 Build selection list (required + resolved optional)
 base_select = [
-    LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, "rainfall_mm",
-    "geology", H_FIELD_COL_NAME, "normalized_density",
+    LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, H_FIELD_COL_NAME
 ]
-selected = [c for c in base_select if c in avail]
-missing = set(base_select) - set(selected)
-if missing:
-    print(f"  [Warn] Missing in CSV (skipped): {missing}")
-    if H_FIELD_COL_NAME in missing:
-        raise ValueError(f"Required H_field '{H_FIELD_COL_NAME}' not found.")
+base_select += opt_num_cols + opt_cat_cols
+
+selected = _drop_missing_keep_order(base_select, df_raw)
+missing_required = [
+    c for c in [LON_COL, LAT_COL, 
+                TIME_COL, 
+                SUBSIDENCE_COL, 
+                GWL_COL, 
+                H_FIELD_COL_NAME]
+              if c not in selected
+        ]
+if missing_required:
+    raise ValueError(f"Missing required columns: {missing_required}")
+
+# Note: Optional columns are fine to be absent – they’ll just be skipped downstream.
+skipped_optional = sorted(set(opt_num_cols + opt_cat_cols) - set(selected))
+if skipped_optional:
+    print(f"  [Info] Optional columns not found (skipped): {skipped_optional}")
 
 df_sel = df_raw[selected].copy()
 
@@ -227,36 +392,39 @@ clean_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_02_clean.csv")
 df_clean.to_csv(clean_csv, index=False)
 print(f"  Saved: {clean_csv}")
 
+print(f"\n{'='*18} Step 2.5: Censor-aware transforms {'='*18}")
+df_cens, censor_report = _apply_censoring(df_clean.copy(), CENSORING_SPECS)
 
 # ==================================================================
 # Step 3: Encode & Scale
 # ==================================================================
+
 print(f"\n{'='*18} Step 3: Encode & Scale {'='*18}")
-df_proc = df_clean.copy()
+df_proc = df_cens.copy()
 
-# Encode geology if present
+# 3.1 One-hot encode ALL optional categoricals that are present
 encoded_names = []
-if "geology" in df_proc.columns:
-    ohe = OneHotEncoder(sparse_output=False, handle_unknown="ignore",
-                        dtype=np.float32)
-    enc = ohe.fit_transform(df_proc[["geology"]])
-    enc_cols = ohe.get_feature_names_out(["geology"]).tolist()
+ohe_paths = {}  # support multiple encoders (one per categorical)
+for cat_col in _drop_missing_keep_order(opt_cat_cols, df_proc):
+    ohe = OneHotEncoder(
+        sparse_output=False, handle_unknown="ignore", dtype=np.float32)
+    enc = ohe.fit_transform(df_proc[[cat_col]])
+    enc_cols = ohe.get_feature_names_out([cat_col]).tolist()
     encoded_names.extend(enc_cols)
-
     enc_df = pd.DataFrame(enc, columns=enc_cols, index=df_proc.index)
-    df_proc = pd.concat(
-        [df_proc.drop(columns=["geology"]), enc_df], axis=1
-    )
-    ohe_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_ohe_encoder.joblib")
-    try:
-        save_job(ohe, ohe_path, append_versions=True, append_date=True)
-    except Exception:
-        joblib.dump(ohe, ohe_path)
-    print(f"  Saved OHE: {ohe_path}")
-else:
-    ohe_path = None
+    df_proc = pd.concat([df_proc.drop(columns=[cat_col]), enc_df], axis=1)
 
-# Time numeric coord for PINN
+    path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_ohe_{cat_col}.joblib")
+    try:
+        save_job(ohe, path, append_versions=True, append_date=True)
+    except Exception:
+        joblib.dump(ohe, path)
+    
+    # joblib.dump(ohe, path)
+    ohe_paths[cat_col] = path
+    print(f"  Saved OHE for '{cat_col}': {path}")
+
+# 3.2 Numeric time coordinate for PINN
 TIME_COL_NUM = f"{TIME_COL}_numeric_coord"
 df_proc[TIME_COL_NUM] = (
     df_proc[DT_TMP].dt.year
@@ -264,23 +432,38 @@ df_proc[TIME_COL_NUM] = (
     / (365 + df_proc[DT_TMP].dt.is_leap_year.astype(int))
 )
 
-# Scale numerical features (keep order!)
-num_cols = [GWL_COL, "rainfall_mm", H_FIELD_COL_NAME, "normalized_density",
-            SUBSIDENCE_COL]
-num_cols = [c for c in num_cols if c in df_proc.columns]
+# If censoring created <col>_eff and/or <col>_censored, include them
+censor_numeric_additions = []
+for sp in CENSORING_SPECS or []:
+    col = sp["col"]
+    feff  = col + sp.get("eff_suffix",  "_eff")
+    fflag = col + sp.get("flag_suffix", "_censored")
+    if feff in df_proc.columns:
+        censor_numeric_additions.append(feff)
+    if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and fflag in df_proc.columns:
+        censor_numeric_additions.append(fflag)
+
+
+# 3.3 Scale numeric features (skip those declared already-normalized)
+present_num = _drop_missing_keep_order(
+    [GWL_COL, H_FIELD_COL_NAME, SUBSIDENCE_COL] + opt_num_cols, df_proc
+) + _drop_missing_keep_order(censor_numeric_additions, df_proc)
+
+# present_num = _drop_missing_keep_order(
+#     [GWL_COL, H_FIELD_COL_NAME, SUBSIDENCE_COL] + opt_num_cols, df_proc
+# )
+num_cols = [c for c in present_num if c not in set(ALREADY_NORMALIZED_FEATURES)]
 
 df_scaled = df_proc.copy()
-scaler = MinMaxScaler()
-scaler_info = {}
-scaler_path = None  # ensure it's defined for the manifest block later
+scaler_info, scaler_path = {}, None
 if num_cols:
+    scaler = MinMaxScaler()
     df_scaled[num_cols] = scaler.fit_transform(df_scaled[num_cols])
     scaler_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_main_scaler.joblib")
-    # Save with a fixed filename so the manifest matches exactly
     joblib.dump(scaler, scaler_path)
     print(f"  Saved scaler (joblib): {scaler_path}")
 
-    # indices for inverse-transform in formatter
+    # indices for inverse-transform of targets only
     targets_to_inv = {SUBSIDENCE_COL: SUBSIDENCE_COL, GWL_COL: GWL_COL}
     for base_name, col_in_scaler in targets_to_inv.items():
         if col_in_scaler in num_cols:
@@ -289,22 +472,41 @@ if num_cols:
                 "all_features": num_cols,
                 "idx": num_cols.index(col_in_scaler),
             }
-            
+
 scaled_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_03_scaled.csv")
 df_scaled.to_csv(scaled_csv, index=False)
 print(f"  Saved: {scaled_csv}")
 
-
 # ==================================================================
 # Step 4: Feature sets (lists only)
 # ==================================================================
+
 print(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
-static_features = encoded_names[:]  # geology one-hots if any
-dynamic_features = [c for c in [GWL_COL, "rainfall_mm", "normalized_density"]
-                    if c in df_scaled.columns]
-future_features = [c for c in ["rainfall_mm"] if c in df_scaled.columns]
+static_features = encoded_names[:]  # all OHE columns added above
+
+# dynamic = required GWL + all optional numeric that are present (except targets/H_field)
+dynamic_base = [GWL_COL]
+dynamic_extra = [c for c in opt_num_cols if c not in {SUBSIDENCE_COL, H_FIELD_COL_NAME}]
+dynamic_features = [c for c in dynamic_base + dynamic_extra if c in df_scaled.columns]
+
+# future = any of FUTURE_DRIVER_FEATURES that are present
+future_features = [c for c in FUTURE_DRIVER_FEATURES if c in df_scaled.columns]
+
 H_FIELD_COL = H_FIELD_COL_NAME
+# If soil thickness is censored and we created an effective column, use it.
+for sp in CENSORING_SPECS or []:
+    if sp["col"] == H_FIELD_COL_NAME:
+        eff = H_FIELD_COL_NAME + sp.get("eff_suffix", "_eff")
+        if USE_EFFECTIVE_H_FIELD and eff in df_scaled.columns:
+            H_FIELD_COL = eff    # this is what Stage-1 will feed as H_field
+            break
+
 GROUP_ID_COLS = [LON_COL, LAT_COL]
+
+for sp in CENSORING_SPECS or []:
+    fflag = sp["col"] + sp.get("flag_suffix", "_censored")
+    if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and fflag in df_scaled.columns:
+        dynamic_features = dynamic_features + [fflag]
 
 print(f"  Static : {static_features}")
 print(f"  Dynamic: {dynamic_features}")
@@ -420,6 +622,14 @@ print(f"  Saved NPZs:\n    {train_inputs_npz}\n    {train_targets_npz}\n"
 # Manifest: one file to rule them all
 # ==================================================================
 print(f"\n{'='*18} Build Manifest {'='*18}")
+
+manifest_censor = {
+    "specs": CENSORING_SPECS,
+    "report": censor_report,
+    "use_effective_h_field": USE_EFFECTIVE_H_FIELD,
+    "flags_as_dynamic": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC
+}
+
 manifest = {
     "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "city": CITY_NAME,
@@ -454,7 +664,7 @@ manifest = {
             "scaled": scaled_csv,
         },
         "encoders": {
-            "ohe": ohe_path,
+            "ohe": ohe_paths,   # dict: {col: path}# ohe_path,
             "main_scaler": scaler_path if num_cols else None,
             "coord_scaler": coord_scaler_path,
             "scaler_info": scaler_info,  # indices for inverse transform
@@ -492,9 +702,101 @@ manifest = {
     },
 }
 
+manifest["config"]["feature_registry"] = {
+    "optional_numeric_declared": OPTIONAL_NUMERIC_FEATURES,
+    "optional_categorical_declared": OPTIONAL_CATEGORICAL_FEATURES,
+    "already_normalized": ALREADY_NORMALIZED_FEATURES,
+    "future_drivers_declared": FUTURE_DRIVER_FEATURES,
+    "resolved_optional_numeric": opt_num_cols,
+    "resolved_optional_categorical": opt_cat_cols,
+}
+manifest["config"]["censoring"] = manifest_censor
+
+# === Step 5b: Build TEST sequences (temporal generalization) ===
+df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()
+test_inputs = test_targets = None
+if not df_test.empty:
+    try: 
+        test_inputs, test_targets, _ = prepare_pinn_data_sequences(
+            df=df_test,
+            time_col=TIME_COL_NUM,
+            lon_col=LON_COL,
+            lat_col=LAT_COL,
+            subsidence_col=SUBSIDENCE_COL,
+            gwl_col=GWL_COL,
+            h_field_col=H_FIELD_COL,
+            dynamic_cols=dynamic_features,
+            static_cols=static_features,
+            future_cols=future_features,
+            group_id_cols=GROUP_ID_COLS,
+            time_steps=TIME_STEPS,
+            forecast_horizon=FORECAST_HORIZON_YEARS,
+            output_subsidence_dim=OUT_S_DIM,
+            output_gwl_dim=OUT_G_DIM,
+            normalize_coords=True,
+            savefile=None,
+            return_coord_scaler=False,
+            mode=MODE,
+            model=MODEL_NAME,
+            verbose=2,
+        )
+    
+        # Export NPZs (mirror train/val)
+        test_inputs_np, test_targets_np = {}, {}
+        if test_inputs:
+            # fill Nones to zeros like you do for train/val
+            N = test_inputs["dynamic_features"].shape[0]
+            static_arr = test_inputs.get("static_features") or np.zeros((N, 0), np.float32)
+            fut_T = TIME_STEPS + FORECAST_HORIZON_YEARS if MODE == "tft_like" else FORECAST_HORIZON_YEARS
+            future_arr = test_inputs.get("future_features") or np.zeros((N, fut_T, 0), np.float32)
+            test_inputs_np = {
+                "coords": test_inputs["coords"],
+                "dynamic_features": test_inputs["dynamic_features"],
+                "static_features": static_arr,
+                "future_features": future_arr,
+                "H_field": test_inputs["H_field"],
+            }
+            test_targets_np = {
+                "subsidence": test_targets["subsidence"],
+                "gwl": test_targets["gwl"],
+            }
+    
+            test_inputs_npz  = os.path.join(ARTIFACTS_DIR, "test_inputs.npz")
+            test_targets_npz = os.path.join(ARTIFACTS_DIR, "test_targets.npz")
+            _save_npz(test_inputs_npz, test_inputs_np)
+            _save_npz(test_targets_npz, test_targets_np)
+            manifest["artifacts"]["numpy"]["test_inputs_npz"]  = test_inputs_npz
+            manifest["artifacts"]["numpy"]["test_targets_npz"] = test_targets_npz
+    except: 
+         pass 
+     # XXX TOFIX : WHen using cross-city-validation. 
+     
+       # [INFO] Group (113.718628, 22.552893): 1 pts -> 0 seq.
+    #     [INFO] Group (113.718628, 22.552376): 1 pts -> 0 seq.
+    #     [INFO] Group (113.718628, 22.551857): 1 pts -> 0 seq.
+    # [INFO] No group is long enough to create any sequence.
+    # Traceback (most recent call last):
+    #   File "F:\repositories\fusionlab-learn\nat.com\main_NATCOM_stage1_prepare.py", line 719, in <module>
+    #     test_inputs, test_targets, _ = prepare_pinn_data_sequences(
+    #   File "F:\repositories\fusionlab-learn\fusionlab\decorators.py", line 3836, in wrapper
+    #     return func(*bound_args.args, **bound_args.kwargs)
+    #   File "F:\repositories\fusionlab-learn\fusionlab\nn\pinn\utils.py", line 3388, in prepare_pinn_data_sequences
+    #     ok, _ = check_sequence_feasibility(
+    #   File "F:\repositories\fusionlab-learn\fusionlab\decorators.py", line 3836, in wrapper
+    #     return func(*bound_args.args, **bound_args.kwargs)
+    #   File "F:\repositories\fusionlab-learn\fusionlab\utils\sequence_utils.py", line 209, in check_sequence_feasibility
+    #     raise SequenceGeneratorError(msg)
+    # fusionlab.utils.sequence_utils.SequenceGeneratorError: No group is long enough to create any sequence.
+    # Each trajectory needs >= 7 consecutive records (time_steps=4, horizon=3), but the longest has only 1.
+    # -> Reduce `time_steps` / `forecast_horizon`, or supply more data.
+    # (fusionlab-py310-test)
+
+
 manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2)
+
+
 print(f"  Saved manifest: {manifest_path}")
 
 print(f"\n{'-'*_TW}\nSTAGE-1 COMPLETE. Artifacts in:\n  {RUN_OUTPUT_PATH}\n{'-'*_TW}")

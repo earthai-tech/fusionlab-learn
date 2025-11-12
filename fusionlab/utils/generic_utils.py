@@ -29,6 +29,7 @@ from typing import (
 import numpy as np 
 import pandas as pd 
 
+PathLike = Union[str, os.PathLike]
 
 _SENTINEL = object()     
 
@@ -3583,3 +3584,108 @@ def split_train_test_by_time(
     train_df = working.loc[train_mask].copy()
     test_df  = working.loc[test_mask].copy()
     return train_df, test_df
+
+
+def getenv_stripped(
+    name: str,
+    default: Optional[str] = None,
+    allow_empty: bool = False
+ ) -> Optional[str]:
+    """
+    Read an environment variable and strip whitespace robustly.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name to read.
+    default : str or None, optional
+        Value returned when the environment variable is not set.
+    allow_empty : bool, default=False
+        If False, empty strings are treated as missing and `default`
+        is returned instead. If True, an empty string is returned
+        unchanged.
+
+    Returns
+    -------
+    out : str or None
+        The stripped string value, the empty string (if allowed), or
+        `default` when unset / empty.
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    val = val.strip()
+    if not val and not allow_empty:
+        return default
+    return val
+
+
+def default_results_dir(
+    start: Optional[PathLike] = None,
+    env_var: str = "RESULTS_DIR",
+    folder_name: str = "results",
+    create: bool = False
+) -> str:
+    """
+    Resolve the canonical 'results' directory with robust fallbacks.
+
+    Resolution order
+    ----------------
+    1. If the environment variable `env_var` is set, use it.
+    2. Else search upward from `start` (or `Path.cwd()`) for a folder
+       named `folder_name`.
+    3. Else return `Path.cwd() / folder_name`.
+
+    Parameters
+    ----------
+    start : path-like, optional
+        Starting path for the upward search. If None, uses the current
+        working directory.
+    env_var : str, default="RESULTS_DIR"
+        Environment variable that, when set, overrides any discovery.
+    folder_name : str, default="results"
+        Directory name to look for when walking upward.
+    create : bool, default=False
+        If True, create the directory when it does not exist.
+
+    Returns
+    -------
+    path_str : str
+        Absolute path to the resolved results directory.
+
+    Notes
+    -----
+    This helper is importable in Stage-1/2/3 scripts to keep path
+    resolution consistent across training/tuning/inference. It avoids
+    relying on `__file__` (which may be inside the package install
+    path) and instead uses `Path.cwd()` by default, which is what users
+    expect when launching scripts from various locations.
+
+    Examples
+    --------
+    >>> default_results_dir()
+    '.../your/project/results'
+
+    >>> default_results_dir(start='/work/exp/run42', create=True)
+    '.../your/project/results'
+    """
+    # 1) Environment variable takes precedence
+    env = os.getenv(env_var)
+    if env:
+        p = Path(env).expanduser().resolve()
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+    # 2) Search upward for `folder_name`
+    base = Path(start).resolve() if start else Path.cwd().resolve()
+    for parent in (base, *base.parents):
+        cand = parent / folder_name
+        if cand.exists():
+            return str(cand.resolve())
+
+    # 3) Fallback to cwd/folder_name
+    fallback = base / folder_name
+    if create:
+        fallback.mkdir(parents=True, exist_ok=True)
+    return str(fallback.resolve())

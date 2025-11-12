@@ -673,6 +673,9 @@ class FixedGammaW(BaseLearnable):
         trainable=False,# False: This is a fixed constant
         **kws
     ):
+        if 'initial_value' in kws: 
+            kws.pop ('initial_value')
+            
         super().__init__(
             initial_value=value,
             name=name or "fixed_gamma_w",
@@ -712,6 +715,9 @@ class FixedHRef(BaseLearnable):
         trainable:bool =False, # This is a fixed hyperparameter
         **kws
     ):
+        if 'initial_value' in kws: 
+            kws.pop ('initial_value')
+            
         super().__init__(
             initial_value=value,
             name=name or "fixed_h_ref",

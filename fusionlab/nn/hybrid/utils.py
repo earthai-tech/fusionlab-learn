@@ -487,9 +487,12 @@ def plot_history_in(
         except Exception as e:
             warnings.warn(f"Failed to save figure: {e}")
             
-    if plt.get_fignums():
+        plt.close(fig)
+        
+    else: 
+    # if plt.get_fignums():
         plt.show()
     
-    # Close the figure if it wasn't shown
-    if savefig and not plt.get_fignums():
-        plt.close(fig)
+    # # Close the figure if it wasn't shown
+    # if savefig and not plt.get_fignums():
+    #     plt.close(fig)

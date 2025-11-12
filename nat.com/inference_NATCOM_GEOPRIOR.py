@@ -19,6 +19,44 @@ Usage (trained model, re-fit calibrator on val):
     --dataset test --fit-calibrator
 
 You can also do --dataset custom --inputs-npz <path> [--targets-npz <path>]
+
+cross -validation 
+-------------------
+1) A --> B ( Nansha-> Zhongshan ), zero-shot 
+
+python nat.com/inference_NATCOM_GEOPRIOR.py \
+  --stage1-dir results/zhongshan_GeoPriorSubsNet_stage1 \
+  --model-path results/nansha_GeoPriorSubsNet_stage1/train_*/nansha_GeoPriorSubsNet_H3.keras \
+  --dataset test \
+  --eval-losses --eval-physics --no-figs
+
+2) A--> B with source calibrator
+
+python nat.com/inference_NATCOM_GEOPRIOR.py \
+  --stage1-dir results/zhongshan_GeoPriorSubsNet_stage1 \
+  --model-path results/nansha_GeoPriorSubsNet_stage1/train_*/nansha_GeoPriorSubsNet_H3.keras \
+  --dataset test \
+  --use-source-calibrator \
+  --eval-losses --eval-physics --no-figs
+
+3) A-->B with target-val calibration (report separately)
+
+python nat.com/inference_NATCOM_GEOPRIOR.py \
+  --stage1-dir results/zhongshan_GeoPriorSubsNet_stage1 \
+  --model-path results/nansha_GeoPriorSubsNet_stage1/train_*/nansha_GeoPriorSubsNet_H3.keras \
+  --dataset test \
+  --fit-calibrator \
+  --eval-losses --eval-physics --no-figs
+
+
+Repeat B--> A by swapping stage1-dir and model-path.
+
+All runs produce:
+
+* formatted prediction CSV (inverse-scaled to mm),
+* inference_summary.json (coverage/sharpness),
+* transfer_eval.json (losses + physics).
+
 """
 
 from __future__ import annotations
@@ -35,6 +73,9 @@ tf.get_logger().setLevel("ERROR")
 
 # --- fusionlab imports ---
 from fusionlab.utils.generic_utils import ensure_directory_exists
+from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+from fusionlab.registry.utils import _find_stage1_manifest  
+
 from fusionlab.nn.pinn.models import GeoPriorSubsNet
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
@@ -50,13 +91,22 @@ from fusionlab.plot.forecast import plot_forecasts, forecast_view
 # ------------------ CLI ------------------
 def parse_args():
     p = argparse.ArgumentParser(description="GeoPriorSubsNet inference")
-    p.add_argument("--stage1-dir", required=True,
-                   help="Folder containing Stage-1 manifest.json")
+    p.add_argument("--stage1-dir", default=None,
+                   help="Folder containing Stage-1 manifest.json (optional)")
+    p.add_argument("--manifest", default=None,
+                   help="Direct path to Stage-1 manifest.json (optional)")
     p.add_argument("--model-path", required=True,
                    help="Path to .keras model (trained or tuned)")
     p.add_argument("--dataset", default="test",
                    choices=["test", "val", "train", "custom"],
                    help="Which split to run inference on")
+    p.add_argument("--eval-losses", action="store_true",
+               help="Compute MAE/MSE losses on chosen split.")
+    p.add_argument("--eval-physics", action="store_true",
+                   help="Compute epsilon_prior/epsilon_cons on chosen split.")
+    p.add_argument("--use-source-calibrator", action="store_true",
+                   help="Load calibrator .npy from the model directory if present.")
+
     p.add_argument("--inputs-npz", default=None,
                    help="Custom inputs npz (for --dataset custom)")
     p.add_argument("--targets-npz", default=None,
@@ -73,22 +123,81 @@ def parse_args():
     p.add_argument("--batch-size", type=int, default=32)
     return p.parse_args()
 
+
+
 # ------------------ helpers ------------------
-def _load_manifest(stage1_dir: str) -> dict:
-    mpath = os.path.join(stage1_dir, "manifest.json")
-    with open(mpath, "r", encoding="utf-8") as f:
+def _resolve_manifest(args) -> dict:
+    # 1) explicit --manifest
+    if args.manifest and os.path.exists(args.manifest):
+        with open(args.manifest, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    # 2) explicit --stage1-dir
+    if args.stage1_dir:
+        mpath = os.path.join(args.stage1_dir, "manifest.json")
+        if not os.path.exists(mpath):
+            raise SystemExit(f"manifest.json not found in {args.stage1_dir}")
+        with open(mpath, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    # 3) env / auto-discovery (same policy as Stage-2/Stage-3)
+
+    RESULTS_DIR = default_results_dir()  # auto-resolve
+    CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
+    MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
+    MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
+    
+    MANIFEST_PATH = _find_stage1_manifest(
+        manual=MANUAL,
+        base_dir=RESULTS_DIR,
+        city_hint=CITY_HINT,
+        model_hint=MODEL_HINT,
+        prefer="timestamp",
+        required_keys=("model", "stage"),
+        verbose=1,
+    )
+
+    with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
+    
+def _sanitize_inputs_np(X: dict) -> dict:
+    X = dict(X)
+    for k, v in X.items():
+        if v is None:
+            continue
+        v = np.asarray(v)
+        v = np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+        if v.ndim > 0 and np.isfinite(v).any():
+            p99 = np.percentile(v, 99)
+            if p99 > 0:
+                v = np.clip(v, -10*p99, 10*p99)
+        X[k] = v
+    if "H_field" in X:
+        X["H_field"] = np.maximum(X["H_field"], 1e-3).astype(np.float32)
+    return X
 
 def _ensure_input_shapes(x: dict, mode: str, horizon: int) -> dict:
-    """Add zero-width placeholders if static/future missing."""
     out = dict(x)
-    N = out["dynamic_features"].shape[0]
+    N  = out["dynamic_features"].shape[0]
+    T  = out["dynamic_features"].shape[1]
     if out.get("static_features") is None:
         out["static_features"] = np.zeros((N, 0), dtype=np.float32)
     if out.get("future_features") is None:
-        t_future = out["dynamic_features"].shape[1] if mode == "tft_like" else horizon
+        t_future = T if mode == "tft_like" else horizon
         out["future_features"] = np.zeros((N, t_future, 0), dtype=np.float32)
     return out
+
+
+# def _ensure_input_shapes(x: dict, mode: str, horizon: int) -> dict:
+#     """Add zero-width placeholders if static/future missing."""
+#     out = dict(x)
+#     N = out["dynamic_features"].shape[0]
+#     if out.get("static_features") is None:
+#         out["static_features"] = np.zeros((N, 0), dtype=np.float32)
+#     if out.get("future_features") is None:
+#         t_future = out["dynamic_features"].shape[1] if mode == "tft_like" else horizon
+#         out["future_features"] = np.zeros((N, t_future, 0), dtype=np.float32)
+#     return out
 
 def _map_targets(y_dict: dict) -> dict:
     # Accept either ('subsidence','gwl') or ('subs_pred','gwl_pred')
@@ -99,24 +208,26 @@ def _map_targets(y_dict: dict) -> dict:
     # Allow missing targets for pure inference
     return {}
 
-def _pick_npz_for_dataset(
-        M: dict, name: str) -> tuple[dict | None, dict | None]:
+ 
+def _pick_npz_for_dataset(M: dict, name: str) -> tuple[dict | None, dict | None]:
     npzs = M["artifacts"]["numpy"]
     if name == "train":
-        return dict(np.load(npzs["train_inputs_npz"])),
-    dict(np.load(npzs["train_targets_npz"]))
+        x = dict(np.load(npzs["train_inputs_npz"]))
+        y = dict(np.load(npzs["train_targets_npz"]))
+        return x, y
     if name == "val":
-        return dict(np.load(npzs["val_inputs_npz"])),
-    dict(np.load(npzs["val_targets_npz"]))
+        x = dict(np.load(npzs["val_inputs_npz"]))
+        y = dict(np.load(npzs["val_targets_npz"]))
+        return x, y
     if name == "test":
-        tin, tt = npzs.get("test_inputs_npz"), 
-        npzs.get("test_targets_npz")
-        if tin is None:
+        tin = npzs.get("test_inputs_npz")
+        tt  = npzs.get("test_targets_npz")
+        if not tin:
             return None, None
         x = dict(np.load(tin))
         y = dict(np.load(tt)) if tt else None
         return x, y
-    raise ValueError("Use 'custom' codepath for custom NPZs")
+    raise ValueError("Use 'custom' for custom NPZs")
 
 def _load_calibrator(args, model, ds_val, target_cov):
     # 1) explicit .npy
@@ -132,7 +243,9 @@ def _load_calibrator(args, model, ds_val, target_cov):
 # ------------------ main ------------------
 def main():
     args = parse_args()
-    M = _load_manifest(args.stage1_dir)
+    M = _resolve_manifest(args)
+    print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
+
 
     cfg = M["config"]
     CITY = M.get("city", "nansha")
@@ -161,6 +274,17 @@ def main():
             scaler_info = joblib.load(scaler_info)
         except Exception:
             pass
+    # Optionally attach scaler objects for inverse-transform if only indices were stored
+    if isinstance(scaler_info, dict):
+        for k, v in scaler_info.items():
+            if isinstance(v, dict) and "scaler_path" in v and "scaler" not in v:
+                p = v["scaler_path"]
+                if p and os.path.exists(p):
+                    try:
+                        v["scaler"] = joblib.load(p)
+                    except Exception:
+                        pass
+
 
     # Output dir
     inf_dir = os.path.join(M["paths"]["run_dir"], "inference", dt.datetime.now(
@@ -180,18 +304,27 @@ def main():
                 f"No NPZs found for dataset='{args.dataset}'."
                 " Re-run Stage-1 with a test split or use --dataset custom.")
 
+    X = _sanitize_inputs_np(X)
     X = _ensure_input_shapes(X, MODE, H)
+    
+    if y:  # y can be None (pure inference)
+        # no need to sanitize y (targets) typically, but it's fine if you want
+        pass
+
     y_map = _map_targets(y or {})
 
     # Datasets for optional calibration/metrics
     batch_size = args.batch_size
     ds_val = None
-    if args.fit_calibrator and "val_inputs_npz" in M["artifacts"]["numpy"]:
-        vx = dict(np.load(M["artifacts"]["numpy"]["val_inputs_npz"]))
-        vy = dict(np.load(M["artifacts"]["numpy"]["val_targets_npz"]))
+    npz = M["artifacts"]["numpy"]
+    if args.fit_calibrator and "val_inputs_npz" in npz and "val_targets_npz" in npz:
+        vx = dict(np.load(npz["val_inputs_npz"]))
+        vy = dict(np.load(npz["val_targets_npz"]))
+        vx = _sanitize_inputs_np(vx)
         vx = _ensure_input_shapes(vx, MODE, H)
         vy = _map_targets(vy)
         ds_val = tf.data.Dataset.from_tensor_slices((vx, vy)).batch(batch_size)
+
 
     # Load model (compile not required for inference)
     custom_objects = {
@@ -288,6 +421,35 @@ def main():
         json.dump(eval_json, f, indent=2)
         
     print(f"Saved inference summary JSON -> {os.path.join(inf_dir, 'inference_summary.json')}")
+    
+    # Optional: metrics in scaled space (Keras) + physics diagnostics
+    if args.eval_losses and y_map:
+        ds_eval = tf.data.Dataset.from_tensor_slices(
+            (X, y_map)).batch(args.batch_size)
+        eval_results = model.evaluate(
+            ds_eval, return_dict=True, verbose=0)
+    else:
+        eval_results = None
+    
+    physics_diag = None
+    if args.eval_physics:
+        try:
+            physics_diag = {k: float(
+                v.numpy()) for k, v in model.evaluate_physics(X).items()}
+        except Exception:
+            pass
+    
+    # Persist a single JSON with everything (also keep your existing summary)
+    with open(os.path.join(inf_dir, "transfer_eval.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "dataset": args.dataset,
+            "coverage80": eval_json.get("coverage80"),
+            "sharpness80": eval_json.get("sharpness80"),
+            "keras_eval": eval_results,         # scaled metrics
+            "physics": physics_diag,            # epsilon_prior/epsilon_cons
+            "csv_path": csv_path,
+        }, f, indent=2)
+    
 
     # Plots
     if (not args.no_figs) and (df is not None) and (len(df) > 0):
@@ -321,6 +483,9 @@ def main():
             print(f"Saved forecast figures in: {inf_dir}")
         except Exception as e:
             print(f"[Warn] plotting failed: {e}")
+    
+    
+
 
 if __name__ == "__main__":
     main()
