@@ -8,12 +8,16 @@ import numpy as np
 import joblib
 import tensorflow as tf
 
+from sklearn.metrics import mean_absolute_error, r2_score
+
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
 
 # ---- fusionlab imports ----
 from fusionlab.registry.utils import _find_stage1_manifest, reproject_dynamic_scale
 from fusionlab.utils.generic_utils import ensure_directory_exists
+
+from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn.pinn.models import GeoPriorSubsNet
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
@@ -22,6 +26,7 @@ from fusionlab.nn.calibration import (
     IntervalCalibrator, fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
 )
+
 from fusionlab.nn.pinn.utils import format_pinn_predictions
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -199,7 +204,18 @@ def run_one_direction(
                 cal = fit_interval_calibrator_on_val(model, ds_val, target=0.80)
         except Exception:
             cal = None
-
+    
+    # extract physic parameters 
+    try: 
+        extract_physical_parameters(
+            model, to_csv=True,
+            filename=f"{M_tgt.get('city')}_xfer_physical_parameters.csv",
+            save_dir=model_path, 
+            model_name="geoprior",
+        )
+    except: 
+        pass 
+    
     # Predict
     pred = model.predict(X_tgt, verbose=0)
     data_final = pred["data_final"]
@@ -217,6 +233,23 @@ def run_one_direction(
         s_p = data_final[..., :OUT_S_DIM]
         g_p = data_final[..., OUT_S_DIM:]
         predictions = {"subs_pred": s_p, "gwl_pred": g_p}
+        
+    # XXX TODO: RECHECK --- New section: Per-horizon MAE and R² ---
+    per_horizon_mae = {}
+    per_horizon_r2 = {}
+    # Loop over each forecast horizon (each time step) and calculate MAE and R²
+    
+    for h in range(H):
+        y_true_horizon = y_map["subs_pred"][:, h, :]  # True subsidence for this horizon
+        y_pred_horizon = predictions["subs_pred"][:, h, :]  # Predicted subsidence for this horizon
+
+        # Compute MAE and R² for subsidence
+        mae = mean_absolute_error(y_true_horizon, y_pred_horizon)
+        r2 = r2_score(y_true_horizon, y_pred_horizon)
+ 
+        per_horizon_mae[f"H{h+1}"] = mae
+        per_horizon_r2[f"H{h+1}"] = r2  
+    # -    
 
     # Optional scaled-space evaluation & physics
     eval_scaled = None
@@ -232,7 +265,21 @@ def run_one_direction(
         physics_diag = {k: float(v.numpy()) for k, v in p.items()}
     except Exception:
         physics_diag = None
-
+    
+    try:
+        model.export_physics_payload(
+            X_tgt,
+            max_batches=None,
+            save_path=os.path.join(
+                model_path, f"{M_tgt.get('city')}_xfer_physics_payload.npz"
+                ),
+            format="npz",
+            overwrite=True,
+            metadata={"city": M_tgt.get("city"), "split": "val"},
+    )
+    except: 
+        pass 
+    
     # Inverse-scaling + metrics in physical units
     enc = M_tgt["artifacts"]["encoders"]
     coord_scaler = None
@@ -265,6 +312,32 @@ def run_one_direction(
         s_q     = tf.concat(s_q_list,    axis=0)
         coverage80 = float(coverage80_fn(y_true, s_q).numpy())
         sharpness80 = float(sharpness80_fn(y_true, s_q).numpy())
+        
+    # Format predictions
+    xfer_df_path =os.path.join(
+        model_path, f"{M_tgt.get('city')}_xfer_predictions_df.npz"
+        )
+    forecast_df = format_pinn_predictions(
+        predictions=predictions,
+        y_true_dict=y_map,
+        target_mapping=target_mapping,
+        scaler_info=scaler_info,
+        quantiles=Q,
+        forecast_horizon=H,
+        output_dims=output_dims,
+        include_coords=True,
+        include_gwl=False,  # change to True if you want to include GWL columns
+        model_inputs=X_tgt,
+        evaluate_coverage=True if Q else False,
+        savefile=xfer_df_path,
+        coord_scaler=coord_scaler,
+        verbose=1,
+    )
+    if forecast_df is not None and not forecast_df.empty:
+        print(f"Saved calibrated forecast CSV -> {xfer_df_path}")
+    else:
+        print("[Warn] Empty forecast DF.")
+
 
     return {
         "model_path": model_path,
@@ -275,7 +348,11 @@ def run_one_direction(
         "physics": physics_diag,
         "coverage80": coverage80,
         "sharpness80": sharpness80,
-        # Add more fields as needed (e.g., per-horizon MAE from formatted DF)
+         # XXX TODO: RECHECK
+        # Add more fields as needed (e.g., per-horizon MAE, r^2 from formatted DF)
+        "per_horizon_mae": per_horizon_mae,  # New metrics
+        "per_horizon_r2": per_horizon_r2,  # New metrics
+       
     }
 
 # ---------------- main ----------------
@@ -328,13 +405,19 @@ def main():
         "keras_eval_scaled.loss","keras_eval_scaled.subs_pred_mae",
         "keras_eval_scaled.gwl_pred_mae",
     ]
+    # XXX TO RECHECK 
+    cols.extend(
+        [f"per_horizon_mae.H{i+1}" for i in range(args.forecast_horizon)])  # Add per-horizon MAE columns
+    cols.extend(
+        [f"per_horizon_r2.H{i+1}" for i in range(args.forecast_horizon)])  # Add per-horizon R² columns
+    
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(cols)
         for r in results:
             phys = r.get("physics") or {}
             ev   = r.get("keras_eval_scaled") or {}
-            w.writerow([
+            row =[
                 r.get("direction"),
                 r.get("source_city"),
                 r.get("target_city"),
@@ -347,7 +430,14 @@ def main():
                 ev.get("loss"),
                 ev.get("subs_pred_mae"),
                 ev.get("gwl_pred_mae"),
-            ])
+            ]
+        # XXX TODO: RECHECK  Add per-horizon MAE and R² 
+        for i in range(args.forecast_horizon):
+            row.append(r.get("per_horizon_mae", {}).get(f"H{i+1}", "N/A"))
+            row.append(r.get("per_horizon_r2", {}).get(f"H{i+1}", "N/A"))
+        
+        w.writerow(row)
+        
     print(f"Saved transfer CSV -> {csv_path}")
 
 if __name__ == "__main__":
