@@ -294,20 +294,21 @@ class TransformerDecoderBlock(Layer):
         return cls(**config)
 
 @register_keras_serializable(
-    'fusionlab.nn.transformers', 
+    'fusionlab.nn.components', 
     name="TransformerEncoderLayer"
 )
 class TransformerEncoderLayer(Layer, NNLearner):
     """
     A single layer of the Transformer Encoder.
 
-    Args:
-        embed_dim (int): Dimensionality of the input and output.
-        num_heads (int): Number of attention heads.
-        ffn_dim (int): Hidden dimensionality of the feed-forward network.
-        dropout_rate (float): Dropout rate.
-        ffn_activation (str): Activation function for the FFN.
-        layer_norm_epsilon (float): Epsilon for LayerNormalization.
+    Parameters 
+    -----------
+    embed_dim (int): Dimensionality of the input and output.
+    num_heads (int): Number of attention heads.
+    ffn_dim (int): Hidden dimensionality of the feed-forward network.
+    dropout_rate (float): Dropout rate.
+    ffn_activation (str): Activation function for the FFN.
+    layer_norm_epsilon (float): Epsilon for LayerNormalization.
     """
     
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
@@ -371,7 +372,7 @@ class TransformerEncoderLayer(Layer, NNLearner):
         return config
 
 @register_keras_serializable(
-    'fusionlab.nn.transformers', name="TransformerDecoderLayer")
+    'fusionlab.nn.components', name="TransformerDecoderLayer")
 class TransformerDecoderLayer(Layer, NNLearner):
     """
     A single layer of the Transformer Decoder.

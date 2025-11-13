@@ -9,9 +9,9 @@ and a combinator loss wrapper that aggregates per-head losses.
 from __future__ import annotations
 
 from typing import Optional, List, Union,  Dict, Tuple, Mapping
+
 from ...api.property import NNLearner
 from ...utils.deps_utils import ensure_pkg
-
 from ._config import KERAS_BACKEND, DEP_MSG
 from ._config import (
     Layer, 
@@ -39,7 +39,6 @@ from ._config import (
     tf_tile, 
     tf_newaxis,
     tf_reduce_sum
-
 )
 
 __all__ = [
@@ -51,7 +50,8 @@ __all__ = [
     "QuantileDistributionModeling",
 ]
 
-   
+_PI =3.141592653589793
+
 @register_keras_serializable(
     "fusionlab.nn.components", name="GaussianHead"
 )
@@ -118,7 +118,7 @@ class GaussianHead(Layer, NNLearner):
         -------
         scalar Tensor
         """
-        two_pi = tf_constant(2.0 * 3.141592653589793, dtype=tf_float32)
+        two_pi = tf_constant(2.0 * _PI, dtype=tf_float32)
         var = tf_square(scale)
         # log σ + (y-μ)^2 / (2 σ^2) + 0.5 log(2π)
         log_prob = (
@@ -239,7 +239,7 @@ class MixtureDensityHead(Layer, NNLearner):
         -------
         scalar Tensor
         """
-        two_pi = tf_constant(2.0 * 3.141592653589793, dtype=tf_float32)
+        two_pi = tf_constant(2.0 * _PI, dtype=tf_float32)
         var = tf_square(scales)
 
         # log N = -0.5 * [log(2πσ^2) + (y-μ)^2/σ^2]
@@ -309,7 +309,6 @@ class PointForecastHead(Layer, NNLearner):
     @classmethod
     def from_config(cls, config: dict):
         return cls(**config)
-
 
 
 @register_keras_serializable(

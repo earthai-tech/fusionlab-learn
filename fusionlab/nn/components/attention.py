@@ -38,6 +38,7 @@ from .gating_norm import GatedResidualNetwork
 from .misc import Activation
 
 
+
 __all__ = [
     "TemporalAttentionLayer",
     "CrossAttention",
@@ -55,12 +56,9 @@ class TemporalAttentionLayer(Layer):
     """Temporal Attention Layer conditioning query with context."""
 
     @validate_params({
-         "units": [Interval(Integral, 0, None, 
-                            closed='left')],
-         "num_heads": [Interval(Integral, 0, None,
-                                closed='left')],
-         "dropout_rate": [Interval(Real, 0, 1,
-                                   closed="both")],
+         "units": [Interval(Integral, 0, None, closed='left')],
+         "num_heads": [Interval(Integral, 0, None, closed='left')],
+         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
          "use_batch_norm": [bool],
      })
     @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)
@@ -417,6 +415,7 @@ class CrossAttention(Layer, NNLearner):
     r"""
     CrossAttention that attends ``source1`` (query) to ``source2``
     (key/value) with optional masks.
+
    
     attention_mask : Tensor, optional
         Bool / 0‑1 mask broadcastable to (B, Tq, Tv). Passed
@@ -987,7 +986,6 @@ class HierarchicalAttention_(Layer, NNLearner):
             specified configuration.
         """
         return cls(**config)
-    
 @register_keras_serializable(
     'fusionlab.nn.components', name="HierarchicalAttention"
 )

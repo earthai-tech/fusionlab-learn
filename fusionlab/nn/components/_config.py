@@ -15,8 +15,8 @@ This file assumes `KERAS_BACKEND` was resolved upstream.
 """
 
 from ..._fusionlog import fusionlog 
-from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 from ...compat.tf import standalone_keras
+from .. import KERAS_DEPS, KERAS_BACKEND, dependency_message
 
 if KERAS_BACKEND:
     try:
@@ -120,10 +120,9 @@ tf_greater =KERAS_DEPS.greater
 tf_float32 = KERAS_DEPS.float32
 tf_reduce_max = KERAS_DEPS.reduce_max 
 
-
 _logger = fusionlog().get_fusionlab_logger(__name__)
 
-DEP_MSG = dependency_message('components._config') 
+DEP_MSG = dependency_message('nn.components') 
 
 __all__ = [
     "activations",

@@ -71,14 +71,14 @@ class GatedResidualNetwork(Layer):
     """Gated Residual Network applying transformations with optional context."""
 
     _COMMON_ACTIVATIONS = {
-        "relu", "tanh", "sigmoid", "elu", "selu", "gelu", "linear", None
+        "relu", "tanh", "sigmoid", "elu", "selu", "gelu", "linear", 
     }
 
     @validate_params({
         "units": [Interval(Integral, 0, None, closed='left')],
         "dropout_rate": [Interval(Real, 0, 1, closed="both")],
         "use_batch_norm": [bool],
-        "activation": [StrOptions(_COMMON_ACTIVATIONS)],
+        "activation": [StrOptions(_COMMON_ACTIVATIONS), None],
         "output_activation": [StrOptions(_COMMON_ACTIVATIONS), None],
         "use_time_distributed": [bool, None],
     })
@@ -485,7 +485,6 @@ class VariableSelectionNetwork(Layer, NNLearner):
         # Build other internal layers like weighting_grn if needed here
         super().build(input_shape) # Call parent build last
         
-
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context=None, training=False):
         """Execute the forward pass with optional context."""

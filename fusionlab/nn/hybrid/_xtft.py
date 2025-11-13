@@ -234,7 +234,6 @@ class XTFT(BaseExtreme):
             
         logger.debug("XTFT._build_components() done")
 
-
     @tf_autograph.experimental.do_not_convert
     def _encode_inputs(
         self,
@@ -271,13 +270,6 @@ class XTFT(BaseExtreme):
         )
         logger.debug("static_features shape=%s", static_features.shape)
         
-        # XXX TODO apply attention mask 
-        # _, fut_for_embed = align_temporal_dimensions(
-        #     tensor_ref=dynamic_input,
-        #     tensor_to_align=future_input,
-        #     mode="auto",
-        #     name="future_input_for_mme",
-        # )
         _, fut_for_embed, fut_mask = align_temporal_dimensions(
             tensor_ref=dynamic_input,
             tensor_to_align=future_input,
@@ -400,79 +392,6 @@ class XTFT(BaseExtreme):
                 mem_att if 'memory' in self.architecture_config[
                     'decoder_attention_stack'] else None
                 ),
-        })
-        logger.debug("XTFT._temporal_backbone() done")
-        return fused, cache
-
-    @tf_autograph.experimental.do_not_convert
-    def __temporal_backbone(
-        self,
-        dynamic_encoded: Tensor,
-        future_encoded: Tensor,
-        *,
-        training: bool,
-        cache: Dict[str, Any],
-    ) -> Tuple[Tensor, Dict[str, Any]]:
-        logger.debug("XTFT._temporal_backbone() start")
-        embeddings = cache["embeddings"]
-    
-        # Multi-scale LSTM processing
-        lstm_out = self.multi_scale_lstm(dynamic_encoded, training=training)
-        lstm_feats = aggregate_multiscale(
-            lstm_out, mode=self.multi_scale_agg
-        )
-        t_steps = tf_shape(dynamic_encoded)[1]
-        lstm_feats = tf_expand_dims(lstm_feats, axis=1)
-        lstm_feats = tf_tile(lstm_feats, [1, t_steps, 1])
-        logger.debug("lstm_feats shape=%s", lstm_feats.shape)
-    
-        # Hierarchical attention
-        attn_mask = tf_expand_dims(cache["fut_mask"], axis=1)  # (B,1,Tv)
-        logger.debug(f"Attention Mask Shape: {attn_mask.shape}")
-    
-        # Apply attention mask to hierarchical attention if required
-        hier_att = self.hierarchical_attention(
-            [dynamic_encoded, future_encoded], 
-            training=training,
-            attention_mask=attn_mask  # passing the attention mask here
-        )
-        logger.debug(f"Hierarchical Attention Shape: {hier_att.shape}")
-    
-        # Cross attention
-        cross_att = self.cross_attention(
-            [dynamic_encoded, embeddings], 
-            training=training, 
-            attention_mask=attn_mask
-        )
-        logger.debug(f"Cross Attention Output Shape: {cross_att.shape}")
-    
-        # Memory augmented attention
-        mem_att = self.memory_augmented_attention(
-            hier_att, 
-            training=training, 
-            attention_mask=attn_mask  
-            # passing the attention mask to memory-augmented attention
-        )
-        logger.debug("att shapes h=%s c=%s m=%s",
-                     hier_att.shape, cross_att.shape, mem_att.shape)
-    
-        # Combine features
-        fused = Concatenate()([
-            lstm_feats,
-            cross_att,
-            hier_att,
-            mem_att,
-        ])
-        fused = self.multi_resolution_attention_fusion(
-            fused, training=training
-        )
-        logger.debug("fused shape post-fusion=%s", fused.shape)
-    
-        # Update cache with attention outputs
-        cache.update({
-            "hierarchical_att": hier_att,
-            "cross_att": cross_att,
-            "memory_att": mem_att,
         })
         logger.debug("XTFT._temporal_backbone() done")
         return fused, cache

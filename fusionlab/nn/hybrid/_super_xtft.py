@@ -12,28 +12,13 @@ from __future__ import annotations
 
 from textwrap import dedent
 from typing import Any, Dict, List, Optional, Tuple, Union
+
+from ..._fusionlog import fusionlog 
 from ...api.docs import _shared_docs, doc
-from ._base_extreme import (
-    KERAS_BACKEND,
-    KERAS_DEPS,
-    logger,
-)
-from .xtft import XTFT  
+from .. import KERAS_DEPS, KERAS_BACKEND
 
 if KERAS_BACKEND:
-    tf_autograph = KERAS_DEPS.autograph
-    register_keras_serializable = KERAS_DEPS.register_keras_serializable
-    Concatenate = KERAS_DEPS.Concatenate
-    Dense = KERAS_DEPS.Dense
-    Dropout = KERAS_DEPS.Dropout
-    LayerNormalization = KERAS_DEPS.LayerNormalization
-    MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
-    Tensor = KERAS_DEPS.Tensor
-
-    tf_shape = KERAS_DEPS.shape
-    tf_expand_dims = KERAS_DEPS.expand_dims
-    tf_tile = KERAS_DEPS.tile
-
+    from ._xtft import XTFT 
     from ..components import (
         Activation,
         GatedResidualNetwork,
@@ -51,6 +36,21 @@ if KERAS_BACKEND:
     )
     from .._tensor_validation import align_temporal_dimensions
 
+tf_autograph = KERAS_DEPS.autograph
+register_keras_serializable = KERAS_DEPS.register_keras_serializable
+Concatenate = KERAS_DEPS.Concatenate
+Dense = KERAS_DEPS.Dense
+Dropout = KERAS_DEPS.Dropout
+LayerNormalization = KERAS_DEPS.LayerNormalization
+MultiHeadAttention = KERAS_DEPS.MultiHeadAttention
+Tensor = KERAS_DEPS.Tensor
+
+tf_shape = KERAS_DEPS.shape
+tf_expand_dims = KERAS_DEPS.expand_dims
+tf_tile = KERAS_DEPS.tile
+  
+logger = fusionlog().get_fusionlab_logger(__name__) 
+ 
 __all__ = ["SuperXTFT"]
 
 
@@ -528,7 +528,7 @@ class SuperXTFT(XTFT):
     ) -> Tensor:
         """
         Apply attention to the fused features and pass through GRN
-        (Gate→Add&Norm→GRN pipeline).
+        (Gate -> Add&Norm -> GRN pipeline).
         """
         
         # Initialize with fused features as the base context

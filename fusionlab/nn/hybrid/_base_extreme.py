@@ -69,7 +69,7 @@ tf_GradientTape = KERAS_DEPS.GradientTape
 tf_autograph = KERAS_DEPS.autograph
 
 
-DEP_MSG = dependency_message("nn.transformers")
+DEP_MSG = dependency_message("nn.hybrid")
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
@@ -269,7 +269,7 @@ class BaseExtreme(Model, NNLearner):
         training: bool,
         cache: Dict[str, Any],
     ) -> Tuple[Tensor, Dict[str, Any]]:
-        """Sequence blocks (LSTM/attention/etc.) → fused features."""
+        """Sequence blocks (LSTM/attention/etc.) -> fused features."""
         raise NotImplementedError
 
     def _aggregate_decode(
@@ -279,7 +279,7 @@ class BaseExtreme(Model, NNLearner):
         training: bool,
         cache: Dict[str, Any],
     ) -> Tensor:
-        """Default: time-window → aggregate → decoder."""
+        """Default: time-window -> aggregate -> decoder."""
         time_window_output = self.dynamic_time_window(
             fused_feats, training=training
         )
@@ -332,7 +332,6 @@ class BaseExtreme(Model, NNLearner):
         self.fusion_mode = resolve_fusion_mode(self.fusion_mode)
         logger.debug("Fusion mode: %s", self.fusion_mode)
  
-    
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, training: bool = False, **kwargs):
         logger.debug("call() on %s, training=%s",
@@ -457,8 +456,6 @@ class BaseExtreme(Model, NNLearner):
 
         return super().train_step(data)
 
-
-    # (De)serialization
     def get_config(self) -> Dict[str, Any]:
         cfg = super().get_config().copy()
         cfg.update({
@@ -511,7 +508,6 @@ class BaseExtreme(Model, NNLearner):
         # Re-add it as a keyword argument for __init__
         return cls(**config,  architecture_config=arch_config)
     
-
     def reconfigure(
         self,
         architecture_config: Dict[str, Any]
@@ -600,7 +596,7 @@ _subclasses MUST implement_:
 Optional overrides:
 
 * `_aggregate_decode(self, fused, training, cache)`  
-  Default uses DynamicTimeWindow → aggregate → MultiDecoder.
+  Default uses DynamicTimeWindow -> aggregate -> MultiDecoder.
 
 * `_maybe_compute_anomaly_scores(self, fused, training, cache)`  
   Populate `self.anomaly_scores` when using 'feature_based'.
