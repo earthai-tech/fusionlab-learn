@@ -320,10 +320,10 @@ class GeoPriorSubsNet(BaseAttentive):
             # )
             
         self.gamma_w = tf_constant(
-            float(self.gamma_w_config.initial_value), dtype=tf_float32
+            float(self.gamma_w_config.value), dtype=tf_float32
         )
         self.h_ref = tf_constant(
-            float(self.h_ref_config.initial_value), dtype=tf_float32
+            float(self.h_ref_config.value), dtype=tf_float32
         )
         
         # Placeholders for the predicted fields.
@@ -1278,7 +1278,6 @@ class GeoPriorSubsNet(BaseAttentive):
         if self._physics_off(): 
             self.lambda_prior=self.lambda_smooth=self.lambda_mv=0.0
         else:
-            
             self.lambda_prior = lambda_prior
             self.lambda_smooth = lambda_smooth
             self.lambda_mv = lambda_mv

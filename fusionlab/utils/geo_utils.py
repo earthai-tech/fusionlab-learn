@@ -963,9 +963,9 @@ def augment_city_spatiotemporal_data(
     default_exclude_cols = set(_group_by_cols + [_time_col])
     # Add known categorical or ID-like columns (expand as needed)
     known_non_numeric_or_id_cols = {
-        'geology', 'density_tier', 'subsidence_intensity',
-        'density_concentration', 'rainfall_category',
-        'building_concentration', 'soil_thickness'
+        'lithology', 'city', 'lithology_class',
+        # 'density_concentration', 'rainfall_category',
+        # 'building_concentration', 'soil_thickness'
     }
     default_exclude_cols.update(known_non_numeric_or_id_cols)
 
