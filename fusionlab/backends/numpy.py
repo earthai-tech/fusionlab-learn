@@ -56,7 +56,7 @@ This documentation aims to provide a concise introduction to using the NumpyBack
 the gofast framework, highlighting its fundamental role in numerical computing and data 
 processing tasks.
 """
-
+from datetime import datetime 
 from .base import BaseBackend 
 
 __all__=["NumpyBackend"]
@@ -143,14 +143,12 @@ class NumpyBackend(BaseBackend):
         """
         if name in self.custom_methods:
             return self.custom_methods[name]
-        # Attempt to delegate to NumPy's attribute
         try:
-            attr = getattr(self._np, name)
-            if callable(attr):
-                return attr
+            return getattr(self._np, name)   # return regardless of callable
         except AttributeError:
-            pass
-        raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+            raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{name}'")
+
 
     def array(self, data, dtype=None, *, copy=True, order='K', subok=False, ndmin=0):
         """
@@ -223,7 +221,7 @@ class NumpyBackend(BaseBackend):
         """
         if not self._np.isnan(a).any():
             return a
-        return self._np.where(self.isnan(a), fill_value, a)
+        return self._np.where(self._np.isnan(a), fill_value, a)
 
     def dropna(self, a, axis=0):
         """
@@ -240,8 +238,13 @@ class NumpyBackend(BaseBackend):
         """
         Convert argument to datetime.
         """
-        import datetime 
-        return self._np.array([self._npdatetime64(datetime.strptime(str(x), format)) for x in a])
+
+        if format:
+            return self._np.array(
+                [self._np.datetime64(
+                    datetime.strptime(str(x), format)) for x in a])
+        return self._np.array(
+            [self._np.datetime64(x) for x in a])
 
     def dot(self, a, b, out=None):
         """
@@ -256,42 +259,3 @@ class NumpyBackend(BaseBackend):
         """
         return self._np.dot(a, b, out=out)
 
-if __name__=='__main__': 
-    # Example usage
-    numpy_backend = NumpyBackend()
-    array_example = numpy_backend.array([1, 2, 3])
-    print(array_example)
-    
-
-    from .backends.numpy import NumpyBackend
-    # Import other backends as necessary
-    
-    # Default backend
-    _active_backend = NumpyBackend()
-    
-    def set_backend(backend_name):
-        global _active_backend
-        if backend_name == 'numpy':
-            _active_backend = NumpyBackend()
-        # Add other backends as they become available
-        else:
-            raise ValueError(f"Unknown backend: {backend_name}")
-    
-    def get_backend():
-        return _active_backend
-    
-    # Example Usage
-    # from fusionlab.config import set_backend, get_backend
-    
-    # Set the active backend to NumPy
-    set_backend('numpy')
-    
-    # Get the current active backend
-    backend = get_backend()
-    
-    # Perform operations using the active backend
-    a = backend.array([1, 2, 3])
-    b = backend.array([4, 5, 6])
-    dot_product = backend.dot(a, b)
-    
-    print(dot_product)  # Output will depend on the active backend's implementation

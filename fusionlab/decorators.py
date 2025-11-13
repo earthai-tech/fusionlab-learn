@@ -70,7 +70,7 @@ __all__ = [
 ]
 
 class EnsureMethod:
-    """
+    r"""
     Decorator class to ensure the prioritized execution of a specified 
     class method based on configuration. This decorator allows flexibility 
     in method execution by supporting modes (strict or soft), customizable 
@@ -200,7 +200,7 @@ class EnsureMethod:
         return cls
 
     def _conditionally_wrap_method(self, cls, method_name):
-        """
+        r"""
         Wraps a method in the class based on its existence and the 
         configuration, prioritizing `method_name` if provided.
 
@@ -240,7 +240,7 @@ class EnsureMethod:
             setattr(cls, method_name, placeholder_method)
 
     def _redirect_method_if_needed(self, cls, default_method):
-        """
+        r"""
         Redirects calls to `fit` or `run` to the specified `method_name` if 
         `fit` or `run` is missing but `method_name` is defined.
 
@@ -267,7 +267,7 @@ class EnsureMethod:
             setattr(cls, default_method, redirect_method)
 
     def _handle_missing_method(self, instance, called_method_name):
-        """
+        r"""
         Handles errors or warnings when required methods are missing, based 
         on decorator configuration.
 
@@ -320,7 +320,7 @@ class EnsureMethod:
 
 
 def executeWithFallback(method, *, mode="soft"):
-    """
+    r"""
     Decorator for the `execute` method, providing fallback functionality to
     either `run` or `fit` methods within the class based on availability.
 
@@ -434,7 +434,7 @@ def executeWithFallback(method, *, mode="soft"):
     return wrapper
 
 class RunReturn:
-    """
+    r"""
     A class-based decorator that enhances a method's return behavior, allowing 
     flexibility in returning `self`, an attribute, or both. If the decorated 
     method returns `None`, the `RunReturn` logic is applied automatically.
@@ -584,7 +584,7 @@ class RunReturn:
         return wrapper
 
     def run_return_logic(self, self_obj) -> Any:
-        """
+        r"""
         Apply the `run_return` logic based on the specified parameters, either 
         returning `self`, an attribute, or both, with error handling.
 
@@ -665,7 +665,7 @@ class RunReturn:
         
     @classmethod
     def from_decorator(cls, *args, **kwargs) -> Callable:
-        """
+        r"""
         Initialize the `RunReturn` decorator, allowing it to be applied with or 
         without parentheses.
     
@@ -737,7 +737,7 @@ class RunReturn:
 RunReturn = RunReturn.from_decorator
 
 def smartFitRun(cls):
-    """
+    r"""
     A class-based decorator that manages the `fit`/`run` method switching 
     logic. If one method is called but the other is implemented, the correct 
     method will be invoked automatically, with a warning issued to the user.
@@ -854,7 +854,7 @@ def smartFitRun(cls):
     return cls
 
 class SmartProcessor:
-    """
+    r"""
     A decorator class for data processing which selectively excludes specified 
     columns from the processing step and reintegrates them afterward. This is 
     useful for data preprocessing steps like scaling or imputing, where certain
@@ -925,7 +925,7 @@ class SmartProcessor:
             functools.update_wrapper(self, func)
             
     def __call__(self, *args, **kwargs):
-        """
+        r"""
         Call method that makes `SmartProcessor` a callable object which can 
         act as a decorator.
     
@@ -1036,7 +1036,7 @@ class SmartProcessor:
         return wrapper(*args, **kwargs)
     
     def _check_columns_exist(self, dataframe, columns):
-        """
+        r"""
         Check if the specified columns exist in the dataframe.
     
         Parameters
@@ -1064,7 +1064,7 @@ class SmartProcessor:
             raise ValueError("Some columns to skip do not exist in the DataFrame")
     
     def _check_indices_valid(self, array, indices):
-        """
+        r"""
         Check if the specified indices are valid for the given NumPy array.
     
         Parameters
@@ -1092,7 +1092,7 @@ class SmartProcessor:
     
     def _reintegrate_skipped_numpy(
             self, original_data, processed_data, skipped_data, columns_to_skip):
-        """
+        r"""
         Reintegrate skipped data back into the processed NumPy array.
     
         Parameters
@@ -1149,7 +1149,7 @@ class SmartProcessor:
         return  result 
     
     def restore_original_column_order(self, result):
-        """
+        r"""
         Restore the column order of a DataFrame to match the original column order
         stored in `_original_columns`. If `result` is not a DataFrame, it attempts to
         convert it into one.
@@ -1202,7 +1202,7 @@ class SmartProcessor:
         
             
 class DataTransformer:
-    """
+    r"""
     A decorator class for transforming the output of functions that return
     pandas DataFrames or Series. It can adjust the return value based on
     specified parameters, including renaming columns, resetting indexes, or
@@ -1394,7 +1394,7 @@ class DataTransformer:
         return data
 
 class Extract1dArrayOrSeries:
-    """
+    r"""
     A decorator and callable that preprocesses input data to ensure it is 
     provided to the decorated/called function as a one-dimensional NumPy 
     array or Pandas Series.
@@ -1687,7 +1687,7 @@ class Extract1dArrayOrSeries:
         return result
 
 class DynamicMethodIn:
-    """
+    r"""
     A class-based decorator designed to preprocess data before it's passed to 
     a function or method. This preprocessing includes filtering data by type, 
     selecting specific columns, handling missing values, applying transformations,
@@ -1845,7 +1845,7 @@ class DynamicMethodIn:
         return wrapper
 
     def _validate_and_prepare_data(self, data, **kwargs):
-        """
+        r"""
         Validates the input data and converts it to a pandas DataFrame if
         necessary.
     
@@ -1903,7 +1903,7 @@ class DynamicMethodIn:
         return data
     
     def _process_data(self, data: pd.DataFrame, **kwargs):
-        """
+        r"""
         Applies various preprocessing steps to the data based on the decorator's parameters.
     
         This method sequentially processes the data through specified steps: capturing 
@@ -2617,7 +2617,7 @@ class DynamicMethod:
                        f"exists on pandas.{cls_to_extend.__name__}.")
 
 class ExportData:
-    """
+    r"""
     A decorator for exporting data into various formats post-function execution. 
     It supports exporting pandas DataFrames or other data types to specified 
     file formats with additional customization through keyword arguments.
@@ -2731,7 +2731,7 @@ class ExportData:
         return [full_path]
   
 class Temp2D:
-    """
+    r"""
     A decorator for creating two-dimensional plots from the outputs of 
     decorated functions. It integrates seamlessly with matplotlib for 
     plotting and supports customization through various parameters.
@@ -2787,7 +2787,7 @@ class Temp2D:
         return wrapper
 
     def plot2d(self, x, y, **kwargs):
-        """
+        r"""
         Generates a 2D plot based on the provided x and y data along with 
         customizable plotting arguments.
 
@@ -2836,7 +2836,7 @@ class Temp2D:
         raise AttributeError(msg)
 
 class SignalFutureChange:
-    """
+    r"""
     A decorator that signals an upcoming change to a function or class, such 
     as deprecation or a recommendation to use a more robust alternative. It 
     allows the function or class to execute normally while optionally logging 
@@ -2876,7 +2876,7 @@ class SignalFutureChange:
         return wrapper
 
 class AppendDocReferences:
-    """
+    r"""
     A decorator for appending reStructuredText references to the docstring 
     of the decorated function or class, enhancing Sphinx documentation by 
     auto-retrieving and replacing values from specified references.
@@ -2926,7 +2926,7 @@ class AppendDocReferences:
     
 
 class Deprecated:
-    """
+    r"""
     Decorator that flags functions, methods, or classes as *deprecated*.
 
     When the decorated object is *called* (functions / methods) or
@@ -3009,7 +3009,7 @@ class Deprecated:
         return _wrapper
 
 class _Deprecated:
-    """
+    r"""
     A decorator for marking functions, methods, and classes as deprecated. 
     It emits a deprecation warning when the decorated item is called or 
     instantiated.
@@ -3057,7 +3057,7 @@ class _Deprecated:
         return new_func
 
 class CheckGDALData:
-    """
+    r"""
     A decorator to ensure the availability of GDAL data for functions requiring GDAL. 
     It checks if the GDAL_DATA environment variable is correctly set and points to an 
     existing path. Optionally, it can raise an ImportError if the GDAL data is not 
@@ -3146,7 +3146,7 @@ class CheckGDALData:
     _gdal_installation_guide = 'https://opensourceoptions.com/blog/how-to-install-gdal-for-python-with-pip-on-windows/'
 
 class RedirectToNew:
-    """
+    r"""
     A decorator to redirect calls from deprecated functions or classes to new ones,
     issuing a deprecation warning and guiding users towards the updated implementation.
 
@@ -3193,7 +3193,7 @@ class RedirectToNew:
         return wrapper
   
 class PlotPrediction:
-    """
+    r"""
     A decorator for plotting predictions and observations using matplotlib. 
     This decorator enhances functions that return prediction and observation 
     data by optionally generating a scatter plot for visual comparison.
@@ -3291,7 +3291,7 @@ class PlotPrediction:
         plt.show()
 
 class PlotFeatureImportance:
-    """
+    r"""
     A decorator to plot permutation feature importance (PFI) diagrams or dendrogram 
     figures for feature correlation analysis. It utilizes matplotlib for plotting 
     and can be customized with various keyword arguments.
@@ -3381,7 +3381,7 @@ class PlotFeatureImportance:
         plt.show()
 
 class AppendDocSection:
-    """
+    r"""
     A decorator to append a specific section of a function's or class's docstring
     to another. This is particularly useful for avoiding redundancy when documenting
     shared parameters or information across multiple functions or classes.
@@ -3444,7 +3444,7 @@ class AppendDocSection:
         return target_func
 
 class AppendDocFrom:
-    """
+    r"""
     A decorator for appending a specific section of a function's or class's docstring
     to another. This is useful for avoiding redundancy in documentation, especially
     for shared parameters or descriptions.
@@ -3519,7 +3519,7 @@ class AppendDocFrom:
         target.__doc__ = target_doc
 
 class NumpyDocstring:
-    """
+    r"""
     A class decorator designed to automatically parse and reformat the docstring of
     the decorated function into a structured NumPy-style docstring. This decorator
     enhances readability and standardization of documentation, making it more useful
@@ -3647,7 +3647,7 @@ class NumpyDocstring:
         setattr(owner, name, self)
         
 def sanitize_docstring(enforce_strict=False, custom_sections=None):
-    """
+    r"""
     Decorator factory function that returns an instance of NumpyDocstring.
     This function simplifies the application of the decorator with additional parameters
     like enforcing strict formatting and adding custom sections to the docstring.
@@ -3728,7 +3728,7 @@ class _AvailableIfDescriptor:
         return out
 
 def available_if(check):
-    """An attribute that is available only if check returns a truthy value
+    r"""An attribute that is available only if check returns a truthy value
 
     Parameters
     ----------
@@ -3764,7 +3764,7 @@ def available_if(check):
 
 
 def isdf(func):
-    """
+    r"""
     Decorator that ensures the first positional argument passed to the 
     decorated callable is a pandas DataFrame. If it's not, attempts to convert
     it to a DataFrame using an optional `columns` keyword argument. 
@@ -3838,7 +3838,7 @@ def isdf(func):
     return wrapper
 
 class IsPerformanceData:
-    """
+    r"""
     A decorator and validator for performance data in machine learning.
 
     The `IsPerformanceData` class can be used both as a decorator and as a
@@ -3961,7 +3961,7 @@ class IsPerformanceData:
             self.data = None
 
     def __call__(self, *args, **kwargs):
-        """
+        r"""
         Enables the class instance to be called as a function
         or used as a decorator.
 
@@ -4026,7 +4026,7 @@ class IsPerformanceData:
 
     @isdf 
     def actual_validate_performance_data(self, data):
-        """
+        r"""
         Performs the actual validation of the performance data.
 
         Parameters
@@ -4146,7 +4146,7 @@ class IsPerformanceData:
         return data 
 
 class NumpyDocstringFormatter:
-    """
+    r"""
     A decorator class for reformatting function docstrings to adhere to the
     NumPy documentation standard.
 
@@ -4256,7 +4256,7 @@ class NumpyDocstringFormatter:
         self.verbose=verbose 
 
     def __call__(self, func):
-        """
+        r"""
         Decorator method to apply the docstring formatting.
 
         Parameters
@@ -4280,7 +4280,7 @@ class NumpyDocstringFormatter:
         return wrapper
 
     def format_docstring(self, docstring):
-        """
+        r"""
         
 
         Parameters
@@ -4321,7 +4321,7 @@ class NumpyDocstringFormatter:
         return formatted_docstring
 
     def extract_sections(self, docstring, sections_order):
-        """
+        r"""
         Extract and return the docstring sections found in the given order.
 
         Parameters
@@ -4360,7 +4360,7 @@ class NumpyDocstringFormatter:
         return sections
 
     def reconstruct_docstring(self, sections, sections_order):
-        """
+        r"""
         Reconstruct the docstring from the extracted sections in the given order.
 
         Parameters
@@ -4382,7 +4382,7 @@ class NumpyDocstringFormatter:
         return reconstructed_docstring
     
     def sphinx_validation(self, docstring):
-        """
+        r"""
         Validates the given docstring using Sphinx and docutils to ensure 
         it adheres to standards acceptable by Sphinx for documentation generation.
     
@@ -4412,11 +4412,17 @@ class NumpyDocstringFormatter:
         try:
             # Create a new document for parsing
             settings_overrides = {'report_level': 2, 'warning_stream': False}
-            document = publish_doctree(docstring, settings_overrides=settings_overrides)
+            document = publish_doctree(
+                docstring, settings_overrides=settings_overrides
+            )
             
+            # warnings_or_errors = _docutils_findall(
+            #     document, lambda n: isinstance(n, _doc_nodes.system_message)
+            # )
             # Check for any errors or warnings in the parsed document
-            warnings_or_errors = document.traverse(condition=lambda node: isinstance(
-                node, (nodes.warning, nodes.error)))
+            warnings_or_errors = _docutils_findall(
+                document, nodes.system_message)
+            
             if next(warnings_or_errors, None):
                 if self.verbose:
                     _logger.warning(
@@ -4428,6 +4434,30 @@ class NumpyDocstringFormatter:
             if self.verbose:
                 _logger.error(
                     f"Docstring validation failed due to an exception: {e}") 
+
+def _docutils_findall(document, predicate):
+    r"""
+    Return a list of nodes matching `predicate` using the modern API when
+    available, with a safe fallback for older docutils.
+    
+    """
+    # compat for docutils >= 0.19 (findall) and older (traverse)
+    try:
+        from docutils import nodes as _doc_nodes
+    except Exception:  # docutils not installed at runtime
+        _doc_nodes = None
+        
+    if _doc_nodes is None:
+        return []
+    # If predicate is a callable, both APIs accept it.
+    # If it's a node class (e.g., nodes.system_message), findall prefers the class.
+    if hasattr(document, "findall"):
+        return list(document.findall(predicate))
+    # Fallback for older docutils
+    if callable(predicate):
+        return document.traverse(condition=predicate)
+    # If a class was passed, adapt to the old API by wrapping it
+    return document.traverse(condition=lambda n: isinstance(n, predicate))
 
 
 class Dataify:

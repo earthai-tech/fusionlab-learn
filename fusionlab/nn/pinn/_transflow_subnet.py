@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 from numbers import Integral, Real 
-from typing import Optional, Union, Dict, List, Tuple
+from typing import Optional, Union, Dict, List, Tuple, Any
 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
@@ -22,7 +22,7 @@ from .._base_attentive import BaseAttentive
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs 
     from ..comp_utils import resolve_gw_coeffs, normalize_C_descriptor
-    from .op import process_pinn_inputs
+    from .op import process_pinn_inputs, default_scales, scale_residual
     from .utils import process_pde_modes, extract_txy_in, _get_coords 
     
 LSTM = KERAS_DEPS.LSTM
@@ -130,6 +130,8 @@ class TransFlowSubsNet(BaseAttentive):
         objective: Optional[str]=None, 
         attention_levels:Optional[Union[str, List[str]]]=None, 
         architecture_config: Optional[Dict] = None,
+        scale_pde_residuals: bool = True,
+        scaling_kwargs: Optional[Dict[str, Any]] = None,
         name: str = "TransFlowSubsNet",
         **kwargs
     ):
@@ -168,7 +170,7 @@ class TransFlowSubsNet(BaseAttentive):
             vsn_units=vsn_units,
             attention_levels =attention_levels,
             objective=objective, 
-            architecture_config=architecture_config, 
+            architecture_config=architecture_config,
             name=name,
             **kwargs
         )
@@ -181,7 +183,10 @@ class TransFlowSubsNet(BaseAttentive):
         self.pinn_coefficient_C_config = normalize_C_descriptor(
             pinn_coefficient_C
         )
-  
+        
+        self.scale_pde_residuals = bool(scale_pde_residuals)
+        self.scaling_kwargs = dict(scaling_kwargs or {})
+    
         self.gw_flow_coeffs = gw_flow_coeffs 
         K, Ss, Q = resolve_gw_coeffs(
             gw_flow_coeffs=self.gw_flow_coeffs,
@@ -275,7 +280,7 @@ class TransFlowSubsNet(BaseAttentive):
         self.subs_coord_mlp = _branch(subs_units, "subs_coord_mlp")
 
     def _build_C_components(self):
-        """
+        r"""
         Instantiates components required for the physics‐informed module.
         Specifically, sets up how we obtain C:
           - If LearnableC, create a trainable variable log_C.
@@ -317,7 +322,7 @@ class TransFlowSubsNet(BaseAttentive):
         return self._get_C()
 
     def _build_pinn_components(self):
-        """
+        r"""
         Instantiates trainable/fixed physical coefficients using the
         correct Keras API to ensure they are tracked by the model.
         """
@@ -371,6 +376,7 @@ class TransFlowSubsNet(BaseAttentive):
         else:  # Fixed value
             self.Q = tf_constant(float(self.Q_config), dtype=tf_float32)
             
+
     @tf_autograph.experimental.do_not_convert
     def call(
         self, inputs: Dict[str, Optional[Tensor]],
@@ -514,62 +520,8 @@ class TransFlowSubsNet(BaseAttentive):
             "gwl_pred_mean": gwl_pred_mean,
         }
 
-    def compute_physics_loss(
-        self, inputs: Dict[str, Tensor]
-    ) -> Tuple[Tensor, Tensor]:
-        """
-        Computes the physics-based loss terms for both consolidation
-        and groundwater flow.
-        """
-        # This method uses its own tape to calculate the gradients
-        # required for the PDE residuals.
-        with GradientTape(persistent=True) as tape:
-            # Watch the coordinate tensor and the model's predictions.
-            coords = inputs['coords']
-            tape.watch(coords)
-            
-            # Re-run the forward pass *within this tape's context*
-            # to get predictions that are differentiable wrt coords.
-            predictions = self(inputs, training=True)
-            s_pred_mean = predictions['subs_pred_mean']
-            h_pred_mean = predictions['gwl_pred_mean']
-            
-            # Explicitly watch the prediction tensors too
-            tape.watch(s_pred_mean)
-            tape.watch(h_pred_mean)
-
-            # Unpack coordinates for differentiation
-            t, x, y = coords[..., 0:1], coords[..., 1:2], coords[..., 2:3]
-
-            # --- First-Order Derivatives ---
-            ds_dt = tape.gradient(s_pred_mean, t)
-            dh_dt = tape.gradient(h_pred_mean, t)
-            dh_dx = tape.gradient(h_pred_mean, x)
-            dh_dy = tape.gradient(h_pred_mean, y)
-
-        # --- Second-Order Derivatives ---
-        d2h_dx2 = tape.gradient(dh_dx, x)
-        d2h_dy2 = tape.gradient(dh_dy, y)
-        
-        # Clean up the persistent tape
-        del tape
-
-        # Validate gradients
-        if any(g is None for g in [ds_dt, dh_dt, d2h_dx2, d2h_dy2]):
-             raise ValueError("Failed to compute one or more PDE gradients.")
-             
-        # Assemble residuals using stateless helpers
-        cons_res = self._compute_consolidation_residual(ds_dt, d2h_dx2, d2h_dy2)
-        gw_res = self._compute_gw_flow_residual(dh_dt, d2h_dx2, d2h_dy2)
-        
-        # Calculate the loss for each residual
-        loss_cons = tf_reduce_mean(tf_square(cons_res))
-        loss_gw = tf_reduce_mean(tf_square(gw_res))
-        
-        return loss_cons, loss_gw
-
     def train_step(self, data):
-        """
+        r"""
         One optimization step uniting data and physics terms.
     
         Uses a single :class:`tf.GradientTape` to obtain all
@@ -579,11 +531,11 @@ class TransFlowSubsNet(BaseAttentive):
         Data loss: any Keras loss supplied in :py:meth:`compile`.
     
         PDE losses:
+            
         .. math::
-           S_s \,\partial_t h
-           \;-\; K (\partial_{xx} h + \partial_{yy} h) - Q &= 0 \\
-           \partial_t s
-           \;-\; C (\partial_{xx} h + \partial_{yy} h) &= 0
+           R_c = \\partial_t s \\; + \\; C \\, \\partial_t h
+           R_{gw} = K(\\partial_{xx} h + \\partial_{yy} h)\\
+               + Q - S_s \\, \\partial_t h
     
         The final objective is
         :math:`\mathcal L = L_\text{data}
@@ -661,16 +613,23 @@ class TransFlowSubsNet(BaseAttentive):
                 )
     
             # Assemble residuals using the stateless helpers.
+
             cons_res = self._compute_consolidation_residual(
-                ds_dt, d2h_dx2, d2h_dy2)
-            gw_res = self._compute_gw_flow_residual(
+                ds_dt, dh_dt)
+            gw_res   = self._compute_gw_flow_residual(
                 dh_dt, d2h_dx2, d2h_dy2)
-        
+
+
+            # --- NEW: Non-dimensionalize residuals ---
+            if self.scale_pde_residuals:
+                scales = self._compute_scales(t, s_pred_mean, h_pred_mean)
+                cons_res = scale_residual(cons_res, scales.get("cons_scale"))
+                gw_res   = scale_residual(gw_res,   scales.get("gw_scale"))
+    
             # --- COMPOSITE LOSS ---
             loss_cons = tf_reduce_mean(tf_square(cons_res))
             loss_gw = tf_reduce_mean(tf_square(gw_res))
-            # physics_loss = (+ self.lambda_cons * loss_cons
-            #               + self.lambda_gw * loss_gw)
+
             total_loss = (
                         data_loss 
                         + self.lambda_cons * loss_cons 
@@ -696,30 +655,76 @@ class TransFlowSubsNet(BaseAttentive):
         })
         return results
     
-    def _compute_consolidation_residual(
-            self, ds_dt, d2h_dx2, d2h_dy2):
-        """
-        Residual of the consolidation balance.
-    
+
+    def _compute_consolidation_residual(self, ds_dt, dh_dt):
+        r"""
+        Consolidation residual (rate form).
+ 
         .. math::
-           R_c = \partial_t s - C(\partial_{xx} h + \partial_{yy} h)
+           R_c = \\partial_t s \\; + \\; C \\, \\partial_t h
+ 
+        Positive C means a drop in head (negative dh/dt) produces positive
+        settlement rate (positive ds/dt). If your sign convention for drawdown
+        is inverted, flip the sign of C accordingly.
         """
         if 'consolidation' not in self.pde_modes_active:
             return tf_zeros_like(ds_dt)
-        return ds_dt - self.C * (d2h_dx2 + d2h_dy2)
-    
-    def _compute_gw_flow_residual(
-            self, dh_dt, d2h_dx2, d2h_dy2):
-        """
-        Residual of the transient groundwater flow.
+        return ds_dt + self.C * dh_dt
+
+
+    def _compute_gw_flow_residual(self, dh_dt, d2h_dx2, d2h_dy2):
+        r"""
+        Transient groundwater-flow residual.
     
         .. math::
-           R_g = S_s \,\partial_t h
-           - K(\partial_{xx} h + \partial_{yy} h) - Q
+           R_{gw} = K(\\partial_{xx} h + \\partial_{yy} h) + Q - S_s \\, \\partial_t h
+    
+        This matches the standard diffusivity equation convention and the
+        sign used by our shared operator utilities.
         """
         if 'gw_flow' not in self.pde_modes_active:
             return tf_zeros_like(dh_dt)
-        return (self.Ss * dh_dt) - self.K * (d2h_dx2 + d2h_dy2) - self.Q
+        lap_h = d2h_dx2 + d2h_dy2
+        return self.K * lap_h + self.Q - self.Ss * dh_dt
+
+
+    def _compute_scales(self, t, s_mean, h_mean):
+        r"""
+        Build dimensionless scales for PDE residuals using default_scales().
+        t: [B, T, 1] time coordinates.
+        s_mean, h_mean: mean predictions used for PDE.
+        Returns a dict with 'cons_scale' and 'gw_scale'.
+        """
+        # Robust Δt: use mean |Δt| over valid differences; if T==1, pass None
+        # default_scales handles None or small values internally.
+        dt_tensor = None
+        if hasattr(t, "shape") and t.shape.rank is not None and t.shape.rank >= 2:
+            # If there are at least 2 time points, compute differences
+            # Note: safe slice if T>1; else leave None
+            # We rely on default_scales’ internal small-number protectors.
+            if t.shape[1] and t.shape[1] > 1:
+                dt_tensor = t[:, 1:, :] - t[:, :-1, :]
+        
+             # dt_tensor = t[:, 1:, :] - t[:, :-1, :] if t.shape[1]
+             # and t.shape[1] > 1 else None
+    
+        # You already have K, Ss, Q tensors (trainable or fixed)
+        # Pass through to default_scales; users can override via scaling_kwargs.
+        
+        # Fallback to a unit Δt if dt is None (keeps scales finite)
+        if dt_tensor is None:
+            dt_tensor = tf_zeros_like(s_mean[..., :1]) + 1.0
+    
+        return default_scales(
+            h=h_mean,
+            s=s_mean,
+            dt=dt_tensor,
+            K=self.K,
+            Ss=self.Ss,
+            Q=self.Q,
+            **self.scaling_kwargs
+        )
+
 
     def split_outputs(
         self, 
@@ -949,6 +954,9 @@ class TransFlowSubsNet(BaseAttentive):
             "K": self.K_config,
             "Ss": self.Ss_config,
             "Q": self.Q_config,
+            "scale_pde_residuals": self.scale_pde_residuals,
+            "scaling_kwargs": self.scaling_kwargs,
+            "model_version": "2.0",
         }
         base_config.update(pinn_config)
         
@@ -996,19 +1004,25 @@ class TransFlowSubsNet(BaseAttentive):
         return cls(**config)
 
 # ------------------------------------ docstring-------------------------------
+
 TransFlowSubsNet.__doc__ = r"""
 Transient Ground-Water–Driven Subsidence Network
 
-TransFlowSubsNet fuses deep-learning encoder–decoder with two
-physics losses so that the network **learns** a forecast **and**
-honours the governing PDEs at once.
+TransFlowSubsNet fuses a deep encoder–decoder with two physics
+residuals so the network **learns** a forecast **and** honours the
+governing dynamics:
 
-*   **Consolidation** loss forces surface settlement :math:`s`
-    to balance the Laplacian of hydraulic head :math:`h`.
-*   **Transient ground-water flow** loss constrains head
-    to obey the diffusivity equation with source/sink term.
+* **Consolidation (rate form)** couples settlement rate and head rate:
+  :math:`\partial_t s + C\,\partial_t h = 0`.  For :math:`C>0`, a head
+  decline (:math:`\partial_t h<0`) implies a positive settlement rate
+  (:math:`\partial_t s>0`).
 
-Both terms vanish when *pde_mode* switches them off.
+* **Transient ground-water flow (diffusivity)** enforces
+  :math:`K\nabla^2 h + Q - S_s\,\partial_t h = 0`.
+
+Both terms can be disabled via *pde_mode* (or :class:`DisabledC` for the
+consolidation branch).  Physics terms are computed on the **mean path**
+emitted by the decoder to keep a unique differentiable trajectory.
 
 See :ref:`User Guide <user_guide_transflowsubsnet>` for a walkthrough.
 
@@ -1018,23 +1032,21 @@ Parameters
 {params.base.dynamic_input_dim}
 {params.base.future_input_dim}
 
-output_subsidence_dim : int, default 1  
-    How many subsidence series are produced at each horizon
-    step.  A multi-well scenario with *n* Digital Leveling
-    benchmarks would use ``n``.
+output_subsidence_dim : int, default 1
+    Number of subsidence series per horizon step.  In a multi-well
+    setting with *n* benchmarks, use ``n``.
 
-output_gwl_dim : int, default 1  
-    How many head series are produced.  Use >1 for multi-aquifer
-    or multi-well settings.
+output_gwl_dim : int, default 1
+    Number of hydraulic-head series.  Use >1 for multi-aquifer or
+    multi-well configurations.
 
-forecast_horizon : int, default 1  
-    Horizon length :math:`H`.  The decoder emits :math:`H`
-    steps; the physics terms are evaluated for every emitted
-    step.
+forecast_horizon : int, default 1
+    Horizon length :math:`H`.  The decoder emits :math:`H` steps; physics
+    residuals are evaluated at each emitted step.
 
-quantiles : list[float] | None, default None  
-    Optional list of quantile levels; enables the
-    Quantile-Distribution head.
+quantiles : list[float] | None, default None
+    Optional list of quantile levels; enables the Quantile-Distribution
+    head for calibrated uncertainty.
 
 {params.base.embed_dim}
 {params.base.hidden_units}
@@ -1053,53 +1065,74 @@ quantiles : list[float] | None, default None
 {params.base.use_vsn}
 {params.base.vsn_units}
 
-pde_mode : {{'consolidation', 'gw_flow', 'both', 'none'}}, \
-default ``'both'``  
-    Select which PDE residuals participate in the loss:  
-    ┌─────────────────┬────────────────────────────────────────┐  
-    │ 'consolidation' │ only :math:`s`–balance term            │  
-    │ 'gw_flow'       │ only flow equation for :math:`h`       │  
-    │ 'both'          │ both residuals (recommended)           │  
-    │ 'none'          │ pure data-driven; behaves like HAL-Net │  
-    └─────────────────┴────────────────────────────────────────┘
+pde_mode : {{'consolidation', 'gw_flow', 'both', 'none'}}, default 'both'
+    Select which residuals participate in the physics loss:
 
-K, Ss, Q : float | str | Learnable*, defaults 1e-4, 1e-5, 0.  
-    Hydraulic conductivity :math:`K`, specific storage
-    :math:`S_s`, and volumetric source/sink :math:`Q`.  
-    Accepted forms:  
-    * **float / int** → fixed numeric.  
-    * ``'learnable'`` → wrap into the corresponding
-      :class:`LearnableK` / *Ss* / *Q*.  Initial seed is taken
-      from the numeric value given *in the same call* or falls
-      back to 1e-4 / 1e-5 / 0.  
-    * ``'fixed'`` → force numeric even if
-      *param_status='learnable'* in
-      :func:`resolve_gw_coeffs`.  
+    ┌─────────────────┬───────────────────────────────────────────────┐
+    │ 'consolidation' │ only the **rate-coupled** term                │
+    │                 │ :math:`\partial_t s + C\,\partial_t h`        │
+    │ 'gw_flow'       │ only the **diffusivity** term                 │
+    │                 │ :math:`K\nabla^2 h + Q - S_s\,\partial_t h`   │
+    │ 'both'          │ both residuals (recommended)                  │
+    │ 'none'          │ pure data-driven; behaves like HAL-Net        │
+    └─────────────────┴───────────────────────────────────────────────┘
+
+K, Ss, Q : float | str | Learnable*, defaults 1e-4, 1e-5, 0
+    Hydraulic conductivity :math:`K` [L/T], specific storage :math:`S_s`
+    [1/L], and volumetric source/sink :math:`Q` [L/T].  Accepted forms:
+
+    * **float / int** → fixed numeric.
+    * ``'learnable'`` → wrap into :class:`LearnableK` / *Ss* / *Q`,
+      seeding from the numeric value in the same call (or the default).
+    * ``'fixed'`` → force numeric even if a global 'learnable' setting
+      is present in :func:`resolve_gw_coeffs`.
     * **Learnable* instance** → forwarded unchanged.
 
 pinn_coefficient_C : float | str | LearnableC | FixedC | DisabledC, \
-default ``LearnableC(0.01)``  
-    Coefficient in the consolidation PDE:  
+default ``LearnableC(0.01)``
+    Consolidation-coupling coefficient in
 
-    .. math:: \partial_t s - C\,\nabla^2 h = 0  
+    .. math:: \partial_t s + C\,\partial_t h = 0
 
-    * ``float`` – fixed.  
-    * ``'learnable'`` or :class:`LearnableC` – optimised in log-space
-      to keep :math:`C>0`.  
-    * :class:`DisabledC` – disables consolidation regardless of
-      *pde_mode*.
+    * ``float`` – fixed.
+    * ``'learnable'`` or :class:`LearnableC` – optimized in log-space
+      to keep :math:`C>0`.
+    * :class:`DisabledC` – disables the consolidation residual
+      regardless of *pde_mode*.
 
-gw_flow_coeffs : dict | None, default None  
-    Convenience container overriding *K/Ss/Q* in one go, e.g. ::
+gw_flow_coeffs : dict | None, default None
+    Convenience container to override *K/Ss/Q* jointly, e.g. ::
 
-        gw_flow_coeffs = {{'K': 'learnable',
-                           'Ss': 1e-6,
-                           'Q': 'fixed'}}
+        gw_flow_coeffs = {{'K': 'learnable', 'Ss': 1e-6, 'Q': 'fixed'}}
 
     Dict entries win over the individual keyword arguments.
 
+
+scale_pde_residuals : bool, default True
+    If ``True``, non-dimensionalize physics residuals with simple
+    data-driven scales so the loss terms are :math:`\mathcal{{O}}(1)`.
+    By default:
+
+    * Ground-water scale  
+      :math:`\text{{gw\_scale}} \approx \overline{{S_s}}\,
+      \overline{{|h|}}/\overline{{\Delta t}}`.
+
+    * Consolidation scale  
+      :math:`\text{{cons\_scale}} \approx \overline{{|s|}}/\overline{{\Delta t}}`.
+
+    These references are computed per batch on the mean paths and used
+    as divisors in the residuals (see :func:`default_scales`,
+    :func:`scale_residual`).
+
+scaling_kwargs : dict | None, default None
+    Extra keyword arguments forwarded to the internal scaling routine.
+    Reserved for future extensions (custom reference magnitudes or
+    alternative scalings).  When ``None`` or empty, the default batch
+    statistics are used.  Unrecognized keys are currently ignored.
+
 mode : {{'pihal_like', 'tft_like'}}, default ``None``  
     Routing for *future_features*:  
+        
     * **pihal_like** – decoder gets all :math:`H` rows, encoder none.  
     * **tft_like**  – first *max_window_size* rows to encoder,  
       next :math:`H` rows to decoder, matching the original
@@ -1131,47 +1164,50 @@ objective : {{'hybrid', 'transformer'}}, default ``'hybrid'``
     * ``'nse'`` – Nash–Sutcliffe model-efficiency score.  
     * ``'rmse'`` – root-mean-square error.  
     When *None* we will supply losses via :py:meth:`compile`.
+    
+attention_levels : str | list[str] | None
+    Which hierarchical attention outputs are returned when the model is
+    called with ``training=False``.  Use ``'all'`` or a subset such as
+    ``['scale', 'cross']`` for interpretability.
 
-attention_levels : str | list[str] | None  
-    Which hierarchical attention outputs are returned when the
-    model is called with ``training=False``.  Use ``'all'`` or a
-    subset such as ``['scale', 'cross']`` for interpretability.
-
-name : str, default ``"TransFlowSubsNet"``  
+name : str, default "TransFlowSubsNet"
     Model scope as registered in Keras.
 
-**kwargs  
+**kwargs
     Forwarded verbatim to :class:`tf.keras.Model`.
 
 Notes
 -----
-Physics loss is added **outside** the Keras loss container inside
-``train_step``; compile with ``lambda_cons`` and ``lambda_gw`` to
-scale them.  When any parameter is *learnable* its
-:pyattr:`tf.Variable` automatically appears in ``model.trainable_variables``.
+* Physics loss is added **outside** the Keras loss container inside
+  :meth:`train_step`; compile with ``lambda_cons`` and ``lambda_gw`` to
+  scale the two physics terms.
+* Residuals are evaluated on the **mean** decoder outputs (pre-quantile)
+  to keep a single differentiable reference trajectory.  Quantile heads
+  are used for data-fidelity with calibrated uncertainty.
 
 See Also
 --------
 fusionlab.nn.models.HALNet
     Purely data-driven encoder–decoder (no physics terms).
-
 fusionlab.nn.pinn.models.PIHALNet
-    Physics-informed HAL-Net that couples consolidation PDEs 
-    and adds an anomaly module.
-
+    Physics-informed HAL-Net with consolidation and anomaly modules.
 fusionlab.nn.pinn.models.PiTGWFlow
-    Stand-alone PINN that solves 2-D / 3-D transient groundwater-flow
-    equations without subsidence coupling.
+    PINN for transient ground-water flow without subsidence coupling.
+fusionlab.nn.pinn.op.default_scales
+    Batchwise scale construction for residual normalization.
+fusionlab.nn.pinn.op.scale_residual
+    Safe residual normalization helper.
 
 Examples
 --------
->>> import tensorflow as tf 
+>>> import tensorflow as tf
 >>> from fusionlab.nn.pinn import TransFlowSubsNet
 >>> model = TransFlowSubsNet(
 ...     static_input_dim=3, dynamic_input_dim=8, future_input_dim=4,
 ...     output_subsidence_dim=1, output_gwl_dim=1,
 ...     K='learnable', Ss=1e-5, Q='fixed',
-...     pde_mode='both', scales=[1, 3], multi_scale_agg='concat'
+...     pde_mode='both', scales=[1, 3], multi_scale_agg='concat',
+...     scale_pde_residuals=True
 ... )
 >>> batch = {{
 ...     "static_features":  tf.zeros([8, 3]),
@@ -1179,9 +1215,7 @@ Examples
 ...     "future_features":  tf.zeros([8, 6, 4]),
 ...     "coords":           tf.zeros([8, 6, 3]),
 ... }}
->>> pred = model(batch, training=False)
->>> list(pred)
-['subs_pred', 'gwl_pred', 'subs_pred_mean', 'gwl_pred_mean']
+>>> out = model(batch, training=False)
+>>> sorted(out.keys())
+['gwl_pred', 'gwl_pred_mean', 'subs_pred', 'subs_pred_mean']
 """.format (params =_param_docs)
-
-

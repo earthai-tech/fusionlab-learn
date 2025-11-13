@@ -17,6 +17,7 @@ import logging
 from numbers import Real 
 from pathlib import Path
 from itertools import chain
+from collections.abc import Mapping
 import matplotlib.pyplot as plt
 from datetime import datetime
 from typing import ( 
@@ -28,6 +29,7 @@ from typing import (
 import numpy as np 
 import pandas as pd 
 
+PathLike = Union[str, os.PathLike]
 
 _SENTINEL = object()     
 
@@ -38,7 +40,8 @@ __all__ =[
     'exclude_duplicate_kwargs', 'reorder_columns',
     'find_id_column', 'check_group_column_validity', 
     'save_all_figures', 'rename_dict_keys', 
-    'normalize_time_column', 'select_mode'
+    'normalize_time_column', 'select_mode', 
+    'normalize_model_inputs'
  ]
 
 class ExistenceChecker:
@@ -203,6 +206,37 @@ class ExistenceChecker:
             raise OSError(f"Unable to create file {file_path}: {exc}") from exc
 
         return file_path
+
+def normalize_model_inputs(
+    *data: Union[pd.DataFrame, Mapping[str, pd.DataFrame], list, tuple]
+) -> Dict[str, pd.DataFrame]:
+    # If single argument
+    if len(data) == 1:
+        single = data[0]
+        # Case: dict-like mapping
+        if isinstance(single, Mapping):
+            return single  # assume Mapping[str, DataFrame]
+        # Case: list/tuple of DataFrames
+        if isinstance(single, (list, tuple)):
+            dfs = single
+            return {f"model_{i+1}": df for i, df in enumerate(dfs)}
+        # Case: single DataFrame
+        if isinstance(single, pd.DataFrame):
+            return {"model": single}
+        raise TypeError(
+            "Expected a DataFrame, a dict[str,DataFrame],"
+            " or a list/tuple of DataFrames"
+        )
+
+    # If multiple arguments, expect each to be a DataFrame
+    if all(isinstance(d, pd.DataFrame) for d in data):
+        return {f"model_{i+1}": df for i, df in enumerate(data)}
+
+    raise TypeError(
+        "When passing multiple arguments,"
+        " each must be a pandas DataFrame"
+    )
+
 
 def check_group_column_validity(
     df: pd.DataFrame,
@@ -932,7 +966,7 @@ def vlog(
     logger=None,
     **kws
 ):
-    """
+    r"""
     Log or naive messages with optional indentation and
     bracketed tags.
 
@@ -942,16 +976,16 @@ def vlog(
     it behaves differently depending on whether
     ``mode`` is ``'log'`` or ``'naive'``. When
     :math:`mode = 'log'`, the message is printed only if
-    :math:`\\text{verbose} \\geq \\text{level}`. Otherwise,
+    :math:`\text{verbose} \geq \text{level}`. Otherwise,
     for :math:`mode` in [``None``, ``'naive'``], the
     verbosity threshold leads to various bracketed
     prefixes (e.g. [INFO], [DEBUG], [TRACE]) unless the
     message already contains such a prefix.
 
     .. math::
-       \\text{indentation} = 2 \\times \\text{depth}
+       \text{indentation} = 2 \times \text{depth}
 
-    where :math:`\\text{depth}` is either manually
+    where :math:`\text{depth}` is either manually
     specified or auto-derived based on `<parameter inline>`
     `level` (1 = ERROR, 2 = WARNING, 3 = INFO, 4/5 =
     DEBUG, 6/7 = TRACE).
@@ -979,7 +1013,7 @@ def vlog(
     mode : str, optional
         Determines logging mode. If set to ``'log'``,
         prints messages only if
-        :math:`\\text{verbose} \\geq \\text{level}`.
+        :math:`\text{verbose} \geq \text{level}`.
         Otherwise (if ``None`` or ``'naive'``), it
         follows a custom logic driven by `<parameter
         inline> verbose`.
@@ -2464,7 +2498,11 @@ def are_all_values_in_bounds(
     else:
         return True
 
-def rename_dict_keys(data, param_to_rename=None):
+def rename_dict_keys(
+       data: dict,
+       param_to_rename: Optional[dict] = None,
+       order: str = "forward",
+    ):
     """
     Renames keys in the `data` dictionary based on 
     the provided `param_to_rename` dictionary.
@@ -2488,7 +2526,19 @@ def rename_dict_keys(data, param_to_rename=None):
         represents an old key that may be found in `data`, and the corresponding 
         value is the new key. If `None`, no renaming is performed. If a key in 
         `data` matches an old key in `param_to_rename`, that key will be renamed.
-
+    order: str, {'forward', 'reverse'}: 
+        Order for renaming keys in a flat dict::
+            
+            forward (default):
+                param_to_rename = {old_key: new_key}
+    
+            reverse:
+              param_to_rename = {
+                canonical_key: alias or (alias1, alias2, ...)
+              }
+              The first alias found in `data` is moved under the
+              canonical key. If the canonical key already exists,
+              nothing is changed for that mapping.
     Returns
     -------
     dict
@@ -2541,14 +2591,52 @@ def rename_dict_keys(data, param_to_rename=None):
     if not isinstance(data, dict):
         raise ValueError(
             f"data must be a dictionary. Got {type(data).__name__!r}")
+    if order not in ("forward", "reverse"):
+        raise ValueError("order must be 'forward' or 'reverse'.")
         
     # Create a copy of data to avoid modifying the original
     updated_data = data.copy()
     
+    if order == "forward":
+        # Rename keys based on param_to_rename mapping
+        for old_key, new_key in param_to_rename.items():
+            if old_key == new_key:
+                continue
+            if old_key in updated_data:
+                # do not clobber an existing canonical value
+                if new_key in updated_data and new_key != old_key:
+                    # keep existing new_key; drop old_key
+                    updated_data.pop(old_key)
+                else:
+                    updated_data[new_key] = updated_data.pop(old_key)
+            return updated_data
+    
+    # reverse mode: canonical -> aliases
+    for canonical, aliases in param_to_rename.items():
+        # normalize aliases to tuple
+        if isinstance(aliases, (list, tuple)):
+            alias_iter = tuple(aliases)
+        elif isinstance(aliases, str):
+            alias_iter = (aliases,)
+        else:
+            raise ValueError(
+                "reverse mode requires alias str or sequence."
+            )
+
+        # if canonical already present, prefer it
+        if canonical in updated_data:
+            continue
+
+        # move first alias found → canonical
+        for a in alias_iter:
+            if a in updated_data:
+                updated_data[canonical] = updated_data.pop(a)
+                break
+            
     # Rename keys based on param_to_rename mapping
-    for old_key, new_key in param_to_rename.items():
-        if old_key in updated_data:
-            updated_data[new_key] = updated_data.pop(old_key)
+    # for old_key, new_key in param_to_rename.items():
+    #     if old_key in updated_data:
+    #         updated_data[new_key] = updated_data.pop(old_key)
     
     return updated_data
 
@@ -3496,3 +3584,108 @@ def split_train_test_by_time(
     train_df = working.loc[train_mask].copy()
     test_df  = working.loc[test_mask].copy()
     return train_df, test_df
+
+
+def getenv_stripped(
+    name: str,
+    default: Optional[str] = None,
+    allow_empty: bool = False
+ ) -> Optional[str]:
+    """
+    Read an environment variable and strip whitespace robustly.
+
+    Parameters
+    ----------
+    name : str
+        Environment variable name to read.
+    default : str or None, optional
+        Value returned when the environment variable is not set.
+    allow_empty : bool, default=False
+        If False, empty strings are treated as missing and `default`
+        is returned instead. If True, an empty string is returned
+        unchanged.
+
+    Returns
+    -------
+    out : str or None
+        The stripped string value, the empty string (if allowed), or
+        `default` when unset / empty.
+    """
+    val = os.getenv(name)
+    if val is None:
+        return default
+    val = val.strip()
+    if not val and not allow_empty:
+        return default
+    return val
+
+
+def default_results_dir(
+    start: Optional[PathLike] = None,
+    env_var: str = "RESULTS_DIR",
+    folder_name: str = "results",
+    create: bool = False
+) -> str:
+    """
+    Resolve the canonical 'results' directory with robust fallbacks.
+
+    Resolution order
+    ----------------
+    1. If the environment variable `env_var` is set, use it.
+    2. Else search upward from `start` (or `Path.cwd()`) for a folder
+       named `folder_name`.
+    3. Else return `Path.cwd() / folder_name`.
+
+    Parameters
+    ----------
+    start : path-like, optional
+        Starting path for the upward search. If None, uses the current
+        working directory.
+    env_var : str, default="RESULTS_DIR"
+        Environment variable that, when set, overrides any discovery.
+    folder_name : str, default="results"
+        Directory name to look for when walking upward.
+    create : bool, default=False
+        If True, create the directory when it does not exist.
+
+    Returns
+    -------
+    path_str : str
+        Absolute path to the resolved results directory.
+
+    Notes
+    -----
+    This helper is importable in Stage-1/2/3 scripts to keep path
+    resolution consistent across training/tuning/inference. It avoids
+    relying on `__file__` (which may be inside the package install
+    path) and instead uses `Path.cwd()` by default, which is what users
+    expect when launching scripts from various locations.
+
+    Examples
+    --------
+    >>> default_results_dir()
+    '.../your/project/results'
+
+    >>> default_results_dir(start='/work/exp/run42', create=True)
+    '.../your/project/results'
+    """
+    # 1) Environment variable takes precedence
+    env = os.getenv(env_var)
+    if env:
+        p = Path(env).expanduser().resolve()
+        if create:
+            p.mkdir(parents=True, exist_ok=True)
+        return str(p)
+
+    # 2) Search upward for `folder_name`
+    base = Path(start).resolve() if start else Path.cwd().resolve()
+    for parent in (base, *base.parents):
+        cand = parent / folder_name
+        if cand.exists():
+            return str(cand.resolve())
+
+    # 3) Fallback to cwd/folder_name
+    fallback = base / folder_name
+    if create:
+        fallback.mkdir(parents=True, exist_ok=True)
+    return str(fallback.resolve())

@@ -26,7 +26,7 @@ HyperModel = KT_DEPS.HyperModel
 Tuner = KT_DEPS.Tuner
 RandomSearch = KT_DEPS.RandomSearch
 KT_DEPS.BayesianOptimization
-BayesianOptimization = KT_DEPS.Hyperband
+BayesianOptimization = KT_DEPS.BayesianOptimization
 HyperParameters = KT_DEPS.HyperParameters
 Objective = KT_DEPS.Objective
 Hyperband = KT_DEPS.Hyperband

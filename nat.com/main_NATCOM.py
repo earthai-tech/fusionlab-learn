@@ -80,7 +80,7 @@ except ImportError as e:
 # ==================================================================
 # ** Step 0: CONFIGURATION PARAMETERS **
 # ==================================================================
-CITY_NAME = 'zhongshan'
+CITY_NAME = 'zhongshan' # or "nansha"
 MODEL_NAME ='TransFlowSubsNet'
 
 # Data loading: Prioritize 500k sample file
@@ -88,9 +88,18 @@ MODEL_NAME ='TransFlowSubsNet'
 # JUPYTER_PROJECT_ROOT can be set as an environment variable
 # For local runs, adjust DATA_DIR as needed.
 DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..") # Go up one level from script if not set
-ZHONGSHAN_500K_FILENAME = "../data/zhongshan_500k.csv" # Target file
-ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    # Smaller fallback
+# ZHONGSHAN_500K_FILENAME = "../data/zhongshan_500k.csv" 
+# ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv"    
 
+ZHONGSHAN_500K_FILENAME = "zhongshan_500k.csv" # Target file
+ZHONGSHAN_2K_FILENAME = "zhongshan_2000.csv" # Smaller fallback
+
+data_paths_to_check = [
+    os.path.join(DATA_DIR, "data", ZHONGSHAN_500K_FILENAME),
+    os.path.join(DATA_DIR, ZHONGSHAN_500K_FILENAME),
+    os.path.join(".", "data", ZHONGSHAN_500K_FILENAME),
+    ZHONGSHAN_500K_FILENAME,
+]
 
 # Training and Forecasting Periods
 TRAIN_END_YEAR = 2022        # Example: Use data up to 2020 for training
@@ -182,12 +191,12 @@ print(f"Forecasting for years: {FORECAST_YEARS_LIST}")
 # ==================================================================
 print(f"\n{'='*20} Step 1: Load Zhongshan Dataset {'='*20}")
 zhongshan_df_raw = None
-data_paths_to_check = [
-    os.path.join(DATA_DIR, "data", ZHONGSHAN_500K_FILENAME),
-    os.path.join(DATA_DIR, ZHONGSHAN_500K_FILENAME),
-    os.path.join(".", "data", ZHONGSHAN_500K_FILENAME), # Current dir/data
-    ZHONGSHAN_500K_FILENAME # Current dir
-]
+# data_paths_to_check = [
+#     os.path.join(DATA_DIR, "data", ZHONGSHAN_500K_FILENAME),
+#     os.path.join(DATA_DIR, ZHONGSHAN_500K_FILENAME),
+#     os.path.join(".", "data", ZHONGSHAN_500K_FILENAME), # Current dir/data
+#     ZHONGSHAN_500K_FILENAME # Current dir
+# ]
 # Add paths for smaller dataset if 500k is not found
 fallback_paths = [
     os.path.join(DATA_DIR, "data", ZHONGSHAN_2K_FILENAME),
@@ -257,7 +266,7 @@ available_cols = zhongshan_df_raw.columns.tolist()
 selected_features_base = [
     LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, 'rainfall_mm',
     'geology', # Will be one-hot encoded
-    'soil_thickness', # Not in Zhongshan sample, add if for Nansha dataset
+    'soil_thickness', # Not in Zhongshan sample, add if for Nansha dataset( WE have now collected soil_thickness for zongshan too)
     'normalized_density', # Example,  building density
     # 'normalized_seismic_risk_score',
 ]
@@ -521,7 +530,7 @@ for name, arr in inputs_train_dict.items():
     print(f"  Train Input '{name}' shape: {arr.shape if arr is not None else 'None'}")
 for name, arr in targets_train_dict.items():
     print(f"  Train Target '{name}' shape: {arr.shape}")
-
+#
 # ==================================================================
 # ** Step 6: Create tf.data.Datasets for Training and Validation **
 # ==================================================================
@@ -569,7 +578,7 @@ for x_batch, y_batch in train_dataset.take(1):
     print("  Sample batch target keys:", list(y_batch.keys()))
     for k,v in y_batch.items(): print(f"    {k}: {v.shape}")
     break
-#%
+#
 # ==================================================================
 # ** Step 7: SubsModel Model Definition, Compilation & Training **
 # ==================================================================
@@ -609,10 +618,16 @@ if MODEL_NAME =="TransFlowSubsNet":
         "Ss": LearnableSs(initial_value= GWFLOW_INIT_Ss), 
         })
     
+    subsmodel_params.update ({ 
+        "scale_pde_residuals":True,        # explicit (default is True)
+        "scaling_kwargs":None,             # or a dict if you add custom refs later
+        })
+    
     physics_loss_weights ={
         "lambda_cons": LAMBDA_PDE_CONS,  
         "lambda_gw": LAMBDA_PDE_GW
     }
+
 else: 
     SubsModel = PIHALNet
     physics_loss_weights ={
@@ -669,7 +684,7 @@ print("SubsModel model compiled successfully.")
 
 # Callbacks
 early_stopping_cb = EarlyStopping(
-    monitor='val_total_loss', # SubsModel train_step returns 'total_loss'
+    monitor='val_loss', # 'val_total_loss'# SubsModel train_step returns 'total_loss'
     patience=15, # Increased patience
     restore_best_weights=True,
     verbose=1
@@ -683,7 +698,7 @@ model_checkpoint_path = os.path.join(RUN_OUTPUT_PATH, checkpoint_filename)
 
 model_checkpoint_cb = ModelCheckpoint(
     filepath=model_checkpoint_path,
-    monitor='val_total_loss',
+    monitor='val_loss',#'val_total_loss'
     save_best_only=True,
     save_weights_only=False, # Save entire model
     verbose=1
@@ -767,6 +782,9 @@ except Exception as e_load:
 # =============================================================================
 # ** Step 8: Forecasting on Test Data **
 # =============================================================================
+# Put this once near other top-level “initialization” vars
+forecast_df = None
+
 print(f"\n{'='*20} Step 8: Forecasting on Test Data {'='*20}")
 # For SubsModel, we need to prepare test inputs similar to training
 # This includes 'coords', 'static_features', 'dynamic_features', 'future_features'
@@ -1028,7 +1046,9 @@ if forecast_df is not None and not forecast_df.empty:
         verbose=1
     )
     # Plot for GWL
-    if INCLUDE_GWL_IN_DF and f"{GWL_COL}_pred" in forecast_df.columns \
+    # if INCLUDE_GWL_IN_DF and f"{GWL_COL}_pred" in forecast_df.columns \
+    #     or (QUANTILES and f"{GWL_COL}_q50" in forecast_df.columns):
+    if (INCLUDE_GWL_IN_DF and f"{GWL_COL}_pred" in forecast_df.columns) \
         or (QUANTILES and f"{GWL_COL}_q50" in forecast_df.columns):
         print("\n--- Plotting GWL Forecasts ---")
         plot_forecasts(

@@ -9,7 +9,6 @@ it attempts to import from `typing_extensions` if not found in the built-in modu
 """
 
 import sys
-import subprocess
 from typing import (
     List,
     Tuple,
@@ -49,15 +48,11 @@ else:
     except ImportError:
         # Try to install typing_extensions if it's not available
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "typing_extensions"])
-            from typing_extensions import TypeGuard
-        except (ImportError, subprocess.CalledProcessError):
-            # Provide a fallback for TypeGuard if installation and import both fail
-            from typing import Type #noqa
-
-            # Mimic TypeGuard behavior
-            class TypeGuard(Type[bool]):
+            from typing_extensions import TypeGuard  # noqa: F401
+        except Exception:
+            class TypeGuard(bool):  # minimal sentinel
                 pass
+
 
 __all__ = [
     "List",

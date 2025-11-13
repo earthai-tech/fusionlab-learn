@@ -124,12 +124,14 @@ class HydroTuner(PINNTunerBase):
         A dictionary containing all parameters that are **not** to be
         tuned. This must include all data-dependent dimensions required
         by the model's constructor, such as:
+            
         - ``static_input_dim``
         - ``dynamic_input_dim``
         - ``future_input_dim``
         - ``output_subsidence_dim``
         - ``output_gwl_dim``
         - ``forecast_horizon``
+        
         It can also include other fixed settings like ``quantiles`` or
         ``mode``.
     search_space : dict, optional
@@ -730,6 +732,7 @@ class HydroTuner(PINNTunerBase):
         # 6. Execute the search by calling the parent's search method.
         vlog("Handing off to Keras Tuner search...", verbose=verbose, level=2, 
              logger=self._logger )
+        
         return super().search(
             train_data=train_dataset,
             epochs=epochs,

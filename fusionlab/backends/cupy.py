@@ -197,34 +197,34 @@ class CuPyBackend(BaseBackend):
         """
         Solve a linear matrix equation, or system of linear scalar equations on the GPU.
         """
-        return cp.linalg.solve(a, b)
+        return self._backend.linalg.solve(a, b)
 
     def eig(self, a):
         """
         Compute the eigenvalues and right eigenvectors of a square array on the GPU.
         """
-        return cp.linalg.eig(a)
+        return self._backend.linalg.eig(a)
 
     def svd(self, a, full_matrices=True, compute_uv=True):
         """
         Singular Value Decomposition on the GPU.
         """
-        return cp.linalg.svd(a, full_matrices=full_matrices, compute_uv=compute_uv)
+        return self._backend.linalg.svd(a, full_matrices=full_matrices, compute_uv=compute_uv)
 
     def fillna(self, a, fill_value=0):
         """
         Replace NaN values with a specified fill value on the GPU.
         """
-        return cp.where(cp.isnan(a), fill_value, a)
+        return self._backend.where(cp.isnan(a), fill_value, a)
 
     def dropna(self, a, axis=0):
         """
         Remove missing values along a given axis on the GPU.
         """
         if axis == 0:
-            return a[~cp.isnan(a).any(axis=1)]
+            return a[~self._backend.isnan(a).any(axis=1)]
         elif axis == 1:
-            return a[:, ~cp.isnan(a).any(axis=0)]
+            return a[:, ~self._backend.isnan(a).any(axis=0)]
         else:
             raise ValueError("axis must be 0 or 1")
 
@@ -232,7 +232,7 @@ class CuPyBackend(BaseBackend):
         """
         Compute the one-dimensional inverse discrete Fourier Transform on the GPU.
         """
-        return cp.fft.ifft(a, n=n, axis=axis)
+        return self._backend.fft.ifft(a, n=n, axis=axis)
 
     def linalg_solve(self, a, b):
         """
@@ -240,7 +240,7 @@ class CuPyBackend(BaseBackend):
         Computes the "exact" solution, `x`, of the well-determined, i.e., full 
         rank, linear matrix equation `ax = b`.
         """
-        return cp.linalg.solve(a, b)
+        return self._backend.linalg.solve(a, b)
 
     def linalg_inv(self, a):
         """
@@ -248,19 +248,19 @@ class CuPyBackend(BaseBackend):
         Given a square matrix `a`, return the matrix `a_inv` satisfying 
         `dot(a, a_inv) = dot(a_inv, a) = eye(a.shape[0])`.
         """
-        return cp.linalg.inv(a)
+        return self._backend.linalg.inv(a)
 
     def linalg_det(self, a):
         """
         Compute the determinant of an array on the GPU.
         """
-        return cp.linalg.det(a)
+        return self._backend.linalg.det(a)
 
     def linalg_eig(self, a):
         """
         Compute the eigenvalues and right eigenvectors of a square array on the GPU.
         """
-        return cp.linalg.eig(a)
+        return self._backend.linalg.eig(a)
 
     def linalg_svd(self, a, full_matrices=True, compute_uv=True):
         """
@@ -268,47 +268,36 @@ class CuPyBackend(BaseBackend):
         When `a` is a 2D array, it is factorized as `u @ np.diag(s) @ v`, where 
         `u` and `v` are 2D unitary arrays and `s` is a 1D array of `a`'s singular values.
         """
-        return cp.linalg.svd(a, full_matrices=full_matrices, compute_uv=compute_uv)
+        return self._backend.linalg.svd(a, full_matrices=full_matrices, compute_uv=compute_uv)
 
     def random_normal(self, loc=0.0, scale=1.0, size=None):
         """
         Draw random samples from a normal (Gaussian) distribution on the GPU.
         """
-        return cp.random.normal(loc=loc, scale=scale, size=size)
+        return self._backend.random.normal(loc=loc, scale=scale, size=size)
 
     def random_uniform(self, low=0.0, high=1.0, size=None):
         """
         Draw samples from a uniform distribution on the GPU.
         """
-        return cp.random.uniform(low=low, high=high, size=size)
+        return self._backend.random.uniform(low=low, high=high, size=size)
 
     def random_integers(self, low, high=None, size=None):
         """
         Return random integers from `low` (inclusive) to `high` (inclusive) on the GPU.
         """
-        return cp.random.randint(low, high=high, size=size)
+        return self._backend.random.randint(low, high=high, size=size)
 
     def array(self, data,**kwargs):
         """
         Convert input data to a CuPy array, utilizing GPU acceleration.
         """
-        return cp.array(data, **kwargs,)
+        return self._backend.array(data, **kwargs,)
 
     def dot(self, a, b):
         """
         Perform dot product of two arrays using CuPy for GPU acceleration.
         """
-        return cp.dot(a, b)
-
-
-if __name__=='__main__': 
-    # Example usage
-    try:
-        backend = CuPyBackend()
-        # Use CuPy's `ones` function through the backend
-        ones_array = backend.ones((5, 5))
-        print(ones_array)
-    except BackendNotAvailable as e:
-        print(e)
+        return self._backend.dot(a, b)
 
 

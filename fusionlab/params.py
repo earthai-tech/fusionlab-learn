@@ -56,9 +56,12 @@ else:         # TF missing → no serialisation
         return decorator
     
 
-__all__ = ["LearnableC", "FixedC", "DisabledC", "LearnableK", "LearnableSs", 
-           "LearnableQ"
-           ]
+__all__ = [
+    "LearnableC", "FixedC", "DisabledC", 
+    "LearnableK", "LearnableSs", "LearnableQ",
+    # --- New Parameters for Revised Manuscript ---
+    "LearnableMV", "LearnableKappa", "FixedGammaW", "FixedHRef"
+]
 
 
 @register_keras_serializable("fusionlab.params", name="_BaseC")
@@ -531,7 +534,7 @@ class LearnableQ(BaseLearnable):
     def __init__(
         self,
         initial_value: float = 0.0,
-        # log_transform: bool=False, 
+        # log_transform: bool=False, # Q should not be log-transformed
         name: Optional[str] =None,
         trainable: bool=True, 
         **kws
@@ -539,7 +542,7 @@ class LearnableQ(BaseLearnable):
         super().__init__(
             initial_value=initial_value,
             name= name or "learnable_Q",
-            # log_transform=log_transform, 
+            log_transform=False, # Explicitly set to False
             trainable= trainable, 
             **kws
             
@@ -556,7 +559,181 @@ class LearnableQ(BaseLearnable):
         Union[Tensor, float]
             Source/sink strength.
         """
-        return self._variable
+        if _BACKEND == "tensorflow":
+            return self._variable # No exp()
+        return float(self._variable) # No exp()
+
+
+@register_keras_serializable("fusionlab.params", name="LearnableMV")
+class LearnableMV(BaseLearnable):
+    """
+    Learnable scalar coefficient of volume compressibility (m_v).
+    
+    Used in the revised consolidation model:
+    :math:`s_{eq}(h) = m_v \gamma_w \Delta h H`
+    
+    Ensures positivity via log-space transform.
+
+    Parameters
+    ----------
+    initial_value : float, default=1e-7
+        Initial value for :math:`m_v` [Pa^-1]. Must be positive.
+    name : str, optional
+        Variable name.
+    trainable : bool, default=True
+        Whether the parameter is trainable.
+    """
+    def __init__(
+        self,
+        initial_value: float = 1e-7,
+        name: Optional[str] = None,
+        trainable: bool = True,
+        log_transform: bool=True, # m_v must be positive
+        **kws
+    ):
+        super().__init__(
+            initial_value=initial_value,
+            name=name or "learnable_mv",
+            log_transform=log_transform, 
+            trainable=trainable,
+            **kws
+        )
+
+    def get_value(self) -> Union[Tensor, float]:
+        """
+        Return :math:`m_v = \exp(\log(m_v))`
+        """
+        if _BACKEND == "tensorflow":
+            return tf.exp(self._variable)
+        return float(np.exp(self._variable))
+
+@register_keras_serializable("fusionlab.params", name="LearnableKappa")
+class LearnableKappa(BaseLearnable):
+    """
+    Learnable scalar consistency prior parameter (kappa_bar).
+    
+    Used in the prior loss term:
+    :math:`L_{prior} = ||\log \tau - \log((\bar{\kappa} H^2) / ((\pi^2 K) / S_s))||^2`
+    
+    Ensures positivity via log-space transform.
+
+    Parameters
+    ----------
+    initial_value : float, default=1.0
+        Initial value for :math:`\bar{\kappa}`. Must be positive.
+    name : str, optional
+        Variable name.
+    trainable : bool, default=True
+        Whether the parameter is trainable.
+    """
+    def __init__(
+        self,
+        initial_value: float = 1.0,
+        name: Optional[str] = None,
+        log_transform: bool=True, # kappa_bar must be positive
+        trainable: bool = True,
+        **kws
+    ):
+        super().__init__(
+            initial_value=initial_value,
+            name=name or "learnable_kappa",
+            log_transform=log_transform, 
+            trainable=trainable,
+            **kws
+        )
+
+    def get_value(self) -> Union[Tensor, float]:
+        """
+        Return :math:`\bar{\kappa} = \exp(\log(\bar{\kappa}))`
+        """
+        if _BACKEND == "tensorflow":
+            return tf.exp(self._variable)
+        return float(np.exp(self._variable))
+
+@register_keras_serializable("fusionlab.params", name="FixedGammaW")
+class FixedGammaW(BaseLearnable):
+    """
+    Fixed scalar parameter for the unit weight of water (gamma_w).
+    
+    Used in :math:`s_{eq}(h) = m_v \gamma_w \Delta h H`. This is a
+    physical constant and should not be trainable.
+
+    Parameters
+    ----------
+    value : float, default=9810.0
+        Value for :math:`\gamma_w` [N m^-3].
+    name : str, optional
+        Variable name.
+    """
+    def __init__(
+        self,
+        value: float = 9810.0, # Approx. 1000 kg/m^3 * 9.81 m/s^2
+        name: Optional[str] = None,
+        log_transform: bool =False,
+        trainable=False,# False: This is a fixed constant
+        **kws
+    ):
+        if 'initial_value' in kws: 
+            kws.pop ('initial_value')
+            
+        super().__init__(
+            initial_value=value,
+            name=name or "fixed_gamma_w",
+            log_transform=log_transform,
+            trainable=trainable, 
+            **kws
+        )
+
+    def get_value(self) -> Union[Tensor, float]:
+        """
+        Return fixed :math:`\gamma_w` value.
+        """
+        if _BACKEND == "tensorflow":
+            return self._variable
+        return float(self._variable)
+
+@register_keras_serializable("fusionlab.params", name="FixedHRef")
+class FixedHRef(BaseLearnable):
+    """
+    Fixed scalar parameter for the reference head (h_ref).
+    
+    Used to calculate drawdown: :math:`\Delta h = h_{ref} - h`.
+    This is typically a user-defined hyperparameter and is not trainable.
+
+    Parameters
+    ----------
+    value : float, default=0.0
+        Value for :math:`h_{ref}` [m].
+    name : str, optional
+        Variable name.
+    """
+    def __init__(
+        self,
+        value: float = 0.0,
+        name: Optional[str] = None,
+        log_transform: bool =False,
+        trainable:bool =False, # This is a fixed hyperparameter
+        **kws
+    ):
+        if 'initial_value' in kws: 
+            kws.pop ('initial_value')
+            
+        super().__init__(
+            initial_value=value,
+            name=name or "fixed_h_ref",
+            log_transform=log_transform,
+            trainable=trainable, # This is a fixed hyperparameter
+            **kws
+        )
+
+    def get_value(self) -> Union[Tensor, float]:
+        """
+        Return fixed :math:`h_{ref}` value.
+        """
+        if _BACKEND == "tensorflow":
+            return self._variable
+        return float(self._variable)
+
 
 @register_keras_serializable("fusionlab.params", name ="resolve_physical_param")
 def resolve_physical_param(

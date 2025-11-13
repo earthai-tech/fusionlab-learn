@@ -24,18 +24,22 @@ from typing import (
 )
 import warnings
 from datetime import datetime, date
+import matplotlib.pyplot as plt
+import matplotlib.style as style
 
 import numpy as np 
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler 
+from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 
 from .._fusionlog import fusionlog 
 from ..core.handlers import columns_manager 
 from ..core.checks import check_spatial_columns, check_empty  
-from ..core.io import is_data_readable
+from ..core.io import is_data_readable, SaveFile
 from ..decorators import isdf 
 
-from .generic_utils import vlog 
+from .generic_utils import vlog, normalize_model_inputs  
 from .validator import is_frame 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
@@ -50,10 +54,812 @@ __all__= [
      'stack_quantile_predictions', 
      'adjust_time_predictions', 
      'add_forecast_times', 
-     'pivot_forecast'
+     'pivot_forecast', 
+     'calibrate_forecasts', 
+     'plot_reliability_diagram'
+     
 ]
 
 _DIGIT_RE = re.compile(r"\d+")
+
+@check_empty(['y_val', 'forecast_val'])
+def calibrate_forecasts(
+    y_val: pd.Series,
+    forecasts_val: pd.DataFrame,
+    *forecasts_to_calibrate: Union[
+        pd.DataFrame,
+        Mapping[str, pd.DataFrame]
+    ],
+    quantiles: Tuple[int, ...] = (
+        10, 20, 30, 40, 50, 60, 70, 80, 90
+    ),
+    prefix: str = 'subsidence',
+    verbose: Optional[int] = None,
+    _logger=None
+):
+    vlog(
+        "Starting forecast calibration...",
+        verbose,
+        level=3,
+        logger=_logger
+    )
+    calibrators = {}
+    # Train a calibration model for each quantile
+    for q in quantiles:
+        col = f"{prefix}_q{q}"
+        if col not in forecasts_val.columns:
+            vlog(
+                f"Skip quantile {q}: '{col}' missing",  # noqa
+                verbose,
+                level=2,
+                logger=_logger
+            )
+            continue
+        y_bin = (
+            y_val < forecasts_val[col]
+        ).astype(int)
+        iso = IsotonicRegression(
+            y_min=0,
+            y_max=1,
+            out_of_bounds="clip"
+        )
+        calibrators[col] = iso.fit(
+            forecasts_val[col],
+            y_bin
+        )
+    # Normalize input forecasts into dict format
+    inputs = normalize_model_inputs(
+        *forecasts_to_calibrate
+    )
+    results = {}
+    vlog(
+        f"Applying calibration to {len(inputs)} model(s)...",
+        verbose,
+        level=3,
+        logger=_logger
+    )
+    # Apply calibrators to each DataFrame
+    for name, df in inputs.items():
+        df_cal = df.copy()
+        for q in quantiles:
+            col = f"{prefix}_q{q}"
+            if col in calibrators:
+                out_col = f"{col}_cal_prob"
+                df_cal[out_col] = (
+                    calibrators[col].predict(
+                        df[col]
+                    )
+                )
+        results[name] = df_cal
+    return results, calibrators
+
+calibrate_forecasts.__doc__ = r"""
+Train and apply isotonic calibration models on forecast data.
+
+Parameters
+----------
+y_val : pandas.Series
+    Observed target values for calibration.
+forecasts_val : pandas.DataFrame
+    Validation forecasts with columns named
+    `<prefix>_q{quantile}` for each quantile.
+*forecasts_to_calibrate : DataFrame or dict
+    One or more DataFrames (or a mapping) of new forecasts
+    to calibrate using trained models.
+quantiles : tuple of int, optional
+    List of quantile levels (e.g., 10, 50, 90) to calibrate.
+prefix : str, default 'subsidence'
+    Column name prefix for quantile forecasts.
+verbose : int, optional
+    Verbosity level passed to vlog for logging.
+_logger : Logger or callable, optional
+    Sink for log messages (print or logging.Logger).
+
+Returns
+-------
+results : dict
+    Mapping of model names to calibrated DataFrames,
+    each containing new `<prefix>_q{q}_cal_prob`
+    probability columns.
+calibrators : dict
+    Fitted IsotonicRegression models per quantile.
+
+Notes
+-----
+This function fits an isotonic regression for each
+quantile on validation data and then predicts
+calibrated probabilities for new forecasts. Use
+`normalize_model_inputs` to handle varied input formats.
+
+Examples
+--------
+>>> import pandas as pd
+>>> import numpy as np
+>>> from fusionlab.utils.forecast_utils import calibrate_forecasts
+>>> # Create dummy validation series
+>>> idx = pd.date_range('2021-01-01', periods=50)
+>>> y_val = pd.Series(
+...     np.random.randn(50), index=idx
+... )
+>>> # Simulate validation forecasts
+>>> val_df = pd.DataFrame({
+...     'subsidence_q10': y_val - 0.2,
+...     'subsidence_q90': y_val + 0.2
+... }, index=idx)
+>>> # Simulate two new forecast sets
+>>> newA = val_df + 0.1
+>>> newB = val_df - 0.1
+>>> # Calibrate forecasts
+>>> results, models = calibrate_forecasts(
+...     y_val,
+...     val_df,
+...     newA,
+...     newB,
+...     quantiles=(10, 90),
+...     verbose=2
+... )
+>>> # Access calibrated probabilities
+>>> results['ModelA']['subsidence_q10_cal_prob']
+>>> # Inspect fitted calibrator for q90
+>>> models['subsidence_q90'].threshold_
+"""
+
+@check_empty(['models_data'])
+def plot_reliability_diagram(
+    models_data: Dict,
+    y_true: pd.Series = None,
+    prefix: str = 'subsidence',
+    figsize: Tuple[int, int] = (8, 8),
+    title: str = "Reliability Diagram",
+    plot_style: str = 'seaborn-whitegrid',
+    verbose: Optional[int] = None,
+    _logger=None
+):
+    # Initialize logging
+    vlog(
+        "Starting reliability diagram plot...",
+        verbose,
+        level=3,
+        logger=_logger
+    )
+
+    # Apply plotting style and set figure size
+    style.use(plot_style)
+    plt.figure(figsize=figsize)
+    ax = plt.gca()
+
+    # Plot perfect calibration baseline
+    ax.plot(
+        [0, 1], [0, 1],
+        'k--',
+        label='Perfect Calibration',
+        lw=2.5,
+        zorder=1
+    )
+
+    # Default colors and markers
+    colors = [
+        '#E41A1C',
+        '#377EB8',
+        '#4DAF4A',
+        '#984EA3',
+        '#FF7F00'
+    ]
+    markers = ['o', 's', '^', 'D', 'P']
+
+    # Wrap simple inputs into nested structure
+    first = next(iter(models_data.values()))
+    if isinstance(first, pd.DataFrame):
+        models_data = {
+            name: {'forecasts': df}
+            for name, df in models_data.items()
+        }
+
+    # Define probability intervals
+    intervals = {
+        0.8: (10, 90), # 80% PI uses q10 and q90
+        0.6: (20, 80), # 60% PI uses q20 and q80
+        0.4: (30, 70), # 40% PI uses q30 and q70
+        0.2: (40, 60), # 20% PI uses q40 and q60
+    }
+
+    # Loop through each model
+    for i, (model_name, data) in enumerate(models_data.items()):
+        vlog(
+            f"Processing model: {model_name}",
+            verbose,
+            level=3,
+            logger=_logger
+        )
+
+        # Use precomputed points if available
+        if 'observed_probs' in data and \
+           'nominal_probs' in data:
+            nominal = data['nominal_probs']
+            observed = data['observed_probs']
+        else:
+            # Require forecasts key
+            if 'forecasts' not in data:
+                vlog(
+                    f"Skip {model_name}: missing forecasts",  # noqa
+                    verbose,
+                    level=2,
+                    logger=_logger
+                )
+                continue
+
+            forecasts = data['forecasts']
+            style_line = data.get(
+                'style', '-'
+            )
+            marker = data.get(
+                'marker', markers[i]
+            )
+            color = data.get(
+                'color', colors[i]
+            )
+
+            # Compute reliability points
+            nominal = sorted(intervals.keys(), reverse=True)
+            observed = []
+
+            for prob in nominal:
+                low_q, up_q = intervals[prob]
+                low_c = f"{prefix}_q{low_q}"
+                up_c = f"{prefix}_q{up_q}"
+
+                if low_c not in forecasts.columns or \
+                   up_c not in forecasts.columns:
+                    continue
+
+                covered = (
+                    (y_true >= forecasts[low_c]) &
+                    (y_true <= forecasts[up_c])
+                )
+                observed.append(np.mean(covered))
+
+            # Trim nominal to match observed length
+            nominal = nominal[:len(observed)]
+
+        # Plot the curve
+        if nominal:
+            ax.plot(
+                nominal,
+                observed,
+                marker=marker,
+                linestyle=style_line,
+                color=color,
+                label=model_name,
+                lw=2,
+                markersize=7,
+                zorder=2
+            )
+
+    # Finalize labels and layout
+    ax.set_xlabel(
+        'Forecast Probability (Nominal)',
+        fontsize=14
+    )
+    ax.set_ylabel(
+        'Observed Frequency (Empirical)',
+        fontsize=14
+    )
+    ax.set_title(
+        title,
+        fontsize=18,
+        fontweight='bold'
+    )
+    ax.legend(
+        fontsize=12,
+        loc='upper left'
+    )
+    ax.grid(
+        True,
+        which='both',
+        linestyle=':',
+        linewidth=0.7
+    )
+    ax.set_aspect(
+        'equal',
+        adjustable='box'
+    )
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+
+    plt.tight_layout()
+    plt.show()
+
+
+plot_reliability_diagram.__doc__ = r"""
+Plot a reliability diagram for one or multiple models.
+
+Parameters
+----------
+models_data : dict
+    Mapping of model names to forecast data. Each value
+    can be a pandas.DataFrame or a nested dict with keys
+    'forecasts', 'color', 'marker', and 'style'.
+y_true : pandas.Series, optional
+    Observed values for empirical coverage calculations.
+    Required when forecasts need processing.
+prefix : str, default 'subsidence'
+    Column prefix for quantile forecast fields.
+figsize : tuple of int, default (8, 8)
+    Figure size (width, height) in inches.
+title : str, default 'Reliability Diagram'
+    Text title displayed at the top of the plot.
+plot_style : str, default 'seaborn-whitegrid'
+    Matplotlib style sheet name to apply.
+verbose : int, optional
+    Verbosity level passed to fusionlab.utils.generic_utils.vlog.
+_logger : Logger or callable, optional
+    Function or logger instance for internal messages.
+
+Returns
+-------
+None
+    Displays the calibration plot and returns nothing.
+
+Notes
+-----
+This function draws a diagonal baseline (perfect
+calibration) and computes empirical coverage for
+probabilistic intervals using specified quantiles.
+It wraps simple DataFrame inputs into the required
+nested format and uses `vlog` for conditional logging.
+
+Examples
+--------
+>>> import pandas as pd
+>>> import numpy as np
+>>> from fusionlab.utils.forecast_utils import plot_reliability_diagram
+>>> # Create dummy true time series
+>>> dates = pd.date_range('2020-01-01', periods=100)
+>>> y_true = pd.Series(
+...     np.random.randn(100), index=dates
+... )
+>>> # Create forecasts for ModelA
+>>> dfA = pd.DataFrame({
+...     'subsidence_q10': y_true - 0.5,
+...     'subsidence_q90': y_true + 0.5
+... }, index=dates)
+>>> # Simple usage with one model
+>>> plot_reliability_diagram(
+...     models_data={'ModelA': dfA},
+...     y_true=y_true,
+...     verbose=2
+... )
+>>> # Create forecasts for ModelB
+... # with custom styling
+>>> dfB = pd.DataFrame({
+...     'subsidence_q10': y_true - 1.0,
+...     'subsidence_q90': y_true + 1.0
+... }, index=dates)
+>>> custom_logger = print
+>>> # Custom styling and logger
+>>> plot_reliability_diagram(
+...     models_data={
+...         'ModelA': {
+...             'forecasts': dfA,
+...             'color': 'C0',
+...             'marker': 'x'
+...         },
+...         'ModelB': {
+...             'forecasts': dfB,
+...             'color': 'C1',
+...             'marker': 'o'
+...         }
+...     },
+...     y_true=y_true,
+...     verbose=4,
+...     _logger=custom_logger
+... )
+"""
+
+    
+def _plot_reliability_diagram(
+    models_data,
+    y_true,
+    figsize=(8, 8),
+    title="Reliability Diagram",
+    show_grid=True,
+    plot_style='seaborn-whitegrid', 
+    verbose=0, 
+   ):
+    """
+    Plots a reliability diagram for one or multiple models.
+    """
+    style.use(plot_style)
+    plt.figure(figsize=figsize)
+    ax = plt.gca()
+
+    # Plot the perfect calibration line
+    ax.plot([0, 1], [0, 1], 'k--', label='Perfect Calibration',
+            lw=2.5, zorder=1)
+
+    # Default properties for iterating through models
+    colors = ['#E41A1C', '#377EB8', '#4DAF4A', '#984EA3', '#FF7F00']
+    markers = ['o', 's', '^', 'D', 'P']
+    
+    for i, (model_name, data) in enumerate(models_data.items()):
+        forecasts = data['forecasts']
+        line_style = data.get('style', '-')
+        marker = data.get('marker', markers[i % len(markers)])
+        color = data.get('color', colors[i % len(colors)])
+        
+        nominal_probs = np.arange(0.1, 1.0, 0.1)
+        observed_probs = []
+
+        for prob in nominal_probs:
+            lower_q = int(50 - (prob * 100 / 2))
+            upper_q = int(50 + (prob * 100 / 2))
+            
+            lower_bound_col = f'q{lower_q}'
+            upper_bound_col = f'q{upper_q}'
+
+            if ( 
+                    lower_bound_col not in forecasts.columns 
+                    or upper_bound_col not in forecasts.columns
+                ):
+                if verbose: 
+                    vlog (f"Warning: Columns for {prob*100:.0f}% PI"
+                          f" not found in '{model_name}'. Skipping.", level=1, 
+                          verbose= verbose  
+                          )
+                continue
+
+            lower_bound = forecasts[lower_bound_col]
+            upper_bound = forecasts[upper_bound_col]
+            
+            is_covered = (y_true >= lower_bound) & (y_true <= upper_bound)
+            observed_probs.append(np.mean(is_covered))
+        
+        # Filter nominal_probs to match available data
+        plottable_nominal = nominal_probs[:len(observed_probs)]
+        
+        ax.plot(
+            plottable_nominal,
+            observed_probs,
+            marker=marker,
+            linestyle=line_style,
+            color=color,
+            label=model_name,
+            lw=2,
+            markersize=7,
+            zorder=2
+        )
+
+    ax.set_xlabel('Forecast Probability (Nominal)', fontsize=14)
+    ax.set_ylabel('Observed Frequency (Empirical)', fontsize=14)
+    ax.set_title(title, fontsize=18, fontweight='bold')
+    ax.legend(fontsize=12, loc='upper left')
+    
+    if show_grid:
+        ax.grid(True, which='both', linestyle=':', linewidth=0.7)
+        
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    plt.tight_layout()
+    plt.show()
+    
+    
+@SaveFile
+@check_empty(["df"])
+@isdf
+def calibrate_probability_forecast(
+    df: pd.DataFrame,
+    prob_col: str,
+    actual_col: str,
+    method: str = 'isotonic',
+    out_col: Optional[str] = None,
+    clip: bool = True,
+    savefile: Optional[str]=None, 
+) -> pd.DataFrame:
+    """
+    Calibrate a probability forecast using either isotonic regression
+    or logistic (Platt scaling).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing raw probability forecasts and actuals.
+    prob_col : str
+        Column name of raw probability forecasts (values in [0,1]).
+    actual_col : str
+        Column name of binary outcomes (0 or 1).
+    method : {'isotonic','logistic'}, default 'isotonic'
+        Calibration method:
+        - 'isotonic': non-parametric isotonic regression.
+        - 'logistic': parametric Platt scaling with logistic regression.
+    out_col : str, optional
+        Name for calibrated probability column. If None, defaults to
+        f"{prob_col}_calib".
+    clip : bool, default True
+        If True, clip output to [0,1].
+
+    Returns
+    -------
+    pd.DataFrame
+        A copy of df with an added calibrated probability column.
+    """
+    df = df.copy()
+    if out_col is None:
+        out_col = f"{prob_col}_calib"
+    y_pred = df[prob_col].values
+    y_true = df[actual_col].values
+
+    if method == 'isotonic':
+        iso = IsotonicRegression(out_of_bounds='clip')
+        iso.fit(y_pred, y_true)
+        y_cal = iso.transform(y_pred)
+    elif method == 'logistic':
+        lr = LogisticRegression(solver='lbfgs')
+        lr.fit(y_pred.reshape(-1, 1), y_true)
+        y_cal = lr.predict_proba(y_pred.reshape(-1, 1))[:, 1]
+    else:
+        raise ValueError(f"Unknown method '{method}'")
+
+    if clip:
+        y_cal = np.clip(y_cal, 0, 1)
+
+    df[out_col] = y_cal
+    return df
+
+@SaveFile 
+@check_empty(["df"])
+@isdf
+def calibrate_quantile_forecasts_(
+    df: pd.DataFrame,
+    quantiles: Sequence[float],
+    q_prefix: str,
+    actual_col: str,
+    method: Literal["isotonic", "logistic"] = "isotonic",
+    out_prefix: str = "calib",
+    grid_mode: Literal["unit", "range"] = "unit",
+    grid_size: int = 1001,
+    group_by: Optional[str] = None, 
+    savefile:Optional[str] =None, # will handle by decorator so once the function 
+    # return dataframe, decorator take it and explort to csv format instead . 
+) -> pd.DataFrame:
+    """
+    Calibrate quantile forecasts by fitting a monotonic classifier
+    at each quantile level, then inverting the CDF at the nominal q.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing raw quantile forecasts and actuals.
+    quantiles : sequence of float
+        Nominal quantile levels, e.g. [0.1,0.5,0.9].
+    q_prefix : str
+        Prefix for quantile columns (e.g. 'subsidence' for
+        columns subsidence_q10, subsidence_q50, …).
+    actual_col : str
+        Column name of the true continuous outcome.
+    method : {'isotonic','logistic'}, default 'isotonic'
+        Calibration method to fit P(actual <= threshold).
+    out_prefix : str, default 'calib'
+        Prefix for the calibrated columns (e.g. 'calib_subsidence_q10').
+    grid_mode : {'unit','range'}, default 'unit'
+        Which domain to build the inversion grid over:
+          - 'unit' → np.linspace(0,1,grid_size)
+          - 'range' → np.linspace(min(raw), max(raw), grid_size)
+    grid_size : int, default 1001
+        Number of points in the inversion grid.
+    group_by : str, optional
+        If provided, calibrate separately per `df[group_by]`
+        (e.g. 'forecast_step').
+
+    Returns
+    -------
+    pd.DataFrame
+        A copy of `df` with new columns
+        `{out_prefix}_{q_prefix}_qXX` appended.
+    """
+
+    def _calibrate_block(block: pd.DataFrame) -> pd.DataFrame:
+        out = block.copy()
+        for q in quantiles:
+            raw_col = f"{q_prefix}_q{int(q*100)}"
+            cal_col = f"{out_prefix}_{raw_col}"
+
+            # Build grid
+            if grid_mode == "unit":
+                grid = np.linspace(0.0, 1.0, grid_size)
+            else:  # 'range'
+                vals = out[raw_col].to_numpy()
+                grid = np.linspace(vals.min(), vals.max(), grid_size)
+
+            # Binary target: actual ≤ raw_pred
+            y_thr = (out[actual_col] <= out[raw_col]).astype(int).values
+            x_thr = out[raw_col].values
+
+            # Fit calibrator
+            if method == "isotonic":
+                iso = IsotonicRegression(out_of_bounds="clip")
+                iso.fit(x_thr, y_thr)
+                cdf_vals = iso.predict(grid)
+            else:  # 'logistic'
+                lr = LogisticRegression(solver="lbfgs")
+                lr.fit(x_thr.reshape(-1, 1), y_thr)
+                cdf_vals = lr.predict_proba(grid.reshape(-1, 1))[:, 1]
+
+            # Invert at q
+            idx = np.searchsorted(cdf_vals, q, side="left")
+            idx = np.clip(idx, 0, grid_size - 1)
+            out[cal_col] = grid[idx]
+
+        return out
+
+    # Apply either globally or per-group
+    if group_by and group_by in df.columns:
+        pieces = []
+        for _, grp in df.groupby(group_by, sort=False):
+            pieces.append(_calibrate_block(grp))
+        df_out = pd.concat(pieces).sort_index()
+    else:
+        df_out = _calibrate_block(df)
+
+    return df_out
+
+@check_empty(["df"])
+@isdf
+def calibrate_quantile_forecasts(
+    df: pd.DataFrame,
+    quantiles: Sequence[float],
+    q_prefix: str,
+    actual_col: str,
+    method: Literal["isotonic", "logistic"] = "isotonic",
+    out_prefix: str = "calib",
+    grid_mode: Literal["unit", "range", "unit_group", "range_group"] = "unit",
+    grid_size: int = 1001,
+    group_by: Optional[str] = None,
+    savefile: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Calibrate quantile forecasts by fitting a monotonic classifier
+    at each quantile level, then inverting the CDF at the nominal q.
+
+    grid_mode controls both domain and grouping:
+      - "unit": global grid [0,1]
+      - "range": global grid over [min(raw), max(raw)]
+      - "unit_group": per-group grids in [0,1], groups via group_by or 'forecast_step'
+      - "range_group": per-group grids over each group's raw range
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw quantile forecasts (q_prefix_qXX) and true values.
+    quantiles : sequence of float
+        E.g. [0.1,0.5,0.9].
+    q_prefix : str
+        Prefix (e.g. "subsidence") of quantile columns.
+    actual_col : str
+        Column name of true continuous outcome.
+    method : {'isotonic','logistic'}
+    out_prefix : str
+        Prefix for calibrated columns.
+    grid_mode : {'unit','range','unit_group','range_group'}
+    grid_size : int
+    group_by : str, optional
+        Column to group by if using group modes.
+    savefile : str, optional
+        If provided, decorator will save output.
+
+    Returns
+    -------
+    pd.DataFrame
+    """
+    # infer grouping for _group modes
+    if grid_mode.endswith("_group"):
+        grp = group_by or "forecast_step"
+    else:
+        grp = None
+
+    def _calibrate_block(block: pd.DataFrame) -> pd.DataFrame:
+        out = block.copy()
+        for q in quantiles:
+            raw_col = f"{q_prefix}_q{int(q*100)}"
+            cal_col = f"{out_prefix}_{raw_col}"
+
+            # build grid domain
+            if grid_mode.startswith("unit"):
+                grid = np.linspace(0.0, 1.0, grid_size)
+            else:  # 'range' modes
+                vals = out[raw_col].to_numpy()
+                grid = np.linspace(vals.min(), vals.max(), grid_size)
+
+            # binary target
+            y_thr = (out[actual_col] <= out[raw_col]).astype(int).values
+            x_thr = out[raw_col].values
+
+            # fit calibrator
+            if method == "isotonic":
+                iso = IsotonicRegression(out_of_bounds="clip")
+                iso.fit(x_thr, y_thr)
+                cdf = iso.predict(grid)
+            else:
+                lr = LogisticRegression(solver="lbfgs")
+                lr.fit(x_thr.reshape(-1,1), y_thr)
+                cdf = lr.predict_proba(grid.reshape(-1,1))[:,1]
+
+            # invert at q
+            idx = np.searchsorted(cdf, q, side="left")
+            idx = np.clip(idx, 0, grid_size-1)
+            out[cal_col] = grid[idx]
+
+        return out
+
+    # dispatch global vs grouped
+    if grp and grp in df.columns:
+        pieces = []
+        for _, g in df.groupby(grp, sort=False):
+            pieces.append(_calibrate_block(g))
+        df_out = pd.concat(pieces).sort_index()
+    else:
+        df_out = _calibrate_block(df)
+
+    return df_out
+
+@check_empty(["df"])
+@isdf
+def compute_quantile_coverage(
+    df: pd.DataFrame,
+    quantiles: Sequence[float],
+    q_prefix: str,
+    actual_col: str
+) -> pd.DataFrame:
+    """
+    For each nominal quantile q in `quantiles`, compute the fraction
+    of samples where actual <= predicted q‑quantile.
+    
+    Returns a DataFrame with columns ['nominal', 'empirical'].
+    """
+    records = []
+    for q in quantiles:
+        col = f"{q_prefix}_q{int(q*100)}"
+        if col not in df:
+            raise KeyError(f"Column '{col}' not found")
+        # fraction of times actual ≤ prediction
+        emp = np.mean(df[actual_col] <= df[col])
+        records.append({"nominal": q, "empirical": emp})
+    return pd.DataFrame.from_records(records)
+
+
+@check_empty(["df"])
+@isdf
+def plot_reliability_diagram_in(
+    coverage_df: pd.DataFrame,
+    ax: plt.Axes = None,
+    figsize=(6,6),
+    title: str = "Reliability Diagram",
+    diag_kwargs: dict = None,
+    pts_kwargs: dict = None
+) -> plt.Axes:
+    """
+    Plot nominal vs empirical probabilities.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=figsize)
+    diag_kwargs  = diag_kwargs or {"linestyle":"--", "color":"gray"}
+    pts_kwargs   = pts_kwargs  or {"marker":"o", "linewidth":1.5}
+    
+    # diagonal
+    ax.plot([0,1],[0,1], **diag_kwargs)
+    # points
+    ax.plot(
+        coverage_df["nominal"],
+        coverage_df["empirical"],
+        **pts_kwargs
+    )
+    ax.set_xlim(0,1)
+    ax.set_ylim(0,1)
+    ax.set_xlabel("Nominal probability")
+    ax.set_ylabel("Empirical frequency")
+    ax.set_title(title)
+    ax.grid(True)
+    return ax
 
 
 @check_empty(["df"])
