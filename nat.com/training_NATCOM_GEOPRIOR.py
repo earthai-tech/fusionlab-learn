@@ -39,8 +39,9 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 try:
     from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
     from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
-    from fusionlab.registry.utils import _find_stage1_manifest  
-    
+    from fusionlab.registry.utils import _find_stage1_manifest
+    from fusionlab.utils.nat_utils import load_nat_config  
+
     from fusionlab.nn.pinn.models import GeoPriorSubsNet
     from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
     from fusionlab.nn.losses import make_weighted_pinball
@@ -78,28 +79,38 @@ MANIFEST_PATH = _find_stage1_manifest(
     verbose=1,
 )
 
-
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
-    
+
 print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
 
-cfg = M["config"]
-CITY_NAME = M.get("city", "nansha")
-MODEL_NAME = M.get("model", "GeoPriorSubsNet")
+# -------------------------------------------------------------------------
+# Merge global NATCOM config (config.json) with Stage-1 manifest config.
+# - load_nat_config() → central config.json["config"] (model/physics/training)
+# - M["config"]       → Stage-1 snapshot (TIME_STEPS/HORIZON/MODE + features,
+#                        censoring report, etc.)
+# We take config.json as base, then let manifest override where needed
+# (especially TIME_STEPS / HORIZON / feature lists that were actually used).
+# -------------------------------------------------------------------------
+cfg_global   = load_nat_config()          # from config.json
+cfg_manifest = M.get("config", {}) or {}  # from manifest.json
 
-# ----- Optional censoring config (from Stage-1 manifest) -----
-FEATURES = cfg.get("features", {})
-DYN_NAMES = FEATURES.get("dynamic", []) or []
+cfg = dict(cfg_global)
+cfg.update(cfg_manifest)  # manifest wins on overlapping keys
 
-# CENSOR block is optional; keep code robust even if absent
-CENSOR = cfg.get("censoring", {})   or cfg.get("censor", {}) or {} # from Stage-1
-CENSOR_SPECS = CENSOR.get("specs", []) or []
+CITY_NAME  = M.get("city",  cfg.get("CITY_NAME", "nansha"))
+MODEL_NAME = M.get("model", cfg.get("MODEL_NAME", "GeoPriorSubsNet"))
+
+# ----- Optional censoring config (from merged cfg) -----------------------
+FEATURES   = cfg.get("features", {}) or {}
+DYN_NAMES  = FEATURES.get("dynamic", []) or []
+
+CENSOR     = cfg.get("censoring", {}) or cfg.get("censor", {}) or {}
+CENSOR_SPECS  = CENSOR.get("specs", []) or []
 CENSOR_THRESH = float(CENSOR.get("flag_threshold", 0.5))
 
-# Resolve the first available censor flag column 
-# (if any) to its index in dynamic_features
-CENSOR_FLAG_IDX = None
+# Resolve the first available censor flag column (if any) in dynamic_features
+CENSOR_FLAG_IDX  = None
 CENSOR_FLAG_NAME = None
 for sp in CENSOR_SPECS:
     # Allow either explicit 'flag_col' or 'col' + optional 'flag_suffix'
@@ -110,43 +121,83 @@ for sp in CENSOR_SPECS:
             cand = base + sp.get("flag_suffix", "_censored")
     if cand and cand in DYN_NAMES:
         CENSOR_FLAG_NAME = cand
-        CENSOR_FLAG_IDX = DYN_NAMES.index(cand) 
+        CENSOR_FLAG_IDX  = DYN_NAMES.index(cand)
         print("[Info] Censor flags present in dynamic features:", cand)
         break
 
-# ---- Model config -----------
-TIME_STEPS = cfg["TIME_STEPS"]
+# ---- Model / physics / training config ---------------------------------
+# NOTE: TIME_STEPS / FORECAST_HORIZON_YEARS / MODE are taken from cfg
+# AFTER merging, so they reflect what Stage-1 actually used.
+TIME_STEPS            = cfg["TIME_STEPS"]
 FORECAST_HORIZON_YEARS = cfg["FORECAST_HORIZON_YEARS"]
-MODE = cfg["MODE"]
-ATTENTION_LEVELS = cfg.get("ATTENTION_LEVELS", ["cross", "hierarchical", "memory"])
+MODE                  = cfg["MODE"]
 
+ATTENTION_LEVELS      = cfg.get("ATTENTION_LEVELS", ["cross", "hierarchical", "memory"])
+SCALE_PDE_RESIDUALS   = cfg.get("SCALE_PDE_RESIDUALS", True)
+
+EMBED_DIM    = cfg.get("EMBED_DIM", 32)
+HIDDEN_UNITS = cfg.get("HIDDEN_UNITS", 64)
+LSTM_UNITS   = cfg.get("LSTM_UNITS", 64)
+ATTENTION_UNITS = cfg.get("ATTENTION_UNITS", 64)
+NUMBER_HEADS    = cfg.get("NUMBER_HEADS", 2)
+DROPOUT_RATE    = cfg.get("DROPOUT_RATE", 0.10)
+
+MEMORY_SIZE    = cfg.get("MEMORY_SIZE", 50)
+SCALES         = cfg.get("SCALES", [1, 2])
+USE_RESIDUALS  = cfg.get("USE_RESIDUALS", True)
+USE_BATCH_NORM = cfg.get("USE_BATCH_NORM", False)   # FIXED key
+USE_VSN        = cfg.get("USE_VSN", True)           # FIXED key
+VSN_UNITS      = cfg.get("VSN_UNITS", 32)
+
+# Helper: JSON has string keys for quantile weight dicts; coerce to float.
+def _coerce_quantile_weights(d: dict, default: dict) -> dict:
+    if not d:
+        return default
+    out = {}
+    for k, v in d.items():
+        try:
+            q = float(k)
+        except (TypeError, ValueError):
+            q = k
+        out[q] = float(v)
+    return out
 
 # Probabilistic outputs
 QUANTILES = cfg.get("QUANTILES", [0.1, 0.5, 0.9])
-SUBS_WEIGHTS = cfg.get("SUBS_WEIGHTS", {0.1: 3.0, 0.5: 1.0, 0.9: 3.0})
-GWL_WEIGHTS  = cfg.get("GWL_WEIGHTS",  {0.1: 1.5, 0.5: 1.0, 0.9: 1.5})
+
+SUBS_WEIGHTS_RAW = cfg.get(
+    "SUBS_WEIGHTS",
+    {0.1: 3.0, 0.5: 1.0, 0.9: 3.0},
+)
+GWL_WEIGHTS_RAW = cfg.get(
+    "GWL_WEIGHTS",
+    {0.1: 1.5, 0.5: 1.0, 0.9: 1.5},
+)
+
+SUBS_WEIGHTS = _coerce_quantile_weights(SUBS_WEIGHTS_RAW, {0.1: 3.0, 0.5: 1.0, 0.9: 3.0})
+GWL_WEIGHTS  = _coerce_quantile_weights(GWL_WEIGHTS_RAW,  {0.1: 1.5, 0.5: 1.0, 0.9: 1.5})
 
 # Physics loss weights
-PDE_MODE_CONFIG = cfg.get("PDE_MODE_CONFIG", "both")
-LAMBDA_CONS   = cfg.get("LAMBDA_CONS",   1.0)
-LAMBDA_GW     = cfg.get("LAMBDA_GW",     1.0)
-LAMBDA_PRIOR  = cfg.get("LAMBDA_PRIOR",  1.0)
-LAMBDA_SMOOTH = cfg.get("LAMBDA_SMOOTH", 1.0)
-LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.1)
+# Config uses e.g. "off", "both", "gw_flow", "consolidation"
+PDE_MODE_CONFIG = cfg.get("PDE_MODE_CONFIG", "off")
+LAMBDA_CONS   = cfg.get("LAMBDA_CONS",   0.10)
+LAMBDA_GW     = cfg.get("LAMBDA_GW",     0.01)
+LAMBDA_PRIOR  = cfg.get("LAMBDA_PRIOR",  0.10)
+LAMBDA_SMOOTH = cfg.get("LAMBDA_SMOOTH", 0.01)
+LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.01)
 MV_LR_MULT    = cfg.get("MV_LR_MULT",    1.0)
 KAPPA_LR_MULT = cfg.get("KAPPA_LR_MULT", 5.0)
 
 # GeoPrior scalar params
-GEOPRIOR_INIT_MV    = cfg.get("GEOPRIOR_INIT_MV", 1e-7)
+GEOPRIOR_INIT_MV    = cfg.get("GEOPRIOR_INIT_MV",    1e-7)
 GEOPRIOR_INIT_KAPPA = cfg.get("GEOPRIOR_INIT_KAPPA", 1.0)
-GEOPRIOR_GAMMA_W    = cfg.get("GEOPRIOR_GAMMA_W", 9810.0)
-GEOPRIOR_H_REF      = cfg.get("GEOPRIOR_H_REF", 0.0)
+GEOPRIOR_GAMMA_W    = cfg.get("GEOPRIOR_GAMMA_W",    9810.0)
+GEOPRIOR_H_REF      = cfg.get("GEOPRIOR_H_REF",      0.0)
 GEOPRIOR_KAPPA_MODE = cfg.get("GEOPRIOR_KAPPA_MODE", "bar")
 GEOPRIOR_USE_EFFECTIVE_H = cfg.get(
     "GEOPRIOR_USE_EFFECTIVE_H",
-    CENSOR.get("use_effective_h_field", True)
+    CENSOR.get("use_effective_h_field", True),
 )
-
 GEOPRIOR_HD_FACTOR  = cfg.get("GEOPRIOR_HD_FACTOR", 0.6)
 
 # Targets & columns (for formatter)
@@ -155,8 +206,8 @@ SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
 GWL_COL        = cols_cfg.get("gwl", "GWL")
 
 # Train options
-EPOCHS = cfg.get("EPOCHS", 100)
-BATCH_SIZE = cfg.get("BATCH_SIZE", 32)
+EPOCHS        = cfg.get("EPOCHS", 50)
+BATCH_SIZE    = cfg.get("BATCH_SIZE", 32)
 LEARNING_RATE = cfg.get("LEARNING_RATE", 1e-4)
 
 # Output directory (reuse Stage-1 run_dir)
@@ -164,8 +215,8 @@ BASE_OUTPUT_DIR = M["paths"]["run_dir"]
 STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, f"train_{STAMP}")
 ensure_directory_exists(RUN_OUTPUT_PATH)
-print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
 
+print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
 
 # Encoders / scalers
 def _load_scaler_info(encoders_block: dict):
@@ -307,24 +358,24 @@ d_dim_model = _ensure_input_shapes(X_train)["dynamic_features"].shape[-1]
 f_dim_model = _ensure_input_shapes(X_train)["future_features"].shape[-1]
 
 subsmodel_params = {
-    "embed_dim": 32,
-    "hidden_units": 64,
-    "lstm_units": 64,
-    "attention_units": 64,
-    "num_heads": 2,
-    "dropout_rate": 0.1,
+    "embed_dim": EMBED_DIM,
+    "hidden_units": HIDDEN_UNITS,
+    "lstm_units": LSTM_UNITS,
+    "attention_units": ATTENTION_UNITS,
+    "num_heads": NUMBER_HEADS,
+    "dropout_rate": DROPOUT_RATE,
     "max_window_size": TIME_STEPS,
-    "memory_size": 50,
-    "scales": [1, 2],
+    "memory_size": MEMORY_SIZE,
+    "scales": SCALES,
     "multi_scale_agg": "last",
     "final_agg": "last",
-    "use_residuals": True,
-    "use_batch_norm": False,
-    "use_vsn": True,
-    "vsn_units": 32,
+    "use_residuals": USE_RESIDUALS,
+    "use_batch_norm": USE_BATCH_NORM,
+    "use_vsn": USE_VSN,
+    "vsn_units": VSN_UNITS,
     "mode": MODE,
     "attention_levels": ATTENTION_LEVELS,
-    "scale_pde_residuals": True,
+    "scale_pde_residuals": SCALE_PDE_RESIDUALS,
     # GeoPrior scalar params
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
     "kappa": LearnableKappa(initial_value=GEOPRIOR_INIT_KAPPA),
@@ -443,9 +494,6 @@ extract_physical_parameters(
 )
 
 # For inference (compile=False is fine)
-# XXX TO REMOVE the path later
-# ckpt_path =r"F:\repositories\fusionlab-learn\results\nansha_GeoPriorSubsNet_stage1\train_20251112-083138\nansha_GeoPriorSubsNet_H3.keras"
-# ckpt_path = train_20251112-083138
 custom_objects_load = {
     
     "GeoPriorSubsNet": GeoPriorSubsNet,

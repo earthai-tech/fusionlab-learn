@@ -95,7 +95,7 @@ class GeoPriorSubsNet(BaseAttentive):
         'output_subsidence_dim': [Interval(Integral,1, None, closed="left")], 
         'output_gwl_dim': [Interval(Integral,1, None, closed="left"),], 
         "pde_mode": [
-            StrOptions({'consolidation', 'gw_flow', 'both', 'none'}), 
+            StrOptions({'consolidation', 'gw_flow', 'both', 'none', 'on', 'off'}), 
             'array-like', None 
         ],
         "mv": [LearnableMV, Real],

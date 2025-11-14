@@ -56,6 +56,7 @@ try:
     from fusionlab.datasets import fetch_zhongshan_data
     from fusionlab.utils.data_utils import nan_ops
     from fusionlab.utils.io_utils import save_job
+    from fusionlab.utils.nat_utils import load_nat_config
     from fusionlab.utils.generic_utils import (
         normalize_time_column,
         ensure_directory_exists,
@@ -69,102 +70,69 @@ except Exception as e:
 
 
 # ==================================================================
-# Step 0: CONFIGURATION
+# Step 0: CONFIGURATION (centralized via load_nat_config)
 # ==================================================================
-CITY_NAME = "nansha"  # or "zhongshan"
-MODEL_NAME = "GeoPriorSubsNet"
+cfg = load_nat_config()
 
+# --- Core identifiers & paths ---
+CITY_NAME   = cfg["CITY_NAME"]
+MODEL_NAME  = cfg["MODEL_NAME"]
+DATA_DIR    = cfg["DATA_DIR"]
+BIG_FN      = cfg["BIG_FN"]
+SMALL_FN    = cfg["SMALL_FN"]
 
-DATA_DIR = os.getenv("JUPYTER_PROJECT_ROOT", "..")
-BIG_FN = f"{CITY_NAME}_final_main_std.harmonized.csv"
-SMALL_FN = f"{CITY_NAME}_2000.csv"
-
-SEARCH_PATHS = [
+# Allow SEARCH/FALLBACK paths to be specified in cfg; otherwise, use defaults
+SEARCH_PATHS = cfg.get("SEARCH_PATHS") or [
     os.path.join(DATA_DIR, "data", BIG_FN),
     os.path.join(DATA_DIR, BIG_FN),
     os.path.join(".", "data", BIG_FN),
     BIG_FN,
 ]
-FALLBACK_PATHS = [
+FALLBACK_PATHS = cfg.get("FALLBACK_PATHS") or [
     os.path.join(DATA_DIR, "data", SMALL_FN),
     os.path.join(DATA_DIR, SMALL_FN),
     os.path.join(".", "data", SMALL_FN),
     SMALL_FN,
 ]
 
-# Time windows
-TRAIN_END_YEAR = 2021
-FORECAST_START_YEAR = 2022
-FORECAST_HORIZON_YEARS = 3  # in years 
-TIME_STEPS = 4                   # lookback in  years 
-MODE = "tft_like"                # {'pihal_like', 'tft_like'}
+# --- Time windows ---
+TRAIN_END_YEAR          = cfg["TRAIN_END_YEAR"]
+FORECAST_START_YEAR     = cfg["FORECAST_START_YEAR"]
+FORECAST_HORIZON_YEARS  = cfg["FORECAST_HORIZON_YEARS"]
+TIME_STEPS              = cfg["TIME_STEPS"]
+MODE                    = cfg["MODE"]          # {'pihal_like', 'tft_like'}
 
-# Columns
-TIME_COL = "year"
-LON_COL = "longitude"
-LAT_COL = "latitude"
-SUBSIDENCE_COL = "subsidence"
-GWL_COL = "GWL_depth_bgs_z" # "GWL"
-H_FIELD_COL_NAME = "soil_thickness"  # Required by GeoPriorSubsNet
+# --- Column names ---
+TIME_COL         = cfg["TIME_COL"]
+LON_COL          = cfg["LON_COL"]
+LAT_COL          = cfg["LAT_COL"]
+SUBSIDENCE_COL   = cfg["SUBSIDENCE_COL"]
+GWL_COL          = cfg["GWL_COL"]
+H_FIELD_COL_NAME = cfg["H_FIELD_COL_NAME"]     # Required by GeoPriorSubsNet
 
-# ---------- Feature registry (global knobs) ----------
+# --- Feature registry (global knobs) ---
+OPTIONAL_NUMERIC_FEATURES     = cfg["OPTIONAL_NUMERIC_FEATURES"]
+OPTIONAL_CATEGORICAL_FEATURES = cfg["OPTIONAL_CATEGORICAL_FEATURES"]
+ALREADY_NORMALIZED_FEATURES   = cfg["ALREADY_NORMALIZED_FEATURES"]
+FUTURE_DRIVER_FEATURES        = cfg["FUTURE_DRIVER_FEATURES"]
 
-# Optional numeric (feed into dynamic_features if present)
-OPTIONAL_NUMERIC_FEATURES = [
-    ("rainfall_mm", "rainfall", "rain_mm", "precip_mm"),
-    ("urban_load_global", "normalized_density", "urban_load"),
-    # add more numeric candidates here (or just a string name)
-]
+# --- Censoring config (wired exactly like training/tuning) ---
+_censor_cfg = cfg.get("censoring", {}) or {}
+CENSORING_SPECS = _censor_cfg.get("specs", [])
+INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = bool(
+    _censor_cfg.get("flags_as_dynamic", True)
+)
+USE_EFFECTIVE_H_FIELD = bool(
+    _censor_cfg.get("use_effective_h_field", True)
+)
 
-# Optional categorical (will be one-hot encoded into static_features)
-OPTIONAL_CATEGORICAL_FEATURES = [
-    ("lithology", "geology"),
-    "lithology_class",  # will be used only if present
-    # add more categorical candidates here
-]
-
-# Which optional numeric are already normalized to [0,1]?
-# (We will SKIP scaling for these to avoid double-normalization)
-ALREADY_NORMALIZED_FEATURES = [
-    # "normalized_urban_load_proxy",  # put real final column name if present
-    "urban_load_global", 
-    # add more if needed
-]
-
-# Future-known drivers (subset of numeric) to expose as future_features
-FUTURE_DRIVER_FEATURES = [
-    "rainfall_mm"  # any resolved/actual column with this name is used if present
-    # add more if you want multi-driver futures
-]
-
-# ---- CENSORING (generic, config-driven) -----------------------------
-# Each spec describes one potentially censored numeric column.
-CENSORING_SPECS = [
-    {
-        "col": H_FIELD_COL_NAME,      # e.g., "soil_thickness"
-        "direction": "right",         # "right" (>= cap) or "left" (<= cap)
-        "cap": 30.0,                  # instrument/processing cap
-        "tol": 1e-6,                  # closeness tolerance for equality-to-cap
-        "flag_suffix": "_censored",   # boolean indicator column
-        "eff_suffix": "_eff",         # effective value column
-           #  or {"flag_col": "soil_thickness_censored"}
-        # How to form the effective value used by the model:
-        # "clip": min(x, cap) ; "cap_minus_eps": cap*(1-eps) if censored
-        # "nan_if_censored": set NaN then impute (see "impute" block)
-        "eff_mode": "clip",
-        "eps": 0.02,                  # used only for "cap_minus_eps"
-        "impute": {"by": ["year"], "func": "median"},  # used only if eff_mode="nan_if_censored"
-        "flag_threshold": 0.5,
-    },
-]
-INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = True   # add *_censored as a (0/1) driver
-USE_EFFECTIVE_H_FIELD = True             # feed H_field = "<col>_eff" if created
-
-
-# Output base
-BASE_OUTPUT_DIR = os.path.join(os.getcwd(), "results")
+# --- Output directories (optionally overridable from cfg) ---
+BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
 ensure_directory_exists(BASE_OUTPUT_DIR)
-RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_stage1")
+
+RUN_OUTPUT_PATH = os.path.join(
+    BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_stage1"
+)
 if os.path.isdir(RUN_OUTPUT_PATH):
     print(f"Cleaning existing Stage-1 directory: {RUN_OUTPUT_PATH}")
     shutil.rmtree(RUN_OUTPUT_PATH)
@@ -548,7 +516,7 @@ inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
     return_coord_scaler=True,
     mode=MODE,
     model=MODEL_NAME,
-    verbose=3,
+    verbose=2,
 )
 if targets_train["subsidence"].shape[0] == 0:
     raise ValueError("No training sequences were generated.")
@@ -769,28 +737,6 @@ if not df_test.empty:
             manifest["artifacts"]["numpy"]["test_targets_npz"] = test_targets_npz
     except: 
          pass 
-     # XXX TOFIX : WHen using cross-city-validation. 
-     
-       # [INFO] Group (113.718628, 22.552893): 1 pts -> 0 seq.
-    #     [INFO] Group (113.718628, 22.552376): 1 pts -> 0 seq.
-    #     [INFO] Group (113.718628, 22.551857): 1 pts -> 0 seq.
-    # [INFO] No group is long enough to create any sequence.
-    # Traceback (most recent call last):
-    #   File "F:\repositories\fusionlab-learn\nat.com\main_NATCOM_stage1_prepare.py", line 719, in <module>
-    #     test_inputs, test_targets, _ = prepare_pinn_data_sequences(
-    #   File "F:\repositories\fusionlab-learn\fusionlab\decorators.py", line 3836, in wrapper
-    #     return func(*bound_args.args, **bound_args.kwargs)
-    #   File "F:\repositories\fusionlab-learn\fusionlab\nn\pinn\utils.py", line 3388, in prepare_pinn_data_sequences
-    #     ok, _ = check_sequence_feasibility(
-    #   File "F:\repositories\fusionlab-learn\fusionlab\decorators.py", line 3836, in wrapper
-    #     return func(*bound_args.args, **bound_args.kwargs)
-    #   File "F:\repositories\fusionlab-learn\fusionlab\utils\sequence_utils.py", line 209, in check_sequence_feasibility
-    #     raise SequenceGeneratorError(msg)
-    # fusionlab.utils.sequence_utils.SequenceGeneratorError: No group is long enough to create any sequence.
-    # Each trajectory needs >= 7 consecutive records (time_steps=4, horizon=3), but the longest has only 1.
-    # -> Reduce `time_steps` / `forecast_horizon`, or supply more data.
-    # (fusionlab-py310-test)
-
 
 manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
 with open(manifest_path, "w", encoding="utf-8") as f:

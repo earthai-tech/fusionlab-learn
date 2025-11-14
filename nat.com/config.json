@@ -1,0 +1,257 @@
+{
+  "city": "zhongshan",
+  "model": "GeoPriorSubsNet",
+  "config": {
+    "CITY_NAME": "zhongshan",
+    "MODEL_NAME": "GeoPriorSubsNet",
+    "DATA_DIR": "..",
+    "BIG_FN_TEMPLATE": "{city}_final_main_std.harmonized.csv",
+    "SMALL_FN_TEMPLATE": "{city}_2000.csv",
+    "BIG_FN": "zhongshan_final_main_std.harmonized.csv",
+    "SMALL_FN": "zhongshan_2000.csv",
+    "TRAIN_END_YEAR": 2022,
+    "FORECAST_START_YEAR": 2023,
+    "FORECAST_HORIZON_YEARS": 3,
+    "TIME_STEPS": 5,
+    "MODE": "tft_like",
+    "TIME_COL": "year",
+    "LON_COL": "longitude",
+    "LAT_COL": "latitude",
+    "SUBSIDENCE_COL": "subsidence",
+    "GWL_COL": "GWL_depth_bgs_z",
+    "H_FIELD_COL_NAME": "soil_thickness",
+    "OPTIONAL_NUMERIC_FEATURES": [
+      [
+        "rainfall_mm",
+        "rainfall",
+        "rain_mm",
+        "precip_mm"
+      ],
+      [
+        "urban_load_global",
+        "normalized_density",
+        "urban_load"
+      ]
+    ],
+    "OPTIONAL_CATEGORICAL_FEATURES": [
+      [
+        "lithology",
+        "geology"
+      ],
+      "lithology_class"
+    ],
+    "ALREADY_NORMALIZED_FEATURES": [
+      "urban_load_global"
+    ],
+    "FUTURE_DRIVER_FEATURES": [
+      "rainfall_mm"
+    ],
+    "CENSORING_SPECS": [
+      {
+        "col": "soil_thickness",
+        "direction": "right",
+        "cap": 30.0,
+        "tol": 1e-06,
+        "flag_suffix": "_censored",
+        "eff_suffix": "_eff",
+        "eff_mode": "clip",
+        "eps": 0.02,
+        "impute": {
+          "by": [
+            "year"
+          ],
+          "func": "median"
+        },
+        "flag_threshold": 0.5
+      }
+    ],
+    "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": true,
+    "USE_EFFECTIVE_H_FIELD": true,
+    "ATTENTION_LEVELS": [
+      "cross",
+      "hierarchical",
+      "memory"
+    ],
+    "EMBED_DIM": 32,
+    "HIDDEN_UNITS": 64,
+    "LSTM_UNITS": 64,
+    "ATTENTION_UNITS": 64,
+    "NUMBER_HEADS": 2,
+    "DROPOUT_RATE": 0.1,
+    "MEMORY_SIZE": 50,
+    "SCALES": [
+      1,
+      2
+    ],
+    "USE_RESIDUALS": true,
+    "USE_BATCH_NORM": false,
+    "USE_VSN": true,
+    "VSN_UNITS": 32,
+    "QUANTILES": [
+      0.1,
+      0.5,
+      0.9
+    ],
+    "SUBS_WEIGHTS": {
+      "0.1": 3.0,
+      "0.5": 1.0,
+      "0.9": 3.0
+    },
+    "GWL_WEIGHTS": {
+      "0.1": 1.5,
+      "0.5": 1.0,
+      "0.9": 1.5
+    },
+    "PDE_MODE_CONFIG": "off",
+    "SCALE_PDE_RESIDUALS": true,
+    "LAMBDA_CONS": 0.1,
+    "LAMBDA_GW": 0.01,
+    "LAMBDA_PRIOR": 0.1,
+    "LAMBDA_SMOOTH": 0.01,
+    "LAMBDA_MV": 0.01,
+    "MV_LR_MULT": 1.0,
+    "KAPPA_LR_MULT": 5.0,
+    "GEOPRIOR_INIT_MV": 1e-07,
+    "GEOPRIOR_INIT_KAPPA": 1.0,
+    "GEOPRIOR_GAMMA_W": 9810.0,
+    "GEOPRIOR_H_REF": 0.0,
+    "GEOPRIOR_KAPPA_MODE": "bar",
+    "GEOPRIOR_USE_EFFECTIVE_H": true,
+    "GEOPRIOR_HD_FACTOR": 0.6,
+    "EPOCHS": 50,
+    "BATCH_SIZE": 32,
+    "LEARNING_RATE": 0.0001,
+    "TUNER_SEARCH_SPACE": {
+      "embed_dim": [
+        32,
+        64
+      ],
+      "hidden_units": [
+        64,
+        96,
+        128
+      ],
+      "lstm_units": [
+        64,
+        96
+      ],
+      "attention_units": [
+        32,
+        64
+      ],
+      "num_heads": [
+        2,
+        4
+      ],
+      "dropout_rate": {
+        "type": "float",
+        "min_value": 0.1,
+        "max_value": 0.3
+      },
+      "use_vsn": {
+        "type": "bool"
+      },
+      "vsn_units": [
+        16,
+        32,
+        48
+      ],
+      "use_batch_norm": {
+        "type": "bool"
+      },
+      "pde_mode": [
+        "both"
+      ],
+      "scale_pde_residuals": {
+        "type": "bool"
+      },
+      "kappa_mode": [
+        "bar",
+        "kb"
+      ],
+      "hd_factor": {
+        "type": "float",
+        "min_value": 0.5,
+        "max_value": 0.8
+      },
+      "mv": {
+        "type": "float",
+        "min_value": 3e-07,
+        "max_value": 1e-06,
+        "sampling": "log"
+      },
+      "kappa": {
+        "type": "float",
+        "min_value": 0.7,
+        "max_value": 1.5
+      },
+      "learning_rate": {
+        "type": "float",
+        "min_value": 5e-05,
+        "max_value": 0.0003,
+        "sampling": "log"
+      },
+      "lambda_gw": {
+        "type": "float",
+        "min_value": 0.1,
+        "max_value": 1.0
+      },
+      "lambda_cons": {
+        "type": "float",
+        "min_value": 0.01,
+        "max_value": 1.0
+      },
+      "lambda_prior": {
+        "type": "float",
+        "min_value": 0.1,
+        "max_value": 0.8
+      },
+      "lambda_smooth": {
+        "type": "float",
+        "min_value": 0.01,
+        "max_value": 1.0
+      },
+      "lambda_mv": {
+        "type": "float",
+        "min_value": 0.01,
+        "max_value": 0.5
+      },
+      "mv_lr_mult": {
+        "type": "float",
+        "min_value": 0.5,
+        "max_value": 2.0
+      },
+      "kappa_lr_mult": {
+        "type": "float",
+        "min_value": 1.0,
+        "max_value": 10.0
+      }
+    },
+    "censoring": {
+      "specs": [
+        {
+          "col": "soil_thickness",
+          "direction": "right",
+          "cap": 30.0,
+          "tol": 1e-06,
+          "flag_suffix": "_censored",
+          "eff_suffix": "_eff",
+          "eff_mode": "clip",
+          "eps": 0.02,
+          "impute": {
+            "by": [
+              "year"
+            ],
+            "func": "median"
+          },
+          "flag_threshold": 0.5
+        }
+      ],
+      "use_effective_h_field": true,
+      "include_flags_as_dynamic": true
+    }
+  },
+  "__meta__": {
+    "config_py_hash": "a7ddc9c6f0406d0a710293e53f3a8a209930d48d4f7be1d731e13142e15953da"
+  }
+}
