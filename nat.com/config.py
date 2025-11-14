@@ -70,6 +70,8 @@ SMALL_FN_TEMPLATE = "{city}_2000.csv"
 BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME)
 SMALL_FN = SMALL_FN_TEMPLATE.format(city=CITY_NAME)
 
+# optional multi-city parquet (e.g. natcom_all_cities.parquet)
+ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
 
 # 1.3 Temporal windows
 # --------------------

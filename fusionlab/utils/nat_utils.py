@@ -258,3 +258,5 @@ def load_nat_config_payload() -> Dict[str, Any]:
         ensure_config_json()
     with open(config_json, "r", encoding="utf-8") as f:
         return json.load(f)
+
+

@@ -56,13 +56,14 @@ try:
     from fusionlab.datasets import fetch_zhongshan_data
     from fusionlab.utils.data_utils import nan_ops
     from fusionlab.utils.io_utils import save_job
+    from fusionlab.utils.geo_utils import unpack_frames_from_file
     from fusionlab.utils.nat_utils import load_nat_config
     from fusionlab.utils.generic_utils import (
         normalize_time_column,
         ensure_directory_exists,
     )
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
-    # from fusionlab.utils.forecast_utils import get_test_data_from
+    
     print("Successfully imported fusionlab modules.")
 except Exception as e:
     print(f"Failed to import fusionlab modules: {e}")
@@ -81,6 +82,9 @@ DATA_DIR    = cfg["DATA_DIR"]
 BIG_FN      = cfg["BIG_FN"]
 SMALL_FN    = cfg["SMALL_FN"]
 
+# optional multi-city parquet (if exists and CSV are missing)
+ALL_CITIES_PARQUET = cfg.get("ALL_CITIES_PARQUET")
+
 # Allow SEARCH/FALLBACK paths to be specified in cfg; otherwise, use defaults
 SEARCH_PATHS = cfg.get("SEARCH_PATHS") or [
     os.path.join(DATA_DIR, "data", BIG_FN),
@@ -94,6 +98,16 @@ FALLBACK_PATHS = cfg.get("FALLBACK_PATHS") or [
     os.path.join(".", "data", SMALL_FN),
     SMALL_FN,
 ]
+
+# where to look for the merged parquet (if configured)
+ALL_CITIES_SEARCH_PATHS = cfg.get("ALL_CITIES_SEARCH_PATHS") or [
+    os.path.join(DATA_DIR, "data", ALL_CITIES_PARQUET) if ALL_CITIES_PARQUET else None,
+    os.path.join(DATA_DIR, ALL_CITIES_PARQUET)         if ALL_CITIES_PARQUET else None,
+    os.path.join(".", "data", ALL_CITIES_PARQUET)      if ALL_CITIES_PARQUET else None,
+    ALL_CITIES_PARQUET,
+]
+# drop Nones
+ALL_CITIES_SEARCH_PATHS = [p for p in ALL_CITIES_SEARCH_PATHS if p]
 
 # --- Time windows ---
 TRAIN_END_YEAR          = cfg["TRAIN_END_YEAR"]
@@ -274,7 +288,48 @@ def _apply_censoring(df: pd.DataFrame, specs: list[dict]) -> tuple[pd.DataFrame,
 # ==================================================================
 # Step 1: Load dataset
 # ==================================================================
+
 print(f"\n{'='*18} Step 1: Load Dataset {'='*18}")
+
+def _any_exists(paths: list[str]) -> bool:
+    return any(os.path.exists(p) for p in paths)
+
+# ---  ensure city CSV exists; if not, try to unpack from merged parquet ---
+if not _any_exists(SEARCH_PATHS) and ALL_CITIES_PARQUET:
+    merged_path = None
+    for p in ALL_CITIES_SEARCH_PATHS:
+        print(f"  [Check] Looking for merged parquet at: {os.path.abspath(p)}")
+        if os.path.exists(p):
+            merged_path = p
+            break
+
+    if merged_path is not None:
+        print(
+            f"  [Info] No '{BIG_FN}' found for city={CITY_NAME!r}; "
+            f"unpacking from merged parquet: {merged_path}"
+        )
+        # This will create e.g. 'nansha_final_main_std.harmonized.csv',
+        # 'zhongshan_final_main_std.harmonized.csv' in the same folder,
+        # using the 'source' column recorded when you merged.
+        unpack_frames_from_file(
+            merged=merged_path,
+            group_col="city",
+            output_dir=os.path.dirname(merged_path),
+            output_format="csv",      # default: CSV outputs
+            use_source_col=True,      # reuse original file names if present
+            source_col="source",
+            drop_columns=("source",), # optional: strip bookkeeping column
+            save=True,
+            return_dict=False,
+            verbose=1,
+        )
+    else:
+        print(
+            "  [Info] ALL_CITIES_PARQUET is set, but merged parquet not found.\n"
+            "         Will proceed with normal CSV search / fetch_zhongshan_data."
+        )
+
+# --- ORIGINAL CSV loading logic  ---
 df_raw = None
 for p in SEARCH_PATHS + FALLBACK_PATHS:
     print(f"  Try: {os.path.abspath(p)}")

@@ -5,9 +5,9 @@
 from __future__ import annotations 
 
 import os
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Iterable, Union,  Literal
 import warnings 
-
+from pathlib import Path
 import pandas as pd
 import numpy as np
 
@@ -21,10 +21,15 @@ from ..core.io import SaveFile
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 
+PathLike = Union[str, "os.PathLike[str]"]
+DataSource = Union[PathLike, pd.DataFrame]
+
+
 __all__ = [
     'augment_city_spatiotemporal_data','augment_series_features',
     'augment_spatiotemporal_data','generate_dummy_pinn_data',
-    'interpolate_temporal_gaps', 'resolve_spatial_columns'
+    'interpolate_temporal_gaps', 'resolve_spatial_columns', 
+    'merge_frames_to_file', 'unpack_frames_from_file'
     ]
 
 def resolve_spatial_columns(
@@ -1203,3 +1208,652 @@ def generate_dummy_pinn_data(
         "GWL": gwl.astype(np.float32),
         "rainfall_mm": rainfall_mm.astype(np.float32),
     }
+
+
+def merge_frames_to_file(
+    sources: Iterable[DataSource],
+    output_path: PathLike,
+    *,
+    output_format: Literal["parquet", "csv", "feather", "pickle"] = "parquet",
+    compression: Optional[str] = "snappy",
+    check_columns: Literal["strict", "subset", "union"] = "strict",
+    excel_mode: Literal["all_sheets", "first_sheet"] = "all_sheets",
+    sheet_names: Optional[Iterable[str]] = None,
+    add_source_label: bool = True,
+    source_col: str = "source",
+    sort_by: Optional[Iterable[str]] = None,
+    drop_duplicates: bool = False,
+    reset_index: bool = True,
+    save_kwargs: Optional[Dict[str, Any]] = None,
+    verbose: int = 1,
+) -> pd.DataFrame:
+    """
+    Merge multiple NATCOM city datasets into a single compressed file.
+
+    Parameters
+    ----------
+    sources : iterable of {path-like, DataFrame}
+        Input sources. Each element can be:
+
+        * A path to a CSV file (e.g. ``"nansha_final...csv"``),
+        * A path to an Excel workbook (one or many sheets per city),
+        * A pre-loaded :class:`~pandas.DataFrame`.
+
+    output_path : path-like
+        Destination file path. If ``output_format='parquet'`` and
+        the suffix is missing, ``'.parquet'`` is appended.
+
+    output_format : {'parquet', 'csv', 'feather', 'pickle'}, optional
+        Output format. Default is ``'parquet'`` for compact,
+        columnar storage (recommended for Code Ocean).
+
+    compression : str or None, optional
+        Compression to use for the chosen format.
+
+        * For ``'parquet'`` this is passed to
+          :meth:`pandas.DataFrame.to_parquet` (e.g. ``'snappy'``,
+          ``'gzip'``, ``'brotli'``).
+        * For ``'csv'`` it is passed to
+          :meth:`pandas.DataFrame.to_csv` via the ``compression``
+          keyword if non-``None``.
+        * Ignored for ``'feather'`` and ``'pickle'`` (Feather uses
+          its own defaults; pickle rarely benefits from extra
+          compression at this layer).
+
+    check_columns : {'strict', 'subset', 'union'}, optional
+        How to handle column consistency across sources:
+
+        * ``'strict'`` (default): all sources must have exactly the
+          same set of columns (order may differ). Columns are then
+          aligned to the order of the first DataFrame. A mismatch
+          raises :class:`ValueError`.
+
+        * ``'subset'``: all columns in the *first* DataFrame must
+          exist in each subsequent DataFrame. Extra columns in later
+          sources are dropped. Missing required columns raise
+          :class:`ValueError`.
+
+        * ``'union'``: columns are unioned across all sources. Any
+          missing column in a particular source is added and filled
+          with ``NaN`` before concatenation.
+
+    excel_mode : {'all_sheets', 'first_sheet'}, optional
+        Behaviour when a source is an Excel workbook:
+
+        * ``'all_sheets'`` (default): read *all* sheets and treat
+          each sheet as a separate DataFrame to merge.
+        * ``'first_sheet'``: read only the first sheet.
+
+        If ``sheet_names`` is provided, it takes precedence.
+
+    sheet_names : iterable of str, optional
+        Explicit sheet names to read from Excel workbooks. If
+        provided, only these sheets are read.
+
+    add_source_label : bool, optional
+        If ``True`` (default), add a column named ``source_col`` to
+        each chunk before concatenation. For path-like inputs, the
+        label is derived from the file name and, when applicable,
+        sheet name (e.g. ``"nansha_final_main_std.harmonized.csv"`` or
+        ``"zhongshan.xlsx:Sheet1"``). For pre-loaded DataFrames, the
+        label is ``'<in_memory>'``.
+
+    source_col : str, optional
+        Name of the column storing the source label when
+        ``add_source_label=True``.
+
+    sort_by : iterable of str, optional
+        Optional column(s) to sort the merged DataFrame by at the
+        end (e.g. ``['city', 'year', 'longitude', 'latitude']``).
+
+    drop_duplicates : bool, optional
+        If ``True``, drop duplicate rows at the end (after sorting).
+
+    reset_index : bool, optional
+        If ``True`` (default), reset index after concatenation.
+
+    save_kwargs : dict, optional
+        Extra keyword arguments forwarded to the corresponding
+        ``to_*`` writer (e.g. ``to_parquet``, ``to_csv``,
+        ``to_feather``, ``to_pickle``).
+
+    verbose : int, optional
+        Verbosity level. ``0`` = silent, ``>=1`` prints basic
+        progress information.
+
+    Returns
+    -------
+    merged : pandas.DataFrame
+        The merged DataFrame (also written to disk).
+
+    Raises
+    ------
+    ValueError
+        If ``check_columns='strict'`` or ``'subset'`` and a column
+        mismatch is detected.
+    Examples 
+    ----------
+    >>> from fusionlab.utils.geo_utils import merge_frames_to_file
+    >>> merge_frames_to_file(
+    ...    sources=[
+    ...        "nansha_final_main_std.harmonized.csv",
+    ...        "zhongshan_final_main_std.harmonized.csv",
+    ...    ],
+    ...    output_path="natcom_all_cities",
+    ...    output_format="parquet",
+    ...    compression="snappy",
+    ...    sort_by=["city", "year", "longitude", "latitude"],
+    ... )
+
+    Notes
+    -----
+    * All inputs are read fully into memory before concatenation.
+      This is acceptable for the NATCOM subsidence datasets
+      (``O(10^6 - 10^7)`` rows) but can be refactored to a
+      streaming/row-group approach if needed later.
+    * Using ``output_format='parquet'`` with compression (e.g.
+      ``'snappy'``) is recommended for Code Ocean to minimise disk
+      usage while keeping I/O efficient.
+    """
+    save_kwargs = dict(save_kwargs or {})
+    sources = list(sources)
+    if not sources:
+        raise ValueError("No sources provided to merge_city_frames_to_file().")
+
+    out_path = Path(output_path)
+    fmt = output_format.lower()
+
+    if fmt not in {"parquet", "csv", "feather", "pickle"}:
+        raise ValueError(
+            f"Unsupported output_format={output_format!r}. "
+            "Expected one of {'parquet','csv','feather','pickle'}."
+        )
+
+    def _iter_frames_from_source(
+        src: DataSource,
+    ) -> List[pd.DataFrame]:
+        """Internal: expand a single source into one or more frames."""
+        if isinstance(src, pd.DataFrame):
+            label = "<in_memory>"
+            return [(src.copy(), label)]
+
+        p = Path(src)
+        if not p.exists():
+            raise FileNotFoundError(f"Source not found: {p}")
+
+        suffix = p.suffix.lower()
+        frames_with_labels: List[tuple[pd.DataFrame, str]] = []
+
+        if suffix in {".csv", ".txt"}:
+            df = pd.read_csv(p)
+            frames_with_labels.append((df, p.name))
+        elif suffix in {".xls", ".xlsx"}:
+            # Decide which sheets to read.
+            if sheet_names is not None:
+                sheets_to_read = list(sheet_names)
+            elif excel_mode == "first_sheet":
+                sheets_to_read = [0]  # first sheet by position
+            else:  # 'all_sheets'
+                # Read all sheets into a dict
+                all_sheets = pd.read_excel(p, sheet_name=None)
+                for sh_name, sh_df in all_sheets.items():
+                    frames_with_labels.append((sh_df, f"{p.name}:{sh_name}"))
+                return [*frames_with_labels]
+
+            for sh in sheets_to_read:
+                sh_df = pd.read_excel(p, sheet_name=sh)
+                label = f"{p.name}:{sh}" if not isinstance(
+                    sh, int) else f"{p.name}:sheet{sh}"
+                frames_with_labels.append((sh_df, label))
+        else:
+            raise ValueError(
+                f"Unsupported file extension for source {p!s}. "
+                "Only CSV (.csv) and Excel (.xls, .xlsx) are allowed."
+            )
+
+        return frames_with_labels
+
+    # 1) Collect and validate/align columns
+    frames: List[pd.DataFrame] = []
+    base_cols = None
+
+    for src in sources:
+        for df_chunk, label in _iter_frames_from_source(src):
+            if base_cols is None:
+                base_cols = list(df_chunk.columns)
+                if verbose:
+                    print(
+                        f"[merge_city_frames] Base columns "
+                        f"({len(base_cols)}): {base_cols[:6]}..."
+                    )
+            else:
+                cols_now = list(df_chunk.columns)
+                set_base = set(base_cols)
+                set_now = set(cols_now)
+
+                if check_columns == "strict":
+                    if set_now != set_base:
+                        missing = sorted(set_base - set_now)
+                        extra = sorted(set_now - set_base)
+                        raise ValueError(
+                            "Column mismatch under 'strict' mode.\n"
+                            f"  Missing in {label}: {missing}\n"
+                            f"  Extra in {label}: {extra}"
+                        )
+                    # Align column order
+                    df_chunk = df_chunk.reindex(columns=base_cols)
+                elif check_columns == "subset":
+                    # ensure *required* columns (base) exist
+                    missing = sorted(set_base - set_now)
+                    if missing:
+                        raise ValueError(
+                            "Column mismatch under 'subset' mode.\n"
+                            f"  Missing required in {label}: {missing}"
+                        )
+                    # drop any extra columns and align order
+                    df_chunk = df_chunk.reindex(columns=base_cols)
+                elif check_columns == "union":
+                    # union columns so far; fill missing with NaN
+                    union_cols = list(set_base | set_now)
+                    for c in union_cols:
+                        if c not in df_chunk.columns:
+                            df_chunk[c] = pd.NA
+                    if set_base != set(union_cols):
+                        # update base definition & expand existing frames
+                        for i, f in enumerate(frames):
+                            for c in union_cols:
+                                if c not in f.columns:
+                                    frames[i][c] = pd.NA
+                        base_cols = union_cols
+                    df_chunk = df_chunk.reindex(columns=base_cols)
+                else:
+                    raise ValueError(
+                        f"Unknown check_columns={check_columns!r}"
+                    )
+
+            if add_source_label:
+                if source_col in df_chunk.columns:
+                    # avoid clobbering an existing column silently
+                    df_chunk[f"{source_col}_orig"] = df_chunk[source_col]
+                df_chunk[source_col] = label
+
+            frames.append(df_chunk)
+
+    if not frames:
+        raise RuntimeError("No frames were collected from the given sources.")
+
+    # 2) Concatenate and post-process
+    merged = pd.concat(frames, axis=0, ignore_index=reset_index)
+
+    if sort_by:
+        merged = merged.sort_values(list(sort_by), ignore_index=reset_index)
+
+    if drop_duplicates:
+        merged = merged.drop_duplicates(ignore_index=reset_index)
+
+    if not reset_index:
+        merged = merged  # keep concatenated index as-is
+    else:
+        merged = merged.reset_index(drop=True)
+
+    # 3) Save to disk (compressed, if requested)
+    if fmt == "parquet":
+        if out_path.suffix == "":
+            out_path = out_path.with_suffix(".parquet")
+        if verbose:
+            print(
+                f"[merge_frames] Writing Parquet -> {out_path} "
+                f"(compression={compression!r})"
+            )
+        merged.to_parquet(
+            out_path,
+            compression=compression,
+            index=False,
+            **save_kwargs,
+        )
+    elif fmt == "csv":
+        if out_path.suffix == "":
+            out_path = out_path.with_suffix(".csv")
+        if verbose:
+            print(
+                f"[merge_frames] Writing CSV -> {out_path} "
+                f"(compression={compression!r})"
+            )
+        if compression is not None:
+            save_kwargs.setdefault("compression", compression)
+        merged.to_csv(out_path, index=False, **save_kwargs)
+    elif fmt == "feather":
+        if out_path.suffix == "":
+            out_path = out_path.with_suffix(".feather")
+        if verbose:
+            print(
+                f"[merge_frames] Writing Feather -> {out_path}"
+            )
+        # pandas uses pyarrow under the hood
+        merged.to_feather(out_path, **save_kwargs)
+    elif fmt == "pickle":
+        if out_path.suffix == "":
+            out_path = out_path.with_suffix(".pkl")
+        if verbose:
+            print(
+                f"[merge_frames] Writing Pickle -> {out_path}"
+            )
+        merged.to_pickle(out_path, **save_kwargs)
+
+    if verbose:
+        print(
+            f"[merge_frames] Done. Merged shape="
+            f"{merged.shape}, saved as '{fmt}' at: {out_path}"
+        )
+
+    return merged
+
+
+def unpack_frames_from_file(
+    merged: Union[PathLike, pd.DataFrame],
+    *,
+    group_col: str = "city",
+    output_dir: Optional[PathLike] = None,
+    output_format: Literal["csv", "parquet", "feather", "pickle"] = "csv",
+    compression: Optional[str] = None,
+    use_source_col: bool = True,
+    source_col: str = "source",
+    filename_pattern: str = "{group_value}_split",
+    drop_columns: Optional[Iterable[str]] = None,
+    keep_columns: Optional[Iterable[str]] = None,
+    save: bool = True,
+    return_dict: bool = True,
+    save_kwargs: Optional[Dict[str, Any]] = None,
+    verbose: int = 1,
+) -> Dict[Any, pd.DataFrame]:
+    """
+    Reverse of `merge_city_frames_to_file`: split an aggregated NATCOM
+    dataset into per-city frames (and optionally write them to disk).
+
+    Parameters
+    ----------
+    merged : path-like or DataFrame
+        Aggregated dataset. If path-like, the format is inferred from
+        the file suffix:
+
+        - ``.parquet`` → :func:`pandas.read_parquet`
+        - ``.csv``     → :func:`pandas.read_csv`
+        - ``.feather`` → :func:`pandas.read_feather`
+        - ``.pkl``/``.pickle`` → :func:`pandas.read_pickle`
+
+        If a :class:`~pandas.DataFrame` is passed, it is used directly.
+
+    group_col : str, optional
+        Column used to split the dataset (default: ``'city'``). Each
+        unique value defines one output chunk.
+
+    output_dir : path-like, optional
+        Directory where per-group files are written. If ``None`` and
+        ``merged`` is a path, the directory of ``merged`` is used.
+        If ``merged`` is a DataFrame and ``output_dir`` is ``None``,
+        the current working directory is used.
+
+    output_format : {'csv', 'parquet', 'feather', 'pickle'}, optional
+        Output format for per-group files. Default is ``'csv'``.
+
+    compression : str or None, optional
+        Compression to use when writing:
+
+        - For ``'csv'``, forwarded to :meth:`DataFrame.to_csv` as the
+          ``compression`` argument (e.g. ``'gzip'``).
+        - For ``'parquet'``, forwarded to :meth:`DataFrame.to_parquet`
+          (e.g. ``'snappy'``, ``'gzip'``).
+        - Ignored for ``'feather'`` and ``'pickle'`` (these use their
+          own defaults).
+
+    use_source_col : bool, optional
+        If ``True`` (default) and a column named ``source_col`` exists,
+        the helper tries to reconstruct the *original* file name for
+        each group:
+
+        - If a group has a single unique, non-null `source` value that
+          looks like a filename (e.g. ``'nansha_final_main_std.harmonized.csv'``),
+          that base name is used for the output (with its suffix
+          adjusted to match ``output_format`` if needed).
+
+        - If there are multiple unique `source` labels within a group,
+          it falls back to ``filename_pattern``.
+
+    source_col : str, optional
+        Name of the column containing the source label (default:
+        ``'source'``). This should match the column created in
+        :func:`merge_frames_to_file` when ``add_source_label=True``.
+
+    filename_pattern : str, optional
+        Pattern used when no suitable `source` label is available.
+        The following placeholders are supported:
+
+        - ``{group_value}`` : the group value as a string
+        - ``{group_col}``   : the name of the grouping column
+
+        Example:
+        ``filename_pattern="{group_col}_{group_value}_data"`` →
+        ``"city_Nansha_data.csv"``.
+
+    drop_columns : iterable of str, optional
+        Columns to drop from each group before saving/returning
+        (e.g. ``['source']`` if you don't want the bookkeeping column).
+
+    keep_columns : iterable of str, optional
+        If provided, only these columns are kept (all others are
+        dropped *after* any ``drop_columns`` processing is applied).
+
+    save : bool, optional
+        If ``True`` (default), write each group to disk as a separate
+        file. If ``False``, no files are written; only the dict of
+        DataFrames is returned (if ``return_dict=True``).
+
+    return_dict : bool, optional
+        If ``True`` (default), return a mapping
+        ``{group_value: group_df}``. If ``False``, an empty dict is
+        returned (useful when you only care about side-effect files).
+
+    save_kwargs : dict, optional
+        Extra keyword arguments forwarded to the respective writer:
+        :meth:`DataFrame.to_csv`, :meth:`DataFrame.to_parquet`,
+        :meth:`DataFrame.to_feather`, or :meth:`DataFrame.to_pickle`.
+
+    verbose : int, optional
+        Verbosity level. ``0`` = silent, ``>=1`` prints progress
+        information.
+
+    Returns
+    -------
+    out : dict
+        Dictionary mapping each group value to the corresponding
+        :class:`~pandas.DataFrame`. Empty if ``return_dict=False``.
+
+    Raises
+    ------
+    ValueError
+        If ``group_col`` is not present in the merged dataset.
+        
+    Examples 
+    ---------
+    >>> from fusionlab.utils.geo_utils import unpack_frames_from_file
+    >>> unpack_frames_from_file(
+    ...     "natcom_all_cities.parquet",
+    ...     group_col="city",
+    ...     output_format="csv",
+    ... )
+    # -> writes e.g. 'nansha_final_main_std.harmonized.csv',
+    #    'zhongshan_final_main_std.harmonized.csv' (if `source` labels exist),
+    #    and returns a dict: {'Nansha': df_nansha, 'Zhongshan': df_zhongshan}
+    """
+    
+    save_kwargs = dict(save_kwargs or {})
+
+    # 1) Load merged DataFrame
+    df: pd.DataFrame
+    merged_path: Optional[Path] = None
+
+    if isinstance(merged, pd.DataFrame):
+        df = merged.copy()
+    else:
+        merged_path = Path(merged)
+        if not merged_path.exists():
+            raise FileNotFoundError(f"Merged file not found: {merged_path}")
+
+        suffix = merged_path.suffix.lower()
+        if suffix == ".parquet":
+            df = pd.read_parquet(merged_path)
+        elif suffix == ".csv":
+            df = pd.read_csv(merged_path)
+        elif suffix in {".feather", ".ft"}:
+            df = pd.read_feather(merged_path)
+        elif suffix in {".pkl", ".pickle"}:
+            df = pd.read_pickle(merged_path)
+        else:
+            raise ValueError(
+                f"Unsupported merged file extension {suffix!r}. "
+                "Expected one of: '.parquet', '.csv', '.feather', '.pkl', '.pickle'."
+            )
+
+    if group_col not in df.columns:
+        raise ValueError(
+            f"group_col={group_col!r} not found in merged DataFrame. "
+            f"Available columns: {list(df.columns)}"
+        )
+
+    # 2) Resolve output directory
+    if output_dir is not None:
+        out_dir = Path(output_dir)
+    elif merged_path is not None:
+        out_dir = merged_path.parent
+    else:
+        out_dir = Path.cwd()
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    fmt = output_format.lower()
+    if fmt not in {"csv", "parquet", "feather", "pickle"}:
+        raise ValueError(
+            f"Unsupported output_format={output_format!r}. "
+            "Expected one of {'csv','parquet','feather','pickle'}."
+        )
+
+    def _ext_for_format() -> str:
+        if fmt == "csv":
+            return ".csv"
+        elif fmt == "parquet":
+            return ".parquet"
+        elif fmt == "feather":
+            return ".feather"
+        else:  # 'pickle'
+            return ".pkl"
+
+    def _filename_from_source_label(
+        label: str,
+        group_value: Any,
+    ) -> str:
+        """
+        Try to infer a good filename from the `source` label. Adjust
+        the suffix to match `output_format`, but keep the stem.
+        """
+        p = Path(str(label))
+        stem = p.stem  # 'nansha_final_main_std.harmonized'
+        ext = _ext_for_format()
+        # Special case: if output_format is csv and original already ends
+        # with .csv, keep exactly that file name.
+        if fmt == "csv" and p.suffix.lower() == ".csv":
+            return p.name
+        return stem + ext
+
+    # 3) Split, post-process, and save
+    out_frames: Dict[Any, pd.DataFrame] = {}
+
+    groups = df.groupby(group_col, dropna=False)
+    if verbose:
+        print(
+            f"[unpack_{group_col}_frames] Splitting merged DataFrame of shape "
+            f"{df.shape} into {len(groups)} group(s) by {group_col!r}..."
+        )
+
+    for gval, gdf in groups:
+        chunk = gdf.copy()
+
+        # Optional column dropping/keeping
+        if drop_columns:
+            cols_to_drop = [c for c in drop_columns if c in chunk.columns]
+            if cols_to_drop:
+                chunk = chunk.drop(columns=cols_to_drop)
+
+        if keep_columns is not None:
+            keep_set = [c for c in keep_columns if c in chunk.columns]
+            chunk = chunk[keep_set]
+
+        # Decide file name
+        filename: Optional[str] = None
+        if save:
+            if (
+                use_source_col
+                and source_col in gdf.columns
+            ):
+                labels = (
+                    gdf[source_col]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                )
+                if labels.size == 1:
+                    # Nice case: one clear source label for this group
+                    filename = _filename_from_source_label(labels[0], gval)
+                elif labels.size > 1 and verbose:
+                    print(
+                        f"[unpack_{group_col}_frames] Group {group_col}={gval!r} "
+                        f"has multiple source labels {labels.tolist()}; "
+                        "falling back to filename_pattern."
+                    )
+
+            if filename is None:
+                # Fallback to pattern
+                gv_str = str(gval).strip().replace(" ", "_")
+                base = filename_pattern.format(
+                    group_value=gv_str,
+                    group_col=group_col,
+                )
+                if not any(base.lower().endswith(ext) for ext in
+                           [".csv", ".parquet", ".feather", ".pkl", ".pickle"]):
+                    base += _ext_for_format()
+                filename = base
+
+            out_path = out_dir / filename
+
+            if verbose:
+                print(
+                    f"[unpack_{group_col}_frames] Writing group {group_col}={gval!r} "
+                    f"to {out_path} (format={fmt}, n={len(chunk)})"
+                )
+
+            # Save according to format
+            if fmt == "csv":
+                if compression is not None:
+                    save_kwargs.setdefault("compression", compression)
+                chunk.to_csv(out_path, index=False, **save_kwargs)
+            elif fmt == "parquet":
+                chunk.to_parquet(
+                    out_path,
+                    compression=compression,
+                    index=False,
+                    **save_kwargs,
+                )
+            elif fmt == "feather":
+                chunk.to_feather(out_path, **save_kwargs)
+            else:  # 'pickle'
+                chunk.to_pickle(out_path, **save_kwargs)
+
+        if return_dict:
+            out_frames[gval] = chunk
+
+    if verbose:
+        print(
+            f"[unpack_{group_col}_frames] Done. Produced {len(out_frames)} "
+            f"group DataFrame(s). Files saved in: {out_dir}"
+        )
+
+    return out_frames
