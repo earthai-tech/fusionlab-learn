@@ -21,7 +21,7 @@ from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn.pinn.models import GeoPriorSubsNet
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
-from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn
+from fusionlab.nn.keras_metrics import _to_py, coverage80_fn, sharpness80_fn
 from fusionlab.nn.calibration import (
     IntervalCalibrator, fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
@@ -145,7 +145,7 @@ def run_one_direction(
 
     cfg_t = M_tgt["config"]
     MODE  = cfg_t["MODE"]
-    T     = cfg_t["TIME_STEPS"]
+    # T     = cfg_t["TIME_STEPS"] # Got if from _ensure_shapes dynamics, :NOqa
     H     = cfg_t["FORECAST_HORIZON_YEARS"]
     Q     = quantiles_override or cfg_t.get("QUANTILES", [0.1, 0.5, 0.9])
 
@@ -236,7 +236,6 @@ def run_one_direction(
         g_p = data_final[..., OUT_S_DIM:]
         predictions = {"subs_pred": s_p, "gwl_pred": g_p}
         
-    # XXX TODO: RECHECK --- New section: Per-horizon MAE and R² ---
     # --- Per-horizon + overall metrics (subsidence) ---
     per_horizon_mae = {}
     per_horizon_r2  = {}
@@ -281,11 +280,25 @@ def run_one_direction(
             eval_scaled = model.evaluate(ds, return_dict=True, verbose=0)
         except Exception:
             eval_scaled = None
-    try:
-        p = model.evaluate_physics(X_tgt)
-        physics_diag = {k: float(v.numpy()) for k, v in p.items()}
-    except Exception:
-        physics_diag = None
+        
+    if eval_scaled is not None: 
+        print(f"Evaluated {M_tgt.get('city')}:", eval_scaled)
+
+        # Physics diagnostics are already aggregated in eval_results
+        phys_keys = ("epsilon_prior", "epsilon_cons")
+        try: 
+            physics_diag = {
+                k: float(_to_py(eval_scaled[k]))
+                for k in phys_keys
+                if k in eval_scaled
+            }
+            if physics_diag:
+                print("Physics diagnostics (from"
+                      f" {M_tgt.get('city')} evaluation):", 
+                      physics_diag
+                )
+        except: 
+            physics_diag = None
     
     try:
         model.export_physics_payload(
@@ -297,7 +310,7 @@ def run_one_direction(
             format="npz",
             overwrite=True,
             metadata={"city": M_tgt.get("city"), "split": "val"},
-    )
+        )
     except: 
         pass 
     

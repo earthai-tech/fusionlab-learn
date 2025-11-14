@@ -70,7 +70,7 @@ SMALL_FN_TEMPLATE = "{city}_2000.csv"
 BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME)
 SMALL_FN = SMALL_FN_TEMPLATE.format(city=CITY_NAME)
 
-# optional multi-city parquet (e.g. natcom_all_cities.parquet)
+# Optional multi-city parquet (e.g. natcom_all_cities.parquet)
 ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
 
 # 1.3 Temporal windows
@@ -275,10 +275,10 @@ GWL_WEIGHTS = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 # 4.3 Physics loss configuration
 # ------------------------------
 # PDE_MODE_CONFIG selects which physical residuals are active:
-#   - "both"         : consolidation + groundwater flow,
-#   - "consolidation": consolidation only,
-#   - "gw_flow"      : groundwater flow only,
-#   - "none"         : physics switched off.
+#   - "both" or "on"   : consolidation + groundwater flow,
+#   - "consolidation"  : consolidation only,
+#   - "gw_flow"        : groundwater flow only,
+#   - "none" or "off"  : physics switched off.
 PDE_MODE_CONFIG = "off"
 
 SCALE_PDE_RESIDUALS = True

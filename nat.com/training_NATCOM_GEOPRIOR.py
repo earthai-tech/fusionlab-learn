@@ -609,33 +609,40 @@ phys = {}
 
 ds_eval = tf.data.Dataset.from_tensor_slices((X_fore, y_fore_fmt)).batch(BATCH_SIZE)
 
-# --- 2.1 Standard Keras evaluate() ---
+# --- 2.1 Standard Keras evaluate() + physics metrics ---
 try:
-    eval_results = subs_model_inst.evaluate(ds_eval, return_dict=True, verbose=1)
+    eval_results = subs_model_inst.evaluate(
+        ds_eval, return_dict=True, verbose=1
+    )
     print("Evaluation:", eval_results)
-except Exception as e:
-    print(f"[Warn] Evaluation failed: {e}")
 
-# --- 2.2 Physics diagnostics (optional) ---
-try:
-    phys = subs_model_inst.evaluate_physics(X_fore)
-    phys = {k: float(v.numpy()) for k, v in phys.items()}
-    print("Physics diagnostics:", phys)
-except Exception as e:
-    print(f"[Warn] Physics eval failed: {e}")
+    # Physics diagnostics are already aggregated in eval_results
+    phys_keys = ("epsilon_prior", "epsilon_cons")
+    phys = {
+        k: float(_to_py(eval_results[k]))
+        for k in phys_keys
+        if k in eval_results
+    }
+    if phys:
+        print("Physics diagnostics (from evaluate):", phys)
 
-#  save physic payload 
+except Exception as e:
+    print(f"[Warn] Evaluation failed (metrics + physics): {e}")
+    eval_results, phys = {}, {}
+
+#  2.2. Save physic payload 
 # collect once and save
 physics_payload = subs_model_loaded.export_physics_payload(
     val_dataset,
     max_batches=None,
     save_path=os.path.join(
         RUN_OUTPUT_PATH, f"{CITY_NAME}_phys_payload_run_val.npz"
-        ),
+    ),
     format="npz",
     overwrite=True,
     metadata={"city": CITY_NAME, "split": "val"},
 )
+
 # 2) later: load without re-evaluating the model
 # payload2, meta = subs_model_inst.load_physics_payload(
 #     os.path.join( RUN_OUTPUT_PATH, "phys_run_val.npz")

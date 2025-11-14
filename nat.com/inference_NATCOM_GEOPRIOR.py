@@ -434,9 +434,23 @@ def main():
     physics_diag = None
     if args.eval_physics:
         try:
-            physics_diag = {k: float(
-                v.numpy()) for k, v in model.evaluate_physics(X).items()}
-        except Exception:
+            phys_raw = model.evaluate_physics(
+                ds_eval,
+                max_batches=10,       # e.g. first 10 batches only
+                return_maps=False,    # we only need scalar epsilons here
+            )
+            # Keep only scalar entries when converting to Python floats
+            physics_diag = {
+                k: float(v.numpy())
+                for k, v in phys_raw.items()
+                if getattr(v, "shape", ()) == ()    # shape () -> scalar
+            }
+            print("Physics diagnostics (approx, first 10 batches):", physics_diag)
+            
+            # physics_diag = {k: float(
+            #     v.numpy()) for k, v in model.evaluate_physics(X,   ).items()}
+        except Exception as e :
+            print(f"[Warn] Physics eval failed: {e}")
             pass
     
     # Persist a single JSON with everything (also keep your existing summary)

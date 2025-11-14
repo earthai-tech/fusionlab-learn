@@ -5,6 +5,7 @@
 from __future__ import annotations
 from numbers import Integral, Real 
 from typing import Optional, Union, Dict, List, Tuple, Any
+from collections.abc import Mapping
 
 import numpy as np 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
@@ -52,6 +53,7 @@ Add =KERAS_DEPS.Add
 Constant =KERAS_DEPS.Constant 
 GradientTape =KERAS_DEPS.GradientTape 
 Mean =KERAS_DEPS.Mean 
+Dataset = KERAS_DEPS.Dataset
 
 tf_zeros_like= KERAS_DEPS.zeros_like
 tf_zeros =KERAS_DEPS.zeros
@@ -70,6 +72,7 @@ tf_assert_equal = KERAS_DEPS.assert_equal
 tf_convert_to_tensor =KERAS_DEPS.convert_to_tensor 
 tf_split = KERAS_DEPS.split 
 tf_sqrt = KERAS_DEPS.sqrt 
+tf_stack = KERAS_DEPS.stack
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
@@ -1019,48 +1022,31 @@ class GeoPriorSubsNet(BaseAttentive):
             Q=Q,         # <-- Use scalar Q (0.0)
             **self.scaling_kwargs
         )
-
-    def evaluate_physics(
+    
+    def _evaluate_physics_on_batch(
         self,
         inputs: Dict[str, Optional[Tensor]],
         return_maps: bool = False,
     ) -> Dict[str, Tensor]:
-        r"""
-        Evaluate physics-diagnostics on a batch without updating weights.
-    
-        Returns
-        -------
-        dict
-            {
-              "epsilon_prior": tf.Tensor shape (),  # RMS of R_prior
-              "epsilon_cons":  tf.Tensor shape (),  # RMS of R_cons
-              # (optional if return_maps=True)
-              "R_prior": tf.Tensor shape (B, H, 1),
-              "R_cons":  tf.Tensor shape (B, H, 1),
-            }
-    
-        Notes
-        -----
-        * This mirrors `train_step`:
-          - Coordinates are extracted via `_get_coords`/`extract_txy_in`.
-          - `H_field` is read from `inputs` (same keys as training).
-          - Time derivative `∂s/∂t` is obtained by AD w.r.t. the `t` fed to the model.
-        * Metrics are **unscaled** RMS as defined in the paper.
+        """
+        Core implementation: physics diagnostics on a *single batch*.
+        This is basically the old `evaluate_physics` body.
         """
         # --- Validate presence of H_field/soil_thickness and extract coords ---
         H_field_in = get_tensor_from(
-            inputs, 'H_field', 'soil_thickness', 
-            auto_convert=True
+            inputs, "H_field", "soil_thickness",
+            auto_convert=True,
         )
         if H_field_in is None:
             raise ValueError(
-                "evaluate_physics() requires 'H_field'"
-                " (or 'soil_thickness') in `inputs`."
+                "evaluate_physics() requires 'H_field' "
+                "(or 'soil_thickness') in `inputs`."
             )
         H_field = tf_convert_to_tensor(H_field_in, dtype=tf_float32)
     
-        coords = _get_coords(inputs)            
-        t, x, y = extract_txy_in(coords)         
+        coords = _get_coords(inputs)
+        t, x, y = extract_txy_in(coords)
+    
         # We must compute model outputs under the tape so AD sees dependency on t.
         with GradientTape() as tape:
             tape.watch(t)
@@ -1069,9 +1055,13 @@ class GeoPriorSubsNet(BaseAttentive):
             outputs = self(inputs, training=False)
     
             # Split means and positive physics fields.
-            ( s_mean, h_mean, 
-             K_field, Ss_field, tau_field
-             )  = self.split_physics_predictions(outputs)
+            (
+                s_mean,
+                h_mean,
+                K_field,
+                Ss_field,
+                tau_field,
+            ) = self.split_physics_predictions(outputs)
     
             # Bind s_mean to t so the tape tracks s(t,x,y)
             s_bind = s_mean + 0.0 * t
@@ -1081,41 +1071,167 @@ class GeoPriorSubsNet(BaseAttentive):
         if ds_dt is None:
             raise ValueError(
                 "Automatic differentiation returned None. "
-                "Ensure (t,x,y) influence the subsidence head"
-                " via the coordinate injection path."
+                "Ensure (t,x,y) influence the subsidence head "
+                "via the coordinate injection path."
             )
     
         # --- Residuals using the model's own helpers (exactly as in training) ---
         # Prior: R_prior = log(tau) - log( (kappa * H^2 Ss) / (π^2 K) )
         R_prior = self._compute_consistency_prior(
-            K_field, Ss_field, tau_field, H_field)
+            K_field, Ss_field, tau_field, H_field
+        )
     
-        # Consolidation: R_cons = ∂s/∂t - (s_eq - s)/tau, with s_eq = m_v γ_w (h_ref - h) H
+        # Consolidation: R_cons = ∂s/∂t - (s_eq - s)/tau,
+        # with s_eq = m_v γ_w (h_ref - h) H
         R_cons = self._compute_consolidation_residual(
             ds_dt, s_mean, h_mean, H_field, tau_field
         )
     
         # --- Unscaled RMS errors (paper definitions) ---
         eps_prior = tf_sqrt(tf_reduce_mean(tf_square(R_prior)))
-        eps_cons  = tf_sqrt(tf_reduce_mean(tf_square(R_cons)))
+        eps_cons = tf_sqrt(tf_reduce_mean(tf_square(R_cons)))
     
         out = {"epsilon_prior": eps_prior, "epsilon_cons": eps_cons}
         if return_maps:
-            # Return maps for residuals
-            out.update({"R_prior": R_prior, "R_cons": R_cons})
-    
             # Also return fields needed for Fig.4 payload
-            tau_phys, Hd_eff = self._tau_phys_from_fields(K_field, Ss_field, H_field)
-            out.update({
-                "K": K_field,
-                "Ss": Ss_field,
-                "H": Hd_eff,          # the effective H actually used
-                # (The tf_exp(tf_log(tau_field)) is a numerically safe no-op to
-                # ensure it’s a tensor and avoids rare autograph tracing surprises.)
-                "tau": tf_exp(tf_log(tau_field)),  # stable pass-through
-                "tau_prior": tau_phys,
-            })
+            tau_phys, Hd_eff = self._tau_phys_from_fields(
+                K_field, Ss_field, H_field
+            )
+            out.update(
+                {
+                    "R_prior": R_prior,
+                    "R_cons": R_cons,
+                    "K": K_field,
+                    "Ss": Ss_field,
+                    "H": Hd_eff,  # effective H actually used
+                    # numerically safe no-op to get a clean tensor
+                    "tau": tf_exp(tf_log(tau_field)),
+                    "tau_prior": tau_phys,
+                }
+            )
         return out
+    
+
+    def evaluate_physics(
+        self,
+        inputs: Union[Dict[str, Optional[Tensor]], "Dataset"],
+        return_maps: bool = False,
+        max_batches: Optional[int] = None,
+        batch_size: Optional[int] = None,
+    ) -> Dict[str, Tensor]:
+        r"""
+        Evaluate physics diagnostics.
+    
+        Parameters
+        ----------
+        inputs : dict or tf.data.Dataset
+            - If a mapping (dict), it is treated as **one batch**, exactly
+              as in the original implementation.  This is the path used by
+              Keras' ``test_step``.
+            - If a ``tf.data.Dataset``, the dataset is iterated batch by
+              batch (up to ``max_batches``) and the scalar diagnostics are
+              aggregated across batches.
+    
+        return_maps : bool, default=False
+            Whether to also return residual maps and physical fields
+            (``R_prior``, ``R_cons``, ``K``, ``Ss``, ``H``, ``tau``,
+            ``tau_prior``).  When ``inputs`` is a dataset these maps are
+            returned **for the last processed batch only**, to avoid
+            storing huge tensors in memory.
+    
+        max_batches : int or None, default=None
+            When ``inputs`` is a dataset, limit the number of batches
+            that are processed.  If ``None``, the whole dataset is used.
+            This is the main knob to avoid out-of-memory situations on
+            very large splits.
+    
+        batch_size : int or None, default=None
+            Convenience option when passing a dict of NumPy arrays:
+            if not ``None``, a temporary ``tf.data.Dataset`` is built
+            and processed using mini-batches of this size.
+    
+        Returns
+        -------
+        dict
+            Always contains the scalar diagnostics
+    
+            ``{"epsilon_prior": ..., "epsilon_cons": ...}``
+    
+            and, if ``return_maps=True``, also residual/field maps.
+    
+        Notes
+        -----
+        * Keras' ``test_step`` still passes a **single-batch dict**,
+          so behaviour during training/validation is unchanged.
+        * For large evaluation splits you should pass a pre-batched
+          dataset, for example::
+    
+              ds = tf.data.Dataset.from_tensor_slices((X_fore, y_fore_fmt))\
+                                   .batch(256)
+              phys = model.evaluate_physics(ds, max_batches=10)
+    
+          which only uses the first 10 batches instead of the full
+          Zhongshan split.
+        """
+
+        # 1) Dataset path: iterate up to `max_batches` and aggregate scalars
+        if isinstance(inputs, Dataset):
+            eps_prior_vals = []
+            eps_cons_vals = []
+            last_maps = None
+    
+            for i, elem in enumerate(inputs):
+                # elem may be (xb, yb) or xb
+                xb = elem[0] if isinstance(elem, (tuple, list)) else elem
+    
+                out_b = self._evaluate_physics_on_batch(
+                    xb, return_maps=return_maps
+                )
+                eps_prior_vals.append(out_b["epsilon_prior"])
+                eps_cons_vals.append(out_b["epsilon_cons"])
+    
+                if return_maps:
+                    # keep non-scalar maps only from the last batch
+                    last_maps = {
+                        k: v
+                        for k, v in out_b.items()
+                        if k not in ("epsilon_prior", "epsilon_cons")
+                    }
+    
+                if max_batches is not None and (i + 1) >= max_batches:
+                    break
+    
+            if not eps_prior_vals:
+                raise ValueError("Empty dataset provided to evaluate_physics.")
+    
+            # eps_* values are already RMS per batch; we aggregate by mean
+            eps_prior = tf_reduce_mean(tf_stack(eps_prior_vals))
+            eps_cons = tf_reduce_mean(tf_stack(eps_cons_vals))
+    
+            out = {"epsilon_prior": eps_prior, "epsilon_cons": eps_cons}
+            if return_maps and last_maps is not None:
+                out.update(last_maps)
+            return out
+    
+        # 2) Dict-of-NumPy arrays convenience path with `batch_size`
+        if isinstance(inputs, Mapping) and batch_size is not None:
+            # If at least one value is not a Tensor, assume NumPy-like.
+            any_tensor = any(
+                isinstance(v, Tensor) for v in inputs.values() if v is not None
+            )
+            if not any_tensor:
+                ds = Dataset.from_tensor_slices(inputs).batch(batch_size)
+                return self.evaluate_physics(
+                    ds,
+                    return_maps=return_maps,
+                    max_batches=max_batches,
+                )
+    
+        # 3) Backwards-compatible single-batch behaviour
+        # Either a dict of Tensors (from test_step) or a small dict of NumPy arrays
+        return self._evaluate_physics_on_batch(
+            inputs, return_maps=return_maps
+        )
 
     def export_physics_payload(
         self,
