@@ -1,14 +1,15 @@
 {
-  "city": "zhongshan",
+  "city": "nansha",
   "model": "GeoPriorSubsNet",
   "config": {
-    "CITY_NAME": "zhongshan",
+    "CITY_NAME": "nansha",
     "MODEL_NAME": "GeoPriorSubsNet",
     "DATA_DIR": "..",
     "BIG_FN_TEMPLATE": "{city}_final_main_std.harmonized.csv",
     "SMALL_FN_TEMPLATE": "{city}_2000.csv",
-    "BIG_FN": "zhongshan_final_main_std.harmonized.csv",
-    "SMALL_FN": "zhongshan_2000.csv",
+    "BIG_FN": "nansha_final_main_std.harmonized.csv",
+    "SMALL_FN": "nansha_2000.csv",
+    "ALL_CITIES_PARQUET": "natcom_all_cities.parquet",
     "TRAIN_END_YEAR": 2022,
     "FORECAST_START_YEAR": 2023,
     "FORECAST_HORIZON_YEARS": 3,
@@ -75,8 +76,8 @@
     "EMBED_DIM": 32,
     "HIDDEN_UNITS": 64,
     "LSTM_UNITS": 64,
-    "ATTENTION_UNITS": 64,
-    "NUMBER_HEADS": 2,
+    "ATTENTION_UNITS": 32,
+    "NUMBER_HEADS": 4,
     "DROPOUT_RATE": 0.1,
     "MEMORY_SIZE": 50,
     "SCALES": [
@@ -102,7 +103,7 @@
       "0.5": 1.0,
       "0.9": 1.5
     },
-    "PDE_MODE_CONFIG": "off",
+    "PDE_MODE_CONFIG": "both",
     "SCALE_PDE_RESIDUALS": true,
     "LAMBDA_CONS": 0.1,
     "LAMBDA_GW": 0.01,
@@ -115,7 +116,7 @@
     "GEOPRIOR_INIT_KAPPA": 1.0,
     "GEOPRIOR_GAMMA_W": 9810.0,
     "GEOPRIOR_H_REF": 0.0,
-    "GEOPRIOR_KAPPA_MODE": "bar",
+    "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
     "EPOCHS": 50,
@@ -252,6 +253,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "a7ddc9c6f0406d0a710293e53f3a8a209930d48d4f7be1d731e13142e15953da"
+    "config_py_hash": "0b330a2635a2bd09d570cc5469f1ddf6e8c0a7e0ade12d27f6bcae767897fa73"
   }
 }

@@ -39,7 +39,7 @@
 # MODEL_NAME is the registered model identifier.  For now the
 # main model is:
 #   - "GeoPriorSubsNet"
-CITY_NAME = "zhongshan"
+CITY_NAME = "nansha"
 MODEL_NAME = "GeoPriorSubsNet"
 
 
@@ -246,8 +246,8 @@ ATTENTION_LEVELS = ["cross", "hierarchical", "memory"]
 EMBED_DIM = 32
 HIDDEN_UNITS = 64
 LSTM_UNITS = 64
-ATTENTION_UNITS = 64
-NUMBER_HEADS = 2
+ATTENTION_UNITS =32 # 64
+NUMBER_HEADS = 4 #2
 DROPOUT_RATE = 0.10
 
 # Additional architectural knobs used inside BaseAttentive /
@@ -279,7 +279,7 @@ GWL_WEIGHTS = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only,
 #   - "gw_flow"        : groundwater flow only,
 #   - "none" or "off"  : physics switched off.
-PDE_MODE_CONFIG = "off"
+PDE_MODE_CONFIG = "both"
 
 SCALE_PDE_RESIDUALS = True
 
@@ -304,7 +304,7 @@ GEOPRIOR_INIT_MV = 1e-7
 GEOPRIOR_INIT_KAPPA = 1.0
 GEOPRIOR_GAMMA_W = 9810.0
 GEOPRIOR_H_REF = 0.0
-GEOPRIOR_KAPPA_MODE = "bar"   # {"bar", "kb"}
+GEOPRIOR_KAPPA_MODE = "kb"   # {"bar", "kb"}
 GEOPRIOR_USE_EFFECTIVE_H = True
 GEOPRIOR_HD_FACTOR = 0.6
 
@@ -316,7 +316,6 @@ GEOPRIOR_HD_FACTOR = 0.6
 EPOCHS = 50
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
-
 
 # -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE

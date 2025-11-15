@@ -34,8 +34,13 @@ import datetime as dt
 
 from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
 try:
-    from fusionlab.utils.generic_utils import ensure_directory_exists
-    from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+    from fusionlab.api.util import get_table_size
+    from fusionlab.utils.generic_utils import (
+        ensure_directory_exists,
+        default_results_dir,
+        getenv_stripped,
+        print_config_table,   
+    )
 
     from fusionlab.registry.utils import _find_stage1_manifest
     # Import the tuner
@@ -346,6 +351,51 @@ else:
         },
     }
 
+config_sections = [
+    ("Run", {
+        "CITY_NAME": CITY_NAME,
+        "MODEL_NAME": MODEL_NAME,
+        "RESULTS_DIR": RESULTS_DIR,
+        "MANIFEST_PATH": MANIFEST_PATH,
+    }),
+    ("Stage-1 sequences (snapshot)", {
+        "TIME_STEPS": TIME_STEPS,
+        "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
+        "MODE": MODE,
+    }),
+    ("Training loop (config.json)", {
+        "EPOCHS": EPOCHS,
+        "BATCH_SIZE": BATCH_SIZE,
+    }),
+    ("Physics / architecture (non-HP)", {
+        "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
+        "ATTENTION_LEVELS": ATTENTION_LEVELS,
+        "SCALE_PDE_RESIDUALS": SCALE_PDE_RESIDUALS,
+        "USE_EFFECTIVE_H": USE_EFFECTIVE_H,
+        "QUANTILES": QUANTILES,
+    }),
+    ("Fixed dimensions (from NPZ)", {
+        "STATIC_DIM": STATIC_DIM,
+        "DYNAMIC_DIM": DYNAMIC_DIM,
+        "FUTURE_DIM": FUTURE_DIM,
+        "OUT_S_DIM": OUT_S_DIM,
+        "OUT_G_DIM": OUT_G_DIM,
+    }),
+    ("Tuner search space", {
+        "n_hyperparameters": len(search_space),
+        "keys": sorted(list(search_space.keys())),
+    }),
+    ("Outputs", {
+        "BASE_STAGE2_DIR": BASE_STAGE2_DIR,
+        "RUN_OUTPUT_PATH": RUN_OUTPUT_PATH,
+    }),
+]
+
+print_config_table(
+    config_sections, table_width = get_table_size (), 
+    title=f"{CITY_NAME.upper()} {MODEL_NAME} TUNER CONFIG",
+)
+
 # 2.3 Package inputs/targets for tuner
 # Note: X_* were exported to always include the keys below (with 0-width arrays if absent).
 train_inputs_np = {
@@ -429,14 +479,41 @@ except Exception as e:
 # =============================================================================
 # 5) Persist results
 # =============================================================================
-best_model_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras")
-best_hps_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json")
+# best_model_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras")
+# best_hps_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json")
+
+# if best_model is not None:
+#     best_model.save(best_model_path)
+#     print(f"\nSaved best tuned model to: {best_model_path}")
+# else:
+#     print("\n[Warn] No best model returned by tuner.")
+# =============================================================================
+# 5) Persist results
+# =============================================================================
+best_model_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras"
+)
+best_weights_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.weights.h5"
+)
+best_hps_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json"
+)
 
 if best_model is not None:
+    # 1) Full SavedModel / .keras archive
     best_model.save(best_model_path)
     print(f"\nSaved best tuned model to: {best_model_path}")
+
+    # 2) Weights-only checkpoint (robust fallback for inference)
+    try:
+        best_model.save_weights(best_weights_path)
+        print(f"Saved best model weights to: {best_weights_path}")
+    except Exception as e:
+        print(f"[Warn] Could not save best model weights: {e}")
 else:
     print("\n[Warn] No best model returned by tuner.")
+    best_weights_path = None
 
 best_hps_dict = {}
 if best_hps is not None:
@@ -476,6 +553,7 @@ summary_payload = {
         "output_gwl_dim": OUT_G_DIM,
     },
     "best_model_path": best_model_path if best_model is not None else None,
+    "best_weights_path": best_weights_path if best_model is not None else None,
     "best_hps": best_hps_dict,
 }
 with open(os.path.join(RUN_OUTPUT_PATH, "tuning_summary.json"), "w", encoding="utf-8") as f:

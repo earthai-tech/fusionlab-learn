@@ -14,6 +14,7 @@ import warnings
 import inspect
 import textwrap
 import logging
+import shutil
 from numbers import Real 
 from pathlib import Path
 from itertools import chain
@@ -41,7 +42,7 @@ __all__ =[
     'find_id_column', 'check_group_column_validity', 
     'save_all_figures', 'rename_dict_keys', 
     'normalize_time_column', 'select_mode', 
-    'normalize_model_inputs'
+    'normalize_model_inputs', 'print_config_table'
  ]
 
 class ExistenceChecker:
@@ -3689,3 +3690,185 @@ def default_results_dir(
     if create:
         fallback.mkdir(parents=True, exist_ok=True)
     return str(fallback.resolve())
+
+def print_config_table(
+    sections: Union[Dict[str, Any], Sequence[Tuple[str, Dict[str, Any]]]],
+    title: Optional[str] = None,
+    table_width: Optional[int] = None,
+    sort_keys: bool = True,
+    key_col_fraction: float = 0.35,
+    max_value_length: int = 200,
+    print_fn=None,
+) -> str:
+    """
+    Pretty-print configuration or hyperparameters as a key/value table.
+
+    This helper is intended for CLI scripts (Stage-1, training, tuning)
+    so that the user can quickly inspect which parameters are actually
+    in effect.
+
+    Parameters
+    ----------
+    sections : dict or sequence of (str, dict)
+        If a single dict is passed, all key/value pairs are printed in
+        one block.
+
+        If a sequence is passed, it must contain ``(name, params)``
+        tuples, where ``name`` is a section label (e.g. ``"Physics"``)
+        and ``params`` is a dict mapping parameter names to values.
+
+    title : str, optional
+        Optional title displayed above the table (centered).
+
+    table_width : int, optional
+        Total width of the printed table.  If ``None``, the function
+        tries to use :func:`fusionlab.api.util.get_table_size`.  If that
+        fails, it falls back to the terminal width (via
+        :mod:`shutil.get_terminal_size`) or 80 characters.
+
+    sort_keys : bool, default=True
+        Whether to sort parameter names alphabetically within each
+        section.
+
+    key_col_fraction : float, default=0.35
+        Fraction of the table width allocated to the parameter-name
+        column.  The remainder is used for the value column.
+
+    max_value_length : int, default=200
+        Maximum number of characters kept from the stringified value.
+        Longer values are truncated with an ellipsis (``"..."``) before
+        being wrapped onto multiple lines.
+
+    print_fn : callable, optional
+        Function used to emit lines (defaults to :func:`print`).  This
+        allows capturing the table in logs if needed.
+
+    Returns
+    -------
+    str
+        The full rendered table as a single string.  It is always
+        printed via ``print_fn`` as a side effect.
+
+    Notes
+    -----
+    * Nested containers (lists, tuples, dicts) are rendered in a compact
+      one-line form and then wrapped to fill the value column.
+
+    * This function is intentionally lightweight and does not depend on
+      external tabulation libraries, so it can be safely used in
+      lightweight Stage-1 / Stage-2 scripts.
+    """
+
+    # 1) Resolve table width
+    if table_width is None:
+        # Fallback to terminal width or 80 columns
+        try:
+            table_width = shutil.get_terminal_size((80, 20)).columns
+        except Exception:  # pragma: no cover
+            table_width = 80
+
+    # Keep width within reasonable bounds
+    table_width = int(max(40, min(table_width, 140)))
+
+    # 2) Normalize `sections` into a sequence of (name, dict)
+    if isinstance(sections, dict):
+        sections_list: Sequence[Tuple[str, Dict[str, Any]]] = [
+            ("", sections)
+        ]
+    else:
+        norm_sections: List[Tuple[str, Dict[str, Any]]] = []
+        for idx, sec in enumerate(sections):
+            if isinstance(sec, dict):
+                norm_sections.append((f"Section {idx+1}", sec))
+            elif (
+                isinstance(sec, (tuple, list)) and len(sec) == 2
+                and isinstance(sec[1], dict)
+            ):
+                name, params = sec
+                norm_sections.append((str(name), params))
+            else:
+                raise TypeError(
+                    "sections must be a dict or a sequence of "
+                    "(name, dict) tuples."
+                )
+        sections_list = norm_sections
+
+    # 3) Determine column widths
+    all_keys: List[str] = []
+    for _, params in sections_list:
+        all_keys.extend(str(k) for k in params.keys())
+
+    if all_keys:
+        key_width = max(len(k) for k in all_keys) + 2
+        key_width = int(min(key_width, table_width * key_col_fraction))
+    else:
+        key_width = int(table_width * key_col_fraction)
+
+    key_width = max(8, key_width)
+    value_width = max(10, table_width - key_width - 3)  # "key : value"
+
+
+    # 4) Helpers for value formatting and wrapping
+    def _format_value(v: Any) -> str:
+        """Compact, human-readable representation for table."""
+        if isinstance(v, float):
+            s = f"{v:.6g}"
+        elif isinstance(v, (list, tuple, set)):
+            inner = ", ".join(repr(x) for x in v)
+            open_br, close_br = ("[", "]") if isinstance(v, list) else \
+                                ("(", ")") if isinstance(v, tuple) else \
+                                ("{", "}")
+            s = f"{open_br}{inner}{close_br}"
+        elif isinstance(v, dict):
+            inner = ", ".join(f"{k}={val!r}" for k, val in v.items())
+            s = "{" + inner + "}"
+        else:
+            s = repr(v)
+        if len(s) > max_value_length:
+            s = s[: max_value_length - 3] + "..."
+        return s
+
+    lines: List[str] = []
+    border = "-" * table_width
+
+    # 5) Build lines
+    lines.append(border)
+    if title:
+        t = str(title)[:table_width]
+        lines.append(t.center(table_width))
+        lines.append(border)
+
+    for sec_name, params in sections_list:
+        if not params:
+            continue
+
+        if sec_name:
+            lines.append(f"[{sec_name}]")
+
+        items = params.items()
+        if sort_keys:
+            items = sorted(items, key=lambda kv: str(kv[0]))
+
+        for key, value in items:
+            key_str = str(key)
+            val_str = _format_value(value)
+            wrapped = textwrap.wrap(val_str, width=value_width) or [""]
+
+            # First line with key
+            first = wrapped[0]
+            lines.append(
+                f"{key_str:<{key_width}} : {first}"
+            )
+            # Continuation lines for long values
+            for cont in wrapped[1:]:
+                lines.append(" " * (key_width + 3) + cont)
+
+        lines.append(border)
+
+    table_text = "\n".join(lines)
+
+    if print_fn is None:
+        print_fn = print  # pragma: no cover
+
+    print_fn(table_text)
+    return table_text

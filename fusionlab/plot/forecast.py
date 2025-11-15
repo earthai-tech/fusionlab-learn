@@ -944,9 +944,11 @@ def plot_forecast_by_step(
         # 4. Save figure to disk if requested.
         if savefig:
             save_figure (
-                fig, savefile = savefig, 
+                fig, 
+                savefile = savefig, 
                 save_fmts= save_fmts, 
-                dpi=300, bbox_inches="tight", 
+                dpi=300, 
+                bbox_inches="tight", 
                 _logger=_logger, 
               )
             plt.close(fig) 

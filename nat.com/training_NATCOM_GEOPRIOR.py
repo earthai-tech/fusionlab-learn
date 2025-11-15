@@ -37,8 +37,10 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 
 # ---------------- fusionlab imports ----------------
 try:
+    from fusionlab.api.util import get_table_size
     from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
     from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+    from fusionlab.utils.generic_utils import print_config_table
     from fusionlab.registry.utils import _find_stage1_manifest
     from fusionlab.utils.nat_utils import load_nat_config  
 
@@ -215,6 +217,65 @@ BASE_OUTPUT_DIR = M["paths"]["run_dir"]
 STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, f"train_{STAMP}")
 ensure_directory_exists(RUN_OUTPUT_PATH)
+
+config_sections = [
+    ("Run", {
+        "CITY_NAME": CITY_NAME,
+        "MODEL_NAME": MODEL_NAME,
+        "RESULTS_DIR": RESULTS_DIR,
+        "MANIFEST_PATH": MANIFEST_PATH,
+        "RUN_OUTPUT_PATH": RUN_OUTPUT_PATH,
+    }),
+    ("Architecture", {
+        "TIME_STEPS": TIME_STEPS,
+        "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
+        "MODE": MODE,
+        "ATTENTION_LEVELS": ATTENTION_LEVELS,
+        "EMBED_DIM": EMBED_DIM,
+        "HIDDEN_UNITS": HIDDEN_UNITS,
+        "LSTM_UNITS": LSTM_UNITS,
+        "ATTENTION_UNITS": ATTENTION_UNITS,
+        "NUMBER_HEADS": NUMBER_HEADS,
+        "DROPOUT_RATE": DROPOUT_RATE,
+        "MEMORY_SIZE": MEMORY_SIZE,
+        "SCALES": SCALES,
+        "USE_RESIDUALS": USE_RESIDUALS,
+        "USE_BATCH_NORM": USE_BATCH_NORM,
+        "USE_VSN": USE_VSN,
+        "VSN_UNITS": VSN_UNITS,
+    }),
+    ("Physics", {
+        "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
+        "SCALE_PDE_RESIDUALS": SCALE_PDE_RESIDUALS,
+        "LAMBDA_CONS": LAMBDA_CONS,
+        "LAMBDA_GW": LAMBDA_GW,
+        "LAMBDA_PRIOR": LAMBDA_PRIOR,
+        "LAMBDA_SMOOTH": LAMBDA_SMOOTH,
+        "LAMBDA_MV": LAMBDA_MV,
+        "MV_LR_MULT": MV_LR_MULT,
+        "KAPPA_LR_MULT": KAPPA_LR_MULT,
+        "GEOPRIOR_INIT_MV": GEOPRIOR_INIT_MV,
+        "GEOPRIOR_INIT_KAPPA": GEOPRIOR_INIT_KAPPA,
+        "GEOPRIOR_GAMMA_W": GEOPRIOR_GAMMA_W,
+        "GEOPRIOR_H_REF": GEOPRIOR_H_REF,
+        "GEOPRIOR_KAPPA_MODE": GEOPRIOR_KAPPA_MODE,
+        "GEOPRIOR_USE_EFFECTIVE_H": GEOPRIOR_USE_EFFECTIVE_H,
+        "GEOPRIOR_HD_FACTOR": GEOPRIOR_HD_FACTOR,
+    }),
+    ("Training", {
+        "EPOCHS": EPOCHS,
+        "BATCH_SIZE": BATCH_SIZE,
+        "LEARNING_RATE": LEARNING_RATE,
+        "QUANTILES": QUANTILES,
+        "SUBS_WEIGHTS": SUBS_WEIGHTS,
+        "GWL_WEIGHTS": GWL_WEIGHTS,
+    }),
+]
+
+print_config_table(
+    config_sections, table_width =get_table_size(), 
+    title=f"{CITY_NAME.upper()} {MODEL_NAME} TRAINING CONFIG",
+)
 
 print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
 
@@ -790,6 +851,8 @@ if forecast_df is not None and not forecast_df.empty:
             figsize=(7, 5.5),
             cbar="uniform",
             verbose=1,
+            savefig = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_eval_plot"),
+            show=False, 
         )
     except Exception as e:
         print(f"[Warn] plot_forecasts failed: {e}")

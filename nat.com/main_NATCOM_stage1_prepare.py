@@ -61,6 +61,8 @@ try:
     from fusionlab.utils.generic_utils import (
         normalize_time_column,
         ensure_directory_exists,
+        print_config_table
+
     )
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
     
@@ -163,6 +165,58 @@ except Exception:
 print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} {MODEL_NAME} STAGE-1 (Steps 1–6)\n{'-'*_TW}")
 print(f"TIME_STEPS={TIME_STEPS}, HORIZON={FORECAST_HORIZON_YEARS}, MODE={MODE}")
 
+
+config_sections = [
+    ("Run", {
+        "CITY_NAME": CITY_NAME,
+        "MODEL_NAME": MODEL_NAME,
+        "DATA_DIR": DATA_DIR,
+        "BIG_FN": BIG_FN,
+        "SMALL_FN": SMALL_FN,
+        "ALL_CITIES_PARQUET": ALL_CITIES_PARQUET,
+    }),
+    ("Data search paths", {
+        "SEARCH_PATHS": SEARCH_PATHS,
+        "FALLBACK_PATHS": FALLBACK_PATHS,
+        "ALL_CITIES_SEARCH_PATHS": ALL_CITIES_SEARCH_PATHS,
+    }),
+    ("Time windows", {
+        "TRAIN_END_YEAR": TRAIN_END_YEAR,
+        "FORECAST_START_YEAR": FORECAST_START_YEAR,
+        "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
+        "TIME_STEPS": TIME_STEPS,
+        "MODE": MODE,
+    }),
+    ("Columns", {
+        "TIME_COL": TIME_COL,
+        "LON_COL": LON_COL,
+        "LAT_COL": LAT_COL,
+        "SUBSIDENCE_COL": SUBSIDENCE_COL,
+        "GWL_COL": GWL_COL,
+        "H_FIELD_COL_NAME": H_FIELD_COL_NAME,
+    }),
+    ("Feature registry", {
+        "OPTIONAL_NUMERIC_FEATURES": OPTIONAL_NUMERIC_FEATURES,
+        "OPTIONAL_CATEGORICAL_FEATURES": OPTIONAL_CATEGORICAL_FEATURES,
+        "ALREADY_NORMALIZED_FEATURES": ALREADY_NORMALIZED_FEATURES,
+        "FUTURE_DRIVER_FEATURES": FUTURE_DRIVER_FEATURES,
+    }),
+    ("Censoring", {
+        "CENSORING_SPECS": CENSORING_SPECS,
+        "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC,
+        "USE_EFFECTIVE_H_FIELD": USE_EFFECTIVE_H_FIELD,
+    }),
+    ("Outputs", {
+        "BASE_OUTPUT_DIR": BASE_OUTPUT_DIR,
+        "RUN_OUTPUT_PATH": RUN_OUTPUT_PATH,
+        "ARTIFACTS_DIR": ARTIFACTS_DIR,
+    }),
+]
+
+print_config_table(
+    config_sections,table_width=_TW, 
+    title=f"{CITY_NAME.upper()} {MODEL_NAME} STAGE-1 CONFIG",
+)
 
 # ==================================================================
 # Small helpers
