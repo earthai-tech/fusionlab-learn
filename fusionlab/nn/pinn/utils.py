@@ -3900,9 +3900,9 @@ def process_pde_modes(
         raise TypeError("`pde_mode` must be a string, list of strings, or None.")
 
     # Handle special cases for "none" and "both"
-    if "none" in pde_modes_active:  # If 'none' is present, override others
+    if "none" in pde_modes_active or "off" in pde_modes_active:  # If 'none' is present, override others
         pde_modes_active = ['none']
-    if "both" in pde_modes_active:  # If 'both' is present, use both modes
+    if "both" in pde_modes_active or "on" in pde_modes_active:  # If 'both' is present, use both modes
         pde_modes_active = ['consolidation', 'gw_flow']
 
     # Enforce consolidation mode if specified

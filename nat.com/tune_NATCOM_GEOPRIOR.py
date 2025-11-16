@@ -32,18 +32,22 @@ import joblib
 import numpy as np
 import datetime as dt
 
-# import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
-
-# --- fusionlab imports ---
 try:
-    from fusionlab.utils.generic_utils import ensure_directory_exists
-    from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+    from fusionlab.api.util import get_table_size
+    from fusionlab.utils.generic_utils import (
+        ensure_directory_exists,
+        default_results_dir,
+        getenv_stripped,
+        print_config_table,   
+    )
 
     from fusionlab.registry.utils import _find_stage1_manifest
     # Import the tuner
     from fusionlab.nn.forecast_tuner import GeoPriorTuner
     from fusionlab.nn.callbacks import NaNGuard 
+    
+    from fusionlab.utils.nat_utils import load_nat_config
     
     print("Successfully imported fusionlab modules for tuning.")
 except Exception as e:
@@ -71,6 +75,10 @@ MANIFEST_PATH = _find_stage1_manifest(
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
 print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
+
+cfg_stage1 = M["config"]        # what Stage-1 used to build sequences
+cfg_hp = load_nat_config()      # global config from config.json (4.*)
+
 
 # Resolve NPZ paths from manifest
 train_inputs_npz = M["artifacts"]["numpy"]["train_inputs_npz"]
@@ -113,14 +121,20 @@ def _ensure_input_shapes_np(X, mode: str, horizon: int):
 X_train = _sanitize_inputs(X_train)
 X_val   = _sanitize_inputs(X_val)
 
-cfg = M["config"]
-CITY_NAME = M.get("city", "unknown_city")
-MODEL_NAME = M.get("model", "GeoPriorSubsNet")
-TIME_STEPS = cfg["TIME_STEPS"]
-FORECAST_HORIZON_YEARS = cfg["FORECAST_HORIZON_YEARS"]
-MODE = cfg["MODE"]
-CENSOR = cfg.get("censoring", {})
+CITY_NAME  = M.get("city", cfg_hp.get("CITY_NAME", "unknown_city"))
+MODEL_NAME = M.get("model", cfg_hp.get("MODEL_NAME", "GeoPriorSubsNet"))
+
+# Time / horizon / mode MUST match Stage-1 sequences
+TIME_STEPS             = cfg_stage1["TIME_STEPS"]
+FORECAST_HORIZON_YEARS = cfg_stage1["FORECAST_HORIZON_YEARS"]
+MODE                   = cfg_stage1["MODE"]
+
+# Censoring: merge Stage-1 (specs + report) and global config
+censor_stage1 = cfg_stage1.get("censoring", {}) or {}
+censor_global = cfg_hp.get("censoring", {}) or {}
+CENSOR = {**censor_stage1, **censor_global}
 USE_EFFECTIVE_H = CENSOR.get("use_effective_h_field", True)
+
 
 # Ensure placeholders exist even if Stage-1 NPZs are from an older run
 X_train = _ensure_input_shapes_np(X_train, MODE, FORECAST_HORIZON_YEARS)
@@ -217,18 +231,19 @@ print(f"  MODE              = {MODE}")
 # =============================================================================
 # 2) Tuning configuration (non-HPs and HP space)
 # =============================================================================
-# Training loop setup
-EPOCHS = 50
-BATCH_SIZE = 32
 
-# Probabilistic outputs default
-QUANTILES = [0.1, 0.5, 0.9]
+# Training loop setup (from config.json)
+EPOCHS     = cfg_hp.get("EPOCHS", 50)
+BATCH_SIZE = cfg_hp.get("BATCH_SIZE", 32)
 
-# PDE selection
-PDE_MODE_CONFIG = "both"  # can be overridden by search space
+# Probabilistic outputs
+QUANTILES = cfg_hp.get("QUANTILES", [0.1, 0.5, 0.9])
 
-# Attention levels used in architecture
-ATTENTION_LEVELS = ["cross", "hierarchical", "memory"]
+# PDE selection & attention levels
+PDE_MODE_CONFIG   = cfg_hp.get("PDE_MODE_CONFIG", "both")
+ATTENTION_LEVELS  = cfg_hp.get("ATTENTION_LEVELS",
+                               ["cross", "hierarchical", "memory"])
+SCALE_PDE_RESIDUALS = cfg_hp.get("SCALE_PDE_RESIDUALS", True)
 
 # 2.1 Non-HP fixed params (derived from shapes/config)
 fixed_params = {
@@ -243,46 +258,143 @@ fixed_params = {
     "quantiles": QUANTILES,
     "loss_weights": {"subs_pred": 1.0, "gwl_pred": 0.5},
     "pde_mode": PDE_MODE_CONFIG,
-    "scale_pde_residuals": True,
-    "use_effective_h": USE_EFFECTIVE_H,  
+    "scale_pde_residuals": SCALE_PDE_RESIDUALS,
+    "use_effective_h": USE_EFFECTIVE_H,
     "architecture_config": {
         "encoder_type": "hybrid",
         "decoder_attention_stack": ATTENTION_LEVELS,
         "feature_processing": "vsn",
     },
 }
+# # 2.2 Hyperparameter search space
 
-# 2.2 Hyperparameter search space
-search_space = {
-    # --- Architecture (model.__init__) ---
-    "embed_dim": [32, 64],
-    "hidden_units": [64, 96, 128],
-    "lstm_units": [64, 96],
-    "attention_units": [32, 64],
-    "num_heads": [2, 4],
-    "dropout_rate": {"type": "float", "min_value": 0.10, "max_value": 0.30},
-    "use_vsn": {"type": "bool"},
-    "vsn_units": [16, 32, 48],
-    "use_batch_norm": {"type": "bool"},
-    # Physics switches
-    "pde_mode": ["both", "consolidation", "gw_flow"],
-    "scale_pde_residuals": {"type": "bool"},
-    "kappa_mode": ["bar", "kb"],
-    "hd_factor": {"type": "float", "min_value": 0.50, "max_value": 0.80},
-    # Learnable scalar initials (wrapped inside model __init__)
-    "mv": {"type": "float", "min_value": 3e-7, "max_value": 1e-6, "sampling": "log"},
-    "kappa": {"type": "float", "min_value": 0.7, "max_value": 1.5},
-    # --- Compile-only (model.compile) ---
-    "learning_rate": {"type": "float", "min_value": 5e-5, "max_value": 3e-4, "sampling": "log"},
-    "lambda_gw": {"type": "float", "min_value": 0.1, "max_value": 1.0},
-    "lambda_cons": {"type": "float", "min_value": 0.1, "max_value": 1.0},
-    "lambda_prior": {"type": "float", "min_value": 0.1, "max_value": 0.8},
-    "lambda_smooth": {"type": "float", "min_value": 0.0, "max_value": 1.0},
-    "lambda_mv": {"type": "float", "min_value": 0.0, "max_value": 0.5},
-    "mv_lr_mult": {"type": "float", "min_value": 0.5, "max_value": 2.0},
-    "kappa_lr_mult": {"type": "float", "min_value": 1.0, "max_value": 10.0},
-}
+search_space_cfg = cfg_hp.get("TUNER_SEARCH_SPACE", None)
 
+if isinstance(search_space_cfg, dict) and search_space_cfg:
+    search_space = search_space_cfg
+else:
+    # Fallback: old hard-coded space (kept here as a backup)
+    search_space = {
+        # --- Architecture (model.__init__) ---
+        "embed_dim": [32, 64],
+        "hidden_units": [64, 96, 128],
+        "lstm_units": [64, 96],
+        "attention_units": [32, 64],
+        "num_heads": [2, 4],
+        "dropout_rate": {
+            "type": "float", "min_value": 0.10, "max_value": 0.30
+        },
+        "use_vsn": {"type": "bool"},
+        "vsn_units": [16, 32, 48],
+        "use_batch_norm": {"type": "bool"},
+        # Physics switches
+        "pde_mode": ["both"],
+        "scale_pde_residuals": {"type": "bool"},
+        "kappa_mode": ["bar", "kb"],
+        "hd_factor": {
+            "type": "float", 
+            "min_value": 0.50, 
+            "max_value": 0.80
+        },
+        "mv": {
+            "type": "float", 
+            "min_value": 3e-7,
+            "max_value": 1e-6,
+            "sampling": "log",
+        },
+        "kappa": {
+            "type": "float",
+                "min_value": 0.7,
+                "max_value": 1.5
+        },
+        # --- Compile-only (model.compile) ---
+        "learning_rate": {
+            "type": "float",
+            "min_value": 5e-5, 
+            "max_value": 3e-4,
+            "sampling": "log",
+        },
+        "lambda_gw": {
+            "type": "float", 
+            "min_value": 0.1,
+            "max_value": 1.0
+        },
+        "lambda_cons": {
+            "type": "float",
+            "min_value": 0.01, 
+            "max_value": 1.0
+        },
+        "lambda_prior": {
+            "type": "float", 
+            "min_value": 0.1, 
+            "max_value": 0.8
+        },
+        "lambda_smooth": {
+            "type": "float",
+            "min_value": 0.01, 
+            "max_value": 1.0
+        },
+        "lambda_mv": {
+            "type": "float", 
+            "min_value": 0.01,
+            "max_value": 0.5
+        },
+        "mv_lr_mult": {
+            "type": "float", 
+            "min_value": 0.5, 
+            "max_value": 2.0
+        },
+        "kappa_lr_mult": {
+            "type": "float", 
+            "min_value": 1.0,
+            "max_value": 10.0
+        },
+    }
+
+config_sections = [
+    ("Run", {
+        "CITY_NAME": CITY_NAME,
+        "MODEL_NAME": MODEL_NAME,
+        "RESULTS_DIR": RESULTS_DIR,
+        "MANIFEST_PATH": MANIFEST_PATH,
+    }),
+    ("Stage-1 sequences (snapshot)", {
+        "TIME_STEPS": TIME_STEPS,
+        "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
+        "MODE": MODE,
+    }),
+    ("Training loop (config.json)", {
+        "EPOCHS": EPOCHS,
+        "BATCH_SIZE": BATCH_SIZE,
+    }),
+    ("Physics / architecture (non-HP)", {
+        "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
+        "ATTENTION_LEVELS": ATTENTION_LEVELS,
+        "SCALE_PDE_RESIDUALS": SCALE_PDE_RESIDUALS,
+        "USE_EFFECTIVE_H": USE_EFFECTIVE_H,
+        "QUANTILES": QUANTILES,
+    }),
+    ("Fixed dimensions (from NPZ)", {
+        "STATIC_DIM": STATIC_DIM,
+        "DYNAMIC_DIM": DYNAMIC_DIM,
+        "FUTURE_DIM": FUTURE_DIM,
+        "OUT_S_DIM": OUT_S_DIM,
+        "OUT_G_DIM": OUT_G_DIM,
+    }),
+    ("Tuner search space", {
+        "n_hyperparameters": len(search_space),
+        "keys": sorted(list(search_space.keys())),
+    }),
+    ("Outputs", {
+        "BASE_STAGE2_DIR": BASE_STAGE2_DIR,
+        "RUN_OUTPUT_PATH": RUN_OUTPUT_PATH,
+    }),
+]
+
+print_config_table(
+    config_sections, table_width = get_table_size (), 
+    title=f"{CITY_NAME.upper()} {MODEL_NAME} TUNER CONFIG",
+)
 
 # 2.3 Package inputs/targets for tuner
 # Note: X_* were exported to always include the keys below (with 0-width arrays if absent).
@@ -367,14 +479,41 @@ except Exception as e:
 # =============================================================================
 # 5) Persist results
 # =============================================================================
-best_model_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras")
-best_hps_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json")
+# best_model_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras")
+# best_hps_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json")
+
+# if best_model is not None:
+#     best_model.save(best_model_path)
+#     print(f"\nSaved best tuned model to: {best_model_path}")
+# else:
+#     print("\n[Warn] No best model returned by tuner.")
+# =============================================================================
+# 5) Persist results
+# =============================================================================
+best_model_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras"
+)
+best_weights_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.weights.h5"
+)
+best_hps_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json"
+)
 
 if best_model is not None:
+    # 1) Full SavedModel / .keras archive
     best_model.save(best_model_path)
     print(f"\nSaved best tuned model to: {best_model_path}")
+
+    # 2) Weights-only checkpoint (robust fallback for inference)
+    try:
+        best_model.save_weights(best_weights_path)
+        print(f"Saved best model weights to: {best_weights_path}")
+    except Exception as e:
+        print(f"[Warn] Could not save best model weights: {e}")
 else:
     print("\n[Warn] No best model returned by tuner.")
+    best_weights_path = None
 
 best_hps_dict = {}
 if best_hps is not None:
@@ -414,6 +553,7 @@ summary_payload = {
         "output_gwl_dim": OUT_G_DIM,
     },
     "best_model_path": best_model_path if best_model is not None else None,
+    "best_weights_path": best_weights_path if best_model is not None else None,
     "best_hps": best_hps_dict,
 }
 with open(os.path.join(RUN_OUTPUT_PATH, "tuning_summary.json"), "w", encoding="utf-8") as f:

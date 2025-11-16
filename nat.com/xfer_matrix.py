@@ -21,7 +21,7 @@ from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn.pinn.models import GeoPriorSubsNet
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
-from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn
+from fusionlab.nn.keras_metrics import _to_py, coverage80_fn, sharpness80_fn
 from fusionlab.nn.calibration import (
     IntervalCalibrator, fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
@@ -145,7 +145,7 @@ def run_one_direction(
 
     cfg_t = M_tgt["config"]
     MODE  = cfg_t["MODE"]
-    T     = cfg_t["TIME_STEPS"]
+    # T     = cfg_t["TIME_STEPS"] # Got if from _ensure_shapes dynamics, :NOqa
     H     = cfg_t["FORECAST_HORIZON_YEARS"]
     Q     = quantiles_override or cfg_t.get("QUANTILES", [0.1, 0.5, 0.9])
 
@@ -176,6 +176,8 @@ def run_one_direction(
 
     # Load latest model under *source* run dir
     model_path = _latest_model_under(M_src["paths"]["run_dir"])
+    model_dir = os.path.dirname(model_path)
+
     if not model_path:
         raise SystemExit(f"No .keras found under {M_src['paths']['run_dir']}")
     custom_objects = {
@@ -210,7 +212,7 @@ def run_one_direction(
         extract_physical_parameters(
             model, to_csv=True,
             filename=f"{M_tgt.get('city')}_xfer_physical_parameters.csv",
-            save_dir=model_path, 
+            save_dir=model_dir,
             model_name="geoprior",
         )
     except: 
@@ -234,22 +236,40 @@ def run_one_direction(
         g_p = data_final[..., OUT_S_DIM:]
         predictions = {"subs_pred": s_p, "gwl_pred": g_p}
         
-    # XXX TODO: RECHECK --- New section: Per-horizon MAE and R² ---
+    # --- Per-horizon + overall metrics (subsidence) ---
     per_horizon_mae = {}
-    per_horizon_r2 = {}
-    # Loop over each forecast horizon (each time step) and calculate MAE and R²
+    per_horizon_r2  = {}
+    overall_mae = overall_mse = overall_r2 = None
     
-    for h in range(H):
-        y_true_horizon = y_map["subs_pred"][:, h, :]  # True subsidence for this horizon
-        y_pred_horizon = predictions["subs_pred"][:, h, :]  # Predicted subsidence for this horizon
-
-        # Compute MAE and R² for subsidence
-        mae = mean_absolute_error(y_true_horizon, y_pred_horizon)
-        r2 = r2_score(y_true_horizon, y_pred_horizon)
- 
-        per_horizon_mae[f"H{h+1}"] = mae
-        per_horizon_r2[f"H{h+1}"] = r2  
-    # -    
+    # Only if we have ground-truth (val/test with targets)
+    if y_map and ("subs_pred" in y_map):
+        # True shape: (B, H, OUT_S_DIM)
+        y_true_subs = y_map["subs_pred"]
+    
+        # Use point predictions. If probabilistic, take the median quantile.
+        if data_final.ndim == 4:
+            # predictions["subs_pred"] is (B, H, Q, OUT_S_DIM)
+            q_arr = np.asarray(Q, dtype=np.float32)
+            med_idx = int(np.argmin(np.abs(q_arr - 0.5)))
+            y_pred_subs = predictions["subs_pred"][:, :, med_idx, :]
+        else:
+            # (B, H, OUT_S_DIM)
+            y_pred_subs = predictions["subs_pred"]
+    
+        # Compute per-horizon metrics
+        H_eff = y_true_subs.shape[1]
+        for h in range(H_eff):
+            yt = y_true_subs[:, h, :].reshape(-1)
+            yp = y_pred_subs[:, h, :].reshape(-1)
+            per_horizon_mae[f"H{h+1}"] = float(mean_absolute_error(yt, yp))
+            per_horizon_r2[f"H{h+1}"]  = float(r2_score(yt, yp))
+    
+        # Overall metrics across all horizons (flatten)
+        yt_all = y_true_subs.reshape(-1)
+        yp_all = y_pred_subs.reshape(-1)
+        overall_mae = float(mean_absolute_error(yt_all, yp_all))
+        overall_mse = float(np.mean((yt_all - yp_all) ** 2))
+        overall_r2  = float(r2_score(yt_all, yp_all))
 
     # Optional scaled-space evaluation & physics
     eval_scaled = None
@@ -260,23 +280,37 @@ def run_one_direction(
             eval_scaled = model.evaluate(ds, return_dict=True, verbose=0)
         except Exception:
             eval_scaled = None
-    try:
-        p = model.evaluate_physics(X_tgt)
-        physics_diag = {k: float(v.numpy()) for k, v in p.items()}
-    except Exception:
-        physics_diag = None
+        
+    if eval_scaled is not None: 
+        print(f"Evaluated {M_tgt.get('city')}:", eval_scaled)
+
+        # Physics diagnostics are already aggregated in eval_results
+        phys_keys = ("epsilon_prior", "epsilon_cons")
+        try: 
+            physics_diag = {
+                k: float(_to_py(eval_scaled[k]))
+                for k in phys_keys
+                if k in eval_scaled
+            }
+            if physics_diag:
+                print("Physics diagnostics (from"
+                      f" {M_tgt.get('city')} evaluation):", 
+                      physics_diag
+                )
+        except: 
+            physics_diag = None
     
     try:
         model.export_physics_payload(
             X_tgt,
             max_batches=None,
             save_path=os.path.join(
-                model_path, f"{M_tgt.get('city')}_xfer_physics_payload.npz"
+                model_dir, f"{M_tgt.get('city')}_xfer_physics_payload.npz"
                 ),
             format="npz",
             overwrite=True,
             metadata={"city": M_tgt.get("city"), "split": "val"},
-    )
+        )
     except: 
         pass 
     
@@ -314,29 +348,41 @@ def run_one_direction(
         sharpness80 = float(sharpness80_fn(y_true, s_q).numpy())
         
     # Format predictions
-    xfer_df_path =os.path.join(
-        model_path, f"{M_tgt.get('city')}_xfer_predictions_df.npz"
-        )
+    # Build canonical y_true mapping (like training_NATCOM_GEOPRIOR.py)
+    y_true_for_format = {}
+    if y_map:
+        if "subs_pred" in y_map:
+            y_true_for_format["subsidence"] = y_map["subs_pred"]
+        if "gwl_pred" in y_map:
+            y_true_for_format["gwl"] = y_map["gwl_pred"]
+    
+    # Save forecasts as CSV in the model directory
+    xfer_csv_path = os.path.join(
+        model_dir, f"{M_tgt.get('city')}_xfer_forecasts_calibrated.csv"
+    )
+    
     forecast_df = format_pinn_predictions(
         predictions=predictions,
-        y_true_dict=y_map,
+        y_true_dict=y_true_for_format if y_true_for_format else None,
         target_mapping=target_mapping,
-        scaler_info=scaler_info,
+        scaler_info=skaler_info if (
+            skaler_info := scaler_info) else scaler_info,  # keep var name stable
         quantiles=Q,
         forecast_horizon=H,
         output_dims=output_dims,
         include_coords=True,
-        include_gwl=False,  # change to True if you want to include GWL columns
+        include_gwl=False,
         model_inputs=X_tgt,
-        evaluate_coverage=True if Q else False,
-        savefile=xfer_df_path,
+        evaluate_coverage=bool(Q),
+        savefile=xfer_csv_path,
         coord_scaler=coord_scaler,
         verbose=1,
     )
     if forecast_df is not None and not forecast_df.empty:
-        print(f"Saved calibrated forecast CSV -> {xfer_df_path}")
+        print(f"Saved calibrated forecast CSV -> {xfer_csv_path}")
     else:
         print("[Warn] Empty forecast DF.")
+    
 
 
     return {
@@ -348,10 +394,11 @@ def run_one_direction(
         "physics": physics_diag,
         "coverage80": coverage80,
         "sharpness80": sharpness80,
-         # XXX TODO: RECHECK
-        # Add more fields as needed (e.g., per-horizon MAE, r^2 from formatted DF)
-        "per_horizon_mae": per_horizon_mae,  # New metrics
-        "per_horizon_r2": per_horizon_r2,  # New metrics
+        "overall_mae": overall_mae,
+        "overall_mse": overall_mse,
+        "overall_r2":  overall_r2,
+        "per_horizon_mae": per_horizon_mae,
+        "per_horizon_r2":  per_horizon_r2,
        
     }
 
@@ -397,19 +444,39 @@ def main():
 
     # Save light CSV
     import csv
+
     csv_path = os.path.join(outdir, "xfer_results.csv")
-    cols = [
-        "direction","source_city","target_city","split","calibration",
-        "coverage80","sharpness80",
-        "physics.epsilon_prior","physics.epsilon_cons",
-        "keras_eval_scaled.loss","keras_eval_scaled.subs_pred_mae",
+    
+    base_cols = [
+        "direction", "source_city", "target_city", "split", "calibration",
+        "overall_mae", "overall_mse", "overall_r2",
+        "coverage80", "sharpness80",
+        "physics.epsilon_prior", "physics.epsilon_cons",
+        "keras_eval_scaled.loss", "keras_eval_scaled.subs_pred_mae",
         "keras_eval_scaled.gwl_pred_mae",
     ]
-    # XXX TO RECHECK 
-    cols.extend(
-        [f"per_horizon_mae.H{i+1}" for i in range(args.forecast_horizon)])  # Add per-horizon MAE columns
-    cols.extend(
-        [f"per_horizon_r2.H{i+1}" for i in range(args.forecast_horizon)])  # Add per-horizon R² columns
+    
+    # Discover horizon keys present in results
+    def _sorted_hkeys(keys):
+        def _k(k):
+            # supports 'H1','H2',... robustly
+            try:
+                return int(str(k).strip().split("H")[-1])
+            except Exception:
+                return 9999
+        return sorted(keys, key=_k)
+    
+    h_mae_keys = set()
+    h_r2_keys  = set()
+    for r in results:
+        h_mae_keys |= set((r.get("per_horizon_mae") or {}).keys())
+        h_r2_keys  |= set((r.get("per_horizon_r2")  or {}).keys())
+    
+    h_mae_keys = _sorted_hkeys(h_mae_keys)
+    h_r2_keys  = _sorted_hkeys(h_r2_keys)
+    
+    cols = base_cols + [f"per_horizon_mae.{k}" for k in h_mae_keys] \
+                     + [f"per_horizon_r2.{k}"  for k in h_r2_keys]
     
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -417,12 +484,16 @@ def main():
         for r in results:
             phys = r.get("physics") or {}
             ev   = r.get("keras_eval_scaled") or {}
-            row =[
+    
+            row = [
                 r.get("direction"),
                 r.get("source_city"),
                 r.get("target_city"),
                 r.get("split"),
                 r.get("calibration"),
+                r.get("overall_mae"),
+                r.get("overall_mse"),
+                r.get("overall_r2"),
                 r.get("coverage80"),
                 r.get("sharpness80"),
                 phys.get("epsilon_prior"),
@@ -431,14 +502,17 @@ def main():
                 ev.get("subs_pred_mae"),
                 ev.get("gwl_pred_mae"),
             ]
-        # XXX TODO: RECHECK  Add per-horizon MAE and R² 
-        for i in range(args.forecast_horizon):
-            row.append(r.get("per_horizon_mae", {}).get(f"H{i+1}", "N/A"))
-            row.append(r.get("per_horizon_r2", {}).get(f"H{i+1}", "N/A"))
-        
-        w.writerow(row)
-        
+    
+            # per-horizon values in stable column order (fill with 'NA' if absent)
+            ph_mae = r.get("per_horizon_mae") or {}
+            ph_r2  = r.get("per_horizon_r2")  or {}
+    
+            row.extend([ph_mae.get(k, "NA") for k in h_mae_keys])
+            row.extend([ph_r2.get(k,  "NA") for k in h_r2_keys])
+            w.writerow(row)
+    
     print(f"Saved transfer CSV -> {csv_path}")
+
 
 if __name__ == "__main__":
     main()
