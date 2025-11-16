@@ -128,11 +128,11 @@ GWL_WEIGHTS  = cfg.get("GWL_WEIGHTS",  {0.1: 1.5, 0.5: 1.0, 0.9: 1.5})
 
 # Physics loss weights
 PDE_MODE_CONFIG = cfg.get("PDE_MODE_CONFIG", "both")
-LAMBDA_CONS   = cfg.get("LAMBDA_CONS",   1.0)
-LAMBDA_GW     = cfg.get("LAMBDA_GW",     1.0)
-LAMBDA_PRIOR  = cfg.get("LAMBDA_PRIOR",  1.0)
-LAMBDA_SMOOTH = cfg.get("LAMBDA_SMOOTH", 1.0)
-LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.1)
+LAMBDA_CONS   = cfg.get("LAMBDA_CONS",   0.1)
+LAMBDA_GW     = cfg.get("LAMBDA_GW",     0.01)
+LAMBDA_PRIOR  = cfg.get("LAMBDA_PRIOR",  0.1)
+LAMBDA_SMOOTH = cfg.get("LAMBDA_SMOOTH", 0.01)
+LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.01)
 MV_LR_MULT    = cfg.get("MV_LR_MULT",    1.0)
 KAPPA_LR_MULT = cfg.get("KAPPA_LR_MULT", 5.0)
 
@@ -155,7 +155,7 @@ SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
 GWL_COL        = cols_cfg.get("gwl", "GWL")
 
 # Train options
-EPOCHS = cfg.get("EPOCHS", 100)
+EPOCHS = cfg.get("EPOCHS", 50)
 BATCH_SIZE = cfg.get("BATCH_SIZE", 32)
 LEARNING_RATE = cfg.get("LEARNING_RATE", 1e-4)
 

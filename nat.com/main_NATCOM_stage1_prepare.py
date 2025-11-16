@@ -71,7 +71,7 @@ except Exception as e:
 # ==================================================================
 # Step 0: CONFIGURATION
 # ==================================================================
-CITY_NAME = "nansha"  # or "zhongshan"
+CITY_NAME = "zhongshan"  # or "zhongshan"
 MODEL_NAME = "GeoPriorSubsNet"
 
 
@@ -93,10 +93,10 @@ FALLBACK_PATHS = [
 ]
 
 # Time windows
-TRAIN_END_YEAR = 2021
-FORECAST_START_YEAR = 2022
+TRAIN_END_YEAR = 2022
+FORECAST_START_YEAR = 2023
 FORECAST_HORIZON_YEARS = 3  # in years 
-TIME_STEPS = 4                   # lookback in  years 
+TIME_STEPS = 5                   # lookback in  years 
 MODE = "tft_like"                # {'pihal_like', 'tft_like'}
 
 # Columns

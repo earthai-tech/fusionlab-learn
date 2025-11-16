@@ -6,6 +6,7 @@
 Physics-Informed Neural Network (PINN) Operations
 and Helpers.
 """
+from __future__ import annotations 
 import os
 import datetime
 
