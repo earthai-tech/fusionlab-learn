@@ -479,17 +479,6 @@ except Exception as e:
 # =============================================================================
 # 5) Persist results
 # =============================================================================
-# best_model_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras")
-# best_hps_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json")
-
-# if best_model is not None:
-#     best_model.save(best_model_path)
-#     print(f"\nSaved best tuned model to: {best_model_path}")
-# else:
-#     print("\n[Warn] No best model returned by tuner.")
-# =============================================================================
-# 5) Persist results
-# =============================================================================
 best_model_path = os.path.join(
     RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras"
 )

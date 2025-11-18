@@ -29,9 +29,8 @@ python nat.com/forecast/make_future_forecasts.py \
 
 from __future__ import annotations
 import os, json, glob, argparse
-from typing import Any, Dict, Tuple
+from typing import Tuple
 import numpy as np
-import pandas as pd
 import joblib
 import tensorflow as tf
 from tensorflow.keras.models import load_model

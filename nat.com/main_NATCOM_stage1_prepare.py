@@ -40,6 +40,7 @@ from typing import Dict, Tuple, Optional
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import sklearn 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 # --- Suppress common warnings/tf chatter ---
@@ -64,10 +65,8 @@ try:
         print_config_table
 
     )
-    from fusionlab.nn.pinn.utils import (
-        prepare_pinn_data_sequences,
-        build_future_sequences_npz,
-    )
+    from fusionlab.utils.sequence_utils import build_future_sequences_npz
+    from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
     
     print("Successfully imported fusionlab modules.")
 except Exception as e:
@@ -782,7 +781,7 @@ manifest = {
         "tensorflow": tf.__version__,
         "numpy": np.__version__,
         "pandas": pd.__version__,
-        "sklearn": "1.x",
+        "sklearn": sklearn.__version__,
     },
 }
 
@@ -855,6 +854,7 @@ if not df_test.empty:
          pass 
 
 # === Step 7: Build *true future* sequences (for Stage-3) ===
+
 future_npz_paths = None
 if BUILD_FUTURE_NPZ:
     print(f"\n{'='*18} Step 7: Future Sequences {'='*18}")
@@ -872,15 +872,15 @@ if BUILD_FUTURE_NPZ:
             dynamic_features=dynamic_features,
             future_features=future_features,
             group_id_cols=GROUP_ID_COLS,
-            train_end_year=TRAIN_END_YEAR,
-            forecast_start_year=FORECAST_START_YEAR,
-            forecast_horizon_years=FORECAST_HORIZON_YEARS,
+            train_end_time=TRAIN_END_YEAR,
+            forecast_start_time=FORECAST_START_YEAR,
+            forecast_horizon=FORECAST_HORIZON_YEARS,
             time_steps=TIME_STEPS,
             mode=MODE,
             model_name=MODEL_NAME,
             artifacts_dir=ARTIFACTS_DIR,
             prefix="future",
-            verbose=2,
+            verbose=7,
         )
         # Attach future_* NPZ paths into the manifest
         manifest["artifacts"]["numpy"].update(future_npz_paths)
@@ -893,7 +893,6 @@ if BUILD_FUTURE_NPZ:
 manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2)
-
 
 print(f"  Saved manifest: {manifest_path}")
 
