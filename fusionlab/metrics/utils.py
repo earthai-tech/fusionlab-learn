@@ -28,6 +28,8 @@ from ._metrics import (
     prediction_stability_score,
     quantile_calibration_error,
 )
+
+
 def compute_quantile_diagnostics(
     *dfs: Union[ pd.DataFrame, Sequence[pd.DataFrame]],
     target_name: str,

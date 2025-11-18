@@ -819,6 +819,7 @@ class FixedGammaW(BaseFixed):
         **kws
     ):
         # gamma_w must be positive, so enforce log_transform for stability
+        kws.pop ("log_transform", None)
         super().__init__(
             value=value,
             name=name or "fixed_gamma_w",
@@ -852,6 +853,7 @@ class FixedHRef(BaseFixed):
         non_negative: bool = False,  # h_ref can be negative
         **kws
     ):
+        kws.pop ("log_transform", None)
         super().__init__(
             value=value,
             name=name or "fixed_h_ref", 

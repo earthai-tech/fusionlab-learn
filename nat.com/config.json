@@ -68,6 +68,7 @@
     ],
     "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": true,
     "USE_EFFECTIVE_H_FIELD": true,
+    "BUILD_FUTURE_NPZ": true,
     "ATTENTION_LEVELS": [
       "cross",
       "hierarchical",
@@ -253,6 +254,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "0b330a2635a2bd09d570cc5469f1ddf6e8c0a7e0ade12d27f6bcae767897fa73"
+    "config_py_hash": "70862231d91f94aa2dd4ed9e2fb6e2f7722b4b21c3d48f492b0700f5ab7b7336"
   }
 }

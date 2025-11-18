@@ -384,7 +384,6 @@ def run_one_direction(
         print("[Warn] Empty forecast DF.")
     
 
-
     return {
         "model_path": model_path,
         "split": split,

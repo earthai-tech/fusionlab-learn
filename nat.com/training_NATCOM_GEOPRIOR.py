@@ -16,14 +16,16 @@ Key corrections:
 from __future__ import annotations
 
 import os
+import sys 
 import json
 import joblib
 import numpy as np
 import datetime as dt
 import warnings
 import tensorflow as tf
+import  platform
 
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
 
@@ -43,7 +45,7 @@ try:
     from fusionlab.utils.generic_utils import print_config_table
     from fusionlab.registry.utils import _find_stage1_manifest
     from fusionlab.utils.nat_utils import load_nat_config  
-
+    from fusionlab.utils.forecast_utils import format_and_forecast
     from fusionlab.nn.pinn.models import GeoPriorSubsNet
     from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
     from fusionlab.nn.losses import make_weighted_pinball
@@ -54,8 +56,7 @@ try:
     )
     from fusionlab.nn.utils import plot_history_in
     from fusionlab.nn.pinn.op import extract_physical_parameters
-    from fusionlab.nn.pinn.utils import format_pinn_predictions
-    from fusionlab.plot.forecast import plot_forecasts, forecast_view
+    from fusionlab.plot.forecast import plot_eval_future
 
     print("Successfully imported fusionlab modules.")
 except Exception as e:
@@ -132,6 +133,7 @@ for sp in CENSOR_SPECS:
 # AFTER merging, so they reflect what Stage-1 actually used.
 TIME_STEPS            = cfg["TIME_STEPS"]
 FORECAST_HORIZON_YEARS = cfg["FORECAST_HORIZON_YEARS"]
+FORECAST_START_YEAR = cfg['FORECAST_START_YEAR']
 MODE                  = cfg["MODE"]
 
 ATTENTION_LEVELS      = cfg.get("ATTENTION_LEVELS", ["cross", "hierarchical", "memory"])
@@ -278,7 +280,8 @@ print_config_table(
 )
 
 print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
-
+#%
+# ------------------------------------Helpers ----------------------------------
 # Encoders / scalers
 def _load_scaler_info(encoders_block: dict):
     """Load scaler_info (possibly a joblib path) so 
@@ -291,6 +294,96 @@ def _load_scaler_info(encoders_block: dict):
             pass
     # Could already be a plain dict with lightweight info (without the scaler object):
     return si
+
+# --- ablation registry helpers 
+def save_ablation_record(outdir, city, model_name, cfg, eval_dict,
+                         phys_diag=None, per_h_mae=None, per_h_r2=None):
+    """One compact JSON row per run for Supplement S6."""
+    rec = {
+        "timestamp": dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
+        "city": city,
+        "model": model_name,
+        # physics toggles / weights
+        "pde_mode": cfg.get("PDE_MODE_CONFIG"),
+        "use_effective_h": bool(cfg.get("GEOPRIOR_USE_EFFECTIVE_H", True)),
+        "kappa_mode": cfg.get("GEOPRIOR_KAPPA_MODE", "bar"),
+        "hd_factor": cfg.get("GEOPRIOR_HD_FACTOR", 0.6),
+        "lambda_cons": cfg.get("LAMBDA_CONS"),
+        "lambda_gw": cfg.get("LAMBDA_GW"),
+        "lambda_prior": cfg.get("LAMBDA_PRIOR"),
+        "lambda_smooth": cfg.get("LAMBDA_SMOOTH"),
+        "lambda_mv": cfg.get("LAMBDA_MV"),
+        # key metrics
+        "r2": (eval_dict or {}).get("r2"),
+        "mse": (eval_dict or {}).get("mse"),
+        "mae": (eval_dict or {}).get("mae"),
+        "coverage80": (eval_dict or {}).get("coverage80"),
+        "sharpness80": (eval_dict or {}).get("sharpness80"),
+    }
+    if phys_diag:
+        rec["epsilon_prior"] = phys_diag.get("epsilon_prior")
+        rec["epsilon_cons"] = phys_diag.get("epsilon_cons")
+    if per_h_mae:
+        rec["per_horizon_mae"] = per_h_mae
+    if per_h_r2:
+        rec["per_horizon_r2"] = per_h_r2
+
+    abl_dir = os.path.join(outdir, "ablation_records")
+    os.makedirs(abl_dir, exist_ok=True)
+    jpath = os.path.join(abl_dir, "ablation_record.jsonl")
+    with open(jpath, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec) + "\n")
+    print(f"[Ablation] appended -> {jpath}")
+
+def _to_np(a):
+    if hasattr(a, "numpy"):
+        a = a.numpy()
+    return np.asarray(a)
+
+def _flat(a):
+    return _to_np(a).reshape(-1)
+
+def _point_metrics(y_true, y_pred):
+    """
+    Returns dict(mae, mse, r2) computed on flattened arrays (NaN-safe).
+    R² = 1 - SSE/SST; if var(y)=0 -> r2=nan.
+    """
+    yt = _flat(y_true)
+    yp = _flat(y_pred)
+    m = {}
+    diff = yt - yp
+    m["mae"] = float(np.nanmean(np.abs(diff)))
+    mse = float(np.nanmean(diff**2))
+    m["mse"] = mse
+    var = float(np.nanvar(yt))
+    m["r2"] = float(1.0 - (mse / (var + 1e-12))) if var > 0 else float("nan")
+    return m
+
+def _per_h_metrics(y_true, y_pred):
+    """
+    Per-horizon MAE & R² as dicts like {"H1": 0.23, "H2": ...}.
+    """
+    Y = _to_np(y_true).squeeze(-1)  # (N,H)
+    P = _to_np(y_pred).squeeze(-1)
+    H = Y.shape[1]
+    out_mae, out_r2 = {}, {}
+    for h in range(H):
+        yy = Y[:, h]
+        pp = P[:, h]
+        mask = np.isfinite(yy) & np.isfinite(pp)
+        if mask.sum() == 0:
+            out_mae[f"H{h+1}"] = None
+            out_r2[f"H{h+1}"] = None
+            continue
+        d = yy[mask] - pp[mask]
+        mae = float(np.mean(np.abs(d)))
+        mse = float(np.mean(d**2))
+        var = float(np.var(yy[mask]))
+        r2 = float(1.0 - mse / (var + 1e-12)) if var > 0 else float("nan")
+        out_mae[f"H{h+1}"] = mae
+        out_r2[f"H{h+1}"] = r2
+    return out_mae, out_r2
+#-----------------------------------------------------------------------------
 
 encoders = M["artifacts"]["encoders"]
 
@@ -496,15 +589,28 @@ print(f"{MODEL_NAME} compiled.")
 # =============================================================================
 # Train
 # =============================================================================
-
+#%
 ckpt_name = f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.keras"
 ckpt_path = os.path.join(RUN_OUTPUT_PATH, ckpt_name)
 
 callbacks = [
-    EarlyStopping(monitor="val_loss", patience=15, restore_best_weights=True, verbose=1),
-    ModelCheckpoint(filepath=ckpt_path, monitor="val_loss", save_best_only=True,
-                    save_weights_only=False, verbose=1),
+    EarlyStopping(
+        monitor="val_loss", 
+        patience=15, 
+        restore_best_weights=True, 
+        verbose=1
+    ),
+    ModelCheckpoint(
+        filepath=ckpt_path, 
+        monitor="val_loss", 
+        save_best_only=True,
+        save_weights_only=False, 
+        verbose=1
+    ),
 ]
+
+csvlog_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_train_log.csv")
+callbacks.append(CSVLogger(csvlog_path, append=False))
 
 print("\nTraining...")
 history = subs_model_inst.fit(
@@ -516,7 +622,153 @@ history = subs_model_inst.fit(
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
 
-# Plots
+def _name_of(obj):
+    if hasattr(obj, "__name__"): 
+        return obj.__name__
+    if hasattr(obj, "__class__"):
+        return obj.__class__.__name__
+    return str(obj)
+
+def _serialize_subs_params(p):
+    out = dict(p)
+    # Make GeoPrior scalars JSON-friendly
+    if "mv" in out:     out["mv"]     = {
+            "type":"LearnableMV", "initial_value": float(GEOPRIOR_INIT_MV)}
+    if "kappa" in out:  out["kappa"]  = {
+            "type":"LearnableKappa","initial_value": float(GEOPRIOR_INIT_KAPPA)}
+    if "gamma_w" in out:out["gamma_w"]= {
+            "type":"FixedGammaW",  "value": float(GEOPRIOR_GAMMA_W)}
+    if "h_ref" in out:  out["h_ref"]  = {
+            "type":"FixedHRef",    "value": float(GEOPRIOR_H_REF)}
+    return out
+
+def _best_epoch_and_metrics(hist: dict):
+    if not hist or "val_loss" not in hist: 
+        return None, {}
+    be = int(np.nanargmin(hist["val_loss"]))
+    metrics_at_best = {k: float(hist[k][be]) for k in hist if len(hist[k])>be}
+    return be, metrics_at_best
+
+# ---- files/paths
+weights_path     = os.path.join(
+    RUN_OUTPUT_PATH, 
+    f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_weights.h5")
+arch_json_path   = os.path.join(
+    RUN_OUTPUT_PATH, 
+    f"{CITY_NAME}_{MODEL_NAME}_architecture.json")
+summary_json_path= os.path.join(
+    RUN_OUTPUT_PATH, 
+    f"{CITY_NAME}_{MODEL_NAME}_training_summary.json")
+savedmodel_dir   = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_SavedModel")
+manifest_path    = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_run_manifest.json")
+
+# ---- 2.1 separate weights (useful for quick reloads / ablations)
+subs_model_inst.save_weights(weights_path)
+
+# ---- 2.2 SavedModel export (graph, signatures)
+try:
+    tf.saved_model.save(subs_model_inst, savedmodel_dir)
+except Exception as e:
+    print(f"[Warn] tf.saved_model.save failed: {e}")
+
+# ---- 2.3 architecture JSON
+try:
+    with open(arch_json_path, "w", encoding="utf-8") as f:
+        f.write(subs_model_inst.to_json())
+except Exception as e:
+    print(f"[Warn] to_json failed: {e}")
+
+# ---- 2.4 best-epoch summary
+best_epoch, metrics_at_best = _best_epoch_and_metrics(history.history)
+
+training_summary = {
+    "timestamp": dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
+    "city": CITY_NAME,
+    "model": MODEL_NAME,
+    "horizon": int(FORECAST_HORIZON_YEARS),
+    "best_epoch": (int(best_epoch) if best_epoch is not None else None),
+    "metrics_at_best": metrics_at_best,       # includes loss/val_* to be tracked
+    "final_epoch_metrics": {
+        k: float(v[-1]) for k, v in history.history.items() if len(v)},
+    "env": {
+        "python": sys.version.split()[0],
+        "tensorflow": tf.__version__,
+        "numpy": np.__version__,
+        "platform": platform.platform(),
+    },
+    "compile": {
+        "optimizer": "Adam",
+        "learning_rate": float(LEARNING_RATE),
+        "loss_weights": loss_weights_dict,
+        "metrics": {k: [_name_of(m) for m in v] for k, v in metrics_dict.items()},
+        "physics_loss_weights": physics_loss_weights,
+    },
+    "hp_init": {
+        "quantiles": QUANTILES,
+        "subs_weights": SUBS_WEIGHTS,
+        "gwl_weights": GWL_WEIGHTS,
+        "attention_levels": ATTENTION_LEVELS,
+        "pde_mode": PDE_MODE_CONFIG,
+        "time_steps": int(TIME_STEPS),
+        "use_batch_norm": bool(USE_BATCH_NORM),
+        "use_vsn": bool(USE_VSN),
+        "vsn_units": int(VSN_UNITS) if VSN_UNITS is not None else None,
+        "mode": MODE,
+        "model_init_params": _serialize_subs_params(subsmodel_params),
+    },
+    "paths": {
+        "run_dir": RUN_OUTPUT_PATH,
+        "checkpoint_keras": ckpt_path,
+        "weights_h5": weights_path,
+        "saved_model": savedmodel_dir,
+        "arch_json": arch_json_path,
+        "csv_log": csvlog_path,
+        "history_plot": os.path.join(
+            RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png"
+        ),
+        "history_plot_pdf": os.path.join(
+            RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.pdf"
+        ),
+        "phys_params_csv": os.path.join(
+            RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv"
+        ),
+    },
+}
+
+with open(summary_json_path, "w", encoding="utf-8") as f:
+    json.dump(training_summary, f, indent=2)
+
+# ---- 2.5 a small run manifest that downstream scripts can read
+run_manifest = {
+    "stage": "stage-2-train",
+    "city": CITY_NAME,
+    "model": MODEL_NAME,
+    "config": {  # keep only lightweight keys you’ll query later
+        "TIME_STEPS": TIME_STEPS,
+        "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
+        "MODE": MODE,
+        "ATTENTION_LEVELS": ATTENTION_LEVELS,
+        "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
+        "QUANTILES": QUANTILES,
+    },
+    "paths": training_summary["paths"],
+    "artifacts": {
+        "training_summary_json": summary_json_path,
+        "train_log_csv": csvlog_path,
+    }
+}
+with open(manifest_path, "w", encoding="utf-8") as f:
+    json.dump(run_manifest, f, indent=2)
+
+print("[OK] Persisted weights, SavedModel, architecture JSON,"
+      " CSV log, training summary, and run manifest.")
+
+
+# 2.6 run to save plots
 history_groups = {
     "Total Loss": ["loss", "val_loss"],
     "Physics Loss": ["physics_loss", "val_physics_loss"],
@@ -553,10 +805,9 @@ extract_physical_parameters(
     filename=f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv",
     save_dir=RUN_OUTPUT_PATH, model_name="geoprior",
 )
-
+#%
 # For inference (compile=False is fine)
 custom_objects_load = {
-    
     "GeoPriorSubsNet": GeoPriorSubsNet,
     "LearnableMV": LearnableMV,
     "LearnableKappa": LearnableKappa,
@@ -625,7 +876,7 @@ else:
         "subs_pred": s_pred_raw,
         "gwl_pred": h_pred_raw,
     }
-
+#%
 # Format to DataFrame (inverse scaling, coords, coverage eval, save CSV)
 target_mapping = {"subs_pred": SUBSIDENCE_COL, "gwl_pred": GWL_COL}
 output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}
@@ -641,27 +892,90 @@ csv_name = (
 )
 csv_path = os.path.join(RUN_OUTPUT_PATH, csv_name)
 
-forecast_df = format_pinn_predictions(
-    predictions=predictions_for_formatter,
-    y_true_dict=y_true_for_format,
-    target_mapping=target_mapping,
-    scaler_info=scaler_info_dict,
-    quantiles=QUANTILES,
-    forecast_horizon=FORECAST_HORIZON_YEARS,
-    output_dims=output_dims,
-    include_coords=True,
-    include_gwl=False,  # change to True if you want to include GWL columns
-    model_inputs=X_fore,
-    evaluate_coverage=True if QUANTILES else False,
-    savefile=csv_path,
-    coord_scaler=coord_scaler,
-    verbose=1,
+csv_eval = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_forecast_"
+    f"{dataset_name_for_forecast}_H"
+    f"{FORECAST_HORIZON_YEARS}_calibrated.csv",
 )
-if forecast_df is not None and not forecast_df.empty:
-    print(f"Saved calibrated forecast CSV -> {csv_path}")
-else:
-    print("[Warn] Empty forecast DF.")
+csv_future = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_forecast_"
+    f"{dataset_name_for_forecast}_H"
+    f"{FORECAST_HORIZON_YEARS}_future.csv",
+)
 
+future_grid = np.arange(
+    FORECAST_START_YEAR,
+    FORECAST_START_YEAR + FORECAST_HORIZON_YEARS,
+    dtype=float,
+)
+
+
+# Build future grid in physical units (years)
+future_grid = np.arange(
+    FORECAST_START_YEAR,
+    FORECAST_START_YEAR + FORECAST_HORIZON_YEARS,
+    dtype=float,
+)
+
+df_eval, df_future = format_and_forecast(
+    y_pred=predictions_for_formatter,
+    y_true=y_true_for_format,
+    coords=X_fore.get("coords", None),
+    quantiles=QUANTILES if QUANTILES else None,
+    target_name=SUBSIDENCE_COL,
+    target_key_pred="subs_pred",
+    component_index=0,
+    scaler_info=scaler_info_dict,
+    coord_scaler=coord_scaler,
+    coord_columns=("coord_t", "coord_x", "coord_y"),
+    train_end_time=cfg.get("TRAIN_END_YEAR"),
+    forecast_start_time=FORECAST_START_YEAR,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+    future_time_grid=future_grid,
+    eval_forecast_step=None,  # last horizon step
+    sample_index_offset=0,
+    city_name=CITY_NAME,
+    model_name=MODEL_NAME,
+    dataset_name=dataset_name_for_forecast,
+    csv_eval_path=csv_eval,
+    csv_future_path=csv_future,
+    time_as_datetime=False,
+    time_format=None,
+    verbose=1,
+    # New evaluation options
+    eval_metrics=True,
+    metrics_column_map=None,  # or custom map
+    metrics_quantile_interval=(0.1, 0.9),
+    metrics_per_horizon=True,
+    metrics_extra=["pss"],  # uses get_metric
+    metrics_extra_kwargs=None,
+    metrics_savefile=os.path.join(
+        RUN_OUTPUT_PATH, 
+        "eval_diagnostics.json"),         # auto name, or give explicit path
+    metrics_save_format=".json",
+    metrics_time_as_str=True,
+    value_mode ="rate"
+)
+
+if df_eval is not None and not df_eval.empty:
+    print(
+        "Saved calibrated EVAL forecast CSV -> "
+        f"{csv_eval}"
+    )
+else:
+    print("[Warn] Empty eval forecast DF.")
+
+if df_future is not None and not df_future.empty:
+    print(
+        "Saved calibrated FUTURE forecast CSV -> "
+        f"{csv_future}"
+    )
+else:
+    print("[Warn] Empty future forecast DF.")
+#%
+#
 # =============================================================================
 # Evaluate metrics & physics on the forecasting split (+ optional censoring)
 # =============================================================================
@@ -703,11 +1017,8 @@ physics_payload = subs_model_loaded.export_physics_payload(
     overwrite=True,
     metadata={"city": CITY_NAME, "split": "val"},
 )
-
+#
 # 2) later: load without re-evaluating the model
-# payload2, meta = subs_model_inst.load_physics_payload(
-#     os.path.join( RUN_OUTPUT_PATH, "phys_run_val.npz")
-# )
 
 def build_censor_mask_from_dynamic(xb, H, dyn_idx, thresh=0.5):
     """
@@ -757,6 +1068,10 @@ mask = tf.concat(mask_list, axis=0) if mask_list else None        # (N,H,1) bool
 
 
 # --- 2.3.a Interval coverage/sharpness (uncalibrated vs calibrated) ---
+# keep them two for ablation storage 
+s_q_cal =None
+s_med =None 
+
 if QUANTILES and (y_true is not None) and (s_q is not None):
     # Uncalibrated
     cov80_uncal   = float(coverage80_fn(y_true, s_q).numpy())
@@ -797,6 +1112,41 @@ if (y_true is not None) and (mask is not None):
     print(f"[CENSOR] MAE censored={censor_metrics['mae_censored']:.4f} | "
           f"uncensored={censor_metrics['mae_uncensored']:.4f}")
 
+
+# --- 2.4 Point metrics (MAE/MSE/R²), overall + per-horizon -------------
+metrics_point = {}
+per_h_mae_dict, per_h_r2_dict = None, None
+
+if (y_true is not None):
+    if QUANTILES and (s_q is not None):
+        # median index
+        med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
+        s_med_uncal = s_q[..., med_idx, :]           # (N,H,1)
+        # prefer calibrated median if available
+        if s_q_cal is not None:
+            s_med_cal = s_q_cal[..., med_idx, :]     # (N,H,1)
+            metrics_point = _point_metrics(y_true, s_med_cal)
+            per_h_mae_dict, per_h_r2_dict = _per_h_metrics(y_true, s_med_cal)
+        else:
+            metrics_point = _point_metrics(y_true, s_med_uncal)
+            per_h_mae_dict, per_h_r2_dict = _per_h_metrics(y_true, s_med_uncal)
+    else:
+        # point-forecast branch (you already built s_med above in 2.3.b)
+        # ensure s_med exists
+        if s_med is None:
+            # fallback: recompute once
+            s_pred_list = []
+            for xb2, _ in ds_eval:
+                out2 = subs_model_inst(xb2, training=False)
+                s_pred_list.append(out2["data_final"][..., :1])  # (B,H,1)
+            s_med = tf.concat(s_pred_list, axis=0)
+        metrics_point = _point_metrics(y_true, s_med)
+        per_h_mae_dict, per_h_r2_dict = _per_h_metrics(y_true, s_med)
+
+# Normalize coverage/sharpness choices for ablation record (prefer calibrated)
+coverage80_for_abl = cov80_cal if (cov80_cal is not None) else cov80_uncal
+sharpness80_for_abl = sharp80_cal if (sharp80_cal is not None) else sharp80_uncal
+
 # Save summary JSON
 stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
 payload = {
@@ -823,54 +1173,100 @@ if QUANTILES:
 if censor_metrics is not None:
     payload["censor_stratified"] = censor_metrics
 
+# Attach point metrics & per-horizon into payload
+if metrics_point:
+    payload["point_metrics"] = {
+        "mae": metrics_point.get("mae"),
+        "mse": metrics_point.get("mse"),
+        "r2":  metrics_point.get("r2"),
+    }
+if per_h_mae_dict:
+    payload.setdefault("per_horizon", {})
+    payload["per_horizon"]["mae"] = per_h_mae_dict
+if per_h_r2_dict:
+    payload.setdefault("per_horizon", {})
+    payload["per_horizon"]["r2"] = per_h_r2_dict
+
+# If you want the calibrated-vs-uncalibrated interval numbers too, you already
+# saved them under 'interval_calibration' (good).
+
 
 json_out = os.path.join(RUN_OUTPUT_PATH, f"geoprior_eval_phys_{stamp}.json")
 with open(json_out, "w", encoding="utf-8") as f:
     json.dump(payload, f, indent=2)
 print(f"Saved metrics + physics JSON -> {json_out}")
 #%
+ABLCFG = {
+    "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
+    "GEOPRIOR_USE_EFFECTIVE_H": GEOPRIOR_USE_EFFECTIVE_H,
+    "GEOPRIOR_KAPPA_MODE": GEOPRIOR_KAPPA_MODE,
+    "GEOPRIOR_HD_FACTOR": GEOPRIOR_HD_FACTOR,
+    "LAMBDA_CONS": LAMBDA_CONS,
+    "LAMBDA_GW": LAMBDA_GW,
+    "LAMBDA_PRIOR": LAMBDA_PRIOR,
+    "LAMBDA_SMOOTH": LAMBDA_SMOOTH,
+    "LAMBDA_MV": LAMBDA_MV,
+}
+
+# Prefer MAE/MSE directly from evaluate() if they exist; else use computed.
+eval_mae = None
+eval_mse = None
+if isinstance(eval_results, dict):
+    eval_mae = eval_results.get("subs_pred_mae")
+    eval_mse = eval_results.get("subs_pred_mse")
+
+save_ablation_record(
+    outdir=RUN_OUTPUT_PATH,
+    city=CITY_NAME,
+    model_name=MODEL_NAME,
+    cfg=ABLCFG,
+    eval_dict={
+        "r2": (metrics_point or {}).get("r2"),
+        "mse": float(eval_mse) if eval_mse is not None else (metrics_point or {}).get("mse"),
+        "mae": float(eval_mae) if eval_mae is not None else (metrics_point or {}).get("mae"),
+        "coverage80": coverage80_for_abl,
+        "sharpness80": sharpness80_for_abl,
+    },
+    phys_diag=(phys or {}),
+    per_h_mae=per_h_mae_dict,   # optional but included when available
+    per_h_r2=per_h_r2_dict      # optional but included when available
+)
+print("Ablation record saved.")
+#
 # =============================================================================
 # Visualization (optional)
 # =============================================================================
-print("\nPlotting forecast views...")
-if forecast_df is not None and not forecast_df.empty:
-    try:
-        # quick spatial snapshots (subsidence only)
-        horizon_steps = [1, FORECAST_HORIZON_YEARS] if FORECAST_HORIZON_YEARS > 1 else [1]
-        plot_forecasts(
-            forecast_df=forecast_df,
-            target_name=SUBSIDENCE_COL,
-            quantiles=QUANTILES,
-            output_dim=OUT_S_DIM,
-            kind="spatial",
-            horizon_steps=horizon_steps,
-            spatial_cols=("coord_x", "coord_y"),
-            sample_ids="first_n",
-            num_samples=min(3, BATCH_SIZE),
-            max_cols=2,
-            figsize=(7, 5.5),
-            cbar="uniform",
-            verbose=1,
-            savefig = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_eval_plot"),
-            show=False, 
-        )
-    except Exception as e:
-        print(f"[Warn] plot_forecasts failed: {e}")
 
-    try:
-        forecast_view(
-            forecast_df,
-            spatial_cols=("coord_x", "coord_y"),
-            time_col="coord_t",
-            value_prefixes=[SUBSIDENCE_COL],
-            verbose=1,
-            view_quantiles=[0.5],
-            savefig=os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_forecast_comparison_plot_"),
-            save_fmts=[".png", ".pdf"],
-        )
-        print(f"Saved forecast view figures in: {RUN_OUTPUT_PATH}")
-    except Exception as e:
-        print(f"[Warn] forecast_view failed: {e}")
+print("\nPlotting forecast views...")
+try:
+    plot_eval_future(
+        df_eval=df_eval,
+        df_future=df_future,
+        target_name=SUBSIDENCE_COL,
+        quantiles=QUANTILES,
+        spatial_cols=("coord_x", "coord_y"),
+        time_col="coord_t",
+        # Eval: show last eval year (e.g. 2022)
+        eval_years=[FORECAST_START_YEAR - 1],
+        # Future: use the same grid you passed to format_and_forecast
+        future_years=future_grid,
+        # For eval: compare [actual] vs [q50] only
+        eval_view_quantiles=[0.5],
+        # For future: show full [q10, q50, q90]
+        future_view_quantiles=QUANTILES,
+        spatial_mode="hexbin",      # hotspot view
+        hexbin_gridsize=40,
+        savefig_prefix=os.path.join(
+            RUN_OUTPUT_PATH,
+            f"{CITY_NAME}_subsidence_view",
+        ),
+        save_fmts=[".png", ".pdf"],
+        show=False,
+        verbose=1,
+        cummulative=True, 
+    )
+except Exception as e:
+    print(f"[Warn] plot_eval_future failed: {e}")
 
 try:
     save_all_figures(

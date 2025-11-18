@@ -463,11 +463,6 @@ def _build_geoprior_from_hps(
     lr = float(best_hps.get("learning_rate", 5e-5))
     optimizer = Adam(learning_rate=lr)
 
-    # pinball_loss = make_weighted_pinball(
-    #     quantiles,
-    #     loss_weights,
-    # )
-
     model.compile(
         optimizer=optimizer,
         loss=loss_dict,
@@ -542,6 +537,7 @@ def main():
     MODE = cfg["MODE"]
     # T = cfg["TIME_STEPS"]
     H = cfg["FORECAST_HORIZON_YEARS"]
+    FSY = cfg.get('FORECAST_START_YEAR') 
     QUANTILES = cfg.get("QUANTILES", [0.1, 0.5, 0.9])
 
     OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
@@ -613,18 +609,6 @@ def main():
         vy = _map_targets(vy)
         ds_val = tf.data.Dataset.from_tensor_slices((vx, vy)).batch(batch_size)
 
-
-    # Load model (compile not required for inference)
-    # custom_objects = {
-    #     "GeoPriorSubsNet": GeoPriorSubsNet,
-    #     "LearnableMV": LearnableMV,
-    #     "LearnableKappa": LearnableKappa,
-    #     "FixedGammaW": FixedGammaW,
-    #     "FixedHRef": FixedHRef,
-    #     "make_weighted_pinball": make_weighted_pinball,
-    # }
-    # with custom_object_scope(custom_objects):
-    #     model = load_model(args.model_path, compile=False)
     # ------------------ Load or Rebuild Model ------------------
     custom_objects = {
         "GeoPriorSubsNet": GeoPriorSubsNet,
@@ -745,6 +729,7 @@ def main():
         savefile=csv_path,
         coord_scaler=coord_scaler,
         verbose=1,
+        forecast_start_year = FSY, 
     )
     print(f"Saved inference CSV -> {csv_path}")
 

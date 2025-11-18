@@ -231,6 +231,8 @@ INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = True
 # when feeding the H-field into GeoPriorSubsNet.
 USE_EFFECTIVE_H_FIELD = True
 
+# Optional: whether Stage-1 should also pre-build future_* NPZ for Stage-3
+BUILD_FUTURE_NPZ = True
 
 # -------------------------------------------------------------------
 # 4. MODEL / PHYSICS / TRAINING DEFAULTS

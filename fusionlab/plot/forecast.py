@@ -13,6 +13,7 @@ import os
 import re
 import logging 
 import warnings
+import datetime 
 from typing import ( 
     Any, List, Optional, 
     Tuple, Union, Dict, 
@@ -1303,6 +1304,7 @@ def forecast_view(
     save_fmts: Union[str, List[str]] = '.png',
     dt_col: Optional[str] = None,
     show: bool =True, 
+    cumulative: Union[bool, str] = False,   
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
     stop_check: Callable [[], bool] =None, 
     verbose: int = 1,
@@ -1438,7 +1440,16 @@ def forecast_view(
     kw = _coerce_dt_kw(
         dt_col=dt_col, time_col=time_col, _time_default=time_col)
     time_col = kw.get("dt_col", time_col)        # adopt canonical name
-        
+    
+    # Decide whether to apply cumulative sum over forecast years
+    if isinstance(cumulative, str):
+        cumulative_flag = cumulative.lower() in {
+            'cum', 'cumulative', 'cummulative', 'true', 'yes'
+        }
+    else:
+        cumulative_flag = bool(cumulative)
+    
+            
     _spatial_cols = spatial_cols or []
     
     is_q = detect_forecast_type(
@@ -1490,12 +1501,23 @@ def forecast_view(
 
     plot_structure = _parse_wide_df_columns(df_wide, value_prefixes)
 
+# XXX TODO 
+
+    # all_years = sorted([
+    #     y for p_data in plot_structure.values() for y in p_data
+    #     if y.isdigit()
+    # ])
+    # years_to_plot = [str(y) for y in view_years] if view_years else all_years
     all_years = sorted([
         y for p_data in plot_structure.values() for y in p_data
-        if y.isdigit()
+        if isinstance(y, str) and y.isdigit()
     ])
-    years_to_plot = [str(y) for y in view_years] if view_years else all_years
     
+    if view_years:
+        years_to_plot = [_normalize_year_key(y) for y in view_years]
+    else:
+        years_to_plot = all_years
+
     all_quantiles = sorted(list(set(
         s for p in plot_structure.values()
         for y in p.values() if isinstance(y, dict)
@@ -1516,7 +1538,52 @@ def forecast_view(
         quantiles_to_plot = ['pred']
         vlog("No quantiles found. Assuming deterministic forecast.",
              level=1, verbose=verbose, logger =_logger)
-    
+        
+    # -------------------- OPTIONAL: cumulative over years --------------------
+    if cumulative_flag and years_to_plot:
+        vlog(
+            "Applying cumulative sum over forecast years in forecast_view.",
+            level=1,
+            verbose=verbose,
+            logger=_logger,
+        )
+
+        # For each prefix (e.g. 'subsidence') and each stat ('q10', 'q50', 'pred'),
+        # cum-sum along sorted years.
+        for prefix, year_map in plot_structure.items():
+            # Keep only years that are in years_to_plot and exist in this prefix
+            years_here = []
+            for y in years_to_plot:
+                if y in year_map:
+                    try:
+                        years_here.append((float(y), y))
+                    except ValueError:
+                        # Non-numeric labels – keep raw order
+                        years_here.append((0.0, y))
+            # Sort years numerically where possible
+            years_here = [y_str for _, y_str in sorted(years_here)]
+            if not years_here:
+                continue
+
+            for stat in quantiles_to_plot:
+                running = None
+                for y_str in years_here:
+                    mapping = year_map.get(y_str)
+                    if not isinstance(mapping, dict):
+                        continue
+                    col_name = mapping.get(stat)
+                    if not col_name or col_name not in df_wide.columns:
+                        continue
+
+                    vals = df_wide[col_name].to_numpy()
+                    if running is None:
+                        running = vals.copy()
+                    else:
+                        running = running + vals
+
+                    # Overwrite in-place with cumulative values
+                    df_wide[col_name] = running
+
     n_rows = len(years_to_plot)
     if n_rows == 0:
         vlog("No years to plot after filtering.", level=0, verbose=verbose, 
@@ -1602,6 +1669,45 @@ def forecast_view(
             else:
                 plt.close(fig)     
                                  
+def _normalize_year_key(y):
+    """
+    Normalize a year spec (int/float/str/Timestamp) to the
+    4-digit string keys used in plot_structure (e.g. '2023').
+    """
+    # pandas / datetime-like
+    try:
+        if isinstance(y, (pd.Timestamp, datetime.date, datetime.datetime)):
+            return f"{y.year:04d}"
+    except Exception:
+        pass
+
+    # Numeric: 2023, 2023.0, 2023.0001 -> '2023'
+    try:
+        y_float = float(y)
+        # If it is "close" to an integer, treat as year
+        if np.isfinite(y_float) and abs(y_float - round(y_float)) < 1e-6:
+            return f"{int(round(y_float)):04d}"
+    except Exception:
+        pass
+
+    # String cases: '2023', '2023.0', '2023-01-01'
+    s = str(y)
+    # If it's something like '2023.0'
+    try:
+        y_float = float(s)
+        if np.isfinite(y_float) and abs(y_float - round(y_float)) < 1e-6:
+            return f"{int(round(y_float)):04d}"
+    except Exception:
+        pass
+
+    # Fallback: extract first 4-digit sequence if any (e.g. from '2023-01-01')
+    import re
+    m = re.search(r"(\d{4})", s)
+    if m:
+        return m.group(1)
+
+    # Last resort: return as-is
+    return s
 
 @check_non_emptiness 
 def plot_forecasts(
@@ -2798,36 +2904,78 @@ def _parse_wide_df_columns(
              
     return plot_structure
 
-def _plot_spatial_subplot(ax, df, x_col, y_col, c_col, s= 10,  **kwargs):
-    """Helper to create a single scatter subplot."""
+def _plot_spatial_subplot(
+    ax, df, x_col, y_col, c_col, s=10, **kwargs
+):
+    """Helper to create a single spatial subplot."""
+    title = kwargs.get('title', '')
+
     if c_col is None or c_col not in df.columns:
-        ax.set_title(f"{kwargs.get('title', '')}\n(Data not found)",
-                     fontsize=10, color='red')
+        ax.set_title(
+            f"{title}\n(Data not found)",
+            fontsize=10,
+            color='red',
+        )
         ax.axis('off')
         return None
-        
+
     plot_df = df[[x_col, y_col, c_col]].dropna()
     if plot_df.empty:
-        ax.set_title(f"{kwargs.get('title', '')}\n(No valid data)", 
-                     fontsize=10)
+        ax.set_title(
+            f"{title}\n(No valid data)",
+            fontsize=10,
+        )
         ax.axis('off')
         return None
-        
-    scatter = ax.scatter(
-        plot_df[x_col], plot_df[y_col], c=plot_df[c_col],
-        cmap=kwargs.get('cmap'), vmin=kwargs.get('vmin'),
-        vmax=kwargs.get('vmax'), s=s,
-        edgecolors='k', linewidths=0.1, alpha=0.8
-    )
-    ax.set_title(kwargs.get('title', ''), fontsize=10)
-    
-    if kwargs.get('axis_off'):
+
+    cmap = kwargs.get('cmap')
+    vmin = kwargs.get('vmin')
+    vmax = kwargs.get('vmax')
+    axis_off = kwargs.get('axis_off')
+    show_grid = kwargs.get('show_grid')
+    grid_props = kwargs.get('grid_props')
+    spatial_mode = kwargs.get('spatial_mode', 'scatter')
+    hexbin_gridsize = kwargs.get('hexbin_gridsize', 40)
+
+    if spatial_mode == 'hexbin':
+        artist = ax.hexbin(
+            plot_df[x_col].to_numpy(),
+            plot_df[y_col].to_numpy(),
+            C=plot_df[c_col].to_numpy(),
+            gridsize=hexbin_gridsize,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+        )
+    else:
+        artist = ax.scatter(
+            plot_df[x_col],
+            plot_df[y_col],
+            c=plot_df[c_col],
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
+            s=s,
+            edgecolors='k',
+            linewidths=0.1,
+            alpha=0.8,
+        )
+
+    ax.set_title(title, fontsize=10)
+
+    if axis_off:
         ax.axis('off')
     else:
-        ax.tick_params(axis='both', which='major', labelsize=8)
-        if kwargs.get('show_grid'):
-            ax.grid(**kwargs.get('grid_props'))
-    return scatter
+        ax.tick_params(
+            axis='both',
+            which='major',
+            labelsize=8,
+        )
+        if show_grid:
+            ax.grid(**grid_props)
+
+    return artist
+
 
 def _plot_temporal_subplot(ax, df, value_col, title, **kwargs):
     """Helper to create a single line plot (fallback)."""
@@ -2963,3 +3111,374 @@ def _plot_single_scatter(
         if show_grid:
             ax.grid(**grid_props)
     return scatter
+
+def plot_eval_future(
+    df_eval: Optional[pd.DataFrame] = None,
+    df_future: Optional[pd.DataFrame] = None,
+    target_name: str = 'subsidence',
+    quantiles: Optional[Sequence[float]] = None,
+    spatial_cols: Tuple[str, str] = ('coord_x', 'coord_y'),
+    time_col: str = 'coord_t',
+    eval_years: Optional[Sequence[Any]] = None,
+    future_years: Optional[Sequence[Any]] = None,
+    eval_view_quantiles: Optional[Sequence[Any]] = None,
+    future_view_quantiles: Optional[Sequence[Any]] = None,
+    cmap: str = 'viridis',
+    cbar: str = 'uniform',
+    axis_off: bool = False,
+    show_grid: bool = True,
+    grid_props: Optional[Dict[str, Any]] = None,
+    figsize_eval: Optional[Tuple[float, float]] = None,
+    figsize_future: Optional[Tuple[float, float]] = None,
+    spatial_mode: str = 'hexbin',
+    hexbin_gridsize: int = 40,
+    savefig_prefix: Optional[str] = None,
+    save_fmts: Union[str, Sequence[str]] = '.png',
+    show: bool = True,
+    verbose: int = 1,
+    cumulative: bool = False,
+    _logger: Optional[Union[logging.Logger,
+                            Callable[[str], None]]] = None,
+    **kws,
+) -> None:
+    """
+    Convenience wrapper to visualize evaluation and future forecasts.
+
+    This function provides a high-level interface around
+    :func:`forecast_view` to jointly visualize:
+
+    * an **evaluation split** (``df_eval``) where actual vs predicted
+      values are shown side-by-side for selected years, and
+    * a **future split** (``df_future``) where only predicted
+      quantiles are shown for future horizons.
+
+    It is designed to work seamlessly with the outputs of
+    :func:`fusionlab.nn.pinn.utils.format_and_forecast`, where
+    the data frames contain columns such as:
+
+    * ``sample_idx``
+    * ``forecast_step``
+    * ``coord_t`` (time), ``coord_x``, ``coord_y`` (spatial coords)
+    * ``<target_name>_actual`` (evaluation only)
+    * ``<target_name>_qXX`` or ``<target_name>_pred`` (predictions)
+
+    Parameters
+    ----------
+    df_eval : pandas.DataFrame, optional
+        Evaluation DataFrame with actual and predicted values for
+        past / validation horizons. Typically the first return value
+        of :func:`fusionlab.nn.pinn.utils.format_and_forecast` when
+        called on a validation or test split.
+        If ``None`` or empty, the evaluation panel is skipped.
+
+    df_future : pandas.DataFrame, optional
+        Future forecast DataFrame with predicted values only, usually
+        the second return value of
+        :func:`fusionlab.nn.pinn.utils.format_and_forecast` when
+        called on a validation or test split (for training years) or
+        true-future split (e.g. 2023–2025). If ``None`` or empty, the
+        future panel is skipped.
+
+    target_name : str, default='subsidence'
+        Base name of the target variable to plot. The function will
+        look for columns that start with this prefix, e.g.
+        ``"subsidence_q10"``, ``"subsidence_q50"``,
+        ``"subsidence_q90"`` or ``"subsidence_pred"``.
+
+    quantiles : sequence of float, optional
+        List of quantiles corresponding to the prediction columns,
+        e.g. ``[0.1, 0.5, 0.9]`` for ``q10``, ``q50``, ``q90``. If
+        provided, these are used as defaults for both evaluation
+        and future views unless overridden via
+        ``eval_view_quantiles`` or ``future_view_quantiles``.
+
+    spatial_cols : tuple of str, default=('coord_x', 'coord_y')
+        Names of the longitude / latitude (or generic x/y) columns in
+        ``df_eval`` and ``df_future`` used for the spatial layout.
+
+    time_col : str, default='coord_t'
+        Name of the time column in ``df_eval`` and ``df_future``.
+        This column is used to select which years (or time stamps) to
+        display and to structure the grid (one row per time slice).
+
+    eval_years : sequence of hashable, optional
+        List of years (or time values in ``time_col``) to visualize in
+        the evaluation split. If ``None``, all unique values of
+        ``time_col`` in ``df_eval`` are collected and only the last
+        one (e.g. the final validation year) is plotted.
+
+    future_years : sequence of hashable, optional
+        List of years (or time values in ``time_col``) to visualize in
+        the future split. If ``None``, all unique values of
+        ``time_col`` in ``df_future`` are used.
+
+    eval_view_quantiles : sequence, optional
+        Quantiles to display for the evaluation split. Elements can be
+        floats (e.g. ``0.1``) or strings (e.g. ``"q10"``). If
+        ``None``, defaults to ``quantiles`` (if provided), otherwise
+        all available quantile columns for ``target_name`` are used.
+
+    future_view_quantiles : sequence, optional
+        Quantiles to display for the future split. Same conventions as
+        ``eval_view_quantiles``. If ``None``, defaults to
+        ``quantiles`` (if provided), otherwise all available quantile
+        columns are used.
+
+    cmap : str, default='viridis'
+        Matplotlib colormap name used for the value maps.
+
+    cbar : {"uniform", "independent"}, default='uniform'
+        Controls how colorbars are scaled:
+
+        * ``"uniform"`` : all subplots share a global ``vmin``/``vmax``
+          inferred from the entire panel for consistent comparison.
+        * ``"independent"`` : each subplot uses its own color scale.
+
+    axis_off : bool, default=False
+        If ``True``, turn off axes (ticks and frames) in the spatial
+        plots for a cleaner, map-like appearance.
+
+    show_grid : bool, default=True
+        If ``True``, overlay a light grid on each subplot (e.g.
+        longitude/latitude grid), controlled by ``grid_props``.
+
+    grid_props : dict, optional
+        Keyword arguments passed to the underlying grid plotting
+        (e.g. ``{"linestyle": ":", "alpha": 0.7}``). If ``None``,
+        a light dotted grid is used by default.
+
+    figsize_eval : tuple of float, optional
+        Figure size (width, height) in inches for the evaluation
+        panel. If ``None``, a size is chosen automatically based on
+        the number of columns and rows.
+
+    figsize_future : tuple of float, optional
+        Figure size (width, height) in inches for the future panel.
+        If ``None``, a size is chosen automatically.
+
+    spatial_mode : {"hexbin", "scatter"}, default='hexbin'
+        Spatial visualization mode:
+
+        * ``"hexbin"`` : use hexagonal binning (`hexbin`) to show
+          spatial hotspots, suitable for dense datasets.
+        * ``"scatter"`` : plot individual points as a scatter map.
+
+    hexbin_gridsize : int, default=40
+        Grid size passed to ``matplotlib.axes.Axes.hexbin`` when
+        ``spatial_mode="hexbin"``. Larger values yield finer spatial
+        resolution.
+
+    savefig_prefix : str, optional
+        If provided, figures are saved using this prefix. The
+        evaluation split is saved as ``"{prefix}_eval.*"`` and the
+        future split as ``"{prefix}_future.*"`` with the extensions
+        controlled by ``save_fmts``.
+
+    save_fmts : str or sequence of str, default='.png'
+        File format(s) for saving figures, e.g. ``".png"`` or
+        ``[".png", ".pdf"]``. Ignored if ``savefig_prefix`` is
+        ``None``.
+
+    show : bool, default=True
+        If ``True``, display figures with ``plt.show()``. If ``False``
+        and ``savefig_prefix`` is not ``None``, figures are only
+        saved to disk and closed.
+
+    verbose : int, default=1
+        Verbosity level for logging. A value of ``0`` silences all
+        messages, higher values enable more detailed logs via
+        :func:`fusionlab.utils.generic_utils.vlog`.
+
+    cumulative : bool, default=False
+        If ``True``, instructs :func:`forecast_view` (for the
+        *evaluation* split) to interpret the predictions for
+        ``target_name`` as *cumulative along the forecast horizon*,
+        instead of per-step rates. This is useful when
+        :func:`fusionlab.nn.pinn.utils.format_and_forecast` has been
+        configured to output relative or absolute cumulative values
+        (e.g. cumulative subsidence at each year). When ``False``,
+        per-step (rate-like) predictions are visualized.
+        
+        Currently this flag is forwarded to the evaluation split
+        only; the future split uses whatever representation is
+        present in ``df_future``.
+
+    _logger : logging.Logger or callable, optional
+        Optional logger instance or callable used for internal
+        messages. If ``None``, messages fall back to
+        :func:`fusionlab.utils.generic_utils.vlog`.
+
+    **kws
+        Additional keyword arguments forwarded to
+        :func:`forecast_view`, allowing fine-grained control over
+        plotting behaviour.
+
+    Returns
+    -------
+    None
+        The function creates and optionally saves matplotlib figures,
+        but does not return any objects.
+
+    Examples
+    --------
+    Basic usage with validation and future forecasts:
+
+    >>> from fusionlab.plot.forecast import plot_eval_future
+    >>> df_eval, df_future = df_eval_val, df_future_val
+    >>> plot_eval_future(
+    ...     df_eval=df_eval,
+    ...     df_future=df_future,
+    ...     target_name="subsidence",
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     spatial_cols=("coord_x", "coord_y"),
+    ...     time_col="coord_t",
+    ...     eval_years=[2022],          # last validation year
+    ...     future_years=[2023, 2024],  # first two forecast years
+    ... )
+
+    Plotting evaluation as cumulative subsidence (e.g. when
+    ``format_and_forecast`` has been configured with cumulative
+    outputs), while keeping the future panel with the raw values in
+    ``df_future``:
+
+    >>> from fusionlab.plot.forecast import plot_eval_future
+    >>> plot_eval_future(
+    ...     df_eval=df_eval,
+    ...     df_future=df_future,
+    ...     target_name="subsidence",
+    ...     quantiles=[0.1, 0.5, 0.9],
+    ...     eval_view_quantiles=[0.5],   # only median for eval
+    ...     future_view_quantiles=[0.1, 0.5, 0.9],
+    ...     spatial_mode="hexbin",
+    ...     cumulative=True,             # show eval as cumulative
+    ...     savefig_prefix="zhongshan_subsidence_view",
+    ...     save_fmts=[".png", ".pdf"],
+    ...     show=False,
+    ... )
+    """
+
+    if grid_props is None:
+        grid_props = {'linestyle': ':', 'alpha': 0.7}
+
+    if df_eval is None or df_eval.empty:
+        msg = 'plot_eval_future: no eval data provided.'
+        vlog(msg, level=3, verbose=verbose, logger=_logger)
+        has_eval = False
+    else:
+        has_eval = True
+
+    if df_future is None or df_future.empty:
+        msg = 'plot_eval_future: no future data provided.'
+        vlog(msg, level=3, verbose=verbose, logger=_logger)
+        has_future = False
+    else:
+        has_future = True
+
+    if not has_eval and not has_future:
+        msg = 'plot_eval_future: nothing to plot.'
+        vlog(msg, level=2, verbose=verbose, logger=_logger)
+        return
+
+    if quantiles is not None:
+        quantiles = list(quantiles)
+
+    if eval_view_quantiles is None:
+        eval_view_quantiles = quantiles
+    else:
+        eval_view_quantiles = list(eval_view_quantiles)
+
+    if future_view_quantiles is None:
+        future_view_quantiles = quantiles
+    else:
+        future_view_quantiles = list(future_view_quantiles)
+
+    # ----------------- EVAL SPLIT: actual vs predicted -----------------
+    if has_eval:
+        if eval_years is None:
+            years_eval = sorted(
+                df_eval[time_col].dropna().unique().tolist()
+            )
+            # default = last available eval year
+            years_eval = years_eval[-1:]
+        else:
+            years_eval = list(eval_years)
+
+        eval_save = None
+        if savefig_prefix is not None:
+            eval_save = f"{savefig_prefix}_eval"
+
+        vlog(
+            'plot_eval_future: plotting eval split.',
+            level=2,
+            verbose=verbose,
+            logger=_logger,
+        )
+
+        forecast_view(
+            forecast_df=df_eval,
+            value_prefixes=[target_name],
+            kind='dual',              # [actual] [q10/q50/q90] layout
+            view_quantiles=eval_view_quantiles,
+            view_years=years_eval,
+            spatial_cols=spatial_cols,
+            time_col=time_col,
+            cmap=cmap,
+            cbar=cbar,
+            axis_off=axis_off,
+            show_grid=show_grid,
+            grid_props=grid_props,
+            figsize=figsize_eval,
+            savefig=eval_save,
+            save_fmts=save_fmts,
+            show=show,
+            verbose=verbose,
+            _logger=_logger,
+            spatial_mode=spatial_mode,
+            hexbin_gridsize=hexbin_gridsize,
+            cumulative=cumulative,
+            **kws,
+        )
+
+    # --------------- FUTURE SPLIT: only predictions --------------------
+    if has_future:
+        if future_years is None:
+            years_future = sorted(
+                df_future[time_col].dropna().unique().tolist()
+            )
+        else:
+            years_future = list(future_years)
+
+        future_save = None
+        if savefig_prefix is not None:
+            future_save = f"{savefig_prefix}_future"
+
+        vlog(
+            'plot_eval_future: plotting future split.',
+            level=2,
+            verbose=verbose,
+            logger=_logger,
+        )
+
+        forecast_view(
+            forecast_df=df_future,
+            value_prefixes=[target_name],
+            kind='pred_only',         # only q's, no actual
+            view_quantiles=future_view_quantiles,
+            view_years=years_future,
+            spatial_cols=spatial_cols,
+            time_col=time_col,
+            cmap=cmap,
+            cbar=cbar,
+            axis_off=axis_off,
+            show_grid=show_grid,
+            grid_props=grid_props,
+            figsize=figsize_future,
+            savefig=future_save,
+            save_fmts=save_fmts,
+            show=show,
+            verbose=verbose,
+            _logger=_logger,
+            spatial_mode=spatial_mode,
+            hexbin_gridsize=hexbin_gridsize,
+            **kws,
+        )

@@ -61,6 +61,8 @@ def parse_args():
                    help="Root folder that contains Stage-1 runs.")
     p.add_argument("--city", default=None,
                    help="City name hint (e.g., 'nansha', 'zhongshan').")
+    p.add_argument("--manifest-path", default=None,
+                   help="Explicit manifest path.")
     p.add_argument("--prefer", default="tuned",
                    choices=["tuned", "trained"],
                    help="Model preference (fallback handled automatically).")
@@ -84,9 +86,9 @@ def parse_args():
 
 
 # ---------------- helpers ----------------
-def _load_manifest(results_dir: str, city_hint: str | None) -> dict:
+def _load_manifest(results_dir: str, city_hint: str | None, manifest_path = None ) -> dict:
     mpath = _find_stage1_manifest(
-        manual=None,
+        manual=manifest_path,
         base_dir=results_dir,
         city_hint=city_hint,
         model_hint=os.getenv("MODEL_NAME_OVERRIDE", "GeoPriorSubsNet"),
@@ -160,7 +162,7 @@ def _load_saved_calibrator(run_dir: str) -> IntervalCalibrator | None:
 # ---------------- main ----------------
 def main():
     args = parse_args()
-    M = _load_manifest(args.results_dir, args.city)
+    M = _load_manifest(args.results_dir, args.city, args.manifest_path)
     cfg = M["config"]
 
     CITY = M.get("city")
