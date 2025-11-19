@@ -421,7 +421,7 @@ def evaluate_forecast(
         median_col = quantile_map[median_q]
         vlog(
             f"[evaluate_forecast] Detected quantile mode with "
-            f"{len(quantile_map)} quantiles; median q≈{median_q:.2f} "
+            f"{len(quantile_map)} quantiles; median q~{median_q:.2f} "
             f"via column '{median_col}'.",
             verbose=verbose,
             level=2,

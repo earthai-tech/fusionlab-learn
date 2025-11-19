@@ -1,6 +1,8 @@
 
 import numpy as np
 
+from .._optdeps import with_progress 
+from ..utils.validator import check_is_fitted 
 from . import KERAS_DEPS
 
 tf_concat=KERAS_DEPS.concat 
@@ -65,7 +67,7 @@ class IntervalCalibrator:
         self.target = float(target)
         self.max_iter = int(max_iter)
         self.tol = float(tol)
-        self.factors_ = None  # shape: (H,)
+        
 
     @staticmethod
     def _coverage(y, lo, hi):
@@ -124,11 +126,12 @@ class IntervalCalibrator:
         bisection per horizon to hit the requested coverage within
         ``tol`` or until ``max_iter`` is reached.
         """
-        
+        # self.factors_ = None  # shape: (H,)
         y_true = np.array(y_true)
         q_lo   = np.array(q_lo)
         q_med  = np.array(q_med)
         q_hi   = np.array(q_hi)
+
         if y_true.ndim == 3 and y_true.shape[-1] == 1:
             y_true = y_true[..., 0]
             q_lo   = q_lo[..., 0]
@@ -136,9 +139,26 @@ class IntervalCalibrator:
             q_hi   = q_hi[..., 0]
 
         H = q_med.shape[1]
+
+        # Optionally wrap the horizon loop with tqdm for a progress bar
+        indices = range(H)
+        indices = with_progress(
+            indices,
+            desc="Fitting interval factors per horizon",
+            ascii=True,
+            leave=False,
+        )
         fs = []
-        for h in range(H):
-            fs.append(self._fit_one(y_true[:, h], q_lo[:, h], q_med[:, h], q_hi[:, h]))
+        for h in indices:
+            fs.append(
+                self._fit_one(
+                    y_true[:, h],
+                    q_lo[:, h],
+                    q_med[:, h],
+                    q_hi[:, h],
+                )
+            )
+
         self.factors_ = np.array(fs, dtype=np.float32)
         return self
 
@@ -174,8 +194,8 @@ class IntervalCalibrator:
         * The output keeps the input dimensionality (``(N, H)`` or
           ``(N, H, 1)``).
         """
-   
-        assert self.factors_ is not None, "Call fit() first."
+        check_is_fitted (self, attributes =['factors_'])
+ 
         q_lo = np.array(q_lo); q_med = np.array(q_med); q_hi = np.array(q_hi)
         squeeze = False
         if q_med.ndim == 3 and q_med.shape[-1] == 1:
@@ -248,13 +268,24 @@ def fit_interval_calibrator_on_val(model, ds_val, target=0.80):
     cal = IntervalCalibrator(target=target)
 
     y_true_list, lo_list, med_list, hi_list = [], [], [], []
-    for x, y in ds_val:  # y needs 'subs_pred' with shape (B,H,1)
+
+    # Wrap with progress bar if available  otherwise use plain iterator
+    iterator = with_progress(
+        ds_val,
+        desc="Calibrating intervals on val",
+        ascii=True,
+        leave=False,
+    )
+
+    for x, y in iterator:  # y needs 'subs_pred' with shape (B,H,1)
         out = model(x, training=False)
         s_pred_q, _ = model.split_data_predictions(out["data_final"])  # (B,H,Q,1), (B,H,Q,1)
         lo, med, hi = _stack_subs_quantiles(s_pred_q)
 
         y_true_list.append(y["subs_pred"])
-        lo_list.append(lo); med_list.append(med); hi_list.append(hi)
+        lo_list.append(lo)
+        med_list.append(med)
+        hi_list.append(hi)
 
     y_true = tf_concat(y_true_list, axis=0).numpy()
     q_lo   = tf_concat(lo_list,   axis=0).numpy()

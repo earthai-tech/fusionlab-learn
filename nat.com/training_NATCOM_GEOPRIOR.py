@@ -20,6 +20,7 @@ import sys
 import json
 import joblib
 import numpy as np
+import pandas as pd
 import datetime as dt
 import warnings
 import tensorflow as tf
@@ -39,6 +40,7 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 
 # ---------------- fusionlab imports ----------------
 try:
+    from fusionlab._optdeps import with_progress 
     from fusionlab.api.util import get_table_size
     from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
     from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
@@ -57,7 +59,7 @@ try:
     from fusionlab.nn.utils import plot_history_in
     from fusionlab.nn.pinn.op import extract_physical_parameters
     from fusionlab.plot.forecast import plot_eval_future
-
+    
     print("Successfully imported fusionlab modules.")
 except Exception as e:
     print(f"Critical Error: fusionlab imports failed: {e}")
@@ -334,6 +336,20 @@ def save_ablation_record(outdir, city, model_name, cfg, eval_dict,
     with open(jpath, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
     print(f"[Ablation] appended -> {jpath}")
+
+
+def load_ablation_jsonl(path):
+    # df_abl = load_ablation_jsonl("ablation_records/ablation_record.jsonl")
+    # print(df_abl.head())
+    rows = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return pd.DataFrame(rows)
+
 
 def _to_np(a):
     if hasattr(a, "numpy"):
@@ -652,28 +668,27 @@ def _best_epoch_and_metrics(hist: dict):
 # ---- files/paths
 weights_path     = os.path.join(
     RUN_OUTPUT_PATH, 
-    f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_weights.h5")
+    f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.weights.h5")
 arch_json_path   = os.path.join(
     RUN_OUTPUT_PATH, 
     f"{CITY_NAME}_{MODEL_NAME}_architecture.json")
 summary_json_path= os.path.join(
     RUN_OUTPUT_PATH, 
     f"{CITY_NAME}_{MODEL_NAME}_training_summary.json")
-savedmodel_dir   = os.path.join(
-    RUN_OUTPUT_PATH,
-    f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_SavedModel")
-manifest_path    = os.path.join(
+
+manifest_path= os.path.join(
     RUN_OUTPUT_PATH,
     f"{CITY_NAME}_{MODEL_NAME}_run_manifest.json")
 
 # ---- 2.1 separate weights (useful for quick reloads / ablations)
-subs_model_inst.save_weights(weights_path)
-
-# ---- 2.2 SavedModel export (graph, signatures)
+#  save weights for rebuilding the model for caution. 
 try:
-    tf.saved_model.save(subs_model_inst, savedmodel_dir)
+    subs_model_inst.save_weights(weights_path)
+    print(f"[OK] Saved HDF5 weights -> {weights_path}")
 except Exception as e:
-    print(f"[Warn] tf.saved_model.save failed: {e}")
+    print(
+        f"[Warn] save_weights('{weights_path}') failed: {e}\n"
+    )
 
 # ---- 2.3 architecture JSON
 try:
@@ -724,18 +739,9 @@ training_summary = {
         "run_dir": RUN_OUTPUT_PATH,
         "checkpoint_keras": ckpt_path,
         "weights_h5": weights_path,
-        "saved_model": savedmodel_dir,
+        # "saved_model": savedmodel_dir,
         "arch_json": arch_json_path,
         "csv_log": csvlog_path,
-        "history_plot": os.path.join(
-            RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png"
-        ),
-        "history_plot_pdf": os.path.join(
-            RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.pdf"
-        ),
-        "phys_params_csv": os.path.join(
-            RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv"
-        ),
     },
 }
 
@@ -764,7 +770,7 @@ run_manifest = {
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(run_manifest, f, indent=2)
 
-print("[OK] Persisted weights, SavedModel, architecture JSON,"
+print("[OK] Persisted weights, architecture JSON,"
       " CSV log, training summary, and run manifest.")
 
 
@@ -1045,7 +1051,7 @@ censor_metrics = None   # will become a dict if we have a flag
 
 y_true_list, s_q_list, mask_list = [], [], []
 
-for xb, yb in ds_eval:
+for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
     out = subs_model_inst(xb, training=False)
     data_final_b = out["data_final"]
 

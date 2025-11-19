@@ -11,7 +11,7 @@ Usage (tuned model):
     --model-path results/nansha_GeoPriorSubsNet_stage1/tuning/run_YYYYMMDD-HHMMSS/nansha_GeoPrior_best.keras ^
     --dataset test ^
     --calibrator results/nansha_GeoPriorSubsNet_stage1/train_YYYYMMDD-HHMMSS/interval_factors_80.npy
-    --eval-physics 
+    --eval-losses --eval-physics --no-figs 
 
 Usage (trained model, re-fit calibrator on val):
   python nat.com/inference_NATCOM_GEOPRIOR.py ^
@@ -49,7 +49,6 @@ python nat.com/inference_NATCOM_GEOPRIOR.py \
   --fit-calibrator \
   --eval-losses --eval-physics --no-figs
 
-
 Repeat B--> A by swapping stage1-dir and model-path.
 
 All runs produce:
@@ -74,6 +73,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 tf.get_logger().setLevel("ERROR")
 
 # --- fusionlab imports ---
+from fusionlab._optdeps import with_progress 
 from fusionlab.utils.generic_utils import ensure_directory_exists
 from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
 from fusionlab.registry.utils import _find_stage1_manifest  
@@ -617,12 +617,20 @@ def main():
         "FixedGammaW": FixedGammaW,
         "FixedHRef": FixedHRef,
         "make_weighted_pinball": make_weighted_pinball,
+        # if not already @register_keras_serializable, also add:
+        "coverage80_fn": coverage80_fn,
+        "sharpness80_fn": sharpness80_fn,
     }
-
+    ckpt_name = "{city}_GeoPrior_best{kind}"
+    #ckpt_path = os.path.join(args.model_path, ckpt_name)
     with custom_object_scope(custom_objects):
         try:
             # Preferred path: load the saved Keras model directly
-            model = load_model(args.model_path, compile=False)
+            
+            model = load_model(
+                os.path.join(args.model_path, ckpt_name.format( city=CITY, kind=".keras")), 
+                compile=True
+                )
             print(f"[Model] Loaded from {args.model_path}")
         except Exception as e:
             # Robust fallback for tuned runs where load_model fails
@@ -655,7 +663,10 @@ def main():
             weights_path = _infer_best_weights_path(args.model_path)
             if weights_path is not None:
                 try:
-                    model.load_weights(weights_path)
+                    model.load_weights(
+                        os.path.join (weights_path, ckpt_name.format(city=CITY, kind=".weights.h5")),
+                        )
+                        
                     print(
                         "[Fallback] Loaded weights into rebuilt "
                         f"GeoPriorSubsNet from: {weights_path}"
@@ -746,7 +757,7 @@ def main():
         # Build a small dataset for metrics
         ds = tf.data.Dataset.from_tensor_slices((X, y_map)).batch(batch_size)
         y_true_list, s_q_list = [], []
-        for xb, yb in ds:
+        for xb, yb in with_progress (ds, desc="Inference Interval diagnostic"):
             out = model(xb, training=False)
             s_q_b, _ = model.split_data_predictions(out["data_final"])
             y_true_list.append(yb["subs_pred"])

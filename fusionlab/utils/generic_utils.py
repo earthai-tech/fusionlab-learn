@@ -1110,7 +1110,7 @@ def vlog(
         if actual_verbose >= level:
             # Indent and prefix with the label from `level`.
             indent = " " * (depth * 2)
-            _emit(f"{indent}{verbosity_labels[level]} {message}")
+            _emit(rf"{indent}{verbosity_labels[level]} {message}")
         # Nothing else for mode='log' if verbosity is too low.
         return
 
@@ -1132,25 +1132,25 @@ def vlog(
         # If >=3 => prefix with [INFO] if vp is True and not already tagged
         if actual_verbose <=3:
             if vp and not already_tagged:
-                _emit(f"{indent}[INFO] {message}")
+                _emit(rf"{indent}[INFO] {message}")
             else:
-                _emit(f"{indent}{message}")
+                _emit(rf"{indent}{message}")
             return 
 
         # If 3 < verbose < 5 => prefix with [DEBUG] if vp is True and not already tagged
         if 3 < actual_verbose < 5:
             if vp and not already_tagged:
-                _emit(f"{indent}[DEBUG] {message}")
+                _emit(rf"{indent}[DEBUG] {message}")
             else:
-                _emit(f"{indent}{message}")
+                _emit(rf"{indent}{message}")
             return
 
         # If verbose >= 5 => prefix with [TRACE] if vp is True and not already tagged
         if actual_verbose >= 5:
             if vp and not already_tagged:
-                _emit(f"{indent}[TRACE] {message}")
+                _emit(rf"{indent}[TRACE] {message}")
             else:
-                _emit(f"{indent}{message}")
+                _emit(rf"{indent}{message}")
             return
 
 def get_actual_column_name(

@@ -26,11 +26,8 @@ from ..core.checks import (
 
 from ..decorators import isdf 
 from .generic_utils import vlog
-
-try:
-    from tqdm.auto import tqdm  
-except Exception:             
-    tqdm = None
+from fusionlab._optdeps import HAS_TQDM, TQDM as _TQDM
+ 
 
 __all__ = [
     'check_sequence_feasibility', 'get_sequence_counts',
@@ -567,17 +564,6 @@ default 'auto'
     subs_target_list, gwl_target_list = [], []
 
     # # Grouping
-    # if group_id_cols:
-    #     grouped = df_win.groupby(group_id_cols)
-    #     n_groups = grouped.ngroups
-    #     group_iter = grouped
-    # else:
-    #     n_groups = 1
-    #     group_iter = [(None, df_win)]
-
-    # log_every = max(1, n_groups // 10)
-
-
     # Setup grouping (allow no grouping => single global group)
     if group_id_cols:
         grouped = df_win.groupby(group_id_cols)
@@ -591,9 +577,9 @@ default 'auto'
     log_every = max(1, n_groups // 10)
     
     # Optionally wrap with tqdm if available and verbosity suggests user cares
-    use_tqdm = tqdm is not None and verbose >= 1 and n_groups > 1
+    use_tqdm = HAS_TQDM  and verbose >= 1 and n_groups > 1
     if use_tqdm:
-        iter_groups = tqdm(
+        iter_groups = _TQDM(
             group_iter,
             total=n_groups,
             desc=f"[Future] groups ({model_name or ''})".strip(),
@@ -621,15 +607,6 @@ default 'auto'
                     level=6,
                     logger=logger,
                 )
-        # else:
-        #     # Optional: very low-level logging if still want text traces
-        #     vlog(
-        #         f"[Future] Proc.subset group {gi}/{n_groups} gid={gid!r}",
-        #         verbose=verbose,
-        #         level=6,
-        #         logger=logger,
-        #     )
-
         # 1) History rows (must exist in data)
         hist_rows = _rows_for_times(hist_times, g)
         if hist_rows is None:
