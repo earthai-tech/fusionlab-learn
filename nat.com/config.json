@@ -120,7 +120,7 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 100,
+    "EPOCHS": 50,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
     "TUNER_SEARCH_SPACE": {
@@ -162,7 +162,10 @@
         "type": "bool"
       },
       "pde_mode": [
-        "both"
+        "both",
+        "consolidation",
+        "gw_flow",
+        "none"
       ],
       "scale_pde_residuals": {
         "type": "bool"
@@ -254,6 +257,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "ae8b82788e563f247ab1962c6fe5abc2355c3c3443cd086ebca0877cc855a302"
+    "config_py_hash": "86be3e7eac0220e4dbf6331322b6e76b080a2a3f6ff24aa51b3ff4fd86f4f83d"
   }
 }

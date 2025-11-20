@@ -48,6 +48,11 @@ try:
     from fusionlab.registry.utils import _find_stage1_manifest
     from fusionlab.utils.nat_utils import load_nat_config  
     from fusionlab.utils.forecast_utils import format_and_forecast
+    from fusionlab.utils.scale_metrics import (
+        inverse_scale_target,
+        point_metrics,
+        per_horizon_metrics,
+    )
     from fusionlab.nn.pinn.models import GeoPriorSubsNet
     from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
     from fusionlab.nn.losses import make_weighted_pinball
@@ -64,7 +69,7 @@ try:
 except Exception as e:
     print(f"Critical Error: fusionlab imports failed: {e}")
     raise
-
+#%
 # =============================================================================
 # Config / Paths
 # =============================================================================
@@ -350,55 +355,6 @@ def load_ablation_jsonl(path):
             rows.append(json.loads(line))
     return pd.DataFrame(rows)
 
-
-def _to_np(a):
-    if hasattr(a, "numpy"):
-        a = a.numpy()
-    return np.asarray(a)
-
-def _flat(a):
-    return _to_np(a).reshape(-1)
-
-def _point_metrics(y_true, y_pred):
-    """
-    Returns dict(mae, mse, r2) computed on flattened arrays (NaN-safe).
-    R² = 1 - SSE/SST; if var(y)=0 -> r2=nan.
-    """
-    yt = _flat(y_true)
-    yp = _flat(y_pred)
-    m = {}
-    diff = yt - yp
-    m["mae"] = float(np.nanmean(np.abs(diff)))
-    mse = float(np.nanmean(diff**2))
-    m["mse"] = mse
-    var = float(np.nanvar(yt))
-    m["r2"] = float(1.0 - (mse / (var + 1e-12))) if var > 0 else float("nan")
-    return m
-
-def _per_h_metrics(y_true, y_pred):
-    """
-    Per-horizon MAE & R² as dicts like {"H1": 0.23, "H2": ...}.
-    """
-    Y = _to_np(y_true).squeeze(-1)  # (N,H)
-    P = _to_np(y_pred).squeeze(-1)
-    H = Y.shape[1]
-    out_mae, out_r2 = {}, {}
-    for h in range(H):
-        yy = Y[:, h]
-        pp = P[:, h]
-        mask = np.isfinite(yy) & np.isfinite(pp)
-        if mask.sum() == 0:
-            out_mae[f"H{h+1}"] = None
-            out_r2[f"H{h+1}"] = None
-            continue
-        d = yy[mask] - pp[mask]
-        mae = float(np.mean(np.abs(d)))
-        mse = float(np.mean(d**2))
-        var = float(np.var(yy[mask]))
-        r2 = float(1.0 - mse / (var + 1e-12)) if var > 0 else float("nan")
-        out_mae[f"H{h+1}"] = mae
-        out_r2[f"H{h+1}"] = r2
-    return out_mae, out_r2
 #-----------------------------------------------------------------------------
 
 encoders = M["artifacts"]["encoders"]
@@ -637,7 +593,7 @@ history = subs_model_inst.fit(
     verbose=1,
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
-
+#%
 def _name_of(obj):
     if hasattr(obj, "__name__"): 
         return obj.__name__
@@ -679,6 +635,7 @@ summary_json_path= os.path.join(
 manifest_path= os.path.join(
     RUN_OUTPUT_PATH,
     f"{CITY_NAME}_{MODEL_NAME}_run_manifest.json")
+
 
 # ---- 2.1 separate weights (useful for quick reloads / ablations)
 #  save weights for rebuilding the model for caution. 
@@ -745,9 +702,22 @@ training_summary = {
     },
 }
 
+final_model_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_final.keras",
+)
+try: 
+    subs_model_inst.save(final_model_path)  # includes optimizer & compile config
+    training_summary["paths"]["final_keras"] = final_model_path
+    print(f"[OK] Saved Final keras model -> {final_model_path}")
+except Exception as e: 
+    print(
+        f"[Warn] Saved Final keras model ('{final_model_path}') failed: {e}\n"
+    )
+
 with open(summary_json_path, "w", encoding="utf-8") as f:
     json.dump(training_summary, f, indent=2)
-
+#%
 # ---- 2.5 a small run manifest that downstream scripts can read
 run_manifest = {
     "stage": "stage-2-train",
@@ -1072,40 +1042,84 @@ y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
 s_q = tf.concat(s_q_list, axis=0) if s_q_list else None           # (N,H,Q,1)
 mask = tf.concat(mask_list, axis=0) if mask_list else None        # (N,H,1) booleans
 
-
-# --- 2.3.a Interval coverage/sharpness (uncalibrated vs calibrated) ---
-# keep them two for ablation storage 
-s_q_cal =None
-s_med =None 
+# --- 2.3.a Interval coverage/sharpness (scaled + physical) ---------------
+cov80_uncal_phys = cov80_cal_phys = None
+sharp80_uncal_phys = sharp80_cal_phys = None
+s_q_cal = None
 
 if QUANTILES and (y_true is not None) and (s_q is not None):
-    # Uncalibrated
+    # ---------- SCALED metrics (as before) ----------
     cov80_uncal   = float(coverage80_fn(y_true, s_q).numpy())
     sharp80_uncal = float(sharpness80_fn(y_true, s_q).numpy())
     # Calibrated (apply same calibrator to the whole tensor)
-    s_q_cal = apply_calibrator_to_subs(cal80, s_q)                        # keeps (N, H, 3, 1)
+    s_q_cal = apply_calibrator_to_subs(cal80, s_q)  # (N, H, Q, 1) # or keeps (N, H, 3, 1)
     cov80_cal   = float(coverage80_fn(y_true, s_q_cal).numpy())
     sharp80_cal = float(sharpness80_fn(y_true, s_q_cal).numpy())
+
+    # ---------- PHYSICAL metrics (inverse-scaled) ----------
+    # 1) inverse-transform y_true and quantiles to physical units
+    y_true_phys_np = inverse_scale_target(
+        y_true,
+        scaler_info=scaler_info_dict,
+        target_name=SUBSIDENCE_COL,
+    )
+    s_q_phys_np = inverse_scale_target(
+        s_q,
+        scaler_info=scaler_info_dict,
+        target_name=SUBSIDENCE_COL,
+    )
+
+    y_true_phys_tf = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    s_q_phys_tf    = tf.convert_to_tensor(s_q_phys_np,    dtype=tf.float32)
+
+    cov80_uncal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+    sharp80_uncal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
+
+    if s_q_cal is not None:
+        s_q_cal_phys_np = inverse_scale_target(
+            s_q_cal,
+            scaler_info=scaler_info_dict,
+            target_name=SUBSIDENCE_COL,
+        )
+        s_q_cal_phys_tf = tf.convert_to_tensor(s_q_cal_phys_np, dtype=tf.float32)
+
+        cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
+        sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
 
 # --- 2.3.b Optional censor-stratified MAE on the same loop products ---
 # Works for both quantile mode (use median) and point-forecast mode (fallback).
 if (y_true is not None) and (mask is not None):
     if QUANTILES and (s_q is not None):
         med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
-        s_med = s_q[..., med_idx, :]  # (N, H, 1)
+        s_med = s_q[..., med_idx, :]  # (N, H, 1) scaled
     else:
         # point-forecast: take subsidence head from this pass
         s_pred_list = []
         for xb2, _ in ds_eval:
             out2 = subs_model_inst(xb2, training=False)
             s_pred_list.append(out2["data_final"][..., :1])  # (B, H, 1)
-        s_med = tf.concat(s_pred_list, axis=0)
+        s_med = tf.concat(s_pred_list, axis=0)              # scaled
+
+    # Convert both y_true and s_med to physical units using Stage-1 scaler_info
+    y_true_phys_np = inverse_scale_target(
+        y_true,
+        scaler_info=scaler_info_dict,
+        target_name=SUBSIDENCE_COL,
+    )
+    s_med_phys_np = inverse_scale_target(
+        s_med,
+        scaler_info=scaler_info_dict,
+        target_name=SUBSIDENCE_COL,
+    )
+
+    y_true_phys = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+    s_med_phys  = tf.convert_to_tensor(s_med_phys_np, dtype=tf.float32)
 
     mask_f = tf.cast(mask, tf.float32)                       # (N, H, 1)
     num_cens = tf.reduce_sum(mask_f) + 1e-8
     num_unc  = tf.reduce_sum(1.0 - mask_f) + 1e-8
 
-    abs_err = tf.abs(y_true - s_med)                         # (N, H, 1)
+    abs_err = tf.abs(y_true_phys - s_med_phys)               # physical units
     mae_cens = tf.reduce_sum(abs_err * mask_f) / num_cens
     mae_unc  = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
 
@@ -1115,11 +1129,13 @@ if (y_true is not None) and (mask is not None):
         "mae_censored": float(mae_cens.numpy()),
         "mae_uncensored": float(mae_unc.numpy()),
     }
+
     print(f"[CENSOR] MAE censored={censor_metrics['mae_censored']:.4f} | "
           f"uncensored={censor_metrics['mae_uncensored']:.4f}")
 
 
 # --- 2.4 Point metrics (MAE/MSE/R²), overall + per-horizon -------------
+
 metrics_point = {}
 per_h_mae_dict, per_h_r2_dict = None, None
 
@@ -1128,30 +1144,79 @@ if (y_true is not None):
         # median index
         med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
         s_med_uncal = s_q[..., med_idx, :]           # (N,H,1)
-        # prefer calibrated median if available
+
+        # Prefer calibrated median if available
         if s_q_cal is not None:
             s_med_cal = s_q_cal[..., med_idx, :]     # (N,H,1)
-            metrics_point = _point_metrics(y_true, s_med_cal)
-            per_h_mae_dict, per_h_r2_dict = _per_h_metrics(y_true, s_med_cal)
+            metrics_point = point_metrics(
+                y_true,
+                s_med_cal,
+                use_physical=True,
+                scaler_info=scaler_info_dict,
+                target_name=SUBSIDENCE_COL,
+            )
+            per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
+                y_true,
+                s_med_cal,
+                use_physical=True,
+                scaler_info=scaler_info_dict,
+                target_name=SUBSIDENCE_COL,
+            )
         else:
-            metrics_point = _point_metrics(y_true, s_med_uncal)
-            per_h_mae_dict, per_h_r2_dict = _per_h_metrics(y_true, s_med_uncal)
+            metrics_point = point_metrics(
+                y_true,
+                s_med_uncal,
+                use_physical=True,
+                scaler_info=scaler_info_dict,
+                target_name=SUBSIDENCE_COL,
+            )
+            per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
+                y_true,
+                s_med_uncal,
+                use_physical=True,
+                scaler_info=scaler_info_dict,
+                target_name=SUBSIDENCE_COL,
+            )
+
     else:
-        # point-forecast branch (you already built s_med above in 2.3.b)
-        # ensure s_med exists
+        # point-forecast branch
         if s_med is None:
-            # fallback: recompute once
             s_pred_list = []
-            for xb2, _ in ds_eval:
+            for xb2, _ in with_progress(ds_eval, desc="Point-forecast Diagnostics"):
                 out2 = subs_model_inst(xb2, training=False)
                 s_pred_list.append(out2["data_final"][..., :1])  # (B,H,1)
             s_med = tf.concat(s_pred_list, axis=0)
-        metrics_point = _point_metrics(y_true, s_med)
-        per_h_mae_dict, per_h_r2_dict = _per_h_metrics(y_true, s_med)
+
+        metrics_point = point_metrics(
+            y_true,
+            s_med,
+            use_physical=True,
+            scaler_info=scaler_info_dict,
+            target_name=SUBSIDENCE_COL,
+        )
+        per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
+            y_true,
+            s_med,
+            use_physical=True,
+            scaler_info=scaler_info_dict,
+            target_name=SUBSIDENCE_COL,
+        )
 
 # Normalize coverage/sharpness choices for ablation record (prefer calibrated)
-coverage80_for_abl = cov80_cal if (cov80_cal is not None) else cov80_uncal
-sharpness80_for_abl = sharp80_cal if (sharp80_cal is not None) else sharp80_uncal
+
+coverage80_for_abl = (
+    cov80_cal_phys if (cov80_cal_phys is not None)
+    else cov80_cal if (cov80_cal is not None)
+    else cov80_uncal_phys if (cov80_uncal_phys is not None)
+    else cov80_uncal
+)
+
+sharpness80_for_abl = (
+    sharp80_cal_phys if (sharp80_cal_phys is not None)
+    else sharp80_uncal_phys if (sharp80_uncal_phys is not None)
+    else sharp80_cal if (sharp80_cal is not None)
+    else sharp80_uncal
+)
 
 # Save summary JSON
 stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -1165,17 +1230,26 @@ payload = {
     "metrics_evaluate": {k: _to_py(v) for k, v in (eval_results or {}).items()},
     "physics_diagnostics": phys,
 }
+
 if QUANTILES:
     payload["interval_calibration"] = {
         "target": 0.80,
-        "factors_per_horizon": getattr(cal80, "factors_", None).tolist(
-            ) if hasattr(cal80, "factors_") else None,
+        "factors_per_horizon": getattr(cal80, "factors_", None).tolist()
+        if hasattr(cal80, "factors_") else None,
+
+        # scaled-space metrics (backward compatible)
         "coverage80_uncalibrated": cov80_uncal,
-        "coverage80_calibrated": cov80_cal,
+        "coverage80_calibrated":   cov80_cal,
         "sharpness80_uncalibrated": sharp80_uncal,
-        "sharpness80_calibrated": sharp80_cal,
+        "sharpness80_calibrated":   sharp80_cal,
+
+        # physical-space metrics (new, recommended for the paper)
+        "coverage80_uncalibrated_phys": cov80_uncal_phys,
+        "coverage80_calibrated_phys":   cov80_cal_phys,
+        "sharpness80_uncalibrated_phys": sharp80_uncal_phys,
+        "sharpness80_calibrated_phys":   sharp80_cal_phys,
     }
-    
+
 if censor_metrics is not None:
     payload["censor_stratified"] = censor_metrics
 
@@ -1192,9 +1266,6 @@ if per_h_mae_dict:
 if per_h_r2_dict:
     payload.setdefault("per_horizon", {})
     payload["per_horizon"]["r2"] = per_h_r2_dict
-
-# If you want the calibrated-vs-uncalibrated interval numbers too, you already
-# saved them under 'interval_calibration' (good).
 
 
 json_out = os.path.join(RUN_OUTPUT_PATH, f"geoprior_eval_phys_{stamp}.json")

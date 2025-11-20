@@ -64,8 +64,6 @@ all__= [
         'plot_hydraulic_head',
 ]
 
-
-
 @SaveFile 
 def format_pinn_predictions(
     predictions: Optional[Dict[str, 'Tensor']] = None,
@@ -617,7 +615,7 @@ def format_pihalnet_predictions(
 
     vlog("Model prediction formatting to DataFrame complete.",
          level=3, verbose=verbose, logger=_logger)
-         
+    
     return final_df
 
 
@@ -1155,21 +1153,33 @@ def _evaluate_coverage(
 
         # Use compute_quantile_diagnostics
         try:
-            cov_savefile = None 
-            if savefile: 
-                cov_savefile = os.path.join(
-                    os.path.dirname(savefile), 'diagnostics_results.json'
-                )
+            cov_savefile = None
+            if savefile:
+                # If savefile has an extension, treat it as a file path.
+                # Example: ".../subs_eval.csv"
+                #   -> ".../subs_eval_diagnostics_results.json"
+                root, ext = os.path.splitext(savefile)
+                if ext:
+                    cov_savefile = f"{root}_diagnostics_results.json"
+                else:
+                    # No extension: treat `savefile` as a directory-like path
+                    # Example: "results/nansha_eval"
+                    #   -> "results/nansha_eval/diagnostics_results.json"
+                    cov_savefile = os.path.join(
+                        savefile, "diagnostics_results.json"
+                    )
+
             compute_quantile_diagnostics(
-                df, 
-                target_name=base_name, 
-                quantiles=[float(c.split('_q')[-1])/100. for c in q_cols], 
-                coverage_quantile_indices=q_indices, 
-                savefile=cov_savefile, 
-                name=name, 
-                verbose=verbose, 
+                df,
+                target_name=base_name,
+                quantiles=[float(c.split("_q")[-1]) / 100.0 for c in q_cols],
+                coverage_quantile_indices=q_indices,
+                savefile=cov_savefile,
+                name=name,
+                verbose=verbose,
                 logger=_logger,
             )
+
         except Exception as e:
             vlog(f"  [WARN] Failed to compute quantile diagnostics: {e}",
                  level=2, verbose=verbose, logger=_logger)

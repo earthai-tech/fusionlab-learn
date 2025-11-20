@@ -76,6 +76,11 @@ tf.get_logger().setLevel("ERROR")
 from fusionlab._optdeps import with_progress 
 from fusionlab.utils.generic_utils import ensure_directory_exists
 from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+from fusionlab.utils.scale_metrics import (
+    inverse_scale_target,
+    point_metrics,
+    per_horizon_metrics,
+)
 from fusionlab.registry.utils import _find_stage1_manifest  
 
 from fusionlab.nn.pinn.models import GeoPriorSubsNet
@@ -124,8 +129,6 @@ def parse_args():
                    help="Target coverage for interval calibrator")
     p.add_argument("--batch-size", type=int, default=32)
     return p.parse_args()
-
-
 
 # ------------------ helpers ------------------
 def _resolve_manifest(args) -> dict:
@@ -219,16 +222,16 @@ def _pick_npz_for_dataset(M: dict, name: str) -> tuple[dict | None, dict | None]
         return x, y
     raise ValueError("Use 'custom' for custom NPZs")
 
-def _load_calibrator(args, model, ds_val, target_cov):
-    # 1) explicit .npy
-    if args.calibrator and os.path.exists(args.calibrator):
-        cal = IntervalCalibrator(target=target_cov)
-        cal.factors_ = np.load(args.calibrator).astype(np.float32)
-        return cal
-    # 2) fit on val set if requested and available
-    if args.fit_calibrator and ds_val is not None:
-        return fit_interval_calibrator_on_val(model, ds_val, target=target_cov)
-    return None
+# def _load_calibrator(args, model, ds_val, target_cov):
+#     # 1) explicit .npy
+#     if args.calibrator and os.path.exists(args.calibrator):
+#         cal = IntervalCalibrator(target=target_cov)
+#         cal.factors_ = np.load(args.calibrator).astype(np.float32)
+#         return cal
+#     # 2) fit on val set if requested and available
+#     if args.fit_calibrator and ds_val is not None:
+#         return fit_interval_calibrator_on_val(model, ds_val, target=target_cov)
+#     return None
 
 def _infer_input_dims_from_X(X: dict) -> tuple[int, int, int]:
     """
@@ -324,6 +327,76 @@ def _load_best_hps_near_model(model_path: str) -> dict:
         f"Looked for '<city>_GeoPrior_best_hps.json' and 'tuning_summary.json'."
     )
 
+def _coerce_quantile_weights(d: dict | None, default: dict) -> dict:
+    """Ensure quantile-weight dict has float keys."""
+    if not d:
+        return default
+    out = {}
+    for k, v in d.items():
+        try:
+            q = float(k)
+        except (TypeError, ValueError):
+            q = k
+        out[q] = float(v)
+    return out
+
+
+def _compile_geoprior_for_eval(
+    model: GeoPriorSubsNet,
+    M: dict,
+    best_hps: dict,
+    quantiles: list[float] | None,
+) -> GeoPriorSubsNet:
+    """
+    (Re)compile GeoPriorSubsNet with the same loss/physics config
+    used in training, based on Stage-1 manifest + best_hps.
+    """
+    cfg = M["config"]
+
+    loss_weights = {"subs_pred": 1.0, "gwl_pred": 0.5}
+
+    SUBS_WEIGHTS_RAW = cfg.get(
+        "SUBS_WEIGHTS",
+        {0.1: 3.0, 0.5: 1.0, 0.9: 3.0},
+    )
+    GWL_WEIGHTS_RAW = cfg.get(
+        "GWL_WEIGHTS",
+        {0.1: 1.5, 0.5: 1.0, 0.9: 1.5},
+    )
+
+    SUBS_WEIGHTS = _coerce_quantile_weights(
+        SUBS_WEIGHTS_RAW, {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
+    )
+    GWL_WEIGHTS = _coerce_quantile_weights(
+        GWL_WEIGHTS_RAW, {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
+    )
+
+    loss_dict = {
+        "subs_pred": make_weighted_pinball(
+            quantiles, SUBS_WEIGHTS
+        ) if quantiles else tf.keras.losses.MSE,
+        "gwl_pred": make_weighted_pinball(
+            quantiles, GWL_WEIGHTS
+        ) if quantiles else tf.keras.losses.MSE,
+    }
+
+    lr = float(best_hps.get("learning_rate", 5e-5))
+    optimizer = Adam(learning_rate=lr)
+
+    model.compile(
+        optimizer=optimizer,
+        loss=loss_dict,
+        loss_weights=loss_weights,
+        # physics loss weights + LR multipliers
+        lambda_gw=float(best_hps.get("lambda_gw", 1.0)),
+        lambda_cons=float(best_hps.get("lambda_cons", 1.0)),
+        lambda_prior=float(best_hps.get("lambda_prior", 1.0)),
+        lambda_smooth=float(best_hps.get("lambda_smooth", 1.0)),
+        lambda_mv=float(best_hps.get("lambda_mv", 0.0)),
+        mv_lr_mult=float(best_hps.get("mv_lr_mult", 1.0)),
+        kappa_lr_mult=float(best_hps.get("kappa_lr_mult", 1.0)),
+    )
+    return model
 
 def _build_geoprior_from_hps(
     M: dict,
@@ -406,27 +479,6 @@ def _build_geoprior_from_hps(
         "feature_processing": feature_processing,
     }
 
-    loss_weights = {"subs_pred": 1.0, "gwl_pred": 0.5}
-
-
-    SUBS_WEIGHTS_RAW = cfg.get(
-        "SUBS_WEIGHTS",
-        {0.1: 3.0, 0.5: 1.0, 0.9: 3.0},
-    )
-    GWL_WEIGHTS_RAW = cfg.get(
-        "GWL_WEIGHTS",
-        {0.1: 1.5, 0.5: 1.0, 0.9: 1.5},
-    )
-
-    SUBS_WEIGHTS = _coerce_quantile_weights(SUBS_WEIGHTS_RAW, {0.1: 3.0, 0.5: 1.0, 0.9: 3.0})
-    GWL_WEIGHTS  = _coerce_quantile_weights(GWL_WEIGHTS_RAW,  {0.1: 1.5, 0.5: 1.0, 0.9: 1.5})
-    
-    loss_dict = {
-        "subs_pred": make_weighted_pinball(
-            quantiles, SUBS_WEIGHTS) if quantiles else tf.keras.losses.MSE,
-        "gwl_pred":  make_weighted_pinball(
-            quantiles, GWL_WEIGHTS)  if quantiles else tf.keras.losses.MSE,
-    }
     # Instantiate the model core
     model = GeoPriorSubsNet(
         static_input_dim=static_dim,
@@ -456,27 +508,17 @@ def _build_geoprior_from_hps(
         # geomechanical priors
         mv=float(best_hps.get("mv", 5e-7)),
         kappa=float(best_hps.get("kappa", 1.0)),
-        architecture_config = architecture_config
+        architecture_config=architecture_config,
     )
-
-    # Compile for evaluation (metrics optional, but loss is required)
-    lr = float(best_hps.get("learning_rate", 5e-5))
-    optimizer = Adam(learning_rate=lr)
-
-    model.compile(
-        optimizer=optimizer,
-        loss=loss_dict,
-        loss_weights=loss_weights,
-        # physics loss weights + LR multipliers
-        lambda_gw=float(best_hps.get("lambda_gw", 1.0)),
-        lambda_cons=float(best_hps.get("lambda_cons", 1.0)),
-        lambda_prior=float(best_hps.get("lambda_prior", 1.0)),
-        lambda_smooth=float(best_hps.get("lambda_smooth", 1.0)),
-        lambda_mv=float(best_hps.get("lambda_mv", 0.0)),
-        mv_lr_mult=float(best_hps.get("mv_lr_mult", 1.0)),
-        kappa_lr_mult=float(best_hps.get("kappa_lr_mult", 1.0)),
+    
+    # Compile for evaluation (reuse helper)
+    _compile_geoprior_for_eval(
+        model,
+        M=M,
+        best_hps=best_hps,
+        quantiles=quantiles,
     )
-
+    
     print(
         "[Fallback] Reconstructed GeoPriorSubsNet from best_hps with "
         f"static_dim={static_dim}, dynamic_dim={dynamic_dim}, "
@@ -520,6 +562,33 @@ def _infer_best_weights_path(model_path: str) -> str | None:
     guess = root + ".weights.h5"
     if os.path.exists(guess):
         return guess
+
+    return None
+
+def _load_calibrator(args, model, ds_val, target_cov):
+    # 0) try loading calibrator from the source model directory
+    if args.use_source_calibrator and not args.calibrator:
+        cand = os.path.join(
+            os.path.dirname(os.path.abspath(args.model_path)),
+            "interval_factors_80.npy",
+        )
+        if os.path.exists(cand):
+            cal = IntervalCalibrator(target=target_cov)
+            cal.factors_ = np.load(cand).astype(np.float32)
+            print(f"[Calibrator] Loaded from source model dir: {cand}")
+            return cal
+
+    # 1) explicit .npy
+    if args.calibrator and os.path.exists(args.calibrator):
+        cal = IntervalCalibrator(target=target_cov)
+        cal.factors_ = np.load(args.calibrator).astype(np.float32)
+        print(f"[Calibrator] Loaded from explicit path: {args.calibrator}")
+        return cal
+
+    # 2) fit on val set if requested and available
+    if args.fit_calibrator and ds_val is not None:
+        print("[Calibrator] Fitting on validation set...")
+        return fit_interval_calibrator_on_val(model, ds_val, target=target_cov)
 
     return None
 
@@ -616,21 +685,19 @@ def main():
         "LearnableKappa": LearnableKappa,
         "FixedGammaW": FixedGammaW,
         "FixedHRef": FixedHRef,
+        # custom loss factory / class
         "make_weighted_pinball": make_weighted_pinball,
-        # if not already @register_keras_serializable, also add:
+        # custom metrics used in compile
         "coverage80_fn": coverage80_fn,
         "sharpness80_fn": sharpness80_fn,
     }
     ckpt_name = "{city}_GeoPrior_best{kind}"
     #ckpt_path = os.path.join(args.model_path, ckpt_name)
+    # os.path.join(args.model_path, ckpt_name.format( city=CITY, kind=".keras")), 
     with custom_object_scope(custom_objects):
+        print(f"[Model] Loaded from {args.model_path}")
         try:
-            # Preferred path: load the saved Keras model directly
-            
-            model = load_model(
-                os.path.join(args.model_path, ckpt_name.format( city=CITY, kind=".keras")), 
-                compile=True
-                )
+            model = load_model(args.model_path, compile=True)
             print(f"[Model] Loaded from {args.model_path}")
         except Exception as e:
             # Robust fallback for tuned runs where load_model fails
@@ -712,6 +779,12 @@ def main():
     y_true_for_format = {}
     if y_map:
         y_true_for_format = {"subsidence": y_map["subs_pred"], "gwl": y_map["gwl_pred"]}
+    # Dataset for metrics / physics diagnostics (scaled space)
+    ds_eval = None
+    if y_map:
+        ds_eval = tf.data.Dataset.from_tensor_slices(
+            (X, y_map)
+        ).batch(args.batch_size)
 
     # Map column names
     cols_cfg = cfg.get("cols", {})
@@ -752,68 +825,149 @@ def main():
         "coverage80": None,
         "sharpness80": None,
     }
+    
+    point_phys = None
+    per_h_mae_phys = None
+    per_h_r2_phys = None
+    
     if y_map and data_final.ndim == 4:
         # Compute interval metrics on-the-fly
-        # Build a small dataset for metrics
         ds = tf.data.Dataset.from_tensor_slices((X, y_map)).batch(batch_size)
         y_true_list, s_q_list = [], []
-        for xb, yb in with_progress (ds, desc="Inference Interval diagnostic"):
+        for xb, yb in with_progress(ds, desc="Inference Interval diagnostic"):
             out = model(xb, training=False)
             s_q_b, _ = model.split_data_predictions(out["data_final"])
-            y_true_list.append(yb["subs_pred"])
-            s_q_list.append(s_q_b)
-        y_true = tf.concat(y_true_list, axis=0)
-        s_q    = tf.concat(s_q_list,    axis=0)
+            y_true_list.append(yb["subs_pred"])   # (B,H,1)
+            s_q_list.append(s_q_b)                # (B,H,Q,1)
+    
+        y_true = tf.concat(y_true_list, axis=0)   # (N,H,1)
+        s_q    = tf.concat(s_q_list,    axis=0)   # (N,H,Q,1)
+    
+        # ---------- scaled coverage/sharpness ----------
         eval_json["coverage80"]  = float(coverage80_fn(y_true, s_q).numpy())
         eval_json["sharpness80"] = float(sharpness80_fn(y_true, s_q).numpy())
-
+        
+        # ---------- physical coverage/sharpness ----------
+        y_true_phys_np = inverse_scale_target(
+            y_true,
+            scaler_info=scaler_info,
+            target_name=SUBS_COL,
+        )
+        s_q_phys_np = inverse_scale_target(
+            s_q,
+            scaler_info=scaler_info,
+            target_name=SUBS_COL,
+        )
+        y_true_phys_tf = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
+        s_q_phys_tf = tf.convert_to_tensor(s_q_phys_np, dtype=tf.float32)
+    
+        eval_json["coverage80_phys"]  = float(
+            coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
+        )
+        eval_json["sharpness80_phys"] = float(
+            sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
+        )
+    
+        # ---------- physical point metrics (MAE/MSE/R²) ----------
+        # Take the median quantile in physical space
+        quantiles_arr = np.asarray(QUANTILES, dtype=float)
+        med_idx = int(np.argmin(np.abs(quantiles_arr - 0.5)))
+        s_med_phys_np = s_q_phys_np[..., med_idx, :]  # (N,H,1)
+    
+        point_phys = point_metrics(
+            y_true_phys_np,
+            s_med_phys_np,
+        )
+        per_h_mae_phys, per_h_r2_phys = per_horizon_metrics(
+            y_true_phys_np,
+            s_med_phys_np,
+        )
+    
+        eval_json["point_metrics_phys"] = {
+            "mae": point_phys.get("mae"),
+            "mse": point_phys.get("mse"),
+            "r2":  point_phys.get("r2"),
+        }
+        eval_json["per_horizon_phys"] = {
+            "mae": per_h_mae_phys,
+            "r2":  per_h_r2_phys,
+        }
+    
     with open(os.path.join(inf_dir, "inference_summary.json"), "w", encoding="utf-8") as f:
         json.dump(eval_json, f, indent=2)
         
     print(f"Saved inference summary JSON -> {os.path.join(inf_dir, 'inference_summary.json')}")
     
+    # If we plan to run scaled-space evaluate/physics, make sure
+    # the model is actually compiled. If not, try to recompile from best_hps.
+    need_eval = (
+        args.eval_losses and y_map and ds_eval is not None
+        ) or args.eval_physics
+    if need_eval and getattr(model, "compiled_loss", None) is None:
+        try:
+            best_hps = _load_best_hps_near_model(args.model_path)
+            _compile_geoprior_for_eval(
+                model,
+                M=M,
+                best_hps=best_hps,
+                quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
+            )
+            print("[Info] Model was not compiled; recompiled from best_hps for eval.")
+        except Exception as e:
+            print(
+                "[Warn] Could not recompile model for evaluation from best_hps: "
+                f"{e}\n[Warn] Scaled-space eval/physics will be skipped."
+            )
+            args.eval_losses = False
+            args.eval_physics = False
+            ds_eval = None
+
+
     # Optional: metrics in scaled space (Keras) + physics diagnostics
-    if args.eval_losses and y_map:
-        ds_eval = tf.data.Dataset.from_tensor_slices(
-            (X, y_map)).batch(args.batch_size)
-        eval_results = model.evaluate(
-            ds_eval, return_dict=True, verbose=0)
-    else:
-        eval_results = None
-    
+    # Optional: metrics in scaled space (Keras) + physics diagnostics
+    eval_results = None
+    if args.eval_losses and ds_eval is not None:
+        try:
+            eval_results = model.evaluate(ds_eval, return_dict=True, verbose=0)
+        except RuntimeError as e:
+            print(
+                "[Warn] Keras evaluate failed (probably uncompiled model): "
+                f"{e}\n[Warn] Skipping scaled-space eval metrics."
+            )
+            eval_results = None
+
     physics_diag = None
-    if args.eval_physics:
+    if args.eval_physics and ds_eval is not None:
         try:
             phys_raw = model.evaluate_physics(
                 ds_eval,
                 max_batches=10,       # e.g. first 10 batches only
                 return_maps=False,    # we only need scalar epsilons here
             )
-            # Keep only scalar entries when converting to Python floats
             physics_diag = {
                 k: float(v.numpy())
                 for k, v in phys_raw.items()
-                if getattr(v, "shape", ()) == ()    # shape () -> scalar
+                if getattr(v, "shape", ()) == ()
             }
             print("Physics diagnostics (approx, first 10 batches):", physics_diag)
-            
-            # physics_diag = {k: float(
-            #     v.numpy()) for k, v in model.evaluate_physics(X,   ).items()}
-        except Exception as e :
+        except Exception as e:
             print(f"[Warn] Physics eval failed: {e}")
-            pass
-    
+            physics_diag = None
+
     # Persist a single JSON with everything (also keep your existing summary)
     with open(os.path.join(inf_dir, "transfer_eval.json"), "w", encoding="utf-8") as f:
         json.dump({
             "dataset": args.dataset,
             "coverage80": eval_json.get("coverage80"),
             "sharpness80": eval_json.get("sharpness80"),
-            "keras_eval": eval_results,         # scaled metrics
-            "physics": physics_diag,            # epsilon_prior/epsilon_cons
+            "coverage80_phys": eval_json.get("coverage80_phys"),
+            "sharpness80_phys": eval_json.get("sharpness80_phys"),
+            "point_metrics_phys": eval_json.get("point_metrics_phys"),
+            "per_horizon_phys": eval_json.get("per_horizon_phys"),
+            "keras_eval": eval_results,   # still in scaled space for debugging
+            "physics": physics_diag,      # epsilon_prior/epsilon_cons
             "csv_path": csv_path,
         }, f, indent=2)
-    
 
     # Plots
     if (not args.no_figs) and (df is not None) and (len(df) > 0):

@@ -315,7 +315,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # --------------------------
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
-EPOCHS = 100
+EPOCHS = 50
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 
@@ -343,7 +343,7 @@ TUNER_SEARCH_SPACE = {
     "use_batch_norm": {"type": "bool"},
 
     # Physics switches
-    "pde_mode": ["both"],
+    "pde_mode": ["both",'consolidation', 'gw_flow', 'none'],
     "scale_pde_residuals": {"type": "bool"},
     "kappa_mode": ["bar", "kb"],
     "hd_factor": {

@@ -9,16 +9,17 @@ import numpy as np
 import tensorflow as tf
 import pandas as pd
 
-from fusionlab.utils.generic_utils import ensure_directory_exists
-from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet
-from fusionlab.nn.pinn.utils import make_weighted_pinball
-from fusionlab.nn.pinn.forecast_utils import format_and_forecast
-from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
-from fusionlab.registry.utils import _find_stage1_manifest
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
+from fusionlab.registry.utils import _find_stage1_manifest
 
-from fusionlab.nn.pinn.utils import build_future_sequences_npz
+from fusionlab.utils.forecast_utils import format_and_forecast
+from fusionlab.utils.generic_utils import ensure_directory_exists
+from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+from fusionlab.utils.sequence_utils import build_future_sequences_npz
 
+from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet
+from fusionlab.nn.losses import make_weighted_pinball
+from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn 
 
 def _load_manifest(path: str | None, verbose: int = 1) -> tuple[dict, str]:
     """
@@ -190,28 +191,64 @@ def main(args):
     
     custom_objects = {
         "GeoPriorSubsNet": GeoPriorSubsNet,
-        "make_weighted_pinball": make_weighted_pinball,
         "LearnableMV": LearnableMV,
         "LearnableKappa": LearnableKappa,
         "FixedGammaW": FixedGammaW,
         "FixedHRef": FixedHRef,
+        # custom loss factory / class
+        "make_weighted_pinball": make_weighted_pinball,
+        # custom metrics used in compile
+        "coverage80_fn": coverage80_fn,
+        "sharpness80_fn": sharpness80_fn,
     }
 
     with tf.keras.utils.custom_object_scope(custom_objects):
         model = tf.keras.models.load_model(args.model_path, compile=False)
         print(f"[Model] Loaded from {args.model_path}")
+        
+    # Dimensions of the two heads (same as in training script)
+    s_dim = getattr(model, "output_subsidence_dim", None)
+    g_dim = getattr(model, "output_gwl_dim", None)
+    if s_dim is None or g_dim is None:
+        # Fallback to manifest info if attributes are missing
+        seq_dims = artifacts["sequences"]["dims"]
+        s_dim = seq_dims["output_subsidence_dim"]
+        g_dim = seq_dims["output_gwl_dim"]
 
     # -----------------------------
     # 4. Run predictions
     # -----------------------------
     y_pred_raw = model.predict(x_future, batch_size=args.batch_size, verbose=1)
 
-    # If model.predict returns a dict, adapt here:
+    # GeoPriorSubsNet.predict usually returns {'data_final': ...}
     if isinstance(y_pred_raw, dict):
-        subs_pred = y_pred_raw["subs_pred"]
+        if "data_final" in y_pred_raw:
+            data_final = y_pred_raw["data_final"]
+        else:
+            raise KeyError(
+                f"Expected key 'data_final' in prediction dict, "
+                f"got keys={list(y_pred_raw.keys())}"
+            )
     else:
-        # If it returns only the subsidence head
-        subs_pred = y_pred_raw
+        # Some variants may return the tensor directly
+        data_final = y_pred_raw
+
+    # data_final shape is either:
+    #   (B, H, Q, O_total) for probabilistic mode
+    #   (B, H, O_total)    for point forecasts
+    if data_final.ndim == 4:
+        # (B, H, Q, O_total)
+        subs_pred = data_final[..., :s_dim]         # (B, H, Q, Os)
+        # gwl_pred  = data_final[..., s_dim:s_dim+g_dim]   # if needed later
+    elif data_final.ndim == 3:
+        # (B, H, O_total)
+        subs_pred = data_final[..., :s_dim]         # (B, H, Os)
+        # gwl_pred  = data_final[..., s_dim:s_dim+g_dim]
+    else:
+        raise RuntimeError(
+            f"Unexpected data_final rank {data_final.ndim}; "
+            "expected 3 or 4."
+        )
 
     # coords_scaled is already (B, H, 3) for the forecast horizon
     coords_horizon = coords_scaled
@@ -220,6 +257,18 @@ def main(args):
     # 5. Use format_and_forecast
     # -----------------------------
     H = forecast_horizon_years
+    
+    # Attach actual scaler objects
+    if isinstance(main_scaler_info, dict):
+        for k, v in main_scaler_info.items():
+            if isinstance(v, dict) and "scaler_path" in v and "scaler" not in v:
+                p = v["scaler_path"]
+                if p and os.path.exists(p):
+                    try:
+                        v["scaler"] = joblib.load(p)
+                    except Exception:
+                        # Keep going even if one scaler fails to load
+                        pass
 
     df_eval, df_future = format_and_forecast(
         y_pred={"subs_pred": subs_pred},
@@ -244,10 +293,12 @@ def main(args):
         # *No* metrics for real future
         eval_metrics=False,
         verbose=2,
+        future_mode="abs_cum", # absolute cummulative 
     )
 
     print("[Stage-3] Future forecast complete.")
     print(f"  Future CSV: {df_future.shape} rows")
+
 
 
 if __name__ == "__main__":
@@ -262,16 +313,16 @@ if __name__ == "__main__":
         ),
     )
     ap.add_argument(
-        "--model_path",
+        "--model-path",
         required=True,
         help="Path to trained Keras model (from Stage-2)",
     )
     ap.add_argument(
-        "--output_dir",
+        "--output-dir",
         default="./results_future",
         help="Where to write future forecast CSV",
     )
-    ap.add_argument("--batch_size", type=int, default=256)
+    ap.add_argument("--batch-size", type=int, default=256)
     ap.add_argument(
         "--quantiles",
         nargs="+",
