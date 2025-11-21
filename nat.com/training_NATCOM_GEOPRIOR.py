@@ -20,7 +20,6 @@ import sys
 import json
 import joblib
 import numpy as np
-import pandas as pd
 import datetime as dt
 import warnings
 import tensorflow as tf
@@ -38,7 +37,6 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
-# ---------------- fusionlab imports ----------------
 try:
     from fusionlab._optdeps import with_progress 
     from fusionlab.api.util import get_table_size
@@ -46,7 +44,20 @@ try:
     from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
     from fusionlab.utils.generic_utils import print_config_table
     from fusionlab.registry.utils import _find_stage1_manifest
-    from fusionlab.utils.nat_utils import load_nat_config  
+    from fusionlab.utils.nat_utils import (
+        load_nat_config, 
+        ensure_input_shapes,
+        map_targets_for_training,
+        make_tf_dataset,
+        load_scaler_info,
+        save_ablation_record,
+        best_epoch_and_metrics,
+        build_censor_mask_from_dynamic,
+        name_of,
+        serialize_subs_params,
+    )
+
+    
     from fusionlab.utils.forecast_utils import format_and_forecast
     from fusionlab.utils.scale_metrics import (
         inverse_scale_target,
@@ -288,72 +299,6 @@ print_config_table(
 
 print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
 #%
-# ------------------------------------Helpers ----------------------------------
-# Encoders / scalers
-def _load_scaler_info(encoders_block: dict):
-    """Load scaler_info (possibly a joblib path) so 
-    formatters can inverse-transform."""
-    si = encoders_block.get("scaler_info")
-    if isinstance(si, str) and os.path.exists(si):
-        try:
-            return joblib.load(si)
-        except Exception:
-            pass
-    # Could already be a plain dict with lightweight info (without the scaler object):
-    return si
-
-# --- ablation registry helpers 
-def save_ablation_record(outdir, city, model_name, cfg, eval_dict,
-                         phys_diag=None, per_h_mae=None, per_h_r2=None):
-    """One compact JSON row per run for Supplement S6."""
-    rec = {
-        "timestamp": dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
-        "city": city,
-        "model": model_name,
-        # physics toggles / weights
-        "pde_mode": cfg.get("PDE_MODE_CONFIG"),
-        "use_effective_h": bool(cfg.get("GEOPRIOR_USE_EFFECTIVE_H", True)),
-        "kappa_mode": cfg.get("GEOPRIOR_KAPPA_MODE", "bar"),
-        "hd_factor": cfg.get("GEOPRIOR_HD_FACTOR", 0.6),
-        "lambda_cons": cfg.get("LAMBDA_CONS"),
-        "lambda_gw": cfg.get("LAMBDA_GW"),
-        "lambda_prior": cfg.get("LAMBDA_PRIOR"),
-        "lambda_smooth": cfg.get("LAMBDA_SMOOTH"),
-        "lambda_mv": cfg.get("LAMBDA_MV"),
-        # key metrics
-        "r2": (eval_dict or {}).get("r2"),
-        "mse": (eval_dict or {}).get("mse"),
-        "mae": (eval_dict or {}).get("mae"),
-        "coverage80": (eval_dict or {}).get("coverage80"),
-        "sharpness80": (eval_dict or {}).get("sharpness80"),
-    }
-    if phys_diag:
-        rec["epsilon_prior"] = phys_diag.get("epsilon_prior")
-        rec["epsilon_cons"] = phys_diag.get("epsilon_cons")
-    if per_h_mae:
-        rec["per_horizon_mae"] = per_h_mae
-    if per_h_r2:
-        rec["per_horizon_r2"] = per_h_r2
-
-    abl_dir = os.path.join(outdir, "ablation_records")
-    os.makedirs(abl_dir, exist_ok=True)
-    jpath = os.path.join(abl_dir, "ablation_record.jsonl")
-    with open(jpath, "a", encoding="utf-8") as f:
-        f.write(json.dumps(rec) + "\n")
-    print(f"[Ablation] appended -> {jpath}")
-
-
-def load_ablation_jsonl(path):
-    # df_abl = load_ablation_jsonl("ablation_records/ablation_record.jsonl")
-    # print(df_abl.head())
-    rows = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    return pd.DataFrame(rows)
 
 #-----------------------------------------------------------------------------
 
@@ -390,7 +335,7 @@ if cs_path and os.path.exists(cs_path):
         print(f"[Warn] Could not load coord_scaler at {cs_path}: {e}")
 
 # Load scaler_info mapping (dict or path)
-scaler_info_dict = _load_scaler_info(encoders)
+scaler_info_dict = load_scaler_info(encoders)
 
 # If scaler_info is a dict with only 'scaler_path',
 #  proactively attach the loaded scaler objects
@@ -431,43 +376,24 @@ OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
 OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
 
 # =============================================================================
-# Helpers
-# =============================================================================
-def _map_targets_for_training(y_dict: dict) -> dict:
-    """Remap canonical keys to model compile keys."""
-    if "subsidence" in y_dict and "gwl" in y_dict:
-        return {"subs_pred": y_dict["subsidence"], "gwl_pred": y_dict["gwl"]}
-    # Backward-compat if exported with 'subs_pred'/'gwl_pred'
-    if "subs_pred" in y_dict and "gwl_pred" in y_dict:
-        return y_dict
-    raise KeyError("Targets must contain ('subsidence','gwl') or ('subs_pred','gwl_pred').")
-
-def _ensure_input_shapes(x: dict) -> dict:
-    """Ensure presence of zero-width placeholders if missing."""
-    out = dict(x)
-    N = out["dynamic_features"].shape[0]
-    if out.get("static_features") is None:
-        out["static_features"] = np.zeros((N, 0), dtype=np.float32)
-    if out.get("future_features") is None:
-        # Most Stage-1 exports already have the correct shape; if not, fall back.
-        # Use past+future or horizon depending on MODE if truly absent.
-        t_future = out["dynamic_features"].shape[1] if MODE == "tft_like" else FORECAST_HORIZON_YEARS
-        out["future_features"] = np.zeros((N, t_future, 0), dtype=np.float32)
-    return out
-
-def make_tf_dataset(X_np: dict, y_np: dict, batch_size: int, shuffle: bool) -> tf.data.Dataset:
-    Xin = _ensure_input_shapes(X_np)
-    Yin = _map_targets_for_training(y_np)
-    ds = tf.data.Dataset.from_tensor_slices((Xin, Yin))
-    if shuffle:
-        ds = ds.shuffle(buffer_size=Xin["dynamic_features"].shape[0], seed=42)
-    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-
-# =============================================================================
 # Build datasets
 # =============================================================================
-train_dataset = make_tf_dataset(X_train, y_train, BATCH_SIZE, shuffle=True)
-val_dataset   = make_tf_dataset(X_val,   y_val,   BATCH_SIZE, shuffle=False)
+
+train_dataset = make_tf_dataset(
+    X_train, y_train,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    mode=MODE,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+)
+val_dataset = make_tf_dataset(
+    X_val, y_val,
+    batch_size=BATCH_SIZE,
+    shuffle=False,
+    mode=MODE,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+)
+
 
 print("\nDataset sample shapes:")
 for xb, yb in train_dataset.take(1):
@@ -479,9 +405,16 @@ for xb, yb in train_dataset.take(1):
 # =============================================================================
 # Build & compile model
 # =============================================================================
-s_dim_model = _ensure_input_shapes(X_train)["static_features"].shape[-1]
-d_dim_model = _ensure_input_shapes(X_train)["dynamic_features"].shape[-1]
-f_dim_model = _ensure_input_shapes(X_train)["future_features"].shape[-1]
+
+X_train_norm = ensure_input_shapes(
+    X_train,
+    mode=MODE,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+)
+s_dim_model = X_train_norm["static_features"].shape[-1]
+d_dim_model = X_train_norm["dynamic_features"].shape[-1]
+f_dim_model = X_train_norm["future_features"].shape[-1]
+
 
 subsmodel_params = {
     "embed_dim": EMBED_DIM,
@@ -594,32 +527,6 @@ history = subs_model_inst.fit(
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
 #%
-def _name_of(obj):
-    if hasattr(obj, "__name__"): 
-        return obj.__name__
-    if hasattr(obj, "__class__"):
-        return obj.__class__.__name__
-    return str(obj)
-
-def _serialize_subs_params(p):
-    out = dict(p)
-    # Make GeoPrior scalars JSON-friendly
-    if "mv" in out:     out["mv"]     = {
-            "type":"LearnableMV", "initial_value": float(GEOPRIOR_INIT_MV)}
-    if "kappa" in out:  out["kappa"]  = {
-            "type":"LearnableKappa","initial_value": float(GEOPRIOR_INIT_KAPPA)}
-    if "gamma_w" in out:out["gamma_w"]= {
-            "type":"FixedGammaW",  "value": float(GEOPRIOR_GAMMA_W)}
-    if "h_ref" in out:  out["h_ref"]  = {
-            "type":"FixedHRef",    "value": float(GEOPRIOR_H_REF)}
-    return out
-
-def _best_epoch_and_metrics(hist: dict):
-    if not hist or "val_loss" not in hist: 
-        return None, {}
-    be = int(np.nanargmin(hist["val_loss"]))
-    metrics_at_best = {k: float(hist[k][be]) for k in hist if len(hist[k])>be}
-    return be, metrics_at_best
 
 # ---- files/paths
 weights_path     = os.path.join(
@@ -655,7 +562,7 @@ except Exception as e:
     print(f"[Warn] to_json failed: {e}")
 
 # ---- 2.4 best-epoch summary
-best_epoch, metrics_at_best = _best_epoch_and_metrics(history.history)
+best_epoch, metrics_at_best = best_epoch_and_metrics(history.history)
 
 training_summary = {
     "timestamp": dt.datetime.now().strftime("%Y%m%d-%H%M%S"),
@@ -676,7 +583,7 @@ training_summary = {
         "optimizer": "Adam",
         "learning_rate": float(LEARNING_RATE),
         "loss_weights": loss_weights_dict,
-        "metrics": {k: [_name_of(m) for m in v] for k, v in metrics_dict.items()},
+        "metrics": {k: [name_of(m) for m in v] for k, v in metrics_dict.items()},
         "physics_loss_weights": physics_loss_weights,
     },
     "hp_init": {
@@ -690,7 +597,7 @@ training_summary = {
         "use_vsn": bool(USE_VSN),
         "vsn_units": int(VSN_UNITS) if VSN_UNITS is not None else None,
         "mode": MODE,
-        "model_init_params": _serialize_subs_params(subsmodel_params),
+        "model_init_params": serialize_subs_params(subsmodel_params, cfg),
     },
     "paths": {
         "run_dir": RUN_OUTPUT_PATH,
@@ -823,8 +730,12 @@ else:
     X_fore = X_val
     y_fore = y_val
 
-X_fore = _ensure_input_shapes(X_fore)
-y_fore_fmt = _map_targets_for_training(y_fore)
+X_fore = ensure_input_shapes(
+    X_fore,
+    mode=MODE,
+    forecast_horizon=FORECAST_HORIZON_YEARS,
+)
+y_fore_fmt = map_targets_for_training(y_fore)
 
 print(f"\nPredicting on {dataset_name_for_forecast}...")
 pred_dict = subs_model_loaded.predict(X_fore, verbose=0)  # {'data_final': ...}
@@ -994,27 +905,6 @@ physics_payload = subs_model_loaded.export_physics_payload(
     metadata={"city": CITY_NAME, "split": "val"},
 )
 #
-# 2) later: load without re-evaluating the model
-
-def build_censor_mask_from_dynamic(xb, H, dyn_idx, thresh=0.5):
-    """
-    Returns a boolean mask (B, H, 1) where True means 'censored'.
-    Prefers dynamic_features (where the index was computed).
-    If dynamic time length != H, take the last H steps.
-    If not available, returns all-False mask.
-    """
-    dyn = xb.get("dynamic_features", None)
-    if dyn is not None:
-        # defensive: make sure index fits the last dimension
-        if dyn.shape[-1] and dyn_idx is not None and dyn_idx < dyn.shape[-1]:
-            m_dyn = dyn[..., dyn_idx:dyn_idx+1] > thresh  # (B, T_dyn, 1)
-            T_dyn = tf.shape(m_dyn)[1]
-            return m_dyn[:, -H:, :] if tf.not_equal(T_dyn, H) else m_dyn
-
-    # fallback: no flag available → no censoring
-    B = tf.shape(xb["coords"])[0]
-    return tf.zeros((B, H, 1), dtype=tf.bool)
-
 # --- 2.3 Interval diagnostics + optional censor-stratified MAE ---
 cov80_uncal = cov80_cal = sharp80_uncal = sharp80_cal = None
 censor_metrics = None   # will become a dict if we have a flag
@@ -1034,7 +924,11 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
 
     if CENSOR_FLAG_IDX is not None:
         H = tf.shape(y_true_b)[1]
-        mask_b = build_censor_mask_from_dynamic(xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH)  # (B, H, 1)
+        mask_b = build_censor_mask_from_dynamic(         # (B, H, 1)
+            xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH
+        )
+
+        # mask_b = build_censor_mask_from_dynamic(xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH) 
         mask_list.append(mask_b)
 
 # # Stack what we collected
