@@ -44,9 +44,10 @@ from PyQt5.QtCore import pyqtSignal, QObject
 import matplotlib
 import matplotlib.pyplot as plt # noqa 
 
-from ...registry import  ManifestRegistry, _update_manifest 
-from ...utils.generic_utils import save_all_figures, apply_affix 
-from ...plot.forecast import plot_forecasts, forecast_view 
+from ....registry import  ManifestRegistry, _update_manifest 
+from ....utils.generic_utils import save_all_figures, apply_affix 
+from ....plot.forecast import plot_forecasts, forecast_view 
+
 from .config import SubsConfig 
 
 if os.environ.get("FUSIONLAB_HEADLESS", "1") == "1":

@@ -53,6 +53,7 @@ try:
 
     from fusionlab.utils.nat_utils import (
         load_nat_config,
+        load_nat_config_payload, 
         ensure_input_shapes,
         map_targets_for_training,
         make_tf_dataset,
@@ -83,10 +84,21 @@ except Exception as e:
 # =============================================================================
 # 0) Load Stage-1 manifest and arrays
 # =============================================================================
-RESULTS_DIR = default_results_dir()  # auto-resolve
-CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
-MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
-MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
+
+RESULTS_DIR = default_results_dir() # auto-resolve
+
+# Desired city/model from NATCOM config payload
+cfg_payload   = load_nat_config_payload()
+CFG_CITY  = (cfg_payload.get("city") or "").strip().lower() or None
+CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+
+# Optional advanced overrides from env
+CITY_ENV   = getenv_stripped("CITY")
+MODEL_ENV  = getenv_stripped("MODEL_NAME_OVERRIDE")
+
+CITY_HINT  = CITY_ENV or CFG_CITY
+MODEL_HINT = MODEL_ENV or CFG_MODEL
+MANUAL     = getenv_stripped("STAGE1_MANIFEST")
 
 MANIFEST_PATH = _find_stage1_manifest(
     manual=MANUAL,                   # exact manifest if provided
@@ -98,10 +110,32 @@ MANIFEST_PATH = _find_stage1_manifest(
     verbose=1,
 )
 
+# with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
+#     M = json.load(f)
+# print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
+
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
-print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
 
+manifest_city = (M.get("city") or "").strip().lower()
+print(f"[Manifest] Loaded city={manifest_city} model={M.get('model')}")
+
+if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
+    raise RuntimeError(
+        "[NATCOM] Stage-1 manifest city "
+        f"{manifest_city!r} does not match config CITY_NAME {CFG_CITY!r}. "
+        "Run Stage-1 for this city first, or set CITY/STAGE1_MANIFEST "
+        "to explicitly override.\n"
+        "#>>> Windows cmd\n"
+        "   $ set CITY=zhongshan\n"
+        "   $ python nat.com/tune_NATCOM_GEOPRIOR.py\n"
+        "\n"
+        "#>>> or\n"
+        "   $ set CITY=zhongshan\n"
+        "   $ python nat.com/tune_NATCOM_GEOPRIOR.py\n"
+
+    )
+    
 cfg_stage1 = M["config"]        # what Stage-1 used to build sequences
 cfg_hp = load_nat_config()      # global config from config.json (4.*)
 
@@ -303,81 +337,132 @@ if isinstance(search_space_cfg, dict) and search_space_cfg:
 else:
     # Fallback: old hard-coded space (kept here as a backup)
     search_space = {
-        # --- Architecture (model.__init__) ---
-        "embed_dim": [32, 64],
-        "hidden_units": [64, 96, 128],
-        "lstm_units": [64, 96],
-        "attention_units": [32, 64],
-        "num_heads": [2, 4],
-        "dropout_rate": {
-            "type": "float", "min_value": 0.10, "max_value": 0.30
-        },
-        "use_vsn": {"type": "bool"},
-        "vsn_units": [16, 32, 48],
-        "use_batch_norm": {"type": "bool"},
-        # Physics switches
-        "pde_mode": ["both"],
-        "scale_pde_residuals": {"type": "bool"},
-        "kappa_mode": ["bar", "kb"],
-        "hd_factor": {
-            "type": "float", 
-            "min_value": 0.50, 
-            "max_value": 0.80
-        },
-        "mv": {
-            "type": "float", 
-            "min_value": 3e-7,
-            "max_value": 1e-6,
-            "sampling": "log",
-        },
-        "kappa": {
-            "type": "float",
-                "min_value": 0.7,
-                "max_value": 1.5
-        },
-        # --- Compile-only (model.compile) ---
-        "learning_rate": {
-            "type": "float",
-            "min_value": 5e-5, 
-            "max_value": 3e-4,
-            "sampling": "log",
-        },
-        "lambda_gw": {
-            "type": "float", 
-            "min_value": 0.1,
-            "max_value": 1.0
-        },
-        "lambda_cons": {
-            "type": "float",
-            "min_value": 0.01, 
-            "max_value": 1.0
-        },
-        "lambda_prior": {
-            "type": "float", 
-            "min_value": 0.1, 
-            "max_value": 0.8
-        },
-        "lambda_smooth": {
-            "type": "float",
-            "min_value": 0.01, 
-            "max_value": 1.0
-        },
-        "lambda_mv": {
-            "type": "float", 
-            "min_value": 0.01,
-            "max_value": 0.5
-        },
-        "mv_lr_mult": {
-            "type": "float", 
-            "min_value": 0.5, 
-            "max_value": 2.0
-        },
-        "kappa_lr_mult": {
-            "type": "float", 
-            "min_value": 1.0,
-            "max_value": 10.0
-        },
-    }
+    # --- Architecture (model.__init__) ---
+    #
+    # Centered around:
+    #   EMBED_DIM      = 32
+    #   HIDDEN_UNITS   = 64
+    #   LSTM_UNITS     = 64
+    #   ATTENTION_UNITS= 32
+    #   NUMBER_HEADS   = 4
+    #   DROPOUT_RATE   = 0.10
+    #
+    "embed_dim": [32, 48, 64],
+    "hidden_units": [64, 96],
+    "lstm_units": [64, 96],
+    "attention_units": [32, 48],
+    "num_heads": [2, 4],
+
+    # Keep dropout near the good regime, but allow a bit of exploration.
+    "dropout_rate": {
+        "type": "float",
+        "min_value": 0.05,
+        "max_value": 0.20,
+    },
+
+    # VSN & BatchNorm are *not* tuned here:
+    #   USE_VSN       = True
+    #   USE_BATCH_NORM= False
+    # We keep them fixed via the main config, because
+    # the preprocessing + scaling is designed for that.
+    #
+    # Still allow some variation of VSN width:
+    "vsn_units": [24, 32, 40],
+
+    # --- Physics switches ---
+    #
+    # Always keep full physics active by default.
+    "pde_mode": ["both"],
+
+    "scale_pde_residuals": {"type": "bool"},
+
+    # Config default is "kb", but we can still let tuner
+    # choose between bar/kb if useful.
+    "kappa_mode": ["bar", "kb"],
+
+    # Around GEOPRIOR_HD_FACTOR = 0.6
+    "hd_factor": {
+        "type": "float",
+        "min_value": 0.50,
+        "max_value": 0.70,
+    },
+
+    # --- Learnable scalar initials (model.__init__) ---
+    #
+    # Around GEOPRIOR_INIT_MV = 1e-7
+    "mv": {
+        "type": "float",
+        "min_value": 5e-8,
+        "max_value": 3e-7,
+        "sampling": "log",
+    },
+
+    # Around GEOPRIOR_INIT_KAPPA = 1.0
+    "kappa": {
+        "type": "float",
+        "min_value": 0.8,
+        "max_value": 1.2,
+    },
+
+    # --- Compile-only (model.compile) ---
+    #
+    # Around LEARNING_RATE = 1e-4
+    "learning_rate": {
+        "type": "float",
+        "min_value": 7e-5,
+        "max_value": 2e-4,
+        "sampling": "log",
+    },
+
+    # Around:
+    #   LAMBDA_GW     = 0.01
+    #   LAMBDA_CONS   = 0.10
+    #   LAMBDA_PRIOR  = 0.10
+    #   LAMBDA_SMOOTH = 0.01
+    #   LAMBDA_MV     = 0.01
+    #
+    "lambda_gw": {
+        "type": "float",
+        "min_value": 0.005,
+        "max_value": 0.03,
+    },
+    "lambda_cons": {
+        "type": "float",
+        "min_value": 0.05,
+        "max_value": 0.20,
+    },
+    "lambda_prior": {
+        "type": "float",
+        "min_value": 0.05,
+        "max_value": 0.20,
+    },
+    "lambda_smooth": {
+        "type": "float",
+        "min_value": 0.005,
+        "max_value": 0.05,
+    },
+    "lambda_mv": {
+        "type": "float",
+        "min_value": 0.005,
+        "max_value": 0.05,
+    },
+
+    # Around:
+    #   MV_LR_MULT    = 1.0
+    #   KAPPA_LR_MULT = 5.0
+    #
+    "mv_lr_mult": {
+        "type": "float",
+        "min_value": 0.5,
+        "max_value": 2.0,
+    },
+    "kappa_lr_mult": {
+        "type": "float",
+        "min_value": 2.0,
+        "max_value": 8.0,
+    },
+  }
+
 
 config_sections = [
     ("Run", {
@@ -613,7 +698,6 @@ if model_for_eval is None:
 if model_for_eval is None:
     print("\n[Warn] No best model; skipping tuned-model diagnostics.")
 else:
-
     print("\n[Eval] Running diagnostics for tuned GeoPriorSubsNet...")
 
     # 6.1 Load optional TEST NPZ; fall back to VAL if absent
@@ -749,7 +833,6 @@ else:
         FORECAST_START_YEAR + FORECAST_HORIZON_YEARS,
         dtype=float,
     )
-
 
     df_eval, df_future = format_and_forecast(
         y_pred=predictions_for_formatter,

@@ -13,7 +13,7 @@ try :
     import tensorflow as tf 
     import numpy as np
     import pandas as pd 
-    from fusionlab.tools.app.tuner import TunerApp 
+    from fusionlab.tools.app.transflow.tuner import TunerApp 
 except: 
    FUSIONLAB_INSTALLED =False 
    HAS_KT = False 

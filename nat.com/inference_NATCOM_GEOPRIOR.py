@@ -62,9 +62,6 @@ All runs produce:
 from __future__ import annotations
 import os, json, argparse, datetime as dt, joblib, numpy as np, warnings
 import tensorflow as tf
-# from tensorflow.keras.models import load_model
-# from tensorflow.keras.utils import custom_object_scope
-# from tensorflow.keras.optimizers import Adam
 
 # --- quiet logs ---
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -210,360 +207,6 @@ def _map_targets(y_dict: dict) -> dict:
     return {}
 
  
-# def _pick_npz_for_dataset(M: dict, name: str) -> tuple[dict | None, dict | None]:
-#     npzs = M["artifacts"]["numpy"]
-#     if name == "train":
-#         x = dict(np.load(npzs["train_inputs_npz"]))
-#         y = dict(np.load(npzs["train_targets_npz"]))
-#         return x, y
-#     if name == "val":
-#         x = dict(np.load(npzs["val_inputs_npz"]))
-#         y = dict(np.load(npzs["val_targets_npz"]))
-#         return x, y
-#     if name == "test":
-#         tin = npzs.get("test_inputs_npz")
-#         tt  = npzs.get("test_targets_npz")
-#         if not tin:
-#             return None, None
-#         x = dict(np.load(tin))
-#         y = dict(np.load(tt)) if tt else None
-#         return x, y
-#     raise ValueError("Use 'custom' for custom NPZs")
-
-
-
-# def _infer_input_dims_from_X(X: dict) -> tuple[int, int, int]:
-#     """
-#     Infer (static_input_dim, dynamic_input_dim, future_input_dim)
-#     from the Stage-1 NPZ inputs dictionary.
-
-#     Parameters
-#     ----------
-#     X : dict
-#         Dictionary with keys:
-#         - 'dynamic_features' (required)
-#         - 'static_features' (optional, may be None)
-#         - 'future_features' (optional, may be None)
-
-#     Returns
-#     -------
-#     static_dim : int
-#         Last-dimension size of static_features (0 if missing / None).
-#     dynamic_dim : int
-#         Last-dimension size of dynamic_features.
-#     future_dim : int
-#         Last-dimension size of future_features (0 if missing / None).
-#     """
-#     dyn = np.asarray(X["dynamic_features"])
-#     dynamic_dim = int(dyn.shape[-1])
-
-#     static = X.get("static_features")
-#     static_dim = int(static.shape[-1]) if static is not None else 0
-
-#     fut = X.get("future_features")
-#     future_dim = int(fut.shape[-1]) if fut is not None else 0
-
-#     return static_dim, dynamic_dim, future_dim
-
-
-# def _load_best_hps_near_model(model_path: str) -> dict:
-#     """
-#     Locate and load tuned hyperparameters stored next to a tuned model.
-
-#     Search order inside `run_YYYYMMDD-HHMMSS` directory:
-#     1. <city>_GeoPrior_best_hps.json (city inferred from model filename)
-#     2. tuning_summary.json['best_hps']
-
-#     Parameters
-#     ----------
-#     model_path : str
-#         Path passed via --model-path, typically something like:
-#         .../tuning/run_YYYYMMDD-HHMMSS/nansha_GeoPrior_best.keras
-
-#     Returns
-#     -------
-#     best_hps : dict
-#         Dictionary of best hyperparameters.
-
-#     Raises
-#     ------
-#     FileNotFoundError
-#         If no hyperparameter JSON can be found.
-#     ValueError
-#         If a candidate JSON exists but does not contain hyperparameters.
-#     """
-#     run_dir = os.path.dirname(os.path.abspath(model_path))
-#     base = os.path.basename(model_path)
-
-#     # Try to infer the city prefix from '<city>_GeoPrior_best.keras'
-#     city_name = None
-#     marker = "_GeoPrior_best"
-#     if marker in base:
-#         city_name = base.split(marker)[0]
-
-#     # 1) Try explicit '<city>_GeoPrior_best_hps.json'
-#     if city_name is not None:
-#         hps_path = os.path.join(run_dir, f"{city_name}_GeoPrior_best_hps.json")
-#         if os.path.exists(hps_path):
-#             with open(hps_path, "r", encoding="utf-8") as f:
-#                 best_hps = json.load(f)
-#             if isinstance(best_hps, dict) and best_hps:
-#                 print(f"[Fallback] Loaded best_hps from: {hps_path}")
-#                 return best_hps
-
-#     # 2) Try tuning_summary.json["best_hps"]
-#     summary_path = os.path.join(run_dir, "tuning_summary.json")
-#     if os.path.exists(summary_path):
-#         with open(summary_path, "r", encoding="utf-8") as f:
-#             summary = json.load(f)
-#         best_hps = summary.get("best_hps", {})
-#         if isinstance(best_hps, dict) and best_hps:
-#             print(f"[Fallback] Loaded best_hps from: {summary_path}")
-#             return best_hps
-
-#     raise FileNotFoundError(
-#         f"Could not find best hyperparameters near model_path={model_path}.\n"
-#         f"Looked for '<city>_GeoPrior_best_hps.json' and 'tuning_summary.json'."
-#     )
-
-# def _coerce_quantile_weights(d: dict | None, default: dict) -> dict:
-#     """Ensure quantile-weight dict has float keys."""
-#     if not d:
-#         return default
-#     out = {}
-#     for k, v in d.items():
-#         try:
-#             q = float(k)
-#         except (TypeError, ValueError):
-#             q = k
-#         out[q] = float(v)
-#     return out
-
-
-# def _compile_geoprior_for_eval(
-#     model: GeoPriorSubsNet,
-#     M: dict,
-#     best_hps: dict,
-#     quantiles: list[float] | None,
-# ) -> GeoPriorSubsNet:
-#     """
-#     (Re)compile GeoPriorSubsNet with the same loss/physics config
-#     used in training, based on Stage-1 manifest + best_hps.
-#     """
-#     cfg = M["config"]
-
-#     loss_weights = {"subs_pred": 1.0, "gwl_pred": 0.5}
-
-#     SUBS_WEIGHTS_RAW = cfg.get(
-#         "SUBS_WEIGHTS",
-#         {0.1: 3.0, 0.5: 1.0, 0.9: 3.0},
-#     )
-#     GWL_WEIGHTS_RAW = cfg.get(
-#         "GWL_WEIGHTS",
-#         {0.1: 1.5, 0.5: 1.0, 0.9: 1.5},
-#     )
-
-#     SUBS_WEIGHTS = _coerce_quantile_weights(
-#         SUBS_WEIGHTS_RAW, {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
-#     )
-#     GWL_WEIGHTS = _coerce_quantile_weights(
-#         GWL_WEIGHTS_RAW, {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
-#     )
-
-#     loss_dict = {
-#         "subs_pred": make_weighted_pinball(
-#             quantiles, SUBS_WEIGHTS
-#         ) if quantiles else tf.keras.losses.MSE,
-#         "gwl_pred": make_weighted_pinball(
-#             quantiles, GWL_WEIGHTS
-#         ) if quantiles else tf.keras.losses.MSE,
-#     }
-
-#     lr = float(best_hps.get("learning_rate", 5e-5))
-#     optimizer = Adam(learning_rate=lr)
-
-#     model.compile(
-#         optimizer=optimizer,
-#         loss=loss_dict,
-#         loss_weights=loss_weights,
-#         # physics loss weights + LR multipliers
-#         lambda_gw=float(best_hps.get("lambda_gw", 1.0)),
-#         lambda_cons=float(best_hps.get("lambda_cons", 1.0)),
-#         lambda_prior=float(best_hps.get("lambda_prior", 1.0)),
-#         lambda_smooth=float(best_hps.get("lambda_smooth", 1.0)),
-#         lambda_mv=float(best_hps.get("lambda_mv", 0.0)),
-#         mv_lr_mult=float(best_hps.get("mv_lr_mult", 1.0)),
-#         kappa_lr_mult=float(best_hps.get("kappa_lr_mult", 1.0)),
-#     )
-#     return model
-
-# def _build_geoprior_from_hps(
-#     M: dict,
-#     X: dict,
-#     best_hps: dict,
-#     out_s_dim: int,
-#     out_g_dim: int,
-#     mode: str,
-#     horizon: int,
-#     quantiles: list[float] | None,
-# ) -> GeoPriorSubsNet:
-#     """
-#     Reconstruct a GeoPriorSubsNet instance using Stage-1 metadata and
-#     the tuned hyperparameters.
-
-#     This mirrors the configuration used during Stage-2 tuning,
-#     but is intentionally conservative: only the parameters that are
-#     clearly defined in Stage-1 manifest + best_hps are used.
-
-#     Parameters
-#     ----------
-#     M : dict
-#         Stage-1 manifest dictionary.
-#     X : dict
-#         Inputs NPZ dictionary (already sanitized and shape-ensured).
-#     best_hps : dict
-#         Hyperparameters loaded from *_GeoPrior_best_hps.json or
-#         tuning_summary.json["best_hps"].
-#     out_s_dim : int
-#         Output dimension for subsidence head.
-#     out_g_dim : int
-#         Output dimension for GWL head.
-#     mode : str
-#         Sequence mode ('tft_like' or 'pihal_like'), from Stage-1 config.
-#     horizon : int
-#         Forecast horizon (number of time steps).
-#     quantiles : list[float] or None
-#         Quantiles used for probabilistic outputs.
-
-#     Returns
-#     -------
-#     model : GeoPriorSubsNet
-#         A freshly instantiated (and compiled) GeoPriorSubsNet.
-#     """
-#     # # Helper: JSON has string keys for quantile weight dicts; coerce to float.
-#     def _coerce_quantile_weights(d: dict, default: dict) -> dict:
-#         if not d:
-#             return default
-#         out = {}
-#         for k, v in d.items():
-#             try:
-#                 q = float(k)
-#             except (TypeError, ValueError):
-#                 q = k
-#             out[q] = float(v)
-#         return out
-    
-#     cfg = M["config"]
-
-#     # Infer input dims directly from Stage-1 NPZ arrays
-#     static_dim, dynamic_dim, future_dim = _infer_input_dims_from_X(X)
-
-#     # Attention stack: fall back to a sensible default if not present
-#     attention_levels = cfg.get(
-#         "ATTENTION_LEVELS",
-#         ["cross", "hierarchical", "memory"],
-#     )
-
-#     # Whether we used effective H during Stage-2
-#     censor_cfg = cfg.get("censoring", {}) or {}
-#     use_effective_h = censor_cfg.get("use_effective_h_field", True)
-
-#     # Feature-processing mode
-#     use_vsn = bool(best_hps.get("use_vsn", True))
-#     feature_processing = "vsn" if use_vsn else "dense"
-
-#     architecture_config = {
-#         "encoder_type": "hybrid",
-#         "decoder_attention_stack": attention_levels,
-#         "feature_processing": feature_processing,
-#     }
-
-#     # Instantiate the model core
-#     model = GeoPriorSubsNet(
-#         static_input_dim=static_dim,
-#         dynamic_input_dim=dynamic_dim,
-#         future_input_dim=future_dim,
-#         output_subsidence_dim=out_s_dim,
-#         output_gwl_dim=out_g_dim,
-#         forecast_horizon=horizon,
-#         mode=mode,
-#         attention_levels=attention_levels,
-#         quantiles=quantiles,
-#         # physics switches from best_hps
-#         pde_mode=best_hps.get("pde_mode", "both"),
-#         scale_pde_residuals=bool(best_hps.get("scale_pde_residuals", True)),
-#         kappa_mode=best_hps.get("kappa_mode", "bar"),
-#         use_effective_h=use_effective_h,
-#         # architecture hyperparameters
-#         embed_dim=int(best_hps.get("embed_dim", 32)),
-#         hidden_units=int(best_hps.get("hidden_units", 96)),
-#         lstm_units=int(best_hps.get("lstm_units", 96)),
-#         attention_units=int(best_hps.get("attention_units", 32)),
-#         num_heads=int(best_hps.get("num_heads", 4)),
-#         dropout_rate=float(best_hps.get("dropout_rate", 0.1)),
-#         use_vsn=use_vsn,
-#         vsn_units=int(best_hps.get("vsn_units", 32)),
-#         use_batch_norm=bool(best_hps.get("use_batch_norm", True)),
-#         # geomechanical priors
-#         mv=float(best_hps.get("mv", 5e-7)),
-#         kappa=float(best_hps.get("kappa", 1.0)),
-#         architecture_config=architecture_config,
-#     )
-    
-#     # Compile for evaluation (reuse helper)
-#     _compile_geoprior_for_eval(
-#         model,
-#         M=M,
-#         best_hps=best_hps,
-#         quantiles=quantiles,
-#     )
-    
-#     print(
-#         "[Fallback] Reconstructed GeoPriorSubsNet from best_hps with "
-#         f"static_dim={static_dim}, dynamic_dim={dynamic_dim}, "
-#         f"future_dim={future_dim}, horizon={horizon}, mode={mode}"
-#     )
-#     return model
-
-# def _infer_best_weights_path(model_path: str) -> str | None:
-#     """
-#     Infer the best weights checkpoint path for a tuned GeoPrior model.
-
-#     Strategy
-#     --------
-#     1) Look for `tuning_summary.json` in the same folder as `model_path`
-#        and use the stored "best_weights_path" if it exists.
-#     2) Fallback: replace the `.keras` suffix by `.weights.h5`, assuming
-#        the naming convention <CITY>_GeoPrior_best.keras ->
-#        <CITY>_GeoPrior_best.weights.h5.
-
-#     Returns
-#     -------
-#     str or None
-#         Absolute path to the weights file if it exists, otherwise None.
-#     """
-#     run_dir = os.path.dirname(model_path)
-
-#     # 1) Preferred: tuning_summary.json
-#     summary_path = os.path.join(run_dir, "tuning_summary.json")
-#     if os.path.exists(summary_path):
-#         try:
-#             with open(summary_path, "r", encoding="utf-8") as f:
-#                 summary = json.load(f)
-#             w = summary.get("best_weights_path")
-#             if w and os.path.exists(w):
-#                 return w
-#         except Exception as e:
-#             print(f"[Warn] Could not read tuning_summary.json for weights: {e}")
-
-#     # 2) Name-based guess from the .keras path
-#     root, ext = os.path.splitext(model_path)
-#     guess = root + ".weights.h5"
-#     if os.path.exists(guess):
-#         return guess
-
-#     return None
-
 def _load_calibrator(args, model, ds_val, target_cov):
     # 0) try loading calibrator from the source model directory
     if args.use_source_calibrator and not args.calibrator:
@@ -737,6 +380,9 @@ def main():
                 f"{'_cal' if cal is not None else ''}.csv")
     csv_path = os.path.join(inf_dir, csv_name)
 
+    # XXX TODO: fIX , use the robust format_and_forecast like you did 
+    # for training and tuned rather than this old helpers... 
+    
     df = format_pinn_predictions(
         predictions=predictions_for_formatter,
         y_true_dict=y_true_for_format or None,
@@ -837,6 +483,8 @@ def main():
         
     print(f"Saved inference summary JSON -> {os.path.join(inf_dir, 'inference_summary.json')}")
     
+    # It does not make sens to evaluate inference.... 
+    
     # If we plan to run scaled-space evaluate/physics, make sure
     # the model is actually compiled. If not, try to recompile from best_hps.
     need_eval = (
@@ -912,6 +560,10 @@ def main():
     if (not args.no_figs) and (df is not None) and (len(df) > 0):
         try:
             horizon_steps = [1, H] if H > 1 else [1]
+            
+            #XXX  better use  plot_eval_future like training and accept _logger parameter 
+            # pass to log , then remove plot_forecasts and forecast_view, 
+            # plot_eval_future does the both task , refer to the run_training 
             plot_forecasts(
                 forecast_df=df,
                 target_name=SUBS_COL,
@@ -928,6 +580,7 @@ def main():
                 verbose=1,
                 savefig = os.path.join(inf_dir, f"{CITY}_inference_plot"),
                 show =False, 
+                _logger = log, # accept _log callback 
             )
             forecast_view(
                 df,
@@ -938,7 +591,8 @@ def main():
                 view_quantiles=[0.5] if data_final.ndim == 4 else None,
                 savefig=os.path.join(inf_dir, f"{CITY}_forecast_comparison_plot_"),
                 save_fmts=[".png", ".pdf"],
-                show =False 
+                show =False , 
+                _logger = log, 
             )
             print(f"Saved forecast figures in: {inf_dir}")
         except Exception as e:

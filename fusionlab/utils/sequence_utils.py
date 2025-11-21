@@ -61,6 +61,7 @@ def build_future_sequences_npz(
     future_mode: str ="auto", 
     verbose: int = 1,
     logger=None,
+    stop_check: Callable[[], bool] = None, 
     **kws,  
 ) -> dict:
     """
@@ -591,6 +592,8 @@ default 'auto'
     dropped_groups = 0
     
     for gi, (gid, g) in enumerate(iter_groups, start=1):
+        if stop_check and stop_check():
+            raise InterruptedError("Sequence generation aborted.")
         # If tqdm is present, keep vlog quieter; if not, use your previous pattern
         if not use_tqdm:
             if verbose and (gi == 1 or gi % log_every == 0 or gi == n_groups):

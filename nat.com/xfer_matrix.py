@@ -476,42 +476,6 @@ def run_one_direction(
         coverage80  = float(coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
         sharpness80 = float(sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy())
         
-    # Format predictions
-    # Build canonical y_true mapping (like training_NATCOM_GEOPRIOR.py)
-    # y_true_for_format = {}
-    # if y_map:
-    #     if "subs_pred" in y_map:
-    #         y_true_for_format["subsidence"] = y_map["subs_pred"]
-    #     if "gwl_pred" in y_map:
-    #         y_true_for_format["gwl"] = y_map["gwl_pred"]
-    
-    # # Save forecasts as CSV in the model directory
-    # xfer_csv_path = os.path.join(
-    #     model_dir, f"{M_tgt.get('city')}_xfer_forecasts_calibrated.csv"
-    # )
-    
-    # forecast_df = format_pinn_predictions(
-    #     predictions=predictions,
-    #     y_true_dict=y_true_for_format if y_true_for_format else None,
-    #     target_mapping=target_mapping,
-    #     scaler_info=skaler_info if (
-    #         skaler_info := scaler_info) else scaler_info,  # keep var name stable
-    #     quantiles=Q,
-    #     forecast_horizon=H,
-    #     output_dims=output_dims,
-    #     include_coords=True,
-    #     include_gwl=False,
-    #     model_inputs=X_tgt,
-    #     evaluate_coverage=bool(Q),
-    #     savefile=xfer_csv_path,
-    #     coord_scaler=coord_scaler,
-    #     verbose=1,
-    # )
-    # if forecast_df is not None and not forecast_df.empty:
-    #     print(f"Saved calibrated forecast CSV -> {xfer_csv_path}")
-    # else:
-    #     print("[Warn] Empty forecast DF.")
-    
     # ------------------------------------------------------------------
     # Format calibrated predictions with the robust helper
     #   - df_eval   : evaluation horizon on the target split (if y_true)

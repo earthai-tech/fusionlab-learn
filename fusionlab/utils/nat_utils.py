@@ -1821,9 +1821,35 @@ def load_or_rebuild_geoprior_model(
 
     return model, best_hps
 
+def sanitize_inputs_np(X: dict) -> dict:
+    X = dict(X)
+    for k, v in X.items():
+        if v is None:
+            continue
+        v = np.asarray(v)
+        v = np.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+        if v.ndim > 0 and np.isfinite(v).any():
+            p99 = np.percentile(v, 99)
+            if p99 > 0:
+                v = np.clip(v, -10*p99, 10*p99)
+        X[k] = v
+    if "H_field" in X:
+        X["H_field"] = np.maximum(X["H_field"], 1e-3).astype(np.float32)
+    return X
+
+# def map_targets(y_dict: dict) -> dict:
+#     # Accept either ('subsidence','gwl') or ('subs_pred','gwl_pred')
+#     if "subsidence" in y_dict and "gwl" in y_dict:
+#         return {"subs_pred": y_dict["subsidence"], "gwl_pred": y_dict["gwl"]}
+#     if "subs_pred" in y_dict and "gwl_pred" in y_dict:
+#         return y_dict
+#     # Allow missing targets for pure inference
+#     return {}
+
 # -------------------------------------------------------------------------
 # Backward-compatible aliases for old private helper names
 # -------------------------------------------------------------------------
+safe_compile = compile_for_eval 
 _pick_npz_for_dataset = pick_npz_for_dataset
 _infer_input_dims_from_X = infer_input_dims_from_X
 _load_best_hps_near_model = load_best_hps_near_model

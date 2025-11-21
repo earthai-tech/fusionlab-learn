@@ -46,6 +46,7 @@ try:
     from fusionlab.registry.utils import _find_stage1_manifest
     from fusionlab.utils.nat_utils import (
         load_nat_config, 
+        load_nat_config_payload, 
         ensure_input_shapes,
         map_targets_for_training,
         make_tf_dataset,
@@ -85,10 +86,26 @@ except Exception as e:
 # Config / Paths
 # =============================================================================
 
-RESULTS_DIR = default_results_dir()  # smart default auto-resolve
-CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
-MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
-MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
+RESULTS_DIR = default_results_dir()
+
+# Desired city/model from NATCOM config payload
+cfg_payload   = load_nat_config_payload()
+CFG_CITY  = (cfg_payload.get("city") or "").strip().lower() or None
+CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+
+# Optional advanced overrides from env
+CITY_ENV   = getenv_stripped("CITY")
+MODEL_ENV  = getenv_stripped("MODEL_NAME_OVERRIDE")
+
+CITY_HINT  = CITY_ENV or CFG_CITY
+MODEL_HINT = MODEL_ENV or CFG_MODEL
+MANUAL     = getenv_stripped("STAGE1_MANIFEST")
+
+
+# RESULTS_DIR = default_results_dir()  # smart default auto-resolve
+# CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
+# MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
+# MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
 
 MANIFEST_PATH = _find_stage1_manifest(
     manual=MANUAL,
@@ -103,8 +120,23 @@ MANIFEST_PATH = _find_stage1_manifest(
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
 
-print(f"[Manifest] Loaded city={M.get('city')} model={M.get('model')}")
+manifest_city = (M.get("city") or "").strip().lower()
+print(f"[Manifest] Loaded city={manifest_city} model={M.get('model')}")
 
+if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
+    raise RuntimeError(
+        "[NATCOM] Stage-1 manifest city "
+        f"{manifest_city!r} does not match config CITY_NAME {CFG_CITY!r}. "
+        "Run Stage-1 for this city first, or set CITY/STAGE1_MANIFEST "
+        "to explicitly override.\n"
+        "#>>> Windows cmd\n"
+        "   $ set CITY=zhongshan\n"
+        "   $ python nat.com/tune_NATCOM_GEOPRIOR.py\n"
+        "\n"
+        "#>>> or\n"
+        "   $ set CITY=zhongshan\n"
+        "   $ python nat.com/training_NATCOM_GEOPRIOR.py\n"
+    )
 # -------------------------------------------------------------------------
 # Merge global NATCOM config (config.json) with Stage-1 manifest config.
 # - load_nat_config() → central config.json["config"] (model/physics/training)

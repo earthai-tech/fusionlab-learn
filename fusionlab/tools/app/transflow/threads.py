@@ -16,14 +16,15 @@ from PyQt5.QtCore    import (
     pyqtSignal, 
 )
 
-from ...registry import ManifestRegistry 
+from ....registry import ManifestRegistry 
+from ..components import ProgressManager
+
 from .config      import SubsConfig
 from .processing  import DataProcessor, SequenceGenerator
 from .modeling    import ModelTrainer, Forecaster
 from .view        import ResultsVisualizer
 from .inference import PredictionPipeline
 from .tuner import TunerApp 
-from .components import ProgressManager
 
 __all__= ["TrainingThread", "InferenceThread", "TunerThread"]
 
