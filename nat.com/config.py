@@ -281,7 +281,7 @@ GWL_WEIGHTS = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only,
 #   - "gw_flow"        : groundwater flow only,
 #   - "none" or "off"  : physics switched off.
-PDE_MODE_CONFIG = "both"
+PDE_MODE_CONFIG = "off"
 
 SCALE_PDE_RESIDUALS = True
 

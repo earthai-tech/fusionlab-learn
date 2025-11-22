@@ -104,7 +104,7 @@
       "0.5": 1.0,
       "0.9": 1.5
     },
-    "PDE_MODE_CONFIG": "both",
+    "PDE_MODE_CONFIG": "off",
     "SCALE_PDE_RESIDUALS": true,
     "LAMBDA_CONS": 0.1,
     "LAMBDA_GW": 0.01,
@@ -248,6 +248,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "4d8a3fa253a3de20605e933e3b34486d6e93bc7d5a03adb0804898653c23877f"
+    "config_py_hash": "bb4b63e2635639c3d09461d4d26831c5b86b223046a4b699470a20b5031d17ae"
   }
 }
