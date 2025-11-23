@@ -79,8 +79,7 @@ from fusionlab.nn.calibration import (                           # used in Step 
     apply_calibrator_to_subs,
 )
 
-print("Successfully imported fusionlab modules for tuning.")
-
+GUI_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "geoprior")
 
 def run_tuning(
     manifest_path: Optional[str] = None,
@@ -147,17 +146,18 @@ def run_tuning(
     # ------------------------------------------------------------------
     # 0) Load Stage-1 manifest and arrays
     # ------------------------------------------------------------------
-    RESULTS_DIR = default_results_dir()  # auto-resolve
 
     # Desired city/model from NATCOM payload (for sanity checks/logging)
-    cfg_payload = load_nat_config_payload()
+    cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
     CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
     CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
 
     # Load global NATCOM config (config.json) and apply overrides
-    cfg_hp = load_nat_config()
+    cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
     if cfg_overrides:
         cfg_hp.update(cfg_overrides)
+
+    RESULTS_DIR = cfg_hp.get("BASE_OUTPUT_DIR", default_results_dir())
 
     # Environment overrides (still honoured when manifest_path is None)
     CITY_ENV = getenv_stripped("CITY")

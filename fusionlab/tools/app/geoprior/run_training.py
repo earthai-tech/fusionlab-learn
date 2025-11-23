@@ -53,7 +53,6 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
-# --- fusionlab imports (same as your script) ---
 from fusionlab._optdeps import with_progress
 from fusionlab.api.util import get_table_size
 from fusionlab.utils.generic_utils import (
@@ -95,6 +94,8 @@ from fusionlab.nn.utils import plot_history_in
 from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.plot.forecast import plot_eval_future
 
+
+GUI_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "geoprior")
 
 # ---------------------------------------------------------------------
 # Small helpers
@@ -181,7 +182,7 @@ def run_training(
     # ================================================================
     RESULTS_DIR = default_results_dir()
 
-    cfg_payload = load_nat_config_payload()
+    cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
     CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
     CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
 
@@ -220,7 +221,7 @@ def run_training(
     # ================================================================
     # 2. Merge global config with Stage-1 config
     # ================================================================
-    cfg_global = load_nat_config()
+    cfg_global = load_nat_config(root=GUI_CONFIG_DIR)
     cfg_manifest = M.get("config", {}) or {}
 
     cfg = dict(cfg_global)

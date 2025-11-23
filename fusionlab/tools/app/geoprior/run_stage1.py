@@ -55,6 +55,9 @@ except Exception as e:  # pragma: no cover
     _IMPORT_ERR = e
 
 
+GUI_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "geoprior")
+# -> /.../fusionlab/tools/app/geoprior
+
 # ======================================================================
 # Small helpers (same behaviour as in your script)
 # ======================================================================
@@ -222,7 +225,7 @@ def run_stage1(
     log = logger or (lambda msg: print(msg, flush=True))
 
     # ===================== CONFIG =====================
-    cfg = load_nat_config()
+    cfg = load_nat_config(root=GUI_CONFIG_DIR)
     if cfg_overrides:
         cfg = {**cfg, **cfg_overrides}
 

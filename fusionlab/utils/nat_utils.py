@@ -98,23 +98,43 @@ def _project_root() -> str:
     return root
 
 
-def get_natcom_dir() -> str:
+def get_natcom_dir(root ="nat.com") -> str:
     """
     Directory containing NATCOM scripts and configuration,
     typically `<repo_root>/nat.com`.
     """
-    return os.path.join(_project_root(), "nat.com")
+    return os.path.join(_project_root(), root)
 
 
-def get_config_paths() -> Tuple[str, str]:
+def get_config_paths(root="nat.com") -> Tuple[str, str]:
     """
     Return `(config_py_path, config_json_path)` for NATCOM.
     """
-    nat_dir = get_natcom_dir()
+    nat_dir = get_natcom_dir(root = root)
     config_py = os.path.join(nat_dir, "config.py")
     config_json = os.path.join(nat_dir, "config.json")
     return config_py, config_json
 
+def get_default_runs_root(
+    root: str = "nat.com",
+    runs_dir_name: str = ".fusionlab_runs",
+) -> str:
+    """
+    Return the base directory for GUI run artifacts.
+
+    The default is ``<project_root>/.fusionlab_runs`` where
+    ``<project_root>`` is the same root inferred by
+    :func:`_project_root`.
+
+    This is *only* a convenience helper; CLI scripts keep
+    using their own defaults (usually ``<cwd>/results``).
+    The GUI overrides ``BASE_OUTPUT_DIR`` with this path so
+    GUI runs do not mix with CLI results.
+    """
+    proj_root = os.path.dirname(get_natcom_dir(root=root))
+    runs_root = os.path.join(proj_root, runs_dir_name)
+    os.makedirs(runs_root, exist_ok=True)
+    return runs_root
 
 # -------------------------------------------------------------------
 # Low-level helpers
@@ -215,7 +235,7 @@ def _extract_config_dict(module) -> Dict[str, Any]:
 # -------------------------------------------------------------------
 # Public API
 # -------------------------------------------------------------------
-def ensure_config_json() -> Tuple[Dict[str, Any], str]:
+def ensure_config_json(root="nat.com") -> Tuple[Dict[str, Any], str]:
     """
     Ensure that `nat.com/config.json` exists and is consistent
     with `nat.com/config.py`.
@@ -235,7 +255,7 @@ def ensure_config_json() -> Tuple[Dict[str, Any], str]:
       changed, it is regenerated.
     - Otherwise the existing JSON file is reused.
     """
-    config_py, config_json = get_config_paths()
+    config_py, config_json = get_config_paths(root=root)
     py_hash = _hash_file(config_py)
 
     payload: Dict[str, Any] | None = None
@@ -275,7 +295,7 @@ def ensure_config_json() -> Tuple[Dict[str, Any], str]:
     return config_dict, config_json
 
 
-def load_nat_config() -> Dict[str, Any]:
+def load_nat_config(root="nat.com") -> Dict[str, Any]:
     """
     High-level helper used by NATCOM scripts.
 
@@ -286,11 +306,11 @@ def load_nat_config() -> Dict[str, Any]:
     >>> CITY_NAME = cfg["CITY_NAME"]
     >>> TIME_STEPS = cfg["TIME_STEPS"]
     """
-    cfg, _ = ensure_config_json()
+    cfg, _ = ensure_config_json(root=root)
     return cfg
 
 
-def load_nat_config_payload() -> Dict[str, Any]:
+def load_nat_config_payload(root="nat.com") -> Dict[str, Any]:
     """
     Return the full `config.json` payload, including `city`,
     `model` and `__meta__` fields.
@@ -298,9 +318,9 @@ def load_nat_config_payload() -> Dict[str, Any]:
     This is convenient when you also want to see which hash or
     city/model are currently active.
     """
-    config_py, config_json = get_config_paths()
+    config_py, config_json = get_config_paths(root=root)
     if not os.path.exists(config_json):
-        ensure_config_json()
+        ensure_config_json(root=root)
     with open(config_json, "r", encoding="utf-8") as f:
         return json.load(f)
 
