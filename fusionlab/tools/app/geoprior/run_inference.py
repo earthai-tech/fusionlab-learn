@@ -52,10 +52,14 @@ from fusionlab.utils.nat_utils import (
         
   )
 
+from fusionlab.tools.app.geoprior.view_utils import ( 
+    _notify_gui_forecast_views
+    )
 
 def run_inference(
     model_path: str,
     dataset: str = "test",
+    use_stage1_future_npz: bool = False,
     *,
     manifest_path: Optional[str] = None,
     stage1_dir: Optional[str] = None,
@@ -71,6 +75,8 @@ def run_inference(
     cfg_overrides: Optional[Dict[str, Any]] = None,
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,  
+    **kws
 ) -> Dict[str, Any]:
     """
     Run Stage-3 inference for GeoPriorSubsNet in a GUI-friendly way.
@@ -81,6 +87,12 @@ def run_inference(
         Path to the trained/tuned `.keras` model.
     dataset :
         One of {"train", "val", "test", "custom"}.
+    use_stage1_future_npz :
+        If True, ignore ``dataset`` / ``inputs_npz`` and instead
+        load the future NPZs recorded in the Stage-1 manifest
+        (generated when ``BUILD_FUTURE_NPZ=True`` in Stage-1).
+        If those artifacts are missing, a clear error is logged
+        and a ``FileNotFoundError`` is raised.
     manifest_path :
         Optional explicit path to Stage-1 `manifest.json`.
     stage1_dir :
@@ -109,7 +121,10 @@ def run_inference(
     stop_check :
         Optional callable returning True when caller wants to abort
         (e.g., GUI "Cancel" button).
-
+    progress_callback : callable or None, default=None
+        Optional callable ``progress_callback(value, message)`` used
+        by the GUI. ``value`` is a float in [0, 1] encoding the global
+        inference progress; ``message`` is a short status string.
     Returns
     -------
     out : dict
@@ -123,6 +138,21 @@ def run_inference(
 
     def should_stop() -> bool:
         return bool(stop_check and stop_check())
+    
+    def _progress(value: float, message: str) -> None:
+        """Safe wrapper around the GUI progress callback."""
+        if progress_callback is None:
+            return
+        try:
+            v = float(value)
+        except Exception:
+            v = 0.0
+        v = max(0.0, min(1.0, v))
+        try:
+            progress_callback(v, message)
+        except Exception:
+            # Never crash inference because the GUI callback misbehaved.
+            pass
 
     # ----------------------------------------------------------
     # 0) Resolve Stage-1 manifest
@@ -177,6 +207,7 @@ def run_inference(
         f"[Manifest] Loaded city={CITY} model={MODEL_NAME} "
         f"(MODE={MODE}, H={H}, FSY={FSY}, QUANTILES={QUANTILES})"
     )
+    _progress(0.05, "Inference: manifest loaded")
 
     if should_stop():
         log("[Inference] stop_check=True after manifest load; aborting.")
@@ -216,6 +247,8 @@ def run_inference(
                         v["scaler"] = joblib.load(p)
                     except Exception:
                         pass
+                    
+    _progress(0.10, "Inference: encoders/scalers loaded")
 
     # ----------------------------------------------------------
     # 2) Output directory
@@ -225,6 +258,8 @@ def run_inference(
     ensure_directory_exists(inf_dir)
     log(f"[Inference] Outputs will be written to: {inf_dir}")
 
+    _progress(0.12, "Inference: output directory prepared")
+    
     if should_stop():
         log("[Inference] stop_check=True before data loading; aborting.")
         return {
@@ -235,10 +270,40 @@ def run_inference(
             "dataset": dataset,
         }
 
-    # ----------------------------------------------------------
-    # 3) Choose dataset (train/val/test/custom)
-    # ----------------------------------------------------------
-    if dataset == "custom":
+    # -------------------------------------------------------------
+    # 3) Choose dataset (train/val/test/custom or Stage-1 future)
+    # -------------------------------------------------------------
+    npz_dict = M["artifacts"]["numpy"]
+
+    if use_stage1_future_npz:
+        # Try to locate future_* NPZs written by Stage-1
+        fut_inputs = npz_dict.get("future_inputs_npz")
+        fut_targets = npz_dict.get("future_targets_npz")
+
+        if not fut_inputs or not os.path.exists(fut_inputs):
+            log(
+                "[Inference] use_stage1_future_npz=True but no "
+                "'future_inputs_npz' entry found in manifest or "
+                "the file is missing.\n"
+                "           Re-run Stage-1 with BUILD_FUTURE_NPZ=True "
+                "to generate future NPZs."
+            )
+            raise FileNotFoundError(
+                "Stage-1 future_* NPZs are not available. "
+                "Run Stage-1 with BUILD_FUTURE_NPZ=True first."
+            )
+
+        log(f"[Inference] Using Stage-1 future NPZs: {fut_inputs}")
+        X = dict(np.load(fut_inputs))
+        y = (
+            dict(np.load(fut_targets))
+            if fut_targets and os.path.exists(fut_targets)
+            else None
+        )
+        # For naming / logging downstream
+        dataset = "future"
+
+    elif dataset == "custom":
         if not inputs_npz:
             raise ValueError(
                 "--inputs-npz (inputs_npz) required for dataset='custom'"
@@ -256,13 +321,13 @@ def run_inference(
     X = sanitize_inputs_np(X)
     X = ensure_input_shapes(X, MODE, H)
     y_map = map_targets_for_training(y or {})
-
+    
+    _progress(0.20, f"Inference: dataset {dataset!r} loaded & shaped")
     # ----------------------------------------------------------
     # 4) Optional validation Dataset for calibrator
     # ----------------------------------------------------------
     ds_val = None
     if fit_calibrator:
-        npz_dict = M["artifacts"]["numpy"]
         if "val_inputs_npz" in npz_dict and "val_targets_npz" in npz_dict:
             vx = dict(np.load(npz_dict["val_inputs_npz"]))
             vy = dict(np.load(npz_dict["val_targets_npz"]))
@@ -274,7 +339,9 @@ def run_inference(
             )
         else:
             log("[Calibrator] No VAL NPZs found; cannot fit calibrator.")
-
+    
+    _progress(0.30, "Inference: validation dataset ready for calibrator")
+    
     if should_stop():
         log("[Inference] stop_check=True before model load; aborting.")
         return {
@@ -313,6 +380,8 @@ def run_inference(
         include_metrics=True,
     )
 
+    _progress(0.45, "Inference: model loaded and compiled")
+     
     if should_stop():
         log("[Inference] stop_check=True after model load; aborting.")
         return {
@@ -351,7 +420,8 @@ def run_inference(
         cal = fit_interval_calibrator_on_val(
             model, ds_val, target=cov_target
         )
-
+    _progress(0.55, "Inference: interval calibrator ready")
+    
     if should_stop():
         log("[Inference] stop_check=True before prediction; aborting.")
         return {
@@ -365,10 +435,14 @@ def run_inference(
     # ----------------------------------------------------------
     # 7) Predict
     # ----------------------------------------------------------
+    _progress(0.60, "Inference: running model.predict(...)")
+
     log("[Inference] Running model.predict(...)")
     pred = model.predict(X, verbose=0)
     data_final = pred["data_final"]
-
+    
+    _progress(0.70, "Inference: raw predictions computed")
+    
     # Split heads, handle quantiles vs point
     if data_final.ndim == 4:  # (B,H,Q,O_total)
         s_q = data_final[..., :OUT_S_DIM]
@@ -466,7 +540,8 @@ def run_inference(
         main_csv = csv_future
     else:
         main_csv = csv_eval
-
+    
+    _progress(0.75, "Inference: forecast CSVs written")
     # ----------------------------------------------------------
     # 9) Manual diagnostics (coverage/sharpness + physical metrics)
     #     (No Keras model.evaluate(), no physics evaluate)
@@ -485,9 +560,21 @@ def run_inference(
 
     if y_map and data_final.ndim == 4 and ds_eval is not None:
         y_true_list, s_q_list = [], []
-
-        for xb, yb in with_progress(
-            ds_eval, desc="Inference interval diagnostics"
+        
+        # Optional: estimate number of batches for GUI progress
+        num_batches = None
+        try:
+            num_batches = int(
+                tf.data.experimental.cardinality(ds_eval).numpy()
+            )
+            if num_batches <= 0:
+                num_batches = None
+        except Exception:
+            num_batches = None
+            
+        for i, (xb, yb) in enumerate(
+            with_progress(ds_eval, desc="Inference interval diagnostics"),
+            start=1,
         ):
             if should_stop():
                 log(
@@ -495,6 +582,13 @@ def run_inference(
                     "diagnostics loop."
                 )
                 break
+            
+            # Inner progress slice: 0.80 → 0.90
+            if num_batches is not None:
+                inner = max(0.0, min(1.0, i / float(num_batches)))
+                frac = 0.80 + 0.10 * inner
+                _progress(frac, f"Inference: diagnostics {i}/{num_batches}")
+    
             out_b = model(xb, training=False)
             s_q_b, _ = model.split_data_predictions(out_b["data_final"])
             # Use same calibration as for predictions CSV
@@ -563,12 +657,16 @@ def run_inference(
                 "mae": per_h_mae_phys,
                 "r2":  per_h_r2_phys,
             }
+        
+        _progress(0.90, "Inference: diagnostics complete")
 
     summary_path = os.path.join(inf_dir, "inference_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(eval_json, f, indent=2)
     log(f"[Inference] Saved inference summary JSON -> {summary_path}")
 
+    _progress(0.95, "Inference: summary JSON written")
+    
     # ----------------------------------------------------------
     # 10) Plots (optional, no evaluate/physics)
     # ----------------------------------------------------------
@@ -609,8 +707,17 @@ def run_inference(
                 _logger=log,
             )
             log(f"[Inference] Saved forecast figures in: {inf_dir}")
+            
+            # notify the GUI that the PNGs were created
+            _notify_gui_forecast_views(inf_dir, CITY)
+            
         except Exception as e:
             log(f"[Warn] plot_eval_future failed: {e}")
+    
+        _progress(1.0, "Inference: complete (plots saved)")
+    
+    if not make_plots or not has_any_df or should_stop():
+        _progress(1.0, "Inference: complete")
 
     # ----------------------------------------------------------
     # 11) Final return payload

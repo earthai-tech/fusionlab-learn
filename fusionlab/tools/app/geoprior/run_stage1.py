@@ -55,8 +55,7 @@ except Exception as e:  # pragma: no cover
     _IMPORT_ERR = e
 
 
-GUI_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "geoprior")
-# -> /.../fusionlab/tools/app/geoprior
+GUI_CONFIG_DIR = os.path.dirname(__file__)
 
 # ======================================================================
 # Small helpers (same behaviour as in your script)
@@ -195,6 +194,7 @@ def run_stage1(
     logger: Optional[Callable[[str], None]] = None,
     clean_run_dir: bool = True,
     stop_check: Callable[[], bool] = None, 
+    progress_callback: Optional[Callable[[float, str], None]] = None,  
 ) -> Dict[str, Any]:
     """
     Run NATCOM GeoPrior Stage-1 for the current city.
@@ -216,6 +216,54 @@ def run_stage1(
     dict
         ``{"manifest", "manifest_path", "run_dir", "artifacts_dir"}``.
     """
+    def _seq_progress_train(local_frac: float) -> None:
+        # Map [0, 1] in sequence-building → [0.40, 0.60] in Stage-1
+        _progress(
+            0.40 + 0.20 * float(local_frac),
+            "Stage-1: building train sequences",
+        )
+
+    def _seq_progress_future(local_frac: float) -> None:
+        # Map [0, 1] in future-building → [0.70, 0.90] in Stage-1 (for example)
+        _progress(
+            0.70 + 0.20 * float(local_frac),
+            "Stage-1: building future sequences",
+        )
+        
+    def _progress(fraction: float, msg: str) -> None:
+        if progress_callback is None:
+            return
+        try:
+            # clamp and forward
+            f = max(0.0, min(1.0, float(fraction)))
+            progress_callback(f, msg)
+        except Exception:
+            # never crash Stage-1 because the GUI callback misbehaved
+            pass
+
+    def _maybe_stop(stage: str) -> None:
+        """
+        Check cooperative stop flag and abort Stage-1 cleanly.
+
+        Parameters
+        ----------
+        stage : str
+            Short description of where we are (for logs/GUI).
+        """
+        if stop_check is not None:
+            try:
+                should_stop = bool(stop_check())
+            except Exception:
+                # Never crash if the callback misbehaves
+                should_stop = False
+            if should_stop:
+                msg = f"[Stage-1] Stop requested → aborting at: {stage}."
+                log(msg)
+                _progress(1.0, f"Stage-1 aborted at: {stage}")
+                raise InterruptedError("Stage-1 was interrupted by user.")
+
+    # ---------------------------------------------------------------------
+    
     if not _IMPORT_OK:
         raise RuntimeError(
             "fusionlab imports failed in run_stage1: "
@@ -372,7 +420,8 @@ def run_stage1(
         title=f"{CITY_NAME.upper()} {MODEL_NAME} STAGE-1 CONFIG",
         print_fn =log
     )
-
+    _maybe_stop("after config resolved")
+    
     # ===================== STEP 1: LOAD =====================
     log(f"\n{'='*18} Step 1: Load Dataset {'='*18}")
 
@@ -434,10 +483,11 @@ def run_stage1(
     raw_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_01_raw.csv")
     df_raw.to_csv(raw_csv, index=False)
     log(f"  Saved: {raw_csv}")
-
+    
+    _maybe_stop("before preprocessing")
     # ===================== STEP 2: PREPROCESS =====================
     log(f"\n{'='*18} Step 2: Initial Preprocessing {'='*18}")
-
+    
     opt_num_cols, opt_num_map = _resolve_optional_columns(
         df_raw, OPTIONAL_NUMERIC_FEATURES
     )
@@ -490,8 +540,12 @@ def run_stage1(
     log(f"\n{'='*18} Step 2.5: Censor-aware transforms {'='*18}")
     df_cens, censor_report = _apply_censoring(df_clean.copy(), CENSORING_SPECS)
 
+    _progress(0.10, "Stage-1: CSV loaded & cleaned")
+    
+    _maybe_stop("after cleaning & censoring")
     # ===================== STEP 3: ENCODE & SCALE =====================
     log(f"\n{'='*18} Step 3: Encode & Scale {'='*18}")
+    
     df_proc = df_cens.copy()
 
     # 3.1 OHE
@@ -563,9 +617,10 @@ def run_stage1(
     df_scaled.to_csv(scaled_csv, index=False)
     log(f"  Saved: {scaled_csv}")
 
-    if stop_check and stop_check():
-        raise InterruptedError("Sequence generation aborted.")
-            
+    _maybe_stop("after encode & scale")
+
+    _progress(0.30, "Stage-1: features scaled")
+
     # ===================== STEP 4: FEATURE SETS =====================
     log(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
 
@@ -601,6 +656,9 @@ def run_stage1(
     log(f"  Future : {future_features}")
     log(f"  H_field: {H_FIELD_COL}")
 
+    _progress(0.35, "Stage-1: feature sets defined")
+    
+    _maybe_stop("after feature sets defined")
     # ===================== STEP 5: TRAIN SPLIT & SEQUENCES =====================
     log(f"\n{'='*18} Step 5: Train Split & Sequences {'='*18}")
 
@@ -612,7 +670,9 @@ def run_stage1(
         ARTIFACTS_DIR,
         f"{CITY_NAME}_train_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}.joblib",  # noqa: E501
     )
-
+    
+    _maybe_stop("before train sequence generation")
+    _progress(0.40, "Stage-1: data sequences preparing...")
     OUT_S_DIM, OUT_G_DIM = 1, 1
     inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
         df=df_train,
@@ -636,10 +696,13 @@ def run_stage1(
         mode=MODE,
         model=MODEL_NAME,
         verbose=2,
-        _logger=log,          # <- route internal verbose logs to GUI/CLI
-        stop_check=stop_check  # <- add when you extend run_stage1 signature
+        _logger=log,          
+        stop_check=stop_check , 
+        progress_hook=_seq_progress_train,
     )
-
+    _progress(0.60, "Stage-1: train sequences built")
+    _maybe_stop("after train sequences built")
+    
     if targets_train["subsidence"].shape[0] == 0:
         raise ValueError("No training sequences were generated.")
 
@@ -719,6 +782,8 @@ def run_stage1(
         f"    {val_targets_npz}"
     )
 
+    _progress(0.80, "Stage-1: validation sequences built")
+    _maybe_stop("before TF dataset export")
     # ===================== MANIFEST: ONE FILE TO RULE THEM ALL =================
     log(f"\n{'='*18} Build Manifest {'='*18}")
 
@@ -826,6 +891,8 @@ def run_stage1(
     # ===================== STEP 5b: TEST SEQUENCES (TEMPORAL GEN) ==============
     df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()
     if not df_test.empty:
+
+        _maybe_stop("before test sequence generation")
         log(
             f"\n{'='*18} Step 5b: Test Sequences (temporal generalisation) "
             f"{'='*18}"
@@ -905,6 +972,7 @@ def run_stage1(
                     f"    {test_inputs_npz}\n"
                     f"    {test_targets_npz}"
                 )
+            _maybe_stop("after test sequences")
         except Exception as e:  # pragma: no cover
             log(
                 f"  [Warn] Test sequence construction failed: {e}. "
@@ -916,6 +984,7 @@ def run_stage1(
     # ===================== STEP 7: TRUE FUTURE SEQUENCES (OPTIONAL) ============
     future_npz_paths = None
     if BUILD_FUTURE_NPZ:
+        _maybe_stop("before future sequence generation")
         log(f"\n{'='*18} Step 7: Future Sequences {'='*18}")
         try:
             future_npz_paths = build_future_sequences_npz(
@@ -942,6 +1011,7 @@ def run_stage1(
                 verbose=7,
                 logger=log, 
                 stop_check = stop_check, 
+                progress_hook=_seq_progress_future,
             )
             manifest["artifacts"]["numpy"].update(future_npz_paths)
             log(f"  Future NPZs: {future_npz_paths}")
@@ -951,7 +1021,10 @@ def run_stage1(
                 f"{e}\n"
                 "       Continuing without future_* NPZs."
             )
+        _maybe_stop("after future sequences")
 
+    _maybe_stop("before manifest write")
+    
     manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
@@ -961,6 +1034,9 @@ def run_stage1(
         f"\n{'-'*_TW}\nSTAGE-1 COMPLETE. Artifacts in:\n"
         f"  {RUN_OUTPUT_PATH}\n{'-'*_TW}"
     )
+    
+    # After test / future sequences and manifest written
+    _progress(1.0, "Stage-1: complete")
 
     return {
         "manifest": manifest,

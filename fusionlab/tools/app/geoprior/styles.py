@@ -56,6 +56,15 @@ PALETTE = {
 }
 
 # ------------------------------------------------------------------ #
+#  Mode indicator colours
+# ------------------------------------------------------------------ #
+MODE_DRY_COLOR   = "teal"       # DRY RUN
+MODE_TRAIN_COLOR = PRIMARY      # Train = brand primary
+MODE_TUNE_COLOR  = "#8D4004"    # Tuning = neutral grey (distinct from SECONDARY)
+MODE_INFER_COLOR = "#00aa00"    # Inference = green
+MODE_XFER_COLOR  = "#CF3476"    # Transferability = magenta# 	#8B008B
+
+# ------------------------------------------------------------------ #
 #  Light theme – main GeoPrior style
 # ------------------------------------------------------------------ #
 FLAB_STYLE_SHEET = f"""
@@ -500,7 +509,6 @@ QMessageBox QPushButton:disabled {{
     color: #888;
 }}
 """
-
 __all__ = [
     "PRIMARY",
     "SECONDARY",
@@ -514,4 +522,9 @@ __all__ = [
     "LOG_STYLES",
     "ERROR_STYLES",
     "TUNER_DIALOG_STYLES",
+    "MODE_DRY_COLOR",
+    "MODE_TRAIN_COLOR",
+    "MODE_TUNE_COLOR",
+    "MODE_INFER_COLOR",
+    "MODE_XFER_COLOR",
 ]

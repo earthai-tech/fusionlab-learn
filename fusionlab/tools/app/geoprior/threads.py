@@ -22,6 +22,7 @@ from .backend import (
     TuningJob,
     InferenceJob,
     XferMatrixJob,
+    XferViewJob,
 )
 
 
@@ -158,6 +159,7 @@ class InferenceThread(BaseJobThread):
         model_path: str,
         dataset: str = "test",
         *,
+        use_stage1_future_npz: bool = False,          
         manifest_path: Optional[str] = None,
         stage1_dir: Optional[str] = None,
         inputs_npz: Optional[str] = None,
@@ -169,14 +171,13 @@ class InferenceThread(BaseJobThread):
         include_gwl: bool = False,
         batch_size: int = 32,
         make_plots: bool = True,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         parent: Optional[object] = None,
     ) -> None:
         job = InferenceJob(
             model_path=model_path,
             dataset=dataset,
+            use_stage1_future_npz=use_stage1_future_npz,  
             manifest_path=manifest_path,
             stage1_dir=stage1_dir,
             inputs_npz=inputs_npz,
@@ -191,6 +192,7 @@ class InferenceThread(BaseJobThread):
             cfg_overrides=cfg_overrides,
         )
         super().__init__(job=job, parent=parent)
+
 
     def run(self) -> None:
         super().run()
@@ -255,6 +257,50 @@ class XferMatrixThread(BaseJobThread):
         self.xfer_finished.emit(result)
 
 
+class XferViewThread(BaseJobThread):
+    """Thread wrapper around XferViewJob."""
+
+    xfer_view_finished = pyqtSignal(dict)
+
+    def __init__(
+        self,
+        *,
+        view_kind: str,
+        results_root: str,
+        xfer_out_dir: Optional[str] = None,
+        xfer_csv: Optional[str] = None,
+        xfer_json: Optional[str] = None,
+        split: str = "val",
+        prefer_split: Optional[str] = None,
+        prefer_calibration: Optional[str] = None,
+        show_overall: bool = True,
+        dpi: int = 150,
+        fontsize: int = 8,
+        parent: Optional[object] = None,
+    ) -> None:
+        job = XferViewJob(
+            view_kind=view_kind,
+            results_root=results_root,
+            xfer_out_dir=xfer_out_dir,
+            xfer_csv=xfer_csv,
+            xfer_json=xfer_json,
+            split=split,
+            prefer_split=prefer_split,
+            prefer_calibration=prefer_calibration,
+            show_overall=show_overall,
+            dpi=dpi,
+            fontsize=fontsize,
+            logger=None,
+            stop_check=None,
+        )
+        super().__init__(job=job, parent=parent)
+
+    def run(self) -> None:
+        super().run()
+        result = self._job.last_result or {}
+        self.xfer_view_finished.emit(result)
+
+
 __all__ = [
     "BaseJobThread",
     "Stage1Thread",
@@ -262,5 +308,6 @@ __all__ = [
     "TuningThread",
     "InferenceThread",
     "XferMatrixThread",
+    "XferViewThread"
 ]
 

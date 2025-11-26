@@ -26,7 +26,7 @@ It:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict#, Mapping, Optional
 
 import os
 
@@ -35,18 +35,99 @@ GUI_CONFIG_DIR = os.path.dirname(__file__)
 # -------------------------------------------------------------------
 # Robust import of nat_utils
 # -------------------------------------------------------------------
-try:  # normal package layout
-    from ...utils.nat_utils import (  # type: ignore
-        load_nat_config_payload,
-    )
-except Exception:  # pragma: no cover - fallback for tests
-    try:
-        # direct import when running the file standalone
-        from nat_utils import (  # type: ignore
-            load_nat_config_payload,
-        )
-    except Exception:  # pragma: no cover
-        load_nat_config_payload = None  # type: ignore
+
+from ....utils.nat_utils import load_nat_config_payload
+from ..smart_stage1 import build_stage1_cfg_from_nat
+# -----------------------------------------------
+# Default tuner search space (GUI + NAT config)
+# -----------------------------------------------
+def default_tuner_search_space() -> Dict[str, Any]:
+    """Return a fresh default TUNER_SEARCH_SPACE dict."""
+    return {
+        # --- Architecture (model.__init__) ---
+        "embed_dim": [32, 48, 64],
+        "hidden_units": [64, 96],
+        "lstm_units": [64, 96],
+        "attention_units": [32, 48],
+        "num_heads": [2, 4],
+
+        "dropout_rate": {
+            "type": "float",
+            "min_value": 0.05,
+            "max_value": 0.20,
+        },
+
+        "vsn_units": [24, 32, 40],
+
+        # --- Physics switches ---
+        "pde_mode": ["both"],
+        "scale_pde_residuals": {"type": "bool"},
+        "kappa_mode": ["bar", "kb"],
+
+        "hd_factor": {
+            "type": "float",
+            "min_value": 0.50,
+            "max_value": 0.70,
+        },
+
+        # --- Learnable scalar initials ---
+        "mv": {
+            "type": "float",
+            "min_value": 5e-8,
+            "max_value": 3e-7,
+            "sampling": "log",
+        },
+        "kappa": {
+            "type": "float",
+            "min_value": 0.8,
+            "max_value": 1.2,
+        },
+
+        # --- Compile-only (model.compile) ---
+        "learning_rate": {
+            "type": "float",
+            "min_value": 7e-5,
+            "max_value": 2e-4,
+            "sampling": "log",
+        },
+
+        "lambda_gw": {
+            "type": "float",
+            "min_value": 0.005,
+            "max_value": 0.03,
+        },
+        "lambda_cons": {
+            "type": "float",
+            "min_value": 0.05,
+            "max_value": 0.20,
+        },
+        "lambda_prior": {
+            "type": "float",
+            "min_value": 0.05,
+            "max_value": 0.20,
+        },
+        "lambda_smooth": {
+            "type": "float",
+            "min_value": 0.005,
+            "max_value": 0.05,
+        },
+        "lambda_mv": {
+            "type": "float",
+            "min_value": 0.005,
+            "max_value": 0.05,
+        },
+
+        "mv_lr_mult": {
+            "type": "float",
+            "min_value": 0.5,
+            "max_value": 2.0,
+        },
+        "kappa_lr_mult": {
+            "type": "float",
+            "min_value": 2.0,
+            "max_value": 8.0,
+        },
+    }
 
 
 @dataclass
@@ -101,6 +182,9 @@ class GeoPriorConfig:
     lambda_smooth: float = 0.01
     lambda_mv: float = 0.01
 
+    # --- flags tied to nat config / Stage-1 ---
+    build_future_npz: bool = False
+    
     # --- flags (not part of nat config) ---
     clean_stage1_dir: bool = False
     evaluate_training: bool = True
@@ -119,8 +203,22 @@ class GeoPriorConfig:
         default_factory=dict,
         repr=False,
     )
+    
+    arch_overrides: Dict[str, Any] = field(     
+        default_factory=dict,
+        repr=False,
+    )
+    prob_overrides: Dict[str, Any] = field(      
+        default_factory=dict,
+        repr=False,
+    )
 
-
+    # NEW: full tuner search space that the GUI can edit and
+    # push back into NAT config as TUNER_SEARCH_SPACE.
+    tuner_search_space: Dict[str, Any] = field(
+        default_factory=default_tuner_search_space,
+        repr=False,
+    )
     # ------------------------------------------------------------------
     # Constructors
     # ------------------------------------------------------------------
@@ -138,26 +236,25 @@ class GeoPriorConfig:
         base: Dict[str, Any] = {}
         meta: Dict[str, Any] = {}
 
-        if load_nat_config_payload is not None:
-            try:
-                # Tell nat_utils to use the GUI config root
-                payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
-                base = payload.get("config", {}) or {}
-                meta = payload.get("__meta__", {}) or {}
-            except Exception:  # pragma: no cover
-                base, meta = {}, {}
-        else:
-            base, meta = {}, {}
-            
+        # Tell nat_utils to use the GUI config root
+        payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
+        base = payload.get("config", {}) or {}
+        meta = payload.get("__meta__", {}) or {}
+
         # Helper for safe extraction with fallback.
-        def iget(
-            key: str,
-            default: Any,
-        ) -> Any:
+        def iget(key: str, default: Any) -> Any:
             if key not in base:
                 return default
             val = base[key]
             # cast conservatively
+            if isinstance(default, bool):       
+                if isinstance(val, str):
+                    v = val.strip().lower()
+                    if v in {"1", "true", "yes", "on"}:
+                        return True
+                    if v in {"0", "false", "no", "off"}:
+                        return False
+                return bool(val)
             if isinstance(default, int):
                 try:
                     return int(val)
@@ -171,7 +268,13 @@ class GeoPriorConfig:
             if isinstance(default, str):
                 return str(val)
             return val
-
+        # Decide tuner search space: config wins, else defaults
+        space_cfg = base.get("TUNER_SEARCH_SPACE", None)
+        if isinstance(space_cfg, dict) and space_cfg:
+            tuner_space = space_cfg
+        else:
+            tuner_space = default_tuner_search_space()
+            
         obj = cls(
             train_end_year=iget(
                 "TRAIN_END_YEAR",
@@ -225,8 +328,13 @@ class GeoPriorConfig:
                 "LAMBDA_MV",
                 cls.lambda_mv,
             ),
+            build_future_npz=iget(               
+                "BUILD_FUTURE_NPZ",
+                cls.build_future_npz,
+            ),
             _base_cfg=base,
             _meta=meta,
+            tuner_search_space=tuner_space,   
         )
         return obj
 
@@ -275,11 +383,117 @@ class GeoPriorConfig:
         maybe("LAMBDA_SMOOTH", self.lambda_smooth)
         maybe("LAMBDA_MV", self.lambda_mv)
         
-        # Extra overrides coming from the feature dialog.
+        # propagate BUILD_FUTURE_NPZ to Stage-1
+        maybe("BUILD_FUTURE_NPZ", self.build_future_npz)
+        
+        # tuner search space
+        maybe("TUNER_SEARCH_SPACE", self.tuner_search_space)
+        
+        # Extra overrides coming from dialogs.
         if self.feature_overrides:
             overrides.update(self.feature_overrides)
+        if self.arch_overrides:                  
+            overrides.update(self.arch_overrides)
+        if self.prob_overrides:                  
+            overrides.update(self.prob_overrides)
 
         return overrides
+    
+    def to_stage1_config(self) -> Dict[str, Any]:
+        """Build a minimal Stage-1 configuration snapshot.
+
+        This mirrors what Stage-1 would see after applying
+        :meth:`to_cfg_overrides` on top of the base nat.com config,
+        but keeps only the keys that
+        :mod:`fusionlab.tools.app.smart_stage1` needs for
+        compatibility checks (``TIME_STEPS``,
+        ``FORECAST_HORIZON_YEARS``, ``TRAIN_END_YEAR``,
+        ``FORECAST_START_YEAR``, ``MODE``, ``censoring``,
+        ``features``, ``cols``).
+        """
+        base_cfg: Dict[str, Any] = self._base_cfg or {}
+        overrides = self.to_cfg_overrides()
+        
+        return build_stage1_cfg_from_nat(
+            base_cfg=base_cfg,
+            overrides=overrides,
+            feature_overrides=self.feature_overrides or None,
+        )
+
+    def ensure_valid(self) -> None:
+        """
+        Validate high-level configuration consistency.
+
+        Raises
+        ------
+        ValueError
+            If any setting is inconsistent.
+        """
+        # --- Temporal logic ---
+        if self.forecast_start_year <= self.train_end_year:
+            raise ValueError(
+                "FORECAST_START_YEAR must be greater than TRAIN_END_YEAR "
+                f"(got TRAIN_END_YEAR={self.train_end_year}, "
+                f"FORECAST_START_YEAR={self.forecast_start_year})."
+            )
+
+        if self.forecast_horizon_years <= 0:
+            raise ValueError(
+                "FORECAST_HORIZON_YEARS must be a positive integer "
+                f"(got {self.forecast_horizon_years})."
+            )
+
+        if self.time_steps <= 0:
+            raise ValueError(
+                "TIME_STEPS must be a positive integer "
+                f"(got {self.time_steps})."
+            )
+
+        # --- Training hyper-parameters ---
+        if self.epochs <= 0:
+            raise ValueError(f"EPOCHS must be > 0 (got {self.epochs}).")
+
+        if self.batch_size <= 0:
+            raise ValueError(
+                f"BATCH_SIZE must be > 0 (got {self.batch_size})."
+            )
+
+        if self.learning_rate <= 0.0:
+            raise ValueError(
+                f"LEARNING_RATE must be > 0 (got {self.learning_rate})."
+            )
+
+        # --- Physics configuration ---
+        allowed_pde_modes = {
+            "both",
+            "on",
+            "consolidation",
+            "gw_flow",
+            "none",
+            "off",
+        }
+        if self.pde_mode not in allowed_pde_modes:
+            raise ValueError(
+                "PDE_MODE_CONFIG must be one of "
+                f"{sorted(allowed_pde_modes)}, got {self.pde_mode!r}."
+            )
+
+        for name in (
+            "lambda_cons",
+            "lambda_gw",
+            "lambda_prior",
+            "lambda_smooth",
+            "lambda_mv",
+        ):
+            val = getattr(self, name)
+            if val < 0.0:
+                raise ValueError(
+                    f"{name.upper()} must be non-negative (got {val})."
+                )
+
+        # Basic sanity for tuner space
+        if not isinstance(self.tuner_search_space, dict):
+            raise ValueError("tuner_search_space must be a dict.")
 
     def as_dict(self) -> Dict[str, Any]:
         """Dump the current values as a plain dict."""
@@ -301,10 +515,16 @@ class GeoPriorConfig:
             "lambda_prior": self.lambda_prior,
             "lambda_smooth": self.lambda_smooth,
             "lambda_mv": self.lambda_mv,
+            "build_future_npz": (               
+                self.build_future_npz
+            ),
             "clean_stage1_dir": (
                 self.clean_stage1_dir
             ),
             "evaluate_training": (
                 self.evaluate_training
             ),
+            # not strictly needed, but handy for debugging
+            "tuner_search_space": self.tuner_search_space,
         }
+    

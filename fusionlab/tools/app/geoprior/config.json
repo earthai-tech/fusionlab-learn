@@ -104,7 +104,7 @@
       "0.5": 1.0,
       "0.9": 1.5
     },
-    "PDE_MODE_CONFIG": "off",
+    "PDE_MODE_CONFIG": "both",
     "SCALE_PDE_RESIDUALS": true,
     "LAMBDA_CONS": 0.1,
     "LAMBDA_GW": 0.01,
@@ -120,7 +120,7 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 30,
+    "EPOCHS": 50,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
     "TUNER_SEARCH_SPACE": {
@@ -248,6 +248,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "41a5208a210ab8ec896ad1866e1a9344edcb922990c2a9b27961f772b2de7ca2"
+    "config_py_hash": "4d8a3fa253a3de20605e933e3b34486d6e93bc7d5a03adb0804898653c23877f"
   }
 }

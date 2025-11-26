@@ -44,7 +44,7 @@ from tensorflow.keras.callbacks import (
 )
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
-
+from tensorflow.data import experimental as tfdata_experimental
 # --- silence TF chatter at import time ---
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -94,8 +94,12 @@ from fusionlab.nn.utils import plot_history_in
 from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.plot.forecast import plot_eval_future
 
+from fusionlab.tools.app.geoprior.view_utils import ( 
+    _notify_gui_forecast_views 
+)
+from fusionlab.tools.app.callbacks import GuiProgress #  , StopCheckCallback
 
-GUI_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "geoprior")
+GUI_CONFIG_DIR = os.path.dirname(__file__)
 
 # ---------------------------------------------------------------------
 # Small helpers
@@ -139,6 +143,8 @@ def run_training(
     cfg_overrides: Optional[Dict[str, Any]] = None,
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None,  
+    **kws
 ) -> Dict[str, Any]:
     """
     Run Stage-2 training & evaluation for GeoPriorSubsNet.
@@ -175,6 +181,12 @@ def run_training(
                 "future_csv": "...",
             }
     """
+    def _progress_from_pct(pct: int) -> None:
+        if progress_callback is None:
+            return
+        frac = max(0.0, min(1.0, pct / 100.0))
+        progress_callback(frac, f"Training: {pct:3d}%")
+
     log = logger or (lambda msg: print(msg, flush=True))
 
     # ================================================================
@@ -385,6 +397,9 @@ def run_training(
         log("[Stop] Cancelled before dataset loading.")
         return {"run_dir": RUN_OUTPUT_PATH, "cancelled": True}
 
+    if progress_callback is not None:
+        progress_callback(0.05, "Training: loading encoders and NPZs...")
+        
     # ================================================================
     # 3. Encoders / NPZ loading
     # ================================================================
@@ -457,6 +472,9 @@ def run_training(
     OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
     OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
 
+    if progress_callback is not None:
+        progress_callback(0.15, "Training: building tf.data datasets...")
+        
     # ================================================================
     # 4. Build datasets
     # ================================================================
@@ -612,22 +630,46 @@ def run_training(
     )
     callbacks.append(CSVLogger(csvlog_path, append=False))
 
+    # Figure out batches per epoch once train_dataset is built
+    batches_per_epoch = None
+    try:
+        # Either tf.data.experimental.cardinality or fusionlab._optdeps.with_progress
+        batches_per_epoch = int(
+            tfdata_experimental.cardinality(train_dataset).numpy()
+        )
+    except Exception:
+        # Fallback; if unknown, you could skip GUI progress or set a dummy value
+        batches_per_epoch = 1
+
     if stop_check is not None:
         callbacks.append(StopTrainingOnSignal(stop_check, logger=log))
-
+    # --- attach GUI progress if a callback was provided ---
+    if progress_callback is not None and batches_per_epoch > 0:
+        gui_cb = GuiProgress(
+            total_epochs=EPOCHS,
+            batches_per_epoch=batches_per_epoch,
+            update_fn=_progress_from_pct,
+            epoch_level=False,  # per-batch → smoother bar
+        )
+        callbacks.append(gui_cb)
+        fit_verbose = 0
+    else:
+        fit_verbose = cfg.get("FIT_VERBOSE", 1)
+        
     log("\nTraining...")
     history = subs_model_inst.fit(
         train_dataset,
         validation_data=val_dataset,
         epochs=EPOCHS,
         callbacks=callbacks,
-        verbose=1,
+        verbose=fit_verbose,
     )
     log(
         f"Best val_loss: "
         f"{min(history.history.get('val_loss', [np.inf])):.4f}"
     )
-
+    if progress_callback is not None:
+        progress_callback(0.25, "Training: building GeoPriorSubsNet model...")
     # =================================================================
     # 7. Persist weights / architecture / training summary / run manifest
     # =================================================================
@@ -1412,6 +1454,9 @@ def run_training(
                 cummulative=True,
                 _logger=log
             )
+            # notify the GUI that the PNGs were created
+            _notify_gui_forecast_views(RUN_OUTPUT_PATH, CITY_NAME)
+            
         except Exception as e:
             log(f"[Warn] plot_eval_future failed: {e}")
 
@@ -1432,7 +1477,11 @@ def run_training(
         f"\n---- {CITY_NAME.upper()} {MODEL_NAME} TRAINING COMPLETE ----\n"
         f"Artifacts -> {RUN_OUTPUT_PATH}\n"
     )
-
+    # Keras fit drives 0.25 → ~0.90 via GuiProgress
+    # After evaluation / calibration:
+    if progress_callback is not None:
+        progress_callback(1.0, "Training: complete (eval & diagnostics done).")
+        
     return {
         "run_dir": RUN_OUTPUT_PATH,
         "train_summary_json": summary_json_path,

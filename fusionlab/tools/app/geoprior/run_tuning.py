@@ -27,6 +27,7 @@ Requirements
 from __future__ import annotations
 
 import os
+import math 
 import json
 import joblib
 import numpy as np
@@ -63,23 +64,24 @@ from fusionlab.utils.nat_utils import (
     compile_for_eval,             # used in Step 6
 )
 
-from fusionlab.utils.forecast_utils import format_and_forecast   # used in Step 6
-from fusionlab.utils.scale_metrics import (                      # used in Step 6
+from fusionlab.utils.forecast_utils import format_and_forecast   
+from fusionlab.utils.scale_metrics import (                      
     inverse_scale_target,
     point_metrics,
     per_horizon_metrics,
 )
-from fusionlab.nn.keras_metrics import (                         # used in Step 6
+from fusionlab.nn.keras_metrics import (                         
     coverage80_fn,
     sharpness80_fn,
     _to_py,
 )
-from fusionlab.nn.calibration import (                           # used in Step 6
+from fusionlab.nn.calibration import (                           
     fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
 )
+from ..callbacks import StopCheckCallback, TunerProgressCallback
 
-GUI_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "geoprior")
+GUI_CONFIG_DIR = os.path.dirname(__file__)
 
 def run_tuning(
     manifest_path: Optional[str] = None,
@@ -87,6 +89,10 @@ def run_tuning(
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
     evaluate_tuned: bool = False,
+    progress_callback: Optional[
+        Callable[[float, str], None]
+    ] = None,
+    **kws
 ) -> Dict[str, Any]:
     """
     Run Stage-2 hyperparameter tuning for GeoPriorSubsNet (GeoPriorTuner).
@@ -110,9 +116,12 @@ def run_tuning(
         True when tuning should stop. This is checked at coarse
         points (before running tuner).
     evaluate_tuned : bool, default=False
-        Placeholder flag indicating whether the tuned model should
-        be evaluated (Step 6). The actual evaluation logic is not
-        yet wired into this function and will be added later.
+        Flag indicating whether the tuned model should
+        be evaluated (Step 6).
+    progress_callback : callable or None, default=None
+        Optional callable ``progress_callback(value, message)`` used
+        by the GUI. ``value`` is a float in [0, 1] giving the global
+        tuning progress; ``message`` is a short status string.
 
     Returns
     -------
@@ -142,6 +151,84 @@ def run_tuning(
     # Simple helper to check cancellation
     def should_stop() -> bool:
         return bool(stop_check and stop_check())
+    
+    # Simple helper to emit safe [0, 1] progress updates
+    def _progress(value: float, message: str = "") -> None:
+        if progress_callback is None:
+            return
+        try:
+            v = float(value)
+        except Exception:
+            v = 0.0
+        v = max(0.0, min(1.0, v))
+        try:
+            progress_callback(v, message)
+        except Exception:
+            # never crash tuning because of the GUI
+            pass
+
+    class _TunerProgressShim:
+        """
+        Minimal ProgressManager-like shim for TunerProgressCallback.
+
+        It maps the inner tuner progress [0, 1] -> a slice of the
+        global bar, e.g. [0.25, 0.75], and formats a short label.
+        """
+
+        def __init__(
+            self,
+            cb: Optional[Callable[[float, str], None]],
+            *,
+            base: float = 0.25,
+            span: float = 0.50,
+        ) -> None:
+            self._cb = cb
+            self._base = base
+            self._span = span
+            self._trial = 0
+            self._n_trials = 0
+            self._epoch = 0
+            self._n_epochs = 0
+
+        # API expected by TunerProgressCallback
+        def start_step(self, label: str) -> None:
+            if self._cb is None:
+                return
+            # snap to the lower bound of the tuning slice
+            self._cb(self._base, f"{label}…")
+
+        def set_trial_context(self, trial: int, total: int) -> None:
+            self._trial = max(1, trial)
+            self._n_trials = max(1, total)
+
+        def set_epoch_context(self, epoch: int, total: int) -> None:
+            self._epoch = max(1, epoch)
+            self._n_epochs = max(1, total)
+
+        def update(self, current: int, total: int) -> None:
+            if self._cb is None or total <= 0:
+                return
+            inner_frac = max(0.0, min(1.0, current / float(total)))
+            frac = self._base + self._span * inner_frac
+            frac = max(0.0, min(1.0, frac))
+            parts = []
+            if self._n_trials:
+                parts.append(f"trial {self._trial}/{self._n_trials}")
+            if self._n_epochs:
+                parts.append(f"epoch {self._epoch}/{self._n_epochs}")
+            msg = "Tuning – " + ", ".join(parts) if parts else "Tuning…"
+            self._cb(frac, msg)
+
+        def finish_step(self, label: str) -> None:
+            if self._cb is None:
+                return
+            # clamp at top of the tuning slice; we'll push to 1.0 later.
+            self._cb(self._base + self._span, f"{label} finished")
+            
+        def __deepcopy__(self, memo):
+            # Keras‐Tuner will copy callbacks; Qt signals can't be
+            # so just return self
+            return self
 
     # ------------------------------------------------------------------
     # 0) Load Stage-1 manifest and arrays
@@ -151,6 +238,8 @@ def run_tuning(
     cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
     CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
     CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+     
+    _progress(0.0, "Stage-2 tuning – locating Stage-1 artifacts…")
 
     # Load global NATCOM config (config.json) and apply overrides
     cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
@@ -273,6 +362,8 @@ def run_tuning(
 
     X_train = _sanitize_inputs(X_train)
     X_val = _sanitize_inputs(X_val)
+    
+    _progress(0.15, "Stage-2 tuning – preparing inputs/targets…")
 
     CITY_NAME = M.get("city", cfg_hp.get("CITY_NAME", "unknown_city"))
     MODEL_NAME = M.get("model", cfg_hp.get("MODEL_NAME", "GeoPriorSubsNet"))
@@ -643,6 +734,7 @@ def run_tuning(
         title=f"{CITY_NAME.upper()} {MODEL_NAME} TUNER CONFIG",
         print_fn =log,
     )
+    _progress(0.22, "Stage-2 tuning – building GeoPriorTuner…")
 
     if should_stop():
         log("[Stage-2] stop_check=True before creating tuner; aborting.")
@@ -688,6 +780,13 @@ def run_tuning(
     tuner_logs_dir = os.path.join(RUN_OUTPUT_PATH, "kt_logs")
     ensure_directory_exists(tuner_logs_dir)
 
+    # before: tuner = GeoPriorTuner.create(...)
+    _progress(0.25, "Stage-2 tuning – starting hyperparameter search…")
+    
+    # EPOCHS / BATCH_SIZE already defined earlier
+    # Derive max_trials from config or default 20 to keep things in sync.
+    max_trials = cfg_hp.get("TUNER_MAX_TRIALS", 20)
+    
     tuner = GeoPriorTuner.create(
         inputs_data=train_inputs_np,
         targets_data=train_targets_np,
@@ -696,11 +795,11 @@ def run_tuning(
         project_name=f"{CITY_NAME}_GeoPrior_HP",
         directory=tuner_logs_dir,
         tuner_type="randomsearch",   # 'randomsearch' | 'bayesian' | 'hyperband'
-        max_trials=20,
+        max_trials=max_trials,
         overwrite=True,
     )
     try:
-        tuner.tuner_.oracle._max_consecutive_failed_trials = 20  # private attr; pragmatic
+        tuner.tuner_.oracle._max_consecutive_failed_trials = max_trials  # private attr; pragmatic
     except Exception:
         pass
 
@@ -744,6 +843,38 @@ def run_tuning(
             "tuning_summary_json": None,
             "best_hps": {},
         }
+    
+    callbacks = [early_cb, ton_cb, nan_guard]
+
+    # Let GUI stop tuning mid-search as well
+    if stop_check is not None:
+        callbacks.append(
+            StopCheckCallback(
+                stop_check_fn=should_stop,
+                log_callback=log,
+            )
+        )
+
+    # Fine-grained GUI progress: only if someone passed a progress_callback
+    if progress_callback is not None:
+        # infer batches_per_epoch from number of training samples
+        n_train = int(train_inputs_np["dynamic_features"].shape[0])
+        batches_per_epoch = max(
+            1,
+            int(math.ceil(n_train / float(BATCH_SIZE))),
+        )
+        pm_shim = _TunerProgressShim(progress_callback)
+
+        tuner_prog_cb = TunerProgressCallback(
+            total_trials=max_trials,
+            total_epochs=EPOCHS,
+            batches_per_epoch=batches_per_epoch,
+            progress_manager=pm_shim,
+            epoch_level=True,
+            batch_level=True,
+            log=log,
+        )
+        callbacks.append(tuner_prog_cb)
 
     try:
         best_model, best_hps, kt = tuner.run(
@@ -752,7 +883,7 @@ def run_tuning(
             validation_data=validation_np,
             epochs=EPOCHS,
             batch_size=BATCH_SIZE,
-            callbacks=[early_cb, ton_cb, nan_guard],
+            callbacks=callbacks,
             verbose=1,
         )
     except Exception as e:
@@ -761,6 +892,8 @@ def run_tuning(
         best_model = getattr(tuner, "best_model_", None)
         best_hps = getattr(tuner, "best_hps_", None)
         # kt = getattr(tuner, "tuner_", None)
+        
+    _progress(0.75, "Stage-2 tuning – serialising best model and HPs…")
 
     # ----------------------------------------------------------------------
     # 5) Persist results
@@ -1318,6 +1451,7 @@ def run_tuning(
         f"---- {CITY_NAME.upper()} {MODEL_NAME} TUNING COMPLETE ----\n"
         f"Artifacts -> {RUN_OUTPUT_PATH}\n"
     )
+    _progress(1.0, "Stage-2 tuning complete.")
 
     return {
         "run_dir": RUN_OUTPUT_PATH,

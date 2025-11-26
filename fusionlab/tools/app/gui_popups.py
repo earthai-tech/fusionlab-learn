@@ -15,8 +15,140 @@ from PyQt5.QtWidgets import (
     QGraphicsScene,
     QGraphicsPixmapItem, 
     QToolButton, QWidget, 
-    QShortcut 
+    QShortcut, 
+    QTableWidget, 
+    QAbstractItemView, 
+    QTableWidgetItem, 
+    QHeaderView
 )
+
+class Stage1ChoiceDialog(QDialog):
+    """
+    Let the user decide how to handle Stage-1 before training.
+
+    API
+    ---
+    decision, summary = Stage1ChoiceDialog.ask(
+        parent, city, runs_for_city, all_runs
+    )
+
+    decision in {"reuse", "rebuild", "cancel"}.
+    summary is the selected Stage1Summary (for reuse) or None.
+    """
+
+    def __init__(self, parent, city, runs_for_city, all_runs):
+        super().__init__(parent)
+        self._runs = runs_for_city
+        self._all_runs = all_runs
+        self.decision = "cancel"
+        self.selected_summary = None
+
+        self.setWindowTitle(f"Stage-1 runs for {city}")
+        self.resize(700, 400)
+
+        layout = QVBoxLayout(self)
+
+        # --- table with existing runs (you already have this) ---
+        self.table = QTableWidget(len(self._runs), 5, self)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        self.table.setHorizontalHeaderLabels(
+            ["City", "Timestamp", "T", "H (years)", "Status"]
+        )
+
+        for row, s in enumerate(self._runs):
+            self.table.setItem(row, 0, QTableWidgetItem(s.city))
+            self.table.setItem(row, 1, QTableWidgetItem(s.timestamp))
+            self.table.setItem(row, 2, QTableWidgetItem(str(s.time_steps)))
+            self.table.setItem(row, 3, QTableWidgetItem(str(s.horizon_years)))
+            status = "OK" if s.is_complete else "Incomplete"
+            if not s.config_match:
+                status += " (config mismatch)"
+            self.table.setItem(row, 4, QTableWidgetItem(status))
+
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.Stretch
+        )
+        layout.addWidget(self.table)
+
+        # --- diff label (NEW) ---
+        self.diff_label = QLabel("")
+        self.diff_label.setObjectName("diffLabel")
+        self.diff_label.setStyleSheet(
+            "color:#d98a00; font-weight:600;"
+        )
+        layout.addWidget(self.diff_label)
+
+        # --- buttons ---
+        btn_row = QHBoxLayout()
+        self.reuse_btn = QPushButton("Reuse selected Stage-1")
+        self.rebuild_btn = QPushButton("Rebuild Stage-1")
+        self.cancel_btn = QPushButton("Cancel")
+
+        btn_row.addWidget(self.reuse_btn)
+        btn_row.addWidget(self.rebuild_btn)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.cancel_btn)
+
+        layout.addLayout(btn_row)
+
+        # connections
+        self.reuse_btn.clicked.connect(self._accept_reuse)
+        self.rebuild_btn.clicked.connect(self._accept_rebuild)
+        self.cancel_btn.clicked.connect(self.reject)
+
+        self.table.selectionModel().currentRowChanged.connect(
+            self._on_row_changed
+        )
+
+        if self._runs:
+            self.table.selectRow(len(self._runs) - 1)
+
+    @classmethod
+    def ask(cls, parent, city, runs_for_city, all_runs):
+        dlg = cls(parent, city, runs_for_city, all_runs)
+        result = dlg.exec_()
+        if result != QDialog.Accepted:
+            return "cancel", None
+        return dlg.decision, dlg.selected_summary
+
+    def _on_row_changed(self, current, _previous):
+        row = current.row()
+        if row < 0 or row >= len(self._runs):
+            self.diff_label.setText("")
+            return
+
+        summary = self._runs[row]
+        if summary.diff_fields:
+            self.diff_label.setText(
+                "⚠ changed: " + ", ".join(summary.diff_fields)
+            )
+        else:
+            self.diff_label.setText(
+                "✓ config matches current GUI setup."
+            )
+
+    def _accept_reuse(self):
+        row = self.table.currentRow()
+        if row < 0 or row >= len(self._runs):
+            QMessageBox.warning(
+                self,
+                "No selection",
+                "Please select a Stage-1 run to reuse.",
+            )
+            return
+
+        self.decision = "reuse"
+        self.selected_summary = self._runs[row]
+        self.accept()
+
+    def _accept_rebuild(self):
+        self.decision = "rebuild"
+        self.selected_summary = None
+        self.accept()
 
 class ImagePopup(QDialog):
     """Simple full-screen preview (no extra actions)."""
@@ -38,67 +170,6 @@ class ImagePopup(QDialog):
         btn = QPushButton("Close", clicked=self.accept)
         vbox.addWidget(btn, alignment=Qt.AlignCenter)
 
-class _ImagePreviewDialog(QDialog):
-    """
-    Small preview that pops up whenever the visualiser saves a figure.
-    Comes with “Save as…” and “Copy to clipboard” actions.
-    """
-    def __init__(self, png_path: str, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(os.path.basename(png_path))
-        self.setMinimumSize(600, 400)
-
-        vbox = QVBoxLayout(self)
-
-        pix = QPixmap(png_path)
-        lbl = QLabel(alignment=Qt.AlignCenter)
-        lbl.setPixmap(
-            pix.scaled(580, 340, Qt.KeepAspectRatio,
-                       Qt.SmoothTransformation)
-        )
-        vbox.addWidget(lbl, 1)
-
-        # button row 
-        row = QHBoxLayout(); vbox.addLayout(row)
-
-        self.btn_save  = QPushButton("Save as…")
-        self.btn_copy  = QPushButton("Copy to clipboard")
-        self.btn_close = QPushButton("Close")
-
-        row.addStretch(1)
-        row.addWidget(self.btn_save)
-        row.addWidget(self.btn_copy)
-        row.addWidget(self.btn_close)
-
-        # connections 
-        self.png_path = png_path
-        self.btn_close.clicked.connect(self.close)
-        self.btn_save .clicked.connect(self._save_as)
-        self.btn_copy.clicked.connect(self._copy_clipboard)
-
-    def _save_as(self):
-        dst, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save figure as…",
-            self.png_path,
-            "PNG image (*.png);;PDF file (*.pdf);;All files (*)",
-        )
-        if dst:
-            try:
-                shutil.copyfile(self.png_path, dst)
-            except Exception as err:
-                QMessageBox.warning(self, "Save error", str(err))
-
-    def _copy_clipboard(self):
-        pix = QPixmap(self.png_path)
-        if pix.isNull():
-            QMessageBox.information(
-                self, "Clipboard", "Could not load image for copying."
-            )
-            return
-        QGuiApplication.clipboard().setPixmap(pix)
-
-
 class _ZoomableView(QGraphicsView):
     """Mouse-wheel zoom + hand-drag panning."""
     _ZOOM_STEP = 1.25
@@ -118,7 +189,7 @@ class _ZoomableView(QGraphicsView):
     # double-click = fit 
     def mouseDoubleClickEvent(self, ev):
         self.fitInView(self.scene().itemsBoundingRect(),
-                       Qt.KeepAspectRatio)
+                        Qt.KeepAspectRatio)
         super().mouseDoubleClickEvent(ev)
 
 

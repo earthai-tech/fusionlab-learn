@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QCloseEvent
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -48,20 +48,58 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QFileDialog,
     QDialog,
+    QToolTip,
 )
 
+from ..smart_stage1 import find_stage1_for_city
+from ..gui_popups import Stage1ChoiceDialog
 
-# from ....utils.nat_utils import get_default_runs_root
+from ....utils.nat_utils import get_default_runs_root
 from ..qt_utils import auto_set_ui_fonts, auto_resize_window
-from .threads import Stage1Thread, TrainingThread
-from .geoprior_config import GeoPriorConfig
+from ..view_signals import VIS_SIGNALS 
+from ..gui_popups import ImagePreviewDialog 
+
+from .threads import (
+    Stage1Thread,
+    TrainingThread,
+    TuningThread,
+    InferenceThread,
+    XferMatrixThread,
+    XferViewThread
+)
+from .geoprior_config import GeoPriorConfig, default_tuner_search_space
 from .feature_dialog import FeatureConfigDialog
-from .dialog import CsvEditDialog
-from .styles import TAB_STYLES, LOG_STYLES, FLAB_STYLE_SHEET
+from .architecture_dialog import ArchitectureConfigDialog   
+from .prob_dialog import ProbConfigDialog 
+from .xfer_dialog import XferAdvancedDialog, XferResultsDialog 
+from .results_dialog import GeoPriorResultsDialog
+from .csv_dialog import CsvEditDialog
+from .styles import (
+    TAB_STYLES,
+    LOG_STYLES,
+    FLAB_STYLE_SHEET,
+    PRIMARY,
+    MODE_DRY_COLOR,
+    MODE_TRAIN_COLOR,
+    MODE_TUNE_COLOR,
+    MODE_INFER_COLOR,
+    MODE_XFER_COLOR,
+)
+from .jobs import TrainJobSpec, latest_jobs_for_root
+from .train_dialogs import (
+    TrainOptionsDialog,
+    QuickTrainDialog,
+)
+from .tune_dialogs import (
+    TuneOptionsDialog,
+    QuickTuneDialog,
+    TuneJobSpec,
+)
 
-
-PRIMARY = "#2E3191"
-
+from .manager import LogManager
+from .components import RangeListEditor
+from .scalars_loss_dialog import ScalarsLossDialog
+from .view_utils import _notify_gui_xfer_view
 
 class GeoPriorForecaster(QMainWindow):
     """GUI wrapper for GeoPrior subsidence runs."""
@@ -76,13 +114,30 @@ class GeoPriorForecaster(QMainWindow):
 
         self.stage1_thread: Stage1Thread | None = None
         self.train_thread: TrainingThread | None = None
+        self.tuning_thread: TuningThread | None = None  
+        self.inference_thread: InferenceThread | None = None
+        self.xfer_thread: XferMatrixThread | None = None 
+        self.xfer_view_thread: XferViewThread | None = None    
+        
+        self._xfer_last_result: Dict[str, Any] | None = None 
+        
+        # New: job selected from the options/quick dialogs
+        # New: job selected from the options/quick dialogs
+        self._queued_train_job: TrainJobSpec |None = None
+        self._queued_tune_job: TuneJobSpec | None = None    
 
+        # --- global run/stop state ---
+        self._active_job_kind: str | None = None  # "train", "tune", "infer", "xfer"
+        
         # Selected CSV (optional) + config overrides passed to threads
         self.csv_path: Path | None = None
         self._cfg_overrides: Dict[str, Any] = {}
 
         # Central config object (defaults loaded from nat.com/config.py)
         self.geo_cfg = GeoPriorConfig.from_nat_config()
+        self._stage1_manifest_hint: Path | None = None 
+        # Dialog for scalar HPs / loss weights (used from Tune tab)
+        self.scalars_dialog = ScalarsLossDialog(self)
         
         # Dedicated root so GUI runs don't mix with CLI results
         # self.gui_runs_root = Path(get_default_runs_root())
@@ -90,10 +145,72 @@ class GeoPriorForecaster(QMainWindow):
         self.gui_runs_root = Path.home() / ".fusionlab_runs"
         self.gui_runs_root.mkdir(parents=True, exist_ok=True)
         
+        # user-overrideable base results root (defaults to gui_runs_root)
+        self.results_root = self.gui_runs_root
+        
+        self._train_help_text = (
+            "Train tab – runs Stage-1 (prepare) and Stage-2 "
+            "(GeoPrior training) for the selected city."
+        )
+        self._train_tip_shown: bool = False  
+        
+        # Help text for Tune tab – will be shown as tooltip/notification
+        self._tune_help_text = (
+            "Tune tab – runs Stage-2 hyperparameter search for the "
+            "selected city using existing Stage-1 sequences.\n"
+            "Note: Stage-1 must already exist for this city; run the "
+            "Train tab first if necessary."
+        )
+        self._tune_tip_shown: bool = False  # one-shot notification flag
+        self._tune_help_text = (
+            "Tune tab – runs Stage-2 hyperparameter search for the "
+            "selected city using existing Stage-1 sequences.\n"
+            "Note: Stage-1 must already exist for this city; run the "
+            "Train tab first if necessary."
+        )
+        self._tune_tip_shown: bool = False  # one-shot notification flag
+        
+        # NEW: Inference tab helper
+        self._infer_help_text = (
+            "Inference tab – evaluate a trained/tuned GeoPriorSubsNet on "
+            "train/val/test splits or run future forecasts based on "
+            "Stage-1 future NPZ artifacts."
+        )
+        self._infer_tip_shown: bool = False       
+
+        # Transferability tab helpe
+        self._xfer_help_text = (
+            "Transferability tab – run cross-city transfer matrix (A↔B) "
+            "and build view figures from xfer_results.* files."
+        )
+        self._xfer_tip_shown: bool = False
+
+        # Advanced options state for XFER
+        self._xfer_quantiles_override = None
+        self._xfer_write_json = True
+        self._xfer_write_csv = True
+
         self._build_ui()
+
+        # Log manager: central buffer + on-disk dumping
+        self.log_mgr = LogManager(
+            self.log_widget,
+            mode="collapse",
+            log_dir_name="_log",
+        )
+
         self._connect_signals()
         self._set_window_props()
 
+        self._preview_windows: list[QDialog] = []        # ← keep refs
+        VIS_SIGNALS.figure_saved.connect(self._show_image_popup)
+
+    def _show_image_popup(self, png_path: str) -> None:
+        dlg = ImagePreviewDialog(png_path, parent=self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)             # frees memory on close
+        dlg.show()                                        # modeless – *no* exec_()
+        self._preview_windows.append(dlg)                 # keep it alive
+        
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -134,7 +251,7 @@ class GeoPriorForecaster(QMainWindow):
 
         layout = QVBoxLayout(root)
 
-        # --- Top row: [Select CSV…] [City / Dataset] [Train] [Quit] ---
+        # --- Top row: [Select CSV…] [City / Dataset] [Dry run] [Mode] [Quit] ---
         top = QHBoxLayout()
 
         self.select_csv_btn = QPushButton("Select CSV…")
@@ -143,16 +260,62 @@ class GeoPriorForecaster(QMainWindow):
         top.addWidget(QLabel("City / Dataset:"))
 
         self.city_edit = QLineEdit()
-        self.city_edit.setPlaceholderText("nansha")
+        self.city_edit.setPlaceholderText("e.g. nansha")
         top.addWidget(self.city_edit, 1)
 
-        self.train_btn = QPushButton("Train")
-        top.addWidget(self.train_btn)
+        # stretch between dataset and right-side controls
+        top.addStretch(1)
+
+        # Dry-run checkbox (logic will be added later)
+        self.chk_dry_run = QCheckBox("Dry run")
+        self.chk_dry_run.setToolTip(
+            "Prepare configuration and log actions without actually "
+            "running Stage-1 / Stage-2. (Placeholder – not wired yet.)"
+        )
+        top.addWidget(self.chk_dry_run)
+        
+        # Global Stop button – only visible while a job is running
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setVisible(False)
+        self.btn_stop.setEnabled(False)
+        top.addWidget(self.btn_stop)
+        
+        # Mode indicator button (updated when tab changes)
+        self.mode_btn = QPushButton("Mode: Train")
+        self.mode_btn.setEnabled(False)
+        self.mode_btn.setFlat(True)
+        top.addWidget(self.mode_btn)
+
+        # self.quit_btn = QPushButton("Quit")
+        # top.addWidget(self.quit_btn)
 
         self.quit_btn = QPushButton("Quit")
+        self.quit_btn.setObjectName("quitButton")
+        self.quit_btn.setToolTip("Quit GeoPrior Forecaster")
+
+        # Local styling: red accent, clearer affordance
+        self.quit_btn.setStyleSheet(
+            """
+            QPushButton#quitButton {
+                background-color: #cc3333;
+                color: white;
+                font-weight: 600;
+                border-radius: 8px;
+                padding: 4px 14px;
+            }
+            QPushButton#quitButton:hover {
+                background-color: #e55353;
+            }
+            QPushButton#quitButton:disabled {
+                background-color: #888888;
+                color: #dddddd;
+            }
+            """
+        )
         top.addWidget(self.quit_btn)
 
         layout.addLayout(top)
+
 
         # --- Tabs row: Train / Tune / Inference / Transferability ---
         self.tabs = QTabWidget()
@@ -204,7 +367,10 @@ class GeoPriorForecaster(QMainWindow):
         prog.addWidget(self.percent_label, 0)
 
         layout.addLayout(prog)
-
+        
+        # initialise global running state (no job at startup)
+        self._update_global_running_state()
+        
     # ------------------------------------------------------------------
     # Tabs
     # ------------------------------------------------------------------
@@ -219,17 +385,8 @@ class GeoPriorForecaster(QMainWindow):
         t_layout = QVBoxLayout(train_tab)
         t_layout.setContentsMargins(6, 6, 6, 6)
         t_layout.setSpacing(8)
-
-        info = QLabel(
-            "Train tab – runs Stage-1 (prepare) and Stage-2 "
-            "(GeoPrior training) for the selected city."
-        )
-        info.setWordWrap(True)
-        t_layout.addWidget(info)
-
+        
         # --- three cards in a horizontal row ---
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(10)
 
         # 1) Temporal window card
         temp_card, temp_box = self._make_card("Temporal window")
@@ -261,8 +418,6 @@ class GeoPriorForecaster(QMainWindow):
         grid_t.addWidget(self.sp_time_steps, 3, 1)
         temp_box.addLayout(grid_t)
 
-        cards_row.addWidget(temp_card, 1)
-
         # 2) Training card
         train_card, train_box = self._make_card("Training")
 
@@ -289,14 +444,12 @@ class GeoPriorForecaster(QMainWindow):
         grid_tr.addWidget(self.sp_lr, 2, 1)
         train_box.addLayout(grid_tr)
 
-        cards_row.addWidget(train_card, 1)
-
         # 3) Physics weights card
         phys_card, phys_box = self._make_card("Physics weights")
 
         self.cmb_pde_mode = QComboBox()
         self.cmb_pde_mode.addItems(
-            ["off", "both", "consolidation", "gw_flow"]
+            ["both", "consolidation", "gw_flow", "off"]
         )
         idx = self.cmb_pde_mode.findText(cfg.pde_mode)
         if idx < 0:
@@ -331,18 +484,50 @@ class GeoPriorForecaster(QMainWindow):
         grid_p.addWidget(QLabel("λ mᵥ:"), 5, 0)
         grid_p.addWidget(self.sb_lmv, 5, 1)
         phys_box.addLayout(grid_p)
+        
+        # --- Cards + buttons as a grid so Physics can span two rows ---
+        cards_grid = QGridLayout()
+        cards_grid.setSpacing(10)
 
-        cards_row.addWidget(phys_card, 1)
+        # Make the whole grid top-aligned in its parent
+        cards_grid.setAlignment(Qt.AlignTop)
+        
+        # Row 0: Temporal, Training, Physics (top part)
+        cards_grid.addWidget(temp_card,  0, 0, 1, 1, Qt.AlignTop)
+        cards_grid.addWidget(train_card, 0, 1, 1, 1, Qt.AlignTop)
 
-        t_layout.addLayout(cards_row)
+        # Physics card spans two rows (rows 0 and 1) in the right column
+        cards_grid.addWidget(phys_card, 0, 2, 2, 1, Qt.AlignTop) # rowSpan=2, colSpan=1
+        
+        # --- Model / config buttons row (only under Temporal + Training) ---
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(12)
+
+        self.btn_features = QPushButton("Feature config…")
+        buttons_row.addWidget(self.btn_features)
+
+        self.btn_arch = QPushButton("Architecture…")
+        buttons_row.addWidget(self.btn_arch)
+
+        self.btn_prob = QPushButton("Probabilistic…")
+        buttons_row.addWidget(self.btn_prob)
+
+        buttons_row.addStretch(1)
+
+        # Put the buttons row in a small container so it can go into the grid
+        buttons_container = QWidget()
+        buttons_container.setLayout(buttons_row)
+
+        # Row 1, columns 0–1 (under Temporal + Training only)
+        cards_grid.addWidget(buttons_container, 1, 0, 1, 2)
+
+        # Add the whole grid to the Train tab layout
+        t_layout.addLayout(cards_grid)
+
 
         # --- bottom flags ---
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(16)
-
-        self.chk_clean_stage1 = QCheckBox("Clean Stage-1 run dir")
-        self.chk_clean_stage1.setChecked(cfg.clean_stage1_dir)
-        bottom_row.addWidget(self.chk_clean_stage1)
 
         self.chk_eval_training = QCheckBox(
             "Evaluate training metrics",
@@ -351,63 +536,797 @@ class GeoPriorForecaster(QMainWindow):
             cfg.evaluate_training,
         )
         bottom_row.addWidget(self.chk_eval_training)
+        
+        self.chk_build_future = QCheckBox(
+            "Build future NPZ",
+        )
+        self.chk_build_future.setChecked(
+            cfg.build_future_npz,
+        )
+        bottom_row.addWidget(self.chk_build_future)
 
-        self.btn_features = QPushButton("Feature config…")
-        bottom_row.addWidget(self.btn_features)
+        # Hidden checkbox used only as a backing store
+        # (not shown directly on the Train tab anymore)
+        self.chk_clean_stage1 = QCheckBox("Clean Stage-1 run dir")
+        self.chk_clean_stage1.setChecked(cfg.clean_stage1_dir)
+        self.chk_clean_stage1.setVisible(False)
 
+        # Options… button takes the place of the visible clean checkbox
+        self.btn_train_options = QPushButton("Advanced options…")
+        bottom_row.addWidget(self.btn_train_options)
+
+        # push Run button to the far right
         bottom_row.addStretch(1)
 
-        bottom_row.addStretch(1)
+        self.train_btn = QPushButton("Run training")
+        bottom_row.addWidget(self.train_btn)
+
+        
         t_layout.addLayout(bottom_row)
         t_layout.addStretch(1)
-
+        
         # ==================================================
-        # Placeholder tabs
+        # Tune tab – hyperparameter search
         # ==================================================
         tune_tab = QWidget()
         u_layout = QVBoxLayout(tune_tab)
-        u_label = QLabel(
-            "Tune tab – hyperparameter search.\n"
-            "To be implemented."
-        )
-        u_label.setWordWrap(True)
-        u_layout.addWidget(u_label)
-        u_layout.addStretch(1)
+        u_layout.setContentsMargins(6, 6, 6, 6)
+        u_layout.setSpacing(8)
 
+        # --- two cards in a horizontal row ---
+        tune_row = QHBoxLayout()
+        tune_row.setSpacing(10)
+
+        # ----------------- 1) Architecture card -----------------
+        arch_card, arch_box = self._make_card("Architecture search")
+
+        self.hp_embed_dim = QLineEdit()
+        self.hp_hidden_units = QLineEdit()
+        self.hp_lstm_units = QLineEdit()
+        self.hp_attention_units = QLineEdit()
+        self.hp_num_heads = QLineEdit()
+        self.hp_vsn_units = QLineEdit()
+
+        self.hp_dropout = RangeListEditor(
+            min_allowed=0.0,
+            max_allowed=1.0,
+            decimals=3,
+        )
+        self.hp_dropout.set_defaults(0.05, 0.20, sampling=None)
+
+        grid_a = QGridLayout()
+        row = 0
+
+        # left + right columns -> larger line edits
+        grid_a.addWidget(QLabel("Embedding dim (comma-sep):"), row, 0)
+        grid_a.addWidget(self.hp_embed_dim, row, 1)
+        grid_a.addWidget(QLabel("LSTM units:"), row, 2)
+        grid_a.addWidget(self.hp_lstm_units, row, 3)
+        row += 1
+
+        grid_a.addWidget(QLabel("Hidden units:"), row, 0)
+        grid_a.addWidget(self.hp_hidden_units, row, 1)
+        grid_a.addWidget(QLabel("Attention units:"), row, 2)
+        grid_a.addWidget(self.hp_attention_units, row, 3)
+        row += 1
+
+        grid_a.addWidget(QLabel("Attention heads:"), row, 0)
+        grid_a.addWidget(self.hp_num_heads, row, 1)
+        grid_a.addWidget(QLabel("VSN units:"), row, 2)
+        grid_a.addWidget(self.hp_vsn_units, row, 3)
+        row += 1
+
+        grid_a.addWidget(QLabel("Dropout:"), row, 0)
+        grid_a.addWidget(self.hp_dropout, row, 1, 1, 3)
+
+        arch_box.addLayout(grid_a)
+        tune_row.addWidget(arch_card, 1)
+
+        # ----------------- 2) Physics card -----------------
+        phys_card, phys_box = self._make_card("Physics switches")
+
+        self.hp_pde_mode = QLineEdit()
+        self.hp_scale_pde_bool = QCheckBox(
+            "Tune 'scale PDE residuals' as boolean HP"
+        )
+        self.hp_kappa_mode = QLineEdit()
+
+        self.hp_hd = RangeListEditor(
+            min_allowed=0.0,
+            max_allowed=2.0,
+            decimals=3,
+        )
+        self.hp_hd.set_defaults(0.50, 0.70, sampling=None)
+
+        grid_ph = QGridLayout()
+        r = 0
+        grid_ph.addWidget(QLabel("PDE modes:"), r, 0)
+        grid_ph.addWidget(self.hp_pde_mode, r, 1); r += 1
+
+        grid_ph.addWidget(QLabel("κ mode (bar/kb):"), r, 0)
+        grid_ph.addWidget(self.hp_kappa_mode, r, 1); r += 1
+
+        grid_ph.addWidget(self.hp_scale_pde_bool, r, 0, 1, 2); r += 1
+
+        grid_ph.addWidget(QLabel("HD factor:"), r, 0)
+        grid_ph.addWidget(self.hp_hd, r, 1)
+        phys_box.addLayout(grid_ph)
+
+        tune_row.addWidget(phys_card, 1)
+
+        u_layout.addLayout(tune_row)
+
+        # --- Bottom row: options + Scalars popup + Run button ---
+        # Row 1: Evaluate checkbox + Scalars button (left side)
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(16)
+
+        self.chk_eval_tuned = QCheckBox("Evaluate tuned model")
+        self.chk_eval_tuned.setChecked(False)
+        opts_row.addWidget(self.chk_eval_tuned)
+
+        self.btn_scalars = QPushButton("Scalars & losses…")
+        opts_row.addWidget(self.btn_scalars)
+
+        opts_row.addStretch(1)   # push them to the left
+        u_layout.addLayout(opts_row)
+
+
+        # Row 2: Advanced options + Run tuning
+        ops_run_row = QHBoxLayout()
+        self.btn_tune_options = QPushButton("Advanced options…")
+        self.btn_run_tune = QPushButton("Run tuning")
+
+        ops_run_row.addWidget(self.btn_tune_options)
+        ops_run_row.addStretch(1)
+        ops_run_row.addWidget(self.btn_run_tune)
+        u_layout.addLayout(ops_run_row)
+        
+        # layout.addWidget(bottom_box)
+        
+        # # Row 2: Run button alone in the bottom-right corner
+        # run_row = QHBoxLayout()
+        # run_row.addStretch(1)    # all free space on the left
+        # self.btn_run_tune = QPushButton("Run tuning")
+        # run_row.addWidget(self.btn_run_tune)
+        # u_layout.addLayout(run_row)
+
+        # u_layout.addStretch(1)
+
+        # ==================================================
+        # Inference tab – evaluation & forecasting
+        # ==================================================
         infer_tab = QWidget()
         i_layout = QVBoxLayout(infer_tab)
-        i_label = QLabel(
-            "Inference tab – evaluation and forecasting.\n"
-            "To be implemented."
+        i_layout.setContentsMargins(6, 6, 6, 6)
+        i_layout.setSpacing(8)
+
+        inf_row = QHBoxLayout()
+        inf_row.setSpacing(10)
+
+        # 1) Model & dataset card
+        model_card, model_box = self._make_card("Model & dataset")
+
+        self.inf_model_edit = QLineEdit()
+        self.inf_model_edit.setPlaceholderText("Select .keras model…")
+        self.inf_model_btn = QPushButton("Browse…")
+
+        self.inf_manifest_edit = QLineEdit()
+        self.inf_manifest_edit.setPlaceholderText(
+            "Stage-1 manifest (auto if empty)"
         )
-        i_label.setWordWrap(True)
-        i_layout.addWidget(i_label)
+        self.inf_manifest_btn = QPushButton("Browse…")
+
+        self.cmb_inf_dataset = QComboBox()
+        self.cmb_inf_dataset.addItem("Validation (val)", "val")
+        self.cmb_inf_dataset.addItem("Test (test)", "test")
+        self.cmb_inf_dataset.addItem("Train (train)", "train")
+        self.cmb_inf_dataset.addItem("Custom NPZ", "custom")
+
+        self.chk_inf_use_future = QCheckBox(
+            "Use Stage-1 future NPZ (forecast mode)"
+        )
+
+        self.inf_inputs_edit = QLineEdit()
+        self.inf_inputs_edit.setPlaceholderText("Custom inputs .npz")
+        self.inf_inputs_btn = QPushButton("Inputs…")
+
+        self.inf_targets_edit = QLineEdit()
+        self.inf_targets_edit.setPlaceholderText(
+            "Optional targets .npz (for metrics)"
+        )
+        self.inf_targets_btn = QPushButton("Targets…")
+
+        self.sp_inf_batch = QSpinBox()
+        self.sp_inf_batch.setRange(1, 2048)
+        self.sp_inf_batch.setValue(32)
+
+        grid_inf1 = QGridLayout()
+        r = 0
+        grid_inf1.addWidget(QLabel("Model file:"), r, 0)
+        grid_inf1.addWidget(self.inf_model_edit, r, 1)
+        grid_inf1.addWidget(self.inf_model_btn, r, 2)
+        r += 1
+
+        grid_inf1.addWidget(QLabel("Stage-1 manifest:"), r, 0)
+        grid_inf1.addWidget(self.inf_manifest_edit, r, 1)
+        grid_inf1.addWidget(self.inf_manifest_btn, r, 2)
+        r += 1
+
+        grid_inf1.addWidget(QLabel("Dataset:"), r, 0)
+        grid_inf1.addWidget(self.cmb_inf_dataset, r, 1, 1, 2)
+        r += 1
+
+        # checkbox + batch size on the same row
+        npz_row = QHBoxLayout()
+        npz_row.addWidget(self.chk_inf_use_future)
+        npz_row.addSpacing(16)
+        npz_row.addWidget(QLabel("Batch size:"))
+        npz_row.addWidget(self.sp_inf_batch)
+        npz_row.addStretch(1)
+        grid_inf1.addLayout(npz_row, r, 0, 1, 3)
+        r += 1
+
+        grid_inf1.addWidget(QLabel("Custom inputs:"), r, 0)
+        grid_inf1.addWidget(self.inf_inputs_edit, r, 1)
+        grid_inf1.addWidget(self.inf_inputs_btn, r, 2)
+        r += 1
+
+        grid_inf1.addWidget(QLabel("Custom targets:"), r, 0)
+        grid_inf1.addWidget(self.inf_targets_edit, r, 1)
+        grid_inf1.addWidget(self.inf_targets_btn, r, 2)
+        r += 1
+
+        model_box.addLayout(grid_inf1)
+        inf_row.addWidget(model_card, 1)
+
+        # 2) Calibration & outputs card
+        calib_card, calib_box = self._make_card("Calibration & outputs")
+
+        self.chk_inf_use_source_calib = QCheckBox(
+            "Use source calibrator (interval_factors_80.npy)"
+        )
+        self.chk_inf_fit_calib = QCheckBox(
+            "Fit calibrator on validation split"
+        )
+
+        self.inf_calib_edit = QLineEdit()
+        self.inf_calib_edit.setPlaceholderText(
+            "Optional explicit calibrator .npy"
+        )
+        self.inf_calib_btn = QPushButton("Browse…")
+
+        self.sp_inf_cov = QDoubleSpinBox()
+        self.sp_inf_cov.setDecimals(3)
+        self.sp_inf_cov.setRange(0.50, 0.99)
+        self.sp_inf_cov.setSingleStep(0.01)
+        self.sp_inf_cov.setValue(0.80)
+
+        self.chk_inf_include_gwl = QCheckBox(
+            "Include GWL columns in CSV"
+        )
+        self.chk_inf_include_gwl.setChecked(False)
+
+        self.chk_inf_plots = QCheckBox("Generate plots")
+        self.chk_inf_plots.setChecked(True)
+
+        grid_inf2 = QGridLayout()
+        c = 0
+        grid_inf2.addWidget(self.chk_inf_use_source_calib, c, 0, 1, 3)
+        c += 1
+        grid_inf2.addWidget(self.chk_inf_fit_calib, c, 0, 1, 3)
+        c += 1
+
+        grid_inf2.addWidget(QLabel("Calibrator file:"), c, 0)
+        grid_inf2.addWidget(self.inf_calib_edit, c, 1)
+        grid_inf2.addWidget(self.inf_calib_btn, c, 2)
+        c += 1
+
+        grid_inf2.addWidget(QLabel("Target coverage:"), c, 0)
+        grid_inf2.addWidget(self.sp_inf_cov, c, 1, 1, 2)
+        c += 1
+
+        grid_inf2.addWidget(self.chk_inf_include_gwl, c, 0, 1, 3)
+        c += 1
+        grid_inf2.addWidget(self.chk_inf_plots, c, 0, 1, 3)
+        c += 1
+
+        calib_box.addLayout(grid_inf2)
+        inf_row.addWidget(calib_card, 1)
+
+        i_layout.addLayout(inf_row)
+
+        # Bottom row: run button
+        inf_run_row = QHBoxLayout()
+        inf_run_row.addStretch(1)
+        self.btn_run_infer = QPushButton("Run inference")
+        inf_run_row.addWidget(self.btn_run_infer)
+        i_layout.addLayout(inf_run_row)
+
         i_layout.addStretch(1)
 
+        # ==================================================
+        # Transferability tab – cross-city transfer matrix
+        # ==================================================
         xfer_tab = QWidget()
         x_layout = QVBoxLayout(xfer_tab)
-        x_label = QLabel(
-            "Transferability tab – cross-city transfer matrix.\n"
-            "To be implemented."
+        x_layout.setContentsMargins(6, 6, 6, 6)
+        x_layout.setSpacing(8)
+        
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        row.setAlignment(Qt.AlignTop)
+        
+        # ----- Cities & splits card -----
+        cities_card, cities_box = self._make_card("Cities & splits")
+        
+        self.xfer_city_a = QLineEdit()
+        self.xfer_city_a.setPlaceholderText("nansha")
+        self.xfer_city_b = QLineEdit()
+        self.xfer_city_b.setPlaceholderText("zhongshan")
+        
+        self.chk_xfer_split_train = QCheckBox("train")
+        self.chk_xfer_split_val = QCheckBox("val")
+        self.chk_xfer_split_test = QCheckBox("test")
+        self.chk_xfer_split_val.setChecked(True)
+        self.chk_xfer_split_test.setChecked(True)
+        
+        self.chk_xfer_cal_none = QCheckBox("none")
+        self.chk_xfer_cal_source = QCheckBox("source")
+        self.chk_xfer_cal_target = QCheckBox("target")
+        for cb in (
+            self.chk_xfer_cal_none,
+            self.chk_xfer_cal_source,
+            self.chk_xfer_cal_target,
+        ):
+            cb.setChecked(True)
+        
+        self.sp_xfer_batch = QSpinBox()
+        self.sp_xfer_batch.setRange(1, 2048)
+        self.sp_xfer_batch.setValue(32)
+        
+        self.chk_xfer_rescale = QCheckBox(
+            "Rescale target city to source domain"
         )
-        x_label.setWordWrap(True)
-        x_layout.addWidget(x_label)
+        
+        grid_cs = QGridLayout()
+        r = 0
+        grid_cs.addWidget(QLabel("City A (source):"), r, 0)
+        grid_cs.addWidget(self.xfer_city_a, r, 1); r += 1
+        grid_cs.addWidget(QLabel("City B (target):"), r, 0)
+        grid_cs.addWidget(self.xfer_city_b, r, 1); r += 1
+        
+        grid_cs.addWidget(QLabel("Splits:"), r, 0)
+        splits_row = QHBoxLayout()
+        splits_row.addWidget(self.chk_xfer_split_train)
+        splits_row.addWidget(self.chk_xfer_split_val)
+        splits_row.addWidget(self.chk_xfer_split_test)
+        splits_row.addStretch(1)
+        grid_cs.addLayout(splits_row, r, 1); r += 1
+        
+        grid_cs.addWidget(QLabel("Calibration modes:"), r, 0)
+        cal_row = QHBoxLayout()
+        cal_row.addWidget(self.chk_xfer_cal_none)
+        cal_row.addWidget(self.chk_xfer_cal_source)
+        cal_row.addWidget(self.chk_xfer_cal_target)
+        cal_row.addStretch(1)
+        grid_cs.addLayout(cal_row, r, 1); r += 1
+        
+        grid_cs.addWidget(QLabel("Batch size:"), r, 0)
+        grid_cs.addWidget(self.sp_xfer_batch, r, 1); r += 1
+        
+        grid_cs.addWidget(self.chk_xfer_rescale, r, 0, 1, 2); r += 1
+        
+        cities_box.addLayout(grid_cs)
+        row.addWidget(cities_card, 1, Qt.AlignTop)
+        
+        # ----- Results & view card -----
+        res_card, res_box = self._make_card("Results & view")
+        
+        self.xfer_results_root = QLineEdit(str(self.gui_runs_root))
+        self.xfer_results_root_btn = QPushButton("Browse…")
+        
+        self.lbl_xfer_last_out = QLabel("No transfer run yet.")
+        self.lbl_xfer_last_out.setObjectName("xferLastOutLabel")
+        
+        self.cmb_xfer_view = QComboBox()
+        self.cmb_xfer_view.addItem(
+            "Calibration vs error (scatter panel)",
+            "calib_panel",
+        )
+        self.cmb_xfer_view.addItem(
+            "Per-horizon MAE + cov/sharp (summary)",
+            "summary_panel",
+        )
+        
+        self.cmb_xfer_view_split = QComboBox()
+        self.cmb_xfer_view_split.addItem("Validation (val)", "val")
+        self.cmb_xfer_view_split.addItem("Test (test)", "test")
+        
+        self.btn_xfer_view = QPushButton("Make view figure…")
+        self.btn_xfer_view.setVisible(False)   # appears after first run
+        
+        grid_res = QGridLayout()
+        c = 0
+        grid_res.addWidget(QLabel("Results root:"), c, 0)
+        grid_res.addWidget(self.xfer_results_root, c, 1)
+        grid_res.addWidget(self.xfer_results_root_btn, c, 2); c += 1
+        
+        grid_res.addWidget(QLabel("Last output folder:"), c, 0)
+        grid_res.addWidget(self.lbl_xfer_last_out, c, 1, 1, 2); c += 1
+        
+        grid_res.addWidget(QLabel("View type:"), c, 0)
+        grid_res.addWidget(self.cmb_xfer_view, c, 1, 1, 2); c += 1
+        
+        grid_res.addWidget(QLabel("View split:"), c, 0)
+        grid_res.addWidget(self.cmb_xfer_view_split, c, 1, 1, 2); c += 1
+        
+        grid_res.addWidget(self.btn_xfer_view, c, 0, 1, 3); c += 1
+        
+        res_box.addLayout(grid_res)
+        row.addWidget(res_card, 1, Qt.AlignTop)
+        
+        x_layout.addLayout(row)
+        
+        # Bottom row: advanced button + run button
+        bottom = QHBoxLayout()
+        self.btn_xfer_advanced = QPushButton("Advanced options…")
+        bottom.addWidget(self.btn_xfer_advanced)
+        bottom.addStretch(1)
+        self.btn_run_xfer = QPushButton("Run transfer matrix")
+        bottom.addWidget(self.btn_run_xfer)
+        x_layout.addLayout(bottom)
+        
         x_layout.addStretch(1)
+        # ----------------------
+ 
+        self.train_tab = train_tab
+        self.tune_tab = tune_tab  
+        self.infer_tab = infer_tab 
+        self.xfer_tab = xfer_tab
 
         self.tabs.addTab(train_tab, "Train")
         self.tabs.addTab(tune_tab, "Tune")
         self.tabs.addTab(infer_tab, "Inference")
         self.tabs.addTab(xfer_tab, "Transferability")
 
+        # Train tab tooltip (same text as panel tooltip)
+        self._train_tab_index = self.tabs.indexOf(self.train_tab)
+        self.tabs.setTabToolTip(
+            self._train_tab_index, self._train_help_text
+        )
+
+        # Tune tab tooltip
+        self._tune_tab_index = self.tabs.indexOf(self.tune_tab)
+        self.tabs.setTabToolTip(
+            self._tune_tab_index, self._tune_help_text
+        )
+
+        # Inference tab tooltip
+        self._infer_tab_index = self.tabs.indexOf(self.infer_tab)
+        self.tabs.setTabToolTip(
+            self._infer_tab_index, self._infer_help_text
+        )
+
+        # Transferability tab tooltip
+        self._xfer_tab_index = self.tabs.indexOf(self.xfer_tab)
+        self.tabs.setTabToolTip(
+            self._xfer_tab_index, self._xfer_help_text
+        )
+
+        # Initialise Mode button with current tab name
+        self._update_mode_button(self.tabs.currentIndex())
+
+
+        # After building Tune widgets, sync from current config
+        self._load_tuner_space_into_ui()
+        
+        # After building Inference widgets, set initial enable/disable state
+        self._update_infer_widgets_state()  
+        
+        # Let _update_xfer_view_state decide visibility
+        self._update_xfer_view_state()
+        
+    # ------------------------------------------------
+    #   Update buttons 
+    # ------------------------------------------------
+ 
+    
+    def _update_mode_button(self, index: int) -> None:
+        """
+        Update the top 'Mode' indicator according to the current tab
+        and the Dry-run state.
+        """
+        if not hasattr(self, "mode_btn"):
+            return
+        if not hasattr(self, "tabs") or self.tabs is None:
+            return
+    
+        # Dry-run has priority over tab mode
+        is_dry = (
+            hasattr(self, "chk_dry_run")
+            and self.chk_dry_run.isChecked()
+        )
+    
+        if is_dry:
+            mode_label = "DRY RUN"
+            color = MODE_DRY_COLOR
+            tooltip = (
+                "You are in DRY-RUN mode: no real execution."
+            )
+        else:
+            # Default: choose by current tab
+            if index == getattr(self, "_train_tab_index", -1):
+                mode_label = "TRAIN"
+                color = MODE_TRAIN_COLOR
+                tooltip = (
+                    "Train mode: Stage-1 + Stage-2 GeoPrior training."
+                )
+            elif index == getattr(self, "_tune_tab_index", -1):
+                mode_label = "TUNING"
+                color = MODE_TUNE_COLOR
+                tooltip = (
+                    "Tuning mode: Stage-2 hyperparameter search."
+                )
+            elif index == getattr(self, "_infer_tab_index", -1):
+                mode_label = "INFER"
+                color = MODE_INFER_COLOR
+                tooltip = (
+                    "Inference mode: evaluation and future forecasts."
+                )
+            elif index == getattr(self, "_xfer_tab_index", -1):
+                mode_label = "TRANSFER"
+                color = MODE_XFER_COLOR
+                tooltip = (
+                    "Transferability mode: cross-city transfer matrix."
+                )
+            else:
+                # Fallback: just use tab text
+                mode_label = self.tabs.tabText(index) or "–"
+                color = MODE_TRAIN_COLOR
+                tooltip = f"Mode: {mode_label}"
+    
+        # Text + tooltip
+        self.mode_btn.setText(f"Mode: {mode_label}")
+        self.mode_btn.setToolTip(tooltip)
+    
+        # Per-mode background; keep it non-clickable but styled
+        self.mode_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {color};
+                color: white;
+                border-radius: 10px;
+                padding: 2px 12px;
+                font-weight: 600;
+            }}
+            QPushButton:disabled {{
+                background-color: {color};
+                color: white;
+            }}
+            """
+        )
+
+    def _update_xfer_view_state(self) -> None:
+        has_result = bool(self._xfer_last_result)
+        self.btn_xfer_view.setVisible(has_result)
+        self.btn_xfer_view.setEnabled(has_result)
+
+    def _update_infer_widgets_state(self) -> None:
+        """
+        Enable/disable custom NPZ fields depending on dataset mode
+        and 'use future NPZ' switch.
+        """
+        if not hasattr(self, "cmb_inf_dataset"):
+            return
+
+        dataset_key = self.cmb_inf_dataset.currentData()
+        use_future = self.chk_inf_use_future.isChecked()
+
+        is_custom_npz = (dataset_key == "custom") and not use_future
+
+        for w in (
+            self.inf_inputs_edit,
+            self.inf_inputs_btn,
+            self.inf_targets_edit,
+            self.inf_targets_btn,
+        ):
+            w.setEnabled(is_custom_npz)
+
+        # When using future NPZ, dataset choice is not relevant
+        self.cmb_inf_dataset.setEnabled(not use_future)
+        
+    # ------------------------------------------------
+    #   Global run / stop helpers
+    # ------------------------------------------------
+    def _any_job_running(self) -> bool:
+        """Return True if any long-running workflow thread is active."""
+        return any(
+            th is not None and th.isRunning()
+            for th in (
+                self.stage1_thread,
+                self.train_thread,
+                self.tuning_thread,
+                self.inference_thread,
+                self.xfer_thread,
+            )
+        )
+
+    def _update_global_running_state(self) -> None:
+        """
+        Update Stop button visibility and run button labels
+        based on _active_job_kind and current threads.
+        """
+        running = self._any_job_running()
+
+        if hasattr(self, "btn_stop"):
+            self.btn_stop.setVisible(running)
+            # disable Stop once user clicked it; re-enabled on next run
+            self.btn_stop.setEnabled(running)
+
+        # Default labels
+        if hasattr(self, "train_btn"):
+            self.train_btn.setText(
+                "Running training…" if self._active_job_kind == "train"
+                else "Run training"
+            )
+        if hasattr(self, "btn_run_tune"):
+            self.btn_run_tune.setText(
+                "Running tuning…" if self._active_job_kind == "tune"
+                else "Run tuning"
+            )
+        if hasattr(self, "btn_run_infer"):
+            self.btn_run_infer.setText(
+                "Running inference…" if self._active_job_kind == "infer"
+                else "Run inference"
+            )
+        if hasattr(self, "btn_run_xfer"):
+            self.btn_run_xfer.setText(
+                "Running transfer…" if self._active_job_kind == "xfer"
+                else "Run transfer matrix"
+            )
+
+    # --------------------------------------------------------------
+    # Tuner search space <-> UI
+    # --------------------------------------------------------------
+
+    def _parse_int_list(
+        self,
+        text: str,
+        fallback: list[int],
+    ) -> list[int]:
+        parts = []
+        for tok in text.replace(";", ",").split(","):
+            tok = tok.strip()
+            if not tok:
+                continue
+            try:
+                parts.append(int(tok))
+            except Exception:
+                pass
+        return parts or list(fallback)
+
+    def _load_tuner_space_into_ui(self) -> None:
+        """Populate Tune tab widgets from self.geo_cfg.tuner_search_space."""
+        space = self.geo_cfg.tuner_search_space or default_tuner_search_space()
+        defaults = default_tuner_search_space()
+
+        def _get(name: str):
+            return space.get(name, defaults.get(name))
+
+        # --- Architecture lists ---
+        self.hp_embed_dim.setText(
+            ", ".join(str(v) for v in _get("embed_dim"))
+        )
+        self.hp_hidden_units.setText(
+            ", ".join(str(v) for v in _get("hidden_units"))
+        )
+        self.hp_lstm_units.setText(
+            ", ".join(str(v) for v in _get("lstm_units"))
+        )
+        self.hp_attention_units.setText(
+            ", ".join(str(v) for v in _get("attention_units"))
+        )
+        self.hp_num_heads.setText(
+            ", ".join(str(v) for v in _get("num_heads"))
+        )
+        self.hp_vsn_units.setText(
+            ", ".join(str(v) for v in _get("vsn_units"))
+        )
+
+        # Dropout: range or list
+        self.hp_dropout.from_search_space_value(
+            _get("dropout_rate"),
+            defaults["dropout_rate"],
+        )
+
+        # --- Physics ---
+        self.hp_pde_mode.setText(
+            ", ".join(str(v) for v in _get("pde_mode"))
+        )
+        self.hp_kappa_mode.setText(
+            ", ".join(str(v) for v in _get("kappa_mode"))
+        )
+
+        sc_pde = _get("scale_pde_residuals")
+        self.hp_scale_pde_bool.setChecked(bool(sc_pde))
+
+        self.hp_hd.from_search_space_value(
+            _get("hd_factor"),
+            defaults["hd_factor"],
+        )
+
+        # --- Scalars & loss weights (dialog only) ---
+        self.scalars_dialog.load_from_space(space, defaults)
+
+
+    def _build_tuner_space_from_ui(self) -> Dict[str, Any]:
+        """Collect hyperparameters from Tune tab into a TUNER_SEARCH_SPACE dict."""
+        defaults = default_tuner_search_space()
+        space: Dict[str, Any] = {}
+
+        # --- Architecture (lists) ---
+        space["embed_dim"] = self._parse_int_list(
+            self.hp_embed_dim.text(), defaults["embed_dim"]
+        )
+        space["hidden_units"] = self._parse_int_list(
+            self.hp_hidden_units.text(), defaults["hidden_units"]
+        )
+        space["lstm_units"] = self._parse_int_list(
+            self.hp_lstm_units.text(), defaults["lstm_units"]
+        )
+        space["attention_units"] = self._parse_int_list(
+            self.hp_attention_units.text(), defaults["attention_units"]
+        )
+        space["num_heads"] = self._parse_int_list(
+            self.hp_num_heads.text(), defaults["num_heads"]
+        )
+        space["vsn_units"] = self._parse_int_list(
+            self.hp_vsn_units.text(), defaults["vsn_units"]
+        )
+
+        # Range / list editor
+        space["dropout_rate"] = self.hp_dropout.to_search_space_value()
+
+        # --- Physics ---
+        def _parse_str_list(text: str, fallback: list[str]) -> list[str]:
+            vals: list[str] = []
+            for tok in text.replace(";", ",").split(","):
+                t = tok.strip()
+                if t:
+                    vals.append(t)
+            return vals or list(fallback)
+
+        space["pde_mode"] = _parse_str_list(
+            self.hp_pde_mode.text(), defaults["pde_mode"]
+        )
+        space["kappa_mode"] = _parse_str_list(
+            self.hp_kappa_mode.text(), defaults["kappa_mode"]
+        )
+
+        if self.hp_scale_pde_bool.isChecked():
+            space["scale_pde_residuals"] = {"type": "bool"}
+
+        space["hd_factor"] = self.hp_hd.to_search_space_value()
+
+        # --- Scalars & loss weights (from dialog) ---
+        space.update(self.scalars_dialog.to_search_space_fragment())
+
+        return space
+
+
     # ------------------------------------------------------------------
     # Config synchronisation
     # ------------------------------------------------------------------
+
     def _sync_config_from_ui(self) -> None:
         """Copy widgets' values into self.geo_cfg."""
         cfg = self.geo_cfg
         cfg.train_end_year = self.sp_train_end.value()
         cfg.forecast_start_year = self.sp_forecast_start.value()
-        cfg.forecast_horizon_years = self.sp_forecast_horizon.value()
+        cfg.forecast_horizon_years = (
+            self.sp_forecast_horizon.value()
+        )
         cfg.time_steps = self.sp_time_steps.value()
 
         cfg.epochs = self.sp_epochs.value()
@@ -421,32 +1340,259 @@ class GeoPriorForecaster(QMainWindow):
         cfg.lambda_smooth = self.sb_lsmooth.value()
         cfg.lambda_mv = self.sb_lmv.value()
 
-        cfg.clean_stage1_dir = self.chk_clean_stage1.isChecked()
-        cfg.evaluate_training = self.chk_eval_training.isChecked()
+        cfg.clean_stage1_dir = (
+            self.chk_clean_stage1.isChecked()
+        )
+        cfg.build_future_npz = (               
+            self.chk_build_future.isChecked()
+        )
+        cfg.evaluate_training = (
+            self.chk_eval_training.isChecked()
+        )
+        
+    def _get_experiment_name(self, default: str) -> str:
+        """
+        Return the experiment name from an optional GUI 
+        field if it exists,
+        otherwise fall back to `default`.
+        """
+        widget = getattr(self, "edit_experiment_name", None)
+        if widget is not None:
+            try:
+                name = widget.text().strip()
+            except Exception:
+                name = ""
+            if name:
+                return name
+        return default
+
+    # ------------------------------------------------------------------
+    # Smart Stage-1 helpers
+    # ------------------------------------------------------------------
+    def _smart_stage1_handshake(
+        self,
+        city: str,
+        csv_path: str,
+    ) -> bool:
+        """
+        Decide whether we should run Stage-1, or reuse an existing run.
+
+        Returns
+        -------
+        need_stage1 : bool
+            True  -> run Stage-1 now.
+            False -> either we jumped straight to training or user cancelled.
+        """
+
+        # 0) Forced rebuild via Training options
+        if bool(getattr(self.geo_cfg, "clean_stage1_dir", False)):
+            self.log_updated.emit(
+                "[SmartStage1] 'Clean Stage-1 run dir' is enabled → "
+                "forcing Stage-1 rebuild."
+            )
+            self._stage1_manifest_hint = None
+            return True
+
+        # 1) Build current Stage-1 config snapshot via nat.com config
+        try:
+            current_cfg = self.geo_cfg.to_stage1_config()
+
+        except Exception as e:
+            self.log_updated.emit(
+                "[SmartStage1] Failed to build current Stage-1 config "
+                f"({e}) → falling back to full Stage-1."
+            )
+            self._stage1_manifest_hint = None
+            return True
+
+        # 2) Discover Stage-1 manifests under the GUI results root
+        results_root = (
+            getattr(self, "gui_runs_root", None)
+            or Path(get_default_runs_root())
+        )
+
+        runs_for_city, all_runs = find_stage1_for_city(
+            city=city,
+            results_root=Path(results_root),
+            current_cfg=current_cfg,
+        )
+
+        if not runs_for_city:
+            self.log_updated.emit(
+                "[SmartStage1] No previous Stage-1 manifest found for this "
+                "city → running Stage-1."
+            )
+            self._stage1_manifest_hint = None
+            return True
+
+        # 3) Let user choose: rebuild vs reuse which Stage-1
+        decision, selected = Stage1ChoiceDialog.ask(
+            parent=self,
+            city=city,
+            runs_for_city=runs_for_city,
+            all_runs=all_runs,
+        )
+        
+        if decision == "cancel":
+            self.log_updated.emit(
+                "[SmartStage1] Training cancelled by user."
+            )
+            self._stage1_manifest_hint = None
+            return False
+
+        if decision == "rebuild":
+            self.log_updated.emit(
+                "[SmartStage1] User requested Stage-1 rebuild."
+            )
+            self._stage1_manifest_hint = None
+            return True
+
+        if decision == "reuse" and selected is not None:
+            # Safety: only reuse fully compatible + complete runs
+            if (not selected.is_complete) or (not selected.config_match):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Stage-1 selection",
+                    "The selected Stage-1 run is incomplete or incompatible "
+                    "with the current configuration.\n\n"
+                    "Stage-1 will be rebuilt.",
+                )
+                self._stage1_manifest_hint = None
+                return True
+
+            self._stage1_manifest_hint = selected.manifest_path
+
+            diff_msg = ""
+            if selected.diff_fields:
+                diff_msg = " (diff: " + ", ".join(selected.diff_fields) + ")"
+
+            self.log_updated.emit(
+                "[SmartStage1] Reusing Stage-1 run" + diff_msg + ":\n"
+                f"  City        : {selected.city}\n"
+                f"  Run dir     : {selected.run_dir}\n"
+                f"  T, H        : {selected.time_steps}, "
+                f"{selected.horizon_years}\n"
+                f"  train / val : {selected.n_train} / {selected.n_val}"
+            )
+            return False
+
+        # Fallback: rebuild
+        self._stage1_manifest_hint = None
+        return True
 
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
     def _connect_signals(self) -> None:
-        self.select_csv_btn.clicked.connect(self._on_select_csv)
-        self.train_btn.clicked.connect(self._on_train_clicked)
-        self.quit_btn.clicked.connect(self.close)
+        self.select_csv_btn.clicked.connect(
+            self._on_select_csv,
+        )
+        self.train_btn.clicked.connect(
+            self._on_train_clicked,
+        )
+        self.quit_btn.clicked.connect(self._on_quit_clicked)
 
-        self.log_updated.connect(self._append_log)
-        self.status_updated.connect(self.status_label.setText)
-        self.progress_updated.connect(self._update_progress)
+        self.btn_stop.clicked.connect(self._on_stop_clicked)
         
+        self.chk_dry_run.toggled.connect(
+            lambda _checked: self._update_mode_button(
+                self.tabs.currentIndex()
+            )
+        )
+        self.log_updated.connect(self._append_log)
+        self.status_updated.connect(
+            self.status_label.setText,
+        )
+        self.progress_updated.connect(
+            self._update_progress,
+        )
+
         self.btn_features.clicked.connect(
             self._on_feature_config,
         )
+        self.btn_arch.clicked.connect(          
+            self._on_arch_config,
+        )
+        self.btn_prob.clicked.connect(          
+            self._on_prob_config,
+        )
+    
+        self.btn_tune_options.clicked.connect(
+            self._on_tune_options_clicked,
+        )
+
+        self.btn_run_tune.clicked.connect(
+            self._on_tune_clicked,
+        )
+
+        self.btn_scalars.clicked.connect(
+            self._on_scalars_config,
+        )
+        
+        self.btn_train_options.clicked.connect(
+            self._on_train_options_clicked
+        )
+
+        # --- Inference tab ---
+        self.btn_run_infer.clicked.connect(self._on_infer_clicked)
+        self.inf_model_btn.clicked.connect(self._on_browse_model)
+        self.inf_manifest_btn.clicked.connect(self._on_browse_manifest)
+        self.inf_inputs_btn.clicked.connect(self._on_browse_inputs_npz)
+        self.inf_targets_btn.clicked.connect(self._on_browse_targets_npz)
+        self.inf_calib_btn.clicked.connect(self._on_browse_calibrator)
+        
+        self.cmb_inf_dataset.currentIndexChanged.connect(
+            self._update_infer_widgets_state
+        )
+        self.chk_inf_use_future.toggled.connect(
+            self._update_infer_widgets_state
+        )
+
+        # --- Transferability tab ---
+        self.btn_run_xfer.clicked.connect(self._on_xfer_clicked)
+        self.btn_xfer_advanced.clicked.connect(self._on_xfer_advanced)
+        self.xfer_results_root_btn.clicked.connect(self._on_browse_xfer_root)
+        self.btn_xfer_view.clicked.connect(self._on_xfer_view_clicked)
+
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
 
     # ------------------------------------------------------------------
     # Logging / progress helpers
     # ------------------------------------------------------------------
+    
     @pyqtSlot(str)
     def _append_log(self, msg: str) -> None:
-        ts = time.strftime("%H:%M:%S")
-        self.log_widget.appendPlainText(f"[{ts}] {msg}")
+        # Delegate to LogManager (adds timestamp, collapse, trimming)
+        if hasattr(self, "log_mgr"):
+            self.log_mgr.append(msg)
+        else:
+            # Fallback if log_mgr is not available for any reason
+            ts = time.strftime("%H:%M:%S")
+            self.log_widget.appendPlainText(f"[{ts}] {msg}")
+
+
+    def _append_status(self, msg: str, error: bool = False) -> None:
+        """
+        Convenience helper: update status line *and* log.
+
+        Parameters
+        ----------
+        msg : str
+            Message to show.
+        error : bool, optional
+            If True, prefix with '[ERROR]' in the log/status.
+        """
+        if error:
+            full = f"[ERROR] {msg}"
+        else:
+            full = msg
+
+        # Update status via signal (label is connected to status_updated)
+        self.status_updated.emit(full)
+
+        # Also push to log
+        self.log_updated.emit(full)
 
     @pyqtSlot(float)
     def _update_progress(self, value: float) -> None:
@@ -462,7 +1608,134 @@ class GeoPriorForecaster(QMainWindow):
         self._update_progress(value)
         if message:
             self.progress_label.setText(message)
-            
+
+    @pyqtSlot()
+    def _on_quit_clicked(self) -> None:
+        """
+        Handle Quit button: warn if workflows are running.
+        """
+        if self._any_job_running():
+            msg = (
+                "One or more workflows are still running "
+                "(Stage-1, training, tuning, inference or transfer matrix).\n\n"
+                "If you quit now, they will be interrupted.\n\n"
+                "Do you really want to quit?"
+            )
+            reply = QMessageBox.question(
+                self,
+                "Quit GeoPrior Forecaster?",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # Best UX when idle: no extra dialog, just quit.
+        self.close()
+
+    def _save_gui_log_for_result(self, result: dict) -> None:
+        """
+        Persist the current GUI log cache into the run's directory.
+
+        Looks for common keys used by the backend helpers:
+        - 'run_dir' (training, tuning, inference, stage-1)
+        - 'run_output_path' (legacy)
+        - 'out_dir' (xfer matrix)
+        """
+        if not hasattr(self, "log_mgr"):
+            return
+
+        run_dir = (
+            result.get("run_dir")
+            or result.get("run_output_path")
+            or result.get("out_dir")
+        )
+        if not run_dir:
+            return
+
+        try:
+            log_path = self.log_mgr.save_cache(run_dir)
+            self.log_updated.emit(
+                f"GUI log saved to:\n  {log_path}"
+            )
+        except Exception as exc:
+            self.log_updated.emit(
+                f"[Warn] Could not save GUI log file: {exc}"
+            )
+
+
+    @pyqtSlot()
+    def _on_tune_options_clicked(self) -> None:
+        """
+        Open the Advanced options dialog for tuning.
+
+        Behaviour
+        ---------
+        - If Stage-1 / training / tuning threads are running, block.
+        - Otherwise, open :class:`TuneOptionsDialog`.
+        - If user picks a city and clicks 'Run', queue the corresponding
+          tuning job and delegate to :meth:`_on_tune_clicked`.
+        """
+        # Do not allow changing options while long-running jobs are active
+        if self.stage1_thread and self.stage1_thread.isRunning():
+            QMessageBox.warning(
+                self,
+                "Stage-1 running",
+                "Please wait for Stage-1 to finish before "
+                "changing tuning options.",
+            )
+            return
+
+        if self.train_thread and self.train_thread.isRunning():
+            QMessageBox.warning(
+                self,
+                "Training running",
+                "Please wait for training to finish before "
+                "changing tuning options.",
+            )
+            return
+
+        if self.tuning_thread and self.tuning_thread.isRunning():
+            QMessageBox.warning(
+                self,
+                "Tuning running",
+                "Hyperparameter search is already running.",
+            )
+            return
+
+        # Open the advanced tune options dialog
+        ok, new_root, job = TuneOptionsDialog.run(
+            cfg=self.geo_cfg,
+            gui_runs_root=self.gui_runs_root,
+            parent=self,
+        )
+        if not ok:
+            return
+
+        # Update GUI-level runs root used by all GUI runs
+        self.gui_runs_root = new_root
+        self.results_root = new_root  # keep in sync
+
+        # Keep GeoPriorConfig in sync if it exposes such a field
+        if hasattr(self.geo_cfg, "results_root"):
+            self.geo_cfg.results_root = new_root
+
+        if job is not None:
+            # Make the GUI city match the chosen Stage-1 summary
+            self.city_edit.setText(job.stage1.city)
+
+            # Mirror into config if the fields exist
+            if hasattr(self.geo_cfg, "CITY_NAME"):
+                self.geo_cfg.CITY_NAME = job.stage1.city
+            if hasattr(self.geo_cfg, "city_label"):
+                self.geo_cfg.city_label = job.stage1.city
+
+            # Cache the job so `_on_tune_clicked` can reuse it
+            self._queued_tune_job = job
+            # Now delegate to the main tuning entry point
+            self._on_tune_clicked()
+
     @pyqtSlot()
     def _on_feature_config(self) -> None:
         if self.csv_path is None:
@@ -498,10 +1771,251 @@ class GeoPriorForecaster(QMainWindow):
             "Feature configuration updated "
             f"(keys: {changed}).",
         )
+        
+    @pyqtSlot()
+    def _on_arch_config(self) -> None:
+        base_cfg = self.geo_cfg._base_cfg or {}
+
+        dlg = ArchitectureConfigDialog(
+            base_cfg=base_cfg,
+            current_overrides=self.geo_cfg.arch_overrides,
+            parent=self,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        self.geo_cfg.arch_overrides = (
+            dlg.get_overrides()
+        )
+
+        changed = ", ".join(
+            sorted(self.geo_cfg.arch_overrides.keys()),
+        )
+        if not changed:
+            changed = "none"
+
+        self.log_updated.emit(
+            "Architecture configuration updated "
+            f"(keys: {changed}).",
+        )
+
+    @pyqtSlot()
+    def _on_prob_config(self) -> None:
+        base_cfg = self.geo_cfg._base_cfg or {}
+
+        dlg = ProbConfigDialog(
+            base_cfg=base_cfg,
+            current_overrides=self.geo_cfg.prob_overrides,
+            parent=self,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        self.geo_cfg.prob_overrides = (
+            dlg.get_overrides()
+        )
+
+        changed = ", ".join(
+            sorted(self.geo_cfg.prob_overrides.keys()),
+        )
+        if not changed:
+            changed = "none"
+
+        self.log_updated.emit(
+            "Probabilistic configuration updated "
+            f"(keys: {changed}).",
+        )
+       
+    @pyqtSlot(int)
+    def _on_tab_changed(self, index: int) -> None:
+        """
+        One-shot helper text for Train / Tune / Inference / Transferability
+        and update of the Mode indicator.
+        """
+        # Update the top 'Mode: ...' indicator
+        self._update_mode_button(index)
+
+        bar = self.tabs.tabBar()
+
+        # Train tab tooltip (one-shot popup when first visiting)
+        if (
+            not getattr(self, "_train_tip_shown", False)
+            and hasattr(self, "train_tab")
+            and index == getattr(self, "_train_tab_index", -1)
+        ):
+            rect = bar.tabRect(index)
+            pos = bar.mapToGlobal(rect.center())
+            QToolTip.showText(pos, self._train_help_text, bar)
+            self._train_tip_shown = True
+
+        # Tune tab tooltip
+        if (
+            not self._tune_tip_shown
+            and hasattr(self, "tune_tab")
+            and index == getattr(self, "_tune_tab_index", -1)
+        ):
+            rect = bar.tabRect(index)
+            pos = bar.mapToGlobal(rect.center())
+            QToolTip.showText(pos, self._tune_help_text, bar)
+            self._tune_tip_shown = True
+
+        # Inference tab tooltip
+        if (
+            not getattr(self, "_infer_tip_shown", False)
+            and hasattr(self, "infer_tab")
+            and index == getattr(self, "_infer_tab_index", -1)
+        ):
+            rect = bar.tabRect(index)
+            pos = bar.mapToGlobal(rect.center())
+            QToolTip.showText(pos, self._infer_help_text, bar)
+            self._infer_tip_shown = True
+            
+        # Transferability tab tooltip
+        if (
+            not getattr(self, "_xfer_tip_shown", False)
+            and hasattr(self, "xfer_tab")
+            and index == getattr(self, "_xfer_tab_index", -1)
+        ):
+            rect = bar.tabRect(index)
+            pos = bar.mapToGlobal(rect.center())
+            QToolTip.showText(pos, self._xfer_help_text, bar)
+            self._xfer_tip_shown = True
+
+    @pyqtSlot()
+    def _on_browse_xfer_root(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Select results root (Stage-1/2/xfer)",
+            str(self.gui_runs_root),
+        )
+        if path:
+            self.xfer_results_root.setText(path)
+
+    @pyqtSlot()
+    def _on_scalars_config(self) -> None:
+        """
+        Open the Scalars & loss weights dialog.
+
+        The dialog is pre-populated from the current tuner search space
+        (or defaults). When the user clicks OK, values stay in the
+        dialog instance and will be picked up by _build_tuner_space_from_ui.
+        """
+        space = self.geo_cfg.tuner_search_space or default_tuner_search_space()
+        defaults = default_tuner_search_space()
+        self.scalars_dialog.load_from_space(space, defaults)
+
+        if self.scalars_dialog.exec_() == QDialog.Accepted:
+            self.log_updated.emit(
+                "Scalars & loss weights updated for tuning."
+            )
+    
+    @pyqtSlot()
+    def _on_train_options_clicked(self) -> None:
+        """
+        Open the advanced train options dialog.
+    
+        - Lets the user change the results root.
+        - Shows existing Stage-1 runs (cities) in that root.
+        - Optionally queues a TrainJobSpec when the user clicks
+          \"Run now\" on a city card.
+        """
+        # Do not allow changing options mid-run
+        if self.stage1_thread and self.stage1_thread.isRunning():
+            QMessageBox.warning(
+                self,
+                "Stage-1 running",
+                "Please wait for Stage-1 to finish before changing options.",
+            )
+            return
+    
+        if self.train_thread and self.train_thread.isRunning():
+            QMessageBox.warning(
+                self,
+                "Training running",
+                "Please wait for training to finish before changing options.",
+            )
+            return
+    
+        accepted, new_root, queued_job = TrainOptionsDialog.run(
+            self,
+            geo_cfg=self.geo_cfg,
+            results_root=self.gui_runs_root,
+        )
+    
+        if not accepted:
+            return
+    
+        # Update the root used by the GUI for all future runs
+        self.gui_runs_root = new_root
+        self.results_root = new_root  # keep them in sync for now
+        self._append_status(f"[Options] Results root set to: {new_root}")
+    
+        # If the user clicked \"Run\" on a city card, we receive a TrainJobSpec
+        self._queued_train_job = queued_job
+    
+        if queued_job is not None:
+            # Reuse the central entry point so all logic stays in one place
+            self._on_train_clicked()
 
     # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
+
+    @pyqtSlot()
+    def _on_browse_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select trained/tuned model",
+            str(self.gui_runs_root),
+            "Keras models (*.keras *.h5);;All files (*)",
+        )
+        if path:
+            self.inf_model_edit.setText(path)
+
+    @pyqtSlot()
+    def _on_browse_manifest(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Stage-1 manifest.json",
+            str(self.gui_runs_root),
+            "JSON files (*.json);;All files (*)",
+        )
+        if path:
+            self.inf_manifest_edit.setText(path)
+
+    @pyqtSlot()
+    def _on_browse_inputs_npz(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select custom inputs NPZ",
+            str(self.gui_runs_root),
+            "NumPy archives (*.npz);;All files (*)",
+        )
+        if path:
+            self.inf_inputs_edit.setText(path)
+
+    @pyqtSlot()
+    def _on_browse_targets_npz(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select custom targets NPZ (optional)",
+            str(self.gui_runs_root),
+            "NumPy archives (*.npz);;All files (*)",
+        )
+        if path:
+            self.inf_targets_edit.setText(path)
+
+    @pyqtSlot()
+    def _on_browse_calibrator(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select calibrator .npy (optional)",
+            str(self.gui_runs_root),
+            "NumPy arrays (*.npy);;All files (*)",
+        )
+        if path:
+            self.inf_calib_edit.setText(path)
+
     @pyqtSlot()
     def _on_select_csv(self) -> None:
         """
@@ -537,51 +2051,741 @@ class GeoPriorForecaster(QMainWindow):
             )
             self.csv_path = None
 
+    def _infer_city_name_from_csv(self, csv_path: str) -> str:
+        """
+        Infer a city/dataset name from the CSV filename.
+
+        Example
+        -------
+        nansha.csv -> "nansha"
+        my city.csv -> "my_city"
+        """
+        stem = Path(csv_path).stem.strip()
+        if not stem:
+            return "geoprior_city"
+
+        # Normalise a bit for directory-friendly names
+        stem = stem.replace(" ", "_")
+        return stem
+
+
     @pyqtSlot()
     def _on_train_clicked(self) -> None:
-        if self.stage1_thread or self.train_thread:
+        """
+        Main entry point when the user clicks \"Run training\".
+    
+        Behaviour:
+    
+        1. If a TrainJobSpec was queued from the Options dialog,
+           run that job.
+        2. Otherwise, if existing Stage-1 runs are found under the
+           current root, show a QuickTrainDialog to let the user
+           pick one (shortcut behaviour).
+        3. If no jobs exist, fall back to the original smart
+           Stage-1 handshake: create Stage-1 if needed, then train.
+        """
+        # Prevent concurrent runs
+        if self.stage1_thread and self.stage1_thread.isRunning():
             QMessageBox.information(
                 self,
                 "Busy",
-                "A workflow is already running.",
+                "Stage-1 is already running.",
+            )
+            return
+    
+        if self.train_thread and self.train_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Training is already running.",
+            )
+            return
+    
+        # 0. If options dialog has queued a specific job, honour it
+        if self._queued_train_job is not None:
+            job = self._queued_train_job
+            self._queued_train_job = None
+            self._run_job(job)
+            return
+    
+        # 1. Try quick shortcut: reuse an existing Stage-1 run
+        # try:
+        # # Build minimal Stage-1 config snapshot to filter compatible runs
+        stage1_cfg = self.geo_cfg.to_stage1_config()
+        jobs = latest_jobs_for_root(
+            results_root=self.gui_runs_root,
+            current_cfg=stage1_cfg,
+        )
+        quick_job = QuickTrainDialog.choose_job(
+            parent=self,
+            jobs=jobs,
+        )
+        # except Exception as exc:  # defensive
+        #     self._append_status(
+        #         f"[QuickTrain] Failed to list jobs: {exc}",
+        #         error=True,
+        #     )
+        #     quick_job = None
+        
+        # XXX TODO : 
+        if quick_job is not None:
+            self._run_job(quick_job)
+            return
+
+        # 2. No existing jobs: fall back to the original behaviour
+
+        csv_path_str = str(self.csv_path) if self.csv_path is not None else ""
+        if not csv_path_str:
+            QMessageBox.warning(
+                self,
+                "No training CSV",
+                "Please choose a training CSV file first.",
+            )
+            return
+        
+        city = self.city_edit.text().strip()
+        if not city and self.csv_path is not None:
+            city = self.csv_path.stem
+        
+        if not city:
+            QMessageBox.warning(
+                self,
+                "Missing city name",
+                "Please provide a city/dataset name.",
             )
             return
 
-        city = self.city_edit.text().strip() or "nansha"
+        cfg = self.geo_cfg
+        cfg.TRAIN_CSV_PATH = csv_path_str
+    
+        # Infer city name from CSV if the user didn't type one
+        if not cfg.CITY_NAME:
+            cfg.CITY_NAME = self._infer_city_name_from_csv(csv_path_str)
+    
+        default_name = cfg.CITY_NAME or "geoprior_run"
+        cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
 
-        # 1) Sync widgets -> GeoPriorConfig
+        try:
+            cfg.ensure_valid()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Invalid configuration",
+                f"The training configuration is not valid:\n\n{exc}",
+            )
+            return
+    
+        # Smart Stage-1 handshake: reuse if matching manifest exists,
+        # otherwise build Stage-1 from scratch.
+        stage1_cfg, stage1_only = self._smart_stage1_handshake(cfg)
+    
+        self.progress.reset()
+        self.progress.set_label("Stage-1: preparing sequences…")
+        self.btn_train.setEnabled(False)
+        self.btn_train_options.setEnabled(False)
+    
+        if stage1_only:
+            stage1_thread = Stage1Thread(
+                csv_path=csv_path_str,
+                cfg_overrides=stage1_cfg,
+                parent=self,
+            )
+            stage1_thread.stage1Finished.connect(
+                lambda summary: self._on_stage1_finished(cfg, summary)
+            )
+            stage1_thread.errorOccurred.connect(self._on_worker_error)
+            self.stage1_thread = stage1_thread
+            stage1_thread.start()
+        else:
+            # stage1_cfg is a Stage1Summary in this branch
+            summary = stage1_cfg  # type: ignore[assignment]
+            self._on_stage1_finished(cfg, summary)
+  
+
+    @pyqtSlot()
+    def _on_tune_clicked(self) -> None:
+        """
+        Run Stage-2 hyperparameter tuning for the selected city,
+        using TuningThread (non-blocking).
+
+        Priority:
+        1) If `_queued_tune_job` is set by the Tune options dialog,
+           use its Stage-1 summary.
+        2) Otherwise, if no city is typed, open QuickTuneDialog to let
+           the user select a Stage-1 city.
+        3) Fallback: use the city from the City/Dataset field.
+        """
+        # Prevent concurrent tuning runs
+        if self.tuning_thread and self.tuning_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Tuning is already running.",
+            )
+            return
+
+        if hasattr(self, "log_mgr"):
+            self.log_mgr.clear()
+
+        job: TuneJobSpec | None = None
+        manifest_path: str | None = None
+
+        # 0) Highest priority: job queued from TuneOptionsDialog
+        if self._queued_tune_job is not None:
+            job = self._queued_tune_job
+            self._queued_tune_job = None
+
+        city_text = self.city_edit.text().strip()
+
+        # 1) If no queued job and no city typed, try QuickTuneDialog
+        if job is None and not city_text:
+            try:
+                ok, quick_job = QuickTuneDialog.run(
+                    results_root=self.gui_runs_root,
+                    parent=self,
+                )
+            except Exception as exc:  # defensive
+                self._append_status(
+                    f"[QuickTune] Failed to list Stage-1 runs: {exc}",
+                    error=True,
+                )
+                ok, quick_job = False, None
+
+            if ok and quick_job is not None:
+                job = quick_job
+
+        # 2) If a job was selected (from advanced options or quick dialog),
+        #    derive city and manifest from it.
+        if job is not None:
+            city = job.stage1.city
+            manifest_path = str(job.stage1.manifest_path)
+            self.city_edit.setText(city)
+        else:
+            city = city_text
+
+        if not city:
+            QMessageBox.warning(
+                self,
+                "Missing city",
+                "Please provide a city/dataset name, or pick one "
+                "from the tuning options.",
+            )
+            return
+
+        # 3) Sync base training config (PDE weights, LR, etc.) from Train tab
         self._sync_config_from_ui()
 
-        # 2) Convert to NAT-style overrides
+        # 4) Update tuner search space from Tune tab widgets
+        self.geo_cfg.tuner_search_space = self._build_tuner_space_from_ui()
+
+        # 5) Build NAT-style overrides, including TUNER_SEARCH_SPACE
         cfg_overrides = self.geo_cfg.to_cfg_overrides()
 
-        # 2b) Force GUI runs under <repo_root>/.fusionlab_runs
+        # 5b) Force GUI runs under ~/.fusionlab_runs
         if getattr(self, "gui_runs_root", None) is not None:
-            # Only set if not already forced by the caller
             cfg_overrides.setdefault(
                 "BASE_OUTPUT_DIR",
                 str(self.gui_runs_root),
             )
 
-        # 3) Inject city / dataset information
+        # 5c) Inject desired city (Stage-1 for this city must exist)
         cfg_overrides["CITY_NAME"] = city
-        if self.csv_path is not None:
-            cfg_overrides["DATA_DIR"] = str(self.csv_path.parent)
-            cfg_overrides["BIG_FN"] = self.csv_path.name
-
         self._cfg_overrides = cfg_overrides
-        
-        self.log_updated.emit(
-            f"GUI runs root: {self.gui_runs_root}"
-        )
-        self.log_updated.emit(
-            f"Start GeoPrior workflow for {city!r}."
-        )
-        self.status_updated.emit(f"Stage-1: preparing city={city}.")
-        self._update_progress(0.0)
-        self.train_btn.setEnabled(False)
 
-        self._start_stage1(city)
+        self.log_updated.emit(
+            f"Start GeoPrior tuning for city={city!r}."
+        )
+        self.status_updated.emit(
+            f"Stage-2: tuning GeoPrior model for city={city}."
+        )
+        self._update_progress(0.0)
+
+        eval_tuned = self.chk_eval_tuned.isChecked()
+
+        # 6) Create and start TuningThread
+        th = TuningThread(
+            manifest_path=manifest_path,  # None -> auto-discover; else fixed
+            cfg_overrides=self._cfg_overrides,
+            evaluate_tuned=eval_tuned,
+            parent=self,
+        )
+        self.tuning_thread = th
+
+        # Wire signals
+        th.log_updated.connect(self.log_updated.emit)
+        th.status_updated.connect(self.status_updated.emit)
+        th.progress_changed.connect(self._on_thread_progress)
+        th.tuning_finished.connect(self._on_tuning_finished)
+        th.error_occurred.connect(self._on_worker_error)
+
+        # Disable Tune button while job is active
+        self.btn_run_tune.setEnabled(False)
+
+        self._active_job_kind = "tune"
+        self._update_global_running_state()   # sets "Running tuning…"
+
+        th.start()
+        # after thread is running, ensure Stop button is shown/updated
+        self._update_global_running_state()
+
+
+    @pyqtSlot()
+    def _on_infer_clicked(self) -> None:
+        """
+        Run Stage-3 inference using InferenceThread (non-blocking).
+        """
+        if self.inference_thread is not None:
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Inference is already running.",
+            )
+            return
+        if hasattr(self, "log_mgr"):
+            self.log_mgr.clear()
+            
+        model_path = self.inf_model_edit.text().strip()
+        if not model_path:
+            QMessageBox.warning(
+                self,
+                "Model required",
+                "Please select a trained/tuned .keras model first.",
+            )
+            return
+
+        dataset_key = self.cmb_inf_dataset.currentData() or "test"
+        use_future = self.chk_inf_use_future.isChecked()
+
+        manifest_path = self.inf_manifest_edit.text().strip() or None
+
+        inputs_npz: str | None = None
+        targets_npz: str | None = None
+        if dataset_key == "custom" and not use_future:
+            inputs_npz = self.inf_inputs_edit.text().strip() or None
+            targets_npz = self.inf_targets_edit.text().strip() or None
+            if not inputs_npz:
+                QMessageBox.warning(
+                    self,
+                    "Inputs NPZ required",
+                    "For 'Custom NPZ', please select an inputs .npz file.",
+                )
+                return
+
+        use_source_calibrator = self.chk_inf_use_source_calib.isChecked()
+        fit_calibrator = self.chk_inf_fit_calib.isChecked()
+        calibrator_path = self.inf_calib_edit.text().strip() or None
+
+        cov_target = float(self.sp_inf_cov.value())
+        include_gwl = self.chk_inf_include_gwl.isChecked()
+        batch_size = int(self.sp_inf_batch.value())
+        make_plots = self.chk_inf_plots.isChecked()
+
+        self.log_updated.emit(
+            f"Start inference: model={model_path!r}, "
+            f"dataset={dataset_key!r}, use_future={use_future}."
+        )
+        self.status_updated.emit("Stage-3: running inference.")
+        self._update_progress(0.0)
+
+        th = InferenceThread(
+            model_path=model_path,
+            dataset=dataset_key,
+            use_stage1_future_npz=use_future,
+            manifest_path=manifest_path,
+            stage1_dir=None,
+            inputs_npz=inputs_npz,
+            targets_npz=targets_npz,
+            use_source_calibrator=use_source_calibrator,
+            calibrator_path=calibrator_path,
+            fit_calibrator=fit_calibrator,
+            cov_target=cov_target,
+            include_gwl=include_gwl,
+            batch_size=batch_size,
+            make_plots=make_plots,
+            cfg_overrides=None,
+            parent=self,
+        )
+        self.inference_thread = th
+
+        th.log_updated.connect(self.log_updated.emit)
+        th.status_updated.connect(self.status_updated.emit)
+        th.progress_changed.connect(self._on_thread_progress)
+        th.error_occurred.connect(self._on_worker_error)
+        th.inference_finished.connect(self._on_inference_finished)
+
+        self.btn_run_infer.setEnabled(False)
+        
+        self._active_job_kind = "infer"
+        self._update_global_running_state()
+
+        th.start()
+        self._update_global_running_state()
+        
+    @pyqtSlot()
+    def _on_xfer_advanced(self) -> None:
+        dlg = XferAdvancedDialog(
+            parent=self,
+            quantiles=self._xfer_quantiles_override,
+            write_json=self._xfer_write_json,
+            write_csv=self._xfer_write_csv,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        self._xfer_quantiles_override = dlg.get_quantiles()
+        self._xfer_write_json = dlg.write_json()
+        self._xfer_write_csv = dlg.write_csv()
+
+        self.log_updated.emit(
+            "Transferability advanced options updated."
+        )
+
+    @pyqtSlot()
+    def _on_xfer_clicked(self) -> None:
+        """
+        Run cross-city transfer matrix using XferMatrixThread.
+        """
+        if self.xfer_thread is not None:
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Transferability is already running.",
+            )
+            return
+        
+        if hasattr(self, "log_mgr"):
+            self.log_mgr.clear()
+            
+        city_a = self.xfer_city_a.text().strip() or "nansha"
+        city_b = self.xfer_city_b.text().strip() or "zhongshan"
+
+        if not city_a or not city_b:
+            QMessageBox.warning(
+                self,
+                "Cities required",
+                "Please fill both City A and City B.",
+            )
+            return
+
+        # Collect splits
+        splits: list[str] = []
+        if self.chk_xfer_split_train.isChecked():
+            splits.append("train")
+        if self.chk_xfer_split_val.isChecked():
+            splits.append("val")
+        if self.chk_xfer_split_test.isChecked():
+            splits.append("test")
+        if not splits:
+            QMessageBox.warning(
+                self,
+                "Splits required",
+                "Please select at least one split.",
+            )
+            return
+
+        # Collect calibration modes
+        calib_modes: list[str] = []
+        if self.chk_xfer_cal_none.isChecked():
+            calib_modes.append("none")
+        if self.chk_xfer_cal_source.isChecked():
+            calib_modes.append("source")
+        if self.chk_xfer_cal_target.isChecked():
+            calib_modes.append("target")
+        if not calib_modes:
+            QMessageBox.warning(
+                self,
+                "Calibration modes required",
+                "Please select at least one calibration mode.",
+            )
+            return
+
+        results_root = (
+            self.xfer_results_root.text().strip()
+            or str(self.gui_runs_root)
+        )
+        rescale = self.chk_xfer_rescale.isChecked()
+        batch_size = int(self.sp_xfer_batch.value())
+        quantiles_override = self._xfer_quantiles_override
+        write_json = self._xfer_write_json
+        write_csv = self._xfer_write_csv
+
+        self.log_updated.emit(
+            "Start cross-city transfer matrix: "
+            f"{city_a!r} ↔ {city_b!r}; "
+            f"splits={splits}, calib={calib_modes}, "
+            f"rescale_to_source={rescale}."
+        )
+        self.status_updated.emit(
+            f"XFER: running transfer matrix for {city_a} and {city_b}."
+        )
+        self._update_progress(0.0)
+
+        th = XferMatrixThread(
+            city_a=city_a,
+            city_b=city_b,
+            results_dir=results_root,
+            splits=splits,
+            calib_modes=calib_modes,
+            rescale_to_source=rescale,
+            batch_size=batch_size,
+            quantiles_override=quantiles_override,
+            out_dir=None,
+            write_json=write_json,
+            write_csv=write_csv,
+            parent=self,
+        )
+        self.xfer_thread = th
+
+        th.log_updated.connect(self.log_updated.emit)
+        th.status_updated.connect(self.status_updated.emit)
+        th.progress_changed.connect(self._on_thread_progress)
+        th.error_occurred.connect(self._on_worker_error)
+        th.xfer_finished.connect(self._on_xfer_finished)
+
+        self.btn_run_xfer.setEnabled(False)
+        
+        self._active_job_kind = "xfer"
+        self._update_global_running_state()
+
+        th.start()
+        self._update_global_running_state()
+        
+        
+    @pyqtSlot(dict)
+    def _on_xfer_finished(self, result: Dict[str, Any]) -> None:
+        """
+        Handle completion of XferMatrixThread.
+        """
+        self.xfer_thread = None
+        self.btn_run_xfer.setEnabled(True)
+
+        if not result:
+            self.log_updated.emit(
+                "Transfer matrix finished with an empty result dict."
+            )
+            self.status_updated.emit(
+                "Transferability failed. See log."
+            )
+            self._update_progress(0.0)
+            return
+
+        out_dir = result.get("out_dir")
+        json_path = result.get("json_path")
+        csv_path = result.get("csv_path")
+
+        # remember result for the view thread
+        self._xfer_last_result = result
+        if out_dir:
+            self.log_updated.emit(
+                "Transferability artifacts in:\n"
+                f"  {out_dir}"
+            )
+            self.lbl_xfer_last_out.setText(out_dir)
+
+        if json_path:
+            self.log_updated.emit(
+                "Transfer results JSON:\n"
+                f"  {json_path}"
+            )
+        if csv_path:
+            self.log_updated.emit(
+                "Transfer results CSV:\n"
+                f"  {csv_path}"
+            )
+
+
+        self.log_updated.emit(
+            "Transfer matrix completed successfully."
+        )
+        
+        # show pretty summary box for the chosen split (default 'val')
+        try:
+            view_split = (
+                self.cmb_xfer_view_split.currentData() or "val"
+            )
+        except Exception:
+            view_split = "val"
+
+        XferResultsDialog.show_for_xfer_result(
+            parent=self,
+            result=result,
+            split=view_split,
+            title="Cross-city transfer summary",
+        )
+
+        # Let _update_xfer_view_state decide visibility
+        self._update_xfer_view_state()
+        
+        # Save GUI log in xfer out_dir
+        self._save_gui_log_for_result(result)
+        
+        self.status_updated.emit("Idle – transferability complete.")
+        self._update_progress(1.0)
+        
+        self._active_job_kind = None
+        self._update_global_running_state()
+
+    @pyqtSlot()
+    def _on_xfer_view_clicked(self) -> None:
+        if self.xfer_view_thread is not None:
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Transferability view is already running.",
+            )
+            return
+    
+        if not self._xfer_last_result:
+            QMessageBox.warning(
+                self,
+                "No results",
+                "No transfer results found. Run the transfer matrix first.",
+            )
+            return
+    
+        view_kind = self.cmb_xfer_view.currentData() or "calib_panel"
+        view_split = self.cmb_xfer_view_split.currentData() or "val"
+        results_root = (
+            self.xfer_results_root.text().strip()
+            or str(self.gui_runs_root)
+        )
+    
+        r = self._xfer_last_result or {}
+        out_dir = r.get("out_dir")
+        csv_path = r.get("csv_path")
+        json_path = r.get("json_path")
+        
+        if not (csv_path or json_path or out_dir):
+            QMessageBox.warning(
+                self,
+                "No artifacts",
+                "Could not find xfer_results.* in the last output folder.",
+            )
+            return
+
+        self.log_updated.emit(
+            f"Build transferability view ({view_kind}) "
+            f"from {csv_path or json_path or 'latest under results root'}."
+        )
+        self.status_updated.emit("Rendering transferability view…")
+        self._update_progress(0.0)
+    
+        th = XferViewThread(
+            view_kind=view_kind,
+            results_root=results_root,
+            xfer_out_dir=out_dir,
+            xfer_csv=csv_path,
+            xfer_json=json_path,
+            split=view_split,
+            prefer_split=None,
+            prefer_calibration=None,
+            show_overall=True,
+            dpi=150,
+            fontsize=8,
+            parent=self,
+        )
+        self.xfer_view_thread = th
+    
+        th.log_updated.connect(self.log_updated.emit)
+        th.status_updated.connect(self.status_updated.emit)
+        th.progress_changed.connect(self._on_thread_progress)
+        th.error_occurred.connect(self._on_worker_error)
+        th.xfer_view_finished.connect(self._on_xfer_view_finished)
+    
+        self.btn_xfer_view.setEnabled(False)
+        th.start()
+        
+    @pyqtSlot(dict)
+    def _on_xfer_view_finished(self, result: Dict[str, Any]) -> None:
+        self.xfer_view_thread = None
+        self.btn_xfer_view.setEnabled(True)
+    
+        if not result:
+            self.log_updated.emit(
+                "Transferability view finished with an empty result dict."
+            )
+            self.status_updated.emit("View failed. See log.")
+            self._update_progress(0.0)
+            return
+        
+        err = result.get("error")
+        if err:
+            self.log(f"[Xfer view] Error: {err}")
+            return
+        
+        png = result.get("png_path")
+        if png:
+            self.log_updated.emit(
+                "Transferability figure saved:\n"
+                f"  {png}"
+            )
+        for key in ("svg_path", "pdf_path", "table_csv", "table_tex"):
+            p = result.get(key)
+            if p:
+                self.log_updated.emit(f"{key}: {p}")
+    
+        view_kind = result.get("view_kind", "view")
+        split = result.get("split")
+        calib = result.get("calibration")
+        bits = [view_kind]
+        if split:
+            bits.append(f"split={split}")
+        if calib:
+            bits.append(f"calib={calib}")
+        self.log_updated.emit("View summary: " + ", ".join(bits))
+        
+        src = result.get("source_city")
+        tgt = result.get("target_city")
+        
+        self.log(
+            "[Xfer view] Transferability figure saved:\n"
+            f"  kind   : {view_kind}\n"
+            f"  source : {src}\n"
+            f"  target : {tgt}\n"
+            f"  file   : {png}"
+         )
+
+        self.status_updated.emit("Idle – transferability view ready.")
+        # auto-preview in GUI (reuses ImagePreviewDialog machinery)
+        _notify_gui_xfer_view(result)
+        
+        self._update_progress(1.0)
+
+    @pyqtSlot()
+    def _on_stop_clicked(self) -> None:
+        """
+        Best-effort global stop for any running workflow.
+
+        It simply calls requestInterruption() on all workflow threads.
+        The actual jobs periodically check _stop_check() and exit
+        cleanly when the flag is set.
+        """
+        if not self._any_job_running():
+            return
+
+        self.log_updated.emit(
+            "Stop requested – attempting to cancel running job(s)…"
+        )
+        self.status_updated.emit("Stopping… please wait for clean shutdown.")
+
+        for label, th in (
+            ("Stage-1", self.stage1_thread),
+            ("Training", self.train_thread),
+            ("Tuning", self.tuning_thread),
+            ("Inference", self.inference_thread),
+            ("Transfer matrix", self.xfer_thread),
+        ):
+            if th is not None and th.isRunning():
+                try:
+                    th.requestInterruption()
+                    self.log_updated.emit(f"  stop requested for {label}.")
+                except Exception as exc:
+                    self.log_updated.emit(
+                        f"  could not interrupt {label}: {exc}"
+                    )
+
+        # prevent repeated clicks; will be re-enabled on next run
+        self.btn_stop.setEnabled(False)
 
     # ------------------------------------------------------------------
     # Thread orchestration
@@ -602,6 +2806,115 @@ class GeoPriorForecaster(QMainWindow):
         th.error_occurred.connect(self._on_worker_error)
 
         th.start()
+        # Now a job is actually running → show Stop, update labels
+        self._update_global_running_state()
+       
+    def _run_job(self, job: TrainJobSpec) -> None:
+        """
+        Execute a training job described by TrainJobSpec.
+    
+        Modes:
+        - \"reuse\": skip Stage-1, go straight to training using
+          the existing Stage-1 summary.
+        - \"rebuild\" / \"scratch\": run Stage-1 first, then training.
+          (We treat \"scratch\" as \"rebuild\" here.)
+        """
+        # Basic config from GUI
+        cfg = self.geo_cfg
+        # Lock the city to the Stage-1 city of the job
+        cfg.CITY_NAME = job.stage1_summary.city
+
+        # --- Only require CSV if we will (re)run Stage-1 -----------------------
+        csv_path_str = ""
+        if job.mode in {"rebuild", "scratch"}:
+            if self.csv_path is not None:
+                csv_path_str = str(self.csv_path)
+    
+            if not csv_path_str:
+                QMessageBox.warning(
+                    self,
+                    "Missing CSV",
+                    "This job needs to rebuild Stage-1.\n"
+                    "Please choose an input CSV file first.",
+                )
+                return
+    
+            cfg.TRAIN_CSV_PATH = csv_path_str
+    
+
+        # csv_path_str = ""
+        # if self.csv_path is not None:
+        #     csv_path_str = str(self.csv_path)
+            
+        # if not csv_path_str:
+        #     QMessageBox.warning(
+        #         self,
+        #         "Missing CSV",
+        #         "Please choose an input CSV file first.",
+        #     )
+        #     return
+    
+        # cfg.TRAIN_CSV_PATH = csv_path_str
+        # cfg.TRAIN_CSV_PATH = csv_path_str
+        default_name = (
+            f"{job.stage1_summary.city}_train_{job.stage1_summary.timestamp}"
+        )
+        cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
+        
+        # try:
+        #     cfg.ensure_valid()
+        # except Exception as exc:  # pragma: no cover - pure GUI validation
+        #     QMessageBox.critical(
+        #         self,
+        #         "Invalid configuration",
+        #         f"The training configuration is not valid:\n\n{exc}",
+        #     )
+        #     return
+    
+        # Shared UI setup
+        self.progress.reset()
+        self.btn_train.setEnabled(False)
+        self.btn_train_options.setEnabled(False)
+    
+        self._append_status(
+            "[Job] Starting training "
+            f"(city={job.stage1_summary.city}, mode={job.mode}, "
+            f"root={job.stage1_root})"
+        )
+    
+        # --- Case 1: reuse existing Stage-1, training only -------------------
+        if job.mode == "reuse":
+            self.progress.set_label(
+                "Stage-2: training GeoPrior model (reusing Stage-1)…"
+            )
+            # Bypass Stage-1 thread and jump directly to Stage-2
+            self._on_stage1_finished(cfg, job.stage1_summary)
+            return
+    
+        # --- Case 2: rebuild/scratch: run Stage-1, then training -------------
+        stage1_cfg = cfg.to_stage1_config()
+        # Ensure Stage-1 outputs go under the GUI runs root
+        stage1_cfg["BASE_OUTPUT_DIR"] = str(self.gui_runs_root)
+    
+        # Optional hint to the Stage-1 script that this is a rebuild
+        if job.mode in {"rebuild", "scratch"}:
+            stage1_cfg["FORCE_REBUILD"] = True
+    
+        self.progress.set_label("Stage-1: preparing sequences…")
+    
+        stage1_thread = Stage1Thread(
+            csv_path=csv_path_str,
+            cfg_overrides=stage1_cfg,
+            parent=self,
+        )
+        stage1_thread.stage1Finished.connect(
+            lambda summary: self._on_stage1_finished(cfg, summary)
+        )
+        stage1_thread.errorOccurred.connect(self._on_worker_error)
+    
+        self.stage1_thread = stage1_thread
+        stage1_thread.start()
+
 
     @pyqtSlot(dict)
     def _on_stage1_finished(self, result: Dict[str, Any]) -> None:
@@ -649,6 +2962,7 @@ class GeoPriorForecaster(QMainWindow):
         th.error_occurred.connect(self._on_worker_error)
 
         th.start()
+        self._update_global_running_state()
 
     @pyqtSlot(dict)
     def _on_training_finished(self, result: Dict[str, Any]) -> None:
@@ -660,6 +2974,9 @@ class GeoPriorForecaster(QMainWindow):
             )
             self.status_updated.emit("Training failed. See log.")
             self.train_btn.setEnabled(True)
+            self._active_job_kind = None
+            self._update_global_running_state()
+            
             return
 
         out_dir = result.get("run_output_path")
@@ -675,22 +2992,228 @@ class GeoPriorForecaster(QMainWindow):
                 "Final checkpoint:\n"
                 f"  {ckpt}"
             )
+        metrics_json = result.get(
+            "metrics_json") or result.get("metrics_json_path")
+        if metrics_json or result.get(
+                "run_output_path") or result.get("run_dir"):
+            try:
+                GeoPriorResultsDialog.show_for_result(
+                    self,
+                    result,
+                    title="Training evaluation metrics",
+                )
+            except Exception as e:
+                self._append_log(
+                    f"[Warn] Could not open metrics dialog: {e}")
 
+        # Persist GUI log into this training run directory
+        self._save_gui_log_for_result(result)
+        
         self.log_updated.emit("Training completed successfully.")
         self.status_updated.emit("Idle – training complete.")
         self._update_progress(1.0)
+        
         self.train_btn.setEnabled(True)
+        self._active_job_kind = None
+        self._update_global_running_state()
 
+        
     @pyqtSlot(str)
     def _on_worker_error(self, message: str) -> None:
         self.log_updated.emit(f"[ERROR] {message}")
         QMessageBox.critical(self, "Error", message)
+
+        # Reset all threads/buttons that might be active
         self.train_btn.setEnabled(True)
+        
+        self.btn_run_tune.setEnabled(True)
+        if hasattr(self, "btn_run_infer"):
+            self.btn_run_infer.setEnabled(True)
+        if hasattr(self, "btn_run_xfer"):
+            self.btn_run_xfer.setEnabled(True)
+        if hasattr(self, "btn_xfer_view"):
+            self.btn_xfer_view.setEnabled(True)
+
         self.stage1_thread = None
         self.train_thread = None
+        self.tuning_thread = None
+        self.inference_thread = None
+        self.xfer_thread = None
+        self.xfer_view_thread = None
+        
+        self._active_job_kind = None
+        self._update_global_running_state()
+        
         self._update_progress(0.0)
         self.progress_label.setText("")
 
+
+    @pyqtSlot(dict)
+    def _on_tuning_finished(self, result: Dict[str, Any]) -> None:
+        """Handle completion of TuningThread."""
+        self.tuning_thread = None
+        self.btn_run_tune.setEnabled(True)
+
+        if not result:
+            self.log_updated.emit(
+                "Tuning finished with an empty result dict."
+            )
+            self.status_updated.emit("Tuning failed. See log.")
+            self._update_progress(0.0)
+            return
+
+        run_dir = result.get("run_dir")
+        best_hps_path = result.get("best_hps_path")
+        best_model_path = result.get("best_model_path")
+        best_weights_path = result.get("best_weights_path")
+
+        if run_dir:
+            self.log_updated.emit(
+                "Tuning artifacts in:\n"
+                f"  {run_dir}"
+            )
+        if best_hps_path:
+            self.log_updated.emit(
+                "Best hyperparameters JSON:\n"
+                f"  {best_hps_path}"
+            )
+        if best_model_path:
+            self.log_updated.emit(
+                "Best tuned model:\n"
+                f"  {best_model_path}"
+            )
+        if best_weights_path:
+            self.log_updated.emit(
+                "Best tuned weights:\n"
+                f"  {best_weights_path}"
+            )
+        metrics_json = result.get(
+            "metrics_json") or result.get(
+                "metrics_json_path")
+        if metrics_json or result.get(
+                "run_output_path") or result.get("run_dir"):
+            try:
+                GeoPriorResultsDialog.show_for_result(
+                    self,
+                    result,
+                    title="Tuned model evaluation",
+                )
+            except Exception as e:
+                self._append_log(
+                    f"[Warn] Could not open metrics dialog: {e}"
+                )
+        # Save GUI log in tuning run_dir
+        self._save_gui_log_for_result(result)
+        
+        self.log_updated.emit("Tuning completed successfully.")
+        self.status_updated.emit("Idle – tuning complete.")
+        self._update_progress(1.0)
+        
+        self._active_job_kind = None
+        self._update_global_running_state()
+        
+    @pyqtSlot(dict)
+    def _on_inference_finished(self, result: Dict[str, Any]) -> None:
+        """
+        Handle completion of InferenceThread.
+        """
+        self.inference_thread = None
+        self.btn_run_infer.setEnabled(True)
+
+        if not result:
+            self.log_updated.emit(
+                "Inference finished with an empty result dict."
+            )
+            self.status_updated.emit("Inference failed. See log.")
+            self._update_progress(0.0)
+            return
+
+        run_dir = result.get("run_dir")
+        csv_eval = result.get("csv_eval_path")
+        csv_future = result.get("csv_future_path")
+        summary_json = result.get("inference_summary_json")
+
+        coverage80 = result.get("coverage80")
+        sharpness80 = result.get("sharpness80")
+        point_phys = result.get("point_metrics_phys") or {}
+        r2_phys = None
+        if isinstance(point_phys, dict):
+            r2_phys = point_phys.get("r2")
+
+        if run_dir:
+            self.log_updated.emit(
+                "Inference artifacts in:\n"
+                f"  {run_dir}"
+            )
+        if csv_eval:
+            self.log_updated.emit(
+                "Evaluation CSV:\n"
+                f"  {csv_eval}"
+            )
+        if csv_future:
+            self.log_updated.emit(
+                "Future forecast CSV:\n"
+                f"  {csv_future}"
+            )
+        if summary_json:
+            self.log_updated.emit(
+                "Inference summary JSON:\n"
+                f"  {summary_json}"
+            )
+
+        metrics_bits = []
+        try:
+            if coverage80 is not None:
+                metrics_bits.append(f"cov80={float(coverage80):.3f}")
+        except Exception:
+            pass
+        try:
+            if sharpness80 is not None:
+                metrics_bits.append(f"sharp80={float(sharpness80):.2f}")
+        except Exception:
+            pass
+        try:
+            if r2_phys is not None:
+                metrics_bits.append(f"R²_phys={float(r2_phys):.3f}")
+        except Exception:
+            pass
+
+        if metrics_bits:
+            self.log_updated.emit(
+                "Inference summary metrics: " + ", ".join(metrics_bits)
+            )
+        # Save GUI log next to inference outputs
+        self._save_gui_log_for_result(result)
+        
+        self.log_updated.emit("Inference completed successfully.")
+        self.status_updated.emit("Idle – inference complete.")
+        self._update_progress(1.0)
+        
+        self._active_job_kind = None
+        self._update_global_running_state()
+        
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """
+        Intercept window-close to warn if workflows are active.
+        """
+        if self._any_job_running():
+            msg = (
+                "One or more workflows are still running "
+                "(Stage-1, training, tuning, inference or transfer matrix).\n\n"
+                "If you quit now, they will be interrupted.\n\n"
+                "Do you really want to quit?"
+            )
+            reply = QMessageBox.question(
+                self,
+                "Quit GeoPrior Forecaster?",
+                msg,
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+        event.accept()
 
 # ----------------------------------------------------------------------
 # Entry point helper

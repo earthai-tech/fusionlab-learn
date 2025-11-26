@@ -62,6 +62,7 @@ def build_future_sequences_npz(
     verbose: int = 1,
     logger=None,
     stop_check: Callable[[], bool] = None, 
+    progress_hook: Optional[Callable[[float], None]] = None,
     **kws,  
 ) -> dict:
     """
@@ -280,7 +281,17 @@ default 'auto'
     >>> result["future_targets_npz"]
     'results/zhongshan/future_npz/zhongshan_future_targets.npz'
     """
+    def _p(frac: float) -> None:
+        if progress_hook is not None:
+            # clamp, avoid crashing
+            try:
+                f = max(0.0, min(1.0, float(frac)))
+                progress_hook(f)
+            except Exception:
+                pass
 
+    _p(0.0)  # start
+    
     # ------------------------------------------------------------------
     # Small helpers
     # ------------------------------------------------------------------
@@ -411,7 +422,9 @@ default 'auto'
     # Candidate data-driven future times (>= f_start_idx, after last_hist)
     data_future_needed = data_future_all[data_future_all >= f_start_idx][:H]
     has_enough_future_data = data_future_needed.size == H
-
+    
+    _p(0.1)
+    
     # Decide effective mode + future times
     using_synthetic_future = False
     if future_mode_norm == "pure-data-driven":
@@ -592,6 +605,10 @@ default 'auto'
     dropped_groups = 0
     
     for gi, (gid, g) in enumerate(iter_groups, start=1):
+        
+        # after finishing this group:
+        _p(0.1 + 0.8 * (gi + 1) / n_groups)
+        
         if stop_check and stop_check():
             raise InterruptedError("Sequence generation aborted.")
         # If tqdm is present, keep vlog quieter; if not, use your previous pattern
@@ -781,7 +798,9 @@ default 'auto'
             level=1,
             logger=logger,
         )
-
+    # After saving NPZs:
+    _p(1.0)
+    
     return {
         "future_inputs_npz": future_inputs_npz,
         "future_targets_npz": future_targets_npz,

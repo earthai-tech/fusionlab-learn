@@ -1,4 +1,3 @@
-# nat.com/xfer_matrix.py
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
 
@@ -37,9 +36,9 @@ from fusionlab.nn.calibration import (
 from typing import Sequence, Optional, Dict, Any, Callable
 
 # ------------- helpers -------------
-def _load_manifest_for_city(city: str, results_dir: str) -> dict:
+def _load_manifest_for_city(city: str, results_dir: str, manual=None) -> dict:
     mpath = _find_stage1_manifest(
-        manual=None,
+        manual=manual,
         base_dir=results_dir,
         city_hint=city,
         model_hint=os.getenv("MODEL_NAME_OVERRIDE", "GeoPriorSubsNet"),
@@ -168,6 +167,8 @@ def run_xfer_matrix(
     write_csv: bool = True,
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None, 
+    **kws
 ) -> Dict[str, Any]:
     """
     Cross-city transferability matrix (A->B and B->A) in a GUI-friendly way.
@@ -227,7 +228,21 @@ def run_xfer_matrix(
 
     def should_stop() -> bool:
         return bool(stop_check and stop_check())
-
+    
+    def _progress(value: float, message: str) -> None:
+        """Safe wrapper around GUI progress callback."""
+        if progress_callback is None:
+            return
+        try:
+            v = float(value)
+        except Exception:
+            v = 0.0
+        v = max(0.0, min(1.0, v))
+        try:
+            progress_callback(v, message)
+        except Exception:
+            # Never crash xfer because the GUI callback misbehaved.
+            pass
     # ----------------- load manifests -----------------
     M_A = _load_manifest_for_city(city_a, results_dir)
     M_B = _load_manifest_for_city(city_b, results_dir)
@@ -241,14 +256,23 @@ def run_xfer_matrix(
         )
     ensure_directory_exists(out_dir)
     log(f"[XFER] Output directory: {out_dir}")
-
+    
+    _progress(0.05, "XFER: manifests loaded and output dir ready")
     # ----------------- run all directions/modes -----------------
     results: list[Dict[str, Any]] = []
     directions = [
         ("A_to_B", M_A, M_B),
         ("B_to_A", M_B, M_A),
     ]
+    
+    total_jobs = len(directions) * len(splits) * len(calib_modes)
+    done_jobs = 0
+    base = 0.10
+    span = 0.80  # we’ll keep [0.10, 0.90] for the combos
 
+    if total_jobs > 0:
+        _progress(base, "XFER: starting transfer combinations")
+        
     stopped = False
     for tag, M_src, M_tgt in directions:
         if stopped:
@@ -263,7 +287,22 @@ def run_xfer_matrix(
                         "directions/splits/modes."
                     )
                     stopped = True
+                    # mark as cancelled at current progress
+                    frac_cancel = base + span * (
+                        done_jobs / max(1, total_jobs)
+                    )
+                    _progress(frac_cancel, "XFER: cancelled by user")
                     break
+
+                done_jobs += 1
+                frac = base + span * (
+                    (done_jobs - 1) / max(1, total_jobs)
+                )
+                msg = (
+                    f"XFER: {tag}, split={split}, calib={cm} "
+                    f"({done_jobs}/{total_jobs})"
+                )
+                _progress(frac, msg)
 
                 log(
                     f"[XFER] direction={tag}, split={split}, "
@@ -281,12 +320,18 @@ def run_xfer_matrix(
                         if quantiles_override is not None
                         else None
                     ),
+                    logger=logger,          # keep as-is / optional
+                    stop_check=stop_check,  # still stops inner loop
                 )
                 if r is not None:
                     r["direction"] = tag
                     r["source_city"] = M_src.get("city")
                     r["target_city"] = M_tgt.get("city")
                     results.append(r)
+
+    if not stopped and total_jobs > 0:
+        # Move to the upper bound of the combo slice before writing files
+        _progress(base + span, "XFER: aggregating and writing results")
 
     # ----------------- write JSON (optional) -----------------
     json_path = None
@@ -295,6 +340,7 @@ def run_xfer_matrix(
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         log(f"[XFER] Saved transfer results JSON -> {json_path}")
+        _progress(0.93, "XFER: xfer_results.json written")
 
     # ----------------- write CSV (optional) -----------------
     csv_path = None
@@ -374,7 +420,11 @@ def run_xfer_matrix(
                 w.writerow(row)
 
         log(f"[XFER] Saved transfer CSV -> {csv_path}")
+        _progress(0.97, "XFER: xfer_results.csv written")
 
+    # Final completion tick
+    _progress(1.0, "XFER: transfer matrix complete")
+    
     return {
         "out_dir": out_dir,
         "results": results,
@@ -857,44 +907,3 @@ def run_one_direction(
         "csv_future": xfer_future_csv,
     }
 
-# ---------------- CLI ----------------
-def parse_args():
-    p = argparse.ArgumentParser(
-        description="Cross-city transfer evaluation matrix (A->B and B->A)."
-    )
-    p.add_argument("--city-a", default="nansha")
-    p.add_argument("--city-b", default="zhongshan")
-    p.add_argument("--results-dir", default=os.getenv("RESULTS_DIR", "results"))
-    p.add_argument(
-        "--splits", nargs="+", default=["val", "test"],
-        choices=["val", "test"], help="Which splits to run."
-    )
-    p.add_argument(
-        "--calib-modes", nargs="+",
-        default=["none", "source", "target"],
-        choices=["none", "source", "target"],
-        help="Calibration modes to evaluate."
-    )
-    p.add_argument(
-        "--rescale-to-source", action="store_true",
-        help="Reproject target dynamic features to source scaler (strict domain test)."
-    )
-    p.add_argument("--batch-size", type=int, default=32)
-    p.add_argument("--quantiles", nargs="*", type=float, default=None,
-                   help="Override quantiles (else read from manifest).")
-    return p.parse_args()
-
-def main():
-    args = parse_args()
-    run_xfer_matrix(
-        city_a=args.city_a,
-        city_b=args.city_b,
-        results_dir=args.results_dir,
-        splits=args.splits,
-        calib_modes=args.calib_modes,
-        rescale_to_source=args.rescale_to_source,
-        batch_size=args.batch_size,
-        quantiles_override=args.quantiles,
-        # For CLI we keep defaults: write_json=True, write_csv=True,
-        # logger=None -> print, stop_check=None
-    )

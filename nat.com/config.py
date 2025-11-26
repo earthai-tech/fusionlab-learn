@@ -315,7 +315,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # --------------------------
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
-EPOCHS = 50
+EPOCHS = 30
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 

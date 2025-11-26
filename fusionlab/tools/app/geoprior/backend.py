@@ -13,6 +13,7 @@ GUI can stream logs and later wire progress bars.
 
 from __future__ import annotations
 
+import os 
 from abc import ABC, abstractmethod
 from typing import (
     Any,
@@ -27,6 +28,12 @@ from .run_training import run_training
 from .run_tuning import run_tuning
 from .run_inference import run_inference
 from .run_xfer_matrix import run_xfer_matrix
+from .xfer_view import (
+    latest_xfer_csv,
+    latest_xfer_json,
+    make_transferability_panel_from_csv,
+    make_cross_transfer_from_json,
+)
 
 
 LogFn = Callable[[str], None]
@@ -129,6 +136,7 @@ class Stage1Job(AppJob):
             logger=self.log,
             clean_run_dir=self.clean_run_dir,
             stop_check=self.should_stop,
+            progress_callback=self.update_progress, 
         )
         self.last_result = result
         return result
@@ -178,6 +186,7 @@ class TrainingJob(AppJob):
             logger=self.log,
             stop_check=self.should_stop,
             evaluate_training=self.evaluate_training,
+            progress_callback=self.update_progress, 
         )
         self.last_result = result
         return result
@@ -227,6 +236,7 @@ class TuningJob(AppJob):
             logger=self.log,
             stop_check=self.should_stop,
             evaluate_tuned=self.evaluate_tuned,
+            progress_callback=self.update_progress, 
         )
         self.last_result = result
         return result
@@ -240,6 +250,7 @@ class InferenceJob(AppJob):
         model_path: str,
         dataset: str = "test",
         *,
+        use_stage1_future_npz: bool = False,
         manifest_path: Optional[str] = None,
         stage1_dir: Optional[str] = None,
         inputs_npz: Optional[str] = None,
@@ -269,6 +280,7 @@ class InferenceJob(AppJob):
         )
         self.model_path = model_path
         self.dataset = dataset
+        self.use_stage1_future_npz = use_stage1_future_npz
         self.manifest_path = manifest_path
         self.stage1_dir = stage1_dir
         self.inputs_npz = inputs_npz
@@ -288,8 +300,7 @@ class InferenceJob(AppJob):
         self.log("[InferenceJob] Stage-3 inference.")
         if self.should_stop():
             self.log(
-                "[InferenceJob] stop requested before "
-                "start."
+                "[InferenceJob] stop requested before start."
             )
             self.last_result = {}
             return self.last_result
@@ -297,13 +308,12 @@ class InferenceJob(AppJob):
         result = run_inference(
             model_path=self.model_path,
             dataset=self.dataset,
+            use_stage1_future_npz=self.use_stage1_future_npz,  
             manifest_path=self.manifest_path,
             stage1_dir=self.stage1_dir,
             inputs_npz=self.inputs_npz,
             targets_npz=self.targets_npz,
-            use_source_calibrator=(
-                self.use_source_calibrator
-            ),
+            use_source_calibrator=self.use_source_calibrator,
             calibrator_path=self.calibrator_path,
             fit_calibrator=self.fit_calibrator,
             cov_target=self.cov_target,
@@ -313,9 +323,11 @@ class InferenceJob(AppJob):
             cfg_overrides=self.cfg_overrides,
             logger=self.log,
             stop_check=self.should_stop,
+            progress_callback=self.update_progress, 
         )
         self.last_result = result
         return result
+
 
 
 class XferMatrixJob(AppJob):
@@ -397,10 +409,137 @@ class XferMatrixJob(AppJob):
             write_csv=self.write_csv,
             logger=self.log,
             stop_check=self.should_stop,
+            progress_callback=self.update_progress, 
         )
         self.last_result = result
         return result
 
+class XferViewJob(AppJob):
+    """Render transferability figure(s) from xfer_results.* files."""
+
+    def __init__(
+        self,
+        *,
+        view_kind: str,
+        results_root: str,
+        xfer_out_dir: Optional[str] = None,
+        xfer_csv: Optional[str] = None,
+        xfer_json: Optional[str] = None,
+        split: str = "val",
+        prefer_split: Optional[str] = None,
+        prefer_calibration: Optional[str] = None,
+        show_overall: bool = True,
+        dpi: int = 150,
+        fontsize: int = 8,
+        logger: Optional[LogFn] = None,
+        stop_check: Optional[StopCheckFn] = None,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        view_kind :
+            'calib_panel' or 'summary_panel'.
+        results_root :
+            Base results directory (e.g. ~/.fusionlab_runs).
+        xfer_out_dir :
+            Last xfer output folder (optional hint).
+        xfer_csv, xfer_json :
+            Explicit paths (optional).  If None, fall back to latest
+            under results_root.
+        """
+        super().__init__(logger=logger, stop_check=stop_check)
+        self.view_kind = view_kind
+        self.results_root = results_root
+        self.xfer_out_dir = xfer_out_dir
+        self.xfer_csv = xfer_csv
+        self.xfer_json = xfer_json
+        self.split = split
+        self.prefer_split = prefer_split
+        self.prefer_calibration = prefer_calibration
+        self.show_overall = show_overall
+        self.dpi = dpi
+        self.fontsize = fontsize
+
+    def run(self) -> Dict[str, Any]:
+        self.log(
+            f"[XferViewJob] view_kind={self.view_kind} "
+            f"split={self.split!r}"
+        )
+        if self.should_stop():
+            self.log("[XferViewJob] stop requested before start.")
+            self.last_result = {}
+            return self.last_result
+
+        out: Dict[str, Any]
+
+        if self.view_kind == "calib_panel":
+            csv_path = self.xfer_csv
+            if not csv_path or not os.path.exists(csv_path):
+                # Prefer last out_dir if given
+                if self.xfer_out_dir:
+                    cand = os.path.join(self.xfer_out_dir, "xfer_results.csv")
+                    if os.path.exists(cand):
+                        csv_path = cand
+                if not csv_path or not os.path.exists(csv_path):
+                    csv_path = latest_xfer_csv(self.results_root)
+            if not csv_path:
+                msg = (
+                    "No xfer_results.csv found – cannot build view "
+                    "(run transfer matrix first)."
+                )
+                self.log(msg)
+                self.last_result = {}
+                return self.last_result
+
+            self.log(f"[XferViewJob] Using CSV: {csv_path}")
+            base = os.path.join(
+                os.path.dirname(csv_path),
+                "xfer_transferability",
+            )
+            out = make_transferability_panel_from_csv(
+                csv_path,
+                split=self.split,
+                out_base=base,
+                fontsize=self.fontsize,
+                dpi=self.dpi,
+                add_legend=True,
+                add_suptitle=False,
+            )
+
+        else:  # 'summary_panel'
+            json_path = self.xfer_json
+            if not json_path or not os.path.exists(json_path):
+                if self.xfer_out_dir:
+                    cand = os.path.join(
+                        self.xfer_out_dir, "xfer_results.json"
+                    )
+                    if os.path.exists(cand):
+                        json_path = cand
+                if not json_path or not os.path.exists(json_path):
+                    json_path = latest_xfer_json(self.results_root)
+            if not json_path:
+                msg = (
+                    "No xfer_results.json found – cannot build view "
+                    "(run transfer matrix first)."
+                )
+                self.log(msg)
+                self.last_result = {}
+                return self.last_result
+
+            self.log(f"[XferViewJob] Using JSON: {json_path}")
+            out = make_cross_transfer_from_json(
+                json_path,
+                out_dir=os.path.dirname(json_path),
+                prefer_split=self.prefer_split,
+                prefer_calibration=self.prefer_calibration,
+                show_overall=self.show_overall,
+                fontsize=self.fontsize,
+                dpi=self.dpi,
+                add_legend=True,
+            )
+
+        self.last_result = out
+        return out
 
 __all__ = [
     "AppJob",
@@ -409,5 +548,6 @@ __all__ = [
     "TuningJob",
     "InferenceJob",
     "XferMatrixJob",
+    "XferViewJob"
 ]
 
