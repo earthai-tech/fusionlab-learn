@@ -47,15 +47,15 @@ __all__ = [
 # Only expose the tool modules if the backend is available. This prevents
 # ImportErrors if a user imports the `tools` package in an environment
 # without TensorFlow.
-if KERAS_BACKEND:
-    from .app.geoprior import geoprior_forecaster_gui as geopriorv3 # noqa 
+# if KERAS_BACKEND:
+#     from .app.geoprior import geoprior_forecaster_gui as geopriorv3 # noqa 
 #     from . import xtft_point # noqa
 #     from . import xtft_proba_p # noqa
 #     from . import xtft_proba # noqa
 
 #     # Add the successfully imported modules to the public API.
-    __all__.extend([
-        "geopriorv3",
-        # "xtft_proba_p",
-        # "xtft_proba",
-    ])
+    # __all__.extend([
+    #     "geopriorv3",
+    #     # "xtft_proba_p",
+    #     # "xtft_proba",
+    # ])
