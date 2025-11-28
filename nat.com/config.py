@@ -39,7 +39,7 @@
 # MODEL_NAME is the registered model identifier.  For now the
 # main model is:
 #   - "GeoPriorSubsNet"
-CITY_NAME = "nansha"
+CITY_NAME = "zhongshan"
 MODEL_NAME = "GeoPriorSubsNet"
 
 
@@ -93,8 +93,8 @@ ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
 #     - "pihal_like" : alternative legacy layout.
 TRAIN_END_YEAR = 2022
 FORECAST_START_YEAR = 2023
-FORECAST_HORIZON_YEARS = 3 
-TIME_STEPS = 5
+FORECAST_HORIZON_YEARS = 4 
+TIME_STEPS = 4
 MODE = "tft_like"   # {"pihal_like", "tft_like"}
 
 
@@ -279,7 +279,7 @@ GWL_WEIGHTS = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only,
 #   - "gw_flow"        : groundwater flow only,
 #   - "none" or "off"  : physics switched off.
-PDE_MODE_CONFIG = "both"
+PDE_MODE_CONFIG = "off"
 
 SCALE_PDE_RESIDUALS = True
 
@@ -313,7 +313,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # --------------------------
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
-EPOCHS = 50
+EPOCHS = 100
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 
