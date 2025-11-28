@@ -23,13 +23,14 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 
+from ..device_options import DeviceOptions, DeviceOptionsWidget
 from ..smart_stage1 import Stage1Summary
 from .jobs import (
     latest_jobs_for_root,
     discover_tune_jobs_for_root,
     TrainJobSpec,
 )
-from .stage1_dialog import Stage1DetailsDialog
+from .stage1_dialogs import Stage1DetailsDialog
 from .geoprior_config import GeoPriorConfig
 
 
@@ -208,6 +209,16 @@ class TuneOptionsDialog(QDialog):
         root_layout.addWidget(btn_browse)
         vbox.addWidget(root_box)
 
+        # --- Processor / devices ----------------------------------------
+        base_cfg = getattr(self._cfg, "_base_cfg", {}) or {}
+        dev_opts = DeviceOptions.from_cfg(base_cfg)
+
+        self.device_widget = DeviceOptionsWidget(
+            initial=dev_opts,
+            parent=self,
+        )
+        vbox.addWidget(self.device_widget)
+        
         # --- Stage-1 / city list ---
         self._city_box = QGroupBox("Available Stage-1 cities")
         self._city_layout = QVBoxLayout(self._city_box)
@@ -230,6 +241,12 @@ class TuneOptionsDialog(QDialog):
     @property
     def queued_job(self) -> Optional[TuneJobSpec]:
         return self._queued_job
+
+    def get_device_overrides(self) -> dict:
+        """Return NAT-style device overrides from the devices widget."""
+        if not hasattr(self, "device_widget"):
+            return {}
+        return self.device_widget.to_cfg_overrides()
 
     def _on_browse_root(self) -> None:
         new_dir = QFileDialog.getExistingDirectory(
@@ -282,7 +299,7 @@ class TuneOptionsDialog(QDialog):
             txt = (
                 f"{city} — Stage-1 @ {summary.timestamp} "
                 f"(T={summary.time_steps}, "
-                f"H={summary.forecast_horizon_years})"
+                f"H={summary.horizon_years})"
             )
 
             tinfo = tune_infos.get(city)
@@ -332,7 +349,10 @@ class TuneOptionsDialog(QDialog):
         cfg: GeoPriorConfig,
         gui_runs_root: Path,
         parent=None,
-    ) -> Tuple[bool, Path, Optional[TuneJobSpec]]:
+    ) -> Tuple[bool, Path, Optional[TuneJobSpec], dict]:
         dlg = cls(cfg=cfg, gui_runs_root=gui_runs_root, parent=parent)
         ok = dlg.exec_() == QDialog.Accepted
-        return ok, dlg.new_root, dlg.queued_job
+        dev_overrides: dict = {}
+        if ok:
+            dev_overrides = dlg.get_device_overrides()
+        return ok, dlg.new_root, dlg.queued_job, dev_overrides

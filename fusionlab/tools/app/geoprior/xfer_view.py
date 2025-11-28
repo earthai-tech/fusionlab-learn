@@ -26,6 +26,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+# from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -36,19 +37,24 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-
 # ---------------------------------------------------------------------
 # Shared style / helpers
 # ---------------------------------------------------------------------
 
+# Generic palette: color for "City A" (source) and "City B" (target)
+CITY_A_COLOR = "#1F78B4"   # was Nansha blue
+CITY_B_COLOR = "#E31A1C"   # was Zhongshan red
+
+# Keep for backward compatibility if anything else imports these
 CITY_COLORS_LOWER = {
-    "nansha": "#1F78B4",    # blue
-    "zhongshan": "#E31A1C",  # red
+    "nansha": CITY_A_COLOR,
+    "zhongshan": CITY_B_COLOR,
 }
 CITY_COLORS_CANON = {
-    "Nansha": "#1F78B4",
-    "Zhongshan": "#E31A1C",
+    "Nansha": CITY_A_COLOR,
+    "Zhongshan": CITY_B_COLOR,
 }
+
 
 CAL_ORDER = ["none", "source", "target"]
 CAL_LABELS = {
@@ -151,6 +157,22 @@ def _extract_metric_arrays(
         out[direction] = vals
     return out
 
+def _infer_dir_labels(df: pd.DataFrame, split: str) -> Dict[str, str]:
+    """
+    Build human-readable labels like "CityA → CityB" for A_to_B/B_to_A
+    using source_city/target_city columns.
+    """
+    labels: Dict[str, str] = {}
+    for direction in ("A_to_B", "B_to_A"):
+        sub = df[(df["direction"] == direction) & (df["split"] == split)]
+        if not sub.empty:
+            row = sub.iloc[0]
+            src = _canonical_city(row.get("source_city"))
+            tgt = _canonical_city(row.get("target_city"))
+            labels[direction] = f"{src} → {tgt}"
+        else:
+            labels[direction] = "A→B" if direction == "A_to_B" else "B→A"
+    return labels
 
 def _render_calib_panel(
     df: pd.DataFrame,
@@ -187,18 +209,22 @@ def _render_calib_panel(
 
     mae_dict = _extract_metric_arrays(df, "overall_mae", split=split)
     r2_dict = _extract_metric_arrays(df, "overall_r2", split=split)
-
+    
     x = np.arange(len(CAL_ORDER), dtype=float)
     width = 0.35
-
+    
+    # Get labels from the CSV (works for any city pair)
+    labels_by_dir = _infer_dir_labels(df, split=split)
+    
+    # Palette: bars are coloured by target city (A→B uses City B colour, etc.)
     dir_info = {
         "A_to_B": {
-            "label": "Nansha → Zhongshan",
-            "color": CITY_COLORS_LOWER["zhongshan"],
+            "label": labels_by_dir["A_to_B"],
+            "color": CITY_B_COLOR,
         },
         "B_to_A": {
-            "label": "Zhongshan → Nansha",
-            "color": CITY_COLORS_LOWER["nansha"],
+            "label": labels_by_dir["B_to_A"],
+            "color": CITY_A_COLOR,
         },
     }
 
@@ -264,8 +290,8 @@ def _render_calib_panel(
             if not np.isfinite(covs[j]) or not np.isfinite(shps[j]):
                 continue
             marker = CAL_MARKERS.get(cal, "o")
-            tgt_city = "zhongshan" if direction == "A_to_B" else "nansha"
-            color = CITY_COLORS_LOWER[tgt_city]
+            # Target colour: B for A→B, A for B→A
+            color = CITY_B_COLOR if direction == "A_to_B" else CITY_A_COLOR
             ax.scatter(
                 shps[j],
                 covs[j],
@@ -312,8 +338,13 @@ def _render_calib_panel(
             ax.set_ylim(ymin, ymax)
             ax.set_xlim(xmin, xmax)
 
-    ax_cov_ab.set_title("(b) Coverage–sharpness: Nansha → Zhongshan")
-    ax_cov_ba.set_title("(c) Coverage–sharpness: Zhongshan → Nansha")
+    ax_cov_ab.set_title(
+        f"(b) Coverage–sharpness: {labels_by_dir['A_to_B']}"
+    )
+    ax_cov_ba.set_title(
+        f"(c) Coverage–sharpness: {labels_by_dir['B_to_A']}"
+    )
+
 
     if add_legend:
         cal_handles = [
@@ -402,14 +433,87 @@ def make_transferability_panel_from_csv(
 # VIEW 2  (Supp Fig S3 style) – from JSON
 # ---------------------------------------------------------------------
 
-def _canonical_city(name: Optional[str]) -> str:
-    n = (name or "").strip().lower()
-    if n.startswith("nan"):
-        return "Nansha"
-    if n.startswith("zhong"):
-        return "Zhongshan"
-    return name or ""
 
+def _canonical_city(name: Optional[str]) -> str:
+    """
+    Normalise a city label read from results.
+
+    - Handles None/empty safely
+    - Title-cases the string
+    """
+    if not name:
+        return ""
+    n = str(name).strip()
+    # simple normalisation; you can extend later if needed
+    return n.replace("_", " ").title()
+
+def get_direction_palette(
+    city_a: Optional[str] = None,
+    city_b: Optional[str] = None,
+) -> Dict[str, Dict[str, str]]:
+    """
+    Return a consistent colour / label mapping for A→B and B→A.
+
+    Parameters
+    ----------
+    city_a : str, optional
+        Name of City A (source city in the GUI).  Can be any string;
+        will be normalised with :func:`_canonical_city`.
+    city_b : str, optional
+        Name of City B (target city in the GUI).
+
+    Returns
+    -------
+    palette : dict
+        Mapping with two entries, ``"A_to_B"`` and ``"B_to_A"``.
+        Each entry is a dict with:
+
+        - ``direction``: "A_to_B" or "B_to_A"
+        - ``label``: "CityA → CityB" / "CityB → CityA"
+        - ``source_city`` / ``target_city``: canonical names
+        - ``facecolor``: fill colour for bars/markers
+        - ``edgecolor``: edge colour for bars/markers
+        - ``hatch``: hatch pattern for bar plots
+        
+    Examples 
+    ---------
+    >>> from fusionlab.tools.app.xfer_view import get_direction_palette
+
+    >>> palette = get_direction_palette(city_a, city_b)
+    >>> style_AtoB = palette["A_to_B"]   # label, facecolor, edgecolor, hatch...
+    >>> style_BtoA = palette["B_to_A"]
+
+    """
+
+    a = _canonical_city(city_a)
+    b = _canonical_city(city_b)
+
+    if not a:
+        a = "City A"
+    if not b:
+        b = "City B"
+
+    return {
+        "A_to_B": {
+            "direction": "A_to_B",
+            "label": f"{a} \u2192 {b}",
+            "source_city": a,
+            "target_city": b,
+            # by convention: coloured by *target* city
+            "facecolor": CITY_B_COLOR,
+            "edgecolor": CITY_A_COLOR,
+            "hatch": "///",
+        },
+        "B_to_A": {
+            "direction": "B_to_A",
+            "label": f"{b} \u2192 {a}",
+            "source_city": b,
+            "target_city": a,
+            "facecolor": CITY_A_COLOR,
+            "edgecolor": CITY_B_COLOR,
+            "hatch": r"\\",
+        },
+    }
 
 def _flatten_per_horizon(
     col: str,
@@ -489,8 +593,14 @@ def _pick_dir_rows(
         & (df["direction"] == tag)
     ]
 
-
 def _direction_style(block: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Choose bar style purely from transfer direction.
+
+    - A→B : face = City B colour, edge = City A colour, hatch=///
+    - B→A : face = City A colour, edge = City B colour, hatch=\\
+    """
+    
     if block.empty:
         return {
             "facecolor": "0.7",
@@ -499,20 +609,50 @@ def _direction_style(block: pd.DataFrame) -> Dict[str, Any]:
         }
 
     row = block.iloc[0]
-    direction = (row.get("direction") or "").strip()
-    src = _canonical_city(row.get("source_city"))
-    tgt = _canonical_city(row.get("target_city"))
+    direction = str(row.get("direction") or "").strip()
+    palette = get_direction_palette(
+        row.get("source_city"),
+        row.get("target_city"),
+    )
+    info = palette.get(direction, {})
 
-    face = CITY_COLORS_CANON.get(tgt, "0.7")
-    edge = CITY_COLORS_CANON.get(src, "#333333")
-    if direction == "A_to_B":
-        hatch = "///"
-    elif direction == "B_to_A":
-        hatch = "\\\\"
-    else:
-        hatch = None
+    return {
+        "facecolor": info.get("facecolor", "0.7"),
+        "edgecolor": info.get("edgecolor", BAR_EDGE_DEFAULT),
+        "hatch": info.get("hatch", None),
+    }
 
-    return {"facecolor": face, "edgecolor": edge, "hatch": hatch}
+# def _direction_style(block: pd.DataFrame) -> Dict[str, Any]:
+#     """
+#     Choose bar style purely from transfer direction.
+
+#     - A→B : face = City B colour, edge = City A colour, hatch=///
+#     - B→A : face = City A colour, edge = City B colour, hatch=\\
+#     """
+#     if block.empty:
+#         return {
+#             "facecolor": "0.7",
+#             "edgecolor": BAR_EDGE_DEFAULT,
+#             "hatch": None,
+#         }
+
+#     row = block.iloc[0]
+#     direction = str(row.get("direction") or "").strip()
+
+#     if direction == "A_to_B":
+#         face = CITY_B_COLOR
+#         edge = CITY_A_COLOR
+#         hatch = "///"
+#     elif direction == "B_to_A":
+#         face = CITY_A_COLOR
+#         edge = CITY_B_COLOR
+#         hatch = "\\\\"
+#     else:
+#         face = "0.7"
+#         edge = BAR_EDGE_DEFAULT
+#         hatch = None
+
+#     return {"facecolor": face, "edgecolor": edge, "hatch": hatch}
 
 
 def _bar_ax(

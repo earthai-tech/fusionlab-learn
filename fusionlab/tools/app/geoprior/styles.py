@@ -58,12 +58,23 @@ PALETTE = {
 # ------------------------------------------------------------------ #
 #  Mode indicator colours
 # ------------------------------------------------------------------ #
-MODE_DRY_COLOR   = "teal"       # DRY RUN
-MODE_TRAIN_COLOR = PRIMARY      # Train = brand primary
-MODE_TUNE_COLOR  = "#8D4004"    # Tuning = neutral grey (distinct from SECONDARY)
-MODE_INFER_COLOR = "#00aa00"    # Inference = green
-MODE_XFER_COLOR  = "#CF3476"    # Transferability = magenta# 	#8B008B
+MODE_DRY_COLOR    = "teal"       # DRY RUN
+MODE_TRAIN_COLOR  = PRIMARY      # Train = brand primary
+MODE_TUNE_COLOR   = "#8D4004"    # Tuning = neutral brown
+MODE_INFER_COLOR  = "#00aa00"    # Inference = green
+MODE_XFER_COLOR   = "#CF3476"    # Transferability = magenta
+MODE_RESULTS_COLOR = "#4B5563"   # Results = slate grey
 
+# ------------------------------------------------------------------ #
+#  Run button colours
+# ------------------------------------------------------------------ #
+# RUN_BUTTON_IDLE     = "#16A34A"  # emerald green – clear "Go" CTA
+# RUN_BUTTON_HOVER    = "#22C55E"  # slightly brighter on hover
+# RUN_BUTTON_DISABLED = "#D1D5DB"  # light grey while running (disabled)
+
+RUN_BUTTON_IDLE     = "#16A34A"  # emerald green
+RUN_BUTTON_HOVER    = "#22C55E"  # brighter on hover
+RUN_BUTTON_DISABLED = "#9CA3AF"  # greyed while running
 # ------------------------------------------------------------------ #
 #  Light theme – main GeoPrior style
 # ------------------------------------------------------------------ #
@@ -141,11 +152,12 @@ QPushButton#stop:enabled {{
 }}
 
 QToolTip {{
-    background: {SECONDARY_T70};
-    color: white;
-    border: 1px solid {SECONDARY};
-    border-radius: 4px;
-    padding: 4px 6px;
+    background-color: rgba(15, 23, 42, 0.96);  /* dark-slate */
+    color: #e5e7eb;
+    border: 1px solid {PRIMARY};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 11px;
 }}
 
 QPushButton#inference {{
@@ -202,6 +214,48 @@ QMessageBox QPushButton:pressed {{
     background-color: {PALETTE['secondary']};
     color: white;
 }}
+
+/* --- Dedicated style for RUN buttons (Train/Tune/Infer/Xfer) --- */
+QPushButton#runButton {{
+    background: {RUN_BUTTON_IDLE};
+    color: white;
+    border-radius: 8px;
+    padding: 6px 16px;
+    font-weight: 600;
+}}
+
+QPushButton#runButton:hover:enabled {{
+    background: {RUN_BUTTON_HOVER};
+}}
+
+QPushButton#runButton:disabled {{
+    background: {RUN_BUTTON_DISABLED};
+    color: #374151;  /* darker grey text while running */
+}}
+
+QPushButton#runButton {{
+    /* icon-only, round hit area */
+    background-color: transparent;
+    border: none;
+    padding: 2px;
+    margin: 0;
+    min-width: 30px;
+    min-height: 30px;
+    max-width: 32px;
+    max-height: 32px;
+}}
+
+QPushButton#runButton:hover:enabled {{
+    /* soft green halo on hover */
+    background-color: rgba(34, 197, 94, 0.16);  /* based on RUN_BUTTON_HOVER */
+    border-radius: 16px;
+}}
+
+QPushButton#runButton:disabled {{
+    background-color: transparent;
+    /* Qt will already dim the icon; this just removes hover halo */
+}}
+
 """
 
 # ------------------------------------------------------------------ #
@@ -527,4 +581,9 @@ __all__ = [
     "MODE_TUNE_COLOR",
     "MODE_INFER_COLOR",
     "MODE_XFER_COLOR",
+    "MODE_RESULTS_COLOR",
+    "RUN_BUTTON_IDLE",
+    "RUN_BUTTON_HOVER",
+    "RUN_BUTTON_DISABLED",
 ]
+

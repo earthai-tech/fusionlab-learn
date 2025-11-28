@@ -39,6 +39,7 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 
 try:
     from fusionlab._optdeps import with_progress 
+    from fusionlab.backends.devices import configure_tf_from_cfg
     from fusionlab.api.util import get_table_size
     from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
     from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
@@ -150,6 +151,7 @@ cfg_manifest = M.get("config", {}) or {}  # from manifest.json
 
 cfg = dict(cfg_global)
 cfg.update(cfg_manifest)  # manifest wins on overlapping keys
+device_info = configure_tf_from_cfg(cfg)
 
 CITY_NAME  = M.get("city",  cfg.get("CITY_NAME", "nansha"))
 MODEL_NAME = M.get("model", cfg.get("MODEL_NAME", "GeoPriorSubsNet"))
@@ -610,6 +612,7 @@ training_summary = {
         "tensorflow": tf.__version__,
         "numpy": np.__version__,
         "platform": platform.platform(),
+        "device": device_info, 
     },
     "compile": {
         "optimizer": "Adam",

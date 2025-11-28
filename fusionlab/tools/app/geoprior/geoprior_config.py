@@ -38,6 +38,7 @@ GUI_CONFIG_DIR = os.path.dirname(__file__)
 
 from ....utils.nat_utils import load_nat_config_payload
 from ..smart_stage1 import build_stage1_cfg_from_nat
+from .stage1_options import Stage1Options
 # -----------------------------------------------
 # Default tuner search space (GUI + NAT config)
 # -----------------------------------------------
@@ -186,9 +187,28 @@ class GeoPriorConfig:
     build_future_npz: bool = False
     
     # --- flags (not part of nat config) ---
-    clean_stage1_dir: bool = False
     evaluate_training: bool = True
 
+    # --- GUI layout / window sizing (GUI-only) -------------------------
+    # Design size (what you used in early screenshots)
+    ui_base_width: int = 980
+    ui_base_height: int = 660
+
+    # Smallest size we allow the main window to shrink to
+    ui_min_width: int = 800
+    ui_min_height: int = 600
+
+    # How much of the available screen we allow the window to occupy
+    # (0.9 = at most 90% of the current monitor)
+    ui_max_ratio: float = 0.90
+
+    ui_font_scale: float = 1.0  # 1.0 = default, 1.1 = +10%, etc.
+
+    # --- Stage-1 behaviour (GUI-only flags) -----------------------------
+    clean_stage1_dir: bool = False
+    stage1_auto_reuse_if_match: bool = True
+    stage1_force_rebuild_if_mismatch: bool = True
+    
     # The raw config dict coming from nat_utils.
     _base_cfg: Dict[str, Any] = field(
         default_factory=dict,
@@ -341,6 +361,22 @@ class GeoPriorConfig:
     # ------------------------------------------------------------------
     # Conversion helpers
     # ------------------------------------------------------------------
+
+    def get_stage1_options(self) -> "Stage1Options":
+        """
+        Return a :class:`Stage1Options` view over Stage-1 flags.
+        """
+        
+        return Stage1Options(
+            clean_dir=bool(self.clean_stage1_dir),
+            auto_reuse_if_match=bool(
+                getattr(self, "stage1_auto_reuse_if_match", True)
+            ),
+            force_rebuild_if_mismatch=bool(
+                getattr(self, "stage1_force_rebuild_if_mismatch", True)
+            ),
+        )
+
     def to_cfg_overrides(
         self,
     ) -> Dict[str, Any]:
@@ -494,6 +530,35 @@ class GeoPriorConfig:
         # Basic sanity for tuner space
         if not isinstance(self.tuner_search_space, dict):
             raise ValueError("tuner_search_space must be a dict.")
+            
+        # --- GUI layout sanity (optional) ------------------------------
+        for name in (
+            "ui_base_width",
+            "ui_base_height",
+            "ui_min_width",
+            "ui_min_height",
+        ):
+            val = getattr(self, name, 0)
+            if val <= 0:
+                raise ValueError(
+                    f"{name} must be > 0 (got {val})."
+                )
+
+        r = float(getattr(self, "ui_max_ratio", 0.0))
+        if not (0.0 < r <= 1.0):
+            raise ValueError(
+                f"ui_max_ratio must be in (0, 1], got {r}."
+            )
+
+        if (
+            self.ui_min_width > self.ui_base_width
+            or self.ui_min_height > self.ui_base_height
+        ):
+            raise ValueError(
+                "ui_min_* should not exceed ui_base_* "
+                f"(base=({self.ui_base_width}, {self.ui_base_height}), "
+                f"min=({self.ui_min_width}, {self.ui_min_height}))."
+            )
 
     def as_dict(self) -> Dict[str, Any]:
         """Dump the current values as a plain dict."""
@@ -526,5 +591,13 @@ class GeoPriorConfig:
             ),
             # not strictly needed, but handy for debugging
             "tuner_search_space": self.tuner_search_space,
+            
+            "ui_base_width": self.ui_base_width,
+            "ui_base_height": self.ui_base_height,
+            "ui_min_width": self.ui_min_width,
+            "ui_min_height": self.ui_min_height,
+            "ui_max_ratio": self.ui_max_ratio,
+            "ui_font_scale": self.ui_font_scale, 
+
         }
     

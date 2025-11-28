@@ -37,6 +37,7 @@ from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
 
 try:
     from fusionlab.api.util import get_table_size
+    from fusionlab.backends.devices import configure_tf_from_cfg
     from fusionlab.utils.generic_utils import (
         ensure_directory_exists,
         default_results_dir,
@@ -142,6 +143,7 @@ cfg_hp = load_nat_config()      # global config from config.json (4.*)
 # Merge global config with Stage-1 snapshot (Stage-1 wins on conflicts)
 cfg = dict(cfg_hp)
 cfg.update(cfg_stage1)
+configure_tf_from_cfg(cfg_hp)
 
 # Resolve NPZ paths from manifest
 train_inputs_npz = M["artifacts"]["numpy"]["train_inputs_npz"]

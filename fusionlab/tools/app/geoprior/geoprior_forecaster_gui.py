@@ -25,8 +25,16 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot
-from PyQt5.QtGui import QIcon, QCloseEvent
+from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot, QSize, QPoint
+from PyQt5.QtGui import (
+    QIcon,
+    QCloseEvent,
+    QPixmap,
+    QPainter,
+    QColor,
+    QPen,
+    QMovie
+)
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -48,14 +56,17 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QFileDialog,
     QDialog,
-    QToolTip,
+    QToolButton, 
+    QSplashScreen
 )
 
 from ..smart_stage1 import find_stage1_for_city
-from ..gui_popups import Stage1ChoiceDialog
-
 from ....utils.nat_utils import get_default_runs_root
-from ..qt_utils import auto_set_ui_fonts, auto_resize_window
+from ..ux_utils import (
+    auto_set_ui_fonts,
+    auto_resize_window,
+    enable_qt_crash_handler,
+)
 from ..view_signals import VIS_SIGNALS 
 from ..gui_popups import ImagePreviewDialog 
 
@@ -72,6 +83,10 @@ from .feature_dialog import FeatureConfigDialog
 from .architecture_dialog import ArchitectureConfigDialog   
 from .prob_dialog import ProbConfigDialog 
 from .xfer_dialog import XferAdvancedDialog, XferResultsDialog 
+from .xfer_view import latest_xfer_csv, latest_xfer_json
+from .inference_dialogs import InferenceOptionsDialog 
+from .stage1_dialogs import Stage1ChoiceDialog
+
 from .results_dialog import GeoPriorResultsDialog
 from .csv_dialog import CsvEditDialog
 from .styles import (
@@ -84,6 +99,8 @@ from .styles import (
     MODE_TUNE_COLOR,
     MODE_INFER_COLOR,
     MODE_XFER_COLOR,
+    MODE_RESULTS_COLOR, 
+    RUN_BUTTON_IDLE,
 )
 from .jobs import TrainJobSpec, latest_jobs_for_root
 from .train_dialogs import (
@@ -95,6 +112,7 @@ from .tune_dialogs import (
     QuickTuneDialog,
     TuneJobSpec,
 )
+from .results_tab import ResultsDownloadTab
 
 from .manager import LogManager
 from .components import RangeListEditor
@@ -108,9 +126,17 @@ class GeoPriorForecaster(QMainWindow):
     status_updated = pyqtSignal(str)
     progress_updated = pyqtSignal(float)
 
-    def __init__(self, *, theme: str = "fusionlab") -> None:
+    def __init__(
+        self,
+        *,
+        theme: str = "fusionlab",
+        splash: LoadingSplash | None = None,
+    ) -> None:
         super().__init__()
         self.theme = theme or "fusionlab"
+
+        if splash:
+            splash.set_progress(20, "Loading defaults…")
 
         self.stage1_thread: Stage1Thread | None = None
         self.train_thread: TrainingThread | None = None
@@ -121,8 +147,7 @@ class GeoPriorForecaster(QMainWindow):
         
         self._xfer_last_result: Dict[str, Any] | None = None 
         
-        # New: job selected from the options/quick dialogs
-        # New: job selected from the options/quick dialogs
+        # job selected from the options/quick dialogs
         self._queued_train_job: TrainJobSpec |None = None
         self._queued_tune_job: TuneJobSpec | None = None    
 
@@ -132,9 +157,15 @@ class GeoPriorForecaster(QMainWindow):
         # Selected CSV (optional) + config overrides passed to threads
         self.csv_path: Path | None = None
         self._cfg_overrides: Dict[str, Any] = {}
+        
+        self._device_cfg_overrides: Dict[str, Any] = {}
 
         # Central config object (defaults loaded from nat.com/config.py)
         self.geo_cfg = GeoPriorConfig.from_nat_config()
+        
+        if splash:
+            splash.set_progress(40, "Building UI…")
+    
         self._stage1_manifest_hint: Path | None = None 
         # Dialog for scalar HPs / loss weights (used from Tune tab)
         self.scalars_dialog = ScalarsLossDialog(self)
@@ -172,18 +203,26 @@ class GeoPriorForecaster(QMainWindow):
         
         # NEW: Inference tab helper
         self._infer_help_text = (
-            "Inference tab – evaluate a trained/tuned GeoPriorSubsNet on "
-            "train/val/test splits or run future forecasts based on "
+            "Inference tab – evaluate a trained/tuned GeoPriorSubsNet on\n "
+            "train/val/test splits or run future forecasts based on\n "
             "Stage-1 future NPZ artifacts."
         )
         self._infer_tip_shown: bool = False       
 
         # Transferability tab helpe
         self._xfer_help_text = (
-            "Transferability tab – run cross-city transfer matrix (A↔B) "
+            "Transferability tab – run cross-city transfer matrix (A↔B)\n "
             "and build view figures from xfer_results.* files."
         )
         self._xfer_tip_shown: bool = False
+
+        self._results_help_text = (
+            "Results tab – browse and download Stage-1 artifacts,\n"
+            "train/tune/inference runs, and transferability outputs\n"
+            "as ZIP archives."
+        )
+        self._results_tip_shown: bool = False
+
 
         # Advanced options state for XFER
         self._xfer_quantiles_override = None
@@ -191,17 +230,25 @@ class GeoPriorForecaster(QMainWindow):
         self._xfer_write_csv = True
 
         self._build_ui()
-
+        
+        if splash:
+            splash.set_progress(70, "Preparing log manager…")
+            
         # Log manager: central buffer + on-disk dumping
         self.log_mgr = LogManager(
             self.log_widget,
             mode="collapse",
             log_dir_name="_log",
         )
-
+        if splash:
+            splash.set_progress(85, "Connecting signals…")
+            
         self._connect_signals()
         self._set_window_props()
-
+        
+        if splash:
+            splash.set_progress(95, "Finalising…")
+            
         self._preview_windows: list[QDialog] = []        # ← keep refs
         VIS_SIGNALS.figure_saved.connect(self._show_image_popup)
 
@@ -214,15 +261,31 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
-    def _set_window_props(self) -> None:
-        self.setWindowTitle("Fusionlab – GeoPrior Forecaster")
-        auto_resize_window(self, base_size=(820, 520))
 
+    def _set_window_props(self) -> None:
+        self.setWindowTitle("Fusionlab – GeoPrior-3.0 Forecaster")
+    
+        # Read window sizing from GeoPriorConfig (with safe fallbacks)
+        cfg = self.geo_cfg
+    
+        base_w = getattr(cfg, "ui_base_width", 820)
+        base_h = getattr(cfg, "ui_base_height", 520)
+        min_w = getattr(cfg, "ui_min_width", 800)
+        min_h = getattr(cfg, "ui_min_height", 600)
+        max_ratio = float(getattr(cfg, "ui_max_ratio", 0.90))
+    
+        auto_resize_window(
+            self,
+            base_size=(base_w, base_h),
+            min_size=(min_w, min_h),
+            max_ratio=max_ratio,
+        )
+    
         ico_dir = Path(__file__).parent
         ico = ico_dir / "fusionlab_learn_logo.ico"
         if ico.exists():
             self.setWindowIcon(QIcon(str(ico)))
-
+    
         # Apply Fusionlab stylesheet (tabs / cards / log)
         self.setStyleSheet(FLAB_STYLE_SHEET + TAB_STYLES + LOG_STYLES)
 
@@ -244,6 +307,71 @@ class GeoPriorForecaster(QMainWindow):
         vbox.addWidget(lbl)
 
         return frame, vbox
+
+    # --------------------------------------------------------------
+    # Run button helpers
+    # --------------------------------------------------------------
+    def _make_play_icon(
+        self,
+        diameter: int = 26,
+        *,
+        hollow: bool = False,
+    ) -> QIcon:
+        """
+        Play icon used for run buttons.
+    
+        When hollow=True, the triangle is outlined instead of filled
+        to visually indicate 'dry-run / preview'.
+        """
+        pix = QPixmap(diameter, diameter)
+        pix.fill(Qt.transparent)
+    
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+    
+        color = QColor(RUN_BUTTON_IDLE)  # base green
+    
+        # Circle outline
+        painter.setPen(QPen(color, 2))
+        painter.setBrush(Qt.NoBrush)
+        radius = diameter // 2 - 2
+        center = QPoint(diameter // 2, diameter // 2)
+        painter.drawEllipse(center, radius, radius)
+    
+        # Triangle (play) inside the circle
+        tri_w = diameter // 3
+        tri_h = diameter // 2
+        x0 = diameter // 2 - tri_w // 3
+        y0 = diameter // 2 - tri_h // 2
+    
+        p1 = QPoint(x0, y0)
+        p2 = QPoint(x0, y0 + tri_h)
+        p3 = QPoint(x0 + tri_w, diameter // 2)
+    
+        if hollow:
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(Qt.NoBrush)
+        else:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(color)
+    
+        painter.drawPolygon(p1, p2, p3)
+        painter.end()
+    
+        return QIcon(pix)
+
+    def _make_run_button(self, tooltip: str) -> QToolButton:
+        btn = QToolButton()
+        btn.setObjectName("runButton")
+        btn.setToolTip(tooltip)
+        btn.setIcon(self._make_play_icon())
+        btn.setIconSize(QSize(26, 26))
+        btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        btn.setAutoRaise(True)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setFixedSize(40, 40)        # match the CSS min/max
+        return btn
+
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -269,8 +397,8 @@ class GeoPriorForecaster(QMainWindow):
         # Dry-run checkbox (logic will be added later)
         self.chk_dry_run = QCheckBox("Dry run")
         self.chk_dry_run.setToolTip(
-            "Prepare configuration and log actions without actually "
-            "running Stage-1 / Stage-2. (Placeholder – not wired yet.)"
+            "Prepare configuration and log actions\n"
+            " without actually running Stage-1 / Stage-2."
         )
         top.addWidget(self.chk_dry_run)
         
@@ -416,6 +544,21 @@ class GeoPriorForecaster(QMainWindow):
         grid_t.addWidget(self.sp_forecast_horizon, 2, 1)
         grid_t.addWidget(QLabel("Time steps (look-back):"), 3, 0)
         grid_t.addWidget(self.sp_time_steps, 3, 1)
+        
+        # Make the temporal rows expand to fill the card height
+        for r in range(4):
+            grid_t.setRowStretch(r, 1)
+
+        # (optional) make the spin boxes a bit taller so the values
+        # are easier to read
+        for sb in (
+            self.sp_train_end,
+            self.sp_forecast_start,
+            self.sp_forecast_horizon,
+            self.sp_time_steps,
+        ):
+            sb.setMinimumHeight(26)
+            
         temp_box.addLayout(grid_t)
 
         # 2) Training card
@@ -529,6 +672,10 @@ class GeoPriorForecaster(QMainWindow):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(16)
 
+        # Options… button takes the place of the visible clean checkbox
+        self.btn_train_options = QPushButton("Advanced options…")
+        bottom_row.addWidget(self.btn_train_options)
+       
         self.chk_eval_training = QCheckBox(
             "Evaluate training metrics",
         )
@@ -551,14 +698,10 @@ class GeoPriorForecaster(QMainWindow):
         self.chk_clean_stage1.setChecked(cfg.clean_stage1_dir)
         self.chk_clean_stage1.setVisible(False)
 
-        # Options… button takes the place of the visible clean checkbox
-        self.btn_train_options = QPushButton("Advanced options…")
-        bottom_row.addWidget(self.btn_train_options)
-
         # push Run button to the far right
         bottom_row.addStretch(1)
 
-        self.train_btn = QPushButton("Run training")
+        self.train_btn = self._make_run_button("Run training")
         bottom_row.addWidget(self.train_btn)
 
         
@@ -591,6 +734,7 @@ class GeoPriorForecaster(QMainWindow):
             min_allowed=0.0,
             max_allowed=1.0,
             decimals=3,
+            show_sampling=False,
         )
         self.hp_dropout.set_defaults(0.05, 0.20, sampling=None)
 
@@ -635,6 +779,7 @@ class GeoPriorForecaster(QMainWindow):
             min_allowed=0.0,
             max_allowed=2.0,
             decimals=3,
+            show_sampling=False,
         )
         self.hp_hd.set_defaults(0.50, 0.70, sampling=None)
 
@@ -657,17 +802,25 @@ class GeoPriorForecaster(QMainWindow):
         u_layout.addLayout(tune_row)
 
         # --- Bottom row: options + Scalars popup + Run button ---
-        # Row 1: Evaluate checkbox + Scalars button (left side)
+        # Row 1: Evaluate checkbox + Max trials + Scalars button
         opts_row = QHBoxLayout()
         opts_row.setSpacing(16)
-
+        
         self.chk_eval_tuned = QCheckBox("Evaluate tuned model")
         self.chk_eval_tuned.setChecked(False)
         opts_row.addWidget(self.chk_eval_tuned)
-
+        
+        # NEW: Max trials (defaults to 20)
+        opts_row.addSpacing(8)
+        opts_row.addWidget(QLabel("Max trials:"))
+        self.spin_max_trials = QSpinBox()
+        self.spin_max_trials.setRange(1, 999)
+        self.spin_max_trials.setValue(20)  # default
+        opts_row.addWidget(self.spin_max_trials)
+        
         self.btn_scalars = QPushButton("Scalars & losses…")
         opts_row.addWidget(self.btn_scalars)
-
+        
         opts_row.addStretch(1)   # push them to the left
         u_layout.addLayout(opts_row)
 
@@ -675,24 +828,14 @@ class GeoPriorForecaster(QMainWindow):
         # Row 2: Advanced options + Run tuning
         ops_run_row = QHBoxLayout()
         self.btn_tune_options = QPushButton("Advanced options…")
-        self.btn_run_tune = QPushButton("Run tuning")
+        self.btn_run_tune = self._make_run_button("Run tuning")
 
         ops_run_row.addWidget(self.btn_tune_options)
         ops_run_row.addStretch(1)
         ops_run_row.addWidget(self.btn_run_tune)
         u_layout.addLayout(ops_run_row)
         
-        # layout.addWidget(bottom_box)
-        
-        # # Row 2: Run button alone in the bottom-right corner
-        # run_row = QHBoxLayout()
-        # run_row.addStretch(1)    # all free space on the left
-        # self.btn_run_tune = QPushButton("Run tuning")
-        # run_row.addWidget(self.btn_run_tune)
-        # u_layout.addLayout(run_row)
-
-        # u_layout.addStretch(1)
-
+ 
         # ==================================================
         # Inference tab – evaluation & forecasting
         # ==================================================
@@ -836,10 +979,16 @@ class GeoPriorForecaster(QMainWindow):
 
         i_layout.addLayout(inf_row)
 
-        # Bottom row: run button
+        # --- Bottom row: Advanced options + Run inference -------------
+
+        # Bottom row: advanced options + run button
         inf_run_row = QHBoxLayout()
+        self.btn_inf_options = QPushButton("Advanced options…")
+        inf_run_row.addWidget(self.btn_inf_options)
+
         inf_run_row.addStretch(1)
-        self.btn_run_infer = QPushButton("Run inference")
+
+        self.btn_run_infer = self._make_run_button("Run inference")
         inf_run_row.addWidget(self.btn_run_infer)
         i_layout.addLayout(inf_run_row)
 
@@ -922,7 +1071,7 @@ class GeoPriorForecaster(QMainWindow):
         
         # ----- Results & view card -----
         res_card, res_box = self._make_card("Results & view")
-        
+
         self.xfer_results_root = QLineEdit(str(self.gui_runs_root))
         self.xfer_results_root_btn = QPushButton("Browse…")
         
@@ -973,7 +1122,7 @@ class GeoPriorForecaster(QMainWindow):
         self.btn_xfer_advanced = QPushButton("Advanced options…")
         bottom.addWidget(self.btn_xfer_advanced)
         bottom.addStretch(1)
-        self.btn_run_xfer = QPushButton("Run transfer matrix")
+        self.btn_run_xfer = self._make_run_button("Run transfer matrix")
         bottom.addWidget(self.btn_run_xfer)
         x_layout.addLayout(bottom)
         
@@ -981,38 +1130,31 @@ class GeoPriorForecaster(QMainWindow):
         # ----------------------
  
         self.train_tab = train_tab
-        self.tune_tab = tune_tab  
-        self.infer_tab = infer_tab 
+        self.tune_tab = tune_tab
+        self.infer_tab = infer_tab
         self.xfer_tab = xfer_tab
+
+        # NEW: Results tab – browse & download artifacts/runs
+        results_tab = ResultsDownloadTab(
+            results_root=self.gui_runs_root,
+            get_results_root=lambda: self.gui_runs_root,
+            parent=self,
+        )
+        self.results_tab = results_tab
 
         self.tabs.addTab(train_tab, "Train")
         self.tabs.addTab(tune_tab, "Tune")
         self.tabs.addTab(infer_tab, "Inference")
         self.tabs.addTab(xfer_tab, "Transferability")
+        self.tabs.addTab(results_tab, "Results")
 
-        # Train tab tooltip (same text as panel tooltip)
+        # Tab indices (used by mode indicator)
         self._train_tab_index = self.tabs.indexOf(self.train_tab)
-        self.tabs.setTabToolTip(
-            self._train_tab_index, self._train_help_text
-        )
-
-        # Tune tab tooltip
         self._tune_tab_index = self.tabs.indexOf(self.tune_tab)
-        self.tabs.setTabToolTip(
-            self._tune_tab_index, self._tune_help_text
-        )
-
-        # Inference tab tooltip
         self._infer_tab_index = self.tabs.indexOf(self.infer_tab)
-        self.tabs.setTabToolTip(
-            self._infer_tab_index, self._infer_help_text
-        )
-
-        # Transferability tab tooltip
         self._xfer_tab_index = self.tabs.indexOf(self.xfer_tab)
-        self.tabs.setTabToolTip(
-            self._xfer_tab_index, self._xfer_help_text
-        )
+        self._results_tab_index = self.tabs.indexOf(self.results_tab)
+
 
         # Initialise Mode button with current tab name
         self._update_mode_button(self.tabs.currentIndex())
@@ -1024,72 +1166,145 @@ class GeoPriorForecaster(QMainWindow):
         # After building Inference widgets, set initial enable/disable state
         self._update_infer_widgets_state()  
         
-        # Let _update_xfer_view_state decide visibility
+        # Try to auto-discover the latest transfer run under current results root
+        try:
+            self._discover_last_xfer_for_root()
+        except Exception as exc:
+            # Robust fallback: do not crash GUI if something is odd on disk
+            self.log_updated.emit(
+                f"[WARN] Could not auto-discover transfer results: {exc}"
+            )
+            self._xfer_last_result = {}
+            self._update_xfer_view_state()
+
+    def _discover_last_xfer_for_root(self) -> None:
+        """
+        Best-effort discovery of the latest transferability run
+        under the current xfer results root.
+
+        Keeps `_xfer_last_result` consistent with whatever is
+        already on disk.
+        """
+
+        root_text = self.xfer_results_root.text().strip()
+        if not root_text:
+            # Nothing to search
+            self._xfer_last_result = {}
+            self.lbl_xfer_last_out.setText("No transfer run yet.")
+            self._update_xfer_view_state()
+            return
+
+        results_root = Path(root_text)
+
+        # latest_xfer_* return *strings*, so pass a string
+        csv_path = latest_xfer_csv(str(results_root))
+        json_path = latest_xfer_json(str(results_root))
+
+        if not csv_path and not json_path:
+            # No xfer/*/*/xfer_results.* found for this root
+            self._xfer_last_result = {}
+            self.lbl_xfer_last_out.setText("No transfer run yet.")
+            self._update_xfer_view_state()
+            return
+
+        # Use whichever artifact we found to infer the run folder
+        best_path = csv_path or json_path
+        run_dir = Path(best_path).parent   # <-- wrap in Path
+
+        self._xfer_last_result = {
+            "out_dir": str(run_dir),
+            "csv_path": str(csv_path) if csv_path else None,
+            "json_path": str(json_path) if json_path else None,
+        }
+
+        self.lbl_xfer_last_out.setText(str(run_dir))
         self._update_xfer_view_state()
-        
+
+        # optional debug log
+        self.log_updated.emit(
+            "Detected latest transferability run under results root:\n"
+            f"  {run_dir}"
+        )
+
+    def _is_dry_mode(self) -> bool:
+        chk = getattr(self, "chk_dry_run", None)
+        return bool(chk is not None and chk.isChecked())
+
+
     # ------------------------------------------------
     #   Update buttons 
     # ------------------------------------------------
- 
-    
     def _update_mode_button(self, index: int) -> None:
         """
         Update the top 'Mode' indicator according to the current tab
-        and the Dry-run state.
+        and the Dry-run state. The mode tooltip carries the detailed
+        help text for the active mode.
         """
         if not hasattr(self, "mode_btn"):
             return
         if not hasattr(self, "tabs") or self.tabs is None:
             return
-    
+
         # Dry-run has priority over tab mode
         is_dry = (
             hasattr(self, "chk_dry_run")
             and self.chk_dry_run.isChecked()
         )
-    
+
         if is_dry:
             mode_label = "DRY RUN"
             color = MODE_DRY_COLOR
             tooltip = (
-                "You are in DRY-RUN mode: no real execution."
+                "Dry-run mode – prepare configuration and log actions\n"
+                "without actually running Stage-1 / Stage-2 / Stage-3."
             )
         else:
             # Default: choose by current tab
             if index == getattr(self, "_train_tab_index", -1):
                 mode_label = "TRAIN"
                 color = MODE_TRAIN_COLOR
-                tooltip = (
-                    "Train mode: Stage-1 + Stage-2 GeoPrior training."
+                tooltip = getattr(
+                    self, "_train_help_text",
+                    "Train tab – Stage-1 + Stage-2 GeoPrior training.",
                 )
             elif index == getattr(self, "_tune_tab_index", -1):
                 mode_label = "TUNING"
                 color = MODE_TUNE_COLOR
-                tooltip = (
-                    "Tuning mode: Stage-2 hyperparameter search."
+                tooltip = getattr(
+                    self, "_tune_help_text",
+                    "Tune tab – Stage-2 hyperparameter search.",
                 )
             elif index == getattr(self, "_infer_tab_index", -1):
                 mode_label = "INFER"
                 color = MODE_INFER_COLOR
-                tooltip = (
-                    "Inference mode: evaluation and future forecasts."
+                tooltip = getattr(
+                    self, "_infer_help_text",
+                    "Inference tab – evaluation and future forecasts.",
                 )
             elif index == getattr(self, "_xfer_tab_index", -1):
                 mode_label = "TRANSFER"
                 color = MODE_XFER_COLOR
-                tooltip = (
-                    "Transferability mode: cross-city transfer matrix."
+                tooltip = getattr(
+                    self, "_xfer_help_text",
+                    "Transferability tab – cross-city transfer matrix.",
+                )
+            elif index == getattr(self, "_results_tab_index", -1):
+                mode_label = "RESULTS"
+                color = MODE_RESULTS_COLOR
+                tooltip = getattr(
+                    self, "_results_help_text",
+                    "Results tab – browse and download artifacts.",
                 )
             else:
                 # Fallback: just use tab text
                 mode_label = self.tabs.tabText(index) or "–"
                 color = MODE_TRAIN_COLOR
                 tooltip = f"Mode: {mode_label}"
-    
+
         # Text + tooltip
         self.mode_btn.setText(f"Mode: {mode_label}")
         self.mode_btn.setToolTip(tooltip)
-    
+
         # Per-mode background; keep it non-clickable but styled
         self.mode_btn.setStyleSheet(
             f"""
@@ -1153,38 +1368,91 @@ class GeoPriorForecaster(QMainWindow):
         )
 
     def _update_global_running_state(self) -> None:
-        """
-        Update Stop button visibility and run button labels
-        based on _active_job_kind and current threads.
-        """
-        running = self._any_job_running()
-
-        if hasattr(self, "btn_stop"):
-            self.btn_stop.setVisible(running)
-            # disable Stop once user clicked it; re-enabled on next run
-            self.btn_stop.setEnabled(running)
-
-        # Default labels
+        any_running = self._any_job_running()
+    
+        self.btn_stop.setEnabled(any_running)
+    
+        is_dry = self._is_dry_mode()
+    
+        # --- Train button ---------------------------------------------------
         if hasattr(self, "train_btn"):
-            self.train_btn.setText(
-                "Running training…" if self._active_job_kind == "train"
-                else "Run training"
-            )
+            if self._active_job_kind == "train":
+                tip = (
+                    "Running training…"
+                    if not is_dry
+                    else "Dry-run – computing planned training steps…"
+                )
+            else:
+                tip = (
+                    "Run training"
+                    if not is_dry
+                    else "Run dry (show planned training workflow)"
+                )
+            self.train_btn.setToolTip(tip)
+    
+        # --- Tune button ----------------------------------------------------
         if hasattr(self, "btn_run_tune"):
-            self.btn_run_tune.setText(
-                "Running tuning…" if self._active_job_kind == "tune"
-                else "Run tuning"
-            )
+            if self._active_job_kind == "tune":
+                tip = (
+                    "Running tuning…"
+                    if not is_dry
+                    else "Dry-run – computing planned tuning workflow…"
+                )
+            else:
+                tip = (
+                    "Run tuning"
+                    if not is_dry
+                    else "Run dry (show planned tuning workflow)"
+                )
+            self.btn_run_tune.setToolTip(tip)
+    
+        # --- Inference button -----------------------------------------------
         if hasattr(self, "btn_run_infer"):
-            self.btn_run_infer.setText(
-                "Running inference…" if self._active_job_kind == "infer"
-                else "Run inference"
-            )
+            if self._active_job_kind == "infer":
+                tip = (
+                    "Running inference…"
+                    if not is_dry
+                    else "Dry-run – computing planned inference workflow…"
+                )
+            else:
+                tip = (
+                    "Run inference"
+                    if not is_dry
+                    else "Run dry (show planned inference workflow)"
+                )
+            self.btn_run_infer.setToolTip(tip)
+    
+        # --- Xfer (transferability) button ----------------------------------
         if hasattr(self, "btn_run_xfer"):
-            self.btn_run_xfer.setText(
-                "Running transfer…" if self._active_job_kind == "xfer"
-                else "Run transfer matrix"
-            )
+            if self._active_job_kind == "xfer":
+                tip = (
+                    "Running transfer matrix…"
+                    if not is_dry
+                    else "Dry-run – computing planned transfer workflow…"
+                )
+            else:
+                tip = (
+                    "Run transfer matrix"
+                    if not is_dry
+                    else "Run dry (show planned transfer matrix workflow)"
+                )
+            self.btn_run_xfer.setToolTip(tip)
+        
+        # --- Update run-button icons for dry vs normal mode ---
+        try:
+            icon_normal = self._make_play_icon(hollow=False)
+            icon_dry = self._make_play_icon(hollow=True)
+        except Exception:
+            # Very defensive: never fail just for an icon
+            return
+        
+        dry_icon = icon_dry if is_dry else icon_normal
+        
+        # Apply to all run buttons we have
+        self.train_btn.setIcon(dry_icon)
+        self.btn_run_tune.setIcon(dry_icon)
+        self.btn_run_infer.setIcon(dry_icon)
+        self.btn_run_xfer.setIcon(dry_icon)
 
     # --------------------------------------------------------------
     # Tuner search space <-> UI
@@ -1425,12 +1693,60 @@ class GeoPriorForecaster(QMainWindow):
             self._stage1_manifest_hint = None
             return True
 
-        # 3) Let user choose: rebuild vs reuse which Stage-1
-        decision, selected = Stage1ChoiceDialog.ask(
+        # ... after runs_for_city / all_runs have been computed ...
+        if not all_runs:
+            # unchanged: no Stage-1 at all => build
+            self.log_updated.emit(
+                "[Stage-1] No existing Stage-1 runs in this root – "
+                "building Stage-1 from scratch."
+            )
+            return True
+
+        # Smart options from config
+        auto_reuse = bool(
+            getattr(self.geo_cfg, "stage1_auto_reuse_if_match", True)
+        )
+        force_rebuild_mismatch = bool(
+            getattr(self.geo_cfg, "stage1_force_rebuild_if_mismatch", True)
+        )
+
+        # 3a) Auto-reuse path: latest complete + config_match
+        if auto_reuse:
+            best = next(
+                (
+                    r
+                    for r in runs_for_city
+                    if r.is_complete and r.config_match
+                ),
+                None,
+            )
+            if best is not None:
+                self.log_updated.emit(
+                    "[Stage-1] Auto-reusing complete Stage-1 run "
+                    f"for city '{city}' @ {best.timestamp} "
+                    "(config matches current GUI settings)."
+                )
+                self._stage1_manifest_hint = best.manifest_path
+                return False  # skip Stage-1 build
+
+        # 3b) Force rebuild when nothing matches the current config
+        any_match = any(r.config_match for r in runs_for_city)
+        if force_rebuild_mismatch and not any_match:
+            self.log_updated.emit(
+                "[Stage-1] Existing Stage-1 runs found but none "
+                "match the current GUI config – forcing Stage-1 "
+                "rebuild for city '{city}'."
+            )
+            self._stage1_manifest_hint = None
+            return True
+        
+        # 3c) Fallback: original behaviour with Stage1ChoiceDialog 
+        decision, selected  = Stage1ChoiceDialog.ask(
             parent=self,
             city=city,
             runs_for_city=runs_for_city,
             all_runs=all_runs,
+            clean_stage1=self.geo_cfg.clean_stage1_dir,
         )
         
         if decision == "cancel":
@@ -1479,6 +1795,26 @@ class GeoPriorForecaster(QMainWindow):
         # Fallback: rebuild
         self._stage1_manifest_hint = None
         return True
+    
+    @pyqtSlot(bool)
+    def _on_dry_run_toggled(self, checked: bool) -> None:
+        # Update the "Mode: Normal / Dry run" badge
+        self._update_mode_button(self.tabs.currentIndex())
+    
+        # Update tooltips / labels on run buttons
+        self._update_global_running_state()
+    
+        # Optional: tiny UX message
+        if checked:
+            self._append_status(
+                "Dry-run mode enabled – Run buttons will only "
+                "log the planned workflow (no training/tuning/inference)."
+            )
+        else:
+            self._append_status(
+                "Dry-run mode disabled – Run buttons now execute "
+                "training/tuning/inference normally."
+            )
 
     # ------------------------------------------------------------------
     # Signal wiring
@@ -1494,11 +1830,8 @@ class GeoPriorForecaster(QMainWindow):
 
         self.btn_stop.clicked.connect(self._on_stop_clicked)
         
-        self.chk_dry_run.toggled.connect(
-            lambda _checked: self._update_mode_button(
-                self.tabs.currentIndex()
-            )
-        )
+
+        self.chk_dry_run.toggled.connect(self._on_dry_run_toggled)
         self.log_updated.connect(self._append_log)
         self.status_updated.connect(
             self.status_label.setText,
@@ -1534,13 +1867,17 @@ class GeoPriorForecaster(QMainWindow):
         )
 
         # --- Inference tab ---
+        # --- Inference tab ---
+        self.btn_inf_options.clicked.connect(
+            self._on_infer_options_clicked
+        )
         self.btn_run_infer.clicked.connect(self._on_infer_clicked)
         self.inf_model_btn.clicked.connect(self._on_browse_model)
         self.inf_manifest_btn.clicked.connect(self._on_browse_manifest)
         self.inf_inputs_btn.clicked.connect(self._on_browse_inputs_npz)
         self.inf_targets_btn.clicked.connect(self._on_browse_targets_npz)
         self.inf_calib_btn.clicked.connect(self._on_browse_calibrator)
-        
+ 
         self.cmb_inf_dataset.currentIndexChanged.connect(
             self._update_infer_widgets_state
         )
@@ -1571,6 +1908,14 @@ class GeoPriorForecaster(QMainWindow):
             ts = time.strftime("%H:%M:%S")
             self.log_widget.appendPlainText(f"[{ts}] {msg}")
 
+    def log(self, msg: str) -> None:
+        """
+        Convenience helper: send a message to the GUI log.
+
+        This simply emits the ``log_updated`` signal, which is
+        connected to ``_append_log``.
+        """
+        self.log_updated.emit(msg)
 
     def _append_status(self, msg: str, error: bool = False) -> None:
         """
@@ -1705,17 +2050,30 @@ class GeoPriorForecaster(QMainWindow):
             return
 
         # Open the advanced tune options dialog
-        ok, new_root, job = TuneOptionsDialog.run(
+        ok, new_root, job, dev_overrides = TuneOptionsDialog.run(
             cfg=self.geo_cfg,
             gui_runs_root=self.gui_runs_root,
             parent=self,
         )
+        self._device_cfg_overrides = dev_overrides or {} 
+        
         if not ok:
             return
 
         # Update GUI-level runs root used by all GUI runs
         self.gui_runs_root = new_root
         self.results_root = new_root  # keep in sync
+
+        # keep Transferability tab in sync with the new root
+        if hasattr(self, "xfer_results_root"):
+            self.xfer_results_root.setText(str(self.gui_runs_root))
+            try:
+                self._discover_last_xfer_for_root()
+            except Exception as exc:  # defensive
+                self.log_updated.emit(
+                    f"[WARN] Could not refresh transfer results "
+                    f"for new root: {exc}"
+                )
 
         # Keep GeoPriorConfig in sync if it exposes such a field
         if hasattr(self.geo_cfg, "results_root"):
@@ -1735,6 +2093,97 @@ class GeoPriorForecaster(QMainWindow):
             self._queued_tune_job = job
             # Now delegate to the main tuning entry point
             self._on_tune_clicked()
+
+    @pyqtSlot()
+    def _on_infer_options_clicked(self) -> None:
+        """
+        Open the advanced inference dialog and, if a workflow/model is
+        selected, pre-fill the Inference tab with the chosen model and
+        Stage-1 manifest.
+
+        Expected API of InferenceOptionsDialog.run:
+            accepted, selection = InferenceOptionsDialog.run(
+                parent=self,
+                results_root=self.gui_runs_root,
+                geo_cfg=self.geo_cfg,
+            )
+
+        where `selection` exposes at least:
+            - selection.city
+            - selection.kind          # "train" or "tune"
+            - selection.run_dir
+            - selection.model_path
+            - selection.manifest_path (may be None)
+        """
+        # Avoid changing configuration while inference is running
+        if self.inference_thread and self.inference_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Inference running",
+                "Please wait for the current inference to finish "
+                "before changing advanced options.",
+            )
+            return
+
+        try:
+             accepted, new_root, choice = InferenceOptionsDialog.run(
+                 parent=self,
+                 geo_cfg=self.geo_cfg,
+                 results_root=self.gui_runs_root,
+             )
+        except Exception as exc:  # defensive: don't crash the GUI
+            self._append_status(
+                f"[Inference options] Failed to open dialog: {exc}",
+                error=True,
+             )
+            return
+         
+        if not accepted or choice is None:
+            # User cancelled or closed the dialog
+            return
+        # Keep all workflows (train / tune / infer / xfer) in sync
+        self.gui_runs_root = new_root
+        self.results_root = new_root
+        
+        # propagate the new root to the Transferability tab
+        if hasattr(self, "xfer_results_root"):
+            self.xfer_results_root.setText(str(self.gui_runs_root))
+            try:
+                self._discover_last_xfer_for_root()
+            except Exception as exc:  # defensive
+                self.log_updated.emit(
+                    f"[WARN] Could not refresh transfer results "
+                    f"for new root: {exc}"
+                )
+        
+        self._append_status(
+            f"[Inference options] Results root set to: {new_root}"
+        )
+        
+        # Pre-fill model + manifest in the Inference tab
+        self.inf_model_edit.setText(str(choice.model_path))
+        self.inf_manifest_edit.setText(str(choice.stage1_manifest_path))
+
+        # Optional: bring the Inference tab to the front
+        try:
+            index = self.tabs.indexOf(self.infer_tab)
+            if index >= 0:
+                self.tabs.setCurrentIndex(index)
+        except Exception:
+            # If infer_tab isn't stored as an attribute, just ignore
+            pass
+        
+        # Optional: log what we picked
+        # kind = getattr(choice, "kind", "?")
+        self.log_updated.emit(
+            f"Selected inference model: city={choice.city}, "
+            f"run_type={choice.run_type}, run={choice.run_name}, "
+            f"model={choice.model_path.name}"
+        )
+
+        # Make sure user sees they are in the Inference tab
+        if hasattr(self, "_infer_tab_index"):
+            self.tabs.setCurrentIndex(self._infer_tab_index)
 
     @pyqtSlot()
     def _on_feature_config(self) -> None:
@@ -1825,71 +2274,52 @@ class GeoPriorForecaster(QMainWindow):
             "Probabilistic configuration updated "
             f"(keys: {changed}).",
         )
-       
+      
     @pyqtSlot(int)
     def _on_tab_changed(self, index: int) -> None:
         """
-        One-shot helper text for Train / Tune / Inference / Transferability
-        and update of the Mode indicator.
+        Update the Mode indicator and toggle the log visibility
+        when the active tab changes.
         """
         # Update the top 'Mode: ...' indicator
         self._update_mode_button(index)
 
-        bar = self.tabs.tabBar()
+        # Show log for Train/Tune/Inference/Transfer, hide for Results
+        if hasattr(self, "log_widget"):
+            if index == getattr(self, "_results_tab_index", -1):
+                self.log_widget.setVisible(False)
+            else:
+                self.log_widget.setVisible(True)
 
-        # Train tab tooltip (one-shot popup when first visiting)
-        if (
-            not getattr(self, "_train_tip_shown", False)
-            and hasattr(self, "train_tab")
-            and index == getattr(self, "_train_tab_index", -1)
-        ):
-            rect = bar.tabRect(index)
-            pos = bar.mapToGlobal(rect.center())
-            QToolTip.showText(pos, self._train_help_text, bar)
-            self._train_tip_shown = True
-
-        # Tune tab tooltip
-        if (
-            not self._tune_tip_shown
-            and hasattr(self, "tune_tab")
-            and index == getattr(self, "_tune_tab_index", -1)
-        ):
-            rect = bar.tabRect(index)
-            pos = bar.mapToGlobal(rect.center())
-            QToolTip.showText(pos, self._tune_help_text, bar)
-            self._tune_tip_shown = True
-
-        # Inference tab tooltip
-        if (
-            not getattr(self, "_infer_tip_shown", False)
-            and hasattr(self, "infer_tab")
-            and index == getattr(self, "_infer_tab_index", -1)
-        ):
-            rect = bar.tabRect(index)
-            pos = bar.mapToGlobal(rect.center())
-            QToolTip.showText(pos, self._infer_help_text, bar)
-            self._infer_tip_shown = True
-            
-        # Transferability tab tooltip
-        if (
-            not getattr(self, "_xfer_tip_shown", False)
-            and hasattr(self, "xfer_tab")
-            and index == getattr(self, "_xfer_tab_index", -1)
-        ):
-            rect = bar.tabRect(index)
-            pos = bar.mapToGlobal(rect.center())
-            QToolTip.showText(pos, self._xfer_help_text, bar)
-            self._xfer_tip_shown = True
 
     @pyqtSlot()
     def _on_browse_xfer_root(self) -> None:
-        path = QFileDialog.getExistingDirectory(
+        root = QFileDialog.getExistingDirectory(
             self,
             "Select results root (Stage-1/2/xfer)",
-            str(self.gui_runs_root),
+            self.xfer_results_root.text() or str(self.gui_runs_root),
         )
-        if path:
-            self.xfer_results_root.setText(path)
+        if not root:
+            return
+
+        # Normalise to Path and keep the global GUI runs root in sync
+        root_path = Path(root)
+        self.gui_runs_root = root_path
+        self.results_root = root_path
+
+        if hasattr(self.geo_cfg, "results_root"):
+            self.geo_cfg.results_root = root_path
+
+        # Update the Transferability line edit
+        self.xfer_results_root.setText(str(root_path))
+
+        self.log_updated.emit(
+            f"Transferability results root changed to: {root_path}"
+        )
+
+        # Re-scan that root for the latest xfer_results.* under xfer/*/*
+        self._discover_last_xfer_for_root()
+
 
     @pyqtSlot()
     def _on_scalars_config(self) -> None:
@@ -1936,18 +2366,33 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
     
-        accepted, new_root, queued_job = TrainOptionsDialog.run(
+        accepted, new_root, queued_job, dev_overrides = TrainOptionsDialog.run(
             self,
             geo_cfg=self.geo_cfg,
             results_root=self.gui_runs_root,
         )
-    
+        # Store device overrides globally (
+        # used later when building cfg_overrides)
+        self._device_cfg_overrides = dev_overrides or {}
+
         if not accepted:
             return
     
         # Update the root used by the GUI for all future runs
         self.gui_runs_root = new_root
         self.results_root = new_root  # keep them in sync for now
+        
+        # keep the Transferability tab in sync
+        if hasattr(self, "xfer_results_root"):
+            self.xfer_results_root.setText(str(self.gui_runs_root))
+            try:
+                self._discover_last_xfer_for_root()
+            except Exception as exc:  # defensive, no GUI crash
+                self.log_updated.emit(
+                    f"[WARN] Could not refresh transfer results "
+                    f"for new root: {exc}"
+                )
+        
         self._append_status(f"[Options] Results root set to: {new_root}")
     
         # If the user clicked \"Run\" on a city card, we receive a TrainJobSpec
@@ -2068,7 +2513,108 @@ class GeoPriorForecaster(QMainWindow):
         stem = stem.replace(" ", "_")
         return stem
 
+    def _run_train_dry_preview(self) -> None:
+        # Validate basic inputs like the real run
+        csv_path_str = str(self.csv_path) if self.csv_path is not None else ""
+        if not csv_path_str:
+            QMessageBox.warning(
+                self,
+                "No training CSV",
+                "Dry-run: please choose a training CSV file first.",
+            )
+            return
+    
+        city = self.city_edit.text().strip()
+        if not city and self.csv_path is not None:
+            city = self.csv_path.stem
+    
+        if not city:
+            QMessageBox.warning(
+                self,
+                "Missing city name",
+                "Dry-run: please provide a city/dataset name.",
+            )
+            return
+    
+        # Sync GUI → config so logs match a real run
+        self._sync_config_from_ui()
+        cfg = self.geo_cfg
+        cfg.TRAIN_CSV_PATH = csv_path_str
+        if not getattr(cfg, "CITY_NAME", ""):
+            cfg.CITY_NAME = self._infer_city_name_from_csv(csv_path_str)
+    
+        default_name = cfg.CITY_NAME or "geoprior_run"
+        cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
+    
+        # You can still call ensure_valid to reveal config errors
+        try:
+            cfg.ensure_valid()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Invalid configuration (dry-run)",
+                f"The training configuration is not valid:\n\n{exc}",
+            )
+            return
+    
+        # Optionally: decide whether Stage-1 would be rebuilt or reused
+        # without actually starting threads. For now we just mention the
+        # Stage-1 policy flags.
+        self._append_status(
+            "[Dry-run / Train] Planned workflow:\n"
+            f"  City           : {cfg.CITY_NAME}\n"
+            f"  CSV            : {csv_path_str}\n"
+            f"  Results root   : {self.gui_runs_root}\n"
+            f"  Time steps     : {cfg.time_steps}\n"
+            f"  Horizon (years): {cfg.forecast_horizon_years}\n"
+            f"  Epochs / batch : {cfg.epochs} / {cfg.batch_size}\n"
+            f"  PDE mode       : {cfg.pde_mode}\n"
+            f"  Clean Stage-1  : {cfg.clean_stage1_dir}\n"
+            f"  Build future   : {cfg.build_future_npz}\n"
+            f"  experiment    : {cfg.EXPERIMENT_NAME}"
+        )
+        # --- NEW PART: ask Smart Stage-1 what it would do ---
+        need_stage1 = self._smart_stage1_handshake(
+            city=city,
+            csv_path=csv_path_str,
+        )
+        manifest_hint = getattr(self, "_stage1_manifest_hint", None)
 
+        if not need_stage1:
+            # Either: reuse existing Stage-1, or user canceled
+            if manifest_hint is None:
+                # Handshake already logged "cancel" – just echo dry-run result.
+                self._append_status(
+                    "[Dry-run] Result: user would cancel at the "
+                    "Stage-1 handshake → no training would run."
+                )
+                return
+
+            # Reuse existing Stage-1
+            self._append_status(
+                "[Dry-run] Result: Stage-1 would be reused.\n"
+                f"  manifest: {manifest_hint}"
+            )
+        else:
+            # Stage-1 must run (rebuild/new)
+            if manifest_hint:
+                self._append_status(
+                    "[Dry-run] Result: Stage-1 would be rebuilt, "
+                    "ignoring existing manifest:\n"
+                    f"  existing manifest: {manifest_hint}"
+                )
+            else:
+                self._append_status(
+                    "[Dry-run] Result: no compatible Stage-1 found → "
+                    "Stage-1 would be run from scratch."
+                )
+
+        # Finally, what about Stage-2 training?
+        self._append_status(
+            "[Dry-run] After Stage-1, a TrainingThread would be started "
+            "with the above configuration (but in dry mode, nothing is run)."
+        )
+        
     @pyqtSlot()
     def _on_train_clicked(self) -> None:
         """
@@ -2100,6 +2646,11 @@ class GeoPriorForecaster(QMainWindow):
                 "Training is already running.",
             )
             return
+        
+        # Dry-run short-circuit
+        if self._is_dry_mode():
+            self._run_train_dry_preview()
+            return
     
         # 0. If options dialog has queued a specific job, honour it
         if self._queued_train_job is not None:
@@ -2109,25 +2660,24 @@ class GeoPriorForecaster(QMainWindow):
             return
     
         # 1. Try quick shortcut: reuse an existing Stage-1 run
-        # try:
-        # # Build minimal Stage-1 config snapshot to filter compatible runs
-        stage1_cfg = self.geo_cfg.to_stage1_config()
-        jobs = latest_jobs_for_root(
-            results_root=self.gui_runs_root,
-            current_cfg=stage1_cfg,
-        )
-        quick_job = QuickTrainDialog.choose_job(
-            parent=self,
-            jobs=jobs,
-        )
-        # except Exception as exc:  # defensive
-        #     self._append_status(
-        #         f"[QuickTrain] Failed to list jobs: {exc}",
-        #         error=True,
-        #     )
-        #     quick_job = None
+        try:
+            # Build minimal Stage-1 config snapshot to filter compatible runs
+            stage1_cfg = self.geo_cfg.to_stage1_config()
+            jobs = latest_jobs_for_root(
+                results_root=self.gui_runs_root,
+                current_cfg=stage1_cfg,
+            )
+            quick_job = QuickTrainDialog.choose_job(
+                parent=self,
+                jobs=jobs,
+            )
+        except Exception as exc:  # defensive
+            self._append_status(
+                f"[QuickTrain] Failed to list jobs: {exc}",
+                error=True,
+            )
+            quick_job = None
         
-        # XXX TODO : 
         if quick_job is not None:
             self._run_job(quick_job)
             return
@@ -2227,6 +2777,11 @@ class GeoPriorForecaster(QMainWindow):
         if hasattr(self, "log_mgr"):
             self.log_mgr.clear()
 
+        # --- dry-run short-circuit ---
+        if self._is_dry_mode():
+            self._run_tune_dry_preview()
+            return
+        
         job: TuneJobSpec | None = None
         manifest_path: str | None = None
 
@@ -2281,6 +2836,18 @@ class GeoPriorForecaster(QMainWindow):
         # 5) Build NAT-style overrides, including TUNER_SEARCH_SPACE
         cfg_overrides = self.geo_cfg.to_cfg_overrides()
 
+        # Inject device overrides chosen in the options dialogs
+        if getattr(self, "_device_cfg_overrides", None):
+            cfg_overrides.update(self._device_cfg_overrides)
+
+        # 5a) Inject desired max_trials into NAT config
+        # run_tuning() will read `TUNER_MAX_TRIALS` from cfg_hp
+        # and default to 20 if missing.
+        if hasattr(self, "spin_max_trials"):
+            cfg_overrides["TUNER_MAX_TRIALS"] = int(
+                self.spin_max_trials.value()
+            )
+
         # 5b) Force GUI runs under ~/.fusionlab_runs
         if getattr(self, "gui_runs_root", None) is not None:
             cfg_overrides.setdefault(
@@ -2328,6 +2895,63 @@ class GeoPriorForecaster(QMainWindow):
         # after thread is running, ensure Stop button is shown/updated
         self._update_global_running_state()
 
+    def _run_tune_dry_preview(self) -> None:
+        """
+        Simulate what a tuning run would do, without starting threads.
+        """
+        if not self.log_mgr:
+            return
+
+        self.log_mgr.clear()
+        self._append_status(
+            "[Dry-run] Previewing GeoPrior tuning workflow ..."
+        )
+
+        # 1. Resolve the TuneJobSpec the same way as in _on_tune_clicked
+        job = self._queued_tune_job
+        self._queued_tune_job = None
+
+        if job is None:
+            # Try the quick dialog to let the user pick a Stage-2 run
+            ok, quick_job = QuickTuneDialog.run(
+                parent=self,
+                results_root=self.gui_runs_root,
+            )
+            if not ok or quick_job is None:
+                self._append_status(
+                    "[Dry-run] No tuning job selected → nothing would run."
+                )
+                return
+            
+            job = quick_job
+
+        stage1 = job.stage1  # depending on your actual API this might be
+                             # job.stage1_summary or similar
+        city = stage1.city
+        manifest_path = getattr(stage1, "manifest_path", None)
+
+        # 2. Sync config / search space as usual
+        self._sync_config_from_ui()
+        cfg = self.geo_cfg
+
+        search_space = default_tuner_search_space()
+
+        max_trials = getattr(cfg, "TUNER_MAX_TRIALS", 20)
+
+        self._append_status(
+            "[Dry-run] Tuning plan:\n"
+            f"  city          : {city}\n"
+            f"  results_root  : {self.gui_runs_root}\n"
+            f"  stage1_root   : {stage1.manifest_path}\n"
+            f"  manifest      : {manifest_path}\n"
+            f"  max_trials    : {max_trials}\n"
+            f"  search keys   : {sorted(search_space.keys())}"
+        )
+
+        self._append_status(
+            "[Dry-run] A TuningThread would be created with the above "
+            "job spec, but in dry mode nothing is started."
+        )
 
     @pyqtSlot()
     def _on_infer_clicked(self) -> None:
@@ -2680,8 +3304,8 @@ class GeoPriorForecaster(QMainWindow):
             prefer_split=None,
             prefer_calibration=None,
             show_overall=True,
-            dpi=150,
-            fontsize=8,
+            dpi=300,
+            fontsize=12,
             parent=self,
         )
         self.xfer_view_thread = th
@@ -2841,35 +3465,20 @@ class GeoPriorForecaster(QMainWindow):
     
             cfg.TRAIN_CSV_PATH = csv_path_str
     
-
-        # csv_path_str = ""
-        # if self.csv_path is not None:
-        #     csv_path_str = str(self.csv_path)
-            
-        # if not csv_path_str:
-        #     QMessageBox.warning(
-        #         self,
-        #         "Missing CSV",
-        #         "Please choose an input CSV file first.",
-        #     )
-        #     return
-    
-        # cfg.TRAIN_CSV_PATH = csv_path_str
-        # cfg.TRAIN_CSV_PATH = csv_path_str
         default_name = (
             f"{job.stage1_summary.city}_train_{job.stage1_summary.timestamp}"
         )
         cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
         
-        # try:
-        #     cfg.ensure_valid()
-        # except Exception as exc:  # pragma: no cover - pure GUI validation
-        #     QMessageBox.critical(
-        #         self,
-        #         "Invalid configuration",
-        #         f"The training configuration is not valid:\n\n{exc}",
-        #     )
-        #     return
+        try:
+            cfg.ensure_valid()
+        except Exception as exc:  # pragma: no cover - pure GUI validation
+            QMessageBox.critical(
+                self,
+                "Invalid configuration",
+                f"The training configuration is not valid:\n\n{exc}",
+            )
+            return
     
         # Shared UI setup
         self.progress.reset()
@@ -2947,9 +3556,14 @@ class GeoPriorForecaster(QMainWindow):
         self._start_training(manifest_path)
 
     def _start_training(self, manifest_path: str) -> None:
+        device_overrides = getattr(
+            self, "_device_cfg_overrides", {}) or {}
+        
+        cfg_overrides =self._cfg_overrides.update(device_overrides)
+        
         th = TrainingThread(
             manifest_path=manifest_path,
-            cfg_overrides=self._cfg_overrides,
+            cfg_overrides=cfg_overrides,
             evaluate_training=self.geo_cfg.evaluate_training,
             parent=self,
         )
@@ -3215,19 +3829,154 @@ class GeoPriorForecaster(QMainWindow):
                 return
         event.accept()
 
+
+class LoadingSplash(QSplashScreen):
+    """
+    Splash screen with logo + progress bar + percentage text.
+    """
+
+    def __init__(self, logo_path: Path, parent: QWidget | None = None) -> None:
+        pixmap = QPixmap(str(logo_path))
+        super().__init__(pixmap, Qt.WindowStaysOnTopHint)
+        self.setMask(pixmap.mask())
+
+        # progress bar at the bottom
+        self._progress = QProgressBar(self)
+        self._progress.setRange(0, 100)
+        self._progress.setTextVisible(True)  # shows "NN %"
+        self._progress.setFormat("%p%")
+        self._progress.setFixedHeight(18)
+
+        # optional text just above the bar
+        self._label = QLabel("Starting GeoPrior-3.0 Forecaster…", self)
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setStyleSheet("color: white;")
+
+        # simple manual layout inside the splash
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.addStretch(1)
+        layout.addWidget(self._label)
+        layout.addWidget(self._progress)
+
+    def set_progress(self, value: int, message: str | None = None) -> None:
+        """Update percent + optional message and let Qt repaint."""
+        self._progress.setValue(value)
+        if message is not None:
+            self._label.setText(message)
+        QApplication.processEvents()
+
+
+class MovieSplashScreen(QSplashScreen):
+    """
+    Simple splash screen that can play an animated GIF (QMovie).
+    """
+    def __init__(self, movie: QMovie, parent=None):
+        # Start with a blank pixmap; we update frames via the movie
+        super().__init__(QPixmap(), parent)
+        self._movie = movie
+        self._movie.frameChanged.connect(self._on_frame_changed)
+        self._movie.start()
+
+    def _on_frame_changed(self, _frame: int) -> None:
+        self.setPixmap(self._movie.currentPixmap())
+        self.update()
+
 # ----------------------------------------------------------------------
 # Entry point helper
 # ----------------------------------------------------------------------
+# def launch_geoprior_gui(theme: str = "fusionlab") -> None:
+#     # Create the Qt application
+#     cfg = GeoPriorConfig.from_nat_config()
+#     app = QApplication(sys.argv)
+
+#     # Cross-platform tweaks
+#     auto_set_ui_fonts(app)                              # DPI-aware fonts + Fusion style
+#     enable_qt_crash_handler(app, keep_gui_alive=False)  # nice tracebacks if something dies
+
+#     scale = float(getattr(cfg, "ui_font_scale", 1.0))
+#     if scale != 1.0:
+#         f = app.font()
+#         f.setPointSizeF(max(6.0, f.pointSizeF() * scale))
+#         app.setFont(f)
+    
+#     gui = GeoPriorForecaster(theme=theme)
+#     gui.show()
+
+#     sys.exit(app.exec_())
+
 def launch_geoprior_gui(theme: str = "fusionlab") -> None:
+    cfg = GeoPriorConfig.from_nat_config()
     app = QApplication(sys.argv)
     auto_set_ui_fonts(app)
+    
+    enable_qt_crash_handler(app, keep_gui_alive=False)  # nice tracebacks if something dies
+    # --- create splash with your logo ---
+    logo_path = Path(__file__).with_name("geoprior_splash.png")
+    splash = LoadingSplash(logo_path)
+    splash.show()
+    app.processEvents()
 
-    gui = GeoPriorForecaster(theme=theme)
+    splash.set_progress(10, "Loading configuration…")
+
+    scale = float(getattr(cfg, "ui_font_scale", 1.0))
+    if scale != 1.0:
+        f = app.font()
+        f.setPointSizeF(max(6.0, f.pointSizeF() * scale))
+        app.setFont(f)
+    
+    # pass splash into the main window so it can update during _build_ui()
+    gui = GeoPriorForecaster(theme=theme, splash=splash)  
+
+    splash.set_progress(100, "Ready")
+    splash.finish(gui)   # hides splash when gui is shown
+
     gui.show()
     sys.exit(app.exec_())
 
 
+# # ----------------------------------------------------------------------
+# def launch_geoprior_gui(theme: str = "fusionlab") -> None:
+#     app = QApplication(sys.argv)
+#     auto_set_ui_fonts(app)
+
+#     # --- 1) Show splash screen immediately ---
+#     # Option A: static PNG logo
+#     # splash_pix = QPixmap(":/img/geoprior_splash.png")  # if you use a Qt resource
+#     # splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
+
+#     # Option B: animated GIF spinner (put your .gif in a known path)
+#     movie = QMovie(str(Path(__file__).with_name("geoprior_splash.gif")))
+#     splash = MovieSplashScreen(movie)
+#     splash.setWindowFlag(Qt.WindowStaysOnTopHint)
+#     splash.show()
+#     app.processEvents()  # let Qt paint the splash
+
+#     # --- 2) Build the main GUI while splash is visible ---
+#     gui = GeoPriorForecaster(theme=theme)
+
+#     # (Optional) you can show a status text on the splash:
+#     # splash.showMessage(
+#     #     "Initializing GeoPrior-3.0 Forecaster…",
+#     #     Qt.AlignBottom | Qt.AlignCenter,
+#     #     Qt.white,
+#     # )
+#     # app.processEvents()
+
+#     # --- 3) Hide splash and show main window ---
+#     splash.finish(gui)
+#     gui.show()
+
+#     sys.exit(app.exec_())
+
+# if __name__ == "__main__":
+#     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+#     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+#     launch_geoprior_gui()
+
 if __name__ == "__main__":
+    # High-DPI attributes should be set before the QApplication exists
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     launch_geoprior_gui()

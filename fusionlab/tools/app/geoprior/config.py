@@ -232,7 +232,7 @@ INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = True
 USE_EFFECTIVE_H_FIELD = True
 
 # Optional: whether Stage-1 should also pre-build future_* NPZ for Stage-3
-BUILD_FUTURE_NPZ = True
+BUILD_FUTURE_NPZ = False
 
 # -------------------------------------------------------------------
 # 4. MODEL / PHYSICS / TRAINING DEFAULTS
@@ -319,12 +319,31 @@ EPOCHS = 50
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 
+# 4.6. Hardware / device configuration
+# ----------------------------------
+# TF_DEVICE_MODE:
+#   - "auto" : use GPU if available, else CPU
+#   - "cpu"  : force CPU only
+#   - "gpu"  : force GPU only (first visible GPU, unless env overrides)
+TF_DEVICE_MODE = "auto"
+
+# CPU threading.  None → let TensorFlow decide.
+TF_INTRA_THREADS = None
+TF_INTER_THREADS = None
+
+# GPU memory behaviour
+TF_GPU_ALLOW_GROWTH = True        # True recommended for desktop GPUs
+TF_GPU_MEMORY_LIMIT_MB = None     # e.g. 12000 to cap at 12 GB, or None
+
+
 # -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE
 # -------------------------------------------------------------------
 # Hyperparameter search space for the GeoPriorTuner.  The tuner
 # script imports this as a simple dictionary and passes it to
 # the tuning API.
+
+TUNER_MAX_TRIALS = 20 
 
 TUNER_SEARCH_SPACE = {
     # --- Architecture (model.__init__) ---

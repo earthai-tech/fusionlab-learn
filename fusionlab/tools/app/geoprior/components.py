@@ -43,10 +43,20 @@ class RangeListEditor(QWidget):
     Small helper widget to edit either a float *range* (min/max)
     or a discrete *list* of values.
 
-    It understands the NATCOM `TUNER_SEARCH_SPACE` formats:
+    It understands NATCOM `TUNER_SEARCH_SPACE` formats:
 
     - range: {"type": "float", "min_value": ..., "max_value": ..., "sampling": ...}
     - list:  [v1, v2, v3]
+
+    Parameters
+    ----------
+    show_sampling : bool, default True
+        If False, the "Sampling" controls are hidden and no "sampling"
+        key is emitted.
+    spin_width : int or None, default None
+        If given, both Min/Max spinboxes are forced to this width.
+        Use it in the Scalars & losses dialog for nice vertical
+        alignment; keep None elsewhere (Dropout, HD factor).
     """
 
     def __init__(
@@ -56,9 +66,16 @@ class RangeListEditor(QWidget):
         min_allowed: float = 0.0,
         max_allowed: float = 1.0,
         decimals: int = 6,
+        show_sampling: bool = True,
+        spin_width: int | None = None,
     ) -> None:
         super().__init__(parent)
 
+        self._show_sampling = show_sampling
+        self._spin_width = spin_width
+
+        # sampling == None  -> "linear" (default)
+        # sampling == "log" -> log-scale search
         self._sampling: str | None = None
 
         # --- Mode selector: Range / List ---
@@ -75,11 +92,15 @@ class RangeListEditor(QWidget):
 
         self.min_sb = QDoubleSpinBox(range_page)
         self.max_sb = QDoubleSpinBox(range_page)
+
         for sb in (self.min_sb, self.max_sb):
             sb.setDecimals(decimals)
             sb.setRange(min_allowed, max_allowed)
             step = (max_allowed - min_allowed) / 100.0 or 0.01
             sb.setSingleStep(step)
+            if self._spin_width is not None:
+                sb.setMinimumWidth(self._spin_width)
+                sb.setMaximumWidth(self._spin_width)
 
         range_layout.addWidget(QLabel("Min:", range_page))
         range_layout.addWidget(self.min_sb)
@@ -99,15 +120,59 @@ class RangeListEditor(QWidget):
 
         self.stack.addWidget(list_page)
 
+        # --- optional Sampling selector ---
+        self.sampling_cb: QComboBox | None = None
+        self._sampling_label: QLabel | None = None
+        if self._show_sampling:
+            self._sampling_label = QLabel("Sampling:", self)
+            self.sampling_cb = QComboBox(self)
+            self.sampling_cb.addItem("Linear")   # underlying: None
+            self.sampling_cb.addItem("Log")      # underlying: "log"
+            self.sampling_cb.currentIndexChanged.connect(
+                self._on_sampling_changed
+            )
+
         # Root layout
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.mode)
         layout.addWidget(self.stack)
+        if self._show_sampling:
+            layout.addWidget(self._sampling_label)
+            layout.addWidget(self.sampling_cb)
+        layout.addStretch(1)
 
         self.mode.currentIndexChanged.connect(self.stack.setCurrentIndex)
         self.mode.setCurrentIndex(0)
         self.stack.setCurrentIndex(0)
+
+    # ------------------------------------------------------------------
+    # Internal helpers for sampling
+    # ------------------------------------------------------------------
+    def _set_sampling_from_string(self, sampling: str | None) -> None:
+        """Update self._sampling and combo box from a raw string."""
+        if not self._show_sampling or self.sampling_cb is None:
+            self._sampling = None
+            return
+
+        s = (sampling or "").lower()
+        if s == "log":
+            self._sampling = "log"
+            idx = self.sampling_cb.findText("Log")
+            if idx >= 0:
+                self.sampling_cb.setCurrentIndex(idx)
+        else:
+            self._sampling = None
+            idx = self.sampling_cb.findText("Linear")
+            if idx >= 0:
+                self.sampling_cb.setCurrentIndex(idx)
+
+    def _on_sampling_changed(self, index: int) -> None:
+        """Callback when user changes the combo box."""
+        if not self._show_sampling or self.sampling_cb is None:
+            return
+        text = self.sampling_cb.itemText(index).lower()
+        self._sampling = "log" if text == "log" else None
 
     # ------------------------------------------------------------------
     # Configuration helpers
@@ -121,11 +186,20 @@ class RangeListEditor(QWidget):
         """Set default range and optional sampling ('log' or 'linear')."""
         lo = float(min(min_value, max_value))
         hi = float(max(min_value, max_value))
-        self.min_sb.setRange(min(self.min_sb.minimum(), lo), max(self.min_sb.maximum(), hi))
-        self.max_sb.setRange(min(self.max_sb.minimum(), lo), max(self.max_sb.maximum(), hi))
+        self.min_sb.setRange(
+            min(self.min_sb.minimum(), lo),
+            max(self.min_sb.maximum(), hi),
+        )
+        self.max_sb.setRange(
+            min(self.max_sb.minimum(), lo),
+            max(self.max_sb.maximum(), hi),
+        )
         self.min_sb.setValue(lo)
         self.max_sb.setValue(hi)
-        self._sampling = sampling
+        if self._show_sampling:
+            self._set_sampling_from_string(sampling)
+        else:
+            self._sampling = None
 
     def _defaults_from_value(self, value) -> tuple[float, float, str | None]:
         """Infer sensible (min, max, sampling) from a tuner-space value."""
@@ -141,10 +215,7 @@ class RangeListEditor(QWidget):
         return 0.0, 1.0, None
 
     def from_search_space_value(self, value, default_value=None) -> None:
-        """
-        Populate the widget from a `TUNER_SEARCH_SPACE` entry and
-        a default value (used when `value` is missing/empty).
-        """
+        """Populate the widget from a `TUNER_SEARCH_SPACE` entry."""
         if default_value is None:
             default_value = value
 
@@ -156,20 +227,29 @@ class RangeListEditor(QWidget):
             self.stack.setCurrentIndex(0)
             self.min_sb.setValue(float(value.get("min_value", dmin)))
             self.max_sb.setValue(float(value.get("max_value", dmax)))
-            self._sampling = value.get("sampling", dsamp)
+            if self._show_sampling:
+                self._set_sampling_from_string(value.get("sampling", dsamp))
+            else:
+                self._sampling = None
         elif isinstance(value, (list, tuple)) and value:
             # List mode
             self.mode.setCurrentIndex(1)
             self.stack.setCurrentIndex(1)
             self.list_edit.setText(", ".join(str(v) for v in value))
-            self._sampling = None
+            if self._show_sampling:
+                self._set_sampling_from_string(dsamp)
+            else:
+                self._sampling = None
         else:
             # Fallback: use defaults as a range
             self.mode.setCurrentIndex(0)
             self.stack.setCurrentIndex(0)
             self.min_sb.setValue(dmin)
             self.max_sb.setValue(dmax)
-            self._sampling = dsamp
+            if self._show_sampling:
+                self._set_sampling_from_string(dsamp)
+            else:
+                self._sampling = None
 
     def _parse_list_text(self) -> list[float]:
         """Parse comma/semicolon separated floats from the list editor."""
@@ -184,7 +264,6 @@ class RangeListEditor(QWidget):
             try:
                 vals.append(float(tok))
             except ValueError:
-                # silently ignore bad tokens
                 continue
         return vals
 
@@ -200,7 +279,6 @@ class RangeListEditor(QWidget):
             if vals:
                 return vals  # discrete grid
 
-        # Fallback / normal: range dict
         lo = float(min(self.min_sb.value(), self.max_sb.value()))
         hi = float(max(self.min_sb.value(), self.max_sb.value()))
         d = {
@@ -208,7 +286,7 @@ class RangeListEditor(QWidget):
             "min_value": lo,
             "max_value": hi,
         }
-        if self._sampling:
+        if self._show_sampling and self._sampling:
             d["sampling"] = self._sampling
         return d
 

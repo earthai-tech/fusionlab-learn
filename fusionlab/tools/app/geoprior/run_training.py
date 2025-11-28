@@ -54,6 +54,7 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
 from fusionlab._optdeps import with_progress
+from fusionlab.backends.devices import configure_tf_from_cfg
 from fusionlab.api.util import get_table_size
 from fusionlab.utils.generic_utils import (
     ensure_directory_exists,
@@ -241,6 +242,9 @@ def run_training(
     if cfg_overrides:
         cfg.update(cfg_overrides)
 
+    # >>> configure TensorFlow from cfg <<<
+    device_info = configure_tf_from_cfg(cfg, logger=log)
+    
     CITY_NAME = M.get("city", cfg.get("CITY_NAME", "nansha"))
     MODEL_NAME = M.get("model", cfg.get("MODEL_NAME", "GeoPriorSubsNet"))
 
@@ -720,6 +724,7 @@ def run_training(
             "tensorflow": tf.__version__,
             "numpy": np.__version__,
             "platform": platform.platform(),
+            
         },
         "compile": {
             "optimizer": "Adam",
@@ -756,6 +761,9 @@ def run_training(
         },
     }
 
+    # stash this into training_summary later:
+    training_summary["env"]["device"] = device_info
+    
     final_model_path = os.path.join(
         RUN_OUTPUT_PATH,
         f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_final.keras",

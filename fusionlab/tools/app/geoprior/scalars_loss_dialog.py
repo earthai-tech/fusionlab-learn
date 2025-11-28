@@ -14,7 +14,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
 )
 
-
 class ScalarsLossDialog(QDialog):
     """
     Popup to configure scalar hyperparameters and loss weights used in
@@ -46,55 +45,77 @@ class ScalarsLossDialog(QDialog):
             row += 1
 
         # --- editors -------------------------------------------------
+
+        spin_w = 130  # or 120, tweak to taste
         self.ed_mv = RangeListEditor(
             min_allowed=1e-9,
             max_allowed=1e-5,
             decimals=8,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_kappa = RangeListEditor(
             min_allowed=0.0,
             max_allowed=10.0,
             decimals=6,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_lr = RangeListEditor(
             min_allowed=1e-6,
             max_allowed=1e-3,
             decimals=8,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_lgw = RangeListEditor(
             min_allowed=0.0,
             max_allowed=1.0,
             decimals=6,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_lcons = RangeListEditor(
             min_allowed=0.0,
             max_allowed=1.0,
             decimals=6,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_lprior = RangeListEditor(
             min_allowed=0.0,
             max_allowed=1.0,
             decimals=6,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_lsmooth = RangeListEditor(
             min_allowed=0.0,
             max_allowed=1.0,
             decimals=6,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_lmv = RangeListEditor(
             min_allowed=0.0,
             max_allowed=1.0,
             decimals=6,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_mv_lr = RangeListEditor(
             min_allowed=0.0,
             max_allowed=20.0,
             decimals=3,
+            show_sampling=True,
+            spin_width=spin_w,
         )
         self.ed_kappa_lr = RangeListEditor(
             min_allowed=0.0,
             max_allowed=20.0,
             decimals=3,
+            show_sampling=True,
+            spin_width=spin_w,
         )
 
         # --- layout --------------------------------------------------

@@ -120,9 +120,11 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 30,
+    "EPOCHS": 5,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
+    "TF_DEVICE_MODE": "auto",
+    "TF_GPU_ALLOW_GROWTH": true,
     "TUNER_SEARCH_SPACE": {
       "embed_dim": [
         32,
@@ -248,6 +250,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "41a5208a210ab8ec896ad1866e1a9344edcb922990c2a9b27961f772b2de7ca2"
+    "config_py_hash": "7e78d30e226b4b135b1e38b113755c8629442374f674cf671c5045714a2178d5"
   }
 }

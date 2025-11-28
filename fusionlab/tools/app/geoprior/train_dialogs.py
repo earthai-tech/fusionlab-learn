@@ -7,6 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
+from PyQt5.QtCore import Qt
+
 from PyQt5.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -22,9 +24,9 @@ from PyQt5.QtWidgets import (
     QCheckBox, 
     QFileDialog
 )
-
+from ..device_options import DeviceOptions, DeviceOptionsWidget
 from .jobs import TrainJobSpec, latest_jobs_for_root
-from .stage1_dialog import Stage1DetailsDialog
+from .stage1_dialogs import Stage1DetailsDialog
 from .geoprior_config import GeoPriorConfig
 
 
@@ -57,9 +59,11 @@ class TrainOptionsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         # ---- Section 1: Stage-1 behaviour --------------------------------
+
         grp_stage1 = QGroupBox("Stage-1 behaviour", self)
         g1 = QVBoxLayout(grp_stage1)
 
+        # --- Dangerous cleanup option ----------------------------------
         self.chk_clean = QCheckBox(
             "Clean Stage-1 run dir before running Stage-1",
             grp_stage1,
@@ -67,7 +71,52 @@ class TrainOptionsDialog(QDialog):
         self.chk_clean.setChecked(
             bool(getattr(self.geo_cfg, "clean_stage1_dir", False))
         )
+        self.chk_clean.toggled.connect(self._on_clean_toggled)
         g1.addWidget(self.chk_clean)
+
+        # Subtle but always-visible warning (danger zone feel)
+        warn_lbl = QLabel(
+            "<b>Danger zone:</b> cleaning removes the whole "
+            "<code>&lt;city&gt;_GeoPriorSubsNet_stage1/</code> folder "
+            "for that city (artifacts, train_*, tuning/, inference/)."
+        )
+        warn_lbl.setTextFormat(Qt.RichText)
+        warn_lbl.setWordWrap(True)
+        warn_lbl.setStyleSheet("color: #b03030; font-size: 9pt;")
+        g1.addWidget(warn_lbl)
+
+        # --- Smart Stage-1 behaviour flags ------------------------------
+        self.chk_auto_reuse = QCheckBox(
+            "Auto-reuse latest complete Stage-1 when config matches "
+            "(no prompt)",
+            grp_stage1,
+        )
+        self.chk_auto_reuse.setChecked(
+            bool(
+                getattr(
+                    self.geo_cfg,
+                    "stage1_auto_reuse_if_match",
+                    True,
+                )
+            )
+        )
+        g1.addWidget(self.chk_auto_reuse)
+
+        self.chk_force_rebuild_mismatch = QCheckBox(
+            "Force Stage-1 rebuild when no compatible run exists "
+            "(config mismatch)",
+            grp_stage1,
+        )
+        self.chk_force_rebuild_mismatch.setChecked(
+            bool(
+                getattr(
+                    self.geo_cfg,
+                    "stage1_force_rebuild_if_mismatch",
+                    True,
+                )
+            )
+        )
+        g1.addWidget(self.chk_force_rebuild_mismatch)
 
         grp_stage1.setLayout(g1)
         layout.addWidget(grp_stage1)
@@ -99,8 +148,18 @@ class TrainOptionsDialog(QDialog):
 
         grp_root.setLayout(g2)
         layout.addWidget(grp_root)
+        
+        # ---- Section 3: Processor / devices ------------------------------
+        base_cfg = getattr(self.geo_cfg, "_base_cfg", {}) or {}
+        dev_opts = DeviceOptions.from_cfg(base_cfg)
 
-        # ---- Section 3: Existing cities / jobs ---------------------------
+        self.device_widget = DeviceOptionsWidget(
+            initial=dev_opts,
+            parent=self,
+        )
+        layout.addWidget(self.device_widget)
+        
+        # ---- Section 4: Existing cities / jobs ---------------------------
         grp_jobs = QGroupBox(
             "Existing cities detected in this results root",
             self,
@@ -125,22 +184,109 @@ class TrainOptionsDialog(QDialog):
         # Initial job discovery
         self._refresh_jobs()
 
-    # -- public helper ----------------------------------------------------
     @classmethod
     def run(
         cls,
         parent,
         geo_cfg: GeoPriorConfig,
         results_root: Path,
-    ) -> tuple[bool, Path, Optional[TrainJobSpec]]:
+    ) -> tuple[bool, Path, Optional[TrainJobSpec], dict]:
         """
-        Open the dialog and return (accepted, new_root, job).
+        Open the dialog and return
+        (accepted, new_root, job, device_overrides).
         """
         dlg = cls(parent, geo_cfg, results_root)
         ok = dlg.exec_() == QDialog.Accepted
-        return ok, dlg.results_root, dlg.selected_job
+        dev_overrides: dict = {}
+        if ok:
+            dev_overrides = dlg.get_device_overrides()
+        return ok, dlg.results_root, dlg.selected_job, dev_overrides
 
     # -- internals --------------------------------------------------------
+    def _on_clean_toggled(self, checked: bool) -> None:
+        """
+        Guard rail for the 'Clean Stage-1' option.
+
+        If the user enables it, show a destructive-action warning
+        summarising what will be deleted and give them a chance
+        to cancel.
+        """
+        if not checked:
+            # User unticked it – nothing to do.
+            return
+
+        # Collect existing Stage-1 run dirs under this results root,
+        # so the dialog can show concrete examples.
+        run_dirs = []
+        for job in getattr(self, "jobs", []) or []:
+            s = job.stage1_summary
+            if s is None:
+                continue
+            # Stage1Summary.run_dir is the <city>_GeoPriorSubsNet_stage1 dir
+            run_dirs.append(str(s.run_dir))
+
+        if run_dirs:
+            max_show = 4
+            listed = "".join(f"<br/>• {path}" for path in run_dirs[:max_show])
+            if len(run_dirs) > max_show:
+                listed += (
+                    f"<br/>… ({len(run_dirs) - max_show} more "
+                    "Stage-1 directories)"
+                )
+            extra_html = (
+                "<p>Existing Stage-1 directories detected in this "
+                f"results root include:{listed}</p>"
+            )
+        else:
+            extra_html = (
+                "<p>Currently no Stage-1 manifests were detected in this "
+                "results root, but any existing "
+                "<code>&lt;city&gt;_GeoPriorSubsNet_stage1/</code> "
+                "directory for the next city you train will still be "
+                "removed.</p>"
+            )
+
+        msg_html = (
+            "<p><span style='color:#b03030; font-weight:bold;'>"
+            "Danger zone – Stage-1 cleanup</span></p>"
+            "<p>You are about to enable "
+            "<b>cleaning of the Stage-1 run directory</b>.</p>"
+            "<p>For the next training run, this will recursively delete "
+            "the entire "
+            "<code>&lt;city&gt;_GeoPriorSubsNet_stage1/</code> folder "
+            "for that city, including:</p>"
+            "<ul>"
+            "<li><code>artifacts/</code> "
+            "(NPZ sequences, <code>manifest.json</code>)</li>"
+            "<li><code>train_*/</code> (all past training runs)</li>"
+            "<li><code>tuning/</code> (all tuning runs)</li>"
+            "<li><code>inference/</code> "
+            "(diagnostic results and summaries)</li>"
+            "</ul>"
+            f"{extra_html}"
+            "<p><b>This cannot be undone.</b> Use this only if you "
+            "explicitly want to discard <b>all</b> previous results "
+            "for that city.</p>"
+            "<p>Do you still want to keep "
+            "<b>'Clean Stage-1 run dir'</b> enabled?</p>"
+        )
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Confirm Stage-1 cleanup")
+        box.setTextFormat(Qt.RichText)
+        box.setText(msg_html)
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+
+        reply = box.exec_()
+
+        if reply != QMessageBox.Yes:
+            # User backed out: revert the checkbox without retriggering us.
+            self.chk_clean.blockSignals(True)
+            self.chk_clean.setChecked(False)
+            self.chk_clean.blockSignals(False)
+
     def _on_browse_root(self) -> None:
         
 
@@ -161,11 +307,18 @@ class TrainOptionsDialog(QDialog):
         self.path_edit.setText(str(default_root))
         self._refresh_jobs()
 
+ 
     def _on_accept(self) -> None:
-        # Apply stage-1 cleaning flag back into config
+        # Apply Stage-1 behaviour flags back into config
         self.geo_cfg.clean_stage1_dir = self.chk_clean.isChecked()
+        self.geo_cfg.stage1_auto_reuse_if_match = (
+            self.chk_auto_reuse.isChecked()
+        )
+        self.geo_cfg.stage1_force_rebuild_if_mismatch = (
+            self.chk_force_rebuild_mismatch.isChecked()
+        )
 
-        # Ensure directory exists
+        # Ensure directory exists (unchanged)
         try:
             self.results_root.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
@@ -177,6 +330,27 @@ class TrainOptionsDialog(QDialog):
             return
 
         self.accept()
+
+    def get_device_overrides(self) -> dict:
+        """
+        NAT-style overrides based on the Processor / devices block.
+
+        Returns
+        -------
+        dict
+            Something like:
+            {
+                "TF_DEVICE_MODE": "gpu",
+                "TF_INTRA_THREADS": 8,
+                "TF_INTER_THREADS": 4,
+                "TF_GPU_ALLOW_GROWTH": True,
+                "TF_GPU_MEMORY_LIMIT_MB": 12000,
+            }
+        """
+        if not hasattr(self, "device_widget"):
+            return {}
+        return self.device_widget.to_cfg_overrides()
+
 
     def _refresh_jobs(self) -> None:
         # clear layout

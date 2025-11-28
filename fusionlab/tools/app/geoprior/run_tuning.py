@@ -38,6 +38,7 @@ import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
 
 from fusionlab.api.util import get_table_size
+from fusionlab.backends.devices import configure_tf_from_cfg
 from fusionlab.utils.generic_utils import (
     ensure_directory_exists,
     default_results_dir,
@@ -245,7 +246,9 @@ def run_tuning(
     cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
     if cfg_overrides:
         cfg_hp.update(cfg_overrides)
-
+    # >>>configure TensorFlow from cfg_hp <<<
+    configure_tf_from_cfg(cfg_hp, logger=log)
+    
     RESULTS_DIR = cfg_hp.get("BASE_OUTPUT_DIR", default_results_dir())
 
     # Environment overrides (still honoured when manifest_path is None)

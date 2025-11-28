@@ -315,9 +315,25 @@ GEOPRIOR_HD_FACTOR = 0.6
 # --------------------------
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
-EPOCHS = 30
+EPOCHS = 5
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
+
+# 4.6. Hardware / device configuration
+# ----------------------------------
+# TF_DEVICE_MODE:
+#   - "auto" : use GPU if available, else CPU
+#   - "cpu"  : force CPU only
+#   - "gpu"  : force GPU only (first visible GPU, unless env overrides)
+TF_DEVICE_MODE = "auto"
+
+# CPU threading.  None → let TensorFlow decide.
+TF_INTRA_THREADS = None
+TF_INTER_THREADS = None
+
+# GPU memory behaviour
+TF_GPU_ALLOW_GROWTH = True        # True recommended for desktop GPUs
+TF_GPU_MEMORY_LIMIT_MB = None     # e.g. 12000 to cap at 12 GB, or None
 
 # -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE
