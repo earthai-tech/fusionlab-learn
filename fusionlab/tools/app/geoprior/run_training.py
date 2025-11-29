@@ -29,6 +29,7 @@ from typing import Optional, Callable, Dict, Any
 
 import os
 import sys
+import time
 import json
 import joblib
 import numpy as np
@@ -38,13 +39,11 @@ import platform
 
 import tensorflow as tf
 from tensorflow.keras.callbacks import (
-    EarlyStopping,
     ModelCheckpoint,
     CSVLogger,
-    Callback,
 )
-from tensorflow.keras.models import load_model
-from tensorflow.keras.utils import custom_object_scope
+# from tensorflow.keras.models import load_model
+# from tensorflow.keras.utils import custom_object_scope
 from tensorflow.data import experimental as tfdata_experimental
 
 from ...._optdeps import with_progress
@@ -90,7 +89,13 @@ from ....nn.pinn.op import extract_physical_parameters
 from ....plot.forecast import plot_eval_future
 
 
-from ..callbacks import GuiProgress 
+from ..callbacks import ( 
+    GuiProgress, 
+    StopTrainingOnSignal,
+    GuiEarlyStopping,
+    GuiEpochLogger, 
+    GuiMetricLogger
+)
 from .view_utils import _notify_gui_forecast_views 
 
 
@@ -108,23 +113,6 @@ GUI_CONFIG_DIR = os.path.dirname(__file__)
 # ---------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------
-class StopTrainingOnSignal(Callback):
-    """Keras callback that uses a `stop_check` callable to interrupt fit."""
-
-    def __init__(
-        self,
-        stop_check: Callable[[], bool],
-        logger: Callable[[str], None] | None = None,
-    ) -> None:
-        super().__init__()
-        self.stop_check = stop_check
-        self._log = logger or (lambda msg: print(msg, flush=True))
-
-    def on_batch_end(self, batch, logs=None):
-        if self.stop_check and self.stop_check():
-            self._log("[Stop] stop_check() returned True – stopping training.")
-            self.model.stop_training = True
-
 
 def _coerce_quantile_weights(d: dict | None, default: dict) -> dict:
     if not d:
@@ -185,11 +173,80 @@ def run_training(
                 "future_csv": "...",
             }
     """
+    # ------------------------------------------------------------------------
+    # Wall-clock anchor for ETA in the training phase
+    train_start_t = None
+
+    def _format_eta(seconds: float) -> str:
+        """Return an ETA string in HH:MM:SS or MM:SS, similar to ProgressManager."""
+        if seconds is None or seconds < 0 or seconds == float("inf"):
+            return "--:--"
+        m, s = divmod(int(seconds), 60)
+        h, m = divmod(m, 60)
+        return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
     def _progress_from_pct(pct: int) -> None:
+        """
+        Bridge Keras/GuiProgress → GUI progress bar, with epoch + ETA info.
+
+        Parameters
+        ----------
+        pct : int
+            Global training completion percentage [0, 100] as reported
+            by GuiProgress.
+        """
+        nonlocal train_start_t
+
         if progress_callback is None:
             return
-        frac = max(0.0, min(1.0, pct / 100.0))
-        progress_callback(frac, f"Training: {pct:3d}%")
+
+        # --- clamp and normalise pct → frac in [0, 1] -----------------
+        try:
+            p = float(pct)
+        except Exception:
+            p = 0.0
+        p = max(0.0, min(100.0, p))
+        frac = p / 100.0
+
+        # --- initialise / update timing for ETA ------------------------
+        now = time.time()
+        if train_start_t is None and frac > 0.0:
+            # first non-zero tick → start of training phase
+            train_start_t = now
+
+        if train_start_t is not None and frac > 1e-6:
+            elapsed = max(0.0, now - train_start_t)
+            # remaining = elapsed * (1 - f) / f   (same idea as ProgressManager)
+            remaining = elapsed * (1.0 - frac) / frac
+            eta_str = _format_eta(remaining)
+        else:
+            eta_str = "--:--"
+
+        # --- best-effort epoch index from global fraction --------------
+        epoch_part = ""
+        try:
+            total_epochs = int(EPOCHS)
+        except Exception:
+            total_epochs = 0
+
+        if total_epochs > 0 and frac > 0.0:
+            # map [0, 1] → [1, total_epochs], clamped
+            ep = int(round(frac * total_epochs))
+            if ep < 1:
+                ep = 1
+            if ep > total_epochs:
+                ep = total_epochs
+            epoch_part = f"Epoch {ep}/{total_epochs} – "
+
+        # --- final human-readable message ------------------------------
+        msg = f"Training – {epoch_part}ETA: {eta_str}"
+
+        # Never let a misbehaving GUI callback crash training
+        try:
+            progress_callback(frac, msg)
+        except Exception:
+            pass
+    # -----------------------------------------------------------
 
     log = logger or (lambda msg: print(msg, flush=True))
 
@@ -226,13 +283,14 @@ def run_training(
     manifest_city = (M.get("city") or "").strip().lower()
     log(f"[Manifest] Loaded city={manifest_city} model={M.get('model')}")
 
-    if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
-        raise RuntimeError(
-            "[NATCOM] Stage-1 manifest city "
-            f"{manifest_city!r} does not match config CITY_NAME {CFG_CITY!r}. "
-            "Run Stage-1 for this city first, or set CITY/STAGE1_MANIFEST "
-            "to explicitly override."
-        )
+
+    # if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
+    #     raise RuntimeError(
+    #         "[NATCOM] Stage-1 manifest city "
+    #         f"{manifest_city!r} does not match config CITY_NAME {CFG_CITY!r}. "
+    #         "Run Stage-1 for this city first, or set CITY/STAGE1_MANIFEST "
+    #         "to explicitly override."
+    #     )
 
     # ================================================================
     # 2. Merge global config with Stage-1 config
@@ -329,9 +387,12 @@ def run_training(
     SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
     GWL_COL = cols_cfg.get("gwl", "GWL")
 
-    EPOCHS = cfg.get("EPOCHS", 50)
+    EPOCHS = cfg.get("EPOCHS", 2)
     BATCH_SIZE = cfg.get("BATCH_SIZE", 32)
     LEARNING_RATE = cfg.get("LEARNING_RATE", 1e-4)
+    
+    
+    SAVE_MODEL_FORMAT = cfg.get("SAVE_MODEL_FORMAT", 'tf')
 
     BASE_OUTPUT_DIR = M["paths"]["run_dir"]
     STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -568,7 +629,13 @@ def run_training(
     for xb, _ in train_dataset.take(1):
         subs_model_inst(xb)
         break
-    subs_model_inst.summary(line_length=110, expand_nested=True)
+    
+    # Send summary to GUI log (or stdout in script mode)
+    subs_model_inst.summary(
+        line_length=110,
+        expand_nested=True,
+        print_fn=log,
+    )
 
     loss_dict = {
         "subs_pred": (
@@ -614,29 +681,78 @@ def run_training(
     # ================================================================
     # 6. Train
     # ================================================================
+    # ================================================================
+    # 6. Train
+    # ================================================================
     ckpt_name = f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.keras"
     ckpt_path = os.path.join(RUN_OUTPUT_PATH, ckpt_name)
-
-    callbacks = [
-        EarlyStopping(
-            monitor="val_loss",
-            patience=15,
-            restore_best_weights=True,
-            verbose=1,
-        ),
-        ModelCheckpoint(
-            filepath=ckpt_path,
-            monitor="val_loss",
-            save_best_only=True,
-            save_weights_only=False,
-            verbose=1,
-        ),
-    ]
+    
     csvlog_path = os.path.join(
         RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_train_log.csv"
     )
-    callbacks.append(CSVLogger(csvlog_path, append=False))
+    
+    # Metric groups shared by:
+    #   • GuiMetricLogger (epoch-wise logging to GUI)
+    #   • plot_history_in (final training plots)
+    history_groups = {
+        "Total Loss": ["loss", "val_loss"],
+        "Physics Loss": ["physics_loss", "val_physics_loss"],
+        "Data Loss": ["data_loss", "val_data_loss"],
+        "Component Losses": [
+            "consolidation_loss", "val_consolidation_loss",
+            "gw_flow_loss",       "val_gw_flow_loss",
+            "prior_loss",         "val_prior_loss",
+            "smooth_loss",        "val_smooth_loss",
+        ],
+        "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
+        "GWL MAE": ["gwl_pred_mae", "val_gwl_pred_mae"],
+        # Optional: epsilon metrics if you wire them as Keras metrics
+        "Epsilon (prior/cons)": [
+            "epsilon_prior", "val_epsilon_prior",
+            "epsilon_cons",  "val_epsilon_cons",
+        ],
+    }
 
+
+    # ckpt_basename = f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}"
+    # if SAVE_MODEL_FORMAT == "tf":                       # SavedModel directory
+    #     ckpt_name   = f"{ckpt_basename}_ckpt"
+    #     ckpt_kwargs = {"save_format": "tf"}          # <─ explicit
+    # else: # SAVE_MODEL_FORMAT == "weights":                # H5 weights only – always works
+    #     ckpt_name   = f"{ckpt_basename}.weights.h5"
+    #     ckpt_kwargs = {"save_weights_only": True}
+            
+    # ckpt_path = os.path.join(RUN_OUTPUT_PATH, ckpt_name)
+
+    # # Metric groups shared by:
+    # #   • GuiMetricLogger (epoch-wise logging to GUI)
+    # #   • plot_history_in (final training plots)
+    # history_groups = {
+    #     "Total Loss": ["loss", "val_loss"],
+    #     "Physics Loss": ["physics_loss", "val_physics_loss"],
+    #     "Data Loss": ["data_loss", "val_data_loss"],
+    #     "Component Losses": [
+    #         "consolidation_loss",
+    #         "val_consolidation_loss",
+    #         "gw_flow_loss",
+    #         "val_gw_flow_loss",
+    #         "prior_loss",
+    #         "val_prior_loss",
+    #         "smooth_loss",
+    #         "val_smooth_loss",
+    #     ],
+    #     "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
+    #     "GWL MAE": ["gwl_pred_mae", "val_gwl_pred_mae"],
+    #     # Optional: add epsilon metrics as Keras metrics
+    #     "Epsilon (prior/cons)": [
+    #         "epsilon_prior", "val_epsilon_prior",
+    #         "epsilon_cons", "val_epsilon_cons",
+    #     ],
+    # }
+
+    csvlog_path = os.path.join(
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_train_log.csv"
+    )
     # Figure out batches per epoch once train_dataset is built
     batches_per_epoch = None
     try:
@@ -648,21 +764,54 @@ def run_training(
         # Fallback; if unknown, you could skip GUI progress or set a dummy value
         batches_per_epoch = 1
 
+    callbacks = [
+        GuiEarlyStopping(
+            monitor="val_loss",
+            patience=15,
+            restore_best_weights=True,
+            verbose=0,          # don't print to stdout
+            log_fn=log,         # log summary into GUI
+        ),
+        ModelCheckpoint(
+            filepath=ckpt_path,
+            monitor="val_loss",
+            save_best_only=True,
+            save_weights_only=False,  # full model, same as script mode
+            verbose=0,               # no stdout
+            # **ckpt_kwargs
+        ),
+        CSVLogger(csvlog_path, append=False),
+     ]
+
+
+    # Optional: only add epoch logger if we have a logger
+    if logger is not None:
+        callbacks.append(GuiEpochLogger(log_fn=log))
+        callbacks.append(
+            GuiMetricLogger(
+                metric_groups=history_groups,
+                log_fn=log,
+                total_epochs=EPOCHS,
+                precision=6,   # tweak fewer/more decimals
+            )
+        )
+
+    
     if stop_check is not None:
         callbacks.append(StopTrainingOnSignal(stop_check, logger=log))
-    # --- attach GUI progress if a callback was provided ---
+    
     if progress_callback is not None and batches_per_epoch > 0:
         gui_cb = GuiProgress(
             total_epochs=EPOCHS,
             batches_per_epoch=batches_per_epoch,
-            update_fn=_progress_from_pct,
+            update_fn=_progress_from_pct,  #  nested closure → ProgressManager
             epoch_level=False,  # per-batch → smoother bar
         )
         callbacks.append(gui_cb)
-        fit_verbose = 0
+        fit_verbose = 0      # silence Keras progress bar; we use our own
     else:
         fit_verbose = cfg.get("FIT_VERBOSE", 1)
-        
+
     log("\nTraining...")
     history = subs_model_inst.fit(
         train_dataset,
@@ -677,30 +826,24 @@ def run_training(
     )
     if progress_callback is not None:
         progress_callback(0.25, "Training: building GeoPriorSubsNet model...")
+        
     # =================================================================
     # 7. Persist weights / architecture / training summary / run manifest
     # =================================================================
-    weights_path = os.path.join(
-        RUN_OUTPUT_PATH,
-        f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.weights.h5",
-    )
+    # weights_path = os.path.join(
+    #     RUN_OUTPUT_PATH,
+    #     f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.weights.h5",
+    # )
     arch_json_path = os.path.join(
         RUN_OUTPUT_PATH,
         f"{CITY_NAME}_{MODEL_NAME}_architecture.json",
     )
-    summary_json_path = os.path.join(
-        RUN_OUTPUT_PATH,
-        f"{CITY_NAME}_{MODEL_NAME}_training_summary.json",
-    )
-    run_manifest_path = os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_run_manifest.json"
-    )
 
-    try:
-        subs_model_inst.save_weights(weights_path)
-        log(f"[OK] Saved HDF5 weights -> {weights_path}")
-    except Exception as e:
-        log(f"[Warn] save_weights('{weights_path}') failed: {e}")
+    # try:
+    #     subs_model_inst.save_weights(weights_path)
+    #     log(f"[OK] Saved HDF5 weights -> {weights_path}")
+    # except Exception as e:
+    #     log(f"[Warn] save_weights('{weights_path}') failed: {e}")
 
     try:
         with open(arch_json_path, "w", encoding="utf-8") as f:
@@ -758,7 +901,8 @@ def run_training(
         "paths": {
             "run_dir": RUN_OUTPUT_PATH,
             "checkpoint_keras": ckpt_path,
-            "weights_h5": weights_path,
+            "checkpoint_weights": ckpt_path,
+            # "weights_h5": weights_path,
             "arch_json": arch_json_path,
             "csv_log": csvlog_path,
         },
@@ -767,21 +911,10 @@ def run_training(
     # stash this into training_summary later:
     training_summary["env"]["device"] = device_info
     
-    final_model_path = os.path.join(
+    summary_json_path = os.path.join(
         RUN_OUTPUT_PATH,
-        f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_final.keras",
+        f"{CITY_NAME}_{MODEL_NAME}_training_summary.json",
     )
-    try:
-        subs_model_inst.save(final_model_path)
-        training_summary["paths"]["final_keras"] = final_model_path
-        log(f"[OK] Saved Final keras model -> {final_model_path}")
-    except Exception as e:
-        log(
-            f"[Warn] Saved Final keras model ('{final_model_path}') failed: {e}"
-        )
-
-    with open(summary_json_path, "w", encoding="utf-8") as f:
-        json.dump(training_summary, f, indent=2)
 
     run_manifest = {
         "stage": "stage-2-train",
@@ -801,6 +934,12 @@ def run_training(
             "train_log_csv": csvlog_path,
         },
     }
+    
+    run_manifest_path = os.path.join(
+        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_run_manifest.json"
+    )
+    
+    
     with open(run_manifest_path, "w", encoding="utf-8") as f:
         json.dump(run_manifest, f, indent=2)
 
@@ -821,23 +960,7 @@ def run_training(
     # ================================================================
     # 8. History plots + physics parameters
     # ================================================================
-    history_groups = {
-        "Total Loss": ["loss", "val_loss"],
-        "Physics Loss": ["physics_loss", "val_physics_loss"],
-        "Data Loss": ["data_loss", "val_data_loss"],
-        "Component Losses": [
-            "consolidation_loss",
-            "val_consolidation_loss",
-            "gw_flow_loss",
-            "val_gw_flow_loss",
-            "prior_loss",
-            "val_prior_loss",
-            "smooth_loss",
-            "val_smooth_loss",
-        ],
-        "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
-        "GWL MAE": ["gwl_pred_mae", "val_gwl_pred_mae"],
-    }
+    history_groups.pop("Epsilon (prior/cons)", None)
     yscales = {
         "Total Loss": "log",
         "Physics Loss": "log",
@@ -875,6 +998,9 @@ def run_training(
     # ================================================================
     # 9. Reload best checkpoint for inference
     # ================================================================
+    # custom_objects_load only matters if you later use load_model, but we
+    # now rely on load_weights, so this is mostly for completeness.
+    
     custom_objects_load = {
         "GeoPriorSubsNet": GeoPriorSubsNet,
         "LearnableMV": LearnableMV,
@@ -883,16 +1009,61 @@ def run_training(
         "FixedHRef": FixedHRef,
         "make_weighted_pinball": make_weighted_pinball,
     }
+    # Best weights are already in-memory thanks to EarlyStopping
+    # with `restore_best_weights=True`. As an extra safety net we
+    # reload them from the HDF5 checkpoint; if that fails, we keep
+    # the in-memory model.
+    
+    # Use a TF-style checkpoint prefix (no extension) so we avoid HDF5
+    ckpt_prefix = (
+        f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_best"
+    )
+    ckpt_path = os.path.join(RUN_OUTPUT_PATH, ckpt_prefix)
+    
     try:
-        with custom_object_scope(custom_objects_load):
-            subs_model_loaded = load_model(ckpt_path, compile=False)
-        log("Loaded best model for inference (compile=False).")
+        subs_model_inst.load_weights(ckpt_path)
+        log("[Info] Reloaded best weights from checkpoint.")
+        subs_model_loaded = subs_model_inst
     except Exception as e:
         log(
-            f"[Warn] Could not load best checkpoint ({e}); "
-            "using in-memory model."
+            "[Warn] Could not reload checkpoint weights "
+            f"({e}); continuing with in-memory model."
         )
         subs_model_loaded = subs_model_inst
+
+
+    final_model_path = os.path.join(
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}_final.keras",
+    )
+
+    try:
+        subs_model_inst.save(final_model_path)
+        training_summary["paths"]["final_keras"] = final_model_path
+        log(f"[OK] Saved Final keras model -> {final_model_path}")
+    except Exception as e:
+        log(f"[Warn] .keras save failed ({e}); falling back to SavedModel.")
+        savedmodel_dir = os.path.join(RUN_OUTPUT_PATH, "savedmodel_final")
+        subs_model_inst.save(savedmodel_dir, save_format="tf")
+        training_summary["paths"]["final_savedmodel"] = savedmodel_dir
+        
+        log(
+            f"[Warn] Saved Final keras model ('{final_model_path}') failed: {e}"
+        )
+
+    with open(summary_json_path, "w", encoding="utf-8") as f:
+        json.dump(training_summary, f, indent=2)
+        
+    # try:
+    #     with custom_object_scope(custom_objects_load):
+    #         subs_model_loaded = load_model(ckpt_path, compile=False)
+    #     log("Loaded best model for inference (compile=False).")
+    # except Exception as e:
+    #     log(
+    #         f"[Warn] Could not load best checkpoint ({e}); "
+    #         "using in-memory model."
+    #     )
+    #     subs_model_loaded = subs_model_inst
 
     if stop_check and stop_check():
         log("[Stop] Cancelled before calibration.")

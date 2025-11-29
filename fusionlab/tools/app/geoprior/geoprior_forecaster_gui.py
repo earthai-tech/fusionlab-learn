@@ -262,7 +262,7 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
 
     def _set_window_props(self) -> None:
-        self.setWindowTitle("Fusionlab – GeoPrior-3.0 Forecaster")
+        self.setWindowTitle("GeoPrior-3.0 Forecaster")
     
         # Read window sizing from GeoPriorConfig (with safe fallbacks)
         cfg = self.geo_cfg
@@ -1366,7 +1366,10 @@ class GeoPriorForecaster(QMainWindow):
     def _update_global_running_state(self) -> None:
         any_running = self._any_job_running()
     
-        self.btn_stop.setEnabled(any_running)
+        # Show/hide + enable/disable Stop based on running state
+        if hasattr(self, "btn_stop"):
+            self.btn_stop.setVisible(any_running)
+            self.btn_stop.setEnabled(any_running)
     
         is_dry = self._is_dry_mode()
     
@@ -2713,6 +2716,10 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
         
+        # push current GUI values into self.geo_cfg
+        self._sync_config_from_ui()
+        cfg = self.geo_cfg
+
         # Dry-run short-circuit
         if self._is_dry_mode():
             self._run_train_dry_preview()
@@ -2762,6 +2769,8 @@ class GeoPriorForecaster(QMainWindow):
         city = self.city_edit.text().strip()
         if not city and self.csv_path is not None:
             city = self.csv_path.stem
+            # XXX TODO
+            cfg.city = city 
         
         if not city:
             QMessageBox.warning(
@@ -2780,7 +2789,7 @@ class GeoPriorForecaster(QMainWindow):
         
         default_name = cfg.CITY_NAME or "geoprior_run"
         cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
-
+        
         try:
             cfg.ensure_valid()
         except Exception as exc:
@@ -3787,6 +3796,9 @@ class GeoPriorForecaster(QMainWindow):
         - \"rebuild\" / \"scratch\": run Stage-1 first, then training.
           (We treat \"scratch\" as \"rebuild\" here.)
         """
+        #  sync GUI → config for this job as well
+        self._sync_config_from_ui()
+
         # Basic config from GUI
         cfg = self.geo_cfg
         # Lock the city to the Stage-1 city of the job
@@ -3833,64 +3845,101 @@ class GeoPriorForecaster(QMainWindow):
         self._append_status(
             "[Job] Starting training "
             f"(city={job.stage1_summary.city}, mode={job.mode}, "
-            f"root={job.stage1_root})"
+            f"root={job.results_root})"
         )
-    
+
         # --- Case 1: reuse existing Stage-1, training only -------------------
         if job.mode == "reuse":
             self.status_updated.emit(
                 "Stage-2: training GeoPrior model (reusing Stage-1)…"
             )
-            # Bypass Stage-1 thread and jump directly to Stage-2
-            self._on_stage1_finished(cfg, job.stage1_summary)
+
+            if job.stage1_summary is None:
+                # Very defensive; normally this should never happen
+                self._append_status(
+                    "[Job] Cannot reuse Stage-1 – no summary attached "
+                    "to TrainJobSpec."
+                )
+                self.train_btn.setEnabled(True)
+                self.btn_train_options.setEnabled(True)
+                return
+
+            # Directly reuse the Stage-1 summary; handler will pick
+            # up manifest_path and start TrainingThread.
+            self._on_stage1_finished(job.stage1_summary)
             return
-    
+
         # --- Case 2: rebuild/scratch: run Stage-1, then training -------------
         stage1_cfg = cfg.to_stage1_config()
-        # Ensure Stage-1 outputs go under the GUI runs root
         stage1_cfg["BASE_OUTPUT_DIR"] = str(self.gui_runs_root)
-    
-        # Optional hint to the Stage-1 script that this is a rebuild
+
         if job.mode in {"rebuild", "scratch"}:
             stage1_cfg["FORCE_REBUILD"] = True
-    
+
         self.status_updated.emit("Stage-1: preparing sequences…")
-    
+
         stage1_thread = Stage1Thread(
             csv_path=csv_path_str,
             cfg_overrides=stage1_cfg,
             parent=self,
         )
-        stage1_thread.stage1Finished.connect(
-            lambda summary: self._on_stage1_finished(cfg, summary)
-        )
+        # Again: single-arg signal → single-arg slot
+        stage1_thread.stage1Finished.connect(self._on_stage1_finished)
         stage1_thread.errorOccurred.connect(self._on_worker_error)
-    
+
         self.stage1_thread = stage1_thread
         stage1_thread.start()
 
 
-    @pyqtSlot(dict)
-    def _on_stage1_finished(self, result: Dict[str, Any]) -> None:
+    @pyqtSlot(object)
+    def _on_stage1_finished(self, result: Any) -> None:
+        """
+        Handle completion of Stage-1 (either reused or freshly built).
+
+        Parameters
+        ----------
+        result :
+            Either
+
+            * a Stage1Summary instance (preferred new path), or
+            * a dict with a "manifest_path" entry (legacy path).
+        """
+        # Stage-1 thread (if any) is no longer running
         self.stage1_thread = None
 
-        if not result:
+        if result is None:
             self.log_updated.emit(
-                "Stage-1 finished with an empty result dict."
+                "Stage-1 finished with an empty result object."
             )
             self.status_updated.emit("Stage-1 failed. See log.")
             self.train_btn.setEnabled(True)
+            # Optional but nice: re-enable options too
+            if hasattr(self, "btn_train_options"):
+                self.btn_train_options.setEnabled(True)
             return
 
-        manifest_path = result.get("manifest_path")
+        manifest_path: str | None = None
+
+        # --- New-style: Stage1Summary-like object -------------------------
+        # Any object with a .manifest_path attribute (Stage1Summary)
+        attr = getattr(result, "manifest_path", None)
+        if attr is not None:
+            manifest_path = str(attr)
+
+        # --- Legacy: dict coming from old run_stage1 helper --------------
+        elif isinstance(result, dict):
+            manifest_path = result.get("manifest_path")
+
         if not manifest_path:
             self.log_updated.emit(
-                "Stage-1 did not return a manifest_path."
+                "Stage-1 result did not provide a manifest_path."
             )
             self.status_updated.emit(
-                "Cannot start training – no manifest."
+                "Cannot start training – no Stage-1 manifest."
             )
             self.train_btn.setEnabled(True)
+            if hasattr(self, "btn_train_options"):
+                self.btn_train_options.setEnabled(True)
             return
 
         self.log_updated.emit(
@@ -3900,12 +3949,22 @@ class GeoPriorForecaster(QMainWindow):
         self.status_updated.emit("Stage-2: training GeoPrior model.")
         self._start_training(manifest_path)
 
+
     def _start_training(self, manifest_path: str) -> None:
+        """
+        Launch the TrainingThread for the given Stage-1 manifest.
+        """
+        # Base overrides computed earlier from the Train tab
+        base_overrides = getattr(self, "_cfg_overrides", {}) or {}
+
+        # Optional device overrides (GPU/CPU selection, etc.)
         device_overrides = getattr(
-            self, "_device_cfg_overrides", {}) or {}
-        
-        cfg_overrides =self._cfg_overrides.update(device_overrides)
-        
+            self, "_device_cfg_overrides", {}
+        ) or {}
+
+        # IMPORTANT: build a merged dict; update() returns None
+        cfg_overrides = {**base_overrides, **device_overrides}
+
         th = TrainingThread(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
@@ -3922,6 +3981,7 @@ class GeoPriorForecaster(QMainWindow):
 
         th.start()
         self._update_global_running_state()
+
 
     @pyqtSlot(dict)
     def _on_training_finished(self, result: Dict[str, Any]) -> None:
