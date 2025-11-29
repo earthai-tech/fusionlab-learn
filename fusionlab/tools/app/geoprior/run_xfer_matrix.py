@@ -2,6 +2,7 @@
 # Author: LKouadio <etanoyau@gmail.com>
 
 from __future__ import annotations
+
 import os
 import json
 import glob

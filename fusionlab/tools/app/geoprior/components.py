@@ -1,3 +1,8 @@
+# License: BSD-3-Clause
+# Author: LKouadio <etanoyau@gmail.com>
+
+from __future__ import annotations
+
 from typing import Callable , Optional
 import time
 import errno

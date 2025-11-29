@@ -68,7 +68,7 @@
     ],
     "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": true,
     "USE_EFFECTIVE_H_FIELD": true,
-    "BUILD_FUTURE_NPZ": true,
+    "BUILD_FUTURE_NPZ": false,
     "ATTENTION_LEVELS": [
       "cross",
       "hierarchical",
@@ -123,6 +123,9 @@
     "EPOCHS": 50,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
+    "TF_DEVICE_MODE": "auto",
+    "TF_GPU_ALLOW_GROWTH": true,
+    "TUNER_MAX_TRIALS": 20,
     "TUNER_SEARCH_SPACE": {
       "embed_dim": [
         32,
@@ -248,6 +251,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "4d8a3fa253a3de20605e933e3b34486d6e93bc7d5a03adb0804898653c23877f"
+    "config_py_hash": "9079f6af672239d3923ea19d26ad6e4df61138891b5f834de214f6d506d67562"
   }
 }

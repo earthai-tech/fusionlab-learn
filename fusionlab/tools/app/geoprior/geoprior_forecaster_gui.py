@@ -1245,11 +1245,8 @@ class GeoPriorForecaster(QMainWindow):
             return
 
         # Dry-run has priority over tab mode
-        is_dry = (
-            hasattr(self, "chk_dry_run")
-            and self.chk_dry_run.isChecked()
-        )
-
+        is_dry = self._is_dry_mode()
+        
         if is_dry:
             mode_label = "DRY RUN"
             color = MODE_DRY_COLOR
@@ -1692,7 +1689,6 @@ class GeoPriorForecaster(QMainWindow):
             self._stage1_manifest_hint = None
             return True
 
-        # ... after runs_for_city / all_runs have been computed ...
         if not all_runs:
             # unchanged: no Stage-1 at all => build
             self.log_updated.emit(
@@ -2513,7 +2509,25 @@ class GeoPriorForecaster(QMainWindow):
         return stem
 
     def _run_train_dry_preview(self) -> None:
-        # Validate basic inputs like the real run
+        """
+        Simulate a training run without starting any worker threads.
+
+        This method validates the current GUI state and logs a detailed
+        description of what *would* happen during Stage-1 and Stage-2
+        training, while driving the main progress bar from 0 → 100 %.
+
+        No files are written and no models are trained.
+        """
+
+        # ------------------------------------------------------------------
+        # 0) Start dry-run preview: reset progress and status line
+        # ------------------------------------------------------------------
+        self._update_progress(0.0)
+        self.status_updated.emit("Dry-run / Train: validating inputs…")
+
+        # ------------------------------------------------------------------
+        # 1) Validate basic inputs, just like in the real run
+        # ------------------------------------------------------------------
         csv_path_str = str(self.csv_path) if self.csv_path is not None else ""
         if not csv_path_str:
             QMessageBox.warning(
@@ -2521,31 +2535,52 @@ class GeoPriorForecaster(QMainWindow):
                 "No training CSV",
                 "Dry-run: please choose a training CSV file first.",
             )
+            # Keep progress at 0 % on early exit
+            self._update_progress(0.0)
+            self.status_updated.emit(
+                "Dry-run / Train: aborted (no training CSV)."
+            )
             return
-    
+
         city = self.city_edit.text().strip()
         if not city and self.csv_path is not None:
+            # Fallback: infer city from CSV filename stem
             city = self.csv_path.stem
-    
+
         if not city:
             QMessageBox.warning(
                 self,
                 "Missing city name",
                 "Dry-run: please provide a city/dataset name.",
             )
+            self._update_progress(0.0)
+            self.status_updated.emit(
+                "Dry-run / Train: aborted (missing city name)."
+            )
             return
-    
-        # Sync GUI → config so logs match a real run
+
+        # ------------------------------------------------------------------
+        # 2) Sync GUI → config so logs match a real run
+        # ------------------------------------------------------------------
+        self.status_updated.emit("Dry-run / Train: syncing configuration…")
         self._sync_config_from_ui()
+
         cfg = self.geo_cfg
         cfg.TRAIN_CSV_PATH = csv_path_str
+
+        # If CITY_NAME not set in config, infer it from CSV
         if not getattr(cfg, "CITY_NAME", ""):
             cfg.CITY_NAME = self._infer_city_name_from_csv(csv_path_str)
-    
+
         default_name = cfg.CITY_NAME or "geoprior_run"
         cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
-    
-        # You can still call ensure_valid to reveal config errors
+
+        # Progress: inputs + config synced successfully
+        self._update_progress(0.25)
+
+        # ------------------------------------------------------------------
+        # 3) Validate configuration (same as a real run)
+        # ------------------------------------------------------------------
         try:
             cfg.ensure_valid()
         except Exception as exc:
@@ -2554,11 +2589,18 @@ class GeoPriorForecaster(QMainWindow):
                 "Invalid configuration (dry-run)",
                 f"The training configuration is not valid:\n\n{exc}",
             )
+            self._update_progress(0.0)
+            self.status_updated.emit(
+                "Dry-run / Train: aborted (invalid configuration)."
+            )
             return
-    
-        # Optionally: decide whether Stage-1 would be rebuilt or reused
-        # without actually starting threads. For now we just mention the
-        # Stage-1 policy flags.
+
+        # Progress: configuration validated
+        self._update_progress(0.4)
+
+        # ------------------------------------------------------------------
+        # 4) Log the planned workflow summary
+        # ------------------------------------------------------------------
         self._append_status(
             "[Dry-run / Train] Planned workflow:\n"
             f"  City           : {cfg.CITY_NAME}\n"
@@ -2570,9 +2612,18 @@ class GeoPriorForecaster(QMainWindow):
             f"  PDE mode       : {cfg.pde_mode}\n"
             f"  Clean Stage-1  : {cfg.clean_stage1_dir}\n"
             f"  Build future   : {cfg.build_future_npz}\n"
-            f"  experiment    : {cfg.EXPERIMENT_NAME}"
+            f"  Experiment     : {cfg.EXPERIMENT_NAME}"
         )
-        # --- NEW PART: ask Smart Stage-1 what it would do ---
+
+        # Progress: summary printed
+        self._update_progress(0.55)
+
+        # ------------------------------------------------------------------
+        # 5) Ask Smart Stage-1 what it *would* do, without starting threads
+        # ------------------------------------------------------------------
+        self.status_updated.emit(
+            "Dry-run / Train: evaluating Smart Stage-1 handshake…"
+        )
         need_stage1 = self._smart_stage1_handshake(
             city=city,
             csv_path=csv_path_str,
@@ -2580,12 +2631,17 @@ class GeoPriorForecaster(QMainWindow):
         manifest_hint = getattr(self, "_stage1_manifest_hint", None)
 
         if not need_stage1:
-            # Either: reuse existing Stage-1, or user canceled
+            # Either reuse existing Stage-1 or user cancelled
             if manifest_hint is None:
-                # Handshake already logged "cancel" – just echo dry-run result.
+                # Handshake already logged the cancel; just echo a dry-run line
                 self._append_status(
                     "[Dry-run] Result: user would cancel at the "
                     "Stage-1 handshake → no training would run."
+                )
+                self._update_progress(1.0)
+                self.status_updated.emit(
+                    "Dry-run / Train: preview complete (100 %) – "
+                    "user would cancel at Stage-1."
                 )
                 return
 
@@ -2595,7 +2651,7 @@ class GeoPriorForecaster(QMainWindow):
                 f"  manifest: {manifest_hint}"
             )
         else:
-            # Stage-1 must run (rebuild/new)
+            # Stage-1 must run (rebuild or from scratch)
             if manifest_hint:
                 self._append_status(
                     "[Dry-run] Result: Stage-1 would be rebuilt, "
@@ -2608,12 +2664,23 @@ class GeoPriorForecaster(QMainWindow):
                     "Stage-1 would be run from scratch."
                 )
 
-        # Finally, what about Stage-2 training?
+        # Progress: Stage-1 decision computed
+        self._update_progress(0.8)
+
+        # ------------------------------------------------------------------
+        # 6) Final message: Stage-2 training that *would* run
+        # ------------------------------------------------------------------
         self._append_status(
             "[Dry-run] After Stage-1, a TrainingThread would be started "
             "with the above configuration (but in dry mode, nothing is run)."
         )
-        
+
+        # Progress: reach 100 % and emit a clear completion message
+        self._update_progress(1.0)
+        self.status_updated.emit(
+            "Dry-run / Train: preview complete (100 %)."
+        )
+
     @pyqtSlot()
     def _on_train_clicked(self) -> None:
         """
@@ -2708,9 +2775,9 @@ class GeoPriorForecaster(QMainWindow):
         cfg.TRAIN_CSV_PATH = csv_path_str
     
         # Infer city name from CSV if the user didn't type one
-        if not cfg.CITY_NAME:
+        if getattr( cfg, "CITY_NAME", None) is None:
             cfg.CITY_NAME = self._infer_city_name_from_csv(csv_path_str)
-    
+        
         default_name = cfg.CITY_NAME or "geoprior_run"
         cfg.EXPERIMENT_NAME = self._get_experiment_name(default_name)
 
@@ -2723,33 +2790,40 @@ class GeoPriorForecaster(QMainWindow):
                 f"The training configuration is not valid:\n\n{exc}",
             )
             return
-    
+
         # Smart Stage-1 handshake: reuse if matching manifest exists,
         # otherwise build Stage-1 from scratch.
-        stage1_cfg, stage1_only = self._smart_stage1_handshake(cfg)
+        need_stage1 = self._smart_stage1_handshake(
+            city=cfg.CITY_NAME or city,
+            csv_path=csv_path_str,
+        )
     
-        # self.progress.reset()
+        # If the user cancelled in the Stage-1 choice dialog,
+        # _stage1_manifest_hint will be None and we just bail out.
+        if not need_stage1 and self._stage1_manifest_hint is None:
+            self.status_updated.emit("Training cancelled before Stage-1.")
+            return
+    
+        # Build overrides once from the current GUI config – this is what
+        # Stage-1 and Training threads will use.
+        # ( self._build_cfg_overrides_from_geo_cfg()
+        self._cfg_overrides = cfg.to_cfg_overrides()
+    
+        # Lock UI and reset progress using existing helpers
+        self.train_btn.setEnabled(False)
+        self.btn_train_options.setEnabled(False)
         self._update_progress(0.0)
         self.status_updated.emit("Stage-1: preparing sequences…")
-        self.btn_train.setEnabled(False)
-        self.btn_train_options.setEnabled(False)
-    
-        if stage1_only:
-            stage1_thread = Stage1Thread(
-                csv_path=csv_path_str,
-                cfg_overrides=stage1_cfg,
-                parent=self,
-            )
-            stage1_thread.stage1Finished.connect(
-                lambda summary: self._on_stage1_finished(cfg, summary)
-            )
-            stage1_thread.errorOccurred.connect(self._on_worker_error)
-            self.stage1_thread = stage1_thread
-            stage1_thread.start()
+  
+        if need_stage1:
+            # Run Stage-1 in a worker thread; when it finishes,
+            # _on_stage1_finished will kick off Training.
+            self._start_stage1(city=cfg.CITY_NAME or city)
         else:
-            # stage1_cfg is a Stage1Summary in this branch
-            summary = stage1_cfg  # type: ignore[assignment]
-            self._on_stage1_finished(cfg, summary)
+            # We already chose a Stage-1 manifest to reuse, so jump straight
+            # to Training.
+            manifest_path = str(self._stage1_manifest_hint)
+            self._start_training(manifest_path)
   
 
     @pyqtSlot()
@@ -2898,51 +2972,115 @@ class GeoPriorForecaster(QMainWindow):
     def _run_tune_dry_preview(self) -> None:
         """
         Simulate what a tuning run would do, without starting threads.
-        """
-        if not self.log_mgr:
-            return
 
-        self.log_mgr.clear()
+        This method follows the same job-resolution logic as the real
+        `_on_tune_clicked`, but instead of launching a `TuningThread`,
+        it logs a detailed summary of the plan and drives the main
+        progress bar from 0 → 100 %.
+
+        No models are trained and no files are written.
+        """
+
+        # ------------------------------------------------------------------
+        # 0) Start dry-run preview: reset progress, clear logs & set status
+        # ------------------------------------------------------------------
+        self._update_progress(0.0)
+        self.status_updated.emit("Dry-run / Tune: resolving tuning job…")
+
+        if hasattr(self, "log_mgr") and self.log_mgr:
+            self.log_mgr.clear()
+
         self._append_status(
-            "[Dry-run] Previewing GeoPrior tuning workflow ..."
+            "[Dry-run] Previewing GeoPrior tuning workflow..."
         )
 
-        # 1. Resolve the TuneJobSpec the same way as in _on_tune_clicked
+        # ------------------------------------------------------------------
+        # 1) Resolve the TuneJobSpec the same way as in _on_tune_clicked
+        # ------------------------------------------------------------------
         job = self._queued_tune_job
         self._queued_tune_job = None
 
+        # If no queued job, fall back to QuickTuneDialog (Stage-1 chooser)
         if job is None:
-            # Try the quick dialog to let the user pick a Stage-2 run
-            ok, quick_job = QuickTuneDialog.run(
-                parent=self,
-                results_root=self.gui_runs_root,
-            )
-            if not ok or quick_job is None:
+            try:
+                ok, quick_job = QuickTuneDialog.run(
+                    results_root=self.gui_runs_root,
+                    parent=self,
+                )
+            except Exception as exc:  # defensive
                 self._append_status(
-                    "[Dry-run] No tuning job selected → nothing would run."
+                    f"[Dry-run / QuickTune] Failed to list Stage-1 runs: {exc}"
+                )
+                self._update_progress(1.0)
+                self.status_updated.emit(
+                    "Dry-run / Tune: preview complete (100 %) – "
+                    "failed to list Stage-1 runs."
                 )
                 return
-            
+
+            if not ok or quick_job is None:
+                self._append_status(
+                    "[Dry-run] No tuning job selected → "
+                    "no tuning would run."
+                )
+                self._update_progress(1.0)
+                self.status_updated.emit(
+                    "Dry-run / Tune: preview complete (100 %) – "
+                    "no tuning job would run."
+                )
+                return
+
             job = quick_job
 
-        stage1 = job.stage1  # depending on your actual API this might be
-                             # job.stage1_summary or similar
+        # At this point we have a TuneJobSpec
+        stage1 = job.stage1               # Stage-1 summary / metadata
         city = stage1.city
         manifest_path = getattr(stage1, "manifest_path", None)
+        stage1_root = getattr(stage1, "run_dir", manifest_path)
 
-        # 2. Sync config / search space as usual
+        # Reflect chosen city in the GUI (for consistency with real run)
+        self.city_edit.setText(city)
+
+        # Progress: job resolved successfully
+        self._update_progress(0.35)
+        self.status_updated.emit(
+            f"Dry-run / Tune: syncing configuration for city={city}…"
+        )
+
+        # ------------------------------------------------------------------
+        # 2) Sync config / search space as usual
+        # ------------------------------------------------------------------
+        # Sync PDE weights, learning rate, etc. from the Train tab
         self._sync_config_from_ui()
         cfg = self.geo_cfg
 
+        # Use the default tuner search space to summarise keys
+        # (the real run may inject overrides from Tune tab widgets,
+        # but the keys are the same).
         search_space = default_tuner_search_space()
 
+        # Determine max_trials:
+        #  - Prefer the GUI spin box if present,
+        #  - otherwise fall back to cfg.TUNER_MAX_TRIALS or default=20.
         max_trials = getattr(cfg, "TUNER_MAX_TRIALS", 20)
+        if hasattr(self, "spin_max_trials"):
+            try:
+                max_trials = int(self.spin_max_trials.value())
+            except Exception:
+                # If something goes wrong, keep the previous max_trials
+                pass
 
+        # Progress: configuration + search space ready
+        self._update_progress(0.65)
+
+        # ------------------------------------------------------------------
+        # 3) Log the tuning plan that *would* be executed
+        # ------------------------------------------------------------------
         self._append_status(
             "[Dry-run] Tuning plan:\n"
             f"  city          : {city}\n"
             f"  results_root  : {self.gui_runs_root}\n"
-            f"  stage1_root   : {stage1.manifest_path}\n"
+            f"  stage1_root   : {stage1_root}\n"
             f"  manifest      : {manifest_path}\n"
             f"  max_trials    : {max_trials}\n"
             f"  search keys   : {sorted(search_space.keys())}"
@@ -2952,6 +3090,103 @@ class GeoPriorForecaster(QMainWindow):
             "[Dry-run] A TuningThread would be created with the above "
             "job spec, but in dry mode nothing is started."
         )
+
+        # ------------------------------------------------------------------
+        # 4) Finalise: set progress to 100 % and emit completion status
+        # ------------------------------------------------------------------
+        self._update_progress(1.0)
+        self.status_updated.emit(
+            "Dry-run / Tune: preview complete (100 %)."
+        )
+
+    # --------------------------------------------------------------
+    # Inference: dry-run helper
+    # --------------------------------------------------------------
+    def _run_infer_dry_preview(self) -> None:
+        """
+        Dry-run helper for the Inference tab.
+
+        Validates current GUI settings and logs what *would* be
+        executed, while driving the progress bar, but without
+        launching InferenceThread.
+        """
+        if hasattr(self, "log_mgr"):
+            self.log_mgr.clear()
+
+        self._append_status(
+            "[DRY] Inference preview – no model will be loaded, "
+            "no files will be written."
+        )
+        self._update_progress(0.0)
+
+        # Reuse the same UI values / validation as _on_infer_clicked
+        model_path = self.inf_model_edit.text().strip()
+        if not model_path:
+            QMessageBox.warning(
+                self,
+                "Model required",
+                "Even in dry-run, please select a trained/tuned .keras "
+                "model first.",
+            )
+            self._update_progress(0.0)
+            return
+
+        dataset_key = self.cmb_inf_dataset.currentData() or "test"
+        use_future = self.chk_inf_use_future.isChecked()
+        manifest_path = self.inf_manifest_edit.text().strip() or None
+
+        inputs_npz: str | None = None
+        targets_npz: str | None = None
+        if dataset_key == "custom" and not use_future:
+            inputs_npz = self.inf_inputs_edit.text().strip() or None
+            targets_npz = self.inf_targets_edit.text().strip() or None
+            if not inputs_npz:
+                QMessageBox.warning(
+                    self,
+                    "Inputs NPZ required",
+                    "For 'Custom NPZ', please select an inputs .npz file.",
+                )
+                self._update_progress(0.0)
+                return
+
+        use_source_calibrator = self.chk_inf_use_source_calib.isChecked()
+        fit_calibrator = self.chk_inf_fit_calib.isChecked()
+        calibrator_path = self.inf_calib_edit.text().strip() or None
+
+        cov_target = float(self.sp_inf_cov.value())
+        include_gwl = self.chk_inf_include_gwl.isChecked()
+        batch_size = int(self.sp_inf_batch.value())
+        make_plots = self.chk_inf_plots.isChecked()
+
+        # Mid-way progress: parsing + validation OK
+        self._update_progress(0.4)
+
+        # Summarise config in the log + status
+        summary_lines = [
+            "[DRY] Inference would run with:",
+            f"  model_path       : {model_path}",
+            f"  dataset          : {dataset_key}",
+            f"  use_future_npz   : {use_future}",
+            f"  manifest_path    : {manifest_path or '<auto-discover>'}",
+            f"  inputs_npz       : {inputs_npz or '<Stage-1 default>'}",
+            f"  targets_npz      : {targets_npz or '<Stage-1 default>'}",
+            f"  cov_target       : {cov_target}",
+            f"  include_gwl      : {include_gwl}",
+            f"  batch_size       : {batch_size}",
+            f"  make_plots       : {make_plots}",
+            f"  use_source_calib : {use_source_calibrator}",
+            f"  fit_calibrator   : {fit_calibrator}",
+            f"  calibrator_path  : {calibrator_path or '<none>'}",
+        ]
+        for line in summary_lines:
+            self._append_status(line)
+
+        # Final progress
+        self._update_progress(1.0)
+        self.status_updated.emit(
+            "[DRY] Inference preview complete – nothing was executed."
+        )
+
 
     @pyqtSlot()
     def _on_infer_clicked(self) -> None:
@@ -2965,6 +3200,12 @@ class GeoPriorForecaster(QMainWindow):
                 "Inference is already running.",
             )
             return
+        
+        # Dry-run short-circuit: preview only, no threads
+        if self._is_dry_mode():
+            self._run_infer_dry_preview()
+            return
+        
         if hasattr(self, "log_mgr"):
             self.log_mgr.clear()
             
@@ -3064,6 +3305,104 @@ class GeoPriorForecaster(QMainWindow):
             "Transferability advanced options updated."
         )
 
+    # --------------------------------------------------------------
+    # Transferability: dry-run helper
+    # --------------------------------------------------------------
+    def _run_xfer_dry_preview(self) -> None:
+        """
+        Dry-run helper for the Transferability tab.
+
+        Validates current GUI settings and logs what *would* be
+        executed, while driving the progress bar, but without
+        launching XferMatrixThread.
+        """
+        if hasattr(self, "log_mgr"):
+            self.log_mgr.clear()
+
+        self._append_status(
+            "[DRY] Transferability preview – no models will be loaded, "
+            "no transfer matrix will be computed."
+        )
+        self._update_progress(0.0)
+
+        city_a = self.xfer_city_a.text().strip() or "nansha" # Keep it for dry only
+        city_b = self.xfer_city_b.text().strip() or "zhongshan"
+
+        if not city_a or not city_b:
+            QMessageBox.warning(
+                self,
+                "Cities required",
+                "Please fill both City A and City B.",
+            )
+            self._update_progress(0.0)
+            return
+
+        # Collect splits (same logic as in _on_xfer_clicked)
+        splits: list[str] = []
+        if self.chk_xfer_split_train.isChecked():
+            splits.append("train")
+        if self.chk_xfer_split_val.isChecked():
+            splits.append("val")
+        if self.chk_xfer_split_test.isChecked():
+            splits.append("test")
+        if not splits:
+            QMessageBox.warning(
+                self,
+                "Splits required",
+                "Please select at least one split.",
+            )
+            self._update_progress(0.0)
+            return
+
+        # Collect calibration modes
+        calib_modes: list[str] = []
+        if self.chk_xfer_calib_none.isChecked():
+            calib_modes.append("none")
+        if self.chk_xfer_calib_source.isChecked():
+            calib_modes.append("source")
+        if self.chk_xfer_calib_target.isChecked():
+            calib_modes.append("target")
+        if not calib_modes:
+            QMessageBox.warning(
+                self,
+                "Calibration modes required",
+                "Please select at least one calibration mode.",
+            )
+            self._update_progress(0.0)
+            return
+
+        results_root = self.gui_runs_root
+        rescale = self.chk_xfer_rescale.isChecked()
+        batch_size = int(self.sp_xfer_batch.value())
+        quantiles_override = self._xfer_quantiles_override
+        write_json = self._xfer_write_json
+        write_csv = self._xfer_write_csv
+
+        # Mid-way progress: everything parsed
+        self._update_progress(0.5)
+
+        summary_lines = [
+            "[DRY] Transfer matrix would run with:",
+            f"  city_a       : {city_a}",
+            f"  city_b       : {city_b}",
+            f"  results_root : {results_root}",
+            f"  splits       : {splits}",
+            f"  calib_modes  : {calib_modes}",
+            f"  rescale      : {rescale}",
+            f"  batch_size   : {batch_size}",
+            f"  quantiles    : {quantiles_override or '<from model>'}",
+            f"  write_json   : {write_json}",
+            f"  write_csv    : {write_csv}",
+        ]
+        for line in summary_lines:
+            self._append_status(line)
+
+        self._update_progress(1.0)
+        self.status_updated.emit(
+            "[DRY] Transferability preview complete – nothing was executed."
+        )
+
+
     @pyqtSlot()
     def _on_xfer_clicked(self) -> None:
         """
@@ -3075,6 +3414,11 @@ class GeoPriorForecaster(QMainWindow):
                 "Busy",
                 "Transferability is already running.",
             )
+            return
+
+        # Dry-run short-circuit: preview only, no threads
+        if self._is_dry_mode():
+            self._run_xfer_dry_preview()
             return
         
         if hasattr(self, "log_mgr"):
@@ -3483,7 +3827,7 @@ class GeoPriorForecaster(QMainWindow):
         # Shared UI setup
         # self.progress.reset()
         self._update_progress(0.0)
-        self.btn_train.setEnabled(False)
+        self.train_btn.setEnabled(False)
         self.btn_train_options.setEnabled(False)
     
         self._append_status(
