@@ -33,12 +33,12 @@ from typing import (
 import pandas as pd 
 import numpy as np   
 
-from ...registry import ManifestRegistry
-from ...utils.deps_utils import get_versions
-from ...utils.generic_utils import ensure_directory_exists
+from ....registry import ManifestRegistry
+from ....utils.deps_utils import get_versions
+from ....utils.generic_utils import ensure_directory_exists
 
-from ._config import setup_environment as _setup_env   
-from .utils import get_safe_output_dir 
+from .._config import setup_environment as _setup_env   
+from ..utils import get_safe_output_dir 
 
 if not globals().get("_FUSIONLAB_ENV_READY", False):
     _setup_env()                           

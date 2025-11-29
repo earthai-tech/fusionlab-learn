@@ -26,6 +26,7 @@ tf_shape = KERAS_DEPS.shape
 tf_expand_dims = KERAS_DEPS.expand_dims
 tf_broadcast_to = KERAS_DEPS.broadcast_to
 tf_shape = KERAS_DEPS.shape
+register_keras_serializable=KERAS_DEPS.register_keras_serializable
 
 DEP_MSG = dependency_message("nn.keras_metrics")
 
@@ -295,6 +296,9 @@ def _infer_quantile_axis(t, n_q=3):
     # Fallback: assume last dim packs (lo, hi) or (… , n_q) at runtime
     return None
 
+@register_keras_serializable(
+    "fusionlab.nn.keras_metrics",name="coverage80_fn"
+)
 def coverage80_fn(y_true, y_pred):
     """
     Empirical coverage for the central [0.1, 0.9] predictive interval.
@@ -377,7 +381,9 @@ def coverage80_fn(y_true, y_pred):
 
 coverage80_fn.__name__ = "coverage80"
 
-
+@register_keras_serializable(
+    "fusionlab.nn.keras_metrics",name="sharpness80_fn"
+)
 def sharpness80_fn(y_true, y_pred):
     """
     Mean width of the central [0.1, 0.9] predictive interval.

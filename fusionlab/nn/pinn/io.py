@@ -1,4 +1,3 @@
-# fusionlab/nn/pinn/io.py
 # -*- coding: utf-8 -*-
 """
 I/O helpers for physics diagnostics payloads.
@@ -14,7 +13,8 @@ from typing import Dict, Iterable, Tuple, Optional
 import numpy as np
 import pandas as pd  
 
-# ------------------------------- utils ------------------------------------ #
+from ..._optdeps import with_progress
+
 
 def _iso_now() -> str:
     """Return current UTC time in ISO format."""
@@ -111,7 +111,23 @@ def gather_physics_payload(
     """
     taus, tau_ps, Ks, Sss, Hds, cons_vals = [], [], [], [], [], []
     n = 0
-    for batch in dataset:
+    # Optional tqdm progress bar
+    iterable = dataset
+    try:
+        total = max_batches if max_batches is not  None else len(dataset) 
+    except: 
+        # Use len(dataset) if available; otherwise tqdm will show unknown total
+        total =None 
+    
+    iterable = with_progress(
+        dataset,
+        total=total,
+        desc="Gathering physics payload",
+        ascii=True,
+        leave=False
+    )
+
+    for batch in iterable:
         inputs = batch[0] if isinstance(batch, (tuple, list)) else batch
         phys = model.evaluate_physics(inputs, return_maps=True)
 

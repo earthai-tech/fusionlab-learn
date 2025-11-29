@@ -70,7 +70,7 @@ full = [
 
 [project.scripts]
 'fusionlab-learn' = 'fusionlab.cli:cli'
-'mini-forecaster' = 'fusionlab.tools.app.mini_forecaster_gui:launch_cli'
+'mini-forecaster' = 'fusionlab.tools.app.transflow.mini_forecaster_gui:launch_cli'
 
 [tool.setuptools.packages.find]
 exclude = ['docs', 'tests', 'examples']

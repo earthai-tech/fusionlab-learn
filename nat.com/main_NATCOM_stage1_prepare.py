@@ -40,6 +40,7 @@ from typing import Dict, Tuple, Optional
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import sklearn 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 # --- Suppress common warnings/tf chatter ---
@@ -64,6 +65,7 @@ try:
         print_config_table
 
     )
+    from fusionlab.utils.sequence_utils import build_future_sequences_npz
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
     
     print("Successfully imported fusionlab modules.")
@@ -117,6 +119,9 @@ FORECAST_START_YEAR     = cfg["FORECAST_START_YEAR"]
 FORECAST_HORIZON_YEARS  = cfg["FORECAST_HORIZON_YEARS"]
 TIME_STEPS              = cfg["TIME_STEPS"]
 MODE                    = cfg["MODE"]          # {'pihal_like', 'tft_like'}
+
+# Optional: whether Stage-1 should also pre-build future_* NPZ for Stage-3
+BUILD_FUTURE_NPZ = bool(cfg.get("BUILD_FUTURE_NPZ", False))
 
 # --- Column names ---
 TIME_COL         = cfg["TIME_COL"]
@@ -600,7 +605,8 @@ if df_train.empty:
     raise ValueError(f"Empty train split at year={TRAIN_END_YEAR}.")
 
 seq_job = os.path.join(
-    ARTIFACTS_DIR, f"{CITY_NAME}_train_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}.joblib"
+    ARTIFACTS_DIR, 
+    f"{CITY_NAME}_train_sequences_T{TIME_STEPS}_H{FORECAST_HORIZON_YEARS}.joblib"
 )
 
 OUT_S_DIM, OUT_G_DIM = 1, 1
@@ -775,7 +781,7 @@ manifest = {
         "tensorflow": tf.__version__,
         "numpy": np.__version__,
         "pandas": pd.__version__,
-        "sklearn": "1.x",
+        "sklearn": sklearn.__version__,
     },
 }
 
@@ -847,10 +853,46 @@ if not df_test.empty:
     except: 
          pass 
 
+# === Step 7: Build *true future* sequences (for Stage-3) ===
+
+future_npz_paths = None
+if BUILD_FUTURE_NPZ:
+    print(f"\n{'='*18} Step 7: Future Sequences {'='*18}")
+    try:
+        future_npz_paths = build_future_sequences_npz(
+            df_scaled=df_scaled,
+            time_col=TIME_COL,
+            time_col_num=TIME_COL_NUM,
+            lon_col=LON_COL,
+            lat_col=LAT_COL,
+            subs_col=SUBSIDENCE_COL,
+            gwl_col=GWL_COL,
+            h_field_col=H_FIELD_COL,
+            static_features=static_features,
+            dynamic_features=dynamic_features,
+            future_features=future_features,
+            group_id_cols=GROUP_ID_COLS,
+            train_end_time=TRAIN_END_YEAR,
+            forecast_start_time=FORECAST_START_YEAR,
+            forecast_horizon=FORECAST_HORIZON_YEARS,
+            time_steps=TIME_STEPS,
+            mode=MODE,
+            model_name=MODEL_NAME,
+            artifacts_dir=ARTIFACTS_DIR,
+            prefix="future",
+            verbose=7,
+        )
+        # Attach future_* NPZ paths into the manifest
+        manifest["artifacts"]["numpy"].update(future_npz_paths)
+    except Exception as e:
+        print(
+            f"  [Warn] BUILD_FUTURE_NPZ=True but construction failed: {e}\n"
+            "        Continuing without future_* NPZs."
+        )
+
 manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2)
-
 
 print(f"  Saved manifest: {manifest_path}")
 

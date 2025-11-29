@@ -34,23 +34,13 @@ from PyQt5.QtWidgets import (
     QInputDialog, 
     QGridLayout, 
     QWidget, 
-    # QSpinBox,
     QDateEdit,
     QDoubleSpinBox,
-    # QComboBox, 
-    # QTextEdit, 
-    # QFileDialog, 
-    # QProgressBar, 
     QLineEdit, 
     QCheckBox,
-    # QDialog, 
-    # QMessageBox,
-    # QToolTip, 
     QTabWidget,
     QStackedWidget, 
     QButtonGroup, 
-    # QSpacerItem, 
-    # QSizePolicy
 )
 
 from .notifications import show_resource_warning

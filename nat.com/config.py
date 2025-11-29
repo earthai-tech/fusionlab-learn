@@ -231,6 +231,8 @@ INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = True
 # when feeding the H-field into GeoPriorSubsNet.
 USE_EFFECTIVE_H_FIELD = True
 
+# Optional: whether Stage-1 should also pre-build future_* NPZ for Stage-3
+BUILD_FUTURE_NPZ = True
 
 # -------------------------------------------------------------------
 # 4. MODEL / PHYSICS / TRAINING DEFAULTS
@@ -313,9 +315,29 @@ GEOPRIOR_HD_FACTOR = 0.6
 # --------------------------
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
+<<<<<<< HEAD
 EPOCHS = 100
+=======
+EPOCHS = 5
+>>>>>>> bec174296ab7cc7fcb40c49cd2f2023cbe319cb2
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
+
+# 4.6. Hardware / device configuration
+# ----------------------------------
+# TF_DEVICE_MODE:
+#   - "auto" : use GPU if available, else CPU
+#   - "cpu"  : force CPU only
+#   - "gpu"  : force GPU only (first visible GPU, unless env overrides)
+TF_DEVICE_MODE = "auto"
+
+# CPU threading.  None → let TensorFlow decide.
+TF_INTRA_THREADS = None
+TF_INTER_THREADS = None
+
+# GPU memory behaviour
+TF_GPU_ALLOW_GROWTH = True        # True recommended for desktop GPUs
+TF_GPU_MEMORY_LIMIT_MB = None     # e.g. 12000 to cap at 12 GB, or None
 
 # -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE
@@ -326,75 +348,119 @@ LEARNING_RATE = 1e-4
 
 TUNER_SEARCH_SPACE = {
     # --- Architecture (model.__init__) ---
-    "embed_dim": [32, 64],
-    "hidden_units": [64, 96, 128],
+    #
+    # Centered around:
+    #   EMBED_DIM      = 32
+    #   HIDDEN_UNITS   = 64
+    #   LSTM_UNITS     = 64
+    #   ATTENTION_UNITS= 32
+    #   NUMBER_HEADS   = 4
+    #   DROPOUT_RATE   = 0.10
+    #
+    "embed_dim": [32, 48, 64],
+    "hidden_units": [64, 96],
     "lstm_units": [64, 96],
-    "attention_units": [32, 64],
+    "attention_units": [32, 48],
     "num_heads": [2, 4],
+
+    # Keep dropout near the good regime, but allow a bit of exploration.
     "dropout_rate": {
         "type": "float",
-        "min_value": 0.10,
-        "max_value": 0.30,
+        "min_value": 0.05,
+        "max_value": 0.20,
     },
-    "use_vsn": {"type": "bool"},
-    "vsn_units": [16, 32, 48],
-    "use_batch_norm": {"type": "bool"},
 
-    # Physics switches
+    # VSN & BatchNorm are *not* tuned here:
+    #   USE_VSN       = True
+    #   USE_BATCH_NORM= False
+    # We keep them fixed via the main config, because
+    # the preprocessing + scaling is designed for that.
+    #
+    # Still allow some variation of VSN width:
+    "vsn_units": [24, 32, 40],
+
+    # --- Physics switches ---
+    #
+    # Always keep full physics active by default.
     "pde_mode": ["both"],
+
     "scale_pde_residuals": {"type": "bool"},
+
+    # Config default is "kb", but we can still let tuner
+    # choose between bar/kb if useful.
     "kappa_mode": ["bar", "kb"],
+
+    # Around GEOPRIOR_HD_FACTOR = 0.6
     "hd_factor": {
         "type": "float",
         "min_value": 0.50,
-        "max_value": 0.80,
+        "max_value": 0.70,
     },
 
-    # Learnable scalar initials (model.__init__)
+    # --- Learnable scalar initials (model.__init__) ---
+    #
+    # Around GEOPRIOR_INIT_MV = 1e-7
     "mv": {
         "type": "float",
-        "min_value": 3e-7,
-        "max_value": 1e-6,
+        "min_value": 5e-8,
+        "max_value": 3e-7,
         "sampling": "log",
     },
+
+    # Around GEOPRIOR_INIT_KAPPA = 1.0
     "kappa": {
         "type": "float",
-        "min_value": 0.7,
-        "max_value": 1.5,
+        "min_value": 0.8,
+        "max_value": 1.2,
     },
 
     # --- Compile-only (model.compile) ---
+    #
+    # Around LEARNING_RATE = 1e-4
     "learning_rate": {
         "type": "float",
-        "min_value": 5e-5,
-        "max_value": 3e-4,
+        "min_value": 7e-5,
+        "max_value": 2e-4,
         "sampling": "log",
     },
+
+    # Around:
+    #   LAMBDA_GW     = 0.01
+    #   LAMBDA_CONS   = 0.10
+    #   LAMBDA_PRIOR  = 0.10
+    #   LAMBDA_SMOOTH = 0.01
+    #   LAMBDA_MV     = 0.01
+    #
     "lambda_gw": {
         "type": "float",
-        "min_value": 0.1,
-        "max_value": 1.0,
+        "min_value": 0.005,
+        "max_value": 0.03,
     },
     "lambda_cons": {
         "type": "float",
-        "min_value": 0.01,
-        "max_value": 1.0,
+        "min_value": 0.05,
+        "max_value": 0.20,
     },
     "lambda_prior": {
         "type": "float",
-        "min_value": 0.1,
-        "max_value": 0.8,
+        "min_value": 0.05,
+        "max_value": 0.20,
     },
     "lambda_smooth": {
         "type": "float",
-        "min_value": 0.01,
-        "max_value": 1.0,
+        "min_value": 0.005,
+        "max_value": 0.05,
     },
     "lambda_mv": {
         "type": "float",
-        "min_value": 0.01,
-        "max_value": 0.5,
+        "min_value": 0.005,
+        "max_value": 0.05,
     },
+
+    # Around:
+    #   MV_LR_MULT    = 1.0
+    #   KAPPA_LR_MULT = 5.0
+    #
     "mv_lr_mult": {
         "type": "float",
         "min_value": 0.5,
@@ -402,7 +468,7 @@ TUNER_SEARCH_SPACE = {
     },
     "kappa_lr_mult": {
         "type": "float",
-        "min_value": 1.0,
-        "max_value": 10.0,
+        "min_value": 2.0,
+        "max_value": 8.0,
     },
 }

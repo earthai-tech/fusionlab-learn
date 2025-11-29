@@ -10,6 +10,9 @@ import os
 import re
 import logging 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
+import json 
+import inspect
 
 from typing import ( 
     Dict, 
@@ -20,7 +23,8 @@ from typing import (
     Optional,
     Tuple , 
     Callable,
-    Literal
+    Literal, 
+    MutableMapping,
 )
 import warnings
 from datetime import datetime, date
@@ -29,17 +33,24 @@ import matplotlib.style as style
 
 import numpy as np 
 import pandas as pd
+
 from sklearn.preprocessing import MinMaxScaler 
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
 
 from .._fusionlog import fusionlog 
+
 from ..core.handlers import columns_manager 
 from ..core.checks import check_spatial_columns, check_empty  
 from ..core.io import is_data_readable, SaveFile
 from ..decorators import isdf 
-
-from .generic_utils import vlog, normalize_model_inputs  
+from ..metrics._registry import get_metric
+from .generic_utils import vlog, normalize_model_inputs, ensure_directory_exists  
 from .validator import is_frame 
 
 logger = fusionlog().get_fusionlab_logger(__name__)
@@ -56,11 +67,1801 @@ __all__= [
      'add_forecast_times', 
      'pivot_forecast', 
      'calibrate_forecasts', 
-     'plot_reliability_diagram'
+     'plot_reliability_diagram', 
+     'format_and_forecast', 
+     'evaluate_forecast'
      
 ]
 
 _DIGIT_RE = re.compile(r"\d+")
+
+
+
+def evaluate_forecast(
+    eval_data: Union[str, os.PathLike, pd.DataFrame],
+    *,
+    target_name: str = "subsidence",
+    column_map: Optional[Mapping[str, Any]] = None,
+    quantile_interval: Tuple[float, float] = (0.1, 0.9),
+    per_horizon: bool = False,
+    extra_metrics: Optional[
+        Union[Sequence[str], Mapping[str, Callable[..., Any]]]
+    ] = None,
+    extra_metric_kwargs: Optional[
+        Mapping[str, Mapping[str, Any]]
+    ] = None,
+    savefile: Optional[Union[str, os.PathLike, bool]] = None,
+    save_format: str = ".json",
+    time_as_str: bool = True,
+    verbose: int = 1,
+    logger: Optional[logging.Logger] = None,
+) -> Union[Dict[str, Any], pd.DataFrame]:
+    """
+    Evaluate forecast diagnostics from an evaluation DataFrame.
+
+    This helper consumes the ``df_eval`` output from
+    :func:`format_and_forecast` (or a compatible DataFrame) and
+    computes aggregate metrics such as MAE, MSE, :math:`R^2`,
+    coverage, and sharpness. It can also optionally evaluate
+    metrics per forecast horizon and apply additional user-defined
+    metrics.
+
+    By default it expects the following columns:
+
+    - ``'sample_idx'``
+    - ``'forecast_step'``
+    - ``'coord_t'``  (time)
+    - Quantile or point-prediction columns for the target, e.g.:
+
+      - Quantile mode:
+        ``f'{target_name}_q10'``,
+        ``f'{target_name}_q50'``,
+        ``f'{target_name}_q90'``,
+        ...
+      - Point mode:
+        ``f'{target_name}_pred'``.
+
+    - Actual column:
+      ``f'{target_name}_actual'``.
+
+    A flexible ``column_map`` allows remapping these logical
+    roles to arbitrary column names, e.g.::
+
+        column_map = {
+            'coord_t': 'date',
+            'actual': 'true_subs',
+            'pred': 'subs_predicted',
+        }
+
+    or, for quantile columns::
+
+        column_map = {
+            'coord_t': 'date',
+            'quantiles': {
+                0.1: 'subs_q10',
+                0.5: 'subs_q50',
+                0.9: 'subs_q90',
+            },
+        }
+
+    Parameters
+    ----------
+    eval_data : str, path-like, or pandas.DataFrame
+        Either a path to a CSV file containing the evaluation
+        DataFrame (as saved by :func:`format_and_forecast`) or an
+        in-memory DataFrame.
+
+    target_name : str, default='subsidence'
+        Base name for the target columns. Used to infer default
+        column names such as ``f'{target_name}_q10'``,
+        ``f'{target_name}_pred'``, and
+        ``f'{target_name}_actual'``.
+
+    column_map : dict, optional
+        Optional mapping to override default column names. The
+        following keys are recognized:
+
+        - ``'sample_idx'`` : sample index column name
+          (default ``'sample_idx'``).
+        - ``'forecast_step'`` : horizon index column name
+          (default ``'forecast_step'``).
+        - ``'coord_t'`` : time coordinate column
+          (default ``'coord_t'``).
+        - ``'actual'`` : name or list of names for the actual
+          target column(s). Currently a single column is supported;
+          default ``f'{target_name}_actual'``.
+        - ``'pred'`` : point prediction column for non-quantile
+          mode, default ``f'{target_name}_pred'``.
+        - ``'quantiles'`` :
+
+          * If a mapping: ``{q: col_name}`` for quantile levels,
+            where ``q`` is a float in (0, 1).
+          * If a sequence of column names, the quantile value will
+            be inferred from suffix patterns like
+            ``f'{target_name}_q{int(q*100):d}'``.
+
+    quantile_interval : tuple of float, default=(0.1, 0.9)
+        Interval (lower, upper) used for coverage and sharpness
+        metrics, typically corresponding to an 80% interval
+        between Q10 and Q90.
+
+    per_horizon : bool, default=False
+        If ``True``, compute per-horizon MAE/MSE/R² grouped by
+        the ``forecast_step`` column.
+
+    extra_metrics : sequence of str or mapping, optional
+        Optional additional metrics to compute.
+
+        - If a sequence of strings (e.g. ``['pss', 'pit']``),
+          each name is resolved via
+          :func:`fusionlab.metrics._registry.get_metric`.
+          If the name is not present in the registry, an error
+          is raised, prompting the user to pass a callable instead.
+        - If a mapping ``{name: func}``, each ``func`` is called as::
+
+              func(y_true, y_pred, **extra_metric_kwargs.get(name, {}))
+
+          where ``y_pred`` is the median (Q50) or point forecast.
+
+        For more complex metrics that require full quantile
+        structure or temporal sequences, pass a suitable wrapper
+        function that internally uses the DataFrame as needed.
+
+    extra_metric_kwargs : mapping, optional
+        Optional mapping of per-metric keyword arguments. Keys must
+        match the names in ``extra_metrics``. Each value is a
+        dict of kwargs forwarded to the corresponding metric
+        function.
+
+    savefile : str, path-like, or bool, optional
+        If provided, metrics are saved to disk.
+
+        - If ``True``: a filename is auto-generated near
+          ``eval_data`` (if it is a path) or in the current working
+          directory.
+        - If a string/path without extension: the extension is
+          taken from ``save_format``.
+        - If a string/path with extension: that extension takes
+          precedence over ``save_format``.
+
+    save_format : {'.json', 'json', '.csv', 'csv'}, default='.json'
+        Output format when ``savefile`` is truthy. JSON preserves
+        nested structure; CSV is flattened into a tall table.
+
+        - For JSON, the function returns the metrics dictionary.
+        - For CSV, the function returns the metrics DataFrame.
+
+    time_as_str : bool, default=True
+        If ``True``, time keys in the result dictionary are
+        converted to strings (useful for JSON serialization). If
+        there is only a single time value, the result is flattened
+        and the time key is omitted.
+
+    verbose : int, default=1
+        Verbosity level passed to :func:`vlog`.
+
+    logger : logging.Logger, optional
+        Optional logger instance used by :func:`vlog`.
+
+    Returns
+    -------
+    results : dict or pandas.DataFrame
+        If ``save_format`` is JSON (default), returns a dict:
+
+        - Single time value:
+
+          .. code-block:: python
+
+             {
+                 "overall_mae": ...,
+                 "overall_mse": ...,
+                 "overall_r2": ...,
+                 "coverage80": ...,
+                 "sharpness80": ...,
+                 "per_horizon_mae": {1: ..., 2: ..., ...},
+                 ...
+             }
+
+        - Multiple time values:
+
+          .. code-block:: python
+
+             {
+                 "2021": { ...metrics... },
+                 "2022": { ...metrics... },
+             }
+
+        If ``save_format`` is CSV, returns a DataFrame with
+        flattened rows:
+
+        - Columns include: ``coord_t``, ``metric``, ``horizon``,
+          and ``value``.
+
+    Notes
+    -----
+    - Default metrics in *quantile* mode:
+
+      - ``overall_mae``, ``overall_mse``, ``overall_r2``
+      - ``coverage80`` and ``sharpness80`` (using the requested
+        interval, e.g., Q10–Q90)
+
+      If ``per_horizon=True``, also:
+
+      - ``per_horizon_mae``, ``per_horizon_mse``,
+        ``per_horizon_r2`` (each a mapping from horizon index to
+        score).
+
+    - Default metrics in *point* mode (no quantiles):
+
+      - ``mae``, ``mse``, ``r2``
+
+      And optionally, if ``per_horizon=True``:
+
+      - ``per_horizon_mae``, ``per_horizon_mse``,
+        ``per_horizon_r2``.
+    """
+    vlog(
+        "[evaluate_forecast] Starting metrics computation.",
+        verbose=verbose,
+        level=1,
+        logger=logger,
+    )
+
+    # ------------------------------------------------------------------
+    # 1. Load DataFrame
+    # ------------------------------------------------------------------
+    source_path: Optional[Path] = None
+    if isinstance(eval_data, (str, os.PathLike)):
+        source_path = Path(eval_data)
+        df = pd.read_csv(source_path)
+        vlog(
+            f"[evaluate_forecast] Loaded eval_data from '{source_path}'.",
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+    elif isinstance(eval_data, pd.DataFrame):
+        df = eval_data.copy()
+        vlog(
+            "[evaluate_forecast] Using in-memory eval DataFrame.",
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+    else:
+        raise TypeError(
+            "eval_data must be a path or a pandas.DataFrame. "
+            f"Got type={type(eval_data).__name__!r}."
+        )
+
+    column_map = dict(column_map or {})
+
+    # Logical column names (with defaults)
+    # sample_col = column_map.get("sample_idx", "sample_idx")
+    step_col = column_map.get("forecast_step", "forecast_step")
+    time_col = column_map.get("coord_t", "coord_t")
+
+    # Actual column (required)
+    actual_spec = column_map.get(
+        "actual", f"{target_name}_actual"
+    )
+    if isinstance(actual_spec, str):
+        actual_cols = [actual_spec]
+    else:
+        actual_cols = list(actual_spec)
+
+    if len(actual_cols) != 1:
+        raise ValueError(
+            "evaluate_forecast currently supports exactly one "
+            "actual target column. Got "
+            f"{len(actual_cols)}: {actual_cols!r}."
+        )
+    actual_col = actual_cols[0]
+    if actual_col not in df.columns:
+        raise KeyError(
+            f"Actual column '{actual_col}' is not present in "
+            f"DataFrame columns={list(df.columns)!r}."
+        )
+
+    # ------------------------------------------------------------------
+    # 2. Detect quantile vs point mode and build quantile map
+    # ------------------------------------------------------------------
+    quantiles_spec = column_map.get("quantiles", None)
+    quantile_map: Dict[float, str] = {}
+
+    if quantiles_spec is not None:
+        # User explicitly provided quantile columns
+        if isinstance(quantiles_spec, Mapping):
+            for q, col in quantiles_spec.items():
+                q_float = float(q)
+                if col not in df.columns:
+                    raise KeyError(
+                        f"Quantile column '{col}' for q={q_float} "
+                        "not present in DataFrame."
+                    )
+                quantile_map[q_float] = col
+        else:
+            # Sequence of column names; try to infer q from suffix
+            from re import match, escape
+
+            for col in quantiles_spec:
+                if col not in df.columns:
+                    raise KeyError(
+                        f"Quantile column '{col}' not present in "
+                        "DataFrame."
+                    )
+                # Pattern: f'{target_name}_q{int(q*100)}'
+                pat = rf"^{escape(target_name)}_q(\d+)$"
+                m = match(pat, col)
+                if not m:
+                    raise ValueError(
+                        f"Cannot infer quantile level from column "
+                        f"name '{col}'. Expected pattern "
+                        f"'{target_name}_qXX'."
+                    )
+                q_int = int(m.group(1))
+                quantile_map[q_int / 100.0] = col
+    else:
+        # Auto-detect quantiles from column names
+        from re import match, escape
+
+        pat = rf"^{escape(target_name)}_q(\d+)$"
+        for col in df.columns:
+            m = match(pat, col)
+            if m:
+                q_int = int(m.group(1))
+                quantile_map[q_int / 100.0] = col
+
+    quantile_mode = len(quantile_map) > 0
+
+    # Prediction (median / point) column
+    if quantile_mode:
+        # Choose q closest to 0.5 as "median"
+        median_q = min(quantile_map.keys(), key=lambda q: abs(q - 0.5))
+        median_col = quantile_map[median_q]
+        vlog(
+            f"[evaluate_forecast] Detected quantile mode with "
+            f"{len(quantile_map)} quantiles; median q~{median_q:.2f} "
+            f"via column '{median_col}'.",
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+    else:
+        pred_col = column_map.get(
+            "pred", f"{target_name}_pred"
+        )
+        if pred_col not in df.columns:
+            raise KeyError(
+                "Point-prediction mode inferred, but prediction "
+                f"column '{pred_col}' is missing."
+            )
+        median_col = pred_col
+        vlog(
+            f"[evaluate_forecast] Detected point mode using "
+            f"column '{median_col}' for predictions.",
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+
+    # ------------------------------------------------------------------
+    # 3. Group by time (coord_t) if available
+    # ------------------------------------------------------------------
+    has_time = time_col in df.columns
+    if has_time:
+        groups = df.groupby(time_col)
+        vlog(
+            f"[evaluate_forecast] Grouping by time column "
+            f"'{time_col}'. Found {groups.ngroups} group(s).",
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+    else:
+        # Single pseudo-group with key None
+        groups = [(None, df)]
+        vlog(
+            "[evaluate_forecast] No time column present; "
+            "treating entire DataFrame as one group.",
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Prepare extra metrics (names -> callables)
+    # ------------------------------------------------------------------
+    metric_fns: Dict[str, Callable[..., Any]] = {}
+    if extra_metrics is not None:
+        if isinstance(extra_metrics, Mapping):
+            metric_fns = dict(extra_metrics)
+        else:
+            # Sequence of names: resolve via get_metric
+            for name in extra_metrics:
+                try:
+                    metric_fns[name] = get_metric(name)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"Metric name '{name}' not found in "
+                        "fusionlab.metrics registry. "
+                        "Please either:\n"
+                        "  - register it in METRIC_REGISTRY, or\n"
+                        "  - pass an explicit callable via "
+                        "`extra_metrics={'name': fn}`."
+                    ) from exc
+
+    extra_metric_kwargs = dict(extra_metric_kwargs or {})
+
+    # ------------------------------------------------------------------
+    # 5. Core metric computation loop
+    # ------------------------------------------------------------------
+    results_by_time: MutableMapping[Any, Dict[str, Any]] = {}
+
+    # Pre-resolve coverage & sharpness metrics, if quantile mode
+    if quantile_mode:
+        try:
+            coverage_fn = get_metric("coverage_score")
+        except KeyError:
+            coverage_fn = None
+
+        try:
+            miw_fn = get_metric("mean_interval_width_score")
+        except KeyError:
+            miw_fn = None
+    else:
+        coverage_fn = None
+        miw_fn = None
+
+    q_lower_target, q_upper_target = quantile_interval
+
+    for t_val, g in (groups if has_time else groups):
+        # When has_time is False, groups is a list of tuples
+        # (None, df). When True, groups is a pandas GroupBy and
+        # iteration yields (t_val, g) pairs directly.
+        if not has_time:
+            t_key = None
+        else:
+            t_key = t_val
+
+        y_true = g[actual_col].to_numpy()
+        y_pred = g[median_col].to_numpy()
+
+        metrics_here: Dict[str, Any] = {}
+
+        # ---- 5a. Default deterministic metrics ------------------------
+        if quantile_mode:
+            metrics_here["overall_mae"] = float(
+                mean_absolute_error(y_true, y_pred)
+            )
+            metrics_here["overall_mse"] = float(
+                mean_squared_error(y_true, y_pred)
+            )
+            # R² requires at least 2 samples
+            if y_true.size >= 2:
+                metrics_here["overall_r2"] = float(
+                    r2_score(y_true, y_pred)
+                )
+            else:
+                metrics_here["overall_r2"] = np.nan
+        else:
+            metrics_here["mae"] = float(
+                mean_absolute_error(y_true, y_pred)
+            )
+            metrics_here["mse"] = float(
+                mean_squared_error(y_true, y_pred)
+            )
+            if y_true.size >= 2:
+                metrics_here["r2"] = float(
+                    r2_score(y_true, y_pred)
+                )
+            else:
+                metrics_here["r2"] = np.nan
+
+        # ---- 5b. Coverage and sharpness (quantile mode only) ----------
+        if quantile_mode and coverage_fn is not None and miw_fn is not None:
+            # Choose quantiles closest to requested interval
+            qs_sorted = sorted(quantile_map.keys())
+            q_low = min(
+                qs_sorted, key=lambda q: abs(q - q_lower_target)
+            )
+            q_high = min(
+                qs_sorted, key=lambda q: abs(q - q_upper_target)
+            )
+
+            y_lower = g[quantile_map[q_low]].to_numpy()
+            y_upper = g[quantile_map[q_high]].to_numpy()
+
+            # coverage80
+            try:
+                cov_val = coverage_fn(
+                    y_true,
+                    y_lower,
+                    y_upper,
+                    nan_policy="omit",
+                    verbose=0,
+                )
+            except TypeError:
+                cov_val = coverage_fn(y_true, y_lower, y_upper)
+            metrics_here["coverage80"] = float(cov_val)
+
+            # sharpness80 (mean interval width)
+            try:
+                miw_val = miw_fn(
+                    y_lower,
+                    y_upper,
+                    nan_policy="omit",
+                    verbose=0,
+                )
+            except TypeError:
+                miw_val = miw_fn(y_lower, y_upper)
+            metrics_here["sharpness80"] = float(miw_val)
+
+        # ---- 5c. Per-horizon deterministic metrics --------------------
+        if per_horizon and step_col in g.columns:
+            per_mae: Dict[int, float] = {}
+            per_mse: Dict[int, float] = {}
+            per_r2: Dict[int, float] = {}
+
+            for h, g_h in g.groupby(step_col):
+                yt_h = g_h[actual_col].to_numpy()
+                yp_h = g_h[median_col].to_numpy()
+
+                h_int = int(h)
+                per_mae[h_int] = float(
+                    mean_absolute_error(yt_h, yp_h)
+                )
+                per_mse[h_int] = float(
+                    mean_squared_error(yt_h, yp_h)
+                )
+                if yt_h.size >= 2:
+                    per_r2[h_int] = float(
+                        r2_score(yt_h, yp_h)
+                    )
+                else:
+                    per_r2[h_int] = np.nan
+
+            metrics_here["per_horizon_mae"] = per_mae
+            metrics_here["per_horizon_mse"] = per_mse
+            metrics_here["per_horizon_r2"] = per_r2
+
+        # ---- 5d. Extra metrics ----------------------------------------
+        for m_name, fn in metric_fns.items():
+            kwargs = dict(extra_metric_kwargs.get(m_name, {}) or {})
+        
+            sig = inspect.signature(fn)
+            param_names = list(sig.parameters.keys())
+        
+            # Case 1: standard supervised metric: metric(y_true, y_pred, ...)
+            if ("y_true" in param_names) and ("y_pred" in param_names):
+                # Prefer explicit kw usage if supported
+                try:
+                    m_val = fn(y_true=y_true, y_pred=y_pred, **kwargs)
+                except TypeError:
+                    # Fall back to positional (y_true, y_pred)
+                    m_val = fn(y_true, y_pred, **kwargs)
+        
+            # Case 2: prediction-only metric: metric(y_pred, sample_weight=..., ...)
+            elif param_names and param_names[0] in ("y_pred", "y_forecast", "y_hat"):
+                # e.g. prediction_stability_score(y_pred, sample_weight=None, ...)
+                m_val = fn(y_pred, **kwargs)
+        
+            else:
+                # Fallback heuristic: try (y_true, y_pred) then (y_pred,)
+                try:
+                    m_val = fn(y_true, y_pred, **kwargs)
+                except TypeError:
+                    m_val = fn(y_pred, **kwargs)
+        
+            # Try to convert scalar arrays to Python floats
+            if isinstance(m_val, np.ndarray) and m_val.size == 1:
+                m_val = float(m_val.reshape(()))
+        
+            metrics_here[m_name] = m_val
+
+        results_by_time[t_key] = metrics_here
+
+    # ------------------------------------------------------------------
+    # 6. Flatten for single vs multi time
+    # ------------------------------------------------------------------
+    if len(results_by_time) == 1:
+        # Single time or no time column → return metrics only
+        final_result: Union[Dict[str, Any], Dict[Any, Any]]
+        final_result = next(iter(results_by_time.values()))
+    else:
+        # Multiple time values → dict keyed by time
+        final_result = {}
+        for k, v in results_by_time.items():
+            if time_as_str and k is not None:
+                final_result[str(k)] = v
+            else:
+                final_result[k] = v
+
+    # ------------------------------------------------------------------
+    # 7. Optionally save to disk
+    # ------------------------------------------------------------------
+    if savefile:
+        # Normalize save_format
+        fmt = save_format.lower()
+        if not fmt.startswith("."):
+            fmt = f".{fmt}"
+
+        # Determine output path
+        if isinstance(savefile, bool):
+            # Auto-generate filename
+            base_dir = (
+                source_path.parent
+                if source_path is not None
+                else Path.cwd()
+            )
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            if fmt in (".csv",):
+                fname = f"eval_{target_name}_diagnostics_{ts}.csv"
+            else:
+                fname = f"eval_{target_name}_diagnostics_{ts}.json"
+            out_path = base_dir / fname
+        else:
+            out_path = Path(savefile)
+            if out_path.suffix:
+                # Explicit extension takes precedence
+                fmt = out_path.suffix.lower()
+            else:
+                out_path = out_path.with_suffix(fmt)
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if fmt in (".json", "json"):
+            # Ensure JSON-serializable (convert numpy scalars)
+            def _to_jsonable(obj: Any) -> Any:
+                if isinstance(obj, (np.generic,)):
+                    return obj.item()
+                if isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                return obj
+
+            json_ready = {}
+
+            if len(results_by_time) == 1:
+                json_ready = {
+                    k: _to_jsonable(v)
+                    for k, v in final_result.items()  # type: ignore[arg-type]
+                }
+            else:
+                for t_key, metrics_here in final_result.items():  # type: ignore[union-attr]
+                    json_ready[t_key] = {
+                        k: _to_jsonable(v)
+                        for k, v in metrics_here.items()
+                    }
+
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    json_ready,
+                    f,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+            vlog(
+                f"[evaluate_forecast] Metrics saved to JSON at "
+                f"'{out_path}'.",
+                verbose=verbose,
+                level=1,
+                logger=logger,
+            )
+            return final_result  # dict
+
+        elif fmt in (".csv", "csv"):
+            # Flatten to long-form DataFrame
+            rows = []
+            for t_key, metrics_here in results_by_time.items():
+                t_val = t_key
+                if time_as_str and t_val is not None:
+                    t_val = str(t_val)
+                for m_name, m_val in metrics_here.items():
+                    if isinstance(m_val, Mapping):
+                        # e.g. per_horizon metrics: dict[horizon -> value]
+                        for h, v in m_val.items():
+                            rows.append(
+                                {
+                                    "coord_t": t_val,
+                                    "metric": m_name,
+                                    "horizon": h,
+                                    "value": v,
+                                }
+                            )
+                    else:
+                        rows.append(
+                            {
+                                "coord_t": t_val,
+                                "metric": m_name,
+                                "horizon": None,
+                                "value": m_val,
+                            }
+                        )
+            df_out = pd.DataFrame(rows)
+            df_out.to_csv(out_path, index=False)
+            vlog(
+                f"[evaluate_forecast] Metrics saved to CSV at "
+                f"'{out_path}'.",
+                verbose=verbose,
+                level=1,
+                logger=logger,
+            )
+            return df_out
+
+        else:
+            raise ValueError(
+                f"Unsupported save_format/extension '{fmt}'. "
+                "Use '.json' or '.csv'."
+            )
+
+    # No saving requested: just return in-memory result
+    return final_result
+
+
+def _find_scaler_block(scaler_info, keys=("targets", "target", "y")):
+    """Best-effort helper to locate a scaler block inside scaler_info."""
+    if not isinstance(scaler_info, dict):
+        return None
+    for k in keys:
+        if k in scaler_info:
+            block = scaler_info.get(k)
+            if isinstance(block, dict):
+                return block
+    return None
+
+def _inverse_with_block(values, block, col_name):
+    """Inverse-transform a 1D array using a scaler block.
+
+    Supports both:
+    - old schema  : block["columns"] / block["cols"]
+    - new PINN schema: block["all_features"] + block["idx"]
+    """
+    if block is None or not isinstance(block, dict):
+        return values
+
+    scaler = block.get("scaler")
+    if scaler is None or not hasattr(scaler, "inverse_transform"):
+        return values
+
+    # ---- Old style: columns/cols present ---------------------------------
+    cols = block.get("columns") or block.get("cols")
+    if cols:
+        if col_name not in cols:
+            return values
+        idx = cols.index(col_name)
+        n_features = len(cols)
+    else:
+        # ---- New PINN style: use all_features + idx -----------------------
+        idx = block.get("idx")
+        if idx is None:
+            return values
+        all_features = block.get("all_features")
+        if all_features:
+            n_features = len(all_features)
+        else:
+            # Fallback: trust the scaler
+            n_features = getattr(scaler, "n_features_in_", idx + 1)
+
+    values = np.asarray(values).reshape(-1)
+    tmp = np.zeros((values.shape[0], n_features), dtype=np.float32)
+    tmp[:, idx] = values
+
+    try:
+        inv = scaler.inverse_transform(tmp)[:, idx]
+    except Exception:
+        return values
+    return inv
+
+
+def format_and_forecast(
+    y_pred: dict,
+    y_true: dict | None,
+    *,
+    coords: np.ndarray | None = None,
+    quantiles: list[float] | None = None,
+    target_name: str = "subsidence",
+    target_key_pred: str = "subs_pred",
+    component_index: int = 0,
+    scaler_info: dict | None = None,
+    coord_scaler: object | None = None,
+    coord_columns: tuple[str, str, str] = ("coord_t", "coord_x", "coord_y"),
+    #
+    # Temporal config
+    train_end_time: float | int | str | None = None,
+    forecast_start_time: float | int | str | None = None,
+    forecast_horizon: int | None = None,
+    future_time_grid: np.ndarray | None = None,
+    eval_forecast_step: int | None = None,
+    #
+    eval_export: object = "all",
+    value_mode: str = "rate",   
+    absolute_baseline: float | Mapping[int, float] | None = None,  
+    # Output / I/O
+    sample_index_offset: int = 0,
+    city_name: str | None = None,
+    model_name: str | None = None,
+    dataset_name: str | None = None,
+    csv_eval_path: str | None = None,
+    csv_future_path: str | None = None,
+    #
+    # Time dtype control
+    time_as_datetime: bool = False,
+    time_format: str | None = None,
+    #
+    # Evaluation options (metrics, optional)
+    eval_metrics: bool = False,
+    metrics_column_map: Mapping[str, Any] | None = None,
+    metrics_quantile_interval: tuple[float, float] = (0.1, 0.9),
+    metrics_per_horizon: bool = False,
+    metrics_extra: (
+        Sequence[str]
+        | Mapping[str, Callable[..., Any]]
+        | None
+    ) = None,
+    metrics_extra_kwargs: (
+        Mapping[str, Mapping[str, Any]] | None
+    ) = None,
+    metrics_savefile: str | os.PathLike | bool | None = None,
+    metrics_save_format: str = ".json",
+    metrics_time_as_str: bool = True,
+    # Logging
+    verbose: int = 1,
+    logger: logging.Logger | None = None,
+    **kws
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Format PINN forecasts into evaluation and future DataFrames.
+
+    This helper takes the raw model outputs (already split into
+    ``y_pred['subs_pred']`` / ``y_pred['gwl_pred']``), the matching
+    ground-truth dictionary (``y_true``), and optional coordinate and
+    scaler information, and returns two DataFrames:
+
+    - ``df_eval``: predictions + actuals for an evaluation year
+      (typically the last training year, e.g. 2022).
+    - ``df_future``: predictions for the future horizon
+      (e.g. 2023–2025), without actuals.
+
+    Parameters
+    ----------
+    y_pred : dict
+        Dictionary of model predictions, as returned by
+        ``GeoPriorSubsNet.predict`` post-processed into
+        ``{'subs_pred': ..., 'gwl_pred': ...}``.
+
+        For subsidence, the expected shapes are:
+
+        - Quantile mode: ``(B, H, Q, O)`` where:
+          ``B`` = batch size, ``H`` = horizon steps,
+          ``Q`` = number of quantiles, ``O`` = output dim.
+        - Point mode: ``(B, H, O)``.
+
+    y_true : dict or None
+        Dictionary of true targets, typically
+
+        ``{'subsidence': ..., 'gwl': ...}`` or
+        ``{'subs_pred': ..., 'gwl_pred': ...}``.
+
+        If ``None``, evaluation DataFrame is still created but
+        without the ``'<target_name>_actual'`` column.
+
+    coords : ndarray, optional
+        Optional coordinates array aligned with predictions.
+        Commonly shaped ``(B, H, 3)`` with columns
+        ``[t_scaled, x_scaled, y_scaled]``.  Only ``x`` and ``y``
+        are used when inverse-transforming spatial coordinates;
+        time is overwritten by the provided temporal config if
+        given.
+
+    quantiles : list of float or None, optional
+        List of quantiles (e.g. ``[0.1, 0.5, 0.9]``) if the model
+        was trained in probabilistic mode.  If ``None``, a single
+        column ``'<target_name>_pred'`` is emitted instead.
+
+    target_name : str, default='subsidence'
+        Base name of the physical target (used for column names
+        like ``subsidence_q10`` or ``subsidence_actual``).
+
+    target_key_pred : str, default='subs_pred'
+        Key inside ``y_pred`` that holds the subsidence forecasts.
+
+    component_index : int, default=0
+        Index along the output dimension O to use when
+        ``output_subsidence_dim > 1``.  For scalar subsidence this
+        is 0.
+
+    scaler_info : dict, optional
+        Optional Stage-1 ``scaler_info`` mapping containing a
+        target scaler under keys such as ``'targets'`` or
+        ``'target'``.  The block is expected to have fields:
+
+        - ``'scaler'``: an sklearn-like transformer.
+        - ``'columns'`` or ``'cols'``: list of column names.
+
+        If present and consistent, subsidence values (predicted and
+        actual) are inverse-transformed for ``target_name``.
+
+    coord_scaler : object, optional
+        Optional scaler used for coordinates.  If provided, it is
+        only used to inverse-transform ``coord_x`` and ``coord_y``
+        when ``coords`` is given and ``coord_columns`` can be
+        matched.  Time is *not* taken from the inverse transform; it
+        is controlled by the temporal config.
+
+    coord_columns : tuple of str, default=('coord_t','coord_x','coord_y')
+        Logical names of the time, x, and y coordinate columns.
+        These are used for DataFrame column naming and for mapping
+        into ``coord_scaler`` if its block carries column names.
+
+    train_end_time : scalar or str or datetime, optional
+        Physical time associated with the evaluation year (e.g.
+        2022).  If ``eval_forecast_step`` is not given, the last
+        horizon step is assumed to correspond to this time.
+
+    forecast_start_time : scalar or str or datetime, optional
+        First time in the future forecast horizon (e.g. 2023).
+
+    forecast_horizon : int, optional
+        Number of forecast steps in the future horizon (e.g. 3).
+        If ``future_time_grid`` is not given, this is used together
+        with ``forecast_start_time`` to build a regular grid.
+
+    future_time_grid : array-like, optional
+        Explicit physical times for each forecast step, length H.
+        For yearly data this might be ``[2023, 2024, 2025]``.
+        If provided, it overrides any automatic construction from
+        ``forecast_start_time`` and ``forecast_horizon``.
+
+    eval_forecast_step : int or None, optional
+        Horizon step index (1-based) to use for evaluation.  If
+        ``None``, defaults to the last horizon step H.
+        
+    eval_export : {"all", "last"} or str or int or sequence, optional
+        Controls which evaluation rows are exported in ``df_eval`` and
+        written to ``csv_eval_path``. By default (``"all"``), the
+        function exports the multi-horizon evaluation DataFrame
+        (``df_eval_all``), which contains one row per sample and
+        forecast step (e.g. years 2020, 2021, 2022 for ``H=3``).
+
+        Accepted values are:
+
+        * ``"all"`` or ``"full"`` or ``"horizons"`` :
+          export all horizons from ``df_eval_all``.
+        * ``"last"`` or ``"single"`` or ``"default"`` :
+          export only the single evaluation step specified by
+          ``eval_forecast_step`` (backwards-compatible behaviour).
+        * Other ``str`` (e.g. ``"2022"``) :
+          interpreted as a time value for ``coord_t``; only rows of
+          ``df_eval_all`` whose time column matches this value are
+          exported.
+        * ``int`` or scalar non-string :
+          interpreted as a single time value (e.g. ``2022``).
+        * sequence of values (e.g. ``[2021, 2022]``) :
+          interpreted as a set of time values; only rows whose
+          ``coord_t`` belongs to this set are exported.
+
+        If ``time_as_datetime=True``, the selection values are
+        converted with ``pandas.to_datetime`` using ``time_format``
+        before filtering. If ``df_eval_all`` is not available
+        (e.g. no ground truth was provided), the function falls back
+        to exporting the single-step ``df_eval`` regardless of
+        ``eval_export``.
+
+    value_mode : {"rate", "cumulative", "absolute_cumulative"}, optional
+        Controls how forecast values are interpreted along the temporal
+        horizon for each sample. The default is ``"rate"``, which
+        treats each forecast step as an incremental rate (e.g.
+        annual subsidence rate) and leaves predictions unchanged.
+
+        Supported modes are:
+
+        * ``"rate"`` :
+          keep per-step predictions as provided by the model
+          (current behaviour).
+        * ``"cumulative"`` or ``"cum"`` :
+          convert per-step rates into *relative cumulative* values
+          by applying a cumulative sum over ``forecast_step`` for
+          each ``sample_idx``. For example, for years 2023–2025,
+          the value at 2024 is the sum of the 2023 and 2024 rates.
+        * ``"absolute_cumulative"`` or ``"abs_cum"`` or ``"absolute"`` :
+          same as ``"cumulative"``, then add an absolute baseline
+          provided by ``absolute_baseline`` (e.g. cumulative
+          subsidence at the end of the training period), yielding
+          absolute cumulative trajectories.
+
+        Cumulative transforms are applied consistently to:
+
+        * the future forecast DataFrame (``df_future``),
+        * the multi-horizon evaluation DataFrame (``df_eval_all``),
+        * and the single-step evaluation DataFrame (``df_eval``,
+          which is regenerated from ``df_eval_all`` after the
+          transformation).
+
+        When an unsupported string is given, the function logs a
+        warning and falls back to ``"rate"``.
+
+    absolute_baseline : float or Mapping[int, float], optional
+        Baseline value to use when ``value_mode`` requests absolute
+        cumulative outputs (``"absolute_cumulative"``, ``"abs_cum"``,
+        ``"absolute"``). This baseline is interpreted as the
+        pre-forecast cumulative level for each sample, for example,
+        cumulative subsidence at ``train_end_time`` (e.g. end of
+        2022), and is added *after* applying the cumulative sum over
+        the forecast horizon.
+
+        If a scalar ``float`` is provided, the same baseline value is
+        added to all samples. If a mapping is provided, it must map
+        ``sample_idx`` (integers) to baseline values, allowing
+        per-sample baselines:
+
+        * ``absolute_baseline = {sample_idx: baseline_value, ...}``
+
+        Only prediction columns for ``target_name`` are shifted (e.g.
+        ``"subsidence_q10"``, ``"subsidence_q50"``, ``"subsidence_q90"``
+        or ``"subsidence_pred"``). When ``df_eval_all`` is present,
+        the corresponding ``"<target_name>_actual"`` column is shifted
+        as well, so evaluation metrics operate on absolute cumulative
+        values.
+
+        If ``value_mode`` is an absolute cumulative variant but
+        ``absolute_baseline`` is ``None``, the function logs a warning
+        and degrades gracefully to relative cumulative mode (i.e. no
+        baseline shift is applied).
+
+    sample_index_offset : int, default=0
+        Offset added to ``sample_idx`` (useful when concatenating
+        multiple tiles).
+
+    city_name, model_name, dataset_name : str, optional
+        Optional metadata used only for logging.
+
+    csv_eval_path : str, optional
+        If provided, ``df_eval`` is written to this path
+        (directories are created if needed).
+
+    csv_future_path : str, optional
+        If provided, ``df_future`` is written to this path.
+
+    time_as_datetime : bool, default=False
+        If ``True``, time values are converted using
+        :func:`pandas.to_datetime` with the provided
+        ``time_format`` (if any).
+
+    time_format : str or None, optional
+        Optional format string passed to :func:`pandas.to_datetime`
+        when ``time_as_datetime=True``.
+
+    eval_metrics : bool, default=False
+        If ``True``, automatically call
+        :func:`evaluate_forecast` on the resulting
+        ``df_eval`` to compute diagnostics.  Metrics are
+        not returned by this function; they are either
+        written to disk (if ``metrics_savefile`` is
+        provided) or discarded.  For programmatic access
+        to the metrics dictionary, call
+        :func:`evaluate_forecast` directly.
+
+    metrics_column_map : mapping, optional
+        Optional column mapping forwarded to
+        :func:`evaluate_forecast` (see its documentation
+        for details).  If ``None``, default column names
+        such as ``'coord_t'``, ``'forecast_step'``,
+        ``f'{target_name}_q10'``, and
+        ``f'{target_name}_actual'`` are assumed.
+
+    metrics_quantile_interval : tuple of float, default=(0.1, 0.9)
+        Interval used for coverage and sharpness
+        diagnostics in quantile mode, forwarded to
+        :func:`evaluate_forecast`.
+
+    metrics_per_horizon : bool, default=False
+        If ``True``, per-horizon MAE/MSE/R² are computed
+        by :func:`evaluate_forecast` and included in the
+        diagnostics.
+
+    metrics_extra : sequence or mapping, optional
+        Optional additional metrics to compute, forwarded
+        to :func:`evaluate_forecast`.  Can be:
+
+        - A sequence of metric names (resolved via
+          ``fusionlab.metrics._registry.get_metric``).
+        - A mapping ``{name: func}`` where ``func`` is a
+          callable taking ``(y_true, y_pred, **kwargs)``.
+
+    metrics_extra_kwargs : mapping, optional
+        Optional per-metric keyword arguments, forwarded
+        to :func:`evaluate_forecast`.  Keys must match
+        metric names in ``metrics_extra``.
+
+    metrics_savefile : str, path-like, bool, or None
+        If truthy, diagnostics from
+        :func:`evaluate_forecast` are written to disk.
+        Behavior matches the ``savefile`` argument of
+        :func:`evaluate_forecast`.  When ``True``, a
+        filename is auto-generated near the evaluation
+        CSV (if any) or in the current working
+        directory.
+
+    metrics_save_format : {'.json', 'json', '.csv', 'csv'}, default='.json'
+        Output format for diagnostics written by
+        :func:`evaluate_forecast`.  JSON preserves the
+        nested metric structure; CSV flattens it into a
+        tall table.
+
+    metrics_time_as_str : bool, default=True
+        If ``True``, time keys in the diagnostics written
+        by :func:`evaluate_forecast` are converted to
+        strings (useful for JSON serialization).
+
+    verbose : int, default=1
+        Verbosity level passed to :func:`vlog`.
+
+    logger : logging.Logger, optional
+        Logger instance; if ``None``, a module-level ``LOG`` is
+        used.
+
+    Returns
+    -------
+    df_eval_to_write : pandas.DataFrame
+        DataFrame containing predictions and actuals for the
+        evaluation time.  Columns include:
+
+        - ``'sample_idx'``
+        - ``'forecast_step'``
+        - quantile columns (e.g. ``subsidence_q10``) or
+          ``subsidence_pred``
+        - ``'subsidence_actual'`` (if y_true given)
+        - ``coord_t``, ``coord_x``, ``coord_y`` (names from
+          ``coord_columns``).
+
+    df_future : pandas.DataFrame
+        DataFrame containing predictions for the future horizon,
+        without actuals.  Same structure as ``df_eval`` but without
+        the ``'<target_name>_actual'`` column.
+    """
+
+    t_col, x_col, y_col = coord_columns
+
+    vlog(
+        "[format_and_forecast] Starting formatting of predictions "
+        f"for city={city_name}, model={model_name}, "
+        f"dataset={dataset_name}",
+        verbose=verbose,
+        level=1,
+        logger = logger
+    )
+
+    if target_key_pred not in y_pred:
+        raise KeyError(
+            f"y_pred must contain key '{target_key_pred}'. "
+            f"Got keys={list(y_pred.keys())}"
+        )
+
+    subs_pred = np.asarray(y_pred[target_key_pred])
+    if subs_pred.ndim not in (3, 4):
+        raise ValueError(
+            f"{target_key_pred} must have ndim 3 or 4. "
+            f"Got shape={subs_pred.shape!r}"
+        )
+
+    B = subs_pred.shape[0]
+    H = subs_pred.shape[1]
+
+    # Choose evaluation horizon step (1-based → 0-based index)
+    if eval_forecast_step is None or not (1 <= eval_forecast_step <= H):
+        eval_forecast_step = H  # last step by default
+    s_idx = eval_forecast_step - 1
+
+    vlog(
+        f"[format_and_forecast] B={B}, H={H}, eval_step={eval_forecast_step}",
+        verbose=verbose,
+        level=2,
+        logger = logger
+    )
+
+    # ------------------------------------------------------------------
+    # Split predictions into eval (one horizon step) and future (all H)
+    # ------------------------------------------------------------------
+    if quantiles is not None:
+        # Expected shape: (B, H, Q, O)
+        if subs_pred.ndim != 4:
+            raise ValueError(
+                "Quantile mode requires subs_pred.ndim == 4. "
+                f"Got shape={subs_pred.shape!r}"
+            )
+        Q = subs_pred.shape[2]
+        if len(quantiles) != Q:
+            vlog(
+                "[format_and_forecast] Warning: len(quantiles) does not "
+                f"match Q={Q}; using first {min(len(quantiles), Q)}.",
+                verbose=verbose,
+                level=1,
+                logger = logger
+            )
+            Q = min(len(quantiles), Q)
+
+        # (B, Q) eval, (B, H, Q) future
+        subs_eval_q = subs_pred[:, s_idx, :Q, component_index]
+        subs_future_q = subs_pred[:, :, :Q, component_index]
+    else:
+        # Point forecasts: expected shape (B, H, O)
+        if subs_pred.ndim != 3:
+            raise ValueError(
+                "Point mode requires subs_pred.ndim == 3. "
+                f"Got shape={subs_pred.shape!r}"
+            )
+        subs_eval_q = subs_pred[:, s_idx, component_index]    # (B,)
+        subs_future_q = subs_pred[:, :, component_index]      # (B, H)
+
+    # ------------------------------------------------------------------
+    # Ground truth for evaluation (last step + all horizons)
+    # ------------------------------------------------------------------
+    subs_true_eval = None          # (B,)
+    subs_true_all_flat = None      # (B*H,)
+    true_arr = None
+
+    if y_true is not None:
+        for k in (target_name, target_key_pred):
+            if k in y_true:
+                true_arr = np.asarray(y_true[k])
+                break
+
+        if true_arr is not None:
+            if true_arr.ndim != 3:
+                vlog(
+                    "[format_and_forecast] y_true has unexpected ndim; "
+                    "skipping actual inverse transform.",
+                    verbose=verbose,
+                    level=1,
+                    logger=logger,
+                )
+            else:
+                # (B, H, O) → pick component_index
+                subs_true_eval = true_arr[:, s_idx, component_index]          # (B,)
+                subs_true_all_flat = true_arr[:, :, component_index].reshape(-1)  # (B*H,)
+
+    # ------------------------------------------------------------------
+    # Coords (only used for x/y; time will come from temporal config)
+    # ------------------------------------------------------------------
+    coord_x_eval = coord_y_eval = None
+    coord_x_future = coord_y_future = None
+    
+    if coords is not None:
+        coords = np.asarray(coords)
+        if coords.ndim == 3 and coords.shape[-1] >= 3:
+            B_coords, H_coords, D_coords = coords.shape
+    
+            # Optional sanity check: coords horizon should match predictions
+            if H_coords != H:
+                vlog(
+                    "[format_and_forecast] Warning: coords.shape[1] "
+                    f"({H_coords}) != H ({H}); continuing but shapes "
+                    "may be misaligned.",
+                    verbose=verbose,
+                    level=1,
+                    logger=logger,
+                )
+            # ---- NEW: inverse-transform coords if we have a coord_scaler ----
+            if coord_scaler is not None and hasattr(
+                    coord_scaler, "inverse_transform"):
+                try:
+                    flat = coords.reshape(-1, D_coords)        # (B*H, D)
+                    flat_inv = coord_scaler.inverse_transform(flat)
+                    coords = flat_inv.reshape(B_coords, H_coords, D_coords)
+                except Exception:
+                    vlog(
+                        "[format_and_forecast] coord_scaler inverse_transform "
+                        "failed; falling back to scaled coords.",
+                        verbose=verbose,
+                        level=1,
+                        logger=logger,
+                    )
+    
+            # Now coords are in physical units; extract x/y for eval + future
+            coord_x_eval = coords[:, s_idx, 1]
+            coord_y_eval = coords[:, s_idx, 2]
+    
+            coord_x_future = coords[:, :, 1].reshape(-1)
+            coord_y_future = coords[:, :, 2].reshape(-1)
+        else:
+            vlog(
+                "[format_and_forecast] coords has unexpected shape; "
+                "spatial coords will not be included.",
+                verbose=verbose,
+                level=1,
+                logger=logger,
+            )
+
+    # ------------------------------------------------------------------
+    # Inverse-transform subsidence (pred + actual) using scaler_info
+    # ------------------------------------------------------------------
+    if isinstance(scaler_info, dict) and target_name in scaler_info:
+        # New Stage-1 schema: one entry per target (e.g. "subsidence")
+        target_block = scaler_info[target_name]
+    else:
+        # Backwards compatibility with old "targets"/"target"/"y" schema
+        target_block = _find_scaler_block(scaler_info)
+
+    
+    # Eval
+    if quantiles is not None:
+        eval_cols = []
+        for j in range(subs_eval_q.shape[1]):
+            vals = subs_eval_q[:, j].reshape(-1)
+            vals_inv = _inverse_with_block(vals, target_block, target_name)
+            eval_cols.append(vals_inv)
+        subs_eval_q = np.stack(eval_cols, axis=1)  # (B, Q)
+    else:
+        vals = subs_eval_q.reshape(-1)
+        subs_eval_q = _inverse_with_block(vals, target_block, target_name)
+
+    # Inverse-transform ground truth (last step + all horizons)
+    if subs_true_eval is not None:
+        subs_true_eval = _inverse_with_block(
+            subs_true_eval.reshape(-1), target_block, target_name
+        )
+
+    if subs_true_all_flat is not None:
+        subs_true_all_flat = _inverse_with_block(
+            subs_true_all_flat.reshape(-1), target_block, target_name
+        )
+
+    # Future
+    if quantiles is not None:
+        future_cols = []
+        for j in range(subs_future_q.shape[2]):
+            vals = subs_future_q[:, :, j].reshape(-1)
+            vals_inv = _inverse_with_block(vals, target_block, target_name)
+            future_cols.append(vals_inv)
+        subs_future_flat = np.stack(future_cols, axis=1)  # (B*H, Q)
+    else:
+        vals = subs_future_q.reshape(-1)
+        subs_future_flat = _inverse_with_block(
+            vals, target_block, target_name
+        ).reshape(-1)
+
+    # ------------------------------------------------------------------
+    # Build temporal grid for future horizon (if not given)
+    # ------------------------------------------------------------------
+    if future_time_grid is None and forecast_start_time is not None:
+        if forecast_horizon is None:
+            forecast_horizon = H
+        # For generality, we don't assume "years"; we simply treat
+        # forecast_start_time as the value for step=1 and increment
+        # by 1 for each subsequent step.  If the user needs monthly
+        # or arbitrary spacing, they can pass an explicit
+        # ``future_time_grid``.
+        base = forecast_start_time
+        try:
+            # Try numeric
+            base_val = float(base)
+            future_time_grid = np.array(
+                [base_val + i for i in range(forecast_horizon)],
+                dtype=float,
+            )
+        except Exception:
+            # Leave as raw objects (e.g., strings or datetimes)
+            future_time_grid = np.array(
+                [base for _ in range(forecast_horizon)], dtype=object
+            )
+
+    if future_time_grid is None:
+        # Fallback to a simple range [1..H]
+        future_time_grid = np.arange(1, H + 1)
+
+    future_time_grid = np.asarray(future_time_grid)
+    if future_time_grid.shape[0] != H:
+        raise ValueError(
+            "future_time_grid must have length H. "
+            f"Got len={future_time_grid.shape[0]}, H={H}"
+        )
+
+    # ------------------------------------------------------------------
+    # Convert times to datetime if requested
+    # ------------------------------------------------------------------
+    def _to_time(values):
+        if not time_as_datetime:
+            return values
+        return pd.to_datetime(values, format=time_format, errors="coerce")
+
+    # Eval time: default to train_end_time or first future time
+    if train_end_time is not None:
+        eval_time_value = train_end_time
+    else:
+        eval_time_value = future_time_grid[-1]
+
+    eval_time_series = _to_time(
+        np.full(B, eval_time_value, dtype=object)
+    )
+
+    # Future times: repeat grid for each sample
+    future_time_series = _to_time(
+        np.tile(future_time_grid, B)
+    )
+
+    # ------------------------------------------------------------------
+    # Build evaluation time grid for ALL horizons (e.g. 2020,2021,2022)
+    # ------------------------------------------------------------------
+    eval_all_time_series = None
+    if train_end_time is not None:
+        # Try numeric arithmetic: end - (H-1), ..., end
+        try:
+            end_val = float(train_end_time)
+            eval_time_grid_full = np.array(
+                [end_val - (H - 1) + i for i in range(H)],
+                dtype=float,
+            )
+        except Exception:
+            # Fallback: use the same train_end_time for all steps
+            eval_time_grid_full = np.array(
+                [train_end_time for _ in range(H)], dtype=object
+            )
+    else:
+        # No explicit train_end_time: fall back to generic 1..H
+        eval_time_grid_full = np.arange(1, H + 1)
+
+    # Repeat per sample (B*H)
+    eval_all_time_series = _to_time(
+        np.tile(eval_time_grid_full, B)
+    )
+
+    # ------------------------------------------------------------------
+    # Build DataFrames
+    # ------------------------------------------------------------------
+    # Evaluation DataFrame (one row per sample)
+    sample_idx_eval = (
+        np.arange(sample_index_offset, sample_index_offset + B)
+        .astype(int)
+    )
+    forecast_step_eval = np.full(B, eval_forecast_step, dtype=int)
+
+    df_eval = pd.DataFrame(
+        {
+            "sample_idx": sample_idx_eval,
+            "forecast_step": forecast_step_eval,
+        }
+    )
+
+    if quantiles is not None:
+        for j, q in enumerate(quantiles[: subs_eval_q.shape[1]]):
+            q_name = int(round(q * 100))
+            df_eval[f"{target_name}_q{q_name:d}"] = subs_eval_q[:, j]
+    else:
+        df_eval[f"{target_name}_pred"] = subs_eval_q
+
+    if subs_true_eval is not None:
+        df_eval[f"{target_name}_actual"] = subs_true_eval
+
+    df_eval[t_col] = eval_time_series
+
+    if coord_x_eval is not None:
+        df_eval[x_col] = coord_x_eval
+    if coord_y_eval is not None:
+        df_eval[y_col] = coord_y_eval
+
+    # Future DataFrame (one row per sample × horizon)
+    N = B * H
+    sample_idx_future = np.repeat(
+        np.arange(sample_index_offset, sample_index_offset + B), H
+    ).astype(int)
+    forecast_step_future = np.tile(np.arange(1, H + 1), B).astype(int)
+
+    df_future = pd.DataFrame(
+        {
+            "sample_idx": sample_idx_future,
+            "forecast_step": forecast_step_future,
+        }
+    )
+
+    if quantiles is not None:
+        for j, q in enumerate(quantiles[: subs_future_flat.shape[1]]):
+            q_name = int(round(q * 100))
+            df_future[f"{target_name}_q{q_name:d}"] = subs_future_flat[:, j]
+    else:
+        df_future[f"{target_name}_pred"] = subs_future_flat
+
+    df_future[t_col] = future_time_series
+
+    if coord_x_future is not None and coord_x_future.shape[0] == N:
+        df_future[x_col] = coord_x_future
+    if coord_y_future is not None and coord_y_future.shape[0] == N:
+        df_future[y_col] = coord_y_future
+
+    # ------------------------------------------------------------------
+    # Build "all horizons" evaluation DF (for per-year metrics)
+    # ------------------------------------------------------------------
+    df_eval_all = None
+    if subs_true_all_flat is not None:
+        # Base index columns: same structure as df_future
+        df_eval_all = pd.DataFrame(
+            {
+                "sample_idx": sample_idx_future,      # length B*H
+                "forecast_step": forecast_step_future,
+                t_col: eval_all_time_series,          # 2020,2021,2022
+                f"{target_name}_actual": subs_true_all_flat,
+            }
+        )
+
+        # Add predictions
+        if quantiles is not None:
+            for j, q in enumerate(quantiles[: subs_future_flat.shape[1]]):
+                q_name = int(round(q * 100))
+                df_eval_all[f"{target_name}_q{q_name:d}"] = subs_future_flat[:, j]
+        else:
+            df_eval_all[f"{target_name}_pred"] = subs_future_flat
+
+        # Add coords if available
+        if coord_x_future is not None and coord_x_future.shape[0] == N:
+            df_eval_all[x_col] = coord_x_future
+        if coord_y_future is not None and coord_y_future.shape[0] == N:
+            df_eval_all[y_col] = coord_y_future
+
+    # ------------------------------------------------------------------
+    # Optional: transform values to cumulative modes
+    # ------------------------------------------------------------------
+    mode = (value_mode or "rate").lower()
+
+    # Which value columns to transform?
+    pred_cols = [
+        c for c in df_future.columns
+        if c.startswith(f"{target_name}_q") or c == f"{target_name}_pred"
+    ]
+
+    if mode not in (
+        "rate",
+        "increment",
+        "diff",
+        "delta",
+        "cum",
+        "cumulative",
+        "relative_cumulative",
+        "absolute_cumulative",
+        "abs_cum",
+        "absolute",
+    ):
+        vlog(
+            f"[format_and_forecast] Unknown value_mode={value_mode!r}; "
+            "falling back to 'rate'.",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+        mode = "rate"
+
+    if mode != "rate" and not pred_cols:
+        vlog(
+            "[format_and_forecast] No prediction columns found to transform "
+            f"for target={target_name!r}; skipping cumulative mode.",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+        mode = "rate"
+
+    if mode != "rate":
+        # 1) relative cumulative over horizon per sample
+        df_future = _cum_by_sample(
+            df_future, pred_cols, include_actual=False, 
+            target_name=target_name, 
+            verbose=verbose 
+            )
+        
+        if df_eval_all is not None:
+            df_eval_all = _cum_by_sample(
+                df_eval_all, pred_cols, include_actual=True, 
+                target_name=target_name, 
+                verbose=verbose 
+            )
+
+            # Refresh df_eval from the full multi-horizon DF
+            df_eval = df_eval_all[
+                df_eval_all["forecast_step"] == eval_forecast_step
+            ].copy()
+
+        # 2) optional absolute baseline shift
+        if mode in ("absolute_cumulative", "abs_cum", "absolute"):
+            if absolute_baseline is None:
+                vlog(
+                    "[format_and_forecast] value_mode='absolute_cumulative' "
+                    "but absolute_baseline is None; using relative "
+                    "cumulative instead.",
+                    verbose=verbose,
+                    level=1,
+                    logger=logger,
+                )
+            else:
+                df_future = _add_baseline(
+                    df_future, pred_cols, include_actual=False, 
+                    target_name= target_name, 
+                    absolute_baseline= absolute_baseline 
+                )
+                if df_eval_all is not None:
+                    df_eval_all = _add_baseline(
+                        df_eval_all, pred_cols, include_actual=True, 
+                        target_name= target_name, 
+                        absolute_baseline= absolute_baseline 
+                        
+                    )
+                    # And keep df_eval in sync with df_eval_all
+                    df_eval = df_eval_all[
+                        df_eval_all["forecast_step"] == eval_forecast_step
+                    ].copy()
+
+    # ------------------------------------------------------------------
+    # Drop actuals from future DF and save CSVs if requested
+    # ------------------------------------------------------------------
+    actual_col = f"{target_name}_actual"
+    if actual_col in df_future.columns:
+        df_future = df_future.drop(columns=[actual_col])
+
+    # Decide which evaluation DataFrame to export
+    df_eval_to_write = df_eval  # default fallback
+
+    if eval_export is not None and df_eval_all is not None:
+        # Case 1: string control ("all", "last", "2022", ...)
+        if isinstance(eval_export, str):
+            key = eval_export.lower()
+
+            if key in ("all", "full", "horizons"):
+                # Use the full multi-horizon DF (2020,2021,2022,...)
+                df_eval_to_write = df_eval_all
+
+            elif key in ("last", "single", "default"):
+                # Old behaviour: single eval_forecast_step only
+                df_eval_to_write = df_eval
+
+            else:
+                # Treat as a single time value for t_col, e.g. "2022"
+                vals = [eval_export]
+                if time_as_datetime:
+                    vals = pd.to_datetime(vals, format=time_format, errors="coerce")
+                df_eval_to_write = df_eval_all[df_eval_all[t_col].isin(vals)]
+
+        else:
+            # Non-string: scalar or sequence of time values (2021, [2021, 2022], ...)
+            if isinstance(eval_export, Sequence):
+                vals = list(eval_export)
+            else:
+                vals = [eval_export]
+
+            if time_as_datetime:
+                vals = pd.to_datetime(vals, format=time_format, errors="coerce")
+
+            df_eval_to_write = df_eval_all[df_eval_all[t_col].isin(vals)]
+
+    if csv_eval_path:
+        ensure_directory_exists(os.path.dirname(csv_eval_path))
+        df_eval_to_write.to_csv(csv_eval_path, index=False)
+        vlog(
+            f"[format_and_forecast] df_eval written to {csv_eval_path} "
+            f"(rows={len(df_eval_to_write)})",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+
+    if csv_future_path:
+        ensure_directory_exists(os.path.dirname(csv_future_path))
+        df_future.to_csv(csv_future_path, index=False)
+        vlog(
+            f"[format_and_forecast] df_future written to "
+            f"{csv_future_path}",
+            verbose=verbose,
+            level=1,
+            logger = logger
+        )
+    # ------------------------------------------------------------------
+    # Optional metrics evaluation (using df_eval)
+    # ------------------------------------------------------------------
+    if eval_metrics:
+        # Prefer full-horizon eval DF (per-year metrics),
+        # fall back to single-step df_eval if needed.
+        df_for_metrics = df_eval_all if df_eval_all is not None else df_eval
+
+        vlog(
+            "[format_and_forecast] Running evaluate_forecast on "
+            f"{'df_eval_all' if df_eval_all is not None else 'df_eval'}.",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+        
+        # We pass df_eval directly; if metrics_savefile is True
+        # without a path, evaluate_forecast will auto-generate
+        # a filename in the current working directory.  If you
+        # want it near csv_eval_path, pass an explicit path.
+        
+        evaluate_forecast(
+            df_for_metrics,
+            target_name=target_name,
+            column_map=metrics_column_map,
+            quantile_interval=metrics_quantile_interval,
+            per_horizon=metrics_per_horizon,
+            extra_metrics=metrics_extra,
+            extra_metric_kwargs=metrics_extra_kwargs,
+            savefile=metrics_savefile,
+            save_format=metrics_save_format,
+            time_as_str=metrics_time_as_str,
+            verbose=verbose,
+            logger=logger,
+        )
+
+    vlog(
+        "[format_and_forecast] Done.",
+        verbose=verbose,
+        level=1,
+        logger = logger
+    )
+
+    return df_eval_to_write, df_future
+
+# Helper to cumulative-sum per sample over forecast_step
+def _cum_by_sample(
+    df: pd.DataFrame,
+    cols: list[str],
+    include_actual: bool = False, 
+    target_name ="subsidence", 
+    verbose: int = 2 
+    ) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    if not {"sample_idx", "forecast_step"}.issubset(df.columns):
+        vlog(
+            "[format_and_forecast] Cannot apply cumulative mode: "
+            "missing 'sample_idx' or 'forecast_step'.",
+            verbose=verbose,
+            level=1,
+            logger=logger,
+        )
+        return df
+
+    df_sorted = df.sort_values(
+        ["sample_idx", "forecast_step"], kind="mergesort"
+    ).copy()
+
+    g = df_sorted.groupby("sample_idx", sort=False)
+    df_sorted[cols] = g[cols].cumsum()
+    if include_actual and f"{target_name}_actual" in df_sorted.columns:
+        df_sorted[f"{target_name}_actual"] = g[
+            f"{target_name}_actual"
+        ].cumsum()
+
+    return df_sorted
+
+# Helper to add an absolute baseline per sample
+def _add_baseline(
+    df: pd.DataFrame,
+    cols: list[str],
+    target_name: str, 
+    absolute_baseline: Mapping, 
+    include_actual: bool = False,
+    
+) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    if absolute_baseline is None:
+        return df
+
+    if isinstance(absolute_baseline, Mapping):
+        base_series = df["sample_idx"].map(absolute_baseline)
+    else:
+        # Scalar baseline
+        base_series = pd.Series(
+            float(absolute_baseline),
+            index=df.index,
+            dtype=float,
+        )
+
+    base_series = base_series.fillna(0.0).astype(float)
+    for c in cols:
+        if c in df.columns:
+            df[c] = df[c].astype(float) + base_series.to_numpy()
+    if include_actual:
+        a_col = f"{target_name}_actual"
+        if a_col in df.columns:
+            df[a_col] = df[a_col].astype(float) + base_series.to_numpy()
+    return df
 
 @check_empty(['y_val', 'forecast_val'])
 def calibrate_forecasts(

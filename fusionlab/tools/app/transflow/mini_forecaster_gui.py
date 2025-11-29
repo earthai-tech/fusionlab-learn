@@ -34,8 +34,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy, 
     QPlainTextEdit
 )
-from ...registry import ManifestRegistry, _locate_manifest
-from .components import ( 
+from ....registry import ManifestRegistry, _locate_manifest
+from ..components import ( 
     ProgressManager, 
     WorkerController, 
     ErrorManager,
@@ -47,10 +47,12 @@ from .components import (
     ManifestManager, 
     DryRunController
 )
+from ..dialog import CsvEditDialog, TunerDialog
+from ..gui_popups import ImagePreviewDialog 
+from ..qt_utils import auto_set_ui_fonts, auto_resize_window 
+from ..utils import log_tuning_params
 
 from .config import SubsConfig
-from .dialog import CsvEditDialog, TunerDialog
-from .gui_popups import ImagePreviewDialog 
 from .styles import ( 
     PRIMARY, 
     SECONDARY, 
@@ -65,8 +67,6 @@ from .threads import (
     InferenceThread, 
     TunerThread 
 )
-from .qt_utils import auto_set_ui_fonts, auto_resize_window 
-from .utils import log_tuning_params
 from .view import VIS_SIGNALS
   
 class MiniForecaster(QMainWindow):

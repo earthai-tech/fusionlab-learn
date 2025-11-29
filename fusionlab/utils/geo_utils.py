@@ -19,6 +19,8 @@ from ..core.checks import (
 from ..core.handlers import columns_manager
 from ..core.io import SaveFile 
 
+from .generic_utils import vlog 
+
 logger = fusionlog().get_fusionlab_logger(__name__)
 
 PathLike = Union[str, "os.PathLike[str]"]
@@ -1565,6 +1567,7 @@ def unpack_frames_from_file(
     return_dict: bool = True,
     save_kwargs: Optional[Dict[str, Any]] = None,
     verbose: int = 1,
+    logger : None, 
 ) -> Dict[Any, pd.DataFrame]:
     """
     Reverse of `merge_city_frames_to_file`: split an aggregated NATCOM
@@ -1685,7 +1688,9 @@ def unpack_frames_from_file(
     #    'zhongshan_final_main_std.harmonized.csv' (if `source` labels exist),
     #    and returns a dict: {'Nansha': df_nansha, 'Zhongshan': df_zhongshan}
     """
-    
+    def _log (mess, verbose =verbose, logger = logger): 
+        vlog (mess, verbose = verbose, logger = logger)
+
     save_kwargs = dict(save_kwargs or {})
 
     # 1) Load merged DataFrame
@@ -1769,7 +1774,7 @@ def unpack_frames_from_file(
 
     groups = df.groupby(group_col, dropna=False)
     if verbose:
-        print(
+        _log(
             f"[unpack_{group_col}_frames] Splitting merged DataFrame of shape "
             f"{df.shape} into {len(groups)} group(s) by {group_col!r}..."
         )
@@ -1804,7 +1809,7 @@ def unpack_frames_from_file(
                     # Nice case: one clear source label for this group
                     filename = _filename_from_source_label(labels[0], gval)
                 elif labels.size > 1 and verbose:
-                    print(
+                    _log(
                         f"[unpack_{group_col}_frames] Group {group_col}={gval!r} "
                         f"has multiple source labels {labels.tolist()}; "
                         "falling back to filename_pattern."
@@ -1825,7 +1830,7 @@ def unpack_frames_from_file(
             out_path = out_dir / filename
 
             if verbose:
-                print(
+                _log(
                     f"[unpack_{group_col}_frames] Writing group {group_col}={gval!r} "
                     f"to {out_path} (format={fmt}, n={len(chunk)})"
                 )
@@ -1851,7 +1856,7 @@ def unpack_frames_from_file(
             out_frames[gval] = chunk
 
     if verbose:
-        print(
+        _log(
             f"[unpack_{group_col}_frames] Done. Produced {len(out_frames)} "
             f"group DataFrame(s). Files saved in: {out_dir}"
         )
