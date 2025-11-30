@@ -586,6 +586,7 @@ def save_ablation_record(
     phys_diag: dict | None = None,
     per_h_mae: dict | None = None,
     per_h_r2: dict | None = None,
+    log_fn = None, 
 ) -> None:
     """
     Append a single ablation record to ``ablation_record.jsonl``.
@@ -630,6 +631,9 @@ def save_ablation_record(
     The output file is a JSON-Lines file, so it can be loaded
     with :func:`load_ablation_jsonl`.
     """
+    if log_fn is None: 
+        log_fn =print 
+        
     eval_dict = eval_dict or {}
 
     rec = {
@@ -670,7 +674,7 @@ def save_ablation_record(
     with open(jpath, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
 
-    print(f"[Ablation] appended -> {jpath}")
+    log_fn(f"[Ablation] appended -> {jpath}")
 
 
 def load_ablation_jsonl(path: str) -> pd.DataFrame:

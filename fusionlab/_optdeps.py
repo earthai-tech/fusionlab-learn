@@ -11,7 +11,9 @@ repeating try/except import blocks.
 
 from __future__ import annotations
 
+from typing import Callable
 from typing import Any, Optional, Iterable, TypeVar
+
 
 T = TypeVar("T")
 
@@ -31,6 +33,49 @@ else:
 
 TQDM = _tqdm
 
+
+class _TqdmLogStream:
+    """
+    Minimal file-like stream that forwards tqdm's text output
+    to a logger function instead of the terminal.
+
+    It buffers partial lines until a newline or carriage return
+    to avoid spamming the logger for every tiny write.
+    """
+
+    def __init__(self, log_fn: Callable[[str], None]) -> None:
+        self._log_fn = log_fn
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        # tqdm sometimes writes bytes or weird objects; be defensive
+        s = str(s)
+        if not s:
+            return 0
+
+        self._buf += s
+
+        # tqdm uses '\r' a lot; treat both '\n' and '\r' as flush points
+        for sep in ("\n", "\r"):
+            if sep in self._buf:
+                parts = self._buf.split(sep)
+                # all but last are complete "lines"
+                for line in parts[:-1]:
+                    line = line.strip()
+                    if line:
+                        self._log_fn(line)
+                # keep the trailing incomplete fragment (if any)
+                self._buf = parts[-1]
+
+        return len(s)
+
+    def flush(self) -> None:
+        # Flush whatever is left in the buffer as a final line
+        if self._buf.strip():
+            self._log_fn(self._buf.strip())
+        self._buf = ""
+
+
 def with_progress(
     iterable: Iterable[T],
     *,
@@ -39,6 +84,7 @@ def with_progress(
     ascii: bool = True,
     leave: bool = False,
     disable: Optional[bool] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
     **tqdm_kwargs: Any,
 ) -> Iterable[T]:
     """
@@ -62,6 +108,10 @@ def with_progress(
     disable : bool or None, optional
         If True, always disable tqdm (return raw iterable).
         If None, uses tqdm if installed; otherwise falls back.
+    log_fn : callable or None, optional
+        If provided, tqdm's progress bar output is redirected into
+        this logger instead of the terminal. The logger must accept
+        a single string argument.
     **tqdm_kwargs :
         Any additional keyword arguments passed directly to tqdm.
 
@@ -80,20 +130,29 @@ def with_progress(
         if total is None:
             try:
                 total = len(iterable)  # type: ignore[arg-type]
-            except:
+            except Exception:
                 total = None
+
+        tqdm_args = {
+            "total": total,
+            "desc": desc,
+            "ascii": ascii,
+            "leave": leave,
+        }
+        tqdm_args.update(tqdm_kwargs)
+
+        # If a logger is provided, redirect tqdm output to it
+        if log_fn is not None:
+            tqdm_args["file"] = _TqdmLogStream(log_fn)
 
         return TQDM(
             iterable,
-            total=total,
-            desc=desc,
-            ascii=ascii,
-            leave=leave,
-            **tqdm_kwargs,
+            **tqdm_args,
         )
-    except:
+    except Exception:
         # Any failure → graceful fallback to plain iterable
         return iterable
+
 
 
 __all__ = [

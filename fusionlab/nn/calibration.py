@@ -222,7 +222,10 @@ def _stack_subs_quantiles(s_pred_q):
     hi  = s_pred_q[:, :, 2, :]
     return lo, med, hi
 
-def fit_interval_calibrator_on_val(model, ds_val, target=0.80):
+def fit_interval_calibrator_on_val(
+        model, ds_val, target=0.80, 
+        log_fn =None, **tqdm_kws
+    ):
     """
     Fit a horizon-wise symmetric interval calibrator on a validation
     dataset.
@@ -244,7 +247,10 @@ def fit_interval_calibrator_on_val(model, ds_val, target=0.80):
         ``y`` must contain key ``"subs_pred"`` of shape ``(B, H, 1)``.
     target : float, default=0.80
         Desired coverage for the central interval.
-
+    log_fn : callable or None, optional
+        If provided, tqdm's progress bar output is redirected into
+        this logger instead of the terminal. The logger must accept
+        a single string argument.
     Returns
     -------
     cal : IntervalCalibrator
@@ -275,6 +281,8 @@ def fit_interval_calibrator_on_val(model, ds_val, target=0.80):
         desc="Calibrating intervals on val",
         ascii=True,
         leave=False,
+        log_fn= log_fn, 
+        **tqdm_kws
     )
 
     for x, y in iterator:  # y needs 'subs_pred' with shape (B,H,1)

@@ -28,7 +28,7 @@ from ..core.checks import (
 
 from ..decorators import isdf 
 from .generic_utils import vlog
-from fusionlab._optdeps import HAS_TQDM, TQDM as _TQDM
+from fusionlab._optdeps import HAS_TQDM, with_progress 
  
 
 __all__ = [
@@ -579,8 +579,34 @@ default 'auto'
     static_list, H_list = [], []
     subs_target_list, gwl_target_list = [], []
 
-    # # Grouping
+    # # # Grouping
+    # # Setup grouping (allow no grouping => single global group)
+    # if group_id_cols:
+    #     grouped = df_win.groupby(group_id_cols)
+    #     n_groups = grouped.ngroups
+    #     group_iter = grouped
+    # else:
+    #     n_groups = 1
+    #     group_iter = [(None, df_win)]
+    
+    # # Progress logging frequency for non-tqdm fallback
+    # log_every = max(1, n_groups // 10)
+    
+    # # Optionally wrap with tqdm if available and verbosity suggests user cares
+    # use_tqdm = HAS_TQDM  and verbose >= 1 and n_groups > 1
+    # if use_tqdm:
+    #     iter_groups = _TQDM(
+    #         group_iter,
+    #         total=n_groups,
+    #         desc=f"[Future] groups ({model_name or ''})".strip(),
+    #         leave=False,
+    #     )
+    # else:
+    #     iter_groups = group_iter
+
+        # Grouping
     # Setup grouping (allow no grouping => single global group)
+    
     if group_id_cols:
         grouped = df_win.groupby(group_id_cols)
         n_groups = grouped.ngroups
@@ -588,22 +614,35 @@ default 'auto'
     else:
         n_groups = 1
         group_iter = [(None, df_win)]
-    
+
     # Progress logging frequency for non-tqdm fallback
     log_every = max(1, n_groups // 10)
-    
-    # Optionally wrap with tqdm if available and verbosity suggests user cares
-    use_tqdm = HAS_TQDM  and verbose >= 1 and n_groups > 1
+
+    # Small adapter so tqdm output goes into your logger instead of terminal
+    def _log_progress_line(msg: str) -> None:
+        # Use vlog so it respects verbose + user logger
+        vlog(
+            msg,
+            verbose=verbose,
+            level=2,
+            logger=logger,
+        )
+
+    # Optionally wrap with tqdm, but redirect its ASCII bar to the log
+    use_tqdm = HAS_TQDM and verbose >= 1 and n_groups > 1
     if use_tqdm:
-        iter_groups = _TQDM(
+        iter_groups = with_progress(
             group_iter,
             total=n_groups,
             desc=f"[Future] groups ({model_name or ''})".strip(),
             leave=False,
+            ascii=True,
+            log_fn=_log_progress_line,  
+            mininterval=1.0,             # optional: don't spam too often
         )
     else:
         iter_groups = group_iter
-        
+
     dropped_groups = 0
     
     for gi, (gid, g) in enumerate(iter_groups, start=1):

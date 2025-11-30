@@ -229,7 +229,6 @@ def find_stage1_for_city(
     return matching_city, all_runs
 
 
-
 def build_stage1_cfg_from_nat(
     *,
     base_cfg: Dict[str, Any],
