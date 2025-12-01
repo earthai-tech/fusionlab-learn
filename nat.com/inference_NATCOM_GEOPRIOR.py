@@ -78,6 +78,7 @@ from fusionlab.utils.scale_metrics import (
     point_metrics,
     per_horizon_metrics,
 )
+from fusionlab.utils.forecast_utils import format_and_forecast 
 from fusionlab.registry.utils import _find_stage1_manifest  
 
 # from fusionlab.nn.pinn.models import GeoPriorSubsNet
@@ -87,9 +88,9 @@ from fusionlab.nn.calibration import (
     fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
 )
-from fusionlab.nn.pinn.utils import format_pinn_predictions
-from fusionlab.plot.forecast import plot_forecasts, forecast_view
-
+# from fusionlab.nn.pinn.utils import format_pinn_predictions
+# from fusionlab.plot.forecast import plot_forecasts, forecast_view
+from fusionlab.plot.forecast import plot_eval_future
 from fusionlab.utils.nat_utils import (
     load_or_rebuild_geoprior_model,
         pick_npz_for_dataset, 
@@ -151,7 +152,7 @@ def _resolve_manifest(args) -> dict:
             return json.load(f)
 
     # 3) env / auto-discovery (same policy as Stage-2/Stage-3)
-
+    
     RESULTS_DIR = default_results_dir()  # auto-resolve
     CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
     MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
@@ -249,6 +250,7 @@ def main():
     # T = cfg["TIME_STEPS"]
     H = cfg["FORECAST_HORIZON_YEARS"]
     FSY = cfg.get('FORECAST_START_YEAR') 
+    TRAIN_END_YEAR = cfg.get("TRAIN_END_YEAR")
     QUANTILES = cfg.get("QUANTILES", [0.1, 0.5, 0.9])
 
     OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
@@ -371,10 +373,13 @@ def main():
     # Map column names
     cols_cfg = cfg.get("cols", {})
     SUBS_COL = cols_cfg.get("subsidence", "subsidence")
-    GWL_COL  = cols_cfg.get("gwl", "GWL")
-    target_mapping = {"subs_pred": SUBS_COL, "gwl_pred": GWL_COL}
-    output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}
-
+    # GWL_COL  = cols_cfg.get("gwl", "GWL")
+    # target_mapping = {"subs_pred": SUBS_COL, "gwl_pred": GWL_COL}
+    # output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}
+    
+    target_name = SUBS_COL
+    target_key_pred = "subs_pred"
+    
     # Save CSV
     csv_name = (f"{CITY}_{MODEL_NAME}_inference_{args.dataset}_H{H}"
                 f"{'_cal' if cal is not None else ''}.csv")
@@ -382,25 +387,58 @@ def main():
 
     # XXX TODO: fIX , use the robust format_and_forecast like you did 
     # for training and tuned rather than this old helpers... 
-    
-    df = format_pinn_predictions(
-        predictions=predictions_for_formatter,
-        y_true_dict=y_true_for_format or None,
-        target_mapping=target_mapping,
+
+    base_name = f"{CITY}_{MODEL_NAME}_inference_{args.dataset}_H{H}"
+    if cal is not None:
+        base_name += "_calibrated"
+
+    csv_eval = os.path.join(inf_dir, base_name + "_eval.csv")
+    csv_future = os.path.join(inf_dir, base_name + "_future.csv")
+
+    # Future grid: same logic as tuning (FSY .. FSY+H)
+    future_grid = None
+    if FSY is not None and H is not None:
+        future_grid = np.arange(FSY, FSY + H, dtype=float)
+
+    df_eval, df_future = format_and_forecast(
+        y_pred=predictions_for_formatter,
+        y_true=y_true_for_format or None,
+        coords=X.get("coords", None),
+        quantiles=QUANTILES if QUANTILES else None,
+        target_name=target_name,
+        target_key_pred=target_key_pred,
+        component_index=0,
         scaler_info=scaler_info,
-        quantiles=QUANTILES if data_final.ndim == 4 else None,
-        forecast_horizon=H,
-        output_dims=output_dims,
-        include_coords=True,
-        include_gwl=args.include_gwl,
-        model_inputs=X,
-        evaluate_coverage=bool(y_map) and data_final.ndim == 4,
-        savefile=csv_path,
         coord_scaler=coord_scaler,
+        coord_columns=("coord_t", "coord_x", "coord_y"),
+        train_end_time=TRAIN_END_YEAR,
+        forecast_start_time=FSY,
+        forecast_horizon=H,
+        future_time_grid=future_grid,
+        eval_forecast_step=None,
+        sample_index_offset=0,
+        city_name=CITY,
+        model_name=MODEL_NAME,
+        dataset_name=f"{args.dataset}",
+        csv_eval_path=csv_eval,
+        csv_future_path=csv_future,
+        time_as_datetime=False,
+        time_format=None,
         verbose=1,
-        forecast_start_year = FSY, 
+        # In inference mode we don't compute extra eval metrics here
+        eval_metrics=False,
+        value_mode="rate",
     )
-    print(f"Saved inference CSV -> {csv_path}")
+
+    if df_eval is not None and not df_eval.empty:
+        print(f"[Inference] Saved calibrated EVAL forecast CSV -> {csv_eval}")
+    else:
+        print("[Inference] Eval forecast DF is empty (df_eval).")
+
+    if df_future is not None and not df_future.empty:
+        print(f"[Inference] Saved calibrated FUTURE forecast CSV -> {csv_future}")
+    else:
+        print("[Inference] Future forecast DF is empty (df_future).")
 
     # Optional quick diagnostics
     eval_json = {
@@ -557,48 +595,47 @@ def main():
         }, f, indent=2)
 
     # Plots
-    if (not args.no_figs) and (df is not None) and (len(df) > 0):
+    has_any_df = (
+        (df_eval is not None and not df_eval.empty)
+        or (df_future is not None and not df_future.empty)
+    )
+
+    if (not args.no_figs) and has_any_df and (len(df_eval) > 0):
+        print("\n[Inference] Plotting forecast views...")
         try:
-            horizon_steps = [1, H] if H > 1 else [1]
-            
-            #XXX  better use  plot_eval_future like training and accept _logger parameter 
-            # pass to log , then remove plot_forecasts and forecast_view, 
-            # plot_eval_future does the both task , refer to the run_training 
-            plot_forecasts(
-                forecast_df=df,
+            # For eval: last year of training (e.g. 2022)
+            eval_years = [TRAIN_END_YEAR] if TRAIN_END_YEAR is not None else None
+            # For future: use the same grid passed to format_and_forecast
+            future_years = future_grid
+
+            plot_eval_future(
+                df_eval=df_eval,       # can be empty; function should handle it
+                df_future=df_future,
                 target_name=SUBS_COL,
-                quantiles=QUANTILES if data_final.ndim == 4 else None,
-                output_dim=OUT_S_DIM,
-                kind="spatial",
-                horizon_steps=horizon_steps,
-                spatial_cols=("coord_x", "coord_y"),
-                sample_ids="first_n",
-                num_samples=min(3, batch_size),
-                max_cols=2,
-                figsize=(7, 5.5),
-                cbar="uniform",
-                verbose=1,
-                savefig = os.path.join(inf_dir, f"{CITY}_inference_plot"),
-                show =False, 
-                _logger = log, # accept _log callback 
-            )
-            forecast_view(
-                df,
+                quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
                 spatial_cols=("coord_x", "coord_y"),
                 time_col="coord_t",
-                value_prefixes=[SUBS_COL],
-                verbose=1,
-                view_quantiles=[0.5] if data_final.ndim == 4 else None,
-                savefig=os.path.join(inf_dir, f"{CITY}_forecast_comparison_plot_"),
+                eval_years=eval_years,
+                future_years=future_years,
+                eval_view_quantiles=[0.5],     # compare [actual] vs [q50]
+                future_view_quantiles=QUANTILES,
+                spatial_mode="hexbin",
+                hexbin_gridsize=40,
+                savefig_prefix=os.path.join(
+                    inf_dir,
+                    f"{CITY}_subsidence_view",
+                ),
                 save_fmts=[".png", ".pdf"],
-                show =False , 
-                _logger = log, 
+                show=False,
+                verbose=1,
+                cumulative=True,
+                # _logger=log,
             )
-            print(f"Saved forecast figures in: {inf_dir}")
+            print(f"[Inference] Saved forecast figures in: {inf_dir}")
+
         except Exception as e:
-            print(f"[Warn] plotting failed: {e}")
-    
-    
+            print(f"[Warn] plot_eval_future failed: {e}")
+            
 
 
 if __name__ == "__main__":

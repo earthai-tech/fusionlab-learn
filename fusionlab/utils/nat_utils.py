@@ -1571,6 +1571,179 @@ def build_geoprior_from_hps(
     )
     return model
 
+def build_geoprior_from_cfg(
+    manifest: dict,
+    X_sample: dict,
+    out_s_dim: int,
+    out_g_dim: int,
+    mode: str,
+    horizon: int,
+    quantiles: list[float] | None,
+) -> Any:
+    """
+    Reconstruct a GeoPriorSubsNet from the NATCOM config only.
+
+    This is intended as a fallback for *trained* models (no tuning JSON)
+    or when no best_hps can be found next to `model_path`.
+
+    Parameters
+    ----------
+    manifest : dict
+        Stage-1 manifest dictionary. The ``"config"`` entry is used as
+        the single source of truth for architecture + physics settings.
+    X_sample : dict
+        NPZ inputs dict (already sanitised and passed through
+        :func:`ensure_input_shapes` or equivalent). Only shapes are used.
+    out_s_dim, out_g_dim : int
+        Output dims for subsidence and GWL heads.
+    mode : str
+        Sequence mode, e.g. ``"tft_like"`` or ``"pihal_like"``.
+    horizon : int
+        Forecast horizon (number of time steps).
+    quantiles : list of float or None
+        Quantiles for probabilistic outputs.
+
+    Returns
+    -------
+    model : GeoPriorSubsNet
+        Compiled model instance ready for prediction/eval.
+    """
+    try:
+        from fusionlab.nn.pinn.models import GeoPriorSubsNet  # type: ignore
+    except Exception as e:  # pragma: no cover - env dependent
+        raise ImportError(
+            "build_geoprior_from_cfg requires "
+            "'fusionlab.nn.pinn.models.GeoPriorSubsNet'. "
+            "Ensure fusionlab is installed and importable."
+        ) from e
+
+    cfg = manifest.get("config", {}) or {}
+
+    # --- Input dims inferred from X_sample ----------------------------
+    static_dim, dynamic_dim, future_dim = infer_input_dims_from_X(X_sample)
+
+    # --- Attention stack / effective-H flag ---------------------------
+    attention_levels = cfg.get(
+        "ATTENTION_LEVELS",
+        ["cross", "hierarchical", "memory"],
+    )
+
+    censor_cfg = cfg.get("censoring", {}) or {}
+    use_effective_h = censor_cfg.get(
+        "use_effective_h_field",
+        bool(cfg.get("GEOPRIOR_USE_EFFECTIVE_H", True)),
+    )
+
+    # --- Physics switches ---------------------------------------------
+    pde_mode = cfg.get("PDE_MODE_CONFIG", cfg.get("PDE_MODE", "both"))
+    scale_pde_residuals = bool(
+        cfg.get("SCALE_PDE_RESIDUALS", cfg.get("SCALE_PDE_RES", True))
+    )
+    kappa_mode = cfg.get(
+        "GEOPRIOR_KAPPA_MODE",
+        cfg.get("KAPPA_MODE", "bar"),
+    )
+
+    # --- Small helpers to read ints/floats/bools from cfg ------------
+    def _cfg_int(default: int, *keys: str) -> int:
+        for k in keys:
+            if k in cfg and cfg[k] is not None:
+                try:
+                    return int(cfg[k])
+                except Exception:
+                    pass
+        return int(default)
+
+    def _cfg_float(default: float, *keys: str) -> float:
+        for k in keys:
+            if k in cfg and cfg[k] is not None:
+                try:
+                    return float(cfg[k])
+                except Exception:
+                    pass
+        return float(default)
+
+    def _cfg_bool(default: bool, *keys: str) -> bool:
+        for k in keys:
+            if k in cfg and cfg[k] is not None:
+                return bool(cfg[k])
+        return bool(default)
+
+    # --- Architecture hyperparams (config-side defaults) --------------
+    embed_dim = _cfg_int(32, "EMBED_DIM", "GEOPRIOR_EMBED_DIM")
+    hidden_units = _cfg_int(96, "HIDDEN_UNITS", "GEOPRIOR_HIDDEN_UNITS")
+    lstm_units = _cfg_int(96, "LSTM_UNITS", "GEOPRIOR_LSTM_UNITS")
+    attention_units = _cfg_int(
+        32, "ATTENTION_UNITS", "GEOPRIOR_ATTENTION_UNITS"
+    )
+    num_heads = _cfg_int(
+        4, "NUM_HEADS", "NUMBER_HEADS", "GEOPRIOR_NUM_HEADS"
+    )
+    dropout_rate = _cfg_float(
+        0.1, "DROPOUT_RATE", "GEOPRIOR_DROPOUT_RATE"
+    )
+    use_vsn = _cfg_bool(True, "USE_VSN", "GEOPRIOR_USE_VSN")
+    vsn_units = _cfg_int(32, "VSN_UNITS", "GEOPRIOR_VSN_UNITS")
+    use_batch_norm = _cfg_bool(
+        True, "USE_BATCH_NORM", "GEOPRIOR_USE_BATCH_NORM"
+    )
+
+    # --- Geomechanical priors (Terzaghi-ish) --------------------------
+    mv = _cfg_float(5e-7, "GEOPRIOR_INIT_MV")
+    kappa = _cfg_float(1.0, "GEOPRIOR_INIT_KAPPA")
+
+    architecture_config = {
+        "encoder_type": "hybrid",
+        "decoder_attention_stack": attention_levels,
+        "feature_processing": "vsn" if use_vsn else "dense",
+    }
+
+    model = GeoPriorSubsNet(
+        static_input_dim=static_dim,
+        dynamic_input_dim=dynamic_dim,
+        future_input_dim=future_dim,
+        output_subsidence_dim=out_s_dim,
+        output_gwl_dim=out_g_dim,
+        forecast_horizon=horizon,
+        mode=mode,
+        attention_levels=attention_levels,
+        quantiles=quantiles,
+        # physics switches
+        pde_mode=pde_mode,
+        scale_pde_residuals=scale_pde_residuals,
+        kappa_mode=kappa_mode,
+        use_effective_h=use_effective_h,
+        # architecture hyperparameters
+        embed_dim=embed_dim,
+        hidden_units=hidden_units,
+        lstm_units=lstm_units,
+        attention_units=attention_units,
+        num_heads=num_heads,
+        dropout_rate=dropout_rate,
+        use_vsn=use_vsn,
+        vsn_units=vsn_units,
+        use_batch_norm=use_batch_norm,
+        # priors
+        mv=mv,
+        kappa=kappa,
+        architecture_config=architecture_config,
+    )
+
+    # Compile using config-only settings
+    compile_for_eval(
+        model=model,
+        manifest=manifest,
+        best_hps=None,
+        quantiles=quantiles,
+        include_metrics=True,
+    )
+
+    print(
+        "[Fallback] Reconstructed GeoPriorSubsNet from manifest config with "
+        f"static_dim={static_dim}, dynamic_dim={dynamic_dim}, "
+        f"future_dim={future_dim}, horizon={horizon}, mode={mode}"
+    )
+    return model
 
 def infer_best_weights_path(model_path: str) -> str | None:
     """
@@ -1618,6 +1791,7 @@ def infer_best_weights_path(model_path: str) -> str | None:
         return guess
 
     return None
+
 
 def load_or_rebuild_geoprior_model(
     model_path: str,
@@ -1771,20 +1945,20 @@ def load_or_rebuild_geoprior_model(
     with custom_object_scope(custom_objects):
         if verbose:
             print(f"[Model] Attempting to load tuned model from: {model_path}")
-
-        try:
-            model = load_model(model_path, compile=compile_on_load)
-            if verbose:
-                print(f"[Model] Successfully loaded tuned model for {label_city} "
-                      f"from: {model_path}")
-            return model, best_hps
-        except Exception as e_load:
-            if verbose:
-                print(
-                    f"[Warn] load_model('{model_path}') failed: {e_load}\n"
-                    "[Warn] Attempting robust fallback: rebuild GeoPriorSubsNet "
-                    "from tuned hyperparameters."
-                )
+        
+        # try:
+        model = load_model(model_path, compile=compile_on_load)
+        if verbose:
+            print(f"[Model] Successfully loaded tuned model for {label_city} "
+                  f"from: {model_path}")
+        return model, best_hps
+        # except Exception as e_load:
+        #     if verbose:
+        #         print(
+        #             f"[Warn] load_model('{model_path}') failed: {e_load}\n"
+        #             "[Warn] Attempting robust fallback: rebuild GeoPriorSubsNet "
+        #             "from tuned hyperparameters."
+        #         )
 
     # ------------------- 2) Fallback: rebuild + load weights --------------
     # 2.1 Hyperparameters near the tuned model
@@ -1869,6 +2043,201 @@ def sanitize_inputs_np(X: dict) -> dict:
 #         return y_dict
 #     # Allow missing targets for pure inference
 #     return {}
+def _load_or_rebuild_geoprior_model(
+    model_path: str,
+    manifest: dict,
+    X_sample: dict,
+    out_s_dim: int,
+    out_g_dim: int,
+    mode: str,
+    horizon: int,
+    quantiles: list[float] | None,
+    city_name: str | None = None,
+    compile_on_load: bool = True,
+    verbose: int = 1,
+):
+    """
+    Load a GeoPriorSubsNet from disk, with robust fallback.
+
+    Works for both:
+    - tuned models (with best_hps / tuning_summary.json nearby), and
+    - plain trained models (no tuning artifacts).
+
+    Strategy
+    --------
+    1. Try ``tf.keras.models.load_model(model_path)`` with the correct
+       custom objects registered.
+
+    2. If that fails:
+       a) Try to locate tuned hyperparameters via
+          :func:`load_best_hps_near_model`.
+          If found, treat this as a *tuned* run and rebuild via
+          :func:`build_geoprior_from_hps`.
+       b) If no best_hps JSON is found, assume this is a *trained* model
+          and rebuild from the config only via
+          :func:`build_geoprior_from_cfg`.
+
+       In both cases we then attempt to load a weights checkpoint via
+       :func:`infer_best_weights_path` (e.g. ``*.weights.h5``). If no
+       weights file is found, the rebuilt model keeps freshly
+       initialised weights and predictions will not match the original
+       run.
+
+    Returns
+    -------
+    model :
+        GeoPriorSubsNet (or compatible) instance ready for
+        evaluation/prediction.
+    best_hps : dict or None
+        Tuned hyperparameters when available (tuned fallback), else
+        ``None`` for pure trained runs.
+    """
+    label_city = city_name or "GeoPrior"
+
+    # --- Lazy imports so nat_utils can be imported without TF/fusionlab ---
+    try:
+        import tensorflow as tf  # type: ignore  # noqa
+        from tensorflow.keras.models import load_model  # type: ignore
+        from tensorflow.keras.utils import custom_object_scope  # type: ignore
+    except Exception as e:  # pragma: no cover - env dependent
+        raise ImportError(
+            "load_or_rebuild_geoprior_model requires TensorFlow. "
+            "Please install 'tensorflow>=2.12' to use this helper."
+        ) from e
+
+    try:
+        from fusionlab.nn.pinn.models import GeoPriorSubsNet  # type: ignore
+        from fusionlab.params import (  # type: ignore
+            LearnableMV,
+            LearnableKappa,
+            FixedGammaW,
+            FixedHRef,
+        )
+        from fusionlab.nn.losses import make_weighted_pinball  # type: ignore
+        from fusionlab.nn.keras_metrics import (  # type: ignore
+            coverage80_fn,
+            sharpness80_fn,
+        )
+    except Exception as e:  # pragma: no cover - env dependent
+        raise ImportError(
+            "load_or_rebuild_geoprior_model requires fusionlab components "
+            "(GeoPriorSubsNet, LearnableMV, etc.). Ensure fusionlab is "
+            "installed and importable."
+        ) from e
+
+    custom_objects = {
+        "GeoPriorSubsNet": GeoPriorSubsNet,
+        "LearnableMV": LearnableMV,
+        "LearnableKappa": LearnableKappa,
+        "FixedGammaW": FixedGammaW,
+        "FixedHRef": FixedHRef,
+        # custom loss factory / class
+        "make_weighted_pinball": make_weighted_pinball,
+        # custom metrics used in compile
+        "coverage80_fn": coverage80_fn,
+        "sharpness80_fn": sharpness80_fn,
+    }
+
+    best_hps: dict | None = None
+
+    # ------------------- 1) Direct load_model -----------------------------
+    with custom_object_scope(custom_objects):
+        if verbose:
+            print(f"[Model] Attempting to load model from: {model_path}")
+
+        try:
+            model = load_model(model_path, compile=compile_on_load)
+            if verbose:
+                print(
+                    "[Model] Successfully loaded model for "
+                    f"{label_city} from: {model_path}"
+                )
+            return model, best_hps
+        except Exception as e_load:
+            if verbose:
+                print(
+                    f"[Warn] load_model('{model_path}') failed: {e_load}\n"
+                    "[Warn] Falling back to config-based reconstruction."
+                )
+
+    # ------------------- 2) Fallback: tuned vs trained --------------------
+    is_tuned = False
+    try:
+        best_hps = load_best_hps_near_model(model_path)
+        is_tuned = True
+        if verbose:
+            print(
+                "[Fallback] Detected tuning artifacts near model_path; "
+                "rebuilding from best_hps."
+            )
+    except Exception as e_hps:
+        # No best_hps → treat as plain trained model
+        best_hps = None
+        if verbose:
+            print(
+                "[Fallback] No best_hps JSON found next to model_path; "
+                "assuming a plain trained model.\n"
+                f"          Reason: {e_hps}"
+            )
+
+    # 2.2 Rebuild architecture + compile
+    try:
+        if is_tuned:
+            model = build_geoprior_from_hps(
+                manifest=manifest,
+                X_sample=X_sample,
+                best_hps=best_hps or {},
+                out_s_dim=out_s_dim,
+                out_g_dim=out_g_dim,
+                mode=mode,
+                horizon=horizon,
+                quantiles=quantiles,
+            )
+        else:
+            model = build_geoprior_from_cfg(
+                manifest=manifest,
+                X_sample=X_sample,
+                out_s_dim=out_s_dim,
+                out_g_dim=out_g_dim,
+                mode=mode,
+                horizon=horizon,
+                quantiles=quantiles,
+            )
+    except Exception as e_build:
+        src = "best_hps" if is_tuned else "manifest config"
+        raise RuntimeError(
+            f"Failed to reconstruct GeoPriorSubsNet from {src}. "
+            f"Error: {e_build}"
+        ) from e_build
+
+    # 2.3 Load weights into the rebuilt model, if a checkpoint is found
+    weights_path = infer_best_weights_path(model_path)
+    if weights_path is not None:
+        try:
+            model.load_weights(weights_path)
+            if verbose:
+                print(
+                    "[Fallback] Loaded weights into rebuilt GeoPriorSubsNet "
+                    f"from: {weights_path}"
+                )
+        except Exception as e_w:
+            if verbose:
+                print(
+                    "[Warn] Could not load weights from checkpoint:\n"
+                    f"       {weights_path}\n"
+                    f"       Error: {e_w}\n"
+                    "       The rebuilt model is using freshly-initialised "
+                    "weights. Predictions will NOT match the original run."
+                )
+    else:
+        if verbose:
+            print(
+                "[Warn] No weights checkpoint found near model_path.\n"
+                "       Using rebuilt model with freshly-initialised "
+                "weights. Predictions will NOT match the original run."
+            )
+
+    return model, best_hps
 
 # -------------------------------------------------------------------------
 # Backward-compatible aliases for old private helper names
@@ -1882,3 +2251,4 @@ _compile_geoprior_for_eval = compile_geoprior_for_eval
 _build_geoprior_from_hps = build_geoprior_from_hps
 _infer_best_weights_path = infer_best_weights_path
 
+_build_geoprior_from_cfg = build_geoprior_from_cfg

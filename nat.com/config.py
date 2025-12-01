@@ -39,7 +39,7 @@
 # MODEL_NAME is the registered model identifier.  For now the
 # main model is:
 #   - "GeoPriorSubsNet"
-CITY_NAME = "zhongshan"
+CITY_NAME = "nansha"
 MODEL_NAME = "GeoPriorSubsNet"
 
 
@@ -93,8 +93,8 @@ ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
 #     - "pihal_like" : alternative legacy layout.
 TRAIN_END_YEAR = 2022
 FORECAST_START_YEAR = 2023
-FORECAST_HORIZON_YEARS = 4 
-TIME_STEPS = 4
+FORECAST_HORIZON_YEARS = 5 
+TIME_STEPS = 3
 MODE = "tft_like"   # {"pihal_like", "tft_like"}
 
 
@@ -248,8 +248,8 @@ ATTENTION_LEVELS = ["cross", "hierarchical", "memory"]
 EMBED_DIM = 32
 HIDDEN_UNITS = 64
 LSTM_UNITS = 64
-ATTENTION_UNITS =32 # 64
-NUMBER_HEADS = 4 #2
+ATTENTION_UNITS = 64 #32 # 64
+NUMBER_HEADS = 2 #4 #2
 DROPOUT_RATE = 0.10
 
 # Additional architectural knobs used inside BaseAttentive /
@@ -315,11 +315,9 @@ GEOPRIOR_HD_FACTOR = 0.6
 # --------------------------
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
-<<<<<<< HEAD
+
 EPOCHS = 100
-=======
-EPOCHS = 5
->>>>>>> bec174296ab7cc7fcb40c49cd2f2023cbe319cb2
+
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 
