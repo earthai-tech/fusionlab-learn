@@ -120,6 +120,7 @@ ipython_config.py
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
 __pypackages__/
 
+
 # Celery stuff
 celerybeat-schedule
 celerybeat.pid
@@ -196,3 +197,6 @@ results_pinn_test_f3ts5_2/results_00/
 _figures/
 results*/
 .cities_results/
+
+# keep out config 
+nat.com/config*
