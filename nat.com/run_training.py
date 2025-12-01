@@ -81,31 +81,31 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 # Config / Paths
 # =============================================================================
 
-RESULTS_DIR = default_results_dir()
+# RESULTS_DIR = default_results_dir()
 
 # Desired city/model from NATCOM config payload
-cfg_payload   = load_nat_config_payload()
-CFG_CITY  = (cfg_payload.get("city") or "").strip().lower() or None
-CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+# cfg_payload   = load_nat_config_payload()
+# CFG_CITY  = (cfg_payload.get("city") or "").strip().lower() or None
+# CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
 
 # Optional advanced overrides from env
-CITY_ENV   = getenv_stripped("CITY")
-MODEL_ENV  = getenv_stripped("MODEL_NAME_OVERRIDE")
+# CITY_ENV   = getenv_stripped("CITY")
+# MODEL_ENV  = getenv_stripped("MODEL_NAME_OVERRIDE")
 
-CITY_HINT  = CITY_ENV or CFG_CITY
-MODEL_HINT = MODEL_ENV or CFG_MODEL
-MANUAL     = getenv_stripped("STAGE1_MANIFEST")
+CITY_HINT  = "zhongshan" # or CFG_CITY
+# MODEL_HINT = MODEL_ENV or CFG_MODEL
+# MANUAL     = getenv_stripped("STAGE1_MANIFEST")
 
-# RESULTS_DIR = default_results_dir()  # smart default auto-resolve
+RESULTS_DIR =r"F:\repositories\fusionlab-learn\results_00" # default_results_dir()  # smart default auto-resolve
 # CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
 # MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
 # MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
 
 MANIFEST_PATH = _find_stage1_manifest(
-    manual=MANUAL,
-    base_dir=RESULTS_DIR,
-    city_hint=CITY_HINT,         # e.g., "zhongshan"; None means "no filter"
-    model_hint=MODEL_HINT,
+    manual=r"F:\repositories\fusionlab-learn\results_00\zhongshan_GeoPriorSubsNet_stage1\manifest.json",
+    base_dir=r"F:\repositories\fusionlab-learn\results_00",
+    city_hint="zhongshan",         # e.g., "zhongshan"; None means "no filter"
+    model_hint="GeoPriorSubsNet",
     prefer="timestamp",          # or "mtime"
     required_keys=("model", "stage"),
     verbose=1,
@@ -113,11 +113,11 @@ MANIFEST_PATH = _find_stage1_manifest(
 
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
-
+CFG_CITY ="zhongshan"
 manifest_city = (M.get("city") or "").strip().lower()
 print(f"[Manifest] Loaded city={manifest_city} model={M.get('model')}")
 
-if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
+if manifest_city and manifest_city != "zhongshan":
     raise RuntimeError(
         "[NATCOM] Stage-1 manifest city "
         f"{manifest_city!r} does not match config CITY_NAME {CFG_CITY!r}. "
@@ -131,6 +131,7 @@ if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
         "   $ set CITY=zhongshan\n"
         "   $ python nat.com/training_NATCOM_GEOPRIOR.py\n"
     )
+    
 # -------------------------------------------------------------------------
 # Merge global NATCOM config (config.json) with Stage-1 manifest config.
 # - load_nat_config() → central config.json["config"] (model/physics/training)

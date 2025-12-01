@@ -129,6 +129,54 @@ def _load_source_calibrator(source_run_dir: str) -> IntervalCalibrator | None:
     cal.factors_ = np.load(p).astype(np.float32)
     return cal
 
+def _infer_source_input_dims(M_src: dict) -> tuple[int, int]:
+    """
+    Infer (static_input_dim, dynamic_input_dim) for the source model
+    from the Stage-1 manifest.
+
+    Preference order:
+    1. artifacts["sequences"]["dims"]["static_input_dim"/"dynamic_input_dim"]
+       if present.
+    2. artifacts["shapes"]["train_inputs"]["static_features"/"dynamic_features"]
+       last axis.
+    3. len(config["features"]["static"/"dynamic"]) as a fallback.
+
+    Returns
+    -------
+    static_dim : int
+    dynamic_dim : int
+    """
+    # 1) Try dims block first (newer manifests might define these)
+    seq = (M_src.get("artifacts") or {}).get("sequences") or {}
+    dims = seq.get("dims") or {}
+
+    s_src = dims.get("static_input_dim")
+    d_src = dims.get("dynamic_input_dim")
+
+    # 2) Fallback to shapes.train_inputs
+    shapes = (M_src.get("artifacts") or {}).get("shapes") or {}
+    tr_in = shapes.get("train_inputs") or {}
+
+    if s_src is None:
+        sf_shape = tr_in.get("static_features")
+        if isinstance(sf_shape, (list, tuple)) and len(sf_shape) >= 2:
+            s_src = sf_shape[-1]
+
+    if d_src is None:
+        df_shape = tr_in.get("dynamic_features")
+        if isinstance(df_shape, (list, tuple)) and len(df_shape) >= 3:
+            d_src = df_shape[-1]
+
+    # 3) Final fallback: length of feature lists from config
+    feats = (M_src.get("config") or {}).get("features") or {}
+    if s_src is None:
+        s_src = len(feats.get("static") or [])
+    if d_src is None:
+        d_src = len(feats.get("dynamic") or [])
+
+    # Make sure we always return ints
+    return int(s_src or 0), int(d_src or 0)
+
 def _align_static_to_source(
     X_tgt: dict,
     M_src: dict,
@@ -205,17 +253,38 @@ def run_one_direction(
     # Align static features to the *source* feature space
     X_tgt = _align_static_to_source(X_tgt, M_src, M_tgt)
     
-    dims_src = M_src["artifacts"]["sequences"]["dims"]
-    print(
-        f"[XFER] Source model expects static={dims_src.get('static_input_dim')} "
-        f"dynamic={dims_src.get('dynamic_input_dim')}"
-    )
-    print(
-        f"[XFER] Target NPZ has   static={X_tgt.get('static_features', np.empty((0,0))).shape[-1]} "
-        f"dynamic={X_tgt['dynamic_features'].shape[-1]}"
-    )
+    # dims_src = M_src["artifacts"]["sequences"]["dims"]
+    # print(
+    #     f"[XFER] Source model expects static={dims_src.get('static_input_dim')} "
+    #     f"dynamic={dims_src.get('dynamic_input_dim')}"
+    # )
+    # print(
+    #     f"[XFER] Target NPZ has   static={X_tgt.get('static_features', np.empty((0,0))).shape[-1]} "
+    #     f"dynamic={X_tgt['dynamic_features'].shape[-1]}"
+    # )
 
-    s_src = int(dims_src.get("static_input_dim", 0))
+    # s_src = int(dims_src.get("static_input_dim", 0))
+    # s_tgt = int(X_tgt["static_features"].shape[-1])
+    
+    # if s_src != s_tgt:
+    #     raise SystemExit(
+    #         "Static feature dimension mismatch in transfer:\n"
+    #         f"  Source model expects static_features dim = {s_src}\n"
+    #         f"  Target NPZ has static_features dim      = {s_tgt}\n"
+    #         "Cross-city transfer requires Stage-1 to export identical "
+    #         "static feature schemas (same feature list and order) for "
+    #         "both cities. Please harmonize Stage-1 config or pad/align "
+    #         "static_features before calling xfer_matrix.py."
+    #     )
+    
+    # Infer source model input dims from manifest
+    s_src, d_src = _infer_source_input_dims(M_src)
+    
+    print(
+        f"[XFER] Source model expects static={s_src} "
+        f"dynamic={d_src}"
+    )
+    
     s_tgt = int(X_tgt["static_features"].shape[-1])
     
     if s_src != s_tgt:
@@ -228,6 +297,16 @@ def run_one_direction(
             "both cities. Please harmonize Stage-1 config or pad/align "
             "static_features before calling xfer_matrix.py."
         )
+        
+    d_tgt = int(X_tgt["dynamic_features"].shape[-1])
+    if d_src != d_tgt:
+        raise SystemExit(
+            "Dynamic feature dimension mismatch in transfer:\n"
+            f"  Source model expects dynamic_features dim = {d_src}\n"
+            f"  Target NPZ has dynamic_features dim      = {d_tgt}\n"
+            "Please harmonize the dynamic feature schema across cities."
+        )
+
 
     # Optional strict domain test: reproject dynamic features to *source* scaling
     if rescale_to_source:
