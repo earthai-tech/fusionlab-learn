@@ -92,12 +92,13 @@ from fusionlab.nn.calibration import (
 # from fusionlab.plot.forecast import plot_forecasts, forecast_view
 from fusionlab.plot.forecast import plot_eval_future
 from fusionlab.utils.nat_utils import (
-    load_or_rebuild_geoprior_model,
+        load_or_rebuild_geoprior_model,
         pick_npz_for_dataset, 
         # infer_input_dims_from_X, 
         load_best_hps_near_model, 
         # coerce_quantile_weights, 
         compile_geoprior_for_eval, 
+        load_geoprior_for_inference
         # build_geoprior_from_hps, 
         # infer_best_weights_path
   )
@@ -324,17 +325,32 @@ def main():
 
     # ------------------ Load or Rebuild Model ------------------
 
-    model, best_hps = load_or_rebuild_geoprior_model(
+    # model, best_hps = load_or_rebuild_geoprior_model(
+    #     model_path=args.model_path,
+    #     manifest=M,
+    #     X_sample=X,               # e.g. X_val or X_train with shapes fixed
+    #     out_s_dim=OUT_S_DIM,
+    #     out_g_dim=OUT_G_DIM,
+    #     mode=MODE,
+    #     horizon=H,
+    #     quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
+    #     city_name=CITY,
+    #     compile_on_load=True,
+    #     verbose=1,
+    # )
+    
+    print(f"[Model] Loading/rebuilding model from: {args.model_path}")
+    model, _info = load_geoprior_for_inference(
         model_path=args.model_path,
         manifest=M,
-        X_sample=X,               # e.g. X_val or X_train with shapes fixed
+        X_sample=X,
         out_s_dim=OUT_S_DIM,
         out_g_dim=OUT_G_DIM,
         mode=MODE,
         horizon=H,
         quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
         city_name=CITY,
-        compile_on_load=True,
+        include_metrics=True,
         verbose=1,
     )
 

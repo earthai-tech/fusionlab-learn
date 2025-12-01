@@ -2043,7 +2043,8 @@ def sanitize_inputs_np(X: dict) -> dict:
 #         return y_dict
 #     # Allow missing targets for pure inference
 #     return {}
-def _load_or_rebuild_geoprior_model(
+
+def load_or_rebuild_geoprior_model(
     model_path: str,
     manifest: dict,
     X_sample: dict,
@@ -2057,46 +2058,49 @@ def _load_or_rebuild_geoprior_model(
     verbose: int = 1,
 ):
     """
-    Load a GeoPriorSubsNet from disk, with robust fallback.
-
-    Works for both:
-    - tuned models (with best_hps / tuning_summary.json nearby), and
-    - plain trained models (no tuning artifacts).
+    Load a tuned *or trained* GeoPriorSubsNet, with robust rebuild fallback.
 
     Strategy
     --------
-    1. Try ``tf.keras.models.load_model(model_path)`` with the correct
+    1. Try ``tf.keras.models.load_model(model_path)`` with all required
        custom objects registered.
 
     2. If that fails:
-       a) Try to locate tuned hyperparameters via
-          :func:`load_best_hps_near_model`.
-          If found, treat this as a *tuned* run and rebuild via
-          :func:`build_geoprior_from_hps`.
-       b) If no best_hps JSON is found, assume this is a *trained* model
-          and rebuild from the config only via
-          :func:`build_geoprior_from_cfg`.
 
-       In both cases we then attempt to load a weights checkpoint via
-       :func:`infer_best_weights_path` (e.g. ``*.weights.h5``). If no
-       weights file is found, the rebuilt model keeps freshly
-       initialised weights and predictions will not match the original
-       run.
+       2a) Try tuned-model reconstruction::
+
+              best_hps = load_best_hps_near_model(...)
+              model = build_geoprior_from_hps(...)
+
+       2b) If no best_hps JSON is found, assume a plain *trained* model
+           and fall back to the ``*_training_summary.json`` recorded next
+           to the checkpoint::
+
+              training_summary = load_training_summary_near_model(...)
+              model = build_geoprior_from_training_summary(...)
+
+       In both cases, a minimal ``best_hps``-like dict is returned so
+       :func:`compile_for_eval` can recreate the physics weights and
+       learning rate.
+
+    3. Try to load the best weights checkpoint via
+       :func:`infer_best_weights_path(model_path)`.
 
     Returns
     -------
     model :
-        GeoPriorSubsNet (or compatible) instance ready for
-        evaluation/prediction.
+        A GeoPriorSubsNet instance ready to be recompiled for evaluation.
+
     best_hps : dict or None
-        Tuned hyperparameters when available (tuned fallback), else
-        ``None`` for pure trained runs.
+        Tuned hyperparameters if present, otherwise a small dict
+        containing at least ``learning_rate`` and the lambda weights
+        from the training summary, or ``None``.
     """
     label_city = city_name or "GeoPrior"
 
     # --- Lazy imports so nat_utils can be imported without TF/fusionlab ---
     try:
-        import tensorflow as tf  # type: ignore  # noqa
+        import tensorflow as tf  # type: ignore # noqa
         from tensorflow.keras.models import load_model  # type: ignore
         from tensorflow.keras.utils import custom_object_scope  # type: ignore
     except Exception as e:  # pragma: no cover - env dependent
@@ -2131,16 +2135,14 @@ def _load_or_rebuild_geoprior_model(
         "LearnableKappa": LearnableKappa,
         "FixedGammaW": FixedGammaW,
         "FixedHRef": FixedHRef,
-        # custom loss factory / class
         "make_weighted_pinball": make_weighted_pinball,
-        # custom metrics used in compile
         "coverage80_fn": coverage80_fn,
         "sharpness80_fn": sharpness80_fn,
     }
 
     best_hps: dict | None = None
 
-    # ------------------- 1) Direct load_model -----------------------------
+    # ------------------- 1) Try direct load_model -------------------------
     with custom_object_scope(custom_objects):
         if verbose:
             print(f"[Model] Attempting to load model from: {model_path}")
@@ -2149,8 +2151,8 @@ def _load_or_rebuild_geoprior_model(
             model = load_model(model_path, compile=compile_on_load)
             if verbose:
                 print(
-                    "[Model] Successfully loaded model for "
-                    f"{label_city} from: {model_path}"
+                    f"[Model] Successfully loaded model for {label_city} "
+                    f"from: {model_path}"
                 )
             return model, best_hps
         except Exception as e_load:
@@ -2160,19 +2162,22 @@ def _load_or_rebuild_geoprior_model(
                     "[Warn] Falling back to config-based reconstruction."
                 )
 
-    # ------------------- 2) Fallback: tuned vs trained --------------------
-    is_tuned = False
+    # ------------------- 2) Fallback: tuned HPs OR training summary -------
     try:
+        # 2a) Tuned model path
         best_hps = load_best_hps_near_model(model_path)
-        is_tuned = True
-        if verbose:
-            print(
-                "[Fallback] Detected tuning artifacts near model_path; "
-                "rebuilding from best_hps."
-            )
+        model = build_geoprior_from_hps(
+            manifest=manifest,
+            X_sample=X_sample,
+            best_hps=best_hps,
+            out_s_dim=out_s_dim,
+            out_g_dim=out_g_dim,
+            mode=mode,
+            horizon=horizon,
+            quantiles=quantiles,
+        )
     except Exception as e_hps:
-        # No best_hps → treat as plain trained model
-        best_hps = None
+        # 2b) No best_hps JSON -> treat this as a plain trained model.
         if verbose:
             print(
                 "[Fallback] No best_hps JSON found next to model_path; "
@@ -2180,45 +2185,56 @@ def _load_or_rebuild_geoprior_model(
                 f"          Reason: {e_hps}"
             )
 
-    # 2.2 Rebuild architecture + compile
-    try:
-        if is_tuned:
-            model = build_geoprior_from_hps(
-                manifest=manifest,
-                X_sample=X_sample,
-                best_hps=best_hps or {},
-                out_s_dim=out_s_dim,
-                out_g_dim=out_g_dim,
-                mode=mode,
-                horizon=horizon,
-                quantiles=quantiles,
-            )
-        else:
-            model = build_geoprior_from_cfg(
-                manifest=manifest,
-                X_sample=X_sample,
-                out_s_dim=out_s_dim,
-                out_g_dim=out_g_dim,
-                mode=mode,
-                horizon=horizon,
-                quantiles=quantiles,
-            )
-    except Exception as e_build:
-        src = "best_hps" if is_tuned else "manifest config"
-        raise RuntimeError(
-            f"Failed to reconstruct GeoPriorSubsNet from {src}. "
-            f"Error: {e_build}"
-        ) from e_build
+        training_summary = load_training_summary_near_model(
+            model_path, city_name=city_name
+        )
+        if training_summary is None:
+            raise RuntimeError(
+                "Failed to reconstruct GeoPriorSubsNet: neither tuned "
+                "hyperparameters nor *_training_summary.json were found "
+                f"near model_path={model_path!r}."
+            ) from e_hps
 
-    # 2.3 Load weights into the rebuilt model, if a checkpoint is found
+        model = build_geoprior_from_training_summary(
+            manifest=manifest,
+            X_sample=X_sample,
+            training_summary=training_summary,
+            out_s_dim=out_s_dim,
+            out_g_dim=out_g_dim,
+            mode=mode,
+            horizon=horizon,
+            quantiles=quantiles,
+        )
+
+        # Build a minimal best_hps dict so compile_for_eval can recover the
+        # training-time physics weights and learning rate.
+        compile_block = training_summary.get("compile", {}) or {}
+        phys = compile_block.get("physics_loss_weights", {}) or {}
+        lr = compile_block.get("learning_rate", None)
+
+        hps_from_train: dict[str, float] = {}
+        if lr is not None:
+            try:
+                hps_from_train["learning_rate"] = float(lr)
+            except Exception:
+                pass
+        for k, v in phys.items():
+            try:
+                hps_from_train[k] = float(v)
+            except Exception:
+                continue
+
+        best_hps = hps_from_train or None
+
+    # ------------------- 3) Load weights if checkpoint exists -------------
     weights_path = infer_best_weights_path(model_path)
     if weights_path is not None:
         try:
             model.load_weights(weights_path)
             if verbose:
                 print(
-                    "[Fallback] Loaded weights into rebuilt GeoPriorSubsNet "
-                    f"from: {weights_path}"
+                    "[Fallback] Loaded weights into reconstructed "
+                    f"GeoPriorSubsNet from: {weights_path}"
                 )
         except Exception as e_w:
             if verbose:
@@ -2232,12 +2248,334 @@ def _load_or_rebuild_geoprior_model(
     else:
         if verbose:
             print(
-                "[Warn] No weights checkpoint found near model_path.\n"
+                "[Warn] No weights checkpoint found near model.\n"
                 "       Using rebuilt model with freshly-initialised "
                 "weights. Predictions will NOT match the original run."
             )
 
     return model, best_hps
+
+
+def build_geoprior_from_training_summary(
+    manifest: dict,
+    X_sample: dict,
+    training_summary: dict,
+    out_s_dim: int,
+    out_g_dim: int,
+    mode: str,
+    horizon: int,
+    quantiles: list[float] | None,
+) -> Any:
+    """
+    Reconstruct a GeoPriorSubsNet from a training_summary JSON.
+
+    This is the fallback path for plain *trained* models (no tuning),
+    using the architecture recorded under ``hp_init['model_init_params']``.
+
+    Parameters
+    ----------
+    manifest : dict
+        Stage-1 manifest dictionary (for some defaults).
+
+    X_sample : dict
+        One NPZ inputs dictionary already passed through
+        :func:`ensure_input_shapes`. Only shapes are used.
+
+    training_summary : dict
+        Parsed ``*_training_summary.json`` for this run.
+
+    out_s_dim, out_g_dim, mode, horizon, quantiles :
+        Same semantics as in :func:`build_geoprior_from_hps`.
+
+    Returns
+    -------
+    model : GeoPriorSubsNet
+        Reconstructed model (uncompiled).
+    """
+    try:
+        from fusionlab.nn.pinn.models import GeoPriorSubsNet  # type: ignore
+    except Exception as e:  # pragma: no cover - env dependent
+        raise ImportError(
+            "build_geoprior_from_training_summary requires "
+            "'fusionlab.nn.pinn.models.GeoPriorSubsNet'. "
+            "Ensure fusionlab is installed and importable."
+        ) from e
+
+    cfg = manifest.get("config", {}) or {}
+
+    # Infer input dims from the NPZ sample
+    static_dim, dynamic_dim, future_dim = infer_input_dims_from_X(X_sample)
+
+    hp_init = training_summary.get("hp_init", {}) or {}
+    model_init = hp_init.get("model_init_params", {}) or {}
+
+    # Quantiles: prefer explicit argument, then the training summary
+    q = quantiles or hp_init.get("quantiles")
+
+    # Attention stack
+    attention_levels = model_init.get(
+        "attention_levels",
+        hp_init.get(
+            "attention_levels",
+            cfg.get("ATTENTION_LEVELS", ["cross", "hierarchical", "memory"]),
+        ),
+    )
+
+    # Physics toggles
+    censor_cfg = cfg.get("censoring", {}) or {}
+    use_effective_h = bool(
+        model_init.get(
+            "use_effective_h",
+            hp_init.get(
+                "use_effective_h",
+                censor_cfg.get("use_effective_h_field", True),
+            ),
+        )
+    )
+    pde_mode = hp_init.get("pde_mode", cfg.get("PDE_MODE_CONFIG", "both"))
+    kappa_mode = model_init.get(
+        "kappa_mode",
+        cfg.get("GEOPRIOR_KAPPA_MODE", "bar"),
+    )
+    scale_pde_residuals = bool(
+        model_init.get("scale_pde_residuals", True)
+    )
+
+    # Architecture hyperparameters (as used at training time)
+    embed_dim = int(model_init.get("embed_dim", 32))
+    hidden_units = int(model_init.get("hidden_units", 96))
+    lstm_units = int(model_init.get("lstm_units", 96))
+    attention_units = int(model_init.get("attention_units", 32))
+    num_heads = int(model_init.get("num_heads", 4))
+    dropout_rate = float(model_init.get("dropout_rate", 0.1))
+
+    use_vsn = bool(
+        model_init.get("use_vsn", hp_init.get("use_vsn", True))
+    )
+    vsn_units = int(
+        model_init.get("vsn_units", hp_init.get("vsn_units", 32))
+    )
+    use_batch_norm = bool(
+        model_init.get(
+            "use_batch_norm",
+            hp_init.get("use_batch_norm", cfg.get("USE_BATCH_NORM", True)),
+        )
+    )
+
+    # Geomechanical parameters were serialised via `serialize_subs_params`
+    # so we need to extract scalar initial values again.
+    def _extract_initial(
+        spec: Any, cfg_key: str, cfg_default: float
+    ) -> float:
+        if isinstance(spec, dict):
+            if "initial_value" in spec:
+                try:
+                    return float(spec["initial_value"])
+                except Exception:
+                    pass
+            if "value" in spec:
+                try:
+                    return float(spec["value"])
+                except Exception:
+                    pass
+        if cfg_key in cfg and cfg[cfg_key] is not None:
+            try:
+                return float(cfg[cfg_key])
+            except Exception:
+                pass
+        return float(cfg_default)
+
+    mv_spec = model_init.get("mv", {})
+    kappa_spec = model_init.get("kappa", {})
+
+    mv_init = _extract_initial(mv_spec, "GEOPRIOR_INIT_MV", 5e-7)
+    kappa_init = _extract_initial(kappa_spec, "GEOPRIOR_INIT_KAPPA", 1.0)
+
+    # Pack the remaining architectural knobs into `architecture_config`
+    known_keys = {
+        "embed_dim",
+        "hidden_units",
+        "lstm_units",
+        "attention_units",
+        "num_heads",
+        "dropout_rate",
+        "use_vsn",
+        "vsn_units",
+        "use_batch_norm",
+        "mv",
+        "kappa",
+        "gamma_w",
+        "h_ref",
+        "kappa_mode",
+        "use_effective_h",
+        "scale_pde_residuals",
+        "attention_levels",
+        "mode",
+        "time_steps",
+    }
+    architecture_config = {
+        k: v for k, v in model_init.items() if k not in known_keys
+    }
+
+    model = GeoPriorSubsNet(
+        static_input_dim=static_dim,
+        dynamic_input_dim=dynamic_dim,
+        future_input_dim=future_dim,
+        output_subsidence_dim=out_s_dim,
+        output_gwl_dim=out_g_dim,
+        forecast_horizon=horizon,
+        mode=mode,
+        attention_levels=attention_levels,
+        quantiles=q,
+        # physics switches
+        pde_mode=pde_mode,
+        scale_pde_residuals=scale_pde_residuals,
+        kappa_mode=kappa_mode,
+        use_effective_h=use_effective_h,
+        # architecture hyperparameters
+        embed_dim=embed_dim,
+        hidden_units=hidden_units,
+        lstm_units=lstm_units,
+        attention_units=attention_units,
+        num_heads=num_heads,
+        dropout_rate=dropout_rate,
+        use_vsn=use_vsn,
+        vsn_units=vsn_units,
+        use_batch_norm=use_batch_norm,
+        # geomechanical priors
+        mv=float(mv_init),
+        kappa=float(kappa_init),
+        architecture_config=architecture_config,
+    )
+
+    print(
+        "[Fallback] Reconstructed GeoPriorSubsNet from training_summary with "
+        f"static_dim={static_dim}, dynamic_dim={dynamic_dim}, "
+        f"future_dim={future_dim}, horizon={horizon}, mode={mode}"
+    )
+    return model
+
+def load_geoprior_for_inference(
+    model_path: str,
+    manifest: dict,
+    X_sample: dict,
+    out_s_dim: int,
+    out_g_dim: int,
+    mode: str,
+    horizon: int,
+    quantiles: list[float] | None,
+    city_name: str | None = None,
+    include_metrics: bool = True,
+    verbose: int = 1,
+):
+    """
+    Convenience wrapper: load (tuned or trained) GeoPriorSubsNet and
+    compile it for evaluation/inference.
+
+    Returns
+    -------
+    model :
+        Compiled model ready for ``predict`` / diagnostics.
+
+    info : dict
+        Small dict with the ``best_hps`` (if any) and the resolved
+        quantiles, useful for logging.
+    """
+    model, best_hps = load_or_rebuild_geoprior_model(
+        model_path=model_path,
+        manifest=manifest,
+        X_sample=X_sample,
+        out_s_dim=out_s_dim,
+        out_g_dim=out_g_dim,
+        mode=mode,
+        horizon=horizon,
+        quantiles=quantiles,
+        city_name=city_name,
+        compile_on_load=False,
+        verbose=verbose,
+    )
+
+    model = compile_for_eval(
+        model=model,
+        manifest=manifest,
+        best_hps=best_hps,
+        quantiles=quantiles,
+        include_metrics=include_metrics,
+    )
+
+    info = {
+        "best_hps": best_hps,
+        "quantiles": quantiles,
+    }
+    return model, info
+
+
+def load_training_summary_near_model(
+    model_path: str,
+    city_name: str | None = None,
+) -> dict | None:
+    """
+    Locate and load a ``*_training_summary.json`` next to a trained model.
+
+    Strategy
+    --------
+    1. Prefer ``<city>_GeoPriorSubsNet_training_summary.json`` if
+       ``city_name`` is given.
+    2. Fallback: first file in the run directory that ends with
+       ``'_training_summary.json'``.
+
+    Parameters
+    ----------
+    model_path : str
+        Path to the `.keras` archive or any checkpoint inside a
+        ``train_YYYYMMDD-HHMMSS`` directory.
+
+    city_name : str or None
+        Optional city name to build a more specific candidate filename.
+
+    Returns
+    -------
+    dict or None
+        Parsed JSON dict if found and loadable, otherwise ``None``.
+    """
+    run_dir = os.path.dirname(os.path.abspath(model_path))
+    candidates: list[str] = []
+
+    if city_name:
+        candidates.append(
+            os.path.join(
+                run_dir,
+                f"{city_name}_GeoPriorSubsNet_training_summary.json",
+            )
+        )
+
+    # Generic fallback: any *_training_summary.json in the run dir
+    try:
+        for fname in os.listdir(run_dir):
+            if fname.endswith("_training_summary.json"):
+                candidates.append(os.path.join(run_dir, fname))
+    except FileNotFoundError:
+        return None
+
+    seen: set[str] = set()
+    for path in candidates:
+        if path in seen:
+            continue
+        seen.add(path)
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    ts = json.load(f)
+                print(f"[TrainSummary] Loaded training_summary from: {path}")
+                return ts
+            except Exception as e:  # pragma: no cover - defensive
+                print(
+                    f"[Warn] Could not read training_summary JSON at {path!r}: {e}"
+                )
+                # Try the next candidate
+                continue
+
+    return None
 
 # -------------------------------------------------------------------------
 # Backward-compatible aliases for old private helper names
