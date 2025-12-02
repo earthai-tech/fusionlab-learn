@@ -39,7 +39,7 @@
 # MODEL_NAME is the registered model identifier.  For now the
 # main model is:
 #   - "GeoPriorSubsNet"
-CITY_NAME = "nansha"
+CITY_NAME = "zhongshan"
 MODEL_NAME = "GeoPriorSubsNet"
 
 

@@ -41,6 +41,7 @@ from PyQt5.QtGui import (
     QPainter,
     QColor,
     QPen,
+    QIcon, 
     QDesktopServices
 )
 from PyQt5.QtWidgets import (
@@ -66,6 +67,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QToolButton,
     QAction,
+    QStyle
 )
 
 from ..smart_stage1 import find_stage1_for_city
@@ -273,6 +275,17 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     # Menu bar
     # ------------------------------------------------------------------
+    def _std_icon(self, sp: QStyle.StandardPixmap) -> QIcon:
+        """
+        Convenience wrapper around style().standardIcon(), so that we
+        can keep icon usage consistent and later swap to custom icons
+        in a single place if needed.
+        """
+        return self.style().standardIcon(sp)
+
+    # ------------------------------------------------------------------
+    # Menu bar
+    # ------------------------------------------------------------------
     def _build_menu_bar(self) -> None:
         """
         Create the main menu bar.
@@ -285,15 +298,22 @@ class GeoPriorForecaster(QMainWindow):
         # ---------------------- File menu ----------------------
         file_menu = menubar.addMenu("&File")
 
-        act_open = QAction("Open dataset…", self)
+        act_open = QAction(
+            self._std_icon(QStyle.SP_DialogOpenButton),
+            "Open dataset…",
+            self,
+        )
         act_open.setShortcut("Ctrl+O")
-        # Reuse the existing Select CSV button behaviour
         act_open.triggered.connect(self._on_open_dataset)
         file_menu.addAction(act_open)
 
         file_menu.addSeparator()
 
-        act_exit = QAction("Exit", self)
+        act_exit = QAction(
+            self._std_icon(QStyle.SP_DialogCloseButton),
+            "Exit",
+            self,
+        )
         act_exit.setShortcut("Ctrl+Q")
         act_exit.triggered.connect(self.close)
         file_menu.addAction(act_exit)
@@ -301,22 +321,38 @@ class GeoPriorForecaster(QMainWindow):
         # ---------------------- Run menu -----------------------
         run_menu = menubar.addMenu("&Run")
 
-        act_run_train = QAction("Run training", self)
+        act_run_train = QAction(
+            self._std_icon(QStyle.SP_MediaPlay),   # ▶ train
+            "Run training",
+            self,
+        )
         act_run_train.setShortcut("F5")
         act_run_train.triggered.connect(self._on_train_clicked)
         run_menu.addAction(act_run_train)
 
-        act_run_tune = QAction("Run tuning", self)
+        act_run_tune = QAction(
+            self._std_icon(QStyle.SP_BrowserReload),  # 🔁 tuning
+            "Run tuning",
+            self,
+        )
         act_run_tune.setShortcut("Shift+F5")
         act_run_tune.triggered.connect(self._on_tune_clicked)
         run_menu.addAction(act_run_tune)
 
-        act_run_infer = QAction("Run inference", self)
+        act_run_infer = QAction(
+            self._std_icon(QStyle.SP_ArrowForward),   # ➜ inference
+            "Run inference",
+            self,
+        )
         act_run_infer.setShortcut("Ctrl+F5")
         act_run_infer.triggered.connect(self._on_infer_clicked)
         run_menu.addAction(act_run_infer)
 
-        act_run_xfer = QAction("Run transfer matrix", self)
+        act_run_xfer = QAction(
+            self._std_icon(QStyle.SP_ArrowRight),     # ↔ transfer matrix
+            "Run transfer matrix",
+            self,
+        )
         act_run_xfer.setShortcut("Alt+F5")
         act_run_xfer.triggered.connect(self._on_xfer_clicked)
         run_menu.addAction(act_run_xfer)
@@ -324,16 +360,25 @@ class GeoPriorForecaster(QMainWindow):
         run_menu.addSeparator()
 
         # Global Stop, mirroring the Stop button
-        act_stop = QAction("Stop", self)
+        act_stop = QAction(
+            self._std_icon(QStyle.SP_MediaStop),
+            "Stop",
+            self,
+        )
         act_stop.setShortcut("Esc")
         act_stop.triggered.connect(self._on_stop_clicked)
         run_menu.addAction(act_stop)
-        self._act_stop = act_stop  # optional: store if you want to enable/disable it
+        self._act_stop = act_stop
 
         run_menu.addSeparator()
 
         # Dry run as a global toggle, synced with the checkbox
-        self.act_dry_run = QAction("Dry run", self, checkable=True)
+        self.act_dry_run = QAction(
+            self._std_icon(QStyle.SP_MessageBoxInformation),
+            "Dry run",
+            self,
+            checkable=True,
+        )
         self.act_dry_run.setChecked(self.chk_dry_run.isChecked())
         self.act_dry_run.toggled.connect(self.chk_dry_run.setChecked)
         self.chk_dry_run.toggled.connect(self.act_dry_run.setChecked)
@@ -342,35 +387,55 @@ class GeoPriorForecaster(QMainWindow):
         # ---------------------- View menu ----------------------
         view_menu = menubar.addMenu("&View")
 
-        view_train = QAction("Train tab", self)
+        view_train = QAction(
+            self._std_icon(QStyle.SP_ComputerIcon),  # "main engine"
+            "Train tab",
+            self,
+        )
         view_train.setShortcut("Ctrl+1")
         view_train.triggered.connect(
             lambda: self.tabs.setCurrentIndex(self._train_tab_index)
         )
         view_menu.addAction(view_train)
 
-        view_tune = QAction("Tune tab", self)
+        view_tune = QAction(
+            self._std_icon(QStyle.SP_FileDialogDetailedView),  # sliders/config
+            "Tune tab",
+            self,
+        )
         view_tune.setShortcut("Ctrl+2")
         view_tune.triggered.connect(
             lambda: self.tabs.setCurrentIndex(self._tune_tab_index)
         )
         view_menu.addAction(view_tune)
 
-        view_infer = QAction("Inference tab", self)
+        view_infer = QAction(
+            self._std_icon(QStyle.SP_FileDialogListView),  # predictions list
+            "Inference tab",
+            self,
+        )
         view_infer.setShortcut("Ctrl+3")
         view_infer.triggered.connect(
             lambda: self.tabs.setCurrentIndex(self._infer_tab_index)
         )
         view_menu.addAction(view_infer)
 
-        view_xfer = QAction("Transferability tab", self)
+        view_xfer = QAction(
+            self._std_icon(QStyle.SP_ArrowRight),  # reuse transfer icon
+            "Transferability tab",
+            self,
+        )
         view_xfer.setShortcut("Ctrl+4")
         view_xfer.triggered.connect(
             lambda: self.tabs.setCurrentIndex(self._xfer_tab_index)
         )
         view_menu.addAction(view_xfer)
 
-        view_results = QAction("Results tab", self)
+        view_results = QAction(
+            self._std_icon(QStyle.SP_DirHomeIcon),  # summary/results
+            "Results tab",
+            self,
+        )
         view_results.setShortcut("Ctrl+5")
         view_results.triggered.connect(
             lambda: self.tabs.setCurrentIndex(self._results_tab_index)
@@ -380,7 +445,11 @@ class GeoPriorForecaster(QMainWindow):
         # ---------------------- Help menu ----------------------
         help_menu = menubar.addMenu("&Help")
 
-        act_docs = QAction("Online documentation…", self)
+        act_docs = QAction(
+            self._std_icon(QStyle.SP_DialogHelpButton),
+            "Online documentation…",
+            self,
+        )
         act_docs.setShortcut("F1")
         act_docs.triggered.connect(
             lambda: QDesktopServices.openUrl(QUrl(DOCS_URL))
@@ -389,9 +458,14 @@ class GeoPriorForecaster(QMainWindow):
 
         help_menu.addSeparator()
 
-        act_about = QAction("About GeoPrior…", self)
+        act_about = QAction(
+            self._std_icon(QStyle.SP_MessageBoxInformation),
+            "About GeoPrior…",
+            self,
+        )
         act_about.triggered.connect(lambda: show_about_dialog(self))
         help_menu.addAction(act_about)
+
 
     # ------------------------------------------------------------------
     # UI construction
@@ -1305,27 +1379,36 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.results_tab = results_tab
 
-        # self.tabs.addTab(train_tab, "Train")
-        # self.tabs.addTab(tune_tab, "Tune")
-        # self.tabs.addTab(infer_tab, "Inference")
-        # self.tabs.addTab(xfer_tab, "Transferability")
-        # self.tabs.addTab(results_tab, "Results")
+
+        self._train_tab_index = self.tabs.addTab(
+            self.train_tab,
+            self._std_icon(QStyle.SP_ComputerIcon),
+            "Train",
+        )
         
-        # Tabs with small “icons” in the label to look more like a menu
-      
-        self.tabs.addTab(train_tab, "⏱ Train")
-        self.tabs.addTab(tune_tab, "⚙ Tune")
-        self.tabs.addTab(infer_tab, "📈 Inference")
-        self.tabs.addTab(xfer_tab, "⇄ Transferability")
-        self.tabs.addTab(results_tab, "📂 Results")
-
-        # Tab indices (used by mode indicator)
-        self._train_tab_index = self.tabs.indexOf(self.train_tab)
-        self._tune_tab_index = self.tabs.indexOf(self.tune_tab)
-        self._infer_tab_index = self.tabs.indexOf(self.infer_tab)
-        self._xfer_tab_index = self.tabs.indexOf(self.xfer_tab)
-        self._results_tab_index = self.tabs.indexOf(self.results_tab)
-
+        self._tune_tab_index = self.tabs.addTab(
+            self.tune_tab,
+            self._std_icon(QStyle.SP_FileDialogDetailedView),
+            "Tune",
+        )
+        
+        self._infer_tab_index = self.tabs.addTab(
+            self.infer_tab,
+            self._std_icon(QStyle.SP_FileDialogListView),
+            "Inference",
+        )
+        
+        self._xfer_tab_index = self.tabs.addTab(
+            self.xfer_tab,
+            self._std_icon(QStyle.SP_ArrowRight),
+            "Transfer",
+        )
+        
+        self._results_tab_index = self.tabs.addTab(
+            self.results_tab,
+            self._std_icon(QStyle.SP_DirHomeIcon),
+            "Results",
+        )
 
         # Initialise Mode button with current tab name
         self._update_mode_button(self.tabs.currentIndex())
@@ -2382,7 +2465,7 @@ class GeoPriorForecaster(QMainWindow):
                 self,
                 "Dataset required",
                 "Please open a dataset first so that columns "
-                "can be listed in the feature dialog.",
+                "can be listed.",
             )
             return
 
@@ -2716,12 +2799,12 @@ class GeoPriorForecaster(QMainWindow):
             QMessageBox.warning(
                 self,
                 "No training CSV",
-                "Dry-run: please choose a training CSV file first.",
+                "Dry-run: please choose a training dataset file first.",
             )
             # Keep progress at 0 % on early exit
             self._update_progress(0.0)
             self.status_updated.emit(
-                "Dry-run / Train: aborted (no training CSV)."
+                "Dry-run / Train: aborted (no training data)."
             )
             return
 
@@ -2941,8 +3024,8 @@ class GeoPriorForecaster(QMainWindow):
         if not csv_path_str:
             QMessageBox.warning(
                 self,
-                "No training CSV",
-                "Please choose a training CSV file first.",
+                "No training dataset",
+                "Please choose a training data file first.",
             )
             return
         
@@ -4431,6 +4514,17 @@ class GeoPriorForecaster(QMainWindow):
 
         # Hand back to the base class for normal closing
         super().closeEvent(event)
+
+    def _icon(self, name: str) -> QIcon:
+        """Load a named icon from our app's icon bundle."""
+        # Then replace self._std_icon(...) calls
+        # with self._icon("train.svg"), etc.
+        base = Path(__file__).resolve().parent / "icons"
+        path = base / name
+        if path.exists():
+            return QIcon(str(path))
+        # Fallback to a neutral standard icon or empty
+        return QIcon()
 
 # ----------------------------------------------------------------------
 # Entry point helper
