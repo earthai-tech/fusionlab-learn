@@ -22,7 +22,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-
 class FeatureConfigDialog(QDialog):
     """Dialog to edit features and censoring."""
 
@@ -31,13 +30,15 @@ class FeatureConfigDialog(QDialog):
         csv_path: Path,
         base_cfg: Dict[str, Any] | None = None,
         current_overrides: Dict[str, Any] | None = None,
+        df: pd.DataFrame | None = None,
         parent: None | "QDialog" = None,
     ) -> None:
         super().__init__(parent)
         self._csv_path = Path(csv_path)
         self._base_cfg = base_cfg or {}
         self._over_in = current_overrides or {}
-
+        self._df = df  
+        
         cfg: Dict[str, Any] = dict(self._base_cfg)
         cfg.update(self._over_in)
 
@@ -61,11 +62,18 @@ class FeatureConfigDialog(QDialog):
         return out
 
     def _load_columns(self) -> list[str]:
+        # Prefer in-memory DataFrame if provided
+        if getattr(self, "_df", None) is not None:
+            return [str(c) for c in self._df.columns]
+
+        if self._csv_path is None:
+            return []
         try:
             df = pd.read_csv(self._csv_path, nrows=5)
         except Exception:
             return []
         return [str(c) for c in df.columns]
+
 
     def _init_state_from_cfg(
         self,

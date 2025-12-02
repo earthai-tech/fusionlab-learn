@@ -46,8 +46,10 @@ class CsvEditDialog(QDialog):
 
     Parameters
     ----------
-    csv_path : str
-        The absolute path to the CSV file to be loaded.
+    source : str or pandas.DataFrame
+        Either a path to a CSV file *or* an in-memory DataFrame.
+        When a DataFrame is provided, it is copied internally and
+        no file I/O is performed.
     parent : QWidget, optional
         The parent widget for this dialog, by default None.
     preview_rows : int, default=200
@@ -67,18 +69,31 @@ class CsvEditDialog(QDialog):
     _PandasModel : The data model used to populate the table view.
     """
 
-    def __init__(self, csv_path: str,
-                 parent=None, *, preview_rows: int = 200):
+    def __init__(
+        self,
+        source: str | pd.DataFrame,
+        parent=None,
+        *,
+        preview_rows: int = 200,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Preview & Editing Data")
-        self.resize(820, 400) # 820, 500)
+        self.resize(820, 400)
 
+        # --- load full DataFrame -------------------------------------
         try:
-            self._df_full = pd.read_csv(csv_path)
+            if isinstance(source, pd.DataFrame):
+                # In-memory dataset (already loaded via read_data)
+                self._df_full = source.copy()
+            else:
+                # Backwards-compatible: path to CSV on disk
+                csv_path = str(source)
+                self._df_full = pd.read_csv(csv_path)
         except Exception as e:
-            QMessageBox.critical(self, "CSV error", str(e))
+            QMessageBox.critical(self, "Data error", str(e))
             self._df_full = pd.DataFrame()
-            self.reject();  return
+            self.reject()
+            return
 
         # slice for the *table* only (view)
         self._view_rows = min(preview_rows, len(self._df_full))
@@ -91,7 +106,9 @@ class CsvEditDialog(QDialog):
         act_del_row = QAction("Delete row(s)", self)
         act_del_col = QAction("Delete col(s)", self)
         act_rename  = QAction("Rename column", self)
-        tb.addAction(act_del_row); tb.addAction(act_del_col); tb.addAction(act_rename)
+        tb.addAction(act_del_row)
+        tb.addAction(act_del_col)
+        tb.addAction(act_rename)
         vbox.addWidget(tb)
 
         # table
@@ -106,16 +123,17 @@ class CsvEditDialog(QDialog):
         # buttons
         hbtn = QHBoxLayout()
         hbtn.addStretch(1)
-        btn_save   = QPushButton("Save / Apply")
+        btn_save = QPushButton("Save / Apply")
         btn_cancel = QPushButton("Cancel")
-        hbtn.addWidget(btn_save); hbtn.addWidget(btn_cancel)
+        hbtn.addWidget(btn_save)
+        hbtn.addWidget(btn_cancel)
         vbox.addLayout(hbtn)
 
         # signals
         act_del_row.triggered.connect(self._delete_rows)
         act_del_col.triggered.connect(self._delete_cols)
-        act_rename .triggered.connect(self._rename_col)
-        btn_save  .clicked.connect(self.accept)
+        act_rename.triggered.connect(self._rename_col)
+        btn_save.clicked.connect(self.accept)
         btn_cancel.clicked.connect(self.reject)
 
     def _delete_rows(self):

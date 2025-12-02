@@ -42,7 +42,6 @@ from ....backends.devices import configure_tf_from_cfg
 from ....utils.generic_utils import (
     ensure_directory_exists,
     default_results_dir,
-    getenv_stripped,
     print_config_table,
 )
 from ...._optdeps import with_progress 
@@ -88,11 +87,12 @@ def run_tuning(
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
     evaluate_tuned: bool = False,
-    progress_callback: Optional[
-        Callable[[float, str], None]
-    ] = None,
-    **kws
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    base_cfg: Optional[Dict[str, Any]] = None,              
+    results_root: Optional[os.PathLike | str] = None,       
+    **kws,
 ) -> Dict[str, Any]:
+
     """
     Run Stage-2 hyperparameter tuning for GeoPriorSubsNet (GeoPriorTuner).
 
@@ -121,7 +121,15 @@ def run_tuning(
         Optional callable ``progress_callback(value, message)`` used
         by the GUI. ``value`` is a float in [0, 1] giving the global
         tuning progress; ``message`` is a short status string.
-
+    base_cfg : dict or None, default=None
+        Unified GeoPriorConfig snapshot from the GUI. If provided, this
+        is used as the main configuration instead of reading
+        ``config.json`` on disk.
+    results_root : path-like or None, default=None
+        Base results directory (e.g. ``~/.fusionlab_runs``). If None,
+        falls back to ``BASE_OUTPUT_DIR`` from the config or
+        :func:`default_results_dir`.
+        
     Returns
     -------
     info : dict
@@ -230,48 +238,51 @@ def run_tuning(
             return self
 
     # ------------------------------------------------------------------
-    # 0) Load Stage-1 manifest and arrays
+    # 0) Load base config / NATCOM config and resolve city/model/root
     # ------------------------------------------------------------------
-
-    # Desired city/model from NATCOM payload (for sanity checks/logging)
-    cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
-    CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
-    CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
-     
     _progress(0.0, "Stage-2 tuning – locating Stage-1 artifacts…")
 
-    # Load global NATCOM config (config.json) and apply overrides
-    cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
+    # If GUI passes a base_cfg (GeoPriorConfig snapshot), prefer it.
+    if base_cfg is not None:
+        cfg_hp = dict(base_cfg)
+        CFG_CITY = (cfg_hp.get("CITY_NAME") or "").strip().lower() or None
+        CFG_MODEL = cfg_hp.get("MODEL_NAME") or "GeoPriorSubsNet"
+    else:
+        # Legacy path: read NATCOM payload + config.json from disk
+        cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
+        CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
+        CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+        cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
+
+    # Apply any explicit overrides from GUI (checkboxes, spin boxes, etc.)
     if cfg_overrides:
         cfg_hp.update(cfg_overrides)
-    # >>>configure TensorFlow from cfg_hp <<<
+
+    # Configure TensorFlow devices / seeds / mixed precision
     configure_tf_from_cfg(cfg_hp, logger=log)
-    
-    RESULTS_DIR = cfg_hp.get("BASE_OUTPUT_DIR", default_results_dir())
 
-    # Environment overrides (still honoured when manifest_path is None)
-    CITY_ENV = getenv_stripped("CITY")
-    MODEL_ENV = getenv_stripped("MODEL_NAME_OVERRIDE")
+    # Base Stage-1 results directory
+    if results_root is not None:
+        RESULTS_DIR = os.fspath(results_root)
+    else:
+        RESULTS_DIR = cfg_hp.get("BASE_OUTPUT_DIR", default_results_dir())
 
-    CITY_HINT = CITY_ENV or CFG_CITY
-    MODEL_HINT = MODEL_ENV or CFG_MODEL
-    MANUAL_ENV = getenv_stripped("STAGE1_MANIFEST")
-
-    # Decide manifest path
+    # ------------------------------------------------------------------
+    # 0.1) Decide Stage-1 manifest path (GUI-only, no env/CLI)
+    # ------------------------------------------------------------------
     if manifest_path is not None:
         MANIFEST_PATH = manifest_path
         log(f"[Stage-2] Using explicit manifest_path: {MANIFEST_PATH}")
     else:
-        # If env provides STAGE1_MANIFEST, treat as manual hint
-        manual = MANUAL_ENV or None
+        # Pure GUI discovery: search under RESULTS_DIR with city/model hints
         MANIFEST_PATH = _find_stage1_manifest(
-            manual=manual,                # exact manifest if provided
-            base_dir=RESULTS_DIR,         # where to search
-            city_hint=CITY_HINT,          # filter by city if set
-            model_hint=MODEL_HINT,        # filter by model if set
-            prefer="timestamp",           # or "mtime"
+            manual=None,
+            base_dir=RESULTS_DIR,
+            city_hint=CFG_CITY,
+            model_hint=CFG_MODEL,
+            prefer="timestamp",
             required_keys=("model", "stage"),
-            verbose=1,
+            verbose=0,
         )
 
     if not os.path.exists(MANIFEST_PATH):
@@ -292,23 +303,16 @@ def run_tuning(
     if manifest_path is None:
         if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
             raise RuntimeError(
-                "[NATCOM] Stage-1 manifest city "
-                f"{manifest_city!r} does not match config CITY_NAME "
-                f"{CFG_CITY!r}. Run Stage-1 for this city first, or set "
-                "CITY/STAGE1_MANIFEST to explicitly override.\n"
-                "#>>> Windows cmd\n"
-                "   $ set CITY=zhongshan\n"
-                "   $ python nat.com/tune_NATCOM_GEOPRIOR.py\n"
-                "\n"
-                "#>>> or\n"
-                "   $ set CITY=zhongshan\n"
-                "   $ python nat.com/tune_NATCOM_GEOPRIOR.py\n"
+                "[GeoPrior] Stage-1 manifest city "
+                f"{manifest_city!r} does not match configured CITY_NAME "
+                f"{CFG_CITY!r}. Run Stage-1 for this city from the GUI "
+                "or select an explicit manifest for tuning."
             )
     else:
         if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
             log(
                 "[Warn] Explicit manifest_path city "
-                f"{manifest_city!r} does not match NATCOM payload city "
+                f"{manifest_city!r} does not match configured CITY_NAME "
                 f"{CFG_CITY!r}. Proceeding with manifest city."
             )
 
@@ -1469,8 +1473,3 @@ def run_tuning(
         "metrics_json": metrics_json_path,
     }
 
-
-
-if __name__ == "__main__":
-    # CLI usage (simple): run with default discovery and no overrides
-    run_tuning()

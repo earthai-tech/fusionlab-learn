@@ -15,8 +15,8 @@ from __future__ import annotations
 # ------------------------------------------------------------------ #
 #  Base palette
 # ------------------------------------------------------------------ #
-PRIMARY = "#2E3191"
-SECONDARY = "#F28620"
+PRIMARY ="#2E3191"# "#1C478B"# "#1F7DAD"# 
+SECONDARY = "#F28620"# "#E66414" # 
 BG_LIGHT = "#fafafa"
 FG_DARK = "#1e1e1e"
 

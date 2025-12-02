@@ -35,18 +35,42 @@ from ....nn.calibration import (
 )
 
 # ------------- helpers -------------
-def _load_manifest_for_city(city: str, results_dir: str, manual=None) -> dict:
+
+def _load_manifest_for_city(
+    city: str,
+    results_dir: str,
+    model_name: str = "GeoPriorSubsNet",
+    manual: str | None = None,
+) -> dict:
+    """
+    Locate and load the Stage-1 manifest for a given city under
+    `results_dir`.
+
+    Parameters
+    ----------
+    city : str
+        City name as recorded in the Stage-1 manifest.
+    results_dir : str
+        Base directory where Stage-1 run dirs live.
+    model_name : str, default="GeoPriorSubsNet"
+        Model name hint to disambiguate Stage-1 directories when
+        multiple models exist for the same city.
+    manual : str or None
+        Optional explicit manifest path (kept for back-compat; GUI
+        callers normally leave this as None).
+    """
     mpath = _find_stage1_manifest(
         manual=manual,
         base_dir=results_dir,
         city_hint=city,
-        model_hint=os.getenv("MODEL_NAME_OVERRIDE", "GeoPriorSubsNet"),
+        model_hint=model_name,
         prefer="timestamp",
         required_keys=("model", "stage"),
         verbose=0,
     )
     with open(mpath, "r", encoding="utf-8") as f:
         return json.load(f)
+
 
 def _latest_model_under(run_dir: str) -> str | None:
     # Prefer tuned models, else trained
@@ -102,6 +126,55 @@ def _load_source_calibrator(source_run_dir: str) -> IntervalCalibrator | None:
     cal = IntervalCalibrator(target=0.80)
     cal.factors_ = np.load(p).astype(np.float32)
     return cal
+
+
+def _infer_source_input_dims(M_src: dict) -> tuple[int, int]:
+    """
+    Infer (static_input_dim, dynamic_input_dim) for the source model
+    from the Stage-1 manifest.
+
+    Preference order:
+    1. artifacts["sequences"]["dims"]["static_input_dim"/"dynamic_input_dim"]
+       if present.
+    2. artifacts["shapes"]["train_inputs"]["static_features"/"dynamic_features"]
+       last axis.
+    3. len(config["features"]["static"/"dynamic"]) as a fallback.
+
+    Returns
+    -------
+    static_dim : int
+    dynamic_dim : int
+    """
+    # 1) Try dims block first (newer manifests might define these)
+    seq = (M_src.get("artifacts") or {}).get("sequences") or {}
+    dims = seq.get("dims") or {}
+
+    s_src = dims.get("static_input_dim")
+    d_src = dims.get("dynamic_input_dim")
+
+    # 2) Fallback to shapes.train_inputs
+    shapes = (M_src.get("artifacts") or {}).get("shapes") or {}
+    tr_in = shapes.get("train_inputs") or {}
+
+    if s_src is None:
+        sf_shape = tr_in.get("static_features")
+        if isinstance(sf_shape, (list, tuple)) and len(sf_shape) >= 2:
+            s_src = sf_shape[-1]
+
+    if d_src is None:
+        df_shape = tr_in.get("dynamic_features")
+        if isinstance(df_shape, (list, tuple)) and len(df_shape) >= 3:
+            d_src = df_shape[-1]
+
+    # 3) Final fallback: length of feature lists from config
+    feats = (M_src.get("config") or {}).get("features") or {}
+    if s_src is None:
+        s_src = len(feats.get("static") or [])
+    if d_src is None:
+        d_src = len(feats.get("dynamic") or [])
+
+    # Make sure we always return ints
+    return int(s_src or 0), int(d_src or 0)
 
 def _align_static_to_source(
     X_tgt: dict,
@@ -167,6 +240,7 @@ def run_xfer_matrix(
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[float, str], None]] = None, 
+    model_name: str = "GeoPriorSubsNet",   
     **kws
 ) -> Dict[str, Any]:
     """
@@ -243,8 +317,9 @@ def run_xfer_matrix(
             # Never crash xfer because the GUI callback misbehaved.
             pass
     # ----------------- load manifests -----------------
-    M_A = _load_manifest_for_city(city_a, results_dir)
-    M_B = _load_manifest_for_city(city_b, results_dir)
+    M_A = _load_manifest_for_city(city_a, results_dir, model_name=model_name)
+    M_B = _load_manifest_for_city(city_b, results_dir, model_name=model_name)
+
 
     if out_dir is None:
         out_dir = os.path.join(
@@ -501,20 +576,16 @@ def run_one_direction(
     # Align static features to the *source* feature space
     X_tgt = _align_static_to_source(X_tgt, M_src, M_tgt)
 
-    dims_src = M_src["artifacts"]["sequences"]["dims"]
+    # Infer source model input dims from manifest
+    s_src, d_src = _infer_source_input_dims(M_src)
+    
     log(
-        f"[XFER] Source model expects static={dims_src.get('static_input_dim')} "
-        f"dynamic={dims_src.get('dynamic_input_dim')}"
+        f"[XFER] Source model expects static={s_src} "
+        f"dynamic={d_src}"
     )
-    log(
-        f"[XFER] Target NPZ has   static="
-        f"{X_tgt.get('static_features', np.empty((0, 0))).shape[-1]} "
-        f"dynamic={X_tgt['dynamic_features'].shape[-1]}"
-    )
-
-    s_src = int(dims_src.get("static_input_dim", 0))
+    
     s_tgt = int(X_tgt["static_features"].shape[-1])
-
+    
     if s_src != s_tgt:
         raise SystemExit(
             "Static feature dimension mismatch in transfer:\n"
@@ -525,6 +596,21 @@ def run_one_direction(
             "both cities. Please harmonize Stage-1 config or pad/align "
             "static_features before calling xfer_matrix.py."
         )
+        
+    d_tgt = int(X_tgt["dynamic_features"].shape[-1])
+    if d_src != d_tgt:
+        raise SystemExit(
+            "Dynamic feature dimension mismatch in transfer:\n"
+            f"  Source model expects dynamic_features dim = {d_src}\n"
+            f"  Target NPZ has dynamic_features dim      = {d_tgt}\n"
+            "Please harmonize the dynamic feature schema across cities."
+        )
+
+    log(
+        f"[XFER] Target NPZ has   static="
+        f"{X_tgt.get('static_features', np.empty((0, 0))).shape[-1]} "
+        f"dynamic={X_tgt['dynamic_features'].shape[-1]}"
+    )
 
     if should_stop():
         log("[XFER] stop_check=True before scaling / model load; aborting direction.")

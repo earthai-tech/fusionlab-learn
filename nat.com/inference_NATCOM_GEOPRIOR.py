@@ -325,20 +325,6 @@ def main():
 
     # ------------------ Load or Rebuild Model ------------------
 
-    # model, best_hps = load_or_rebuild_geoprior_model(
-    #     model_path=args.model_path,
-    #     manifest=M,
-    #     X_sample=X,               # e.g. X_val or X_train with shapes fixed
-    #     out_s_dim=OUT_S_DIM,
-    #     out_g_dim=OUT_G_DIM,
-    #     mode=MODE,
-    #     horizon=H,
-    #     quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
-    #     city_name=CITY,
-    #     compile_on_load=True,
-    #     verbose=1,
-    # )
-    
     print(f"[Model] Loading/rebuilding model from: {args.model_path}")
     model, _info = load_geoprior_for_inference(
         model_path=args.model_path,

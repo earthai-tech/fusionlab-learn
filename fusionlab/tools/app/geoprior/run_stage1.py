@@ -26,10 +26,8 @@ import sklearn
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 from ....api.util import get_table_size
-from ....datasets import fetch_zhongshan_data
 from ....utils.data_utils import nan_ops
 from ....utils.io_utils import save_job
-from ....utils.geo_utils import unpack_frames_from_file
 from ....utils.nat_utils import load_nat_config
 from ....utils.generic_utils import (
     normalize_time_column,
@@ -182,9 +180,12 @@ def _any_exists(paths: list[str]) -> bool:
 def run_stage1(
     cfg_overrides: Optional[Dict[str, Any]] = None,
     logger: Optional[Callable[[str], None]] = None,
-    clean_run_dir: bool = True,
-    stop_check: Callable[[], bool] = None, 
-    progress_callback: Optional[Callable[[float, str], None]] = None,  
+    clean_run_dir: bool = False,
+    stop_check: Optional[Callable[[], bool]] = None,
+    progress_callback: Optional[Callable[[float, str], None]] = None, 
+    base_cfg: Optional[Dict[str, Any]] = None,
+    results_root: Optional[os.PathLike | str] = None,
+    edited_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     """
     Run NATCOM GeoPrior Stage-1 for the current city.
@@ -256,39 +257,37 @@ def run_stage1(
     log = logger or (lambda msg: print(msg, flush=True))
 
     # ===================== CONFIG =====================
-    cfg = load_nat_config(root=GUI_CONFIG_DIR)
-    if cfg_overrides:
-        cfg = {**cfg, **cfg_overrides}
+    # 1) Start from a base NAT-style config.
+    if base_cfg is not None:
+        # Shallow copy so we don't mutate the caller's dict.
+        cfg = dict(base_cfg)
+    else:
+        cfg = load_nat_config(root=GUI_CONFIG_DIR)
 
-    CITY_NAME   = cfg["CITY_NAME"]
-    MODEL_NAME  = cfg["MODEL_NAME"]
+    # 2) Apply flat overrides (from GeoPriorConfig.to_cfg_overrides, plus
+    #    CITY_NAME / DATA_DIR / BIG_FN / BASE_OUTPUT_DIR, etc.).
+    if cfg_overrides:
+        cfg.update(cfg_overrides)
+
+    # 3) Decide where Stage-1 runs live.
+    #    - If GUI passes results_root, we force BASE_OUTPUT_DIR to that.
+    #    - Otherwise, fall back to NAT's BASE_OUTPUT_DIR or ./results.
+    if results_root is not None:
+        base_output_dir = os.fspath(results_root)
+        cfg["BASE_OUTPUT_DIR"] = base_output_dir
+    else:
+        base_output_dir = cfg.get(
+            "BASE_OUTPUT_DIR",
+            os.path.join(os.getcwd(), "results"),
+        )
+        cfg["BASE_OUTPUT_DIR"] = base_output_dir
+
+
+    CITY_NAME   = cfg.get("CITY_NAME", '')
+    MODEL_NAME  = cfg.get("MODEL_NAME", 'GeoPriorSubsNet')
     DATA_DIR    = cfg["DATA_DIR"]
     BIG_FN      = cfg["BIG_FN"]
     SMALL_FN    = cfg["SMALL_FN"]
-    ALL_CITIES_PARQUET = cfg.get("ALL_CITIES_PARQUET")
-
-    SEARCH_PATHS = cfg.get("SEARCH_PATHS") or [
-        os.path.join(DATA_DIR, "data", BIG_FN),
-        os.path.join(DATA_DIR, BIG_FN),
-        os.path.join(".", "data", BIG_FN),
-        BIG_FN,
-    ]
-    FALLBACK_PATHS = cfg.get("FALLBACK_PATHS") or [
-        os.path.join(DATA_DIR, "data", SMALL_FN),
-        os.path.join(DATA_DIR, SMALL_FN),
-        os.path.join(".", "data", SMALL_FN),
-        SMALL_FN,
-    ]
-    ALL_CITIES_SEARCH_PATHS = cfg.get("ALL_CITIES_SEARCH_PATHS") or [
-        os.path.join(DATA_DIR, "data", ALL_CITIES_PARQUET)
-        if ALL_CITIES_PARQUET else None,
-        os.path.join(DATA_DIR, ALL_CITIES_PARQUET)
-        if ALL_CITIES_PARQUET else None,
-        os.path.join(".", "data", ALL_CITIES_PARQUET)
-        if ALL_CITIES_PARQUET else None,
-        ALL_CITIES_PARQUET,
-    ]
-    ALL_CITIES_SEARCH_PATHS = [p for p in ALL_CITIES_SEARCH_PATHS if p]
 
     TRAIN_END_YEAR         = cfg["TRAIN_END_YEAR"]
     FORECAST_START_YEAR    = cfg["FORECAST_START_YEAR"]
@@ -318,17 +317,17 @@ def run_stage1(
         _censor_cfg.get("use_effective_h_field", True)
     )
 
-    BASE_OUTPUT_DIR = cfg.get(
-        "BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results")
-    )
+    BASE_OUTPUT_DIR = base_output_dir
     ensure_directory_exists(BASE_OUTPUT_DIR)
 
     RUN_OUTPUT_PATH = os.path.join(
         BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_stage1"
     )
+
     if clean_run_dir and os.path.isdir(RUN_OUTPUT_PATH):
         log(f"Cleaning existing Stage-1 directory: {RUN_OUTPUT_PATH}")
         shutil.rmtree(RUN_OUTPUT_PATH)
+        
     os.makedirs(RUN_OUTPUT_PATH, exist_ok=True)
 
     ARTIFACTS_DIR = os.path.join(RUN_OUTPUT_PATH, "artifacts")
@@ -355,12 +354,7 @@ def run_stage1(
             "DATA_DIR": DATA_DIR,
             "BIG_FN": BIG_FN,
             "SMALL_FN": SMALL_FN,
-            "ALL_CITIES_PARQUET": ALL_CITIES_PARQUET,
-        }),
-        ("Data search paths", {
-            "SEARCH_PATHS": SEARCH_PATHS,
-            "FALLBACK_PATHS": FALLBACK_PATHS,
-            "ALL_CITIES_SEARCH_PATHS": ALL_CITIES_SEARCH_PATHS,
+
         }),
         ("Time windows", {
             "TRAIN_END_YEAR": TRAIN_END_YEAR,
@@ -408,65 +402,51 @@ def run_stage1(
     # ===================== STEP 1: LOAD =====================
     log(f"\n{'='*18} Step 1: Load Dataset {'='*18}")
 
-    if not _any_exists(SEARCH_PATHS) and ALL_CITIES_PARQUET:
-        merged_path = None
-        for p in ALL_CITIES_SEARCH_PATHS:
-            log(f"  [Check] Looking for merged parquet at: {os.path.abspath(p)}")
-            if os.path.exists(p):
-                merged_path = p
-                break
-        if merged_path is not None:
-            log(
-                f"  [Info] No '{BIG_FN}' found for city={CITY_NAME!r}; "
-                f"unpacking from merged parquet: {merged_path}"
-            )
-            unpack_frames_from_file(
-                merged=merged_path,
-                group_col="city",
-                output_dir=os.path.dirname(merged_path),
-                output_format="csv",
-                use_source_col=True,
-                source_col="source",
-                drop_columns=("source",),
-                save=True,
-                return_dict=False,
-                verbose=1,
-                logger=log
-            )
-        else:
-            log(
-                "  [Info] ALL_CITIES_PARQUET is set, but merged parquet "
-                "not found.\n"
-                "         Will proceed with normal CSV search / "
-                "fetch_zhongshan_data."
-            )
-
     df_raw: pd.DataFrame | None = None
-    for p in SEARCH_PATHS + FALLBACK_PATHS:
-        log(f"  Try: {os.path.abspath(p)}")
-        if os.path.exists(p):
+    used_path: str | None = None
+
+    if edited_df is not None:
+        # GUI provided an in-memory dataset (already edited)
+        df_raw = edited_df.copy()
+        log(f"  Using in-memory dataset provided by GUI -> {df_raw.shape}")
+    else:
+        # In GUI/CLI mode the CSV path is DATA_DIR + BIG_FN, with
+        # optional fallback to SMALL_FN if BIG_FN is missing.
+        candidates: list[str] = []
+
+        if BIG_FN:
+            candidates.append(os.path.join(DATA_DIR, BIG_FN))
+        if SMALL_FN and SMALL_FN != BIG_FN:
+            candidates.append(os.path.join(DATA_DIR, SMALL_FN))
+
+        for p in candidates:
+            abs_p = os.path.abspath(p)
+            log(f"  Try: {abs_p}")
+            if not os.path.exists(p):
+                continue
             try:
                 df_raw = pd.read_csv(p)
+                used_path = abs_p
                 log(f"    Loaded {os.path.basename(p)} -> {df_raw.shape}")
-                if BIG_FN in p and df_raw.shape[0] < 400_000:
-                    log("    [Warn] 500k filename but rows < 400k.")
                 break
             except Exception as e:
-                log(f"    Error reading {p}: {e}")
+                log(f"    Error reading {abs_p}: {e}")
 
-    if df_raw is None or df_raw.empty:
-        log("  No CSV found. Try fusionlab.datasets.fetch_zhongshan_data() ...")
-        try:
-            bunch = fetch_zhongshan_data(verbose=1)
-            df_raw = bunch.frame
-            log(f"    Loaded via fetch_zhongshan_data -> {df_raw.shape}")
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to load dataset: {e}")
+        if df_raw is None or df_raw.empty:
+            msg = (
+                "Failed to load dataset. Checked the following paths:\n  "
+                + "\n  ".join(os.path.abspath(c) for c in candidates)
+            )
+            raise FileNotFoundError(msg)
 
+        if used_path:
+            log(f"  [Info] Using dataset from: {used_path}")
+
+    # At this point df_raw is guaranteed non-None
     raw_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_01_raw.csv")
     df_raw.to_csv(raw_csv, index=False)
     log(f"  Saved: {raw_csv}")
-    
+
     _maybe_stop("before preprocessing")
     # ===================== STEP 2: PREPROCESS =====================
     log(f"\n{'='*18} Step 2: Initial Preprocessing {'='*18}")
@@ -770,6 +750,10 @@ def run_stage1(
     # ===================== MANIFEST: ONE FILE TO RULE THEM ALL =================
     log(f"\n{'='*18} Build Manifest {'='*18}")
 
+    run_dir_abs = os.path.abspath(RUN_OUTPUT_PATH)
+    artifacts_dir_abs = os.path.abspath(ARTIFACTS_DIR)
+    base_output_abs = os.path.abspath(BASE_OUTPUT_DIR)
+
     manifest_censor = {
         "specs": CENSORING_SPECS,
         "report": censor_report,
@@ -845,8 +829,9 @@ def run_stage1(
             },
         },
         "paths": {
-            "run_dir": RUN_OUTPUT_PATH,
-            "artifacts_dir": ARTIFACTS_DIR,
+            "run_dir": run_dir_abs,
+            "artifacts_dir": artifacts_dir_abs,
+            "results_root": base_output_abs,  
         },
         "versions": {
             "python": (
@@ -1015,15 +1000,15 @@ def run_stage1(
     log(f"  Saved manifest: {manifest_path}")
     log(
         f"\n{'-'*_TW}\nSTAGE-1 COMPLETE. Artifacts in:\n"
-        f"  {RUN_OUTPUT_PATH}\n{'-'*_TW}"
+        f"  {run_dir_abs}\n{'-'*_TW}"
     )
-    
-    # After test / future sequences and manifest written
+
     _progress(1.0, "Stage-1: complete")
 
     return {
         "manifest": manifest,
         "manifest_path": manifest_path,
-        "run_dir": RUN_OUTPUT_PATH,
-        "artifacts_dir": ARTIFACTS_DIR,
+        "run_dir": run_dir_abs,
+        "artifacts_dir": artifacts_dir_abs,
     }
+

@@ -25,7 +25,15 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-from PyQt5.QtCore import Qt, pyqtSignal, pyqtSlot, QSize, QPoint
+from PyQt5.QtCore import ( 
+    Qt, 
+    pyqtSignal, 
+    pyqtSlot, 
+    QSize, 
+    QPoint, 
+    QTimer, 
+    QUrl
+)
 from PyQt5.QtGui import (
     QIcon,
     QCloseEvent,
@@ -33,6 +41,7 @@ from PyQt5.QtGui import (
     QPainter,
     QColor,
     QPen,
+    QDesktopServices
 )
 from PyQt5.QtWidgets import (
     QApplication,
@@ -55,7 +64,8 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QFileDialog,
     QDialog,
-    QToolButton, 
+    QToolButton,
+    QAction,
 )
 
 from ..smart_stage1 import find_stage1_for_city
@@ -79,15 +89,15 @@ from .threads import (
 )
 from .geoprior_config import GeoPriorConfig, default_tuner_search_space
 from .feature_dialog import FeatureConfigDialog
-from .architecture_dialog import ArchitectureConfigDialog   
+from .architecture_dialog import ArchitectureConfigDialog  
+from .dataset_open import open_dataset_with_editor 
 from .prob_dialog import ProbConfigDialog 
 from .xfer_dialog import XferAdvancedDialog, XferResultsDialog 
 from .xfer_view import latest_xfer_csv, latest_xfer_json
 from .inference_dialogs import InferenceOptionsDialog 
 from .stage1_dialogs import Stage1ChoiceDialog
-
+from .about import show_about_dialog, DOCS_URL
 from .results_dialog import GeoPriorResultsDialog
-from .csv_dialog import CsvEditDialog
 from .styles import (
     TAB_STYLES,
     LOG_STYLES,
@@ -178,6 +188,8 @@ class GeoPriorForecaster(QMainWindow):
         # user-overrideable base results root (defaults to gui_runs_root)
         self.results_root = self.gui_runs_root
         
+        self._edited_df = None   # : pd.DataFrame | None 
+        
         self._train_help_text = (
             "Train tab – runs Stage-1 (prepare) and Stage-2 "
             "(GeoPrior training) for the selected city."
@@ -229,6 +241,7 @@ class GeoPriorForecaster(QMainWindow):
         self._xfer_write_csv = True
 
         self._build_ui()
+        self._build_menu_bar()   
         
         if splash:
             splash.set_progress(70, "Preparing log manager…")
@@ -256,7 +269,130 @@ class GeoPriorForecaster(QMainWindow):
         dlg.setAttribute(Qt.WA_DeleteOnClose)             # frees memory on close
         dlg.show()                                        # modeless – *no* exec_()
         self._preview_windows.append(dlg)                 # keep it alive
-        
+
+    # ------------------------------------------------------------------
+    # Menu bar
+    # ------------------------------------------------------------------
+    def _build_menu_bar(self) -> None:
+        """
+        Create the main menu bar.
+
+        Tabs remain the primary workflow navigation; the menu offers
+        global commands and keyboard shortcuts.
+        """
+        menubar = self.menuBar()
+
+        # ---------------------- File menu ----------------------
+        file_menu = menubar.addMenu("&File")
+
+        act_open = QAction("Open dataset…", self)
+        act_open.setShortcut("Ctrl+O")
+        # Reuse the existing Select CSV button behaviour
+        act_open.triggered.connect(self._on_open_dataset)
+        file_menu.addAction(act_open)
+
+        file_menu.addSeparator()
+
+        act_exit = QAction("Exit", self)
+        act_exit.setShortcut("Ctrl+Q")
+        act_exit.triggered.connect(self.close)
+        file_menu.addAction(act_exit)
+
+        # ---------------------- Run menu -----------------------
+        run_menu = menubar.addMenu("&Run")
+
+        act_run_train = QAction("Run training", self)
+        act_run_train.setShortcut("F5")
+        act_run_train.triggered.connect(self._on_train_clicked)
+        run_menu.addAction(act_run_train)
+
+        act_run_tune = QAction("Run tuning", self)
+        act_run_tune.setShortcut("Shift+F5")
+        act_run_tune.triggered.connect(self._on_tune_clicked)
+        run_menu.addAction(act_run_tune)
+
+        act_run_infer = QAction("Run inference", self)
+        act_run_infer.setShortcut("Ctrl+F5")
+        act_run_infer.triggered.connect(self._on_infer_clicked)
+        run_menu.addAction(act_run_infer)
+
+        act_run_xfer = QAction("Run transfer matrix", self)
+        act_run_xfer.setShortcut("Alt+F5")
+        act_run_xfer.triggered.connect(self._on_xfer_clicked)
+        run_menu.addAction(act_run_xfer)
+
+        run_menu.addSeparator()
+
+        # Global Stop, mirroring the Stop button
+        act_stop = QAction("Stop", self)
+        act_stop.setShortcut("Esc")
+        act_stop.triggered.connect(self._on_stop_clicked)
+        run_menu.addAction(act_stop)
+        self._act_stop = act_stop  # optional: store if you want to enable/disable it
+
+        run_menu.addSeparator()
+
+        # Dry run as a global toggle, synced with the checkbox
+        self.act_dry_run = QAction("Dry run", self, checkable=True)
+        self.act_dry_run.setChecked(self.chk_dry_run.isChecked())
+        self.act_dry_run.toggled.connect(self.chk_dry_run.setChecked)
+        self.chk_dry_run.toggled.connect(self.act_dry_run.setChecked)
+        run_menu.addAction(self.act_dry_run)
+
+        # ---------------------- View menu ----------------------
+        view_menu = menubar.addMenu("&View")
+
+        view_train = QAction("Train tab", self)
+        view_train.setShortcut("Ctrl+1")
+        view_train.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(self._train_tab_index)
+        )
+        view_menu.addAction(view_train)
+
+        view_tune = QAction("Tune tab", self)
+        view_tune.setShortcut("Ctrl+2")
+        view_tune.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(self._tune_tab_index)
+        )
+        view_menu.addAction(view_tune)
+
+        view_infer = QAction("Inference tab", self)
+        view_infer.setShortcut("Ctrl+3")
+        view_infer.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(self._infer_tab_index)
+        )
+        view_menu.addAction(view_infer)
+
+        view_xfer = QAction("Transferability tab", self)
+        view_xfer.setShortcut("Ctrl+4")
+        view_xfer.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(self._xfer_tab_index)
+        )
+        view_menu.addAction(view_xfer)
+
+        view_results = QAction("Results tab", self)
+        view_results.setShortcut("Ctrl+5")
+        view_results.triggered.connect(
+            lambda: self.tabs.setCurrentIndex(self._results_tab_index)
+        )
+        view_menu.addAction(view_results)
+
+        # ---------------------- Help menu ----------------------
+        help_menu = menubar.addMenu("&Help")
+
+        act_docs = QAction("Online documentation…", self)
+        act_docs.setShortcut("F1")
+        act_docs.triggered.connect(
+            lambda: QDesktopServices.openUrl(QUrl(DOCS_URL))
+        )
+        help_menu.addAction(act_docs)
+
+        help_menu.addSeparator()
+
+        act_about = QAction("About GeoPrior…", self)
+        act_about.triggered.connect(lambda: show_about_dialog(self))
+        help_menu.addAction(act_about)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -380,15 +516,33 @@ class GeoPriorForecaster(QMainWindow):
 
         # --- Top row: [Select CSV…] [City / Dataset] [Dry run] [Mode] [Quit] ---
         top = QHBoxLayout()
-
-        self.select_csv_btn = QPushButton("Select CSV…")
+    
+        self.select_csv_btn = QPushButton("Open dataset…")
         top.addWidget(self.select_csv_btn)
 
-        top.addWidget(QLabel("City / Dataset:"))
-
+        label = QLabel("City / Dataset:")
+        # label.setStyleSheet("font-weight: 600;")
+        top.addWidget(label)
+       
         self.city_edit = QLineEdit()
         self.city_edit.setPlaceholderText("e.g. nansha")
         top.addWidget(self.city_edit, 1)
+        
+        self.city_edit.setStyleSheet(
+            """
+            QLineEdit#cityDatasetEdit {
+                background-color: #fff9f0;
+                border: 1px solid #f0b96a;
+                border-radius: 8px;
+                padding: 3px 8px;
+                font-weight: 600;
+            }
+            QLineEdit#cityDatasetEdit:focus {
+                border: 1px solid #e8902f;
+                background-color: #fff3e0;
+            }
+            """
+        )
 
         # stretch between dataset and right-side controls
         top.addStretch(1)
@@ -405,45 +559,55 @@ class GeoPriorForecaster(QMainWindow):
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setVisible(False)
         self.btn_stop.setEnabled(False)
+        self.btn_stop.setObjectName("stopButton")
+        self.btn_stop.setCursor(Qt.PointingHandCursor)
         top.addWidget(self.btn_stop)
         
+        # --- NEW: base + pulse styles for the Stop button ---
+        self._stop_base_style = """
+        QPushButton#stopButton {
+            background-color: #d9534f;   /* red */
+            color: white;
+            font-weight: 600;
+            border-radius: 10px;
+            padding: 4px 16px;
+        }
+        QPushButton#stopButton:hover {
+            background-color: #c9302c;
+        }
+        QPushButton#stopButton:disabled {
+            background-color: #a0a0a0;
+            color: #eeeeee;
+        }
+        """
+        
+        # Slightly lighter / stronger red for the "pulse" frame
+        self._stop_pulse_style = """
+        QPushButton#stopButton {
+            background-color: #ff6f6f;
+            color: white;
+            font-weight: 700;
+            border-radius: 10px;
+            padding: 4px 16px;
+        }
+        """
+        
+        # Apply the base style once
+        self.btn_stop.setStyleSheet(self._stop_base_style)
+        
+        # Timer driving the pulse effect
+        self._stop_pulse_timer = QTimer(self)
+        self._stop_pulse_timer.setInterval(450)  # ms between frames
+        self._stop_pulse_timer.timeout.connect(self._on_stop_pulse_tick)
+        self._stop_pulse_state = False
+
         # Mode indicator button (updated when tab changes)
         self.mode_btn = QPushButton("Mode: Train")
         self.mode_btn.setEnabled(False)
         self.mode_btn.setFlat(True)
         top.addWidget(self.mode_btn)
-
-        # self.quit_btn = QPushButton("Quit")
-        # top.addWidget(self.quit_btn)
-
-        self.quit_btn = QPushButton("Quit")
-        self.quit_btn.setObjectName("quitButton")
-        self.quit_btn.setToolTip("Quit GeoPrior Forecaster")
-
-        # Local styling: red accent, clearer affordance
-        self.quit_btn.setStyleSheet(
-            """
-            QPushButton#quitButton {
-                background-color: #cc3333;
-                color: white;
-                font-weight: 600;
-                border-radius: 8px;
-                padding: 4px 14px;
-            }
-            QPushButton#quitButton:hover {
-                background-color: #e55353;
-            }
-            QPushButton#quitButton:disabled {
-                background-color: #888888;
-                color: #dddddd;
-            }
-            """
-        )
-        top.addWidget(self.quit_btn)
-
+        
         layout.addLayout(top)
-
-
         # --- Tabs row: Train / Tune / Inference / Transferability ---
         self.tabs = QTabWidget()
         self._init_tabs()
@@ -1141,11 +1305,19 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.results_tab = results_tab
 
-        self.tabs.addTab(train_tab, "Train")
-        self.tabs.addTab(tune_tab, "Tune")
-        self.tabs.addTab(infer_tab, "Inference")
-        self.tabs.addTab(xfer_tab, "Transferability")
-        self.tabs.addTab(results_tab, "Results")
+        # self.tabs.addTab(train_tab, "Train")
+        # self.tabs.addTab(tune_tab, "Tune")
+        # self.tabs.addTab(infer_tab, "Inference")
+        # self.tabs.addTab(xfer_tab, "Transferability")
+        # self.tabs.addTab(results_tab, "Results")
+        
+        # Tabs with small “icons” in the label to look more like a menu
+      
+        self.tabs.addTab(train_tab, "⏱ Train")
+        self.tabs.addTab(tune_tab, "⚙ Tune")
+        self.tabs.addTab(infer_tab, "📈 Inference")
+        self.tabs.addTab(xfer_tab, "⇄ Transferability")
+        self.tabs.addTab(results_tab, "📂 Results")
 
         # Tab indices (used by mode indicator)
         self._train_tab_index = self.tabs.indexOf(self.train_tab)
@@ -1367,9 +1539,22 @@ class GeoPriorForecaster(QMainWindow):
         any_running = self._any_job_running()
     
         # Show/hide + enable/disable Stop based on running state
+        # Show/hide + enable/disable Stop based on running state
         if hasattr(self, "btn_stop"):
             self.btn_stop.setVisible(any_running)
             self.btn_stop.setEnabled(any_running)
+
+            # start/stop the pulse animation
+            if any_running and hasattr(self, "_stop_pulse_timer"):
+                if not self._stop_pulse_timer.isActive():
+                    self._stop_pulse_state = False
+                    self._stop_pulse_timer.start()
+            else:
+                if hasattr(self, "_stop_pulse_timer"):
+                    self._stop_pulse_timer.stop()
+                if hasattr(self, "_stop_base_style"):
+                    # reset to base style when idle
+                    self.btn_stop.setStyleSheet(self._stop_base_style)
     
         is_dry = self._is_dry_mode()
     
@@ -1452,6 +1637,38 @@ class GeoPriorForecaster(QMainWindow):
         self.btn_run_tune.setIcon(dry_icon)
         self.btn_run_infer.setIcon(dry_icon)
         self.btn_run_xfer.setIcon(dry_icon)
+        
+    def _on_stop_pulse_tick(self) -> None:
+        """
+        Simple 'pulse' animation for the Stop button 
+        while jobs are running.
+
+        Alternates between the base and a lighter 
+        red style every timer tick.
+        """
+        if not hasattr(self, "btn_stop"):
+            return
+
+        # If no job is actually running anymore, stop and reset
+        if not self._any_job_running():
+            if hasattr(self, "_stop_pulse_timer"):
+                self._stop_pulse_timer.stop()
+            if hasattr(self, "_stop_base_style"):
+                self.btn_stop.setStyleSheet(self._stop_base_style)
+            return
+
+        if not (hasattr(self, "_stop_base_style")
+                and hasattr(self, "_stop_pulse_style")):
+            return
+
+        # Toggle style
+        self._stop_pulse_state = not getattr(
+            self, "_stop_pulse_state", False
+        )
+        if self._stop_pulse_state:
+            self.btn_stop.setStyleSheet(self._stop_pulse_style)
+        else:
+            self.btn_stop.setStyleSheet(self._stop_base_style)
 
     # --------------------------------------------------------------
     # Tuner search space <-> UI
@@ -1819,12 +2036,11 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     def _connect_signals(self) -> None:
         self.select_csv_btn.clicked.connect(
-            self._on_select_csv,
+            self._on_open_dataset,
         )
         self.train_btn.clicked.connect(
             self._on_train_clicked,
         )
-        self.quit_btn.clicked.connect(self._on_quit_clicked)
 
         self.btn_stop.clicked.connect(self._on_stop_clicked)
         
@@ -1952,30 +2168,6 @@ class GeoPriorForecaster(QMainWindow):
         if message:
             self.progress_label.setText(message)
 
-    @pyqtSlot()
-    def _on_quit_clicked(self) -> None:
-        """
-        Handle Quit button: warn if workflows are running.
-        """
-        if self._any_job_running():
-            msg = (
-                "One or more workflows are still running "
-                "(Stage-1, training, tuning, inference or transfer matrix).\n\n"
-                "If you quit now, they will be interrupted.\n\n"
-                "Do you really want to quit?"
-            )
-            reply = QMessageBox.question(
-                self,
-                "Quit GeoPrior Forecaster?",
-                msg,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
-                return
-
-        # Best UX when idle: no extra dialog, just quit.
-        self.close()
 
     def _save_gui_log_for_result(self, result: dict) -> None:
         """
@@ -2185,13 +2377,12 @@ class GeoPriorForecaster(QMainWindow):
 
     @pyqtSlot()
     def _on_feature_config(self) -> None:
-        if self.csv_path is None:
+        if self.csv_path is None and self._edited_df is None:
             QMessageBox.information(
                 self,
-                "CSV required",
-                "Please select a CSV file first so "
-                "that columns can be listed in the "
-                "feature dialog.",
+                "Dataset required",
+                "Please open a dataset first so that columns "
+                "can be listed in the feature dialog.",
             )
             return
 
@@ -2202,6 +2393,7 @@ class GeoPriorForecaster(QMainWindow):
             base_cfg=base_cfg,
             current_overrides=self.geo_cfg.feature_overrides,
             parent=self,
+            df=self._edited_df,   
         )
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -2218,6 +2410,7 @@ class GeoPriorForecaster(QMainWindow):
             "Feature configuration updated "
             f"(keys: {changed}).",
         )
+
         
     @pyqtSlot()
     def _on_arch_config(self) -> None:
@@ -2460,39 +2653,26 @@ class GeoPriorForecaster(QMainWindow):
             self.inf_calib_edit.setText(path)
 
     @pyqtSlot()
-    def _on_select_csv(self) -> None:
+    def _on_open_dataset(self) -> None:
         """
-        Open a CSV file, optionally edit it, and update
-        City/Dataset + internal csv_path.
+        Open a dataset (CSV/parquet/xlsx/…), let the user edit it,
+        then save as a canonical CSV and update City/Dataset.
         """
-        path_str, _ = QFileDialog.getOpenFileName(
+        csv_path, self._edited_df, city_name = open_dataset_with_editor(
             self,
-            "Open CSV file",
-            "",
-            "CSV Files (*.csv)",
+            gui_runs_root=self.gui_runs_root,
+            initial_dir="",
         )
-        if not path_str:
-            return
+        if csv_path is None:
+            return  # user cancelled or error
 
-        try:
-            dlg = CsvEditDialog(path_str, self)
-            if dlg.exec_() != QDialog.Accepted:
-                return
+        self.csv_path = csv_path
 
-            self.csv_path = Path(path_str)
+        # Auto-fill City/Dataset if empty
+        if not self.city_edit.text().strip() and city_name:
+            self.city_edit.setText(city_name)
 
-            # Auto-populate City/Dataset if empty
-            if not self.city_edit.text().strip():
-                self.city_edit.setText(self.csv_path.stem)
-
-            self.log_updated.emit(f"CSV selected: {self.csv_path}")
-        except Exception as exc:  # pragma: no cover - GUI error path
-            QMessageBox.critical(
-                self,
-                "CSV error",
-                f"Failed to open CSV:\n{exc}",
-            )
-            self.csv_path = None
+        self.log_updated.emit(f"Dataset selected: {self.csv_path}")
 
     def _infer_city_name_from_csv(self, csv_path: str) -> str:
         """
@@ -2769,9 +2949,7 @@ class GeoPriorForecaster(QMainWindow):
         city = self.city_edit.text().strip()
         if not city and self.csv_path is not None:
             city = self.csv_path.stem
-            # XXX TODO
-            cfg.city = city 
-        
+   
         if not city:
             QMessageBox.warning(
                 self,
@@ -2817,7 +2995,10 @@ class GeoPriorForecaster(QMainWindow):
         # Stage-1 and Training threads will use.
         # ( self._build_cfg_overrides_from_geo_cfg()
         self._cfg_overrides = cfg.to_cfg_overrides()
-    
+        
+        if getattr(self, "_device_cfg_overrides", None):
+            self._cfg_overrides.update(self._device_cfg_overrides)
+            
         # Lock UI and reset progress using existing helpers
         self.train_btn.setEnabled(False)
         self.btn_train_options.setEnabled(False)
@@ -3365,12 +3546,13 @@ class GeoPriorForecaster(QMainWindow):
 
         # Collect calibration modes
         calib_modes: list[str] = []
-        if self.chk_xfer_calib_none.isChecked():
+        if self.chk_xfer_cal_none.isChecked():
             calib_modes.append("none")
-        if self.chk_xfer_calib_source.isChecked():
+        if self.chk_xfer_cal_source.isChecked():
             calib_modes.append("source")
-        if self.chk_xfer_calib_target.isChecked():
+        if self.chk_xfer_cal_target.isChecked():
             calib_modes.append("target")
+
         if not calib_modes:
             QMessageBox.warning(
                 self,
@@ -3595,7 +3777,7 @@ class GeoPriorForecaster(QMainWindow):
         
         # Save GUI log in xfer out_dir
         self._save_gui_log_for_result(result)
-        
+
         self.status_updated.emit("Idle – transferability complete.")
         self._update_progress(1.0)
         
@@ -3768,10 +3950,14 @@ class GeoPriorForecaster(QMainWindow):
     # Thread orchestration
     # ------------------------------------------------------------------
     def _start_stage1(self, city: str) -> None:
+        results_root = getattr (self, 'results_root', self.gui_runs_root )
         th = Stage1Thread(
             city=city,
             cfg_overrides=self._cfg_overrides,
             clean_run_dir=self.geo_cfg.clean_stage1_dir,
+            base_cfg=self.geo_cfg._base_cfg,
+            edited_df=self._edited_df,  
+            results_root= results_root,
             parent=self,
         )
         self.stage1_thread = th
@@ -3873,23 +4059,25 @@ class GeoPriorForecaster(QMainWindow):
         stage1_cfg = cfg.to_stage1_config()
         stage1_cfg["BASE_OUTPUT_DIR"] = str(self.gui_runs_root)
 
-        if job.mode in {"rebuild", "scratch"}:
-            stage1_cfg["FORCE_REBUILD"] = True
+        # --- Case 2: rebuild/scratch: run Stage-1, then training -------------
+
+        # Build cfg_overrides just like in the normal Train path
+        self._cfg_overrides = cfg.to_cfg_overrides()
+        if getattr(self, "_device_cfg_overrides", None):
+            self._cfg_overrides.update(self._device_cfg_overrides)
+
+        # Ensure TRAIN_CSV_PATH is set (we already validated above)
+        self._cfg_overrides["TRAIN_CSV_PATH"] = csv_path_str
+
+        # Force rebuild flag into overrides if your backend uses it
+        self._cfg_overrides["FORCE_REBUILD"] = True
+
+        # Lock the Stage-1 city to that of the job
+        city = job.stage1_summary.city
 
         self.status_updated.emit("Stage-1: preparing sequences…")
-
-        stage1_thread = Stage1Thread(
-            csv_path=csv_path_str,
-            cfg_overrides=stage1_cfg,
-            parent=self,
-        )
-        # Again: single-arg signal → single-arg slot
-        stage1_thread.stage1Finished.connect(self._on_stage1_finished)
-        stage1_thread.errorOccurred.connect(self._on_worker_error)
-
-        self.stage1_thread = stage1_thread
-        stage1_thread.start()
-
+        self._start_stage1(city=city)
+  
 
     @pyqtSlot(object)
     def _on_stage1_finished(self, result: Any) -> None:
@@ -4210,10 +4398,16 @@ class GeoPriorForecaster(QMainWindow):
         
         self._active_job_kind = None
         self._update_global_running_state()
-        
+       
+    # ------------------------------------------------------------------
+    # Window close handling
+    # ------------------------------------------------------------------
     def closeEvent(self, event: QCloseEvent) -> None:
         """
-        Intercept window-close to warn if workflows are active.
+        Intercept window close (File → Exit, Ctrl+Q, window X).
+
+        If long-running workflows are active, ask for confirmation
+        before closing. Otherwise just accept.
         """
         if self._any_job_running():
             msg = (
@@ -4231,9 +4425,12 @@ class GeoPriorForecaster(QMainWindow):
             )
             if reply != QMessageBox.Yes:
                 event.ignore()
-                return
-        event.accept()
+                return  # keep the window open
 
+        # XXX TODO: could do any final cleanup, save settings, etc.
+
+        # Hand back to the base class for normal closing
+        super().closeEvent(event)
 
 # ----------------------------------------------------------------------
 # Entry point helper

@@ -120,22 +120,48 @@ def compare_stage1_configs(
     # 2) Feature sets (compare as sets to ignore ordering)
     feat_m = manifest_cfg.get("features") or {}
     feat_c = current_cfg.get("features") or {}
-    for sub in ("static", "dynamic", "future", "group_id_cols"):
-        v_m = list(feat_m.get(sub) or [])
-        v_c = list(feat_c.get(sub) or [])
-        if sorted(v_m) != sorted(v_c):
-            diffs[f"features.{sub}"] = (v_m, v_c)
-
+    
+    structured_keys = ("static", "dynamic", "future", "group_id_cols")
+    has_structured = any(
+        k in feat_m or k in feat_c for k in structured_keys
+    )
+    
+    if has_structured:
+        # NAT-style features: compare per section
+        for sub in structured_keys:
+            v_m = list(feat_m.get(sub) or [])
+            v_c = list(feat_c.get(sub) or [])
+            if sorted(v_m) != sorted(v_c):
+                diffs[f"features.{sub}"] = (v_m, v_c)
+    else:
+        # Pure-style (OPTIONAL_* etc.) – fall back to direct dict equality
+        if feat_m != feat_c:
+            diffs["features"] = (feat_m, feat_c)
+    
     # 3) Cols mapping
     cols_m = manifest_cfg.get("cols") or {}
     cols_c = current_cfg.get("cols") or {}
     if cols_m and cols_c and cols_m != cols_c:
         diffs["cols"] = (cols_m, cols_c)
-
+        
+    def _extract_censor_specs(c: Dict[str, Any]) -> Any:
+        if not isinstance(c, dict):
+            return None
+        # NAT-style
+        if "specs" in c:
+            return c["specs"]
+        # Pure GeoPrior-style
+        if "CENSORING_SPECS" in c:
+            return c["CENSORING_SPECS"]
+        return None
+    
     # 4) Censoring – compare specs
     c_m = manifest_cfg.get("censoring") or {}
     c_c = current_cfg.get("censoring") or {}
-    if c_m.get("specs") != c_c.get("specs"):
+    
+    specs_m = _extract_censor_specs(c_m)
+    specs_c = _extract_censor_specs(c_c)
+    if specs_m != specs_c:
         diffs["censoring"] = (c_m, c_c)
 
     return (len(diffs) == 0), diffs
@@ -185,7 +211,6 @@ def make_stage1_summary(
         config_diffs=config_diffs,
         diff_fields=diff_fields,
     )
-
 
 def discover_stage1_runs(
     results_root: Path,

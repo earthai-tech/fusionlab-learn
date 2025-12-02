@@ -2186,7 +2186,8 @@ class PandasDataHandlers(BaseClass):
             ".pkl": pd.read_pickle,
             ".sas": pd.read_sas,
             ".spss": pd.read_spss,
-            ".txt": pd.read_csv
+            ".txt": pd.read_csv,
+            ".parquet": pd.read_parquet, 
         }
 
     @staticmethod

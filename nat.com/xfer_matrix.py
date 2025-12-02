@@ -253,30 +253,6 @@ def run_one_direction(
     # Align static features to the *source* feature space
     X_tgt = _align_static_to_source(X_tgt, M_src, M_tgt)
     
-    # dims_src = M_src["artifacts"]["sequences"]["dims"]
-    # print(
-    #     f"[XFER] Source model expects static={dims_src.get('static_input_dim')} "
-    #     f"dynamic={dims_src.get('dynamic_input_dim')}"
-    # )
-    # print(
-    #     f"[XFER] Target NPZ has   static={X_tgt.get('static_features', np.empty((0,0))).shape[-1]} "
-    #     f"dynamic={X_tgt['dynamic_features'].shape[-1]}"
-    # )
-
-    # s_src = int(dims_src.get("static_input_dim", 0))
-    # s_tgt = int(X_tgt["static_features"].shape[-1])
-    
-    # if s_src != s_tgt:
-    #     raise SystemExit(
-    #         "Static feature dimension mismatch in transfer:\n"
-    #         f"  Source model expects static_features dim = {s_src}\n"
-    #         f"  Target NPZ has static_features dim      = {s_tgt}\n"
-    #         "Cross-city transfer requires Stage-1 to export identical "
-    #         "static feature schemas (same feature list and order) for "
-    #         "both cities. Please harmonize Stage-1 config or pad/align "
-    #         "static_features before calling xfer_matrix.py."
-    #     )
-    
     # Infer source model input dims from manifest
     s_src, d_src = _infer_source_input_dims(M_src)
     

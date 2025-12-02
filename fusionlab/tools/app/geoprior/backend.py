@@ -96,6 +96,9 @@ class Stage1Job(AppJob):
         ] = None,
         *,
         clean_run_dir: bool = True,
+        base_cfg: Optional[Dict[str, Any]] = None,         
+        results_root: Optional[os.PathLike | str] = None,  
+        edited_df: Optional[pd.DataFrame] = None,      
         logger: Optional[LogFn] = None,
         stop_check: Optional[
             StopCheckFn
@@ -111,7 +114,10 @@ class Stage1Job(AppJob):
         )
         self.city = city
         self.clean_run_dir = clean_run_dir
-
+        self.base_cfg = base_cfg              
+        self.results_root = results_root      
+        self.edited_df = edited_df 
+        
         overrides: Dict[str, Any] = dict(
             cfg_overrides or {}
         )
@@ -137,6 +143,9 @@ class Stage1Job(AppJob):
             clean_run_dir=self.clean_run_dir,
             stop_check=self.should_stop,
             progress_callback=self.update_progress, 
+            base_cfg=self.base_cfg,               
+            results_root=self.results_root, 
+            edited_df=self.edited_df,
         )
         self.last_result = result
         return result
@@ -153,6 +162,8 @@ class TrainingJob(AppJob):
         ] = None,
         *,
         evaluate_training: bool = True,
+        base_cfg: Optional[Dict[str, Any]] = None,            
+        results_root: Optional[os.PathLike | str] = None,     
         logger: Optional[LogFn] = None,
         stop_check: Optional[
             StopCheckFn
@@ -169,6 +180,8 @@ class TrainingJob(AppJob):
         self.manifest_path = manifest_path
         self.cfg_overrides = dict(cfg_overrides or {})
         self.evaluate_training = evaluate_training
+        self.base_cfg = base_cfg               
+        self.results_root = results_root        
 
     def run(self) -> Dict[str, Any]:
         self.log("[TrainingJob] Stage-2 training.")
@@ -187,6 +200,8 @@ class TrainingJob(AppJob):
             stop_check=self.should_stop,
             evaluate_training=self.evaluate_training,
             progress_callback=self.update_progress, 
+            base_cfg=self.base_cfg,                  
+            results_root=self.results_root,          
         )
         self.last_result = result
         return result
@@ -203,6 +218,8 @@ class TuningJob(AppJob):
         ] = None,
         *,
         evaluate_tuned: bool = False,
+        base_cfg: Optional[Dict[str, Any]] = None,              
+        results_root: Optional[os.PathLike | str] = None,       
         logger: Optional[LogFn] = None,
         stop_check: Optional[
             StopCheckFn
@@ -219,6 +236,8 @@ class TuningJob(AppJob):
         self.manifest_path = manifest_path
         self.cfg_overrides = dict(cfg_overrides or {})
         self.evaluate_tuned = evaluate_tuned
+        self.base_cfg = base_cfg                                  
+        self.results_root = results_root  
 
     def run(self) -> Dict[str, Any]:
         self.log("[TuningJob] Hyperparameter search.")
@@ -237,6 +256,8 @@ class TuningJob(AppJob):
             stop_check=self.should_stop,
             evaluate_tuned=self.evaluate_tuned,
             progress_callback=self.update_progress, 
+            base_cfg=self.base_cfg,                
+            results_root=self.results_root,       
         )
         self.last_result = result
         return result
@@ -264,7 +285,7 @@ class InferenceJob(AppJob):
         make_plots: bool = True,
         cfg_overrides: Optional[
             Dict[str, Any]
-        ] = None,
+        ] = None,          
         logger: Optional[LogFn] = None,
         stop_check: Optional[
             StopCheckFn
@@ -353,6 +374,7 @@ class XferMatrixJob(AppJob):
         out_dir: Optional[str] = None,
         write_json: bool = True,
         write_csv: bool = True,
+        model_name: str = "GeoPriorSubsNet", 
         logger: Optional[LogFn] = None,
         stop_check: Optional[
             StopCheckFn
@@ -381,6 +403,7 @@ class XferMatrixJob(AppJob):
         self.out_dir = out_dir
         self.write_json = write_json
         self.write_csv = write_csv
+        self.model_name = model_name 
 
     def run(self) -> Dict[str, Any]:
         self.log(
@@ -410,6 +433,7 @@ class XferMatrixJob(AppJob):
             logger=self.log,
             stop_check=self.should_stop,
             progress_callback=self.update_progress, 
+            model_name=self.model_name,
         )
         self.last_result = result
         return result

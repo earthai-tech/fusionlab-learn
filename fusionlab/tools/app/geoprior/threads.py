@@ -83,12 +83,18 @@ class Stage1Thread(BaseJobThread):
         ] = None,
         *,
         clean_run_dir: bool = True,
+        base_cfg: Optional[Dict[str, Any]] = None,   
+        results_root: Optional[str] = None, 
+        edited_df: Optional[pd.DataFrame] = None,           
         parent: Optional[object] = None,
     ) -> None:
         job = Stage1Job(
             city=city,
             cfg_overrides=cfg_overrides,
             clean_run_dir=clean_run_dir,
+            base_cfg=base_cfg,                        
+            results_root=results_root, 
+            edited_df=edited_df,  
         )
         super().__init__(job=job, parent=parent)
 
@@ -106,12 +112,16 @@ class TrainingThread(BaseJobThread):
         ] = None,
         *,
         evaluate_training: bool = True,
+        base_cfg: Optional[Dict[str, Any]] = None,     
+        results_root: Optional[str] = None,            
         parent: Optional[object] = None,
     ) -> None:
         job = TrainingJob(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
             evaluate_training=evaluate_training,
+            base_cfg=base_cfg,                         
+            results_root=results_root,  
         )
         super().__init__(job=job, parent=parent)
 
@@ -134,12 +144,16 @@ class TuningThread(BaseJobThread):
         ] = None,
         *,
         evaluate_tuned: bool = False,
+        base_cfg: Optional[Dict[str, Any]] = None,          
+        results_root: Optional[str] = None,  
         parent: Optional[object] = None,
     ) -> None:
         job = TuningJob(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
             evaluate_tuned=evaluate_tuned,
+            base_cfg=base_cfg,                               
+            results_root=results_root,                       
         )
         super().__init__(job=job, parent=parent)
 
@@ -225,6 +239,7 @@ class XferMatrixThread(BaseJobThread):
         out_dir: Optional[str] = None,
         write_json: bool = True,
         write_csv: bool = True,
+        model_name: str = "GeoPriorSubsNet",       
         parent: Optional[object] = None,
     ) -> None:
         if splits is None:
@@ -248,6 +263,7 @@ class XferMatrixThread(BaseJobThread):
             out_dir=out_dir,
             write_json=write_json,
             write_csv=write_csv,
+            model_name=model_name, 
         )
         super().__init__(job=job, parent=parent)
 

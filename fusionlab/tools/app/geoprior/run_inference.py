@@ -12,18 +12,13 @@ from typing import Optional, Dict, Any, Callable
 import tensorflow as tf
 
 from ...._optdeps import with_progress 
-from ....utils.generic_utils import( 
-    default_results_dir, 
-    getenv_stripped, 
-    ensure_directory_exists
-)
+from ....utils.generic_utils import ensure_directory_exists
 from ....utils.scale_metrics import (
     inverse_scale_target,
     point_metrics,
     per_horizon_metrics,
 )
 from ....utils.forecast_utils import format_and_forecast
-from ....registry.utils import _find_stage1_manifest  
 
 from ....nn.keras_metrics import ( 
     coverage80_fn,
@@ -37,12 +32,11 @@ from ....nn.calibration import (
 
 from ....plot.forecast import plot_eval_future
 from ....utils.nat_utils import (
-    load_or_rebuild_geoprior_model,
+    load_geoprior_for_inference, 
     pick_npz_for_dataset, 
     sanitize_inputs_np, 
     map_targets_for_training, 
     ensure_input_shapes, 
-    safe_compile 
   )
 
 from .view_utils import _notify_gui_forecast_views 
@@ -155,30 +149,21 @@ def run_inference(
     # 0) Resolve Stage-1 manifest
     # ----------------------------------------------------------
     if manifest_path is not None:
-        manifest_file = manifest_path
+        manifest_file = os.path.abspath(manifest_path)
     elif stage1_dir is not None:
         manifest_file = os.path.join(stage1_dir, "manifest.json")
         if not os.path.exists(manifest_file):
             raise FileNotFoundError(
                 f"manifest.json not found in stage1_dir={stage1_dir!r}"
             )
+        manifest_file = os.path.abspath(manifest_file)
     else:
-        # Same policy as Stage-2: auto-discovery via env
-        RESULTS_DIR = default_results_dir()
-        CITY_HINT = getenv_stripped("CITY")
-        MODEL_HINT = getenv_stripped(
-            "MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet"
-        )
-        MANUAL = getenv_stripped("STAGE1_MANIFEST")
-
-        manifest_file = _find_stage1_manifest(
-            manual=MANUAL,
-            base_dir=RESULTS_DIR,
-            city_hint=CITY_HINT,
-            model_hint=MODEL_HINT,
-            prefer="timestamp",
-            required_keys=("model", "stage"),
-            verbose=1,
+        # In the GUI pipeline we always know which Stage-1 run
+        # we are continuing from, so environment-based discovery
+        # is no longer supported here.
+        raise ValueError(
+            "run_inference requires either 'manifest_path' or "
+            "'stage1_dir' when used from the GeoPrior GUI."
         )
 
     with open(manifest_file, "r", encoding="utf-8") as f:
@@ -353,7 +338,8 @@ def run_inference(
     # 5) Load or rebuild model (and compile safely)
     # ----------------------------------------------------------
     log(f"[Model] Loading/rebuilding model from: {model_path}")
-    model, best_hps = load_or_rebuild_geoprior_model(
+
+    model, _info = load_geoprior_for_inference(
         model_path=model_path,
         manifest=M,
         X_sample=X,
@@ -363,18 +349,8 @@ def run_inference(
         horizon=H,
         quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
         city_name=CITY,
-        compile_on_load=True,
-        verbose=1,
-    )
-
-    # Even though we won't call model.evaluate(), keep a safe compile for
-    # consistency (esp. if some code path later relies on compiled metrics).
-    model = safe_compile(
-        model=model,
-        manifest=M,
-        best_hps=best_hps,
-        quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
         include_metrics=True,
+        verbose=1,
     )
 
     _progress(0.45, "Inference: model loaded and compiled")

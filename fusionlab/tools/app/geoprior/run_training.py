@@ -52,14 +52,10 @@ from ....api.util import get_table_size
 from ....utils.generic_utils import (
     ensure_directory_exists,
     save_all_figures,
-    default_results_dir,
-    getenv_stripped,
     print_config_table,
 )
-from ....registry.utils import _find_stage1_manifest
 from ....utils.nat_utils import (
     load_nat_config,
-    load_nat_config_payload,
     ensure_input_shapes,
     map_targets_for_training,
     make_tf_dataset,
@@ -135,9 +131,13 @@ def run_training(
     cfg_overrides: Optional[Dict[str, Any]] = None,
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
-    progress_callback: Optional[Callable[[float, str], None]] = None,  
-    **kws
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+    base_cfg: Optional[Dict[str, Any]] = None,
+    results_root: Optional[os.PathLike | str] = None,
+    evaluate_training: bool =True, 
+    **kws,
 ) -> Dict[str, Any]:
+
     """
     Run Stage-2 training & evaluation for GeoPriorSubsNet.
 
@@ -249,141 +249,73 @@ def run_training(
         except Exception:
             pass
 
-    # def _progress_from_pct(pct: int) -> None:
-    #     """
-    #     Bridge Keras/GuiProgress → GUI progress bar, with epoch + ETA info.
-
-    #     Parameters
-    #     ----------
-    #     pct : int
-    #         Global training completion percentage [0, 100] as reported
-    #         by GuiProgress.
-    #     """
-    #     nonlocal train_start_t
-
-    #     if progress_callback is None:
-    #         return
-
-    #     # --- clamp and normalise pct → frac in [0, 1] -----------------
-    #     try:
-    #         p = float(pct)
-    #     except Exception:
-    #         p = 0.0
-    #     p = max(0.0, min(100.0, p))
-    #     frac = p / 100.0
-
-    #     # --- initialise / update timing for ETA ------------------------
-    #     now = time.time()
-    #     if train_start_t is None and frac > 0.0:
-    #         # first non-zero tick → start of training phase
-    #         train_start_t = now
-
-    #     if train_start_t is not None and frac > 1e-6:
-    #         elapsed = max(0.0, now - train_start_t)
-    #         # remaining = elapsed * (1 - f) / f   (same idea as ProgressManager)
-    #         remaining = elapsed * (1.0 - frac) / frac
-    #         eta_str = _format_eta(remaining)
-    #     else:
-    #         eta_str = "--:--"
-
-    #     # --- best-effort epoch index from global fraction --------------
-    #     epoch_part = ""
-    #     try:
-    #         total_epochs = int(EPOCHS)
-    #     except Exception:
-    #         total_epochs = 0
-
-    #     if total_epochs > 0 and frac > 0.0:
-    #         # map [0, 1] → [1, total_epochs], clamped
-    #         ep = int(round(frac * total_epochs))
-    #         if ep < 1:
-    #             ep = 1
-    #         if ep > total_epochs:
-    #             ep = total_epochs
-    #         epoch_part = f"Epoch {ep}/{total_epochs} – "
-
-    #     # --- final human-readable message ------------------------------
-    #     msg = f"Training – {epoch_part}ETA: {eta_str}"
-
-    #     # Never let a misbehaving GUI callback crash training
-    #     try:
-    #         progress_callback(frac, msg)
-    #     except Exception:
-    #         pass
     # -----------------------------------------------------------
 
     log = logger or (lambda msg: print(msg, flush=True))
 
     # ================================================================
-    # 1. Locate Stage-1 manifest
+    # 1. Locate Stage-1 manifest (GUI: manifest_path is required)
     # ================================================================
-    RESULTS_DIR = default_results_dir()
-
-    cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
-    CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
-    CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
-
-    CITY_ENV = getenv_stripped("CITY")
-    MODEL_ENV = getenv_stripped("MODEL_NAME_OVERRIDE")
-
-    CITY_HINT = CITY_ENV or CFG_CITY
-    MODEL_HINT = MODEL_ENV or CFG_MODEL
-    MANUAL = getenv_stripped("STAGE1_MANIFEST")
-
     if manifest_path is None:
-        manifest_path = _find_stage1_manifest(
-            manual=MANUAL,
-            base_dir=RESULTS_DIR,
-            city_hint=CITY_HINT,
-            model_hint=MODEL_HINT,
-            prefer="timestamp",
-            required_keys=("model", "stage"),
-            verbose=1,
+        raise ValueError(
+            "run_training requires an explicit 'manifest_path' "
+            "when used from the GeoPrior GUI."
         )
 
+    manifest_path = os.path.abspath(manifest_path)
+
+    # Load Stage-1 manifest produced by run_stage1
     with open(manifest_path, "r", encoding="utf-8") as f:
         M = json.load(f)
 
     manifest_city = (M.get("city") or "").strip().lower()
-    log(f"[Manifest] Loaded city={manifest_city} model={M.get('model')}")
-    
+    manifest_model = M.get("model")
+
+    log(f"[Manifest] Loaded city={manifest_city} model={manifest_model}")
+
+    # For logging only: a reasonable 'RESULTS_DIR' root.
+    # - If caller passes results_root, honour it.
+    # - Otherwise derive from the Stage-1 run_dir, or from the manifest path.
+    if results_root is not None:
+        RESULTS_DIR = os.fspath(results_root)
+    else:
+        run_dir = (M.get("paths") or {}).get("run_dir")
+        if run_dir:
+            RESULTS_DIR = os.path.abspath(os.path.dirname(run_dir))
+        else:
+            # manifest.json lives in <stage1_run_dir>/manifest.json
+            RESULTS_DIR = os.path.abspath(
+                os.path.dirname(os.path.dirname(manifest_path))
+            )
+
     if progress_callback is not None:
         progress_callback(0.02, "Training: loaded Stage-1 manifest.")
 
-    # if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
-    #     raise RuntimeError(
-    #         "[NATCOM] Stage-1 manifest city "
-    #         f"{manifest_city!r} does not match config CITY_NAME {CFG_CITY!r}. "
-    #         "Run Stage-1 for this city first, or set CITY/STAGE1_MANIFEST "
-    #         "to explicitly override."
-    #     )
-    
-    print("M==================================================\n", M)
-    print("Manifestcity\n", manifest_city)
+
     # ================================================================
     # 2. Merge global config with Stage-1 config
     # ================================================================
-    cfg_global = load_nat_config(root=GUI_CONFIG_DIR)
+    if base_cfg is not None:
+        cfg_global = dict(base_cfg)
+    else:
+        cfg_global = load_nat_config(root=GUI_CONFIG_DIR)
+
     cfg_manifest = M.get("config", {}) or {}
 
     cfg = dict(cfg_global)
     cfg.update(cfg_manifest)
     if cfg_overrides:
         cfg.update(cfg_overrides)
-    
-    print("CFG ====\n", cfg)
-    
-    print("===OVERWRITE =============\n",cfg_overrides )
-    
-    print("CGF UPDATE==\n", cfg)
-    
-    return 
 
     # >>> configure TensorFlow from cfg <<<
     device_info = configure_tf_from_cfg(cfg, logger=log)
-    
+
     if progress_callback is not None:
-        progress_callback(0.05, "Training: merged config & configured TensorFlow.")
+        progress_callback(
+            0.05,
+            "Training: merged config & configured TensorFlow.",
+        )
+
 
     CITY_NAME = M.get("city", cfg.get("CITY_NAME", "nansha"))
     MODEL_NAME = M.get("model", cfg.get("MODEL_NAME", "GeoPriorSubsNet"))

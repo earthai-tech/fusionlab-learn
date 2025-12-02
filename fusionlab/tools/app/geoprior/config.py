@@ -30,6 +30,14 @@
 # -------------------------------------------------------------------
 # 1. CORE EXPERIMENT SETUP
 # -------------------------------------------------------------------
+
+# xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#                         !!! IMPORTANT NOTE:
+#                 THIS SECTION IS NOT NEEDED FOR GUI SINCE 
+#                 DATASET/CITY NAME IS INFER FROM THE CSV 
+#                 FILE SELECTION OR USER PROVIDE IT 
+#                    EXPLICITELY. CAN BYPASS 
+# 
 # 1.1 City / model identifiers
 # ----------------------------
 # CITY_NAME selects which city dataset is used.  Typical values:
@@ -39,8 +47,8 @@
 # MODEL_NAME is the registered model identifier.  For now the
 # main model is:
 #   - "GeoPriorSubsNet"
-CITY_NAME = "zhongshan"
-MODEL_NAME = "GeoPriorSubsNet"
+# CITY_NAME = "zhongshan"
+# MODEL_NAME = "GeoPriorSubsNet"
 
 
 # 1.2 Data root and file patterns
@@ -59,19 +67,24 @@ MODEL_NAME = "GeoPriorSubsNet"
 # You can change DATA_DIR if your data folder is elsewhere.
 # Advanced users can also override this via environment variables
 # in `nat_utils` (for example `JUPYTER_PROJECT_ROOT`).
-DATA_DIR = ".."
+# DATA_DIR = ".."
 
 # File name templates.  When CITY_NAME = "nansha", this becomes:
 #   BIG_FN   = "nansha_final_main_std.harmonized.csv"
 #   SMALL_FN = "nansha_2000.csv"
-BIG_FN_TEMPLATE = "{city}_final_main_std.harmonized.csv"
-SMALL_FN_TEMPLATE = "{city}_2000.csv"
+# BIG_FN_TEMPLATE = "{city}_final_main_std.harmonized.csv"
+# SMALL_FN_TEMPLATE = "{city}_2000.csv"
 
-BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME)
-SMALL_FN = SMALL_FN_TEMPLATE.format(city=CITY_NAME)
+# BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME)
+# SMALL_FN = SMALL_FN_TEMPLATE.format(city=CITY_NAME)
 
 # Optional multi-city parquet (e.g. natcom_all_cities.parquet)
-ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
+# ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
+
+CITY_NAME = ""
+MODEL_NAME = "GeoPriorSubsNet"
+# xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx END xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
 
 # 1.3 Temporal windows
 # --------------------
