@@ -35,7 +35,6 @@ from PyQt5.QtCore import (
     QUrl
 )
 from PyQt5.QtGui import (
-    QIcon,
     QCloseEvent,
     QPixmap,
     QPainter,
@@ -98,8 +97,10 @@ from .xfer_dialog import XferAdvancedDialog, XferResultsDialog
 from .xfer_view import latest_xfer_csv, latest_xfer_json
 from .inference_dialogs import InferenceOptionsDialog 
 from .stage1_dialogs import Stage1ChoiceDialog
+from .phys_dialogs import PhysicsConfigDialog, PHYSICS_DEFAULTS
 from .about import show_about_dialog, DOCS_URL
 from .results_dialog import GeoPriorResultsDialog
+from .clock_timer import RunClockTimer
 from .styles import (
     TAB_STYLES,
     LOG_STYLES,
@@ -214,7 +215,7 @@ class GeoPriorForecaster(QMainWindow):
         )
         self._tune_tip_shown: bool = False  # one-shot notification flag
         
-        # NEW: Inference tab helper
+        # Inference tab helper
         self._infer_help_text = (
             "Inference tab – evaluate a trained/tuned GeoPriorSubsNet on\n "
             "train/val/test splits or run future forecasts based on\n "
@@ -282,6 +283,29 @@ class GeoPriorForecaster(QMainWindow):
         in a single place if needed.
         """
         return self.style().standardIcon(sp)
+    
+    def _icon(self, name: str) -> QIcon:
+        """Load a named icon from our app's icon bundle."""
+        base = Path(__file__).resolve().parent / "icons"
+        path = base / name
+        if path.exists():
+            return QIcon(str(path))
+        # Fallback to a neutral standard icon or empty
+        return QIcon()
+    
+    def _workflow_icon(
+        self,
+        svg_name: str,
+        fallback: QStyle.StandardPixmap,
+    ) -> QIcon:
+        """
+        Prefer a custom SVG icon from geoprior/icons/, with a Qt
+        standard pixmap as fallback.
+        """
+        icon = self._icon(svg_name)
+        if not icon.isNull():
+            return icon
+        return self._std_icon(fallback)
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -320,42 +344,43 @@ class GeoPriorForecaster(QMainWindow):
 
         # ---------------------- Run menu -----------------------
         run_menu = menubar.addMenu("&Run")
-
+    
         act_run_train = QAction(
-            self._std_icon(QStyle.SP_MediaPlay),   # ▶ train
+            self._workflow_icon("train.svg", QStyle.SP_MediaPlay),
             "Run training",
             self,
         )
         act_run_train.setShortcut("F5")
         act_run_train.triggered.connect(self._on_train_clicked)
         run_menu.addAction(act_run_train)
-
+    
         act_run_tune = QAction(
-            self._std_icon(QStyle.SP_BrowserReload),  # 🔁 tuning
+            self._workflow_icon("tune.svg", QStyle.SP_BrowserReload),
             "Run tuning",
             self,
         )
         act_run_tune.setShortcut("Shift+F5")
         act_run_tune.triggered.connect(self._on_tune_clicked)
         run_menu.addAction(act_run_tune)
-
+    
         act_run_infer = QAction(
-            self._std_icon(QStyle.SP_ArrowForward),   # ➜ inference
+            self._workflow_icon("inference.svg", QStyle.SP_ArrowForward),
             "Run inference",
             self,
         )
         act_run_infer.setShortcut("Ctrl+F5")
         act_run_infer.triggered.connect(self._on_infer_clicked)
         run_menu.addAction(act_run_infer)
-
+    
         act_run_xfer = QAction(
-            self._std_icon(QStyle.SP_ArrowRight),     # ↔ transfer matrix
+            self._workflow_icon("transfer.svg", QStyle.SP_ArrowRight),
             "Run transfer matrix",
             self,
         )
         act_run_xfer.setShortcut("Alt+F5")
         act_run_xfer.triggered.connect(self._on_xfer_clicked)
         run_menu.addAction(act_run_xfer)
+
 
         run_menu.addSeparator()
 
@@ -386,9 +411,9 @@ class GeoPriorForecaster(QMainWindow):
 
         # ---------------------- View menu ----------------------
         view_menu = menubar.addMenu("&View")
-
+    
         view_train = QAction(
-            self._std_icon(QStyle.SP_ComputerIcon),  # "main engine"
+            self._workflow_icon("train.svg", QStyle.SP_ComputerIcon),
             "Train tab",
             self,
         )
@@ -397,9 +422,9 @@ class GeoPriorForecaster(QMainWindow):
             lambda: self.tabs.setCurrentIndex(self._train_tab_index)
         )
         view_menu.addAction(view_train)
-
+    
         view_tune = QAction(
-            self._std_icon(QStyle.SP_FileDialogDetailedView),  # sliders/config
+            self._workflow_icon("tune.svg", QStyle.SP_FileDialogDetailedView),
             "Tune tab",
             self,
         )
@@ -408,9 +433,9 @@ class GeoPriorForecaster(QMainWindow):
             lambda: self.tabs.setCurrentIndex(self._tune_tab_index)
         )
         view_menu.addAction(view_tune)
-
+    
         view_infer = QAction(
-            self._std_icon(QStyle.SP_FileDialogListView),  # predictions list
+            self._workflow_icon("inference.svg", QStyle.SP_FileDialogListView),
             "Inference tab",
             self,
         )
@@ -419,20 +444,21 @@ class GeoPriorForecaster(QMainWindow):
             lambda: self.tabs.setCurrentIndex(self._infer_tab_index)
         )
         view_menu.addAction(view_infer)
-
+    
         view_xfer = QAction(
-            self._std_icon(QStyle.SP_ArrowRight),  # reuse transfer icon
+            self._workflow_icon("transfer.svg", QStyle.SP_ArrowRight),
             "Transferability tab",
             self,
         )
         view_xfer.setShortcut("Ctrl+4")
         view_xfer.triggered.connect(
-            lambda: self.tabs.setCurrentIndex(self._xfer_tab_index)
+                lambda: self.tabs.setCurrentIndex(self._xfer_tab_index)
         )
         view_menu.addAction(view_xfer)
-
+    
+        # Results can keep a standard icon for now
         view_results = QAction(
-            self._std_icon(QStyle.SP_DirHomeIcon),  # summary/results
+            self._std_icon(QStyle.SP_DirHomeIcon),
             "Results tab",
             self,
         )
@@ -465,8 +491,30 @@ class GeoPriorForecaster(QMainWindow):
         )
         act_about.triggered.connect(lambda: show_about_dialog(self))
         help_menu.addAction(act_about)
+        
+    # --------------------------------------------------------------
+    # Run timer helpers
+    # --------------------------------------------------------------
+    def _start_run_timer(self) -> None:
+        """Restart the digital run timer when a new job starts."""
+        if hasattr(self, "run_timer"):
+            self.run_timer.restart()
 
+    def _stop_run_timer(self) -> None:
+        """
+        Stop (but do not hide) the run timer when a job finishes
+        or is aborted.
+        """
+        if hasattr(self, "run_timer"):
+            self.run_timer.stop()
 
+    def _reset_run_timer(self) -> None:
+        """
+        Reset the run timer when a job finishes
+        or is aborted.
+        """
+        if hasattr(self, "run_timer"):
+            self.run_timer.reset()
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -688,10 +736,25 @@ class GeoPriorForecaster(QMainWindow):
         layout.addWidget(self.tabs, 1)
 
         # --- Status line ---
+        status_row = QHBoxLayout()
+        # self.status_label = QLabel("? Idle")
+        # self.status_label.setStyleSheet(f"color:{PRIMARY};")
+        # layout.addWidget(self.status_label)
+
         self.status_label = QLabel("? Idle")
         self.status_label.setStyleSheet(f"color:{PRIMARY};")
-        layout.addWidget(self.status_label)
-
+        status_row.addWidget(self.status_label, 1)  # takes the left side
+        
+        status_row.addStretch(1)  # push timer fully to the right
+        
+        # NEW: digital run timer (black background, green digits)
+        self.run_timer = RunClockTimer(self)
+        self.run_timer.reset()
+        self.run_timer.stop()
+        status_row.addWidget(self.run_timer, 0)
+        
+        layout.addLayout(status_row)
+        
         # --- Log widget ---
         self.log_widget = QPlainTextEdit()
         self.log_widget.setObjectName("logWidget")
@@ -891,7 +954,10 @@ class GeoPriorForecaster(QMainWindow):
 
         self.btn_prob = QPushButton("Probabilistic…")
         buttons_row.addWidget(self.btn_prob)
-
+        
+        self.physics_btn = QPushButton("Physics config…")
+        buttons_row.addWidget(self.physics_btn)
+         
         buttons_row.addStretch(1)
 
         # Put the buttons row in a small container so it can go into the grid
@@ -1371,7 +1437,7 @@ class GeoPriorForecaster(QMainWindow):
         self.infer_tab = infer_tab
         self.xfer_tab = xfer_tab
 
-        # NEW: Results tab – browse & download artifacts/runs
+        # Results tab – browse & download artifacts/runs
         results_tab = ResultsDownloadTab(
             results_root=self.gui_runs_root,
             get_results_root=lambda: self.gui_runs_root,
@@ -1379,31 +1445,30 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.results_tab = results_tab
 
-
         self._train_tab_index = self.tabs.addTab(
             self.train_tab,
-            self._std_icon(QStyle.SP_ComputerIcon),
+            self._workflow_icon("train.svg", QStyle.SP_ComputerIcon),
             "Train",
         )
-        
+
         self._tune_tab_index = self.tabs.addTab(
             self.tune_tab,
-            self._std_icon(QStyle.SP_FileDialogDetailedView),
+            self._workflow_icon("tune.svg", QStyle.SP_FileDialogDetailedView),
             "Tune",
         )
-        
+
         self._infer_tab_index = self.tabs.addTab(
             self.infer_tab,
-            self._std_icon(QStyle.SP_FileDialogListView),
+            self._workflow_icon("inference.svg", QStyle.SP_FileDialogListView),
             "Inference",
         )
-        
+
         self._xfer_tab_index = self.tabs.addTab(
             self.xfer_tab,
-            self._std_icon(QStyle.SP_ArrowRight),
+            self._workflow_icon("transfer.svg", QStyle.SP_ArrowRight),
             "Transfer",
         )
-        
+
         self._results_tab_index = self.tabs.addTab(
             self.results_tab,
             self._std_icon(QStyle.SP_DirHomeIcon),
@@ -1916,7 +1981,77 @@ class GeoPriorForecaster(QMainWindow):
         cfg.evaluate_training = (
             self.chk_eval_training.isChecked()
         )
-        
+
+    # ------------------------------------------------------------------
+    # Physics scalar config bridge  (GeoPriorConfig ↔ PhysicsConfigDialog)
+    # ------------------------------------------------------------------
+    def _physics_cfg_from_geo_cfg(self) -> dict:
+        """
+        Build a NAT-style physics dict from self.geo_cfg.
+
+        Keys match PHYSICS_DEFAULTS / NAT config:
+        MV_LR_MULT, KAPPA_LR_MULT, GEOPRIOR_INIT_MV, ...
+        """
+        cfg = self.geo_cfg
+
+        def get(name: str, attr: str):
+            # Fall back to PHYSICS_DEFAULTS if the dataclass
+            # does not carry the attribute for some reason.
+            return getattr(cfg, attr, PHYSICS_DEFAULTS[name])
+
+        return {
+            "MV_LR_MULT":          float(
+                get("MV_LR_MULT", "mv_lr_mult")),
+            "KAPPA_LR_MULT":       float(
+                get("KAPPA_LR_MULT", "kappa_lr_mult")),
+            "GEOPRIOR_INIT_MV":    float(
+                get("GEOPRIOR_INIT_MV", "geoprior_init_mv")),
+            "GEOPRIOR_INIT_KAPPA": float(
+                get("GEOPRIOR_INIT_KAPPA", "geoprior_init_kappa")),
+            "GEOPRIOR_GAMMA_W":    float(
+                get("GEOPRIOR_GAMMA_W", "geoprior_gamma_w")),
+            "GEOPRIOR_H_REF":      float(
+                get("GEOPRIOR_H_REF", "geoprior_h_ref")),
+            "GEOPRIOR_KAPPA_MODE": str(
+                get("GEOPRIOR_KAPPA_MODE", "geoprior_kappa_mode")).lower(),
+            "GEOPRIOR_HD_FACTOR":  float(
+                get("GEOPRIOR_HD_FACTOR", "geoprior_hd_factor")),
+        }
+
+    def _apply_physics_cfg_to_geo_cfg(self, phys_cfg: dict) -> None:
+        """
+        Take a NAT-style physics dict (as returned by the dialog)
+        and write it back into self.geo_cfg.
+        """
+        cfg = self.geo_cfg
+
+        if "MV_LR_MULT" in phys_cfg:
+            cfg.mv_lr_mult = float(phys_cfg["MV_LR_MULT"])
+
+        if "KAPPA_LR_MULT" in phys_cfg:
+            cfg.kappa_lr_mult = float(phys_cfg["KAPPA_LR_MULT"])
+
+        if "GEOPRIOR_INIT_MV" in phys_cfg:
+            cfg.geoprior_init_mv = float(phys_cfg["GEOPRIOR_INIT_MV"])
+
+        if "GEOPRIOR_INIT_KAPPA" in phys_cfg:
+            cfg.geoprior_init_kappa = float(phys_cfg["GEOPRIOR_INIT_KAPPA"])
+
+        if "GEOPRIOR_GAMMA_W" in phys_cfg:
+            cfg.geoprior_gamma_w = float(phys_cfg["GEOPRIOR_GAMMA_W"])
+
+        if "GEOPRIOR_H_REF" in phys_cfg:
+            cfg.geoprior_h_ref = float(phys_cfg["GEOPRIOR_H_REF"])
+
+        if "GEOPRIOR_KAPPA_MODE" in phys_cfg:
+            cfg.geoprior_kappa_mode = str(
+                phys_cfg["GEOPRIOR_KAPPA_MODE"]
+            ).lower()
+
+        if "GEOPRIOR_HD_FACTOR" in phys_cfg:
+            cfg.geoprior_hd_factor = float(
+                phys_cfg["GEOPRIOR_HD_FACTOR"])
+
     def _get_experiment_name(self, default: str) -> str:
         """
         Return the experiment name from an optional GUI 
@@ -2146,6 +2281,9 @@ class GeoPriorForecaster(QMainWindow):
         self.btn_prob.clicked.connect(          
             self._on_prob_config,
         )
+        self.physics_btn.clicked.connect(
+            self._on_physics_config_clicked
+        )
     
         self.btn_tune_options.clicked.connect(
             self._on_tune_options_clicked,
@@ -2162,8 +2300,7 @@ class GeoPriorForecaster(QMainWindow):
         self.btn_train_options.clicked.connect(
             self._on_train_options_clicked
         )
-
-        # --- Inference tab ---
+    
         # --- Inference tab ---
         self.btn_inf_options.clicked.connect(
             self._on_infer_options_clicked
@@ -2594,6 +2731,44 @@ class GeoPriorForecaster(QMainWindow):
         # Re-scan that root for the latest xfer_results.* under xfer/*/*
         self._discover_last_xfer_for_root()
 
+    @pyqtSlot()
+    def _on_physics_config_clicked(self) -> None:
+        """
+        Open the PhysicsConfigDialog.
+
+        Values are initialised from self.geo_cfg and written
+        back to self.geo_cfg if the user clicks OK.
+        """
+        # Make sure temporal + lambda widgets are synced into geo_cfg
+        self._sync_config_from_ui()
+
+        # Current scalar physics values as NAT-style dict
+        initial = self._physics_cfg_from_geo_cfg()
+
+        updated = PhysicsConfigDialog.edit_physics(
+            parent=self,
+            cfg=initial,
+        )
+        if updated is None:
+            # User cancelled
+            return
+
+        # Push the new values into GeoPriorConfig
+        self._apply_physics_cfg_to_geo_cfg(updated)
+
+        # Optional: sanity check + log
+        try:
+            self.geo_cfg.ensure_valid()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Physics configuration",
+                f"Updated physics values may be inconsistent:\n\n{exc}",
+            )
+        else:
+            self.log_updated.emit(
+                "[Physics] Scalar physics parameters updated."
+            )
 
     @pyqtSlot()
     def _on_scalars_config(self) -> None:
@@ -3073,7 +3248,10 @@ class GeoPriorForecaster(QMainWindow):
         if not need_stage1 and self._stage1_manifest_hint is None:
             self.status_updated.emit("Training cancelled before Stage-1.")
             return
-    
+        
+        # start / restart the run timer for this training flow
+        self._start_run_timer()
+        
         # Build overrides once from the current GUI config – this is what
         # Stage-1 and Training threads will use.
         # ( self._build_cfg_overrides_from_geo_cfg()
@@ -3216,9 +3394,12 @@ class GeoPriorForecaster(QMainWindow):
 
         eval_tuned = self.chk_eval_tuned.isChecked()
 
+        # start / restart timer for tuning flow
+        self._start_run_timer()
+        
         # 6) Create and start TuningThread
         th = TuningThread(
-            manifest_path=manifest_path,  # None -> auto-discover; else fixed
+            manifest_path=manifest_path,  
             cfg_overrides=self._cfg_overrides,
             evaluate_tuned=eval_tuned,
             parent=self,
@@ -3524,7 +3705,10 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.status_updated.emit("Stage-3: running inference.")
         self._update_progress(0.0)
-
+        
+        # start / restart timer for inference flow
+        self._start_run_timer()
+        
         th = InferenceThread(
             model_path=model_path,
             dataset=dataset_key,
@@ -3762,6 +3946,8 @@ class GeoPriorForecaster(QMainWindow):
         )
         self._update_progress(0.0)
 
+        self._start_run_timer() 
+        
         th = XferMatrixThread(
             city_a=city_a,
             city_b=city_b,
@@ -3866,6 +4052,8 @@ class GeoPriorForecaster(QMainWindow):
         
         self._active_job_kind = None
         self._update_global_running_state()
+        self._stop_run_timer()
+
 
     @pyqtSlot()
     def _on_xfer_view_clicked(self) -> None:
@@ -4028,12 +4216,16 @@ class GeoPriorForecaster(QMainWindow):
 
         # prevent repeated clicks; will be re-enabled on next run
         self.btn_stop.setEnabled(False)
+        self._stop_run_timer()
+
 
     # ------------------------------------------------------------------
     # Thread orchestration
     # ------------------------------------------------------------------
     def _start_stage1(self, city: str) -> None:
         results_root = getattr (self, 'results_root', self.gui_runs_root )
+        self._start_run_timer()
+        
         th = Stage1Thread(
             city=city,
             cfg_overrides=self._cfg_overrides,
@@ -4227,19 +4419,25 @@ class GeoPriorForecaster(QMainWindow):
         """
         # Base overrides computed earlier from the Train tab
         base_overrides = getattr(self, "_cfg_overrides", {}) or {}
-
+        
         # Optional device overrides (GPU/CPU selection, etc.)
         device_overrides = getattr(
             self, "_device_cfg_overrides", {}
         ) or {}
-
-        # IMPORTANT: build a merged dict; update() returns None
+        # build a merged dict; update() returns None
         cfg_overrides = {**base_overrides, **device_overrides}
+
+        # 1) Sync widgets → GeoPriorConfig
+        self._sync_config_from_ui()
+    
+        # 2) Build fresh overrides from GeoPriorConfig
+        cfg_overrides = self.geo_cfg.to_cfg_overrides()
 
         th = TrainingThread(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
             evaluate_training=self.geo_cfg.evaluate_training,
+            results_root=self.geo_cfg.results_root,
             parent=self,
         )
         self.train_thread = th
@@ -4257,7 +4455,15 @@ class GeoPriorForecaster(QMainWindow):
     @pyqtSlot(dict)
     def _on_training_finished(self, result: Dict[str, Any]) -> None:
         self.train_thread = None
-
+        CITY_NAME= self.geo_cfg.get(
+            'city', 
+            self.geo_cfg.get(
+                "CITY_NAME", self.geo_cfg.get(
+                    "TRAIN_CSV_PATH", 'Geoprior_city')
+                )
+        )
+        
+        
         if not result:
             self.log_updated.emit(
                 "Training finished with an empty result dict."
@@ -4291,6 +4497,7 @@ class GeoPriorForecaster(QMainWindow):
                     self,
                     result,
                     title="Training evaluation metrics",
+                    city = CITY_NAME
                 )
             except Exception as e:
                 self._append_log(
@@ -4304,8 +4511,10 @@ class GeoPriorForecaster(QMainWindow):
         self._update_progress(1.0)
         
         self.train_btn.setEnabled(True)
+        self.btn_train_options.setEnabled(True)
         self._active_job_kind = None
         self._update_global_running_state()
+        self._stop_run_timer()
 
         
     @pyqtSlot(str)
@@ -4401,6 +4610,7 @@ class GeoPriorForecaster(QMainWindow):
         
         self._active_job_kind = None
         self._update_global_running_state()
+        self._stop_run_timer()
         
     @pyqtSlot(dict)
     def _on_inference_finished(self, result: Dict[str, Any]) -> None:
@@ -4515,16 +4725,6 @@ class GeoPriorForecaster(QMainWindow):
         # Hand back to the base class for normal closing
         super().closeEvent(event)
 
-    def _icon(self, name: str) -> QIcon:
-        """Load a named icon from our app's icon bundle."""
-        # Then replace self._std_icon(...) calls
-        # with self._icon("train.svg"), etc.
-        base = Path(__file__).resolve().parent / "icons"
-        path = base / name
-        if path.exists():
-            return QIcon(str(path))
-        # Fallback to a neutral standard icon or empty
-        return QIcon()
 
 # ----------------------------------------------------------------------
 # Entry point helper

@@ -154,6 +154,7 @@ def extract_physical_parameters(
     return_fields: bool = False,           
     field_stat: str = "mean",              
     verbose: int = 0,
+    log_fn =None, 
 ) -> Dict[str, float]:
     r"""Extracts physical parameters from a PINN model.
 
@@ -228,9 +229,11 @@ def extract_physical_parameters(
     {'Hydraulic_Conductivity_K': 8.5e-05, 'Specific_Storage_Ss': 6e-06, ...}
     """
     params = {}
+    log = log_fn if log_fn is not None else print 
+    
     
     if verbose:
-        print("Extracting physical parameters from the trained model...")
+        log("Extracting physical parameters from the trained model...")
 
     def _tofloat(x):
         try:
@@ -374,7 +377,7 @@ def extract_physical_parameters(
                 print("\nSuccessfully exported parameters to:"
                       f" {os.path.abspath(save_path)}")
         except IOError as e:
-            print(f"\nError: Could not write to file at {save_path}."
+            log(f"\nError: Could not write to file at {save_path}."
                   " Please check permissions.")
             raise e
 

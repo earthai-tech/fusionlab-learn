@@ -2269,6 +2269,8 @@ class GeoPriorSubsNet(BaseAttentive):
         metadata=None,
         random_subsample=None,
         float_dtype=np.float32,
+        log_fn =None, 
+        **tqdm_kws
     ):
         r"""
         Gather a physics payload from a dataset and optionally persist it.
@@ -2358,6 +2360,8 @@ class GeoPriorSubsNet(BaseAttentive):
             dataset,
             max_batches=max_batches,
             float_dtype=float_dtype,
+            log_fn=log_fn, 
+            **tqdm_kws
         )
     
         if random_subsample is not None:
@@ -2373,6 +2377,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 save_path,
                 format=format,
                 overwrite=overwrite,
+                log_fn=log_fn,
             )
     
         return payload

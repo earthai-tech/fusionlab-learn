@@ -86,6 +86,8 @@ def gather_physics_payload(
     dataset: Iterable,
     max_batches: Optional[int] = None,
     float_dtype=np.float32,
+    log_fn =None, 
+    **tqdm_kws
 ) -> Dict[str, np.ndarray]:
     """
     Iterate a dataset and collect flattened arrays for physics plots.
@@ -124,7 +126,9 @@ def gather_physics_payload(
         total=total,
         desc="Gathering physics payload",
         ascii=True,
-        leave=False
+        leave=False, 
+        log_fn= log_fn, 
+        **tqdm_kws
     )
 
     for batch in iterable:
@@ -179,6 +183,7 @@ def save_physics_payload(
     path: str | None =None,
     format: str = "npz",
     overwrite: bool = False,
+    log_fn =None, 
 ) -> str:
     """
     Save payload + sidecar metadata to disk.
@@ -202,6 +207,8 @@ def save_physics_payload(
     str
         The resolved data file path that was written.
     """
+    log = log_fn if log_fn is not None else print 
+    
     if path is None: 
         path = os.gcwd() 
         
@@ -251,7 +258,7 @@ def save_physics_payload(
     with open(path + ".meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
     
-    print(f"Physics payload sucessfully saved to {path}")
+    log(f"Physics payload sucessfully saved to {path}")
     return path
 
 

@@ -407,6 +407,7 @@ def run_training(
 
     BASE_OUTPUT_DIR = M["paths"]["run_dir"]
     STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    
     RUN_OUTPUT_PATH = os.path.join(BASE_OUTPUT_DIR, f"train_{STAMP}")
     ensure_directory_exists(RUN_OUTPUT_PATH)
 
@@ -1032,7 +1033,8 @@ def run_training(
     # ================================================================
     log("\nFitting interval calibrator (target 80%) on validation set...")
     cal80 = fit_interval_calibrator_on_val(
-        subs_model_inst, val_dataset, target=0.80
+        subs_model_inst, val_dataset, target=0.80, 
+        log_fn= log, 
     )
     np.save(
         os.path.join(RUN_OUTPUT_PATH, "interval_factors_80.npy"),

@@ -271,6 +271,15 @@ class GeoPriorConfig:
     lambda_prior: float = 0.10
     lambda_smooth: float = 0.01
     lambda_mv: float = 0.01
+    mv_lr_mult: float = 1.0
+    kappa_lr_mult: float = 5.0
+
+    geoprior_init_mv: float = 1e-7
+    geoprior_init_kappa: float = 1.0
+    geoprior_gamma_w: float = 9810.0
+    geoprior_h_ref: float = 0.0
+    geoprior_kappa_mode: str = "kb"   # {"bar", "kb"}
+    geoprior_hd_factor: float = 0.6
 
    # --- probabilistic outputs & weights ---
     quantiles: List[float] = field(default_factory=lambda: [0.1, 0.5, 0.9])
@@ -426,6 +435,27 @@ class GeoPriorConfig:
             lambda_smooth=iget("LAMBDA_SMOOTH", cls.lambda_smooth),
             lambda_mv=iget("LAMBDA_MV", cls.lambda_mv),
             build_future_npz=iget("BUILD_FUTURE_NPZ", cls.build_future_npz),
+            
+            # Scalar physics parameters --------------------------------
+            mv_lr_mult=iget("MV_LR_MULT", cls.mv_lr_mult),
+            kappa_lr_mult=iget("KAPPA_LR_MULT", cls.kappa_lr_mult),
+            geoprior_init_mv=iget(
+                "GEOPRIOR_INIT_MV", cls.geoprior_init_mv
+            ),
+            geoprior_init_kappa=iget(
+                "GEOPRIOR_INIT_KAPPA", cls.geoprior_init_kappa
+            ),
+            geoprior_gamma_w=iget(
+                "GEOPRIOR_GAMMA_W", cls.geoprior_gamma_w
+            ),
+            geoprior_h_ref=iget("GEOPRIOR_H_REF", cls.geoprior_h_ref),
+            geoprior_kappa_mode=iget(
+                "GEOPRIOR_KAPPA_MODE", cls.geoprior_kappa_mode
+            ),
+            geoprior_hd_factor=iget(
+                "GEOPRIOR_HD_FACTOR", cls.geoprior_hd_factor
+            ),
+
             # Device configuration -------------------------------------------
             tf_device_mode=iget("TF_DEVICE_MODE", cls.tf_device_mode),
             tf_gpu_allow_growth=iget(
@@ -571,6 +601,16 @@ class GeoPriorConfig:
         maybe("LAMBDA_SMOOTH", self.lambda_smooth)
         maybe("LAMBDA_MV", self.lambda_mv)
 
+        # Scalar physics parameters
+        maybe("MV_LR_MULT", self.mv_lr_mult)
+        maybe("KAPPA_LR_MULT", self.kappa_lr_mult)
+        maybe("GEOPRIOR_INIT_MV", self.geoprior_init_mv)
+        maybe("GEOPRIOR_INIT_KAPPA", self.geoprior_init_kappa)
+        maybe("GEOPRIOR_GAMMA_W", self.geoprior_gamma_w)
+        maybe("GEOPRIOR_H_REF", self.geoprior_h_ref)
+        maybe("GEOPRIOR_KAPPA_MODE", self.geoprior_kappa_mode)
+        maybe("GEOPRIOR_HD_FACTOR", self.geoprior_hd_factor)
+        
         # Stage-1 extras
         maybe("BUILD_FUTURE_NPZ", self.build_future_npz)
 
@@ -820,6 +860,40 @@ class GeoPriorConfig:
                 f"min=({self.ui_min_width}, {self.ui_min_height}))."
             )
 
+        # Scalar physics checks
+        if self.mv_lr_mult < 0.0 or self.kappa_lr_mult < 0.0:
+            raise ValueError(
+                "MV_LR_MULT and KAPPA_LR_MULT must be non-negative."
+            )
+
+        if self.geoprior_init_mv <= 0.0:
+            raise ValueError(
+                f"GEOPRIOR_INIT_MV must be > 0 (got {self.geoprior_init_mv})."
+            )
+
+        if self.geoprior_init_kappa <= 0.0:
+            raise ValueError(
+                "GEOPRIOR_INIT_KAPPA must be > 0 "
+                f"(got {self.geoprior_init_kappa})."
+            )
+
+        if self.geoprior_gamma_w <= 0.0:
+            raise ValueError(
+                f"GEOPRIOR_GAMMA_W must be > 0 (got {self.geoprior_gamma_w})."
+            )
+
+        if not (0.0 <= self.geoprior_hd_factor <= 1.0):
+            raise ValueError(
+                "GEOPRIOR_HD_FACTOR must be in [0, 1], "
+                f"got {self.geoprior_hd_factor}."
+            )
+
+        if self.geoprior_kappa_mode not in {"bar", "kb"}:
+            raise ValueError(
+                "GEOPRIOR_KAPPA_MODE must be 'bar' or 'kb', "
+                f"got {self.geoprior_kappa_mode!r}."
+            )
+
         # --- Tuner search space sanity --------------------------------
         if not isinstance(self.tuner_search_space, dict):
             raise ValueError("tuner_search_space must be a dict.")
@@ -865,6 +939,14 @@ class GeoPriorConfig:
             "lambda_prior": self.lambda_prior,
             "lambda_smooth": self.lambda_smooth,
             "lambda_mv": self.lambda_mv,
+            "mv_lr_mult": self.mv_lr_mult,
+            "kappa_lr_mult": self.kappa_lr_mult,
+            "geoprior_init_mv": self.geoprior_init_mv,
+            "geoprior_init_kappa": self.geoprior_init_kappa,
+            "geoprior_gamma_w": self.geoprior_gamma_w,
+            "geoprior_h_ref": self.geoprior_h_ref,
+            "geoprior_kappa_mode": self.geoprior_kappa_mode,
+            "geoprior_hd_factor": self.geoprior_hd_factor,
             "build_future_npz": self.build_future_npz,
             # Device configuration
             "tf_device_mode": self.tf_device_mode,

@@ -125,6 +125,7 @@ def plot_history_in(
     show_grid: bool = True,
     grid_props: Optional[Dict] = None,
     yscale_settings: Optional[Dict[str, str]] = None,
+    log_fn =None,  
     **plot_kwargs
 ) -> None:
     r"""Visualizes the training and validation history of a Keras model.
@@ -307,7 +308,8 @@ def plot_history_in(
     ...    ),
     ...)
     """
-    
+    log = log_fn if log_fn is not None else print 
+
     if isinstance(history, History):
         history_dict = history.history
     elif isinstance(history, dict):
@@ -483,7 +485,7 @@ def plot_history_in(
             if save_dir and not os.path.exists(save_dir):
                 os.makedirs(save_dir)
             plt.savefig(savefig, dpi=300)
-            print(f"Figure saved to {savefig}")
+            log(f"Figure saved to {savefig}")
         except Exception as e:
             warnings.warn(f"Failed to save figure: {e}")
             

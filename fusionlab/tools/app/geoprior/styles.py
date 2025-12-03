@@ -22,6 +22,7 @@ FG_DARK = "#1e1e1e"
 
 PRIMARY_T75 = "rgba(46,49,145,0.75)"
 SECONDARY_T70 = "rgba(242,134,32,0.70)"
+SECONDARY_TBLUE = "#3399ff"
 
 # Inference-mode toggle
 INFERENCE_ON = PRIMARY

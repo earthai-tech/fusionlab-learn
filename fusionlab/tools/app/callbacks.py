@@ -254,11 +254,13 @@ class StopTrainingOnSignal(Callback):
         super().__init__()
         self.stop_check = stop_check
         self._log = logger or (lambda msg: print(msg, flush=True))
+        self.was_stopped = False
 
     def on_batch_end(self, batch, logs=None):
         if self.stop_check and self.stop_check():
             self._log("[Stop] stop_check() returned True – stopping training.")
             self.model.stop_training = True
+            self.was_stopped = True
 
     def _maybe_stop(self):
         if self.stop_check is not None and self.stop_check():

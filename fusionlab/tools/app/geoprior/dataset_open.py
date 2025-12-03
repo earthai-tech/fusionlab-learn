@@ -24,10 +24,12 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QDialog,
+    QApplication,
 )
 
 from ....core.io import read_data
 from .csv_dialog import CsvEditDialog
+from .pop_progress import PopProgressDialog  
 
 # Single filter including common formats handled by read_data
 DATASET_FILTER = (
@@ -37,12 +39,189 @@ DATASET_FILTER = (
 )
 
 
+def _load_dataset_with_progress(
+    parent: QWidget,
+    src_path: Path,
+) -> Optional[pd.DataFrame]:
+    """
+    Load a dataset using read_data with a nice popup progress dialog.
+
+    Returns a DataFrame or None if the user cancels.
+    """
+    dlg = PopProgressDialog(
+        parent,
+        title="Loading dataset",
+        text=f"Reading data from: {src_path.name}",
+        minimum=0,
+        maximum=100,
+        cancelable=True,
+    )
+    dlg.show()
+    QApplication.processEvents()
+
+    progress_cb = dlg.as_fraction_callback()
+
+    try:
+        df = read_data(
+            str(src_path),
+            sanitize=True,
+            logger=None,           # or pass a GUI logger if you want
+            progress_hook=progress_cb,
+        )
+    except Exception:
+        dlg.finish()
+        raise
+    else:
+        dlg.finish()
+
+    if dlg.was_canceled():
+        # Note: cancellation currently doesn't interrupt read_data,
+        # but this ensures the GUI treats the operation as aborted.
+        return None
+
+    return df
+
+def _run_with_busy_progress(
+    parent: QWidget,
+    title: str,
+    label: str,
+    func,
+    *args,
+    **kwargs,
+):
+    """
+    Run a blocking function while showing an *indeterminate*
+    progress dialog (busy mode).
+
+    Returns the function's result, or re-raises any exception.
+    """
+    dlg = PopProgressDialog(
+        parent,
+        title=title,
+        text=label,
+        minimum=0,
+        maximum=0,          # 0..0 = indeterminate style
+        cancelable=False,   # no cancel for "busy" helper
+    )
+    dlg.show()
+    QApplication.processEvents()
+
+    try:
+        result = func(*args, **kwargs)
+    finally:
+        dlg.finish()
+        QApplication.processEvents()
+
+    return result
+
+# def _run_with_busy_progress(
+#     parent: QWidget,
+#     title: str,
+#     label: str,
+#     func,
+#     *args,
+#     **kwargs,
+# ):
+#     """
+#     Run a blocking function while showing an indeterminate
+#     progress dialog (0..0).
+
+#     Returns the function's result, or re-raises any exception.
+#     """
+#     dlg = QProgressDialog(label, "", 0, 0, parent)
+#     dlg.setWindowTitle(title)
+#     dlg.setWindowModality(Qt.ApplicationModal)
+#     dlg.setCancelButton(None)       # no cancel button
+#     dlg.setMinimumDuration(0)
+#     dlg.setRange(0, 0)              # infinite/busy mode
+#     dlg.show()
+#     QApplication.processEvents()
+
+#     try:
+#         result = func(*args, **kwargs)
+#     finally:
+#         dlg.close()
+#         QApplication.processEvents()
+
+#     return result
+
+def _save_csv_with_progress(
+    parent: QWidget,
+    df: pd.DataFrame,
+    target_csv: Path,
+    *,
+    chunk_size: int = 50_000,
+) -> None:
+    """
+    Save a DataFrame to CSV in chunks, with a PopProgressDialog
+    showing real row-level progress.
+
+    Raises RuntimeError if the user cancels, or any I/O exception.
+    """
+    total_rows = len(df)
+    if total_rows == 0:
+        # Trivial case
+        df.to_csv(target_csv, index=False)
+        return
+
+    dlg = PopProgressDialog(
+        parent,
+        title="Saving dataset",
+        text="Saving edited dataset to CSV…",
+        minimum=0,
+        maximum=total_rows,
+        cancelable=True,
+    )
+    dlg.show()
+    QApplication.processEvents()
+
+    # Ensure we don't leave a half-written file if cancelled/error
+    if target_csv.exists():
+        target_csv.unlink()
+
+    written = 0
+    first_chunk = True
+
+    try:
+        with target_csv.open("w", encoding="utf-8", newline="") as f:
+            for start in range(0, total_rows, chunk_size):
+                if dlg.was_canceled():
+                    raise RuntimeError("Save cancelled by user.")
+
+                end = min(start + chunk_size, total_rows)
+                chunk = df.iloc[start:end]
+
+                # Write header only once
+                chunk.to_csv(
+                    f,
+                    index=False,
+                    header=first_chunk,
+                )
+                first_chunk = False
+
+                written = end
+                dlg.set_value(
+                    written,
+                    message=(
+                        f"Saving edited dataset… "
+                        f"{written:,} / {total_rows:,} rows"
+                    ),
+                )
+    except Exception:
+        # If something goes wrong, remove partial file
+        if target_csv.exists():
+            target_csv.unlink()
+        raise
+    finally:
+        dlg.finish()
+        QApplication.processEvents()
+
+
 def _infer_city_name(path: Path) -> str:
     stem = path.stem.strip()
     if not stem:
         return "geoprior_city"
     return stem.replace(" ", "_")
-
 
 def open_dataset_with_editor(
     parent: QWidget,
@@ -63,6 +242,7 @@ def open_dataset_with_editor(
     city_name : str or None
         Inferred city/dataset name from the original filename.
     """
+
     # 1) Choose a file
     path_str, _ = QFileDialog.getOpenFileName(
         parent,
@@ -75,15 +255,19 @@ def open_dataset_with_editor(
 
     src_path = Path(path_str)
 
-    # 2) Load with fusionlab.core.io.read_data
+    # 2) Load with fusionlab.core.io.read_data, with progress popup.
     try:
-        df = read_data(str(src_path), sanitize=True)
+        df = _load_dataset_with_progress(parent, src_path)
     except Exception as exc:
         QMessageBox.critical(
             parent,
             "Dataset error",
             f"Could not read dataset:\n{src_path}\n\n{exc}",
         )
+        return None, None, None
+
+    if df is None:
+        # User cancelled during load
         return None, None, None
 
     if df.empty:
@@ -123,7 +307,15 @@ def open_dataset_with_editor(
             i += 1
 
     try:
-        edited.to_csv(target_csv, index=False)
+        _save_csv_with_progress(parent, edited, target_csv)
+    except RuntimeError as exc:
+        # User cancelled save
+        QMessageBox.information(
+            parent,
+            "Save cancelled",
+            str(exc),
+        )
+        return None, None, None
     except Exception as exc:
         QMessageBox.critical(
             parent,

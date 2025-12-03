@@ -182,7 +182,6 @@ def show_about_dialog(parent: QWidget | None = None) -> None:
 # Dialog implementation
 # ---------------------------------------------------------------------------
 
-
 class AboutDialog(QDialog):
     """
     Simple two-tab dialog: "About" and "Quick help".

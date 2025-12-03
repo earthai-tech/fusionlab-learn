@@ -93,7 +93,7 @@ def auto_resize_window(
     max_ratio :
         Maximum fraction of the available screen area to occupy.
     """
-    base_size = base_size or (980, 660)
+    base_size = base_size or (980, 660) #980
     margin = margin or (100, 100)
     min_size = min_size or (800, 600)
 
@@ -114,7 +114,6 @@ def auto_resize_window(
 
     window.resize(target_w, target_h)
     window.setMinimumSize(min_size[0], min_size[1])
-
 
 # ----------------------------------------------------------------------
 # Crash / exception handling

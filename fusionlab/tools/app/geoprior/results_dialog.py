@@ -115,12 +115,13 @@ class GeoPriorResultsDialog(QDialog):
         parent: Optional[QWidget] = None,
         *,
         title: Optional[str] = None,
+        city: Optional[str]=None, 
     ) -> None:
         super().__init__(parent)
 
         self._json_path = os.path.abspath(json_path)
         self._data: Dict[str, Any] = self._load_json(self._json_path)
-
+        self._city: Optional[str] = city  
         self.setWindowTitle(title or "GeoPrior evaluation metrics")
         self.setModal(True)
         self.resize(720, 520)
@@ -178,7 +179,8 @@ class GeoPriorResultsDialog(QDialog):
     def _build_header_text(self) -> str:
         meta = self._data
         ts = meta.get("timestamp", "unknown time")
-        city = meta.get("city") or meta.get("dataset_name", "unknown city")
+        city = meta.get("city", self._city) or meta.get(
+            "dataset_name", "unknown city")
         horizon = meta.get("horizon")
         q = meta.get("quantiles")
         q_str = (
@@ -207,7 +209,8 @@ class GeoPriorResultsDialog(QDialog):
         )
         layout.addRow(
             "City / dataset:",
-            QLabel(str(meta.get("city") or meta.get("dataset_name", "n/a"))),
+            QLabel(str(meta.get("city", self._city) or meta.get(
+                "dataset_name", "n/a"))),
         )
         layout.addRow(
             "Horizon:",
