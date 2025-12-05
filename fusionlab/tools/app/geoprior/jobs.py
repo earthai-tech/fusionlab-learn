@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Literal
 
-from ..smart_stage1 import Stage1Summary, discover_stage1_runs
+from .config import Stage1Summary, discover_stage1_runs
 
 
 JobMode = Literal["reuse", "rebuild"]

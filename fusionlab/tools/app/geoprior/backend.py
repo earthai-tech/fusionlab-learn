@@ -23,12 +23,12 @@ from typing import (
     Sequence,
 )
 
-from .run_stage1 import run_stage1
-from .run_training import run_training
-from .run_tuning import run_tuning
-from .run_inference import run_inference
-from .run_xfer_matrix import run_xfer_matrix
-from .xfer_view import (
+from .runs.run_stage1 import run_stage1
+from .runs.run_training import run_training
+from .runs.run_tuning import run_tuning
+from .runs.run_inference import run_inference
+from .runs.run_xfer_matrix import run_xfer_matrix
+from .services.xfer_view import (
     latest_xfer_csv,
     latest_xfer_json,
     make_transferability_panel_from_csv,
