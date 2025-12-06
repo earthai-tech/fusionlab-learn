@@ -45,7 +45,7 @@ class ArchitectureConfigDialog(QDialog):
     ) -> None:
         super().__init__(parent)
 
-        self.setWindowTitle("Architecture config")
+        self.setWindowTitle("Architecture configuration")
 
         cfg: Dict[str, Any] = dict(base_cfg or {})
         if current_overrides:

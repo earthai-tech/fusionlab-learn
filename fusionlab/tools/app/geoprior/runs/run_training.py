@@ -104,8 +104,6 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
     
 
-GUI_CONFIG_DIR = os.path.dirname(__file__)
-
 # ---------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------
@@ -298,7 +296,9 @@ def run_training(
     if base_cfg is not None:
         cfg_global = dict(base_cfg)
     else:
-        cfg_global = load_nat_config(root=GUI_CONFIG_DIR)
+        GUI_CONFIG_DIR = os.path.dirname(__file__)
+        config_root = os.path.join( os.path.dirname (GUI_CONFIG_DIR), 'config')
+        cfg_global = load_nat_config(root=config_root)
 
     cfg_manifest = M.get("config", {}) or {}
 

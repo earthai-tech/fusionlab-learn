@@ -11,7 +11,7 @@ from .scalars_loss_dialog import ScalarsLossDialog
 from .model_params_dialog import ModelParamsDialog
 from .train_dialogs import TrainOptionsDialog, QuickTrainDialog
 from .tune_dialogs import TuneOptionsDialog, QuickTuneDialog,  TuneJobSpec
-
+from .dataset_choice_dialog import choose_dataset_for_city
 
 __all__= [ 
     
@@ -33,5 +33,6 @@ __all__= [
     'QuickTrainDialog', 
     'TuneOptionsDialog', 
     'QuickTuneDialog',  
-    'TuneJobSpec'
+    'TuneJobSpec', 
+    'choose_dataset_for_city'
     ]

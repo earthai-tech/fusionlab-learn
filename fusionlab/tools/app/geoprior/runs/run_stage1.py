@@ -16,6 +16,7 @@ import json
 import shutil
 import joblib
 import warnings
+from pathlib import Path  
 import datetime as dt
 from typing import Dict, Tuple, Optional, Callable, Any
 
@@ -45,8 +46,6 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
     
-GUI_CONFIG_DIR = os.path.dirname(__file__)
-
 
 def _save_npz(path: str, arrays: Dict[str, np.ndarray]) -> str:
     """Save dict of numpy arrays to compressed NPZ."""
@@ -169,6 +168,227 @@ def _apply_censoring(
         }
     return df, report
 
+def _find_latest_gui_dataset(
+    city_name: str,
+    *,
+    results_root: Optional[os.PathLike | str],
+    logger: Optional[Callable[[str], None]] = None,
+) -> Optional[str]:
+    """
+    Try to locate the most recent CSV dataset saved by the GeoPrior GUI
+    for a given city.
+
+    Search order
+    ------------
+    1. ``results_root / "_datasets"``  (if ``results_root`` is given)
+    2. ``Path.home() / ".fusionlab_runs" / "_datasets"``
+
+    Files considered
+    ----------------
+    - ``{city_name}.csv``
+    - ``{city_name}_<int>.csv``
+
+    Returns
+    -------
+    str or None
+        Absolute path to the latest CSV, or ``None`` if no match is found.
+    """
+    log = logger or (lambda msg: None)
+
+    city_slug = (city_name or "").strip()
+    if not city_slug:
+        city_slug = "geoprior_city"
+
+    search_roots: list[Path] = []
+    if results_root is not None:
+        search_roots.append(Path(results_root))
+
+    user_root = Path.home() / ".fusionlab_runs"
+    if user_root not in search_roots:
+        search_roots.append(user_root)
+
+    candidates: list[Path] = []
+
+    for root in search_roots:
+        ds_dir = root / "_datasets"
+        if not ds_dir.is_dir():
+            continue
+
+        for p in ds_dir.glob("*.csv"):
+            stem = p.stem
+            if stem == city_slug or stem.startswith(f"{city_slug}_"):
+                candidates.append(p)
+
+    if not candidates:
+        log(
+            f"[Stage-1] No GUI datasets found for city '{city_slug}' "
+            "under any _datasets directory in: "
+            + ", ".join(str(r) for r in search_roots)
+        )
+        return None
+
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    log(
+        "[Stage-1] Auto-detected GUI dataset: "
+        f"{latest} (latest by mtime among {len(candidates)} candidate(s))"
+    )
+    return str(latest.resolve())
+
+def _distinct_preserve_order(names: list[str]) -> list[str]:
+    """Return a list with duplicates removed, preserving order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for n in names or []:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _filter_present_features(
+    requested: list[str],
+    df: pd.DataFrame,
+    *,
+    what: str,
+    log: Callable[[str], None],
+    banned: Optional[set[str]] = None,
+) -> list[str]:
+    """
+    Keep only requested features that exist in df.columns,
+    log missing / banned ones.
+    """
+    requested = _distinct_preserve_order(requested or [])
+    if not requested:
+        return []
+
+    cols = set(df.columns)
+    banned = banned or set()
+
+    present: list[str] = []
+    missing: list[str] = []
+    skipped_banned: list[str] = []
+
+    for name in requested:
+        if name in banned:
+            skipped_banned.append(name)
+            continue
+        if name in cols:
+            present.append(name)
+        else:
+            missing.append(name)
+
+    if missing:
+        log(
+            f"  [Info] {what} features not found in dataset and will be "
+            f"skipped: {missing}"
+        )
+    if skipped_banned:
+        log(
+            f"  [Info] {what} features include target/H-field columns that "
+            f"cannot be used as inputs and will be skipped: {skipped_banned}"
+        )
+
+    return present
+
+
+def _resolve_feature_sets(
+    df_scaled: pd.DataFrame,
+    *,
+    encoded_names: list[str],
+    opt_num_cols: list[str],
+    static_cfg: list[str],
+    dynamic_cfg: list[str],
+    future_cfg: list[str],
+    gwl_col: str,
+    subs_col: str,
+    h_field_col: str,
+    log: Callable[[str], None],
+) -> tuple[list[str], list[str], list[str]]:
+    """
+    Resolve static / dynamic / future feature sets with user overrides.
+
+    Rules
+    -----
+    - If STATIC_DRIVER_FEATURES non-empty:
+        * Use intersection with df_scaled.columns.
+        * Log missing ones.
+        * If nothing valid → fall back to encoded_names.
+    - If DYNAMIC_DRIVER_FEATURES non-empty:
+        * Use intersection with df_scaled.columns, excluding subs/h_field.
+        * Log missing / banned ones.
+        * If nothing valid → fall back to auto dynamic set.
+    - FUTURE_DRIVER_FEATURES:
+        * Always treated as the declared list (from config or overrides).
+        * Use intersection with df_scaled.columns, log missing.
+        * If empty → it's allowed (no future drivers).
+    """
+    df_cols = list(df_scaled.columns)
+
+    # --- auto dynamic baseline (current behaviour) --------------------
+    banned_dynamic = {subs_col, h_field_col}
+    dynamic_base = [gwl_col]
+    dynamic_extra = [
+        c for c in opt_num_cols if c not in banned_dynamic
+    ]
+    dynamic_auto = [
+        c for c in dynamic_base + dynamic_extra if c in df_cols
+    ]
+
+    # --- static -------------------------------------------------------
+    static_cfg = list(static_cfg or [])
+    if static_cfg:
+        static_features = _filter_present_features(
+            static_cfg,
+            df_scaled,
+            what="Static",
+            log=log,
+        )
+        if not static_features:
+            log(
+                "  [Info] No valid static features from "
+                "STATIC_DRIVER_FEATURES; falling back to "
+                f"auto static set (encoded categorical features): "
+                f"{encoded_names}"
+            )
+            static_features = encoded_names[:]
+    else:
+        static_features = encoded_names[:]
+
+    # --- dynamic ------------------------------------------------------
+    dynamic_cfg = list(dynamic_cfg or [])
+    if dynamic_cfg:
+        dynamic_features = _filter_present_features(
+            dynamic_cfg,
+            df_scaled,
+            what="Dynamic",
+            log=log,
+            banned=banned_dynamic,
+        )
+        if not dynamic_features:
+            log(
+                "  [Info] No valid dynamic features from "
+                "DYNAMIC_DRIVER_FEATURES; falling back to "
+                f"auto dynamic set: {dynamic_auto}"
+            )
+            dynamic_features = dynamic_auto
+    else:
+        dynamic_features = dynamic_auto
+
+    # --- future -------------------------------------------------------
+    future_cfg = list(future_cfg or [])
+    future_features = _filter_present_features(
+        future_cfg,
+        df_scaled,
+        what="Future driver",
+        log=log,
+    )
+    # If empty, that's OK (no future drivers).
+
+    return (
+        _distinct_preserve_order(static_features),
+        _distinct_preserve_order(dynamic_features),
+        _distinct_preserve_order(future_features),
+    )
 
 def _any_exists(paths: list[str]) -> bool:
     return any(os.path.exists(p) for p in paths)
@@ -262,7 +482,9 @@ def run_stage1(
         # Shallow copy so we don't mutate the caller's dict.
         cfg = dict(base_cfg)
     else:
-        cfg = load_nat_config(root=GUI_CONFIG_DIR)
+        GUI_CONFIG_DIR = os.path.dirname(__file__)
+        config_root = os.path.join( os.path.dirname (GUI_CONFIG_DIR), 'config')
+        cfg = load_nat_config(root=config_root)
 
     # 2) Apply flat overrides (from GeoPriorConfig.to_cfg_overrides, plus
     #    CITY_NAME / DATA_DIR / BIG_FN / BASE_OUTPUT_DIR, etc.).
@@ -286,8 +508,8 @@ def run_stage1(
     CITY_NAME   = cfg.get("CITY_NAME", '')
     MODEL_NAME  = cfg.get("MODEL_NAME", 'GeoPriorSubsNet')
     DATA_DIR    = cfg.get("DATA_DIR", base_output_dir)
-    BIG_FN      = cfg["BIG_FN"]
-    SMALL_FN    = cfg["SMALL_FN"]
+    BIG_FN      = cfg.get("BIG_FN", "")
+    SMALL_FN    = cfg.get("SMALL_FN", "")
 
     TRAIN_END_YEAR         = cfg["TRAIN_END_YEAR"]
     FORECAST_START_YEAR    = cfg["FORECAST_START_YEAR"]
@@ -303,10 +525,28 @@ def run_stage1(
     GWL_COL          = cfg["GWL_COL"]
     H_FIELD_COL_NAME = cfg["H_FIELD_COL_NAME"]
 
-    OPTIONAL_NUMERIC_FEATURES     = cfg["OPTIONAL_NUMERIC_FEATURES"]
-    OPTIONAL_CATEGORICAL_FEATURES = cfg["OPTIONAL_CATEGORICAL_FEATURES"]
+    OPTIONAL_NUMERIC_FEATURES = (
+        cfg.get("OPTIONAL_NUMERIC_FEATURES_REGISTRY")
+        or cfg.get("OPTIONAL_NUMERIC_FEATURES")
+        or []
+    )
+    OPTIONAL_CATEGORICAL_FEATURES = (
+        cfg.get("OPTIONAL_CATEGORICAL_FEATURES_REGISTRY")
+        or cfg.get("OPTIONAL_CATEGORICAL_FEATURES")
+        or []
+    )
     ALREADY_NORMALIZED_FEATURES   = cfg["ALREADY_NORMALIZED_FEATURES"]
-    FUTURE_DRIVER_FEATURES        = cfg["FUTURE_DRIVER_FEATURES"]
+    FUTURE_DRIVER_FEATURES        = list(
+        cfg.get("FUTURE_DRIVER_FEATURES", []) or []
+    )
+
+    # NEW: optional user-defined feature lists (from GeoPriorConfig)
+    STATIC_DRIVER_FEATURES = list(
+        cfg.get("STATIC_DRIVER_FEATURES", []) or []
+    )
+    DYNAMIC_DRIVER_FEATURES = list(
+        cfg.get("DYNAMIC_DRIVER_FEATURES", []) or []
+    )
 
     _censor_cfg = cfg.get("censoring", {}) or {}
     CENSORING_SPECS = _censor_cfg.get("specs", [])
@@ -319,6 +559,24 @@ def run_stage1(
 
     BASE_OUTPUT_DIR = base_output_dir
     ensure_directory_exists(BASE_OUTPUT_DIR)
+
+     # auto-detect a GUI dataset under _datasets/, if any
+    auto_dataset = _find_latest_gui_dataset(
+        CITY_NAME,
+        results_root=BASE_OUTPUT_DIR,
+        logger=log,
+    )
+    if auto_dataset is not None:
+        # Keep config consistent with what we really use
+        DATA_DIR = os.path.dirname(auto_dataset)
+        BIG_FN = os.path.basename(auto_dataset)
+        cfg["DATA_DIR"] = DATA_DIR
+        cfg["BIG_FN"] = BIG_FN
+        log(
+            "[Stage-1] Overriding DATA_DIR/BIG_FN from GUI dataset: "
+            f"DATA_DIR={DATA_DIR}, BIG_FN={BIG_FN}"
+        )
+
 
     RUN_OUTPUT_PATH = os.path.join(
         BASE_OUTPUT_DIR, f"{CITY_NAME}_{MODEL_NAME}_stage1"
@@ -353,7 +611,6 @@ def run_stage1(
             "MODEL_NAME": MODEL_NAME,
             "DATA_DIR": DATA_DIR,
             "BIG_FN": BIG_FN,
-            "SMALL_FN": SMALL_FN,
 
         }),
         ("Time windows", {
@@ -377,6 +634,9 @@ def run_stage1(
                 OPTIONAL_CATEGORICAL_FEATURES,
             "ALREADY_NORMALIZED_FEATURES": ALREADY_NORMALIZED_FEATURES,
             "FUTURE_DRIVER_FEATURES": FUTURE_DRIVER_FEATURES,
+            "STATIC_DRIVER_FEATURES": STATIC_DRIVER_FEATURES, 
+            "DYNAMIC_DRIVER_FEATURES": DYNAMIC_DRIVER_FEATURES,
+            
         }),
         ("Censoring", {
             "CENSORING_SPECS": CENSORING_SPECS,
@@ -587,18 +847,33 @@ def run_stage1(
     # ===================== STEP 4: FEATURE SETS =====================
     log(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
 
-    static_features = encoded_names[:]
-    dynamic_base = [GWL_COL]
-    dynamic_extra = [
-        c for c in opt_num_cols if c not in {SUBSIDENCE_COL, H_FIELD_COL_NAME}
-    ]
-    dynamic_features = [
-        c for c in dynamic_base + dynamic_extra if c in df_scaled.columns
-    ]
-    future_features = [
-        c for c in FUTURE_DRIVER_FEATURES if c in df_scaled.columns
-    ]
-
+    # static_features = encoded_names[:]
+    # dynamic_base = [GWL_COL]
+    # dynamic_extra = [
+    #     c for c in opt_num_cols if c not in {SUBSIDENCE_COL, H_FIELD_COL_NAME}
+    # ]
+    # dynamic_features = [
+    #     c for c in dynamic_base + dynamic_extra if c in df_scaled.columns
+    # ]
+    # future_features = [
+    #     c for c in FUTURE_DRIVER_FEATURES if c in df_scaled.columns
+    # ]
+    
+    # First resolve base static / dynamic / future sets
+    
+    static_features, dynamic_features, future_features = _resolve_feature_sets(
+        df_scaled=df_scaled,
+        encoded_names=encoded_names,
+        opt_num_cols=opt_num_cols,
+        static_cfg=STATIC_DRIVER_FEATURES,
+        dynamic_cfg=DYNAMIC_DRIVER_FEATURES,
+        future_cfg=FUTURE_DRIVER_FEATURES,
+        gwl_col=GWL_COL,
+        subs_col=SUBSIDENCE_COL,
+        h_field_col=H_FIELD_COL_NAME,
+        log=log,
+    )
+    # Then decide whether to use effective H-field instead of raw
     H_FIELD_COL = H_FIELD_COL_NAME
     for sp in CENSORING_SPECS or []:
         if sp["col"] == H_FIELD_COL_NAME:
@@ -609,10 +884,16 @@ def run_stage1(
 
 
     GROUP_ID_COLS = [LON_COL, LAT_COL]
+    
+    # Finally, add censor flags as dynamic if requested
     for sp in CENSORING_SPECS or []:
         fflag = sp["col"] + sp.get("flag_suffix", "_censored")
-        if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and fflag in df_scaled.columns:
-            dynamic_features = dynamic_features + [fflag]
+        if (
+            INCLUDE_CENSOR_FLAGS_AS_DYNAMIC
+            and fflag in df_scaled.columns
+            and fflag not in dynamic_features
+        ):
+            dynamic_features.append(fflag)
 
     log(f"  Static : {static_features}")
     log(f"  Dynamic: {dynamic_features}")
@@ -851,6 +1132,8 @@ def run_stage1(
         "optional_categorical_declared": OPTIONAL_CATEGORICAL_FEATURES,
         "already_normalized": ALREADY_NORMALIZED_FEATURES,
         "future_drivers_declared": FUTURE_DRIVER_FEATURES,
+        "static_drivers_declared": STATIC_DRIVER_FEATURES,
+        "dynamic_drivers_declared": DYNAMIC_DRIVER_FEATURES,
         "resolved_optional_numeric": opt_num_cols,
         "resolved_optional_categorical": opt_cat_cols,
     }

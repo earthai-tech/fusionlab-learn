@@ -263,6 +263,13 @@ class GeoPriorConfig:
     already_normalized_features: List[str] = field(
         default_factory=lambda: ["urban_load_global"]
     )
+    dynamic_driver_features: List[str] = field(
+        default_factory=lambda: ['GWL_depth_bgs_z']
+    )
+    static_driver_features: List[str] = field(
+        default_factory=lambda: ['lithology']
+    )
+    
     future_driver_features: List[str] = field(
         default_factory=lambda: ["rainfall_mm"]
     )
@@ -522,6 +529,15 @@ class GeoPriorConfig:
             "FUTURE_DRIVER_FEATURES", 
             obj.future_driver_features
         )
+        obj.static_driver_features = base.get(
+            "STATIC_DRIVER_FEATURES", 
+            obj.static_driver_features
+        )
+        obj.dynamic_driver_features= base.get(
+            "DYNAMIC_DRIVER_FEATURES", 
+            obj.dynamic_driver_features
+        )
+        
         obj.censoring_specs = base.get(
             "CENSORING_SPECS",
             obj.censoring_specs
@@ -654,6 +670,8 @@ class GeoPriorConfig:
         maybe("OPTIONAL_CATEGORICAL_FEATURES", self.optional_categorical_features)
         maybe("ALREADY_NORMALIZED_FEATURES", self.already_normalized_features)
         maybe("FUTURE_DRIVER_FEATURES", self.future_driver_features)
+        maybe("STATIC_DRIVER_FEATURES", self.static_driver_features)
+        maybe("DYNAMIC_DRIVER_FEATURES", self.dynamic_driver_features)
         maybe("CENSORING_SPECS", self.censoring_specs)
         maybe("INCLUDE_CENSOR_FLAGS_AS_DYNAMIC",
               self.include_censor_flags_as_dynamic)

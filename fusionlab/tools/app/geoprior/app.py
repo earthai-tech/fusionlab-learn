@@ -118,7 +118,6 @@ from .config import (
 from .dialogs import ( 
     FeatureConfigDialog,
     ArchitectureConfigDialog , 
-    open_dataset_with_editor,
     ProbConfigDialog ,
     XferAdvancedDialog, 
     XferResultsDialog, 
@@ -134,6 +133,8 @@ from .dialogs import (
     QuickTuneDialog,
     Stage1ChoiceDialog, 
     TuneJobSpec,
+    open_dataset_with_editor,
+    choose_dataset_for_city
 )
 
 from .about import show_about_dialog, DOCS_URL
@@ -241,7 +242,7 @@ class GeoPriorForecaster(QMainWindow):
         self._device_cfg_overrides: Dict[str, Any] = {}
 
         # Central config object (defaults loaded from nat.com/config.py)
-        self.geo_cfg = GeoPriorConfig.from_nat_config()
+        self.geo_cfg = GeoPriorConfig.from_defaults()
 
         # Stage-1 manifest hint (used by train/infer flows)
         self._stage1_manifest_hint: Path | None = None
@@ -566,7 +567,7 @@ class GeoPriorForecaster(QMainWindow):
         
         status_row.addStretch(1)  # push timer fully to the right
         
-        # NEW: digital run timer (black background, green digits)
+        # digital run timer (black background, green digits)
         self.run_timer = RunClockTimer(self)
         self.run_timer.reset()
         self.run_timer.stop()
@@ -2527,7 +2528,6 @@ class GeoPriorForecaster(QMainWindow):
             msg.exec_()
             self._feature_tip_shown = True
 
-
     @pyqtSlot()
     def _on_train_clicked(self) -> None:
         """
@@ -2647,7 +2647,6 @@ class GeoPriorForecaster(QMainWindow):
         )
     
         # UI lock + run timer for training flow
-        self._start_run_timer()
         self.train_btn.setEnabled(False)
         if hasattr(self, "btn_train_options"):
             self.btn_train_options.setEnabled(False)
@@ -2680,6 +2679,17 @@ class GeoPriorForecaster(QMainWindow):
             start_stage1_cb=_start_stage1_cb,
             start_training_cb=_start_training_cb,
         )
+        
+        # If planning failed or user cancelled at the Stage-1 handshake,
+        # no worker thread will have been started. In that case we must
+        # stop the run timer and unlock the UI again.
+        if not self._any_job_running():
+            self._stop_run_timer()
+            self._active_job_kind = None
+            self._update_global_running_state()
+            self.train_btn.setEnabled(True)
+            if hasattr(self, "btn_train_options"):
+                self.btn_train_options.setEnabled(True)
 
     # --------------------------------------------------------------
     # Tuning 
@@ -2849,6 +2859,7 @@ class GeoPriorForecaster(QMainWindow):
                 "Please provide a city/dataset name, or pick one "
                 "from the tuning options.",
             )
+            self._stop_run_timer()
             return
     
         # 3) Sync base training config (PDE weights, LR, etc.) from Train tab
@@ -2903,6 +2914,8 @@ class GeoPriorForecaster(QMainWindow):
                 manifest_path=plan.manifest_path,
                 cfg_overrides=self._cfg_overrides,
                 evaluate_tuned=eval_tuned_flag,
+                base_cfg = self.geo_cfg._base_cfg, 
+                results_root = self.results_root, 
                 parent=self,
             )
             self.tuning_thread = th
@@ -3450,6 +3463,7 @@ class GeoPriorForecaster(QMainWindow):
                 "Transferability failed. See log."
             )
             self._update_progress(0.0)
+            self._stop_run_timer()
             return
 
         out_dir = result.get("out_dir")
@@ -3636,20 +3650,51 @@ class GeoPriorForecaster(QMainWindow):
         
         self._update_progress(1.0)
 
-
     # ------------------------------------------------------------------
     # Thread orchestration
     # ------------------------------------------------------------------
     def _start_stage1(self, city: str) -> None:
-        results_root = getattr (self, 'results_root', self.gui_runs_root )
-        
+        results_root = getattr(self, "results_root", self.gui_runs_root)
+
+        # Make sure we have cfg_overrides dict to work with
+        overrides = getattr(self, "_cfg_overrides", {}) or {}
+        overrides = dict(overrides)  # shallow copy
+
+        edited_df = self._edited_df
+
+        # If no in-memory dataset is provided, resolve it from _datasets/
+        if edited_df is None:
+            csv_path_str = choose_dataset_for_city(
+                parent=self,
+                city=city,
+                results_root=Path(results_root),
+            )
+            if not csv_path_str:
+                # User cancelled or no dataset found; dialog already
+                # informed them, so just abort Stage-1 quietly.
+                
+                return
+
+            csv_path = Path(csv_path_str)
+            overrides["DATA_DIR"] = str(csv_path.parent)
+            overrides["BIG_FN"] = csv_path.name
+
+            # Keep a stable copy for Stage1Thread
+            self._cfg_overrides = overrides
+
+            # Optional: small log line in GUI
+            self.log_updated.emit(
+                f"[Stage-1] Using dataset: {csv_path.name} "
+                f"({csv_path.parent})"
+            )
+
         th = Stage1Thread(
             city=city,
             cfg_overrides=self._cfg_overrides,
             clean_run_dir=self.geo_cfg.clean_stage1_dir,
             base_cfg=self.geo_cfg._base_cfg,
-            edited_df=self._edited_df,  
-            results_root= results_root,
+            edited_df=edited_df,        # may still be None
+            results_root=str(results_root),
             parent=self,
         )
         self.stage1_thread = th
@@ -3661,12 +3706,11 @@ class GeoPriorForecaster(QMainWindow):
         th.error_occurred.connect(self._on_worker_error)
 
         self._start_run_timer()
-        
         th.start()
-        
+
         # Now a job is actually running → show Stop, update labels
         self._update_global_running_state()
-       
+ 
     def _run_job(self, job: TrainJobSpec) -> None:
         """
         Execute a training job described by TrainJobSpec.
@@ -3799,6 +3843,8 @@ class GeoPriorForecaster(QMainWindow):
             # Optional but nice: re-enable options too
             if hasattr(self, "btn_train_options"):
                 self.btn_train_options.setEnabled(True)
+            self._stop_run_timer()
+            
             return
 
         manifest_path: str | None = None
@@ -3823,6 +3869,10 @@ class GeoPriorForecaster(QMainWindow):
             self.train_btn.setEnabled(True)
             if hasattr(self, "btn_train_options"):
                 self.btn_train_options.setEnabled(True)
+            
+            self._stop_run_timer()
+            self._active_job_kind = None
+            self._update_global_running_state()
             return
 
         self.log_updated.emit(
@@ -3857,6 +3907,7 @@ class GeoPriorForecaster(QMainWindow):
             cfg_overrides=cfg_overrides,
             evaluate_training=self.geo_cfg.evaluate_training,
             results_root=self.geo_cfg.results_root,
+            base_cfg = self.geo_cfg._base_cfg, 
             parent=self,
         )
         self.train_thread = th
@@ -3872,7 +3923,6 @@ class GeoPriorForecaster(QMainWindow):
     
         th.start()
         self._update_global_running_state()
-
 
 
     @pyqtSlot(dict)
@@ -3897,7 +3947,7 @@ class GeoPriorForecaster(QMainWindow):
             self.train_btn.setEnabled(True)
             self._active_job_kind = None
             self._update_global_running_state()
-            
+            self._stop_run_timer()
             return
 
         out_dir = result.get("run_output_path")
@@ -3970,6 +4020,7 @@ class GeoPriorForecaster(QMainWindow):
         
         self._update_progress(0.0)
         self.progress_label.setText("")
+        self._stop_run_timer()
 
     # ------------------------------------------------------------------
     # Window close handling
@@ -4012,7 +4063,7 @@ class GeoPriorForecaster(QMainWindow):
 def launch_geoprior_gui(theme: str = "fusionlab") -> None:
     
     app = QApplication(sys.argv)
-    cfg = GeoPriorConfig.from_nat_config()
+    cfg = GeoPriorConfig.from_defaults () 
     auto_set_ui_fonts(app)
     
     enable_qt_crash_handler(app, keep_gui_alive=False)  # nice tracebacks if something dies

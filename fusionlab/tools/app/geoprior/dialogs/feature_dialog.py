@@ -10,7 +10,8 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal, QEvent
+from PyQt5.QtGui import QTextCursor
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,6 +30,20 @@ from PyQt5.QtWidgets import (
     QTextBrowser,     
 )
 
+class ColumnsPlainTextEdit(QPlainTextEdit):
+    """
+    Read-only view of available columns that emits the column name
+    on double-click.
+    """
+    columnActivated = pyqtSignal(str)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
+        cursor = self.cursorForPosition(event.pos())
+        cursor.select(QTextCursor.WordUnderCursor)
+        text = cursor.selectedText().strip().strip(",; ")
+        if text:
+            self.columnActivated.emit(text)
+        super().mouseDoubleClickEvent(event)
 
 class FeatureConfigDialog(QDialog):
     """Dialog to edit features and censoring."""
@@ -183,8 +198,16 @@ class FeatureConfigDialog(QDialog):
     ) -> None:
         # --- Registries from config (raw) -----------------------------
         # 1) raw registries from config (canonical names / tuples)
-        raw_num_reg = cfg.get("OPTIONAL_NUMERIC_FEATURES", []) or []
-        raw_cat_reg = cfg.get("OPTIONAL_CATEGORICAL_FEATURES", []) or []
+        raw_num_reg = (
+            cfg.get("OPTIONAL_NUMERIC_FEATURES_REGISTRY")
+            or cfg.get("OPTIONAL_NUMERIC_FEATURES")
+            or []
+        )
+        raw_cat_reg = (
+            cfg.get("OPTIONAL_CATEGORICAL_FEATURES_REGISTRY")
+            or cfg.get("OPTIONAL_CATEGORICAL_FEATURES")
+            or []
+        )
         raw_norm_reg = cfg.get("ALREADY_NORMALIZED_FEATURES", []) or []
 
         # 2) dataset-filtered registries (for UI + overrides)
@@ -210,27 +233,40 @@ class FeatureConfigDialog(QDialog):
 
         # --- Main feature selections (for the PINN inputs) ------------
         # Base (canonical) feature names -> resolved dataset columns
-        numeric_feats = self._flatten_feats(
-            cfg.get("OPTIONAL_NUMERIC_FEATURES", []),
-        )
-        static_feats = self._flatten_feats(
-            cfg.get("OPTIONAL_CATEGORICAL_FEATURES", []),
-        )
+        # opt_numeric_feats = self._flatten_feats(
+        #     cfg.get("OPTIONAL_NUMERIC_FEATURES", []),
+        # )
+        # opt_static_feats = self._flatten_feats(
+        #     cfg.get("OPTIONAL_CATEGORICAL_FEATURES", []),
+        # )
         future_feats = [
             str(x) for x in cfg.get("FUTURE_DRIVER_FEATURES", [])
+        ]
+        
+        # These are the explicit driver lists; they can be empty.
+        dyn_drivers = [
+            str(x) for x in cfg.get("DYNAMIC_DRIVER_FEATURES", [])
+        ]
+        stat_drivers = [
+            str(x) for x in cfg.get("STATIC_DRIVER_FEATURES", [])
         ]
         # already-normalised registry (can also contain tuples)
         normalized_feats = self._flatten_feats(
             cfg.get("ALREADY_NORMALIZED_FEATURES", []),
         )
-
-        # Smart auto-mapping to *dataset* column names
-        self.numeric_feats = self._auto_map_feature_list(numeric_feats)
-        self.static_feats = self._auto_map_feature_list(static_feats)
+        
+        # # Smart auto-mapping to *dataset* column names
+        # self.opt_numeric_feats = self._auto_map_feature_list(opt_numeric_feats)
+        # self.opt_static_feats = self._auto_map_feature_list(opt_static_feats)
         self.future_feats = self._auto_map_feature_list(future_feats)
+        # Smart auto-mapping to *dataset* column names
+        self.numeric_feats = self._auto_map_feature_list(dyn_drivers)
+        self.static_feats = self._auto_map_feature_list(stat_drivers)
+        
         self.normalized_feats = self._auto_map_feature_list(
             normalized_feats
         )
+
         # --- Core spatio-temporal / target columns --------------------
         # Defaults from config or sensible fallbacks
         time_default = cfg.get("TIME_COL", "year")
@@ -362,7 +398,17 @@ class FeatureConfigDialog(QDialog):
         lbl_cols.setStyleSheet("font-weight: 600;")
         layout.addWidget(lbl_cols)
 
-        self.txt_cols = QPlainTextEdit()
+        # tiny visual cue under available columns
+        hint_cols = QLabel(
+            "<i>Tip: double-click a column to add it to the field that "
+            "currently has focus (drivers, registries or H-field).</i>"
+        )
+        hint_cols.setWordWrap(True)
+        hint_cols.setStyleSheet("color: #6b7280; font-size: 11px;")
+        layout.addWidget(hint_cols)
+
+        self.txt_cols = ColumnsPlainTextEdit()
+        
         self.txt_cols.setReadOnly(True)
         self.txt_cols.setMaximumHeight(90)
         self.txt_cols.setStyleSheet(
@@ -373,6 +419,22 @@ class FeatureConfigDialog(QDialog):
         )
         layout.addWidget(self.txt_cols)
         
+
+
+        # --- Two-column main area -----------------------------------------
+        two_col = QHBoxLayout()
+        two_col.setSpacing(10)
+        layout.addLayout(two_col)
+        
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+        two_col.addLayout(left_col, 1)
+        
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+        two_col.addLayout(right_col, 1)
+        
+
         # --- Core spatio-temporal / target columns --------------------
         core_box = QGroupBox("Core spatio-temporal & target columns")
         core_box.setStyleSheet(
@@ -442,43 +504,69 @@ class FeatureConfigDialog(QDialog):
         hint_core.setWordWrap(True)
         core_layout.addWidget(hint_core, row + 1, 0, 1, 2)
 
-        layout.addWidget(core_box)
+        left_col.addWidget(core_box)
 
         # --- Feature groups -------------------------------------------
-        grid_feat = QGridLayout()
+
+        drivers_box = QGroupBox("Driver features")
+        drivers_box.setStyleSheet(
+            "QGroupBox {"
+            "  border: 1px solid #e5e7eb;"
+            "  border-radius: 6px;"
+            "  margin-top: 6px;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  left: 8px;"
+            "  padding: 0 2px 0 2px;"
+            "}"
+        )
+        grid_feat = QGridLayout(drivers_box)
         grid_feat.setColumnStretch(0, 0)
         grid_feat.setColumnStretch(1, 1)
         grid_feat.setHorizontalSpacing(10)
         grid_feat.setVerticalSpacing(6)
-        layout.addLayout(grid_feat)
-
+        
         # PINN-required: dynamic features
-        lbl_dyn = QLabel("Dynamic features (required)")
+        # Dynamic features (pure drivers)
+        lbl_dyn = QLabel("Dynamic features")
         lbl_dyn.setStyleSheet("font-weight: 600;")
         grid_feat.addWidget(lbl_dyn, 0, 0)
+        
         self.edit_dynamic = QLineEdit()
         self.edit_dynamic.setPlaceholderText(
             "Comma-separated columns, e.g. rainfall_mm, urban_load_global"
         )
         grid_feat.addWidget(self.edit_dynamic, 0, 1)
+        
+        # New hint under dynamic features
+        hint_dyn = QLabel(
+            "<i>Optional: leave empty to let GeoPrior auto-detect "
+            "dynamic drivers from the dataset.</i>"
+        )
+        hint_dyn.setWordWrap(True)
+        hint_dyn.setStyleSheet("color: #6b7280; font-size: 11px;")
+        grid_feat.addWidget(hint_dyn, 1, 0, 1, 2)
 
         # Optional static & future drivers
         lbl_static = QLabel("Static features")
-        grid_feat.addWidget(lbl_static, 1, 0)
+        grid_feat.addWidget(lbl_static, 2, 0)
         self.edit_static = QLineEdit()
         self.edit_static.setPlaceholderText(
             "Optional, e.g. lithology, lithology_class"
         )
-        grid_feat.addWidget(self.edit_static, 1, 1)
+        grid_feat.addWidget(self.edit_static, 2, 1)
 
         lbl_future = QLabel("Future drivers")
-        grid_feat.addWidget(lbl_future, 2, 0)
+        grid_feat.addWidget(lbl_future, 3, 0)
         self.edit_future = QLineEdit()
         self.edit_future.setPlaceholderText(
             "Optional driver features with future values"
         )
-        grid_feat.addWidget(self.edit_future, 2, 1)
+        grid_feat.addWidget(self.edit_future, 3, 1)
 
+        right_col.addWidget(drivers_box)
+        
         # --- Additional feature registry -------------------------
         gb_reg = QGroupBox("Additional feature registry")
         reg_layout = QVBoxLayout(gb_reg)
@@ -531,18 +619,26 @@ class FeatureConfigDialog(QDialog):
         )
         grid_reg.addWidget(self.edit_norm, 2, 1)
 
-        layout.addWidget(gb_reg)
+        right_col.addWidget(gb_reg)
 
         # --- Censoring / H-field group --------------------------------
-        lbl_censor = QLabel("Censoring (H-field)")
-        lbl_censor.setStyleSheet("font-weight: 600; margin-top: 4px;")
-        layout.addWidget(lbl_censor)
-
-        grid_c = QGridLayout()
+        censor_box = QGroupBox("Censoring (H-field)")
+        censor_box.setStyleSheet(
+            "QGroupBox {"
+            "  border: 1px solid #e5e7eb;"
+            "  border-radius: 6px;"
+            "  margin-top: 6px;"
+            "}"
+            "QGroupBox::title {"
+            "  subcontrol-origin: margin;"
+            "  left: 8px;"
+            "  padding: 0 2px 0 2px;"
+            "}"
+        )
+        grid_c = QGridLayout(censor_box)
         grid_c.setHorizontalSpacing(8)
         grid_c.setVerticalSpacing(6)
-        layout.addLayout(grid_c)
-
+        
         # Row 0: H-field (required) spanning all columns
         lbl_h = QLabel("H-field column (required)")
         lbl_h.setStyleSheet("font-weight: 600;")
@@ -550,7 +646,7 @@ class FeatureConfigDialog(QDialog):
         self.edit_h_col = QLineEdit()
         self.edit_h_col.setPlaceholderText("e.g. soil_thickness")
         grid_c.addWidget(self.edit_h_col, 0, 1, 1, 3)
-
+        
         # Row 1: Cap | Direction
         grid_c.addWidget(QLabel("Cap"), 1, 0)
         self.spin_cap = QDoubleSpinBox()
@@ -586,7 +682,9 @@ class FeatureConfigDialog(QDialog):
             "Include censor flags as dynamic drivers",
         )
         grid_c.addWidget(self.chk_flags_dyn, 4, 0, 1, 4)
-
+        
+        left_col.addWidget(censor_box)
+        
         # --- Buttons ---------------------------------------------------
         btn_box = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
@@ -595,17 +693,116 @@ class FeatureConfigDialog(QDialog):
         btn_box.rejected.connect(self.reject)
         layout.addWidget(btn_box)
 
+        # ------------------------------------------------------------------
+        # Track which field was last focused (for double-click insert)
+        # ------------------------------------------------------------------
+        self._focus_map = {
+            self.edit_opt_num: "registry_num",
+            self.edit_opt_cat: "registry_cat",
+            self.edit_norm: "csv",
+            self.edit_dynamic: "csv",
+            self.edit_static: "csv",
+            self.edit_future: "csv",
+            self.edit_h_col: "single",
+        }
+        for w in self._focus_map.keys():
+            w.installEventFilter(self)
+
+        self._last_target = None   # type: Optional[QLineEdit]
+        self._last_mode = None     # type: Optional[str]
+
+        # connect double-click signal
+        self.txt_cols.columnActivated.connect(self._on_column_activated)
+                
         # Slightly larger dialog footprint
-        self.resize(600, 430)
+        self.resize(850, 420)
 
         # Validate/colour required fields on the fly
-        self.edit_dynamic.textChanged.connect(self._update_required_styles)
+        # self.edit_dynamic.textChanged.connect(self._update_required_styles)
         self.edit_h_col.textChanged.connect(self._update_required_styles)
         self.cmb_time.currentIndexChanged.connect(self._update_required_styles)
         self.cmb_lon.currentIndexChanged.connect(self._update_required_styles)
         self.cmb_lat.currentIndexChanged.connect(self._update_required_styles)
         self.cmb_subs.currentIndexChanged.connect(self._update_required_styles)
         self.cmb_gwl.currentIndexChanged.connect(self._update_required_styles)
+
+    def eventFilter(self, obj, event):
+        """
+        Remember which editable field was last focused so that
+        double-clicking a column knows where to insert it.
+        """
+        if event.type() == QEvent.FocusIn:
+            mode = getattr(self, "_focus_map", {}).get(obj)
+            if mode is not None:
+                self._last_target = obj
+                self._last_mode = mode
+        return super().eventFilter(obj, event)
+
+    def _on_column_activated(self, col: str) -> None:
+        """
+        Called when the user double-clicks a column name in the
+        'Available columns' box.
+
+        Behaviour:
+        - Optional numeric registry: add as new group (';')
+        - Dynamic / static / future / normalized / optional cat:
+          append as comma-separated list
+        - H-field: replace
+        """
+        col = col.strip()
+        if not col:
+            return
+
+        # Use the last field that had focus before the columns box
+        target = getattr(self, "_last_target", None)
+        mode = getattr(self, "_last_mode", None)
+
+        if target is None or mode is None:
+            # No relevant field has ever been focused → ignore
+            return
+
+        current = target.text().strip()
+
+        if mode == "single":
+            # H-field: just replace
+            new_text = col
+
+        elif mode == "csv":
+            # Comma-separated fields, avoid duplicates
+            if not current:
+                new_text = col
+            else:
+                parts = [p.strip() for p in current.split(",") if p.strip()]
+                if col in parts:
+                    return
+                new_text = current + ", " + col
+
+        elif mode == "registry_num":
+            # Optional numeric registry: groups separated by ';'
+            # Each double-click adds a new one-column group.
+            if not current:
+                new_text = col
+            else:
+                groups = [g.strip() for g in current.split(";") if g.strip()]
+                if col in groups:
+                    return
+                new_text = current.rstrip() + "; " + col
+
+        elif mode == "registry_cat":
+            # Optional categorical: treat like csv
+            if not current:
+                new_text = col
+            else:
+                parts = [p.strip() for p in current.split(",") if p.strip()]
+                if col in parts:
+                    return
+                new_text = current + ", " + col
+        else:
+            return
+
+        target.setText(new_text)
+        self._update_required_styles()
+
 
     def _populate_from_state(self) -> None:
         if self.all_columns:
@@ -679,7 +876,7 @@ class FeatureConfigDialog(QDialog):
         - Core spatio-temporal / target columns
         - H-field column
         """
-        dyn_missing = not self._parse_list(self.edit_dynamic.text())
+        # dyn_missing = not self._parse_list(self.edit_dynamic.text())
         h_missing = not self.edit_h_col.text().strip()
 
         time_missing = not self.cmb_time.currentText().strip()
@@ -702,9 +899,9 @@ class FeatureConfigDialog(QDialog):
         )
         ok_style = ""  # let global stylesheet apply
 
-        self.edit_dynamic.setStyleSheet(
-            err_line_style if dyn_missing else ok_style
-        )
+        # self.edit_dynamic.setStyleSheet(
+        #     err_line_style if dyn_missing else ok_style
+        # )
         self.edit_h_col.setStyleSheet(
             err_line_style if h_missing else ok_style
         )
@@ -939,11 +1136,13 @@ class FeatureConfigDialog(QDialog):
 
         overrides: Dict[str, Any] = {}
 
-        # Existing keys: selections used by the GUI / pipeline today
-        overrides["OPTIONAL_NUMERIC_FEATURES"] = dyn
-        overrides["OPTIONAL_CATEGORICAL_FEATURES"] = stat
+        # # Existing keys: selections used by the GUI / pipeline today
+        
+        # Pure driver lists (can be empty; auto-detection handles it)
+        overrides["DYNAMIC_DRIVER_FEATURES"] = dyn
+        overrides["STATIC_DRIVER_FEATURES"] = stat
         overrides["FUTURE_DRIVER_FEATURES"] = fut
-
+        
         overrides["TIME_COL"] = time_col
         overrides["LON_COL"] = lon_col
         overrides["LAT_COL"] = lat_col
@@ -979,11 +1178,10 @@ class FeatureConfigDialog(QDialog):
         """
         Ensure PINN-required fields are filled:
 
-        - Dynamic features
         - Core spatio-temporal / target columns
         - H-field column
         """
-        dyn = self._parse_list(self.edit_dynamic.text())
+        # dyn = self._parse_list(self.edit_dynamic.text())
         hcol = self.edit_h_col.text().strip()
 
         time_col = self.cmb_time.currentText().strip()
@@ -1004,7 +1202,7 @@ class FeatureConfigDialog(QDialog):
             if not val
         ]
 
-        if not dyn or not hcol or missing_core:
+        if not hcol or missing_core:
             msg = QMessageBox(self)
             msg.setWindowTitle("Required features missing")
             msg.setIcon(QMessageBox.Warning)
@@ -1017,7 +1215,6 @@ class FeatureConfigDialog(QDialog):
             msg.setText(
                 "<p>For GeoPriorSubsNet the following fields are required:</p>"
                 "<ul>"
-                "<li><b>Dynamic features</b></li>"
                 "<li><b>H-field column</b></li>"
                 f"{core_html}"
                 "</ul>"
@@ -1388,6 +1585,6 @@ class FeatureConfigHelpDialog(QDialog):
 
         btn_box = QDialogButtonBox(QDialogButtonBox.Close)
         btn_box.rejected.connect(self.reject)
-        btn_box.accepted.connect(self.accept)
+        # btn_box.accepted.connect(self.accept)
         # Close on either Close or Esc
         layout.addWidget(btn_box)
