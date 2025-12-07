@@ -78,16 +78,16 @@ def default_tuner_search_space() -> Dict[str, Any]:
         # decoder_attention_stack=["cross", "hierarchical", "memory"].
         "memory_size": [50, 100],
         "scales": [
-            [1],          # single-scale (baseline, close to NATCOM)
+            # [1],          # single-scale (baseline, close to NATCOM)
             [1, 2],       # two-scale (fine + medium)
-            [1, 2, 4],    # richer multi-scale
+            # [1, 2, 4],    # richer multi-scale
         ],
         # Each entry is a *stack* of attention levels to activate.
         "attention_levels": [
             ["cross", "hierarchical", "memory"],  # full stack (most expressive)
-            ["cross", "memory"],                  # skip hierarchical
-            ["hierarchical", "memory"],           # hierarchical + memory
-            ["memory"],                           # lightweight memory-only
+            # ["cross", "memory"],                  # skip hierarchical
+            # ["hierarchical", "memory"],           # hierarchical + memory
+            # ["memory"],                           # lightweight memory-only
         ],
         # Boolean HPs are handled via hp.Boolean in GeoPriorTuner
         "use_batch_norm": {"type": "bool"},

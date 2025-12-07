@@ -87,6 +87,8 @@ from .services.results_service import ResultsService
 from .ui.file_browse import FileBrowseHelper
 from .ui.menu_manager import MenuManager
 from .ui.splash import LoadingSplash
+from .ui.tools_tab import ToolsTab
+
      
 from ..ux_utils import (
     auto_set_ui_fonts,
@@ -256,6 +258,9 @@ class GeoPriorForecaster(QMainWindow):
         self._edited_df = None  # : pd.DataFrame | None
         
         self._feature_tip_shown: bool = False
+        
+        # Map lowercased city name -> manifest path (string)
+        self._preferred_stage1_manifest_by_city: Dict[str, str] = {}
 
 
     def _init_help_texts(self) -> None:
@@ -1296,6 +1301,19 @@ class GeoPriorForecaster(QMainWindow):
             self._workflow_icon("results.svg", QStyle.SP_DirHomeIcon),
             "Results",
         )
+        # Tools tab – utilities (data, manifests, diagnostics, environment)
+        self.tools_tab = ToolsTab(
+            app_ctx=self,   
+            geo_cfg=self.geo_cfg,
+            gui_runs_root=self.gui_runs_root,
+            parent=self,
+        )
+
+        self._tools_tab_index = self.tabs.addTab(
+            self.tools_tab,
+            self._workflow_icon("tools.svg", QStyle.SP_FileDialogInfoView),
+            "Tools",
+        )
 
         # After building Tune widgets, sync from current config
         self._load_tuner_space_into_ui()
@@ -1543,6 +1561,21 @@ class GeoPriorForecaster(QMainWindow):
     
         self._update_xfer_view_state()
 
+    # ------------------------------------------------------------------
+    # Logging / progress helpers
+    # ------------------------------------------------------------------
+
+    def set_console_visible(self, visible: bool) -> None:
+        """
+        Show or hide the bottom log console.
+
+        Tools / tabs that do not need the shared log (for example the
+        Tools → Dataset explorer) can call this helper so the central
+        workspace uses the full height.
+        """
+        if hasattr(self, "log_widget") and self.log_widget is not None:
+            self.log_widget.setVisible(visible)
+
 
     def _is_dry_mode(self) -> bool:
         chk = getattr(self, "chk_dry_run", None)
@@ -1764,22 +1797,29 @@ class GeoPriorForecaster(QMainWindow):
                 "training/tuning/inference normally."
             )
     
-    
-    @pyqtSlot(int)
+                
     def _on_tab_changed(self, index: int) -> None:
         """
         Update the Mode indicator and toggle the log visibility
         when the active tab changes.
         """
         self._update_mode_button(index)
-    
-        # Show log for Train/Tune/Inference/Transfer, hide for Results
-        if hasattr(self, "log_widget"):
-            if index == getattr(self, "_results_tab_index", -1):
-                self.log_widget.setVisible(False)
-            else:
-                self.log_widget.setVisible(True)
-                
+
+        if not hasattr(self, "log_widget"):
+            return
+
+        results_idx = getattr(self, "_results_tab_index", -1)
+        tools_idx   = getattr(self, "_tools_tab_index", -1)
+
+        # Train / Tune / Inference / Transfer → console visible
+        # Results → console hidden
+        # Tools   → hidden by default; individual tools can override.
+        if index == results_idx:
+            self.set_console_visible(False)
+        elif index == tools_idx:
+            self.set_console_visible(False)   # default for Tools
+        else:
+            self.set_console_visible(True)
          
     # ------------------------------------------------------------------
     # Logging / progress helpers
@@ -2016,7 +2056,6 @@ class GeoPriorForecaster(QMainWindow):
                 return name
         return default
 
-
     @pyqtSlot()
     def _on_feature_config(self) -> None:
         if self.csv_path is None and self._edited_df is None:
@@ -2027,9 +2066,9 @@ class GeoPriorForecaster(QMainWindow):
                 "can be listed.",
             )
             return
-
+    
         base_cfg = self.geo_cfg._base_cfg or {}
-
+    
         dlg = FeatureConfigDialog(
             csv_path=self.csv_path,
             base_cfg=base_cfg,
@@ -2039,56 +2078,82 @@ class GeoPriorForecaster(QMainWindow):
         )
         if dlg.exec_() != QDialog.Accepted:
             return
-
+    
+        # Store overrides back on the config
         self.geo_cfg.feature_overrides = dlg.get_overrides()
         overs = self.geo_cfg.feature_overrides or {}
-
-        dyn = ", ".join(
-            overs.get("OPTIONAL_NUMERIC_FEATURES", [])
-        ) or "none"
-        stat = ", ".join(
-            overs.get("OPTIONAL_CATEGORICAL_FEATURES", [])
-        ) or "none"
-        fut = ", ".join(
-            overs.get("FUTURE_DRIVER_FEATURES", [])
-        ) or "none"
+    
+        # ------------------------------------------------------------------
+        # Core driver groups
+        # ------------------------------------------------------------------
+        dyn_list = overs.get("DYNAMIC_DRIVER_FEATURES", []) or []
+        stat_list = overs.get("STATIC_DRIVER_FEATURES", []) or []
+        fut_list = overs.get("FUTURE_DRIVER_FEATURES", []) or []
+    
+        def _list_or(text_list, empty: str) -> str:
+            return ", ".join(text_list) if text_list else empty
+    
+        dyn = _list_or(dyn_list, "auto-detect from dataset")
+        stat = _list_or(stat_list, "none")
+        fut = _list_or(fut_list, "none")
+    
         hcol = overs.get("H_FIELD_COL_NAME") or "none"
-
+    
+        # Core spatio-temporal / targets (fall back to base_cfg defaults)
+        time_col = overs.get("TIME_COL") or base_cfg.get("TIME_COL", "year")
+        lon_col = overs.get("LON_COL") or base_cfg.get("LON_COL", "longitude")
+        lat_col = overs.get("LAT_COL") or base_cfg.get("LAT_COL", "latitude")
+        subs_col = overs.get("SUBSIDENCE_COL") or base_cfg.get(
+            "SUBSIDENCE_COL", "subsidence"
+        )
+        gwl_col = overs.get("GWL_COL") or base_cfg.get(
+            "GWL_COL", "GWL_depth_bgs_z"
+        )
+    
+        use_eff = overs.get(
+            "USE_EFFECTIVE_H_FIELD",
+            base_cfg.get("USE_EFFECTIVE_H_FIELD", True),
+        )
+        flags_dyn = overs.get(
+            "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC",
+            base_cfg.get("INCLUDE_CENSOR_FLAGS_AS_DYNAMIC", True),
+        )
+    
         msg_lines = [
             "Feature configuration updated:",
-            f"  • Dynamic features: {dyn}",
+            (
+                "  • Time / Lon / Lat / Subs / GWL: "
+                f"{time_col} / {lon_col} / {lat_col} / {subs_col} / {gwl_col}"
+            ),
+            f"  • Dynamic driver features: {dyn}",
             f"  • Static features: {stat}",
             f"  • Future drivers: {fut}",
             f"  • H-field column: {hcol}",
+            f"  • Use effective H-field: {use_eff}",
+            f"  • Flags as dynamic drivers: {flags_dyn}",
         ]
-
-        # Optional: registries and normalized features
-        num_reg = overs.get(
-            "OPTIONAL_NUMERIC_FEATURES_REGISTRY", []
-        )
-        cat_reg = overs.get(
-            "OPTIONAL_CATEGORICAL_FEATURES_REGISTRY", []
-        )
-        norm_feats = overs.get(
-            "ALREADY_NORMALIZED_FEATURES", []
-        )
-
+    
+        # ------------------------------------------------------------------
+        # Registries & already-normalised
+        # ------------------------------------------------------------------
+        num_reg = overs.get("OPTIONAL_NUMERIC_FEATURES_REGISTRY", []) or []
+        cat_reg = overs.get("OPTIONAL_CATEGORICAL_FEATURES_REGISTRY", []) or []
+        norm_feats = overs.get("ALREADY_NORMALIZED_FEATURES", []) or []
+    
         if num_reg:
             msg_lines.append(
-                "  • Numeric registry groups: "
-                f"{len(num_reg)}"
+                f"  • Numeric registry groups: {len(num_reg)}"
             )
         if cat_reg:
             msg_lines.append(
-                "  • Categorical registry groups: "
-                f"{len(cat_reg)}"
+                f"  • Categorical registry groups: {len(cat_reg)}"
             )
         if norm_feats:
             msg_lines.append(
                 "  • Already-normalized features: "
-                f"{', '.join(norm_feats)}"
+                + ", ".join(norm_feats)
             )
-
+    
         self.log_updated.emit("\n".join(msg_lines))
 
         
@@ -2185,6 +2250,110 @@ class GeoPriorForecaster(QMainWindow):
             self.log_updated.emit(
                 "[Physics] Scalar physics parameters updated."
             )
+            
+
+    # ------------------------------------------------------------------
+    # Preferred Stage-1 manifest API (used by Stage1ManagerTool)
+    # ------------------------------------------------------------------
+    def set_preferred_stage1_manifest(
+        self,
+        city: str,
+        manifest_path: str,
+    ) -> None:
+        """
+        Remember a preferred Stage-1 manifest for a given city.
+
+        Called by the Tools → Stage-1 manager when the user clicks
+        \"Use for this city in GUI\".
+        """
+        city_slug = (city or "").strip().lower()
+        if not city_slug:
+            return
+
+        p = Path(manifest_path).expanduser()
+        if not p.is_file():
+            # Do not crash if file disappeared; just log a short warning.
+            try:
+                self.log_updated.emit(
+                    "[Stage-1 manager] Cannot set preferred manifest for "
+                    f"'{city_slug}': file does not exist:\n  {p}"
+                )
+            except Exception:
+                pass
+            return
+
+        self._preferred_stage1_by_city[city_slug] = str(p)
+
+        # Optional but convenient: keep City field in sync with the choice
+        try:
+            if hasattr(self, "city_edit"):
+                self.city_edit.setText(city)
+        except Exception:
+            pass
+
+        try:
+            self.log_updated.emit(
+                "[Stage-1 manager] Preferred Stage-1 manifest for "
+                f"city '{city_slug}' set to:\n  {p}"
+            )
+        except Exception:
+            pass
+
+    def _get_preferred_stage1_manifest_for_city(
+        self,
+        city: str,
+    ) -> str | None:
+        """
+        Return a valid preferred manifest for ``city``, or ``None``.
+
+        Also auto-cleans the registry if the file no longer exists.
+        """
+        if not city:
+            return None
+
+        key = city.strip().lower()
+        path = self._preferred_stage1_by_city.get(key)
+        if not path:
+            return None
+
+        p = Path(path)
+        if not p.is_file():
+            # Manifest disappeared → drop mapping and warn once.
+            self._preferred_stage1_by_city.pop(key, None)
+            try:
+                self.log_updated.emit(
+                    "[Stage-1 manager] Preferred manifest for "
+                    f"'{key}' no longer exists → entry cleared."
+                )
+            except Exception:
+                pass
+            return None
+
+        return str(p)
+
+    def _resolve_stage1_manifest_for_current_city(self) -> str | None:
+        """
+        Convenience wrapper: infer the active city from GeoPriorConfig
+        and return a preferred Stage-1 manifest if one was selected.
+
+        Fallback: also try the city line-edit if present.
+        """
+        city = None
+
+        # 1) GeoPriorConfig (canonical)
+        if getattr(self, "geo_cfg", None) is not None:
+            city = getattr(self.geo_cfg, "city", None)
+
+        # 2) City line-edit on the toolbar, if any
+        if not city and hasattr(self, "city_lineedit"):
+            try:
+                txt = self.city_lineedit.text().strip()
+                if txt:
+                    city = txt
+            except Exception:
+                pass
+
+        return self._get_preferred_stage1_manifest_for_city(city)
 
     # --------------------------------------------------------------
     # Tuner search space <-> UI
@@ -2588,7 +2757,20 @@ class GeoPriorForecaster(QMainWindow):
             )
             self.train_controller.dry_preview(gui_state)
             return
+        # --------------------------------------------------------------
+        # Preferred Stage-1 manifest (from Tools → Stage-1 manager)
+        # --------------------------------------------------------------
+        preferred_manifest = None
+        try:
+            city_text = self.city_edit.text().strip()
+        except Exception:
+            city_text = ""
     
+        if city_text:
+            preferred_manifest = self._get_preferred_stage1_manifest_for_city(
+                city_text
+            )
+
         # --------------------------------------------------------------
         # 0. If options dialog queued a specific job, honour it
         # --------------------------------------------------------------
@@ -2597,9 +2779,10 @@ class GeoPriorForecaster(QMainWindow):
             self._queued_train_job = None
             self._run_job(job)
             return
-    
+
         # --------------------------------------------------------------
         # 1. Try QuickTrain shortcut: reuse an existing Stage-1 run
+        #    (respect preferred manifest if one was set).
         # --------------------------------------------------------------
         try:
             stage1_cfg = self.geo_cfg.to_stage1_config()
@@ -2607,21 +2790,56 @@ class GeoPriorForecaster(QMainWindow):
                 results_root=self.gui_runs_root,
                 current_cfg=stage1_cfg,
             )
-            quick_job = QuickTrainDialog.choose_job(
-                parent=self,
-                jobs=jobs,
-            )
+
+            quick_job = None
+
+            # 1.a If a preferred manifest exists for this city, try to
+            #     find a matching job and reuse it directly.
+            if preferred_manifest and jobs:
+                pref_path = Path(preferred_manifest).resolve()
+
+                for job in jobs:
+                    summary = getattr(job, "stage1_summary", None)
+                    manifest_attr = getattr(
+                        summary, "manifest_path", None
+                    ) if summary is not None else None
+
+                    if manifest_attr is None:
+                        continue
+
+                    try:
+                        job_path = Path(str(manifest_attr)).resolve()
+                    except Exception:
+                        continue
+
+                    if job_path == pref_path:
+                        quick_job = job
+                        self._append_status(
+                            "[QuickTrain] Using preferred Stage-1 run "
+                            "from Stage-1 manager:\n"
+                            f"  city   = {getattr(summary, 'city', '?')}\n"
+                            f"  manifest = {pref_path}"
+                        )
+                        break
+
+            # 1.b If no preferred job matched, fall back to the dialog
+            if quick_job is None:
+                quick_job = QuickTrainDialog.choose_job(
+                    parent=self,
+                    jobs=jobs,
+                )
+
         except Exception as exc:  # defensive
             self._append_status(
                 f"[QuickTrain] Failed to list jobs: {exc}",
                 error=True,
             )
             quick_job = None
-    
+
         if quick_job is not None:
             self._run_job(quick_job)
             return
-    
+
         # --------------------------------------------------------------
         # 2. No existing jobs: use TrainController + Stage1Service
         # --------------------------------------------------------------
@@ -2674,6 +2892,8 @@ class GeoPriorForecaster(QMainWindow):
             self._start_training(manifest_path)
     
         # Delegate the planning / Stage-1 handshake to the controller
+        
+        self._start_run_timer()
         self.train_controller.start_real_run(
             gui_state=gui_state,
             start_stage1_cb=_start_stage1_cb,
@@ -3705,7 +3925,6 @@ class GeoPriorForecaster(QMainWindow):
         th.results_ready.connect(self._on_stage1_finished)
         th.error_occurred.connect(self._on_worker_error)
 
-        self._start_run_timer()
         th.start()
 
         # Now a job is actually running → show Stop, update labels
