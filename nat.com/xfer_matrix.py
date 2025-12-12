@@ -46,7 +46,7 @@ def parse_args():
         choices=["val", "test"], help="Which splits to run."
     )
     p.add_argument(
-        "--calib-modes", nargs="+",
+        "--b-modes", nargs="+",
         default=["none", "source", "target"],
         choices=["none", "source", "target"],
         help="Calibration modes to evaluate."

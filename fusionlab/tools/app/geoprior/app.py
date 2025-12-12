@@ -447,7 +447,7 @@ class GeoPriorForecaster(QMainWindow):
         )
     
         ico_dir = Path(__file__).parent
-        ico = ico_dir / "fusionlab_learn_logo.ico"
+        ico = ico_dir / "geoprior_logo.ico"
         if ico.exists():
             self.setWindowIcon(QIcon(str(ico)))
     
