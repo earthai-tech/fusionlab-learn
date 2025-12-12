@@ -12,6 +12,7 @@ from .model_params_dialog import ModelParamsDialog
 from .train_dialogs import TrainOptionsDialog, QuickTrainDialog
 from .tune_dialogs import TuneOptionsDialog, QuickTuneDialog,  TuneJobSpec
 from .dataset_choice_dialog import choose_dataset_for_city
+from .pop_progress import PopProgressDialog 
 
 __all__= [ 
     
@@ -34,5 +35,6 @@ __all__= [
     'TuneOptionsDialog', 
     'QuickTuneDialog',  
     'TuneJobSpec', 
-    'choose_dataset_for_city'
+    'choose_dataset_for_city', 
+    'PopProgressDialog'
     ]

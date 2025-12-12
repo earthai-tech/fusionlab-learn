@@ -42,7 +42,11 @@ from .tools import (
     Stage1ManagerTool,
     ManifestBrowserTool,
     ReproduceRunHelperTool, 
-    BuildNPZTool
+    BuildNPZTool, 
+    MetricsDashboardTool, 
+    RunComparisonTool, 
+    PhysicsDiagnosticsTool,
+
 )
 
 
@@ -187,16 +191,20 @@ def default_tool_specs(app_ctx: object | None = None) -> List[ToolSpec]:
             factory=lambda ctx=app_ctx: ManifestBrowserTool(app_ctx=ctx),
             needs_log=False,
         ),
-        ToolSpec(
+        ToolSpec(  # XXX TODO: already Done - NPZ builder (inference-ready sequences)
             tool_id="runs.build_npz",
             title="Build NPZ Dataset",
             group="Runs & Manifests",
-            description="Generate NPZ files for training and validation data using Stage-1.",
-            factory=lambda: BuildNPZTool(app_ctx=app_ctx),
-            needs_log=False,  # No need for log; full space for user interaction
+            description=(
+                "Build NPZ sequences for GeoPriorSubsNet from the active "
+                "or saved dataset, using either a JSON/manifest config "
+                "or manually entered parameters."
+            ),
+            factory=lambda ctx=app_ctx: BuildNPZTool(app_ctx=ctx),
+            needs_log=True,  # show main log console while building NPZ
         ),
 
-        ToolSpec(
+        ToolSpec(# XXX TODO: already Done 
             tool_id="runs.reproduce_helper",
             title="Reproduce run helper",
             group="Runs & Manifests",
@@ -206,44 +214,39 @@ def default_tool_specs(app_ctx: object | None = None) -> List[ToolSpec]:
         ),
 
         # --- Diagnostics & Plots ------------------------------------------
-        ToolSpec(
+        ToolSpec(# XXX TODO: already Done 
             tool_id="diag.metrics_dashboard",
             title="Metrics dashboard",
             group="Diagnostics & Plots",
-            description="Visualise performance metrics, per-horizon and "
-                        "interval diagnostics.",
-            factory=lambda: _make_placeholder_tool(
-                "Metrics dashboard",
-                "A central place for evaluating GeoPriorSubsNet runs: "
-                "point metrics, interval metrics, per-horizon curves, "
-                "and later calibration plots such as PIT histograms "
-                "and reliability diagrams."
+            description=(
+                "Visualise performance metrics, per-horizon diagnostics "
+                "and, once available, PIT / reliability plots for "
+                "GeoPriorSubsNet runs."
             ),
+            factory=lambda ctx=app_ctx: MetricsDashboardTool(app_ctx=ctx),
+            needs_log=False,  # we use full space for the plots
         ),
-        ToolSpec(
+
+        ToolSpec(# XXX TODO: already Done
             tool_id="diag.run_comparison",
             title="Run comparison",
             group="Diagnostics & Plots",
-            description="Compare metrics and configs across runs.",
-            factory=lambda: _make_placeholder_tool(
-                "Run comparison",
-                "This tool will let you compare two or more runs side "
-                "by side, both in terms of metrics and high-level "
-                "configuration, to support ablations and paper figures."
+            description=(
+                "Compare metrics and high-level configuration across "
+                "multiple runs to support ablations and paper figures."
             ),
+            factory=lambda ctx=app_ctx: RunComparisonTool(app_ctx=ctx),
+            needs_log=False,   # we use our own table + config text area
         ),
-        ToolSpec(
+                
+        ToolSpec( # XXX TODO: already Done
             tool_id="diag.physics_diagnostics",
             title="Physics diagnostics",
             group="Diagnostics & Plots",
             description="Inspect physics residuals and constraint "
                         "violations.",
-            factory=lambda: _make_placeholder_tool(
-                "Physics diagnostics",
-                "Here you will visualise physics-related diagnostics "
-                "from the PINN: residual distributions, time evolution "
-                "of errors and localised violations."
-            ),
+            factory=lambda ctx=app_ctx: PhysicsDiagnosticsTool(app_ctx=ctx),
+            needs_log=False,
         ),
 
         # --- System & Environment -----------------------------------------

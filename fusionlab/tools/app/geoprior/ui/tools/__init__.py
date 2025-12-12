@@ -11,6 +11,10 @@ from .stage1_manager import Stage1ManagerTool
 from .manifest_browser import ManifestBrowserTool
 from .reproduce_helper import ReproduceRunHelperTool
 from .build_npz import BuildNPZTool   
+from .metrics_dashboard import MetricsDashboardTool
+from .run_comparison import RunComparisonTool 
+from .physics_diagnostics import PhysicsDiagnosticsTool
+
 
 from .env_check import EnvironmentCheckTool
 
@@ -23,4 +27,7 @@ __all__ = [
     "ReproduceRunHelperTool", 
     "BuildNPZTool", 
     "EnvironmentCheckTool",
+    "MetricsDashboardTool", 
+    "RunComparisonTool", 
+    "PhysicsDiagnosticsTool"
 ]
