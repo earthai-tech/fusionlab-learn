@@ -104,15 +104,25 @@
       "0.5": 1.0,
       "0.9": 1.5
     },
-    "PDE_MODE_CONFIG": "off",
+    "PDE_MODE_CONFIG": "both",
+    "PHYSICS_BASELINE_MODE": "none",
     "SCALE_PDE_RESIDUALS": true,
     "LAMBDA_CONS": 0.1,
     "LAMBDA_GW": 0.01,
     "LAMBDA_PRIOR": 0.1,
     "LAMBDA_SMOOTH": 0.01,
     "LAMBDA_MV": 0.01,
+    "LAMBDA_BOUNDS": 0.0,
     "MV_LR_MULT": 1.0,
     "KAPPA_LR_MULT": 5.0,
+    "PHYSICS_BOUNDS": {
+      "H_min": 5.0,
+      "H_max": 80.0,
+      "K_min": 1e-08,
+      "K_max": 0.001,
+      "Ss_min": 1e-07,
+      "Ss_max": 0.001
+    },
     "GEOPRIOR_INIT_MV": 1e-07,
     "GEOPRIOR_INIT_KAPPA": 1.0,
     "GEOPRIOR_GAMMA_W": 9810.0,
@@ -250,6 +260,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "8a322dcf4af1ddc1cc116512e12b85ff4e6da5654cdcc7085773b077d54955a1"
+    "config_py_hash": "1eef188c3ee63a406597f6b7c9168c812e3d25d2b9a1084688686b3ea2583647"
   }
 }

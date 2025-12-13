@@ -66,7 +66,10 @@ try:
         point_metrics,
         per_horizon_metrics,
     )
-    from fusionlab.nn.pinn.models import GeoPriorSubsNet
+    from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet
+    from fusionlab.nn.pinn.log_offsets_diagnostics import (
+        run_sm3_offsets_from_payload,
+    )
     from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
     from fusionlab.nn.losses import make_weighted_pinball
     from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn, _to_py
@@ -99,7 +102,7 @@ CITY_ENV   = getenv_stripped("CITY")
 MODEL_ENV  = getenv_stripped("MODEL_NAME_OVERRIDE")
 
 CITY_HINT  = CITY_ENV or CFG_CITY
-MODEL_HINT = MODEL_ENV or CFG_MODEL
+# MODEL_HINT = MODEL_ENV or CFG_MODEL
 MANUAL     = getenv_stripped("STAGE1_MANIFEST")
 
 
@@ -107,6 +110,10 @@ MANUAL     = getenv_stripped("STAGE1_MANIFEST")
 # CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
 # MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
 # MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
+
+# IMPORTANT: do not filter Stage-1 manifests by model, so we can
+# reuse the same Stage-1 run for multiple model flavours.
+MODEL_HINT = None
 
 MANIFEST_PATH = _find_stage1_manifest(
     manual=MANUAL,
@@ -154,8 +161,8 @@ cfg.update(cfg_manifest)  # manifest wins on overlapping keys
 device_info = configure_tf_from_cfg(cfg)
 
 CITY_NAME  = M.get("city",  cfg.get("CITY_NAME", "nansha"))
-MODEL_NAME = M.get("model", cfg.get("MODEL_NAME", "GeoPriorSubsNet"))
-
+# MODEL_NAME = M.get("model", cfg.get("MODEL_NAME", "GeoPriorSubsNet"))
+MODEL_NAME = MODEL_ENV or cfg.get("MODEL_NAME", "GeoPriorSubsNet")
 # ----- Optional censoring config (from merged cfg) -----------------------
 FEATURES   = cfg.get("features", {}) or {}
 DYN_NAMES  = FEATURES.get("dynamic", []) or []
@@ -243,7 +250,7 @@ LAMBDA_SMOOTH = cfg.get("LAMBDA_SMOOTH", 0.01)
 LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.01)
 MV_LR_MULT    = cfg.get("MV_LR_MULT",    1.0)
 KAPPA_LR_MULT = cfg.get("KAPPA_LR_MULT", 5.0)
-
+LAMBDA_BOUNDS = cfg.get("LAMBDA_BOUNDS", 0.0)
 # Global physics bounds (from config.py)
 PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
 
@@ -280,6 +287,29 @@ GEOPRIOR_USE_EFFECTIVE_H = cfg.get(
     CENSOR.get("use_effective_h_field", True),
 )
 GEOPRIOR_HD_FACTOR  = cfg.get("GEOPRIOR_HD_FACTOR", 0.6)
+
+# ------------------------------------------------------------------
+# Flavour-dependent physics tweaks
+# ------------------------------------------------------------------
+if MODEL_NAME == "HybridAttn-NoPhysics":
+    # Full data-only baseline: disable physics entirely.
+    PDE_MODE_CONFIG = "off"
+    LAMBDA_CONS   = 0.0
+    LAMBDA_GW     = 0.0
+    LAMBDA_PRIOR  = 0.0
+    LAMBDA_SMOOTH = 0.0
+    LAMBDA_BOUNDS = 0.0
+    LAMBDA_MV     = 0.0
+    MV_LR_MULT    = 0.0
+    KAPPA_LR_MULT = 0.0
+
+elif MODEL_NAME == "PoroElasticSubsNet":
+    # Poroelastic surrogate: consolidation only, no GW-flow equation.
+    PDE_MODE_CONFIG = "consolidation"
+    LAMBDA_GW       = 0.0
+
+# For "GeoPriorSubsNet" we keep whatever is in config.py
+# (typically PDE_MODE_CONFIG="both").
 
 # Targets & columns (for formatter)
 cols_cfg = cfg.get("cols", {})
@@ -330,6 +360,7 @@ config_sections = [
         "LAMBDA_GW": LAMBDA_GW,
         "LAMBDA_PRIOR": LAMBDA_PRIOR,
         "LAMBDA_SMOOTH": LAMBDA_SMOOTH,
+        "LAMBDA_BOUNDS": LAMBDA_BOUNDS, 
         "LAMBDA_MV": LAMBDA_MV,
         "MV_LR_MULT": MV_LR_MULT,
         "KAPPA_LR_MULT": KAPPA_LR_MULT,
@@ -475,6 +506,15 @@ s_dim_model = X_train_norm["static_features"].shape[-1]
 d_dim_model = X_train_norm["dynamic_features"].shape[-1]
 f_dim_model = X_train_norm["future_features"].shape[-1]
 
+MODEL_CLASS_REGISTRY = {
+    "GeoPriorSubsNet": GeoPriorSubsNet,
+    "PoroElasticSubsNet": PoroElasticSubsNet,
+    # HybridAttn-NoPhysics reuses the same architecture as GeoPriorSubsNet,
+    # but with PDE_MODE_CONFIG="off" and all lambda_* = 0.
+    "HybridAttn-NoPhysics": GeoPriorSubsNet,
+}
+
+model_cls = MODEL_CLASS_REGISTRY.get(MODEL_NAME, GeoPriorSubsNet)
 
 subsmodel_params = {
     "embed_dim": EMBED_DIM,
@@ -510,7 +550,7 @@ subsmodel_params = {
     "hd_factor": GEOPRIOR_HD_FACTOR,
 }
 
-subs_model_inst = GeoPriorSubsNet(
+subs_model_inst = model_cls(
     static_input_dim=s_dim_model,
     dynamic_input_dim=d_dim_model,
     future_input_dim=f_dim_model,
@@ -521,6 +561,7 @@ subs_model_inst = GeoPriorSubsNet(
     pde_mode=PDE_MODE_CONFIG,
     **subsmodel_params,
 )
+
 #%
 # Build once
 for xb, _ in train_dataset.take(1):
@@ -542,6 +583,7 @@ physics_loss_weights = {
     "lambda_gw": LAMBDA_GW,
     "lambda_prior": LAMBDA_PRIOR,
     "lambda_smooth": LAMBDA_SMOOTH,
+    "lambda_bounds": LAMBDA_BOUNDS, 
     "lambda_mv": LAMBDA_MV,
     "mv_lr_mult": MV_LR_MULT,
     "kappa_lr_mult": KAPPA_LR_MULT,
@@ -749,21 +791,35 @@ plot_history_in(
 )
 
 # Extract physical parameters
+# extract_physical_parameters(
+#     subs_model_inst, to_csv=True,
+#     filename=f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv",
+#     save_dir=RUN_OUTPUT_PATH, model_name="geoprior",
+# )
+phys_model_tag = "geoprior"
+if MODEL_NAME == "PoroElasticSubsNet":
+    phys_model_tag = "poroelastic"
+elif MODEL_NAME.startswith("HybridAttn"):
+    phys_model_tag = "hybridattn"
+
 extract_physical_parameters(
     subs_model_inst, to_csv=True,
     filename=f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv",
-    save_dir=RUN_OUTPUT_PATH, model_name="geoprior",
+    save_dir=RUN_OUTPUT_PATH, model_name=phys_model_tag,
 )
+
 #%
 # For inference (compile=False is fine)
 custom_objects_load = {
     "GeoPriorSubsNet": GeoPriorSubsNet,
+    "PoroElasticSubsNet": PoroElasticSubsNet,
     "LearnableMV": LearnableMV,
     "LearnableKappa": LearnableKappa,
     "FixedGammaW": FixedGammaW,
     "FixedHRef": FixedHRef,
     "make_weighted_pinball": make_weighted_pinball,
 }
+
 try:
     with custom_object_scope(custom_objects_load):
         subs_model_loaded = load_model(ckpt_path, compile=False)
@@ -975,35 +1031,25 @@ physics_payload = subs_model_loaded.export_physics_payload(
 # -------------------------------------------------------------------------
 # SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
 # -------------------------------------------------------------------------
-try:
-    from nat.com.sm3_log_offsets_diagnostics import (
-        run_sm3_offsets_from_payload,
-    )
-except ImportError:
-    run_sm3_offsets_from_payload = None
-
 phys_npz_path = os.path.join(
     RUN_OUTPUT_PATH,
     f"{CITY_NAME}_phys_payload_run_val.npz",
 )
 
-if run_sm3_offsets_from_payload is not None:
-    try:
-        print("\n[SM3] Running log-offset diagnostics (Supplementary Methods 3)...")
-        _sm3_result = run_sm3_offsets_from_payload(
-            physics_npz_path=phys_npz_path,
-            outdir=RUN_OUTPUT_PATH,
-            city=CITY_NAME,
-            model_name=MODEL_NAME,
-        )
-        print("[SM3] Done. Offsets tables and plots are available in:")
-        print(f"      - raw:     {_sm3_result['raw_csv']}")
-        print(f"      - summary: {_sm3_result['summary_csv']}")
-    except Exception as e:
-        print(f"[Warn] SM3 log-offset diagnostics failed: {e}")
-else:
-    print("[SM3] sm3_log_offsets_diagnostics module not available "
-          "(skipping SM3 diagnostics).")
+try:
+    print("\n[SM3] Running log-offset diagnostics (Supplementary Methods 3)...")
+    _sm3_result = run_sm3_offsets_from_payload(
+        physics_npz_path=phys_npz_path,
+        outdir=RUN_OUTPUT_PATH,
+        city=CITY_NAME,
+        model_name=MODEL_NAME,
+    )
+    print("[SM3] Done. Offsets tables and plots are available in:")
+    print(f"      - raw:     {_sm3_result['raw_csv']}")
+    print(f"      - summary: {_sm3_result['summary_csv']}")
+except Exception as e:
+    print(f"[Warn] SM3 log-offset diagnostics failed: {e}")
+
 
 #
 # --- 2.3 Interval diagnostics + optional censor-stratified MAE ---
@@ -1277,6 +1323,7 @@ ABLCFG = {
     "LAMBDA_GW": LAMBDA_GW,
     "LAMBDA_PRIOR": LAMBDA_PRIOR,
     "LAMBDA_SMOOTH": LAMBDA_SMOOTH,
+    "LAMBDA_BOUNDS": LAMBDA_BOUNDS,
     "LAMBDA_MV": LAMBDA_MV,
 }
 

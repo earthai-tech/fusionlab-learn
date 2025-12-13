@@ -3,12 +3,17 @@ from .models import (
     PiTGWFlow, 
     PIHALNet, 
     PiHALNet, 
-    TransFlowSubsNet 
+    TransFlowSubsNet, 
+    PoroElasticSubsNet, 
+    GeoPriorSubsNet 
 )
 
 __all__=[
     "PiHALNet",
     "PIHALNet", 
     "TransFlowSubsNet", 
-    "PiTGWFlow"
+    "PiTGWFlow", 
+    "PoroElasticSubsNet", 
+    "GeoPriorSubsNet"
+    
    ]

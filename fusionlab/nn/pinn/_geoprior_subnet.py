@@ -225,8 +225,7 @@ class GeoPriorSubsNet(BaseAttentive):
         
         self.pde_modes_active = process_pde_modes(pde_mode)
         self.scale_pde_residuals = bool(scale_pde_residuals)
-        self.scaling_kwargs = dict(scaling_kwargs or {})
-    
+
         # --- Process new scalar physics params ---
         if isinstance(mv, (int, float)):
             mv = LearnableMV(initial_value=float(mv))
@@ -236,6 +235,11 @@ class GeoPriorSubsNet(BaseAttentive):
             gamma_w = FixedGammaW(value=float(gamma_w))
         if isinstance(h_ref, (int, float)):
             h_ref = FixedHRef(value=float(h_ref))
+
+        self.scaling_kwargs = dict(scaling_kwargs or {})
+        b = self.scaling_kwargs.get("bounds")
+        if isinstance(b, Mapping) and not isinstance(b, dict):
+            self.scaling_kwargs["bounds"] = dict(b)
 
         self.mv_config = mv
         self.kappa_config = kappa
@@ -1477,7 +1481,7 @@ class GeoPriorSubsNet(BaseAttentive):
             K=K_field,   # <-- predicted K field
             Ss=Ss_field, # <-- predicted Ss field
             Q=Q,         # <-- scalar source/sink (0.0 in current setup)
-            **self.scaling_kwargs,
+            # **self.scaling_kwargs,
         )
 
     def _evaluate_physics_on_batch(

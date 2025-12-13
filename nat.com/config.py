@@ -32,15 +32,15 @@
 # -------------------------------------------------------------------
 # 1.1 City / model identifiers
 # ----------------------------
-# CITY_NAME selects which city dataset is used.  Typical values:
-#   - "nansha"
-#   - "zhongshan"
+# CITY_NAME selects which city dataset is used.
 #
-# MODEL_NAME is the registered model identifier.  For now the
-# main model is:
-#   - "GeoPriorSubsNet"
+# MODEL_NAME selects the model *flavour* used in Stage-2:
+#   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
+#   - "PoroElasticSubsNet"   : poroelastic surrogate (consolidation-only)
+#   - "GeoPriorSubsNet"      : full GeoPriorSubsNet (default)
 CITY_NAME = "zhongshan"
 MODEL_NAME = "GeoPriorSubsNet"
+
 
 
 # 1.2 Data root and file patterns
@@ -281,7 +281,8 @@ GWL_WEIGHTS = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only,
 #   - "gw_flow"        : groundwater flow only,
 #   - "none" or "off"  : physics switched off.
-PDE_MODE_CONFIG = "off"
+PDE_MODE_CONFIG = "both"
+PHYSICS_BASELINE_MODE = "none"  # used for data-only baseline
 
 SCALE_PDE_RESIDUALS = True
 
@@ -291,6 +292,8 @@ LAMBDA_GW = 0.01
 LAMBDA_PRIOR = 0.10
 LAMBDA_SMOOTH = 0.01
 LAMBDA_MV = 0.01
+
+LAMBDA_BOUNDS = 0.0
 
 # Learning-rate multipliers for scalar physics parameters.
 MV_LR_MULT = 1.0
