@@ -244,6 +244,31 @@ LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.01)
 MV_LR_MULT    = cfg.get("MV_LR_MULT",    1.0)
 KAPPA_LR_MULT = cfg.get("KAPPA_LR_MULT", 5.0)
 
+# Global physics bounds (from config.py)
+PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
+
+_default_phys_bounds = {
+    "H_min": 5.0,
+    "H_max": 80.0,
+    "K_min": 1e-8,
+    "K_max": 1e-3,
+    "Ss_min": 1e-7,
+    "Ss_max": 1e-3,
+}
+
+phys_bounds = dict(_default_phys_bounds)
+phys_bounds.update(PHYSICS_BOUNDS_CFG)
+
+# Convert to the form expected by GeoPriorSubsNet / default_scales(...)
+bounds_for_scaling = {
+    "H_min": float(phys_bounds["H_min"]),
+    "H_max": float(phys_bounds["H_max"]),
+    "logK_min": float(np.log(phys_bounds["K_min"])),
+    "logK_max": float(np.log(phys_bounds["K_max"])),
+    "logSs_min": float(np.log(phys_bounds["Ss_min"])),
+    "logSs_max": float(np.log(phys_bounds["Ss_max"])),
+}
+
 # GeoPrior scalar params
 GEOPRIOR_INIT_MV    = cfg.get("GEOPRIOR_INIT_MV",    1e-7)
 GEOPRIOR_INIT_KAPPA = cfg.get("GEOPRIOR_INIT_KAPPA", 1.0)
@@ -315,6 +340,7 @@ config_sections = [
         "GEOPRIOR_KAPPA_MODE": GEOPRIOR_KAPPA_MODE,
         "GEOPRIOR_USE_EFFECTIVE_H": GEOPRIOR_USE_EFFECTIVE_H,
         "GEOPRIOR_HD_FACTOR": GEOPRIOR_HD_FACTOR,
+        "PHYSICS_BOUNDS": phys_bounds,
     }),
     ("Training", {
         "EPOCHS": EPOCHS,
@@ -469,6 +495,11 @@ subsmodel_params = {
     "mode": MODE,
     "attention_levels": ATTENTION_LEVELS,
     "scale_pde_residuals": SCALE_PDE_RESIDUALS,
+    "scaling_kwargs": {
+        # anything else default_scales(...) already expects can
+        # also be passed here later
+        "bounds": bounds_for_scaling,
+    },
     # GeoPrior scalar params
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
     "kappa": LearnableKappa(initial_value=GEOPRIOR_INIT_KAPPA),
@@ -929,16 +960,51 @@ except Exception as e:
 
 #  2.2. Save physic payload 
 # collect once and save
+phys_npz_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_phys_payload_run_val.npz",
+)
 physics_payload = subs_model_loaded.export_physics_payload(
     val_dataset,
     max_batches=None,
-    save_path=os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_phys_payload_run_val.npz"
-    ),
+    save_path=phys_npz_path,
     format="npz",
     overwrite=True,
     metadata={"city": CITY_NAME, "split": "val"},
 )
+# -------------------------------------------------------------------------
+# SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
+# -------------------------------------------------------------------------
+try:
+    from nat.com.sm3_log_offsets_diagnostics import (
+        run_sm3_offsets_from_payload,
+    )
+except ImportError:
+    run_sm3_offsets_from_payload = None
+
+phys_npz_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_phys_payload_run_val.npz",
+)
+
+if run_sm3_offsets_from_payload is not None:
+    try:
+        print("\n[SM3] Running log-offset diagnostics (Supplementary Methods 3)...")
+        _sm3_result = run_sm3_offsets_from_payload(
+            physics_npz_path=phys_npz_path,
+            outdir=RUN_OUTPUT_PATH,
+            city=CITY_NAME,
+            model_name=MODEL_NAME,
+        )
+        print("[SM3] Done. Offsets tables and plots are available in:")
+        print(f"      - raw:     {_sm3_result['raw_csv']}")
+        print(f"      - summary: {_sm3_result['summary_csv']}")
+    except Exception as e:
+        print(f"[Warn] SM3 log-offset diagnostics failed: {e}")
+else:
+    print("[SM3] sm3_log_offsets_diagnostics module not available "
+          "(skipping SM3 diagnostics).")
+
 #
 # --- 2.3 Interval diagnostics + optional censor-stratified MAE ---
 cov80_uncal = cov80_cal = sharp80_uncal = sharp80_cal = None

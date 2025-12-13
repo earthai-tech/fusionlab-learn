@@ -309,6 +309,31 @@ ATTENTION_LEVELS  = cfg_hp.get("ATTENTION_LEVELS",
                                ["cross", "hierarchical", "memory"])
 SCALE_PDE_RESIDUALS = cfg_hp.get("SCALE_PDE_RESIDUALS", True)
 
+# Global physics bounds (from config.py / config.json)
+PHYSICS_BOUNDS_CFG = cfg_hp.get("PHYSICS_BOUNDS", {}) or {}
+
+_default_phys_bounds = {
+    "H_min": 5.0,
+    "H_max": 80.0,
+    "K_min": 1e-8,
+    "K_max": 1e-3,
+    "Ss_min": 1e-7,
+    "Ss_max": 1e-3,
+}
+
+phys_bounds = dict(_default_phys_bounds)
+phys_bounds.update(PHYSICS_BOUNDS_CFG)
+
+# Convert to the form expected by GeoPriorSubsNet / default_scales(...)
+bounds_for_scaling = {
+    "H_min": float(phys_bounds["H_min"]),
+    "H_max": float(phys_bounds["H_max"]),
+    "logK_min": float(np.log(phys_bounds["K_min"])),
+    "logK_max": float(np.log(phys_bounds["K_max"])),
+    "logSs_min": float(np.log(phys_bounds["Ss_min"])),
+    "logSs_max": float(np.log(phys_bounds["Ss_max"])),
+}
+
 # 2.1 Non-HP fixed params (derived from shapes/config)
 fixed_params = {
     "static_input_dim": STATIC_DIM,
@@ -324,12 +349,17 @@ fixed_params = {
     "pde_mode": PDE_MODE_CONFIG,
     "scale_pde_residuals": SCALE_PDE_RESIDUALS,
     "use_effective_h": USE_EFFECTIVE_H,
+    "scaling_kwargs": {
+        # same structure as in training_NATCOM_GEOPRIOR.py
+        "bounds": bounds_for_scaling,
+    },
     "architecture_config": {
         "encoder_type": "hybrid",
         "decoder_attention_stack": ATTENTION_LEVELS,
         "feature_processing": "vsn",
     },
 }
+
 # # 2.2 Hyperparameter search space
 
 search_space_cfg = cfg_hp.get("TUNER_SEARCH_SPACE", None)
@@ -488,6 +518,7 @@ config_sections = [
         "SCALE_PDE_RESIDUALS": SCALE_PDE_RESIDUALS,
         "USE_EFFECTIVE_H": USE_EFFECTIVE_H,
         "QUANTILES": QUANTILES,
+        "PHYSICS_BOUNDS": phys_bounds,
     }),
     ("Fixed dimensions (from NPZ)", {
         "STATIC_DIM": STATIC_DIM,

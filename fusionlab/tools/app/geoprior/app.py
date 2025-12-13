@@ -260,7 +260,7 @@ class GeoPriorForecaster(QMainWindow):
         self._feature_tip_shown: bool = False
         
         # Map lowercased city name -> manifest path (string)
-        self._preferred_stage1_manifest_by_city: Dict[str, str] = {}
+        self._preferred_stage1_by_city: Dict[str, str] = {}
 
 
     def _init_help_texts(self) -> None:

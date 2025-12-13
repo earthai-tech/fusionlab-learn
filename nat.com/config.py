@@ -296,6 +296,27 @@ LAMBDA_MV = 0.01
 MV_LR_MULT = 1.0
 KAPPA_LR_MULT = 5.0
 
+# 4.3bis Physics bounds for scaling
+# ---------------------------------
+# Global, city-level ranges used when scaling PDE residuals and
+# defining log-offset priors.
+#
+# Bounds are specified in *linear* space here (no numpy in config.py);
+# the training script converts them to log-space as needed.
+
+PHYSICS_BOUNDS = {
+    # Effective thickness H [m]
+    "H_min": 5.0,
+    "H_max": 80.0,
+
+    # Hydraulic conductivity K [m/s]
+    "K_min": 1e-8,
+    "K_max": 1e-3,
+
+    # Specific storage Ss [Pa^-1]
+    "Ss_min": 1e-7,
+    "Ss_max": 1e-3,
+}
 
 # 4.4 GeoPrior scalar parameters
 # ------------------------------

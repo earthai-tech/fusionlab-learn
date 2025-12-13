@@ -3,19 +3,35 @@
 # Author: LKouadio <etanoyau@gmail.com>
 
 """
-Module `fusionlab.params` provides simple, self-documenting classes to
-specify how the PINN's physical coefficient :math:`C` should be handled:
+Module ``fusionlab.params`` provides small, self-documenting helpers
+for scalar physical hyperparameters used in PINNs and physics-guided
+nets.
 
-- `LearnableC`: learn :math:`C` (i.e., trainable), initialized via
-  `initial_value`.
-- `FixedC`: keep :math:`C` fixed (non-trainable) at a specified value.
-- `DisabledC`: disable physics (treat :math:`C` as 1.0 internally,
-  but unused).
+Two families of descriptors are provided:
 
-These classes make the model signature clearer than passing bare strings
-or floats.  When building the PINN, one checks `isinstance(..., LearnableC)`,
-etc., and sets up trainable weights accordingly.
+- Learnable scalars (subclasses of :class:`BaseLearnable`) such as
+  :class:`LearnableK`, :class:`LearnableSs`, :class:`LearnableMV`,
+  :class:`LearnableKappa`, etc.  These wrap a trainable scalar, often
+  stored in log-space to enforce positivity.
+
+- Fixed scalars (subclasses of :class:`BaseFixed`) such as
+  :class:`FixedGammaW` and :class:`FixedHRef`, used for constants in
+  the physics block.
+
+Legacy descriptors :class:`LearnableC`, :class:`FixedC` and
+:class:`DisabledC` are kept for backwards-compatible handling of a
+generic positive coefficient :math:`C`.
+
+In the GeoPriorSubsNet consolidation model specifically, the spatial
+fields :math:`K(x,y)`, :math:`S_s(x,y)`, :math:`H(x,y)` and the
+relaxation time :math:`\\tau(x,y)` are represented as *effective
+fields* built from covariates and the neural network, whereas the
+scalar wrappers here represent global hyperparameters such as the
+effective compressibility :math:`m_v`, the consistency factor
+:math:`\\bar\\kappa`, the unit weight of water :math:`\\gamma_w`
+and the reference head :math:`h_{\\mathrm{ref}}`.
 """
+
 from __future__ import annotations
 import importlib
 from typing import Any, Union, Optional, Dict, Type
@@ -212,7 +228,7 @@ class FixedC(_BaseC):
             )
         if value < 0:
             raise ValueError(
-                "LearnableC.initial_value must be strictly positive."
+                "FixedC.value must be non-negative."
             )
         self._value = float(value) 
         self._export_kw = {"value": self._value}             # type: ignore
@@ -245,7 +261,7 @@ class DisabledC(_BaseC):
     
     def _make_value(self) -> float:                          # noqa: D401
         self._export_kw = {}                                 # type: ignore
-        # return 1.0  # No need
+        return 1.0  # convention, but unused when physics is disabled
         
 @register_keras_serializable("fusionlab.params", name ="BaseLearnable")
 class BaseLearnable(ABC):
@@ -566,18 +582,25 @@ class LearnableQ(BaseLearnable):
 
 @register_keras_serializable("fusionlab.params", name="LearnableMV")
 class LearnableMV(BaseLearnable):
-    """
-    Learnable scalar coefficient of volume compressibility (m_v).
-    
-    Used in the revised consolidation model:
-    :math:`s_{eq}(h) = m_v \gamma_w \Delta h H`
-    
-    Ensures positivity via log-space transform.
+    r"""
+    Learnable effective vertical compressibility (m_v).
+
+    In GeoPriorSubsNet this is a *global scalar* that links head
+    changes to equilibrium settlement via
+    :math:`s_{\\mathrm{eq}}(h) = m_v\\,\\gamma_w\\,\\Delta h\\,H`,
+    where :math:`H(x,y)` is an effective compressible thickness
+    field.  The field :math:`S_s(x,y)` is interpreted as an effective
+    specific storage, with :math:`S_s \\approx m_v\\,\\gamma_w` used
+    as a soft consistency relation rather than a hard identity.
+
+    Positivity is enforced by learning :math:`\\log(m_v)`.
 
     Parameters
     ----------
     initial_value : float, default=1e-7
-        Initial value for :math:`m_v` [Pa^-1]. Must be positive.
+        Initial value for :math:`m_v` [Pa^-1].  Must be positive
+        and typically falls in a geotechnically plausible range
+        (e.g. :math:`10^{-9}–10^{-5}` Pa^-1).
     name : str, optional
         Variable name.
     trainable : bool, default=True
@@ -610,17 +633,33 @@ class LearnableMV(BaseLearnable):
 @register_keras_serializable("fusionlab.params", name="LearnableKappa")
 class LearnableKappa(BaseLearnable):
     """
-    Learnable scalar consistency prior parameter (kappa_bar).
-    
-    Used in the prior loss term:
-    :math:`L_{prior} = ||\log \tau - \log((\bar{\kappa} H^2) / ((\pi^2 K) / S_s))||^2`
-    
-    Ensures positivity via log-space transform.
+    Learnable scalar consistency factor (:math:`\\bar{\\kappa}`).
+
+    In the revised consolidation prior, :math:`\\bar{\\kappa}` relates
+    the effective relaxation time :math:`\\tau(x,y)` to the
+    Terzaghi-style diffusion time built from the effective fields
+    :math:`K(x,y)`, :math:`S_s(x,y)` and :math:`H(x,y)`.  In the
+    manuscript, it collects terms such as drainage-path ratios and
+    leakage / anisotropy factors.
+
+    It enters a soft prior term of the form
+
+    .. math::
+        \\log \\tau_{\\mathrm{prior}}(x,y)
+        \\approx
+        \\log\\left(
+          \\frac{\\bar{\\kappa} H(x,y)^2}
+               {\\pi^2 K(x,y) / S_s(x,y)}
+        \\right),
+
+    which is penalised against the learned :math:`\\log \\tau(x,y)`.
+
+    Positivity is enforced via a log-space parametrisation.
 
     Parameters
     ----------
     initial_value : float, default=1.0
-        Initial value for :math:`\bar{\kappa}`. Must be positive.
+        Initial guess for :math:`\\bar{\\kappa}`
     name : str, optional
         Variable name.
     trainable : bool, default=True
@@ -797,10 +836,15 @@ class BaseFixed(ABC):
 @register_keras_serializable("fusionlab.params", name="FixedGammaW")
 class FixedGammaW(BaseFixed):
     """
-    Fixed scalar parameter for the unit weight of water (gamma_w).
-    
-    Used in :math:`s_{eq}(h) = m_v \gamma_w \Delta h H`. This is a
-    physical constant and should not be trainable.
+    Fixed scalar for the (effective) unit weight of water
+    :math:`\\gamma_w`.
+
+    Used in :math:`s_{\\mathrm{eq}}(h) = m_v\\,\\gamma_w\\,\\Delta h\\,H`.
+    Treated as a constant (non-trainable); in most applications
+    :math:`\\gamma_w \\approx 9{,}810\\ \\mathrm{N\\,m^{-3}}`.
+
+    Internally we keep :math:`\\log(\\gamma_w)` for numerical stability
+    and return :math:`\\gamma_w` via :meth:`get_value`.
 
     Parameters
     ----------
@@ -832,10 +876,12 @@ class FixedGammaW(BaseFixed):
 @register_keras_serializable("fusionlab.params", name="FixedHRef")
 class FixedHRef(BaseFixed):
     """
-    Fixed scalar parameter for the reference head (h_ref).
-    
-    Used to calculate drawdown: :math:`\Delta h = h_{ref} - h`.
-    This is typically a user-defined hyperparameter and is not trainable.
+    Fixed scalar for the reference head :math:`h_{\\mathrm{ref}}`.
+
+    Used to define drawdown :math:`\\Delta h = h_{\\mathrm{ref}} - h`.
+    This is a modelling convention rather than a material property;
+    typically set to zero or to a long-term pre-development level and
+    kept non-trainable.
 
     Parameters
     ----------

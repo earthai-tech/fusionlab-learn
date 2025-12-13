@@ -267,7 +267,35 @@ class GeoPriorSubsNet(BaseAttentive):
         self._build_pinn_components()
 
     def _build_attentive_layers(self):
-
+        r"""
+        Extend :class:`BaseAttentive` with physics-specific heads.
+    
+        This method first delegates to
+        :meth:`BaseAttentive._build_attentive_layers` to construct the
+        standard encoder/decoder stack (VSN blocks, multi-scale LSTMs,
+        attention layers, etc.), and then adds the extra components
+        required by the PINN:
+    
+        * a **physics head** that predicts the raw fields
+          :math:`K(x,y)`, :math:`S_s(x,y)`, and :math:`\tau(x,y)`,
+    
+        * scalar **diagnostic metrics** for the physics residuals
+          (:math:`\epsilon_\text{prior}`, :math:`\epsilon_\text{cons}`),
+    
+        * a placeholder for the layer thickness field ``H_field`` that
+          is populated during :meth:`call`.
+    
+        Notes
+        -----
+        * The physics head operates on the 3D decoder features returned
+          by :meth:`run_encoder_decoder_core`. Its outputs are further
+          processed by :meth:`split_physics_predictions` (positivity and
+          splitting into individual fields).
+        * The two ``Mean`` metrics are updated inside
+          :meth:`test_step` and :meth:`evaluate_physics`, providing
+          lightweight monitoring of the physics misfit during training
+          and evaluation.
+        """
         # Build the standard attentive stack (encoder + decoder + VSN).
         super()._build_attentive_layers()
     
@@ -300,7 +328,53 @@ class GeoPriorSubsNet(BaseAttentive):
         hidden: Tuple[int, int] = (32, 16),
         act: str = "gelu",
     ) -> None:
-
+        r"""
+        Initialize coordinate-based correction MLPs.
+    
+        Each field (subsidence, GW head, :math:`K`, :math:`S_s`,
+        :math:`\tau`) receives an additive correction from a small MLP
+        that depends explicitly on coordinates :math:`(t, x, y)`.
+    
+        The rationale is twofold:
+    
+        1.  Guarantee a **direct differentiable path** from
+            :math:`(t,x,y)` to all physics outputs, so that PDE
+            residuals have non-zero gradients (avoiding ``None``
+            gradients and NaNs in physics losses).
+        2.  Allow flexible, spatially-varying corrections on top of the
+            base decoder features, improving expressiveness in complex
+            urban settings.
+    
+        Parameters
+        ----------
+        gwl_units : int or None, default=None
+            Output width for the groundwater-head correction branch.
+            Defaults to :attr:`output_gwl_dim`.
+    
+        subs_units : int or None, default=None
+            Output width for the subsidence correction branch.
+            Defaults to :attr:`output_subsidence_dim`.
+    
+        hidden : (int, int), default=(32, 16)
+            Hidden layer sizes used for all coordinate MLPs. Each branch
+            has the structure ``[Dense(hidden[0]), Dense(hidden[1]),
+            Dense(out_units)]``.
+    
+        act : str, default="gelu"
+            Activation function for the hidden layers (shared across all
+            branches).
+    
+        Notes
+        -----
+        * All branches take an input of shape ``(B, H, 3)`` corresponding
+          to :math:`(t, x, y)` (or a reshaped equivalent) and return a
+          tensor with the same spatial shape and field-specific channel
+          dimension.
+        * Corrections are applied on top of the physics head outputs and 
+        then passed through positive(·) again to keep 
+        :math:`K`, :math:`S_s`, and :math:`\tau` 
+        strictly positive..
+        """
         gwl_units = gwl_units or self.output_gwl_dim
         subs_units = subs_units or self.output_subsidence_dim
     
@@ -334,7 +408,35 @@ class GeoPriorSubsNet(BaseAttentive):
         self.tau_coord_mlp = _branch(self.output_tau_dim, "tau_coord_mlp")
 
     def _build_pinn_components(self):
-
+        r"""
+        Instantiate trainable and fixed scalar physics coefficients.
+    
+        This method builds the scalar parameters used in the PDE
+        residuals and geomechanical priors, namely:
+    
+        * :math:`m_v` (compressibility),
+        * :math:`\kappa` (consistency factor),
+        * :math:`\gamma_w` (unit weight of water),
+        * :math:`h_\text{ref}` (reference hydraulic head).
+    
+        The first two may be **learnable** (wrapped in
+        :class:`LearnableMV` / :class:`LearnableKappa`) or fixed,
+        depending on how the model was configured. The scalar values
+        are stored in log-space to enforce positivity.
+    
+        Notes
+        -----
+        * If ``mv_config`` or ``kappa_config`` is an instance of the
+          corresponding ``Learnable*`` wrapper, we create a trainable
+          weight ``log_mv`` / ``log_kappa`` which is later exponentiated
+          via :meth:`_mv_value` and :meth:`_kappa_value`.
+        * If they are fixed wrappers, we create constant tensors
+          ``_mv_fixed`` / ``_kappa_fixed`` instead.
+        * The raw physics fields ``K_field``, ``Ss_field`` and
+          ``tau_field`` are initialized to ``None`` and are populated
+          after calls to :meth:`split_physics_predictions` during the
+          forward pass.
+        """
     
         # Compressibility m_v
         if isinstance(self.mv_config, LearnableMV):
@@ -401,7 +503,79 @@ class GeoPriorSubsNet(BaseAttentive):
         coords_input: Tensor,
         training: bool,
     ) -> Tuple[Tensor, Tensor]:
-        
+        r"""
+        Core encoder–decoder pass with explicit coordinate injection.
+    
+        This method overrides
+        :meth:`BaseAttentive.run_encoder_decoder_core` to insert the
+        coordinate tensor :math:`(t, x, y)` into the decoder path,
+        ensuring that all downstream data and physics outputs have a
+        differentiable dependence on space and time.
+    
+        Parameters
+        ----------
+        static_input : tf.Tensor
+            Static covariates with shape ``(B, S)`` (or ``(B, S')`` after
+            preprocessing). May be zero-width if no static features
+            were configured.
+    
+        dynamic_input : tf.Tensor
+            Dynamic covariates with shape ``(B, T, D)`` where ``T`` is
+            the number of encoder time steps and ``D`` is the number of
+            dynamic features.
+    
+        future_input : tf.Tensor
+            Future covariates for the decoder, with shape dependent on
+            the mode:
+    
+            * ``"tft_like"``: typically ``(B, T + H, D_f)``; the first
+              ``T`` steps may be used by the encoder, the last ``H`` by
+              the decoder.
+            * ``"pihal_like"``: typically ``(B, H, D_f)``; only the
+              forecast horizon is used in the decoder.
+            * may be zero-width or ``None`` if no future covariates are
+              present.
+    
+        coords_input : tf.Tensor
+            Coordinate tensor to inject into the decoder, with shape
+            ``(B, H, 3)`` corresponding to ``(t, x, y)`` across the
+            forecast horizon. This is critical for PDE-based physics:
+            if this tensor is missing or not connected properly, the
+            PDE gradients w.r.t. :math:`(t, x, y)` will be zero or
+            ``None``.
+    
+        training : bool
+            Standard Keras training flag for controlling dropout, batch
+            normalization, etc.
+    
+        Returns
+        -------
+        data_features_2d : tf.Tensor
+            Time-aggregated decoder features for the **data path** with
+            shape ``(B, U_data)``. These are fed into
+            :attr:`multi_decoder` to produce subsidence and GW head.
+    
+        phys_features_raw_3d : tf.Tensor
+            Time-distributed decoder features for the **physics path**
+            with shape ``(B, H, U_phys)``. These go into
+            :attr:`physics_mean_head` to yield raw
+            :math:`K, S_s, \tau` fields.
+    
+        Notes
+        -----
+        * Most of the logic mirrors :class:`BaseAttentive`:
+    
+          - VSN / dense preprocessing for each feature block,
+          - hybrid LSTM / transformer encoder,
+          - multi-level attention in the decoder.
+    
+          The main modification is the **coordinate injection** into
+          the ``decoder_parts`` list.
+    
+        * If ``coords_input`` is ``None``, a ``ValueError`` is raised
+          immediately, since the PINN cannot function without a valid
+          coordinate path.
+        """
         # ------------------------------------------------------------------
         # 0. Basic time dimension inference
         # ------------------------------------------------------------------
@@ -604,7 +778,73 @@ class GeoPriorSubsNet(BaseAttentive):
         inputs: Dict[str, Optional[Tensor]],
         training: bool = False,
     ) -> Dict[str, Tensor]:
-        
+        r"""
+        Forward pass separating data and physics paths.
+    
+        This override of :meth:`tf.keras.Model.call` does three things:
+    
+        1.  Unpacks and validates all PINN inputs via
+            :func:`process_pinn_inputs`, including coordinates and
+            the geomechanical thickness field ``H_field``.
+        2.  Constructs a coordinate tensor
+            :math:`(t, x, y)` with shape ``(B, H, 3)`` that is injected
+            into the decoder path of :class:`BaseAttentive` through
+            :meth:`run_encoder_decoder_core`. This guarantees that all
+            physics heads depend on space and time.
+        3.  Produces separate outputs for:
+    
+            * the **data path** (subsidence and hydraulic head),
+            * the **physics path** (raw :math:`K, S_s, \tau` fields).
+    
+        Parameters
+        ----------
+        inputs : dict
+            Mapping of input tensors. The exact set of required keys is
+            handled by :func:`process_pinn_inputs`, but typically includes:
+    
+            * ``"coords"`` or equivalent components for time and space,
+            * ``"H_field"`` (or ``"soil_thickness"``) for layer thickness,
+            * ``"static_features"`` (optional),
+            * ``"dynamic_features"`` (required),
+            * ``"future_features"`` (optional, depending on mode).
+    
+            All tensors are expected to be batched with a leading
+            dimension ``B``. Time and horizon dimensions must be
+            consistent with the configuration passed at initialization
+            and enforced via :func:`check_inputs` and
+            :func:`validate_model_inputs`.
+    
+        training : bool, default=False
+            Standard Keras ``training`` flag. Controls dropout, batch
+            normalization, etc., in both the data encoder/decoder and
+            the physics heads.
+    
+        Returns
+        -------
+        dict
+            Dictionary with three entries:
+    
+            * ``"data_final"`` : Tensor with the **final data outputs**,
+              i.e. subsidence and head after optional quantile expansion.
+              Shape typically ``(B, H, Q, D_data)`` or similar.
+            * ``"data_mean"`` : Tensor with the **mean data outputs**
+              before quantile modeling. Shape typically ``(B, H, D_data)``.
+            * ``"phys_mean_raw"`` : Tensor with raw physics features
+              (pre-positivity) for :math:`K`, :math:`S_s`, :math:`\tau`,
+              with shape ``(B, H, D_phys)`` where ``D_phys = 3`` here.
+    
+        Notes
+        -----
+        * The field :attr:`self.H_field` is updated on every call from
+          the unpacked ``H_field`` input. This is later used by
+          :meth:`evaluate_physics` and the diagnostics helpers.
+        * Coordinate injection is **central** to the PINN behaviour.
+          The tensor ``coords_for_decoder = concat([t, x, y], axis=-1)``
+          is passed to :meth:`run_encoder_decoder_core`, ensuring that
+          all physics fields (:math:`K, S_s, \tau`) and data outputs rely
+          on :math:`(t, x, y)`. If this path is broken, PDE gradients
+          may become ``None`` and will be caught in :meth:`train_step`.
+        """
         # ------------------------------------------------------------------
         # 1. Unpack and validate all PINN inputs
         # ------------------------------------------------------------------
@@ -715,7 +955,82 @@ class GeoPriorSubsNet(BaseAttentive):
         }
 
     def train_step(self, data):
-        
+        r"""
+        Single optimization step uniting data loss and physics-informed terms.
+    
+        This method implements the full loss function described in the
+        revised manuscript:
+    
+        .. math::
+    
+            L_\text{total}
+            &= L_\text{data}
+             + \lambda_\text{cons} L_\text{cons}
+             + \lambda_\text{gw}   L_\text{gw}
+             + \lambda_\text{prior} L_\text{prior}
+             + \lambda_\text{smooth} L_\text{smooth}
+             + \lambda_{m_v} L_{m_v},
+    
+        where
+    
+        * :math:`L_\text{data}` is the supervised loss on subsidence and
+          head predictions (quantile or mean, depending on the compiled
+          loss),
+        * :math:`L_\text{gw}` is based on the groundwater-flow residual
+          :math:`R_\text{gw}`,
+        * :math:`L_\text{cons}` is based on the consolidation residual
+          :math:`R_\text{cons}`,
+        * :math:`L_\text{prior}` enforces consistency between
+          :math:`\tau`, :math:`K`, :math:`S_s` and :math:`H`,
+        * :math:`L_\text{smooth}` discourages spatial roughness in
+          :math:`K` and :math:`S_s`,
+        * :math:`L_{m_v}` is the storage identity penalty linking
+          :math:`S_s` and :math:`m_v`.
+    
+        Parameters
+        ----------
+        data : tuple
+            Tuple ``(inputs, targets)`` as provided by a Keras
+            ``tf.data.Dataset``:
+    
+            * ``inputs`` : mapping accepted by :meth:`call`, and
+              **must** include ``"H_field"`` or ``"soil_thickness"`` for
+              the consolidation and prior terms.
+            * ``targets`` : either
+    
+              - a dict with keys ``"subsidence"`` and ``"gwl"`` (mapped
+                internally to ``"subs_pred"`` / ``"gwl_pred"``), or
+              - directly a mapping compatible with the compiled loss.
+    
+        Returns
+        -------
+        dict
+            Dictionary of scalar training metrics including, at minimum:
+    
+            * ``"total_loss"`` : full loss including physics terms,
+            * ``"data_loss"`` : supervised loss only,
+            * ``"physics_loss"`` : weighted sum of physics components,
+            * individual physics components:
+              ``"consolidation_loss"``, ``"gw_flow_loss"``,
+              ``"prior_loss"``, ``"smooth_loss"``, ``"mv_prior_loss"``,
+            * all metrics registered in :attr:`self.metrics`.
+    
+        Notes
+        -----
+        * All PDE-related derivatives are computed via
+          :class:`tf.GradientTape` with explicit ``tape.watch`` calls on
+          :math:`t, x, y` **and** the corrected physics fields
+          (:math:`K`, :math:`S_s`, :math:`\tau`). If any of those
+          gradients are ``None``, a ``ValueError`` is raised with the
+          missing keys. This is a crucial guard to prevent silent NaNs.
+        * Physics can be fully disabled by including ``"none"`` in
+          :attr:`pde_modes_active`. In that case, all residuals are
+          forced to zero and the physics loss weights are zeroed in
+          :meth:`compile`.
+        * The gradients for the scalar physics parameters :math:`m_v` and
+          :math:`\kappa` are scaled via :meth:`_scale_param_grads`, which
+          applies per-parameter learning-rate multipliers.
+        """
         # -----------------------------------------------------------------
         # 0. Unpack and normalize targets
         # -----------------------------------------------------------------
@@ -1025,7 +1340,61 @@ class GeoPriorSubsNet(BaseAttentive):
         return results
 
     def test_step(self, data):
-        
+        r"""
+        Evaluation step mirroring :meth:`train_step` (data-only + physics).
+    
+        This overrides :meth:`tf.keras.Model.test_step` to ensure that:
+    
+        * The **same supervised mapping** used in
+          :meth:`train_step` is used for evaluation, i.e.
+          ``{"subs_pred", "gwl_pred"}`` heads.
+        * Data loss and metrics are computed exactly as during training.
+        * Optional **physics diagnostics** are logged via
+          :meth:`evaluate_physics` **without** computing gradients.
+    
+        Parameters
+        ----------
+        data : tuple
+            A tuple ``(inputs, targets)`` where:
+    
+            * ``inputs`` is a mapping accepted by :meth:`call`, and must
+              contain at least the coordinate tensor (``"coords"``) and
+              ``"H_field"`` / ``"soil_thickness"`` if physics is enabled.
+            * ``targets`` is either
+    
+              - a dict with keys ``"subsidence"`` and ``"gwl"``, or
+              - a dict with keys ``"subs_pred"`` and ``"gwl_pred"``, or
+              - a tensor-like already matching the compiled loss.
+    
+            In the dict case, keys are renamed to the canonical
+            ``"subs_pred"`` / ``"gwl_pred"`` mapping used during training.
+    
+        Returns
+        -------
+        dict
+            Dictionary of scalar metrics. At minimum, contains:
+    
+            * ``"loss"`` : data loss (same definition as in training),
+            * ``"epsilon_prior"`` : RMS of the consistency prior
+              :math:`R_\text{prior}`,
+            * ``"epsilon_cons"`` : RMS of the consolidation residual
+              :math:`R_\text{cons}`,
+    
+            plus all metrics registered in :attr:`self.metrics`
+            (e.g. MAE, MSE, coverage, sharpness, etc.).
+    
+        Notes
+        -----
+        * Physics diagnostics are computed on the **input batch only**
+          (no dataset iteration here) by calling
+          :meth:`evaluate_physics(inputs)`. This uses the same internal
+          helpers as training (``_compute_consistency_prior``,
+          ``_compute_consolidation_residual``).
+        * When physics is turned off (``pde_modes_active`` contains
+          ``"none"``), we **still** update the epsilon metrics with
+          zeros. This keeps the logging interface stable and avoids
+          NaN metrics in purely data-driven runs.
+        """
         # --- 0. Unpack and normalize targets 
         inputs, targets = data
     
@@ -1212,7 +1581,48 @@ class GeoPriorSubsNet(BaseAttentive):
         Ss_field,
         Q: float = 0.0,
     ):
-
+        r"""
+        Compute groundwater-flow residual
+    
+        .. math::
+    
+            R_\text{gw}
+            = S_s \frac{\partial h}{\partial t}
+              - \nabla \cdot (K \nabla h) - Q,
+    
+        where :math:`h` is hydraulic head, :math:`K` hydraulic
+        conductivity, :math:`S_s` specific storage and :math:`Q`
+        represents distributed sources/sinks.
+    
+        If the mode ``"gw_flow"`` is not active in
+        :attr:`pde_modes_active`, this method returns a tensor of
+        zeros with the same shape as ``dh_dt`` so that the term is
+        effectively disabled in the total loss.
+    
+        Parameters
+        ----------
+        dh_dt : tf.Tensor
+            Time derivative :math:`\partial h / \partial t`, shape
+            ``(B, H, 1)``.
+        d_K_dh_dx_dx, d_K_dh_dy_dy : tf.Tensor
+            Spatial derivatives of :math:`K \, \partial h / \partial x`
+            and :math:`K \, \partial h / \partial y` w.r.t. ``x`` and
+            ``y`` respectively, each of shape ``(B, H, 1)``.
+            These are usually obtained inside :meth:`train_step` via
+            nested :class:`tf.GradientTape` calls.
+        Ss_field : tf.Tensor
+            Specific storage field :math:`S_s(x,y)`, shape
+            ``(B, H, 1)``.
+        Q : float, default=0.0
+            Source/sink term. For the current GeoPriorSubsNet
+            experiments we set :math:`Q = 0`.
+    
+        Returns
+        -------
+        tf.Tensor
+            Groundwater-flow residual :math:`R_\text{gw}` with the
+            same shape as ``dh_dt``.
+        """
         if "gw_flow" not in self.pde_modes_active:
             return tf_zeros_like(dh_dt)
     
@@ -1230,7 +1640,63 @@ class GeoPriorSubsNet(BaseAttentive):
         H_field,
         tau_field,
     ):
-
+        r"""
+        Compute consolidation residual
+    
+        .. math::
+    
+            R_\text{cons}
+            = \frac{\partial s}{\partial t}
+              - \frac{s_\text{eq}(h) - s}{\tau},
+    
+        where the equilibrium settlement :math:`s_\text{eq}` is given
+        by
+    
+        .. math::
+    
+            s_\text{eq}(h)
+            = m_v \, \gamma_w \, (h_\text{ref} - h) \, H.
+    
+        Here :math:`s` is subsidence, :math:`h` hydraulic head,
+        :math:`H` the thickness field, :math:`m_v` compressibility,
+        :math:`\gamma_w` the unit weight of water, and
+        :math:`h_\text{ref}` a reference head.
+    
+        If the mode ``"consolidation"`` is not active in
+        :attr:`pde_modes_active`, a zero tensor is returned so this
+        term does not contribute to the loss.
+    
+        **NaN safety**
+    
+        - ``tau_field`` is clamped from below by a small
+          :math:`\varepsilon` before performing the division to avoid
+          accidental division by zero if the network predicts extremely
+          small :math:`\tau`.
+    
+        Parameters
+        ----------
+        ds_dt : tf.Tensor
+            Time derivative :math:`\partial s / \partial t`, shape
+            ``(B, H, 1)``.
+        s_mean : tf.Tensor
+            Mean subsidence field :math:`s(x,y,t)`, shape
+            ``(B, H, 1)``.
+        h_mean : tf.Tensor
+            Mean hydraulic head field :math:`h(x,y,t)`, shape
+            ``(B, H, 1)``.
+        H_field : tf.Tensor
+            Thickness field :math:`H(x,y)`, shape ``(B, H, 1)``.
+        tau_field : tf.Tensor
+            Relaxation time field :math:`\tau(x,y)`, shape
+            ``(B, H, 1)``, usually already passed through a
+            positivity function.
+    
+        Returns
+        -------
+        tf.Tensor
+            Consolidation residual :math:`R_\text{cons}` with the
+            same shape as ``ds_dt``.
+        """
         if "consolidation" not in self.pde_modes_active:
             return tf_zeros_like(ds_dt)
     
@@ -1256,7 +1722,66 @@ class GeoPriorSubsNet(BaseAttentive):
         tau_field,
         H_field,
     ):
-
+        r"""
+        Compute the geomechanical consistency prior
+    
+        .. math::
+    
+            R_\text{prior} = \log(\tau_\text{pred})
+                             - \log(\tau_\text{phys})
+    
+        where :math:`\tau_\text{phys}` is the physical time scale implied
+        by :math:`K, S_s, H` and the scalar coefficient :math:`\kappa`.
+    
+        For ``kappa_mode == "bar"`` we interpret :math:`\kappa` as
+        :math:`\bar{\kappa}` acting on an *effective* thickness
+        :math:`H_\text{eff} = H_d`:
+    
+        .. math::
+    
+            \tau_\text{phys}
+            = \frac{\bar{\kappa} \, H_\text{eff}^2 \, S_s}
+                   {\pi^2 K}.
+    
+        For ``kappa_mode == "kb"`` we interpret :math:`\kappa` as a
+        basal :math:`\kappa_b` so that the factor
+    
+        .. math::
+    
+            \left(\frac{H_d}{H}\right)^2
+    
+        is handled explicitly in the expression.
+    
+        **NaN safety**
+    
+        - All quantities entering ``log(·)`` are shifted by a small
+          :math:`\varepsilon` to avoid ``log(0)``.
+        - This is *critical* for ``kappa_mode == "kb"`` where the
+          original implementation used ``log(H_field)`` directly, which
+          produced ``-inf`` and hence ``NaN`` losses when
+          :math:`H = 0`.
+    
+        Parameters
+        ----------
+        K_field : tf.Tensor
+            Predicted hydraulic conductivity field :math:`K(x,y)`,
+            shape ``(B, H, 1)``.
+        Ss_field : tf.Tensor
+            Predicted specific storage field :math:`S_s(x,y)`,
+            shape ``(B, H, 1)``.
+        tau_field : tf.Tensor
+            Predicted relaxation time field :math:`\tau(x,y)`,
+            shape ``(B, H, 1)``.
+        H_field : tf.Tensor
+            Input thickness field :math:`H(x,y)`, in model units,
+            shape ``(B, H, 1)``.
+    
+        Returns
+        -------
+        tf.Tensor
+            Residual :math:`R_\text{prior}` with the same shape
+            as ``tau_field``.
+        """
         eps = tf_constant(1e-6, dtype=tf_float32)
         pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
     
@@ -1332,7 +1857,63 @@ class GeoPriorSubsNet(BaseAttentive):
         }
 
     def _tau_phys_from_fields(self, K_field, Ss_field, H_field):
-
+        r"""
+        Compute the physical time scale :math:`\tau_\text{phys}` implied
+        by :math:`K, S_s, H` and the scalar coefficient :math:`\kappa`.
+    
+        This is the linear-space counterpart of
+        :meth:`_compute_consistency_prior` and follows the same
+        ``kappa_mode`` logic.
+    
+        For ``kappa_mode == "bar"``:
+    
+        .. math::
+    
+            \tau_\text{phys}
+            = \frac{\bar{\kappa} \, H_\text{eff}^2 \, S_s}
+                   {\pi^2 K},
+    
+        where :math:`H_\text{eff}` is the effective thickness
+        (either :math:`H` or :math:`H_d` depending on
+        ``use_effective_thickness``).
+    
+        For ``kappa_mode == "kb"``:
+    
+        .. math::
+    
+            \tau_\text{phys}
+            = \frac{\kappa_b \, (H_\text{eff}/H)^2 \, H^2 \, S_s}
+                   {\pi^2 K}.
+    
+        **NaN / inf safety**
+    
+        - ``K_field`` and ``Ss_field`` are clipped to be at least
+          :math:`\varepsilon` before entering the denominators.
+        - ``H_field`` and the effective thickness are shifted by
+          :math:`\varepsilon` to avoid zero divisions in the ratio
+          :math:`H_\text{eff} / H`.
+    
+        Parameters
+        ----------
+        K_field : tf.Tensor
+            Predicted hydraulic conductivity field :math:`K(x,y)`,
+            shape ``(B, H, 1)``.
+        Ss_field : tf.Tensor
+            Predicted specific storage field :math:`S_s(x,y)`,
+            shape ``(B, H, 1)``.
+        H_field : tf.Tensor
+            Input thickness field :math:`H(x,y)`, in model units,
+            shape ``(B, H, 1)``.
+    
+        Returns
+        -------
+        tau_phys : tf.Tensor
+            Physical relaxation time :math:`\tau_\text{phys}(x,y)` in
+            linear space, shape ``(B, H, 1)``.
+        H_eff : tf.Tensor
+            Effective thickness field :math:`H_\text{eff}(x,y)` actually
+            used in the computation, shape ``(B, H, 1)``.
+        """
         eps = tf_constant(1e-6, dtype=tf_float32)
         pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
     
@@ -1377,7 +1958,55 @@ class GeoPriorSubsNet(BaseAttentive):
         dSs_dx,
         dSs_dy,
     ):
-
+        r"""
+        Compute spatial smoothness prior on :math:`K` and :math:`S_s`.
+    
+        The smoothness residual is defined as
+    
+        .. math::
+    
+            R_\text{smooth}
+            = \|\nabla K\|_2^2 + \|\nabla S_s\|_2^2
+            = \left(\frac{\partial K}{\partial x}\right)^2
+            + \left(\frac{\partial K}{\partial y}\right)^2
+            + \left(\frac{\partial S_s}{\partial x}\right)^2
+            + \left(\frac{\partial S_s}{\partial y}\right)^2.
+    
+        In practice this function returns a tensor with the same spatio-
+        temporal shape as the derivative fields. The scalar loss
+    
+        .. math::
+    
+            L_\text{smooth}
+            = \mathbb{E}\left[R_\text{smooth}\right]
+    
+        is computed later via :func:`tf.reduce_mean`.
+    
+        Parameters
+        ----------
+        dK_dx, dK_dy : tf.Tensor
+            Spatial derivatives :math:`\partial K / \partial x` and
+            :math:`\partial K / \partial y`, typically of shape
+            ``(B, H, 1)``.
+        dSs_dx, dSs_dy : tf.Tensor
+            Spatial derivatives :math:`\partial S_s / \partial x` and
+            :math:`\partial S_s / \partial y`, same shape as above.
+    
+        Returns
+        -------
+        tf.Tensor
+            Smoothness residual :math:`R_\text{smooth}` with the same
+            shape as the input derivative tensors.
+    
+        Notes
+        -----
+        * No explicit scaling is applied here; the relative importance
+          of this term is controlled by ``lambda_smooth`` in
+          :meth:`compile`.
+        * Any NaNs in the input derivatives will propagate through;
+          those should be prevented earlier (e.g. by ensuring
+          gradients are well-defined in :meth:`train_step`).
+        """
         grad_K_squared = tf_square(dK_dx) + tf_square(dK_dy)
         grad_Ss_squared = tf_square(dSs_dx) + tf_square(dSs_dy)
     
@@ -1389,7 +2018,24 @@ class GeoPriorSubsNet(BaseAttentive):
         Ss_field: Tensor,
         H_field: Tensor,
     ) -> Tensor:
+        """
+        Soft bound violations for H, log K, log S_s.
 
+        Bounds are configured via ``self.scaling_kwargs['bounds']`` with
+        optional scalar entries:
+
+          - 'H_min', 'H_max'          (m)
+          - 'logK_min', 'logK_max'    (natural log of m/s)
+          - 'logSs_min', 'logSs_max'  (natural log of Pa^{-1})
+
+        Any missing entry disables the corresponding penalty.
+
+        Returns
+        -------
+        Tensor
+            Non-negative residual with same shape as the fields, whose
+            squared mean is added to the loss.
+        """
         eps = tf_constant(1e-6, dtype=tf_float32)
         zero = tf_constant(0.0, dtype=tf_float32)
 
@@ -1448,7 +2094,69 @@ class GeoPriorSubsNet(BaseAttentive):
         Ss_field,
         Q: float = 0.0,
     ):
-
+        r"""
+        Build dimensionless scaling factors for PDE residuals.
+    
+        This helper constructs the arguments required by
+        :func:`default_scales` and returns the resulting scaling
+        dictionary, typically containing per-batch factors used to
+        rescale the PDE residuals (e.g. ``cons_scale``, ``gw_scale``).
+    
+        Time stepping
+        -------------
+        The time increment :math:`\Delta t` is estimated via a simple
+        forward finite difference on the time coordinate:
+    
+        .. math::
+    
+            \Delta t_{b,i} = t_{b,i+1} - t_{b,i}.
+    
+        If ``t`` does not have at least two time steps, or if no valid
+        difference can be computed, we fall back to a tensor of ones
+        (unit time step) to keep the scales finite.
+    
+        Parameters
+        ----------
+        t : tf.Tensor
+            Time coordinate tensor, typically of shape ``(B, H, 1)``.
+            Assumed to be *monotonically increasing* in the time axis
+            used for the finite differences.
+        s_mean : tf.Tensor
+            Mean subsidence field :math:`s(x,y,t)`, shape compatible
+            with ``t``.
+        h_mean : tf.Tensor
+            Mean hydraulic head field :math:`h(x,y,t)`, shape compatible
+            with ``t``.
+        K_field : tf.Tensor
+            Predicted hydraulic conductivity field :math:`K(x,y)`,
+            shape ``(B, H, 1)``.
+        Ss_field : tf.Tensor
+            Predicted specific storage field :math:`S_s(x,y)`,
+            shape ``(B, H, 1)``.
+        Q : float, default=0.0
+            Source/sink term in the groundwater-flow PDE. For the
+            revised manuscript this is typically set to ``0.0``.
+    
+        Returns
+        -------
+        dict
+            A dictionary of scaling factors as returned by
+            :func:`default_scales`, e.g.::
+    
+                {
+                  "cons_scale": ...,
+                  "gw_scale": ...,
+                  ...
+                }
+    
+        Notes
+        -----
+        * The exact non-dimensionalization is delegated to
+          :func:`default_scales`, which can be configured via
+          ``self.scaling_kwargs``.
+        * If you change the signature of :func:`default_scales`,
+          remember to keep this adapter in sync.
+        """
         # dt_tensor = None
         # if hasattr(t, "shape") and t.shape.rank is not None and t.shape.rank >= 2:
         #     # t shape: (B, H, 1) or (B, T, 1). We assume the second
@@ -1520,7 +2228,14 @@ class GeoPriorSubsNet(BaseAttentive):
                 Ss_base,
                 tau_base,
             )  = self.split_physics_predictions(outputs)
-
+            # (
+            #     s_mean,
+            #     h_mean,
+            #     K_field,
+            #     Ss_field,
+            #     tau_field,
+            # ) = self.split_physics_predictions(outputs)
+            
             # Reuse coordinate MLPs (no training, faster)
             mlp_corr = self.coord_mlp(coords_flat, training=False)
             s_corr = self.subs_coord_mlp(coords_flat, training=False)
@@ -1598,7 +2313,60 @@ class GeoPriorSubsNet(BaseAttentive):
         max_batches: Optional[int] = None,
         batch_size: Optional[int] = None,
     ) -> Dict[str, Tensor]:
-
+        r"""
+        Evaluate physics diagnostics.
+    
+        Parameters
+        ----------
+        inputs : dict or tf.data.Dataset
+            - If a mapping (dict), it is treated as **one batch**, exactly
+              as in the original implementation.  This is the path used by
+              Keras' ``test_step``.
+            - If a ``tf.data.Dataset``, the dataset is iterated batch by
+              batch (up to ``max_batches``) and the scalar diagnostics are
+              aggregated across batches.
+    
+        return_maps : bool, default=False
+            Whether to also return residual maps and physical fields
+            (``R_prior``, ``R_cons``, ``K``, ``Ss``, ``H``, ``tau``,
+            ``tau_prior``).  When ``inputs`` is a dataset these maps are
+            returned **for the last processed batch only**, to avoid
+            storing huge tensors in memory.
+    
+        max_batches : int or None, default=None
+            When ``inputs`` is a dataset, limit the number of batches
+            that are processed.  If ``None``, the whole dataset is used.
+            This is the main knob to avoid out-of-memory situations on
+            very large splits.
+    
+        batch_size : int or None, default=None
+            Convenience option when passing a dict of NumPy arrays:
+            if not ``None``, a temporary ``tf.data.Dataset`` is built
+            and processed using mini-batches of this size.
+    
+        Returns
+        -------
+        dict
+            Always contains the scalar diagnostics
+    
+            ``{"epsilon_prior": ..., "epsilon_cons": ...}``
+    
+            and, if ``return_maps=True``, also residual/field maps.
+    
+        Notes
+        -----
+        * Keras' ``test_step`` still passes a **single-batch dict**,
+          so behaviour during training/validation is unchanged.
+        * For large evaluation splits you should pass a pre-batched
+          dataset, for example::
+    
+              ds = tf.data.Dataset.from_tensor_slices((X_fore, y_fore_fmt))\
+                                   .batch(256)
+              phys = model.evaluate_physics(ds, max_batches=10)
+    
+          which only uses the first 10 batches instead of the full
+          Zhongshan split.
+        """
 
         # 1) Dataset path: iterate up to `max_batches` and aggregate scalars
         if isinstance(inputs, Dataset):
@@ -1672,7 +2440,89 @@ class GeoPriorSubsNet(BaseAttentive):
         log_fn =None, 
         **tqdm_kws
     ):
-
+        r"""
+        Gather a physics payload from a dataset and optionally persist it.
+    
+        This is a convenience wrapper around
+        :func:`gather_physics_payload` that:
+    
+        1. Iterates over a (pre-batched) dataset and calls
+           :meth:`evaluate_physics` with ``return_maps=True`` to collect
+           ``tau``, ``tau_prior``, :math:`K`, :math:`S_s`, :math:`H_d`
+           and consolidation residuals.
+        2. Optionally applies a random subsampling step to reduce the
+           payload size for plotting / diagnostics.
+        3. Optionally saves the payload + metadata to disk using
+           :func:`save_physics_payload`.
+    
+        Parameters
+        ----------
+        dataset : iterable
+            Typically a ``tf.data.Dataset`` yielding
+            ``(inputs, targets)`` or ``inputs`` batches, where
+            ``inputs`` is compatible with
+            :meth:`evaluate_physics` (i.e. contains ``"coords"`` and
+            ``"H_field"`` / ``"soil_thickness"``).
+        max_batches : int or None, default=None
+            Optional cap on the number of batches processed. If
+            ``None``, all batches in ``dataset`` are consumed.
+            Use this to limit memory / runtime when the forecast
+            split is large (e.g. Zhongshan).
+        save_path : str or None, default=None
+            If not ``None``, the physics payload and metadata are
+            written to this path. The file format is controlled by
+            ``format``.
+        format : {"npz", "parquet", "csv"}, default="npz"
+            Serialization format understood by
+            :func:`save_physics_payload`. The default ``"npz"`` is
+            compact and preserves dtypes.
+        overwrite : bool, default=False
+            If ``False`` and a file already exists at ``save_path``,
+            :func:`save_physics_payload` will raise. Set to ``True``
+            to overwrite existing payloads.
+        metadata : dict or None, default=None
+            Optional extra metadata to merge into the base metadata
+            created by :func:`default_meta_from_model`. This is a good
+            place to stash run IDs, dataset descriptors, etc.
+        random_subsample : int, float or None, default=None
+            Optional subsampling specification forwarded to
+            :func:`_maybe_subsample`. Typical values:
+    
+            * ``int``  → keep at most this many points,
+            * ``float`` in ``(0, 1]`` → keep a fixed fraction of
+              the payload.
+    
+            If ``None``, no subsampling is performed.
+        float_dtype : numpy dtype, default=np.float32
+            Target dtype for the numeric arrays in the payload.
+    
+        Returns
+        -------
+        dict
+            The physics payload returned by
+            :func:`gather_physics_payload`, possibly subsampled.
+            Keys include, for example:
+    
+            ``"tau"``, ``"tau_prior"``, ``"K"``, ``"Ss"``, ``"Hd"``,
+            ``"cons_res_vals"``, and a nested ``"metrics"`` dict.
+    
+        Notes
+        -----
+        * This method is intentionally high-level and can be called
+          from scripts/notebooks as a one-liner after training:
+    
+          .. code-block:: python
+    
+              payload = model.export_physics_payload(
+                  ds_fore,
+                  max_batches=20,
+                  save_path="geoprior_phys_zs.npz",
+                  random_subsample=500_000,
+              )
+    
+        * For very large splits, choose a moderate ``max_batches`` and
+          a subsampling strategy to keep the payload size manageable.
+        """
         payload = gather_physics_payload(
             self,
             dataset,
@@ -1703,14 +2553,78 @@ class GeoPriorSubsNet(BaseAttentive):
     
     @staticmethod
     def load_physics_payload(path):
-
+        r"""
+        Load a previously saved physics payload and its metadata.
+    
+        This is a thin wrapper around :func:`load_physics_payload`
+        to keep the API symmetric with
+        :meth:`export_physics_payload`.
+    
+        Parameters
+        ----------
+        path : str
+            File path pointing to a physics payload previously
+            written by :func:`save_physics_payload`.
+    
+        Returns
+        -------
+        tuple
+            ``(payload, metadata)`` where
+    
+            * ``payload`` is a dict of 1D arrays such as
+              ``"tau"``, ``"tau_prior"``, ``"K"``, ``"Ss"``,
+              ``"Hd"``, etc.
+            * ``metadata`` is a dictionary containing model/config
+              information at export time (run ID, city, model name,
+              etc.).
+        """
         return load_physics_payload(path)
     
     def split_data_predictions(
         self,
         data_tensor: Tensor,
     ) -> Tuple[Tensor, Tensor]:
-
+        r"""
+        Split the combined data tensor into subsidence and head parts.
+    
+        The data decoder produces a single tensor that concatenates
+        both data outputs along the last dimension:
+    
+        .. math::
+    
+            \text{data} = [s \,\|\, h],
+    
+        where :math:`s` is subsidence and :math:`h` is hydraulic
+        head. This helper slices that tensor into its two components.
+    
+        Parameters
+        ----------
+        data_tensor : tf.Tensor
+            Combined data predictions with shape
+    
+            ``(..., output_subsidence_dim + output_gwl_dim)``.
+    
+            This is typically either:
+    
+            * the mean predictions (``data_mean``), or
+            * the quantile-expanded tensor (``data_final``).
+    
+        Returns
+        -------
+        (tf.Tensor, tf.Tensor)
+            ``(s_pred, gwl_pred)`` where
+    
+            * ``s_pred`` has shape ``(..., output_subsidence_dim)``,
+            * ``gwl_pred`` has shape ``(..., output_gwl_dim)``.
+    
+        Notes
+        -----
+        * This function does **not** apply any activation; it only
+          slices the last dimension.
+        * The dimensionality is controlled by
+          :attr:`output_subsidence_dim` and :attr:`output_gwl_dim`
+          set in ``__init__``.
+        """
         s_pred = data_tensor[..., : self.output_subsidence_dim]
         gwl_pred = data_tensor[..., self.output_subsidence_dim :]
     
@@ -1720,8 +2634,96 @@ class GeoPriorSubsNet(BaseAttentive):
         self,
         outputs_dict: Dict[str, Tensor],
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
-
-
+        r"""
+        Split mean data predictions and physics *logits*.
+    
+        The model exposes two streams of features:
+    
+        * ``"data_mean"``: combined mean predictions for
+          :math:`s` and :math:`h`,
+        * ``"phys_mean_raw"``: raw physics logits that will be
+          mapped to positive fields :math:`K`, :math:`S_s`,
+          :math:`\tau`.
+    
+        This helper:
+    
+        1. Splits ``data_mean`` into mean subsidence and head,
+        2. Slices ``phys_mean_raw`` into three blocks:
+    
+           * :math:`K(x,y)` (hydraulic conductivity),
+           * :math:`S_s(x,y)` (specific storage),
+           * :math:`\tau(x,y)` (relaxation time),
+    
+        3. Applies the positivity function :func:`positive` to each
+           physics block, and
+        4. Stores the resulting physics fields on the model instance
+           for later inspection (e.g. in :meth:`get_last_physics_fields`).
+    
+        Parameters
+        ----------
+        outputs_dict : dict
+            Output dictionary produced by :meth:`call`, expected to
+            contain at least the keys:
+    
+            * ``"data_mean"`` : combined mean data outputs,
+            * ``"phys_mean_raw"`` : raw physics logits.
+    
+            Shapes are typically ``(B, H, U)`` for both tensors.
+    
+        Returns
+        -------
+        tuple of tf.Tensor
+            ``(s_pred_mean, gwl_pred_mean, K_field, Ss_field, tau_field)``
+            * s_pred_mean : Tensor
+                Mean subsidence path \\bar{s}(x,y,t) used for physics.
+            * gwl_pred_mean : Tensor
+                Mean head path \\bar{h}(x,y,t) used for physics.
+            * K_logits, Ss_logits, tau_logits : Tensor
+                Raw physics logits from ``physics_mean_head``. Positivity
+                is enforced later (after coordinate-based corrections)
+                in ``train_step`` / ``evaluate_physics``.
+    
+        Notes
+        -----
+        * The lengths of the physics slices are controlled by
+          :attr:`output_K_dim`, :attr:`output_Ss_dim` and
+          :attr:`output_tau_dim`.
+        * By storing ``K_field``, ``Ss_field`` and ``tau_field`` on
+          ``self``, we make them accessible to diagnostic routines
+          and to :meth:`evaluate_physics`.
+        """
+        # data_means_tensor = outputs_dict["data_mean"]
+        # phys_means_raw_tensor = outputs_dict["phys_mean_raw"]
+    
+        # # --- Split mean data predictions (s, h) 
+        # s_pred_mean = data_means_tensor[..., : self.output_subsidence_dim]
+        # gwl_pred_mean = data_means_tensor[
+        #     ..., self.output_subsidence_dim :
+        # ]
+    
+        # # --- Slice physics logits: (K, Ss, tau) 
+        # start_idx = 0
+        # end_idx = self.output_K_dim
+        # K_raw = phys_means_raw_tensor[..., start_idx:end_idx]
+    
+        # start_idx = end_idx
+        # end_idx += self.output_Ss_dim
+        # Ss_raw = phys_means_raw_tensor[..., start_idx:end_idx]
+    
+        # start_idx = end_idx
+        # tau_raw = phys_means_raw_tensor[..., start_idx:]
+    
+        # # --- Positivity constraints 
+        # K_field = positive(K_raw)
+        # Ss_field = positive(Ss_raw)
+        # tau_field = positive(tau_raw)
+    
+        # # Store fields from latest forward pass for debugging/diagnostics
+        # self.K_field = K_field
+        # self.Ss_field = Ss_field
+        # self.tau_field = tau_field
+    
+        # return s_pred_mean, gwl_pred_mean, K_field, Ss_field, tau_field
 
         data_means_tensor = outputs_dict["data_mean"]
         phys_means_raw_tensor = outputs_dict["phys_mean_raw"]
@@ -1746,7 +2748,42 @@ class GeoPriorSubsNet(BaseAttentive):
         return s_pred_mean, gwl_pred_mean, K_logits, Ss_logits, tau_logits
 
     def _scale_param_grads(self, grads, trainable_vars):
-
+        r"""
+        Scale gradients for special scalar parameters :math:`m_v` and
+        :math:`\kappa`.
+    
+        The scalar parameters :math:`m_v` and :math:`\kappa` are
+        internally represented in log-space via the variables
+        ``log_mv`` and ``log_kappa``. To tune their learning speed
+        independently of the rest of the network, we apply per-parameter
+        multipliers ``mv_lr_mult`` and ``kappa_lr_mult`` to their
+        gradients.
+    
+        Parameters
+        ----------
+        grads : list of tf.Tensor or None
+            Gradients as returned by :func:`tape.gradient` in
+            :meth:`train_step`.
+        trainable_vars : list of tf.Variable
+            The model's trainable variables, in the same order as
+            used when calling :func:`tape.gradient`.
+    
+        Returns
+        -------
+        list of (tf.Tensor, tf.Variable)
+            List of (gradient, variable) pairs ready to be passed to
+            :meth:`optimizer.apply_gradients`.
+    
+        Notes
+        -----
+        * Any ``None`` gradients (e.g. for unused variables) are
+          skipped.
+        * Only the gradients associated with ``log_mv`` and
+          ``log_kappa`` are scaled; all others are left unchanged.
+        * The actual multipliers are stored in
+          :attr:`_mv_lr_mult` and :attr:`_kappa_lr_mult`, set in
+          :meth:`compile`.
+        """
         scaled = []
         mv_var = getattr(self, "log_mv", None)
         kappa_var = getattr(self, "log_kappa", None)
