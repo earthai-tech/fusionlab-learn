@@ -74,6 +74,10 @@ tf_split = KERAS_DEPS.split
 tf_sqrt = KERAS_DEPS.sqrt 
 tf_stack = KERAS_DEPS.stack
 tf_maximum =KERAS_DEPS.maximum 
+tf_debugging = KERAS_DEPS.debugging
+tf_identity = KERAS_DEPS.identity 
+tf_pow = KERAS_DEPS.pow 
+
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
@@ -127,7 +131,8 @@ class GeoPriorSubsNet(BaseAttentive):
         "h_ref": [FixedHRef, Real], 
         "use_effective_h": [bool],
         "hd_factor": [Interval(Real, 0, 1, closed="right")], 
-        "kappa_mode": [StrOptions({"bar", "kb"})]
+        "kappa_mode": [StrOptions({"bar", "kb"})],
+        "offset_mode": [StrOptions({"mul", "log10"})],
         
     }
    )
@@ -164,6 +169,7 @@ class GeoPriorSubsNet(BaseAttentive):
         use_effective_h: bool = False,
         hd_factor: float = 1.0 ,  # if Hd = Hd_factor * H
         kappa_mode: str = "bar",   # {"bar", "kb"}  # κ̄ vs κ_b
+        offset_mode: str = "mul",  # {"mul", "log10"}
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         mode: Optional[str]=None, 
@@ -260,7 +266,17 @@ class GeoPriorSubsNet(BaseAttentive):
         self._kappa_lr_mult = 1.0
         self.lambda_bounds = 0.0   
 
+        # global scaling for *all* physics terms
+        self.offset_mode = offset_mode
         
+        self._lambda_offset = self.add_weight(
+            name="lambda_offset",
+            shape=(),
+            initializer=Constant(1.0),
+            trainable=False,
+            dtype=tf_float32,
+        )
+
         logger.info(
             f"Initialized GeoPriorSubsNet with scalar physics params:"
             f" mv_trainable={mv.trainable},"
@@ -969,16 +985,21 @@ class GeoPriorSubsNet(BaseAttentive):
             # smooth_res is already a squared norm, so just average
             loss_smooth = tf_reduce_mean(smooth_res)
     
-            total_loss = (
-                data_loss
-                + self.lambda_cons * loss_cons
+            # --- physics loss (raw, before offset) --------------------------
+            physics_loss_raw = (
+                self.lambda_cons * loss_cons
                 + self.lambda_gw * loss_gw
                 + self.lambda_prior * loss_prior
                 + self.lambda_smooth * loss_smooth
                 + self.lambda_mv * loss_mv
                 + self.lambda_bounds * loss_bounds
             )
-    
+            
+            # --- lambda offset applied globally to physics -------------------
+            phys_mult = self._physics_loss_multiplier()
+            physics_loss_scaled = phys_mult * physics_loss_raw
+            total_loss = data_loss + physics_loss_scaled
+
         # -----------------------------------------------------------------
         # 8. Apply gradients (with per-parameter LR multipliers)
         # -----------------------------------------------------------------
@@ -1003,29 +1024,31 @@ class GeoPriorSubsNet(BaseAttentive):
                 if m.name not in ("epsilon_prior", "epsilon_cons")
             }
 
-    
-        physics_loss = (
-            self.lambda_cons * loss_cons
-            + self.lambda_gw * loss_gw
-            + self.lambda_prior * loss_prior
-            + self.lambda_smooth * loss_smooth
-            + self.lambda_mv * loss_mv
-            + self.lambda_bounds * loss_bounds 
-        )
-    
+  
+        # reuse what was computed inside the tape
+        physics_loss = physics_loss_raw
+        physics_loss_scaled_out = physics_loss_scaled
+
         results.update(
             {
                 "total_loss": total_loss,
                 "data_loss": data_loss,
-                "physics_loss": physics_loss,
+        
+                "physics_loss": physics_loss,   
+                "physics_mult": phys_mult,             # computed                 
+                "physics_loss_scaled": physics_loss_scaled_out,   
+                "lambda_offset": self._lambda_offset,  
                 "consolidation_loss": loss_cons,
                 "gw_flow_loss": loss_gw,
                 "prior_loss": loss_prior,
                 "smooth_loss": loss_smooth,
                 "mv_prior_loss": loss_mv,
-                "bounds_loss": loss_bounds, 
+                "bounds_loss": loss_bounds,
             }
         )
+        
+        results["loss"] = total_loss
+
         return results
 
     def test_step(self, data):
@@ -1064,7 +1087,7 @@ class GeoPriorSubsNet(BaseAttentive):
         }
     
         # --- 3. Data loss + metrics (same mapping as train_step) 
-        loss = self.compiled_loss(
+        data_loss  = self.compiled_loss(
             y_true=targets,
             y_pred=y_pred_for_eval,
             regularization_losses=self.losses,
@@ -1078,26 +1101,105 @@ class GeoPriorSubsNet(BaseAttentive):
         if not self._physics_off():
             # evaluate_physics() returns scalar epsilons and optionally
             # residual maps. Here we only need the scalars.
-            phys = self.evaluate_physics(inputs)  # returns tensors
-            self.eps_prior_metric.update_state(phys["epsilon_prior"])
-            self.eps_cons_metric.update_state(phys["epsilon_cons"])
+            # phys = self.evaluate_physics(inputs)  # returns tensors
+            # self.eps_prior_metric.update_state(phys["epsilon_prior"])
+            # self.eps_cons_metric.update_state(phys["epsilon_cons"])
+            
+            phys_pack = self.evaluate_physics(inputs, return_maps=False)
+            total_loss = data_loss + phys_pack["physics_loss_scaled"]
+        
         else:
             # Physics is disabled: push zeros to keep metrics well-defined
             # and prevent NaNs in logs.
-            self.eps_prior_metric.update_state(0.0)
-            self.eps_cons_metric.update_state(0.0)
-    
-        # --- 5. Collect and return metrics 
-        results = {m.name: m.result() for m in self.metrics}
-        results.update(
-            {
-                "loss": loss,
-                "epsilon_prior": self.eps_prior_metric.result(),
-                "epsilon_cons": self.eps_cons_metric.result(),
+            # self.eps_prior_metric.update_state(0.0)
+            # self.eps_cons_metric.update_state(0.0)
+            phys_pack = {
+                "epsilon_prior": tf_constant(0.0, tf_float32),
+                "epsilon_cons": tf_constant(0.0, tf_float32),
+                "physics_loss_raw": tf_constant(0.0, tf_float32),
+                "physics_mult": tf_constant(1.0, tf_float32),
+                "physics_loss_scaled": tf_constant(0.0, tf_float32),
+                "consolidation_loss": tf_constant(0.0, tf_float32),
+                "gw_flow_loss": tf_constant(0.0, tf_float32),
+                "prior_loss": tf_constant(0.0, tf_float32),
+                "smooth_loss": tf_constant(0.0, tf_float32),
+                "mv_prior_loss": tf_constant(0.0, tf_float32),
+                "bounds_loss": tf_constant(0.0, tf_float32),
             }
-        )
+            total_loss = data_loss
+
+        # keep eps metrics well-defined
+        self.eps_prior_metric.update_state(phys_pack["epsilon_prior"])
+        self.eps_cons_metric.update_state(phys_pack["epsilon_cons"])
+        
+        # --- 5. Collect and return metrics 
+        results = {
+                m.name: m.result()
+                for m in self.metrics
+                if m.name not in ("epsilon_prior", "epsilon_cons")
+            }
     
+        results.update({
+            # THIS drives val_loss
+            "loss": total_loss,
+        
+            # extras for plotting
+            "total_loss": total_loss,
+            "data_loss": data_loss,
+            "physics_loss": phys_pack["physics_loss_raw"],
+            "physics_mult": phys_pack["physics_mult"],
+            "physics_loss_scaled": phys_pack["physics_loss_scaled"],
+            "lambda_offset": self._lambda_offset,
+        
+            "consolidation_loss": phys_pack["consolidation_loss"],
+            "gw_flow_loss": phys_pack["gw_flow_loss"],
+            "prior_loss": phys_pack["prior_loss"],
+            "smooth_loss": phys_pack["smooth_loss"],
+            "mv_prior_loss": phys_pack["mv_prior_loss"],
+            "bounds_loss": phys_pack["bounds_loss"],
+        
+            "epsilon_prior": self.eps_prior_metric.result(),
+            "epsilon_cons": self.eps_cons_metric.result(),
+        })
         return results
+    
+        # results = {m.name: m.result() for m in self.metrics}
+        # results.update(
+        #     {
+        #         "data_loss": data_loss ,
+        #         "epsilon_prior": self.eps_prior_metric.result(),
+        #         "epsilon_cons": self.eps_cons_metric.result(),
+        #     }
+        # )
+
+        # return results
+    
+    def _physics_loss_multiplier(self) -> Tensor:
+        # If physics is off, multiplier is irrelevant; keep neutral.
+        if self._physics_off():
+            return tf_constant(1.0, dtype=tf_float32)
+    
+        mode = self.offset_mode  # <-- correct name
+    
+        if mode == "mul":
+            # optional safety (graph-safe):
+            tf_debugging.assert_greater(
+                self._lambda_offset,
+                tf_constant(0.0, tf_float32),
+                message="lambda_offset must be > 0 when offset_mode='mul'.",
+            )
+            return tf_identity(self._lambda_offset)
+    
+        if mode == "log10":
+            return tf_pow(
+                tf_constant(10.0, dtype=tf_float32),
+                tf_identity(self._lambda_offset),
+            )
+    
+        # This should be impossible due to validate_params
+        raise ValueError(
+            f"Invalid offset_mode={mode!r}. Expected 'mul' or 'log10'."
+        )
 
     def _mv_value(self) -> Tensor:
         r"""
@@ -1252,75 +1354,83 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return ds_dt - relaxation_term
 
-
-    def _compute_consistency_prior(
-        self,
-        K_field,
-        Ss_field,
-        tau_field,
-        H_field,
-    ):
-
-        eps = tf_constant(1e-6, dtype=tf_float32)
-        pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
+    def _compute_consistency_prior(self, K_field, Ss_field, tau_field, H_field):
+        eps = tf_constant(1e-12, dtype=tf_float32)
     
-
-        # 1) Make all log arguments strictly positive (NaN safety)
         tau_safe = tf_maximum(tau_field, eps)
-        K_safe   = tf_maximum(K_field,   eps)
-        Ss_safe  = tf_maximum(Ss_field,  eps)
+        tau_phys, _Hd = self._tau_phys_from_fields(K_field, Ss_field, H_field)
+        tau_phys_safe = tf_maximum(tau_phys, eps)
     
-        # log(tau_pred)
-        log_tau_pred = tf_log(tau_safe)
+        return tf_log(tau_safe) - tf_log(tau_phys_safe)
+
+    # def _compute_consistency_prior(
+    #     self,
+    #     K_field,
+    #     Ss_field,
+    #     tau_field,
+    #     H_field,
+    # ):
+
+    #     eps = tf_constant(1e-6, dtype=tf_float32)
+    #     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
     
-        # H-handling:
-        #   - safe_H_eff is the "effective" thickness H_d or H (+eps)
-        #   - safe_H is the raw H (+eps) used in the kb-mode formula
-        safe_H_eff = (
-            H_field * self.Hd_factor
-            if self.use_effective_thickness else H_field
-        ) + eps
-        safe_H = H_field + eps
+
+    #     # 1) Make all log arguments strictly positive (NaN safety)
+    #     tau_safe = tf_maximum(tau_field, eps)
+    #     K_safe   = tf_maximum(K_field,   eps)
+    #     Ss_safe  = tf_maximum(Ss_field,  eps)
     
-        # 2) Compute log(tau_phys) in a mode-dependent way
-        if self.kappa_mode == "bar":
-            # Standard formulation using H_eff directly:
-            #
-            # tau_phys = (kappa * H_eff^2 * Ss) / (pi^2 * K)
-            #
-            # log(tau_phys)
-            #   = log(kappa) + 2 log(H_eff)
-            #     - [log(pi^2) + log(K) - log(Ss)]
-            log_tau_phys = (
-                tf_log(self._kappa_value())
-                + 2.0 * tf_log(safe_H_eff)
-                - (tf_log(pi_sq) + tf_log(K_safe) - tf_log(Ss_safe))
-            )
-        else:  # "kb" – kappa is κ_b; incorporate (H_d/H)^2 explicitly.
-            #
-            # tau_phys
-            #   = kappa_b * (H_eff / H)^2 * H^2 * Ss / (pi^2 * K)
-            #   = kappa_b * (H_eff^2 * Ss) / (pi^2 * K)
-            #     (mathematically equivalent but we keep the ratio explicit)
-            #
-            # To remain explicit in logs:
-            #
-            #   log(tau_phys)
-            #     = log(kappa_b) + 2 log(H_eff / H)
-            #       + 2 log(H) - [log(pi^2) + log(K) - log(Ss)]
-            #
-            # and we ensure both H_eff and H never hit zero by
-            # using safe_H_eff and safe_H above.
-            ratio = safe_H_eff / safe_H
-            log_tau_phys = (
-                tf_log(self._kappa_value())
-                + 2.0 * tf_log(ratio)
-                + 2.0 * tf_log(safe_H)
-                - (tf_log(pi_sq) + tf_log(K_safe) - tf_log(Ss_safe))
-            )
+    #     # log(tau_pred)
+    #     log_tau_pred = tf_log(tau_safe)
     
-        # 3) Consistency residual in log-space
-        return log_tau_pred - log_tau_phys
+    #     # H-handling:
+    #     #   - safe_H_eff is the "effective" thickness H_d or H (+eps)
+    #     #   - safe_H is the raw H (+eps) used in the kb-mode formula
+    #     safe_H_eff = (
+    #         H_field * self.Hd_factor
+    #         if self.use_effective_thickness else H_field
+    #     ) + eps
+    #     safe_H = H_field + eps
+    
+    #     # 2) Compute log(tau_phys) in a mode-dependent way
+    #     if self.kappa_mode == "bar":
+    #         # Standard formulation using H_eff directly:
+    #         #
+    #         # tau_phys = (kappa * H_eff^2 * Ss) / (pi^2 * K)
+    #         #
+    #         # log(tau_phys)
+    #         #   = log(kappa) + 2 log(H_eff)
+    #         #     - [log(pi^2) + log(K) - log(Ss)]
+    #         log_tau_phys = (
+    #             tf_log(self._kappa_value())
+    #             + 2.0 * tf_log(safe_H_eff)
+    #             - (tf_log(pi_sq) + tf_log(K_safe) - tf_log(Ss_safe))
+    #         )
+    #     else:  # "kb" – kappa is κ_b; incorporate (H_d/H)^2 explicitly.
+    #         #
+    #         # tau_phys
+    #         #   = kappa_b * (H_eff / H)^2 * H^2 * Ss / (pi^2 * K)
+    #         #   = kappa_b * (H_eff^2 * Ss) / (pi^2 * K)
+    #         #     (mathematically equivalent but we keep the ratio explicit)
+    #         #
+    #         # To remain explicit in logs:
+    #         #
+    #         #   log(tau_phys)
+    #         #     = log(kappa_b) + 2 log(H_eff / H)
+    #         #       + 2 log(H) - [log(pi^2) + log(K) - log(Ss)]
+    #         #
+    #         # and we ensure both H_eff and H never hit zero by
+    #         # using safe_H_eff and safe_H above.
+    #         ratio = safe_H_eff / safe_H
+    #         log_tau_phys = (
+    #             tf_log(self._kappa_value())
+    #             + 2.0 * tf_log(ratio)
+    #             + 2.0 * tf_log(safe_H)
+    #             - (tf_log(pi_sq) + tf_log(K_safe) - tf_log(Ss_safe))
+    #         )
+    
+    #     # 3) Consistency residual in log-space
+    #     return log_tau_pred - log_tau_phys
 
 
     def get_last_physics_fields(self):
@@ -1336,43 +1446,82 @@ class GeoPriorSubsNet(BaseAttentive):
         }
 
     def _tau_phys_from_fields(self, K_field, Ss_field, H_field):
-
-        eps = tf_constant(1e-6, dtype=tf_float32)
+        # Use a tiny epsilon: avoid div-by-zero without clamping physics away
+        epsK = tf_constant(1e-12, dtype=tf_float32)
+        eps  = tf_constant(1e-12, dtype=tf_float32)
         pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
     
-        # Make sure denominator fields are never exactly zero to avoid
-        # inf / NaN when computing tau_phys.
-        K_safe  = tf_maximum(K_field,  eps)
+        K_safe  = tf_maximum(K_field,  epsK)
         Ss_safe = tf_maximum(Ss_field, eps)
     
-        # Same effective thickness logic as in _compute_consistency_prior
-        safe_H_eff = (
-            H_field * self.Hd_factor
-            if self.use_effective_thickness else H_field
-        ) + eps
-        safe_H = H_field + eps
+        H_safe = tf_maximum(H_field, eps)
+    
+        # Drainage path: Hd = eta * H (eta = Hd_factor), if enabled
+        Hd = (H_safe * self.Hd_factor) if self.use_effective_thickness else H_safe
+        Hd = tf_maximum(Hd, eps)
+    
+        ratio = Hd / H_safe  # Hd/H
     
         if self.kappa_mode == "bar":
-            # τ_phys = (κ * H_eff^2 * Ss) / (π^2 * K)
+            # kappa_bar := (Hd/H)^2 / kappa_b  (>= 0)
+            # tau = kappa_bar * H^2 * Ss / (pi^2 * K)
             tau_phys = (
                 self._kappa_value()
-                * (safe_H_eff ** 2)
+                * (H_safe ** 2)
                 * Ss_safe
                 / (pi_sq * K_safe)
             )
         else:  # "kb"
-            # τ_phys = κ_b * (H_eff/H)^2 * H^2 * Ss / (π^2 * K)
-            ratio = safe_H_eff / safe_H
+            # tau = (Hd/H)^2 * H^2 * Ss / (pi^2 * kappa_b * K)
+            #     = Hd^2 * Ss / (pi^2 * kappa_b * K)
             tau_phys = (
-                self._kappa_value()
-                * (ratio ** 2)
-                * (safe_H ** 2)
+                (ratio ** 2)
+                * (H_safe ** 2)
                 * Ss_safe
-                / (pi_sq * K_safe)
+                / (pi_sq * self._kappa_value() * K_safe)
             )
     
-        # Return tau_phys and the effective thickness actually used.
-        return tau_phys, safe_H_eff
+        return tau_phys, Hd
+
+
+    # def _tau_phys_from_fields(self, K_field, Ss_field, H_field):
+
+    #     eps = tf_constant(1e-6, dtype=tf_float32)
+    #     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
+    
+    #     # Make sure denominator fields are never exactly zero to avoid
+    #     # inf / NaN when computing tau_phys.
+    #     K_safe  = tf_maximum(K_field,  eps)
+    #     Ss_safe = tf_maximum(Ss_field, eps)
+    
+    #     # Same effective thickness logic as in _compute_consistency_prior
+    #     safe_H_eff = (
+    #         H_field * self.Hd_factor
+    #         if self.use_effective_thickness else H_field
+    #     ) + eps
+    #     safe_H = H_field + eps
+    
+    #     if self.kappa_mode == "bar":
+    #         # τ_phys = (κ * H_eff^2 * Ss) / (π^2 * K)
+    #         tau_phys = (
+    #             self._kappa_value()
+    #             * (safe_H_eff ** 2)
+    #             * Ss_safe
+    #             / (pi_sq * K_safe)
+    #         )
+    #     else:  # "kb"
+    #         # τ_phys = κ_b * (H_eff/H)^2 * H^2 * Ss / (π^2 * K)
+    #         ratio = safe_H_eff / safe_H
+    #         tau_phys = (
+    #             self._kappa_value()
+    #             * (ratio ** 2)
+    #             * (safe_H ** 2)
+    #             * Ss_safe
+    #             / (pi_sq * K_safe)
+    #         )
+    
+    #     # Return tau_phys and the effective thickness actually used.
+    #     return tau_phys, safe_H_eff
 
     def _compute_smoothness_prior(
         self,
@@ -1509,9 +1658,9 @@ class GeoPriorSubsNet(BaseAttentive):
         t, x, y = extract_txy_in(coords)
         coords_flat = tf_concat([t, x, y], axis=-1)
     
-        # We must compute model outputs under the tape so AD sees dependency on t.
-        with GradientTape() as tape:
-            tape.watch(t)
+        # --- Need derivatives wrt t,x,y (and 2nd derivatives like in train_step)
+        with GradientTape(persistent=True) as tape:
+            tape.watch([t, x, y])
     
             # Forward pass (no training); also stores self.H_field internally.
             outputs = self(inputs, training=False)
@@ -1546,54 +1695,152 @@ class GeoPriorSubsNet(BaseAttentive):
             self.tau_field = tau_field
                         
             # Bind s_mean to t so the tape tracks s(t,x,y)
-            s_bind = s_mean + 0.0 * t
+            # bind to coords (guards against “None” AD in some graphs)
+            s_bind = s_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
+            h_bind = h_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
+            K_bind = K_field      + 0.0 * x + 0.0 * y
+            Ss_bind = Ss_field    + 0.0 * x + 0.0 * y
+            
+            # --- grads (multiple calls => persistent tape required)
+        
+            # AD: ds/dt at the same spatiotemporal points
+            ds_dt = tape.gradient(s_bind, t)
+            
+            if ds_dt is None:
+                raise ValueError(
+                    "Automatic differentiation returned None. "
+                    "Ensure (t,x,y) influence the subsidence head "
+                    "via the coordinate injection path."
+                )
+                
+            dh_dt = tape.gradient(h_bind, t)
+            dh_dx = tape.gradient(h_bind, x)
+            dh_dy = tape.gradient(h_bind, y)
+            
+            K_dh_dx = K_bind * dh_dx
+            K_dh_dy = K_bind * dh_dy
+            d_K_dh_dx_dx = tape.gradient(K_dh_dx, x)
+            d_K_dh_dy_dy = tape.gradient(K_dh_dy, y)
+            
+            dK_dx  = tape.gradient(K_bind, x)
+            dK_dy  = tape.gradient(K_bind, y)
+            dSs_dx = tape.gradient(Ss_bind, x)
+            dSs_dy = tape.gradient(Ss_bind, y)
+            
+            if any(v is None for v in [
+                    ds_dt, dh_dt, dh_dx, dh_dy,
+                    d_K_dh_dx_dx, d_K_dh_dy_dy]):
+                raise ValueError(
+                    "Some physics gradients are None in evaluate_physics()."
+                    )
+
+        del tape
+     
+        # --- residuals (unscaled)
+        gw_res = self._compute_gw_flow_residual(
+            dh_dt, d_K_dh_dx_dx, d_K_dh_dy_dy, Ss_field, Q=0.0
+        )
+        cons_res = self._compute_consolidation_residual(
+            ds_dt, s_mean_corr, h_mean_corr, H_field, tau_field
+        )
+        prior_res = self._compute_consistency_prior(
+            K_field, Ss_field, tau_field, H_field
+        )
+        smooth_res = self._compute_smoothness_prior(
+            dK_dx, dK_dy, dSs_dx, dSs_dy
+        )
+        mv_prior_res = self._compute_mv_prior(Ss_field)
+        bounds_res = self._compute_bounds_residual(K_field, Ss_field, H_field)
     
-        # AD: ds/dt at the same spatiotemporal points
-        ds_dt = tape.gradient(s_bind, t)
-        if ds_dt is None:
-            raise ValueError(
-                "Automatic differentiation returned None. "
-                "Ensure (t,x,y) influence the subsidence head "
-                "via the coordinate injection path."
+        # paper epsilons = RMS of *unscaled* residuals
+        eps_prior = tf_sqrt(tf_reduce_mean(tf_square(prior_res)))
+        eps_cons  = tf_sqrt(tf_reduce_mean(tf_square(cons_res)))
+    
+        # --- if physics off, zero-out everything
+        if self._physics_off():
+            z = tf_constant(0.0, tf_float32)
+            out = {
+                "epsilon_prior": z,
+                "epsilon_cons": z,
+                "consolidation_loss": z,
+                "gw_flow_loss": z,
+                "prior_loss": z,
+                "smooth_loss": z,
+                "mv_prior_loss": z,
+                "bounds_loss": z,
+                "physics_loss_raw": z,
+                "physics_mult": tf_constant(1.0, tf_float32),
+                "physics_loss_scaled": z,
+            }
+            return out
+    
+        # --- scaling (same rule as train_step: only cons/gw are scaled)
+        cons_for_loss = cons_res
+        gw_for_loss   = gw_res
+        if self.scale_pde_residuals:
+            scales = self._compute_scales(
+                t, s_mean_corr, h_mean_corr, K_field, Ss_field, Q=0.0
             )
+            cons_for_loss = scale_residual(cons_for_loss, scales.get("cons_scale"))
+            gw_for_loss   = scale_residual(gw_for_loss,   scales.get("gw_scale"))
     
-        # --- Residuals using the model's own helpers (exactly as in training) ---
-        # Prior: R_prior = log(tau) - log( (kappa * H^2 Ss) / (π^2 K) )
-        R_prior = self._compute_consistency_prior(
-            K_field, Ss_field, tau_field, H_field)
-
-        # Consolidation: R_cons = ∂s/∂t - (s_eq - s)/tau,
-        # with s_eq = m_v γ_w (h_ref - h) H
-
-        R_cons  = self._compute_consolidation_residual(
-            ds_dt, s_mean_corr, h_mean_corr, H_field, 
-            tau_field
+        # --- component losses (match train_step)
+        loss_cons   = tf_reduce_mean(tf_square(cons_for_loss))
+        loss_gw     = tf_reduce_mean(tf_square(gw_for_loss))
+        loss_prior  = tf_reduce_mean(tf_square(prior_res))
+        loss_smooth = tf_reduce_mean(smooth_res)
+        loss_mv     = tf_reduce_mean(tf_square(mv_prior_res))
+        loss_bounds = tf_reduce_mean(tf_square(bounds_res))
+    
+        physics_loss_raw = (
+            self.lambda_cons   * loss_cons
+            + self.lambda_gw     * loss_gw
+            + self.lambda_prior  * loss_prior
+            + self.lambda_smooth * loss_smooth
+            + self.lambda_mv     * loss_mv
+            + self.lambda_bounds * loss_bounds
         )
     
-        # --- Unscaled RMS errors (paper definitions) ---
-        eps_prior = tf_sqrt(tf_reduce_mean(tf_square(R_prior)))
-        eps_cons = tf_sqrt(tf_reduce_mean(tf_square(R_cons)))
+        phys_mult = self._physics_loss_multiplier()
+        physics_loss_scaled = phys_mult * physics_loss_raw
     
-        out = {"epsilon_prior": eps_prior, "epsilon_cons": eps_cons}
+        out = {
+            "epsilon_prior": eps_prior,
+            "epsilon_cons": eps_cons,
+            "consolidation_loss": loss_cons,
+            "gw_flow_loss": loss_gw,
+            "prior_loss": loss_prior,
+            "smooth_loss": loss_smooth,
+            "mv_prior_loss": loss_mv,
+            "bounds_loss": loss_bounds,
+            "physics_loss_raw": physics_loss_raw,
+            "physics_mult": phys_mult,
+            "physics_loss_scaled": physics_loss_scaled,
+        }
+    
         if return_maps:
-            # Also return fields needed for Fig.4 payload
             tau_phys, Hd_eff = self._tau_phys_from_fields(
                 K_field, Ss_field, H_field
             )
-            out.update(
-                {
-                    "R_prior": R_prior,
-                    "R_cons": R_cons,
-                    "K": K_field,
-                    "Ss": Ss_field,
-                    "H": Hd_eff,  # effective H actually used
-                    # numerically safe no-op to get a clean tensor
-                    "tau": tf_exp(tf_log(tau_field)),
-                    "tau_prior": tau_phys,
-                }
-            )
+            out.update({
+                "R_prior": prior_res,
+                "R_cons": cons_res,
+                "K": K_field,
+                "Ss": Ss_field,
+            
+                #  explicit names
+                "H_field": H_field,
+                "Hd": Hd_eff,
+            
+                # keep legacy key for older loaders
+                "H": Hd_eff,
+            
+                "tau": tau_field,
+                "tau_prior": tau_phys,
+            })
+            
         return out
-    
+
 
     def evaluate_physics(
         self,
@@ -1791,6 +2038,22 @@ class GeoPriorSubsNet(BaseAttentive):
         )
 
     @property
+    def lambda_offset_value(self) -> float:
+        """Current raw value stored in the TF weight ``_lambda_offset``."""
+        try:
+            return float(self._lambda_offset.numpy())
+        except:
+            return float(self._lambda_offset)
+
+    @property
+    def lambda_offset(self) -> float:
+        return float(self._lambda_offset.numpy())
+    
+    @lambda_offset.setter
+    def lambda_offset(self, value: float) -> None:
+        self._lambda_offset.assign(float(value))
+
+    @property
     def mv_lr_mult(self) -> float:
         r"""
         Learning-rate multiplier for :math:`m_v` (via ``log_mv``).
@@ -1832,70 +2095,131 @@ class GeoPriorSubsNet(BaseAttentive):
         lambda_prior: float = 1.0,
         lambda_smooth: float = 1.0,
         lambda_mv: float = 0.0,
-        lambda_bounds: float = 0.0,  
+        lambda_bounds: float = 0.0,
+        lambda_offset: float = 1.0,
         mv_lr_mult: float = 1.0,
         kappa_lr_mult: float = 1.0,
         **kwargs,
     ):
         r"""
-        Compile the model and configure physics/data loss weights.
+        Compile the model and configure data/physics loss weighting.
     
-        This override extends :meth:`tf.keras.Model.compile` by adding
-        weights for the different physics loss components and by
-        setting per-parameter learning-rate multipliers for
-        :math:`m_v` and :math:`\kappa`.
+        This override extends :meth:`tf.keras.Model.compile` by exposing
+        explicit weights for each physics term used in the PINN objective,
+        plus a **global physics multiplier** (``lambda_offset``) applied
+        uniformly to the *sum* of all physics losses.
+    
+        In this implementation, the physics objective is assembled as:
+    
+        .. math::
+    
+            L_\text{phys}
+            = \lambda_\text{cons} L_\text{cons}
+            + \lambda_\text{gw}   L_\text{gw}
+            + \lambda_\text{prior} L_\text{prior}
+            + \lambda_\text{smooth} L_\text{smooth}
+            + \lambda_{m_v} L_{m_v}
+            + \lambda_\text{bounds} L_\text{bounds},
+    
+        and the total training loss used by ``train_step`` is:
+    
+        .. math::
+    
+            L
+            = L_\text{data}
+            + \alpha(\text{offset\_mode}, \lambda_\text{offset})
+              \, L_\text{phys},
+    
+        where :math:`\alpha(\cdot)` is computed by
+        :meth:`_physics_loss_multiplier` according to ``self.offset_mode``:
+    
+        * ``offset_mode="mul"``:
+          :math:`\alpha = \lambda_\text{offset}` (must be :math:`>0`)
+        * ``offset_mode="log10"``:
+          :math:`\alpha = 10^{\lambda_\text{offset}}`
+          (e.g. ``0`` :math:`\to 1`, ``1`` :math:`\to 10`, ``-1`` :math:`\to 0.1`)
+    
+        ``lambda_offset`` is stored as a **non-trainable TF weight**
+        ``self._lambda_offset`` (created with ``add_weight(trainable=False)``),
+        making it safe to change during training via callbacks using:
+    
+        ``self.model._lambda_offset.assign(value)``.
     
         Parameters
         ----------
         lambda_cons : float, default=1.0
-            Weight for the consolidation residual :math:`L_\text{cons}`,
+            Weight for the consolidation residual loss :math:`L_\text{cons}`
             associated with :math:`R_\text{cons}`.
+    
         lambda_gw : float, default=1.0
-            Weight for the groundwater-flow residual :math:`L_\text{gw}`,
+            Weight for the groundwater-flow residual loss :math:`L_\text{gw}`
             associated with :math:`R_\text{gw}`.
+    
         lambda_prior : float, default=1.0
-            Weight for the geomechanical consistency prior
-            :math:`L_\text{prior}` (linking :math:`\tau`, :math:`K`,
-            :math:`S_s`, :math:`H`).
+            Weight for the consistency prior loss :math:`L_\text{prior}`
+            linking :math:`\tau`, :math:`K`, :math:`S_s`, and :math:`H`.
+    
         lambda_smooth : float, default=1.0
-            Weight for the smoothness prior :math:`L_\text{smooth}`,
+            Weight for the smoothness prior loss :math:`L_\text{smooth}`,
             based on :math:`\|\nabla K\|^2 + \|\nabla S_s\|^2`.
+    
         lambda_mv : float, default=0.0
-            Weight for the storage identity penalty
+            Weight for the storage-identity penalty :math:`L_{m_v}` derived
+            from:
     
             .. math::
     
-                R_{m_v}
-                = \log(S_s) - \log(m_v \gamma_w),
+                R_{m_v} = \log(S_s) - \log(m_v \gamma_w).
     
-            which gives :math:`m_v` a direct gradient. Set this to a
-            positive value if you want :math:`m_v` to be informed by
-            the predicted :math:`S_s`.
+            This term provides a direct gradient signal for :math:`m_v`.
+            Set this to a positive value to inform :math:`m_v` from the
+            predicted :math:`S_s`.
+    
+        lambda_bounds : float, default=0.0
+            Weight for the soft-constraints/bounds penalty
+            :math:`L_\text{bounds}` (e.g., on :math:`H`, :math:`\log K`,
+            :math:`\log S_s` as configured in ``scaling_kwargs``).
+    
+        lambda_offset : float, default=1.0
+            Global physics scaling parameter stored in ``self._lambda_offset``.
+            The effective multiplier applied to the total physics loss is
+            determined by ``self.offset_mode`` (see above). Use this to
+            globally raise/lower the influence of all physics terms without
+            changing each individual ``lambda_*``.
+    
+            If you need *scheduling* (warmup/ramp), prefer a callback
+            (e.g., ``LambdaOffsetScheduler``) that calls
+            ``self.model._lambda_offset.assign(value)``.
+    
         mv_lr_mult : float, default=1.0
             Learning-rate multiplier applied only to the gradient of
-            ``log_mv`` (the log-parameter for :math:`m_v`).
+            ``log_mv`` (the log-parameter of :math:`m_v`).
+    
         kappa_lr_mult : float, default=1.0
             Learning-rate multiplier applied only to the gradient of
-            ``log_kappa`` (the log-parameter for :math:`\kappa`).
+            ``log_kappa`` (the log-parameter of :math:`\kappa`).
+    
         **kwargs
             Additional keyword arguments forwarded to
-            :meth:`tf.keras.Model.compile`, e.g. ``optimizer``,
-            ``loss``, ``metrics``, etc.
+            :meth:`tf.keras.Model.compile`, such as ``optimizer``, ``loss``,
+            ``metrics``, ``jit_compile``, etc.
     
         Notes
         -----
-        * If :meth:`_physics_off` returns ``True`` (i.e. PDE modes
-          contain ``"none"``), the physics weights ``lambda_prior``,
-          ``lambda_smooth`` and ``lambda_mv`` are forced to ``0.0``
-          regardless of the values passed here. This ensures the
-          physics terms do not contribute when physics is disabled.
-        * The data loss weight is implicitly ``1.0`` and is defined by
-          the loss passed in ``**kwargs``.
+        * When :meth:`_physics_off` is ``True`` (e.g., PDE modes contain
+          ``"none"``), the physics weights
+          ``lambda_prior``, ``lambda_smooth``, ``lambda_mv`` and
+          ``lambda_bounds`` are hard-set to ``0.0`` regardless of the values
+          passed here, and ``self._lambda_offset`` is set to ``1.0`` (neutral).
+        * ``lambda_offset`` is validated once per run in Python. For
+          ``offset_mode="mul"``, it must be strictly positive.
+        * The data loss weight is implicitly ``1.0`` and is defined by the
+          loss passed in ``**kwargs``.
         """
-        # Let the base class set up optimizer/loss/metrics first
+        # Let the base class set up optimizer/loss/metrics first.
         super().compile(**kwargs)
     
-        # Store core physics weights
+        # Store core physics weights.
         self.lambda_cons = float(lambda_cons)
         self.lambda_gw = float(lambda_gw)
     
@@ -1905,15 +2229,27 @@ class GeoPriorSubsNet(BaseAttentive):
             self.lambda_smooth = 0.0
             self.lambda_mv = 0.0
             self.lambda_bounds = 0.0
+    
+            # Keep neutral; avoids any assertion trouble and keeps logs stable.
+            self._lambda_offset.assign(1.0)
         else:
             self.lambda_prior = float(lambda_prior)
             self.lambda_smooth = float(lambda_smooth)
             self.lambda_mv = float(lambda_mv)
             self.lambda_bounds = float(lambda_bounds)
     
-        # Per-parameter LR multipliers for log_mv and log_kappa
+            # Validate once, in Python, per run.
+            lo = float(lambda_offset)
+            if self.offset_mode == "mul" and lo <= 0.0:
+                raise ValueError(
+                    "lambda_offset must be > 0 when offset_mode='mul'."
+                )
+            self._lambda_offset.assign(lo)
+    
+        # Per-parameter LR multipliers for log_mv and log_kappa.
         self._mv_lr_mult = float(mv_lr_mult)
         self._kappa_lr_mult = float(kappa_lr_mult)
+
 
 
     def get_config(self) -> dict:
@@ -1963,6 +2299,7 @@ class GeoPriorSubsNet(BaseAttentive):
             # NEW: keep the effective thickness / κ-mode knobs
             "use_effective_h": self.use_effective_thickness,
             "hd_factor": self.Hd_factor,
+            "offset_mode": self.offset_mode, 
             "kappa_mode": self.kappa_mode,
             "model_version": "3.1-GeoPrior",
         }

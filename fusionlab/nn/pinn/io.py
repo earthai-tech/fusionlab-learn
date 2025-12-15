@@ -78,6 +78,14 @@ def default_meta_from_model(model) -> Dict:
         "quantiles": list(getattr(model, "quantiles", []) or []),
         "lambda_bounds": float(getattr(model, "lambda_bounds", 0.0)),
         "lambda_offsets": float(getattr(model, "lambda_offsets", 0.0)),
+        # --- Naming clarity for reviewers / plots ---------------------
+        # NOTE: current payload key "tau_prior" is the closure timescale
+        # computed from learned/effective fields (not a borehole prior).
+        "tau_prior_definition": "tau_closure_from_learned_fields",
+        "tau_prior_human_name": "tau_closure",
+        "tau_prior_source": "model.evaluate_physics() closure head",
+        # Optional: keep formula as described in Methods 
+        "tau_closure_formula": "Hd^2 * Ss / (pi^2 * kappa_b * K)",
 
     }
 
@@ -144,42 +152,6 @@ def identifiability_diagnostics_from_payload(
           each containing summary stats for the log-offsets
           delta_K, delta_Ss, delta_Hd.
     """
-
-    # from fusionlab.nn.pinn.io import (
-    #     load_physics_payload,
-    #     identifiability_diagnostics_from_payload,
-    # )
-    
-    # # 1) Load payload saved by model.export_physics_payload(...)
-    # payload, meta = load_physics_payload("synthetic_column_run01.npz")
-    
-    # # 2) Your synthetic "truth" & priors (computed from the column)
-    # tau_eff_true = tau_eff_from_column   # scalar
-    # K_eff_true   = K_eff_from_column
-    # Ss_eff_true  = Ss_eff_from_column
-    # Hd_eff_true  = Hd_eff_from_column
-    
-    # K_prior = K_prior_from_lithology
-    # Ss_prior = Ss_prior_from_lithology
-    # Hd_prior = Hd_prior_from_lithology
-    
-    # # 3) Compute diagnostics
-    # diag = identifiability_diagnostics_from_payload(
-    #     payload,
-    #     tau_true=tau_eff_true,
-    #     K_true=K_eff_true,
-    #     Ss_true=Ss_eff_true,
-    #     Hd_true=Hd_eff_true,
-    #     K_prior=K_prior,
-    #     Ss_prior=Ss_prior,
-    #     Hd_prior=Hd_prior,
-    # )
-    
-    # # Then you can access e.g.
-    # diag["tau_rel_error"]["median"]
-    # diag["tau_rel_error"]["q95"]
-    # diag["closure_log_resid"]["mean"]
-    # diag["offsets"]["vs_true"]["delta_K"]["q90"]
 
     tau = np.asarray(payload["tau"], dtype=float)
     tau_prior = np.asarray(payload["tau_prior"], dtype=float)
@@ -261,15 +233,7 @@ def summarise_effective_params(payload: Dict[str, np.ndarray]) -> Dict[str, floa
     outputs are spatially constant and we only need a single
     representative value per run.
     """
-    # payload = model.export_physics_payload(dataset, save_path=None)
-    # eff = summarise_effective_params(payload)
-    
-    # tau_est       = eff["tau"]
-    # tau_prior_est = eff["tau_prior"]
-    # K_est         = eff["K"]
-    # Ss_est        = eff["Ss"]
-    # Hd_est        = eff["Hd"]
-    
+
     out = {}
     for key in ("tau", "tau_prior", "K", "Ss", "Hd"):
         arr = np.asarray(payload[key])
@@ -286,6 +250,7 @@ def compute_identifiability_summary(
     true_params: Dict[str, float],
     prior_params: Dict[str, float],
     kappa_b: float = 1.0,
+    eps: float = 1e-12
 ) -> Dict[str, float]:
     """
     Compute identifiability diagnostics for Supp. Methods 3.
@@ -293,33 +258,6 @@ def compute_identifiability_summary(
     See Supplementary Methods 3 for definitions of the
     quantities returned.
     """
-    # summaries = []
-    # for run_seed in seeds:
-    #     # train 1D model, build dataset, etc…
-    
-    #     payload = model.export_physics_payload(dataset, save_path=None)
-    #     eff = summarise_effective_params(payload)
-    
-    #     true_params = {
-    #         "tau": tau_eff_true,
-    #         "K": K_eff_true,
-    #         "Ss": Ss_eff_true,
-    #         "Hd": Hd_eff_true,
-    #     }
-    #     prior_params = {
-    #         "K": K_prior,
-    #         "Ss": Ss_prior,
-    #         "Hd": Hd_prior,
-    #     }
-    
-    #     s = compute_identifiability_summary(eff, true_params, prior_params, kappa_b)
-    #     summaries.append(s)
-    
-    # # Example: median relative error in tau across runs
-    # rel_err_tau_all = np.array([s["rel_err_tau"] for s in summaries])
-    # median_rel_err_tau = np.median(rel_err_tau_all)
-    # q90_rel_err_tau = np.quantile(rel_err_tau_all, 0.9)
-
 
     tau_est = eff_params["tau"]
     K_est   = eff_params["K"]
@@ -330,21 +268,35 @@ def compute_identifiability_summary(
 
     rel_err_tau = abs(tau_est - tau_true) / tau_true
 
-    closure_est = Hd_est**2 * Ss_est / (kappa_b * K_est)
-    log_closure_resid = float(np.log(closure_est) - np.log(tau_true))
-
+    # closure_est = Hd_est**2 * Ss_est / (kappa_b * K_est)
+    # log_closure_resid = float(np.log(closure_est) - np.log(tau_true))
+    # FIX: include pi^2
+    closure_est = (Hd_est**2) * Ss_est / (
+        np.pi**2 * max(kappa_b, eps) * max(K_est, eps))
+    log_closure_resid = float(
+        np.log(max(closure_est, eps)) - np.log(max(tau_true, eps)))
+    
     K_prior  = prior_params["K"]
     Ss_prior = prior_params["Ss"]
     Hd_prior = prior_params["Hd"]
 
-    delta_K_prior  = float(np.log(K_est)  - np.log(K_prior))
-    delta_Ss_prior = float(np.log(Ss_est) - np.log(Ss_prior))
-    delta_Hd_prior = float(Hd_est - Hd_prior)
+    # delta_K_prior  = float(np.log(K_est)  - np.log(K_prior))
+    # delta_Ss_prior = float(np.log(Ss_est) - np.log(Ss_prior))
+    # delta_Hd_prior = float(Hd_est - Hd_prior)
 
-    delta_K_true  = float(np.log(K_est)  - np.log(true_params["K"]))
-    delta_Ss_true = float(np.log(Ss_est) - np.log(true_params["Ss"]))
-    delta_Hd_true = float(Hd_est - true_params["Hd"])
+    # delta_K_true  = float(np.log(K_est)  - np.log(true_params["K"]))
+    # delta_Ss_true = float(np.log(Ss_est) - np.log(true_params["Ss"]))
+    # delta_Hd_true = float(Hd_est - true_params["Hd"])
 
+    #  use log offsets for Hd to match the main diagnostics
+    delta_K_prior  = float(np.log(max(K_est, eps))  - np.log(max(K_prior, eps)))
+    delta_Ss_prior = float(np.log(max(Ss_est, eps)) - np.log(max(Ss_prior, eps)))
+    delta_Hd_prior = float(np.log(max(Hd_est, eps)) - np.log(max(Hd_prior, eps)))
+
+    delta_K_true  = float(np.log(max(K_est, eps))  - np.log(max(true_params["K"], eps)))
+    delta_Ss_true = float(np.log(max(Ss_est, eps)) - np.log(max(true_params["Ss"], eps)))
+    delta_Hd_true = float(np.log(max(Hd_est, eps)) - np.log(max(true_params["Hd"], eps)))
+    
     return {
         "rel_err_tau": float(rel_err_tau),
         "log_closure_resid": log_closure_resid,
@@ -415,7 +367,10 @@ def gather_physics_payload(
         tau_ps.append(_to_1d(phys["tau_prior"], dtype=float_dtype))
         Ks.append(_to_1d(phys["K"], dtype=float_dtype))
         Sss.append(_to_1d(phys["Ss"], dtype=float_dtype))
-        Hds.append(_to_1d(phys["H"], dtype=float_dtype))
+        Hd_key = "Hd" if "Hd" in phys else "H"
+        Hds.append(_to_1d(phys[Hd_key], dtype=float_dtype))
+
+        # Hds.append(_to_1d(phys["H"], dtype=float_dtype))
         cons_vals.append(_to_1d(phys["R_cons"], dtype=float_dtype))
 
         n += 1
@@ -439,6 +394,8 @@ def gather_physics_payload(
     tp_clip = np.clip(payload["tau_prior"], 1e-12, None)
     payload["log10_tau"] = np.log10(tau_clip)
     payload["log10_tau_prior"] = np.log10(tp_clip)
+    payload["tau_closure"] = payload["tau_prior"]
+    payload["log10_tau_closure"] = payload["log10_tau_prior"]
 
     eps_prior_rms = float(
         np.sqrt(np.mean((np.log(tau_clip) - np.log(tp_clip)) ** 2))
@@ -485,8 +442,12 @@ def save_physics_payload(
     """
     log = log_fn if log_fn is not None else print 
     
-    if path is None: 
-        path = os.getcwd()
+    if path is None:
+        path = os.path.join(os.getcwd(), "physics_payload.npz")
+
+    if os.path.isdir(path):
+        path = os.path.join(path, "physics_payload.npz")
+
         
     root, ext = os.path.splitext(path)
     if ext == "":
@@ -497,33 +458,57 @@ def save_physics_payload(
 
     meta = dict(meta or {})
     meta.setdefault("saved_utc", _iso_now())
-
+    
+    # Ensure definition always exists even if caller bypassed default_meta
+    meta.setdefault("tau_prior_definition", "tau_closure_from_learned_fields")
+    meta.setdefault("tau_prior_human_name", "tau_closure")
+    meta.setdefault("tau_prior_source", "model.evaluate_physics() closure head")
+    
+    tau_prior = payload["tau_prior"]
+    
     if format.lower() == "npz":
         np.savez_compressed(
             path,
             tau=payload["tau"],
-            tau_prior=payload["tau_prior"],
+            tau_prior=tau_prior,                    # legacy key
+            tau_closure=tau_prior,                  # alias
             K=payload["K"],
             Ss=payload["Ss"],
             Hd=payload["Hd"],
             cons_res_vals=payload["cons_res_vals"],
             log10_tau=payload["log10_tau"],
             log10_tau_prior=payload["log10_tau_prior"],
+            log10_tau_closure=payload["log10_tau_prior"],  # alias
         )
         with open(path + ".meta.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
         return path
 
+    # df = pd.DataFrame({
+    #     "tau": payload["tau"],
+    #     "tau_prior": payload["tau_prior"],
+    #     "K": payload["K"],
+    #     "Ss": payload["Ss"],
+    #     "Hd": payload["Hd"],
+    #     "cons_res_vals": payload["cons_res_vals"],
+    #     "log10_tau": payload["log10_tau"],
+    #     "log10_tau_prior": payload["log10_tau_prior"],
+    # })
     df = pd.DataFrame({
         "tau": payload["tau"],
         "tau_prior": payload["tau_prior"],
+        "tau_closure": payload.get("tau_closure", payload["tau_prior"]),
         "K": payload["K"],
         "Ss": payload["Ss"],
         "Hd": payload["Hd"],
         "cons_res_vals": payload["cons_res_vals"],
         "log10_tau": payload["log10_tau"],
         "log10_tau_prior": payload["log10_tau_prior"],
+        "log10_tau_closure": payload.get(
+            "log10_tau_closure", payload["log10_tau_prior"]
+        ),
     })
+
     if format.lower() == "csv":
         df.to_csv(path, index=False)
     elif format.lower() == "parquet":
@@ -574,4 +559,16 @@ def load_physics_payload(path: str) -> Tuple[Dict[str, np.ndarray], Dict]:
     if os.path.exists(meta_path):
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
+            
+    # Back/forward compatible aliases
+    if "tau_prior" not in payload and "tau_closure" in payload:
+        payload["tau_prior"] = payload["tau_closure"]
+    if "tau_closure" not in payload and "tau_prior" in payload:
+        payload["tau_closure"] = payload["tau_prior"]
+    
+    if "log10_tau_prior" not in payload and "log10_tau_closure" in payload:
+        payload["log10_tau_prior"] = payload["log10_tau_closure"]
+    if "log10_tau_closure" not in payload and "log10_tau_prior" in payload:
+        payload["log10_tau_closure"] = payload["log10_tau_prior"]
+
     return payload, meta

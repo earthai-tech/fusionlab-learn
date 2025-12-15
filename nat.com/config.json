@@ -113,6 +113,12 @@
     "LAMBDA_SMOOTH": 0.01,
     "LAMBDA_MV": 0.01,
     "LAMBDA_BOUNDS": 0.0,
+    "OFFSET_MODE": "mul",
+    "LAMBDA_OFFSET": 1.0,
+    "USE_LAMBDA_OFFSET_SCHEDULER": false,
+    "LAMBDA_OFFSET_UNIT": "epoch",
+    "LAMBDA_OFFSET_WHEN": "begin",
+    "LAMBDA_OFFSET_WARMUP": 10,
     "MV_LR_MULT": 1.0,
     "KAPPA_LR_MULT": 5.0,
     "PHYSICS_BOUNDS": {
@@ -130,7 +136,7 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 100,
+    "EPOCHS": 10,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
     "TF_DEVICE_MODE": "auto",
@@ -224,6 +230,12 @@
         "min_value": 0.005,
         "max_value": 0.05
       },
+      "lambda_offset": {
+        "type": "float",
+        "min_value": 0.1,
+        "max_value": 50.0,
+        "sampling": "log"
+      },
       "mv_lr_mult": {
         "type": "float",
         "min_value": 0.5,
@@ -260,6 +272,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "1eef188c3ee63a406597f6b7c9168c812e3d25d2b9a1084688686b3ea2583647"
+    "config_py_hash": "6eb57be98ecc23f7ba0ba6ad6fcf7dd8c7495f954fe776ee42d914096c9597ac"
   }
 }

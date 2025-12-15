@@ -1,49 +1,12 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
-"""
-sm3_log_offsets_diagnostics.py
 
-Supplementary Methods 3 (SM3): log-offset diagnostics for GeoPriorSubsNet.
-
-This script consumes the physics payload exported by
-``GeoPriorSubsNet.export_physics_payload`` (typically
-``<CITY>_phys_payload_run_val.npz``) and:
-
-* computes log-offsets
-    δ_K   = log10(K_eff / K_prior)
-    δ_Ss  = log10(Ss_eff / Ss_prior)
-    δ_Hd  = log10(Hd_eff / Hd_prior)
-    δ_tau = log10(τ_eff / τ_prior)
-* saves a "long" CSV with pointwise offsets;
-* saves a compact summary CSV (mean / std / 5–95 %);
-* produces simple histograms and a τ–δτ scatter plot.
-
-Intended usage (CLI)
---------------------
-    $ python sm3_log_offsets_diagnostics.py \
-        --physics-npz path/to/NANSHa_phys_payload_run_val.npz \
-        --outdir path/to/run_dir
-
-Programmatic usage
-------------------
-    from nat.com.sm3_log_offsets_diagnostics import (
-        run_sm3_offsets_from_payload
-    )
-
-    run_sm3_offsets_from_payload(
-        physics_npz_path=phys_npz_path,
-        outdir=RUN_OUTPUT_PATH,
-        city=CITY_NAME,
-        model_name=MODEL_NAME,
-    )
-"""
 
 from __future__ import annotations
 
 import os
-import argparse
-from typing import Dict, Any, Optional, Tuple, List
+from typing import Dict, Any, Optional, List
 
 import numpy as np
 import pandas as pd

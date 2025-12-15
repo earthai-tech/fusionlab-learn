@@ -8,13 +8,278 @@ Utility callbacks for training and tuning.
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Set, Any
+from typing import ( 
+    Iterable, Optional, Set, Any, 
+    Callable, Mapping, Sequence, 
+    Union
+)
 import numpy as np
 
 from . import KERAS_DEPS
 
 Callback = KERAS_DEPS.Callback
 
+
+
+ScheduleType = Union[
+    Callable[[Optional[int], int, float], float],
+    Mapping[int, float],
+    Sequence[float],
+    None,
+]
+
+def _linear_warmup_value(
+    idx: int,
+    start: float,
+    end: float,
+    warmup: int,
+) -> float:
+    """Linear ramp from start to end over warmup steps/epochs."""
+    if warmup <= 0:
+        return float(end)
+    if idx <= 0:
+        return float(start)
+    if idx >= warmup:
+        return float(end)
+    frac = float(idx) / float(warmup)
+    return float(start + (end - start) * frac)
+
+
+class LambdaOffsetScheduler(Callback):
+    r"""
+    Schedule GeoPrior's global physics-loss offset ``_lambda_offset``.
+
+    This callback updates the non-trainable TF variable
+    ``model._lambda_offset`` via ``assign()``, which is safe under
+    ``tf.function`` tracing (the new value is visible to the graph).
+
+    It supports both:
+    - epoch-based schedules (default) via ``unit="epoch"``
+    - step-based schedules via ``unit="step"``
+
+    Parameters
+    ----------
+    schedule : callable or mapping or sequence or None, optional
+        How to set the offset.
+
+        * callable:
+            ``schedule(epoch, step, current) -> new_value``
+
+        * mapping:
+            ``{index: value}`` where index is epoch or step depending on
+            ``unit``. Missing keys keep the current value.
+
+        * sequence:
+            ``values[index]`` where index is epoch or step.
+
+        * None (default):
+            Use an internal warmup schedule controlled by ``warmup``,
+            ``start`` and ``end`` (and adapted to ``model.offset_mode`` if
+            start/end are not provided).
+
+    unit : {"epoch", "step"}, default="epoch"
+        Schedule index type.
+
+    when : {"begin", "end"}, default="begin"
+        When to apply the update.
+
+    warmup : int, default=10
+        Warmup length when ``schedule is None``. Meaning depends on
+        ``unit`` (epochs or steps).
+
+    start : float or None, optional
+        Start value for the warmup when ``schedule is None``.
+        If None, a mode-aware default is chosen:
+        - offset_mode="mul"   -> start=0.1
+        - offset_mode="log10" -> start=-1.0  (multiplier 0.1)
+
+    end : float or None, optional
+        End value for the warmup when ``schedule is None``.
+        If None, a mode-aware default is chosen:
+        - offset_mode="mul"   -> end=1.0
+        - offset_mode="log10" -> end=0.0   (multiplier 1.0)
+
+    clamp_positive : bool, default=True
+        Enforce ``_lambda_offset > 0`` when ``offset_mode="mul"``.
+
+    verbose : int, default=1
+        Print updates.
+
+    Notes
+    -----
+    * This callback expects the model to expose:
+      - ``model._lambda_offset`` (tf.Variable; non-trainable)
+      - ``model.offset_mode`` in {"mul", "log10"}
+    """
+
+    def __init__(
+        self,
+        schedule: ScheduleType = None,
+        unit: str = "epoch",
+        when: str = "begin",
+        warmup: int = 10,
+        start: Optional[float] = None,
+        end: Optional[float] = None,
+        clamp_positive: bool = True,
+        verbose: int = 1,
+    ) -> None:
+        super().__init__()
+        self.schedule = schedule
+        self.unit = str(unit)
+        self.when = str(when)
+
+        self.warmup = int(warmup)
+        self.start = start
+        self.end = end
+
+        self.clamp_positive = bool(clamp_positive)
+        self.verbose = int(verbose)
+
+        self.step_: int = 0
+        self.last_value_: Optional[float] = None
+
+        if self.unit not in ("epoch", "step"):
+            raise ValueError("unit must be 'epoch' or 'step'.")
+        if self.when not in ("begin", "end"):
+            raise ValueError("when must be 'begin' or 'end'.")
+
+    # -----------------------
+    # Lifecycle
+    # -----------------------
+    def on_train_begin(self, logs: Optional[dict] = None) -> None:
+        self.step_ = 0
+        self.last_value_ = None
+
+        if not hasattr(self.model, "_lambda_offset"):
+            raise AttributeError(
+                "LambdaOffsetScheduler requires `model._lambda_offset` "
+                "(created with add_weight(trainable=False))."
+            )
+        if not hasattr(self.model, "offset_mode"):
+            raise AttributeError(
+                "LambdaOffsetScheduler requires `model.offset_mode`."
+            )
+
+        # Apply initial update (epoch 0 / step 0) if configured at begin.
+        if self.when == "begin":
+            epoch0 = 0 if self.unit == "epoch" else None
+            self._maybe_update(epoch=epoch0, step=self.step_)
+
+    # -----------------------
+    # Epoch hooks
+    # -----------------------
+    def on_epoch_begin(self, epoch: int, logs: Optional[dict] = None) -> None:
+        if self.unit == "epoch" and self.when == "begin":
+            self._maybe_update(epoch=epoch, step=self.step_)
+
+    def on_epoch_end(self, epoch: int, logs: Optional[dict] = None) -> None:
+        if self.unit == "epoch" and self.when == "end":
+            self._maybe_update(epoch=epoch, step=self.step_)
+
+    # -----------------------
+    # Step hooks
+    # -----------------------
+    def on_train_batch_begin(self, batch: int, logs: Optional[dict] = None) -> None:
+        if self.unit == "step" and self.when == "begin":
+            self._maybe_update(epoch=None, step=self.step_)
+
+    def on_train_batch_end(self, batch: int, logs: Optional[dict] = None) -> None:
+        if self.unit == "step" and self.when == "end":
+            self._maybe_update(epoch=None, step=self.step_)
+        self.step_ += 1
+
+    # -----------------------
+    # Core helpers
+    # -----------------------
+    def _current_value(self) -> float:
+        try:
+            return float(self.model._lambda_offset.numpy())
+        except Exception:
+            return float(self.model._lambda_offset)
+
+    def _mode_defaults(self) -> tuple[float, float]:
+        mode = str(getattr(self.model, "offset_mode", "mul"))
+        if mode == "log10":
+            # multiplier goes 10**(-1)=0.1 -> 10**0=1.0
+            return -1.0, 0.0
+        # mode == "mul"
+        return 0.1, 1.0
+
+    def _default_schedule_value(self, epoch: Optional[int], step: int) -> float:
+        idx = int(epoch) if self.unit == "epoch" else int(step)
+        d_start, d_end = self._mode_defaults()
+        start = float(self.start) if self.start is not None else d_start
+        end = float(self.end) if self.end is not None else d_end
+        return _linear_warmup_value(idx, start=start, end=end, warmup=self.warmup)
+
+    def _get_scheduled_value(
+        self,
+        epoch: Optional[int],
+        step: int,
+        current: float,
+    ) -> Optional[float]:
+        idx = int(epoch) if self.unit == "epoch" else int(step)
+
+        if self.schedule is None:
+            return self._default_schedule_value(epoch=epoch, step=step)
+
+        if callable(self.schedule):
+            return float(self.schedule(epoch, step, current))
+
+        if isinstance(self.schedule, Mapping):
+            v = self.schedule.get(idx, None)
+            return None if v is None else float(v)
+
+        if isinstance(self.schedule, Sequence):
+            if 0 <= idx < len(self.schedule):
+                return float(self.schedule[idx])
+            return None
+
+        raise TypeError(
+            "schedule must be callable, mapping, sequence, or None."
+        )
+
+    def _validate_value(self, value: float) -> None:
+        if not np.isfinite(value):
+            raise ValueError("lambda_offset must be finite.")
+
+        mode = str(getattr(self.model, "offset_mode", "mul"))
+        if self.clamp_positive and mode == "mul" and value <= 0.0:
+            raise ValueError(
+                "lambda_offset must be > 0 when offset_mode='mul'."
+            )
+
+    def _maybe_update(self, epoch: Optional[int], step: int) -> None:
+        cur = self._current_value()
+        new = self._get_scheduled_value(epoch=epoch, step=step, current=cur)
+
+        if new is None:
+            return
+
+        self._validate_value(new)
+        self.model._lambda_offset.assign(float(new))
+        self.last_value_ = float(new)
+
+        if self.verbose:
+            unit = "epoch" if self.unit == "epoch" else "step"
+            idx = epoch if self.unit == "epoch" else step
+            print(
+                f"[LambdaOffsetScheduler] {unit}={idx}: "
+                f"lambda_offset={float(new):g}"
+            )
+
+    def __repr__(self) -> str:
+        return (
+            "LambdaOffsetScheduler("
+            f"unit={self.unit!r}, when={self.when!r}, "
+            f"warmup={self.warmup}, start={self.start}, end={self.end}, "
+            f"clamp_positive={self.clamp_positive}, verbose={self.verbose})"
+        )
+
+class LambdaOffsetStepScheduler(LambdaOffsetScheduler):
+    def __init__(self, *args, **kwargs):
+        kwargs["unit"] = "step"
+        super().__init__(*args, **kwargs)
 
 class NaNGuard(Callback):
     r"""
@@ -223,3 +488,5 @@ class NaNGuard(Callback):
             f"raise_on_nan={self.raise_on_nan}, "
             f"verbose={self.verbose})"
         )
+
+

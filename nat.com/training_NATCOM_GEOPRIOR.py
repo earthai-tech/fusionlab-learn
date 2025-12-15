@@ -67,9 +67,6 @@ try:
         per_horizon_metrics,
     )
     from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet
-    from fusionlab.nn.pinn.log_offsets_diagnostics import (
-        run_sm3_offsets_from_payload,
-    )
     from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
     from fusionlab.nn.losses import make_weighted_pinball
     from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn, _to_py
@@ -80,6 +77,7 @@ try:
     from fusionlab.nn.utils import plot_history_in
     from fusionlab.nn.pinn.op import extract_physical_parameters
     from fusionlab.plot.forecast import plot_eval_future
+    from fusionlab.nn.callbacks import LambdaOffsetScheduler
     
     print("Successfully imported fusionlab modules.")
 except Exception as e:
@@ -250,9 +248,23 @@ LAMBDA_SMOOTH = cfg.get("LAMBDA_SMOOTH", 0.01)
 LAMBDA_MV     = cfg.get("LAMBDA_MV",     0.01)
 MV_LR_MULT    = cfg.get("MV_LR_MULT",    1.0)
 KAPPA_LR_MULT = cfg.get("KAPPA_LR_MULT", 5.0)
+OFFSET_MODE = cfg.get("OFFSET_MODE", "mul")
+LAMBDA_OFFSET = float(cfg.get("LAMBDA_OFFSET", 1.0))
+
+USE_LAMBDA_OFFSET_SCHEDULER = bool(cfg.get("USE_LAMBDA_OFFSET_SCHEDULER", False))
+LAMBDA_OFFSET_UNIT = cfg.get("LAMBDA_OFFSET_UNIT", "epoch")
+LAMBDA_OFFSET_WHEN = cfg.get("LAMBDA_OFFSET_WHEN", "begin")
+LAMBDA_OFFSET_WARMUP = int(cfg.get("LAMBDA_OFFSET_WARMUP", 10))
+
+LAMBDA_OFFSET_START = cfg.get("LAMBDA_OFFSET_START", None)
+LAMBDA_OFFSET_END = cfg.get("LAMBDA_OFFSET_END", None)
+LAMBDA_OFFSET_SCHEDULE = cfg.get("LAMBDA_OFFSET_SCHEDULE", None)
+
+
 LAMBDA_BOUNDS = cfg.get("LAMBDA_BOUNDS", 0.0)
 # Global physics bounds (from config.py)
 PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
+
 
 _default_phys_bounds = {
     "H_min": 5.0,
@@ -548,6 +560,7 @@ subsmodel_params = {
     "kappa_mode": GEOPRIOR_KAPPA_MODE,
     "use_effective_h": GEOPRIOR_USE_EFFECTIVE_H,
     "hd_factor": GEOPRIOR_HD_FACTOR,
+    "offset_mode": OFFSET_MODE,
 }
 
 subs_model_inst = model_cls(
@@ -586,6 +599,8 @@ physics_loss_weights = {
     "lambda_bounds": LAMBDA_BOUNDS, 
     "lambda_mv": LAMBDA_MV,
     "mv_lr_mult": MV_LR_MULT,
+    # (global multiplier for the physics block)
+    "lambda_offset": LAMBDA_OFFSET,
     "kappa_lr_mult": KAPPA_LR_MULT,
 }
 
@@ -623,6 +638,20 @@ callbacks = [
 
 csvlog_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_train_log.csv")
 callbacks.append(CSVLogger(csvlog_path, append=False))
+
+if USE_LAMBDA_OFFSET_SCHEDULER and (not subs_model_inst._physics_off()):
+    callbacks.append(
+        LambdaOffsetScheduler(
+            schedule=LAMBDA_OFFSET_SCHEDULE,
+            unit=LAMBDA_OFFSET_UNIT,
+            when=LAMBDA_OFFSET_WHEN,
+            warmup=LAMBDA_OFFSET_WARMUP,
+            start=LAMBDA_OFFSET_START,
+            end=LAMBDA_OFFSET_END,
+            clamp_positive=True,
+            verbose=1,
+        )
+    )
 
 print("\nTraining...")
 history = subs_model_inst.fit(
@@ -706,6 +735,8 @@ training_summary = {
         "vsn_units": int(VSN_UNITS) if VSN_UNITS is not None else None,
         "mode": MODE,
         "model_init_params": serialize_subs_params(subsmodel_params, cfg),
+        "offset_mode": OFFSET_MODE,
+        "lambda_offset": LAMBDA_OFFSET,
     },
     "paths": {
         "run_dir": RUN_OUTPUT_PATH,
@@ -759,43 +790,62 @@ print("[OK] Persisted weights, architecture JSON,"
       " CSV log, training summary, and run manifest.")
 
 
-# 2.6 run to save plots
+# 2.6 run to save plots  (use ONLY train keys; val_* is auto-detected)
 history_groups = {
-    "Total Loss": ["loss", "val_loss"],
-    "Physics Loss": ["physics_loss", "val_physics_loss"],
-    "Data Loss": ["data_loss", "val_data_loss"],
-    "Component Losses": [
-        "consolidation_loss", "val_consolidation_loss",
-        "gw_flow_loss", "val_gw_flow_loss",
-        "prior_loss", "val_prior_loss",
-        "smooth_loss", "val_smooth_loss",
+    # What  actually optimize
+    "Total Loss": ["total_loss"],
+
+    # Decomposition: data + physics (scaled vs raw)
+    "Data vs Physics": ["data_loss", "physics_loss_scaled", "physics_loss"],
+
+    # Offset controls (helps debug scheduling)
+    "Offset Controls": ["lambda_offset", "physics_mult"],
+
+    # Physics components (raw components, before global offset)
+    "Physics Components": [
+        "consolidation_loss",
+        "gw_flow_loss",
+        "prior_loss",
+        "smooth_loss",
+        "mv_prior_loss",
+        "bounds_loss",
     ],
-    "Subsidence MAE": ["subs_pred_mae", "val_subs_pred_mae"],
-    "GWL MAE": ["gwl_pred_mae", "val_gwl_pred_mae"],
+
+    "Subsidence MAE": ["subs_pred_mae"],
+    "GWL MAE": ["gwl_pred_mae"],
 }
+history_groups.update({
+    "Physics Loss (Scaled)": ["physics_loss_scaled", "val_physics_loss_scaled"],
+    "Offset & Multiplier": [
+        "lambda_offset", "val_lambda_offset",
+        "physics_mult", "val_physics_mult",
+    ],
+})
+
 yscales = {
     "Total Loss": "log",
-    "Physics Loss": "log",
-    "Data Loss": "log",
-    "Component Losses": "log",
+    "Data vs Physics": "log",
+    "Physics Components": "log",
+    "Offset Controls": "linear",   # lambda_offset can be negative in log10 mode
     "Subsidence MAE": "linear",
     "GWL MAE": "linear",
 }
+
 plot_history_in(
-    history.history, metrics=history_groups, 
+    history.history,
+    metrics=history_groups,
     title=f"{MODEL_NAME} Training History",
     yscale_settings=yscales,
-    layout="subplots",  
+    layout="subplots",
     savefig=os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot"),
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot",
+    ),
 )
 
+
 # Extract physical parameters
-# extract_physical_parameters(
-#     subs_model_inst, to_csv=True,
-#     filename=f"{CITY_NAME}_{MODEL_NAME.lower()}_physical_parameters.csv",
-#     save_dir=RUN_OUTPUT_PATH, model_name="geoprior",
-# )
+
 phys_model_tag = "geoprior"
 if MODEL_NAME == "PoroElasticSubsNet":
     phys_model_tag = "poroelastic"
@@ -1036,19 +1086,22 @@ phys_npz_path = os.path.join(
     f"{CITY_NAME}_phys_payload_run_val.npz",
 )
 
-try:
-    print("\n[SM3] Running log-offset diagnostics (Supplementary Methods 3)...")
-    _sm3_result = run_sm3_offsets_from_payload(
-        physics_npz_path=phys_npz_path,
-        outdir=RUN_OUTPUT_PATH,
-        city=CITY_NAME,
-        model_name=MODEL_NAME,
-    )
-    print("[SM3] Done. Offsets tables and plots are available in:")
-    print(f"      - raw:     {_sm3_result['raw_csv']}")
-    print(f"      - summary: {_sm3_result['summary_csv']}")
-except Exception as e:
-    print(f"[Warn] SM3 log-offset diagnostics failed: {e}")
+# try:
+#     from fusionlab.nn.pinn.log_offsets_diagnostics import (
+#         run_sm3_offsets_from_payload,
+#     )
+#     print("\n[SM3] Running log-offset diagnostics (Supplementary Methods 3)...")
+#     _sm3_result = run_sm3_offsets_from_payload(
+#         physics_npz_path=phys_npz_path,
+#         outdir=RUN_OUTPUT_PATH,
+#         city=CITY_NAME,
+#         model_name=MODEL_NAME,
+#     )
+#     print("[SM3] Done. Offsets tables and plots are available in:")
+#     print(f"      - raw:     {_sm3_result['raw_csv']}")
+#     print(f"      - summary: {_sm3_result['summary_csv']}")
+# except Exception as e:
+#     print(f"[Warn] SM3 log-offset diagnostics failed: {e}")
 
 
 #

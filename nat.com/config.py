@@ -295,6 +295,37 @@ LAMBDA_MV = 0.01
 
 LAMBDA_BOUNDS = 0.0
 
+# 4.3ter Global physics-loss offset (scales the whole physics block)
+# ------------------------------------------------------------------
+# OFFSET_MODE controls how `model._lambda_offset` is interpreted:
+#   - "mul"   : physics_mult = lambda_offset
+#   - "log10" : physics_mult = 10 ** lambda_offset
+OFFSET_MODE = "mul"   # {"mul", "log10"}
+
+# Initial value assigned in model.compile(lambda_offset=...)
+LAMBDA_OFFSET = 1.0
+
+# Optional scheduler (OFF by default)
+USE_LAMBDA_OFFSET_SCHEDULER = False
+
+# Scheduler knobs (used only when USE_LAMBDA_OFFSET_SCHEDULER=True)
+LAMBDA_OFFSET_UNIT = "epoch"   # {"epoch", "step"}
+LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
+
+# If LAMBDA_OFFSET_SCHEDULE is None, callback uses linear warmup:
+# start -> end over `warmup` epochs/steps.
+LAMBDA_OFFSET_WARMUP = 10
+LAMBDA_OFFSET_START = None
+LAMBDA_OFFSET_END = None
+
+# Optional explicit schedule:
+# - dict  : {index: value} where index is epoch/step
+# - list  : values[index]
+LAMBDA_OFFSET_SCHEDULE = None
+# Example:
+# LAMBDA_OFFSET_SCHEDULE = {0: 0.1, 5: 0.5, 10: 1.0}
+
+
 # Learning-rate multipliers for scalar physics parameters.
 MV_LR_MULT = 1.0
 KAPPA_LR_MULT = 5.0
@@ -340,7 +371,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
 
-EPOCHS = 100
+EPOCHS = 10
 
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
@@ -478,7 +509,12 @@ TUNER_SEARCH_SPACE = {
         "min_value": 0.005,
         "max_value": 0.05,
     },
-
+    "lambda_offset": {
+        "type": "float",
+        "min_value": 0.1,
+        "max_value": 50.0,
+        "sampling": "log",
+    }, 
     # Around:
     #   MV_LR_MULT    = 1.0
     #   KAPPA_LR_MULT = 5.0
