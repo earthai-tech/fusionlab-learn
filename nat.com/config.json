@@ -130,6 +130,9 @@
       "Ss_max": 0.001
     },
     "TIME_UNITS": "year",
+    "SUBS_UNIT_TO_SI": 0.001,
+    "HEAD_UNIT_TO_SI": 1.0,
+    "AUTO_SI_AFFINE_FROM_STAGE1": true,
     "GEOPRIOR_INIT_MV": 1e-07,
     "GEOPRIOR_INIT_KAPPA": 1.0,
     "GEOPRIOR_GAMMA_W": 9810.0,
@@ -137,7 +140,7 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 2,
+    "EPOCHS": 100,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
     "TF_DEVICE_MODE": "auto",
@@ -273,6 +276,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "6ea79b1bac617d4ab64f8776a6b245ea5ea0a230d23b7b6d2989ba548edf6dd7"
+    "config_py_hash": "fcf04140e63bad6f1603f4153578d947bb8ef6d03fa77164d9fae26391277296"
   }
 }

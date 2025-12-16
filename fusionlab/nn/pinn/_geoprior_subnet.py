@@ -113,6 +113,16 @@ _param_docs = DocstringComponents.from_nested_components(
 #         ),
 #     ),
 # )
+# # scaling_kwargs
+# scaling_kwargs = dict(
+#     ...
+#     # model_output_to_SI: s_si = s_model * subs_scale_si + subs_bias_si
+#     subs_scale_si=1e-3,   # mm -> m   (or std_mm*1e-3 if standardized)
+#     subs_bias_si=0.0,     # mean_mm*1e-3 if you used z-score w/ nonzero mean
+
+#     head_scale_si=1.0,    # m -> m (or std_m if standardized)
+#     head_bias_si=0.0,
+# )
 
 
 __all__ = ["GeoPriorSubsNet"]
@@ -309,6 +319,19 @@ class GeoPriorSubsNet(BaseAttentive):
         
         self._init_coordinate_corrections()
         self._build_pinn_components()
+        
+
+    def _to_si_subsidence(self, s_model: Tensor) -> Tensor:
+        cfg = self.scaling_kwargs or {}
+        a = tf_constant(float(cfg.get("subs_scale_si", 1.0)), tf_float32)
+        b = tf_constant(float(cfg.get("subs_bias_si", 0.0)), tf_float32)
+        return s_model * a + b
+    
+    def _to_si_head(self, h_model: Tensor) -> Tensor:
+        cfg = self.scaling_kwargs or {}
+        a = tf_constant(float(cfg.get("head_scale_si", 1.0)), tf_float32)
+        b = tf_constant(float(cfg.get("head_bias_si", 0.0)), tf_float32)
+        return h_model * a + b
 
     def _coord_ranges(self):
         cfg = self.scaling_kwargs or {}
@@ -333,7 +356,6 @@ class GeoPriorSubsNet(BaseAttentive):
             name="physics_mean_head",
         )
 
-        # Runtime placeholders and scalar metrics
         # H_field is populated in call() and reused by test_step /
         # evaluate_physics / export_physics_payload.
         self.H_field: Optional[Tensor] = None
@@ -856,6 +878,10 @@ class GeoPriorSubsNet(BaseAttentive):
             h_pred_mean_corr = gwl_pred_mean + mlp_corr
             s_pred_mean_corr = s_pred_mean + s_corr
     
+            # NEW: convert to SI (meters) for physics
+            h_si = self._to_si_head(h_pred_mean_corr)
+            s_si = self._to_si_subsidence(s_pred_mean_corr)
+            
             K_corr = self.K_coord_mlp(coords_flat, training=True)
             Ss_corr = self.Ss_coord_mlp(coords_flat, training=True)
             tau_corr = self.tau_coord_mlp(coords_flat, training=True)
@@ -884,25 +910,18 @@ class GeoPriorSubsNet(BaseAttentive):
             # -----------------------------------------------------------------
             # 4. PDE derivatives via automatic differentiation
             # -----------------------------------------------------------------
-            s_bind = s_pred_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
-            h_bind = h_pred_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
+            # Use SI for PDE
+            s_pde = s_si
+            h_pde = h_si
             
-            # ds/dt for consolidation residual
+            s_bind = s_pde + 0.0 * t + 0.0 * x + 0.0 * y
+            h_bind = h_pde + 0.0 * t + 0.0 * x + 0.0 * y
+            
             ds_dt = tape.gradient(s_bind, t)
-            # dh/dt and spatial derivatives for groundwater residual
             dh_dt = tape.gradient(h_bind, t)
-            
             dh_dx = tape.gradient(h_bind, x)
             dh_dy = tape.gradient(h_bind, y)
 
-
-            
-            # ds_dt = tape.gradient(s_pred_mean_corr, t)
-            
-            # dh_dt = tape.gradient(h_pred_mean_corr, t)
-            # ---- 
-            # dh_dx = tape.gradient(h_pred_mean_corr, x)
-            # dh_dy = tape.gradient(h_pred_mean_corr, y)
     
             K_dh_dx = K_field * dh_dx
             K_dh_dy = K_field * dh_dy
@@ -978,11 +997,11 @@ class GeoPriorSubsNet(BaseAttentive):
             # Consolidation residual:
             #   R_cons = ds/dt - (s_eq - s)/tau
             cons_res = self._compute_consolidation_residual(
-                ds_dt,
-                s_pred_mean_corr,
-                h_pred_mean_corr,
-                H_field,
-                tau_field,
+                ds_dt, 
+                s_pde, 
+                h_pde,
+                H_field, 
+                tau_field
             )
     
             # Consistency prior residual:
@@ -1032,10 +1051,10 @@ class GeoPriorSubsNet(BaseAttentive):
             # -----------------------------------------------------------------
             if (not self._physics_off()) and self.scale_pde_residuals:
                 scales = self._compute_scales(
-                    t,
-                    s_pred_mean_corr,
-                    h_pred_mean_corr,
-                    K_field,
+                    t,  
+                    s_pde,
+                    h_pde,
+                    K_field, 
                     Ss_field,
                     Q=0.0,
                 )
@@ -1637,6 +1656,12 @@ class GeoPriorSubsNet(BaseAttentive):
         
             h_mean_corr = h_mean + mlp_corr
             s_mean_corr = s_mean + s_corr
+            
+            h_si = self._to_si_head(h_mean_corr)
+            s_si = self._to_si_subsidence(s_mean_corr)
+            
+            h_pde = h_si
+            s_pde = s_si
         
             K_corr = self.K_coord_mlp(coords_flat, training=False)
             Ss_corr = self.Ss_coord_mlp(coords_flat, training=False)
@@ -1653,8 +1678,9 @@ class GeoPriorSubsNet(BaseAttentive):
                         
             # Bind s_mean to t so the tape tracks s(t,x,y)
             # bind to coords (guards against “None” AD in some graphs)
-            s_bind = s_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
-            h_bind = h_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
+            s_bind = s_pde + 0.0 * t + 0.0 * x + 0.0 * y
+            h_bind = h_pde + 0.0 * t + 0.0 * x + 0.0 * y
+
             K_bind = K_field      + 0.0 * x + 0.0 * y
             Ss_bind = Ss_field    + 0.0 * x + 0.0 * y
             
@@ -1708,13 +1734,27 @@ class GeoPriorSubsNet(BaseAttentive):
             # now convert time rates to per-second as you already do
             ds_dt = rate_to_per_second(ds_dt, self.time_units)
             dh_dt = rate_to_per_second(dh_dt, self.time_units)
-            
-            if any(v is None for v in [
-                    ds_dt, dh_dt, dh_dx, dh_dy,
-                    d_K_dh_dx_dx, d_K_dh_dy_dy]):
+                        
+            missing = {
+                "ds_dt": ds_dt,
+                "dh_dt": dh_dt,
+                "dh_dx": dh_dx,
+                "dh_dy": dh_dy,
+                "d_K_dh_dx_dx": d_K_dh_dx_dx,
+                "d_K_dh_dy_dy": d_K_dh_dy_dy,
+                "dK_dx": dK_dx,
+                "dK_dy": dK_dy,
+                "dSs_dx": dSs_dx,
+                "dSs_dy": dSs_dy,
+            }
+            none_keys = [k for k, v in missing.items() if v is None]
+            if none_keys:
                 raise ValueError(
-                    "Some physics gradients are None in evaluate_physics()."
-                    )
+                    "Some physics gradients are None in evaluate_physics(): "
+                    f"{none_keys}. Check coord injection / MLP corrections so "
+                    "K, Ss, h depend on (t,x,y)."
+                )
+
 
         del tape
      
@@ -1723,7 +1763,7 @@ class GeoPriorSubsNet(BaseAttentive):
             dh_dt, d_K_dh_dx_dx, d_K_dh_dy_dy, Ss_field, Q=0.0
         )
         cons_res = self._compute_consolidation_residual(
-            ds_dt, s_mean_corr, h_mean_corr, H_field, tau_field
+            ds_dt, s_pde, h_pde, H_field, tau_field
         )
         prior_res = self._compute_consistency_prior(
             K_field, Ss_field, tau_field, H_field
@@ -1761,7 +1801,7 @@ class GeoPriorSubsNet(BaseAttentive):
         gw_for_loss   = gw_res
         if self.scale_pde_residuals:
             scales = self._compute_scales(
-                t, s_mean_corr, h_mean_corr, K_field, Ss_field, Q=0.0
+                t, s_pde, h_pde, K_field, Ss_field, Q=0.0
             )
             cons_for_loss = scale_residual(cons_for_loss, scales.get("cons_scale"))
             gw_for_loss   = scale_residual(gw_for_loss,   scales.get("gw_scale"))

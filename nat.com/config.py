@@ -353,6 +353,30 @@ PHYSICS_BOUNDS = {
 }
 
 TIME_UNITS ="year" 
+# -------------------------------------------------------------------
+# 4.3quater  Model->SI affine mapping for physics residuals
+# -------------------------------------------------------------------
+# Physics residuals should run in physical/SI-consistent units.
+# The model outputs are usually in the Stage-1 scaled space.
+#
+# We convert with an affine map:
+#   y_si = y_model * SCALE + BIAS
+#
+# If *_SCALE_SI / *_BIAS_SI are None, Stage-2 will infer them from
+# the Stage-1 target scalers (recommended).
+#
+# Optional extra unit factors (e.g., if your raw subsidence is mm/yr but
+# physics expects m/yr, set SUBS_UNIT_TO_SI=1e-3).
+SUBS_UNIT_TO_SI = 1e-3   # mm -> m (set 1.0 if already meters)
+HEAD_UNIT_TO_SI = 1.0    # head already meters in most cases
+
+SUBS_SCALE_SI = None
+SUBS_BIAS_SI  = None
+HEAD_SCALE_SI = None
+HEAD_BIAS_SI  = None
+
+# Prefer auto-derive from Stage-1 scalers when None
+AUTO_SI_AFFINE_FROM_STAGE1 = True
 
 # 4.4 GeoPrior scalar parameters
 # ------------------------------
@@ -373,7 +397,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
 
-EPOCHS = 2
+EPOCHS = 100
 
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4

@@ -280,13 +280,6 @@ def compute_identifiability_summary(
     Ss_prior = prior_params["Ss"]
     Hd_prior = prior_params["Hd"]
 
-    # delta_K_prior  = float(np.log(K_est)  - np.log(K_prior))
-    # delta_Ss_prior = float(np.log(Ss_est) - np.log(Ss_prior))
-    # delta_Hd_prior = float(Hd_est - Hd_prior)
-
-    # delta_K_true  = float(np.log(K_est)  - np.log(true_params["K"]))
-    # delta_Ss_true = float(np.log(Ss_est) - np.log(true_params["Ss"]))
-    # delta_Hd_true = float(Hd_est - true_params["Hd"])
 
     #  use log offsets for Hd to match the main diagnostics
     delta_K_prior  = float(np.log(max(K_est, eps))  - np.log(max(K_prior, eps)))

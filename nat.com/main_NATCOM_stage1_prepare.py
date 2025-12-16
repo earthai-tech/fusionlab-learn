@@ -559,6 +559,80 @@ scaled_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_03_scaled.csv")
 df_scaled.to_csv(scaled_csv, index=False)
 print(f"  Saved: {scaled_csv}")
 
+# --------------------------------------------------------------
+# 3.4 Physics SI affine mapping (model-space -> SI-space)
+#     y_si = y_model * scale_si + bias_si
+# --------------------------------------------------------------
+SUBS_UNIT_TO_SI = float(cfg.get("SUBS_UNIT_TO_SI", 1.0))  # e.g. 1e-3 for mm->m
+HEAD_UNIT_TO_SI = float(cfg.get("HEAD_UNIT_TO_SI", 1.0))  # often 1.0
+
+# Optional explicit overrides from config.py (if user sets them)
+SUBS_SCALE_SI_CFG = cfg.get("SUBS_SCALE_SI", None)
+SUBS_BIAS_SI_CFG  = cfg.get("SUBS_BIAS_SI",  None)
+HEAD_SCALE_SI_CFG = cfg.get("HEAD_SCALE_SI", None)
+HEAD_BIAS_SI_CFG  = cfg.get("HEAD_BIAS_SI",  None)
+
+AUTO_SI = bool(cfg.get("AUTO_SI_AFFINE_FROM_STAGE1", True))
+
+def _infer_affine_from_scaler(_scaler, _all_features, _col):
+    """
+    Return (scale, bias) such that: y_phys = y_scaled * scale + bias
+    for the single feature `_col` in the fitted scaler.
+    """
+    if (_col is None) or (_col not in _all_features) or (_scaler is None):
+        return None
+
+    idx = _all_features.index(_col)
+
+    # MinMaxScaler: inverse is y = y_scaled*(max-min) + min
+    if hasattr(_scaler, "data_min_") and hasattr(_scaler, "data_max_"):
+        mn = float(np.asarray(_scaler.data_min_)[idx])
+        mx = float(np.asarray(_scaler.data_max_)[idx])
+        return (mx - mn), mn
+
+    # StandardScaler: inverse is y = y_scaled*std + mean
+    if hasattr(_scaler, "scale_") and hasattr(_scaler, "mean_"):
+        sc = float(np.asarray(_scaler.scale_)[idx])
+        mu = float(np.asarray(_scaler.mean_)[idx])
+        return sc, mu
+
+    # RobustScaler: inverse is y = y_scaled*scale + center
+    if hasattr(_scaler, "scale_") and hasattr(_scaler, "center_"):
+        sc = float(np.asarray(_scaler.scale_)[idx])
+        ce = float(np.asarray(_scaler.center_)[idx])
+        return sc, ce
+
+    raise TypeError(f"Unsupported scaler for affine inference: {type(_scaler)}")
+
+# Defaults if column was NOT scaled (identity in model-space)
+subs_scale, subs_bias = 1.0, 0.0
+head_scale, head_bias = 1.0, 0.0
+
+if AUTO_SI:
+    aff_subs = _infer_affine_from_scaler(scaler if num_cols else None, num_cols, SUBSIDENCE_COL)
+    aff_head = _infer_affine_from_scaler(scaler if num_cols else None, num_cols, GWL_COL)
+
+    if aff_subs is not None:
+        subs_scale, subs_bias = aff_subs
+    if aff_head is not None:
+        head_scale, head_bias = aff_head
+
+# Apply explicit overrides if provided
+if SUBS_SCALE_SI_CFG is not None: subs_scale = float(SUBS_SCALE_SI_CFG)
+if SUBS_BIAS_SI_CFG  is not None: subs_bias  = float(SUBS_BIAS_SI_CFG)
+if HEAD_SCALE_SI_CFG is not None: head_scale = float(HEAD_SCALE_SI_CFG)
+if HEAD_BIAS_SI_CFG  is not None: head_bias  = float(HEAD_BIAS_SI_CFG)
+
+# Convert into SI using unit factors:
+# y_SI = (y_scaled*scale + bias) * unit_factor  =>  scale_si=scale*unit, bias_si=bias*unit
+subs_scale_si = float(subs_scale) * SUBS_UNIT_TO_SI
+subs_bias_si  = float(subs_bias)  * SUBS_UNIT_TO_SI
+head_scale_si = float(head_scale) * HEAD_UNIT_TO_SI
+head_bias_si  = float(head_bias)  * HEAD_UNIT_TO_SI
+
+print("[SI affine] subs: scale_si=", subs_scale_si, "bias_si=", subs_bias_si)
+print("[SI affine] head: scale_si=", head_scale_si, "bias_si=", head_bias_si)
+
 # ==================================================================
 # Step 4: Feature sets (lists only)
 # ==================================================================
@@ -786,6 +860,14 @@ manifest = {
     },
 }
 
+manifest["config"].setdefault("scaling_kwargs", {})
+manifest["config"]["scaling_kwargs"].update({
+    "subs_scale_si": subs_scale_si,
+    "subs_bias_si": subs_bias_si,
+    "head_scale_si": head_scale_si,
+    "head_bias_si": head_bias_si,
+})
+
 manifest["config"]["feature_registry"] = {
     "optional_numeric_declared": OPTIONAL_NUMERIC_FEATURES,
     "optional_categorical_declared": OPTIONAL_CATEGORICAL_FEATURES,
@@ -842,11 +924,14 @@ if not df_test.empty:
                 "future_features": future_arr,
                 "H_field": test_inputs["H_field"],
             }
+            # test_targets_np = {
+            #     "subsidence": test_targets["subsidence"],
+            #     "gwl": test_targets["gwl"],
+            # }
             test_targets_np = {
-                "subsidence": test_targets["subsidence"],
-                "gwl": test_targets["gwl"],
+                "subs_pred": test_targets["subsidence"],
+                "gwl_pred":  test_targets["gwl"],
             }
-    
             test_inputs_npz  = os.path.join(ARTIFACTS_DIR, "test_inputs.npz")
             test_targets_npz = os.path.join(ARTIFACTS_DIR, "test_targets.npz")
             _save_npz(test_inputs_npz, test_inputs_np)

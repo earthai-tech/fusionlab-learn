@@ -325,6 +325,74 @@ def load_nat_config_payload(root="nat.com") -> Dict[str, Any]:
         return json.load(f)
 
 
+def _as_float1(x):
+    if x is None:
+        return None
+    arr = np.asarray(x).reshape(-1)
+    return float(arr[0])
+
+def affine_from_scaler(scaler):
+    # MinMaxScaler: inverse is y = y_scaled*(max-min) + min
+    if hasattr(scaler, "data_min_") and hasattr(scaler, "data_max_"):
+        scale = _as_float1(scaler.data_max_ - scaler.data_min_)
+        bias  = _as_float1(scaler.data_min_)
+        return scale, bias
+
+    # StandardScaler: inverse is y = y_scaled*std + mean
+    if hasattr(scaler, "scale_") and hasattr(scaler, "mean_"):
+        scale = _as_float1(scaler.scale_)
+        bias  = _as_float1(scaler.mean_)
+        return scale, bias
+
+    # RobustScaler: inverse is y = y_scaled*scale + center
+    if hasattr(scaler, "scale_") and hasattr(scaler, "center_"):
+        scale = _as_float1(scaler.scale_)
+        bias  = _as_float1(scaler.center_)
+        return scale, bias
+
+    raise TypeError(
+        f"Unsupported scaler type for affine inference: {type(scaler)}")
+
+def resolve_si_affine(
+    cfg: dict,
+    scaler_info: dict,
+    *,
+    target_name: str,
+    prefix: str,              # "SUBS" or "HEAD"
+    unit_factor_key: str,     # "SUBS_UNIT_TO_SI" or "HEAD_UNIT_TO_SI"
+    scale_key: str,           # "SUBS_SCALE_SI" / "HEAD_SCALE_SI"
+    bias_key: str,            # "SUBS_BIAS_SI"  / "HEAD_BIAS_SI"
+):
+    # 1) explicit overrides win
+    scale = cfg.get(scale_key, None)
+    bias  = cfg.get(bias_key, None)
+
+    unit_factor = float(cfg.get(unit_factor_key, 1.0))
+    auto = bool(cfg.get("AUTO_SI_AFFINE_FROM_STAGE1", True))
+
+    if (scale is None or bias is None) and auto:
+        info = scaler_info.get(target_name) or {}
+        scaler = info.get("scaler")
+        if scaler is None and "scaler_path" in info:
+            # load happens elsewhere in your code; keep it simple here
+            scaler = info.get("scaler")
+        if scaler is None:
+            raise RuntimeError(
+                f"[{prefix}] Cannot infer SI affine: scaler for target "
+                f"{target_name!r} not found in scaler_info."
+            )
+        s, b = affine_from_scaler(scaler)
+        if scale is None:
+            scale = s
+        if bias is None:
+            bias = b
+
+    # 2) apply unit conversion into the affine
+    #    y_SI = (y_scaled*scale + bias) * unit_factor
+    scale_si = float(scale) * unit_factor
+    bias_si  = float(bias)  * unit_factor
+    return scale_si, bias_si
+
 # -------------------------------------------------------------------------
 # NATCOM training helpers
 # -------------------------------------------------------------------------

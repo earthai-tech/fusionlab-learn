@@ -57,9 +57,9 @@ try:
         build_censor_mask_from_dynamic,
         name_of,
         serialize_subs_params,
+        resolve_si_affine
     )
 
-    
     from fusionlab.utils.forecast_utils import format_and_forecast
     from fusionlab.utils.scale_metrics import (
         inverse_scale_target,
@@ -603,6 +603,31 @@ subsmodel_params["scaling_kwargs"].update({
     "time_units": TIME_UNITS,
     "coords_normalized": coords_normalized,
     "coord_ranges": coord_ranges or {},
+})
+
+
+subs_scale_si, subs_bias_si = resolve_si_affine(
+    cfg, scaler_info_dict,
+    target_name=SUBSIDENCE_COL,
+    prefix="SUBS",
+    unit_factor_key="SUBS_UNIT_TO_SI",
+    scale_key="SUBS_SCALE_SI",
+    bias_key="SUBS_BIAS_SI",
+)
+head_scale_si, head_bias_si = resolve_si_affine(
+    cfg, scaler_info_dict,
+    target_name=GWL_COL,
+    prefix="HEAD",
+    unit_factor_key="HEAD_UNIT_TO_SI",
+    scale_key="HEAD_SCALE_SI",
+    bias_key="HEAD_BIAS_SI",
+)
+
+subsmodel_params["scaling_kwargs"].update({
+    "subs_scale_si": subs_scale_si,
+    "subs_bias_si": subs_bias_si,
+    "head_scale_si": head_scale_si,
+    "head_bias_si": head_bias_si,
 })
 
 subs_model_inst = model_cls(
