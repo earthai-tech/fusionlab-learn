@@ -33,7 +33,9 @@ if KERAS_BACKEND:
         gather_physics_payload
     ) 
     from .op import ( 
-        process_pinn_inputs, default_scales, scale_residual, positive 
+        process_pinn_inputs, default_scales, scale_residual, positive, 
+        rate_to_per_second, 
+        
     )
     from .utils import  process_pde_modes, extract_txy_in, _get_coords
     from ..components import ( 
@@ -133,6 +135,7 @@ class GeoPriorSubsNet(BaseAttentive):
         "hd_factor": [Interval(Real, 0, 1, closed="right")], 
         "kappa_mode": [StrOptions({"bar", "kb"})],
         "offset_mode": [StrOptions({"mul", "log10"})],
+        "time_units": [str, None],          
         
     }
    )
@@ -170,6 +173,7 @@ class GeoPriorSubsNet(BaseAttentive):
         hd_factor: float = 1.0 ,  # if Hd = Hd_factor * H
         kappa_mode: str = "bar",   # {"bar", "kb"}  # κ̄ vs κ_b
         offset_mode: str = "mul",  # {"mul", "log10"}
+        time_units: Optional[str] = None,  
         use_vsn: bool = True,
         vsn_units: Optional[int] = None,
         mode: Optional[str]=None, 
@@ -247,6 +251,26 @@ class GeoPriorSubsNet(BaseAttentive):
         if isinstance(b, Mapping) and not isinstance(b, dict):
             self.scaling_kwargs["bounds"] = dict(b)
 
+        # -----------------------------------------------------------------
+        # Resolve time_units (scaling_kwargs wins; else propagate init)
+        # -----------------------------------------------------------------
+        # Back-compat: accept "time_unit" but normalize to "time_units"
+        if ("time_units" not in self.scaling_kwargs) and (
+                "time_unit" in self.scaling_kwargs):
+            self.scaling_kwargs["time_units"] = self.scaling_kwargs.pop(
+                "time_unit")
+        
+        scale_tu = self.scaling_kwargs.get("time_units", None)
+        if isinstance(scale_tu, str) and not scale_tu.strip():
+            scale_tu = None
+        
+        # precedence: scaling wins; else init; then always store in scaling_kwargs
+        self.time_units = scale_tu if scale_tu is not None else time_units
+        self.scaling_kwargs["time_units"] = self.time_units
+        
+        # # IMPORTANT: bypass tf.Module attribute tracking
+        # self.__dict__["scaling_kwargs"] = dict(scaling_kwargs or {})
+        
         self.mv_config = mv
         self.kappa_config = kappa
         self.gamma_w_config = gamma_w
@@ -285,6 +309,13 @@ class GeoPriorSubsNet(BaseAttentive):
         
         self._init_coordinate_corrections()
         self._build_pinn_components()
+
+    def _coord_ranges(self):
+        cfg = self.scaling_kwargs or {}
+        if not cfg.get("coords_normalized", False):
+            return None, None, None
+        r = cfg.get("coord_ranges", {}) or {}
+        return r.get("t", None), r.get("x", None), r.get("y", None)
 
     def _build_attentive_layers(self):
 
@@ -853,13 +884,25 @@ class GeoPriorSubsNet(BaseAttentive):
             # -----------------------------------------------------------------
             # 4. PDE derivatives via automatic differentiation
             # -----------------------------------------------------------------
+            s_bind = s_pred_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
+            h_bind = h_pred_mean_corr + 0.0 * t + 0.0 * x + 0.0 * y
+            
             # ds/dt for consolidation residual
-            ds_dt = tape.gradient(s_pred_mean_corr, t)
-    
+            ds_dt = tape.gradient(s_bind, t)
             # dh/dt and spatial derivatives for groundwater residual
-            dh_dt = tape.gradient(h_pred_mean_corr, t)
-            dh_dx = tape.gradient(h_pred_mean_corr, x)
-            dh_dy = tape.gradient(h_pred_mean_corr, y)
+            dh_dt = tape.gradient(h_bind, t)
+            
+            dh_dx = tape.gradient(h_bind, x)
+            dh_dy = tape.gradient(h_bind, y)
+
+
+            
+            # ds_dt = tape.gradient(s_pred_mean_corr, t)
+            
+            # dh_dt = tape.gradient(h_pred_mean_corr, t)
+            # ---- 
+            # dh_dx = tape.gradient(h_pred_mean_corr, x)
+            # dh_dy = tape.gradient(h_pred_mean_corr, y)
     
             K_dh_dx = K_field * dh_dx
             K_dh_dy = K_field * dh_dy
@@ -873,6 +916,30 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dx = tape.gradient(Ss_field, x)
             dSs_dy = tape.gradient(Ss_field, y)
     
+            # ---  chain-rule correction if coords were MinMax normalized ---
+            tR, xR, yR = self._coord_ranges()
+            if tR:
+                ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
+                dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
+            
+            if xR:
+                xRt = tf_constant(float(xR), tf_float32)
+                dh_dx = dh_dx / xRt
+                d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
+                dK_dx = dK_dx / xRt
+                dSs_dx = dSs_dx / xRt
+            
+            if yR:
+                yRt = tf_constant(float(yR), tf_float32)
+                dh_dy = dh_dy / yRt
+                d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
+                dK_dy = dK_dy / yRt
+                dSs_dy = dSs_dy / yRt
+    
+            # now convert time rates to per-second as you already do
+            ds_dt = rate_to_per_second(ds_dt, self.time_units)
+            dh_dt = rate_to_per_second(dh_dt, self.time_units)
+
             # Guardrail: if any critical derivative is None, fail fast.
             derivs = {
                 "ds_dt": ds_dt,
@@ -1163,17 +1230,6 @@ class GeoPriorSubsNet(BaseAttentive):
         })
         return results
     
-        # results = {m.name: m.result() for m in self.metrics}
-        # results.update(
-        #     {
-        #         "data_loss": data_loss ,
-        #         "epsilon_prior": self.eps_prior_metric.result(),
-        #         "epsilon_cons": self.eps_cons_metric.result(),
-        #     }
-        # )
-
-        # return results
-    
     def _physics_loss_multiplier(self) -> Tensor:
         # If physics is off, multiplier is irrelevant; keep neutral.
         if self._physics_off():
@@ -1363,76 +1419,6 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return tf_log(tau_safe) - tf_log(tau_phys_safe)
 
-    # def _compute_consistency_prior(
-    #     self,
-    #     K_field,
-    #     Ss_field,
-    #     tau_field,
-    #     H_field,
-    # ):
-
-    #     eps = tf_constant(1e-6, dtype=tf_float32)
-    #     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
-    
-
-    #     # 1) Make all log arguments strictly positive (NaN safety)
-    #     tau_safe = tf_maximum(tau_field, eps)
-    #     K_safe   = tf_maximum(K_field,   eps)
-    #     Ss_safe  = tf_maximum(Ss_field,  eps)
-    
-    #     # log(tau_pred)
-    #     log_tau_pred = tf_log(tau_safe)
-    
-    #     # H-handling:
-    #     #   - safe_H_eff is the "effective" thickness H_d or H (+eps)
-    #     #   - safe_H is the raw H (+eps) used in the kb-mode formula
-    #     safe_H_eff = (
-    #         H_field * self.Hd_factor
-    #         if self.use_effective_thickness else H_field
-    #     ) + eps
-    #     safe_H = H_field + eps
-    
-    #     # 2) Compute log(tau_phys) in a mode-dependent way
-    #     if self.kappa_mode == "bar":
-    #         # Standard formulation using H_eff directly:
-    #         #
-    #         # tau_phys = (kappa * H_eff^2 * Ss) / (pi^2 * K)
-    #         #
-    #         # log(tau_phys)
-    #         #   = log(kappa) + 2 log(H_eff)
-    #         #     - [log(pi^2) + log(K) - log(Ss)]
-    #         log_tau_phys = (
-    #             tf_log(self._kappa_value())
-    #             + 2.0 * tf_log(safe_H_eff)
-    #             - (tf_log(pi_sq) + tf_log(K_safe) - tf_log(Ss_safe))
-    #         )
-    #     else:  # "kb" – kappa is κ_b; incorporate (H_d/H)^2 explicitly.
-    #         #
-    #         # tau_phys
-    #         #   = kappa_b * (H_eff / H)^2 * H^2 * Ss / (pi^2 * K)
-    #         #   = kappa_b * (H_eff^2 * Ss) / (pi^2 * K)
-    #         #     (mathematically equivalent but we keep the ratio explicit)
-    #         #
-    #         # To remain explicit in logs:
-    #         #
-    #         #   log(tau_phys)
-    #         #     = log(kappa_b) + 2 log(H_eff / H)
-    #         #       + 2 log(H) - [log(pi^2) + log(K) - log(Ss)]
-    #         #
-    #         # and we ensure both H_eff and H never hit zero by
-    #         # using safe_H_eff and safe_H above.
-    #         ratio = safe_H_eff / safe_H
-    #         log_tau_phys = (
-    #             tf_log(self._kappa_value())
-    #             + 2.0 * tf_log(ratio)
-    #             + 2.0 * tf_log(safe_H)
-    #             - (tf_log(pi_sq) + tf_log(K_safe) - tf_log(Ss_safe))
-    #         )
-    
-    #     # 3) Consistency residual in log-space
-    #     return log_tau_pred - log_tau_phys
-
-
     def get_last_physics_fields(self):
         """
         Returns the most recent physics fields and H used by the model call.
@@ -1483,45 +1469,6 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return tau_phys, Hd
 
-
-    # def _tau_phys_from_fields(self, K_field, Ss_field, H_field):
-
-    #     eps = tf_constant(1e-6, dtype=tf_float32)
-    #     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
-    
-    #     # Make sure denominator fields are never exactly zero to avoid
-    #     # inf / NaN when computing tau_phys.
-    #     K_safe  = tf_maximum(K_field,  eps)
-    #     Ss_safe = tf_maximum(Ss_field, eps)
-    
-    #     # Same effective thickness logic as in _compute_consistency_prior
-    #     safe_H_eff = (
-    #         H_field * self.Hd_factor
-    #         if self.use_effective_thickness else H_field
-    #     ) + eps
-    #     safe_H = H_field + eps
-    
-    #     if self.kappa_mode == "bar":
-    #         # τ_phys = (κ * H_eff^2 * Ss) / (π^2 * K)
-    #         tau_phys = (
-    #             self._kappa_value()
-    #             * (safe_H_eff ** 2)
-    #             * Ss_safe
-    #             / (pi_sq * K_safe)
-    #         )
-    #     else:  # "kb"
-    #         # τ_phys = κ_b * (H_eff/H)^2 * H^2 * Ss / (π^2 * K)
-    #         ratio = safe_H_eff / safe_H
-    #         tau_phys = (
-    #             self._kappa_value()
-    #             * (ratio ** 2)
-    #             * (safe_H ** 2)
-    #             * Ss_safe
-    #             / (pi_sq * K_safe)
-    #         )
-    
-    #     # Return tau_phys and the effective thickness actually used.
-    #     return tau_phys, safe_H_eff
 
     def _compute_smoothness_prior(
         self,
@@ -1621,7 +1568,17 @@ class GeoPriorSubsNet(BaseAttentive):
         if dt_tensor is None:
             # shape consistent with (B, H, 1)
             dt_tensor = tf_zeros_like(s_mean[..., :1]) + 1.0
-
+        
+        # Right now dt_tensor is in normalized units. Convert it to “years” first:
+            
+        tR, _, _ = self._coord_ranges()
+        if tR:
+            dt_tensor = dt_tensor * tf_constant(float(tR), tf_float32)
+            
+        time_units = self.scaling_kwargs.get("time_units",
+                 self.scaling_kwargs.get("time_unit", None)
+                 ) or self.time_units
+        
         # --- Pass the predicted K and Ss fields into default_scales -----
         return default_scales(
             h=h_mean,
@@ -1630,7 +1587,7 @@ class GeoPriorSubsNet(BaseAttentive):
             K=K_field,   # <-- predicted K field
             Ss=Ss_field, # <-- predicted Ss field
             Q=Q,         # <-- scalar source/sink (0.0 in current setup)
-            # **self.scaling_kwargs,
+            time_units= time_units 
         )
 
     def _evaluate_physics_on_batch(
@@ -1714,6 +1671,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 )
                 
             dh_dt = tape.gradient(h_bind, t)
+            
             dh_dx = tape.gradient(h_bind, x)
             dh_dy = tape.gradient(h_bind, y)
             
@@ -1726,6 +1684,30 @@ class GeoPriorSubsNet(BaseAttentive):
             dK_dy  = tape.gradient(K_bind, y)
             dSs_dx = tape.gradient(Ss_bind, x)
             dSs_dy = tape.gradient(Ss_bind, y)
+            
+            # ---  chain-rule correction if coords were MinMax normalized ---
+            tR, xR, yR = self._coord_ranges()
+            if tR:
+                ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
+                dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
+            
+            if xR:
+                xRt = tf_constant(float(xR), tf_float32)
+                dh_dx = dh_dx / xRt
+                d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
+                dK_dx = dK_dx / xRt
+                dSs_dx = dSs_dx / xRt
+            
+            if yR:
+                yRt = tf_constant(float(yR), tf_float32)
+                dh_dy = dh_dy / yRt
+                d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
+                dK_dy = dK_dy / yRt
+                dSs_dy = dSs_dy / yRt
+    
+            # now convert time rates to per-second as you already do
+            ds_dt = rate_to_per_second(ds_dt, self.time_units)
+            dh_dt = rate_to_per_second(dh_dt, self.time_units)
             
             if any(v is None for v in [
                     ds_dt, dh_dt, dh_dx, dh_dy,
@@ -2251,7 +2233,6 @@ class GeoPriorSubsNet(BaseAttentive):
         self._kappa_lr_mult = float(kappa_lr_mult)
 
 
-
     def get_config(self) -> dict:
         r"""
         Return the full serializable configuration of the model.
@@ -2295,8 +2276,9 @@ class GeoPriorSubsNet(BaseAttentive):
             "gamma_w": self.gamma_w_config,
             "h_ref": self.h_ref_config,
             "scale_pde_residuals": self.scale_pde_residuals,
+            "time_units": self.time_units,      
             "scaling_kwargs": self.scaling_kwargs,
-            # NEW: keep the effective thickness / κ-mode knobs
+            #  keep the effective thickness / κ-mode knobs
             "use_effective_h": self.use_effective_thickness,
             "hd_factor": self.Hd_factor,
             "offset_mode": self.offset_mode, 
@@ -2403,281 +2385,3 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return cls(**config)
 
-
-GeoPriorSubsNet.__doc__ = r""" 
-Geomechanical Prior-Informed Subsidence Network (GeoPriorSubsNet)
-
-This model fuses a deep encoder–decoder (from ``BaseAttentive``) with
-a physically-sound geomechanical model, addressing key limitations of
-simpler PINNs by learning a physically consistent system.
-
-**Model Outputs:**
-
-The network is multi-headed, predicting five distinct fields:
-1.  **Subsidence :math:`s(x,y,t)`** (Data, with quantiles)
-2.  **Hydraulic Head :math:`h(x,y,t)`** (Data, with quantiles)
-3.  **Hydraulic Conductivity :math:`K(x,y)`** (Physics field, positive)
-4.  **Specific Storage :math:`S_s(x,y)`** (Physics field, positive)
-5.  **Relaxation Time :math:`\tau(x,y)` (Physics field, positive)
-
-**Physics & Loss Function:**
-
-The model is trained by minimizing a composite loss function that
-ensures physical consistency, as defined in the revised manuscript:
-
-.. math::
-    
-    \mathcal{{L}} = \mathcal{{L}}_{{\text{{data}}}} +
-                  \lambda_{{gw}} \mathcal{{L}}_{{gw}} +
-                  \lambda_{{cons}} \mathcal{{L}}_{{cons}} +
-                  \lambda_{{prior}} \mathcal{{L}}_{{prior}} +
-                  \lambda_{{smooth}} \mathcal{{L}}_{{smooth}}
-
-Where:
-
-* :math:`\mathcal{{L}}_{{\text{{data}}}}` (Data Fidelity):
-  Pinball loss on the predicted quantiles of :math:`s` and :math:`h`.
-
-* :math:`\mathcal{{L}}_{{gw}}` (Groundwater Flow):
-  Residual of the 2D transient flow equation. Assumes :math:`Q=0`.
-  
-  .. math::
-      R_{{gw}} = S_s \frac{{\partial h}}{{\partial t}} -
-               \nabla \cdot (K \nabla h)
-
-* :math:`\mathcal{{L}}_{{cons}}` (Reduced-Order Consolidation):
-  Residual of the 1D relaxation model.
-  
-  .. math::
-      R_{{cons}} = \frac{{\partial s}}{{\partial t}} -
-                 \frac{{s_{{eq}}(h) - s}}{{\tau}}
-                 
-  where:
-  .. math::
-      s_{{eq}}(h) = m_v \gamma_w (h_{{ref}} - h) H
-
-* :math:`\mathcal{{L}}_{{prior}}` (Geomechanical Consistency Prior):
-  Enforces a physical link between the learned fields, addressing
-  the non-uniqueness.
-  
-  .. math::
-      R_{{prior}} = \log(\tau) - \log\left(
-          \frac{{\bar{{\kappa}} H^2}}{{(\pi^2 K) / S_s}}
-      \right)
-
-* :math:`\mathcal{{L}}_{{smooth}}` (Smoothness Prior):
-  A regularizer on the spatial gradients of the predicted fields.
-  
-  .. math::
-      R_{{smooth}}= \|\nabla K\|^2_2 + \|\nabla S_s\|^2_2
-
-See :ref:`User Guide <user_guide_geopriorsubsnet>` for a walkthrough.
-
-Parameters
-----------
-{params.base.static_input_dim}
-{params.base.dynamic_input_dim}
-{params.base.future_input_dim}
-
-output_subsidence_dim : int, default 1
-    Number of subsidence series per horizon step. (Data output :math:`s`)
-output_gwl_dim : int, default 1
-    Number of hydraulic-head series. (Data output :math:`h`)
-
-forecast_horizon : int, default 1
-    Horizon length :math:`H`. The decoder emits :math:`H` steps
-    for all data and physics outputs.
-
-quantiles : list[float] | None, default None
-    Optional list of quantile levels; enables the Quantile-Distribution
-    head for :math:`s` and :math:`h`.
-
-{params.base.embed_dim}
-{params.base.hidden_units}
-{params.base.lstm_units}
-{params.base.attention_units}
-{params.base.num_heads}
-{params.base.dropout_rate}
-{params.base.max_window_size}
-{params.base.memory_size}
-{params.base.scales}
-{params.base.multi_scale_agg}
-{params.base.final_agg}
-{params.base.activation}
-{params.base.use_residuals}
-{params.base.use_batch_norm}
-{params.base.use_vsn}
-{params.base.vsn_units}
-
-
-pde_mode : {{'consolidation', 'gw_flow', 'both', 'none'}}, default 'both'
-    Select which physics residuals participate in the loss.
-    (Priors :math:`\mathcal{{L}}_{{prior}}` and 
-     :math:`\mathcal{{L}}_{{smooth}}`
-    are always active if their lambda weights are > 0).
-
-    ┌─────────────────┬───────────────────────────────────────────────┐
-    │ 'consolidation' │ only the **consolidation** term               │
-    │                 │ :math:`R_{{cons}} = \dot{{s}} - (s_{{eq}} - s)/\tau` │
-    │ 'gw_flow'       │ only the **diffusivity** term                 │
-    │                 │ :math:`R_{{gw}} = S_s \partial_t h - \nabla \cdot (K \nabla h)`
-    │ 'both'          │ both residuals (recommended)                  │
-    │ 'none'          │ pure data-driven (disables :math:`R_{{cons}}`, :math:`R_{{gw}}`) │
-    └─────────────────┴───────────────────────────────────────────────┘
-
-mv : float or LearnableMV, default ``LearnableMV(1e-7)``
-    Scalar coefficient of volume compressibility :math:`m_v`[Pa⁻¹].
-    Used to calculate :math:`s_{{eq}}`.
-    Can be a fixed float or a :class:`LearnableMV` instance.
-
-kappa : float or LearnableKappa, default ``LearnableKappa(1.0)``
-    Scalar consistency prior parameter :math:`\bar{{\kappa}}` (unitless).
-    Used in :math:`\mathcal{{L}}_{{prior}}` to link :math:`\tau, K, S_s, H`.
-    Can be a fixed float or a :class:`LearnableKappa` instance.
-
-gamma_w : float or FixedGammaW, default ``FixedGammaW(9810.0)``
-    Scalar unit weight of water :math:`\gamma_w` [N m⁻³].
-    Used to calculate :math:`s_{{eq}}`.
-    Can be a fixed float or a :class:`FixedGammaW` instance.
-
-h_ref : float or FixedHRef, default ``FixedHRef(0.0)``
-    Scalar reference head :math:`h_{{ref}}` [m].
-    Used to calculate drawdown :math:`\Delta h = h_{{ref}} - h`.
-    Can be a fixed float or a :class:`FixedHRef` instance.
-
-use_effective_h : bool, default False
-    If ``True``, use an **effective drained thickness** :math:`H_d`
-    in place of the physical thickness :math:`H` wherever thickness
-    appears in the physics terms (e.g., in :math:`s_{{eq}}` and the
-    :math:`\tau` prior). This is useful when only a fraction of the
-    layer drains/responds over the forecast horizon.
-
-hd_factor : float, default 1.0
-    Multiplicative factor defining the effective thickness
-    :math:`H_d = \text{{Hd\_factor}}\, H`. Only used when
-    ``use_effective_h=True``. Typical values lie in :math:`(0, 1]`,
-    where lower values model partially draining layers.
-
-kappa_mode : {{'bar', 'kb'}}, default 'bar'
-    Interpretation of :math:`\kappa` in the geomechanical-consistency
-    prior.
-    
-    - ``'bar'`` – bulk calibration :math:`\bar{{\kappa}}` with thickness
-      :math:`H_*` (which equals :math:`H_d` if
-      ``use_effective_h=True``, else :math:`H`):
-      
-      .. math::
-         R_{{\text{{prior}}}} = \log \tau - \log \left(
-           \frac{{\bar{{\kappa}}\, H_*^{{2}}\, S_s}}{{\pi^{{2}}\, K}} \right)
-    
-    - ``'kb'`` – boundary factor :math:`\kappa_b` (same functional
-      form, different physical meaning). Also pairs :math:`\kappa_b`
-      with :math:`H_*` as above:
-      
-      .. math::
-         R_{{\text{{prior}}}} = \log \tau - \log \left(
-           \frac{{\kappa_b\, H_*^{{2}}\, S_s}}{{\pi^{{2}}\, K}} \right)
-
-scale_pde_residuals : bool, default True
-    If ``True``, non-dimensionalize physics residuals 
-    (:math:`R_{{gw}}`, :math:`R_{{cons}}`)
-    with simple data-driven scales so the loss terms are
-    :math:`\mathcal{{O}}(1)`.
-    (See :func:`fusionlab.nn.pinn.op.default_scales`).
-
-scaling_kwargs : dict | None, default None
-    Extra keyword arguments forwarded to :func:`default_scales`.
-
-mode : {{'pihal_like', 'tft_like'}}, default ``None``
-    Routing for *future_features*:
-        
-    * **pihal_like** – decoder gets all :math:`H` rows, encoder none.
-    * **tft_like** – first *max_window_size* rows to encoder,
-      next :math:`H` rows to decoder. ``None`` inherits
-      BaseAttentive default ('tft_like').
-
-objective : {{'hybrid', 'transformer'}}, default ``'hybrid'``
-    Selects the backbone architecture. (See `BaseAttentive` docs).
-    
-attention_levels : str | list[str] | None
-    Controls the attention layers used in the decoder.
-    (See `BaseAttentive` docs).
-
-name : str, default "GeoPriorSubsNet"
-    Model scope as registered in Keras.
-
-**kwargs
-    Forwarded verbatim to :class:`tf.keras.Model`.
-
-Notes
------
-* **Required Input:** The `inputs` dictionary for `call` and
-    `train_step` **must** include an `H_field` (or `soil_thickness`)
-    tensor of shape `(B, H, 1)` representing the soil thickness.
-* **Loss Weights:** The composite loss is controlled by four
-    weights passed to :meth:`compile`:
-    `lambda_cons`, `lambda_gw`, `lambda_prior`, `lambda_smooth`.
-* **Outputs:** The model's `call` method returns a dictionary with
-    keys: `data_final` (for :math:`s, h` quantiles), `data_mean` (for $s, h$
-    means), and `phys_mean_raw` (for raw :math:`K, S_s, \tau` logits).
-
-See Also
---------
-fusionlab.nn.models.BaseAttentive
-    The data-driven backbone for this model.
-fusionlab.nn.pinn.models.TransFlowSubsNet
-    The previous, simpler PINN model with scalar physics parameters.
-fusionlab.params.LearnableMV
-    Parameter class for learnable :math:`m_v`.
-fusionlab.params.LearnableKappa
-    Parameter class for learnable :math:`\bar{{\kappa}}`.
-fusionlab.nn.pinn.op.process_pinn_inputs
-    Utility for unpacking input dictionaries.
-
-Examples
---------
->>> import tensorflow as tf
->>> from fusionlab.nn.pinn import GeoPriorSubsNet
->>> from fusionlab.params import LearnableMV, LearnableKappa
->>>
->>> B, T, H = 8, 12, 6 # Batch, Timesteps, Horizon
->>>
->>> model = GeoPriorSubsNet(
-...     static_input_dim=3, dynamic_input_dim=8, future_input_dim=4,
-...     output_subsidence_dim=1, output_gwl_dim=1,
-...     forecast_horizon=H, max_window_size=T,
-...     mv=LearnableMV(1e-8),       # Pass new scalar params
-...     kappa=LearnableKappa(1.2),  # (K, Ss, Q are removed)
-...     pde_mode='both',
-...     scale_pde_residuals=True
-... )
->>>
->>> # Note: future_features length depends on 'mode'
->>> # Default mode 'tft_like' requires T + H = 12 + 6 = 18 steps
->>> batch = {{
-...     "static_features":  tf.zeros([B, 3]),
-...     "dynamic_features": tf.zeros([B, T, 8]),
-...     "future_features":  tf.zeros([B, T + H, 4]),
-...     "coords":           tf.zeros([B, H, 3]),
-...     "H_field":          tf.ones([B, H, 1]) * 20.0 # Soil thickness
-... }}
->>>
->>> # Compile with new loss weights
->>> model.compile(
-...     optimizer='adam',
-...     loss='mae', # Data loss (will be wrapped)
-...     lambda_cons=1.0,
-...     lambda_gw=1.0,
-...     lambda_prior=0.5,
-...     lambda_smooth=0.1
-... )
->>>
->>> # Call returns a dictionary of all outputs
->>> out = model(batch, training=False)
->>> sorted(out.keys())
-['data_final', 'data_mean', 'phys_mean_raw']
->>> out['data_mean'].shape
-TensorShape([8, 6, 2])
->>> out['phys_mean_raw'].shape
-TensorShape([8, 6, 3])
-""".format(params=_param_docs)

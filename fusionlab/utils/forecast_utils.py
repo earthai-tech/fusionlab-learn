@@ -3237,6 +3237,10 @@ def normalize_for_pinn(
     verbose: int = 1, 
     forecast_horizon: Optional[int] = None,  
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
+    coord_scaler: Optional[MinMaxScaler] = None,
+    fit_coord_scaler: bool = True,
+    other_scaler: Optional[MinMaxScaler] = None,
+    fit_other_scaler: bool = True,
     **kws
 ) -> Tuple[pd.DataFrame, Optional[MinMaxScaler], Optional[MinMaxScaler]]:
     """
@@ -3396,21 +3400,33 @@ def normalize_for_pinn(
     coord_scaler: Optional[MinMaxScaler] = None
     other_scaler: Optional[MinMaxScaler] = None
 
-    # --- 1. Adjust time before scaling ---
+    # # --- 1. Adjust time before scaling ---
     if forecast_horizon is not None:
-        # Check if time_col is integer (year)
-        if pd.api.types.is_integer_dtype(df_scaled[time_col]):
-            # If it's an integer (year), we can simply add the forecast_horizon
-            df_scaled[time_col] = df_scaled[time_col] + forecast_horizon
-            vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
-                 verbose=verbose, level=4, logger=_logger)
+        if  pd.api.types.is_numeric_dtype(
+                df_scaled[time_col]):
+            # Only do this if you are NOT scaling coords, otherwise it cancels out anyway.
+            if not scale_coords:
+                df_scaled[time_col] = df_scaled[time_col] + float(forecast_horizon)
+                vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+                      verbose=verbose, level=4, logger=_logger)
+        # # Check if time_col is integer (year)
+        # if pd.api.types.is_integer_dtype(df_scaled[time_col]):
+        #     # If it's an integer (year), we can simply add the forecast_horizon
+        #     df_scaled[time_col] = df_scaled[time_col] + forecast_horizon
+        #     vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+        #           verbose=verbose, level=4, logger=_logger)
         elif pd.api.types.is_datetime64_any_dtype(df_scaled[time_col]):
             # If time_col is datetime, use the helper function to increment dates
             df_scaled = increment_dates_by_horizon(
                 df_scaled, time_col, forecast_horizon
             )
             vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
-                 verbose=verbose, level=4, logger=_logger)
+                  verbose=verbose, level=4, logger=_logger)
+    if forecast_horizon is not None and pd.api.types.is_numeric_dtype(
+            df_scaled[time_col]):
+        # Only do this if you are NOT scaling coords, otherwise it cancels out anyway.
+        if not scale_coords:
+            df_scaled[time_col] = df_scaled[time_col] + float(forecast_horizon)
 
     # --- 2. Scale coordinates if requested ---
     if scale_coords:
@@ -3429,10 +3445,16 @@ def normalize_for_pinn(
                         f"Cannot convert '{col}' to numeric: {e}"
                     )
         coord_scaler = MinMaxScaler()
-        df_scaled[coord_cols] = coord_scaler.fit_transform(
-            df_scaled[coord_cols]
-        )
-
+        # df_scaled[coord_cols] = coord_scaler.fit_transform(
+        #     df_scaled[coord_cols]
+        # )
+        if fit_coord_scaler:
+            df_scaled[coord_cols] = coord_scaler.fit_transform(
+                df_scaled[coord_cols])
+        else:
+            df_scaled[coord_cols] = coord_scaler.transform(
+                df_scaled[coord_cols])
+            
     # --- 3. Determine `other_cols_to_scale` ---
     if cols_to_scale == "auto":
         vlog("Auto-selecting numeric columns to scale...", 
@@ -3485,17 +3507,27 @@ def normalize_for_pinn(
             valid_cols.append(col)
 
         if valid_cols:
+            
+            if other_scaler is None:
+                other_scaler = MinMaxScaler()
+    
             other_scaler = MinMaxScaler()
-            df_scaled[valid_cols] = other_scaler.fit_transform(
-                df_scaled[valid_cols]
+            # df_scaled[valid_cols] = other_scaler.fit_transform(
+            #     df_scaled[valid_cols]
+            # )
+            if fit_other_scaler:
+                df_scaled[valid_cols] = other_scaler.fit_transform(
+                    df_scaled[valid_cols])
+            else:
+                df_scaled[valid_cols] = other_scaler.transform(
+                    df_scaled[valid_cols])
+            
+            vlog ( f" other_scaler.data_min_: {other_scaler.data_min_}", 
+                  verbose=verbose, level =3, logger =_logger ) 
+            vlog(
+                f" other_scaler.data_max_: {other_scaler.data_max_}", 
+                verbose=verbose, level =3 , logger =_logger, 
             )
-            if verbose >= 3:
-                logger.debug(
-                    f" other_scaler.data_min_: {other_scaler.data_min_}"
-                )
-                logger.debug(
-                    f" other_scaler.data_max_: {other_scaler.data_max_}"
-                )
 
     return df_scaled, coord_scaler, other_scaler
 

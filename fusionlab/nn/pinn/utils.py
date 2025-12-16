@@ -1725,6 +1725,8 @@ def prepare_pinn_data_sequences(
     normalize_coords: bool = True, 
     cols_to_scale: Union[List[str], str, None] = None,
     return_coord_scaler: bool =False, 
+    coord_scaler: Optional[MinMaxScaler] = None,
+    fit_coord_scaler: bool = True,
     mode: Optional[str] =None, 
     model: Optional[str] =None,
     savefile: Optional[str] = None,
@@ -1910,15 +1912,17 @@ def prepare_pinn_data_sequences(
          level=1, verbose=verbose, logger=_logger)
 
     df_proc, coord_scaler, cols_scaler = normalize_for_pinn(
-        df=df_proc, 
-        time_col= numerical_time_col, 
-        coord_x=lon_col, 
-        coord_y=lat_col, 
-        scale_coords= normalize_coords, 
-        cols_to_scale =cols_to_scale, 
-        forecast_horizon= forecast_horizon, 
-        verbose =verbose, 
-        _logger = _logger, 
+        df=df_proc,
+        time_col=numerical_time_col,
+        coord_x=lon_col,
+        coord_y=lat_col,
+        scale_coords=normalize_coords,
+        cols_to_scale=cols_to_scale,
+        forecast_horizon=forecast_horizon,
+        verbose=verbose,
+        _logger=_logger,
+        coord_scaler=coord_scaler,
+        fit_coord_scaler=fit_coord_scaler,
     )
 
     # --- 2. Group and Sort Data ---

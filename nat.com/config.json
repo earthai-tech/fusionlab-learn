@@ -129,6 +129,7 @@
       "Ss_min": 1e-07,
       "Ss_max": 0.001
     },
+    "TIME_UNITS": "year",
     "GEOPRIOR_INIT_MV": 1e-07,
     "GEOPRIOR_INIT_KAPPA": 1.0,
     "GEOPRIOR_GAMMA_W": 9810.0,
@@ -136,7 +137,7 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 10,
+    "EPOCHS": 2,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
     "TF_DEVICE_MODE": "auto",
@@ -272,6 +273,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "6eb57be98ecc23f7ba0ba6ad6fcf7dd8c7495f954fe776ee42d914096c9597ac"
+    "config_py_hash": "6ea79b1bac617d4ab64f8776a6b245ea5ea0a230d23b7b6d2989ba548edf6dd7"
   }
 }

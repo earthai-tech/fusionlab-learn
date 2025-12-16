@@ -41,7 +41,7 @@ tf_stop_gradient = KERAS_DEPS.stop_gradient
 tf_reduce_mean = KERAS_DEPS.reduce_mean
 tf_abs = KERAS_DEPS.abs 
 tf_softplus = KERAS_DEPS.softplus 
-
+tf_zeros_like = KERAS_DEPS.zeros_like 
 
 DEP_MSG = dependency_message('nn.pinn.op') 
 logger = fusionlog().get_fusionlab_logger(__name__)
@@ -49,6 +49,64 @@ logger.addFilter(OncePerMessageFilter())
 
 
 _SMALL = 1e-6
+
+# ---------------------------------------------------------------------
+# Time-units helpers (SI conversion)
+# ---------------------------------------------------------------------
+_TIME_UNIT_TO_SECONDS = {
+    # identity / legacy
+    "unitless": 1.0, "step": 1.0, "index": 1.0,
+
+    # seconds
+    "s": 1.0, "sec": 1.0, "second": 1.0, "seconds": 1.0,
+
+    # minutes / hours
+    "min": 60.0, "minute": 60.0, "minutes": 60.0,
+    "h": 3600.0, "hr": 3600.0, "hour": 3600.0, "hours": 3600.0,
+
+    # days / weeks
+    "day": 86400.0, "days": 86400.0,
+    "week": 7.0 * 86400.0, "weeks": 7.0 * 86400.0,
+
+    # years/months (mean Gregorian)
+    "year": 31556952.0, "years": 31556952.0, "yr": 31556952.0,
+    "month": 31556952.0 / 12.0, "months": 31556952.0 / 12.0,
+}
+
+
+def seconds_per_time_unit(
+    time_units: Optional[str],
+    dtype=tf_float32,
+) -> Tensor:
+    """Return seconds-per-unit for a given time unit string."""
+    if time_units is None:
+        key = "unitless"
+    else:
+        key = str(time_units).strip().lower()
+
+    if key not in _TIME_UNIT_TO_SECONDS:
+        raise ValueError(
+            f"Unsupported time_units={time_units!r}. Supported keys: "
+            f"{sorted(_TIME_UNIT_TO_SECONDS.keys())}"
+        )
+
+    return tf_constant(float(_TIME_UNIT_TO_SECONDS[key]), dtype=dtype)
+
+
+@optional_tf_function
+def dt_to_seconds(dt: Tensor, time_units: Optional[str]) -> Tensor:
+    """Convert dt (in `time_units`) to seconds."""
+    sec = seconds_per_time_unit(time_units, dtype=dt.dtype)
+    return dt * sec
+
+
+@optional_tf_function
+def rate_to_per_second(dz_dt: Tensor, time_units: Optional[str]) -> Tensor:
+    """Convert derivative w.r.t. `time_units` to derivative per second."""
+    sec = seconds_per_time_unit(time_units, dtype=dz_dt.dtype)
+    return dz_dt / (sec + _SMALL)
+
+
 
 def positive(x, eps: float = _SMALL):
     """Softplus positivity with tiny epsilon to avoid exact zeros."""
@@ -62,6 +120,7 @@ def default_scales(
     K: Optional[Tensor] = None, 
     Ss: Optional[Tensor] = None, 
     Q: Optional[Union[float, Tensor]] = None, 
+    time_units: Optional[str] = None,
     **kws
 ) -> Dict[str, Tensor]:
     r"""
@@ -113,10 +172,17 @@ def default_scales(
         - "gw_scale": Characteristic scale for the groundwater flow residual.
         - "cons_scale": Characteristic scale for the consolidation residual.
     """
+    # ---  time-unit normalization for dt ----------------------------
+    time_units = time_units  or kws.get(
+        "time_units", kws.get("time_unit", None))
+
+    # dt passed in is in the same units as coords['t'] → convert to seconds
+    dt_si = dt_to_seconds(dt, time_units)
+
     # robust refs (stop gradients to keep them 'constants' during backprop)
     h_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
     s_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + _SMALL)
-    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt)) + _SMALL)
+    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_si)) + _SMALL)
 
     # groundwater residual typical scale ~ Ss * h / dt  (first-order)
     if Ss is not None:
@@ -133,7 +199,7 @@ def default_scales(
     return {
         "h_ref": h_ref,
         "s_ref": s_ref,
-        "dt_ref": dt_ref,
+        "dt_ref": dt_ref,  # now in seconds
         "gw_scale": gw_scale,
         "cons_scale": cons_scale,
     }

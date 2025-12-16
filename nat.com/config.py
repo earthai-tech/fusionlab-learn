@@ -352,6 +352,8 @@ PHYSICS_BOUNDS = {
     "Ss_max": 1e-3,
 }
 
+TIME_UNITS ="year" 
+
 # 4.4 GeoPrior scalar parameters
 # ------------------------------
 # These control how the geomechanical prior is initialised and
@@ -371,7 +373,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
 
-EPOCHS = 10
+EPOCHS = 2
 
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4

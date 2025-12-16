@@ -241,6 +241,9 @@ GWL_WEIGHTS  = _coerce_quantile_weights(GWL_WEIGHTS_RAW,  {0.1: 1.5, 0.5: 1.0, 0
 # Physics loss weights
 # Config uses e.g. "off", "both", "gw_flow", "consolidation"
 PDE_MODE_CONFIG = cfg.get("PDE_MODE_CONFIG", "off")
+if PDE_MODE_CONFIG in ("off", "none"):
+    PDE_MODE_CONFIG = "none"
+
 LAMBDA_CONS   = cfg.get("LAMBDA_CONS",   0.10)
 LAMBDA_GW     = cfg.get("LAMBDA_GW",     0.01)
 LAMBDA_PRIOR  = cfg.get("LAMBDA_PRIOR",  0.10)
@@ -264,7 +267,8 @@ LAMBDA_OFFSET_SCHEDULE = cfg.get("LAMBDA_OFFSET_SCHEDULE", None)
 LAMBDA_BOUNDS = cfg.get("LAMBDA_BOUNDS", 0.0)
 # Global physics bounds (from config.py)
 PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
-
+# Time units for physics (controls d/dt scaling inside PINN residuals)
+TIME_UNITS = (cfg.get("TIME_UNITS", "year") or "year").strip().lower()
 
 _default_phys_bounds = {
     "H_min": 5.0,
@@ -368,6 +372,7 @@ config_sections = [
     ("Physics", {
         "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
         "SCALE_PDE_RESIDUALS": SCALE_PDE_RESIDUALS,
+        "TIME_UNITS": TIME_UNITS,
         "LAMBDA_CONS": LAMBDA_CONS,
         "LAMBDA_GW": LAMBDA_GW,
         "LAMBDA_PRIOR": LAMBDA_PRIOR,
@@ -436,6 +441,33 @@ if cs_path and os.path.exists(cs_path):
         coord_scaler = joblib.load(cs_path)
     except Exception as e:
         print(f"[Warn] Could not load coord_scaler at {cs_path}: {e}")
+        
+# XXX NEW ADDED 
+coord_ranges = None
+coords_normalized = False
+
+if coord_scaler is not None:
+    # MinMaxScaler has data_min_/data_max_. StandardScaler has scale_.
+    if hasattr(coord_scaler, "data_min_") and hasattr(coord_scaler, "data_max_"):
+        span = coord_scaler.data_max_ - coord_scaler.data_min_
+        coord_ranges = {
+            "t": float(span[0]),
+            "x": float(span[1]),
+            "y": float(span[2]),
+        }
+        coords_normalized = True
+
+    elif hasattr(coord_scaler, "scale_"):
+        # If Stage-1 used StandardScaler, you can still reuse the same mechanism:
+        # derivative in original units = derivative_wrt_norm / scale
+        sc = coord_scaler.scale_
+        coord_ranges = {"t": float(sc[0]), "x": float(sc[1]), "y": float(sc[2])}
+        coords_normalized = True
+
+print("[Info] coords_normalized:", 
+      coords_normalized, "coord_ranges:", coord_ranges)
+
+# ---END ADDED 
 
 # Load scaler_info mapping (dict or path)
 scaler_info_dict = load_scaler_info(encoders)
@@ -551,6 +583,7 @@ subsmodel_params = {
         # anything else default_scales(...) already expects can
         # also be passed here later
         "bounds": bounds_for_scaling,
+        "time_units": TIME_UNITS,   
     },
     # GeoPrior scalar params
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
@@ -561,7 +594,16 @@ subsmodel_params = {
     "use_effective_h": GEOPRIOR_USE_EFFECTIVE_H,
     "hd_factor": GEOPRIOR_HD_FACTOR,
     "offset_mode": OFFSET_MODE,
+    
+    # For consistency
+    "time_units": TIME_UNITS, 
 }
+subsmodel_params["scaling_kwargs"].update({
+    "bounds": bounds_for_scaling,
+    "time_units": TIME_UNITS,
+    "coords_normalized": coords_normalized,
+    "coord_ranges": coord_ranges or {},
+})
 
 subs_model_inst = model_cls(
     static_input_dim=s_dim_model,
@@ -722,6 +764,8 @@ training_summary = {
         "loss_weights": loss_weights_dict,
         "metrics": {k: [name_of(m) for m in v] for k, v in metrics_dict.items()},
         "physics_loss_weights": physics_loss_weights,
+        "lambda_offset": LAMBDA_OFFSET,
+        
     },
     "hp_init": {
         "quantiles": QUANTILES,
@@ -736,7 +780,13 @@ training_summary = {
         "mode": MODE,
         "model_init_params": serialize_subs_params(subsmodel_params, cfg),
         "offset_mode": OFFSET_MODE,
-        "lambda_offset": LAMBDA_OFFSET,
+        "scaling_kwargs": {
+            "bounds": bounds_for_scaling,
+            "time_units": TIME_UNITS,   
+            "coords_normalized": coords_normalized,
+            "coord_ranges": coord_ranges or {},
+        },
+        
     },
     "paths": {
         "run_dir": RUN_OUTPUT_PATH,
@@ -776,6 +826,10 @@ run_manifest = {
         "ATTENTION_LEVELS": ATTENTION_LEVELS,
         "PDE_MODE_CONFIG": PDE_MODE_CONFIG,
         "QUANTILES": QUANTILES,
+        "scaling_kwargs": {
+            "bounds": bounds_for_scaling,
+            "time_units": TIME_UNITS,   
+        },
     },
     "paths": training_summary["paths"],
     "artifacts": {
@@ -1076,7 +1130,8 @@ physics_payload = subs_model_loaded.export_physics_payload(
     save_path=phys_npz_path,
     format="npz",
     overwrite=True,
-    metadata={"city": CITY_NAME, "split": "val"},
+    metadata={"city": CITY_NAME, "split": "val", "time_units": TIME_UNITS},
+
 )
 # -------------------------------------------------------------------------
 # SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
@@ -1086,25 +1141,7 @@ phys_npz_path = os.path.join(
     f"{CITY_NAME}_phys_payload_run_val.npz",
 )
 
-# try:
-#     from fusionlab.nn.pinn.log_offsets_diagnostics import (
-#         run_sm3_offsets_from_payload,
-#     )
-#     print("\n[SM3] Running log-offset diagnostics (Supplementary Methods 3)...")
-#     _sm3_result = run_sm3_offsets_from_payload(
-#         physics_npz_path=phys_npz_path,
-#         outdir=RUN_OUTPUT_PATH,
-#         city=CITY_NAME,
-#         model_name=MODEL_NAME,
-#     )
-#     print("[SM3] Done. Offsets tables and plots are available in:")
-#     print(f"      - raw:     {_sm3_result['raw_csv']}")
-#     print(f"      - summary: {_sm3_result['summary_csv']}")
-# except Exception as e:
-#     print(f"[Warn] SM3 log-offset diagnostics failed: {e}")
 
-
-#
 # --- 2.3 Interval diagnostics + optional censor-stratified MAE ---
 cov80_uncal = cov80_cal = sharp80_uncal = sharp80_cal = None
 censor_metrics = None   # will become a dict if we have a flag
