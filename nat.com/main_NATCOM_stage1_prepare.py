@@ -146,6 +146,11 @@ INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = bool(
 USE_EFFECTIVE_H_FIELD = bool(
     _censor_cfg.get("use_effective_h_field", True)
 )
+# -----coordinates settlement ------------------------------
+COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).lower()
+UTM_EPSG = int(cfg.get("UTM_EPSG", 32649))
+THICKNESS_UNIT_TO_SI = float(cfg.get("THICKNESS_UNIT_TO_SI", 1.0))
+
 
 # --- Output directories (optionally overridable from cfg) ---
 BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
@@ -484,6 +489,46 @@ df_cens, censor_report = _apply_censoring(df_clean.copy(), CENSORING_SPECS)
 print(f"\n{'='*18} Step 3: Encode & Scale {'='*18}")
 df_proc = df_cens.copy()
 
+# --------------------------------------------------------------
+# 3.0 Coordinate system for physics: use meters if possible
+# --------------------------------------------------------------
+COORD_X_COL, COORD_Y_COL = LON_COL, LAT_COL
+coords_in_degrees = True
+deg_to_m_lon = None
+deg_to_m_lat = None
+coord_epsg = None
+
+if COORD_MODE in ("utm", "projected", "meters"):
+    try:
+        from pyproj import Transformer
+
+        tr = Transformer.from_crs("EPSG:4326", f"EPSG:{UTM_EPSG}", always_xy=True)
+        x_m, y_m = tr.transform(
+            df_proc[LON_COL].to_numpy(dtype=float),
+            df_proc[LAT_COL].to_numpy(dtype=float),
+        )
+
+        df_proc["x_m"] = x_m.astype(np.float32)
+        df_proc["y_m"] = y_m.astype(np.float32)
+
+        COORD_X_COL, COORD_Y_COL = "x_m", "y_m"
+        coords_in_degrees = False
+        coord_epsg = UTM_EPSG
+
+        print(f"[Coords] Using UTM meters: ({COORD_X_COL},{COORD_Y_COL}) EPSG:{UTM_EPSG}")
+
+    except Exception as e:
+        print(f"[Coords][Warn] UTM projection failed ({e}). Falling back to degrees.")
+
+# Fallback / explicit degrees mode: keep lon/lat degrees but precompute deg->m factors
+if coords_in_degrees:
+    lat0 = float(np.nanmean(df_proc[LAT_COL].to_numpy(dtype=float)))
+    deg_to_m_lon = float(111320.0 * np.cos(np.deg2rad(lat0)))
+    deg_to_m_lat = float(110574.0)
+    print(f"[Coords] Using degrees; deg_to_m_lon={deg_to_m_lon:.2f},"
+          f" deg_to_m_lat={deg_to_m_lat:.2f}")
+
+
 # 3.1 One-hot encode ALL optional categoricals that are present
 encoded_names = []
 ohe_paths = {}  # support multiple encoders (one per categorical)
@@ -649,6 +694,23 @@ dynamic_features = [c for c in dynamic_base + dynamic_extra if c in df_scaled.co
 future_features = [c for c in FUTURE_DRIVER_FEATURES if c in df_scaled.columns]
 
 H_FIELD_COL = H_FIELD_COL_NAME
+# --------------------------------------------------------------
+# H-field SI affine (model-space -> meters)
+# --------------------------------------------------------------
+aff_H = _infer_affine_from_scaler(
+    scaler if num_cols else None, num_cols, H_FIELD_COL)
+
+H_scale, H_bias = (1.0, 0.0)
+if aff_H is not None:
+    H_scale, H_bias = aff_H
+
+H_scale_si = float(H_scale) * THICKNESS_UNIT_TO_SI
+H_bias_si  = float(H_bias)  * THICKNESS_UNIT_TO_SI
+
+print("[SI affine] H_field:", H_FIELD_COL,
+      "scale_si=", H_scale_si, "bias_si=", H_bias_si
+   )
+
 # If soil thickness is censored and we created an effective column, use it.
 for sp in CENSORING_SPECS or []:
     if sp["col"] == H_FIELD_COL_NAME:
@@ -687,8 +749,8 @@ OUT_S_DIM, OUT_G_DIM = 1, 1
 inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
     df=df_train,
     time_col=TIME_COL_NUM,
-    lon_col=LON_COL,
-    lat_col=LAT_COL,
+    lon_col=COORD_X_COL, # LON_COL
+    lat_col=COORD_Y_COL,  # LAT_COL
     subsidence_col=SUBSIDENCE_COL,
     gwl_col=GWL_COL,
     h_field_col=H_FIELD_COL,
@@ -714,6 +776,16 @@ if targets_train["subsidence"].shape[0] == 0:
 coord_scaler_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_coord_scaler.joblib")
 joblib.dump(coord_scaler, coord_scaler_path)
 print(f"  Saved coord scaler: {coord_scaler_path}")
+
+# --------------------------------------------------------------
+# coord scaler metadata for chain-rule in Stage-2
+# (assumes coord order: [t, x, y] inside prepare_pinn_data_sequences)
+# --------------------------------------------------------------
+cmin = np.asarray(getattr(coord_scaler, "data_min_", None), dtype=float)
+cmax = np.asarray(getattr(coord_scaler, "data_max_", None), dtype=float)
+crng = (cmax - cmin)
+
+coord_ranges = {"t": float(crng[0]), "x": float(crng[1]), "y": float(crng[2])}
 
 for k, v in inputs_train.items():
     print(f"  Train input '{k}': {None if v is None else v.shape}")
@@ -866,6 +938,25 @@ manifest["config"]["scaling_kwargs"].update({
     "subs_bias_si": subs_bias_si,
     "head_scale_si": head_scale_si,
     "head_bias_si": head_bias_si,
+    "H_scale_si": H_scale_si,
+    "H_bias_si": H_bias_si,
+})
+manifest["config"]["scaling_kwargs"].update({
+    # coords
+    "coords_normalized": True,
+    "coord_order": ["t", "x", "y"],
+    "coord_ranges": coord_ranges,
+    "coord_x_col": COORD_X_COL,
+    "coord_y_col": COORD_Y_COL,
+
+    # degree handling
+    "coords_in_degrees": bool(coords_in_degrees),
+    **({ "deg_to_m_lon": float(deg_to_m_lon), 
+        "deg_to_m_lat": float(deg_to_m_lat) }
+       if coords_in_degrees and (deg_to_m_lon is not None) else {}),
+
+    # EPSG record (informational)
+    **({ "coord_epsg": int(coord_epsg) } if coord_epsg is not None else {}),
 })
 
 manifest["config"]["feature_registry"] = {
@@ -886,8 +977,8 @@ if not df_test.empty:
         test_inputs, test_targets, _ = prepare_pinn_data_sequences(
             df=df_test,
             time_col=TIME_COL_NUM,
-            lon_col=LON_COL,
-            lat_col=LAT_COL,
+            lon_col=COORD_X_COL,
+            lat_col=COORD_Y_COL, 
             subsidence_col=SUBSIDENCE_COL,
             gwl_col=GWL_COL,
             h_field_col=H_FIELD_COL,

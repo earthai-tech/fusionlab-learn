@@ -292,6 +292,7 @@ bounds_for_scaling = {
     "logSs_max": float(np.log(phys_bounds["Ss_max"])),
 }
 
+
 # GeoPrior scalar params
 GEOPRIOR_INIT_MV    = cfg.get("GEOPRIOR_INIT_MV",    1e-7)
 GEOPRIOR_INIT_KAPPA = cfg.get("GEOPRIOR_INIT_KAPPA", 1.0)
@@ -443,20 +444,37 @@ if cs_path and os.path.exists(cs_path):
         print(f"[Warn] Could not load coord_scaler at {cs_path}: {e}")
         
 # XXX NEW ADDED 
-coord_ranges = None
-coords_normalized = False
+# -------------------------------------------------------------------------
+# Stage-1 scaling metadata (single source of truth for physics chain-rule)
+# -------------------------------------------------------------------------
+sk = (cfg.get("scaling_kwargs") or {})
 
-if coord_scaler is not None:
-    # MinMaxScaler has data_min_/data_max_. StandardScaler has scale_.
-    if hasattr(coord_scaler, "data_min_") and hasattr(coord_scaler, "data_max_"):
+# coords
+coords_normalized = bool(sk.get("coords_normalized", False))
+coord_ranges = sk.get("coord_ranges") or None   # expected dict {"t":..,"x":..,"y":..}
+coord_order = sk.get("coord_order", ["t", "x", "y"])
+
+coords_in_degrees = bool(sk.get("coords_in_degrees", False))
+deg_to_m_lon = sk.get("deg_to_m_lon", None)
+deg_to_m_lat = sk.get("deg_to_m_lat", None)
+
+# thickness SI affine (model-space -> meters)
+H_scale_si = sk.get("H_scale_si", None)
+H_bias_si  = sk.get("H_bias_si",  None)
+
+# Fallback: if Stage-1 did not record coord_ranges, infer from coord_scaler
+
+if (coord_ranges is None) and (coord_scaler is not None):
+    if hasattr(coord_scaler, "data_min_") and hasattr(
+            coord_scaler, "data_max_"):
         span = coord_scaler.data_max_ - coord_scaler.data_min_
         coord_ranges = {
-            "t": float(span[0]),
-            "x": float(span[1]),
-            "y": float(span[2]),
+            "t": float(span[0]), 
+            "x": float(span[1]), 
+            "y": float(span[2])
         }
         coords_normalized = True
-
+        
     elif hasattr(coord_scaler, "scale_"):
         # If Stage-1 used StandardScaler, you can still reuse the same mechanism:
         # derivative in original units = derivative_wrt_norm / scale
@@ -464,8 +482,12 @@ if coord_scaler is not None:
         coord_ranges = {"t": float(sc[0]), "x": float(sc[1]), "y": float(sc[2])}
         coords_normalized = True
 
-print("[Info] coords_normalized:", 
-      coords_normalized, "coord_ranges:", coord_ranges)
+print("[Info] coords_normalized:", coords_normalized,
+      "coord_ranges:", coord_ranges
+     )
+print("[Info] coords_in_degrees:", coords_in_degrees,
+      "deg_to_m_lon:", deg_to_m_lon, "deg_to_m_lat:", deg_to_m_lat)
+print("[Info] H_scale_si:", H_scale_si, "H_bias_si:", H_bias_si)
 
 # ---END ADDED 
 
@@ -598,12 +620,27 @@ subsmodel_params = {
     # For consistency
     "time_units": TIME_UNITS, 
 }
+
 subsmodel_params["scaling_kwargs"].update({
-    "bounds": bounds_for_scaling,
-    "time_units": TIME_UNITS,
     "coords_normalized": coords_normalized,
     "coord_ranges": coord_ranges or {},
+    "coord_order": coord_order,
+
+    # lon/lat degrees handling (only used if coords_in_degrees=True)
+    "coords_in_degrees": coords_in_degrees,
+    "deg_to_m_lon": (float(deg_to_m_lon) if deg_to_m_lon is not None else None),
+    "deg_to_m_lat": (float(deg_to_m_lat) if deg_to_m_lat is not None else None),
+
+    # thickness SI affine (used by _to_si_thickness patch)
+    "H_scale_si": (float(H_scale_si) if H_scale_si is not None else 1.0),
+    "H_bias_si":  (float(H_bias_si)  if H_bias_si  is not None else 0.0),
 })
+
+# Optional: drop Nones to keep scaling_kwargs clean
+subsmodel_params["scaling_kwargs"] = {
+    k: v for k, v in subsmodel_params["scaling_kwargs"].items()
+    if v is not None
+}
 
 sk = cfg.get("scaling_kwargs", {}) or {}
 

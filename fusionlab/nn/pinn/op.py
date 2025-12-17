@@ -107,7 +107,6 @@ def rate_to_per_second(dz_dt: Tensor, time_units: Optional[str]) -> Tensor:
     return dz_dt / (sec + _SMALL)
 
 
-
 def positive(x, eps: float = _SMALL):
     """Softplus positivity with tiny epsilon to avoid exact zeros."""
     return tf_softplus(x) + eps

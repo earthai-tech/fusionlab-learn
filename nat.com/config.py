@@ -325,7 +325,6 @@ LAMBDA_OFFSET_SCHEDULE = None
 # Example:
 # LAMBDA_OFFSET_SCHEDULE = {0: 0.1, 5: 0.5, 10: 1.0}
 
-
 # Learning-rate multipliers for scalar physics parameters.
 MV_LR_MULT = 1.0
 KAPPA_LR_MULT = 5.0
@@ -347,7 +346,7 @@ PHYSICS_BOUNDS = {
     "K_min": 1e-8,
     "K_max": 1e-3,
 
-    # Specific storage Ss [Pa^-1]
+    # Specific storage Ss [m^-1]
     "Ss_min": 1e-7,
     "Ss_max": 1e-3,
 }
@@ -378,6 +377,14 @@ HEAD_BIAS_SI  = None
 # Prefer auto-derive from Stage-1 scalers when None
 AUTO_SI_AFFINE_FROM_STAGE1 = True
 
+# --- Coordinate handling for physics (x,y) ---
+COORD_MODE = "degrees"      # {"utm", "degrees"}
+UTM_EPSG = 32649        # Pearl River Delta often OK with UTM 49N
+
+# --- Thickness unit (raw soil_thickness is already meters in most cases) ---
+THICKNESS_UNIT_TO_SI = 1.0
+
+
 # 4.4 GeoPrior scalar parameters
 # ------------------------------
 # These control how the geomechanical prior is initialised and
@@ -397,7 +404,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
 
-EPOCHS = 100
+EPOCHS = 50
 
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4

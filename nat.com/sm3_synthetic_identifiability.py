@@ -229,7 +229,6 @@ def train_one_pixel(
         hd_factor=float(hd_factor),
         scale_pde_residuals=True,
         
-
         pde_mode="consolidation",
         offset_mode="log10",  # optional but good for branch coverage
     
@@ -321,341 +320,420 @@ def flatten_diag(diag: Dict[str, Any]) -> Dict[str, float]:
             row[f"{block}_{key}_q95"] = d["q95"]
     return row
 
-def main():
+def convert_payload_time_units(
+    payload: Dict[str, np.ndarray],
+    *,
+    from_units: str = "sec",
+    to_units: str = "sec",
+    sec_per_year: float = SEC_PER_YEAR,
+    eps: float = 1e-12,
+) -> Dict[str, np.ndarray]:
     """
-    Run the Synthetic Identifiability Experiment (Supplementary Methods 3).
+    Convert a physics payload between:
+      - "sec"  : tau in seconds, K in m/s
+      - "year" : tau in years,   K in m/year
 
-    Key design (fixed):
-    - Avoid degenerate/clamped tau by sampling tau_prior in a resolvable range.
-    - Enforce *truth consistency* by back-computing K from the closure:
-          tau = Hd^2 * Ss / (pi^2 * kappa_b * K)
-      so the parameters recorded as "true" are exactly those that generated
-      the synthetic series.
-    - If the current GeoPrior physics head does not learn Hd independently,
-      set Hd_true = Hd_prior (otherwise the experiment is unfair by design).
-
-    Workflow per realisation r:
-      1) Sample lithology and thickness H_phys -> H_eff -> Hd_prior.
-      2) Take Ss_prior from lithology; sample tau_prior (log-uniform).
-      3) Compute K_prior from (Hd_prior, Ss_prior, tau_prior).
-      4) Sample Ss_true (log-offset around Ss_prior), sample tau_true
-         (log-offset around tau_prior), clip tau_true to [tau_min, tau_max],
-         set Hd_true = Hd_prior, then compute K_true from closure.
-      5) Generate drawdown history Δh(t) and simulate settlement with tau_true.
-      6) Build 1-step windows, train a 1-pixel GeoPriorSubsNet.
-      7) Export physics payload, run SM3 diagnostics, save per-run JSON + CSV.
+    Notes
+    -----
+    We convert only the *time-dependent physical fields*:
+      - tau, tau_prior, tau_closure (if present)
+      - K
+    Other fields (Ss, Hd, etc.) are left unchanged.
     """
-    ap = argparse.ArgumentParser()
+    fu = (from_units or "sec").strip().lower()
+    tu = (to_units or "sec").strip().lower()
 
-    # --------------------------
-    # Output / experiment size
-    # --------------------------
-    ap.add_argument("--outdir", required=True,
-                    help="Root output folder. A subfolder real_XXX is created per run.")
-    ap.add_argument("--n-realizations", type=int, default=30,
-                    help="Number of independent synthetic runs (different seeds/loads/noise).")
-    ap.add_argument("--n-years", type=int, default=20,
-                    help="Length of synthetic annual time series.")
-    ap.add_argument("--time-steps", type=int, default=5,
-                    help="Encoder window length T (years).")
-    ap.add_argument("--val-tail", type=int, default=5,
-                    help="Hold-out tail length (years) for validation/evaluation.")
-    ap.add_argument("--seed", type=int, default=123,
-                    help="Base RNG seed (each realisation adds +r).")
+    if fu not in ("sec", "s", "second", "seconds", "year", "years"):
+        raise ValueError(f"Unsupported from_units={from_units!r}")
+    if tu not in ("sec", "s", "second", "seconds", "year", "years"):
+        raise ValueError(f"Unsupported to_units={to_units!r}")
 
-    # --------------------------
-    # Training hyperparameters
-    # --------------------------
-    ap.add_argument("--epochs", type=int, default=50)
-    ap.add_argument("--batch", type=int, default=16)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    fu = "sec" if fu.startswith("s") else "year"
+    tu = "sec" if tu.startswith("s") else "year"
 
-    # --------------------------
-    # Synthetic data controls
-    # --------------------------
-    ap.add_argument("--noise-std", type=float, default=0.02,
-                    help="Std dev of additive Gaussian noise on increments (same unit as y_inc).")
-    ap.add_argument("--load-type", choices=("step", "ramp"), default="step",
-                    help="Drawdown history type Δh(t).")
-    # ap.add_argument("--alpha", type=float, default=1.0,
-    #                 help="Settlement scaling in settlement_from_tau (dimensionless).")
-    ap.add_argument("--alpha", type=float, default=1000.0,
-                    help="Unit scale applied to Ss*Δh*H (e.g., 1000 for mm).")
-    # If you set alpha=1000 (mm), keep noise_std like 0.02–0.2 (mm).
-    # If you keep alpha=1 (meters), use noise_std like 2e-5–2e-4 (m) (i.e., 0.02–0.2 mm).
+    out = dict(payload)
+    if fu == tu:
+        # Still refresh log fields for safety/consistency.
+        if "log10_tau" in out and "tau" in out:
+            out["log10_tau"] = np.log10(np.clip(np.asarray(out["tau"], float), eps, None))
+        if "log10_tau_prior" in out and "tau_prior" in out:
+            out["log10_tau_prior"] = np.log10(np.clip(np.asarray(
+                out["tau_prior"], float), eps, None))
+        if "log10_tau_closure" in out and "tau_closure" in out:
+            out["log10_tau_closure"] = np.log10(np.clip(np.asarray(
+                out["tau_closure"], float), eps, None))
+        return out
 
-    # --------------------------
-    # GeoPrior physics knobs
-    # --------------------------
-    ap.add_argument("--hd-factor", type=float, default=0.6,
-                    help="Hd_prior = hd_factor * H_eff (effective drainage path fraction).")
-    ap.add_argument("--thickness-cap", type=float, default=30.0,
-                    help="Cap for H_eff = min(H_phys, thickness_cap).")
-    ap.add_argument("--kappa-b", type=float, default=1.0,
-                    help="Anisotropy/leakage factor κ_b (k_v = κ_b K).")
-    ap.add_argument("--gamma-w", type=float, default=9810.0,
-                    help="Unit weight of water (kept for model signature; not used in synthetic forward).")
+    # --- Conversion factors ---
+    # sec -> year : tau /= spy, K *= spy
+    # year -> sec : tau *= spy, K /= spy
+    spy = float(sec_per_year)
 
-    # --------------------------
-    # Timescale sampling (core SM3 fix)
-    # --------------------------
-    ap.add_argument("--tau-min", type=float, default=0.3,
-                    help="Minimum sampled timescale (years).")
-    ap.add_argument("--tau-max", type=float, default=10.0,
-                    help="Maximum sampled timescale (years).")
-    ap.add_argument("--tau-spread-dex", type=float, default=0.3,
-                    help="Std dev (dex) for log10(tau_true) around log10(tau_prior).")
+    def _as_float(a):
+        return np.asarray(a, float)
 
-    # Optional: truth spread for Ss (dex via log10)
-    ap.add_argument("--Ss-spread-dex", type=float, default=0.4,
-                    help="Std dev (dex) for log10(Ss_true) around log10(Ss_prior).")
+    if fu == "sec" and tu == "year":
+        if "tau" in out:
+            out["tau"] = _as_float(out["tau"]) / spy
+        if "tau_prior" in out:
+            out["tau_prior"] = _as_float(out["tau_prior"]) / spy
+        if "tau_closure" in out:
+            out["tau_closure"] = _as_float(out["tau_closure"]) / spy
+        if "K" in out:
+            out["K"] = _as_float(out["K"]) * spy
 
-    args = ap.parse_args()
+    elif fu == "year" and tu == "sec":
+        if "tau" in out:
+            out["tau"] = _as_float(out["tau"]) * spy
+        if "tau_prior" in out:
+            out["tau_prior"] = _as_float(out["tau_prior"]) * spy
+        if "tau_closure" in out:
+            out["tau_closure"] = _as_float(out["tau_closure"]) * spy
+        if "K" in out:
+            out["K"] = _as_float(out["K"]) / spy
 
-    if not (args.tau_min > 0.0 and args.tau_max > args.tau_min):
-        raise ValueError("--tau-min must be > 0 and < --tau-max.")
+    # Refresh log fields if they exist (useful for plots)
+    if "log10_tau" in out and "tau" in out:
+        out["log10_tau"] = np.log10(np.clip(
+            np.asarray(out["tau"], float), eps, None))
+    if "log10_tau_prior" in out and "tau_prior" in out:
+        out["log10_tau_prior"] = np.log10(np.clip(
+            np.asarray(out["tau_prior"], float), eps, None))
+    if "log10_tau_closure" in out and "tau_closure" in out:
+        # IMPORTANT: closure must track tau_closure (not tau_prior)
+        out["log10_tau_closure"] = np.log10(np.clip(
+            np.asarray(out["tau_closure"], float), eps, None))
 
-    os.makedirs(args.outdir, exist_ok=True)
+    return out
 
-    # RNG (reproducible)
-    rng = np.random.default_rng(args.seed)
 
-    # Lithology priors: we keep Ss_prior and thickness ranges from here.
-    # NOTE: lp.K_prior (m/s) is no longer used to *drive* tau; K is derived
-    # from sampled tau to ensure timescale diversity and consistency.
-    priors = litho_priors()
+def _infer_payload_time_units(meta: Dict[str, Any]) -> str:
+    """
+    Infer payload units robustly from metadata.
+
+    Priority:
+      1) meta["units"]["tau"] if present
+      2) meta["payload_time_units"] if you write it
+      3) meta["time_units"] fallback
+    """
+    units = meta.get("units") or {}
+    tau_u = str(units.get("tau", "")).lower()
+    if "year" in tau_u:
+        return "year"
+    if "sec" in tau_u or tau_u in ("s", "second", "seconds"):
+        return "sec"
+
+    pu = str(meta.get("payload_time_units", "")).strip().lower()
+    if pu.startswith("y"):
+        return "year"
+    if pu.startswith("s"):
+        return "sec"
+
+    return str(meta.get("time_units", "year")).strip().lower()
+
+
+def run_one_realisation(
+    *,
+    r: int,
+    args: argparse.Namespace,
+    rng: np.random.Generator,
+    priors: List[LithoPrior],
+    years: np.ndarray,
+    outdir: str,
+) -> Dict[str, Any]:
+    """
+    One SM3 synthetic run:
+      - sample truth/prior
+      - simulate series
+      - train 1-pixel GeoPriorSubsNet
+      - export payload
+      - load payload + run unit-safe diagnostics
+      - return a flat row dict for the global CSV
+    """
     n_lith = len(priors)
 
-    # Annual times in years
+    run_dir = os.path.join(outdir, f"real_{r:03d}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    # ------------------------------------------------------------
+    # 1) Sample lithology + thickness -> H_eff -> Hd_prior
+    # ------------------------------------------------------------
+    lith_idx = int(rng.integers(0, n_lith))
+    lp = priors[lith_idx]
+
+    H_phys = float(rng.uniform(lp.Hmin, lp.Hmax))
+    H_eff = float(min(H_phys, args.thickness_cap))
+    Hd_prior = float(args.hd_factor * H_eff)
+
+    # ------------------------------------------------------------
+    # 2) Ss_prior and tau_prior (years)
+    # ------------------------------------------------------------
+    Ss_prior = float(lp.Ss_prior)
+
+    logtau_p = float(rng.uniform(np.log10(args.tau_min), np.log10(args.tau_max)))
+    tau_prior_year = float(10.0 ** logtau_p)
+    tau_prior_sec = tau_prior_year * SEC_PER_YEAR
+
+    # ------------------------------------------------------------
+    # 3) K_prior from closure (SI: m/s, consistent with tau in seconds)
+    # ------------------------------------------------------------
+    K_prior_mps = float(
+        (Hd_prior ** 2) * Ss_prior
+        / (np.pi ** 2 * float(args.kappa_b) * tau_prior_sec)
+    )
+
+    # ------------------------------------------------------------
+    # 4) Sample truth (Ss_true, tau_true), set Hd_true, derive K_true
+    # ------------------------------------------------------------
+    dlogSs = float(rng.normal(0.0, float(args.Ss_spread_dex)))
+    Ss_true = float(Ss_prior * (10.0 ** dlogSs))
+
+    logtau_t = float(logtau_p + rng.normal(0.0, float(args.tau_spread_dex)))
+    tau_true_year = float(np.clip(10.0 ** logtau_t, args.tau_min, args.tau_max))
+    tau_true_sec = tau_true_year * SEC_PER_YEAR
+
+    Hd_true = float(Hd_prior)
+    K_true_mps = float(
+        (Hd_true ** 2) * Ss_true
+        / (np.pi ** 2 * float(args.kappa_b) * tau_true_sec)
+    )
+
+    # ------------------------------------------------------------
+    # 5) Drawdown Δh(t) and settlement with tau_true
+    # ------------------------------------------------------------
+    amp = float(rng.uniform(-15.0, -5.0))
+    step_year = int(rng.integers(2, max(3, args.n_years // 3)))
+
+    dh = build_load(
+        years=years,
+        kind=args.load_type,
+        step_year=step_year,
+        amplitude=amp,
+        ramp_years=max(3, args.n_years // 4),
+    )
+
+    # alpha_eff controls output magnitude (mm if alpha=1000)
+    unit_scale = float(args.alpha)
+    alpha_eff = unit_scale * Ss_true * H_eff
+
+    s_cum = settlement_from_tau(years, dh, tau_true_year, alpha=alpha_eff)
+
+    y_inc = np.zeros_like(s_cum)
+    y_inc[0] = s_cum[0]
+    y_inc[1:] = s_cum[1:] - s_cum[:-1]
+    y_inc = y_inc + rng.normal(0.0, args.noise_std, size=y_inc.shape)
+
+    # ------------------------------------------------------------
+    # 6) Build windows + split
+    # ------------------------------------------------------------
+    is_capped = float(H_phys > args.thickness_cap)
+    static_vec = np.concatenate(
+        [one_hot(lith_idx, n_lith), np.array([H_eff, is_capped], np.float32)],
+        axis=0
+    ).astype(np.float32)
+
+    X, y = make_one_step_windows(
+        years=years,
+        dh=dh,
+        y_inc=y_inc,
+        static_vec=static_vec,
+        time_steps=args.time_steps,
+        H_field_value=H_eff,
+    )
+
+    Xtr, ytr, Xva, yva = split_tail(X, y, args.val_tail)
+
+    # ------------------------------------------------------------
+    # 7) Train
+    # ------------------------------------------------------------
+    model, ds_va = train_one_pixel(
+        Xtr, ytr, Xva, yva,
+        outdir=run_dir,
+        seed=int(args.seed + r),
+        epochs=args.epochs,
+        batch=args.batch,
+        lr=args.lr,
+        kappa_b=args.kappa_b,
+        gamma_w=args.gamma_w,
+        hd_factor=args.hd_factor,
+    )
+
+    # ------------------------------------------------------------
+    # 8) Export physics payload (+ truth/prior metadata)
+    # ------------------------------------------------------------
+    npz_path = os.path.join(run_dir, "phys_payload_val.npz")
+
+    # IMPORTANT:
+    # Do NOT claim payload is "sec" if model exports "year".
+    # We keep report_time_units="year" for SM3.
+    model.export_physics_payload(
+        ds_va,
+        save_path=npz_path,
+        format="npz",
+        overwrite=True,
+        metadata={
+            "synthetic": True,
+            "realisation": int(r),
+
+            "report_time_units": "year",
+            "sec_per_year": float(SEC_PER_YEAR),
+            "kappa_b": float(args.kappa_b),
+
+            # truth (SI + year)
+            "tau_true_sec": float(tau_true_sec),
+            "tau_true_year": float(tau_true_year),
+            "K_true_mps": float(K_true_mps),
+            "Ss_true": float(Ss_true),
+            "Hd_true": float(Hd_true),
+
+            # priors (SI + year)
+            "tau_prior_sec": float(tau_prior_sec),
+            "tau_prior_year": float(tau_prior_year),
+            "K_prior_mps": float(K_prior_mps),
+            "Ss_prior": float(Ss_prior),
+            "Hd_prior": float(Hd_prior),
+
+            # thickness bookkeeping
+            "H_eff": float(H_eff),
+            "H_phys": float(H_phys),
+
+            # load/noise
+            "load_type": str(args.load_type),
+            "amp_dh": float(amp),
+            "step_year": int(step_year),
+            "noise_std": float(args.noise_std),
+        },
+    )
+
+    # ------------------------------------------------------------
+    # 9) Load payload + run unit-safe SM3 diagnostics
+    # ------------------------------------------------------------
+    payload_raw, meta = load_physics_payload(npz_path)
+
+    payload_units = _infer_payload_time_units(meta)
+    report_units = str(meta.get(
+        "report_time_units") or payload_units).strip().lower()
+    spy = float(meta.get("sec_per_year", SEC_PER_YEAR))
+
+    # Convert payload into report units for diagnostics
+    payload_u = convert_payload_time_units(
+        payload_raw, from_units=payload_units, 
+        to_units=report_units, sec_per_year=spy
+    )
+
+    # Convert truth/prior to the SAME report units
+    if report_units == "year":
+        tau_true_u = float(meta["tau_true_year"])
+        tau_prior_u = float(meta["tau_prior_year"])
+        K_true_u = float(meta["K_true_mps"]) * spy      # m/year
+        K_prior_u = float(meta["K_prior_mps"]) * spy    # m/year
+    elif report_units == "sec":
+        tau_true_u = float(meta["tau_true_sec"])
+        tau_prior_u = float(meta["tau_prior_sec"])
+        K_true_u = float(meta["K_true_mps"])            # m/s
+        K_prior_u = float(meta["K_prior_mps"])          # m/s
+    else:
+        raise ValueError(f"Unsupported report_units={report_units!r}")
+
+    diag = identifiability_diagnostics_from_payload(
+        payload_u,
+        tau_true=tau_true_u,
+        K_true=K_true_u,
+        Ss_true=float(meta["Ss_true"]),
+        Hd_true=float(meta["Hd_true"]),
+        K_prior=K_prior_u,
+        Ss_prior=float(meta["Ss_prior"]),
+        Hd_prior=float(meta["Hd_prior"]),
+    )
+
+    with open(os.path.join(run_dir, "sm3_identifiability_diag.json"), "w",
+              encoding="utf-8") as f:
+        json.dump(diag, f, indent=2)
+
+    # For debugging: always keep both year and sec summaries (consistent)
+    payload_year = convert_payload_time_units(
+        payload_raw, from_units=payload_units, to_units="year", 
+        sec_per_year=spy)
+    payload_sec = convert_payload_time_units(
+        payload_raw, from_units=payload_units, to_units="sec", 
+        sec_per_year=spy)
+
+    eff_year = summarise_effective_params(payload_year)
+    eff_sec = summarise_effective_params(payload_sec)
+
+    # ------------------------------------------------------------
+    # 10) Build one CSV row
+    # ------------------------------------------------------------
+    row = {
+        "realisation": int(r),
+        "lith_idx": int(lith_idx),
+
+        "tau_true_year": float(tau_true_year),
+        "tau_prior_year": float(tau_prior_year),
+        "tau_true_sec": float(tau_true_sec),
+        "tau_prior_sec": float(tau_prior_sec),
+
+        "K_true_mps": float(K_true_mps),
+        "K_prior_mps": float(K_prior_mps),
+
+        "Ss_true": float(Ss_true),
+        "Ss_prior": float(Ss_prior),
+        "Hd_true": float(Hd_true),
+        "Hd_prior": float(Hd_prior),
+
+        # estimates (always provide both unit systems)
+        "tau_est_med_year": float(eff_year["tau"]),
+        "K_est_med_m_per_year": float(eff_year["K"]),
+        "Ss_est_med": float(eff_year["Ss"]),
+        "Hd_est_med": float(eff_year["Hd"]),
+
+        "tau_est_med_sec": float(eff_sec["tau"]),
+        "K_est_med_mps": float(eff_sec["K"]),
+
+        "kappa_b": float(args.kappa_b),
+    }
+
+    row.update(flatten_diag(diag))
+    return row
+
+
+def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
+    """
+    Driver for the full SM3 experiment:
+      - loops over realisations
+      - collects rows
+      - writes runs CSV + summary CSV
+      - returns the runs dataframe (useful for interactive debugging)
+    """
+    os.makedirs(args.outdir, exist_ok=True)
+
+    rng = np.random.default_rng(args.seed)
+    priors = litho_priors()
     years = np.arange(args.n_years, dtype=float)
 
     rows: List[Dict[str, Any]] = []
 
     for r in range(args.n_realizations):
-        run_dir = os.path.join(args.outdir, f"real_{r:03d}")
-        os.makedirs(run_dir, exist_ok=True)
+        print("=" * 72)
+        print(f"Realisation {r+1:03d}/{args.n_realizations:03d}")
+        print("=" * 72)
 
-        # ------------------------------------------------------------
-        # 1) Sample lithology + thickness -> H_eff -> Hd_prior
-        # ------------------------------------------------------------
-        lith_idx = int(rng.integers(0, n_lith))
-        lp = priors[lith_idx]
-
-        H_phys = float(rng.uniform(lp.Hmin, lp.Hmax))
-        H_eff = float(min(H_phys, args.thickness_cap))
-        Hd_prior = float(args.hd_factor * H_eff)
-
-        # ------------------------------------------------------------
-        # 2) Set Ss_prior (internal unit) and sample tau_prior (years)
-        # ------------------------------------------------------------
-        Ss_prior = float(lp.Ss_prior)
-
-        logtau_p = float(rng.uniform(np.log10(args.tau_min), np.log10(args.tau_max)))
-        
-        # tau_prior is sampled in YEARS (for the simulator)
-        tau_prior_year = float(10.0 ** logtau_p)
-        
-        # SI version used by the model when time_units="year"
-        tau_prior_sec = tau_prior_year * SEC_PER_YEAR
-
-        # ------------------------------------------------------------
-        # 3) Compute K_prior from closure (SI: m/s)
-        #    tau = Hd^2 * Ss / (pi^2 * kappa_b * K)
-        # -> K = Hd^2 * Ss / (pi^2 * kappa_b * tau)
-        # ------------------------------------------------------------
-        
-        # K in SI (m/s), consistent with tau in seconds
-        K_prior_mps = float(
-            (Hd_prior ** 2) * Ss_prior
-            / (np.pi ** 2 * float(args.kappa_b) * tau_prior_sec)
-        )
-
-        # ------------------------------------------------------------
-        # 4) Sample truth: Ss_true, tau_true; set Hd_true; derive K_true
-        # ------------------------------------------------------------
-        dlogSs = float(rng.normal(0.0, float(args.Ss_spread_dex)))
-        Ss_true = float(Ss_prior * (10.0 ** dlogSs))
-
-        logtau_t = float(logtau_p + rng.normal(0.0, float(args.tau_spread_dex)))
-        tau_true = float(10.0 ** logtau_t)
-        
-        tau_true_year = float(np.clip(tau_true, args.tau_min, args.tau_max))
-        tau_true_sec  = tau_true_year * SEC_PER_YEAR
-        
-        Hd_true = float(Hd_prior)
-        
-        K_true_mps = float(
-            (Hd_true ** 2) * Ss_true
-            / (np.pi ** 2 * float(args.kappa_b) * tau_true_sec)
-        )
-
-        # ------------------------------------------------------------
-        # 5) Synthetic drawdown Δh(t) and settlement with tau_true
-        # ------------------------------------------------------------
-        amp = float(rng.uniform(-15.0, -5.0))
-        step_year = int(rng.integers(2, max(3, args.n_years // 3)))
-
-        dh = build_load(
+        row = run_one_realisation(
+            r=r,
+            args=args,
+            rng=rng,
+            priors=priors,
             years=years,
-            kind=args.load_type,
-            step_year=step_year,
-            amplitude=amp,
-            ramp_years=max(3, args.n_years // 4),
+            outdir=args.outdir,
         )
-        # Δh is in meters, Ss_true is your effective storage scale,
-        # H_eff is thickness (m). unit_scale turns meters -> mm if desired.
-        unit_scale = float(args.alpha)  # interpret --alpha as "unit scale"
-        alpha_eff = unit_scale * Ss_true * H_eff
-        
-        s_cum = settlement_from_tau(years, dh, tau_true_year, alpha=alpha_eff)
-
-        y_inc = np.zeros_like(s_cum)
-        y_inc[0] = s_cum[0]
-        y_inc[1:] = s_cum[1:] - s_cum[:-1]
-        y_inc = y_inc + rng.normal(0.0, args.noise_std, size=y_inc.shape)
-
-        # ------------------------------------------------------------
-        # 6) Build windows + split
-        # ------------------------------------------------------------
-        # static_vec = np.concatenate(
-        #     [one_hot(lith_idx, n_lith), np.array([H_eff], np.float32)],
-        #     axis=0
-        # ).astype(np.float32)
-        is_capped = float(H_phys > args.thickness_cap)
-        static_vec = np.concatenate(
-            [one_hot(lith_idx, n_lith),
-             np.array([H_eff, is_capped], np.float32)],
-            axis=0
-        ).astype(np.float32)
-
-        X, y = make_one_step_windows(
-            years=years,
-            dh=dh,
-            y_inc=y_inc,
-            static_vec=static_vec,
-            time_steps=args.time_steps,
-            H_field_value=H_eff,
-        )
-
-        Xtr, ytr, Xva, yva = split_tail(X, y, args.val_tail)
-
-        # ------------------------------------------------------------
-        # 7) Train
-        # ------------------------------------------------------------
-        model, ds_va = train_one_pixel(
-            Xtr, ytr, Xva, yva,
-            outdir=run_dir,
-            seed=int(args.seed + r),
-            epochs=args.epochs,
-            batch=args.batch,
-            lr=args.lr,
-            kappa_b=args.kappa_b,
-            gamma_w=args.gamma_w,
-            hd_factor=args.hd_factor,
-        )
-
-        # ------------------------------------------------------------
-        # 8) Export physics payload + metadata
-        # ------------------------------------------------------------
-        npz_path = os.path.join(run_dir, "phys_payload_val.npz")
-
-        model.export_physics_payload(
-            ds_va,
-            save_path=npz_path,
-            format="npz",
-            overwrite=True,
-            metadata={
-                "synthetic": True,
-                "realisation": int(r),
-            
-                # --- ground truth (SI for units-aware physics) ---
-                "tau_true_sec": float(tau_true_sec),     # seconds
-                "K_true_mps": float(K_true_mps),         # m/s
-                "Ss_true": float(Ss_true),
-                "Hd_true": float(Hd_true),               # m
-            
-                # --- priors (SI) ---
-                "tau_prior_sec": float(tau_prior_sec),   # seconds
-                "K_prior_mps": float(K_prior_mps),       # m/s
-                "Ss_prior": float(Ss_prior),
-                "Hd_prior": float(Hd_prior),
-            
-                # optional: keep the “human readable” year versions too
-                "tau_true_year": float(tau_true_year),
-                "tau_prior_year": float(tau_prior_year),
-            
-                # thickness bookkeeping
-                "H_eff": float(H_eff),
-                "H_phys": float(H_phys),
-            
-                # load / noise settings
-                "load_type": str(args.load_type),
-                "amp_dh": float(amp),
-                "step_year": int(step_year),
-                "noise_std": float(args.noise_std),
-            }, 
-
-        )
-
-        # ------------------------------------------------------------
-        # 9) Load payload and compute SM3 diagnostics
-        # ------------------------------------------------------------
-        payload, meta = load_physics_payload(npz_path)
-
-        diag = identifiability_diagnostics_from_payload(
-            payload,
-            tau_true=tau_true_sec,
-            K_true=K_true_mps, Ss_true=Ss_true, Hd_true=Hd_true,
-            K_prior=K_prior_mps, Ss_prior=Ss_prior, Hd_prior=Hd_prior,
-        )
-
-        with open(os.path.join(run_dir, "sm3_identifiability_diag.json"),
-                  "w", encoding="utf-8") as f:
-            json.dump(diag, f, indent=2)
-
-        eff = summarise_effective_params(payload)
-
-        # ------------------------------------------------------------
-        # 10) Row for global CSV
-        # ------------------------------------------------------------
-        row = {
-            "realisation": int(r),
-            "lith_idx": int(lith_idx),
-
-            "tau_true_year": float(tau_true_year),
-            "tau_prior_year": float(tau_prior_year),
-        
-            "tau_true_sec": float(tau_true_sec),
-            "tau_prior_sec": float(tau_prior_sec),
-        
-            "K_true_mps": float(K_true_mps),
-            "K_prior_mps": float(K_prior_mps),
-        
-            "Ss_true": float(Ss_true),
-            "Ss_prior": float(Ss_prior),
-            "Hd_true": float(Hd_true),
-            "Hd_prior": float(Hd_prior),
-        
-            "tau_est_med": float(eff["tau"]),        # should now be seconds if model is consistent
-            "K_est_med": float(eff["K"]),            # should now be m/s
-            "Ss_est_med": float(eff["Ss"]),
-            "Hd_est_med": float(eff["Hd"]),
-        }
-        row["kappa_b"] = float(args.kappa_b)
-        
-        row.update(flatten_diag(diag))
         rows.append(row)
 
-    # --------------------------
-    # Save per-run table
-    # --------------------------
     df = pd.DataFrame(rows)
+
     runs_csv = os.path.join(args.outdir, "sm3_synth_runs.csv")
     df.to_csv(runs_csv, index=False)
 
-    # --------------------------
-    # Save summary table
-    # --------------------------
+    # Summary stats over numeric columns
     metrics = [
         c for c in df.columns
         if c not in ("realisation", "lith_idx")
@@ -681,8 +759,49 @@ def main():
 
     print("[OK] wrote:", runs_csv)
     print("[OK] wrote:", sum_csv)
+    return df
 
 
+def main() -> None:
+    ap = argparse.ArgumentParser()
+
+    # Output / experiment size
+    ap.add_argument("--outdir", required=True)
+    ap.add_argument("--n-realizations", type=int, default=30)
+    ap.add_argument("--n-years", type=int, default=20)
+    ap.add_argument("--time-steps", type=int, default=5)
+    ap.add_argument("--val-tail", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=123)
+
+    # Training hyperparameters
+    ap.add_argument("--epochs", type=int, default=50)
+    ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--lr", type=float, default=1e-3)
+
+    # Synthetic data controls
+    ap.add_argument("--noise-std", type=float, default=0.02)
+    ap.add_argument("--load-type", choices=("step", "ramp"), default="step")
+    ap.add_argument("--alpha", type=float, default=1000.0)
+
+    # GeoPrior physics knobs
+    ap.add_argument("--hd-factor", type=float, default=0.6)
+    ap.add_argument("--thickness-cap", type=float, default=30.0)
+    ap.add_argument("--kappa-b", type=float, default=1.0)
+    ap.add_argument("--gamma-w", type=float, default=9810.0)
+
+    # Timescale sampling
+    ap.add_argument("--tau-min", type=float, default=0.3)
+    ap.add_argument("--tau-max", type=float, default=10.0)
+    ap.add_argument("--tau-spread-dex", type=float, default=0.3)
+    ap.add_argument("--Ss-spread-dex", type=float, default=0.4)
+
+    args = ap.parse_args()
+    if not (args.tau_min > 0.0 and args.tau_max > args.tau_min):
+        raise ValueError("--tau-min must be > 0 and < --tau-max.")
+    if not (0 < args.val_tail < (args.n_years - args.time_steps)):
+        raise ValueError("--val-tail must be in (0, B) with B=n_years-time_steps.")
+
+    _ = run_experiment(args)
 
 
 if __name__ == "__main__":
