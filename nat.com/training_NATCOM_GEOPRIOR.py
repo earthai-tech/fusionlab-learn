@@ -605,23 +605,31 @@ subsmodel_params["scaling_kwargs"].update({
     "coord_ranges": coord_ranges or {},
 })
 
+sk = cfg.get("scaling_kwargs", {}) or {}
 
-subs_scale_si, subs_bias_si = resolve_si_affine(
-    cfg, scaler_info_dict,
-    target_name=SUBSIDENCE_COL,
-    prefix="SUBS",
-    unit_factor_key="SUBS_UNIT_TO_SI",
-    scale_key="SUBS_SCALE_SI",
-    bias_key="SUBS_BIAS_SI",
-)
-head_scale_si, head_bias_si = resolve_si_affine(
-    cfg, scaler_info_dict,
-    target_name=GWL_COL,
-    prefix="HEAD",
-    unit_factor_key="HEAD_UNIT_TO_SI",
-    scale_key="HEAD_SCALE_SI",
-    bias_key="HEAD_BIAS_SI",
-)
+subs_scale_si = sk.get("subs_scale_si")
+subs_bias_si  = sk.get("subs_bias_si")
+head_scale_si = sk.get("head_scale_si")
+head_bias_si  = sk.get("head_bias_si")
+
+if subs_scale_si is None or subs_bias_si is None:
+    subs_scale_si, subs_bias_si = resolve_si_affine(
+        cfg, scaler_info_dict,
+        target_name=SUBSIDENCE_COL,
+        prefix="SUBS",
+        unit_factor_key="SUBS_UNIT_TO_SI",
+        scale_key="SUBS_SCALE_SI",
+        bias_key="SUBS_BIAS_SI",
+    )
+if head_scale_si is None or head_bias_si is None:
+    head_scale_si, head_bias_si = resolve_si_affine(
+        cfg, scaler_info_dict,
+        target_name=GWL_COL,
+        prefix="HEAD",
+        unit_factor_key="HEAD_UNIT_TO_SI",
+        scale_key="HEAD_SCALE_SI",
+        bias_key="HEAD_BIAS_SI",
+    )
 
 subsmodel_params["scaling_kwargs"].update({
     "subs_scale_si": subs_scale_si,

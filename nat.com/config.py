@@ -178,7 +178,7 @@ ALREADY_NORMALIZED_FEATURES = [
 # values in the forecast window.  These are exposed as
 # `future_features` for TFT-style models.
 FUTURE_DRIVER_FEATURES = [
-    "rainfall_mm",
+    ("rainfall_mm", "rainfall", "rain_mm", "precip_mm")
     # Add more if you want multi-driver futures.
 ]
 

@@ -331,27 +331,27 @@ def _as_float1(x):
     arr = np.asarray(x).reshape(-1)
     return float(arr[0])
 
-def affine_from_scaler(scaler):
-    # MinMaxScaler: inverse is y = y_scaled*(max-min) + min
+def affine_from_scaler(scaler, idx: int = 0):
     if hasattr(scaler, "data_min_") and hasattr(scaler, "data_max_"):
-        scale = _as_float1(scaler.data_max_ - scaler.data_min_)
-        bias  = _as_float1(scaler.data_min_)
+        data_min = np.asarray(scaler.data_min_).reshape(-1)
+        data_max = np.asarray(scaler.data_max_).reshape(-1)
+        scale = float((data_max - data_min)[idx])
+        bias  = float(data_min[idx])
         return scale, bias
 
-    # StandardScaler: inverse is y = y_scaled*std + mean
     if hasattr(scaler, "scale_") and hasattr(scaler, "mean_"):
-        scale = _as_float1(scaler.scale_)
-        bias  = _as_float1(scaler.mean_)
-        return scale, bias
+        sc = np.asarray(scaler.scale_).reshape(-1)
+        mu = np.asarray(scaler.mean_).reshape(-1)
+        return float(sc[idx]), float(mu[idx])
 
-    # RobustScaler: inverse is y = y_scaled*scale + center
     if hasattr(scaler, "scale_") and hasattr(scaler, "center_"):
-        scale = _as_float1(scaler.scale_)
-        bias  = _as_float1(scaler.center_)
-        return scale, bias
+        sc = np.asarray(scaler.scale_).reshape(-1)
+        ce = np.asarray(scaler.center_).reshape(-1)
+        return float(sc[idx]), float(ce[idx])
 
     raise TypeError(
         f"Unsupported scaler type for affine inference: {type(scaler)}")
+
 
 def resolve_si_affine(
     cfg: dict,
@@ -372,6 +372,7 @@ def resolve_si_affine(
 
     if (scale is None or bias is None) and auto:
         info = scaler_info.get(target_name) or {}
+        idx  = int(info.get("idx", 0))
         scaler = info.get("scaler")
         if scaler is None and "scaler_path" in info:
             # load happens elsewhere in your code; keep it simple here
@@ -381,7 +382,7 @@ def resolve_si_affine(
                 f"[{prefix}] Cannot infer SI affine: scaler for target "
                 f"{target_name!r} not found in scaler_info."
             )
-        s, b = affine_from_scaler(scaler)
+        s, b = affine_from_scaler(scaler, idx=idx)
         if scale is None:
             scale = s
         if bias is None:

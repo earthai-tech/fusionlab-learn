@@ -60,34 +60,51 @@ def default_meta_from_model(model) -> Dict:
     """
     Build lightweight, JSON-serializable provenance from a model.
     """
-    return {
+    # Try to fetch time_units from model/scaling_kwargs if available
+    skw = getattr(model, "scaling_kwargs", None) or {}
+    time_units = skw.get("time_units", getattr(model, "time_units", None))
+
+    # Prefer your real attribute names, fallback to old ones
+    use_eff_h = bool(getattr(model, "use_effective_h",
+                     getattr(model, "use_effective_thickness", False)))
+    hd_factor = float(getattr(model, "hd_factor",
+                      getattr(model, "Hd_factor", 1.0)))
+    lambda_offset = float(getattr(model, "lambda_offset",
+                          getattr(model, "lambda_offsets", 0.0)))
+
+    meta = {
         "created_utc": _iso_now(),
         "model_name": type(model).__name__,
-        "model_version": getattr(model, "get_config", lambda: {})()
-            .get("model_version", None),
         "pde_modes_active": getattr(model, "pde_modes_active", None),
         "kappa_mode": getattr(model, "kappa_mode", None),
-        "use_effective_thickness":
-            bool(getattr(model, "use_effective_thickness", False)),
-        "Hd_factor": float(getattr(model, "Hd_factor", 1.0)),
-        "lambda_cons": float(getattr(model, "lambda_cons", 0.0)),
-        "lambda_gw": float(getattr(model, "lambda_gw", 0.0)),
-        "lambda_prior": float(getattr(model, "lambda_prior", 0.0)),
-        "lambda_smooth": float(getattr(model, "lambda_smooth", 0.0)),
-        "lambda_mv": float(getattr(model, "lambda_mv", 0.0)),
-        "quantiles": list(getattr(model, "quantiles", []) or []),
-        "lambda_bounds": float(getattr(model, "lambda_bounds", 0.0)),
-        "lambda_offsets": float(getattr(model, "lambda_offsets", 0.0)),
-        # --- Naming clarity for reviewers / plots ---------------------
-        # NOTE: current payload key "tau_prior" is the closure timescale
-        # computed from learned/effective fields (not a borehole prior).
+
+        # fixed / clarified
+        "use_effective_h": use_eff_h,
+        "hd_factor": hd_factor,
+        "lambda_offset": lambda_offset,
+
+        # optional: keep old keys for backward compat
+        "use_effective_thickness": use_eff_h,
+        "Hd_factor": hd_factor,
+        "lambda_offsets": lambda_offset,
+
+        "time_units": time_units,
+        "units": {
+            "Hd": "m",
+            "Ss": "1/m",
+            "K": f"m/{time_units}" if time_units else "unknown",
+            "tau": str(time_units) if time_units else "unknown",
+            "tau_prior": str(time_units) if time_units else "unknown",
+            "cons_res_vals": "see model scaling",  # residual may be scaled
+        },
+
+        # your naming clarity block is good:
         "tau_prior_definition": "tau_closure_from_learned_fields",
         "tau_prior_human_name": "tau_closure",
         "tau_prior_source": "model.evaluate_physics() closure head",
-        # Optional: keep formula as described in Methods 
         "tau_closure_formula": "Hd^2 * Ss / (pi^2 * kappa_b * K)",
-
     }
+    return meta
 
 # ---------------------------- core routines -------------------------------- #
 
@@ -307,101 +324,185 @@ def gather_physics_payload(
     dataset: Iterable,
     max_batches: Optional[int] = None,
     float_dtype=np.float32,
-    log_fn =None, 
-    **tqdm_kws
+    log_fn=None,
+    eps: float = 1e-12,
+    **tqdm_kws,
 ) -> Dict[str, np.ndarray]:
     """
-    Iterate a dataset and collect flattened arrays for physics plots.
+    Collect a *flat* physics payload from a batched dataset for diagnostics.
+
+    This function iterates over a `tf.data.Dataset` (or any iterable) and
+    calls `model.evaluate_physics(inputs, return_maps=True)` on each batch.
+    The returned per-batch tensors are flattened and concatenated into
+    1D arrays suitable for scatter plots, histograms, and summary stats.
+
+    Important
+    ---------
+    **No unit conversion is performed here.**
+    The payload is exported in *whatever units* `evaluate_physics(...)`
+    returns. Unit consistency is therefore a responsibility of the model's
+    physics implementation (and its `scaling_kwargs`), not this I/O layer.
+
+    Expected model output
+    ---------------------
+    `evaluate_physics(..., return_maps=True)` must return a dict with:
+      - "tau"       : relaxation time (effective timescale)
+      - "tau_prior" : closure timescale implied by (Hd, Ss, K, kappa)
+      - "K"         : hydraulic conductivity (effective)
+      - "Ss"        : specific storage (effective)
+      - "Hd" or "H" : drainage thickness (effective)
+      - "R_cons"    : consolidation residual values (diagnostic)
 
     Parameters
     ----------
     model : tf.keras.Model-like
-        Must expose `evaluate_physics(inputs, return_maps=True)` returning
-        a dict with keys: "K", "Ss", "H", "tau", "tau_prior", "R_cons".
+        A model exposing `evaluate_physics(inputs, return_maps=True)`.
     dataset : iterable
-        Yields (inputs, targets) or inputs that `evaluate_physics` accepts.
-    max_batches : int or None
-        Optional cap on the number of batches processed.
-    float_dtype : numpy dtype
-        Casting dtype for returned arrays (e.g., np.float32).
+        Yields either `inputs` or `(inputs, targets)`. If targets are present,
+        they are ignored (physics evaluation uses inputs only).
+    max_batches : int or None, default=None
+        If provided, stop after this many batches.
+    float_dtype : numpy dtype, default=np.float32
+        Dtype used when casting flattened arrays (keeps files compact).
+    log_fn : callable or None, default=None
+        Optional logger passed to the progress helper (e.g., `print`).
+    eps : float, default=1e-12
+        Small positive constant used to clip strictly-positive quantities
+        before applying log/log10. Prevents `-inf` and NaNs.
+    **tqdm_kws :
+        Extra keyword arguments forwarded to the progress helper.
 
     Returns
     -------
-    dict
-        1D arrays with keys: "tau", "tau_prior", "K", "Ss",
-        "Hd", "cons_res_vals", "log10_tau", "log10_tau_prior",
-        and a small "metrics" sub-dict with "eps_prior_rms", "r2_logtau".
+    payload : dict
+        Dictionary with 1D arrays:
+          - "tau", "tau_prior", "K", "Ss", "Hd", "cons_res_vals"
+          - "log10_tau", "log10_tau_prior"
+          - aliases: "tau_closure" == "tau_prior",
+                     "log10_tau_closure" == "log10_tau_prior"
+        and a nested dict `payload["metrics"]` with:
+          - "eps_prior_rms" : RMS of log(tau) - log(tau_prior)
+          - "r2_logtau"     : R² between log10(tau_prior) and log10(tau)
+          - "closure_consistency_rms" : (optional) RMS between log(tau_prior)
+            and log(tau_closure_calc) computed from (Hd, Ss, K) and a scalar
+            kappa extracted from the model (NaN if unavailable)
+        If kappa is available, also includes:
+          - "tau_closure_calc" : closure computed from Hd² Ss / (π² kappa K)
     """
-    taus, tau_ps, Ks, Sss, Hds, cons_vals = [], [], [], [], [], []
-    n = 0
-    # Optional tqdm progress bar
-    iterable = dataset
+    # ----------------------------- setup ---------------------------------
+    taus, tau_priors, Ks, Sss, Hds, cons_vals = [], [], [], [], [], []
+
+    # Progress reporting: use `len(dataset)` if available, else unknown total.
     try:
-        total = max_batches if max_batches is not  None else len(dataset) 
-    except: 
-        # Use len(dataset) if available; otherwise tqdm will show unknown total
-        total =None 
-    
+        total = max_batches if max_batches is not None else len(dataset)
+    except Exception:
+        total = max_batches  # may still be None
+
     iterable = with_progress(
         dataset,
         total=total,
         desc="Gathering physics payload",
         ascii=True,
-        leave=False, 
-        log_fn= log_fn, 
-        **tqdm_kws
+        leave=False,
+        log_fn=log_fn,
+        **tqdm_kws,
     )
 
+    # ------------------------- batch iteration ---------------------------
+    n_seen = 0
     for batch in iterable:
+        # Support datasets that yield either `inputs` or `(inputs, targets)`.
         inputs = batch[0] if isinstance(batch, (tuple, list)) else batch
+
         phys = model.evaluate_physics(inputs, return_maps=True)
 
+        # Flatten batch maps -> 1D arrays; concatenate at the end.
         taus.append(_to_1d(phys["tau"], dtype=float_dtype))
-        tau_ps.append(_to_1d(phys["tau_prior"], dtype=float_dtype))
+        tau_priors.append(_to_1d(phys["tau_prior"], dtype=float_dtype))
         Ks.append(_to_1d(phys["K"], dtype=float_dtype))
         Sss.append(_to_1d(phys["Ss"], dtype=float_dtype))
+
+        # Historical compatibility: some implementations return "H" not "Hd".
         Hd_key = "Hd" if "Hd" in phys else "H"
         Hds.append(_to_1d(phys[Hd_key], dtype=float_dtype))
 
-        # Hds.append(_to_1d(phys["H"], dtype=float_dtype))
         cons_vals.append(_to_1d(phys["R_cons"], dtype=float_dtype))
 
-        n += 1
-        if (max_batches is not None) and (n >= max_batches):
+        n_seen += 1
+        if max_batches is not None and n_seen >= max_batches:
             break
 
     if not taus:
         raise ValueError("gather_physics_payload: dataset yielded no batches.")
 
-    payload = {
-        "tau": np.concatenate(taus),
-        "tau_prior": np.concatenate(tau_ps),
-        "K": np.concatenate(Ks),
-        "Ss": np.concatenate(Sss),
-        "Hd": np.concatenate(Hds), #  # note: from phys["H"]
-        "cons_res_vals": np.concatenate(cons_vals),
+    # ------------------------ concatenate arrays -------------------------
+    payload: Dict[str, np.ndarray] = {
+        "tau": np.concatenate(taus, axis=0),
+        "tau_prior": np.concatenate(tau_priors, axis=0),
+        "K": np.concatenate(Ks, axis=0),
+        "Ss": np.concatenate(Sss, axis=0),
+        "Hd": np.concatenate(Hds, axis=0),
+        "cons_res_vals": np.concatenate(cons_vals, axis=0),
     }
 
-    # derived logs + metrics used in Fig.4 annotations
-    tau_clip = np.clip(payload["tau"], 1e-12, None)
-    tp_clip = np.clip(payload["tau_prior"], 1e-12, None)
+    # -------------------------- safe logs --------------------------------
+    tau_clip = np.clip(payload["tau"], eps, None)
+    tp_clip = np.clip(payload["tau_prior"], eps, None)
+
     payload["log10_tau"] = np.log10(tau_clip)
     payload["log10_tau_prior"] = np.log10(tp_clip)
+
+    # Back/forward compatible naming: "tau_prior" is the closure timescale.
     payload["tau_closure"] = payload["tau_prior"]
     payload["log10_tau_closure"] = payload["log10_tau_prior"]
 
+    # ---------------------- primary summary metrics ----------------------
     eps_prior_rms = float(
         np.sqrt(np.mean((np.log(tau_clip) - np.log(tp_clip)) ** 2))
     )
-    r2_logtau = _r2_from_logs(
-        payload["log10_tau_prior"], payload["log10_tau"]
-    )
+    r2_logtau = _r2_from_logs(payload["log10_tau_prior"], payload["log10_tau"])
+
     payload["metrics"] = {
         "eps_prior_rms": eps_prior_rms,
         "r2_logtau": r2_logtau,
     }
-    return payload
 
+    # ----------------- optional closure consistency check ----------------
+    # If the model exposes a usable scalar kappa, recompute tau_closure from
+    # (Hd, Ss, K) and compare to the reported tau_prior in log-space.
+    kappa_val = None
+    for attr in ("kappa_value", "kappa", "kappa_b", "kappa_bar"):
+        if hasattr(model, attr):
+            try:
+                cand = getattr(model, attr)
+                # handle keras Variables / params with `.numpy()`
+                if hasattr(cand, "numpy"):
+                    cand = cand.numpy()
+                kappa_val = float(np.asarray(cand).reshape(()))
+                break
+            except Exception:
+                kappa_val = None
+
+    if kappa_val is not None and np.isfinite(kappa_val) and kappa_val > 0:
+        K = np.clip(payload["K"], eps, None)
+        Ss = np.clip(payload["Ss"], eps, None)
+        Hd = np.clip(payload["Hd"], eps, None)
+
+        tau_closure_calc = (Hd ** 2) * Ss / (np.pi ** 2 * kappa_val * K)
+        payload["tau_closure_calc"] = tau_closure_calc
+
+        tp = np.clip(payload["tau_prior"], eps, None)
+        tc = np.clip(tau_closure_calc, eps, None)
+
+        payload["metrics"]["closure_consistency_rms"] = float(
+            np.sqrt(np.mean((np.log(tp) - np.log(tc)) ** 2))
+        )
+        payload["metrics"]["kappa_used_for_closure"] = float(kappa_val)
+    else:
+        payload["metrics"]["closure_consistency_rms"] = float("nan")
+        payload["metrics"]["kappa_used_for_closure"] = None
+
+    return payload
 
 def save_physics_payload(
     payload: Dict[str, np.ndarray],
@@ -477,16 +578,6 @@ def save_physics_payload(
             json.dump(meta, f, indent=2)
         return path
 
-    # df = pd.DataFrame({
-    #     "tau": payload["tau"],
-    #     "tau_prior": payload["tau_prior"],
-    #     "K": payload["K"],
-    #     "Ss": payload["Ss"],
-    #     "Hd": payload["Hd"],
-    #     "cons_res_vals": payload["cons_res_vals"],
-    #     "log10_tau": payload["log10_tau"],
-    #     "log10_tau_prior": payload["log10_tau_prior"],
-    # })
     df = pd.DataFrame({
         "tau": payload["tau"],
         "tau_prior": payload["tau_prior"],

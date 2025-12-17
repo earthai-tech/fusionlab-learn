@@ -2,6 +2,11 @@
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
 
+# $ python nat.com/sm3_synthetic_identifiability.py 
+# --outdir results/sm3_synth --n-realizations 50 --n-years 20 
+# --time-steps 5 --epochs 50 --noise-std 0.02 
+# --load-type step --seed 123
+
 from __future__ import annotations
 
 import os
@@ -204,7 +209,6 @@ def train_one_pixel(
         output_gwl_dim=1,
         forecast_horizon=1,
         quantiles=[0.1, 0.5, 0.9],
-        pde_mode="consolidation",
 
         embed_dim=32,
         hidden_units=64,
@@ -224,7 +228,37 @@ def train_one_pixel(
         use_effective_h=True,
         hd_factor=float(hd_factor),
         scale_pde_residuals=True,
+        
+
+        pde_mode="consolidation",
+        offset_mode="log10",  # optional but good for branch coverage
+    
+        # IMPORTANT: make units/bounds path non-trivial
+        scaling_kwargs=dict(
+            # subsidence target is in mm in  SM3 (alpha=1000) -> convert to meters
+            subs_scale_si=1e-3,
+            subs_bias_si=0.0,
+    
+            # head is conceptually meters in  synthetic setup
+            head_scale_si=1.0,
+            head_bias_si=0.0,
+    
+            # force the per-second conversion branch
+            time_units="year",
+    
+            # bounds used by _compute_bounds_residual()
+            bounds=dict(
+                H_min=3.0,
+                H_max=80.0,
+                logK_min=float(np.log(1e-10)),  # m/s
+                logK_max=float(np.log(1e-3)),
+                logSs_min=float(np.log(1e-8)),  # 1/m (typical-ish broad range)
+                logSs_max=float(np.log(1e-3)),
+            ),
+        ),
     )
+
+
 
     ds_tr = tf_dataset(Xtr, ytr, batch, True, seed)
     ds_va = tf_dataset(Xva, yva, batch, False, seed)
@@ -235,17 +269,21 @@ def train_one_pixel(
         break
 
     loss_sub = make_weighted_pinball([0.1, 0.5, 0.9], {0.1: 3.0, 0.5: 1.0, 0.9: 3.0})
+    
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=float(lr), clipnorm=1.0),
         loss={"subs_pred": loss_sub, "gwl_pred": tf.keras.losses.MSE},
         loss_weights={"subs_pred": 1.0, "gwl_pred": 0.0},
+    
         lambda_cons=0.1,
         lambda_gw=0.0,
         lambda_prior=0.1,
         lambda_smooth=0.01,
-        lambda_bounds=0.0,
         lambda_mv=0.01,
-        # lambda_offsets=0.0,
+    
+        lambda_bounds=0.05,      
+        # lambda_offset=1.0,       
+        lambda_offset=0.0,    # 10^0 = 1 (neutral), but exercises log10 branch
         mv_lr_mult=1.0,
         kappa_lr_mult=0.0,
     )
@@ -413,16 +451,23 @@ def main():
         Ss_prior = float(lp.Ss_prior)
 
         logtau_p = float(rng.uniform(np.log10(args.tau_min), np.log10(args.tau_max)))
-        tau_prior = float(10.0 ** logtau_p)
+        
+        # tau_prior is sampled in YEARS (for the simulator)
+        tau_prior_year = float(10.0 ** logtau_p)
+        
+        # SI version used by the model when time_units="year"
+        tau_prior_sec = tau_prior_year * SEC_PER_YEAR
 
         # ------------------------------------------------------------
-        # 3) Compute K_prior from closure (INTERNAL units: m/year)
+        # 3) Compute K_prior from closure (SI: m/s)
         #    tau = Hd^2 * Ss / (pi^2 * kappa_b * K)
         # -> K = Hd^2 * Ss / (pi^2 * kappa_b * tau)
         # ------------------------------------------------------------
-        K_prior = float(
+        
+        # K in SI (m/s), consistent with tau in seconds
+        K_prior_mps = float(
             (Hd_prior ** 2) * Ss_prior
-            / (np.pi ** 2 * float(args.kappa_b) * tau_prior)
+            / (np.pi ** 2 * float(args.kappa_b) * tau_prior_sec)
         )
 
         # ------------------------------------------------------------
@@ -433,14 +478,15 @@ def main():
 
         logtau_t = float(logtau_p + rng.normal(0.0, float(args.tau_spread_dex)))
         tau_true = float(10.0 ** logtau_t)
-        tau_true = float(np.clip(tau_true, args.tau_min, args.tau_max))
-
-        # Hd is not independently learnable in the current head -> keep fixed
+        
+        tau_true_year = float(np.clip(tau_true, args.tau_min, args.tau_max))
+        tau_true_sec  = tau_true_year * SEC_PER_YEAR
+        
         Hd_true = float(Hd_prior)
-
-        K_true = float(
+        
+        K_true_mps = float(
             (Hd_true ** 2) * Ss_true
-            / (np.pi ** 2 * float(args.kappa_b) * tau_true)
+            / (np.pi ** 2 * float(args.kappa_b) * tau_true_sec)
         )
 
         # ------------------------------------------------------------
@@ -461,7 +507,7 @@ def main():
         unit_scale = float(args.alpha)  # interpret --alpha as "unit scale"
         alpha_eff = unit_scale * Ss_true * H_eff
         
-        s_cum = settlement_from_tau(years, dh, tau_true, alpha=alpha_eff)
+        s_cum = settlement_from_tau(years, dh, tau_true_year, alpha=alpha_eff)
 
         y_inc = np.zeros_like(s_cum)
         y_inc[0] = s_cum[0]
@@ -471,8 +517,14 @@ def main():
         # ------------------------------------------------------------
         # 6) Build windows + split
         # ------------------------------------------------------------
+        # static_vec = np.concatenate(
+        #     [one_hot(lith_idx, n_lith), np.array([H_eff], np.float32)],
+        #     axis=0
+        # ).astype(np.float32)
+        is_capped = float(H_phys > args.thickness_cap)
         static_vec = np.concatenate(
-            [one_hot(lith_idx, n_lith), np.array([H_eff], np.float32)],
+            [one_hot(lith_idx, n_lith),
+             np.array([H_eff, is_capped], np.float32)],
             axis=0
         ).astype(np.float32)
 
@@ -515,33 +567,34 @@ def main():
             metadata={
                 "synthetic": True,
                 "realisation": int(r),
-
-                # ground truth (INTERNAL)
-                "tau_true": float(tau_true),      # years
-                "K_true": float(K_true),          # m/year (internal)
+            
+                # --- ground truth (SI for units-aware physics) ---
+                "tau_true_sec": float(tau_true_sec),     # seconds
+                "K_true_mps": float(K_true_mps),         # m/s
                 "Ss_true": float(Ss_true),
-                "Hd_true": float(Hd_true),        # m
-
-                # priors used (INTERNAL)
-                "tau_prior": float(tau_prior),    # sampled (years)
-                "K_prior": float(K_prior),        # derived (m/year)
+                "Hd_true": float(Hd_true),               # m
+            
+                # --- priors (SI) ---
+                "tau_prior_sec": float(tau_prior_sec),   # seconds
+                "K_prior_mps": float(K_prior_mps),       # m/s
                 "Ss_prior": float(Ss_prior),
                 "Hd_prior": float(Hd_prior),
-
+            
+                # optional: keep the “human readable” year versions too
+                "tau_true_year": float(tau_true_year),
+                "tau_prior_year": float(tau_prior_year),
+            
                 # thickness bookkeeping
                 "H_eff": float(H_eff),
                 "H_phys": float(H_phys),
-
+            
                 # load / noise settings
                 "load_type": str(args.load_type),
                 "amp_dh": float(amp),
                 "step_year": int(step_year),
                 "noise_std": float(args.noise_std),
+            }, 
 
-                # unit audit trail (optional)
-                "K_prior_mps": float(K_prior / SEC_PER_YEAR),
-                "K_true_mps": float(K_true / SEC_PER_YEAR),
-            },
         )
 
         # ------------------------------------------------------------
@@ -551,9 +604,9 @@ def main():
 
         diag = identifiability_diagnostics_from_payload(
             payload,
-            tau_true=tau_true,
-            K_true=K_true, Ss_true=Ss_true, Hd_true=Hd_true,
-            K_prior=K_prior, Ss_prior=Ss_prior, Hd_prior=Hd_prior,
+            tau_true=tau_true_sec,
+            K_true=K_true_mps, Ss_true=Ss_true, Hd_true=Hd_true,
+            K_prior=K_prior_mps, Ss_prior=Ss_prior, Hd_prior=Hd_prior,
         )
 
         with open(os.path.join(run_dir, "sm3_identifiability_diag.json"),
@@ -569,24 +622,27 @@ def main():
             "realisation": int(r),
             "lith_idx": int(lith_idx),
 
-            "tau_true": float(tau_true),
-            "tau_prior": float(tau_prior),
-
-            "K_true_myr": float(K_true),
-            "K_prior_myr": float(K_prior),
-
+            "tau_true_year": float(tau_true_year),
+            "tau_prior_year": float(tau_prior_year),
+        
+            "tau_true_sec": float(tau_true_sec),
+            "tau_prior_sec": float(tau_prior_sec),
+        
+            "K_true_mps": float(K_true_mps),
+            "K_prior_mps": float(K_prior_mps),
+        
             "Ss_true": float(Ss_true),
             "Ss_prior": float(Ss_prior),
-
             "Hd_true": float(Hd_true),
             "Hd_prior": float(Hd_prior),
-
-            "tau_est_med": float(eff["tau"]),
-            "tau_prior_med": float(eff["tau_prior"]),
-            "K_est_med": float(eff["K"]),
+        
+            "tau_est_med": float(eff["tau"]),        # should now be seconds if model is consistent
+            "K_est_med": float(eff["K"]),            # should now be m/s
             "Ss_est_med": float(eff["Ss"]),
             "Hd_est_med": float(eff["Hd"]),
         }
+        row["kappa_b"] = float(args.kappa_b)
+        
         row.update(flatten_diag(diag))
         rows.append(row)
 

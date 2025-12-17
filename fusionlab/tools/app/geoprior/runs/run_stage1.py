@@ -549,12 +549,16 @@ def run_stage1(
     )
 
     _censor_cfg = cfg.get("censoring", {}) or {}
-    CENSORING_SPECS = _censor_cfg.get("specs", [])
+    CENSORING_SPECS = _censor_cfg.get("specs") or cfg.get("CENSORING_SPECS", [])
     INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = bool(
-        _censor_cfg.get("flags_as_dynamic", True)
+        _censor_cfg.get("flags_as_dynamic", cfg.get(
+            "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC", True)
+            )
     )
     USE_EFFECTIVE_H_FIELD = bool(
-        _censor_cfg.get("use_effective_h_field", True)
+        _censor_cfg.get("use_effective_h_field", cfg.get(
+            "USE_EFFECTIVE_H_FIELD", True)
+            )
     )
 
     BASE_OUTPUT_DIR = base_output_dir
@@ -1000,7 +1004,9 @@ def run_stage1(
     val_size = int(0.2 * num_train)
     train_size = num_train - val_size
 
-    full_ds = full_ds.shuffle(buffer_size=num_train, seed=42)
+    full_ds = full_ds.shuffle(
+        buffer_size=num_train, seed=42, reshuffle_each_iteration=False
+    )
     train_ds = full_ds.take(train_size).batch(32).prefetch(tf.data.AUTOTUNE)
     val_ds = full_ds.skip(train_size).batch(32).prefetch(tf.data.AUTOTUNE)
 
