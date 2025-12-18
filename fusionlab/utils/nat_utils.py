@@ -826,6 +826,119 @@ def best_epoch_and_metrics(
     }
     return be, metrics_at_best
 
+def build_censor_mask(
+    xb: dict,
+    H,
+    idx: int | None,
+    thresh: float = 0.5,
+    *,
+    source: str = "dynamic",          # {"dynamic", "future"}
+    reduce_time: str = "any",         # {"any", "last", "all"}
+    align: str = "broadcast",         # {"broadcast", "crop", "pad_false", "pad_edge", "error"}
+) -> "tf.Tensor":
+    """
+    Build a censor mask aligned to the forecast horizon: (B, H, 1).
+
+    Parameters
+    ----------
+    source:
+        - "dynamic": read flag from xb["dynamic_features"][:, :, idx]
+          (history window, length TIME_STEPS).
+        - "future":  read flag from xb["future_features"][:, :, idx]
+          (forecast window, should have length H).
+    reduce_time:
+        When source="dynamic" and the flag is effectively static, collapse
+        the history axis to one label per sample:
+          - "any":  censored if any history step is flagged (robust default)
+          - "last": use last history step
+          - "all":  censored only if all history steps are flagged
+    align:
+        How to align to horizon H if time length != H (mainly for safety):
+          - "broadcast": repeat a single-step label to all H steps (recommended)
+          - "crop":      take last H steps (only works if T > H)
+          - "pad_false": pad missing steps with False (if T < H)
+          - "pad_edge":  pad missing steps by repeating last (if T < H)
+          - "error":     raise if mismatch
+    """
+    try:
+        import tensorflow as tf  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise ImportError(TF_IMPORT_ERROR_MSG) from exc
+
+    # Resolve batch size
+    if "coords" in xb:
+        B = tf.shape(xb["coords"])[0]
+    else:
+        B = tf.shape(xb.get("dynamic_features", xb.get("future_features")))[0]
+
+    H = tf.cast(H, tf.int32)
+
+    if idx is None:
+        return tf.zeros((B, H, 1), dtype=tf.bool)
+
+    key = "dynamic_features" if source == "dynamic" else "future_features"
+    feat = xb.get(key, None)
+    if feat is None:
+        return tf.zeros((B, H, 1), dtype=tf.bool)
+
+    nfeat = tf.shape(feat)[-1]
+
+    def _all_false():
+        return tf.zeros((B, H, 1), dtype=tf.bool)
+
+    def _align_time(m):  # m: (B, T, 1)
+        T = tf.shape(m)[1]
+
+        def _broadcast_from_one(step):
+            return tf.tile(step, [1, H, 1])
+
+        if align == "error":
+            tf.debugging.assert_equal(T, H, message=f"{key} length != H")
+            return m
+
+        if align == "crop":
+            # if T < H, this cannot increase length -> would still mismatch
+            return tf.cond(T >= H, lambda: m[:, -H:, :], lambda: m)
+
+        if align == "pad_false":
+            # pad at front so last steps line up
+            pad = tf.maximum(H - T, 0)
+            m2 = tf.pad(m, paddings=[[0, 0], [pad, 0], [0, 0]], constant_values=False)
+            return m2[:, -H:, :]
+
+        if align == "pad_edge":
+            pad = tf.maximum(H - T, 0)
+            last = m[:, -1:, :]
+            m2 = tf.concat([tf.tile(last, [1, pad, 1]), m], axis=1)
+            return m2[:, -H:, :]
+
+        # default: "broadcast"
+        # If already H, keep it; else broadcast a single-step summary.
+        return tf.cond(
+            tf.equal(T, H),
+            lambda: m,
+            lambda: _broadcast_from_one(m[:, -1:, :]),
+        )
+
+    def _build():
+        m = (feat[..., idx:idx + 1] > thresh)  # (B, T, 1)
+
+        # If source is dynamic, we usually want a sample-level censor label.
+        if source == "dynamic":
+            if reduce_time == "any":
+                one = tf.reduce_any(m, axis=1, keepdims=True)   # (B,1,1)
+                return tf.tile(one, [1, H, 1])                  # (B,H,1)
+            if reduce_time == "all":
+                one = tf.reduce_all(m, axis=1, keepdims=True)
+                return tf.tile(one, [1, H, 1])
+            if reduce_time == "last":
+                one = m[:, -1:, :]
+                return tf.tile(one, [1, H, 1])
+
+        # Otherwise, align time dimension to horizon (future usually already matches)
+        return _align_time(m)
+
+    return tf.cond(tf.less(idx, nfeat), _build, _all_false)
 
 def build_censor_mask_from_dynamic(
     xb: dict,
@@ -848,7 +961,11 @@ def build_censor_mask_from_dynamic(
       last ``H`` steps (consistent with the forecasting horizon).
     - If no dynamic features or index are available, returns an
       all-False mask of shape ``(B, H, 1)``.
-
+      
+    If the censor flag only exists on the history window (T_dyn=TIME_STEPS),
+    but the evaluation is done on the forecast horizon (H=FORECAST_HORIZON),
+    we must broadcast/pad because slicing cannot increase length.
+    
     Parameters
     ----------
     xb : dict
@@ -868,30 +985,97 @@ def build_censor_mask_from_dynamic(
         Boolean mask of shape ``(B, H, 1)`` where True indicates
         censored samples.
     """
+#     try:
+#         import tensorflow as tf  # type: ignore
+#     except Exception as exc:  # pragma: no cover
+#         raise ImportError(TF_IMPORT_ERROR_MSG) from exc
+
+#     dyn = xb.get("dynamic_features", None)
+#     if dyn is not None:
+#         # Defensive programming: ensure the requested index is in
+#         # range before indexing.
+#         if dyn.shape[-1] and dyn_idx is not None and dyn_idx < dyn.shape[-1]:
+#             m_dyn = dyn[..., dyn_idx:dyn_idx + 1] > thresh  # (B, T_dyn, 1)
+#             T_dyn = tf.shape(m_dyn)[1]
+#             # If time dimension does not match the requested H,
+#             # keep only the last H steps (matching the forecast
+#             # window).
+#             return tf.cond(
+#                 tf.not_equal(T_dyn, H),
+#                 lambda: m_dyn[:, -H:, :],
+#                 lambda: m_dyn,
+#             )
+
+#     # Fallback: no flag available → no censoring anywhere.
+#     B = tf.shape(xb["coords"])[0]
+#     return tf.zeros((B, H, 1), dtype=tf.bool)
+
+# def build_censor_mask_from_dynamic(
+#     xb: dict,
+#     H,
+#     dyn_idx: int | None,
+#     thresh: float = 0.5,
+# ) -> "tf.Tensor":
+#     """
+#     Return a boolean mask of shape (B, H, 1) aligned to the *forecast horizon*.
+
+#     If the censor flag only exists on the history window (T_dyn=TIME_STEPS),
+#     but the evaluation is done on the forecast horizon (H=FORECAST_HORIZON),
+#     we must broadcast/pad because slicing cannot increase length.
+#     """
     try:
         import tensorflow as tf  # type: ignore
     except Exception as exc:  # pragma: no cover
         raise ImportError(TF_IMPORT_ERROR_MSG) from exc
 
-    dyn = xb.get("dynamic_features", None)
-    if dyn is not None:
-        # Defensive programming: ensure the requested index is in
-        # range before indexing.
-        if dyn.shape[-1] and dyn_idx is not None and dyn_idx < dyn.shape[-1]:
-            m_dyn = dyn[..., dyn_idx:dyn_idx + 1] > thresh  # (B, T_dyn, 1)
-            T_dyn = tf.shape(m_dyn)[1]
-            # If time dimension does not match the requested H,
-            # keep only the last H steps (matching the forecast
-            # window).
-            return tf.cond(
-                tf.not_equal(T_dyn, H),
-                lambda: m_dyn[:, -H:, :],
-                lambda: m_dyn,
-            )
+    # Resolve B
+    if "coords" in xb:
+        B = tf.shape(xb["coords"])[0]
+    else:
+        dyn0 = xb.get("dynamic_features", None)
+        B = tf.shape(dyn0)[0] if dyn0 is not None else 0
 
-    # Fallback: no flag available → no censoring anywhere.
-    B = tf.shape(xb["coords"])[0]
-    return tf.zeros((B, H, 1), dtype=tf.bool)
+    H = tf.cast(H, tf.int32)
+
+    # No flag → no censoring
+    dyn = xb.get("dynamic_features", None)
+    if dyn is None or dyn_idx is None:
+        return tf.zeros((B, H, 1), dtype=tf.bool)
+
+    # Defensive: dyn_idx range (works even if dyn.shape[-1] is None)
+    nfeat = tf.shape(dyn)[-1]
+    def _all_false():
+        return tf.zeros((B, H, 1), dtype=tf.bool)
+
+    def _build():
+        # (B, T_dyn, 1)
+        m_dyn = (dyn[..., dyn_idx:dyn_idx + 1] > thresh)
+        T_dyn = tf.shape(m_dyn)[1]
+
+        # Case 1: exact match
+        def _same():
+            return m_dyn
+
+        # Case 2: history longer than horizon → take last H
+        def _crop():
+            return m_dyn[:, -H:, :]
+
+        # Case 3: history shorter than horizon → broadcast last observed flag
+        def _broadcast_last():
+            last = m_dyn[:, -1:, :]              # (B,1,1)
+            return tf.tile(last, [1, H, 1])      # (B,H,1)
+
+        return tf.case(
+            [
+                (tf.equal(T_dyn, H), _same),
+                (tf.greater(T_dyn, H), _crop),
+                (tf.less(T_dyn, H), _broadcast_last),
+            ],
+            default=_broadcast_last,
+            exclusive=True,
+        )
+
+    return tf.cond(tf.less(dyn_idx, nfeat), _build, _all_false)
 
 
 def name_of(obj: object) -> str:

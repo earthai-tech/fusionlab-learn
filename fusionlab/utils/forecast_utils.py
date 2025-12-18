@@ -853,6 +853,29 @@ def _inverse_with_block(values, block, col_name):
         return values
     return inv
 
+def _auto_output_target_name(
+    target_name: str,
+    output_target_name: str | None,
+    *,
+    suffixes: tuple[str, ...] = ("_cum", "_cumulative"),
+) -> str:
+    """
+    If output_target_name is not provided, derive a clean output prefix.
+
+    Examples
+    --------
+    target_name='subsidence_cum'   -> 'subsidence'
+    target_name='subsidence'       -> 'subsidence'
+    target_name='subsidence_cumulative' -> 'subsidence'
+    """
+    if output_target_name is not None and str(output_target_name).strip():
+        return str(output_target_name)
+
+    name = str(target_name)
+    for sfx in suffixes:
+        if name.endswith(sfx):
+            return name[: -len(sfx)]
+    return name
 
 def format_and_forecast(
     y_pred: dict,
@@ -860,7 +883,11 @@ def format_and_forecast(
     *,
     coords: np.ndarray | None = None,
     quantiles: list[float] | None = None,
+    
     target_name: str = "subsidence",
+    output_target_name: str | None = None,   
+    scaler_target_name: str | None = None,   
+
     target_key_pred: str = "subs_pred",
     component_index: int = 0,
     scaler_info: dict | None = None,
@@ -876,6 +903,8 @@ def format_and_forecast(
     #
     eval_export: object = "all",
     value_mode: str = "rate",   
+    input_value_mode: str = "rate",    # what MODEL produced (NEW)
+    rate_first: str = "cum_over_dtref",# for cumulative->rate (NEW)
     absolute_baseline: float | Mapping[int, float] | None = None,  
     # Output / I/O
     sample_index_offset: int = 0,
@@ -960,8 +989,62 @@ def format_and_forecast(
         column ``'<target_name>_pred'`` is emitted instead.
 
     target_name : str, default='subsidence'
-        Base name of the physical target (used for column names
-        like ``subsidence_q10`` or ``subsidence_actual``).
+        Logical target identifier used as the default key for locating the
+        target scaler in ``scaler_info`` and as a fallback for resolving
+        truth arrays in ``y_true``.
+    
+        Column naming is controlled by ``output_target_name`` (or the
+        auto-derived output prefix when it is ``None``).
+
+    output_target_name : str or None, optional
+        Output prefix used when creating DataFrame columns for predictions
+        and actuals.
+    
+        This controls the *column naming* only (e.g. the function will
+        emit ``f"{output_target_name}_q10"``, ``f"{output_target_name}_pred"``,
+        and ``f"{output_target_name}_actual"``).
+    
+        If ``None`` (default), the function derives the output prefix from
+        ``target_name`` and applies a small convenience rule:
+    
+        * if ``target_name`` ends with ``"_cum"`` (or ``"_cumulative"``),
+          the suffix is stripped for output naming.
+    
+        This keeps downstream tooling consistent (many plotting and metrics
+        utilities expect names like ``subsidence_q10`` rather than
+        ``subsidence_cum_q10``), while still allowing the scaler lookup to
+        use the true target key::
+    
+            >>> target_name = "subsidence_cum"
+            >>> output_target_name = None
+            # Output columns become: subsidence_q10, subsidence_q50, subsidence_actual
+        
+            >>> target_name = "subsidence_cum"
+            >>> output_target_name = "subsidence_cum"
+            # Output columns keep the suffix: subsidence_cum_q10, ...
+    
+    scaler_target_name : str or None, optional
+        Name used to locate the target scaling block inside ``scaler_info``
+        and to perform inverse-transform for predictions and actuals.
+    
+        This controls the *scaler key and inverse scaling*, not the output
+        column naming.
+    
+        If ``None`` (default), the scaler key is assumed to be
+        ``target_name``. This is important when you want clean output
+        columns but the scaler was fitted/stored under the original target
+        name.
+    
+        Notes:
+        
+        A common pattern is to keep ``target_name="subsidence_cum"`` so the
+        scaler lookup matches the Stage-1 schema, while letting
+        ``output_target_name=None`` produce clean output columns:
+    
+        * inverse-transform uses ``scaler_target_name="subsidence_cum"``
+          (implicitly via ``target_name``),
+        * output columns are named ``subsidence_*`` due to the auto-strip
+          rule.
 
     target_key_pred : str, default='subs_pred'
         Key inside ``y_pred`` that holds the subsidence forecasts.
@@ -1219,9 +1302,21 @@ def format_and_forecast(
         DataFrame containing predictions for the future horizon,
         without actuals.  Same structure as ``df_eval`` but without
         the ``'<target_name>_actual'`` column.
+    
+    Notes
+    -----
+    This function separates *scaler lookup* (``scaler_target_name``) from
+    *output column naming* (``output_target_name``). 
+    This is useful when the stored scaler key contains suffixes like 
+    ``"_cum"`` but downstream tools expect canonical names such 
+    as ``subsidence_*``.
+
+
     """
 
     t_col, x_col, y_col = coord_columns
+    scale_name = scaler_target_name or target_name
+    out_name = _auto_output_target_name(target_name, output_target_name)
 
     vlog(
         "[format_and_forecast] Starting formatting of predictions "
@@ -1301,25 +1396,28 @@ def format_and_forecast(
     subs_true_all_flat = None      # (B*H,)
     true_arr = None
 
+    true_key_candidates = (out_name, scale_name, target_key_pred, target_name)
+    
+    true_arr = None
     if y_true is not None:
-        for k in (target_name, target_key_pred):
+        for k in true_key_candidates:
             if k in y_true:
                 true_arr = np.asarray(y_true[k])
                 break
-
-        if true_arr is not None:
-            if true_arr.ndim != 3:
-                vlog(
-                    "[format_and_forecast] y_true has unexpected ndim; "
-                    "skipping actual inverse transform.",
-                    verbose=verbose,
-                    level=1,
-                    logger=logger,
-                )
-            else:
-                # (B, H, O) → pick component_index
-                subs_true_eval = true_arr[:, s_idx, component_index]          # (B,)
-                subs_true_all_flat = true_arr[:, :, component_index].reshape(-1)  # (B*H,)
+            
+    if true_arr is not None:
+        if true_arr.ndim != 3:
+            vlog(
+                "[format_and_forecast] y_true has unexpected ndim; "
+                "skipping actual inverse transform.",
+                verbose=verbose,
+                level=1,
+                logger=logger,
+            )
+        else:
+            # (B, H, O) → pick component_index
+            subs_true_eval = true_arr[:, s_idx, component_index]          # (B,)
+            subs_true_all_flat = true_arr[:, :, component_index].reshape(-1)  # (B*H,)
 
     # ------------------------------------------------------------------
     # Coords (only used for x/y; time will come from temporal config)
@@ -1376,9 +1474,9 @@ def format_and_forecast(
     # ------------------------------------------------------------------
     # Inverse-transform subsidence (pred + actual) using scaler_info
     # ------------------------------------------------------------------
-    if isinstance(scaler_info, dict) and target_name in scaler_info:
+    if isinstance(scaler_info, dict) and scale_name  in scaler_info:
         # New Stage-1 schema: one entry per target (e.g. "subsidence")
-        target_block = scaler_info[target_name]
+        target_block = scaler_info[scale_name]
     else:
         # Backwards compatibility with old "targets"/"target"/"y" schema
         target_block = _find_scaler_block(scaler_info)
@@ -1389,22 +1487,22 @@ def format_and_forecast(
         eval_cols = []
         for j in range(subs_eval_q.shape[1]):
             vals = subs_eval_q[:, j].reshape(-1)
-            vals_inv = _inverse_with_block(vals, target_block, target_name)
+            vals_inv = _inverse_with_block(vals, target_block, scale_name)
             eval_cols.append(vals_inv)
         subs_eval_q = np.stack(eval_cols, axis=1)  # (B, Q)
     else:
         vals = subs_eval_q.reshape(-1)
-        subs_eval_q = _inverse_with_block(vals, target_block, target_name)
+        subs_eval_q = _inverse_with_block(vals, target_block, scale_name)
 
     # Inverse-transform ground truth (last step + all horizons)
     if subs_true_eval is not None:
         subs_true_eval = _inverse_with_block(
-            subs_true_eval.reshape(-1), target_block, target_name
+            subs_true_eval.reshape(-1), target_block, scale_name
         )
 
     if subs_true_all_flat is not None:
         subs_true_all_flat = _inverse_with_block(
-            subs_true_all_flat.reshape(-1), target_block, target_name
+            subs_true_all_flat.reshape(-1), target_block, scale_name
         )
 
     # Future
@@ -1412,13 +1510,13 @@ def format_and_forecast(
         future_cols = []
         for j in range(subs_future_q.shape[2]):
             vals = subs_future_q[:, :, j].reshape(-1)
-            vals_inv = _inverse_with_block(vals, target_block, target_name)
+            vals_inv = _inverse_with_block(vals, target_block, scale_name)
             future_cols.append(vals_inv)
         subs_future_flat = np.stack(future_cols, axis=1)  # (B*H, Q)
     else:
         vals = subs_future_q.reshape(-1)
         subs_future_flat = _inverse_with_block(
-            vals, target_block, target_name
+            vals, target_block, scale_name
         ).reshape(-1)
 
     # ------------------------------------------------------------------
@@ -1464,28 +1562,12 @@ def format_and_forecast(
         if not time_as_datetime:
             return values
         return pd.to_datetime(values, format=time_format, errors="coerce")
-
-    # Eval time: default to train_end_time or first future time
-    if train_end_time is not None:
-        eval_time_value = train_end_time
-    else:
-        eval_time_value = future_time_grid[-1]
-
-    eval_time_series = _to_time(
-        np.full(B, eval_time_value, dtype=object)
-    )
-
-    # Future times: repeat grid for each sample
-    future_time_series = _to_time(
-        np.tile(future_time_grid, B)
-    )
-
+    
     # ------------------------------------------------------------------
-    # Build evaluation time grid for ALL horizons (e.g. 2020,2021,2022)
+    # Build evaluation time grid for ALL horizons first (length H)
     # ------------------------------------------------------------------
-    eval_all_time_series = None
     if train_end_time is not None:
-        # Try numeric arithmetic: end - (H-1), ..., end
+        # Numeric arithmetic: end-(H-1), ..., end
         try:
             end_val = float(train_end_time)
             eval_time_grid_full = np.array(
@@ -1493,18 +1575,29 @@ def format_and_forecast(
                 dtype=float,
             )
         except Exception:
-            # Fallback: use the same train_end_time for all steps
+            # Fallback: same label repeated
             eval_time_grid_full = np.array(
                 [train_end_time for _ in range(H)], dtype=object
             )
     else:
-        # No explicit train_end_time: fall back to generic 1..H
-        eval_time_grid_full = np.arange(1, H + 1)
-
-    # Repeat per sample (B*H)
-    eval_all_time_series = _to_time(
-        np.tile(eval_time_grid_full, B)
-    )
+        # If no train_end_time provided, use future grid if it matches H,
+        # otherwise fall back to 1..H.
+        if future_time_grid is not None and len(future_time_grid) == H:
+            eval_time_grid_full = np.asarray(future_time_grid)
+        else:
+            eval_time_grid_full = np.arange(1, H + 1)
+    
+    # ------------------------------------------------------------------
+    # eval time must correspond to the chosen eval_forecast_step (s_idx)
+    # ------------------------------------------------------------------
+    eval_time_value = eval_time_grid_full[s_idx]
+    eval_time_series = _to_time(np.full(B, eval_time_value, dtype=object))
+    
+    # Future times: repeat grid for each sample
+    future_time_series = _to_time(np.tile(np.asarray(future_time_grid), B))
+    
+    # Repeat per sample for (B*H)
+    eval_all_time_series = _to_time(np.tile(eval_time_grid_full, B))
 
     # ------------------------------------------------------------------
     # Build DataFrames
@@ -1526,12 +1619,12 @@ def format_and_forecast(
     if quantiles is not None:
         for j, q in enumerate(quantiles[: subs_eval_q.shape[1]]):
             q_name = int(round(q * 100))
-            df_eval[f"{target_name}_q{q_name:d}"] = subs_eval_q[:, j]
+            df_eval[f"{out_name}_q{q_name:d}"] = subs_eval_q[:, j]
     else:
-        df_eval[f"{target_name}_pred"] = subs_eval_q
+        df_eval[f"{out_name}_pred"] = subs_eval_q
 
     if subs_true_eval is not None:
-        df_eval[f"{target_name}_actual"] = subs_true_eval
+        df_eval[f"{out_name}_actual"] = subs_true_eval
 
     df_eval[t_col] = eval_time_series
 
@@ -1557,9 +1650,9 @@ def format_and_forecast(
     if quantiles is not None:
         for j, q in enumerate(quantiles[: subs_future_flat.shape[1]]):
             q_name = int(round(q * 100))
-            df_future[f"{target_name}_q{q_name:d}"] = subs_future_flat[:, j]
+            df_future[f"{out_name}_q{q_name:d}"] = subs_future_flat[:, j]
     else:
-        df_future[f"{target_name}_pred"] = subs_future_flat
+        df_future[f"{out_name}_pred"] = subs_future_flat
 
     df_future[t_col] = future_time_series
 
@@ -1579,7 +1672,7 @@ def format_and_forecast(
                 "sample_idx": sample_idx_future,      # length B*H
                 "forecast_step": forecast_step_future,
                 t_col: eval_all_time_series,          # 2020,2021,2022
-                f"{target_name}_actual": subs_true_all_flat,
+                f"{out_name}_actual": subs_true_all_flat,
             }
         )
 
@@ -1587,9 +1680,9 @@ def format_and_forecast(
         if quantiles is not None:
             for j, q in enumerate(quantiles[: subs_future_flat.shape[1]]):
                 q_name = int(round(q * 100))
-                df_eval_all[f"{target_name}_q{q_name:d}"] = subs_future_flat[:, j]
+                df_eval_all[f"{out_name}_q{q_name:d}"] = subs_future_flat[:, j]
         else:
-            df_eval_all[f"{target_name}_pred"] = subs_future_flat
+            df_eval_all[f"{out_name}_pred"] = subs_future_flat
 
         # Add coords if available
         if coord_x_future is not None and coord_x_future.shape[0] == N:
@@ -1598,100 +1691,143 @@ def format_and_forecast(
             df_eval_all[y_col] = coord_y_future
 
     # ------------------------------------------------------------------
-    # Optional: transform values to cumulative modes
+    # Optional: transform values between (rate <-> cumulative)
     # ------------------------------------------------------------------
-    mode = (value_mode or "rate").lower()
-
-    # Which value columns to transform?
+    out_mode = (value_mode or "rate").lower()
+    in_mode  = (input_value_mode or "rate").lower()
+    
+    # prediction columns to transform
     pred_cols = [
         c for c in df_future.columns
-        if c.startswith(f"{target_name}_q") or c == f"{target_name}_pred"
+        if c.startswith(f"{out_name}_q") or c == f"{out_name}_pred"
     ]
-
-    if mode not in (
-        "rate",
-        "increment",
-        "diff",
-        "delta",
-        "cum",
-        "cumulative",
-        "relative_cumulative",
-        "absolute_cumulative",
-        "abs_cum",
-        "absolute",
-    ):
+    
+    # normalize mode aliases
+    CUM_MODES = {
+        "cum", "cumulative", "relative_cumulative",
+        "absolute_cumulative", "abs_cum", "absolute"
+    }
+    RATE_MODES = {"rate", "increment", "diff", "delta"}
+    
+    if out_mode not in (CUM_MODES | RATE_MODES):
         vlog(
             f"[format_and_forecast] Unknown value_mode={value_mode!r}; "
             "falling back to 'rate'.",
-            verbose=verbose,
-            level=1,
-            logger=logger,
+            verbose=verbose, level=1, logger=logger,
         )
-        mode = "rate"
-
-    if mode != "rate" and not pred_cols:
+        out_mode = "rate"
+    
+    if in_mode not in (CUM_MODES | RATE_MODES):
         vlog(
-            "[format_and_forecast] No prediction columns found to transform "
-            f"for target={target_name!r}; skipping cumulative mode.",
-            verbose=verbose,
-            level=1,
-            logger=logger,
+            f"[format_and_forecast] Unknown input_value_mode={input_value_mode!r}; "
+            "falling back to 'rate'.",
+            verbose=verbose, level=1, logger=logger,
         )
-        mode = "rate"
-
-    if mode != "rate":
-        # 1) relative cumulative over horizon per sample
+        in_mode = "rate"
+    
+    def _rate_by_sample(
+        df: pd.DataFrame,
+        cols: list[str],
+        *,
+        include_actual: bool,
+        time_col: str,
+        group_col: str = "sample_idx",
+        first: str = "cum_over_dtref",
+    ) -> pd.DataFrame:
+        out = df.copy()
+        use_cols = list(cols)
+        if include_actual:
+            act = f"{out_name}_actual"
+            if act in out.columns:
+                use_cols.append(act)
+    
+        # group per sample (each sample has H rows)
+        for _, gidx in out.groupby(group_col, sort=False).groups.items():
+            g = out.loc[gidx].sort_values("forecast_step")
+            t = pd.to_numeric(g[time_col], errors="coerce").to_numpy(float)
+    
+            if t.size <= 1:
+                continue
+    
+            dt = np.diff(t)
+            good = np.isfinite(dt) & (dt != 0)
+            dt_ref = float(np.median(dt[good])) if np.any(good) else 1.0
+            if not np.isfinite(dt_ref) or dt_ref == 0:
+                dt_ref = 1.0
+    
+            dt_i = np.diff(t)
+            dt_i = np.where((~np.isfinite(dt_i)) | (dt_i == 0), dt_ref, dt_i)
+    
+            for ccol in use_cols:
+                c = pd.to_numeric(g[ccol], errors="coerce").to_numpy(float)
+                r = np.zeros_like(c, dtype=float)
+    
+                if first == "nan":
+                    r[0] = np.nan
+                elif first == "cum_over_dtref":
+                    r[0] = c[0] / dt_ref
+                else:
+                    raise ValueError("rate_first must be 'nan' or 'cum_over_dtref'.")
+    
+                r[1:] = np.diff(c) / dt_i
+                out.loc[g.index, ccol] = r
+    
+        return out
+    
+    # --- transform path -------------------------------------------------
+    want_cum = out_mode in CUM_MODES
+    have_cum = in_mode in CUM_MODES
+    
+    if want_cum and not have_cum:
+        # rate -> cumulative (legacy behavior)
         df_future = _cum_by_sample(
-            df_future, pred_cols, include_actual=False, 
-            target_name=target_name, 
-            verbose=verbose 
-            )
-        
+            df_future, pred_cols, include_actual=False,
+            target_name=target_name, verbose=verbose
+        )
         if df_eval_all is not None:
             df_eval_all = _cum_by_sample(
-                df_eval_all, pred_cols, include_actual=True, 
-                target_name=target_name, 
-                verbose=verbose 
+                df_eval_all, pred_cols, include_actual=True,
+                target_name=target_name, verbose=verbose
             )
-
-            # Refresh df_eval from the full multi-horizon DF
-            df_eval = df_eval_all[
-                df_eval_all["forecast_step"] == eval_forecast_step
-            ].copy()
-
-        # 2) optional absolute baseline shift
-        if mode in ("absolute_cumulative", "abs_cum", "absolute"):
-            if absolute_baseline is None:
-                vlog(
-                    "[format_and_forecast] value_mode='absolute_cumulative' "
-                    "but absolute_baseline is None; using relative "
-                    "cumulative instead.",
-                    verbose=verbose,
-                    level=1,
-                    logger=logger,
+            df_eval = df_eval_all[df_eval_all["forecast_step"] == eval_forecast_step].copy()
+    
+    elif (not want_cum) and have_cum:
+        # cumulative -> rate (NEW)
+        df_future = _rate_by_sample(
+            df_future, pred_cols, include_actual=False,
+            time_col=t_col, first=rate_first
+        )
+        if df_eval_all is not None:
+            df_eval_all = _rate_by_sample(
+                df_eval_all, pred_cols, include_actual=True,
+                time_col=t_col, first=rate_first
+            )
+            df_eval = df_eval_all[df_eval_all["forecast_step"] == eval_forecast_step].copy()
+    
+    # absolute baseline shift ONLY makes sense when output is cumulative
+    if want_cum and out_mode in ("absolute_cumulative", "abs_cum", "absolute"):
+        if absolute_baseline is None:
+            vlog(
+                "[format_and_forecast] absolute cumulative requested but "
+                "absolute_baseline is None; keeping relative cumulative.",
+                verbose=verbose, level=1, logger=logger,
+            )
+        else:
+            df_future = _add_baseline(
+                df_future, pred_cols, include_actual=False,
+                target_name=out_name, absolute_baseline=absolute_baseline
+            )
+            if df_eval_all is not None:
+                df_eval_all = _add_baseline(
+                    df_eval_all, pred_cols, include_actual=True,
+                    target_name=out_name, absolute_baseline=absolute_baseline
                 )
-            else:
-                df_future = _add_baseline(
-                    df_future, pred_cols, include_actual=False, 
-                    target_name= target_name, 
-                    absolute_baseline= absolute_baseline 
-                )
-                if df_eval_all is not None:
-                    df_eval_all = _add_baseline(
-                        df_eval_all, pred_cols, include_actual=True, 
-                        target_name= target_name, 
-                        absolute_baseline= absolute_baseline 
-                        
-                    )
-                    # And keep df_eval in sync with df_eval_all
-                    df_eval = df_eval_all[
-                        df_eval_all["forecast_step"] == eval_forecast_step
-                    ].copy()
+                df_eval = df_eval_all[df_eval_all["forecast_step"] == eval_forecast_step].copy()
 
     # ------------------------------------------------------------------
     # Drop actuals from future DF and save CSVs if requested
     # ------------------------------------------------------------------
-    actual_col = f"{target_name}_actual"
+    actual_col = f"{out_name}_actual"
     if actual_col in df_future.columns:
         df_future = df_future.drop(columns=[actual_col])
 
@@ -1774,7 +1910,7 @@ def format_and_forecast(
         
         evaluate_forecast(
             df_for_metrics,
-            target_name=target_name,
+            target_name=out_name,
             column_map=metrics_column_map,
             quantile_interval=metrics_quantile_interval,
             per_horizon=metrics_per_horizon,

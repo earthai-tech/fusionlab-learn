@@ -88,19 +88,14 @@ from fusionlab.nn.calibration import (
     fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
 )
-# from fusionlab.nn.pinn.utils import format_pinn_predictions
-# from fusionlab.plot.forecast import plot_forecasts, forecast_view
+
 from fusionlab.plot.forecast import plot_eval_future
 from fusionlab.utils.nat_utils import (
         load_or_rebuild_geoprior_model,
         pick_npz_for_dataset, 
-        # infer_input_dims_from_X, 
         load_best_hps_near_model, 
-        # coerce_quantile_weights, 
         compile_geoprior_for_eval, 
         load_geoprior_for_inference
-        # build_geoprior_from_hps, 
-        # infer_best_weights_path
   )
 # ------------------ CLI ------------------
 def parse_args():
@@ -429,7 +424,8 @@ def main():
         verbose=1,
         # In inference mode we don't compute extra eval metrics here
         eval_metrics=False,
-        value_mode="rate",
+        value_mode="cumulative", # set to "rate" to convert back to rate 
+        input_value_mode="cumulative",
     )
 
     if df_eval is not None and not df_eval.empty:
@@ -630,7 +626,6 @@ def main():
                 save_fmts=[".png", ".pdf"],
                 show=False,
                 verbose=1,
-                cumulative=True,
                 # _logger=log,
             )
             print(f"[Inference] Saved forecast figures in: {inf_dir}")

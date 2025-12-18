@@ -93,8 +93,8 @@ ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
 #     - "pihal_like" : alternative legacy layout.
 TRAIN_END_YEAR = 2022
 FORECAST_START_YEAR = 2023
-FORECAST_HORIZON_YEARS = 5 
-TIME_STEPS = 3
+FORECAST_HORIZON_YEARS = 3 
+TIME_STEPS = 5
 MODE = "tft_like"   # {"pihal_like", "tft_like"}
 
 
@@ -121,7 +121,6 @@ MODE = "tft_like"   # {"pihal_like", "tft_like"}
 TIME_COL = "year"
 LON_COL = "longitude"
 LAT_COL = "latitude"
-# SUBSIDENCE_COL = "subsidence"
 SUBSIDENCE_COL = "subsidence_cum"
 GWL_COL = "GWL_depth_bgs_z"
 H_FIELD_COL_NAME = "soil_thickness"
@@ -228,9 +227,17 @@ CENSORING_SPECS = [
 # If True, add *_censored flags as extra dynamic drivers.
 INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = True
 
+# If True, also add *_censored flags as extra future drivers.
+# Default False: thickness censoring is effectively sample/static, and
+# diagnostics can broadcast from dynamic-history safely.
+INCLUDE_CENSOR_FLAGS_AS_FUTURE = False
+
 # If True, prefer the effective column "<col>_eff" (if created)
 # when feeding the H-field into GeoPriorSubsNet.
 USE_EFFECTIVE_H_FIELD = True
+
+# --- Thickness unit (raw soil_thickness is already meters in most cases) ---
+THICKNESS_UNIT_TO_SI = 1.0
 
 # Optional: whether Stage-1 should also pre-build future_* NPZ for Stage-3
 BUILD_FUTURE_NPZ = True
@@ -383,9 +390,6 @@ AUTO_SI_AFFINE_FROM_STAGE1 = True
 COORD_MODE = "degrees"      # {"utm", "degrees"}
 UTM_EPSG = 32649        # Pearl River Delta often OK with UTM 49N
 
-# --- Thickness unit (raw soil_thickness is already meters in most cases) ---
-THICKNESS_UNIT_TO_SI = 1.0
-
 
 # 4.4 GeoPrior scalar parameters
 # ------------------------------
@@ -406,7 +410,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
 
-EPOCHS = 50
+EPOCHS = 2
 
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4

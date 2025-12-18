@@ -79,6 +79,7 @@ tf_maximum =KERAS_DEPS.maximum
 tf_debugging = KERAS_DEPS.debugging
 tf_identity = KERAS_DEPS.identity 
 tf_pow = KERAS_DEPS.pow 
+tf_sigmoid = KERAS_DEPS.sigmoid 
 
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
@@ -94,35 +95,6 @@ logger.addFilter(OncePerMessageFilter())
 _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_halnet_core_params)
 )
-
-# model = GeoPriorSubsNet(
-#     ...,
-#     scale_pde_residuals=True,
-#     scaling_kwargs=dict(
-#         # existing stuff for default_scales(...)
-#         # ...
-
-#         # NEW: physics bounds (global, city-level ranges)
-#         bounds=dict(
-#             H_min=5.0,    # m    (lower bound on effective thickness)
-#             H_max=80.0,   # m    (upper bound on effective thickness)
-#             logK_min=np.log(1e-8),  # m/s
-#             logK_max=np.log(1e-3),
-#             logSs_min=np.log(1e-7), # m^-1
-#             logSs_max=np.log(1e-3),
-#         ),
-#     ),
-# )
-# # scaling_kwargs
-# scaling_kwargs = dict(
-#     ...
-#     # model_output_to_SI: s_si = s_model * subs_scale_si + subs_bias_si
-#     subs_scale_si=1e-3,   # mm -> m   (or std_mm*1e-3 if standardized)
-#     subs_bias_si=0.0,     # mean_mm*1e-3 if you used z-score w/ nonzero mean
-
-#     head_scale_si=1.0,    # m -> m (or std_m if standardized)
-#     head_bias_si=0.0,
-# )
 
 
 __all__ = ["GeoPriorSubsNet"]
@@ -419,11 +391,13 @@ class GeoPriorSubsNet(BaseAttentive):
         #   - Ss(x,y)
         #   - tau(x,y)
         # stored as a single tensor, later split in split_physics_predictions.
-        self.physics_mean_head = Dense(
-            self._phys_output_dim,
-            name="physics_mean_head",
-        )
-
+        # self.physics_mean_head = Dense(
+        #     self._phys_output_dim,
+        #     name="physics_mean_head",
+        # )
+        self.K_head   = Dense(self.output_K_dim,  name="K_head")
+        self.Ss_head  = Dense(self.output_Ss_dim, name="Ss_head")
+        self.tau_head = Dense(self.output_tau_dim, name="tau_head")
         # H_field is populated in call() and reused by test_step /
         # evaluate_physics / export_physics_payload.
         self.H_field: Optional[Tensor] = None
@@ -473,6 +447,9 @@ class GeoPriorSubsNet(BaseAttentive):
         self.K_coord_mlp = _branch(self.output_K_dim, "K_coord_mlp")
         self.Ss_coord_mlp = _branch(self.output_Ss_dim, "Ss_coord_mlp")
         self.tau_coord_mlp = _branch(self.output_tau_dim, "tau_coord_mlp")
+        
+
+        
 
     def _build_pinn_components(self):
 
@@ -838,11 +815,16 @@ class GeoPriorSubsNet(BaseAttentive):
         # ------------------------------------------------------------------
         # 4. Physics path: decode K, Ss, tau (pre-positivity)
         # ------------------------------------------------------------------
-        decoded_physics_means_raw = self.physics_mean_head(
-            phys_features_raw_3d,
-            training=training,
-        )
-    
+        # decoded_physics_means_raw = self.physics_mean_head(
+        #     phys_features_raw_3d,
+        #     training=training,
+        # )
+        K_raw   = self.K_head(phys_features_raw_3d, training=training)
+        Ss_raw  = self.Ss_head(phys_features_raw_3d, training=training)
+        tau_raw = self.tau_head(phys_features_raw_3d, training=training)
+        
+        decoded_physics_means_raw = tf_concat([K_raw, Ss_raw, tau_raw], axis=-1)
+
         # ------------------------------------------------------------------
         # 5. Return all components for downstream use
         # ------------------------------------------------------------------
@@ -951,18 +933,26 @@ class GeoPriorSubsNet(BaseAttentive):
             h_si = self._to_si_head(h_pred_mean_corr)
             s_si = self._to_si_subsidence(s_pred_mean_corr)
 
-            K_corr = self.K_coord_mlp(coords_flat, training=True)
+            K_corr  = self.K_coord_mlp(coords_flat, training=True)
             Ss_corr = self.Ss_coord_mlp(coords_flat, training=True)
             tau_corr = self.tau_coord_mlp(coords_flat, training=True)
-    
-            # Apply corrections then enforce positivity
-            K_field = positive(K_field_base + K_corr)
-            Ss_field = positive(Ss_field_base + Ss_corr)
-            # tau_field = positive(tau_field_base + tau_corr)
-            log_tau = tau_field_base + tau_corr
-            tau_field = tf_exp(log_tau) + tf_constant(1e-6, tf_float32)  # tau in seconds
-
             
+            # --- bounded SI K, Ss ---------------------------------------------------
+            logK_min, logK_max, logSs_min, logSs_max = self._get_log_bounds()
+            
+            K_raw  = K_field_base  + K_corr
+            Ss_raw = Ss_field_base + Ss_corr
+            
+            K_field  = self._bounded_exp(K_raw,  logK_min,  logK_max)
+            Ss_field = self._bounded_exp(Ss_raw, logSs_min, logSs_max)
+            
+            # --- tau anchored to tau_phys (seconds) --------------------------------
+            delta_log_tau = tau_field_base + tau_corr  # dimensionless
+            tau_phys, _Hd_eff = self._tau_phys_from_fields(
+                K_field, Ss_field, H_si)  # seconds
+            tau_field = tau_phys * tf_exp(
+                delta_log_tau) + tf_constant(1e-6, tf_float32)
+
             # Save latest physical fields for diagnostics / export
             self.K_field = K_field
             self.Ss_field = Ss_field
@@ -1008,46 +998,6 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dy = tape.gradient(Ss_field, y)
     
             # ---  chain-rule correction if coords were MinMax normalized ---
-            # tR, xR, yR = self._coord_ranges()
-            # deg2m_x = self._deg_to_m("x")
-            # deg2m_y = self._deg_to_m("y")
-            
-            # if tR:
-            #     ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
-            #     dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
-
-            # if xR:
-            #     # xRt = tf_constant(float(xR), tf_float32)
-            #     xRt = tf_constant(float(xR), tf_float32) * deg2m_x  
-            #     dh_dx = dh_dx / xRt
-            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
-            #     dK_dx = dK_dx / xRt
-            #     dSs_dx = dSs_dx / xRt
-            
-            # if yR:
-            #     # yRt = tf_constant(float(yR), tf_float32)
-            #     yRt = tf_constant(float(yR), tf_float32) * deg2m_y  
-            #     dh_dy = dh_dy / yRt
-            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
-            #     dK_dy = dK_dy / yRt
-            #     dSs_dy = dSs_dy / yRt
-                
-            # # Minimal guard (safe improvement):
-            
-            # if (not xR) and self.scaling_kwargs.get(
-            #         "coords_in_degrees", False):
-            #     dh_dx = dh_dx / deg2m_x
-            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (deg2m_x * deg2m_x)
-            #     dK_dx = dK_dx / deg2m_x
-            #     dSs_dx = dSs_dx / deg2m_x
-            
-            # if (not yR) and self.scaling_kwargs.get(
-            #         "coords_in_degrees", False):
-            #     dh_dy = dh_dy / deg2m_y
-            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (deg2m_y * deg2m_y)
-            #     dK_dy = dK_dy / deg2m_y
-            #     dSs_dy = dSs_dy / deg2m_y
-            
             coords_norm = bool(
                 self.scaling_kwargs.get("coords_normalized", False))
             coords_deg  = bool(
@@ -1139,13 +1089,14 @@ class GeoPriorSubsNet(BaseAttentive):
     
             # Consistency prior residual:
             #   R_prior = log(tau) - log(tau_phys)
-            prior_res = self._compute_consistency_prior(
-                K_field,
-                Ss_field,
-                tau_field,
-                H_si,
-            )
-    
+            # prior_res = self._compute_consistency_prior(
+            #     K_field,
+            #     Ss_field,
+            #     tau_field,
+            #     H_si,
+            # )
+            prior_res = delta_log_tau 
+            
             # Smoothness prior:
             #   R_smooth = ||grad(K)||^2 + ||grad(Ss)||^2
             smooth_res = self._compute_smoothness_prior(
@@ -1267,6 +1218,26 @@ class GeoPriorSubsNet(BaseAttentive):
         results["loss"] = total_loss
 
         return results
+
+    def _get_log_bounds(self):
+        b = (self.scaling_kwargs or {}).get("bounds", {}) or {}
+        logK_min = np.log(float(b["K_min"]))
+        logK_max = np.log(float(b["K_max"]))
+        logSs_min = np.log(float(b["Ss_min"]))
+        logSs_max = np.log(float(b["Ss_max"]))
+        return (
+            tf_constant(logK_min, tf_float32),
+            tf_constant(logK_max, tf_float32),
+            tf_constant(logSs_min, tf_float32),
+            tf_constant(logSs_max, tf_float32),
+        )
+    
+    def _bounded_exp(self, raw, log_min, log_max, eps=1e-12):
+        # raw -> (0,1) -> [log_min, log_max] -> exp -> (min,max)
+        z = tf_sigmoid(raw)
+        logv = log_min + z * (log_max - log_min)
+        return tf_exp(logv) + tf_constant(eps, tf_float32)
+
 
     def test_step(self, data):
         
@@ -1831,12 +1802,27 @@ class GeoPriorSubsNet(BaseAttentive):
             Ss_corr = self.Ss_coord_mlp(coords_flat, training=False)
             tau_corr = self.tau_coord_mlp(coords_flat, training=False)
         
-            K_field = positive(K_base + K_corr)
-            Ss_field = positive(Ss_base + Ss_corr)
-            # tau_field = positive(tau_base + tau_corr)
-            log_tau = tau_base + tau_corr
-            tau_field = tf_exp(log_tau) + tf_constant(1e-6, tf_float32)
+            # K_field = positive(K_base + K_corr)
+            # Ss_field = positive(Ss_base + Ss_corr)
+            # # tau_field = positive(tau_base + tau_corr)
+            # log_tau = tau_base + tau_corr
+            # tau_field = tf_exp(log_tau) + tf_constant(1e-6, tf_float32)
+            logK_min, logK_max, logSs_min, logSs_max = self._get_log_bounds()
             
+            K_raw  = K_base  + K_corr
+            Ss_raw = Ss_base + Ss_corr
+            
+            K_field  = self._bounded_exp(K_raw,  logK_min,  logK_max)
+            Ss_field = self._bounded_exp(Ss_raw, logSs_min, logSs_max)
+            
+            delta_log_tau = tau_base + tau_corr  # dimensionless
+            
+            tau_phys, Hd_eff = self._tau_phys_from_fields(
+                K_field, Ss_field, H_si)  # <-- seconds
+            tau_field = tau_phys * tf_exp(
+                delta_log_tau) + tf_constant(1e-6, tf_float32)
+
+
             # Keep last-physics fields consistent with the training path
             self.K_field = K_field
             self.Ss_field = Ss_field
@@ -1878,43 +1864,6 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dy = tape.gradient(Ss_bind, y)
             
             # ---  chain-rule correction if coords were MinMax normalized ---
-            # tR, xR, yR = self._coord_ranges()
-            # deg2m_x = self._deg_to_m("x")
-            # deg2m_y = self._deg_to_m("y")
-
-            # if tR:
-            #     ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
-            #     dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
-            
-            # if xR:
-            #     xRt = tf_constant(float(xR), tf_float32) * deg2m_x
-            #     dh_dx = dh_dx / xRt
-            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
-            #     dK_dx = dK_dx / xRt
-            #     dSs_dx = dSs_dx / xRt
-            
-            # if yR:
-            #     yRt = tf_constant(float(yR), tf_float32) * deg2m_y
-            #     dh_dy = dh_dy / yRt
-            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
-            #     dK_dy = dK_dy / yRt
-            #     dSs_dy = dSs_dy / yRt
-                
-            # # Minimal guard (safe improvement):
-            # if (not xR) and self.scaling_kwargs.get(
-            #         "coords_in_degrees", False):
-            #     dh_dx = dh_dx / deg2m_x
-            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (deg2m_x * deg2m_x)
-            #     dK_dx = dK_dx / deg2m_x
-            #     dSs_dx = dSs_dx / deg2m_x
-            
-            # if (not yR) and self.scaling_kwargs.get(
-            #         "coords_in_degrees", False):
-            #     dh_dy = dh_dy / deg2m_y
-            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (deg2m_y * deg2m_y)
-            #     dK_dy = dK_dy / deg2m_y
-            #     dSs_dy = dSs_dy / deg2m_y
-            
             coords_norm = bool(
                 self.scaling_kwargs.get("coords_normalized", False))
             coords_deg  = bool(
@@ -1989,9 +1938,12 @@ class GeoPriorSubsNet(BaseAttentive):
         cons_res = self._compute_consolidation_residual(
             ds_dt, s_pde, h_pde, H_si, tau_field
         )
-        prior_res = self._compute_consistency_prior(
-            K_field, Ss_field, tau_field, H_si
-        )
+        # prior_res = self._compute_consistency_prior(
+        #     K_field, Ss_field, tau_field, H_si
+        # )
+        # consistency prior is exactly delta_log_tau by construction
+        prior_res = delta_log_tau
+
         smooth_res = self._compute_smoothness_prior(
             dK_dx, dK_dy, dSs_dx, dSs_dy,
             K_field=K_field, Ss_field=Ss_field,

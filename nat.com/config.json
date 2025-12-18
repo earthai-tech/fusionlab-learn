@@ -12,8 +12,8 @@
     "ALL_CITIES_PARQUET": "natcom_all_cities.parquet",
     "TRAIN_END_YEAR": 2022,
     "FORECAST_START_YEAR": 2023,
-    "FORECAST_HORIZON_YEARS": 5,
-    "TIME_STEPS": 3,
+    "FORECAST_HORIZON_YEARS": 3,
+    "TIME_STEPS": 5,
     "MODE": "tft_like",
     "TIME_COL": "year",
     "LON_COL": "longitude",
@@ -73,6 +73,7 @@
     ],
     "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": true,
     "USE_EFFECTIVE_H_FIELD": true,
+    "THICKNESS_UNIT_TO_SI": 1.0,
     "BUILD_FUTURE_NPZ": true,
     "ATTENTION_LEVELS": [
       "cross",
@@ -140,7 +141,6 @@
     "AUTO_SI_AFFINE_FROM_STAGE1": true,
     "COORD_MODE": "degrees",
     "UTM_EPSG": 32649,
-    "THICKNESS_UNIT_TO_SI": 1.0,
     "GEOPRIOR_INIT_MV": 1e-07,
     "GEOPRIOR_INIT_KAPPA": 1.0,
     "GEOPRIOR_GAMMA_W": 9810.0,
@@ -148,7 +148,7 @@
     "GEOPRIOR_KAPPA_MODE": "kb",
     "GEOPRIOR_USE_EFFECTIVE_H": true,
     "GEOPRIOR_HD_FACTOR": 0.6,
-    "EPOCHS": 50,
+    "EPOCHS": 2,
     "BATCH_SIZE": 32,
     "LEARNING_RATE": 0.0001,
     "TF_DEVICE_MODE": "auto",
@@ -284,6 +284,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "3cd2a8f70579f449b8a514a544035a8fdf99341b4ec715389e87b4d024d0c9bd"
+    "config_py_hash": "36af15cc596da6fc64c38ff179438c805ccbb6c3344b2bc9f2b6e030dec9b655"
   }
 }

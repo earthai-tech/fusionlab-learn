@@ -145,6 +145,10 @@ CENSORING_SPECS = _censor_cfg.get("specs", [])
 INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = bool(
     _censor_cfg.get("flags_as_dynamic", True)
 )
+INCLUDE_CENSOR_FLAGS_AS_FUTURE = bool(
+    _censor_cfg.get("flags_as_future", False)
+)
+
 USE_EFFECTIVE_H_FIELD = bool(
     _censor_cfg.get("use_effective_h_field", True)
 )
@@ -216,6 +220,7 @@ config_sections = [
     ("Censoring", {
         "CENSORING_SPECS": CENSORING_SPECS,
         "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC,
+        "INCLUDE_CENSOR_FLAGS_AS_FUTURE":INCLUDE_CENSOR_FLAGS_AS_FUTURE, 
         "USE_EFFECTIVE_H_FIELD": USE_EFFECTIVE_H_FIELD,
     }),
     ("Outputs", {
@@ -758,7 +763,9 @@ for sp in CENSORING_SPECS or []:
     fflag = sp["col"] + sp.get("flag_suffix", "_censored")
     if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and fflag in df_scaled.columns:
         dynamic_features = dynamic_features + [fflag]
-
+    if INCLUDE_CENSOR_FLAGS_AS_FUTURE and fflag not in future_features:       
+        future_features = future_features + [fflag]
+        
 print(f"  Static : {static_features}")
 print(f"  Dynamic: {dynamic_features}")
 print(f"  Future : {future_features}")

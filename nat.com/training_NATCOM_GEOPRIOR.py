@@ -54,7 +54,8 @@ try:
         load_scaler_info,
         save_ablation_record,
         best_epoch_and_metrics,
-        build_censor_mask_from_dynamic,
+        # build_censor_mask_from_dynamic,
+        build_censor_mask, 
         name_of,
         serialize_subs_params,
         resolve_si_affine
@@ -164,26 +165,63 @@ MODEL_NAME = MODEL_ENV or cfg.get("MODEL_NAME", "GeoPriorSubsNet")
 # ----- Optional censoring config (from merged cfg) -----------------------
 FEATURES   = cfg.get("features", {}) or {}
 DYN_NAMES  = FEATURES.get("dynamic", []) or []
+FUT_NAMES  = FEATURES.get("future",  []) or []   # <-- NEW
 
 CENSOR     = cfg.get("censoring", {}) or cfg.get("censor", {}) or {}
 CENSOR_SPECS  = CENSOR.get("specs", []) or []
 CENSOR_THRESH = float(CENSOR.get("flag_threshold", 0.5))
 
 # Resolve the first available censor flag column (if any) in dynamic_features
-CENSOR_FLAG_IDX  = None
-CENSOR_FLAG_NAME = None
+# CENSOR_FLAG_IDX  = None
+# CENSOR_FLAG_NAME = None
+
+# for sp in CENSOR_SPECS:
+#     # Allow either explicit 'flag_col' or 'col' + optional 'flag_suffix'
+#     cand = sp.get("flag_col")
+#     if not cand:
+#         base = sp.get("col")
+#         if base:
+#             cand = base + sp.get("flag_suffix", "_censored")
+#     if cand and cand in DYN_NAMES:
+#         CENSOR_FLAG_NAME = cand
+#         CENSOR_FLAG_IDX  = DYN_NAMES.index(cand)
+#         print("[Info] Censor flags present in dynamic features:", cand)
+#         break
+
+CENSOR_FLAG_IDX_DYN  = None
+CENSOR_FLAG_IDX_FUT  = None
+CENSOR_FLAG_NAME     = None
+
 for sp in CENSOR_SPECS:
-    # Allow either explicit 'flag_col' or 'col' + optional 'flag_suffix'
     cand = sp.get("flag_col")
     if not cand:
         base = sp.get("col")
         if base:
             cand = base + sp.get("flag_suffix", "_censored")
-    if cand and cand in DYN_NAMES:
-        CENSOR_FLAG_NAME = cand
-        CENSOR_FLAG_IDX  = DYN_NAMES.index(cand)
-        print("[Info] Censor flags present in dynamic features:", cand)
-        break
+
+    if cand:
+        if cand in FUT_NAMES and CENSOR_FLAG_IDX_FUT is None:
+            CENSOR_FLAG_IDX_FUT = FUT_NAMES.index(cand)
+            CENSOR_FLAG_NAME = cand
+        if cand in DYN_NAMES and CENSOR_FLAG_IDX_DYN is None:
+            CENSOR_FLAG_IDX_DYN = DYN_NAMES.index(cand)
+            CENSOR_FLAG_NAME = cand
+
+# prefer FUT if available, else DYN
+if CENSOR_FLAG_IDX_FUT is not None:
+    CENSOR_MASK_SOURCE = "future"
+    CENSOR_FLAG_IDX = CENSOR_FLAG_IDX_FUT
+elif CENSOR_FLAG_IDX_DYN is not None:
+    CENSOR_MASK_SOURCE = "dynamic"
+    CENSOR_FLAG_IDX = CENSOR_FLAG_IDX_DYN
+    print("[Info] Censor flags present in dynamic features:", cand)
+else:
+    CENSOR_MASK_SOURCE = None
+    CENSOR_FLAG_IDX = None
+
+print("[Info] Censor mask source:", CENSOR_MASK_SOURCE,
+      "| flag:", CENSOR_FLAG_NAME, "| idx:", CENSOR_FLAG_IDX)
+
 
 # ---- Model / physics / training config ---------------------------------
 # NOTE: TIME_STEPS / FORECAST_HORIZON_YEARS / MODE are taken from cfg
@@ -635,6 +673,8 @@ subsmodel_params["scaling_kwargs"].update({
     # thickness SI affine (used by _to_si_thickness patch)
     "H_scale_si": (float(H_scale_si) if H_scale_si is not None else 1.0),
     "H_bias_si":  (float(H_bias_si)  if H_bias_si  is not None else 0.0),
+    
+
 })
 
 # Optional: drop Nones to keep scaling_kwargs clean
@@ -677,7 +717,7 @@ subsmodel_params["scaling_kwargs"].update({
 })
 
 print("=" * 72)
-print("SCALES & UNITS (Stage-1 → Stage-2 SI affine maps)")
+print("SCALES & UNITS (Stage-1 -> Stage-2 SI affine maps)")
 print("-" * 72)
 
 def _fmt(v):
@@ -1132,7 +1172,9 @@ df_eval, df_future = format_and_forecast(
     y_true=y_true_for_format,
     coords=X_fore.get("coords", None),
     quantiles=QUANTILES if QUANTILES else None,
-    target_name=SUBSIDENCE_COL,
+    target_name=SUBSIDENCE_COL,             
+    scaler_target_name=SUBSIDENCE_COL,       
+    output_target_name="subsidence",         
     target_key_pred="subs_pred",
     component_index=0,
     scaler_info=scaler_info_dict,
@@ -1164,7 +1206,8 @@ df_eval, df_future = format_and_forecast(
         "eval_diagnostics.json"),         # auto name, or give explicit path
     metrics_save_format=".json",
     metrics_time_as_str=True,
-    value_mode ="rate"
+    value_mode="cumulative", # set to "rate" to convert back to rate 
+    input_value_mode="cumulative",
 )
 
 if df_eval is not None and not df_eval.empty:
@@ -1254,13 +1297,28 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
         s_q_b, _ = subs_model_inst.split_data_predictions(data_final_b)  # (B, H, Q, 1)
         s_q_list.append(s_q_b)
 
+    # if CENSOR_FLAG_IDX is not None:
+    #     H = tf.shape(y_true_b)[1]
+    #     mask_b = build_censor_mask(
+    #         xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH,
+    #         source="dynamic",
+    #         reduce_time="any",
+    #     )
+    #     # mask_b = build_censor_mask_from_dynamic(         # (B, H, 1)
+    #     #     xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH
+    #     # )
+
+    #     # mask_b = build_censor_mask_from_dynamic(xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH) 
+    #     # mask_list.append(mask_b)
+        
     if CENSOR_FLAG_IDX is not None:
         H = tf.shape(y_true_b)[1]
-        mask_b = build_censor_mask_from_dynamic(         # (B, H, 1)
-            xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH
+        mask_b = build_censor_mask(
+            xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH,
+            source=CENSOR_MASK_SOURCE or "dynamic",
+            reduce_time="any",       # best default for thickness censoring
+            align="broadcast",       # safe fallback
         )
-
-        # mask_b = build_censor_mask_from_dynamic(xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH) 
         mask_list.append(mask_b)
 
 # # Stack what we collected
@@ -1567,7 +1625,6 @@ try:
         save_fmts=[".png", ".pdf"],
         show=False,
         verbose=1,
-        cummulative=True, 
     )
 except Exception as e:
     print(f"[Warn] plot_eval_future failed: {e}")

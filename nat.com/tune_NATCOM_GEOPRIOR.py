@@ -904,7 +904,8 @@ else:
         ),
         metrics_save_format=".json",
         metrics_time_as_str=True,
-        value_mode="rate",
+        value_mode="cumulative", # set to "rate" to convert back to rate 
+        input_value_mode="cumulative",
     )
 
 

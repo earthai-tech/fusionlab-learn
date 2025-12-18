@@ -3,7 +3,7 @@
 # Author: LKouadio <etanoyau@gmail.com>
 
 # $ python nat.com/sm3_synthetic_identifiability.py 
-# --outdir results/sm3_synth --n-realizations 50 --n-years 20 
+# --outdir results/sm3_synth --n-realizations 30 --n-years 20 
 # --time-steps 5 --epochs 50 --noise-std 0.02 
 # --load-type step --seed 123
 
@@ -116,20 +116,21 @@ def settlement_from_tau(years: np.ndarray, dh: np.ndarray,
 def make_one_step_windows(
     years: np.ndarray,
     dh: np.ndarray,
-    y_inc: np.ndarray,
+    s_cum: np.ndarray,          # <-- cumulative target
     static_vec: np.ndarray,
     time_steps: int,
-    H_field_value: float,   
+    H_field_value: float,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-
     """
-    1-step-ahead windows so we don't need future drivers.
-    Inputs match the model/evaluate_physics convention:
-      static_features, dynamic_features, future_features, coords
+    1-step-ahead windows (H=1).
+    - dynamic_features: past dh (length T)
+    - future_features: zeros but length (T+H) to satisfy TFT-like slicing
+    - coords: (B, H, 3) at the forecast time
+    - targets: cumulative subsidence s(t) and head/drawdown h(t)
     """
     years = np.asarray(years, dtype=float)
-    dh = np.asarray(dh, dtype=float)
-    y_inc = np.asarray(y_inc, dtype=float)
+    dh    = np.asarray(dh, dtype=float)
+    s_cum = np.asarray(s_cum, dtype=float)
 
     T = int(time_steps)
     H = 1
@@ -140,9 +141,10 @@ def make_one_step_windows(
     X = {
         "static_features": np.repeat(static_vec[None, :], B, axis=0).astype(np.float32),
         "dynamic_features": np.zeros((B, T, 1), dtype=np.float32),
+        # IMPORTANT for TFT-like internals: future length should be T+H
         "future_features": np.zeros((B, H, 1), dtype=np.float32),
-        "coords": np.zeros((B, H, 3), dtype=np.float32),          # was (B, T+H, 3)
-        "H_field": np.full((B, H, 1), float(H_field_value), dtype=np.float32),  
+        "coords": np.zeros((B, H, 3), dtype=np.float32),
+        "H_field": np.full((B, H, 1), float(H_field_value), dtype=np.float32),
     }
 
     y = {
@@ -151,12 +153,17 @@ def make_one_step_windows(
     }
 
     for i in range(B):
+        # history up to j-1
         X["dynamic_features"][i, :, 0] = dh[i:i + T]
         j = i + T
-        y["subs_pred"][i, 0, 0] = y_inc[j]
-        X["coords"][i, 0, 0] = years[j]   # horizon time (H=1)
-        # x,y stay 0
 
+        # --- targets at forecast time j (cumulative + head) ---
+        y["subs_pred"][i, 0, 0] = s_cum[j]
+        y["gwl_pred"][i, 0, 0]  = dh[j]          # treat dh as head relative to href=0
+
+        # --- coords at forecast time (H=1) ---
+        X["coords"][i, 0, 0] = years[j]          # t
+        # x,y left at 0 for 1-pixel synthetic
 
     return X, y
 
@@ -249,7 +256,7 @@ def train_one_pixel(
             bounds=dict(
                 H_min=3.0,
                 H_max=80.0,
-                logK_min=float(np.log(1e-10)),  # m/s
+                logK_min=float(np.log(1e-14)),  # m/s
                 logK_max=float(np.log(1e-3)),
                 logSs_min=float(np.log(1e-8)),  # 1/m (typical-ish broad range)
                 logSs_max=float(np.log(1e-3)),
@@ -272,7 +279,7 @@ def train_one_pixel(
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=float(lr), clipnorm=1.0),
         loss={"subs_pred": loss_sub, "gwl_pred": tf.keras.losses.MSE},
-        loss_weights={"subs_pred": 1.0, "gwl_pred": 0.0},
+        loss_weights={"subs_pred": 1.0, "gwl_pred": 1.0},
     
         lambda_cons=0.1,
         lambda_gw=0.0,
@@ -522,6 +529,8 @@ def run_one_realisation(
     y_inc[0] = s_cum[0]
     y_inc[1:] = s_cum[1:] - s_cum[:-1]
     y_inc = y_inc + rng.normal(0.0, args.noise_std, size=y_inc.shape)
+    # cumulative observation derived from (noisy) increments
+    s_obs = np.cumsum(y_inc)
 
     # ------------------------------------------------------------
     # 6) Build windows + split
@@ -535,11 +544,12 @@ def run_one_realisation(
     X, y = make_one_step_windows(
         years=years,
         dh=dh,
-        y_inc=y_inc,
+        s_cum=s_obs,     # cumulative observations
         static_vec=static_vec,
         time_steps=args.time_steps,
         H_field_value=H_eff,
     )
+
 
     Xtr, ytr, Xva, yva = split_tail(X, y, args.val_tail)
 
@@ -574,6 +584,12 @@ def run_one_realisation(
         metadata={
             "synthetic": True,
             "realisation": int(r),
+            
+            "payload_time_units": "sec",
+            "units": {
+                "tau": "sec",
+                "K": "m/s",
+            },
 
             "report_time_units": "year",
             "sec_per_year": float(SEC_PER_YEAR),
@@ -610,9 +626,8 @@ def run_one_realisation(
     # ------------------------------------------------------------
     payload_raw, meta = load_physics_payload(npz_path)
 
-    payload_units = _infer_payload_time_units(meta)
-    report_units = str(meta.get(
-        "report_time_units") or payload_units).strip().lower()
+    payload_units = _infer_payload_time_units(meta)     # now correctly "sec"
+    report_units  = meta.get("report_time_units", payload_units)
     spy = float(meta.get("sec_per_year", SEC_PER_YEAR))
 
     # Convert payload into report units for diagnostics
