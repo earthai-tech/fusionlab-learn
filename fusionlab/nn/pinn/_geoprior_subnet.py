@@ -108,7 +108,7 @@ _param_docs = DocstringComponents.from_nested_components(
 #             H_max=80.0,   # m    (upper bound on effective thickness)
 #             logK_min=np.log(1e-8),  # m/s
 #             logK_max=np.log(1e-3),
-#             logSs_min=np.log(1e-7), # Pa^-1
+#             logSs_min=np.log(1e-7), # m^-1
 #             logSs_max=np.log(1e-3),
 #         ),
 #     ),
@@ -1008,41 +1008,81 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dy = tape.gradient(Ss_field, y)
     
             # ---  chain-rule correction if coords were MinMax normalized ---
+            # tR, xR, yR = self._coord_ranges()
+            # deg2m_x = self._deg_to_m("x")
+            # deg2m_y = self._deg_to_m("y")
+            
+            # if tR:
+            #     ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
+            #     dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
+
+            # if xR:
+            #     # xRt = tf_constant(float(xR), tf_float32)
+            #     xRt = tf_constant(float(xR), tf_float32) * deg2m_x  
+            #     dh_dx = dh_dx / xRt
+            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
+            #     dK_dx = dK_dx / xRt
+            #     dSs_dx = dSs_dx / xRt
+            
+            # if yR:
+            #     # yRt = tf_constant(float(yR), tf_float32)
+            #     yRt = tf_constant(float(yR), tf_float32) * deg2m_y  
+            #     dh_dy = dh_dy / yRt
+            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
+            #     dK_dy = dK_dy / yRt
+            #     dSs_dy = dSs_dy / yRt
+                
+            # # Minimal guard (safe improvement):
+            
+            # if (not xR) and self.scaling_kwargs.get(
+            #         "coords_in_degrees", False):
+            #     dh_dx = dh_dx / deg2m_x
+            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (deg2m_x * deg2m_x)
+            #     dK_dx = dK_dx / deg2m_x
+            #     dSs_dx = dSs_dx / deg2m_x
+            
+            # if (not yR) and self.scaling_kwargs.get(
+            #         "coords_in_degrees", False):
+            #     dh_dy = dh_dy / deg2m_y
+            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (deg2m_y * deg2m_y)
+            #     dK_dy = dK_dy / deg2m_y
+            #     dSs_dy = dSs_dy / deg2m_y
+            
+            coords_norm = bool(
+                self.scaling_kwargs.get("coords_normalized", False))
+            coords_deg  = bool(
+                self.scaling_kwargs.get("coords_in_degrees", False))
+            
             tR, xR, yR = self._coord_ranges()
             deg2m_x = self._deg_to_m("x")
             deg2m_y = self._deg_to_m("y")
             
-            if tR:
-                ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
-                dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
-
-            if xR:
-                # xRt = tf_constant(float(xR), tf_float32)
-                xRt = tf_constant(float(xR), tf_float32) * deg2m_x  
-                dh_dx = dh_dx / xRt
-                d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
-                dK_dx = dK_dx / xRt
-                dSs_dx = dSs_dx / xRt
+            # --- time ---
+            if coords_norm and tR:
+                ds_dt = ds_dt / tR
+                dh_dt = dh_dt / tR
             
-            if yR:
-                # yRt = tf_constant(float(yR), tf_float32)
-                yRt = tf_constant(float(yR), tf_float32) * deg2m_y  
-                dh_dy = dh_dy / yRt
-                d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
-                dK_dy = dK_dy / yRt
-                dSs_dy = dSs_dy / yRt
-                
-            # Minimal guard (safe improvement):
-            
-            if (not xR) and self.scaling_kwargs.get(
-                    "coords_in_degrees", False):
+            # --- space ---
+            if coords_norm:
+                if xR:
+                    xRt = xR * deg2m_x
+                    dh_dx = dh_dx / xRt
+                    d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
+                    dK_dx = dK_dx / xRt
+                    dSs_dx = dSs_dx / xRt
+                if yR:
+                    yRt = yR * deg2m_y
+                    dh_dy = dh_dy / yRt
+                    d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
+                    dK_dy = dK_dy / yRt
+                    dSs_dy = dSs_dy / yRt
+            elif coords_deg:
+                # unnormalized degrees → just convert deg→m
                 dh_dx = dh_dx / deg2m_x
                 d_K_dh_dx_dx = d_K_dh_dx_dx / (deg2m_x * deg2m_x)
                 dK_dx = dK_dx / deg2m_x
                 dSs_dx = dSs_dx / deg2m_x
             
-            if (not yR) and self.scaling_kwargs.get(
-                    "coords_in_degrees", False):
                 dh_dy = dh_dy / deg2m_y
                 d_K_dh_dy_dy = d_K_dh_dy_dy / (deg2m_y * deg2m_y)
                 dK_dy = dK_dy / deg2m_y
@@ -1711,9 +1751,10 @@ class GeoPriorSubsNet(BaseAttentive):
         
         # Right now dt_tensor is in normalized units. Convert it to “years” first:
             
+        coords_norm = bool(self.scaling_kwargs.get("coords_normalized", False))
         tR, _, _ = self._coord_ranges()
-        if tR:
-            dt_tensor = dt_tensor * tf_constant(float(tR), tf_float32)
+        if coords_norm and tR:
+            dt_tensor = dt_tensor * tR
             
         time_units = self.scaling_kwargs.get("time_units",
                  self.scaling_kwargs.get("time_unit", None)
@@ -1837,38 +1878,78 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dy = tape.gradient(Ss_bind, y)
             
             # ---  chain-rule correction if coords were MinMax normalized ---
+            # tR, xR, yR = self._coord_ranges()
+            # deg2m_x = self._deg_to_m("x")
+            # deg2m_y = self._deg_to_m("y")
+
+            # if tR:
+            #     ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
+            #     dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
+            
+            # if xR:
+            #     xRt = tf_constant(float(xR), tf_float32) * deg2m_x
+            #     dh_dx = dh_dx / xRt
+            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
+            #     dK_dx = dK_dx / xRt
+            #     dSs_dx = dSs_dx / xRt
+            
+            # if yR:
+            #     yRt = tf_constant(float(yR), tf_float32) * deg2m_y
+            #     dh_dy = dh_dy / yRt
+            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
+            #     dK_dy = dK_dy / yRt
+            #     dSs_dy = dSs_dy / yRt
+                
+            # # Minimal guard (safe improvement):
+            # if (not xR) and self.scaling_kwargs.get(
+            #         "coords_in_degrees", False):
+            #     dh_dx = dh_dx / deg2m_x
+            #     d_K_dh_dx_dx = d_K_dh_dx_dx / (deg2m_x * deg2m_x)
+            #     dK_dx = dK_dx / deg2m_x
+            #     dSs_dx = dSs_dx / deg2m_x
+            
+            # if (not yR) and self.scaling_kwargs.get(
+            #         "coords_in_degrees", False):
+            #     dh_dy = dh_dy / deg2m_y
+            #     d_K_dh_dy_dy = d_K_dh_dy_dy / (deg2m_y * deg2m_y)
+            #     dK_dy = dK_dy / deg2m_y
+            #     dSs_dy = dSs_dy / deg2m_y
+            
+            coords_norm = bool(
+                self.scaling_kwargs.get("coords_normalized", False))
+            coords_deg  = bool(
+                self.scaling_kwargs.get("coords_in_degrees", False))
+            
             tR, xR, yR = self._coord_ranges()
             deg2m_x = self._deg_to_m("x")
             deg2m_y = self._deg_to_m("y")
-
-            if tR:
-                ds_dt = ds_dt / tf_constant(float(tR), tf_float32)
-                dh_dt = dh_dt / tf_constant(float(tR), tf_float32)
             
-            if xR:
-                xRt = tf_constant(float(xR), tf_float32) * deg2m_x
-                dh_dx = dh_dx / xRt
-                d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
-                dK_dx = dK_dx / xRt
-                dSs_dx = dSs_dx / xRt
+            # --- time ---
+            if coords_norm and tR:
+                ds_dt = ds_dt / tR
+                dh_dt = dh_dt / tR
             
-            if yR:
-                yRt = tf_constant(float(yR), tf_float32) * deg2m_y
-                dh_dy = dh_dy / yRt
-                d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
-                dK_dy = dK_dy / yRt
-                dSs_dy = dSs_dy / yRt
-                
-            # Minimal guard (safe improvement):
-            if (not xR) and self.scaling_kwargs.get(
-                    "coords_in_degrees", False):
+            # --- space ---
+            if coords_norm:
+                if xR:
+                    xRt = xR * deg2m_x
+                    dh_dx = dh_dx / xRt
+                    d_K_dh_dx_dx = d_K_dh_dx_dx / (xRt * xRt)
+                    dK_dx = dK_dx / xRt
+                    dSs_dx = dSs_dx / xRt
+                if yR:
+                    yRt = yR * deg2m_y
+                    dh_dy = dh_dy / yRt
+                    d_K_dh_dy_dy = d_K_dh_dy_dy / (yRt * yRt)
+                    dK_dy = dK_dy / yRt
+                    dSs_dy = dSs_dy / yRt
+            elif coords_deg:
+                # unnormalized degrees → just convert deg→m
                 dh_dx = dh_dx / deg2m_x
                 d_K_dh_dx_dx = d_K_dh_dx_dx / (deg2m_x * deg2m_x)
                 dK_dx = dK_dx / deg2m_x
                 dSs_dx = dSs_dx / deg2m_x
             
-            if (not yR) and self.scaling_kwargs.get(
-                    "coords_in_degrees", False):
                 dh_dy = dh_dy / deg2m_y
                 d_K_dh_dy_dy = d_K_dh_dy_dy / (deg2m_y * deg2m_y)
                 dK_dy = dK_dy / deg2m_y

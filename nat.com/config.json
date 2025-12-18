@@ -18,7 +18,7 @@
     "TIME_COL": "year",
     "LON_COL": "longitude",
     "LAT_COL": "latitude",
-    "SUBSIDENCE_COL": "subsidence",
+    "SUBSIDENCE_COL": "subsidence_cum",
     "GWL_COL": "GWL_depth_bgs_z",
     "H_FIELD_COL_NAME": "soil_thickness",
     "OPTIONAL_NUMERIC_FEATURES": [
@@ -284,6 +284,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "a0f107573676096994af75114de433a874f07eb67d4ab5cc456af4d69fd5f213"
+    "config_py_hash": "3cd2a8f70579f449b8a514a544035a8fdf99341b4ec715389e87b4d024d0c9bd"
   }
 }

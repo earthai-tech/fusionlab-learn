@@ -48,7 +48,7 @@ logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
 
-_SMALL = 1e-6
+_SMALL = 1e-12
 
 # ---------------------------------------------------------------------
 # Time-units helpers (SI conversion)
@@ -111,97 +111,67 @@ def positive(x, eps: float = _SMALL):
     """Softplus positivity with tiny epsilon to avoid exact zeros."""
     return tf_softplus(x) + eps
 
+
 @optional_tf_function
 def default_scales(
-    h: Tensor, 
-    s: Tensor, 
-    dt: Tensor, 
-    K: Optional[Tensor] = None, 
-    Ss: Optional[Tensor] = None, 
-    Q: Optional[Union[float, Tensor]] = None, 
+    h: Tensor,
+    s: Tensor,
+    dt: Tensor,
+    K: Optional[Tensor] = None,
+    Ss: Optional[Tensor] = None,
+    Q: Optional[Union[float, Tensor]] = None,
     time_units: Optional[str] = None,
     **kws
 ) -> Dict[str, Tensor]:
-    r"""
-    Derive simple data-driven scale factors so residuals are O(1).
 
-    This function calculates characteristic *scalar* scales for the entire
-    batch by taking the mean of the absolute values of the input tensors
-    (fields). These scalar scales are then used to non-dimensionalize
-    the PDE loss terms, ensuring they are of a similar magnitude (O(1))
-    and preventing any single loss term from dominating the gradient.
+    time_units = time_units or kws.get("time_units", kws.get("time_unit", None))
 
-    The scales are computed as:
-    .. math::
-        
-        \text{cons\_scale} = \frac{\text{s\_ref}}{\text{dt\_ref}}\\
-            \approx \text{Scale}(\frac{\partial s}{\partial t})
-            
-        \text{gw\_scale} = \frac{\text{Ss\_ref} \cdot \text{h\_ref}}\\
-            {\text{dt\_ref}} \approx \text{Scale}(S_s \frac{\partial h}{\partial t})
-    
-    All reference values (h_ref, s_ref, dt_ref, Ss_ref) are computed
-    using ``tf.stop_gradient`` to treat them as constants during
-    differentiation.
-
-    Parameters
-    ----------
-    h : tf.Tensor
-        Predicted hydraulic head field, shape `(B, H, 1)`.
-    s : tf.Tensor
-        Predicted subsidence field, shape `(B, H, 1)`.
-    dt : tf.Tensor
-        Time step intervals, shape `(B, H-1, 1)` or similar.
-    K : tf.Tensor, optional
-        Predicted hydraulic conductivity field. Currently unused in
-        this function but included for API consistency.
-    Ss : tf.Tensor, optional
-        Predicted specific storage field, shape `(B, H, 1)`.
-    Q : float or tf.Tensor, optional
-        Source/sink term. Currently unused.
-
-    Returns
-    -------
-    dict
-        A dictionary containing the scalar reference values and the
-        computed scales:
-        - "h_ref": Scalar mean of |h|
-        - "s_ref": Scalar mean of |s|
-        - "dt_ref": Scalar mean of |dt|
-        - "gw_scale": Characteristic scale for the groundwater flow residual.
-        - "cons_scale": Characteristic scale for the consolidation residual.
-    """
-    # ---  time-unit normalization for dt ----------------------------
-    time_units = time_units  or kws.get(
-        "time_units", kws.get("time_unit", None))
-
-    # dt passed in is in the same units as coords['t'] → convert to seconds
+    # dt is in "time_units" -> convert to seconds
     dt_si = dt_to_seconds(dt, time_units)
 
-    # robust refs (stop gradients to keep them 'constants' during backprop)
-    h_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
-    s_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + _SMALL)
+    # refs (stop gradients)
     dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_si)) + _SMALL)
 
-    # groundwater residual typical scale ~ Ss * h / dt  (first-order)
-    if Ss is not None:
-        # Get the batch-mean of the Ss field
-        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
-        gw_scale = Ss_ref * h_ref / dt_ref
+    # ---- Use increment refs for cumulative fields -----------------------
+    # s: (B,H,1)  -> ds: (B,H-1,1)  matches dt
+    s_level_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + _SMALL)
+    if (s.shape.rank is not None) and (s.shape.rank >= 2) and (
+        (s.shape[1] is not None) and (s.shape[1] > 1)
+    ):
+        ds = s[:, 1:, :] - s[:, :-1, :]
+        ds_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(ds)) + _SMALL)
     else:
-        # Fallback if Ss is not provided (e.g., gw_flow mode disabled)
+        ds_ref = s_level_ref  # fallback
+
+    # optional but usually better for gw scaling too:
+    h_level_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
+    if (h.shape.rank is not None) and (h.shape.rank >= 2) and (
+        (h.shape[1] is not None) and (h.shape[1] > 1)
+    ):
+        dh = h[:, 1:, :] - h[:, :-1, :]
+        dh_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dh)) + _SMALL)
+    else:
+        dh_ref = h_level_ref
+
+    # ---- Scales (both end up in 1/s * field units) ----------------------
+    if Ss is not None:
+        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
+        gw_scale = Ss_ref * dh_ref / dt_ref   # uses Δh not level h
+    else:
         gw_scale = tf_constant(1.0, dtype=tf_float32)
 
-    # consolidation residual typical scale ~ s / dt
-    cons_scale = s_ref / dt_ref
+    cons_scale = ds_ref / dt_ref              # uses Δs not level s
 
     return {
-        "h_ref": h_ref,
-        "s_ref": s_ref,
-        "dt_ref": dt_ref,  # now in seconds
+        "h_ref": h_level_ref,
+        "s_ref": s_level_ref,
+        "dh_ref": dh_ref,
+        "ds_ref": ds_ref,
+        "dt_ref": dt_ref,
         "gw_scale": gw_scale,
         "cons_scale": cons_scale,
     }
+
 
 @optional_tf_function
 def scale_residual(residual, scale):
@@ -1129,4 +1099,95 @@ def compute_gw_flow_derivatives(
 
 
 
+@optional_tf_function
+def _default_scales(
+    h: Tensor, 
+    s: Tensor, 
+    dt: Tensor, 
+    K: Optional[Tensor] = None, 
+    Ss: Optional[Tensor] = None, 
+    Q: Optional[Union[float, Tensor]] = None, 
+    time_units: Optional[str] = None,
+    **kws
+) -> Dict[str, Tensor]:
+    r"""
+    Derive simple data-driven scale factors so residuals are O(1).
+
+    This function calculates characteristic *scalar* scales for the entire
+    batch by taking the mean of the absolute values of the input tensors
+    (fields). These scalar scales are then used to non-dimensionalize
+    the PDE loss terms, ensuring they are of a similar magnitude (O(1))
+    and preventing any single loss term from dominating the gradient.
+
+    The scales are computed as:
+    .. math::
+        
+        \text{cons\_scale} = \frac{\text{s\_ref}}{\text{dt\_ref}}\\
+            \approx \text{Scale}(\frac{\partial s}{\partial t})
+            
+        \text{gw\_scale} = \frac{\text{Ss\_ref} \cdot \text{h\_ref}}\\
+            {\text{dt\_ref}} \approx \text{Scale}(S_s \frac{\partial h}{\partial t})
+    
+    All reference values (h_ref, s_ref, dt_ref, Ss_ref) are computed
+    using ``tf.stop_gradient`` to treat them as constants during
+    differentiation.
+
+    Parameters
+    ----------
+    h : tf.Tensor
+        Predicted hydraulic head field, shape `(B, H, 1)`.
+    s : tf.Tensor
+        Predicted subsidence field, shape `(B, H, 1)`.
+    dt : tf.Tensor
+        Time step intervals, shape `(B, H-1, 1)` or similar.
+    K : tf.Tensor, optional
+        Predicted hydraulic conductivity field. Currently unused in
+        this function but included for API consistency.
+    Ss : tf.Tensor, optional
+        Predicted specific storage field, shape `(B, H, 1)`.
+    Q : float or tf.Tensor, optional
+        Source/sink term. Currently unused.
+
+    Returns
+    -------
+    dict
+        A dictionary containing the scalar reference values and the
+        computed scales:
+        - "h_ref": Scalar mean of |h|
+        - "s_ref": Scalar mean of |s|
+        - "dt_ref": Scalar mean of |dt|
+        - "gw_scale": Characteristic scale for the groundwater flow residual.
+        - "cons_scale": Characteristic scale for the consolidation residual.
+    """
+    # ---  time-unit normalization for dt ----------------------------
+    time_units = time_units  or kws.get(
+        "time_units", kws.get("time_unit", None))
+
+    # dt passed in is in the same units as coords['t'] → convert to seconds
+    dt_si = dt_to_seconds(dt, time_units)
+
+    # robust refs (stop gradients to keep them 'constants' during backprop)
+    h_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
+    s_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + _SMALL)
+    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_si)) + _SMALL)
+
+    # groundwater residual typical scale ~ Ss * h / dt  (first-order)
+    if Ss is not None:
+        # Get the batch-mean of the Ss field
+        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
+        gw_scale = Ss_ref * h_ref / dt_ref
+    else:
+        # Fallback if Ss is not provided (e.g., gw_flow mode disabled)
+        gw_scale = tf_constant(1.0, dtype=tf_float32)
+
+    # consolidation residual typical scale ~ s / dt
+    cons_scale = s_ref / dt_ref
+
+    return {
+        "h_ref": h_ref,
+        "s_ref": s_ref,
+        "dt_ref": dt_ref,  # now in seconds
+        "gw_scale": gw_scale,
+        "cons_scale": cons_scale,
+    }
 

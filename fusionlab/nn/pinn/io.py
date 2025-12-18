@@ -55,16 +55,21 @@ def _maybe_subsample(payload: Dict[str, np.ndarray],
             out[k] = v
     return out
 
-
 def default_meta_from_model(model) -> Dict:
     """
     Build lightweight, JSON-serializable provenance from a model.
+
+    Notes
+    -----
+    - `time_units` describes the *time coordinate units* in the dataset
+      (e.g., "year"), i.e., what `t` represents before conversion.
+    - Physics diagnostics (`tau`, `tau_prior`, `K`, `cons_res_vals`) are
+      exported in SI time units after the model's internal conversions:
+        K: m/s, tau: s, cons_res_vals: m/s.
     """
-    # Try to fetch time_units from model/scaling_kwargs if available
     skw = getattr(model, "scaling_kwargs", None) or {}
     time_units = skw.get("time_units", getattr(model, "time_units", None))
 
-    # Prefer your real attribute names, fallback to old ones
     use_eff_h = bool(getattr(model, "use_effective_h",
                      getattr(model, "use_effective_thickness", False)))
     hd_factor = float(getattr(model, "hd_factor",
@@ -78,33 +83,36 @@ def default_meta_from_model(model) -> Dict:
         "pde_modes_active": getattr(model, "pde_modes_active", None),
         "kappa_mode": getattr(model, "kappa_mode", None),
 
-        # fixed / clarified
         "use_effective_h": use_eff_h,
         "hd_factor": hd_factor,
         "lambda_offset": lambda_offset,
 
-        # optional: keep old keys for backward compat
+        # backward-compat aliases
         "use_effective_thickness": use_eff_h,
         "Hd_factor": hd_factor,
         "lambda_offsets": lambda_offset,
 
+        # provenance: what the input time axis was expressed in
         "time_units": time_units,
+        "time_coord_units": time_units,   # clearer alias
+
+        # IMPORTANT: exported payload units (SI)
         "units": {
             "Hd": "m",
             "Ss": "1/m",
-            "K": f"m/{time_units}" if time_units else "unknown",
-            "tau": str(time_units) if time_units else "unknown",
-            "tau_prior": str(time_units) if time_units else "unknown",
-            "cons_res_vals": "see model scaling",  # residual may be scaled
+            "K": "m/s",
+            "tau": "s",
+            "tau_prior": "s",
+            "cons_res_vals": "m/s",
         },
 
-        # your naming clarity block is good:
         "tau_prior_definition": "tau_closure_from_learned_fields",
         "tau_prior_human_name": "tau_closure",
         "tau_prior_source": "model.evaluate_physics() closure head",
         "tau_closure_formula": "Hd^2 * Ss / (pi^2 * kappa_b * K)",
     }
     return meta
+
 
 # ---------------------------- core routines -------------------------------- #
 

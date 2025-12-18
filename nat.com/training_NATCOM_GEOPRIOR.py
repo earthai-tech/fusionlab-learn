@@ -489,6 +489,7 @@ print("[Info] coords_in_degrees:", coords_in_degrees,
       "deg_to_m_lon:", deg_to_m_lon, "deg_to_m_lat:", deg_to_m_lat)
 print("[Info] H_scale_si:", H_scale_si, "H_bias_si:", H_bias_si)
 
+
 # ---END ADDED 
 
 # Load scaler_info mapping (dict or path)
@@ -674,6 +675,30 @@ subsmodel_params["scaling_kwargs"].update({
     "head_scale_si": head_scale_si,
     "head_bias_si": head_bias_si,
 })
+
+print("=" * 72)
+print("SCALES & UNITS (Stage-1 → Stage-2 SI affine maps)")
+print("-" * 72)
+
+def _fmt(v):
+    if v is None:
+        return "None"
+    try:
+        return f"{float(v):.6g}"
+    except Exception:
+        return str(v)
+
+print(f"{'subs_scale_si':<16}: {_fmt(subs_scale_si)}   [m / model_unit]")
+print(f"{'subs_bias_si':<16}: {_fmt(subs_bias_si)}   [m]")
+print(f"{'head_scale_si':<16}: {_fmt(head_scale_si)}   [m / model_unit]")
+print(f"{'head_bias_si':<16}: {_fmt(head_bias_si)}   [m]")
+print(f"{'time_units':<16}: {_fmt(TIME_UNITS)}   (e.g., 'years')")
+
+print("-" * 72)
+print("SI conversions:  s_si = s_model*subs_scale_si + subs_bias_si ; "
+      "h_si = h_model*head_scale_si + head_bias_si")
+print("=" * 72)
+
 
 subs_model_inst = model_cls(
     static_input_dim=s_dim_model,

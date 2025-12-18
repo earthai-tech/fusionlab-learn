@@ -1744,9 +1744,7 @@ def prepare_pinn_data_sequences(
     
     vlog("Starting PINN data sequence preparation...",
          verbose=verbose, level=1, logger=_logger)
-    
-    if verbose >= 1:
-        logger.info("Starting PINN data sequence preparation...")
+
     df_proc = df.copy()
 
     # --- 1. Validate Input Parameters and Columns ---
@@ -2158,13 +2156,12 @@ def prepare_pinn_data_sequences(
             horizon_end_idx = i + time_steps + forecast_horizon
  
             if future_cols and num_future_feats > 0:
-                if future_cols and num_future_feats > 0:
-                    if mode == 'tft_like':
-                        future_start_idx = i
-                        future_end_idx = i + time_steps + forecast_horizon
-                    else: # 'pihal_like' mode
-                        future_start_idx = horizon_start_idx
-                        future_end_idx = horizon_end_idx
+                if mode == 'tft_like':
+                    future_start_idx = i
+                    future_end_idx = i + time_steps + forecast_horizon
+                else: # 'pihal_like' mode
+                    future_start_idx = horizon_start_idx
+                    future_end_idx = horizon_end_idx
              
                 future_features_arr[current_seq_idx] = group_df.iloc[
                     future_start_idx:future_end_idx

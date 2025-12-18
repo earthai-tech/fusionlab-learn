@@ -63,7 +63,9 @@ try:
         normalize_time_column,
         ensure_directory_exists,
         print_config_table
-
+    )
+    from fusionlab.utils.subsidence_utils import ( 
+        rate_to_cumulative, cumulative_to_rate
     )
     from fusionlab.utils.sequence_utils import build_future_sequences_npz
     from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
@@ -428,6 +430,34 @@ print(f"  Saved: {raw_csv}")
 print(f"\n{'='*18} Step 2: Initial Preprocessing {'='*18}")
 avail = df_raw.columns.tolist()
 
+# --- subsidence column handshake (rate <-> cumulative) ---
+if SUBSIDENCE_COL not in df_raw.columns:
+    if SUBSIDENCE_COL.endswith("_cum") and ("subsidence" in df_raw.columns):
+        df_raw = rate_to_cumulative(
+            df_raw,
+            rate_col="subsidence",
+            cum_col=SUBSIDENCE_COL,
+            time_col=TIME_COL,
+            group_cols=(LON_COL, LAT_COL, "city"),
+            initial="first_equals_rate_dt",
+            inplace=False,
+        )
+    elif (SUBSIDENCE_COL == "subsidence") and ("subsidence_cum" in df_raw.columns):
+        df_raw = cumulative_to_rate(
+            df_raw,
+            cum_col="subsidence_cum",
+            rate_col="subsidence",
+            time_col=TIME_COL,
+            group_cols=(LON_COL, LAT_COL, "city"),
+            first="cum_over_dtref",
+            inplace=False,
+        )
+    else:
+        raise ValueError(
+            f"SUBSIDENCE_COL={SUBSIDENCE_COL!r} not in df and no "
+            "convertible alternative was found."
+        )
+
 # 2.1 Resolve optional columns (as-declared in config)
 opt_num_cols, opt_num_map = _resolve_optional_columns(
     df_raw, OPTIONAL_NUMERIC_FEATURES
@@ -435,7 +465,10 @@ opt_num_cols, opt_num_map = _resolve_optional_columns(
 opt_cat_cols, opt_cat_map = _resolve_optional_columns(
     df_raw, OPTIONAL_CATEGORICAL_FEATURES
     )
-
+# resolves features drivers too if applicables 
+FUTURE_DRIVER_FEATURES, _ = _resolve_optional_columns(
+    df_raw, FUTURE_DRIVER_FEATURES
+)
 # 2.2 Build selection list (required + resolved optional)
 base_select = [
     LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, H_FIELD_COL_NAME
@@ -796,13 +829,12 @@ for k, v in targets_train.items():
 # ==================================================================
 # Step 6: Build train/val datasets & EXPORT numpy
 # ==================================================================
-print(f"\n{'='*18} Step 6: TF Datasets & Export {'='*18}")
+print(f"\n{'='*18} Step 6: Split & Export NPZ {'='*18}")
 
 num_train = inputs_train["dynamic_features"].shape[0]
-future_time_dim = TIME_STEPS + FORECAST_HORIZON_YEARS if MODE == "tft_like" \
-                  else FORECAST_HORIZON_YEARS
+future_time_dim = TIME_STEPS + FORECAST_HORIZON_YEARS if MODE == "tft_like" else FORECAST_HORIZON_YEARS
 
-# Create dense inputs dict (replace Nones with valid shapes)
+# Fill missing optional blocks with empty tensors (consistent shapes)
 static_arr = inputs_train.get("static_features")
 if static_arr is None:
     static_arr = np.zeros((num_train, 0), dtype=np.float32)
@@ -811,33 +843,37 @@ future_arr = inputs_train.get("future_features")
 if future_arr is None:
     future_arr = np.zeros((num_train, future_time_dim, 0), dtype=np.float32)
 
+# Build export dicts directly from arrays (no tf.data round-trip)
 dataset_inputs = {
-    "coords": inputs_train["coords"],
-    "dynamic_features": inputs_train["dynamic_features"],
-    "static_features": static_arr,
-    "future_features": future_arr,
-    "H_field": inputs_train["H_field"],
+    "coords":            np.asarray(inputs_train["coords"], dtype=np.float32),
+    "dynamic_features":  np.asarray(inputs_train["dynamic_features"], dtype=np.float32),
+    "static_features":   np.asarray(static_arr, dtype=np.float32),
+    "future_features":   np.asarray(future_arr, dtype=np.float32),
+    "H_field":           np.asarray(inputs_train["H_field"], dtype=np.float32),
 }
 dataset_targets = {
-    "subs_pred": targets_train["subsidence"],
-    "gwl_pred": targets_train["gwl"],
+    "subs_pred": np.asarray(targets_train["subsidence"], dtype=np.float32),
+    "gwl_pred":  np.asarray(targets_train["gwl"], dtype=np.float32),
 }
 
-full_ds = tf.data.Dataset.from_tensor_slices((dataset_inputs, dataset_targets))
+# Deterministic split indices
 val_size = int(0.2 * num_train)
-train_size = num_train - val_size
-full_ds = full_ds.shuffle(buffer_size=num_train, seed=42)
-train_ds = full_ds.take(train_size).batch(32).prefetch(tf.data.AUTOTUNE)
-val_ds = full_ds.skip(train_size).batch(32).prefetch(tf.data.AUTOTUNE)
+val_size = max(1, min(val_size, num_train - 1))
 
-# Export to numpy so Stage-2 (tuner or trainer) can np.load
-train_np_x, train_np_y = _dataset_to_numpy_pair(train_ds)
-val_np_x, val_np_y = _dataset_to_numpy_pair(val_ds)
+rng = np.random.default_rng(42)
+perm = rng.permutation(num_train)
+val_idx = perm[:val_size]
+train_idx = perm[val_size:]
 
-train_inputs_npz = os.path.join(ARTIFACTS_DIR, "train_inputs.npz")
+train_np_x = {k: v[train_idx] for k, v in dataset_inputs.items()}
+train_np_y = {k: v[train_idx] for k, v in dataset_targets.items()}
+val_np_x   = {k: v[val_idx]   for k, v in dataset_inputs.items()}
+val_np_y   = {k: v[val_idx]   for k, v in dataset_targets.items()}
+
+train_inputs_npz  = os.path.join(ARTIFACTS_DIR, "train_inputs.npz")
 train_targets_npz = os.path.join(ARTIFACTS_DIR, "train_targets.npz")
-val_inputs_npz = os.path.join(ARTIFACTS_DIR, "val_inputs.npz")
-val_targets_npz = os.path.join(ARTIFACTS_DIR, "val_targets.npz")
+val_inputs_npz    = os.path.join(ARTIFACTS_DIR, "val_inputs.npz")
+val_targets_npz   = os.path.join(ARTIFACTS_DIR, "val_targets.npz")
 
 _save_npz(train_inputs_npz, train_np_x)
 _save_npz(train_targets_npz, train_np_y)
@@ -847,6 +883,9 @@ _save_npz(val_targets_npz, val_np_y)
 print(f"  Saved NPZs:\n    {train_inputs_npz}\n    {train_targets_npz}\n"
       f"    {val_inputs_npz}\n    {val_targets_npz}")
 
+# (Optional) only if you still want tf.data for a tiny sanity check
+# train_ds = tf.data.Dataset.from_tensor_slices((train_np_x, train_np_y)).batch(32).prefetch(1)
+# val_ds   = tf.data.Dataset.from_tensor_slices((val_np_x, val_np_y)).batch(32).prefetch(1)
 
 # ==================================================================
 # Manifest: one file to rule them all
@@ -1005,9 +1044,14 @@ if not df_test.empty:
         if test_inputs:
             # fill Nones to zeros like you do for train/val
             N = test_inputs["dynamic_features"].shape[0]
-            static_arr = test_inputs.get("static_features") or np.zeros((N, 0), np.float32)
+            static_arr = test_inputs.get("static_features")
+            if static_arr is None:
+                static_arr = np.zeros((N, 0), np.float32)
+                
             fut_T = TIME_STEPS + FORECAST_HORIZON_YEARS if MODE == "tft_like" else FORECAST_HORIZON_YEARS
-            future_arr = test_inputs.get("future_features") or np.zeros((N, fut_T, 0), np.float32)
+            future_arr = test_inputs.get("future_features")
+            if future_arr is None:
+                future_arr = np.zeros((N, fut_T, 0), np.float32)
             test_inputs_np = {
                 "coords": test_inputs["coords"],
                 "dynamic_features": test_inputs["dynamic_features"],

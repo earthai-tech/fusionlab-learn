@@ -121,7 +121,8 @@ MODE = "tft_like"   # {"pihal_like", "tft_like"}
 TIME_COL = "year"
 LON_COL = "longitude"
 LAT_COL = "latitude"
-SUBSIDENCE_COL = "subsidence"
+# SUBSIDENCE_COL = "subsidence"
+SUBSIDENCE_COL = "subsidence_cum"
 GWL_COL = "GWL_depth_bgs_z"
 H_FIELD_COL_NAME = "soil_thickness"
 
@@ -369,6 +370,7 @@ TIME_UNITS ="year"
 SUBS_UNIT_TO_SI = 1e-3   # mm -> m (set 1.0 if already meters)
 HEAD_UNIT_TO_SI = 1.0    # head already meters in most cases
 
+# Let Stage-1 derive the affine from the MinMaxScaler (recommended)
 SUBS_SCALE_SI = None
 SUBS_BIAS_SI  = None
 HEAD_SCALE_SI = None

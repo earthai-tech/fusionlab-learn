@@ -3176,8 +3176,10 @@ def _normalize_for_pinn(
         # Exclude one-hot columns: numeric columns whose unique values ⊆ {0,1}
         auto_cols = []
         for c in numeric_cols:
-            uniq = pd.unique(df_scaled[c])
-            if set(np.unique(uniq)) <= {0, 1}:
+            # uniq = pd.unique(df_scaled[c])
+            vals = pd.Series(df_scaled[c]).dropna().unique()
+            # if set(np.unique(uniq)) <= {0, 1}:
+            if len(vals) and set(np.unique(vals)) <= {0, 1}:
                 vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
                      verbose=verbose, level=3, logger=_logger)
                 continue
@@ -3422,11 +3424,6 @@ def normalize_for_pinn(
             )
             vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
                   verbose=verbose, level=4, logger=_logger)
-    if forecast_horizon is not None and pd.api.types.is_numeric_dtype(
-            df_scaled[time_col]):
-        # Only do this if you are NOT scaling coords, otherwise it cancels out anyway.
-        if not scale_coords:
-            df_scaled[time_col] = df_scaled[time_col] + float(forecast_horizon)
 
     # --- 2. Scale coordinates if requested ---
     if scale_coords:
@@ -3444,7 +3441,9 @@ def normalize_for_pinn(
                     raise ValueError(
                         f"Cannot convert '{col}' to numeric: {e}"
                     )
-        coord_scaler = MinMaxScaler()
+        if coord_scaler is None:
+            coord_scaler = MinMaxScaler()
+
         # df_scaled[coord_cols] = coord_scaler.fit_transform(
         #     df_scaled[coord_cols]
         # )
@@ -3452,6 +3451,10 @@ def normalize_for_pinn(
             df_scaled[coord_cols] = coord_scaler.fit_transform(
                 df_scaled[coord_cols])
         else:
+            if not hasattr(coord_scaler, "min_"):
+                raise ValueError(
+                    "fit_coord_scaler=False but `coord_scaler` is not fitted."
+                )
             df_scaled[coord_cols] = coord_scaler.transform(
                 df_scaled[coord_cols])
             
@@ -3510,8 +3513,7 @@ def normalize_for_pinn(
             
             if other_scaler is None:
                 other_scaler = MinMaxScaler()
-    
-            other_scaler = MinMaxScaler()
+
             # df_scaled[valid_cols] = other_scaler.fit_transform(
             #     df_scaled[valid_cols]
             # )
@@ -3519,6 +3521,11 @@ def normalize_for_pinn(
                 df_scaled[valid_cols] = other_scaler.fit_transform(
                     df_scaled[valid_cols])
             else:
+                if not hasattr(coord_scaler, "min_"):
+                    raise ValueError(
+                        "fit_coord_scaler=False but"
+                        " `other_scaler` is not fitted."
+                    )
                 df_scaled[valid_cols] = other_scaler.transform(
                     df_scaled[valid_cols])
             
