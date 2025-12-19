@@ -234,7 +234,7 @@ def train_one_pixel(
         kappa_mode="kb",
         use_effective_h=True,
         hd_factor=float(hd_factor),
-        scale_pde_residuals=True,
+        scale_pde_residuals=False,
         
         pde_mode="consolidation",
         offset_mode="log10",  # optional but good for branch coverage

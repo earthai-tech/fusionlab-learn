@@ -155,8 +155,19 @@ if CFG_CITY and manifest_city and manifest_city != CFG_CITY:
 cfg_global   = load_nat_config()          # from config.json
 cfg_manifest = M.get("config", {}) or {}  # from manifest.json
 
-cfg = dict(cfg_global)
-cfg.update(cfg_manifest)  # manifest wins on overlapping keys
+def deep_update(base: dict, upd: dict) -> dict:
+    for k, v in (upd or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            deep_update(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+cfg = deep_update(dict(cfg_global), cfg_manifest)  # manifest wins, but nested keys preserved
+
+
+# cfg = dict(cfg_global)
+# cfg.update(cfg_manifest)  # manifest wins on overlapping keys
 device_info = configure_tf_from_cfg(cfg)
 
 CITY_NAME  = M.get("city",  cfg.get("CITY_NAME", "nansha"))
@@ -301,10 +312,10 @@ LAMBDA_OFFSET_START = cfg.get("LAMBDA_OFFSET_START", None)
 LAMBDA_OFFSET_END = cfg.get("LAMBDA_OFFSET_END", None)
 LAMBDA_OFFSET_SCHEDULE = cfg.get("LAMBDA_OFFSET_SCHEDULE", None)
 
-
 LAMBDA_BOUNDS = cfg.get("LAMBDA_BOUNDS", 0.0)
 # Global physics bounds (from config.py)
 PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
+PHYSICS_BOUNDS_MODE = (cfg.get("PHYSICS_BOUNDS_MODE", "soft") or "soft").strip().lower()
 # Time units for physics (controls d/dt scaling inside PINN residuals)
 TIME_UNITS = (cfg.get("TIME_UNITS", "year") or "year").strip().lower()
 
@@ -322,14 +333,22 @@ phys_bounds.update(PHYSICS_BOUNDS_CFG)
 
 # Convert to the form expected by GeoPriorSubsNet / default_scales(...)
 bounds_for_scaling = {
+    # thickness
     "H_min": float(phys_bounds["H_min"]),
     "H_max": float(phys_bounds["H_max"]),
-    "logK_min": float(np.log(phys_bounds["K_min"])),
-    "logK_max": float(np.log(phys_bounds["K_max"])),
+
+    # ALSO keep linear (canonical from config.py)
+    "K_min":  float(phys_bounds["K_min"]),
+    "K_max":  float(phys_bounds["K_max"]),
+    "Ss_min": float(phys_bounds["Ss_min"]),
+    "Ss_max": float(phys_bounds["Ss_max"]),
+
+    # convenience log-space
+    "logK_min":  float(np.log(phys_bounds["K_min"])),
+    "logK_max":  float(np.log(phys_bounds["K_max"])),
     "logSs_min": float(np.log(phys_bounds["Ss_min"])),
     "logSs_max": float(np.log(phys_bounds["Ss_max"])),
 }
-
 
 # GeoPrior scalar params
 GEOPRIOR_INIT_MV    = cfg.get("GEOPRIOR_INIT_MV",    1e-7)
@@ -487,6 +506,20 @@ if cs_path and os.path.exists(cs_path):
 # -------------------------------------------------------------------------
 sk = (cfg.get("scaling_kwargs") or {})
 
+# -------------------------------------------------------------------------
+# GWL semantics (depth vs head) from config / manifest
+# -------------------------------------------------------------------------
+GWL_KIND = str(sk.get("gwl_kind", cfg.get("GWL_KIND", "depth_bgs"))).lower()
+GWL_SIGN = str(sk.get("gwl_sign", cfg.get("GWL_SIGN", "down_positive"))).lower()
+USE_HEAD_PROXY = bool(sk.get("use_head_proxy", cfg.get("USE_HEAD_PROXY", True)))
+Z_SURF_COL = sk.get("z_surf_col", cfg.get("Z_SURF_COL", None))
+
+print("[Info] GWL semantics:",
+      "GWL_KIND=", GWL_KIND,
+      "| GWL_SIGN=", GWL_SIGN,
+      "| USE_HEAD_PROXY=", USE_HEAD_PROXY,
+      "| Z_SURF_COL=", Z_SURF_COL)
+
 # coords
 coords_normalized = bool(sk.get("coords_normalized", False))
 coord_ranges = sk.get("coord_ranges") or None   # expected dict {"t":..,"x":..,"y":..}
@@ -519,6 +552,12 @@ if (coord_ranges is None) and (coord_scaler is not None):
         sc = coord_scaler.scale_
         coord_ranges = {"t": float(sc[0]), "x": float(sc[1]), "y": float(sc[2])}
         coords_normalized = True
+
+if coords_normalized and not coord_ranges:
+    raise RuntimeError(
+        "coords_normalized=True but coord_ranges missing"
+        " and cannot infer from coord_scaler."
+    )
 
 print("[Info] coords_normalized:", coords_normalized,
       "coord_ranges:", coord_ranges
@@ -646,6 +685,7 @@ subsmodel_params = {
         "bounds": bounds_for_scaling,
         "time_units": TIME_UNITS,   
     },
+    "bounds_mode": PHYSICS_BOUNDS_MODE,
     # GeoPrior scalar params
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
     "kappa": LearnableKappa(initial_value=GEOPRIOR_INIT_KAPPA),
@@ -657,7 +697,7 @@ subsmodel_params = {
     "offset_mode": OFFSET_MODE,
     
     # For consistency
-    "time_units": TIME_UNITS, 
+    "time_units": TIME_UNITS,
 }
 
 subsmodel_params["scaling_kwargs"].update({
@@ -676,12 +716,6 @@ subsmodel_params["scaling_kwargs"].update({
     
 
 })
-
-# Optional: drop Nones to keep scaling_kwargs clean
-subsmodel_params["scaling_kwargs"] = {
-    k: v for k, v in subsmodel_params["scaling_kwargs"].items()
-    if v is not None
-}
 
 sk = cfg.get("scaling_kwargs", {}) or {}
 
@@ -714,7 +748,20 @@ subsmodel_params["scaling_kwargs"].update({
     "subs_bias_si": subs_bias_si,
     "head_scale_si": head_scale_si,
     "head_bias_si": head_bias_si,
+
+    # --- NEW: semantics for interpreting the GWL variable ---
+    "gwl_kind": GWL_KIND,                 # "depth_bgs" or "head"
+    "gwl_sign": GWL_SIGN,                 # "down_positive" or "up_positive"
+    "use_head_proxy": USE_HEAD_PROXY,     # if no z_surf -> head_proxy = -depth
+    "z_surf_col": Z_SURF_COL,             # None or column name if you provide it
+    "gwl_z_meta": sk.get("gwl_z_meta", None),  # optional traceability
 })
+
+# Optional: drop Nones to keep scaling_kwargs clean
+subsmodel_params["scaling_kwargs"] = {
+    k: v for k, v in subsmodel_params["scaling_kwargs"].items()
+    if v is not None
+}
 
 print("=" * 72)
 print("SCALES & UNITS (Stage-1 -> Stage-2 SI affine maps)")
@@ -972,6 +1019,20 @@ run_manifest = {
         "train_log_csv": csvlog_path,
     }
 }
+run_manifest["config"]["scaling_kwargs"].update({
+    "subs_scale_si": subs_scale_si,
+    "subs_bias_si": subs_bias_si,
+    "head_scale_si": head_scale_si,
+    "head_bias_si": head_bias_si,
+    "H_scale_si": float(H_scale_si) if H_scale_si is not None else None,
+    "H_bias_si":  float(H_bias_si)  if H_bias_si  is not None else None,
+    "coords_normalized": coords_normalized,
+    "coord_ranges": coord_ranges,
+    "coords_in_degrees": coords_in_degrees,
+    "deg_to_m_lon": deg_to_m_lon,
+    "deg_to_m_lat": deg_to_m_lat,
+})
+
 with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(run_manifest, f, indent=2)
 
@@ -1297,20 +1358,6 @@ for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
         s_q_b, _ = subs_model_inst.split_data_predictions(data_final_b)  # (B, H, Q, 1)
         s_q_list.append(s_q_b)
 
-    # if CENSOR_FLAG_IDX is not None:
-    #     H = tf.shape(y_true_b)[1]
-    #     mask_b = build_censor_mask(
-    #         xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH,
-    #         source="dynamic",
-    #         reduce_time="any",
-    #     )
-    #     # mask_b = build_censor_mask_from_dynamic(         # (B, H, 1)
-    #     #     xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH
-    #     # )
-
-    #     # mask_b = build_censor_mask_from_dynamic(xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH) 
-    #     # mask_list.append(mask_b)
-        
     if CENSOR_FLAG_IDX is not None:
         H = tf.shape(y_true_b)[1]
         mask_b = build_censor_mask(

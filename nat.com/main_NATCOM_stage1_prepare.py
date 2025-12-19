@@ -614,9 +614,10 @@ present_num = _drop_missing_keep_order(
     [GWL_COL, H_FIELD_COL_NAME, SUBSIDENCE_COL] + opt_num_cols, df_proc
 ) + _drop_missing_keep_order(censor_numeric_additions, df_proc)
 
-# present_num = _drop_missing_keep_order(
-#     [GWL_COL, H_FIELD_COL_NAME, SUBSIDENCE_COL] + opt_num_cols, df_proc
-# )
+
+if isinstance(GWL_COL, str) and GWL_COL.endswith("_z"):
+    ALREADY_NORMALIZED_FEATURES = list(ALREADY_NORMALIZED_FEATURES) + [GWL_COL]
+
 num_cols = [c for c in present_num if c not in set(ALREADY_NORMALIZED_FEATURES)]
 
 df_scaled = df_proc.copy()
@@ -699,6 +700,28 @@ if AUTO_SI:
         subs_scale, subs_bias = aff_subs
     if aff_head is not None:
         head_scale, head_bias = aff_head
+
+# --- If GWL_COL is a z-score of a raw meters column, compose to meters ---
+gwl_raw_col = cfg.get("GWL_RAW_COL", None)
+
+if gwl_raw_col is None and isinstance(GWL_COL, str) and GWL_COL.endswith("_z"):
+    cand = GWL_COL[:-2]  # "GWL_depth_bgs_z" -> "GWL_depth_bgs"
+    if cand in df_proc.columns:
+        gwl_raw_col = cand
+
+gwl_z_meta = None
+if gwl_raw_col and gwl_raw_col in df_proc.columns:
+    mu_m = float(pd.to_numeric(df_proc[gwl_raw_col], errors="coerce").mean())
+    sd_m = float(pd.to_numeric(df_proc[gwl_raw_col], errors="coerce").std(ddof=0))
+    sd_m = max(sd_m, 1e-12)
+
+    # head_scale/head_bias currently invert MinMax back to "z"
+    # Compose z -> meters
+    head_scale = float(head_scale) * sd_m
+    head_bias  = float(head_bias)  * sd_m + mu_m
+
+    gwl_z_meta = {"raw_col": gwl_raw_col, "mean_m": mu_m, "std_m": sd_m}
+
 
 # Apply explicit overrides if provided
 if SUBS_SCALE_SI_CFG is not None: subs_scale = float(SUBS_SCALE_SI_CFG)
@@ -1014,6 +1037,16 @@ manifest["config"]["feature_registry"] = {
     "resolved_optional_categorical": opt_cat_cols,
 }
 manifest["config"]["censoring"] = manifest_censor
+
+manifest["config"]["scaling_kwargs"].update({
+    "gwl_z_meta": gwl_z_meta,
+    "gwl_kind": str(cfg.get("GWL_KIND", "depth_bgs")),
+    "gwl_sign": str(cfg.get("GWL_SIGN", "down_positive")),
+    "use_head_proxy": bool(cfg.get("USE_HEAD_PROXY", True)),
+    "z_surf_col": cfg.get("Z_SURF_COL", None),
+    "gwl_col": GWL_COL,
+    "gwl_raw_col": gwl_z_meta.get("raw_col") if gwl_z_meta else None,
+})
 
 # === Step 5b: Build TEST sequences (temporal generalization) ===
 df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()

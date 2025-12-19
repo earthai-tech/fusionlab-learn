@@ -4,26 +4,6 @@
 debug_geoprior_physics_harness.py
 
 Minimal physics-debug harness for GeoPriorSubsNet (synthetic data).
-
-What it does
-------------
-1) Creates a synthetic NATCOM-like dataframe with your columns.
-2) Builds one "tft_like" sample:
-     - history years:  [FORECAST_START_YEAR - TIME_STEPS, ..., FORECAST_START_YEAR-1]
-     - forecast years: [FORECAST_START_YEAR, ..., FORECAST_START_YEAR + H - 1]
-3) Runs a forward pass.
-4) Runs model.evaluate_physics(..., return_maps=True) and prints:
-     - epsilon_prior / epsilon_cons (if returned)
-     - physics loss parts (if returned)
-     - tau vs tau_phys (closure) and their ratio
-
-How to use
-----------
-python debug_geoprior_physics_harness.py
-
-If it fails:
-- Fix the import list in try_import_geoprior_model()
-- Fix the input dict keys in pack_inputs() to match your model.
 """
 
 from __future__ import annotations
@@ -31,7 +11,6 @@ from __future__ import annotations
 import os
 import math
 import inspect
-import importlib
 from dataclasses import dataclass
 from typing import Dict, Any, Tuple, Optional, Sequence
 
@@ -40,7 +19,7 @@ import pandas as pd
 import tensorflow as tf
 
 from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet
-
+from fusionlab.nn.pinn.op import seconds_per_time_unit
 # ---------------------------------------------------------------------
 # 0) Defaults mirroring your nat.com/config.py (only what we need here)
 # ---------------------------------------------------------------------
@@ -50,15 +29,15 @@ DEFAULT_CFG: Dict[str, Any] = dict(
 
     TRAIN_END_YEAR=2022,
     FORECAST_START_YEAR=2023,
-    FORECAST_HORIZON_YEARS=5,
-    TIME_STEPS=3,
+    FORECAST_HORIZON_YEARS=3,
+    TIME_STEPS=5,
     MODE="tft_like",
 
     TIME_COL="year",
     LON_COL="longitude",
     LAT_COL="latitude",
     SUBSIDENCE_COL="subsidence_cum",
-    GWL_COL="GWL_depth_bgs_z",
+    GWL_COL="head_z",
     H_FIELD_COL_NAME="soil_thickness",
 
     # Architecture
@@ -80,22 +59,22 @@ DEFAULT_CFG: Dict[str, Any] = dict(
     LAMBDA_PRIOR=0.10,
     LAMBDA_SMOOTH=0.01,
     LAMBDA_MV=0.01,
-    LAMBDA_BOUNDS=0.0,
+    LAMBDA_BOUNDS = 1e-3,  # or 1e-2 if you see drift; 0.0 is okay for pure debug
     OFFSET_MODE="mul",
     LAMBDA_OFFSET=1.0,
 
     PHYSICS_BOUNDS=dict(
         H_min=5.0, H_max=80.0,
         K_min=1e-8, K_max=1e-3,
-        Ss_min=1e-7, Ss_max=1e-3,
+        Ss_min=1e-4, Ss_max=1e-3,
     ),
 
-    TIME_UNITS="year",
+    TIME_UNITS="yr",
 
     # Units
     SUBS_UNIT_TO_SI=1e-3,   # mm -> m
     HEAD_UNIT_TO_SI=1.0,    # m -> m
-    THICKNESS_UNIT_TO_SI=1.0,
+    THICKNESS_UNIT_TO_SI=1.0, # m  -> m
 
     # GeoPrior scalars
     GEOPRIOR_INIT_MV=1e-7,
@@ -108,20 +87,6 @@ DEFAULT_CFG: Dict[str, Any] = dict(
     # Optim
     LEARNING_RATE=1e-4,
 )
-
-
-def load_cfg() -> Dict[str, Any]:
-    """Try nat_utils.load_nat_config(); fallback to DEFAULT_CFG."""
-    try:
-        from fusionlab.utils.nat_utils import load_nat_config  # type: ignore
-        cfg = load_nat_config()
-        out = DEFAULT_CFG.copy()
-        out.update(cfg)
-        return out
-    except Exception as e:
-        print("[WARN] Could not import/load nat_utils.load_nat_config().")
-        print("       Falling back to DEFAULT_CFG. Reason:", repr(e))
-        return DEFAULT_CFG.copy()
 
 
 # ---------------------------------------------------------------------
@@ -143,8 +108,10 @@ def make_fake_df(
     lons = lon0 + 0.08 * rng.random(n_sites)
     lats = lat0 + 0.08 * rng.random(n_sites)
 
-    litho_classes = ["Fine-Grained Soil", "Coarse-Grained Soil", "Mixed Clastics", "Carbonate"]
-    lithos = ["Mudstone–Siltstone", "Conglomerate–Sandstone", "Sandstone–Siltstone", "Limestone–Sandstone"]
+    litho_classes = ["Fine-Grained Soil", "Coarse-Grained Soil",
+                     "Mixed Clastics", "Carbonate"]
+    lithos = ["Mudstone–Siltstone", "Conglomerate–Sandstone",
+              "Sandstone–Siltstone", "Limestone–Sandstone"]
 
     rows = []
     for i in range(n_sites):
@@ -152,33 +119,61 @@ def make_fake_df(
         lithology = lithos[i % len(lithos)]
         lithology_class = litho_classes[i % len(litho_classes)]
 
-        urban0 = rng.uniform(0.05, 0.95)   # already [0,1]
-        H0 = rng.uniform(0.5, 25.0)        # m
-        rain0 = rng.uniform(700.0, 1400.0)
+        # static-ish site properties
+        urban0 = rng.uniform(0.05, 0.95)          # already [0,1]
+        H0 = rng.uniform(0.5, 25.0)               # m
+        rain0 = rng.uniform(700.0, 1400.0)        # mm
 
+        # NEW: surface elevation (datum) and baseline depth-to-water
+        z_surf = float(rng.uniform(0.0, 30.0))    # m (synthetic DEM)
+        depth0 = float(rng.uniform(5.0, 60.0))    # m (positive downward)
+        # depth-to-water (BGS), positive downward
+        depth = depth0 + 0.03 * (900.0 - rain0) + rng.normal(0.0, 1.5)
+        depth = float(np.clip(depth, 0.5, 120.0))
+
+        
         subs_annual = []
-        gwl_z = []
+        depth_series = []
+        head_series = []
         H_series = []
         rain_series = []
 
         for y in years:
             rain = rain0 + 80.0 * math.sin((y - years[0]) * 0.7) + rng.normal(0, 40.0)
             rain = float(np.clip(rain, 200.0, 2500.0))
-            hz = float(rng.normal(0.0, 1.0))            # mimics your *_z column
+
+            # depth-to-water (BGS), positive downward
+            depth = depth0 + 0.03 * (900.0 - rain) + rng.normal(0.0, 1.5)
+            depth = float(np.clip(depth, 0.5, 120.0))  # m
+            
+            # hydraulic head in meters (datum = z_surf)
+            head_m = z_surf - depth  # h = z_surf - z_GWL
+            
+            depth_series.append(depth)
+            head_series.append(head_m)
+
+            # hydraulic head in meters
+            head_m = z_surf - depth  # h = z_surf - z_GWL
+
             H = float(np.clip(H0 + rng.normal(0, 0.3), 0.1, 40.0))
 
-            # toy annual subsidence in mm/yr
+            # # drawdown relative to baseline year (positive for head loss)
+            head_ref = z_surf - depth0
+            drawdown = max(0.0, head_ref - head_m)  # = max(0, depth - depth0)
+
+            # toy annual subsidence in mm/yr (depends on drawdown + urban + rain)
             s_mm = (
                 2.0
                 + 10.0 * (urban0 ** 1.3)
-                + 3.0 * max(0.0, -hz)
+                + 1.5 * drawdown               # mm per meter drawdown (toy)
                 + 0.002 * max(0.0, (rain - 900.0))
                 + rng.normal(0.0, 1.0)
             )
             s_mm = float(np.clip(s_mm, 0.0, 40.0))
 
             subs_annual.append(s_mm)
-            gwl_z.append(hz)
+            depth_series.append(depth)
+            head_series.append(head_m)
             H_series.append(H)
             rain_series.append(rain)
 
@@ -186,16 +181,27 @@ def make_fake_df(
         subs_cum = np.cumsum(subs_annual)  # cumulative mm
 
         for j, y in enumerate(years):
-            H = H_series[j]
+            H = float(H_series[j])
             censored = bool(H >= 30.0 - 1e-6)
             H_eff = float(min(H, 30.0))
+
+            depth = float(depth_series[j])
+            head_m = float(head_series[j])
+
             rows.append(
                 dict(
                     longitude=float(lons[i]),
                     latitude=float(lats[i]),
                     year=int(y),
                     lithology=lithology,
-                    GWL=float(np.nan),
+
+                    # keep your columns (now *filled*)
+                    GWL=float(depth),                 # depth-to-water (m)
+                    GWL_depth_bgs=float(depth),       # depth-to-water (m)
+      
+                    head_m=float(head_m),
+                    z_surf_m=float(z_surf),
+
                     rainfall_mm=float(rain_series[j]),
                     soil_thickness=float(H),
                     normalized_urban_load_proxy=float(urban0),
@@ -203,15 +209,41 @@ def make_fake_df(
                     subsidence_cum=float(subs_cum[j]),
                     city=city,
                     lithology_class=lithology_class,
-                    GWL_depth_bgs=float(np.nan),
-                    GWL_depth_bgs_z=float(gwl_z[j]),
+
+                    # # NEW: surface + head in meters
+                    # z_surf_m=float(z_surf),
+                    # head_m=float(head_m),
+
+                    # censoring/thickness fields
                     soil_thickness_censored=censored,
                     soil_thickness_imputed=float(H),
                     soil_thickness_eff=float(H_eff),
                     urban_load_global=float(urban0),
                 )
             )
-    return pd.DataFrame(rows)
+
+    df = pd.DataFrame(rows)
+
+    # Create z-scored versions (like your real dataset)
+    def _zscore(col: str) -> Tuple[pd.Series, float, float]:
+        mu = float(df[col].mean())
+        sig = float(df[col].std(ddof=0))
+        sig = max(sig, 1e-12)
+        return (df[col] - mu) / sig, mu, sig
+
+
+    df["GWL_depth_bgs_z"], depth_mu, depth_std = _zscore("GWL_depth_bgs")
+    
+    # standardize hydraulic head (meters) for the model
+    df["head_z"], head_mu, head_std = _zscore("head_m")
+    
+    df.attrs["head_mu_m"]  = head_mu
+    df.attrs["head_std_m"] = head_std
+    df.attrs["depth_mu_m"] = depth_mu
+    df.attrs["depth_std_m"]= depth_std
+
+
+    return df
 
 
 # ---------------------------------------------------------------------
@@ -264,6 +296,11 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
 
     gcols = [cfg["LON_COL"], cfg["LAT_COL"]]
     sites = list(df.groupby(gcols).groups.keys())[:8]
+    
+    lat_mean = float(np.mean([la for _, la in sites]))
+    deg_to_m_lat = 111_320.0
+    deg_to_m_lon = 111_320.0 * math.cos(math.radians(lat_mean))
+
     B = len(sites)
 
     def get_site_year(df_site: pd.DataFrame, year: int, col: str) -> float:
@@ -372,8 +409,9 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
 
     subs_scale_si = subs_rng * float(cfg["SUBS_UNIT_TO_SI"])
     subs_bias_si = subs_min * float(cfg["SUBS_UNIT_TO_SI"])
-    head_scale_si = head_rng * float(cfg["HEAD_UNIT_TO_SI"])
-    head_bias_si = head_min * float(cfg["HEAD_UNIT_TO_SI"])
+    head_scale_si = float(df.attrs["head_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
+    head_bias_si  = float(df.attrs["head_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
+
 
     scaling_kwargs = dict(
         coords_normalized=True,
@@ -397,6 +435,12 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
         head_scale_si=head_scale_si,
         head_bias_si=head_bias_si,
     )
+    scaling_kwargs.update(dict(
+        coords_in_degrees=True,
+        deg_to_m_lon=deg_to_m_lon,
+        deg_to_m_lat=deg_to_m_lat,
+    ))
+
     # H-field over full window (T+H), in raw meters
     # # IMPORTANT: feed H in RAW meters for physics (reconstruct from scaler)
     # # H_future_raw_m = (X_fut_s[..., 2:3] * H_rng + H_min).astype("float32")
@@ -478,6 +522,7 @@ def build_model(cfg: Dict[str, Any], scaling_kwargs: Dict[str, Any],
 
         mode=cfg.get("MODE", None),  # optional but often helpful
     )
+    init_kwargs["bounds_mode"] = cfg.get("BOUNDS_MODE", "soft")
     model = GeoPriorSubsNet(**init_kwargs)
 
     # compile is optional for evaluate_physics, but ok to keep
@@ -491,6 +536,7 @@ def build_model(cfg: Dict[str, Any], scaling_kwargs: Dict[str, Any],
         lambda_bounds=cfg["LAMBDA_BOUNDS"],
         lambda_offset=cfg["LAMBDA_OFFSET"],
     )
+    compile_kwargs["lambda_bounds"] = cfg.get("LAMBDA_BOUNDS", 0.0)
     model.compile(**compile_kwargs)
     return model
 
@@ -519,7 +565,8 @@ def summarize(name: str, x) -> None:
 # 6) Main
 # ---------------------------------------------------------------------
 def main():
-    cfg = load_cfg()
+    cfg = DEFAULT_CFG.copy() 
+
     print("[CFG] City:", cfg["CITY_NAME"], "| Model:", cfg["MODEL_NAME"])
     print("[CFG] T:", cfg["TIME_STEPS"], "H:", cfg["FORECAST_HORIZON_YEARS"],
           "| train_end:", cfg["TRAIN_END_YEAR"], "forecast_start:", cfg["FORECAST_START_YEAR"])
@@ -573,6 +620,13 @@ def main():
         summarize("mv", model.current_mv())
     if hasattr(model, "current_kappa"):
         summarize("kappa", model.current_kappa())
+        
+    sec_per = seconds_per_time_unit(cfg["TIME_UNITS"])
+    eps_cons_mm_per_unit = phys["epsilon_cons"] * sec_per * 1000.0
+    tf.print("epsilon_cons [mm/time_unit] =", eps_cons_mm_per_unit)
+    tf.print("tau [time_unit] =", phys["tau"] / sec_per)
+    tf.print("pde_modes_active =", model.pde_modes_active)
+
 
     print("\nDone. If tau and tau_phys differ by many orders at init,")
     print("you’ll typically see a big consolidation/prior term at epoch-1.")

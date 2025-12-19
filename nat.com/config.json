@@ -72,6 +72,7 @@
       }
     ],
     "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": true,
+    "INCLUDE_CENSOR_FLAGS_AS_FUTURE": false,
     "USE_EFFECTIVE_H_FIELD": true,
     "THICKNESS_UNIT_TO_SI": 1.0,
     "BUILD_FUTURE_NPZ": true,
@@ -121,10 +122,12 @@
     "LAMBDA_BOUNDS": 0.0,
     "OFFSET_MODE": "mul",
     "LAMBDA_OFFSET": 1.0,
-    "USE_LAMBDA_OFFSET_SCHEDULER": false,
+    "USE_LAMBDA_OFFSET_SCHEDULER": true,
     "LAMBDA_OFFSET_UNIT": "epoch",
     "LAMBDA_OFFSET_WHEN": "begin",
     "LAMBDA_OFFSET_WARMUP": 10,
+    "LAMBDA_OFFSET_START": 0.1,
+    "LAMBDA_OFFSET_END": 1.0,
     "MV_LR_MULT": 1.0,
     "KAPPA_LR_MULT": 5.0,
     "PHYSICS_BOUNDS": {
@@ -135,6 +138,7 @@
       "Ss_min": 1e-07,
       "Ss_max": 0.001
     },
+    "PHYSICS_BOUNDS_MODE": "soft",
     "TIME_UNITS": "year",
     "SUBS_UNIT_TO_SI": 0.001,
     "HEAD_UNIT_TO_SI": 1.0,
@@ -284,6 +288,6 @@
     }
   },
   "__meta__": {
-    "config_py_hash": "36af15cc596da6fc64c38ff179438c805ccbb6c3344b2bc9f2b6e030dec9b655"
+    "config_py_hash": "a02bfd9ac35bb0fb66498dfd297034ba4205a5d43608a33e0aa04d2c02228e30"
   }
 }

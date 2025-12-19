@@ -42,7 +42,6 @@ CITY_NAME = "zhongshan"
 MODEL_NAME = "GeoPriorSubsNet"
 
 
-
 # 1.2 Data root and file patterns
 # -------------------------------
 # DATA_DIR is the base path where the CSV files live, relative to
@@ -124,6 +123,12 @@ LAT_COL = "latitude"
 SUBSIDENCE_COL = "subsidence_cum"
 GWL_COL = "GWL_depth_bgs_z"
 H_FIELD_COL_NAME = "soil_thickness"
+
+
+GWL_KIND = "depth_bgs"     # {"depth_bgs", "head"}
+GWL_SIGN = "down_positive" # {"down_positive", "up_positive"}
+USE_HEAD_PROXY = True      # if no z_surf available: head_proxy = -depth
+Z_SURF_COL = None          # or "dem_m" if you have it
 
 
 # -------------------------------------------------------------------
@@ -314,7 +319,7 @@ OFFSET_MODE = "mul"   # {"mul", "log10"}
 LAMBDA_OFFSET = 1.0
 
 # Optional scheduler (OFF by default)
-USE_LAMBDA_OFFSET_SCHEDULER = False
+USE_LAMBDA_OFFSET_SCHEDULER = True
 
 # Scheduler knobs (used only when USE_LAMBDA_OFFSET_SCHEDULER=True)
 LAMBDA_OFFSET_UNIT = "epoch"   # {"epoch", "step"}
@@ -323,8 +328,8 @@ LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
 # If LAMBDA_OFFSET_SCHEDULE is None, callback uses linear warmup:
 # start -> end over `warmup` epochs/steps.
 LAMBDA_OFFSET_WARMUP = 10
-LAMBDA_OFFSET_START = None
-LAMBDA_OFFSET_END = None
+LAMBDA_OFFSET_START = 0.1# none
+LAMBDA_OFFSET_END = 1.0 # None
 
 # Optional explicit schedule:
 # - dict  : {index: value} where index is epoch/step
@@ -358,6 +363,8 @@ PHYSICS_BOUNDS = {
     "Ss_min": 1e-7,
     "Ss_max": 1e-3,
 }
+
+PHYSICS_BOUNDS_MODE ="soft" 
 
 TIME_UNITS ="year" 
 # -------------------------------------------------------------------
@@ -410,7 +417,7 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Used when training directly (without tuner) and as defaults
 # for compile / fit arguments.
 
-EPOCHS = 2
+EPOCHS = 50
 
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4

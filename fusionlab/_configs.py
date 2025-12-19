@@ -147,6 +147,7 @@ TENSORFLOW_CONFIG = {
     'MultiHeadAttention': ('layers', 'MultiHeadAttention'),
     'Optimizer': ('optimizers', 'Optimizer'),
     'RMSprop': ('optimizers', 'RMSprop'),
+    'RandomNormal': ('initializers', 'RandomNormal'), 
     'Reduction': ('losses','Reduction' ), 
     'ReduceLROnPlateau': ('callbacks', 'ReduceLROnPlateau'),
     'RepeatVector': ('layers', 'RepeatVector'),

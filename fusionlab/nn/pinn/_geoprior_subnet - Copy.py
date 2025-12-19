@@ -89,25 +89,6 @@ _param_docs = DocstringComponents.from_nested_components(
     base=DocstringComponents(_halnet_core_params)
 )
 
-# model = GeoPriorSubsNet(
-#     ...,
-#     scale_pde_residuals=True,
-#     scaling_kwargs=dict(
-#         # existing stuff for default_scales(...)
-#         # ...
-
-#         # NEW: physics bounds (global, city-level ranges)
-#         bounds=dict(
-#             H_min=5.0,    # m    (lower bound on effective thickness)
-#             H_max=80.0,   # m    (upper bound on effective thickness)
-#             logK_min=np.log(1e-8),  # m/s
-#             logK_max=np.log(1e-3),
-#             logSs_min=np.log(1e-7), # Pa^-1
-#             logSs_max=np.log(1e-3),
-#         ),
-#     ),
-# )
-
 
 __all__ = ["GeoPriorSubsNet"]
 

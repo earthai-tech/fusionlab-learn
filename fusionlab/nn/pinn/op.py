@@ -72,22 +72,66 @@ _TIME_UNIT_TO_SECONDS = {
     "year": 31556952.0, "years": 31556952.0, "yr": 31556952.0,
     "month": 31556952.0 / 12.0, "months": 31556952.0 / 12.0,
 }
+def _normalize_time_units(u: Optional[str]) -> str:
+    """
+    Normalize a user-provided time unit string to a canonical key.
+
+    Notes
+    -----
+    - We interpret `time_units` as a *time denominator* for rates, e.g.
+      "m/year", "mm/yr", "1/year" all normalize to "year".
+    - The numerator (e.g. "m/" or "mm/") is ignored by design.
+    - Whitespace is ignored and matching is case-insensitive.
+    """
+    if u is None:
+        return "unitless"
+
+    s = str(u).strip().lower().replace(" ", "")
+
+    # If user passes a rate-like unit ("m/year", "mm/yr", "1/year"),
+    # keep only the denominator.
+    if "/" in s:
+        # e.g. "m/year" -> "year", "1/year" -> "year"
+        s = s.split("/", 1)[1]
+
+    # Also accept explicit reciprocal forms without a slash (rare but safe):
+    # e.g. "1year" is not supported; only "1/year" or "1/yr" etc.
+    if s.startswith("1/"):
+        s = s[2:]
+
+    # Common aliases/cleanup (optional but helpful)
+    if s == "secs":
+        s = "sec"
+    elif s == "yrs":
+        s = "yr"
+    elif s == "mins":
+        s = "min"
+    elif s == "hrs":
+        s = "hr"
+
+    return s
 
 
 def seconds_per_time_unit(
     time_units: Optional[str],
     dtype=tf_float32,
 ) -> Tensor:
-    """Return seconds-per-unit for a given time unit string."""
-    if time_units is None:
-        key = "unitless"
-    else:
-        key = str(time_units).strip().lower()
+    """
+    Return seconds-per-unit for a given time unit string.
+
+    Examples
+    --------
+    - "year"   -> 31556952.0
+    - "m/year" -> 31556952.0   (rate-like input; denominator parsed)
+    - "sec"    -> 1.0
+    """
+    key = _normalize_time_units(time_units)
 
     if key not in _TIME_UNIT_TO_SECONDS:
+        supported = sorted(_TIME_UNIT_TO_SECONDS.keys())
         raise ValueError(
-            f"Unsupported time_units={time_units!r}. Supported keys: "
-            f"{sorted(_TIME_UNIT_TO_SECONDS.keys())}"
+            f"Unsupported time_units={time_units!r} (normalized={key!r}). "
+            f"Supported keys: {supported}"
         )
 
     return tf_constant(float(_TIME_UNIT_TO_SECONDS[key]), dtype=dtype)
@@ -113,7 +157,7 @@ def positive(x, eps: float = _SMALL):
 
 
 @optional_tf_function
-def default_scales(
+def _default_scales(
     h: Tensor,
     s: Tensor,
     dt: Tensor,
@@ -126,10 +170,8 @@ def default_scales(
 
     time_units = time_units or kws.get("time_units", kws.get("time_unit", None))
 
-    # dt is in "time_units" -> convert to seconds
-    dt_si = dt_to_seconds(dt, time_units)
-
-    # refs (stop gradients)
+    # dt is in `time_units` -> convert to seconds for SI-consistent scaling
+    dt_si  = dt_to_seconds(dt, time_units)
     dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_si)) + _SMALL)
 
     # ---- Use increment refs for cumulative fields -----------------------
@@ -156,7 +198,12 @@ def default_scales(
     # ---- Scales (both end up in 1/s * field units) ----------------------
     if Ss is not None:
         Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
-        gw_scale = Ss_ref * dh_ref / dt_ref   # uses Δh not level h
+        # gw_scale = Ss_ref * dh_ref / dt_ref   # uses Δh not level h
+        
+        # dt_ref_sec = dt_ref * seconds_per_time_unit(time_units)  # if dt_ref is in "yr"
+        gw_scale   = Ss_ref * dh_ref / dt_ref                          # => 1/s
+        cons_scale = ds_ref / dt_ref                                   # => m/s
+
     else:
         gw_scale = tf_constant(1.0, dtype=tf_float32)
 
@@ -172,6 +219,39 @@ def default_scales(
         "cons_scale": cons_scale,
     }
 
+def default_scales(h, s, dt, K=None, Ss=None, Q=None, time_units=None, **kws):
+    eps = tf_constant(1e-12, tf_float32)
+    time_units = time_units or kws.get("time_units", kws.get("time_unit", None))
+
+    # dt is in `time_units` (e.g., years) -> convert ONCE to seconds
+    dt_sec  = dt_to_seconds(dt, time_units)
+    dt_ref  = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_sec)) + eps)   # [s]
+
+    # cumulative levels -> use increments for “typical change per step”
+    if s.shape.rank and s.shape[1] and s.shape[1] > 1:
+        ds = s[:, 1:, :] - s[:, :-1, :]
+        ds_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(ds)) + eps)     # [m]
+    else:
+        ds_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + eps)      # [m]
+
+    if h.shape.rank and h.shape[1] and h.shape[1] > 1:
+        dh = h[:, 1:, :] - h[:, :-1, :]
+        dh_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dh)) + eps)     # [m]
+    else:
+        dh_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + eps)      # [m]
+
+    cons_scale = ds_ref / dt_ref                                        # [m/s]
+
+    if Ss is not None:
+        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + eps)     # [1/m]
+        gw_scale = Ss_ref * dh_ref / dt_ref                             # [1/s]
+    else:
+        gw_scale = tf_constant(1.0, tf_float32)
+
+    return {
+        "dt_ref": dt_ref, "ds_ref": ds_ref, "dh_ref": dh_ref,
+        "cons_scale": cons_scale, "gw_scale": gw_scale,
+    }
 
 @optional_tf_function
 def scale_residual(residual, scale):
