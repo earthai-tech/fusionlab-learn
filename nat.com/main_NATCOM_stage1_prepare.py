@@ -788,7 +788,10 @@ for sp in CENSORING_SPECS or []:
         dynamic_features = dynamic_features + [fflag]
     if INCLUDE_CENSOR_FLAGS_AS_FUTURE and fflag not in future_features:       
         future_features = future_features + [fflag]
-        
+     
+# --- record ordering metadata for Stage-2 (NO guessing later) ---
+gwl_dyn_index = int(dynamic_features.index(GWL_COL))  # will raise if missing (good)
+
 print(f"  Static : {static_features}")
 print(f"  Dynamic: {dynamic_features}")
 print(f"  Future : {future_features}")
@@ -1046,6 +1049,11 @@ manifest["config"]["scaling_kwargs"].update({
     "z_surf_col": cfg.get("Z_SURF_COL", None),
     "gwl_col": GWL_COL,
     "gwl_raw_col": gwl_z_meta.get("raw_col") if gwl_z_meta else None,
+})
+manifest["config"]["scaling_kwargs"].update({
+    "dynamic_feature_names": list(dynamic_features),
+    "future_feature_names":  list(future_features),
+    "gwl_dyn_index":         gwl_dyn_index,
 })
 
 # === Step 5b: Build TEST sequences (temporal generalization) ===

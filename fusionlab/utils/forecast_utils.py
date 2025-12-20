@@ -3298,8 +3298,8 @@ def normalize_for_pinn(
 
     # Make a copy to avoid side effects
     df_scaled = df.copy(deep=True)
-    coord_scaler: Optional[MinMaxScaler] = None
-    other_scaler: Optional[MinMaxScaler] = None
+    # coord_scaler: Optional[MinMaxScaler] = None
+    # other_scaler: Optional[MinMaxScaler] = None
 
     # # --- 1. Adjust time before scaling ---
     if forecast_horizon is not None:
@@ -3341,6 +3341,9 @@ def normalize_for_pinn(
                         f"Cannot convert '{col}' to numeric: {e}"
                     )
         if coord_scaler is None:
+            if not fit_coord_scaler:
+                raise ValueError(
+                    "coord_scaler must be provided when fit_coord_scaler=False")
             coord_scaler = MinMaxScaler()
 
         # df_scaled[coord_cols] = coord_scaler.fit_transform(
@@ -3411,16 +3414,16 @@ def normalize_for_pinn(
         if valid_cols:
             
             if other_scaler is None:
+                if not fit_coord_scaler:
+                    raise ValueError(
+                        "other_scaler must be provided when fit_coord_scaler=False")
                 other_scaler = MinMaxScaler()
 
-            # df_scaled[valid_cols] = other_scaler.fit_transform(
-            #     df_scaled[valid_cols]
-            # )
             if fit_other_scaler:
                 df_scaled[valid_cols] = other_scaler.fit_transform(
                     df_scaled[valid_cols])
             else:
-                if not hasattr(coord_scaler, "min_"):
+                if not hasattr(other_scaler, "min_"):
                     raise ValueError(
                         "fit_coord_scaler=False but"
                         " `other_scaler` is not fitted."

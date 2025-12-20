@@ -42,6 +42,12 @@ tf_reduce_mean = KERAS_DEPS.reduce_mean
 tf_abs = KERAS_DEPS.abs 
 tf_softplus = KERAS_DEPS.softplus 
 tf_zeros_like = KERAS_DEPS.zeros_like 
+tf_reshape =KERAS_DEPS.reshape 
+tf_shape = KERAS_DEPS.shape 
+tf_maximum = KERAS_DEPS.maximum 
+tf_reduce_max = KERAS_DEPS.reduce_max 
+tf_cast = KERAS_DEPS.cast 
+
 
 DEP_MSG = dependency_message('nn.pinn.op') 
 logger = fusionlog().get_fusionlab_logger(__name__)
@@ -53,25 +59,45 @@ _SMALL = 1e-12
 # ---------------------------------------------------------------------
 # Time-units helpers (SI conversion)
 # ---------------------------------------------------------------------
+
 _TIME_UNIT_TO_SECONDS = {
     # identity / legacy
-    "unitless": 1.0, "step": 1.0, "index": 1.0,
+    "unitless": 1.0, 
+    "step": 1.0,
+    "index": 1.0,
 
     # seconds
-    "s": 1.0, "sec": 1.0, "second": 1.0, "seconds": 1.0,
+    "s": 1.0, 
+    "sec": 1.0,
+    "second": 1.0, 
+    "seconds": 1.0,
 
     # minutes / hours
-    "min": 60.0, "minute": 60.0, "minutes": 60.0,
-    "h": 3600.0, "hr": 3600.0, "hour": 3600.0, "hours": 3600.0,
+    "min": 60.0, 
+    "minute": 60.0, 
+    "minutes": 60.0,
+    
+    "h": 3600.0, 
+    "hr": 3600.0, 
+    "hour": 3600.0,
+    "hours": 3600.0,
 
     # days / weeks
-    "day": 86400.0, "days": 86400.0,
-    "week": 7.0 * 86400.0, "weeks": 7.0 * 86400.0,
+    "day": 86400.0,
+    "days": 86400.0,
+    
+    "week": 7.0 * 86400.0, 
+    "weeks": 7.0 * 86400.0,
 
     # years/months (mean Gregorian)
-    "year": 31556952.0, "years": 31556952.0, "yr": 31556952.0,
-    "month": 31556952.0 / 12.0, "months": 31556952.0 / 12.0,
+    "year": 31556952.0,
+    "years": 31556952.0, 
+    "yr": 31556952.0,
+    
+    "month": 31556952.0 / 12.0, 
+    "months": 31556952.0 / 12.0,
 }
+
 def _normalize_time_units(u: Optional[str]) -> str:
     """
     Normalize a user-provided time unit string to a canonical key.
@@ -155,103 +181,109 @@ def positive(x, eps: float = _SMALL):
     """Softplus positivity with tiny epsilon to avoid exact zeros."""
     return tf_softplus(x) + eps
 
-
-@optional_tf_function
-def _default_scales(
-    h: Tensor,
+def default_scales(
     s: Tensor,
+    h: Tensor,
     dt: Tensor,
     K: Optional[Tensor] = None,
     Ss: Optional[Tensor] = None,
-    Q: Optional[Union[float, Tensor]] = None,
-    time_units: Optional[str] = None,
-    **kws
+    Q: Optional[Tensor] = None,
+    time_units: Optional[str] = "yr",
+    eps: float = 1e-12,
+    *,
+    min_cons_rate: float = 1e-3,
+    min_gw_scale: float = 1e-12,
+    head_scale_floor: float = 1.0,
 ) -> Dict[str, Tensor]:
+    """
+    Heuristic, safe defaults for PDE scaling constants c* (m/s) and g* (1/s).
 
-    time_units = time_units or kws.get("time_units", kws.get("time_unit", None))
+    Key behavior:
+    - Uses both incremental and amplitude-based rates.
+    - Floors c* so it cannot collapse when s(t) is initially flat.
+    - Floors dt_ref so weird dt cannot collapse scales.
+    """
+    if time_units is None:
+        time_units = "yr"
 
-    # dt is in `time_units` -> convert to seconds for SI-consistent scaling
-    dt_si  = dt_to_seconds(dt, time_units)
-    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_si)) + _SMALL)
+    def _flat(x: Tensor) -> Tensor:
+        return tf_reshape(x, [-1])
 
-    # ---- Use increment refs for cumulative fields -----------------------
-    # s: (B,H,1)  -> ds: (B,H-1,1)  matches dt
-    s_level_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + _SMALL)
-    if (s.shape.rank is not None) and (s.shape.rank >= 2) and (
-        (s.shape[1] is not None) and (s.shape[1] > 1)
-    ):
-        ds = s[:, 1:, :] - s[:, :-1, :]
-        ds_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(ds)) + _SMALL)
-    else:
-        ds_ref = s_level_ref  # fallback
+    # Ensure expected ranks (B, T, 1)
+    if getattr(s, "shape", None) is not None and s.shape.rank == 2:
+        s = s[:, :, None]
+    if getattr(h, "shape", None) is not None and h.shape.rank == 2:
+        h = h[:, :, None]
 
-    # optional but usually better for gw scaling too:
-    h_level_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + _SMALL)
-    if (h.shape.rank is not None) and (h.shape.rank >= 2) and (
-        (h.shape[1] is not None) and (h.shape[1] > 1)
-    ):
-        dh = h[:, 1:, :] - h[:, :-1, :]
-        dh_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dh)) + _SMALL)
-    else:
-        dh_ref = h_level_ref
+    # --- dt reference (seconds) ---
+    dt_sec = dt_to_seconds(dt, time_units=time_units)
+    dt_ref = tf_reduce_mean(tf_abs(_flat(dt_sec)))
+    dt_ref = tf_maximum(
+        dt_ref,
+        tf_cast(seconds_per_time_unit(time_units), dt_ref.dtype),
+    )
 
-    # ---- Scales (both end up in 1/s * field units) ----------------------
+    # --- consolidation scale c* (m/s) ---
+    ds = s[:, 1:, :] - s[:, :-1, :]
+    ds_abs = tf_abs(_flat(ds))
+    s_abs = tf_abs(_flat(s))
+
+    ds_mean = tf_reduce_mean(ds_abs)
+    s_mean = tf_reduce_mean(s_abs)
+
+    T = tf_shape(s)[1]
+    Tm1 = tf_maximum(T - 1, 1)
+    Tm1_f = tf_cast(Tm1, dt_ref.dtype)
+    dt_total = dt_ref * Tm1_f
+
+    rate_inc = ds_mean / dt_ref
+    rate_amp = s_mean / dt_total
+
+    rate_inc_max = tf_reduce_max(ds_abs) / dt_ref
+    rate_amp_max = tf_reduce_max(s_abs) / dt_total
+
+    cons_scale = tf_maximum(
+        tf_maximum(rate_inc, rate_amp),
+        0.1 * tf_maximum(rate_inc_max, rate_amp_max),
+    )
+
+    cons_floor = rate_to_per_second(
+        tf_cast(min_cons_rate, cons_scale.dtype),
+        time_units=time_units,
+    )
+    cons_scale = tf_maximum(cons_scale, cons_floor)
+    cons_scale = tf_maximum(cons_scale, tf_cast(eps, cons_scale.dtype))
+
+    # --- groundwater scale g* (1/s) ---
+    dh = h[:, 1:, :] - h[:, :-1, :]
+    dh_abs = tf_abs(_flat(dh))
+    h_abs = tf_abs(_flat(h))
+
+    dh_mean = tf_reduce_mean(dh_abs)
+    h_mean = tf_reduce_mean(h_abs)
+
+    dh_dt_inc = dh_mean / dt_ref
+    dh_dt_amp = h_mean / dt_total
+    dh_dt_ref = tf_maximum(dh_dt_inc, dh_dt_amp)
+
+    head_scale = tf_maximum(
+        h_mean,
+        tf_cast(head_scale_floor, dh_dt_ref.dtype),
+    )
+
     if Ss is not None:
-        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + _SMALL)
-        # gw_scale = Ss_ref * dh_ref / dt_ref   # uses Δh not level h
-        
-        # dt_ref_sec = dt_ref * seconds_per_time_unit(time_units)  # if dt_ref is in "yr"
-        gw_scale   = Ss_ref * dh_ref / dt_ref                          # => 1/s
-        cons_scale = ds_ref / dt_ref                                   # => m/s
-
+        Ss_ref = tf_reduce_mean(tf_abs(_flat(Ss)))
     else:
-        gw_scale = tf_constant(1.0, dtype=tf_float32)
+        Ss_ref = 1.0 / head_scale
 
-    cons_scale = ds_ref / dt_ref              # uses Δs not level s
+    gw_scale_1 = Ss_ref * dh_dt_ref
+    gw_scale_2 = dh_dt_ref / head_scale
+    gw_scale = tf_maximum(gw_scale_1, gw_scale_2)
+    gw_scale = tf_maximum(gw_scale, tf_cast(min_gw_scale, gw_scale.dtype))
+    gw_scale = tf_maximum(gw_scale, tf_cast(eps, gw_scale.dtype))
 
-    return {
-        "h_ref": h_level_ref,
-        "s_ref": s_level_ref,
-        "dh_ref": dh_ref,
-        "ds_ref": ds_ref,
-        "dt_ref": dt_ref,
-        "gw_scale": gw_scale,
-        "cons_scale": cons_scale,
-    }
+    return {"cons_scale": cons_scale, "gw_scale": gw_scale}
 
-def default_scales(h, s, dt, K=None, Ss=None, Q=None, time_units=None, **kws):
-    eps = tf_constant(1e-12, tf_float32)
-    time_units = time_units or kws.get("time_units", kws.get("time_unit", None))
-
-    # dt is in `time_units` (e.g., years) -> convert ONCE to seconds
-    dt_sec  = dt_to_seconds(dt, time_units)
-    dt_ref  = tf_stop_gradient(tf_reduce_mean(tf_abs(dt_sec)) + eps)   # [s]
-
-    # cumulative levels -> use increments for “typical change per step”
-    if s.shape.rank and s.shape[1] and s.shape[1] > 1:
-        ds = s[:, 1:, :] - s[:, :-1, :]
-        ds_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(ds)) + eps)     # [m]
-    else:
-        ds_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(s)) + eps)      # [m]
-
-    if h.shape.rank and h.shape[1] and h.shape[1] > 1:
-        dh = h[:, 1:, :] - h[:, :-1, :]
-        dh_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(dh)) + eps)     # [m]
-    else:
-        dh_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(h)) + eps)      # [m]
-
-    cons_scale = ds_ref / dt_ref                                        # [m/s]
-
-    if Ss is not None:
-        Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(Ss)) + eps)     # [1/m]
-        gw_scale = Ss_ref * dh_ref / dt_ref                             # [1/s]
-    else:
-        gw_scale = tf_constant(1.0, tf_float32)
-
-    return {
-        "dt_ref": dt_ref, "ds_ref": ds_ref, "dh_ref": dh_ref,
-        "cons_scale": cons_scale, "gw_scale": gw_scale,
-    }
 
 @optional_tf_function
 def scale_residual(residual, scale):

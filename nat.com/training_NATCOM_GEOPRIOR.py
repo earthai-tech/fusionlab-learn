@@ -390,6 +390,39 @@ cols_cfg = cfg.get("cols", {})
 SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
 GWL_COL        = cols_cfg.get("gwl", "GWL")
 
+# -------------------------------------------------------------------------
+# Resolve which *dynamic feature channel* corresponds to the GWL driver
+# (depth-to-water or head proxy) and store its index for the model.
+# -------------------------------------------------------------------------
+sk_stage1 = cfg.get("scaling_kwargs", {}) or {}
+
+# Prefer an explicit name if Stage-1 recorded it; else fall back to cols["gwl"]
+gwl_dyn_name = (
+    sk_stage1.get("gwl_dyn_name")
+    or sk_stage1.get("gwl_col")     # backward compat with earlier naming
+    or GWL_COL
+)
+
+# If cols["gwl"] is a target name but the dynamic driver is e.g. "z_GWL",
+# try common alternatives.
+if gwl_dyn_name not in DYN_NAMES:
+    for cand in (GWL_COL, "z_GWL", "Z_GWL", "gwl", "GWL", "depth_to_water"):
+        if cand in DYN_NAMES:
+            gwl_dyn_name = cand
+            break
+
+if gwl_dyn_name not in DYN_NAMES:
+    raise RuntimeError(
+        "Cannot find the GWL driver column inside FEATURES['dynamic'].\n"
+        f"  Requested/derived gwl_dyn_name: {gwl_dyn_name!r}\n"
+        f"  Available dynamic features: {DYN_NAMES}\n"
+        "Fix: ensure Stage-1 exports the GWL driver in dynamic_features, or set\n"
+        "     cfg['scaling_kwargs']['gwl_dyn_name'] to the correct dynamic feature."
+    )
+
+GWL_DYN_INDEX = int(DYN_NAMES.index(gwl_dyn_name))
+print(f"[Info] GWL dynamic channel: name={gwl_dyn_name} | index={GWL_DYN_INDEX}")
+
 # Train options
 EPOCHS        = cfg.get("EPOCHS", 50)
 BATCH_SIZE    = cfg.get("BATCH_SIZE", 32)
@@ -610,6 +643,18 @@ y_test  = dict(np.load(test_targets_npz)) if test_targets_npz else None
 OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
 OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
 
+# Assert tensor/name consistency once
+
+if "dynamic_features" in X_train and DYN_NAMES:
+    f_dyn = X_train["dynamic_features"].shape[-1]
+    if f_dyn != len(DYN_NAMES):
+        raise RuntimeError(
+            "Mismatch: NPZ dynamic_features last-dim != len(FEATURES['dynamic']).\n"
+            f"  NPZ dynamic_features dim: {f_dyn}\n"
+            f"  FEATURES['dynamic'] len : {len(DYN_NAMES)}\n"
+            "This means Stage-1 feature list and exported NPZ are out of sync."
+        )
+
 # =============================================================================
 # Build datasets
 # =============================================================================
@@ -715,6 +760,16 @@ subsmodel_params["scaling_kwargs"].update({
     "H_bias_si":  (float(H_bias_si)  if H_bias_si  is not None else 0.0),
     
 
+})
+
+subsmodel_params["scaling_kwargs"].update({
+    # names let you sanity-check tensors and debug
+    "dynamic_feature_names": list(DYN_NAMES),
+    "future_feature_names":  list(FUT_NAMES),
+
+    # the important part: safe slicing instead of hard-coded channel 0
+    "gwl_dyn_name":  gwl_dyn_name,
+    "gwl_dyn_index": GWL_DYN_INDEX,
 })
 
 sk = cfg.get("scaling_kwargs", {}) or {}
@@ -1031,6 +1086,13 @@ run_manifest["config"]["scaling_kwargs"].update({
     "coords_in_degrees": coords_in_degrees,
     "deg_to_m_lon": deg_to_m_lon,
     "deg_to_m_lat": deg_to_m_lat,
+})
+
+run_manifest["config"]["scaling_kwargs"].update({
+    "dynamic_feature_names": list(DYN_NAMES),
+    "future_feature_names":  list(FUT_NAMES),
+    "gwl_dyn_name":  gwl_dyn_name,
+    "gwl_dyn_index": int(GWL_DYN_INDEX),
 })
 
 with open(manifest_path, "w", encoding="utf-8") as f:

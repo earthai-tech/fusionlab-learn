@@ -37,7 +37,8 @@ DEFAULT_CFG: Dict[str, Any] = dict(
     LON_COL="longitude",
     LAT_COL="latitude",
     SUBSIDENCE_COL="subsidence_cum",
-    GWL_COL="head_z",
+    # GWL_COL="head_z",
+    GWL_COL="GWL_depth_bgs_z", 
     H_FIELD_COL_NAME="soil_thickness",
 
     # Architecture
@@ -62,14 +63,19 @@ DEFAULT_CFG: Dict[str, Any] = dict(
     LAMBDA_BOUNDS = 1e-3,  # or 1e-2 if you see drift; 0.0 is okay for pure debug
     OFFSET_MODE="mul",
     LAMBDA_OFFSET=1.0,
-
+    
     PHYSICS_BOUNDS=dict(
-        H_min=5.0, H_max=80.0,
-        K_min=1e-8, K_max=1e-3,
-        Ss_min=1e-4, Ss_max=1e-3,
+        # H_field is soil_thickness_eff (effective compressible thickness)
+        H_min=0.1,    H_max=35.0,   # use 30–35 depending on your censor cap
+    
+        # Effective hydraulic conductivity (m/s) — keep wide but sane
+        K_min=1e-10,  K_max=1e-4,
+    
+        # Specific storage (1/m) — wide enough to not overconstrain
+        Ss_min=1e-6,  Ss_max=1e-3,
     ),
 
-    TIME_UNITS="yr",
+    TIME_UNITS="year",
 
     # Units
     SUBS_UNIT_TO_SI=1e-3,   # mm -> m
@@ -145,19 +151,17 @@ def make_fake_df(
             # depth-to-water (BGS), positive downward
             depth = depth0 + 0.03 * (900.0 - rain) + rng.normal(0.0, 1.5)
             depth = float(np.clip(depth, 0.5, 120.0))  # m
-            
+
             # hydraulic head in meters (datum = z_surf)
             head_m = z_surf - depth  # h = z_surf - z_GWL
-            
+
+            # keep exactly ONE append per year
             depth_series.append(depth)
             head_series.append(head_m)
 
-            # hydraulic head in meters
-            head_m = z_surf - depth  # h = z_surf - z_GWL
-
             H = float(np.clip(H0 + rng.normal(0, 0.3), 0.1, 40.0))
 
-            # # drawdown relative to baseline year (positive for head loss)
+            # drawdown relative to baseline year (positive for head loss)
             head_ref = z_surf - depth0
             drawdown = max(0.0, head_ref - head_m)  # = max(0, depth - depth0)
 
@@ -165,15 +169,13 @@ def make_fake_df(
             s_mm = (
                 2.0
                 + 10.0 * (urban0 ** 1.3)
-                + 1.5 * drawdown               # mm per meter drawdown (toy)
+                + 1.5 * drawdown
                 + 0.002 * max(0.0, (rain - 900.0))
                 + rng.normal(0.0, 1.0)
             )
             s_mm = float(np.clip(s_mm, 0.0, 40.0))
 
             subs_annual.append(s_mm)
-            depth_series.append(depth)
-            head_series.append(head_m)
             H_series.append(H)
             rain_series.append(rain)
 
@@ -330,6 +332,9 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
     litho_id = np.zeros((B, 1), int)
     classes = {c: i for i, c in enumerate(sorted(df["lithology_class"].dropna().unique().tolist()))}
     
+    head_scale_si = float(df.attrs["depth_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
+    head_bias_si  = float(df.attrs["depth_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
+
     # n_classes = len(classes)
     # static_inputs = np.eye(n_classes, dtype="float32")[litho_id[:, 0]]  # (B, C)
 
@@ -401,24 +406,40 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
     # full future-cov window
     X_fut_s[..., 0]  = rain_s
     X_fut_s[..., 2]  = H_s
+    # ------------------------------------------------------------------
+    # Feature name lists that MUST match the tensor channel ordering
+    # ------------------------------------------------------------------
+    DYN_FEATURE_NAMES = [
+        cfg["GWL_COL"],                 # channel 0
+        "rainfall_mm",                  # channel 1
+        "urban_load_global",            # channel 2
+        "soil_thickness_eff",           # channel 3
+        "soil_thickness_censored",      # channel 4
+    ]
+    FUT_FEATURE_NAMES = [
+        "rainfall_mm",                  # channel 0
+        "urban_load_global",            # channel 1
+        "soil_thickness_eff",           # channel 2
+        "soil_thickness_censored",      # channel 3
+    ]
 
-    # --- SI affine mapping (model-space -> SI)
-    # (best-effort for physics debug; adapt if your real Stage-1 differs)
+    GWL_DYN_INDEX = int(DYN_FEATURE_NAMES.index(cfg["GWL_COL"]))
+
+    # --- SI affine mapping (model-space -> SI meters)
+    # subsidence: you minmax'ed future subs; keep as you had
     _, subs_min, subs_rng = _minmax_fit_transform(y_subs_fut)
-    _, head_min, head_rng = _minmax_fit_transform(y_gwl_fut)
-
     subs_scale_si = subs_rng * float(cfg["SUBS_UNIT_TO_SI"])
-    subs_bias_si = subs_min * float(cfg["SUBS_UNIT_TO_SI"])
-    head_scale_si = float(df.attrs["head_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
-    head_bias_si  = float(df.attrs["head_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
+    subs_bias_si  = subs_min * float(cfg["SUBS_UNIT_TO_SI"])
 
+    # IMPORTANT: your GWL_COL is DEPTH z-score => use depth stats
+    head_scale_si = float(df.attrs["depth_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
+    head_bias_si  = float(df.attrs["depth_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
 
     scaling_kwargs = dict(
         coords_normalized=True,
         coords_in_degrees=False,
         time_units=cfg.get("TIME_UNITS", "year"),
 
-        # multiple spellings for your _coord_ranges() implementation
         coord_ranges=dict(t=t_rng, x=x_rng, y=y_rng),
         t_range=t_rng, x_range=x_rng, y_range=y_rng,
         coord_range_t=t_rng, coord_range_x=x_rng, coord_range_y=y_rng,
@@ -434,11 +455,30 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
         subs_bias_si=subs_bias_si,
         head_scale_si=head_scale_si,
         head_bias_si=head_bias_si,
+
+        # >>> NEW: allow model to slice the right gwl channel safely
+        dynamic_feature_names=list(DYN_FEATURE_NAMES),
+        future_feature_names=list(FUT_FEATURE_NAMES),
+        gwl_col=str(cfg["GWL_COL"]),
+        gwl_dyn_index=int(GWL_DYN_INDEX),
     )
+
     scaling_kwargs.update(dict(
         coords_in_degrees=True,
         deg_to_m_lon=deg_to_m_lon,
         deg_to_m_lat=deg_to_m_lat,
+    ))
+    
+    # scaling_kwargs.update(dict(
+    #     gwl_kind="depth",          # IMPORTANT
+    #     gwl_sign="down_positive",  # your convention (depth positive downward)
+    #     use_head_proxy=True,       # if you do NOT provide z_surf
+    # ))
+    scaling_kwargs.update(dict(
+        gwl_kind="depth_bgs",     # better than "depth" if the model checks for "depth_bgs"
+        gwl_sign="down_positive",
+        use_head_proxy=True,      # since harness doesn't pass z_surf as tensor input
+        z_surf_col=None,
     ))
 
     # H-field over full window (T+H), in raw meters
@@ -540,14 +580,11 @@ def build_model(cfg: Dict[str, Any], scaling_kwargs: Dict[str, Any],
     model.compile(**compile_kwargs)
     return model
 
-
-
 # ---------------------------------------------------------------------
 # 5) Small printing helpers
 # ---------------------------------------------------------------------
 def _to_np(x) -> np.ndarray:
     return x.numpy() if hasattr(x, "numpy") else np.asarray(x)
-
 
 def summarize(name: str, x) -> None:
     arr = np.asarray(_to_np(x), dtype=float).ravel()
@@ -560,7 +597,6 @@ def summarize(name: str, x) -> None:
         f"min={q[0]:.3e} p50={q[1]:.3e} p95={q[2]:.3e} max={q[3]:.3e}"
     )
 
-
 # ---------------------------------------------------------------------
 # 6) Main
 # ---------------------------------------------------------------------
@@ -572,8 +608,16 @@ def main():
           "| train_end:", cfg["TRAIN_END_YEAR"], "forecast_start:", cfg["FORECAST_START_YEAR"])
 
     df = make_fake_df(cfg, n_sites=16)
+    # Make h_ref consistent with the head datum and typical values (meters).
+    cfg["GEOPRIOR_H_REF"] = -float(df.attrs["depth_mu_m"])
+
     pack = build_one_sample(cfg, df)
     print("[DATA] meta:", pack.meta)
+    
+    print("[SANITY] gwl_col:", pack.scaling_kwargs["gwl_col"])
+    print("[SANITY] gwl_dyn_index:", pack.scaling_kwargs["gwl_dyn_index"])
+    print("[SANITY] dyn names:", pack.scaling_kwargs["dynamic_feature_names"])
+
 
     model = build_model(cfg, pack.scaling_kwargs, pack.inputs)
     xb = {k: tf.convert_to_tensor(v) for k, v in pack.inputs.items()}
@@ -592,6 +636,15 @@ def main():
         print("      Available keys:", list(xb.keys()))
         print("      Fix: edit pack_inputs() to match your model. Error:", repr(e))
         raise
+        
+    # --- Workaround: provide h_ref_si explicitly to bypass broadcasting bug ---
+    gwl_hist = xb["dynamic_features"][:, -1:, 0:1]  # (B,1,1) channel 0 = GWL_depth_bgs_z
+    a = tf.constant(pack.scaling_kwargs["head_scale_si"], tf.float32)
+    b = tf.constant(pack.scaling_kwargs["head_bias_si"], tf.float32)
+    
+    depth_m = gwl_hist * a + b                       # depth in meters (SI)
+    h_ref_si = -depth_m                              # proxy head (use_head_proxy=True)
+    xb["h_ref_si"] = h_ref_si                        # (B,1,1)
 
     # Physics diagnostics
     phys = model.evaluate_physics(xb, return_maps=True, max_batches=None, batch_size=None)
@@ -621,9 +674,12 @@ def main():
     if hasattr(model, "current_kappa"):
         summarize("kappa", model.current_kappa())
         
-    sec_per = seconds_per_time_unit(cfg["TIME_UNITS"])
-    eps_cons_mm_per_unit = phys["epsilon_cons"] * sec_per * 1000.0
-    tf.print("epsilon_cons [mm/time_unit] =", eps_cons_mm_per_unit)
+    sec_per = seconds_per_time_unit(model.time_units)
+    
+    tf.print("epsilon_cons [m/s] =", phys["epsilon_cons"])
+    tf.print("epsilon_cons [mm/time_unit] =", phys["epsilon_cons"] * sec_per * 1000.0)
+    
+    # tf.print("tau [s] =", phys["tau"])
     tf.print("tau [time_unit] =", phys["tau"] / sec_per)
     tf.print("pde_modes_active =", model.pde_modes_active)
 

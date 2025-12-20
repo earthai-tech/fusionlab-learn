@@ -1274,7 +1274,6 @@ def pick_npz_for_dataset(
 
     raise ValueError("split must be one of {'train', 'val', 'test'}.")
 
-
 def infer_input_dims_from_X(X: dict) -> tuple[int, int, int]:
     """
     Infer (static_input_dim, dynamic_input_dim, future_input_dim) from NPZ inputs.

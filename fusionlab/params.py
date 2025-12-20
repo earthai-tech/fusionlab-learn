@@ -34,7 +34,7 @@ and the reference head :math:`h_{\\mathrm{ref}}`.
 
 from __future__ import annotations
 import importlib
-from typing import Any, Union, Optional, Dict, Type
+from typing import Any, Union, Optional, Dict, Type, Literal
 from abc import ABC, abstractmethod
 
 # Attempt to import TensorFlow, else fall
@@ -872,42 +872,68 @@ class FixedGammaW(BaseFixed):
             **kws
         )
 
-
 @register_keras_serializable("fusionlab.params", name="FixedHRef")
 class FixedHRef(BaseFixed):
-    """
-    Fixed scalar for the reference head :math:`h_{\\mathrm{ref}}`.
+    r"""
+    Reference head configuration :math:`h_{\mathrm{ref}}` for drawdown.
 
-    Used to define drawdown :math:`\\Delta h = h_{\\mathrm{ref}} - h`.
-    This is a modelling convention rather than a material property;
-    typically set to zero or to a long-term pre-development level and
-    kept non-trainable.
+    Drawdown convention used in GeoPrior:
+    :math:`\Delta h = \max(h_{\mathrm{ref}} - h, 0)`.
+
+    This is a modelling datum (not a material parameter). In regional
+    hydrogeology it may represent a pre-development head, a long-term
+    mean head, or (recommended here) a rolling baseline derived from the
+    last observed historical head at forecast start.
 
     Parameters
     ----------
-    value : float, default=0.0
-        Value for :math:`h_{ref}` [m]. Can be negative, zero, or positive.
+    value : float or None, default=0.0
+        Fallback reference head [m] used when mode="auto" cannot be
+        resolved. If None, defaults to 0.0.
+    mode : {"auto", "fixed"}, default="auto"
+        - "auto": derive :math:`h_{\mathrm{ref}}` per batch from the
+          last historical groundwater observation (preferred).
+        - "fixed": always use `value` as a global datum.
     name : str, optional
         Variable name.
     non_negative : bool, default=False
-        Allow negative values since h_ref can be negative in some contexts.
+        Allow negative values since heads can be negative depending on
+        datum.
     """
+
     def __init__(
         self,
-        value: float = 0.0,
+        value: Optional[float] = 0.0,
+        mode: Literal["auto", "fixed"] = "auto",
         name: Optional[str] = None,
-        non_negative: bool = False,  # h_ref can be negative
-        **kws
+        non_negative: bool = False,
+        **kws,
     ):
-        kws.pop ("log_transform", None)
+        kws.pop("log_transform", None)
+
+        mode = "auto" if mode is None else str(mode).strip().lower()
+        if mode not in ("auto", "fixed"):
+            raise ValueError(
+                f"Invalid mode={mode!r}. Expected 'auto' or 'fixed'."
+            )
+
+        if value is None:
+            value = 0.0
+
+        self.mode = mode
+
         super().__init__(
-            value=value,
-            name=name or "fixed_h_ref", 
-            log_transform=False,  # h_ref can be negative, no log transform
+            value=float(value),
+            name=name or "fixed_h_ref",
+            log_transform=False,
             non_negative=non_negative,
-            **kws
+            **kws,
         )
-        
+
+    def get_config(self):
+        cfg = super().get_config()
+        cfg.update({"mode": self.mode})
+        return cfg
 
 @register_keras_serializable("fusionlab.params", name="resolve_physical_param")
 def resolve_physical_param(

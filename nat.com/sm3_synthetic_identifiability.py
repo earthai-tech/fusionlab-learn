@@ -112,21 +112,33 @@ def settlement_from_tau(years: np.ndarray, dh: np.ndarray,
         s[t] = alpha * acc
     return s
 
-
 def make_one_step_windows(
     years: np.ndarray,
     dh: np.ndarray,
-    s_cum: np.ndarray,          # <-- cumulative target
+    s_cum: np.ndarray,          # cumulative subsidence observation (in mm here)
     static_vec: np.ndarray,
     time_steps: int,
     H_field_value: float,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """
-    1-step-ahead windows (H=1).
-    - dynamic_features: past dh (length T)
-    - future_features: zeros but length (T+H) to satisfy TFT-like slicing
-    - coords: (B, H, 3) at the forecast time
-    - targets: cumulative subsidence s(t) and head/drawdown h(t)
+    1-step-ahead windows (H=1), single-pixel synthetic.
+
+    Conventions (aligned with GeoPrior):
+    - We store groundwater as depth-to-water z_GWL (m, positive downward).
+      Here dh is a synthetic "head change" (negative drawdown), so:
+          z_GWL = -dh   (positive downward)
+      With z_surf = 0, this implies head h = z_surf - z_GWL = -z_GWL = dh.
+
+    Shapes:
+    - dynamic_features: (B, T, 1) = past z_GWL history
+    - future_features : (B, T+H, 1) = dummy zeros, but length T+H to satisfy
+      any TFT-like "known future" slicing logic (even if unused).
+    - coords          : (B, H, 3) = forecast coords at time j (x=y=0 here)
+    - H_field         : (B, H, 1) = static thickness tiled across horizon
+
+    Targets:
+    - subs_pred: cumulative subsidence s(t=j) (mm in this synthetic generator)
+    - gwl_pred : z_GWL(t=j) (m, positive downward)
     """
     years = np.asarray(years, dtype=float)
     dh    = np.asarray(dh, dtype=float)
@@ -138,11 +150,15 @@ def make_one_step_windows(
     if B <= 0:
         raise ValueError("Not enough samples for given time_steps.")
 
+    # Convert synthetic head-change series to GeoPrior-style depth-to-water
+    z_gwl = -dh  # (m) positive downward
+
     X = {
         "static_features": np.repeat(static_vec[None, :], B, axis=0).astype(np.float32),
         "dynamic_features": np.zeros((B, T, 1), dtype=np.float32),
-        # IMPORTANT for TFT-like internals: future length should be T+H
+        # IMPORTANT for TFT-like internals: future length should be auto T+H
         "future_features": np.zeros((B, H, 1), dtype=np.float32),
+
         "coords": np.zeros((B, H, 3), dtype=np.float32),
         "H_field": np.full((B, H, 1), float(H_field_value), dtype=np.float32),
     }
@@ -153,20 +169,19 @@ def make_one_step_windows(
     }
 
     for i in range(B):
-        # history up to j-1
-        X["dynamic_features"][i, :, 0] = dh[i:i + T]
-        j = i + T
+        j = i + T  # forecast index
 
-        # --- targets at forecast time j (cumulative + head) ---
+        # history window [i, i+T)
+        X["dynamic_features"][i, :, 0] = z_gwl[i:i + T]
+
+        # forecast targets at time j
         y["subs_pred"][i, 0, 0] = s_cum[j]
-        y["gwl_pred"][i, 0, 0]  = dh[j]          # treat dh as head relative to href=0
+        y["gwl_pred"][i, 0, 0]  = z_gwl[j]
 
-        # --- coords at forecast time (H=1) ---
-        X["coords"][i, 0, 0] = years[j]          # t
-        # x,y left at 0 for 1-pixel synthetic
+        # coords at forecast time (x=y=0 for single pixel)
+        X["coords"][i, 0, 0] = years[j]  # t
 
     return X, y
-
 
 def tf_dataset(X: Dict[str, np.ndarray], y: Dict[str, np.ndarray],
                batch: int, shuffle: bool, seed: int) -> tf.data.Dataset:
@@ -227,7 +242,6 @@ def train_one_pixel(
         attention_levels=["cross"],
 
         mv=LearnableMV(initial_value=1e-7),
-        # kappa=LearnableKappa(initial_value=float(kappa_b)),
         kappa=LearnableKappa(initial_value=float(kappa_b), trainable=False),
         gamma_w=FixedGammaW(value=float(gamma_w)),
         h_ref=FixedHRef(value=0.0),
@@ -243,7 +257,7 @@ def train_one_pixel(
         scaling_kwargs=dict(
             # subsidence target is in mm in  SM3 (alpha=1000) -> convert to meters
             subs_scale_si=1e-3,
-            subs_bias_si=0.0,
+            subs_bias_si=1.0,
     
             # head is conceptually meters in  synthetic setup
             head_scale_si=1.0,
@@ -251,7 +265,14 @@ def train_one_pixel(
     
             # force the per-second conversion branch
             time_units="year",
-    
+            
+            # --- CRITICAL: tell the model which dynamic channel is GWL/depth ---
+            gwl_dyn_index=0,       # <-- because dynamic_features is (B,T,1)
+        
+            # (optional but robust / self-documenting)
+            dynamic_feature_names=["z_GWL"],
+            gwl_col="z_GWL",
+
             # bounds used by _compute_bounds_residual()
             bounds=dict(
                 H_min=3.0,
@@ -281,15 +302,26 @@ def train_one_pixel(
         loss={"subs_pred": loss_sub, "gwl_pred": tf.keras.losses.MSE},
         loss_weights={"subs_pred": 1.0, "gwl_pred": 1.0},
     
-        lambda_cons=0.1,
-        lambda_gw=0.0,
-        lambda_prior=0.1,
-        lambda_smooth=0.01,
-        lambda_mv=0.01,
+        # Make consolidation physics actually constrain tau
+        lambda_cons=1.0,
     
-        lambda_bounds=0.05,      
-        # lambda_offset=1.0,       
-        lambda_offset=0.0,    # 10^0 = 1 (neutral), but exercises log10 branch
+        # No groundwater PDE in 1-pixel SM3
+        lambda_gw=0.0,
+    
+        # Prior helps stabilize closure but don’t over-lock it
+        lambda_prior=0.3,
+    
+        # No spatial fields => smoothness is meaningless here
+        lambda_smooth=0.0,
+    
+        # Optional (small); turn off initially if you want cleaner tau learning
+        lambda_mv=0.0,
+    
+        # Bounds can dominate early in 1-pixel: keep off initially
+        lambda_bounds=0.0,
+    
+        # keep branch coverage if you want, but neutral is fine
+        lambda_offset=0.0,
         mv_lr_mult=1.0,
         kappa_lr_mult=0.0,
     )
@@ -586,10 +618,10 @@ def run_one_realisation(
             "realisation": int(r),
             
             "payload_time_units": "sec",
-            "units": {
-                "tau": "sec",
-                "K": "m/s",
-            },
+            # "units": {
+            #     "tau": "sec",
+            #     "K": "m/s",
+            # },
 
             "report_time_units": "year",
             "sec_per_year": float(SEC_PER_YEAR),

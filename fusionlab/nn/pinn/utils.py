@@ -2263,11 +2263,14 @@ def prepare_pinn_data_sequences(
             'coord_scaler': coord_scaler, 
             'normalize_coords_flag': normalize_coords, 
             'saved_coord_scaler_flag':coord_scaler is not None, 
-            # --- MODIFICATION 6: Conditionally add to savefile ---
+            # ---  Conditionally add to savefile ---
             'model_type': model,
             'h_field_col': h_field_col,
             'H_field': H_field_arr if H_field_arr is not None else None,
-            # --- End Modification 6 ---
+            
+            'gwl_col': gwl_col,
+            'gwl_dyn_index': int(dynamic_cols.index(gwl_col)),
+  
         }
         try:
             job_dict.update(get_versions())
