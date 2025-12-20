@@ -20,6 +20,8 @@ import tensorflow as tf
 
 from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet
 from fusionlab.nn.pinn.op import seconds_per_time_unit
+from fusionlab.utils.subsidence_utils import make_txy_coords
+from fusionlab.utils.subsidence_utils import finalize_si_affines_and_units
 # ---------------------------------------------------------------------
 # 0) Defaults mirroring your nat.com/config.py (only what we need here)
 # ---------------------------------------------------------------------
@@ -93,6 +95,20 @@ DEFAULT_CFG: Dict[str, Any] = dict(
     # Optim
     LEARNING_RATE=1e-4,
 )
+
+DEFAULT_CFG.update(dict(
+    # Use SI (meters) directly in the harness
+    SUBS_UNIT_TO_SI=1.0,         # already meters
+    HEAD_UNIT_TO_SI=1.0,         # already meters
+    THICKNESS_UNIT_TO_SI=1.0,    # already meters
+
+    # Use raw depth (meters), not z-score
+    GWL_COL="GWL_depth_bgs",     # <-- instead of "GWL_depth_bgs_z"
+
+    # (optional) add coord CRS info like Stage-1
+    COORD_SRC_EPSG=4326,
+    COORD_TARGET_EPSG=32649,
+))
 
 
 # ---------------------------------------------------------------------
@@ -180,7 +196,8 @@ def make_fake_df(
             rain_series.append(rain)
 
         subs_annual = np.asarray(subs_annual, float)
-        subs_cum = np.cumsum(subs_annual)  # cumulative mm
+        subs_cum_mm = np.cumsum(subs_annual)         # mm
+        subs_cum_m  = subs_cum_mm * 1e-3             # meters
 
         for j, y in enumerate(years):
             H = float(H_series[j])
@@ -208,7 +225,7 @@ def make_fake_df(
                     soil_thickness=float(H),
                     normalized_urban_load_proxy=float(urban0),
                     subsidence=float(subs_annual[j]),
-                    subsidence_cum=float(subs_cum[j]),
+                    subsidence_cum=float(subs_cum_m[j]),
                     city=city,
                     lithology_class=lithology_class,
 
@@ -300,8 +317,17 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
     sites = list(df.groupby(gcols).groups.keys())[:8]
     
     lat_mean = float(np.mean([la for _, la in sites]))
-    deg_to_m_lat = 111_320.0
-    deg_to_m_lon = 111_320.0 * math.cos(math.radians(lat_mean))
+    # deg_to_m_lat = 111_320.0
+    # deg_to_m_lon = 111_320.0 * math.cos(math.radians(lat_mean))
+
+    from pyproj import Transformer
+    
+    tr = Transformer.from_crs(
+        f"EPSG:{cfg.get('COORD_SRC_EPSG', 4326)}",
+        f"EPSG:{cfg.get('COORD_TARGET_EPSG', 32649)}",
+        always_xy=True,
+    )
+
 
     B = len(sites)
 
@@ -354,9 +380,15 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
     
         # ---- coords + targets remain on horizon only ----
         for j, y in enumerate(fut_years):
-            lon[i, j, 0] = float(lo)
-            lat[i, j, 0] = float(la)
-            t_raw[i, j, 0] = float(y)
+            # lon[i, j, 0] = float(lo)
+            # lat[i, j, 0] = float(la)
+            # t_raw[i, j, 0] = float(y)
+            x_m, y_m = tr.transform(float(lo), float(la))
+            
+            lon[i, j, 0] = float(x_m)   # now meters
+            lat[i, j, 0] = float(y_m)   # now meters
+            t_raw[i, j, 0] = float(y)   # keep raw year
+
     
             y_subs_fut[i, j, 0] = get_site_year(df_site, y, cfg["SUBSIDENCE_COL"])
             y_gwl_fut[i, j, 0]  = get_site_year(df_site, y, cfg["GWL_COL"])
@@ -372,27 +404,44 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
 
 
     # --- coords minmax -> [0,1] over FULL window (T+H)
-    t_norm,  t_min, t_rng = _minmax_fit_transform(t_raw)
-    lon_norm, x_min, x_rng = _minmax_fit_transform(lon)
-    lat_norm, y_min, y_rng = _minmax_fit_transform(lat)
-    coords = np.concatenate([t_norm, lon_norm, lat_norm], axis=-1).astype("float32")
+    # t_norm,  t_min, t_rng = _minmax_fit_transform(t_raw)
+    # lon_norm, x_min, x_rng = _minmax_fit_transform(lon)
+    # lat_norm, y_min, y_rng = _minmax_fit_transform(lat)
+    # coords = np.concatenate([t_norm, lon_norm, lat_norm], axis=-1).astype("float32")
+
+    # Optional: shift time to reduce magnitude but still "not normalized"
+    t0 = float(np.min(t_raw))
+    t_use = t_raw - t0   # 0,1,2,... (still in "years" units)
+    
+    coords = np.concatenate([t_use, lon, lat], axis=-1).astype("float32")
+    
+    t_min = float(np.min(t_use));  t_rng = float(np.max(t_use) - np.min(t_use))
+    x_min = float(np.min(lon));    x_rng = float(np.max(lon) - np.min(lon))
+    y_min = float(np.min(lat));    y_rng = float(np.max(lat) - np.min(lat))
+
+    coords_pack = make_txy_coords(
+        t=t_raw[..., 0],        # (B,H) years
+        x=lon[..., 0],          # (B,H) meters (already UTM)
+        y=lat[..., 0],          # (B,H) meters
+        time_shift="min",       # shift to start at 0
+        xy_shift="min",         # shift x,y to start at 0 (still meters)
+    )
+    
+    coords = coords_pack.coords  # (B,H,3)
+    
+    t_min = coords_pack.coord_mins["t"]
+    x_min = coords_pack.coord_mins["x"]
+    y_min = coords_pack.coord_mins["y"]
+    t_rng = coords_pack.coord_ranges["t"]
+    x_rng = coords_pack.coord_ranges["x"]
+    y_rng = coords_pack.coord_ranges["y"]
+
 
 
     # --- scale rainfall + H_eff; keep urban_load_global as-is
-    # rain_all = np.concatenate([X_hist[..., 1], X_fut[..., 0]], axis=1)
-    # H_all = np.concatenate([X_hist[..., 3], X_fut[..., 2]], axis=1)
     rain_all = X_fut[..., 0]     # (B, T+H)
     H_all    = X_fut[..., 2]     # (B, T+H)
 
-    # rain_s, rain_min, rain_rng = _minmax_fit_transform(rain_all)
-    # H_s, H_min, H_rng = _minmax_fit_transform(H_all)
-
-    # X_hist_s = X_hist.copy()
-    # X_fut_s = X_fut.copy()
-    # X_hist_s[..., 1] = rain_s[:, :T]
-    # X_fut_s[..., 0] = rain_s[:, T:T + H]
-    # X_hist_s[..., 3] = H_s[:, :T]
-    # X_fut_s[..., 2] = H_s[:, T:T + H]
     rain_s, rain_min, rain_rng = _minmax_fit_transform(rain_all)
     H_s,    H_min,    H_rng    = _minmax_fit_transform(H_all)
     
@@ -427,23 +476,27 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
 
     # --- SI affine mapping (model-space -> SI meters)
     # subsidence: you minmax'ed future subs; keep as you had
-    _, subs_min, subs_rng = _minmax_fit_transform(y_subs_fut)
-    subs_scale_si = subs_rng * float(cfg["SUBS_UNIT_TO_SI"])
-    subs_bias_si  = subs_min * float(cfg["SUBS_UNIT_TO_SI"])
+    # _, subs_min, subs_rng = _minmax_fit_transform(y_subs_fut)
+    # subs_scale_si = subs_rng * float(cfg["SUBS_UNIT_TO_SI"])
+    # subs_bias_si  = subs_min * float(cfg["SUBS_UNIT_TO_SI"])
+    subs_scale_si, subs_bias_si = 1.0, 0.0
+
 
     # IMPORTANT: your GWL_COL is DEPTH z-score => use depth stats
-    head_scale_si = float(df.attrs["depth_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
-    head_bias_si  = float(df.attrs["depth_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
+    # head_scale_si = float(df.attrs["depth_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
+    # head_bias_si  = float(df.attrs["depth_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
+    head_scale_si, head_bias_si = 1.0, 0.0
+
 
     scaling_kwargs = dict(
-        coords_normalized=True,
+        coords_normalized=False,
         coords_in_degrees=False,
         time_units=cfg.get("TIME_UNITS", "year"),
 
-        coord_ranges=dict(t=t_rng, x=x_rng, y=y_rng),
         t_range=t_rng, x_range=x_rng, y_range=y_rng,
-        coord_range_t=t_rng, coord_range_x=x_rng, coord_range_y=y_rng,
+        coord_ranges=dict(t=t_rng, x=x_rng, y=y_rng),
         coord_mins=dict(t=t_min, x=x_min, y=y_min),
+
 
         bounds=cfg.get("PHYSICS_BOUNDS", {}),
 
@@ -464,27 +517,23 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
     )
 
     scaling_kwargs.update(dict(
-        coords_in_degrees=True,
-        deg_to_m_lon=deg_to_m_lon,
-        deg_to_m_lat=deg_to_m_lat,
-    ))
-    
-    # scaling_kwargs.update(dict(
-    #     gwl_kind="depth",          # IMPORTANT
-    #     gwl_sign="down_positive",  # your convention (depth positive downward)
-    #     use_head_proxy=True,       # if you do NOT provide z_surf
-    # ))
-    scaling_kwargs.update(dict(
         gwl_kind="depth_bgs",     # better than "depth" if the model checks for "depth_bgs"
         gwl_sign="down_positive",
         use_head_proxy=True,      # since harness doesn't pass z_surf as tensor input
         z_surf_col=None,
     ))
+    
+    
+    scaling_kwargs = finalize_si_affines_and_units(
+        scaling_kwargs,
+        subs_in_si=True,        # your harness uses meters already
+        head_in_si=True,        # your harness uses meters already
+        thickness_in_si=True,   # your harness uses meters already
+        force_identity_affine_if_si=True,
+        warn=True,
+    )
 
     # H-field over full window (T+H), in raw meters
-    # # IMPORTANT: feed H in RAW meters for physics (reconstruct from scaler)
-    # # H_future_raw_m = (X_fut_s[..., 2:3] * H_rng + H_min).astype("float32")
-    # H_future_raw_m = H_all_raw_m
     H_fut_raw_m  = X_fut[..., 2:3].astype("float32")[:, T:, :]   # (B, H, 1)
     H_future_raw_m = H_fut_raw_m
 
@@ -638,13 +687,17 @@ def main():
         raise
         
     # --- Workaround: provide h_ref_si explicitly to bypass broadcasting bug ---
-    gwl_hist = xb["dynamic_features"][:, -1:, 0:1]  # (B,1,1) channel 0 = GWL_depth_bgs_z
-    a = tf.constant(pack.scaling_kwargs["head_scale_si"], tf.float32)
-    b = tf.constant(pack.scaling_kwargs["head_bias_si"], tf.float32)
+    # gwl_hist = xb["dynamic_features"][:, -1:, 0:1]  # (B,1,1) channel 0 = GWL_depth_bgs_z
+    # a = tf.constant(pack.scaling_kwargs["head_scale_si"], tf.float32)
+    # b = tf.constant(pack.scaling_kwargs["head_bias_si"], tf.float32)
     
-    depth_m = gwl_hist * a + b                       # depth in meters (SI)
-    h_ref_si = -depth_m                              # proxy head (use_head_proxy=True)
-    xb["h_ref_si"] = h_ref_si                        # (B,1,1)
+    # depth_m = gwl_hist * a + b                       # depth in meters (SI)
+    # h_ref_si = -depth_m                              # proxy head (use_head_proxy=True)
+    # xb["h_ref_si"] = h_ref_si                        # (B,1,1)
+    
+    # last observed depth (meters) -> proxy head reference = -depth
+    gwl_hist_depth_m = xb["dynamic_features"][:, -1:, 0:1]
+    xb["h_ref_si"] = -gwl_hist_depth_m
 
     # Physics diagnostics
     phys = model.evaluate_physics(xb, return_maps=True, max_batches=None, batch_size=None)

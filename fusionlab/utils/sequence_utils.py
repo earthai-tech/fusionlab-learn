@@ -14,7 +14,8 @@ from typing import (
     Dict, 
     Union, 
     Callable, 
-    Literal 
+    Literal, 
+    Any
 )
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
@@ -61,6 +62,8 @@ def build_future_sequences_npz(
     artifacts_dir: str | None = None,
     prefix: str = "future",
     future_mode: str ="auto", 
+    normalize_coords: bool = False,
+    coord_scaler: Any | None = None,
     verbose: int = 1,
     logger=None,
     stop_check: Callable[[], bool] = None, 
@@ -322,6 +325,14 @@ default 'auto'
     if artifacts_dir is None or not str(artifacts_dir).strip():
         artifacts_dir = os.getcwd()
 
+    normalize_coords = bool(normalize_coords)
+    if normalize_coords:
+        if coord_scaler is None or not hasattr(coord_scaler, "transform"):
+            raise ValueError(
+                "build_future_sequences_npz: normalize_coords=True requires a "
+                "fitted `coord_scaler` (same one used in Stage-1)."
+            )
+
     # ------------------------------------------------------------------
     # Step 1: infer temporal configuration (history + future windows)
     # ------------------------------------------------------------------
@@ -578,34 +589,6 @@ default 'auto'
     coords_list, dyn_list, fut_list = [], [], []
     static_list, H_list = [], []
     subs_target_list, gwl_target_list = [], []
-
-    # # # Grouping
-    # # Setup grouping (allow no grouping => single global group)
-    # if group_id_cols:
-    #     grouped = df_win.groupby(group_id_cols)
-    #     n_groups = grouped.ngroups
-    #     group_iter = grouped
-    # else:
-    #     n_groups = 1
-    #     group_iter = [(None, df_win)]
-    
-    # # Progress logging frequency for non-tqdm fallback
-    # log_every = max(1, n_groups // 10)
-    
-    # # Optionally wrap with tqdm if available and verbosity suggests user cares
-    # use_tqdm = HAS_TQDM  and verbose >= 1 and n_groups > 1
-    # if use_tqdm:
-    #     iter_groups = _TQDM(
-    #         group_iter,
-    #         total=n_groups,
-    #         desc=f"[Future] groups ({model_name or ''})".strip(),
-    #         leave=False,
-    #     )
-    # else:
-    #     iter_groups = group_iter
-
-        # Grouping
-    # Setup grouping (allow no grouping => single global group)
     
     if group_id_cols:
         grouped = df_win.groupby(group_id_cols)
@@ -808,6 +791,22 @@ default 'auto'
     subs_targets_arr = np.stack(subs_target_list, axis=0)
     gwl_targets_arr = np.stack(gwl_target_list, axis=0)
 
+    # --------------------------------------------------------------
+    # Normalize coords exactly like Stage-1 (if requested)
+    # coords_arr shape: (N, H, 3) with order [t, x, y]
+    # --------------------------------------------------------------
+    if normalize_coords:
+        coords_flat = coords_arr.reshape(-1, 3).astype(np.float32, copy=False)
+        if not np.isfinite(coords_flat).all():
+            raise ValueError(
+                "build_future_sequences_npz: coords contain non-finite values; "
+                "cannot apply coord_scaler.transform()."
+            )
+        coords_flat = coord_scaler.transform(coords_flat)
+        coords_arr = coords_flat.reshape(coords_arr.shape).astype(np.float32, copy=False)
+    else:
+        coords_arr = coords_arr.astype(np.float32, copy=False)
+
     future_inputs_np = {
         "coords": coords_arr,
         "dynamic_features": dyn_arr,
@@ -843,9 +842,10 @@ default 'auto'
     _p(1.0)
     
     return {
-        "future_inputs_npz": future_inputs_npz,
-        "future_targets_npz": future_targets_npz,
+        f"{prefix}_inputs_npz": future_inputs_npz,
+        f"{prefix}_targets_npz": future_targets_npz,
     }
+
 
 
 @isdf 

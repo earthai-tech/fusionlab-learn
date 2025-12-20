@@ -446,7 +446,31 @@ class GeoPriorSubsNet(BaseAttentive):
             "Provide scaling_kwargs['gwl_dyn_index'] (recommended) or "
             "scaling_kwargs['dynamic_feature_names'] + scaling_kwargs['gwl_col']."
         )
+
+    def _validate_scaling_kwargs(self):
+        sk = self._scaling_kwargs or {}
     
+        # Coords sanity
+        if sk.get("coords_in_degrees", False):
+            raise ValueError(
+                "coords_in_degrees=True but you are feeding UTM meters. "
+                "Set coords_in_degrees=False."
+            )
+    
+        # Normalization sanity
+        if sk.get("coords_normalized", False) and not sk.get("coord_ranges"):
+            raise ValueError(
+                "coords_normalized=True but coord_ranges is missing. "
+                "Either provide coord_ranges or set coords_normalized=False."
+            )
+    
+        # Time sanity
+        if "time_units" not in sk:
+            raise ValueError(
+                "time_units missing in scaling_kwargs. "
+                "Set time_units='year' if t is in years."
+            )
+
     def _get_gwl_dyn_index(self) -> int:
         # cache after first resolve
         idx = getattr(self, "_gwl_dyn_index", None)
@@ -1197,6 +1221,7 @@ class GeoPriorSubsNet(BaseAttentive):
         self.H_field = H_field
         H_si = self._to_si_thickness(H_field)
     
+        self._validate_scaling_kwargs()
         # --------------------------------------------------------------
         # 2) GradientTape: forward pass + data loss + physics
         # --------------------------------------------------------------

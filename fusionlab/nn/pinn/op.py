@@ -223,6 +223,12 @@ def default_scales(
         tf_cast(seconds_per_time_unit(time_units), dt_ref.dtype),
     )
 
+    # XXX TODO: In future:
+    # default_scales(...) estimates typical rates using differences 
+    # like s[:,1:] - s[:,:-1]. That is correct only when s is
+    # cumulative (which is your case). 
+    # (for 'rate targets', then default_scales should be 
+    #  extended with a subsidence_kind flag. 
     # --- consolidation scale c* (m/s) ---
     ds = s[:, 1:, :] - s[:, :-1, :]
     ds_abs = tf_abs(_flat(ds))

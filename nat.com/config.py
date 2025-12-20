@@ -153,6 +153,27 @@ Z_SURF_COL = None            # e.g. "dem_m" if available, else None
 GWL_DYN_INDEX = None         # e.g. 0 if z_GWL is the first dynamic channel
 
 
+# ---------------------------------------------
+# Stage-1: physics-critical scaling controls
+# ---------------------------------------------
+
+# Keep coords raw for physics:
+KEEP_COORDS_RAW = True
+
+# Keep H_field in meters (recommended):
+SCALE_H_FIELD = False
+
+# Keep GWL/head in meters (recommended):
+SCALE_GWL = False
+
+# Convert subsidence to SI (recommended):
+# If SUBSIDENCE_COL is in mm or mm/yr, convert to meters or meters/yr.
+SUBS_UNIT_TO_SI = 1e-3
+
+# If subsidence is "rate" (per year) or "cumulative":
+SUBSIDENCE_KIND = "cumulative"   # {"cumulative", "rate"}
+
+
 # ===================================================================
 # 2) FEATURE REGISTRY (Stage-1 -> Stage-2 handshake)
 # ===================================================================
@@ -411,11 +432,11 @@ TIME_UNITS = "year"
 #
 # If *_SCALE_SI / *_BIAS_SI are None and AUTO_SI_AFFINE_FROM_STAGE1=True,
 # Stage-2 should infer them from Stage-1 scalers (recommended).
-SUBS_UNIT_TO_SI = 1e-3   # e.g. mm -> m
+# SUBS_UNIT_TO_SI = 1e-3   # e.g. mm -> m
 HEAD_UNIT_TO_SI = 1.0    # typically already meters
 
-SUBS_SCALE_SI = None
-SUBS_BIAS_SI  = None
+SUBS_SCALE_SI = 1.0
+SUBS_BIAS_SI  = 0.0
 HEAD_SCALE_SI = None
 HEAD_BIAS_SI  = None
 
@@ -428,8 +449,10 @@ AUTO_SI_AFFINE_FROM_STAGE1 = True
 # If coords are degrees, Stage-2 must convert degrees -> meters internally
 # before computing spatial derivatives (or use ranges to rescale).
 COORD_MODE = "degrees"     # {"utm", "degrees"}
-UTM_EPSG = 32649           # if COORD_MODE="utm" and you use UTM
+UTM_EPSG = 32649           # if COORD_MODE="utm" then use it
 
+COORD_SRC_EPSG = 4326 # (e.g. 4326 if lon/lat WGS84)
+# COORD_TARGET_EPSG= 32649 # (your UTM EPSG, e.g. 32649)
 
 # ===================================================================
 # 6) GEOPRIOR SCALAR PARAMETERS (initialization / closures)
