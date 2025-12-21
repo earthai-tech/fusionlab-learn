@@ -44,7 +44,7 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "zhongshan"
+CITY_NAME = "nansha"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
@@ -124,7 +124,7 @@ TIME_COL = "year"
 LON_COL = "longitude"
 LAT_COL = "latitude"
 SUBSIDENCE_COL = "subsidence_cum"
-GWL_COL = "GWL_depth_bgs_z"
+GWL_COL = "GWL" # "GWL_depth_bgs"
 H_FIELD_COL_NAME = "soil_thickness"
 
 # Groundwater representation (critical for sign consistency):

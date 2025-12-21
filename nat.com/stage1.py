@@ -191,9 +191,6 @@ except Exception:
 print(f"\n{'-'*_TW}\n{CITY_NAME.upper()} {MODEL_NAME} STAGE-1 (Steps 1–6)\n{'-'*_TW}")
 print(f"TIME_STEPS={TIME_STEPS}, HORIZON={FORECAST_HORIZON_YEARS}, MODE={MODE}")
 
-
-
-
 # ==================================================================
 # Small helpers
 # ==================================================================
@@ -313,88 +310,141 @@ def _apply_censoring(df: pd.DataFrame, specs: list[dict]) -> tuple[pd.DataFrame,
             "eff_mode": mode,
             "censored_rate": float(np.mean(m)),
         }
+    print("==> Censoring done ...")
     return df, report
 
 # ==================================================================
 # Step 1: Load dataset
 # ==================================================================
-
 print(f"\n{'='*18} Step 1: Load Dataset {'='*18}")
 
 def _any_exists(paths: list[str]) -> bool:
-    return any(os.path.exists(p) for p in paths)
+    """Return True if any candidate path exists on disk."""
+    return any(p and os.path.exists(p) for p in paths)
 
-# ---  ensure city CSV exists; if not, try to unpack from merged parquet ---
-if not _any_exists(SEARCH_PATHS) and ALL_CITIES_PARQUET:
-    merged_path = None
-    for p in ALL_CITIES_SEARCH_PATHS:
-        print(f"  [Check] Looking for merged parquet at: {os.path.abspath(p)}")
-        if os.path.exists(p):
-            merged_path = p
-            break
+def _first_existing(paths: list[str]) -> Optional[str]:
+    """Return the first existing path from a list, else None."""
+    for p in paths:
+        if p and os.path.exists(p):
+            return p
+    return None
+
+# ------------------------------------------------------------------
+# 1.0 If the city CSV is missing, optionally unpack it from a merged
+#     parquet that contains both cities.
+# ------------------------------------------------------------------
+if (not _any_exists(SEARCH_PATHS)) and ALL_CITIES_PARQUET:
+    merged_path = _first_existing(ALL_CITIES_SEARCH_PATHS)
 
     if merged_path is not None:
         print(
             f"  [Info] No '{BIG_FN}' found for city={CITY_NAME!r}; "
-            f"unpacking from merged parquet: {merged_path}"
+            f"unpacking from merged parquet: {os.path.abspath(merged_path)}"
         )
-        # This will create e.g. 'nansha_final_main_std.harmonized.csv',
-        # 'zhongshan_final_main_std.harmonized.csv' in the same folder,
-        # using the 'source' column recorded when you merged.
+        # This will create e.g.:
+        #   'nansha_final_main_std.harmonized.csv'
+        #   'zhongshan_final_main_std.harmonized.csv'
+        # in the parquet folder (or whatever 'source' column provides).
         unpack_frames_from_file(
             merged=merged_path,
             group_col="city",
             output_dir=os.path.dirname(merged_path),
-            output_format="csv",      # default: CSV outputs
-            use_source_col=True,      # reuse original file names if present
+            output_format="csv",
+            use_source_col=True,
             source_col="source",
-            drop_columns=("source",), # optional: strip bookkeeping column
+            drop_columns=("source",),
             save=True,
             return_dict=False,
             verbose=1,
         )
     else:
         print(
-            "  [Info] ALL_CITIES_PARQUET is set, but merged parquet not found.\n"
-            "         Will proceed with normal CSV search / fetch_zhongshan_data."
+            "  [Info] ALL_CITIES_PARQUET is set, but the merged parquet "
+            "was not found in ALL_CITIES_SEARCH_PATHS.\n"
+            "         Will proceed with normal CSV search / "
+            "fetch_zhongshan_data fallback."
         )
 
-# --- ORIGINAL CSV loading logic  ---
+# ------------------------------------------------------------------
+# 1.1 Load CSV from SEARCH_PATHS then FALLBACK_PATHS; otherwise use the
+#     fusionlab dataset fetcher.
+# ------------------------------------------------------------------
 df_raw = None
-for p in SEARCH_PATHS + FALLBACK_PATHS:
+used_path = None
+
+for p in (SEARCH_PATHS + FALLBACK_PATHS):
+    if not p:
+        continue
     print(f"  Try: {os.path.abspath(p)}")
     if os.path.exists(p):
         try:
             df_raw = pd.read_csv(p)
+            used_path = p
             print(f"    Loaded {os.path.basename(p)} -> {df_raw.shape}")
-            if BIG_FN in p and df_raw.shape[0] < 400_000:
-                print("    [Warn] 500k filename but rows < 400k.")
+            # soft sanity check: some 500k-named files are smaller
+            if (BIG_FN in os.path.basename(p)) and (df_raw.shape[0] < 400_000):
+                print("    [Warn] BIG_FN filename but rows < 400k (check you loaded the expected file).")
             break
         except Exception as e:
-            print(f"    Error reading {p}: {e}")
+            print(f"    [Warn] Error reading {p}: {e}")
 
 if df_raw is None or df_raw.empty:
-    print("  No CSV found. Try fusionlab.datasets.fetch_zhongshan_data() ...")
+    print("  [Info] No CSV found. Trying fusionlab.datasets.fetch_zhongshan_data() ...")
     try:
         bunch = fetch_zhongshan_data(verbose=1)
         df_raw = bunch.frame
+        used_path = "<fetch_zhongshan_data>"
         print(f"    Loaded via fetch_zhongshan_data -> {df_raw.shape}")
     except Exception as e:
-        raise FileNotFoundError(f"Failed to load dataset: {e}")
+        raise FileNotFoundError(f"Failed to load dataset from CSV and fetcher: {e}")
 
+# Save a copy of the raw loaded table for traceability
 raw_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_01_raw.csv")
 df_raw.to_csv(raw_csv, index=False)
 print(f"  Saved: {raw_csv}")
+print(f"  Source: {used_path}")
 
+# ------------------------------------------------------------------
+# 1.2 GWL alias normalization (do this ONCE, early, before Step 2)
+#     Goal:
+#       - If config uses 'GWL' but dataset provides 'GWL_depth_bgs', map it.
+#       - If dataset uses 'GWL' but model expects meters 'GWL_depth_bgs', map it.
+#     IMPORTANT: This is ONLY a naming fix. Unit conversion is handled
+#     later when creating __si columns.
+# ------------------------------------------------------------------
+# If config says "GWL", treat it as an alias and standardize to depth_bgs.
+if isinstance(GWL_COL, str) and (GWL_COL.strip().lower() == "gwl"):
+    # Priority order: prefer the physically meaningful meters column
+    if ("GWL_depth_bgs" in df_raw.columns) and ("GWL" in df_raw.columns):
+        print("  [GWL] Config uses 'GWL'. Both 'GWL' and 'GWL_depth_bgs' exist; "
+              "switching GWL_COL -> 'GWL_depth_bgs' (meters).")
+        GWL_COL = "GWL_depth_bgs"
+
+    elif ("GWL_depth_bgs" in df_raw.columns) and ("GWL" not in df_raw.columns):
+        print("  [GWL] Config uses 'GWL' but dataset has 'GWL_depth_bgs'. "
+              "Switching GWL_COL -> 'GWL_depth_bgs'.")
+        GWL_COL = "GWL_depth_bgs"
+
+    elif ("GWL" in df_raw.columns) and ("GWL_depth_bgs" not in df_raw.columns):
+        # We only rename if the target name does not already exist.
+        print("  [GWL] Dataset has 'GWL' but missing 'GWL_depth_bgs'. "
+              "Renaming column 'GWL' -> 'GWL_depth_bgs' for consistency.")
+        df_raw.rename(columns={"GWL": "GWL_depth_bgs"}, inplace=True)
+        GWL_COL = "GWL_depth_bgs"
+
+    else:
+        print("  [GWL] Config uses 'GWL' but dataset has neither 'GWL' nor "
+              "'GWL_depth_bgs'. Will error later in required-column checks.")
 
 # ==================================================================
-# Step 2: Initial preprocessing
+# Step 2: Initial preprocessing (clean + select + censor)
 # ==================================================================
-
 print(f"\n{'='*18} Step 2: Initial Preprocessing {'='*18}")
 avail = df_raw.columns.tolist()
 
-# --- subsidence column handshake (rate <-> cumulative) ---
+# ------------------------------------------------------------------
+# 2.0 Subsidence column handshake (rate <-> cumulative)
+# ------------------------------------------------------------------
 if SUBSIDENCE_COL not in df_raw.columns:
     if SUBSIDENCE_COL.endswith("_cum") and ("subsidence" in df_raw.columns):
         df_raw = rate_to_cumulative(
@@ -406,6 +456,7 @@ if SUBSIDENCE_COL not in df_raw.columns:
             initial="first_equals_rate_dt",
             inplace=False,
         )
+        print(f"  [Subs] Built cumulative '{SUBSIDENCE_COL}' from 'subsidence'.")
     elif (SUBSIDENCE_COL == "subsidence") and ("subsidence_cum" in df_raw.columns):
         df_raw = cumulative_to_rate(
             df_raw,
@@ -416,144 +467,312 @@ if SUBSIDENCE_COL not in df_raw.columns:
             first="cum_over_dtref",
             inplace=False,
         )
+        print("  [Subs] Built rate 'subsidence' from 'subsidence_cum'.")
     else:
         raise ValueError(
             f"SUBSIDENCE_COL={SUBSIDENCE_COL!r} not in df and no "
             "convertible alternative was found."
         )
 
-# 2.1 Resolve optional columns (as-declared in config)
-opt_num_cols, opt_num_map = _resolve_optional_columns(
-    df_raw, OPTIONAL_NUMERIC_FEATURES
+# ------------------------------------------------------------------
+# 2.1 Resolve optional columns exactly as declared in config.
+#     Supports tuples like ("rain", "rainfall") and chooses the first
+#     present column in df_raw.
+# ------------------------------------------------------------------
+opt_num_cols, opt_num_map = _resolve_optional_columns(df_raw, OPTIONAL_NUMERIC_FEATURES)
+opt_cat_cols, opt_cat_map = _resolve_optional_columns(df_raw, OPTIONAL_CATEGORICAL_FEATURES)
+
+# Resolve future drivers too (if present)
+FUTURE_DRIVER_FEATURES, _ = _resolve_optional_columns(df_raw, FUTURE_DRIVER_FEATURES)
+
+
+
+# ------------------------------------------------------------------
+# 2.2 Decide the "meters" groundwater source used for physics
+#
+# Rule (physics-first):
+#   - Physics MUST use meters. Prefer 'GWL_depth_bgs' or 'GWL'.
+#   - If user explicitly provides a GWL_COL (non-None), we interpret it
+#     as "this is the column I want as the PHYSICS groundwater input".
+#       * If it exists and is NOT z-score -> accept.
+#       * If it is z-score -> reject (physics requires meters).
+#   - If user does NOT provide GWL_COL (None or ''), auto-detect:
+#       * If meters exist -> choose 'GWL_depth_bgs' (preferred) else 'GWL'
+#         and print a message.
+#       * If meters exist AND z-score exists -> still choose meters and
+#         print a message that z-score will be ignored for physics.
+#       * If only z-score exists -> raise with a clear physics message.
+#
+# Optional:
+#   - If z-score exists AND meters exists, keep z-score as an optional
+#     ML convenience feature (if you want), but never use it for physics.
+# ------------------------------------------------------------------
+
+def _is_nonempty_str(x) -> bool:
+    return isinstance(x, str) and x.strip() != ""
+
+def _looks_like_zscore_name(col: str) -> bool:
+    return isinstance(col, str) and col.lower().endswith("_z")
+
+def resolve_gwl_for_physics(
+    df: pd.DataFrame,
+    gwl_col_user: Optional[str],
+    *,
+    prefer_depth_bgs: bool = True,
+    allow_keep_zscore_as_ml: bool = True,
+) -> tuple[str, Optional[str]]:
+    """
+    Resolve groundwater columns for GeoPrior Stage-1.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Raw dataframe.
+    gwl_col_user : str or None
+        User-provided GWL_COL. If None/empty, auto-detect.
+        If provided, it is treated as the intended PHYSICS input and
+        must be in meters (NOT z-scored).
+    prefer_depth_bgs : bool, default=True
+        If auto-detect and both meters candidates exist, choose
+        'GWL_depth_bgs' over 'GWL'.
+    allow_keep_zscore_as_ml : bool, default=True
+        If meters exist and z-score exists, return the z-score column
+        as a "ML convenience" column name (optional).
+
+    Returns
+    -------
+    gwl_meters_col : str
+        The column name to use for physics and for building __si.
+    gwl_zscore_col : str or None
+        Optional z-score column name, returned only if present AND
+        allow_keep_zscore_as_ml=True.
+
+    Raises
+    ------
+    ValueError
+        If only z-score exists, or if the user explicitly requests
+        a z-score column for physics.
+    """
+    cols = set(df.columns)
+
+    # Canonical candidate names used across your pipeline
+    meters_candidates = []
+    if prefer_depth_bgs:
+        meters_candidates += ["GWL_depth_bgs", "GWL"]
+    else:
+        meters_candidates += ["GWL", "GWL_depth_bgs"]
+
+    zscore_candidates = ["GWL_depth_bgs_z", "GWL_z"]
+
+    # Discover availability
+    meters_available = [c for c in meters_candidates if c in cols]
+    zscore_available = [c for c in zscore_candidates if c in cols]
+
+    # --- Case A: user explicitly provided a groundwater column ---
+    if _is_nonempty_str(gwl_col_user):
+        if gwl_col_user not in cols:
+            raise ValueError(
+                f"GWL_COL={gwl_col_user!r} was provided but does not exist in the dataset."
+            )
+        if _looks_like_zscore_name(gwl_col_user) or (gwl_col_user in zscore_candidates):
+            raise ValueError(
+                f"GWL_COL={gwl_col_user!r} looks like a z-score column. "
+                "GeoPrior physics requires groundwater in meters. "
+                "Please set GWL_COL to 'GWL_depth_bgs' or 'GWL' (meters)."
+            )
+
+        # If user points to a meters column, accept it.
+        gwl_m = gwl_col_user
+
+        # Optionally keep z-score for ML (never for physics)
+        gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
+
+        # Informative messages
+        if gwl_z is not None:
+            print(
+                f"  [GWL] Using user-provided meters column {gwl_m!r} for physics. "
+                f"Z-score column {gwl_z!r} exists and will be kept only as an optional ML feature."
+            )
+        else:
+            print(f"  [GWL] Using user-provided meters column {gwl_m!r} for physics.")
+        return gwl_m, gwl_z
+
+    # --- Case B: user did not provide GWL_COL -> auto detect meters ---
+    if meters_available:
+        # Choose preferred meters column
+        gwl_m = meters_available[0]  # already ordered by preference above
+
+        gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
+
+        if gwl_z is not None:
+            print(
+                f"  [GWL] Auto-selected meters column {gwl_m!r} for physics "
+                f"(preferred). Z-score column {gwl_z!r} exists; it will NOT be used for physics."
+            )
+        else:
+            print(f"  [GWL] Auto-selected meters column {gwl_m!r} for physics.")
+        return gwl_m, gwl_z
+
+    # --- Case C: no meters column exists ---
+    if zscore_available:
+        raise ValueError(
+            "No groundwater column in meters was found (expected 'GWL_depth_bgs' or 'GWL'), "
+            f"but z-score column(s) exist: {zscore_available}. "
+            "GeoPrior physics constraints require groundwater in meters. "
+            "Please provide/restore a meters column in the dataset."
+        )
+
+    raise ValueError(
+        "No groundwater column found. Expected 'GWL_depth_bgs' or 'GWL' (meters) "
+        "for physics (and optionally 'GWL_depth_bgs_z' for ML)."
     )
-opt_cat_cols, opt_cat_map = _resolve_optional_columns(
-    df_raw, OPTIONAL_CATEGORICAL_FEATURES
-    )
-# resolves features drivers too if applicables 
-FUTURE_DRIVER_FEATURES, _ = _resolve_optional_columns(
-    df_raw, FUTURE_DRIVER_FEATURES
+
+
+# ---- Apply the resolver ----
+GWL_METERS_COL, GWL_ZSCORE_COL = resolve_gwl_for_physics(
+    df_raw,
+    gwl_col_user=GWL_COL,   # may be None/'' per your rule
+    prefer_depth_bgs=True,
+    allow_keep_zscore_as_ml=True,
 )
-# 2.2 Build selection list (required + resolved optional)
+
+# The physics source used later to build __si (NEVER z-score)
+GWL_SRC_COL = GWL_METERS_COL
+
+
+# ------------------------------------------------------------------
+# 2.3 Build selection list (required + resolved optional)
+#     - Always include required physics/targets:
+#         lon, lat, year, subsidence, meters_gwl, thickness
+#     - Optionally include z-score GWL as an extra ML feature
+#       (never used for physics; can help the network)
+# ------------------------------------------------------------------
 base_select = [
-    LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_COL, H_FIELD_COL_NAME
+    LON_COL,
+    LAT_COL,
+    TIME_COL,
+    SUBSIDENCE_COL,
+    GWL_METERS_COL,       # <- meters (physics-critical)
+    H_FIELD_COL_NAME,
 ]
+
+# Optional: keep z-score as ML convenience column if present
+if (GWL_ZSCORE_COL is not None) and (GWL_ZSCORE_COL in df_raw.columns):
+    base_select.append(GWL_ZSCORE_COL)
+
+# Add resolved optional columns (numeric + categorical)
 base_select += opt_num_cols + opt_cat_cols
 
 selected = _drop_missing_keep_order(base_select, df_raw)
-missing_required = [
-    c for c in [LON_COL, LAT_COL, 
-                TIME_COL, 
-                SUBSIDENCE_COL, 
-                GWL_COL, 
-                H_FIELD_COL_NAME]
-              if c not in selected
-        ]
-if missing_required:
-    raise ValueError(f"Missing required columns: {missing_required}")
 
-# Note: Optional columns are fine to be absent – they’ll just be skipped downstream.
+missing_required = [
+    c for c in [LON_COL, LAT_COL, TIME_COL, SUBSIDENCE_COL, GWL_METERS_COL, H_FIELD_COL_NAME]
+    if c not in selected
+]
+if missing_required:
+    raise ValueError(
+        f"Missing required columns: {missing_required}\n"
+        f"(Groundwater meters column resolved as {GWL_METERS_COL!r})"
+    )
+
+# Optional columns can be missing; report for transparency
 skipped_optional = sorted(set(opt_num_cols + opt_cat_cols) - set(selected))
 if skipped_optional:
     print(f"  [Info] Optional columns not found (skipped): {skipped_optional}")
 
 df_sel = df_raw[selected].copy()
 
+# ------------------------------------------------------------------
+# 2.4 Normalize time column to DT_TMP + ensure TIME_COL is numeric year
+# ------------------------------------------------------------------
 DT_TMP = "datetime_temp"
 try:
     df_sel[DT_TMP] = pd.to_datetime(df_sel[TIME_COL], format="%Y")
 except Exception:
     df_sel = normalize_time_column(
-        df_sel, time_col=TIME_COL, datetime_col=DT_TMP,
-        year_col=TIME_COL, drop_orig=True
+        df_sel,
+        time_col=TIME_COL,
+        datetime_col=DT_TMP,
+        year_col=TIME_COL,
+        drop_orig=True,
     )
 
 print(f"  Shape after select: {df_sel.shape}")
 print(f"  NaNs before clean: {df_sel.isna().sum().sum()}")
+
+# Sanitize/fill missing values using your pipeline utility
 df_clean = nan_ops(df_sel, ops="sanitize", action="fill", verbose=0)
+
 print(f"  NaNs after clean : {df_clean.isna().sum().sum()}")
 
 clean_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_02_clean.csv")
 df_clean.to_csv(clean_csv, index=False)
 print(f"  Saved: {clean_csv}")
 
+# ------------------------------------------------------------------
+# 2.5 Censor-aware transforms (adds *_censored flags and *_eff values)
+# ------------------------------------------------------------------
 print(f"\n{'='*18} Step 2.5: Censor-aware transforms {'='*18}")
 df_cens, censor_report = _apply_censoring(df_clean.copy(), CENSORING_SPECS)
 
 # ==================================================================
 # Step 3: Encode & Scale
 # ==================================================================
-
 print(f"\n{'='*18} Step 3: Encode & Scale {'='*18}")
 df_proc = df_cens.copy()
 
-# ---- Choose thickness source column (raw or effective) ----
+# ------------------------------------------------------------------
+# 3.0 Choose thickness source column (raw vs effective)
+# ------------------------------------------------------------------
 H_FIELD_SRC_COL = H_FIELD_COL_NAME
-for sp in CENSORING_SPECS or []:
+for sp in (CENSORING_SPECS or []):
     if sp.get("col") == H_FIELD_COL_NAME:
         eff = H_FIELD_COL_NAME + sp.get("eff_suffix", "_eff")
-        if USE_EFFECTIVE_H_FIELD and eff in df_proc.columns:
+        if USE_EFFECTIVE_H_FIELD and (eff in df_proc.columns):
             H_FIELD_SRC_COL = eff
         break
 
-# ---- Choose GWL source column (prefer meters if SCALE_GWL=False) ----
-GWL_SRC_COL = GWL_COL
-
-if not SCALE_GWL:
-    # If user didn't specify raw col, try to infer from "_z" convention
-    if GWL_RAW_COL is None and isinstance(GWL_COL, str) and GWL_COL.endswith("_z"):
-        cand = GWL_COL[:-2]  # "GWL_depth_bgs_z" -> "GWL_depth_bgs"
-        if cand in df_proc.columns:
-            GWL_RAW_COL = cand
-
-    if not GWL_RAW_COL or GWL_RAW_COL not in df_proc.columns:
-        raise ValueError(
-            "SCALE_GWL=False requires groundwater in meters. "
-            "Please set GWL_RAW_COL in config.py (e.g. 'GWL_depth_bgs') "
-            f"or provide a meters column. Current GWL_COL={GWL_COL!r}."
-        )
-
-    GWL_SRC_COL = GWL_RAW_COL
-
-# ---- Create SI columns (model-facing, never scaled) ----
+# ------------------------------------------------------------------
+# 3.1 Create explicit SI columns (meters) for physics-critical channels.
+#     These columns are NEVER scaled by ML scalers.
+# ------------------------------------------------------------------
 SUBS_COL_MODEL = f"{SUBSIDENCE_COL}__si"   # meters
-GWL_COL_MODEL  = f"{GWL_SRC_COL}__si"      # meters
+GWL_COL_MODEL  = f"{GWL_SRC_COL}__si"      # meters  (GWL_SRC_COL is meters, never None)
 H_COL_MODEL    = f"{H_FIELD_SRC_COL}__si"  # meters
 
-# subsidence: cumulative in mm -> meters
-# (since you decided SUBSIDENCE_KIND="cumulative")
+# Subsidence: mm -> m (if SUBS_UNIT_TO_SI=1e-3), stored in __si
 df_proc[SUBS_COL_MODEL] = (
-    pd.to_numeric(df_proc[SUBSIDENCE_COL], errors="coerce").astype(float) * SUBS_UNIT_TO_SI
+    pd.to_numeric(df_proc[SUBSIDENCE_COL], errors="coerce").astype(float)
+    * float(SUBS_UNIT_TO_SI)
 ).astype(np.float32)
 
-# gwl/head in meters already (depth_bgs is meters)
+# Groundwater: meters already (depth_bgs convention)
 df_proc[GWL_COL_MODEL] = (
     pd.to_numeric(df_proc[GWL_SRC_COL], errors="coerce").astype(float)
 ).astype(np.float32)
 
-# thickness to meters (apply THICKNESS_UNIT_TO_SI once, here)
+# Thickness: apply THICKNESS_UNIT_TO_SI exactly once here
 df_proc[H_COL_MODEL] = (
-    pd.to_numeric(df_proc[H_FIELD_SRC_COL], errors="coerce").astype(float) * THICKNESS_UNIT_TO_SI
+    pd.to_numeric(df_proc[H_FIELD_SRC_COL], errors="coerce").astype(float)
+    * float(THICKNESS_UNIT_TO_SI)
 ).astype(np.float32)
 
-# --------------------------------------------------------------
-# 3.0 Coordinate system for physics: ALWAYS meters internally
-# --------------------------------------------------------------
+# ------------------------------------------------------------------
+# 3.2 Coordinate system for physics: ALWAYS meters internally
+#     (this block unchanged except it now runs after SI columns exist)
+# ------------------------------------------------------------------
 COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).lower()
 UTM_EPSG = int(cfg.get("UTM_EPSG", 32649))
-COORD_SRC_EPSG    = cfg.get("COORD_SRC_EPSG", None)     # required for degrees
+COORD_SRC_EPSG    = cfg.get("COORD_SRC_EPSG", None)      # required for degrees
 COORD_TARGET_EPSG = int(cfg.get("COORD_TARGET_EPSG", UTM_EPSG))
 
 COORD_X_COL, COORD_Y_COL = LON_COL, LAT_COL
 coord_epsg = None
-coords_input_mode = COORD_MODE
-coords_in_degrees =bool( COORD_MODE=='degrees')
+coords_in_degrees = bool(COORD_MODE == "degrees")
 
 if COORD_MODE in ("degrees", "lonlat", "geographic"):
     if COORD_SRC_EPSG is None:
-        # You said: user should provide EPSG; enforce it.
-        raise ValueError(
-            "COORD_MODE='degrees' requires COORD_SRC_EPSG (e.g., 4326)."
-        )
+        raise ValueError("COORD_MODE='degrees' requires COORD_SRC_EPSG (e.g., 4326).")
     try:
         from pyproj import Transformer
         tr = Transformer.from_crs(
@@ -571,36 +790,40 @@ if COORD_MODE in ("degrees", "lonlat", "geographic"):
         COORD_X_COL, COORD_Y_COL = "x_m", "y_m"
         coord_epsg = int(COORD_TARGET_EPSG)
 
-        print(f"[Coords] degrees(EPSG:{COORD_SRC_EPSG}) -> meters(EPSG:{coord_epsg}) "
-              f"using ({COORD_X_COL},{COORD_Y_COL})")
-        coords_in_degrees = False  # already transformed in UTM
-        
+        print(
+            f"[Coords] degrees(EPSG:{COORD_SRC_EPSG}) -> meters(EPSG:{coord_epsg}) "
+            f"using ({COORD_X_COL},{COORD_Y_COL})"
+        )
+        coords_in_degrees = False  # already projected
     except Exception as e:
         raise RuntimeError(f"Projection failed for COORD_MODE='degrees': {e}")
 
 elif COORD_MODE in ("utm", "projected", "meters"):
-    # Assume provided columns already in meters
-    COORD_X_COL, COORD_Y_COL = LON_COL, LAT_COL
     coord_epsg = int(cfg.get("COORD_EPSG", COORD_TARGET_EPSG))
-    print(f"[Coords] Using provided projected coords directly: "
-          f"({COORD_X_COL},{COORD_Y_COL}) EPSG:{coord_epsg}")
-
+    print(
+        f"[Coords] Using provided projected coords directly: "
+        f"({COORD_X_COL},{COORD_Y_COL}) EPSG:{coord_epsg}"
+    )
 else:
     raise ValueError(
-        f"Unknown COORD_MODE={COORD_MODE!r}. "
-        "Use 'degrees' or 'utm'/'projected'/'meters'."
+        f"Unknown COORD_MODE={COORD_MODE!r}. Use 'degrees' or 'utm'/'projected'/'meters'."
     )
 
-
-# 3.1 One-hot encode ALL optional categoricals that are present
+proc_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_03_02_proc.csv")
+df_proc.to_csv(proc_csv, index=False)
+print(f"  Saved: {proc_csv}") 
+#%
+# ------------------------------------------------------------------
+# 3.3 One-hot encode ALL optional categoricals that are present
+# ------------------------------------------------------------------
 encoded_names = []
-ohe_paths = {}  # support multiple encoders (one per categorical)
+ohe_paths = {}
 for cat_col in _drop_missing_keep_order(opt_cat_cols, df_proc):
-    ohe = OneHotEncoder(
-        sparse_output=False, handle_unknown="ignore", dtype=np.float32)
+    ohe = OneHotEncoder(sparse_output=False, handle_unknown="ignore", dtype=np.float32)
     enc = ohe.fit_transform(df_proc[[cat_col]])
     enc_cols = ohe.get_feature_names_out([cat_col]).tolist()
     encoded_names.extend(enc_cols)
+
     enc_df = pd.DataFrame(enc, columns=enc_cols, index=df_proc.index)
     df_proc = pd.concat([df_proc.drop(columns=[cat_col]), enc_df], axis=1)
 
@@ -609,12 +832,13 @@ for cat_col in _drop_missing_keep_order(opt_cat_cols, df_proc):
         save_job(ohe, path, append_versions=True, append_date=True)
     except Exception:
         joblib.dump(ohe, path)
-    
-    # joblib.dump(ohe, path)
+
     ohe_paths[cat_col] = path
     print(f"  Saved OHE for '{cat_col}': {path}")
 
-# 3.2 Numeric time coordinate for PINN
+# ------------------------------------------------------------------
+# 3.4 Numeric time coordinate for PINN / derivatives
+# ------------------------------------------------------------------
 TIME_COL_NUM = f"{TIME_COL}_numeric_coord"
 df_proc[TIME_COL_NUM] = (
     df_proc[DT_TMP].dt.year
@@ -624,16 +848,18 @@ df_proc[TIME_COL_NUM] = (
 
 # If censoring created <col>_eff and/or <col>_censored, include them
 censor_numeric_additions = []
-for sp in CENSORING_SPECS or []:
+for sp in (CENSORING_SPECS or []):
     col = sp["col"]
-    feff  = col + sp.get("eff_suffix",  "_eff")
+    feff  = col + sp.get("eff_suffix", "_eff")
     fflag = col + sp.get("flag_suffix", "_censored")
     if feff in df_proc.columns:
         censor_numeric_additions.append(feff)
-    if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and fflag in df_proc.columns:
+    if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and (fflag in df_proc.columns):
         censor_numeric_additions.append(fflag)
 
-
+# ------------------------------------------------------------------
+# 3.5 Print config (now consistent: GWL_SRC_COL is meters, never None)
+# ------------------------------------------------------------------
 config_sections = [
     ("Run", {
         "CITY_NAME": CITY_NAME,
@@ -660,7 +886,9 @@ config_sections = [
         "LON_COL": LON_COL,
         "LAT_COL": LAT_COL,
         "SUBSIDENCE_COL": SUBSIDENCE_COL,
-        "GWL_COL": GWL_COL,
+        # Keep both for transparency:
+        "GWL_COL (ML)": GWL_COL,
+        "GWL_SRC_COL (meters)": GWL_SRC_COL,
         "H_FIELD_COL_NAME": H_FIELD_COL_NAME,
     }),
     ("Feature registry", {
@@ -672,7 +900,7 @@ config_sections = [
     ("Censoring", {
         "CENSORING_SPECS": CENSORING_SPECS,
         "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC,
-        "INCLUDE_CENSOR_FLAGS_AS_FUTURE":INCLUDE_CENSOR_FLAGS_AS_FUTURE, 
+        "INCLUDE_CENSOR_FLAGS_AS_FUTURE": INCLUDE_CENSOR_FLAGS_AS_FUTURE,
         "USE_EFFECTIVE_H_FIELD": USE_EFFECTIVE_H_FIELD,
     }),
     ("Outputs", {
@@ -684,37 +912,39 @@ config_sections = [
 
 config_sections.insert(5, ("Coordinates", {
     "COORD_MODE": COORD_MODE,
-    "COORD_SRC_EPSG": cfg.get("COORD_SRC_EPSG", None),
-    "COORD_TARGET_EPSG": cfg.get("COORD_TARGET_EPSG", UTM_EPSG),
+    "COORD_SRC_EPSG": COORD_SRC_EPSG,
+    "COORD_TARGET_EPSG": COORD_TARGET_EPSG,
     "COORD_EPSG": cfg.get("COORD_EPSG", None),
     "COORD_X_COL_USED": COORD_X_COL,
     "COORD_Y_COL_USED": COORD_Y_COL,
     "KEEP_COORDS_RAW": KEEP_COORDS_RAW,
 }))
+
 config_sections.insert(6, ("Physics SI", {
     "SUBS_UNIT_TO_SI": SUBS_UNIT_TO_SI,
     "THICKNESS_UNIT_TO_SI": THICKNESS_UNIT_TO_SI,
     "SCALE_GWL": SCALE_GWL,
-    "SCALE_H_FIELD": SCALE_H_FIELD,
     "SUBS_COL_MODEL": SUBS_COL_MODEL,
     "GWL_COL_MODEL": GWL_COL_MODEL,
     "H_COL_MODEL": H_COL_MODEL,
 }))
 
 print_config_table(
-    config_sections,table_width=_TW, 
+    config_sections,
+    table_width=_TW,
     title=f"{CITY_NAME.upper()} {MODEL_NAME} STAGE-1 CONFIG",
 )
 
-
-# Decide which coord columns you will actually feed to the model
+# ------------------------------------------------------------------
+# 3.6 Decide which coord columns you will feed to the model
+# ------------------------------------------------------------------
 TIME_COL_USED = TIME_COL_NUM
 X_COL_USED = COORD_X_COL
 Y_COL_USED = COORD_Y_COL
 
 SHIFT_RAW_COORDS = bool(cfg.get("SHIFT_RAW_COORDS", True))
-
 coord_shift_pack = None
+
 if KEEP_COORDS_RAW and SHIFT_RAW_COORDS:
     pack = make_txy_coords(
         t=df_proc[TIME_COL_NUM].to_numpy(float),
@@ -735,28 +965,34 @@ if KEEP_COORDS_RAW and SHIFT_RAW_COORDS:
     coord_shift_pack = pack
 
 # ------------------------------------------------------------------
-# 3.3 Scale numeric ML drivers (NOT physics-critical channels)
+# 3.7 Scale numeric ML drivers (NOT physics-critical channels)
 # ------------------------------------------------------------------
-
-# Candidate numeric ML drivers:
 ml_numeric_candidates = []
 ml_numeric_candidates += opt_num_cols[:]  # rainfall, urban_load, etc.
 ml_numeric_candidates += _drop_missing_keep_order(censor_numeric_additions, df_proc)
 
-# Remove any columns that are physics-critical or targets
-physics_locked = {SUBS_COL_MODEL, GWL_COL_MODEL, H_COL_MODEL, TIME_COL_NUM, COORD_X_COL, COORD_Y_COL}
-physics_locked |= {SUBSIDENCE_COL, GWL_COL, H_FIELD_COL_NAME, H_FIELD_SRC_COL, GWL_SRC_COL}
+# Anything that influences physics or targets must NEVER be scaled here.
+physics_locked = {
+    # SI columns (always locked)
+    SUBS_COL_MODEL, GWL_COL_MODEL, H_COL_MODEL,
+    # physics coords/time (raw or projected)
+    TIME_COL_NUM, COORD_X_COL, COORD_Y_COL,
+    # raw columns used to build SI
+    SUBSIDENCE_COL, H_FIELD_COL_NAME, H_FIELD_SRC_COL,
+    GWL_SRC_COL, GWL_METERS_COL,
+    # plus the ML alias column if you want to keep it unscaled
+    # (usually you DO want it scaled if it's a z-score / ML-only driver)
+}
 
 ml_numeric_cols = [
     c for c in _drop_missing_keep_order(ml_numeric_candidates, df_proc)
     if c not in physics_locked
 ]
-
-# Also respect user-declared already-normalized features
 ml_numeric_cols = [c for c in ml_numeric_cols if c not in set(ALREADY_NORMALIZED_FEATURES)]
 
 df_scaled = df_proc.copy()
 scaler_path = None
+
 if ml_numeric_cols:
     scaler = MinMaxScaler()
     df_scaled[ml_numeric_cols] = scaler.fit_transform(df_scaled[ml_numeric_cols])
@@ -771,17 +1007,16 @@ scaled_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_03_scaled.csv")
 df_scaled.to_csv(scaled_csv, index=False)
 print(f"  Saved: {scaled_csv}")
 
-scaled_ml_numeric_cols = ml_numeric_cols[:]  # record for manifest 
+scaled_ml_numeric_cols = ml_numeric_cols[:]  # record for manifest
 
-# --------------------------------------------------------------
-# 3.4 Physics SI affine mapping (model-space -> SI-space)
-# Since we created explicit __si columns, model-space == SI.
-# --------------------------------------------------------------
+# ------------------------------------------------------------------
+# 3.8 Physics SI affine mapping (model-space -> SI-space)
+# Stage-1 created explicit __si columns, so identity maps apply.
+# ------------------------------------------------------------------
 subs_scale_si, subs_bias_si = 1.0, 0.0
 head_scale_si, head_bias_si = 1.0, 0.0
 H_scale_si, H_bias_si       = 1.0, 0.0
-
-gwl_z_meta = None  # not used because we feed meters directly
+gwl_z_meta = None  # unused because we feed meters directly
 
 print("[SI affine] Using identity (inputs/targets already SI):")
 print("  subs: scale_si=1.0 bias_si=0.0")
@@ -789,10 +1024,8 @@ print("  head: scale_si=1.0 bias_si=0.0")
 print("  H   : scale_si=1.0 bias_si=0.0")
 
 H_FIELD_COL = H_COL_MODEL
-
-# H_field is already SI (meters) via H_COL_MODEL
-H_scale_si, H_bias_si = 1.0, 0.0
 print(f"[SI affine] H_field identity (meters already): {H_FIELD_COL}")
+
       
 # ==================================================================
 # Step 4: Feature sets (lists only)
@@ -808,7 +1041,7 @@ def _dedup_keep_order(seq):
 
 print(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
 
-GROUP_ID_COLS = [LON_COL, LAT_COL]
+GROUP_ID_COLS = [LON_COL, LAT_COL] # here for 
 # --- base features
 static_features = encoded_names[:]
 
@@ -833,12 +1066,10 @@ future_features  = _dedup_keep_order(future_features)
 # --- record indices after finalization
 gwl_dyn_index = int(dynamic_features.index(GWL_COL_MODEL))
 
-
 print(f"  Static : {static_features}")
 print(f"  Dynamic: {dynamic_features}")
 print(f"  Future : {future_features}")
 print(f"  H_field: {H_FIELD_COL}")
-
 
 # ==================================================================
 # Step 5: Split & build TRAIN sequences
@@ -1142,8 +1373,6 @@ manifest["config"]["units_provenance"].update({
     "thickness_unit_to_si_applied_stage1": float(THICKNESS_UNIT_TO_SI),
 })
 
-
-
 # === Step 5b: Build TEST sequences (temporal generalization) ===
 df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()
 test_inputs = test_targets = None
@@ -1154,7 +1383,6 @@ if not df_test.empty:
             time_col=TIME_COL_USED,
             lon_col=X_COL_USED,
             lat_col=Y_COL_USED,
-        
             subsidence_col=SUBS_COL_MODEL,
             gwl_col=GWL_COL_MODEL,
             h_field_col=H_COL_MODEL,
@@ -1244,7 +1472,6 @@ if BUILD_FUTURE_NPZ:
             prefix="future",
             normalize_coords=normalize_coords,     
             coord_scaler=coord_scaler,            
-
             verbose=7,
         )
         # Attach future_* NPZ paths into the manifest
