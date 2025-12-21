@@ -1724,6 +1724,8 @@ def prepare_pinn_data_sequences(
     datetime_format: Optional[str] = None,
     normalize_coords: bool = True, 
     cols_to_scale: Union[List[str], str, None] = None,
+    lock_physics_cols: bool = True,
+    protect_si_suffix: str = "__si",
     return_coord_scaler: bool =False, 
     coord_scaler: Optional[MinMaxScaler] = None,
     fit_coord_scaler: bool = True,
@@ -1845,34 +1847,6 @@ def prepare_pinn_data_sequences(
         forecast_horizon, "forecast_horizon", )
     
 
-    vlog(
-        "Pre-flight: assessing sliding-window feasibility ...",
-        verbose=verbose,
-        level=1,
-        logger=_logger,
-    )
-    
-    ok, _ = check_sequence_feasibility(
-        df_proc.copy(),
-        time_col=time_col,
-        group_id_cols=group_id_cols,
-        time_steps=time_steps,
-        forecast_horizon=forecast_horizon,
-        verbose=verbose,
-        error="raise",  # fail fast on impossibility,
-        logger= _logger, 
-    )
-    
-    vlog(
-        "Feasibility check passed — generating sequences...",
-        verbose=verbose,
-        level=1,
-        logger=_logger,
-    )
-    
-    vlog("Starting PINN data sequence generation...",
-         verbose=verbose, level=1, logger=_logger)
-
     vlog("Converting time column to numeric values...",
          verbose=verbose, level=4, logger=_logger)
     if pd.api.types.is_numeric_dtype(df_proc[time_col]):
@@ -1904,11 +1878,49 @@ def prepare_pinn_data_sequences(
                 f"Ensure it's datetime-like or specify `datetime_format`."
                 f" Error: {e}"
             )
+    vlog(
+        "Pre-flight: assessing sliding-window feasibility ...",
+        verbose=verbose,
+        level=1,
+        logger=_logger,
+    )
+    
+    ok, _ = check_sequence_feasibility(
+        df_proc.copy(),
+        time_col=time_col,
+        group_id_cols=group_id_cols,
+        time_steps=time_steps,
+        forecast_horizon=forecast_horizon,
+        verbose=verbose,
+        error="raise",  # fail fast on impossibility,
+        logger= _logger, 
+    )
+    
+    vlog(
+        "Feasibility check passed — generating sequences...",
+        verbose=verbose,
+        level=1,
+        logger=_logger,
+    )
+    
+    vlog("Starting PINN data sequence generation...",
+         verbose=verbose, level=1, logger=_logger)
    
     mode = select_mode(mode, default='pihal_like')
     vlog(f"Operating in '{mode}' data preparation mode.",
          level=1, verbose=verbose, logger=_logger)
 
+    exclude_cols = []
+    if lock_physics_cols:
+        exclude_cols += [subsidence_col, gwl_col]
+        if h_field_col is not None:
+            exclude_cols.append(h_field_col)
+    
+        # Also exclude any "__si" columns automatically (safe for Stage-1 outputs)
+        if protect_si_suffix:
+            exclude_cols += [c for c in df_proc.columns if str(c).endswith(protect_si_suffix)]
+    
+    # IMPORTANT: do NOT shift time in normalization for PINN
     df_proc, coord_scaler, cols_scaler = normalize_for_pinn(
         df=df_proc,
         time_col=numerical_time_col,
@@ -1917,6 +1929,9 @@ def prepare_pinn_data_sequences(
         scale_coords=normalize_coords,
         cols_to_scale=cols_to_scale,
         forecast_horizon=forecast_horizon,
+        shift_time_by_horizon=False,     
+        exclude_cols=exclude_cols,
+        protect_si_suffix=protect_si_suffix,
         verbose=verbose,
         _logger=_logger,
         coord_scaler=coord_scaler,

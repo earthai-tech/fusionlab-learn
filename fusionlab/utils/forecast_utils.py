@@ -3135,6 +3135,9 @@ def normalize_for_pinn(
     coord_y: str,
     cols_to_scale: Union[List[str], str, None] = "auto",
     scale_coords: bool = True,
+    exclude_cols: Optional[List[str]] = None,
+    protect_si_suffix: str = "__si",
+    shift_time_by_horizon: bool = False,
     verbose: int = 1, 
     forecast_horizon: Optional[int] = None,  
     _logger: Optional[Union[logging.Logger, Callable[[str], None]]] = None,
@@ -3142,6 +3145,7 @@ def normalize_for_pinn(
     fit_coord_scaler: bool = True,
     other_scaler: Optional[MinMaxScaler] = None,
     fit_other_scaler: bool = True,
+    
     **kws
 ) -> Tuple[pd.DataFrame, Optional[MinMaxScaler], Optional[MinMaxScaler]]:
     """
@@ -3302,27 +3306,42 @@ def normalize_for_pinn(
     # other_scaler: Optional[MinMaxScaler] = None
 
     # # --- 1. Adjust time before scaling ---
-    if forecast_horizon is not None:
-        if  pd.api.types.is_numeric_dtype(
-                df_scaled[time_col]):
-            # Only do this if you are NOT scaling coords, otherwise it cancels out anyway.
-            if not scale_coords:
-                df_scaled[time_col] = df_scaled[time_col] + float(forecast_horizon)
-                vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
-                      verbose=verbose, level=4, logger=_logger)
-        # # Check if time_col is integer (year)
-        # if pd.api.types.is_integer_dtype(df_scaled[time_col]):
-        #     # If it's an integer (year), we can simply add the forecast_horizon
-        #     df_scaled[time_col] = df_scaled[time_col] + forecast_horizon
-        #     vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
-        #           verbose=verbose, level=4, logger=_logger)
-        elif pd.api.types.is_datetime64_any_dtype(df_scaled[time_col]):
-            # If time_col is datetime, use the helper function to increment dates
-            df_scaled = increment_dates_by_horizon(
-                df_scaled, time_col, forecast_horizon
+    # if forecast_horizon is not None:
+    #     if  pd.api.types.is_numeric_dtype(
+    #             df_scaled[time_col]):
+    #         # Only do this if you are NOT scaling coords, otherwise it cancels out anyway.
+    #         if not scale_coords:
+    #             df_scaled[time_col] = df_scaled[time_col] + float(forecast_horizon)
+    #             vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+    #                   verbose=verbose, level=4, logger=_logger)
+    #     # # Check if time_col is integer (year)
+    #     # if pd.api.types.is_integer_dtype(df_scaled[time_col]):
+    #     #     # If it's an integer (year), we can simply add the forecast_horizon
+    #     #     df_scaled[time_col] = df_scaled[time_col] + forecast_horizon
+    #     #     vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+    #     #           verbose=verbose, level=4, logger=_logger)
+    #     elif pd.api.types.is_datetime64_any_dtype(df_scaled[time_col]):
+    #         # If time_col is datetime, use the helper function to increment dates
+    #         df_scaled = increment_dates_by_horizon(
+    #             df_scaled, time_col, forecast_horizon
+    #         )
+    #         vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
+    #               verbose=verbose, level=4, logger=_logger)
+    
+    # --- 1. Optionally adjust time before scaling (OFF by default) ---
+    if shift_time_by_horizon and forecast_horizon is not None:
+        if pd.api.types.is_numeric_dtype(df_scaled[time_col]):
+            df_scaled[time_col] = df_scaled[time_col] + float(forecast_horizon)
+            vlog(
+                f"Time column shifted by forecast_horizon={forecast_horizon}",
+                verbose=verbose, level=4, logger=_logger
             )
-            vlog(f"Time column adjusted with forecast horizon: {forecast_horizon}",
-                  verbose=verbose, level=4, logger=_logger)
+        elif pd.api.types.is_datetime64_any_dtype(df_scaled[time_col]):
+            df_scaled = increment_dates_by_horizon(df_scaled, time_col, forecast_horizon)
+            vlog(
+                f"Datetime column shifted by forecast_horizon={forecast_horizon}",
+                verbose=verbose, level=4, logger=_logger
+            )
 
     # --- 2. Scale coordinates if requested ---
     if scale_coords:
@@ -3361,36 +3380,71 @@ def normalize_for_pinn(
                 df_scaled[coord_cols])
             
     # --- 3. Determine `other_cols_to_scale` ---
-    if cols_to_scale == "auto":
-        vlog("Auto-selecting numeric columns to scale...", 
-             verbose=verbose, level=2, logger=_logger)
-        # Start with all numeric columns
-        numeric_cols = df_scaled.select_dtypes(
-            include=[np.number]).columns.tolist()
+    # if cols_to_scale == "auto":
+    #     vlog("Auto-selecting numeric columns to scale...", 
+    #          verbose=verbose, level=2, logger=_logger)
+    #     # Start with all numeric columns
+    #     numeric_cols = df_scaled.select_dtypes(
+    #         include=[np.number]).columns.tolist()
 
-        # Exclude coordinate columns if not scaling them 
+    #     # Exclude coordinate columns if not scaling them 
+    #     for c in (time_col, coord_x, coord_y):
+    #         if c in numeric_cols:
+    #             numeric_cols.remove(c)
+
+    #     # Exclude one-hot columns: numeric columns whose unique values ⊆ {0,1}
+    #     auto_cols = []
+    #     for c in numeric_cols:
+    #         uniq = pd.unique(df_scaled[c])
+    #         if set(np.unique(uniq)) <= {0, 1}:
+    #             vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
+    #                  verbose=verbose, level=3, logger=_logger)
+    #             continue
+    #         auto_cols.append(c)
+
+    #     other_cols_to_scale = auto_cols
+    #     vlog(f"Auto-selected columns: {other_cols_to_scale}", 
+    #          verbose=verbose, level=2, logger=_logger)
+    
+    exclude_set = set(exclude_cols or [])
+    if protect_si_suffix:
+        exclude_set |= {c for c in df_scaled.columns if str(c).endswith(protect_si_suffix)}
+        
+    if cols_to_scale == "auto":
+        numeric_cols = df_scaled.select_dtypes(include=[np.number]).columns.tolist()
+    
+        # always exclude coords from "other" scaling
         for c in (time_col, coord_x, coord_y):
             if c in numeric_cols:
                 numeric_cols.remove(c)
-
-        # Exclude one-hot columns: numeric columns whose unique values ⊆ {0,1}
+    
         auto_cols = []
         for c in numeric_cols:
-            uniq = pd.unique(df_scaled[c])
-            if set(np.unique(uniq)) <= {0, 1}:
-                vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.", 
+            if c in exclude_set:
+                vlog(f"Excluding locked column '{c}' from auto-scaling.",
                      verbose=verbose, level=3, logger=_logger)
                 continue
+    
+            uniq = pd.unique(df_scaled[c])
+            if set(np.unique(uniq)) <= {0, 1}:
+                vlog(f"Excluding one-hot/boolean column '{c}' from auto-scaling.",
+                     verbose=verbose, level=3, logger=_logger)
+                continue
+    
             auto_cols.append(c)
-
+    
         other_cols_to_scale = auto_cols
-        vlog(f"Auto-selected columns: {other_cols_to_scale}", 
-             verbose=verbose, level=2, logger=_logger)
+
     elif isinstance(cols_to_scale, list):
-        other_cols_to_scale = cols_to_scale.copy()
+       other_cols_to_scale = [c for c in cols_to_scale if c not in exclude_set]
+       dropped = [c for c in cols_to_scale if c in exclude_set]
+       if dropped:
+           vlog(f"Dropped locked columns from scaling list: {dropped}",
+                verbose=verbose, level=2, logger=_logger)
+
     else:  # cols_to_scale is None
         other_cols_to_scale = []
-
+    
     # --- 4. Scale `other_cols_to_scale` if any ---
     if other_cols_to_scale:
         vlog(f"Scaling additional columns: {other_cols_to_scale}", 
@@ -3414,10 +3468,12 @@ def normalize_for_pinn(
         if valid_cols:
             
             if other_scaler is None:
-                if not fit_coord_scaler:
+                if not fit_other_scaler:
                     raise ValueError(
-                        "other_scaler must be provided when fit_coord_scaler=False")
+                        "other_scaler must be provided when fit_other_scaler=False"
+                    )
                 other_scaler = MinMaxScaler()
+
 
             if fit_other_scaler:
                 df_scaled[valid_cols] = other_scaler.fit_transform(
@@ -3425,9 +3481,9 @@ def normalize_for_pinn(
             else:
                 if not hasattr(other_scaler, "min_"):
                     raise ValueError(
-                        "fit_coord_scaler=False but"
-                        " `other_scaler` is not fitted."
+                        "fit_other_scaler=False but `other_scaler` is not fitted."
                     )
+
                 df_scaled[valid_cols] = other_scaler.transform(
                     df_scaled[valid_cols])
             
