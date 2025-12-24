@@ -64,7 +64,7 @@ from fusionlab.utils.generic_utils import (
 )
 from fusionlab.utils.subsidence_utils import ( 
     rate_to_cumulative, cumulative_to_rate, 
-    # finalize_si_scaling_kwargs
+    finalize_si_scaling_kwargs
 )
 from fusionlab.utils.subsidence_utils import make_txy_coords
 from fusionlab.utils.sequence_utils import build_future_sequences_npz
@@ -134,40 +134,21 @@ OPTIONAL_CATEGORICAL_FEATURES = cfg["OPTIONAL_CATEGORICAL_FEATURES"]
 ALREADY_NORMALIZED_FEATURES   = cfg["ALREADY_NORMALIZED_FEATURES"]
 FUTURE_DRIVER_FEATURES        = cfg["FUTURE_DRIVER_FEATURES"]
 
-# --- Censoring config (v3.2 flat config; keep legacy fallback) ---
-CENSORING_SPECS = cfg.get("CENSORING_SPECS", None)
-if CENSORING_SPECS is None:
-    _c = cfg.get("censoring", {}) or {}
-    CENSORING_SPECS = _c.get("specs", []) or []
-
+# --- Censoring config (wired exactly like training/tuning) ---
+_censor_cfg = cfg.get("censoring", {}) or {}
+CENSORING_SPECS = _censor_cfg.get("specs", [])
 INCLUDE_CENSOR_FLAGS_AS_DYNAMIC = bool(
-    cfg.get(
-        "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC",
-        (cfg.get("censoring", {}) or {}).get("flags_as_dynamic", True),
-    )
+    _censor_cfg.get("flags_as_dynamic", True)
 )
 INCLUDE_CENSOR_FLAGS_AS_FUTURE = bool(
-    cfg.get(
-        "INCLUDE_CENSOR_FLAGS_AS_FUTURE",
-        (cfg.get("censoring", {}) or {}).get("flags_as_future", False),
-    )
-)
-USE_EFFECTIVE_H_FIELD = bool(
-    cfg.get(
-        "USE_EFFECTIVE_H_FIELD",
-        (cfg.get("censoring", {}) or {}).get("use_effective_h_field", True),
-    )
+    _censor_cfg.get("flags_as_future", False)
 )
 
+USE_EFFECTIVE_H_FIELD = bool(
+    _censor_cfg.get("use_effective_h_field", True)
+)
 THICKNESS_UNIT_TO_SI = float(cfg.get("THICKNESS_UNIT_TO_SI", 1.0))
 HEAD_UNIT_TO_SI = float(cfg.get("HEAD_UNIT_TO_SI", 1.0))
-
-# v3.2 z_surf/head conventions
-Z_SURF_COL = cfg.get("Z_SURF_COL", None)
-USE_HEAD_PROXY = bool(cfg.get("USE_HEAD_PROXY", True))
-Z_SURF_UNIT_TO_SI= float(cfg.get("Z_SURF_UNIT_TO_SI", 1.0))
-HEAD_COL = cfg.get("HEAD_COL", "head_m")
-INCLUDE_Z_SURF_AS_STATIC = bool(cfg.get("INCLUDE_Z_SURF_AS_STATIC", True))
 
 
 # --- Stage-1 physics-critical scaling controls ---
@@ -181,15 +162,6 @@ SUBSIDENCE_KIND = str(cfg.get("SUBSIDENCE_KIND", "cumulative")).lower()
 # Optional but strongly recommended if GWL_COL is not in meters:
 GWL_RAW_COL = cfg.get("GWL_RAW_COL", None)  # e.g. "GWL_depth_bgs"
 
-# Coordinate system for physics
-COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).lower()
-UTM_EPSG = int(cfg.get("UTM_EPSG", 32649))
-COORD_SRC_EPSG    = cfg.get("COORD_SRC_EPSG", None)      # required for degrees
-COORD_TARGET_EPSG = int(cfg.get("COORD_TARGET_EPSG", UTM_EPSG))
-
-COORD_X_COL, COORD_Y_COL = LON_COL, LAT_COL
-coord_epsg = None
-coords_in_degrees = bool(COORD_MODE == "degrees")
 
 # --- Output directories (optionally overridable from cfg) ---
 BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
@@ -624,114 +596,6 @@ GWL_METERS_COL, GWL_ZSCORE_COL = resolve_gwl_for_physics(
     allow_keep_zscore_as_ml=True,
 )
 
-def resolve_head_column(
-    df: pd.DataFrame,
-    *,
-    depth_col: str,
-    head_col: str = "head_m",
-    z_surf_col: Optional[str] = None,
-    use_head_proxy: bool = True,
-) -> tuple[str, Optional[str]]:
-    cols = set(df.columns)
-
-    # Prefer explicit head column if present
-    if head_col and head_col in cols:
-        return head_col, z_surf_col if (z_surf_col in cols if z_surf_col else False) else None
-
-    # Else compute from z_surf - depth if possible
-    if z_surf_col and (z_surf_col in cols):
-        new_head = "head_m"  # canonical name
-        df[new_head] = pd.to_numeric(df[z_surf_col], errors="coerce"
-                                     ) - pd.to_numeric(df[depth_col], errors="coerce")
-        return new_head, z_surf_col
-
-    # Else proxy: head ≈ -depth (only if allowed)
-    if use_head_proxy:
-        new_head = "head_m"
-        df[new_head] = -pd.to_numeric(df[depth_col], errors="coerce")
-        return new_head, None
-
-    raise ValueError(
-        "Cannot resolve head. Provide 'head_m' or 'z_surf' (Z_SURF_COL), "
-        "or enable USE_HEAD_PROXY."
-    )
-
-Z_SURF_COL = cfg.get("Z_SURF_COL", None)
-USE_HEAD_PROXY = bool(cfg.get("USE_HEAD_PROXY", True))
-HEAD_COL = cfg.get("HEAD_COL", "head_m")
-
-# Depth for the dynamic driver (z_GWL)
-GWL_DEPTH_COL = GWL_METERS_COL  # keep your existing meters resolver
-
-# Head for physics/target (h)
-HEAD_SRC_COL, Z_SURF_COL_USED = resolve_head_column(
-    df_raw,
-    depth_col=GWL_DEPTH_COL,
-    head_col=HEAD_COL,
-    z_surf_col=Z_SURF_COL,
-    use_head_proxy=USE_HEAD_PROXY,
-)
-
-# ------------------------------------------------------------------
-# v3.2 robustness: make some physics inputs optional when missing.
-# If the user requests physics (PDE_MODE_CONFIG not "off") but the
-# dataset does not contain physics-critical columns, we auto-disable
-# physics for this Stage-1 run and proceed in ML-only mode.
-# ------------------------------------------------------------------
-_pde_mode = str(cfg.get("PDE_MODE_CONFIG", "off")).strip().lower()
-_physics_requested = _pde_mode not in ("off", "none", "no", "0")
-
-if (GWL_METERS_COL is None) and _physics_requested:
-    print(
-        "  [Warn] No groundwater-level column in meters could be resolved. "
-        "Disabling physics (PDE_MODE_CONFIG='off') for this Stage-1 run."
-    )
-    cfg["PDE_MODE_CONFIG"] = "off"
-    _physics_requested = False
-
-# If meters column is missing, fall back to z-score or user-provided GWL
-# so the ML driver can still run. (Physics stays off.)
-if GWL_METERS_COL is None:
-    if (GWL_ZSCORE_COL is not None) and (GWL_ZSCORE_COL in df_raw.columns):
-        GWL_METERS_COL = GWL_ZSCORE_COL
-    elif (GWL_COL is not None) and (GWL_COL in df_raw.columns):
-        GWL_METERS_COL = GWL_COL
-    else:
-        raise ValueError(
-            "No usable groundwater column found. Provide at least one of: "
-            f"{GWL_COL!r}, {GWL_ZSCORE_COL!r}, or a resolvable meters column."
-        )
-
-# Soil thickness: try to resolve from common aliases; otherwise create a
-# constant thickness so the pipeline can still run (physics stays off if
-# thickness was required).
-if H_FIELD_COL_NAME not in df_raw.columns:
-    _thick_candidates = [
-        "soil_thickness_eff", "soil_thickness_imputed", "soil_thickness",
-        "H_field", "soil_thickness_m"
-    ]
-    _found = next((c for c in _thick_candidates if c in df_raw.columns), None)
-    if _found is not None:
-        print(
-            f"  [Info] Using thickness column {_found!r} as H_FIELD_COL_NAME "
-            f"(was {H_FIELD_COL_NAME!r})."
-        )
-        H_FIELD_COL_NAME = _found
-    else:
-        if _physics_requested:
-            print(
-                "  [Warn] No soil thickness column found; disabling physics "
-                "(PDE_MODE_CONFIG='off') for this Stage-1 run."
-            )
-            cfg["PDE_MODE_CONFIG"] = "off"
-            _physics_requested = False
-        _H_default = float(cfg.get("H_FIELD_DEFAULT_VALUE", 1.0))
-        print(
-            f"  [Warn] No thickness column found; creating constant "
-            f"{H_FIELD_COL_NAME!r}={_H_default} (m)."
-        )
-        df_raw[H_FIELD_COL_NAME] = _H_default
-
 # The physics source used later to build __si (NEVER z-score)
 GWL_SRC_COL = GWL_METERS_COL
 
@@ -751,13 +615,6 @@ base_select = [
     GWL_METERS_COL,       # <- meters (physics-critical)
     H_FIELD_COL_NAME,
 ]
-Z_SURF_COL = cfg.get("Z_SURF_COL", None)
-HEAD_COL   = cfg.get("HEAD_COL", "head_m")
-
-if Z_SURF_COL and (Z_SURF_COL in df_raw.columns):
-    base_select.append(Z_SURF_COL)
-if HEAD_COL and (HEAD_COL in df_raw.columns):
-    base_select.append(HEAD_COL)
 
 # Optional: keep z-score as ML convenience column if present
 if (GWL_ZSCORE_COL is not None) and (GWL_ZSCORE_COL in df_raw.columns):
@@ -788,21 +645,6 @@ if skipped_optional:
     print(f"  [Info] Optional columns not found (skipped): {skipped_optional}")
 
 df_sel = df_raw[selected].copy()
-
-print("[Required columns check]")
-print("  depth col:", GWL_DEPTH_COL)
-print("  head  col:", HEAD_SRC_COL)
-print("  z_surf col:", Z_SURF_COL_USED)
-print("  H col:", H_FIELD_COL_NAME)
-
-for c in (GWL_DEPTH_COL, HEAD_SRC_COL, H_FIELD_COL_NAME):
-    if c not in df_raw.columns:
-        raise ValueError(f"[Stage1] Missing critical column: {c}")
-
-if not USE_HEAD_PROXY and (Z_SURF_COL is not None) and (Z_SURF_COL not in df_raw.columns):
-    raise ValueError(
-        f"[Stage1] USE_HEAD_PROXY=False but Z_SURF_COL={Z_SURF_COL!r} not found in dataset."
-    )
 
 # ------------------------------------------------------------------
 # 2.4 Normalize time column to DT_TMP + ensure TIME_COL is numeric year
@@ -878,66 +720,41 @@ if _missing_src:
     )
 
 # ---- SI column names (explicit, always meters) ----
-SUBS_SI_COL   = f"{SUBSIDENCE_COL}__si"      # settlement in meters
-DEPTH_SI_COL  = f"{GWL_DEPTH_COL}__si"       # depth-bgs in meters (z_GWL)
-HEAD_SI_COL   = f"{HEAD_SRC_COL}__si"        # head in meters
-H_SI_COL      = f"{H_FIELD_SRC_COL}__si"     # thickness in meters
-Z_SURF_SI_COL = f"{Z_SURF_COL_USED}__si" if Z_SURF_COL_USED else None
+SUBS_SI_COL = f"{SUBSIDENCE_COL}__si"     # meters
+GWL_SI_COL  = f"{GWL_SRC_COL}__si"        # meters (depth_bgs or head proxy, but meters)
+H_SI_COL    = f"{H_FIELD_SRC_COL}__si"    # meters
 
-# ---- Build SI columns ----
+# ---- Build SI columns exactly once ----
 df_proc[SUBS_SI_COL] = (
     pd.to_numeric(df_proc[SUBSIDENCE_COL], errors="coerce").astype(float)
     * float(SUBS_UNIT_TO_SI)
 ).astype(np.float32)
 
-df_proc[DEPTH_SI_COL] = (
-    pd.to_numeric(df_proc[GWL_DEPTH_COL], errors="coerce").astype(float)
-    * float(HEAD_UNIT_TO_SI)   # depth is meters in your datasets; keep 1.0
+df_proc[GWL_SI_COL] = (
+    pd.to_numeric(df_proc[GWL_SRC_COL], errors="coerce").astype(float)
+    * HEAD_UNIT_TO_SI
 ).astype(np.float32)
-
-df_proc[HEAD_SI_COL] = (
-    pd.to_numeric(df_proc[HEAD_SRC_COL], errors="coerce").astype(float)
-    * float(HEAD_UNIT_TO_SI)   # head is meters; keep 1.0
-).astype(np.float32)
-
-if Z_SURF_SI_COL:
-    df_proc[Z_SURF_SI_COL] = (
-        pd.to_numeric(df_proc[Z_SURF_COL_USED], errors="coerce").astype(float)
-        * float(Z_SURF_UNIT_TO_SI)
-    ).astype(np.float32)
 
 df_proc[H_SI_COL] = (
     pd.to_numeric(df_proc[H_FIELD_SRC_COL], errors="coerce").astype(float)
     * float(THICKNESS_UNIT_TO_SI)
 ).astype(np.float32)
 
-# ---- Model-space columns (GeoPrior v3.2 uses SI directly) ----
+# ---- Model-space columns (what the net sees/predicts in Stage-2) ----
+# IMPORTANT: for GeoPriorSubsNet we keep these SI to avoid any ambiguity
+# in physics residuals and unit conversions.
 SUBS_MODEL_COL = SUBS_SI_COL
-
-# IMPORTANT v3.2:
-# - dynamic GWL channel is DEPTH (z_GWL)
-# - predicted/target GWL channel is HEAD
-GWL_DYN_COL    = DEPTH_SI_COL
-GWL_TARGET_COL = HEAD_SI_COL
-
-# Keep a single "gwl_model" for backward compatibility: treat it as TARGET
-GWL_MODEL_COL  = GWL_TARGET_COL
-
+GWL_MODEL_COL  = GWL_SI_COL
 H_MODEL_COL    = H_SI_COL
-H_FIELD_COL    = H_MODEL_COL
 
+# Keep one canonical name for the thickness field that the model expects.
+H_FIELD_COL = H_MODEL_COL
+
+# ---- Debug print (helps catching accidental renames) ----
 print("[SI cols]")
-print(f"  SUBS_MODEL_COL={SUBS_MODEL_COL}  <- {SUBSIDENCE_COL} * {SUBS_UNIT_TO_SI}")
-print(f"  GWL_DYN_COL   ={GWL_DYN_COL}     <- {GWL_DEPTH_COL} (depth, meters)")
-print(f"  GWL_TARGET_COL={GWL_TARGET_COL} <- {HEAD_SRC_COL} (head, meters)")
-print(f"  H_FIELD_COL   ={H_FIELD_COL}    <- {H_FIELD_SRC_COL} * {THICKNESS_UNIT_TO_SI}")
-if Z_SURF_SI_COL:
-    print(f"  Z_SURF_SI_COL ={Z_SURF_SI_COL}  <- {Z_SURF_COL_USED} (meters)")
-
-# Quick hard checks (debugging)
-for _c in (SUBS_MODEL_COL, GWL_DYN_COL, GWL_TARGET_COL, H_FIELD_COL):
-    if _c not in df_proc.columns:
-        raise RuntimeError(f"[Stage1] SI column missing after build: {_c}")
+print(f"  SUBS_MODEL_COL={SUBS_MODEL_COL} (from {SUBSIDENCE_COL}, unit_to_si={SUBS_UNIT_TO_SI})")
+print(f"  GWL_MODEL_COL ={GWL_MODEL_COL}  (from {GWL_SRC_COL}, meters)")
+print(f"  H_FIELD_COL   ={H_FIELD_COL}    (from {H_FIELD_SRC_COL}, unit_to_si={THICKNESS_UNIT_TO_SI})")
 
 # Optional guard: if someone sets these True, make it explicit that we ignore
 # them for GeoPriorSubsNet to keep physics consistent.
@@ -951,6 +768,14 @@ if SCALE_GWL or SCALE_H_FIELD:
 # 3.2 Coordinate system for physics: ALWAYS meters internally
 #     (this block unchanged except it now runs after SI columns exist)
 # ------------------------------------------------------------------
+COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).lower()
+UTM_EPSG = int(cfg.get("UTM_EPSG", 32649))
+COORD_SRC_EPSG    = cfg.get("COORD_SRC_EPSG", None)      # required for degrees
+COORD_TARGET_EPSG = int(cfg.get("COORD_TARGET_EPSG", UTM_EPSG))
+
+COORD_X_COL, COORD_Y_COL = LON_COL, LAT_COL
+coord_epsg = None
+coords_in_degrees = bool(COORD_MODE == "degrees")
 
 if COORD_MODE in ("degrees", "lonlat", "geographic"):
     if COORD_SRC_EPSG is None:
@@ -1163,30 +988,25 @@ ml_numeric_candidates += _drop_missing_keep_order(censor_numeric_additions, df_p
 physics_locked = {
     # targets/physics channels (SI == model)
     SUBS_MODEL_COL, GWL_MODEL_COL, H_FIELD_COL,
-    SUBS_SI_COL, DEPTH_SI_COL, HEAD_SI_COL, H_SI_COL,
+    SUBS_SI_COL, GWL_SI_COL, H_SI_COL,
 
     # time/coords (raw/proj + possibly shifted)
     TIME_COL_NUM, COORD_X_COL, COORD_Y_COL,
     TIME_COL_USED, X_COL_USED, Y_COL_USED,
 
     # raw columns used to build SI
-    SUBSIDENCE_COL, GWL_DEPTH_COL, HEAD_SRC_COL, H_FIELD_SRC_COL,
+    SUBSIDENCE_COL, GWL_SRC_COL, GWL_METERS_COL,
+    H_FIELD_COL_NAME, H_FIELD_SRC_COL,
 
     # bookkeeping columns you don't want scaled
     TIME_COL, DT_TMP, LON_COL, LAT_COL,
 }
-if Z_SURF_SI_COL:
-    physics_locked.add(Z_SURF_SI_COL)
-
 
 ml_numeric_cols = [
     c for c in _drop_missing_keep_order(ml_numeric_candidates, df_proc)
     if c not in physics_locked
 ]
-ml_numeric_cols = [
-    c for c in ml_numeric_cols if c not in 
-    set(ALREADY_NORMALIZED_FEATURES)
-]
+ml_numeric_cols = [c for c in ml_numeric_cols if c not in set(ALREADY_NORMALIZED_FEATURES)]
 
 df_scaled = df_proc.copy()
 scaler_path = None
@@ -1200,9 +1020,7 @@ if ml_numeric_cols:
 
     # Fit on TRAIN only (avoid leakage), transform ALL
     scaler.fit(df_proc.loc[train_mask, ml_numeric_cols])
-    df_scaled.loc[:, ml_numeric_cols] = scaler.transform(
-        df_scaled.loc[:, ml_numeric_cols]
-    )
+    df_scaled.loc[:, ml_numeric_cols] = scaler.transform(df_scaled.loc[:, ml_numeric_cols])
 
     scaler_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_main_scaler.joblib")
     joblib.dump(scaler, scaler_path)
@@ -1253,18 +1071,8 @@ print(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
 GROUP_ID_COLS = [LON_COL, LAT_COL] # here for 
 # --- base features
 static_features = encoded_names[:]
-if bool(cfg.get("INCLUDE_Z_SURF_AS_STATIC", True)
-        ) and Z_SURF_SI_COL and (Z_SURF_SI_COL in df_scaled.columns):
-    static_features.append(Z_SURF_SI_COL)
 
-# v3.2: optionally include historical subsidence as a dynamic driver so
-# physics-driven settlement (which needs an initial condition) can use
-# the last observed value without extra packing.
-INCLUDE_SUBS_HIST_DYNAMIC = bool(cfg.get("INCLUDE_SUBS_HIST_DYNAMIC", True))
-
-dynamic_base  = [GWL_DYN_COL] # [GWL_MODEL_COL]
-if INCLUDE_SUBS_HIST_DYNAMIC and (SUBS_MODEL_COL in df_scaled.columns):
-    dynamic_base.append(SUBS_MODEL_COL)
+dynamic_base  = [GWL_MODEL_COL]
 
 forbidden_dyn = {GWL_SRC_COL, GWL_METERS_COL, GWL_COL, (GWL_ZSCORE_COL or "")}
 
@@ -1288,12 +1096,7 @@ dynamic_features = _dedup_keep_order(dynamic_features)
 future_features  = _dedup_keep_order(future_features)
 
 # --- record indices after finalization
-# gwl_dyn_index = int(dynamic_features.index(GWL_MODEL_COL))
-gwl_dyn_index = int(dynamic_features.index(GWL_DYN_COL))
-
-subs_dyn_index = None
-if SUBS_MODEL_COL in dynamic_features:
-    subs_dyn_index = int(dynamic_features.index(SUBS_MODEL_COL))
+gwl_dyn_index = int(dynamic_features.index(GWL_MODEL_COL))
 
 print(f"  Static : {static_features}")
 print(f"  Dynamic: {dynamic_features}")
@@ -1316,10 +1119,6 @@ seq_job = os.path.join(
 OUT_S_DIM, OUT_G_DIM = 1, 1
 normalize_coords = not KEEP_COORDS_RAW
 
-print("gwl_col(target):", GWL_TARGET_COL)
-print("gwl_dyn_col(driver):", GWL_DYN_COL)
-print("dynamic_features:", dynamic_features)
-
 inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
     df=df_train,
     time_col=TIME_COL_USED,
@@ -1328,8 +1127,7 @@ inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
 
     # Use SI columns for physics
     subsidence_col=SUBS_MODEL_COL,
-    gwl_col=GWL_TARGET_COL,   # head_m__si  (TARGET)
-    gwl_dyn_col=GWL_DYN_COL,     # depth__si   (DRIVER)  
+    gwl_col=GWL_MODEL_COL,
     h_field_col=H_FIELD_COL,
 
     dynamic_cols=dynamic_features,
@@ -1443,157 +1241,49 @@ _save_npz(val_targets_npz, val_np_y)
 print(f"  Saved NPZs:\n    {train_inputs_npz}\n    {train_targets_npz}\n"
       f"    {val_inputs_npz}\n    {val_targets_npz}")
 
+# (Optional) only if you still want tf.data for a tiny sanity check
+# train_ds = tf.data.Dataset.from_tensor_slices((train_np_x, train_np_y)).batch(32).prefetch(1)
+# val_ds   = tf.data.Dataset.from_tensor_slices((val_np_x, val_np_y)).batch(32).prefetch(1)
+
 # ==================================================================
-# Manifest: single handshake for Stage-2 (no redundant truth source)
+# Manifest: one file to rule them all
 # ==================================================================
 print(f"\n{'='*18} Build Manifest {'='*18}")
 
-# Keep censoring details together (needed for audit + Stage-2 checks)
 manifest_censor = {
     "specs": CENSORING_SPECS,
     "report": censor_report,
     "use_effective_h_field": USE_EFFECTIVE_H_FIELD,
-    "flags_as_dynamic": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC,
-    "flags_as_future": INCLUDE_CENSOR_FLAGS_AS_FUTURE,
+    "flags_as_dynamic": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC
 }
 
-# ---- 1) Canonical naming/roles: ONE place for columns & feature order ----
-cols_spec = {
-    # raw identifiers
-    "time": TIME_COL,
-    "lon": LON_COL,
-    "lat": LAT_COL,
-
-    # time/coords actually fed to the model sequences (may be shifted/proj)
-    "time_numeric": TIME_COL_NUM,
-    "time_used": TIME_COL_USED,
-    "x_base": COORD_X_COL,     # projected or raw, before shifting
-    "y_base": COORD_Y_COL,
-    "x_used": X_COL_USED,      # used in sequences (shifted or base)
-    "y_used": Y_COL_USED,
-
-    # subsidence: raw column + model-space column (SI in v3.2)
-    "subs_raw": SUBSIDENCE_COL,
-    "subs_model": SUBS_MODEL_COL,
-
-    # groundwater: explicit split (driver=depth, target=head)
-    "depth_raw": GWL_DEPTH_COL,
-    "head_raw": HEAD_SRC_COL,
-    "depth_model": GWL_DYN_COL,
-    "head_model": GWL_TARGET_COL,
-
-    # thickness: source and model column (SI in v3.2)
-    "h_field_raw": H_FIELD_SRC_COL if "H_FIELD_SRC_COL" in globals() else H_FIELD_COL_NAME,
-    "h_field_model": H_FIELD_COL,
-
-    # optional surface elevation (static)
-    "z_surf_raw": Z_SURF_COL_USED,
-    "z_surf_static": Z_SURF_SI_COL,
-}
-
-features_spec = {
-    "static": list(static_features),
-    "dynamic": list(dynamic_features),
-    "future": list(future_features),
-    "group_id_cols": list(GROUP_ID_COLS),
-}
-
-# indices are the only “positional truth” Stage-2 needs
-indices_spec = {
-    "gwl_dyn_index": int(gwl_dyn_index),
-    "subs_dyn_index": (int(subs_dyn_index) if subs_dyn_index is not None else None),
-    "gwl_dyn_name": GWL_DYN_COL
-}
-
-conventions_spec = {
-    # GWL conventions (Stage-2 physics depends on these)
-    "gwl_kind": str(cfg.get("GWL_KIND", "depth_bgs")),
-    "gwl_sign": str(cfg.get("GWL_SIGN", "down_positive")),
-    "use_head_proxy": bool(cfg.get("USE_HEAD_PROXY", True)),
-    "time_units": str(TIME_UNITS),
-
-    # what Stage-1 actually produced (explicit in v3.2)
-    "gwl_driver_kind": "depth",
-    "gwl_target_kind": "head",
-    
-}
-
-# ---- 2) Numeric scaling/physics metadata: ONE place for scalars/ranges ----
-# IMPORTANT: scaling_kwargs contains *no column names* (that lives in cols_spec).
-scaling_kwargs = {
-    # SI affine maps (identity here because Stage-1 produced SI columns)
-    "subs_scale_si": float(subs_scale_si),
-    "subs_bias_si": float(subs_bias_si),
-    "head_scale_si": float(head_scale_si),
-    "head_bias_si": float(head_bias_si),
-    "H_scale_si": float(H_scale_si),
-    "H_bias_si": float(H_bias_si),
-    
-    "subsidence_kind": SUBSIDENCE_KIND, 
-
-    # coords scaling metadata (needed for chain-rule in Stage-2)
-    "coords_normalized": bool(normalize_coords),
-    "coord_order": ["t", "x", "y"],
-    "coord_ranges": {k: float(v) for k, v in coord_ranges.items()},
-
-    # coordinate provenance
-    "coord_mode": str(COORD_MODE),
-    "coord_src_epsg": (int(COORD_SRC_EPSG) if COORD_SRC_EPSG is not None else None),
-    "coord_target_epsg": int(COORD_TARGET_EPSG),
-    "coord_epsg_used": (int(coord_epsg) if coord_epsg is not None else None),
-    "coords_in_degrees": bool(coords_in_degrees),
-    
-    **indices_spec
-}
-
-# Optional: shift metadata only if used (kept here because Stage-2 needs it)
-if coord_shift_pack is not None:
-    scaling_kwargs["coord_shift_mins"] = coord_shift_pack.coord_mins
-    scaling_kwargs["coord_shift_meta"] = coord_shift_pack.meta
-
-# ---- 3) Manifest object (minimal, stable schema) ----
 manifest = {
-    "schema_version": "3.2",  # bump when Stage-2 handshake changes
     "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "city": CITY_NAME,
     "model": MODEL_NAME,
     "stage": "stage1",
-
-    # Stage-2 handshake (minimal, canonical)
     "config": {
-        "TIME_STEPS": int(TIME_STEPS),
-        "FORECAST_HORIZON_YEARS": int(FORECAST_HORIZON_YEARS),
-        "MODE": str(MODE),
-        "TRAIN_END_YEAR": int(TRAIN_END_YEAR),
-        "FORECAST_START_YEAR": int(FORECAST_START_YEAR),
-
-        "cols": cols_spec,
-        "features": features_spec,
-        "indices": indices_spec,
-        "conventions": conventions_spec,
-        "scaling_kwargs": scaling_kwargs,
-
-        # “declared vs resolved” is optional but useful for audit/debug
-        "feature_registry": {
-            "optional_numeric_declared": OPTIONAL_NUMERIC_FEATURES,
-            "optional_categorical_declared": OPTIONAL_CATEGORICAL_FEATURES,
-            "already_normalized": ALREADY_NORMALIZED_FEATURES,
-            "future_drivers_declared": FUTURE_DRIVER_FEATURES,
-            "resolved_optional_numeric": opt_num_cols,
-            "resolved_optional_categorical": opt_cat_cols,
+        "TIME_STEPS": TIME_STEPS,
+        "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
+        "MODE": MODE,
+        "TRAIN_END_YEAR": TRAIN_END_YEAR,
+        "FORECAST_START_YEAR": FORECAST_START_YEAR,
+        "cols": {
+            "time": TIME_COL,
+            "time_numeric": TIME_COL_NUM,
+            "lon": LON_COL,
+            "lat": LAT_COL,
+            "subsidence": SUBSIDENCE_COL,
+            "gwl": GWL_COL,
+            "h_field": H_FIELD_COL,
         },
-        "censoring": manifest_censor,
-
-        # Units provenance: what Stage-1 applied to produce SI columns
-        "units_provenance": {
-            "subs_unit_to_si_applied_stage1": float(SUBS_UNIT_TO_SI),
-            "thickness_unit_to_si_applied_stage1": float(THICKNESS_UNIT_TO_SI),
-            "head_unit_to_si_assumed_stage1": float(HEAD_UNIT_TO_SI),
-            "z_surf_unit_to_si_assumed_stage1": float(cfg.get("Z_SURF_UNIT_TO_SI", 1.0)),
+        "features": {
+            "static": static_features,
+            "dynamic": dynamic_features,
+            "future": future_features,
+            "group_id_cols": GROUP_ID_COLS,
         },
     },
-
-    # Artifacts are just file pointers (Stage-2 loads from here)
     "artifacts": {
         "csv": {
             "raw": raw_csv,
@@ -1601,16 +1291,17 @@ manifest = {
             "scaled": scaled_csv,
         },
         "encoders": {
-            "ohe": ohe_paths,                  # dict {col: path}
-            "coord_scaler": coord_scaler_path, # None if KEEP_COORDS_RAW
-            "main_scaler": scaler_path,        # may be None if no ML cols scaled
+            "ohe": ohe_paths,   # dict: {col: path}# ohe_path,
+            "coord_scaler": coord_scaler_path,
+            "main_scaler": scaler_path,
             "scaled_ml_numeric_cols": scaled_ml_numeric_cols,
+
         },
         "sequences": {
             "joblib_train_sequences": seq_job,
             "dims": {
-                "output_subsidence_dim": int(OUT_S_DIM),
-                "output_gwl_dim": int(OUT_G_DIM),
+                "output_subsidence_dim": OUT_S_DIM,
+                "output_gwl_dim": OUT_G_DIM,
             },
         },
         "numpy": {
@@ -1619,7 +1310,6 @@ manifest = {
             "val_inputs_npz": val_inputs_npz,
             "val_targets_npz": val_targets_npz,
         },
-        # shapes are helpful but do not define truth (derived from arrays)
         "shapes": {
             "train_inputs": {k: list(v.shape) for k, v in train_np_x.items()},
             "train_targets": {k: list(v.shape) for k, v in train_np_y.items()},
@@ -1627,12 +1317,10 @@ manifest = {
             "val_targets": {k: list(v.shape) for k, v in val_np_y.items()},
         },
     },
-
     "paths": {
         "run_dir": RUN_OUTPUT_PATH,
         "artifacts_dir": ARTIFACTS_DIR,
     },
-
     "versions": {
         "python": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
         "tensorflow": tf.__version__,
@@ -1641,6 +1329,107 @@ manifest = {
         "sklearn": sklearn.__version__,
     },
 }
+
+manifest["config"].setdefault("scaling_kwargs", {})
+manifest["config"]["scaling_kwargs"].update({
+    # ---- SI affine maps (identity because Stage-1 wrote SI columns) ----
+    "subs_scale_si": subs_scale_si,
+    "subs_bias_si": subs_bias_si,
+    "head_scale_si": head_scale_si,
+    "head_bias_si": head_bias_si,
+    "H_scale_si": H_scale_si,
+    "H_bias_si": H_bias_si,
+
+    # ---- Which columns were actually used to build coords in sequences ----
+    "coords_normalized": bool(normalize_coords),
+    "coord_order": ["t", "x", "y"],
+    "coord_ranges": coord_ranges,
+
+    # provenance (raw/proj)
+    "coord_mode": COORD_MODE,
+    "coord_src_epsg": int(COORD_SRC_EPSG) if COORD_SRC_EPSG is not None else None,
+    "coord_target_epsg": int(COORD_TARGET_EPSG),
+    "coord_epsg_used": int(coord_epsg) if coord_epsg is not None else None,
+    "coords_in_degrees": bool(coords_in_degrees),
+
+    # IMPORTANT: store both "base projected cols" and "used cols" (shifted or not)
+    "time_col_num": TIME_COL_NUM,
+    "coord_x_col_base": COORD_X_COL,
+    "coord_y_col_base": COORD_Y_COL,
+    "time_col_used": TIME_COL_USED,
+    "coord_x_col_used": X_COL_USED,
+    "coord_y_col_used": Y_COL_USED,
+
+    # ---- Groundwater conventions ----
+    "gwl_kind": str(cfg.get("GWL_KIND", "depth_bgs")),
+    "gwl_sign": str(cfg.get("GWL_SIGN", "down_positive")),
+    "use_head_proxy": bool(cfg.get("USE_HEAD_PROXY", True)),
+    "z_surf_col": cfg.get("Z_SURF_COL", None),
+
+    # What user asked for vs what we used (physics-first)
+    "gwl_col_requested": GWL_COL,
+    "gwl_col_meters": GWL_SRC_COL,
+    "gwl_col_zscore": GWL_ZSCORE_COL,
+
+    # The channel actually used as the dynamic gwl driver + predicted gwl target
+    "gwl_dyn_name": GWL_MODEL_COL,
+    "gwl_dyn_index": gwl_dyn_index,
+
+    # ---- Feature names as finalized ----
+    "dynamic_feature_names": list(dynamic_features),
+    "future_feature_names": list(future_features),
+
+    # ---- These are SI already because Stage-1 applied unit conversions ----
+    "subs_unit_to_si": 1.0,
+    "head_unit_to_si": 1.0,
+    "thickness_unit_to_si": 1.0,
+
+    # ---- If you ever revive z-score metadata, keep it here ----
+    "gwl_z_meta": gwl_z_meta,
+    
+    # store time units 
+    "time_units": TIME_UNITS,
+})
+
+manifest["config"]["cols"].update({
+    "subs_model": SUBS_MODEL_COL,
+    "gwl_model": GWL_MODEL_COL,
+    "h_field_model": H_FIELD_COL,
+    "gwl_meters": GWL_SRC_COL,
+    "gwl_zscore": GWL_ZSCORE_COL,
+    "time_used": TIME_COL_USED,
+    "x_used": X_COL_USED,
+    "y_used": Y_COL_USED,
+})
+
+# manifest["config"]["scaling_kwargs"] = finalize_si_scaling_kwargs(
+#     manifest["config"]["scaling_kwargs"],
+#     subs_in_si=True,        # subsidence_col = SUBS_MODEL_COL in meters
+#     head_in_si=True,        # gwl_col = GWL_MODEL_COL in meters (depth or head, still meters)
+#     thickness_in_si=True,   # h_field_col = H_MODEL_COL in meters
+#     force_identity_affine_if_si= True, 
+#     warn=True,
+# )
+
+if coord_shift_pack is not None:
+    manifest["config"]["scaling_kwargs"]["coord_shift_mins"] = coord_shift_pack.coord_mins
+    manifest["config"]["scaling_kwargs"]["coord_shift_meta"] = coord_shift_pack.meta
+
+manifest["config"]["feature_registry"] = {
+    "optional_numeric_declared": OPTIONAL_NUMERIC_FEATURES,
+    "optional_categorical_declared": OPTIONAL_CATEGORICAL_FEATURES,
+    "already_normalized": ALREADY_NORMALIZED_FEATURES,
+    "future_drivers_declared": FUTURE_DRIVER_FEATURES,
+    "resolved_optional_numeric": opt_num_cols,
+    "resolved_optional_categorical": opt_cat_cols,
+}
+manifest["config"]["censoring"] = manifest_censor
+
+manifest["config"].setdefault("units_provenance", {})
+manifest["config"]["units_provenance"].update({
+    "subs_unit_to_si_applied_stage1": float(SUBS_UNIT_TO_SI),
+    "thickness_unit_to_si_applied_stage1": float(THICKNESS_UNIT_TO_SI),
+})
 
 # === Step 5b: Build TEST sequences (temporal generalization) ===
 df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()
@@ -1653,9 +1442,8 @@ if not df_test.empty:
             lon_col=X_COL_USED,
             lat_col=Y_COL_USED,
             subsidence_col=SUBS_MODEL_COL,
-            gwl_col=GWL_TARGET_COL,   
-            gwl_dyn_col=GWL_DYN_COL,     
-            h_field_col=H_FIELD_COL,
+            gwl_col=GWL_MODEL_COL,
+            h_field_col=H_MODEL_COL,
         
             dynamic_cols=dynamic_features,
             static_cols=static_features,
@@ -1685,10 +1473,7 @@ if not df_test.empty:
             if static_arr is None:
                 static_arr = np.zeros((N, 0), np.float32)
                 
-            fut_T = ( 
-                TIME_STEPS + FORECAST_HORIZON_YEARS if 
-                MODE == "tft_like" else FORECAST_HORIZON_YEARS
-            )
+            fut_T = TIME_STEPS + FORECAST_HORIZON_YEARS if MODE == "tft_like" else FORECAST_HORIZON_YEARS
             future_arr = test_inputs.get("future_features")
             if future_arr is None:
                 future_arr = np.zeros((N, fut_T, 0), np.float32)
@@ -1699,7 +1484,10 @@ if not df_test.empty:
                 "future_features": future_arr,
                 "H_field": test_inputs["H_field"],
             }
-
+            # test_targets_np = {
+            #     "subsidence": test_targets["subsidence"],
+            #     "gwl": test_targets["gwl"],
+            # }
             test_targets_np = {
                 "subs_pred": test_targets["subsidence"],
                 "gwl_pred":  test_targets["gwl"],
@@ -1726,8 +1514,8 @@ if BUILD_FUTURE_NPZ:
             lon_col=COORD_X_COL,
             lat_col=COORD_Y_COL,
             subs_col=SUBS_MODEL_COL,
-            gwl_col=GWL_TARGET_COL,
-            h_field_col=H_FIELD_COL,
+            gwl_col=GWL_MODEL_COL,
+            h_field_col=H_MODEL_COL,
             static_features=static_features,
             dynamic_features=dynamic_features,
             future_features=future_features,
@@ -1751,7 +1539,6 @@ if BUILD_FUTURE_NPZ:
             f"  [Warn] BUILD_FUTURE_NPZ=True but construction failed: {e}\n"
             "        Continuing without future_* NPZs."
         )
-
 
 manifest_path = os.path.join(RUN_OUTPUT_PATH, "manifest.json")
 with open(manifest_path, "w", encoding="utf-8") as f:

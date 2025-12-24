@@ -2256,6 +2256,18 @@ def prepare_pinn_data_sequences(
         vlog(f"\nPreparing to save sequence data to '{savefile}'...", 
              verbose=verbose, level=3, logger=_logger
              )
+        # --- v3.2: allow split between GWL dynamic driver and GWL prediction target ---
+        gwl_dyn_col = kws.get("gwl_dyn_col", None) or gwl_col
+        
+        if gwl_dyn_col not in dynamic_cols:
+            raise ValueError(
+                f"gwl_dyn_col={gwl_dyn_col!r} must be present in dynamic_cols.\n"
+                f"Got gwl_col(target)={gwl_col!r} and dynamic_cols={dynamic_cols}.\n"
+                "GeoPrior v3.2 expects: gwl_dyn_col=<depth__si>, gwl_col=<head__si>."
+            )
+        
+        gwl_dyn_index = int(dynamic_cols.index(gwl_dyn_col))
+
         job_dict = {
             'static_data': static_features_arr,
             'dynamic_data': dynamic_features_arr,
@@ -2283,8 +2295,10 @@ def prepare_pinn_data_sequences(
             'h_field_col': h_field_col,
             'H_field': H_field_arr if H_field_arr is not None else None,
             
-            'gwl_col': gwl_col,
-            'gwl_dyn_index': int(dynamic_cols.index(gwl_col)),
+            'gwl_col':gwl_col,                 # target column (head)
+            'gwl_dyn_col':gwl_dyn_col,         # dynamic driver column (depth)
+            'gwl_dyn_index':gwl_dyn_index,     # index of the driver in dynamic_cols
+
   
         }
         try:

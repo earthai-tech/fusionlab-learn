@@ -149,6 +149,7 @@ class BaseAttentive(Model, NNLearner):
         attention_levels : Optional [Union[str, List[str]]]=None,
         objective: str = 'hybrid',
         architecture_config: Optional[Dict] = None,
+        verbose: int = 0, 
         name: str = "BaseAttentiveModel",
         **kwargs
     ):
@@ -197,6 +198,7 @@ class BaseAttentive(Model, NNLearner):
             attention_levels=attention_levels,
             architecture_config=architecture_config
         )
+        self.verbose = verbose 
         # ---------------------------------------------------
         
         self._build_attentive_layers()
@@ -957,6 +959,7 @@ class BaseAttentive(Model, NNLearner):
             "attention_levels": self.attention_levels, 
             "use_batch_norm": self.use_batch_norm, 
             "architecture_config": self.architecture_config,
+            "verbose": self.verbose, 
             "name": self.name 
         })
         return config

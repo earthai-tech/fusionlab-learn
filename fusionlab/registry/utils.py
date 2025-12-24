@@ -398,12 +398,19 @@ def find_manifest(
             except Exception:
                 continue  # unreadable or not JSON
 
-            # Filtering by hints
-            if model_hint and m.get("model") and m["model"] != model_hint:
+            def _norm(x):
+                return str(x).strip().lower() if x is not None else None
+            
+            m_city  = _norm(m.get("city"))
+            m_model = str(m.get("model")).strip() if m.get(
+                "model") is not None else None
+            m_stage = _norm(m.get("stage"))
+            
+            if model_hint and m_model and m_model != model_hint:
                 continue
-            if city_hint and m.get("city") and str(m["city"]).lower() != str(city_hint).lower():
+            if city_hint and m_city and m_city != _norm(city_hint):
                 continue
-            if stage_hint and m.get("stage") and m["stage"] != stage_hint:
+            if stage_hint and m_stage and m_stage != _norm(stage_hint):
                 continue
 
             # Required keys check

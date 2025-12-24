@@ -28,7 +28,6 @@ from fusionlab.nn.calibration import (
     IntervalCalibrator, fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
 )
-# from fusionlab.nn.pinn.utils import format_pinn_predictions
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 tf.get_logger().setLevel("ERROR")

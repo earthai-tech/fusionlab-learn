@@ -52,6 +52,9 @@ from ..decorators import isdf
 from ..metrics._registry import get_metric
 from .generic_utils import vlog, normalize_model_inputs, ensure_directory_exists  
 from .validator import is_frame 
+from .subsidence_utils import (
+    convert_target_units_df,
+)
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 
@@ -934,6 +937,14 @@ def format_and_forecast(
     metrics_savefile: str | os.PathLike | bool | None = None,
     metrics_save_format: str = ".json",
     metrics_time_as_str: bool = True,
+    
+    # --- NEW: unit conversion before export/metrics ---
+    output_unit: str | None = None,
+    output_unit_from: str = "m",
+    output_unit_mode: str = "overwrite",
+    output_unit_suffix: str = "_mm",
+    output_unit_col: str | None = None,
+
     # Logging
     verbose: int = 1,
     logger: logging.Logger | None = None,
@@ -1865,6 +1876,31 @@ def format_and_forecast(
                 vals = pd.to_datetime(vals, format=time_format, errors="coerce")
 
             df_eval_to_write = df_eval_all[df_eval_all[t_col].isin(vals)]
+    
+    if output_unit is not None:
+
+        df_future = convert_target_units_df(
+            df_future,
+            base=out_name,
+            from_unit=output_unit_from,
+            to_unit=output_unit,
+            mode=output_unit_mode,
+            suffix=output_unit_suffix,
+            unit_col=output_unit_col,
+            copy_df=False,
+        )
+
+        if df_eval_all is not None:
+            df_eval_to_write = convert_target_units_df(
+                df_eval_to_write,
+                base=out_name,
+                from_unit=output_unit_from,
+                to_unit=output_unit,
+                mode=output_unit_mode,
+                suffix=output_unit_suffix,
+                unit_col=output_unit_col,
+                copy_df=False,
+            )
 
     if csv_eval_path:
         ensure_directory_exists(os.path.dirname(csv_eval_path))

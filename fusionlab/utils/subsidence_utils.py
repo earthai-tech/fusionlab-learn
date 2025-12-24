@@ -2,8 +2,10 @@
 from __future__ import annotations
 from typing import ( 
     Dict, Iterable, Tuple, 
-    Any, Optional, Literal
+    Any, Optional, Literal, 
+    Mapping
 )
+import math 
 import numpy as np
 import pandas as pd
 
@@ -12,42 +14,304 @@ import warnings
 
 
 ShiftMode = Literal["none", "min", "mean", "value"]
+Mode = Literal["add", "overwrite"]
+
+
+DEFAULT_SUBS_UNIT_TO_SI = 1e-3
+
+
+def _norm_unit(unit: str | None) -> str:
+    u = (unit or "").strip().lower()
+    if u in ("m", "meter", "meters"):
+        return "m"
+    if u in ("mm", "millimeter", "millimeters"):
+        return "mm"
+    return u
+
+
+def _unit_factor(
+    from_unit: str | None,
+    to_unit: str | None,
+) -> float:
+    fu = _norm_unit(from_unit)
+    tu = _norm_unit(to_unit)
+
+    if fu == tu:
+        return 1.0
+
+    if fu == "m" and tu == "mm":
+        return 1000.0
+
+    if fu == "mm" and tu == "m":
+        return 1e-3
+
+    raise ValueError(
+        "Unsupported unit conversion: "
+        f"{from_unit!r} -> {to_unit!r}."
+    )
+
+
+def _as_float(x: object) -> float:
+    try:
+        v = float(x)  # type: ignore[arg-type]
+    except Exception as e:
+        raise ValueError(
+            f"Cannot convert to float: {x!r}."
+        ) from e
+
+    if not math.isfinite(v):
+        raise ValueError(
+            f"Non-finite value: {v!r}."
+        )
+    return float(v)
+
+
+def _as_pos_float(
+    x: object,
+    *,
+    default: float,
+) -> float:
+    v = _as_float(x)
+    if v <= 0.0:
+        return float(default)
+    return float(v)
+
+
+def _select_target_cols(
+    df: pd.DataFrame,
+    *,
+    base: str,
+    columns: Iterable[str] | None = None,
+) -> list[str]:
+    if columns is not None:
+        return [c for c in columns if c in df.columns]
+
+    b = (base or "").strip()
+    if not b:
+        return []
+
+    pref = b + "_"
+    cols: list[str] = []
+    for c in df.columns:
+        cs = str(c)
+        if cs == b or cs.startswith(pref):
+            cols.append(cs)
+    return cols
+
+
+def convert_target_units_df(
+    df: pd.DataFrame | None,
+    *,
+    base: str,
+    from_unit: str = "m",
+    to_unit: str = "mm",
+    mode: Mode = "overwrite",
+    suffix: str = "_mm",
+    columns: Iterable[str] | None = None,
+    unit_col: str | None = None,
+    copy_df: bool = True,
+    overwrite_cols: bool = False,
+    strict: bool = False,
+) -> pd.DataFrame | None:
+    """
+    Convert target-like columns between "m" and "mm".
+
+    Selected columns:
+    - `base`
+    - `base + "_*"` (quantiles, intervals, ...)
+
+    If mode="add", new columns use `suffix`.
+    """
+    if df is None or getattr(df, "empty", True):
+        return df
+
+    cols = _select_target_cols(
+        df,
+        base=base,
+        columns=columns,
+    )
+    if not cols:
+        return df
+
+    m = (mode or "overwrite").strip().lower()
+    if m not in ("add", "overwrite"):
+        raise ValueError(
+            "mode must be 'add' or 'overwrite'. "
+            f"Got {mode!r}."
+        )
+
+    # If user asked to "add" but suffix is empty,
+    # this is effectively overwrite.
+    if m == "add" and (suffix == ""):
+        m = "overwrite"
+
+    factor = _unit_factor(from_unit, to_unit)
+    out = df.copy() if copy_df else df
+
+    for c in cols:
+        dst = c if m == "overwrite" else (c + suffix)
+        if (dst in out.columns) and (m == "add"):
+            if not overwrite_cols:
+                continue
+
+        ser = out[c]
+        vals = pd.to_numeric(ser, errors="coerce")
+        if strict and (vals.notna().sum() == 0):
+            raise ValueError(
+                f"Cannot convert column to numeric: {c!r}."
+            )
+        out[dst] = vals.astype(float) * float(factor)
+
+    ucol = unit_col or (str(base).strip() + "_unit")
+    out[ucol] = _norm_unit(to_unit)
+
+    return out
+
+
+def subs_unit_to_si(
+    cfg: Mapping[str, object] | None = None,
+    *,
+    default: float = DEFAULT_SUBS_UNIT_TO_SI,
+    units_prov_key: str = "units_provenance",
+    stage1_key: str = "subs_unit_to_si_applied_stage1",
+    cfg_key: str = "SUBS_UNIT_TO_SI",
+) -> float:
+    """
+    Subsidence unit->SI factor (to meters).
+
+    Priority:
+    1) cfg[units_prov_key][stage1_key]
+    2) cfg[cfg_key]
+    3) default
+    """
+    if cfg is None:
+        return float(default)
+
+    prov = cfg.get(units_prov_key)
+    if isinstance(prov, Mapping):
+        v = prov.get(stage1_key)
+        if v is not None:
+            return _as_pos_float(v, default=default)
+
+    v2 = cfg.get(cfg_key)
+    if v2 is not None:
+        return _as_pos_float(v2, default=default)
+
+    return float(default)
+
+
+def subs_native_unit(
+    cfg: Mapping[str, object] | None = None,
+    *,
+    default: str = "mm",
+) -> str:
+    """
+    Infer the "native" subsidence unit from cfg.
+
+    - unit_to_si ~= 1e-3 -> "mm"
+    - unit_to_si ~= 1.0  -> "m"
+    """
+    if cfg is None:
+        return _norm_unit(default) or "mm"
+
+    u2si = subs_unit_to_si(cfg)
+    if abs(u2si - 1e-3) <= 1e-10:
+        return "mm"
+    if abs(u2si - 1.0) <= 1e-10:
+        return "m"
+
+    return _norm_unit(default) or "mm"
+
+
+def add_subsidence_mm_columns(
+    df: pd.DataFrame | None,
+    cfg: Mapping[str, object] | None = None,
+    *,
+    base: str = "subsidence",
+    columns: Iterable[str] | None = None,
+    suffix: str = "_mm",
+    unit_col: str | None = None,
+    copy_df: bool = True,
+    overwrite: bool = False,
+) -> pd.DataFrame | None:
+    """
+    Add (or overwrite) subsidence columns in millimeters.
+
+    Always assumes the current values are in meters.
+    """
+    return convert_target_units_df(
+        df,
+        base=base,
+        from_unit="m",
+        to_unit="mm",
+        mode="add",
+        suffix=suffix,
+        columns=columns,
+        unit_col=unit_col,
+        copy_df=copy_df,
+        overwrite_cols=overwrite,
+        strict=False,
+    )
+
+
+def add_subsidence_native_unit_columns(
+    df: pd.DataFrame | None,
+    cfg: Mapping[str, object] | None = None,
+    *,
+    base: str = "subsidence",
+    columns: Iterable[str] | None = None,
+    suffix: str = "_native",
+    unit_col: str | None = None,
+    copy_df: bool = True,
+    overwrite: bool = False,
+) -> pd.DataFrame | None:
+    """
+    Add columns in the cfg-inferred native unit.
+
+    If cfg says the native unit was meters, this becomes
+    a no-op aside from optional unit_col.
+    """
+    to_unit = subs_native_unit(cfg)
+    return convert_target_units_df(
+        df,
+        base=base,
+        from_unit="m",
+        to_unit=to_unit,
+        mode="add",
+        suffix=suffix,
+        columns=columns,
+        unit_col=unit_col,
+        copy_df=copy_df,
+        overwrite_cols=overwrite,
+        strict=False,
+    )
 
 
 def finalize_si_scaling_kwargs(
-    scaling_kwargs: Dict[str, Any],
+    scaling_kwargs: dict[str, Any],
     *,
     subs_in_si: bool,
     head_in_si: bool,
     thickness_in_si: bool,
     force_identity_affine_if_si: bool = True,
     warn: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
-    Make GeoPrior scaling_kwargs consistent and safe against double scaling.
-
-    GeoPriorSubsNet uses:
-      - subs: subs_scale_si, subs_bias_si, subs_unit_to_si
-      - head: head_scale_si, head_bias_si, head_unit_to_si
-      - H/thickness: H_scale_si, H_bias_si, thickness_unit_to_si
-
-    If Stage-1 already converted to SI meters, set unit_to_si=1.0 and
-    affine=(1,0) to prevent silent double conversion.
+    Prevent double SI conversion in GeoPrior scaling_kwargs.
     """
     kw = dict(scaling_kwargs)
 
-    def _as_float(x: Any, default: float) -> float:
+    def _f(name: str, default: float) -> float:
+        v = kw.get(name, default)
         try:
-            return float(x)
+            return float(v)
         except Exception:
-            return default
+            return float(default)
 
-    # Ensure unit keys exist (even if Stage-1 forgot)
-    kw["subs_unit_to_si"] = _as_float(kw.get("subs_unit_to_si", 1.0), 1.0)
-    kw["head_unit_to_si"] = _as_float(kw.get("head_unit_to_si", 1.0), 1.0)
-    kw["thickness_unit_to_si"] = _as_float(kw.get("thickness_unit_to_si", 1.0), 1.0)
+    kw["subs_unit_to_si"] = _f("subs_unit_to_si", 1.0)
+    kw["head_unit_to_si"] = _f("head_unit_to_si", 1.0)
+    kw["thickness_unit_to_si"] = _f("thickness_unit_to_si", 1.0)
 
-    # Ensure affine keys exist (GeoPrior's names)
     kw.setdefault("subs_scale_si", None)
     kw.setdefault("subs_bias_si", None)
     kw.setdefault("head_scale_si", None)
@@ -64,19 +328,18 @@ def finalize_si_scaling_kwargs(
         name: str,
     ) -> None:
         if not already_si:
-            # Not already SI: keep unit conversion active.
-            # If affine missing, default identity.
             if kw.get(scale_key) is None:
                 kw[scale_key] = 1.0
             if kw.get(bias_key) is None:
                 kw[bias_key] = 0.0
             return
 
-        # already SI: force unit_to_si=1 and (optionally) identity affine
-        if warn and _as_float(kw.get(unit_key, 1.0), 1.0) != 1.0:
+        cur = _f(unit_key, 1.0)
+        if warn and (cur != 1.0):
             warnings.warn(
-                f"[GeoPrior SI] {name} is already SI, but {unit_key}={kw[unit_key]}. "
-                f"Setting {unit_key}=1.0 to prevent double scaling.",
+                "[GeoPrior SI] "
+                f"{name} already SI but {unit_key}={cur}. "
+                f"Setting {unit_key}=1.0.",
                 RuntimeWarning,
             )
         kw[unit_key] = 1.0
@@ -90,90 +353,33 @@ def finalize_si_scaling_kwargs(
             if kw.get(bias_key) is None:
                 kw[bias_key] = 0.0
 
-    _fix(already_si=subs_in_si, unit_key="subs_unit_to_si",
-         scale_key="subs_scale_si", bias_key="subs_bias_si", name="subsidence")
-    _fix(already_si=head_in_si, unit_key="head_unit_to_si",
-         scale_key="head_scale_si", bias_key="head_bias_si", name="head/GWL")
-    _fix(already_si=thickness_in_si, unit_key="thickness_unit_to_si",
-         scale_key="H_scale_si", bias_key="H_bias_si", name="thickness/H_field")
+    _fix(
+        already_si=subs_in_si,
+        unit_key="subs_unit_to_si",
+        scale_key="subs_scale_si",
+        bias_key="subs_bias_si",
+        name="subsidence",
+    )
+    _fix(
+        already_si=head_in_si,
+        unit_key="head_unit_to_si",
+        scale_key="head_scale_si",
+        bias_key="head_bias_si",
+        name="head/GWL",
+    )
+    _fix(
+        already_si=thickness_in_si,
+        unit_key="thickness_unit_to_si",
+        scale_key="H_scale_si",
+        bias_key="H_bias_si",
+        name="thickness/H_field",
+    )
 
     return kw
 
-def finalize_si_affines_and_units(
-    scaling_kwargs: Dict[str, Any],
-    *,
-    subs_in_si: bool,
-    head_in_si: bool,
-    thickness_in_si: bool,
-    force_identity_affine_if_si: bool = True,
-    warn: bool = True,
-) -> Dict[str, Any]:
-    """
-    Make scaling_kwargs consistent and safe against "double conversion".
+# Backward-compat alias (no duplicate body)
+finalize_si_affines_and_units = finalize_si_scaling_kwargs
 
-    If a quantity is already SI (meters), we strongly recommend:
-      unit_to_si = 1.0 and explicit affine (scale=1, bias=0).
-
-    This keeps behavior stable even if model internals change, and prevents
-    silent shrinking if someone forgets to update unit factors.
-    """
-    kw = dict(scaling_kwargs)
-
-    def _ensure(name: str, default: float) -> float:
-        v = kw.get(name, default)
-        try:
-            return float(v)
-        except Exception:
-            return default
-
-    # Ensure keys exist
-    kw["subs_unit_to_si"] = _ensure("subs_unit_to_si", 1.0)
-    kw["head_unit_to_si"] = _ensure("head_unit_to_si", 1.0)
-    kw["thickness_unit_to_si"] = _ensure("thickness_unit_to_si", 1.0)
-
-    # Affine keys are used by your model if present (and then unit_to_si is ignored)
-    kw.setdefault("subs_scale_si", None)
-    kw.setdefault("subs_bias_si", None)
-    kw.setdefault("head_scale_si", None)
-    kw.setdefault("head_bias_si", None)
-
-    def _fix_one(prefix: str, already_si: bool):
-        unit_key = f"{prefix}_unit_to_si"
-        scale_key = f"{prefix}_scale_si"
-        bias_key = f"{prefix}_bias_si"
-
-        if not already_si:
-            # If user didn't provide explicit affine, keep unit_to_si as the
-            # conversion mechanism. Do NOT override explicit affines.
-            if kw.get(scale_key) is None:
-                kw[scale_key] = 1.0
-            if kw.get(bias_key) is None:
-                kw[bias_key] = 0.0
-            return
-
-        # already SI:
-        if warn and kw.get(unit_key, 1.0) != 1.0:
-            warnings.warn(
-                f"[SI inputs] {unit_key} was {kw[unit_key]} but data is already SI. "
-                f"Setting {unit_key}=1.0 to prevent double scaling.",
-                RuntimeWarning,
-            )
-        kw[unit_key] = 1.0
-
-        if force_identity_affine_if_si:
-            kw[scale_key] = 1.0
-            kw[bias_key] = 0.0
-        else:
-            if kw.get(scale_key) is None:
-                kw[scale_key] = 1.0
-            if kw.get(bias_key) is None:
-                kw[bias_key] = 0.0
-
-    _fix_one("subs", subs_in_si)
-    _fix_one("head", head_in_si)
-    _fix_one("thickness", thickness_in_si)
-
-    return kw
 
 def infer_utm_epsg_from_lonlat(
     lon_deg: np.ndarray,

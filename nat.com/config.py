@@ -56,31 +56,21 @@ MODEL_NAME = "GeoPriorSubsNet"
 # -------------------------------------------------------------------
 # 1.2 Data root and file patterns
 # -------------------------------------------------------------------
-# DATA_DIR is the base path where datasets live, relative to project root.
-# Example layout:
-#
-#   fusionlab-learn/
-#       nat.com/
-#           config.py
-#           main_NATCOM_stage1_prepare.py
-#       data/
-#           nansha_final_main_std.harmonized.csv
-#           nansha_2000.csv
-#
-# You can change DATA_DIR if your data folder is elsewhere.
 DATA_DIR = ".."
 
+# Dataset variant tag (v3.2 real-data harmonized export)
+DATASET_VARIANT = "with_zsurf"
+
 # File name templates. When CITY_NAME="nansha":
-#   BIG_FN   -> "nansha_final_main_std.harmonized.csv"
-#   SMALL_FN -> "nansha_2000.csv"
-BIG_FN_TEMPLATE = "{city}_final_main_std.harmonized.csv"
-SMALL_FN_TEMPLATE = "{city}_2000.csv"
+#   BIG_FN   -> "nansha_final_main_std.harmonized.with_zsurf.csv"
+#   SMALL_FN -> "nansha_2000.with_zsurf.csv"  (only if you created it)
+BIG_FN_TEMPLATE = "{city}_final_main_std.harmonized.{variant}.csv"
+SMALL_FN_TEMPLATE = "{city}_2000.{variant}.csv"
 
 # Resolved filenames (scripts may use these directly).
-BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME)
-SMALL_FN = SMALL_FN_TEMPLATE.format(city=CITY_NAME)
+BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME, variant=DATASET_VARIANT)
+SMALL_FN = SMALL_FN_TEMPLATE.format(city=CITY_NAME, variant=DATASET_VARIANT)
 
-# Optional multi-city parquet (if you maintain a combined dataset)
 ALL_CITIES_PARQUET = "natcom_all_cities.parquet"
 
 
@@ -124,7 +114,7 @@ TIME_COL = "year"
 LON_COL = "longitude"
 LAT_COL = "latitude"
 SUBSIDENCE_COL = "subsidence_cum"
-GWL_COL = "GWL" # "GWL_depth_bgs"
+GWL_COL = "GWL_depth_bgs"   # preferred over "GWL" (if both exist)
 H_FIELD_COL_NAME = "soil_thickness"
 
 # Groundwater representation (critical for sign consistency):
@@ -141,9 +131,17 @@ H_FIELD_COL_NAME = "soil_thickness"
 # This keeps head and depth linked for physics, but is approximate.
 GWL_KIND = "depth_bgs"       # {"depth_bgs", "head"}
 GWL_SIGN = "down_positive"   # {"down_positive", "up_positive"}
-USE_HEAD_PROXY = True
-Z_SURF_COL = None            # e.g. "dem_m" if available, else None
 
+# With z_surf available, do NOT use the proxy
+USE_HEAD_PROXY = False
+
+# Column containing surface elevation z_surf in meters.
+# IMPORTANT: set this to the actual column name you wrote into the CSV.
+# Recommended name for v3.2: "z_surf"
+Z_SURF_COL = "z_surf" # e.g. None :"dem_m" if available, else None
+
+INCLUDE_Z_SURF_AS_STATIC = True   # new (recommended)
+HEAD_COL ="head_m"
 # IMPORTANT (recommended in new GeoPrior paths):
 # If the model cannot resolve which channel inside dynamic_features is GWL,
 # you MUST provide gwl_dyn_index in scaling_kwargs (Stage-2 uses this).
@@ -152,10 +150,7 @@ Z_SURF_COL = None            # e.g. "dem_m" if available, else None
 # - Leave None only if Stage-2 can reliably infer it from names.
 GWL_DYN_INDEX = None         # e.g. 0 if z_GWL is the first dynamic channel
 
-
-# ---------------------------------------------
 # Stage-1: physics-critical scaling controls
-# ---------------------------------------------
 
 # Keep coords raw for physics:
 KEEP_COORDS_RAW = True
@@ -165,6 +160,10 @@ SCALE_H_FIELD = False
 
 # Keep GWL/head in meters (recommended):
 SCALE_GWL = False
+
+# NEW (recommended): keep z_surf in meters, unscaled
+SCALE_Z_SURF = False
+Z_SURF_UNIT_TO_SI = 1.0
 
 # Convert subsidence to SI (recommended):
 # If SUBSIDENCE_COL is in mm or mm/yr, convert to meters or meters/yr.
@@ -281,7 +280,7 @@ USE_EFFECTIVE_H_FIELD = True
 THICKNESS_UNIT_TO_SI = 1.0
 
 # If True, Stage-1 may pre-build future_* NPZ blocks for Stage-3 scenarios.
-BUILD_FUTURE_NPZ = True
+BUILD_FUTURE_NPZ = False
 
 
 # ===================================================================
@@ -421,6 +420,7 @@ PHYSICS_BOUNDS_MODE = "soft"
 TIME_UNITS = "year"
 
 
+
 # -------------------------------------------------------------------
 # 5.5 Model->SI affine mapping for physics residuals
 # -------------------------------------------------------------------
@@ -481,6 +481,18 @@ GEOPRIOR_HD_FACTOR = 0.6
 # Numeric fallback:
 #   0.0 -> fixed datum (useful for synthetic 1-pixel tests)
 GEOPRIOR_H_REF = "auto"   # or 0.0
+
+
+# -------------------------------------------------------------------
+# 5. Consolidation stepping / residual definition (v3.2)
+# -------------------------------------------------------------------
+# -------------------------------------------------------------------
+# 5.x v3.2: residual discretization controls
+# -------------------------------------------------------------------
+# How to compute the per-step consolidation residual inside the batch:
+#   - "exact" : v3.2 exact step formulation (preferred)
+#   - "fd"    : finite-difference / legacy discretization
+CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 
 
 # ===================================================================
@@ -567,7 +579,9 @@ TUNER_SEARCH_SPACE = {
         "min_value": 0.50,
         "max_value": 0.70,
     },
-
+    
+    "residual_method": ["exact"],  # or ["exact", "euler"]
+    
     # --- Learnable scalar initials (model.__init__) ---
     #
     # Around GEOPRIOR_INIT_MV = 1e-7

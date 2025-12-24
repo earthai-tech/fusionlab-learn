@@ -69,7 +69,7 @@ def default_meta_from_model(model) -> Dict:
     """
     skw = getattr(model, "scaling_kwargs", None) or {}
     time_units = skw.get("time_units", getattr(model, "time_units", None))
-
+    
     use_eff_h = bool(getattr(model, "use_effective_h",
                      getattr(model, "use_effective_thickness", False)))
     hd_factor = float(getattr(model, "hd_factor",
@@ -96,21 +96,51 @@ def default_meta_from_model(model) -> Dict:
         "time_units": time_units,
         "time_coord_units": time_units,   # clearer alias
 
-        # IMPORTANT: exported payload units (SI)
+        # exported payload units (SI) 
         "units": {
+            "H": "m",
             "Hd": "m",
             "Ss": "1/m",
             "K": "m/s",
             "tau": "s",
             "tau_prior": "s",
             "cons_res_vals": "m/s",
+            "kappa": "dimensionless",
         },
-
         "tau_prior_definition": "tau_closure_from_learned_fields",
         "tau_prior_human_name": "tau_closure",
         "tau_prior_source": "model.evaluate_physics() closure head",
-        "tau_closure_formula": "Hd^2 * Ss / (pi^2 * kappa_b * K)",
     }
+    kappa_mode = getattr(model, "kappa_mode", None)
+
+    # try extract scalar kappa from either attribute or method
+    def _scalar_kappa(m):
+        for a in ("kappa_value", "kappa", "kappa_b", "kappa_bar", "_kappa_value"):
+            if not hasattr(m, a):
+                continue
+            v = getattr(m, a)
+            try:
+                if callable(v):
+                    v = v()
+                if hasattr(v, "numpy"):
+                    v = v.numpy()
+                return float(np.asarray(v).reshape(()))
+            except Exception:
+                pass
+        return None
+    
+    kappa_val = _scalar_kappa(model)
+    
+    meta["kappa_mode"] = kappa_mode
+    meta["kappa_value"] = kappa_val
+    meta["units"]["kappa"] = "dimensionless"
+    
+    if kappa_mode == "bar":
+        meta["tau_closure_formula"] = "kappa_bar * H^2 * Ss / (pi^2 * K)"
+    else:
+        meta["tau_closure_formula"] = "Hd^2 * Ss / (pi^2 * kappa_b * K)"
+
+
     return meta
 
 
@@ -326,7 +356,12 @@ def compute_identifiability_summary(
         "delta_Hd_true": delta_Hd_true,
     }
 
-
+def _pick(phys: Dict[str, Any], *keys: str):
+    for k in keys:
+        if k in phys and phys[k] is not None:
+            return phys[k], k
+    return None, None
+    
 def gather_physics_payload(
     model,
     dataset: Iterable,
@@ -397,9 +432,11 @@ def gather_physics_payload(
         If kappa is available, also includes:
           - "tau_closure_calc" : closure computed from Hd² Ss / (π² kappa K)
     """
+
+
     # ----------------------------- setup ---------------------------------
     taus, tau_priors, Ks, Sss, Hds, cons_vals = [], [], [], [], [], []
-
+    Hs=[]
     # Progress reporting: use `len(dataset)` if available, else unknown total.
     try:
         total = max_batches if max_batches is not None else len(dataset)
@@ -421,20 +458,50 @@ def gather_physics_payload(
     for batch in iterable:
         # Support datasets that yield either `inputs` or `(inputs, targets)`.
         inputs = batch[0] if isinstance(batch, (tuple, list)) else batch
-
         phys = model.evaluate_physics(inputs, return_maps=True)
-
-        # Flatten batch maps -> 1D arrays; concatenate at the end.
-        taus.append(_to_1d(phys["tau"], dtype=float_dtype))
-        tau_priors.append(_to_1d(phys["tau_prior"], dtype=float_dtype))
-        Ks.append(_to_1d(phys["K"], dtype=float_dtype))
-        Sss.append(_to_1d(phys["Ss"], dtype=float_dtype))
-
-        # Historical compatibility: some implementations return "H" not "Hd".
-        Hd_key = "Hd" if "Hd" in phys else "H"
-        Hds.append(_to_1d(phys[Hd_key], dtype=float_dtype))
-
-        cons_vals.append(_to_1d(phys["R_cons"], dtype=float_dtype))
+        
+        tau_t, _ = _pick(phys, "tau")
+        tp_t, _  = _pick(phys, "tau_prior", "tau_closure")
+        K_t, _   = _pick(phys, "K", "K_field")
+        Ss_t, _  = _pick(phys, "Ss", "Ss_field")
+        
+        Hd_t, _  = _pick(phys, "Hd")              # effective drainage thickness
+        H_t, _   = _pick(phys, "H", "H_field")    # base thickness (needed for bar mode)
+        
+        Rcons_t, _ = _pick(phys, "R_cons", "cons_res_vals")
+        
+        # optional: strict validation here (THIS is the right place)
+        missing = [n for n, v in [
+            ("tau", tau_t), 
+            ("tau_prior/tau_closure", tp_t),
+            ("K", K_t), 
+            ("Ss", Ss_t), 
+            ("R_cons", Rcons_t)]
+                   if v is None]
+        
+        if missing:
+            raise KeyError(f"evaluate_physics(...) missing required keys: {missing}")
+        
+        taus.append(_to_1d(tau_t, dtype=float_dtype))
+        tau_priors.append(_to_1d(tp_t, dtype=float_dtype))
+        Ks.append(_to_1d(K_t, dtype=float_dtype))
+        Sss.append(_to_1d(Ss_t, dtype=float_dtype))
+        
+        # store thicknesses robustly
+        if Hd_t is not None:
+            Hds.append(_to_1d(Hd_t, dtype=float_dtype))
+        elif H_t is not None:
+            Hds.append(_to_1d(H_t, dtype=float_dtype))
+        else:
+            raise KeyError("evaluate_physics(...) missing both 'Hd' and 'H/H_field'.")
+        
+        # optionally also keep H explicitly (recommended for kappa_mode='bar')
+        # create list Hs=[] above, then:
+        
+        if H_t is not None: 
+            Hs.append(_to_1d(H_t, dtype=float_dtype))
+        
+        cons_vals.append(_to_1d(Rcons_t, dtype=float_dtype))
 
         n_seen += 1
         if max_batches is not None and n_seen >= max_batches:
@@ -452,6 +519,7 @@ def gather_physics_payload(
         "Hd": np.concatenate(Hds, axis=0),
         "cons_res_vals": np.concatenate(cons_vals, axis=0),
     }
+    payload["H"] = np.concatenate(Hs, axis=0)
 
     # -------------------------- safe logs --------------------------------
     tau_clip = np.clip(payload["tau"], eps, None)
@@ -490,13 +558,27 @@ def gather_physics_payload(
                 break
             except Exception:
                 kappa_val = None
-
+                
+    kappa_mode = getattr(model, "kappa_mode", None)
+    
     if kappa_val is not None and np.isfinite(kappa_val) and kappa_val > 0:
         K = np.clip(payload["K"], eps, None)
         Ss = np.clip(payload["Ss"], eps, None)
-        Hd = np.clip(payload["Hd"], eps, None)
+        # Hd = np.clip(payload["Hd"], eps, None)
 
-        tau_closure_calc = (Hd ** 2) * Ss / (np.pi ** 2 * kappa_val * K)
+        # tau_closure_calc = (Hd ** 2) * Ss / (np.pi ** 2 * kappa_val * K)
+        # kappa_mode = getattr(model, "kappa_mode", None)
+        
+        if kappa_mode == "bar":
+            # needs base thickness H (store it in payload!)
+            Hbase = np.clip(payload.get("H", payload["Hd"]), eps, None)
+            tau_closure_calc = (kappa_val * (Hbase ** 2) * Ss) / (np.pi ** 2 * K)
+        else:
+            # kappa_b in denominator, uses Hd
+            Hd = np.clip(payload["Hd"], eps, None)
+            tau_closure_calc = (Hd ** 2) * Ss / (np.pi ** 2 * kappa_val * K)
+
+
         payload["tau_closure_calc"] = tau_closure_calc
 
         tp = np.clip(payload["tau_prior"], eps, None)
@@ -562,26 +644,30 @@ def save_physics_payload(
     meta.setdefault("saved_utc", _iso_now())
     
     # Ensure definition always exists even if caller bypassed default_meta
+    meta.setdefault("payload_metrics", payload.get("metrics", {}))
     meta.setdefault("tau_prior_definition", "tau_closure_from_learned_fields")
     meta.setdefault("tau_prior_human_name", "tau_closure")
     meta.setdefault("tau_prior_source", "model.evaluate_physics() closure head")
     
     tau_prior = payload["tau_prior"]
     
+    npz_kwargs = dict(
+        tau=payload["tau"],
+        tau_prior=tau_prior,
+        tau_closure=tau_prior,
+        K=payload["K"],
+        Ss=payload["Ss"],
+        Hd=payload["Hd"],
+        cons_res_vals=payload["cons_res_vals"],
+        log10_tau=payload["log10_tau"],
+        log10_tau_prior=payload["log10_tau_prior"],
+        log10_tau_closure=payload["log10_tau_prior"],
+    )
+    if "H" in payload:
+        npz_kwargs["H"] = payload["H"]
+    
     if format.lower() == "npz":
-        np.savez_compressed(
-            path,
-            tau=payload["tau"],
-            tau_prior=tau_prior,                    # legacy key
-            tau_closure=tau_prior,                  # alias
-            K=payload["K"],
-            Ss=payload["Ss"],
-            Hd=payload["Hd"],
-            cons_res_vals=payload["cons_res_vals"],
-            log10_tau=payload["log10_tau"],
-            log10_tau_prior=payload["log10_tau_prior"],
-            log10_tau_closure=payload["log10_tau_prior"],  # alias
-        )
+        np.savez_compressed(path, **npz_kwargs)
         with open(path + ".meta.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
         return path

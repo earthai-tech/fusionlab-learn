@@ -985,44 +985,7 @@ def build_censor_mask_from_dynamic(
         Boolean mask of shape ``(B, H, 1)`` where True indicates
         censored samples.
     """
-#     try:
-#         import tensorflow as tf  # type: ignore
-#     except Exception as exc:  # pragma: no cover
-#         raise ImportError(TF_IMPORT_ERROR_MSG) from exc
 
-#     dyn = xb.get("dynamic_features", None)
-#     if dyn is not None:
-#         # Defensive programming: ensure the requested index is in
-#         # range before indexing.
-#         if dyn.shape[-1] and dyn_idx is not None and dyn_idx < dyn.shape[-1]:
-#             m_dyn = dyn[..., dyn_idx:dyn_idx + 1] > thresh  # (B, T_dyn, 1)
-#             T_dyn = tf.shape(m_dyn)[1]
-#             # If time dimension does not match the requested H,
-#             # keep only the last H steps (matching the forecast
-#             # window).
-#             return tf.cond(
-#                 tf.not_equal(T_dyn, H),
-#                 lambda: m_dyn[:, -H:, :],
-#                 lambda: m_dyn,
-#             )
-
-#     # Fallback: no flag available → no censoring anywhere.
-#     B = tf.shape(xb["coords"])[0]
-#     return tf.zeros((B, H, 1), dtype=tf.bool)
-
-# def build_censor_mask_from_dynamic(
-#     xb: dict,
-#     H,
-#     dyn_idx: int | None,
-#     thresh: float = 0.5,
-# ) -> "tf.Tensor":
-#     """
-#     Return a boolean mask of shape (B, H, 1) aligned to the *forecast horizon*.
-
-#     If the censor flag only exists on the history window (T_dyn=TIME_STEPS),
-#     but the evaluation is done on the forecast horizon (H=FORECAST_HORIZON),
-#     we must broadcast/pad because slicing cannot increase length.
-#     """
     try:
         import tensorflow as tf  # type: ignore
     except Exception as exc:  # pragma: no cover
@@ -2045,7 +2008,7 @@ def infer_best_weights_path(model_path: str) -> str | None:
     return None
 
 
-def load_or_rebuild_geoprior_model(
+def _load_or_rebuild_geoprior_model(
     model_path: str,
     manifest: dict,
     X_sample: dict,
@@ -2287,14 +2250,6 @@ def sanitize_inputs_np(X: dict) -> dict:
         X["H_field"] = np.maximum(X["H_field"], 1e-3).astype(np.float32)
     return X
 
-# def map_targets(y_dict: dict) -> dict:
-#     # Accept either ('subsidence','gwl') or ('subs_pred','gwl_pred')
-#     if "subsidence" in y_dict and "gwl" in y_dict:
-#         return {"subs_pred": y_dict["subsidence"], "gwl_pred": y_dict["gwl"]}
-#     if "subs_pred" in y_dict and "gwl_pred" in y_dict:
-#         return y_dict
-#     # Allow missing targets for pure inference
-#     return {}
 
 def load_or_rebuild_geoprior_model(
     model_path: str,
