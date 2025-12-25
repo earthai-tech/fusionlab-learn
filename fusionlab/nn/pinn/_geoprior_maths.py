@@ -1299,17 +1299,15 @@ def settlement_state_for_pde(
     inputs: Optional[Dict[str, Tensor]] = None,
     time_units: Optional[str] = None,
     baseline_keys: Sequence[str] = (
-        "s0_si",
-        "subs0_si",
-        "s_ref_si",
-        "subs_ref_si",
+        "s0_si", "subs0_si", "s_ref_si", "subs_ref_si",
     ),
+    dt: Optional[Tensor] = None,                 # NEW
+    return_incremental: bool = True,             # NEW
     verbose: int = 0,
 ) -> Tensor:
-    """Map model output to cumulative settlement state s(t) in meters."""
+    """Map model output to settlement state in meters."""
     sk = scaling_kwargs or {}
-    kind = str(sk.get("subsidence_kind", "cumulative"))
-    kind = kind.strip().lower()
+    kind = str(sk.get("subsidence_kind", "cumulative")).strip().lower()
 
     s = tf_cast(s_pred_si, tf_float32)
     if getattr(s, "shape", None) is not None and s.shape.rank == 2:
@@ -1332,52 +1330,148 @@ def settlement_state_for_pde(
                     ),
                 )
                 break
-
     if s0 is None:
         s0 = tf_zeros_like(s[:, :1, :])
+
 
     vprint(verbose, "settlement_kind=", kind)
     vprint(verbose, "s_pred_si=", s)
     vprint(verbose, "s0=", s0)
     vprint(verbose, "time_units=", time_units)
 
-    # -----------------------------------------------------------------
-    # cases
-    # -----------------------------------------------------------------
+    # -------------------------------------------------------------
+    # Build cumulative series s_cum(t) first (same shape as s)
+    # -------------------------------------------------------------
     if kind == "cumulative":
-        return s
+        s_cum = s  # may include baseline (as in call(): s0_cum + s_inc)
 
-    if kind == "increment":
-        # s is Δs per step (meters)
-        out = s0 + KERAS_DEPS.cumsum(s, axis=1)
-        vprint(verbose, "s_state(increment)=", out)
-        return out
+    elif kind == "increment":
+        # s is Δs per step
+        s_cum = s0 + KERAS_DEPS.cumsum(s, axis=1)
 
-    if kind == "rate":
-        # s is ds/dt in meters / time_unit
-        tt = tf_cast(t, tf_float32)
-        if getattr(tt, "shape", None) is not None and tt.shape.rank == 2:
-            tt = tt[:, :, None]
-
-        dt = tt[:, 1:, :] - tt[:, :-1, :]
-        dt0 = tf_zeros_like(tt[:, :1, :]) + 1.0
-        dt_step = tf_concat([dt0, dt], axis=1)
-
-        ds = s * dt_step
-        out = s0 + KERAS_DEPS.cumsum(ds, axis=1)
+    elif kind == "rate":
+        # s is ds/dt (meters / time_unit)
+        if dt is not None:
+            dtt = tf_cast(dt, tf_float32)
+            if getattr(dtt, "shape", None) is not None and dtt.shape.rank == 2:
+                dtt = dtt[:, :, None]
+            ds = s * dtt
+        else:
+            tt = tf_cast(t, tf_float32)
+            if getattr(tt, "shape", None) is not None and tt.shape.rank == 2:
+                tt = tt[:, :, None]
+            dtn = tt[:, 1:, :] - tt[:, :-1, :]
+            # fallback default for first step (kept for backward compat)
+            dt0 = tf_zeros_like(tt[:, :1, :]) + 1.0
+            ds = s * tf_concat([dt0, dtn], axis=1)
+        s_cum = s0 + KERAS_DEPS.cumsum(ds, axis=1)
 
         vprint(verbose, "t=", tt)
-        vprint(verbose, "dt_step=", dt_step)
         vprint(verbose, "ds=", ds)
-        vprint(verbose, "s_state(rate)=", out)
 
-        return out
+    else:
+        raise ValueError(
+            f"Unsupported subsidence_kind={kind!r}. "
+            "Use one of {'cumulative','increment','rate'}."
+        )
 
-    raise ValueError(
-        "Unsupported subsidence_kind="
-        f"{kind!r}. Use one of "
-        "{'cumulative','increment','rate'}."
-    )
+    # -------------------------------------------------------------
+    # Return incremental ODE state if requested: s_inc(t)=s_cum(t)-s0
+    # -------------------------------------------------------------
+    if return_incremental:
+        s0H = s0 + tf_zeros_like(s_cum)  # broadcast to (B,H,1)
+        return s_cum - s0H
+
+    return s_cum
+
+
+# def settlement_state_for_pde(
+#     s_pred_si: Tensor,
+#     t: Tensor,
+#     *,
+#     scaling_kwargs: Optional[Dict[str, Any]] = None,
+#     inputs: Optional[Dict[str, Tensor]] = None,
+#     time_units: Optional[str] = None,
+#     baseline_keys: Sequence[str] = (
+#         "s0_si",
+#         "subs0_si",
+#         "s_ref_si",
+#         "subs_ref_si",
+#     ),
+#     verbose: int = 0,
+# ) -> Tensor:
+#     """Map model output to cumulative settlement state s(t) in meters."""
+#     sk = scaling_kwargs or {}
+#     kind = str(sk.get("subsidence_kind", "cumulative"))
+#     kind = kind.strip().lower()
+
+#     s = tf_cast(s_pred_si, tf_float32)
+#     if getattr(s, "shape", None) is not None and s.shape.rank == 2:
+#         s = s[:, :, None]
+
+#     # --- baseline s0 (SI meters) ---
+#     s0 = None
+#     if inputs is not None:
+#         for k in baseline_keys:
+#             if (k in inputs) and (inputs[k] is not None):
+#                 s0 = tf_cast(inputs[k], tf_float32)
+#                 r = tf_rank(s0)
+#                 s0 = tf_cond(
+#                     tf_equal(r, 1),
+#                     lambda: s0[:, None, None],
+#                     lambda: tf_cond(
+#                         tf_equal(r, 2),
+#                         lambda: s0[:, :, None],
+#                         lambda: s0,
+#                     ),
+#                 )
+#                 break
+
+#     if s0 is None:
+#         s0 = tf_zeros_like(s[:, :1, :])
+
+#     vprint(verbose, "settlement_kind=", kind)
+#     vprint(verbose, "s_pred_si=", s)
+#     vprint(verbose, "s0=", s0)
+#     vprint(verbose, "time_units=", time_units)
+
+#     # -----------------------------------------------------------------
+#     # cases
+#     # -----------------------------------------------------------------
+#     if kind == "cumulative":
+#         return s
+
+#     if kind == "increment":
+#         # s is Δs per step (meters)
+#         out = s0 + KERAS_DEPS.cumsum(s, axis=1)
+#         vprint(verbose, "s_state(increment)=", out)
+#         return out
+
+#     if kind == "rate":
+#         # s is ds/dt in meters / time_unit
+#         tt = tf_cast(t, tf_float32)
+#         if getattr(tt, "shape", None) is not None and tt.shape.rank == 2:
+#             tt = tt[:, :, None]
+
+#         dt = tt[:, 1:, :] - tt[:, :-1, :]
+#         dt0 = tf_zeros_like(tt[:, :1, :]) + 1.0
+#         dt_step = tf_concat([dt0, dt], axis=1)
+
+#         ds = s * dt_step
+#         out = s0 + KERAS_DEPS.cumsum(ds, axis=1)
+
+#         vprint(verbose, "t=", tt)
+#         vprint(verbose, "dt_step=", dt_step)
+#         vprint(verbose, "ds=", ds)
+#         vprint(verbose, "s_state(rate)=", out)
+
+#         return out
+
+#     raise ValueError(
+#         "Unsupported subsidence_kind="
+#         f"{kind!r}. Use one of "
+#         "{'cumulative','increment','rate'}."
+#     )
     
 
 def to_rms(

@@ -114,9 +114,9 @@ TIME_COL = "year"
 LON_COL = "longitude"
 LAT_COL = "latitude"
 SUBSIDENCE_COL = "subsidence_cum"
-GWL_COL = "GWL_depth_bgs"   # preferred over "GWL" (if both exist)
 H_FIELD_COL_NAME = "soil_thickness"
 
+GWL_COL = "GWL_depth_bgs"   # preferred over "GWL" (if both exist)
 # Groundwater representation (critical for sign consistency):
 # - GWL_KIND:
 #     "depth_bgs" -> depth below ground surface (positive downward)
@@ -129,7 +129,8 @@ H_FIELD_COL_NAME = "soil_thickness"
 # USE_HEAD_PROXY=True uses a simple proxy:
 #   head_proxy ≈ -depth
 # This keeps head and depth linked for physics, but is approximate.
-GWL_KIND = "depth_bgs"       # {"depth_bgs", "head"}
+
+GWL_KIND =  None  # -> defaults to "down_positive" for depth_bgs
 GWL_SIGN = "down_positive"   # {"down_positive", "up_positive"}
 
 # With z_surf available, do NOT use the proxy
@@ -151,9 +152,9 @@ HEAD_COL ="head_m"
 GWL_DYN_INDEX = None         # e.g. 0 if z_GWL is the first dynamic channel
 
 # Stage-1: physics-critical scaling controls
-
-# Keep coords raw for physics:
-KEEP_COORDS_RAW = True
+NORMALIZE_COORDS = True          # preferred knob
+KEEP_COORDS_RAW  = False         # legacy knob, keep for backward compat
+SHIFT_RAW_COORDS = True          # only matters when KEEP_COORDS_RAW=True
 
 # Keep H_field in meters (recommended):
 SCALE_H_FIELD = False
@@ -163,15 +164,11 @@ SCALE_GWL = False
 
 # NEW (recommended): keep z_surf in meters, unscaled
 SCALE_Z_SURF = False
-Z_SURF_UNIT_TO_SI = 1.0
-
-# Convert subsidence to SI (recommended):
-# If SUBSIDENCE_COL is in mm or mm/yr, convert to meters or meters/yr.
-SUBS_UNIT_TO_SI = 1e-3
 
 # If subsidence is "rate" (per year) or "cumulative":
 SUBSIDENCE_KIND = "cumulative"   # {"cumulative", "rate"}
 
+ALLOW_SUBS_RESIDUAL =True 
 
 # ===================================================================
 # 2) FEATURE REGISTRY (Stage-1 -> Stage-2 handshake)
@@ -274,10 +271,6 @@ INCLUDE_CENSOR_FLAGS_AS_FUTURE = False
 
 # If True, prefer "<col>_eff" (if created) as the thickness fed to the model.
 USE_EFFECTIVE_H_FIELD = True
-
-# Raw thickness unit conversion to SI meters.
-# If your thickness is already meters, keep 1.0.
-THICKNESS_UNIT_TO_SI = 1.0
 
 # If True, Stage-1 may pre-build future_* NPZ blocks for Stage-3 scenarios.
 BUILD_FUTURE_NPZ = False
@@ -440,8 +433,19 @@ SUBS_BIAS_SI  = 0.0
 HEAD_SCALE_SI = None
 HEAD_BIAS_SI  = None
 
-AUTO_SI_AFFINE_FROM_STAGE1 = True
+Z_SURF_UNIT_TO_SI = 1.0
+# Convert subsidence to SI (recommended):
+# If SUBSIDENCE_COL is in mm or mm/yr, convert to meters or meters/yr.
+SUBS_UNIT_TO_SI = 1e-3
 
+# Raw thickness unit conversion to SI meters.
+# If your thickness is already meters, keep 1.0.
+THICKNESS_UNIT_TO_SI = 1.0
+# Guard against zero/negative thickness & non-finite SI columns ( in meters) 
+
+H_FIELD_MIN_SI = 0.1 
+
+AUTO_SI_AFFINE_FROM_STAGE1 = True
 
 # -------------------------------------------------------------------
 # 5.6 Coordinate handling for physics (x,y)

@@ -102,6 +102,7 @@ _STANDARD_ALONE_MAP = {
     'sqrt': ('tensorflow', 'sqrt'), 
     'stack': ('tensorflow', 'stack'),
     'subtract': ('tensorflow', 'subtract'),
+    'switch_case': ('tensorflow', 'switch_case'), 
     'tile': ('tensorflow', 'tile'),
     'transpose': ('tensorflow', 'transpose'),
     'unstack': ('tensorflow', 'unstack'),

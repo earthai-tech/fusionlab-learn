@@ -23,10 +23,7 @@ from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message
 from .._base_attentive import BaseAttentive
 
 if KERAS_BACKEND:
-    from .._tensor_validation import ( 
-        check_inputs, validate_model_inputs, 
-        # ensure_bh1, maybe_reduce_quantiles_bh
-        )
+    from .._tensor_validation import check_inputs, validate_model_inputs
     from .._utils import get_tensor_from 
     from .io import ( 
         _maybe_subsample, 
@@ -49,8 +46,7 @@ if KERAS_BACKEND:
         integrate_consolidation_mean,
         compute_consolidation_step_residual,
         dt_to_seconds,
-        to_rms, 
-        settlement_state_for_pde
+        to_rms
     )
 
     from ._geoprior_utils import (
@@ -63,7 +59,6 @@ if KERAS_BACKEND:
         get_s_init_si, 
         get_h_ref_si,
         infer_dt_units_from_t,
-        to_si_subsidence,
         from_si_subsidence
     )
 
@@ -437,7 +432,6 @@ class GeoPriorSubsNet(BaseAttentive):
         self.H_field = None
         self.eps_prior_metric = Mean(name="epsilon_prior")
         self.eps_cons_metric = Mean(name="epsilon_cons")
-        self.eps_gw_metric =  Mean(name="epsilon_gw")
 
     
     def _init_coordinate_corrections(
@@ -867,7 +861,7 @@ class GeoPriorSubsNet(BaseAttentive):
         # baseline cumulative at forecast start (SI)
         s0_cum_si = get_s_init_si(self, inputs, like=h_mean_si)
         
-        # Voigt state here should be incremental relative to h_ref at t0
+        # IMPORTANT: Voigt state here should be incremental relative to h_ref at t0
         s0_inc_si = tf_zeros_like(s0_cum_si)
         
         # dt in *time_units*
@@ -880,7 +874,7 @@ class GeoPriorSubsNet(BaseAttentive):
             H_field_si=H_si,
             tau_field=tau_field,
             h_ref_si=h_ref_si,
-            s_init_si=s0_inc_si,     
+            s_init_si=s0_inc_si,     # <-- change
             dt=dt_units,
             time_units=self.time_units,
             method=self.residual_method,
@@ -947,7 +941,7 @@ class GeoPriorSubsNet(BaseAttentive):
         `tape.gradient(..., coords)` can become None.
         """
         verbose = int(getattr(self, "verbose", 0))
-
+    
         # ----------------------------------------------------------
         # 0) Unpack (inputs, targets) + normalize target keys
         # ----------------------------------------------------------
@@ -957,7 +951,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 targets.copy(),
                 param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"},
             )
-
+    
         # ----------------------------------------------------------
         # 1) Thickness field is required by physics (H_field / soil_thickness)
         # ----------------------------------------------------------
@@ -1024,7 +1018,7 @@ class GeoPriorSubsNet(BaseAttentive):
             # ----------------------
             # Prefer the explicit mean output produced by call() (Option-1).
             data_mean_raw = outputs.get("data_mean_raw", None)
-
+    
             if data_mean_raw is not None:
                 _, gwl_mean_raw = self.split_data_predictions(data_mean_raw)
             else:
@@ -1037,13 +1031,9 @@ class GeoPriorSubsNet(BaseAttentive):
                     lambda: tf_reduce_mean(gwl_mean_raw, axis=2),
                     lambda: gwl_mean_raw,
                 )
-                r2 = tf_rank(gwl_mean_raw)
-                gwl_mean_raw = tf_cond(
-                    tf_equal(r2, 2),
-                    lambda: tf_expand_dims(gwl_mean_raw, axis=-1),
-                    lambda: gwl_mean_raw,
-                )
-            
+                if tf_rank(gwl_mean_raw) == 2:
+                    gwl_mean_raw = gwl_mean_raw[:, :, None]
+    
             # Convert predicted gwl/depth -> SI meters -> head meters (SI)
             gwl_si = to_si_head(gwl_mean_raw, self.scaling_kwargs)
             h_si = gwl_to_head_m(gwl_si, self.scaling_kwargs, inputs=inputs_fwd)  # (B,H,1)
@@ -1059,10 +1049,10 @@ class GeoPriorSubsNet(BaseAttentive):
             ( K_logits, Ss_logits, dlogtau_logits, Q_logits  
             )= self.split_physics_predictions(phys_mean_raw)
 
+
             # Option-1 recommendation: keep K,Ss,tau time-constant over the horizon
             sk = self.scaling_kwargs or {}
             freeze_fields = bool(sk.get("freeze_physics_fields_over_time", True))
-            
             if freeze_fields:
                 K_base = tf_broadcast_to(
                     tf_reduce_mean(K_logits, axis=1, keepdims=True),
@@ -1206,6 +1196,11 @@ class GeoPriorSubsNet(BaseAttentive):
             else:
                 Q_si = rate_to_per_second(Q_base, time_units=self.time_units)
     
+            # Ensure broadcastable with (B,H,1)
+            # if tf_rank(Q_si) == 2:
+            #     Q_si = Q_si[:, :, None]
+            # Q_si = Q_si + tf_zeros_like(dh_dt)
+            
             # Ensure (B,H,1) and broadcastable with dh_dt (graph-safe)
             r = tf_rank(Q_si)
             Q_si = tf_cond(
@@ -1221,98 +1216,46 @@ class GeoPriorSubsNet(BaseAttentive):
             # 6) Physics-driven mean settlement (Option-1)
             # ------------------------------------------------------
             dt_units = infer_dt_units_from_t(t, self.scaling_kwargs)  # (B,H,1) in self.time_units
-            # s_init_si = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
+            s_init_si = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
             h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=h_si[:, :1, :])  # (B,1,1)
             h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                       # (B,H,1)
     
-            # ------------------------------------------------------
-            # 6) Consolidation: enforce ODE on the *model prediction*
-            # ------------------------------------------------------
-            # NOTE:
-            # If you build `s_state` from `s_bar` (the exact-step integrated
-            # solution), the step residual is identically ~0 (self-check).
-            # Use the model's predicted mean subsidence instead.
-
-            # Predicted mean subsidence (model space) -> SI meters
-            allow_resid = bool((self.scaling_kwargs or {}).get(
-                "allow_subs_residual", False))
-            
-            cons_active = ("consolidation" in self.pde_modes_active)
-            
-            if (not cons_active) or (cons_active and not allow_resid):
-                # Not active OR hard-embedded -> make it zero and cheap
-                cons_res = tf_zeros_like(h_si)  # (B,H,1)
-            else: 
-                
-                if data_mean_raw is not None:
-                    s_mean_raw, _ = self.split_data_predictions(data_mean_raw)
-                else:
-                    # Fallback: average over quantile axis if present
-                    s_mean_raw = s_pred_final
-                    r = tf_rank(s_mean_raw)
-                    s_mean_raw = tf_cond(
-                        tf_greater_equal(r, 3),
-                        lambda: tf_reduce_mean(s_mean_raw, axis=2),
-                        lambda: s_mean_raw,
-                    )
-                r2 = tf_rank(s_mean_raw)
-                s_mean_raw = tf_cond(
-                    tf_equal(r2, 2),
-                    lambda: tf_expand_dims(s_mean_raw, axis=-1),
-                    lambda: s_mean_raw,
-                )
+            # Mean cumulative settlement path (B,H,1) in SI meters
+            s_bar = integrate_consolidation_mean(
+                h_mean_si=h_si,
+                Ss_field=Ss_field,
+                H_field_si=H_si,
+                tau_field=tau_field,
+                h_ref_si=h_ref_si,
+                s_init_si=s_init_si,
+                dt=dt_units,
+                time_units=self.time_units,
+                method=self.residual_method,
+                verbose=self.verbose, 
+            )
     
-                # # Predicted mean subsidence (model space) -> SI meters
-     
-                s_pred_si = to_si_subsidence(s_mean_raw, self.scaling_kwargs)  # (B,H,1)
+            # One-step residual in meters, then normalize to m/s using dt_sec
+            # Build state length H+1 for step residual:
+            s_state = tf_concat([s_init_si, s_bar], axis=1)          # (B,H+1,1)
+            # Align h_n with steps: use h_si for each step; pad last value for shape
+            h_state = tf_concat([h_si, h_si[:, -1:, :]], axis=1)     # (B,H+1,1)
     
-                # # One-step residual in meters, then normalize to m/s using dt_sec
-                # # Build state length H+1 for step residual:
-                # s_state = tf_concat([s_init_si, s_pred_si], axis=1)          # (B,H+1,1)
-                # # Align h_n with steps: use h_si for each step; pad last value for shape
-                # h_state = tf_concat([h_ref_si_11, h_si], axis=1) # (B,H+1,1)
+            cons_step_m = compute_consolidation_step_residual(
+                s_state_si=s_state,
+                h_mean_si=h_state,
+                Ss_field=Ss_field,
+                H_field_si=H_si,
+                tau_field=tau_field,
+                h_ref_si=h_ref_si,
+                dt=dt_units,
+                time_units=self.time_units,
+                method="exact",
+                verbose=self.verbose, 
+            )  # (B,H,1)
     
-                # baseline cumulative at forecast start (SI)
-                s0_cum_11 = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
-                
-                # Build incremental state since t0 (ODE state), consistent with call()
-                pde_inputs = dict(inputs_fwd)
-                pde_inputs["s0_si"] = s0_cum_11
-                
-                s_inc_pred = settlement_state_for_pde(
-                    s_pred_si,
-                    t,
-                    scaling_kwargs=self.scaling_kwargs,
-                    inputs=pde_inputs,
-                    time_units=self.time_units,
-                    dt=dt_units,                 # important if kind=='rate'
-                    return_incremental=True,      # returns s(t)-s0
-                )  # (B,H,1)
-                
-                s0_inc_11 = tf_zeros_like(s0_cum_11)  # ODE initial state is zero increment
-                s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)     # (B,H+1,1)
-                
-                # time indexing fix (already correct in your train_step)
-                h_state = tf_concat([h_ref_si_11, h_si], axis=1)         # (B,H+1,1)
+            dt_sec = dt_to_seconds(dt_units, time_units=self.time_units)
+            cons_res = cons_step_m / tf_maximum(dt_sec, tf_constant(1e-12, tf_float32))
     
-                cons_step_m = compute_consolidation_step_residual(
-                    s_state_si=s_state,
-                    h_mean_si=h_state,
-                    Ss_field=Ss_field,
-                    H_field_si=H_si,
-                    tau_field=tau_field,
-                    h_ref_si=h_ref_si,
-                    dt=dt_units,
-                    time_units=self.time_units,
-                    method="exact",
-                    verbose=self.verbose, 
-                )  # (B,H,1)
-        
-                dt_sec = dt_to_seconds(dt_units, time_units=self.time_units)
-                cons_res = cons_step_m / tf_maximum(
-                    dt_sec, tf_constant(1e-12, tf_float32)
-                )
-        
             # ------------------------------------------------------
             # 7) Residuals + priors
             # ------------------------------------------------------
@@ -1364,16 +1307,10 @@ class GeoPriorSubsNet(BaseAttentive):
             # ------------------------------------------------------
             if (not self._physics_off()) and bool(
                     getattr(self, "scale_pde_residuals", True)):
-                s_for_scales = (
-                    tf_stop_gradient(s_inc_pred)
-                    if (cons_active and allow_resid)
-                    else tf_zeros_like(h_si)
-                )
-                                
                 scales = compute_scales(
                     self,
                     t=t,
-                    s_mean=s_for_scales, # physics mean settlement
+                    s_mean=s_bar,   # physics mean settlement
                     h_mean=h_si,    # latent head
                     K_field=K_field,
                     Ss_field=Ss_field,
@@ -1459,6 +1396,7 @@ class GeoPriorSubsNet(BaseAttentive):
         return results
 
 
+    
     def test_step(self, data):
         """
         Validation step (v3.2).
@@ -1515,9 +1453,8 @@ class GeoPriorSubsNet(BaseAttentive):
     
             total_loss = data_loss + physics_loss_scaled
     
-            eps_prior = phys.get("epsilon_prior", tf_constant(0.0, tf_float32))
-            eps_cons = phys.get("epsilon_cons", tf_constant(0.0, tf_float32))
-            eps_gw    = phys.get("epsilon_gw",    tf_constant(0.0, tf_float32))  
+            eps_prior = phys.get("eps_prior", tf_constant(0.0, tf_float32))
+            eps_cons = phys.get("eps_cons", tf_constant(0.0, tf_float32))
         else:
             physics_loss_raw = tf_constant(0.0, tf_float32)
             phys_mult = tf_constant(1.0, tf_float32)
@@ -1525,20 +1462,17 @@ class GeoPriorSubsNet(BaseAttentive):
             total_loss = data_loss
             eps_prior = tf_constant(0.0, tf_float32)
             eps_cons = tf_constant(0.0, tf_float32)
-            eps_gw    = tf_constant(0.0, tf_float32)  
     
         # Keep epsilon metrics well-defined if you track them
         if hasattr(self, "eps_prior_metric"):
             self.eps_prior_metric.update_state(eps_prior)
         if hasattr(self, "eps_cons_metric"):
             self.eps_cons_metric.update_state(eps_cons)
-        if hasattr(self, "eps_gw_metric"):
-            self.eps_gw_metric.update_state(eps_gw)  
-            
+    
         results = {
             m.name: m.result()
             for m in self.metrics
-            if m.name not in ("epsilon_prior", "epsilon_cons", "epsilon_gw")  
+            if m.name not in ("epsilon_prior", "epsilon_cons")
         }
     
         results.update(
@@ -1562,11 +1496,6 @@ class GeoPriorSubsNet(BaseAttentive):
                     self.eps_cons_metric.result()
                     if hasattr(self, "eps_cons_metric")
                     else eps_cons
-                ),
-                "epsilon_gw": ( 
-                    self.eps_gw_metric.result()
-                    if hasattr(self, "eps_gw_metric")
-                    else eps_gw
                 ),
             }
         )
@@ -1835,67 +1764,43 @@ class GeoPriorSubsNet(BaseAttentive):
         # --------------------------------------------------------------
         # 5) Physics-driven mean settlement + consolidation residual
         # --------------------------------------------------------------
-        allow_resid = bool((sk or {}).get("allow_subs_residual", False))
-        cons_active = ("consolidation" in self.pde_modes_active)
-
         dt_units = infer_dt_units_from_t(t, sk)
         dt_sec = dt_to_seconds(dt_units, time_units=self.time_units)
     
         s_init_si = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])     # (B,1,1)
         h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=h_si[:, :1, :])    # (B,1,1)
         h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                         # (B,H,1)
-        # Build consolidation residual on predicted mean subsidence (not on the integrated s_bar)
-        # s_state = tf_concat([s_init_si, s_pred_si], axis=1)                   # (B,H+1,1)
-        # h_state = tf_concat([h_ref_si_11, h_si], axis=1)         # (B,H+1,1)
-        # Physics mean settlement path (for diagnostics only)
-        
-        # This mirrors call(): integrate incremental compaction from the predicted head
-        # starting at zero increment, then map to the configured subsidence_kind.
-        # s0_cum_11 = s_init_si
-        # s0_cum = s0_cum_11 + tf_zeros_like(h_si)
-        # s0_inc_11 = tf_zeros_like(s0_cum_11)
     
-        if (not cons_active) or (cons_active and not allow_resid):
-            cons_res = tf_zeros_like(h_si)  # (B,H,1)
-            cons_res_scaled = cons_res
-            eps_cons = tf_constant(0.0, tf_float32)
-        else:
-            s_pred_si = to_si_subsidence(tf_cast(subs_mean_raw, tf_float32), sk)  # (B,H,1)
-            
-            s0_cum_11 = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])      # (B,1,1)
-            pde_inputs = dict(inputs_fwd)
-            pde_inputs["s0_si"] = s0_cum_11
-            
-            s_inc_pred = settlement_state_for_pde(
-                s_pred_si,
-                t,
-                scaling_kwargs=sk,
-                inputs=pde_inputs,
-                time_units=self.time_units,
-                dt=dt_units,
-                return_incremental=True,
-            )  # (B,H,1)
-            
-            s0_inc_11 = tf_zeros_like(s0_cum_11)
-            s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)      # (B,H+1,1)
-            h_state = tf_concat([h_ref_si_11, h_si], axis=1)          # (B,H+1,1)
-                        
-            
-            cons_step_m = compute_consolidation_step_residual(
-                s_state_si=s_state,
-                h_mean_si=h_state,
-                Ss_field=Ss_field,
-                H_field_si=H_si,
-                tau_field=tau_field,
-                h_ref_si=h_ref_si,
-                dt=dt_units,
-                time_units=self.time_units,
-                method=self.residual_method,
-                verbose= self.verbose, 
-            )
+        s_bar = integrate_consolidation_mean(
+            h_mean_si=h_si,
+            Ss_field=Ss_field,
+            H_field_si=H_si,
+            tau_field=tau_field,
+            h_ref_si=h_ref_si,
+            s_init_si=s_init_si,
+            dt=dt_units,
+            time_units=self.time_units,
+            method=self.residual_method,
+            verbose= self.verbose, 
+        )
     
-            cons_res = cons_step_m / tf_maximum(dt_sec, eps)         # (B,H,1) in m/s
-            eps_cons = to_rms(cons_res)
+        s_state = tf_concat([s_init_si, s_bar], axis=1)          # (B,H+1,1)
+        h_state = tf_concat([h_ref_si_11, h_si], axis=1)         # (B,H+1,1)
+    
+        cons_step_m = compute_consolidation_step_residual(
+            s_state_si=s_state,
+            h_mean_si=h_state,
+            Ss_field=Ss_field,
+            H_field_si=H_si,
+            tau_field=tau_field,
+            h_ref_si=h_ref_si,
+            dt=dt_units,
+            time_units=self.time_units,
+            method=self.residual_method,
+            verbose= self.verbose, 
+        )
+    
+        cons_res = cons_step_m / tf_maximum(dt_sec, eps)         # (B,H,1) in m/s
     
         # --------------------------------------------------------------
         # 6) GW residual + priors
@@ -1937,9 +1842,7 @@ class GeoPriorSubsNet(BaseAttentive):
             scales = compute_scales(
                 self,
                 t=t,
-                s_mean=tf_stop_gradient(s_inc_pred) if (
-                    cons_active and allow_resid) 
-                else tf_zeros_like(h_si),
+                s_mean=s_bar,
                 h_mean=h_si,
                 K_field=K_field,
                 Ss_field=Ss_field,
@@ -1967,22 +1870,11 @@ class GeoPriorSubsNet(BaseAttentive):
         loss_bounds = tf_reduce_mean(tf_square(bounds_res))
     
         eps_prior = to_rms(prior_res)
-        
+        eps_cons = to_rms(cons_res)
         eps_gw = to_rms(gw_res)
-        
-        physics_loss_raw = (
-            self.lambda_cons * loss_cons
-            + self.lambda_gw * loss_gw
-            + self.lambda_prior * loss_prior
-            + self.lambda_smooth * loss_smooth
-            + self.lambda_mv * loss_mv
-            + self.lambda_bounds * loss_bounds
-        )
-        phys_mult = self._physics_loss_multiplier()
-        physics_loss_scaled = phys_mult * physics_loss_raw
-        
+    
         out = {
-            "loss_physics": physics_loss_scaled,
+            "loss_physics": loss_cons + loss_gw,
             "loss_consolidation": loss_cons,
             "loss_gw_flow": loss_gw,
             "loss_prior": loss_prior,
@@ -1993,34 +1885,8 @@ class GeoPriorSubsNet(BaseAttentive):
             "epsilon_cons": eps_cons,
             "epsilon_gw": eps_gw,
         }
-        
-        s_bar = None
+    
         if return_maps:
-            s0_inc_11 = tf_zeros_like(s0_cum_11)
-            s_inc_si = integrate_consolidation_mean(
-                h_mean_si=h_si,
-                Ss_field=Ss_field,
-                H_field_si=H_si,
-                tau_field=tau_field,
-                h_ref_si=h_ref_si,
-                s_init_si=s0_inc_11,
-                dt=dt_units,
-                time_units=self.time_units,
-                method=self.residual_method,
-                verbose=0,
-            )
-            
-            kind = str((sk or {}).get(
-                "subsidence_kind", "cumulative")).strip().lower()
-            if kind == "increment":
-                ds0 = s_inc_si[:, :1, :]
-                dsr = s_inc_si[:, 1:, :] - s_inc_si[:, :-1, :]
-                s_bar = tf_concat([ds0, dsr], axis=1)
-            else:
-                # baseline + increment (matches call())
-                s0_cum = s0_cum_11 + tf_zeros_like(h_si)
-                s_bar = s0_cum + s_inc_si
-                
             out.update(
                 {
                     "h_si": h_si,

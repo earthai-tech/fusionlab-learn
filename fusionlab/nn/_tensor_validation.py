@@ -50,10 +50,16 @@ tf_autograph=KERAS_DEPS.autograph
 tf_concat = KERAS_DEPS.concat
 tf_sequence_mask = KERAS_DEPS.sequence_mask
 tf_bool = KERAS_DEPS.bool
-    
+tf_switch_case  = KERAS_DEPS.switch_case   
+tf_reduce_mean = KERAS_DEPS.reduce_mean 
 tf_expand_dims=KERAS_DEPS.expand_dims
 tf_control_dependencies=KERAS_DEPS.control_dependencies
 tf_get_static_value = KERAS_DEPS.get_static_value
+tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_cond = KERAS_DEPS.cond 
+tf_greater =KERAS_DEPS.greater 
+tf_greater_equal =KERAS_DEPS.greater_equal 
+tf_squeeze = KERAS_DEPS.squeeze
 
 if hasattr(tf_autograph, 'set_verbosity'):
     tf_autograph.set_verbosity(0) 
@@ -61,6 +67,284 @@ if hasattr(tf_autograph, 'set_verbosity'):
 _logger = fusionlog().get_fusionlab_logger(__name__)
 
 # --------------------------- tensor validation -------------------------------
+
+def maybe_reduce_quantiles_bh(
+    x,
+    *,
+    name: str = "tensor",
+    axis: int = 2,
+    reduction: str | callable = "mean",
+):
+    """
+    If x looks like (B,H,Q) or (B,H,Q,1), reduce over Q axis.
+    Otherwise return x unchanged. Graph-safe.
+    """
+    x = tf_convert_to_tensor(x)
+
+    def _reduce(t):
+        if callable(reduction):
+            return reduction(t, axis=axis)
+        red = str(reduction).lower()
+        if red == "mean":
+            return tf_reduce_mean(t, axis=axis)
+        if red == "sum":
+            return tf_reduce_sum(t, axis=axis)
+        raise ValueError(
+            f"{name}: unsupported reduction='{reduction}'. "
+            "Use 'mean', 'sum', or a callable."
+        )
+
+    r = tf_rank(x)
+
+    # rank-4: assume (B,H,Q,1) -> reduce Q -> (B,H,1)
+    x = tf_cond(
+        tf_greater_equal(r, 4),
+        lambda: _reduce(x),
+        lambda: x,
+    )
+
+    r = tf_rank(x)
+
+    # rank-3: could be (B,H,1) or (B,H,Q)
+    def _rank3():
+        last = tf_shape(x)[-1]
+        return tf_cond(
+            tf_greater(last, 1),
+            lambda: _reduce(x),  # (B,H,Q) -> (B,H)
+            lambda: x,           # (B,H,1) -> keep
+        )
+
+    x = tf_cond(
+        tf_equal(r, 3),
+        _rank3,
+        lambda: x,
+    )
+    return x
+
+
+def ensure_bh1(
+    x,
+    *,
+    name: str = "tensor",
+    dtype=None,
+    reduce_axis: int | None = None,
+    reduction: str | callable = "mean",
+    allow_rank1: bool = False,
+):
+    """
+    Ensure `x` has shape ``(B, H, 1)`` (graph-safe).
+
+    This helper is designed for GeoPrior/TFT-style batches where most
+    physics signals must be rank-3 with a singleton last dimension:
+    ``(batch, horizon, 1)``.
+
+    Parameters
+    ----------
+    x : array-like or tf.Tensor
+        Input to standardize. Common accepted shapes:
+
+        - ``(B, H)``           -> ``(B, H, 1)``
+        - ``(B, H, 1)``        -> unchanged
+        - ``(B, H, Q)``        -> requires `reduce_axis=2` to become
+          ``(B, H, 1)``
+        - ``(B, H, Q, 1)``     -> requires `reduce_axis=2` to become
+          ``(B, H, 1)``
+        - ``(B,)`` (optional)  -> ``(B, 1, 1)`` if `allow_rank1=True`
+
+    name : str, default="tensor"
+        Name used in error messages.
+
+    dtype : tf.DType or None, default=None
+        If provided, cast `x` to this dtype after conversion.
+
+    reduce_axis : int or None, default=None
+        If provided, reduce `x` along this axis before enforcing
+        ``(B, H, 1)``. Use this when `x` still has a quantile/channel
+        dimension (e.g. ``(B, H, Q)``).
+
+    reduction : {"mean", "sum"} or callable, default="mean"
+        Reduction used when `reduce_axis` is not None.
+
+        - If a string, must be "mean" or "sum".
+        - If a callable, it must have signature ``fn(t, axis=...)`` and
+          return a tensor.
+
+        Note: median is intentionally not built in (avoid extra deps);
+        pass a callable if you need it.
+
+    allow_rank1 : bool, default=False
+        If True, accept a rank-1 input ``(B,)`` and convert it to
+        ``(B, 1, 1)``. If False, rank-1 inputs raise.
+
+    Returns
+    -------
+    tf.Tensor
+        Tensor with shape ``(B, H, 1)`` (rank 3, last dim 1).
+
+    Raises
+    ------
+    ValueError
+        If `x` cannot be coerced to ``(B, H, 1)`` unambiguously.
+
+    Notes
+    -----
+    This function is safe under `tf.function` / graph mode: it does not
+    use symbolic tensors in Python boolean contexts.
+    """
+    # import tensorflow as tf
+
+    # --- Convert/cast -------------------------------------------------
+    x = tf_convert_to_tensor(x)
+    if dtype is not None:
+        x = tf_cast(x, dtype)
+
+    # --- Optional reduction (e.g., quantiles) -------------------------
+    if reduce_axis is not None:
+        if callable(reduction):
+            x = reduction(x, axis=reduce_axis)
+        else:
+            red = str(reduction).lower()
+            if red == "mean":
+                x = tf_reduce_mean(x, axis=reduce_axis)
+            elif red == "sum":
+                x = tf_reduce_sum(x, axis=reduce_axis)
+            else:
+                raise ValueError(
+                    f"{name}: unsupported reduction='{reduction}'. "
+                    "Use 'mean', 'sum', or a callable."
+                )
+
+    # --- Rank handling: prefer static rank when available -------------
+    r_static = x.shape.rank
+
+    def _bad_rank(msg: str):
+        # Graph-safe "raise": trigger an always-failing assertion.
+        tf_debugging.assert_equal(
+            tf_constant(0, tf_int32),
+            tf_constant(1, tf_int32),
+            message=msg,
+        )
+        return x  # unreachable
+
+    if r_static is not None:
+        # Static rank path (fast + clean error messages)
+        if r_static == 4:
+            # Common case: (B,H,Q,1) or (B,H,1,1)
+            last = x.shape[-1]
+            if last != 1:
+                raise ValueError(
+                    f"{name}: rank-4 tensor must have last dim == 1, "
+                    f"got shape={x.shape}."
+                )
+            x3 = tf_squeeze(x, axis=-1)  # (B,H,Q) or (B,H,1)
+            # If still has Q, reduce it; otherwise keep
+            if x3.shape.rank == 3 and (x3.shape[-1] is not None) and x3.shape[-1] > 1:
+                x3 = tf_reduce_mean(x3, axis=2)   # (B,H)
+                x3 = tf_expand_dims(x3, axis=-1)  # (B,H,1)
+            return x3
+
+        if r_static == 3:
+            last = x.shape[-1]
+            if last == 1:
+                return x
+            raise ValueError(
+                f"{name}: expected last dim == 1 for rank-3 tensor, "
+                f"got shape={x.shape}. If this is (B,H,Q), pass "
+                "reduce_axis=2 first."
+            )
+
+        if r_static == 2:
+            return tf_expand_dims(x, axis=-1)
+
+        if r_static == 1:
+            if not allow_rank1:
+                raise ValueError(
+                    f"{name}: rank-1 input is not allowed (shape={x.shape}). "
+                    "Set allow_rank1=True to coerce (B,) -> (B,1,1)."
+                )
+            x = tf_expand_dims(x, axis=1)   # (B,1)
+            x = tf_expand_dims(x, axis=-1)  # (B,1,1)
+            return x
+
+        raise ValueError(
+            f"{name}: expected rank 2 or 3 (or rank 1 with allow_rank1=True), "
+            f"got rank={r_static}, shape={x.shape}. If you have an extra "
+            "dimension (e.g. quantiles), reduce it first via reduce_axis."
+        )
+
+    # --- Dynamic rank path (graph-safe) -------------------------------
+    r = tf_rank(x)
+
+    def case_rank1():
+        if not allow_rank1:
+            return _bad_rank(
+                f"{name}: rank-1 input is not allowed. "
+                "Set allow_rank1=True to coerce (B,) -> (B,1,1)."
+            )
+        t = tf_expand_dims(x, axis=1)
+        t = tf_expand_dims(t, axis=-1)
+        return t
+
+    def case_rank2():
+        return tf_expand_dims(x, axis=-1)
+
+    def case_rank3():
+        # Assert last dim == 1
+        tf_debugging.assert_equal(
+            tf_shape(x)[-1],
+            tf_constant(1, tf_int32),
+            message=(
+                f"{name}: expected last dim == 1 for rank-3 tensor. "
+                "If this is (B,H,Q), pass reduce_axis=2 first."
+            ),
+        )
+        return x
+    
+    def case_rank4():
+        # Expect last dim == 1, then squeeze it.
+        last = tf_shape(x)[-1]
+
+        def _last_is_1():
+            x3 = tf_squeeze(x, axis=-1)  # (B,H,Q) or (B,H,1)
+            q = tf_shape(x3)[-1]
+
+            # If q>1, it's (B,H,Q) -> mean over Q -> (B,H) -> expand -> (B,H,1)
+            return tf_cond(
+                tf_greater(q, 1),
+                lambda: tf_expand_dims(tf_reduce_mean(x3, axis=2), axis=-1),
+                lambda: x3,  # already (B,H,1)
+            )
+
+        return tf_cond(
+            tf_equal(last, tf_constant(1, tf_int32)),
+            _last_is_1,
+            lambda: _bad_rank(
+                f"{name}: rank-4 tensor must have last dim == 1. "
+                "If you have (B,H,Q,C) use a different reduction."
+            ),
+        )
+
+    def default_case():
+        return _bad_rank(
+            f"{name}: expected rank 2 or 3 (or rank 1 with allow_rank1=True). "
+            "If you have extra dimensions (e.g. quantiles), reduce them first "
+            "via reduce_axis."
+        )
+
+    # switch_case requires concrete branch keys; we map rank->branch.
+    # For ranks not explicitly handled, default_case raises via assert.
+    # IMPORTANT: keys must be {0,1,2,3} (contiguous from 0)
+    return tf_switch_case(
+        tf_cast(r, tf_int32),
+        branch_fns={
+            0: default_case,  # rank 0 is invalid -> raise via assert
+            1: case_rank1,
+            2: case_rank2,
+            3: case_rank3,
+            4: case_rank4,   
+        },
+        default=default_case,
+    )
 
 def set_anomaly_config(
         anomaly_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:

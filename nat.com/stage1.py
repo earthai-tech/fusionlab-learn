@@ -62,6 +62,7 @@ from fusionlab.utils.generic_utils import (
     ensure_directory_exists,
     print_config_table
 )
+from fusionlab.utils.spatial_utils import deg_to_m_from_lat
 from fusionlab.utils.subsidence_utils import ( 
     rate_to_cumulative, cumulative_to_rate, 
     # finalize_si_scaling_kwargs
@@ -161,6 +162,7 @@ USE_EFFECTIVE_H_FIELD = bool(
 
 THICKNESS_UNIT_TO_SI = float(cfg.get("THICKNESS_UNIT_TO_SI", 1.0))
 HEAD_UNIT_TO_SI = float(cfg.get("HEAD_UNIT_TO_SI", 1.0))
+H_MIN_SI = float(cfg.get("H_FIELD_MIN_SI", 0.1))  # meters
 
 # v3.2 z_surf/head conventions
 Z_SURF_COL = cfg.get("Z_SURF_COL", None)
@@ -171,7 +173,28 @@ INCLUDE_Z_SURF_AS_STATIC = bool(cfg.get("INCLUDE_Z_SURF_AS_STATIC", True))
 
 
 # --- Stage-1 physics-critical scaling controls ---
-KEEP_COORDS_RAW = bool(cfg.get("KEEP_COORDS_RAW", True))
+# Preferred knob:
+NORMALIZE_COORDS = bool(cfg.get("NORMALIZE_COORDS", True))
+
+# Backward-compat knob (legacy):
+KEEP_COORDS_RAW = bool(cfg.get("KEEP_COORDS_RAW", not NORMALIZE_COORDS))
+
+# Canonical reconciliation: NORMALIZE_COORDS wins if present
+if "NORMALIZE_COORDS" in cfg:
+    if "KEEP_COORDS_RAW" in cfg:
+        # if inconsistent, warn once (optional)
+        if bool(cfg["KEEP_COORDS_RAW"]) == NORMALIZE_COORDS:
+            print(
+                "  [Warn] BOTH NORMALIZE_COORDS and KEEP_COORDS_RAW were set but "
+                "are inconsistent. NORMALIZE_COORDS takes precedence."
+            )
+    KEEP_COORDS_RAW = not NORMALIZE_COORDS
+else:
+    NORMALIZE_COORDS = not KEEP_COORDS_RAW
+
+# Only matters when KEEP_COORDS_RAW=True
+SHIFT_RAW_COORDS = bool(cfg.get("SHIFT_RAW_COORDS", True))
+
 SCALE_H_FIELD   = bool(cfg.get("SCALE_H_FIELD", False))  # recommended False
 SCALE_GWL       = bool(cfg.get("SCALE_GWL", False))      # recommended False
 
@@ -190,6 +213,8 @@ COORD_TARGET_EPSG = int(cfg.get("COORD_TARGET_EPSG", UTM_EPSG))
 COORD_X_COL, COORD_Y_COL = LON_COL, LAT_COL
 coord_epsg = None
 coords_in_degrees = bool(COORD_MODE == "degrees")
+
+ALLOW_SUBS_RESIDUAL = bool (cfg.get("allow_subs_residual", True)) 
 
 # --- Output directories (optionally overridable from cfg) ---
 BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
@@ -911,6 +936,15 @@ df_proc[H_SI_COL] = (
     * float(THICKNESS_UNIT_TO_SI)
 ).astype(np.float32)
 
+df_proc[H_SI_COL] = np.clip(df_proc[H_SI_COL].to_numpy(np.float32), H_MIN_SI, np.inf)
+
+# Optional: hard fail if anything non-finite survives in physics-critical cols
+_phys_cols = [SUBS_SI_COL, DEPTH_SI_COL, HEAD_SI_COL, H_SI_COL]
+bad = {c: int((~np.isfinite(df_proc[c].to_numpy())).sum()) for c in _phys_cols}
+if any(v > 0 for v in bad.values()):
+    raise ValueError(f"[Stage1] Non-finite values in physics SI columns: {bad}")
+
+
 # ---- Model-space columns (GeoPrior v3.2 uses SI directly) ----
 SUBS_MODEL_COL = SUBS_SI_COL
 
@@ -1099,8 +1133,11 @@ config_sections.insert(5, ("Coordinates", {
     "COORD_EPSG": cfg.get("COORD_EPSG", None),
     "COORD_X_COL_USED": COORD_X_COL,
     "COORD_Y_COL_USED": COORD_Y_COL,
-    "KEEP_COORDS_RAW": KEEP_COORDS_RAW,
+    "NORMALIZE_COORDS": bool(NORMALIZE_COORDS),
+    "KEEP_COORDS_RAW": bool(KEEP_COORDS_RAW),
+    "SHIFT_RAW_COORDS": bool(SHIFT_RAW_COORDS),
 }))
+
 
 config_sections.insert(6, ("Physics SI", {
     "SUBS_UNIT_TO_SI": SUBS_UNIT_TO_SI,
@@ -1314,7 +1351,7 @@ seq_job = os.path.join(
 )
 
 OUT_S_DIM, OUT_G_DIM = 1, 1
-normalize_coords = not KEEP_COORDS_RAW
+normalize_coords = bool(NORMALIZE_COORDS)
 
 print("gwl_col(target):", GWL_TARGET_COL)
 print("gwl_dyn_col(driver):", GWL_DYN_COL)
@@ -1366,19 +1403,20 @@ else:
 # --------------------------------------------------------------
 # coord ranges for chain-rule in Stage-2
 # --------------------------------------------------------------
+
+EPS_RNG = 1e-6
 if normalize_coords:
     cmin = np.asarray(coord_scaler.data_min_, dtype=float)
     cmax = np.asarray(coord_scaler.data_max_, dtype=float)
-    crng = (cmax - cmin)
+    crng = np.maximum(cmax - cmin, EPS_RNG)
     coord_ranges = {"t": float(crng[0]), "x": float(crng[1]), "y": float(crng[2])}
 else:
-    coords_raw = np.asarray(inputs_train["coords"], dtype=float)  # (N,H,3)
+    coords_raw = np.asarray(inputs_train["coords"], dtype=float)
     coord_ranges = {
-        "t": float(coords_raw[..., 0].max() - coords_raw[..., 0].min()),
-        "x": float(coords_raw[..., 1].max() - coords_raw[..., 1].min()),
-        "y": float(coords_raw[..., 2].max() - coords_raw[..., 2].min()),
+        "t": float(max(coords_raw[..., 0].max() - coords_raw[..., 0].min(), EPS_RNG)),
+        "x": float(max(coords_raw[..., 1].max() - coords_raw[..., 1].min(), EPS_RNG)),
+        "y": float(max(coords_raw[..., 2].max() - coords_raw[..., 2].min(), EPS_RNG)),
     }
-
 
 for k, v in inputs_train.items():
     print(f"  Train input '{k}': {None if v is None else v.shape}")
@@ -1443,6 +1481,8 @@ _save_npz(val_targets_npz, val_np_y)
 print(f"  Saved NPZs:\n    {train_inputs_npz}\n    {train_targets_npz}\n"
       f"    {val_inputs_npz}\n    {val_targets_npz}")
 
+
+
 # ==================================================================
 # Manifest: single handshake for Stage-2 (no redundant truth source)
 # ==================================================================
@@ -1505,17 +1545,25 @@ indices_spec = {
     "gwl_dyn_name": GWL_DYN_COL
 }
 
+kind = str(cfg.get("GWL_KIND", "depth_bgs"))
+sign = cfg.get("GWL_SIGN", None)
+if sign is None:
+    sign = "up_positive" if kind == "head" else "down_positive"
+
 conventions_spec = {
     # GWL conventions (Stage-2 physics depends on these)
-    "gwl_kind": str(cfg.get("GWL_KIND", "depth_bgs")),
-    "gwl_sign": str(cfg.get("GWL_SIGN", "down_positive")),
+    "gwl_kind": kind,
+    "gwl_sign": sign, # str(cfg.get("GWL_SIGN", "down_positive")),  # declared/raw sign
     "use_head_proxy": bool(cfg.get("USE_HEAD_PROXY", True)),
     "time_units": str(TIME_UNITS),
 
     # what Stage-1 actually produced (explicit in v3.2)
     "gwl_driver_kind": "depth",
     "gwl_target_kind": "head",
-    
+    # explicit Stage-1 resolved roles (truth for Stage-2)
+    "gwl_driver_sign": "down_positive",
+    "gwl_target_sign": "up_positive",
+
 }
 
 # ---- 2) Numeric scaling/physics metadata: ONE place for scalars/ranges ----
@@ -1530,6 +1578,7 @@ scaling_kwargs = {
     "H_bias_si": float(H_bias_si),
     
     "subsidence_kind": SUBSIDENCE_KIND, 
+    "allow_subs_residual": ALLOW_SUBS_RESIDUAL, 
 
     # coords scaling metadata (needed for chain-rule in Stage-2)
     "coords_normalized": bool(normalize_coords),
@@ -1545,6 +1594,19 @@ scaling_kwargs = {
     
     **indices_spec
 }
+# Only attach degree→meter factors if
+#  coords are actually degrees
+if coords_in_degrees:
+    # Use the *raw* latitude column, not 
+    # y_used if y_used got shifted/normalized
+    lat_ref_deg = float(
+        np.nanmean(df_proc[LAT_COL].to_numpy(dtype=float)))
+    deg_to_m_lon, deg_to_m_lat = deg_to_m_from_lat(lat_ref_deg)
+    scaling_kwargs.update({
+        "lat_ref_deg": lat_ref_deg,      # handy for audit/fallback
+        "deg_to_m_lon": deg_to_m_lon,
+        "deg_to_m_lat": deg_to_m_lat,
+    })
 
 # Optional: shift metadata only if used (kept here because Stage-2 needs it)
 if coord_shift_pack is not None:

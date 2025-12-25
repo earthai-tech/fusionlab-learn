@@ -34,7 +34,7 @@ from fusionlab.utils.subsidence_utils import make_txy_coords
 # ---------------------------------------------------------------------
 # Debug toggles
 # ---------------------------------------------------------------------
-WORK_WITH_NORMALIZED_DATA = True      # if True, use *_z cols + affines
+WORK_WITH_NORMALIZED_DATA = True        # if True, use *_z cols + affines
 WORK_WITH_NORMALIZED_COORDS = True    # if True, normalize coords to ~[0,1]
 
 # If you do not provide z_surf as an explicit input, the model can use a
@@ -101,7 +101,7 @@ DEFAULT_CFG: Dict[str, Any] = dict(
     TIME_UNITS="year",
 
     # SI conversion (harness uses SI meters already)
-    SUBS_UNIT_TO_SI=1.0,
+    SUBS_UNIT_TO_SI=1e-3, 
     HEAD_UNIT_TO_SI=1.0,
     THICKNESS_UNIT_TO_SI=1.0,
 
@@ -202,7 +202,7 @@ def make_fake_df(
             rain_series.append(rain)
 
         subs_annual_mm = np.asarray(subs_annual_mm, float)
-        subs_cum_m = np.cumsum(subs_annual_mm) * 1e-3  # meters
+        subs_cum_mm = np.cumsum(subs_annual_mm)  # millimeters
 
         for j, y in enumerate(years):
             H = float(H_series[j])
@@ -231,7 +231,7 @@ def make_fake_df(
                     soil_thickness_censored=float(censored),
 
                     subsidence=float(subs_annual_mm[j]),     # mm/yr (toy)
-                    subsidence_cum=float(subs_cum_m[j]),     # meters
+                    subsidence_cum=float(subs_cum_mm[j]),     #m meters
                 )
             )
 
@@ -340,7 +340,7 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
         head_scale_si = float(df.attrs["depth_std_m"]) * float(cfg["HEAD_UNIT_TO_SI"])
         head_bias_si  = float(df.attrs["depth_mu_m"])  * float(cfg["HEAD_UNIT_TO_SI"])
     else:
-        head_scale_si = 1.0
+        head_scale_si = float(cfg["HEAD_UNIT_TO_SI"])
         head_bias_si  = 0.0
 
     # --- SI affine mapping (model-space -> SI meters) for subsidence
@@ -348,7 +348,8 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
         subs_scale_si = float(df.attrs["subs_std_m"]) * float(cfg["SUBS_UNIT_TO_SI"])
         subs_bias_si  = float(df.attrs["subs_mu_m"])  * float(cfg["SUBS_UNIT_TO_SI"])
     else:
-        subs_scale_si = 1.0
+        # RAW column: value is in "native units" -> convert to SI via SUBS_UNIT_TO_SI
+        subs_scale_si = float(cfg["SUBS_UNIT_TO_SI"])
         subs_bias_si  = 0.0
 
     # v3.2 feature layout (matches your new description)
@@ -500,7 +501,7 @@ def build_one_sample(cfg: Dict[str, Any], df: pd.DataFrame) -> Stage1LikePack:
 
         # option-1 behavior
         subsidence_kind="cumulative",
-        allow_subs_residual=False,
+        allow_subs_residual=True,
 
         # depth->head rules
         gwl_kind="depth_bgs",

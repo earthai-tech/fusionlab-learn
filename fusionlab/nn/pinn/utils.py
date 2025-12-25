@@ -2267,7 +2267,7 @@ def prepare_pinn_data_sequences(
             )
         
         gwl_dyn_index = int(dynamic_cols.index(gwl_dyn_col))
-
+        
         job_dict = {
             'static_data': static_features_arr,
             'dynamic_data': dynamic_features_arr,
@@ -2417,8 +2417,11 @@ def process_pde_modes(
     # Ensure 'consolidation' is the only active mode if it was defaulted,
     # or if user explicitly selected only unsupported modes.
     if any(unsupported in pde_modes_active 
-           for unsupported in ['gw_flow', 'both', 'none']) \
-       and 'consolidation' not in pde_modes_active:
+           for unsupported in {
+                   'consolidation', 'gw_flow', 
+                   'both', 'none', 'on', 
+                   'off'}
+          ):
         # This case means decorator didn't force 'consolidation', so we do it here
         logger.info(
             f"Unsupported pde_mode '{pde_mode}' "

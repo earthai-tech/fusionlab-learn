@@ -67,6 +67,28 @@ __all__ = [
      'extract_spatial_roi', 
  ]
 
+
+def deg_to_m_from_lat(lat_deg: float) -> tuple[float, float]:
+    """
+    Approx WGS84 meters per degree at reference latitude.
+    Returns (deg_to_m_lon, deg_to_m_lat).
+    """
+    phi = np.deg2rad(lat_deg)
+    # Common geodesy approximations (meters per degree)
+    deg_to_m_lat = (
+        111132.92
+        - 559.82 * np.cos(2 * phi)
+        + 1.175 * np.cos(4 * phi)
+        - 0.0023 * np.cos(6 * phi)
+    )
+    deg_to_m_lon = (
+        111412.84 * np.cos(phi)
+        - 93.5 * np.cos(3 * phi)
+        + 0.118 * np.cos(5 * phi)
+    )
+    return float(deg_to_m_lon), float(deg_to_m_lat)
+
+
 @SaveFile
 @isdf 
 def extract_spatial_roi(
