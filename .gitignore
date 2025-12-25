@@ -199,4 +199,4 @@ results*/
 .cities_results/
 
 # keep out config 
-nat.com/config*
+/nat.com/config.json 
