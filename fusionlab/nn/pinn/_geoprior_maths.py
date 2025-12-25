@@ -62,6 +62,13 @@ tf_zeros_like = KERAS_DEPS.zeros_like
 tf_print =KERAS_DEPS.print 
 tf_reduce_min =KERAS_DEPS.reduce_min 
 tf_argmin  = KERAS_DEPS.argmin 
+tf_reduce_sum = KERAS_DEPS.reduce_sum 
+tf_is_nan = KERAS_DEPS.is_nan 
+tf_is_inf = KERAS_DEPS.is_inf 
+tf_logical_or = KERAS_DEPS.logical_or 
+tf_where = KERAS_DEPS.where 
+tf_cumsum = KERAS_DEPS.cumsum 
+
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
 
@@ -71,7 +78,7 @@ if tf_autograph is not None:
     tf_autograph.set_verbosity(0)
 
 
-DEP_MSG = dependency_message("nn.pinn.models")
+DEP_MSG = dependency_message("nn.pinn._geoprior_maths")
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
@@ -87,7 +94,34 @@ SMALL = 1e-12
 def vprint(verbose: int, *args) -> None:
     """Verbose print (eager-friendly)."""
     if int(verbose) > 0:
-        print(*args)
+        tf_print(*args)
+
+def tf_print_nonfinite(tag: str, x: Tensor, summarize: int = 6) -> Tensor:
+    """Print a compact report ONLY if x contains NaN/Inf (graph-safe)."""
+    x = tf_convert_to_tensor(x, dtype=tf_float32)
+    is_nan = tf_is_nan(x)
+    is_inf = tf_is_inf(x)
+    is_bad = tf_logical_or(is_nan, is_inf)
+    n_nan = tf_reduce_sum(tf_cast(is_nan, tf_int32))
+    n_inf = tf_reduce_sum(tf_cast(is_inf, tf_int32))
+    n_bad = tf_reduce_sum(tf_cast(is_bad, tf_int32))
+
+    def _do_print():
+        # safe stats: replace bad values with 0 for min/max/mean
+        x_safe = tf_where(is_bad, tf_zeros_like(x), x)
+        tf_print(
+            "[NONFINITE]", tag,
+            "| shape=", tf_shape(x),
+            "| n_bad=", n_bad, "n_nan=", n_nan, "n_inf=", n_inf,
+            "| min=", tf_reduce_min(x_safe),
+            "| max=", tf_reduce_max(x_safe),
+            "| mean=", tf_reduce_mean(x_safe),
+            summarize=summarize,
+        )
+        return tf_constant(0, tf_int32)
+
+    return tf_cond(n_bad > 0, _do_print, lambda: tf_constant(0, tf_int32))
+
 
 # ---------------------------------------------------------------------
 # Physics residuals / priors
@@ -830,15 +864,29 @@ def compose_physics_fields(
     verbose: int = 0,
 ):
     """Compose K,Ss,tau fields with coord MLPs."""
+    
+    if verbose > 6: 
+        tf_print_nonfinite("compose/coords_flat", coords_flat)
+        tf_print_nonfinite("compose/K_base", K_base)
+        tf_print_nonfinite("compose/Ss_base", Ss_base)
+        tf_print_nonfinite("compose/tau_base", tau_base)
+
     coords_xy0 = tf_concat(
         [tf_zeros_like(coords_flat[..., :1]),
          coords_flat[..., 1:]],
         axis=-1,
     )
 
+
     K_corr = model.K_coord_mlp(coords_xy0, training=training)
     Ss_corr = model.Ss_coord_mlp(coords_xy0, training=training)
     tau_corr = model.tau_coord_mlp(coords_xy0, training=training)
+
+    if verbose >6:
+        # after coord MLP corrections
+        tf_print_nonfinite("compose/K_corr", K_corr)
+        tf_print_nonfinite("compose/Ss_corr", Ss_corr)
+        tf_print_nonfinite("compose/tau_corr", tau_corr)
 
     rawK = K_base + K_corr
     rawSs = Ss_base + Ss_corr
@@ -876,6 +924,13 @@ def compose_physics_fields(
         Ss_field = tf_exp(logSs) + tf_constant(eps_KSs, logSs.dtype)
 
     delta_log_tau = tau_base + tau_corr
+    
+    if verbose > 6: 
+        # after combining
+        tf_print_nonfinite("compose/rawK", rawK)
+        tf_print_nonfinite("compose/rawSs", rawSs)
+        tf_print_nonfinite("compose/delta_log_tau", delta_log_tau)
+    
     tau_phys, Hd_eff = tau_phys_from_fields(
         model,
         K_field,
@@ -888,6 +943,15 @@ def compose_physics_fields(
         + tf_constant(eps_tau, tau_phys.dtype)
     )
 
+    if verbose > 6:
+        # after exp mapping (soft mode)
+        tf_print_nonfinite("compose/K_field", K_field)
+        tf_print_nonfinite("compose/Ss_field", Ss_field)
+        
+        # derived tau_phys + final tau
+        tf_print_nonfinite("compose/tau_phys", tau_phys)
+        tf_print_nonfinite("compose/tau_field", tau_field)
+                   
     vprint(verbose, "fields: K=", K_field)
     vprint(verbose, "fields: Ss=", Ss_field)
     vprint(verbose, "fields: tau=", tau_field)
@@ -1347,7 +1411,7 @@ def settlement_state_for_pde(
 
     elif kind == "increment":
         # s is Δs per step
-        s_cum = s0 + KERAS_DEPS.cumsum(s, axis=1)
+        s_cum = s0 + tf_cumsum(s, axis=1)
 
     elif kind == "rate":
         # s is ds/dt (meters / time_unit)
@@ -1364,7 +1428,7 @@ def settlement_state_for_pde(
             # fallback default for first step (kept for backward compat)
             dt0 = tf_zeros_like(tt[:, :1, :]) + 1.0
             ds = s * tf_concat([dt0, dtn], axis=1)
-        s_cum = s0 + KERAS_DEPS.cumsum(ds, axis=1)
+        s_cum = s0 + tf_cumsum(ds, axis=1)
 
         vprint(verbose, "t=", tt)
         vprint(verbose, "ds=", ds)
@@ -1384,95 +1448,6 @@ def settlement_state_for_pde(
 
     return s_cum
 
-
-# def settlement_state_for_pde(
-#     s_pred_si: Tensor,
-#     t: Tensor,
-#     *,
-#     scaling_kwargs: Optional[Dict[str, Any]] = None,
-#     inputs: Optional[Dict[str, Tensor]] = None,
-#     time_units: Optional[str] = None,
-#     baseline_keys: Sequence[str] = (
-#         "s0_si",
-#         "subs0_si",
-#         "s_ref_si",
-#         "subs_ref_si",
-#     ),
-#     verbose: int = 0,
-# ) -> Tensor:
-#     """Map model output to cumulative settlement state s(t) in meters."""
-#     sk = scaling_kwargs or {}
-#     kind = str(sk.get("subsidence_kind", "cumulative"))
-#     kind = kind.strip().lower()
-
-#     s = tf_cast(s_pred_si, tf_float32)
-#     if getattr(s, "shape", None) is not None and s.shape.rank == 2:
-#         s = s[:, :, None]
-
-#     # --- baseline s0 (SI meters) ---
-#     s0 = None
-#     if inputs is not None:
-#         for k in baseline_keys:
-#             if (k in inputs) and (inputs[k] is not None):
-#                 s0 = tf_cast(inputs[k], tf_float32)
-#                 r = tf_rank(s0)
-#                 s0 = tf_cond(
-#                     tf_equal(r, 1),
-#                     lambda: s0[:, None, None],
-#                     lambda: tf_cond(
-#                         tf_equal(r, 2),
-#                         lambda: s0[:, :, None],
-#                         lambda: s0,
-#                     ),
-#                 )
-#                 break
-
-#     if s0 is None:
-#         s0 = tf_zeros_like(s[:, :1, :])
-
-#     vprint(verbose, "settlement_kind=", kind)
-#     vprint(verbose, "s_pred_si=", s)
-#     vprint(verbose, "s0=", s0)
-#     vprint(verbose, "time_units=", time_units)
-
-#     # -----------------------------------------------------------------
-#     # cases
-#     # -----------------------------------------------------------------
-#     if kind == "cumulative":
-#         return s
-
-#     if kind == "increment":
-#         # s is Δs per step (meters)
-#         out = s0 + KERAS_DEPS.cumsum(s, axis=1)
-#         vprint(verbose, "s_state(increment)=", out)
-#         return out
-
-#     if kind == "rate":
-#         # s is ds/dt in meters / time_unit
-#         tt = tf_cast(t, tf_float32)
-#         if getattr(tt, "shape", None) is not None and tt.shape.rank == 2:
-#             tt = tt[:, :, None]
-
-#         dt = tt[:, 1:, :] - tt[:, :-1, :]
-#         dt0 = tf_zeros_like(tt[:, :1, :]) + 1.0
-#         dt_step = tf_concat([dt0, dt], axis=1)
-
-#         ds = s * dt_step
-#         out = s0 + KERAS_DEPS.cumsum(ds, axis=1)
-
-#         vprint(verbose, "t=", tt)
-#         vprint(verbose, "dt_step=", dt_step)
-#         vprint(verbose, "ds=", ds)
-#         vprint(verbose, "s_state(rate)=", out)
-
-#         return out
-
-#     raise ValueError(
-#         "Unsupported subsidence_kind="
-#         f"{kind!r}. Use one of "
-#         "{'cumulative','increment','rate'}."
-#     )
-    
 
 def to_rms(
     x: Tensor,

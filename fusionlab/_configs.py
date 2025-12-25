@@ -55,6 +55,7 @@ _STANDARD_ALONE_MAP = {
     'greater_equal': ('tensorflow', 'greater_equal'),
     'identity': ('tensorflow', 'identity'),
     'int32': ('tensorflow', 'int32'),
+    'is_inf': ('tensorflow.math', 'is_inf'),    
     'is_nan': ('tensorflow.math', 'is_nan'),
     'less': ('tensorflow', 'less'),
     'less_equal': ('tensorflow', 'less_equal'),

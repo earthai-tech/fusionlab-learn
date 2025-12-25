@@ -50,7 +50,8 @@ if KERAS_BACKEND:
         compute_consolidation_step_residual,
         dt_to_seconds,
         to_rms, 
-        settlement_state_for_pde
+        settlement_state_for_pde, 
+        tf_print_nonfinite
     )
 
     from ._geoprior_utils import (
@@ -887,6 +888,15 @@ class GeoPriorSubsNet(BaseAttentive):
             verbose=self.verbose,
         )  # (B,H,1) incremental compaction since t0
 
+        if self.verbose >6: 
+            tf_print_nonfinite("call/coords_for_decoder", coords_for_decoder)
+            tf_print_nonfinite("call/H_si", H_si)
+            tf_print_nonfinite("call/K_base", K_base)
+            tf_print_nonfinite("call/Ss_base", Ss_base)
+            tf_print_nonfinite("call/tau_base", tau_base)
+            tf_print_nonfinite("call/tau_field(pre-integrator)", tau_field)
+
+
         # map to requested subsidence kind
         kind = str((self.scaling_kwargs or {}).get(
             "subsidence_kind", "cumulative")).strip().lower()
@@ -978,6 +988,18 @@ class GeoPriorSubsNet(BaseAttentive):
         # ----------------------------------------------------------
         coords = tf_convert_to_tensor(_get_coords(inputs), tf_float32)
     
+        if self.verbose > 6: 
+            tf_print_nonfinite("train_step/coords", coords)
+            
+            for k in ("static_features", "dynamic_features",
+                      "future_features", "H_field"):
+                v = inputs.get(k, None)
+                if v is not None:
+                    tf_print_nonfinite(
+                        f"train_step/{k}", tf_convert_to_tensor(v, tf_float32)
+                )
+
+
         # Accept (B,3) -> (B,1,3) edge cases
         if coords.shape.rank == 2:
             coords = tf_expand_dims(coords, axis=1)

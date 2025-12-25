@@ -20,16 +20,14 @@ import sys
 import json
 import joblib
 import numpy as np
-import pandas as pd 
 import datetime as dt
 import warnings
 import tensorflow as tf
 import  platform
 
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, TerminateOnNaN
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
-# tf.debugging.enable_check_numerics()
 
 # Silence common warnings and TF logs
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -39,49 +37,53 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
-from fusionlab._optdeps import with_progress 
-from fusionlab.backends.devices import configure_tf_from_cfg
-from fusionlab.api.util import get_table_size
-from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
-from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
-from fusionlab.utils.generic_utils import print_config_table
-from fusionlab.registry.utils import _find_stage1_manifest
-from fusionlab.utils.nat_utils import (
-    load_nat_config, 
-    load_nat_config_payload, 
-    ensure_input_shapes,
-    map_targets_for_training,
-    make_tf_dataset,
-    load_scaler_info,
-    save_ablation_record,
-    best_epoch_and_metrics,
-    build_censor_mask, 
-    name_of,
-    serialize_subs_params,
-    resolve_si_affine
-)
+try:
+    from fusionlab._optdeps import with_progress 
+    from fusionlab.backends.devices import configure_tf_from_cfg
+    from fusionlab.api.util import get_table_size
+    from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
+    from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
+    from fusionlab.utils.generic_utils import print_config_table
+    from fusionlab.registry.utils import _find_stage1_manifest
+    from fusionlab.utils.nat_utils import (
+        load_nat_config, 
+        load_nat_config_payload, 
+        ensure_input_shapes,
+        map_targets_for_training,
+        make_tf_dataset,
+        load_scaler_info,
+        save_ablation_record,
+        best_epoch_and_metrics,
+        build_censor_mask, 
+        name_of,
+        serialize_subs_params,
+        resolve_si_affine
+    )
 
-from fusionlab.utils.forecast_utils import format_and_forecast
-from fusionlab.utils.scale_metrics import (
-    inverse_scale_target,
-    point_metrics,
-    per_horizon_metrics,
-)
-from fusionlab.utils.spatial_utils import deg_to_m_from_lat
-from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet
-from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
-from fusionlab.nn.losses import make_weighted_pinball
-from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn, _to_py
-from fusionlab.nn.calibration import (
-    fit_interval_calibrator_on_val,
-    apply_calibrator_to_subs,
-)
-from fusionlab.nn.utils import plot_history_in
-from fusionlab.nn.pinn.op import extract_physical_parameters
-from fusionlab.plot.forecast import plot_eval_future
-from fusionlab.nn.callbacks import LambdaOffsetScheduler
-
-
+    from fusionlab.utils.forecast_utils import format_and_forecast
+    from fusionlab.utils.scale_metrics import (
+        inverse_scale_target,
+        point_metrics,
+        per_horizon_metrics,
+    )
+    from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet
+    from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
+    from fusionlab.nn.losses import make_weighted_pinball
+    from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn, _to_py
+    from fusionlab.nn.calibration import (
+        fit_interval_calibrator_on_val,
+        apply_calibrator_to_subs,
+    )
+    from fusionlab.nn.utils import plot_history_in
+    from fusionlab.nn.pinn.op import extract_physical_parameters
+    from fusionlab.plot.forecast import plot_eval_future
+    from fusionlab.nn.callbacks import LambdaOffsetScheduler
+    
+    print("Successfully imported fusionlab modules.")
+except Exception as e:
+    print(f"Critical Error: fusionlab imports failed: {e}")
+    raise
+#%
 # =============================================================================
 # Config / Paths
 # =============================================================================
@@ -101,42 +103,28 @@ CITY_HINT  = CITY_ENV or CFG_CITY
 # MODEL_HINT = MODEL_ENV or CFG_MODEL
 MANUAL     = getenv_stripped("STAGE1_MANIFEST")
 
+
+# RESULTS_DIR = default_results_dir()  # smart default auto-resolve
+# CITY_HINT   = getenv_stripped("CITY")  # -> None if unset/empty
+# MODEL_HINT  = getenv_stripped("MODEL_NAME_OVERRIDE", default="GeoPriorSubsNet")
+# MANUAL      = getenv_stripped("STAGE1_MANIFEST")  # exact path if provided
+
 # IMPORTANT: do not filter Stage-1 manifests by model, so we can
 # reuse the same Stage-1 run for multiple model flavours.
 MODEL_HINT = None
 
-def _is_valid_stage1(m: dict, path: str) -> bool:
-    if str(m.get("stage", "")).strip().lower() != "stage1":
-        return False
-    art = (m.get("artifacts") or {})
-    npz = (art.get("numpy") or {})
-    need = (
-        "train_inputs_npz", "train_targets_npz",
-        "val_inputs_npz", "val_targets_npz"
-    )
-    return all(k in npz and isinstance(
-        npz[k], str) and npz[k] for k in need)
-
 MANIFEST_PATH = _find_stage1_manifest(
     manual=MANUAL,
     base_dir=RESULTS_DIR,
-    city_hint=CITY_HINT, # e.g., "zhongshan"; None means "no filter"
-    model_hint=None,
-    prefer="timestamp",
-    required_keys=("model", "stage", "artifacts", "config", "paths"),
-    filter_fn=_is_valid_stage1,
+    city_hint=CITY_HINT,         # e.g., "zhongshan"; None means "no filter"
+    model_hint=MODEL_HINT,
+    prefer="timestamp",          # or "mtime"
+    required_keys=("model", "stage"),
     verbose=1,
 )
 
 with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
     M = json.load(f)
-
-stage = (M.get("stage") or "").strip().lower()
-if stage not in ("stage1", "stage-1", "stage_1"):
-    raise RuntimeError(
-        "Expected a Stage-1 manifest, got"
-        f" stage={stage!r} at {MANIFEST_PATH}"
-    )
 
 manifest_city = (M.get("city") or "").strip().lower()
 print(f"[Manifest] Loaded city={manifest_city} model={M.get('model')}")
@@ -187,7 +175,7 @@ MODEL_NAME = MODEL_ENV or cfg.get("MODEL_NAME", "GeoPriorSubsNet")
 # ----- Optional censoring config (from merged cfg) -----------------------
 FEATURES   = cfg.get("features", {}) or {}
 DYN_NAMES  = FEATURES.get("dynamic", []) or []
-FUT_NAMES  = FEATURES.get("future",  []) or []   
+FUT_NAMES  = FEATURES.get("future",  []) or []   # <-- NEW
 
 CENSOR     = cfg.get("censoring", {}) or cfg.get("censor", {}) or {}
 CENSOR_SPECS  = CENSOR.get("specs", []) or []
@@ -240,15 +228,6 @@ MODE                  = cfg["MODE"]
 
 ATTENTION_LEVELS      = cfg.get("ATTENTION_LEVELS", ["cross", "hierarchical", "memory"])
 SCALE_PDE_RESIDUALS   = cfg.get("SCALE_PDE_RESIDUALS", True)
-CONSOLIDATION_STEP_RESIDUAL_METHOD =cfg.get(
-    "CONSOLIDATION_STEP_RESIDUAL_METHOD", "exact"
-)
-
-ALLOW_SUBS_RESIDUAL =cfg.get(
-    "allow_subs_residual", cfg.get(
-        "ALLOW_SUBS_RESIDUAL", True
-        )
-)
 
 EMBED_DIM    = cfg.get("EMBED_DIM", 32)
 HIDDEN_UNITS = cfg.get("HIDDEN_UNITS", 64)
@@ -260,10 +239,9 @@ DROPOUT_RATE    = cfg.get("DROPOUT_RATE", 0.10)
 MEMORY_SIZE    = cfg.get("MEMORY_SIZE", 50)
 SCALES         = cfg.get("SCALES", [1, 2])
 USE_RESIDUALS  = cfg.get("USE_RESIDUALS", True)
-USE_BATCH_NORM = cfg.get("USE_BATCH_NORM", False)   
-USE_VSN        = cfg.get("USE_VSN", True)           
+USE_BATCH_NORM = cfg.get("USE_BATCH_NORM", False)   # FIXED key
+USE_VSN        = cfg.get("USE_VSN", True)           # FIXED key
 VSN_UNITS      = cfg.get("VSN_UNITS", 32)
-
 
 # Helper: JSON has string keys for quantile weight dicts; coerce to float.
 def _coerce_quantile_weights(d: dict, default: dict) -> dict:
@@ -324,12 +302,6 @@ PHYSICS_BOUNDS_CFG = cfg.get("PHYSICS_BOUNDS", {}) or {}
 PHYSICS_BOUNDS_MODE = (cfg.get("PHYSICS_BOUNDS_MODE", "soft") or "soft").strip().lower()
 # Time units for physics (controls d/dt scaling inside PINN residuals)
 TIME_UNITS = (cfg.get("TIME_UNITS", "year") or "year").strip().lower()
-
-# Prefer Stage-1 provenance (most trustworthy), fallback to config default.
-units_prov = cfg.get("units_provenance", {}) or {}
-SUBS_UNIT_TO_SI_APPLIED = float(
-    units_prov.get("subs_unit_to_si_applied_stage1", cfg.get("SUBS_UNIT_TO_SI", 1e-3))
-)
 
 _default_phys_bounds = {
     "H_min": 5.0,
@@ -398,21 +370,10 @@ elif MODEL_NAME == "PoroElasticSubsNet":
 # (typically PDE_MODE_CONFIG="both").
 
 # Targets & columns (for formatter)
-# cols_cfg = cfg.get("cols", {})
-# SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
-# GWL_COL        = cols_cfg.get("gwl", "GWL")
-
-cols_cfg = cfg.get("cols", {}) or {}
-
-SUBS_MODEL_COL = cols_cfg.get("subs_model", cols_cfg.get("subsidence", "subsidence"))
-GWL_MODEL_COL  = cols_cfg.get("gwl_model",  cols_cfg.get("gwl", "GWL"))
-H_MODEL_COL    = cols_cfg.get("h_field_model", cols_cfg.get("h_field", "soil_thickness"))
-
-# Keep requested names only for logging/UI if you want
-# SUBS_REQUESTED_COL = cols_cfg.get("subsidence", "subsidence")
-# GWL_REQUESTED_COL  = cols_cfg.get("gwl", "GWL")
+cols_cfg = cfg.get("cols", {})
 SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
 GWL_COL        = cols_cfg.get("gwl", "GWL")
+
 # -------------------------------------------------------------------------
 # Resolve which *dynamic feature channel* corresponds to the GWL driver
 # (depth-to-water or head proxy) and store its index for the model.
@@ -457,6 +418,7 @@ else:
     GWL_DYN_INDEX = int(DYN_NAMES.index(gwl_dyn_name))
 
 print(f"[Info] GWL dynamic channel: name={gwl_dyn_name} | index={GWL_DYN_INDEX}")
+
 
 # Train options
 EPOCHS        = cfg.get("EPOCHS", 50)
@@ -538,17 +500,6 @@ print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
 
 encoders = M["artifacts"]["encoders"]
 
-scaled_cols = set(encoders.get("scaled_ml_numeric_cols") or [])
-
-def _needs_inverse_affine(col: str) -> bool:
-    return bool(col) and (col in scaled_cols)
-
-def _warn_if_identity(col, a, b):
-    if (a is not None and b is not None) and (float(a) == 1.0 and float(b) == 0.0):
-        print(f"[Warn] {col}: manifest provides identity SI affine; "
-              "will override if this column is scaled by main_scaler.")
-
-
 # If OHE is present, it may be a single path or a {col:path} dict; we don't need it here.
 ohe_block = encoders.get("ohe")
 if isinstance(ohe_block, dict):
@@ -579,7 +530,6 @@ if cs_path and os.path.exists(cs_path):
     except Exception as e:
         print(f"[Warn] Could not load coord_scaler at {cs_path}: {e}")
         
-# 
 # -------------------------------------------------------------------------
 # Stage-1 scaling metadata (single source of truth for physics chain-rule)
 # -------------------------------------------------------------------------
@@ -592,68 +542,6 @@ GWL_KIND = str(sk.get("gwl_kind", cfg.get("GWL_KIND", "depth_bgs"))).lower()
 GWL_SIGN = str(sk.get("gwl_sign", cfg.get("GWL_SIGN", "down_positive"))).lower()
 USE_HEAD_PROXY = bool(sk.get("use_head_proxy", cfg.get("USE_HEAD_PROXY", True)))
 Z_SURF_COL = sk.get("z_surf_col", cfg.get("Z_SURF_COL", None))
-
-# -------------------------------------------------------------------------
-# Canonical GWL truth table (single source for Stage-2 + physics code)
-# -------------------------------------------------------------------------
-conv = cfg.get("conventions", {}) or {}
-
-# Promote manifest-level conventions into scaling_kwargs (sk) so downstream
-# code only consults *one* dict.
-for _k in (
-    "gwl_kind",
-    "gwl_sign",
-    "gwl_driver_kind",
-    "gwl_driver_sign",
-    "gwl_target_kind",
-    "gwl_target_sign",
-    "use_head_proxy",
-    "time_units",
-):
-    if _k not in sk and _k in conv:
-        sk[_k] = conv[_k]
-
-cols_spec = (cfg.get("cols", {}) or {})
-z_surf_any = (
-    Z_SURF_COL
-    or cols_spec.get("z_surf_static")
-    or cols_spec.get("z_surf_raw")
-)
-
-head_from_depth_rule = None
-if z_surf_any:
-    head_from_depth_rule = "z_surf - depth"
-elif USE_HEAD_PROXY:
-    head_from_depth_rule = "-depth (proxy)"
-
-gwl_z_meta = {
-    # declared/raw semantics (what user/config *meant*)
-    "raw_kind": str(conv.get("gwl_kind", GWL_KIND)).lower(),
-    "raw_sign": str(conv.get("gwl_sign", GWL_SIGN)).lower(),
-
-    # Stage-1 resolved roles (what Stage-1 *produced*)
-    "driver_kind": str(conv.get("gwl_driver_kind", "depth")).lower(),
-    "driver_sign": str(conv.get("gwl_driver_sign", "down_positive")).lower(),
-    "target_kind": str(conv.get("gwl_target_kind", "head")).lower(),
-    "target_sign": str(conv.get("gwl_target_sign", "up_positive")).lower(),
-
-    "use_head_proxy": bool(USE_HEAD_PROXY),
-    "z_surf_col": z_surf_any,
-    "head_from_depth_rule": head_from_depth_rule,
-
-    # Column provenance (for audit/debug; physics should still use indices)
-    "cols": {
-        "depth_raw": cols_spec.get("depth_raw"),
-        "head_raw": cols_spec.get("head_raw"),
-        "z_surf_raw": cols_spec.get("z_surf_raw"),
-        "depth_model": cols_spec.get("depth_model"),
-        "head_model": cols_spec.get("head_model"),
-        "z_surf_static": cols_spec.get("z_surf_static"),
-    },
-}
-
-# Store back into scaling_kwargs so GeoPriorSubsNet only consults sk.
-sk["gwl_z_meta"] = gwl_z_meta
 
 print("[Info] GWL semantics:",
       "GWL_KIND=", GWL_KIND,
@@ -668,27 +556,18 @@ coords_normalized = bool(
 )
 coord_ranges = sk.get("coord_ranges") or None
 
-# Infer ONLY if Stage-1 says normalized but didn’t record ranges
-if coords_normalized and (not coord_ranges) and (coord_scaler is not None):
+# Only infer coord_ranges if Stage-1 says coords are normalized
+if coords_normalized and (coord_ranges is None) and (coord_scaler is not None):
     if hasattr(coord_scaler, "data_min_") and hasattr(coord_scaler, "data_max_"):
         span = coord_scaler.data_max_ - coord_scaler.data_min_
-        coord_ranges = {
-            "t": float(span[0]),
-            "x": float(span[1]), 
-            "y": float(span[2])
-        }
+        coord_ranges = {"t": float(span[0]), "x": float(span[1]), "y": float(span[2])}
     elif hasattr(coord_scaler, "scale_"):
         sc = coord_scaler.scale_
-        coord_ranges = {
-            "t": float(sc[0]),
-            "x": float(sc[1]),
-            "y": float(sc[2])
-        }
+        coord_ranges = {"t": float(sc[0]), "x": float(sc[1]), "y": float(sc[2])}
 
 if coords_normalized and not coord_ranges:
     raise RuntimeError(
-        "coords_normalized=True but coord_ranges missing"
-        " and cannot infer from coord_scaler."
+        "coords_normalized=True but coord_ranges missing and cannot infer from coord_scaler."
     )
 
 coords_in_degrees = bool(sk.get("coords_in_degrees", False))
@@ -696,71 +575,35 @@ deg_to_m_lon = sk.get("deg_to_m_lon", None)
 deg_to_m_lat = sk.get("deg_to_m_lat", None)
 coord_order = sk.get("coord_order", ["t", "x", "y"])
 
-# Robust fallback: if coords are degrees, we must know meters-per-degree
-# for chain-rule rescaling. Stage-1 should provide these, but we can
-# recover them from the Stage-1 scaled CSV if missing.
-if coords_in_degrees and (deg_to_m_lon is None or deg_to_m_lat is None):
-    lat_ref_deg = sk.get("lat_ref_deg", None)
-
-    if lat_ref_deg is None or (
-        isinstance(lat_ref_deg, str) and lat_ref_deg.strip().lower() == "auto"
-    ):
-        scaled_csv_path = (
-            M.get("artifacts", {})
-            .get("csv", {})
-            .get("scaled", None)
-        )
-        lat_col = (cfg.get("cols", {}) or {}).get("lat", None)
-        if scaled_csv_path and lat_col:
-            try:
-                _lat = pd.read_csv(
-                    scaled_csv_path,
-                    usecols=[lat_col],
-                )[lat_col].to_numpy(dtype=float)
-                lat_ref_deg = float(np.nanmean(_lat))
-                print(
-                    f"[Coords] Recovered lat_ref_deg={lat_ref_deg:.6f} "
-                    f"from Stage-1 scaled CSV ({scaled_csv_path})."
-                )
-            except Exception:
-                lat_ref_deg = None
-
-    if lat_ref_deg is None or not np.isfinite(float(lat_ref_deg)):
-        raise RuntimeError(
-            "coords_in_degrees=True but deg_to_m_lon/deg_to_m_lat missing "
-            "and could not infer a finite lat_ref_deg."
-        )
-
-    lat_ref_deg = float(lat_ref_deg)
-
-    try:
-          # type: ignore
-        deg_to_m_lon, deg_to_m_lat = deg_to_m_from_lat(lat_ref_deg)
-    except Exception:
-        lat_rad = np.deg2rad(lat_ref_deg)
-        deg_to_m_lat = (
-            111132.92
-            - 559.82 * np.cos(2.0 * lat_rad)
-            + 1.175 * np.cos(4.0 * lat_rad)
-            - 0.0023 * np.cos(6.0 * lat_rad)
-        )
-        deg_to_m_lon = (
-            111412.84 * np.cos(lat_rad)
-            - 93.5 * np.cos(3.0 * lat_rad)
-            + 0.118 * np.cos(5.0 * lat_rad)
-        )
-
-    sk.update(
-        {
-            "lat_ref_deg": float(lat_ref_deg),
-            "deg_to_m_lon": float(deg_to_m_lon),
-            "deg_to_m_lat": float(deg_to_m_lat),
-        }
-    )
-
 # thickness SI affine (model-space -> meters)
 H_scale_si = sk.get("H_scale_si", None)
 H_bias_si  = sk.get("H_bias_si",  None)
+
+# Fallback: if Stage-1 did not record coord_ranges, infer from coord_scaler
+
+if (coord_ranges is None) and (coord_scaler is not None):
+    if hasattr(coord_scaler, "data_min_") and hasattr(
+            coord_scaler, "data_max_"):
+        span = coord_scaler.data_max_ - coord_scaler.data_min_
+        coord_ranges = {
+            "t": float(span[0]), 
+            "x": float(span[1]), 
+            "y": float(span[2])
+        }
+        coords_normalized = True
+        
+    elif hasattr(coord_scaler, "scale_"):
+        # If Stage-1 used StandardScaler, you can still reuse the same mechanism:
+        # derivative in original units = derivative_wrt_norm / scale
+        sc = coord_scaler.scale_
+        coord_ranges = {"t": float(sc[0]), "x": float(sc[1]), "y": float(sc[2])}
+        coords_normalized = True
+
+if coords_normalized and not coord_ranges:
+    raise RuntimeError(
+        "coords_normalized=True but coord_ranges missing"
+        " and cannot infer from coord_scaler."
+    )
 
 print("[Info] coords_normalized:", coords_normalized,
       "coord_ranges:", coord_ranges
@@ -915,13 +758,11 @@ subsmodel_params = {
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
     "kappa": LearnableKappa(initial_value=GEOPRIOR_INIT_KAPPA),
     "gamma_w": FixedGammaW(value=GEOPRIOR_GAMMA_W),
-    "h_ref": FixedHRef(mode=GEOPRIOR_H_REF),
+    "h_ref": FixedHRef(value=GEOPRIOR_H_REF),
     "kappa_mode": GEOPRIOR_KAPPA_MODE,
     "use_effective_h": GEOPRIOR_USE_EFFECTIVE_H,
     "hd_factor": GEOPRIOR_HD_FACTOR,
     "offset_mode": OFFSET_MODE,
-    
-    "residual_method": CONSOLIDATION_STEP_RESIDUAL_METHOD, 
     
     # For consistency
     "time_units": TIME_UNITS,
@@ -941,8 +782,7 @@ subsmodel_params["scaling_kwargs"].update({
     "H_scale_si": (float(H_scale_si) if H_scale_si is not None else 1.0),
     "H_bias_si":  (float(H_bias_si)  if H_bias_si  is not None else 0.0),
     
-    "allow_subs_residual": ALLOW_SUBS_RESIDUAL, 
-    
+
 })
 
 subsmodel_params["scaling_kwargs"].update({
@@ -955,7 +795,7 @@ subsmodel_params["scaling_kwargs"].update({
     "gwl_dyn_index": GWL_DYN_INDEX,
 })
 
-
+sk = cfg.get("scaling_kwargs", {}) or {}
 
 subs_scale_si = sk.get("subs_scale_si")
 subs_bias_si  = sk.get("subs_bias_si")
@@ -987,7 +827,7 @@ subsmodel_params["scaling_kwargs"].update({
     "head_scale_si": head_scale_si,
     "head_bias_si": head_bias_si,
 
-    # --- semantics for interpreting the GWL variable ---
+    # --- NEW: semantics for interpreting the GWL variable ---
     "gwl_kind": GWL_KIND,                 # "depth_bgs" or "head"
     "gwl_sign": GWL_SIGN,                 # "down_positive" or "up_positive"
     "use_head_proxy": USE_HEAD_PROXY,     # if no z_surf -> head_proxy = -depth
@@ -1034,6 +874,8 @@ subs_model_inst = model_cls(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     quantiles=QUANTILES,
     pde_mode=PDE_MODE_CONFIG,
+    # XXX TO REMOVE 
+    verbose =7, 
     **subsmodel_params,
 )
 
@@ -1100,7 +942,6 @@ callbacks = [
 
 csvlog_path = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_{MODEL_NAME}_train_log.csv")
 callbacks.append(CSVLogger(csvlog_path, append=False))
-callbacks.append(TerminateOnNaN())
 
 if USE_LAMBDA_OFFSET_SCHEDULER and (not subs_model_inst._physics_off()):
     callbacks.append(
@@ -1277,14 +1118,6 @@ run_manifest["config"]["scaling_kwargs"].update({
     "future_feature_names":  list(FUT_NAMES),
     "gwl_dyn_name":  gwl_dyn_name,
     "gwl_dyn_index": int(GWL_DYN_INDEX),
-})
-
-run_manifest["config"]["scaling_kwargs"].update({
-    "coord_order": coord_order,
-    "gwl_kind": GWL_KIND,
-    "gwl_sign": GWL_SIGN,
-    "use_head_proxy": USE_HEAD_PROXY,
-    "z_surf_col": Z_SURF_COL,
 })
 
 with open(manifest_path, "w", encoding="utf-8") as f:
@@ -1514,12 +1347,6 @@ df_eval, df_future = format_and_forecast(
     metrics_time_as_str=True,
     value_mode="cumulative", # set to "rate" to convert back to rate 
     input_value_mode="cumulative",
-    
-    # --- export in mm directly ---
-    output_unit="mm",
-    output_unit_from="m",
-    output_unit_mode="overwrite",
-    output_unit_col="subsidence_unit",
 )
 
 if df_eval is not None and not df_eval.empty:
@@ -1545,23 +1372,17 @@ else:
 eval_results = {}
 phys = {}
 
-# Better: reuse make_tf_dataset so keys/shapes match training exactly
-# (instead of tf.data.Dataset.from_tensor_slices)
-ds_eval = make_tf_dataset(
-    X_fore, y_fore,                 # <--- use ORIGINAL y_fore
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    mode=MODE,
-    forecast_horizon=FORECAST_HORIZON_YEARS,
-)
+ds_eval = tf.data.Dataset.from_tensor_slices((X_fore, y_fore_fmt)).batch(BATCH_SIZE)
 
 # --- 2.1 Standard Keras evaluate() + physics metrics ---
 try:
-    eval_results = model_inf.evaluate(ds_eval, return_dict=True, verbose=1)
+    eval_results = subs_model_inst.evaluate(
+        ds_eval, return_dict=True, verbose=1
+    )
     print("Evaluation:", eval_results)
 
-    # v3.2: include epsilon_gw if available
-    phys_keys = ("epsilon_prior", "epsilon_cons", "epsilon_gw")
+    # Physics diagnostics are already aggregated in eval_results
+    phys_keys = ("epsilon_prior", "epsilon_cons")
     phys = {
         k: float(_to_py(eval_results[k]))
         for k in phys_keys
@@ -1574,33 +1395,29 @@ except Exception as e:
     print(f"[Warn] Evaluation failed (metrics + physics): {e}")
     eval_results, phys = {}, {}
 
-# --- 2.2 Save physics payload (use the same model & same ds split you evaluated) ---
+#  2.2. Save physic payload 
+# collect once and save
 phys_npz_path = os.path.join(
     RUN_OUTPUT_PATH,
     f"{CITY_NAME}_phys_payload_run_val.npz",
-    # f"{CITY_NAME}_phys_payload_{dataset_name_for_forecast.lower()}.npz"
- )
-
-_ = model_inf.export_physics_payload(
-    ds_eval,
+)
+physics_payload = model_inf.export_physics_payload(
+    val_dataset,
     max_batches=None,
     save_path=phys_npz_path,
     format="npz",
     overwrite=True,
-    metadata={
-        "city": CITY_NAME,
-        "split": dataset_name_for_forecast,
-        "time_units": TIME_UNITS,
-        "gwl_kind": GWL_KIND,
-        "gwl_sign": GWL_SIGN,
-        "use_head_proxy": USE_HEAD_PROXY,
-    },
-)
-print(f"[OK] Saved physics payload -> {phys_npz_path}")
+    metadata={"city": CITY_NAME, "split": "val", "time_units": TIME_UNITS},
 
+)
 # -------------------------------------------------------------------------
 # SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
 # -------------------------------------------------------------------------
+phys_npz_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{CITY_NAME}_phys_payload_run_val.npz",
+)
+
 
 # --- 2.3 Interval diagnostics + optional censor-stratified MAE ---
 cov80_uncal = cov80_cal = sharp80_uncal = sharp80_cal = None
@@ -1609,14 +1426,14 @@ censor_metrics = None   # will become a dict if we have a flag
 y_true_list, s_q_list, mask_list = [], [], []
 
 for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
-    out = model_inf(xb, training=False)
+    out = subs_model_inst(xb, training=False)
     data_final_b = out["data_final"]
 
     y_true_b = yb["subs_pred"]           # (B, H, 1)
     y_true_list.append(y_true_b)
 
     if QUANTILES:
-        s_q_b, _ = model_inf.split_data_predictions(data_final_b)  # (B, H, Q, 1)
+        s_q_b, _ = subs_model_inst.split_data_predictions(data_final_b)  # (B, H, Q, 1)
         s_q_list.append(s_q_b)
 
     if CENSOR_FLAG_IDX is not None:
@@ -1795,6 +1612,7 @@ if (y_true is not None):
         )
 
 # Normalize coverage/sharpness choices for ablation record (prefer calibrated)
+
 coverage80_for_abl = (
     cov80_cal_phys if (cov80_cal_phys is not None)
     else cov80_cal if (cov80_cal is not None)
