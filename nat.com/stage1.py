@@ -74,7 +74,7 @@ from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
 # ==================================================================
 # Step 0: CONFIGURATION (centralized via load_nat_config)
 # ==================================================================
-
+# XXX NEW 
 cfg = load_nat_config()
 
 # --- Core identifiers & paths ---
