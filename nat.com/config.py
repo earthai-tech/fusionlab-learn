@@ -329,7 +329,7 @@ PDE_MODE_CONFIG = "both"
 PHYSICS_BASELINE_MODE = "none"
 
 # If True, use internal scale factors (c*, g*) so residual terms are comparable.
-SCALE_PDE_RESIDUALS = True
+SCALE_PDE_RESIDUALS = False
 
 
 # -------------------------------------------------------------------
@@ -405,7 +405,7 @@ PHYSICS_BOUNDS = {
 # Bounds penalty mode:
 # - "soft" : penalize violations (recommended)
 # - "hard" : clamp or reject (only if you know what you are doing)
-PHYSICS_BOUNDS_MODE = "soft"
+PHYSICS_BOUNDS_MODE = "hard"
 
 # Time coordinate units used by physics conversions (rate_to_per_second etc.)
 # Must match what `TIME_COL` represents in your dataset.

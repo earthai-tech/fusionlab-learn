@@ -34,8 +34,8 @@ from fusionlab.utils.subsidence_utils import make_txy_coords
 # ---------------------------------------------------------------------
 # Debug toggles
 # ---------------------------------------------------------------------
-WORK_WITH_NORMALIZED_DATA = True        # if True, use *_z cols + affines
-WORK_WITH_NORMALIZED_COORDS = True    # if True, normalize coords to ~[0,1]
+WORK_WITH_NORMALIZED_DATA = False        # if True, use *_z cols + affines
+WORK_WITH_NORMALIZED_COORDS = False    # if True, normalize coords to ~[0,1]
 
 # If you do not provide z_surf as an explicit input, the model can use a
 # proxy head conversion (e.g. h = -depth) driven by h_ref_si.

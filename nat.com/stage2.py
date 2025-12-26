@@ -584,6 +584,9 @@ if cs_path and os.path.exists(cs_path):
 # -------------------------------------------------------------------------
 sk = (cfg.get("scaling_kwargs") or {})
 
+CONSOLIDATION_RESIDUAL_UNITS = sk.get(
+    "cons_residual_units",  "second") 
+  # {"step", "time_unit", "second"})
 # -------------------------------------------------------------------------
 # GWL semantics (depth vs head) from config / manifest
 # -------------------------------------------------------------------------
@@ -908,6 +911,7 @@ subsmodel_params = {
         # also be passed here later
         "bounds": bounds_for_scaling,
         "time_units": TIME_UNITS,   
+        "cons_residual_units": CONSOLIDATION_RESIDUAL_UNITS, 
     },
     "bounds_mode": PHYSICS_BOUNDS_MODE,
     # GeoPrior scalar params
@@ -1033,7 +1037,7 @@ subs_model_inst = model_cls(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     quantiles=QUANTILES,
     pde_mode=PDE_MODE_CONFIG,
-    verbose = 7, # XXX TOREMOVE :  FOR DEBUG ONLY
+    verbose = 0, # XXX TOREMOVE :  FOR DEBUG ONLY
     **subsmodel_params,
 )
 

@@ -64,6 +64,7 @@ _STANDARD_ALONE_MAP = {
     'logical_and': ('tensorflow', 'logical_and'),
     'logical_not': ('tensorflow', 'logical_not'),
     'logical_or': ('tensorflow', 'logical_or'),
+    'math': ('tensorflow', 'math'), 
     'maximum': ('tensorflow.math', 'maximum'),
     'minimum': ('tensorflow.math', 'minimum'),
     'multiply': ('tensorflow', 'multiply'),

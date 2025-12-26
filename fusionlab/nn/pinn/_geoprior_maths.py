@@ -68,6 +68,8 @@ tf_is_inf = KERAS_DEPS.is_inf
 tf_logical_or = KERAS_DEPS.logical_or 
 tf_where = KERAS_DEPS.where 
 tf_cumsum = KERAS_DEPS.cumsum 
+tf_math = KERAS_DEPS.math 
+
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
@@ -88,7 +90,7 @@ _param_docs = DocstringComponents.from_nested_components(
 )
 
 
-SMALL = 1e-12
+_SMALL = 1e-12
 
 
 def vprint(verbose: int, *args) -> None:
@@ -511,11 +513,11 @@ def integrate_consolidation_mean(
     def step(prev: Tensor, elems: Tuple[Tensor, Tensor, Tensor]) -> Tensor:
         dt_i, tau_i, seq_i = elems  # each (B,1)
         if method == "exact":
-            a = tf_exp(-dt_i / (tau_i + tf_constant(SMALL, tau_i.dtype)))
+            a = tf_exp(-dt_i / (tau_i + tf_constant(_SMALL, tau_i.dtype)))
             nxt = prev * a + seq_i * (1.0 - a)
         else:
             nxt = prev + dt_i * (seq_i - prev) / (
-                tau_i + tf_constant(SMALL, tau_i.dtype)
+                tau_i + tf_constant(_SMALL, tau_i.dtype)
             )
         return nxt
 
@@ -594,10 +596,10 @@ def compute_consolidation_step_residual(
 
     method = str(method).strip().lower()
     if method == "exact":
-        a = tf_exp(-dt_sec / (tau + tf_constant(SMALL, tau.dtype)))
+        a = tf_exp(-dt_sec / (tau + tf_constant(_SMALL, tau.dtype)))
         pred = s_n * a + s_eq_n * (1.0 - a)
     elif method == "euler":
-        pred = s_n + dt_sec * (s_eq_n - s_n) / (tau + tf_constant(SMALL, tau.dtype))
+        pred = s_n + dt_sec * (s_eq_n - s_n) / (tau + tf_constant(_SMALL, tau.dtype))
     else:
         raise ValueError(
             "compute_consolidation_step_residual: method must be 'exact' or 'euler'."
@@ -849,6 +851,11 @@ def bounded_exp(
         return out, logv
     return out
 
+def finite_floor(x: Tensor, eps: float) -> Tensor:
+    x = tf_cast(x, tf_float32)
+    eps_t = tf_constant(float(eps), tf_float32)
+    x = tf_where(tf_math.is_finite(x), x, eps_t)
+    return tf_maximum(x, eps_t)
 
 def compose_physics_fields(
     model,
@@ -1137,10 +1144,10 @@ def rate_to_per_second(
 ) -> Tensor:
     """d/d(time_units) -> d/ds."""
     sec = seconds_per_time_unit(time_units, dtype=dz_dt.dtype)
-    return dz_dt / (sec + tf_constant(SMALL, dz_dt.dtype))
+    return dz_dt / (sec + tf_constant(_SMALL, dz_dt.dtype))
 
 
-def positive(x: Tensor, *, eps: float = SMALL) -> Tensor:
+def positive(x: Tensor, *, eps: float = _SMALL) -> Tensor:
     """Softplus positivity."""
     return tf_softplus(x) + tf_constant(eps, x.dtype)
 
@@ -1259,16 +1266,25 @@ def default_scales(
     vprint(verbose, "scales:", out)
     return out
 
+@optional_tf_function
+def scale_residual(residual: Tensor, scale: Tensor, *, floor: float = _SMALL) -> Tensor:
+    s = tf_cast(scale, residual.dtype)
+    f = tf_constant(float(floor), residual.dtype)
+
+    # If scale is NaN/Inf -> replace with floor BEFORE max()
+    s = tf_where(tf_math.is_finite(s), s, f)
+
+    s = tf_maximum(s, f)
+    s = tf_stop_gradient(s)
+    return residual / (s + tf_constant(_SMALL, residual.dtype))
+
+# @optional_tf_function
+# def scale_residual(residual: Tensor, scale: Tensor, *, floor: float = _SMALL) -> Tensor:
+#     s = tf_maximum(tf_cast(scale, residual.dtype), tf_constant(float(floor), residual.dtype))
+#     s = tf_stop_gradient(s)
+#     return residual / (s + tf_constant(_SMALL, residual.dtype))
 
 @optional_tf_function
-def scale_residual(residual: Tensor, scale: Tensor) -> Tensor:
-    """Residual / scale with safety."""
-    return residual / (
-        tf_cast(scale, residual.dtype)
-        + tf_constant(SMALL, residual.dtype)
-    )
-
-
 def compute_scales(
     model,
     *,
@@ -1277,80 +1293,276 @@ def compute_scales(
     h_mean: Tensor,
     K_field: Tensor,
     Ss_field: Tensor,
-    ds_dt: Optional[Tensor] = None,
     tau_field: Optional[Tensor] = None,
     H_field: Optional[Tensor] = None,
     h_ref_si: Optional[Tensor] = None,
     Q: Optional[Tensor] = None,
+    # NEW: pass the SAME dt/time_units used to build cons_res
+    dt: Optional[Tensor] = None,
+    time_units: Optional[str] = None,
+    # NEW: pass real GW terms if available
+    dh_dt: Optional[Tensor] = None,
+    div_K_grad_h: Optional[Tensor] = None,
     verbose: int = 0,
 ) -> Dict[str, Tensor]:
-    """Wrapper: dt handling + tau-aware cons_scale."""
+    """
+    Robust residual scales for v3.2.
+
+    - - cons_scale matches cons_res units.
+    - gw_scale is based on magnitudes of storage/div/forcing terms (SI).
+    """
     from ._geoprior_utils import coord_ranges
-    
-    dt_tensor = None
-    if hasattr(t, "shape") and t.shape.rank is not None:
-        if (t.shape.rank >= 2) and (t.shape[1] is not None):
-            if t.shape[1] > 1:
-                dt_tensor = t[:, 1:, :] - t[:, :-1, :]
 
-    if dt_tensor is None:
-        if (s_mean.shape.rank is not None) and (
-            s_mean.shape[1] is not None
-        ) and (s_mean.shape[1] > 1):
-            dt_tensor = tf_zeros_like(s_mean[:, 1:, :]) + 1.0
+    sk = model.scaling_kwargs or {}
+    mode = resolve_cons_units(sk)
+
+    # -----------------------------
+    # 0) Normalize shapes
+    # -----------------------------
+    s = tf_cast(s_mean, tf_float32)
+    h = tf_cast(h_mean, tf_float32)
+
+    if s.shape.rank == 2:
+        s = s[:, :, None]
+    if h.shape.rank == 2:
+        h = h[:, :, None]
+
+    # -----------------------------
+    # 1) Choose time_units CONSISTENTLY
+    # -----------------------------
+    if time_units is None:
+        time_units = (
+            (model.scaling_kwargs or {}).get("time_units", None)
+            or (model.scaling_kwargs or {}).get("time_unit", None)
+            or getattr(model, "time_units", None)
+            or "unitless"
+        )
+
+    # -----------------------------
+    # 2) Build dt (in same units as residual construction)
+    # -----------------------------
+    if dt is None:
+        # infer from t if not provided
+        tt = tf_cast(t, tf_float32)
+        if tt.shape.rank == 2:
+            tt = tt[:, :, None]
+
+        if (tt.shape.rank >= 2) and (tt.shape[1] is not None) and (tt.shape[1] > 1):
+            dt_step = tt[:, 1:, :] - tt[:, :-1, :]
         else:
-            dt_tensor = tf_zeros_like(s_mean[..., :1]) + 1.0
+            dt_step = tf_zeros_like(s[:, :1, :]) + 1.0
 
-    coords_norm = bool(model.scaling_kwargs.get(
-        "coords_normalized",
-        False,
-    ))
-    tR, _, _ = coord_ranges(model.scaling_kwargs)
-    if coords_norm and tR:
-        dt_tensor = dt_tensor * tf_cast(tR, dt_tensor.dtype)
+        # de-normalize if coords_normalized=True
+        coords_norm = bool((model.scaling_kwargs or {}).get("coords_normalized", False))
+        tR, _, _ = coord_ranges(model.scaling_kwargs or {})
+        if coords_norm and tR:
+            dt_step = dt_step * tf_cast(float(tR), dt_step.dtype)
+    else:
+        dt_step = tf_cast(dt, tf_float32)
+        if dt_step.shape.rank == 2:
+            dt_step = dt_step[:, :, None]
 
-    time_units = (
-        model.scaling_kwargs.get("time_units", None)
-        or model.scaling_kwargs.get("time_unit", None)
-        or model.time_units
+    # dt_step should be (B,H,1) OR (B,H-1,1). We'll need a per-step dt_sec.
+    dt_sec = dt_to_seconds(dt_step, time_units=time_units)
+    dt_sec = tf_maximum(dt_sec, tf_constant(_SMALL, tf_float32))
+
+    # A single reference dt for scaling (mean over batch & time)
+    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(tf_reshape(dt_sec, [-1]))))
+    # dt_ref = tf_maximum(dt_ref, seconds_per_time_unit(time_units, dtype=tf_float32))
+    dt_ref = tf_maximum(dt_ref, _SMALL) 
+
+    # -----------------------------
+    # 3) Consolidation scale (rate) = max(|ds/dt|, |(s_eq - s)/tau|)
+    # -----------------------------
+    # Estimate ds/dt from s_mean
+    # Use differences along time: ds has shape (B,H-1,1)
+    eps = tf_constant(_SMALL, tf_float32)
+    
+    # dt in native time_units (scalar ref)
+    dt_ref_u = tf_stop_gradient(
+        tf_reduce_mean(
+            tf_abs(tf_reshape(dt_step, [-1]))
+        )
     )
-
-    scales = default_scales(
-        s=s_mean,
-        h=h_mean,
-        dt=dt_tensor,
-        K=K_field,
-        Ss=Ss_field,
-        Q=Q,
-        time_units=time_units,
-        verbose=0,
+    dt_ref_u = tf_maximum(dt_ref_u, eps)
+    
+    # dt in seconds (scalar ref)
+    dt_ref = tf_stop_gradient(
+        tf_reduce_mean(
+            tf_abs(tf_reshape(dt_sec, [-1]))
+        )
     )
-
-    if (
-        ds_dt is not None
-        and tau_field is not None
-        and H_field is not None
-    ):
-        eps = tf_constant(1e-12, tf_float32)
-
+    dt_ref = tf_maximum(
+        dt_ref,
+        seconds_per_time_unit(
+            time_units,
+            dtype=tf_float32,
+        ),
+    )
+    
+    # ds magnitude (meters)
+    if tf_shape(s)[1] > 1:
+        ds = s[:, 1:, :] - s[:, :-1, :]
+        ds_abs = tf_abs(tf_reshape(ds, [-1]))
+        ds_ref = tf_stop_gradient(tf_reduce_mean(ds_abs))
+        ds_max = tf_stop_gradient(tf_reduce_max(ds_abs))
+    else:
+        ds_ref = tf_constant(0.0, tf_float32)
+        ds_max = tf_constant(0.0, tf_float32)
+    
+    if mode == "step":
+        cons_scale = tf_maximum(ds_ref, 0.1 * ds_max)
+    
+    elif mode == "time_unit":
+        cons_scale = tf_maximum(
+            ds_ref / dt_ref_u,
+            0.1 * (ds_max / dt_ref_u),
+        )
+    
+    else:
+        cons_scale = tf_maximum(
+            ds_ref / dt_ref,
+            0.1 * (ds_max / dt_ref),
+        )
+    
+    # Add equilibrium / relaxation magnitude if tau/H available
+    if (tau_field is not None) and (H_field is not None):
+        tau = tf_maximum(tf_cast(tau_field, tf_float32), eps)
+    
         href = h_ref_si
         if href is None:
-            href = tf_cast(model.h_ref, h_mean.dtype)
-
-        delta_h = tf_maximum(href - h_mean, 0.0)
-        s_eq = Ss_field * delta_h * H_field
-        relax = (s_eq - s_mean) / (tau_field + eps)
-
-        term1 = tf_stop_gradient(
-            tf_reduce_mean(tf_abs(ds_dt)) + eps
+            href = tf_cast(getattr(model, "h_ref", 0.0), tf_float32)
+        href = tf_broadcast_to(
+            tf_convert_to_tensor(href, tf_float32),
+            tf_shape(h),
         )
-        term2 = tf_stop_gradient(
-            tf_reduce_mean(tf_abs(relax)) + eps
+    
+        delta_h = tf_maximum(href - h, 0.0)
+        s_eq = (
+            tf_cast(Ss_field, tf_float32)
+            * delta_h
+            * tf_cast(H_field, tf_float32)
         )
-        scales["cons_scale"] = term1 + term2
+    
+        eq_mis = tf_abs(s_eq - s)
+        eq_ref = tf_stop_gradient(
+            tf_reduce_mean(tf_reshape(eq_mis, [-1])) + eps
+        )
+        eq_max = tf_stop_gradient(
+            tf_reduce_max(tf_reshape(eq_mis, [-1])) + eps
+        )
+    
+        if mode == "step":
+            cons_scale = tf_maximum(cons_scale, eq_ref)
+            cons_scale = tf_maximum(cons_scale, 0.1 * eq_max)
+    
+        else:
+            relax = tf_abs(eq_mis / (tau + eps))
+    
+            if mode == "time_unit":
+                sec_u = seconds_per_time_unit(
+                    time_units,
+                    dtype=tf_float32,
+                )
+                relax = relax * sec_u
+    
+            r_ref = tf_stop_gradient(
+                tf_reduce_mean(tf_reshape(relax, [-1])) + eps
+            )
+            r_max = tf_stop_gradient(
+                tf_reduce_max(tf_reshape(relax, [-1])) + eps
+            )
+    
+            cons_scale = tf_maximum(cons_scale, r_ref)
+            cons_scale = tf_maximum(cons_scale, 0.1 * r_max)
+    
+    # Unit-aware floor
+    floor_def = _SMALL
+    if mode in ("step", "time_unit"):
+        floor_def = 1e-6
+    
+    floor_val = float(sk.get("cons_scale_floor", floor_def))
+    cons_scale = tf_maximum(
+        cons_scale,
+        tf_constant(floor_val, tf_float32),
+    )
+    
+    cons_scale = tf_stop_gradient(cons_scale)
 
-    vprint(verbose, "compute_scales:", scales)
-    return scales
+
+    # -----------------------------
+    # 4) GW scale = max(|Ss dh/dt|, |div|, |Q|)
+    # -----------------------------
+    # dh/dt reference:
+    if dh_dt is None:
+        if tf_shape(h)[1] > 1:
+            dh = h[:, 1:, :] - h[:, :-1, :]
+            dh_abs = tf_abs(tf_reshape(dh, [-1]))
+            dh_dt_ref = tf_stop_gradient(tf_reduce_mean(dh_abs) / dt_ref)
+            dh_dt_max = tf_stop_gradient(tf_reduce_max(dh_abs) / dt_ref)
+        else:
+            dh_dt_ref = tf_constant(0.0, tf_float32)
+            dh_dt_max = tf_constant(0.0, tf_float32)
+    else:
+        dh_dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(tf_reshape(tf_cast(dh_dt, tf_float32), [-1]))))
+        dh_dt_max = tf_stop_gradient(tf_reduce_max(tf_abs(tf_reshape(tf_cast(dh_dt, tf_float32), [-1]))))
+
+    Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(tf_reshape(tf_cast(Ss_field, tf_float32), [-1]))))
+    storage_ref = Ss_ref * dh_dt_ref
+    storage_max = Ss_ref * dh_dt_max
+
+    gw_scale = tf_maximum(storage_ref, tf_constant(0.1, tf_float32) * storage_max)
+
+    if div_K_grad_h is not None:
+        div_abs = tf_abs(tf_reshape(tf_cast(div_K_grad_h, tf_float32), [-1]))
+        div_ref = tf_stop_gradient(tf_reduce_mean(div_abs) + tf_constant(1e-12, tf_float32))
+        div_max = tf_stop_gradient(tf_reduce_max(div_abs) + tf_constant(1e-12, tf_float32))
+        gw_scale = tf_maximum(gw_scale, div_ref)
+        gw_scale = tf_maximum(gw_scale, tf_constant(0.1, tf_float32) * div_max)
+
+    if Q is not None:
+        Q_abs = tf_abs(tf_reshape(tf_cast(Q, tf_float32), [-1]))
+        Q_ref = tf_stop_gradient(tf_reduce_mean(Q_abs) + tf_constant(1e-12, tf_float32))
+        Q_max = tf_stop_gradient(tf_reduce_max(Q_abs) + tf_constant(1e-12, tf_float32))
+        gw_scale = tf_maximum(gw_scale, Q_ref)
+        gw_scale = tf_maximum(gw_scale, tf_constant(0.1, tf_float32) * Q_max)
+
+    gw_floor = tf_constant(float((model.scaling_kwargs or {}).get(
+        "gw_scale_floor", 1e-12)), tf_float32)
+    gw_scale = tf_maximum(gw_scale, gw_floor)
+    gw_scale = tf_stop_gradient(gw_scale)
+
+    out = {"cons_scale": cons_scale, "gw_scale": gw_scale}
+
+    vprint(verbose, "compute_scales(v3.2): time_units=", time_units)
+    vprint(verbose, "compute_scales(v3.2): cons_scale=", cons_scale, "gw_scale=", gw_scale)
+    return out
+
+
+def resolve_cons_units(
+    sk: Optional[Dict[str, Any]],
+) -> str:
+    """Normalize consolidation residual units."""
+    if not sk:
+        return "second"
+
+    v = sk.get("cons_residual_units", None)
+    if v is None:
+        v = sk.get("cons_residual_unit", None)
+
+    mode = str(v or "second").strip().lower()
+
+    if mode in ("s", "sec", "secs", "seconds"):
+        mode = "second"
+    elif mode in ("tu", "time", "timeunit", "time_units"):
+        mode = "time_unit"
+    elif mode in ("step", "index", "unitless"):
+        mode = "step"
+
+    if mode not in ("step", "time_unit", "second"):
+        mode = "second"
+
+    return mode
 
 # ---------------------------------------------------------------------
 # Settlement-kind adaptation

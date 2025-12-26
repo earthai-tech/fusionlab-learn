@@ -35,6 +35,7 @@ tf_concat = KERAS_DEPS.concat
 tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
 tf_ones_like = KERAS_DEPS.ones_like 
 tf_less_equal =KERAS_DEPS.less_equal 
+tf_abs = KERAS_DEPS.abs 
 
 
 def affine_from_cfg(
@@ -614,54 +615,15 @@ def infer_dt_units_from_t(
 
     # if H <= 1: ones; else: diffs
     dt = tf_cond(tf_less_equal(H, 1), lambda: dt_default, _multi_step)
+    dt = tf_abs(dt)
+    dt_pos = tf_greater(dt, tf_constant(0.0, tf_float32))
+    dt_pos_f = tf_cast(dt_pos, tf_float32)
+    dt = dt * dt_pos_f + dt_default * (1.0 - dt_pos_f)
+    
+    dt_eps = float(scaling_kwargs.get("dt_min_units", 1e-6))
+    dt = tf_maximum(dt, tf_constant(dt_eps, tf_float32))
+
+
     return dt
 
-def _infer_dt_units_from_t(
-    t_BH1: Tensor,
-    scaling_kwargs: Optional[Dict[str, Any]],
-    *,
-    eps: float = 1e-12,
-) -> Tensor:
-    """
-    Infer per-step dt in *time_units* from time tensor t(B,H,1).
-
-    Shapes
-    ------
-    t_BH1 : (B,H,1)
-    returns: (B,H,1)
-
-    Notes
-    -----
-    - dt uses diffs along H; first step uses the first diff.
-    - If coords are normalized, dt is multiplied by the de-normalization
-      time range tR (from coord_ranges()).
-    - Output is clipped to >= eps.
-    """
-    cfg = scaling_kwargs or {}
-    t = tf_cast(t_BH1, tf_float32)
-
-    B = tf_shape(t)[0]
-    H = tf_shape(t)[1]
-    eps_t = tf_constant(eps, tf_float32)
-
-    # Default dt = 1 time-unit
-    dt = tf_ones([B, 1, 1], dtype=tf_float32)
-
-    def _dt_from_diffs() -> Tensor:
-        diffs = t[:, 1:, :] - t[:, :-1, :]          # (B,H-1,1)
-        dt_first = diffs[:, :1, :]                  # (B,1,1)
-        return tf_concat([dt_first, diffs], axis=1) # (B,H,1)
-
-    dt = tf_cond(tf_greater(H, 1), _dt_from_diffs, lambda: dt)
-
-    # If coords were normalized, dt is still normalized -> scale back
-    if bool(cfg.get("coords_normalized", False)):
-        tR, _, _ = coord_ranges(cfg)
-        if tR is None:
-            raise ValueError(
-                "coords_normalized=True but coord_range_t missing."
-            )
-        dt = dt * tf_constant(float(tR), tf_float32)
-
-    return tf_maximum(dt, eps_t)
 
