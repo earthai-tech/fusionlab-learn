@@ -29,7 +29,7 @@ import json
 import os
 import joblib
 import datetime as dt
-from typing import Any, Dict, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Tuple, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -526,6 +526,156 @@ def ensure_input_shapes(
     return out
 
 
+def _np_nonfinite_report(
+    arr: np.ndarray,
+    max_items: int = 5,
+) -> Optional[dict[str, Any]]:
+    """Return a small report if arr has NaN/Inf."""
+    bad = ~np.isfinite(arr)
+    n_bad = int(bad.sum())
+    if n_bad == 0:
+        return None
+
+    idx = np.argwhere(bad)
+    head = idx[:max_items]
+
+    samples: list[tuple[tuple[int, ...], Any]] = []
+    for ii in head:
+        t = tuple(ii.tolist())
+        samples.append((t, arr[t]))
+
+    finite = np.isfinite(arr)
+    if np.any(finite):
+        min_f = float(np.nanmin(arr[finite]))
+        max_f = float(np.nanmax(arr[finite]))
+    else:
+        min_f = None
+        max_f = None
+
+    return {
+        "shape": tuple(arr.shape),
+        "dtype": str(arr.dtype),
+        "n_nonfinite": n_bad,
+        "first_bad": samples,
+        "min_finite": min_f,
+        "max_finite": max_f,
+    }
+
+
+def check_npz_dict_finite(
+    d: dict,
+    name: str,
+    feature_names_last_dim: Optional[list[str]] = None,
+    max_bad_channels: int = 30,
+    max_print: int = 20,
+) -> None:
+    """
+    Validate that all numeric arrays in a dict
+    contain only finite values.
+
+    If `feature_names_last_dim` is provided and
+    matches v.shape[-1], a per-channel report
+    is added (helpful for dyn/fut features).
+    """
+    problems: list[tuple[str, dict[str, Any]]] = []
+
+    for k, v in d.items():
+        if not isinstance(v, np.ndarray):
+            continue
+        if not np.issubdtype(v.dtype, np.number):
+            continue
+
+        rep = _np_nonfinite_report(v)
+        if rep is None:
+            continue
+
+        if (
+            feature_names_last_dim
+            and v.ndim >= 2
+            and v.shape[-1] == len(feature_names_last_dim)
+        ):
+            bad = ~np.isfinite(v)
+            per_ch = bad.reshape(-1, v.shape[-1]).sum(axis=0)
+            bad_idx = np.where(per_ch > 0)[0].tolist()
+
+            rep["bad_channels"] = [
+                {
+                    "index": int(i),
+                    "name": feature_names_last_dim[i],
+                    "n_nonfinite": int(per_ch[i]),
+                }
+                for i in bad_idx[:max_bad_channels]
+            ]
+
+        problems.append((str(k), rep))
+
+    if not problems:
+        print(f"[OK] {name}: all numeric arrays finite.")
+        return
+
+    print(f"\n[NaN/Inf] Non-finite values in {name}:")
+    for k, rep in problems[:max_print]:
+        sh = rep.get("shape")
+        dt = rep.get("dtype")
+        nb = rep.get("n_nonfinite")
+        print(f"  - key={k!r} shape={sh} dtype={dt}")
+        print(f"    nonfinite={nb}")
+
+        if "bad_channels" in rep:
+            print("    bad channels:")
+            for ch in rep["bad_channels"]:
+                i = ch["index"]
+                nm = ch["name"]
+                nn = ch["n_nonfinite"]
+                print(f"      * {i:>3} {nm:<32} n={nn}")
+
+        fb = rep.get("first_bad", [])
+        print(f"    first bad: {fb[:5]}")
+
+    raise RuntimeError(
+        f"Stopping: {name} contains NaN/Inf. "
+        "Fix Stage-1 export or cleaning."
+    )
+
+
+def scan_tf_dataset_finite(
+    ds: Any,
+    name: str,
+    max_batches: int = 200,
+) -> None:
+    """
+    Eager scan of first N batches.
+
+    Useful to fail *before* model.fit().
+    """
+    try:
+        import tensorflow as tf  # type: ignore
+    except Exception as exc:  # pragma: no cover
+        raise ImportError(TF_IMPORT_ERROR_MSG) from exc
+
+    for b, (xb, yb) in enumerate(ds):
+        if max_batches is not None and b >= max_batches:
+            break
+
+        for k, v in xb.items():
+            if v.dtype.is_floating or v.dtype.is_complex:
+                tf.debugging.assert_all_finite(
+                    v,
+                    f"{name}: X[{k}] NaN/Inf "
+                    f"at batch {b}",
+                )
+
+        for k, v in yb.items():
+            if v.dtype.is_floating or v.dtype.is_complex:
+                tf.debugging.assert_all_finite(
+                    v,
+                    f"{name}: y[{k}] NaN/Inf "
+                    f"at batch {b}",
+                )
+
+    print(f"[OK] {name}: first {max_batches} batches ok.")
+
+
 def make_tf_dataset(
     X_np: dict,
     y_np: dict,
@@ -533,23 +683,26 @@ def make_tf_dataset(
     shuffle: bool,
     mode: str,
     forecast_horizon: int,
-) -> "tf.data.Dataset":
+    *,
+    seed: int = 42,
+    drop_remainder: bool = False,
+    reshuffle_each_iter: bool = True,
+    prefetch: bool = True,
+    check_npz_finite: bool = False,
+    check_finite: bool = False,
+    scan_finite_batches: int = 0,
+    dynamic_feature_names: Optional[list[str]] = None,
+    future_feature_names: Optional[list[str]] = None,
+) -> "Any":
     """
-    Build a ``tf.data.Dataset`` using NATCOM conventions.
+    Build a `tf.data.Dataset` using NATCOM
+    conventions.
 
-    This is the canonical way to turn the Stage-1 NPZ exports into
-    a dataset suitable for Keras training/evaluation.
-
-    It performs three steps:
-
-    1. Normalise the input dictionary so all three inputs
-       (``static_features``, ``dynamic_features``,
-       ``future_features``) are present via
-       :func:`ensure_input_shapes`.
-    2. Map the target dictionary to the canonical keys
-       (``subs_pred``, ``gwl_pred``) via
-       :func:`map_targets_for_training`.
-    3. Construct a batched, prefetched ``tf.data.Dataset``.
+    Steps:
+    1) ensure_input_shapes(...) for X.
+    2) map_targets_for_training(...) for y.
+    3) tf.data pipeline (shuffle/batch/prefetch).
+    4) optional finite checks (NPZ + tf batches).
 
     Parameters
     ----------
@@ -568,37 +721,132 @@ def make_tf_dataset(
         Model mode passed to :func:`ensure_input_shapes`.
     forecast_horizon : int
         Forecast horizon passed to :func:`ensure_input_shapes`.
+        
+    check_npz_finite : bool
+        If True, checks Xin/Yin numpy arrays
+        for NaN/Inf before building ds.
+    check_finite : bool
+        If True, inserts `assert_all_finite`
+        checks inside the tf.data pipeline.
+    scan_finite_batches : int
+        If >0, eagerly scans first N batches
+        right away (fails early).
+    dynamic_feature_names, future_feature_names
+        If provided, used to report bad
+        channels for feature tensors.
 
     Returns
     -------
     tf.data.Dataset
-        A batched, optionally shuffled dataset of (X, y) pairs.
+        Dataset of (X, y) pairs.
 
     Notes
     -----
     TensorFlow is imported lazily inside the function so that
     this module remains importable in environments where TF is
     not installed (for example, for tooling or static analysis).
+        
+        
     """
     try:
         import tensorflow as tf  # type: ignore
     except Exception as exc:  # pragma: no cover
-        # You can catch this in your training script if you want.
         raise ImportError(TF_IMPORT_ERROR_MSG) from exc
 
-    Xin = ensure_input_shapes(X_np, mode, forecast_horizon)
+    # Normalize inputs/targets to canonical keys.
+    Xin = ensure_input_shapes(
+        X_np,
+        mode=mode,
+        forecast_horizon=forecast_horizon,
+    )
     Yin = map_targets_for_training(y_np)
 
-    ds = tf.data.Dataset.from_tensor_slices((Xin, Yin))
-    if shuffle:
-        # Use dataset size as buffer and a fixed seed for stable
-        # experiments / unit tests.
-        ds = ds.shuffle(
-            buffer_size=Xin["dynamic_features"].shape[0],
-            seed=42,
-        )
-    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    # Optional: stop early if NPZ content is bad.
+    if check_npz_finite:
+        check_npz_dict_finite(Xin, "X_np (Xin)")
+        check_npz_dict_finite(Yin, "y_np (Yin)")
 
+        if (
+            dynamic_feature_names
+            and "dynamic_features" in Xin
+        ):
+            check_npz_dict_finite(
+                {"dynamic_features": Xin["dynamic_features"]},
+                "Xin.dynamic_features",
+                feature_names_last_dim=dynamic_feature_names,
+            )
+
+        if (
+            future_feature_names
+            and "future_features" in Xin
+        ):
+            check_npz_dict_finite(
+                {"future_features": Xin["future_features"]},
+                "Xin.future_features",
+                feature_names_last_dim=future_feature_names,
+            )
+
+    # Build dataset.
+    ds = tf.data.Dataset.from_tensor_slices((Xin, Yin))
+
+    # Shuffle with a stable seed.
+    if shuffle:
+        # Prefer dynamic_features for size.
+        if "dynamic_features" in Xin:
+            n = int(Xin["dynamic_features"].shape[0])
+        else:
+            # Fallback: first array in Xin.
+            first = next(iter(Xin.values()))
+            n = int(first.shape[0])
+
+        ds = ds.shuffle(
+            buffer_size=max(1, n),
+            seed=seed,
+            reshuffle_each_iteration=reshuffle_each_iter,
+        )
+
+    ds = ds.batch(
+        batch_size,
+        drop_remainder=drop_remainder,
+    )
+
+    # Optional: add assert_all_finite into pipeline.
+    if check_finite:
+
+        def _assert_batch(xb, yb):
+            # Assert only float/complex tensors.
+            for k, v in xb.items():
+                if v.dtype.is_floating or v.dtype.is_complex:
+                    tf.debugging.assert_all_finite(
+                        v,
+                        f"X[{k}] has NaN/Inf",
+                    )
+            for k, v in yb.items():
+                if v.dtype.is_floating or v.dtype.is_complex:
+                    tf.debugging.assert_all_finite(
+                        v,
+                        f"y[{k}] has NaN/Inf",
+                    )
+            return xb, yb
+
+        ds = ds.map(
+            _assert_batch,
+            num_parallel_calls=tf.data.AUTOTUNE,
+        )
+
+    if prefetch:
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+    # Optional: force an eager scan now.
+    # This is what stops *before* model.fit().
+    if scan_finite_batches and scan_finite_batches > 0:
+        scan_tf_dataset_finite(
+            ds,
+            name="make_tf_dataset",
+            max_batches=int(scan_finite_batches),
+        )
+
+    return ds
 
 def load_scaler_info(encoders_block: dict) -> dict | None:
     """

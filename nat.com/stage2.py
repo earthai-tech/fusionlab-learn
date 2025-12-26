@@ -584,9 +584,6 @@ if cs_path and os.path.exists(cs_path):
 # -------------------------------------------------------------------------
 sk = (cfg.get("scaling_kwargs") or {})
 
-CONSOLIDATION_RESIDUAL_UNITS = sk.get(
-    "cons_residual_units",  "second") 
-  # {"step", "time_unit", "second"})
 # -------------------------------------------------------------------------
 # GWL semantics (depth vs head) from config / manifest
 # -------------------------------------------------------------------------
@@ -811,6 +808,7 @@ y_val   = dict(np.load(val_targets_npz))
 X_test  = dict(np.load(test_inputs_npz)) if test_inputs_npz else None
 y_test  = dict(np.load(test_targets_npz)) if test_targets_npz else None
 
+
 # Dims
 OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
 OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
@@ -841,19 +839,46 @@ if "future_features" in X_train and FUT_NAMES:
 # Build datasets
 # =============================================================================
 
+# train_dataset = make_tf_dataset(
+#     X_train, y_train,
+#     batch_size=BATCH_SIZE,
+#     shuffle=True,
+#     mode=MODE,
+#     forecast_horizon=FORECAST_HORIZON_YEARS,
+# )
+# val_dataset = make_tf_dataset(
+#     X_val, y_val,
+#     batch_size=BATCH_SIZE,
+#     shuffle=False,
+#     mode=MODE,
+#     forecast_horizon=FORECAST_HORIZON_YEARS,
+# )
 train_dataset = make_tf_dataset(
-    X_train, y_train,
+    X_train,
+    y_train,
     batch_size=BATCH_SIZE,
     shuffle=True,
     mode=MODE,
     forecast_horizon=FORECAST_HORIZON_YEARS,
+    check_npz_finite=True,
+    check_finite=True,
+    scan_finite_batches=None, # 500
+    dynamic_feature_names=list(DYN_NAMES),
+    future_feature_names=list(FUT_NAMES),
 )
+
 val_dataset = make_tf_dataset(
-    X_val, y_val,
+    X_val,
+    y_val,
     batch_size=BATCH_SIZE,
     shuffle=False,
     mode=MODE,
     forecast_horizon=FORECAST_HORIZON_YEARS,
+    check_npz_finite=True,
+    check_finite=True,
+    scan_finite_batches=None, #200
+    dynamic_feature_names=list(DYN_NAMES),
+    future_feature_names=list(FUT_NAMES),
 )
 
 
@@ -911,7 +936,6 @@ subsmodel_params = {
         # also be passed here later
         "bounds": bounds_for_scaling,
         "time_units": TIME_UNITS,   
-        "cons_residual_units": CONSOLIDATION_RESIDUAL_UNITS, 
     },
     "bounds_mode": PHYSICS_BOUNDS_MODE,
     # GeoPrior scalar params
@@ -1037,7 +1061,7 @@ subs_model_inst = model_cls(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     quantiles=QUANTILES,
     pde_mode=PDE_MODE_CONFIG,
-    verbose = 0, # XXX TOREMOVE :  FOR DEBUG ONLY
+    verbose = 0, # XXX TOREMOVE :  gFOR DEBUG ONLY
     **subsmodel_params,
 )
 

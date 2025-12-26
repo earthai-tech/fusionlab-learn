@@ -435,6 +435,17 @@ class GeoPriorSubsNet(BaseAttentive):
             kernel_initializer="zeros",
             bias_initializer=Constant(0.0),
         )
+        # Coords stabiliser for decoder injection.
+        self.coords_norm = LayerNormalization(
+            epsilon=1e-6,
+            name="coords_norm",
+        )
+        self.coords_proj = Dense(
+            units=self.attention_units,
+            activation="swish",
+            name="coords_proj",
+        )
+
     
         self.H_field = None
         self.eps_prior_metric = Mean(name="epsilon_prior")
@@ -554,6 +565,13 @@ class GeoPriorSubsNet(BaseAttentive):
         training: bool,
     ) -> Tuple[Tensor, Tensor]:
         
+        def _assert_finite(x: Tensor, tag: str) -> Tensor:
+            tf_debugging.assert_all_finite(
+                x,
+                f"NaN/Inf at {tag}",
+            )
+            return x
+
         # ------------------------------------------------------------------
         # 0. Basic time dimension inference
         # ------------------------------------------------------------------
@@ -567,7 +585,10 @@ class GeoPriorSubsNet(BaseAttentive):
             dynamic_input,
             future_input,
         )
-    
+        
+        dynamic_input = tf_cast(dynamic_input, tf_float32)
+        dynamic_input = _assert_finite(dynamic_input, "dynamic_input")
+        
         if self.architecture_config.get("feature_processing") == "vsn":
             # Static VSN path
             if self.static_vsn is not None:
@@ -586,9 +607,17 @@ class GeoPriorSubsNet(BaseAttentive):
                     dynamic_input,
                     training=training,
                 )
+                dyn_context = _assert_finite(
+                    dyn_context,
+                    "dyn_context (dynamic_vsn)",
+                )
                 dyn_proc = self.dynamic_vsn_grn(
                     dyn_context,
                     training=training,
+                )
+                dyn_proc = _assert_finite(
+                    dyn_proc,
+                    "dyn_proc (dynamic_vsn_grn)",
                 )
     
             # Future VSN path
@@ -611,6 +640,10 @@ class GeoPriorSubsNet(BaseAttentive):
                 )
             if self.dynamic_dense is not None:
                 dyn_proc = self.dynamic_dense(dynamic_input)
+                dyn_proc = _assert_finite(
+                    dyn_proc,
+                    "dyn_proc (dynamic_dense)",
+                )
             if self.future_dense is not None:
                 fut_proc = self.future_dense(future_input)
     
@@ -619,7 +652,7 @@ class GeoPriorSubsNet(BaseAttentive):
             f"Dynamic={getattr(dyn_proc, 'shape', 'N/A')}, "
             f"Future={getattr(fut_proc, 'shape', 'N/A')}"
         )
-    
+
         # ------------------------------------------------------------------
         # 2. Encoder path (hybrid LSTM/Transformer)
         # ------------------------------------------------------------------
@@ -633,7 +666,19 @@ class GeoPriorSubsNet(BaseAttentive):
     
         encoder_raw = tf_concat(encoder_input_parts, axis=-1)
         encoder_input = self.encoder_positional_encoding(encoder_raw)
-    
+        
+        # dyn_proc = _assert_finite(dyn_proc, "dyn_proc")
+        fut_proc = _assert_finite(fut_proc, "fut_proc")
+        
+        encoder_raw = _assert_finite(
+            encoder_raw,
+            "encoder_raw",
+        )
+        encoder_input = _assert_finite(
+            encoder_input,
+            "encoder_input",
+        )
+        
         if self.architecture_config["encoder_type"] == "hybrid":
             # Multi-scale LSTM encoder followed by multiscale aggregation
             lstm_out = self.multi_scale_lstm(
@@ -651,11 +696,17 @@ class GeoPriorSubsNet(BaseAttentive):
                 attn_out = mha(
                     encoder_sequences,
                     encoder_sequences,
+                    training=training,
                 )
                 encoder_sequences = norm(
                     encoder_sequences + attn_out
                 )
-    
+                
+        encoder_sequences = _assert_finite(
+            encoder_sequences,
+            "encoder_sequences",
+        )
+        
         # Optional dynamic time windowing (DTW)
         if self.apply_dtw and self.dynamic_time_window is not None:
             encoder_sequences = self.dynamic_time_window(
@@ -703,7 +754,18 @@ class GeoPriorSubsNet(BaseAttentive):
                 "GeoPriorSubsNet.run_encoder_decoder_core requires "
                 "'coords_input' (B, H, 3) to be provided."
             )
-        decoder_parts.append(coords_input)
+        
+        # Old:
+        # decoder_parts.append(coords_input)
+        
+        # New:
+        coords_nn = tf_cast(coords_input, tf_float32)
+        coords_nn = self.coords_norm(coords_nn)
+        coords_nn = self.coords_proj(coords_nn)
+        decoder_parts.append(coords_nn)
+
+
+        # decoder_parts.append(coords_input)
     
         # If everything is missing (very degenerate case), fall back to
         # a zero tensor so shapes remain valid.
@@ -718,6 +780,13 @@ class GeoPriorSubsNet(BaseAttentive):
         projected_decoder_input = self.decoder_input_projection(
             raw_decoder_input
         )
+        
+        # After decoder projection
+        projected_decoder_input = _assert_finite(
+            projected_decoder_input,
+            "projected_decoder_input",
+        )
+
         logger.debug(
             "Projected decoder input shape: "
             f"{projected_decoder_input.shape}"
@@ -733,7 +802,12 @@ class GeoPriorSubsNet(BaseAttentive):
             encoder_sequences,
             training=training,
         )
-    
+        # After apply_attention_levels
+        final_features = _assert_finite(
+            final_features,
+            "final_features",
+        )
+        
         logger.debug(
             f"Shape after final fusion: {final_features.shape}"
         )
@@ -816,8 +890,8 @@ class GeoPriorSubsNet(BaseAttentive):
         subs_net = decoded_data_means_net[..., : self.output_subsidence_dim]   # (B,H,1) residual (optional)
         gwl_mean = decoded_data_means_net[..., self.output_subsidence_dim :]   # (B,H,1)
     
-        if self.verbose > 6:
-            tf_print_nonfinite("call/phys_features_raw_3d", phys_features_raw_3d)
+        # if self.verbose > 6:
+        tf_print_nonfinite("call/phys_features_raw_3d", phys_features_raw_3d)
         
         # fail-fast while debugging
         tf_debugging.assert_all_finite(
@@ -1499,8 +1573,21 @@ class GeoPriorSubsNet(BaseAttentive):
         # ----------------------------------------------------------
         # 10) Apply gradients
         # ----------------------------------------------------------
+        def _assert_grads_finite(
+            grads: list[Tensor | None],
+            vars_: list[Tensor],
+        ) -> None:
+            for g, v in zip(grads, vars_):
+                if g is None:
+                    continue
+                tf_debugging.assert_all_finite(
+                    g,
+                    f"NaN/Inf grad for {v.name}",
+                )
+        
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
+        _assert_grads_finite(grads, trainable_vars)
         del tape
     
         self.optimizer.apply_gradients(
