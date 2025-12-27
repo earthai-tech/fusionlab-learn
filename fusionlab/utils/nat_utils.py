@@ -675,7 +675,6 @@ def scan_tf_dataset_finite(
 
     print(f"[OK] {name}: first {max_batches} batches ok.")
 
-
 def make_tf_dataset(
     X_np: dict,
     y_np: dict,

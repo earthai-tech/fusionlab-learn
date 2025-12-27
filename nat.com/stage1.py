@@ -201,9 +201,25 @@ SCALE_GWL       = bool(cfg.get("SCALE_GWL", False))      # recommended False
 SUBS_UNIT_TO_SI = float(cfg.get("SUBS_UNIT_TO_SI", 1e-3))  # mm -> m
 SUBSIDENCE_KIND = str(cfg.get("SUBSIDENCE_KIND", "cumulative")).lower()
 
+CONSOLIDATION_RESIDUAL_UNITS = str(
+    cfg.get("CONSOLIDATION_RESIDUAL_UNITS", "second")
+    ).lower()
 # Optional but strongly recommended if GWL_COL is not in meters:
 GWL_RAW_COL = cfg.get("GWL_RAW_COL", None)  # e.g. "GWL_depth_bgs"
 
+CONS_SCALE_FLOOR = float(cfg.get("CONS_SCALE_FLOOR", 1e-10)) 
+GW_SCALE_FLOOR = float(cfg.get("GW_SCALE_FLOOR", 1e-10))  
+DT_MIN_UNITS = float(cfg.get("DT_MIN_UNITS", 1e-6))  
+
+Q_WRT_NORMALIZED_TIME = bool(cfg.get("Q_WRT_NORMALIZED_TIME", False))     
+Q_IN_SI = bool(cfg.get("Q_IN_SI", False))      
+Q_IN_PER_SECOND  = bool(cfg.get("Q_IN_PER_SECOND", False))      
+Q_KIND =str(cfg.get("Q_kind", "per_volume"))
+Q_LENGTH_IN_SI = bool (cfg.get('Q_length_in_si', False))  
+DRAINAGE_MODE = str(cfg.get("DRAINAGE_MODE", "double"))
+
+SCALING_ERROR_POLICY = str(cfg.get("SCALING_ERROR_POLICY", "warn"))
+DEBUG_PHYSICS_GRADS =str(cfg.get('DEBUG_PHYSICS_GRADS', False ))
 # Coordinate system for physics
 COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).lower()
 UTM_EPSG = int(cfg.get("UTM_EPSG", 32649))
@@ -1287,7 +1303,7 @@ def _dedup_keep_order(seq):
 
 print(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
 
-GROUP_ID_COLS = [LON_COL, LAT_COL] # here for 
+GROUP_ID_COLS = [LON_COL, LAT_COL] 
 # --- base features
 static_features = encoded_names[:]
 if bool(cfg.get("INCLUDE_Z_SURF_AS_STATIC", True)
@@ -1299,15 +1315,16 @@ if bool(cfg.get("INCLUDE_Z_SURF_AS_STATIC", True)
 # the last observed value without extra packing.
 INCLUDE_SUBS_HIST_DYNAMIC = bool(cfg.get("INCLUDE_SUBS_HIST_DYNAMIC", True))
 
-dynamic_base  = [GWL_DYN_COL] # [GWL_MODEL_COL]
+dynamic_base  = [GWL_DYN_COL] 
 if INCLUDE_SUBS_HIST_DYNAMIC and (SUBS_MODEL_COL in df_scaled.columns):
     dynamic_base.append(SUBS_MODEL_COL)
 
 forbidden_dyn = {GWL_SRC_COL, GWL_METERS_COL, GWL_COL, (GWL_ZSCORE_COL or "")}
 
 dynamic_extra = [c for c in opt_num_cols if c not in {
-    SUBSIDENCE_COL, H_FIELD_COL_NAME, *forbidden_dyn}
-   ]
+    SUBSIDENCE_COL, H_FIELD_COL_NAME, *forbidden_dyn
+    }
+]
 dynamic_features = [c for c in dynamic_base + dynamic_extra if c in df_scaled.columns]
 
 future_features = [c for c in FUTURE_DRIVER_FEATURES if c in df_scaled.columns]
@@ -1325,13 +1342,15 @@ dynamic_features = _dedup_keep_order(dynamic_features)
 future_features  = _dedup_keep_order(future_features)
 
 # --- record indices after finalization
-# gwl_dyn_index = int(dynamic_features.index(GWL_MODEL_COL))
 gwl_dyn_index = int(dynamic_features.index(GWL_DYN_COL))
 
-subs_dyn_index = None
 if SUBS_MODEL_COL in dynamic_features:
     subs_dyn_index = int(dynamic_features.index(SUBS_MODEL_COL))
-
+    
+z_surf_static_index = None 
+if Z_SURF_SI_COL in static_features:
+    z_surf_static_index = int(static_features.index(Z_SURF_SI_COL)) 
+    
 print(f"  Static : {static_features}")
 print(f"  Dynamic: {dynamic_features}")
 print(f"  Future : {future_features}")
@@ -1409,7 +1428,11 @@ if normalize_coords:
     cmin = np.asarray(coord_scaler.data_min_, dtype=float)
     cmax = np.asarray(coord_scaler.data_max_, dtype=float)
     crng = np.maximum(cmax - cmin, EPS_RNG)
-    coord_ranges = {"t": float(crng[0]), "x": float(crng[1]), "y": float(crng[2])}
+    coord_ranges = {
+        "t": float(crng[0]), 
+        "x": float(crng[1]), 
+        "y": float(crng[2])
+    }
 else:
     coords_raw = np.asarray(inputs_train["coords"], dtype=float)
     coord_ranges = {
@@ -1542,9 +1565,17 @@ features_spec = {
 indices_spec = {
     "gwl_dyn_index": int(gwl_dyn_index),
     "subs_dyn_index": (int(subs_dyn_index) if subs_dyn_index is not None else None),
-    "gwl_dyn_name": GWL_DYN_COL
+    "gwl_dyn_name": GWL_DYN_COL, 
+    'z_surf_static_index': (
+        int(z_surf_static_index) if z_surf_static_index is not None else None),
 }
 
+model_cols = { 
+    "gwl_col": GWL_DYN_COL, 
+    "z_surf_col": Z_SURF_SI_COL,
+    "subs_dyn_name": SUBS_MODEL_COL
+}
+    
 kind = str(cfg.get("GWL_KIND", "depth_bgs"))
 sign = cfg.get("GWL_SIGN", None)
 if sign is None:
@@ -1592,8 +1623,23 @@ scaling_kwargs = {
     "coord_epsg_used": (int(coord_epsg) if coord_epsg is not None else None),
     "coords_in_degrees": bool(coords_in_degrees),
     
-    **indices_spec
+    "cons_residual_units": CONSOLIDATION_RESIDUAL_UNITS, 
+    'cons_scale_floor':  CONS_SCALE_FLOOR,
+    'gw_scale_floor' :GW_SCALE_FLOOR,
+    'dt_min_units' :DT_MIN_UNITS,
+    'Q_wrt_normalized_time':Q_WRT_NORMALIZED_TIME,
+    'Q_in_si' : Q_IN_SI,
+    'Q_in_per_second' : Q_IN_PER_SECOND,
+    "Q_kind": Q_KIND,
+    "Q_length_in_si": Q_LENGTH_IN_SI, 
+    "drainage_mode": DRAINAGE_MODE, 
+    
+    "scaling_error_policy": SCALING_ERROR_POLICY, 
+    'debug_physics_grads': DEBUG_PHYSICS_GRADS, 
+
+    **indices_spec, **model_cols
 }
+
 # Only attach degree→meter factors if
 #  coords are actually degrees
 if coords_in_degrees:

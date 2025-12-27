@@ -23,10 +23,7 @@ from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message
 from .._base_attentive import BaseAttentive
 
 if KERAS_BACKEND:
-    from .._tensor_validation import ( 
-        check_inputs, validate_model_inputs, 
-        # ensure_bh1, maybe_reduce_quantiles_bh
-        )
+    from .._tensor_validation import check_inputs, validate_model_inputs
     from .._utils import get_tensor_from 
     from .io import ( 
         _maybe_subsample, 
@@ -48,11 +45,13 @@ if KERAS_BACKEND:
         scale_residual, 
         integrate_consolidation_mean,
         compute_consolidation_step_residual,
-        dt_to_seconds,
         to_rms, 
         settlement_state_for_pde, 
         tf_print_nonfinite, 
-        resolve_cons_units
+        resolve_cons_units, 
+        cons_step_to_cons_residual, 
+        q_to_gw_source_term_si,
+        get_log_tau_bounds
     )
 
     from ._geoprior_utils import (
@@ -61,12 +60,22 @@ if KERAS_BACKEND:
         deg_to_m,
         coord_ranges,
         validate_scaling_kwargs,
+        canonicalize_scaling_kwargs, 
+        enforce_scaling_alias_consistency, 
+        load_scaling_kwargs, 
         gwl_to_head_m,
         get_s_init_si, 
         get_h_ref_si,
         infer_dt_units_from_t,
         to_si_subsidence,
-        from_si_subsidence
+        from_si_subsidence, 
+        get_sk, 
+    )
+    from ._geoprior_losses import (
+        assemble_physics_loss,
+        build_physics_bundle,
+        pack_step_results,
+        pack_eval_physics,
     )
 
     from .utils import  process_pde_modes,  _get_coords
@@ -126,6 +135,8 @@ tf_greater = KERAS_DEPS.greater
 tf_greater_equal = KERAS_DEPS.greater_equal
 tf_reshape = KERAS_DEPS.reshape 
 tf_nn =KERAS_DEPS.nn 
+tf_add_n = KERAS_DEPS.add_n 
+
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
@@ -244,20 +255,67 @@ class GeoPriorSubsNet(BaseAttentive):
             self.scaling_kwargs["bounds"] = dict(b)
 
         self.bounds_mode = bounds_mode or "soft"
-        # -----------------------------------------------------------------
-        # Resolve time_units (scaling_kwargs wins; else propagate init)
-        # -----------------------------------------------------------------
- 
-        if ("time_units" not in self.scaling_kwargs): 
-                self.scaling_kwargs["time_units"] = time_units 
-        
-        scale_tu = self.scaling_kwargs.get("time_units", None)
+
+        # --------------------------------------------------------------
+        # Scaling kwargs: accept dict OR JSON string/path.
+        # Then canonicalize + validate alias consistency.
+        # --------------------------------------------------------------
+        self.scaling_kwargs = load_scaling_kwargs(
+            scaling_kwargs,
+            copy=True,
+        )
+
+        # Ensure nested bounds is a plain dict if provided.
+        b = self.scaling_kwargs.get("bounds", None)
+        if isinstance(b, Mapping) and not isinstance(b, dict):
+            self.scaling_kwargs["bounds"] = dict(b)
+
+        # Canonicalize missing canonical keys from aliases.
+        self.scaling_kwargs = canonicalize_scaling_kwargs(
+            self.scaling_kwargs,
+        )
+
+        # Enforce that canonical and alias keys do not disagree.
+        enforce_scaling_alias_consistency(
+            self.scaling_kwargs,
+            where="validate",
+        )
+
+        # --------------------------------------------------------------
+        # Resolve time_units (scaling wins; else __init__ arg).
+        # Always store final value back to scaling_kwargs.
+        # --------------------------------------------------------------
+        scale_tu = get_sk(
+            self.scaling_kwargs,
+            "time_units",
+            default=None,
+        )
         if isinstance(scale_tu, str) and not scale_tu.strip():
             scale_tu = None
-        
-        # precedence: scaling wins; else init; then always store in scaling_kwargs
-        self.time_units = scale_tu if scale_tu is not None else time_units
+
+        self.time_units = (
+            scale_tu if scale_tu is not None else time_units
+        )
         self.scaling_kwargs["time_units"] = self.time_units
+
+        # ------------------------------------------------------------------
+        # Drainage mode (controls Hd_factor used in tau_phys prior)
+        # ------------------------------------------------------------------
+        self.use_effective_thickness = use_effective_h
+        self.Hd_factor = hd_factor   # if Hd = Hd_factor * H
+        
+        
+        drainage_mode = self.scaling_kwargs.get("drainage_mode", None)
+        
+        # Only auto-override if user didn't explicitly pass custom values
+        if drainage_mode is not None and (
+                use_effective_h is False and hd_factor == 1.0):
+            dm = str(drainage_mode).strip().lower()
+            self.use_effective_thickness = True
+            self.Hd_factor = 0.5 if dm.startswith("double") else 1.0
+
+        # Optional: run scaling sanity checks now (policy-aware).
+        validate_scaling_kwargs(self.scaling_kwargs)
 
         super().__init__(
             static_input_dim=static_input_dim,
@@ -321,9 +379,6 @@ class GeoPriorSubsNet(BaseAttentive):
         self.kappa_config = kappa
         self.gamma_w_config = gamma_w
 
-        
-        self.use_effective_thickness = use_effective_h
-        self.Hd_factor = hd_factor   # if Hd = Hd_factor * H
         self.kappa_mode = kappa_mode  # {"bar", "kb"}  # κ̄ vs κ_b
 
         # Sensible defaults before compile() is called
@@ -436,15 +491,15 @@ class GeoPriorSubsNet(BaseAttentive):
             bias_initializer=Constant(0.0),
         )
         # Coords stabiliser for decoder injection.
-        self.coords_norm = LayerNormalization(
-            epsilon=1e-6,
-            name="coords_norm",
-        )
-        self.coords_proj = Dense(
-            units=self.attention_units,
-            activation="swish",
-            name="coords_proj",
-        )
+        # self.coords_norm = LayerNormalization(
+        #     epsilon=1e-6,
+        #     name="coords_norm",
+        # )
+        # self.coords_proj = Dense(
+        #     units=self.attention_units,
+        #     activation="swish",
+        #     name="coords_proj",
+        # )
 
     
         self.H_field = None
@@ -755,17 +810,12 @@ class GeoPriorSubsNet(BaseAttentive):
                 "'coords_input' (B, H, 3) to be provided."
             )
         
-        # Old:
-        # decoder_parts.append(coords_input)
-        
-        # New:
-        coords_nn = tf_cast(coords_input, tf_float32)
-        coords_nn = self.coords_norm(coords_nn)
-        coords_nn = self.coords_proj(coords_nn)
-        decoder_parts.append(coords_nn)
+        # coords_nn = tf_cast(coords_input, tf_float32)
+        # coords_nn = self.coords_norm(coords_nn)
+        # coords_nn = self.coords_proj(coords_nn)
+        # decoder_parts.append(coords_nn)
 
-
-        # decoder_parts.append(coords_input)
+        decoder_parts.append(coords_input)
     
         # If everything is missing (very degenerate case), fall back to
         # a zero tensor so shapes remain valid.
@@ -928,9 +978,12 @@ class GeoPriorSubsNet(BaseAttentive):
         coords_flat = coords_for_decoder  # already (B,H,3)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)
     
-        (K_field, Ss_field, tau_field,
-         tau_phys, Hd_eff,
-         delta_log_tau, logK, logSs) = compose_physics_fields(
+        # (K_field, Ss_field, tau_field,
+        #  tau_phys, Hd_eff,
+        #  delta_log_tau, logK, logSs, 
+        #  log_tau, log_tau_phys) = compose_physics_fields(
+        
+        K_field, Ss_field, tau_field, *_ = compose_physics_fields(
             self,
             coords_flat=coords_flat,
             H_si=H_si,
@@ -947,8 +1000,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         # refs / init
         h_ref_si  = get_h_ref_si(self, inputs, like=h_mean_si)
-        # s_init_si = get_s_init_si(self, inputs, like=h_mean_si)
-        
+
         # baseline cumulative at forecast start (SI)
         s0_cum_si = get_s_init_si(self, inputs, like=h_mean_si)
         
@@ -982,8 +1034,9 @@ class GeoPriorSubsNet(BaseAttentive):
 
 
         # map to requested subsidence kind
-        kind = str((self.scaling_kwargs or {}).get(
-            "subsidence_kind", "cumulative")).strip().lower()
+        kind = str(get_sk(
+            self.scaling_kwargs, "subsidence_kind", 
+            default="cumulative")).strip().lower()
         
         if kind == "increment":
             ds0 = s_inc_si[:, :1, :]
@@ -997,7 +1050,9 @@ class GeoPriorSubsNet(BaseAttentive):
         subs_phys_model = from_si_subsidence(subs_phys_si, self.scaling_kwargs)
     
         # Option: allow a learned residual around physics mean
-        allow_resid = bool((self.scaling_kwargs or {}).get("allow_subs_residual", False))
+        allow_resid = bool(get_sk(
+            self.scaling_kwargs, "allow_subs_residual", default=False)
+        )
         subs_mean = subs_phys_model + subs_net if allow_resid else subs_phys_model
     
         decoded_data_means = tf_concat([subs_mean, gwl_mean], axis=-1)
@@ -1019,6 +1074,8 @@ class GeoPriorSubsNet(BaseAttentive):
             "data_mean_raw": data_mean_raw,   
             "phys_mean_raw": phys_mean_raw,
         }
+
+
 
     def train_step(self, data):
         """
@@ -1066,7 +1123,12 @@ class GeoPriorSubsNet(BaseAttentive):
     
         validate_scaling_kwargs(self.scaling_kwargs)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)  # SI meters
-    
+        
+        # XXX TO REMOVE JUST FOR DEGUG 
+        debug_grads = bool(get_sk(
+            self.scaling_kwargs or {}, "debug_physics_grads", 
+            default=False)
+        )
         # ----------------------------------------------------------
         # 2) Coordinates: ensure (B,H,3) and force forward-pass to use them
         # ----------------------------------------------------------
@@ -1102,6 +1164,8 @@ class GeoPriorSubsNet(BaseAttentive):
         def chk(name, x):
             tf_debugging.assert_all_finite(x, f"{name} has NaN/Inf")
             return x
+        
+        
         # ----------------------------------------------------------
         # 3) Forward + losses + physics derivatives
         # ----------------------------------------------------------
@@ -1191,7 +1255,7 @@ class GeoPriorSubsNet(BaseAttentive):
             # Map logits -> SI-consistent fields (positivity/bounds + tau_phys)
             (
                 K_field, Ss_field, tau_field, tau_phys, Hd_eff,
-                delta_log_tau, logK, logSs,
+                delta_log_tau, logK, logSs, log_tau, log_tau_phys, 
             ) = compose_physics_fields(
                 self,
                 coords_flat=coords,
@@ -1245,8 +1309,8 @@ class GeoPriorSubsNet(BaseAttentive):
             # ------------------------------------------------------
             # 4.1 Chain-rule correction (normalized coords / degrees)
             # ------------------------------------------------------
-            coords_norm = bool(sk.get("coords_normalized", False))
-            coords_deg = bool(sk.get("coords_in_degrees", False))
+            coords_norm = bool(get_sk(sk, "coords_normalized", default=False))
+            coords_deg  = bool(get_sk(sk, "coords_in_degrees", default=False))
     
             # Start from raw derivatives and progressively convert to SI:
             dh_dt = dh_dt_raw
@@ -1299,22 +1363,23 @@ class GeoPriorSubsNet(BaseAttentive):
             # ------------------------------------------------------
             # 5) Q logits -> SI (1/s)
             # ------------------------------------------------------
-            Q_base = tf_cast(Q_logits, tf_float32)
-    
-            # If Q was produced w.r.t normalized time, de-normalize it first
-            if coords_norm and bool(sk.get("Q_wrt_normalized_time", False)):
-                if tR_tf is None:
-                    raise ValueError(
-                        "Q_wrt_normalized_time=True but coord_range_t missing."
-                    )
-                Q_base = Q_base / (tR_tf + tf_constant(1e-12, tf_float32))
-    
-            # Convert 1/time_units -> 1/s unless already SI
-            if bool(sk.get("Q_in_per_second", False)) or bool(sk.get("Q_in_si", False)):
-                Q_si = Q_base
-            else:
-                Q_si = rate_to_per_second(Q_base, time_units=self.time_units)
-    
+            tR_tf = None
+            if coords_norm:
+                tR, _, _ = coord_ranges(self.scaling_kwargs)
+                if tR is not None:
+                    tR_tf = tf_constant(float(tR), tf_float32)
+            
+            Q_si = q_to_gw_source_term_si(
+                self,
+                Q_logits,
+                Ss_field=Ss_field,
+                H_field=H_si,            # needed for recharge_rate
+                coords_normalized=coords_norm,
+                t_range_units=tR_tf,
+                time_units=self.time_units,
+                scaling_kwargs=self.scaling_kwargs,
+                verbose=verbose,
+            )
             # Ensure (B,H,1) and broadcastable with dh_dt (graph-safe)
             r = tf_rank(Q_si)
             Q_si = tf_cond(
@@ -1376,11 +1441,6 @@ class GeoPriorSubsNet(BaseAttentive):
                 s_pred_si = to_si_subsidence(s_mean_raw, self.scaling_kwargs)  # (B,H,1)
     
                 # # One-step residual in meters, then normalize to m/s using dt_sec
-                # # Build state length H+1 for step residual:
-                # s_state = tf_concat([s_init_si, s_pred_si], axis=1)          # (B,H+1,1)
-                # # Align h_n with steps: use h_si for each step; pad last value for shape
-                # h_state = tf_concat([h_ref_si_11, h_si], axis=1) # (B,H+1,1)
-    
                 # baseline cumulative at forecast start (SI)
                 s0_cum_11 = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
                 
@@ -1417,33 +1477,15 @@ class GeoPriorSubsNet(BaseAttentive):
                     verbose=self.verbose, 
                 )  # (B,H,1)
         
-                sk = self.scaling_kwargs or {}
-                mode = resolve_cons_units(sk)
-
-                if mode == "step":
-                    cons_res = cons_step_m
-                
-                elif mode == "time_unit":
-                    dt_u = tf_maximum(
-                        tf_cast(dt_units, tf_float32),
-                        tf_constant(1e-12, tf_float32),
-                    )
-                    cons_res = cons_step_m / dt_u
-       
-                
-                else:
-                    dt_sec = dt_to_seconds(
-                        dt_units,
-                        time_units=self.time_units,
-                    )
-                    dt_sec = tf_maximum(
-                        dt_sec,
-                        tf_constant(1e-12, tf_float32),
-                    )
-                    cons_res = cons_step_m / dt_sec
-                    
-                    if self.verbose > 6:
-                        tf_print("cons_units=", mode, "rms=", to_rms(cons_res))
+                cons_res = cons_step_to_cons_residual(
+                    cons_step_m,
+                    dt_units=dt_units,
+                    scaling_kwargs=sk,
+                    time_units=self.time_units,
+                )
+                if self.verbose > 6:
+                    mode = resolve_cons_units(sk)
+                    tf_print("cons_units=", mode, "rms=", to_rms(cons_res))
 
             # ------------------------------------------------------
             # 7) Residuals + priors
@@ -1478,9 +1520,21 @@ class GeoPriorSubsNet(BaseAttentive):
             R_H, R_K, R_Ss = compute_bounds_residual(
                 self, K_field, Ss_field, H_si, verbose=verbose
             )
-            bounds_res = tf_concat([R_H, R_K, R_Ss], axis=-1)
-            loss_bounds = tf_reduce_mean(tf_square(bounds_res))
+            
+            # ---- tau bounds residual (log-space, seconds) ----
+            log_tau_min, log_tau_max = get_log_tau_bounds(
+                self, as_tensor=True, dtype=log_tau.dtype, verbose=0
+            )
+            zero = tf_constant(0.0, dtype=log_tau.dtype)
+            epsb = tf_constant(1e-12, dtype=log_tau.dtype)
+            lo = tf_maximum(log_tau_min - log_tau, zero)
+            hi = tf_maximum(log_tau - log_tau_max, zero)
+            rng = tf_maximum(log_tau_max - log_tau_min, epsb)
+            R_tau = (lo + hi) / rng
     
+            bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
+            loss_bounds = tf_reduce_mean(tf_square(bounds_res))
+        
             # Physics-off shortcut (keeps returned keys stable)
             if self._physics_off():
                 cons_res = tf_zeros_like(cons_res)
@@ -1528,8 +1582,8 @@ class GeoPriorSubsNet(BaseAttentive):
                     div_K_grad_h=div_term,       # helps GW scaling a lot
                     verbose=verbose,
                 )
-                cons_floor = float(sk.get("cons_scale_floor", 1e-10))
-                gw_floor   = float(sk.get("gw_scale_floor",   1e-10))
+                cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-10))
+                gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-10))
                 
                 cons_res = scale_residual(cons_res_raw, scales["cons_scale"], floor=cons_floor)
                 gw_res   = scale_residual(gw_res_raw,   scales["gw_scale"],   floor=gw_floor)
@@ -1548,28 +1602,29 @@ class GeoPriorSubsNet(BaseAttentive):
                 chk("K_field", K_field)
                 chk("Ss_field", Ss_field)
 
-
             # ------------------------------------------------------
             # 9) Physics loss + total loss
             # ------------------------------------------------------
-            loss_cons = tf_reduce_mean(tf_square(cons_res))
-            loss_gw = tf_reduce_mean(tf_square(gw_res))
-            loss_prior = tf_reduce_mean(tf_square(prior_res))
+            loss_cons   = tf_reduce_mean(tf_square(cons_res))     # cons_res is scaled
+            loss_gw     = tf_reduce_mean(tf_square(gw_res))       # gw_res is scaled
+            loss_prior  = tf_reduce_mean(tf_square(prior_res))
             loss_smooth = tf_reduce_mean(smooth_res)
-    
-            physics_loss_raw = (
-                self.lambda_cons * loss_cons
-                + self.lambda_gw * loss_gw
-                + self.lambda_prior * loss_prior
-                + self.lambda_smooth * loss_smooth
-                + self.lambda_mv * loss_mv
-                + self.lambda_bounds * loss_bounds
+
+            
+            physics_loss_raw, physics_loss_scaled, phys_mult, terms_scaled = (
+                assemble_physics_loss(
+                    self, 
+                    loss_cons=loss_cons,
+                    loss_gw=loss_gw,
+                    loss_prior=loss_prior,
+                    loss_smooth=loss_smooth,
+                    loss_mv=loss_mv,
+                    loss_bounds=loss_bounds,
+                )
             )
-    
-            phys_mult = self._physics_loss_multiplier()
-            physics_loss_scaled = phys_mult * physics_loss_raw
+            
             total_loss = data_loss + physics_loss_scaled
-    
+
         # ----------------------------------------------------------
         # 10) Apply gradients
         # ----------------------------------------------------------
@@ -1587,7 +1642,15 @@ class GeoPriorSubsNet(BaseAttentive):
         
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
+        
+        # # XXX FOR DEBUGGING
         _assert_grads_finite(grads, trainable_vars)
+        
+        if debug_grads:
+            for name, lt in {"data": data_loss, **terms_scaled}.items():
+                g = tape.gradient(lt, trainable_vars)
+                _assert_grads_finite(g, trainable_vars)
+        
         del tape
     
         self.optimizer.apply_gradients(
@@ -1595,51 +1658,44 @@ class GeoPriorSubsNet(BaseAttentive):
         )
     
         # ----------------------------------------------------------
-        # 11) Update metrics + logs
+        # 11) Package logs (single path)
         # ----------------------------------------------------------
-        self.compiled_metrics.update_state(targets, y_pred)
-    
         eps_prior = to_rms(prior_res)
         
-        eps_cons_raw = to_rms(cons_res_raw)   # physical units (depends on mode)
-        eps_gw_raw   = to_rms(gw_res_raw)     # 1/s
+        eps_cons_raw = to_rms(cons_res_raw)
+        eps_gw_raw = to_rms(gw_res_raw)
         
-        eps_cons = to_rms(cons_res)           # scaled (dimensionless)
-        eps_gw   = to_rms(gw_res)             # scaled (dimensionless)
-
-        results = {
-            m.name: m.result()
-            for m in self.metrics
-            if m.name not in ("epsilon_prior", "epsilon_cons", "epsilon_gw")
-        }
-        results.update(
-            {
-                "loss": total_loss,
-                "total_loss": total_loss,
-                "data_loss": data_loss,
-    
-                "physics_loss": physics_loss_raw,
-                "physics_mult": phys_mult,
-                "physics_loss_scaled": physics_loss_scaled,
-                "lambda_offset": self._lambda_offset,
-    
-                "consolidation_loss": loss_cons,
-                "gw_flow_loss": loss_gw,
-                "prior_loss": loss_prior,
-                "smooth_loss": loss_smooth,
-                "mv_prior_loss": loss_mv,
-                "bounds_loss": loss_bounds,
-    
-                "epsilon_prior": eps_prior,
-                "epsilon_cons": eps_cons,
-                "epsilon_gw": eps_gw,
-                
-                "epsilon_cons_raw": eps_cons_raw,
-                "epsilon_gw_raw": eps_gw_raw,
-            }
+        eps_cons = to_rms(cons_res)
+        eps_gw = to_rms(gw_res)
+        
+        physics_bundle = None
+        if not self._physics_off():
+            physics_bundle = build_physics_bundle(
+                self,
+                physics_loss_raw=physics_loss_raw,
+                physics_loss_scaled=physics_loss_scaled,
+                phys_mult=phys_mult,
+                loss_cons=loss_cons,
+                loss_gw=loss_gw,
+                loss_prior=loss_prior,
+                loss_smooth=loss_smooth,
+                loss_mv=loss_mv,
+                loss_bounds=loss_bounds,
+                eps_prior=eps_prior,
+                eps_cons=eps_cons,
+                eps_gw=eps_gw,
+                eps_cons_raw=eps_cons_raw,
+                eps_gw_raw=eps_gw_raw,
+            )
+        
+        return pack_step_results(
+            self,
+            total_loss=total_loss,
+            data_loss=data_loss,
+            targets=targets,
+            y_pred=y_pred,
+            physics=physics_bundle,
         )
-        return results
-
 
     def test_step(self, data):
         """
@@ -1673,116 +1729,28 @@ class GeoPriorSubsNet(BaseAttentive):
             y_pred=y_pred_for_eval,
             regularization_losses=self.losses,
         )
-        self.compiled_metrics.update_state(targets, y_pred_for_eval)
-    
-        # -------------------------------
-        # Physics diagnostics / loss
-        # -------------------------------
+        physics_bundle = None
+        
         if not self._physics_off():
-            phys = self._evaluate_physics_on_batch(inputs, return_maps=False)
-    
-            # phys contains (scaled) component losses:
-            #   loss_consolidation, loss_gw_flow, loss_prior, loss_smooth, loss_mv, loss_bounds
-            physics_loss_raw = (
-                self.lambda_cons * phys["loss_consolidation"]
-                + self.lambda_gw * phys["loss_gw_flow"]
-                + self.lambda_prior * phys["loss_prior"]
-                + self.lambda_smooth * phys["loss_smooth"]
-                + self.lambda_mv * phys["loss_mv"]
-                + self.lambda_bounds * phys["loss_bounds"]
+            phys = self._evaluate_physics_on_batch(
+                inputs,
+                return_maps=False,
             )
-    
-            phys_mult = self._physics_loss_multiplier()
-            physics_loss_scaled = phys_mult * physics_loss_raw
-    
-            total_loss = data_loss + physics_loss_scaled
-    
-            eps_prior = phys.get("epsilon_prior", tf_constant(0.0, tf_float32))
-            eps_cons = phys.get("epsilon_cons", tf_constant(0.0, tf_float32))
-            eps_gw    = phys.get("epsilon_gw",    tf_constant(0.0, tf_float32))  
+            physics_bundle = phys
+            total_loss = data_loss + phys["physics_loss_scaled"]
         else:
-            physics_loss_raw = tf_constant(0.0, tf_float32)
-            phys_mult = tf_constant(1.0, tf_float32)
-            physics_loss_scaled = tf_constant(0.0, tf_float32)
             total_loss = data_loss
-            eps_prior = tf_constant(0.0, tf_float32)
-            eps_cons = tf_constant(0.0, tf_float32)
-            eps_gw    = tf_constant(0.0, tf_float32)  
-    
-        # Keep epsilon metrics well-defined if you track them
-        if hasattr(self, "eps_prior_metric"):
-            self.eps_prior_metric.update_state(eps_prior)
-        if hasattr(self, "eps_cons_metric"):
-            self.eps_cons_metric.update_state(eps_cons)
-        if hasattr(self, "eps_gw_metric"):
-            self.eps_gw_metric.update_state(eps_gw)  
-            
-        results = {
-            m.name: m.result()
-            for m in self.metrics
-            if m.name not in ("epsilon_prior", "epsilon_cons", "epsilon_gw")  
-        }
-    
-        results.update(
-            {
-                "loss": total_loss,  # drives val_loss
-                "total_loss": total_loss,
-                "data_loss": data_loss,
-    
-                "physics_loss": physics_loss_raw,
-                "physics_mult": phys_mult,
-                "physics_loss_scaled": physics_loss_scaled,
-                "lambda_offset": self._lambda_offset,
-    
-                # expose eps for dashboards
-                "epsilon_prior": (
-                    self.eps_prior_metric.result()
-                    if hasattr(self, "eps_prior_metric")
-                    else eps_prior
-                ),
-                "epsilon_cons": (
-                    self.eps_cons_metric.result()
-                    if hasattr(self, "eps_cons_metric")
-                    else eps_cons
-                ),
-                "epsilon_gw": ( 
-                    self.eps_gw_metric.result()
-                    if hasattr(self, "eps_gw_metric")
-                    else eps_gw
-                ),
-            }
+        
+        return pack_step_results(
+            self,
+            total_loss=total_loss,
+            data_loss=data_loss,
+            targets=targets,
+            y_pred=y_pred_for_eval,
+            physics=physics_bundle,
         )
-    
-        # If you also want component losses in val logs, keep them when physics is on
-        if (not self._physics_off()):
-            results.update(
-                {
-                    "consolidation_loss": phys["loss_consolidation"],
-                    "gw_flow_loss": phys["loss_gw_flow"],
-                    "prior_loss": phys["loss_prior"],
-                    "smooth_loss": phys["loss_smooth"],
-                    "mv_prior_loss": phys["loss_mv"],
-                    "bounds_loss": phys["loss_bounds"],
-                }
-            )
-        else:
-            results.update(
-                {
-                    "consolidation_loss": tf_constant(0.0, tf_float32),
-                    "gw_flow_loss": tf_constant(0.0, tf_float32),
-                    "prior_loss": tf_constant(0.0, tf_float32),
-                    "smooth_loss": tf_constant(0.0, tf_float32),
-                    "mv_prior_loss": tf_constant(0.0, tf_float32),
-                    "bounds_loss": tf_constant(0.0, tf_float32),
-                }
-            )
-        
-        results["loss"] = total_loss
-        results["total_loss"] = total_loss
 
-        return results
 
-        
     def _evaluate_physics_on_batch(
         self,
         inputs: Dict[str, Optional[Tensor]],
@@ -1803,21 +1771,8 @@ class GeoPriorSubsNet(BaseAttentive):
         # 0) Physics OFF shortcut
         # --------------------------------------------------------------
         if self._physics_off():
-            z = tf_constant(0.0, dtype=tf_float32)
-            out = dict(
-                loss_physics=z,
-                loss_consolidation=z,
-                loss_gw_flow=z,
-                loss_prior=z,
-                loss_smooth=z,
-                loss_mv=z,
-                loss_bounds=z,
-                epsilon_prior=z,
-                epsilon_cons=z,
-                epsilon_gw=z,
-            )
-            return out
-    
+            return pack_eval_physics(self, physics=None)
+
         # --------------------------------------------------------------
         # 1) Validate thickness + coords
         # --------------------------------------------------------------
@@ -1852,8 +1807,8 @@ class GeoPriorSubsNet(BaseAttentive):
     
         t = coords[..., 0:1]
     
-        coords_norm = bool(sk.get("coords_normalized", False))
-        coords_deg = bool(sk.get("coords_in_degrees", False))
+        coords_norm = bool(get_sk(sk, "coords_normalized", default=False))
+        coords_deg  = bool(get_sk(sk, "coords_in_degrees", default=False))
     
         # --------------------------------------------------------------
         # 2) Forward + autodiff wrt coords
@@ -1901,7 +1856,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
             (
                 K_field, Ss_field, tau_field, tau_phys, Hd_eff,
-                delta_log_tau, logK, logSs,
+                delta_log_tau, logK, logSs, log_tau, log_tau_phys
             ) = compose_physics_fields(
                 self,
                 coords_flat=coords,
@@ -2030,21 +1985,23 @@ class GeoPriorSubsNet(BaseAttentive):
         # --------------------------------------------------------------
         # 4) Q -> SI (1/s)  (branch-free: Q_logits is always a tensor)
         # --------------------------------------------------------------
-        Q_base = tf_cast(Q_logits, tf_float32)
-        
-        if coords_norm and bool(sk.get("Q_wrt_normalized_time", False)):
-            tR, _, _ = coord_ranges(sk)
-            if tR is None:
-                raise ValueError(
-                    "Q_wrt_normalized_time=True but coord_range_t missing."
-                )
-            Q_base = Q_base / (tf_constant(float(tR), tf_float32) + eps)
-        
-        if bool(sk.get("Q_in_per_second", False)) or bool(sk.get("Q_in_si", False)):
-            Q_si = Q_base
-        else:
-            Q_si = rate_to_per_second(Q_base, time_units=self.time_units)
-        
+        tR_tf = None
+        if coords_norm:
+            tR, _, _ = coord_ranges(self.scaling_kwargs)
+            if tR is not None:
+                tR_tf = tf_constant(float(tR), tf_float32)
+   
+        Q_si = q_to_gw_source_term_si(
+            self,
+            Q_logits,
+            Ss_field=Ss_field,
+            H_field=H_si,            
+            coords_normalized=coords_norm,
+            t_range_units=tR_tf,
+            time_units=self.time_units,
+            scaling_kwargs=self.scaling_kwargs,
+            verbose=0,
+        )
         # Ensure (B,H,1) and broadcastable with dh_dt
         r = tf_rank(Q_si)
         Q_si = tf_cond(
@@ -2057,7 +2014,9 @@ class GeoPriorSubsNet(BaseAttentive):
         # --------------------------------------------------------------
         # 5) Physics-driven mean settlement + consolidation residual
         # --------------------------------------------------------------
-        allow_resid = bool((sk or {}).get("allow_subs_residual", False))
+        allow_resid = bool(
+            get_sk(self.scaling_kwargs, "allow_subs_residual", default=False)
+            )
         cons_active = ("consolidation" in self.pde_modes_active)
 
         dt_units = infer_dt_units_from_t(t, sk)
@@ -2107,21 +2066,12 @@ class GeoPriorSubsNet(BaseAttentive):
                 verbose= self.verbose, 
             )
             
-            mode = resolve_cons_units(sk)
-        
-            if mode == "step":
-                cons_res = cons_step_m
-            
-            elif mode == "time_unit":
-                dt_u = tf_maximum(tf_abs(tf_cast(dt_units, tf_float32)), eps)
-                cons_res = cons_step_m / dt_u
-            
-            else:
-                dt_sec = dt_to_seconds(dt_units, time_units=self.time_units)
-                dt_sec = tf_maximum(tf_abs(dt_sec), eps)
-                cons_res = cons_step_m / dt_sec
-
-            # cons_res = cons_step_m / tf_maximum(dt_sec, eps)         # (B,H,1) in m/s
+            cons_res = cons_step_to_cons_residual(
+                cons_step_m,
+                dt_units=dt_units,
+                scaling_kwargs=sk,
+                time_units=self.time_units,
+            ) # (B,H,1) in m/s      
             eps_cons = to_rms(cons_res)
         
         # --------------------------------------------------------------
@@ -2155,7 +2105,19 @@ class GeoPriorSubsNet(BaseAttentive):
         R_H, R_K, R_Ss = compute_bounds_residual(
             self, K_field, Ss_field, H_si, verbose=0
         )
-        bounds_res = tf_concat([R_H, R_K, R_Ss], axis=-1)
+
+        # ---- tau bounds residual (log-space, seconds) ----
+        log_tau_min, log_tau_max = get_log_tau_bounds(
+            self, as_tensor=True, dtype=log_tau.dtype, verbose=0
+        )
+        zero = tf_constant(0.0, dtype=log_tau.dtype)
+        epsb = tf_constant(1e-12, dtype=log_tau.dtype)
+        lo = tf_maximum(log_tau_min - log_tau, zero)
+        hi = tf_maximum(log_tau - log_tau_max, zero)
+        rng = tf_maximum(log_tau_max - log_tau_min, epsb)
+        R_tau = (lo + hi) / rng
+    
+        bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
     
         # --------------------------------------------------------------
         # 7) Optional nondimensionalization
@@ -2190,8 +2152,8 @@ class GeoPriorSubsNet(BaseAttentive):
                 verbose=0,
             )
 
-            cons_floor = float(sk.get("cons_scale_floor", 1e-10))
-            gw_floor   = float(sk.get("gw_scale_floor",   1e-10))
+            cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-10))
+            gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-10))
         
             cons_res_scaled = scale_residual(
                 cons_res_raw, scales["cons_scale"],
@@ -2209,48 +2171,57 @@ class GeoPriorSubsNet(BaseAttentive):
         # --------------------------------------------------------------
         # 8) Losses + epsilons
         # --------------------------------------------------------------
-        loss_cons = tf_reduce_mean(tf_square(cons_res_scaled))
-        loss_gw = tf_reduce_mean(tf_square(gw_res_scaled))
-        loss_prior = tf_reduce_mean(tf_square(prior_res))
+        loss_cons   = tf_reduce_mean(tf_square(cons_res_scaled))
+        loss_gw     = tf_reduce_mean(tf_square(gw_res_scaled))
+        loss_prior  = tf_reduce_mean(tf_square(prior_res))
         loss_smooth = tf_reduce_mean(smooth_res)
-        loss_mv = to_rms (mv_res)
+        loss_mv     = to_rms(mv_res)
         loss_bounds = tf_reduce_mean(tf_square(bounds_res))
-    
+        
         eps_cons_raw = to_rms(cons_res_raw)
         eps_gw_raw   = to_rms(gw_res_raw)
-
+        
         eps_prior = to_rms(prior_res)
-        eps_gw = to_rms(gw_res)
+        eps_cons  = to_rms(cons_res_scaled)
+        eps_gw    = to_rms(gw_res_scaled)
         
-        physics_loss_raw = (
-            self.lambda_cons * loss_cons
-            + self.lambda_gw * loss_gw
-            + self.lambda_prior * loss_prior
-            + self.lambda_smooth * loss_smooth
-            + self.lambda_mv * loss_mv
-            + self.lambda_bounds * loss_bounds
+        (
+            physics_loss_raw,
+            physics_loss_scaled,
+            phys_mult,
+            _,
+        ) = assemble_physics_loss(
+            self,
+            loss_cons=loss_cons,
+            loss_gw=loss_gw,
+            loss_prior=loss_prior,
+            loss_smooth=loss_smooth,
+            loss_mv=loss_mv,
+            loss_bounds=loss_bounds,
         )
-        phys_mult = self._physics_loss_multiplier()
-        physics_loss_scaled = phys_mult * physics_loss_raw
         
-        out = {
-            "loss_physics": physics_loss_scaled,
-            "loss_consolidation": loss_cons,
-            "loss_gw_flow": loss_gw,
-            "loss_prior": loss_prior,
-            "loss_smooth": loss_smooth,
-            "loss_mv": loss_mv,
-            "loss_bounds": loss_bounds,
-            "epsilon_prior": eps_prior,
-            "epsilon_cons": eps_cons,
-            "epsilon_gw": eps_gw,
-            
-            "epsilon_cons_raw": eps_cons_raw,
-            "epsilon_gw_raw": eps_gw_raw,
-        }
+        physics_bundle = build_physics_bundle(
+            self,
+            physics_loss_raw=physics_loss_raw,
+            physics_loss_scaled=physics_loss_scaled,
+            phys_mult=phys_mult,
+            loss_cons=loss_cons,
+            loss_gw=loss_gw,
+            loss_prior=loss_prior,
+            loss_smooth=loss_smooth,
+            loss_mv=loss_mv,
+            loss_bounds=loss_bounds,
+            eps_prior=eps_prior,
+            eps_cons=eps_cons,
+            eps_gw=eps_gw,
+            eps_cons_raw=eps_cons_raw,
+            eps_gw_raw=eps_gw_raw,
+        )
         
-        s_bar = None
+        out = pack_eval_physics(self, physics=physics_bundle)
+        
         if return_maps:
+            
             s0_inc_11 = tf_zeros_like(s0_cum_11)
             s_inc_si = integrate_consolidation_mean(
                 h_mean_si=h_si,
@@ -2283,14 +2254,13 @@ class GeoPriorSubsNet(BaseAttentive):
                     "s_bar": s_bar,
                     "s_init_si": s_init_si,
                     "dt_units": dt_units,
-                    "dt_sec": dt_sec,
                     "Q_si": Q_si,
                     "K_field": K_field,
                     "Ss_field": Ss_field,
                     "tau_field": tau_field,
                     "tau_phys": tau_phys,
                     "Hd_eff": Hd_eff,
-                    "R_cons": cons_res, 
+                    "R_cons": cons_res,
                     "R_gw": gw_res,
                     "R_prior": prior_res,
                     "R_smooth": smooth_res,
@@ -2298,8 +2268,6 @@ class GeoPriorSubsNet(BaseAttentive):
                     "R_bounds": bounds_res,
                     "R_cons_scaled": cons_res_scaled,
                     "R_gw_scaled": gw_res_scaled,
-                    "subs_mean_raw": subs_mean_raw,
-                    "gwl_mean_raw": gwl_mean_raw,
                     
                     "K": K_field,               # effective K (m/s)
                     "Ss": Ss_field,             # effective Ss (1/m)
@@ -2313,8 +2281,9 @@ class GeoPriorSubsNet(BaseAttentive):
                     "cons_res_vals": cons_res,  # alias
                 }
             )
-    
+        
         return out
+
 
     def evaluate_physics(
         self,
@@ -2373,7 +2342,10 @@ class GeoPriorSubsNet(BaseAttentive):
     
                 if max_batches is not None and (i + 1) >= max_batches:
                     break
-    
+            
+            if not acc:
+                return {}
+            
             out = {k: tf_reduce_mean(tf_stack(vs)) for k, vs in acc.items()}
             if return_maps and last_maps is not None:
                 out.update(last_maps)

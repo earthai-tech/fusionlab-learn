@@ -476,8 +476,10 @@ def gather_physics_payload(
             ("tau_prior/tau_closure", tp_t),
             ("K", K_t), 
             ("Ss", Ss_t), 
-            ("R_cons", Rcons_t)]
-                   if v is None]
+            ("R_cons", Rcons_t)
+            ]
+        if v is None
+        ]
         
         if missing:
             raise KeyError(f"evaluate_physics(...) missing required keys: {missing}")

@@ -8,11 +8,13 @@ Short docs only; full docs later.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
+from collections.abc import Mapping
+from  warnings import warn
+import json
+from pathlib import Path
 
 import numpy as np
-
 from .. import KERAS_DEPS
-
 
 Tensor = KERAS_DEPS.Tensor
 
@@ -36,6 +38,524 @@ tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
 tf_ones_like = KERAS_DEPS.ones_like 
 tf_less_equal =KERAS_DEPS.less_equal 
 tf_abs = KERAS_DEPS.abs 
+
+
+# ---------------------------------------------------------------------
+# Scaling kwargs access helpers (alias-safe)
+# ---------------------------------------------------------------------
+_SK_ALIASES = {
+    # common naming drift
+    "time_units": (
+        "time_unit",
+    ),
+    "cons_residual_units": (
+        "cons_residual_unit",
+    ),
+
+    # policy drift
+    "scaling_error_policy": (
+        "error_policy",
+        "scaling_policy",
+    ),
+
+    # coord drift
+    "coords_normalized": (
+        "coord_normalized",
+        "coords_norm",
+    ),
+    "coords_in_degrees": (
+        "coord_in_degrees",
+        "coords_deg",
+    ),
+    "coord_order": (
+        "coords_order",
+    ),
+    "coord_ranges": (
+        "coord_range",
+    ),
+
+    # feature-name list drift
+    "dynamic_feature_names": (
+        "dynamic_features_names",
+        "dyn_feature_names",
+    ),
+    "future_feature_names": (
+        "future_features_names",
+        "fut_feature_names",
+    ),
+    "static_feature_names": (
+        "static_features_names",
+        "stat_feature_names",
+    ),
+
+    # feature-channel naming drift
+    "gwl_col": (
+        "gwl_dyn_name",
+        "gwl_dyn_col",
+        "gwl_name",
+    ),
+    "subs_dyn_name": (
+        "subs_col",
+        "subs_dyn_col",
+        "subsidence_dyn_name",
+    ),
+
+    # feature-channel index drift
+    "gwl_dyn_index": (
+        "gwl_index",
+        "gwl_feature_index",
+        "gwl_channel_index",
+    ),
+    "subs_dyn_index": (
+        "subs_index",
+        "subs_feature_index",
+        "subs_channel_index",
+    ),
+
+    # z_surf drift
+    "z_surf_col": (
+        "z_surf_key",
+        "z_surf_name",
+    ),
+    # bounds drift (often nested under scaling_kwargs['bounds'])
+    "log_tau_min": (
+        "logTau_min",
+        "logtau_min",
+    ),
+    "log_tau_max": (
+        "logTau_max",
+        "logtau_max",
+    ),
+    "tau_min": (
+        "Tau_min",
+        "tauMin",
+        "tau_min_sec",
+        "tau_min_seconds",
+    ),
+    "tau_max": (
+        "Tau_max",
+        "tauMax",
+        "tau_max_sec",
+        "tau_max_seconds",
+    ),
+    "tau_min_units": (
+        "tau_min_time_units",
+        "tau_min_in_time_units",
+    ),
+    "tau_max_units": (
+        "tau_max_time_units",
+        "tau_max_in_time_units",
+    ),
+
+}
+
+
+def enforce_scaling_alias_consistency(
+    scaling_kwargs: Optional[Dict[str, Any]],
+    *,
+    where: str = "validate",
+) -> None:
+    """
+    Enforce that canonical keys and aliases agree.
+
+    If both canonical and an alias exist and their
+    values differ, apply the scaling error policy.
+    """
+    sk = scaling_kwargs or {}
+
+    for key, aliases in _SK_ALIASES.items():
+        if key not in sk:
+            continue
+
+        v0 = sk.get(key, None)
+        if v0 is None:
+            continue
+
+        for a in aliases:
+            if a not in sk:
+                continue
+
+            va = sk.get(a, None)
+            if va is None:
+                continue
+
+            if va != v0:
+                msg = (
+                    "Conflicting scaling keys: "
+                    f"{key!r}={v0!r} != {a!r}={va!r}."
+                )
+                _handle_scaling_issue(
+                    sk,
+                    msg,
+                    where=where,
+                )
+
+
+def canonicalize_scaling_kwargs(
+    scaling_kwargs: Optional[Dict[str, Any]],
+    *,
+    copy: bool = True,
+) -> Dict[str, Any]:
+    """
+    Return a canonicalized scaling dict.
+
+    - If a canonical key is missing, but one of its
+      aliases exists, copy alias -> canonical.
+    - Keeps existing canonical values unchanged.
+    """
+    sk0 = scaling_kwargs or {}
+    sk = dict(sk0) if copy else sk0
+
+    for key, aliases in _SK_ALIASES.items():
+        if key in sk and sk.get(key, None) is not None:
+            continue
+
+        for a in aliases:
+            if a in sk and sk.get(a, None) is not None:
+                sk[key] = sk[a]
+                break
+
+    return sk
+
+def load_scaling_kwargs(
+    scaling_kwargs: Optional[Any],
+    *,
+    copy: bool = True,
+) -> Dict[str, Any]:
+    """
+    Load scaling kwargs from a dict-like object or JSON.
+
+    Supported inputs
+    ----------------
+    - dict / Mapping:
+        Returned (copied by default).
+    - str:
+        * If it looks like JSON ("{...}" or "[...]"), parse as JSON.
+        * Else treat as a filesystem path to a JSON file.
+    - pathlib.Path:
+        Treated as a filesystem path to a JSON file.
+    - None:
+        Returns {}.
+
+    Parameters
+    ----------
+    scaling_kwargs : Any
+        Scaling configuration input. Can be a dict, JSON string,
+        path to JSON file, or None.
+    copy : bool, default=True
+        If True, returns a shallow copy of the dict.
+
+    Returns
+    -------
+    dict
+        Parsed scaling kwargs as a Python dict.
+
+    Raises
+    ------
+    TypeError
+        If the input type is unsupported.
+    ValueError
+        If JSON parsing fails or JSON does not decode to a dict.
+    FileNotFoundError
+        If a JSON path is given but does not exist.
+    """
+    if scaling_kwargs is None:
+        return {}
+
+    if isinstance(scaling_kwargs, Mapping):
+        return dict(scaling_kwargs) if copy else scaling_kwargs
+
+    if isinstance(scaling_kwargs, Path):
+        path = scaling_kwargs
+        text = path.read_text(encoding="utf-8")
+        obj = json.loads(text)
+        if not isinstance(obj, dict):
+            raise ValueError(
+                "Scaling JSON must decode to an object/dict, "
+                f"got {type(obj).__name__}."
+            )
+        return obj
+
+    if isinstance(scaling_kwargs, str):
+        s = scaling_kwargs.strip()
+
+        # 1) Inline JSON object/array.
+        if (s.startswith("{") and s.endswith("}")) or (
+            s.startswith("[") and s.endswith("]")
+        ):
+            try:
+                obj = json.loads(s)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    "Invalid scaling_kwargs JSON string."
+                ) from e
+            if not isinstance(obj, dict):
+                raise ValueError(
+                    "Scaling JSON must decode to an object/dict, "
+                    f"got {type(obj).__name__}."
+                )
+                
+            return obj
+
+        # 2) Treat as file path to JSON.
+        path = Path(s).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Scaling kwargs JSON file not found: {str(path)!r}."
+            )
+        text = path.read_text(encoding="utf-8")
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Invalid JSON in scaling kwargs file: {str(path)!r}."
+            ) from e
+        if not isinstance(obj, dict):
+            raise ValueError(
+                "Scaling JSON file must decode to an object/dict, "
+                f"got {type(obj).__name__}."
+            )
+        return obj
+
+    try:
+        obj = dict(scaling_kwargs)
+    except Exception as e:
+        raise TypeError(
+            "scaling_kwargs must be a dict/Mapping, JSON string, "
+            "Path, or a path string to a JSON file."
+        ) from e
+
+    return obj
+
+def get_sk(
+    scaling_kwargs,
+    key: str,
+    *aliases: str,
+    default=None,
+    required: bool = False,
+    cast=None,
+):
+    """
+    Fetch a key from `scaling_kwargs` with aliases + default.
+
+    - Tries: key -> built-in aliases -> explicit aliases
+    - Treats None and blank strings as "missing" and keeps searching.
+    """
+    sk = scaling_kwargs or {}
+    if not isinstance(sk, Mapping):
+        try:
+            sk = dict(sk)
+        except Exception:
+            sk = {}
+
+    cand = [key]
+    cand.extend(_SK_ALIASES.get(key, ()))
+    cand.extend([a for a in aliases if a])
+
+    for k in cand:
+        if k in sk:
+            v = sk[k]
+            if v is None:
+                continue
+            if isinstance(v, str) and not v.strip():
+                continue
+            if cast is not None:
+                try:
+                    v = cast(v)
+                except Exception as e:
+                    raise ValueError(f"Invalid scaling_kwargs[{k!r}]={v!r}.") from e
+            return v
+
+    if required:
+        alias_txt = ", ".join(repr(x) for x in cand[1:]) or "none"
+        raise ValueError(
+            f"Missing required scaling key {key!r} (aliases: {alias_txt})."
+        )
+    if cast is not None and default is not None:
+        try:
+            return cast(default)
+        except Exception:
+            return default
+    return default
+
+
+def _norm_policy(policy: Optional[str]) -> str:
+    """
+    Normalize scaling error policy.
+
+    Allowed:
+    - 'ignore'
+    - 'warn'   (default)
+    - 'raise'
+    """
+    p = (policy or "warn").strip().lower()
+    if p not in ("ignore", "warn", "raise"):
+        p = "warn"
+    return p
+
+
+def _handle_scaling_issue(
+    scaling_kwargs: Optional[Dict[str, Any]],
+    message: str,
+    *,
+    where: str = "validate",
+) -> None:
+    """
+    Apply scaling error policy.
+
+    Notes
+    -----
+    You asked for: even if policy is 'raise', runtime
+    fallback paths should still fall back to zeros.
+    So:
+    - where='validate': obey ignore/warn/raise
+    - where='runtime' : treat 'raise' as 'warn'
+    """
+    sk = scaling_kwargs or {}
+    policy = _norm_policy(
+        get_sk(sk, "scaling_error_policy", default="warn")
+    )
+
+    # Runtime must not crash; still fall back later.
+    if where != "validate" and policy == "raise":
+        policy = "warn"
+
+    if policy == "ignore":
+        return
+
+    if policy == "warn":
+        warn(
+            message,
+            category=RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    # validate + raise
+    raise ValueError(message)
+
+def validate_scaling_kwargs(
+    scaling_kwargs: Optional[Dict[str, Any]],
+) -> None:
+    """
+    Basic scaling sanity checks.
+
+    This includes policy-controlled heuristic checks
+    for common "silent fallback" cases.
+    """
+    sk = canonicalize_scaling_kwargs(scaling_kwargs)
+    enforce_scaling_alias_consistency(sk, where="validate")
+
+    # --------------------------------------------------
+    # Degrees mode requires meters-per-degree factors.
+    # --------------------------------------------------
+    if bool(sk.get("coords_in_degrees", False)):
+        for key in ("deg_to_m_lon", "deg_to_m_lat"):
+            val = sk.get(key, None)
+            if val is None:
+                msg = (
+                    "coords_in_degrees=True but missing "
+                    f"scaling_kwargs[{key!r}]."
+                )
+                raise ValueError(msg)
+            try:
+                v = float(val)
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"Invalid {key!r}={val!r}."
+                ) from e
+            if not np.isfinite(v) or v <= 0.0:
+                raise ValueError(f"Invalid {key!r}={v}.")
+
+    # --------------------------------------------------
+    # Normalized coords require coord_ranges.
+    # --------------------------------------------------
+    if bool(sk.get("coords_normalized", False)) and not sk.get(
+        "coord_ranges",
+        None,
+    ):
+        raise ValueError(
+            "coords_normalized=True but coord_ranges missing."
+        )
+
+    # --------------------------------------------------
+    # Require time units (alias-safe).
+    # --------------------------------------------------
+    if get_sk(sk, "time_units", default=None) is None:
+        raise ValueError("time_units missing in scaling_kwargs.")
+
+    # --------------------------------------------------
+    # Heuristic checks (policy-controlled).
+    # --------------------------------------------------
+    names = sk.get("dynamic_feature_names", None)
+    names = list(names) if names is not None else []
+
+    # A) Subsidence init: detect cum subs channel.
+    has_subs_cum = any(
+        ("subs" in str(n).lower() and "cum" in str(n).lower())
+        for n in names
+    )
+
+    subs_idx = sk.get("subs_dyn_index", None)
+    subs_name = get_sk(sk, "subs_dyn_name", default=None)
+
+    meta = sk.get("gwl_z_meta", {}) or {}
+    cols = meta.get("cols", {}) or {}
+    subs_meta = cols.get("subs_model", None)
+
+    if has_subs_cum and subs_idx is None and subs_name is None:
+        if subs_meta is None:
+            msg = (
+                "dynamic_feature_names contains a cumulative "
+                "subsidence channel, but no subs_dyn_index/"
+                "subs_dyn_name and no gwl_z_meta.cols.subs_model. "
+                "Initial settlement will fall back to zeros."
+            )
+            _handle_scaling_issue(
+                sk,
+                msg,
+                where="validate",
+            )
+
+    # B) Depth->head conversion needs z_surf when proxy=False.
+    kind = str(sk.get("gwl_kind", "")).lower()
+    proxy = bool(sk.get("use_head_proxy", True))
+
+    if (not proxy) and (
+        kind not in ("head", "waterhead", "hydraulic_head")
+    ):
+        z_col = sk.get("z_surf_col", None)
+        z_col = z_col or meta.get("z_surf_col", None)
+
+        z_static = cols.get("z_surf_static", None)
+        z_idx = sk.get("z_surf_static_index", None)
+
+        static_names = get_sk(
+            sk,
+            "static_feature_names",
+            default=None,
+        )
+
+        # If you did not provide a way to locate z_surf
+        # in static features, conversion may fallback.
+        if (
+            z_idx is None
+            and static_names is None
+            and z_col is not None
+            and z_static is not None
+            and z_col != z_static
+        ):
+            msg = (
+                "use_head_proxy=False and gwl_kind is depth-like, "
+                "but z_surf_col differs from gwl_z_meta.cols."
+                "z_surf_static, and no static_feature_names/"
+                "z_surf_static_index provided. Depth->head "
+                "conversion may fall back to depth."
+            )
+            _handle_scaling_issue(
+                sk,
+                msg,
+                where="validate",
+            )
 
 
 def affine_from_cfg(
@@ -138,7 +658,12 @@ def deg_to_m(
     axis: str,
     scaling_kwargs: Optional[Dict[str, Any]],
 ) -> Tensor:
-    """Meters per degree factor for lon/lat coords."""
+    """
+    Meters per degree factor for lon/lat coords.
+
+    If coords_in_degrees=True and deg_to_m_lon/lat are missing, we try
+    to compute them from lat0_deg (recommended).
+    """
     if axis not in ("x", "y"):
         raise ValueError(
             f"deg_to_m: axis must be 'x' or 'y', got {axis!r}."
@@ -150,12 +675,21 @@ def deg_to_m(
 
     key = "deg_to_m_lon" if axis == "x" else "deg_to_m_lat"
     val = cfg.get(key, None)
-    if val is None:
-        raise ValueError(
-            "coords_in_degrees=True but missing "
-            f"scaling_kwargs[{key!r}]."
-        )
 
+    if val is None:
+        lat0 = cfg.get("lat0_deg", None)
+        if lat0 is None:
+            raise ValueError(
+                "coords_in_degrees=True but missing deg_to_m_lon/deg_to_m_lat "
+                "and lat0_deg (needed for lon scaling)."
+            )
+        lat0 = float(lat0)
+        if axis == "x":
+            v = 111320.0 * float(np.cos(np.deg2rad(lat0)))
+        else:
+            v = 110574.0
+        return tf_constant(v, tf_float32)
+    
     try:
         v = float(val)
     except (TypeError, ValueError) as e:
@@ -163,9 +697,8 @@ def deg_to_m(
 
     if not np.isfinite(v) or v <= 0.0:
         raise ValueError(f"Invalid {key!r}={v}.")
-
+        
     return tf_constant(v, tf_float32)
-
 
 def coord_ranges(
     scaling_kwargs: Optional[Dict[str, Any]],
@@ -191,43 +724,6 @@ def coord_ranges(
     yR = get("y", "y_range", "coord_range_y")
     return tR, xR, yR
 
-
-def validate_scaling_kwargs(
-    scaling_kwargs: Optional[Dict[str, Any]],
-) -> None:
-    """Basic scaling sanity checks."""
-    sk = scaling_kwargs or {}
-
-    # --- lon/lat degrees mode ------------------------------------------
-    # v3.2 supports coords in degrees by converting spatial derivatives
-    # using stored meters-per-degree factors (deg_to_m_lon/lat).
-    if bool(sk.get("coords_in_degrees", False)):
-        for key in ("deg_to_m_lon", "deg_to_m_lat"):
-            val = sk.get(key, None)
-            if val is None:
-                raise ValueError(
-                    "coords_in_degrees=True but missing "
-                    f"scaling_kwargs[{key!r}]."
-                )
-            try:
-                v = float(val)
-            except (TypeError, ValueError) as e:
-                raise ValueError(f"Invalid {key!r}={val!r}.") from e
-            if not np.isfinite(v) or v <= 0.0:
-                raise ValueError(f"Invalid {key!r}={v}.")
-
-    if bool(sk.get("coords_normalized", False)) and not sk.get(
-        "coord_ranges",
-        None,
-    ):
-        raise ValueError(
-            "coords_normalized=True but coord_ranges missing."
-        )
-
-    if "time_units" not in sk:
-        raise ValueError("time_units missing in scaling_kwargs.")
-
-
 def resolve_gwl_dyn_index(
     scaling_kwargs: Optional[Dict[str, Any]],
 ) -> int:
@@ -239,7 +735,7 @@ def resolve_gwl_dyn_index(
         return int(idx)
 
     names = sk.get("dynamic_feature_names", None)
-    gwl_col = sk.get("gwl_col", None)
+    gwl_col = get_sk(sk, "gwl_col", default=None)
 
     if names is not None and gwl_col is not None:
         names = list(names)
@@ -264,10 +760,7 @@ def get_gwl_dyn_index_cached(model) -> int:
         setattr(model, "gwl_dyn_index", int(idx))
     return int(idx)
 
-
-def resolve_subs_dyn_index(
-    scaling_kwargs: Optional[Dict[str, Any]],
-) -> int:
+def resolve_subs_dyn_index(scaling_kwargs):
     """Resolve subsidence channel index for dynamic_features.
 
     This is optional: v3.2 can use historical subsidence as a dynamic
@@ -281,7 +774,15 @@ def resolve_subs_dyn_index(
         return int(idx)
 
     names = sk.get("dynamic_feature_names", None)
-    subs_col = sk.get("subs_dyn_name", None) or sk.get("subs_col", None)
+
+    subs_col = get_sk(sk, "subs_dyn_name", default=None)
+
+    # NEW: fallback to gwl_z_meta.cols.subs_model
+    if subs_col is None:
+        meta = sk.get("gwl_z_meta", {}) or {}
+        cols = meta.get("cols", {}) or {}
+        subs_col = cols.get("subs_model", None)
+
     if names is not None and subs_col is not None:
         names = list(names)
         if subs_col in names:
@@ -289,7 +790,7 @@ def resolve_subs_dyn_index(
 
     raise ValueError(
         "Cannot resolve subsidence channel. Provide subs_dyn_index "
-        "or dynamic_feature_names + subs_dyn_name."
+        "or dynamic_feature_names + subs_dyn_name (or gwl_z_meta.cols.subs_model)."
     )
 
 
@@ -330,46 +831,94 @@ def assert_dynamic_names_match_tensor(
         message="dynamic_feature_names != Xh last dim",
     )
 
+
 def gwl_to_head_m(
     v_m: Tensor,
     scaling_kwargs: Optional[Dict[str, Any]],
     *,
     inputs: Optional[Dict[str, Tensor]] = None,
 ) -> Tensor:
-    """Convert depth-bgs to head if requested.
+    """
+    Convert depth-bgs to head if possible.
 
-    If `gwl_kind` is missing, infer it from `gwl_col`: any name
-    containing "depth" is treated as depth (down-positive by default).
-    This keeps raw and *_z column variants consistent.
+    Behavior
+    --------
+    - If gwl_kind is head-like: return v_m.
+    - Otherwise treat as depth and try:
+      head = z_surf - depth.
+    - If z_surf is missing:
+      * use_head_proxy=True  -> return -depth
+      * use_head_proxy=False -> return depth
     """
     sk = scaling_kwargs or {}
 
+    # --------------------------------------------------
+    # 1) Decide whether v_m is head or depth.
+    # --------------------------------------------------
     kind_raw = sk.get("gwl_kind", None)
     if kind_raw is None or str(kind_raw).strip() == "":
-        gwl_col = str(sk.get("gwl_col", "")).lower()
+        gwl_col = str(get_sk(sk, "gwl_col", default=""))
+        gwl_col = gwl_col.lower()
         kind = "depth" if ("depth" in gwl_col) else "head"
     else:
         kind = str(kind_raw).lower()
 
-    # Any non-head kind is treated as depth (backward-compatible with
-    # "depth_bgs", etc.)
     if kind in ("head", "waterhead", "hydraulic_head"):
         return tf_cast(v_m, tf_float32)
 
+    # --------------------------------------------------
+    # 2) Depth convention + proxy behavior.
+    # --------------------------------------------------
     sign = str(sk.get("gwl_sign", "down_positive")).lower()
     proxy = bool(sk.get("use_head_proxy", True))
-    z_surf_col = sk.get("z_surf_col", None)
 
+    # --------------------------------------------------
+    # 3) Collect possible z_surf keys.
+    # Prefer SI/static key first when available.
+    # --------------------------------------------------
+    meta = sk.get("gwl_z_meta", {}) or {}
+    cols = meta.get("cols", {}) or {}
+
+    z_surf_col = sk.get("z_surf_col", None)
+    z_surf_col = z_surf_col or meta.get("z_surf_col", None)
+
+    z_surf_static = cols.get("z_surf_static", None)
+    z_surf_raw = cols.get("z_surf_raw", None)
+
+    z_surf_keys = [
+        k
+        for k in (z_surf_static, z_surf_col, z_surf_raw)
+        if k
+    ]
+
+    # Dedupe while preserving order.
+    seen = set()
+    z_surf_keys = [
+        k
+        for k in z_surf_keys
+        if not (k in seen or seen.add(k))
+    ]
+
+    # --------------------------------------------------
+    # 4) Convert to positive-down depth.
+    # --------------------------------------------------
     v_m = tf_cast(v_m, tf_float32)
     depth_m = v_m if sign == "down_positive" else -v_m
 
+    # --------------------------------------------------
+    # 5) Try direct inputs[z_surf_key] first.
+    # --------------------------------------------------
     z_surf = None
+    if inputs is not None:
+        for k in z_surf_keys:
+            z_surf = inputs.get(k, None)
+            if z_surf is not None:
+                z_surf = tf_cast(z_surf, tf_float32)
+                break
 
-    if inputs is not None and z_surf_col:
-        z_surf = inputs.get(z_surf_col, None)
-        if z_surf is not None:
-            z_surf = tf_cast(z_surf, tf_float32)
-
+    # --------------------------------------------------
+    # 6) If missing, try static_features lookup.
+    # --------------------------------------------------
     if z_surf is None and inputs is not None:
         sf = inputs.get("static_features", None)
         if sf is not None:
@@ -377,16 +926,21 @@ def gwl_to_head_m(
 
             idx = sk.get("z_surf_static_index", None)
             if idx is None:
-                names = sk.get("static_feature_names", None)
-                if names is None:
-                    names = sk.get("static_features_names", None)
-                if names is not None and z_surf_col is not None:
+                names = get_sk(
+                    sk,
+                    "static_feature_names",
+                    default=None,
+                )
+                if names is not None:
                     names = list(names)
-                    if z_surf_col in names:
-                        idx = int(names.index(z_surf_col))
+                    for k in z_surf_keys:
+                        if k in names:
+                            idx = int(names.index(k))
+                            break
 
             if idx is not None:
                 idx_i = int(idx)
+
                 tf_debugging.assert_less(
                     tf_cast(idx_i, tf_int32),
                     tf_shape(sf)[-1],
@@ -406,6 +960,9 @@ def gwl_to_head_m(
                         lambda: sf[:, :, idx_i:idx_i + 1],
                     )
 
+    # --------------------------------------------------
+    # 7) If we have z_surf: head = z_surf - depth.
+    # --------------------------------------------------
     if z_surf is not None:
         r = tf_rank(z_surf)
         z_surf = tf_cond(
@@ -417,11 +974,15 @@ def gwl_to_head_m(
                 lambda: z_surf,
             ),
         )
+
+        # Broadcast z_surf to match depth_m.
         z_surf = z_surf + tf_zeros_like(depth_m)
         return z_surf - depth_m
 
+    # --------------------------------------------------
+    # 8) Fallback: proxy head or keep depth.
+    # --------------------------------------------------
     return -depth_m if proxy else depth_m
-
 
 def _reshape_to_b11(v: Tensor) -> Tensor:
     """Coerce a tensor to (B,1,1) if possible."""
@@ -517,8 +1078,15 @@ def get_s_init_si(
         if Xh is not None:
             try:
                 subs_idx = get_subs_dyn_index_cached(model)
-            except Exception:
+            except Exception as e:
+                _handle_scaling_issue(
+                    getattr(model, "scaling_kwargs", None),
+                    f"Could not resolve subsidence init channel ({e}). "
+                    "Falling back to zeros for s_init_si.",
+                    where="runtime",
+                )
                 subs_idx = None
+                
             if subs_idx is not None:
                 Xh = tf_cast(Xh, tf_float32)
                 assert_dynamic_names_match_tensor(Xh, sk)
@@ -620,7 +1188,7 @@ def infer_dt_units_from_t(
     dt_pos_f = tf_cast(dt_pos, tf_float32)
     dt = dt * dt_pos_f + dt_default * (1.0 - dt_pos_f)
     
-    dt_eps = float(scaling_kwargs.get("dt_min_units", 1e-6))
+    dt_eps = float(get_sk(sk, "dt_min_units", default=1e-6))
     dt = tf_maximum(dt, tf_constant(dt_eps, tf_float32))
 
 

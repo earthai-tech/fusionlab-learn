@@ -329,7 +329,7 @@ PDE_MODE_CONFIG = "both"
 PHYSICS_BASELINE_MODE = "none"
 
 # If True, use internal scale factors (c*, g*) so residual terms are comparable.
-SCALE_PDE_RESIDUALS = False
+SCALE_PDE_RESIDUALS = True
 
 
 # -------------------------------------------------------------------
@@ -365,13 +365,13 @@ LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
 
 # If LAMBDA_OFFSET_SCHEDULE is None, callback uses warmup:
 # start -> end over `LAMBDA_OFFSET_WARMUP` epochs/steps.
-LAMBDA_OFFSET_WARMUP = 15
+LAMBDA_OFFSET_WARMUP = 5# 15
 
 # Safe defaults:
 # - start small so the model learns data scale before physics locks in
 # - end at 1.0 (neutral)
-LAMBDA_OFFSET_START = 0.05
-LAMBDA_OFFSET_END = 1.0
+LAMBDA_OFFSET_START = 0.2 # 0.05
+LAMBDA_OFFSET_END = 10 #1.0
 
 # Optional explicit schedule:
 # - dict  : {index: value} where index is epoch/step
@@ -400,6 +400,13 @@ PHYSICS_BOUNDS = {
 
     "Ss_min": 1e-6,     # [1/m]
     "Ss_max": 1e-3,
+    
+    # tau bounds (seconds)
+    "tau_min": 7.0 * 86400.0,
+    "tau_max": 300.0 * 31556952.0,
+    # (optional) or directly:
+    # "logTau_min": np.log(7*86400.0),
+    # "logTau_max": np.log(300*31556952.0),
 }
 
 # Bounds penalty mode:
@@ -411,6 +418,7 @@ PHYSICS_BOUNDS_MODE = "hard"
 # Must match what `TIME_COL` represents in your dataset.
 TIME_UNITS = "year"
 
+DEBUG_PHYSICS_GRADS =False  
 
 
 # -------------------------------------------------------------------
@@ -496,7 +504,21 @@ GEOPRIOR_H_REF = "auto"   # or 0.0
 #   - "exact" : v3.2 exact step formulation (preferred)
 #   - "fd"    : finite-difference / legacy discretization
 CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
+CONSOLIDATION_RESIDUAL_UNITS ="second"
 
+CONS_SCALE_FLOOR =1e-10
+GW_SCALE_FLOOR =1e-10
+DT_MIN_UNITS = 1e-6
+
+Q_WRT_NORMALIZED_TIME = False 
+Q_IN_SI = True 
+Q_IN_PER_SECOND = False
+Q_KIND ="per_volume" 
+Q_LENGTH_IN_SI=False 
+
+DRAINAGE_MODE ="double" 
+
+SCALING_ERROR_POLICY ="raise" 
 
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)

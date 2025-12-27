@@ -187,6 +187,7 @@ MODEL_NAME = MODEL_ENV or cfg.get("MODEL_NAME", "GeoPriorSubsNet")
 FEATURES   = cfg.get("features", {}) or {}
 DYN_NAMES  = FEATURES.get("dynamic", []) or []
 FUT_NAMES  = FEATURES.get("future",  []) or []   
+STA_NAMES  = FEATURES.get("static",  []) or []  
 
 CENSOR     = cfg.get("censoring", {}) or cfg.get("censor", {}) or {}
 CENSOR_SPECS  = CENSOR.get("specs", []) or []
@@ -337,6 +338,13 @@ _default_phys_bounds = {
     "K_max": 1e-3,
     "Ss_min": 1e-7,
     "Ss_max": 1e-3,
+    # tau bounds (seconds)
+    "tau_min": 7.0 * 86400.0,
+    "tau_max": 300.0 * 31556952.0,
+    
+    # tau in years (because time_units="yr"):
+    "tau_min_units": 0.05,   # ~18 days
+    "tau_max_units": 300.0,  # 300 years
 }
 
 phys_bounds = dict(_default_phys_bounds)
@@ -353,12 +361,20 @@ bounds_for_scaling = {
     "K_max":  float(phys_bounds["K_max"]),
     "Ss_min": float(phys_bounds["Ss_min"]),
     "Ss_max": float(phys_bounds["Ss_max"]),
-
+    
+    # tau bounds (seconds)
+    "tau_min":  float(phys_bounds["tau_min"]),
+    "tau_max": float(phys_bounds["tau_max"]),
+    
     # convenience log-space
     "logK_min":  float(np.log(phys_bounds["K_min"])),
     "logK_max":  float(np.log(phys_bounds["K_max"])),
     "logSs_min": float(np.log(phys_bounds["Ss_min"])),
     "logSs_max": float(np.log(phys_bounds["Ss_max"])),
+
+    "logTau_min": float(np.log(phys_bounds["tau_min"])),
+    "logTau_max": float(np.log(phys_bounds["tau_max"])),
+    
 }
 
 # GeoPrior scalar params
@@ -417,6 +433,7 @@ GWL_COL        = cols_cfg.get("gwl", "GWL")
 # (depth-to-water or head proxy) and store its index for the model.
 # -------------------------------------------------------------------------
 sk_stage1 = cfg.get("scaling_kwargs", {}) or {}
+sk_model = sk_stage1.copy() 
 
 # Prefer Stage-1 exported channel index (most robust)
 if "gwl_dyn_index" in sk_stage1 and sk_stage1["gwl_dyn_index"] is not None:
@@ -456,6 +473,17 @@ else:
     GWL_DYN_INDEX = int(DYN_NAMES.index(gwl_dyn_name))
 
 print(f"[Info] GWL dynamic channel: name={gwl_dyn_name} | index={GWL_DYN_INDEX}")
+
+Z_SURF_STATIC_INDEX = sk_stage1.get('z_surf_static_index')
+
+# get index straight from sk_tage1
+SUBS_DYN_INDEX =None 
+SUBS_DYN_INDEX= sk_stage1.get("subs_dyn_index" )
+sub_model_name = sk_stage1.get('subs_dyn_name') 
+if SUBS_DYN_INDEX is None and sub_model_name is not None: 
+    if 'sub_model_name' in list(DYN_NAMES): 
+        # then get the index 
+        SUBS_DYN_INDEX = list(DYN_NAMES).index (sub_model_name) 
 
 # Train options
 EPOCHS        = cfg.get("EPOCHS", 50)
@@ -648,6 +676,7 @@ gwl_z_meta = {
         "depth_model": cols_spec.get("depth_model"),
         "head_model": cols_spec.get("head_model"),
         "z_surf_static": cols_spec.get("z_surf_static"),
+        "subs_model": SUBS_MODEL_COL
     },
 }
 
@@ -702,7 +731,8 @@ if coords_in_degrees and (deg_to_m_lon is None or deg_to_m_lat is None):
     lat_ref_deg = sk.get("lat_ref_deg", None)
 
     if lat_ref_deg is None or (
-        isinstance(lat_ref_deg, str) and lat_ref_deg.strip().lower() == "auto"
+        isinstance(lat_ref_deg, str) and lat_ref_deg.strip(
+            ).lower() == "auto"
     ):
         scaled_csv_path = (
             M.get("artifacts", {})
@@ -735,7 +765,7 @@ if coords_in_degrees and (deg_to_m_lon is None or deg_to_m_lat is None):
     try:
           # type: ignore
         deg_to_m_lon, deg_to_m_lat = deg_to_m_from_lat(lat_ref_deg)
-    except Exception:
+    except:
         lat_rad = np.deg2rad(lat_ref_deg)
         deg_to_m_lat = (
             111132.92
@@ -839,20 +869,6 @@ if "future_features" in X_train and FUT_NAMES:
 # Build datasets
 # =============================================================================
 
-# train_dataset = make_tf_dataset(
-#     X_train, y_train,
-#     batch_size=BATCH_SIZE,
-#     shuffle=True,
-#     mode=MODE,
-#     forecast_horizon=FORECAST_HORIZON_YEARS,
-# )
-# val_dataset = make_tf_dataset(
-#     X_val, y_val,
-#     batch_size=BATCH_SIZE,
-#     shuffle=False,
-#     mode=MODE,
-#     forecast_horizon=FORECAST_HORIZON_YEARS,
-# )
 train_dataset = make_tf_dataset(
     X_train,
     y_train,
@@ -912,6 +928,15 @@ MODEL_CLASS_REGISTRY = {
 
 model_cls = MODEL_CLASS_REGISTRY.get(MODEL_NAME, GeoPriorSubsNet)
 
+sk_model.update (sk)
+
+sk_model.update ({
+    # anything else default_scales(...) already expects can
+    # also be passed here later
+    "bounds": bounds_for_scaling,
+    "time_units": TIME_UNITS,   
+    } 
+)
 subsmodel_params = {
     "embed_dim": EMBED_DIM,
     "hidden_units": HIDDEN_UNITS,
@@ -931,12 +956,7 @@ subsmodel_params = {
     "mode": MODE,
     "attention_levels": ATTENTION_LEVELS,
     "scale_pde_residuals": SCALE_PDE_RESIDUALS,
-    "scaling_kwargs": {
-        # anything else default_scales(...) already expects can
-        # also be passed here later
-        "bounds": bounds_for_scaling,
-        "time_units": TIME_UNITS,   
-    },
+    "scaling_kwargs": sk_model, # get the scaling from manifest and update 
     "bounds_mode": PHYSICS_BOUNDS_MODE,
     # GeoPrior scalar params
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
@@ -971,18 +991,22 @@ subsmodel_params["scaling_kwargs"].update({
     "allow_subs_residual": ALLOW_SUBS_RESIDUAL, 
     
 })
-
+Z_SURF_STATIC_INDEX = sk_stage1.get('z_surf_static_index')
 subsmodel_params["scaling_kwargs"].update({
     # names let you sanity-check tensors and debug
     "dynamic_feature_names": list(DYN_NAMES),
     "future_feature_names":  list(FUT_NAMES),
+    "static_feature_names" : list(STA_NAMES), 
 
     # the important part: safe slicing instead of hard-coded channel 0
     "gwl_dyn_name":  gwl_dyn_name,
     "gwl_dyn_index": GWL_DYN_INDEX,
+    
+    "z_surf_static_index": int(
+        Z_SURF_STATIC_INDEX) if Z_SURF_STATIC_INDEX is not None else None , 
+    "subs_dyn_index": int(SUBS_DYN_INDEX) if SUBS_DYN_INDEX is not None else None, 
+    'subs_dyn_name': sub_model_name if sub_model_name is not None else SUBS_MODEL_COL, 
 })
-
-
 
 subs_scale_si = sk.get("subs_scale_si")
 subs_bias_si  = sk.get("subs_bias_si")
@@ -1007,7 +1031,7 @@ if head_scale_si is None or head_bias_si is None:
         scale_key="HEAD_SCALE_SI",
         bias_key="HEAD_BIAS_SI",
     )
-
+    
 subsmodel_params["scaling_kwargs"].update({
     "subs_scale_si": subs_scale_si,
     "subs_bias_si": subs_bias_si,
@@ -1020,6 +1044,49 @@ subsmodel_params["scaling_kwargs"].update({
     "use_head_proxy": USE_HEAD_PROXY,     # if no z_surf -> head_proxy = -depth
     "z_surf_col": Z_SURF_COL,             # None or column name if you provide it
     "gwl_z_meta": sk.get("gwl_z_meta", None),  # optional traceability
+    
+    "subsidence_kind": sk.get("subsidence_kind", cfg.get(
+        "SUBSIDENCE_KIND", "cumulative")
+        ), 
+    'cons_residual_units': sk.get(
+        "CONSOLIDATION_RESIDUAL_UNITS", "second"
+        ),
+    'cons_scale_floor':  sk.get("cons_scale_floor", cfg.get(
+        "CONS_SCALE_FLOOR", 1e-10)
+        ),
+    'gw_scale_floor' :sk.get("gw_scale_floor", cfg.get(
+        "GW_SCALE_FLOOR", 1e-10)
+        ), 
+    'dt_min_units' :sk.get("dt_min_units", cfg.get(
+        "DT_MIN_UNITS", 1e-6)
+        ), 
+    'Q_wrt_normalized_time':sk.get("Q_wrt_normalized_time", cfg.get(
+        "Q_WRT_NORMALIZED_TIME", False)
+        ), 
+    'Q_in_si' : sk.get("Q_in_si", cfg.get(
+        "Q_IN_SI", False)
+        ), 
+    'Q_in_per_second' : sk.get("Q_in_per_second", cfg.get(
+        "Q_IN_PER_SECOND", False )
+        ), 
+    'Q_kind' : sk.get("Q_kind", cfg.get(
+        "Q_KIND", "per_volume")
+        ), 
+    'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get(
+        "Q_LENGTH_IN_SI", False )
+        ), 
+    'drainage_mode': sk.get("drainage_mode", cfg.get("DRAINAGE_MODE", "double")), 
+    
+    "debug_physics_grads": sk.get('debug_physics_grads', cfg.get(
+        "DEBUG_PHYSICS_GRADS", False
+        )
+     ), 
+    "scaling_error_policy": sk.get('scaling_error_policy', cfg.get(
+        'SCALING_ERROR_POLICY','warn')
+        )
+    
+    
+    
 })
 
 # Optional: drop Nones to keep scaling_kwargs clean
@@ -1051,7 +1118,11 @@ print("SI conversions:  s_si = s_model*subs_scale_si + subs_bias_si ; "
       "h_si = h_model*head_scale_si + head_bias_si")
 print("=" * 72)
 
+scaling_path = os.path.join(RUN_OUTPUT_PATH, "scaling_kwargs.json")
+with open(scaling_path, "w", encoding="utf-8") as f:
+    json.dump(subsmodel_params["scaling_kwargs"] , f, indent=2)
 
+ 
 subs_model_inst = model_cls(
     static_input_dim=s_dim_model,
     dynamic_input_dim=d_dim_model,
@@ -1150,7 +1221,7 @@ history = subs_model_inst.fit(
     validation_data=val_dataset,
     epochs=EPOCHS,
     callbacks=callbacks,
-    verbose=1,
+    verbose=1,  
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
 #%
@@ -1293,9 +1364,11 @@ run_manifest["config"]["scaling_kwargs"].update({
     "head_bias_si": head_bias_si,
     "H_scale_si": float(H_scale_si) if H_scale_si is not None else None,
     "H_bias_si":  float(H_bias_si)  if H_bias_si  is not None else None,
+    
     "coords_normalized": coords_normalized,
     "coord_ranges": coord_ranges,
     "coords_in_degrees": coords_in_degrees,
+    
     "deg_to_m_lon": deg_to_m_lon,
     "deg_to_m_lat": deg_to_m_lat,
 })
@@ -1303,6 +1376,7 @@ run_manifest["config"]["scaling_kwargs"].update({
 run_manifest["config"]["scaling_kwargs"].update({
     "dynamic_feature_names": list(DYN_NAMES),
     "future_feature_names":  list(FUT_NAMES),
+    "static_feature_names" : list(STA_NAMES), 
     "gwl_dyn_name":  gwl_dyn_name,
     "gwl_dyn_index": int(GWL_DYN_INDEX),
 })

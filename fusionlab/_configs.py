@@ -31,6 +31,7 @@ _STANDARD_ALONE_MAP = {
     'broadcast_to': ('tensorflow', 'broadcast_to'), 
     'bool': ('tensorflow', 'bool'),
     'cast': ('tensorflow', 'cast'),
+    'clip_by_value':('tensorflow', 'clip_by_value'), 
     'concat': ('tensorflow', 'concat'),
     'cond': ('tensorflow', 'cond'),
     'constant': ('tensorflow', 'constant'),
