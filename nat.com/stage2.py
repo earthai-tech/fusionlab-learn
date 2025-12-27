@@ -1132,7 +1132,7 @@ subs_model_inst = model_cls(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     quantiles=QUANTILES,
     pde_mode=PDE_MODE_CONFIG,
-    verbose = 0, # XXX TOREMOVE :  gFOR DEBUG ONLY
+    verbose = 1, # XXX TOREMOVE :  gFOR DEBUG ONLY
     **subsmodel_params,
 )
 

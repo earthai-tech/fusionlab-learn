@@ -1172,6 +1172,18 @@ def get_log_bounds(
                             )
                     except Exception:
                         pass
+                
+                    if vmin <= 0.0 or vmax <= 0.0:
+                        raise ValueError(
+                            f"{lin_min_key}/{lin_max_key} must be > 0. "
+                            f"Got vmin={vmin}, vmax={vmax}."
+                        )
+                    if vmax <= vmin:
+                        raise ValueError(
+                            f"{lin_max_key} must be > {lin_min_key}. "
+                            f"Got vmin={vmin}, vmax={vmax}."
+                        )
+
 
                 return float(np.log(vmin)), float(np.log(vmax))
 
@@ -1996,8 +2008,24 @@ def compute_scales(
 
     out = {"cons_scale": cons_scale, "gw_scale": gw_scale}
 
+    if verbose > 0:
+        vprint(
+            verbose,
+            "cons_scale:",
+            "min=", tf_reduce_min(cons_scale),
+            "mean=", tf_reduce_mean(cons_scale),
+            "max=", tf_reduce_max(cons_scale),
+        )
+        vprint(
+            verbose,
+            "gw_scale:",
+            "min=", tf_reduce_min(gw_scale),
+            "mean=", tf_reduce_mean(gw_scale),
+            "max=", tf_reduce_max(gw_scale),
+        )
     vprint(verbose, "compute_scales(v3.2): time_units=", time_units)
-    vprint(verbose, "compute_scales(v3.2): cons_scale=", cons_scale, "gw_scale=", gw_scale)
+    vprint(verbose, "compute_scales(v3.2): cons_scale=", 
+           cons_scale, "gw_scale=", gw_scale)
     return out
 
 
@@ -2121,164 +2149,144 @@ def settlement_state_for_pde(
 
     return s_cum
 
-# # -*- coding: utf-8 -*-
-# # _geoprior_maths.py (or generic math utils)
-
-# from __future__ import annotations
-
-# from typing import Optional, Sequence, Union
-
-# from .. import KERAS_DEPS
-
-# Tensor = KERAS_DEPS.Tensor
-
-# tf_float32 = KERAS_DEPS.float32
-
-# tf_cast = KERAS_DEPS.cast
-# tf_constant = KERAS_DEPS.constant
-# tf_debugging = KERAS_DEPS.debugging
-# tf_math = KERAS_DEPS.math
-# tf_reduce_mean = KERAS_DEPS.reduce_mean
-# tf_reduce_sum = KERAS_DEPS.reduce_sum
-# tf_sqrt = KERAS_DEPS.sqrt
-# tf_square = KERAS_DEPS.square
-# tf_where = KERAS_DEPS.where
-# tf_zeros_like = KERAS_DEPS.zeros_like
-
-
-# def to_rms(
-#     x: Tensor,
-#     *,
-#     axis: AxisLike = None,
-#     keepdims: bool = False,
-#     eps: Optional[float] = None,
-#     rms_floor: Optional[float] = None,
-#     nan_policy: str = "propagate",
-#     dtype: Tensor = tf_float32,
-# ) -> Tensor:
-#     """Root-mean-square (RMS) of a tensor.
-
-#     Notes
-#     -----
-#     - By default (eps=None), NO flooring is applied.
-#       This avoids "frozen" epsilons in logs.
-#     - Use eps (mean-square floor) only when you really
-#       need a nonzero lower bound (rare for metrics).
-#     - Use rms_floor if you specifically want an RMS
-#       lower bound (also opt-in).
-
-#     Parameters
-#     ----------
-#     x : Tensor
-#         Input tensor.
-#     axis : int | Sequence[int] | None
-#         Reduction axis/axes. If None, reduce all.
-#     keepdims : bool
-#         Keep reduced dimensions.
-#     eps : float | None
-#         Optional lower bound on the mean-square before
-#         sqrt (mean-square floor). If None, disabled.
-#     rms_floor : float | None
-#         Optional lower bound on the RMS after sqrt.
-#         If None, disabled.
-#     nan_policy : {"propagate", "raise", "omit"}
-#         - "propagate": NaN/Inf propagate naturally.
-#         - "raise": assert all finite before reduce.
-#         - "omit": ignore non-finite entries in RMS.
-#     dtype : tf.DType
-#         Compute dtype (casts x before reduction).
-
-#     Returns
-#     -------
-#     rms : Tensor
-#         RMS value (scalar if axis=None; else reduced).
-#     """
-#     x = tf_cast(x, dtype)
-
-#     if nan_policy == "raise":
-#         tf_debugging.assert_all_finite(
-#             x,
-#             "to_rms(): x has NaN/Inf",
-#         )
-#         ms = tf_reduce_mean(
-#             tf_square(x),
-#             axis=axis,
-#             keepdims=keepdims,
-#         )
-
-#     elif nan_policy == "omit":
-#         finite = tf_math.is_finite(x)
-#         x0 = tf_where(finite, x, tf_zeros_like(x))
-#         num = tf_reduce_sum(
-#             tf_square(x0),
-#             axis=axis,
-#             keepdims=keepdims,
-#         )
-#         den = tf_reduce_sum(
-#             tf_cast(finite, dtype),
-#             axis=axis,
-#             keepdims=keepdims,
-#         )
-#         den = tf_maximum(
-#             den,
-#             tf_constant(1.0, dtype),
-#         )
-#         ms = num / den
-
-#     else:  # "propagate"
-#         ms = tf_reduce_mean(
-#             tf_square(x),
-#             axis=axis,
-#             keepdims=keepdims,
-#         )
-
-#     if eps is not None and float(eps) > 0.0:
-#         ms = tf_maximum(
-#             ms,
-#             tf_constant(float(eps), dtype),
-#         )
-
-#     rms = tf_sqrt(ms)
-
-#     if rms_floor is not None and float(rms_floor) > 0.0:
-#         rms = tf_maximum(
-#             rms,
-#             tf_constant(float(rms_floor), dtype),
-#         )
-
-#     return rms
-
 def to_rms(
     x: Tensor,
     *,
-    axis=None,
+    axis: AxisLike = None,
     keepdims: bool = False,
-    eps: float = _SMALL,
+    eps: Optional[float] = None,
+    ms_floor: float | None = None,
+    rms_floor: Optional[float] = None,
+    nan_policy: str = "propagate",
+    dtype: Tensor = tf_float32,
 ) -> Tensor:
     """Root-mean-square (RMS) of a tensor.
+
+    Notes
+    -----
+    - By default (eps=None), NO flooring is applied.
+      This avoids "frozen" epsilons in logs.
+    - Use eps (mean-square floor) only when you really
+      need a nonzero lower bound (rare for metrics).
+    - Use rms_floor if you specifically want an RMS
+      lower bound (also opt-in).
 
     Parameters
     ----------
     x : Tensor
         Input tensor.
     axis : int | Sequence[int] | None
-        Reduction axis/axes. If None, reduce over all elements.
+        Reduction axis/axes. If None, reduce all.
     keepdims : bool
         Keep reduced dimensions.
-    eps : float
-        Optional lower bound on the mean-square before sqrt
-        (useful to avoid sqrt(0) in some diagnostics).
+    eps : float | None
+        Optional lower bound on the mean-square before
+        sqrt (mean-square floor). If None, disabled.
+    rms_floor : float | None
+        Optional lower bound on the RMS after sqrt.
+        If None, disabled.
+    nan_policy : {"propagate", "raise", "omit"}
+        - "propagate": NaN/Inf propagate naturally.
+        - "raise": assert all finite before reduce.
+        - "omit": ignore non-finite entries in RMS.
+    dtype : tf.DType
+        Compute dtype (casts x before reduction).
 
     Returns
     -------
     rms : Tensor
-        RMS value (scalar if axis=None; else reduced tensor).
+        RMS value (scalar if axis=None; else reduced).
     """
-    x = tf_cast(x, tf_float32)
-    ms = tf_reduce_mean(tf_square(x), axis=axis, keepdims=keepdims)
-    if eps and float(eps) > 0.0:
-        ms = tf_maximum(ms, tf_constant(float(eps), tf_float32))
-    return tf_sqrt(ms)
+    x = tf_cast(x, dtype)
+
+    if nan_policy == "raise":
+        tf_debugging.assert_all_finite(
+            x,
+            "to_rms(): x has NaN/Inf",
+        )
+        ms = tf_reduce_mean(
+            tf_square(x),
+            axis=axis,
+            keepdims=keepdims,
+        )
+
+    elif nan_policy == "omit":
+        finite = tf_math.is_finite(x)
+        x0 = tf_where(finite, x, tf_zeros_like(x))
+        num = tf_reduce_sum(
+            tf_square(x0),
+            axis=axis,
+            keepdims=keepdims,
+        )
+        den = tf_reduce_sum(
+            tf_cast(finite, dtype),
+            axis=axis,
+            keepdims=keepdims,
+        )
+        den = tf_maximum(
+            den,
+            tf_constant(1.0, dtype),
+        )
+        ms = num / den
+
+    else:  # "propagate"
+        ms = tf_reduce_mean(
+            tf_square(x),
+            axis=axis,
+            keepdims=keepdims,
+        )
+
+    if eps is not None and float(eps) > 0.0:
+        ms = tf_maximum(
+            ms,
+            tf_constant(float(eps), dtype),
+        )
+        
+    if ms_floor is not None:
+        msf = tf_constant(float(ms_floor), dtype)
+        ms = tf_maximum(ms, msf)
+        
+    rms = tf_sqrt(ms)
+
+    if rms_floor is not None and float(rms_floor) > 0.0:
+        rms = tf_maximum(
+            rms,
+            tf_constant(float(rms_floor), dtype),
+        )
+
+    return rms
+
+# def to_rms(
+#     x: Tensor,
+#     *,
+#     axis=None,
+#     keepdims: bool = False,
+#     eps: float = _SMALL,
+# ) -> Tensor:
+#     """Root-mean-square (RMS) of a tensor.
+
+#     Parameters
+#     ----------
+#     x : Tensor
+#         Input tensor.
+#     axis : int | Sequence[int] | None
+#         Reduction axis/axes. If None, reduce over all elements.
+#     keepdims : bool
+#         Keep reduced dimensions.
+#     eps : float
+#         Optional lower bound on the mean-square before sqrt
+#         (useful to avoid sqrt(0) in some diagnostics).
+
+#     Returns
+#     -------
+#     rms : Tensor
+#         RMS value (scalar if axis=None; else reduced tensor).
+#     """
+#     x = tf_cast(x, tf_float32)
+#     ms = tf_reduce_mean(tf_square(x), axis=axis, keepdims=keepdims)
+#     if eps and float(eps) > 0.0:
+#         ms = tf_maximum(ms, tf_constant(float(eps), tf_float32))
+#     return tf_sqrt(ms)
 
 def _stats(name: str, x: Tensor) -> None:
     x = tf_cast(x, tf_float32)
