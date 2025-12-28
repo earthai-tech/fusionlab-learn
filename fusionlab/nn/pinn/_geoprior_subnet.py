@@ -2477,23 +2477,23 @@ class GeoPriorSubsNet(BaseAttentive):
             f"Invalid offset_mode={mode!r}. Expected 'mul' or 'log10'."
         )
 
-    def _mv_value(self) -> Tensor:
-        r"""
-        Return the current value of :math:`m_v` in linear space.
+    # def _mv_value(self) -> Tensor:
+    #     r"""
+    #     Return the current value of :math:`m_v` in linear space.
     
-        If :math:`m_v` is learnable, this is ``exp(log_mv)``; otherwise
-        it is the fixed constant ``_mv_fixed``.
+    #     If :math:`m_v` is learnable, this is ``exp(log_mv)``; otherwise
+    #     it is the fixed constant ``_mv_fixed``.
     
-        Returns
-        -------
-        tf.Tensor
-            Scalar tensor (0D) representing :math:`m_v > 0`.
-        """
-        return (
-            tf_exp(self.log_mv)
-            if hasattr(self, "log_mv")
-            else self._mv_fixed
-        )
+    #     Returns
+    #     -------
+    #     tf.Tensor
+    #         Scalar tensor (0D) representing :math:`m_v > 0`.
+    #     """
+    #     return (
+    #         tf_exp(self.log_mv)
+    #         if hasattr(self, "log_mv")
+    #         else self._mv_fixed
+    #     )
     
     def _mv_value(self) -> Tensor:
         if hasattr(self, "log_mv"):
