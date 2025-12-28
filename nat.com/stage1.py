@@ -52,6 +52,10 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
 from fusionlab.api.util import get_table_size
+from fusionlab.utils.audit_utils import (
+    should_audit,
+    audit_stage1_scaling,
+)
 from fusionlab.datasets import fetch_zhongshan_data
 from fusionlab.utils.data_utils import nan_ops
 from fusionlab.utils.io_utils import save_job
@@ -204,6 +208,10 @@ SUBSIDENCE_KIND = str(cfg.get("SUBSIDENCE_KIND", "cumulative")).lower()
 CONSOLIDATION_RESIDUAL_UNITS = str(
     cfg.get("CONSOLIDATION_RESIDUAL_UNITS", "second")
     ).lower()
+
+GW_RESIDUAL_UNITS = str(cfg.get ("GW_RESIDUAL_UNITS", "time_unit"))
+CLIP_GLOBAL_NORM = float(cfg.get("CLIP_GLOBAL_NORM", 5.0))
+
 # Optional but strongly recommended if GWL_COL is not in meters:
 GWL_RAW_COL = cfg.get("GWL_RAW_COL", None)  # e.g. "GWL_depth_bgs"
 
@@ -219,7 +227,7 @@ Q_LENGTH_IN_SI = bool (cfg.get('Q_length_in_si', False))
 DRAINAGE_MODE = str(cfg.get("DRAINAGE_MODE", "double"))
 
 SCALING_ERROR_POLICY = str(cfg.get("SCALING_ERROR_POLICY", "warn"))
-DEBUG_PHYSICS_GRADS =str(cfg.get('DEBUG_PHYSICS_GRADS', False ))
+DEBUG_PHYSICS_GRADS =bool(cfg.get('DEBUG_PHYSICS_GRADS', False ))
 # Coordinate system for physics
 COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).lower()
 UTM_EPSG = int(cfg.get("UTM_EPSG", 32649))
@@ -231,6 +239,29 @@ coord_epsg = None
 coords_in_degrees = bool(COORD_MODE == "degrees")
 
 ALLOW_SUBS_RESIDUAL = bool (cfg.get("allow_subs_residual", True)) 
+
+# AUDIT stages 
+AUDIT_STAGES = cfg.get("AUDIT_STAGES", '*')
+
+# Consolidation drawdown / equilibrium compaction controls
+CONS_DRAWDOWN_MODE = str(cfg.get("CONS_DRAWDOWN_MODE", "smooth_relu")).lower()
+CONS_DRAWDOWN_RULE = str(cfg.get("CONS_DRAWDOWN_RULE", "ref_minus_mean")).lower()
+
+CONS_STOP_GRAD_REF = bool(cfg.get("CONS_STOP_GRAD_REF", True))
+CONS_DRAWDOWN_ZERO_AT_ORIGIN = bool(cfg.get("CONS_DRAWDOWN_ZERO_AT_ORIGIN", False))
+
+CONS_RELU_BETA = float(cfg.get("CONS_RELU_BETA", 20.0))
+
+# Optional clip max: allow None / "none" / "" etc.
+_cons_clip = cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)
+if _cons_clip is None:
+    CONS_DRAWDOWN_CLIP_MAX = None
+else:
+    s = str(_cons_clip).strip().lower()
+    if s in {"", "none", "null"}:
+        CONS_DRAWDOWN_CLIP_MAX = None
+    else:
+        CONS_DRAWDOWN_CLIP_MAX = float(_cons_clip)
 
 # --- Output directories (optionally overridable from cfg) ---
 BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
@@ -1027,6 +1058,14 @@ if COORD_MODE in ("degrees", "lonlat", "geographic"):
             f"using ({COORD_X_COL},{COORD_Y_COL})"
         )
         coords_in_degrees = False  # already projected
+
+        lon, lat = df_proc.loc[0, "longitude"], df_proc.loc[0, "latitude"]
+        x, y = tr.transform(lon, lat)
+        
+        print("lon/lat:", lon, lat)
+        print("UTM32649 x/y:", x, y)
+        print("stored x_m/y_m:", df_proc.loc[0, "x_m"], df_proc.loc[0, "y_m"])
+
     except Exception as e:
         raise RuntimeError(f"Projection failed for COORD_MODE='degrees': {e}")
 
@@ -1446,7 +1485,52 @@ for k, v in inputs_train.items():
 for k, v in targets_train.items():
     print(f"  Train target '{k}': {v.shape}")
 
+# --------------------------------------------------------------
+# Stage-1 Audit (coords + scaling + feature split + SI sanity)
+# --------------------------------------------------------------
+if should_audit(AUDIT_STAGES, stage="stage1"):
+    _ = audit_stage1_scaling(
+        df_train=df_train,
+        inputs_train=inputs_train,
+        targets_train=targets_train,
+        coord_scaler=coord_scaler,
+        coord_ranges=coord_ranges,
 
+        # provenance
+        coord_mode=COORD_MODE,
+        coords_in_degrees=bool(coords_in_degrees),
+        coord_epsg_used=coord_epsg,
+        coord_x_col_used=COORD_X_COL,
+        coord_y_col_used=COORD_Y_COL,
+        x_col_used=X_COL_USED,
+        y_col_used=Y_COL_USED,
+        time_col_used=TIME_COL_USED,
+        normalize_coords=bool(NORMALIZE_COORDS),
+        keep_coords_raw=bool(KEEP_COORDS_RAW),
+        shift_raw_coords=bool(SHIFT_RAW_COORDS),
+
+        # physics columns (SI/model)
+        subs_model_col=SUBS_MODEL_COL,
+        gwl_dyn_col=GWL_DYN_COL,
+        gwl_target_col=GWL_TARGET_COL,
+        h_field_col=H_FIELD_COL,
+
+        # feature lists + scaler summary
+        dynamic_features=dynamic_features,
+        static_features=static_features,
+        future_features=future_features,
+        scaled_ml_numeric_cols=scaled_ml_numeric_cols,
+
+        # UI + saving
+        save_dir=RUN_OUTPUT_PATH,
+        table_width=_TW,
+        title_prefix="COORDINATE + FEATURE SCALING AUDIT (Stage-1)",
+        city=CITY_NAME,
+        model_name=MODEL_NAME,
+        sample_rows=5,
+    )
+
+#%
 # ==================================================================
 # Step 6: Build train/val datasets & EXPORT numpy
 # ==================================================================
@@ -1637,6 +1721,19 @@ scaling_kwargs = {
     "scaling_error_policy": SCALING_ERROR_POLICY, 
     'debug_physics_grads': DEBUG_PHYSICS_GRADS, 
 
+    "gw_residual_units": GW_RESIDUAL_UNITS,
+    "clip_global_norm": CLIP_GLOBAL_NORM, 
+    
+    # --- consolidation drawdown options ----------------------
+    "cons_drawdown_mode": str(CONS_DRAWDOWN_MODE).lower(),
+    "cons_drawdown_rule": str(CONS_DRAWDOWN_RULE).lower(),
+    "cons_stop_grad_ref": bool(CONS_STOP_GRAD_REF),
+    "cons_drawdown_zero_at_origin": bool(CONS_DRAWDOWN_ZERO_AT_ORIGIN),
+    "cons_drawdown_clip_max": (
+        None if CONS_DRAWDOWN_CLIP_MAX is None else float(CONS_DRAWDOWN_CLIP_MAX)
+    ),
+    "cons_relu_beta": float(CONS_RELU_BETA),
+    
     **indices_spec, **model_cols
 }
 

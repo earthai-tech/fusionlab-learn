@@ -43,7 +43,7 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "zhongshan"
+CITY_NAME = "nansha"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
@@ -420,6 +420,45 @@ TIME_UNITS = "year"
 
 DEBUG_PHYSICS_GRADS =False  
 
+# ------------------------------------------------------------
+# Consolidation drawdown gating (s_eq = Ss * delta_h * H)
+# ------------------------------------------------------------
+# These options control how drawdown (delta_h) is computed and gated.
+# They are used by:
+# - equilibrium_compaction_si(...)
+# - integrate_consolidation_mean(...)
+# - compute_consolidation_step_residual(...)
+#
+# CONS_DRAWDOWN_RULE:
+# - "ref_minus_mean" : delta_h = h_ref - h_mean   (default; head-loss drawdown)
+# - "mean_minus_ref" : delta_h = h_mean - h_ref   (use if you are actually in depth-space)
+#
+# CONS_DRAWDOWN_MODE:
+# - "smooth_relu" : smooth positive-part gate via softplus(beta*x)/beta (recommended)
+# - "relu"        : hard relu max(x,0)
+# - "softplus"    : softplus(x) (always > 0; not zero at x=0)
+# - "none"        : no gating (delta_h can be negative; use carefully)
+#
+# CONS_STOP_GRAD_REF:
+# - True  : stop-gradient on h_ref to prevent collapsing drawdown by moving the reference
+# - False : allow gradients through h_ref (only if you know why)
+#
+# CONS_DRAWDOWN_ZERO_AT_ORIGIN:
+# - If True and mode="smooth_relu", shift so output is ~0 at x=0
+#   (note: can become slightly negative for x<0).
+#
+# CONS_DRAWDOWN_CLIP_MAX:
+# - Optional float to clip delta_h after gating: delta_h = clip(delta_h, 0, clip_max)
+# - None disables clipping.
+#
+# CONS_RELU_BETA:
+# - Curvature control for smooth_relu. Larger -> closer to hard relu.
+CONS_DRAWDOWN_MODE = "softplus"
+CONS_DRAWDOWN_RULE = "ref_minus_mean"
+CONS_STOP_GRAD_REF = True
+CONS_DRAWDOWN_ZERO_AT_ORIGIN = False
+CONS_DRAWDOWN_CLIP_MAX = None
+CONS_RELU_BETA = 20.0
 
 # -------------------------------------------------------------------
 # 5.5 Model->SI affine mapping for physics residuals
@@ -511,14 +550,16 @@ GW_SCALE_FLOOR =1e-10
 DT_MIN_UNITS = 1e-6
 
 Q_WRT_NORMALIZED_TIME = False 
-Q_IN_SI = True 
+Q_IN_SI = False  
 Q_IN_PER_SECOND = False
 Q_KIND ="per_volume" 
 Q_LENGTH_IN_SI=False 
 
 DRAINAGE_MODE ="double" 
-
 SCALING_ERROR_POLICY ="raise" 
+GW_RESIDUAL_UNITS="time_unit"
+
+CLIP_GLOBAL_NORM = 5.0 
 
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
@@ -546,6 +587,35 @@ TF_INTER_THREADS = None
 TF_GPU_ALLOW_GROWTH = True
 TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
 
+# ---------------------------------------------------------------------
+# Auditing (Stage-1 / Stage-2 pipeline sanity checks)
+# ---------------------------------------------------------------------
+# Controls which audit helpers run and print/save diagnostics.
+#
+# Accepted values (flexible):
+#   - None / "" / False / "off" / "0" :
+#       Disable all audits.
+#
+#   - "*" / "all" / "both" / True :
+#       Audit all stages (Stage-1 + Stage-2).
+#
+#   - "stage1" / "stage_1" / "stage-1" / "1" / "s1" :
+#       Audit Stage-1 only.
+#
+#   - "stage2" / "stage_2" / "stage-2" / "2" / "s2" :
+#       Audit Stage-2 only.
+#
+#   - Combined forms like:
+#       "stage1,stage2", "stage1/2", "1+2", ["stage1", "stage2"]
+#       Audit both Stage-1 and Stage-2.
+#
+# Notes
+# -----
+# - Stage-1 audit focuses on coordinate provenance, scaling/leakage,
+#   SI-channel sanity, and feature splits.
+# - Stage-2 audit focuses on NPZ tensor shapes, finiteness, coordinate
+#   normalization/inversion checks, and scaling_kwargs consistency.
+AUDIT_STAGES = "*"
 
 # -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE

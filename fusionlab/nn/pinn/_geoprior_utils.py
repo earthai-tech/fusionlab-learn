@@ -146,9 +146,38 @@ _SK_ALIASES = {
         "tau_max_time_units",
         "tau_max_in_time_units",
     ),
+    "Q_length_in_si": ( 
+        "Q_in_m_per_s", 
+        )
 
 }
 
+_SK_ALIASES.update({
+    "cons_drawdown_mode": (
+        "drawdown_mode",
+        "cons_delta_mode",
+    ),
+    "cons_drawdown_rule": (
+        "drawdown_rule",
+        "cons_delta_rule",
+    ),
+    "cons_stop_grad_ref": (
+        "stop_grad_ref",
+        "cons_stopgrad_ref",
+    ),
+    "cons_drawdown_zero_at_origin": (
+        "drawdown_zero_at_origin",
+        "cons_zero_at_origin",
+    ),
+    "cons_drawdown_clip_max": (
+        "drawdown_clip_max",
+        "cons_clip_max",
+    ),
+    "cons_relu_beta": (
+        "relu_beta",
+        "cons_beta",
+    ),
+})
 
 def enforce_scaling_alias_consistency(
     scaling_kwargs: Optional[Dict[str, Any]],

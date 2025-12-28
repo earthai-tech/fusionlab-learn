@@ -34,7 +34,7 @@ if KERAS_BACKEND:
     ) 
     from .op import process_pinn_inputs
     from ._geoprior_maths import (
-        compute_mv_prior,
+        compute_mv_prior_loss,
         compute_gw_flow_residual,
         compute_smoothness_prior,
         get_log_bounds,
@@ -51,7 +51,10 @@ if KERAS_BACKEND:
         resolve_cons_units, 
         cons_step_to_cons_residual, 
         q_to_gw_source_term_si,
-        get_log_tau_bounds
+        get_log_tau_bounds, 
+        seconds_per_time_unit, 
+        resolve_gw_units, 
+        resolve_cons_drawdown_options, 
     )
 
     from ._geoprior_utils import (
@@ -98,6 +101,7 @@ GradientTape =KERAS_DEPS.GradientTape
 Mean =KERAS_DEPS.Mean 
 Dataset = KERAS_DEPS.Dataset
 RandomNormal = KERAS_DEPS.RandomNormal
+Constraint = KERAS_DEPS.Constraint
 
 tf_zeros_like= KERAS_DEPS.zeros_like
 tf_zeros =KERAS_DEPS.zeros
@@ -136,6 +140,10 @@ tf_greater_equal = KERAS_DEPS.greater_equal
 tf_reshape = KERAS_DEPS.reshape 
 tf_nn =KERAS_DEPS.nn 
 tf_add_n = KERAS_DEPS.add_n 
+tf_clip_by_value = KERAS_DEPS.clip_by_value 
+tf_clip_by_global_norm = KERAS_DEPS.clip_by_global_norm
+tf_math = KERAS_DEPS.math 
+tf_where = KERAS_DEPS.where 
 
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
@@ -354,7 +362,7 @@ class GeoPriorSubsNet(BaseAttentive):
 
         # --- Process new scalar physics params ---
         if isinstance(mv, (int, float)):
-            mv = LearnableMV(initial_value=float(mv))
+            mv = LearnableMV(initial_value=float(mv), trainable=False)
         if isinstance(kappa, (int, float)):
             kappa = LearnableKappa(initial_value=float(kappa))
         if isinstance(gamma_w, (int, float)):
@@ -553,25 +561,49 @@ class GeoPriorSubsNet(BaseAttentive):
         self.tau_coord_mlp = _branch(self.output_tau_dim, "tau_coord_mlp")
         
     def _build_pinn_components(self):
+        class LogClipConstraint(Constraint):
+            def __init__(self, min_value, max_value):
+                self.min_value = min_value
+                self.max_value = max_value
+            def __call__(self, w):
+                return tf_clip_by_value(w, self.min_value, self.max_value)
+
 
         # Compressibility m_v
+        # if isinstance(self.mv_config, LearnableMV):
+        #     # Trainable log-parameter for m_v
+        #     self.log_mv = self.add_weight(
+        #         name="log_param_mv",
+        #         shape=(),
+        #         initializer=Constant(
+        #             tf_log(self.mv_config.initial_value)
+        #         ),
+        #         trainable=self.mv_config.trainable,
+        #     )
+        # else:
+        #     # Fixed scalar m_v as a constant
+        #     self._mv_fixed = tf_constant(
+        #         float(self.mv_config.initial_value),
+        #         dtype=tf_float32,
+        #     )
+    
+        # Compressibility m_v: always log-space parameter
+        mv0 = float(self.mv_config.initial_value)
         if isinstance(self.mv_config, LearnableMV):
-            # Trainable log-parameter for m_v
             self.log_mv = self.add_weight(
                 name="log_param_mv",
                 shape=(),
-                initializer=Constant(
-                    tf_log(self.mv_config.initial_value)
+                initializer=Constant(tf_log(tf_constant(mv0, tf_float32))),
+                trainable=bool(getattr(self.mv_config, "trainable", False)),
+                # optional but recommended: constraint to keep exp(log_mv) finite
+                constraint=LogClipConstraint(
+                    min_value=tf_log(tf_constant(1e-12, tf_float32)),
+                    max_value=tf_log(tf_constant(1e-4,  tf_float32)),
                 ),
-                trainable=self.mv_config.trainable,
             )
         else:
             # Fixed scalar m_v as a constant
-            self._mv_fixed = tf_constant(
-                float(self.mv_config.initial_value),
-                dtype=tf_float32,
-            )
-    
+            self._mv_fixed = tf_constant(mv0, dtype=tf_float32)
     
         # Consistency factor κ
         if isinstance(self.kappa_config, LearnableKappa):
@@ -1011,18 +1043,27 @@ class GeoPriorSubsNet(BaseAttentive):
         dt_units = infer_dt_units_from_t(t, self.scaling_kwargs)
     
         # physics mean settlement path (exact-step)
+        dd = resolve_cons_drawdown_options(self.scaling_kwargs)
+        
         s_inc_si = integrate_consolidation_mean(
             h_mean_si=h_mean_si,
             Ss_field=Ss_field,
             H_field_si=H_si,
             tau_field=tau_field,
             h_ref_si=h_ref_si,
-            s_init_si=s0_inc_si,     
+            s_init_si=s0_inc_si,
             dt=dt_units,
             time_units=self.time_units,
             method=self.residual_method,
+            relu_beta=dd["relu_beta"],
+            # NEW: forward drawdown controls
+            drawdown_mode=dd["drawdown_mode"],
+            drawdown_rule=dd["drawdown_rule"],
+            stop_grad_ref=dd["stop_grad_ref"],
+            drawdown_zero_at_origin=dd["drawdown_zero_at_origin"],
+            drawdown_clip_max=dd["drawdown_clip_max"],
             verbose=self.verbose,
-        )  # (B,H,1) incremental compaction since t0
+        )# (B,H,1) incremental compaction since t0
 
         if self.verbose >6: 
             tf_print_nonfinite("call/coords_for_decoder", coords_for_decoder)
@@ -1464,6 +1505,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 # time indexing fix (already correct in your train_step)
                 h_state = tf_concat([h_ref_si_11, h_si], axis=1)         # (B,H+1,1)
     
+                dd = resolve_cons_drawdown_options(self.scaling_kwargs)
                 cons_step_m = compute_consolidation_step_residual(
                     s_state_si=s_state,
                     h_mean_si=h_state,
@@ -1474,9 +1516,16 @@ class GeoPriorSubsNet(BaseAttentive):
                     dt=dt_units,
                     time_units=self.time_units,
                     method="exact",
-                    verbose=self.verbose, 
-                )  # (B,H,1)
-        
+                    relu_beta=dd["relu_beta"],
+                    # NEW: forward drawdown controls
+                    drawdown_mode=dd["drawdown_mode"],
+                    drawdown_rule=dd["drawdown_rule"],
+                    stop_grad_ref=dd["stop_grad_ref"],
+                    drawdown_zero_at_origin=dd["drawdown_zero_at_origin"],
+                    drawdown_clip_max=dd["drawdown_clip_max"],
+                    verbose=self.verbose,
+                ) # (B,H,1)
+
                 cons_res = cons_step_to_cons_residual(
                     cons_step_m,
                     dt_units=dt_units,
@@ -1486,7 +1535,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 if self.verbose > 6:
                     mode = resolve_cons_units(sk)
                     tf_print("cons_units=", mode, "rms=", to_rms(cons_res))
-
+                
             # ------------------------------------------------------
             # 7) Residuals + priors
             # ------------------------------------------------------
@@ -1499,7 +1548,12 @@ class GeoPriorSubsNet(BaseAttentive):
                 Q=Q_si,
                 verbose=verbose,
             )
-    
+
+            if resolve_gw_units(sk) == "time_unit":
+                sec_u = seconds_per_time_unit(
+                    self.time_units, dtype=tf_float32)
+                gw_res = gw_res * sec_u
+
             prior_res = delta_log_tau  # tau consistency prior in log-space
     
             smooth_res = compute_smoothness_prior(
@@ -1507,15 +1561,24 @@ class GeoPriorSubsNet(BaseAttentive):
                 K_field=K_field,
                 Ss_field=Ss_field,
             )
-    
-            mv_prior_rms = compute_mv_prior(
-                    self,
-                    Ss_field,
-                    reduction="domain_mean",
-                    as_loss=True,
-                    verbose=verbose,
-                )
-            loss_mv = to_rms(mv_prior_rms)
+            
+            # mv_prior_rms = compute_mv_prior(
+            #         self,
+            #         Ss_field,
+            #         reduction="domain_mean",
+            #         as_loss=False,
+            #         verbose=verbose,
+            #     )
+            loss_mv = compute_mv_prior_loss(
+                self,
+                Ss_field,
+                alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1)),
+                delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
+                verbose=verbose,
+                
+            )
+
+            # loss_mv = to_rms(mv_prior_rms)
             
             R_H, R_K, R_Ss = compute_bounds_residual(
                 self, K_field, Ss_field, H_si, verbose=verbose
@@ -1541,7 +1604,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 gw_res = tf_zeros_like(gw_res)
                 prior_res = tf_zeros_like(prior_res)
                 smooth_res = tf_zeros_like(smooth_res)
-                loss_mv = tf_zeros_like(mv_prior_rms)
+                loss_mv = tf_constant(0.0, dtype = tf_float32)
                 bounds_res = tf_zeros_like(bounds_res)
                 loss_bounds = tf_zeros_like(loss_bounds)
             
@@ -1582,6 +1645,7 @@ class GeoPriorSubsNet(BaseAttentive):
                     div_K_grad_h=div_term,       # helps GW scaling a lot
                     verbose=verbose,
                 )
+                
                 cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-10))
                 gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-10))
                 
@@ -1628,31 +1692,35 @@ class GeoPriorSubsNet(BaseAttentive):
         # ----------------------------------------------------------
         # 10) Apply gradients
         # ----------------------------------------------------------
-        def _assert_grads_finite(
-            grads: list[Tensor | None],
-            vars_: list[Tensor],
-        ) -> None:
-            for g, v in zip(grads, vars_):
-                if g is None:
-                    continue
-                tf_debugging.assert_all_finite(
-                    g,
-                    f"NaN/Inf grad for {v.name}",
-                )
+        # def _assert_grads_finite(
+        #     grads: list[Tensor | None],
+        #     vars_: list[Tensor],
+        # ) -> None:
+        #     for g, v in zip(grads, vars_):
+        #         if g is None:
+        #             continue
+        #         tf_debugging.assert_all_finite(
+        #             g,
+        #             f"NaN/Inf grad for {v.name}",
+        #         )
         
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
         
         # # XXX FOR DEBUGGING
-        _assert_grads_finite(grads, trainable_vars)
+        # _assert_grads_finite(grads, trainable_vars)
         
-        if debug_grads:
-            for name, lt in {"data": data_loss, **terms_scaled}.items():
-                g = tape.gradient(lt, trainable_vars)
-                _assert_grads_finite(g, trainable_vars)
+        # if debug_grads:
+        #     for name, lt in {"data": data_loss, **terms_scaled}.items():
+        #         g = tape.gradient(lt, trainable_vars)
+        #         _assert_grads_finite(g, trainable_vars)
         
         del tape
-    
+        
+        # clip = float(
+        #     get_sk(self.scaling_kwargs or {}, "clip_global_norm", default=5.0)
+        #     )
+        # grads, _ = tf_clip_by_global_norm(grads, clip)
         self.optimizer.apply_gradients(
             self._scale_param_grads(grads, trainable_vars)
         )
@@ -2052,7 +2120,7 @@ class GeoPriorSubsNet(BaseAttentive):
             s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)      # (B,H+1,1)
             h_state = tf_concat([h_ref_si_11, h_si], axis=1)          # (B,H+1,1)
                         
-            
+            dd = resolve_cons_drawdown_options(self.scaling_kwargs)
             cons_step_m = compute_consolidation_step_residual(
                 s_state_si=s_state,
                 h_mean_si=h_state,
@@ -2062,16 +2130,22 @@ class GeoPriorSubsNet(BaseAttentive):
                 h_ref_si=h_ref_si,
                 dt=dt_units,
                 time_units=self.time_units,
-                method=self.residual_method,
-                verbose= self.verbose, 
-            )
-            
+                method="exact",
+                relu_beta=dd["relu_beta"],
+                # forward drawdown controls
+                drawdown_mode=dd["drawdown_mode"],
+                drawdown_rule=dd["drawdown_rule"],
+                stop_grad_ref=dd["stop_grad_ref"],
+                drawdown_zero_at_origin=dd["drawdown_zero_at_origin"],
+                drawdown_clip_max=dd["drawdown_clip_max"],
+                verbose=0,
+            ) # (B,H,1)
             cons_res = cons_step_to_cons_residual(
                 cons_step_m,
                 dt_units=dt_units,
                 scaling_kwargs=sk,
                 time_units=self.time_units,
-            ) # (B,H,1) in m/s      
+            ) # (B,H,1) in m/s    
             eps_cons = to_rms(cons_res)
         
         # --------------------------------------------------------------
@@ -2086,7 +2160,7 @@ class GeoPriorSubsNet(BaseAttentive):
             Q=Q_si,
             verbose=0,
         )
-    
+
         prior_res = delta_log_tau
     
         smooth_res = compute_smoothness_prior(
@@ -2094,14 +2168,21 @@ class GeoPriorSubsNet(BaseAttentive):
             K_field=K_field,
             Ss_field=Ss_field,
         )
-    
-        mv_res = compute_mv_prior(
-            self, Ss_field, 
-            reduction="domain_mean", 
-            as_loss=False, 
-            verbose=0
-            )
         
+        # mv_res = compute_mv_prior(
+        #     self, Ss_field, 
+        #     reduction="domain_mean", 
+        #     as_loss=False, 
+        #     verbose=0
+        #     )
+        loss_mv = compute_mv_prior_loss(
+            self,
+            Ss_field,
+            alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1)),
+            delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
+            verbose=0,
+        )
+
         R_H, R_K, R_Ss = compute_bounds_residual(
             self, K_field, Ss_field, H_si, verbose=0
         )
@@ -2175,7 +2256,6 @@ class GeoPriorSubsNet(BaseAttentive):
         loss_gw     = tf_reduce_mean(tf_square(gw_res_scaled))
         loss_prior  = tf_reduce_mean(tf_square(prior_res))
         loss_smooth = tf_reduce_mean(smooth_res)
-        loss_mv     = to_rms(mv_res)
         loss_bounds = tf_reduce_mean(tf_square(bounds_res))
         
         eps_cons_raw = to_rms(cons_res_raw)
@@ -2264,7 +2344,7 @@ class GeoPriorSubsNet(BaseAttentive):
                     "R_gw": gw_res,
                     "R_prior": prior_res,
                     "R_smooth": smooth_res,
-                    "R_mv": mv_res,
+                    # "R_mv": mv_res,
                     "R_bounds": bounds_res,
                     "R_cons_scaled": cons_res_scaled,
                     "R_gw_scaled": gw_res_scaled,
@@ -2415,7 +2495,16 @@ class GeoPriorSubsNet(BaseAttentive):
             else self._mv_fixed
         )
     
-    
+    def _mv_value(self) -> Tensor:
+        if hasattr(self, "log_mv"):
+            # clip already enforced by constraint, but re-clip defensively
+            log_mv = tf_cast(self.log_mv, tf_float32)
+            log_mv = tf_where(tf_math.is_finite(log_mv), log_mv,
+                              tf_log(tf_constant(1e-12, tf_float32)))
+            return tf_exp(log_mv)
+        
+        return tf_cast(self._mv_fixed, tf_float32)
+
     def _kappa_value(self) -> Tensor:
         r"""
         Return the current value of :math:`\kappa` in linear space.

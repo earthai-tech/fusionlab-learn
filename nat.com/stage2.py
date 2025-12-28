@@ -42,6 +42,7 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 from fusionlab._optdeps import with_progress 
 from fusionlab.backends.devices import configure_tf_from_cfg
 from fusionlab.api.util import get_table_size
+from fusionlab.utils.audit_utils import should_audit, audit_stage2_handshake
 from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
 from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
 from fusionlab.utils.generic_utils import print_config_table
@@ -264,6 +265,7 @@ USE_BATCH_NORM = cfg.get("USE_BATCH_NORM", False)
 USE_VSN        = cfg.get("USE_VSN", True)           
 VSN_UNITS      = cfg.get("VSN_UNITS", 32)
 
+AUDIT_STAGES = cfg.get ("AUDIT_STAGES")
 
 # Helper: JSON has string keys for quantile weight dicts; coerce to float.
 def _coerce_quantile_weights(d: dict, default: dict) -> dict:
@@ -692,13 +694,17 @@ print("[Info] GWL semantics:",
 # coords
 # Stage-1 should be the source of truth
 coords_normalized = bool(
-    sk.get("coords_normalized", sk.get("normalize_coords", False))  # backward compat
+    sk.get("coords_normalized", 
+           sk.get("normalize_coords", False)
+         )  # backward compat
 )
 coord_ranges = sk.get("coord_ranges") or None
 
 # Infer ONLY if Stage-1 says normalized but didn’t record ranges
-if coords_normalized and (not coord_ranges) and (coord_scaler is not None):
-    if hasattr(coord_scaler, "data_min_") and hasattr(coord_scaler, "data_max_"):
+if coords_normalized and (not coord_ranges) and (
+        coord_scaler is not None):
+    if hasattr(coord_scaler, "data_min_") and hasattr(
+            coord_scaler, "data_max_"):
         span = coord_scaler.data_max_ - coord_scaler.data_min_
         coord_ranges = {
             "t": float(span[0]),
@@ -1045,48 +1051,34 @@ subsmodel_params["scaling_kwargs"].update({
     "z_surf_col": Z_SURF_COL,             # None or column name if you provide it
     "gwl_z_meta": sk.get("gwl_z_meta", None),  # optional traceability
     
-    "subsidence_kind": sk.get("subsidence_kind", cfg.get(
-        "SUBSIDENCE_KIND", "cumulative")
-        ), 
-    'cons_residual_units': sk.get(
-        "CONSOLIDATION_RESIDUAL_UNITS", "second"
-        ),
-    'cons_scale_floor':  sk.get("cons_scale_floor", cfg.get(
-        "CONS_SCALE_FLOOR", 1e-10)
-        ),
-    'gw_scale_floor' :sk.get("gw_scale_floor", cfg.get(
-        "GW_SCALE_FLOOR", 1e-10)
-        ), 
-    'dt_min_units' :sk.get("dt_min_units", cfg.get(
-        "DT_MIN_UNITS", 1e-6)
-        ), 
-    'Q_wrt_normalized_time':sk.get("Q_wrt_normalized_time", cfg.get(
-        "Q_WRT_NORMALIZED_TIME", False)
-        ), 
-    'Q_in_si' : sk.get("Q_in_si", cfg.get(
-        "Q_IN_SI", False)
-        ), 
-    'Q_in_per_second' : sk.get("Q_in_per_second", cfg.get(
-        "Q_IN_PER_SECOND", False )
-        ), 
-    'Q_kind' : sk.get("Q_kind", cfg.get(
-        "Q_KIND", "per_volume")
-        ), 
-    'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get(
-        "Q_LENGTH_IN_SI", False )
-        ), 
+    "subsidence_kind": sk.get("subsidence_kind", cfg.get("SUBSIDENCE_KIND", "cumulative")), 
+
+    'gw_scale_floor' :sk.get("gw_scale_floor", cfg.get("GW_SCALE_FLOOR", 1e-10)), 
+    'dt_min_units' :sk.get("dt_min_units", cfg.get("DT_MIN_UNITS", 1e-6)), 
+    'Q_wrt_normalized_time':sk.get("Q_wrt_normalized_time", cfg.get("Q_WRT_NORMALIZED_TIME", False)), 
+    'Q_in_si' : sk.get("Q_in_si", cfg.get("Q_IN_SI", False)), 
+    'Q_in_per_second' : sk.get("Q_in_per_second", cfg.get("Q_IN_PER_SECOND", False )), 
+    'Q_kind' : sk.get("Q_kind", cfg.get("Q_KIND", "per_volume")), 
+    'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get("Q_LENGTH_IN_SI", False )), 
     'drainage_mode': sk.get("drainage_mode", cfg.get("DRAINAGE_MODE", "double")), 
+    "gw_residual_units": sk.get("gw_residual_units", cfg.get("GW_RESIDUAL_UNITS","time_unit")), 
     
-    "debug_physics_grads": sk.get('debug_physics_grads', cfg.get(
-        "DEBUG_PHYSICS_GRADS", False
-        )
-     ), 
-    "scaling_error_policy": sk.get('scaling_error_policy', cfg.get(
-        'SCALING_ERROR_POLICY','warn')
-        )
+    "clip_global_norm": sk.get("clip_global_norm", cfg.get("CLIP_GLOBAL_NORM", 5.0)),
+    "debug_physics_grads": sk.get('debug_physics_grads', cfg.get("DEBUG_PHYSICS_GRADS", False)), 
+    "scaling_error_policy": sk.get('scaling_error_policy', cfg.get('SCALING_ERROR_POLICY','warn')), 
     
-    
-    
+    # Consolidation drawdown gating options (saved into scaling_kwargs.json)
+    'cons_residual_units': sk.get("CONSOLIDATION_RESIDUAL_UNITS", "second"),
+    'cons_scale_floor':  sk.get("cons_scale_floor", cfg.get("CONS_SCALE_FLOOR", 1e-10)),
+    "cons_drawdown_mode": sk.get("cons_drawdown_mode",cfg.get("CONS_DRAWDOWN_MODE", "smooth_relu")),
+    "cons_drawdown_rule": sk.get("cons_drawdown_rule",cfg.get("CONS_DRAWDOWN_RULE", "ref_minus_mean")),
+    "cons_stop_grad_ref": sk.get("cons_stop_grad_ref",cfg.get("CONS_STOP_GRAD_REF", True)),
+    "cons_drawdown_zero_at_origin": sk.get("cons_drawdown_zero_at_origin",
+        cfg.get("CONS_DRAWDOWN_ZERO_AT_ORIGIN", False),
+    ),
+    "cons_drawdown_clip_max": sk.get("cons_drawdown_clip_max",cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)),
+    "cons_relu_beta": sk.get("cons_relu_beta",cfg.get("CONS_RELU_BETA", 20.0)),
+
 })
 
 # Optional: drop Nones to keep scaling_kwargs clean
@@ -1123,6 +1115,30 @@ with open(scaling_path, "w", encoding="utf-8") as f:
     json.dump(subsmodel_params["scaling_kwargs"] , f, indent=2)
 
  
+
+# ---- CALL IT (right before building the model) ----------------------------
+
+if should_audit(AUDIT_STAGES, stage="stage2"):
+    _ = audit_stage2_handshake(
+        X_train=X_train,
+        X_val=X_val,
+        y_train=y_train,
+        y_val=y_val,
+        time_steps=TIME_STEPS,
+        forecast_horizon=FORECAST_HORIZON_YEARS,
+        mode=MODE,
+        dyn_names=list(DYN_NAMES),
+        fut_names=list(FUT_NAMES),
+        sta_names=list(STA_NAMES),
+        coord_scaler=coord_scaler,
+        sk_final=subsmodel_params["scaling_kwargs"],
+        save_dir=RUN_OUTPUT_PATH,
+        table_width=get_table_size(),
+        title_prefix="STAGE-2 HANDSHAKE AUDIT",
+        city =CITY_NAME, 
+        model_name = MODEL_NAME 
+    )
+#%
 subs_model_inst = model_cls(
     static_input_dim=s_dim_model,
     dynamic_input_dim=d_dim_model,
@@ -1132,7 +1148,7 @@ subs_model_inst = model_cls(
     forecast_horizon=FORECAST_HORIZON_YEARS,
     quantiles=QUANTILES,
     pde_mode=PDE_MODE_CONFIG,
-    verbose = 1, # XXX TOREMOVE :  gFOR DEBUG ONLY
+    verbose = 0, # XXX TOREMOVE :  gFOR DEBUG ONLY
     **subsmodel_params,
 )
 

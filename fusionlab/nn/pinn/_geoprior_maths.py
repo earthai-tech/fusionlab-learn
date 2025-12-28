@@ -72,6 +72,9 @@ tf_cumsum = KERAS_DEPS.cumsum
 tf_math = KERAS_DEPS.math 
 tf_ones_like = KERAS_DEPS.ones_like 
 tf_clip_by_value = KERAS_DEPS.clip_by_value
+tf_gather = KERAS_DEPS.gather 
+tf_minimum = KERAS_DEPS.minimum 
+
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
@@ -149,7 +152,6 @@ def resolve_q_kind(sk: Optional[Dict[str, Any]]) -> str:
     return "per_volume"
 
 
-
 def q_to_gw_source_term_si(
     model,
     Q_logits: Tensor,
@@ -188,7 +190,7 @@ def q_to_gw_source_term_si(
     if kind == "per_volume":
         # Backward-compatible flags for volumetric Q:
         Q_in_per_second = bool(get_sk(sk, "Q_in_per_second", default=False))
-        Q_in_si = bool(get_sk(sk, "Q_in_si", default=True))
+        Q_in_si = bool(get_sk(sk, "Q_in_si", default=False))
         if Q_in_per_second or Q_in_si:
             Q_per_s = Q_base
         else:
@@ -199,7 +201,7 @@ def q_to_gw_source_term_si(
 
     # For the other kinds, interpret Q as a LENGTH RATE (m/time)
     # Use a *separate* flag so we don't conflict with Q_in_si default=True.
-    Q_len_in_si = bool(get_sk(sk, "Q_length_in_si", "Q_in_m_per_s", default=False))
+    Q_len_in_si = bool(get_sk(sk, "Q_length_in_si", default=False))
     if Q_len_in_si:
         Q_m_per_s = Q_base
     else:
@@ -344,116 +346,194 @@ def cons_step_to_cons_residual(
 # ---------------------------------------------------------------------
 # Physics residuals / priors
 # ---------------------------------------------------------------------
-def resolve_mv_gamma_si(
-    model,
-    Ss_field: Tensor,
-    *,
-    eps: float = 1e-12,
-    verbose: int = 0,
-) -> Tuple[Tensor, Tensor]:
-    """Return (mv_si [Pa^-1], gamma_w_si [Pa/m]) with auto unit alignment.
+# def resolve_mv_gamma_si(
+#     model,
+#     Ss_field: Tensor,
+#     *,
+#     eps: float = 1e-12,
+#     verbose: int = 0,
+# ) -> Tuple[Tensor, Tensor]:
+#     """Return (mv_si [Pa^-1], gamma_w_si [Pa/m]) with auto unit alignment.
 
-    We test a small set of plausible conversions and choose the pair
-    that best matches the domain-mean of log(Ss).
+#     We test a small set of plausible conversions and choose the pair
+#     that best matches the domain-mean of log(Ss).
 
-    Candidates:
-      - (mv, gw)                      : assume both already SI
-      - (mv/1000, gw)                 : mv provided in 1/kPa, gw in Pa/m
-      - (mv, gw*1000)                 : mv in 1/Pa, gw provided in kPa/m
-      - (mv/1000, gw*1000)            : mv in 1/kPa and gw in kPa/m
+#     Candidates:
+#       - (mv, gw)                      : assume both already SI
+#       - (mv/1000, gw)                 : mv provided in 1/kPa, gw in Pa/m
+#       - (mv, gw*1000)                 : mv in 1/Pa, gw provided in kPa/m
+#       - (mv/1000, gw*1000)            : mv in 1/kPa and gw in kPa/m
 
-    Notes
-    -----
-    This avoids requiring `mv_units` / `gamma_w_units` in config and
-    works even when people forget to set them.
-    """
-    eps_t = tf_constant(float(eps), tf_float32)
+#     Notes
+#     -----
+#     This avoids requiring `mv_units` / `gamma_w_units` in config and
+#     works even when people forget to set them.
+#     """
+#     eps_t = tf_constant(float(eps), tf_float32)
 
-    Ss_safe = tf_maximum(tf_cast(Ss_field, tf_float32), eps_t)
-    logSs_mean = tf_reduce_mean(tf_log(Ss_safe))  # scalar
+#     Ss_safe = tf_maximum(tf_cast(Ss_field, tf_float32), eps_t)
+#     logSs_mean = tf_reduce_mean(tf_log(Ss_safe))  # scalar
 
-    mv_raw = tf_maximum(tf_cast(model._mv_value(), tf_float32), eps_t)
-    gw_raw = tf_maximum(tf_cast(getattr(model, "gamma_w", mv_raw * 0 + 9810.0),
-                                tf_float32), eps_t)
+#     mv_raw = tf_maximum(tf_cast(model._mv_value(), tf_float32), eps_t)
+#     gw_raw = tf_maximum(tf_cast(getattr(model, "gamma_w", mv_raw * 0 + 9810.0),
+#                                 tf_float32), eps_t)
 
-    # --- candidates (all scalars) ------------------------------------
-    mv_cands = tf_stack([
-        mv_raw,
-        mv_raw / tf_constant(1000.0, tf_float32),
-        mv_raw,
-        mv_raw / tf_constant(1000.0, tf_float32),
-    ])
-    gw_cands = tf_stack([
-        gw_raw,
-        gw_raw,
-        gw_raw * tf_constant(1000.0, tf_float32),
-        gw_raw * tf_constant(1000.0, tf_float32),
-    ])
+#     # --- candidates (all scalars) ------------------------------------
+#     mv_cands = tf_stack([
+#         mv_raw,
+#         mv_raw / tf_constant(1000.0, tf_float32),
+#         mv_raw,
+#         mv_raw / tf_constant(1000.0, tf_float32),
+#     ])
+#     gw_cands = tf_stack([
+#         gw_raw,
+#         gw_raw,
+#         gw_raw * tf_constant(1000.0, tf_float32),
+#         gw_raw * tf_constant(1000.0, tf_float32),
+#     ])
 
-    log_targets = tf_log(mv_cands) + tf_log(gw_cands)     # (4,)
-    errs = tf_abs(logSs_mean - log_targets)               # (4,)
+#     log_targets = tf_log(mv_cands) + tf_log(gw_cands)     # (4,)
+#     errs = tf_abs(logSs_mean - log_targets)               # (4,)
 
-    idx = tf_cast(tf_argmin(errs, axis=0), tf_int32)
+#     idx = tf_cast(tf_argmin(errs, axis=0), tf_int32)
 
-    mv_sel = mv_cands[idx]
-    gw_sel = gw_cands[idx]
+#     mv_sel = mv_cands[idx]
+#     gw_sel = gw_cands[idx]
 
-    vprint(verbose, "resolve_mv_gamma_si:")
-    vprint(verbose, "  mv_raw=", mv_raw, " gw_raw=", gw_raw)
-    vprint(verbose, "  logSs_mean=", logSs_mean)
-    vprint(verbose, "  log_targets=", log_targets, " errs=", errs, " idx=", idx)
-    vprint(verbose, "  mv_sel=", mv_sel, " gw_sel=", gw_sel)
+#     vprint(verbose, "resolve_mv_gamma_si:")
+#     vprint(verbose, "  mv_raw=", mv_raw, " gw_raw=", gw_raw)
+#     vprint(verbose, "  logSs_mean=", logSs_mean)
+#     vprint(verbose, "  log_targets=", log_targets, " errs=", errs, " idx=", idx)
+#     vprint(verbose, "  mv_sel=", mv_sel, " gw_sel=", gw_sel)
 
+#     return mv_sel, gw_sel
+
+# def compute_mv_prior( # will be remove , old implementation . 
+#     model,
+#     Ss_field: Tensor,
+#     *,
+#     reduction: str = "domain_mean",
+#     as_loss: bool = False,
+#     verbose: int = 0,
+# ) -> Tensor:
+#     """Specific-storage identity prior in log-space.
+
+#     Encodes: Ss ≈ mv · gamma_w.
+
+#     Option A (default): compare scalar mv to the domain-mean of log(Ss),
+#     instead of penalizing every pixel.
+#     Option B: when `as_loss=True`, return RMS magnitude (log-units),
+#     which is more stable than MSE (squared log-units).
+#     """
+#     eps = tf_constant(1e-12, dtype=tf_float32)
+#     Ss_safe = tf_maximum(tf_cast(Ss_field, tf_float32), eps)
+
+#     mv, gw = resolve_mv_gamma_si(model, Ss_field, verbose=verbose)
+
+#     log_target = tf_log(mv) + tf_log(gw)
+
+#     red = str(reduction).strip().lower()
+#     if red in ("domain_mean", "mean", "global"):
+#         logSs = tf_reduce_mean(tf_log(Ss_safe))  # scalar
+#     elif red in ("field", "none", "per_pixel", "pixel"):
+#         logSs = tf_log(Ss_safe)                  # field
+#     else:
+#         raise ValueError(
+#             "compute_mv_prior(reduction=...) must be one of "
+#             "{'domain_mean', 'field'}. Got: %r" % reduction
+#         )
+
+#     res = logSs - log_target  # signed residual (scalar or field)
+
+#     if as_loss:
+#         # RMS in log-units (preferred scale for weighting).
+#         out = to_rms(res)
+#     else:
+#         out = res
+
+#     vprint(verbose, "mv_prior: reduction=", red)
+#     vprint(verbose, "mv_prior: mv=", mv, "gw=", gw)
+#     vprint(verbose, "mv_prior: log_target=", log_target)
+#     vprint(verbose, "mv_prior: out=", out)
+#     return out
+
+def resolve_mv_gamma_si_stable(model, Ss_field, *, eps=1e-12, verbose=0):
+    # Ss only needed to choose best unit combo; sanitize it first
+    logSs_mean = tf_reduce_mean(safe_log_pos(Ss_field, eps=eps))
+
+    # log(mv) in a safe way (no exp)
+    if hasattr(model, "log_mv"):
+        log_mv = tf_cast(model.log_mv, tf_float32)
+    else:
+        log_mv = safe_log_pos(model._mv_fixed, eps=eps)
+
+    # gamma_w safe (true constant fallback)
+    gw_default = tf_constant(9810.0, tf_float32)
+    gw = getattr(model, "gamma_w", gw_default)
+    log_gw = safe_log_pos(gw, eps=eps)
+
+    log1000 = tf_log(tf_constant(1000.0, tf_float32))
+
+    # candidates in log space
+    log_mv_c = tf_stack([log_mv, log_mv - log1000, log_mv, log_mv - log1000])
+    log_gw_c = tf_stack([log_gw, log_gw, log_gw + log1000, log_gw + log1000])
+
+    log_targets = log_mv_c + log_gw_c
+    errs = tf_abs(logSs_mean - log_targets)
+
+    idx = tf_cast(
+        tf_argmin(
+            tf_stop_gradient(errs), axis=0), 
+        tf_int32
+    )
+
+    # return linear values if you want, but everything important is log-safe
+    mv_sel = tf_exp(tf_gather(log_mv_c, idx))
+    gw_sel = tf_exp(tf_gather(log_gw_c, idx))
     return mv_sel, gw_sel
 
-def compute_mv_prior(
+def huber(x, delta=1.0):
+    ax = tf_abs(x)
+    quad = tf_minimum(ax, tf_constant(delta, x.dtype))
+    lin  = ax - quad
+    return 0.5 * tf_square(quad) + tf_constant(delta, x.dtype) * lin
+
+def compute_mv_prior_loss( # NEW IMPLEMENTATION. 
     model,
-    Ss_field: Tensor,
+    Ss_field,
     *,
-    reduction: str = "domain_mean",
-    as_loss: bool = False,
+    alpha_disp: float = 0.1,   # dispersion weight
+    delta: float = 1.0,        # huber delta in log units
+    eps: float = _SMALL,
     verbose: int = 0,
-) -> Tensor:
-    """Specific-storage identity prior in log-space.
+):
+    Ss_safe_log = safe_log_pos(Ss_field, eps=eps)
 
-    Encodes: Ss ≈ mv · gamma_w.
+    mv, gw = resolve_mv_gamma_si_stable(
+        model, Ss_field, eps=eps, verbose=verbose)
+    log_target = safe_log_pos(
+        mv, eps=eps) + safe_log_pos(gw, eps=eps)
 
-    Option A (default): compare scalar mv to the domain-mean of log(Ss),
-    instead of penalizing every pixel.
-    Option B: when `as_loss=True`, return RMS magnitude (log-units),
-    which is more stable than MSE (squared log-units).
-    """
-    eps = tf_constant(1e-12, dtype=tf_float32)
-    Ss_safe = tf_maximum(tf_cast(Ss_field, tf_float32), eps)
+    r = Ss_safe_log - log_target  # (field)
 
-    mv, gw = resolve_mv_gamma_si(model, Ss_field, verbose=verbose)
+    r_bar = tf_reduce_mean(r)
+    loss_global = huber(r_bar, delta=delta)
 
-    log_target = tf_log(mv) + tf_log(gw)
+    # dispersion term (optional but very useful)
+    loss_disp = tf_reduce_mean(huber(r - r_bar, delta=delta))
 
-    red = str(reduction).strip().lower()
-    if red in ("domain_mean", "mean", "global"):
-        logSs = tf_reduce_mean(tf_log(Ss_safe))  # scalar
-    elif red in ("field", "none", "per_pixel", "pixel"):
-        logSs = tf_log(Ss_safe)                  # field
-    else:
-        raise ValueError(
-            "compute_mv_prior(reduction=...) must be one of "
-            "{'domain_mean', 'field'}. Got: %r" % reduction
-        )
+    return loss_global + tf_constant(alpha_disp, tf_float32) * loss_disp
 
-    res = logSs - log_target  # signed residual (scalar or field)
+def safe_pos(x, eps=1e-12, dtype=tf_float32):
+    
+    eps_t = tf_constant(float(eps), dtype)
+    x = tf_cast(x, dtype)
+    x = tf_where(tf_math.is_finite(x), x, eps_t)  # kill NaN/Inf
+    
+    return tf_maximum(x, eps_t)
 
-    if as_loss:
-        # RMS in log-units (preferred scale for weighting).
-        out = to_rms(res)
-    else:
-        out = res
-
-    vprint(verbose, "mv_prior: reduction=", red)
-    vprint(verbose, "mv_prior: mv=", mv, "gw=", gw)
-    vprint(verbose, "mv_prior: log_target=", log_target)
-    vprint(verbose, "mv_prior: out=", out)
-    return out
+def safe_log_pos(x, eps=1e-12, dtype=tf_float32):
+    return tf_log(safe_pos(x, eps=eps, dtype=dtype))
 
 def compute_gw_flow_residual(
     model,
@@ -481,10 +561,11 @@ def compute_gw_flow_residual(
     storage_term = Ss_field * dh_dt
 
     out = storage_term - div_K_grad_h - Qv
-
-    vprint(verbose, "gw: dh_dt=", dh_dt)
-    vprint(verbose, "gw: div=", div_K_grad_h)
-    vprint(verbose, "gw: out=", out)
+    
+    if verbose > 6: 
+        vprint(verbose, "gw: dh_dt=", dh_dt)
+        vprint(verbose, "gw: div=", div_K_grad_h)
+        vprint(verbose, "gw: out=", out)
 
     return out
 
@@ -551,20 +632,142 @@ def _broadcast_like(x: Optional[Tensor], like: Tensor) -> Tensor:
     xt = tf_convert_to_tensor(x, dtype=like.dtype)
     return tf_broadcast_to(xt, tf_shape(like))
 
+def _positive_part(
+    x: Tensor,
+    *,
+    mode: str = "smooth_relu",
+    beta: float = 20.0,
+    eps: float = _SMALL,
+    zero_at_origin: bool = False,
+) -> Tensor:
+    """Return the non-negative part of x, with selectable smoothness.
+
+    Parameters
+    ----------
+    x : Tensor
+        Input tensor.
+    mode : {'smooth_relu', 'relu', 'softplus', 'none'}
+        - 'smooth_relu': softplus(beta*x)/beta  (smooth ReLU approx)
+        - 'relu'       : max(x, 0)
+        - 'softplus'   : softplus(x)            (always > 0)
+        - 'none'       : x (no clamping)
+    beta : float
+        Curvature control for 'smooth_relu'. Larger -> closer to ReLU.
+    eps : float
+        Small additive floor after gating (usually 0).
+    zero_at_origin : bool
+        If True and mode == 'smooth_relu', shift so that output is
+        (approximately) 0 at x=0:
+            softplus(beta*x)/beta - log(2)/beta
+        Note: this shifted version can become slightly negative for x<0.
+        If you need strict non-negativity, keep this False.
+
+    Returns
+    -------
+    Tensor
+        Gated tensor.
+    """
+    mode = str(mode).strip().lower()
+    x = tf_cast(x, tf_float32)
+
+    if mode == "none":
+        y = x
+
+    elif mode == "relu":
+        y = tf_maximum(x, tf_constant(eps, dtype=x.dtype))
+
+    elif mode == "softplus":
+        y = positive(x, eps = eps )
+
+    elif mode == "smooth_relu":
+        b = tf_constant(float(beta), dtype=x.dtype)
+        y = tf_softplus(b * x) / b
+        if bool(zero_at_origin):
+            log2 = tf_constant(float(np.log(2.0)), dtype=x.dtype)
+            y = y - (log2 / b)
+
+    else:
+        raise ValueError(
+            "_positive_part: mode must be one of "
+            "{'smooth_relu','relu','softplus','none'}."
+        )
+
+    if eps and float(eps) > 0.0:
+        y = y + tf_constant(float(eps), dtype=y.dtype)
+
+    return y
+
 def equilibrium_compaction_si(
     *,
     h_mean_si: Tensor,
     h_ref_si: Tensor,
     Ss_field: Tensor,
     H_field_si: Tensor,
-    use_relu: bool = True,
+    drawdown_mode: str = "smooth_relu",
+    drawdown_rule: str = "ref_minus_mean",
+    relu_beta: float = 20.0,
+    stop_grad_ref: bool = True,
+    drawdown_zero_at_origin: bool = False,
+    drawdown_clip_max: Optional[float] = None,
+    eps: float = _SMALL, 
     verbose: int = 0,
 ) -> Tensor:
-    """Compute equilibrium compaction s_eq in SI meters."""
+    """Compute equilibrium compaction s_eq (SI meters).
+
+    Notes
+    -----
+    - The physically common convention for drawdown (head loss) is:
+        delta_h = h_ref - h_mean
+      which is `drawdown_rule='ref_minus_mean'`.
+
+    - If you accidentally pass *depth* (down-positive) instead of head,
+      drawdown often needs to be flipped:
+        delta_h = h_mean - h_ref
+      which is `drawdown_rule='mean_minus_ref'`.
+
+    - `stop_grad_ref=True` is strongly recommended: it prevents the model
+      from collapsing delta_h by moving the reference.
+
+    Parameters
+    ----------
+    h_mean_si : Tensor
+        Mean head (or depth, depending on your pipeline), SI meters.
+        Shape (B,H,1) or broadcastable.
+    h_ref_si : Tensor
+        Reference head (or depth), SI meters, broadcastable to h_mean_si.
+    Ss_field : Tensor
+        Specific storage field in 1/m, broadcastable.
+    H_field_si : Tensor
+        Compressible thickness in meters, broadcastable.
+    drawdown_mode : str
+        Gating for positive drawdown: 'smooth_relu' (default), 'relu',
+        'softplus', or 'none'.
+    drawdown_rule : str
+        'ref_minus_mean' (default) or 'mean_minus_ref'.
+    relu_beta : float
+        Smoothness parameter for 'smooth_relu'.
+    stop_grad_ref : bool
+        If True, uses stop_gradient on h_ref_si.
+    drawdown_zero_at_origin : bool
+        If True and drawdown_mode='smooth_relu', shift the smooth ReLU so
+        it is ~0 at x=0 (see _positive_part doc).
+    drawdown_clip_max : float, optional
+        If provided, clips delta_h to [0, drawdown_clip_max] after gating.
+    verbose : int
+        Verbosity level.
+
+    Returns
+    -------
+    Tensor
+        Equilibrium compaction s_eq in meters, shape (B,H,1).
+    """
     h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
     h_ref_si = _broadcast_like(_ensure_3d(tf_cast(h_ref_si, tf_float32)), h_mean_si)
     Ss_field = _broadcast_like(_ensure_3d(Ss_field), h_mean_si)
     H_field_si = _broadcast_like(_ensure_3d(H_field_si), h_mean_si)
+
+    if bool(stop_grad_ref):
+        h_ref_si = tf_stop_gradient(h_ref_si)
 
     vprint(
         verbose,
@@ -573,13 +776,38 @@ def equilibrium_compaction_si(
         "h_ref", h_ref_si.shape,
         "Ss", Ss_field.shape,
         "H", H_field_si.shape,
-        "| use_relu=", use_relu,
+        "| mode=", drawdown_mode,
+        "| rule=", drawdown_rule,
+        "| stop_grad_ref=", stop_grad_ref,
     )
 
-    if use_relu:
-        delta_h = tf_maximum(h_ref_si - h_mean_si, 0.0)
+    rule = str(drawdown_rule).strip().lower()
+    if rule in {"ref_minus_mean", "ref-mean", "ref_mean"}:
+        delta_raw = h_ref_si - h_mean_si
+    elif rule in {"mean_minus_ref", "mean-ref", "mean_ref"}:
+        delta_raw = h_mean_si - h_ref_si
     else:
-        delta_h = h_ref_si - h_mean_si
+        raise ValueError(
+            "equilibrium_compaction_si: drawdown_rule must be "
+            "'ref_minus_mean' or 'mean_minus_ref'."
+        )
+
+    delta_h = _positive_part(
+        delta_raw,
+        mode=drawdown_mode,
+        beta=relu_beta,
+        eps=eps,
+        zero_at_origin=bool(drawdown_zero_at_origin),
+    )
+
+    # Optional clip (after gating).
+    if drawdown_clip_max is not None:
+        mx = tf_constant(float(drawdown_clip_max), dtype=delta_h.dtype)
+        delta_h = tf_clip_by_value(
+            delta_h,
+            tf_constant(eps, dtype=delta_h.dtype),
+            mx,
+        )
 
     vprint(
         verbose,
@@ -598,7 +826,7 @@ def equilibrium_compaction_si(
         "max=", tf_reduce_max(s_eq),
         "mean=", tf_reduce_mean(s_eq),
     )
-    return s_eq
+    return s_eq 
 
 def integrate_consolidation_mean(
     *,
@@ -612,9 +840,41 @@ def integrate_consolidation_mean(
     time_units: Optional[str] = "yr",
     method: str = "exact",
     eps_tau: float = 1e-12,
+    relu_beta: float = 20.0,
+    drawdown_mode: str = "smooth_relu",
+    drawdown_rule: str = "ref_minus_mean",
+    stop_grad_ref: bool = True,
+    drawdown_zero_at_origin: bool = False,
+    drawdown_clip_max: Optional[float] = None,
     verbose: int = 0,
 ) -> Tensor:
-    """Integrate mean settlement using a stable stepper."""
+
+    """Integrate mean settlement \bar{s}(t) using a stable stepper.
+
+    Parameters
+    ----------
+    h_mean_si : Tensor
+        Mean head in SI meters, shape (B,H,1) (or (B,H)).
+    Ss_field, H_field_si, tau_field : Tensor
+        Effective fields in SI (Ss in 1/m, H in m, tau in seconds).
+        May be broadcastable to (B,H,1).
+    h_ref_si : Tensor
+        Reference head for drawdown (broadcastable).
+    s_init_si : Tensor
+        Initial cumulative settlement (SI meters), shape (B,1,1) or (B,1).
+    dt : Tensor, optional
+        Time step in `time_units`, broadcastable to (B,H,1). If None,
+        defaults to 1 per step.
+    time_units : str, optional
+        Units of `dt` (converted to seconds).
+    method : {'exact','euler'}
+        Stepping scheme.
+
+    Returns
+    -------
+    s_bar_si : Tensor
+        Mean cumulative settlement over the horizon, shape (B,H,1).
+    """
     h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
 
     # ----------------------------------------------------------
@@ -684,7 +944,13 @@ def integrate_consolidation_mean(
         h_ref_si=h_ref_si,
         Ss_field=Ss_field,
         H_field_si=H_field_si,
-        use_relu=True,
+        # NEW forwarding:
+        drawdown_mode=drawdown_mode,
+        drawdown_rule=drawdown_rule,
+        stop_grad_ref=stop_grad_ref,
+        drawdown_zero_at_origin=drawdown_zero_at_origin,
+        drawdown_clip_max=drawdown_clip_max,
+        relu_beta=relu_beta,
         verbose=verbose,
     )
     s_eq = tf_reshape(s_eq, [B, H, 1])
@@ -765,159 +1031,6 @@ def integrate_consolidation_mean(
     )
     return s_bar
 
-
-def _integrate_consolidation_mean(
-    *,
-    h_mean_si: Tensor,
-    Ss_field: Tensor,
-    H_field_si: Tensor,
-    tau_field: Tensor,
-    h_ref_si: Tensor,
-    s_init_si: Tensor,
-    dt: Optional[Tensor] = None,
-    time_units: Optional[str] = "yr",
-    method: str = "exact",
-    eps_tau: float = 1e-12,
-    verbose: int = 0,
-) -> Tensor:
-    """Integrate mean settlement \bar{s}(t) using a stable stepper.
-
-    Parameters
-    ----------
-    h_mean_si : Tensor
-        Mean head in SI meters, shape (B,H,1) (or (B,H)).
-    Ss_field, H_field_si, tau_field : Tensor
-        Effective fields in SI (Ss in 1/m, H in m, tau in seconds).
-        May be broadcastable to (B,H,1).
-    h_ref_si : Tensor
-        Reference head for drawdown (broadcastable).
-    s_init_si : Tensor
-        Initial cumulative settlement (SI meters), shape (B,1,1) or (B,1).
-    dt : Tensor, optional
-        Time step in `time_units`, broadcastable to (B,H,1). If None,
-        defaults to 1 per step.
-    time_units : str, optional
-        Units of `dt` (converted to seconds).
-    method : {'exact','euler'}
-        Stepping scheme.
-
-    Returns
-    -------
-    s_bar_si : Tensor
-        Mean cumulative settlement over the horizon, shape (B,H,1).
-    """
-    h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
-    B = tf_shape(h_mean_si)[0]
-    H = tf_shape(h_mean_si)[1]
-
-    vprint(
-        verbose,
-        "[integrate_consolidation_mean] B,H =",
-        B, H,
-        "| time_units=", time_units,
-        "| method=", method,
-    )
-
-    # --- dt in seconds (same shape as horizon) ---
-    if dt is None:
-        dt = tf_zeros_like(h_mean_si) + 1.0
-        vprint(verbose, "[integrate_consolidation_mean] dt=None -> using 1.0 per step")
-    else:
-        dt = _broadcast_like(_ensure_3d(tf_cast(dt, tf_float32)), h_mean_si)
-
-    dt_sec = dt_to_seconds(dt, time_units=time_units)
-
-    vprint(
-        verbose,
-        "[integrate_consolidation_mean] dt_sec stats:",
-        "min=", tf_reduce_min(dt_sec),
-        "max=", tf_reduce_max(dt_sec),
-        "mean=", tf_reduce_mean(dt_sec),
-    )
-
-    # --- fields, broadcast to horizon ---
-    tau = _broadcast_like(_ensure_3d(tf_cast(tau_field, tf_float32)), h_mean_si)
-    tau = tf_maximum(tau, tf_constant(eps_tau, dtype=tf_float32))
-
-    vprint(
-        verbose,
-        "[integrate_consolidation_mean] tau stats:",
-        "min=", tf_reduce_min(tau),
-        "max=", tf_reduce_max(tau),
-        "mean=", tf_reduce_mean(tau),
-    )
-
-    s_eq = equilibrium_compaction_si(
-        h_mean_si=h_mean_si,
-        h_ref_si=h_ref_si,
-        Ss_field=Ss_field,
-        H_field_si=H_field_si,
-        use_relu=True,
-        verbose=verbose,
-    )
-
-    method = str(method).strip().lower()
-    if method not in {"exact", "euler"}:
-        raise ValueError(
-            "integrate_consolidation_mean: method must be 'exact' or 'euler'."
-        )
-
-    # --- scan over time axis (time-major) ---
-    # s0 = _ensure_3d(tf_cast(s_init_si, tf_float32))
-    # s0 = tf_broadcast_to(s0, [B, 1, 1])
-    # s0_2d = s0[:, 0, :]  # (B,1)
-    s0 = _ensure_3d(tf_cast(s_init_si, tf_float32))
-    s0 = s0[:, :1, :]          # <-- safe even if already (B,1,1)
-    s0 = tf_broadcast_to(s0, [B, 1, 1])
-    s0_2d = s0[:, 0, :]  # (B,1)
-
-    vprint(
-        verbose,
-        "[integrate_consolidation_mean] s_init stats:",
-        "min=", tf_reduce_min(s0_2d),
-        "max=", tf_reduce_max(s0_2d),
-        "mean=", tf_reduce_mean(s0_2d),
-    )
-
-    if tf_transpose is None or tf_scan is None:
-        raise RuntimeError(
-            "TensorFlow ops 'transpose'/'scan' missing from KERAS_DEPS. "
-            "Check backend initialization."
-        )
-
-    dt_tm = tf_transpose(dt_sec, [1, 0, 2])  # (H,B,1)
-    tau_tm = tf_transpose(tau, [1, 0, 2])
-    seq_tm = tf_transpose(s_eq, [1, 0, 2])
-
-    def step(prev: Tensor, elems: Tuple[Tensor, Tensor, Tensor]) -> Tensor:
-        dt_i, tau_i, seq_i = elems  # each (B,1)
-        if method == "exact":
-            a = tf_exp(-dt_i / (tau_i + tf_constant(_SMALL, tau_i.dtype)))
-            nxt = prev * a + seq_i * (1.0 - a)
-        else:
-            nxt = prev + dt_i * (seq_i - prev) / (
-                tau_i + tf_constant(_SMALL, tau_i.dtype)
-            )
-        return nxt
-
-    s_tm = tf_scan(
-        fn=step,
-        elems=(dt_tm, tau_tm, seq_tm),
-        initializer=s0_2d,
-    )
-
-    s_bar = tf_transpose(s_tm, [1, 0, 2])
-
-    vprint(
-        verbose,
-        "[integrate_consolidation_mean] s_bar stats:",
-        "min=", tf_reduce_min(s_bar),
-        "max=", tf_reduce_max(s_bar),
-        "mean=", tf_reduce_mean(s_bar),
-    )
-    return s_bar
-
-
 def compute_consolidation_step_residual(
     *,
     s_state_si: Tensor,
@@ -930,8 +1043,16 @@ def compute_consolidation_step_residual(
     time_units: Optional[str] = "yr",
     method: str = "exact",
     eps_tau: float = 1e-12,
+    relu_beta: float = 20.0,
+
+    drawdown_mode: str = "smooth_relu",
+    drawdown_rule: str = "ref_minus_mean",
+    stop_grad_ref: bool = True,
+    drawdown_zero_at_origin: bool = False,
+    drawdown_clip_max: Optional[float] = None,
     verbose: int = 0,
 ) -> Tensor:
+
     """One-step consolidation residual in SI space.
 
     This is useful when `s_state_si` is produced by a network and you want
@@ -943,11 +1064,19 @@ def compute_consolidation_step_residual(
     h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
 
     T = tf_shape(s_state_si)[1]
-    vprint(verbose, "[compute_consolidation_step_residual] T =", T, "| method=", method)
+    vprint(
+        verbose, 
+        "[compute_consolidation_step_residual] T =",
+        T, "| method=", method
+    )
 
     if dt is None:
         dt = tf_zeros_like(s_state_si[:, 1:, :]) + 1.0
-        vprint(verbose, "[compute_consolidation_step_residual] dt=None -> using 1.0 per step")
+        vprint(
+            verbose, 
+            "[compute_consolidation_step_residual]"
+            " dt=None -> using 1.0 per step"
+        )
     else:
         dt = _broadcast_like(
             _ensure_3d(tf_cast(dt, tf_float32)),
@@ -969,19 +1098,27 @@ def compute_consolidation_step_residual(
         h_ref_si=h_ref_si,
         Ss_field=Ss_field,
         H_field_si=H_field_si,
-        use_relu=True,
+  
+        drawdown_mode=drawdown_mode,
+        drawdown_rule=drawdown_rule,
+        stop_grad_ref=stop_grad_ref,
+        drawdown_zero_at_origin=drawdown_zero_at_origin,
+        drawdown_clip_max=drawdown_clip_max,
+        relu_beta=relu_beta,
         verbose=verbose,
     )
-
     method = str(method).strip().lower()
     if method == "exact":
         a = tf_exp(-dt_sec / (tau + tf_constant(_SMALL, tau.dtype)))
         pred = s_n * a + s_eq_n * (1.0 - a)
     elif method == "euler":
-        pred = s_n + dt_sec * (s_eq_n - s_n) / (tau + tf_constant(_SMALL, tau.dtype))
+        pred = s_n + dt_sec * (s_eq_n - s_n) / (
+            tau + tf_constant(_SMALL, tau.dtype)
+        )
     else:
         raise ValueError(
-            "compute_consolidation_step_residual: method must be 'exact' or 'euler'."
+            "compute_consolidation_step_residual:"
+            " method must be 'exact' or 'euler'."
         )
 
     res = s_np1 - pred
@@ -1075,7 +1212,6 @@ def compute_consistency_prior(
 
     return out
 
-
 def compute_smoothness_prior(
     dK_dx: Tensor,
     dK_dy: Tensor,
@@ -1084,33 +1220,48 @@ def compute_smoothness_prior(
     *,
     K_field: Optional[Tensor] = None,
     Ss_field: Optional[Tensor] = None,
+    already_log: bool = False,
     verbose: int = 0,
 ) -> Tensor:
-    """Smoothness prior on (log) fields."""
+    """
+    Smoothness prior on spatial gradients.
+
+    If already_log=True, inputs are d(logK)/dx, 
+    d(logK)/dy, d(logSs)/dx, d(logSs)/dy.
+    Otherwise, if K_field/Ss_field are provided,
+    we convert via division (less stable).
+    """
     eps = tf_constant(1e-12, dtype=tf_float32)
 
-    if (K_field is not None) and (Ss_field is not None):
-        dlogK_dx = dK_dx / (K_field + eps)
-        dlogK_dy = dK_dy / (K_field + eps)
-        dlogSs_dx = dSs_dx / (Ss_field + eps)
-        dlogSs_dy = dSs_dy / (Ss_field + eps)
-
+    if already_log:
         out = (
-            tf_square(dlogK_dx)
-            + tf_square(dlogK_dy)
-            + tf_square(dlogSs_dx)
-            + tf_square(dlogSs_dy)
+            tf_square(dK_dx) + tf_square(dK_dy)
+            + tf_square(dSs_dx) + tf_square(dSs_dy)
         )
-        vprint(verbose, "smooth(log): out=", out)
+        vprint(verbose, "smooth(log-direct): out=", out)
         return out
 
-    out = (
-        tf_square(dK_dx)
-        + tf_square(dK_dy)
-        + tf_square(dSs_dx)
+    if (K_field is not None) and (Ss_field is not None):
+        dlogK_dx  = dK_dx  / (K_field  + eps)
+        dlogK_dy  = dK_dy  / (K_field  + eps)
+        dlogSs_dx = dSs_dx / (Ss_field + eps)
+        dlogSs_dy = dSs_dy / (Ss_field + eps)
+        out = (
+            tf_square(dlogK_dx) + tf_square(dlogK_dy)
+            + tf_square(dlogSs_dx) + tf_square(dlogSs_dy)
+        )
+        vprint(verbose, "smooth(log-div): out=", out)
+        return out
+
+    out = ( 
+        tf_square(dK_dx) 
+        + tf_square(dK_dy) 
+        + tf_square(dSs_dx) 
         + tf_square(dSs_dy)
     )
-    vprint(verbose, "smooth: out=", out)
+    
+    vprint(verbose, "smooth(raw): out=", out)
+    
     return out
 
 
@@ -1447,8 +1598,8 @@ def compose_physics_fields(
         delta_log_tau,
         logK,
         logSs,
-        log_tau,        # NEW: return log_tau for bounds penalty + diagnostics
-        log_tau_phys,   # NEW: optional but very useful for priors/diagnostics
+        log_tau,        # return log_tau for bounds penalty + diagnostics
+        log_tau_phys,   # optional but very useful for priors/diagnostics
     )
 
 def compute_bounds_residual(
@@ -1525,10 +1676,11 @@ def compute_bounds_residual(
         R_Ss = tf_zeros_like(Ss_safe)
     else:
         R_Ss = log_bound(Ss_safe, logSs_min, logSs_max)
-
-    vprint(verbose, "bounds: R_H=", R_H)
-    vprint(verbose, "bounds: R_K=", R_K)
-    vprint(verbose, "bounds: R_Ss=", R_Ss)
+    
+    if verbose > 6:
+        vprint(verbose, "bounds: R_H=", R_H)
+        vprint(verbose, "bounds: R_K=", R_K)
+        vprint(verbose, "bounds: R_Ss=", R_Ss)
 
     return R_H, R_K, R_Ss
 
@@ -1620,6 +1772,12 @@ def rate_to_per_second(
     """d/d(time_units) -> d/ds."""
     sec = seconds_per_time_unit(time_units, dtype=dz_dt.dtype)
     return dz_dt / (sec + tf_constant(_SMALL, dz_dt.dtype))
+
+
+def smooth_relu(x: Tensor, *, beta: float = 20.0) -> Tensor:
+    """Smooth approximation to relu(x) with controlled curvature."""
+    b = tf_constant(float(beta), dtype=x.dtype)
+    return tf_softplus(b * x) / b
 
 
 def positive(x: Tensor, *, eps: float = _SMALL) -> Tensor:
@@ -2005,6 +2163,11 @@ def compute_scales(
 
     gw_scale = tf_maximum(gw_scale, gw_floor)
     gw_scale = tf_stop_gradient(gw_scale)
+    
+    if resolve_gw_units(sk) == "time_unit":
+        sec_u = seconds_per_time_unit(time_units, dtype=tf_float32)
+        gw_scale = gw_scale * sec_u
+
 
     out = {"cons_scale": cons_scale, "gw_scale": gw_scale}
 
@@ -2028,6 +2191,12 @@ def compute_scales(
            cons_scale, "gw_scale=", gw_scale)
     return out
 
+def resolve_gw_units(sk):
+    v = get_sk(sk, "gw_residual_units", default="time_unit")
+    v = str(v).strip().lower()
+    if v in ("sec", "second", "seconds", "s"):
+        return "second"
+    return "time_unit"
 
 def resolve_cons_units(
     sk: Optional[Dict[str, Any]],
@@ -2064,8 +2233,8 @@ def settlement_state_for_pde(
     baseline_keys: Sequence[str] = (
         "s0_si", "subs0_si", "s_ref_si", "subs_ref_si",
     ),
-    dt: Optional[Tensor] = None,                 # NEW
-    return_incremental: bool = True,             # NEW
+    dt: Optional[Tensor] = None,                 
+    return_incremental: bool = True,            
     verbose: int = 0,
 ) -> Tensor:
     """Map model output to settlement state in meters."""
@@ -2256,37 +2425,119 @@ def to_rms(
 
     return rms
 
-# def to_rms(
-#     x: Tensor,
-#     *,
-#     axis=None,
-#     keepdims: bool = False,
-#     eps: float = _SMALL,
-# ) -> Tensor:
-#     """Root-mean-square (RMS) of a tensor.
+def _as_bool(x: Any, default: bool = False) -> bool:
+    """Parse bool-like values robustly (bool/int/str)."""
+    if x is None:
+        return bool(default)
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, (int, float)):
+        return bool(int(x))
+    if isinstance(x, str):
+        s = x.strip().lower()
+        if s in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if s in {"0", "false", "f", "no", "n", "off"}:
+            return False
+    return bool(default)
 
-#     Parameters
-#     ----------
-#     x : Tensor
-#         Input tensor.
-#     axis : int | Sequence[int] | None
-#         Reduction axis/axes. If None, reduce over all elements.
-#     keepdims : bool
-#         Keep reduced dimensions.
-#     eps : float
-#         Optional lower bound on the mean-square before sqrt
-#         (useful to avoid sqrt(0) in some diagnostics).
+def _cast_lower_str(v):
+    return str(v).strip().lower()
 
-#     Returns
-#     -------
-#     rms : Tensor
-#         RMS value (scalar if axis=None; else reduced tensor).
-#     """
-#     x = tf_cast(x, tf_float32)
-#     ms = tf_reduce_mean(tf_square(x), axis=axis, keepdims=keepdims)
-#     if eps and float(eps) > 0.0:
-#         ms = tf_maximum(ms, tf_constant(float(eps), tf_float32))
-#     return tf_sqrt(ms)
+def _cast_optional_float(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in {"", "none", "null"}:
+            return None
+    return float(v)
+
+def resolve_cons_drawdown_options(
+    scaling_kwargs,
+    *,
+    default_mode: str = "smooth_relu",
+    default_rule: str = "ref_minus_mean",
+    default_stop_grad_ref: bool = True,
+    default_zero_at_origin: bool = False,
+    default_clip_max: Optional[float] = None,
+    default_relu_beta: float = 20.0,
+) -> Dict[str, Any]:
+    """Resolve consolidation drawdown options from scaling_kwargs.
+
+    Supported keys (prefer the 'cons_*' names):
+    - cons_drawdown_mode / drawdown_mode
+    - cons_drawdown_rule / drawdown_rule
+    - cons_stop_grad_ref / stop_grad_ref
+    - cons_drawdown_zero_at_origin / drawdown_zero_at_origin
+    - cons_drawdown_clip_max / drawdown_clip_max
+    - cons_relu_beta / relu_beta
+
+    Returns
+    -------
+    dict with keys:
+      drawdown_mode, drawdown_rule, stop_grad_ref,
+      drawdown_zero_at_origin, drawdown_clip_max, relu_beta
+    """
+    sk = scaling_kwargs or {}
+
+    mode = get_sk(
+        sk, "cons_drawdown_mode",
+        default=default_mode,
+        cast=_cast_lower_str,
+    )
+    rule = get_sk(
+        sk, "cons_drawdown_rule",
+        default=default_rule,
+        cast=_cast_lower_str,
+    )
+    stopg = get_sk(
+        sk, "cons_stop_grad_ref",
+        default=default_stop_grad_ref,
+        cast=lambda x: _as_bool(x, default_stop_grad_ref),
+    )
+    zero0 = get_sk(
+        sk, "cons_drawdown_zero_at_origin",
+        default=default_zero_at_origin,
+        cast=lambda x: _as_bool(x, default_zero_at_origin),
+    )
+    clipm = get_sk(
+        sk, "cons_drawdown_clip_max",
+        default=default_clip_max,
+        cast=_cast_optional_float,
+    )
+    beta = get_sk(
+        sk, "cons_relu_beta",
+        default=default_relu_beta,
+        cast=float,
+    )
+
+    allowed_modes = {"smooth_relu", "relu", "softplus", "none"}
+    allowed_rules = {"ref_minus_mean", "mean_minus_ref"}
+
+    if mode not in allowed_modes:
+        pol = _cast_lower_str(get_sk(sk, "scaling_error_policy", default="raise"))
+        if pol == "raise":
+            raise ValueError(
+                f"drawdown_mode must be {sorted(allowed_modes)}; got {mode!r}")
+        mode = default_mode
+
+    if rule not in allowed_rules:
+        pol = _cast_lower_str(get_sk(
+            sk, "scaling_error_policy", default="raise"))
+        if pol == "raise":
+            raise ValueError(
+                f"drawdown_rule must be {sorted(allowed_rules)}; got {rule!r}")
+        rule = default_rule
+
+    return {
+        "drawdown_mode": mode,
+        "drawdown_rule": rule,
+        "stop_grad_ref": stopg,
+        "drawdown_zero_at_origin": zero0,
+        "drawdown_clip_max": clipm,
+        "relu_beta": beta,
+    }
 
 def _stats(name: str, x: Tensor) -> None:
     x = tf_cast(x, tf_float32)
