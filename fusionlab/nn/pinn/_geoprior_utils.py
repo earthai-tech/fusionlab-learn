@@ -26,14 +26,15 @@ tf_constant = KERAS_DEPS.constant
 tf_debugging = KERAS_DEPS.debugging
 tf_equal = KERAS_DEPS.equal
 tf_maximum = KERAS_DEPS.maximum
+tf_minimum = KERAS_DEPS.minimum
+tf_greater_equal = KERAS_DEPS.greater_equal
 tf_rank = KERAS_DEPS.rank
 tf_cond = KERAS_DEPS.cond
 tf_shape = KERAS_DEPS.shape
 tf_zeros_like = KERAS_DEPS.zeros_like
 tf_ones = KERAS_DEPS.ones 
 tf_greater = KERAS_DEPS.greater 
-tf_greater_equal = KERAS_DEPS.greater_equal
- 
+
 tf_cond = KERAS_DEPS.cond 
 tf_concat = KERAS_DEPS.concat 
 tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
@@ -1288,29 +1289,60 @@ def _vshapes(title, items):
     tf_print("================================\n")
 
 
+
 # ---------------------------------------------------------------------
-# Simple warmup gates (graph-safe)
+# Training strategy gates (Q and subsidence residual)
 # ---------------------------------------------------------------------
 def policy_gate(
     step: Tensor,
-    *,
     policy: str,
+    *,
     warmup_steps: int = 0,
+    ramp_steps: int = 0,
     dtype: Any = tf_float32,
 ) -> Tensor:
-    """Return a scalar gate in [0,1] from a simple policy."""
-    pol = str(policy or "").strip().lower()
-    if pol in ("", "always_on", "on", "true", "1"):
-        return tf_constant(1.0, dtype)
-    if pol in ("always_off", "off", "false", "0", "none"):
-        return tf_constant(0.0, dtype)
-    if pol in ("warmup_off", "warmupoff", "warmup"):
-        w = int(warmup_steps or 0)
-        if w <= 0:
-            return tf_constant(1.0, dtype)
-        step_i = tf_cast(step, tf_int32)
-        return tf_cast(
-            tf_greater_equal(step_i, tf_constant(w, tf_int32)),
-            dtype,
-        )
-    return tf_constant(1.0, dtype)
+    r"""Return a scalar gate in ``[0,1]`` based on a policy + step.
+
+    Parameters
+    ----------
+    step : Tensor
+        Global step counter (typically ``optimizer.iterations``).
+    policy : {"always_on","always_off","warmup_off"}
+        Gating behavior:
+        - ``always_on``  : gate = 1
+        - ``always_off`` : gate = 0
+        - ``warmup_off`` : gate = 0 for ``step < warmup_steps``,
+          then ramps to 1 over ``ramp_steps`` (linear) if ``ramp_steps>0``,
+          otherwise becomes 1 immediately at ``warmup_steps``.
+    warmup_steps : int, default=0
+        Number of steps to keep the gate at 0 (only for ``warmup_off``).
+    ramp_steps : int, default=0
+        Number of steps for a linear ramp from 0->1 after warmup.
+        If 0, the gate is a hard step.
+    dtype : dtype, default=tf_float32
+        Output dtype.
+    """
+    pol = (policy or "always_on").strip().lower()
+    if pol in ("always_on", "on", "true", "1"):
+        return tf_constant(1.0, dtype=dtype)
+    if pol in ("always_off", "off", "false", "0"):
+        return tf_constant(0.0, dtype=dtype)
+
+    w = int(warmup_steps or 0)
+    r = int(ramp_steps or 0)
+
+    if w <= 0 and r <= 0:
+        return tf_constant(1.0, dtype=dtype)
+
+    step_i = tf_cast(step, tf_int32)
+
+    if r <= 0:
+        return tf_cast(tf_greater_equal(step_i, tf_constant(w, tf_int32)), dtype)
+
+    step_f = tf_cast(step_i, dtype)
+    w_f = tf_constant(float(w), dtype)
+    r_f = tf_constant(float(r), dtype)
+    frac = (step_f - w_f) / r_f
+    frac = tf_maximum(tf_constant(0.0, dtype), frac)
+    frac = tf_minimum(tf_constant(1.0, dtype), frac)
+    return frac

@@ -167,6 +167,10 @@ def build_physics_bundle(
     loss_prior: Tensor,
     loss_smooth: Tensor,
     loss_mv: Tensor,
+    loss_q_reg: Tensor,
+    q_rms: Tensor,
+    q_gate: Tensor,
+    subs_resid_gate: Tensor,
     loss_bounds: Tensor,
     eps_prior: Tensor,
     eps_cons: Tensor,
@@ -194,6 +198,12 @@ def build_physics_bundle(
         "loss_prior": loss_prior,
         "loss_smooth": loss_smooth,
         "loss_mv": loss_mv,
+        
+        "loss_q_reg": loss_q_reg,
+        "q_rms": q_rms,
+        "q_gate": q_gate,
+        "subs_resid_gate": subs_resid_gate,
+
         "loss_bounds": loss_bounds,
 
         "epsilon_prior": eps_prior,

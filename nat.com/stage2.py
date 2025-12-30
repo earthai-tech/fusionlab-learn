@@ -904,7 +904,6 @@ val_dataset = make_tf_dataset(
     future_feature_names=list(FUT_NAMES),
 )
 
-
 print("\nDataset sample shapes:")
 for xb, yb in train_dataset.take(1):
     for k, v in xb.items():
@@ -936,7 +935,6 @@ MODEL_CLASS_REGISTRY = {
 model_cls = MODEL_CLASS_REGISTRY.get(MODEL_NAME, GeoPriorSubsNet)
 
 sk_model.update (sk)
-
 sk_model.update ({
     # anything else default_scales(...) already expects can
     # also be passed here later

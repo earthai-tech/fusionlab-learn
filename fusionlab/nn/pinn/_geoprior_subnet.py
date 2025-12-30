@@ -1562,11 +1562,18 @@ class GeoPriorSubsNet(BaseAttentive):
             
             # now broadcast with dh_dt
             Q_si = Q_si + tf_zeros_like(dh_dt)
-            q_gate = self._q_gate(training=True)
+            # q_gate = self._q_gate(training=True)
+            # Q_si = Q_si * q_gate
+            # loss_q_reg = tf_reduce_mean(tf_square(Q_si))
+            # q_rms = to_rms(Q_si)
+            
+            # Strategy gate + Q regularization payload
+            q_gate = self._q_gate()
             Q_si = Q_si * q_gate
             loss_q_reg = tf_reduce_mean(tf_square(Q_si))
             q_rms = to_rms(Q_si)
-             
+            subs_resid_gate = self._subs_resid_gate()
+
             if verbose > 3:
                 tf_print("[train_step] --- step: Q source term ---")
                 _vshapes("STEP 5 (Q)", [
@@ -1955,6 +1962,10 @@ class GeoPriorSubsNet(BaseAttentive):
                 loss_prior=loss_prior,
                 loss_smooth=loss_smooth,
                 loss_mv=loss_mv,
+                loss_q_reg=loss_q_reg,
+                q_rms=q_rms,
+                q_gate=q_gate,
+                subs_resid_gate=subs_resid_gate,
                 loss_bounds=loss_bounds,
                 eps_prior=eps_prior,
                 eps_cons=eps_cons,
@@ -2287,18 +2298,22 @@ class GeoPriorSubsNet(BaseAttentive):
         # now broadcast with dh_dt
         Q_si = Q_si + tf_zeros_like(dh_dt)
         
-        q_gate = self._q_gate(training=False)
+        # q_gate = self._q_gate(training=False)
+        # Q_si = Q_si * q_gate
+        # loss_q_reg = tf_reduce_mean(tf_square(Q_si))
+        # q_rms = to_rms(Q_si)
+        q_gate = self._q_gate()
         Q_si = Q_si * q_gate
         loss_q_reg = tf_reduce_mean(tf_square(Q_si))
         q_rms = to_rms(Q_si)
-
+        subs_resid_gate = self._subs_resid_gate()
+        
         like_11 = h_si[:, :1, :1]   
         # s_init_si = get_s_init_si(self, inputs_fwd, like=like_11)   # (B,1,1)
         h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=like_11)    # (B,1,1)
         h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                  # (B,H,1)
         # Build consolidation residual on predicted mean
         # subsidence (not on the integrated s_bar)
-
 
         # --------------------------------------------------------------
         # 5) Physics-driven mean settlement + consolidation residual
@@ -2498,6 +2513,7 @@ class GeoPriorSubsNet(BaseAttentive):
             loss_smooth=loss_smooth,
             loss_mv=loss_mv,
             loss_q_reg=loss_q_reg,
+            loss_q_reg=loss_q_reg,
             loss_bounds=loss_bounds,
         )
         
@@ -2511,6 +2527,10 @@ class GeoPriorSubsNet(BaseAttentive):
             loss_prior=loss_prior,
             loss_smooth=loss_smooth,
             loss_mv=loss_mv,
+            loss_q_reg=loss_q_reg,
+            q_rms=q_rms,
+            q_gate=q_gate,
+            subs_resid_gate=subs_resid_gate,
             loss_bounds=loss_bounds,
             eps_prior=eps_prior,
             eps_cons=eps_cons,
@@ -2669,28 +2689,55 @@ class GeoPriorSubsNet(BaseAttentive):
         )
 
      # --------------------------------------------------------------
-    # Training strategy gates (Q and subsidence residual)
+     # Training strategy gates (Q and subsidence residual)
      # --------------------------------------------------------------
-    def _q_gate(self, training: bool = True) -> Tensor:
-        
-        sk = self.scaling_kwargs or {}
-        policy = str(get_sk(sk, "q_policy", "always_on")).strip().lower()
-        warmup_steps = int(get_sk(sk, "q_warmup_steps", 0) or 0)
-        if not bool(training):
-            return tf_constant(0.0, tf_float32) if policy in (
-                "always_off","off","none") else tf_constant(1.0, tf_float32)
-        step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
-        return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
 
-    def _subs_resid_gate(self, training: bool = True) -> Tensor:
+    def _current_step_tensor(self) -> Tensor:
+        """Graph-safe global step for warmup/ramp gates.
+        If optimizer is missing (inference), behave as fully ON unless always_off.
+        """
+        opt = getattr(self, "optimizer", None)
+        it = getattr(opt, "iterations", None) if opt is not None else None
+        if it is None:
+            return tf_constant(10**9, dtype=tf_int32)
+        return tf_cast(it, tf_int32)
+
+    def _q_gate(self) -> Tensor:
         sk = self.scaling_kwargs or {}
-        policy = str(get_sk(sk, "subs_resid_policy", "always_on")).strip().lower()
-        warmup_steps = int(get_sk(sk, "subs_resid_warmup_steps", 0) or 0)
-        if not bool(training):
-            return tf_constant(0.0, tf_float32) if policy in (
-                "always_off","off","none") else tf_constant(1.0, tf_float32)
-        step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
-        return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
+        policy = sk.get("q_policy", "always_on")
+        w = int(sk.get("q_warmup_steps", 0) or 0)
+        r = int(sk.get("q_ramp_steps", 0) or 0)
+        return policy_gate(self._current_step_tensor(), str(policy),
+                           warmup_steps=w, ramp_steps=r, dtype=tf_float32)
+
+    def _subs_resid_gate(self) -> Tensor:
+        sk = self.scaling_kwargs or {}
+        policy = sk.get("subs_resid_policy", "always_on")
+        w = int(sk.get("subs_resid_warmup_steps", 0) or 0)
+        r = int(sk.get("subs_resid_ramp_steps", 0) or 0)
+        return policy_gate(self._current_step_tensor(), str(policy),
+                           warmup_steps=w, ramp_steps=r, dtype=tf_float32)
+
+    # def _q_gate(self, training: bool = True) -> Tensor:
+        
+    #     sk = self.scaling_kwargs or {}
+    #     policy = str(get_sk(sk, "q_policy", "always_on")).strip().lower()
+    #     warmup_steps = int(get_sk(sk, "q_warmup_steps", 0) or 0)
+    #     if not bool(training):
+    #         return tf_constant(0.0, tf_float32) if policy in (
+    #             "always_off","off","none") else tf_constant(1.0, tf_float32)
+    #     step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
+    #     return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
+
+    # def _subs_resid_gate(self, training: bool = True) -> Tensor:
+    #     sk = self.scaling_kwargs or {}
+    #     policy = str(get_sk(sk, "subs_resid_policy", "always_on")).strip().lower()
+    #     warmup_steps = int(get_sk(sk, "subs_resid_warmup_steps", 0) or 0)
+    #     if not bool(training):
+    #         return tf_constant(0.0, tf_float32) if policy in (
+    #             "always_off","off","none") else tf_constant(1.0, tf_float32)
+    #     step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
+    #     return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
 
     def _mv_value(self) -> Tensor:
         r"""
@@ -2987,10 +3034,12 @@ class GeoPriorSubsNet(BaseAttentive):
         lambda_smooth: float = 1.0,
         lambda_mv: float = 0.0,
         lambda_bounds: float = 0.0,
+        lambda_q: float = 0.0,
         lambda_offset: float = 1.0,
         mv_lr_mult: float = 1.0,
         kappa_lr_mult: float = 1.0,
         scale_mv_with_offset: bool = False,
+        scale_q_with_offset: bool = True,
         **kwargs,
     ):
         r"""
@@ -3114,13 +3163,17 @@ class GeoPriorSubsNet(BaseAttentive):
         # Store core physics weights.
         self.lambda_cons = float(lambda_cons)
         self.lambda_gw = float(lambda_gw)
+        self.lambda_q = float(lambda_q)
+        
         self._scale_mv_with_offset = bool(scale_mv_with_offset)
+        self._scale_q_with_offset = bool(scale_q_with_offset)
     
         if self._physics_off():
             # When physics is off, hard-disable these contributions.
             self.lambda_prior = 0.0
             self.lambda_smooth = 0.0
             self.lambda_mv = 0.0
+            self.lambda_q = 0.0
             self.lambda_bounds = 0.0
     
             # Keep neutral; avoids any assertion trouble and keeps logs stable.
