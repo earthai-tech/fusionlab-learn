@@ -1085,8 +1085,6 @@ subsmodel_params["scaling_kwargs"].update({
     "mv_alpha_disp": sk.get('mv_alpha_disp', cfg.get("MV_ALPHA_DISP", 0.1)), 
     "mv_huber_delta":  sk.get('mv_huber_delta', cfg.get("MV_HUBER_DELTA", 1.0)), 
     
-    
-    
 })
 
 # -------------------------------------------------------------------------
