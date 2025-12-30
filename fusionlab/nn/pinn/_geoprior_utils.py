@@ -32,12 +32,15 @@ tf_shape = KERAS_DEPS.shape
 tf_zeros_like = KERAS_DEPS.zeros_like
 tf_ones = KERAS_DEPS.ones 
 tf_greater = KERAS_DEPS.greater 
+tf_greater_equal = KERAS_DEPS.greater_equal
+ 
 tf_cond = KERAS_DEPS.cond 
 tf_concat = KERAS_DEPS.concat 
 tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
 tf_ones_like = KERAS_DEPS.ones_like 
 tf_less_equal =KERAS_DEPS.less_equal 
 tf_abs = KERAS_DEPS.abs 
+tf_print = KERAS_DEPS.print 
 
 
 # ---------------------------------------------------------------------
@@ -178,6 +181,44 @@ _SK_ALIASES.update({
         "cons_beta",
     ),
 })
+
+# ---------------------------------------------------------------------
+# MV prior drift (mode/weight/warmup + loss knobs)
+# ---------------------------------------------------------------------
+_SK_ALIASES.update({
+    "mv_prior_mode": (
+        "mv_mode",
+        "mvprior_mode",
+        "mv_prior_kind",
+    ),
+    "mv_weight": (
+        "mv_prior_weight",
+        "mvprior_weight",
+        "mv_w",
+    ),
+    "mv_warmup_steps": (
+        "mv_prior_warmup_steps",
+        "mv_warmup_steps",
+        "mv_warmup_iters",
+        "mv_warmup_iterations",
+    ),
+    "mv_alpha_disp": (
+        "mv_prior_alpha_disp",
+        "mv_disp_alpha",
+        "mv_alpha",
+    ),
+    "mv_huber_delta": (
+        "mv_prior_huber_delta",
+        "mv_delta",
+        "mv_huber",
+    ),
+    "mv_prior_units": (
+        "mv_units",
+        "mv_gamma_units",
+        "mv_gw_units",
+    ),
+})
+
 
 def enforce_scaling_alias_consistency(
     scaling_kwargs: Optional[Dict[str, Any]],
@@ -1224,3 +1265,52 @@ def infer_dt_units_from_t(
     return dt
 
 
+# ==============================================================
+# VERBOSE SHAPE DIAGNOSTICS (paste-only snippets)
+# - Uses tf_shape() (works in graph) + a small helper.
+# - Triggered when verbose > 3.
+# ==============================================================
+
+def _vshape(tag, x):
+    """Print runtime shape + rank (graph-safe)."""
+    if x is None:
+        tf_print("[shape]", tag, "= None")
+        return
+    xr = tf_rank(x)
+    xs = tf_shape(x)
+    tf_print("[shape]", tag, "rank=", xr, "shape=", xs)
+
+def _vshapes(title, items):
+    """Convenience: print a block of shapes."""
+    tf_print("\n==========", title, "==========")
+    for tag, x in items:
+        _vshape(tag, x)
+    tf_print("================================\n")
+
+
+# ---------------------------------------------------------------------
+# Simple warmup gates (graph-safe)
+# ---------------------------------------------------------------------
+def policy_gate(
+    step: Tensor,
+    *,
+    policy: str,
+    warmup_steps: int = 0,
+    dtype: Any = tf_float32,
+) -> Tensor:
+    """Return a scalar gate in [0,1] from a simple policy."""
+    pol = str(policy or "").strip().lower()
+    if pol in ("", "always_on", "on", "true", "1"):
+        return tf_constant(1.0, dtype)
+    if pol in ("always_off", "off", "false", "0", "none"):
+        return tf_constant(0.0, dtype)
+    if pol in ("warmup_off", "warmupoff", "warmup"):
+        w = int(warmup_steps or 0)
+        if w <= 0:
+            return tf_constant(1.0, dtype)
+        step_i = tf_cast(step, tf_int32)
+        return tf_cast(
+            tf_greater_equal(step_i, tf_constant(w, tf_int32)),
+            dtype,
+        )
+    return tf_constant(1.0, dtype)

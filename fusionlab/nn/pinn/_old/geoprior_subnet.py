@@ -34,9 +34,7 @@ if KERAS_BACKEND:
     ) 
     from .op import process_pinn_inputs
     from ._geoprior_maths import (
-        _EPSILON, _assert_grads_finite,
-        LogClipConstraint, 
-        compute_mv_prior, 
+        compute_mv_prior_loss,
         compute_gw_flow_residual,
         compute_smoothness_prior,
         get_log_bounds,
@@ -57,11 +55,9 @@ if KERAS_BACKEND:
         seconds_per_time_unit, 
         resolve_gw_units, 
         resolve_cons_drawdown_options, 
-        
     )
 
     from ._geoprior_utils import (
-        _vshapes, _vshape, 
         to_si_thickness,
         to_si_head,
         deg_to_m,
@@ -76,9 +72,7 @@ if KERAS_BACKEND:
         infer_dt_units_from_t,
         to_si_subsidence,
         from_si_subsidence, 
-        get_sk,
-        policy_gate,
-
+        get_sk, 
     )
     from ._geoprior_losses import (
         assemble_physics_loss,
@@ -107,7 +101,7 @@ GradientTape =KERAS_DEPS.GradientTape
 Mean =KERAS_DEPS.Mean 
 Dataset = KERAS_DEPS.Dataset
 RandomNormal = KERAS_DEPS.RandomNormal
-
+Constraint = KERAS_DEPS.Constraint
 
 tf_zeros_like= KERAS_DEPS.zeros_like
 tf_zeros =KERAS_DEPS.zeros
@@ -150,7 +144,7 @@ tf_clip_by_value = KERAS_DEPS.clip_by_value
 tf_clip_by_global_norm = KERAS_DEPS.clip_by_global_norm
 tf_math = KERAS_DEPS.math 
 tf_where = KERAS_DEPS.where 
-tf_reduce_all = KERAS_DEPS.reduce_all
+
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
@@ -386,7 +380,7 @@ class GeoPriorSubsNet(BaseAttentive):
         elif isinstance(h_ref, (int, float)):
             # numeric => explicit fixed datum
             h_ref = FixedHRef(value=float(h_ref), mode="fixed")
-            
+        # else: assume it's already a FixedHRef-like objec
         self.h_ref_config = h_ref
 
         self.mv_config = mv
@@ -504,7 +498,18 @@ class GeoPriorSubsNet(BaseAttentive):
             kernel_initializer="zeros",
             bias_initializer=Constant(0.0),
         )
+        # Coords stabiliser for decoder injection.
+        # self.coords_norm = LayerNormalization(
+        #     epsilon=1e-6,
+        #     name="coords_norm",
+        # )
+        # self.coords_proj = Dense(
+        #     units=self.attention_units,
+        #     activation="swish",
+        #     name="coords_proj",
+        # )
 
+    
         self.H_field = None
         self.eps_prior_metric = Mean(name="epsilon_prior")
         self.eps_cons_metric = Mean(name="epsilon_cons")
@@ -556,89 +561,82 @@ class GeoPriorSubsNet(BaseAttentive):
         self.tau_coord_mlp = _branch(self.output_tau_dim, "tau_coord_mlp")
         
     def _build_pinn_components(self):
-        """
-        Create scalar physics params + fixed constants.
-    
-        Notes
-        -----
-        - m_v is stored in log-space when learnable.
-        - We use a NaN-safe clip constraint so a bad
-          update cannot leave log_mv as NaN forever.
-        """
-    
-        # -------------------------------------------------
+        class LogClipConstraint(Constraint):
+            def __init__(self, min_value, max_value):
+                self.min_value = min_value
+                self.max_value = max_value
+            def __call__(self, w):
+                return tf_clip_by_value(w, self.min_value, self.max_value)
+
+
         # Compressibility m_v
-        # -------------------------------------------------
+        # if isinstance(self.mv_config, LearnableMV):
+        #     # Trainable log-parameter for m_v
+        #     self.log_mv = self.add_weight(
+        #         name="log_param_mv",
+        #         shape=(),
+        #         initializer=Constant(
+        #             tf_log(self.mv_config.initial_value)
+        #         ),
+        #         trainable=self.mv_config.trainable,
+        #     )
+        # else:
+        #     # Fixed scalar m_v as a constant
+        #     self._mv_fixed = tf_constant(
+        #         float(self.mv_config.initial_value),
+        #         dtype=tf_float32,
+        #     )
+    
+        # Compressibility m_v: always log-space parameter
         mv0 = float(self.mv_config.initial_value)
-    
-        # Hard safety window for exp(log_mv) in float32.
-        log_mv_min = tf_log(tf_constant(_EPSILON, tf_float32))
-        log_mv_max = tf_log(tf_constant(1e-4, tf_float32))
-    
         if isinstance(self.mv_config, LearnableMV):
-            # Learnable scalar in log-space to enforce
-            # positivity: mv = exp(log_mv).
             self.log_mv = self.add_weight(
                 name="log_param_mv",
                 shape=(),
-                initializer=Constant(
-                    tf_log(tf_constant(mv0, tf_float32)),
-                ),
-                trainable=bool(
-                    getattr(self.mv_config, "trainable", False),
-                ),
+                initializer=Constant(tf_log(tf_constant(mv0, tf_float32))),
+                trainable=bool(getattr(self.mv_config, "trainable", False)),
+                # optional but recommended: constraint to keep exp(log_mv) finite
                 constraint=LogClipConstraint(
-                    min_value=log_mv_min,
-                    max_value=log_mv_max,
+                    min_value=tf_log(tf_constant(1e-12, tf_float32)),
+                    max_value=tf_log(tf_constant(1e-4,  tf_float32)),
                 ),
             )
         else:
-            # Fixed scalar (linear space).
+            # Fixed scalar m_v as a constant
             self._mv_fixed = tf_constant(mv0, dtype=tf_float32)
     
-        # -------------------------------------------------
-        # Consistency factor κ (log-space if learnable)
-        # -------------------------------------------------
+        # Consistency factor κ
         if isinstance(self.kappa_config, LearnableKappa):
+            # Trainable log-parameter for κ
             self.log_kappa = self.add_weight(
                 name="log_param_kappa",
                 shape=(),
                 initializer=Constant(
-                    tf_log(self.kappa_config.initial_value),
+                    tf_log(self.kappa_config.initial_value)
                 ),
-                trainable=bool(
-                    getattr(self.kappa_config, "trainable", False),
-                ),
+                trainable=self.kappa_config.trainable,
             )
         else:
+            # Fixed scalar κ as a constant
             self._kappa_fixed = tf_constant(
                 float(self.kappa_config.initial_value),
                 dtype=tf_float32,
             )
     
-        # -------------------------------------------------
-        # Fixed physical constants
-        # -------------------------------------------------
-        self.gamma_w = tf_cast(
-            self.gamma_w_config.get_value(),
-            tf_float32,
-        )
-    
-        self.h_ref_mode = getattr(
-            self.h_ref_config,
-            "mode",
-            "fixed",
-        )
-    
-        # Always store a numeric head datum.
+        # Fixed physical constants (water unit weight, reference head)
+        self.gamma_w = tf_cast(self.gamma_w_config.get_value(), tf_float32)
+
+        self.h_ref_mode = getattr(self.h_ref_config, "mode", "fixed")
+
         self.h_ref = tf_constant(
-            float(self.h_ref_config.value),
+            float(self.h_ref_config.value),  # always a float fallback
             dtype=tf_float32,
         )
     
-        # -------------------------------------------------
-        # Runtime placeholders for last evaluated fields
-        # -------------------------------------------------
+        # Runtime placeholders for physics fields
+        # These are filled in train_step / evaluate_physics()
+        # *after* coordinate corrections and positivity have been applied,
+        # and can be inspected via get_last_physics_fields().
         self.K_field = None
         self.Ss_field = None
         self.tau_field = None
@@ -844,6 +842,11 @@ class GeoPriorSubsNet(BaseAttentive):
                 "'coords_input' (B, H, 3) to be provided."
             )
         
+        # coords_nn = tf_cast(coords_input, tf_float32)
+        # coords_nn = self.coords_norm(coords_nn)
+        # coords_nn = self.coords_proj(coords_nn)
+        # decoder_parts.append(coords_nn)
+
         decoder_parts.append(coords_input)
     
         # If everything is missing (very degenerate case), fall back to
@@ -921,10 +924,6 @@ class GeoPriorSubsNet(BaseAttentive):
         ) = process_pinn_inputs(inputs, mode="auto", model_name="geoprior")
     
         coords_for_decoder = tf_concat([t, x, y], axis=-1)  # (B,H,3)
-        tf_debugging.assert_shapes([
-            (coords_for_decoder, ("B", "H", 3)),
-        ])
-
         self.H_field = H_field
     
         check_inputs(
@@ -1011,7 +1010,11 @@ class GeoPriorSubsNet(BaseAttentive):
         coords_flat = coords_for_decoder  # already (B,H,3)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)
     
-
+        # (K_field, Ss_field, tau_field,
+        #  tau_phys, Hd_eff,
+        #  delta_log_tau, logK, logSs, 
+        #  log_tau, log_tau_phys) = compose_physics_fields(
+        
         K_field, Ss_field, tau_field, *_ = compose_physics_fields(
             self,
             coords_flat=coords_flat,
@@ -1022,72 +1025,46 @@ class GeoPriorSubsNet(BaseAttentive):
             training=training,
             verbose=0,
         )
-        # ==============================================================
-        # build physics-driven incremental settlement (SI meters)
-        # ==============================================================
-        
-        # --------------------------------------------------------------
-        # 1) Predicted groundwater output -> SI head in meters
-        # --------------------------------------------------------------
-        # gwl_mean: (B, H, 1) in model space
-        # h_mean_si: (B, H, 1) in SI meters (head)
+    
+        # predicted head -> SI head (meters) (handles "depth" vs "head")
         h_mean_si = to_si_head(gwl_mean, self.scaling_kwargs)
-        h_mean_si = gwl_to_head_m(
-            h_mean_si,
-            self.scaling_kwargs,
-            inputs=inputs,
-        )
-        
-        # --------------------------------------------------------------
-        # 3) Reference head and initial settlement at forecast start
-        # --------------------------------------------------------------
-        # h_ref_si:   (B, 1, 1)  reference head at t0 (SI meters)
-        # s0_cum_si:  (B, 1, 1)  cumulative settlement at t0 (SI meters)
-        h_ref_si = get_h_ref_si(self, inputs, like=h_mean_si)
+        h_mean_si = gwl_to_head_m(h_mean_si, self.scaling_kwargs, inputs=inputs)
+    
+        # refs / init
+        h_ref_si  = get_h_ref_si(self, inputs, like=h_mean_si)
+
+        # baseline cumulative at forecast start (SI)
         s0_cum_si = get_s_init_si(self, inputs, like=h_mean_si)
         
-        # --------------------------------------------------------------
-        # 4) Consolidation ODE state is an INCREMENT relative to t0
-        # --------------------------------------------------------------
-        # s0_inc_si: (B, 1, 1) incremental settlement at t0 (=0)
-        # NOTE: we do NOT start the ODE with cumulative settlement.
+        # Voigt state here should be incremental relative to h_ref at t0
         s0_inc_si = tf_zeros_like(s0_cum_si)
         
-        # --------------------------------------------------------------
-        # 5) Time step in model "time_units"
-        # --------------------------------------------------------------
-        # dt_units: typically (B, H, 1) but may be broadcastable.
-        # To keep one consistent representation, force it to (B,H,1).
+        # dt in *time_units*
         dt_units = infer_dt_units_from_t(t, self.scaling_kwargs)
-        # dt_units = _ensure_3d(dt_units) + tf_zeros_like(h_mean_si)    # (B,H,1)
-        
-        # --------------------------------------------------------------
-        # 6) Integrate Voigt consolidation using exact/euler stepping
-        # --------------------------------------------------------------
-  
+    
+        # physics mean settlement path (exact-step)
         dd = resolve_cons_drawdown_options(self.scaling_kwargs)
         
-        # s_inc_si: (B, H, 1) incremental settlement since t0 (SI meters)
         s_inc_si = integrate_consolidation_mean(
-            h_mean_si=h_mean_si,        # (B, H, 1)
-            Ss_field=Ss_field,          # (B, H, 1) or broadcastable
-            H_field_si=H_si,            # (B, H, 1) or broadcastable
-            tau_field=tau_field,        # (B, H, 1) or broadcastable
-            h_ref_si=h_ref_si,          # (B, 1, 1)  <-- keep base shape
-            s_init_si=s0_inc_si,        # (B, 1, 1)  <-- keep base shape
-            dt=dt_units,                # (B, H, 1)
+            h_mean_si=h_mean_si,
+            Ss_field=Ss_field,
+            H_field_si=H_si,
+            tau_field=tau_field,
+            h_ref_si=h_ref_si,
+            s_init_si=s0_inc_si,
+            dt=dt_units,
             time_units=self.time_units,
             method=self.residual_method,
             relu_beta=dd["relu_beta"],
+            # NEW: forward drawdown controls
             drawdown_mode=dd["drawdown_mode"],
             drawdown_rule=dd["drawdown_rule"],
             stop_grad_ref=dd["stop_grad_ref"],
             drawdown_zero_at_origin=dd["drawdown_zero_at_origin"],
             drawdown_clip_max=dd["drawdown_clip_max"],
             verbose=self.verbose,
-        ) # (B,H,1) incremental compaction since t0
-        
-    
+        )# (B,H,1) incremental compaction since t0
+
         if self.verbose >6: 
             tf_print_nonfinite("call/coords_for_decoder", coords_for_decoder)
             tf_print_nonfinite("call/H_si", H_si)
@@ -1117,13 +1094,8 @@ class GeoPriorSubsNet(BaseAttentive):
         allow_resid = bool(get_sk(
             self.scaling_kwargs, "allow_subs_residual", default=False)
         )
-        # subs_mean = subs_phys_model + subs_net if allow_resid else subs_phys_model
-        subs_gate = self._subs_resid_gate(training=bool(training))
-        if not bool(allow_resid):
-            subs_gate = tf_constant(0.0, tf_float32)
-            
-        subs_mean = subs_phys_model + subs_gate * subs_net
-        
+        subs_mean = subs_phys_model + subs_net if allow_resid else subs_phys_model
+    
         decoded_data_means = tf_concat([subs_mean, gwl_mean], axis=-1)
         data_mean_raw = decoded_data_means
     
@@ -1143,6 +1115,7 @@ class GeoPriorSubsNet(BaseAttentive):
             "data_mean_raw": data_mean_raw,   
             "phys_mean_raw": phys_mean_raw,
         }
+
 
 
     def train_step(self, data):
@@ -1177,22 +1150,6 @@ class GeoPriorSubsNet(BaseAttentive):
                 param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"},
             )
 
-        if verbose > 10:
-            tf_print("\n[train_step] verbose=", verbose)
-            tf_print("[train_step] --- step 0/1 inputs+targets ---")
-            # Inputs dict keys (python-level string list is ok)
-            tf_print("[train_step] inputs keys:", list(inputs.keys()))
-            if isinstance(targets, dict):
-                tf_print("[train_step] targets keys:", list(targets.keys()))
-            _vshapes("STEP 0/1 (raw tensors)", [
-                ("inputs['H_field']", inputs.get("H_field", None)),
-                ("inputs['soil_thickness']", inputs.get("soil_thickness", None)),
-                ("inputs['coords']", inputs.get("coords", None)),
-                ("inputs['static_features']", inputs.get("static_features", None)),
-                ("inputs['dynamic_features']", inputs.get("dynamic_features", None)),
-                ("inputs['future_features']", inputs.get("future_features", None)),
-            ])
-
         # ----------------------------------------------------------
         # 1) Thickness field is required by physics (H_field / soil_thickness)
         # ----------------------------------------------------------
@@ -1208,29 +1165,19 @@ class GeoPriorSubsNet(BaseAttentive):
         validate_scaling_kwargs(self.scaling_kwargs)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)  # SI meters
         
+        # XXX TO REMOVE JUST FOR DEGUG 
         debug_grads = bool(get_sk(
-            self.scaling_kwargs, "debug_physics_grads", 
+            self.scaling_kwargs or {}, "debug_physics_grads", 
             default=False)
         )
-
-        if verbose > 3:
-            tf_print("[train_step] --- step 1 thickness ---")
-            _vshapes("STEP 1 (thickness)", [
-                ("H_field", H_field),
-                ("H_si", H_si),
-            ])
-
         # ----------------------------------------------------------
         # 2) Coordinates: ensure (B,H,3) and force forward-pass to use them
         # ----------------------------------------------------------
         coords = tf_convert_to_tensor(_get_coords(inputs), tf_float32)
     
-        if verbose > 6: 
-            tf_debugging.assert_equal(tf_rank(coords), 3, "coords must be rank-3 (B,T,3)")
-            tf_debugging.assert_equal(tf_shape(coords)[-1], 3, "coords last dim must be 3")
-      
+        if self.verbose > 6: 
             tf_print_nonfinite("train_step/coords", coords)
-        
+            
             for k in ("static_features", "dynamic_features",
                       "future_features", "H_field"):
                 v = inputs.get(k, None)
@@ -1253,7 +1200,6 @@ class GeoPriorSubsNet(BaseAttentive):
         inputs_fwd = dict(inputs)
         inputs_fwd["coords"] = coords  # crucial for AD connectivity
     
-        # convenient slices (B,H,1)
         t = coords[..., 0:1]  # (B,H,1)
         
         def chk(name, x):
@@ -1311,19 +1257,11 @@ class GeoPriorSubsNet(BaseAttentive):
                     lambda: tf_expand_dims(gwl_mean_raw, axis=-1),
                     lambda: gwl_mean_raw,
                 )
-
+            
             # Convert predicted gwl/depth -> SI meters -> head meters (SI)
             gwl_si = to_si_head(gwl_mean_raw, self.scaling_kwargs)
             h_si = gwl_to_head_m(gwl_si, self.scaling_kwargs, inputs=inputs_fwd)  # (B,H,1)
     
-            if verbose > 10:
-                tf_print("[train_step] --- step: mean-head prep ---")
-                _vshapes("STEP 3.2 (mean head)", [
-                    ("gwl_mean_raw", gwl_mean_raw),
-                    ("gwl_si", gwl_si),
-                    ("h_si", h_si),
-                ])
-
             # ----------------------
             # 3.3 Physics logits: K, Ss, Δlogτ (+ optional Q)
             # ----------------------
@@ -1335,14 +1273,6 @@ class GeoPriorSubsNet(BaseAttentive):
             ( K_logits, Ss_logits, dlogtau_logits, Q_logits  
             )= self.split_physics_predictions(phys_mean_raw)
 
-            if verbose > 10:
-                tf_print("[train_step] --- step: forward pass outputs ---")
-                _vshape("data_final", data_final)
-                _vshape("s_pred_final", s_pred_final)
-                _vshape("gwl_pred_final", gwl_pred_final)
-                _vshape("data_mean_raw", data_mean_raw)
-                _vshape("phys_mean_raw", phys_mean_raw)
-                
             # Option-1 recommendation: keep K,Ss,tau time-constant over the horizon
             sk = self.scaling_kwargs or {}
             freeze_fields = bool(sk.get("freeze_physics_fields_over_time", True))
@@ -1377,33 +1307,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 training=True,
                 verbose=verbose,
             )
-
-            if verbose > 10:
-                tf_print("[train_step] --- step: physics logits/base ---")
-                _vshapes("STEP 3.3 (physics logits)", [
-                    ("K_logits", K_logits),
-                    ("Ss_logits", Ss_logits),
-                    ("dlogtau_logits", dlogtau_logits),
-                    ("Q_logits", Q_logits),
-                    ("K_base", K_base),
-                    ("Ss_base", Ss_base),
-                    ("dlogtau_base", dlogtau_base),
-                ])
-  
-                tf_print("[train_step] --- step: physics fields (SI) ---")
-                _vshapes("STEP 3.3 (physics fields)", [
-                    ("K_field", K_field),
-                    ("Ss_field", Ss_field),
-                    ("tau_field", tau_field),
-                    ("tau_phys", tau_phys),
-                    ("Hd_eff", Hd_eff),
-                    ("delta_log_tau", delta_log_tau),
-                    ("logK", logK),
-                    ("logSs", logSs),
-                    ("log_tau", log_tau),
-                    ("log_tau_phys", log_tau_phys),
-                ])
-
+    
             # ------------------------------------------------------
             # 4) GW PDE derivatives via AD (w.r.t coords)
             # ------------------------------------------------------
@@ -1455,29 +1359,6 @@ class GeoPriorSubsNet(BaseAttentive):
             d_K_dh_dy_dy = d_K_dh_dy_dy_raw
             dK_dx, dK_dy, dSs_dx, dSs_dy = dK_dx_raw, dK_dy_raw, dSs_dx_raw, dSs_dy_raw
     
-
-            if verbose > 7:
-                tf_print("[train_step] --- step: AD derivatives (raw) ---")
-                _vshapes("STEP 4 (AD raw grads)", [
-                    ("dh_dcoords", dh_dcoords),
-                    ("dh_dt_raw", dh_dt_raw),
-                    ("dh_dx_raw", dh_dx_raw),
-                    ("dh_dy_raw", dh_dy_raw),
-                    ("K_dh_dx", K_dh_dx),
-                    ("K_dh_dy", K_dh_dy),
-                    ("dKdhx_dcoords", dKdhx_dcoords),
-                    ("dKdhy_dcoords", dKdhy_dcoords),
-                    ("d_K_dh_dx_dx_raw", d_K_dh_dx_dx_raw),
-                    ("d_K_dh_dy_dy_raw", d_K_dh_dy_dy_raw),
-                    ("dK_dcoords", dK_dcoords),
-                    ("dSs_dcoords", dSs_dcoords),
-                    ("dK_dx_raw", dK_dx_raw),
-                    ("dK_dy_raw", dK_dy_raw),
-                    ("dSs_dx_raw", dSs_dx_raw),
-                    ("dSs_dy_raw", dSs_dy_raw),
-                ])
-
-
             # If coords are normalized, convert derivatives to per-(original coord unit)
             tR_tf = xR_tf = yR_tf = None
             if coords_norm:
@@ -1520,18 +1401,6 @@ class GeoPriorSubsNet(BaseAttentive):
             # Time derivative must be per second for SI PDE
             dh_dt = rate_to_per_second(dh_dt, time_units=self.time_units)
     
-            if verbose > 10:
-                tf_print("[train_step] --- step: chain-rule corrected ---")
-                _vshapes("STEP 4.1 (SI grads)", [
-                    ("dh_dt (after norm/deg + per-second)", dh_dt),
-                    ("d_K_dh_dx_dx (SI)", d_K_dh_dx_dx),
-                    ("d_K_dh_dy_dy (SI)", d_K_dh_dy_dy),
-                    ("dK_dx (SI)", dK_dx),
-                    ("dK_dy (SI)", dK_dy),
-                    ("dSs_dx (SI)", dSs_dx),
-                    ("dSs_dy (SI)", dSs_dy),
-                ])
-
             # ------------------------------------------------------
             # 5) Q logits -> SI (1/s)
             # ------------------------------------------------------
@@ -1562,30 +1431,23 @@ class GeoPriorSubsNet(BaseAttentive):
             
             # now broadcast with dh_dt
             Q_si = Q_si + tf_zeros_like(dh_dt)
-            q_gate = self._q_gate(training=True)
-            Q_si = Q_si * q_gate
-            loss_q_reg = tf_reduce_mean(tf_square(Q_si))
-            q_rms = to_rms(Q_si)
-             
-            if verbose > 3:
-                tf_print("[train_step] --- step: Q source term ---")
-                _vshapes("STEP 5 (Q)", [
-                    ("Q_si (before broadcast)", Q_si),
-                    ("dh_dt (for broadcast)", dh_dt),
-                    ("Q_si (after broadcast)", Q_si + tf_zeros_like(dh_dt)),
-                ])
-
 
             # ------------------------------------------------------
-            # 6) Physic mean subsidence settlement + consolidation 
+            # 6) Physics-driven mean settlement (Option-1)
             # ------------------------------------------------------
-
             dt_units = infer_dt_units_from_t(t, self.scaling_kwargs)  # (B,H,1) in self.time_units
             # s_init_si = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
             h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=h_si[:, :1, :])  # (B,1,1)
             h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                       # (B,H,1)
     
-    
+            # ------------------------------------------------------
+            # 6) Consolidation: enforce ODE on the *model prediction*
+            # ------------------------------------------------------
+            # NOTE:
+            # If you build `s_state` from `s_bar` (the exact-step integrated
+            # solution), the step residual is identically ~0 (self-check).
+            # Use the model's predicted mean subsidence instead.
+
             # Predicted mean subsidence (model space) -> SI meters
             allow_resid = bool((self.scaling_kwargs or {}).get(
                 "allow_subs_residual", False))
@@ -1596,7 +1458,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 # Not active OR hard-embedded -> make it zero and cheap
                 cons_res = tf_zeros_like(h_si)  # (B,H,1)
             else: 
-    
+                
                 if data_mean_raw is not None:
                     s_mean_raw, _ = self.split_data_predictions(data_mean_raw)
                 else:
@@ -1614,62 +1476,55 @@ class GeoPriorSubsNet(BaseAttentive):
                     lambda: tf_expand_dims(s_mean_raw, axis=-1),
                     lambda: s_mean_raw,
                 )
-                 
-                # ==============================================================
-                # train_step(): consolidation residual from predicted mean subsidence
-                # ==============================================================
+    
+                # # Predicted mean subsidence (model space) -> SI meters
+     
+                s_pred_si = to_si_subsidence(s_mean_raw, self.scaling_kwargs)  # (B,H,1)
+    
+                # # One-step residual in meters, then normalize to m/s using dt_sec
+                # baseline cumulative at forecast start (SI)
+                s0_cum_11 = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
                 
-                # # h_si: (B,H,1)
-                like_11 = h_si[:, :1, :1]                                            # (B,1,1)
-
-                # predicted mean subsidence -> SI
-                s_pred_si = to_si_subsidence(s_mean_raw, self.scaling_kwargs)         # (B,H,1)
-                
-                # ---- baseline cumulative subsidence at t0 (kept as B11) ----
-                s0_cum_11 = get_s_init_si(self, inputs_fwd, like=like_11)             # (B,1,1)
-                
-                # state we enforce is INCREMENTAL relative to t0
+                # Build incremental state since t0 (ODE state), consistent with call()
                 pde_inputs = dict(inputs_fwd)
-                pde_inputs["s0_si"] = s0_cum_11                                       # (B,1,1)
+                pde_inputs["s0_si"] = s0_cum_11
                 
                 s_inc_pred = settlement_state_for_pde(
-                    s_pred_si,                                                        # (B,H,1)
+                    s_pred_si,
                     t,
                     scaling_kwargs=self.scaling_kwargs,
                     inputs=pde_inputs,
                     time_units=self.time_units,
-                    dt=dt_units,    # important if kind=='rate'                       # (B,H,1)
-                    return_incremental=True, # returns s(t)-s0
-                )                                                                     # (B,H,1)
+                    dt=dt_units,                 # important if kind=='rate'
+                    return_incremental=True,      # returns s(t)-s0
+                )  # (B,H,1)
                 
-                s0_inc_11 = tf_zeros_like(s0_cum_11)   # should be # (B,H+1,1)     # # (B,1,1)
-                s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)                  # (B,H+1,1)
+                s0_inc_11 = tf_zeros_like(s0_cum_11)  # ODE initial state is zero increment
+                s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)     # (B,H+1,1)
                 
-                # # ---- baseline reference head at t0 (MUST be B11) ----
-                # h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=like_11)            # (B,1,1)
-                h_state = tf_concat([h_ref_si_11, h_si], axis=1)                      # (B,H+1,1)
-
+                # time indexing fix (already correct in your train_step)
+                h_state = tf_concat([h_ref_si_11, h_si], axis=1)         # (B,H+1,1)
+    
                 dd = resolve_cons_drawdown_options(self.scaling_kwargs)
-                
-                # residual per step (meters): (B,H,1)
                 cons_step_m = compute_consolidation_step_residual(
-                    s_state_si=s_state,         # (B,H+1,1)
-                    h_mean_si=h_state,          # (B,H+1,1)
-                    Ss_field=Ss_field,          # broadcastable -> (B,H,1)
-                    H_field_si=H_si,            # broadcastable -> (B,H,1)
-                    tau_field=tau_field,        # broadcastable -> (B,H,1)
-                    h_ref_si=h_ref_si,          # (B,1,1)  broadcast INSIDE
-                    dt=dt_units,                # (B,H,1)
+                    s_state_si=s_state,
+                    h_mean_si=h_state,
+                    Ss_field=Ss_field,
+                    H_field_si=H_si,
+                    tau_field=tau_field,
+                    h_ref_si=h_ref_si,
+                    dt=dt_units,
                     time_units=self.time_units,
                     method="exact",
                     relu_beta=dd["relu_beta"],
+                    # NEW: forward drawdown controls
                     drawdown_mode=dd["drawdown_mode"],
                     drawdown_rule=dd["drawdown_rule"],
                     stop_grad_ref=dd["stop_grad_ref"],
                     drawdown_zero_at_origin=dd["drawdown_zero_at_origin"],
                     drawdown_clip_max=dd["drawdown_clip_max"],
                     verbose=self.verbose,
-                )  # (B,H,1)
+                ) # (B,H,1)
 
                 cons_res = cons_step_to_cons_residual(
                     cons_step_m,
@@ -1680,29 +1535,6 @@ class GeoPriorSubsNet(BaseAttentive):
                 if self.verbose > 6:
                     mode = resolve_cons_units(sk)
                     tf_print("cons_units=", mode, "rms=", to_rms(cons_res))
-                    
-
-                if verbose >10:
-                    tf_print("[train_step] --- step: consolidation branch ---")
-                    tf_print(
-                        "[train_step] allow_resid=", 
-                        allow_resid, "| cons_active=", cons_active
-                        )
-                
-                    _vshapes("STEP 6 (consolidation state build)", [
-                        ("s_mean_raw", s_mean_raw),
-                        ("s_pred_si", s_pred_si),
-                        ("like_11", like_11),
-                        ("dt_units", dt_units),
-                        ("s0_cum_11", s0_cum_11),
-                        ("s_inc_pred", s_inc_pred),
-                        ("s_state", s_state),
-                        ("h_ref_si_11", h_ref_si_11),
-                        ("h_state", h_state),
-                        ("cons_step_m", cons_step_m),
-                        ("cons_res", cons_res),
-                    ])
-
                 
             # ------------------------------------------------------
             # 7) Residuals + priors
@@ -1730,16 +1562,24 @@ class GeoPriorSubsNet(BaseAttentive):
                 Ss_field=Ss_field,
             )
             
-            loss_mv = compute_mv_prior(
+            # mv_prior_rms = compute_mv_prior(
+            #         self,
+            #         Ss_field,
+            #         reduction="domain_mean",
+            #         as_loss=False,
+            #         verbose=verbose,
+            #     )
+            loss_mv = compute_mv_prior_loss(
                 self,
                 Ss_field,
-                logSs=logSs,
-                as_loss=True,
-                step=self.optimizer.iterations,
                 alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1)),
                 delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
                 verbose=verbose,
+                
             )
+
+            # loss_mv = to_rms(mv_prior_rms)
+            
             R_H, R_K, R_Ss = compute_bounds_residual(
                 self, K_field, Ss_field, H_si, verbose=verbose
             )
@@ -1749,7 +1589,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 self, as_tensor=True, dtype=log_tau.dtype, verbose=0
             )
             zero = tf_constant(0.0, dtype=log_tau.dtype)
-            epsb = tf_constant(_EPSILON, dtype=log_tau.dtype)
+            epsb = tf_constant(1e-12, dtype=log_tau.dtype)
             lo = tf_maximum(log_tau_min - log_tau, zero)
             hi = tf_maximum(log_tau - log_tau_max, zero)
             rng = tf_maximum(log_tau_max - log_tau_min, epsb)
@@ -1758,17 +1598,6 @@ class GeoPriorSubsNet(BaseAttentive):
             bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
             loss_bounds = tf_reduce_mean(tf_square(bounds_res))
         
-            if verbose > 10:
-                tf_print("[train_step] --- step: residuals + priors ---")
-                _vshapes("STEP 7 (residual tensors)", [
-                    ("gw_res", gw_res),
-                    ("prior_res (delta_log_tau)", prior_res),
-                    ("smooth_res", smooth_res),
-                    ("loss_mv (scalar)", loss_mv),
-                    ("bounds_res", bounds_res),
-                    ("loss_bounds (scalar)", loss_bounds),
-                ])
-
             # Physics-off shortcut (keeps returned keys stable)
             if self._physics_off():
                 cons_res = tf_zeros_like(cons_res)
@@ -1789,15 +1618,6 @@ class GeoPriorSubsNet(BaseAttentive):
             # Keep raw residuals for Patch logging
             cons_res_raw = cons_res
             gw_res_raw   = gw_res
-            
-            if verbose > 10:
-                tf_print("[train_step] --- step 8 scaling ---")
-                _vshapes("STEP 8 (before/after scaling)", [
-                    ("cons_res_raw", cons_res_raw),
-                    ("gw_res_raw", gw_res_raw),
-                    ("cons_res (scaled)", cons_res),
-                    ("gw_res (scaled)", gw_res),
-                ])
 
             if (not self._physics_off()) and bool(
                     getattr(self, "scale_pde_residuals", True)):
@@ -1832,17 +1652,19 @@ class GeoPriorSubsNet(BaseAttentive):
                 cons_res = scale_residual(cons_res_raw, scales["cons_scale"], floor=cons_floor)
                 gw_res   = scale_residual(gw_res_raw,   scales["gw_scale"],   floor=gw_floor)
 
-                if verbose > 6: 
+                if self.verbose > 6: 
                     chk("cons_scale", scales.get("cons_scale"))
                     chk("gw_scale", scales.get("gw_scale"))
                     chk("R_cons( after scaling)", cons_res)
                     chk("R_gw (after scaling)", gw_res)
                     
-            if verbose > 6: 
+                # cons_res = scale_residual(cons_res, scales["cons_scale"], floor=1e-12)
+                # gw_res   = scale_residual(gw_res,   scales["gw_scale"],   floor=1e-12)
+
+            if self.verbose > 6: 
                 chk("tau_field", tau_field)
                 chk("K_field", K_field)
                 chk("Ss_field", Ss_field)
-
 
             # ------------------------------------------------------
             # 9) Physics loss + total loss
@@ -1852,6 +1674,7 @@ class GeoPriorSubsNet(BaseAttentive):
             loss_prior  = tf_reduce_mean(tf_square(prior_res))
             loss_smooth = tf_reduce_mean(smooth_res)
 
+            
             physics_loss_raw, physics_loss_scaled, phys_mult, terms_scaled = (
                 assemble_physics_loss(
                     self, 
@@ -1860,71 +1683,44 @@ class GeoPriorSubsNet(BaseAttentive):
                     loss_prior=loss_prior,
                     loss_smooth=loss_smooth,
                     loss_mv=loss_mv,
-                    loss_q_reg=loss_q_reg,
                     loss_bounds=loss_bounds,
                 )
             )
+            
             total_loss = data_loss + physics_loss_scaled
-        
-        if verbose > 10:
-            tf_print("[train_step] --- step 9 losses ---")
-            _vshapes("STEP 9 (loss scalars)", [
-                ("data_loss", data_loss),
-                ("loss_cons", loss_cons),
-                ("loss_gw", loss_gw),
-                ("loss_prior", loss_prior),
-                ("loss_smooth", loss_smooth),
-                ("physics_loss_raw", physics_loss_raw),
-                ("physics_loss_scaled", physics_loss_scaled),
-                ("total_loss", total_loss),
-            ])
 
         # ----------------------------------------------------------
         # 10) Apply gradients
         # ----------------------------------------------------------
-
+        # def _assert_grads_finite(
+        #     grads: list[Tensor | None],
+        #     vars_: list[Tensor],
+        # ) -> None:
+        #     for g, v in zip(grads, vars_):
+        #         if g is None:
+        #             continue
+        #         tf_debugging.assert_all_finite(
+        #             g,
+        #             f"NaN/Inf grad for {v.name}",
+        #         )
+        
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
         
-        if verbose > 10:
-            # Find the exact variable whose gradient aggregation is inconsistent
-            for v, g in zip(trainable_vars, grads):
-                if g is None:
-                    continue
-                vs = tf_shape(v)
-                gs = tf_shape(g)
-                ok = tf_reduce_all(tf_equal(vs, gs))
-                tf_debugging.assert_equal(
-                    ok, True,
-                    message=("Grad shape mismatch for: " + v.name)
-                )
-                
-            tf_print("[train_step] --- step 10 gradients ---")
-            tf_print("[train_step] n_trainable_vars =", 
-                     tf_constant(len(trainable_vars), tf_int32))
-            # Print a few grads/vars shapes (avoid huge spam)
-            n_show = tf_constant(12, tf_int32)
-            for i, (v, g) in enumerate(zip(trainable_vars, grads)):
-                if i >= int(n_show.numpy()
-                            ) if hasattr(n_show, "numpy") else i >= 12:
-                    break
-                if g is None:
-                    tf_print("[grad] NONE | var:", 
-                             v.name, "| var_shape:", tf_shape(v)
-                            )
-                else:
-                    tf_print(
-                        "[grad]", v.name, "| var_shape:",
-                        tf_shape(v), "| grad_shape:", tf_shape(g)
-                    )
-
-        if debug_grads:
-            for name, lt in {"data": data_loss, **terms_scaled}.items():
-                g = tape.gradient(lt, trainable_vars)
-                _assert_grads_finite(g, trainable_vars)
+        # # XXX FOR DEBUGGING
+        # _assert_grads_finite(grads, trainable_vars)
+        
+        # if debug_grads:
+        #     for name, lt in {"data": data_loss, **terms_scaled}.items():
+        #         g = tape.gradient(lt, trainable_vars)
+        #         _assert_grads_finite(g, trainable_vars)
         
         del tape
-
+        
+        # clip = float(
+        #     get_sk(self.scaling_kwargs or {}, "clip_global_norm", default=5.0)
+        #     )
+        # grads, _ = tf_clip_by_global_norm(grads, clip)
         self.optimizer.apply_gradients(
             self._scale_param_grads(grads, trainable_vars)
         )
@@ -1940,9 +1736,6 @@ class GeoPriorSubsNet(BaseAttentive):
         eps_cons = to_rms(cons_res)
         eps_gw = to_rms(gw_res)
         
-        if verbose > 10:
-            tf_print("[train_step] --- step: Done apply_gradients ---\n")
-    
         physics_bundle = None
         if not self._physics_off():
             physics_bundle = build_physics_bundle(
@@ -2142,7 +1935,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 training=False,
                 verbose=0,
             )
-
+    
             # --- 1st derivatives
             dh_dcoords = tape.gradient(h_si, coords)
             if dh_dcoords is None:
@@ -2286,20 +2079,6 @@ class GeoPriorSubsNet(BaseAttentive):
         )
         # now broadcast with dh_dt
         Q_si = Q_si + tf_zeros_like(dh_dt)
-        
-        q_gate = self._q_gate(training=False)
-        Q_si = Q_si * q_gate
-        loss_q_reg = tf_reduce_mean(tf_square(Q_si))
-        q_rms = to_rms(Q_si)
-
-        like_11 = h_si[:, :1, :1]   
-        # s_init_si = get_s_init_si(self, inputs_fwd, like=like_11)   # (B,1,1)
-        h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=like_11)    # (B,1,1)
-        h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                  # (B,H,1)
-        # Build consolidation residual on predicted mean
-        # subsidence (not on the integrated s_bar)
-
-
         # --------------------------------------------------------------
         # 5) Physics-driven mean settlement + consolidation residual
         # --------------------------------------------------------------
@@ -2308,61 +2087,59 @@ class GeoPriorSubsNet(BaseAttentive):
             )
         cons_active = ("consolidation" in self.pde_modes_active)
 
+        dt_units = infer_dt_units_from_t(t, sk)
+
+        s_init_si = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])     # (B,1,1)
+        h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=h_si[:, :1, :])    # (B,1,1)
+        h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                         # (B,H,1)
+        # Build consolidation residual on predicted mean
+        # subsidence (not on the integrated s_bar)
+
         if (not cons_active) or (cons_active and not allow_resid):
             cons_res = tf_zeros_like(h_si)  # (B,H,1)
             cons_res_scaled = cons_res
             eps_cons = tf_constant(0.0, tf_float32)
         else:
-            
-            dt_units = infer_dt_units_from_t(t, sk)
             s_pred_si = to_si_subsidence(tf_cast(subs_mean_raw, tf_float32), sk)  # (B,H,1)
             
-            # ==============================================================
-            # consolidation residual (same as train_step)
-            # ==============================================================
-
-            s0_cum_11   = get_s_init_si(self, inputs_fwd, like=like_11)           # (B,1,1)
-            
+            s0_cum_11 = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])      # (B,1,1)
             pde_inputs = dict(inputs_fwd)
-            pde_inputs["s0_si"] = s0_cum_11                                       # (B,1,1)
+            pde_inputs["s0_si"] = s0_cum_11
             
             s_inc_pred = settlement_state_for_pde(
-                s_pred_si,                                                        # (B,H,1)
+                s_pred_si,
                 t,
                 scaling_kwargs=sk,
                 inputs=pde_inputs,
                 time_units=self.time_units,
-                dt=dt_units,                                                      # (B,H,1)
+                dt=dt_units,
                 return_incremental=True,
-            )                                                                     # (B,H,1)
+            )  # (B,H,1)
             
-            s0_inc_11 = tf_zeros_like(s0_cum_11)                                  # (B,1,1)
-            s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)                  # (B,H+1,1)
-            
-            h_state = tf_concat([h_ref_si_11, h_si], axis=1)                      # (B,H+1,1)
-            
-
+            s0_inc_11 = tf_zeros_like(s0_cum_11)
+            s_state = tf_concat([s0_inc_11, s_inc_pred], axis=1)      # (B,H+1,1)
+            h_state = tf_concat([h_ref_si_11, h_si], axis=1)          # (B,H+1,1)
+                        
             dd = resolve_cons_drawdown_options(self.scaling_kwargs)
-            
             cons_step_m = compute_consolidation_step_residual(
-                s_state_si=s_state,         # (B,H+1,1)
-                h_mean_si=h_state,          # (B,H+1,1)
+                s_state_si=s_state,
+                h_mean_si=h_state,
                 Ss_field=Ss_field,
                 H_field_si=H_si,
                 tau_field=tau_field,
-                h_ref_si=h_ref_si,      
-                dt=dt_units,                # (B,H,1)
+                h_ref_si=h_ref_si,
+                dt=dt_units,
                 time_units=self.time_units,
                 method="exact",
                 relu_beta=dd["relu_beta"],
+                # forward drawdown controls
                 drawdown_mode=dd["drawdown_mode"],
                 drawdown_rule=dd["drawdown_rule"],
                 stop_grad_ref=dd["stop_grad_ref"],
                 drawdown_zero_at_origin=dd["drawdown_zero_at_origin"],
                 drawdown_clip_max=dd["drawdown_clip_max"],
                 verbose=0,
-            )  # (B,H,1)
-
+            ) # (B,H,1)
             cons_res = cons_step_to_cons_residual(
                 cons_step_m,
                 dt_units=dt_units,
@@ -2392,17 +2169,20 @@ class GeoPriorSubsNet(BaseAttentive):
             Ss_field=Ss_field,
         )
         
-        loss_mv = compute_mv_prior(
+        # mv_res = compute_mv_prior(
+        #     self, Ss_field, 
+        #     reduction="domain_mean", 
+        #     as_loss=False, 
+        #     verbose=0
+        #     )
+        loss_mv = compute_mv_prior_loss(
             self,
             Ss_field,
-            logSs=logSs,
-            as_loss=True,
-            step=self.optimizer.iterations,
             alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1)),
             delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
             verbose=0,
         )
-        
+
         R_H, R_K, R_Ss = compute_bounds_residual(
             self, K_field, Ss_field, H_si, verbose=0
         )
@@ -2412,7 +2192,7 @@ class GeoPriorSubsNet(BaseAttentive):
             self, as_tensor=True, dtype=log_tau.dtype, verbose=0
         )
         zero = tf_constant(0.0, dtype=log_tau.dtype)
-        epsb = tf_constant(_EPSILON, dtype=log_tau.dtype)
+        epsb = tf_constant(1e-12, dtype=log_tau.dtype)
         lo = tf_maximum(log_tau_min - log_tau, zero)
         hi = tf_maximum(log_tau - log_tau_max, zero)
         rng = tf_maximum(log_tau_max - log_tau_min, epsb)
@@ -2497,7 +2277,6 @@ class GeoPriorSubsNet(BaseAttentive):
             loss_prior=loss_prior,
             loss_smooth=loss_smooth,
             loss_mv=loss_mv,
-            loss_q_reg=loss_q_reg,
             loss_bounds=loss_bounds,
         )
         
@@ -2522,9 +2301,38 @@ class GeoPriorSubsNet(BaseAttentive):
         out = pack_eval_physics(self, physics=physics_bundle)
         
         if return_maps:
+            
+            s0_inc_11 = tf_zeros_like(s0_cum_11)
+            s_inc_si = integrate_consolidation_mean(
+                h_mean_si=h_si,
+                Ss_field=Ss_field,
+                H_field_si=H_si,
+                tau_field=tau_field,
+                h_ref_si=h_ref_si,
+                s_init_si=s0_inc_11,
+                dt=dt_units,
+                time_units=self.time_units,
+                method=self.residual_method,
+                verbose=0,
+            )
+            
+            kind = str((sk or {}).get(
+                "subsidence_kind", "cumulative")).strip().lower()
+            if kind == "increment":
+                ds0 = s_inc_si[:, :1, :]
+                dsr = s_inc_si[:, 1:, :] - s_inc_si[:, :-1, :]
+                s_bar = tf_concat([ds0, dsr], axis=1)
+            else:
+                # baseline + increment (matches call())
+                s0_cum = s0_cum_11 + tf_zeros_like(h_si)
+                s_bar = s0_cum + s_inc_si
                 
             out.update(
                 {
+                    "h_si": h_si,
+                    "h_ref_si": h_ref_si,
+                    "s_bar": s_bar,
+                    "s_init_si": s_init_si,
                     "dt_units": dt_units,
                     "Q_si": Q_si,
                     "K_field": K_field,
@@ -2555,6 +2363,7 @@ class GeoPriorSubsNet(BaseAttentive):
             )
         
         return out
+
 
     def evaluate_physics(
         self,
@@ -2668,43 +2477,25 @@ class GeoPriorSubsNet(BaseAttentive):
             f"Invalid offset_mode={mode!r}. Expected 'mul' or 'log10'."
         )
 
-     # --------------------------------------------------------------
-    # Training strategy gates (Q and subsidence residual)
-     # --------------------------------------------------------------
-    def _q_gate(self, training: bool = True) -> Tensor:
-        
-        sk = self.scaling_kwargs or {}
-        policy = str(get_sk(sk, "q_policy", "always_on")).strip().lower()
-        warmup_steps = int(get_sk(sk, "q_warmup_steps", 0) or 0)
-        if not bool(training):
-            return tf_constant(0.0, tf_float32) if policy in (
-                "always_off","off","none") else tf_constant(1.0, tf_float32)
-        step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
-        return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
-
-    def _subs_resid_gate(self, training: bool = True) -> Tensor:
-        sk = self.scaling_kwargs or {}
-        policy = str(get_sk(sk, "subs_resid_policy", "always_on")).strip().lower()
-        warmup_steps = int(get_sk(sk, "subs_resid_warmup_steps", 0) or 0)
-        if not bool(training):
-            return tf_constant(0.0, tf_float32) if policy in (
-                "always_off","off","none") else tf_constant(1.0, tf_float32)
-        step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
-        return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
-
+    # def _mv_value(self) -> Tensor:
+    #     r"""
+    #     Return the current value of :math:`m_v` in linear space.
+    
+    #     If :math:`m_v` is learnable, this is ``exp(log_mv)``; otherwise
+    #     it is the fixed constant ``_mv_fixed``.
+    
+    #     Returns
+    #     -------
+    #     tf.Tensor
+    #         Scalar tensor (0D) representing :math:`m_v > 0`.
+    #     """
+    #     return (
+    #         tf_exp(self.log_mv)
+    #         if hasattr(self, "log_mv")
+    #         else self._mv_fixed
+    #     )
+    
     def _mv_value(self) -> Tensor:
-        r"""
-        Return the current value of :math:`m_v` in linear space.
-    
-        If :math:`m_v` is learnable, this is ``exp(log_mv)``; otherwise
-        it is the fixed constant ``_mv_fixed``.
-    
-        Returns
-        -------
-        tf.Tensor
-            Scalar tensor (0D) representing :math:`m_v > 0`.
-        """
-
         if hasattr(self, "log_mv"):
             # clip already enforced by constraint, but re-clip defensively
             log_mv = tf_cast(self.log_mv, tf_float32)
@@ -2990,7 +2781,6 @@ class GeoPriorSubsNet(BaseAttentive):
         lambda_offset: float = 1.0,
         mv_lr_mult: float = 1.0,
         kappa_lr_mult: float = 1.0,
-        scale_mv_with_offset: bool = False,
         **kwargs,
     ):
         r"""
@@ -3114,7 +2904,6 @@ class GeoPriorSubsNet(BaseAttentive):
         # Store core physics weights.
         self.lambda_cons = float(lambda_cons)
         self.lambda_gw = float(lambda_gw)
-        self._scale_mv_with_offset = bool(scale_mv_with_offset)
     
         if self._physics_off():
             # When physics is off, hard-disable these contributions.

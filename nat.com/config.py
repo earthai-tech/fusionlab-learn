@@ -384,6 +384,63 @@ LAMBDA_OFFSET_SCHEDULE = None
 MV_LR_MULT = 1.0
 KAPPA_LR_MULT = 5.0
 
+MV_PRIOR_UNITS ="strict" 
+MV_ALPHA_DISP = 0.1
+MV_HUBER_DELTA = 1.0 
+# MV prior scheduling (independent from lambda_offset)
+MV_PRIOR_MODE = "calibrate"   # stop_gradient(Ss_field) by default
+MV_WEIGHT = 1e-3              # final mv weight (small)
+
+# --- MV prior scheduler (preferred: epoch-based, robust to batch size) ---
+MV_SCHEDULE_UNIT = "epoch"   # {"epoch", "step"}
+
+# epoch-based schedule (recommended)
+MV_DELAY_EPOCHS  = 1         # wait 1 epoch before mv starts
+MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
+
+# step-based schedule (optional, only used if MV_SCHEDULE_UNIT="step")
+MV_DELAY_STEPS   = None
+MV_WARMUP_STEPS  = None
+
+# ===================================================================
+# 7.x TRAINING STRATEGY (Physics-first vs Data-first)
+# ===================================================================
+# Strategy choices:
+#   - "physics_first": warm up the network with PDE constraints dominating
+#     (optionally keep Q and subs residuals off early).
+#   - "data_first"   : fit observations first, then let physics catch up.
+#
+# Policies:
+#   - "always_on"  : gate = 1
+#   - "always_off" : gate = 0
+#   - "warmup_off" : gate = 0 for warmup, then ramps to 1
+#
+TRAINING_STRATEGY = "physics_first"
+ 
+# --- Physics-first ------------------------------------
+Q_POLICY_PHYSICS_FIRST = "warmup_off"     # or "always_off" for NO Q ever
+Q_WARMUP_EPOCHS_PHYSICS_FIRST = 5
+Q_RAMP_EPOCHS_PHYSICS_FIRST = 2           # 0 => hard step
+
+# Keep Q regularization small even in physics-first (post-warmup).
+# (This is multiplied by your global physics offset as well.)
+LAMBDA_Q_PHYSICS_FIRST = 1e-5
+
+SUBS_RESID_POLICY_PHYSICS_FIRST = "warmup_off"
+SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 5
+SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 2  # 0 => hard step
+ 
+# --- Data-first (uncomment to use) ---------------------
+# TRAINING_STRATEGY = "data_first"
+# LOSS_WEIGHT_GWL_DATA_FIRST = 1.0   # raise from 0.5
+# LAMBDA_Q_DATA_FIRST = 1e-3         # start small (try 1e-4 to 1e-2)
+# Q_POLICY_DATA_FIRST = "always_on"
+# Q_WARMUP_EPOCHS_DATA_FIRST = 0
+# Q_RAMP_EPOCHS_DATA_FIRST = 0
+# SUBS_RESID_POLICY_DATA_FIRST = "always_on"
+# SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST = 0
+# SUBS_RESID_RAMP_EPOCHS_DATA_FIRST = 0
+
 
 # -------------------------------------------------------------------
 # 5.4 Physics bounds (specified in LINEAR space here)

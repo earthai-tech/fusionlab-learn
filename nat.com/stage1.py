@@ -263,6 +263,31 @@ else:
     else:
         CONS_DRAWDOWN_CLIP_MAX = float(_cons_clip)
 
+MV_PRIOR_UNITS = str(cfg.get("MV_PRIOR_UNITS", "auto") )
+MV_ALPHA_DISP = float(cfg.get("MV_ALPHA_DISP", 0.1))
+MV_HUBER_DELTA = float(cfg.get("MV_HUBER_DELTA", 1.0))    
+  
+MV_PRIOR_MODE =str(cfg.get("MV_PRIOR_MODE", "calibrate") )
+MV_WEIGHT = float(cfg.get("MV_WEIGHT", 1e-3))  
+
+MV_SCHEDULE_UNIT = str(cfg.get("MV_SCHEDULE_UNIT", "epoch")).strip().lower()
+
+MV_DELAY_EPOCHS  = int(cfg.get("MV_DELAY_EPOCHS", 1))
+MV_WARMUP_EPOCHS = int(cfg.get("MV_WARMUP_EPOCHS", 2))
+
+# legacy / optional step-based keys
+MV_DELAY_STEPS   = cfg.get("MV_DELAY_STEPS", None)
+MV_WARMUP_STEPS  = cfg.get("MV_WARMUP_STEPS", None)
+
+if MV_SCHEDULE_UNIT not in ("epoch", "step"):
+    raise ValueError("MV_SCHEDULE_UNIT must be 'epoch' or 'step'.")
+
+# If user selects step mode but didn't provide step counts, fall back to legacy default
+if MV_SCHEDULE_UNIT == "step" and MV_WARMUP_STEPS is None:
+    MV_WARMUP_STEPS = 4780 * 2  # legacy fallback, but prefer explicit in config.py
+if MV_SCHEDULE_UNIT == "step" and MV_DELAY_STEPS is None:
+    MV_DELAY_STEPS = 0
+
 # --- Output directories (optionally overridable from cfg) ---
 BASE_OUTPUT_DIR = cfg.get("BASE_OUTPUT_DIR", os.path.join(os.getcwd(), "results"))
 ensure_directory_exists(BASE_OUTPUT_DIR)
@@ -1681,6 +1706,7 @@ conventions_spec = {
 
 }
 
+
 # ---- 2) Numeric scaling/physics metadata: ONE place for scalars/ranges ----
 # IMPORTANT: scaling_kwargs contains *no column names* (that lives in cols_spec).
 scaling_kwargs = {
@@ -1734,6 +1760,19 @@ scaling_kwargs = {
     ),
     "cons_relu_beta": float(CONS_RELU_BETA),
     
+    "mv_prior_units": MV_PRIOR_UNITS, 
+    "mv_alpha_disp": MV_ALPHA_DISP, 
+    "mv_huber_delta":   MV_HUBER_DELTA,  
+    
+    "mv_prior_mode": MV_PRIOR_MODE,
+    "mv_weight": MV_WEIGHT, 
+
+    "mv_schedule_unit": MV_SCHEDULE_UNIT,
+    "mv_delay_epochs": int(MV_DELAY_EPOCHS),
+    "mv_warmup_epochs": int(MV_WARMUP_EPOCHS),
+    "mv_delay_steps": (None if MV_DELAY_STEPS is None else int(MV_DELAY_STEPS)),
+    "mv_warmup_steps": (None if MV_WARMUP_STEPS is None else int(MV_WARMUP_STEPS)),
+
     **indices_spec, **model_cols
 }
 

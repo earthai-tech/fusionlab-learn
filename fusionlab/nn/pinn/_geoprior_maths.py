@@ -14,7 +14,7 @@ import numpy as np
 
 from .. import KERAS_DEPS, dependency_message
 from ...compat.tf import optional_tf_function
-from ...utils.generic_utils import vlog 
+# from ...utils.generic_utils import vlog 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
 from ._geoprior_utils import coord_ranges, get_sk, get_h_ref_si
@@ -25,10 +25,10 @@ from ._geoprior_utils import coord_ranges, get_sk, get_h_ref_si
 Tensor = KERAS_DEPS.Tensor
 Dataset = KERAS_DEPS.Dataset
 GradientTape = KERAS_DEPS.GradientTape
+Constraint = KERAS_DEPS.Constraint
 
 tf_float32 = KERAS_DEPS.float32
 tf_int32 = KERAS_DEPS.int32
-
 tf_abs = KERAS_DEPS.abs
 tf_broadcast_to = KERAS_DEPS.broadcast_to
 tf_cast = KERAS_DEPS.cast
@@ -74,16 +74,16 @@ tf_ones_like = KERAS_DEPS.ones_like
 tf_clip_by_value = KERAS_DEPS.clip_by_value
 tf_gather = KERAS_DEPS.gather 
 tf_minimum = KERAS_DEPS.minimum 
-
+tf_switch_case= KERAS_DEPS.switch_case
+tf_logical_and = KERAS_DEPS.logical_and 
+tf_greater = KERAS_DEPS.greater 
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
 
-
 tf_autograph = getattr(KERAS_DEPS, "autograph", None)
 if tf_autograph is not None:
     tf_autograph.set_verbosity(0)
-
 
 DEP_MSG = dependency_message("nn.pinn._geoprior_maths")
 
@@ -95,10 +95,65 @@ _param_docs = DocstringComponents.from_nested_components(
 )
 
 
-_SMALL = 1e-12
+_EPSILON = 1e-12
+
+# ---------------------------------------------------------------------
+# Time units + scaling
+# ---------------------------------------------------------------------
+TIME_UNIT_TO_SECONDS = {
+    "unitless": 1.0,
+    "step": 1.0,
+    "index": 1.0,
+    "s": 1.0,
+    "sec": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "min": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+    "h": 3600.0,
+    "hr": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
+    "day": 86400.0,
+    "days": 86400.0,
+    "week": 7.0 * 86400.0,
+    "weeks": 7.0 * 86400.0,
+    "year": 31556952.0,
+    "years": 31556952.0,
+    "yr": 31556952.0,
+    "month": 31556952.0 / 12.0,
+    "months": 31556952.0 / 12.0,
+}
+
 
 AxisLike = Optional[Union[int, Sequence[int]]]
 
+class LogClipConstraint(Constraint):
+    """
+    NaN-safe clip constraint for log-params.
+
+    Important: clip_by_value(NaN, a, b) -> NaN,
+    so we must sanitize NaNs before clipping.
+    """
+
+    def __init__(self, min_value, max_value):
+        self.min_value = tf_cast(min_value, tf_float32)
+        self.max_value = tf_cast(max_value, tf_float32)
+
+    def __call__(self, w):
+        w = tf_cast(w, tf_float32)
+        w = tf_where(
+            tf_math.is_finite(w),
+            w,
+            self.min_value,
+        )
+        return tf_clip_by_value(
+            w,
+            self.min_value,
+            self.max_value,
+        )
+        
 def vprint(verbose: int, *args) -> None:
     """Verbose print (eager-friendly)."""
     if int(verbose) > 0:
@@ -252,7 +307,7 @@ def _apply_q_normalized_time_rule(
                     "Q_wrt_normalized_time=True but coord_ranges['t'] missing."
                 )
             t_range_units = tf_constant(float(tR), tf_float32)
-        Q_base = Q_base / (t_range_units + tf_constant(_SMALL, tf_float32))
+        Q_base = Q_base / (t_range_units + tf_constant(_EPSILON, tf_float32))
 
     return Q_base
 
@@ -342,198 +397,601 @@ def cons_step_to_cons_residual(
     dt_sec = tf_maximum(dt_sec, tf_constant(eps, tf_float32))
     return cons_step_m / dt_sec
 
-
+# XXX 
 # ---------------------------------------------------------------------
 # Physics residuals / priors
 # ---------------------------------------------------------------------
-# def resolve_mv_gamma_si(
-#     model,
-#     Ss_field: Tensor,
-#     *,
-#     eps: float = 1e-12,
-#     verbose: int = 0,
-# ) -> Tuple[Tensor, Tensor]:
-#     """Return (mv_si [Pa^-1], gamma_w_si [Pa/m]) with auto unit alignment.
 
-#     We test a small set of plausible conversions and choose the pair
-#     that best matches the domain-mean of log(Ss).
+def _canon_mv_prior_mode(v) -> str:
+    """
+    Normalize mv-prior mode string to canonical labels.
+    """
+    if v is None:
+        return "calibrate"
 
-#     Candidates:
-#       - (mv, gw)                      : assume both already SI
-#       - (mv/1000, gw)                 : mv provided in 1/kPa, gw in Pa/m
-#       - (mv, gw*1000)                 : mv in 1/Pa, gw provided in kPa/m
-#       - (mv/1000, gw*1000)            : mv in 1/kPa and gw in kPa/m
+    s = str(v).strip().lower()
+    s = s.replace("-", "_")
+    
+    # ---- explicit off/disable ----
+    if s in (
+            "off", 
+            "none", 
+            "disabled", 
+            "disable", 
+            "false", 
+            "0"
+        ):
+        return "off"
 
-#     Notes
-#     -----
-#     This avoids requiring `mv_units` / `gamma_w_units` in config and
-#     works even when people forget to set them.
-#     """
-#     eps_t = tf_constant(float(eps), tf_float32)
+    # Default / detach-style synonyms.
+    if s in (
+        "default",
+        "detach",
+        "stopgrad",
+        "stop_grad",
+        "stop_gradient",
+        "calibrate",
+        "calibrate_mv",
+    ):
+        return "calibrate"
 
-#     Ss_safe = tf_maximum(tf_cast(Ss_field, tf_float32), eps_t)
-#     logSs_mean = tf_reduce_mean(tf_log(Ss_safe))  # scalar
+    # Fully coupled (can be unstable).
+    if s in (
+        "field",
+        "ss_field",
+        "backprop",
+        "coupled",
+    ):
+        return "field"
 
-#     mv_raw = tf_maximum(tf_cast(model._mv_value(), tf_float32), eps_t)
-#     gw_raw = tf_maximum(tf_cast(getattr(model, "gamma_w", mv_raw * 0 + 9810.0),
-#                                 tf_float32), eps_t)
+    # Prefer log-parameterization (safer anchoring).
+    if s in (
+        "logss",
+        "log_ss",
+        "logs",
+    ):
+        return "logss"
 
-#     # --- candidates (all scalars) ------------------------------------
-#     mv_cands = tf_stack([
-#         mv_raw,
-#         mv_raw / tf_constant(1000.0, tf_float32),
-#         mv_raw,
-#         mv_raw / tf_constant(1000.0, tf_float32),
-#     ])
-#     gw_cands = tf_stack([
-#         gw_raw,
-#         gw_raw,
-#         gw_raw * tf_constant(1000.0, tf_float32),
-#         gw_raw * tf_constant(1000.0, tf_float32),
-#     ])
+    # Unknown: keep user value (but non-empty).
+    return s or "calibrate"
 
-#     log_targets = tf_log(mv_cands) + tf_log(gw_cands)     # (4,)
-#     errs = tf_abs(logSs_mean - log_targets)               # (4,)
 
-#     idx = tf_cast(tf_argmin(errs, axis=0), tf_int32)
+def _get_mv_prior_mode(model) -> str:
+    """
+    Resolve mv-prior mode from scaling kwargs (alias-safe).
 
-#     mv_sel = mv_cands[idx]
-#     gw_sel = gw_cands[idx]
+    Notes
+    -----
+    We try top-level keys first, then `bounds` fallback.
+    """
+    sk = getattr(model, "scaling_kwargs", None) or {}
 
-#     vprint(verbose, "resolve_mv_gamma_si:")
-#     vprint(verbose, "  mv_raw=", mv_raw, " gw_raw=", gw_raw)
-#     vprint(verbose, "  logSs_mean=", logSs_mean)
-#     vprint(verbose, "  log_targets=", log_targets, " errs=", errs, " idx=", idx)
-#     vprint(verbose, "  mv_sel=", mv_sel, " gw_sel=", gw_sel)
+    # 1) Top-level scaling kwargs (alias-safe).
+    v = get_sk(sk, "mv_prior_mode", default=None)
 
-#     return mv_sel, gw_sel
+    # 2) Nested bounds fallback (common pattern in this codebase).
+    if v is None:
+        b = sk.get("bounds", None) or {}
+        v = get_sk(b, "mv_prior_mode", default=None)
 
-# def compute_mv_prior( # will be remove , old implementation . 
-#     model,
-#     Ss_field: Tensor,
-#     *,
-#     reduction: str = "domain_mean",
-#     as_loss: bool = False,
-#     verbose: int = 0,
-# ) -> Tensor:
-#     """Specific-storage identity prior in log-space.
+    return _canon_mv_prior_mode(v)
 
-#     Encodes: Ss ≈ mv · gamma_w.
+def _resolve_mv_prior_weight(
+    model,
+    *,
+    weight=None,
+    warmup_steps=None,
+    step=None,
+    dtype=tf_float32,
+) -> Optional[Tensor]:
+    """
+    Resolve mv-prior weight with delay + warmup.
 
-#     Option A (default): compare scalar mv to the domain-mean of log(Ss),
-#     instead of penalizing every pixel.
-#     Option B: when `as_loss=True`, return RMS magnitude (log-units),
-#     which is more stable than MSE (squared log-units).
-#     """
-#     eps = tf_constant(1e-12, dtype=tf_float32)
-#     Ss_safe = tf_maximum(tf_cast(Ss_field, tf_float32), eps)
+    Keys
+    ----
+    mv_schedule_unit: "epoch" or "step"
+    mv_delay_epochs,  mv_warmup_epochs
+    mv_delay_steps,   mv_warmup_steps
+    mv_steps_per_epoch (epoch->step)
+    """
+    sk = getattr(model, "scaling_kwargs", None) or {}
+    b = sk.get("bounds", None) or {}
 
-#     mv, gw = resolve_mv_gamma_si(model, Ss_field, verbose=verbose)
+    # ----------------------------
+    # Base weight.
+    # ----------------------------
+    if weight is None:
+        weight = get_sk(sk, "mv_weight", default=None)
+    if weight is None:
+        weight = get_sk(b, "mv_weight", default=None)
+    if weight is None:
+        return None
 
-#     log_target = tf_log(mv) + tf_log(gw)
+    w = tf_constant(float(weight), dtype)
+    w = _finite_or_zero(w)
 
-#     red = str(reduction).strip().lower()
-#     if red in ("domain_mean", "mean", "global"):
-#         logSs = tf_reduce_mean(tf_log(Ss_safe))  # scalar
-#     elif red in ("field", "none", "per_pixel", "pixel"):
-#         logSs = tf_log(Ss_safe)                  # field
-#     else:
-#         raise ValueError(
-#             "compute_mv_prior(reduction=...) must be one of "
-#             "{'domain_mean', 'field'}. Got: %r" % reduction
-#         )
+    # No step => constant weight.
+    if step is None:
+        return w
 
-#     res = logSs - log_target  # signed residual (scalar or field)
+    # ----------------------------
+    # Schedule unit.
+    # ----------------------------
+    unit = get_sk(sk, "mv_schedule_unit", default=None)
+    if unit is None:
+        unit = get_sk(b, "mv_schedule_unit", default=None)
 
-#     if as_loss:
-#         # RMS in log-units (preferred scale for weighting).
-#         out = to_rms(res)
-#     else:
-#         out = res
+    if unit is None:
+        unit = "step" if warmup_steps is not None else "epoch"
 
-#     vprint(verbose, "mv_prior: reduction=", red)
-#     vprint(verbose, "mv_prior: mv=", mv, "gw=", gw)
-#     vprint(verbose, "mv_prior: log_target=", log_target)
-#     vprint(verbose, "mv_prior: out=", out)
-#     return out
+    unit = str(unit).strip().lower()
+    if unit not in ("epoch", "step"):
+        unit = "step"
 
-def resolve_mv_gamma_si_stable(model, Ss_field, *, eps=1e-12, verbose=0):
-    # Ss only needed to choose best unit combo; sanitize it first
-    logSs_mean = tf_reduce_mean(safe_log_pos(Ss_field, eps=eps))
+    # ----------------------------
+    # Epoch params.
+    # ----------------------------
+    de = get_sk(sk, "mv_delay_epochs", default=None)
+    if de is None:
+        de = get_sk(b, "mv_delay_epochs", default=None)
 
-    # log(mv) in a safe way (no exp)
-    if hasattr(model, "log_mv"):
-        log_mv = tf_cast(model.log_mv, tf_float32)
+    we = get_sk(sk, "mv_warmup_epochs", default=None)
+    if we is None:
+        we = get_sk(b, "mv_warmup_epochs", default=None)
+
+    # ----------------------------
+    # Step params.
+    # ----------------------------
+    ds = get_sk(sk, "mv_delay_steps", default=None)
+    if ds is None:
+        ds = get_sk(b, "mv_delay_steps", default=None)
+
+    if warmup_steps is None:
+        ws = get_sk(sk, "mv_warmup_steps", default=None)
+        if ws is None:
+            ws = get_sk(b, "mv_warmup_steps", default=None)
     else:
-        log_mv = safe_log_pos(model._mv_fixed, eps=eps)
+        ws = warmup_steps
 
-    # gamma_w safe (true constant fallback)
-    gw_default = tf_constant(9810.0, tf_float32)
-    gw = getattr(model, "gamma_w", gw_default)
-    log_gw = safe_log_pos(gw, eps=eps)
+    spe = get_sk(sk, "mv_steps_per_epoch", default=None)
+    if spe is None:
+        spe = get_sk(b, "mv_steps_per_epoch", default=None)
+
+    # ----------------------------
+    # Convert to ints.
+    # ----------------------------
+    def _to_int(v):
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except Exception:
+            return None
+
+    delay_s = _to_int(ds)
+    warm_s = _to_int(ws)
+
+    # Epoch -> step conversion.
+    if unit == "epoch":
+        spe_i = _to_int(spe)
+        if spe_i is not None and spe_i > 0:
+            if delay_s is None:
+                de_i = _to_int(de) or 0
+                delay_s = max(0, de_i) * spe_i
+            if warm_s is None:
+                we_i = _to_int(we) or 0
+                warm_s = max(0, we_i) * spe_i
+
+    if delay_s is None:
+        delay_s = 0
+
+    # ----------------------------
+    # Ramp with delay + warmup.
+    # ----------------------------
+    s = tf_cast(step, dtype)
+    s = _finite_or_zero(s)
+
+    d = tf_constant(float(delay_s), dtype)
+    d = _finite_or_zero(d)
+
+    # Hard gate if warmup missing/0.
+    if (warm_s is None) or (warm_s <= 0):
+        one = tf_constant(1.0, dtype)
+        zero = tf_constant(0.0, dtype)
+        ramp = tf_where(s >= d, one, zero)
+        return w * ramp
+
+    wu = tf_constant(float(max(1, warm_s)), dtype)
+    wu = _finite_or_zero(wu)
+
+    ramp = tf_clip_by_value((s - d) / wu, 0.0, 1.0)
+    ramp = _finite_or_zero(ramp)
+
+    return w * ramp
+
+
+def resolve_mv_gamma_log_target_from_logSs(
+    model,
+    logSs,
+    *,
+    eps=_EPSILON,
+    verbose=0,
+) -> Tensor:
+    """
+    Like resolve_mv_gamma_log_target(), but uses logSs.
+
+    This is the preferred path for mode='logss' because it
+    avoids the 1/Ss gradient amplification from log(Ss_field).
+    """
+    mv_units = _get_mv_prior_units(model)
+
+    log_mv = _safe_log_mv(model, eps=eps)
+    log_gw = _safe_log_gw(model, eps=eps)
+
+    # Strict path: smooth and stable.
+    if mv_units != "auto":
+        log_target = log_mv + log_gw
+        vprint(verbose, "mv_prior_units:", mv_units)
+        vprint(verbose, "log_target(strict):", log_target)
+        return log_target
+
+    # Auto path: choose 1e3 convention by matching mean(logSs).
+    logSs = tf_cast(logSs, tf_float32)
+
+    eps_t = tf_constant(float(eps), tf_float32)
+    log_eps = tf_log(eps_t)
+
+    logSs = tf_where(tf_math.is_finite(logSs), logSs, log_eps)
+    logSs_mean = tf_reduce_mean(logSs)
 
     log1000 = tf_log(tf_constant(1000.0, tf_float32))
 
-    # candidates in log space
-    log_mv_c = tf_stack([log_mv, log_mv - log1000, log_mv, log_mv - log1000])
-    log_gw_c = tf_stack([log_gw, log_gw, log_gw + log1000, log_gw + log1000])
+    log_mv_c = tf_stack(
+        [log_mv, log_mv - log1000, log_mv, log_mv - log1000],
+    )
+    log_gw_c = tf_stack(
+        [log_gw, log_gw, log_gw + log1000, log_gw + log1000],
+    )
 
     log_targets = log_mv_c + log_gw_c
     errs = tf_abs(logSs_mean - log_targets)
 
     idx = tf_cast(
-        tf_argmin(
-            tf_stop_gradient(errs), axis=0), 
-        tf_int32
+        tf_argmin(tf_stop_gradient(errs), axis=0),
+        tf_int32,
     )
+    log_target = tf_gather(log_targets, idx)
 
-    # return linear values if you want, but everything important is log-safe
-    mv_sel = tf_exp(tf_gather(log_mv_c, idx))
-    gw_sel = tf_exp(tf_gather(log_gw_c, idx))
-    return mv_sel, gw_sel
+    vprint(verbose, "mv_prior_units:", mv_units)
+    vprint(verbose, "mv/gw idx:", idx)
+    vprint(verbose, "log_target(auto):", log_target)
 
-def huber(x, delta=1.0):
-    ax = tf_abs(x)
-    quad = tf_minimum(ax, tf_constant(delta, x.dtype))
-    lin  = ax - quad
-    return 0.5 * tf_square(quad) + tf_constant(delta, x.dtype) * lin
+    return log_target
 
-def compute_mv_prior_loss( # NEW IMPLEMENTATION. 
+def _mv_prior_disabled_return(
+    *,
+    as_loss: bool,
+    Ss_field: Optional[Tensor],
+    logSs: Optional[Tensor],
+    dtype=tf_float32,
+) -> Tensor:
+    """
+    Return zeros for disabled mv-prior.
+
+    - as_loss=True  -> scalar 0
+    - as_loss=False -> zeros_like(logSs or Ss_field)
+    """
+    if bool(as_loss):
+        return tf_constant(0.0, dtype)
+
+    ref = logSs if (logSs is not None) else Ss_field
+    if ref is None:
+        return tf_constant(0.0, dtype)
+
+    ref = tf_cast(ref, dtype)
+    return tf_zeros_like(ref)
+
+
+def _mv_prior_is_disabled(model, *, mode: str) -> bool:
+    """
+    True if mv-prior should be skipped.
+    """
+    if mode == "off":
+        return True
+
+    lam = float(getattr(model, "lambda_mv", 0.0))
+    return lam <= 0.0
+
+def compute_mv_prior(
+    model,
+    Ss_field: Optional[Tensor] = None,
+    *,
+    logSs: Optional[Tensor] = None,
+    mode: Optional[str] = None,
+    as_loss: bool = True,
+    weight=None,
+    warmup_steps=None,
+    step=None,
+    alpha_disp=0.1,
+    delta=1.0,
+    eps=_EPSILON,
+    verbose=0,
+):
+    """
+    MV prior with 3 modes (default: calibrate).
+
+    Residual
+    --------
+    r = log(Ss) - log(m_v * gamma_w)
+
+    Modes
+    -----
+    calibrate (default)
+        Uses stop_gradient(Ss_field). This calibrates mv without
+        reshaping Ss_field. Most stable for physics-driven mean
+        subsidence.
+
+    field
+        Backprop through Ss_field. Can be unstable due to
+        d log(Ss)/dSs = 1/Ss amplification.
+
+    logss
+        Backprop through logSs (recommended if you need stronger
+        Ss anchoring). Pass logSs from compose_physics_fields().
+
+    Returns
+    -------
+    If as_loss=True:
+        Scalar loss (Huber on mean + dispersion term).
+    If as_loss=False:
+        Residual field r (same shape as logSs / derived logSs).
+    """
+    # ----------------------------------------------------------
+    # 1) Resolve mode (alias-safe via scaling_kwargs).
+    # ----------------------------------------------------------
+    if mode is None:
+        mode = _get_mv_prior_mode(model)
+    mode = _canon_mv_prior_mode(mode)
+
+    # ----------------------------
+    # 1b) Off / disabled gate.
+    # ----------------------------
+    if _mv_prior_is_disabled(model, mode=mode):
+        return _mv_prior_disabled_return(
+            as_loss=as_loss,
+            Ss_field=Ss_field,
+            logSs=logSs,
+        )
+    
+    # ----------------------------------------------------------
+    # 2) Build log-space residual r.
+    # ----------------------------------------------------------
+    if mode == "logss":
+        if logSs is None:
+            raise ValueError(
+                "mode='logss' requires `logSs` from "
+                "compose_physics_fields().",
+            )
+
+        logSs_ = tf_cast(logSs, tf_float32)
+        log_target = resolve_mv_gamma_log_target_from_logSs(
+            model,
+            logSs_,
+            eps=eps,
+            verbose=verbose,
+        )
+        r = logSs_ - log_target
+
+    else:
+        if Ss_field is None:
+            raise ValueError(
+                "compute_mv_prior requires Ss_field "
+                "for mode != 'logss'.",
+            )
+
+        Ss_in = Ss_field
+
+        # Default: detach Ss to avoid trunk destabilization.
+        if mode == "calibrate":
+            Ss_in = tf_stop_gradient(Ss_field)
+
+        logSs_ = safe_log_pos(Ss_in, eps=eps)
+        log_target = resolve_mv_gamma_log_target(
+            model,
+            Ss_in,
+            eps=eps,
+            verbose=verbose,
+        )
+        r = logSs_ - log_target
+
+    # Return residual if requested (diagnostics use-case).
+    if not bool(as_loss):
+        return r
+
+    # ----------------------------------------------------------
+    # 3) Scalar loss: global mismatch + dispersion penalty.
+    # ----------------------------------------------------------
+    r_bar = tf_reduce_mean(r)
+    loss_g = huber(r_bar, delta=delta)
+
+    loss_d = tf_reduce_mean(huber(r - r_bar, delta=delta))
+    a = tf_constant(float(alpha_disp), tf_float32)
+
+    loss = loss_g + a * loss_d
+
+    # ----------------------------------------------------------
+    # 4) Optional independent weight + warmup ramp.
+    # ----------------------------------------------------------
+    w = _resolve_mv_prior_weight(
+        model,
+        weight=weight,
+        warmup_steps=warmup_steps,
+        step=step,
+    )
+    if w is not None:
+        loss = loss * w
+
+    return loss
+
+
+def _get_mv_prior_units(model) -> str:
+    """
+    Get mv prior units mode from scaling kwargs.
+
+    Expected values:
+    - "auto"   : choose best 1e3 convention
+    - "strict" : use log(mv) + log(gamma_w)
+    """
+    sk = getattr(model, "scaling_kwargs", None) or {}
+
+    # Allow either top-level or nested placement.
+    v = sk.get("mv_prior_units", None)
+
+    if v is None:
+        b = sk.get("bounds", None) or {}
+        v = b.get("mv_prior_units", None)
+
+    if v is None:
+        return "strict"
+
+    return str(v).strip().lower()
+
+def _safe_log_mv(model, *, eps=_EPSILON) -> Tensor:
+    """
+    Return log(mv) safely.
+
+    - If mv is learnable: use model.log_mv (log-space).
+    - If mv is fixed: log(mv_fixed) in a safe way.
+    - If missing/None: return log(eps).
+    """
+    eps_t = tf_constant(float(eps), tf_float32)
+    log_eps = tf_log(eps_t)
+
+    log_mv_raw = getattr(model, "log_mv", None)
+    if log_mv_raw is not None:
+        log_mv = tf_cast(log_mv_raw, tf_float32)
+        return tf_where(
+            tf_math.is_finite(log_mv),
+            log_mv,
+            log_eps,
+        )
+
+    mv = getattr(model, "_mv_fixed", None)
+    if mv is None:
+        return log_eps
+
+    return safe_log_pos(mv, eps=eps)
+
+
+def _safe_log_gw(model, *, eps=_EPSILON) -> Tensor:
+    """
+    Return log(gamma_w) safely.
+
+    Uses a constant fallback if gamma_w is missing/None.
+    """
+    gw = getattr(model, "gamma_w", None)
+    if gw is None:
+        gw = tf_constant(9810.0, tf_float32)
+
+    return safe_log_pos(gw, eps=eps)
+
+
+def resolve_mv_gamma_log_target(
     model,
     Ss_field,
     *,
-    alpha_disp: float = 0.1,   # dispersion weight
-    delta: float = 1.0,        # huber delta in log units
-    eps: float = _SMALL,
-    verbose: int = 0,
-):
-    Ss_safe_log = safe_log_pos(Ss_field, eps=eps)
+    eps=_EPSILON,
+    verbose=0,
+) -> Tensor:
+    """
+    Return log(mv * gamma_w) with configurable units.
 
-    mv, gw = resolve_mv_gamma_si_stable(
-        model, Ss_field, eps=eps, verbose=verbose)
-    log_target = safe_log_pos(
-        mv, eps=eps) + safe_log_pos(gw, eps=eps)
+    If mv_prior_units == "strict":
+        log_target = log(mv) + log(gamma_w)
 
-    r = Ss_safe_log - log_target  # (field)
+    If mv_prior_units == "auto":
+        pick among 4 candidates that best matches
+        mean(log(Ss_field)) in magnitude:
+        - mv      vs mv/1000
+        - gamma_w vs gamma_w*1000
+    """
+    mv_units = _get_mv_prior_units(model)
 
-    r_bar = tf_reduce_mean(r)
-    loss_global = huber(r_bar, delta=delta)
+    log_mv = _safe_log_mv(model, eps=eps)
+    log_gw = _safe_log_gw(model, eps=eps)
 
-    # dispersion term (optional but very useful)
-    loss_disp = tf_reduce_mean(huber(r - r_bar, delta=delta))
+    # Strict path: no argmin, no discrete switches.
+    if mv_units != "auto":
+        log_target = log_mv + log_gw
+        vprint(verbose, "mv_prior_units:", mv_units)
+        vprint(verbose, "log_target(strict):", log_target)
+        return log_target
 
-    return loss_global + tf_constant(alpha_disp, tf_float32) * loss_disp
+    # Auto path: use Ss only for scale matching.
+    logSs_mean = tf_reduce_mean(
+        safe_log_pos(Ss_field, eps=eps),
+    )
 
-def safe_pos(x, eps=1e-12, dtype=tf_float32):
-    
+    log1000 = tf_log(tf_constant(1000.0, tf_float32))
+
+    # 4 candidates (log-space).
+    log_mv_c = tf_stack(
+        [log_mv, log_mv - log1000, log_mv, log_mv - log1000],
+    )
+    log_gw_c = tf_stack(
+        [log_gw, log_gw, log_gw + log1000, log_gw + log1000],
+    )
+
+    log_targets = log_mv_c + log_gw_c
+    errs = tf_abs(logSs_mean - log_targets)
+
+    # Discrete choice only; do not backprop it.
+    idx = tf_cast(
+        tf_argmin(tf_stop_gradient(errs), axis=0),
+        tf_int32,
+    )
+
+    log_target = tf_gather(log_targets, idx)
+
+    vprint(verbose, "mv_prior_units:", mv_units)
+    vprint(verbose, "mv/gw idx:", idx)
+    vprint(verbose, "log_target(auto):", log_target)
+
+    return log_target
+
+# -----------------------------
+# Reusable numeric helpers
+# -----------------------------
+def safe_pos(x, *, eps=_EPSILON, dtype=tf_float32):
+    """
+    Force x to be finite and >= eps.
+
+    Replaces NaN/Inf by eps, then floors.
+    """
     eps_t = tf_constant(float(eps), dtype)
     x = tf_cast(x, dtype)
-    x = tf_where(tf_math.is_finite(x), x, eps_t)  # kill NaN/Inf
-    
+    x = tf_where(tf_math.is_finite(x), x, eps_t)
+    x = tf_clip_by_value(x, eps_t, tf_constant(1e30, dtype))
     return tf_maximum(x, eps_t)
 
-def safe_log_pos(x, eps=1e-12, dtype=tf_float32):
+
+def safe_log_pos(x, *, eps=_EPSILON, dtype=tf_float32):
+    """log(safe_pos(x))."""
     return tf_log(safe_pos(x, eps=eps, dtype=dtype))
+
+
+def huber(x, *, delta=1.0):
+    """
+    Huber loss (elementwise).
+
+    delta is treated as a scalar constant.
+    """
+    d = tf_constant(float(delta), x.dtype)
+    ax = tf_abs(x)
+    quad = tf_minimum(ax, d)
+    lin = ax - quad
+    return 0.5 * tf_square(quad) + d * lin
+
 
 def compute_gw_flow_residual(
     model,
@@ -545,26 +1003,35 @@ def compute_gw_flow_residual(
     Q: Optional[Tensor] = None,
     verbose: int = 0,
 ) -> Tensor:
-    """Groundwater flow PDE residual."""
+    """Groundwater flow PDE residual (NaN/Inf-safe, broadcast-safe)."""
     if "gw_flow" not in model.pde_modes_active:
         return tf_zeros_like(dh_dt)
 
-    # NOTE: v3.2: Q can be a learned forcing field (Tensor) or a scalar.
+    # --- convert + sanitize core terms ---
+    dh_dt = _finite_or_zero(tf_convert_to_tensor(dh_dt, dtype=tf_float32))
+    d_K_dh_dx_dx = _finite_or_zero(tf_convert_to_tensor(d_K_dh_dx_dx, dtype=dh_dt.dtype))
+    d_K_dh_dy_dy = _finite_or_zero(tf_convert_to_tensor(d_K_dh_dy_dy, dtype=dh_dt.dtype))
+    Ss_field = _finite_or_zero(tf_convert_to_tensor(Ss_field, dtype=dh_dt.dtype))
+
+    # --- Q: scalar / (H,) / (B,H) / (B,H,1) -> (B,H,1) ---
     if Q is None:
         Qv = tf_zeros_like(dh_dt)
     else:
         Qv = tf_convert_to_tensor(Q, dtype=dh_dt.dtype)
-        # Broadcast scalars / rank-1/2 to match dh_dt.
-        Qv = tf_broadcast_to(Qv, tf_shape(dh_dt))
+        Qv = ensure_3d(Qv)                         # scalar->(1,1,1), (H,)->(1,H,1), (B,H)->(B,H,1)
+        Qv = tf_broadcast_to(Qv, tf_shape(dh_dt))  # now broadcast is valid
+        Qv = _finite_or_zero(Qv)
 
     div_K_grad_h = d_K_dh_dx_dx + d_K_dh_dy_dy
     storage_term = Ss_field * dh_dt
 
     out = storage_term - div_K_grad_h - Qv
-    
-    if verbose > 6: 
+    out = _finite_or_zero(out)  # optional, but makes the "output finite" contract explicit
+
+    if verbose > 6:
         vprint(verbose, "gw: dh_dt=", dh_dt)
         vprint(verbose, "gw: div=", div_K_grad_h)
+        vprint(verbose, "gw: Q=", Qv)
         vprint(verbose, "gw: out=", out)
 
     return out
@@ -587,7 +1054,7 @@ def compute_consolidation_residual(
     if "consolidation" not in model.pde_modes_active:
         return tf_zeros_like(ds_dt)
 
-    eps = tf_constant(1e-12, dtype=tf_float32)
+    eps = tf_constant(_EPSILON, dtype=tf_float32)
     tau_safe = tf_maximum(tau_field, eps)
 
     h_ref_si = get_h_ref_si(model, inputs, like=h_mean)
@@ -615,29 +1082,12 @@ def compute_consolidation_residual(
     return out
 
 
-# ---------------------------------------------------------------------
-# v3.2 helpers: physics-driven mean settlement via stable stepping
-# ---------------------------------------------------------------------
-def _ensure_3d(x: Tensor) -> Tensor:
-    """Ensure (B,T,1) shape."""
-    if getattr(x, "shape", None) is not None and x.shape.rank == 2:
-        return x[:, :, None]
-    return x
-
-
-def _broadcast_like(x: Optional[Tensor], like: Tensor) -> Tensor:
-    """Convert and broadcast x to the shape of `like` (dtype preserved)."""
-    if x is None:
-        return tf_zeros_like(like)
-    xt = tf_convert_to_tensor(x, dtype=like.dtype)
-    return tf_broadcast_to(xt, tf_shape(like))
-
 def _positive_part(
     x: Tensor,
     *,
     mode: str = "smooth_relu",
     beta: float = 20.0,
-    eps: float = _SMALL,
+    eps: float = _EPSILON,
     zero_at_origin: bool = False,
 ) -> Tensor:
     """Return the non-negative part of x, with selectable smoothness.
@@ -668,7 +1118,9 @@ def _positive_part(
         Gated tensor.
     """
     mode = str(mode).strip().lower()
+
     x = tf_cast(x, tf_float32)
+    x = _finite_or_zero(x)  
 
     if mode == "none":
         y = x
@@ -677,7 +1129,7 @@ def _positive_part(
         y = tf_maximum(x, tf_constant(eps, dtype=x.dtype))
 
     elif mode == "softplus":
-        y = positive(x, eps = eps )
+        y = positive(x, eps=eps)
 
     elif mode == "smooth_relu":
         b = tf_constant(float(beta), dtype=x.dtype)
@@ -709,7 +1161,7 @@ def equilibrium_compaction_si(
     stop_grad_ref: bool = True,
     drawdown_zero_at_origin: bool = False,
     drawdown_clip_max: Optional[float] = None,
-    eps: float = _SMALL, 
+    eps: float = _EPSILON,
     verbose: int = 0,
 ) -> Tensor:
     """Compute equilibrium compaction s_eq (SI meters).
@@ -761,10 +1213,46 @@ def equilibrium_compaction_si(
     Tensor
         Equilibrium compaction s_eq in meters, shape (B,H,1).
     """
+
     h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
     h_ref_si = _broadcast_like(_ensure_3d(tf_cast(h_ref_si, tf_float32)), h_mean_si)
     Ss_field = _broadcast_like(_ensure_3d(Ss_field), h_mean_si)
     H_field_si = _broadcast_like(_ensure_3d(H_field_si), h_mean_si)
+
+    def _n_bad(x: Tensor) -> Tensor:
+        return tf_reduce_sum(tf_cast(~tf_math.is_finite(x), tf_int32))
+
+    # --- debug counts BEFORE sanitization
+    vprint(
+        verbose,
+        "[equilibrium_compaction_si] nonfinite counts (pre):",
+        "h_mean", _n_bad(h_mean_si),
+        "h_ref", _n_bad(h_ref_si),
+        "Ss", _n_bad(Ss_field),
+        "H", _n_bad(H_field_si),
+    )
+
+    # --- sanitize ALL inputs (this is what makes your tests pass)
+    h_mean_si = _finite_or_zero(h_mean_si)
+    h_ref_si = _finite_or_zero(h_ref_si)
+    Ss_field = _finite_or_zero(Ss_field)
+    H_field_si = _finite_or_zero(H_field_si)
+
+    # Optional: enforce non-negativity for physical fields
+    # (keeps math stable if something goes negative)
+    zero = tf_constant(0.0, dtype=tf_float32)
+    Ss_field = tf_maximum(Ss_field, zero)
+    H_field_si = tf_maximum(H_field_si, zero)
+
+    # --- debug counts AFTER sanitization
+    vprint(
+        verbose,
+        "[equilibrium_compaction_si] nonfinite counts (post):",
+        "h_mean", _n_bad(h_mean_si),
+        "h_ref", _n_bad(h_ref_si),
+        "Ss", _n_bad(Ss_field),
+        "H", _n_bad(H_field_si),
+    )
 
     if bool(stop_grad_ref):
         h_ref_si = tf_stop_gradient(h_ref_si)
@@ -800,14 +1288,10 @@ def equilibrium_compaction_si(
         zero_at_origin=bool(drawdown_zero_at_origin),
     )
 
-    # Optional clip (after gating).
     if drawdown_clip_max is not None:
         mx = tf_constant(float(drawdown_clip_max), dtype=delta_h.dtype)
         delta_h = tf_clip_by_value(
-            delta_h,
-            tf_constant(eps, dtype=delta_h.dtype),
-            mx,
-        )
+            delta_h, tf_constant(eps, dtype=delta_h.dtype), mx)
 
     vprint(
         verbose,
@@ -818,6 +1302,7 @@ def equilibrium_compaction_si(
     )
 
     s_eq = Ss_field * delta_h * H_field_si
+    s_eq = _finite_or_zero(s_eq)  # extra safety net
 
     vprint(
         verbose,
@@ -825,8 +1310,9 @@ def equilibrium_compaction_si(
         "min=", tf_reduce_min(s_eq),
         "max=", tf_reduce_max(s_eq),
         "mean=", tf_reduce_mean(s_eq),
+        "| nonfinite=", _n_bad(s_eq),
     )
-    return s_eq 
+    return s_eq
 
 def integrate_consolidation_mean(
     *,
@@ -875,6 +1361,48 @@ def integrate_consolidation_mean(
     s_bar_si : Tensor
         Mean cumulative settlement over the horizon, shape (B,H,1).
     """
+    def _align_to_horizon(x: Tensor, *, name: str) -> Tensor:
+        """Align x time-length to horizon H (or keep length 1)."""
+        xt = _ensure_3d(tf_cast(x, tf_float32))
+        tx = tf_shape(xt)[1]
+    
+        # If provided as state-length (H+1), slice to horizon H.
+        xt = tf_cond(
+            tf_equal(tx, H + 1),
+            lambda: xt[:, :-1, :],
+            lambda: xt,
+        )
+    
+        # If provided as step-length (H-1), pad to horizon H by
+        # repeating the first step (consistent with dt inference).
+        tx2 = tf_shape(xt)[1]
+    
+        def _pad_prepend() -> Tensor:
+            first = xt[:, :1, :]
+            return tf_concat([first, xt], axis=1)
+    
+        xt = tf_cond(
+            tf_logical_and(
+                tf_greater(H, 1),
+                tf_equal(tx2, H - 1),
+            ),
+            _pad_prepend,
+            lambda: xt,
+        )
+    
+        # Now must be length H or 1.
+        tx3 = tf_shape(xt)[1]
+        ok = tf_logical_or(tf_equal(tx3, H), tf_equal(tx3, 1))
+        tf_debugging.assert_equal(
+            ok,
+            True,
+            message=(
+                f"{name} has incompatible time length; "
+                "expected H, H-1, H+1, or 1."
+            ),
+        )
+        return xt
+
     h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
 
     # ----------------------------------------------------------
@@ -902,14 +1430,22 @@ def integrate_consolidation_mean(
             "[integrate_consolidation_mean] dt=None -> 1",
         )
     else:
-        dt = _broadcast_like(
-            _ensure_3d(tf_cast(dt, tf_float32)),
-            h_mean_si,
-        )
+        dt_in = _align_to_horizon(dt, name="dt")
+        dt = _broadcast_like(dt_in, h_mean_si)
+        
     dt = tf_reshape(dt, [B, H, 1])
+    
+    # sanitize dt before converting
+    dt = _finite_or_zero(dt)
+    # Optional: disallow negative time steps
+    dt = tf_maximum(dt, tf_constant(0.0, dtype=dt.dtype))
 
     dt_sec = dt_to_seconds(dt, time_units=time_units)
     dt_sec = tf_reshape(dt_sec, [B, H, 1])
+    
+    # sanitize dt_sec too (unit conversion could create non-finite)
+    dt_sec = _finite_or_zero(dt_sec)
+    dt_sec = tf_maximum(dt_sec, tf_constant(0.0, dtype=dt_sec.dtype))
 
     vprint(
         verbose,
@@ -920,11 +1456,21 @@ def integrate_consolidation_mean(
     )
 
     # --- tau (BH1) ---------------------------------------------
-    tau = _broadcast_like(
-        _ensure_3d(tf_cast(tau_field, tf_float32)),
-        h_mean_si,
-    )
+    tau_in = _align_to_horizon(tau_field, name="tau_field")
+    tau = _broadcast_like(tau_in, h_mean_si)
     tau = tf_reshape(tau, [B, H, 1])
+
+    tf_debugging.assert_equal(
+        tf_shape(tau)[1], H,
+        message=( 
+            "integrate_consolidation_mean:"
+            " tau horizon must match h_mean_si horizon"
+            )
+    )
+
+    # sanitize tau BEFORE clamping
+    tau = _finite_or_zero(tau)
+    
     tau = tf_maximum(
         tau,
         tf_constant(eps_tau, dtype=tf_float32),
@@ -963,9 +1509,21 @@ def integrate_consolidation_mean(
         )
 
     # --- initializer (B,1) -------------------------------------
+    # s0 = _ensure_3d(tf_cast(s_init_si, tf_float32))
+    # s0 = s0[:, :1, :1]
+    # s0 = tf_reshape(s0, [B, 1, 1])
+    # s0 = _finite_or_zero(s0)
+    
+    # s0_2d = tf_reshape(s0[:, 0, :], [B, 1])
+    
     s0 = _ensure_3d(tf_cast(s_init_si, tf_float32))
     s0 = s0[:, :1, :1]
+    
+    # broadcast to (B,1,1) using the same mechanism as dt/tau
+    s0 = _broadcast_like(s0, h_mean_si[:, :1, :1])
     s0 = tf_reshape(s0, [B, 1, 1])
+    
+    s0 = _finite_or_zero(s0)
     s0_2d = tf_reshape(s0[:, 0, :], [B, 1])
 
     vprint(
@@ -1003,13 +1561,13 @@ def integrate_consolidation_mean(
             a = tf_exp(
                 -dt_i / (
                     tau_i
-                    + tf_constant(_SMALL, tau_i.dtype)
+                    + tf_constant(_EPSILON, tau_i.dtype)
                 )
             )
             nxt = prev * a + seq_i * (1.0 - a)
         else:
             nxt = prev + dt_i * (seq_i - prev) / (
-                tau_i + tf_constant(_SMALL, tau_i.dtype)
+                tau_i + tf_constant(_EPSILON, tau_i.dtype)
             )
 
         return tf_reshape(nxt, shp_prev)
@@ -1021,6 +1579,7 @@ def integrate_consolidation_mean(
     )
 
     s_bar = tf_transpose(s_tm, [1, 0, 2])
+    s_bar = _finite_or_zero(s_bar)
 
     vprint(
         verbose,
@@ -1044,7 +1603,6 @@ def compute_consolidation_step_residual(
     method: str = "exact",
     eps_tau: float = 1e-12,
     relu_beta: float = 20.0,
-
     drawdown_mode: str = "smooth_relu",
     drawdown_rule: str = "ref_minus_mean",
     stop_grad_ref: bool = True,
@@ -1052,53 +1610,136 @@ def compute_consolidation_step_residual(
     drawdown_clip_max: Optional[float] = None,
     verbose: int = 0,
 ) -> Tensor:
-
-    """One-step consolidation residual in SI space.
-
-    This is useful when `s_state_si` is produced by a network and you want
-    to *enforce* the consolidation ODE via a stable stepper.
-
-    Returns a residual for each step n -> n+1: shape (B,T-1,1).
     """
-    s_state_si = _ensure_3d(tf_cast(s_state_si, tf_float32))
-    h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
+    One-step consolidation residual in SI space.
 
-    T = tf_shape(s_state_si)[1]
-    vprint(
-        verbose, 
-        "[compute_consolidation_step_residual] T =",
-        T, "| method=", method
+    This enforces the Voigt-style ODE using a stable stepper.
+
+    Inputs
+    ------
+    s_state_si : (B,T,1)
+        Settlement *state* (typically incremental).
+    h_mean_si : (B,T,1)
+        Head state aligned with s_state_si.
+    Ss_field, H_field_si, tau_field, h_ref_si :
+        Fields used to compute equilibrium settlement.
+
+    Returns
+    -------
+    res : (B,T-1,1)
+        Residual per step n -> n+1 in meters.
+    """
+    # ---------------------------------------------------------
+    # 1) Normalize core tensors to (B,T,1) float32.
+    # ---------------------------------------------------------
+    s_state = _ensure_3d(tf_cast(s_state_si, tf_float32))
+    h_state = _ensure_3d(tf_cast(h_mean_si, tf_float32))
+
+    T_s = tf_shape(s_state)[1]
+    T_h = tf_shape(h_state)[1]
+    tf_debugging.assert_equal(
+        T_s,
+        T_h,
+        message="s_state_si and h_mean_si must share T.",
     )
 
+    vprint(
+        verbose,
+        "[compute_cons_step_res] T=",
+        T_s,
+        "| method=",
+        method,
+    )
+
+    # ---------------------------------------------------------
+    # 2) Build step-aligned sequences (length H = T-1).
+    # ---------------------------------------------------------
+    s_n = s_state[:, :-1, :]     # (B,H,1)
+    s_np1 = s_state[:, 1:, :]   # (B,H,1)
+    h_n = h_state[:, :-1, :]    # (B,H,1)
+
+    H = tf_shape(s_n)[1]        # H = T-1
+
+    # ---------------------------------------------------------
+    # 3) Helper: align a time series to step length H.
+    #    Accepts:
+    #      - (B,T,1) -> slice to (B,H,1)
+    #      - (B,H,1) -> keep
+    #      - (B,1,1) -> broadcast later
+    # ---------------------------------------------------------
+    def _align_to_steps(x: Optional[Tensor], name: str) -> Optional[Tensor]:
+        if x is None:
+            return None
+
+        xt = _ensure_3d(tf_cast(x, tf_float32))
+        tx = tf_shape(xt)[1]
+
+        # If provided at state length T, slice to steps.
+        xt = tf_cond(
+            tf_equal(tx, H + 1),
+            lambda: xt[:, :-1, :],
+            lambda: xt,
+        )
+
+        # After slicing, require time dim == H or 1.
+        tx2 = tf_shape(xt)[1]
+        ok = tf_logical_or(tf_equal(tx2, H), tf_equal(tx2, 1))
+        tf_debugging.assert_equal(
+            ok,
+            True,
+            message=(
+                f"{name} time length must be H or 1 "
+                "or T (then sliced)."
+            ),
+        )
+        return xt
+
+    # ---------------------------------------------------------
+    # 4) dt handling: align then broadcast to (B,H,1).
+    # ---------------------------------------------------------
     if dt is None:
-        dt = tf_zeros_like(s_state_si[:, 1:, :]) + 1.0
+        dt_steps = tf_ones_like(s_n)
         vprint(
-            verbose, 
-            "[compute_consolidation_step_residual]"
-            " dt=None -> using 1.0 per step"
+            verbose,
+            "[compute_cons_step_res] dt=None -> 1 per step",
         )
     else:
-        dt = _broadcast_like(
-            _ensure_3d(tf_cast(dt, tf_float32)),
-            s_state_si[:, 1:, :],
-        )
+        dt_in = _align_to_steps(dt, "dt")
+        dt_steps = _broadcast_like(dt_in, s_n)
 
-    dt_sec = dt_to_seconds(dt, time_units=time_units)
+    # Convert dt to seconds for the stepper.
+    dt_sec = dt_to_seconds(dt_steps, time_units=time_units)
 
-    # Align to n=0..T-2
-    s_n = s_state_si[:, :-1, :]
-    s_np1 = s_state_si[:, 1:, :]
-    h_n = h_mean_si[:, :-1, :]
+    # Optional safety: keep finite, non-negative dt.
+    dt_sec = _finite_or_zero(dt_sec)
+    dt_sec = tf_maximum(dt_sec, tf_constant(0.0, tf_float32))
 
-    tau = _broadcast_like(_ensure_3d(tf_cast(tau_field, tf_float32)), s_n)
-    tau = tf_maximum(tau, tf_constant(eps_tau, dtype=tf_float32))
+    # ---------------------------------------------------------
+    # 5) Align other time-series fields to step length.
+    # ---------------------------------------------------------
+    h_ref_n = _align_to_steps(h_ref_si, "h_ref_si")
+    Ss_n = _align_to_steps(Ss_field, "Ss_field")
+    Hf_n = _align_to_steps(H_field_si, "H_field_si")
+    tau_n = _align_to_steps(tau_field, "tau_field")
 
+    # Broadcast each aligned series to (B,H,1).
+    h_ref_n = _broadcast_like(h_ref_n, s_n)
+    Ss_n = _broadcast_like(Ss_n, s_n)
+    Hf_n = _broadcast_like(Hf_n, s_n)
+    tau = _broadcast_like(tau_n, s_n)
+
+    # Clamp tau for numerical stability.
+    tau = _finite_or_zero(tau)
+    tau = tf_maximum(tau, tf_constant(eps_tau, tf_float32))
+
+    # ---------------------------------------------------------
+    # 6) Compute equilibrium settlement at step times.
+    # ---------------------------------------------------------
     s_eq_n = equilibrium_compaction_si(
         h_mean_si=h_n,
-        h_ref_si=h_ref_si,
-        Ss_field=Ss_field,
-        H_field_si=H_field_si,
-  
+        h_ref_si=h_ref_n,
+        Ss_field=Ss_n,
+        H_field_si=Hf_n,
         drawdown_mode=drawdown_mode,
         drawdown_rule=drawdown_rule,
         stop_grad_ref=stop_grad_ref,
@@ -1107,28 +1748,36 @@ def compute_consolidation_step_residual(
         relu_beta=relu_beta,
         verbose=verbose,
     )
-    method = str(method).strip().lower()
-    if method == "exact":
-        a = tf_exp(-dt_sec / (tau + tf_constant(_SMALL, tau.dtype)))
+
+    # ---------------------------------------------------------
+    # 7) Stable one-step prediction and residual.
+    # ---------------------------------------------------------
+    m = str(method).strip().lower()
+    if m == "exact":
+        a = tf_exp(-dt_sec / (tau + tf_constant(_EPSILON, tau.dtype)))
         pred = s_n * a + s_eq_n * (1.0 - a)
-    elif method == "euler":
+    elif m == "euler":
         pred = s_n + dt_sec * (s_eq_n - s_n) / (
-            tau + tf_constant(_SMALL, tau.dtype)
+            tau + tf_constant(_EPSILON, tau.dtype)
         )
     else:
         raise ValueError(
-            "compute_consolidation_step_residual:"
-            " method must be 'exact' or 'euler'."
+            "compute_consolidation_step_residual: "
+            "method must be 'exact' or 'euler'."
         )
 
     res = s_np1 - pred
+    res = _finite_or_zero(res)
 
     vprint(
         verbose,
-        "[compute_consolidation_step_residual] residual stats:",
-        "min=", tf_reduce_min(res),
-        "max=", tf_reduce_max(res),
-        "mean=", tf_reduce_mean(res),
+        "[compute_cons_step_res] res stats:",
+        "min=",
+        tf_reduce_min(res),
+        "max=",
+        tf_reduce_max(res),
+        "mean=",
+        tf_reduce_mean(res),
     )
     return res
 
@@ -1139,39 +1788,50 @@ def tau_phys_from_fields(
     Ss_field: Tensor,
     H_field: Tensor,
     *,
+    eps: float = _EPSILON,
     verbose: int = 0,
 ) -> Tuple[Tensor, Tensor]:
-    """Compute tau_phys and Hd."""
-    epsK = tf_constant(1e-12, dtype=tf_float32)
-    eps = tf_constant(1e-12, dtype=tf_float32)
+    """Compute tau_phys (s) and Hd (m)."""
+    eps = float(eps)
     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
 
-    K_safe = tf_maximum(K_field, epsK)
-    Ss_safe = tf_maximum(Ss_field, eps)
-    H_safe = tf_maximum(H_field, eps)
+    K_safe = finite_floor(K_field, eps=eps)
+    Ss_safe = finite_floor(Ss_field, eps=eps)
+    H_safe = finite_floor(H_field, eps=eps)
 
-    if bool(model.use_effective_thickness):
-        Hd = H_safe * tf_cast(model.Hd_factor, H_safe.dtype)
+    use_hd = bool(getattr(model, "use_effective_thickness", False))
+    if use_hd:
+        f = getattr(model, "Hd_factor", 1.0)
+        f = tf_cast(f, H_safe.dtype)
+        f = tf_where(tf_math.is_finite(f), f, tf_constant(1.0, H_safe.dtype))
+        Hd = H_safe * f
     else:
         Hd = H_safe
 
-    Hd = tf_maximum(Hd, eps)
+    Hd = finite_floor(Hd, eps=eps)
     ratio = Hd / H_safe
 
-    if str(model.kappa_mode) == "bar":
+    kappa = model._kappa_value()
+    kappa = tf_cast(kappa, H_safe.dtype)
+    kappa = tf_where(
+        tf_math.is_finite(kappa),
+        kappa,
+        tf_constant(1.0, H_safe.dtype),
+    )
+    kappa = finite_floor(kappa, eps=eps)
+
+    if str(getattr(model, "kappa_mode", "bar")) == "bar":
         tau_phys = (
-            model._kappa_value()
-            * (H_safe ** 2)
-            * Ss_safe
-            / (pi_sq * K_safe)
+            kappa * (H_safe ** 2) * Ss_safe / (pi_sq * K_safe)
         )
     else:
         tau_phys = (
             (ratio ** 2)
-            * (H_safe ** 2)
-            * Ss_safe
-            / (pi_sq * model._kappa_value() * K_safe)
+            * (H_safe ** 2) * Ss_safe
+            / (pi_sq * kappa * K_safe)
         )
+
+    tau_phys = finite_floor(tau_phys, eps=eps)
 
     vprint(verbose, "tau_phys: K=", K_safe)
     vprint(verbose, "tau_phys: Ss=", Ss_safe)
@@ -1180,7 +1840,6 @@ def tau_phys_from_fields(
     vprint(verbose, "tau_phys: out=", tau_phys)
 
     return tau_phys, Hd
-
 
 def compute_consistency_prior(
     model,
@@ -1192,7 +1851,7 @@ def compute_consistency_prior(
     verbose: int = 0,
 ) -> Tensor:
     """Consistency prior: log(tau)-log(tau_phys)."""
-    eps = tf_constant(1e-12, dtype=tf_float32)
+    eps = tf_constant(_EPSILON, dtype=tf_float32)
 
     tau_safe = tf_maximum(tau_field, eps)
     tau_phys, _ = tau_phys_from_fields(
@@ -1264,7 +1923,6 @@ def compute_smoothness_prior(
     
     return out
 
-
 # ---------------------------------------------------------------------
 # Bounds + field composition
 # ---------------------------------------------------------------------
@@ -1275,86 +1933,175 @@ def get_log_bounds(
     dtype=tf_float32,
     verbose: int = 0,
 ) -> Tuple[Any, Any, Any, Any]:
-    """Get (logK_min,logK_max,logSs_min,logSs_max)."""
-    b = (getattr(model, "scaling_kwargs", {}) or {}).get(
-        "bounds",
-        {},
-    ) or {}
+    """
+    Return (logK_min, logK_max, logSs_min, logSs_max).
 
-    def get_pair(
+    Contract:
+    - If bounds are present but invalid (NaN, inf, <=0, max<=min),
+      raise ValueError (do NOT emit NaN logs).
+    - If bounds are missing, return (None, None, None, None).
+    """
+    sk = getattr(model, "scaling_kwargs", None) or {}
+    b = (sk.get("bounds", None) or {}) or {}
+
+    def _as_float(v: Any) -> float:
+        """Best-effort cast to float for config values."""
+        if hasattr(v, "numpy"):
+            v = v.numpy()
+        return float(v)
+
+    def _is_finite(v: float) -> bool:
+        return bool(np.isfinite(v))
+
+    def _validate_lin_pair(
+        vmin: float,
+        vmax: float,
+        *,
+        name_min: str,
+        name_max: str,
+    ) -> Tuple[float, float]:
+        """Validate linear bounds are finite and positive."""
+        if (not _is_finite(vmin)) or (not _is_finite(vmax)):
+            raise ValueError(
+                f"{name_min}/{name_max} must be finite. "
+                f"Got vmin={vmin}, vmax={vmax}."
+            )
+        if (vmin <= 0.0) or (vmax <= 0.0):
+            raise ValueError(
+                f"{name_min}/{name_max} must be > 0. "
+                f"Got vmin={vmin}, vmax={vmax}."
+            )
+        if vmax <= vmin:
+            raise ValueError(
+                f"{name_max} must be > {name_min}. "
+                f"Got vmin={vmin}, vmax={vmax}."
+            )
+        return vmin, vmax
+
+    def _validate_log_pair(
+        lmin: float,
+        lmax: float,
+        *,
+        name_min: str,
+        name_max: str,
+    ) -> Tuple[float, float]:
+        """Validate log-bounds are finite and ordered."""
+        if (not _is_finite(lmin)) or (not _is_finite(lmax)):
+            raise ValueError(
+                f"{name_min}/{name_max} must be finite. "
+                f"Got lmin={lmin}, lmax={lmax}."
+            )
+        if lmax <= lmin:
+            raise ValueError(
+                f"{name_max} must be > {name_min}. "
+                f"Got lmin={lmin}, lmax={lmax}."
+            )
+        return lmin, lmax
+
+    def _maybe_convert_ss_from_mv(
+        vmin: float,
+        vmax: float,
+    ) -> Tuple[float, float]:
+        """
+        Heuristic: if Ss bounds look like m_v, convert using gamma_w.
+
+        This only runs for (Ss_min, Ss_max). If gamma_w is missing
+        or non-finite, we skip conversion (and still validate).
+        """
+        try:
+            gw = getattr(model, "gamma_w", None)
+            if gw is None:
+                return vmin, vmax
+
+            gw_f = _as_float(gw)
+            if (not _is_finite(gw_f)) or (gw_f <= 0.0):
+                return vmin, vmax
+
+            # mv_config.initial_value is only used as a sanity hint.
+            mv0 = getattr(getattr(model, "mv_config", None),
+                          "initial_value", None)
+            mv0 = float(mv0) if mv0 is not None else None
+
+            ss_exp = (mv0 * gw_f) if mv0 else None
+
+            # "looks like mv" = very small upper bound,
+            # and gamma_w looks like N/m^3.
+            looks_mv = (vmax <= 1e-5) and (gw_f > 1e3)
+
+            if looks_mv and (ss_exp is None or ss_exp > 1e-5):
+                logger.warning(
+                    "Ss_min/max look like m_v; convert via "
+                    "Ss = m_v * gamma_w."
+                )
+                return vmin * gw_f, vmax * gw_f
+
+        except:
+            # Never crash: conversion is optional.
+            return vmin, vmax
+
+        return vmin, vmax
+
+    def _get_pair(
         log_min_key: str,
         log_max_key: str,
         lin_min_key: str,
         lin_max_key: str,
-    ):
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        Read either log-bounds or linear bounds and return log-bounds.
+
+        Returns (None, None) if neither form exists.
+        Raises ValueError on invalid values.
+        """
+        # 1) Prefer explicit log-bounds if provided.
         log_min = b.get(log_min_key, None)
         log_max = b.get(log_max_key, None)
 
-        if (log_min is None) or (log_max is None):
-            if (lin_min_key in b) and (lin_max_key in b):
-                vmin = float(b[lin_min_key])
-                vmax = float(b[lin_max_key])
+        if (log_min is not None) and (log_max is not None):
+            lmin = _as_float(log_min)
+            lmax = _as_float(log_max)
+            lmin, lmax = _validate_log_pair(
+                lmin,
+                lmax,
+                name_min=log_min_key,
+                name_max=log_max_key,
+            )
+            return lmin, lmax
 
-                if lin_min_key == "Ss_min" and lin_max_key == "Ss_max":
-                    try:
-                        gw = getattr(model, "gamma_w", None)
-                        gw = float(gw.numpy()) if hasattr(
-                            gw,
-                            "numpy",
-                        ) else float(gw)
-
-                        mv0 = getattr(
-                            getattr(model, "mv_config", None),
-                            "initial_value",
-                            None,
-                        )
-                        mv0 = float(mv0) if mv0 is not None else None
-                        ss_exp = (mv0 * gw) if mv0 else None
-
-                        looks_mv = (vmax <= 1e-5) and (gw > 1e3)
-                        if looks_mv and (
-                            ss_exp is None or ss_exp > 1e-5
-                        ):
-                            vmin *= gw
-                            vmax *= gw
-                            logger.warning(
-                                "Ss_min/max look like m_v; "
-                                "convert via Ss=m_v*gamma_w."
-                            )
-                    except Exception:
-                        pass
-                
-                    if vmin <= 0.0 or vmax <= 0.0:
-                        raise ValueError(
-                            f"{lin_min_key}/{lin_max_key} must be > 0. "
-                            f"Got vmin={vmin}, vmax={vmax}."
-                        )
-                    if vmax <= vmin:
-                        raise ValueError(
-                            f"{lin_max_key} must be > {lin_min_key}. "
-                            f"Got vmin={vmin}, vmax={vmax}."
-                        )
-
-
-                return float(np.log(vmin)), float(np.log(vmax))
-
+        # 2) Otherwise, build from linear bounds if provided.
+        if (lin_min_key not in b) or (lin_max_key not in b):
             return None, None
 
-        return float(log_min), float(log_max)
+        vmin = _as_float(b[lin_min_key])
+        vmax = _as_float(b[lin_max_key])
 
-    logK_min, logK_max = get_pair(
+        # Optional: detect Ss_min/max passed as m_v.
+        if (lin_min_key == "Ss_min") and (lin_max_key == "Ss_max"):
+            vmin, vmax = _maybe_convert_ss_from_mv(vmin, vmax)
+
+        vmin, vmax = _validate_lin_pair(
+            vmin,
+            vmax,
+            name_min=lin_min_key,
+            name_max=lin_max_key,
+        )
+
+        return float(np.log(vmin)), float(np.log(vmax))
+
+    logK_min, logK_max = _get_pair(
         "logK_min",
         "logK_max",
         "K_min",
         "K_max",
     )
-    logSs_min, logSs_max = get_pair(
+    logSs_min, logSs_max = _get_pair(
         "logSs_min",
         "logSs_max",
         "Ss_min",
         "Ss_max",
     )
 
+    # If either set is missing, treat bounds as not configured.
     if (logK_min is None) or (logSs_min is None):
         return (None, None, None, None)
 
@@ -1362,14 +2109,15 @@ def get_log_bounds(
         return logK_min, logK_max, logSs_min, logSs_max
 
     out = (
-        tf_constant(logK_min, dtype),
-        tf_constant(logK_max, dtype),
-        tf_constant(logSs_min, dtype),
-        tf_constant(logSs_max, dtype),
+        tf_constant(float(logK_min), dtype),
+        tf_constant(float(logK_max), dtype),
+        tf_constant(float(logSs_min), dtype),
+        tf_constant(float(logSs_max), dtype),
     )
 
     vprint(verbose, "bounds: out=", out)
     return out
+
 
 def get_log_tau_bounds(
     model,
@@ -1379,68 +2127,116 @@ def get_log_tau_bounds(
     verbose: int = 0,
 ) -> Tuple[Any, Any]:
     """
-    Get (log_tau_min, log_tau_max) for the consolidation timescale.
+    Return (log_tau_min, log_tau_max) for consolidation timescale.
 
-    Tau is in SI seconds (because tau_phys_from_fields returns seconds).
-    Bounds are returned in log-seconds.
-
-    Looks inside model.scaling_kwargs['bounds'] using get_sk() aliases.
-
-    Defaults (safety net):
-      tau_min = 7 days
-      tau_max = 300 years
+    Contract:
+    - If user provides tau bounds but they are invalid (NaN/inf,
+      <=0, max<=min), raise ValueError.
+    - If tau bounds are missing, use robust defaults.
+    - Returned units are log-seconds (tau is SI seconds).
     """
-    bounds = (getattr(model, "scaling_kwargs", {}) or {}).get("bounds", {}) or {}
+    sk = getattr(model, "scaling_kwargs", None) or {}
+    bounds = (sk.get("bounds", None) or {}) or {}
 
-    # 1) explicit log-bounds (log-seconds)
-    log_min = get_sk(bounds, "log_tau_min", default=None, cast=float)
-    log_max = get_sk(bounds, "log_tau_max", default=None, cast=float)
+    def _is_finite(v: float) -> bool:
+        return bool(np.isfinite(v))
 
-    # 2) build from linear bounds (seconds or time_units)
-    if (log_min is None) or (log_max is None):
-        tau_min = get_sk(bounds, "tau_min", default=None, cast=float)
-        tau_max = get_sk(bounds, "tau_max", default=None, cast=float)
+    def _need_raise(v: Optional[float]) -> bool:
+        return (v is not None) and (not _is_finite(float(v)))
 
-        # 2b) bounds in native time_units -> convert to seconds
-        if (tau_min is None) or (tau_max is None):
-            tau_min_u = get_sk(bounds, "tau_min_units", default=None, cast=float)
-            tau_max_u = get_sk(bounds, "tau_max_units", default=None, cast=float)
+    # 1) Explicit log-bounds (already in log-seconds).
+    log_min = get_sk(bounds, "log_tau_min",
+                     default=None, cast=float)
+    log_max = get_sk(bounds, "log_tau_max",
+                     default=None, cast=float)
 
-            if (tau_min_u is not None) and (tau_max_u is not None):
-                sk = getattr(model, "scaling_kwargs", None) or {}
-                tu = (
-                    get_sk(sk, "time_units", default=None)
-                    or getattr(model, "time_units", None)
-                    or "yr"
-                )
-                key = normalize_time_units(tu)
-                sec_per = float(TIME_UNIT_TO_SECONDS.get(key, 1.0))
-                tau_min = float(tau_min_u) * sec_per
-                tau_max = float(tau_max_u) * sec_per
+    if _need_raise(log_min) or _need_raise(log_max):
+        raise ValueError(
+            "log_tau_min/log_tau_max must be finite."
+        )
 
-        # 2c) defaults
-        if (tau_min is None) or (tau_max is None):
-            sec_day = 86400.0
-            sec_year = float(TIME_UNIT_TO_SECONDS.get("yr", 31556952.0))
-            tau_min = 7.0 * sec_day
-            tau_max = 300.0 * sec_year
-            logger.warning(
-                "Tau bounds not found in scaling_kwargs['bounds']; "
-                "using defaults: tau_min=7 days, tau_max=300 years (SI seconds)."
+    if (log_min is not None) and (log_max is not None):
+        if float(log_max) <= float(log_min):
+            raise ValueError(
+                "log_tau_max must be > log_tau_min. "
+                f"Got {log_min}, {log_max}."
+            )
+        if not as_tensor:
+            return float(log_min), float(log_max)
+
+        out = (
+            tf_constant(float(log_min), dtype=dtype),
+            tf_constant(float(log_max), dtype=dtype),
+        )
+        vprint(verbose, "tau_bounds(log-sec):", out)
+        return out
+
+    # 2) Linear tau bounds (seconds).
+    tau_min = get_sk(bounds, "tau_min", default=None, cast=float)
+    tau_max = get_sk(bounds, "tau_max", default=None, cast=float)
+
+    if _need_raise(tau_min) or _need_raise(tau_max):
+        raise ValueError("tau_min/tau_max must be finite.")
+
+    # 2b) Linear tau bounds in "time_units".
+    if (tau_min is None) or (tau_max is None):
+        tau_min_u = get_sk(bounds, "tau_min_units",
+                           default=None, cast=float)
+        tau_max_u = get_sk(bounds, "tau_max_units",
+                           default=None, cast=float)
+
+        if _need_raise(tau_min_u) or _need_raise(tau_max_u):
+            raise ValueError(
+                "tau_min_units/tau_max_units must be finite."
             )
 
-        # sanitize
-        tau_min = max(float(tau_min), _SMALL)
-        tau_max = max(float(tau_max), _SMALL)
-        if tau_max < tau_min:
-            logger.warning("tau_max < tau_min; swapping tau bounds.")
-            tau_min, tau_max = tau_max, tau_min
+        if (tau_min_u is not None) and (tau_max_u is not None):
+            tu = (
+                get_sk(sk, "time_units", default=None)
+                or getattr(model, "time_units", None)
+                or "yr"
+            )
+            key = normalize_time_units(tu)
+            sec_per = float(TIME_UNIT_TO_SECONDS.get(key, 1.0))
+            tau_min = float(tau_min_u) * sec_per
+            tau_max = float(tau_max_u) * sec_per
 
-        log_min = float(np.log(tau_min))
-        log_max = float(np.log(tau_max))
+    # 2c) Defaults if still missing.
+    if (tau_min is None) or (tau_max is None):
+        sec_day = 86400.0
+        sec_year = float(
+            TIME_UNIT_TO_SECONDS.get("yr", 31556952.0),
+        )
+        tau_min = 7.0 * sec_day
+        tau_max = 300.0 * sec_year
+        logger.warning(
+            "Tau bounds not found in scaling_kwargs['bounds']; "
+            "using defaults: tau_min=7 days, "
+            "tau_max=300 years (SI seconds)."
+        )
+
+    tau_min = float(tau_min)
+    tau_max = float(tau_max)
+
+    if (not _is_finite(tau_min)) or (not _is_finite(tau_max)):
+        raise ValueError(
+            f"tau_min/tau_max must be finite. "
+            f"Got {tau_min}, {tau_max}."
+        )
+    if (tau_min <= 0.0) or (tau_max <= 0.0):
+        raise ValueError(
+            f"tau_min/tau_max must be > 0. "
+            f"Got {tau_min}, {tau_max}."
+        )
+    if tau_max < tau_min:
+        logger.warning("tau_max < tau_min; swapping tau bounds.")
+        tau_min, tau_max = tau_max, tau_min
+
+    log_min = float(np.log(tau_min))
+    log_max = float(np.log(tau_max))
 
     if not as_tensor:
-        return float(log_min), float(log_max)
+        return log_min, log_max
 
     out = (
         tf_constant(float(log_min), dtype=dtype),
@@ -1449,19 +2245,55 @@ def get_log_tau_bounds(
     vprint(verbose, "tau_bounds(log-sec):", out)
     return out
 
+
 def bounded_exp(
     raw: Tensor,
     log_min: Tensor,
     log_max: Tensor,
     *,
-    eps: float = 1e-12,
+    eps: float = _EPSILON,
     return_log: bool = False,
     verbose: int = 0,
 ):
-    """Exp with hard log-bounds."""
+    """
+    Exp with hard log-bounds.
+
+    Contract:
+    - Never emit NaN/Inf due to NaN/Inf in `raw`.
+    - (log_min, log_max) are assumed finite; if they are not,
+      we fall back to safe constants to prevent NaNs.
+    """
+    eps_t = tf_constant(float(eps), tf_float32)
+    log_eps = tf_log(eps_t)
+
+    # Sanitize inputs to avoid NaN propagation.
+    raw = tf_cast(raw, tf_float32)
+    raw = tf_where(tf_math.is_finite(raw), raw, tf_zeros_like(raw))
+
+    log_min = tf_cast(log_min, tf_float32)
+    log_max = tf_cast(log_max, tf_float32)
+
+    log_min = tf_where(
+        tf_math.is_finite(log_min),
+        log_min,
+        log_eps,
+    )
+    log_max = tf_where(
+        tf_math.is_finite(log_max),
+        log_max,
+        log_min + tf_constant(1.0, tf_float32),
+    )
+
+    # If user swapped bounds, repair silently (safe + monotone).
+    log_lo = tf_minimum(log_min, log_max)
+    log_hi = tf_maximum(log_min, log_max)
+
+    # Map raw -> (0,1) then interpolate inside [log_lo, log_hi].
     z = tf_sigmoid(raw)
-    logv = log_min + z * (log_max - log_min)
-    out = tf_exp(logv) + tf_constant(eps, tf_float32)
+    logv = log_lo + z * (log_hi - log_lo)
+
+    # Output is positive, with epsilon floor.
+    out = tf_exp(logv) + eps_t
 
     vprint(verbose, "bounded_exp: logv=", logv)
     vprint(verbose, "bounded_exp: out=", out)
@@ -1470,11 +2302,21 @@ def bounded_exp(
         return out, logv
     return out
 
+
 def finite_floor(x: Tensor, eps: float) -> Tensor:
+    """
+    Replace NaN/Inf by eps and floor to eps.
+
+    Useful when you want "never NaN" behaviour, not strict errors.
+    """
     x = tf_cast(x, tf_float32)
     eps_t = tf_constant(float(eps), tf_float32)
     x = tf_where(tf_math.is_finite(x), x, eps_t)
     return tf_maximum(x, eps_t)
+
+def _finite_or_zero(x: Tensor) -> Tensor:
+    x = tf_cast(x, tf_float32)
+    return tf_where(tf_math.is_finite(x), x, tf_zeros_like(x))
 
 def compose_physics_fields(
     model,
@@ -1485,7 +2327,7 @@ def compose_physics_fields(
     Ss_base: Tensor,
     tau_base: Tensor,
     training: bool = False,
-    eps_KSs: float = _SMALL,
+    eps_KSs: float = _EPSILON,
     eps_tau: float = 1e-6,
     verbose: int = 0,
 ):
@@ -1501,10 +2343,15 @@ def compose_physics_fields(
         [tf_zeros_like(coords_flat[..., :1]), coords_flat[..., 1:]],
         axis=-1,
     )
+    coords_xy0 = _finite_or_zero(coords_xy0)
+    
+    K_corr = _finite_or_zero(model.K_coord_mlp(coords_xy0, training=training))
+    Ss_corr = _finite_or_zero(model.Ss_coord_mlp(coords_xy0, training=training))
+    tau_corr = _finite_or_zero(model.tau_coord_mlp(coords_xy0, training=training))
 
-    K_corr = model.K_coord_mlp(coords_xy0, training=training)
-    Ss_corr = model.Ss_coord_mlp(coords_xy0, training=training)
-    tau_corr = model.tau_coord_mlp(coords_xy0, training=training)
+    # K_corr = model.K_coord_mlp(coords_xy0, training=training)
+    # Ss_corr = model.Ss_coord_mlp(coords_xy0, training=training)
+    # tau_corr = model.tau_coord_mlp(coords_xy0, training=training)
 
     if verbose > 6:
         tf_print_nonfinite("compose/K_corr", K_corr)
@@ -1534,9 +2381,23 @@ def compose_physics_fields(
         logSs = rawSs
         K_field = tf_exp(logK) + tf_constant(eps_KSs, logK.dtype)
         Ss_field = tf_exp(logSs) + tf_constant(eps_KSs, logSs.dtype)
+        
+        tf_debugging.assert_all_finite(rawK,  "rawK non-finite")
+        tf_debugging.assert_all_finite(rawSs, "rawSs non-finite")
+        
+        # key: watch the magnitude
+        
+        vprint(verbose, "rawK range MIN", tf_reduce_min(rawK))
+        vprint(verbose, "rawK range MAX", tf_reduce_max(rawSs))
+        vprint(verbose, "rawSs range MIN", tf_reduce_min(rawSs))
+        vprint(verbose, "rawSs range MAX", tf_reduce_max(rawSs))
+        
+        tf_debugging.assert_all_finite(K_field,  "K_field non-finite")
+        tf_debugging.assert_all_finite(Ss_field, "Ss_field non-finite")
+
 
     # ---- tau ( log-space composition + bounds) ----
-    delta_log_tau = tau_base + tau_corr
+    delta_log_tau = _finite_or_zero(tau_base + tau_corr)
 
     if verbose > 6:
         tf_print_nonfinite("compose/rawK", rawK)
@@ -1685,222 +2546,13 @@ def compute_bounds_residual(
     return R_H, R_K, R_Ss
 
 
-# ---------------------------------------------------------------------
-# Time units + scaling
-# ---------------------------------------------------------------------
-TIME_UNIT_TO_SECONDS = {
-    "unitless": 1.0,
-    "step": 1.0,
-    "index": 1.0,
-    "s": 1.0,
-    "sec": 1.0,
-    "second": 1.0,
-    "seconds": 1.0,
-    "min": 60.0,
-    "minute": 60.0,
-    "minutes": 60.0,
-    "h": 3600.0,
-    "hr": 3600.0,
-    "hour": 3600.0,
-    "hours": 3600.0,
-    "day": 86400.0,
-    "days": 86400.0,
-    "week": 7.0 * 86400.0,
-    "weeks": 7.0 * 86400.0,
-    "year": 31556952.0,
-    "years": 31556952.0,
-    "yr": 31556952.0,
-    "month": 31556952.0 / 12.0,
-    "months": 31556952.0 / 12.0,
-}
-
-
-def normalize_time_units(u: Optional[str]) -> str:
-    """Normalize time unit strings."""
-    if u is None:
-        return "unitless"
-
-    s = str(u).strip().lower().replace(" ", "")
-    if "/" in s:
-        s = s.split("/", 1)[1]
-    if s.startswith("1/"):
-        s = s[2:]
-
-    if s == "secs":
-        s = "sec"
-    elif s == "yrs":
-        s = "yr"
-    elif s == "mins":
-        s = "min"
-    elif s == "hrs":
-        s = "hr"
-
-    return s
-
-
-def seconds_per_time_unit(
-    time_units: Optional[str],
-    *,
-    dtype=tf_float32,
-) -> Tensor:
-    """Seconds-per-unit."""
-    key = normalize_time_units(time_units)
-
-    if key not in TIME_UNIT_TO_SECONDS:
-        keys = sorted(TIME_UNIT_TO_SECONDS.keys())
-        raise ValueError(
-            f"Unsupported time_units={time_units!r}. "
-            f"Supported: {keys}"
-        )
-
-    return tf_constant(float(TIME_UNIT_TO_SECONDS[key]), dtype=dtype)
-
 
 @optional_tf_function
-def dt_to_seconds(dt: Tensor, *, time_units: Optional[str]) -> Tensor:
-    """dt(time_units) -> seconds."""
-    sec = seconds_per_time_unit(time_units, dtype=dt.dtype)
-    return dt * sec
-
-
-@optional_tf_function
-def rate_to_per_second(
-    dz_dt: Tensor,
-    *,
-    time_units: Optional[str],
-) -> Tensor:
-    """d/d(time_units) -> d/ds."""
-    sec = seconds_per_time_unit(time_units, dtype=dz_dt.dtype)
-    return dz_dt / (sec + tf_constant(_SMALL, dz_dt.dtype))
-
-
-def smooth_relu(x: Tensor, *, beta: float = 20.0) -> Tensor:
-    """Smooth approximation to relu(x) with controlled curvature."""
-    b = tf_constant(float(beta), dtype=x.dtype)
-    return tf_softplus(b * x) / b
-
-
-def positive(x: Tensor, *, eps: float = _SMALL) -> Tensor:
-    """Softplus positivity."""
-    return tf_softplus(x) + tf_constant(eps, x.dtype)
-
-
-def default_scales(
-    *,
-    s: Tensor,
-    h: Tensor,
-    dt: Tensor,
-    K: Optional[Tensor] = None,
-    Ss: Optional[Tensor] = None,
-    Q: Optional[Tensor] = None,
-    time_units: Optional[str] = "yr",
-    eps: float = 1e-12,
-    min_cons_rate: float = 1e-3,
-    min_gw_scale: float = 1e-12,
-    head_scale_floor: float = 1.0,
-    verbose: int = 0,
-) -> Dict[str, Tensor]:
-    """Default PDE scaling."""
-    if time_units is None:
-        time_units = "yr"
-
-    def flat(x: Tensor) -> Tensor:
-        return tf_reshape(x, [-1])
-
-    if getattr(s, "shape", None) is not None and s.shape.rank == 2:
-        s = s[:, :, None]
-    if getattr(h, "shape", None) is not None and h.shape.rank == 2:
-        h = h[:, :, None]
-
-    dt_sec = dt_to_seconds(dt, time_units=time_units)
-    dt_ref = tf_reduce_mean(tf_abs(flat(dt_sec)))
-
-    floor = seconds_per_time_unit(time_units)
-    dt_ref = tf_maximum(dt_ref, tf_cast(floor, dt_ref.dtype))
-
-    ds = s[:, 1:, :] - s[:, :-1, :]
-    ds_abs = tf_abs(flat(ds))
-    s_abs = tf_abs(flat(s))
-
-    ds_mean = tf_reduce_mean(ds_abs)
-    s_mean = tf_reduce_mean(s_abs)
-
-    T = tf_shape(s)[1]
-    Tm1 = tf_maximum(T - 1, 1)
-    Tm1_f = tf_cast(Tm1, dt_ref.dtype)
-    dt_total = dt_ref * Tm1_f
-
-    rate_inc = ds_mean / dt_ref
-    rate_amp = s_mean / dt_total
-
-    rate_inc_max = tf_reduce_max(ds_abs) / dt_ref
-    rate_amp_max = tf_reduce_max(s_abs) / dt_total
-
-    cons_scale = tf_maximum(
-        tf_maximum(rate_inc, rate_amp),
-        0.1 * tf_maximum(rate_inc_max, rate_amp_max),
-    )
-
-    cons_floor = rate_to_per_second(
-        tf_cast(min_cons_rate, cons_scale.dtype),
-        time_units=time_units,
-    )
-    cons_scale = tf_maximum(cons_scale, cons_floor)
-    cons_scale = tf_maximum(
-        cons_scale,
-        tf_cast(eps, cons_scale.dtype),
-    )
-
-    dh = h[:, 1:, :] - h[:, :-1, :]
-    dh_abs = tf_abs(flat(dh))
-    h_abs = tf_abs(flat(h))
-
-    dh_mean = tf_reduce_mean(dh_abs)
-    h_mean = tf_reduce_mean(h_abs)
-
-    dh_dt_inc = dh_mean / dt_ref
-    dh_dt_amp = h_mean / dt_total
-    dh_dt_ref = tf_maximum(dh_dt_inc, dh_dt_amp)
-
-    head_scale = tf_maximum(
-        h_mean,
-        tf_cast(head_scale_floor, dh_dt_ref.dtype),
-    )
-
-    if Ss is not None:
-        Ss_ref = tf_reduce_mean(tf_abs(flat(Ss)))
-    else:
-        Ss_ref = 1.0 / head_scale
-
-    gw_scale_1 = Ss_ref * dh_dt_ref
-    gw_scale_2 = dh_dt_ref / head_scale
-    gw_scale = tf_maximum(gw_scale_1, gw_scale_2)
-    gw_scale = tf_maximum(
-        gw_scale,
-        tf_cast(min_gw_scale, gw_scale.dtype),
-    )
-    gw_scale = tf_maximum(
-        gw_scale,
-        tf_cast(eps, gw_scale.dtype),
-    )
-
-    # v3.2: include forcing magnitude when Q is present so GW residual
-    # doesn't collapse to ~1e-9 due to unit/scale mismatch.
-    if Q is not None:
-        Qv = tf_convert_to_tensor(Q, dtype=tf_float32)
-        Q_ref = tf_reduce_mean(tf_abs(flat(Qv)))
-        gw_scale = tf_maximum(
-            gw_scale,
-            tf_cast(Q_ref, gw_scale.dtype) + tf_constant(eps, gw_scale.dtype),
-        )
-
-    out = {"cons_scale": cons_scale, "gw_scale": gw_scale}
-
-    vprint(verbose, "scales:", out)
-    return out
-
-@optional_tf_function
-def scale_residual(residual: Tensor, scale: Tensor, *, floor: float = _SMALL) -> Tensor:
+def scale_residual(
+    residual: Tensor, 
+    scale: Tensor, *, 
+    floor: float = _EPSILON
+ ) -> Tensor:
     s = tf_cast(scale, residual.dtype)
     f = tf_constant(float(floor), residual.dtype)
 
@@ -1909,10 +2561,192 @@ def scale_residual(residual: Tensor, scale: Tensor, *, floor: float = _SMALL) ->
 
     s = tf_maximum(s, f)
     s = tf_stop_gradient(s)
-    return residual / (s + tf_constant(_SMALL, residual.dtype))
+    return residual / (s + tf_constant(_EPSILON, residual.dtype))
+
+@optional_tf_function
+def _cons_scale_core(
+    *,
+    s: Tensor,
+    h: Tensor,
+    Ss: Tensor,
+    dt_ref_u: Tensor,
+    dt_ref_s: Tensor,
+    mode: str,
+    time_units: str,
+    tau: Tensor,
+    Hf: Tensor,
+    href: Tensor,
+    use_relax: bool,
+    floor: float,
+) -> Tensor:
+    """
+    Consolidation scale.
+
+    Output units match the consolidation residual units:
+    - "step": meters/step
+    - "time_unit": meters/time_unit
+    - "si": meters/second
+    """
+    eps = tf_constant(_EPSILON, tf_float32)
+    floor_t = tf_constant(float(floor), tf_float32)
+
+    # Sanitize inputs (no NaN/Inf in reductions).
+    s = _finite_or_zero(s)
+    h = _finite_or_zero(h)
+    Ss = _finite_or_zero(Ss)
+
+    dt_ref_u = finite_floor(dt_ref_u, _EPSILON)
+    dt_ref_s = finite_floor(dt_ref_s, _EPSILON)
+
+    # --- ds statistics (meters).
+    if tf_shape(s)[1] > 1:
+        ds = s[:, 1:, :] - s[:, :-1, :]
+        ds_abs = tf_abs(tf_reshape(_finite_or_zero(ds), [-1]))
+        ds_ref = tf_stop_gradient(tf_reduce_mean(ds_abs))
+        ds_max = tf_stop_gradient(tf_reduce_max(ds_abs))
+    else:
+        ds_ref = tf_constant(0.0, tf_float32)
+        ds_max = tf_constant(0.0, tf_float32)
+
+    # Base scale from ds (step / rate).
+    if mode == "step":
+        cons = tf_maximum(ds_ref, 0.1 * ds_max)
+    elif mode == "time_unit":
+        cons = tf_maximum(
+            ds_ref / dt_ref_u,
+            0.1 * (ds_max / dt_ref_u),
+        )
+    else:
+        cons = tf_maximum(
+            ds_ref / dt_ref_s,
+            0.1 * (ds_max / dt_ref_s),
+        )
+
+    # Optional equilibrium / relaxation term.
+    if use_relax:
+        tau = finite_floor(tau, _EPSILON)
+        Hf = tf_maximum(_finite_or_zero(Hf), 0.0)
+        href = _finite_or_zero(href)
+
+        dh = tf_maximum(href - h, 0.0)
+        s_eq = Ss * dh * Hf
+
+        eq_mis = tf_abs(_finite_or_zero(s_eq - s))
+        eq_ref = tf_stop_gradient(
+            tf_reduce_mean(tf_reshape(eq_mis, [-1])) + eps
+        )
+        eq_max = tf_stop_gradient(
+            tf_reduce_max(tf_reshape(eq_mis, [-1])) + eps
+        )
+
+        if mode == "step":
+            cons = tf_maximum(cons, eq_ref)
+            cons = tf_maximum(cons, 0.1 * eq_max)
+        else:
+            relax = tf_abs(eq_mis / (tau + eps))
+
+            if mode == "time_unit":
+                sec_u = seconds_per_time_unit(
+                    time_units,
+                    dtype=tf_float32,
+                )
+                relax = relax * sec_u
+
+            relax = _finite_or_zero(relax)
+            r_ref = tf_stop_gradient(
+                tf_reduce_mean(tf_reshape(relax, [-1])) + eps
+            )
+            r_max = tf_stop_gradient(
+                tf_reduce_max(tf_reshape(relax, [-1])) + eps
+            )
+            cons = tf_maximum(cons, r_ref)
+            cons = tf_maximum(cons, 0.1 * r_max)
+
+    cons = tf_maximum(cons, floor_t)
+    return tf_stop_gradient(cons)
 
 
 @optional_tf_function
+def _gw_scale_core(
+    *,
+    h: Tensor,
+    Ss: Tensor,
+    dt_ref_s: Tensor,
+    time_units: str,
+    gw_units: str,
+    dh_dt: Optional[Tensor],
+    div_K_grad_h: Optional[Tensor],
+    Q: Optional[Tensor],
+    floor: float,
+) -> Tensor:
+    """
+    Groundwater scale.
+
+    Base SI terms are in 1/s:
+    - storage: Ss * dh/dt
+    - div:     div(K grad h) / H^2 (precomputed upstream)
+    - forcing: Q (per-volume) / (??) (precomputed upstream)
+    """
+    eps = tf_constant(_EPSILON, tf_float32)
+    floor_t = tf_constant(float(floor), tf_float32)
+
+    h = _finite_or_zero(h)
+    Ss = _finite_or_zero(Ss)
+    dt_ref_s = finite_floor(dt_ref_s, _EPSILON)
+
+    # dh/dt reference (SI: m/s).
+    if dh_dt is None:
+        if tf_shape(h)[1] > 1:
+            dh = h[:, 1:, :] - h[:, :-1, :]
+            dh_abs = tf_abs(tf_reshape(_finite_or_zero(dh), [-1]))
+            dh_ref = tf_stop_gradient(tf_reduce_mean(dh_abs))
+            dh_max = tf_stop_gradient(tf_reduce_max(dh_abs))
+            dh_dt_ref = dh_ref / dt_ref_s
+            dh_dt_max = dh_max / dt_ref_s
+        else:
+            dh_dt_ref = tf_constant(0.0, tf_float32)
+            dh_dt_max = tf_constant(0.0, tf_float32)
+    else:
+        d = tf_abs(tf_reshape(_finite_or_zero(dh_dt), [-1]))
+        dh_dt_ref = tf_stop_gradient(tf_reduce_mean(d))
+        dh_dt_max = tf_stop_gradient(tf_reduce_max(d))
+
+    # Ss reference (1/m).
+    Ss_abs = tf_abs(tf_reshape(_finite_or_zero(Ss), [-1]))
+    Ss_ref = tf_stop_gradient(tf_reduce_mean(Ss_abs))
+
+    storage_ref = Ss_ref * dh_dt_ref
+    storage_max = Ss_ref * dh_dt_max
+    gw = tf_maximum(storage_ref, 0.1 * storage_max)
+
+    if div_K_grad_h is not None:
+        divv = tf_abs(tf_reshape(_finite_or_zero(div_K_grad_h),
+                                 [-1]))
+        div_ref = tf_stop_gradient(tf_reduce_mean(divv) + eps)
+        div_max = tf_stop_gradient(tf_reduce_max(divv) + eps)
+        gw = tf_maximum(gw, div_ref)
+        gw = tf_maximum(gw, 0.1 * div_max)
+
+    if Q is not None:
+        QQ = tf_abs(tf_reshape(_finite_or_zero(Q), [-1]))
+        Q_ref = tf_stop_gradient(tf_reduce_mean(QQ) + eps)
+        Q_max = tf_stop_gradient(tf_reduce_max(QQ) + eps)
+        gw = tf_maximum(gw, Q_ref)
+        gw = tf_maximum(gw, 0.1 * Q_max)
+
+    gw = tf_maximum(gw, floor_t)
+
+    # Optional "per time_unit" scaling (not SI).
+    if gw_units == "time_unit":
+        sec_u = seconds_per_time_unit(
+            time_units,
+            dtype=tf_float32,
+        )
+        gw = gw * sec_u
+
+    return tf_stop_gradient(gw)
+
+
 def compute_scales(
     model,
     *,
@@ -1925,271 +2759,158 @@ def compute_scales(
     H_field: Optional[Tensor] = None,
     h_ref_si: Optional[Tensor] = None,
     Q: Optional[Tensor] = None,
-    # NEW: pass the SAME dt/time_units used to build cons_res
     dt: Optional[Tensor] = None,
     time_units: Optional[str] = None,
-    # NEW: pass real GW terms if available
     dh_dt: Optional[Tensor] = None,
     div_K_grad_h: Optional[Tensor] = None,
     verbose: int = 0,
 ) -> Dict[str, Tensor]:
     """
-    Robust residual scales for v3.2.
+    Robust residual scales (v3.2).
 
-    - - cons_scale matches cons_res units.
-    - gw_scale is based on magnitudes of storage/div/forcing terms (SI).
+    This wrapper is *not* tf.function-traced because it
+    accepts a Python `model` object.
     """
-    
-
-    sk = model.scaling_kwargs or {}
+    sk = getattr(model, "scaling_kwargs", None) or {}
     mode = resolve_cons_units(sk)
+    gw_units = resolve_gw_units(sk)
 
-    # -----------------------------
-    # 0) Normalize shapes
-    # -----------------------------
+    # --- Normalize ranks to (B,H,1).
     s = tf_cast(s_mean, tf_float32)
     h = tf_cast(h_mean, tf_float32)
-
     if s.shape.rank == 2:
         s = s[:, :, None]
     if h.shape.rank == 2:
         h = h[:, :, None]
 
-    # -----------------------------
-    # 1) Choose time_units CONSISTENTLY
-    # -----------------------------
+    # --- Time units (consistent source of truth).
     if time_units is None:
         time_units = (
-            get_sk(getattr(model, "scaling_kwargs", None), 
-                   "time_units", default=None)
+            get_sk(sk, "time_units", default=None)
             or getattr(model, "time_units", None)
             or "unitless"
         )
 
-    # -----------------------------
-    # 2) Build dt (in same units as residual construction)
-    # -----------------------------
+    # --- Build dt in *time_units*.
     if dt is None:
-        # infer from t if not provided
         tt = tf_cast(t, tf_float32)
         if tt.shape.rank == 2:
             tt = tt[:, :, None]
 
-        if (tt.shape.rank >= 2) and (tt.shape[1] is not None) and (tt.shape[1] > 1):
+        if (tt.shape.rank >= 2) and (tf_shape(tt)[1] > 1):
             dt_step = tt[:, 1:, :] - tt[:, :-1, :]
         else:
             dt_step = tf_zeros_like(s[:, :1, :]) + 1.0
 
-        # de-normalize if coords_normalized=True
-        coords_norm = bool((model.scaling_kwargs or {}).get("coords_normalized", False))
-        tR, _, _ = coord_ranges(model.scaling_kwargs or {})
+        # De-normalize if coords were normalized.
+        coords_norm = bool(sk.get("coords_normalized", False))
+        tR, _, _ = coord_ranges(sk)
         if coords_norm and tR:
-            dt_step = dt_step * tf_cast(float(tR), dt_step.dtype)
+            dt_step = dt_step * tf_cast(float(tR),
+                                        tf_float32)
     else:
         dt_step = tf_cast(dt, tf_float32)
         if dt_step.shape.rank == 2:
             dt_step = dt_step[:, :, None]
 
-    # dt_step should be (B,H,1) OR (B,H-1,1). We'll need a per-step dt_sec.
+    # Sanitize dt before any conversion/reduction.
+    dt_step = tf_abs(_finite_or_zero(dt_step))
+    dt_step = finite_floor(dt_step, _EPSILON)
+
     dt_sec = dt_to_seconds(dt_step, time_units=time_units)
-    dt_sec = tf_maximum(dt_sec, tf_constant(_SMALL, tf_float32))
+    dt_sec = tf_abs(_finite_or_zero(dt_sec))
+    dt_sec = finite_floor(dt_sec, _EPSILON)
 
-    # A single reference dt for scaling (mean over batch & time)
-    dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(tf_reshape(dt_sec, [-1]))))
-    dt_ref = tf_maximum(dt_ref, _SMALL) 
+    # Scalar dt refs.
+    dt_ref_u = tf_reduce_mean(tf_reshape(dt_step, [-1]))
+    dt_ref_u = finite_floor(dt_ref_u, _EPSILON)
 
-    # -----------------------------
-    # 3) Consolidation scale (rate) = max(|ds/dt|, |(s_eq - s)/tau|)
-    # -----------------------------
-    # Estimate ds/dt from s_mean
-    # Use differences along time: ds has shape (B,H-1,1)
-    eps = tf_constant(_SMALL, tf_float32)
-    
-    # dt in native time_units (scalar ref)
-    dt_ref_u = tf_stop_gradient(
-        tf_reduce_mean(
-            tf_abs(tf_reshape(dt_step, [-1]))
-        )
+    dt_ref_s = tf_reduce_mean(tf_reshape(dt_sec, [-1]))
+    dt_ref_s = finite_floor(dt_ref_s, _EPSILON)
+
+    # Prefer a sane SI lower bound when dt is broken.
+    sec_u = seconds_per_time_unit(
+        time_units,
+        dtype=tf_float32,
     )
-    dt_ref_u = tf_maximum(dt_ref_u, eps)
-    
-    # dt in seconds (scalar ref)
-    dt_ref = tf_stop_gradient(
-        tf_reduce_mean(
-            tf_abs(tf_reshape(dt_sec, [-1]))
-        )
-    )
-    dt_ref = tf_maximum(
-        dt_ref,
-        seconds_per_time_unit(
-            time_units,
-            dtype=tf_float32,
-        ),
-    )
-    
-    # ds magnitude (meters)
-    if tf_shape(s)[1] > 1:
-        ds = s[:, 1:, :] - s[:, :-1, :]
-        ds_abs = tf_abs(tf_reshape(ds, [-1]))
-        ds_ref = tf_stop_gradient(tf_reduce_mean(ds_abs))
-        ds_max = tf_stop_gradient(tf_reduce_max(ds_abs))
-    else:
-        ds_ref = tf_constant(0.0, tf_float32)
-        ds_max = tf_constant(0.0, tf_float32)
-    
-    if mode == "step":
-        cons_scale = tf_maximum(ds_ref, 0.1 * ds_max)
-    
-    elif mode == "time_unit":
-        cons_scale = tf_maximum(
-            ds_ref / dt_ref_u,
-            0.1 * (ds_max / dt_ref_u),
-        )
-    
-    else:
-        cons_scale = tf_maximum(
-            ds_ref / dt_ref,
-            0.1 * (ds_max / dt_ref),
-        )
-    
-    # Add equilibrium / relaxation magnitude if tau/H available
-    if (tau_field is not None) and (H_field is not None):
-        tau = tf_maximum(tf_cast(tau_field, tf_float32), eps)
-    
-        href = h_ref_si
-        if href is None:
-            href = tf_cast(getattr(model, "h_ref", 0.0), tf_float32)
-        href = tf_broadcast_to(
-            tf_convert_to_tensor(href, tf_float32),
-            tf_shape(h),
-        )
-    
-        delta_h = tf_maximum(href - h, 0.0)
-        s_eq = (
-            tf_cast(Ss_field, tf_float32)
-            * delta_h
-            * tf_cast(H_field, tf_float32)
-        )
-    
-        eq_mis = tf_abs(s_eq - s)
-        eq_ref = tf_stop_gradient(
-            tf_reduce_mean(tf_reshape(eq_mis, [-1])) + eps
-        )
-        eq_max = tf_stop_gradient(
-            tf_reduce_max(tf_reshape(eq_mis, [-1])) + eps
-        )
-    
-        if mode == "step":
-            cons_scale = tf_maximum(cons_scale, eq_ref)
-            cons_scale = tf_maximum(cons_scale, 0.1 * eq_max)
-    
-        else:
-            relax = tf_abs(eq_mis / (tau + eps))
-    
-            if mode == "time_unit":
-                sec_u = seconds_per_time_unit(
-                    time_units,
-                    dtype=tf_float32,
-                )
-                relax = relax * sec_u
-    
-            r_ref = tf_stop_gradient(
-                tf_reduce_mean(tf_reshape(relax, [-1])) + eps
-            )
-            r_max = tf_stop_gradient(
-                tf_reduce_max(tf_reshape(relax, [-1])) + eps
-            )
-    
-            cons_scale = tf_maximum(cons_scale, r_ref)
-            cons_scale = tf_maximum(cons_scale, 0.1 * r_max)
-    
-    # Unit-aware floor
-    floor_def = _SMALL
+    dt_ref_s = tf_maximum(dt_ref_s, sec_u)
+
+    # --- h_ref broadcast (finite).
+    if h_ref_si is None:
+        h_ref_si = tf_cast(getattr(model, "h_ref", 0.0),
+                           tf_float32)
+    href = tf_convert_to_tensor(h_ref_si, tf_float32)
+    href = tf_broadcast_to(href, tf_shape(h))
+    href = _finite_or_zero(href)
+
+    # --- Floors.
+    cons_floor_def = _EPSILON
     if mode in ("step", "time_unit"):
-        floor_def = 1e-6
-    
-    floor_val = float(get_sk(sk, "cons_scale_floor", default=floor_def))
+        cons_floor_def = 1e-6
 
-    cons_scale = tf_maximum(
-        cons_scale,
-        tf_constant(floor_val, tf_float32),
+    cons_floor = float(
+        get_sk(sk, "cons_scale_floor", default=cons_floor_def)
     )
-    
-    cons_scale = tf_stop_gradient(cons_scale)
+    gw_floor = float(
+        get_sk(sk, "gw_scale_floor", default=_EPSILON)
+    )
 
+    # --- Optional tau/H (shape-safe).
+    use_relax = (tau_field is not None) and (H_field is not None)
 
-    # -----------------------------
-    # 4) GW scale = max(|Ss dh/dt|, |div|, |Q|)
-    # -----------------------------
-    # dh/dt reference:
-    if dh_dt is None:
-        if tf_shape(h)[1] > 1:
-            dh = h[:, 1:, :] - h[:, :-1, :]
-            dh_abs = tf_abs(tf_reshape(dh, [-1]))
-            dh_dt_ref = tf_stop_gradient(tf_reduce_mean(dh_abs) / dt_ref)
-            dh_dt_max = tf_stop_gradient(tf_reduce_max(dh_abs) / dt_ref)
-        else:
-            dh_dt_ref = tf_constant(0.0, tf_float32)
-            dh_dt_max = tf_constant(0.0, tf_float32)
+    if use_relax:
+        tau = tf_cast(tau_field, tf_float32)
+        Hf = tf_cast(H_field, tf_float32)
+        if tau.shape.rank == 2:
+            tau = tau[:, :, None]
+        if Hf.shape.rank == 2:
+            Hf = Hf[:, :, None]
+        tau = tf_broadcast_to(tau, tf_shape(h))
+        Hf = tf_broadcast_to(Hf, tf_shape(h))
     else:
-        dh_dt_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(tf_reshape(tf_cast(dh_dt, tf_float32), [-1]))))
-        dh_dt_max = tf_stop_gradient(tf_reduce_max(tf_abs(tf_reshape(tf_cast(dh_dt, tf_float32), [-1]))))
+        tau = tf_ones_like(h)
+        Hf = tf_zeros_like(h)
 
-    Ss_ref = tf_stop_gradient(tf_reduce_mean(tf_abs(tf_reshape(tf_cast(Ss_field, tf_float32), [-1]))))
-    storage_ref = Ss_ref * dh_dt_ref
-    storage_max = Ss_ref * dh_dt_max
+    # --- Sanitize Ss once, then reuse.
+    Ss = tf_cast(Ss_field, tf_float32)
+    if Ss.shape.rank == 2:
+        Ss = Ss[:, :, None]
+    Ss = tf_broadcast_to(Ss, tf_shape(h))
+    Ss = _finite_or_zero(Ss)
 
-    gw_scale = tf_maximum(storage_ref, tf_constant(0.1, tf_float32) * storage_max)
-
-    if div_K_grad_h is not None:
-        div_abs = tf_abs(tf_reshape(tf_cast(div_K_grad_h, tf_float32), [-1]))
-        div_ref = tf_stop_gradient(tf_reduce_mean(div_abs) + tf_constant(1e-12, tf_float32))
-        div_max = tf_stop_gradient(tf_reduce_max(div_abs) + tf_constant(1e-12, tf_float32))
-        gw_scale = tf_maximum(gw_scale, div_ref)
-        gw_scale = tf_maximum(gw_scale, tf_constant(0.1, tf_float32) * div_max)
-
-    if Q is not None:
-        Q_abs = tf_abs(tf_reshape(tf_cast(Q, tf_float32), [-1]))
-        Q_ref = tf_stop_gradient(tf_reduce_mean(Q_abs) + tf_constant(1e-12, tf_float32))
-        Q_max = tf_stop_gradient(tf_reduce_max(Q_abs) + tf_constant(1e-12, tf_float32))
-        gw_scale = tf_maximum(gw_scale, Q_ref)
-        gw_scale = tf_maximum(gw_scale, tf_constant(0.1, tf_float32) * Q_max)
-
-    gw_floor = tf_constant(
-        float(get_sk(
-            getattr(model, "scaling_kwargs", None), "gw_scale_floor", default=1e-12)),
-        tf_float32
+    cons_scale = _cons_scale_core(
+        s=s,
+        h=h,
+        Ss=Ss,
+        dt_ref_u=dt_ref_u,
+        dt_ref_s=dt_ref_s,
+        mode=mode,
+        time_units=time_units,
+        tau=tau,
+        Hf=Hf,
+        href=href,
+        use_relax=use_relax,
+        floor=cons_floor,
     )
 
-    gw_scale = tf_maximum(gw_scale, gw_floor)
-    gw_scale = tf_stop_gradient(gw_scale)
-    
-    if resolve_gw_units(sk) == "time_unit":
-        sec_u = seconds_per_time_unit(time_units, dtype=tf_float32)
-        gw_scale = gw_scale * sec_u
-
-
-    out = {"cons_scale": cons_scale, "gw_scale": gw_scale}
+    gw_scale = _gw_scale_core(
+        h=h,
+        Ss=Ss,
+        dt_ref_s=dt_ref_s,
+        time_units=time_units,
+        gw_units=gw_units,
+        dh_dt=dh_dt,
+        div_K_grad_h=div_K_grad_h,
+        Q=Q,
+        floor=gw_floor,
+    )
 
     if verbose > 0:
-        vprint(
-            verbose,
-            "cons_scale:",
-            "min=", tf_reduce_min(cons_scale),
-            "mean=", tf_reduce_mean(cons_scale),
-            "max=", tf_reduce_max(cons_scale),
-        )
-        vprint(
-            verbose,
-            "gw_scale:",
-            "min=", tf_reduce_min(gw_scale),
-            "mean=", tf_reduce_mean(gw_scale),
-            "max=", tf_reduce_max(gw_scale),
-        )
-    vprint(verbose, "compute_scales(v3.2): time_units=", time_units)
-    vprint(verbose, "compute_scales(v3.2): cons_scale=", 
-           cons_scale, "gw_scale=", gw_scale)
-    return out
+        _stats("cons_scale", cons_scale)
+        _stats("gw_scale", gw_scale)
+
+    return {"cons_scale": cons_scale, "gw_scale": gw_scale}
+
 
 def resolve_gw_units(sk):
     v = get_sk(sk, "gw_residual_units", default="time_unit")
@@ -2539,6 +3260,158 @@ def resolve_cons_drawdown_options(
         "relu_beta": beta,
     }
 
+# ---------------------------------------
+# Helpers 
+# ---------------------------------------
+
+def normalize_time_units(u: Optional[str]) -> str:
+    """Normalize time unit strings."""
+    if u is None:
+        return "unitless"
+
+    s = str(u).strip().lower().replace(" ", "")
+    if "/" in s:
+        s = s.split("/", 1)[1]
+    if s.startswith("1/"):
+        s = s[2:]
+
+    if s == "secs":
+        s = "sec"
+    elif s == "yrs":
+        s = "yr"
+    elif s == "mins":
+        s = "min"
+    elif s == "hrs":
+        s = "hr"
+
+    return s
+
+
+def seconds_per_time_unit(
+    time_units: Optional[str],
+    *,
+    dtype=tf_float32,
+) -> Tensor:
+    """Seconds-per-unit."""
+    key = normalize_time_units(time_units)
+
+    if key not in TIME_UNIT_TO_SECONDS:
+        keys = sorted(TIME_UNIT_TO_SECONDS.keys())
+        raise ValueError(
+            f"Unsupported time_units={time_units!r}. "
+            f"Supported: {keys}"
+        )
+
+    return tf_constant(float(TIME_UNIT_TO_SECONDS[key]), dtype=dtype)
+
+
+# ---------------------------------------------------------------------
+# v3.2 helpers: physics-driven mean settlement via stable stepping
+# ---------------------------------------------------------------------
+
+def ensure_3d(x: Tensor) -> Tensor:
+    """
+    Return a rank-3 tensor, preferring static rank when available.
+
+    Rules
+    -----
+    r=0 -> (1,1,1)
+    r=1 -> (1,N,1)
+    r=2 -> (B,H,1)
+    r=3 -> unchanged
+    """
+    x = tf_convert_to_tensor(x)
+    r_static = x.shape.rank
+
+    # --- Fast path: static rank known (works great with KerasTensors) ---
+    if r_static is not None:
+        if r_static == 0:
+            # scalar -> (1,1,1)
+            return tf_reshape(x, [1, 1, 1])
+        if r_static == 1:
+            # (B,) -> (B,1,1)
+            n = tf_shape(x)[0]
+            return tf_reshape(x, [1, n, 1])
+        if r_static == 2:
+            return tf_expand_dims(x, axis=-1)
+        if r_static == 3:
+            return x
+        raise ValueError(f"_ensure_3d: rank {r_static} not supported")
+
+    # --- Fallback: dynamic rank (only if static is unknown) ---
+    r = tf_rank(x)
+
+    def r0():
+        return tf_reshape(x, [1, 1, 1])
+
+    def r1():
+        n = tf_shape(x)[0]
+        return tf_reshape(x, [1, n, 1])
+
+    def r2():
+        # (B,H) -> (B,H,1)
+        return tf_expand_dims(x, axis=-1)
+
+    def r3():
+        # already (B,H,1)
+        return x
+
+    x = tf_cond(tf_equal(r, 0), r0, lambda: x)
+    x = tf_cond(tf_equal(tf_rank(x), 1), r1, lambda: x)
+    x = tf_cond(tf_equal(tf_rank(x), 2), r2, lambda: x)
+    tf_debugging.assert_equal(
+        tf_rank(x), 3, 
+        message="_ensure_3d must return rank-3"
+    )
+    return x
+
+def _ensure_3d(x: Tensor) -> Tensor:
+    """Ensure (B,T,1) shape."""
+    if getattr(x, "shape", None) is not None and x.shape.rank == 2:
+        return x[:, :, None]
+    return x
+
+
+def _broadcast_like(x: Optional[Tensor], like: Tensor) -> Tensor:
+    """Convert and broadcast x to the shape of `like` (dtype preserved)."""
+    if x is None:
+        return tf_zeros_like(like)
+    xt = tf_convert_to_tensor(x, dtype=like.dtype)
+    return tf_broadcast_to(xt, tf_shape(like))
+
+
+@optional_tf_function
+def dt_to_seconds(dt: Tensor, *, time_units: Optional[str]) -> Tensor:
+    """dt(time_units) -> seconds."""
+    dt = tf_convert_to_tensor(dt)
+    dt = tf_cast(dt, tf_float32)
+    dt = _finite_or_zero(dt)  # NaN/Inf -> 0
+    dt = tf_maximum(dt, tf_constant(0.0, dt.dtype))  # no negative dt
+    sec = seconds_per_time_unit(time_units, dtype=dt.dtype)
+    return dt * sec
+
+
+@optional_tf_function
+def rate_to_per_second(
+    dz_dt: Tensor,
+    *,
+    time_units: Optional[str],
+) -> Tensor:
+    """d/d(time_units) -> d/ds."""
+    sec = seconds_per_time_unit(time_units, dtype=dz_dt.dtype)
+    return dz_dt / (sec + tf_constant(_EPSILON, dz_dt.dtype))
+
+
+def smooth_relu(x: Tensor, *, beta: float = 20.0) -> Tensor:
+    """Smooth approximation to relu(x) with controlled curvature."""
+    b = tf_constant(float(beta), dtype=x.dtype)
+    return tf_softplus(b * x) / b
+
+
+def positive(x: Tensor, *, eps: float = _EPSILON) -> Tensor:
+    """Softplus positivity."""
+    return tf_softplus(x) + tf_constant(eps, x.dtype)
+
 def _stats(name: str, x: Tensor) -> None:
     x = tf_cast(x, tf_float32)
     tf_print(
@@ -2553,3 +3426,15 @@ def _stats(name: str, x: Tensor) -> None:
 def _frac_leq_zero(x: Tensor) -> Tensor:
     x = tf_cast(x, tf_float32)
     return tf_reduce_mean(tf_cast(x <= 0.0, tf_float32))
+
+def _assert_grads_finite(
+    grads: list[Tensor | None],
+    vars_: list[Tensor],
+) -> None:
+    for g, v in zip(grads, vars_):
+        if g is None:
+            continue
+        tf_debugging.assert_all_finite(
+            g,
+            f"NaN/Inf grad for {v.name}",
+        )

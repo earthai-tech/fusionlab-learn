@@ -69,7 +69,8 @@ from fusionlab.utils.scale_metrics import (
     per_horizon_metrics,
 )
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
-from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet
+from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet # CHANGE module later
+from fusionlab.nn.pinn.models import  PoroElasticSubsNet
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
 from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn, _to_py
@@ -1038,6 +1039,7 @@ if head_scale_si is None or head_bias_si is None:
         bias_key="HEAD_BIAS_SI",
     )
     
+
 subsmodel_params["scaling_kwargs"].update({
     "subs_scale_si": subs_scale_si,
     "subs_bias_si": subs_bias_si,
@@ -1078,7 +1080,164 @@ subsmodel_params["scaling_kwargs"].update({
     ),
     "cons_drawdown_clip_max": sk.get("cons_drawdown_clip_max",cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)),
     "cons_relu_beta": sk.get("cons_relu_beta",cfg.get("CONS_RELU_BETA", 20.0)),
+    
+    "mv_prior_units": sk.get('mv_prior_units', cfg.get("MV_PRIOR_UNITS", "auto")), 
+    "mv_alpha_disp": sk.get('mv_alpha_disp', cfg.get("MV_ALPHA_DISP", 0.1)), 
+    "mv_huber_delta":  sk.get('mv_huber_delta', cfg.get("MV_HUBER_DELTA", 1.0)), 
+    
+    
+    
+})
 
+# -------------------------------------------------------------------------
+# MV prior schedule (Stage-2 robust even with legacy Stage-1 manifests)
+# -------------------------------------------------------------------------
+MV_PRIOR_MODE = str(sk.get("mv_prior_mode", cfg.get("MV_PRIOR_MODE", "calibrate")))
+MV_WEIGHT     = float(sk.get("mv_weight", cfg.get("MV_WEIGHT", 1e-3)))
+
+MV_SCHEDULE_UNIT = str(sk.get("mv_schedule_unit", cfg.get(
+    "MV_SCHEDULE_UNIT", "epoch"))).strip().lower()
+
+MV_DELAY_EPOCHS  = int(sk.get("mv_delay_epochs",  cfg.get("MV_DELAY_EPOCHS", 1)))
+MV_WARMUP_EPOCHS = int(sk.get("mv_warmup_epochs", cfg.get("MV_WARMUP_EPOCHS", 2)))
+
+MV_DELAY_STEPS   = sk.get("mv_delay_steps",  cfg.get("MV_DELAY_STEPS", None))
+MV_WARMUP_STEPS  = sk.get("mv_warmup_steps", cfg.get("MV_WARMUP_STEPS", None))
+
+if MV_SCHEDULE_UNIT not in ("epoch", "step"):
+    raise ValueError("MV_SCHEDULE_UNIT must be 'epoch' or 'step'.")
+
+n_train = int(X_train_norm["static_features"].shape[0])
+steps_per_epoch = int(np.ceil(n_train / float(BATCH_SIZE)))
+
+def _int_or_none(v):
+    return None if v is None else int(v)
+
+mv_delay_steps  = _int_or_none(MV_DELAY_STEPS)
+mv_warmup_steps = _int_or_none(MV_WARMUP_STEPS)
+
+# If Stage-1 provided steps, keep them. Otherwise derive from epochs.
+if mv_delay_steps is None:
+    mv_delay_steps = max(0, MV_DELAY_EPOCHS) * steps_per_epoch
+if mv_warmup_steps is None:
+    mv_warmup_steps = max(0, MV_WARMUP_EPOCHS) * steps_per_epoch
+
+print(
+    f"[MV schedule] unit={MV_SCHEDULE_UNIT} "
+    f"steps_per_epoch={steps_per_epoch} "
+    f"delay_steps={mv_delay_steps} warmup_steps={mv_warmup_steps}"
+)
+
+subsmodel_params["scaling_kwargs"].update({
+    "mv_prior_mode": MV_PRIOR_MODE,
+    "mv_weight": MV_WEIGHT,
+
+    "mv_schedule_unit": MV_SCHEDULE_UNIT,
+    "mv_delay_epochs": int(MV_DELAY_EPOCHS),
+    "mv_warmup_epochs": int(MV_WARMUP_EPOCHS),
+    "mv_delay_steps": int(mv_delay_steps),
+    "mv_warmup_steps": int(mv_warmup_steps),
+    "mv_steps_per_epoch": int(steps_per_epoch),
+})
+
+# ---------------------------------------------------------------------
+# Training strategy: "physics_first" vs "data_first"
+# - physics_first: gate Q + subs residual off during warmup, then ramp on.
+# - data_first: keep residuals on, fit data more strongly, regularize Q.
+# ---------------------------------------------------------------------
+TRAINING_STRATEGY = str(cfg.get("TRAINING_STRATEGY", "data_first")).strip().lower()
+if TRAINING_STRATEGY not in ("physics_first", "data_first"):
+    raise ValueError(
+        "TRAINING_STRATEGY must be 'physics_first' or 'data_first'. "
+        f"Got: {TRAINING_STRATEGY!r}"
+    )
+
+# Defaults (keeps current behavior unless overridden)
+LOSS_WEIGHT_GWL = float(cfg.get("LOSS_WEIGHT_GWL", 0.5))
+LAMBDA_Q = float(cfg.get("LAMBDA_Q", 0.0))
+
+# Gate policies
+q_policy = "always_on"
+q_warmup_epochs = 0
+q_ramp_epochs = 0
+
+subs_resid_policy = "always_on"
+subs_resid_warmup_epochs = 0
+subs_resid_ramp_epochs = 0
+
+if TRAINING_STRATEGY == "physics_first":
+    q_policy = str(cfg.get("Q_POLICY_PHYSICS_FIRST", "warmup_off")).strip().lower()
+    q_warmup_epochs = int(cfg.get("Q_WARMUP_EPOCHS_PHYSICS_FIRST", 5))
+    q_ramp_epochs = int(cfg.get("Q_RAMP_EPOCHS_PHYSICS_FIRST", 0))
+
+    subs_resid_policy = str(
+        cfg.get("SUBS_RESID_POLICY_PHYSICS_FIRST", "warmup_off")
+    ).strip().lower()
+    subs_resid_warmup_epochs = int(cfg.get("SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST", 5))
+    subs_resid_ramp_epochs = int(cfg.get("SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST", 0))
+
+    # keep small lambda_Q even in physics-first (post-warmup)
+    LAMBDA_Q = float(cfg.get("LAMBDA_Q_PHYSICS_FIRST", LAMBDA_Q))
+    LOSS_WEIGHT_GWL = float(cfg.get("LOSS_WEIGHT_GWL_PHYSICS_FIRST", LOSS_WEIGHT_GWL))
+
+else:  # data_first
+    LOSS_WEIGHT_GWL = float(cfg.get("LOSS_WEIGHT_GWL_DATA_FIRST", LOSS_WEIGHT_GWL))
+    LAMBDA_Q = float(cfg.get("LAMBDA_Q_DATA_FIRST", LAMBDA_Q))
+
+    q_policy = str(cfg.get("Q_POLICY_DATA_FIRST", "always_on")).strip().lower()
+    q_warmup_epochs = int(cfg.get("Q_WARMUP_EPOCHS_DATA_FIRST", 0))
+    q_ramp_epochs = int(cfg.get("Q_RAMP_EPOCHS_DATA_FIRST", 0))
+
+    subs_resid_policy = str(cfg.get("SUBS_RESID_POLICY_DATA_FIRST", "always_on")).strip().lower()
+    subs_resid_warmup_epochs = int(cfg.get("SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST", 0))
+    subs_resid_ramp_epochs = int(cfg.get("SUBS_RESID_RAMP_EPOCHS_DATA_FIRST", 0))
+
+# If Q is forced off forever, drop its regularizer too.
+if q_policy == "always_off":
+    LAMBDA_Q = 0.0
+
+q_warmup_steps = max(0, q_warmup_epochs) * steps_per_epoch
+q_ramp_steps = max(0, q_ramp_epochs) * steps_per_epoch
+
+subs_resid_warmup_steps = max(0, subs_resid_warmup_epochs) * steps_per_epoch
+subs_resid_ramp_steps = max(0, subs_resid_ramp_epochs) * steps_per_epoch
+
+print("=" * 72)
+print(
+    f"[TRAINING_STRATEGY] {TRAINING_STRATEGY} | "
+    f"LOSS_WEIGHT_GWL={LOSS_WEIGHT_GWL:g} | LAMBDA_Q={LAMBDA_Q:g}"
+)
+print(
+    f"[GATES] q_policy={q_policy} warmup_epochs={q_warmup_epochs} "
+    f"ramp_epochs={q_ramp_epochs} (steps: {q_warmup_steps}/{q_ramp_steps})"
+)
+print(
+    f"[GATES] subs_resid_policy={subs_resid_policy} "
+    f"warmup_epochs={subs_resid_warmup_epochs} ramp_epochs={subs_resid_ramp_epochs} "
+    f"(steps: {subs_resid_warmup_steps}/{subs_resid_ramp_steps})"
+)
+
+subsmodel_params["scaling_kwargs"].update({
+    "training_strategy": TRAINING_STRATEGY,
+
+    "q_policy": q_policy,
+    "q_warmup_epochs": int(q_warmup_epochs),
+    "q_ramp_epochs": int(q_ramp_epochs),
+    "q_warmup_steps": int(q_warmup_steps),
+    "q_ramp_steps": int(q_ramp_steps),
+
+    "subs_resid_policy": subs_resid_policy,
+    "subs_resid_warmup_epochs": int(subs_resid_warmup_epochs),
+    "subs_resid_ramp_epochs": int(subs_resid_ramp_epochs),
+    "subs_resid_warmup_steps": int(subs_resid_warmup_steps),
+    "subs_resid_ramp_steps": int(subs_resid_ramp_steps),
+})
+
+
+# Keep compile-time knobs in the audit trail as well.
+subsmodel_params["scaling_kwargs"].update({
+    "loss_weight_gwl": float(LOSS_WEIGHT_GWL),
+   "lambda_q": float(LAMBDA_Q),
 })
 
 # Optional: drop Nones to keep scaling_kwargs clean
@@ -1114,7 +1273,6 @@ scaling_path = os.path.join(RUN_OUTPUT_PATH, "scaling_kwargs.json")
 with open(scaling_path, "w", encoding="utf-8") as f:
     json.dump(subsmodel_params["scaling_kwargs"] , f, indent=2)
 
- 
 
 # ---- CALL IT (right before building the model) ----------------------------
 
@@ -1167,7 +1325,7 @@ metrics_dict = {
     "subs_pred": ["mae", "mse"] + ([coverage80_fn, sharpness80_fn] if QUANTILES else []),
     "gwl_pred":  ["mae", "mse"],
 }
-loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": 0.5}
+
 physics_loss_weights = {
     "lambda_cons": LAMBDA_CONS,
     "lambda_gw": LAMBDA_GW,
@@ -1180,6 +1338,9 @@ physics_loss_weights = {
     "lambda_offset": LAMBDA_OFFSET,
     "kappa_lr_mult": KAPPA_LR_MULT,
 }
+# Strategy override
+loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": float(LOSS_WEIGHT_GWL)}
+physics_loss_weights["lambda_q"] = float(LAMBDA_Q)
 
 subs_model_inst.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, clipnorm=1.0),

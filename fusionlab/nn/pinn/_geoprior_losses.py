@@ -44,7 +44,6 @@ def should_log_physics(model: Any) -> bool:
         default=False,
     ))
 
-
 # ---------------------------------------------------------------------
 # Physics multiplier + loss assembly
 # ---------------------------------------------------------------------
@@ -56,42 +55,58 @@ def assemble_physics_loss(
     loss_prior: Tensor,
     loss_smooth: Tensor,
     loss_mv: Tensor,
+    loss_q_reg: Tensor,
     loss_bounds: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, dict[str, Tensor]]:
     """
-    Assemble physics loss in one canonical place.
+    Assemble physics loss with an explicit offset scope.
 
-    Returns
-    -------
-    physics_raw : Tensor
-        Weighted sum of component losses (no offset).
-    physics_scaled : Tensor
-        physics_raw multiplied once by global multiplier.
-    phys_mult : Tensor
-        Effective global multiplier (offset_mode aware).
-    terms_scaled : dict
-        Per-term contributions (each includes phys_mult once).
+    Notes
+    -----
+    By default, the global physics multiplier `phys_mult`
+    (derived from `lambda_offset`) scales PDE-style terms
+    (cons, gw, prior, smooth, bounds). The mv term is treated
+    as a calibration loss and is *not* scaled by `phys_mult`
+    unless `model._scale_mv_with_offset` is True.
     """
-    physics_raw = (
-        model.lambda_cons * loss_cons
-        + model.lambda_gw * loss_gw
-        + model.lambda_prior * loss_prior
-        + model.lambda_smooth * loss_smooth
-        + model.lambda_mv * loss_mv
-        + model.lambda_bounds * loss_bounds
-    )
+    # ----------------------------------------------------------
+    # 1) Unscaled weighted terms.
+    # ----------------------------------------------------------
+    t_cons = model.lambda_cons * loss_cons
+    t_gw = model.lambda_gw * loss_gw
+    t_prior = model.lambda_prior * loss_prior
+    t_smooth = model.lambda_smooth * loss_smooth
+    t_bounds = model.lambda_bounds * loss_bounds
+    t_mv = model.lambda_mv * loss_mv
+    t_q = model.lambda_q * loss_q_reg
 
+    core_raw = t_cons + t_gw + t_prior + t_smooth + t_bounds
+    physics_raw = core_raw + t_mv + t_q
+
+    # ----------------------------------------------------------
+    # 2) Global multiplier (offset_mode aware).
+    # ----------------------------------------------------------
     phys_mult = model._physics_loss_multiplier()
-    physics_scaled = phys_mult * physics_raw
-    
-    # Optional: per-term scaled contributions for debug/logging
+
+    scale_mv = bool(getattr(model, "_scale_mv_with_offset", False))
+    scale_q = bool(getattr(model, "_scale_q_with_offset", False))
+
+    core_scaled = phys_mult * core_raw
+    mv_scaled = phys_mult * t_mv if scale_mv else t_mv
+    q_scaled = phys_mult * t_q if scale_q else t_q
+
+    physics_scaled = core_scaled + mv_scaled + q_scaled
+    # ----------------------------------------------------------
+    # 3) Per-term contributions consistent with physics_scaled.
+    # ----------------------------------------------------------
     terms_scaled = {
-        "cons":   phys_mult * model.lambda_cons   * loss_cons,
-        "gw":     phys_mult * model.lambda_gw     * loss_gw,
-        "prior":  phys_mult * model.lambda_prior  * loss_prior,
-        "smooth": phys_mult * model.lambda_smooth * loss_smooth,
-        "mv":     phys_mult * model.lambda_mv     * loss_mv,
-        "bounds": phys_mult * model.lambda_bounds * loss_bounds,
+        "cons":   phys_mult * t_cons,
+        "gw":     phys_mult * t_gw,
+        "prior":  phys_mult * t_prior,
+        "smooth": phys_mult * t_smooth,
+        "bounds": phys_mult * t_bounds,
+        "mv": mv_scaled,
+        "q": q_scaled,
     }
     return physics_raw, physics_scaled, phys_mult, terms_scaled
 
@@ -126,6 +141,11 @@ def zero_physics_bundle(
         "loss_prior": z,
         "loss_smooth": z,
         "loss_mv": z,
+        "loss_q_reg": z,
+        "q_rms": z,
+        "q_gate": z,
+        "subs_resid_gate": z,
+
         "loss_bounds": z,
 
         "epsilon_prior": z,
