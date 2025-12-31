@@ -426,6 +426,8 @@ SUBS_MODEL_COL = cols_cfg.get("subs_model", cols_cfg.get("subsidence", "subsiden
 GWL_MODEL_COL  = cols_cfg.get("gwl_model",  cols_cfg.get("gwl", "GWL"))
 H_MODEL_COL    = cols_cfg.get("h_field_model", cols_cfg.get("h_field", "soil_thickness"))
 
+
+#%
 # Keep requested names only for logging/UI if you want
 # SUBS_REQUESTED_COL = cols_cfg.get("subsidence", "subsidence")
 # GWL_REQUESTED_COL  = cols_cfg.get("gwl", "GWL")
@@ -846,6 +848,24 @@ X_test  = dict(np.load(test_inputs_npz)) if test_inputs_npz else None
 y_test  = dict(np.load(test_targets_npz)) if test_targets_npz else None
 
 
+# ---- DEBUG UNITS: Stage-2 loaded tensors ----
+# XXX FOR DEBUG
+def _np_stats(name, a):
+    a = np.asarray(a)
+    print(f"[Stage2][Loaded] {name:18s} shape={a.shape} "
+          f"min={np.nanmin(a):.4g} max={np.nanmax(a):.4g} mean={np.nanmean(a):.4g}")
+
+_np_stats("y_train.subs_pred", y_train["subs_pred"])
+_np_stats("y_train.gwl_pred",  y_train["gwl_pred"])
+
+# also check the driver channel you *think* is depth
+# (only if you know the dyn index)
+GW_IDX = sk_stage1.get('gwl_dyn_index')
+print("GW_IDX=", GW_IDX)
+_np_stats("X_train.dynamic[...,gwl_dyn]", X_train["dynamic_features"][..., GW_IDX])
+    
+
+#%
 # Dims
 OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
 OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
@@ -923,7 +943,7 @@ X_train_norm = ensure_input_shapes(
 s_dim_model = X_train_norm["static_features"].shape[-1]
 d_dim_model = X_train_norm["dynamic_features"].shape[-1]
 f_dim_model = X_train_norm["future_features"].shape[-1]
-
+#%
 MODEL_CLASS_REGISTRY = {
     "GeoPriorSubsNet": GeoPriorSubsNet,
     "PoroElasticSubsNet": PoroElasticSubsNet,
@@ -1270,6 +1290,8 @@ with open(scaling_path, "w", encoding="utf-8") as f:
     json.dump(subsmodel_params["scaling_kwargs"] , f, indent=2)
 
 
+# %
+
 # ---- CALL IT (right before building the model) ----------------------------
 
 if should_audit(AUDIT_STAGES, stage="stage2"):
@@ -1321,7 +1343,7 @@ metrics_dict = {
     "subs_pred": ["mae", "mse"] + ([coverage80_fn, sharpness80_fn] if QUANTILES else []),
     "gwl_pred":  ["mae", "mse"],
 }
-
+#%
 physics_loss_weights = {
     "lambda_cons": LAMBDA_CONS,
     "lambda_gw": LAMBDA_GW,
@@ -1333,11 +1355,12 @@ physics_loss_weights = {
     # (global multiplier for the physics block)
     "lambda_offset": LAMBDA_OFFSET,
     "kappa_lr_mult": KAPPA_LR_MULT,
+    "lambda_q": float(LAMBDA_Q)
 }
 # Strategy override
 loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": float(LOSS_WEIGHT_GWL)}
-physics_loss_weights["lambda_q"] = float(LAMBDA_Q)
 
+#
 subs_model_inst.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, clipnorm=1.0),
     loss=loss_dict,
@@ -1346,7 +1369,7 @@ subs_model_inst.compile(
     **physics_loss_weights,
 )
 print(f"{MODEL_NAME} compiled.")
-
+#
 # =============================================================================
 # Train
 # =============================================================================
@@ -1397,7 +1420,7 @@ history = subs_model_inst.fit(
     verbose=1,  
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
-#%
+#%%
 
 # ---- files/paths
 weights_path     = os.path.join(
@@ -1829,6 +1852,7 @@ ds_eval = make_tf_dataset(
     mode=MODE,
     forecast_horizon=FORECAST_HORIZON_YEARS,
 )
+
 
 # --- 2.1 Standard Keras evaluate() + physics metrics ---
 try:

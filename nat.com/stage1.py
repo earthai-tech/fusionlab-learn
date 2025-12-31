@@ -1352,7 +1352,25 @@ print("  H   : scale_si=1.0 bias_si=0.0")
 H_FIELD_COL = H_MODEL_COL
 print(f"[SI affine] H_field identity (meters already): {H_FIELD_COL}")
 
-      
+# XXX FOR DEBUG 
+# ---- DEBUG UNITS: Stage-1 sanity ----
+cols = [
+    SUBSIDENCE_COL, SUBS_SI_COL,
+    GWL_DEPTH_COL, DEPTH_SI_COL,
+    HEAD_SRC_COL, HEAD_SI_COL,
+    H_FIELD_SRC_COL, H_SI_COL,
+]
+cols = [c for c in cols if c and c in df_proc.columns]
+
+print("\n[Stage1][Units] head/depth/subs sample (raw vs __si):")
+print(df_proc[cols].head(5))
+
+print("\n[Stage1][Units] ranges:")
+for c in cols:
+    s = df_proc[c]
+    print(f"  {c:20s} min={s.min(): .4g}  max={s.max(): .4g}  mean={s.mean(): .4g}")
+
+#%%
 # ==================================================================
 # Step 4: Feature sets (lists only)
 # ==================================================================
@@ -1482,7 +1500,18 @@ if normalize_coords:
 else:
     coord_scaler = None
     print("  [Coords] KEEP_COORDS_RAW=True -> coords NOT normalized; no coord_scaler saved.")
+#%
+# ---- DEBUG UNITS: Stage-1 target tensors ----
 
+def _np_stats(name, a):
+    a = np.asarray(a)
+    print(f"[Stage1][NPZ] {name:12s} shape={a.shape} "
+          f"min={np.nanmin(a):.4g} max={np.nanmax(a):.4g} mean={np.nanmean(a):.4g}")
+
+_np_stats("y_subs", targets_train["subsidence"])
+_np_stats("y_gwl",  targets_train["gwl"])
+
+#%%
 # --------------------------------------------------------------
 # coord ranges for chain-rule in Stage-2
 # --------------------------------------------------------------

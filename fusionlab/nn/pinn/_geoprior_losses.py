@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import KERAS_DEPS
-from ._geoprior_utils import get_sk
+from ._geoprior_utils import get_sk, select_q  
 
 
 Tensor = KERAS_DEPS.Tensor
@@ -273,6 +273,23 @@ def epsilon_value_for_logs(
 # ---------------------------------------------------------------------
 # Train/Test step packer (no duplication)
 # ---------------------------------------------------------------------
+
+def _needs_full_quantiles(metric_name: str) -> bool:
+    n = metric_name.lower()
+    return ("coverage" in n) or ("sharpness" in n)
+
+def _metric_key_from_name(name: str):
+    # Keras names: "subs_pred_mae", "subs_pred_coverage80", "gwl_pred_mse", ...
+    # Skip Keras loss trackers
+    if name in ("loss",) or name.endswith("_loss"):
+        return None
+
+    if name.startswith("subs_pred_"):
+        return "subs_pred"
+    if name.startswith("gwl_pred_"):
+        return "gwl_pred"
+    return None
+
 def pack_step_results(
     model: Any,
     *,
@@ -288,8 +305,27 @@ def pack_step_results(
     - Always includes loss/total_loss/data_loss + compiled metrics.
     - Includes physics keys only if `should_log_physics(model)`.
     """
-    model.compiled_metrics.update_state(targets, y_pred)
+    # model.compiled_metrics.update_state(targets, y_pred)
+    q = getattr(model, "quantiles", None)
+    y_pred_p50 = {}
+    if isinstance(y_pred, dict):
+        for k, v in y_pred.items():
+            y_pred_p50[k] = select_q(v, q, q=0.5, fallback="mean")
+    else:
+        y_pred_p50 = y_pred  # fallback
 
+    # --- update metrics manually (quantile-safe) ---
+    for m in model.compiled_metrics.metrics:
+        key = _metric_key_from_name(getattr(m, "name", "") or "")
+        if key is None:
+            continue
+        yt = targets[key]
+        if _needs_full_quantiles(m.name):
+            yp = y_pred[key]          # full (B,H,Q,1)
+        else:
+            yp = y_pred_p50[key]      # p50 (B,H,1)
+        m.update_state(yt, yp)
+        
     results: dict[str, Tensor] = {
         m.name: m.result()
         for m in model.metrics

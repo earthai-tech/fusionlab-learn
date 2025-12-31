@@ -56,12 +56,13 @@ if KERAS_BACKEND:
         get_log_tau_bounds, 
         seconds_per_time_unit, 
         resolve_gw_units, 
-        resolve_cons_drawdown_options, 
+        resolve_cons_drawdown_options,
+        dt_to_seconds, 
+        guard_scale_with_residual
         
     )
 
     from ._geoprior_utils import (
-        _vshapes, _vshape, 
         to_si_thickness,
         to_si_head,
         deg_to_m,
@@ -93,6 +94,29 @@ if KERAS_BACKEND:
         aggregate_time_window_output 
     )
     
+    from ._debugs import (
+        dbg_step0_inputs_targets,
+        dbg_step1_thickness,
+        dbg_step2_coords_checks,
+        dbg_units_once,
+        dbg_step3_mean_head,
+        dbg_assert_data_layout,
+        dbg_step31_forward_outputs,
+        dbg_step33_physics_logits,
+        dbg_step33_physics_fields,
+        dbg_step4_ad_raw,
+        dbg_step41_si_grads,
+        dbg_chk_scales,
+        dbg_cons_units_rms,
+        dbg_step6_consolidation,
+        dbg_step7_residuals,
+        dbg_step8_scaling,
+        dbg_step9_losses,
+        dbg_step10_grads,
+        dbg_term_grads_finite,
+        dbg_chk_core_finite,
+    )
+
 LSTM = KERAS_DEPS.LSTM
 Dense = KERAS_DEPS.Dense
 LayerNormalization = KERAS_DEPS.LayerNormalization 
@@ -107,7 +131,6 @@ GradientTape =KERAS_DEPS.GradientTape
 Mean =KERAS_DEPS.Mean 
 Dataset = KERAS_DEPS.Dataset
 RandomNormal = KERAS_DEPS.RandomNormal
-
 
 tf_zeros_like= KERAS_DEPS.zeros_like
 tf_zeros =KERAS_DEPS.zeros
@@ -151,6 +174,8 @@ tf_clip_by_global_norm = KERAS_DEPS.clip_by_global_norm
 tf_math = KERAS_DEPS.math 
 tf_where = KERAS_DEPS.where 
 tf_reduce_all = KERAS_DEPS.reduce_all
+tf_reduce_min =KERAS_DEPS.reduce_min 
+tf_reduce_max =KERAS_DEPS.reduce_max 
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object= KERAS_DEPS.deserialize_keras_object
@@ -1118,7 +1143,7 @@ class GeoPriorSubsNet(BaseAttentive):
             self.scaling_kwargs, "allow_subs_residual", default=False)
         )
         # subs_mean = subs_phys_model + subs_net if allow_resid else subs_phys_model
-        subs_gate = self._subs_resid_gate(training=bool(training))
+        subs_gate = self._subs_resid_gate()
         if not bool(allow_resid):
             subs_gate = tf_constant(0.0, tf_float32)
             
@@ -1177,22 +1202,11 @@ class GeoPriorSubsNet(BaseAttentive):
                 param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"},
             )
 
-        if verbose > 10:
-            tf_print("\n[train_step] verbose=", verbose)
-            tf_print("[train_step] --- step 0/1 inputs+targets ---")
-            # Inputs dict keys (python-level string list is ok)
-            tf_print("[train_step] inputs keys:", list(inputs.keys()))
-            if isinstance(targets, dict):
-                tf_print("[train_step] targets keys:", list(targets.keys()))
-            _vshapes("STEP 0/1 (raw tensors)", [
-                ("inputs['H_field']", inputs.get("H_field", None)),
-                ("inputs['soil_thickness']", inputs.get("soil_thickness", None)),
-                ("inputs['coords']", inputs.get("coords", None)),
-                ("inputs['static_features']", inputs.get("static_features", None)),
-                ("inputs['dynamic_features']", inputs.get("dynamic_features", None)),
-                ("inputs['future_features']", inputs.get("future_features", None)),
-            ])
-
+        dbg_step0_inputs_targets(
+            verbose=verbose,
+            inputs=inputs,
+            targets=targets,
+        )
         # ----------------------------------------------------------
         # 1) Thickness field is required by physics (H_field / soil_thickness)
         # ----------------------------------------------------------
@@ -1213,32 +1227,21 @@ class GeoPriorSubsNet(BaseAttentive):
             default=False)
         )
 
-        if verbose > 3:
-            tf_print("[train_step] --- step 1 thickness ---")
-            _vshapes("STEP 1 (thickness)", [
-                ("H_field", H_field),
-                ("H_si", H_si),
-            ])
-
+        dbg_step1_thickness(
+            verbose=verbose,
+            H_field=H_field,
+            H_si=H_si,
+        )
         # ----------------------------------------------------------
         # 2) Coordinates: ensure (B,H,3) and force forward-pass to use them
         # ----------------------------------------------------------
         coords = tf_convert_to_tensor(_get_coords(inputs), tf_float32)
     
-        if verbose > 6: 
-            tf_debugging.assert_equal(tf_rank(coords), 3, "coords must be rank-3 (B,T,3)")
-            tf_debugging.assert_equal(tf_shape(coords)[-1], 3, "coords last dim must be 3")
-      
-            tf_print_nonfinite("train_step/coords", coords)
-        
-            for k in ("static_features", "dynamic_features",
-                      "future_features", "H_field"):
-                v = inputs.get(k, None)
-                if v is not None:
-                    tf_print_nonfinite(
-                        f"train_step/{k}", tf_convert_to_tensor(v, tf_float32)
-                )
-
+        dbg_step2_coords_checks(
+            verbose=verbose,
+            coords=coords,
+            inputs=inputs,
+        )
 
         # Accept (B,3) -> (B,1,3) edge cases
         if coords.shape.rank == 2:
@@ -1278,21 +1281,32 @@ class GeoPriorSubsNet(BaseAttentive):
     
             # Quantile-aware tensors are OK here; we only slice the last dim
             s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
-            y_pred = {"subs_pred": s_pred_final, "gwl_pred": gwl_pred_final}
-    
+            y_pred = {
+                "subs_pred": s_pred_final, 
+                "gwl_pred": gwl_pred_final
+            }
+            
+            dbg_units_once(
+                verbose=verbose,
+                iterations=self.optimizer.iterations,
+                targets=targets,
+                gwl_pred_final=gwl_pred_final,
+                s_pred_final=s_pred_final,
+                quantiles=self.quantiles,
+            )
+
             # Supervised data loss (pinball, MSE, etc. defined at compile-time)
             data_loss = self.compiled_loss(
                 y_true=targets,
                 y_pred=y_pred,
                 regularization_losses=self.losses,
             )
-    
-            # ----------------------
-            # 3.2 Mean head for physics
-            # ----------------------
-            # Prefer the explicit mean output produced by call() (Option-1).
-            data_mean_raw = outputs.get("data_mean_raw", None)
 
+            # ------------------------------------------------------
+            # 3.2 Mean head for physics
+            # ------------------------------------------------------
+            data_mean_raw = outputs.get("data_mean_raw", None)
+            
             if data_mean_raw is not None:
                 _, gwl_mean_raw = self.split_data_predictions(data_mean_raw)
             else:
@@ -1311,18 +1325,27 @@ class GeoPriorSubsNet(BaseAttentive):
                     lambda: tf_expand_dims(gwl_mean_raw, axis=-1),
                     lambda: gwl_mean_raw,
                 )
-
-            # Convert predicted gwl/depth -> SI meters -> head meters (SI)
+            
+            dbg_assert_data_layout(
+                verbose=verbose,
+                data_final=data_final,
+                data_mean_raw=data_mean_raw,
+                quantiles=self.quantiles,
+            )
+            
             gwl_si = to_si_head(gwl_mean_raw, self.scaling_kwargs)
-            h_si = gwl_to_head_m(gwl_si, self.scaling_kwargs, inputs=inputs_fwd)  # (B,H,1)
-    
-            if verbose > 10:
-                tf_print("[train_step] --- step: mean-head prep ---")
-                _vshapes("STEP 3.2 (mean head)", [
-                    ("gwl_mean_raw", gwl_mean_raw),
-                    ("gwl_si", gwl_si),
-                    ("h_si", h_si),
-                ])
+            h_si = gwl_to_head_m(
+                gwl_si,
+                self.scaling_kwargs,
+                inputs=inputs_fwd,
+            )
+            
+            dbg_step3_mean_head(
+                verbose=verbose,
+                gwl_mean_raw=gwl_mean_raw,
+                gwl_si=gwl_si,
+                h_si=h_si,
+            )
 
             # ----------------------
             # 3.3 Physics logits: K, Ss, Δlogτ (+ optional Q)
@@ -1335,13 +1358,14 @@ class GeoPriorSubsNet(BaseAttentive):
             ( K_logits, Ss_logits, dlogtau_logits, Q_logits  
             )= self.split_physics_predictions(phys_mean_raw)
 
-            if verbose > 10:
-                tf_print("[train_step] --- step: forward pass outputs ---")
-                _vshape("data_final", data_final)
-                _vshape("s_pred_final", s_pred_final)
-                _vshape("gwl_pred_final", gwl_pred_final)
-                _vshape("data_mean_raw", data_mean_raw)
-                _vshape("phys_mean_raw", phys_mean_raw)
+            dbg_step31_forward_outputs(
+                verbose=verbose,
+                data_final=data_final,
+                s_pred_final=s_pred_final,
+                gwl_pred_final=gwl_pred_final,
+                data_mean_raw=data_mean_raw,
+                phys_mean_raw=phys_mean_raw,
+            )
                 
             # Option-1 recommendation: keep K,Ss,tau time-constant over the horizon
             sk = self.scaling_kwargs or {}
@@ -1378,31 +1402,30 @@ class GeoPriorSubsNet(BaseAttentive):
                 verbose=verbose,
             )
 
-            if verbose > 10:
-                tf_print("[train_step] --- step: physics logits/base ---")
-                _vshapes("STEP 3.3 (physics logits)", [
-                    ("K_logits", K_logits),
-                    ("Ss_logits", Ss_logits),
-                    ("dlogtau_logits", dlogtau_logits),
-                    ("Q_logits", Q_logits),
-                    ("K_base", K_base),
-                    ("Ss_base", Ss_base),
-                    ("dlogtau_base", dlogtau_base),
-                ])
-  
-                tf_print("[train_step] --- step: physics fields (SI) ---")
-                _vshapes("STEP 3.3 (physics fields)", [
-                    ("K_field", K_field),
-                    ("Ss_field", Ss_field),
-                    ("tau_field", tau_field),
-                    ("tau_phys", tau_phys),
-                    ("Hd_eff", Hd_eff),
-                    ("delta_log_tau", delta_log_tau),
-                    ("logK", logK),
-                    ("logSs", logSs),
-                    ("log_tau", log_tau),
-                    ("log_tau_phys", log_tau_phys),
-                ])
+            dbg_step33_physics_logits(
+                verbose=verbose,
+                K_logits=K_logits,
+                Ss_logits=Ss_logits,
+                dlogtau_logits=dlogtau_logits,
+                Q_logits=Q_logits,
+                K_base=K_base,
+                Ss_base=Ss_base,
+                dlogtau_base=dlogtau_base,
+            )
+
+            dbg_step33_physics_fields(
+                verbose=verbose,
+                K_field=K_field,
+                Ss_field=Ss_field,
+                tau_field=tau_field,
+                tau_phys=tau_phys,
+                Hd_eff=Hd_eff,
+                delta_log_tau=delta_log_tau,
+                logK=logK,
+                logSs=logSs,
+                log_tau=log_tau,
+                log_tau_phys=log_tau_phys,
+            )
 
             # ------------------------------------------------------
             # 4) GW PDE derivatives via AD (w.r.t coords)
@@ -1456,26 +1479,25 @@ class GeoPriorSubsNet(BaseAttentive):
             dK_dx, dK_dy, dSs_dx, dSs_dy = dK_dx_raw, dK_dy_raw, dSs_dx_raw, dSs_dy_raw
     
 
-            if verbose > 7:
-                tf_print("[train_step] --- step: AD derivatives (raw) ---")
-                _vshapes("STEP 4 (AD raw grads)", [
-                    ("dh_dcoords", dh_dcoords),
-                    ("dh_dt_raw", dh_dt_raw),
-                    ("dh_dx_raw", dh_dx_raw),
-                    ("dh_dy_raw", dh_dy_raw),
-                    ("K_dh_dx", K_dh_dx),
-                    ("K_dh_dy", K_dh_dy),
-                    ("dKdhx_dcoords", dKdhx_dcoords),
-                    ("dKdhy_dcoords", dKdhy_dcoords),
-                    ("d_K_dh_dx_dx_raw", d_K_dh_dx_dx_raw),
-                    ("d_K_dh_dy_dy_raw", d_K_dh_dy_dy_raw),
-                    ("dK_dcoords", dK_dcoords),
-                    ("dSs_dcoords", dSs_dcoords),
-                    ("dK_dx_raw", dK_dx_raw),
-                    ("dK_dy_raw", dK_dy_raw),
-                    ("dSs_dx_raw", dSs_dx_raw),
-                    ("dSs_dy_raw", dSs_dy_raw),
-                ])
+            dbg_step4_ad_raw(
+                verbose=verbose,
+                dh_dcoords=dh_dcoords,
+                dh_dt_raw=dh_dt_raw,
+                dh_dx_raw=dh_dx_raw,
+                dh_dy_raw=dh_dy_raw,
+                K_dh_dx=K_dh_dx,
+                K_dh_dy=K_dh_dy,
+                dKdhx_dcoords=dKdhx_dcoords,
+                dKdhy_dcoords=dKdhy_dcoords,
+                d_K_dh_dx_dx_raw=d_K_dh_dx_dx_raw,
+                d_K_dh_dy_dy_raw=d_K_dh_dy_dy_raw,
+                dK_dcoords=dK_dcoords,
+                dSs_dcoords=dSs_dcoords,
+                dK_dx_raw=dK_dx_raw,
+                dK_dy_raw=dK_dy_raw,
+                dSs_dx_raw=dSs_dx_raw,
+                dSs_dy_raw=dSs_dy_raw,
+            )
 
 
             # If coords are normalized, convert derivatives to per-(original coord unit)
@@ -1519,18 +1541,17 @@ class GeoPriorSubsNet(BaseAttentive):
     
             # Time derivative must be per second for SI PDE
             dh_dt = rate_to_per_second(dh_dt, time_units=self.time_units)
-    
-            if verbose > 10:
-                tf_print("[train_step] --- step: chain-rule corrected ---")
-                _vshapes("STEP 4.1 (SI grads)", [
-                    ("dh_dt (after norm/deg + per-second)", dh_dt),
-                    ("d_K_dh_dx_dx (SI)", d_K_dh_dx_dx),
-                    ("d_K_dh_dy_dy (SI)", d_K_dh_dy_dy),
-                    ("dK_dx (SI)", dK_dx),
-                    ("dK_dy (SI)", dK_dy),
-                    ("dSs_dx (SI)", dSs_dx),
-                    ("dSs_dy (SI)", dSs_dy),
-                ])
+            
+            dbg_step41_si_grads(
+                verbose=verbose,
+                dh_dt=dh_dt,
+                d_K_dh_dx_dx=d_K_dh_dx_dx,
+                d_K_dh_dy_dy=d_K_dh_dy_dy,
+                dK_dx=dK_dx,
+                dK_dy=dK_dy,
+                dSs_dx=dSs_dx,
+                dSs_dy=dSs_dy,
+            )
 
             # ------------------------------------------------------
             # 5) Q logits -> SI (1/s)
@@ -1562,11 +1583,7 @@ class GeoPriorSubsNet(BaseAttentive):
             
             # now broadcast with dh_dt
             Q_si = Q_si + tf_zeros_like(dh_dt)
-            # q_gate = self._q_gate(training=True)
-            # Q_si = Q_si * q_gate
-            # loss_q_reg = tf_reduce_mean(tf_square(Q_si))
-            # q_rms = to_rms(Q_si)
-            
+
             # Strategy gate + Q regularization payload
             q_gate = self._q_gate()
             Q_si = Q_si * q_gate
@@ -1574,20 +1591,37 @@ class GeoPriorSubsNet(BaseAttentive):
             q_rms = to_rms(Q_si)
             subs_resid_gate = self._subs_resid_gate()
 
-            if verbose > 3:
-                tf_print("[train_step] --- step: Q source term ---")
-                _vshapes("STEP 5 (Q)", [
-                    ("Q_si (before broadcast)", Q_si),
-                    ("dh_dt (for broadcast)", dh_dt),
-                    ("Q_si (after broadcast)", Q_si + tf_zeros_like(dh_dt)),
-                ])
-
 
             # ------------------------------------------------------
             # 6) Physic mean subsidence settlement + consolidation 
             # ------------------------------------------------------
 
             dt_units = infer_dt_units_from_t(t, self.scaling_kwargs)  # (B,H,1) in self.time_units
+            
+            # XXX FOR DEBUGGING  
+            # if verbose > 6:
+            sec_u = seconds_per_time_unit(self.time_units, dtype=tf_float32)
+            dt_sec = dt_to_seconds(dt_units, time_units=self.time_units)
+        
+            tf_print("[dt debug] time_units =", self.time_units)
+            tf_print("[dt debug] sec_u =", sec_u)
+        
+            tf_print("[dt debug] dt_units min/mean/max =",
+                     tf_reduce_min(dt_units),
+                     tf_reduce_mean(dt_units),
+                     tf_reduce_max(dt_units))
+        
+            tf_print("[dt debug] dt_sec   min/mean/max =",
+                     tf_reduce_min(dt_sec),
+                     tf_reduce_mean(dt_sec),
+                     tf_reduce_max(dt_sec))
+        
+            tf_print("[dt debug] dt_sec / dt_units (mean) =",
+                     tf_reduce_mean(dt_sec / tf_maximum(dt_units, 1e-12)))
+            
+            tf_print("[t debug] t[0,:,0] =", t[0, :, 0])
+
+
             # s_init_si = get_s_init_si(self, inputs_fwd, like=h_si[:, :1, :])   # (B,1,1)
             h_ref_si_11 = get_h_ref_si(self, inputs_fwd, like=h_si[:, :1, :])  # (B,1,1)
             h_ref_si = h_ref_si_11 + tf_zeros_like(h_si)                       # (B,H,1)
@@ -1689,27 +1723,27 @@ class GeoPriorSubsNet(BaseAttentive):
                     tf_print("cons_units=", mode, "rms=", to_rms(cons_res))
                     
 
-                if verbose >10:
-                    tf_print("[train_step] --- step: consolidation branch ---")
-                    tf_print(
-                        "[train_step] allow_resid=", 
-                        allow_resid, "| cons_active=", cons_active
-                        )
-                
-                    _vshapes("STEP 6 (consolidation state build)", [
-                        ("s_mean_raw", s_mean_raw),
-                        ("s_pred_si", s_pred_si),
-                        ("like_11", like_11),
-                        ("dt_units", dt_units),
-                        ("s0_cum_11", s0_cum_11),
-                        ("s_inc_pred", s_inc_pred),
-                        ("s_state", s_state),
-                        ("h_ref_si_11", h_ref_si_11),
-                        ("h_state", h_state),
-                        ("cons_step_m", cons_step_m),
-                        ("cons_res", cons_res),
-                    ])
+                dbg_cons_units_rms(
+                    verbose=verbose,
+                    sk=sk,
+                    cons_res=cons_res,
+                )
 
+                dbg_step6_consolidation(
+                    verbose=verbose,
+                    allow_resid=allow_resid,
+                    cons_active=cons_active,
+                    s_mean_raw=s_mean_raw,
+                    s_pred_si=s_pred_si,
+                    dt_units=dt_units,
+                    s0_cum_11=s0_cum_11,
+                    s_inc_pred=s_inc_pred,
+                    s_state=s_state,
+                    h_ref_si_11=h_ref_si_11,
+                    h_state=h_state,
+                    cons_step_m=cons_step_m,
+                    cons_res=cons_res,
+                )
                 
             # ------------------------------------------------------
             # 7) Residuals + priors
@@ -1747,34 +1781,32 @@ class GeoPriorSubsNet(BaseAttentive):
                 delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
                 verbose=verbose,
             )
-            R_H, R_K, R_Ss = compute_bounds_residual(
-                self, K_field, Ss_field, H_si, verbose=verbose
+
+            R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
+                self,
+                H_field=H_si,
+                logK=logK,
+                logSs=logSs,
+                log_tau=log_tau,
+                verbose=verbose,
             )
             
-            # ---- tau bounds residual (log-space, seconds) ----
-            log_tau_min, log_tau_max = get_log_tau_bounds(
-                self, as_tensor=True, dtype=log_tau.dtype, verbose=0
+            bounds_res = tf_concat(
+                [R_H, R_K, R_Ss, R_tau],
+                axis=-1,
             )
-            zero = tf_constant(0.0, dtype=log_tau.dtype)
-            epsb = tf_constant(_EPSILON, dtype=log_tau.dtype)
-            lo = tf_maximum(log_tau_min - log_tau, zero)
-            hi = tf_maximum(log_tau - log_tau_max, zero)
-            rng = tf_maximum(log_tau_max - log_tau_min, epsb)
-            R_tau = (lo + hi) / rng
-    
-            bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
             loss_bounds = tf_reduce_mean(tf_square(bounds_res))
-        
-            if verbose > 10:
-                tf_print("[train_step] --- step: residuals + priors ---")
-                _vshapes("STEP 7 (residual tensors)", [
-                    ("gw_res", gw_res),
-                    ("prior_res (delta_log_tau)", prior_res),
-                    ("smooth_res", smooth_res),
-                    ("loss_mv (scalar)", loss_mv),
-                    ("bounds_res", bounds_res),
-                    ("loss_bounds (scalar)", loss_bounds),
-                ])
+
+            dbg_step7_residuals(
+                verbose=verbose,
+                gw_res=gw_res,
+                prior_res=prior_res,
+                smooth_res=smooth_res,
+                loss_mv=loss_mv,
+                bounds_res=bounds_res,
+                loss_bounds=loss_bounds,
+            )
+
 
             # Physics-off shortcut (keeps returned keys stable)
             if self._physics_off():
@@ -1786,9 +1818,16 @@ class GeoPriorSubsNet(BaseAttentive):
                 bounds_res = tf_zeros_like(bounds_res)
                 loss_bounds = tf_zeros_like(loss_bounds)
             
-            if self.verbose > 6: 
-                chk("R_cons_nd (before scaling)", cons_res)
-                chk("R_gw_nd (before scaling)", gw_res)
+            dbg_chk_core_finite(
+                verbose=verbose,
+                level=6,
+                cons_res=cons_res,
+                gw_res=gw_res,
+                tau_field=tau_field,
+                K_field=K_field,
+                Ss_field=Ss_field,
+            )
+
             # ------------------------------------------------------
             # 8) Optional residual scaling (nondimensionalization)
             # ------------------------------------------------------
@@ -1797,14 +1836,14 @@ class GeoPriorSubsNet(BaseAttentive):
             cons_res_raw = cons_res
             gw_res_raw   = gw_res
             
-            if verbose > 10:
-                tf_print("[train_step] --- step 8 scaling ---")
-                _vshapes("STEP 8 (before/after scaling)", [
-                    ("cons_res_raw", cons_res_raw),
-                    ("gw_res_raw", gw_res_raw),
-                    ("cons_res (scaled)", cons_res),
-                    ("gw_res (scaled)", gw_res),
-                ])
+            dbg_step8_scaling(
+                verbose=verbose,
+                cons_res_raw=cons_res_raw,
+                gw_res_raw=gw_res_raw,
+                cons_res=cons_res,
+                gw_res=gw_res,
+            )
+
 
             if (not self._physics_off()) and bool(
                     getattr(self, "scale_pde_residuals", True)):
@@ -1836,20 +1875,43 @@ class GeoPriorSubsNet(BaseAttentive):
                 cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-10))
                 gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-10))
                 
-                cons_res = scale_residual(cons_res_raw, scales["cons_scale"], floor=cons_floor)
-                gw_res   = scale_residual(gw_res_raw,   scales["gw_scale"],   floor=gw_floor)
+                cons_s = guard_scale_with_residual(
+                    residual=cons_res,
+                    scale=scales["cons_scale"],
+                    floor=cons_floor,
+                )
+                gw_s = guard_scale_with_residual(
+                    residual=gw_res,
+                    scale=scales["gw_scale"],
+                    floor=gw_floor,
+                )
 
-                if verbose > 6: 
-                    chk("cons_scale", scales.get("cons_scale"))
-                    chk("gw_scale", scales.get("gw_scale"))
-                    chk("R_cons( after scaling)", cons_res)
-                    chk("R_gw (after scaling)", gw_res)
-                    
-            if verbose > 6: 
-                chk("tau_field", tau_field)
-                chk("K_field", K_field)
-                chk("Ss_field", Ss_field)
 
+                cons_res = scale_residual(
+                    cons_res, cons_s, 
+                    floor=cons_floor
+                )
+                gw_res   = scale_residual(
+                    gw_res,   
+                    gw_s,   
+                    floor=gw_floor
+                )
+
+                dbg_chk_scales(
+                    verbose=verbose,
+                    level=6,
+                    scales=scales,
+                )
+
+                dbg_chk_core_finite(
+                    verbose=verbose,
+                    level=6,
+                    cons_res=cons_res,
+                    gw_res=gw_res,
+                    tau_field=tau_field,
+                    K_field=K_field,
+                    Ss_field=Ss_field,
+                )
 
             # ------------------------------------------------------
             # 9) Physics loss + total loss
@@ -1873,18 +1935,17 @@ class GeoPriorSubsNet(BaseAttentive):
             )
             total_loss = data_loss + physics_loss_scaled
         
-        if verbose > 10:
-            tf_print("[train_step] --- step 9 losses ---")
-            _vshapes("STEP 9 (loss scalars)", [
-                ("data_loss", data_loss),
-                ("loss_cons", loss_cons),
-                ("loss_gw", loss_gw),
-                ("loss_prior", loss_prior),
-                ("loss_smooth", loss_smooth),
-                ("physics_loss_raw", physics_loss_raw),
-                ("physics_loss_scaled", physics_loss_scaled),
-                ("total_loss", total_loss),
-            ])
+        dbg_step9_losses(
+            verbose=verbose,
+            data_loss=data_loss,
+            loss_cons=loss_cons,
+            loss_gw=loss_gw,
+            loss_prior=loss_prior,
+            loss_smooth=loss_smooth,
+            physics_loss_raw=physics_loss_raw,
+            physics_loss_scaled=physics_loss_scaled,
+            total_loss=total_loss,
+        )
 
         # ----------------------------------------------------------
         # 10) Apply gradients
@@ -1893,43 +1954,21 @@ class GeoPriorSubsNet(BaseAttentive):
         trainable_vars = self.trainable_variables
         grads = tape.gradient(total_loss, trainable_vars)
         
-        if verbose > 10:
-            # Find the exact variable whose gradient aggregation is inconsistent
-            for v, g in zip(trainable_vars, grads):
-                if g is None:
-                    continue
-                vs = tf_shape(v)
-                gs = tf_shape(g)
-                ok = tf_reduce_all(tf_equal(vs, gs))
-                tf_debugging.assert_equal(
-                    ok, True,
-                    message=("Grad shape mismatch for: " + v.name)
-                )
-                
-            tf_print("[train_step] --- step 10 gradients ---")
-            tf_print("[train_step] n_trainable_vars =", 
-                     tf_constant(len(trainable_vars), tf_int32))
-            # Print a few grads/vars shapes (avoid huge spam)
-            n_show = tf_constant(12, tf_int32)
-            for i, (v, g) in enumerate(zip(trainable_vars, grads)):
-                if i >= int(n_show.numpy()
-                            ) if hasattr(n_show, "numpy") else i >= 12:
-                    break
-                if g is None:
-                    tf_print("[grad] NONE | var:", 
-                             v.name, "| var_shape:", tf_shape(v)
-                            )
-                else:
-                    tf_print(
-                        "[grad]", v.name, "| var_shape:",
-                        tf_shape(v), "| grad_shape:", tf_shape(g)
-                    )
+        dbg_step10_grads(
+            verbose=verbose,
+            trainable_vars=trainable_vars,
+            grads=grads,
+        )
 
-        if debug_grads:
-            for name, lt in {"data": data_loss, **terms_scaled}.items():
-                g = tape.gradient(lt, trainable_vars)
-                _assert_grads_finite(g, trainable_vars)
-        
+        dbg_term_grads_finite(
+            verbose=verbose,
+            debug_grads=debug_grads,
+            trainable_vars=trainable_vars,
+            data_loss=data_loss,
+            terms_scaled=terms_scaled,
+            tape=tape,
+        )
+
         del tape
 
         self.optimizer.apply_gradients(
@@ -1947,9 +1986,7 @@ class GeoPriorSubsNet(BaseAttentive):
         eps_cons = to_rms(cons_res)
         eps_gw = to_rms(gw_res)
         
-        if verbose > 10:
-            tf_print("[train_step] --- step: Done apply_gradients ---\n")
-    
+
         physics_bundle = None
         if not self._physics_off():
             physics_bundle = build_physics_bundle(
@@ -2008,7 +2045,11 @@ class GeoPriorSubsNet(BaseAttentive):
             raise ValueError("Model outputs missing 'data_final' in test_step().")
     
         s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
-        y_pred_for_eval = {"subs_pred": s_pred_final, "gwl_pred": gwl_pred_final}
+        
+        y_pred_for_eval = {
+            "subs_pred": s_pred_final, 
+            "gwl_pred": gwl_pred_final
+        }
     
         data_loss = self.compiled_loss(
             y_true=targets,
@@ -2298,10 +2339,6 @@ class GeoPriorSubsNet(BaseAttentive):
         # now broadcast with dh_dt
         Q_si = Q_si + tf_zeros_like(dh_dt)
         
-        # q_gate = self._q_gate(training=False)
-        # Q_si = Q_si * q_gate
-        # loss_q_reg = tf_reduce_mean(tf_square(Q_si))
-        # q_rms = to_rms(Q_si)
         q_gate = self._q_gate()
         Q_si = Q_si * q_gate
         loss_q_reg = tf_reduce_mean(tf_square(Q_si))
@@ -2418,23 +2455,20 @@ class GeoPriorSubsNet(BaseAttentive):
             verbose=0,
         )
         
-        R_H, R_K, R_Ss = compute_bounds_residual(
-            self, K_field, Ss_field, H_si, verbose=0
+        R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
+            self,
+            H_field=H_si,
+            logK=logK,
+            logSs=logSs,
+            log_tau=log_tau,
+            verbose=0,
+        )
+        
+        bounds_res = tf_concat(
+            [R_H, R_K, R_Ss, R_tau],
+            axis=-1,
         )
 
-        # ---- tau bounds residual (log-space, seconds) ----
-        log_tau_min, log_tau_max = get_log_tau_bounds(
-            self, as_tensor=True, dtype=log_tau.dtype, verbose=0
-        )
-        zero = tf_constant(0.0, dtype=log_tau.dtype)
-        epsb = tf_constant(_EPSILON, dtype=log_tau.dtype)
-        lo = tf_maximum(log_tau_min - log_tau, zero)
-        hi = tf_maximum(log_tau - log_tau_max, zero)
-        rng = tf_maximum(log_tau_max - log_tau_min, epsb)
-        R_tau = (lo + hi) / rng
-    
-        bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
-    
         # --------------------------------------------------------------
         # 7) Optional nondimensionalization
         # --------------------------------------------------------------
@@ -2512,7 +2546,6 @@ class GeoPriorSubsNet(BaseAttentive):
             loss_prior=loss_prior,
             loss_smooth=loss_smooth,
             loss_mv=loss_mv,
-            loss_q_reg=loss_q_reg,
             loss_q_reg=loss_q_reg,
             loss_bounds=loss_bounds,
         )
@@ -2691,7 +2724,6 @@ class GeoPriorSubsNet(BaseAttentive):
      # --------------------------------------------------------------
      # Training strategy gates (Q and subsidence residual)
      # --------------------------------------------------------------
-
     def _current_step_tensor(self) -> Tensor:
         """Graph-safe global step for warmup/ramp gates.
         If optimizer is missing (inference), behave as fully ON unless always_off.
@@ -2718,26 +2750,6 @@ class GeoPriorSubsNet(BaseAttentive):
         return policy_gate(self._current_step_tensor(), str(policy),
                            warmup_steps=w, ramp_steps=r, dtype=tf_float32)
 
-    # def _q_gate(self, training: bool = True) -> Tensor:
-        
-    #     sk = self.scaling_kwargs or {}
-    #     policy = str(get_sk(sk, "q_policy", "always_on")).strip().lower()
-    #     warmup_steps = int(get_sk(sk, "q_warmup_steps", 0) or 0)
-    #     if not bool(training):
-    #         return tf_constant(0.0, tf_float32) if policy in (
-    #             "always_off","off","none") else tf_constant(1.0, tf_float32)
-    #     step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
-    #     return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
-
-    # def _subs_resid_gate(self, training: bool = True) -> Tensor:
-    #     sk = self.scaling_kwargs or {}
-    #     policy = str(get_sk(sk, "subs_resid_policy", "always_on")).strip().lower()
-    #     warmup_steps = int(get_sk(sk, "subs_resid_warmup_steps", 0) or 0)
-    #     if not bool(training):
-    #         return tf_constant(0.0, tf_float32) if policy in (
-    #             "always_off","off","none") else tf_constant(1.0, tf_float32)
-    #     step = tf_cast(getattr(self.optimizer, "iterations", 0), tf_int32)
-    #     return policy_gate(step, policy=policy, warmup_steps=warmup_steps)
 
     def _mv_value(self) -> Tensor:
         r"""

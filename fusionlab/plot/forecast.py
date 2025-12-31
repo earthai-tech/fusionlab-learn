@@ -1501,7 +1501,7 @@ def forecast_view(
 
     plot_structure = _parse_wide_df_columns(df_wide, value_prefixes)
 
-# XXX TODO 
+    # XXX TODO 
 
     # all_years = sorted([
     #     y for p_data in plot_structure.values() for y in p_data
@@ -1591,20 +1591,41 @@ def forecast_view(
         return
 
     vmin, vmax = None, None
-    if cbar == 'uniform':
+    
+    if cbar == "uniform":
         all_plot_cols = [
             c for p in plot_structure.values()
             for y in p.values()
             for c in (y.values() if isinstance(y, dict) else [y])
             if c in df_wide
         ]
-        if all_plot_cols:
-            min_vals = [df_wide[c].dropna().min() for c in all_plot_cols]
-            max_vals = [df_wide[c].dropna().max() for c in all_plot_cols]
-            if any(pd.notna(v) for v in min_vals):
-                vmin = min(v for v in min_vals if pd.notna(v))
-            if any(pd.notna(v) for v in max_vals):
-                vmax = max(v for v in max_vals if pd.notna(v))
+    
+        numeric_plot_cols = []
+        for c in all_plot_cols:
+            s = pd.to_numeric(df_wide[c], errors="coerce")
+            if s.notna().any():          # keeps real numeric cols, drops 'mm'
+                df_wide[c] = s
+                numeric_plot_cols.append(c)
+    
+        if numeric_plot_cols:
+            vmin = min(df_wide[c].min() for c in numeric_plot_cols)
+            vmax = max(df_wide[c].max() for c in numeric_plot_cols)
+
+
+    # if cbar == 'uniform':
+    #     all_plot_cols = [
+    #         c for p in plot_structure.values()
+    #         for y in p.values()
+    #         for c in (y.values() if isinstance(y, dict) else [y])
+    #         if c in df_wide
+    #     ]
+    #     if all_plot_cols:
+    #         min_vals = [df_wide[c].dropna().min() for c in all_plot_cols]
+    #         max_vals = [df_wide[c].dropna().max() for c in all_plot_cols]
+    #         if any(pd.notna(v) for v in min_vals):
+    #             vmin = min(v for v in min_vals if pd.notna(v))
+    #         if any(pd.notna(v) for v in max_vals):
+    #             vmax = max(v for v in max_vals if pd.notna(v))
     
     plot_kwargs = dict(
         cmap=cmap, vmin=vmin, vmax=vmax, axis_off=axis_off,
@@ -2860,12 +2881,16 @@ def _get_metrics_from_cols(
                 metrics.add(col[len(p)+1:])
     return sorted(list(metrics))
 
+
+
 def _parse_wide_df_columns(
     df_wide: pd.DataFrame,
     value_prefixes: List[str]
 ) -> Dict[str, Dict[str, Dict[str, str]]]:
     """Parses wide-format columns into a structured dictionary."""
     plot_structure = {prefix: {} for prefix in value_prefixes}
+    
+    META_SUFFIXES = {"unit", "units", "uom"}  # add more if needed
     
     # Regex for columns with years, e.g., GWL_2022_q10 or GWL_2022_actual
     pattern_year = re.compile(
@@ -2886,6 +2911,8 @@ def _parse_wide_df_columns(
             prefix, year, suffix = match_year.groups()
             # If suffix is empty, it's a point prediction
             suffix = suffix or 'pred' 
+            if suffix in META_SUFFIXES:
+                continue
             if year not in plot_structure[prefix]:
                 plot_structure[prefix][year] = {}
             plot_structure[prefix][year][suffix] = col
@@ -2893,6 +2920,8 @@ def _parse_wide_df_columns(
             # Handles columns like 'subsidence_q10',
             # 'subsidence_actual'
             prefix, suffix = match_no_year.groups()
+            if suffix in META_SUFFIXES:
+                continue
             if "static" not in plot_structure[prefix]:
                  plot_structure[prefix]["static"] = {}
             plot_structure[prefix]["static"][suffix] = col
@@ -3417,7 +3446,7 @@ def plot_eval_future(
         forecast_view(
             forecast_df=df_eval,
             value_prefixes=[target_name],
-            kind='dual',              # [actual] [q10/q50/q90] layout
+            kind='dual', # [actual] [q10/q50/q90] layout
             view_quantiles=eval_view_quantiles,
             view_years=years_eval,
             spatial_cols=spatial_cols,

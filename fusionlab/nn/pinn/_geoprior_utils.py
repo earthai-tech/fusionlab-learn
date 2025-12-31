@@ -34,7 +34,6 @@ tf_shape = KERAS_DEPS.shape
 tf_zeros_like = KERAS_DEPS.zeros_like
 tf_ones = KERAS_DEPS.ones 
 tf_greater = KERAS_DEPS.greater 
-
 tf_cond = KERAS_DEPS.cond 
 tf_concat = KERAS_DEPS.concat 
 tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor 
@@ -42,8 +41,13 @@ tf_ones_like = KERAS_DEPS.ones_like
 tf_less_equal =KERAS_DEPS.less_equal 
 tf_abs = KERAS_DEPS.abs 
 tf_print = KERAS_DEPS.print 
+tf_reduce_mean = KERAS_DEPS.reduce_mean 
+tf_expand_dims = KERAS_DEPS.expand_dims 
+tf_tile = KERAS_DEPS.tile 
 
 
+
+_EPSILON = 1e-12
 # ---------------------------------------------------------------------
 # Scaling kwargs access helpers (alias-safe)
 # ---------------------------------------------------------------------
@@ -722,7 +726,7 @@ def from_si_subsidence(
         meta_keys=("subs_z_meta",),
         unit_key="subs_unit_to_si",
     )
-    eps = tf_constant(1e-12, tf_float32)
+    eps = tf_constant(_EPSILON, tf_float32)
     return (tf_cast(s_si, tf_float32) - b) / (a + eps)
 
 def deg_to_m(
@@ -1030,6 +1034,12 @@ def gwl_to_head_m(
                         lambda: sf[:, idx_i:idx_i + 1],
                         lambda: sf[:, :, idx_i:idx_i + 1],
                     )
+                    
+    if z_surf is None:
+        # if bool(sk.get("debug_units", False)):
+        tf_print("[gwl_to_head_m] z_surf missing ->",
+                 "use_head_proxy=", bool(sk.get("use_head_proxy", False)),
+                 "returning depth-like quantity (NOT true head)")
 
     # --------------------------------------------------
     # 7) If we have z_surf: head = z_surf - depth.
@@ -1346,3 +1356,67 @@ def policy_gate(
     frac = tf_maximum(tf_constant(0.0, dtype), frac)
     frac = tf_minimum(tf_constant(1.0, dtype), frac)
     return frac
+
+# ---------------------------------------------------------------------
+# Quantile helpers (shape-safe)
+# ---------------------------------------------------------------------
+def _q_index(quantiles, q=0.5):
+    """Return the index of q in quantiles (python int), else None."""
+    if quantiles is None:
+        return None
+    try:
+        qs = [float(x) for x in list(quantiles)]
+    except Exception:
+        return None
+    # exact match first
+    for i, qi in enumerate(qs):
+        if abs(qi - float(q)) < 1e-12:
+            return i
+    # fallback: closest
+    qv = float(q)
+    i0 = int(np.argmin([abs(qi - qv) for qi in qs]))
+    return i0
+
+
+def select_q(pred, quantiles=None, q=0.5, fallback="mean"):
+    """
+    Select q-quantile from pred.
+
+    pred:
+      - (B,H,Q,O) -> returns (B,H,O)
+      - (B,H,Q,1) -> returns (B,H,1)
+      - otherwise returned as-is.
+    """
+    r = getattr(pred, "shape", None)
+    rank = pred.shape.rank if r is not None else None
+
+    if rank != 4:
+        return pred
+
+    idx = _q_index(quantiles, q=q)
+    if idx is not None:
+        return pred[:, :, idx, :]
+
+    # fallback if quantiles list is missing/odd
+    if str(fallback).lower() == "mean":
+        return tf_reduce_mean(pred, axis=2)
+    # "middle" fallback
+    qn = tf_shape(pred)[2]
+    mid = qn // 2
+    return pred[:, :, mid, :]
+
+
+def tile_true_to_quantiles(y_true, y_pred):
+    """
+    Make y_true compatible with y_pred when y_pred has quantile axis.
+
+    y_true: (B,H,O) and y_pred: (B,H,Q,O) -> return y_true_q: (B,H,Q,O)
+    Else return y_true unchanged.
+    """
+    rt = y_true.shape.rank
+    rp = y_pred.shape.rank
+    if (rp == 4) and (rt == 3):
+        y4 = tf_expand_dims(y_true, axis=2)  # (B,H,1,O)
+        qn = tf_shape(y_pred)[2]
+        return tf_tile(y4, [1, 1, qn, 1])
+    return y_true

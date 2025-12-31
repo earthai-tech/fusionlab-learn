@@ -514,5 +514,3 @@ def make_coverage80(q_axis):
     fn.__name__ = f"coverage80_qax{q_axis}"
     return fn
 
-
-# Then compile with metrics=[make_coverage80(q_axis=-2), ...] if we want to be explicit.

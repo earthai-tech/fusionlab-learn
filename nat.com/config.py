@@ -43,7 +43,7 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "nansha"
+CITY_NAME = "zhongshan"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
@@ -323,7 +323,7 @@ GWL_WEIGHTS  = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only
 #   - "gw_flow"        : groundwater flow only
 #   - "none" or "off"  : physics switched off
-PDE_MODE_CONFIG = "both"
+PDE_MODE_CONFIG = "on"
 
 # For data-only baselines, scripts may ignore physics even if enabled above.
 PHYSICS_BASELINE_MODE = "none"
@@ -335,12 +335,12 @@ SCALE_PDE_RESIDUALS = True
 # -------------------------------------------------------------------
 # 5.2 Relative weights of each physics term (compile-time)
 # -------------------------------------------------------------------
-LAMBDA_CONS   = 0.10
-LAMBDA_GW     = 0.005
-LAMBDA_PRIOR  = 0.05
+LAMBDA_CONS   = 1.0     # from 0.10 (×10)
+LAMBDA_GW     = 0.05    # from 0.005 (×10) # 0.005
+LAMBDA_PRIOR  = 0.10   # keep/raise if K,Ss collapse # 0.05
 LAMBDA_SMOOTH = 0.01
 LAMBDA_MV     = 0.005
-LAMBDA_BOUNDS = 1e-4
+LAMBDA_BOUNDS = 1e-3   # from 1e-4 1e-4
 
 
 # -------------------------------------------------------------------
@@ -365,12 +365,12 @@ LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
 
 # If LAMBDA_OFFSET_SCHEDULE is None, callback uses warmup:
 # start -> end over `LAMBDA_OFFSET_WARMUP` epochs/steps.
-LAMBDA_OFFSET_WARMUP = 5# 15
+LAMBDA_OFFSET_WARMUP =1 # # 1–2 epochs (not 5)
 
 # Safe defaults:
 # - start small so the model learns data scale before physics locks in
 # - end at 1.0 (neutral)
-LAMBDA_OFFSET_START = 0.2 # 0.05
+LAMBDA_OFFSET_START =2.0 # 0.2 # 0.05
 LAMBDA_OFFSET_END = 10 #1.0
 
 # Optional explicit schedule:
@@ -425,6 +425,7 @@ Q_RAMP_EPOCHS_PHYSICS_FIRST = 2           # 0 => hard step
 # Keep Q regularization small even in physics-first (post-warmup).
 # (This is multiplied by your global physics offset as well.)
 LAMBDA_Q_PHYSICS_FIRST = 1e-5
+LOSS_WEIGHT_GWL_PHYSICS_FIRST = 0.05 
 
 SUBS_RESID_POLICY_PHYSICS_FIRST = "warmup_off"
 SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 5
@@ -469,7 +470,7 @@ PHYSICS_BOUNDS = {
 # Bounds penalty mode:
 # - "soft" : penalize violations (recommended)
 # - "hard" : clamp or reject (only if you know what you are doing)
-PHYSICS_BOUNDS_MODE = "hard"
+PHYSICS_BOUNDS_MODE = "hard" #"hard"
 
 # Time coordinate units used by physics conversions (rate_to_per_second etc.)
 # Must match what `TIME_COL` represents in your dataset.
@@ -621,7 +622,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 50
+EPOCHS = 5
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 

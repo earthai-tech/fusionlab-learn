@@ -1890,7 +1890,7 @@ def compute_smoothness_prior(
     Otherwise, if K_field/Ss_field are provided,
     we convert via division (less stable).
     """
-    eps = tf_constant(1e-12, dtype=tf_float32)
+    eps = tf_constant(_EPSILON, dtype=tf_float32)
 
     if already_log:
         out = (
@@ -1926,6 +1926,52 @@ def compute_smoothness_prior(
 # ---------------------------------------------------------------------
 # Bounds + field composition
 # ---------------------------------------------------------------------
+def guarded_exp_from_bounds(
+    raw_log,
+    log_min,
+    log_max,
+    *,
+    eps=0.0,
+    guard=5.0,
+    dtype=None,
+    name="",
+):
+    """
+    Safe exp() with a wide log-space guard-band around [log_min, log_max].
+
+    - raw_log: unconstrained log-parameter (may drift during training)
+    - log_min/log_max: physical bounds in log-space
+    - guard: extra margin to avoid overflow; values outside are clipped only
+             for *numerical safety*, not as a hard physical constraint.
+    """
+    if dtype is None:
+        dtype = raw_log.dtype
+
+    raw_log = tf_cast(raw_log, dtype)
+    log_min = tf_cast(log_min, dtype)
+    log_max = tf_cast(log_max, dtype)
+    guard = tf_cast(tf_constant(guard), dtype)
+    eps = tf_cast(tf_constant(eps), dtype)
+
+    # replace NaN/Inf with 0 to avoid propagating non-finites
+    raw_log = tf_where(
+        tf_math.is_finite(raw_log), raw_log, 
+        tf_zeros_like(raw_log)
+    )
+
+    # guard-band clip (prevents exp overflow)
+    log_safe = tf_clip_by_value(
+        raw_log, log_min - guard, log_max + guard
+        )
+
+    field = tf_exp(log_safe) + eps
+
+    if name:
+        tf_debugging.assert_all_finite(raw_log,  f"{name} raw_log non-finite")
+        tf_debugging.assert_all_finite(field,    f"{name} field non-finite")
+
+    return field, raw_log, log_safe
+
 def get_log_bounds(
     model,
     *,
@@ -2318,6 +2364,7 @@ def _finite_or_zero(x: Tensor) -> Tensor:
     x = tf_cast(x, tf_float32)
     return tf_where(tf_math.is_finite(x), x, tf_zeros_like(x))
 
+
 def compose_physics_fields(
     model,
     *,
@@ -2362,39 +2409,39 @@ def compose_physics_fields(
     rawSs = Ss_base + Ss_corr
 
     bounds_mode = str(getattr(model, "bounds_mode", "soft")).strip().lower()
-
+    
+    logK_min, logK_max, logSs_min, logSs_max = get_log_bounds(
+        model, as_tensor=True, dtype=rawK.dtype, verbose=verbose,
+    )
     # ---- K, Ss  ----
     if bounds_mode == "hard":
-        logK_min, logK_max, logSs_min, logSs_max = get_log_bounds(
-            model, as_tensor=True, dtype=rawK.dtype, verbose=0,
-        )
         K_field, logK = bounded_exp(
             rawK, logK_min, logK_max, eps=eps_KSs,
-            return_log=True, verbose=0,
+            return_log=True, verbose=verbose,
         )
         Ss_field, logSs = bounded_exp(
             rawSs, logSs_min, logSs_max, eps=eps_KSs,
-            return_log=True, verbose=0,
+            return_log=True, verbose=verbose,
         )
-    else:
-        logK = rawK
-        logSs = rawSs
-        K_field = tf_exp(logK) + tf_constant(eps_KSs, logK.dtype)
-        Ss_field = tf_exp(logSs) + tf_constant(eps_KSs, logSs.dtype)
-        
-        tf_debugging.assert_all_finite(rawK,  "rawK non-finite")
-        tf_debugging.assert_all_finite(rawSs, "rawSs non-finite")
-        
-        # key: watch the magnitude
-        
-        vprint(verbose, "rawK range MIN", tf_reduce_min(rawK))
-        vprint(verbose, "rawK range MAX", tf_reduce_max(rawSs))
-        vprint(verbose, "rawSs range MIN", tf_reduce_min(rawSs))
-        vprint(verbose, "rawSs range MAX", tf_reduce_max(rawSs))
-        
-        tf_debugging.assert_all_finite(K_field,  "K_field non-finite")
-        tf_debugging.assert_all_finite(Ss_field, "Ss_field non-finite")
 
+    else:
+        # Keep raw log-params (useful for priors/diagnostics),
+        # but NEVER feed an unbounded log into exp() in float32.
+        K_field,  logK,  _ = guarded_exp_from_bounds(
+            rawK,  logK_min,  logK_max, eps=eps_KSs, 
+            guard=5.0, name="K"
+        )
+        Ss_field, logSs, _ = guarded_exp_from_bounds(
+            rawSs, logSs_min, logSs_max,eps=eps_KSs,
+            guard=5.0, name="Ss"
+        )
+    
+        # Optional: keep the asserts, but now they won't trip from exp overflow.
+        tf_debugging.assert_all_finite(logK,    "rawK/logK non-finite")
+        tf_debugging.assert_all_finite(logSs,   "rawSs/logSs non-finite")
+        tf_debugging.assert_all_finite(K_field, "K_field non-finite")
+        tf_debugging.assert_all_finite(Ss_field,"Ss_field non-finite")
+    
 
     # ---- tau ( log-space composition + bounds) ----
     delta_log_tau = _finite_or_zero(tau_base + tau_corr)
@@ -2463,7 +2510,208 @@ def compose_physics_fields(
         log_tau_phys,   # optional but very useful for priors/diagnostics
     )
 
+def _log_bounds_residual(
+    logv: Tensor,
+    lo: Tensor,
+    hi: Tensor,
+    *,
+    eps: float = 1e-12,
+    name: str = "",
+) -> Tensor:
+    """
+    Normalized bound violation in log-space.
+
+    We compute a symmetric distance outside [lo, hi], then
+    normalize by the range (hi - lo). This returns 0 inside
+    bounds and >0 outside bounds.
+
+    Notes
+    -----
+    - We sanitize non-finite logv to avoid NaN explosions.
+    - lo/hi are assumed finite tensors (from helpers).
+    """
+    dtype = logv.dtype
+    zero = tf_constant(0.0, dtype=dtype)
+    eps_t = tf_constant(float(eps), dtype=dtype)
+
+    # Sanitize inputs: never propagate NaN/Inf into loss.
+    is_ok = tf_math.is_finite(logv)
+    logv = tf_where(is_ok, logv, tf_zeros_like(logv))
+
+    lo = tf_cast(lo, dtype)
+    hi = tf_cast(hi, dtype)
+
+    lower = tf_maximum(lo - logv, zero)
+    upper = tf_maximum(logv - hi, zero)
+
+    rng = tf_maximum(hi - lo, eps_t)
+    res = (lower + upper) / rng
+
+    # Optional debug checks (keep off by default).
+    if name:
+        msg = name + " bounds residual non-finite"
+        tf_debugging.assert_all_finite(res, msg)
+
+    return res
+
+
 def compute_bounds_residual(
+    model: Any,
+    *,
+    H_field: Tensor,
+    logK: Optional[Tensor] = None,
+    logSs: Optional[Tensor] = None,
+    log_tau: Optional[Tensor] = None,
+    K_field: Optional[Tensor] = None,
+    Ss_field: Optional[Tensor] = None,
+    tau_field: Optional[Tensor] = None,
+    eps: float = _EPSILON, 
+    verbose: int = 0,
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """
+    Bounds residuals for H, K, Ss, tau.
+
+    Preferred (soft mode)
+    ---------------------
+    Pass raw logs:
+      - logK, logSs, log_tau
+    so penalties see the *true* violations, not guarded
+    exp() outputs.
+
+    Fallback
+    --------
+    If logs are missing, infer them from fields:
+      - log(K_field), log(Ss_field), log(tau_field)
+    This is less ideal in soft mode if fields were guarded.
+    """
+    dtype = H_field.dtype
+    eps_t = tf_constant(eps, dtype=dtype)
+    zero = tf_constant(0.0, dtype=dtype)
+
+    # ------------------------------------------------------
+    # H bounds (linear space, SI meters).
+    # ------------------------------------------------------
+    H_safe = tf_maximum(tf_cast(H_field, dtype), eps_t)
+
+    sk = getattr(model, "scaling_kwargs", None) or {}
+    b = (sk.get("bounds", None) or {}) or {}
+
+    H_min = b.get("H_min", None)
+    H_max = b.get("H_max", None)
+
+    if (H_min is None) or (H_max is None):
+        R_H = tf_zeros_like(H_safe)
+    else:
+        H_min_t = tf_constant(float(H_min), dtype=dtype)
+        H_max_t = tf_constant(float(H_max), dtype=dtype)
+
+        lo = tf_maximum(H_min_t - H_safe, zero)
+        hi = tf_maximum(H_safe - H_max_t, zero)
+
+        rng = tf_maximum(H_max_t - H_min_t, eps_t)
+        R_H = (lo + hi) / rng
+
+    # ------------------------------------------------------
+    # K, Ss bounds (log-space).
+    # Prefer raw logs if provided.
+    # ------------------------------------------------------
+    out = get_log_bounds(
+        model,
+        as_tensor=True,
+        dtype=dtype,
+        verbose=0,
+    )
+    logK_min, logK_max, logSs_min, logSs_max = out
+
+    if logK_min is None:
+        # Bounds not configured -> no penalty.
+        R_K = tf_zeros_like(H_safe)
+        R_Ss = tf_zeros_like(H_safe)
+    else:
+        # ---- K residual ----
+        if logK is None:
+            if K_field is None:
+                R_K = tf_zeros_like(H_safe)
+            else:
+                K_safe = tf_maximum(tf_cast(K_field, dtype), eps_t)
+                logK_hat = tf_math.log(K_safe)
+                R_K = _log_bounds_residual(
+                    logK_hat,
+                    logK_min,
+                    logK_max,
+                    name="K",
+                )
+        else:
+            R_K = _log_bounds_residual(
+                tf_cast(logK, dtype),
+                logK_min,
+                logK_max,
+                name="K",
+            )
+
+        # ---- Ss residual ----
+        if logSs is None:
+            if Ss_field is None:
+                R_Ss = tf_zeros_like(H_safe)
+            else:
+                Ss_safe = tf_maximum(
+                    tf_cast(Ss_field, dtype),
+                    eps_t,
+                )
+                logSs_hat = tf_math.log(Ss_safe)
+                R_Ss = _log_bounds_residual(
+                    logSs_hat,
+                    logSs_min,
+                    logSs_max,
+                    name="Ss",
+                )
+        else:
+            R_Ss = _log_bounds_residual(
+                tf_cast(logSs, dtype),
+                logSs_min,
+                logSs_max,
+                name="Ss",
+            )
+
+    # ------------------------------------------------------
+    # tau bounds (log-space, seconds).
+    # Prefer raw log_tau if provided.
+    # ------------------------------------------------------
+    log_tau_min, log_tau_max = get_log_tau_bounds(
+        model,
+        as_tensor=True,
+        dtype=dtype,
+        verbose=0,
+    )
+
+    if log_tau is not None:
+        R_tau = _log_bounds_residual(
+            tf_cast(log_tau, dtype),
+            log_tau_min,
+            log_tau_max,
+            name="tau",
+        )
+    elif tau_field is not None:
+        tau_safe = tf_maximum(tf_cast(tau_field, dtype), eps_t)
+        log_tau_hat = tf_math.log(tau_safe)
+        R_tau = _log_bounds_residual(
+            log_tau_hat,
+            log_tau_min,
+            log_tau_max,
+            name="tau",
+        )
+    else:
+        R_tau = tf_zeros_like(H_safe)
+
+    if verbose > 6:
+        vprint(verbose, "bounds: R_H=", R_H)
+        vprint(verbose, "bounds: R_K=", R_K)
+        vprint(verbose, "bounds: R_Ss=", R_Ss)
+        vprint(verbose, "bounds: R_tau=", R_tau)
+
+    return R_H, R_K, R_Ss, R_tau
+
+def _compute_bounds_residual(
     model,
     K_field: Tensor,
     Ss_field: Tensor,
@@ -2545,6 +2793,33 @@ def compute_bounds_residual(
 
     return R_H, R_K, R_Ss
 
+@optional_tf_function
+def guard_scale_with_residual(
+    residual: Tensor,
+    scale: Tensor,
+    *,
+    floor: float,
+    eps: float = _EPSILON,
+) -> Tensor:
+    """Ensure `scale` is never tiny vs the actual residual."""
+    dtype = residual.dtype
+    eps_t = tf_constant(float(eps), dtype=dtype)
+    floor_t = tf_constant(float(floor), dtype=dtype)
+
+    r = tf_abs(_finite_or_zero(residual))
+    r = tf_reshape(r, [-1])
+
+    r_ref = tf_stop_gradient(tf_reduce_mean(r) + eps_t)
+    r_max = tf_stop_gradient(tf_reduce_max(r) + eps_t)
+
+    s = tf_cast(scale, dtype)
+    s = tf_where(tf_math.is_finite(s), s, floor_t)
+
+    # Guard: scale >= typical residual magnitude
+    s = tf_maximum(s, r_ref)
+    s = tf_maximum(s, tf_constant(0.1, dtype) * r_max)
+
+    return tf_stop_gradient(tf_maximum(s, floor_t))
 
 
 @optional_tf_function
@@ -2791,16 +3066,27 @@ def compute_scales(
             or "unitless"
         )
 
+    
+    def _diffs():
+        return tt[:, 1:, :] - tt[:, :-1, :]
+    
+    def _ones():
+        return tf_zeros_like(s[:, :1, :]) + 1.0
+    
     # --- Build dt in *time_units*.
     if dt is None:
         tt = tf_cast(t, tf_float32)
         if tt.shape.rank == 2:
             tt = tt[:, :, None]
+            
+        H = tf_shape(tt)[1]
 
-        if (tt.shape.rank >= 2) and (tf_shape(tt)[1] > 1):
-            dt_step = tt[:, 1:, :] - tt[:, :-1, :]
-        else:
-            dt_step = tf_zeros_like(s[:, :1, :]) + 1.0
+        # if (tt.shape.rank >= 2) and (tt.shape[1] > 1):
+        #     dt_step = tt[:, 1:, :] - tt[:, :-1, :]
+        # else:
+        #     dt_step = tf_zeros_like(s[:, :1, :]) + 1.0
+        
+        dt_step = tf_cond(tf_greater(H, 1), _diffs, _ones)
 
         # De-normalize if coords were normalized.
         coords_norm = bool(sk.get("coords_normalized", False))
