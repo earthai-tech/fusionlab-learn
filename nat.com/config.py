@@ -425,10 +425,10 @@ Q_RAMP_EPOCHS_PHYSICS_FIRST = 2           # 0 => hard step
 # Keep Q regularization small even in physics-first (post-warmup).
 # (This is multiplied by your global physics offset as well.)
 LAMBDA_Q_PHYSICS_FIRST = 1e-5
-LOSS_WEIGHT_GWL_PHYSICS_FIRST = 0.05 
+LOSS_WEIGHT_GWL_PHYSICS_FIRST =0.5 # 0.05 
 
 SUBS_RESID_POLICY_PHYSICS_FIRST = "warmup_off"
-SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 5
+SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 1 # 5
 SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 2  # 0 => hard step
  
 # --- Data-first (uncomment to use) ---------------------
@@ -604,7 +604,7 @@ CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 CONSOLIDATION_RESIDUAL_UNITS ="second"
 
 CONS_SCALE_FLOOR =1e-10
-GW_SCALE_FLOOR =1e-10
+GW_SCALE_FLOOR =1e-14
 DT_MIN_UNITS = 1e-6
 
 Q_WRT_NORMALIZED_TIME = False 

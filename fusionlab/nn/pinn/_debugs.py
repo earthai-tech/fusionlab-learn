@@ -22,7 +22,10 @@ from ._geoprior_maths import (
     tf_print_nonfinite,
     _assert_grads_finite,
     resolve_cons_units,
-    to_rms
+    to_rms, _stats, 
+    seconds_per_time_unit,
+    dt_to_seconds,
+
 )
 
 # ---------------------------------------------------------------------
@@ -49,9 +52,9 @@ tf_square = KERAS_DEPS.square
 tf_where = KERAS_DEPS.where
 tf_zeros_like = KERAS_DEPS.zeros_like
 tf_math =KERAS_DEPS.math 
-
-
-
+tf_sqrt = KERAS_DEPS.sqrt 
+tf_maximum = KERAS_DEPS.maximum
+tf_string = KERAS_DEPS.string
 # ---------------------------------------------------------------------
 # Small gates
 # ---------------------------------------------------------------------
@@ -96,6 +99,124 @@ def dbg_stats(tag: str, x: Tensor) -> None:
         tf_reduce_max(x),
         tf_reduce_mean(x),
     )
+
+
+def dbg_pde_divergence_maxabs(
+    *,
+    verbose: int,
+    raw_dKdhx_dcoords: Tensor,
+    raw_d_K_dh_dx_dx: Tensor,
+    raw_d_K_dh_dy_dy: Tensor,
+    d_K_dh_dx_dx: Optional[Tensor] = None,
+    d_K_dh_dy_dy: Optional[Tensor] = None,
+    level: int = 8,
+    prefix: str = "pde/div",
+) -> None:
+    """
+    Print max-abs diagnostics for the divergence terms, before and
+    optionally after normalization/chain-rule correction.
+
+    Usage
+    -----
+    # before normalization only:
+    dbg_pde_divergence_maxabs(
+        verbose=verbose,
+        raw_dKdhx_dcoords=dKdhx_dcoords,
+        raw_d_K_dh_dx_dx=d_K_dh_dx_dx_raw,
+        raw_d_K_dh_dy_dy=d_K_dh_dy_dy_raw,
+    )
+
+    # after normalization too:
+    dbg_pde_divergence_maxabs(
+        verbose=verbose,
+        raw_dKdhx_dcoords=dKdhx_dcoords,
+        raw_d_K_dh_dx_dx=d_K_dh_dx_dx_raw,
+        raw_d_K_dh_dy_dy=d_K_dh_dy_dy_raw,
+        d_K_dh_dx_dx=d_K_dh_dx_dx,
+        d_K_dh_dy_dy=d_K_dh_dy_dy,
+    )
+    """
+    if not dbg_on(verbose, level):
+        return
+
+    tf_print(f"[{prefix}] before normalization:")
+    tf_print(
+        "max|dKdhx_dcoords|=",
+        tf_reduce_max(tf_abs(raw_dKdhx_dcoords)),
+    )
+    tf_print(
+        "max|d_K_dh_dx_dx_raw|=",
+        tf_reduce_max(tf_abs(raw_d_K_dh_dx_dx)),
+    )
+    tf_print(
+        "max|d_K_dh_dy_dy_raw|=",
+        tf_reduce_max(tf_abs(raw_d_K_dh_dy_dy)),
+    )
+
+    if (d_K_dh_dx_dx is None) or (d_K_dh_dy_dy is None):
+        return
+
+    tf_print(f"[{prefix}] after normalization:")
+    tf_print(
+        "max|d_K_dh_dx_dx|=",
+        tf_reduce_max(tf_abs(d_K_dh_dx_dx)),
+    )
+    tf_print(
+        "max|d_K_dh_dy_dy|=",
+        tf_reduce_max(tf_abs(d_K_dh_dy_dy)),
+    )
+
+
+def dbg_gw_units_and_sec_scale(
+    *,
+    verbose: int,
+    gw_units: Any,
+    gw_res_before: Tensor,
+    gw_res_after: Tensor,
+    level: int = 7,
+    prefix: str = "gw/units",
+) -> None:
+    """
+    Print GW residual diagnostics before/after applying sec_u scaling.
+
+    Call this right after you do:
+        gw_res_before = gw_res
+        gw_res = gw_res * sec_u
+        gw_res_after = gw_res
+
+    Parameters
+    ----------
+    gw_units:
+        Usually resolve_gw_units(sk). Keep it as Any so callers can
+        pass python strings without TF ops.
+
+    Notes
+    -----
+    We print RMS to catch accidental unit explosions.
+    """
+    if not dbg_on(verbose, level):
+        return
+
+    tf_print(
+        f"[{prefix}] resolve_gw_units(sk)=",
+        gw_units,
+    )
+    tf_print(
+        f"[{prefix}] gw_res BEFORE sec_u: RMS=",
+        to_rms(gw_res_before),
+        "| max|.|=",
+        tf_reduce_max(tf_abs(gw_res_before)),
+    )
+    tf_print(
+        f"[{prefix}] gw_res AFTER  sec_u: RMS=",
+        to_rms(gw_res_after),
+        "| max|.|=",
+        tf_reduce_max(tf_abs(gw_res_after)),
+    )
+
+    # Optional: if you want to catch NaNs early (cheap)
+    tf_print_nonfinite(f"{prefix}/gw_res_before", gw_res_before)
+    tf_print_nonfinite(f"{prefix}/gw_res_after", gw_res_after)
 
 
 def dbg_mae(tag: str, y: Tensor, yhat: Tensor) -> None:
@@ -858,3 +979,264 @@ def dbg_step5_q(
     )
 
 
+
+def _dbg_stats_line(tag: str, x: Tensor) -> None:
+    """Print min/mean/max + rms for a tensor."""
+    x = tf_cast(x, tf_float32)
+    tf_print(
+        "[stats]",
+        tag,
+        "min/mean/max=",
+        tf_reduce_min(x),
+        tf_reduce_mean(x),
+        tf_reduce_max(x),
+        "| rms=",
+        tf_sqrt(tf_reduce_mean(tf_square(x))),
+    )
+
+
+def dbg_step8_residual_scale_stats(
+    *,
+    verbose: int,
+    level: int = 3,
+    cons_res_raw: Tensor,
+    cons_scale: Tensor,
+    gw_res_raw: Tensor,
+    gw_scale: Tensor,
+) -> None:
+    """
+    Debug block for residuals + scaling stats.
+
+    Replaces:
+        _stats("cons_res_raw", cons_res)
+        _stats("cons_scale", scales["cons_scale"])
+        _stats("gw_res_raw", gw_res)
+        _stats("gw_scale", scales["gw_scale"])
+    """
+    if not dbg_on(verbose, level):
+        return
+
+    tf_print("[train_step] --- residual/scale stats ---")
+    _dbg_stats_line("cons_res_raw", cons_res_raw)
+    _dbg_stats_line("cons_scale", cons_scale)
+    _dbg_stats_line("gw_res_raw", gw_res_raw)
+    _dbg_stats_line("gw_scale", gw_scale)
+
+
+def dbg_dt_debug(
+    *,
+    verbose: int,
+    level: int = 6,
+    time_units: str,
+    dt_units: Tensor,
+    t: Tensor,
+) -> None:
+    """
+    Debug dt conversion and t-grid sanity.
+
+    Replaces the "dt debug" block.
+    """
+    if not dbg_on(verbose, level):
+        return
+
+    sec_u = seconds_per_time_unit(
+        time_units,
+        dtype=tf_float32,
+    )
+    dt_sec = dt_to_seconds(
+        dt_units,
+        time_units=time_units,
+    )
+
+    tf_print("[dt debug] time_units =", time_units)
+    tf_print("[dt debug] sec_u =", sec_u)
+
+    tf_print(
+        "[dt debug] dt_units min/mean/max =",
+        tf_reduce_min(dt_units),
+        tf_reduce_mean(dt_units),
+        tf_reduce_max(dt_units),
+    )
+
+    tf_print(
+        "[dt debug] dt_sec   min/mean/max =",
+        tf_reduce_min(dt_sec),
+        tf_reduce_mean(dt_sec),
+        tf_reduce_max(dt_sec),
+    )
+
+    tf_print(
+        "[dt debug] dt_sec / dt_units (mean) =",
+        tf_reduce_mean(
+            dt_sec / tf_maximum(dt_units, tf_constant(1e-12, tf_float32))
+        ),
+    )
+
+    # show the first sample time grid (B=0)
+    tf_print("[t debug] t[0,:,0] =", t[0, :, 0])
+
+
+def dbg_call_nonfinite(
+    *,
+    verbose: int,
+    level: int = 6,
+    coords_for_decoder: Tensor,
+    H_si: Tensor,
+    K_base: Tensor,
+    Ss_base: Tensor,
+    dlogtau_base: Tensor,
+    tau_field: Tensor,
+) -> None:
+    """
+    Debug non-finite checks for call() internal tensors.
+
+    Replaces:
+        tf_print_nonfinite("call/coords_for_decoder", coords_for_decoder)
+        ...
+    """
+    if not dbg_on(verbose, level):
+        return
+
+    tf_print_nonfinite("call/coords_for_decoder", coords_for_decoder)
+    tf_print_nonfinite("call/H_si", H_si)
+    tf_print_nonfinite("call/K_base", K_base)
+    tf_print_nonfinite("call/Ss_base", Ss_base)
+    tf_print_nonfinite("call/tau_base", dlogtau_base)
+    tf_print_nonfinite(
+        "call/tau_field(pre-integrator)",
+        tau_field,
+    )
+
+def dbg_step3_residual_scales(
+    *,
+    verbose: int,
+    cons_res: Tensor,
+    gw_res: Tensor,
+    scales: dict,
+    level: int = 3,
+) -> None:
+    """Print raw residual stats + scaling factors."""
+    if not dbg_on(verbose, level):
+        return
+
+    cons_scale = scales.get("cons_scale", None)
+    gw_scale = scales.get("gw_scale", None)
+
+    _stats("cons_res_raw", cons_res)
+    if cons_scale is not None:
+        _stats("cons_scale", cons_scale)
+
+    _stats("gw_res_raw", gw_res)
+    if gw_scale is not None:
+        _stats("gw_scale", gw_scale)
+
+
+def dbg_dt_diag(
+    *,
+    verbose: int,
+    time_units: str,
+    dt_units: Tensor,
+    t: Tensor,
+    level: int = 7,
+) -> None:
+    """Print dt consistency checks in time_units and seconds."""
+    if not dbg_on(verbose, level):
+        return
+
+    sec_u = seconds_per_time_unit(
+        time_units,
+        dtype=tf_float32,
+    )
+    dt_sec = dt_to_seconds(
+        dt_units,
+        time_units=time_units,
+    )
+
+    tf_print("[dt debug] time_units =", time_units)
+    tf_print("[dt debug] sec_u =", sec_u)
+
+    tf_print(
+        "[dt debug] dt_units min/mean/max =",
+        tf_reduce_min(dt_units),
+        tf_reduce_mean(dt_units),
+        tf_reduce_max(dt_units),
+    )
+
+    tf_print(
+        "[dt debug] dt_sec   min/mean/max =",
+        tf_reduce_min(dt_sec),
+        tf_reduce_mean(dt_sec),
+        tf_reduce_max(dt_sec),
+    )
+
+    tf_print(
+        "[dt debug] dt_sec / dt_units (mean) =",
+        tf_reduce_mean(
+            dt_sec / tf_maximum(dt_units, 1e-12),
+        ),
+    )
+
+    tf_print("[t debug] t[0,:,0] =", t[0, :, 0])
+
+
+def dbg_call_nonfinite_diag(
+    *,
+    verbose: int,
+    coords_for_decoder: Tensor,
+    H_si: Tensor,
+    K_base: Tensor,
+    Ss_base: Tensor,
+    dlogtau_base: Tensor,
+    tau_field: Tensor,
+    level: int = 7,
+) -> None:
+    """Print non-finite diagnostics inside call()."""
+    if not dbg_on(verbose, level):
+        return
+
+    tf_print_nonfinite(
+        "call/coords_for_decoder",
+        coords_for_decoder,
+    )
+    tf_print_nonfinite("call/H_si", H_si)
+    tf_print_nonfinite("call/K_base", K_base)
+    tf_print_nonfinite("call/Ss_base", Ss_base)
+    tf_print_nonfinite(
+        "call/tau_base",
+        dlogtau_base,
+    )
+    tf_print_nonfinite(
+        "call/tau_field(pre-integrator)",
+        tau_field,
+    )
+
+def dbg_gw_grad_flux_rms(
+    *,
+    verbose: int,
+    dh_dx_raw: Tensor,
+    dh_dy_raw: Tensor,
+    K_field: Tensor,
+    level: int = 8,
+    prefix: str = "gw/gradflux",
+) -> None:
+    """
+    Print RMS diagnostics for spatial head gradients and Darcy-like
+    flux terms K*∂h/∂x, K*∂h/∂y (raw coord units).
+
+    Replaces:
+        tf_print("to_rms(dh_dx)=", to_rms(dh_dx_raw))
+        tf_print("to_rms(dh_dy)=", to_rms(dh_dy_raw))
+        tf_print("to_rms(K_field * dh_dx)=", to_rms(K_field * dh_dx_raw))
+        tf_print("to_rms(K_field * dh_dy)=", to_rms(K_field * dh_dy_raw))
+    """
+    if not dbg_on(verbose, level):
+        return
+
+    tf_print(f"[{prefix}] rms(dh_dx_raw)=", to_rms(dh_dx_raw))
+    tf_print(f"[{prefix}] rms(dh_dy_raw)=", to_rms(dh_dy_raw))
+
+    fx = K_field * dh_dx_raw
+    fy = K_field * dh_dy_raw
+
+    tf_print(f"[{prefix}] rms(K*dh_dx_raw)=", to_rms(fx))
+    tf_print(f"[{prefix}] rms(K*dh_dy_raw)=", to_rms(fy))

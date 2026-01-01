@@ -95,7 +95,7 @@ _param_docs = DocstringComponents.from_nested_components(
 )
 
 
-_EPSILON = 1e-12
+_EPSILON = 1e-15
 
 # ---------------------------------------------------------------------
 # Time units + scaling
@@ -1012,7 +1012,7 @@ def compute_gw_flow_residual(
     d_K_dh_dx_dx = _finite_or_zero(tf_convert_to_tensor(d_K_dh_dx_dx, dtype=dh_dt.dtype))
     d_K_dh_dy_dy = _finite_or_zero(tf_convert_to_tensor(d_K_dh_dy_dy, dtype=dh_dt.dtype))
     Ss_field = _finite_or_zero(tf_convert_to_tensor(Ss_field, dtype=dh_dt.dtype))
-
+    
     # --- Q: scalar / (H,) / (B,H) / (B,H,1) -> (B,H,1) ---
     if Q is None:
         Qv = tf_zeros_like(dh_dt)
@@ -1033,6 +1033,20 @@ def compute_gw_flow_residual(
         vprint(verbose, "gw: div=", div_K_grad_h)
         vprint(verbose, "gw: Q=", Qv)
         vprint(verbose, "gw: out=", out)
+    
+        tf_print( 
+            "to_rms(Ss_field * dh_dt)=", 
+            to_rms(Ss_field * dh_dt),
+        
+            'to_rms(div_K_grad_h)=',
+            to_rms(div_K_grad_h),
+            
+            'to_rms(Qv)=',
+            to_rms(Qv),
+            
+            'to_rms(out)=',
+            to_rms(out),
+            )
 
     return out
 
@@ -2364,7 +2378,6 @@ def _finite_or_zero(x: Tensor) -> Tensor:
     x = tf_cast(x, tf_float32)
     return tf_where(tf_math.is_finite(x), x, tf_zeros_like(x))
 
-
 def compose_physics_fields(
     model,
     *,
@@ -2793,7 +2806,7 @@ def _compute_bounds_residual(
 
     return R_H, R_K, R_Ss
 
-@optional_tf_function
+
 def guard_scale_with_residual(
     residual: Tensor,
     scale: Tensor,
@@ -2820,7 +2833,6 @@ def guard_scale_with_residual(
     s = tf_maximum(s, tf_constant(0.1, dtype) * r_max)
 
     return tf_stop_gradient(tf_maximum(s, floor_t))
-
 
 @optional_tf_function
 def scale_residual(
@@ -2857,15 +2869,17 @@ def _cons_scale_core(
     """
     Consolidation scale.
 
-    Output units match the consolidation residual units:
-    - "step": meters/step
-    - "time_unit": meters/time_unit
-    - "si": meters/second
+    Output units match consolidation residual units:
+    - "step": meters / step
+    - "time_unit": meters / time_unit
+    - "si": meters / second
     """
     eps = tf_constant(_EPSILON, tf_float32)
     floor_t = tf_constant(float(floor), tf_float32)
 
-    # Sanitize inputs (no NaN/Inf in reductions).
+    # ------------------------------------------------------
+    # Sanitize inputs (avoid NaN/Inf in reductions).
+    # ------------------------------------------------------
     s = _finite_or_zero(s)
     h = _finite_or_zero(h)
     Ss = _finite_or_zero(Ss)
@@ -2873,54 +2887,85 @@ def _cons_scale_core(
     dt_ref_u = finite_floor(dt_ref_u, _EPSILON)
     dt_ref_s = finite_floor(dt_ref_s, _EPSILON)
 
-    # --- ds statistics (meters).
-    if tf_shape(s)[1] > 1:
+    # ------------------------------------------------------
+    # ds statistics (meters). Must be graph-safe:
+    # use tf_cond, not a Python `if` on tf.shape().
+    # ------------------------------------------------------
+    def _ds_stats() -> tuple[Tensor, Tensor]:
         ds = s[:, 1:, :] - s[:, :-1, :]
-        ds_abs = tf_abs(tf_reshape(_finite_or_zero(ds), [-1]))
+        ds = _finite_or_zero(ds)
+
+        ds_abs = tf_abs(tf_reshape(ds, [-1]))
+
         ds_ref = tf_stop_gradient(tf_reduce_mean(ds_abs))
         ds_max = tf_stop_gradient(tf_reduce_max(ds_abs))
-    else:
-        ds_ref = tf_constant(0.0, tf_float32)
-        ds_max = tf_constant(0.0, tf_float32)
 
+        return ds_ref, ds_max
+
+    def _ds_stats_zero() -> tuple[Tensor, Tensor]:
+        z = tf_constant(0.0, tf_float32)
+        return z, z
+
+    # Horizon length H = shape(s)[1]
+    H_len = tf_shape(s)[1]
+    has_ds = tf_greater(H_len, tf_constant(1, tf_int32))
+
+    ds_ref, ds_max = tf_cond(has_ds, _ds_stats, _ds_stats_zero)
+
+    # ------------------------------------------------------
     # Base scale from ds (step / rate).
+    # ------------------------------------------------------
     if mode == "step":
         cons = tf_maximum(ds_ref, 0.1 * ds_max)
+
     elif mode == "time_unit":
         cons = tf_maximum(
             ds_ref / dt_ref_u,
             0.1 * (ds_max / dt_ref_u),
         )
+
     else:
         cons = tf_maximum(
             ds_ref / dt_ref_s,
             0.1 * (ds_max / dt_ref_s),
         )
 
+    # ------------------------------------------------------
     # Optional equilibrium / relaxation term.
+    # ------------------------------------------------------
     if use_relax:
         tau = finite_floor(tau, _EPSILON)
         Hf = tf_maximum(_finite_or_zero(Hf), 0.0)
         href = _finite_or_zero(href)
 
+        # dh >= 0 (drawdown / head loss proxy)
         dh = tf_maximum(href - h, 0.0)
+
+        # 1D equilibrium settlement (meters)
         s_eq = Ss * dh * Hf
 
+        # Misfit to equilibrium (meters)
         eq_mis = tf_abs(_finite_or_zero(s_eq - s))
+        eq_vec = tf_reshape(eq_mis, [-1])
+
         eq_ref = tf_stop_gradient(
-            tf_reduce_mean(tf_reshape(eq_mis, [-1])) + eps
+            tf_reduce_mean(eq_vec) + eps
         )
         eq_max = tf_stop_gradient(
-            tf_reduce_max(tf_reshape(eq_mis, [-1])) + eps
+            tf_reduce_max(eq_vec) + eps
         )
 
         if mode == "step":
+            # In step mode, keep as meters/step.
             cons = tf_maximum(cons, eq_ref)
             cons = tf_maximum(cons, 0.1 * eq_max)
+
         else:
+            # Relaxation rate: meters/second.
             relax = tf_abs(eq_mis / (tau + eps))
 
             if mode == "time_unit":
+                # Convert to meters/time_unit.
                 sec_u = seconds_per_time_unit(
                     time_units,
                     dtype=tf_float32,
@@ -2928,18 +2973,23 @@ def _cons_scale_core(
                 relax = relax * sec_u
 
             relax = _finite_or_zero(relax)
+            r_vec = tf_reshape(relax, [-1])
+
             r_ref = tf_stop_gradient(
-                tf_reduce_mean(tf_reshape(relax, [-1])) + eps
+                tf_reduce_mean(r_vec) + eps
             )
             r_max = tf_stop_gradient(
-                tf_reduce_max(tf_reshape(relax, [-1])) + eps
+                tf_reduce_max(r_vec) + eps
             )
+
             cons = tf_maximum(cons, r_ref)
             cons = tf_maximum(cons, 0.1 * r_max)
 
+    # ------------------------------------------------------
+    # Final floor and stop-gradient.
+    # ------------------------------------------------------
     cons = tf_maximum(cons, floor_t)
     return tf_stop_gradient(cons)
-
 
 @optional_tf_function
 def _gw_scale_core(
@@ -2959,59 +3009,106 @@ def _gw_scale_core(
 
     Base SI terms are in 1/s:
     - storage: Ss * dh/dt
-    - div:     div(K grad h) / H^2 (precomputed upstream)
-    - forcing: Q (per-volume) / (??) (precomputed upstream)
+    - div:     div(K grad h)  (precomputed upstream)
+    - forcing: Q             (precomputed upstream)
+
+    Output units:
+    - default: SI (1/s)
+    - if gw_units == "time_unit": 1/time_unit
     """
     eps = tf_constant(_EPSILON, tf_float32)
     floor_t = tf_constant(float(floor), tf_float32)
 
+    # ------------------------------------------------------
+    # Sanitize inputs (avoid NaN/Inf in reductions).
+    # ------------------------------------------------------
     h = _finite_or_zero(h)
     Ss = _finite_or_zero(Ss)
     dt_ref_s = finite_floor(dt_ref_s, _EPSILON)
 
+    # ------------------------------------------------------
     # dh/dt reference (SI: m/s).
+    # If dh_dt is provided, use it directly.
+    # Otherwise estimate from consecutive steps in h.
+    # Must be graph-safe: use tf_cond for shape checks.
+    # ------------------------------------------------------
+    def _dh_dt_from_h() -> tuple[Tensor, Tensor]:
+        dh = h[:, 1:, :] - h[:, :-1, :]
+        dh = _finite_or_zero(dh)
+
+        dh_abs = tf_abs(tf_reshape(dh, [-1]))
+
+        dh_ref = tf_stop_gradient(tf_reduce_mean(dh_abs))
+        dh_max = tf_stop_gradient(tf_reduce_max(dh_abs))
+
+        dh_dt_ref = dh_ref / dt_ref_s
+        dh_dt_max = dh_max / dt_ref_s
+
+        return dh_dt_ref, dh_dt_max
+
+    def _dh_dt_zero() -> tuple[Tensor, Tensor]:
+        z = tf_constant(0.0, tf_float32)
+        return z, z
+
     if dh_dt is None:
-        if tf_shape(h)[1] > 1:
-            dh = h[:, 1:, :] - h[:, :-1, :]
-            dh_abs = tf_abs(tf_reshape(_finite_or_zero(dh), [-1]))
-            dh_ref = tf_stop_gradient(tf_reduce_mean(dh_abs))
-            dh_max = tf_stop_gradient(tf_reduce_max(dh_abs))
-            dh_dt_ref = dh_ref / dt_ref_s
-            dh_dt_max = dh_max / dt_ref_s
-        else:
-            dh_dt_ref = tf_constant(0.0, tf_float32)
-            dh_dt_max = tf_constant(0.0, tf_float32)
+        H_len = tf_shape(h)[1]
+        has_dh = tf_greater(H_len, tf_constant(1, tf_int32))
+        dh_dt_ref, dh_dt_max = tf_cond(
+            has_dh,
+            _dh_dt_from_h,
+            _dh_dt_zero,
+        )
     else:
-        d = tf_abs(tf_reshape(_finite_or_zero(dh_dt), [-1]))
+        d = _finite_or_zero(dh_dt)
+        d = tf_abs(tf_reshape(d, [-1]))
+
         dh_dt_ref = tf_stop_gradient(tf_reduce_mean(d))
         dh_dt_max = tf_stop_gradient(tf_reduce_max(d))
 
+    # ------------------------------------------------------
     # Ss reference (1/m).
+    # ------------------------------------------------------
     Ss_abs = tf_abs(tf_reshape(_finite_or_zero(Ss), [-1]))
     Ss_ref = tf_stop_gradient(tf_reduce_mean(Ss_abs))
 
+    # Storage term scale (1/s).
     storage_ref = Ss_ref * dh_dt_ref
     storage_max = Ss_ref * dh_dt_max
+
     gw = tf_maximum(storage_ref, 0.1 * storage_max)
 
+    # ------------------------------------------------------
+    # Optional div term (already in compatible units).
+    # ------------------------------------------------------
     if div_K_grad_h is not None:
-        divv = tf_abs(tf_reshape(_finite_or_zero(div_K_grad_h),
-                                 [-1]))
+        divv = _finite_or_zero(div_K_grad_h)
+        divv = tf_abs(tf_reshape(divv, [-1]))
+
         div_ref = tf_stop_gradient(tf_reduce_mean(divv) + eps)
         div_max = tf_stop_gradient(tf_reduce_max(divv) + eps)
+
         gw = tf_maximum(gw, div_ref)
         gw = tf_maximum(gw, 0.1 * div_max)
 
+    # ------------------------------------------------------
+    # Optional forcing term Q (already in compatible units).
+    # ------------------------------------------------------
     if Q is not None:
-        QQ = tf_abs(tf_reshape(_finite_or_zero(Q), [-1]))
+        QQ = _finite_or_zero(Q)
+        QQ = tf_abs(tf_reshape(QQ, [-1]))
+
         Q_ref = tf_stop_gradient(tf_reduce_mean(QQ) + eps)
         Q_max = tf_stop_gradient(tf_reduce_max(QQ) + eps)
+
         gw = tf_maximum(gw, Q_ref)
         gw = tf_maximum(gw, 0.1 * Q_max)
 
+    # Floor for numerical stability.
     gw = tf_maximum(gw, floor_t)
 
-    # Optional "per time_unit" scaling (not SI).
+    # ------------------------------------------------------
+    # Optional "per time_unit" conversion (non-SI).
+    # ------------------------------------------------------
     if gw_units == "time_unit":
         sec_u = seconds_per_time_unit(
             time_units,
@@ -3020,7 +3117,6 @@ def _gw_scale_core(
         gw = gw * sec_u
 
     return tf_stop_gradient(gw)
-
 
 def compute_scales(
     model,
@@ -3334,18 +3430,20 @@ def to_rms(
     ms_floor: float | None = None,
     rms_floor: Optional[float] = None,
     nan_policy: str = "propagate",
-    dtype: Tensor = tf_float32,
+    dtype: Any = None,
 ) -> Tensor:
     """Root-mean-square (RMS) of a tensor.
 
     Notes
     -----
-    - By default (eps=None), NO flooring is applied.
-      This avoids "frozen" epsilons in logs.
-    - Use eps (mean-square floor) only when you really
-      need a nonzero lower bound (rare for metrics).
-    - Use rms_floor if you specifically want an RMS
-      lower bound (also opt-in).
+    - Default dtype is float32 (fast). Pass dtype=tf_float64
+      for diagnostics when values are extremely small.
+    - By default (eps=None and ms_floor=None), NO flooring is
+      applied. Floors are opt-in.
+    - nan_policy:
+      - "propagate": NaN/Inf propagate naturally.
+      - "raise": assert all finite before reduce.
+      - "omit": ignore non-finite entries in RMS.
 
     Parameters
     ----------
@@ -3356,26 +3454,31 @@ def to_rms(
     keepdims : bool
         Keep reduced dimensions.
     eps : float | None
-        Optional lower bound on the mean-square before
-        sqrt (mean-square floor). If None, disabled.
-    rms_floor : float | None
-        Optional lower bound on the RMS after sqrt.
+        Optional lower bound on the mean-square before sqrt.
         If None, disabled.
-    nan_policy : {"propagate", "raise", "omit"}
-        - "propagate": NaN/Inf propagate naturally.
-        - "raise": assert all finite before reduce.
-        - "omit": ignore non-finite entries in RMS.
-    dtype : tf.DType
-        Compute dtype (casts x before reduction).
+    ms_floor : float | None
+        Alias for a mean-square floor (applied after eps).
+        If None, disabled.
+    rms_floor : float | None
+        Optional lower bound on RMS after sqrt. If None, disabled.
+    nan_policy : {"propagate","raise","omit"}
+        NaN/Inf handling policy.
+    dtype : tf.DType | None
+        Compute dtype. If None, uses tf_float32.
 
     Returns
     -------
     rms : Tensor
         RMS value (scalar if axis=None; else reduced).
     """
-    x = tf_cast(x, dtype)
+    pol = str(nan_policy or "propagate").strip().lower()
+    if pol not in ("propagate", "raise", "omit"):
+        pol = "propagate"
 
-    if nan_policy == "raise":
+    dt = tf_float32 if dtype is None else dtype
+    x = tf_cast(x, dt)
+
+    if pol == "raise":
         tf_debugging.assert_all_finite(
             x,
             "to_rms(): x has NaN/Inf",
@@ -3386,48 +3489,52 @@ def to_rms(
             keepdims=keepdims,
         )
 
-    elif nan_policy == "omit":
+    elif pol == "omit":
         finite = tf_math.is_finite(x)
         x0 = tf_where(finite, x, tf_zeros_like(x))
+
         num = tf_reduce_sum(
             tf_square(x0),
             axis=axis,
             keepdims=keepdims,
         )
         den = tf_reduce_sum(
-            tf_cast(finite, dtype),
+            tf_cast(finite, dt),
             axis=axis,
             keepdims=keepdims,
         )
         den = tf_maximum(
             den,
-            tf_constant(1.0, dtype),
+            tf_constant(1.0, dt),
         )
         ms = num / den
 
-    else:  # "propagate"
+    else:  # propagate
         ms = tf_reduce_mean(
             tf_square(x),
             axis=axis,
             keepdims=keepdims,
         )
 
+    # mean-square floors (opt-in)
     if eps is not None and float(eps) > 0.0:
         ms = tf_maximum(
             ms,
-            tf_constant(float(eps), dtype),
+            tf_constant(float(eps), dt),
         )
-        
-    if ms_floor is not None:
-        msf = tf_constant(float(ms_floor), dtype)
-        ms = tf_maximum(ms, msf)
-        
+
+    if ms_floor is not None and float(ms_floor) > 0.0:
+        ms = tf_maximum(
+            ms,
+            tf_constant(float(ms_floor), dt),
+        )
+
     rms = tf_sqrt(ms)
 
     if rms_floor is not None and float(rms_floor) > 0.0:
         rms = tf_maximum(
             rms,
-            tf_constant(float(rms_floor), dtype),
+            tf_constant(float(rms_floor), dt),
         )
 
     return rms

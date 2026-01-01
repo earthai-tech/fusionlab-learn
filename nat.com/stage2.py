@@ -1420,7 +1420,7 @@ history = subs_model_inst.fit(
     verbose=1,  
 )
 print(f"Best val_loss: {min(history.history.get('val_loss', [np.inf])):.4f}")
-#%%
+#%
 
 # ---- files/paths
 weights_path     = os.path.join(
