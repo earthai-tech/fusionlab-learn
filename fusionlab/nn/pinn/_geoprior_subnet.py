@@ -1196,8 +1196,7 @@ class GeoPriorSubsNet(BaseAttentive):
         into `call()` (we inject it into inputs_fwd["coords"]). Otherwise,
         `tape.gradient(..., coords)` can become None.
         """
-        verbose = int(getattr(self, "verbose", 0))
-
+        
         # ----------------------------------------------------------
         # 0) Unpack (inputs, targets) + normalize target keys
         # ----------------------------------------------------------
@@ -1209,7 +1208,7 @@ class GeoPriorSubsNet(BaseAttentive):
             )
 
         dbg_step0_inputs_targets(
-            verbose=verbose,
+            verbose=self.verbose,
             inputs=inputs,
             targets=targets,
         )
@@ -1234,7 +1233,7 @@ class GeoPriorSubsNet(BaseAttentive):
         )
 
         dbg_step1_thickness(
-            verbose=verbose,
+            verbose=self.verbose,
             H_field=H_field,
             H_si=H_si,
         )
@@ -1244,7 +1243,7 @@ class GeoPriorSubsNet(BaseAttentive):
         coords = tf_convert_to_tensor(_get_coords(inputs), tf_float32)
     
         dbg_step2_coords_checks(
-            verbose=verbose,
+            verbose=self.verbose,
             coords=coords,
             inputs=inputs,
         )
@@ -1293,7 +1292,7 @@ class GeoPriorSubsNet(BaseAttentive):
             }
             
             dbg_units_once(
-                verbose=verbose,
+                verbose=self.verbose,
                 iterations=self.optimizer.iterations,
                 targets=targets,
                 gwl_pred_final=gwl_pred_final,
@@ -1333,7 +1332,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 )
             
             dbg_assert_data_layout(
-                verbose=verbose,
+                verbose=self.verbose,
                 data_final=data_final,
                 data_mean_raw=data_mean_raw,
                 quantiles=self.quantiles,
@@ -1347,7 +1346,7 @@ class GeoPriorSubsNet(BaseAttentive):
             )
             
             dbg_step3_mean_head(
-                verbose=verbose,
+                verbose=self.verbose,
                 gwl_mean_raw=gwl_mean_raw,
                 gwl_si=gwl_si,
                 h_si=h_si,
@@ -1365,7 +1364,7 @@ class GeoPriorSubsNet(BaseAttentive):
             )= self.split_physics_predictions(phys_mean_raw)
 
             dbg_step31_forward_outputs(
-                verbose=verbose,
+                verbose=self.verbose,
                 data_final=data_final,
                 s_pred_final=s_pred_final,
                 gwl_pred_final=gwl_pred_final,
@@ -1405,11 +1404,11 @@ class GeoPriorSubsNet(BaseAttentive):
                 Ss_base=Ss_base,
                 tau_base=dlogtau_base,  # interpreted as Δlogτ
                 training=True,
-                verbose=verbose,
+                verbose=self.verbose,
             )
 
             dbg_step33_physics_logits(
-                verbose=verbose,
+                verbose=self.verbose,
                 K_logits=K_logits,
                 Ss_logits=Ss_logits,
                 dlogtau_logits=dlogtau_logits,
@@ -1420,7 +1419,7 @@ class GeoPriorSubsNet(BaseAttentive):
             )
 
             dbg_step33_physics_fields(
-                verbose=verbose,
+                verbose=self.verbose,
                 K_field=K_field,
                 Ss_field=Ss_field,
                 tau_field=tau_field,
@@ -1459,7 +1458,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 raise ValueError("Second-order PDE gradients are None.")
                 
             dbg_gw_grad_flux_rms(
-                verbose=verbose,
+                verbose=self.verbose,
                 dh_dx_raw=dh_dx_raw,
                 dh_dy_raw=dh_dy_raw,
                 K_field=K_field,
@@ -1492,7 +1491,7 @@ class GeoPriorSubsNet(BaseAttentive):
             dK_dx, dK_dy, dSs_dx, dSs_dy = dK_dx_raw, dK_dy_raw, dSs_dx_raw, dSs_dy_raw
     
             dbg_step4_ad_raw(
-                verbose=verbose,
+                verbose=self.verbose,
                 dh_dcoords=dh_dcoords,
                 dh_dt_raw=dh_dt_raw,
                 dh_dx_raw=dh_dx_raw,
@@ -1512,7 +1511,7 @@ class GeoPriorSubsNet(BaseAttentive):
             )
             
             dbg_pde_divergence_maxabs(
-                verbose=verbose,
+                verbose=self.verbose,
                 raw_dKdhx_dcoords=dKdhx_dcoords,
                 raw_d_K_dh_dx_dx=d_K_dh_dx_dx_raw,
                 raw_d_K_dh_dy_dy=d_K_dh_dy_dy_raw,
@@ -1562,7 +1561,7 @@ class GeoPriorSubsNet(BaseAttentive):
             
             # and check after normalization too:
             dbg_pde_divergence_maxabs(
-                verbose=verbose,
+                verbose=self.verbose,
                 raw_dKdhx_dcoords=dKdhx_dcoords,
                 raw_d_K_dh_dx_dx=d_K_dh_dx_dx_raw,
                 raw_d_K_dh_dy_dy=d_K_dh_dy_dy_raw,
@@ -1572,7 +1571,7 @@ class GeoPriorSubsNet(BaseAttentive):
 
 
             dbg_step41_si_grads(
-                verbose=verbose,
+                verbose=self.verbose,
                 dh_dt=dh_dt,
                 d_K_dh_dx_dx=d_K_dh_dx_dx,
                 d_K_dh_dy_dy=d_K_dh_dy_dy,
@@ -1600,7 +1599,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 t_range_units=tR_tf,
                 time_units=self.time_units,
                 scaling_kwargs=self.scaling_kwargs,
-                verbose=verbose,
+                verbose=self.verbose,
             )
             # Ensure (B,H,1) and broadcastable with dh_dt (graph-safe)
             r = tf_rank(Q_si)
@@ -1627,7 +1626,7 @@ class GeoPriorSubsNet(BaseAttentive):
 
             dt_units = infer_dt_units_from_t(t, self.scaling_kwargs)  # (B,H,1) in self.time_units
             dbg_dt_debug(
-                verbose=verbose,
+                verbose=self.verbose,
                 time_units=self.time_units,
                 dt_units=dt_units,
                 t=t,
@@ -1732,13 +1731,13 @@ class GeoPriorSubsNet(BaseAttentive):
 
 
                 dbg_cons_units_rms(
-                    verbose=verbose,
+                    verbose=self.verbose,
                     sk=sk,
                     cons_res=cons_res,
                 )
 
                 dbg_step6_consolidation(
-                    verbose=verbose,
+                    verbose=self.verbose,
                     allow_resid=allow_resid,
                     cons_active=cons_active,
                     s_mean_raw=s_mean_raw,
@@ -1764,7 +1763,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 d_K_dh_dy_dy=d_K_dh_dy_dy,
                 Ss_field=Ss_field,
                 Q=Q_si,
-                verbose=verbose,
+                verbose=self.verbose,
             )
 
             gw_units = resolve_gw_units(sk)
@@ -1776,7 +1775,7 @@ class GeoPriorSubsNet(BaseAttentive):
             gw_after = gw_res
             
             dbg_gw_units_and_sec_scale(
-                verbose=verbose,
+                verbose=self.verbose,
                 gw_units=gw_units,
                 gw_res_before=gw_before,
                 gw_res_after=gw_after,
@@ -1798,7 +1797,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 step=self.optimizer.iterations,
                 alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1)),
                 delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
-                verbose=verbose,
+                verbose=self.verbose,
             )
 
             R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
@@ -1807,7 +1806,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 logK=logK,
                 logSs=logSs,
                 log_tau=log_tau,
-                verbose=verbose,
+                verbose=self.verbose,
             )
             
             bounds_res = tf_concat(
@@ -1817,7 +1816,7 @@ class GeoPriorSubsNet(BaseAttentive):
             loss_bounds = tf_reduce_mean(tf_square(bounds_res))
 
             dbg_step7_residuals(
-                verbose=verbose,
+                verbose=self.verbose,
                 gw_res=gw_res,
                 prior_res=prior_res,
                 smooth_res=smooth_res,
@@ -1838,7 +1837,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 loss_bounds = tf_zeros_like(loss_bounds)
             
             dbg_chk_core_finite(
-                verbose=verbose,
+                verbose=self.verbose,
                 level=6,
                 cons_res=cons_res,
                 gw_res=gw_res,
@@ -1856,7 +1855,7 @@ class GeoPriorSubsNet(BaseAttentive):
             gw_res_raw   = gw_res
             
             dbg_step8_scaling(
-                verbose=verbose,
+                verbose=self.verbose,
                 cons_res_raw=cons_res_raw,
                 gw_res_raw=gw_res_raw,
                 cons_res=cons_res,
@@ -1889,7 +1888,7 @@ class GeoPriorSubsNet(BaseAttentive):
                     Q=Q_si,
                     dh_dt=dh_dt,                 
                     div_K_grad_h=div_term,       
-                    verbose=verbose,
+                    verbose=self.verbose,
                 )
                 
                 cons_s = guard_scale_with_residual(
@@ -1917,13 +1916,13 @@ class GeoPriorSubsNet(BaseAttentive):
                 tf_print("RMS gw after scaled", to_rms(gw_res))
                 
                 dbg_chk_scales(
-                    verbose=verbose,
+                    verbose=self.verbose,
                     level=6,
                     scales=scales,
                 )
 
                 dbg_chk_core_finite(
-                    verbose=verbose,
+                    verbose=self.verbose,
                     level=6,
                     cons_res=cons_res,
                     gw_res=gw_res,
@@ -1933,7 +1932,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 )
                 
                 dbg_step8_residual_scale_stats(
-                    verbose=verbose,
+                    verbose=self.verbose,
                     cons_res_raw=cons_res_raw,
                     cons_scale=scales["cons_scale"],
                     gw_res_raw=gw_res_raw,
@@ -1964,7 +1963,7 @@ class GeoPriorSubsNet(BaseAttentive):
             total_loss = data_loss + physics_loss_scaled
         
         dbg_step9_losses(
-            verbose=verbose,
+            verbose=self.verbose,
             data_loss=data_loss,
             loss_cons=loss_cons,
             loss_gw=loss_gw,
@@ -1979,30 +1978,66 @@ class GeoPriorSubsNet(BaseAttentive):
         # 10) Apply gradients
         # ----------------------------------------------------------
 
+        # trainable_vars = self.trainable_variables
+        # grads, _ = tf_clip_by_global_norm(grads, 1.0)
+        # grads = tape.gradient(total_loss, trainable_vars)
+        
+        # dbg_step10_grads(
+        #     verbose=self.verbose,
+        #     trainable_vars=trainable_vars,
+        #     grads=grads,
+        # )
+
+        # dbg_term_grads_finite(
+        #     verbose=self.verbose,
+        #     debug_grads=debug_grads,
+        #     trainable_vars=trainable_vars,
+        #     data_loss=data_loss,
+        #     terms_scaled=terms_scaled,
+        #     tape=tape,
+        # )
+
+        # del tape
+
+        # self.optimizer.apply_gradients(
+        #     self._scale_param_grads(grads, trainable_vars)
+        # )
+    
         trainable_vars = self.trainable_variables
+        
+        # 1) Compute grads
         grads = tape.gradient(total_loss, trainable_vars)
         
+        # 2) Clip (handle None grads safely)
+        grads = [
+            tf_zeros_like(v) if g is None else g
+            for g, v in zip(grads, trainable_vars)
+        ]
+        grads, _ = tf_clip_by_global_norm(grads, 1.0)
+        
         dbg_step10_grads(
-            verbose=verbose,
+            verbose=self.verbose,
             trainable_vars=trainable_vars,
             grads=grads,
         )
-
+        
         dbg_term_grads_finite(
-            verbose=verbose,
+            verbose=self.verbose,
             debug_grads=debug_grads,
             trainable_vars=trainable_vars,
             data_loss=data_loss,
             terms_scaled=terms_scaled,
             tape=tape,
         )
-
+        
+        # 3) Now we are done with the tape
         del tape
-
+        
+        # 4) Apply update
         self.optimizer.apply_gradients(
             self._scale_param_grads(grads, trainable_vars)
         )
-    
+
         # ----------------------------------------------------------
         # 11) Package logs (single path)
         # ----------------------------------------------------------
@@ -2159,6 +2194,7 @@ class GeoPriorSubsNet(BaseAttentive):
         inputs_fwd["coords"] = coords
     
         t = coords[..., 0:1]
+        dt_units = infer_dt_units_from_t(t, sk)
     
         coords_norm = bool(get_sk(sk, "coords_normalized", default=False))
         coords_deg  = bool(get_sk(sk, "coords_in_degrees", default=False))
@@ -2232,15 +2268,7 @@ class GeoPriorSubsNet(BaseAttentive):
             dh_dx = dh_dcoords[..., 1:2]
             dh_dy = dh_dcoords[..., 2:3]
             
-            
-            if dh_dx is None:
-                raise RuntimeError(
-                    "dh_dx is None -> h_mean does NOT depend on x. GW PDE cannot work.")
 
-            if dh_dy is None:
-                raise RuntimeError(
-                    "dh_dy is None -> h_mean does NOT depend on y. GW PDE cannot work.")
-                
             # --- divergence of (K * grad h)
             K_dh_dx = K_field * dh_dx
             K_dh_dy = K_field * dh_dy
@@ -2253,16 +2281,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
             d_K_dh_dx_dx = dKdhx_dcoords[..., 1:2]
             d_K_dh_dy_dy = dKdhy_dcoords[..., 2:3]
-    
-            if d_K_dh_dx_dx is None:
-                raise RuntimeError(
-                    "d_K_dh_dx_dx is None -> h_mean does NOT depend on x"
-                    "( second derivative). GW PDE cannot work.")
 
-            if d_K_dh_dy_dy is None:
-                raise RuntimeError(
-                    "d_K_dh_dy_dy is None -> h_mean does NOT depend on y"
-                    "( second derivative). GW PDE cannot work.")
                 
             # smoothness grads
             dK_dcoords = tape.gradient(K_field, coords)
@@ -2275,24 +2294,7 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dx = dSs_dcoords[..., 1:2]
             dSs_dy = dSs_dcoords[..., 2:3]
 
-            if dK_dx is None:
-                raise RuntimeError(
-                    "dK_dx is None -> K does NOT depend on x"
-                    " GW PDE cannot work.")
-            if dK_dy is None:
-                raise RuntimeError(
-                    "dK_dy is None -> K does NOT depend on y"
-                    " GW PDE cannot work.")
-                
-            if dSs_dy is None:
-                raise RuntimeError(
-                    "dSs_dy  is None -> SS does NOT depend on y"
-                    "( second derivative).")
-            if dSs_dx is None:
-                raise RuntimeError(
-                    "dSs_dx  is None -> SS does NOT depend on x^2"
-                    "( second derivative).")
-                
+
         del tape
     
         # --------------------------------------------------------------
@@ -2391,8 +2393,6 @@ class GeoPriorSubsNet(BaseAttentive):
             cons_res_scaled = cons_res
             eps_cons = tf_constant(0.0, tf_float32)
         else:
-            
-            dt_units = infer_dt_units_from_t(t, sk)
             s_pred_si = to_si_subsidence(tf_cast(subs_mean_raw, tf_float32), sk)  # (B,H,1)
             
             # ==============================================================
