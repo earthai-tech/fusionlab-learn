@@ -60,7 +60,7 @@ tf_string = KERAS_DEPS.string
 # ---------------------------------------------------------------------
 def dbg_on(verbose: int, level: int) -> bool:
     """Return True if verbose is strictly above level."""
-    return int(verbose) > int(level)
+    return int(verbose) >= int(level)
 
 
 def dbg_run_first_iter(
@@ -109,7 +109,7 @@ def dbg_pde_divergence_maxabs(
     raw_d_K_dh_dy_dy: Tensor,
     d_K_dh_dx_dx: Optional[Tensor] = None,
     d_K_dh_dy_dy: Optional[Tensor] = None,
-    level: int = 8,
+    level: int = 7,
     prefix: str = "pde/div",
 ) -> None:
     """
@@ -280,8 +280,9 @@ def dbg_step0_inputs_targets(
     verbose: int,
     inputs: Dict[str, Any],
     targets: Any,
+    level: int = 12
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("\n[train_step] verbose=", verbose)
@@ -312,8 +313,9 @@ def dbg_step1_thickness(
     verbose: int,
     H_field: Tensor,
     H_si: Tensor,
+    level: int = 12
 ) -> None:
-    if not dbg_on(verbose, 3):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step 1 thickness ---")
@@ -331,8 +333,9 @@ def dbg_step2_coords_checks(
     verbose: int,
     coords: Tensor,
     inputs: Dict[str, Any],
+    level: int= 12, 
 ) -> None:
-    if not dbg_on(verbose, 6):
+    if not dbg_on(verbose, level):
         return
 
     tf_debugging.assert_equal(
@@ -374,8 +377,9 @@ def dbg_units_once(
     gwl_pred_final: Tensor,
     s_pred_final: Tensor,
     quantiles: Optional[Sequence[float]],
+    level: int = 7, 
 ) -> None:
-    if not dbg_on(verbose, 6):
+    if not dbg_on(verbose, level):
         return
 
     it = tf_cast(iterations, tf_int32)
@@ -433,8 +437,9 @@ def dbg_assert_data_layout(
     data_final: Tensor,
     data_mean_raw: Optional[Tensor],
     quantiles: Optional[Sequence[float]],
+    level: int =12, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     if quantiles is None:
@@ -472,8 +477,9 @@ def dbg_step3_mean_head(
     gwl_mean_raw: Tensor,
     gwl_si: Tensor,
     h_si: Tensor,
+    level: int = 12, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: mean-head prep ---")
@@ -495,8 +501,9 @@ def dbg_step31_forward_outputs(
     gwl_pred_final: Tensor,
     data_mean_raw: Optional[Tensor],
     phys_mean_raw: Tensor,
+    level: int =12
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: forward outputs ---")
@@ -521,8 +528,9 @@ def dbg_step33_physics_logits(
     K_base: Tensor,
     Ss_base: Tensor,
     dlogtau_base: Tensor,
+    level: int =12, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: physics logits/base ---")
@@ -553,8 +561,9 @@ def dbg_step33_physics_fields(
     logSs: Tensor,
     log_tau: Tensor,
     log_tau_phys: Tensor,
+    level: int =12, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: physics fields (SI) ---")
@@ -597,8 +606,9 @@ def dbg_step4_ad_raw(
     dK_dy_raw: Tensor,
     dSs_dx_raw: Tensor,
     dSs_dy_raw: Tensor,
+    level: int= 12, 
 ) -> None:
-    if not dbg_on(verbose, 7):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: AD derivatives (raw) ---")
@@ -635,8 +645,9 @@ def dbg_step41_si_grads(
     dK_dy: Tensor,
     dSs_dx: Tensor,
     dSs_dy: Tensor,
+    level: int =12, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: chain-rule corrected ---")
@@ -662,8 +673,9 @@ def dbg_step5_q_source(
     verbose: int,
     Q_si: Tensor,
     dh_dt: Tensor,
+    level: int= 12, 
 ) -> None:
-    if not dbg_on(verbose, 3):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: Q source term ---")
@@ -684,8 +696,9 @@ def dbg_cons_units_rms(
     verbose: int,
     sk: Dict[str, Any],
     cons_res: Tensor,
+    level: int = 7, 
 ) -> None:
-    if not dbg_on(verbose, 6):
+    if not dbg_on(verbose, level):
         return
 
     mode = resolve_cons_units(sk)
@@ -744,8 +757,9 @@ def dbg_step7_residuals(
     loss_mv: Tensor,
     bounds_res: Tensor,
     loss_bounds: Tensor,
+    level: int =12
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step: residuals + priors ---")
@@ -772,8 +786,9 @@ def dbg_step8_scaling(
     gw_res_raw: Tensor,
     cons_res: Tensor,
     gw_res: Tensor,
+    level: int =7, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step 8 scaling ---")
@@ -791,8 +806,8 @@ def dbg_step8_scaling(
 def dbg_chk_scales(
     *,
     verbose: int,
-    level: int,
     scales: Dict[str, Tensor],
+    level: int = 2, 
 ) -> None:
     if not dbg_on(verbose, level):
         return
@@ -810,12 +825,13 @@ def dbg_chk_scales(
 def dbg_chk_core_finite(
     *,
     verbose: int,
-    level: int,
+
     cons_res: Tensor,
     gw_res: Tensor,
     tau_field: Tensor,
     K_field: Tensor,
     Ss_field: Tensor,
+    level: int=2, 
 ) -> None:
     if not dbg_on(verbose, level):
         return
@@ -856,8 +872,9 @@ def dbg_step9_losses(
     physics_loss_raw: Tensor,
     physics_loss_scaled: Tensor,
     total_loss: Tensor,
+    level: int = 7, 
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step 9 losses ---")
@@ -881,8 +898,9 @@ def dbg_step10_grads(
     verbose: int,
     trainable_vars: Sequence[Tensor],
     grads: Sequence[Optional[Tensor]],
+    level: int = 9,
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step 10 gradients ---")
@@ -908,10 +926,11 @@ def dbg_term_grads_finite(
     data_loss: Tensor,
     terms_scaled: Dict[str, Tensor],
     tape: Any,
+    level: int =1
 ) -> None:
     if not debug_grads:
         return
-    if not dbg_on(verbose, 1):
+    if not dbg_on(verbose, level):
         # debug_grads is an explicit toggle, but keep a
         # tiny verbosity gate to avoid surprises.
         pass
@@ -924,10 +943,14 @@ def dbg_term_grads_finite(
 
 def dbg_done_apply_gradients(
     *,
-    verbose: int,
+    debug_grads: bool =False, 
+    verbose: int=1
 ) -> None:
-    if not dbg_on(verbose, 10):
+    if not debug_grads:
         return
+    
+    if not dbg_on(verbose, 1):
+        pass
     tf_print("[train_step] --- apply_gradients done ---\n")
 
 def dbg_select_q(
@@ -964,9 +987,10 @@ def dbg_step5_q(
     verbose: int,
     Q_si: Tensor,
     dh_dt: Tensor,
+    level: int = 12, 
 ) -> None:
     """Print Q source term block."""
-    if not dbg_on(verbose, 3):
+    if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- Q source term ---")
@@ -1026,7 +1050,7 @@ def dbg_step8_residual_scale_stats(
 def dbg_dt_debug(
     *,
     verbose: int,
-    level: int = 6,
+    level: int = 3,
     time_units: str,
     dt_units: Tensor,
     t: Tensor,
@@ -1079,7 +1103,7 @@ def dbg_dt_debug(
 def dbg_call_nonfinite(
     *,
     verbose: int,
-    level: int = 6,
+    level: int = 9,
     coords_for_decoder: Tensor,
     H_si: Tensor,
     K_base: Tensor,
@@ -1137,7 +1161,7 @@ def dbg_dt_diag(
     time_units: str,
     dt_units: Tensor,
     t: Tensor,
-    level: int = 7,
+    level: int = 3,
 ) -> None:
     """Print dt consistency checks in time_units and seconds."""
     if not dbg_on(verbose, level):
@@ -1188,7 +1212,7 @@ def dbg_call_nonfinite_diag(
     Ss_base: Tensor,
     dlogtau_base: Tensor,
     tau_field: Tensor,
-    level: int = 7,
+    level: int = 9,
 ) -> None:
     """Print non-finite diagnostics inside call()."""
     if not dbg_on(verbose, level):
@@ -1216,7 +1240,7 @@ def dbg_gw_grad_flux_rms(
     dh_dx_raw: Tensor,
     dh_dy_raw: Tensor,
     K_field: Tensor,
-    level: int = 8,
+    level: int = 3,
     prefix: str = "gw/gradflux",
 ) -> None:
     """

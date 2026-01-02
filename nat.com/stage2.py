@@ -25,6 +25,7 @@ import datetime as dt
 import warnings
 import tensorflow as tf
 import  platform
+import gc
 
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, TerminateOnNaN
 from tensorflow.keras.models import load_model
@@ -1172,6 +1173,8 @@ if TRAINING_STRATEGY not in ("physics_first", "data_first"):
 LOSS_WEIGHT_GWL = float(cfg.get("LOSS_WEIGHT_GWL", 0.5))
 LAMBDA_Q = float(cfg.get("LAMBDA_Q", 0.0))
 
+LOG_Q_DIAGNOSTICS = bool(cfg.get("LOG_Q_DIAGNOSTICS", False))
+
 # Gate policies
 q_policy = "always_on"
 q_warmup_epochs = 0
@@ -1241,6 +1244,7 @@ subsmodel_params["scaling_kwargs"].update({
     "q_ramp_epochs": int(q_ramp_epochs),
     "q_warmup_steps": int(q_warmup_steps),
     "q_ramp_steps": int(q_ramp_steps),
+    "log_q_diagnostics": bool(LOG_Q_DIAGNOSTICS),
 
     "subs_resid_policy": subs_resid_policy,
     "subs_resid_warmup_epochs": int(subs_resid_warmup_epochs),
@@ -2248,4 +2252,5 @@ except Exception as e:
 print(f"\n---- {CITY_NAME.upper()} {MODEL_NAME} TRAINING COMPLETE ----\n"
       f"Artifacts -> {RUN_OUTPUT_PATH}\n")
 
-
+tf.keras.backend.clear_session()
+gc.collect()

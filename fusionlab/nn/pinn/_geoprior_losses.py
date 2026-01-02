@@ -302,42 +302,90 @@ def pack_step_results(
     """
     Canonical return dict for train_step/test_step.
 
-    - Always includes loss/total_loss/data_loss + compiled metrics.
-    - Includes physics keys only if `should_log_physics(model)`.
+    - Always returns:
+        loss, total_loss, data_loss
+        + compiled loss trackers (e.g., subs_pred_loss, gwl_pred_loss)
+        + compiled metrics (e.g., mae/mse/coverage/sharpness)
+    - Adds physics keys only if `should_log_physics(model)`.
     """
-    # model.compiled_metrics.update_state(targets, y_pred)
+    # ------------------------------------------------------------------
+    # 0) Update compiled metrics (quantile-safe)
+    # ------------------------------------------------------------------
+    
     q = getattr(model, "quantiles", None)
-    y_pred_p50 = {}
-    if isinstance(y_pred, dict):
-        for k, v in y_pred.items():
-            y_pred_p50[k] = select_q(v, q, q=0.5, fallback="mean")
+
+    if isinstance(targets, dict) and isinstance(y_pred, dict):
+        # Lazy p50 cache (only computed for point-metrics)
+        y_pred_p50: dict[str, Tensor] = {}
+
+        def _get_p50(key: str) -> Tensor:
+            if key not in y_pred_p50:  # full (B,H,Q,1)
+                y_pred_p50[key] = select_q(
+                    y_pred[key],
+                    quantiles=q,
+                    q=0.5,
+                    fallback="mean",
+                )
+            return y_pred_p50[key] # p50 (B,H,1)
+
+        for m in getattr(model.compiled_metrics, "metrics", []):
+            mname = getattr(m, "name", "") or ""
+            key = _metric_key_from_name(mname)
+            if key is None:
+                continue
+
+            yt = targets.get(key, None)
+            yp_full = y_pred.get(key, None)
+            if (yt is None) or (yp_full is None):
+                continue
+
+            yp = yp_full if _needs_full_quantiles(mname) else _get_p50(key)
+            m.update_state(yt, yp)
+
     else:
-        y_pred_p50 = y_pred  # fallback
+        # Fallback: if caller didn't use dict outputs, defer to Keras
+        try:
+            model.compiled_metrics.update_state(targets, y_pred)
+        except Exception:
+            pass
+    # ------------------------------------------------------------------
+    # Optional: log extra Q/subs-residual diagnostics
+    # ------------------------------------------------------------------
+    sk = getattr(model, "scaling_kwargs", None) or {}
+    log_q_diag = bool(get_sk(sk, "log_q_diagnostics", default=False))
+    
+    # ------------------------------------------------------------------
+    # 1) Collect logs (DO NOT rely on model.metrics only)
+    # ------------------------------------------------------------------
+    results: dict[str, Tensor] = {}
 
-    # --- update metrics manually (quantile-safe) ---
-    for m in model.compiled_metrics.metrics:
-        key = _metric_key_from_name(getattr(m, "name", "") or "")
-        if key is None:
-            continue
-        yt = targets[key]
-        if _needs_full_quantiles(m.name):
-            yp = y_pred[key]          # full (B,H,Q,1)
-        else:
-            yp = y_pred_p50[key]      # p50 (B,H,1)
-        m.update_state(yt, yp)
-        
-    results: dict[str, Tensor] = {
-        m.name: m.result()
-        for m in model.metrics
-        if m.name
-        not in ("epsilon_prior", "epsilon_cons", "epsilon_gw")
-    }
-    results.update({
-        "loss": total_loss,
-        "total_loss": total_loss,
-        "data_loss": data_loss,
-    })
+    RESERVED = {"loss", "total_loss", "data_loss"}
+    EXCLUDE = {"epsilon_prior", "epsilon_cons", "epsilon_gw"}
 
+    def _add_metric_list(metrics):
+        for mm in metrics or []:
+            nm = getattr(mm, "name", "") or ""
+            if (not nm) or (nm in RESERVED) or (nm in EXCLUDE):
+                continue
+            if nm in results:
+                continue
+            results[nm] = mm.result()
+
+    # per-output loss trackers from compile(loss=...)
+    _add_metric_list(getattr(model.compiled_loss, "metrics", []))
+    # compile(metrics=...)
+    _add_metric_list(getattr(model.compiled_metrics, "metrics", []))
+    # any other custom trackers attached to model (rare but possible)
+    _add_metric_list(getattr(model, "metrics", []))
+
+    # Canonical loss fields (authoritative)
+    results["loss"] = total_loss
+    results["total_loss"] = total_loss
+    results["data_loss"] = data_loss
+
+    # ------------------------------------------------------------------
+    # 2) Physics logs (optional)
+    # ------------------------------------------------------------------
     if not should_log_physics(model):
         return results
 
@@ -363,7 +411,6 @@ def pack_step_results(
         "smooth_loss": physics["loss_smooth"],
         "mv_prior_loss": physics["loss_mv"],
         "bounds_loss": physics["loss_bounds"],
-
         "epsilon_prior": epsilon_value_for_logs(
             model,
             "prior",
@@ -383,6 +430,15 @@ def pack_step_results(
         "epsilon_cons_raw": physics["epsilon_cons_raw"],
         "epsilon_gw_raw": physics["epsilon_gw_raw"],
     })
+    
+    if log_q_diag:
+        results.update({
+            "q_reg_loss": physics.get("loss_q_reg", tf_constant(0.0, tf_float32)),
+            "q_rms": physics.get("q_rms", tf_constant(0.0, tf_float32)),
+            "q_gate": physics.get("q_gate", tf_constant(0.0, tf_float32)),
+            "subs_resid_gate": physics.get("subs_resid_gate", tf_constant(0.0, tf_float32)),
+        })
+
     return results
 
 # ---------------------------------------------------------------------
