@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Tuple, Sequence, Union
 import numpy as np
 
 from .. import KERAS_DEPS, dependency_message
-from ...compat.tf import optional_tf_function
+# from ...compat.tf import optional_tf_function
 # from ...utils.generic_utils import vlog 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
@@ -311,8 +311,6 @@ def _apply_q_normalized_time_rule(
 
     return Q_base
 
-
-@optional_tf_function
 def q_to_per_second(
     Q_base: Tensor,
     *,
@@ -811,6 +809,7 @@ def compute_mv_prior(
     # ----------------------------------------------------------
     # 3) Scalar loss: global mismatch + dispersion penalty.
     # ----------------------------------------------------------
+    
     r_bar = tf_reduce_mean(r)
     loss_g = huber(r_bar, delta=delta)
 
@@ -2834,7 +2833,6 @@ def guard_scale_with_residual(
 
     return tf_stop_gradient(tf_maximum(s, floor_t))
 
-@optional_tf_function
 def scale_residual(
     residual: Tensor, 
     scale: Tensor, *, 
@@ -2850,7 +2848,6 @@ def scale_residual(
     s = tf_stop_gradient(s)
     return residual / (s + tf_constant(_EPSILON, residual.dtype))
 
-@optional_tf_function
 def _cons_scale_core(
     *,
     s: Tensor,
@@ -2991,7 +2988,6 @@ def _cons_scale_core(
     cons = tf_maximum(cons, floor_t)
     return tf_stop_gradient(cons)
 
-@optional_tf_function
 def _gw_scale_core(
     *,
     h: Tensor,
@@ -3118,6 +3114,7 @@ def _gw_scale_core(
 
     return tf_stop_gradient(gw)
 
+# @optional_tf_function
 def compute_scales(
     model,
     *,
@@ -3772,8 +3769,6 @@ def _broadcast_like(x: Optional[Tensor], like: Tensor) -> Tensor:
     xt = tf_convert_to_tensor(x, dtype=like.dtype)
     return tf_broadcast_to(xt, tf_shape(like))
 
-
-@optional_tf_function
 def dt_to_seconds(dt: Tensor, *, time_units: Optional[str]) -> Tensor:
     """dt(time_units) -> seconds."""
     dt = tf_convert_to_tensor(dt)
@@ -3783,8 +3778,6 @@ def dt_to_seconds(dt: Tensor, *, time_units: Optional[str]) -> Tensor:
     sec = seconds_per_time_unit(time_units, dtype=dt.dtype)
     return dt * sec
 
-
-@optional_tf_function
 def rate_to_per_second(
     dz_dt: Tensor,
     *,

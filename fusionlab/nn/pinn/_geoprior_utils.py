@@ -187,9 +187,8 @@ _SK_ALIASES.update({
     ),
 })
 
-# ---------------------------------------------------------------------
+
 # MV prior drift (mode/weight/warmup + loss knobs)
-# ---------------------------------------------------------------------
 _SK_ALIASES.update({
     "mv_prior_mode": (
         "mv_mode",

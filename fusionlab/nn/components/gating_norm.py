@@ -212,7 +212,7 @@ class GatedResidualNetwork(Layer):
 
         # context_dense builds lazily on first call
         # Call the build method of the parent class
-        super().build(input_shape)
+        super().build(input_shape=input_shape)
         
     def call(self, x, context=None, training=False):
         """Forward pass implementing GRN with optional context."""
@@ -483,7 +483,7 @@ class VariableSelectionNetwork(Layer, NNLearner):
              # Let Keras build context_projection on first call with context
 
         # Build other internal layers like weighting_grn if needed here
-        super().build(input_shape) # Call parent build last
+        super().build(input_shape=input_shape) # Call parent build last
         
     @tf_autograph.experimental.do_not_convert
     def call(self, inputs, context=None, training=False):

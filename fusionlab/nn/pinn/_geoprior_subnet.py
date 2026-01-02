@@ -10,7 +10,7 @@ from collections.abc import Mapping
 import numpy as np 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
-from ...compat.sklearn import validate_params, Interval, StrOptions 
+from ...compat.sklearn import validate_params, Interval, StrOptions
 from ...utils.deps_utils import ensure_pkg 
 from ...utils.generic_utils import rename_dict_keys 
 from ...params import (
@@ -220,11 +220,8 @@ class GeoPriorSubsNet(BaseAttentive):
         "time_units": [str, None], 
         "bounds_mode": [StrOptions({"soft", "hard"}), None],
         "residual_method":[StrOptions({"exact", "euler"})]       
-        
-    }
+        }
    )
-
-    @ensure_pkg(KERAS_BACKEND or "keras", extra=DEP_MSG)   
     def __init__(
         self,
         static_input_dim: int,
@@ -674,7 +671,7 @@ class GeoPriorSubsNet(BaseAttentive):
         self.tau_field = None
 
 
-    @tf_autograph.experimental.do_not_convert
+   # @tf_autograph.experimental.do_not_convert
     def run_encoder_decoder_core(
         self,
         static_input: Tensor,
@@ -787,16 +784,17 @@ class GeoPriorSubsNet(BaseAttentive):
         encoder_input = self.encoder_positional_encoding(encoder_raw)
         
         # dyn_proc = _assert_finite(dyn_proc, "dyn_proc")
-        fut_proc = _assert_finite(fut_proc, "fut_proc")
-        
-        encoder_raw = _assert_finite(
-            encoder_raw,
-            "encoder_raw",
-        )
-        encoder_input = _assert_finite(
-            encoder_input,
-            "encoder_input",
-        )
+        if self.verbose >= 1: 
+            fut_proc = _assert_finite(fut_proc, "fut_proc")
+            
+            encoder_raw = _assert_finite(
+                encoder_raw,
+                "encoder_raw",
+            )
+            encoder_input = _assert_finite(
+                encoder_input,
+                "encoder_input",
+            )
         
         if self.architecture_config["encoder_type"] == "hybrid":
             # Multi-scale LSTM encoder followed by multiscale aggregation
@@ -820,11 +818,12 @@ class GeoPriorSubsNet(BaseAttentive):
                 encoder_sequences = norm(
                     encoder_sequences + attn_out
                 )
-                
-        encoder_sequences = _assert_finite(
-            encoder_sequences,
-            "encoder_sequences",
-        )
+        
+        if self.verbose >= 1: 
+            encoder_sequences = _assert_finite(
+                encoder_sequences,
+                "encoder_sequences",
+            )
         
         # Optional dynamic time windowing (DTW)
         if self.apply_dtw and self.dynamic_time_window is not None:
@@ -890,11 +889,12 @@ class GeoPriorSubsNet(BaseAttentive):
             raw_decoder_input
         )
         
-        # After decoder projection
-        projected_decoder_input = _assert_finite(
-            projected_decoder_input,
-            "projected_decoder_input",
-        )
+        if self.verbose >= 1:
+            # After decoder projection
+            projected_decoder_input = _assert_finite(
+                projected_decoder_input,
+                "projected_decoder_input",
+            )
 
         logger.debug(
             "Projected decoder input shape: "
@@ -911,11 +911,12 @@ class GeoPriorSubsNet(BaseAttentive):
             encoder_sequences,
             training=training,
         )
-        # After apply_attention_levels
-        final_features = _assert_finite(
-            final_features,
-            "final_features",
-        )
+        if self.verbose >= 1:
+            # After apply_attention_levels
+            final_features = _assert_finite(
+                final_features,
+                "final_features",
+            )
         
         logger.debug(
             f"Shape after final fusion: {final_features.shape}"
@@ -932,7 +933,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return data_features_2d, phys_features_raw_3d
 
-    @tf_autograph.experimental.do_not_convert
+    #@tf_autograph.experimental.do_not_convert
     def call(
         self,
         inputs: Dict[str, Optional[Tensor]],
@@ -1117,7 +1118,6 @@ class GeoPriorSubsNet(BaseAttentive):
             verbose=self.verbose,
         ) # (B,H,1) incremental compaction since t0
         
-    
         dbg_call_nonfinite(
             verbose=self.verbose,
             coords_for_decoder=coords_for_decoder,
@@ -1174,7 +1174,6 @@ class GeoPriorSubsNet(BaseAttentive):
             "data_mean_raw": data_mean_raw,   
             "phys_mean_raw": phys_mean_raw,
         }
-
 
     def train_step(self, data):
         """
@@ -1913,8 +1912,6 @@ class GeoPriorSubsNet(BaseAttentive):
                     floor=gw_floor
                 )
                 
-                tf_print("RMS gw after scaled", to_rms(gw_res))
-                
                 dbg_chk_scales(
                     verbose=self.verbose,
                     level=6,
@@ -2198,6 +2195,10 @@ class GeoPriorSubsNet(BaseAttentive):
     
         coords_norm = bool(get_sk(sk, "coords_normalized", default=False))
         coords_deg  = bool(get_sk(sk, "coords_in_degrees", default=False))
+        alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1))
+        delta=float(get_sk(sk, "mv_huber_delta", default=1.0))
+        cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-15))
+        gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-15))
     
         # --------------------------------------------------------------
         # 2) Forward + autodiff wrt coords
@@ -2267,7 +2268,6 @@ class GeoPriorSubsNet(BaseAttentive):
             dh_dt = dh_dcoords[..., 0:1]
             dh_dx = dh_dcoords[..., 1:2]
             dh_dy = dh_dcoords[..., 2:3]
-            
 
             # --- divergence of (K * grad h)
             K_dh_dx = K_field * dh_dx
@@ -2281,7 +2281,6 @@ class GeoPriorSubsNet(BaseAttentive):
     
             d_K_dh_dx_dx = dKdhx_dcoords[..., 1:2]
             d_K_dh_dy_dy = dKdhy_dcoords[..., 2:3]
-
                 
             # smoothness grads
             dK_dcoords = tape.gradient(K_field, coords)
@@ -2294,7 +2293,6 @@ class GeoPriorSubsNet(BaseAttentive):
             dSs_dx = dSs_dcoords[..., 1:2]
             dSs_dy = dSs_dcoords[..., 2:3]
 
-
         del tape
     
         # --------------------------------------------------------------
@@ -2304,6 +2302,7 @@ class GeoPriorSubsNet(BaseAttentive):
             tR, xR, yR = coord_ranges(sk)
             if (tR is None) or (xR is None) or (yR is None):
                 raise ValueError("coords_normalized=True but coord_ranges missing.")
+                
             tR = tf_constant(float(tR), tf_float32)
             xR = tf_constant(float(xR), tf_float32)
             yR = tf_constant(float(yR), tf_float32)
@@ -2476,8 +2475,8 @@ class GeoPriorSubsNet(BaseAttentive):
             logSs=logSs,
             as_loss=True,
             step=self.optimizer.iterations,
-            alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1)),
-            delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
+            alpha_disp=alpha_disp,
+            delta=delta,
             verbose=0,
         )
         
@@ -2503,12 +2502,8 @@ class GeoPriorSubsNet(BaseAttentive):
         cons_res_raw = cons_res
         gw_res_raw   = gw_res
         
-        
         if self.scale_pde_residuals:
-            
-            cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-10))
-            gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-10))
-            
+
             div_term = d_K_dh_dx_dx + d_K_dh_dy_dy
             s_for_scales = (
                 tf_stop_gradient(s_inc_pred)
