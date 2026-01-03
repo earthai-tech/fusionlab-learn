@@ -189,8 +189,9 @@ class HelpMeta(type):
 
     # Keras lifecycle hooks: DO NOT wrap these (signature-sensitive in Keras 3)
     KERAS_RESERVED = {
-        "build", "call",
-        "get_config", "from_config",
+        "__init__", "build", "call",
+        "get_config", "from_config", 'compile', "fit", 
+        "evaluate", "predict", 
         "compute_output_shape", "compute_mask",
     }
 

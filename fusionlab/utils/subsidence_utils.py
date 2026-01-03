@@ -5,6 +5,8 @@ from typing import (
     Any, Optional, Literal, 
     Mapping
 )
+import os 
+import json 
 import math 
 import numpy as np
 import pandas as pd
@@ -768,3 +770,392 @@ def cumulative_to_rate(
         out.loc[g.index[m], rate_col] = r
 
     return out
+
+
+
+# ---------------------------------------------------------------------
+# Evaluation payload unit conversion
+# ---------------------------------------------------------------------
+
+_TIME_UNIT_TO_SECONDS: dict[str, float] = {
+    "unitless": 1.0,
+    "step": 1.0,
+    "index": 1.0,
+    "s": 1.0,
+    "sec": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "min": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+    "h": 3600.0,
+    "hr": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
+    "day": 86400.0,
+    "days": 86400.0,
+    "week": 7.0 * 86400.0,
+    "weeks": 7.0 * 86400.0,
+    # Mean tropical year (365.2425 d)
+    "year": 31556952.0,
+    "years": 31556952.0,
+    "yr": 31556952.0,
+    "month": 31556952.0 / 12.0,
+    "months": 31556952.0 / 12.0,
+}
+
+
+def _cfg_to_mapping(cfg: object | None) -> Mapping[str, object]:
+    if cfg is None:
+        return {}
+    if isinstance(cfg, Mapping):
+        return cfg
+    try:
+        return dict(vars(cfg))
+    except Exception:
+        return {}
+
+
+def _norm_time_units(time_units: str | None) -> str:
+    s = (time_units or "").strip().lower()
+    if s in ("", "none", "null"):
+        return "unitless"
+    if s in ("t", "time", "times"):
+        return "unitless"
+    if s in ("yrs",):
+        return "yr"
+    return s
+
+
+def _seconds_per_time_unit(time_units: str | None) -> float:
+    key = _norm_time_units(time_units)
+    if key not in _TIME_UNIT_TO_SECONDS:
+        keys = sorted(_TIME_UNIT_TO_SECONDS.keys())
+        raise ValueError(
+            f"Unsupported time_units={time_units!r}. "
+            f"Supported: {keys}"
+        )
+    return float(_TIME_UNIT_TO_SECONDS[key])
+
+
+def _is_number(x: object) -> bool:
+    if isinstance(x, (bool,)):
+        return False
+    return isinstance(x, (int, float, np.number))
+
+
+def _scale_obj(obj: object, factor: float) -> object:
+    """
+    Multiply numbers inside common JSON-like containers.
+
+    Supports scalar numbers, dicts of numbers, and lists/tuples of
+    numbers. Non-numeric entries are left unchanged.
+    """
+    if _is_number(obj):
+        return float(obj) * float(factor)
+
+    if isinstance(obj, dict):
+        return {k: _scale_obj(v, factor) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [ _scale_obj(v, factor) for v in obj ]
+
+    return obj
+
+
+def _set_scaled(d: dict[str, Any], key: str, factor: float) -> None:
+    if key not in d:
+        return
+    d[key] = _scale_obj(d[key], factor)
+
+
+def convert_eval_payload_units(
+    payload: Mapping[str, Any],
+    cfg: Mapping[str, object] | object | None = None,
+    *,
+    mode: Literal["si", "interpretable"] = "si",
+    scope: Literal["all", "subsidence", "physics"] = "all",
+    savefile: str | None = None,
+    fmt: Literal["json"] = "json",
+    indent: int = 2,
+    copy_payload: bool = True,
+) -> dict[str, Any]:
+    """
+    Convert GeoPriorSubsNet evaluation-payload units for reporting.
+
+    This is a **post-processing** helper meant for stage-2 evaluation
+    JSON payloads (e.g. ``geoprior_eval_phys_<timestamp>.json``).
+
+    Parameters
+    ----------
+    payload : Mapping[str, Any]
+        The evaluation payload dict. It is expected to contain sections
+        like ``metrics_evaluate``, ``point_metrics``, ``per_horizon``,
+        ``interval_calibration`` and ``censor_stratified``.
+    cfg : mapping or module, optional
+        The experiment config (e.g. ``config`` module or ``globals()``).
+        We use:
+        - ``SUBS_UNIT_TO_SI`` (or stage-1 provenance)
+        - ``TIME_UNITS`` (e.g. "year")
+    mode : {"si", "interpretable"}, default="si"
+        - "si": leave values untouched (current behaviour).
+        - "interpretable": convert selected subsidence/physics metrics
+          from SI into native units implied by ``SUBS_UNIT_TO_SI``.
+    scope : {"all", "subsidence", "physics"}, default="all"
+        Which parts to convert when ``mode="interpretable"``.
+        - "subsidence": convert only subsidence metrics (MAE/MSE/
+          sharpness) to the native unit (e.g. mm).
+        - "physics": convert only physics residual rates where units are
+          unambiguous (currently ``epsilon_cons_raw`` and
+          ``epsilon_gw_raw``).
+        - "all": do both.
+    savefile : str, optional
+        If provided, write the converted payload to this path.
+    fmt : {"json"}, default="json"
+        Output format when ``savefile`` is provided.
+    indent : int, default=2
+        JSON indentation.
+    copy_payload : bool, default=True
+        If True, operate on a deep copy of ``payload``. If False,
+        convert in-place (dangerous).
+
+    Returns
+    -------
+    dict
+        Converted payload as a plain ``dict``.
+
+    Notes
+    -----
+    Subsidence conversions:
+    - linear metrics (MAE, sharpness) scale by ``1/SUBS_UNIT_TO_SI``.
+    - squared metrics (MSE) scale by ``(1/SUBS_UNIT_TO_SI)^2``.
+
+    Physics conversions (when enabled):
+    - ``epsilon_cons_raw`` is treated as a **rate** in [m/s] and is
+      converted to ``<subs_native_unit>/<TIME_UNITS>`` (e.g. mm/yr).
+    - ``epsilon_gw_raw`` is treated as a **rate** in [1/s] and is
+      converted to ``1/<TIME_UNITS>`` (e.g. 1/yr).
+
+    The helper records unit provenance under ``payload["units"]``.
+    """
+    if payload is None:
+        raise ValueError("payload must be a mapping, got None.")
+
+    out: dict[str, Any]
+    if copy_payload:
+        import copy as _copy
+        out = _copy.deepcopy(dict(payload))
+    else:
+        out = dict(payload)  # shallow
+
+    cfg_m = _cfg_to_mapping(cfg)
+
+    # -----------------------------------------------------------------
+    # Resolve unit factors
+    # -----------------------------------------------------------------
+    u2si = subs_unit_to_si(cfg_m)
+    native_u = subs_native_unit(cfg_m)
+    subs_from_si = 1.0 / float(u2si)
+
+    time_units = (
+        cfg_m.get("TIME_UNITS")
+        or out.get("time_units")
+        or out.get("TIME_UNITS")
+        or "year"
+    )
+    sec_per = _seconds_per_time_unit(str(time_units))
+
+    # -----------------------------------------------------------------
+    # Always attach provenance (even if mode="si")
+    # -----------------------------------------------------------------
+    out.setdefault("units", {})
+    if not isinstance(out["units"], dict):
+        out["units"] = {}
+
+    out["units"].update({
+        # Core provenance the user asked for
+        "subs_unit_to_si": float(u2si),
+        "subs_factor_si_to_real": float(subs_from_si),
+        "subs_metrics_unit": (
+            native_u if mode == "interpretable" else "m"
+        ),
+        # Extra helpful metadata
+        "time_units": str(time_units),
+        "seconds_per_time_unit": float(sec_per),
+    })
+
+    if mode != "interpretable":
+        if savefile:
+            _write_payload(out, savefile, fmt=fmt, indent=indent)
+        return out
+
+    # -----------------------------------------------------------------
+    # 1) Subsidence metrics (SI m -> native unit, e.g. mm)
+    # -----------------------------------------------------------------
+    do_subs = scope in ("all", "subsidence")
+    if do_subs:
+        # metrics_evaluate: subs_pred_* metrics
+        me = out.get("metrics_evaluate")
+        if isinstance(me, dict):
+            for k, v in list(me.items()):
+                if not _is_number(v):
+                    continue
+                if not k.startswith("subs_pred_"):
+                    continue
+
+                lk = k.lower()
+                if "coverage" in lk or "r2" in lk:
+                    continue
+
+                if "mse" in lk:
+                    me[k] = float(v) * (subs_from_si ** 2)
+                elif ("mae" in lk) or ("rmse" in lk) or ("sharpness" in lk):
+                    me[k] = float(v) * subs_from_si
+
+        # point_metrics: (mae, mse, r2)
+        pm = out.get("point_metrics")
+        if isinstance(pm, dict):
+            if "mae" in pm:
+                _set_scaled(pm, "mae", subs_from_si)
+            if "mse" in pm:
+                _set_scaled(pm, "mse", subs_from_si ** 2)
+            if "rmse" in pm:
+                _set_scaled(pm, "rmse", subs_from_si)
+
+        # per_horizon: mae/mse/rmse dicts with keys H1/H2/...
+        ph = out.get("per_horizon")
+        if isinstance(ph, dict):
+            for metric_name, series in ph.items():
+                if not isinstance(series, dict):
+                    continue
+                lk = str(metric_name).lower()
+                if lk in ("mae", "rmse", "sharpness"):
+                    ph[metric_name] = _scale_obj(series, subs_from_si)
+                elif lk == "mse":
+                    ph[metric_name] = _scale_obj(series, subs_from_si ** 2)
+
+        # interval_calibration: only *_phys sharpness is physical
+        ic = out.get("interval_calibration")
+        if isinstance(ic, dict):
+            for k, v in list(ic.items()):
+                if not _is_number(v):
+                    continue
+                lk = k.lower()
+                if ("sharpness" in lk) and lk.endswith("_phys"):
+                    ic[k] = float(v) * subs_from_si
+
+        # censor_stratified: mae_* values
+        cs = out.get("censor_stratified")
+        if isinstance(cs, dict):
+            for k, v in list(cs.items()):
+                if not _is_number(v):
+                    continue
+                lk = k.lower()
+                if lk.startswith("mae_") or ("mae" == lk):
+                    cs[k] = float(v) * subs_from_si
+                elif lk.startswith("mse_") or ("mse" == lk):
+                    cs[k] = float(v) * (subs_from_si ** 2)
+
+    # -----------------------------------------------------------------
+    # 2) Physics residual rates (SI -> interpretable)
+    # -----------------------------------------------------------------
+    do_phys = scope in ("all", "physics")
+    if do_phys:
+        unit_rate = f"{native_u}/{_norm_time_units(str(time_units))}"
+        # Prefer converting *_raw variants (scaled eps are often dimensionless)
+        me = out.get("metrics_evaluate")
+        if isinstance(me, dict):
+            if "epsilon_cons_raw" in me and _is_number(me["epsilon_cons_raw"]):
+                me["epsilon_cons_raw"] = (
+                    float(me["epsilon_cons_raw"])
+                    * subs_from_si
+                    * sec_per
+                )
+                out["units"]["epsilon_cons_raw_unit"] = unit_rate
+
+            if "epsilon_gw_raw" in me and _is_number(me["epsilon_gw_raw"]):
+                me["epsilon_gw_raw"] = float(me["epsilon_gw_raw"]) * sec_per
+                out["units"]["epsilon_gw_raw_unit"] = (
+                    f"1/{_norm_time_units(str(time_units))}"
+                )
+
+        pdg = out.get("physics_diagnostics")
+        if isinstance(pdg, dict):
+            if "epsilon_cons_raw" in pdg and _is_number(pdg["epsilon_cons_raw"]):
+                pdg["epsilon_cons_raw"] = (
+                    float(pdg["epsilon_cons_raw"])
+                    * subs_from_si
+                    * sec_per
+                )
+                out["units"]["epsilon_cons_raw_unit"] = unit_rate
+
+            if "epsilon_gw_raw" in pdg and _is_number(pdg["epsilon_gw_raw"]):
+                pdg["epsilon_gw_raw"] = float(pdg["epsilon_gw_raw"]) * sec_per
+                out["units"]["epsilon_gw_raw_unit"] = (
+                    f"1/{_norm_time_units(str(time_units))}"
+                )
+
+    if savefile:
+        _write_payload(out, savefile, fmt=fmt, indent=indent)
+
+    return out
+
+
+def _json_default(x: object) -> object:
+    # numpy scalars -> python scalars
+    if isinstance(x, np.generic):
+        return x.item()
+    # numpy arrays -> lists
+    if isinstance(x, np.ndarray):
+        return x.tolist()
+    # pandas scalars
+    try:
+        import pandas as _pd  # local
+        if isinstance(x, (_pd.Timestamp,)):
+            return x.isoformat()
+    except Exception:
+        pass
+    # fallback: string
+    return str(x)
+
+
+def _write_payload(
+    payload: Mapping[str, Any],
+    savefile: str,
+    *,
+    fmt: str = "json",
+    indent: int = 2,
+) -> None:
+    """
+    Write a payload to disk.
+
+    Parameters
+    ----------
+    payload : mapping
+        JSON-serializable mapping.
+    savefile : str
+        Output file path.
+    fmt : {"json"}, default="json"
+        Output format.
+    indent : int, default=2
+        JSON indentation.
+    """
+
+    fmt0 = (fmt or "").strip().lower()
+    if not fmt0:
+        ext = os.path.splitext(savefile)[1].lstrip(".").lower()
+        fmt0 = ext or "json"
+
+    if fmt0 != "json":
+        raise ValueError(
+            f"Unsupported fmt={fmt!r}. Only 'json' is supported."
+        )
+
+    with open(savefile, "w", encoding="utf-8") as f:
+        json.dump(
+            dict(payload),
+            f,
+            indent=int(indent),
+            ensure_ascii=False,
+            default=_json_default,
+        )

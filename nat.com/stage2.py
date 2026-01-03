@@ -60,7 +60,8 @@ from fusionlab.utils.nat_utils import (
     build_censor_mask, 
     name_of,
     serialize_subs_params,
-    resolve_si_affine
+    resolve_si_affine, 
+    resolve_hybrid_config
 )
 
 from fusionlab.utils.forecast_utils import format_and_forecast
@@ -70,11 +71,15 @@ from fusionlab.utils.scale_metrics import (
     per_horizon_metrics,
 )
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
-from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet # CHANGE module later
+from fusionlab.utils.subsidence_utils import convert_eval_payload_units
+from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet #XXX CHANGE module later
 from fusionlab.nn.pinn.models import  PoroElasticSubsNet
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
-from fusionlab.nn.keras_metrics import coverage80_fn, sharpness80_fn, _to_py
+from fusionlab.nn.keras_metrics import ( 
+    coverage80_fn, sharpness80_fn, _to_py, 
+    mae_q50_fn, mse_q50_fn 
+    )
 from fusionlab.nn.calibration import (
     fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
@@ -83,6 +88,8 @@ from fusionlab.nn.utils import plot_history_in
 from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.plot.forecast import plot_eval_future
 from fusionlab.nn.callbacks import LambdaOffsetScheduler
+
+
 
 # =============================================================================
 # Config / Paths
@@ -176,8 +183,14 @@ def deep_update(base: dict, upd: dict) -> dict:
             base[k] = v
     return base
 
-cfg = deep_update(dict(cfg_global), cfg_manifest)  # manifest wins, but nested keys preserved
-
+# cfg = deep_update(dict(cfg_global), cfg_manifest)  # manifest wins, but nested keys preserved
+# Manifest wins for Data, Config wins for Physics
+print("\n[Config] Resolving Hybrid Configuration...")
+cfg = resolve_hybrid_config(
+    manifest_cfg=cfg_manifest, 
+    live_cfg=cfg_global,
+    verbose=True
+)
 
 # cfg = dict(cfg_global)
 # cfg.update(cfg_manifest)  # manifest wins on overlapping keys
@@ -334,6 +347,14 @@ units_prov = cfg.get("units_provenance", {}) or {}
 SUBS_UNIT_TO_SI_APPLIED = float(
     units_prov.get("subs_unit_to_si_applied_stage1", cfg.get("SUBS_UNIT_TO_SI", 1e-3))
 )
+# -------------------------------------------------------------------------
+# Unit post-processing for evaluation JSON (controlled by config).
+# - EVAL_JSON_UNITS_MODE  : 'si' (default) or 'interpretable'
+# - EVAL_JSON_UNITS_SCOPE : 'subsidence', 'physics', or 'all'
+# -------------------------------------------------------------------------
+_units_mode = str(cfg.get('EVAL_JSON_UNITS_MODE', 'si') or 'si').strip().lower()
+_units_scope = str(cfg.get('EVAL_JSON_UNITS_SCOPE', 'all') or 'all').strip().lower()
+
 
 _default_phys_bounds = {
     "H_min": 5.0,
@@ -393,6 +414,15 @@ GEOPRIOR_USE_EFFECTIVE_H = cfg.get(
 )
 GEOPRIOR_HD_FACTOR  = cfg.get("GEOPRIOR_HD_FACTOR", 0.6)
 
+GEOPRIOR_H_REF_VALUE = 0.0 
+GEOPRIOR_H_REF_MODE = None 
+if isinstance (GEOPRIOR_H_REF, (int, float)): 
+    GEOPRIOR_H_REF_VALUE = GEOPRIOR_H_REF 
+    
+else: 
+    # assume string that fit the mode 
+    GEOPRIOR_H_REF_MODE = GEOPRIOR_H_REF 
+    
 # ------------------------------------------------------------------
 # Flavour-dependent physics tweaks
 # ------------------------------------------------------------------
@@ -496,6 +526,11 @@ EPOCHS        = cfg.get("EPOCHS", 50)
 BATCH_SIZE    = cfg.get("BATCH_SIZE", 32)
 LEARNING_RATE = cfg.get("LEARNING_RATE", 1e-4)
 
+# Defaults (keeps current behavior unless overridden)
+LOSS_WEIGHT_GWL = float(cfg.get("LOSS_WEIGHT_GWL", 0.5))
+LAMBDA_Q = float(cfg.get("LAMBDA_Q", 0.0))
+LOG_Q_DIAGNOSTICS = bool(cfg.get("LOG_Q_DIAGNOSTICS", False))
+
 # Output directory (reuse Stage-1 run_dir)
 BASE_OUTPUT_DIR = M["paths"]["run_dir"]
 STAMP = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -538,6 +573,9 @@ config_sections = [
         "LAMBDA_SMOOTH": LAMBDA_SMOOTH,
         "LAMBDA_BOUNDS": LAMBDA_BOUNDS, 
         "LAMBDA_MV": LAMBDA_MV,
+        "LAMBDA_Q": LAMBDA_Q, 
+        "LOSS_WEIGHT_GWL": LOSS_WEIGHT_GWL, 
+        "LOG_Q_DIAGNOSTICS": LOG_Q_DIAGNOSTICS, 
         "MV_LR_MULT": MV_LR_MULT,
         "KAPPA_LR_MULT": KAPPA_LR_MULT,
         "GEOPRIOR_INIT_MV": GEOPRIOR_INIT_MV,
@@ -988,7 +1026,7 @@ subsmodel_params = {
     "mv": LearnableMV(initial_value=GEOPRIOR_INIT_MV),
     "kappa": LearnableKappa(initial_value=GEOPRIOR_INIT_KAPPA),
     "gamma_w": FixedGammaW(value=GEOPRIOR_GAMMA_W),
-    "h_ref": FixedHRef(mode=GEOPRIOR_H_REF),
+    "h_ref": FixedHRef(value = GEOPRIOR_H_REF_VALUE, mode=GEOPRIOR_H_REF_MODE),
     "kappa_mode": GEOPRIOR_KAPPA_MODE,
     "use_effective_h": GEOPRIOR_USE_EFFECTIVE_H,
     "hd_factor": GEOPRIOR_HD_FACTOR,
@@ -1058,7 +1096,6 @@ if head_scale_si is None or head_bias_si is None:
         bias_key="HEAD_BIAS_SI",
     )
     
-
 subsmodel_params["scaling_kwargs"].update({
     "subs_scale_si": subs_scale_si,
     "subs_bias_si": subs_bias_si,
@@ -1072,9 +1109,18 @@ subsmodel_params["scaling_kwargs"].update({
     "z_surf_col": Z_SURF_COL,             # None or column name if you provide it
     "gwl_z_meta": sk.get("gwl_z_meta", None),  # optional traceability
     
+    # --- Data parameters (Keep using sk / manifest) ---
     "subsidence_kind": sk.get("subsidence_kind", cfg.get("SUBSIDENCE_KIND", "cumulative")), 
+    
+    # --- Tunable Physics Parameters (Use cfg / hybrid) ---
+    # CRITICAL CHANGE: We look at 'cfg' first because it holds the "Auto" overrides.
+    # If we looked at 'sk' first, we would get the stale '1e-10' from Stage 1.
+    
+    'cons_scale_floor': cfg.get("CONS_SCALE_FLOOR", 1e-7),
+    'gw_scale_floor':   cfg.get("GW_SCALE_FLOOR", 1e-7),
+    'gw_residual_units': cfg.get("GW_RESIDUAL_UNITS", "time_unit"),
+    'cons_residual_units': cfg.get("CONSOLIDATION_RESIDUAL_UNITS", "second"),
 
-    'gw_scale_floor' :sk.get("gw_scale_floor", cfg.get("GW_SCALE_FLOOR", 1e-10)), 
     'dt_min_units' :sk.get("dt_min_units", cfg.get("DT_MIN_UNITS", 1e-6)), 
     'Q_wrt_normalized_time':sk.get("Q_wrt_normalized_time", cfg.get("Q_WRT_NORMALIZED_TIME", False)), 
     'Q_in_si' : sk.get("Q_in_si", cfg.get("Q_IN_SI", False)), 
@@ -1082,15 +1128,14 @@ subsmodel_params["scaling_kwargs"].update({
     'Q_kind' : sk.get("Q_kind", cfg.get("Q_KIND", "per_volume")), 
     'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get("Q_LENGTH_IN_SI", False )), 
     'drainage_mode': sk.get("drainage_mode", cfg.get("DRAINAGE_MODE", "double")), 
-    "gw_residual_units": sk.get("gw_residual_units", cfg.get("GW_RESIDUAL_UNITS","time_unit")), 
     
-    "clip_global_norm": sk.get("clip_global_norm", cfg.get("CLIP_GLOBAL_NORM", 5.0)),
-    "debug_physics_grads": sk.get('debug_physics_grads', cfg.get("DEBUG_PHYSICS_GRADS", False)), 
-    "scaling_error_policy": sk.get('scaling_error_policy', cfg.get('SCALING_ERROR_POLICY','warn')), 
+    "clip_global_norm": cfg.get("CLIP_GLOBAL_NORM", 5.0),
+    "debug_physics_grads": cfg.get("DEBUG_PHYSICS_GRADS", False), 
+    "scaling_error_policy": cfg.get('SCALING_ERROR_POLICY','warn'), 
     
-    # Consolidation drawdown gating options (saved into scaling_kwargs.json)
-    'cons_residual_units': sk.get("CONSOLIDATION_RESIDUAL_UNITS", "second"),
-    'cons_scale_floor':  sk.get("cons_scale_floor", cfg.get("CONS_SCALE_FLOOR", 1e-10)),
+    # --- Consolidation drawdown gating options ---
+    # These are usually structural, so defaulting to 'sk' is fine, 
+    # but we fall back to 'cfg' if missing.
     "cons_drawdown_mode": sk.get("cons_drawdown_mode",cfg.get("CONS_DRAWDOWN_MODE", "smooth_relu")),
     "cons_drawdown_rule": sk.get("cons_drawdown_rule",cfg.get("CONS_DRAWDOWN_RULE", "ref_minus_mean")),
     "cons_stop_grad_ref": sk.get("cons_stop_grad_ref",cfg.get("CONS_STOP_GRAD_REF", True)),
@@ -1100,11 +1145,59 @@ subsmodel_params["scaling_kwargs"].update({
     "cons_drawdown_clip_max": sk.get("cons_drawdown_clip_max",cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)),
     "cons_relu_beta": sk.get("cons_relu_beta",cfg.get("CONS_RELU_BETA", 20.0)),
     
-    "mv_prior_units": sk.get('mv_prior_units', cfg.get("MV_PRIOR_UNITS", "auto")), 
-    "mv_alpha_disp": sk.get('mv_alpha_disp', cfg.get("MV_ALPHA_DISP", 0.1)), 
-    "mv_huber_delta":  sk.get('mv_huber_delta', cfg.get("MV_HUBER_DELTA", 1.0)), 
+    # --- MV Prior Units (Tunable) ---
+    "mv_prior_units": cfg.get("MV_PRIOR_UNITS", "auto"), 
+    "mv_alpha_disp": cfg.get("MV_ALPHA_DISP", 0.1), 
+    "mv_huber_delta":  cfg.get("MV_HUBER_DELTA", 1.0), 
     
 })
+
+# subsmodel_params["scaling_kwargs"].update({
+#     "subs_scale_si": subs_scale_si,
+#     "subs_bias_si": subs_bias_si,
+#     "head_scale_si": head_scale_si,
+#     "head_bias_si": head_bias_si,
+
+#     # --- semantics for interpreting the GWL variable ---
+#     "gwl_kind": GWL_KIND,                 # "depth_bgs" or "head"
+#     "gwl_sign": GWL_SIGN,                 # "down_positive" or "up_positive"
+#     "use_head_proxy": USE_HEAD_PROXY,     # if no z_surf -> head_proxy = -depth
+#     "z_surf_col": Z_SURF_COL,             # None or column name if you provide it
+#     "gwl_z_meta": sk.get("gwl_z_meta", None),  # optional traceability
+    
+#     "subsidence_kind": sk.get("subsidence_kind", cfg.get("SUBSIDENCE_KIND", "cumulative")), 
+
+#     'gw_scale_floor' :sk.get("gw_scale_floor", cfg.get("GW_SCALE_FLOOR", 1e-7)), 
+#     'dt_min_units' :sk.get("dt_min_units", cfg.get("DT_MIN_UNITS", 1e-6)), 
+#     'Q_wrt_normalized_time':sk.get("Q_wrt_normalized_time", cfg.get("Q_WRT_NORMALIZED_TIME", False)), 
+#     'Q_in_si' : sk.get("Q_in_si", cfg.get("Q_IN_SI", False)), 
+#     'Q_in_per_second' : sk.get("Q_in_per_second", cfg.get("Q_IN_PER_SECOND", False )), 
+#     'Q_kind' : sk.get("Q_kind", cfg.get("Q_KIND", "per_volume")), 
+#     'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get("Q_LENGTH_IN_SI", False )), 
+#     'drainage_mode': sk.get("drainage_mode", cfg.get("DRAINAGE_MODE", "double")), 
+#     "gw_residual_units": sk.get("gw_residual_units", cfg.get("GW_RESIDUAL_UNITS","time_unit")), 
+    
+#     "clip_global_norm": sk.get("clip_global_norm", cfg.get("CLIP_GLOBAL_NORM", 5.0)),
+#     "debug_physics_grads": sk.get('debug_physics_grads', cfg.get("DEBUG_PHYSICS_GRADS", False)), 
+#     "scaling_error_policy": sk.get('scaling_error_policy', cfg.get('SCALING_ERROR_POLICY','warn')), 
+    
+#     # Consolidation drawdown gating options (saved into scaling_kwargs.json)
+#     'cons_residual_units': sk.get("CONSOLIDATION_RESIDUAL_UNITS", "second"),
+#     'cons_scale_floor':  sk.get("cons_scale_floor", cfg.get("CONS_SCALE_FLOOR", 1e-7)),
+#     "cons_drawdown_mode": sk.get("cons_drawdown_mode",cfg.get("CONS_DRAWDOWN_MODE", "smooth_relu")),
+#     "cons_drawdown_rule": sk.get("cons_drawdown_rule",cfg.get("CONS_DRAWDOWN_RULE", "ref_minus_mean")),
+#     "cons_stop_grad_ref": sk.get("cons_stop_grad_ref",cfg.get("CONS_STOP_GRAD_REF", True)),
+#     "cons_drawdown_zero_at_origin": sk.get("cons_drawdown_zero_at_origin",
+#         cfg.get("CONS_DRAWDOWN_ZERO_AT_ORIGIN", False),
+#     ),
+#     "cons_drawdown_clip_max": sk.get("cons_drawdown_clip_max",cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)),
+#     "cons_relu_beta": sk.get("cons_relu_beta",cfg.get("CONS_RELU_BETA", 20.0)),
+    
+#     "mv_prior_units": sk.get('mv_prior_units', cfg.get("MV_PRIOR_UNITS", "auto")), 
+#     "mv_alpha_disp": sk.get('mv_alpha_disp', cfg.get("MV_ALPHA_DISP", 0.1)), 
+#     "mv_huber_delta":  sk.get('mv_huber_delta', cfg.get("MV_HUBER_DELTA", 1.0)), 
+    
+# })
 
 # -------------------------------------------------------------------------
 # MV prior schedule (Stage-2 robust even with legacy Stage-1 manifests)
@@ -1168,12 +1261,6 @@ if TRAINING_STRATEGY not in ("physics_first", "data_first"):
         "TRAINING_STRATEGY must be 'physics_first' or 'data_first'. "
         f"Got: {TRAINING_STRATEGY!r}"
     )
-
-# Defaults (keeps current behavior unless overridden)
-LOSS_WEIGHT_GWL = float(cfg.get("LOSS_WEIGHT_GWL", 0.5))
-LAMBDA_Q = float(cfg.get("LAMBDA_Q", 0.0))
-
-LOG_Q_DIAGNOSTICS = bool(cfg.get("LOG_Q_DIAGNOSTICS", False))
 
 # Gate policies
 q_policy = "always_on"
@@ -1293,9 +1380,7 @@ scaling_path = os.path.join(RUN_OUTPUT_PATH, "scaling_kwargs.json")
 with open(scaling_path, "w", encoding="utf-8") as f:
     json.dump(subsmodel_params["scaling_kwargs"] , f, indent=2)
 
-
 # %
-
 # ---- CALL IT (right before building the model) ----------------------------
 
 if should_audit(AUDIT_STAGES, stage="stage2"):
@@ -1344,9 +1429,11 @@ loss_dict = {
     "gwl_pred":  make_weighted_pinball(QUANTILES, GWL_WEIGHTS)  if QUANTILES else tf.keras.losses.MSE,
 }
 metrics_dict = {
-    "subs_pred": ["mae", "mse"] + ([coverage80_fn, sharpness80_fn] if QUANTILES else []),
-    "gwl_pred":  ["mae", "mse"],
+    "subs_pred": ([mae_q50_fn, mse_q50_fn, coverage80_fn, sharpness80_fn] if QUANTILES
+                 else ["mae", "mse"]),
+    "gwl_pred":  ([mae_q50_fn, mse_q50_fn] if QUANTILES else ["mae", "mse"]),
 }
+
 #%
 physics_loss_weights = {
     "lambda_cons": LAMBDA_CONS,
@@ -1698,6 +1785,7 @@ print("Calibrator saved.")
 # =============================================================================
 # Forecasting (Test NPZ if available, otherwise validation fallback)
 # =============================================================================
+
 forecast_df = None
 dataset_name_for_forecast = "ValidationSet_Fallback"
 X_fore = None
@@ -1719,33 +1807,60 @@ X_fore = ensure_input_shapes(
 y_fore_fmt = map_targets_for_training(y_fore)
 
 print(f"\nPredicting on {dataset_name_for_forecast}...")
-pred_dict = model_inf.predict(X_fore, verbose=0)  # {'data_final': ...}
+pred_out = model_inf.predict(X_fore, verbose=0)  # NEW: {'subs_pred': ..., 'gwl_pred': ...}
 
-data_final = pred_dict["data_final"]
-s_dim = model_inf.output_subsidence_dim
-
-# Split into subsidence and GWL predictions
-if QUANTILES:
-    # (B, H, Q, O_total)
-    s_pred_q_raw = data_final[..., :s_dim]   # (B,H,Q,O_s)
-    h_pred_q_raw = data_final[..., s_dim:]   # (B,H,Q,O_g)
-    # ---- CALIBRATION: apply on SUBSIDENCE quantiles first ----
-    s_pred_q_cal = apply_calibrator_to_subs(cal80, s_pred_q_raw)
-    # Prepared for formatter
-    predictions_for_formatter = {
-        "subs_pred": s_pred_q_cal,
-        "gwl_pred": h_pred_q_raw,
-    }
+# ------------------------------------------------------------
+# Normalize predict() output (Keras can return dict or list/tuple)
+# ------------------------------------------------------------
+if isinstance(pred_out, dict):
+    pred_dict = pred_out
+elif isinstance(pred_out, (list, tuple)):
+    # If Keras returns a list, map by output_names when available
+    if hasattr(model_inf, "output_names") and model_inf.output_names:
+        names = list(model_inf.output_names)
+        pred_dict = {names[i]: pred_out[i] for i in range(min(len(names), len(pred_out)))}
+    else:
+        # fallback: assume [subs_pred, gwl_pred]
+        pred_dict = {"subs_pred": pred_out[0]}
+        if len(pred_out) > 1:
+            pred_dict["gwl_pred"] = pred_out[1]
 else:
-    # (B, H, O_total) point forecasts
-    s_pred_raw = data_final[..., :s_dim]
-    h_pred_raw = data_final[..., s_dim:]
-    predictions_for_formatter = {
-        "subs_pred": s_pred_raw,
-        "gwl_pred": h_pred_raw,
-    }
-#%
+    raise TypeError(f"Unexpected predict() output type: {type(pred_out)}")
+
+# Backward-compat: older checkpoints may still output 'data_final'
+if "subs_pred" not in pred_dict and "data_final" in pred_dict:
+    data_final = pred_dict["data_final"]
+    s_dim = model_inf.output_subsidence_dim
+    if QUANTILES:
+        s_pred_q_raw = data_final[..., :s_dim]   # (B,H,Q,1)
+        h_pred_q_raw = data_final[..., s_dim:]   # (B,H,Q,1)
+        s_pred_q_cal = apply_calibrator_to_subs(cal80, s_pred_q_raw)
+        predictions_for_formatter = {"subs_pred": s_pred_q_cal, "gwl_pred": h_pred_q_raw}
+    else:
+        s_pred_raw = data_final[..., :s_dim]     # (B,H,1)
+        h_pred_raw = data_final[..., s_dim:]     # (B,H,1)
+        predictions_for_formatter = {"subs_pred": s_pred_raw, "gwl_pred": h_pred_raw}
+
+else:
+    
+    # NEW path: call() returns {'subs_pred':..., 'gwl_pred':...}
+    s_pred = pred_dict.get("subs_pred", None)
+    h_pred = pred_dict.get("gwl_pred", None)
+    if s_pred is None or h_pred is None:
+        raise KeyError(
+            f"predict() must return 'subs_pred' and"
+            f" 'gwl_pred'. Got keys={list(pred_dict.keys())}")
+
+    if QUANTILES:
+        # (B,H,Q,1) expected for subs_pred; calibrate subsidence quantiles only
+        s_pred_cal = apply_calibrator_to_subs(cal80, s_pred)
+        predictions_for_formatter = {"subs_pred": s_pred_cal, "gwl_pred": h_pred}
+    else:
+        # (B,H,1)
+        predictions_for_formatter = {"subs_pred": s_pred, "gwl_pred": h_pred}
+
 # Format to DataFrame (inverse scaling, coords, coverage eval, save CSV)
+
 target_mapping = {"subs_pred": SUBSIDENCE_COL, "gwl_pred": GWL_COL}
 output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}
 
@@ -1753,6 +1868,7 @@ y_true_for_format = {
     "subsidence": y_fore_fmt["subs_pred"],
     "gwl": y_fore_fmt["gwl_pred"],
 }
+
 
 csv_eval = os.path.join(
     RUN_OUTPUT_PATH,
@@ -2162,6 +2278,22 @@ if per_h_r2_dict:
     payload["per_horizon"]["r2"] = per_h_r2_dict
 
 
+# -------------------------------------------------------------------------
+# Unit post-processing for evaluation JSON (controlled by config).
+# - EVAL_JSON_UNITS_MODE  : 'si' (default) or 'interpretable'
+# - EVAL_JSON_UNITS_SCOPE : 'subsidence', 'physics', or 'all'
+# -------------------------------------------------------------------------
+
+try:
+    payload = convert_eval_payload_units(
+        payload,
+        cfg,
+        mode=_units_mode,
+        scope=_units_scope,
+    )
+except Exception as e:
+    print(f"[Warn] unit conversion skipped (mode={_units_mode}, scope={_units_scope}): {e}")
+
 json_out = os.path.join(RUN_OUTPUT_PATH, f"geoprior_eval_phys_{stamp}.json")
 with open(json_out, "w", encoding="utf-8") as f:
     json.dump(payload, f, indent=2)
@@ -2178,14 +2310,25 @@ ABLCFG = {
     "LAMBDA_SMOOTH": LAMBDA_SMOOTH,
     "LAMBDA_BOUNDS": LAMBDA_BOUNDS,
     "LAMBDA_MV": LAMBDA_MV,
+    "LAMBDA_Q": LAMBDA_Q,
 }
 
-# Prefer MAE/MSE directly from evaluate() if they exist; else use computed.
-eval_mae = None
-eval_mse = None
-if isinstance(eval_results, dict):
-    eval_mae = eval_results.get("subs_pred_mae")
-    eval_mse = eval_results.get("subs_pred_mse")
+# Prefer MAE/MSE from the *unit-consistent* payload (already post-processed);
+# fall back to locally computed metrics when missing.
+_m_eval = payload.get("metrics_evaluate", {}) if isinstance(payload, dict) else {}
+_p_point = payload.get("point_metrics", {}) if isinstance(payload, dict) else {}
+_p_hor = payload.get("per_horizon", {}) if isinstance(payload, dict) else {}
+
+eval_mae = _m_eval.get("subs_pred_mae", _p_point.get("mae"))
+eval_mse = _m_eval.get("subs_pred_mse", _p_point.get("mse"))
+
+# Coverage/sharpness for ablation: prefer evaluate() values if present.
+abl_coverage80 = _m_eval.get("subs_pred_coverage80", coverage80_for_abl)
+abl_sharpness80 = _m_eval.get("subs_pred_sharpness80", sharpness80_for_abl)
+
+# Per-horizon: prefer payload copies (unit-consistent) else local.
+per_h_mae_for_abl = (_p_hor.get("mae") if isinstance(_p_hor, dict) else None) or per_h_mae_dict
+per_h_r2_for_abl = (_p_hor.get("r2") if isinstance(_p_hor, dict) else None) or per_h_r2_dict
 
 save_ablation_record(
     outdir=RUN_OUTPUT_PATH,
@@ -2193,15 +2336,15 @@ save_ablation_record(
     model_name=MODEL_NAME,
     cfg=ABLCFG,
     eval_dict={
-        "r2": (metrics_point or {}).get("r2"),
-        "mse": float(eval_mse) if eval_mse is not None else (metrics_point or {}).get("mse"),
-        "mae": float(eval_mae) if eval_mae is not None else (metrics_point or {}).get("mae"),
-        "coverage80": coverage80_for_abl,
-        "sharpness80": sharpness80_for_abl,
+        "r2": (_p_point or {}).get("r2"),
+        "mse": float(eval_mse) if eval_mse is not None else None,
+        "mae": float(eval_mae) if eval_mae is not None else None,
+        "coverage80": float(abl_coverage80) if abl_coverage80 is not None else None,
+        "sharpness80": float(abl_sharpness80) if abl_sharpness80 is not None else None,
     },
     phys_diag=(phys or {}),
-    per_h_mae=per_h_mae_dict,   # optional but included when available
-    per_h_r2=per_h_r2_dict      # optional but included when available
+    per_h_mae=per_h_mae_for_abl,   # unit-consistent when available
+    per_h_r2=per_h_r2_for_abl      # unit-consistent when available
 )
 print("Ablation record saved.")
 #

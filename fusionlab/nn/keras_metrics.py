@@ -294,6 +294,9 @@ def _infer_quantile_axis(t, n_q=3):
     if cand:
         return cand[-1]  # prefer the last matching axis
     # Fallback: assume last dim packs (lo, hi) or (… , n_q) at runtime
+    # If we follow the convention (B,H,Q,O), force Q-axis=2 for rank-4
+    if getattr(t, "shape", None) is not None and t.shape.rank == 4:
+        return 2
     return None
 
 @register_keras_serializable(
@@ -513,4 +516,220 @@ def make_coverage80(q_axis):
                                 tf_cast(tf_size(hit), tf_float32))
     fn.__name__ = f"coverage80_qax{q_axis}"
     return fn
+
+@register_keras_serializable(
+    "fusionlab.nn.keras_metrics",
+    name="mae_q50_fn",
+)
+def mae_q50_fn(y_true, y_pred):
+    r"""
+    Mean absolute error using the q50 point forecast.
+
+    This metric is designed for models that output either:
+
+    * Quantiles in a dedicated axis of length 3:
+      ``(q10, q50, q90)`` in this exact order.
+    * A packed central interval in the last dimension:
+      ``(..., 2)`` interpreted as ``(lo, hi)``.
+
+    If a quantile axis is detected, the function extracts
+    the median (q50) and computes the mean absolute error
+    (MAE) against ``y_true``. If a packed interval is
+    detected, the midpoint ``0.5 * (lo + hi)`` is used as
+    a fallback point forecast. Otherwise, ``y_pred`` is
+    used as-is.
+
+    The MAE is computed as:
+
+    .. math::
+
+        \mathrm{MAE} \;=\;
+        \frac{1}{N}\sum_{i=1}^{N}
+        \lvert y_i - \hat{y}_i\rvert
+
+    Parameters
+    ----------
+    y_true : tf.Tensor
+        Ground-truth targets.
+    y_pred : tf.Tensor
+        Model predictions, either a point forecast, a
+        packed interval ``(..., 2)``, or quantiles with a
+        3-length axis containing ``(q10, q50, q90)``.
+
+    Returns
+    -------
+    tf.Tensor
+        Scalar MAE aggregated over all elements.
+
+    Notes
+    -----
+    * Quantile axis detection is delegated to
+      :func:`~fusionlab.nn.keras_metrics`
+      ``._infer_quantile_axis``.
+    * If you want the progress-bar name to be exactly
+      "mae", set ``mae_q50_fn.__name__ = "mae"`` before
+      calling ``model.compile(...)``. Keras snapshots
+      names at compile time.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> y = tf.zeros((2, 3, 1), dtype=tf.float32)
+    >>> q10 = tf.zeros((2, 3, 1), dtype=tf.float32)
+    >>> q50 = tf.ones((2, 3, 1), dtype=tf.float32)
+    >>> q90 = 2.0 * tf.ones((2, 3, 1), dtype=tf.float32)
+    >>> yp = tf.stack([q10, q50, q90], axis=2)
+    >>> float(mae_q50_fn(y, yp).numpy()) > 0.0
+    True
+
+    See Also
+    --------
+    mse_q50_fn : Mean squared error for q50 point
+        forecast.
+    coverage80_fn : Empirical 80 percent interval
+        coverage.
+    sharpness80_fn : Mean width of 80 percent
+        interval.
+
+    References
+    ----------
+    .. [1] Koenker, R., and Bassett, G. (1978).
+       "Regression Quantiles". Econometrica, 46(1),
+       33-50.
+    """
+    # Detect a quantile axis of length 3, if any.
+    qax = _infer_quantile_axis(y_pred, n_q=3)
+
+    # Extract the q50 point forecast when available.
+    yp = y_pred
+    if qax is not None:
+        yp = tf_gather(yp, 1, axis=qax)
+    else:
+        # Packed (lo, hi) interval -> midpoint fallback.
+        if yp.shape.rank is not None and yp.shape[-1] == 2:
+            yp = 0.5 * (yp[..., 0] + yp[..., 1])
+
+    # Cast to a stable dtype for metric computations.
+    y = tf_cast(y_true, tf_float32)
+    yp = tf_cast(yp, tf_float32)
+
+    # If targets have a trailing singleton dim, align yp.
+    if (
+        y.shape.rank is not None
+        and yp.shape.rank is not None
+        and y.shape.rank == yp.shape.rank + 1
+    ):
+        yp = tf_expand_dims(yp, axis=-1)
+
+    # Broadcast prediction to target shape.
+    yp = tf_broadcast_to(yp, tf_shape(y))
+
+    return tf_reduce_mean(tf_abs(y - yp))
+
+
+mae_q50_fn.__name__ = "mae"
+
+
+@register_keras_serializable(
+    "fusionlab.nn.keras_metrics",
+    name="mse_q50_fn",
+)
+def mse_q50_fn(y_true, y_pred):
+    r"""
+    Mean squared error using the q50 point forecast.
+
+    This metric mirrors :func:`mae_q50_fn`, but uses the
+    mean squared error (MSE):
+
+    .. math::
+
+        \mathrm{MSE} \;=\;
+        \frac{1}{N}\sum_{i=1}^{N}
+        (y_i - \hat{y}_i)^2
+
+    The point forecast :math:`\hat{y}` is derived from
+    ``y_pred`` as follows:
+
+    * If a 3-length quantile axis is detected, extract
+      q50.
+    * Else if ``y_pred.shape[-1] == 2``, use midpoint of
+      ``(lo, hi)``.
+    * Otherwise, treat ``y_pred`` as a point forecast.
+
+    Parameters
+    ----------
+    y_true : tf.Tensor
+        Ground-truth targets.
+    y_pred : tf.Tensor
+        Model predictions, either a point forecast, a
+        packed interval ``(..., 2)``, or quantiles with a
+        3-length axis containing ``(q10, q50, q90)``.
+
+    Returns
+    -------
+    tf.Tensor
+        Scalar MSE aggregated over all elements.
+
+    Notes
+    -----
+    For naming in Keras logs, see the note in
+    :func:`mae_q50_fn`.
+
+    Examples
+    --------
+    >>> import tensorflow as tf
+    >>> y = tf.zeros((1, 2, 1), dtype=tf.float32)
+    >>> lo = tf.zeros((1, 2, 1), dtype=tf.float32)
+    >>> hi = tf.ones((1, 2, 1), dtype=tf.float32)
+    >>> yp = tf.concat([lo, hi], axis=-1)
+    >>> float(mse_q50_fn(y, yp).numpy()) >= 0.0
+    True
+
+    See Also
+    --------
+    mae_q50_fn : Mean absolute error for q50 point
+        forecast.
+    coverage80_fn : Empirical 80 percent interval
+        coverage.
+    sharpness80_fn : Mean width of 80 percent
+        interval.
+
+    References
+    ----------
+    .. [1] Koenker, R., and Bassett, G. (1978).
+       "Regression Quantiles". Econometrica, 46(1),
+       33-50.
+    """
+    # Detect a quantile axis of length 3, if any.
+    qax = _infer_quantile_axis(y_pred, n_q=3)
+
+    # Extract the q50 point forecast when available.
+    yp = y_pred
+    if qax is not None:
+        yp = tf_gather(yp, 1, axis=qax)
+    else:
+        # Packed (lo, hi) interval -> midpoint fallback.
+        if yp.shape.rank is not None and yp.shape[-1] == 2:
+            yp = 0.5 * (yp[..., 0] + yp[..., 1])
+
+    # Cast to a stable dtype for metric computations.
+    y = tf_cast(y_true, tf_float32)
+    yp = tf_cast(yp, tf_float32)
+
+    # If targets have a trailing singleton dim, align yp.
+    if (
+        y.shape.rank is not None
+        and yp.shape.rank is not None
+        and y.shape.rank == yp.shape.rank + 1
+    ):
+        yp = tf_expand_dims(yp, axis=-1)
+
+    # Broadcast prediction to target shape.
+    yp = tf_broadcast_to(yp, tf_shape(y))
+
+    d = y - yp
+    return tf_reduce_mean(d * d)
+
+
+mse_q50_fn.__name__ = "mse"
 

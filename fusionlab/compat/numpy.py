@@ -68,3 +68,31 @@ def ensure_numpy_compatibility():
 
 def gelu_numpy(x):
     return 0.5 * x * (1 + safe_erf(x / np.sqrt(2)))
+
+# ---------------------------------------------------------------------
+# NumPy compatibility helpers
+#
+# NumPy >= 2.0 stopped exposing some warnings/exceptions in the
+# top-level namespace. Prefer numpy.exceptions when available.
+# ---------------------------------------------------------------------
+def _resolve_numpy_symbol(name: str):
+    """Resolve a NumPy symbol across versions.
+
+    Tries (in order): numpy.exceptions, numpy, then legacy internal modules.
+    Returns None if not found.
+    """
+    for mod in ("numpy.exceptions", "numpy", "numpy.core.numeric"):
+        try:
+            m = __import__(mod, fromlist=[name])
+            return getattr(m, name)
+        except Exception:
+            pass
+    return None
+
+
+# Public alias used across fusionlab
+ComplexWarning = _resolve_numpy_symbol("ComplexWarning")
+if ComplexWarning is None:
+    class ComplexWarning(RuntimeWarning):
+        """Fallback ComplexWarning (very old/stripped NumPy builds)."""
+        pass

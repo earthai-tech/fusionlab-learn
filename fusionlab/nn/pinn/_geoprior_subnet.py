@@ -11,8 +11,9 @@ import numpy as np
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
 from ...compat.sklearn import validate_params, Interval, StrOptions
-from ...utils.deps_utils import ensure_pkg 
-from ...utils.generic_utils import rename_dict_keys 
+from ...compat.tf import optional_tf_function
+from ...utils.generic_utils import rename_dict_keys, as_tuple 
+from ..keras_utils import _canonicalize_targets
 from ...params import (
     LearnableMV, LearnableKappa, FixedGammaW, FixedHRef,
     LearnableK, LearnableSs, LearnableQ, LearnableC,
@@ -55,7 +56,8 @@ if KERAS_BACKEND:
         seconds_per_time_unit, 
         resolve_gw_units, 
         resolve_cons_drawdown_options,
-        guard_scale_with_residual
+        guard_scale_with_residual, 
+        resolve_auto_scale_floor
         
     )
 
@@ -83,6 +85,7 @@ if KERAS_BACKEND:
         build_physics_bundle,
         pack_step_results,
         pack_eval_physics,
+        update_compiled_metrics
     )
 
     from .utils import  process_pde_modes,  _get_coords
@@ -933,8 +936,19 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return data_features_2d, phys_features_raw_3d
 
-    #@tf_autograph.experimental.do_not_convert
-    def call(
+    # @tf_autograph.experimental.do_not_convert
+    # @optional_tf_function 
+    def call(self,
+        inputs: Dict[str, Optional[Tensor]],
+        training: bool = False,
+    ) -> Dict[str, Tensor]:
+        
+        y_pred, _ = self._forward_all(inputs, training=training)
+        
+        return y_pred
+
+
+    def _forward_all(
         self,
         inputs: Dict[str, Optional[Tensor]],
         training: bool = False,
@@ -1169,11 +1183,19 @@ class GeoPriorSubsNet(BaseAttentive):
         else:
             data_final = decoded_data_means
     
-        return {
+        # Split into the supervised heads
+        s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
+        
+        y_pred = {"subs_pred": s_pred_final, "gwl_pred": gwl_pred_final}
+        
+        aux = {
             "data_final": data_final,
-            "data_mean_raw": data_mean_raw,   
+            "data_mean_raw": data_mean_raw,
             "phys_mean_raw": phys_mean_raw,
+            "phys_features_raw_3d": phys_features_raw_3d,
         }
+        return y_pred, aux
+
 
     def train_step(self, data):
         """
@@ -1200,11 +1222,7 @@ class GeoPriorSubsNet(BaseAttentive):
         # 0) Unpack (inputs, targets) + normalize target keys
         # ----------------------------------------------------------
         inputs, targets = data
-        if isinstance(targets, dict):
-            targets = rename_dict_keys(
-                targets.copy(),
-                param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"},
-            )
+        targets = _canonicalize_targets(targets)
 
         dbg_step0_inputs_targets(
             verbose=self.verbose,
@@ -1277,19 +1295,12 @@ class GeoPriorSubsNet(BaseAttentive):
             # ----------------------
             # 3.1 Forward pass
             # ----------------------
-            outputs = self(inputs_fwd, training=True)
-    
-            data_final = outputs.get("data_final", None)
-            if data_final is None:
-                raise ValueError("Model outputs missing 'data_final'.")
-    
-            # Quantile-aware tensors are OK here; we only slice the last dim
-            s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
-            y_pred = {
-                "subs_pred": s_pred_final, 
-                "gwl_pred": gwl_pred_final
-            }
+            y_pred, aux = self._forward_all(inputs_fwd, training=True)
             
+            data_final = aux["data_final"]
+            s_pred_final= y_pred['subs_pred']
+            gwl_pred_final =y_pred['gwl_pred']
+
             dbg_units_once(
                 verbose=self.verbose,
                 iterations=self.optimizer.iterations,
@@ -1301,19 +1312,18 @@ class GeoPriorSubsNet(BaseAttentive):
 
             # Supervised data loss (pinball, MSE, etc. defined at compile-time)
             data_loss = self.compiled_loss(
-                y_true=targets,
-                y_pred=y_pred,
+                targets, y_pred,
                 regularization_losses=self.losses,
             )
-
+            
             # ------------------------------------------------------
             # 3.2 Mean head for physics
             # ------------------------------------------------------
-            data_mean_raw = outputs.get("data_mean_raw", None)
+            data_mean_raw = aux.get('data_mean_raw', None)
             
             if data_mean_raw is not None:
                 _, gwl_mean_raw = self.split_data_predictions(data_mean_raw)
-            else:
+            else: # this will never reach 
                 # Fallback: average over quantile axis if present
                 gwl_mean_raw = gwl_pred_final
                 r = tf_rank(gwl_mean_raw)
@@ -1354,7 +1364,7 @@ class GeoPriorSubsNet(BaseAttentive):
             # ----------------------
             # 3.3 Physics logits: K, Ss, Δlogτ (+ optional Q)
             # ----------------------
-            phys_mean_raw = outputs.get("phys_mean_raw", None)
+            phys_mean_raw = aux.get("phys_mean_raw", None)
             if phys_mean_raw is None:
                 raise ValueError("Model outputs missing 'phys_mean_raw'.")
     
@@ -1862,9 +1872,10 @@ class GeoPriorSubsNet(BaseAttentive):
             )
 
             if (not self._physics_off()) and self.scale_pde_residuals:
-                cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-9))
-                gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-9))
-                
+                # Use the robust auto-resolver
+                cons_floor = resolve_auto_scale_floor("cons", sk)
+                gw_floor   = resolve_auto_scale_floor("gw", sk)
+
                 s_for_scales = (
                     tf_stop_gradient(s_inc_pred)
                     if (cons_active and allow_resid)
@@ -1889,6 +1900,12 @@ class GeoPriorSubsNet(BaseAttentive):
                     div_K_grad_h=div_term,       
                     verbose=self.verbose,
                 )
+                # >>>>>> INSERT THIS FIX <<<<<<
+                # Detach scales from the computation graph. 
+                # We want to scale the loss by the MAGNITUDE of these terms,
+                # NOT optimize the terms to change the scale.
+                scales = {k: tf_stop_gradient(v) for k, v in scales.items()}
+                # >>>>>> END FIX <<<<<<
                 
                 cons_s = guard_scale_with_residual(
                     residual=cons_res,
@@ -1975,31 +1992,6 @@ class GeoPriorSubsNet(BaseAttentive):
         # 10) Apply gradients
         # ----------------------------------------------------------
 
-        # trainable_vars = self.trainable_variables
-        # grads, _ = tf_clip_by_global_norm(grads, 1.0)
-        # grads = tape.gradient(total_loss, trainable_vars)
-        
-        # dbg_step10_grads(
-        #     verbose=self.verbose,
-        #     trainable_vars=trainable_vars,
-        #     grads=grads,
-        # )
-
-        # dbg_term_grads_finite(
-        #     verbose=self.verbose,
-        #     debug_grads=debug_grads,
-        #     trainable_vars=trainable_vars,
-        #     data_loss=data_loss,
-        #     terms_scaled=terms_scaled,
-        #     tape=tape,
-        # )
-
-        # del tape
-
-        # self.optimizer.apply_gradients(
-        #     self._scale_param_grads(grads, trainable_vars)
-        # )
-    
         trainable_vars = self.trainable_variables
         
         # 1) Compute grads
@@ -2044,7 +2036,6 @@ class GeoPriorSubsNet(BaseAttentive):
         eps_cons = to_rms(cons_res)
         eps_gw = to_rms(gw_res, dtype = tf_float64)
         
-
         physics_bundle = None
         if not self._physics_off():
             physics_bundle = build_physics_bundle(
@@ -2088,32 +2079,16 @@ class GeoPriorSubsNet(BaseAttentive):
           internally uses a GradientTape (but no optimizer update here).
         """
         inputs, targets = data
-    
-        if isinstance(targets, dict):
-            targets = rename_dict_keys(
-                targets.copy(),
-                param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"},
-            )
-    
-        # Forward pass (no optimizer / gradients applied)
-        outputs = self(inputs, training=False)
-    
-        data_final = outputs.get("data_final", None)
-        if data_final is None:
-            raise ValueError("Model outputs missing 'data_final' in test_step().")
-    
-        s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
+        targets = _canonicalize_targets(targets)
         
-        y_pred_for_eval = {
-            "subs_pred": s_pred_final, 
-            "gwl_pred": gwl_pred_final
-        }
-    
+        # Forward pass (no optimizer / gradients applied)
+        y_pred_for_eval = self(inputs, training=False)
+
         data_loss = self.compiled_loss(
-            y_true=targets,
-            y_pred=y_pred_for_eval,
+            targets, y_pred_for_eval,
             regularization_losses=self.losses,
         )
+        
         physics_bundle = None
         
         if not self._physics_off():
@@ -2186,7 +2161,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 f"Got shape={coords.shape}."
             )
     
-        # IMPORTANT: ensure forward uses the same coords tensor
+        # ensure forward uses the same coords tensor
         inputs_fwd = dict(inputs)
         inputs_fwd["coords"] = coords
     
@@ -2197,28 +2172,29 @@ class GeoPriorSubsNet(BaseAttentive):
         coords_deg  = bool(get_sk(sk, "coords_in_degrees", default=False))
         alpha_disp=float(get_sk(sk, "mv_alpha_disp", default=0.1))
         delta=float(get_sk(sk, "mv_huber_delta", default=1.0))
-        cons_floor = float(get_sk(sk, "cons_scale_floor", default=1e-15))
-        gw_floor   = float(get_sk(sk, "gw_scale_floor", default=1e-15))
-    
+        cons_floor = resolve_auto_scale_floor("cons", sk)
+        gw_floor   = resolve_auto_scale_floor("gw", sk)
+        
+        # XXX TOREMOVE 
+        tf_print("cons_floor=", cons_floor)
+        tf_print("gw_floor=", gw_floor)
         # --------------------------------------------------------------
         # 2) Forward + autodiff wrt coords
         # --------------------------------------------------------------
         with GradientTape(persistent=True) as tape:
             tape.watch(coords)
     
-            outputs = self(inputs_fwd, training=False)
-    
-            data_mean_raw = outputs.get("data_mean_raw", None)
-            if data_mean_raw is None:
-                raise ValueError("Model outputs missing 'data_mean_raw'.")
-    
-            subs_mean_raw, gwl_mean_raw = self.split_data_predictions(data_mean_raw)
-    
+            y_pred, aux  = self._forward_all(inputs_fwd, training=False) 
+            
+            subs_mean_raw, gwl_mean_raw = self.split_data_predictions(
+                aux ['data_mean_raw']
+            )
+            
             # predicted gwl/depth -> SI head (meters)
             gwl_si = to_si_head(tf_cast(gwl_mean_raw, tf_float32), sk)
             h_si = gwl_to_head_m(gwl_si, sk, inputs=inputs_fwd)
     
-            phys_mean_raw = outputs.get("phys_mean_raw", None)
+            phys_mean_raw = aux.get("phys_mean_raw", None)
             if phys_mean_raw is None:
                 raise ValueError("Model outputs missing 'phys_mean_raw'.")
     
@@ -2527,6 +2503,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 div_K_grad_h=div_term,       # helps GW scaling a lot
                 verbose=0,
             )
+            scales = {k: tf_stop_gradient(v) for k, v in scales.items()}
             cons_s = guard_scale_with_residual(
                 residual=cons_res,
                 scale=scales["cons_scale"],

@@ -3223,16 +3223,19 @@ def compute_scales(
     href = _finite_or_zero(href)
 
     # --- Floors.
-    cons_floor_def = _EPSILON
-    if mode in ("step", "time_unit"):
-        cons_floor_def = 1e-6
-
-    cons_floor = float(
-        get_sk(sk, "cons_scale_floor", default=cons_floor_def)
-    )
-    gw_floor = float(
-        get_sk(sk, "gw_scale_floor", default=_EPSILON)
-    )
+    # cons_floor_def = _EPSILON
+    # if mode in ("step", "time_unit"):
+    #     cons_floor_def = 1e-6
+    
+    cons_floor = resolve_auto_scale_floor("cons", sk)
+    gw_floor   = resolve_auto_scale_floor("gw", sk)
+    
+    # cons_floor = float(
+    #     get_sk(sk, "cons_scale_floor", default=cons_floor_def)
+    # )
+    # gw_floor = float(
+    #     get_sk(sk, "gw_scale_floor", default=_EPSILON)
+    # )
 
     # --- Optional tau/H (shape-safe).
     use_relax = (tau_field is not None) and (H_field is not None)
@@ -3290,6 +3293,81 @@ def compute_scales(
 
     return {"cons_scale": cons_scale, "gw_scale": gw_scale}
 
+
+def resolve_auto_scale_floor(
+    key: str,
+    scaling_kwargs: dict[str, Any] | None,
+    default_val: float | str = "auto",
+) -> float:
+    """
+    Robustly determine a numerical stability floor for physics scales.
+
+    If the user provides a float in scaling_kwargs, it is respected.
+    If 'auto', we derive a safe floor based on float32 stability limits
+    converted to the active unit system (SI, time_units, or steps).
+
+    Baselines (SI):
+      - cons (velocity): 1e-7 m/s  (~3 m/yr)
+        High floor because velocity residuals are often noise-dominated.
+      - gw (rate):       1e-9 1/s  (~0.03 /yr)
+        Lower floor to capture subtler groundwater dynamics.
+    """
+    sk = scaling_kwargs or {}
+    
+    # 1. Check user override in config (e.g., "cons_scale_floor": 1e-12)
+    #    We strip "auto" if it appears as a string literal.
+    val = get_sk(sk, f"{key}_scale_floor", default=default_val)
+    
+    if isinstance(val, (float, int)) and not isinstance(val, bool):
+        return float(val)
+        
+    if str(val).lower() != "auto":
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            pass # Fallthrough to auto logic
+
+    # 2. "Auto" Logic: Derive based on Units
+    time_units = get_sk(sk, "time_units", default="year")
+    
+    # Calculate conversion factor: 1 "time_unit" = X seconds
+    try:
+        sec_per_unit = float(seconds_per_time_unit(time_units))
+    except Exception:
+        sec_per_unit = 31556952.0 # Default to year if unknown
+        
+    # Define Safe SI Baselines (float32 stability thresholds)
+    # m/s for cons, 1/s for gw
+    SI_BASE_CONS = 1e-7 
+    SI_BASE_GW   = 1e-9 
+
+    if key == "cons":
+        # Target units: "second", "time_unit", or "step"
+        resid_units = str(get_sk(sk, "cons_residual_units", default="second")).lower()
+        
+        if "second" in resid_units:
+            return SI_BASE_CONS
+        elif "time" in resid_units:
+            # Convert m/s -> m/year (or m/month, etc)
+            # floor = (m/s) * (s/unit) = m/unit
+            return SI_BASE_CONS * sec_per_unit
+        else:
+            # "step": treat roughly like SI (conservative)
+            return SI_BASE_CONS
+
+    elif key == "gw":
+        # Target units: "second" or "time_unit"
+        resid_units = str(get_sk(sk, "gw_residual_units", default="time_unit")).lower()
+        
+        if "second" in resid_units:
+            return SI_BASE_GW
+        elif "time" in resid_units:
+            # Convert 1/s -> 1/year
+            # floor = (1/s) * (s/unit) = 1/unit
+            return SI_BASE_GW * sec_per_unit
+            
+    # Fallback safe default
+    return 1e-7
 
 def resolve_gw_units(sk):
     v = get_sk(sk, "gw_residual_units", default="time_unit")

@@ -3872,3 +3872,147 @@ def print_config_table(
 
     print_fn(table_text)
     return table_text
+
+def as_tuple(
+    obj: Any,
+    names: Sequence[str] | None = None,
+    *,
+    ctx: str = "value",
+    strict: bool = True,
+    allow_unwrap_singleton: bool = True,
+    max_unwrap_depth: int = 4,
+    missing_value: Any = None,
+) -> Tuple[Any, ...]:
+    """
+    Convert model I/O structures (dict/list/tuple/tensor-like) into a tuple.
+
+    This is designed for Keras multi-output training where `y_true` and
+    `y_pred` may be dictionaries keyed by output names, but Keras metrics
+    are more stable when fed a tuple/list ordered like `model.output_names`.
+
+    Parameters
+    ----------
+    obj : Any
+        The object to convert. Common cases:
+        - Mapping (e.g., {"subs_pred": t1, "gwl_pred": t2})
+        - list/tuple (e.g., [t1, t2])
+        - tensor-like scalar/single output (e.g., t1)
+        - nested single-key mapping wrapper
+          (e.g., {"data_final": {"subs_pred": t1, "gwl_pred": t2}})
+
+    names : sequence of str, optional
+        Expected output names (ordering source). Typically `self.output_names`.
+        If provided and `obj` is a mapping, values are extracted in this order.
+
+    ctx : str, default="value"
+        Context label used in error messages ("targets" / "y_pred", etc.).
+
+    strict : bool, default=True
+        If True, enforce:
+        - all `names` keys exist when `obj` is a mapping
+        - sequence length matches `len(names)` when `obj` is list/tuple
+        - multi-output requires structured input (not a single tensor-like)
+        If False, best-effort conversion is attempted and missing keys are
+        filled with `missing_value` (only for mapping + names).
+
+    allow_unwrap_singleton : bool, default=True
+        If True, unwrap nested single-key mapping layers when the key is not
+        in `names` (e.g., {"data_final": ...}) up to `max_unwrap_depth`.
+
+    max_unwrap_depth : int, default=4
+        Maximum unwrap depth when `allow_unwrap_singleton=True`.
+
+    missing_value : Any, default=None
+        Value used when `strict=False` and a key in `names` is missing.
+
+    Returns
+    -------
+    tuple
+        Tuple of outputs ordered to match `names` (if provided), otherwise
+        preserves list/tuple order or mapping insertion order.
+
+    Raises
+    ------
+    KeyError
+        If `obj` is a mapping, `names` is provided, and a required key is
+        missing (strict=True).
+
+    ValueError
+        If `obj` is a list/tuple and its length doesn't match `len(names)`
+        (strict=True).
+
+    TypeError
+        If `obj` is tensor-like (non-iterable, non-mapping) but multiple
+        outputs are expected (len(names) > 1) and strict=True.
+    """
+    # Normalize names early (avoid weird generators / None).
+    if names is not None:
+        names = tuple(str(n) for n in names)
+
+    # ------------------------------------------------------------
+    # 0) Optional unwrap: {"data_final": {...}} -> {...}
+    # ------------------------------------------------------------
+    if allow_unwrap_singleton:
+        depth = 0
+        cur = obj
+        while (
+            depth < int(max_unwrap_depth)
+            and isinstance(cur, Mapping)
+            and len(cur) == 1
+        ):
+            (k,) = cur.keys()
+            # Unwrap if this singleton key is clearly a wrapper (not an output).
+            if names is not None and str(k) in names:
+                break
+            cur = next(iter(cur.values()))
+            depth += 1
+        obj = cur
+
+    # ------------------------------------------------------------
+    # 1) Mapping case: extract by names (preferred for multi-output)
+    # ------------------------------------------------------------
+    if isinstance(obj, Mapping):
+        if names is None:
+            # Fall back to insertion order (Py3.7+ preserves insertion order).
+            return tuple(obj[k] for k in obj.keys())
+
+        missing = [n for n in names if n not in obj]
+        if missing and strict:
+            available = ", ".join(map(str, obj.keys()))
+            need = ", ".join(map(str, missing))
+            raise KeyError(
+                f"{ctx} is a mapping but missing required key(s): {need}. "
+                f"Available keys: {available}."
+            )
+
+        # If not strict, fill missing keys with missing_value.
+        return tuple(obj.get(n, missing_value) for n in names)
+
+    # ------------------------------------------------------------
+    # 2) Sequence case: validate length against names if provided
+    # ------------------------------------------------------------
+    if isinstance(obj, (tuple, list)):
+        tup = tuple(obj)
+        if names is not None and strict and len(tup) != len(names):
+            raise ValueError(
+                f"{ctx} has length {len(tup)} but expected {len(names)} "
+                f"to match output_names={list(names)}."
+            )
+        return tup
+
+    # ------------------------------------------------------------
+    # 3) Single (tensor-like / scalar) case
+    # ------------------------------------------------------------
+    if names is not None and len(names) > 1:
+        if strict:
+            raise TypeError(
+                f"{ctx} is not a mapping/sequence but multiple outputs are "
+                f"expected (len(output_names)={len(names)}). "
+                f"Provide a dict keyed by {list(names)} or a tuple/list of "
+                f"that length."
+            )
+        # Best-effort: replicate into a 1-tuple (caller may handle).
+        return (obj,)
+
+    return (obj,)
+

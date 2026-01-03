@@ -167,7 +167,7 @@ SCALE_Z_SURF = False
 # If subsidence is "rate" (per year) or "cumulative":
 SUBSIDENCE_KIND = "cumulative"   # {"cumulative", "rate"}
 
-ALLOW_SUBS_RESIDUAL =True 
+
 
 # ===================================================================
 # 2) FEATURE REGISTRY (Stage-1 -> Stage-2 handshake)
@@ -329,7 +329,7 @@ PDE_MODE_CONFIG = "on"
 PHYSICS_BASELINE_MODE = "none"
 
 # If True, use internal scale factors (c*, g*) so residual terms are comparable.
-SCALE_PDE_RESIDUALS = True
+SCALE_PDE_RESIDUALS = True 
 
 
 # -------------------------------------------------------------------
@@ -606,8 +606,10 @@ GEOPRIOR_H_REF = "auto"   # or 0.0
 CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 CONSOLIDATION_RESIDUAL_UNITS ="second"
 
-CONS_SCALE_FLOOR =1e-10
-GW_SCALE_FLOOR =1e-14
+CONS_SCALE_FLOOR ="auto"#1e-7
+GW_SCALE_FLOOR ="auto" #1e-7
+ALLOW_SUBS_RESIDUAL =True 
+
 DT_MIN_UNITS = 1e-6
 
 Q_WRT_NORMALIZED_TIME = False 
@@ -625,7 +627,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 50
+EPOCHS = 3
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
 
@@ -677,6 +679,10 @@ TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
 # - Stage-2 audit focuses on NPZ tensor shapes, finiteness, coordinate
 #   normalization/inversion checks, and scaling_kwargs consistency.
 AUDIT_STAGES = "*"
+
+
+EVAL_JSON_UNITS_MODE = "si"              # or "interpretable"
+EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"
 
 # -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE

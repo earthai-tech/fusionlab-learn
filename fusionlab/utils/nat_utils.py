@@ -3031,6 +3031,132 @@ def load_training_summary_near_model(
 
     return None
 
+def resolve_hybrid_config(
+    manifest_cfg: dict,
+    live_cfg: dict,
+    verbose: bool = True
+) -> dict:
+    """
+    Merge Manifest config (Data Authority) with Live config (Physics Authority).
+
+    Strategy
+    --------
+    1. Base: Start with Manifest config. This guarantees that data shapes,
+       time steps, features, and normalization match the artifacts on disk.
+    2. Override: Apply specific keys from Live config (config.py) that control
+       architecture, physics equations, loss weights, and training dynamics.
+
+    This allows you to tune the model and physics without re-running Stage 1.
+
+    Parameters
+    ----------
+    manifest_cfg : dict
+        Configuration dictionary loaded from `manifest.json`.
+    live_cfg : dict
+        Configuration dictionary loaded from the current `config.py`.
+
+    Returns
+    -------
+    dict
+        Merged configuration.
+    """
+    # 1. Start with Manifest (Data Wins)
+    merged = manifest_cfg.copy()
+
+    # 2. Define "Safe" keys that Stage 2 is allowed to override.
+    #    (Everything that does NOT affect input data shapes or target columns)
+    OVERRIDABLE_KEYS = {
+        # --- 1. Architecture (Safe to tune if model is rebuilt) ---
+        "EMBED_DIM", "HIDDEN_UNITS", "LSTM_UNITS", "ATTENTION_UNITS",
+        "NUMBER_HEADS", "DROPOUT_RATE", "MEMORY_SIZE", "SCALES",
+        "USE_RESIDUALS", "USE_BATCH_NORM", "USE_VSN", "VSN_UNITS",
+        "ATTENTION_LEVELS",
+
+        # --- 2. Physics Toggles & Math ---
+        "PDE_MODE_CONFIG", "SCALE_PDE_RESIDUALS",
+        "CONSOLIDATION_STEP_RESIDUAL_METHOD",
+        "ALLOW_SUBS_RESIDUAL", "OFFSET_MODE",
+        "PHYSICS_BOUNDS_MODE", "TIME_UNITS",
+        
+        # --- 3. Physics Parameters & Initialization ---
+        "GEOPRIOR_INIT_MV", "GEOPRIOR_INIT_KAPPA", 
+        "GEOPRIOR_GAMMA_W", "GEOPRIOR_H_REF",
+        "GEOPRIOR_KAPPA_MODE", "GEOPRIOR_USE_EFFECTIVE_H",
+        "GEOPRIOR_HD_FACTOR", "PHYSICS_BOUNDS",
+
+        # --- 4. Loss Weights (Lambdas) ---
+        "LAMBDA_CONS", "LAMBDA_GW", "LAMBDA_PRIOR", 
+        "LAMBDA_SMOOTH", "LAMBDA_BOUNDS", "LAMBDA_MV", 
+        "LAMBDA_Q", "LAMBDA_OFFSET", 
+        "LOSS_WEIGHT_GWL",
+        "MV_LR_MULT", "KAPPA_LR_MULT",
+        "SUBS_WEIGHTS", "GWL_WEIGHTS",  # Safe: weights don't change shape
+
+        # --- 5. Scaling, Stability & Units ---
+        "CONS_SCALE_FLOOR", "GW_SCALE_FLOOR",
+        "GW_RESIDUAL_UNITS", "CONSOLIDATION_RESIDUAL_UNITS",
+        "DT_MIN_UNITS", "Q_WRT_NORMALIZED_TIME",
+        "Q_IN_SI", "Q_IN_PER_SECOND", "Q_KIND", "Q_LENGTH_IN_SI",
+        "DRAINAGE_MODE", "CLIP_GLOBAL_NORM",
+        "DEBUG_PHYSICS_GRADS", "SCALING_ERROR_POLICY",
+
+        # --- 6. Consolidation Drawdown Gates ---
+        "CONS_DRAWDOWN_MODE", "CONS_DRAWDOWN_RULE", 
+        "CONS_STOP_GRAD_REF", "CONS_DRAWDOWN_ZERO_AT_ORIGIN", 
+        "CONS_DRAWDOWN_CLIP_MAX", "CONS_RELU_BETA",
+
+        # --- 7. MV Prior Strategy ---
+        "MV_PRIOR_UNITS", "MV_ALPHA_DISP", "MV_HUBER_DELTA",
+        "MV_PRIOR_MODE", "MV_WEIGHT", "MV_SCHEDULE_UNIT",
+        "MV_DELAY_EPOCHS", "MV_WARMUP_EPOCHS", 
+        "MV_DELAY_STEPS", "MV_WARMUP_STEPS",
+
+        # --- 8. Training Strategy & Gates (Physics-First vs Data-First) ---
+        "TRAINING_STRATEGY",
+        # Physics-First specific overrides
+        "Q_POLICY_PHYSICS_FIRST", 
+        "Q_WARMUP_EPOCHS_PHYSICS_FIRST", "Q_RAMP_EPOCHS_PHYSICS_FIRST",
+        "SUBS_RESID_POLICY_PHYSICS_FIRST", 
+        "SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST", "SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST",
+        "LAMBDA_Q_PHYSICS_FIRST", "LOSS_WEIGHT_GWL_PHYSICS_FIRST",
+        # Data-First specific overrides
+        "LOSS_WEIGHT_GWL_DATA_FIRST", "LAMBDA_Q_DATA_FIRST",
+        "Q_POLICY_DATA_FIRST", 
+        "Q_WARMUP_EPOCHS_DATA_FIRST", "Q_RAMP_EPOCHS_DATA_FIRST",
+        "SUBS_RESID_POLICY_DATA_FIRST", 
+        "SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST", "SUBS_RESID_RAMP_EPOCHS_DATA_FIRST",
+
+        # --- 9. Lambda Offset Scheduler ---
+        "USE_LAMBDA_OFFSET_SCHEDULER", "LAMBDA_OFFSET_UNIT",
+        "LAMBDA_OFFSET_WHEN", "LAMBDA_OFFSET_WARMUP",
+        "LAMBDA_OFFSET_START", "LAMBDA_OFFSET_END", 
+        "LAMBDA_OFFSET_SCHEDULE",
+
+        # --- 10. Training Loop & Logging ---
+        "EPOCHS", "BATCH_SIZE", "LEARNING_RATE", "PATIENCE",
+        "LOG_Q_DIAGNOSTICS", "AUDIT_STAGES",
+        "EVAL_JSON_UNITS_MODE", "EVAL_JSON_UNITS_SCOPE"
+    }
+
+    updates = []
+    for key in OVERRIDABLE_KEYS:
+        # If the key exists in your live config (config.py), it overrides manifest
+        if key in live_cfg:
+            current_val = merged.get(key)
+            new_val = live_cfg[key]
+            
+            # Update only if different (or if manifest didn't have it)
+            if new_val != current_val:
+                merged[key] = new_val
+                updates.append(key)
+
+    if verbose and updates:
+        print(f"[Config] Applied {len(updates)} physics/training overrides from config.py:")
+        # Print a few examples
+        sample = updates[:4]
+        print(f"         {', '.join(sample)} ...")
+    
+    return merged
 # -------------------------------------------------------------------------
 # Backward-compatible aliases for old private helper names
 # -------------------------------------------------------------------------

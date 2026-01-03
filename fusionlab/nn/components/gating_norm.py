@@ -425,11 +425,18 @@ class VariableSelectionNetwork(Layer, NNLearner):
         # Determine shape of input slices passed to single_variable_grns
         # Add feature dim F=1 if missing
         # Add feature dimension if missing
+        # XXX TO ENABLE 
         inferred_input_shape = tf_cond(
-             tf_equal(input_rank, expected_min_rank),
-             lambda: input_shape.as_list() + [1],
-             lambda: input_shape.as_list()
-         )
+              tf_equal(input_rank, expected_min_rank),
+              lambda: input_shape.as_list() + [1],
+              lambda: input_shape.as_list()
+          )
+        # gating_norm.py :: VariableSelectionNetwork.build
+
+        # inferred_input_shape = input_shape.as_list()
+        # if input_rank == expected_min_rank:
+        #     inferred_input_shape = inferred_input_shape + [1]
+
         # Shape: (B, N, F=1) or (B, T, N, F=1)
 
         # Ensure dimensions (except batch) are 

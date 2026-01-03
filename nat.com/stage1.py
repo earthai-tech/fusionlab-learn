@@ -215,8 +215,8 @@ CLIP_GLOBAL_NORM = float(cfg.get("CLIP_GLOBAL_NORM", 5.0))
 # Optional but strongly recommended if GWL_COL is not in meters:
 GWL_RAW_COL = cfg.get("GWL_RAW_COL", None)  # e.g. "GWL_depth_bgs"
 
-CONS_SCALE_FLOOR = float(cfg.get("CONS_SCALE_FLOOR", 1e-10)) 
-GW_SCALE_FLOOR = float(cfg.get("GW_SCALE_FLOOR", 1e-10))  
+CONS_SCALE_FLOOR = cfg.get("CONS_SCALE_FLOOR", 1e-5) 
+GW_SCALE_FLOOR = cfg.get("GW_SCALE_FLOOR", 1e-5)  
 DT_MIN_UNITS = float(cfg.get("DT_MIN_UNITS", 1e-6))  
 
 Q_WRT_NORMALIZED_TIME = bool(cfg.get("Q_WRT_NORMALIZED_TIME", False))     
