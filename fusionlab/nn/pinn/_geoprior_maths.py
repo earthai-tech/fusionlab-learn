@@ -13,7 +13,6 @@ from typing import Any, Dict, Optional, Tuple, Sequence, Union
 import numpy as np
 
 from .. import KERAS_DEPS, dependency_message
-# from ...compat.tf import optional_tf_function
 # from ...utils.generic_utils import vlog 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
@@ -217,7 +216,7 @@ def q_to_gw_source_term_si(
     t_range_units: Optional[Tensor],
     time_units: Optional[str],
     scaling_kwargs: Optional[Dict[str, Any]],
-    H_floor: float = 1e-6,
+    H_floor: float = 1e0, #1e-6,
     verbose: int = 0,
 ) -> Tensor:
     """
@@ -3075,7 +3074,7 @@ def _gw_scale_core(
 
     # ------------------------------------------------------
     # Optional div term (already in compatible units).
-    # ------------------------------------------------------
+    # ------------------------------------------------------gim
     if div_K_grad_h is not None:
         divv = _finite_or_zero(div_K_grad_h)
         divv = tf_abs(tf_reshape(divv, [-1]))

@@ -402,6 +402,7 @@ MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
 MV_DELAY_STEPS   = None
 MV_WARMUP_STEPS  = None
 
+TRACK_ADD_ON_METRICS =True 
 # ===================================================================
 # 7.x TRAINING STRATEGY (Physics-first vs Data-first)
 # ===================================================================
@@ -444,7 +445,7 @@ SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 2  # 0 => hard step
 
 
 # Log extra Q/subs-residual diagnostics in train/val logs
-LOG_Q_DIAGNOSTICS = False
+LOG_Q_DIAGNOSTICS = True
 
 # -------------------------------------------------------------------
 # 5.4 Physics bounds (specified in LINEAR space here)
@@ -606,8 +607,8 @@ GEOPRIOR_H_REF = "auto"   # or 0.0
 CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 CONSOLIDATION_RESIDUAL_UNITS ="second"
 
-CONS_SCALE_FLOOR ="auto"#1e-7
-GW_SCALE_FLOOR ="auto" #1e-7
+CONS_SCALE_FLOOR =1e-1
+GW_SCALE_FLOOR =1e-1
 ALLOW_SUBS_RESIDUAL =True 
 
 DT_MIN_UNITS = 1e-6

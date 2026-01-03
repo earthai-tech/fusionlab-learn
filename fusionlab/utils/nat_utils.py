@@ -3066,6 +3066,7 @@ def resolve_hybrid_config(
     # 2. Define "Safe" keys that Stage 2 is allowed to override.
     #    (Everything that does NOT affect input data shapes or target columns)
     OVERRIDABLE_KEYS = {
+        "TRACK_ADD_ON_METRICS", 
         # --- 1. Architecture (Safe to tune if model is rebuilt) ---
         "EMBED_DIM", "HIDDEN_UNITS", "LSTM_UNITS", "ATTENTION_UNITS",
         "NUMBER_HEADS", "DROPOUT_RATE", "MEMORY_SIZE", "SCALES",

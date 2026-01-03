@@ -11,9 +11,7 @@ import numpy as np
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
 from ...compat.sklearn import validate_params, Interval, StrOptions
-from ...compat.tf import optional_tf_function
-from ...utils.generic_utils import rename_dict_keys, as_tuple 
-from ..keras_utils import _canonicalize_targets
+from ...utils.target_utils import _canonicalize_targets
 from ...params import (
     LearnableMV, LearnableKappa, FixedGammaW, FixedHRef,
     LearnableK, LearnableSs, LearnableQ, LearnableC,
@@ -22,6 +20,10 @@ from ...params import (
 
 from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message 
 from .._base_attentive import BaseAttentive
+from ..keras_metrics import (
+    mae_q50_fn, mse_q50_fn, 
+    coverage80_fn, sharpness80_fn
+)
 
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs
@@ -85,7 +87,6 @@ if KERAS_BACKEND:
         build_physics_bundle,
         pack_step_results,
         pack_eval_physics,
-        update_compiled_metrics
     )
 
     from .utils import  process_pde_modes,  _get_coords
@@ -313,6 +314,10 @@ class GeoPriorSubsNet(BaseAttentive):
         b = self.scaling_kwargs.get("bounds", None)
         if isinstance(b, Mapping) and not isinstance(b, dict):
             self.scaling_kwargs["bounds"] = dict(b)
+        
+        self._track_add_on_metrics = get_sk(
+            self.scaling_kwargs, "track_add_on_metrics", default=True
+            )
 
         # Canonicalize missing canonical keys from aliases.
         self.scaling_kwargs = canonicalize_scaling_kwargs(
@@ -454,10 +459,66 @@ class GeoPriorSubsNet(BaseAttentive):
             f" kappa_trainable={kappa.trainable}"
         )
         
+        self.custom_trackers = {}
+        
+        if self._track_add_on_metrics:
+            self._build_manual_trackers()
+            
         self._init_coordinate_corrections()
         self._build_pinn_components()
 
 
+    def _build_manual_trackers(self):
+        """Create internal Mean metrics for explicit logging."""
+        # We use Mean() because we will calculate the scalar value 
+        # (e.g. coverage) per batch and just ask Keras to average it.
+        MetricMean = Mean
+        
+        # Subsidence metrics
+        self.custom_trackers["subs_mae"] = MetricMean(name="subs_mae")
+        self.custom_trackers["subs_mse"] = MetricMean(name="subs_mse")
+        
+        if self.quantiles:
+            self.custom_trackers["subs_cov80"] = MetricMean(name="subs_cov80")
+            self.custom_trackers["subs_sharp80"] = MetricMean(name="subs_sharp80")
+            
+        # GWL metrics
+        self.custom_trackers["gwl_mae"] = MetricMean(name="gwl_mae")
+        self.custom_trackers["gwl_mse"] = MetricMean(name="gwl_mse")
+
+    def _update_manual_trackers(self, targets, y_pred):
+        """Manually calculate and update the trackers."""
+        if not self._track_add_on_metrics:
+            return
+
+        # --- 1. Subsidence ---
+        yt_s = targets.get("subs_pred")
+        yp_s = y_pred.get("subs_pred")
+        
+        if yt_s is not None and yp_s is not None:
+            # Point metrics (uses q50 if quantiles present)
+            mae_val = mae_q50_fn(yt_s, yp_s)
+            mse_val = mse_q50_fn(yt_s, yp_s)
+            self.custom_trackers["subs_mae"].update_state(mae_val)
+            self.custom_trackers["subs_mse"].update_state(mse_val)
+            
+            # Interval metrics
+            if self.quantiles and "subs_cov80" in self.custom_trackers:
+                cov_val = coverage80_fn(yt_s, yp_s)
+                shp_val = sharpness80_fn(yt_s, yp_s)
+                self.custom_trackers["subs_cov80"].update_state(cov_val)
+                self.custom_trackers["subs_sharp80"].update_state(shp_val)
+
+        # --- 2. GWL ---
+        yt_g = targets.get("gwl_pred")
+        yp_g = y_pred.get("gwl_pred")
+        
+        if yt_g is not None and yp_g is not None:
+            mae_val = mae_q50_fn(yt_g, yp_g)
+            mse_val = mse_q50_fn(yt_g, yp_g)
+            self.custom_trackers["gwl_mae"].update_state(mae_val)
+            self.custom_trackers["gwl_mse"].update_state(mse_val)
+    
     def _assert_dynamic_names_match_tensor(self, Xh):
         sk = self.scaling_kwargs or {}
         names = sk.get("dynamic_feature_names", None)
@@ -1055,6 +1116,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         coords_flat = coords_for_decoder  # already (B,H,3)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)
+        H_si = tf_maximum(H_si, 1.0) # XXX TO RECHECK 
     
 
         K_field, Ss_field, tau_field, *_ = compose_physics_fields(
@@ -1243,6 +1305,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         validate_scaling_kwargs(self.scaling_kwargs)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)  # SI meters
+        H_si = tf_maximum(H_si, 1.0) #XXX to recheck 
         
         debug_grads = bool(get_sk(
             self.scaling_kwargs, "debug_physics_grads", 
@@ -2027,6 +2090,16 @@ class GeoPriorSubsNet(BaseAttentive):
             self._scale_param_grads(grads, trainable_vars)
         )
 
+        # XXX TO REMOVE self.compiled_metrics.update_state (targets, y_pred)
+        # self.compiled_metrics.update_state(
+        #     [targets['subs_pred'], targets['gwl_pred']], 
+        #     [y_pred['subs_pred'], y_pred['gwl_pred']], 
+        #     sample_weight=(sample_weight, )
+             
+        # )
+        
+        self._update_manual_trackers(targets, y_pred)
+                  
         # ----------------------------------------------------------
         # 11) Package logs (single path)
         # ----------------------------------------------------------
@@ -2066,6 +2139,7 @@ class GeoPriorSubsNet(BaseAttentive):
             data_loss=data_loss,
             targets=targets,
             y_pred=y_pred,
+            manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
             physics=physics_bundle,
         )
 
@@ -2080,7 +2154,6 @@ class GeoPriorSubsNet(BaseAttentive):
         """
         inputs, targets = data
         targets = _canonicalize_targets(targets)
-        
         # Forward pass (no optimizer / gradients applied)
         y_pred_for_eval = self(inputs, training=False)
 
@@ -2090,6 +2163,14 @@ class GeoPriorSubsNet(BaseAttentive):
         )
         
         physics_bundle = None
+        
+        # XXX TO REMOVE 
+        # self.compiled_metrics.update_state(
+        #     [targets['subs_pred'], targets['gwl_pred']], 
+        #     [y_pred_for_eval['subs_pred'], y_pred_for_eval['gwl_pred']], 
+        #     sample_weight=(sample_weight, ) 
+        # )
+        self._update_manual_trackers(targets, y_pred_for_eval)
         
         if not self._physics_off():
             phys = self._evaluate_physics_on_batch(
@@ -2107,6 +2188,7 @@ class GeoPriorSubsNet(BaseAttentive):
             data_loss=data_loss,
             targets=targets,
             y_pred=y_pred_for_eval,
+            manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
             physics=physics_bundle,
         )
 
@@ -2147,6 +2229,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         H_field = tf_convert_to_tensor(H_field_in, dtype=tf_float32)  # model scale
         H_si = to_si_thickness(H_field, sk)                           # SI meters
+        H_si = tf_maximum(H_si, 1.0) # TO RECHECK
     
         coords = tf_convert_to_tensor(_get_coords(inputs), tf_float32)
     
@@ -2176,8 +2259,6 @@ class GeoPriorSubsNet(BaseAttentive):
         gw_floor   = resolve_auto_scale_floor("gw", sk)
         
         # XXX TOREMOVE 
-        tf_print("cons_floor=", cons_floor)
-        tf_print("gw_floor=", gw_floor)
         # --------------------------------------------------------------
         # 2) Forward + autodiff wrt coords
         # --------------------------------------------------------------

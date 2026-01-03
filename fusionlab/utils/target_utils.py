@@ -1,7 +1,7 @@
 from __future__ import annotations 
 
 from collections.abc import Mapping, Sequence
-from ..utils.generic_utils import rename_dict_keys
+from .generic_utils import rename_dict_keys
 
 
 _DEFAULT_EXCLUDE_KEYS = {
@@ -9,7 +9,6 @@ _DEFAULT_EXCLUDE_KEYS = {
     "phys_final", "phys_mean_raw",
     "aux", "physics", "maps",
 }
-
 
 def _metric_key_from_name(name: str):
     # Keras names: "subs_pred_mae", "subs_pred_coverage80", "gwl_pred_mse", ...
@@ -45,7 +44,10 @@ def _safe_to_numpy(x, *, mode="auto"):
     return x
 
 
-def get_output_names(model=None, y=None, y_pred=None, *, exclude_keys=_DEFAULT_EXCLUDE_KEYS):
+def get_output_names(
+        model=None, y=None, y_pred=None, *, 
+        exclude_keys=_DEFAULT_EXCLUDE_KEYS
+    ):
     """
     Try to obtain stable output names (best-effort, Keras-3-safe).
     Priority:
@@ -107,7 +109,9 @@ def as_tuple(
     """
     if isinstance(obj, Mapping):
         if names is None:
-            names = get_output_names(model=model, y=obj, y_pred=None, exclude_keys=exclude_keys)
+            names = get_output_names(
+                model=model, y=obj, y_pred=None, exclude_keys=exclude_keys
+            )
 
         if names:
             out = []
@@ -118,7 +122,8 @@ def as_tuple(
                 else:
                     missing.append(n)
             if missing and strict:
-                raise KeyError(f"{ctx}: missing keys {missing}. Available keys={list(obj.keys())}")
+                raise KeyError(
+                    f"{ctx}: missing keys {missing}. Available keys={list(obj.keys())}")
             return tuple(out)
 
         # No names: keep insertion order excluding known aux keys

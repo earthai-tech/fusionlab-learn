@@ -20,8 +20,9 @@ Tensor = KERAS_DEPS.Tensor
 tf_float32 = KERAS_DEPS.float32
 tf_constant = KERAS_DEPS.constant
 tf_identity = KERAS_DEPS.identity
-Tensor = KERAS_DEPS.Tensor
 tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+tf_shape = KERAS_DEPS.shape 
+tf_gather =KERAS_DEPS.gather 
 
 # ---------------------------------------------------------------------
 # Small switches
@@ -218,41 +219,6 @@ def build_physics_bundle(
         ),
     }
 
-# def update_compiled_metrics(model, targets, y_pred):
-#     """
-#     Update compiled metrics without relying on Keras structure-matching.
-
-#     Works even if model.call() returns a dict unrelated to (subs_pred, gwl_pred).
-#     Assumes `targets` and `y_pred` are dicts with keys:
-#       - "subs_pred"
-#       - "gwl_pred"
-#     """
-#     if not isinstance(targets, dict) or not isinstance(y_pred, dict):
-#         return
-
-#     # metrics = getattr(model.compiled_metrics, "metrics", []) or []
-#     # Keras 3: model.metrics contains all instantiated metrics
-#     metrics = getattr(model, "metrics", []) or []
-#     for m in metrics:
-#         name = getattr(m, "name", "") or ""
-
-#         if name.startswith("subs_pred"):
-#             key = "subs_pred"
-#         elif name.startswith("gwl_pred"):
-#             key = "gwl_pred"
-#         else:
-#             continue
-
-#         yt = targets.get(key, None)
-#         yp = y_pred.get(key, None)
-#         if yt is None or yp is None:
-#             continue
-
-#         try:
-#             m.update_state(yt, yp)
-#         except TypeError:
-#             # defensive: some custom metrics might be single-arg
-#             m.update_state(yt)
 
 # ---------------------------------------------------------------------
 # Epsilon metric helpers
@@ -301,86 +267,100 @@ def epsilon_value_for_logs(
         return _set_metric_results(m, fallback)
     return fallback
 
-# def epsilon_value_for_logs(
-#     model: Any,
-#     which: str,
-#     fallback: Tensor,
-# ) -> Tensor:
-#     """
-#     Prefer tracked epsilon metric if it exists.
-#     """
-#     if which == "prior":
-#         m = getattr(model, "eps_prior_metric", None)
-#         if m is not None:
-#             return _set_metric_results(m, fallback)
 
-#     if which == "cons":
-#         m = getattr(model, "eps_cons_metric", None)
-#         if m is not None:
-#             return _set_metric_results(m, fallback)
+def _needs_full_quantiles(metric_name: str) -> bool:
+    n = (metric_name or "").lower()
+    # keep full quantiles for interval metrics AND your q50 helper metrics
+    return any(k in n for k in (
+        "coverage", "sharpness", "q50", "quantile", 
+        "coverage80", "sharpness80",
+        ))
 
-#     if which == "gw":
-#         m = getattr(model, "eps_gw_metric", None)
-#         if m is not None:
-#             return _set_metric_results(m, fallback)
+def _iter_compiled_metrics_only(model):
+    """Yield only compiled metrics (excludes loss trackers in model.metrics)."""
+    cm = getattr(model, "compiled_metrics", None)
+    stack = list(getattr(cm, "metrics", []) or [])
+    seen = set()
 
-#     return fallback
+    while stack:
+        m = stack.pop(0)
+        if m is None:
+            continue
+        mid = id(m)
+        if mid in seen:
+            continue
+        seen.add(mid)
 
+        children = getattr(m, "metrics", None)
+        if children:
+            stack.extend(list(children))
+            continue
 
-# ---------------------------------------------------------------------
-# Train/Test step packer (no duplication)
-# ---------------------------------------------------------------------
-def update_compiled_metrics(model, targets, y_pred):
-    """
-    Update compiled metrics explicitly for Keras 3 compatibility.
-    Handles 'lazy building' by ensuring all relevant metrics see data.
-    """
+        yield m
+
+def update_compiled_metrics(model, targets, y_pred, sample_weight=None):
     if not isinstance(targets, dict) or not isinstance(y_pred, dict):
         return
 
-    # Keras 3: model.metrics contains all instantiated metrics
-    metrics = getattr(model, "metrics", []) or []
-    
-    for m in metrics:
-        name = getattr(m, "name", "") or ""
+    # quantiles list, if you store it on the model (recommended)
+    quantiles = getattr(model, "quantiles", None) or getattr(model, "QUANTILES", None)
 
-        # Skip loss trackers
-        if name == "loss" or name.endswith("_loss"):
+    p50_cache = {}
+
+    def _point_pred(key: str, yp_full):
+        """Return q50 if yp_full is (B,H,Q,O), else return yp_full as-is."""
+        if yp_full is None:
+            return None
+        if getattr(yp_full, "shape", None) is not None and yp_full.shape.rank == 4:
+            if key not in p50_cache:
+                if quantiles:
+                    p50_cache[key] = select_q(
+                        yp_full, quantiles=quantiles, q=0.5, axis=2
+                    )
+                else:
+                    # fallback: middle quantile index
+                    idx = tf_shape(yp_full)[2] // 2
+                    p50_cache[key] = tf_gather(yp_full, idx, axis=2)
+            return p50_cache[key]
+        return yp_full
+
+    def _strip_tiled_true(yt_full):
+        """If y_true was tiled to (B,H,Q,O), strip back to (B,H,O)."""
+        if yt_full is None:
+            return None
+        if getattr(yt_full, "shape", None) is not None and yt_full.shape.rank == 4:
+            return yt_full[:, :, 0, :]
+        return yt_full
+
+    for m in _iter_compiled_metrics_only(model):
+        name = getattr(m, "name", type(m).__name__)
+        if not name:
             continue
 
-        # --- MATCHING LOGIC ---
-        # Keras 3 prefixes metric names with output names.
-        # e.g. "subs_pred_coverage80", "gwl_pred_mse"
-        key = None
-        
-        # Check explicit output names first
-        if "subs_pred" in name:
+        # route metric -> output key
+        if name.startswith("subs_pred"):
             key = "subs_pred"
-        elif "gwl_pred" in name:
+        elif name.startswith("gwl_pred"):
             key = "gwl_pred"
-        
-        if key is None:
-            # Fallback: if user didn't use prefixes but we have exact names
-            if name in ("coverage80", "sharpness80", "mae", "mse"):
-                # Ambiguous if we have multiple outputs. 
-                # Usually we assume the first output or try both.
-                # Here we skip ambiguous to avoid crashing.
-                continue
+        else:
+            continue
 
-        if key is not None:
-            yt = targets.get(key, None)
-            yp = y_pred.get(key, None)
+        yt = _strip_tiled_true(targets.get(key))
+        yp_full = y_pred.get(key)
+        if yt is None or yp_full is None:
+            continue
+
+        yp = yp_full if _needs_full_quantiles(name) else _point_pred(key, yp_full)
+
+        # update_state signatures vary across metrics
+        try:
+            if sample_weight is None:
+                m.update_state(yt, yp)
+            else:
+                m.update_state(yt, yp, sample_weight=sample_weight)
+        except TypeError:
+            m.update_state(yt, yp)
             
-            if yt is not None and yp is not None:
-                try:
-                    # This call BUILDS the metric if it wasn't built yet
-                    m.update_state(yt, yp)
-                except Exception:
-                    pass
-                
-def _needs_full_quantiles(metric_name: str) -> bool:
-    n = metric_name.lower()
-    return ("coverage" in n) or ("sharpness" in n)
 
 def _metric_key_from_name(name: str):
     # Keras names: "subs_pred_mae", "subs_pred_coverage80", "gwl_pred_mse", ...
@@ -394,6 +374,56 @@ def _metric_key_from_name(name: str):
         return "gwl_pred"
     return None
 
+def _iter_leaf_metrics(model):
+    """Yield leaf metric objects, flattening CompileMetrics containers."""
+    seen = set()
+    stack = []
+
+    # model.metrics sometimes contains a CompileMetrics container
+    stack.extend(list(getattr(model, "metrics", []) or []))
+
+    # compiled_metrics.metrics often contains the actual compiled metrics
+    cm = getattr(model, "compiled_metrics", None)
+    if cm is not None:
+        stack.extend(list(getattr(cm, "metrics", []) or []))
+
+    while stack:
+        m = stack.pop(0)
+        if m is None:
+            continue
+        mid = id(m)
+        if mid in seen:
+            continue
+        seen.add(mid)
+
+        children = getattr(m, "metrics", None)
+        if children:
+            stack.extend(list(children))
+            continue
+
+        yield m
+def _sw_like_targets(targets, sample_weight):
+    # Avoid the Keras 3 "NoneType is not iterable" path.
+    if sample_weight is not None:
+        return sample_weight
+    if isinstance(targets, dict):
+        return {k: None for k in targets.keys()}
+    if isinstance(targets, (list, tuple)):
+        return [None] * len(targets)
+    return None
+
+def safe_update_compiled_metrics(model, targets, y_pred, sample_weight=None):
+    cm = getattr(model, "compiled_metrics", None)
+    if cm is None:
+        return
+    sw = _sw_like_targets(targets, sample_weight)
+    try:
+        cm.update_state(targets, y_pred, sample_weight=sw)
+    except TypeError:
+        # last fallback (some metrics may not accept sample_weight)
+        cm.update_state(targets, y_pred)
+
+
 def pack_step_results(
     model: Any,
     *,
@@ -402,6 +432,7 @@ def pack_step_results(
     targets: Any,
     y_pred: Any,
     physics: dict[str, Tensor] | None = None,
+    manual_trackers: dict | None = None,
 ) -> dict[str, Tensor]:
     """
     Canonical return dict for train_step/test_step.
@@ -412,7 +443,7 @@ def pack_step_results(
     # We DO NOT use model.compiled_metrics.update_state(targets, y_pred)
     # because it crashes with TypeError on dicts in Keras 3.
     # 1. Update states (Builds the metrics)
-    update_compiled_metrics(model, targets, y_pred)
+    update_compiled_metrics(model, targets, y_pred, sample_weight=None)
     
     # ------------------------------------------------------------------
     # Optional: log extra Q/subs-residual diagnostics
@@ -446,13 +477,27 @@ def pack_step_results(
     
 
     # per-output loss trackers from compile(loss=...)
-    _add_metric_list(getattr(model, "metrics", []))
+    # _add_metric_list(getattr(model, "metrics", []))
+    for mm in _iter_leaf_metrics(model):
+        nm = getattr(mm, "name", "") or ""
+        if (not nm) or (nm in RESERVED) or (nm in EXCLUDE):
+            continue
+        if nm in results:
+            continue
+        try:
+            results[nm] = mm.result()
+        except Exception:
+            continue
 
     # Canonical loss fields (authoritative)
     results["loss"] = total_loss
     results["total_loss"] = total_loss
     results["data_loss"] = data_loss
 
+    if manual_trackers is not None:
+        for name, tracker in manual_trackers.items():
+            results[name] = tracker.result()
+            
     # ------------------------------------------------------------------
     # 2) Physics logs (optional)
     # ------------------------------------------------------------------

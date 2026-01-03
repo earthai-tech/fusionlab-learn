@@ -1148,56 +1148,11 @@ subsmodel_params["scaling_kwargs"].update({
     # --- MV Prior Units (Tunable) ---
     "mv_prior_units": cfg.get("MV_PRIOR_UNITS", "auto"), 
     "mv_alpha_disp": cfg.get("MV_ALPHA_DISP", 0.1), 
-    "mv_huber_delta":  cfg.get("MV_HUBER_DELTA", 1.0), 
+    "mv_huber_delta":  cfg.get("MV_HUBER_DELTA", 1.0),
+    
+    "track_add_on_metrics": cfg.get("TRACK_ADD_ON_METRICS", True)
     
 })
-
-# subsmodel_params["scaling_kwargs"].update({
-#     "subs_scale_si": subs_scale_si,
-#     "subs_bias_si": subs_bias_si,
-#     "head_scale_si": head_scale_si,
-#     "head_bias_si": head_bias_si,
-
-#     # --- semantics for interpreting the GWL variable ---
-#     "gwl_kind": GWL_KIND,                 # "depth_bgs" or "head"
-#     "gwl_sign": GWL_SIGN,                 # "down_positive" or "up_positive"
-#     "use_head_proxy": USE_HEAD_PROXY,     # if no z_surf -> head_proxy = -depth
-#     "z_surf_col": Z_SURF_COL,             # None or column name if you provide it
-#     "gwl_z_meta": sk.get("gwl_z_meta", None),  # optional traceability
-    
-#     "subsidence_kind": sk.get("subsidence_kind", cfg.get("SUBSIDENCE_KIND", "cumulative")), 
-
-#     'gw_scale_floor' :sk.get("gw_scale_floor", cfg.get("GW_SCALE_FLOOR", 1e-7)), 
-#     'dt_min_units' :sk.get("dt_min_units", cfg.get("DT_MIN_UNITS", 1e-6)), 
-#     'Q_wrt_normalized_time':sk.get("Q_wrt_normalized_time", cfg.get("Q_WRT_NORMALIZED_TIME", False)), 
-#     'Q_in_si' : sk.get("Q_in_si", cfg.get("Q_IN_SI", False)), 
-#     'Q_in_per_second' : sk.get("Q_in_per_second", cfg.get("Q_IN_PER_SECOND", False )), 
-#     'Q_kind' : sk.get("Q_kind", cfg.get("Q_KIND", "per_volume")), 
-#     'Q_length_in_si' : sk.get("Q_length_in_si", cfg.get("Q_LENGTH_IN_SI", False )), 
-#     'drainage_mode': sk.get("drainage_mode", cfg.get("DRAINAGE_MODE", "double")), 
-#     "gw_residual_units": sk.get("gw_residual_units", cfg.get("GW_RESIDUAL_UNITS","time_unit")), 
-    
-#     "clip_global_norm": sk.get("clip_global_norm", cfg.get("CLIP_GLOBAL_NORM", 5.0)),
-#     "debug_physics_grads": sk.get('debug_physics_grads', cfg.get("DEBUG_PHYSICS_GRADS", False)), 
-#     "scaling_error_policy": sk.get('scaling_error_policy', cfg.get('SCALING_ERROR_POLICY','warn')), 
-    
-#     # Consolidation drawdown gating options (saved into scaling_kwargs.json)
-#     'cons_residual_units': sk.get("CONSOLIDATION_RESIDUAL_UNITS", "second"),
-#     'cons_scale_floor':  sk.get("cons_scale_floor", cfg.get("CONS_SCALE_FLOOR", 1e-7)),
-#     "cons_drawdown_mode": sk.get("cons_drawdown_mode",cfg.get("CONS_DRAWDOWN_MODE", "smooth_relu")),
-#     "cons_drawdown_rule": sk.get("cons_drawdown_rule",cfg.get("CONS_DRAWDOWN_RULE", "ref_minus_mean")),
-#     "cons_stop_grad_ref": sk.get("cons_stop_grad_ref",cfg.get("CONS_STOP_GRAD_REF", True)),
-#     "cons_drawdown_zero_at_origin": sk.get("cons_drawdown_zero_at_origin",
-#         cfg.get("CONS_DRAWDOWN_ZERO_AT_ORIGIN", False),
-#     ),
-#     "cons_drawdown_clip_max": sk.get("cons_drawdown_clip_max",cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)),
-#     "cons_relu_beta": sk.get("cons_relu_beta",cfg.get("CONS_RELU_BETA", 20.0)),
-    
-#     "mv_prior_units": sk.get('mv_prior_units', cfg.get("MV_PRIOR_UNITS", "auto")), 
-#     "mv_alpha_disp": sk.get('mv_alpha_disp', cfg.get("MV_ALPHA_DISP", 0.1)), 
-#     "mv_huber_delta":  sk.get('mv_huber_delta', cfg.get("MV_HUBER_DELTA", 1.0)), 
-    
-# })
 
 # -------------------------------------------------------------------------
 # MV prior schedule (Stage-2 robust even with legacy Stage-1 manifests)
@@ -1460,7 +1415,10 @@ subs_model_inst.compile(
     **physics_loss_weights,
 )
 print(f"{MODEL_NAME} compiled.")
-#
+
+print([m.name for m in subs_model_inst.metrics])
+
+#%%
 # =============================================================================
 # Train
 # =============================================================================
