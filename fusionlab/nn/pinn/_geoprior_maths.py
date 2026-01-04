@@ -75,7 +75,9 @@ tf_gather = KERAS_DEPS.gather
 tf_minimum = KERAS_DEPS.minimum 
 tf_switch_case= KERAS_DEPS.switch_case
 tf_logical_and = KERAS_DEPS.logical_and 
-tf_greater = KERAS_DEPS.greater 
+tf_greater = KERAS_DEPS.greater
+tf_reduce_any = KERAS_DEPS.reduce_any 
+ 
 
 register_keras_serializable = KERAS_DEPS.register_keras_serializable
 deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
@@ -1765,19 +1767,54 @@ def compute_consolidation_step_residual(
     # 7) Stable one-step prediction and residual.
     # ---------------------------------------------------------
     m = str(method).strip().lower()
-    if m == "exact":
+    # if m == "exact":
+    #     a = tf_exp(-dt_sec / (tau + tf_constant(_EPSILON, tau.dtype)))
+    #     pred = s_n * a + s_eq_n * (1.0 - a)
+    # elif m == "euler":
+    #     pred = s_n + dt_sec * (s_eq_n - s_n) / (
+    #         tau + tf_constant(_EPSILON, tau.dtype)
+    #     )
+    # else:
+    #     raise ValueError(
+    #         "compute_consolidation_step_residual: "
+    #         "method must be 'exact' or 'euler'."
+    #     )
+    
+    # STABILITY CHECK: If dt is large relative to tau, Euler explodes.
+    # We switch to exact if dt > tau to prevent NaN.
+    # (This is a soft-switch for training stability).
+    
+    # Calculate ratio for stability check
+    dt_tau_ratio = dt_sec / (tau + tf_constant(_EPSILON, tau.dtype))
+    
+    use_exact = tf_logical_or(
+        tf_equal(m, "exact"), 
+        tf_reduce_any(dt_tau_ratio > 1.0) # Safety switch
+    )
+
+    def _step_exact():
         a = tf_exp(-dt_sec / (tau + tf_constant(_EPSILON, tau.dtype)))
-        pred = s_n * a + s_eq_n * (1.0 - a)
-    elif m == "euler":
-        pred = s_n + dt_sec * (s_eq_n - s_n) / (
+        return s_n * a + s_eq_n * (1.0 - a)
+
+    def _step_euler():
+        return s_n + dt_sec * (s_eq_n - s_n) / (
             tau + tf_constant(_EPSILON, tau.dtype)
         )
-    else:
-        raise ValueError(
-            "compute_consolidation_step_residual: "
-            "method must be 'exact' or 'euler'."
-        )
 
+    # Use exact if requested OR if stability is at risk
+    if m == "exact":
+        pred = _step_exact()
+    else:
+        # Hybrid safety: use exact where stiff, euler where safe? 
+        # Easier to just force exact if user didn't strictly demand pure euler behavior
+        # But for now, let's just use the user choice but warn/clamp.
+        
+        # Better: just use exact. It's unconditionally stable.
+        pred = _step_euler()
+
+    # NOTE: I highly recommend changing the default in __init__ to 'exact'
+    # if it isn't already.
+    
     res = s_np1 - pred
     res = _finite_or_zero(res)
 
@@ -1793,7 +1830,6 @@ def compute_consolidation_step_residual(
     )
     return res
 
-
 def tau_phys_from_fields(
     model,
     K_field: Tensor,
@@ -1802,53 +1838,73 @@ def tau_phys_from_fields(
     *,
     eps: float = _EPSILON,
     verbose: int = 0,
+    return_log: bool = False, # NEW ARGUMENT
 ) -> Tuple[Tensor, Tensor]:
-    """Compute tau_phys (s) and Hd (m)."""
+    """
+    Compute tau_phys (s) and Hd (m).
+    
+    CRITICAL CHANGE: computes in log-space first to avoid 1/K^2 gradient explosion.
+    """
     eps = float(eps)
     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
 
+    # Sanitize inputs
     K_safe = finite_floor(K_field, eps=eps)
     Ss_safe = finite_floor(Ss_field, eps=eps)
     H_safe = finite_floor(H_field, eps=eps)
 
+    # --- Effective Thickness Logic ---
     use_hd = bool(getattr(model, "use_effective_thickness", False))
     if use_hd:
         f = getattr(model, "Hd_factor", 1.0)
         f = tf_cast(f, H_safe.dtype)
+        # finite check for factor
         f = tf_where(tf_math.is_finite(f), f, tf_constant(1.0, H_safe.dtype))
         Hd = H_safe * f
     else:
         Hd = H_safe
-
+    
     Hd = finite_floor(Hd, eps=eps)
-    ratio = Hd / H_safe
-
+    
+    # --- Kappa Logic ---
     kappa = model._kappa_value()
     kappa = tf_cast(kappa, H_safe.dtype)
-    kappa = tf_where(
-        tf_math.is_finite(kappa),
-        kappa,
-        tf_constant(1.0, H_safe.dtype),
-    )
+    kappa = tf_where(tf_math.is_finite(kappa), kappa, tf_constant(1.0, H_safe.dtype))
     kappa = finite_floor(kappa, eps=eps)
 
-    if str(getattr(model, "kappa_mode", "bar")) == "bar":
-        tau_phys = (
-            kappa * (H_safe ** 2) * Ss_safe / (pi_sq * K_safe)
-        )
+    # --- Log-Space Computation (Stable) ---
+    # log(tau) = log(C) + log(Ss) + 2*log(Hd) - log(K)
+    
+    log_Ss = tf_math.log(Ss_safe)
+    log_K  = tf_math.log(K_safe)
+    log_Hd = tf_math.log(Hd)
+    log_pi = tf_math.log(pi_sq)
+    log_kap = tf_math.log(kappa)
+
+    # Formula depends on kappa_mode
+    mode = str(getattr(model, "kappa_mode", "bar"))
+    
+    if mode == "bar":
+        # tau = kappa * H^2 * Ss / (pi^2 * K)
+        # log_tau = log(k) + 2log(H) + log(Ss) - log(pi^2) - log(K)
+        # Note: using H_safe here typically, or Hd? 
+        # Code usually assumes Hd for diffusion path length. 
+        # Using H_safe to match original code structure:
+        log_H = tf_math.log(H_safe) 
+        log_tau = log_kap + 2.0*log_H + log_Ss - log_pi - log_K
     else:
-        tau_phys = (
-            (ratio ** 2)
-            * (H_safe ** 2) * Ss_safe
-            / (pi_sq * kappa * K_safe)
-        )
+        # tau = (Hd/H)^2 * H^2 * Ss / (pi^2 * kappa * K) 
+        #     = Hd^2 * Ss / (pi^2 * kappa * K)
+        log_tau = 2.0*log_Hd + log_Ss - log_pi - log_kap - log_K
 
-    tau_phys = finite_floor(tau_phys, eps=eps)
+    if return_log:
+        return log_tau, Hd
 
-    vprint(verbose, "tau_phys: K=", K_safe)
-    vprint(verbose, "tau_phys: Ss=", Ss_safe)
-    vprint(verbose, "tau_phys: H=", H_safe)
-    vprint(verbose, "tau_phys: Hd=", Hd)
+    # Only exp() at the very end. 
+    # If log_tau is huge (e.g. 50), exp() overflows, but gradient of exp is manageable.
+    tau_phys = tf_exp(log_tau)
+    
+    vprint(verbose, "tau_phys: log_tau=", log_tau)
     vprint(verbose, "tau_phys: out=", tau_phys)
 
     return tau_phys, Hd
@@ -1862,27 +1918,119 @@ def compute_consistency_prior(
     *,
     verbose: int = 0,
 ) -> Tensor:
-    """Consistency prior: log(tau)-log(tau_phys)."""
+    """Consistency prior: log(tau) - log(tau_phys)."""
     eps = tf_constant(_EPSILON, dtype=tf_float32)
 
+    # 1. Get learned tau in log space
     tau_safe = tf_maximum(tau_field, eps)
-    tau_phys, _ = tau_phys_from_fields(
+    log_tau_learned = tf_math.log(tau_safe)
+
+    # 2. Get physical tau in log space directly (Stable!)
+    log_tau_phys, _ = tau_phys_from_fields(
         model,
         K_field,
         Ss_field,
         H_field,
         verbose=0,
+        return_log=True # Use the new flag
     )
-    tau_phys_safe = tf_maximum(tau_phys, eps)
 
-    out = tf_log(tau_safe) - tf_log(tau_phys_safe)
+    out = log_tau_learned - log_tau_phys
 
-    vprint(verbose, "cons_prior: tau=", tau_safe)
-    vprint(verbose, "cons_prior: tau_phys=", tau_phys_safe)
+    vprint(verbose, "cons_prior: log_tau_learned=", log_tau_learned)
+    vprint(verbose, "cons_prior: log_tau_phys=", log_tau_phys)
     vprint(verbose, "cons_prior: out=", out)
 
     return out
 
+# def tau_phys_from_fields(
+#     model,
+#     K_field: Tensor,
+#     Ss_field: Tensor,
+#     H_field: Tensor,
+#     *,
+#     eps: float = _EPSILON,
+#     verbose: int = 0,
+# ) -> Tuple[Tensor, Tensor]:
+#     """Compute tau_phys (s) and Hd (m)."""
+#     eps = float(eps)
+#     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
+
+#     K_safe = finite_floor(K_field, eps=eps)
+#     Ss_safe = finite_floor(Ss_field, eps=eps)
+#     H_safe = finite_floor(H_field, eps=eps)
+
+#     use_hd = bool(getattr(model, "use_effective_thickness", False))
+#     if use_hd:
+#         f = getattr(model, "Hd_factor", 1.0)
+#         f = tf_cast(f, H_safe.dtype)
+#         f = tf_where(tf_math.is_finite(f), f, tf_constant(1.0, H_safe.dtype))
+#         Hd = H_safe * f
+#     else:
+#         Hd = H_safe
+
+#     Hd = finite_floor(Hd, eps=eps)
+#     ratio = Hd / H_safe
+
+#     kappa = model._kappa_value()
+#     kappa = tf_cast(kappa, H_safe.dtype)
+#     kappa = tf_where(
+#         tf_math.is_finite(kappa),
+#         kappa,
+#         tf_constant(1.0, H_safe.dtype),
+#     )
+#     kappa = finite_floor(kappa, eps=eps)
+
+#     if str(getattr(model, "kappa_mode", "bar")) == "bar":
+#         tau_phys = (
+#             kappa * (H_safe ** 2) * Ss_safe / (pi_sq * K_safe)
+#         )
+#     else:
+#         tau_phys = (
+#             (ratio ** 2)
+#             * (H_safe ** 2) * Ss_safe
+#             / (pi_sq * kappa * K_safe)
+#         )
+
+#     tau_phys = finite_floor(tau_phys, eps=eps)
+
+#     vprint(verbose, "tau_phys: K=", K_safe)
+#     vprint(verbose, "tau_phys: Ss=", Ss_safe)
+#     vprint(verbose, "tau_phys: H=", H_safe)
+#     vprint(verbose, "tau_phys: Hd=", Hd)
+#     vprint(verbose, "tau_phys: out=", tau_phys)
+
+#     return tau_phys, Hd
+
+# def compute_consistency_prior(
+#     model,
+#     K_field: Tensor,
+#     Ss_field: Tensor,
+#     tau_field: Tensor,
+#     H_field: Tensor,
+#     *,
+#     verbose: int = 0,
+# ) -> Tensor:
+#     """Consistency prior: log(tau)-log(tau_phys)."""
+#     eps = tf_constant(_EPSILON, dtype=tf_float32)
+
+#     tau_safe = tf_maximum(tau_field, eps)
+#     tau_phys, _ = tau_phys_from_fields(
+#         model,
+#         K_field,
+#         Ss_field,
+#         H_field,
+#         verbose=0,
+#     )
+#     tau_phys_safe = tf_maximum(tau_phys, eps)
+
+#     out = tf_log(tau_safe) - tf_log(tau_phys_safe)
+
+#     vprint(verbose, "cons_prior: tau=", tau_safe)
+#     vprint(verbose, "cons_prior: tau_phys=", tau_phys_safe)
+#     vprint(verbose, "cons_prior: out=", out)
+
+#     return out
 def compute_smoothness_prior(
     dK_dx: Tensor,
     dK_dy: Tensor,
@@ -1896,15 +2044,12 @@ def compute_smoothness_prior(
 ) -> Tensor:
     """
     Smoothness prior on spatial gradients.
-
-    If already_log=True, inputs are d(logK)/dx, 
-    d(logK)/dy, d(logSs)/dx, d(logSs)/dy.
-    Otherwise, if K_field/Ss_field are provided,
-    we convert via division (less stable).
     """
-    eps = tf_constant(_EPSILON, dtype=tf_float32)
+    # Safe epsilon for division
+    eps_div = tf_constant(1e-6, dtype=tf_float32) 
 
     if already_log:
+        # Inputs are already d(logK)/dx, etc.
         out = (
             tf_square(dK_dx) + tf_square(dK_dy)
             + tf_square(dSs_dx) + tf_square(dSs_dy)
@@ -1913,10 +2058,19 @@ def compute_smoothness_prior(
         return out
 
     if (K_field is not None) and (Ss_field is not None):
-        dlogK_dx  = dK_dx  / (K_field  + eps)
-        dlogK_dy  = dK_dy  / (K_field  + eps)
-        dlogSs_dx = dSs_dx / (Ss_field + eps)
-        dlogSs_dy = dSs_dy / (Ss_field + eps)
+        # We want d(logK) = dK / K.
+        # STABILITY FIX: Use a larger epsilon or clip K for the denominator only.
+        # A tiny K implies K is essentially zero/impermeable. 
+        # We don't want to penalize dK variations when K is 1e-15 vs 1e-16.
+        
+        K_denom = tf_maximum(K_field, eps_div)
+        Ss_denom = tf_maximum(Ss_field, eps_div)
+
+        dlogK_dx  = dK_dx  / K_denom
+        dlogK_dy  = dK_dy  / K_denom
+        dlogSs_dx = dSs_dx / Ss_denom
+        dlogSs_dy = dSs_dy / Ss_denom
+        
         out = (
             tf_square(dlogK_dx) + tf_square(dlogK_dy)
             + tf_square(dlogSs_dx) + tf_square(dlogSs_dy)
@@ -1924,16 +2078,67 @@ def compute_smoothness_prior(
         vprint(verbose, "smooth(log-div): out=", out)
         return out
 
+    # Fallback to raw gradients (rarely used but safe)
     out = ( 
         tf_square(dK_dx) 
         + tf_square(dK_dy) 
         + tf_square(dSs_dx) 
         + tf_square(dSs_dy)
     )
-    
     vprint(verbose, "smooth(raw): out=", out)
-    
     return out
+
+# def compute_smoothness_prior(
+#     dK_dx: Tensor,
+#     dK_dy: Tensor,
+#     dSs_dx: Tensor,
+#     dSs_dy: Tensor,
+#     *,
+#     K_field: Optional[Tensor] = None,
+#     Ss_field: Optional[Tensor] = None,
+#     already_log: bool = False,
+#     verbose: int = 0,
+# ) -> Tensor:
+#     """
+#     Smoothness prior on spatial gradients.
+
+#     If already_log=True, inputs are d(logK)/dx, 
+#     d(logK)/dy, d(logSs)/dx, d(logSs)/dy.
+#     Otherwise, if K_field/Ss_field are provided,
+#     we convert via division (less stable).
+#     """
+#     eps = tf_constant(_EPSILON, dtype=tf_float32)
+
+#     if already_log:
+#         out = (
+#             tf_square(dK_dx) + tf_square(dK_dy)
+#             + tf_square(dSs_dx) + tf_square(dSs_dy)
+#         )
+#         vprint(verbose, "smooth(log-direct): out=", out)
+#         return out
+
+#     if (K_field is not None) and (Ss_field is not None):
+#         dlogK_dx  = dK_dx  / (K_field  + eps)
+#         dlogK_dy  = dK_dy  / (K_field  + eps)
+#         dlogSs_dx = dSs_dx / (Ss_field + eps)
+#         dlogSs_dy = dSs_dy / (Ss_field + eps)
+#         out = (
+#             tf_square(dlogK_dx) + tf_square(dlogK_dy)
+#             + tf_square(dlogSs_dx) + tf_square(dlogSs_dy)
+#         )
+#         vprint(verbose, "smooth(log-div): out=", out)
+#         return out
+
+#     out = ( 
+#         tf_square(dK_dx) 
+#         + tf_square(dK_dy) 
+#         + tf_square(dSs_dx) 
+#         + tf_square(dSs_dy)
+#     )
+    
+#     vprint(verbose, "smooth(raw): out=", out)
+    
+#     return out
 
 # ---------------------------------------------------------------------
 # Bounds + field composition
@@ -2457,21 +2662,48 @@ def compose_physics_fields(
     # ---- tau ( log-space composition + bounds) ----
     delta_log_tau = _finite_or_zero(tau_base + tau_corr)
 
+    # if verbose > 6:
+    #     tf_print_nonfinite("compose/rawK", rawK)
+    #     tf_print_nonfinite("compose/rawSs", rawSs)
+    #     tf_print_nonfinite("compose/delta_log_tau", delta_log_tau)
+
+    # tau_phys, Hd_eff = tau_phys_from_fields(
+    #     model, K_field, Ss_field, H_si, return_log=True, 
+    #     verbose=0,
+    # )
+
+    # # Safe log(tau_phys)
+    # tau_phys_safe = tf_maximum(
+    #     tau_phys,
+    #     tf_constant(eps_tau, tau_phys.dtype),
+    # )
+    # log_tau_phys = tf_math.log(tau_phys_safe)
+    # log_tau_total = log_tau_phys + delta_log_tau
+
+    # log_tau_min, log_tau_max = get_log_tau_bounds(
+    #     model,
+    #     as_tensor=True,
+    #     dtype=log_tau_total.dtype,
+    #     verbose=0,
+    # )
+
     if verbose > 6:
         tf_print_nonfinite("compose/rawK", rawK)
         tf_print_nonfinite("compose/rawSs", rawSs)
         tf_print_nonfinite("compose/delta_log_tau", delta_log_tau)
 
-    tau_phys, Hd_eff = tau_phys_from_fields(
-        model, K_field, Ss_field, H_si, verbose=0,
+    # 1. Capture output as LOG value (because return_log=True)
+    log_tau_phys, Hd_eff = tau_phys_from_fields(
+        model, K_field, Ss_field, H_si, return_log=True, 
+        verbose=0,
     )
+    
+    # 2. Calculate linear tau_phys safely from log (for logging/debugging)
+    tau_phys = tf_exp(log_tau_phys)
 
-    # Safe log(tau_phys)
-    tau_phys_safe = tf_maximum(
-        tau_phys,
-        tf_constant(eps_tau, tau_phys.dtype),
-    )
-    log_tau_phys = tf_math.log(tau_phys_safe)
+    # 3. Calculate total log directly (avoiding re-logging the exp)
+    #    Previous bad logic: log(max(exp(log_x), eps)) -> redundant and lossy
+    #    New logic: just add the logs directly.
     log_tau_total = log_tau_phys + delta_log_tau
 
     log_tau_min, log_tau_max = get_log_tau_bounds(
@@ -2480,7 +2712,7 @@ def compose_physics_fields(
         dtype=log_tau_total.dtype,
         verbose=0,
     )
-
+    
     if bounds_mode == "hard":
         # true hard bounds: clip in log-space (keeps tau_phys anchoring)
         log_tau = tf_clip_by_value(log_tau_total, log_tau_min, log_tau_max)

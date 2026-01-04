@@ -1416,7 +1416,7 @@ subs_model_inst.compile(
 )
 print(f"{MODEL_NAME} compiled.")
 
-print([m.name for m in subs_model_inst.metrics])
+# print([m.name for m in subs_model_inst.metrics])
 
 #%%
 # =============================================================================

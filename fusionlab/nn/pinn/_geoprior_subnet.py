@@ -94,7 +94,12 @@ if KERAS_BACKEND:
         aggregate_multiscale_on_3d, 
         aggregate_time_window_output 
     )
-    
+    from ._stability import (
+        clamp_physics_logits, 
+        sanitize_scales, 
+        compute_physics_warmup_gate, 
+        filter_nan_gradients
+    )
     from ._debugs import (
         dbg_step0_inputs_targets,
         dbg_step1_thickness,
@@ -352,7 +357,6 @@ class GeoPriorSubsNet(BaseAttentive):
         # ------------------------------------------------------------------
         self.use_effective_thickness = use_effective_h
         self.Hd_factor = hd_factor   # if Hd = Hd_factor * H
-        
         
         drainage_mode = self.scaling_kwargs.get("drainage_mode", None)
         
@@ -1434,7 +1438,11 @@ class GeoPriorSubsNet(BaseAttentive):
             # Expected layout: [K, Ss, delta_log_tau, (optional) Q]
             ( K_logits, Ss_logits, dlogtau_logits, Q_logits  
             )= self.split_physics_predictions(phys_mean_raw)
-
+            
+            K_logits, Ss_logits, dlogtau_logits, Q_logits = clamp_physics_logits(
+                        K_logits, Ss_logits, dlogtau_logits, Q_logits
+                    )
+            
             dbg_step31_forward_outputs(
                 verbose=self.verbose,
                 data_final=data_final,
@@ -1963,12 +1971,11 @@ class GeoPriorSubsNet(BaseAttentive):
                     div_K_grad_h=div_term,       
                     verbose=self.verbose,
                 )
-                # >>>>>> INSERT THIS FIX <<<<<<
+                scales = sanitize_scales(scales)
                 # Detach scales from the computation graph. 
                 # We want to scale the loss by the MAGNITUDE of these terms,
                 # NOT optimize the terms to change the scale.
                 scales = {k: tf_stop_gradient(v) for k, v in scales.items()}
-                # >>>>>> END FIX <<<<<<
                 
                 cons_s = guard_scale_with_residual(
                     residual=cons_res,
@@ -2037,6 +2044,13 @@ class GeoPriorSubsNet(BaseAttentive):
                     loss_bounds=loss_bounds,
                 )
             )
+            phys_gate = compute_physics_warmup_gate(
+                    self.optimizer.iterations, 
+                    warmup_steps=500, 
+                    ramp_steps=500
+                )
+            physics_loss_scaled = physics_loss_scaled * phys_gate
+            
             total_loss = data_loss + physics_loss_scaled
         
         dbg_step9_losses(
@@ -2061,10 +2075,11 @@ class GeoPriorSubsNet(BaseAttentive):
         grads = tape.gradient(total_loss, trainable_vars)
         
         # 2) Clip (handle None grads safely)
-        grads = [
-            tf_zeros_like(v) if g is None else g
-            for g, v in zip(grads, trainable_vars)
-        ]
+        # grads = [
+        #     tf_zeros_like(v) if g is None else g
+        #     for g, v in zip(grads, trainable_vars)
+        # ]
+        grads = filter_nan_gradients(grads)
         grads, _ = tf_clip_by_global_norm(grads, 1.0)
         
         dbg_step10_grads(
@@ -2286,6 +2301,10 @@ class GeoPriorSubsNet(BaseAttentive):
                 tau_logits, 
                 Q_logits 
             )= self.split_physics_predictions(phys_mean_raw)
+            
+            K_logits, Ss_logits, tau_logits, Q_logits = clamp_physics_logits(
+                        K_logits, Ss_logits, tau_logits, Q_logits
+                    )
 
             # recommended: keep K,Ss,tau spatial-only (average over time then broadcast)
             K_base = tf_broadcast_to(
@@ -2584,6 +2603,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 div_K_grad_h=div_term,       # helps GW scaling a lot
                 verbose=0,
             )
+            scales = sanitize_scales(scales)
             scales = {k: tf_stop_gradient(v) for k, v in scales.items()}
             cons_s = guard_scale_with_residual(
                 residual=cons_res,
