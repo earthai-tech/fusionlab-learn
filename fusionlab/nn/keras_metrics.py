@@ -627,7 +627,7 @@ def mae_q50_fn(y_true, y_pred):
     return tf_reduce_mean(tf_abs(y - yp))
 
 
-mae_q50_fn.__name__ = "mae"
+mae_q50_fn.__name__ = "mae_q50"
 
 
 @register_keras_serializable(
@@ -731,5 +731,5 @@ def mse_q50_fn(y_true, y_pred):
     return tf_reduce_mean(d * d)
 
 
-mse_q50_fn.__name__ = "mse"
+mse_q50_fn.__name__ = "mse_q50"
 

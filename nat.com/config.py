@@ -402,7 +402,7 @@ MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
 MV_DELAY_STEPS   = None
 MV_WARMUP_STEPS  = None
 
-TRACK_ADD_ON_METRICS =True 
+TRACK_ADD_ON_METRICS =False 
 # ===================================================================
 # 7.x TRAINING STRATEGY (Physics-first vs Data-first)
 # ===================================================================
@@ -682,7 +682,6 @@ TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
 # - Stage-2 audit focuses on NPZ tensor shapes, finiteness, coordinate
 #   normalization/inversion checks, and scaling_kwargs consistency.
 AUDIT_STAGES = "*"
-
 
 EVAL_JSON_UNITS_MODE = "si"              # or "interpretable"
 EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"

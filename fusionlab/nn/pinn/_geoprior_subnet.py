@@ -6,6 +6,7 @@ from __future__ import annotations
 from numbers import Integral, Real 
 from typing import Optional, Union, Dict, List, Tuple, Any
 from collections.abc import Mapping
+from collections import OrderedDict
 
 import numpy as np 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
@@ -211,6 +212,9 @@ __all__ = ["GeoPriorSubsNet"]
 @register_keras_serializable(
     'fusionlab.nn.pinn', name="GeoPriorSubsNet") 
 class GeoPriorSubsNet(BaseAttentive):
+    
+    OUTPUT_KEYS = ("subs_pred", "gwl_pred")
+    
     @validate_params({
         'output_subsidence_dim': [Interval(Integral,1, None, closed="left")], 
         'output_gwl_dim': [Interval(Integral,1, None, closed="left"),], 
@@ -401,6 +405,8 @@ class GeoPriorSubsNet(BaseAttentive):
             name=name,
             **kwargs
         )
+        
+        self._output_keys = list(self.OUTPUT_KEYS)
         
         self.pde_modes_active = process_pde_modes(pde_mode)
         self.scale_pde_residuals = bool(scale_pde_residuals)
@@ -1001,15 +1007,34 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return data_features_2d, phys_features_raw_3d
 
+    # Keras 3: make multi-output routing deterministic for compiled metrics
+    # @property
+    # def output_names(self):
+    #     # Used by Keras containers as “the output order”
+    #     return list(self._output_keys)
+
+    @property
+    def _output_keys(self):
+        return self.__output_keys
+
+    @_output_keys.setter
+    def _output_keys(self, v):
+        self.__output_keys = list(v)
+       
+    def _order_by_output_keys(self, d: dict) -> OrderedDict:
+        return OrderedDict(
+            (k, d[k])
+            for k in self._output_keys
+            if (k in d and d[k] is not None)
+        )
+
     # @tf_autograph.experimental.do_not_convert
-    # @optional_tf_function 
     def call(self,
         inputs: Dict[str, Optional[Tensor]],
         training: bool = False,
     ) -> Dict[str, Tensor]:
         
         y_pred, _ = self._forward_all(inputs, training=training)
-        
         return y_pred
 
 
@@ -1252,8 +1277,12 @@ class GeoPriorSubsNet(BaseAttentive):
         # Split into the supervised heads
         s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
         
-        y_pred = {"subs_pred": s_pred_final, "gwl_pred": gwl_pred_final}
-        
+        y_pred_raw = {
+            "gwl_pred": gwl_pred_final,
+            "subs_pred": s_pred_final,
+        }
+        y_pred = self._order_by_output_keys(y_pred_raw)
+  
         aux = {
             "data_final": data_final,
             "data_mean_raw": data_mean_raw,
@@ -1261,7 +1290,6 @@ class GeoPriorSubsNet(BaseAttentive):
             "phys_features_raw_3d": phys_features_raw_3d,
         }
         return y_pred, aux
-
 
     def train_step(self, data):
         """
@@ -1288,7 +1316,7 @@ class GeoPriorSubsNet(BaseAttentive):
         # 0) Unpack (inputs, targets) + normalize target keys
         # ----------------------------------------------------------
         inputs, targets = data
-        targets = _canonicalize_targets(targets)
+        targets = self._order_by_output_keys(_canonicalize_targets(targets))
 
         dbg_step0_inputs_targets(
             verbose=self.verbose,
@@ -1378,10 +1406,15 @@ class GeoPriorSubsNet(BaseAttentive):
             )
 
             # Supervised data loss (pinball, MSE, etc. defined at compile-time)
+            # XXX TOFIX 
             data_loss = self.compiled_loss(
-                targets, y_pred,
+                [targets['subs_pred'], targets['gwl_pred']], 
+                [ y_pred['subs_pred'], y_pred['gwl_pred']],
                 regularization_losses=self.losses,
             )
+            
+            # # Supervised data loss (pinball, MSE, etc. defined at compile-time)
+            # data_loss, _out_losses = self._safe_compiled_data_loss(targets, y_pred)
             
             # ------------------------------------------------------
             # 3.2 Mean head for physics
@@ -1428,9 +1461,9 @@ class GeoPriorSubsNet(BaseAttentive):
                 h_si=h_si,
             )
 
-            # ----------------------
+            # --------------------------------------------------
             # 3.3 Physics logits: K, Ss, Δlogτ (+ optional Q)
-            # ----------------------
+            # -------------------------------------------------
             phys_mean_raw = aux.get("phys_mean_raw", None)
             if phys_mean_raw is None:
                 raise ValueError("Model outputs missing 'phys_mean_raw'.")
@@ -2068,17 +2101,12 @@ class GeoPriorSubsNet(BaseAttentive):
         # ----------------------------------------------------------
         # 10) Apply gradients
         # ----------------------------------------------------------
-
         trainable_vars = self.trainable_variables
         
         # 1) Compute grads
         grads = tape.gradient(total_loss, trainable_vars)
         
         # 2) Clip (handle None grads safely)
-        # grads = [
-        #     tf_zeros_like(v) if g is None else g
-        #     for g, v in zip(grads, trainable_vars)
-        # ]
         grads = filter_nan_gradients(grads)
         grads, _ = tf_clip_by_global_norm(grads, 1.0)
         
@@ -2105,14 +2133,6 @@ class GeoPriorSubsNet(BaseAttentive):
             self._scale_param_grads(grads, trainable_vars)
         )
 
-        # XXX TO REMOVE self.compiled_metrics.update_state (targets, y_pred)
-        # self.compiled_metrics.update_state(
-        #     [targets['subs_pred'], targets['gwl_pred']], 
-        #     [y_pred['subs_pred'], y_pred['gwl_pred']], 
-        #     sample_weight=(sample_weight, )
-             
-        # )
-        
         self._update_manual_trackers(targets, y_pred)
                   
         # ----------------------------------------------------------
@@ -2148,7 +2168,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 eps_gw_raw=eps_gw_raw,
             )
         
-        return pack_step_results(
+        logs = pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
@@ -2157,6 +2177,10 @@ class GeoPriorSubsNet(BaseAttentive):
             manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
             physics=physics_bundle,
         )
+        # if _out_losses:
+        #     logs.update(_out_losses)
+        return logs
+
 
     def test_step(self, data):
         """
@@ -2168,23 +2192,21 @@ class GeoPriorSubsNet(BaseAttentive):
           internally uses a GradientTape (but no optimizer update here).
         """
         inputs, targets = data
-        targets = _canonicalize_targets(targets)
+        targets = self._order_by_output_keys(_canonicalize_targets(targets))
+
         # Forward pass (no optimizer / gradients applied)
         y_pred_for_eval = self(inputs, training=False)
 
+        # XXX TOFIX
         data_loss = self.compiled_loss(
-            targets, y_pred_for_eval,
+            [ targets['subs_pred'], targets['gwl_pred']], 
+            [ y_pred_for_eval['subs_pred'], y_pred_for_eval['gwl_pred']], 
             regularization_losses=self.losses,
         )
+        # data_loss, _out_losses = self._safe_compiled_data_loss(targets, y_pred_for_eval)
         
         physics_bundle = None
         
-        # XXX TO REMOVE 
-        # self.compiled_metrics.update_state(
-        #     [targets['subs_pred'], targets['gwl_pred']], 
-        #     [y_pred_for_eval['subs_pred'], y_pred_for_eval['gwl_pred']], 
-        #     sample_weight=(sample_weight, ) 
-        # )
         self._update_manual_trackers(targets, y_pred_for_eval)
         
         if not self._physics_off():
@@ -2197,7 +2219,7 @@ class GeoPriorSubsNet(BaseAttentive):
         else:
             total_loss = data_loss
         
-        return pack_step_results(
+        logs =  pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
@@ -2206,6 +2228,9 @@ class GeoPriorSubsNet(BaseAttentive):
             manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
             physics=physics_bundle,
         )
+        # if _out_losses:
+        #     logs.update(_out_losses)
+        return logs
 
 
     def _evaluate_physics_on_batch(

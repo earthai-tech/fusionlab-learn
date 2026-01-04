@@ -1370,7 +1370,7 @@ for c in cols:
     s = df_proc[c]
     print(f"  {c:20s} min={s.min(): .4g}  max={s.max(): .4g}  mean={s.mean(): .4g}")
 
-#%%
+#%
 # ==================================================================
 # Step 4: Feature sets (lists only)
 # ==================================================================
@@ -1511,7 +1511,7 @@ def _np_stats(name, a):
 _np_stats("y_subs", targets_train["subsidence"])
 _np_stats("y_gwl",  targets_train["gwl"])
 
-#%%
+#%
 # --------------------------------------------------------------
 # coord ranges for chain-rule in Stage-2
 # --------------------------------------------------------------

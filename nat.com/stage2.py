@@ -27,10 +27,12 @@ import tensorflow as tf
 import  platform
 import gc
 
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, TerminateOnNaN
+from tensorflow.keras.callbacks import ( 
+    EarlyStopping, ModelCheckpoint,
+    CSVLogger, TerminateOnNaN
+ )
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
-# tf.debugging.enable_check_numerics()
 
 # Silence common warnings and TF logs
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -72,8 +74,7 @@ from fusionlab.utils.scale_metrics import (
 )
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
 from fusionlab.utils.subsidence_utils import convert_eval_payload_units
-from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet #XXX CHANGE module later
-from fusionlab.nn.pinn.models import  PoroElasticSubsNet
+from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet 
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
 from fusionlab.nn.keras_metrics import ( 
@@ -88,8 +89,6 @@ from fusionlab.nn.utils import plot_history_in
 from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.plot.forecast import plot_eval_future
 from fusionlab.nn.callbacks import LambdaOffsetScheduler
-
-
 
 # =============================================================================
 # Config / Paths
@@ -1382,8 +1381,10 @@ subs_model_inst.summary(line_length=110, expand_nested=True)
 loss_dict = {
     "subs_pred": make_weighted_pinball(QUANTILES, SUBS_WEIGHTS) if QUANTILES else tf.keras.losses.MSE,
     "gwl_pred":  make_weighted_pinball(QUANTILES, GWL_WEIGHTS)  if QUANTILES else tf.keras.losses.MSE,
+
 }
 metrics_dict = {
+
     "subs_pred": ([mae_q50_fn, mse_q50_fn, coverage80_fn, sharpness80_fn] if QUANTILES
                  else ["mae", "mse"]),
     "gwl_pred":  ([mae_q50_fn, mse_q50_fn] if QUANTILES else ["mae", "mse"]),
@@ -1417,8 +1418,12 @@ subs_model_inst.compile(
 print(f"{MODEL_NAME} compiled.")
 
 # print([m.name for m in subs_model_inst.metrics])
+print("model.loss type:", type(subs_model_inst.loss))
+print("model.loss:", subs_model_inst.loss)
+print("output_names:", getattr(subs_model_inst, "output_names", None))
+print("_output_keys:", getattr(subs_model_inst, "_output_keys", None))
 
-#%%
+#%
 # =============================================================================
 # Train
 # =============================================================================
