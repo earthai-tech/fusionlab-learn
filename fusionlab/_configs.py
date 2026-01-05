@@ -84,6 +84,7 @@ _STANDARD_ALONE_MAP = {
     'random': ('tensorflow', 'random'),
     'range': ('tensorflow', 'range'),
     'rank': ('tensorflow', 'rank'),
+    'reduce_any':('tensorflow', 'reduce_any'), 
     'reduce_all': ('tensorflow', 'reduce_all'),
     'reduce_logsumexp':('tensorflow.math', 'reduce_logsumexp'), 
     'reduce_max': ('tensorflow', 'reduce_max'),

@@ -6,14 +6,13 @@ from __future__ import annotations
 from numbers import Integral, Real 
 from typing import Optional, Union, Dict, List, Tuple, Any
 from collections.abc import Mapping
+from collections import OrderedDict
 
 import numpy as np 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
 from ...compat.sklearn import validate_params, Interval, StrOptions
-from ...compat.tf import optional_tf_function
-from ...utils.generic_utils import rename_dict_keys, as_tuple 
-from ..keras_utils import _canonicalize_targets
+from ...utils.target_utils import _canonicalize_targets
 from ...params import (
     LearnableMV, LearnableKappa, FixedGammaW, FixedHRef,
     LearnableK, LearnableSs, LearnableQ, LearnableC,
@@ -22,6 +21,10 @@ from ...params import (
 
 from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message 
 from .._base_attentive import BaseAttentive
+from ..keras_metrics import (
+    mae_q50_fn, mse_q50_fn, 
+    coverage80_fn, sharpness80_fn
+)
 
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs
@@ -85,7 +88,6 @@ if KERAS_BACKEND:
         build_physics_bundle,
         pack_step_results,
         pack_eval_physics,
-        update_compiled_metrics
     )
 
     from .utils import  process_pde_modes,  _get_coords
@@ -93,7 +95,12 @@ if KERAS_BACKEND:
         aggregate_multiscale_on_3d, 
         aggregate_time_window_output 
     )
-    
+    from ._stability import (
+        clamp_physics_logits, 
+        sanitize_scales, 
+        compute_physics_warmup_gate, 
+        filter_nan_gradients
+    )
     from ._debugs import (
         dbg_step0_inputs_targets,
         dbg_step1_thickness,
@@ -205,6 +212,9 @@ __all__ = ["GeoPriorSubsNet"]
 @register_keras_serializable(
     'fusionlab.nn.pinn', name="GeoPriorSubsNet") 
 class GeoPriorSubsNet(BaseAttentive):
+    
+    OUTPUT_KEYS = ("subs_pred", "gwl_pred")
+    
     @validate_params({
         'output_subsidence_dim': [Interval(Integral,1, None, closed="left")], 
         'output_gwl_dim': [Interval(Integral,1, None, closed="left"),], 
@@ -313,6 +323,10 @@ class GeoPriorSubsNet(BaseAttentive):
         b = self.scaling_kwargs.get("bounds", None)
         if isinstance(b, Mapping) and not isinstance(b, dict):
             self.scaling_kwargs["bounds"] = dict(b)
+        
+        self._track_add_on_metrics = get_sk(
+            self.scaling_kwargs, "track_add_on_metrics", default=True
+            )
 
         # Canonicalize missing canonical keys from aliases.
         self.scaling_kwargs = canonicalize_scaling_kwargs(
@@ -347,7 +361,6 @@ class GeoPriorSubsNet(BaseAttentive):
         # ------------------------------------------------------------------
         self.use_effective_thickness = use_effective_h
         self.Hd_factor = hd_factor   # if Hd = Hd_factor * H
-        
         
         drainage_mode = self.scaling_kwargs.get("drainage_mode", None)
         
@@ -392,6 +405,8 @@ class GeoPriorSubsNet(BaseAttentive):
             name=name,
             **kwargs
         )
+        
+        self._output_keys = list(self.OUTPUT_KEYS)
         
         self.pde_modes_active = process_pde_modes(pde_mode)
         self.scale_pde_residuals = bool(scale_pde_residuals)
@@ -454,10 +469,66 @@ class GeoPriorSubsNet(BaseAttentive):
             f" kappa_trainable={kappa.trainable}"
         )
         
+        self.custom_trackers = {}
+        
+        if self._track_add_on_metrics:
+            self._build_manual_trackers()
+            
         self._init_coordinate_corrections()
         self._build_pinn_components()
 
 
+    def _build_manual_trackers(self):
+        """Create internal Mean metrics for explicit logging."""
+        # We use Mean() because we will calculate the scalar value 
+        # (e.g. coverage) per batch and just ask Keras to average it.
+        MetricMean = Mean
+        
+        # Subsidence metrics
+        self.custom_trackers["subs_mae"] = MetricMean(name="subs_mae")
+        self.custom_trackers["subs_mse"] = MetricMean(name="subs_mse")
+        
+        if self.quantiles:
+            self.custom_trackers["subs_cov80"] = MetricMean(name="subs_cov80")
+            self.custom_trackers["subs_sharp80"] = MetricMean(name="subs_sharp80")
+            
+        # GWL metrics
+        self.custom_trackers["gwl_mae"] = MetricMean(name="gwl_mae")
+        self.custom_trackers["gwl_mse"] = MetricMean(name="gwl_mse")
+
+    def _update_manual_trackers(self, targets, y_pred):
+        """Manually calculate and update the trackers."""
+        if not self._track_add_on_metrics:
+            return
+
+        # --- 1. Subsidence ---
+        yt_s = targets.get("subs_pred")
+        yp_s = y_pred.get("subs_pred")
+        
+        if yt_s is not None and yp_s is not None:
+            # Point metrics (uses q50 if quantiles present)
+            mae_val = mae_q50_fn(yt_s, yp_s)
+            mse_val = mse_q50_fn(yt_s, yp_s)
+            self.custom_trackers["subs_mae"].update_state(mae_val)
+            self.custom_trackers["subs_mse"].update_state(mse_val)
+            
+            # Interval metrics
+            if self.quantiles and "subs_cov80" in self.custom_trackers:
+                cov_val = coverage80_fn(yt_s, yp_s)
+                shp_val = sharpness80_fn(yt_s, yp_s)
+                self.custom_trackers["subs_cov80"].update_state(cov_val)
+                self.custom_trackers["subs_sharp80"].update_state(shp_val)
+
+        # --- 2. GWL ---
+        yt_g = targets.get("gwl_pred")
+        yp_g = y_pred.get("gwl_pred")
+        
+        if yt_g is not None and yp_g is not None:
+            mae_val = mae_q50_fn(yt_g, yp_g)
+            mse_val = mse_q50_fn(yt_g, yp_g)
+            self.custom_trackers["gwl_mae"].update_state(mae_val)
+            self.custom_trackers["gwl_mse"].update_state(mse_val)
+    
     def _assert_dynamic_names_match_tensor(self, Xh):
         sk = self.scaling_kwargs or {}
         names = sk.get("dynamic_feature_names", None)
@@ -936,15 +1007,34 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return data_features_2d, phys_features_raw_3d
 
+    # Keras 3: make multi-output routing deterministic for compiled metrics
+    # @property
+    # def output_names(self):
+    #     # Used by Keras containers as “the output order”
+    #     return list(self._output_keys)
+
+    @property
+    def _output_keys(self):
+        return self.__output_keys
+
+    @_output_keys.setter
+    def _output_keys(self, v):
+        self.__output_keys = list(v)
+       
+    def _order_by_output_keys(self, d: dict) -> OrderedDict:
+        return OrderedDict(
+            (k, d[k])
+            for k in self._output_keys
+            if (k in d and d[k] is not None)
+        )
+
     # @tf_autograph.experimental.do_not_convert
-    # @optional_tf_function 
     def call(self,
         inputs: Dict[str, Optional[Tensor]],
         training: bool = False,
     ) -> Dict[str, Tensor]:
         
         y_pred, _ = self._forward_all(inputs, training=training)
-        
         return y_pred
 
 
@@ -1055,6 +1145,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         coords_flat = coords_for_decoder  # already (B,H,3)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)
+        H_si = tf_maximum(H_si, 1.0) # XXX TO RECHECK 
     
 
         K_field, Ss_field, tau_field, *_ = compose_physics_fields(
@@ -1186,8 +1277,12 @@ class GeoPriorSubsNet(BaseAttentive):
         # Split into the supervised heads
         s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
         
-        y_pred = {"subs_pred": s_pred_final, "gwl_pred": gwl_pred_final}
-        
+        y_pred_raw = {
+            "gwl_pred": gwl_pred_final,
+            "subs_pred": s_pred_final,
+        }
+        y_pred = self._order_by_output_keys(y_pred_raw)
+  
         aux = {
             "data_final": data_final,
             "data_mean_raw": data_mean_raw,
@@ -1195,7 +1290,6 @@ class GeoPriorSubsNet(BaseAttentive):
             "phys_features_raw_3d": phys_features_raw_3d,
         }
         return y_pred, aux
-
 
     def train_step(self, data):
         """
@@ -1222,7 +1316,7 @@ class GeoPriorSubsNet(BaseAttentive):
         # 0) Unpack (inputs, targets) + normalize target keys
         # ----------------------------------------------------------
         inputs, targets = data
-        targets = _canonicalize_targets(targets)
+        targets = self._order_by_output_keys(_canonicalize_targets(targets))
 
         dbg_step0_inputs_targets(
             verbose=self.verbose,
@@ -1243,6 +1337,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         validate_scaling_kwargs(self.scaling_kwargs)
         H_si = to_si_thickness(H_field, self.scaling_kwargs)  # SI meters
+        H_si = tf_maximum(H_si, 1.0) #XXX to recheck 
         
         debug_grads = bool(get_sk(
             self.scaling_kwargs, "debug_physics_grads", 
@@ -1311,10 +1406,15 @@ class GeoPriorSubsNet(BaseAttentive):
             )
 
             # Supervised data loss (pinball, MSE, etc. defined at compile-time)
+            # XXX TOFIX 
             data_loss = self.compiled_loss(
-                targets, y_pred,
+                [targets['subs_pred'], targets['gwl_pred']], 
+                [ y_pred['subs_pred'], y_pred['gwl_pred']],
                 regularization_losses=self.losses,
             )
+            
+            # # Supervised data loss (pinball, MSE, etc. defined at compile-time)
+            # data_loss, _out_losses = self._safe_compiled_data_loss(targets, y_pred)
             
             # ------------------------------------------------------
             # 3.2 Mean head for physics
@@ -1361,9 +1461,9 @@ class GeoPriorSubsNet(BaseAttentive):
                 h_si=h_si,
             )
 
-            # ----------------------
+            # --------------------------------------------------
             # 3.3 Physics logits: K, Ss, Δlogτ (+ optional Q)
-            # ----------------------
+            # -------------------------------------------------
             phys_mean_raw = aux.get("phys_mean_raw", None)
             if phys_mean_raw is None:
                 raise ValueError("Model outputs missing 'phys_mean_raw'.")
@@ -1371,7 +1471,11 @@ class GeoPriorSubsNet(BaseAttentive):
             # Expected layout: [K, Ss, delta_log_tau, (optional) Q]
             ( K_logits, Ss_logits, dlogtau_logits, Q_logits  
             )= self.split_physics_predictions(phys_mean_raw)
-
+            
+            K_logits, Ss_logits, dlogtau_logits, Q_logits = clamp_physics_logits(
+                        K_logits, Ss_logits, dlogtau_logits, Q_logits
+                    )
+            
             dbg_step31_forward_outputs(
                 verbose=self.verbose,
                 data_final=data_final,
@@ -1900,12 +2004,11 @@ class GeoPriorSubsNet(BaseAttentive):
                     div_K_grad_h=div_term,       
                     verbose=self.verbose,
                 )
-                # >>>>>> INSERT THIS FIX <<<<<<
+                scales = sanitize_scales(scales)
                 # Detach scales from the computation graph. 
                 # We want to scale the loss by the MAGNITUDE of these terms,
                 # NOT optimize the terms to change the scale.
                 scales = {k: tf_stop_gradient(v) for k, v in scales.items()}
-                # >>>>>> END FIX <<<<<<
                 
                 cons_s = guard_scale_with_residual(
                     residual=cons_res,
@@ -1974,6 +2077,13 @@ class GeoPriorSubsNet(BaseAttentive):
                     loss_bounds=loss_bounds,
                 )
             )
+            phys_gate = compute_physics_warmup_gate(
+                    self.optimizer.iterations, 
+                    warmup_steps=500, 
+                    ramp_steps=500
+                )
+            physics_loss_scaled = physics_loss_scaled * phys_gate
+            
             total_loss = data_loss + physics_loss_scaled
         
         dbg_step9_losses(
@@ -1991,17 +2101,13 @@ class GeoPriorSubsNet(BaseAttentive):
         # ----------------------------------------------------------
         # 10) Apply gradients
         # ----------------------------------------------------------
-
         trainable_vars = self.trainable_variables
         
         # 1) Compute grads
         grads = tape.gradient(total_loss, trainable_vars)
         
         # 2) Clip (handle None grads safely)
-        grads = [
-            tf_zeros_like(v) if g is None else g
-            for g, v in zip(grads, trainable_vars)
-        ]
+        grads = filter_nan_gradients(grads)
         grads, _ = tf_clip_by_global_norm(grads, 1.0)
         
         dbg_step10_grads(
@@ -2027,6 +2133,8 @@ class GeoPriorSubsNet(BaseAttentive):
             self._scale_param_grads(grads, trainable_vars)
         )
 
+        self._update_manual_trackers(targets, y_pred)
+                  
         # ----------------------------------------------------------
         # 11) Package logs (single path)
         # ----------------------------------------------------------
@@ -2060,14 +2168,19 @@ class GeoPriorSubsNet(BaseAttentive):
                 eps_gw_raw=eps_gw_raw,
             )
         
-        return pack_step_results(
+        logs = pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
             targets=targets,
             y_pred=y_pred,
+            manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
             physics=physics_bundle,
         )
+        # if _out_losses:
+        #     logs.update(_out_losses)
+        return logs
+
 
     def test_step(self, data):
         """
@@ -2079,17 +2192,22 @@ class GeoPriorSubsNet(BaseAttentive):
           internally uses a GradientTape (but no optimizer update here).
         """
         inputs, targets = data
-        targets = _canonicalize_targets(targets)
-        
+        targets = self._order_by_output_keys(_canonicalize_targets(targets))
+
         # Forward pass (no optimizer / gradients applied)
         y_pred_for_eval = self(inputs, training=False)
 
+        # XXX TOFIX
         data_loss = self.compiled_loss(
-            targets, y_pred_for_eval,
+            [ targets['subs_pred'], targets['gwl_pred']], 
+            [ y_pred_for_eval['subs_pred'], y_pred_for_eval['gwl_pred']], 
             regularization_losses=self.losses,
         )
+        # data_loss, _out_losses = self._safe_compiled_data_loss(targets, y_pred_for_eval)
         
         physics_bundle = None
+        
+        self._update_manual_trackers(targets, y_pred_for_eval)
         
         if not self._physics_off():
             phys = self._evaluate_physics_on_batch(
@@ -2101,14 +2219,18 @@ class GeoPriorSubsNet(BaseAttentive):
         else:
             total_loss = data_loss
         
-        return pack_step_results(
+        logs =  pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
             targets=targets,
             y_pred=y_pred_for_eval,
+            manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
             physics=physics_bundle,
         )
+        # if _out_losses:
+        #     logs.update(_out_losses)
+        return logs
 
 
     def _evaluate_physics_on_batch(
@@ -2147,6 +2269,7 @@ class GeoPriorSubsNet(BaseAttentive):
     
         H_field = tf_convert_to_tensor(H_field_in, dtype=tf_float32)  # model scale
         H_si = to_si_thickness(H_field, sk)                           # SI meters
+        H_si = tf_maximum(H_si, 1.0) # TO RECHECK
     
         coords = tf_convert_to_tensor(_get_coords(inputs), tf_float32)
     
@@ -2176,8 +2299,6 @@ class GeoPriorSubsNet(BaseAttentive):
         gw_floor   = resolve_auto_scale_floor("gw", sk)
         
         # XXX TOREMOVE 
-        tf_print("cons_floor=", cons_floor)
-        tf_print("gw_floor=", gw_floor)
         # --------------------------------------------------------------
         # 2) Forward + autodiff wrt coords
         # --------------------------------------------------------------
@@ -2205,6 +2326,10 @@ class GeoPriorSubsNet(BaseAttentive):
                 tau_logits, 
                 Q_logits 
             )= self.split_physics_predictions(phys_mean_raw)
+            
+            K_logits, Ss_logits, tau_logits, Q_logits = clamp_physics_logits(
+                        K_logits, Ss_logits, tau_logits, Q_logits
+                    )
 
             # recommended: keep K,Ss,tau spatial-only (average over time then broadcast)
             K_base = tf_broadcast_to(
@@ -2503,6 +2628,7 @@ class GeoPriorSubsNet(BaseAttentive):
                 div_K_grad_h=div_term,       # helps GW scaling a lot
                 verbose=0,
             )
+            scales = sanitize_scales(scales)
             scales = {k: tf_stop_gradient(v) for k, v in scales.items()}
             cons_s = guard_scale_with_residual(
                 residual=cons_res,

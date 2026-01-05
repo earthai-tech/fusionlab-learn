@@ -43,7 +43,7 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "zhongshan"
+CITY_NAME = "nansha"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
@@ -97,7 +97,6 @@ FORECAST_START_YEAR = 2023
 FORECAST_HORIZON_YEARS = 3
 TIME_STEPS = 5
 MODE = "tft_like"   # {"pihal_like", "tft_like"}
-
 
 # -------------------------------------------------------------------
 # 1.4 Column names and groundwater conventions
@@ -166,8 +165,6 @@ SCALE_Z_SURF = False
 
 # If subsidence is "rate" (per year) or "cumulative":
 SUBSIDENCE_KIND = "cumulative"   # {"cumulative", "rate"}
-
-
 
 # ===================================================================
 # 2) FEATURE REGISTRY (Stage-1 -> Stage-2 handshake)
@@ -336,11 +333,11 @@ SCALE_PDE_RESIDUALS = True
 # 5.2 Relative weights of each physics term (compile-time)
 # -------------------------------------------------------------------
 LAMBDA_CONS   = 1.0     # from 0.10 (×10)
-LAMBDA_GW     = 0.05    # from 0.005 (×10) # 0.005
-LAMBDA_PRIOR  = 0.10   # keep/raise if K,Ss collapse # 0.05
-LAMBDA_SMOOTH = 0.01
-LAMBDA_MV     = 0.005
-LAMBDA_BOUNDS = 1e-3   # from 1e-4 1e-4
+LAMBDA_GW     = 0.10    # from 0.005 (×10) # 0.005 # Increased from 0.05 to force head fitting
+LAMBDA_PRIOR  = 0.5   # keep/raise if K,Ss collapse # 0.05 # # Increased: strongly enforce tau = Ss*H^2/K
+LAMBDA_SMOOTH = 0.05  # # Help reduce noise in K/Ss fields # 0.01
+LAMBDA_MV     = .01 #0.005
+LAMBDA_BOUNDS = 1. # 1e-3   # from 1e-4 1e-4 # # Strong penalty for soft bounds
 LAMBDA_Q      = 0.0
 
 # -------------------------------------------------------------------
@@ -365,13 +362,16 @@ LAMBDA_OFFSET_WHEN = "begin"   # {"begin", "end"}
 
 # If LAMBDA_OFFSET_SCHEDULE is None, callback uses warmup:
 # start -> end over `LAMBDA_OFFSET_WARMUP` epochs/steps.
-LAMBDA_OFFSET_WARMUP =1 # # 1–2 epochs (not 5)
+LAMBDA_OFFSET_WARMUP =20 # 1 # # 1–2 epochs (not 5) # Sync with Q_WARMUP
 
 # Safe defaults:
 # - start small so the model learns data scale before physics locks in
 # - end at 1.0 (neutral)
-LAMBDA_OFFSET_START =2.0 # 0.2 # 0.05
-LAMBDA_OFFSET_END = 10 #1.0
+# Start small (0.1) -> Data dominates, getting rough shape right.
+# End at 1.0 -> Physics balances data.
+
+LAMBDA_OFFSET_START =0.1 # 2.0 # 0.2 # 0.05
+LAMBDA_OFFSET_END = 1.0 # 10 #1.0
 
 # Optional explicit schedule:
 # - dict  : {index: value} where index is epoch/step
@@ -402,6 +402,7 @@ MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
 MV_DELAY_STEPS   = None
 MV_WARMUP_STEPS  = None
 
+TRACK_ADD_ON_METRICS =False 
 # ===================================================================
 # 7.x TRAINING STRATEGY (Physics-first vs Data-first)
 # ===================================================================
@@ -418,18 +419,19 @@ MV_WARMUP_STEPS  = None
 TRAINING_STRATEGY = "physics_first"
  
 # --- Physics-first ------------------------------------
-Q_POLICY_PHYSICS_FIRST = "warmup_off"     # or "always_off" for NO Q ever
-Q_WARMUP_EPOCHS_PHYSICS_FIRST = 5
-Q_RAMP_EPOCHS_PHYSICS_FIRST = 2           # 0 => hard step
+Q_POLICY_PHYSICS_FIRST = "warmup_off"   # or "always_off" for NO Q ever
+Q_WARMUP_EPOCHS_PHYSICS_FIRST = 20      # Wait 20 epochs (assuming 100 total)
+Q_RAMP_EPOCHS_PHYSICS_FIRST = 10         # 0 => hard step # Smooth transition
 
 # Keep Q regularization small even in physics-first (post-warmup).
 # (This is multiplied by your global physics offset as well.)
 LAMBDA_Q_PHYSICS_FIRST = 1e-5
-LOSS_WEIGHT_GWL_PHYSICS_FIRST =0.5 # 0.05 
+# Increase if logs showed GWL_MSE was high (44.0)
+LOSS_WEIGHT_GWL_PHYSICS_FIRST =0.5 # 0.05 1.0
 
 SUBS_RESID_POLICY_PHYSICS_FIRST = "warmup_off"
-SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 1 # 5
-SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 2  # 0 => hard step
+SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST = 15 # 5
+SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 10 # 0 => hard step
  
 # --- Data-first (uncomment to use) ---------------------
 # TRAINING_STRATEGY = "data_first"
@@ -444,7 +446,7 @@ SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST = 2  # 0 => hard step
 
 
 # Log extra Q/subs-residual diagnostics in train/val logs
-LOG_Q_DIAGNOSTICS = False
+LOG_Q_DIAGNOSTICS = True
 
 # -------------------------------------------------------------------
 # 5.4 Physics bounds (specified in LINEAR space here)
@@ -473,7 +475,8 @@ PHYSICS_BOUNDS = {
 # Bounds penalty mode:
 # - "soft" : penalize violations (recommended)
 # - "hard" : clamp or reject (only if you know what you are doing)
-PHYSICS_BOUNDS_MODE = "hard" #"hard"
+# Use SOFT to keep gradients alive
+PHYSICS_BOUNDS_MODE = "soft" #"hard" #"hard"
 
 # Time coordinate units used by physics conversions (rate_to_per_second etc.)
 # Must match what `TIME_COL` represents in your dataset.
@@ -606,8 +609,8 @@ GEOPRIOR_H_REF = "auto"   # or 0.0
 CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 CONSOLIDATION_RESIDUAL_UNITS ="second"
 
-CONS_SCALE_FLOOR ="auto"#1e-7
-GW_SCALE_FLOOR ="auto" #1e-7
+CONS_SCALE_FLOOR =1e-1
+GW_SCALE_FLOOR =1e-1
 ALLOW_SUBS_RESIDUAL =True 
 
 DT_MIN_UNITS = 1e-6
@@ -627,9 +630,9 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 3
+EPOCHS = 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
 
 # ===================================================================
@@ -679,7 +682,6 @@ TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
 # - Stage-2 audit focuses on NPZ tensor shapes, finiteness, coordinate
 #   normalization/inversion checks, and scaling_kwargs consistency.
 AUDIT_STAGES = "*"
-
 
 EVAL_JSON_UNITS_MODE = "si"              # or "interpretable"
 EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"
