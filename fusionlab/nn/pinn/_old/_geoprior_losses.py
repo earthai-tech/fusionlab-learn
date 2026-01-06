@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import KERAS_DEPS
-from ._geoprior_utils import get_sk
+from ._prior_utils import get_sk
 
 Tensor = KERAS_DEPS.Tensor
 tf_float32 = KERAS_DEPS.float32
@@ -260,7 +260,8 @@ def update_epsilon_metrics(
             m.update_state(val)
 
 
-def epsilon_value_for_logs(model: Any, which: str, fallback: Tensor) -> Tensor:
+def epsilon_value_for_logs(
+        model: Any, which: str, fallback: Tensor) -> Tensor:
     """Prefer tracked epsilon metric if it exists."""
     key = f"eps_{which}_metric"
     m = getattr(model, key, None)
@@ -272,7 +273,9 @@ def epsilon_value_for_logs(model: Any, which: str, fallback: Tensor) -> Tensor:
 # ---------------------------------------------------------------------
 # Metric Update Logic (Keras 3-safe)
 # ---------------------------------------------------------------------
-def _infer_output_names(model: Any, targets: dict, y_pred: dict) -> list[str]:
+def _infer_output_names(
+        model: Any, targets: dict, y_pred: dict
+    ) -> list[str]:
     """
     Infer a stable output ordering for CompileMetrics.update_state.
 
@@ -282,7 +285,9 @@ def _infer_output_names(model: Any, targets: dict, y_pred: dict) -> list[str]:
     3) y_pred insertion order
     4) common canonical order if present
     """
-    out_names = getattr(model, "_output_keys", None) or getattr(model, "output_names", None)
+    out_names = getattr(
+        model, "_output_keys", None) or getattr(
+            model, "output_names", None)
 
     if isinstance(out_names, str):
         out_names = [out_names]
@@ -296,7 +301,8 @@ def _infer_output_names(model: Any, targets: dict, y_pred: dict) -> list[str]:
     # Keep only names that exist in BOTH dicts and are not None.
     out_names = [
         n for n in out_names
-        if (n in targets and n in y_pred and targets[n] is not None and y_pred[n] is not None)
+        if (n in targets and n in y_pred and targets[n] is not None and 
+            y_pred[n] is not None)
     ]
     return out_names
 
@@ -310,7 +316,10 @@ def _strip_tiled_true(yt: Any) -> Any:
     return yt
 
 
-def update_compiled_metrics(model: Any, targets: Any, y_pred: Any, sample_weight: Any = None) -> None:
+def update_compiled_metrics(
+        model: Any, targets: Any, y_pred: Any, 
+        sample_weight: Any = None
+   ) -> None:
     """
     Manually update compiled metrics in a Keras 3-safe way.
 
@@ -485,85 +494,3 @@ def pack_eval_physics(model: Any, *, physics: dict[str, Tensor] | None) -> dict[
         return zero_physics_bundle(model) if should_log_physics(model) else {}
     return physics
 
-def _safe_compiled_data_loss(
-    self,
-    targets: dict[str, Tensor],
-    y_pred: dict[str, Tensor],
-) -> tuple[Tensor, dict[str, Tensor]]:
-    """Compute supervised data loss robustly across Keras versions.
-
-    In some Keras 3 / subclassed-model edge cases, `self.compiled_loss`
-    may be initialized in "single-output" mode (loss path `()`), which
-    raises a KeyError when `y_pred` is a dict. We fall back to a manual
-    per-output loss aggregation that respects `loss_weights` and adds
-    `regularization_losses`.
-    """
-    try:
-        data_loss = self.compiled_loss(
-            targets,
-            y_pred,
-            regularization_losses=self.losses,
-        )
-        return data_loss, {}
-    except KeyError as e:
-        # Only fall back for the known "loss path ()" mismatch.
-        if "path: ()" not in str(e):
-            raise
-        return self._manual_data_loss(targets, y_pred)
-
-def _manual_data_loss(
-    self,
-    targets: dict[str, Tensor],
-    y_pred: dict[str, Tensor],
-) -> tuple[Tensor, dict[str, Tensor]]:
-    """Manual supervised loss: sum_i w_i * loss_i(y_i, ŷ_i)."""
-    from ._geoprior_losses import _strip_tiled_true
-
-    loss_cfg = self.loss
-    loss_w = getattr(self, "loss_weights", None)
-
-    out_losses: dict[str, Tensor] = {}
-    total = tf_constant(0.0, tf_float32)
-
-    # Helper to safely read mappings.
-    def _get(mapping, key, default=None):
-        try:
-            return mapping.get(key, default)
-        except Exception:
-            return default
-
-    for i, name in enumerate(self.output_names):
-        fn = _get(loss_cfg, name) if hasattr(loss_cfg, "get") else loss_cfg
-        if fn is None:
-            continue
-
-        yt = _get(targets, name) if hasattr(targets, "get") else None
-        yp = _get(y_pred, name) if hasattr(y_pred, "get") else None
-        if yt is None or yp is None:
-            continue
-
-        # If y_true was tiled to match quantile dimensions, strip it.
-        yt_use = _strip_tiled_true(yt)
-
-        l = fn(yt_use, yp)
-        l = tf_reduce_mean(l)
-
-        w = 1.0
-        if isinstance(loss_w, dict):
-            w = float(loss_w.get(name, 1.0))
-        elif isinstance(loss_w, (list, tuple)):
-            w = float(loss_w[i]) if i < len(loss_w) else 1.0
-        elif loss_w is not None:
-            try:
-                w = float(loss_w)
-            except Exception:
-                w = 1.0
-
-        out_losses[f"{name}_loss"] = l
-        total = total + tf_cast(w, tf_float32) * tf_cast(l, tf_float32)
-
-    # Add regularization losses if any.
-    if self.losses:
-        total = total + tf_add_n([tf_cast(x, tf_float32) for x in self.losses])
-
-    return total, out_losses

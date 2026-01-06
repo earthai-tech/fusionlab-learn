@@ -402,7 +402,8 @@ MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
 MV_DELAY_STEPS   = None
 MV_WARMUP_STEPS  = None
 
-TRACK_ADD_ON_METRICS =False 
+TRACK_AUX_METRICS = True
+
 # ===================================================================
 # 7.x TRAINING STRATEGY (Physics-first vs Data-first)
 # ===================================================================
@@ -630,7 +631,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 100           # Recommended: 50 to 200
+EPOCHS = 2 # 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 

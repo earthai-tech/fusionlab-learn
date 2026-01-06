@@ -175,7 +175,7 @@ Z_SURF_UNIT_TO_SI= float(cfg.get("Z_SURF_UNIT_TO_SI", 1.0))
 HEAD_COL = cfg.get("HEAD_COL", "head_m")
 INCLUDE_Z_SURF_AS_STATIC = bool(cfg.get("INCLUDE_Z_SURF_AS_STATIC", True))
 
-TRACK_ADD_ON_METRICS = bool(cfg.get("TRACK_ADD_ON_METRICS", True))
+TRACK_AUX_METRICS = bool(cfg.get("TRACK_AUX_METRICS", True))
 # --- Stage-1 physics-critical scaling controls ---
 # Preferred knob:
 NORMALIZE_COORDS = bool(cfg.get("NORMALIZE_COORDS", True))
@@ -1802,7 +1802,7 @@ scaling_kwargs = {
     "mv_delay_steps": (None if MV_DELAY_STEPS is None else int(MV_DELAY_STEPS)),
     "mv_warmup_steps": (None if MV_WARMUP_STEPS is None else int(MV_WARMUP_STEPS)),
     
-    "track_add_on_metrics": TRACK_ADD_ON_METRICS, 
+    "track_aux_metrics": TRACK_AUX_METRICS, 
 
     **indices_spec, **model_cols
 }

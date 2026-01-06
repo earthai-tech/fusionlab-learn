@@ -16,7 +16,7 @@ from .. import KERAS_DEPS, dependency_message
 # from ...utils.generic_utils import vlog 
 from ..._fusionlog import fusionlog, OncePerMessageFilter
 from ...api.docs import DocstringComponents, _halnet_core_params
-from ._geoprior_utils import coord_ranges, get_sk, get_h_ref_si
+from ._prior_utils import coord_ranges, get_sk, get_h_ref_si
 
 # ---------------------------------------------------------------------
 # Keras deps aliases (keep short lines for linting)

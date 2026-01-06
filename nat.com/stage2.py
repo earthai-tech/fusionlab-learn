@@ -63,7 +63,8 @@ from fusionlab.utils.nat_utils import (
     name_of,
     serialize_subs_params,
     resolve_si_affine, 
-    resolve_hybrid_config
+    resolve_hybrid_config, 
+    subs_point_from_out, 
 )
 
 from fusionlab.utils.forecast_utils import format_and_forecast
@@ -79,7 +80,7 @@ from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
 from fusionlab.nn.keras_metrics import ( 
     coverage80_fn, sharpness80_fn, _to_py, 
-    mae_q50_fn, mse_q50_fn 
+    MAEQ50, MSEQ50, Coverage80, Sharpness80
     )
 from fusionlab.nn.calibration import (
     fit_interval_calibrator_on_val,
@@ -603,7 +604,6 @@ print_config_table(
 
 print(f"\nTraining outputs -> {RUN_OUTPUT_PATH}")
 #%
-
 #-----------------------------------------------------------------------------
 
 encoders = M["artifacts"]["encoders"]
@@ -649,7 +649,6 @@ if cs_path and os.path.exists(cs_path):
     except Exception as e:
         print(f"[Warn] Could not load coord_scaler at {cs_path}: {e}")
         
-# 
 # -------------------------------------------------------------------------
 # Stage-1 scaling metadata (single source of truth for physics chain-rule)
 # -------------------------------------------------------------------------
@@ -887,7 +886,6 @@ y_test  = dict(np.load(test_targets_npz)) if test_targets_npz else None
 
 
 # ---- DEBUG UNITS: Stage-2 loaded tensors ----
-# XXX FOR DEBUG
 def _np_stats(name, a):
     a = np.asarray(a)
     print(f"[Stage2][Loaded] {name:18s} shape={a.shape} "
@@ -902,8 +900,6 @@ GW_IDX = sk_stage1.get('gwl_dyn_index')
 print("GW_IDX=", GW_IDX)
 _np_stats("X_train.dynamic[...,gwl_dyn]", X_train["dynamic_features"][..., GW_IDX])
     
-
-#%
 # Dims
 OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
 OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
@@ -1149,7 +1145,8 @@ subsmodel_params["scaling_kwargs"].update({
     "mv_alpha_disp": cfg.get("MV_ALPHA_DISP", 0.1), 
     "mv_huber_delta":  cfg.get("MV_HUBER_DELTA", 1.0),
     
-    "track_add_on_metrics": cfg.get("TRACK_ADD_ON_METRICS", True)
+    "track_aux_metrics": cfg.get("TRACK_AUX_METRICS", True)
+
     
 })
 
@@ -1372,56 +1369,100 @@ subs_model_inst = model_cls(
 )
 
 #%
-# Build once
+# Build once (ensures model outputs are created before compile bookkeeping)
 for xb, _ in train_dataset.take(1):
     subs_model_inst(xb)
     break
-subs_model_inst.summary(line_length=110, expand_nested=True)
 
+# ------------------------------------------------------------
+# Losses (always)
+# ------------------------------------------------------------
 loss_dict = {
-    "subs_pred": make_weighted_pinball(QUANTILES, SUBS_WEIGHTS) if QUANTILES else tf.keras.losses.MSE,
-    "gwl_pred":  make_weighted_pinball(QUANTILES, GWL_WEIGHTS)  if QUANTILES else tf.keras.losses.MSE,
-
+    "subs_pred": (
+        make_weighted_pinball(QUANTILES, SUBS_WEIGHTS)
+        if QUANTILES
+        else tf.keras.losses.MSE
+    ),
+    "gwl_pred": (
+        make_weighted_pinball(QUANTILES, GWL_WEIGHTS)
+        if QUANTILES
+        else tf.keras.losses.MSE
+    ),
 }
-metrics_dict = {
 
-    "subs_pred": ([mae_q50_fn, mse_q50_fn, coverage80_fn, sharpness80_fn] if QUANTILES
-                 else ["mae", "mse"]),
-    "gwl_pred":  ([mae_q50_fn, mse_q50_fn] if QUANTILES else ["mae", "mse"]),
-}
+# ------------------------------------------------------------
+# Metrics
+# ------------------------------------------------------------
+# If we track auxiliary metrics internally (GeoPriorTrackers / add_on),
+# disable compile-time metrics to avoid duplicated log entries.
+TRACK_AUX_METRICS = bool(cfg.get("TRACK_AUX_METRICS", cfg.get("TRACK_ADD_ON_METRICS", True)))
 
-#%
+if TRACK_AUX_METRICS:
+    metrics_arg = None  # or {} (both are fine; None is simplest)
+else:
+    if QUANTILES:
+        metrics_arg = {
+            "subs_pred": [
+                MAEQ50(name="mae_q50"),
+                MSEQ50(name="mse_q50"),
+                Coverage80(name="coverage80"),
+                Sharpness80(name="sharpness80"),
+            ],
+            "gwl_pred": [
+                MAEQ50(name="mae_q50"),
+                MSEQ50(name="mse_q50"),
+            ],
+        }
+    else:
+        metrics_arg = {
+            "subs_pred": ["mae", "mse"],
+            "gwl_pred": ["mae", "mse"],
+        }
+
+# ------------------------------------------------------------
+# Physics loss weights (always)
+# ------------------------------------------------------------
 physics_loss_weights = {
     "lambda_cons": LAMBDA_CONS,
     "lambda_gw": LAMBDA_GW,
     "lambda_prior": LAMBDA_PRIOR,
     "lambda_smooth": LAMBDA_SMOOTH,
-    "lambda_bounds": LAMBDA_BOUNDS, 
+    "lambda_bounds": LAMBDA_BOUNDS,
     "lambda_mv": LAMBDA_MV,
     "mv_lr_mult": MV_LR_MULT,
     # (global multiplier for the physics block)
     "lambda_offset": LAMBDA_OFFSET,
     "kappa_lr_mult": KAPPA_LR_MULT,
-    "lambda_q": float(LAMBDA_Q)
+    "lambda_q": float(LAMBDA_Q),
 }
+
 # Strategy override
 loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": float(LOSS_WEIGHT_GWL)}
 
-#
+# ------------------------------------------------------------
+# Compile
+# ------------------------------------------------------------
 subs_model_inst.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE, clipnorm=1.0),
+    optimizer=tf.keras.optimizers.Adam(
+        learning_rate=LEARNING_RATE,
+        clipnorm=1.0,
+    ),
     loss=loss_dict,
-    metrics=metrics_dict,
+    metrics=metrics_arg,  # None when TRACK_AUX_METRICS=True
     loss_weights=loss_weights_dict,
     **physics_loss_weights,
 )
-print(f"{MODEL_NAME} compiled.")
 
-# print([m.name for m in subs_model_inst.metrics])
+print(f"{MODEL_NAME} compiled.")
+print("TRACK_AUX_METRICS:", TRACK_AUX_METRICS)
+print("QUANTILES:", QUANTILES)
 print("model.loss type:", type(subs_model_inst.loss))
 print("model.loss:", subs_model_inst.loss)
 print("output_names:", getattr(subs_model_inst, "output_names", None))
 print("_output_keys:", getattr(subs_model_inst, "_output_keys", None))
+print("compiled metrics:", metrics_arg)
+print([m.name for m in subs_model_inst.metrics])
+
 
 #%
 # =============================================================================
@@ -1532,7 +1573,10 @@ training_summary = {
         "optimizer": "Adam",
         "learning_rate": float(LEARNING_RATE),
         "loss_weights": loss_weights_dict,
-        "metrics": {k: [name_of(m) for m in v] for k, v in metrics_dict.items()},
+        "metrics": ( 
+            {k: [name_of(m) for m in v] for k, v in metrics_arg.items()}
+            if metrics_arg else {} 
+            ), 
         "physics_loss_weights": physics_loss_weights,
         "lambda_offset": LAMBDA_OFFSET,
         
@@ -1939,7 +1983,7 @@ ds_eval = make_tf_dataset(
 
 # --- 2.1 Standard Keras evaluate() + physics metrics ---
 try:
-    eval_results = model_inf.evaluate(ds_eval, return_dict=True, verbose=1)
+    eval_results = subs_model_inst.evaluate(ds_eval, return_dict=True, verbose=1)
     print("Evaluation:", eval_results)
 
     # v3.2: include epsilon_gw if available
@@ -1990,26 +2034,57 @@ censor_metrics = None   # will become a dict if we have a flag
 
 y_true_list, s_q_list, mask_list = [], [], []
 
+def _extract_preds(model, out):
+    # NEW path
+    if isinstance(out, dict) and ("subs_pred" in out) and ("gwl_pred" in out):
+        return out["subs_pred"], out["gwl_pred"]
+    # BACKWARD compat path (older checkpoints)
+    if isinstance(out, dict) and ("data_final" in out):
+        return model.split_data_predictions(out["data_final"])
+    raise KeyError(
+        f"Unsupported model output keys: {list(out.keys()) if isinstance(out, dict) else type(out)}")
+
+def _subs_point_from_out(model, out, quantiles, med_idx):
+    """
+    Return subsidence point prediction tensor shaped (B,H,1) in model space.
+    - If quantile output: returns median quantile.
+    - If point output: returns direct point.
+    """
+    s_pred, _ = _extract_preds(model, out)  # s_pred: (B,H,1) or (B,H,Q,1)
+    if s_pred is None:
+        raise ValueError("Model output 'subs_pred' is None.")
+
+    # Quantile case: select median -> (B,H,1)
+    if quantiles and (getattr(s_pred, "shape", None) is not None
+                      ) and (s_pred.shape.rank == 4):
+        return s_pred[..., med_idx, :]
+
+    # Point case already (B,H,1)
+    return s_pred
+
+
 for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
     out = model_inf(xb, training=False)
-    data_final_b = out["data_final"]
 
-    y_true_b = yb["subs_pred"]           # (B, H, 1)
+    s_pred_b, _ = _extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
+
+    y_true_b = yb["subs_pred"]                    # (B,H,1)
     y_true_list.append(y_true_b)
 
     if QUANTILES:
-        s_q_b, _ = model_inf.split_data_predictions(data_final_b)  # (B, H, Q, 1)
-        s_q_list.append(s_q_b)
+        # s_pred_b is already (B,H,Q,1)
+        s_q_list.append(s_pred_b)
 
     if CENSOR_FLAG_IDX is not None:
         H = tf.shape(y_true_b)[1]
         mask_b = build_censor_mask(
             xb, H, CENSOR_FLAG_IDX, CENSOR_THRESH,
             source=CENSOR_MASK_SOURCE or "dynamic",
-            reduce_time="any",       # best default for thickness censoring
-            align="broadcast",       # safe fallback
+            reduce_time="any",
+            align="broadcast",
         )
         mask_list.append(mask_b)
+
 
 # # Stack what we collected
 y_true = tf.concat(y_true_list, axis=0) if y_true_list else None  # (N,H,1)
@@ -2060,19 +2135,33 @@ if QUANTILES and (y_true is not None) and (s_q is not None):
         cov80_cal_phys   = float(coverage80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
         sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
 
+
 # --- 2.3.b Optional censor-stratified MAE on the same loop products ---
 # Works for both quantile mode (use median) and point-forecast mode (fallback).
+
+# Median quantile index (robust)
+_med_idx = None
+if QUANTILES:
+    _med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES, dtype=float) - 0.5)))
+    
 if (y_true is not None) and (mask is not None):
+
     if QUANTILES and (s_q is not None):
-        med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
-        s_med = s_q[..., med_idx, :]  # (N, H, 1) scaled
+        # s_q: (N,H,Q,1) -> median: (N,H,1)
+        med_idx = _med_idx
+        s_med = s_q[..., med_idx, :]
     else:
-        # point-forecast: take subsidence head from this pass
+        # point-forecast: run model and collect (B,H,1) batches
         s_pred_list = []
-        for xb2, _ in ds_eval:
-            out2 = subs_model_inst(xb2, training=False)
-            s_pred_list.append(out2["data_final"][..., :OUT_S_DIM])  # (B, H, 1)
-        s_med = tf.concat(s_pred_list, axis=0)              # scaled
+        for xb2, _ in with_progress(ds_eval, desc="Point preds for censor-MAE"):
+            out2 = model_inf(xb2, training=False)
+            s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
+            s_pred_list.append(s2)
+
+        if not s_pred_list:
+            raise RuntimeError("No batches collected for point preds (censor-MAE).")
+
+        s_med = tf.concat(s_pred_list, axis=0)  # (N,H,1) scaled/model space
 
     # Convert both y_true and s_med to physical units using Stage-1 scaler_info
     y_true_phys_np = inverse_scale_target(
@@ -2087,13 +2176,13 @@ if (y_true is not None) and (mask is not None):
     )
 
     y_true_phys = tf.convert_to_tensor(y_true_phys_np, dtype=tf.float32)
-    s_med_phys  = tf.convert_to_tensor(s_med_phys_np, dtype=tf.float32)
+    s_med_phys  = tf.convert_to_tensor(s_med_phys_np,  dtype=tf.float32)
 
-    mask_f = tf.cast(mask, tf.float32)                       # (N, H, 1)
+    mask_f = tf.cast(mask, tf.float32)  # (N,H,1)
     num_cens = tf.reduce_sum(mask_f) + 1e-8
     num_unc  = tf.reduce_sum(1.0 - mask_f) + 1e-8
 
-    abs_err = tf.abs(y_true_phys - s_med_phys)               # physical units
+    abs_err = tf.abs(y_true_phys - s_med_phys)
     mae_cens = tf.reduce_sum(abs_err * mask_f) / num_cens
     mae_unc  = tf.reduce_sum(abs_err * (1.0 - mask_f)) / num_unc
 
@@ -2104,62 +2193,55 @@ if (y_true is not None) and (mask is not None):
         "mae_uncensored": float(mae_unc.numpy()),
     }
 
-    print(f"[CENSOR] MAE censored={censor_metrics['mae_censored']:.4f} | "
-          f"uncensored={censor_metrics['mae_uncensored']:.4f}")
+    print(
+        f"[CENSOR] MAE censored={censor_metrics['mae_censored']:.4f} | "
+        f"uncensored={censor_metrics['mae_uncensored']:.4f}"
+    )
 
 
 # --- 2.4 Point metrics (MAE/MSE/R²), overall + per-horizon -------------
-
 metrics_point = {}
 per_h_mae_dict, per_h_r2_dict = None, None
 
-if (y_true is not None):
+if y_true is not None:
+
     if QUANTILES and (s_q is not None):
         # median index
-        med_idx = int(np.argmin(np.abs(np.asarray(QUANTILES) - 0.5)))
-        s_med_uncal = s_q[..., med_idx, :]           # (N,H,1)
+        med_idx = _med_idx
+        s_med_uncal = s_q[..., med_idx, :]  # (N,H,1)
 
         # Prefer calibrated median if available
-        if s_q_cal is not None:
-            s_med_cal = s_q_cal[..., med_idx, :]     # (N,H,1)
-            metrics_point = point_metrics(
-                y_true,
-                s_med_cal,
-                use_physical=True,
-                scaler_info=scaler_info_dict,
-                target_name=SUBSIDENCE_COL,
-            )
-            per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
-                y_true,
-                s_med_cal,
-                use_physical=True,
-                scaler_info=scaler_info_dict,
-                target_name=SUBSIDENCE_COL,
-            )
-        else:
-            metrics_point = point_metrics(
-                y_true,
-                s_med_uncal,
-                use_physical=True,
-                scaler_info=scaler_info_dict,
-                target_name=SUBSIDENCE_COL,
-            )
-            per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
-                y_true,
-                s_med_uncal,
-                use_physical=True,
-                scaler_info=scaler_info_dict,
-                target_name=SUBSIDENCE_COL,
-            )
+        s_used = (s_q_cal[..., med_idx, :] if (s_q_cal is not None) else s_med_uncal)
+
+        metrics_point = point_metrics(
+            y_true,
+            s_used,
+            use_physical=True,
+            scaler_info=scaler_info_dict,
+            target_name=SUBSIDENCE_COL,
+        )
+        per_h_mae_dict, per_h_r2_dict = per_horizon_metrics(
+            y_true,
+            s_used,
+            use_physical=True,
+            scaler_info=scaler_info_dict,
+            target_name=SUBSIDENCE_COL,
+        )
 
     else:
-        # point-forecast branch
-        if s_med is None:
+        # point-forecast branch: we need predictions (N,H,1)
+        # If you already computed s_med in the censor block above, you can reuse it.
+        if "s_med" not in locals() or s_med is None:
             s_pred_list = []
             for xb2, _ in with_progress(ds_eval, desc="Point-forecast Diagnostics"):
-                out2 = subs_model_inst(xb2, training=False)
-                s_pred_list.append(out2["data_final"][..., :OUT_S_DIM])  # (B,H,1)
-            s_med = tf.concat(s_pred_list, axis=0)
+                out2 = model_inf(xb2, training=False)
+                s2 = subs_point_from_out(model_inf, out2, QUANTILES, _med_idx)  # (B,H,1)
+                s_pred_list.append(s2)
+
+            if not s_pred_list:
+                raise RuntimeError("No batches collected for point-forecast diagnostics.")
+
+            s_med = tf.concat(s_pred_list, axis=0)  # (N,H,1) scaled/model space
 
         metrics_point = point_metrics(
             y_true,
@@ -2175,6 +2257,7 @@ if (y_true is not None):
             scaler_info=scaler_info_dict,
             target_name=SUBSIDENCE_COL,
         )
+
 
 # Normalize coverage/sharpness choices for ablation record (prefer calibrated)
 coverage80_for_abl = (

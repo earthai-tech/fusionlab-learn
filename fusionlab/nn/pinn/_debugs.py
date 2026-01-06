@@ -17,8 +17,8 @@ import numpy as np
 
 from .. import KERAS_DEPS
 
-from ._geoprior_utils import _vshape, _vshapes
-from ._geoprior_maths import (
+from ._prior_utils import _vshape, _vshapes
+from ._prior_maths import (
     tf_print_nonfinite,
     _assert_grads_finite,
     resolve_cons_units,

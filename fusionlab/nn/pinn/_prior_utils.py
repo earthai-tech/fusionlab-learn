@@ -1419,3 +1419,42 @@ def tile_true_to_quantiles(y_true, y_pred):
         qn = tf_shape(y_pred)[2]
         return tf_tile(y4, [1, 1, qn, 1])
     return y_true
+
+# def _align_true_for_loss(yt, yp):
+#     # If y_true is already tiled (B,H,Q,O), reduce it to (B,H,O).
+#     # Pinball will broadcast over Q internally.
+#     if yt.shape.rank == 4:
+#         return yt[:, :, 0, :]
+#     return yt
+
+def _align_true_for_loss(y_true, y_pred):
+    """
+    Align y_true to y_pred for quantile-aware losses/metrics.
+
+    Never tiles y_true across Q. Only reduces y_true if it accidentally
+    arrives with a quantile axis.
+    """
+    y_true = tf_convert_to_tensor(y_true)
+    y_pred = tf_convert_to_tensor(y_pred)
+
+    # (B,H) -> (B,H,1)
+    if y_true.shape.rank == 2:
+        y_true = tf_expand_dims(y_true, axis=-1)
+
+    rt = y_true.shape.rank
+    rp = y_pred.shape.rank
+
+    # (B,H,Q,O) -> (B,H,O)
+    if rt == 4:
+        return y_true[:, :, 0, :]
+
+    # (B,H,Q) -> (B,H,1)  (rare but happens if upstream tiled targets)
+    if rt == 3 and rp in (3, 4):
+        if rp == 4:
+            q_dim = y_pred.shape[2]
+            if (q_dim is None) or (y_true.shape[-1] == q_dim):
+                return tf_expand_dims(y_true[:, :, 0], axis=-1)
+        else:
+            return tf_expand_dims(y_true[:, :, 0], axis=-1)
+
+    return y_true

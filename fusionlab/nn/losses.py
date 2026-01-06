@@ -41,6 +41,8 @@ tf_zeros_like=KERAS_DEPS.zeros_like
 tf_constant = KERAS_DEPS.constant 
 tf_float32 = KERAS_DEPS.float32 
 tf_reduce_sum = KERAS_DEPS.reduce_sum
+tf_gather = KERAS_DEPS.gather 
+
 register_keras_serializable=KERAS_DEPS.register_keras_serializable
     
 DEP_MSG = dependency_message('nn.losses') 
@@ -175,8 +177,13 @@ def make_weighted_pinball(qs, weights):
         y_true = tf_convert_to_tensor(y_true)
         y_pred = tf_convert_to_tensor(y_pred)
 
+        # If someone accidentally passed (B,H,Q,O) targets, drop Q.
+        if y_true.shape.rank == 4:
+            y_true = tf_gather(y_true, 0, axis=2)   # -> (B,H,O)
+    
         # y_true -> (B,H,1)
         ytrue_rank = tf_rank(y_true)
+        
         y_true_3 = tf_cond(
             tf_equal(ytrue_rank, 2),
             lambda: tf_expand_dims(y_true, axis=-1),  # (B,H)->(B,H,1)

@@ -4,9 +4,15 @@
 
 from __future__ import annotations
 
+from . import KERAS_DEPS, dependency_message
+from ._shapes import (
+    _as_BHO,
+    _as_BHO_like_pred,
+    _weighted_sum_and_count,
+)
+
 import numpy as np 
 
-from . import KERAS_DEPS, dependency_message
 
 Layer = KERAS_DEPS.Layer
 Loss = KERAS_DEPS.Loss
@@ -26,10 +32,390 @@ tf_shape = KERAS_DEPS.shape
 tf_expand_dims = KERAS_DEPS.expand_dims
 tf_broadcast_to = KERAS_DEPS.broadcast_to
 tf_shape = KERAS_DEPS.shape
+tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
+tf_math = KERAS_DEPS.math 
+tf_broadcast_to = KERAS_DEPS.broadcast_to
+tf_abs = KERAS_DEPS.abs 
+tf_debugging = KERAS_DEPS.debugging 
+tf_rank = KERAS_DEPS.rank 
+tf_print = KERAS_DEPS.print 
+
 register_keras_serializable=KERAS_DEPS.register_keras_serializable
+
 
 DEP_MSG = dependency_message("nn.keras_metrics")
 
+__all__ = [
+    "MAEQ50",
+    "MSEQ50",
+    "Coverage80",
+    "Sharpness80",
+]
+
+
+# ---------------------------------------------------------------------
+# Dev note:
+# These are **Metric classes** (not metric functions).
+# They accumulate scalar means via (total / count).
+# Each metric is shape-safe for:
+#   - (B,H) targets
+#   - (B,H,1) targets
+#   - (B,H,Q) quantile preds
+#   - (B,H,Q,O) quantile preds
+#   - packed intervals (...,2)
+# They also tolerate accidental y_true tiling (B,H,Q,O).
+# ---------------------------------------------------------------------
+
+def _ensure_pred_tensor(y_pred):
+    if isinstance(y_pred, (list, tuple)):
+        raise TypeError(
+            "This metric expects a single output tensor, but got a "
+            "list/tuple (multi-output bundle). Pass y_pred per-output."
+        )
+    return tf_convert_to_tensor(y_pred)
+
+def _infer_quantile_axis(t, n_q: int = 3):
+    """Infer Q axis (static, conservative)."""
+    shape = getattr(t, "shape", None)
+    rank = getattr(shape, "rank", None)
+
+    if rank is None:
+        return None
+
+    # Canonical layouts used in FusionLab:
+    #   (B,H,Q,O) -> axis=2
+    #   (B,H,O,Q) -> axis=3
+    if rank == 4:
+        if shape[2] == n_q:
+            return 2
+        if shape[3] == n_q:
+            return 3
+        return None
+
+    # Rank-3: only accept (B,H,Q) on last axis.
+    if rank == 3:
+        return 2 if shape[2] == n_q else None
+
+    return None
+
+
+def _extract_q50(
+    y_pred,
+    *,
+    n_q: int = 3,
+    q_axis_default: int = 2,
+):
+    """Return q50 as (B,H,O) or (B,H,1)."""
+    yp = _ensure_pred_tensor(y_pred)
+
+    qax = _infer_quantile_axis(yp, n_q=n_q)
+
+    # Dev note:
+    # If rank-4 but Q axis is dynamic/unknown, we still
+    # assume canonical (B,H,Q,O) in this codebase.
+    if qax is None and yp.shape.rank == 4:
+        qax = int(q_axis_default)
+
+    # Quantile layout -> gather q50 at index=1.
+    if qax is not None:
+        yp50 = tf_gather(yp, 1, axis=qax)
+        return _as_BHO_like_pred(yp50)
+
+    # Packed interval (...,2) -> midpoint.
+    if (yp.shape.rank is not None) and (yp.shape[-1] == 2):
+        mid = 0.5 * (yp[..., 0] + yp[..., 1])
+        return _as_BHO_like_pred(mid)
+
+    # Fallback: treat as point forecast.
+    return _as_BHO_like_pred(yp)
+
+
+def _extract_lo_hi(
+    y_pred,
+    *,
+    n_q: int = 3,
+    q_axis_default: int = 2,
+):
+    """Return (lo, hi) as BHO-like tensors."""
+    yp = _ensure_pred_tensor(y_pred)
+
+    qax = _infer_quantile_axis(yp, n_q=n_q)
+
+    if qax is None and yp.shape.rank == 4:
+        qax = int(q_axis_default)
+
+    # Quantiles: (q10,q50,q90) => indices (0,2).
+    if qax is not None:
+        lo = tf_gather(yp, 0, axis=qax)
+        hi = tf_gather(yp, n_q - 1, axis=qax)
+        return _as_BHO_like_pred(lo), _as_BHO_like_pred(hi)
+
+    # Packed interval (...,2)
+    if (yp.shape.rank is not None) and (yp.shape[-1] == 2):
+        lo = _as_BHO_like_pred(yp[..., 0])
+        hi = _as_BHO_like_pred(yp[..., 1])
+        return lo, hi
+
+    raise ValueError(
+        "Cannot extract interval: expected quantiles"
+        " (len=3) or packed (...,2)."
+    )
+
+
+class _BaseScalarMetric(Metric):
+    """Scalar mean accumulator: total / count."""
+
+    def __init__(self, name, dtype=tf_float32, **kwargs):
+        super().__init__(name=name, dtype=dtype, **kwargs)
+
+        self.total = self.add_weight(
+            name="total",
+            initializer="zeros",
+            dtype=tf_float32,
+        )
+        self.count = self.add_weight(
+            name="count",
+            initializer="zeros",
+            dtype=tf_float32,
+        )
+
+    def reset_state(self):
+        self.total.assign(0.0)
+        self.count.assign(0.0)
+
+    def result(self):
+        return tf_math.divide_no_nan(self.total, self.count)
+
+
+@register_keras_serializable("fusionlab.nn.keras_metrics")
+class MAEQ50(_BaseScalarMetric):
+    """MAE on q50 point forecast."""
+
+    def __init__(
+        self,
+        name: str = "mae_q50",
+        q_axis: int = 2,
+        n_q: int = 3,
+        **kwargs,
+    ):
+        super().__init__(name=name, **kwargs)
+        self.q_axis = int(q_axis)
+        self.n_q = int(n_q)
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        if isinstance(y_pred, (list, tuple, dict)):
+            raise TypeError(
+                "Quantile metrics expect a single output tensor (B,H,Q,O), "
+                "but received a multi-output container. "
+                "Update metrics per-output (do not pass [subs_pred, gwl_pred])."
+            )
+            
+        yp = _ensure_pred_tensor(y_pred)
+        tf_debugging.assert_less_equal(
+            tf_rank(yp),
+            4,
+            message="MAEQ50 received rank>4 prediction. "
+                    "This usually means outputs were stacked"
+                    " (e.g. list passed to update_state)."
+        )
+        y = _as_BHO(y_true, y_pred=y_pred)
+
+        yp50 = _extract_q50(
+            y_pred,
+            n_q=self.n_q,
+            q_axis_default=self.q_axis,
+        )
+        yp50 = tf_broadcast_to(yp50, tf_shape(y))
+ 
+        vals = tf_abs(y - yp50)
+
+        s, c = _weighted_sum_and_count(
+            vals,
+            sample_weight=sample_weight,
+        )
+        self.total.assign_add(s)
+        self.count.assign_add(c)
+
+    def get_config(self):
+        cfg = super().get_config()
+        cfg.update(
+            {
+                "q_axis": self.q_axis,
+                "n_q": self.n_q,
+            }
+        )
+        return cfg
+
+
+@register_keras_serializable("fusionlab.nn.keras_metrics")
+class MSEQ50(_BaseScalarMetric):
+    """MSE on q50 point forecast."""
+
+    def __init__(
+        self,
+        name: str = "mse_q50",
+        q_axis: int = 2,
+        n_q: int = 3,
+        **kwargs,
+    ):
+        super().__init__(name=name, **kwargs)
+        self.q_axis = int(q_axis)
+        self.n_q = int(n_q)
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        if isinstance(y_pred, (list, tuple, dict)):
+            raise TypeError(
+                "Quantile metrics expect a single output tensor (B,H,Q,O), "
+                "but received a multi-output container. "
+                "Update metrics per-output (do not pass [subs_pred, gwl_pred])."
+            )
+
+        yp = _ensure_pred_tensor(y_pred)
+        tf_debugging.assert_less_equal(
+            tf_rank(yp),
+            4,
+            message="MSEQ50 received rank>4 prediction. "
+                    "This usually means outputs were stacked"
+                    " (e.g. list passed to update_state)."
+        )
+        y = _as_BHO(y_true, y_pred=y_pred)
+
+        yp50 = _extract_q50(
+            y_pred,
+            n_q=self.n_q,
+            q_axis_default=self.q_axis,
+        )
+        
+        yp50 = tf_broadcast_to(yp50, tf_shape(y))
+
+        d = y - yp50
+        vals = d * d
+
+        s, c = _weighted_sum_and_count(
+            vals,
+            sample_weight=sample_weight,
+        )
+        self.total.assign_add(s)
+        self.count.assign_add(c)
+
+    def get_config(self):
+        cfg = super().get_config()
+        cfg.update(
+            {
+                "q_axis": self.q_axis,
+                "n_q": self.n_q,
+            }
+        )
+        return cfg
+
+
+@register_keras_serializable("fusionlab.nn.keras_metrics")
+class Coverage80(_BaseScalarMetric):
+    """Empirical coverage of q10..q90 interval."""
+
+    def __init__(
+        self,
+        name: str = "coverage80",
+        q_axis: int = 2,
+        n_q: int = 3,
+        **kwargs,
+    ):
+        super().__init__(name=name, **kwargs)
+        self.q_axis = int(q_axis)
+        self.n_q = int(n_q)
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        if isinstance(y_pred, (list, tuple, dict)):
+            raise TypeError(
+                "Quantile metrics expect a single output tensor (B,H,Q,O), "
+                "but received a multi-output container. "
+                "Update metrics per-output (do not pass [subs_pred, gwl_pred])."
+            )
+            
+        y = _as_BHO(y_true, y_pred=y_pred)
+
+        lo, hi = _extract_lo_hi(
+            y_pred,
+            n_q=self.n_q,
+            q_axis_default=self.q_axis,
+        )
+
+        lo = tf_broadcast_to(lo, tf_shape(y))
+        hi = tf_broadcast_to(hi, tf_shape(y))
+
+        hit = tf_cast((y >= lo) & (y <= hi), tf_float32)
+
+        s, c = _weighted_sum_and_count(
+            hit,
+            sample_weight=sample_weight,
+        )
+        self.total.assign_add(s)
+        self.count.assign_add(c)
+
+    def get_config(self):
+        cfg = super().get_config()
+        cfg.update(
+            {
+                "q_axis": self.q_axis,
+                "n_q": self.n_q,
+            }
+        )
+        return cfg
+
+
+@register_keras_serializable("fusionlab.nn.keras_metrics")
+class Sharpness80(_BaseScalarMetric):
+    """Mean width of q10..q90 interval."""
+
+    def __init__(
+        self,
+        name: str = "sharpness80",
+        q_axis: int = 2,
+        n_q: int = 3,
+        **kwargs,
+    ):
+        super().__init__(name=name, **kwargs)
+        self.q_axis = int(q_axis)
+        self.n_q = int(n_q)
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        if isinstance(y_pred, (list, tuple, dict)):
+            raise TypeError(
+                "Quantile metrics expect a single output tensor (B,H,Q,O), "
+                "but received a multi-output container. "
+                "Update metrics per-output (do not pass [subs_pred, gwl_pred])."
+            )
+            
+        # Dev note: y_true only used for target shape.
+        y = _as_BHO(y_true, y_pred=y_pred)
+
+        lo, hi = _extract_lo_hi(
+            y_pred,
+            n_q=self.n_q,
+            q_axis_default=self.q_axis,
+        )
+
+        lo = tf_broadcast_to(lo, tf_shape(y))
+        hi = tf_broadcast_to(hi, tf_shape(y))
+
+        width = tf_abs(hi - lo)
+
+        s, c = _weighted_sum_and_count(
+            width,
+            sample_weight=sample_weight,
+        )
+        self.total.assign_add(s)
+        self.count.assign_add(c)
+
+    def get_config(self):
+        cfg = super().get_config()
+        cfg.update(
+            {
+                "q_axis": self.q_axis,
+                "n_q": self.n_q,
+            }
+        )
+        return cfg
 
 def _normalize_index(idx, dim):
     # idx can be python int; dim can be python int or a scalar tensor
@@ -42,19 +428,24 @@ def _normalize_index(idx, dim):
         return dim + idx
     return idx
 
-def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
-    r"""
-    Return (lo, hi) for coverage/sharpness.
-
-    - If y_pred_interval is (lo, hi) or has last-dim==2 → use that.
-    - If q_axis is not None → treat that axis as quantile axis and select
-      lo_index/hi_index (defaults 0 and -1 for [0.1,0.5,0.9]).
+def _q_gather(y_pred, idx, q_axis):
     """
+    Gather quantile index along q_axis, returning point tensor (B,H,O) or (B,H,1).
+    """
+    yp = tf_convert_to_tensor(y_pred)
+    if q_axis is None:
+        return yp
+    out = tf_gather(yp, idx, axis=q_axis)
+    return out
+
+
+def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
     if isinstance(y_pred_interval, (list, tuple)):
         lo, hi = y_pred_interval[0], y_pred_interval[1]
         return lo, hi
 
     t = y_pred_interval
+
     if q_axis is not None:
         qdim_static = t.shape[q_axis]
         qdim = qdim_static if qdim_static is not None else tf_shape(t)[q_axis]
@@ -64,10 +455,20 @@ def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
         hi = tf_gather(t, hi_idx, axis=q_axis)
         return lo, hi
 
-    # fallback: assume last dim packs (lo, hi)
-    lo, hi = t[..., 0], t[..., 1]
-    return lo, hi
-
+    # packed interval mode must be (..., 2)
+    if t.shape.rank is not None:
+        if t.shape[-1] not in (2, None):
+            raise ValueError(
+                f"Expected packed interval with last dim == 2, got shape={t.shape}. "
+                "If this is quantiles, pass q_axis (and indices) instead."
+            )
+        if t.shape[-1] is None:
+            # runtime assert for dynamic last dim
+            KERAS_DEPS.debugging.assert_equal(
+                tf_shape(t)[-1], 2,
+                message="Packed interval requires last dim == 2."
+            )
+    return t[..., 0], t[..., 1]
 
 class CentralCoverage(Metric):
     r"""
@@ -286,18 +687,20 @@ def _to_py(x):
         except Exception:
             return str(x)
     
-
-def _infer_quantile_axis(t, n_q=3):
-    """Pick an axis that (statically) looks like the quantile axis."""
-    stat = t.shape
-    cand = [i for i, d in enumerate(stat) if d == n_q]
-    if cand:
-        return cand[-1]  # prefer the last matching axis
-    # Fallback: assume last dim packs (lo, hi) or (… , n_q) at runtime
-    # If we follow the convention (B,H,Q,O), force Q-axis=2 for rank-4
-    if getattr(t, "shape", None) is not None and t.shape.rank == 4:
-        return 2
+def infer_quantile_axis(t, n_q=3):
+    r = getattr(t.shape, "rank", None)
+    if r == 4:
+        return 2  # force (B,H,Q,O)
+    if r == 3:
+        # common packed quantiles (B,H,Q)
+        if t.shape[-1] == n_q:
+            return -1
+        # fallback: last axis that equals n_q
+        stat = t.shape
+        cand = [i for i, d in enumerate(stat) if d == n_q]
+        return cand[-1] if cand else None
     return None
+
 
 @register_keras_serializable(
     "fusionlab.nn.keras_metrics",name="coverage80_fn"
@@ -733,3 +1136,119 @@ def mse_q50_fn(y_true, y_pred):
 
 mse_q50_fn.__name__ = "mse_q50"
 
+def make_mae_for_quantile(q, quantiles, q_axis=None):
+    qs = list(map(float, quantiles))
+    if q not in qs:
+        raise ValueError(f"q={q} not in quantiles={qs}")
+    q_idx = qs.index(q)
+
+    def fn(y_true, y_pred):
+        ax = q_axis
+        if ax is None:
+            ax = _infer_quantile_axis(y_pred, n_q=len(qs))
+        if ax is None:
+            # packed interval fallback if (...,2)
+            if y_pred.shape.rank is not None and y_pred.shape[-1] == 2 and q == 0.5:
+                yp = 0.5 * (y_pred[..., 0] + y_pred[..., 1])
+            else:
+                raise ValueError("Cannot locate quantile axis for MAE.")
+        else:
+            yp = tf_gather(y_pred, q_idx, axis=ax)
+
+        y = tf_cast(y_true, tf_float32)
+        yp = tf_cast(yp, tf_float32)
+        if y.shape.rank is not None and yp.shape.rank is not None and y.shape.rank == yp.shape.rank + 1:
+            yp = tf_expand_dims(yp, -1)
+        yp = tf_broadcast_to(yp, tf_shape(y))
+        return tf_reduce_mean(tf_abs(y - yp))
+
+    fn.__name__ = f"mae_q{q:g}"
+    return fn
+
+
+# def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
+#     r"""
+#     Return (lo, hi) for coverage/sharpness.
+
+#     - If y_pred_interval is (lo, hi) or has last-dim==2 → use that.
+#     - If q_axis is not None → treat that axis as quantile axis and select
+#       lo_index/hi_index (defaults 0 and -1 for [0.1,0.5,0.9]).
+#     """
+#     if isinstance(y_pred_interval, (list, tuple)):
+#         lo, hi = y_pred_interval[0], y_pred_interval[1]
+#         return lo, hi
+
+#     t = y_pred_interval
+#     if q_axis is not None:
+#         qdim_static = t.shape[q_axis]
+#         qdim = qdim_static if qdim_static is not None else tf_shape(t)[q_axis]
+#         lo_idx = _normalize_index(lo_index, qdim)
+#         hi_idx = _normalize_index(hi_index, qdim)
+#         lo = tf_gather(t, lo_idx, axis=q_axis)
+#         hi = tf_gather(t, hi_idx, axis=q_axis)
+#         return lo, hi
+
+#     # fallback: assume last dim packs (lo, hi)
+#     lo, hi = t[..., 0], t[..., 1]
+#     return lo, hi
+
+# def __infer_quantile_axis(t, n_q=3):
+#     """
+#     Infer quantile axis of length n_q.
+
+#     Conservative rules:
+#     - Rank-4: prefer axis 2 (B,H,Q,O), else axis 3 (B,H,O,Q)
+#     - Rank-3: only accept last axis (B,H,Q)
+#     - Never infer axis=1 (horizon) to avoid H==n_q false positives.
+#     """
+#     shape = getattr(t, "shape", None)
+#     if shape is None:
+#         return None
+
+#     rank = shape.rank
+#     if rank is None:
+#         return None
+
+#     dims = list(shape)
+
+#     # Canonical layouts
+#     if rank == 4:
+#         if dims[2] == n_q:
+#             return 2
+#         if dims[3] == n_q:
+#             return 3
+#         return None
+
+#     if rank == 3:
+#         # Only accept (B,H,Q) to avoid H==n_q confusion in (B,H,O)
+#         return 2 if dims[2] == n_q else None
+
+#     # Fallback: only consider "non-batch, non-horizon" axes if they exist
+#     cand = [i for i, d in enumerate(dims) if d == n_q and i not in (0, 1)]
+#     if len(cand) == 1:
+#         return cand[0]
+
+#     return None
+
+# def _split_interval(y_pred_interval, *, q_axis=None, lo_index=0, hi_index=-1):
+#     if isinstance(y_pred_interval, (list, tuple)):
+#         return y_pred_interval[0], y_pred_interval[1]
+
+#     t = y_pred_interval
+#     if q_axis is not None:
+#         qdim_static = t.shape[q_axis]
+#         qdim = qdim_static if qdim_static is not None else tf_shape(t)[q_axis]
+#         lo_idx = _normalize_index(lo_index, qdim)
+#         hi_idx = _normalize_index(hi_index, qdim)
+#         return tf_gather(t, lo_idx, axis=q_axis), tf_gather(t, hi_idx, axis=q_axis)
+
+#     # packed interval MUST be (...,2)
+#     if t.shape.rank is not None and t.shape[-1] not in (2, None):
+#         raise ValueError(
+#             f"Packed interval requires last dim == 2. Got y_pred shape={t.shape}. "
+#             "If this is quantiles, pass q_axis."
+#         )
+#     if t.shape.rank is not None and t.shape[-1] is None:
+#         KERAS_DEPS.debugging.assert_equal(tf_shape(t)[-1], 2)
+
+#     return t[..., 0], t[..., 1]

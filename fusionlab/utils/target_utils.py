@@ -224,8 +224,9 @@ def _canonicalize_targets(targets):
     if isinstance(targets, Mapping):
         tgt = dict(targets)
         # already canonical?
-        if ("subs_pred" in tgt) or ("gwl_pred" in tgt):
+        if ("subs_pred" in tgt) and ("gwl_pred" in tgt):
             return tgt
+
         return rename_dict_keys(
             tgt,
             param_to_rename={"subsidence": "subs_pred", "gwl": "gwl_pred"},

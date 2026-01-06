@@ -21,10 +21,7 @@ from ...params import (
 
 from .. import KERAS_BACKEND, KERAS_DEPS, dependency_message 
 from .._base_attentive import BaseAttentive
-from ..keras_metrics import (
-    mae_q50_fn, mse_q50_fn, 
-    coverage80_fn, sharpness80_fn
-)
+from ..custom_metrics import GeoPriorTrackers
 
 if KERAS_BACKEND:
     from .._tensor_validation import check_inputs, validate_model_inputs
@@ -37,7 +34,7 @@ if KERAS_BACKEND:
         gather_physics_payload
     ) 
     from .op import process_pinn_inputs
-    from ._geoprior_maths import (
+    from ._prior_maths import (
         _EPSILON, 
         LogClipConstraint, 
         compute_mv_prior, 
@@ -63,8 +60,7 @@ if KERAS_BACKEND:
         resolve_auto_scale_floor
         
     )
-
-    from ._geoprior_utils import (
+    from ._prior_utils import (
         to_si_thickness,
         to_si_head,
         deg_to_m,
@@ -81,9 +77,10 @@ if KERAS_BACKEND:
         from_si_subsidence, 
         get_sk,
         policy_gate,
+        _align_true_for_loss
 
     )
-    from ._geoprior_losses import (
+    from ._prior_losses import (
         assemble_physics_loss,
         build_physics_bundle,
         pack_step_results,
@@ -283,6 +280,8 @@ class GeoPriorSubsNet(BaseAttentive):
         **kwargs
     ):
         
+        self._output_keys = list(self.OUTPUT_KEYS)
+        
         self.output_subsidence_dim = output_subsidence_dim
         self.output_gwl_dim = output_gwl_dim
         self._data_output_dim = (
@@ -324,8 +323,8 @@ class GeoPriorSubsNet(BaseAttentive):
         if isinstance(b, Mapping) and not isinstance(b, dict):
             self.scaling_kwargs["bounds"] = dict(b)
         
-        self._track_add_on_metrics = get_sk(
-            self.scaling_kwargs, "track_add_on_metrics", default=True
+        self._track_aux_metrics = get_sk(
+            self.scaling_kwargs, "track_aux_metrics", default=True
             )
 
         # Canonicalize missing canonical keys from aliases.
@@ -406,8 +405,6 @@ class GeoPriorSubsNet(BaseAttentive):
             **kwargs
         )
         
-        self._output_keys = list(self.OUTPUT_KEYS)
-        
         self.pde_modes_active = process_pde_modes(pde_mode)
         self.scale_pde_residuals = bool(scale_pde_residuals)
 
@@ -469,66 +466,66 @@ class GeoPriorSubsNet(BaseAttentive):
             f" kappa_trainable={kappa.trainable}"
         )
         
-        self.custom_trackers = {}
+        self.add_on = None
         
-        if self._track_add_on_metrics:
-            self._build_manual_trackers()
+        if self._track_aux_metrics:
+            self.add_on = GeoPriorTrackers(
+                quantiles=bool(self.quantiles),
+                subs_key="subs_pred",
+                gwl_key="gwl_pred",
+                q_axis=2,
+                n_q=3,
+            )
+
             
         self._init_coordinate_corrections()
         self._build_pinn_components()
 
-
-    def _build_manual_trackers(self):
-        """Create internal Mean metrics for explicit logging."""
-        # We use Mean() because we will calculate the scalar value 
-        # (e.g. coverage) per batch and just ask Keras to average it.
-        MetricMean = Mean
-        
-        # Subsidence metrics
-        self.custom_trackers["subs_mae"] = MetricMean(name="subs_mae")
-        self.custom_trackers["subs_mse"] = MetricMean(name="subs_mse")
-        
-        if self.quantiles:
-            self.custom_trackers["subs_cov80"] = MetricMean(name="subs_cov80")
-            self.custom_trackers["subs_sharp80"] = MetricMean(name="subs_sharp80")
-            
-        # GWL metrics
-        self.custom_trackers["gwl_mae"] = MetricMean(name="gwl_mae")
-        self.custom_trackers["gwl_mse"] = MetricMean(name="gwl_mse")
-
-    def _update_manual_trackers(self, targets, y_pred):
-        """Manually calculate and update the trackers."""
-        if not self._track_add_on_metrics:
-            return
-
-        # --- 1. Subsidence ---
-        yt_s = targets.get("subs_pred")
-        yp_s = y_pred.get("subs_pred")
-        
-        if yt_s is not None and yp_s is not None:
-            # Point metrics (uses q50 if quantiles present)
-            mae_val = mae_q50_fn(yt_s, yp_s)
-            mse_val = mse_q50_fn(yt_s, yp_s)
-            self.custom_trackers["subs_mae"].update_state(mae_val)
-            self.custom_trackers["subs_mse"].update_state(mse_val)
-            
-            # Interval metrics
-            if self.quantiles and "subs_cov80" in self.custom_trackers:
-                cov_val = coverage80_fn(yt_s, yp_s)
-                shp_val = sharpness80_fn(yt_s, yp_s)
-                self.custom_trackers["subs_cov80"].update_state(cov_val)
-                self.custom_trackers["subs_sharp80"].update_state(shp_val)
-
-        # --- 2. GWL ---
-        yt_g = targets.get("gwl_pred")
-        yp_g = y_pred.get("gwl_pred")
-        
-        if yt_g is not None and yp_g is not None:
-            mae_val = mae_q50_fn(yt_g, yp_g)
-            mse_val = mse_q50_fn(yt_g, yp_g)
-            self.custom_trackers["gwl_mae"].update_state(mae_val)
-            self.custom_trackers["gwl_mse"].update_state(mse_val)
+    @property
+    def output_names(self):
+        # Used by Keras containers as “the output order”
+        return list(self._output_keys)
     
+    @property
+    def _output_keys(self):
+        return self.__output_keys
+
+    @_output_keys.setter
+    def _output_keys(self, v):
+        self.__output_keys = list(v)
+       
+    def _order_by_output_keys(self, d: dict) -> OrderedDict:
+        return OrderedDict(
+            (k, d[k])
+            for k in self._output_keys
+            if (k in d and d[k] is not None)
+        )
+
+    @property
+    def metrics(self):
+        base = super().metrics
+        extras = []
+    
+        for m in (
+            getattr(self, "eps_prior_metric", None),
+            getattr(self, "eps_cons_metric", None),
+            getattr(self, "eps_gw_metric", None),
+        ):
+            if m is not None:
+                extras.append(m)
+    
+        if getattr(self, "add_on", None) is not None:
+            extras.extend(self.add_on.metrics)
+    
+        seen = set()
+        out = []
+        for m in list(base) + list(extras):
+            if id(m) not in seen:
+                out.append(m)
+                seen.add(id(m))
+        return out
+
+
     def _assert_dynamic_names_match_tensor(self, Xh):
         sk = self.scaling_kwargs or {}
         names = sk.get("dynamic_feature_names", None)
@@ -1007,26 +1004,6 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return data_features_2d, phys_features_raw_3d
 
-    # Keras 3: make multi-output routing deterministic for compiled metrics
-    # @property
-    # def output_names(self):
-    #     # Used by Keras containers as “the output order”
-    #     return list(self._output_keys)
-
-    @property
-    def _output_keys(self):
-        return self.__output_keys
-
-    @_output_keys.setter
-    def _output_keys(self, v):
-        self.__output_keys = list(v)
-       
-    def _order_by_output_keys(self, d: dict) -> OrderedDict:
-        return OrderedDict(
-            (k, d[k])
-            for k in self._output_keys
-            if (k in d and d[k] is not None)
-        )
 
     # @tf_autograph.experimental.do_not_convert
     def call(self,
@@ -1277,6 +1254,7 @@ class GeoPriorSubsNet(BaseAttentive):
         # Split into the supervised heads
         s_pred_final, gwl_pred_final = self.split_data_predictions(data_final)
         
+        # y_pred = { "subs_pred": s_pred_final, "gwl_pred": gwl_pred_final}
         y_pred_raw = {
             "gwl_pred": gwl_pred_final,
             "subs_pred": s_pred_final,
@@ -1317,6 +1295,7 @@ class GeoPriorSubsNet(BaseAttentive):
         # ----------------------------------------------------------
         inputs, targets = data
         targets = self._order_by_output_keys(_canonicalize_targets(targets))
+        targets = {k: targets[k] for k in self.output_names}
 
         dbg_step0_inputs_targets(
             verbose=self.verbose,
@@ -1404,18 +1383,23 @@ class GeoPriorSubsNet(BaseAttentive):
                 s_pred_final=s_pred_final,
                 quantiles=self.quantiles,
             )
-
-            # Supervised data loss (pinball, MSE, etc. defined at compile-time)
-            # XXX TOFIX 
+            
+            # Force plain python dicts (avoid wrapper weirdness)
+            y_pred = {k: y_pred[k] for k in self.output_names}
+            targets_aligned = {
+                k: _align_true_for_loss(targets[k], y_pred[k])
+                for k in self.output_names
+            }
+            
+            # Always call compiled_loss with ordered lists (stable)
+            yt_list = [targets_aligned[k] for k in self.output_names]
+            yp_list = [y_pred[k] for k in self.output_names]
+            
             data_loss = self.compiled_loss(
-                [targets['subs_pred'], targets['gwl_pred']], 
-                [ y_pred['subs_pred'], y_pred['gwl_pred']],
+                yt_list, yp_list,
                 regularization_losses=self.losses,
             )
-            
-            # # Supervised data loss (pinball, MSE, etc. defined at compile-time)
-            # data_loss, _out_losses = self._safe_compiled_data_loss(targets, y_pred)
-            
+
             # ------------------------------------------------------
             # 3.2 Mean head for physics
             # ------------------------------------------------------
@@ -2132,8 +2116,10 @@ class GeoPriorSubsNet(BaseAttentive):
         self.optimizer.apply_gradients(
             self._scale_param_grads(grads, trainable_vars)
         )
+        
+        if self.add_on is not None:
+            self.add_on.update_state(targets, y_pred)
 
-        self._update_manual_trackers(targets, y_pred)
                   
         # ----------------------------------------------------------
         # 11) Package logs (single path)
@@ -2167,20 +2153,19 @@ class GeoPriorSubsNet(BaseAttentive):
                 eps_cons_raw=eps_cons_raw,
                 eps_gw_raw=eps_gw_raw,
             )
+        manual = None
+        if self.add_on is not None:
+            manual = self.add_on.as_dict
         
-        logs = pack_step_results(
+        return pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
             targets=targets,
             y_pred=y_pred,
-            manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
+            manual_trackers=manual,
             physics=physics_bundle,
         )
-        # if _out_losses:
-        #     logs.update(_out_losses)
-        return logs
-
 
     def test_step(self, data):
         """
@@ -2197,17 +2182,30 @@ class GeoPriorSubsNet(BaseAttentive):
         # Forward pass (no optimizer / gradients applied)
         y_pred_for_eval = self(inputs, training=False)
 
-        # XXX TOFIX
+        # safest: dict path (maps by output name)
+        targets = {k: targets[k] for k in self.output_names}
+
+        # Force plain python dicts (avoid wrapper weirdness)
+        y_pred_for_eval = {k: y_pred_for_eval[k] for k in self.output_names}
+        targets_aligned = {
+            k: _align_true_for_loss(targets[k], y_pred_for_eval[k])
+            for k in self.output_names
+        }
+        
+        # Always call compiled_loss with ordered lists (stable)
+        yt_list = [targets_aligned[k] for k in self.output_names]
+        yp_list = [y_pred_for_eval[k] for k in self.output_names]
+        
         data_loss = self.compiled_loss(
-            [ targets['subs_pred'], targets['gwl_pred']], 
-            [ y_pred_for_eval['subs_pred'], y_pred_for_eval['gwl_pred']], 
+            yt_list, yp_list,
             regularization_losses=self.losses,
         )
-        # data_loss, _out_losses = self._safe_compiled_data_loss(targets, y_pred_for_eval)
-        
+
         physics_bundle = None
         
-        self._update_manual_trackers(targets, y_pred_for_eval)
+        if self.add_on is not None:
+            self.add_on.update_state(targets, y_pred_for_eval)
+
         
         if not self._physics_off():
             phys = self._evaluate_physics_on_batch(
@@ -2219,18 +2217,19 @@ class GeoPriorSubsNet(BaseAttentive):
         else:
             total_loss = data_loss
         
-        logs =  pack_step_results(
+        return pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
             targets=targets,
             y_pred=y_pred_for_eval,
-            manual_trackers=self.custom_trackers if self._track_add_on_metrics else None,
+            manual_trackers=(
+                self.add_on.as_dict
+                if self.add_on is not None
+                else None
+            ),
             physics=physics_bundle,
         )
-        # if _out_losses:
-        #     logs.update(_out_losses)
-        return logs
 
 
     def _evaluate_physics_on_batch(
@@ -2298,7 +2297,7 @@ class GeoPriorSubsNet(BaseAttentive):
         cons_floor = resolve_auto_scale_floor("cons", sk)
         gw_floor   = resolve_auto_scale_floor("gw", sk)
         
-        # XXX TOREMOVE 
+
         # --------------------------------------------------------------
         # 2) Forward + autodiff wrt coords
         # --------------------------------------------------------------
@@ -3504,3 +3503,6 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return cls(**config)
 
+    def forward_with_aux(self, inputs, training: bool = False):
+        """Returns (y_pred, aux) for diagnostics; does not affect Keras training."""
+        return self._forward_all(inputs, training=training)

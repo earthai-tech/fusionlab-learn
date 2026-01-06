@@ -8,6 +8,7 @@ from . import KERAS_DEPS
 tf_concat=KERAS_DEPS.concat 
 tf_stack = KERAS_DEPS.stack 
 tf_expand_dims = KERAS_DEPS.expand_dims 
+tf_convert = KERAS_DEPS.convert_to_tensor
 
 class IntervalCalibrator:
     r"""
@@ -210,19 +211,236 @@ class IntervalCalibrator:
             lo_c = lo_c[..., None]; hi_c = hi_c[..., None]
         return lo_c, hi_c
 
-def _stack_subs_quantiles(s_pred_q):
-    """
-    Accept (B,H,Q) or (B,H,Q,1); return (lo, med, hi) shaped (B,H,1).
-    """
+def _extract_subs_pred(model, out):
+    r"""
+    Extract subsidence predictions from a model output.
 
+    Supports both the new GeoPrior output dict and the legacy
+    ``data_final`` path used by older checkpoints.
+
+    Parameters
+    ----------
+    model : object
+        Model instance. If the output is legacy, the model must
+        implement ``split_data_predictions(data_final)``.
+
+    out : dict
+        Output dict returned by ``model(x, training=False)``.
+
+    Returns
+    -------
+    subs_pred : Tensor
+        Subsidence prediction tensor in model space.
+
+        Expected shapes:
+
+        - Point mode: ``(B, H, 1)``
+        - Quantile mode: ``(B, H, Q, 1)``
+
+    Raises
+    ------
+    TypeError
+        If ``out`` is not a dict.
+    KeyError
+        If required keys are missing.
+
+    Notes
+    -----
+    New path:
+    ``out["subs_pred"]`` is used when available.
+
+    Legacy path:
+    ``out["data_final"]`` is split via
+    ``model.split_data_predictions``.
+
+    Examples
+    --------
+    >>> out = model(x, training=False)
+    >>> s_pred = _extract_subs_pred(model, out)
+    """
+    if not isinstance(out, dict):
+        raise TypeError(
+            "Expected `out` to be a dict. "
+            f"Got type={type(out)!r}."
+        )
+
+    if ("subs_pred" in out) and ("gwl_pred" in out):
+        return out["subs_pred"]
+
+    if "data_final" in out:
+        s_pred, _ = model.split_data_predictions(
+            out["data_final"],
+        )
+        return s_pred
+
+    raise KeyError(
+        "Unsupported model output keys. Expected "
+        "{'subs_pred','gwl_pred'} or {'data_final'}. "
+        f"Got keys={list(out.keys())!r}."
+    )
+
+def _stack_subs_quantiles(s_pred_q):
+    r"""
+    Extract (lo, med, hi) from subsidence quantiles.
+
+    Parameters
+    ----------
+    s_pred_q : Tensor or np.ndarray
+        Subsidence quantiles shaped ``(B, H, Q)`` or
+        ``(B, H, Q, 1)``. The function assumes the quantile
+        axis order is ``[q10, q50, q90]``.
+
+    Returns
+    -------
+    lo : Tensor
+        Lower quantile shaped ``(B, H, 1)``.
+    med : Tensor
+        Median quantile shaped ``(B, H, 1)``.
+    hi : Tensor
+        Upper quantile shaped ``(B, H, 1)``.
+
+    Raises
+    ------
+    ValueError
+        If ``s_pred_q`` does not look like a quantile tensor.
+
+    Notes
+    -----
+    This helper is used by interval calibration and expects
+    three quantiles (Q=3).
+
+    Examples
+    --------
+    >>> lo, med, hi = _stack_subs_quantiles(s_pred_q)
+    """
     if len(s_pred_q.shape) == 3:
-        s_pred_q = tf_expand_dims(s_pred_q, axis=-1)  # -> (B,H,Q,1)
-    lo  = s_pred_q[:, :, 0, :]
+        s_pred_q = tf_expand_dims(  # -> (B,H,Q,1)
+            s_pred_q,
+            axis=-1,
+        )
+
+    rank = getattr(getattr(s_pred_q, "shape", None), "rank", None)
+    if rank is not None and rank != 4:
+        raise ValueError(
+            "Expected rank-4 quantile tensor. "
+            f"Got rank={rank!r}."
+        )
+
+    q_dim = getattr(s_pred_q.shape, "__getitem__", None)
+    if q_dim is not None:
+        qn = s_pred_q.shape[2]
+        if (qn is not None) and (int(qn) < 3):
+            raise ValueError(
+                "Need at least 3 quantiles on axis=2. "
+                f"Got Q={int(qn)!r}."
+            )
+
+    lo = s_pred_q[:, :, 0, :]
     med = s_pred_q[:, :, 1, :]
-    hi  = s_pred_q[:, :, 2, :]
+    hi = s_pred_q[:, :, 2, :]
     return lo, med, hi
 
 def fit_interval_calibrator_on_val(
+    model,
+    ds_val,
+    target=0.80,
+    log_fn=None,
+    **tqdm_kws,
+):
+    r"""
+    Fit a horizon-wise symmetric interval calibrator on a
+    validation dataset.
+
+    This routine runs the model on ``ds_val``, extracts the
+    subsidence quantiles (q10, q50, q90), and learns per-horizon
+    scale factors so the central interval reaches ``target``
+    empirical coverage.
+
+    The function supports both output formats:
+
+    - New: ``{"subs_pred": ..., "gwl_pred": ...}``
+    - Legacy: ``{"data_final": ...}`` plus
+      ``model.split_data_predictions``
+
+    Parameters
+    ----------
+    model : tf.keras.Model
+        Trained model used for inference on ``ds_val``.
+    ds_val : tf.data.Dataset
+        Validation dataset yielding ``(x, y)`` where
+        ``y["subs_pred"]`` is shaped ``(B, H, 1)``.
+    target : float, default=0.80
+        Desired coverage for the central interval.
+    log_fn : callable or None, optional
+        Optional logger sink for progress output.
+    **tqdm_kws : dict
+        Extra keyword arguments forwarded to ``with_progress``.
+
+    Returns
+    -------
+    cal : IntervalCalibrator
+        Fitted calibrator.
+
+    Raises
+    ------
+    ValueError
+        If the model does not output quantiles.
+
+    Notes
+    -----
+    Only the subsidence head is calibrated.
+
+    Examples
+    --------
+    >>> cal = fit_interval_calibrator_on_val(
+    ...     model,
+    ...     ds_val,
+    ...     target=0.8,
+    ... )
+    """
+    cal = IntervalCalibrator(target=target)
+
+    y_true_list = []
+    lo_list, med_list, hi_list = [], [], []
+
+    iterator = with_progress(
+        ds_val,
+        desc="Calibrating intervals on val",
+        ascii=True,
+        leave=False,
+        log_fn=log_fn,
+        **tqdm_kws,
+    )
+
+    for x, y in iterator:
+        out = model(x, training=False)
+
+        s_pred = _extract_subs_pred(model, out)
+
+        rank = getattr(getattr(s_pred, "shape", None), "rank", None)
+        if rank is not None and rank != 4:
+            raise ValueError(
+                "Interval calibration requires quantiles. "
+                "Expected subs_pred shape (B,H,Q,1). "
+                f"Got rank={rank!r}."
+            )
+
+        lo, med, hi = _stack_subs_quantiles(s_pred)
+
+        y_true_list.append(y["subs_pred"])
+        lo_list.append(lo)
+        med_list.append(med)
+        hi_list.append(hi)
+
+    y_true = tf_concat(y_true_list, axis=0).numpy()
+    q_lo = tf_concat(lo_list, axis=0).numpy()
+    q_med = tf_concat(med_list, axis=0).numpy()
+    q_hi = tf_concat(hi_list, axis=0).numpy()
+
+    cal.fit(y_true, q_lo, q_med, q_hi)
+    return cal
+
+def _fit_interval_calibrator_on_val(
         model, ds_val, target=0.80, 
         log_fn =None, **tqdm_kws
     ):

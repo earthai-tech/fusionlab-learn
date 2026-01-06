@@ -3161,6 +3161,253 @@ def resolve_hybrid_config(
         print(f"         {', '.join(sample)} ...")
     
     return merged
+
+def extract_preds(model, out):
+    r"""
+    Extract subsidence and groundwater predictions from a model output.
+
+    This helper normalizes the output interface across two
+    GeoPrior generation families:
+
+    1. New interface (preferred)
+       ``model(inputs) -> {"subs_pred": ..., "gwl_pred": ...}``
+
+    2. Legacy interface (backward compatible)
+       ``model(inputs) -> {"data_final": ...}``, where the caller
+       must split the tensor using ``model.split_data_predictions``.
+
+    Parameters
+    ----------
+    model : object
+        A Keras-like model instance that may expose
+        ``split_data_predictions(data_final)``.
+
+        The splitter must return a tuple:
+
+        - ``subs_pred`` with shape ``(B, H, 1)`` or ``(B, H, Q, 1)``
+        - ``gwl_pred``  with shape ``(B, H, 1)`` or ``(B, H, Q, 1)``
+
+    out : dict
+        Output returned by the model call, typically
+        ``model(inputs, training=False)``.
+
+        Supported keys are either:
+
+        - ``{"subs_pred", "gwl_pred"}`` (new interface), or
+        - ``{"data_final"}`` (legacy interface).
+
+    Returns
+    -------
+    subs_pred : Tensor
+        Predicted subsidence in model space.
+
+        Expected shapes:
+
+        - Point mode: ``(B, H, 1)``
+        - Quantile mode: ``(B, H, Q, 1)``
+
+    gwl_pred : Tensor
+        Predicted groundwater/head variable in model space.
+
+        Expected shapes:
+
+        - Point mode: ``(B, H, 1)``
+        - Quantile mode: ``(B, H, Q, 1)``
+
+    Raises
+    ------
+    KeyError
+        If ``out`` does not contain a supported key set.
+    TypeError
+        If ``out`` is not a mapping/dict-like object.
+
+    Notes
+    -----
+    This function is intended for Stage-2 and Stage-3
+    scripts where you may load checkpoints from older
+    experiments. It avoids fragile code that slices
+    ``data_final`` manually.
+
+    The function does not validate tensor dtypes or
+    numerical finiteness. Upstream code should handle
+    ``NaN`` and ``Inf`` checks as needed.
+
+    Examples
+    --------
+    New interface::
+
+        out = model_inf(xb, training=False)
+        s_pred, h_pred = extract_stage_outputs(
+            model_inf,
+            out,
+        )
+
+    Legacy interface::
+
+        out = model_inf(xb, training=False)
+        s_pred, h_pred = extract_stage_outputs(
+            model_inf,
+            out,
+        )
+
+    See Also
+    --------
+    subs_point_from_stage_out :
+        Convert subsidence predictions to a point forecast.
+
+    References
+    ----------
+    .. [1] Chollet, F. et al. Keras: Deep Learning for Humans.
+           (Software documentation).
+    """
+    if not isinstance(out, dict):
+        raise TypeError(
+            "Expected `out` to be a dict-like mapping. "
+            f"Got type={type(out)!r}."
+        )
+
+    has_new = ("subs_pred" in out) and ("gwl_pred" in out)
+    if has_new:
+        return out["subs_pred"], out["gwl_pred"]
+
+    if "data_final" in out:
+        return model.split_data_predictions(out["data_final"])
+
+    raise KeyError(
+        "Unsupported model output keys. Expected "
+        "{'subs_pred','gwl_pred'} or {'data_final'}. "
+        f"Got keys={list(out.keys())!r}."
+    )
+
+
+def subs_point_from_out(model, out, quantiles=None, med_idx=None):
+    r"""
+    Convert model output into a subsidence point forecast.
+
+    This helper produces a subsidence tensor shaped ``(B, H, 1)``
+    in model space, regardless of whether the model emits
+    quantiles or a point prediction.
+
+    - If quantiles are present and the subsidence prediction
+      is shaped ``(B, H, Q, 1)``, the function selects the
+      median quantile slice.
+    - Otherwise, it returns the point prediction directly.
+
+    Parameters
+    ----------
+    model : object
+        A Keras-like model instance passed to
+        :func:`extract_stage_outputs`.
+
+    out : dict
+        Output returned by the model call.
+
+        This can be either the new interface with keys
+        ``"subs_pred"`` and ``"gwl_pred"``, or the legacy
+        interface with key ``"data_final"``.
+
+    quantiles : sequence of float or None, default=None
+        Quantile levels used by the model, such as
+        ``[0.1, 0.5, 0.9]``.
+
+        If provided, the function may use it to interpret
+        the rank-4 quantile output and select the median.
+
+        If ``None``, quantile selection is disabled unless
+        ``med_idx`` is explicitly provided and the tensor
+        rank indicates quantiles.
+
+    med_idx : int or None, default=None
+        Index along the quantile axis to use as the
+        "point" forecast when quantiles are available.
+
+        If ``None`` and ``quantiles`` is provided, the
+        function selects the index closest to ``0.5``.
+
+    Returns
+    -------
+    subs_point : Tensor
+        Subsidence point prediction in model space with
+        shape ``(B, H, 1)``.
+
+    Raises
+    ------
+    ValueError
+        If subsidence prediction is missing or ``None``.
+    ValueError
+        If a quantile tensor is detected but a valid
+        median index cannot be resolved.
+
+    Notes
+    -----
+    Quantile outputs are assumed to be shaped
+    ``(B, H, Q, 1)`` where the quantile axis is the
+    third dimension (axis=2).
+
+    If the model returns point predictions already,
+    the function is effectively a no-op.
+
+    Examples
+    --------
+    Quantile model::
+
+        out = model_inf(xb, training=False)
+        s_point = subs_point_from_stage_out(
+            model_inf,
+            out,
+            quantiles=[0.1, 0.5, 0.9],
+        )
+
+    Point model::
+
+        out = model_inf(xb, training=False)
+        s_point = subs_point_from_stage_out(
+            model_inf,
+            out,
+        )
+
+    See Also
+    --------
+    extract_stage_outputs :
+        Normalize outputs across new and legacy checkpoints.
+
+    References
+    ----------
+    .. [1] Koenker, R. and Bassett, G. Regression Quantiles.
+           Econometrica, 1978.
+    """
+    subs_pred, _ = extract_preds(model, out)
+
+    if subs_pred is None:
+        raise ValueError(
+            "Model output 'subs_pred' is None."
+        )
+
+    has_rank = hasattr(subs_pred, "shape") and (
+        getattr(subs_pred.shape, "rank", None) is not None
+    )
+    is_quantile_tensor = has_rank and (subs_pred.shape.rank == 4)
+
+    if not is_quantile_tensor:
+        return subs_pred
+
+    if med_idx is None:
+        if not quantiles:
+            raise ValueError(
+                "Quantile tensor detected but `med_idx` "
+                "is None and `quantiles` is not provided."
+            )
+
+        q = np.asarray(quantiles, dtype=float)
+        med_idx = int(np.argmin(np.abs(q - 0.5)))
+
+    if med_idx is None or int(med_idx) < 0:
+        raise ValueError(
+            "Invalid `med_idx` resolved for quantiles."
+        )
+
+    return subs_pred[..., int(med_idx), :]
+
 # -------------------------------------------------------------------------
 # Backward-compatible aliases for old private helper names
 # -------------------------------------------------------------------------
