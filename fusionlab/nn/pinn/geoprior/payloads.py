@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-I/O helpers for physics diagnostics payloads.
+Physics diagnostics payloads.
 
 This module centralizes data collection from a trained model for
 physics sanity plots (e.g., Fig.4) and provides robust persistence
@@ -13,8 +13,7 @@ from typing import Dict, Iterable, Tuple, Optional, Any
 import numpy as np
 import pandas as pd  
 
-from ..._optdeps import with_progress
-
+from ...._optdeps import with_progress
 
 def _iso_now() -> str:
     """Return current UTC time in ISO format."""

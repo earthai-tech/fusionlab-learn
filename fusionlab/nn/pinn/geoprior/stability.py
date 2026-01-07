@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from .. import KERAS_DEPS
+from ... import KERAS_DEPS
 
 tf_clip_by_value = KERAS_DEPS.clip_by_value
 tf_math = KERAS_DEPS.math 
@@ -13,6 +13,7 @@ tf_cast = KERAS_DEPS.cast
 tf_ones_like = KERAS_DEPS.ones_like 
 tf_float32 = KERAS_DEPS.float32 
 tf_zeros_like = KERAS_DEPS.zeros_like 
+tf_IndexedSlices = KERAS_DEPS.IndexedSlices
 
 
 def clamp_physics_logits(
@@ -87,24 +88,42 @@ def compute_physics_warmup_gate(step_tensor, warmup_steps=500, ramp_steps=500):
     return tf_minimum(tf_maximum(gate, 0.0), 1.0)
 
 
+def _sanitize_grad(g):
+    if g is None:
+        return None
+
+    # Handle sparse grads (very common with embeddings)
+    if isinstance(g, tf_IndexedSlices):
+        vals = g.values
+        bad = tf_math.logical_or(tf_math.is_nan(vals), tf_math.is_inf(vals))
+        vals = tf_where(bad, tf_zeros_like(vals), vals)
+        return tf_IndexedSlices(vals, g.indices, g.dense_shape)
+
+    bad = tf_math.logical_or(tf_math.is_nan(g), tf_math.is_inf(g))
+    return tf_where(bad, tf_zeros_like(g), g)
+
+
 def filter_nan_gradients(grads):
-    """
-    (Fix D) Replaces None or non-finite gradients with zeros to prevent 
-    weight corruption during a bad batch.
-    """
-    safe_grads = []
-    for g in grads:
-        if g is None:
-            safe_grads.append(g)
-            continue
+    return [_sanitize_grad(g) for g in grads]
+
+# def filter_nan_gradients(grads):
+#     """
+#     (Fix D) Replaces None or non-finite gradients with zeros to prevent 
+#     weight corruption during a bad batch.
+#     """
+#     safe_grads = []
+#     for g in grads:
+#         if g is None:
+#             safe_grads.append(g)
+#             continue
             
-        # Check finite
-        is_finite = tf_math.is_finite(g)
+#         # Check finite
+#         is_finite = tf_math.is_finite(g)
         
-        # If any element is nan/inf, this might be aggressive, but often 
-        # we want to mask strictly the bad values:
-        g_safe = tf_where(is_finite, g, tf_zeros_like(g))
+#         # If any element is nan/inf, this might be aggressive, but often 
+#         # we want to mask strictly the bad values:
+#         g_safe = tf_where(is_finite, g, tf_zeros_like(g))
         
-        safe_grads.append(g_safe)
+#         safe_grads.append(g_safe)
         
-    return safe_grads
+#     return safe_grads

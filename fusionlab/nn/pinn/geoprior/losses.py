@@ -12,15 +12,10 @@ This module centralizes:
 from __future__ import annotations
 
 from typing import Any 
-from .. import KERAS_DEPS
-from .._shapes import _as_BHO
+from ... import KERAS_DEPS
+from ..._shapes import _as_BHO
 
-from ._prior_utils import ( 
-    get_sk, 
-    select_q, 
-    _align_true_for_loss, 
-    tile_true_to_quantiles 
-)
+from .utils import get_sk
 
 Tensor = KERAS_DEPS.Tensor
 tf_float32 = KERAS_DEPS.float32

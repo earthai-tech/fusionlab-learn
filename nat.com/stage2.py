@@ -75,7 +75,8 @@ from fusionlab.utils.scale_metrics import (
 )
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
 from fusionlab.utils.subsidence_utils import convert_eval_payload_units
-from fusionlab.nn.pinn.models import GeoPriorSubsNet, PoroElasticSubsNet 
+from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet, PoroElasticSubsNet
+from fusionlab.nn.pinn.geoprior.utils import finalize_scaling_kwargs 
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
 from fusionlab.nn.keras_metrics import ( 
@@ -1298,6 +1299,15 @@ subsmodel_params["scaling_kwargs"].update({
    "lambda_q": float(LAMBDA_Q),
 })
 
+subsmodel_params["scaling_kwargs"].update({
+   "physics_warmup_steps": int(cfg.get("PHYSICS_WARMUP_STEPS", 500)), 
+   "physics_ramp_steps": int(cfg.get("PHYSICS_RAMP_STEPS", 500))
+})
+
+subsmodel_params["scaling_kwargs"] = finalize_scaling_kwargs(
+    subsmodel_params["scaling_kwargs"]
+)
+
 # Optional: drop Nones to keep scaling_kwargs clean
 subsmodel_params["scaling_kwargs"] = {
     k: v for k, v in subsmodel_params["scaling_kwargs"].items()
@@ -2007,7 +2017,7 @@ phys_npz_path = os.path.join(
     # f"{CITY_NAME}_phys_payload_{dataset_name_for_forecast.lower()}.npz"
  )
 
-_ = model_inf.export_physics_payload(
+_ = subs_model_inst.export_physics_payload(
     ds_eval,
     max_batches=None,
     save_path=phys_npz_path,

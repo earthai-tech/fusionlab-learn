@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet
+from fusionlab.nn.pinn.models import GeoPriorSubsNet
 from fusionlab.nn.pinn.op import seconds_per_time_unit
 from fusionlab.utils.subsidence_utils import make_txy_coords
 

@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 
 import numpy as np
-from .. import KERAS_DEPS
+from ... import KERAS_DEPS
 
 Tensor = KERAS_DEPS.Tensor
 
@@ -1274,32 +1274,7 @@ def infer_dt_units_from_t(
 
     return dt
 
-
-# ==============================================================
-# VERBOSE SHAPE DIAGNOSTICS (paste-only snippets)
-# - Uses tf_shape() (works in graph) + a small helper.
-# - Triggered when verbose > 3.
-# ==============================================================
-
-def _vshape(tag, x):
-    """Print runtime shape + rank (graph-safe)."""
-    if x is None:
-        tf_print("[shape]", tag, "= None")
-        return
-    xr = tf_rank(x)
-    xs = tf_shape(x)
-    tf_print("[shape]", tag, "rank=", xr, "shape=", xs)
-
-def _vshapes(title, items):
-    """Convenience: print a block of shapes."""
-    tf_print("\n==========", title, "==========")
-    for tag, x in items:
-        _vshape(tag, x)
-    tf_print("================================\n")
-
-
-
-# ---------------------------------------------------------------------
+# -------------------------------------------------
 # Training strategy gates (Q and subsidence residual)
 # ---------------------------------------------------------------------
 def policy_gate(
@@ -1357,104 +1332,84 @@ def policy_gate(
     return frac
 
 # ---------------------------------------------------------------------
-# Quantile helpers (shape-safe)
+# Derived SI conversion helpers (optional, but recommended)
 # ---------------------------------------------------------------------
-def _q_index(quantiles, q=0.5):
-    """Return the index of q in quantiles (python int), else None."""
-    if quantiles is None:
-        return None
-    try:
-        qs = [float(x) for x in list(quantiles)]
-    except Exception:
-        return None
-    # exact match first
-    for i, qi in enumerate(qs):
-        if abs(qi - float(q)) < 1e-12:
-            return i
-    # fallback: closest
-    qv = float(q)
-    i0 = int(np.argmin([abs(qi - qv) for qi in qs]))
-    return i0
+def finalize_scaling_kwargs(sk: Dict[str, Any]) -> Dict[str, Any]:
+    """Add derived SI conversion constants to ``scaling_kwargs``.
 
+    Adds (when possible):
+    - ``seconds_per_time_unit``: float
+    - ``coord_ranges_si``: dict with keys ``t`` (seconds), ``x``/``y`` (meters)
+    - ``coord_inv_ranges_si``: inverse of the above (safe floor).
 
-def select_q(pred, quantiles=None, q=0.5, fallback="mean"):
+    Notes
+    -----
+    This helper is designed to be called *once* when assembling
+    ``scaling_kwargs`` (e.g., in your stage2 script) so the model can
+    reuse those constants without recomputing unit conversions in the
+    hot training loop.
     """
-    Select q-quantile from pred.
+    if sk is None:
+        return sk
 
-    pred:
-      - (B,H,Q,O) -> returns (B,H,O)
-      - (B,H,Q,1) -> returns (B,H,1)
-      - otherwise returned as-is.
+    sk = dict(sk)
+
+    tu = str(get_sk(sk, "time_units", default="second")).strip().lower()
+    time_unit_to_seconds = {
+        "second": 1.0, "sec": 1.0, "s": 1.0,
+        "minute": 60.0, "min": 60.0, "m": 60.0,
+        "hour": 3600.0, "h": 3600.0,
+        "day": 86400.0, "d": 86400.0,
+        # Julian year (365.2425 days) to match prior_maths.py
+        "year": 31556952.0, "yr": 31556952.0, "y": 31556952.0,
+    }
+    sec_u = float(time_unit_to_seconds.get(tu, 1.0))
+    sk.setdefault("seconds_per_time_unit", sec_u)
+
+    cr = get_sk(sk, "coord_ranges", default=None)
+    if isinstance(cr, Mapping) and all(k in cr for k in ("t", "x", "y")):
+        tR = float(cr.get("t", 1.0))
+        xR = float(cr.get("x", 1.0))
+        yR = float(cr.get("y", 1.0))
+
+        # If coordinates are degrees, convert spans to meters.
+        if bool(get_sk(sk, "coords_in_degrees", default=False)):
+            deg_to_m_lon = get_sk(sk, "deg_to_m_lon", default=None)
+            deg_to_m_lat = get_sk(sk, "deg_to_m_lat", default=None)
+            if deg_to_m_lon is not None and deg_to_m_lat is not None:
+                xR *= float(deg_to_m_lon)
+                yR *= float(deg_to_m_lat)
+
+        # Convert time span to seconds (important if coords_normalized=True).
+        tR *= sec_u
+
+        sk["coord_ranges_si"] = {"t": tR, "x": xR, "y": yR}
+        eps = 1e-12
+        sk["coord_inv_ranges_si"] = {
+            "t": 1.0 / max(tR, eps),
+            "x": 1.0 / max(xR, eps),
+            "y": 1.0 / max(yR, eps),
+        }
+
+    return sk
+
+
+def coord_ranges_si(
+        sk: Dict[str, Any]
+    ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """Return coordinate spans in SI (t in seconds; x/y in meters).
+
+    If ``coord_ranges_si`` is present in ``sk``, it is used directly.
+    Otherwise, this is computed from ``coord_ranges`` and ``time_units``
+    (and degree-to-meter factors when applicable).
     """
-    r = getattr(pred, "shape", None)
-    rank = pred.shape.rank if r is not None else None
+    cr_si = get_sk(sk, "coord_ranges_si", default=None)
+    if isinstance(cr_si, Mapping) and all(k in cr_si for k in ("t", "x", "y")):
+        return float(cr_si["t"]), float(cr_si["x"]), float(cr_si["y"])
 
-    if rank != 4:
-        return pred
+    sk2 = finalize_scaling_kwargs(sk)
+    cr_si = get_sk(sk2, "coord_ranges_si", default=None)
+    if isinstance(cr_si, Mapping) and all(k in cr_si for k in ("t", "x", "y")):
+        return float(cr_si["t"]), float(cr_si["x"]), float(cr_si["y"])
 
-    idx = _q_index(quantiles, q=q)
-    if idx is not None:
-        return pred[:, :, idx, :]
-
-    # fallback if quantiles list is missing/odd
-    if str(fallback).lower() == "mean":
-        return tf_reduce_mean(pred, axis=2)
-    # "middle" fallback
-    qn = tf_shape(pred)[2]
-    mid = qn // 2
-    return pred[:, :, mid, :]
-
-
-def tile_true_to_quantiles(y_true, y_pred):
-    """
-    Make y_true compatible with y_pred when y_pred has quantile axis.
-
-    y_true: (B,H,O) and y_pred: (B,H,Q,O) -> return y_true_q: (B,H,Q,O)
-    Else return y_true unchanged.
-    """
-    rt = y_true.shape.rank
-    rp = y_pred.shape.rank
-    if (rp == 4) and (rt == 3):
-        y4 = tf_expand_dims(y_true, axis=2)  # (B,H,1,O)
-        qn = tf_shape(y_pred)[2]
-        return tf_tile(y4, [1, 1, qn, 1])
-    return y_true
-
-# def _align_true_for_loss(yt, yp):
-#     # If y_true is already tiled (B,H,Q,O), reduce it to (B,H,O).
-#     # Pinball will broadcast over Q internally.
-#     if yt.shape.rank == 4:
-#         return yt[:, :, 0, :]
-#     return yt
-
-def _align_true_for_loss(y_true, y_pred):
-    """
-    Align y_true to y_pred for quantile-aware losses/metrics.
-
-    Never tiles y_true across Q. Only reduces y_true if it accidentally
-    arrives with a quantile axis.
-    """
-    y_true = tf_convert_to_tensor(y_true)
-    y_pred = tf_convert_to_tensor(y_pred)
-
-    # (B,H) -> (B,H,1)
-    if y_true.shape.rank == 2:
-        y_true = tf_expand_dims(y_true, axis=-1)
-
-    rt = y_true.shape.rank
-    rp = y_pred.shape.rank
-
-    # (B,H,Q,O) -> (B,H,O)
-    if rt == 4:
-        return y_true[:, :, 0, :]
-
-    # (B,H,Q) -> (B,H,1)  (rare but happens if upstream tiled targets)
-    if rt == 3 and rp in (3, 4):
-        if rp == 4:
-            q_dim = y_pred.shape[2]
-            if (q_dim is None) or (y_true.shape[-1] == q_dim):
-                return tf_expand_dims(y_true[:, :, 0], axis=-1)
-        else:
-            return tf_expand_dims(y_true[:, :, 0], axis=-1)
-
-    return y_true
+    return None, None, None

@@ -325,6 +325,9 @@ PDE_MODE_CONFIG = "on"
 # For data-only baselines, scripts may ignore physics even if enabled above.
 PHYSICS_BASELINE_MODE = "none"
 
+PHYSICS_WARMUP_STEPS = 500 
+PHYSICS_RAMP_STEPS = 500 
+ 
 # If True, use internal scale factors (c*, g*) so residual terms are comparable.
 SCALE_PDE_RESIDUALS = True 
 
@@ -610,8 +613,8 @@ GEOPRIOR_H_REF = "auto"   # or 0.0
 CONSOLIDATION_STEP_RESIDUAL_METHOD = "exact"
 CONSOLIDATION_RESIDUAL_UNITS ="second"
 
-CONS_SCALE_FLOOR =1e-1
-GW_SCALE_FLOOR =1e-1
+CONS_SCALE_FLOOR ="auto"
+GW_SCALE_FLOOR ="auto"
 ALLOW_SUBS_RESIDUAL =True 
 
 DT_MIN_UNITS = 1e-6
@@ -624,14 +627,14 @@ Q_LENGTH_IN_SI=False
 
 DRAINAGE_MODE ="double" 
 SCALING_ERROR_POLICY ="raise" 
-GW_RESIDUAL_UNITS="time_unit"
+GW_RESIDUAL_UNITS="second"
 
 CLIP_GLOBAL_NORM = 5.0 
 
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 2 # 100           # Recommended: 50 to 200
+EPOCHS = 25 # 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 

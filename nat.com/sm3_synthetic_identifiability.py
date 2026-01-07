@@ -20,7 +20,7 @@ import pandas as pd
 import tensorflow as tf
 
 #  I/O + SM3 diagnostics 
-from fusionlab.nn.pinn.io import (
+from fusionlab.nn.pinn.geoprior.payloads import (
     load_physics_payload,
     identifiability_diagnostics_from_payload,
     summarise_effective_params,

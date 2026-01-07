@@ -15,10 +15,8 @@ from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
-from .. import KERAS_DEPS
-
-from ._prior_utils import _vshape, _vshapes
-from ._prior_maths import (
+from ... import KERAS_DEPS 
+from .maths import (
     tf_print_nonfinite,
     _assert_grads_finite,
     resolve_cons_units,
@@ -28,9 +26,6 @@ from ._prior_maths import (
 
 )
 
-# ---------------------------------------------------------------------
-# TF aliases (keep local + short)
-# ---------------------------------------------------------------------
 Tensor = KERAS_DEPS.Tensor
 
 tf_abs = KERAS_DEPS.abs
@@ -55,6 +50,30 @@ tf_math =KERAS_DEPS.math
 tf_sqrt = KERAS_DEPS.sqrt 
 tf_maximum = KERAS_DEPS.maximum
 tf_string = KERAS_DEPS.string
+
+
+# ==============================================================
+# VERBOSE SHAPE DIAGNOSTICS (paste-only snippets)
+# - Uses tf_shape() (works in graph) + a small helper.
+# - Triggered when verbose > 3.
+# ==============================================================
+
+def _vshape(tag, x):
+    """Print runtime shape + rank (graph-safe)."""
+    if x is None:
+        tf_print("[shape]", tag, "= None")
+        return
+    xr = tf_rank(x)
+    xs = tf_shape(x)
+    tf_print("[shape]", tag, "rank=", xr, "shape=", xs)
+
+def _vshapes(title, items):
+    """Convenience: print a block of shapes."""
+    tf_print("\n==========", title, "==========")
+    for tag, x in items:
+        _vshape(tag, x)
+    tf_print("================================\n")
+
 # ---------------------------------------------------------------------
 # Small gates
 # ---------------------------------------------------------------------
@@ -864,33 +883,45 @@ def dbg_chk_core_finite(
 def dbg_step9_losses(
     *,
     verbose: int,
-    data_loss: Tensor,
-    loss_cons: Tensor,
-    loss_gw: Tensor,
-    loss_prior: Tensor,
-    loss_smooth: Tensor,
-    physics_loss_raw: Tensor,
-    physics_loss_scaled: Tensor,
-    total_loss: Tensor,
-    level: int = 7, 
+    data_loss: "Tensor | None" = None,
+    loss_cons: "Tensor | None" = None,
+    loss_gw: "Tensor | None" = None,
+    loss_prior: "Tensor | None" = None,
+    loss_smooth: "Tensor | None" = None,
+    physics_loss_raw: "Tensor | None" = None,
+    physics_loss_scaled: "Tensor | None" = None,
+    total_loss: "Tensor | None" = None,
+    level: int = 7,
 ) -> None:
+    """Debug-print loss scalars (only those provided)."""
     if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step 9 losses ---")
-    _vshapes(
-        "STEP 9 (loss scalars)",
-        [
-            ("data_loss", data_loss),
-            ("loss_cons", loss_cons),
-            ("loss_gw", loss_gw),
-            ("loss_prior", loss_prior),
-            ("loss_smooth", loss_smooth),
-            ("physics_loss_raw", physics_loss_raw),
-            ("physics_loss_scaled", physics_loss_scaled),
-            ("total_loss", total_loss),
-        ],
-    )
+
+    pairs = []
+    if data_loss is not None:
+        pairs.append(("data_loss", data_loss))
+    if loss_cons is not None:
+        pairs.append(("loss_cons", loss_cons))
+    if loss_gw is not None:
+        pairs.append(("loss_gw", loss_gw))
+    if loss_prior is not None:
+        pairs.append(("loss_prior", loss_prior))
+    if loss_smooth is not None:
+        pairs.append(("loss_smooth", loss_smooth))
+    if physics_loss_raw is not None:
+        pairs.append(("physics_loss_raw", physics_loss_raw))
+    if physics_loss_scaled is not None:
+        pairs.append(("physics_loss_scaled", physics_loss_scaled))
+    if total_loss is not None:
+        pairs.append(("total_loss", total_loss))
+
+    if not pairs:
+        tf_print("STEP 9 (loss scalars): <no losses provided>")
+        return
+
+    _vshapes("STEP 9 (loss scalars)", pairs)
 
 
 def dbg_step10_grads(

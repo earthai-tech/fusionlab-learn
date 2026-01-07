@@ -16,6 +16,7 @@ _STANDARD_ALONE_MAP = {
     'Assert': ('tensorflow', 'Assert'),
     'Dataset': ('tensorflow.data', 'Dataset'),
     'GradientTape': ('tensorflow', 'GradientTape'),
+    'IndexedSlices': ('tensorflow', 'IndexedSlices'), 
     'Tensor': ('tensorflow', 'Tensor'),
     'TensorShape': ('tensorflow', 'TensorShape'),
     'Variable': ('tensorflow', 'Variable'),

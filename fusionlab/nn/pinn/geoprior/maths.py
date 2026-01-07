@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 # _geoprior_maths.py
 """
@@ -8,99 +7,99 @@ Short docs only; full docs later.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, Sequence, Union 
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
-from .. import KERAS_DEPS, dependency_message
-# from ...utils.generic_utils import vlog 
-from ..._fusionlog import fusionlog, OncePerMessageFilter
-from ...api.docs import DocstringComponents, _halnet_core_params
-from ._prior_utils import coord_ranges, get_sk, get_h_ref_si
+from ... import KERAS_DEPS, dependency_message
+from ...._fusionlog import OncePerMessageFilter, fusionlog
+from ....api.docs import DocstringComponents, _halnet_core_params
 
-# ---------------------------------------------------------------------
-# Keras deps aliases (keep short lines for linting)
-# ---------------------------------------------------------------------
-Tensor = KERAS_DEPS.Tensor
-Dataset = KERAS_DEPS.Dataset
-GradientTape = KERAS_DEPS.GradientTape
-Constraint = KERAS_DEPS.Constraint
+from .utils import coord_ranges, get_h_ref_si, get_sk
 
-tf_float32 = KERAS_DEPS.float32
-tf_int32 = KERAS_DEPS.int32
-tf_abs = KERAS_DEPS.abs
-tf_broadcast_to = KERAS_DEPS.broadcast_to
-tf_cast = KERAS_DEPS.cast
-tf_concat = KERAS_DEPS.concat
-tf_cond = KERAS_DEPS.cond
-tf_constant = KERAS_DEPS.constant
-tf_convert_to_tensor = KERAS_DEPS.convert_to_tensor
-tf_debugging = KERAS_DEPS.debugging
-tf_equal = KERAS_DEPS.equal
-tf_exp = KERAS_DEPS.exp
-tf_expand_dims = KERAS_DEPS.expand_dims
-tf_identity = KERAS_DEPS.identity
-tf_log = KERAS_DEPS.log
-tf_maximum = KERAS_DEPS.maximum
-tf_pow = KERAS_DEPS.pow
-tf_rank = KERAS_DEPS.rank
-tf_reduce_max = KERAS_DEPS.reduce_max
-tf_reduce_mean = KERAS_DEPS.reduce_mean
-tf_reshape = KERAS_DEPS.reshape
-tf_sigmoid = KERAS_DEPS.sigmoid
-tf_softplus = KERAS_DEPS.softplus
-tf_shape = KERAS_DEPS.shape
-tf_sqrt = KERAS_DEPS.sqrt
-tf_square = KERAS_DEPS.square
-tf_stack = KERAS_DEPS.stack
-tf_stop_gradient = KERAS_DEPS.stop_gradient
-tf_tile = KERAS_DEPS.tile
-tf_transpose = KERAS_DEPS.transpose
-tf_scan = KERAS_DEPS.scan
-tf_zeros = KERAS_DEPS.zeros
-tf_zeros_like = KERAS_DEPS.zeros_like
-tf_print =KERAS_DEPS.print 
-tf_reduce_min =KERAS_DEPS.reduce_min 
-tf_argmin  = KERAS_DEPS.argmin 
-tf_reduce_sum = KERAS_DEPS.reduce_sum 
-tf_is_nan = KERAS_DEPS.is_nan 
-tf_is_inf = KERAS_DEPS.is_inf 
-tf_logical_or = KERAS_DEPS.logical_or 
-tf_where = KERAS_DEPS.where 
-tf_cumsum = KERAS_DEPS.cumsum 
-tf_math = KERAS_DEPS.math 
-tf_ones_like = KERAS_DEPS.ones_like 
-tf_clip_by_value = KERAS_DEPS.clip_by_value
-tf_gather = KERAS_DEPS.gather 
-tf_minimum = KERAS_DEPS.minimum 
-tf_switch_case= KERAS_DEPS.switch_case
-tf_logical_and = KERAS_DEPS.logical_and 
-tf_greater = KERAS_DEPS.greater
-tf_reduce_any = KERAS_DEPS.reduce_any 
- 
+K = KERAS_DEPS
 
-register_keras_serializable = KERAS_DEPS.register_keras_serializable
-deserialize_keras_object = KERAS_DEPS.deserialize_keras_object
+Tensor = K.Tensor
+Dataset = K.Dataset
+GradientTape = K.GradientTape
+Constraint = K.Constraint
 
-tf_autograph = getattr(KERAS_DEPS, "autograph", None)
+tf_abs = K.abs
+tf_argmin = K.argmin
+tf_broadcast_to = K.broadcast_to
+tf_cast = K.cast
+tf_clip_by_value = K.clip_by_value
+tf_concat = K.concat
+tf_cond = K.cond
+tf_constant = K.constant
+tf_convert_to_tensor = K.convert_to_tensor
+tf_cumsum = K.cumsum
+tf_debugging = K.debugging
+tf_equal = K.equal
+tf_exp = K.exp
+tf_expand_dims = K.expand_dims
+tf_float32 = K.float32
+tf_gather = K.gather
+tf_greater = K.greater
+tf_identity = K.identity
+tf_int32 = K.int32
+tf_is_inf = K.is_inf
+tf_is_nan = K.is_nan
+tf_log = K.log
+tf_logical_and = K.logical_and
+tf_logical_or = K.logical_or
+tf_math = K.math
+tf_maximum = K.maximum
+tf_minimum = K.minimum
+tf_ones_like = K.ones_like
+tf_pow = K.pow
+tf_print = K.print
+tf_rank = K.rank
+tf_reduce_any = K.reduce_any
+tf_reduce_max = K.reduce_max
+tf_reduce_mean = K.reduce_mean
+tf_reduce_min = K.reduce_min
+tf_reduce_sum = K.reduce_sum
+tf_reshape = K.reshape
+tf_scan = K.scan
+tf_shape = K.shape
+tf_sigmoid = K.sigmoid
+tf_softplus = K.softplus
+tf_sqrt = K.sqrt
+tf_square = K.square
+tf_stack = K.stack
+tf_stop_gradient = K.stop_gradient
+tf_switch_case = K.switch_case
+tf_tile = K.tile
+tf_transpose = K.transpose
+tf_where = K.where
+tf_zeros = K.zeros
+tf_zeros_like = K.zeros_like
+
+register_keras_serializable = K.register_keras_serializable
+deserialize_keras_object = K.deserialize_keras_object
+
+# Optional: silence autograph verbosity in TF-backed runtimes.
+tf_autograph = getattr(K, "autograph", None)
 if tf_autograph is not None:
     tf_autograph.set_verbosity(0)
 
-DEP_MSG = dependency_message("nn.pinn._geoprior_maths")
+# Module logger + shared docs
+DEP_MSG = dependency_message("nn.pinn.geoprior.maths")
 
 logger = fusionlog().get_fusionlab_logger(__name__)
 logger.addFilter(OncePerMessageFilter())
 
 _param_docs = DocstringComponents.from_nested_components(
-    base=DocstringComponents(_halnet_core_params)
+    base=DocstringComponents(_halnet_core_params),
 )
 
-
+# Constants + types
 _EPSILON = 1e-15
 
-# ---------------------------------------------------------------------
+AxisLike = Optional[Union[int, Sequence[int]]]
+
 # Time units + scaling
-# ---------------------------------------------------------------------
 TIME_UNIT_TO_SECONDS = {
     "unitless": 1.0,
     "step": 1.0,
@@ -127,8 +126,6 @@ TIME_UNIT_TO_SECONDS = {
     "months": 31556952.0 / 12.0,
 }
 
-
-AxisLike = Optional[Union[int, Sequence[int]]]
 
 class LogClipConstraint(Constraint):
     """
@@ -1767,27 +1764,11 @@ def compute_consolidation_step_residual(
     # 7) Stable one-step prediction and residual.
     # ---------------------------------------------------------
     m = str(method).strip().lower()
-    # if m == "exact":
-    #     a = tf_exp(-dt_sec / (tau + tf_constant(_EPSILON, tau.dtype)))
-    #     pred = s_n * a + s_eq_n * (1.0 - a)
-    # elif m == "euler":
-    #     pred = s_n + dt_sec * (s_eq_n - s_n) / (
-    #         tau + tf_constant(_EPSILON, tau.dtype)
-    #     )
-    # else:
-    #     raise ValueError(
-    #         "compute_consolidation_step_residual: "
-    #         "method must be 'exact' or 'euler'."
-    #     )
-    
-    # STABILITY CHECK: If dt is large relative to tau, Euler explodes.
-    # We switch to exact if dt > tau to prevent NaN.
-    # (This is a soft-switch for training stability).
-    
+
     # Calculate ratio for stability check
     dt_tau_ratio = dt_sec / (tau + tf_constant(_EPSILON, tau.dtype))
     
-    use_exact = tf_logical_or(
+    use_exact = tf_logical_or( # noqa
         tf_equal(m, "exact"), 
         tf_reduce_any(dt_tau_ratio > 1.0) # Safety switch
     )
@@ -1943,94 +1924,6 @@ def compute_consistency_prior(
 
     return out
 
-# def tau_phys_from_fields(
-#     model,
-#     K_field: Tensor,
-#     Ss_field: Tensor,
-#     H_field: Tensor,
-#     *,
-#     eps: float = _EPSILON,
-#     verbose: int = 0,
-# ) -> Tuple[Tensor, Tensor]:
-#     """Compute tau_phys (s) and Hd (m)."""
-#     eps = float(eps)
-#     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
-
-#     K_safe = finite_floor(K_field, eps=eps)
-#     Ss_safe = finite_floor(Ss_field, eps=eps)
-#     H_safe = finite_floor(H_field, eps=eps)
-
-#     use_hd = bool(getattr(model, "use_effective_thickness", False))
-#     if use_hd:
-#         f = getattr(model, "Hd_factor", 1.0)
-#         f = tf_cast(f, H_safe.dtype)
-#         f = tf_where(tf_math.is_finite(f), f, tf_constant(1.0, H_safe.dtype))
-#         Hd = H_safe * f
-#     else:
-#         Hd = H_safe
-
-#     Hd = finite_floor(Hd, eps=eps)
-#     ratio = Hd / H_safe
-
-#     kappa = model._kappa_value()
-#     kappa = tf_cast(kappa, H_safe.dtype)
-#     kappa = tf_where(
-#         tf_math.is_finite(kappa),
-#         kappa,
-#         tf_constant(1.0, H_safe.dtype),
-#     )
-#     kappa = finite_floor(kappa, eps=eps)
-
-#     if str(getattr(model, "kappa_mode", "bar")) == "bar":
-#         tau_phys = (
-#             kappa * (H_safe ** 2) * Ss_safe / (pi_sq * K_safe)
-#         )
-#     else:
-#         tau_phys = (
-#             (ratio ** 2)
-#             * (H_safe ** 2) * Ss_safe
-#             / (pi_sq * kappa * K_safe)
-#         )
-
-#     tau_phys = finite_floor(tau_phys, eps=eps)
-
-#     vprint(verbose, "tau_phys: K=", K_safe)
-#     vprint(verbose, "tau_phys: Ss=", Ss_safe)
-#     vprint(verbose, "tau_phys: H=", H_safe)
-#     vprint(verbose, "tau_phys: Hd=", Hd)
-#     vprint(verbose, "tau_phys: out=", tau_phys)
-
-#     return tau_phys, Hd
-
-# def compute_consistency_prior(
-#     model,
-#     K_field: Tensor,
-#     Ss_field: Tensor,
-#     tau_field: Tensor,
-#     H_field: Tensor,
-#     *,
-#     verbose: int = 0,
-# ) -> Tensor:
-#     """Consistency prior: log(tau)-log(tau_phys)."""
-#     eps = tf_constant(_EPSILON, dtype=tf_float32)
-
-#     tau_safe = tf_maximum(tau_field, eps)
-#     tau_phys, _ = tau_phys_from_fields(
-#         model,
-#         K_field,
-#         Ss_field,
-#         H_field,
-#         verbose=0,
-#     )
-#     tau_phys_safe = tf_maximum(tau_phys, eps)
-
-#     out = tf_log(tau_safe) - tf_log(tau_phys_safe)
-
-#     vprint(verbose, "cons_prior: tau=", tau_safe)
-#     vprint(verbose, "cons_prior: tau_phys=", tau_phys_safe)
-#     vprint(verbose, "cons_prior: out=", out)
-
-#     return out
 def compute_smoothness_prior(
     dK_dx: Tensor,
     dK_dy: Tensor,
@@ -2087,58 +1980,6 @@ def compute_smoothness_prior(
     )
     vprint(verbose, "smooth(raw): out=", out)
     return out
-
-# def compute_smoothness_prior(
-#     dK_dx: Tensor,
-#     dK_dy: Tensor,
-#     dSs_dx: Tensor,
-#     dSs_dy: Tensor,
-#     *,
-#     K_field: Optional[Tensor] = None,
-#     Ss_field: Optional[Tensor] = None,
-#     already_log: bool = False,
-#     verbose: int = 0,
-# ) -> Tensor:
-#     """
-#     Smoothness prior on spatial gradients.
-
-#     If already_log=True, inputs are d(logK)/dx, 
-#     d(logK)/dy, d(logSs)/dx, d(logSs)/dy.
-#     Otherwise, if K_field/Ss_field are provided,
-#     we convert via division (less stable).
-#     """
-#     eps = tf_constant(_EPSILON, dtype=tf_float32)
-
-#     if already_log:
-#         out = (
-#             tf_square(dK_dx) + tf_square(dK_dy)
-#             + tf_square(dSs_dx) + tf_square(dSs_dy)
-#         )
-#         vprint(verbose, "smooth(log-direct): out=", out)
-#         return out
-
-#     if (K_field is not None) and (Ss_field is not None):
-#         dlogK_dx  = dK_dx  / (K_field  + eps)
-#         dlogK_dy  = dK_dy  / (K_field  + eps)
-#         dlogSs_dx = dSs_dx / (Ss_field + eps)
-#         dlogSs_dy = dSs_dy / (Ss_field + eps)
-#         out = (
-#             tf_square(dlogK_dx) + tf_square(dlogK_dy)
-#             + tf_square(dlogSs_dx) + tf_square(dlogSs_dy)
-#         )
-#         vprint(verbose, "smooth(log-div): out=", out)
-#         return out
-
-#     out = ( 
-#         tf_square(dK_dx) 
-#         + tf_square(dK_dy) 
-#         + tf_square(dSs_dx) 
-#         + tf_square(dSs_dy)
-#     )
-    
-#     vprint(verbose, "smooth(raw): out=", out)
-    
-#     return out
 
 # ---------------------------------------------------------------------
 # Bounds + field composition
@@ -2661,31 +2502,6 @@ def compose_physics_fields(
 
     # ---- tau ( log-space composition + bounds) ----
     delta_log_tau = _finite_or_zero(tau_base + tau_corr)
-
-    # if verbose > 6:
-    #     tf_print_nonfinite("compose/rawK", rawK)
-    #     tf_print_nonfinite("compose/rawSs", rawSs)
-    #     tf_print_nonfinite("compose/delta_log_tau", delta_log_tau)
-
-    # tau_phys, Hd_eff = tau_phys_from_fields(
-    #     model, K_field, Ss_field, H_si, return_log=True, 
-    #     verbose=0,
-    # )
-
-    # # Safe log(tau_phys)
-    # tau_phys_safe = tf_maximum(
-    #     tau_phys,
-    #     tf_constant(eps_tau, tau_phys.dtype),
-    # )
-    # log_tau_phys = tf_math.log(tau_phys_safe)
-    # log_tau_total = log_tau_phys + delta_log_tau
-
-    # log_tau_min, log_tau_max = get_log_tau_bounds(
-    #     model,
-    #     as_tensor=True,
-    #     dtype=log_tau_total.dtype,
-    #     verbose=0,
-    # )
 
     if verbose > 6:
         tf_print_nonfinite("compose/rawK", rawK)
