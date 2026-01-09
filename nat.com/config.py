@@ -657,9 +657,20 @@ TF_INTER_THREADS = None
 TF_GPU_ALLOW_GROWTH = True
 TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
 
-USE_IN_MEMORY_MODEL= True
-DEBUG = False
+# ===================================================================
+# 8) MODEL FORMAT CONFIGURATION
+# ===================================================================
+# If True, the model will be saved in TensorFlow format (SavedModel).
+USE_TF_SAVEDMODEL = True  # Set to False to use the default weight-based saving
 
+# ===================================================================
+# 9) MODEL LOADING / DEBUGGING CONFIGURATION
+# ===================================================================
+# If True, load the model directly into memory rather than from disk.
+USE_IN_MEMORY_MODEL = True  # Change to True for in-memory usage
+
+# If True, enable debug information during training and evaluation.
+DEBUG = False  # Enable or disable debugging
 
 # ---------------------------------------------------------------------
 # Auditing (Stage-1 / Stage-2 pipeline sanity checks)

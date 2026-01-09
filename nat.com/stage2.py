@@ -15,26 +15,110 @@ Key corrections:
 
 from __future__ import annotations
 
-import os
-import sys 
+import datetime as dt
+import gc
 import json
+import os
+import platform
+import sys
+import warnings
+
 import joblib
 import numpy as np
-import pandas as pd 
-import datetime as dt
-import warnings
+import pandas as pd
 import tensorflow as tf
-import  platform
-import gc
 
-from tensorflow.keras.callbacks import ( 
-    EarlyStopping, ModelCheckpoint,
-    CSVLogger, TerminateOnNaN
- )
-from tensorflow.keras.models import load_model
-from tensorflow.keras.utils import custom_object_scope
+from tensorflow.keras.callbacks import (
+    CSVLogger,
+    EarlyStopping,
+    ModelCheckpoint,
+    TerminateOnNaN,
+)
 
-# Silence common warnings and TF logs
+from fusionlab._optdeps import with_progress
+from fusionlab.backends.devices import configure_tf_from_cfg
+from fusionlab.compat.keras import (
+    load_inference_model,
+    load_model_from_tfv2,
+    save_manifest,
+    save_model,
+)
+from fusionlab.registry.utils import _find_stage1_manifest
+from fusionlab.utils.nat_utils import (
+    best_epoch_and_metrics,
+    build_censor_mask,
+    ensure_input_shapes,
+    extract_preds,
+    load_nat_config,
+    load_nat_config_payload,
+    load_scaler_info,
+    make_tf_dataset,
+    map_targets_for_training,
+    name_of,
+    resolve_hybrid_config,
+    resolve_si_affine,
+    save_ablation_record,
+    serialize_subs_params,
+    subs_point_from_out,
+)
+
+from fusionlab.api.util import get_table_size
+from fusionlab.utils.audit_utils import audit_stage2_handshake, should_audit
+from fusionlab.utils.generic_utils import (
+    default_results_dir,
+    ensure_directory_exists,
+    getenv_stripped,
+    print_config_table,
+    save_all_figures,
+)
+
+from fusionlab.utils.forecast_utils import format_and_forecast
+from fusionlab.utils.scale_metrics import (
+    inverse_scale_target,
+    per_horizon_metrics,
+    point_metrics,
+)
+from fusionlab.utils.spatial_utils import deg_to_m_from_lat
+from fusionlab.utils.subsidence_utils import convert_eval_payload_units
+from fusionlab.plot.forecast import plot_eval_future
+
+from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet, PoroElasticSubsNet
+from fusionlab.nn.pinn.geoprior.utils import finalize_scaling_kwargs
+from fusionlab.nn.pinn.geoprior.debugs import debug_model_reload
+from fusionlab.nn.pinn.geoprior.plot import (
+    autoplot_geoprior_history,
+    plot_physics_values_in,
+)
+from fusionlab.nn.pinn.op import extract_physical_parameters
+from fusionlab.nn._shapes import (
+    _logs_to_py,
+    canonicalize_BHQO_quantiles_np,
+    debug_quantile_crossing_np,
+    debug_tensor_interval,
+    debug_val_interval,
+)
+
+from fusionlab.nn.losses import make_weighted_pinball
+from fusionlab.nn.keras_metrics import (
+    Coverage80,
+    MAEQ50,
+    MSEQ50,
+    Sharpness80,
+    _to_py,
+    coverage80_fn,
+    sharpness80_fn,
+)
+from fusionlab.nn.calibration import (
+    apply_calibrator_to_subs,
+    fit_interval_calibrator_on_val,
+)
+from fusionlab.nn.callbacks import LambdaOffsetScheduler
+from fusionlab.nn.utils import plot_history_in
+
+from fusionlab.params import FixedGammaW, FixedHRef, LearnableKappa, LearnableMV
+
+
+# Global runtime settings (warnings / TF logs)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
@@ -42,68 +126,6 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
-from fusionlab._optdeps import with_progress 
-from fusionlab.backends.devices import configure_tf_from_cfg
-from fusionlab.compat.keras import save_manifest, load_bundle_for_inference
-from fusionlab.api.util import get_table_size
-from fusionlab.utils.audit_utils import should_audit, audit_stage2_handshake
-from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
-from fusionlab.utils.generic_utils import default_results_dir, getenv_stripped
-from fusionlab.utils.generic_utils import print_config_table
-from fusionlab.registry.utils import _find_stage1_manifest
-from fusionlab.utils.nat_utils import (
-    load_nat_config, 
-    load_nat_config_payload, 
-    ensure_input_shapes,
-    map_targets_for_training,
-    make_tf_dataset,
-    load_scaler_info,
-    save_ablation_record,
-    best_epoch_and_metrics,
-    build_censor_mask, 
-    name_of,
-    serialize_subs_params,
-    resolve_si_affine, 
-    resolve_hybrid_config, 
-    subs_point_from_out, 
-    extract_preds, 
-)
-
-from fusionlab.utils.forecast_utils import format_and_forecast
-from fusionlab.utils.scale_metrics import (
-    inverse_scale_target,
-    point_metrics,
-    per_horizon_metrics,
-)
-from fusionlab.utils.spatial_utils import deg_to_m_from_lat
-from fusionlab.utils.subsidence_utils import convert_eval_payload_units
-from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet, PoroElasticSubsNet
-# from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet, PoroElasticSubsNet
-from fusionlab.nn.pinn.geoprior.utils import finalize_scaling_kwargs 
-from fusionlab.nn.pinn.geoprior.debugs import debug_model_reload
-from fusionlab.nn._shapes import (
-    debug_val_interval,
-    debug_tensor_interval,
-    canonicalize_BHQO_quantiles_np, 
-    _logs_to_py, 
-    debug_quantile_crossing_np
-)
-
-from fusionlab.nn.pinn.geoprior.plot import plot_physics_values_in, autoplot_geoprior_history 
-from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
-from fusionlab.nn.losses import make_weighted_pinball
-from fusionlab.nn.keras_metrics import ( 
-    coverage80_fn, sharpness80_fn, _to_py, 
-    MAEQ50, MSEQ50, Coverage80, Sharpness80
-    )
-from fusionlab.nn.calibration import (
-    fit_interval_calibrator_on_val,
-    apply_calibrator_to_subs,
-)
-from fusionlab.nn.utils import plot_history_in
-from fusionlab.nn.pinn.op import extract_physical_parameters
-from fusionlab.plot.forecast import plot_eval_future
-from fusionlab.nn.callbacks import LambdaOffsetScheduler
 
 # =============================================================================
 # Config / Paths
@@ -298,6 +320,9 @@ AUDIT_STAGES = cfg.get ("AUDIT_STAGES")
 
 USE_IN_MEMORY_MODEL = bool(cfg.get("USE_IN_MEMORY_MODEL", False))
 DEBUG = bool(cfg.get("DEBUG", False))
+USE_TF_SAVEDMODEL = bool(
+    cfg.get("USE_TF_SAVEDMODEL", False)
+)
 
 # Helper: JSON has string keys for quantile weight dicts; coerce to float.
 def _coerce_quantile_weights(d: dict, default: dict) -> dict:
@@ -1565,6 +1590,11 @@ best_weights_path = os.path.join(
     RUN_OUTPUT_PATH, f"{bundle_prefix}_best.weights.h5"
   )
 
+best_tf_dir = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{bundle_prefix}_best_savedmodel",
+)
+
 # IMPORTANT: do not clash with  later run_manifest.json
 model_init_manifest_path = os.path.join(RUN_OUTPUT_PATH, "model_init_manifest.json")
 
@@ -1618,21 +1648,7 @@ model_init_manifest = {
 save_manifest(model_init_manifest_path, model_init_manifest)
 print(f"[OK] Saved model init manifest -> {model_init_manifest_path}")
 
-# callbacks = [
-#     EarlyStopping(
-#         monitor="val_loss", 
-#         patience=15, 
-#         restore_best_weights=True, 
-#         verbose=1
-#     ),
-#     ModelCheckpoint(
-#         filepath=ckpt_path, 
-#         monitor="val_loss", 
-#         save_best_only=True,
-#         save_weights_only=False, 
-#         verbose=1
-#     ),
-# ]
+
 callbacks = [
     ModelCheckpoint(
         filepath=best_keras_path,
@@ -1941,16 +1957,6 @@ custom_objects_load = {
     "make_weighted_pinball": make_weighted_pinball,
 }
 
-# try:
-#     with custom_object_scope(custom_objects_load):
-#         model_inf = load_model(ckpt_path, compile=False)
-#     print("Loaded best model for inference (compile=False).")
-# except Exception as e:
-#     print(f"[Warn] Could not load best checkpoint ({e}); using in-memory model.")
-#     model_inf = subs_model_inst
-# # XXX TODO LET CHECK WHETHER THE ERROR is load model in keras 3.0 
-# model_inf = subs_model_inst
-# Pick one real batch for building (needed for weights fallback)
 
 build_inputs = None
 for xb, _ in val_dataset.take(1):
@@ -1987,12 +1993,35 @@ def builder(manifest: dict):
         **_subsparams,
     )
 
+# Saving model (TensorFlow or default based on USE_TF_SAVEDMODEL)
+save_model(
+    model=subs_model_inst,
+    keras_path=(
+        best_tf_dir
+        if USE_TF_SAVEDMODEL
+        else best_keras_path
+    ),
+    weights_path=best_weights_path,
+    manifest_path=model_init_manifest_path,
+    manifest=model_init_manifest,
+    overwrite=True,
+    use_tf_format=USE_TF_SAVEDMODEL,
+)
+
 # --- choose inference model source ---
 if USE_IN_MEMORY_MODEL:
     model_inf = subs_model_inst
     print("[Info] Using in-memory model for inference.")
+    
+elif USE_TF_SAVEDMODEL:
+    model_inf = load_model_from_tfv2(
+        best_tf_dir,
+        endpoint="serve",
+        custom_objects=custom_objects_load,
+    )
+    print("[OK] Loaded inference model from TF SavedModel:", best_tf_dir)
 else:
-    model_inf = load_bundle_for_inference(
+    model_inf = load_inference_model(
         keras_path=best_keras_path,
         weights_path=best_weights_path,
         manifest_path=model_init_manifest_path,
@@ -2002,8 +2031,10 @@ else:
         build_inputs=build_inputs,
         prefer_full_model=False,
         log_fn=print,
+        use_in_memory_model=False,
     )
     print("[OK] Loaded inference model from bundle:", type(model_inf))
+
 
 # --- optional debug check ---
 if DEBUG and (model_inf is not subs_model_inst):

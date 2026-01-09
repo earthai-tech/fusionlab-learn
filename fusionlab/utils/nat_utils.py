@@ -3069,6 +3069,8 @@ def resolve_hybrid_config(
         # track City Name , so we can switch to change city as well 
         "CITY_NAME", "CITY", 
         
+        "USE_IN_MEMORY_MODEL", "DEBUG", "USE_TF_SAVEDMODEL", 
+        
         "TRACK_AUX_METRICS", 
         # --- 1. Architecture (Safe to tune if model is rebuilt) ---
         "EMBED_DIM", "HIDDEN_UNITS", "LSTM_UNITS", "ATTENTION_UNITS",

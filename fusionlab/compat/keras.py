@@ -28,8 +28,9 @@ __all__ = [
     "load_manifest",
     "save_bundle",
     "load_bundle_for_inference",
+    "save_model",
+    "load_model_from_tf",
 ]
-
 
 CustomObjects = Optional[Dict[str, Any]]
 Builder = Optional[Callable[[Dict[str, Any]], Any]]
@@ -144,6 +145,34 @@ def _extract_x(build_inputs: Any) -> Any:
 def _log_default(_: str) -> None:
     return None
 
+def _to_savedmodel_dir(path: str) -> str:
+    """
+    Convert a file-like path to a SavedModel directory.
+    """
+    base, ext = os.path.splitext(path)
+    if ext in (".keras", ".h5"):
+        return base + "_savedmodel"
+    return path
+
+
+def _clear_path(path: str, overwrite: bool) -> None:
+    """
+    Remove an existing directory if overwrite is True.
+    """
+    if not overwrite:
+        return
+    if not os.path.exists(path):
+        return
+
+    import shutil
+
+    if os.path.isdir(path):
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        try:
+            os.remove(path)
+        except OSError:
+            return
 
 # ---------------------------------------------------------------------
 # Manifest helpers
@@ -197,6 +226,292 @@ def save_bundle(
     if manifest_path and manifest is not None:
         save_manifest(manifest_path, manifest)
 
+def save_model(
+    model: Any,
+    keras_path: Optional[str] = None,
+    weights_path: Optional[str] = None,
+    manifest_path: Optional[str] = None,
+    manifest: Optional[Dict[str, Any]] = None,
+    overwrite: bool = True,
+    use_tf_format: bool = False,
+) -> None:
+    """
+    Save model artifacts.
+
+    - Default: save_bundle() (native .keras/.h5 + weights + manifest)
+    - TF format:
+        * Keras 3  -> model.export(dir)
+        * Keras 2  -> model.save(dir, save_format="tf")
+    """
+    keras = _import_keras()
+
+    if manifest_path and manifest is not None:
+        save_manifest(manifest_path, manifest)
+
+    if not use_tf_format:
+        save_bundle(
+            model=model,
+            keras_path=keras_path,
+            weights_path=weights_path,
+            manifest_path=None,
+            manifest=None,
+            overwrite=overwrite,
+        )
+        return
+
+    if not keras_path:
+        raise ValueError(
+            "keras_path is required when use_tf_format=True."
+        )
+
+    tf_dir = _to_savedmodel_dir(keras_path)
+    _ensure_parent_dir(tf_dir)
+    _clear_path(tf_dir, overwrite=overwrite)
+
+    # Optional: keep weights as a fallback artifact.
+    if weights_path:
+        _ensure_parent_dir(weights_path)
+        try:
+            model.save_weights(
+                weights_path,
+                overwrite=overwrite,
+            )
+        except Exception:
+            pass
+
+    # --- Keras 3: export() writes a SavedModel directory.
+    if is_keras3() and hasattr(model, "export"):
+        model.export(tf_dir)
+        print(
+            "[INFO] Exported TF SavedModel -> "
+            f"{tf_dir}"
+        )
+        return
+
+    # --- Keras 2 / tf.keras: save(..., save_format="tf")
+    try:
+        model.save(
+            tf_dir,
+            overwrite=overwrite,
+            save_format="tf",
+        )
+        print(
+            "[INFO] Saved TF SavedModel -> "
+            f"{tf_dir}"
+        )
+        return
+    except TypeError:
+        # Some builds infer from directory path.
+        model.save(tf_dir, overwrite=overwrite)
+        print(
+            "[INFO] Saved TF SavedModel -> "
+            f"{tf_dir}"
+        )
+        return
+
+def load_model_from_tfv2(
+    saved_model_dir: str,
+    endpoint: str = "serve",
+    custom_objects: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """
+    Minimal TF SavedModel loader that supports dict inputs/outputs.
+
+    - Keras 2 / tf.keras: keras.models.load_model(saved_model_dir)
+    - Keras 3: wrap SavedModel as inference-only keras.Model via TFSMLayer,
+      building dict Inputs from the SavedModel signature (supports positional
+      dict arg 'args_0' like your export).
+    """
+    keras = _import_keras()
+
+    if not os.path.isdir(saved_model_dir):
+        raise ValueError(
+            f"SavedModel directory not found: {saved_model_dir!r}"
+        )
+
+    # --- Keras 2 / tf.keras can load SavedModel directly
+    if not is_keras3():
+        with _custom_object_scope(keras, custom_objects):
+            return keras.models.load_model(saved_model_dir, compile=False)
+
+    # --- Keras 3: TFSMLayer + build dict Inputs from signature
+    import tensorflow as tf
+
+    obj = tf.saved_model.load(saved_model_dir)
+    sigs = getattr(obj, "signatures", {}) or {}
+
+    # pick signature: requested endpoint -> fallback to serving_default -> any
+    fn = sigs.get(endpoint) or sigs.get("serving_default")
+    used_ep = endpoint if sigs.get(endpoint) is not None else "serving_default"
+    if fn is None and sigs:
+        used_ep, fn = next(iter(sigs.items()))
+
+    if fn is None:
+        raise ValueError(
+            f"No callable signatures found in SavedModel: {saved_model_dir!r}"
+        )
+
+    # Your export uses a single positional dict argument (args_0) -> parse args[0]
+    args, kwargs = fn.structured_input_signature
+
+    specs = None
+    if isinstance(kwargs, dict) and kwargs:
+        # keyword-input SavedModel
+        specs = kwargs
+    elif isinstance(args, (tuple, list)) and args:
+        # positional-input SavedModel: args[0] may be dict of TensorSpecs
+        if isinstance(args[0], dict) and args[0]:
+            specs = args[0]
+
+    if not isinstance(specs, dict) or not specs:
+        raise ValueError(
+            "Cannot infer dict input specs from SavedModel signature. "
+            f"Available signatures: {list(sigs.keys())}"
+        )
+
+    # Build a TFSMLayer for the chosen endpoint
+    layer = keras.layers.TFSMLayer(
+        saved_model_dir,
+        call_endpoint=used_ep,
+    )
+
+    # Create one keras.Input per dict key
+    inputs = {}
+    for name, spec in specs.items():
+        if not hasattr(spec, "shape"):
+            raise ValueError(
+                f"Invalid TensorSpec for key {name!r}: {spec!r}"
+            )
+        shape = tuple(spec.shape)[1:]  # drop batch dim
+        inputs[name] = keras.Input(
+            shape=shape,
+            dtype=spec.dtype,
+            name=name,
+        )
+
+    outputs = layer(inputs)  # dict -> dict
+    return keras.Model(inputs=inputs, outputs=outputs, name="tfsm_inference")
+
+def load_model_from_tf(
+    saved_model_path: str,
+    custom_objects: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """
+    Load a TF SavedModel directory for inference.
+
+    - Keras 2: keras.models.load_model(dir)
+    - Keras 3: TFSMLayer(dir) wrapped as keras.Model
+    """
+    keras = _import_keras()
+
+    if not is_keras3():
+        with _custom_object_scope(keras, custom_objects):
+            return keras.models.load_model(
+                saved_model_path,
+                compile=False,
+            )
+
+    # Keras 3: inference-only wrapper.
+    endpoints = ("serve", "serving_default")
+    layer = None
+    last_err = None
+    used_ep = None
+
+    for ep in endpoints:
+        try:
+            layer = keras.layers.TFSMLayer(
+                saved_model_path,
+                call_endpoint=ep,
+            )
+            used_ep = ep
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+
+    if layer is None:
+        raise ValueError(
+            "Cannot create TFSMLayer from SavedModel: "
+            f"{last_err!r}"
+        )
+
+    # Try to infer inputs from TF signature (best).
+    specs = None
+    try:
+        import tensorflow as tf
+
+        obj = tf.saved_model.load(saved_model_path)
+        sigs = getattr(obj, "signatures", {}) or {}
+        fn = sigs.get(used_ep) or sigs.get("serving_default")
+
+        if fn is not None:
+            _, kw = fn.structured_input_signature
+            if isinstance(kw, dict) and kw:
+                specs = kw
+    except Exception:
+        specs = None
+
+    if specs:
+        inputs = {}
+        for name, spec in specs.items():
+            shp = tuple(spec.shape)[1:]
+            inputs[name] = keras.Input(
+                shape=shp,
+                dtype=spec.dtype,
+                name=name,
+            )
+
+        outputs = layer(inputs)
+        return keras.Model(
+            inputs,
+            outputs,
+            name="tfsm_inference",
+        )
+
+    # Fallback: single-input case only.
+    inp_shape = getattr(layer, "input_shape", None)
+    if not inp_shape or len(inp_shape) < 2:
+        raise ValueError(
+            "Cannot infer inputs for TFSMLayer wrapper."
+        )
+
+    inp = keras.Input(shape=tuple(inp_shape[1:]))
+    out = layer(inp)
+    return keras.Model(inp, out, name="tfsm_inference")
+
+def load_inference_model(
+    keras_path: Optional[str] = None,
+    weights_path: Optional[str] = None,
+    manifest_path: Optional[str] = None,
+    custom_objects: Optional[Dict[str, Any]] = None,
+    compile: bool = False,
+    builder: Optional[Callable[[Dict[str, Any]], Any]] = None,
+    build_inputs: Optional[Any] = None,
+    prefer_full_model: bool = True,
+    log_fn=print,
+    use_in_memory_model: bool = False,
+):
+    """Load the model for inference based on the configuration."""
+
+    if use_in_memory_model:
+        print("[INFO] Using in-memory model.")
+        # Use the in-memory model (no need to load from disk)
+        model = builder(load_manifest(manifest_path))
+        model.build(build_inputs)  # Ensure the model is built for inference
+    else:
+        # Default behavior: Load the model from disk
+        model = load_bundle_for_inference(
+            keras_path=keras_path,
+            weights_path=weights_path,
+            manifest_path=manifest_path,
+            custom_objects=custom_objects,
+            compile=compile,
+            builder=builder,
+            build_inputs=build_inputs,
+            prefer_full_model=prefer_full_model,
+            log_fn=log_fn,
+        )
+    return model
 
 def load_bundle_for_inference(
     *,
@@ -250,44 +565,48 @@ def load_bundle_for_inference(
         # --------------------------------------------------------
         if is_keras3() and os.path.isdir(keras_path):
             try:
-                layer = keras.layers.TFSMLayer(
+                return load_model_from_tf(
                     keras_path,
-                    call_endpoint="serving_default",
+                    custom_objects=custom_objects,
                 )
+                # layer = keras.layers.TFSMLayer(
+                #     keras_path,
+                #     call_endpoint="serving_default",
+                # )
 
-                x = _extract_x(build_inputs) if build_inputs else None
-                inp_shape = getattr(layer, "input_shape", None)
+                # x = _extract_x(build_inputs) if build_inputs else None
+                # inp_shape = getattr(layer, "input_shape", None)
 
-                if isinstance(inp_shape, (list, tuple)):
-                    if inp_shape and isinstance(
-                        inp_shape[0],
-                        (list, tuple),
-                    ):
-                        # Multi-input SavedModel
-                        raise ValueError(
-                            "TFSMLayer multi-input is "
-                            "not supported here."
-                        )
+                # if isinstance(inp_shape, (list, tuple)):
+                #     if inp_shape and isinstance(
+                #         inp_shape[0],
+                #         (list, tuple),
+                #     ):
+                #         # Multi-input SavedModel
+                #         raise ValueError(
+                #             "TFSMLayer multi-input is "
+                #             "not supported here."
+                #         )
 
-                if isinstance(inp_shape, (list, tuple)) and len(
-                    inp_shape
-                ) >= 2:
-                    shape = tuple(inp_shape[1:])
-                elif x is not None and hasattr(x, "shape"):
-                    shape = tuple(x.shape[1:])
-                else:
-                    raise ValueError(
-                        "Cannot infer input shape for "
-                        "TFSMLayer wrapper."
-                    )
+                # if isinstance(inp_shape, (list, tuple)) and len(
+                #     inp_shape
+                # ) >= 2:
+                #     shape = tuple(inp_shape[1:])
+                # elif x is not None and hasattr(x, "shape"):
+                #     shape = tuple(x.shape[1:])
+                # else:
+                #     raise ValueError(
+                #         "Cannot infer input shape for "
+                #         "TFSMLayer wrapper."
+                #     )
 
-                inp = keras.Input(shape=shape)
-                out = layer(inp)
-                return keras.Model(
-                    inp,
-                    out,
-                    name="tfsm_inference",
-                )
+                # inp = keras.Input(shape=shape)
+                # out = layer(inp)
+                # return keras.Model(
+                #     inp,
+                #     out,
+                #     name="tfsm_inference",
+                # )
             except Exception as e:
                 log(
                     "[compat.keras] TFSMLayer failed: "
