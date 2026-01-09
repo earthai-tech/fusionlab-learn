@@ -614,6 +614,20 @@ class QuantileDistributionModeling(Layer, NNLearner):
               (B, H, O)
             - Else: (B, H, Q, O)
         """
+        # ensure last dim is statically known (Keras2 reload safety)
+        try:
+            # TF tensors support set_shape
+            if ( 
+                    inputs.shape.rank is not None 
+                    and inputs.shape[-1] is None
+                ):
+                inputs.set_shape(
+                    inputs.shape[:-1].concatenate(
+                        [self.output_dim])
+                )
+        except:
+            pass
+
         # No quantiles => deterministic
         if self.quantiles is None:
             return self.output_layer(inputs)

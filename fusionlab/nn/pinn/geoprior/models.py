@@ -64,27 +64,21 @@ from .payloads import (
     load_physics_payload,
     save_physics_payload,
 )
+from .scaling import GeoPriorScalingConfig
 from .stability import filter_nan_gradients
 from .step_core import physics_core
 from .utils import (
-    canonicalize_scaling_kwargs,
-    enforce_scaling_alias_consistency,
     from_si_subsidence,
     get_h_ref_si,
     get_s_init_si,
     get_sk,
     gwl_to_head_m,
     infer_dt_units_from_t,
-    load_scaling_kwargs,
     policy_gate,
     to_si_head,
     to_si_thickness,
-    validate_scaling_kwargs,
 )
 
-# ---------------------------------------------------------------------
-# Keras deps aliases (keep short lines, stable across backends)
-# ---------------------------------------------------------------------
 K = KERAS_DEPS
 
 LSTM = K.LSTM
@@ -154,9 +148,8 @@ deserialize_keras_object = K.deserialize_keras_object
 tf_autograph = K.autograph
 tf_autograph.set_verbosity(0)
 
-# ---------------------------------------------------------------------
+
 # Module logger + shared docs
-# ---------------------------------------------------------------------
 DEP_MSG = dependency_message("nn.pinn.geoprior.models")
 
 logger = fusionlog().get_fusionlab_logger(__name__)
@@ -174,27 +167,58 @@ __all__ = ["GeoPriorSubsNet", "PoroElasticSubsNet"]
 class GeoPriorSubsNet(BaseAttentive):
     
     OUTPUT_KEYS = ("subs_pred", "gwl_pred")
-    
-    @validate_params({
-        'output_subsidence_dim': [Interval(Integral,1, None, closed="left")], 
-        'output_gwl_dim': [Interval(Integral,1, None, closed="left"),], 
-        "pde_mode": [
-            StrOptions({'consolidation', 'gw_flow', 'both', 'none', 'on', 'off'}), 
-            'array-like', None 
-        ],
-        "mv": [LearnableMV, Real],
-        "kappa": [LearnableKappa, Real],
-        "gamma_w": [FixedGammaW, Real],
-        "h_ref": [FixedHRef, Real, StrOptions({"auto", "fixed"}), None], 
-        "use_effective_h": [bool],
-        "hd_factor": [Interval(Real, 0, 1, closed="right")], 
-        "kappa_mode": [StrOptions({"bar", "kb"})],
-        "offset_mode": [StrOptions({"mul", "log10"})],
-        "time_units": [str, None], 
-        "bounds_mode": [StrOptions({"soft", "hard"}), None],
-        "residual_method":[StrOptions({"exact", "euler"})]       
+
+    @validate_params(
+        {
+            "output_subsidence_dim": [
+                Interval(Integral, 1, None, closed="left"),
+            ],
+            "output_gwl_dim": [
+                Interval(Integral, 1, None, closed="left"),
+            ],
+            "pde_mode": [
+                StrOptions(
+                    {
+                        "consolidation",
+                        "gw_flow",
+                        "both",
+                        "none",
+                        "on",
+                        "off",
+                    }
+                ),
+                "array-like",
+                None,
+            ],
+            "mv": [LearnableMV, Real],
+            "kappa": [LearnableKappa, Real],
+            "gamma_w": [FixedGammaW, Real],
+            "h_ref": [
+                FixedHRef,
+                Real,
+                StrOptions({"auto", "fixed"}),
+                None,
+            ],
+            "use_effective_h": [bool],
+            "hd_factor": [
+                Interval(Real, 0, 1, closed="right"),
+            ],
+            "kappa_mode": [StrOptions({"bar", "kb"})],
+            "offset_mode": [StrOptions({"mul", "log10"})],
+            "time_units": [str, None],
+            "bounds_mode": [StrOptions({"soft", "hard"}), None],
+            "residual_method": [
+                StrOptions({"exact", "euler"}),
+            ],
+            "scaling_kwargs": [
+                Mapping,
+                str,
+                GeoPriorScalingConfig,
+                None,
+            ],
         }
-   )
+    )
+
     def __init__(
         self,
         static_input_dim: int,
@@ -265,77 +289,88 @@ class GeoPriorSubsNet(BaseAttentive):
         if 'output_dim' in kwargs: 
             kwargs.pop ('output_dim') 
             
-        self.scaling_kwargs = dict(scaling_kwargs or {})
-        b = self.scaling_kwargs.get("bounds")
-        if isinstance(b, Mapping) and not isinstance(b, dict):
-            self.scaling_kwargs["bounds"] = dict(b)
-
         self.bounds_mode = bounds_mode or "soft"
 
         # --------------------------------------------------------------
-        # Scaling kwargs: accept dict OR JSON string/path.
-        # Then canonicalize + validate alias consistency.
+        # Scaling kwargs: accept None / Mapping / path / config.
+        # Always resolve to a canonical, validated dict.
         # --------------------------------------------------------------
-        self.scaling_kwargs = load_scaling_kwargs(
+        self.scaling_cfg = GeoPriorScalingConfig.from_any(
             scaling_kwargs,
             copy=True,
         )
-
-        # Ensure nested bounds is a plain dict if provided.
+        
+        # If user passed time_units but scaling has none,
+        # inject it *before* resolve so derived fields match.
+        if time_units is not None:
+            tu0 = self.scaling_cfg.payload.get("time_units", None)
+            if tu0 is None:
+                self.scaling_cfg.payload["time_units"] = time_units
+            elif isinstance(tu0, str) and not tu0.strip():
+                self.scaling_cfg.payload["time_units"] = time_units
+        
+        try:
+            self.scaling_kwargs = self.scaling_cfg.resolve()
+        except Exception as err:
+            logger.exception(
+                "Scaling resolve failed (source=%r): %s",
+                self.scaling_cfg.source, err
+            )
+            raise
+        
+        # Ensure nested bounds is a plain dict.
         b = self.scaling_kwargs.get("bounds", None)
         if isinstance(b, Mapping) and not isinstance(b, dict):
             self.scaling_kwargs["bounds"] = dict(b)
         
-        self._track_aux_metrics = get_sk(
-            self.scaling_kwargs, "track_aux_metrics", default=True
-            )
-
-        # Canonicalize missing canonical keys from aliases.
-        self.scaling_kwargs = canonicalize_scaling_kwargs(
-            self.scaling_kwargs,
-        )
-
-        # Enforce that canonical and alias keys do not disagree.
-        enforce_scaling_alias_consistency(
-            self.scaling_kwargs,
-            where="validate",
-        )
-
-        # --------------------------------------------------------------
-        # Resolve time_units (scaling wins; else __init__ arg).
-        # Always store final value back to scaling_kwargs.
-        # --------------------------------------------------------------
-        scale_tu = get_sk(
-            self.scaling_kwargs,
+        # Resolve time_units from final scaling dict.
+        self.time_units = self.scaling_kwargs.get(
             "time_units",
-            default=None,
+            None,
         )
-        if isinstance(scale_tu, str) and not scale_tu.strip():
-            scale_tu = None
-
-        self.time_units = (
-            scale_tu if scale_tu is not None else time_units
+        
+        # If __init__ forces a bounds_mode and scaling is silent,
+        # keep existing behavior (bounds_mode wins).
+        if bounds_mode is None:
+            bm0 = self.scaling_kwargs.get("bounds_mode", None)
+            if bm0 is not None:
+                self.bounds_mode = str(bm0)
+        else:
+            self.bounds_mode = bounds_mode or "soft"
+        
+        # Aux metrics flag (read from canonical scaling).
+        self._track_aux_metrics = get_sk(
+            self.scaling_kwargs,
+            "track_aux_metrics",
+            default=True,
         )
-        self.scaling_kwargs["time_units"] = self.time_units
 
         # ------------------------------------------------------------------
         # Drainage mode (controls Hd_factor used in tau_phys prior)
         # ------------------------------------------------------------------
         self.use_effective_thickness = use_effective_h
-        self.Hd_factor = hd_factor   # if Hd = Hd_factor * H
+        self.Hd_factor = hd_factor
         
-        drainage_mode = self.scaling_kwargs.get("drainage_mode", None)
+        drainage_mode = self.scaling_kwargs.get(
+            "drainage_mode",
+            None,
+        )
         
-        # Only auto-override if user didn't explicitly pass custom values
         if drainage_mode is not None and (
-                use_effective_h is False and hd_factor == 1.0):
+            use_effective_h is False and hd_factor == 1.0
+        ):
             dm = str(drainage_mode).strip().lower()
             self.use_effective_thickness = True
-            self.Hd_factor = 0.5 if dm.startswith("double") else 1.0
-
-        # Optional: run scaling sanity checks now (policy-aware).
-        validate_scaling_kwargs(self.scaling_kwargs)
-
+            self.Hd_factor = 0.5 if dm.startswith(
+                "double"
+            ) else 1.0
+        
+        # mutate self.scaling_kwargs (time_units, drainage, etc)
+        self.scaling_cfg = GeoPriorScalingConfig.from_any(
+            self.scaling_kwargs,
+            copy=True,
+        )
+        
         super().__init__(
             static_input_dim=static_input_dim,
             dynamic_input_dim=dynamic_input_dim,
@@ -430,6 +465,8 @@ class GeoPriorSubsNet(BaseAttentive):
             f" kappa_trainable={kappa.trainable}"
         )
         
+        self.output_names = list(self._output_keys)
+        
         self.add_on = None
         
         if self._track_aux_metrics:
@@ -440,18 +477,10 @@ class GeoPriorSubsNet(BaseAttentive):
                 q_axis=2,
                 n_q=3,
             )
-
             
         self._init_coordinate_corrections()
         self._build_pinn_components()
         
-        self.output_names = list(self._output_keys)
-        
-
-    # @property
-    # def output_names(self):
-    #     # Used by Keras containers as “the output order”
-    #     return list(self._output_keys)
 
     @property
     def _output_keys(self):
@@ -708,8 +737,6 @@ class GeoPriorSubsNet(BaseAttentive):
         self.Ss_field = None
         self.tau_field = None
 
-
-   # @tf_autograph.experimental.do_not_convert
     def run_encoder_decoder_core(
         self,
         static_input: Tensor,
@@ -983,7 +1010,6 @@ class GeoPriorSubsNet(BaseAttentive):
             inputs, training=training
         )
     
-    # @tf_autograph.experimental.do_not_convert
     def call(
         self,
         inputs: Dict[str, Optional[Tensor]],
@@ -2298,123 +2324,61 @@ class GeoPriorSubsNet(BaseAttentive):
         self._mv_lr_mult = float(mv_lr_mult)
         self._kappa_lr_mult = float(kappa_lr_mult)
 
-
     def get_config(self) -> dict:
-        r"""
-        Return the full serializable configuration of the model.
+        r"""Return a Keras-serializable model config."""
+        cfg = super().get_config()
     
-        This extends :meth:`BaseAttentive.get_config` with additional
-        physics-related knobs so that :class:`GeoPriorSubsNet` can be
-        saved and restored with :func:`tf.keras.models.clone_model`,
-        :func:`tf.keras.models.model_from_json`, or the Keras SavedModel
-        machinery.
+        # Keep BaseAttentive compatible output_dim.
+        cfg["output_dim"] = self._data_output_dim
     
-        Returns
-        -------
-        dict
-            A configuration dictionary suitable for reconstruction via
-            :meth:`from_config`. It includes:
+        # Store scaling as a Keras object so load_model()
+        # reconstructs the exact scaling pipeline.
+        cfg["scaling_kwargs"] = K.serialize_keras_object(
+            self.scaling_cfg,
+        )
     
-            * all keys from :meth:`BaseAttentive.get_config`,
-            * PINN-specific entries:
+        # Physics + PINN knobs (constructor args).
+        cfg.update(
+            {
+                "output_subsidence_dim": (
+                    self.output_subsidence_dim
+                ),
+                "output_gwl_dim": self.output_gwl_dim,
+                "pde_mode": self.pde_modes_active,
+                "mv": self.mv_config,
+                "kappa": self.kappa_config,
+                "gamma_w": self.gamma_w_config,
+                "h_ref": self.h_ref_config,
+                "scale_pde_residuals": (
+                    self.scale_pde_residuals
+                ),
+                "time_units": self.time_units,
+                "use_effective_h": (
+                    self.use_effective_thickness
+                ),
+                "hd_factor": self.Hd_factor,
+                "offset_mode": self.offset_mode,
+                "kappa_mode": self.kappa_mode,
+                "bounds_mode": self.bounds_mode,
+                "residual_method": self.residual_method,
+                "verbose": self.verbose,
+                "model_version": "3.2-GeoPrior",
+            }
+        )
     
-              - ``"output_subsidence_dim"``,
-              - ``"output_gwl_dim"``,
-              - ``"pde_mode"`` (active PDE modes),
-              - ``"mv"`` (possibly a serialized :class:`LearnableMV`),
-              - ``"kappa"`` (possibly a serialized :class:`LearnableKappa`),
-              - ``"gamma_w"`` and ``"h_ref"`` (fixed physics scalars),
-              - ``"scale_pde_residuals"`` and ``"scaling_kwargs"``,
+        return cfg
     
-            * a lightweight ``"model_version"`` tag for manual inspection.
-        """
-        base_config = super().get_config()
-    
-        pinn_config = {
-            "output_subsidence_dim": self.output_subsidence_dim,
-            "output_gwl_dim": self.output_gwl_dim,
-            # Note: pde_modes_active is typically a list; we store it as-is.
-            "pde_mode": self.pde_modes_active,
-            # These may be wrapper objects (LearnableMV, LearnableKappa,
-            # FixedGammaW, FixedHRef) which Keras knows how to serialize.
-            "mv": self.mv_config,
-            "kappa": self.kappa_config,
-            "gamma_w": self.gamma_w_config,
-            "h_ref": self.h_ref_config,
-            "scale_pde_residuals": self.scale_pde_residuals,
-            "time_units": self.time_units,      
-            "scaling_kwargs": dict(self.scaling_kwargs or {}),
-            #  keep the effective thickness / κ-mode knobs
-            "use_effective_h": self.use_effective_thickness,
-            "hd_factor": self.Hd_factor,
-            "offset_mode": self.offset_mode, 
-            "kappa_mode": self.kappa_mode,
-            "bounds_mode": self.bounds_mode,
-            "residual_method": self.residual_method, 
-            "verbose": self.verbose, 
-            "model_version": "3.2-GeoPrior",
-        }
-    
-        base_config.update(pinn_config)
-        # For backward compatibility with BaseAttentive, keep the original
-        # data output dimension visible.
-        base_config["output_dim"] = self._data_output_dim
-    
-        return base_config
-
     @classmethod
-    def from_config(cls, config: dict, custom_objects=None):
-        r"""
-        Reconstruct a :class:`GeoPriorSubsNet` instance from config.
-    
-        This is the inverse of :meth:`get_config` and is used by the
-        Keras serialization utilities. It also handles two important
-        concerns:
-    
-        * Re-hydrating physics parameter wrappers (e.g. ``LearnableMV``)
-          from their serialized dict form.
-        * Gracefully dropping legacy or intermediate keys that no longer
-          belong in the public constructor (older SavedModels / configs).
-    
-        Parameters
-        ----------
-        config : dict
-            Configuration dictionary produced by :meth:`get_config`,
-            possibly extended by Keras when saving/loading. May contain
-            serialized versions of ``mv``, ``kappa``, ``gamma_w``,
-            ``h_ref`` as nested dicts with ``"class_name"`` and
-            ``"config"`` fields.
-    
-        custom_objects : dict or None, default=None
-            Optional mapping of string names to custom classes or
-            functions. If ``None``, a fresh dictionary is created and
-            populated with the physics parameter wrappers required to
-            deserialize the config (e.g. :class:`LearnableMV`,
-            :class:`LearnableKappa`, :class:`FixedGammaW`,
-            :class:`FixedHRef`, etc.).
-    
-        Returns
-        -------
-        GeoPriorSubsNet
-            A newly constructed model instance with weights uninitialized
-            (to be loaded separately if needed).
-    
-        Notes
-        -----
-        * Any legacy keys that refer to older model variants
-          (e.g. explicit ``"K"``, ``"Ss"`` or generic
-          ``"pinn_coefficient_C"``) are removed to keep the constructor
-          signature clean.
-        * The ``"output_dim"`` key is also removed because
-          :class:`GeoPriorSubsNet` derives it from
-          ``output_subsidence_dim`` and ``output_gwl_dim``.
-        """
+    def from_config(
+        cls,
+        config: dict,
+        custom_objects=None,
+    ):
+        r"""Rebuild model from a serialized config."""
         if custom_objects is None:
             custom_objects = {}
     
-        # Register all physics parameter wrappers so that Keras'
-        # deserialize_keras_object() can rebuild them from their
-        # serialized representation.
+        # Register wrappers for deserialization safety.
         custom_objects.update(
             {
                 "LearnableMV": LearnableMV,
@@ -2427,22 +2391,39 @@ class GeoPriorSubsNet(BaseAttentive):
                 "LearnableC": LearnableC,
                 "FixedC": FixedC,
                 "DisabledC": DisabledC,
+                "GeoPriorScalingConfig": (
+                    GeoPriorScalingConfig
+                ),
             }
         )
     
-        # Re-hydrate scalar physics configs if they were serialized as
-        # Keras objects (with {"class_name": ..., "config": ...}).
+        # Rehydrate scalar wrappers when saved as
+        # {"class_name": ..., "config": ...}.
         for key in ("mv", "kappa", "gamma_w", "h_ref"):
-            obj = config.get(key)
+            obj = config.get(key, None)
             if isinstance(obj, dict) and "class_name" in obj:
                 config[key] = deserialize_keras_object(
                     obj,
                     custom_objects=custom_objects,
                 )
     
-        # Drop legacy / internal keys that should not be passed to
-        # the public __init__. This keeps backwards compatibility with
-        # older SavedModels while avoiding unexpected kwargs.
+        # Rehydrate scaling config if it is a Keras object.
+        sk = config.get("scaling_kwargs", None)
+        if isinstance(sk, dict) and "class_name" in sk:
+            try:
+                config["scaling_kwargs"] = (
+                    deserialize_keras_object(
+                        sk,
+                        custom_objects=custom_objects,
+                    )
+                )
+            except Exception as err:
+                logger.exception(
+                    f"Failed to deserialize scaling_kwargs: {err}"
+                )
+                raise
+    
+        # Drop legacy / internal keys not in __init__.
         config.pop("K", None)
         config.pop("Ss", None)
         config.pop("Q", None)
@@ -2453,7 +2434,11 @@ class GeoPriorSubsNet(BaseAttentive):
     
         return cls(**config)
 
-@register_keras_serializable("fusionlab.nn.pinn", name="PoroElasticSubsNet")
+
+@register_keras_serializable(
+    "fusionlab.nn.pinn.models.geoprior",
+    name="PoroElasticSubsNet"
+ )
 class PoroElasticSubsNet(GeoPriorSubsNet):
     """
     Poroelastic surrogate variant of GeoPriorSubsNet.

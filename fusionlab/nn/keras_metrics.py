@@ -88,7 +88,7 @@ def _infer_quantile_axis(t, n_q: int = 3):
     if rank == 4:
         if shape[2] == n_q:
             return 2
-        if shape[3] == n_q:
+        elif shape[3] == n_q:
             return 3
         return None
 
@@ -97,7 +97,6 @@ def _infer_quantile_axis(t, n_q: int = 3):
         return 2 if shape[2] == n_q else None
 
     return None
-
 
 def _extract_q50(
     y_pred,

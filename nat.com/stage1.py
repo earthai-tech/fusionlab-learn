@@ -67,9 +67,12 @@ from fusionlab.utils.generic_utils import (
     print_config_table
 )
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
-from fusionlab.utils.subsidence_utils import ( 
-    rate_to_cumulative, cumulative_to_rate, 
-    # finalize_si_scaling_kwargs
+from fusionlab.utils.subsidence_utils import (
+    cumulative_to_rate,
+    normalize_gwl_alias,
+    rate_to_cumulative,
+    resolve_gwl_for_physics,
+    resolve_head_column,
 )
 from fusionlab.utils.subsidence_utils import make_txy_coords
 from fusionlab.utils.sequence_utils import build_future_sequences_npz
@@ -534,29 +537,11 @@ print(f"  Source: {used_path}")
 #     IMPORTANT: This is ONLY a naming fix. Unit conversion is handled
 #     later when creating __si columns.
 # ------------------------------------------------------------------
-# If config says "GWL", treat it as an alias and standardize to depth_bgs.
-if isinstance(GWL_COL, str) and (GWL_COL.strip().lower() == "gwl"):
-    # Priority order: prefer the physically meaningful meters column
-    if ("GWL_depth_bgs" in df_raw.columns) and ("GWL" in df_raw.columns):
-        print("  [GWL] Config uses 'GWL'. Both 'GWL' and 'GWL_depth_bgs' exist; "
-              "switching GWL_COL -> 'GWL_depth_bgs' (meters).")
-        GWL_COL = "GWL_depth_bgs"
-
-    elif ("GWL_depth_bgs" in df_raw.columns) and ("GWL" not in df_raw.columns):
-        print("  [GWL] Config uses 'GWL' but dataset has 'GWL_depth_bgs'. "
-              "Switching GWL_COL -> 'GWL_depth_bgs'.")
-        GWL_COL = "GWL_depth_bgs"
-
-    elif ("GWL" in df_raw.columns) and ("GWL_depth_bgs" not in df_raw.columns):
-        # We only rename if the target name does not already exist.
-        print("  [GWL] Dataset has 'GWL' but missing 'GWL_depth_bgs'. "
-              "Renaming column 'GWL' -> 'GWL_depth_bgs' for consistency.")
-        df_raw.rename(columns={"GWL": "GWL_depth_bgs"}, inplace=True)
-        GWL_COL = "GWL_depth_bgs"
-
-    else:
-        print("  [GWL] Config uses 'GWL' but dataset has neither 'GWL' nor "
-              "'GWL_depth_bgs'. Will error later in required-column checks.")
+df_raw, GWL_COL = normalize_gwl_alias(
+    df_raw,
+    GWL_COL,
+    prefer_depth_bgs=True,
+)
 
 # ==================================================================
 # Step 2: Initial preprocessing (clean + select + censor)
@@ -609,156 +594,18 @@ FUTURE_DRIVER_FEATURES, _ = _resolve_optional_columns(df_raw, FUTURE_DRIVER_FEAT
 
 # ------------------------------------------------------------------
 # 2.2 Decide the "meters" groundwater source used for physics
-#
-# Rule (physics-first):
-#   - Physics MUST use meters. Prefer 'GWL_depth_bgs' or 'GWL'.
-#   - If user explicitly provides a GWL_COL (non-None), we interpret it
-#     as "this is the column I want as the PHYSICS groundwater input".
-#       * If it exists and is NOT z-score -> accept.
-#       * If it is z-score -> reject (physics requires meters).
-#   - If user does NOT provide GWL_COL (None or ''), auto-detect:
-#       * If meters exist -> choose 'GWL_depth_bgs' (preferred) else 'GWL'
-#         and print a message.
-#       * If meters exist AND z-score exists -> still choose meters and
-#         print a message that z-score will be ignored for physics.
-#       * If only z-score exists -> raise with a clear physics message.
-#
-# Optional:
-#   - If z-score exists AND meters exists, keep z-score as an optional
-#     ML convenience feature (if you want), but never use it for physics.
-# ------------------------------------------------------------------
-
-def _is_nonempty_str(x) -> bool:
-    return isinstance(x, str) and x.strip() != ""
-
-def _looks_like_zscore_name(col: str) -> bool:
-    return isinstance(col, str) and col.lower().endswith("_z")
-
-def resolve_gwl_for_physics(
-    df: pd.DataFrame,
-    gwl_col_user: Optional[str],
-    *,
-    prefer_depth_bgs: bool = True,
-    allow_keep_zscore_as_ml: bool = True,
-) -> tuple[str, Optional[str]]:
-    cols = set(df.columns)
-
-    meters_pref = ["GWL_depth_bgs", "GWL"] if prefer_depth_bgs else ["GWL", "GWL_depth_bgs"]
-    zscore_cands = ["GWL_depth_bgs_z", "GWL_z"]
-
-    meters_available = [c for c in meters_pref if c in cols]
-    zscore_available = [c for c in zscore_cands if c in cols]
-
-    def is_z(col: str) -> bool:
-        return isinstance(col, str) and (col.lower().endswith("_z") or col in zscore_cands)
-
-    def nonempty(x) -> bool:
-        return isinstance(x, str) and x.strip() != ""
-
-    # --- User provided something ---
-    if nonempty(gwl_col_user):
-        if gwl_col_user not in cols:
-            raise ValueError(
-                f"GWL_COL={gwl_col_user!r} was provided but does not exist in the dataset."
-            )
-
-        # User provided z-score column:
-        if is_z(gwl_col_user):
-            if meters_available:
-                gwl_m = meters_available[0]
-                gwl_z = gwl_col_user if allow_keep_zscore_as_ml else None
-                print(
-                    f"  [GWL] Config/user requested {gwl_col_user!r} (z-score), "
-                    f"but meters column {gwl_m!r} exists. "
-                    f"Using {gwl_m!r} for physics; keeping {gwl_z!r} as ML-only."
-                )
-                return gwl_m, gwl_z
-            raise ValueError(
-                f"GWL_COL={gwl_col_user!r} is z-scored, and no meters groundwater column "
-                "('GWL_depth_bgs' or 'GWL') exists. Physics requires meters."
-            )
-
-        # User provided meters column:
-        gwl_m = gwl_col_user
-        gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
-        if gwl_z is not None:
-            print(
-                f"  [GWL] Using user-provided meters column {gwl_m!r} for physics. "
-                f"Z-score {gwl_z!r} exists and can be kept ML-only."
-            )
-        else:
-            print(f"  [GWL] Using user-provided meters column {gwl_m!r} for physics.")
-        return gwl_m, gwl_z
-
-    # --- Auto-detect (user did not provide) ---
-    if meters_available:
-        gwl_m = meters_available[0]
-        gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
-        if gwl_z is not None:
-            print(
-                f"  [GWL] Auto-selected meters {gwl_m!r} for physics. "
-                f"Z-score {gwl_z!r} exists; it will NOT be used for physics."
-            )
-        else:
-            print(f"  [GWL] Auto-selected meters {gwl_m!r} for physics.")
-        return gwl_m, gwl_z
-
-    if zscore_available:
-        raise ValueError(
-            "No groundwater column in meters was found (expected 'GWL_depth_bgs' or 'GWL'), "
-            f"but z-score column(s) exist: {zscore_available}. Physics requires meters."
-        )
-
-    raise ValueError(
-        "No groundwater column found. Expected 'GWL_depth_bgs' or 'GWL' (meters)."
-    )
-
+#--------------------------------------------------------------------
 # ---- Apply the resolver ----
 GWL_METERS_COL, GWL_ZSCORE_COL = resolve_gwl_for_physics(
     df_raw,
-    gwl_col_user=GWL_COL,   # may be None/'' per your rule
+    gwl_col_user=GWL_COL, # may be None/'' per  rule
     prefer_depth_bgs=True,
     allow_keep_zscore_as_ml=True,
 )
 
-def resolve_head_column(
-    df: pd.DataFrame,
-    *,
-    depth_col: str,
-    head_col: str = "head_m",
-    z_surf_col: Optional[str] = None,
-    use_head_proxy: bool = True,
-) -> tuple[str, Optional[str]]:
-    cols = set(df.columns)
-
-    # Prefer explicit head column if present
-    if head_col and head_col in cols:
-        return head_col, z_surf_col if (z_surf_col in cols if z_surf_col else False) else None
-
-    # Else compute from z_surf - depth if possible
-    if z_surf_col and (z_surf_col in cols):
-        new_head = "head_m"  # canonical name
-        df[new_head] = pd.to_numeric(df[z_surf_col], errors="coerce"
-                                     ) - pd.to_numeric(df[depth_col], errors="coerce")
-        return new_head, z_surf_col
-
-    # Else proxy: head ≈ -depth (only if allowed)
-    if use_head_proxy:
-        new_head = "head_m"
-        df[new_head] = -pd.to_numeric(df[depth_col], errors="coerce")
-        return new_head, None
-
-    raise ValueError(
-        "Cannot resolve head. Provide 'head_m' or 'z_surf' (Z_SURF_COL), "
-        "or enable USE_HEAD_PROXY."
-    )
-
-Z_SURF_COL = cfg.get("Z_SURF_COL", None)
-USE_HEAD_PROXY = bool(cfg.get("USE_HEAD_PROXY", True))
-HEAD_COL = cfg.get("HEAD_COL", "head_m")
 
 # Depth for the dynamic driver (z_GWL)
-GWL_DEPTH_COL = GWL_METERS_COL  # keep your existing meters resolver
+GWL_DEPTH_COL = GWL_METERS_COL  # 
 
 # Head for physics/target (h)
 HEAD_SRC_COL, Z_SURF_COL_USED = resolve_head_column(
@@ -766,7 +613,7 @@ HEAD_SRC_COL, Z_SURF_COL_USED = resolve_head_column(
     depth_col=GWL_DEPTH_COL,
     head_col=HEAD_COL,
     z_surf_col=Z_SURF_COL,
-    use_head_proxy=USE_HEAD_PROXY,
+    use_head_proxy=bool(USE_HEAD_PROXY),
 )
 
 # ------------------------------------------------------------------
@@ -832,7 +679,6 @@ if H_FIELD_COL_NAME not in df_raw.columns:
 # The physics source used later to build __si (NEVER z-score)
 GWL_SRC_COL = GWL_METERS_COL
 
-
 # ------------------------------------------------------------------
 # 2.3 Build selection list (required + resolved optional)
 #     - Always include required physics/targets:
@@ -848,8 +694,6 @@ base_select = [
     GWL_METERS_COL,       # <- meters (physics-critical)
     H_FIELD_COL_NAME,
 ]
-Z_SURF_COL = cfg.get("Z_SURF_COL", None)
-HEAD_COL   = cfg.get("HEAD_COL", "head_m")
 
 if Z_SURF_COL and (Z_SURF_COL in df_raw.columns):
     base_select.append(Z_SURF_COL)
@@ -896,9 +740,12 @@ for c in (GWL_DEPTH_COL, HEAD_SRC_COL, H_FIELD_COL_NAME):
     if c not in df_raw.columns:
         raise ValueError(f"[Stage1] Missing critical column: {c}")
 
-if not USE_HEAD_PROXY and (Z_SURF_COL is not None) and (Z_SURF_COL not in df_raw.columns):
+if not USE_HEAD_PROXY and (
+        Z_SURF_COL is not None) and (
+            Z_SURF_COL not in df_raw.columns):
     raise ValueError(
-        f"[Stage1] USE_HEAD_PROXY=False but Z_SURF_COL={Z_SURF_COL!r} not found in dataset."
+        "[Stage1] USE_HEAD_PROXY=False but Z_SURF_COL"
+        f"={Z_SURF_COL!r} not found in dataset."
     )
 
 # ------------------------------------------------------------------
@@ -1325,9 +1172,26 @@ if ml_numeric_cols:
     joblib.dump(scaler, scaler_path)
     print(f"  Saved scaler (fit on train only): {scaler_path}")
     print(f"  Scaled ML numeric cols: {ml_numeric_cols}")
+    
 else:
     scaler = None
     print("  [Info] No ML numeric features to scale.")
+
+# --------------------------------------------------------------
+# Stage-1 scaler_info (for Stage-2 metrics inversion/debugging)
+# --------------------------------------------------------------
+scaler_info = {}
+if scaler_path and ml_numeric_cols:
+    for j, feat in enumerate(ml_numeric_cols):
+        scaler_info[feat] = {
+            "scaler_path": scaler_path,
+            "all_features": list(ml_numeric_cols),
+            "idx": int(j),
+            # "scaler": scaler  # DO NOT store object in JSON; Stage-2 may attach it at runtime
+        }
+else:
+    scaler_info = {}
+
 
 scaled_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_03_scaled.csv")
 df_scaled.to_csv(scaled_csv, index=False)
@@ -1582,6 +1446,8 @@ if should_audit(AUDIT_STAGES, stage="stage1"):
         city=CITY_NAME,
         model_name=MODEL_NAME,
         sample_rows=5,
+        main_scaler_path=scaler_path,
+        scaler_info=scaler_info,
     )
 
 #%
@@ -1846,6 +1712,7 @@ manifest = {
         "features": features_spec,
         "indices": indices_spec,
         "conventions": conventions_spec,
+        "scaler_info": scaler_info,
         "scaling_kwargs": scaling_kwargs,
 
         # “declared vs resolved” is optional but useful for audit/debug
@@ -1916,6 +1783,7 @@ manifest = {
         "sklearn": sklearn.__version__,
     },
 }
+
 
 # === Step 5b: Build TEST sequences (temporal generalization) ===
 df_test = df_scaled[df_scaled[TIME_COL] >= FORECAST_START_YEAR].copy()

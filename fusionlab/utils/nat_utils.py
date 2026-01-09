@@ -3067,9 +3067,9 @@ def resolve_hybrid_config(
     #    (Everything that does NOT affect input data shapes or target columns)
     OVERRIDABLE_KEYS = {
         # track City Name , so we can switch to change city as well 
-        "CITY_NAME", 
+        "CITY_NAME", "CITY", 
         
-        "TRACK_ADD_ON_METRICS", 
+        "TRACK_AUX_METRICS", 
         # --- 1. Architecture (Safe to tune if model is rebuilt) ---
         "EMBED_DIM", "HIDDEN_UNITS", "LSTM_UNITS", "ATTENTION_UNITS",
         "NUMBER_HEADS", "DROPOUT_RATE", "MEMORY_SIZE", "SCALES",
@@ -3383,10 +3383,20 @@ def subs_point_from_out(model, out, quantiles=None, med_idx=None):
             "Model output 'subs_pred' is None."
         )
 
-    has_rank = hasattr(subs_pred, "shape") and (
-        getattr(subs_pred.shape, "rank", None) is not None
-    )
-    is_quantile_tensor = has_rank and (subs_pred.shape.rank == 4)
+    # has_rank = hasattr(subs_pred, "shape") and (
+    #     getattr(subs_pred.shape, "rank", None) is not None
+    # )
+    # is_quantile_tensor = has_rank and (subs_pred.shape.rank == 4)
+    rank = None
+    if hasattr(subs_pred, "shape"):
+        rank = getattr(subs_pred.shape, "rank", None)  # TF tensors
+        if rank is None:
+            try:
+                rank = len(subs_pred.shape)            # NumPy arrays / tuples
+            except Exception:
+                rank = None
+    
+    is_quantile_tensor = (rank == 4)
 
     if not is_quantile_tensor:
         return subs_pred

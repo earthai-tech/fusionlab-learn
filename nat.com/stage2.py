@@ -44,6 +44,7 @@ if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
 
 from fusionlab._optdeps import with_progress 
 from fusionlab.backends.devices import configure_tf_from_cfg
+from fusionlab.compat.keras import save_manifest, load_bundle_for_inference
 from fusionlab.api.util import get_table_size
 from fusionlab.utils.audit_utils import should_audit, audit_stage2_handshake
 from fusionlab.utils.generic_utils import ensure_directory_exists, save_all_figures
@@ -65,6 +66,7 @@ from fusionlab.utils.nat_utils import (
     resolve_si_affine, 
     resolve_hybrid_config, 
     subs_point_from_out, 
+    extract_preds, 
 )
 
 from fusionlab.utils.forecast_utils import format_and_forecast
@@ -76,7 +78,18 @@ from fusionlab.utils.scale_metrics import (
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
 from fusionlab.utils.subsidence_utils import convert_eval_payload_units
 from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet, PoroElasticSubsNet
+# from fusionlab.nn.pinn._geoprior_subnet import GeoPriorSubsNet, PoroElasticSubsNet
 from fusionlab.nn.pinn.geoprior.utils import finalize_scaling_kwargs 
+from fusionlab.nn.pinn.geoprior.debugs import debug_model_reload
+from fusionlab.nn._shapes import (
+    debug_val_interval,
+    debug_tensor_interval,
+    canonicalize_BHQO_quantiles_np, 
+    _logs_to_py, 
+    debug_quantile_crossing_np
+)
+
+from fusionlab.nn.pinn.geoprior.plot import plot_physics_values_in, autoplot_geoprior_history 
 from fusionlab.params import LearnableMV, LearnableKappa, FixedGammaW, FixedHRef
 from fusionlab.nn.losses import make_weighted_pinball
 from fusionlab.nn.keras_metrics import ( 
@@ -282,6 +295,9 @@ USE_VSN        = cfg.get("USE_VSN", True)
 VSN_UNITS      = cfg.get("VSN_UNITS", 32)
 
 AUDIT_STAGES = cfg.get ("AUDIT_STAGES")
+
+USE_IN_MEMORY_MODEL = bool(cfg.get("USE_IN_MEMORY_MODEL", False))
+DEBUG = bool(cfg.get("DEBUG", False))
 
 # Helper: JSON has string keys for quantile weight dicts; coerce to float.
 def _coerce_quantile_weights(d: dict, default: dict) -> dict:
@@ -850,6 +866,36 @@ print("[Info] H_scale_si:", H_scale_si, "H_bias_si:", H_bias_si)
 
 # Load scaler_info mapping (dict or path)
 scaler_info_dict = load_scaler_info(encoders)
+
+def _pick_scaler_key(scaler_info, preferred, fallbacks=()):
+    if not scaler_info:
+        return preferred
+    if preferred in scaler_info:
+        return preferred
+    for k in fallbacks:
+        if k in scaler_info:
+            return k
+    # last resort: fuzzy match
+    low = {k.lower(): k for k in scaler_info.keys()}
+    for token in ("subs", "subsidence"):
+        for lk, orig in low.items():
+            if token in lk:
+                return orig
+    return preferred
+
+SUBS_SCALER_KEY = _pick_scaler_key(
+    scaler_info_dict,
+    preferred=SUBSIDENCE_COL,                 # what you used before
+    fallbacks=("subsidence", "subs_pred"),    # what your pipeline commonly uses
+)
+
+GWL_SCALER_KEY = _pick_scaler_key(
+    scaler_info_dict,
+    preferred=GWL_COL if "GWL_COL" in globals() else "gwl",
+    fallbacks=("gwl", "gwl_pred"),
+)
+
+print(f"[DEBUG] Using SUBS_SCALER_KEY={SUBS_SCALER_KEY!r} (SUBSIDENCE_COL={SUBSIDENCE_COL!r})")
 
 # If scaler_info is a dict with only 'scaler_path',
 #  proactively attach the loaded scaler objects
@@ -1449,19 +1495,46 @@ physics_loss_weights = {
 # Strategy override
 loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": float(LOSS_WEIGHT_GWL)}
 
+
+out_names = list(getattr(subs_model_inst, "output_names", [])) or ["subs_pred", "gwl_pred"]
+import keras 
+IS_KERAS2 = keras.__version__.startswith("2.")
+
+# Build positional compile args (Keras2-safe)
+if IS_KERAS2:
+    loss_arg = [loss_dict[k] for k in out_names]
+    lossw_arg = [loss_weights_dict.get(k, 1.0) for k in out_names]
+    metrics_compile = None if metrics_arg is None else [metrics_arg.get(k, []) for k in out_names]
+else:
+    loss_arg = loss_dict
+    lossw_arg = loss_weights_dict
+    metrics_compile = metrics_arg
+
 # ------------------------------------------------------------
 # Compile
 # ------------------------------------------------------------
+# subs_model_inst.compile(
+#     optimizer=tf.keras.optimizers.Adam(
+#         learning_rate=LEARNING_RATE,
+#         clipnorm=1.0,
+#     ),
+#     loss=loss_dict,
+#     metrics=metrics_arg,  # None when TRACK_AUX_METRICS=True
+#     loss_weights=loss_weights_dict,
+#     **physics_loss_weights,
+# )
 subs_model_inst.compile(
     optimizer=tf.keras.optimizers.Adam(
         learning_rate=LEARNING_RATE,
         clipnorm=1.0,
     ),
-    loss=loss_dict,
-    metrics=metrics_arg,  # None when TRACK_AUX_METRICS=True
-    loss_weights=loss_weights_dict,
+    loss=loss_arg,
+    loss_weights=lossw_arg,
+    metrics=metrics_compile,
     **physics_loss_weights,
 )
+
+print([m.name for m in subs_model_inst.metrics if "coverage" in m.name or "sharpness" in m.name])
 
 print(f"{MODEL_NAME} compiled.")
 print("TRACK_AUX_METRICS:", TRACK_AUX_METRICS)
@@ -1479,22 +1552,107 @@ print([m.name for m in subs_model_inst.metrics])
 # Train
 # =============================================================================
 #%
-ckpt_name = f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.keras"
-ckpt_path = os.path.join(RUN_OUTPUT_PATH, ckpt_name)
+# ckpt_name = f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}.keras"
+# ckpt_path = os.path.join(RUN_OUTPUT_PATH, ckpt_name)
 
+bundle_prefix = f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}"
+
+best_keras_path = os.path.join(
+    RUN_OUTPUT_PATH,
+    f"{bundle_prefix}_best.keras"
+    )
+best_weights_path = os.path.join(
+    RUN_OUTPUT_PATH, f"{bundle_prefix}_best.weights.h5"
+  )
+
+# IMPORTANT: do not clash with  later run_manifest.json
+model_init_manifest_path = os.path.join(RUN_OUTPUT_PATH, "model_init_manifest.json")
+
+# --- Save a lightweight init manifest for robust inference reload ---
+# NOTE: avoid dumping non-JSON objects (mv/kappa etc). Store scalars + config.
+model_init_manifest = {
+    "model_class": model_cls.__name__,
+    "dims": {
+        "static_input_dim": int(s_dim_model),
+        "dynamic_input_dim": int(d_dim_model),
+        "future_input_dim": int(f_dim_model),
+        "output_subsidence_dim": int(OUT_S_DIM),
+        "output_gwl_dim": int(OUT_G_DIM),
+        "forecast_horizon": int(FORECAST_HORIZON_YEARS),
+    },
+    "config": {
+        "quantiles": list(QUANTILES) if QUANTILES else None,
+        "pde_mode": PDE_MODE_CONFIG,
+        "mode": MODE,
+        "time_units": TIME_UNITS,
+        "embed_dim": EMBED_DIM,
+        "hidden_units": HIDDEN_UNITS,
+        "lstm_units": LSTM_UNITS,
+        "attention_units": ATTENTION_UNITS,
+        "num_heads": NUMBER_HEADS,
+        "dropout_rate": DROPOUT_RATE,
+        "memory_size": MEMORY_SIZE,
+        "scales": list(SCALES) if SCALES else None,
+        "use_residuals": bool(USE_RESIDUALS),
+        "use_batch_norm": bool(USE_BATCH_NORM),
+        "use_vsn": bool(USE_VSN),
+        "vsn_units": int(VSN_UNITS) if VSN_UNITS is not None else None,
+
+        # GeoPrior scalar params (JSON-safe)
+        "geoprior": {
+            "init_mv": float(GEOPRIOR_INIT_MV),
+            "init_kappa": float(GEOPRIOR_INIT_KAPPA),
+            "gamma_w": float(GEOPRIOR_GAMMA_W),
+            "h_ref_value": float(GEOPRIOR_H_REF_VALUE),
+            "h_ref_mode": GEOPRIOR_H_REF_MODE,
+            "kappa_mode": GEOPRIOR_KAPPA_MODE,
+            "use_effective_h": bool(GEOPRIOR_USE_EFFECTIVE_H),
+            "hd_factor": float(GEOPRIOR_HD_FACTOR),
+            "offset_mode": OFFSET_MODE,
+        },
+        # Keep scaling_kwargs (already JSON-ish after finalize_scaling_kwargs)
+        "scaling_kwargs": subsmodel_params.get("scaling_kwargs", {}),
+    },
+}
+
+save_manifest(model_init_manifest_path, model_init_manifest)
+print(f"[OK] Saved model init manifest -> {model_init_manifest_path}")
+
+# callbacks = [
+#     EarlyStopping(
+#         monitor="val_loss", 
+#         patience=15, 
+#         restore_best_weights=True, 
+#         verbose=1
+#     ),
+#     ModelCheckpoint(
+#         filepath=ckpt_path, 
+#         monitor="val_loss", 
+#         save_best_only=True,
+#         save_weights_only=False, 
+#         verbose=1
+#     ),
+# ]
 callbacks = [
-    EarlyStopping(
-        monitor="val_loss", 
-        patience=15, 
-        restore_best_weights=True, 
-        verbose=1
+    ModelCheckpoint(
+        filepath=best_keras_path,
+        monitor="val_loss",
+        save_best_only=True,
+        save_weights_only=False,
+        verbose=1,
     ),
     ModelCheckpoint(
-        filepath=ckpt_path, 
-        monitor="val_loss", 
+        filepath=best_weights_path,
+        monitor="val_loss",
         save_best_only=True,
-        save_weights_only=False, 
-        verbose=1
+        save_weights_only=True,
+        verbose=1,
+    ),
+    EarlyStopping(
+        monitor="val_loss",
+        patience=15,
+        restore_best_weights=True,
+        verbose=1,
     ),
 ]
 
@@ -1614,11 +1772,15 @@ training_summary = {
     },
     "paths": {
         "run_dir": RUN_OUTPUT_PATH,
-        "checkpoint_keras": ckpt_path,
+        # "checkpoint_keras": ckpt_path,
         "weights_h5": weights_path,
         # "saved_model": savedmodel_dir,
         "arch_json": arch_json_path,
         "csv_log": csvlog_path,
+        "best_keras": best_keras_path,
+        "best_weights": best_weights_path,
+        "model_init_manifest": model_init_manifest_path,
+
     },
 }
 
@@ -1700,18 +1862,13 @@ print("[OK] Persisted weights, architecture JSON,"
       " CSV log, training summary, and run manifest.")
 
 
-# 2.6 run to save plots  (use ONLY train keys; val_* is auto-detected)
 history_groups = {
-    # What  actually optimize
     "Total Loss": ["total_loss"],
 
-    # Decomposition: data + physics (scaled vs raw)
     "Data vs Physics": ["data_loss", "physics_loss_scaled", "physics_loss"],
 
-    # Offset controls (helps debug scheduling)
     "Offset Controls": ["lambda_offset", "physics_mult"],
 
-    # Physics components (raw components, before global offset)
     "Physics Components": [
         "consolidation_loss",
         "gw_flow_loss",
@@ -1723,20 +1880,17 @@ history_groups = {
 
     "Subsidence MAE": ["subs_pred_mae"],
     "GWL MAE": ["gwl_pred_mae"],
+
+    # Keep the group if you want it, but only train key:
+    "Physics Loss (Scaled)": ["physics_loss_scaled"],
 }
-history_groups.update({
-    "Physics Loss (Scaled)": ["physics_loss_scaled", "val_physics_loss_scaled"],
-    "Offset & Multiplier": [
-        "lambda_offset", "val_lambda_offset",
-        "physics_mult", "val_physics_mult",
-    ],
-})
 
 yscales = {
     "Total Loss": "log",
     "Data vs Physics": "log",
     "Physics Components": "log",
-    "Offset Controls": "linear",   # lambda_offset can be negative in log10 mode
+    "Physics Loss (Scaled)": "log",
+    "Offset Controls": "linear",
     "Subsidence MAE": "linear",
     "GWL MAE": "linear",
 }
@@ -1749,10 +1903,17 @@ plot_history_in(
     layout="subplots",
     savefig=os.path.join(
         RUN_OUTPUT_PATH,
-        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot",
+        f"{CITY_NAME}_{MODEL_NAME.lower()}_training_history_plot.png",  # add extension
     ),
 )
 
+autoplot_geoprior_history(
+    history,
+    outdir=RUN_OUTPUT_PATH,
+    prefix=f"{CITY_NAME}_{MODEL_NAME}_H{FORECAST_HORIZON_YEARS}",
+    style="default",
+    log_fn=print,
+)
 
 # Extract physical parameters
 
@@ -1780,16 +1941,82 @@ custom_objects_load = {
     "make_weighted_pinball": make_weighted_pinball,
 }
 
-# inference model (use checkpoint if available, else in-memory)
-model_inf = subs_model_inst
+# try:
+#     with custom_object_scope(custom_objects_load):
+#         model_inf = load_model(ckpt_path, compile=False)
+#     print("Loaded best model for inference (compile=False).")
+# except Exception as e:
+#     print(f"[Warn] Could not load best checkpoint ({e}); using in-memory model.")
+#     model_inf = subs_model_inst
+# # XXX TODO LET CHECK WHETHER THE ERROR is load model in keras 3.0 
+# model_inf = subs_model_inst
+# Pick one real batch for building (needed for weights fallback)
 
-try:
-    with custom_object_scope(custom_objects_load):
-        model_inf = load_model(ckpt_path, compile=False)
-    print("Loaded best model for inference (compile=False).")
-except Exception as e:
-    print(f"[Warn] Could not load best checkpoint ({e}); using in-memory model.")
+build_inputs = None
+for xb, _ in val_dataset.take(1):
+    build_inputs = xb
+    break
+
+def builder(manifest: dict):
+    dims = (manifest or {}).get("dims", {}) or {}
+    cfgm = (manifest or {}).get("config", {}) or {}
+    gp = (cfgm.get("geoprior", {}) or {})
+
+    # Recreate the JSON-safe scalars -> objects here
+    _subsparams = dict(subsmodel_params)
+    _subsparams.update({
+        "mv": LearnableMV(initial_value=float(gp.get("init_mv", GEOPRIOR_INIT_MV))),
+        "kappa": LearnableKappa(initial_value=float(gp.get("init_kappa", GEOPRIOR_INIT_KAPPA))),
+        "gamma_w": FixedGammaW(value=float(gp.get("gamma_w", GEOPRIOR_GAMMA_W))),
+        "h_ref": FixedHRef(
+            value=float(gp.get("h_ref_value", GEOPRIOR_H_REF_VALUE)),
+            mode=gp.get("h_ref_mode", GEOPRIOR_H_REF_MODE),
+        ),
+    })
+
+    return model_cls(
+        static_input_dim=int(dims.get("static_input_dim", s_dim_model)),
+        dynamic_input_dim=int(dims.get("dynamic_input_dim", d_dim_model)),
+        future_input_dim=int(dims.get("future_input_dim", f_dim_model)),
+        output_subsidence_dim=int(dims.get("output_subsidence_dim", OUT_S_DIM)),
+        output_gwl_dim=int(dims.get("output_gwl_dim", OUT_G_DIM)),
+        forecast_horizon=int(dims.get("forecast_horizon", FORECAST_HORIZON_YEARS)),
+        quantiles=cfgm.get("quantiles", QUANTILES),
+        pde_mode=cfgm.get("pde_mode", PDE_MODE_CONFIG),
+        verbose=0,
+        **_subsparams,
+    )
+
+# --- choose inference model source ---
+if USE_IN_MEMORY_MODEL:
     model_inf = subs_model_inst
+    print("[Info] Using in-memory model for inference.")
+else:
+    model_inf = load_bundle_for_inference(
+        keras_path=best_keras_path,
+        weights_path=best_weights_path,
+        manifest_path=model_init_manifest_path,
+        custom_objects=custom_objects_load,
+        compile=False,
+        builder=builder,
+        build_inputs=build_inputs,
+        prefer_full_model=False,
+        log_fn=print,
+    )
+    print("[OK] Loaded inference model from bundle:", type(model_inf))
+
+# --- optional debug check ---
+if DEBUG and (model_inf is not subs_model_inst):
+    _ = debug_model_reload(
+        subs_model_inst,
+        model_inf,
+        val_dataset,
+        pred_key="subs_pred",
+        also_check=["subs_pred", "gwl_pred"],
+        top_weights=30,
+        log_fn=print,
+    )
+
 
 # =============================================================================
 # Calibrate on validation set (BEFORE formatting)
@@ -1848,6 +2075,7 @@ else:
 if "subs_pred" not in pred_dict and "data_final" in pred_dict:
     data_final = pred_dict["data_final"]
     s_dim = model_inf.output_subsidence_dim
+
     if QUANTILES:
         s_pred_q_raw = data_final[..., :s_dim]   # (B,H,Q,1)
         h_pred_q_raw = data_final[..., s_dim:]   # (B,H,Q,1)
@@ -1867,6 +2095,13 @@ else:
         raise KeyError(
             f"predict() must return 'subs_pred' and"
             f" 'gwl_pred'. Got keys={list(pred_dict.keys())}")
+    
+    if QUANTILES:
+        s_pred = canonicalize_BHQO_quantiles_np(
+            s_pred, n_q=len(QUANTILES), verbose=1)
+        h_pred = canonicalize_BHQO_quantiles_np(
+            h_pred, n_q=len(QUANTILES), verbose=1)
+    
 
     if QUANTILES:
         # (B,H,Q,1) expected for subs_pred; calibrate subsidence quantiles only
@@ -1876,7 +2111,14 @@ else:
         # (B,H,1)
         predictions_for_formatter = {"subs_pred": s_pred, "gwl_pred": h_pred}
 
-# Format to DataFrame (inverse scaling, coords, coverage eval, save CSV)
+
+if DEBUG:
+    debug_quantile_crossing_np(
+        s_pred,
+        n_q=3,
+        name="subs_pred",
+        verbose=1,
+    )
 
 target_mapping = {"subs_pred": SUBSIDENCE_COL, "gwl_pred": GWL_COL}
 output_dims = {"subs_pred": OUT_S_DIM, "gwl_pred": OUT_G_DIM}
@@ -1914,7 +2156,7 @@ df_eval, df_future = format_and_forecast(
     coords=X_fore.get("coords", None),
     quantiles=QUANTILES if QUANTILES else None,
     target_name=SUBSIDENCE_COL,             
-    scaler_target_name=SUBSIDENCE_COL,       
+    scaler_target_name=SUBS_SCALER_KEY,       
     output_target_name="subsidence",         
     target_key_pred="subs_pred",
     component_index=0,
@@ -1983,7 +2225,7 @@ phys = {}
 # Better: reuse make_tf_dataset so keys/shapes match training exactly
 # (instead of tf.data.Dataset.from_tensor_slices)
 ds_eval = make_tf_dataset(
-    X_fore, y_fore,                 # <--- use ORIGINAL y_fore
+    X_fore, y_fore,                 
     batch_size=BATCH_SIZE,
     shuffle=False,
     mode=MODE,
@@ -1991,15 +2233,39 @@ ds_eval = make_tf_dataset(
 )
 
 
+# 1) Dataset debug (safe)
+_ = debug_val_interval(
+    model_inf,
+    ds_eval,
+    n_q=len(QUANTILES),
+    max_batches=2,
+    verbose=1,
+)
+# after loading with compile=False
+if not USE_IN_MEMORY_MODEL:
+    model_inf.compile(
+        optimizer=tf.keras.optimizers.SGD(learning_rate=0.0),  # dummy is fine
+        loss=loss_arg,
+        loss_weights=lossw_arg,
+        metrics=metrics_compile,
+        **physics_loss_weights,
+    )
+
 # --- 2.1 Standard Keras evaluate() + physics metrics ---
-try:
-    eval_results = subs_model_inst.evaluate(ds_eval, return_dict=True, verbose=1)
+try:# Use model_inf instead of subs_model_inst
+    eval_raw = model_inf.evaluate(
+        ds_eval,
+        return_dict=True,
+        verbose=1,
+    )
+    
+    eval_results = _logs_to_py(eval_raw)
     print("Evaluation:", eval_results)
 
     # v3.2: include epsilon_gw if available
     phys_keys = ("epsilon_prior", "epsilon_cons", "epsilon_gw")
     phys = {
-        k: float(_to_py(eval_results[k]))
+        k: float(_to_py(eval_raw[k]))
         for k in phys_keys
         if k in eval_results
     }
@@ -2017,22 +2283,26 @@ phys_npz_path = os.path.join(
     # f"{CITY_NAME}_phys_payload_{dataset_name_for_forecast.lower()}.npz"
  )
 
-_ = subs_model_inst.export_physics_payload(
-    ds_eval,
-    max_batches=None,
-    save_path=phys_npz_path,
-    format="npz",
-    overwrite=True,
-    metadata={
-        "city": CITY_NAME,
-        "split": dataset_name_for_forecast,
-        "time_units": TIME_UNITS,
-        "gwl_kind": GWL_KIND,
-        "gwl_sign": GWL_SIGN,
-        "use_head_proxy": USE_HEAD_PROXY,
-    },
-)
-print(f"[OK] Saved physics payload -> {phys_npz_path}")
+try:
+    _ = model_inf.export_physics_payload(
+        ds_eval,
+        max_batches=None,
+        save_path=phys_npz_path,
+        format="npz",
+        overwrite=True,
+        metadata={
+            "city": CITY_NAME,
+            "split": dataset_name_for_forecast,
+            "time_units": TIME_UNITS,
+            "gwl_kind": GWL_KIND,
+            "gwl_sign": GWL_SIGN,
+            "use_head_proxy": USE_HEAD_PROXY,
+        },
+    )
+    print(f"[OK] Saved physics payload -> {phys_npz_path}")
+except Exception as e : 
+    print(f"Failed to saved physic payload: {e}")
+     
 
 # -------------------------------------------------------------------------
 # SM3: log-offset diagnostics (δ_K, δ_Ss, δ_Hd, δ_tau)
@@ -2044,39 +2314,11 @@ censor_metrics = None   # will become a dict if we have a flag
 
 y_true_list, s_q_list, mask_list = [], [], []
 
-def _extract_preds(model, out):
-    # NEW path
-    if isinstance(out, dict) and ("subs_pred" in out) and ("gwl_pred" in out):
-        return out["subs_pred"], out["gwl_pred"]
-    # BACKWARD compat path (older checkpoints)
-    if isinstance(out, dict) and ("data_final" in out):
-        return model.split_data_predictions(out["data_final"])
-    raise KeyError(
-        f"Unsupported model output keys: {list(out.keys()) if isinstance(out, dict) else type(out)}")
-
-def _subs_point_from_out(model, out, quantiles, med_idx):
-    """
-    Return subsidence point prediction tensor shaped (B,H,1) in model space.
-    - If quantile output: returns median quantile.
-    - If point output: returns direct point.
-    """
-    s_pred, _ = _extract_preds(model, out)  # s_pred: (B,H,1) or (B,H,Q,1)
-    if s_pred is None:
-        raise ValueError("Model output 'subs_pred' is None.")
-
-    # Quantile case: select median -> (B,H,1)
-    if quantiles and (getattr(s_pred, "shape", None) is not None
-                      ) and (s_pred.shape.rank == 4):
-        return s_pred[..., med_idx, :]
-
-    # Point case already (B,H,1)
-    return s_pred
-
 
 for xb, yb in with_progress(ds_eval, desc="Interval-Censoring Diagnostics"):
     out = model_inf(xb, training=False)
 
-    s_pred_b, _ = _extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
+    s_pred_b, _ = extract_preds(model_inf, out)   # <- (B,H,1) or (B,H,Q,1)
 
     y_true_b = yb["subs_pred"]                    # (B,H,1)
     y_true_list.append(y_true_b)
@@ -2146,6 +2388,24 @@ if QUANTILES and (y_true is not None) and (s_q is not None):
         sharp80_cal_phys = float(sharpness80_fn(y_true_phys_tf, s_q_cal_phys_tf).numpy())
 
 
+# 2) Tensor debug (safe)
+if DEBUG:
+    _ = debug_tensor_interval(
+        y_true,
+        s_q,
+        n_q=len(QUANTILES),
+        name="RAW",
+        verbose=1,
+    )
+    
+    _ = debug_tensor_interval(
+        y_true,
+        s_q_cal,
+        n_q=len(QUANTILES),
+        name="CAL",
+        verbose=1,
+    )
+
 # --- 2.3.b Optional censor-stratified MAE on the same loop products ---
 # Works for both quantile mode (use median) and point-forecast mode (fallback).
 
@@ -2207,7 +2467,19 @@ if (y_true is not None) and (mask is not None):
         f"[CENSOR] MAE censored={censor_metrics['mae_censored']:.4f} | "
         f"uncensored={censor_metrics['mae_uncensored']:.4f}"
     )
-
+    
+if DEBUG:
+    # Minimal sanity checks: If that var() is no longer tiny,  
+    # R² will stop being absurdly negative
+    yt_phys = inverse_scale_target(
+        y_true, scaler_info=scaler_info_dict, 
+        target_name=SUBS_SCALER_KEY
+      )
+    print(
+          "[DEBUG] y_true_phys stats:", float(yt_phys.min()),
+          float(yt_phys.max()), float(yt_phys.mean()), 
+          float(yt_phys.var())
+      )
 
 # --- 2.4 Point metrics (MAE/MSE/R²), overall + per-horizon -------------
 metrics_point = {}
@@ -2267,7 +2539,6 @@ if y_true is not None:
             scaler_info=scaler_info_dict,
             target_name=SUBSIDENCE_COL,
         )
-
 
 # Normalize coverage/sharpness choices for ablation record (prefer calibrated)
 coverage80_for_abl = (
@@ -2339,7 +2610,7 @@ if per_h_r2_dict:
 # - EVAL_JSON_UNITS_MODE  : 'si' (default) or 'interpretable'
 # - EVAL_JSON_UNITS_SCOPE : 'subsidence', 'physics', or 'all'
 # -------------------------------------------------------------------------
-
+# XXX DO NOT CONVERT #: FOR DEBUG
 try:
     payload = convert_eval_payload_units(
         payload,
@@ -2404,6 +2675,39 @@ save_ablation_record(
 )
 print("Ablation record saved.")
 #
+
+try:
+    # payload is what you saved via export_physics_payload(...)
+    # payload, meta = load_physics_payload(phys_npz_path)
+    
+    # 1) Spatial maps (needs coords from dataset)
+    plot_physics_values_in(
+        payload,
+        dataset=ds_eval,
+        keys=[
+            "cons_res_vals",
+            "log10_tau",
+            "log10_tau_prior",
+            "K",
+            "Ss",
+            "Hd",
+        ],
+        mode="map",
+        transform=None,
+        savefig=os.path.join(RUN_OUTPUT_PATH, "phys_maps.png"),
+    )
+    
+    # 2) Residual distribution (no coords needed)
+    plot_physics_values_in(
+        payload,
+        keys=["cons_res_vals"],
+        mode="hist",
+        transform="signed_log10",
+        savefig=os.path.join(RUN_OUTPUT_PATH, "cons_res_hist.png"),
+    )
+except: 
+    print("Failed to plot physic values in...")
+    
 # =============================================================================
 # Visualization (optional)
 # =============================================================================

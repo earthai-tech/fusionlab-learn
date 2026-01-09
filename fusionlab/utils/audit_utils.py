@@ -243,6 +243,8 @@ def audit_stage1_scaling(
     static_features: Optional[Iterable[str]] = None,
     future_features: Optional[Iterable[str]] = None,
     scaled_ml_numeric_cols: Optional[Iterable[str]] = None,
+    main_scaler_path: Optional[str] = None,
+    scaler_info: Optional[dict] = None,
     # UI + saving
     save_dir: Optional[str] = None,
     table_width: int = 110,
@@ -431,6 +433,11 @@ def audit_stage1_scaling(
         audit["targets_stats"] = dict(targets_sec)
         audit["scaled_ml_numeric_cols"] = list(scaled_set)
         audit["feature_split"] = dict(feat_split)
+        audit["scalers"] = {
+            "main_scaler_path": main_scaler_path,
+            "scaled_ml_numeric_cols": list(scaled_ml_numeric_cols or []),
+            "scaler_info": scaler_info or {},
+        }
 
         path = os.path.join(save_dir, "stage1_scaling_audit.json")
         with open(path, "w", encoding="utf-8") as f:

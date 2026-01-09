@@ -63,8 +63,8 @@ DATASET_VARIANT = "with_zsurf"
 # File name templates. When CITY_NAME="nansha":
 #   BIG_FN   -> "nansha_final_main_std.harmonized.with_zsurf.csv"
 #   SMALL_FN -> "nansha_2000.with_zsurf.csv"  (only if you created it)
-BIG_FN_TEMPLATE = "{city}_final_main_std.harmonized.{variant}.csv"
-SMALL_FN_TEMPLATE = "{city}_2000.{variant}.csv"
+BIG_FN_TEMPLATE = "{city}_final_main_std.harmonized.cleaned.{variant}.csv"
+SMALL_FN_TEMPLATE = "{city}_2000.cleaned.{variant}.csv"
 
 # Resolved filenames (scripts may use these directly).
 BIG_FN = BIG_FN_TEMPLATE.format(city=CITY_NAME, variant=DATASET_VARIANT)
@@ -114,7 +114,7 @@ LAT_COL = "latitude"
 SUBSIDENCE_COL = "subsidence_cum"
 H_FIELD_COL_NAME = "soil_thickness"
 
-GWL_COL = "GWL_depth_bgs"   # preferred over "GWL" (if both exist)
+GWL_COL = "GWL_depth_bgs_m"   # preferred over "GWL" (if both exist)
 # Groundwater representation (critical for sign consistency):
 # - GWL_KIND:
 #     "depth_bgs" -> depth below ground surface (positive downward)
@@ -128,7 +128,7 @@ GWL_COL = "GWL_depth_bgs"   # preferred over "GWL" (if both exist)
 #   head_proxy ≈ -depth
 # This keeps head and depth linked for physics, but is approximate.
 
-GWL_KIND =  None  # -> defaults to "down_positive" for depth_bgs
+GWL_KIND =  "depth_bgs"  # or None ->depth_bgs defaults to "down_positive" for depth_bgs
 GWL_SIGN = "down_positive"   # {"down_positive", "up_positive"}
 
 # With z_surf available, do NOT use the proxy
@@ -137,7 +137,7 @@ USE_HEAD_PROXY = False
 # Column containing surface elevation z_surf in meters.
 # IMPORTANT: set this to the actual column name you wrote into the CSV.
 # Recommended name for v3.2: "z_surf"
-Z_SURF_COL = "z_surf" # e.g. None :"dem_m" if available, else None
+Z_SURF_COL = "z_surf_m" # e.g. None :"dem_m" if available, else None
 
 INCLUDE_Z_SURF_AS_STATIC = True   # new (recommended)
 HEAD_COL ="head_m"
@@ -320,7 +320,7 @@ GWL_WEIGHTS  = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only
 #   - "gw_flow"        : groundwater flow only
 #   - "none" or "off"  : physics switched off
-PDE_MODE_CONFIG = "on"
+PDE_MODE_CONFIG = "off"
 
 # For data-only baselines, scripts may ignore physics even if enabled above.
 PHYSICS_BASELINE_MODE = "none"
@@ -405,7 +405,7 @@ MV_WARMUP_EPOCHS = 2         # ramp mv over 2 epochs
 MV_DELAY_STEPS   = None
 MV_WARMUP_STEPS  = None
 
-TRACK_AUX_METRICS = True
+TRACK_AUX_METRICS = False
 
 # ===================================================================
 # 7.x TRAINING STRATEGY (Physics-first vs Data-first)
@@ -634,7 +634,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 25 # 100           # Recommended: 50 to 200
+EPOCHS = 2 # 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
@@ -656,6 +656,10 @@ TF_INTER_THREADS = None
 # GPU memory behaviour
 TF_GPU_ALLOW_GROWTH = True
 TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
+
+USE_IN_MEMORY_MODEL= True
+DEBUG = False
+
 
 # ---------------------------------------------------------------------
 # Auditing (Stage-1 / Stage-2 pipeline sanity checks)

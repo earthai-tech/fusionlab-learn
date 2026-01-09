@@ -30,7 +30,6 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Optional, Tuple
 
-import os
 import numpy as np
 import joblib
 
@@ -73,18 +72,58 @@ def _resolve_stage1_entry(
     """
     entry: Mapping[str, Any] | None = None
 
+    # 0) If caller provided a direct entry, trust it.
     if scaler_entry is not None:
         entry = scaler_entry
-    elif isinstance(scaler_info, Mapping):
-        # Could already be a single entry
-        if "idx" in scaler_info or "scaler_path" in scaler_info:
-            entry = scaler_info
-        elif target_name is not None and target_name in scaler_info:
+
+    # 1) If scaler_info itself looks like a single entry, use it.
+    elif isinstance(scaler_info, Mapping) and (
+        "idx" in scaler_info or "scaler_path" in scaler_info or "scaler" in scaler_info
+    ):
+        entry = scaler_info  # already an entry
+
+
+    # 2) Otherwise, scaler_info is expected to be name -> entry mapping.
+    elif isinstance(scaler_info, Mapping) and isinstance(target_name, str):
+        # direct hit
+        if target_name in scaler_info:
             entry = scaler_info[target_name]
-    
+        else:
+            # case-insensitive + aliases
+            keymap = {k.lower(): k for k in scaler_info.keys() if isinstance(k, str)}
+            lname = target_name.lower()
+
+            aliases: list[str] = []
+            if lname.endswith("_pred"):
+                aliases.append(lname[:-5])
+
+            if "subs" in lname:
+                aliases += [
+                    "subsidence", "subs", "subs_pred",
+                    "subsidence_cum", "subsidence_cum__si"
+                ]
+            if "gwl" in lname or "head" in lname:
+                aliases += [
+                    "gwl", "gwl_pred", 
+                    "gwl_depth_bgs", "gwl_depth_bgs__si", 
+                    "head_m", "head_m__si",
+                    ]
+                
+            # de-dup preserve order
+            seen = set()
+            aliases = [a for a in aliases if not (a in seen or seen.add(a))]
+            
+            # try aliases (case-insensitive)
+            for a in aliases:
+                real = keymap.get(a.lower())
+                if real is not None:
+                    entry = scaler_info[real]
+                    break
+
     if entry is None:
         return None, None, None
 
+    # 3) Load scaler if needed
     scaler = entry.get("scaler")
     if scaler is None and isinstance(entry.get("scaler_path"), str):
         try:
@@ -106,10 +145,9 @@ def _resolve_stage1_entry(
             pass
 
     if n_features is None and idx is not None:
-        n_features = idx + 1
+        n_features = int(idx) + 1
 
     return scaler, idx, n_features
-
 
 def inverse_scale_target(
     y_scaled: ArrayLike,

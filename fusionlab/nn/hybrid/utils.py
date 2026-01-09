@@ -25,7 +25,7 @@ else:
             self.history = {}
 
 
-__all__ = ['select_mode', 'plot_history_in']
+__all__ = ['select_mode', 'plot_history_in', 'plot_history']
 
 def select_mode(
     mode: Union[str, None] = None,
@@ -495,6 +495,358 @@ def plot_history_in(
     # if plt.get_fignums():
         plt.show()
     
-    # # Close the figure if it wasn't shown
-    # if savefig and not plt.get_fignums():
-    #     plt.close(fig)
+def plot_history(
+    history,
+    metrics=None,
+    layout="subplots",
+    title="Model Training History",
+    figsize=None,
+    style="default",
+    savefig=None,
+    max_cols="auto",
+    show_grid=True,
+    grid_props=None,
+    yscale_settings=None,
+    log_fn=None,
+    **plot_kwargs,
+):
+    """Plot Keras training history (train + val)."""
+
+    log = log_fn if log_fn is not None else print
+
+    # ----------------------------
+    # Helpers (small + robust)
+    # ----------------------------
+    def _is_history_obj(obj):
+        # Avoid hard dependency on keras/tf imports here.
+        return hasattr(obj, "history") and isinstance(
+            getattr(obj, "history", None),
+            dict,
+        )
+
+    def _as_history_dict(obj):
+        if _is_history_obj(obj):
+            return obj.history
+        if isinstance(obj, dict):
+            return obj
+        raise TypeError(
+            "`history` must be a Keras History or a dict."
+        )
+
+    def _uniq(seq):
+        # Preserve order, drop duplicates.
+        out = []
+        seen = set()
+        for x in seq:
+            if x in seen:
+                continue
+            seen.add(x)
+            out.append(x)
+        return out
+
+    def _pretty(name):
+        return name.replace("_", " ").strip().title()
+
+    def _safe_series(arr):
+        # Return (x, y) with finite mask, or (None, None).
+        y = np.asarray(arr, dtype=float)
+        if y.size == 0:
+            return None, None
+        x = np.arange(1, y.size + 1, dtype=int)
+        m = np.isfinite(y)
+        if not np.any(m):
+            return None, None
+        return x[m], y[m]
+
+    def _has_nonpos(y):
+        # True if any y <= 0 (finite only).
+        y = np.asarray(y, dtype=float)
+        m = np.isfinite(y)
+        if not np.any(m):
+            return False
+        return np.any(y[m] <= 0.0)
+
+    def _auto_groups(hd):
+        # Small, sane default grouping.
+        groups = {}
+        for k in hd.keys():
+            if k.startswith("val_"):
+                continue
+            key_l = k.lower()
+            if "loss" in key_l:
+                g = "Losses"
+            elif "mae" in key_l:
+                g = "MAE"
+            elif "mse" in key_l:
+                g = "MSE"
+            elif "epsilon" in key_l:
+                g = "Epsilons"
+            else:
+                g = _pretty(k)
+            groups.setdefault(g, []).append(k)
+
+        if "Losses" in groups:
+            groups["Losses"] = sorted(
+                _uniq(groups["Losses"]),
+                key=lambda x: (x not in ("loss", "total_loss"), x),
+            )
+        else:
+            for g in list(groups.keys()):
+                groups[g] = _uniq(groups[g])
+
+        return groups
+
+    def _sanitize_group(keys, hd):
+        # 1) unique
+        keys = _uniq(keys)
+
+        # 2) drop "val_*" if base exists in same group
+        s = set(keys)
+        cleaned = []
+        for k in keys:
+            if k.startswith("val_") and k[4:] in s:
+                continue
+            cleaned.append(k)
+
+        # 3) keep only keys present in history_dict
+        cleaned = [k for k in cleaned if k in hd]
+
+        return cleaned
+
+    def _plot_line(ax, x, y, lab, ls):
+        # Plot with kwargs if possible; fallback if invalid kw.
+        try:
+            ax.plot(
+                x,
+                y,
+                linestyle=ls,
+                label=lab,
+                **plot_kwargs,
+            )
+        except Exception:
+            ax.plot(
+                x,
+                y,
+                linestyle=ls,
+                label=lab,
+            )
+
+    # ----------------------------
+    # Prepare inputs
+    # ----------------------------
+    history_dict = _as_history_dict(history)
+
+    if not history_dict:
+        warnings.warn("Empty history. Nothing to plot.")
+        return
+
+    # Style (fallback gracefully)
+    try:
+        plt.style.use(style)
+    except Exception:
+        warnings.warn(
+            f"Style '{style}' not found. Using 'default'."
+        )
+        plt.style.use("default")
+
+    if metrics is None:
+        metrics = _auto_groups(history_dict)
+
+    if not metrics:
+        warnings.warn("No metrics to plot.")
+        return
+
+    if yscale_settings is None:
+        yscale_settings = {}
+
+    # Grid defaults
+    if grid_props is None:
+        grid_props = {"linestyle": ":", "alpha": 0.7}
+
+    # ----------------------------
+    # Layout
+    # ----------------------------
+    n_plots = len(metrics)
+
+    if layout not in ("single", "subplots"):
+        warnings.warn(
+            "layout must be 'single' or 'subplots'. "
+            "Falling back to 'subplots'."
+        )
+        layout = "subplots"
+
+    if layout == "subplots":
+        if max_cols == "auto":
+            n_cols = 2
+        else:
+            n_cols = max(1, int(max_cols))
+        n_cols = min(n_cols, n_plots)
+        n_rows = (n_plots + n_cols - 1) // n_cols
+        if figsize is None:
+            figsize = (n_cols * 6, n_rows * 5)
+    else:
+        n_rows, n_cols = 1, 1
+        if figsize is None:
+            figsize = (10, 6)
+
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=figsize,
+        squeeze=False,
+    )
+    axes_flat = axes.flatten()
+    fig.suptitle(title, fontsize=16, weight="bold")
+
+    # ----------------------------
+    # Plotting
+    # ----------------------------
+    def _apply_yscale(ax, scale, y_list):
+        # Robust scaling: log -> symlog if nonpositive values.
+        if scale is None:
+            scale = "linear"
+        scale = str(scale).lower()
+
+        if scale == "log" and any(_has_nonpos(y) for y in y_list):
+            # Avoid broken log plots when <= 0 exists.
+            ax.set_yscale("symlog", linthresh=1e-6)
+            return
+
+        try:
+            ax.set_yscale(scale)
+        except Exception:
+            ax.set_yscale("linear")
+
+    if layout == "single":
+        ax = axes_flat[0]
+
+        # Flatten all metric keys across groups.
+        all_keys = []
+        for group_keys in metrics.values():
+            all_keys.extend(group_keys)
+
+        all_keys = _sanitize_group(all_keys, history_dict)
+
+        y_seen = []
+        for k in all_keys:
+            # If caller passed "val_*", treat it as validation.
+            is_val = k.startswith("val_")
+            base = k[4:] if is_val else k
+
+            x, y = _safe_series(history_dict.get(k, []))
+            if x is None:
+                continue
+
+            y_seen.append(y)
+            lab = f"{'Val' if is_val else 'Train'} {_pretty(base)}"
+            ls = "--" if is_val else "-"
+            _plot_line(ax, x, y, lab, ls)
+
+            # Auto-add validation for train curves only.
+            if not is_val:
+                vk = f"val_{k}"
+                if vk in history_dict:
+                    xv, yv = _safe_series(history_dict[vk])
+                    if xv is not None:
+                        y_seen.append(yv)
+                        labv = f"Val {_pretty(k)}"
+                        _plot_line(ax, xv, yv, labv, "--")
+
+        ax.set_title("All Metrics")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Value")
+
+        if show_grid:
+            ax.grid(**grid_props)
+
+        ax.legend(fontsize=9)
+
+        scale = yscale_settings.get("All Metrics", "linear")
+        _apply_yscale(ax, scale, y_seen)
+
+    else:
+        plot_idx = 0
+
+        for subplot_title, keys in metrics.items():
+            if plot_idx >= len(axes_flat):
+                break
+
+            ax = axes_flat[plot_idx]
+
+            keys = _sanitize_group(keys, history_dict)
+            if not keys:
+                ax.set_visible(False)
+                plot_idx += 1
+                continue
+
+            y_seen = []
+            for k in keys:
+                is_val = k.startswith("val_")
+                base = k[4:] if is_val else k
+
+                x, y = _safe_series(history_dict.get(k, []))
+                if x is None:
+                    continue
+
+                y_seen.append(y)
+                lab = f"{'Val' if is_val else 'Train'} {_pretty(base)}"
+                ls = "--" if is_val else "-"
+                _plot_line(ax, x, y, lab, ls)
+
+                # Auto-add validation for train curves only.
+                if not is_val:
+                    vk = f"val_{k}"
+                    if vk in history_dict:
+                        xv, yv = _safe_series(history_dict[vk])
+                        if xv is not None:
+                            y_seen.append(yv)
+                            labv = f"Val {_pretty(k)}"
+                            _plot_line(ax, xv, yv, labv, "--")
+
+            ax.set_title(subplot_title)
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Value")
+
+            if show_grid:
+                ax.grid(**grid_props)
+
+            ax.legend(fontsize=9)
+
+            scale = yscale_settings.get(subplot_title, None)
+            _apply_yscale(ax, scale, y_seen)
+
+            plot_idx += 1
+
+        # Hide unused axes.
+        for i in range(plot_idx, len(axes_flat)):
+            axes_flat[i].set_visible(False)
+
+    # Leave space for title.
+    plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+
+    # ----------------------------
+    # Save or show
+    # ----------------------------
+    if savefig:
+        try:
+            # Add extension if missing.
+            root, ext = os.path.splitext(savefig)
+            if not ext:
+                savefig = root + ".png"
+
+            save_dir = os.path.dirname(savefig)
+            if save_dir and not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+
+            plt.savefig(
+                savefig,
+                dpi=300,
+                bbox_inches="tight",
+            )
+            log(f"Figure saved to {savefig}")
+        except Exception as e:
+            warnings.warn(f"Failed to save figure: {e}")
+        finally:
+            plt.close(fig)
+    else:
+        plt.show()

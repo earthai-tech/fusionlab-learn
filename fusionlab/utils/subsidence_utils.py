@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import ( 
     Dict, Iterable, Tuple, 
     Any, Optional, Literal, 
-    Mapping
+    Mapping, Union, Sequence 
 )
 import os 
 import json 
@@ -14,13 +14,295 @@ import pandas as pd
 from dataclasses import dataclass
 import warnings
 
-
 ShiftMode = Literal["none", "min", "mean", "value"]
 Mode = Literal["add", "overwrite"]
 
 
 DEFAULT_SUBS_UNIT_TO_SI = 1e-3
 
+
+def _is_nonempty_str(x) -> bool:
+    return isinstance(x, str) and x.strip() != ""
+
+
+def _looks_like_zscore_name(col: str) -> bool:
+    if not isinstance(col, str):
+        return False
+    c = col.strip().lower()
+    return c.endswith("_z") or c.endswith("_zscore")
+
+
+def _first_present(
+    cols: set,
+    candidates: Sequence[str],
+) -> Optional[str]:
+    for c in candidates:
+        if c and c in cols:
+            return c
+    return None
+
+
+def normalize_gwl_alias(
+    df: pd.DataFrame,
+    gwl_col_user: Optional[str],
+    *,
+    prefer_depth_bgs: bool = True,
+    verbose: bool = True,
+) -> Tuple[pd.DataFrame, Optional[str]]:
+    """Normalize common GWL naming aliases.
+
+    Naming-only: unit conversion happens later.
+    """
+    if not _is_nonempty_str(gwl_col_user):
+        return df, gwl_col_user
+
+    cols = set(df.columns)
+    user = gwl_col_user.strip()
+
+    depth_m = ["GWL_depth_bgs_m"]
+    depth = ["GWL_depth_bgs"]
+    generic = ["GWL"]
+
+    aliases_depth_m = {"gwl_depth_bgs_m", "gwl_depth_m"}
+    aliases_depth = {"gwl_depth_bgs", "gwl_depth"}
+    aliases_generic = {"gwl"}
+
+    u = user.lower()
+
+    if u in aliases_generic:
+        order = depth_m + depth + generic
+        if not prefer_depth_bgs:
+            order = generic + depth + depth_m
+        pick = _first_present(cols, order)
+        if pick is None:
+            return df, user
+        if verbose and pick != user:
+            print(
+                "  [GWL] Config uses "
+                f"{user!r}; using {pick!r}."
+            )
+        return df, pick
+
+    if u in aliases_depth_m and "GWL_depth_bgs_m" in cols:
+        if verbose and user != "GWL_depth_bgs_m":
+            print(
+                "  [GWL] Alias "
+                f"{user!r} -> 'GWL_depth_bgs_m'."
+            )
+        return df, "GWL_depth_bgs_m"
+
+    if u in aliases_depth and "GWL_depth_bgs" in cols:
+        if verbose and user != "GWL_depth_bgs":
+            print(
+                "  [GWL] Alias "
+                f"{user!r} -> 'GWL_depth_bgs'."
+            )
+        return df, "GWL_depth_bgs"
+
+    if user == "GWL_depth_bgs_m" and user not in cols:
+        alt = _first_present(cols, depth)
+        if alt is not None:
+            if verbose:
+                print(
+                    "  [GWL] 'GWL_depth_bgs_m' "
+                    "missing; using 'GWL_depth_bgs'."
+                )
+            return df, alt
+
+    if user == "GWL_depth_bgs" and user not in cols:
+        alt = _first_present(cols, depth_m)
+        if alt is not None:
+            if verbose:
+                print(
+                    "  [GWL] 'GWL_depth_bgs' "
+                    "missing; using 'GWL_depth_bgs_m'."
+                )
+            return df, alt
+
+    if user == "GWL" and ("GWL" in cols) and _first_present(
+        cols, depth_m + depth
+    ) is None:
+        if "GWL_depth_bgs" not in cols:
+            if verbose:
+                print(
+                    "  [GWL] Renaming "
+                    "'GWL' -> 'GWL_depth_bgs'."
+                )
+            df.rename(
+                columns={"GWL": "GWL_depth_bgs"},
+                inplace=True,
+            )
+            return df, "GWL_depth_bgs"
+
+    return df, user
+
+
+def resolve_gwl_for_physics(
+    df: pd.DataFrame,
+    gwl_col_user: Optional[str],
+    *,
+    prefer_depth_bgs: bool = True,
+    allow_keep_zscore_as_ml: bool = True,
+    verbose: bool = True,
+) -> Tuple[str, Optional[str]]:
+    """Pick meters GWL for physics; keep z-score ML-only."""
+    df, gwl_col_user = normalize_gwl_alias(
+        df,
+        gwl_col_user,
+        prefer_depth_bgs=prefer_depth_bgs,
+        verbose=verbose,
+    )
+
+    cols = set(df.columns)
+
+    meters_pref = [
+        "GWL_depth_bgs_m",
+        "GWL_depth_bgs",
+        "GWL",
+    ]
+    if not prefer_depth_bgs:
+        meters_pref = [
+            "GWL",
+            "GWL_depth_bgs",
+            "GWL_depth_bgs_m",
+        ]
+
+    zscore_cands = [
+        "GWL_depth_bgs_m_z",
+        "GWL_depth_bgs_z",
+        "GWL_z",
+    ]
+
+    meters_avail = _first_present(cols, meters_pref)
+    zscore_avail = _first_present(cols, zscore_cands)
+
+    def _is_z(col: str) -> bool:
+        if _looks_like_zscore_name(col):
+            return True
+        return col in zscore_cands
+
+    if _is_nonempty_str(gwl_col_user):
+        if gwl_col_user not in cols:
+            raise ValueError(
+                f"GWL_COL={gwl_col_user!r} not in dataset."
+            )
+
+        if _is_z(gwl_col_user):
+            if meters_avail is None:
+                raise ValueError(
+                    "GWL_COL is z-scored but no meters "
+                    "GWL exists. Physics needs meters."
+                )
+            gwl_m = meters_avail
+            if allow_keep_zscore_as_ml:
+                gwl_z = gwl_col_user
+            else:
+                gwl_z = None
+            if verbose:
+                print(
+                    "  [GWL] Using "
+                    f"{gwl_m!r} for physics; "
+                    f"keeping {gwl_z!r} ML-only."
+                )
+            return gwl_m, gwl_z
+
+        if ("GWL_depth_bgs_m" in cols) and (
+            gwl_col_user != "GWL_depth_bgs_m"
+        ):
+            if verbose:
+                print(
+                    "  [GWL] Using "
+                    "'GWL_depth_bgs_m' for physics "
+                    f"(over {gwl_col_user!r})."
+                )
+            gwl_m = "GWL_depth_bgs_m"
+        else:
+            gwl_m = gwl_col_user
+
+        if allow_keep_zscore_as_ml and zscore_avail:
+            gwl_z = zscore_avail
+        else:
+            gwl_z = None
+        return gwl_m, gwl_z
+
+    if meters_avail is None:
+        if zscore_avail is not None:
+            raise ValueError(
+                "No meters GWL found, but a z-score "
+                "column exists. Physics needs meters."
+            )
+        raise ValueError(
+            "No groundwater column found. Expected "
+            "'GWL_depth_bgs_m', 'GWL_depth_bgs', or 'GWL'."
+        )
+
+    if allow_keep_zscore_as_ml and zscore_avail:
+        gwl_z = zscore_avail
+    else:
+        gwl_z = None
+    if verbose:
+        if gwl_z is not None:
+            print(
+                "  [GWL] Auto-selected "
+                f"{meters_avail!r} for physics; "
+                "z-score kept ML-only."
+            )
+        else:
+            print(
+                "  [GWL] Auto-selected "
+                f"{meters_avail!r} for physics."
+            )
+    return meters_avail, gwl_z
+
+
+def resolve_head_column(
+    df: pd.DataFrame,
+    *,
+    depth_col: str,
+    head_col: str = "head_m",
+    z_surf_col: Optional[str] = None,
+    use_head_proxy: bool = True,
+) -> Tuple[str, Optional[str]]:
+    """Resolve a head column, creating one if needed."""
+    cols = set(df.columns)
+
+    if head_col and head_col in cols:
+        z_used = None
+        if z_surf_col and z_surf_col in cols:
+            z_used = z_surf_col
+        elif "z_surf_m" in cols:
+            z_used = "z_surf_m"
+        elif "z_surf" in cols:
+            z_used = "z_surf"
+        return head_col, z_used
+
+    z_cands = []
+    if z_surf_col:
+        z_cands.append(z_surf_col)
+    z_cands += ["z_surf_m", "z_surf_corr", "z_surf"]
+
+    z_used = _first_present(cols, z_cands)
+
+    if z_used is not None:
+        new_head = "head_m"
+        df[new_head] = (
+            pd.to_numeric(df[z_used], errors="coerce")
+            - pd.to_numeric(df[depth_col], errors="coerce")
+        )
+        return new_head, z_used
+
+    if use_head_proxy:
+        new_head = "head_m"
+        df[new_head] = -pd.to_numeric(
+            df[depth_col],
+            errors="coerce",
+        )
+        return new_head, None
+
+    raise ValueError(
+        "Cannot resolve head. Provide 'head_m' "
+        "or z_surf, or enable USE_HEAD_PROXY."
+    )
 
 def _norm_unit(unit: str | None) -> str:
     u = (unit or "").strip().lower()
@@ -1159,3 +1441,462 @@ def _write_payload(
             ensure_ascii=False,
             default=_json_default,
         )
+
+
+def _lonlat_to_local_xy_m(
+    lon: Union[np.ndarray, pd.Series],
+    lat: Union[np.ndarray, pd.Series],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Local XY meters from lon/lat (fast, city-scale)."""
+    lon = np.asarray(lon, dtype=float)
+    lat = np.asarray(lat, dtype=float)
+
+    lat0 = np.nanmedian(lat)
+    lon0 = np.nanmedian(lon)
+    
+    # meters per degree approx
+    m_per_deg_lat = 110_540.0
+    m_per_deg_lon = 111_320.0 * np.cos(np.deg2rad(lat0))
+
+    x = (lon - lon0) * m_per_deg_lon
+    y = (lat - lat0) * m_per_deg_lat
+    return x, y
+
+
+def _knn_impute(
+    values: Union[np.ndarray, pd.Series],
+    x: Union[np.ndarray, pd.Series],
+    y: Union[np.ndarray, pd.Series],
+    good_mask: np.ndarray,
+    k: int = 20,
+) -> np.ndarray:
+    """Median kNN impute for values where good_mask is False."""
+    values = np.asarray(values, dtype=float)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    bad_mask = ~good_mask
+    if int(bad_mask.sum()) == 0:
+        return values.copy()
+
+    good_idx = np.where(good_mask)[0]
+    bad_idx = np.where(bad_mask)[0]
+
+    if good_idx.size == 0:
+        filled = values.copy()
+        filled[bad_idx] = np.nanmedian(values)
+        return filled
+    
+    # If too few good points, fallback
+    need = max(5, min(int(k), 20))
+    if good_idx.size < need:
+        filled = values.copy()
+        filled[bad_idx] = np.nanmedian(values[good_idx])
+        return filled
+
+    p_good = np.c_[x[good_idx], y[good_idx]]
+    p_bad = np.c_[x[bad_idx], y[bad_idx]]
+
+    filled = values.copy()
+    n_nei = int(min(int(k), good_idx.size))
+
+    try: # sklearn
+        from sklearn.neighbors import NearestNeighbors
+        nn = NearestNeighbors(
+            n_neighbors=n_nei,
+            algorithm="kd_tree",
+        )
+        nn.fit(p_good)
+        neigh = nn.kneighbors(p_bad, return_distance=False)
+        
+        for j, nbrs in enumerate(neigh):
+            src = good_idx[nbrs]
+            filled[bad_idx[j]] = np.nanmedian(values[src])
+        return filled
+    except: 
+        pass 
+    
+
+    try: # scipy
+        from scipy.spatial import cKDTree
+        tree = cKDTree(p_good)
+        _, ii = tree.query(p_bad, k=n_nei)
+
+        if ii.ndim == 1:
+            ii = ii[:, None]
+
+        for j, nbrs in enumerate(ii):
+            src = good_idx[nbrs]
+            filled[bad_idx[j]] = np.nanmedian(values[src])
+        return filled
+    
+    except:
+        pass
+    
+    # last resort
+    filled[bad_idx] = np.nanmedian(values[good_idx])
+    return filled
+
+def _infer_gwl_scale_auto(
+    g: np.ndarray,
+) -> float:
+    """Infer GWL scale from distribution only."""
+    g = np.asarray(g, dtype=float)
+    g = g[np.isfinite(g)]
+
+    if g.size == 0:
+        return 1.0
+
+    gmax = float(np.max(g))
+    p95 = float(np.percentile(g, 95))
+    p99 = float(np.percentile(g, 99))
+
+    # If it reaches ~100, it is almost surely cm.
+    if (gmax >= 60.0) or (p95 >= 50.0) or (p99 >= 60.0):
+        return 0.01
+
+    # If the whole city is <= ~35, it is
+    # more consistent with meters (e.g. 0-28 m).
+    if gmax <= 35.0:
+        return 1.0
+
+    # Ambiguous middle zone: default to meters.
+    return 1.0
+
+def _resolve_save_path(savefile: Optional[str]) -> Optional[str]:
+    """Return a CSV path or None."""
+    if not savefile:
+        return None
+
+    path = os.fspath(savefile)
+
+    if path.endswith(os.sep):
+        return os.path.join(path, "cleaned_gwl_zsurf.csv")
+
+    if os.path.isdir(path):
+        return os.path.join(path, "cleaned_gwl_zsurf.csv")
+
+    if not path.lower().endswith(".csv"):
+        path = f"{path}.csv"
+
+    return path
+
+def clean_gwl_zsurf(
+    df: pd.DataFrame,
+    *,
+    lon_col: str = "longitude",
+    lat_col: str = "latitude",
+    z_col: str = "z_surf",
+    gwl_col: str = "GWL_depth_bgs",
+    gwl_scale: Union[str, float] = "auto",
+    max_depth_m: float = 50.0,
+    z_outlier_iqr_mult: float = 3.0,
+    knn_k: int = 25,
+    return_report: bool = True,
+    savefile: Optional[str] = None,
+) -> Tuple[pd.DataFrame, Optional[Dict[str, Any]], Optional[str]]:
+    """Fix GWL units + robust z_surf, then recompute head_m."""
+    df = df.copy()
+    
+    # --- 0) Basic checks
+    required = (lon_col, lat_col, z_col, gwl_col)
+    for c in required:
+        if c not in df.columns:
+            raise KeyError(f"Missing column: {c!r}")
+
+    gwl_raw = f"{gwl_col}_raw"
+    z_raw = f"{z_col}_raw"
+    
+
+    # Keep raw
+    if gwl_raw not in df.columns:
+        df[gwl_raw] = df[gwl_col]
+    if z_raw not in df.columns:
+        df[z_raw] = df[z_col]
+        
+    # --- 1) Infer GWL scale
+    if gwl_scale == "auto":
+        g = df[gwl_col].to_numpy(dtype=float)
+        gwl_scale_val = _infer_gwl_scale_auto(g)
+        # gmax = float(np.nanmax(g))
+        # gmed = float(np.nanmedian(g))
+
+        # # Your case: always <=100 and city is low-lying -> cm is the safest default
+        # # If discover the collector used decimeters, set gwl_scale=0.1 manually.
+        
+        # if (gmax <= 120.0) and (gmed >= 5.0):
+        #     gwl_scale_val = 0.01  # cm -> m
+        # else:
+        #     gwl_scale_val = 1.0  # already meters (fallback)
+    else:
+        gwl_scale_val = float(gwl_scale)
+
+    # --- 2) Convert depth-bgs to meters + clip
+    df["GWL_depth_bgs_m"] = np.clip(
+        df[gwl_col].astype(float) * gwl_scale_val,
+        0.0,
+        float(max_depth_m),
+    )
+
+    # --- 3) Make z_surf static per (lon,lat) using median (robust to noise)
+    z_loc = (
+        df.groupby([lon_col, lat_col], sort=False)[z_col]
+        .median()
+        .rename("z_surf_loc_med")
+        .reset_index()
+    )
+
+    # --- 4) Robust outlier detection on location-level z_surf
+    zvals = z_loc["z_surf_loc_med"].to_numpy(dtype=float)
+    q1, q3 = np.nanpercentile(zvals, [25, 75])
+    iqr = float(q3 - q1)
+
+    lo = float(q1 - z_outlier_iqr_mult * iqr)
+    hi = float(q3 + z_outlier_iqr_mult * iqr)
+
+    good = np.isfinite(zvals) & (zvals >= lo) & (zvals <= hi)
+    
+    # --- 5) Spatial kNN impute for outliers
+    x, y = _lonlat_to_local_xy_m(
+        z_loc[lon_col].to_numpy(),
+        z_loc[lat_col].to_numpy(),
+    )
+
+    z_filled = _knn_impute(
+        zvals,
+        x,
+        y,
+        good_mask=good,
+        k=int(knn_k),
+    )
+    
+    # Extra safety: clip to robust bounds after imputation
+    z_filled = np.clip(z_filled, lo, hi)
+
+    z_loc["z_surf_corr"] = z_filled
+    z_loc["z_surf_flag_outlier"] = ~good
+    
+    # --- 6) Merge corrected z_surf back
+    df = df.merge(
+        z_loc[[lon_col, lat_col, "z_surf_corr",
+               "z_surf_flag_outlier"]],
+        on=[lon_col, lat_col],
+        how="left",
+    )
+    
+    # Prefer corrected z_surf everywhere
+    df["z_surf_m"] = df["z_surf_corr"].astype(float)
+    df["head_m"] = df["z_surf_m"] - df["GWL_depth_bgs_m"]
+
+    saved_path = _resolve_save_path(savefile)
+    if saved_path is not None:
+        df.to_csv(saved_path, index=False)
+
+    report: Optional[Dict[str, Any]] = None
+    if return_report:
+        pct = [0.01, 0.05, 0.5, 0.95, 0.99]
+
+        report = {
+            "gwl_scale_used": float(gwl_scale_val),
+            "z_loc_bounds_iqr": {
+                "q1": float(q1),
+                "q3": float(q3),
+                "iqr": float(iqr),
+                "lo": float(lo),
+                "hi": float(hi),
+            },
+            "z_loc_outliers": int((~good).sum()),
+            "z_loc_total": int(len(z_loc)),
+            "depth_m_stats": df["GWL_depth_bgs_m"]
+            .describe(percentiles=pct)
+            .to_dict(),
+            "head_stats": df["head_m"]
+            .describe(percentiles=pct)
+            .to_dict(),
+            "saved_file": saved_path,
+        }
+
+    return df, report
+
+
+# # -----------------------
+# # Recommended usage
+# # -----------------------
+# from fusionlab.utils.subsidence_utils import clean_gwl_zsurf
+
+# # Nansha (your diagnostics show cm -> m):
+# nansha_df2, nansha_rep, _ = clean_gwl_zsurf(
+#     nansha_data,
+#     gwl_col="GWL_depth_bgs",
+#     gwl_scale="auto",   # should pick 0.01
+# )
+
+# # Zhongshan (range 0-28 is consistent with meters):
+# zhong_df2, zhong_rep, _ = clean_gwl_zsurf(
+#     zhongshan_data,
+#     gwl_col="GWL_depth_bgs",
+#     gwl_scale="auto",   # should pick 1.0
+# )
+
+
+# If config says "GWL", treat it as an alias and standardize to depth_bgs.
+# if isinstance(GWL_COL, str) and (GWL_COL.strip().lower() == "gwl"):
+#     # Priority order: prefer the physically meaningful meters column
+#     if ("GWL_depth_bgs" in df_raw.columns) and ("GWL" in df_raw.columns):
+#         print("  [GWL] Config uses 'GWL'. Both 'GWL' and 'GWL_depth_bgs' exist; "
+#               "switching GWL_COL -> 'GWL_depth_bgs' (meters).")
+#         GWL_COL = "GWL_depth_bgs"
+
+#     elif ("GWL_depth_bgs" in df_raw.columns) and ("GWL" not in df_raw.columns):
+#         print("  [GWL] Config uses 'GWL' but dataset has 'GWL_depth_bgs'. "
+#               "Switching GWL_COL -> 'GWL_depth_bgs'.")
+#         GWL_COL = "GWL_depth_bgs"
+
+#     elif ("GWL" in df_raw.columns) and ("GWL_depth_bgs" not in df_raw.columns):
+#         # We only rename if the target name does not already exist.
+#         print("  [GWL] Dataset has 'GWL' but missing 'GWL_depth_bgs'. "
+#               "Renaming column 'GWL' -> 'GWL_depth_bgs' for consistency.")
+#         df_raw.rename(columns={"GWL": "GWL_depth_bgs"}, inplace=True)
+#         GWL_COL = "GWL_depth_bgs"
+
+#     else:
+#         print("  [GWL] Config uses 'GWL' but dataset has neither 'GWL' nor "
+#               "'GWL_depth_bgs'. Will error later in required-column checks.")
+
+# ------------------------------------------------------------------
+# 2.2 Decide the "meters" groundwater source used for physics
+#
+# Rule (physics-first):
+#   - Physics MUST use meters. Prefer 'GWL_depth_bgs' or 'GWL'.
+#   - If user explicitly provides a GWL_COL (non-None), we interpret it
+#     as "this is the column I want as the PHYSICS groundwater input".
+#       * If it exists and is NOT z-score -> accept.
+#       * If it is z-score -> reject (physics requires meters).
+#   - If user does NOT provide GWL_COL (None or ''), auto-detect:
+#       * If meters exist -> choose 'GWL_depth_bgs' (preferred) else 'GWL'
+#         and print a message.
+#       * If meters exist AND z-score exists -> still choose meters and
+#         print a message that z-score will be ignored for physics.
+#       * If only z-score exists -> raise with a clear physics message.
+#
+# Optional:
+#   - If z-score exists AND meters exists, keep z-score as an optional
+#     ML convenience feature (if you want), but never use it for physics.
+# ------------------------------------------------------------------
+
+# def _is_nonempty_str(x) -> bool:
+#     return isinstance(x, str) and x.strip() != ""
+
+# def _looks_like_zscore_name(col: str) -> bool:
+#     return isinstance(col, str) and col.lower().endswith("_z")
+
+# def resolve_gwl_for_physics(
+#     df: pd.DataFrame,
+#     gwl_col_user: Optional[str],
+#     *,
+#     prefer_depth_bgs: bool = True,
+#     allow_keep_zscore_as_ml: bool = True,
+# ) -> tuple[str, Optional[str]]:
+#     cols = set(df.columns)
+
+#     meters_pref = ["GWL_depth_bgs", "GWL"] if prefer_depth_bgs else ["GWL", "GWL_depth_bgs"]
+#     zscore_cands = ["GWL_depth_bgs_z", "GWL_z"]
+
+#     meters_available = [c for c in meters_pref if c in cols]
+#     zscore_available = [c for c in zscore_cands if c in cols]
+
+#     def is_z(col: str) -> bool:
+#         return isinstance(col, str) and (col.lower().endswith("_z") or col in zscore_cands)
+
+#     def nonempty(x) -> bool:
+#         return isinstance(x, str) and x.strip() != ""
+
+#     # --- User provided something ---
+#     if nonempty(gwl_col_user):
+#         if gwl_col_user not in cols:
+#             raise ValueError(
+#                 f"GWL_COL={gwl_col_user!r} was provided but does not exist in the dataset."
+#             )
+
+#         # User provided z-score column:
+#         if is_z(gwl_col_user):
+#             if meters_available:
+#                 gwl_m = meters_available[0]
+#                 gwl_z = gwl_col_user if allow_keep_zscore_as_ml else None
+#                 print(
+#                     f"  [GWL] Config/user requested {gwl_col_user!r} (z-score), "
+#                     f"but meters column {gwl_m!r} exists. "
+#                     f"Using {gwl_m!r} for physics; keeping {gwl_z!r} as ML-only."
+#                 )
+#                 return gwl_m, gwl_z
+#             raise ValueError(
+#                 f"GWL_COL={gwl_col_user!r} is z-scored, and no meters groundwater column "
+#                 "('GWL_depth_bgs' or 'GWL') exists. Physics requires meters."
+#             )
+
+#         # User provided meters column:
+#         gwl_m = gwl_col_user
+#         gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
+#         if gwl_z is not None:
+#             print(
+#                 f"  [GWL] Using user-provided meters column {gwl_m!r} for physics. "
+#                 f"Z-score {gwl_z!r} exists and can be kept ML-only."
+#             )
+#         else:
+#             print(f"  [GWL] Using user-provided meters column {gwl_m!r} for physics.")
+#         return gwl_m, gwl_z
+
+#     # --- Auto-detect (user did not provide) ---
+#     if meters_available:
+#         gwl_m = meters_available[0]
+#         gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
+#         if gwl_z is not None:
+#             print(
+#                 f"  [GWL] Auto-selected meters {gwl_m!r} for physics. "
+#                 f"Z-score {gwl_z!r} exists; it will NOT be used for physics."
+#             )
+#         else:
+#             print(f"  [GWL] Auto-selected meters {gwl_m!r} for physics.")
+#         return gwl_m, gwl_z
+
+#     if zscore_available:
+#         raise ValueError(
+#             "No groundwater column in meters was found (expected 'GWL_depth_bgs' or 'GWL'), "
+#             f"but z-score column(s) exist: {zscore_available}. Physics requires meters."
+#         )
+
+#     raise ValueError(
+#         "No groundwater column found. Expected 'GWL_depth_bgs' or 'GWL' (meters)."
+#     )
+
+# def resolve_head_column(
+#     df: pd.DataFrame,
+#     *,
+#     depth_col: str,
+#     head_col: str = "head_m",
+#     z_surf_col: Optional[str] = None,
+#     use_head_proxy: bool = True,
+# ) -> tuple[str, Optional[str]]:
+#     cols = set(df.columns)
+
+#     # Prefer explicit head column if present
+#     if head_col and head_col in cols:
+#         return head_col, z_surf_col if (z_surf_col in cols if z_surf_col else False) else None
+
+#     # Else compute from z_surf - depth if possible
+#     if z_surf_col and (z_surf_col in cols):
+#         new_head = "head_m"  # canonical name
+#         df[new_head] = pd.to_numeric(df[z_surf_col], errors="coerce"
+#                                      ) - pd.to_numeric(df[depth_col], errors="coerce")
+#         return new_head, z_surf_col
+
+#     # Else proxy: head ≈ -depth (only if allowed)
+#     if use_head_proxy:
+#         new_head = "head_m"
+#         df[new_head] = -pd.to_numeric(df[depth_col], errors="coerce")
+#         return new_head, None
+
+#     raise ValueError(
+#         "Cannot resolve head. Provide 'head_m' or 'z_surf' (Z_SURF_COL), "
+#         "or enable USE_HEAD_PROXY."
+#     )

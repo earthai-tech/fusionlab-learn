@@ -12,10 +12,15 @@ This module centralizes:
 from __future__ import annotations
 
 from typing import Any 
-from ... import KERAS_DEPS
-from ..._shapes import _as_BHO
+from .. import KERAS_DEPS
+from .._shapes import _as_BHO
 
-from .utils import get_sk
+from ._prior_utils import ( 
+    get_sk, 
+    select_q, 
+    _align_true_for_loss, 
+    tile_true_to_quantiles 
+)
 
 Tensor = KERAS_DEPS.Tensor
 tf_float32 = KERAS_DEPS.float32
@@ -321,18 +326,6 @@ def update_compiled_metrics(model, targets, y_pred):
     t_norm = {k: _as_BHO(targets[k], y_pred=y_pred[k]) for k in keys}
     p_norm = {k: y_pred[k] for k in keys}
 
-    # For keras 2.0 
-    yt_list = [t_norm[k] for k in keys]
-    yp_list = [p_norm[k] for k in keys]
-    
-    # Try list path first (works with list-compiled metrics,
-    # avoids dict key weirdness) in keras 2
-    try:
-        compiled.update_state(yt_list, yp_list)
-        return
-    except:
-        pass
-    
     # IMPORTANT: use dict path (per-output), never lists
     try:
         compiled.update_state(t_norm, p_norm)

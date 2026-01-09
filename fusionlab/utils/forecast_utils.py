@@ -78,8 +78,6 @@ __all__= [
 
 _DIGIT_RE = re.compile(r"\d+")
 
-
-
 def evaluate_forecast(
     eval_data: Union[str, os.PathLike, pd.DataFrame],
     *,
@@ -1492,7 +1490,6 @@ def format_and_forecast(
         # Backwards compatibility with old "targets"/"target"/"y" schema
         target_block = _find_scaler_block(scaler_info)
 
-    
     # Eval
     if quantiles is not None:
         eval_cols = []
@@ -1929,7 +1926,10 @@ def format_and_forecast(
     if eval_metrics:
         # Prefer full-horizon eval DF (per-year metrics),
         # fall back to single-step df_eval if needed.
-        df_for_metrics = df_eval_all if df_eval_all is not None else df_eval
+        
+        # df_for_metrics = df_eval_all if df_eval_all is not None else df_eval
+        df_for_metrics = df_eval_to_write
+
 
         vlog(
             "[format_and_forecast] Running evaluate_forecast on "

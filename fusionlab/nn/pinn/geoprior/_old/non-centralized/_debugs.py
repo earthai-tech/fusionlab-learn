@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
-# License : BSD-3-Clause
-# Author  : LKouadio
-
+# .py
 """Debug helpers for GeoPriorSubsNet.
 
 Keep *all* verbosity + shape/unit printing here so
@@ -9,27 +7,18 @@ Keep *all* verbosity + shape/unit printing here so
 
 All functions are safe to call inside `tf.function`:
 they use `tf.print` and TensorFlow assertions.
-- Compare in-memory vs loaded inference model on the *same* batch.
-- Report prediction diffs + weight name/shape diffs + key attribute digests.
-
 """
 
 from __future__ import annotations
 
-from typing import ( 
-    Any, Dict, Optional, Sequence, 
-    Callable, List, Tuple, 
-    Iterable
-)
-
-import hashlib
-import json
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 
-from ... import KERAS_DEPS 
+from .. import KERAS_DEPS
 
-from .maths import (
+from ._prior_utils import _vshape, _vshapes
+from ._prior_maths import (
     tf_print_nonfinite,
     _assert_grads_finite,
     resolve_cons_units,
@@ -39,6 +28,9 @@ from .maths import (
 
 )
 
+# ---------------------------------------------------------------------
+# TF aliases (keep local + short)
+# ---------------------------------------------------------------------
 Tensor = KERAS_DEPS.Tensor
 
 tf_abs = KERAS_DEPS.abs
@@ -63,243 +55,6 @@ tf_math =KERAS_DEPS.math
 tf_sqrt = KERAS_DEPS.sqrt 
 tf_maximum = KERAS_DEPS.maximum
 tf_string = KERAS_DEPS.string
-
-
-
-def _to_numpy(x: Any) -> np.ndarray:
-    # Works for tf.Tensor, np.ndarray, python numbers
-    if hasattr(x, "numpy"):
-        return x.numpy()
-    return np.asarray(x)
-
-
-def _get_one_batch(dataset: Iterable) -> Tuple[Any, Any]:
-    # Works for tf.data.Dataset or any iterator yielding (xb, yb)
-    return next(iter(dataset))
-
-
-def _extract_output(model: Any, out: Any, key: str):
-    """
-    Support dict outputs (preferred) and
-    list/tuple outputs (Keras predict()).
-    """
-    if isinstance(out, dict):
-        if key not in out:
-            raise KeyError(
-                f"Output key {key!r} not found."
-                f" Got keys={list(out.keys())}")
-        return out[key]
-
-    if isinstance(out, (list, tuple)):
-        names = list(getattr(model, "output_names", []) or [])
-        if names and key in names:
-            return out[names.index(key)]
-        # fallback common ordering
-        if key == "subs_pred" and len(out) >= 1:
-            return out[0]
-        if key == "gwl_pred" and len(out) >= 2:
-            return out[1]
-        raise KeyError(
-            f"Cannot map output key {key!r} from"
-            f" list outputs; output_names={names}")
-
-    raise TypeError(f"Unexpected model output type: {type(out)}")
-
-
-def weight_diff_report(
-    m1: Any,
-    m2: Any,
-    *,
-    top: int = 30,
-    include_ok: bool = False,
-) -> List[Tuple[float, str, str, Any]]:
-    """
-    Compare weights by name; returns rows sorted by worst diff first.
-
-    Each row is:
-      (max_abs_diff or inf, tag, weight_name, shape_info)
-    where tag in {"OK","MISSING","SHAPE"}.
-    """
-    w2 = {w.name: w for w in getattr(m2, "weights", [])}
-    rows: List[Tuple[float, str, str, Any]] = []
-
-    for w in getattr(m1, "weights", []):
-        name = w.name
-        if name not in w2:
-            rows.append(
-                (np.inf, "MISSING", name, tuple(
-                    getattr(w, "shape", ()))))
-            continue
-
-        a = _to_numpy(w)
-        b = _to_numpy(w2[name])
-
-        if a.shape != b.shape:
-            rows.append((np.inf, "SHAPE", name, (a.shape, b.shape)))
-            continue
-
-        d = float(np.max(np.abs(a - b))) if a.size else 0.0
-        if include_ok or d > 0.0:
-            rows.append((d, "OK", name, a.shape))
-
-    rows.sort(key=lambda x: x[0], reverse=True)
-
-    # If include_ok=False, the tail may be empty; keep only top anyway
-    return rows[: int(top)]
-
-
-def model_scaling_digest(model: Any) -> str:
-    """
-    Stable digest of `model.scaling_kwargs` to verify the same config
-    survived reload.
-    """
-    sk = getattr(model, "scaling_kwargs", {}) or {}
-    s = json.dumps(sk, sort_keys=True, default=str)
-    return hashlib.md5(s.encode("utf-8")).hexdigest()
-
-
-def debug_model_reload(
-    mem_model: Any,
-    load_model: Any,
-    dataset: Iterable,
-    *,
-    pred_key: str = "subs_pred",
-    also_check: Optional[List[str]] = None,
-    top_weights: int = 30,
-    atol: float = 1e-6,
-    rtol: float = 1e-6,
-    log_fn: Optional[Callable[[str], None]] = None,
-) -> Dict[str, Any]:
-    """
-    Run a compact reload debug on one batch and return a dict report.
-
-    - Compares predictions (max/mean abs diff) for `pred_key` (+ optional keys).
-    - Compares weights by name (MISSING/SHAPE/OK).
-    - Compares scaling_kwargs digest + time_units attribute.
-    """
-    log = log_fn or print
-    also = list(also_check or [])
-    if pred_key not in also:
-        also = [pred_key] + also
-
-    xb, _ = _get_one_batch(dataset)
-
-    out_mem = mem_model(xb, training=False)
-    out_ld  = load_model(xb, training=False)
-
-    pred_report: Dict[str, Dict[str, float]] = {}
-
-    for k in also:
-        a = _to_numpy(_extract_output(mem_model, out_mem, k))
-        b = _to_numpy(_extract_output(load_model, out_ld, k))
-
-        diff = np.abs(a - b)
-        max_abs = float(np.max(diff)) if diff.size else 0.0
-        mean_abs = float(np.mean(diff)) if diff.size else 0.0
-
-        # relative check (avoid division by zero)
-        denom = np.maximum(np.abs(a), np.abs(b))
-        rel = diff / np.maximum(denom, 1e-12)
-        max_rel = float(np.max(rel)) if rel.size else 0.0
-
-        pred_report[k] = {
-            "max_abs_diff": max_abs,
-            "mean_abs_diff": mean_abs,
-            "max_rel_diff": max_rel,
-        }
-
-    mv_present = any("mv" in w.name.lower() for w in getattr(mem_model, "weights", []))
-    kappa_present = any("kappa" in w.name.lower() for w in getattr(mem_model, "weights", []))
-
-    w_rows = weight_diff_report(mem_model, load_model, top=top_weights, include_ok=False)
-    n_missing = sum(1 for _, tag, _, _ in w_rows if tag == "MISSING")
-    n_shape   = sum(1 for _, tag, _, _ in w_rows if tag == "SHAPE")
-
-    sk_mem = model_scaling_digest(mem_model)
-    sk_ld  = model_scaling_digest(load_model)
-
-    tu_mem = getattr(mem_model, "time_units", None)
-    tu_ld  = getattr(load_model, "time_units", None)
-
-    # Pretty logs
-    log("=" * 72)
-    log("[GeoPrior][Reload Debug] One-batch prediction diffs")
-    for k, d in pred_report.items():
-        log(
-            f"  - {k}: max_abs={d['max_abs_diff']:.6g} "
-            f"mean_abs={d['mean_abs_diff']:.6g} "
-            f"max_rel={d['max_rel_diff']:.6g}"
-        )
-
-    log("[GeoPrior][Reload Debug] Weight presence (mem model)")
-    log(f"  - mv in weights?    {mv_present}")
-    log(f"  - kappa in weights? {kappa_present}")
-
-    log("[GeoPrior][Reload Debug] scaling_kwargs digest / time_units")
-    log(f"  - sk_digest mem : {sk_mem}")
-    log(f"  - sk_digest load: {sk_ld}")
-    log(f"  - time_units mem : {tu_mem}")
-    log(f"  - time_units load: {tu_ld}")
-
-    if w_rows:
-        log("[GeoPrior][Reload Debug] Top weight issues (by name)")
-        for d, tag, name, shp in w_rows:
-            # d is inf for MISSING/SHAPE
-            log(f"  {tag:7s} max_abs={d} | {name} | {shp}")
-    else:
-        log("[GeoPrior][Reload Debug] No nonzero/shape/missing issues in top scan.")
-
-    # Simple pass/fail (you can tweak thresholds)
-    # - fail if shape/missing weights exist
-    # - fail if prediction diffs exceed (atol + rtol * scale)
-    ok_preds = True
-    for k, d in pred_report.items():
-        if d["max_abs_diff"] > (atol + rtol * 1.0):
-            ok_preds = False
-            break
-
-    ok = (n_missing == 0) and (n_shape == 0) and ok_preds
-
-    report = {
-        "ok": bool(ok),
-        "pred": pred_report,
-        "weights_top": w_rows,
-        "n_missing_or_shape_in_top": {"missing": int(n_missing), "shape": int(n_shape)},
-        "mv_in_weights": bool(mv_present),
-        "kappa_in_weights": bool(kappa_present),
-        "sk_digest_mem": sk_mem,
-        "sk_digest_load": sk_ld,
-        "time_units_mem": tu_mem,
-        "time_units_load": tu_ld,
-    }
-
-    log(f"[GeoPrior][Reload Debug] ok={report['ok']}")
-    log("=" * 72)
-
-    return report
-
-# ==============================================================
-# VERBOSE SHAPE DIAGNOSTICS (paste-only snippets)
-# - Uses tf_shape() (works in graph) + a small helper.
-# - Triggered when verbose > 3.
-# ==============================================================
-
-def _vshape(tag, x):
-    """Print runtime shape + rank (graph-safe)."""
-    if x is None:
-        tf_print("[shape]", tag, "= None")
-        return
-    xr = tf_rank(x)
-    xs = tf_shape(x)
-    tf_print("[shape]", tag, "rank=", xr, "shape=", xs)
-
-def _vshapes(title, items):
-    """Convenience: print a block of shapes."""
-    tf_print("\n==========", title, "==========")
-    for tag, x in items:
-        _vshape(tag, x)
-    tf_print("================================\n")
-
 # ---------------------------------------------------------------------
 # Small gates
 # ---------------------------------------------------------------------
@@ -1109,45 +864,33 @@ def dbg_chk_core_finite(
 def dbg_step9_losses(
     *,
     verbose: int,
-    data_loss: "Tensor | None" = None,
-    loss_cons: "Tensor | None" = None,
-    loss_gw: "Tensor | None" = None,
-    loss_prior: "Tensor | None" = None,
-    loss_smooth: "Tensor | None" = None,
-    physics_loss_raw: "Tensor | None" = None,
-    physics_loss_scaled: "Tensor | None" = None,
-    total_loss: "Tensor | None" = None,
-    level: int = 7,
+    data_loss: Tensor,
+    loss_cons: Tensor,
+    loss_gw: Tensor,
+    loss_prior: Tensor,
+    loss_smooth: Tensor,
+    physics_loss_raw: Tensor,
+    physics_loss_scaled: Tensor,
+    total_loss: Tensor,
+    level: int = 7, 
 ) -> None:
-    """Debug-print loss scalars (only those provided)."""
     if not dbg_on(verbose, level):
         return
 
     tf_print("[train_step] --- step 9 losses ---")
-
-    pairs = []
-    if data_loss is not None:
-        pairs.append(("data_loss", data_loss))
-    if loss_cons is not None:
-        pairs.append(("loss_cons", loss_cons))
-    if loss_gw is not None:
-        pairs.append(("loss_gw", loss_gw))
-    if loss_prior is not None:
-        pairs.append(("loss_prior", loss_prior))
-    if loss_smooth is not None:
-        pairs.append(("loss_smooth", loss_smooth))
-    if physics_loss_raw is not None:
-        pairs.append(("physics_loss_raw", physics_loss_raw))
-    if physics_loss_scaled is not None:
-        pairs.append(("physics_loss_scaled", physics_loss_scaled))
-    if total_loss is not None:
-        pairs.append(("total_loss", total_loss))
-
-    if not pairs:
-        tf_print("STEP 9 (loss scalars): <no losses provided>")
-        return
-
-    _vshapes("STEP 9 (loss scalars)", pairs)
+    _vshapes(
+        "STEP 9 (loss scalars)",
+        [
+            ("data_loss", data_loss),
+            ("loss_cons", loss_cons),
+            ("loss_gw", loss_gw),
+            ("loss_prior", loss_prior),
+            ("loss_smooth", loss_smooth),
+            ("physics_loss_raw", physics_loss_raw),
+            ("physics_loss_scaled", physics_loss_scaled),
+            ("total_loss", total_loss),
+        ],
+    )
 
 
 def dbg_step10_grads(
