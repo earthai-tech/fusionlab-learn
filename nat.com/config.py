@@ -702,7 +702,7 @@ DEBUG = False  # Enable or disable debugging
 #   normalization/inversion checks, and scaling_kwargs consistency.
 AUDIT_STAGES = "*"
 
-EVAL_JSON_UNITS_MODE = "si"              # or "interpretable"
+EVAL_JSON_UNITS_MODE = "interpretable"              # or "si / interpretable"
 EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"
 
 # -------------------------------------------------------------------
