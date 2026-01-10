@@ -128,11 +128,126 @@ TIME_UNIT_TO_SECONDS = {
 
 
 class LogClipConstraint(Constraint):
-    """
-    NaN-safe clip constraint for log-params.
-
-    Important: clip_by_value(NaN, a, b) -> NaN,
-    so we must sanitize NaNs before clipping.
+    r"""
+    NaN-safe clip constraint for log-parameters.
+    
+    This constraint is intended for parameters stored in log-space,
+    such as ``logK``, ``logSs``, or ``log_tau``, where the model must
+    enforce hard bounds:
+    
+    .. math::
+    
+       w \in [w_{min}, w_{max}]
+    
+    Why this exists
+    ---------------
+    In TensorFlow, ``clip_by_value`` does not repair invalid values:
+    
+    .. math::
+    
+       clip(NaN, a, b) = NaN
+    
+    Therefore, if a parameter ever becomes non-finite (NaN or Inf),
+    a plain clipping constraint will silently keep it invalid and
+    training can destabilize. This class explicitly sanitizes
+    non-finite entries before applying the clip.
+    
+    Mapping
+    -------
+    Given an input weight tensor ``w`` and bounds
+    ``min_value`` and ``max_value``:
+    
+    1) Sanitize non-finite entries:
+    
+    .. math::
+    
+       w_{safe}[i]
+       =
+       \begin{cases}
+       w[i], & \text{if } w[i] \text{ is finite} \\
+       w_{min}, & \text{otherwise}
+       \end{cases}
+    
+    2) Apply hard clipping:
+    
+    .. math::
+    
+       w_{out}
+       =
+       \min(\max(w_{safe}, w_{min}), w_{max})
+    
+    The output is guaranteed to be finite as long as
+    ``min_value`` and ``max_value`` are finite.
+    
+    Parameters
+    ----------
+    min_value : float or Tensor
+        Lower bound for the constrained tensor in log-space. This is
+        cast to ``tf_float32`` and stored.
+    
+    max_value : float or Tensor
+        Upper bound for the constrained tensor in log-space. This is
+        cast to ``tf_float32`` and stored.
+    
+    Returns
+    -------
+    Constraint
+        A callable constraint object compatible with Keras variables.
+        When applied, it returns a clipped tensor in float32.
+    
+    Notes
+    -----
+    * This constraint is most appropriate for parameters represented
+      in log-space because hard bounds in log-space correspond to
+      multiplicative bounds in linear space.
+    * Sanitizing to ``min_value`` is a conservative choice:
+      it prevents NaN propagation while keeping the parameter within
+      the feasible region. If you prefer a different fallback (e.g.
+      0 or the midpoint), change the replacement value accordingly.
+    * The constraint operates in ``tf_float32`` for speed and
+      compatibility with typical training graphs.
+    
+    Examples
+    --------
+    Constrain a learnable log-parameter:
+    
+    .. code-block:: python
+    
+       logK = tf.Variable(
+           initial_value=0.0,
+           constraint=LogClipConstraint(-20.0, 5.0),
+           trainable=True,
+           dtype=tf.float32,
+       )
+    
+    In a Keras layer weight:
+    
+    .. code-block:: python
+    
+       self.log_tau = self.add_weight(
+           name="log_tau",
+           shape=(1,),
+           initializer="zeros",
+           trainable=True,
+           constraint=LogClipConstraint(log_tau_min, log_tau_max),
+       )
+    
+    See Also
+    --------
+    keras.constraints.Constraint
+        Base class for Keras constraints.
+    
+    tf.clip_by_value
+        Elementwise clipping. Note that it does not repair NaNs.
+    
+    tf.where
+        Used here to sanitize non-finite entries before clipping.
+    
+    References
+    ----------
+    .. [1] Abadi, M. et al.
+       TensorFlow: Large-Scale Machine Learning on Heterogeneous
+       Systems. (2016). (Defines clip and masking behaviors).
     """
 
     def __init__(self, min_value, max_value):
@@ -204,7 +319,6 @@ def resolve_q_kind(sk: Optional[Dict[str, Any]]) -> str:
 
     return "per_volume"
 
-
 def q_to_gw_source_term_si(
     model,
     Q_logits: Tensor,
@@ -218,17 +332,242 @@ def q_to_gw_source_term_si(
     H_floor: float = 1e0, #1e-6,
     verbose: int = 0,
 ) -> Tensor:
-    """
-    Convert Q_logits into a GW PDE source term with SI units (1/s),
-    compatible with:
-        R_gw = Ss*dh_dt - div(K grad h) - Q_term
-
-    Modes
+    r"""
+    Convert ``Q_logits`` into a GW source term in SI units.
+    
+    This helper maps the network output ``Q_logits`` into a source
+    term :math:`Q_{term}` that is compatible with the groundwater
+    PDE residual used by the model:
+    
+    .. math::
+    
+       R_{gw}
+       =
+       S_s \, \frac{\partial h}{\partial t}
+       -
+       \nabla \cdot (K \nabla h)
+       -
+       Q_{term}
+    
+    The returned tensor always has units of 1/s so it can be
+    subtracted directly in :math:`R_{gw}`.
+    
+    Overview
+    --------
+    The model can interpret the raw output ``Q_logits`` in multiple
+    ways depending on ``Q_kind`` resolved from ``scaling_kwargs``.
+    All modes must end with :math:`Q_{term}` in 1/s, but the meaning
+    of ``Q_logits`` differs:
+    
+    ``per_volume``
+        ``Q_logits`` represents a volumetric forcing rate already in
+        inverse time units (either 1/time_unit or 1/s depending on
+        flags). This is the simplest and most backward-compatible
+        interpretation.
+    
+    ``recharge_rate``
+        ``Q_logits`` represents a recharge flux expressed as a length
+        rate (m/time_unit or m/s). It is converted into a volumetric
+        rate by dividing by an effective thickness :math:`H`:
+    
+        .. math::
+    
+           Q_{term} = \frac{R}{H}
+    
+        where :math:`R` is in m/s and :math:`H` is in m, giving 1/s.
+    
+    ``head_rate``
+        ``Q_logits`` represents a head-rate forcing (m/time_unit or
+        m/s) that enters the storage term. Since the storage term is
+        :math:`S_s \, dh/dt`, the equivalent forcing in the residual
+        is:
+    
+        .. math::
+    
+           Q_{term} = S_s \, q_h
+    
+        where :math:`q_h` is in m/s and :math:`S_s` is in 1/m,
+        yielding 1/s.
+    
+    Time normalization handling
+    ---------------------------
+    When coordinates are normalized (typical in this project), the
+    time coordinate is scaled by a range factor :math:`t_R`. If
+    ``Q_logits`` was produced in that normalized coordinate system,
+    it must be converted back to the intended time units before any
+    SI conversion. This function delegates that correction to the
+    internal helper ``_apply_q_normalized_time_rule`` using:
+    
+    * ``coords_normalized``
+    * ``t_range_units`` (the time range in model time units)
+    * ``scaling_kwargs`` flags
+    
+    After this correction, unit conversion is applied based on the
+    selected ``Q_kind`` and SI flags.
+    
+    Mode details
+    ------------
+    per_volume
+    ~~~~~~~~~~
+    In this mode the model output is treated as already being an
+    inverse-time quantity.
+    
+    If either of the following flags is True:
+    
+    * ``Q_in_per_second`` or
+    * ``Q_in_si``
+    
+    then ``Q_logits`` is assumed to already be in 1/s and returned
+    directly.
+    
+    Otherwise, it is assumed to be in 1/time_unit and converted to
+    1/s via:
+    
+    .. math::
+    
+       Q_{term} = Q \cdot \frac{1}{sec\_per\_time\_unit}
+    
+    where ``sec_per_time_unit`` depends on ``time_units``.
+    
+    recharge_rate
+    ~~~~~~~~~~~~~
+    Here, ``Q_logits`` is treated as a length rate :math:`R`:
+    
+    .. math::
+    
+       R \in \mathrm{m}/\mathrm{s}
+    
+    It is converted from m/time_unit to m/s unless
+    ``Q_length_in_si`` is True.
+    
+    The volumetric rate is then computed as:
+    
+    .. math::
+    
+       Q_{term} = \frac{R}{H}
+    
+    To prevent division instability, the thickness is floored:
+    
+    .. math::
+    
+       H_{safe} = \max(H, H_{floor})
+    
+    and the returned value is:
+    
+    .. math::
+    
+       Q_{term} = \frac{R}{H_{safe}}
+    
+    head_rate
+    ~~~~~~~~~
+    Here, ``Q_logits`` is treated as a head-rate :math:`q_h`:
+    
+    .. math::
+    
+       q_h \in \mathrm{m}/\mathrm{s}
+    
+    It is converted from m/time_unit to m/s unless
+    ``Q_length_in_si`` is True.
+    
+    The residual forcing is:
+    
+    .. math::
+    
+       Q_{term} = S_s \, q_h
+    
+    If ``Ss_field`` is missing, a robust fallback consistent with
+    the rest of the model is used:
+    
+    .. math::
+    
+       S_s \approx m_v \, gamma_w
+    
+    where :math:`m_v` is taken from the model and :math:`gamma_w`
+    is the configured unit weight of water.
+    
+    Parameters
+    ----------
+    This function is typically called from the physics core where
+    all arguments are already defined. For meanings and expected
+    shapes, refer to the caller that constructs the GW residual
+    and its inputs.
+    
+    In brief:
+    
+    * ``Q_logits`` is the network output for the forcing channel.
+    * ``Ss_field`` and ``H_field`` are the effective fields used
+      by the PDE, broadcastable to the batch-horizon layout.
+    * ``coords_normalized`` and ``t_range_units`` describe how time
+      normalization was applied.
+    * ``time_units`` specifies the units used for conversion when
+      interpreting rates.
+    * ``scaling_kwargs`` provides configuration including ``Q_kind``
+      and unit flags.
+    
+    Returns
+    -------
+    Q_term : Tensor
+        Source term :math:`Q_{term}` in 1/s, broadcastable to the
+        GW residual layout (typically (B,H,1)).
+    
+    Raises
+    ------
+    ValueError
+        If ``Q_kind='recharge_rate'`` is selected but ``H_field`` is
+        not provided.
+    
+    Notes
     -----
-    - per_volume: Q_logits is 1/time_unit (or already 1/s via flags)
-    - recharge_rate: Q_logits is m/time_unit; Q_term = (R_per_s / H)
-    - head_rate: Q_logits is m/time_unit; Q_term = Ss * qh_per_s
+    * Choose ``per_volume`` when you want a direct 1/s forcing that
+      can be interpreted as a volumetric sink/source per unit volume.
+    * Choose ``recharge_rate`` when you want the network to predict
+      a flux-like term (m/s) that becomes volumetric forcing by
+      dividing by thickness.
+    * Choose ``head_rate`` when you want forcing to act like an
+      additive term to :math:`dh/dt` inside the storage term.
+    
+    Examples
+    --------
+    Assuming the physics core has already produced ``Q_logits`` and
+    the effective fields:
+    
+    .. code-block:: python
+    
+       Q_term = q_to_gw_source_term_si(
+           model,
+           Q_logits,
+           Ss_field=Ss_field,
+           H_field=H_field,
+           coords_normalized=coords_normalized,
+           t_range_units=t_range_units,
+           time_units=time_units,
+           scaling_kwargs=scaling_kwargs,
+       )
+    
+    See Also
+    --------
+    rate_to_per_second
+        Converts values in 1/time_unit or m/time_unit to SI per
+        second rates.
+    
+    _apply_q_normalized_time_rule
+        Corrects rates if the time coordinate was normalized.
+    
+    resolve_q_kind
+        Resolves the configured Q interpretation mode from the
+        scaling configuration.
+    
+    References
+    ----------
+    .. [1] Bear, J.
+       Dynamics of Fluids in Porous Media. Dover (1988).
+       (Groundwater flow equation and source terms).
+    
+    .. [2] de Marsily, G.
+       Quantitative Hydrogeology. Academic Press (1986).
+       (Units and interpretation of recharge and forcing terms).
     """
+
     sk = scaling_kwargs or {}
     kind = resolve_q_kind(sk)
 
@@ -392,8 +731,7 @@ def cons_step_to_cons_residual(
     dt_sec = dt_to_seconds(dt_u, time_units=time_units)
     dt_sec = tf_maximum(dt_sec, tf_constant(eps, tf_float32))
     return cons_step_m / dt_sec
-
-# XXX 
+ 
 # ---------------------------------------------------------------------
 # Physics residuals / priors
 # ---------------------------------------------------------------------
@@ -713,35 +1051,260 @@ def compute_mv_prior(
     eps=_EPSILON,
     verbose=0,
 ):
-    """
-    MV prior with 3 modes (default: calibrate).
-
-    Residual
-    --------
-    r = log(Ss) - log(m_v * gamma_w)
-
-    Modes
-    -----
-    calibrate (default)
-        Uses stop_gradient(Ss_field). This calibrates mv without
-        reshaping Ss_field. Most stable for physics-driven mean
-        subsidence.
-
-    field
-        Backprop through Ss_field. Can be unstable due to
-        d log(Ss)/dSs = 1/Ss amplification.
-
-    logss
-        Backprop through logSs (recommended if you need stronger
-        Ss anchoring). Pass logSs from compose_physics_fields().
-
+    r"""
+    Compute an m_v - gamma_w prior from predicted S_s.
+    
+    This routine builds a log-space residual that ties the model's
+    specific storage :math:`S_s` to the consolidation coefficient
+    :math:`m_v` and the unit weight of water :math:`gamma_w` via:
+    
+    .. math::
+    
+       S_s \approx m_v \, \gamma_w
+    
+    The constraint is applied in log space for numerical stability:
+    
+    .. math::
+    
+       r = \log(S_s) - \log(m_v \, \gamma_w)
+    
+    Depending on ``mode``, gradients may be blocked or allowed to
+    flow through :math:`S_s` (or its log) to control stability.
+    
+    Mathematical objective
+    ----------------------
+    If ``as_loss=True``, this function returns a scalar loss built
+    from two components:
+    
+    1) A global mismatch term based on the mean residual:
+    
+    .. math::
+    
+       \bar{r} = \mathrm{mean}(r)
+    
+    .. math::
+    
+       L_g = \mathrm{Huber}(\bar{r}; delta)
+    
+    2) A dispersion term that discourages spatial or batch-wide
+    scatter around the mean residual:
+    
+    .. math::
+    
+       L_d = \mathrm{mean}(
+           \mathrm{Huber}(r - \bar{r}; delta)
+       )
+    
+    The total loss is:
+    
+    .. math::
+    
+       L = L_g + alpha\_disp \, L_d
+    
+    Optionally, an additional weight and warmup ramp may be applied:
+    
+    .. math::
+    
+       L \leftarrow w(step) \, L
+    
+    Mode semantics and gradient flow
+    --------------------------------
+    The choice of mode controls where gradients are allowed.
+    
+    ``calibrate`` (default)
+        Uses :func:`tf.stop_gradient` on ``Ss_field`` before taking
+        :math:`\log(S_s)`. This calibrates :math:`m_v` without
+        reshaping the :math:`S_s` field produced by the trunk.
+    
+        This is typically the safest choice when the mean settlement
+        is physics-driven and the network already has strong physics
+        constraints elsewhere.
+    
+    ``field``
+        Backpropagates through ``Ss_field``. This can be unstable
+        when :math:`S_s` becomes small because:
+    
+        .. math::
+    
+           \frac{\partial \log(S_s)}{\partial S_s} = \frac{1}{S_s}
+    
+        so gradients can be amplified.
+    
+    ``logss``
+        Backpropagates through ``logSs`` directly. This is often
+        more stable than ``field`` because the log transform is
+        already computed upstream in a controlled manner (for
+        example, using guarded exponentiation in the field
+        composer). Use this when you want a stronger anchoring of
+        the log-storage field without the 1/S_s amplification.
+    
+    Inputs used
+    -----------
+    This function requires exactly one of:
+    
+    * ``logSs`` when ``mode='logss'``, or
+    * ``Ss_field`` when ``mode!='logss'``.
+    
+    The log target term :math:`\log(m_v \, \gamma_w)` is obtained
+    from the model configuration through helper resolvers. These
+    helpers may also apply internal conventions such as:
+    
+    * whether :math:`m_v` is learnable or fixed,
+    * the unit system for :math:`gamma_w`,
+    * safe floors ``eps`` to avoid :math:`\log(0)`.
+    
+    Parameters
+    ----------
+    model : Any
+        Model instance providing :math:`m_v`, :math:`gamma_w`,
+        scaling configuration, and optional scheduling state used
+        by helper resolvers.
+    
+    Ss_field : Tensor, optional
+        Specific storage field :math:`S_s` in 1/m. Required unless
+        ``mode='logss'``. The expected shape is broadcastable to
+        the physics batch layout (typically (B,H,1) or (B,1,1)).
+    
+    logSs : Tensor, optional
+        Log-specific storage :math:`\log(S_s)`. Required when
+        ``mode='logss'``. Prefer passing the raw log output from
+        the field composer to preserve true bound violations.
+    
+    mode : str, optional
+        Prior mode controlling gradient flow. If None, the mode is
+        resolved from model configuration. Supported modes are
+        ``'calibrate'``, ``'field'``, and ``'logss'`` (aliases may
+        be accepted by the internal canonicalizer).
+    
+    as_loss : bool, default=True
+        If True, return a scalar loss :math:`L`. If False, return
+        the residual field :math:`r`.
+    
+    weight : float or Tensor, optional
+        Optional multiplicative factor applied to the returned loss.
+        If None, the function may still derive a weight from model
+        configuration.
+    
+    warmup_steps : int, optional
+        If provided, enables an internal warmup schedule for the
+        prior weight via helper logic (for example a linear ramp
+        from 0 to 1 over ``warmup_steps``).
+    
+    step : int or Tensor, optional
+        Training step index passed to the warmup logic. If None, the
+        warmup logic may use model state or disable warmup.
+    
+    alpha_disp : float, default=0.1
+        Weight for the dispersion penalty :math:`L_d`.
+    
+    delta : float, default=1.0
+        Huber threshold parameter used by the robust penalty.
+    
+    eps : float, default=_EPSILON
+        Positive floor used when computing :math:`\log(S_s)` to
+        avoid :math:`\log(0)` and reduce numerical issues.
+    
+    verbose : int, default=0
+        Verbosity flag forwarded to internal helpers for debugging.
+    
     Returns
     -------
-    If as_loss=True:
-        Scalar loss (Huber on mean + dispersion term).
-    If as_loss=False:
-        Residual field r (same shape as logSs / derived logSs).
+    loss_or_residual : Tensor
+        If ``as_loss=True``, a scalar tensor representing the MV
+        prior loss. If ``as_loss=False``, the residual field
+        :math:`r` with the same shape as ``logSs`` (or derived
+        logSs from ``Ss_field``).
+    
+    Raises
+    ------
+    ValueError
+        If required inputs are missing for the selected mode
+        (for example, ``mode='logss'`` without ``logSs``).
+    
+    Notes
+    -----
+    Why log space
+    ~~~~~~~~~~~~~
+    Using :math:`\log(S_s)` makes the prior scale-invariant and
+    reduces sensitivity to absolute magnitudes. It also aligns with
+    how bounds on :math:`K` and :math:`S_s` are often expressed in
+    log space.
+    
+    Why the mean + dispersion split
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Calibrating :math:`m_v` is primarily a global adjustment. The
+    mean term penalizes systematic mismatch, while the dispersion
+    term discourages pathological spatial variability in the prior
+    residual without forcing every location to match exactly.
+    
+    Scheduling
+    ~~~~~~~~~~
+    In many training regimes, it is beneficial to ramp this prior
+    after the data loss stabilizes. The optional warmup hook allows
+    a gradual introduction to avoid early domination.
+    
+    Examples
+    --------
+    Compute a scalar MV prior loss in calibrate mode:
+    
+    .. code-block:: python
+    
+       loss_mv = compute_mv_prior(
+           model,
+           Ss_field=Ss_field,
+           mode="calibrate",
+           as_loss=True,
+           alpha_disp=0.1,
+           delta=1.0,
+       )
+    
+    Use the residual field for diagnostics (no reduction):
+    
+    .. code-block:: python
+    
+       r_mv = compute_mv_prior(
+           model,
+           Ss_field=Ss_field,
+           mode="field",
+           as_loss=False,
+       )
+    
+    Use logSs from the field composer (preferred for strong
+    anchoring without 1/S_s amplification):
+    
+    .. code-block:: python
+    
+       K, Ss, tau, tau_phys, Hd, dlogtau, logK, logSs, log_tau, log_tau_phys = (
+           compose_physics_fields(...)
+       )
+       loss_mv = compute_mv_prior(
+           model,
+           logSs=logSs,
+           mode="logss",
+           as_loss=True,
+       )
+    
+    See Also
+    --------
+    compose_physics_fields
+        Produces ``logSs`` consistent with guarded exponentiation.
+    
+    compute_consistency_prior
+        Prior linking learned tau to physically implied tau.
+    
+    assemble_physics_loss
+        Combines MV prior with other physics terms and offsets.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K., Peck, R. B., and Mesri, G.
+       Soil Mechanics in Engineering Practice. Wiley (1996).
+       (Consolidation theory and storage relations).
+    
+    .. [2] Huber, P. J.
+       Robust Statistics. Wiley (1981).  (Huber loss).
     """
+
     # ----------------------------------------------------------
     # 1) Resolve mode (alias-safe via scaling_kwargs).
     # ----------------------------------------------------------
@@ -1175,55 +1738,225 @@ def equilibrium_compaction_si(
     eps: float = _EPSILON,
     verbose: int = 0,
 ) -> Tensor:
-    """Compute equilibrium compaction s_eq (SI meters).
-
-    Notes
-    -----
-    - The physically common convention for drawdown (head loss) is:
-        delta_h = h_ref - h_mean
-      which is `drawdown_rule='ref_minus_mean'`.
-
-    - If you accidentally pass *depth* (down-positive) instead of head,
-      drawdown often needs to be flipped:
-        delta_h = h_mean - h_ref
-      which is `drawdown_rule='mean_minus_ref'`.
-
-    - `stop_grad_ref=True` is strongly recommended: it prevents the model
-      from collapsing delta_h by moving the reference.
-
+    r"""
+    Compute equilibrium compaction ``s_eq`` in SI meters.
+    
+    This function computes the equilibrium (instantaneous) settlement
+    that would be reached under a sustained head change, given a
+    specific storage field and a compressible thickness. The output
+    ``s_eq`` is used by the consolidation residual to compare the
+    current settlement state against its equilibrium target.
+    
+    Mathematical definition
+    -----------------------
+    Let:
+    
+    * :math:`h_{mean}` be the mean hydraulic head (m),
+    * :math:`h_{ref}` be a reference head (m),
+    * :math:`S_s` be specific storage (1/m),
+    * :math:`H` be compressible thickness (m).
+    
+    A drawdown (head loss) scalar :math:`Delta h` is formed from a
+    rule:
+    
+    .. math::
+    
+       Delta h_{raw} =
+       \begin{cases}
+         h_{ref} - h_{mean}, & \text{rule = ref\_minus\_mean} \\
+         h_{mean} - h_{ref}, & \text{rule = mean\_minus\_ref}
+       \end{cases}
+    
+    A non-negative drawdown is enforced using a gating operator
+    :math:`[x]_+` controlled by ``drawdown_mode``:
+    
+    .. math::
+    
+       Delta h = [Delta h_{raw}]_+
+    
+    Finally, equilibrium compaction is:
+    
+    .. math::
+    
+       s_{eq} = S_s \, Delta h \, H
+    
+    Units are consistent: :math:`(1/m) * (m) * (m) = m`.
+    
+    Drawdown gating
+    ---------------
+    The gating operator is chosen by ``drawdown_mode``:
+    
+    * ``"none"``:
+      :math:`[x]_+ = x` (no positivity enforcement).
+    * ``"relu"``:
+      :math:`[x]_+ = max(0, x)`.
+    * ``"softplus"``:
+      Smooth positive part via softplus (implementation dependent).
+    * ``"smooth_relu"``:
+      A smooth approximation to ReLU controlled by ``relu_beta``.
+    
+    If ``drawdown_zero_at_origin=True`` in ``"smooth_relu"`` mode,
+    the smooth positive part is shifted so its value at zero is
+    approximately zero, improving interpretability of the residual
+    near :math:`Delta h_{raw}=0`.
+    
+    Reference-gradient handling
+    ---------------------------
+    If ``stop_grad_ref=True`` (recommended), gradients are stopped
+    through the reference:
+    
+    .. math::
+    
+       h_{ref} := stop\_gradient(h_{ref})
+    
+    This prevents the model from trivially reducing drawdown by
+    moving the reference rather than adjusting the predicted head.
+    
+    Clipping
+    --------
+    If ``drawdown_clip_max`` is provided, the gated drawdown is
+    clipped after gating:
+    
+    .. math::
+    
+       Delta h := clip(Delta h, eps, Delta h_{max})
+    
+    This can prevent extremely large drawdowns from dominating the
+    physics loss in early training.
+    
     Parameters
     ----------
     h_mean_si : Tensor
-        Mean head (or depth, depending on your pipeline), SI meters.
-        Shape (B,H,1) or broadcastable.
+        Mean head (or depth, depending on your pipeline) in meters.
+        Must be broadcastable to shape ``(B, H, 1)``. If provided as
+        ``(B, H)``, it is expanded to ``(B, H, 1)``.
+    
     h_ref_si : Tensor
-        Reference head (or depth), SI meters, broadcastable to h_mean_si.
+        Reference head (or depth) in meters, broadcastable to
+        ``h_mean_si``. If ``stop_grad_ref=True``, gradients are
+        stopped through this tensor.
+    
     Ss_field : Tensor
-        Specific storage field in 1/m, broadcastable.
+        Specific storage field :math:`S_s` in 1/m. Must be
+        broadcastable to ``h_mean_si``. Non-finite values are
+        sanitized to zero. A non-negativity clamp is applied.
+    
     H_field_si : Tensor
-        Compressible thickness in meters, broadcastable.
-    drawdown_mode : str
-        Gating for positive drawdown: 'smooth_relu' (default), 'relu',
-        'softplus', or 'none'.
-    drawdown_rule : str
-        'ref_minus_mean' (default) or 'mean_minus_ref'.
-    relu_beta : float
-        Smoothness parameter for 'smooth_relu'.
-    stop_grad_ref : bool
-        If True, uses stop_gradient on h_ref_si.
-    drawdown_zero_at_origin : bool
-        If True and drawdown_mode='smooth_relu', shift the smooth ReLU so
-        it is ~0 at x=0 (see _positive_part doc).
-    drawdown_clip_max : float, optional
-        If provided, clips delta_h to [0, drawdown_clip_max] after gating.
-    verbose : int
-        Verbosity level.
-
+        Compressible thickness :math:`H` in meters. Must be
+        broadcastable to ``h_mean_si``. Non-finite values are
+        sanitized to zero. A non-negativity clamp is applied.
+    
+    drawdown_mode : str, default="smooth_relu"
+        Positivity enforcement for drawdown. Supported values:
+        ``"smooth_relu"``, ``"relu"``, ``"softplus"``, ``"none"``.
+    
+    drawdown_rule : str, default="smooth_relu"
+        Rule used to form raw drawdown:
+        ``"ref_minus_mean"`` or ``"mean_minus_ref"``.
+    
+    relu_beta : float, default=20.0
+        Smoothness/steepness for ``"smooth_relu"`` gating. Larger
+        values approach hard ReLU.
+    
+    stop_grad_ref : bool, default=True
+        If True, apply ``stop_gradient`` to ``h_ref_si`` to prevent
+        reference drift.
+    
+    drawdown_zero_at_origin : bool, default=False
+        Only used by ``"smooth_relu"``. If True, shift the smooth
+        positive-part so it is approximately zero at input zero.
+    
+    drawdown_clip_max : float or None, default=None
+        If provided, clip gated drawdown to
+        ``[eps, drawdown_clip_max]``.
+    
+    eps : float, default=_EPSILON
+        Small positive constant used by gating/clipping utilities.
+    
+    verbose : int, default=0
+        Verbosity level for debug printing and basic stats.
+    
     Returns
     -------
-    Tensor
-        Equilibrium compaction s_eq in meters, shape (B,H,1).
+    s_eq : Tensor
+        Equilibrium compaction in meters, shape ``(B, H, 1)``. Any
+        non-finite values are sanitized to zero as a final safeguard.
+    
+    Notes
+    -----
+    Head vs depth convention
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+    The default drawdown convention assumes head loss:
+    
+    .. math::
+    
+       Delta h = h_{ref} - h_{mean}
+    
+    If upstream code uses a depth-like quantity that increases
+    downward, the physically meaningful drawdown may require the
+    opposite sign:
+    
+    .. math::
+    
+       Delta h = h_{mean} - h_{ref}
+    
+    Use ``drawdown_rule="mean_minus_ref"`` in that case.
+    
+    Sanitization behavior
+    ~~~~~~~~~~~~~~~~~~~~~
+    Inputs are sanitized with a "finite-or-zero" rule before use.
+    This favors training stability over strict error signaling. If
+    you want fail-fast behavior, validate upstream.
+    
+    Examples
+    --------
+    Compute equilibrium compaction with default settings:
+    
+    >>> s_eq = equilibrium_compaction_si(
+    ...     h_mean_si=h_mean,
+    ...     h_ref_si=h_ref,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ... )
+    
+    Flip the drawdown rule for depth-like signals:
+    
+    >>> s_eq = equilibrium_compaction_si(
+    ...     h_mean_si=depth_mean,
+    ...     h_ref_si=depth_ref,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     drawdown_rule="mean_minus_ref",
+    ... )
+    
+    Clip extreme drawdowns during early training:
+    
+    >>> s_eq = equilibrium_compaction_si(
+    ...     h_mean_si=h_mean,
+    ...     h_ref_si=h_ref,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     drawdown_clip_max=50.0,
+    ... )
+    
+    See Also
+    --------
+    compute_consolidation_step_residual
+        Uses ``s_eq`` as the equilibrium target in the ODE residual.
+    
+    settlement_state_for_pde
+        Maps model settlement outputs to the ODE state convention.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K.
+       Theoretical Soil Mechanics. Wiley (1943).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
     """
+
 
     h_mean_si = _ensure_3d(tf_cast(h_mean_si, tf_float32))
     h_ref_si = _broadcast_like(_ensure_3d(tf_cast(h_ref_si, tf_float32)), h_mean_si)
@@ -1346,32 +2079,290 @@ def integrate_consolidation_mean(
     verbose: int = 0,
 ) -> Tensor:
 
-    """Integrate mean settlement \bar{s}(t) using a stable stepper.
-
+    r"""
+    Integrate mean consolidation settlement over a forecast horizon.
+    
+    This routine evolves the mean settlement state
+    :math:`\bar{s}(t)` using a stable, shape-safe time stepper that is
+    compatible with TensorFlow graph execution. It is designed for the
+    GeoPriorSubsNet "Option-1" mean path, where the mean subsidence is
+    physics-driven from the predicted head.
+    
+    The integrator advances a first-order relaxation model:
+    
+    .. math::
+    
+       \frac{d\bar{s}}{dt} =
+       \frac{s_{eq}(t) - \bar{s}(t)}{\tau(t)}
+    
+    where:
+    
+    * :math:`\bar{s}(t)` is the mean settlement state (m),
+    * :math:`s_{eq}(t)` is the equilibrium compaction (m),
+    * :math:`\tau(t)` is a consolidation time scale (s).
+    
+    The equilibrium compaction is computed by
+    :func:`equilibrium_compaction_si`:
+    
+    .. math::
+    
+       s_{eq}(t) = S_s(t)\, \Delta h(t)\, H(t)
+    
+    with :math:`S_s` (1/m), :math:`H` (m), and drawdown
+    :math:`\Delta h` (m) formed from ``h_mean_si`` and ``h_ref_si``
+    using ``drawdown_rule`` and gated by ``drawdown_mode``.
+    
+    Discrete-time update
+    --------------------
+    Let :math:`t_0, ..., t_{H-1}` be the horizon times and let
+    :math:`\Delta t_i` be the step duration in seconds. The state
+    update can be done in two ways:
+    
+    Exact step (stable for large :math:`\Delta t/\tau`)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    For each step :math:`i`:
+    
+    .. math::
+    
+       a_i = \exp\left(-\frac{\Delta t_i}{\tau_i}\right)
+    
+    .. math::
+    
+       \bar{s}_{i} =
+       a_i\, \bar{s}_{i-1} + (1-a_i)\, s_{eq,i}
+    
+    This is the closed-form solution of the linear ODE assuming
+    :math:`s_{eq}` and :math:`\tau` are constant on the step.
+    
+    Euler step (simple, less stable)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    For each step :math:`i`:
+    
+    .. math::
+    
+       \bar{s}_{i} =
+       \bar{s}_{i-1} +
+       \Delta t_i\, \frac{s_{eq,i} - \bar{s}_{i-1}}{\tau_i}
+    
+    Use ``method="exact"`` unless you have a strong reason to match
+    a legacy discretization.
+    
+    Time and units
+    --------------
+    The integrator expects:
+    
+    * ``h_mean_si`` and ``h_ref_si`` in meters,
+    * ``Ss_field`` in 1/m,
+    * ``H_field_si`` in meters,
+    * ``tau_field`` in seconds,
+    * ``dt`` expressed in ``time_units`` and converted to seconds
+      internally via :func:`dt_to_seconds`.
+    
+    If ``dt`` is None, a unit step of ``1`` is used per horizon index,
+    interpreted in ``time_units``.
+    
+    Shape contract and horizon alignment
+    ------------------------------------
+    Internally, this function forces a strict ``(B, H, 1)`` layout for
+    the evolving state and for all step inputs, because TensorFlow
+    scan operations can widen shapes when rank is ambiguous.
+    
+    Inputs that vary with time may be provided as:
+    
+    * length ``H``  : already aligned,
+    * length ``H+1``: treated as state-length, sliced to ``[:-1]``,
+    * length ``H-1``: treated as step-length, padded by prepending the
+      first entry, producing length ``H``,
+    * length ``1``  : broadcast across horizon.
+    
+    This alignment is applied to ``dt`` and ``tau_field``. The
+    equilibrium sequence ``s_eq`` is computed at length ``H``.
+    
+    Stability and sanitization
+    --------------------------
+    This integrator aggressively sanitizes non-finite values:
+    
+    * ``dt`` and ``dt_sec`` are mapped through a finite-or-zero rule,
+      then clamped to non-negative.
+    * ``tau`` is sanitized and lower-bounded by ``eps_tau``.
+    * The final output is passed through a finite-or-zero rule.
+    
+    These guards are intended to prevent training from crashing when
+    upstream predictions temporarily produce NaN/Inf.
+    
     Parameters
     ----------
     h_mean_si : Tensor
-        Mean head in SI meters, shape (B,H,1) (or (B,H)).
-    Ss_field, H_field_si, tau_field : Tensor
-        Effective fields in SI (Ss in 1/m, H in m, tau in seconds).
-        May be broadcastable to (B,H,1).
+        Mean head in meters. Shape ``(B, H, 1)`` or ``(B, H)``.
+        The last dim is forced to 1 for scan stability.
+    
+    Ss_field : Tensor
+        Specific storage :math:`S_s` in 1/m. Broadcastable to
+        ``(B, H, 1)``.
+    
+    H_field_si : Tensor
+        Compressible thickness :math:`H` in meters. Broadcastable to
+        ``(B, H, 1)``.
+    
+    tau_field : Tensor
+        Consolidation time scale :math:`\tau` in seconds.
+        Broadcastable to ``(B, H, 1)`` or horizon-aligned by the
+        alignment rules described above.
+    
     h_ref_si : Tensor
-        Reference head for drawdown (broadcastable).
+        Reference head (meters). Broadcastable to ``h_mean_si``.
+        If ``stop_grad_ref=True``, gradients are stopped through this
+        reference inside :func:`equilibrium_compaction_si`.
+    
     s_init_si : Tensor
-        Initial cumulative settlement (SI meters), shape (B,1,1) or (B,1).
+        Initial settlement state at the horizon origin. This is the
+        initial value used by the scan initializer. It is expected to
+        represent the settlement at the first horizon time.
+        Typical shape is ``(B, 1, 1)`` or ``(B, 1)``.
+    
     dt : Tensor, optional
-        Time step in `time_units`, broadcastable to (B,H,1). If None,
-        defaults to 1 per step.
-    time_units : str, optional
-        Units of `dt` (converted to seconds).
-    method : {'exact','euler'}
-        Stepping scheme.
-
+        Step duration in ``time_units``. If provided, it must be
+        broadcastable and is horizon-aligned. If None, a unit step of
+        ones is used.
+    
+    time_units : str, default="yr"
+        Units for ``dt``. Converted to seconds via :func:`dt_to_seconds`.
+        Examples include "yr", "day", "hour", or "unitless", depending
+        on your pipeline.
+    
+    method : {"exact", "euler"}, default="exact"
+        Integration scheme. "exact" uses the closed-form step for a
+        first-order linear relaxation. "euler" uses forward Euler.
+    
+    eps_tau : float, default=1e-12
+        Lower bound for ``tau`` to prevent division by zero and
+        undefined exponentials.
+    
+    relu_beta : float, default=20.0
+        Smoothness parameter forwarded to
+        :func:`equilibrium_compaction_si` for ``drawdown_mode="smooth_relu"``.
+    
+    drawdown_mode : str, default="smooth_relu"
+        Drawdown gating forwarded to :func:`equilibrium_compaction_si`.
+        Common values: "smooth_relu", "relu", "softplus", "none".
+    
+    drawdown_rule : str, default="ref_minus_mean"
+        Drawdown rule forwarded to :func:`equilibrium_compaction_si`.
+        Use "ref_minus_mean" for head-loss convention. Use
+        "mean_minus_ref" for depth-like (down-positive) signals.
+    
+    stop_grad_ref : bool, default=True
+        Forwarded to :func:`equilibrium_compaction_si`. If True, stops
+        gradient through ``h_ref_si`` to prevent reference drift.
+    
+    drawdown_zero_at_origin : bool, default=False
+        Forwarded to :func:`equilibrium_compaction_si`. If True, shifts
+        smooth drawdown gating so the value at zero is near zero.
+    
+    drawdown_clip_max : float or None, default=None
+        Forwarded to :func:`equilibrium_compaction_si`. If set, clips
+        drawdown after gating to avoid extreme values dominating loss.
+    
+    verbose : int, default=0
+        Verbosity for printing basic statistics and shape info.
+    
     Returns
     -------
     s_bar_si : Tensor
-        Mean cumulative settlement over the horizon, shape (B,H,1).
+        Mean cumulative settlement over the horizon in meters, shape
+        ``(B, H, 1)``. The sequence is the scan output of the chosen
+        stepper initialized at ``s_init_si``.
+    
+    Notes
+    -----
+    Relationship to model outputs
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    In Option-1 mean modeling, the network predicts mean head, and
+    settlement mean is computed by integrating the relaxation ODE.
+    The model may optionally add a learned residual around this mean,
+    but the returned value here is the physics mean only.
+    
+    Interpreting the horizon index
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    This function produces a length-H sequence. If your horizon times
+    represent the future steps 1..H, ensure that ``dt`` and ``h_mean_si``
+    are consistent with that convention. If you supply sequences of
+    length H+1 (state nodes), the last node is dropped by alignment.
+    
+    Numerical behavior
+    ~~~~~~~~~~~~~~~~~~
+    The exact update has the desirable limit:
+    
+    * If :math:`\Delta t_i \ll \tau_i`, then
+      :math:`\bar{s}_i \approx \bar{s}_{i-1}` (slow relaxation).
+    * If :math:`\Delta t_i \gg \tau_i`, then
+      :math:`\bar{s}_i \approx s_{eq,i}` (fast equilibration).
+    
+    Examples
+    --------
+    Integrate with unit yearly steps and exact update:
+    
+    >>> s_bar = integrate_consolidation_mean(
+    ...     h_mean_si=h_mean,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     tau_field=tau,
+    ...     h_ref_si=h_ref,
+    ...     s_init_si=s0,
+    ...     time_units="yr",
+    ...     method="exact",
+    ... )
+    
+    Use explicit dt (months) and Euler update:
+    
+    >>> s_bar = integrate_consolidation_mean(
+    ...     h_mean_si=h_mean,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     tau_field=tau,
+    ...     h_ref_si=h_ref,
+    ...     s_init_si=s0,
+    ...     dt=dt_months,
+    ...     time_units="month",
+    ...     method="euler",
+    ... )
+    
+    Flip drawdown rule for depth-like signals:
+    
+    >>> s_bar = integrate_consolidation_mean(
+    ...     h_mean_si=depth_mean,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     tau_field=tau,
+    ...     h_ref_si=depth_ref,
+    ...     s_init_si=s0,
+    ...     drawdown_rule="mean_minus_ref",
+    ... )
+    
+    See Also
+    --------
+    equilibrium_compaction_si
+        Computes :math:`s_{eq}(t)` from head/drawdown and fields.
+    
+    tau_phys_from_fields
+        Computes a physically motivated baseline time scale.
+    
+    settlement_state_for_pde
+        Converts predicted settlement representations to an ODE state.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K.
+       Theoretical Soil Mechanics. Wiley (1943).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
+    
+    .. [3] Zienkiewicz, O. C., Taylor, R. L.
+       The Finite Element Method, Vol. 3. Butterworth-Heinemann (2000).
     """
+
     def _align_to_horizon(x: Tensor, *, name: str) -> Tensor:
         """Align x time-length to horizon H (or keep length 1)."""
         xt = _ensure_3d(tf_cast(x, tf_float32))
@@ -1621,25 +2612,261 @@ def compute_consolidation_step_residual(
     drawdown_clip_max: Optional[float] = None,
     verbose: int = 0,
 ) -> Tensor:
-    """
-    One-step consolidation residual in SI space.
-
-    This enforces the Voigt-style ODE using a stable stepper.
-
-    Inputs
-    ------
-    s_state_si : (B,T,1)
-        Settlement *state* (typically incremental).
-    h_mean_si : (B,T,1)
-        Head state aligned with s_state_si.
-    Ss_field, H_field_si, tau_field, h_ref_si :
-        Fields used to compute equilibrium settlement.
-
+    r"""
+    Compute a one-step consolidation residual in SI space.
+    
+    This function forms a per-step residual that penalizes violations of
+    a first-order consolidation relaxation model over a sequence of
+    states. It is intended for physics diagnostics and for PDE-style
+    training objectives where the settlement state is predicted (or
+    derived) and should satisfy a stable time-stepping rule.
+    
+    Model and notation
+    ------------------
+    Let the settlement state be :math:`s(t)` (m). The governing ODE is a
+    Voigt-style relaxation toward an equilibrium settlement
+    :math:`s_{eq}(t)`:
+    
+    .. math::
+    
+       \frac{ds}{dt} = \frac{s_{eq}(t) - s(t)}{\tau(t)}
+    
+    where :math:`\tau(t)` is a (possibly space/time varying) time scale
+    in seconds. The equilibrium settlement is computed from head
+    drawdown:
+    
+    .. math::
+    
+       s_{eq}(t) = S_s(t)\, \Delta h(t)\, H(t)
+    
+    with :math:`S_s` in 1/m and :math:`H` in m. The drawdown
+    :math:`\Delta h(t)` is constructed from ``h_mean_si`` and ``h_ref_si``
+    using ``drawdown_rule`` and is gated by ``drawdown_mode`` via
+    :func:`equilibrium_compaction_si`.
+    
+    Discrete residual definition
+    ----------------------------
+    Given state samples :math:`s_n = s(t_n)` and a step duration
+    :math:`\Delta t_n` (seconds), this routine computes a one-step
+    prediction :math:`\hat{s}_{n+1}` from :math:`s_n` and :math:`s_{eq,n}`
+    and returns the residual:
+    
+    .. math::
+    
+       r_n = s_{n+1} - \hat{s}_{n+1}
+    
+    The residual has units of meters and is produced for
+    :math:`n = 0, ..., T-2`, hence the output time length is ``T-1``.
+    
+    Two steppers are supported:
+    
+    Exact step (closed-form, stable)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Assuming :math:`s_{eq}` and :math:`\tau` are constant over the step:
+    
+    .. math::
+    
+       a_n = \exp\left(-\frac{\Delta t_n}{\tau_n}\right)
+    
+    .. math::
+    
+       \hat{s}_{n+1} =
+       a_n s_n + (1-a_n) s_{eq,n}
+    
+    Euler step (forward Euler)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    .. math::
+    
+       \hat{s}_{n+1} =
+       s_n + \Delta t_n \frac{s_{eq,n} - s_n}{\tau_n}
+    
+    The "exact" update is unconditionally stable for stiff regimes
+    (:math:`\Delta t / \tau` large). Euler may be unstable unless
+    :math:`\Delta t \ll \tau`.
+    
+    Time and units
+    --------------
+    * Inputs are SI: meters, seconds, and 1/m as documented below.
+    * ``dt`` is interpreted in ``time_units`` and converted to seconds
+      using :func:`dt_to_seconds`.
+    
+    Shape contract and alignment
+    ----------------------------
+    Let ``s_state_si`` and ``h_mean_si`` have shape ``(B, T, 1)`` (or
+    ``(B, T)`` which is promoted to ``(B, T, 1)``). This function forms
+    step-aligned sequences of length ``H = T-1``:
+    
+    * :math:`s_n = s[:, :-1]` and :math:`s_{n+1} = s[:, 1:]`
+    * :math:`h_n = h[:, :-1]`
+    
+    Time-varying fields may be provided with time length:
+    
+    * ``T``     : state-length, sliced to ``T-1`` steps,
+    * ``T-1``   : already step-length,
+    * ``1``     : broadcast across steps.
+    
+    After alignment, fields are broadcast to ``(B, T-1, 1)``.
+    
+    Numerical safety
+    ----------------
+    This routine sanitizes key quantities:
+    
+    * Non-finite values are mapped through a finite-or-zero rule.
+    * ``tau`` is clamped below by ``eps_tau``.
+    * ``dt`` converted to seconds is clamped to non-negative.
+    
+    These guards prevent crashes during training when upstream model
+    outputs temporarily produce NaN/Inf.
+    
+    Parameters
+    ----------
+    s_state_si : Tensor
+        Settlement state in meters. Shape ``(B, T, 1)`` or ``(B, T)``.
+        This is the state used in the stepper (often incremental).
+    
+    h_mean_si : Tensor
+        Mean head (or depth-like signal) in meters. Shape must match
+        ``s_state_si`` in the time dimension ``T``. The stepper uses
+        ``h_mean_si[:, :-1]`` to compute :math:`s_{eq,n}`.
+    
+    Ss_field : Tensor
+        Specific storage :math:`S_s` in 1/m. Time length may be ``T``,
+        ``T-1``, or ``1``; it is aligned to steps and broadcast.
+    
+    H_field_si : Tensor
+        Compressible thickness :math:`H` in meters. Time length may be
+        ``T``, ``T-1``, or ``1``; it is aligned to steps and broadcast.
+    
+    tau_field : Tensor
+        Consolidation time scale :math:`\tau` in seconds. Time length may
+        be ``T``, ``T-1``, or ``1``; it is aligned to steps and clamped
+        below by ``eps_tau``.
+    
+    h_ref_si : Tensor
+        Reference head (or reference depth) in meters. Time length may be
+        ``T``, ``T-1``, or ``1``; it is aligned to steps. If
+        ``stop_grad_ref=True``, gradients are stopped through this
+        reference inside :func:`equilibrium_compaction_si`.
+    
+    dt : Tensor, optional
+        Step duration in ``time_units``. Time length may be ``T``,
+        ``T-1``, or ``1``. If None, a unit step is used for every step.
+    
+    time_units : str, default="yr"
+        Units for ``dt`` prior to conversion to seconds via
+        :func:`dt_to_seconds`.
+    
+    method : {"exact", "euler"}, default="exact"
+        Stepping scheme used to build :math:`\hat{s}_{n+1}`.
+    
+    eps_tau : float, default=1e-12
+        Lower bound for ``tau`` to prevent division by zero and overflow
+        in stiff regimes.
+    
+    relu_beta : float, default=20.0
+        Smoothness parameter forwarded to :func:`equilibrium_compaction_si`
+        when ``drawdown_mode="smooth_relu"``.
+    
+    drawdown_mode : str, default="smooth_relu"
+        Forwarded to :func:`equilibrium_compaction_si`. Controls the
+        positive-part gating applied to drawdown.
+    
+    drawdown_rule : str, default="ref_minus_mean"
+        Forwarded to :func:`equilibrium_compaction_si`. Controls the sign
+        convention for drawdown. Use "ref_minus_mean" for head loss and
+        "mean_minus_ref" for depth-like (down-positive) signals.
+    
+    stop_grad_ref : bool, default=True
+        Forwarded to :func:`equilibrium_compaction_si`. If True, prevents
+        gradients through the reference signal ``h_ref_si``.
+    
+    drawdown_zero_at_origin : bool, default=False
+        Forwarded to :func:`equilibrium_compaction_si`. If True, shifts
+        the smooth drawdown gate so the value at zero is near zero.
+    
+    drawdown_clip_max : float or None, default=None
+        Forwarded to :func:`equilibrium_compaction_si`. Clips drawdown
+        after gating to reduce extreme values.
+    
+    verbose : int, default=0
+        Verbosity for basic shape and residual statistics.
+    
     Returns
     -------
-    res : (B,T-1,1)
-        Residual per step n -> n+1 in meters.
+    res : Tensor
+        One-step residual sequence in meters, shape ``(B, T-1, 1)``:
+    
+        .. math::
+    
+           r_n = s_{n+1} - \hat{s}_{n+1}
+    
+    Notes
+    -----
+    Incremental vs cumulative state
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    This residual is defined on the settlement state passed as
+    ``s_state_si``. If your training uses an incremental ODE state
+    :math:`s_{inc}(t) = s_{cum}(t) - s_0`, ensure that both
+    ``s_state_si`` and ``s_eq`` are expressed in the same state space.
+    A mismatch (e.g., residuals on incremental state but equilibrium in
+    cumulative units) will produce biased residuals.
+    
+    When to prefer the exact step
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If the ratio :math:`\Delta t / \tau` is frequently larger than 1,
+    Euler updates can become numerically unstable. The exact step is
+    stable in both stiff and non-stiff regimes and is typically the best
+    default for physics losses.
+    
+    Examples
+    --------
+    Compute residuals for a horizon sequence:
+    
+    >>> r = compute_consolidation_step_residual(
+    ...     s_state_si=s_state,
+    ...     h_mean_si=h_mean,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     tau_field=tau,
+    ...     h_ref_si=h_ref,
+    ...     dt=dt,
+    ...     time_units="yr",
+    ...     method="exact",
+    ... )
+    
+    Flip drawdown rule for depth-like inputs:
+    
+    >>> r = compute_consolidation_step_residual(
+    ...     s_state_si=s_state,
+    ...     h_mean_si=depth,
+    ...     Ss_field=Ss,
+    ...     H_field_si=H,
+    ...     tau_field=tau,
+    ...     h_ref_si=depth_ref,
+    ...     drawdown_rule="mean_minus_ref",
+    ... )
+    
+    See Also
+    --------
+    integrate_consolidation_mean
+        Integrates the same relaxation model forward in time.
+    
+    equilibrium_compaction_si
+        Computes equilibrium settlement from drawdown and fields.
+    
+    dt_to_seconds
+        Converts ``dt`` in ``time_units`` to SI seconds.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K.
+       Theoretical Soil Mechanics. Wiley (1943).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
     """
+
     # ---------------------------------------------------------
     # 1) Normalize core tensors to (B,T,1) float32.
     # ---------------------------------------------------------
@@ -1819,13 +3046,211 @@ def tau_phys_from_fields(
     *,
     eps: float = _EPSILON,
     verbose: int = 0,
-    return_log: bool = False, # NEW ARGUMENT
+    return_log: bool = False, 
 ) -> Tuple[Tensor, Tensor]:
-    """
-    Compute tau_phys (s) and Hd (m).
+    r"""
+    Compute the physics closure consolidation timescale ``tau_phys``
+    and the effective drainage thickness ``Hd``.
     
-    CRITICAL CHANGE: computes in log-space first to avoid 1/K^2 gradient explosion.
+    This function implements the model's consolidation timescale
+    closure :math:`tau_{phys}` in a numerically stable way. The core
+    design is to compute :math:`log(tau_{phys})` first, and only
+    apply ``exp`` at the end (unless ``return_log=True``). This
+    prevents unstable gradients that can arise from naive algebraic
+    forms that contain high powers of :math:`1/K`.
+    
+    Mathematical definition
+    -----------------------
+    Let the model provide effective fields in SI units:
+    
+    * :math:`K` in m/s (hydraulic conductivity),
+    * :math:`S_s` in 1/m (specific storage),
+    * :math:`H` in m (thickness),
+    * :math:`kappa` is a positive scalar multiplier (dimensionless
+      in the code path; its physical meaning depends on the chosen
+      mode).
+    
+    An effective drainage thickness :math:`H_d` is defined as:
+    
+    .. math::
+    
+       H_d =
+       \begin{cases}
+         H \cdot f_{Hd}, & \text{if use\_effective\_thickness is True} \\
+         H,              & \text{otherwise}
+       \end{cases}
+    
+    where :math:`f_{Hd}` is ``model.Hd_factor``. The function returns
+    this :math:`H_d` as ``Hd``.
+    
+    Two closure modes are supported via ``model.kappa_mode``:
+    
+    1) ``kappa_mode="bar"``
+    
+    The closure is:
+    
+    .. math::
+    
+       \tau_{phys}
+       = \frac{\kappa \, H^2 \, S_s}{\pi^2 \, K}
+    
+    The log form is:
+    
+    .. math::
+    
+       \log(\tau_{phys})
+       = \log(\kappa)
+         + 2\log(H)
+         + \log(S_s)
+         - \log(\pi^2)
+         - \log(K)
+    
+    2) Any other value (the "non-bar" branch)
+    
+    The closure is:
+    
+    .. math::
+    
+       \tau_{phys}
+       = \frac{H_d^2 \, S_s}{\pi^2 \, \kappa \, K}
+    
+    The log form is:
+    
+    .. math::
+    
+       \log(\tau_{phys})
+       = 2\log(H_d)
+         + \log(S_s)
+         - \log(\pi^2)
+         - \log(\kappa)
+         - \log(K)
+    
+    The implementation uses the log forms above. If ``return_log`` is
+    False, it returns:
+    
+    .. math::
+    
+       \tau_{phys} = \exp(\log(\tau_{phys}))
+    
+    Numerical stability
+    -------------------
+    All inputs are sanitized and floored to be strictly positive:
+    
+    .. math::
+    
+       K_{safe}  = \max(K,  eps) \\
+       S_{s,safe}= \max(S_s,eps) \\
+       H_{safe}  = \max(H,  eps) \\
+       H_{d,safe}= \max(H_d,eps) \\
+       \kappa_{safe} = \max(\kappa, eps)
+    
+    This ensures that ``log`` is never applied to non-positive or
+    non-finite values. Computing in log-space also avoids gradient
+    blow-ups associated with expressions that behave like
+    :math:`1/K^2` when written in certain equivalent algebraic forms.
+    
+    Parameters
+    ----------
+    model : Any
+        Model instance providing:
+        ``use_effective_thickness``, ``Hd_factor``, ``kappa_mode``,
+        and a callable ``_kappa_value()`` returning a positive scalar.
+    
+    K_field : Tensor
+        Effective conductivity :math:`K` in SI (m/s). Shape is
+        broadcastable to ``(B, H, 1)``.
+    
+    Ss_field : Tensor
+        Effective specific storage :math:`S_s` in SI (1/m). Shape is
+        broadcastable to ``(B, H, 1)``.
+    
+    H_field : Tensor
+        Thickness :math:`H` in SI (m). Shape is broadcastable to
+        ``(B, H, 1)``.
+    
+    eps : float, default=_EPSILON
+        Positive floor used by ``finite_floor`` to prevent invalid
+        logs and divisions.
+    
+    verbose : int, default=0
+        Verbosity level for debug printing.
+    
+    return_log : bool, default=False
+        If True, return ``(log_tau_phys, Hd)`` where ``log_tau_phys``
+        is :math:`log(tau_{phys})`. If False, return
+        ``(tau_phys, Hd)`` where ``tau_phys`` is in seconds.
+    
+    Returns
+    -------
+    tau_or_log_tau : Tensor
+        If ``return_log=False``:
+        Physics closure timescale :math:`tau_{phys}` in seconds.
+    
+        If ``return_log=True``:
+        :math:`log(tau_{phys})` in log-seconds.
+    
+    Hd : Tensor
+        Effective drainage thickness :math:`H_d` in meters. This is
+        either ``H_field`` or ``H_field * Hd_factor`` depending on
+        ``model.use_effective_thickness``. Shape is broadcastable to
+        ``(B, H, 1)``.
+    
+    Notes
+    -----
+    Choice of ``H`` vs ``Hd`` in "bar" mode
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    In the ``kappa_mode="bar"`` branch, the code uses ``H_safe`` in
+    the :math:`H^2` term. The function still computes and returns
+    ``Hd`` for downstream diagnostics and for non-"bar" mode. If your
+    physical interpretation requires :math:`H_d` as the diffusion path
+    length in "bar" mode, you may adapt the closure accordingly.
+    
+    Gradient behavior
+    ~~~~~~~~~~~~~~~~~
+    Computing :math:`log(tau_{phys})` first improves stability because
+    the derivative of ``log`` scales like :math:`1/x`, while direct
+    algebraic expansions of :math:`tau_{phys}` can introduce stronger
+    inverse powers in intermediate steps. The only exponential is
+    applied at the end (if requested), keeping the computational graph
+    well behaved.
+    
+    Examples
+    --------
+    Compute ``tau_phys`` and use it in a prior:
+    
+    >>> tau_phys, Hd = tau_phys_from_fields(model, K, Ss, H)
+    >>> R_prior = tf.math.log(tf.maximum(tau_learned, 1e-12)) \
+    ...          - tf.math.log(tf.maximum(tau_phys, 1e-12))
+    >>> loss_prior = tf.reduce_mean(tf.square(R_prior))
+    
+    Get log-space output for direct log-priors:
+    
+    >>> log_tau_phys, Hd = tau_phys_from_fields(
+    ...     model, K, Ss, H, return_log=True
+    ... )
+    
+    See Also
+    --------
+    compute_consistency_prior
+        Builds the residual ``log(tau_learned) - log(tau_phys)``.
+    
+    compose_physics_fields
+        Composes bounded SI fields and returns ``log_tau_phys`` for
+        diagnostics and bounds penalties.
+    
+    get_log_tau_bounds
+        Provides configured bounds for ``log_tau`` (log-seconds).
+    
+    References
+    ----------
+    .. [1] Terzaghi, K.
+       Theoretical Soil Mechanics. Wiley (1943).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
     """
+
     eps = float(eps)
     pi_sq = tf_constant(np.pi**2, dtype=tf_float32)
 
@@ -1899,7 +3324,175 @@ def compute_consistency_prior(
     *,
     verbose: int = 0,
 ) -> Tensor:
-    """Consistency prior: log(tau) - log(tau_phys)."""
+    r"""
+    Compute the consolidation timescale consistency prior.
+    
+    This prior constrains the learned consolidation timescale ``tau``
+    to remain physically consistent with the permeability-storage-
+    thickness closure implied by the poroelastic consolidation model.
+    It returns the *log-space mismatch*:
+    
+    .. math::
+    
+       R_{\mathrm{prior}}
+       = \log(\tau_{\mathrm{learned}})
+         - \log(\tau_{\mathrm{phys}})
+    
+    where :math:`\tau_{\mathrm{phys}}` is computed from the predicted
+    fields :math:`K`, :math:`S_s`, and :math:`H` through
+    :func:`tau_phys_from_fields`.
+    
+    Log-space is used for two reasons:
+    
+    1. Positivity: :math:`\tau > 0` is enforced implicitly.
+    2. Scale: timescales may span orders of magnitude; comparing
+       logs yields a relative-type error signal.
+    
+    Mathematical formulation
+    ------------------------
+    Let the model predict effective fields (all SI):
+    
+    * :math:`K(x,y)` in m/s (hydraulic conductivity),
+    * :math:`S_s(x,y)` in 1/m (specific storage),
+    * :math:`H(x,y)` in m (compressible thickness),
+    * :math:`\tau_{\mathrm{learned}}(x,y)` in s (learned timescale).
+    
+    A common 1D Terzaghi-style drainage closure gives a characteristic
+    timescale:
+    
+    .. math::
+    
+       \tau_{\mathrm{phys}}
+       = \frac{H_d^2 \, S_s}{\pi^2 \, c_v}
+    
+    with consolidation coefficient:
+    
+    .. math::
+    
+       c_v = \frac{K}{S_s}
+    
+    or, equivalently, for a diffusion-like closure:
+    
+    .. math::
+    
+       \tau_{\mathrm{phys}}
+       = \frac{H_d^2 \, S_s}{\pi^2 \, K}
+    
+    where :math:`H_d` is the effective drainage thickness (often a
+    fraction of :math:`H`, e.g. :math:`H_d = \mathrm{hd\_factor}\,H`).
+    The exact form used is delegated to :func:`tau_phys_from_fields`,
+    which may incorporate additional model parameters such as
+    :math:`\kappa` (compressibility/bulk coupling) or boundary
+    conditions.
+    
+    The prior residual returned by this function is:
+    
+    .. math::
+    
+       R_{\mathrm{prior}}(x,y)
+       = \log(\max(\tau_{\mathrm{learned}}(x,y), \varepsilon))
+         - \log(\tau_{\mathrm{phys}}(x,y))
+    
+    where :math:`\varepsilon` is a small constant used to avoid
+    ``log(0)`` when the learned timescale becomes numerically small.
+    
+    This residual is typically used inside an L2 penalty:
+    
+    .. math::
+    
+       L_{\mathrm{prior}}
+       = \mathbb{E}\left[R_{\mathrm{prior}}^2\right]
+    
+    and contributes to the physics loss with a user-controlled weight
+    (e.g., ``lambda_prior``).
+    
+    Parameters
+    ----------
+    model : Any
+        Model instance providing configuration used by
+        :func:`tau_phys_from_fields` (for example, effective thickness
+        settings, kappa mode, bounds, and scaling config).
+    
+    K_field : Tensor
+        Effective hydraulic conductivity :math:`K` in SI units (m/s).
+        Expected shape is broadcastable to ``(B, H, 1)``.
+    
+    Ss_field : Tensor
+        Effective specific storage :math:`S_s` in SI units (1/m).
+        Expected shape is broadcastable to ``(B, H, 1)``.
+    
+    tau_field : Tensor
+        Learned timescale :math:`\tau_{\mathrm{learned}}` in SI seconds.
+        Expected shape is broadcastable to ``(B, H, 1)``.
+    
+    H_field : Tensor
+        Thickness :math:`H` in SI meters. Expected shape is
+        broadcastable to ``(B, H, 1)``.
+    
+    verbose : int, default=0
+        Verbosity level for debug printing.
+    
+    Returns
+    -------
+    residual : Tensor
+        Log-space prior residual:
+    
+        .. math::
+    
+           R_{\mathrm{prior}}
+           = \log(\tau_{\mathrm{learned}})
+             - \log(\tau_{\mathrm{phys}})
+    
+        Shape follows the broadcasted shape of the inputs, typically
+        ``(B, H, 1)``.
+    
+    Notes
+    -----
+    Numerical stability
+    ~~~~~~~~~~~~~~~~~~~
+    * ``tau_field`` is floored by a small :math:`\varepsilon` before
+      taking the logarithm.
+    * :func:`tau_phys_from_fields` is called with ``return_log=True``
+      to compute :math:`\log(\tau_{\mathrm{phys}})` directly, avoiding
+      the unstable pattern ``log(exp(log_tau))``.
+    
+    Interpretation
+    ~~~~~~~~~~~~~~
+    * ``residual = 0`` means the learned timescale matches the closure.
+    * Positive values indicate :math:`\tau_{\mathrm{learned}}` is larger
+      (slower consolidation) than predicted by the closure.
+    * Negative values indicate a smaller (faster) learned timescale.
+    
+    Examples
+    --------
+    Compute and reduce to an L2 prior loss:
+    
+    >>> R_prior = compute_consistency_prior(
+    ...     model, K_field=K, Ss_field=Ss,
+    ...     tau_field=tau, H_field=H
+    ... )
+    >>> loss_prior = tf.reduce_mean(tf.square(R_prior))
+    
+    See Also
+    --------
+    tau_phys_from_fields
+        Computes :math:`\tau_{\mathrm{phys}}` from :math:`K`, :math:`S_s`,
+        and :math:`H` (and model configuration).
+    
+    compose_physics_fields
+        Builds bounded/guarded SI fields and returns both learned
+        and closure timescales in log-space.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K.
+       Theoretical Soil Mechanics. Wiley (1943).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
+    """
+
     eps = tf_constant(_EPSILON, dtype=tf_float32)
 
     # 1. Get learned tau in log space
@@ -1935,9 +3528,162 @@ def compute_smoothness_prior(
     already_log: bool = False,
     verbose: int = 0,
 ) -> Tensor:
+    r"""
+    Compute a smoothness prior on spatial gradients of physics fields.
+    
+    This function builds a spatial regularizer that penalizes rapid
+    variation of the permeability-like field ``K`` and the storage
+    field ``Ss`` over the spatial coordinates. In the GeoPrior PINN,
+    this prior stabilizes the inverse problem by discouraging
+    unrealistic high-frequency spatial structure in learned fields.
+    
+    The preferred penalty is applied in *log-space*:
+    
+    .. math::
+    
+       R_{\mathrm{smooth}}
+       = \left\|\nabla \log K\right\|^2
+         + \left\|\nabla \log S_s\right\|^2
+    
+    where, in 2D:
+    
+    .. math::
+    
+       \left\|\nabla \log K\right\|^2
+       = \left(\frac{\partial \log K}{\partial x}\right)^2
+         + \left(\frac{\partial \log K}{\partial y}\right)^2
+    
+    and similarly for :math:`S_s`. Penalizing gradients of logs is
+    often preferable to raw gradients because it regularizes *relative*
+    changes (order-of-magnitude variations) rather than absolute
+    changes.
+    
+    Implementation modes
+    --------------------
+    The function supports three modes, chosen by inputs:
+    
+    1. ``already_log=True``:
+       Inputs ``dK_dx`` etc. are interpreted as
+       :math:`\partial_x \log K` and so on, and the penalty is:
+    
+       .. math::
+    
+          R_{\mathrm{smooth}}
+          = (d\log K/dx)^2 + (d\log K/dy)^2
+            + (d\log S_s/dx)^2 + (d\log S_s/dy)^2
+    
+    2. ``already_log=False`` with ``K_field`` and ``Ss_field``:
+       The function converts raw gradients to log-gradients using:
+    
+       .. math::
+    
+          \frac{\partial \log K}{\partial x}
+          = \frac{1}{K}\frac{\partial K}{\partial x}
+    
+       and similarly for the other terms. For numerical stability,
+       denominators are floored by a small constant ``eps_div``:
+    
+       .. math::
+    
+          K_{\mathrm{denom}} = \max(K, \varepsilon_{\mathrm{div}})
+    
+       This avoids exploding ratios when ``K`` or ``Ss`` are very small.
+    
+    3. Fallback (rare):
+       If ``K_field`` and ``Ss_field`` are not provided, it penalizes
+       the raw gradients directly:
+    
+       .. math::
+    
+          R_{\mathrm{smooth}}
+          = (dK/dx)^2 + (dK/dy)^2
+            + (dS_s/dx)^2 + (dS_s/dy)^2
+    
+    Parameters
+    ----------
+    dK_dx, dK_dy : Tensor
+        Spatial gradients of ``K`` with respect to x and y. If
+        ``already_log=True``, these are gradients of ``logK`` instead.
+    
+    dSs_dx, dSs_dy : Tensor
+        Spatial gradients of ``Ss`` with respect to x and y. If
+        ``already_log=True``, these are gradients of ``logSs`` instead.
+    
+    K_field : Tensor or None, default=None
+        Field ``K`` in SI units (m/s). Used only when converting
+        raw gradients to log-gradients.
+    
+    Ss_field : Tensor or None, default=None
+        Field ``Ss`` in SI units (1/m). Used only when converting
+        raw gradients to log-gradients.
+    
+    already_log : bool, default=False
+        If True, treat the input gradients as log-gradients.
+    
+    verbose : int, default=0
+        Verbosity level for debug printing.
+    
+    Returns
+    -------
+    residual : Tensor
+        Smoothness residual map. Typical shape is ``(B, H, 1)`` or a
+        broadcast-compatible shape. This quantity is usually squared
+        and reduced to form ``loss_smooth``.
+    
+    Notes
+    -----
+    Why log-space regularization?
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    In hydrogeologic inverse problems, fields like ``K`` can vary by
+    orders of magnitude across space. Penalizing gradients of ``logK``
+    naturally encourages spatial smoothness in a multiplicative sense,
+    which aligns with common geostatistical assumptions.
+    
+    Stability of division
+    ~~~~~~~~~~~~~~~~~~~~~
+    When converting ``dK`` to ``dlogK = dK / K``, small ``K`` can
+    create extremely large ratios. The denominator floor
+    ``eps_div`` is applied only for the conversion step, so that
+    regions with effectively zero permeability do not dominate the
+    regularizer.
+    
+    Examples
+    --------
+    Penalty in log-space using provided fields:
+    
+    >>> R_smooth = compute_smoothness_prior(
+    ...     dK_dx, dK_dy, dSs_dx, dSs_dy,
+    ...     K_field=K, Ss_field=Ss, already_log=False
+    ... )
+    >>> loss_smooth = tf.reduce_mean(tf.square(R_smooth))
+    
+    Direct log-gradient mode (inputs already log-gradients):
+    
+    >>> R_smooth = compute_smoothness_prior(
+    ...     dlogK_dx, dlogK_dy, dlogSs_dx, dlogSs_dy,
+    ...     already_log=True
+    ... )
+    
+    See Also
+    --------
+    compose_physics_fields
+        Produces bounded SI fields ``K_field`` and ``Ss_field`` and
+        associated log values for diagnostics and priors.
+    
+    ensure_si_derivative_frame
+        Converts autodiff derivatives to SI-consistent spatial
+        derivatives suitable for smoothness penalties.
+    
+    References
+    ----------
+    .. [1] Tarantola, A.
+       Inverse Problem Theory and Methods for Model Parameter
+       Estimation. SIAM (2005).
+    
+    .. [2] Rasmussen, C. E., and Williams, C. K. I.
+       Gaussian Processes for Machine Learning. MIT Press (2006).
     """
-    Smoothness prior on spatial gradients.
-    """
+
     # Safe epsilon for division
     eps_div = tf_constant(1e-6, dtype=tf_float32) 
 
@@ -2037,14 +3783,112 @@ def get_log_bounds(
     dtype=tf_float32,
     verbose: int = 0,
 ) -> Tuple[Any, Any, Any, Any]:
+    r"""
+    Get validated log-space bounds for K and Ss.
+    
+    This helper reads bounds from ``model.scaling_kwargs['bounds']``
+    and returns a 4-tuple:
+    
+    ``(logK_min, logK_max, logSs_min, logSs_max)``.
+    
+    It supports two equivalent representations:
+    
+    * Direct log-bounds:
+      ``logK_min/logK_max`` and ``logSs_min/logSs_max``.
+    * Linear bounds converted to logs:
+      ``K_min/K_max`` and ``Ss_min/Ss_max``.
+    
+    If bounds are missing, the function returns
+    ``(None, None, None, None)``.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object with an optional ``scaling_kwargs`` dict.
+        Bounds are read from ``model.scaling_kwargs['bounds']``.
+    
+    as_tensor : bool, default=True
+        If True, return Tensor scalars created with ``tf_constant``.
+        If False, return Python floats.
+    
+    dtype : tf.DType, default=tf_float32
+        Tensor dtype used when ``as_tensor=True``.
+    
+    verbose : int, default=0
+        Verbosity level for optional debug printing.
+    
+    Returns
+    -------
+    logK_min, logK_max, logSs_min, logSs_max : tuple
+        Log-space bounds as Tensor scalars (if ``as_tensor=True``),
+        otherwise Python floats.
+    
+        If bounds are not configured, returns:
+        ``(None, None, None, None)``.
+    
+    Raises
+    ------
+    ValueError
+        If bounds exist but are invalid, including:
+    
+        * non-finite values (NaN or inf)
+        * non-positive linear bounds (<= 0)
+        * unordered bounds (max <= min)
+    
+    Notes
+    -----
+    Validation contract
+    ~~~~~~~~~~~~~~~~~~~
+    This function never emits NaN log bounds. If the configuration
+    contains invalid entries, it fails fast with ``ValueError``.
+    
+    Conversion precedence
+    ~~~~~~~~~~~~~~~~~~~~~
+    If log-bounds are present, they are used directly. Otherwise,
+    the function looks for linear bounds and converts them via:
+    
+    .. math::
+    
+       \log K_{\min} = \log(K_{\min}), \quad
+       \log K_{\max} = \log(K_{\max}),
+    
+    and similarly for :math:`S_s`.
+    
+    Optional Ss heuristic
+    ~~~~~~~~~~~~~~~~~~~~
+    If ``Ss_min/Ss_max`` appear to be compressibility-like values
+    (e.g., :math:`m_v`), the function may optionally convert them
+    to :math:`S_s` using :math:`S_s = m_v \gamma_w` when a finite
+    ``model.gamma_w`` is available. This heuristic is best-effort
+    and never raises by itself.
+    
+    Examples
+    --------
+    Use Tensor bounds for downstream math:
+    
+    >>> logK_min, logK_max, logSs_min, logSs_max = get_log_bounds(
+    ...     model, as_tensor=True
+    ... )
+    
+    Return Python floats for inspection:
+    
+    >>> bounds = get_log_bounds(model, as_tensor=False)
+    >>> print(bounds)
+    
+    See Also
+    --------
+    get_log_tau_bounds
+        Companion helper for tau bounds in log space.
+    
+    compute_bounds_residual
+        Uses these bounds to compute normalized violations.
+    
+    References
+    ----------
+    .. [1] Nocedal, J., and Wright, S. J. Numerical Optimization.
+       Springer (2006).
     """
-    Return (logK_min, logK_max, logSs_min, logSs_max).
 
-    Contract:
-    - If bounds are present but invalid (NaN, inf, <=0, max<=min),
-      raise ValueError (do NOT emit NaN logs).
-    - If bounds are missing, return (None, None, None, None).
-    """
     sk = getattr(model, "scaling_kwargs", None) or {}
     b = (sk.get("bounds", None) or {}) or {}
 
@@ -2230,15 +4074,115 @@ def get_log_tau_bounds(
     dtype=tf_float32,
     verbose: int = 0,
 ) -> Tuple[Any, Any]:
+    r"""
+    Get validated log-space bounds for the consolidation timescale.
+    
+    This helper returns a 2-tuple:
+    
+    ``(log_tau_min, log_tau_max)``,
+    
+    where :math:`\tau` is the consolidation timescale expressed in
+    SI seconds, and the returned bounds are in log-seconds.
+    
+    The function reads bounds from ``model.scaling_kwargs['bounds']``
+    with the following precedence:
+    
+    1. Explicit log bounds:
+       ``log_tau_min`` and ``log_tau_max`` (already log-seconds).
+    2. Linear bounds in seconds:
+       ``tau_min`` and ``tau_max``.
+    3. Linear bounds in dataset time units:
+       ``tau_min_units`` and ``tau_max_units`` multiplied by the
+       seconds-per-time-unit factor inferred from ``time_units``.
+    4. Robust defaults if nothing is provided.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object with an optional ``scaling_kwargs`` dict.
+        Tau bounds are read from ``model.scaling_kwargs['bounds']``.
+    
+    as_tensor : bool, default=True
+        If True, return Tensor scalars created with ``tf_constant``.
+        If False, return Python floats.
+    
+    dtype : tf.DType, default=tf_float32
+        Tensor dtype used when ``as_tensor=True``.
+    
+    verbose : int, default=0
+        Verbosity level for optional debug printing.
+    
+    Returns
+    -------
+    log_tau_min, log_tau_max : tuple
+        Log-space bounds (log-seconds). Returned as Tensor scalars
+        when ``as_tensor=True``, otherwise as Python floats.
+    
+    Raises
+    ------
+    ValueError
+        If user-provided bounds exist but are invalid, including:
+    
+        * non-finite values (NaN or inf)
+        * non-positive linear bounds (<= 0)
+        * unordered bounds (max <= min) for explicit log bounds
+    
+    Notes
+    -----
+    Units and meaning
+    ~~~~~~~~~~~~~~~~~
+    The consolidation timescale :math:`\tau` controls the relaxation
+    rate in a first-order consolidation closure, e.g.:
+    
+    .. math::
+    
+       \partial_t s = \frac{s_{eq}(h) - s}{\tau},
+    
+    where :math:`s` is settlement and :math:`s_{eq}` is the
+    equilibrium settlement implied by head (or drawdown).
+    
+    Default behavior
+    ~~~~~~~~~~~~~~~~
+    If no tau bounds are provided, robust defaults are used:
+    
+    * ``tau_min = 7 days``
+    * ``tau_max = 300 years``
+    
+    Both are converted to seconds and then logged. A warning may be
+    emitted to make the defaulting explicit.
+    
+    Swapped linear bounds
+    ~~~~~~~~~~~~~~~~~~~~~
+    If linear bounds are provided with ``tau_max < tau_min``, the
+    function may swap them to maintain a valid interval.
+    
+    Examples
+    --------
+    Use Tensor bounds for log-space clipping:
+    
+    >>> log_tau_min, log_tau_max = get_log_tau_bounds(model)
+    
+    Return floats for reporting:
+    
+    >>> log_tau_min, log_tau_max = get_log_tau_bounds(
+    ...     model, as_tensor=False
+    ... )
+    
+    See Also
+    --------
+    get_log_bounds
+        Bounds helper for log(K) and log(Ss).
+    
+    compute_bounds_residual
+        Computes normalized bound violations using these limits.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K. Theoretical Soil Mechanics. Wiley (1943).
+    .. [2] Verruijt, A. Theory and Problems of Poroelasticity.
+       Delft University of Technology (2013).
     """
-    Return (log_tau_min, log_tau_max) for consolidation timescale.
 
-    Contract:
-    - If user provides tau bounds but they are invalid (NaN/inf,
-      <=0, max<=min), raise ValueError.
-    - If tau bounds are missing, use robust defaults.
-    - Returned units are log-seconds (tau is SI seconds).
-    """
     sk = getattr(model, "scaling_kwargs", None) or {}
     bounds = (sk.get("bounds", None) or {}) or {}
 
@@ -2359,14 +4303,109 @@ def bounded_exp(
     return_log: bool = False,
     verbose: int = 0,
 ):
+    r"""
+    Exponentiate a raw parameter inside hard log-bounds.
+    
+    This helper maps an unconstrained tensor ``raw`` to a positive
+    field by interpolating in log space between ``log_min`` and
+    ``log_max``. The mapping is smooth and bounded:
+    
+    .. math::
+    
+       z = \sigma(\mathrm{raw}), \quad
+       \log v = \log v_{min} + z(\log v_{max} - \log v_{min}), \quad
+       v = \exp(\log v) + \varepsilon,
+    
+    where :math:`\sigma` is the logistic sigmoid and
+    :math:`\varepsilon` is a small positive floor.
+    
+    This is used when ``bounds_mode="hard"`` to ensure learned
+    fields such as :math:`K`, :math:`S_s`, or :math:`\tau` never
+    leave their configured ranges.
+    
+    Parameters
+    ----------
+    raw : Tensor
+        Unconstrained logit-like tensor (any shape). Non-finite
+        entries are sanitized to zeros to avoid NaN propagation.
+    
+    log_min : Tensor
+        Lower bound in log space. Must be finite for strict
+        correctness, but non-finite values are sanitized to a safe
+        constant to prevent NaNs.
+    
+    log_max : Tensor
+        Upper bound in log space. Must be finite for strict
+        correctness, but non-finite values are sanitized to a safe
+        constant to prevent NaNs.
+    
+    eps : float, default=_EPSILON
+        Positive floor added after exponentiation to guarantee
+        strictly positive output.
+    
+    return_log : bool, default=False
+        If True, return ``(out, logv)`` where ``logv`` is the bounded
+        log value actually exponentiated. If False, return ``out``
+        only.
+    
+    verbose : int, default=0
+        Verbosity level for optional debug printing.
+    
+    Returns
+    -------
+    out : Tensor
+        Positive bounded field tensor with the same shape as ``raw``.
+    
+    logv : Tensor, optional
+        Bounded log value used to compute ``out``. Returned only
+        when ``return_log=True``.
+    
+    Notes
+    -----
+    Hard bounds via sigmoid
+    ~~~~~~~~~~~~~~~~~~~~~~~
+    The sigmoid interpolation produces values strictly inside the
+    interval (up to numerical precision). This avoids the gradient
+    discontinuity of direct clipping while still enforcing bounds.
+    
+    Sanitization policy
+    ~~~~~~~~~~~~~~~~~~~
+    To prevent NaNs and Infs from contaminating training, the
+    function sanitizes:
+    
+    * non-finite values in ``raw`` to zeros,
+    * non-finite values in bounds to safe constants,
+    * swapped bounds by repairing the interval ordering.
+    
+    This behavior is defensive and prioritizes numerical stability.
+    
+    Examples
+    --------
+    Bound a raw logit field to the K interval:
+    
+    >>> K, logK = bounded_exp(
+    ...     rawK, logK_min, logK_max, return_log=True
+    ... )
+    
+    Bound a tau field (already in log seconds bounds):
+    
+    >>> tau = bounded_exp(raw_tau, log_tau_min, log_tau_max)
+    
+    See Also
+    --------
+    guarded_exp_from_bounds
+        Soft-bounds path that keeps raw logs for penalties while
+        guarding exponentiation overflow.
+    
+    compose_physics_fields
+        Uses bounded_exp to build K, Ss, and tau fields.
+    
+    References
+    ----------
+    .. [1] Goodfellow, I., Bengio, Y., and Courville, A. Deep
+       Learning. MIT Press (2016).
     """
-    Exp with hard log-bounds.
 
-    Contract:
-    - Never emit NaN/Inf due to NaN/Inf in `raw`.
-    - (log_min, log_max) are assumed finite; if they are not,
-      we fall back to safe constants to prevent NaNs.
-    """
     eps_t = tf_constant(float(eps), tf_float32)
     log_eps = tf_log(eps_t)
 
@@ -2435,7 +4474,239 @@ def compose_physics_fields(
     eps_tau: float = 1e-6,
     verbose: int = 0,
 ):
-    """Compose K,Ss,tau fields with coord MLPs."""
+    r"""
+    Compose physically meaningful fields :math:`K`, :math:`S_s`, and
+    :math:`\tau` from network "base" logits and coordinate corrections.
+    
+    This routine is the central *field mapping* step for GeoPrior-style
+    PINN models. The model predicts coarse (time-dependent) latent logits
+    ``K_base``, ``Ss_base``, and ``tau_base`` from the physics head, then
+    adds smooth spatial corrections from coordinate MLPs:
+    
+    * ``model.K_coord_mlp`` for :math:`\log K`
+    * ``model.Ss_coord_mlp`` for :math:`\log S_s`
+    * ``model.tau_coord_mlp`` for :math:`\Delta \log \tau`
+    
+    The corrected parameters are then mapped to SI-consistent, positive
+    fields (in float32-safe ways) and combined with a physics closure
+    timescale :math:`\tau_\mathrm{phys}` computed from the fields.
+    
+    Let :math:`(t, x, y)` denote the coordinate tensor passed to the
+    decoder. Spatial corrections are evaluated on coordinates with time
+    zeroed:
+    
+    .. math::
+    
+       \tilde{\mathbf{c}} = (0, x, y).
+    
+    Define the raw log-parameters (logits) as:
+    
+    .. math::
+    
+       \ell_K  &= \ell_K^\mathrm{base}(t,x,y)
+                 + \Delta \ell_K(\tilde{\mathbf{c}}), \\
+       \ell_{S_s} &= \ell_{S_s}^\mathrm{base}(t,x,y)
+                 + \Delta \ell_{S_s}(\tilde{\mathbf{c}}).
+    
+    The resulting fields are positive exponentials:
+    
+    .. math::
+    
+       K = \exp(\ell_K), \qquad
+       S_s = \exp(\ell_{S_s}),
+    
+    subject to (log-)bounds. In ``bounds_mode="hard"`` the values are
+    projected into the valid interval by clipping in log space, while in
+    ``bounds_mode="soft"`` the function returns the unbounded logs for
+    penalties but uses a *guarded exponential* to avoid float32 overflow.
+    
+    For the consolidation timescale, we first compute a closure (prior)
+    timescale from the fields:
+    
+    .. math::
+    
+       \log \tau_\mathrm{phys} =
+       f_\tau(K, S_s, H; \text{model options}),
+    
+    where :math:`H` is the drained thickness in meters (``H_si``) and
+    ``tau_phys_from_fields`` implements the chosen closure and drainage
+    convention. The network adds a learnable residual in log space:
+    
+    .. math::
+    
+       \Delta \log \tau =
+       \ell_\tau^\mathrm{base}(t,x,y) + \Delta \ell_\tau(\tilde{\mathbf{c}}),
+    
+    and the total learned timescale is:
+    
+    .. math::
+    
+       \log \tau = \log \tau_\mathrm{phys} + \Delta \log \tau, \qquad
+       \tau = \exp(\log \tau) + \varepsilon_\tau.
+    
+    The term :math:`\varepsilon_\tau` (``eps_tau``) is a small positive
+    floor to avoid exact zeros and improve numerical stability.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object providing:
+    
+        * coordinate MLPs: ``K_coord_mlp``, ``Ss_coord_mlp``,
+          ``tau_coord_mlp``
+        * bounds configuration: ``bounds_mode`` and bounds accessors
+          used by ``get_log_bounds`` and ``get_log_tau_bounds``
+        * closure configuration used by ``tau_phys_from_fields``
+    
+    coords_flat : Tensor
+        Coordinate tensor used by the decoder. Expected shape is
+        ``(B, H, 3)`` with last dimension ordered as ``(t, x, y)``.
+        The function constructs ``(0, x, y)`` for the coordinate MLPs to
+        keep corrections time-invariant by default.
+    
+    H_si : Tensor
+        Drained thickness :math:`H` in SI units (meters). Shape must be
+        broadcastable to ``(B, H, 1)``.
+    
+    K_base : Tensor
+        Base logits for :math:`\log K`. Shape is typically ``(B, H, 1)``.
+    
+    Ss_base : Tensor
+        Base logits for :math:`\log S_s`. Shape is typically
+        ``(B, H, 1)``.
+    
+    tau_base : Tensor
+        Base logits for :math:`\Delta \log \tau`. Shape is typically
+        ``(B, H, 1)``.
+    
+    training : bool, default=False
+        Forward mode for coordinate MLPs.
+    
+    eps_KSs : float, default=_EPSILON
+        Small positive constant used when mapping log-parameters to
+        positive values (e.g., inside bounded / guarded exponentials).
+    
+    eps_tau : float, default=1e-6
+        Additive floor for :math:`\tau` in seconds to avoid exact zeros.
+    
+    verbose : int, default=0
+        Verbosity level used by internal debug printing utilities.
+    
+    Returns
+    -------
+    K_field : Tensor
+        Effective hydraulic conductivity field :math:`K` in SI units.
+        Shape ``(B, H, 1)``. Units are typically meters per second.
+    
+    Ss_field : Tensor
+        Effective specific storage field :math:`S_s` in SI units.
+        Shape ``(B, H, 1)``. Units are typically inverse meters.
+    
+    tau_field : Tensor
+        Learned consolidation timescale :math:`\tau` in seconds.
+        Shape ``(B, H, 1)``.
+    
+    tau_phys : Tensor
+        Closure-based timescale :math:`\tau_\mathrm{phys}` in seconds.
+        Shape ``(B, H, 1)`` (broadcasted as needed).
+    
+    Hd_eff : Tensor
+        Effective drainage thickness :math:`H_d` in meters used by the
+        closure, accounting for drainage mode and ``hd_factor`` style
+        options. Shape broadcastable to ``(B, H, 1)``.
+    
+    delta_log_tau : Tensor
+        The learnable log-residual :math:`\Delta \log \tau` added to
+        :math:`\log \tau_\mathrm{phys}`. Shape ``(B, H, 1)``.
+    
+    logK : Tensor
+        Log-parameter :math:`\log K` used for priors, bounds penalties,
+        and diagnostics. Shape ``(B, H, 1)``.
+    
+    logSs : Tensor
+        Log-parameter :math:`\log S_s` used for priors, bounds penalties,
+        and diagnostics. Shape ``(B, H, 1)``.
+    
+    log_tau : Tensor
+        Log of total timescale :math:`\log \tau` (pre-guard in soft mode).
+        Returned for bounds penalties and diagnostics. Shape ``(B, H, 1)``.
+    
+    log_tau_phys : Tensor
+        Log of closure timescale :math:`\log \tau_\mathrm{phys}` returned
+        for priors and diagnostics. Shape ``(B, H, 1)``.
+    
+    Notes
+    -----
+    Why coordinate corrections use ``(0, x, y)``
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    The coordinate MLPs are intended to represent slowly varying spatial
+    heterogeneity (e.g., lithology-driven variability). Zeroing time
+    reduces the risk that the model encodes time-varying physics fields
+    that can destabilize PDE derivatives across horizons.
+    
+    Hard vs soft bounds
+    ~~~~~~~~~~~~~~~~~~~
+    When ``bounds_mode="hard"``, log-parameters are projected into the
+    valid interval, yielding fields that always satisfy bounds.
+    
+    When ``bounds_mode="soft"``, log-parameters are returned unmodified
+    for differentiable penalties, but exponentiation is guarded to prevent
+    float32 overflow. This preserves gradients for penalties without
+    risking NaN / Inf in the forward pass.
+    
+    Numerical stability
+    ~~~~~~~~~~~~~~~~~~~
+    The function deliberately avoids reapplying ``log(exp(.))`` patterns.
+    In particular, it composes :math:`\log \tau` additively:
+    
+    .. math::
+    
+       \log \tau = \log \tau_\mathrm{phys} + \Delta \log \tau,
+    
+    which is both exact and numerically stable.
+    
+    Examples
+    --------
+    Compute fields inside a physics forward pass:
+    
+    >>> K_field, Ss_field, tau_field, tau_phys, Hd_eff, dlogtau, logK, \
+    ... logSs, log_tau, log_tau_phys = compose_physics_fields(
+    ...     model,
+    ...     coords_flat=coords,
+    ...     H_si=H_si,
+    ...     K_base=K_logits,
+    ...     Ss_base=Ss_logits,
+    ...     tau_base=dlogtau_logits,
+    ...     training=True,
+    ... )
+    
+    Use returned logs for priors and bounds penalties:
+    
+    >>> prior_res = dlogtau
+    >>> bounds_penalty_inputs = (logK, logSs, log_tau)
+    
+    See Also
+    --------
+    tau_phys_from_fields
+        Computes the closure timescale :math:`\tau_\mathrm{phys}`.
+    
+    get_log_bounds, get_log_tau_bounds
+        Provide log-space bounds used for field mapping.
+    
+    bounded_exp, guarded_exp_from_bounds
+        Safe mappings from log-parameters to positive fields.
+    
+    compute_bounds_residual
+        Uses the returned logs and thickness for bounds penalties.
+    
+    References
+    ----------
+    .. [1] Biot, M. A. Theory of elasticity and consolidation for a
+       porous anisotropic solid. Journal of Applied Physics (1941).
+    
+    .. [2] Bear, J. Dynamics of Fluids in Porous Media. Dover (1972).
+    """
+
 
     if verbose > 6:
         tf_print_nonfinite("compose/coords_flat", coords_flat)
@@ -2452,10 +4723,6 @@ def compose_physics_fields(
     K_corr = _finite_or_zero(model.K_coord_mlp(coords_xy0, training=training))
     Ss_corr = _finite_or_zero(model.Ss_coord_mlp(coords_xy0, training=training))
     tau_corr = _finite_or_zero(model.tau_coord_mlp(coords_xy0, training=training))
-
-    # K_corr = model.K_coord_mlp(coords_xy0, training=training)
-    # Ss_corr = model.Ss_coord_mlp(coords_xy0, training=training)
-    # tau_corr = model.tau_coord_mlp(coords_xy0, training=training)
 
     if verbose > 6:
         tf_print_nonfinite("compose/K_corr", K_corr)
@@ -2627,22 +4894,199 @@ def compute_bounds_residual(
     eps: float = _EPSILON, 
     verbose: int = 0,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-    """
-    Bounds residuals for H, K, Ss, tau.
-
-    Preferred (soft mode)
-    ---------------------
-    Pass raw logs:
-      - logK, logSs, log_tau
-    so penalties see the *true* violations, not guarded
-    exp() outputs.
-
-    Fallback
+    r"""
+    Compute differentiable bound-violation residuals for the learned
+    physics fields.
+    
+    This function converts configured parameter bounds into *residual
+    maps* that can be squared and averaged to form a soft penalty term
+    (e.g., :math:`L_\mathrm{bounds} = \mathrm{mean}(R^2)`).
+    
+    The bounds policy is driven by ``model.scaling_kwargs['bounds']`` and
+    supports:
+    
+    * Linear-space bounds for drained thickness :math:`H` (meters).
+    * Log-space bounds for :math:`K`, :math:`S_s`, and :math:`\tau`.
+    
+    The returned residuals are normalized by the corresponding bound
+    ranges, so they are roughly comparable across parameters.
+    
+    Mathematical formulation
+    ------------------------
+    Let :math:`z` be a scalar parameter with bounds
+    :math:`z_{\min} \le z \le z_{\max}`. A standard non-negative violation
+    is:
+    
+    .. math::
+    
+       v(z) = \max(z_{\min} - z, 0) + \max(z - z_{\max}, 0).
+    
+    This function returns a *range-normalized* residual:
+    
+    .. math::
+    
+       R(z) = \frac{v(z)}{\max(z_{\max} - z_{\min}, \varepsilon)}.
+    
+    For log-bounded parameters (conductivity, storage, and timescale), the
+    same definition is applied in log space. For example, if
+    :math:`\ell_K = \log K`, then:
+    
+    .. math::
+    
+       R_K = R(\ell_K; \ell_{K,\min}, \ell_{K,\max}),
+    
+    where :math:`\ell_{K,\min} = \log K_{\min}` and
+    :math:`\ell_{K,\max} = \log K_{\max}`.
+    
+    Preferred usage in soft bounds mode
+    -----------------------------------
+    When ``bounds_mode="soft"``, it is preferable to pass the raw log
+    parameters ``logK``, ``logSs``, and ``log_tau`` produced before any
+    "guarded exponential" is applied. This ensures that the penalty
+    reflects the true magnitude of out-of-range logits, even if the
+    corresponding fields are exponentiated using an overflow guard.
+    
+    If raw logs are not provided, the function falls back to inferring
+    logs from the fields via ``log(max(field, eps))``. This is safe, but
+    may under-estimate violations if the field values were produced by a
+    guarded mapping.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object providing:
+    
+        * ``scaling_kwargs`` with optional ``bounds`` mapping.
+        * Accessors used by ``get_log_bounds`` and ``get_log_tau_bounds``.
+    
+    H_field : Tensor
+        Drained thickness field :math:`H` in SI meters. Shape must be
+        broadcastable to ``(B, H, 1)``. Bounds are applied in linear space
+        using keys ``H_min`` and ``H_max`` when present.
+    
+    logK : Tensor, optional
+        Log-conductivity :math:`\log K` (preferred). If provided, bounds
+        are applied directly in log space and ``K_field`` is not needed.
+    
+    logSs : Tensor, optional
+        Log-specific storage :math:`\log S_s` (preferred). If provided,
+        bounds are applied directly in log space and ``Ss_field`` is not
+        needed.
+    
+    log_tau : Tensor, optional
+        Log-timescale :math:`\log \tau` in seconds (preferred). If
+        provided, bounds are applied directly in log space and
+        ``tau_field`` is not needed.
+    
+    K_field : Tensor, optional
+        Conductivity field :math:`K` (meters per second). Used only if
+        ``logK`` is not provided.
+    
+    Ss_field : Tensor, optional
+        Specific storage field :math:`S_s` (inverse meters). Used only if
+        ``logSs`` is not provided.
+    
+    tau_field : Tensor, optional
+        Timescale field :math:`\tau` (seconds). Used only if ``log_tau`` is
+        not provided.
+    
+    eps : float, default=_EPSILON
+        Small positive constant used to avoid division by zero and
+        undefined logs, via :math:`\max(\cdot, \varepsilon)`.
+    
+    verbose : int, default=0
+        Verbosity level for optional debug printing.
+    
+    Returns
+    -------
+    R_H : Tensor
+        Residual map for thickness bounds violations. Same shape as
+        ``H_field`` (broadcasted as needed). All values are non-negative.
+    
+    R_K : Tensor
+        Residual map for conductivity log-bounds violations. Same shape as
+        ``H_field`` (broadcasted as needed). All values are non-negative.
+    
+    R_Ss : Tensor
+        Residual map for specific storage log-bounds violations. Same
+        shape as ``H_field`` (broadcasted as needed). All values are
+        non-negative.
+    
+    R_tau : Tensor
+        Residual map for timescale log-bounds violations. Same shape as
+        ``H_field`` (broadcasted as needed). All values are non-negative.
+    
+    Notes
+    -----
+    Bounds configuration
+    ~~~~~~~~~~~~~~~~~~~~
+    The function reads bounds from:
+    
+    * ``model.scaling_kwargs.get('bounds', {})`` for ``H_min`` and ``H_max``.
+    * ``get_log_bounds(model, ...)`` for log-space bounds of :math:`K` and
+      :math:`S_s` (typically ``logK_min``, ``logK_max``, ``logSs_min``,
+      ``logSs_max``).
+    * ``get_log_tau_bounds(model, ...)`` for log-space bounds of
+      :math:`\tau` (typically ``logTau_min`` and ``logTau_max``).
+    
+    If a bound is not configured (missing keys or accessors returning
+    ``None``), the corresponding residual is returned as zeros.
+    
+    Normalization
+    ~~~~~~~~~~~~~
+    Residuals are normalized by the bound range to reduce sensitivity to
+    the absolute scale of each parameter. This makes it easier to set a
+    single loss weight such as ``lambda_bounds`` without one parameter
+    dominating purely due to units.
+    
+    Examples
     --------
-    If logs are missing, infer them from fields:
-      - log(K_field), log(Ss_field), log(tau_field)
-    This is less ideal in soft mode if fields were guarded.
+    Compute residuals from raw logs (recommended in soft mode):
+    
+    >>> R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
+    ...     model,
+    ...     H_field=H_si,
+    ...     logK=logK,
+    ...     logSs=logSs,
+    ...     log_tau=log_tau,
+    ... )
+    
+    Fallback when only fields are available:
+    
+    >>> R_H, R_K, R_Ss, R_tau = compute_bounds_residual(
+    ...     model,
+    ...     H_field=H_si,
+    ...     K_field=K_field,
+    ...     Ss_field=Ss_field,
+    ...     tau_field=tau_field,
+    ... )
+    
+    Create a scalar penalty:
+    
+    >>> bounds_res = tf_concat([R_H, R_K, R_Ss, R_tau], axis=-1)
+    >>> loss_bounds = tf_reduce_mean(tf_square(bounds_res))
+    
+    See Also
+    --------
+    compose_physics_fields
+        Produces both raw logs and exponentiated fields.
+    
+    get_log_bounds, get_log_tau_bounds
+        Retrieve log-space bounds for :math:`K`, :math:`S_s`, and
+        :math:`\tau`.
+    
+    _log_bounds_residual
+        Internal helper that converts log-values to normalized residuals.
+    
+    References
+    ----------
+    .. [1] Nocedal, J., and Wright, S. J. Numerical Optimization.
+       Springer (2006).
+    
+    .. [2] Boyd, S., and Vandenberghe, L. Convex Optimization.
+       Cambridge University Press (2004).
     """
+
     dtype = H_field.dtype
     eps_t = tf_constant(eps, dtype=dtype)
     zero = tf_constant(0.0, dtype=dtype)
@@ -2860,7 +5304,131 @@ def guard_scale_with_residual(
     floor: float,
     eps: float = _EPSILON,
 ) -> Tensor:
-    """Ensure `scale` is never tiny vs the actual residual."""
+    r"""
+    Guard a residual scale using the observed residual magnitude.
+    
+    This helper prevents residual normalization from exploding
+    when a nominal scale is too small compared with the actual
+    residual values observed on the current batch.
+    
+    Mathematical intent
+    -------------------
+    Given a residual tensor :math:`r` and a proposed scale
+    :math:`s`, this function produces a guarded scale
+    :math:`\hat{s}` such that:
+    
+    .. math::
+    
+       \hat{s} \ge s_{floor}
+    
+    and also:
+    
+    .. math::
+    
+       \hat{s} \ge r_{ref}
+    
+    .. math::
+    
+       \hat{s} \ge 0.1\, r_{max}
+    
+    where:
+    
+    .. math::
+    
+       r_{ref} = \mathrm{mean}(|r|) + \varepsilon
+    
+    .. math::
+    
+       r_{max} = \mathrm{max}(|r|) + \varepsilon
+    
+    This ensures the normalized residual:
+    
+    .. math::
+    
+       \tilde{r} = \frac{r}{\hat{s}}
+    
+    is not arbitrarily large solely because the scale estimate
+    collapsed (for example, due to degenerate dt, missing
+    features, or transient NaN handling upstream).
+    
+    Key properties
+    --------------
+    * Robust to NaN/Inf in ``residual`` and ``scale``:
+      non-finite entries are treated as zeros for the residual
+      magnitude and replaced by ``floor`` for the scale.
+    * Uses stop-gradient on the guarded scale, so the model
+      cannot reduce loss by manipulating the scale path.
+    * Uses both a typical magnitude (mean) and a tail proxy
+      (max) to avoid under-scaling when outliers occur.
+    
+    Parameters
+    ----------
+    residual : Tensor
+        Residual tensor :math:`r`. Any shape is accepted.
+        Values are flattened internally to compute statistics.
+    
+    scale : Tensor
+        Proposed residual scale :math:`s`. May be scalar-like
+        (recommended). If non-finite, it is replaced by
+        ``floor``.
+    
+    floor : float
+        Minimal allowed scale :math:`s_{floor}`. This protects
+        against division by tiny values.
+    
+    eps : float, default=_EPSILON
+        Small positive constant :math:`\varepsilon` added to the
+        residual statistics to prevent zero magnitudes.
+    
+    Returns
+    -------
+    scale_guarded : Tensor
+        Guarded scale :math:`\hat{s}` with stop-gradient applied.
+    
+    Notes
+    -----
+    Why guard against residual magnitude
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If a scale is estimated from weak signals (for example,
+    nearly constant series) it may become very small. Dividing
+    a non-trivial residual by that small scale can dominate the
+    training objective and destabilize optimization.
+    
+    Why the 0.1 * max term
+    ~~~~~~~~~~~~~~~~~~~~~~
+    The mean alone can underestimate the needed scale when
+    residuals have heavy tails or occasional spikes. Including a
+    fraction of the max provides a simple tail-sensitive guard.
+    
+    Examples
+    --------
+    This function is typically used before scaling residuals:
+    
+    .. code-block:: python
+    
+       scale_gw = _gw_scale_core(...)
+       scale_gw = guard_scale_with_residual(
+           residual=R_gw,
+           scale=scale_gw,
+           floor=1e-8,
+       )
+       R_gw_scaled = scale_residual(R_gw, scale_gw)
+    
+    See Also
+    --------
+    scale_residual
+        Divide a residual by a stop-gradient scale safely.
+    
+    to_rms
+        Compute RMS magnitudes when you want RMS-based scaling.
+    
+    References
+    ----------
+    .. [1] Goodfellow, I., Bengio, Y., and Courville, A.
+       Deep Learning. MIT Press (2016).  (Gradient stability
+       discussion; normalization heuristics).
+    """
+
     dtype = residual.dtype
     eps_t = tf_constant(float(eps), dtype=dtype)
     floor_t = tf_constant(float(floor), dtype=dtype)
@@ -2885,6 +5453,93 @@ def scale_residual(
     scale: Tensor, *, 
     floor: float = _EPSILON
  ) -> Tensor:
+    r"""
+    Scale a residual by a (guarded) normalization factor.
+    
+    This helper divides a residual tensor by a positive scale,
+    with strict safeguards against non-finite or tiny scales.
+    The scale is treated as a constant with respect to
+    backpropagation (stop-gradient).
+    
+    Mathematical definition
+    -----------------------
+    Given a residual :math:`r` and a scale :math:`s`, the scaled
+    residual is:
+    
+    .. math::
+    
+       \tilde{r} = \frac{r}{\hat{s} + \varepsilon}
+    
+    where:
+    
+    .. math::
+    
+       \hat{s} = \mathrm{stop\_grad}(\max(s, s_{floor}))
+    
+    and any non-finite :math:`s` is replaced by :math:`s_{floor}`
+    before flooring.
+    
+    This ensures that :math:`\tilde{r}` remains finite and that
+    gradients flow only through :math:`r`, not through the scale.
+    
+    Parameters
+    ----------
+    residual : Tensor
+        Residual tensor :math:`r` to normalize.
+    
+    scale : Tensor
+        Scale tensor :math:`s` (typically scalar-like). If it is
+        NaN/Inf, it is replaced with ``floor``.
+    
+    floor : float, default=_EPSILON
+        Minimal allowed scale :math:`s_{floor}`.
+    
+    Returns
+    -------
+    residual_scaled : Tensor
+        Scaled residual :math:`\tilde{r}` with the same shape as
+        ``residual``.
+    
+    Notes
+    -----
+    Use with guard_scale_with_residual
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If ``scale`` is derived from heuristics or batch statistics,
+    it can occasionally be too small. In that case, call
+    :func:`guard_scale_with_residual` first to ensure the scale
+    is consistent with observed residual magnitudes.
+    
+    Why stop-gradient
+    ~~~~~~~~~~~~~~~~~
+    Residual scaling is a conditioning tool. Allowing gradients
+    to adjust the scale can create degenerate solutions where
+    the model inflates the scale instead of reducing the
+    residual.
+    
+    Examples
+    --------
+    .. code-block:: python
+    
+       s = _finite_or_zero(scale_est)
+       s = guard_scale_with_residual(R, s, floor=1e-8)
+       R_scaled = scale_residual(R, s, floor=1e-8)
+    
+    See Also
+    --------
+    guard_scale_with_residual
+        Strengthen a scale using residual statistics.
+    
+    compute_scales
+        Compute robust scales for consolidation and groundwater
+        residuals.
+    
+    References
+    ----------
+    .. [1] Bottou, L., Curtis, F. E., and Nocedal, J.
+       Optimization Methods for Large-Scale Machine Learning.
+       SIAM Review (2018).
+    """
+
     s = tf_cast(scale, residual.dtype)
     f = tf_constant(float(floor), residual.dtype)
 
@@ -2910,14 +5565,280 @@ def _cons_scale_core(
     use_relax: bool,
     floor: float,
 ) -> Tensor:
+    r"""
+    Compute the consolidation residual scale.
+    
+    This helper builds a robust, positive scale used to
+    non-dimensionalize (or weight) the consolidation residual.
+    It is designed to be stable under noisy early training,
+    variable horizons, and occasional non-finite values.
+    
+    The scale is a stop-gradient quantity. It is computed from
+    simple batch statistics so that it adapts to the magnitude
+    of the current batch while not injecting gradients back into
+    the model through the normalization path.
+    
+    Mathematical intent
+    -------------------
+    Let :math:`s_{b,t}` be the settlement state (m) for batch
+    index :math:`b` and time index :math:`t` over a horizon
+    length :math:`H`.
+    
+    A consolidation residual is typically expressed as either:
+    
+    1) step form (meters per step)
+    
+    .. math::
+    
+       R_{cons}^{step}(t)
+       = s_{t+1} - s_t
+         - \hat{\Delta s}_t
+    
+    2) rate form (meters per time)
+    
+    .. math::
+    
+       R_{cons}^{rate}(t)
+       = \frac{ds}{dt}
+         - \frac{s_{eq}(t) - s(t)}{\tau(t)}
+    
+    To make such residuals comparable across batches and to
+    prevent any single term from dominating due to scale alone,
+    we normalize by a characteristic magnitude:
+    
+    .. math::
+    
+       \tilde{R}_{cons} = \frac{R_{cons}}{c_*}
+    
+    where :math:`c_*` is the "consolidation scale" returned by
+    this function.
+    
+    This helper computes :math:`c_*` from two sources:
+    
+    A) empirical change statistics from the settlement series
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Define per-step increments:
+    
+    .. math::
+    
+       \Delta s_{b,t} = s_{b,t+1} - s_{b,t}
+    
+    Let :math:`|\Delta s|` denote absolute increments flattened
+    over batch and time. Two robust summary statistics are used:
+    
+    .. math::
+    
+       d_{ref} = \mathrm{mean}(|\Delta s|)
+    
+    .. math::
+    
+       d_{max} = \mathrm{max}(|\Delta s|)
+    
+    Both are treated as constants w.r.t. gradients
+    (:func:`tf.stop_gradient`).
+    
+    Depending on ``mode``, the base scale is:
+    
+    * ``mode="step"`` (meters per step)
+    
+      .. math::
+    
+         c_{base} =
+         \max(d_{ref}, 0.1\, d_{max})
+    
+    * ``mode="time_unit"`` (meters per time_unit)
+    
+      Let :math:`\Delta t_{ref,u}` be a representative step size
+      in "time_units" (the caller provides ``dt_ref_u``):
+    
+      .. math::
+    
+         c_{base} =
+         \max\left(
+           \frac{d_{ref}}{\Delta t_{ref,u}},
+           0.1\,\frac{d_{max}}{\Delta t_{ref,u}}
+         \right)
+    
+    * otherwise (SI rate, meters per second)
+    
+      Let :math:`\Delta t_{ref,s}` be a representative step size
+      in seconds (the caller provides ``dt_ref_s``):
+    
+      .. math::
+    
+         c_{base} =
+         \max\left(
+           \frac{d_{ref}}{\Delta t_{ref,s}},
+           0.1\,\frac{d_{max}}{\Delta t_{ref,s}}
+         \right)
+    
+    B) optional relaxation and equilibrium misfit statistics
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    When ``use_relax=True``, an additional scale component is
+    computed from the equilibrium settlement implied by the
+    fields and drawdown proxy.
+    
+    A non-negative drawdown proxy is formed as:
+    
+    .. math::
+    
+       \Delta h = \max(h_{ref} - h, 0)
+    
+    An equilibrium settlement is then:
+    
+    .. math::
+    
+       s_{eq} = S_s \, \Delta h \, H_f
+    
+    where :math:`S_s` is specific storage (1/m) and :math:`H_f`
+    is a thickness (m). The equilibrium misfit magnitude is:
+    
+    .. math::
+    
+       e = |s_{eq} - s|
+    
+    Flatten :math:`e` over batch and time and compute:
+    
+    .. math::
+    
+       e_{ref} = \mathrm{mean}(e) + \varepsilon
+    
+    .. math::
+    
+       e_{max} = \mathrm{max}(e) + \varepsilon
+    
+    How this affects the scale depends on ``mode``:
+    
+    * ``mode="step"``
+    
+      In step units, equilibrium misfit is already in meters,
+      so it can directly act as a characteristic magnitude:
+    
+      .. math::
+    
+         c_* \leftarrow
+         \max(c_{base}, e_{ref}, 0.1\,e_{max})
+    
+    * rate modes (meters per time)
+    
+      Convert the misfit to a characteristic relaxation rate:
+    
+      .. math::
+    
+         r = \left|\frac{s_{eq} - s}{\tau}\right|
+    
+      For SI rate mode, :math:`r` is in m/s. For ``mode="time_unit"``,
+      convert m/s to m/time_unit using the number of seconds per
+      unit :math:`\mathrm{sec}_{u}`:
+    
+      .. math::
+    
+         r_{u} = r\, \mathrm{sec}_{u}
+    
+      Then summarize:
+    
+      .. math::
+    
+         r_{ref} = \mathrm{mean}(r) + \varepsilon
+    
+      .. math::
+    
+         r_{max} = \mathrm{max}(r) + \varepsilon
+    
+      And update:
+    
+      .. math::
+    
+         c_* \leftarrow
+         \max(c_{base}, r_{ref}, 0.1\,r_{max})
+    
+    Final flooring and gradient behavior
+    ------------------------------------
+    A positive floor is enforced:
+    
+    .. math::
+    
+       c_* \leftarrow \max(c_*, c_{floor})
+    
+    and the result is stop-gradient:
+    
+    .. math::
+    
+       c_* \leftarrow \mathrm{stop\_grad}(c_*)
+    
+    This ensures the scale cannot collapse to zero and cannot
+    backpropagate into model parameters.
+    
+    Parameters
+    ----------
+    Refer to :func:`compute_scales` for the definition and
+    meaning of all inputs. This helper assumes all tensors are
+    already broadcastable to ``(B, H, 1)`` and represent SI
+    quantities consistent with the consolidation objective.
+    
+    Returns
+    -------
+    cons_scale : Tensor
+        A scalar Tensor (or scalar-like Tensor) representing the
+        consolidation scale :math:`c_*`.
+    
+        Units depend on ``mode``:
+    
+        * ``"step"``     : meters per step
+        * ``"time_unit"``: meters per time_unit
+        * otherwise      : meters per second
+    
+    Notes
+    -----
+    Why both mean and max
+    ~~~~~~~~~~~~~~~~~~~~~
+    Using :math:`\max(d_{ref}, 0.1 d_{max})` reduces sensitivity
+    to outliers while still reacting when the batch contains
+    rare but very large changes (which can otherwise produce
+    under-scaling and exploding normalized residuals).
+    
+    Why stop-gradient
+    ~~~~~~~~~~~~~~~~~
+    The scale is a diagnostic normalization factor. Letting
+    gradients flow through statistics such as mean/max can
+    create undesirable feedback loops where the model learns to
+    change the scale instead of reducing the residual.
+    
+    Drawdown proxy
+    ~~~~~~~~~~~~~~
+    The drawdown proxy here uses a hard positive-part gate
+    :math:`\max(h_{ref} - h, 0)`. If your pipeline uses a smooth
+    gate or a different sign convention, that logic should be
+    handled by the caller before reaching this helper.
+    
+    Examples
+    --------
+    This function is not intended to be called directly.
+    Use :func:`compute_scales`, which computes both
+    consolidation and groundwater residual scales and handles
+    time-unit conversions and input sanitization.
+    
+    See Also
+    --------
+    compute_scales
+        Public interface that computes residual scales.
+    
+    equilibrium_compaction_si
+        Computes :math:`s_{eq}` given fields and drawdown logic.
+    
+    dt_to_seconds
+        Conversion of time step sizes to SI seconds.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K.
+       Theoretical Soil Mechanics. Wiley (1943).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
     """
-    Consolidation scale.
 
-    Output units match consolidation residual units:
-    - "step": meters / step
-    - "time_unit": meters / time_unit
-    - "si": meters / second
-    """
     eps = tf_constant(_EPSILON, tf_float32)
     floor_t = tf_constant(float(floor), tf_float32)
 
@@ -3047,18 +5968,248 @@ def _gw_scale_core(
     Q: Optional[Tensor],
     floor: float,
 ) -> Tensor:
+    r"""
+    Compute the groundwater-flow residual scale.
+    
+    This helper builds a robust, positive scale used to
+    non-dimensionalize (or weight) the groundwater PDE residual.
+    It is intended to stabilize training by ensuring the PDE
+    term has a comparable magnitude across batches, horizons,
+    and unit conventions.
+    
+    The scale is computed from batch statistics and returned as
+    a stop-gradient value, so it does not backpropagate through
+    the normalization path.
+    
+    Mathematical intent
+    -------------------
+    A common 2D groundwater-flow residual in specific-storage
+    form is:
+    
+    .. math::
+    
+       R_{gw}
+       = S_s \,\frac{\partial h}{\partial t}
+         - \nabla \cdot (K \nabla h)
+         - Q
+    
+    where:
+    
+    * :math:`h` is hydraulic head (m),
+    * :math:`S_s` is specific storage (1/m),
+    * :math:`K` is hydraulic conductivity (m/s),
+    * :math:`Q` is a volumetric forcing per storage thickness,
+      expressed here in compatible residual units.
+    
+    In SI, each term has units of 1/s:
+    
+    * storage term:
+      :math:`S_s \, \partial_t h` has
+      :math:`(1/m) (m/s) = 1/s`
+    * divergence term:
+      :math:`\nabla \cdot (K \nabla h)` has 1/s
+      under the standard Darcy form and consistent spatial
+      scaling handled upstream
+    * forcing term:
+      :math:`Q` is assumed already mapped to 1/s
+    
+    The normalized residual is:
+    
+    .. math::
+    
+       \tilde{R}_{gw} = \frac{R_{gw}}{g_*}
+    
+    where :math:`g_*` is the groundwater scale returned by this
+    function.
+    
+    Scale construction
+    ------------------
+    This helper uses three optional contributors:
+    
+    A) storage-term magnitude
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+    A representative head-rate magnitude is estimated from either
+    a provided :math:`\partial_t h` (``dh_dt``) or from finite
+    differences across the horizon.
+    
+    If ``dh_dt`` is not provided, define step head differences:
+    
+    .. math::
+    
+       \Delta h_{b,t} = h_{b,t+1} - h_{b,t}
+    
+    Let :math:`\Delta t_{ref,s}` be a representative step size
+    in seconds (caller-provided ``dt_ref_s``). Define:
+    
+    .. math::
+    
+       \dot{h}_{ref} =
+       \frac{\mathrm{mean}(|\Delta h|)}{\Delta t_{ref,s}}
+    
+    .. math::
+    
+       \dot{h}_{max} =
+       \frac{\mathrm{max}(|\Delta h|)}{\Delta t_{ref,s}}
+    
+    If ``dh_dt`` is provided, its mean and max absolute values
+    are used directly as :math:`\dot{h}_{ref}` and
+    :math:`\dot{h}_{max}`.
+    
+    A representative storage coefficient magnitude is computed as:
+    
+    .. math::
+    
+       S_{s,ref} = \mathrm{mean}(|S_s|)
+    
+    The storage-term reference scales are:
+    
+    .. math::
+    
+       s_{ref}  = S_{s,ref}\,\dot{h}_{ref}
+    
+    .. math::
+    
+       s_{max}  = S_{s,ref}\,\dot{h}_{max}
+    
+    and the initial scale is:
+    
+    .. math::
+    
+       g_* \leftarrow \max(s_{ref}, 0.1\,s_{max})
+    
+    B) divergence-term magnitude (optional)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If the divergence contribution
+    :math:`d = \nabla \cdot (K \nabla h)` is provided upstream as
+    ``div_K_grad_h``, its batch statistics contribute:
+    
+    .. math::
+    
+       d_{ref} = \mathrm{mean}(|d|) + \varepsilon
+    
+    .. math::
+    
+       d_{max} = \mathrm{max}(|d|) + \varepsilon
+    
+    and the scale is updated:
+    
+    .. math::
+    
+       g_* \leftarrow \max(g_*, d_{ref}, 0.1\,d_{max})
+    
+    C) forcing-term magnitude (optional)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If forcing ``Q`` is provided (assumed in compatible units),
+    its batch statistics contribute:
+    
+    .. math::
+    
+       q_{ref} = \mathrm{mean}(|Q|) + \varepsilon
+    
+    .. math::
+    
+       q_{max} = \mathrm{max}(|Q|) + \varepsilon
+    
+    and the scale is updated:
+    
+    .. math::
+    
+       g_* \leftarrow \max(g_*, q_{ref}, 0.1\,q_{max})
+    
+    Flooring, units, and gradients
+    ------------------------------
+    A positive floor is enforced:
+    
+    .. math::
+    
+       g_* \leftarrow \max(g_*, g_{floor})
+    
+    The result is returned with stop-gradient:
+    
+    .. math::
+    
+       g_* \leftarrow \mathrm{stop\_grad}(g_*)
+    
+    By default, :math:`g_*` is in SI (1/s). If ``gw_units`` is
+    ``"time_unit"``, the scale is converted to 1/time_unit using
+    the seconds-per-unit constant :math:`\mathrm{sec}_u`:
+    
+    .. math::
+    
+       g_*^{(u)} = g_* \,\mathrm{sec}_u
+    
+    so that dividing a residual expressed in 1/time_unit by
+    :math:`g_*^{(u)}` remains consistent.
+    
+    Parameters
+    ----------
+    Refer to :func:`compute_scales` for the meaning and expected
+    units of all inputs. This helper assumes inputs are already
+    broadcastable to ``(B, H, 1)`` and consistent with the PDE
+    assembly used upstream.
+    
+    Returns
+    -------
+    gw_scale : Tensor
+        A scalar Tensor (or scalar-like Tensor) representing the
+        groundwater scale :math:`g_*`.
+    
+        Units:
+    
+        * default         : 1/s
+        * gw_units="time_unit" : 1/time_unit
+    
+    Notes
+    -----
+    Why mean and max
+    ~~~~~~~~~~~~~~~~
+    Using :math:`\max(x_{ref}, 0.1 x_{max})` provides a robust
+    scale that tracks typical magnitudes while remaining
+    sensitive to rare but large values that can otherwise cause
+    under-scaling and unstable normalized residuals.
+    
+    Why stop-gradient
+    ~~~~~~~~~~~~~~~~~
+    The scale is a normalization constant, not a learnable
+    quantity. Allowing gradients through batch statistics can
+    create feedback loops where the model changes the scale
+    instead of reducing the residual.
+    
+    What "compatible units" means for div and Q
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    This helper assumes ``div_K_grad_h`` and ``Q`` are already
+    expressed in the same residual units as the storage term,
+    i.e. compatible with 1/s in SI. Any spatial-coordinate
+    normalization and chain-rule rescaling should be handled
+    upstream.
+    
+    Examples
+    --------
+    This function is not intended to be called directly.
+    Use :func:`compute_scales`, which computes both residual
+    scales and manages time-unit conversions and sanitization.
+    
+    See Also
+    --------
+    compute_scales
+        Public interface that computes both cons and gw scales.
+    
+    seconds_per_time_unit
+        Converts a time-unit string into seconds per unit.
+    
+    dt_to_seconds
+        Converts per-step dt into SI seconds.
+    
+    References
+    ----------
+    .. [1] Bear, J.
+       Dynamics of Fluids in Porous Media. Dover (1972).
+    
+    .. [2] Wang, H. F.
+       Theory of Linear Poroelasticity. Princeton University Press
+       (2000).
     """
-    Groundwater scale.
 
-    Base SI terms are in 1/s:
-    - storage: Ss * dh/dt
-    - div:     div(K grad h)  (precomputed upstream)
-    - forcing: Q             (precomputed upstream)
-
-    Output units:
-    - default: SI (1/s)
-    - if gw_units == "time_unit": 1/time_unit
-    """
     eps = tf_constant(_EPSILON, tf_float32)
     floor_t = tf_constant(float(floor), tf_float32)
 
@@ -3161,7 +6312,6 @@ def _gw_scale_core(
 
     return tf_stop_gradient(gw)
 
-# @optional_tf_function
 def compute_scales(
     model,
     *,
@@ -3180,12 +6330,231 @@ def compute_scales(
     div_K_grad_h: Optional[Tensor] = None,
     verbose: int = 0,
 ) -> Dict[str, Tensor]:
+    r"""
+    Compute robust normalization scales for physics residuals.
+    
+    This function estimates per-batch (or per-sample) scale factors
+    used to non-dimensionalize physics residuals before squaring and
+    averaging. The goal is to make losses comparable across sites,
+    time spans, and coordinate encodings, and to prevent a single
+    residual from dominating due to unit magnitude alone.
+    
+    The returned scales are typically used as:
+    
+    .. math::
+    
+       R_{cons}^{*} = \frac{R_{cons}}{s_{cons}}, \qquad
+       R_{gw}^{*}   = \frac{R_{gw}}{s_{gw}},
+    
+    where :math:`s_{cons}` and :math:`s_{gw}` are produced by this
+    function (with floors applied for numerical safety).
+    
+    The routine is intentionally defensive. It sanitizes shapes to
+    ``(B, H, 1)``, guards non-finite values, enforces positive dt,
+    and applies safe floors before any division or reduction.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object holding configuration in
+        ``model.scaling_kwargs`` and optionally ``model.time_units``
+        and ``model.h_ref``. This function reads:
+    
+        * consolidation display mode from ``resolve_cons_units(sk)``
+        * groundwater display mode from ``resolve_gw_units(sk)``
+        * coordinate normalization flags via ``sk['coords_normalized']``
+        * coordinate ranges via ``coord_ranges(sk)``
+        * auto floors via ``resolve_auto_scale_floor(kind, sk)``
+    
+    t : Tensor
+        Time coordinate tensor. Expected shape is ``(B, H, 1)`` or
+        ``(B, H)``. Units follow the dataset time encoding. If
+        ``coords_normalized=True``, ``t`` is assumed normalized and
+        is de-normalized using ``coord_ranges(sk)['t']`` when dt is
+        inferred internally.
+    
+    s_mean : Tensor
+        Mean settlement state used for consolidation scaling.
+        Expected shape is ``(B, H, 1)`` or ``(B, H)``.
+    
+    h_mean : Tensor
+        Mean head state used for scaling. Expected shape is
+        ``(B, H, 1)`` or ``(B, H)``. Units should match the model
+        internal convention (typically SI meters).
+    
+    K_field : Tensor
+        Effective conductivity field. Present for signature
+        compatibility and potential future scale heuristics. Current
+        logic does not require this argument directly.
+    
+    Ss_field : Tensor
+        Effective specific storage field :math:`S_s`. Used by both
+        consolidation and groundwater scale heuristics. Expected
+        shape is broadcastable to ``(B, H, 1)``.
+    
+    tau_field : Tensor, optional
+        Consolidation timescale :math:`tau` in seconds. Provide this
+        together with ``H_field`` to enable relaxation-aware
+        consolidation scaling.
+    
+    H_field : Tensor, optional
+        Drained thickness :math:`H` in meters. Used with
+        ``tau_field`` for relaxation-aware consolidation scaling.
+    
+    h_ref_si : Tensor, optional
+        Reference head :math:`h_{ref}` in meters. If not provided,
+        the function falls back to ``model.h_ref`` (or 0.0). The
+        value is broadcast to ``(B, H, 1)`` and sanitized.
+    
+    Q : Tensor, optional
+        Source term used in the groundwater residual scaling.
+        Expected shape is broadcastable to ``(B, H, 1)``.
+    
+    dt : Tensor, optional
+        Time step tensor in the dataset time units. If provided,
+        it is used directly (after shape normalization). If None,
+        dt is inferred from ``t``. The inferred dt is de-normalized
+        when ``coords_normalized=True``.
+    
+    time_units : str, optional
+        Name of the dataset time unit (e.g., "year", "day",
+        "second"). If None, the function resolves it from
+        ``sk['time_units']`` or ``model.time_units``. It is used to
+        convert dt to seconds.
+    
+    dh_dt : Tensor, optional
+        Precomputed :math:`dh/dt` in SI units (m/s). If provided,
+        groundwater scaling can use it directly rather than
+        reconstructing a representative magnitude.
+    
+    div_K_grad_h : Tensor, optional
+        Precomputed divergence term for groundwater flow,
+        :math:`\nabla \cdot (K \nabla h)`, in SI units. If provided,
+        it is used as a representative magnitude for groundwater
+        scaling.
+    
+    verbose : int, default=0
+        Verbosity level. If > 0, basic statistics of computed scales
+        may be printed.
+    
+    Returns
+    -------
+    scales : dict[str, Tensor]
+        Dictionary with keys:
+    
+        * ``'cons_scale'`` : Tensor
+          Scale for consolidation residuals.
+        * ``'gw_scale'`` : Tensor
+          Scale for groundwater-flow residuals.
+    
+        Each value is shaped as ``(B, 1, 1)`` or broadcastable to
+        ``(B, H, 1)``, depending on internal heuristics.
+    
+    Notes
+    -----
+    Why scaling is needed
+    ~~~~~~~~~~~~~~~~~~~~~
+    Consolidation and groundwater residuals can differ by many
+    orders of magnitude depending on:
+    
+    * the dataset time unit (years vs seconds),
+    * coordinate normalization spans (t, x, y),
+    * site geometry and hydro-mechanical priors,
+    * whether residuals are reported in SI or display units.
+    
+    A stable scaling strategy prevents trivial unit choices from
+    changing optimization dynamics.
+    
+    dt construction and safety
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If ``dt`` is not provided, dt is inferred as consecutive
+    differences along horizon:
+    
+    * if :math:`H > 1`, :math:`dt_h = t_{h} - t_{h-1}`
+    * else, dt defaults to 1.0 (in dataset time units)
+    
+    When ``coords_normalized=True``, dt is multiplied by the raw
+    time span ``t_range`` from ``coord_ranges(sk)`` to recover dt in
+    dataset time units. dt is then converted to seconds via
+    ``dt_to_seconds(dt, time_units=...)``.
+    
+    All dt paths apply:
+    
+    * absolute value
+    * finite sanitization
+    * a positive floor
+    * a final lower bound using ``seconds_per_time_unit(time_units)``
+    
+    This guards against degenerate dt values that would explode
+    scales.
+    
+    Relaxation-aware consolidation scaling
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    If both ``tau_field`` and ``H_field`` are provided, consolidation
+    scales may incorporate a relaxation time scale to better match
+    the form of the consolidation closure used by the model. If they
+    are not provided, a simpler heuristic is used.
+    
+    Groundwater scaling inputs
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Groundwater scales are computed from representative magnitudes
+    of the groundwater PDE components, optionally using
+    ``dh_dt`` and ``div_K_grad_h`` when provided. The scaling also
+    accounts for display unit policies returned by
+    ``resolve_gw_units(sk)``.
+    
+    This function is not traced
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    This wrapper is not decorated with ``tf.function`` because it
+    accepts a Python ``model`` object. Callers may wrap the function
+    at a higher level if a stable tracing boundary is desired.
+    
+    Examples
+    --------
+    Compute scales inside the physics path:
+    
+    >>> scales = compute_scales(
+    ...     model,
+    ...     t=t,
+    ...     s_mean=s_inc_pred,
+    ...     h_mean=h_si,
+    ...     K_field=K_field,
+    ...     Ss_field=Ss_field,
+    ...     tau_field=tau_field,
+    ...     H_field=H_si,
+    ...     h_ref_si=h_ref_11,
+    ...     Q=Q_si,
+    ...     dt=dt_units,
+    ...     time_units=model.time_units,
+    ...     dh_dt=dh_dt,
+    ...     div_K_grad_h=dKdhx + dKdhy,
+    ... )
+    
+    Use the returned scales to normalize residuals:
+    
+    >>> cons_scaled = R_cons / scales["cons_scale"]
+    >>> gw_scaled = R_gw / scales["gw_scale"]
+    
+    See Also
+    --------
+    scale_residual
+        Applies a scale and floor to a residual tensor.
+    
+    resolve_auto_scale_floor
+        Resolves "auto" floors for scale denominators.
+    
+    ensure_si_derivative_frame
+        Converts raw autodiff derivatives to SI-consistent forms.
+    
+    References
+    ----------
+    .. [1] Raissi, M., Perdikaris, P., and Karniadakis, G. E.
+       Physics-informed neural networks: A deep learning framework
+       for solving forward and inverse problems involving nonlinear
+       partial differential equations. JCP (2019).
+    .. [2] Terzaghi, K. Theoretical Soil Mechanics. Wiley (1943).
     """
-    Robust residual scales (v3.2).
 
-    This wrapper is *not* tf.function-traced because it
-    accepts a Python `model` object.
-    """
     sk = getattr(model, "scaling_kwargs", None) or {}
     mode = resolve_cons_units(sk)
     gw_units = resolve_gw_units(sk)
@@ -3462,7 +6831,212 @@ def settlement_state_for_pde(
     return_incremental: bool = True,            
     verbose: int = 0,
 ) -> Tensor:
-    """Map model output to settlement state in meters."""
+    r"""
+    Map predicted settlement output into a PDE-ready settlement state.
+    
+    This helper converts a model settlement output ``s_pred_si`` into
+    a consistent settlement time series in SI meters that can be used
+    as the state variable in the consolidation residual and related
+    physics terms.
+    
+    The model can represent settlement in different output modes
+    controlled by ``scaling_kwargs['subsidence_kind']``:
+    
+    * ``"cumulative"`` : ``s_pred_si`` already represents cumulative
+      settlement :math:`s(t)` (meters).
+    * ``"increment"`` : ``s_pred_si`` represents per-step increments
+      :math:`\Delta s_h` (meters per step).
+    * ``"rate"`` : ``s_pred_si`` represents a settlement rate
+      :math:`ds/dt` (meters per time unit).
+    
+    The function first constructs a cumulative series :math:`s(t)`
+    and then optionally returns the incremental state
+    :math:`s_{inc}(t)` used by the ODE/PDE residuals.
+    
+    Parameters
+    ----------
+    s_pred_si : Tensor
+        Predicted settlement output in SI meters (or SI meters per
+        time unit when ``subsidence_kind="rate"``). Expected shapes:
+    
+        * ``(B, H, 1)`` (preferred)
+        * ``(B, H)`` will be promoted to ``(B, H, 1)``
+    
+    t : Tensor
+        Time coordinate used to infer :math:`\Delta t` when
+        ``subsidence_kind="rate"`` and ``dt`` is not provided.
+        Expected shape is ``(B, H, 1)`` or ``(B, H)``.
+    
+    scaling_kwargs : dict, optional
+        Scaling and configuration dictionary. This function reads
+        ``subsidence_kind`` via:
+    
+        ``get_sk(sk, 'subsidence_kind', default='cumulative')``
+    
+        If not provided, defaults to ``{}``.
+    
+    inputs : dict[str, Tensor], optional
+        Optional batch inputs that may contain a baseline settlement
+        value :math:`s_0` (SI meters). If provided, the function
+        searches for the first available tensor among ``baseline_keys``
+        and uses it as :math:`s_0`.
+    
+    time_units : str, optional
+        Name of the dataset time unit (e.g., "year", "day"). This
+        argument is informational here and is logged for diagnostics.
+        When ``subsidence_kind="rate"``, the interpretation of
+        ``s_pred_si`` is "meters per time unit".
+    
+    baseline_keys : Sequence[str], default=("s0_si", "subs0_si",
+    "s_ref_si", "subs_ref_si")
+        Candidate keys to locate a baseline settlement tensor
+        :math:`s_0` in ``inputs``. The first match found is used.
+    
+    dt : Tensor, optional
+        Time step per horizon in dataset time units. Used only when
+        ``subsidence_kind="rate"``. Expected shape is ``(B, H, 1)``
+        or ``(B, H)``. If None, dt is inferred from ``t`` by finite
+        differences, with a fallback of 1.0 for the first step.
+    
+    return_incremental : bool, default=True
+        If True, return the incremental settlement state:
+    
+        .. math::
+    
+           s_{inc}(t_h) = s(t_h) - s_0,
+    
+        shaped like ``(B, H, 1)``. If False, return the cumulative
+        settlement series :math:`s(t_h)`.
+    
+    verbose : int, default=0
+        Verbosity level. When > 0, prints basic diagnostics of the
+        selected mode and intermediate tensors.
+    
+    Returns
+    -------
+    s_state : Tensor
+        Settlement state in SI meters with shape ``(B, H, 1)``.
+    
+        If ``return_incremental=True`` the output is
+        :math:`s_{inc}(t)` (incremental since :math:`s_0`). Otherwise
+        the output is the cumulative series :math:`s(t)`.
+    
+    Notes
+    -----
+    Baseline handling
+    ~~~~~~~~~~~~~~~~~
+    The baseline :math:`s_0` is interpreted as the settlement value
+    at the reference time :math:`t_0` used by the physics residuals.
+    If no baseline is provided, :math:`s_0` defaults to zero with
+    shape ``(B, 1, 1)`` and is broadcast over the horizon.
+    
+    Cumulative construction
+    ~~~~~~~~~~~~~~~~~~~~~~~
+    The function builds a cumulative settlement series :math:`s(t)`
+    according to ``subsidence_kind``:
+    
+    1) ``subsidence_kind="cumulative"``
+    
+       ``s_pred_si`` is assumed to already represent :math:`s(t)`:
+    
+       .. math::
+    
+          s(t_h) = s_{pred}(t_h).
+    
+       This includes cases where the caller already added a baseline,
+       e.g., :math:`s(t) = s_0 + s_{inc}(t)`.
+    
+    2) ``subsidence_kind="increment"``
+    
+       ``s_pred_si`` is interpreted as per-step increments:
+    
+       .. math::
+    
+          s(t_h) = s_0 + \sum_{j=0}^{h} \Delta s_j.
+    
+    3) ``subsidence_kind="rate"``
+    
+       ``s_pred_si`` is interpreted as a rate in meters per time unit:
+    
+       .. math::
+    
+          \Delta s_h = \left(\frac{ds}{dt}\right)_h \Delta t_h,
+          \qquad
+          s(t_h) = s_0 + \sum_{j=0}^{h} \Delta s_j.
+    
+       If ``dt`` is not provided, :math:`\Delta t_h` is inferred from
+       the time coordinate tensor ``t`` using finite differences. The
+       first step uses a fallback of 1.0 (for backward compatibility).
+    
+    Incremental state for PDE/ODE residuals
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Many physics residuals are written for an incremental settlement
+    state :math:`s_{inc}(t)` that starts at zero at :math:`t_0`. When
+    ``return_incremental=True`` the function returns:
+    
+    .. math::
+    
+       s_{inc}(t_h) = s(t_h) - s_0.
+    
+    This makes it safe to concatenate an explicit initial state
+    (e.g., ``s0_inc=0``) when constructing a state sequence for an
+    exact-step consolidation integrator.
+    
+    Examples
+    --------
+    Convert per-step increments to an incremental PDE state:
+    
+    >>> sk = {"subsidence_kind": "increment"}
+    >>> s_inc = settlement_state_for_pde(
+    ...     s_pred_si=ds_pred_m,
+    ...     t=coords_t,
+    ...     scaling_kwargs=sk,
+    ...     inputs={"s0_si": s0_m},
+    ...     return_incremental=True,
+    ... )
+    
+    Convert a rate output using provided dt:
+    
+    >>> sk = {"subsidence_kind": "rate"}
+    >>> s_inc = settlement_state_for_pde(
+    ...     s_pred_si=dsdt_pred_m_per_u,
+    ...     t=coords_t,
+    ...     dt=dt_units,
+    ...     scaling_kwargs=sk,
+    ...     inputs={"s0_si": s0_m},
+    ...     return_incremental=True,
+    ... )
+    
+    Return the cumulative series instead:
+    
+    >>> s_cum = settlement_state_for_pde(
+    ...     s_pred_si=s_pred_m,
+    ...     t=coords_t,
+    ...     scaling_kwargs={"subsidence_kind": "cumulative"},
+    ...     return_incremental=False,
+    ... )
+    
+    See Also
+    --------
+    compute_consolidation_step_residual
+        Builds the consolidation residual from settlement and head
+        states.
+    
+    cons_step_to_cons_residual
+        Converts a step residual into a residual consistent with the
+        PDE time convention.
+    
+    integrate_consolidation_mean
+        Integrates a consolidation mean settlement trajectory used as
+        a physics-driven prediction path.
+    
+    References
+    ----------
+    .. [1] Terzaghi, K. Theoretical Soil Mechanics. Wiley (1943).
+    .. [2] Biot, M. A. General theory of three-dimensional
+       consolidation. Journal of Applied Physics (1941).
+    """
+
     sk = scaling_kwargs or {}
     kind = str(
         get_sk(sk, "subsidence_kind", default="cumulative")
@@ -3554,45 +7128,152 @@ def to_rms(
     nan_policy: str = "propagate",
     dtype: Any = None,
 ) -> Tensor:
-    """Root-mean-square (RMS) of a tensor.
-
-    Notes
-    -----
-    - Default dtype is float32 (fast). Pass dtype=tf_float64
-      for diagnostics when values are extremely small.
-    - By default (eps=None and ms_floor=None), NO flooring is
-      applied. Floors are opt-in.
-    - nan_policy:
-      - "propagate": NaN/Inf propagate naturally.
-      - "raise": assert all finite before reduce.
-      - "omit": ignore non-finite entries in RMS.
-
+    r"""
+    Compute the root-mean-square (RMS) of a tensor.
+    
+    This utility computes:
+    
+    .. math::
+    
+       \mathrm{RMS}(x)
+       = \sqrt{\mathbb{E}[x^2]}
+    
+    over the requested reduction axes. It is designed for robust
+    diagnostics in physics-informed training loops, where tensors may
+    contain extremely small values (needing ``float64``) or occasional
+    non-finite entries (handled via ``nan_policy``).
+    
     Parameters
     ----------
     x : Tensor
-        Input tensor.
-    axis : int | Sequence[int] | None
-        Reduction axis/axes. If None, reduce all.
-    keepdims : bool
-        Keep reduced dimensions.
-    eps : float | None
-        Optional lower bound on the mean-square before sqrt.
-        If None, disabled.
-    ms_floor : float | None
-        Alias for a mean-square floor (applied after eps).
-        If None, disabled.
-    rms_floor : float | None
-        Optional lower bound on RMS after sqrt. If None, disabled.
-    nan_policy : {"propagate","raise","omit"}
-        NaN/Inf handling policy.
-    dtype : tf.DType | None
-        Compute dtype. If None, uses tf_float32.
-
+        Input tensor. Any shape is accepted. The computation is
+        performed in ``dtype`` (default float32).
+    
+    axis : int or Sequence[int] or None, default=None
+        Axis or axes to reduce.
+    
+        * If None, reduce over all dimensions and return a scalar.
+        * If an int or sequence, reduce only those axes.
+    
+    keepdims : bool, default=False
+        If True, keep reduced dimensions with length 1.
+    
+    eps : float or None, default=None
+        Optional lower bound applied to the mean-square value before
+        the square root is taken. If provided and > 0, the mean-square
+        is floored as:
+    
+        .. math::
+    
+           \mathrm{MS} = \max(\mathrm{MS}, \mathrm{eps})
+    
+        where :math:`\mathrm{MS} = \mathbb{E}[x^2]`.
+    
+    ms_floor : float or None, default=None
+        Alias for an additional mean-square floor applied after
+        ``eps``. If provided and > 0, it is applied as:
+    
+        .. math::
+    
+           \mathrm{MS} = \max(\mathrm{MS}, \mathrm{ms\_floor})
+    
+        This can be useful when you want a hard numerical floor but
+        prefer to keep ``eps`` reserved for "epsilon-like" smoothing.
+    
+    rms_floor : float or None, default=None
+        Optional lower bound applied after taking the square root.
+        If provided and > 0:
+    
+        .. math::
+    
+           \mathrm{RMS} = \max(\mathrm{RMS}, \mathrm{rms\_floor})
+    
+    nan_policy : {"propagate", "raise", "omit"}, default="propagate"
+        Policy for handling non-finite values (NaN/Inf):
+    
+        * ``"propagate"``:
+          Use the standard reduction. Non-finite values propagate
+          through ``mean`` and the RMS becomes non-finite.
+        * ``"raise"``:
+          Assert that ``x`` is all finite before reducing, raising an
+          error if NaN/Inf is present.
+        * ``"omit"``:
+          Ignore non-finite entries by treating them as missing. The
+          RMS is computed from finite entries only:
+    
+          .. math::
+    
+             \mathrm{MS}
+             = \frac{\sum x_i^2}{N_f}
+    
+          where :math:`N_f` is the count of finite entries along the
+          reduced axes (clipped to at least 1).
+    
+    dtype : Any, default=None
+        Compute dtype. If None, uses ``tf_float32`` for speed.
+        Pass ``dtype=tf_float64`` when diagnosing very small residuals
+        or when accumulated rounding error matters.
+    
     Returns
     -------
     rms : Tensor
-        RMS value (scalar if axis=None; else reduced).
+        RMS value reduced along ``axis``. If ``axis=None`` the result
+        is a scalar tensor; otherwise it has the reduced shape.
+    
+    Notes
+    -----
+    Flooring behavior
+    ~~~~~~~~~~~~~~~~~
+    Floors are opt-in. If ``eps is None`` and ``ms_floor is None``,
+    no flooring is applied to the mean-square. If ``rms_floor is
+    None``, no flooring is applied to the RMS.
+    
+    A common pattern for stable logging of near-zero residuals is to
+    use a small mean-square floor with float64 diagnostics:
+    
+    * ``dtype=tf_float64`` to reduce rounding error.
+    * ``ms_floor`` to avoid taking ``sqrt(0)`` when a later operation
+      applies ``log`` or divides by RMS.
+    
+    Non-finite handling
+    ~~~~~~~~~~~~~~~~~~~
+    ``nan_policy="omit"`` is intended for diagnostics and logging.
+    For training-time physics losses, prefer cleaning tensors before
+    the loss is computed, so gradients are well-defined.
+    
+    Examples
+    --------
+    Compute RMS over all entries:
+    
+    >>> r = to_rms(x)
+    
+    Compute per-batch RMS (reduce over horizon and channel axes):
+    
+    >>> r_b = to_rms(x, axis=(1, 2))
+    
+    Omit non-finite values when logging a residual map:
+    
+    >>> eps_gw = to_rms(R_gw, nan_policy="omit", dtype=tf_float64)
+    
+    Apply a small mean-square floor for stable downstream log:
+    
+    >>> eps = to_rms(R, ms_floor=1e-30, dtype=tf_float64)
+    
+    See Also
+    --------
+    scale_residual
+        Scales residuals by computed characteristic scales.
+    
+    guard_scale_with_residual
+        Ensures a scale is safe when residuals are near zero.
+    
+    References
+    ----------
+    .. [1] Goodfellow, I., Bengio, Y., and Courville, A.
+       Deep Learning. MIT Press (2016). Chapter on numerical
+       stability and floating point considerations.
     """
+
     pol = str(nan_policy or "propagate").strip().lower()
     if pol not in ("propagate", "raise", "omit"):
         pol = "propagate"

@@ -1969,7 +1969,7 @@ def builder(manifest: dict):
     gp = (cfgm.get("geoprior", {}) or {})
 
     # Recreate the JSON-safe scalars -> objects here
-    _subsparams = dict(subsmodel_params)
+    _subsparams = dict(subsmodel_params) 
     _subsparams.update({
         "mv": LearnableMV(initial_value=float(gp.get("init_mv", GEOPRIOR_INIT_MV))),
         "kappa": LearnableKappa(initial_value=float(gp.get("init_kappa", GEOPRIOR_INIT_KAPPA))),

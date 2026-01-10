@@ -144,7 +144,299 @@ def physics_core(
     *,
     for_train: bool = False,
 ) -> Dict[str, Any]:
-    """Shared physics path for train/eval."""
+    r"""
+    Compute GeoPrior physics residuals and losses for a batch.
+    
+    This function implements the shared physics pathway used by both
+    training and evaluation for GeoPrior-style PINN models. It is
+    designed to keep the physics logic consistent across:
+    
+    * ``train_step()`` (when physics losses are added to the total loss)
+    * evaluation routines (when physics diagnostics are reported)
+    
+    At a high level, the function performs:
+    
+    1. Input preparation and SI conversions (thickness, head, coords).
+    2. Forward pass through the model to obtain data predictions and
+       physics logits.
+    3. Mapping of physics logits to bounded physical fields
+       (:math:`K`, :math:`S_s`, :math:`tau`) and the closure prior
+       :math:`tau_{phys}`.
+    4. Automatic differentiation to obtain PDE derivatives with respect
+       to the model coords.
+    5. Chain-rule scaling to SI-consistent derivatives.
+    6. Construction of residual maps for:
+       * consolidation relaxation residual,
+       * groundwater flow residual,
+       * time-scale prior residual,
+       * smoothness prior residual,
+       * bounds residual.
+    7. Optional nondimensionalization / residual scaling.
+    8. Assembly of physics losses, gating schedules, and diagnostic
+       epsilon metrics.
+    
+    The returned dictionary contains predictions, auxiliary forward
+    outputs, packed physics values (for logging), and optionally the
+    full residual maps and fields.
+    
+    Parameters
+    ----------
+    model : object
+        Model instance providing GeoPrior-style methods and attributes.
+    
+        The function expects the model to expose (at minimum):
+    
+        * ``scaling_kwargs`` : dict
+            Resolved scaling and convention payload.
+        * ``time_units`` : str or None
+            Dataset time unit (for per-second conversions).
+        * ``forecast_horizon`` : int
+            Horizon length used to tile coords when needed.
+        * ``_forward_all(inputs, training=...)`` : callable
+            Forward pass returning ``(y_pred, aux)``.
+        * ``split_data_predictions(x)`` : callable
+            Split concatenated data head into subsidence and GWL.
+        * ``split_physics_predictions(x)`` : callable
+            Split concatenated physics head into
+            ``(K_logits, Ss_logits, dlogtau_logits, Q_logits)``.
+        * ``pde_modes_active`` : iterable of str
+            Active PDE modes (e.g., {'consolidation', 'gw_flow'}).
+        * Optional gates: ``_q_gate()``, ``_subs_resid_gate()``.
+        * Optional physics switch: ``_physics_off()``.
+    
+        Notes
+        -----
+        The function is tolerant to partial capabilities and will
+        short-circuit when physics is disabled, but missing mandatory
+        signals (e.g., thickness) raise errors.
+    inputs : dict
+        Dict input batch following the GeoPrior batch API.
+    
+        Required entries
+        ----------------
+        * ``coords`` : Tensor
+            Coordinate tensor. Expected shape ``(B, H, 3)`` with order
+            (t, x, y). If shape is ``(B, 3)``, it is tiled across
+            horizon.
+        * ``H_field`` or ``soil_thickness`` : Tensor
+            Thickness field used by consolidation closure and priors.
+    
+        Common optional entries
+        -----------------------
+        * ``static_features`` : Tensor
+        * ``dynamic_features`` : Tensor
+        * ``future_features`` : Tensor
+        * ``s0_si`` : Tensor (optional state injection)
+            Used by settlement-state formatting utilities.
+    
+        Notes
+        -----
+        The exact batch layout depends on your Stage-1 export. This
+        function relies on ``_get_coords(inputs)`` and ``get_tensor_from``
+        to locate inputs robustly.
+    training : bool
+        Forward-pass training flag passed to ``model._forward_all`` and
+        downstream field composition. Use True during training and
+        False during evaluation.
+    return_maps : bool, default False
+        If True, return additional intermediate tensors and residual
+        maps, including (K, Ss, tau, tau_prior, Q), SI thickness, SI head
+        and reference head, and both raw and scaled residual fields.
+    
+        Notes
+        -----
+        Enabling ``return_maps`` increases memory usage and is intended
+        for debugging, diagnostics, and research analysis.
+    for_train : bool, default False
+        If True, apply training-time gating schedules for physics loss
+        activation (warmup and ramp) based on optimizer step.
+    
+        Notes
+        -----
+        This flag is separate from ``training`` to allow evaluation-style
+        forward passes with training-time schedules when needed.
+    
+    Returns
+    -------
+    out : dict
+        Output dictionary with the following common keys:
+    
+        ``'y_pred'`` : dict
+            Model predictions (at least ``'subs_pred'`` and ``'gwl_pred'``).
+    
+        ``'aux'`` : dict
+            Auxiliary forward outputs produced by the model forward path.
+            Commonly includes:
+            * ``data_mean_raw`` (optional),
+            * ``phys_mean_raw`` (required by this function).
+    
+        ``'physics'`` : dict or None
+            Physics bundle returned by :func:`build_physics_bundle`.
+            Contains loss scalars, epsilons, and diagnostics. If physics
+            is disabled, this is None.
+    
+        ``'physics_packed'`` : dict
+            Packed physics values suitable for logging in evaluation
+            mode. This is always returned (may be empty when physics off).
+    
+        ``'terms_scaled'`` : dict
+            Dictionary of physics loss terms after scheduling gates and
+            multipliers have been applied. Keys are stable across train
+            and eval for consistent logging.
+    
+        ``'dt_units'`` : Tensor
+            Inferred dataset time step size in dataset time units
+            (not seconds). This value is used in settlement-state and
+            certain Q conversions.
+    
+        ``'scales'`` : dict or None
+            Optional residual scaling dictionary when physics residual
+            scaling is enabled. May include per-term scale factors used
+            for nondimensionalization.
+    
+        If ``return_maps=True``, additional keys include (non-exhaustive):
+        ``'K_field'``, ``'Ss_field'``, ``'tau_field'``, ``'tau_phys'``,
+        ``'Hd_eff'``, ``'H_si'``, ``'Q_si'``, ``'h_si'``,
+        ``'h_ref_si_11'``, ``'R_cons'``, ``'R_gw'``, ``'R_prior'``,
+        ``'R_smooth'``, ``'R_bounds'``, and scaled counterparts.
+    
+    Raises
+    ------
+    ValueError
+        If required inputs are missing (e.g., no thickness field).
+    ValueError
+        If coords do not have shape ``(B, H, 3)`` after coercion.
+    ValueError
+        If expected forward outputs are missing (e.g., missing
+        ``'phys_mean_raw'``).
+    
+    Notes
+    -----
+    Physics switch behavior
+    ~~~~~~~~~~~~~~~~~~~~~~~
+    If the model indicates physics is disabled (via ``_physics_off``),
+    the function performs only the forward pass and returns:
+    
+    * predictions and aux outputs,
+    * ``physics=None``,
+    * packed physics with ``physics=None``,
+    * empty scaled term dict.
+    
+    This allows unified train/eval code paths without special casing.
+    
+    Derivative handling and SI conversion
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Derivatives are computed via autodiff with respect to the coords
+    tensor fed to ``call()``. These raw derivatives are then converted
+    to SI-consistent derivatives using coordinate ranges and
+    conversions:
+    
+    * normalized coords are rescaled by spans (and spans squared for
+      second derivatives),
+    * degree-based spatial coords are converted to meters when needed,
+    * time derivatives are converted to per-second using ``time_units``
+      unless SI time spans are already supplied.
+    
+    Residual families
+    ~~~~~~~~~~~~~~~~~
+    The core residual maps assembled by this function correspond to:
+    
+    Groundwater flow
+        .. math::
+    
+           R_{gw} = S_s \\, \partial_t h
+                    - \nabla \cdot (K \\, \nabla h) - Q
+    
+    Consolidation relaxation
+        .. math::
+    
+           R_{cons} = \partial_t s - \frac{s_{eq}(h) - s}{tau}
+    
+    Time-scale prior
+        A residual tying learned :math:`tau` to a closure prior
+        :math:`tau_{phys}` in log space (implementation-dependent).
+    
+    Smoothness prior
+        A spatial smoothness regularizer on :math:`K` and :math:`S_s`
+        implemented via gradients of fields w.r.t. spatial coords.
+    
+    Bounds residual
+        Residual measuring violation of declared bounds for
+        (H, K, S_s, tau) or their log transforms.
+    
+    Scaling and nondimensionalization
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    When enabled (``model.scale_pde_residuals=True``), residuals may be
+    scaled by data-driven or physics-driven magnitudes to produce
+    dimensionless residuals with more comparable scales across sites.
+    Floors are applied to prevent division by near-zero scales.
+    
+    Training gates
+    ~~~~~~~~~~~~~~
+    When ``for_train=True``, the physics loss is gated by a warmup/ramp
+    schedule based on optimizer step:
+    
+    * warmup: physics contribution is suppressed,
+    * ramp: physics contribution increases to full strength.
+    
+    This improves stability in early training by letting the data head
+    learn a reasonable representation before enforcing physics strongly.
+    
+    Examples
+    --------
+    Compute physics losses during training:
+    
+    >>> out = physics_core(
+    ...     model=model,
+    ...     inputs=batch,
+    ...     training=True,
+    ...     for_train=True,
+    ... )
+    >>> float(out["physics"]["physics_loss_scaled"])
+    0.0  # may be gated early in training
+    
+    Evaluate and return residual maps for debugging:
+    
+    >>> out = physics_core(
+    ...     model=model,
+    ...     inputs=batch,
+    ...     training=False,
+    ...     return_maps=True,
+    ... )
+    >>> sorted([k for k in out if k.startswith("R_")])[:4]
+    ['R_bounds', 'R_cons', 'R_gw', 'R_prior']
+    
+    See Also
+    --------
+    fusionlab.nn.pinn.geoprior.derivatives.compute_head_pde_derivatives_raw
+        Compute raw autodiff PDE derivatives w.r.t. coords.
+    
+    fusionlab.nn.pinn.geoprior.derivatives.ensure_si_derivative_frame
+        Convert raw derivatives to SI-consistent derivatives.
+    
+    fusionlab.nn.pinn.geoprior.losses.assemble_physics_loss
+        Assemble physics loss scalars and term dictionaries.
+    
+    fusionlab.nn.pinn.geoprior.losses.build_physics_bundle
+        Build a packed physics bundle used for logging and metrics.
+    
+    fusionlab.nn.pinn.geoprior.maths.compose_physics_fields
+        Map logits to bounded physical fields and tau prior.
+    
+    References
+    ----------
+    .. [1] Bear, J. Dynamics of Fluids in Porous Media. Dover
+       Publications, 1988.
+    
+    .. [2] Raissi, M., Perdikaris, P., and Karniadakis, G. E.
+       Physics-informed neural networks: A deep learning framework
+       for solving forward and inverse problems involving nonlinear
+       partial differential equations. Journal of Computational
+       Physics, 2019.
+    
+    .. [3] Terzaghi, K. Theoretical Soil Mechanics. Wiley, 1943.
+    """
+
     sk = getattr(model, "scaling_kwargs", None) or {}
     validate_scaling_kwargs(sk)
 

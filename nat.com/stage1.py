@@ -43,14 +43,6 @@ import tensorflow as tf
 import sklearn 
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
-# --- Suppress common warnings/tf chatter ---
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=FutureWarning)
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
-tf.get_logger().setLevel("ERROR")
-if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
-    tf.autograph.set_verbosity(0)
-
 from fusionlab.api.util import get_table_size
 from fusionlab.utils.audit_utils import (
     should_audit,
@@ -77,6 +69,14 @@ from fusionlab.utils.subsidence_utils import (
 from fusionlab.utils.subsidence_utils import make_txy_coords
 from fusionlab.utils.sequence_utils import build_future_sequences_npz
 from fusionlab.nn.pinn.utils import prepare_pinn_data_sequences
+
+# --- Suppress common warnings/tf chatter ---
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+tf.get_logger().setLevel("ERROR")
+if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
+    tf.autograph.set_verbosity(0)
 
 # ==================================================================
 # Step 0: CONFIGURATION (centralized via load_nat_config)

@@ -974,3 +974,245 @@ def audit_stage1_stage2_coord_consistency(
         return audit_path
 
     return None
+
+# ---------------------------------------------------------------------
+# Stage-3 Audit (tuning + saving + eval artifacts)
+# ---------------------------------------------------------------------
+
+
+def _json_safe(x: Any) -> Any:
+    if isinstance(x, (np.generic,)):
+        try:
+            return x.item()
+        except Exception:
+            return str(x)
+
+    if isinstance(x, np.ndarray):
+        try:
+            return x.tolist()
+        except Exception:
+            return str(x)
+
+    return x
+
+
+def _subset_dict(
+    d: Optional[Dict[str, Any]],
+    keys: Iterable[str],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = OrderedDict()
+    if not d:
+        return out
+    for k in keys:
+        if k in d:
+            out[k] = d[k]
+    return out
+
+
+def audit_stage3_run(
+    *,
+    manifest_path: Optional[str],
+    manifest: Dict[str, Any],
+    cfg: Dict[str, Any],
+    fixed_params: Dict[str, Any],
+    best_hps: Optional[Dict[str, Any]],
+    run_dir: str,
+    best_model_path: Optional[str],
+    best_weights_path: Optional[str],
+    use_tf_savedmodel: bool,
+    quantiles: Any,
+    forecast_horizon: int,
+    mode: str,
+    pred_shapes: Optional[Dict[str, Any]] = None,
+    eval_results: Optional[Dict[str, Any]] = None,
+    phys_diag: Optional[Dict[str, Any]] = None,
+    calibrator_factors: Any = None,
+    forecast_csv_eval: Optional[str] = None,
+    forecast_csv_future: Optional[str] = None,
+    metrics_json_path: Optional[str] = None,
+    physics_payload_path: Optional[str] = None,
+    save_dir: Optional[str] = None,
+    table_width: int = 100,
+    title_prefix: str = "STAGE-3 AUDIT",
+    city: str = "Unknown",
+    model_name: str = "Model",
+) -> Optional[str]:
+    """Stage-3 audit: tuned artifacts + eval sanity."""
+    os.makedirs(run_dir, exist_ok=True)
+
+    audit: Dict[str, Any] = {}
+
+    prov = OrderedDict()
+    prov["city"] = str(city)
+    prov["model"] = str(model_name)
+    prov["run_dir"] = str(run_dir)
+    prov["manifest_path"] = str(manifest_path)
+    prov["use_tf_savedmodel"] = bool(use_tf_savedmodel)
+    prov["forecast_horizon"] = int(forecast_horizon)
+    prov["mode"] = str(mode)
+    prov["quantiles"] = (
+        list(quantiles)
+        if isinstance(quantiles, (list, tuple))
+        else quantiles
+    )
+
+    art = OrderedDict()
+
+    def _exists(p: Optional[str]) -> Optional[bool]:
+        if not p:
+            return None
+        return bool(os.path.exists(p))
+
+    art["best_model_path"] = str(best_model_path)
+    art["best_model_exists"] = _exists(best_model_path)
+    art["best_weights_path"] = str(best_weights_path)
+    art["best_weights_exists"] = _exists(best_weights_path)
+
+    art["forecast_csv_eval"] = str(forecast_csv_eval)
+    art["forecast_csv_eval_exists"] = _exists(forecast_csv_eval)
+
+    art["forecast_csv_future"] = str(forecast_csv_future)
+    art["forecast_csv_future_exists"] = _exists(
+        forecast_csv_future
+    )
+
+    art["metrics_json_path"] = str(metrics_json_path)
+    art["metrics_json_exists"] = _exists(metrics_json_path)
+
+    art["physics_payload_path"] = str(physics_payload_path)
+    art["physics_payload_exists"] = _exists(
+        physics_payload_path
+    )
+
+    fixed = OrderedDict()
+    fixed_keys = (
+        "static_input_dim",
+        "dynamic_input_dim",
+        "future_input_dim",
+        "output_subsidence_dim",
+        "output_gwl_dim",
+        "pde_mode",
+        "offset_mode",
+        "bounds_mode",
+        "residual_method",
+        "time_units",
+        "scale_pde_residuals",
+        "use_effective_h",
+    )
+    fixed.update(_subset_dict(fixed_params, fixed_keys))
+
+    sk = fixed_params.get("scaling_kwargs", {}) or {}
+    sk_sum = OrderedDict()
+    if isinstance(sk, dict):
+        sk_sum = _summarize_scaling_kwargs(sk)
+
+    hp = OrderedDict()
+    hp["n_best_hps"] = int(len(best_hps or {}))
+    hp_keys = (
+        "learning_rate",
+        "lambda_gw",
+        "lambda_cons",
+        "lambda_prior",
+        "lambda_smooth",
+        "lambda_bounds",
+        "lambda_q",
+        "lambda_offset",
+        "lambda_mv",
+        "mv_lr_mult",
+        "kappa_lr_mult",
+        "scale_mv_with_offset",
+        "scale_q_with_offset",
+    )
+    hp.update(_subset_dict(best_hps, hp_keys))
+
+    preds = OrderedDict()
+    if pred_shapes:
+        for k, v in pred_shapes.items():
+            preds[f"{k}.shape"] = str(v)
+
+    cal = OrderedDict()
+    f = calibrator_factors
+    if f is None:
+        cal["cal_factors"] = "None"
+    else:
+        try:
+            f_arr = np.asarray(f, dtype=float)
+            cal["factors.shape"] = str(tuple(f_arr.shape))
+            cal["factors.stats"] = _minmaxmeanstd(f_arr)
+            cal["factors.finite_ratio"] = _finite_ratio(f_arr)
+        except Exception:
+            cal["cal_factors"] = str(f)
+
+    ev = OrderedDict()
+    if eval_results:
+        ev["n_keys"] = int(len(eval_results))
+        keep = (
+            "loss",
+            "total_loss",
+            "data_loss",
+            "physics_loss",
+            "physics_loss_scaled",
+            "consolidation_loss",
+            "gw_flow_loss",
+            "prior_loss",
+            "smooth_loss",
+            "bounds_loss",
+            "mv_prior_loss",
+            "epsilon_prior",
+            "epsilon_cons",
+        )
+        ev.update(_subset_dict(eval_results, keep))
+
+    ph = OrderedDict()
+    if phys_diag:
+        ph.update(phys_diag)
+
+    sections = [
+        ("Stage-3 provenance", prov),
+        ("Artifacts", art),
+        ("Fixed params (key subset)", fixed),
+        ("Scaling kwargs (summary)", sk_sum),
+        ("Best HPs (summary)", hp),
+        ("Pred shapes", preds),
+        ("Calibrator", {k: str(v) for k, v in cal.items()}),
+        ("Evaluate() summary", {k: str(v) for k, v in ev.items()}),
+        ("Physics diag", {k: str(v) for k, v in ph.items()}),
+    ]
+
+    print_config_table(
+        sections,
+        table_width=table_width,
+        title=(
+            f"{title_prefix} — {str(city).upper()} "
+            f"{model_name} ({dt.datetime.now():%Y-%m-%d %H:%M:%S})"
+        ),
+    )
+
+    out_dir = save_dir or run_dir
+    if not out_dir:
+        return None
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    audit["provenance"] = dict(prov)
+    audit["artifacts"] = dict(art)
+    audit["fixed_params"] = dict(fixed)
+    audit["scaling_kwargs_summary"] = dict(sk_sum)
+    audit["best_hps"] = {k: _json_safe(v) for k, v in (best_hps or {}).items()}
+    audit["pred_shapes"] = dict(preds)
+    audit["calibrator"] = dict(cal)
+    audit["eval_results"] = {
+        k: _json_safe(v)
+        for k, v in (eval_results or {}).items()
+    }
+    audit["physics_diag"] = {
+        k: _json_safe(v)
+        for k, v in (phys_diag or {}).items()
+    }
+
+    audit_path = os.path.join(out_dir, "stage3_audit.json")
+    with open(audit_path, "w", encoding="utf-8") as f:
+        json.dump(audit, f, indent=2)
+
+    print(f"\n[Audit] Saved Stage-3 audit -> {audit_path}")
+    return audit_path

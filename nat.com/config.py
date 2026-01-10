@@ -320,7 +320,7 @@ GWL_WEIGHTS  = {0.1: 1.5, 0.5: 1.0, 0.9: 1.5}
 #   - "consolidation"  : consolidation only
 #   - "gw_flow"        : groundwater flow only
 #   - "none" or "off"  : physics switched off
-PDE_MODE_CONFIG = "off"
+PDE_MODE_CONFIG = "on"
 
 # For data-only baselines, scripts may ignore physics even if enabled above.
 PHYSICS_BASELINE_MODE = "none"
@@ -634,7 +634,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 2 # 100           # Recommended: 50 to 200
+EPOCHS = 50 # 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
@@ -661,7 +661,7 @@ TF_GPU_MEMORY_LIMIT_MB = None   # e.g. 12000 for 12 GB, or None
 # 8) MODEL FORMAT CONFIGURATION
 # ===================================================================
 # If True, the model will be saved in TensorFlow format (SavedModel).
-USE_TF_SAVEDMODEL = True  # Set to False to use the default weight-based saving
+USE_TF_SAVEDMODEL = False  # Set to False to use the default weight-based saving
 
 # ===================================================================
 # 9) MODEL LOADING / DEBUGGING CONFIGURATION
@@ -712,128 +712,92 @@ EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"
 # script imports this as a simple dictionary and passes it to
 # the tuning API.
 
-TUNER_SEARCH_SPACE = {
-    # --- Architecture (model.__init__) ---
-    #
-    # Centered around:
-    #   EMBED_DIM      = 32
-    #   HIDDEN_UNITS   = 64
-    #   LSTM_UNITS     = 64
-    #   ATTENTION_UNITS= 32
-    #   NUMBER_HEADS   = 4
-    #   DROPOUT_RATE   = 0.10
-    #
+# Notes:
+# - v3.2 adds compile-time: lambda_bounds, lambda_q, lambda_offset,
+#   scale_mv_with_offset, scale_q_with_offset.
+# - OFFSET_MODE affects lambda_offset semantics:
+#     * "mul"   : physics_mult = lambda_offset                  (must be > 0)
+#     * "log10" : physics_mult = 10 ** lambda_offset            (can be < 0)
+#   We set ranges so physics_mult roughly spans ~[0.1, 50] in both regimes.
+
+TUNER_SEARCH_SPACE_BASE_V32 = {
+    # ----------------------------
+    # Architecture (model.__init__)
+    # ----------------------------
     "embed_dim": [32, 48, 64],
-    "hidden_units": [64, 96],
+    "hidden_units": [64, 96, 128],
     "lstm_units": [64, 96],
     "attention_units": [32, 48],
     "num_heads": [2, 4],
-
-    # Keep dropout near the good regime, but allow a bit of exploration.
     "dropout_rate": {
         "type": "float",
         "min_value": 0.05,
-        "max_value": 0.20,
+        "max_value": 0.25,
+        "step": 0.05,
     },
+    # Optional memory knobs (keep modest; Stage2 defaults are stable)
+    "max_window_size": [8, 10, 12],
+    "memory_size": [50, 100],
 
-    # VSN & BatchNorm are *not* tuned here:
-    #   USE_VSN       = True
-    #   USE_BATCH_NORM= False
-    # We keep them fixed via the main config, because
-    # the preprocessing + scaling is designed for that.
-    #
-    # Still allow some variation of VSN width:
-    "vsn_units": [24, 32, 40],
-
-    # --- Physics switches ---
-    #
-    # Always keep full physics active by default.
-    "pde_mode": ["both"],
-
-    "scale_pde_residuals": {"type": "bool"},
-
-    # Config default is "kb", but we can still let tuner
-    # choose between bar/kb if useful.
-    "kappa_mode": ["bar", "kb"],
-
-    # Around GEOPRIOR_HD_FACTOR = 0.6
-    "hd_factor": {
-        "type": "float",
-        "min_value": 0.50,
-        "max_value": 0.70,
-    },
-    
-    "residual_method": ["exact"],  # or ["exact", "euler"]
-    
-    # --- Learnable scalar initials (model.__init__) ---
-    #
-    # Around GEOPRIOR_INIT_MV = 1e-7
-    "mv": {
-        "type": "float",
-        "min_value": 5e-8,
-        "max_value": 3e-7,
-        "sampling": "log",
-    },
-
-    # Around GEOPRIOR_INIT_KAPPA = 1.0
-    "kappa": {
-        "type": "float",
-        "min_value": 0.8,
-        "max_value": 1.2,
-    },
-
-    # --- Compile-only (model.compile) ---
-    #
-    # Around LEARNING_RATE = 1e-4
+    # ----------------------------
+    # Optimizer / training
+    # ----------------------------
     "learning_rate": {
         "type": "float",
-        "min_value": 7e-5,
-        "max_value": 2e-4,
+        "min_value": 3e-4,
+        "max_value": 3e-3,
         "sampling": "log",
     },
 
-    # Around:
-    #   LAMBDA_GW     = 0.01
-    #   LAMBDA_CONS   = 0.10
-    #   LAMBDA_PRIOR  = 0.10
-    #   LAMBDA_SMOOTH = 0.01
-    #   LAMBDA_MV     = 0.01
-    #
+    # ----------------------------
+    # Physics loss weights (compile-time)
+    # ----------------------------
     "lambda_gw": {
         "type": "float",
-        "min_value": 0.005,
-        "max_value": 0.03,
+        "min_value": 0.01,
+        "max_value": 0.20,
     },
     "lambda_cons": {
         "type": "float",
         "min_value": 0.05,
-        "max_value": 0.20,
+        "max_value": 0.30,
     },
     "lambda_prior": {
         "type": "float",
-        "min_value": 0.05,
-        "max_value": 0.20,
+        "min_value": 0.02,
+        "max_value": 0.30,
     },
+
+    # Smoothness is often tiny; log-range helps
     "lambda_smooth": {
         "type": "float",
-        "min_value": 0.005,
-        "max_value": 0.05,
+        "min_value": 1e-5,
+        "max_value": 5e-3,
+        "sampling": "log",
     },
+
+    # v3.2: bounds penalty (soft bounds). Use wide log-range.
+    "lambda_bounds": {
+        "type": "float",
+        "min_value": 1e-4,
+        "max_value": 1.0,
+        "sampling": "log",
+    },
+
+    # MV prior penalty usually small (or even 0)
     "lambda_mv": {
         "type": "float",
-        "min_value": 0.005,
+        "min_value": 0.0,
         "max_value": 0.05,
     },
-    "lambda_offset": {
-        "type": "float",
-        "min_value": 0.1,
-        "max_value": 50.0,
-        "sampling": "log",
-    }, 
-    # Around:
-    #   MV_LR_MULT    = 1.0
-    #   KAPPA_LR_MULT = 5.0
-    #
+
+    # v3.2: Q forcing penalty (often 0; include a few “on” options)
+    "lambda_q": {
+        "type": "choice",
+        "values": [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3],
+    },
+
+    # v3.2: per-parameter LR multipliers
     "mv_lr_mult": {
         "type": "float",
         "min_value": 0.5,
@@ -844,4 +808,37 @@ TUNER_SEARCH_SPACE = {
         "min_value": 2.0,
         "max_value": 8.0,
     },
+
+    # v3.2: whether MV/Q terms scale with the global physics offset
+    # (I usually keep these fixed in fixed_params, but they can be tuned)
+    "scale_mv_with_offset": {
+        "type": "choice",
+        "values": [False, True],
+    },
+    "scale_q_with_offset": {
+        "type": "choice",
+        "values": [True, False],
+    },
 }
+
+# Offset-mode-aware lambda_offset
+if OFFSET_MODE == "mul":
+    # physics_mult = lambda_offset in ~[0.1, 50] (log-sampled)
+    TUNER_SEARCH_SPACE = dict(TUNER_SEARCH_SPACE_BASE_V32)
+    TUNER_SEARCH_SPACE["lambda_offset"] = {
+        "type": "float",
+        "min_value": 0.1,
+        "max_value": 50.0,
+        "sampling": "log",
+    }
+else:
+    # physics_mult = 10**lambda_offset in ~[0.1, 50]
+    # lambda_offset ~ log10(mult) in [-1, 1.7]
+    TUNER_SEARCH_SPACE = dict(TUNER_SEARCH_SPACE_BASE_V32)
+    TUNER_SEARCH_SPACE["lambda_offset"] = {
+        "type": "float",
+        "min_value": -1.0,
+        "max_value": 1.7,
+        "step": 0.05,
+    }
+

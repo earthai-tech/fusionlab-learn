@@ -90,6 +90,13 @@ _COMPILE_ONLY = {
     "lambda_prior",
     "lambda_smooth",
     "lambda_mv",
+    
+    "lambda_bounds",
+    "lambda_q",
+    "lambda_offset",
+    "scale_mv_with_offset",
+    "scale_q_with_offset",
+
     "mv_lr_mult",
     "kappa_lr_mult",
 }
@@ -426,6 +433,14 @@ class GeoPriorTuner(PINNTunerBase):
             compile_hps,
             error="ignore",
         )
+        cast_multiple_bool_params(
+            valid_compile,
+            bool_params_to_cast=[
+                ("scale_mv_with_offset", False),
+                ("scale_q_with_offset", True),
+            ],
+        )
+
         model.compile(
             optimizer=optimizer,
             loss=loss,

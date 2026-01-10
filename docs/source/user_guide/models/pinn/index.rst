@@ -30,3 +30,5 @@ meaningful predictions.
    pihalnet
    transflow_subnet
    pitgwflow
+   geoprior/index
+   

@@ -65,17 +65,209 @@ def assemble_physics_loss(
     loss_q_reg: Tensor,
     loss_bounds: Tensor,
 ) -> tuple[Tensor, Tensor, Tensor, dict[str, Tensor]]:
-    """
-    Assemble physics loss with an explicit offset scope.
-
+    r"""
+    Assemble the full physics objective with an offset-aware multiplier.
+    
+    This helper combines individual physics loss components computed by
+    the GeoPrior PINN core into:
+    
+    * an unscaled physics loss (for logging and diagnostics),
+    * a scaled physics loss (the quantity added to the data loss),
+    * the global physics multiplier used for scaling,
+    * a dictionary of per-term scaled contributions that is consistent
+      with the scaled physics loss.
+    
+    The function implements the GeoPrior weighting convention:
+    
+    1) Each component loss is first multiplied by its corresponding
+       per-term weight stored on the model instance (``lambda_*``).
+    
+    2) A global physics multiplier ``phys_mult`` is computed by
+       ``model._physics_loss_multiplier()``, which depends on
+       ``model.offset_mode`` and the scalar state ``model._lambda_offset``.
+    
+    3) The multiplier is applied to PDE-style terms by default, while
+       certain calibration/regularization terms can opt out depending on
+       model flags (see Notes).
+    
+    Formally, define weighted terms:
+    
+    .. math::
+    
+       T_{cons}   = \lambda_{cons}   L_{cons}
+       \\
+       T_{gw}     = \lambda_{gw}     L_{gw}
+       \\
+       T_{prior}  = \lambda_{prior}  L_{prior}
+       \\
+       T_{smooth} = \lambda_{smooth} L_{smooth}
+       \\
+       T_{bounds} = \lambda_{bounds} L_{bounds}
+       \\
+       T_{mv}     = \lambda_{mv}     L_{mv}
+       \\
+       T_{q}      = \lambda_{q}      L_{q}
+    
+    Let the PDE core sum be:
+    
+    .. math::
+    
+       L_{core} = T_{cons} + T_{gw} + T_{prior} + T_{smooth} + T_{bounds}
+    
+    and the unscaled physics loss be:
+    
+    .. math::
+    
+       L_{phys,raw} = L_{core} + T_{mv} + T_{q}
+    
+    The scaled physics loss is:
+    
+    .. math::
+    
+       L_{phys,scaled} =
+           phys\_mult \, L_{core}
+           + s_{mv} \, T_{mv}
+           + s_{q}  \, T_{q}
+    
+    where:
+    
+    * :math:`s_{mv} = phys\_mult` if ``model._scale_mv_with_offset`` is
+      True, else :math:`s_{mv} = 1`.
+    * :math:`s_{q}  = phys\_mult` if ``model._scale_q_with_offset`` is
+      True, else :math:`s_{q} = 1`.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object providing the weighting attributes:
+    
+        * ``lambda_cons``, ``lambda_gw``, ``lambda_prior``,
+          ``lambda_smooth``, ``lambda_bounds``, ``lambda_mv``,
+          ``lambda_q``
+        * ``_physics_loss_multiplier()`` method
+        * optional flags ``_scale_mv_with_offset`` and
+          ``_scale_q_with_offset``
+    
+    loss_cons : Tensor
+        Consolidation loss :math:`L_{cons}` (typically mean-square of a
+        scaled consolidation residual).
+    
+    loss_gw : Tensor
+        Groundwater-flow PDE loss :math:`L_{gw}` (typically mean-square
+        of a scaled groundwater residual).
+    
+    loss_prior : Tensor
+        Timescale-consistency prior loss :math:`L_{prior}` (often
+        mean-square of a log-timescale residual).
+    
+    loss_smooth : Tensor
+        Smoothness prior loss :math:`L_{smooth}` (regularizes spatial
+        gradients of learned fields).
+    
+    loss_mv : Tensor
+        Storage identity / compressibility calibration loss
+        :math:`L_{mv}`.
+    
+    loss_q_reg : Tensor
+        Forcing regularization loss :math:`L_{q}` (typically
+        mean-square of the SI forcing field :math:`Q`).
+    
+    loss_bounds : Tensor
+        Soft-bounds penalty loss :math:`L_{bounds}` derived from bound
+        residuals (if enabled).
+    
+    Returns
+    -------
+    physics_raw : Tensor
+        Unscaled physics loss:
+    
+        .. math::
+    
+           L_{phys,raw} = L_{core} + T_{mv} + T_{q}
+    
+        Useful for diagnostics, independent of ``lambda_offset``.
+    
+    physics_scaled : Tensor
+        Scaled physics loss, consistent with the global multiplier and
+        the optional scaling rules for ``mv`` and ``q`` terms.
+    
+    phys_mult : Tensor
+        The global physics multiplier returned by
+        ``model._physics_loss_multiplier()``.
+    
+    terms_scaled : dict[str, Tensor]
+        Per-term contributions consistent with ``physics_scaled``.
+        Keys are:
+    
+        * ``'cons'``, ``'gw'``, ``'prior'``, ``'smooth'``, ``'bounds'``,
+          ``'mv'``, ``'q'``.
+    
     Notes
     -----
-    By default, the global physics multiplier `phys_mult`
-    (derived from `lambda_offset`) scales PDE-style terms
-    (cons, gw, prior, smooth, bounds). The mv term is treated
-    as a calibration loss and is *not* scaled by `phys_mult`
-    unless `model._scale_mv_with_offset` is True.
+    Offset-aware scaling policy
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    The global multiplier ``phys_mult`` is intended as a single knob to
+    warm up or damp all PDE-style physics terms together. By default:
+    
+    * PDE-style terms (cons, gw, prior, smooth, bounds) are always scaled
+      by ``phys_mult``.
+    * The ``mv`` term is treated as a calibration loss and is not scaled
+      by ``phys_mult`` unless ``model._scale_mv_with_offset`` is True.
+    * The ``q`` regularization term is scaled by ``phys_mult`` only if
+      ``model._scale_q_with_offset`` is True.
+    
+    This separation avoids unintended suppression of calibration signals
+    when physics warmup is used.
+    
+    Logging and gradient debugging
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Returning both ``physics_raw`` and ``physics_scaled`` helps debug
+    training stability:
+    
+    * ``physics_raw`` shows whether residual magnitudes are decreasing.
+    * ``physics_scaled`` shows the effective contribution to the total
+      optimization objective.
+    
+    Examples
+    --------
+    Assemble physics loss inside a training loop:
+    
+    >>> physics_raw, physics_scaled, phys_mult, terms = (
+    ...     assemble_physics_loss(
+    ...         model,
+    ...         loss_cons=loss_cons,
+    ...         loss_gw=loss_gw,
+    ...         loss_prior=loss_prior,
+    ...         loss_smooth=loss_smooth,
+    ...         loss_mv=loss_mv,
+    ...         loss_q_reg=loss_q_reg,
+    ...         loss_bounds=loss_bounds,
+    ...     )
+    ... )
+    >>> total_loss = data_loss + physics_scaled
+    
+    Inspect per-term contributions:
+    
+    >>> float(terms["prior"])
+    0.0123
+    
+    See Also
+    --------
+    fusionlab.nn.pinn.geoprior.step_core.physics_core
+        Produces the component losses used as inputs here.
+    
+    GeoPriorSubsNet.compile
+        Configures the ``lambda_*`` weights and the offset multiplier.
+    
+    References
+    ----------
+    .. [1] Raissi, M., Perdikaris, P., and Karniadakis, G. E.
+       Physics-informed neural networks: A deep learning framework
+       for solving forward and inverse problems involving nonlinear
+       partial differential equations. Journal of Computational
+       Physics, 2019.
     """
+
     # ----------------------------------------------------------
     # 1) Unscaled weighted terms.
     # ----------------------------------------------------------
@@ -301,6 +493,114 @@ def _get_real_compile_metrics(model):
 
 
 def update_compiled_metrics(model, targets, y_pred):
+    r"""
+    Update compiled Keras metrics for multi-output dict predictions.
+    
+    This helper updates the metric container created by
+    :meth:`tf.keras.Model.compile` in a way that is robust across Keras 2
+    and Keras 3 behavior when the model uses named outputs (dict-style)
+    and the training loop uses a custom :meth:`train_step` /
+    :meth:`test_step`.
+    
+    The function:
+    
+    1) Locates the "real" compiled metrics object for the model (if any)
+       using an internal helper (``_get_real_compile_metrics``).
+    
+    2) Determines the ordered list of output keys from the model
+       (preferably ``model.output_names`` and then ``model._output_keys``).
+    
+    3) Aligns the shapes of ground truth tensors to match prediction
+       tensors (via ``_as_BHO``), so metrics always see consistent batch
+       layout.
+    
+    4) Attempts to update metrics using the most stable calling pattern
+       for the installed Keras version:
+    
+       * First try list-based update (``update_state(y_true_list,
+         y_pred_list)``), which avoids dict key routing issues that can
+         occur with certain Keras 2 configurations.
+       * If that fails, fall back to dict-based update
+         (``update_state(y_true_dict, y_pred_dict)``).
+       * If that also fails, fall back to manually updating per-output
+         metric objects by matching metric name prefixes.
+    
+    This helper is primarily used to keep metric reporting consistent
+    when custom training logic bypasses the default Keras fit loop
+    internals.
+    
+    Parameters
+    ----------
+    model : Any
+        A Keras model instance (or model-like object) that has been
+        compiled with ``metrics`` and possibly multi-output losses.
+    
+    targets : dict-like
+        Ground truth outputs keyed by output name. Values can be tensors
+        or tensor-like arrays.
+    
+    y_pred : dict-like
+        Model predictions keyed by output name. Values are tensors.
+    
+    Returns
+    -------
+    None
+        Updates the compiled metrics state in-place.
+    
+    Notes
+    -----
+    Why a custom updater is needed
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Keras multi-output metric routing depends on how metrics were compiled
+    (list-based vs dict-based) and how outputs are named and returned. In
+    custom :meth:`train_step` / :meth:`test_step`, you often compute losses
+    manually and must also call metric updates manually to preserve the
+    behavior of ``model.fit``.
+    
+    Compatibility behavior
+    ~~~~~~~~~~~~~~~~~~~~~~~~
+    - In some Keras 2 environments, calling ``compiled.update_state`` with
+      dicts can fail or silently mis-route metrics when output names do not
+      align with how the metric container was constructed. The list-first
+      strategy is a defensive approach.
+    - The final manual fallback updates metric objects directly by matching
+      their name prefix (``<output_name>_``) and skipping loss-like metrics.
+    
+    Shape normalization
+    ~~~~~~~~~~~~~~~~~~~~~
+    The helper normalizes ground-truth shapes to match prediction shapes
+    before updating metrics. This reduces common failures when targets are
+    provided as ``(B,H)`` or ``(B,H,1)`` while predictions may be
+    ``(B,H,Q,1)`` (quantiles) or similar.
+    
+    Examples
+    --------
+    Inside a custom test_step:
+    
+    >>> y_pred = model(inputs, training=False)
+    >>> update_compiled_metrics(model, targets, y_pred)
+    
+    Inside a custom train_step:
+    
+    >>> with tf.GradientTape() as tape:
+    ...     y_pred = model(inputs, training=True)
+    ...     loss = model.compiled_loss(...)
+    >>> update_compiled_metrics(model, targets, y_pred)
+    
+    See Also
+    --------
+    tf.keras.Model.compiled_metrics
+        Standard entry point for metric containers in Keras.
+    
+    GeoPriorSubsNet.train_step
+        Custom training loop that may use this helper to keep metrics
+        consistent.
+    
+    References
+    ----------
+    .. [1] Keras Team. Keras fit/compile metrics routing documentation.
+    """
+
     compiled = _get_real_compile_metrics(model)
     if compiled is None:
         return
@@ -416,9 +716,156 @@ def pack_step_results(
     physics: dict[str, Tensor] | None = None,
     manual_trackers: dict | None = None,
 ) -> dict[str, Tensor]:
+    r"""
+    Canonical return dictionary for custom ``train_step`` / ``test_step``.
+    
+    This helper builds a stable logging payload for GeoPrior-style models
+    that use a custom training loop. It combines:
+    
+    * supervised loss scalars (data and total),
+    * compiled Keras metrics (if available),
+    * optional manual trackers (e.g., add-on quantile trackers),
+    * optional physics diagnostics (PINN losses and epsilons).
+    
+    The function is intentionally defensive across Keras versions:
+    
+    * It explicitly updates and reads compiled metrics using
+      ``update_compiled_metrics`` and the underlying compile-metrics
+      container, rather than relying on ``model.metrics`` alone.
+    * It reserves the key ``"loss"`` as the authoritative scalar returned
+      to Keras, while also including explicit ``"total_loss"`` and
+      ``"data_loss"`` entries for clarity.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object that provides compiled metrics and configuration.
+        Expected attributes and helpers include:
+    
+        * ``metrics`` (optional list of metric objects)
+        * ``output_names`` or ``_output_keys`` (output ordering)
+        * ``scaling_kwargs`` (optional dict)
+        * functions used by this module such as
+          ``should_log_physics``, ``zero_physics_bundle``,
+          ``update_compiled_metrics``, ``safe_metric_result``,
+          ``update_epsilon_metrics``, and ``epsilon_value_for_logs``.
+    
+    total_loss : Tensor
+        The scalar loss used for optimization in the current step. This is
+        returned as ``results["loss"]`` and ``results["total_loss"]``.
+    
+    data_loss : Tensor
+        The supervised loss computed from the compiled loss function
+        (i.e., the data term). Returned as ``results["data_loss"]``.
+    
+    targets : Any
+        Ground-truth targets for the supervised outputs. Typically a dict
+        keyed by output names (e.g., ``{"subs_pred": ..., "gwl_pred": ...}``)
+        but may be any structure supported by ``update_compiled_metrics``.
+    
+    y_pred : Any
+        Predicted outputs corresponding to ``targets``. Typically a dict
+        keyed by output names.
+    
+    physics : dict[str, Tensor] or None, optional
+        Physics bundle produced by ``physics_core`` (or an equivalent).
+        If None and physics logging is enabled, a zero bundle is used.
+    
+    manual_trackers : dict or None, optional
+        Optional additional trackers to log. Values may be metric objects
+        with ``result()`` or raw scalars/tensors. This is typically used
+        for add-on metrics that are not part of Keras compiled metrics.
+    
+    Returns
+    -------
+    results : dict[str, Tensor]
+        A dictionary suitable for returning from ``train_step`` or
+        ``test_step``. At minimum it contains:
+    
+        * ``loss``: total loss used by Keras progress reporting.
+        * ``total_loss``: same as ``loss`` (explicit alias).
+        * ``data_loss``: supervised/data loss term.
+    
+        If compiled metrics are available, additional keys are included
+        (e.g., ``subs_pred_mae``, quantile coverage, etc.). If physics
+        logging is enabled, physics diagnostics are appended (see Notes).
+    
+    Notes
+    -----
+    Metric collection strategy
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Compiled metrics are updated via ``update_compiled_metrics`` and then
+    read from the underlying compile-metrics object. This avoids common
+    routing failures when using dict outputs in custom training loops.
+    
+    Reserved and excluded keys
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    Certain names are reserved to prevent collisions with Keras internals
+    and to ensure that the loss scalar remains authoritative. Some epsilon
+    fields may also be excluded from the compiled-metric collection to
+    avoid duplicate/conflicting reporting.
+    
+    Physics logging
+    ~~~~~~~~~~~~~~~
+    If physics logging is enabled (``should_log_physics(model)`` returns
+    True), this helper adds a consistent set of physics metrics, typically:
+    
+    * physics losses (raw and scaled),
+    * per-term losses (consolidation, gw flow, priors, bounds),
+    * epsilon metrics (scaled and raw variants).
+    
+    If physics is disabled for the model and logging is enabled, a zero
+    bundle is inserted to keep log schemas stable.
+    
+    Q and residual gates
+    ~~~~~~~~~~~~~~~~~~~~
+    When ``scaling_kwargs`` requests Q diagnostics
+    (``log_q_diagnostics=True``), additional fields such as Q RMS and gate
+    values may be included for debugging training schedules.
+    
+    Examples
+    --------
+    Inside a custom training step:
+    
+    >>> results = pack_step_results(
+    ...     model,
+    ...     total_loss=total_loss,
+    ...     data_loss=data_loss,
+    ...     targets=targets,
+    ...     y_pred=y_pred,
+    ...     manual_trackers=(model.add_on.as_dict if model.add_on else None),
+    ...     physics=physics_bundle,
+    ... )
+    >>> return results
+    
+    Inside a custom test step:
+    
+    >>> return pack_step_results(
+    ...     model,
+    ...     total_loss=total_loss,
+    ...     data_loss=data_loss,
+    ...     targets=targets,
+    ...     y_pred=y_pred,
+    ...     physics=physics_bundle,
+    ... )
+    
+    See Also
+    --------
+    update_compiled_metrics
+        Compatibility helper to update metrics for multi-output dicts.
+    
+    assemble_physics_loss
+        Builds the scaled physics objective used in ``total_loss``.
+    
+    physics_core
+        Produces the physics bundle consumed by this packer.
+    
+    References
+    ----------
+    .. [1] Keras Team. Customizing ``fit`` with ``train_step`` and
+       ``test_step``. Keras guides and API documentation.
     """
-    Canonical return dict for train_step/test_step.
-    """
+
     
     RESERVED = {"loss", "total_loss", "data_loss" , "compile_metrics"}
     EXCLUDE = {"epsilon_prior", "epsilon_cons", "epsilon_gw"}
@@ -559,13 +1006,76 @@ def pack_eval_physics(
     *,
     physics: dict[str, Tensor] | None,
 ) -> dict[str, Tensor]:
+    r"""
+    Canonical physics bundle output for batch-level physics evaluation.
+    
+    This helper normalizes the output of physics diagnostics so that
+    callers can rely on a stable schema regardless of whether physics is
+    enabled for the model.
+    
+    Behavior:
+    
+    * If a physics bundle is provided, it is returned unchanged.
+    * If physics is off and logging is enabled, a zero-valued physics
+      bundle is returned (to keep downstream logging stable).
+    * If physics is off and logging is disabled, an empty dict is
+      returned.
+    
+    Parameters
+    ----------
+    model : Any
+        Model-like object that controls whether physics logging is enabled.
+        This function relies on ``should_log_physics(model)`` and
+        ``zero_physics_bundle(model)`` which are expected to be available
+        in the surrounding module.
+    
+    physics : dict[str, Tensor] or None
+        Physics bundle produced by ``physics_core`` or a compatible
+        routine. If None, behavior depends on whether physics logging is
+        enabled.
+    
+    Returns
+    -------
+    out : dict[str, Tensor]
+        Canonical physics dictionary.
+    
+        If physics is enabled (or logging when off), keys typically include
+        (implementation dependent):
+    
+        * ``physics_loss_raw``
+        * ``physics_loss_scaled``
+        * ``physics_mult``
+        * per-term losses and epsilon diagnostics
+    
+        If physics is off and logging is disabled, returns ``{}``.
+    
+    Notes
+    -----
+    Stable logging schema
+    ~~~~~~~~~~~~~~~~~~~~
+    Returning a zero bundle when physics is off is useful for dashboards
+    and automated training loops where missing keys complicate aggregation.
+    
+    Examples
+    --------
+    Batch-level evaluation:
+    
+    >>> packed = pack_eval_physics(model, physics=physics_bundle)
+    
+    Physics-off scenario:
+    
+    >>> packed = pack_eval_physics(model, physics=None)
+    >>> packed  # either {} or a zero bundle depending on settings
+    
+    See Also
+    --------
+    GeoPriorSubsNet.evaluate_physics
+        Aggregates these batch outputs across datasets.
+    
+    physics_core
+        Produces the physics bundle consumed by this helper.
     """
-    Canonical output for evaluate_physics_on_batch.
 
-    If physics is off:
-    - return zeros if `log_physics_when_off` is True
-    - else return an empty dict
-    """
     if physics is None:
         if should_log_physics(model):
             return zero_physics_bundle(model)
