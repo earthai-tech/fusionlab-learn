@@ -90,7 +90,9 @@ from fusionlab.nn.calibration import (
     fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
 )
-
+from fusionlab.nn.pinn.geoprior.scaling import (
+    override_scaling_kwargs,
+)
 # =============================================================================
 # 0) Load Stage-1 manifest and arrays
 # =============================================================================
@@ -361,6 +363,19 @@ bounds_for_scaling = {
 # Merge Stage-1 scaling kwargs (critical in v3.2)
 sk_stage1 = cfg.get("scaling_kwargs", {}) or {}
 sk_model = dict(sk_stage1)
+
+exp_names = sk_model.get("dynamic_feature_names", None)
+exp_gwl = sk_model.get("gwl_dyn_index", None)
+
+sk_model = override_scaling_kwargs(
+    sk_model,
+    cfg,
+    dyn_names=exp_names,
+    gwl_dyn_index=exp_gwl,
+    base_dir=os.path.dirname(__file__),
+    strict=True,
+    log_fn=print,
+)
 sk_bounds0 = (sk_model.get("bounds", {}) or {})
 sk_model["bounds"] = {**sk_bounds0, **bounds_for_scaling}
 

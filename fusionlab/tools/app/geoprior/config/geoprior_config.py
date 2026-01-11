@@ -39,7 +39,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Directory where this GUI config lives (used as root for nat_utils).
 GUI_CONFIG_DIR = os.path.dirname(__file__)
@@ -58,111 +58,95 @@ from .stage1_options import Stage1Options
 # ----------------------------------------------------------------------
 # Default tuner search space
 # ----------------------------------------------------------------------
-def default_tuner_search_space() -> Dict[str, Any]:
+def default_tuner_search_space(
+    offset_mode: str = "mul",
+) -> Dict[str, Any]:
     """Return a fresh default ``TUNER_SEARCH_SPACE`` dict.
 
-    This mirrors the contents of the original NATCOM ``config.py`` but
-    is kept here so that the GUI can work even if ``config.json`` is
-    missing.
+    The GUI uses this fallback when a legacy NATCOM payload does not
+    provide a ``TUNER_SEARCH_SPACE`` entry.
+
+    Parameters
+    ----------
+    offset_mode : str, default="mul"
+        Controls the sampling range for ``lambda_offset`` in v3.2.
+
+        - ``"mul"``: ``physics_mult = lambda_offset`` (must be > 0).
+        - ``"log10"``: ``physics_mult = 10 ** lambda_offset`` (can be < 0).
+
+    Notes
+    -----
+    The returned dictionary mirrors the v3.2 NATCOM tuning space:
+    ``TUNER_SEARCH_SPACE_BASE_V32`` plus an offset-mode-aware
+    ``lambda_offset`` so that the effective physics multiplier spans
+    roughly ``[0.1, 50]`` in both regimes.
+
     """
-    return {
-        # --- Architecture (model.__init__) -----------------------------
+    space: Dict[str, Any] = {
+        # ----------------------------
+        # Architecture (model.__init__)
+        # ----------------------------
         "embed_dim": [32, 48, 64],
-        "hidden_units": [64, 96],
+        "hidden_units": [64, 96, 128],
         "lstm_units": [64, 96],
         "attention_units": [32, 48],
         "num_heads": [2, 4],
-
-        # --- Multi-scale memory / attention ---------------------------
-        # Around model defaults: memory_size=100, scales=[1],
-        # decoder_attention_stack=["cross", "hierarchical", "memory"].
-        "memory_size": [50, 100],
-        "scales": [
-            # [1],          # single-scale (baseline, close to NATCOM)
-            [1, 2],       # two-scale (fine + medium)
-            # [1, 2, 4],    # richer multi-scale
-        ],
-        # Each entry is a *stack* of attention levels to activate.
-        "attention_levels": [
-            ["cross", "hierarchical", "memory"],  # full stack (most expressive)
-            # ["cross", "memory"],                  # skip hierarchical
-            # ["hierarchical", "memory"],           # hierarchical + memory
-            # ["memory"],                           # lightweight memory-only
-        ],
-        # Boolean HPs are handled via hp.Boolean in GeoPriorTuner
-        "use_batch_norm": {"type": "bool"},
-        "use_residuals": {"type": "bool"},
-        "use_vsn": {"type": "bool"},
-
-        # --- Regularisation -------------------------------------------
         "dropout_rate": {
             "type": "float",
             "min_value": 0.05,
-            "max_value": 0.20,
+            "max_value": 0.25,
+            "step": 0.05,
         },
-
-        # Variable selection network width
-        "vsn_units": [24, 32, 40],
-
-        # --- Physics switches -----------------------------------------
-        "pde_mode": ["both"],
-        "scale_pde_residuals": {"type": "bool"},
-        "kappa_mode": ["bar", "kb"],
-
-        # Around GEOPRIOR_HD_FACTOR = 0.6
-        "hd_factor": {
-            "type": "float",
-            "min_value": 0.50,
-            "max_value": 0.70,
-        },
-
-        # --- Learnable scalar initials (model.__init__) ---------------
-        "mv": {
-            "type": "float",
-            "min_value": 5e-8,
-            "max_value": 3e-7,
-            "sampling": "log",
-        },
-        "kappa": {
-            "type": "float",
-            "min_value": 0.8,
-            "max_value": 1.2,
-        },
-
-        # --- Compile-only (model.compile) -----------------------------
+        "max_window_size": [8, 10, 12],
+        "memory_size": [50, 100],
+        # ----------------------------
+        # Optimizer / training
+        # ----------------------------
         "learning_rate": {
             "type": "float",
-            "min_value": 7e-5,
-            "max_value": 2e-4,
+            "min_value": 3e-4,
+            "max_value": 3e-3,
             "sampling": "log",
         },
-
+        # ----------------------------
+        # Physics loss weights (compile-time)
+        # ----------------------------
         "lambda_gw": {
             "type": "float",
-            "min_value": 0.005,
-            "max_value": 0.03,
+            "min_value": 0.01,
+            "max_value": 0.20,
         },
         "lambda_cons": {
             "type": "float",
             "min_value": 0.05,
-            "max_value": 0.20,
+            "max_value": 0.30,
         },
         "lambda_prior": {
             "type": "float",
-            "min_value": 0.05,
-            "max_value": 0.20,
+            "min_value": 0.02,
+            "max_value": 0.30,
         },
         "lambda_smooth": {
             "type": "float",
-            "min_value": 0.005,
-            "max_value": 0.05,
+            "min_value": 1e-5,
+            "max_value": 5e-3,
+            "sampling": "log",
+        },
+        "lambda_bounds": {
+            "type": "float",
+            "min_value": 1e-4,
+            "max_value": 1.0,
+            "sampling": "log",
         },
         "lambda_mv": {
             "type": "float",
-            "min_value": 0.005,
+            "min_value": 0.0,
             "max_value": 0.05,
         },
-
+        "lambda_q": {
+            "type": "choice",
+            "values": [0.0, 1e-5, 5e-5, 1e-4, 5e-4, 1e-3],
+        },
         "mv_lr_mult": {
             "type": "float",
             "min_value": 0.5,
@@ -173,18 +157,33 @@ def default_tuner_search_space() -> Dict[str, Any]:
             "min_value": 2.0,
             "max_value": 8.0,
         },
-
-        # --- Training loop (tuner.search) -----------------------------
-        # These control epochs / batch size per trial; kept modest to
-        # avoid exploding tuning cost, but still explore stability
-        # vs. speed.
-        "batch_size": [32, 64],
-        "epochs": [30, 50],
+        "scale_mv_with_offset": {
+            "type": "choice",
+            "values": [False, True],
+        },
+        "scale_q_with_offset": {
+            "type": "choice",
+            "values": [True, False],
+        },
     }
 
-# ----------------------------------------------------------------------
-# Unified GeoPriorConfig
-# ----------------------------------------------------------------------
+    mode = str(offset_mode or "mul").lower()
+    if mode == "mul":
+        space["lambda_offset"] = {
+            "type": "float",
+            "min_value": 0.1,
+            "max_value": 50.0,
+            "sampling": "log",
+        }
+    else:
+        space["lambda_offset"] = {
+            "type": "float",
+            "min_value": -1.0,
+            "max_value": 1.7,
+            "step": 0.05,
+        }
+
+    return space
 @dataclass
 class GeoPriorConfig:
     """
@@ -243,6 +242,31 @@ class GeoPriorConfig:
     gwl_col: str = "GWL_depth_bgs_z"
     h_field_col: str = "soil_thickness"
 
+    # v3.2: groundwater representation and surface elevation.
+    # - GWL_KIND defines whether the input column is a depth (BGS)
+    #   or a hydraulic head already.
+    # - GWL_SIGN declares the sign convention in the raw dataset.
+    gwl_kind: str = "depth_bgs"          # {"depth_bgs","head"}
+    gwl_sign: str = "down_positive"      # {"down_positive","up_positive"}
+    use_head_proxy: bool = False
+
+    # Optional surface elevation column used to build head:
+    #   head = z_surf - z_gwl (depth-bgs, down_positive)
+    z_surf_col: Optional[str] = None
+    include_z_surf_as_static: bool = True
+    head_col: str = "head_m"
+    gwl_dyn_index: Optional[int] = None
+
+    # Stage-1 scaling controls (v3.2)
+    normalize_coords: bool = True
+    keep_coords_raw: bool = False
+    shift_raw_coords: bool = True
+    scale_h_field: bool = False
+    scale_gwl: bool = False
+    scale_z_surf: bool = False
+    subsidence_kind: str = "cumulative"  # {"cumulative","rate"}
+
+
     # ------------------------------------------------------------------
     # Feature registry & censoring (Stage-1)
     # ------------------------------------------------------------------
@@ -293,6 +317,12 @@ class GeoPriorConfig:
     include_censor_flags_as_dynamic: bool = True
     use_effective_h_field: bool = True
 
+    # --- near feature registry fields ---
+    dynamic_feature_names: Optional[List[str]] = None
+    future_feature_names: Optional[List[str]] = None
+    
+    include_censor_flags_as_future: bool = False
+
     # ------------------------------------------------------------------
     # Training hyper-parameters (config 4.5)
     # ------------------------------------------------------------------
@@ -307,11 +337,30 @@ class GeoPriorConfig:
     # ``PDE_MODE_CONFIG`` in the overrides.
     pde_mode: str = "off"
 
+    # v3.2: physics warmup / ramp (stage-2)
+    physics_warmup_steps: int = 500
+    physics_ramp_steps: int = 500
+    scale_pde_residuals: bool = True
+
     lambda_cons: float = 0.10
     lambda_gw: float = 0.01
     lambda_prior: float = 0.10
     lambda_smooth: float = 0.01
     lambda_mv: float = 0.01
+    lambda_bounds: float = 1.0
+    lambda_q: float = 0.0
+
+    # v3.2: global physics-loss offset
+    offset_mode: str = "mul"          # {"mul","log10"}
+    lambda_offset: float = 1.0
+    use_lambda_offset_scheduler: bool = True
+    lambda_offset_unit: str = "epoch"  # {"epoch","step"}
+    lambda_offset_when: str = "begin"  # {"begin","end"}
+    lambda_offset_warmup: int = 20
+    lambda_offset_start: float = 0.1
+    lambda_offset_end: float = 1.0
+    lambda_offset_schedule: Optional[Dict[int, float]] = None
+
     mv_lr_mult: float = 1.0
     kappa_lr_mult: float = 5.0
 
@@ -321,6 +370,117 @@ class GeoPriorConfig:
     geoprior_h_ref: float = 0.0
     geoprior_kappa_mode: str = "kb"   # {"bar", "kb"}
     geoprior_hd_factor: float = 0.6
+
+    # ------------------------------------------------------------------
+    # v3.2: bounds, units and source-term controls
+    # ------------------------------------------------------------------
+    physics_bounds: Dict[str, float] = field(
+        default_factory=lambda: {
+            "K_min": 1e-9,
+            "K_max": 1e-3,
+            "Ss_min": 1e-7,
+            "Ss_max": 1e-2,
+            "tau_min": 1e5,
+            "tau_max": 1e10,
+            "H_min": 5.0,
+            "H_max": 500.0,
+        }
+    )
+    bounds_mode: str = "soft"          # {"soft","hard"}
+    time_units: str = "year"           # {"year","day","second"}
+
+    # SI affine mapping (used by scaling helpers)
+    subs_unit_to_si: float = 1e-3
+    subs_scale_si: float = 1.0
+    subs_bias_si: float = 0.0
+    head_unit_to_si: float = 1.0
+    head_scale_si: Optional[float] = None
+    head_bias_si: Optional[float] = None
+    thickness_unit_to_si: float = 1.0
+    z_surf_unit_to_si: float = 1.0
+    h_field_min_si: float = 0.1
+    auto_si_affine_from_stage1: bool = True
+
+    # Coordinate interpretation (stage-1 / scaling)
+    coord_mode: str = "degrees"
+    utm_epsg: int = 32649
+    coord_src_epsg: int = 4326
+
+    # Consolidation & groundwater residual scaling
+    residual_method: str = "exact"     # {"exact","fd"}
+    cons_residual_units: str = "second"
+    gw_residual_units: str = "second"
+    cons_scale_floor: str = "auto"
+    gw_scale_floor: str = "auto"
+    allow_subs_residual: bool = True
+    dt_min_units: float = 1e-6
+
+    # Q forcing / drainage
+    q_wrt_normalized_time: bool = False
+    q_in_si: bool = False
+    q_in_per_second: bool = False
+    q_kind: str = "per_volume"
+    q_length_in_si: bool = False
+    drainage_mode: str = "double"
+    
+    # Training strategy (v3.2)
+    training_strategy: str = "physics_first"
+    
+    # --------------------------
+    # Physics-first knobs
+    # --------------------------
+    q_policy_physics_first: str = "warmup_off"
+    q_warmup_epochs_physics_first: int = 20
+    q_ramp_epochs_physics_first: int = 10
+    lambda_q_physics_first: float = 1e-5
+    loss_weight_gwl_physics_first: float = 0.5
+    subs_resid_policy_physics_first: str = "warmup_off"
+    subs_resid_warmup_epochs_physics_first: int = 15
+    subs_resid_ramp_epochs_physics_first: int = 10
+    
+    # --------------------------
+    # Data-first knobs
+    # --------------------------
+    loss_weight_gwl_data_first: float = 1.0
+    lambda_q_data_first: float = 1e-3
+    q_policy_data_first: str = "always_on"
+    q_warmup_epochs_data_first: int = 0
+    q_ramp_epochs_data_first: int = 0
+    subs_resid_policy_data_first: str = "always_on"
+    subs_resid_warmup_epochs_data_first: int = 0
+    subs_resid_ramp_epochs_data_first: int = 0
+    
+    log_q_diagnostics: bool = True
+    track_aux_metrics: bool = False
+
+    # --- near physics config fields ---
+    physics_baseline_mode: str = "none"
+    debug_physics_grads: bool = False
+    
+    mv_prior_units: str = "strict"
+    mv_alpha_disp: float = 0.1
+    mv_huber_delta: float = 1.0
+    mv_prior_mode: str = "calibrate"
+    mv_weight: float = 1e-3
+    
+    mv_schedule_unit: str = "epoch"
+    mv_delay_epochs: int = 1
+    mv_warmup_epochs: int = 2
+    mv_delay_steps: Optional[int] = None
+    mv_warmup_steps: Optional[int] = None
+    
+    geoprior_use_effective_h: bool = True 
+    
+    # Scaling / stability safeguards
+    scaling_error_policy: str = "raise"
+    clip_global_norm: float = 5.0
+
+    # Evaluation JSON units
+    eval_json_units_mode: str = "interpretable"
+    eval_json_units_scope: str = "all"
+    
+    # External scaling kwargs (v3.2)
+    scaling_kwargs_json_path: Optional[str] = None
 
    # --- probabilistic outputs & weights ---
     quantiles: List[float] = field(default_factory=lambda: [0.1, 0.5, 0.9])
@@ -339,6 +499,43 @@ class GeoPriorConfig:
     # ------------------------------------------------------------------
     tf_device_mode: str = "auto"         # {"auto","cpu","gpu"}
     tf_gpu_allow_growth: bool = True
+    
+    # --- near device configuration fields ---
+    tf_intra_threads: Optional[int] = None
+    tf_inter_threads: Optional[int] = None
+    tf_gpu_memory_limit_mb: Optional[int] = None
+    
+    use_tf_savedmodel: bool = False
+    use_in_memory_model: bool = True
+    debug: bool = False
+    
+    audit_stages: Any = "*"
+
+    # --- optional but recommended: architecture defaults ---
+    model_name: str = "GeoPriorSubsNet"
+    
+    attention_levels: List[str] = field(
+        default_factory=lambda: [
+            "cross",
+            "hierarchical",
+            "memory",
+        ]
+    )
+    embed_dim: int = 32
+    hidden_units: int = 64
+    lstm_units: int = 64
+    attention_units: int = 64
+    number_heads: int = 2
+    dropout_rate: float = 0.10
+    
+    memory_size: int = 50
+    scales: List[int] = field(
+        default_factory=lambda: [1, 2]
+    )
+    use_residuals: bool = True
+    use_batch_norm: bool = False
+    use_vsn: bool = True
+    vsn_units: int = 32
 
     # ------------------------------------------------------------------
     # GUI-only flags
@@ -439,7 +636,12 @@ class GeoPriorConfig:
         if isinstance(space_cfg, dict) and space_cfg:
             tuner_space = space_cfg
         else:
-            tuner_space = default_tuner_search_space()
+            tuner_space = default_tuner_search_space(
+                offset_mode=base.get(
+                    "OFFSET_MODE",
+                    cls.offset_mode,
+                ),
+            )
 
         tuner_max_trials = iget("TUNER_MAX_TRIALS", cls.tuner_max_trials)
 
@@ -465,17 +667,140 @@ class GeoPriorConfig:
             gwl_col=iget("GWL_COL", cls.gwl_col),
             h_field_col=iget("H_FIELD_COL_NAME", cls.h_field_col),
 
+            gwl_kind=iget("GWL_KIND", cls.gwl_kind),
+            gwl_sign=iget("GWL_SIGN", cls.gwl_sign),
+            use_head_proxy=iget(
+                "USE_HEAD_PROXY",
+                cls.use_head_proxy,
+            ),
+            z_surf_col=base.get("Z_SURF_COL", cls.z_surf_col),
+            include_z_surf_as_static=iget(
+                "INCLUDE_Z_SURF_AS_STATIC",
+                cls.include_z_surf_as_static,
+            ),
+            head_col=iget("HEAD_COL", cls.head_col),
+            gwl_dyn_index=base.get(
+                "GWL_DYN_INDEX",
+                cls.gwl_dyn_index,
+            ),
+            normalize_coords=iget(
+                "NORMALIZE_COORDS",
+                cls.normalize_coords,
+            ),
+            keep_coords_raw=iget(
+                "KEEP_COORDS_RAW",
+                cls.keep_coords_raw,
+            ),
+            shift_raw_coords=iget(
+                "SHIFT_RAW_COORDS",
+                cls.shift_raw_coords,
+            ),
+            scale_h_field=iget(
+                "SCALE_H_FIELD",
+                cls.scale_h_field,
+            ),
+            scale_gwl=iget("SCALE_GWL", cls.scale_gwl),
+            scale_z_surf=iget(
+                "SCALE_Z_SURF",
+                cls.scale_z_surf,
+            ),
+            subsidence_kind=iget(
+                "SUBSIDENCE_KIND",
+                cls.subsidence_kind,
+            ),
+            # --- runtime / format / debugging / audit ---
+            tf_intra_threads=base.get(
+                "TF_INTRA_THREADS",
+                cls.tf_intra_threads,
+            ),
+            tf_inter_threads=base.get(
+                "TF_INTER_THREADS",
+                cls.tf_inter_threads,
+            ),
+            tf_gpu_memory_limit_mb=base.get(
+                "TF_GPU_MEMORY_LIMIT_MB",
+                cls.tf_gpu_memory_limit_mb,
+            ),
+            
+            use_tf_savedmodel=iget(
+                "USE_TF_SAVEDMODEL",
+                cls.use_tf_savedmodel,
+            ),
+            use_in_memory_model=iget(
+                "USE_IN_MEMORY_MODEL",
+                cls.use_in_memory_model,
+            ),
+            debug=iget("DEBUG", cls.debug),
+            
+            audit_stages=base.get(
+                "AUDIT_STAGES",
+                cls.audit_stages,
+            ),
+    
             # Training hyper-params ------------------------------------------
             epochs=iget("EPOCHS", cls.epochs),
             batch_size=iget("BATCH_SIZE", cls.batch_size),
             learning_rate=iget("LEARNING_RATE", cls.learning_rate),
             # Physics configuration ------------------------------------------
-            pde_mode=iget("PDE_MODE_CONFIG", cls.pde_mode),
+            pde_mode=base.get("PDE_MODE_CONFIG", cls.pde_mode),
             lambda_cons=iget("LAMBDA_CONS", cls.lambda_cons),
             lambda_gw=iget("LAMBDA_GW", cls.lambda_gw),
             lambda_prior=iget("LAMBDA_PRIOR", cls.lambda_prior),
             lambda_smooth=iget("LAMBDA_SMOOTH", cls.lambda_smooth),
             lambda_mv=iget("LAMBDA_MV", cls.lambda_mv),
+            lambda_bounds=iget(
+                "LAMBDA_BOUNDS",
+                cls.lambda_bounds,
+            ),
+            lambda_q=iget("LAMBDA_Q", cls.lambda_q),
+            offset_mode=iget(
+                "OFFSET_MODE",
+                cls.offset_mode,
+            ),
+            lambda_offset=iget(
+                "LAMBDA_OFFSET",
+                cls.lambda_offset,
+            ),
+            use_lambda_offset_scheduler=iget(
+                "USE_LAMBDA_OFFSET_SCHEDULER",
+                cls.use_lambda_offset_scheduler,
+            ),
+            lambda_offset_unit=iget(
+                "LAMBDA_OFFSET_UNIT",
+                cls.lambda_offset_unit,
+            ),
+            lambda_offset_when=iget(
+                "LAMBDA_OFFSET_WHEN",
+                cls.lambda_offset_when,
+            ),
+            lambda_offset_warmup=iget(
+                "LAMBDA_OFFSET_WARMUP",
+                cls.lambda_offset_warmup,
+            ),
+            lambda_offset_start=iget(
+                "LAMBDA_OFFSET_START",
+                cls.lambda_offset_start,
+            ),
+            lambda_offset_end=iget(
+                "LAMBDA_OFFSET_END",
+                cls.lambda_offset_end,
+            ),
+            lambda_offset_schedule=base.get(
+                "LAMBDA_OFFSET_SCHEDULE",
+                cls.lambda_offset_schedule,
+            ),
+            physics_warmup_steps=iget(
+                "PHYSICS_WARMUP_STEPS",
+                cls.physics_warmup_steps,
+            ),
+            physics_ramp_steps=iget(
+                "PHYSICS_RAMP_STEPS",
+                cls.physics_ramp_steps,
+            ),
+            scale_pde_residuals=iget(
+                "SCALE_PDE_RESIDUALS",
+                cls.scale_pde_residuals,
+            ),
             build_future_npz=iget("BUILD_FUTURE_NPZ", cls.build_future_npz),
             
             # Scalar physics parameters --------------------------------
@@ -497,6 +822,286 @@ class GeoPriorConfig:
             geoprior_hd_factor=iget(
                 "GEOPRIOR_HD_FACTOR", cls.geoprior_hd_factor
             ),
+
+            physics_bounds=base.get(
+                "PHYSICS_BOUNDS",
+                cls.physics_bounds,
+            ),
+            bounds_mode=iget(
+                "PHYSICS_BOUNDS_MODE",
+                cls.bounds_mode,
+            ),
+            time_units=iget("TIME_UNITS", cls.time_units),
+            subs_unit_to_si=iget(
+                "SUBS_UNIT_TO_SI",
+                cls.subs_unit_to_si,
+            ),
+            subs_scale_si=iget(
+                "SUBS_SCALE_SI",
+                cls.subs_scale_si,
+            ),
+            subs_bias_si=iget(
+                "SUBS_BIAS_SI",
+                cls.subs_bias_si,
+            ),
+            head_unit_to_si=iget(
+                "HEAD_UNIT_TO_SI",
+                cls.head_unit_to_si,
+            ),
+            head_scale_si=base.get(
+                "HEAD_SCALE_SI",
+                cls.head_scale_si,
+            ),
+            head_bias_si=base.get(
+                "HEAD_BIAS_SI",
+                cls.head_bias_si,
+            ),
+            thickness_unit_to_si=iget(
+                "THICKNESS_UNIT_TO_SI",
+                cls.thickness_unit_to_si,
+            ),
+            z_surf_unit_to_si=iget(
+                "Z_SURF_UNIT_TO_SI",
+                cls.z_surf_unit_to_si,
+            ),
+            h_field_min_si=iget(
+                "H_FIELD_MIN_SI",
+                cls.h_field_min_si,
+            ),
+            auto_si_affine_from_stage1=iget(
+                "AUTO_SI_AFFINE_FROM_STAGE1",
+                cls.auto_si_affine_from_stage1,
+            ),
+            coord_mode=iget("COORD_MODE", cls.coord_mode),
+            utm_epsg=iget("UTM_EPSG", cls.utm_epsg),
+            coord_src_epsg=iget(
+                "COORD_SRC_EPSG",
+                cls.coord_src_epsg,
+            ),
+            residual_method=iget(
+                "CONSOLIDATION_STEP_RESIDUAL_METHOD",
+                cls.residual_method,
+            ),
+            cons_residual_units=iget(
+                "CONSOLIDATION_RESIDUAL_UNITS",
+                cls.cons_residual_units,
+            ),
+            gw_residual_units=iget(
+                "GW_RESIDUAL_UNITS",
+                cls.gw_residual_units,
+            ),
+            cons_scale_floor=iget(
+                "CONS_SCALE_FLOOR",
+                cls.cons_scale_floor,
+            ),
+            gw_scale_floor=iget(
+                "GW_SCALE_FLOOR",
+                cls.gw_scale_floor,
+            ),
+            allow_subs_residual=iget(
+                "ALLOW_SUBS_RESIDUAL",
+                cls.allow_subs_residual,
+            ),
+            dt_min_units=iget(
+                "DT_MIN_UNITS",
+                cls.dt_min_units,
+            ),
+            q_wrt_normalized_time=iget(
+                "Q_WRT_NORMALIZED_TIME",
+                cls.q_wrt_normalized_time,
+            ),
+            q_in_si=iget("Q_IN_SI", cls.q_in_si),
+            q_in_per_second=iget(
+                "Q_IN_PER_SECOND",
+                cls.q_in_per_second,
+            ),
+            q_kind=iget("Q_KIND", cls.q_kind),
+            q_length_in_si=iget(
+                "Q_LENGTH_IN_SI",
+                cls.q_length_in_si,
+            ),
+            drainage_mode=iget(
+                "DRAINAGE_MODE",
+                cls.drainage_mode,
+            ),
+            training_strategy=iget(
+                "TRAINING_STRATEGY",
+                cls.training_strategy,
+            ),
+            q_policy_physics_first=iget(
+                "Q_POLICY_PHYSICS_FIRST",
+                cls.q_policy_physics_first,
+            ),
+            q_warmup_epochs_physics_first=iget(
+                "Q_WARMUP_EPOCHS_PHYSICS_FIRST",
+                cls.q_warmup_epochs_physics_first,
+            ),
+            q_ramp_epochs_physics_first=iget(
+                "Q_RAMP_EPOCHS_PHYSICS_FIRST",
+                cls.q_ramp_epochs_physics_first,
+            ),
+            lambda_q_physics_first=iget(
+                "LAMBDA_Q_PHYSICS_FIRST",
+                cls.lambda_q_physics_first,
+            ),
+            loss_weight_gwl_physics_first=iget(
+                "LOSS_WEIGHT_GWL_PHYSICS_FIRST",
+                cls.loss_weight_gwl_physics_first,
+            ),
+            subs_resid_policy_physics_first=iget(
+                "SUBS_RESID_POLICY_PHYSICS_FIRST",
+                cls.subs_resid_policy_physics_first,
+            ),
+            subs_resid_warmup_epochs_physics_first=iget(
+                "SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST",
+                cls.subs_resid_warmup_epochs_physics_first,
+            ),
+            subs_resid_ramp_epochs_physics_first=iget(
+                "SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST",
+                cls.subs_resid_ramp_epochs_physics_first,
+            ),
+            loss_weight_gwl_data_first=iget(
+                "LOSS_WEIGHT_GWL_DATA_FIRST",
+                cls.loss_weight_gwl_data_first,
+            ),
+            lambda_q_data_first=iget(
+                "LAMBDA_Q_DATA_FIRST",
+                cls.lambda_q_data_first,
+            ),
+            q_policy_data_first=iget(
+                "Q_POLICY_DATA_FIRST",
+                cls.q_policy_data_first,
+            ),
+            q_warmup_epochs_data_first=iget(
+                "Q_WARMUP_EPOCHS_DATA_FIRST",
+                cls.q_warmup_epochs_data_first,
+            ),
+            q_ramp_epochs_data_first=iget(
+                "Q_RAMP_EPOCHS_DATA_FIRST",
+                cls.q_ramp_epochs_data_first,
+            ),
+            subs_resid_policy_data_first=iget(
+                "SUBS_RESID_POLICY_DATA_FIRST",
+                cls.subs_resid_policy_data_first,
+            ),
+            subs_resid_warmup_epochs_data_first=iget(
+                "SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST",
+                cls.subs_resid_warmup_epochs_data_first,
+            ),
+            subs_resid_ramp_epochs_data_first=iget(
+                "SUBS_RESID_RAMP_EPOCHS_DATA_FIRST",
+                cls.subs_resid_ramp_epochs_data_first,
+            ),
+            log_q_diagnostics=iget(
+                "LOG_Q_DIAGNOSTICS",
+                cls.log_q_diagnostics,
+            ),
+            track_aux_metrics=iget(
+                "TRACK_AUX_METRICS",
+                cls.track_aux_metrics,
+            ),
+            scaling_error_policy=iget(
+                "SCALING_ERROR_POLICY",
+                cls.scaling_error_policy,
+            ),
+            clip_global_norm=iget(
+                "CLIP_GLOBAL_NORM",
+                cls.clip_global_norm,
+            ),
+            eval_json_units_mode=iget(
+                "EVAL_JSON_UNITS_MODE",
+                cls.eval_json_units_mode,
+            ),
+            eval_json_units_scope=iget(
+                "EVAL_JSON_UNITS_SCOPE",
+                cls.eval_json_units_scope,
+            ),
+            scaling_kwargs_json_path=iget(
+                "SCALING_KWARGS_JSON_PATH",
+                cls.scaling_kwargs_json_path,
+            ),
+            # --- physics baseline / debug grads ---
+            physics_baseline_mode=iget(
+                "PHYSICS_BASELINE_MODE",
+                cls.physics_baseline_mode,
+            ),
+            debug_physics_grads=iget(
+                "DEBUG_PHYSICS_GRADS",
+                cls.debug_physics_grads,
+            ),
+            # --- MV prior scheduler parity ---
+            mv_prior_units=iget(
+                "MV_PRIOR_UNITS",
+                cls.mv_prior_units,
+            ),
+            mv_alpha_disp=iget(
+                "MV_ALPHA_DISP",
+                cls.mv_alpha_disp,
+            ),
+            mv_huber_delta=iget(
+                "MV_HUBER_DELTA",
+                cls.mv_huber_delta,
+            ),
+            mv_prior_mode=iget(
+                "MV_PRIOR_MODE",
+                cls.mv_prior_mode,
+            ),
+            mv_weight=iget("MV_WEIGHT", cls.mv_weight),
+            
+            mv_schedule_unit=iget(
+                "MV_SCHEDULE_UNIT",
+                cls.mv_schedule_unit,
+            ),
+            mv_delay_epochs=iget(
+                "MV_DELAY_EPOCHS",
+                cls.mv_delay_epochs,
+            ),
+            mv_warmup_epochs=iget(
+                "MV_WARMUP_EPOCHS",
+                cls.mv_warmup_epochs,
+            ),
+            mv_delay_steps=base.get(
+                "MV_DELAY_STEPS",
+                cls.mv_delay_steps,
+            ),
+            mv_warmup_steps=base.get(
+                "MV_WARMUP_STEPS",
+                cls.mv_warmup_steps,
+            ),
+
+            # --- optional: architecture defaults ---
+            model_name=iget("MODEL_NAME", cls.model_name),
+            attention_levels=base.get(
+                "ATTENTION_LEVELS",
+                cls.attention_levels,
+            ),
+            embed_dim=iget("EMBED_DIM", cls.embed_dim),
+            hidden_units=iget("HIDDEN_UNITS", cls.hidden_units),
+            lstm_units=iget("LSTM_UNITS", cls.lstm_units),
+            attention_units=iget(
+                "ATTENTION_UNITS",
+                cls.attention_units,
+            ),
+            number_heads=iget(
+                "NUMBER_HEADS",
+                cls.number_heads,
+            ),
+            dropout_rate=iget(
+                "DROPOUT_RATE",
+                cls.dropout_rate,
+            ),
+            memory_size=iget("MEMORY_SIZE", cls.memory_size),
+            scales=base.get("SCALES", cls.scales),
+            use_residuals=iget(
+                "USE_RESIDUALS",
+                cls.use_residuals,
+            ),
+            use_batch_norm=iget(
+                "USE_BATCH_NORM",
+                cls.use_batch_norm,
+            ),
+            use_vsn=iget("USE_VSN", cls.use_vsn),
+            vsn_units=iget("VSN_UNITS", cls.vsn_units),
 
             # Device configuration -------------------------------------------
             tf_device_mode=iget("TF_DEVICE_MODE", cls.tf_device_mode),
@@ -566,7 +1171,35 @@ class GeoPriorConfig:
             obj.gwl_weights,
         )
         
+        obj.dynamic_feature_names = base.get(
+            "DYNAMIC_FEATURE_NAMES",
+            obj.dynamic_feature_names,
+        )
+        obj.future_feature_names = base.get(
+            "FUTURE_FEATURE_NAMES",
+            obj.future_feature_names,
+        )
+        
+        obj.include_censor_flags_as_future = base.get(
+            "INCLUDE_CENSOR_FLAGS_AS_FUTURE",
+            obj.include_censor_flags_as_future,
+        )
+
         return obj 
+    
+    def refresh_from_nat(self) -> None:
+        """Reload NAT config without touching UI-owned fields."""
+        keep_city = self.city
+        keep_path = self.dataset_path
+        keep_root = self.results_root
+    
+        new = type(self).from_nat_config()
+    
+        self.__dict__.update(new.__dict__)
+    
+        self.city = keep_city
+        self.dataset_path = keep_path
+        self.results_root = keep_root
 
     @classmethod
     def from_defaults(cls) -> "GeoPriorConfig":
@@ -638,6 +1271,23 @@ class GeoPriorConfig:
         maybe("SUBSIDENCE_COL", self.subs_col)
         maybe("GWL_COL", self.gwl_col)
         maybe("H_FIELD_COL_NAME", self.h_field_col)
+        maybe("GWL_KIND", self.gwl_kind)
+        maybe("GWL_SIGN", self.gwl_sign)
+        maybe("USE_HEAD_PROXY", self.use_head_proxy)
+        maybe("Z_SURF_COL", self.z_surf_col)
+        maybe(
+            "INCLUDE_Z_SURF_AS_STATIC",
+            self.include_z_surf_as_static,
+        )
+        maybe("HEAD_COL", self.head_col)
+        maybe("GWL_DYN_INDEX", self.gwl_dyn_index)
+        maybe("NORMALIZE_COORDS", self.normalize_coords)
+        maybe("KEEP_COORDS_RAW", self.keep_coords_raw)
+        maybe("SHIFT_RAW_COORDS", self.shift_raw_coords)
+        maybe("SCALE_H_FIELD", self.scale_h_field)
+        maybe("SCALE_GWL", self.scale_gwl)
+        maybe("SCALE_Z_SURF", self.scale_z_surf)
+        maybe("SUBSIDENCE_KIND", self.subsidence_kind)
         
         # Training hyper-parameters
         maybe("EPOCHS", self.epochs)
@@ -651,6 +1301,32 @@ class GeoPriorConfig:
         maybe("LAMBDA_PRIOR", self.lambda_prior)
         maybe("LAMBDA_SMOOTH", self.lambda_smooth)
         maybe("LAMBDA_MV", self.lambda_mv)
+        maybe("LAMBDA_BOUNDS", self.lambda_bounds)
+        maybe("LAMBDA_Q", self.lambda_q)
+        maybe("OFFSET_MODE", self.offset_mode)
+        maybe("LAMBDA_OFFSET", self.lambda_offset)
+        maybe(
+            "USE_LAMBDA_OFFSET_SCHEDULER",
+            self.use_lambda_offset_scheduler,
+        )
+        maybe("LAMBDA_OFFSET_UNIT", self.lambda_offset_unit)
+        maybe("LAMBDA_OFFSET_WHEN", self.lambda_offset_when)
+        maybe("LAMBDA_OFFSET_WARMUP", self.lambda_offset_warmup)
+        maybe("LAMBDA_OFFSET_START", self.lambda_offset_start)
+        maybe("LAMBDA_OFFSET_END", self.lambda_offset_end)
+        maybe(
+            "LAMBDA_OFFSET_SCHEDULE",
+            self.lambda_offset_schedule,
+        )
+        maybe(
+            "PHYSICS_WARMUP_STEPS",
+            self.physics_warmup_steps,
+        )
+        maybe("PHYSICS_RAMP_STEPS", self.physics_ramp_steps)
+        maybe(
+            "SCALE_PDE_RESIDUALS",
+            self.scale_pde_residuals,
+        )
 
         # Scalar physics parameters
         maybe("MV_LR_MULT", self.mv_lr_mult)
@@ -661,6 +1337,117 @@ class GeoPriorConfig:
         maybe("GEOPRIOR_H_REF", self.geoprior_h_ref)
         maybe("GEOPRIOR_KAPPA_MODE", self.geoprior_kappa_mode)
         maybe("GEOPRIOR_HD_FACTOR", self.geoprior_hd_factor)
+        maybe("PHYSICS_BOUNDS", self.physics_bounds)
+        maybe("PHYSICS_BOUNDS_MODE", self.bounds_mode)
+        maybe("TIME_UNITS", self.time_units)
+        maybe("SUBS_UNIT_TO_SI", self.subs_unit_to_si)
+        maybe("SUBS_SCALE_SI", self.subs_scale_si)
+        maybe("SUBS_BIAS_SI", self.subs_bias_si)
+        maybe("HEAD_UNIT_TO_SI", self.head_unit_to_si)
+        maybe("HEAD_SCALE_SI", self.head_scale_si)
+        maybe("HEAD_BIAS_SI", self.head_bias_si)
+        maybe("THICKNESS_UNIT_TO_SI", self.thickness_unit_to_si)
+        maybe("Z_SURF_UNIT_TO_SI", self.z_surf_unit_to_si)
+        maybe("H_FIELD_MIN_SI", self.h_field_min_si)
+        maybe(
+            "AUTO_SI_AFFINE_FROM_STAGE1",
+            self.auto_si_affine_from_stage1,
+        )
+        maybe("COORD_MODE", self.coord_mode)
+        maybe("UTM_EPSG", self.utm_epsg)
+        maybe("COORD_SRC_EPSG", self.coord_src_epsg)
+        maybe(
+            "CONSOLIDATION_STEP_RESIDUAL_METHOD",
+            self.residual_method,
+        )
+        maybe("CONSOLIDATION_RESIDUAL_UNITS", self.cons_residual_units)
+        maybe("GW_RESIDUAL_UNITS", self.gw_residual_units)
+        maybe("CONS_SCALE_FLOOR", self.cons_scale_floor)
+        maybe("GW_SCALE_FLOOR", self.gw_scale_floor)
+        maybe("ALLOW_SUBS_RESIDUAL", self.allow_subs_residual)
+        maybe("DT_MIN_UNITS", self.dt_min_units)
+        maybe("Q_WRT_NORMALIZED_TIME", self.q_wrt_normalized_time)
+        maybe("Q_IN_SI", self.q_in_si)
+        maybe("Q_IN_PER_SECOND", self.q_in_per_second)
+        maybe("Q_KIND", self.q_kind)
+        maybe("Q_LENGTH_IN_SI", self.q_length_in_si)
+        maybe("DRAINAGE_MODE", self.drainage_mode)
+        maybe("TRAINING_STRATEGY", self.training_strategy)
+        maybe(
+            "Q_POLICY_PHYSICS_FIRST",
+            self.q_policy_physics_first,
+        )
+        maybe(
+            "Q_WARMUP_EPOCHS_PHYSICS_FIRST",
+            self.q_warmup_epochs_physics_first,
+        )
+        maybe(
+            "Q_RAMP_EPOCHS_PHYSICS_FIRST",
+            self.q_ramp_epochs_physics_first,
+        )
+        maybe(
+            "LAMBDA_Q_PHYSICS_FIRST",
+            self.lambda_q_physics_first,
+        )
+        maybe(
+            "LOSS_WEIGHT_GWL_PHYSICS_FIRST",
+            self.loss_weight_gwl_physics_first,
+        )
+        maybe(
+            "SUBS_RESID_POLICY_PHYSICS_FIRST",
+            self.subs_resid_policy_physics_first,
+        )
+        maybe(
+            "SUBS_RESID_WARMUP_EPOCHS_PHYSICS_FIRST",
+            self.subs_resid_warmup_epochs_physics_first,
+        )
+        maybe(
+            "SUBS_RESID_RAMP_EPOCHS_PHYSICS_FIRST",
+            self.subs_resid_ramp_epochs_physics_first,
+        )
+        maybe(
+            "LOSS_WEIGHT_GWL_DATA_FIRST",
+            self.loss_weight_gwl_data_first,
+        )
+        maybe(
+            "LAMBDA_Q_DATA_FIRST",
+            self.lambda_q_data_first,
+        )
+        maybe(
+            "Q_POLICY_DATA_FIRST",
+            self.q_policy_data_first,
+        )
+        maybe(
+            "Q_WARMUP_EPOCHS_DATA_FIRST",
+            self.q_warmup_epochs_data_first,
+        )
+        maybe(
+            "Q_RAMP_EPOCHS_DATA_FIRST",
+            self.q_ramp_epochs_data_first,
+        )
+        maybe(
+            "SUBS_RESID_POLICY_DATA_FIRST",
+            self.subs_resid_policy_data_first,
+        )
+        maybe(
+            "SUBS_RESID_WARMUP_EPOCHS_DATA_FIRST",
+            self.subs_resid_warmup_epochs_data_first,
+        )
+        maybe(
+            "SUBS_RESID_RAMP_EPOCHS_DATA_FIRST",
+            self.subs_resid_ramp_epochs_data_first,
+        )
+        maybe("LOG_Q_DIAGNOSTICS", self.log_q_diagnostics)
+        maybe("TRACK_AUX_METRICS", self.track_aux_metrics)
+        maybe("SCALING_ERROR_POLICY", self.scaling_error_policy)
+        maybe(
+            "SCALING_KWARGS_JSON_PATH",
+            self.scaling_kwargs_json_path,
+        )
+
+        maybe("CLIP_GLOBAL_NORM", self.clip_global_norm)
+        maybe("EVAL_JSON_UNITS_MODE", self.eval_json_units_mode)
+        maybe("EVAL_JSON_UNITS_SCOPE", self.eval_json_units_scope)
         
         # Stage-1 extras
         maybe("BUILD_FUTURE_NPZ", self.build_future_npz)
@@ -681,6 +1468,16 @@ class GeoPriorConfig:
         maybe("TF_DEVICE_MODE", self.tf_device_mode)
         maybe("TF_GPU_ALLOW_GROWTH", self.tf_gpu_allow_growth)
 
+        maybe("TF_INTRA_THREADS", self.tf_intra_threads)
+        maybe("TF_INTER_THREADS", self.tf_inter_threads)
+        maybe("TF_GPU_MEMORY_LIMIT_MB", self.tf_gpu_memory_limit_mb)
+        
+        maybe("USE_TF_SAVEDMODEL", self.use_tf_savedmodel)
+        maybe("USE_IN_MEMORY_MODEL", self.use_in_memory_model)
+        maybe("DEBUG", self.debug)
+        
+        maybe("AUDIT_STAGES", self.audit_stages)
+
         # Tuner bits
         maybe("TUNER_MAX_TRIALS", self.tuner_max_trials)
         maybe("TUNER_SEARCH_SPACE", self.tuner_search_space)
@@ -690,6 +1487,45 @@ class GeoPriorConfig:
         maybe("SUBS_WEIGHTS", self.subs_weights)
         maybe("GWL_WEIGHTS", self.gwl_weights)
         
+        maybe("PHYSICS_BASELINE_MODE", self.physics_baseline_mode)
+        maybe("DEBUG_PHYSICS_GRADS", self.debug_physics_grads)
+
+        maybe("MV_PRIOR_UNITS", self.mv_prior_units)
+        maybe("MV_ALPHA_DISP", self.mv_alpha_disp)
+        maybe("MV_HUBER_DELTA", self.mv_huber_delta)
+        maybe("MV_PRIOR_MODE", self.mv_prior_mode)
+        maybe("MV_WEIGHT", self.mv_weight)
+        
+        maybe("MV_SCHEDULE_UNIT", self.mv_schedule_unit)
+        maybe("MV_DELAY_EPOCHS", self.mv_delay_epochs)
+        maybe("MV_WARMUP_EPOCHS", self.mv_warmup_epochs)
+        maybe("MV_DELAY_STEPS", self.mv_delay_steps)
+        maybe("MV_WARMUP_STEPS", self.mv_warmup_steps)
+
+        maybe("DYNAMIC_FEATURE_NAMES", self.dynamic_feature_names)
+        maybe("FUTURE_FEATURE_NAMES", self.future_feature_names)
+        
+        maybe(
+            "INCLUDE_CENSOR_FLAGS_AS_FUTURE",
+            self.include_censor_flags_as_future,
+        )
+
+        maybe("MODEL_NAME", self.model_name)
+        maybe("ATTENTION_LEVELS", self.attention_levels)
+        maybe("EMBED_DIM", self.embed_dim)
+        maybe("HIDDEN_UNITS", self.hidden_units)
+        maybe("LSTM_UNITS", self.lstm_units)
+        maybe("ATTENTION_UNITS", self.attention_units)
+        maybe("NUMBER_HEADS", self.number_heads)
+        maybe("DROPOUT_RATE", self.dropout_rate)
+        
+        maybe("MEMORY_SIZE", self.memory_size)
+        maybe("SCALES", self.scales)
+        maybe("USE_RESIDUALS", self.use_residuals)
+        maybe("USE_BATCH_NORM", self.use_batch_norm)
+        maybe("USE_VSN", self.use_vsn)
+        maybe("VSN_UNITS", self.vsn_units)
+
         # Extra overrides coming from dialogs.
         if self.feature_overrides:
             overrides.update(self.feature_overrides)
@@ -851,6 +1687,13 @@ class GeoPriorConfig:
             )
 
         # --- Physics configuration ------------------------------------
+
+        if isinstance(self.pde_mode, (list, tuple)):
+            self.pde_mode = (
+                self.pde_mode[0]
+                if self.pde_mode
+                else "off"
+            )
         allowed_pde_modes = {
             "both",
             "on",
@@ -884,6 +1727,55 @@ class GeoPriorConfig:
                 f"MODE must be one of {sorted(allowed_modes)}, "
                 f"got {self.mode!r}."
             )
+
+
+        # --- v3.2: additional sanity checks -------------------------
+        allowed_offset_modes = {"mul", "log10"}
+        if self.offset_mode not in allowed_offset_modes:
+            raise ValueError(
+                "offset_mode must be one of "
+                f"{sorted(allowed_offset_modes)} "
+                f"(got {self.offset_mode!r})."
+            )
+
+        allowed_gwl_kind = {"depth_bgs", "head"}
+        if self.gwl_kind not in allowed_gwl_kind:
+            raise ValueError(
+                "gwl_kind must be one of "
+                f"{sorted(allowed_gwl_kind)} "
+                f"(got {self.gwl_kind!r})."
+            )
+
+        allowed_subs_kind = {"cumulative", "rate"}
+        if self.subsidence_kind not in allowed_subs_kind:
+            raise ValueError(
+                "subsidence_kind must be one of "
+                f"{sorted(allowed_subs_kind)} "
+                f"(got {self.subsidence_kind!r})."
+            )
+
+        allowed_bounds_mode = {"soft", "hard"}
+        if self.bounds_mode not in allowed_bounds_mode:
+            raise ValueError(
+                "bounds_mode must be one of "
+                f"{sorted(allowed_bounds_mode)} "
+                f"(got {self.bounds_mode!r})."
+            )
+
+        allowed_residual_method = {"exact", "fd"}
+        if self.residual_method not in allowed_residual_method:
+            raise ValueError(
+                "residual_method must be one of "
+                f"{sorted(allowed_residual_method)} "
+                f"(got {self.residual_method!r})."
+            )
+
+        if self.clip_global_norm is not None:
+            if float(self.clip_global_norm) < 0.0:
+                raise ValueError(
+                    "clip_global_norm must be >= 0 "
+                    f"(got {self.clip_global_norm!r})."
+                )
 
         # --- GUI layout sanity ----------------------------------------
         for name in (
@@ -953,11 +1845,28 @@ class GeoPriorConfig:
     def as_dict(self) -> Dict[str, Any]:
         """Dump the current values as a plain dictionary."""
         return {
+            # --------------------------------------------------------------
             # GUI / dataset
+            # --------------------------------------------------------------
             "city": self.city,
-            "dataset_path": str(self.dataset_path) if self.dataset_path else None,
+            "dataset_path": (
+                str(self.dataset_path)
+                if self.dataset_path
+                else None
+            ),
             "results_root": str(self.results_root),
-            
+    
+            # --------------------------------------------------------------
+            # Temporal window
+            # --------------------------------------------------------------
+            "train_end_year": self.train_end_year,
+            "forecast_start_year": self.forecast_start_year,
+            "forecast_horizon_years": self.forecast_horizon_years,
+            "time_steps": self.time_steps,
+    
+            # --------------------------------------------------------------
+            # Stage-1 layout & columns
+            # --------------------------------------------------------------
             "mode": self.mode,
             "time_col": self.time_col,
             "lon_col": self.lon_col,
@@ -965,54 +1874,254 @@ class GeoPriorConfig:
             "subs_col": self.subs_col,
             "gwl_col": self.gwl_col,
             "h_field_col": self.h_field_col,
-            "optional_numeric_features": self.optional_numeric_features,
-            "optional_categorical_features": self.optional_categorical_features,
-            "already_normalized_features": self.already_normalized_features,
+    
+            # v3.2: GWL/head conventions
+            "gwl_kind": self.gwl_kind,
+            "gwl_sign": self.gwl_sign,
+            "use_head_proxy": self.use_head_proxy,
+            "z_surf_col": self.z_surf_col,
+            "include_z_surf_as_static": (
+                self.include_z_surf_as_static
+            ),
+            "head_col": self.head_col,
+            "gwl_dyn_index": self.gwl_dyn_index,
+    
+            # Stage-1 scaling controls
+            "normalize_coords": self.normalize_coords,
+            "keep_coords_raw": self.keep_coords_raw,
+            "shift_raw_coords": self.shift_raw_coords,
+            "scale_h_field": self.scale_h_field,
+            "scale_gwl": self.scale_gwl,
+            "scale_z_surf": self.scale_z_surf,
+            "subsidence_kind": self.subsidence_kind,
+    
+            # --------------------------------------------------------------
+            # Feature registry & censoring (Stage-1)
+            # --------------------------------------------------------------
+            "optional_numeric_features": (
+                self.optional_numeric_features
+            ),
+            "optional_categorical_features": (
+                self.optional_categorical_features
+            ),
+            "already_normalized_features": (
+                self.already_normalized_features
+            ),
+            "dynamic_driver_features": self.dynamic_driver_features,
+            "static_driver_features": self.static_driver_features,
             "future_driver_features": self.future_driver_features,
             "censoring_specs": self.censoring_specs,
             "include_censor_flags_as_dynamic": (
                 self.include_censor_flags_as_dynamic
             ),
             "use_effective_h_field": self.use_effective_h_field,
-
-            # Temporal window
-            "train_end_year": self.train_end_year,
-            "forecast_start_year": self.forecast_start_year,
-            "forecast_horizon_years": self.forecast_horizon_years,
-            "time_steps": self.time_steps,
+            "dynamic_feature_names": self.dynamic_feature_names,
+            "future_feature_names": self.future_feature_names,
+            "include_censor_flags_as_future": (
+                self.include_censor_flags_as_future
+            ),
+    
+            # --------------------------------------------------------------
             # Training hyper-params
+            # --------------------------------------------------------------
             "epochs": self.epochs,
             "batch_size": self.batch_size,
             "learning_rate": self.learning_rate,
-            # Physics configuration
+    
+            # --------------------------------------------------------------
+            # Physics configuration (Stage-2)
+            # --------------------------------------------------------------
             "pde_mode": self.pde_mode,
+            "physics_warmup_steps": self.physics_warmup_steps,
+            "physics_ramp_steps": self.physics_ramp_steps,
+            "scale_pde_residuals": self.scale_pde_residuals,
+    
             "lambda_cons": self.lambda_cons,
             "lambda_gw": self.lambda_gw,
             "lambda_prior": self.lambda_prior,
             "lambda_smooth": self.lambda_smooth,
             "lambda_mv": self.lambda_mv,
+            "lambda_bounds": self.lambda_bounds,
+            "lambda_q": self.lambda_q,
+    
+            "offset_mode": self.offset_mode,
+            "lambda_offset": self.lambda_offset,
+            "use_lambda_offset_scheduler": (
+                self.use_lambda_offset_scheduler
+            ),
+            "lambda_offset_unit": self.lambda_offset_unit,
+            "lambda_offset_when": self.lambda_offset_when,
+            "lambda_offset_warmup": self.lambda_offset_warmup,
+            "lambda_offset_start": self.lambda_offset_start,
+            "lambda_offset_end": self.lambda_offset_end,
+            "lambda_offset_schedule": self.lambda_offset_schedule,
+    
             "mv_lr_mult": self.mv_lr_mult,
             "kappa_lr_mult": self.kappa_lr_mult,
+    
             "geoprior_init_mv": self.geoprior_init_mv,
             "geoprior_init_kappa": self.geoprior_init_kappa,
             "geoprior_gamma_w": self.geoprior_gamma_w,
             "geoprior_h_ref": self.geoprior_h_ref,
             "geoprior_kappa_mode": self.geoprior_kappa_mode,
             "geoprior_hd_factor": self.geoprior_hd_factor,
+    
+            # bounds / units / residual scaling / source term controls
+            "physics_bounds": self.physics_bounds,
+            "bounds_mode": self.bounds_mode,
+            "time_units": self.time_units,
+    
+            "subs_unit_to_si": self.subs_unit_to_si,
+            "subs_scale_si": self.subs_scale_si,
+            "subs_bias_si": self.subs_bias_si,
+            "head_unit_to_si": self.head_unit_to_si,
+            "head_scale_si": self.head_scale_si,
+            "head_bias_si": self.head_bias_si,
+            "thickness_unit_to_si": self.thickness_unit_to_si,
+            "z_surf_unit_to_si": self.z_surf_unit_to_si,
+            "h_field_min_si": self.h_field_min_si,
+            "auto_si_affine_from_stage1": (
+                self.auto_si_affine_from_stage1
+            ),
+    
+            "coord_mode": self.coord_mode,
+            "utm_epsg": self.utm_epsg,
+            "coord_src_epsg": self.coord_src_epsg,
+    
+            "residual_method": self.residual_method,
+            "cons_residual_units": self.cons_residual_units,
+            "gw_residual_units": self.gw_residual_units,
+            "cons_scale_floor": self.cons_scale_floor,
+            "gw_scale_floor": self.gw_scale_floor,
+            "allow_subs_residual": self.allow_subs_residual,
+            "dt_min_units": self.dt_min_units,
+    
+            "q_wrt_normalized_time": self.q_wrt_normalized_time,
+            "q_in_si": self.q_in_si,
+            "q_in_per_second": self.q_in_per_second,
+            "q_kind": self.q_kind,
+            "q_length_in_si": self.q_length_in_si,
+            "drainage_mode": self.drainage_mode,
+    
+            "training_strategy": self.training_strategy,
+            "q_policy_physics_first": self.q_policy_physics_first,
+            "q_warmup_epochs_physics_first": (
+                self.q_warmup_epochs_physics_first
+            ),
+            "q_ramp_epochs_physics_first": (
+                self.q_ramp_epochs_physics_first
+            ),
+            "lambda_q_physics_first": self.lambda_q_physics_first,
+            "loss_weight_gwl_physics_first": (
+                self.loss_weight_gwl_physics_first
+            ),
+            "subs_resid_policy_physics_first": (
+                self.subs_resid_policy_physics_first
+            ),
+            "subs_resid_warmup_epochs_physics_first": (
+                self.subs_resid_warmup_epochs_physics_first
+            ),
+            "subs_resid_ramp_epochs_physics_first": (
+                self.subs_resid_ramp_epochs_physics_first
+            ),
+            "loss_weight_gwl_data_first": (
+                self.loss_weight_gwl_data_first
+            ),
+            "lambda_q_data_first": self.lambda_q_data_first,
+            "q_policy_data_first": self.q_policy_data_first,
+            "q_warmup_epochs_data_first": (
+                self.q_warmup_epochs_data_first
+            ),
+            "q_ramp_epochs_data_first": (
+                self.q_ramp_epochs_data_first
+            ),
+            "subs_resid_policy_data_first": (
+                self.subs_resid_policy_data_first
+            ),
+            "subs_resid_warmup_epochs_data_first": (
+                self.subs_resid_warmup_epochs_data_first
+            ),
+            "subs_resid_ramp_epochs_data_first": (
+                self.subs_resid_ramp_epochs_data_first
+            ),
+            "log_q_diagnostics": self.log_q_diagnostics,
+            "track_aux_metrics": self.track_aux_metrics,
+    
+            "physics_baseline_mode": self.physics_baseline_mode,
+            "debug_physics_grads": self.debug_physics_grads,
+    
+            "mv_prior_units": self.mv_prior_units,
+            "mv_alpha_disp": self.mv_alpha_disp,
+            "mv_huber_delta": self.mv_huber_delta,
+            "mv_prior_mode": self.mv_prior_mode,
+            "mv_weight": self.mv_weight,
+    
+            "mv_schedule_unit": self.mv_schedule_unit,
+            "mv_delay_epochs": self.mv_delay_epochs,
+            "mv_warmup_epochs": self.mv_warmup_epochs,
+            "mv_delay_steps": self.mv_delay_steps,
+            "mv_warmup_steps": self.mv_warmup_steps,
+    
+            "geoprior_use_effective_h": self.geoprior_use_effective_h,
+    
+            "scaling_error_policy": self.scaling_error_policy,
+            "clip_global_norm": self.clip_global_norm,
+    
+            "eval_json_units_mode": self.eval_json_units_mode,
+            "eval_json_units_scope": self.eval_json_units_scope,
+            "scaling_kwargs_json_path": self.scaling_kwargs_json_path,
+    
+            # Probabilistic outputs & weights
+            "quantiles": self.quantiles,
+            "subs_weights": self.subs_weights,
+            "gwl_weights": self.gwl_weights,
+    
+            # Stage-1 helper output
             "build_future_npz": self.build_future_npz,
-            # Device configuration
+    
+            # --------------------------------------------------------------
+            # Device / runtime
+            # --------------------------------------------------------------
             "tf_device_mode": self.tf_device_mode,
             "tf_gpu_allow_growth": self.tf_gpu_allow_growth,
-            # Stage-1 / evaluation flags
+            "tf_intra_threads": self.tf_intra_threads,
+            "tf_inter_threads": self.tf_inter_threads,
+            "tf_gpu_memory_limit_mb": self.tf_gpu_memory_limit_mb,
+            "use_tf_savedmodel": self.use_tf_savedmodel,
+            "use_in_memory_model": self.use_in_memory_model,
+            "debug": self.debug,
+            "audit_stages": self.audit_stages,
+    
+            # --------------------------------------------------------------
+            # Architecture defaults
+            # --------------------------------------------------------------
+            "model_name": self.model_name,
+            "attention_levels": self.attention_levels,
+            "embed_dim": self.embed_dim,
+            "hidden_units": self.hidden_units,
+            "lstm_units": self.lstm_units,
+            "attention_units": self.attention_units,
+            "number_heads": self.number_heads,
+            "dropout_rate": self.dropout_rate,
+            "memory_size": self.memory_size,
+            "scales": self.scales,
+            "use_residuals": self.use_residuals,
+            "use_batch_norm": self.use_batch_norm,
+            "use_vsn": self.use_vsn,
+            "vsn_units": self.vsn_units,
+    
+            # --------------------------------------------------------------
+            # GUI-only flags
+            # --------------------------------------------------------------
+            "evaluate_training": self.evaluate_training,
             "clean_stage1_dir": self.clean_stage1_dir,
-            "stage1_auto_reuse_if_match": self.stage1_auto_reuse_if_match,
+            "stage1_auto_reuse_if_match": (
+                self.stage1_auto_reuse_if_match
+            ),
             "stage1_force_rebuild_if_mismatch": (
                 self.stage1_force_rebuild_if_mismatch
             ),
-            "evaluate_training": self.evaluate_training,
-            # Tuner bits
-            "tuner_max_trials": self.tuner_max_trials,
-            "tuner_search_space": self.tuner_search_space,
+    
             # GUI layout
             "ui_base_width": self.ui_base_width,
             "ui_base_height": self.ui_base_height,
@@ -1020,4 +2129,19 @@ class GeoPriorConfig:
             "ui_min_height": self.ui_min_height,
             "ui_max_ratio": self.ui_max_ratio,
             "ui_font_scale": self.ui_font_scale,
+    
+            # --------------------------------------------------------------
+            # Tuner
+            # --------------------------------------------------------------
+            "tuner_max_trials": self.tuner_max_trials,
+            "tuner_search_space": self.tuner_search_space,
+    
+            # --------------------------------------------------------------
+            # Dialog override buckets (GUI)
+            # --------------------------------------------------------------
+            "feature_overrides": self.feature_overrides,
+            "arch_overrides": self.arch_overrides,
+            "prob_overrides": self.prob_overrides,
         }
+
+        

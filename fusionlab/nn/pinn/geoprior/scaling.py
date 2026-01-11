@@ -6,8 +6,11 @@ r"""GeoPrior scaling config helpers (Keras-serializable)."""
 
 from __future__ import annotations
 
+from typing import Any, Callable, Optional, Sequence
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+import json
+import os
 
 import numpy as np
 
@@ -22,7 +25,6 @@ from .utils import (
 
 K = KERAS_DEPS
 register_keras_serializable = K.register_keras_serializable
-
 
 DEP_MSG = dependency_message("nn.pinn.geoprior.scaling")
 logger = fusionlog().get_fusionlab_logger(__name__)
@@ -528,8 +530,297 @@ class GeoPriorScalingConfig:
         )
         return cls(**config)
 
+def _deep_update(base: dict, over: dict) -> dict:
+    """
+    Deep-merge nested dicts.
+
+    Override wins. Update is in-place; returns `base`.
+    """
+    if not over:
+        return base
+    for k, v in over.items():
+        is_d = isinstance(v, dict)
+        is_b = isinstance(base.get(k), dict)
+        if is_d and is_b:
+            _deep_update(base[k], v)
+        else:
+            base[k] = v
+    return base
 
 
+def _resolve_json_path(
+    path: str,
+    base_dir: Optional[str],
+) -> str:
+    """
+    Resolve a JSON path.
+
+    Expands env vars and `~`. Relative paths are
+    resolved against `base_dir` (or CWD).
+    """
+    p = os.path.expandvars(os.path.expanduser(str(path)))
+    if os.path.isabs(p):
+        return p
+    b = base_dir or os.getcwd()
+    return os.path.abspath(os.path.join(b, p))
+
+
+def override_scaling_kwargs(
+    sk: Mapping[str, Any],
+    cfg: Optional[Mapping[str, Any]],
+    *,
+    finalize: Optional[Callable[[dict], dict]] = None,
+    dyn_names: Optional[Sequence[str]] = None,
+    gwl_dyn_index: Optional[int] = None,
+    base_dir: Optional[str] = None,
+    path_key: str = "SCALING_KWARGS_JSON_PATH",
+    strict: bool = True,
+    add_path: bool = True,
+    log_fn: Optional[Callable[[str], Any]] = None,
+) -> dict:
+    r"""
+    Override ``scaling_kwargs`` from a JSON file or dict.
+    
+    This helper applies an optional, precedence-based override to
+    an existing ``scaling_kwargs`` mapping. The override source is
+    read from ``cfg[path_key]``. If the key is missing or empty, the
+    input ``sk`` is returned (optionally finalized).
+    
+    The override can be provided as:
+    
+    - a file path to a JSON object (mapping), or
+    - a Python dict-like mapping embedded in ``cfg``.
+    
+    Overrides are applied via a deep-merge strategy:
+    
+    - for nested dict values, keys are merged recursively,
+    - for non-dict values, the override replaces the base value.
+    
+    Optionally, the merged result is passed through ``finalize`` to
+    recompute derived or canonical fields (for example, coordinate
+    ranges, unit flags, or other normalization metadata).
+    
+    Parameters
+    ----------
+    sk : Mapping[str, Any]
+        Base scaling configuration (``scaling_kwargs``). This is
+        typically computed by Stage-2 or loaded from Stage-1 output.
+        The input is copied to a plain ``dict`` before modification.
+    
+    cfg : Mapping[str, Any] or None
+        Configuration mapping that may contain the override source
+        under ``path_key``. If ``None``, no override is applied.
+    
+    finalize : callable or None, optional
+        Function applied to the scaling dict to enforce canonical
+        structure or to compute derived fields. If provided, it is
+        applied before and after the override merge:
+    
+        - pre-merge: normalize the base dict,
+        - post-merge: ensure the merged dict is consistent.
+    
+        The callable must accept a dict and return a dict.
+    
+    dyn_names : Sequence[str] or None, optional
+        Expected dynamic feature names for safety validation. If
+        provided and the override contains ``dynamic_feature_names``,
+        the two sequences are compared. A mismatch raises an error
+        when ``strict=True``.
+    
+    gwl_dyn_index : int or None, optional
+        Expected dynamic index for the groundwater-level feature.
+        If provided and the override contains ``gwl_dyn_index``, the
+        values are compared. A mismatch raises an error when
+        ``strict=True``.
+    
+    base_dir : str or None, optional
+        Base directory used to resolve relative JSON paths. If
+        ``None``, the current working directory is used.
+    
+    path_key : str, default="SCALING_KWARGS_JSON_PATH"
+        Name of the key in ``cfg`` that specifies the override. The
+        value may be a dict-like mapping or a path to a JSON file.
+    
+    strict : bool, default=True
+        Controls behavior on safety-check mismatches. When ``True``,
+        mismatches raise a ``ValueError``. When ``False``, mismatches
+        can be logged via ``log_fn`` and the override still proceeds.
+    
+    add_path : bool, default=True
+        If ``True``, store the resolved override source in the output
+        dict under ``scaling_kwargs_override_path``. When the override
+        is provided as a mapping (not a file), the value is set to
+        ``"<dict>"``.
+    
+    log_fn : callable or None, optional
+        Optional logger function. If provided, it is called with
+        informative messages such as successful override application
+        and (when ``strict=False``) mismatch warnings. Common choices
+        are ``print`` or ``logger.info``.
+    
+    Returns
+    -------
+    out : dict
+        Final scaling dict after optional override and optional
+        finalization. The returned dict is independent from the input
+        mapping object ``sk`` (a copy is always created).
+    
+    Raises
+    ------
+    FileNotFoundError
+        If ``cfg[path_key]`` is a path and the file does not exist.
+    
+    ValueError
+        If a path is provided but the file does not contain valid
+        JSON, or if a safety check fails while ``strict=True``.
+    
+    TypeError
+        If the loaded override is not a JSON object (dict-like).
+    
+    Notes
+    -----
+    Path resolution
+        When ``cfg[path_key]`` is a string path, it is resolved as:
+    
+        1. Expand environment variables and ``~``.
+        2. If relative, join with ``base_dir`` (or CWD).
+    
+    Safety checks
+        The checks are intentionally conservative. They prevent using
+        an override file produced for a different dataset or feature
+        layout. Recommended checks are:
+    
+        - ``dynamic_feature_names`` equality when known.
+        - ``gwl_dyn_index`` equality when known.
+    
+        You can extend validation by checking additional keys such as
+        ``coord_epsg_used``, ``coords_normalized``, or unit flags.
+    
+    Finalization
+        In GeoPrior pipelines, ``finalize`` is typically a helper that
+        enforces defaults and recomputes derived entries. Applying it
+        both before and after the override helps reduce edge cases
+        where the override only supplies partial information.
+    
+    Examples
+    --------
+    Stage-2: override computed scaling with a file
+        In Stage-2, call this right after the auto-computed scaling
+        is available, so the override takes precedence:
+    
+        >>> sk = subsmodel_params["scaling_kwargs"]
+        >>> sk = override_scaling_kwargs(
+        ...     sk,
+        ...     cfg,
+        ...     finalize=finalize_scaling_kwargs,
+        ...     dyn_names=DYN_NAMES,
+        ...     gwl_dyn_index=GWL_DYN_INDEX,
+        ...     base_dir=os.path.dirname(__file__),
+        ...     strict=True,
+        ...     log_fn=print,
+        ... )
+        >>> subsmodel_params["scaling_kwargs"] = sk
+    
+    Stage-3: override Stage-1 scaling prior to enforcing bounds
+        In Stage-3, apply the override before injecting Stage-3 bounds:
+    
+        >>> sk_model = dict(cfg.get("scaling_kwargs", {}) or {})
+        >>> sk_model = override_scaling_kwargs(
+        ...     sk_model,
+        ...     cfg,
+        ...     dyn_names=sk_model.get("dynamic_feature_names"),
+        ...     gwl_dyn_index=sk_model.get("gwl_dyn_index"),
+        ...     base_dir=os.path.dirname(__file__),
+        ... )
+        >>> sk_model["bounds"] = {
+        ...     **(sk_model.get("bounds", {}) or {}),
+        ...     **bounds_for_scaling,
+        ... }
+    
+    Inline dict override (no JSON file)
+        If the override is embedded in config, it is used directly:
+    
+        >>> cfg = {
+        ...     "SCALING_KWARGS_JSON_PATH": {
+        ...         "coords_normalized": True,
+        ...         "coord_ranges": {"t": 7.0, "x": 1000.0, "y": 900.0},
+        ...     }
+        ... }
+        >>> out = override_scaling_kwargs({}, cfg)
+    
+    See Also
+    --------
+    finalize_scaling_kwargs :
+        Canonicalize and complete ``scaling_kwargs`` entries.
+    compute_scaling_kwargs :
+        Build a base scaling dict from data and pipeline settings.
+    
+    References
+    ----------
+    .. [1] Hunter, J. D. (2007). Matplotlib: A 2D graphics
+       environment. Computing in Science and Engineering, 9(3),
+       90-95.
+    """
+
+    base = dict(sk) if sk is not None else {}
+    if finalize is not None:
+        base = finalize(base)
+
+    cfg = cfg or {}
+    raw = cfg.get(path_key, None)
+    if raw in (None, "", False):
+        return base
+
+    if isinstance(raw, Mapping):
+        over = dict(raw)
+        over_path = "<dict>"
+    else:
+        over_path = _resolve_json_path(str(raw), base_dir)
+        if not os.path.isfile(over_path):
+            raise FileNotFoundError(
+                f"{path_key} not found: {over_path}"
+            )
+        try:
+            with open(over_path, "r", encoding="utf-8") as f:
+                over = json.load(f)
+        except Exception as e:
+            raise ValueError(
+                f"Invalid JSON: {over_path}"
+            ) from e
+
+    if not isinstance(over, dict):
+        raise TypeError("Override must be a JSON object.")
+
+    if dyn_names and "dynamic_feature_names" in over:
+        names = list(over["dynamic_feature_names"])
+        if names != list(dyn_names):
+            msg = "Override mismatch: dynamic_feature_names."
+            if strict:
+                raise ValueError(msg)
+            if log_fn:
+                log_fn(msg)
+
+    if gwl_dyn_index is not None and "gwl_dyn_index" in over:
+        ov = int(over["gwl_dyn_index"])
+        if ov != int(gwl_dyn_index):
+            msg = "Override mismatch: gwl_dyn_index."
+            if strict:
+                raise ValueError(msg)
+            if log_fn:
+                log_fn(msg)
+
+    out = _deep_update(base, over)
+
+    if finalize is not None:
+        out = finalize(out)
+
+    if add_path:
+        out["scaling_kwargs_override_path"] = over_path
+
+    if log_fn:
+        log_fn(f"[INFO] scaling_kwargs override: {over_path}")
+
+    return out
 
 
 

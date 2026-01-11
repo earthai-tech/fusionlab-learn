@@ -266,7 +266,6 @@ class GeoPriorSubsNet(BaseAttentive):
         verbose: int = 0, 
         **kwargs
     ):
-        
         self._output_keys = list(self.OUTPUT_KEYS)
         
         self.output_subsidence_dim = output_subsidence_dim

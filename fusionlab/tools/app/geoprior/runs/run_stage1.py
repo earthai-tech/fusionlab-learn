@@ -35,9 +35,23 @@ from .....utils.generic_utils import (
     ensure_directory_exists,
     print_config_table,
 )
+from ....utils.audit_utils import (
+    audit_stage1_scaling,
+    should_audit,
+)
+
+from ....utils.spatial_utils import deg_to_m_from_lat
+from ....utils.subsidence_utils import (
+    cumulative_to_rate,
+    make_txy_coords,
+    normalize_gwl_alias,
+    rate_to_cumulative,
+    resolve_gwl_for_physics,
+    resolve_head_column,
+)
+
 from .....utils.sequence_utils import build_future_sequences_npz
 from .....nn.pinn.utils import prepare_pinn_data_sequences
-
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -525,6 +539,54 @@ def run_stage1(
     GWL_COL          = cfg["GWL_COL"]
     H_FIELD_COL_NAME = cfg["H_FIELD_COL_NAME"]
 
+    # --- v3.2 hydro/geometry columns ---
+    Z_SURF_COL = cfg.get("Z_SURF_COL", None)
+    HEAD_COL = cfg.get("HEAD_COL", None)
+    USE_HEAD_PROXY = bool(cfg.get("USE_HEAD_PROXY", True))
+    
+    GWL_KIND = str(cfg.get("GWL_KIND", "depth_bgs")).strip().lower()
+    GWL_SIGN = cfg.get("GWL_SIGN", None)
+    
+    # --- v3.2 units -> SI (meters) ---
+    SUBS_UNIT_TO_SI = float(cfg.get("SUBS_UNIT_TO_SI", 1.0))
+    HEAD_UNIT_TO_SI = float(cfg.get("HEAD_UNIT_TO_SI", 1.0))
+    THICKNESS_UNIT_TO_SI = float(cfg.get("THICKNESS_UNIT_TO_SI", 1.0))
+    Z_SURF_UNIT_TO_SI = float(cfg.get("Z_SURF_UNIT_TO_SI", 1.0))
+    H_MIN_SI = float(cfg.get("H_MIN_SI", 1.0))
+    
+    # --- v3.2 behavior toggles ---
+    SUBSIDENCE_KIND = str(
+        cfg.get("SUBSIDENCE_KIND", "cumulative")
+    ).strip().lower()
+    
+    ALLOW_SUBS_RESIDUAL = bool(cfg.get("ALLOW_SUBS_RESIDUAL", True))
+    INCLUDE_Z_SURF_AS_STATIC = bool(
+        cfg.get("INCLUDE_Z_SURF_AS_STATIC", True)
+    )
+    INCLUDE_SUBS_HIST_DYNAMIC = bool(
+        cfg.get("INCLUDE_SUBS_HIST_DYNAMIC", True)
+    )
+    
+    # --- v3.2 coordinate handling ---
+    COORD_MODE = str(cfg.get("COORD_MODE", "degrees")).strip().lower()
+    COORD_SRC_EPSG = int(cfg.get("COORD_SRC_EPSG", 4326))
+    COORD_TARGET_EPSG = int(cfg.get("COORD_TARGET_EPSG", 32649))
+    COORD_X_COL = str(cfg.get("COORD_X_COL", "x_m"))
+    COORD_Y_COL = str(cfg.get("COORD_Y_COL", "y_m"))
+    
+    NORMALIZE_COORDS = bool(cfg.get("NORMALIZE_COORDS", True))
+    KEEP_COORDS_RAW = bool(cfg.get("KEEP_COORDS_RAW", not NORMALIZE_COORDS))
+    
+    if "NORMALIZE_COORDS" in cfg:
+        KEEP_COORDS_RAW = not bool(cfg.get("NORMALIZE_COORDS", True))
+    else:
+        NORMALIZE_COORDS = not KEEP_COORDS_RAW
+
+    SHIFT_RAW_COORDS = bool(cfg.get("SHIFT_RAW_COORDS", True))
+    
+    AUDIT_STAGES = cfg.get("AUDIT_STAGES", []) or []
+
+
     OPTIONAL_NUMERIC_FEATURES = (
         cfg.get("OPTIONAL_NUMERIC_FEATURES_REGISTRY")
         or cfg.get("OPTIONAL_NUMERIC_FEATURES")
@@ -555,11 +617,91 @@ def run_stage1(
             "INCLUDE_CENSOR_FLAGS_AS_DYNAMIC", True)
             )
     )
+    # --- v3.2 censor flags ---
+    INCLUDE_CENSOR_FLAGS_AS_FUTURE = bool(
+        _censor_cfg.get(
+            "flags_as_future",
+            cfg.get("INCLUDE_CENSOR_FLAGS_AS_FUTURE", True),
+        )
+    )
+    
     USE_EFFECTIVE_H_FIELD = bool(
         _censor_cfg.get("use_effective_h_field", cfg.get(
             "USE_EFFECTIVE_H_FIELD", True)
             )
     )
+    TRACK_AUX_METRICS = bool(cfg.get("TRACK_AUX_METRICS", True))
+
+    CONSOLIDATION_RESIDUAL_UNITS = str(
+        cfg.get("CONSOLIDATION_RESIDUAL_UNITS", "second")
+    )
+    GW_RESIDUAL_UNITS = str(cfg.get("GW_RESIDUAL_UNITS", "time_unit"))
+    CLIP_GLOBAL_NORM = float(cfg.get("CLIP_GLOBAL_NORM", 5.0))
+    
+    CONS_SCALE_FLOOR = cfg.get("CONS_SCALE_FLOOR", 1e-5)
+    GW_SCALE_FLOOR = cfg.get("GW_SCALE_FLOOR", 1e-5)
+    DT_MIN_UNITS = float(cfg.get("DT_MIN_UNITS", 1e-6))
+    
+    Q_WRT_NORMALIZED_TIME = bool(cfg.get("Q_WRT_NORMALIZED_TIME", False))
+    Q_IN_SI = bool(cfg.get("Q_IN_SI", False))
+    Q_IN_PER_SECOND = bool(cfg.get("Q_IN_PER_SECOND", False))
+    Q_KIND = str(cfg.get("Q_kind", "per_volume"))
+    Q_LENGTH_IN_SI = bool(cfg.get("Q_length_in_si", False))
+    DRAINAGE_MODE = str(cfg.get("DRAINAGE_MODE", "double"))
+    
+    SCALING_ERROR_POLICY = str(cfg.get("SCALING_ERROR_POLICY", "warn"))
+    DEBUG_PHYSICS_GRADS = bool(cfg.get("DEBUG_PHYSICS_GRADS", False))
+    
+    CONS_DRAWDOWN_MODE = str(
+        cfg.get("CONS_DRAWDOWN_MODE", "smooth_relu")
+    ).lower()
+    CONS_DRAWDOWN_RULE = str(
+        cfg.get("CONS_DRAWDOWN_RULE", "ref_minus_mean")
+    ).lower()
+    
+    CONS_STOP_GRAD_REF = bool(cfg.get("CONS_STOP_GRAD_REF", True))
+    CONS_DRAWDOWN_ZERO_AT_ORIGIN = bool(
+        cfg.get("CONS_DRAWDOWN_ZERO_AT_ORIGIN", False)
+    )
+    CONS_RELU_BETA = float(cfg.get("CONS_RELU_BETA", 20.0))
+    
+    _cons_clip = cfg.get("CONS_DRAWDOWN_CLIP_MAX", None)
+    if _cons_clip is None:
+        CONS_DRAWDOWN_CLIP_MAX = None
+    else:
+        try:
+            CONS_DRAWDOWN_CLIP_MAX = float(_cons_clip)
+        except Exception:
+            CONS_DRAWDOWN_CLIP_MAX = None
+    
+    MV_PRIOR_UNITS = str(cfg.get("MV_PRIOR_UNITS", "auto"))
+    MV_ALPHA_DISP = float(cfg.get("MV_ALPHA_DISP", 0.1))
+    MV_HUBER_DELTA = float(cfg.get("MV_HUBER_DELTA", 1.0))
+    MV_PRIOR_MODE = str(cfg.get("MV_PRIOR_MODE", "calibrate"))
+    MV_WEIGHT = float(cfg.get("MV_WEIGHT", 1e-3))
+    
+    MV_SCHEDULE_UNIT = str(
+        cfg.get("MV_SCHEDULE_UNIT", "epoch")
+    ).strip().lower()
+    
+    MV_DELAY_EPOCHS = int(cfg.get("MV_DELAY_EPOCHS", 1))
+    MV_WARMUP_EPOCHS = int(cfg.get("MV_WARMUP_EPOCHS", 2))
+    
+    MV_DELAY_STEPS = cfg.get("MV_DELAY_STEPS", None)
+    MV_WARMUP_STEPS = cfg.get("MV_WARMUP_STEPS", None)
+    
+    if MV_SCHEDULE_UNIT not in ("epoch", "step"):
+        raise ValueError(
+            "MV_SCHEDULE_UNIT must be 'epoch' or 'step'."
+        )
+    
+    if MV_SCHEDULE_UNIT == "step" and MV_WARMUP_STEPS is None:
+        MV_WARMUP_STEPS = 4780 * 2
+    if MV_SCHEDULE_UNIT == "step" and MV_DELAY_STEPS is None:
+        MV_DELAY_STEPS = 0
+    
+    TIME_UNITS = str(cfg.get("TIME_UNITS", "year"))
+
 
     BASE_OUTPUT_DIR = base_output_dir
     ensure_directory_exists(BASE_OUTPUT_DIR)
@@ -711,6 +853,55 @@ def run_stage1(
     df_raw.to_csv(raw_csv, index=False)
     log(f"  Saved: {raw_csv}")
 
+    df_raw, GWL_COL = normalize_gwl_alias(
+        df_raw,
+        GWL_COL,
+        prefer_depth_bgs=True,
+    )
+    
+    if SUBSIDENCE_COL not in df_raw.columns:
+        if SUBSIDENCE_COL.endswith("_cum") and (
+            "subsidence" in df_raw.columns
+        ):
+            df_raw = rate_to_cumulative(
+                df_raw,
+                rate_col="subsidence",
+                cum_col=SUBSIDENCE_COL,
+                time_col=TIME_COL,
+                group_cols=(LON_COL, LAT_COL, "city"),
+                initial="first_equals_rate_dt",
+                inplace=False,
+            )
+            log(
+                f"  [Subs] Built cumulative '{SUBSIDENCE_COL}' "
+                "from 'subsidence'."
+            )
+        elif (SUBSIDENCE_COL == "subsidence") and (
+            "subsidence_cum" in df_raw.columns
+        ):
+            df_raw = cumulative_to_rate(
+                df_raw,
+                cum_col="subsidence_cum",
+                rate_col="subsidence",
+                time_col=TIME_COL,
+                group_cols=(LON_COL, LAT_COL, "city"),
+                first="cum_over_dtref",
+                inplace=False,
+            )
+            log("  [Subs] Built rate 'subsidence' from 'subsidence_cum'.")
+        else:
+            raise ValueError(
+                f"SUBSIDENCE_COL={SUBSIDENCE_COL!r} not in df and no "
+                "convertible alternative was found."
+            )
+
+    
+    # Resolve optional future features (tuples / alternatives)
+    FUTURE_DRIVER_FEATURES, _ = _resolve_optional_columns(
+        df_raw,
+        FUTURE_DRIVER_FEATURES,
+    )
+
     _maybe_stop("before preprocessing")
     # ===================== STEP 2: PREPROCESS =====================
     log(f"\n{'='*18} Step 2: Initial Preprocessing {'='*18}")
@@ -721,14 +912,102 @@ def run_stage1(
     opt_cat_cols, opt_cat_map = _resolve_optional_columns(
         df_raw, OPTIONAL_CATEGORICAL_FEATURES
     )
-
+    
+    GWL_METERS_COL, GWL_ZSCORE_COL = resolve_gwl_for_physics(
+        df_raw,
+        gwl_col_user=GWL_COL,
+        prefer_depth_bgs=True,
+        allow_keep_zscore_as_ml=True,
+    )
+    
+    GWL_DEPTH_COL = GWL_METERS_COL
+    
+    HEAD_SRC_COL, Z_SURF_COL_USED = resolve_head_column(
+        df_raw,
+        depth_col=GWL_DEPTH_COL,
+        head_col=HEAD_COL,
+        z_surf_col=Z_SURF_COL,
+        use_head_proxy=bool(USE_HEAD_PROXY),
+    )
+    
+    _pde_mode = str(cfg.get("PDE_MODE_CONFIG", "off")).strip().lower()
+    _physics_requested = _pde_mode not in ("off", "none", "no", "0")
+    
+    if (GWL_METERS_COL is None) and _physics_requested:
+        log(
+            "  [Warn] No groundwater-level column in meters resolved. "
+            "Disabling physics (PDE_MODE_CONFIG='off') for this run."
+        )
+        cfg["PDE_MODE_CONFIG"] = "off"
+        _physics_requested = False
+    
+    if GWL_METERS_COL is None:
+        if (GWL_ZSCORE_COL is not None) and (GWL_ZSCORE_COL in df_raw.columns):
+            GWL_METERS_COL = GWL_ZSCORE_COL
+        elif (GWL_COL is not None) and (GWL_COL in df_raw.columns):
+            GWL_METERS_COL = GWL_COL
+        else:
+            raise ValueError(
+                "No usable groundwater column found. Provide at least "
+                f"one of: {GWL_COL!r}, {GWL_ZSCORE_COL!r}, or meters GWL."
+            )
+    
+    if H_FIELD_COL_NAME not in df_raw.columns:
+        _thick_candidates = [
+            "soil_thickness_eff",
+            "soil_thickness_imputed",
+            "soil_thickness",
+            "H_field",
+            "soil_thickness_m",
+        ]
+        _found = next(
+            (c for c in _thick_candidates if c in df_raw.columns),
+            None,
+        )
+        if _found is not None:
+            log(
+                f"  [Info] Using thickness column {_found!r} "
+                f"as H_FIELD_COL_NAME (was {H_FIELD_COL_NAME!r})."
+            )
+            H_FIELD_COL_NAME = _found
+        else:
+            if _physics_requested:
+                log(
+                    "  [Warn] No thickness column found; disabling physics "
+                    "(PDE_MODE_CONFIG='off') for this run."
+                )
+                cfg["PDE_MODE_CONFIG"] = "off"
+                _physics_requested = False
+            _H_default = float(cfg.get("H_FIELD_DEFAULT_VALUE", 1.0))
+            log(
+                f"  [Warn] No thickness column found; creating constant "
+                f"{H_FIELD_COL_NAME!r}={_H_default} (m)."
+            )
+            df_raw[H_FIELD_COL_NAME] = _H_default
+    
+    GWL_SRC_COL = GWL_METERS_COL
+    
     base_select = [
-        LON_COL, LAT_COL, TIME_COL,
-        SUBSIDENCE_COL, GWL_COL, H_FIELD_COL_NAME,
+        LON_COL,
+        LAT_COL,
+        TIME_COL,
+        SUBSIDENCE_COL,
+        GWL_METERS_COL,
+        H_FIELD_COL_NAME,
     ]
+    
+    if Z_SURF_COL and (Z_SURF_COL in df_raw.columns):
+        base_select.append(Z_SURF_COL)
+    if HEAD_COL and (HEAD_COL in df_raw.columns):
+        base_select.append(HEAD_COL)
+    
+    if (GWL_ZSCORE_COL is not None) and (GWL_ZSCORE_COL in df_raw.columns):
+        base_select.append(GWL_ZSCORE_COL)
+    
     base_select += opt_num_cols + opt_cat_cols
-
+    
     selected = _drop_missing_keep_order(base_select, df_raw)
+
     missing_required = [
         c for c in [
             LON_COL, LAT_COL, TIME_COL,
@@ -774,8 +1053,209 @@ def run_stage1(
     log(f"\n{'='*18} Step 3: Encode & Scale {'='*18}")
     
     df_proc = df_cens.copy()
+    
+    # ------------------------------------------------------------------
+    # 3.0 Choose thickness source column (raw vs effective)
+    # ------------------------------------------------------------------
+    H_FIELD_SRC_COL = H_FIELD_COL_NAME
+    for sp in (CENSORING_SPECS or []):
+        if sp.get("col") == H_FIELD_COL_NAME:
+            eff = H_FIELD_COL_NAME + sp.get("eff_suffix", "_eff")
+            if USE_EFFECTIVE_H_FIELD and (eff in df_proc.columns):
+                H_FIELD_SRC_COL = eff
+            break
+    
+    # ------------------------------------------------------------------
+    # 3.1 Create explicit SI columns (meters) for physics-critical channels
+    # ------------------------------------------------------------------
+    _missing_src = [
+        c
+        for c in (
+            SUBSIDENCE_COL,
+            GWL_SRC_COL,
+            H_FIELD_SRC_COL,
+        )
+        if c not in df_proc.columns
+    ]
+    if _missing_src:
+        raise ValueError(f"Missing required columns: {_missing_src}")
+    
+    SUBS_SI_COL = f"{SUBSIDENCE_COL}__si"
+    DEPTH_SI_COL = f"{GWL_DEPTH_COL}__si"
+    HEAD_SI_COL = f"{HEAD_SRC_COL}__si"
+    H_SI_COL = f"{H_FIELD_SRC_COL}__si"
+    Z_SURF_SI_COL = (
+        f"{Z_SURF_COL_USED}__si" if Z_SURF_COL_USED else None
+    )
+    
+    df_proc[SUBS_SI_COL] = (
+        pd.to_numeric(df_proc[SUBSIDENCE_COL], errors="coerce")
+        .astype(float)
+        * float(SUBS_UNIT_TO_SI)
+    ).astype(np.float32)
+    
+    df_proc[DEPTH_SI_COL] = (
+        pd.to_numeric(df_proc[GWL_DEPTH_COL], errors="coerce")
+        .astype(float)
+        * float(HEAD_UNIT_TO_SI)
+    ).astype(np.float32)
+    
+    df_proc[HEAD_SI_COL] = (
+        pd.to_numeric(df_proc[HEAD_SRC_COL], errors="coerce")
+        .astype(float)
+        * float(HEAD_UNIT_TO_SI)
+    ).astype(np.float32)
+    
+    df_proc[H_SI_COL] = (
+        pd.to_numeric(df_proc[H_FIELD_SRC_COL], errors="coerce")
+        .astype(float)
+        * float(THICKNESS_UNIT_TO_SI)
+    ).astype(np.float32)
+    
+    df_proc[H_SI_COL] = np.clip(
+        df_proc[H_SI_COL].to_numpy(np.float32),
+        float(H_MIN_SI),
+        np.inf,
+    )
+    
+    if Z_SURF_SI_COL:
+        df_proc[Z_SURF_SI_COL] = (
+            pd.to_numeric(df_proc[Z_SURF_COL_USED], errors="coerce")
+            .astype(float)
+            * float(Z_SURF_UNIT_TO_SI)
+        ).astype(np.float32)
+    
+    SUBS_MODEL_COL = SUBS_SI_COL
+    GWL_DYN_COL = DEPTH_SI_COL
+    GWL_TARGET_COL = HEAD_SI_COL
+    H_FIELD_COL = H_SI_COL
 
-    # 3.1 OHE
+    _phys_cols = [SUBS_SI_COL, DEPTH_SI_COL, HEAD_SI_COL, H_SI_COL]
+    bad = {
+        c: int((~np.isfinite(df_proc[c].to_numpy())).sum())
+        for c in _phys_cols
+    }
+    if any(v > 0 for v in bad.values()):
+        raise ValueError(
+            f"[Stage1] Non-finite values in physics SI columns: {bad}"
+        )
+
+    units_provenance = {
+        "subs_src": SUBSIDENCE_COL,
+        "subs_si": SUBS_SI_COL,
+        "depth_src": GWL_DEPTH_COL,
+        "depth_si": DEPTH_SI_COL,
+        "head_src": HEAD_SRC_COL,
+        "head_si": HEAD_SI_COL,
+        "h_field_src": H_FIELD_SRC_COL,
+        "h_field_si": H_SI_COL,
+        "z_surf_src": Z_SURF_COL_USED,
+        "z_surf_si": Z_SURF_SI_COL,
+        "subs_unit_to_si": SUBS_UNIT_TO_SI,
+        "head_unit_to_si": HEAD_UNIT_TO_SI,
+        "thickness_unit_to_si": THICKNESS_UNIT_TO_SI,
+        "z_surf_unit_to_si": Z_SURF_UNIT_TO_SI,
+        "h_min_si": H_MIN_SI,
+        "gwl_kind": GWL_KIND,
+        "gwl_sign": GWL_SIGN,
+        "use_head_proxy": USE_HEAD_PROXY,
+    }
+    
+    # ------------------------------------------------------------------
+    # 3.2 Coordinates: degrees -> projected meters (optional)
+    # ------------------------------------------------------------------
+    coords_in_degrees = COORD_MODE == "degrees"
+    coord_epsg_used = None
+    
+    if coords_in_degrees:
+        try:
+            from pyproj import Transformer  # local import
+        except Exception as e:
+            raise ImportError(
+                "pyproj is required for COORD_MODE='degrees'."
+            ) from e
+    
+        transformer = Transformer.from_crs(
+            COORD_SRC_EPSG,
+            COORD_TARGET_EPSG,
+            always_xy=True,
+        )
+        x_m, y_m = transformer.transform(
+            df_proc[LON_COL].to_numpy(),
+            df_proc[LAT_COL].to_numpy(),
+        )
+        df_proc[COORD_X_COL] = x_m.astype(float)
+        df_proc[COORD_Y_COL] = y_m.astype(float)
+        coord_epsg_used = COORD_TARGET_EPSG
+    else:
+        if COORD_X_COL not in df_proc.columns:
+            df_proc[COORD_X_COL] = df_proc[LON_COL].astype(float)
+        if COORD_Y_COL not in df_proc.columns:
+            df_proc[COORD_Y_COL] = df_proc[LAT_COL].astype(float)
+        coord_epsg_used = COORD_SRC_EPSG
+    
+    # Heuristic degree->meter scale factors (for debug/audit only)
+    deg2m_x = deg_to_m_from_lat(
+        df_proc[LAT_COL].astype(float).to_numpy()
+    ) if coords_in_degrees else None
+    deg2m_y = 111_320.0 if coords_in_degrees else None
+    
+    # ------------------------------------------------------------------
+    # 3.3 Normalize time -> numeric coord
+    # ------------------------------------------------------------------
+    DT_TMP = "datetime_temp"
+    df_proc[DT_TMP] = pd.to_datetime(df_proc[TIME_COL], format="%Y")
+    
+    df_proc = normalize_time_column(
+        df_proc,
+        time_col=TIME_COL,
+        datetime_col=DT_TMP,
+        require_full_year=True,
+        raise_on_error=True,
+    )
+    
+    TIME_COL_NUM = f"{TIME_COL}_numeric_coord"
+    df_proc[TIME_COL_NUM] = (
+        df_proc[DT_TMP].dt.year
+        + (df_proc[DT_TMP].dt.dayofyear - 1)
+        / (365 + df_proc[DT_TMP].dt.is_leap_year.astype(int))
+    )
+    
+    # ------------------------------------------------------------------
+    # 3.4 Build effective coord columns (shift optional)
+    # ------------------------------------------------------------------
+    TIME_COL_USED = TIME_COL_NUM
+    X_COL_USED = COORD_X_COL
+    Y_COL_USED = COORD_Y_COL
+    
+    coord_shift_pack = None
+    
+    if KEEP_COORDS_RAW and SHIFT_RAW_COORDS:
+        pack = make_txy_coords(
+            t=df_proc[TIME_COL_NUM].to_numpy(float),
+            x=df_proc[COORD_X_COL].to_numpy(float),
+            y=df_proc[COORD_Y_COL].to_numpy(float),
+            time_shift="min",
+            xy_shift="min",
+            dtype="float32",
+        )
+        df_proc[TIME_COL_NUM + "__shift"] = pack.coords[:, 0]
+        df_proc[COORD_X_COL + "__shift"] = pack.coords[:, 1]
+        df_proc[COORD_Y_COL + "__shift"] = pack.coords[:, 2]
+    
+        TIME_COL_USED = TIME_COL_NUM + "__shift"
+        X_COL_USED = COORD_X_COL + "__shift"
+        Y_COL_USED = COORD_Y_COL + "__shift"
+    
+        coord_shift_pack = pack
+
+    # ------------------------------------------------------------------
+    # 3.5 OneHotEncode categorical features (keep your existing OHE code,
+    #     but do it on df_proc now)
+    # ------------------------------------------------------------------
+    # NOTE: reuse your current OHE code here, but read from df_proc
+    # and set encoded_names accordingly.
+    # # 3.1 OHE
     encoded_names: list[str] = []
     ohe_paths: dict[str, str] = {}
     for cat_col in _drop_missing_keep_order(opt_cat_cols, df_proc):
@@ -797,16 +1277,14 @@ def run_stage1(
             joblib.dump(ohe, path)
         ohe_paths[cat_col] = path
         log(f"  Saved OHE for '{cat_col}': {path}")
-
-    # 3.2 numeric time coord
-    TIME_COL_NUM = f"{TIME_COL}_numeric_coord"
-    df_proc[TIME_COL_NUM] = (
-        df_proc[DT_TMP].dt.year
-        + (df_proc[DT_TMP].dt.dayofyear - 1)
-        / (365 + df_proc[DT_TMP].dt.is_leap_year.astype(int))
-    )
-
-    # 3.3 scaling
+    # ------------------------------------------------------------------
+    # 3.6 Scale ML numeric features on TRAIN ONLY (never physics locked)
+    #
+    # No leakage rule:
+    #   - Fit scaler on TRAIN split only (<= TRAIN_END_YEAR)
+    #   - Transform the full table after fitting
+    # ------------------------------------------------------------------
+    # # 3.3 scaling
     censor_numeric_additions: list[str] = []
     for sp in CENSORING_SPECS or []:
         col = sp["col"]
@@ -816,67 +1294,178 @@ def run_stage1(
             censor_numeric_additions.append(feff)
         if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC and fflag in df_proc.columns:
             censor_numeric_additions.append(fflag)
-
-    present_num = _drop_missing_keep_order(
-        [GWL_COL, H_FIELD_COL_NAME, SUBSIDENCE_COL] + opt_num_cols, df_proc
-    ) + _drop_missing_keep_order(censor_numeric_additions, df_proc)
-    num_cols = [c for c in present_num if c not in set(ALREADY_NORMALIZED_FEATURES)]
-
+            
+    # Keep a single "gwl_model" for backward compatibility: treat it as TARGET
+    GWL_MODEL_COL  = GWL_TARGET_COL
+    
+    ml_numeric_candidates = []
+    ml_numeric_candidates += opt_num_cols[:]
+    ml_numeric_candidates += _drop_missing_keep_order(
+        censor_numeric_additions,
+        df_proc,
+    )
+    
+    physics_locked = {
+        # targets/physics channels (SI == model)
+        SUBS_MODEL_COL,
+        GWL_MODEL_COL,
+        H_FIELD_COL,
+        SUBS_SI_COL,
+        DEPTH_SI_COL,
+        HEAD_SI_COL,
+        H_SI_COL,
+    
+        # time/coords (raw/proj + possibly shifted)
+        TIME_COL_NUM,
+        COORD_X_COL,
+        COORD_Y_COL,
+        TIME_COL_USED,
+        X_COL_USED,
+        Y_COL_USED,
+    
+        # raw columns used to build SI
+        SUBSIDENCE_COL,
+        GWL_DEPTH_COL,
+        HEAD_SRC_COL,
+        H_FIELD_SRC_COL,
+    
+        # bookkeeping columns you don't want scaled
+        TIME_COL,
+        DT_TMP,
+        LON_COL,
+        LAT_COL,
+    }
+    
+    if Z_SURF_SI_COL:
+        physics_locked.add(Z_SURF_SI_COL)
+    
+    ml_numeric_cols = [
+        c for c in _drop_missing_keep_order(
+            ml_numeric_candidates,
+            df_proc,
+        )
+        if c not in physics_locked
+    ]
+    
+    ml_numeric_cols = [
+        c for c in ml_numeric_cols
+        if c not in set(ALREADY_NORMALIZED_FEATURES or [])
+    ]
+    
     df_scaled = df_proc.copy()
-    scaler_info, scaler_path = {}, None
-    if num_cols:
+    scaler_path = None
+    
+    train_mask = df_proc[TIME_COL].astype(float) <= float(TRAIN_END_YEAR)
+    if not np.any(train_mask):
+        raise ValueError(
+            f"No rows satisfy training mask: {TIME_COL} "
+            f"<= {TRAIN_END_YEAR}"
+        )
+    
+    if ml_numeric_cols:
         scaler = MinMaxScaler()
-        df_scaled[num_cols] = scaler.fit_transform(df_scaled[num_cols])
-        scaler_path = os.path.join(ARTIFACTS_DIR, f"{CITY_NAME}_main_scaler.joblib")
+    
+        scaler.fit(df_proc.loc[train_mask, ml_numeric_cols])
+        df_scaled.loc[:, ml_numeric_cols] = scaler.transform(
+            df_scaled.loc[:, ml_numeric_cols]
+        )
+    
+        scaler_path = os.path.join(
+            ARTIFACTS_DIR,
+            f"{CITY_NAME}_main_scaler.joblib",
+        )
         joblib.dump(scaler, scaler_path)
-        log(f"  Saved scaler (joblib): {scaler_path}")
-
-        targets_to_inv = {SUBSIDENCE_COL: SUBSIDENCE_COL, GWL_COL: GWL_COL}
-        for base_name, col_in_scaler in targets_to_inv.items():
-            if col_in_scaler in num_cols:
-                scaler_info[base_name] = {
-                    "scaler_path": scaler_path,
-                    "all_features": num_cols,
-                    "idx": num_cols.index(col_in_scaler),
-                }
-
-    scaled_csv = os.path.join(RUN_OUTPUT_PATH, f"{CITY_NAME}_03_scaled.csv")
+    
+        log(f"  Saved scaler (fit on train only): {scaler_path}")
+        log(f"  Scaled ML numeric cols: {ml_numeric_cols}")
+    
+    else:
+        scaler = None
+        log("  [Info] No ML numeric features to scale.")
+    
+    # --------------------------------------------------------------
+    # Stage-1 scaler_info (for Stage-2 metrics inversion/debugging)
+    # --------------------------------------------------------------
+    scaler_info = {}
+    if scaler_path and ml_numeric_cols:
+        for j, feat in enumerate(ml_numeric_cols):
+            scaler_info[feat] = {
+                "scaler_path": scaler_path,
+                "all_features": list(ml_numeric_cols),
+                "idx": int(j),
+            }
+    
+    scaled_ml_numeric_cols = ml_numeric_cols[:]
+    
+    scaled_csv = os.path.join(
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_03_scaled.csv",
+    )
     df_scaled.to_csv(scaled_csv, index=False)
     log(f"  Saved: {scaled_csv}")
-
+    
     _maybe_stop("after encode & scale")
-
     _progress(0.30, "Stage-1: features scaled")
 
     # ===================== STEP 4: FEATURE SETS =====================
     log(f"\n{'='*18} Step 4: Define Feature Sets {'='*18}")
 
-    # static_features = encoded_names[:]
-    # dynamic_base = [GWL_COL]
-    # dynamic_extra = [
-    #     c for c in opt_num_cols if c not in {SUBSIDENCE_COL, H_FIELD_COL_NAME}
-    # ]
-    # dynamic_features = [
-    #     c for c in dynamic_base + dynamic_extra if c in df_scaled.columns
-    # ]
-    # future_features = [
-    #     c for c in FUTURE_DRIVER_FEATURES if c in df_scaled.columns
-    # ]
+
+    static_features = list(encoded_names or [])
+    if INCLUDE_Z_SURF_AS_STATIC and (Z_SURF_SI_COL is not None):
+        static_features.append(Z_SURF_SI_COL)
     
-    # First resolve base static / dynamic / future sets
+    dynamic_features = [GWL_DYN_COL]
+    if INCLUDE_SUBS_HIST_DYNAMIC:
+        dynamic_features.append(SUBS_MODEL_COL)
     
-    static_features, dynamic_features, future_features = _resolve_feature_sets(
-        df_scaled=df_scaled,
-        encoded_names=encoded_names,
-        opt_num_cols=opt_num_cols,
-        static_cfg=STATIC_DRIVER_FEATURES,
-        dynamic_cfg=DYNAMIC_DRIVER_FEATURES,
-        future_cfg=FUTURE_DRIVER_FEATURES,
-        gwl_col=GWL_COL,
-        subs_col=SUBSIDENCE_COL,
-        h_field_col=H_FIELD_COL_NAME,
-        log=log,
+    for c in OPTIONAL_NUMERIC_FEATURES:
+        if c in df_scaled.columns and (c not in dynamic_features):
+            if c not in (FUTURE_DRIVER_FEATURES or []):
+                dynamic_features.append(c)
+    
+    future_features = []
+    for c in (FUTURE_DRIVER_FEATURES or []):
+        if c in df_scaled.columns:
+            future_features.append(c)
+    
+    # censor flags
+    if CENSORING_SPECS:
+        flag_cols = [
+            sp.get("flag") or f"{sp.get('col')}_censored"
+            for sp in CENSORING_SPECS
+        ]
+        if INCLUDE_CENSOR_FLAGS_AS_DYNAMIC:
+            for fcol in flag_cols:
+                if fcol in df_scaled.columns:
+                    dynamic_features.append(fcol)
+        if INCLUDE_CENSOR_FLAGS_AS_FUTURE:
+            for fcol in flag_cols:
+                if fcol in df_scaled.columns:
+                    future_features.append(fcol)
+    
+    # optional GUI overrides: append only (do not reorder base)
+    for c in (STATIC_DRIVER_FEATURES or []):
+        if c in df_scaled.columns and (c not in static_features):
+            static_features.append(c)
+    
+    for c in (DYNAMIC_DRIVER_FEATURES or []):
+        if c in df_scaled.columns and (c not in dynamic_features):
+            dynamic_features.append(c)
+    
+    # indices spec for Stage-2
+    gwl_dyn_index = dynamic_features.index(GWL_DYN_COL)
+    subs_dyn_index = (
+        dynamic_features.index(SUBS_MODEL_COL)
+        if SUBS_MODEL_COL in dynamic_features
+        else None
     )
+    z_surf_static_index = (
+        static_features.index(Z_SURF_SI_COL)
+        if (Z_SURF_SI_COL is not None and Z_SURF_SI_COL in static_features)
+        else None
+    )
+
     # Then decide whether to use effective H-field instead of raw
     H_FIELD_COL = H_FIELD_COL_NAME
     for sp in CENSORING_SPECS or []:
@@ -924,11 +1513,12 @@ def run_stage1(
     OUT_S_DIM, OUT_G_DIM = 1, 1
     inputs_train, targets_train, coord_scaler = prepare_pinn_data_sequences(
         df=df_train,
-        time_col=TIME_COL_NUM,
-        lon_col=LON_COL,
-        lat_col=LAT_COL,
-        subsidence_col=SUBSIDENCE_COL,
-        gwl_col=GWL_COL,
+        time_col=TIME_COL_USED,
+        lon_col=X_COL_USED,
+        lat_col=Y_COL_USED,
+        subsidence_col=SUBS_MODEL_COL,
+        gwl_col=GWL_TARGET_COL,
+        gwl_dyn_col=GWL_DYN_COL,
         h_field_col=H_FIELD_COL,
         dynamic_cols=dynamic_features,
         static_cols=static_features,
@@ -938,27 +1528,72 @@ def run_stage1(
         forecast_horizon=FORECAST_HORIZON_YEARS,
         output_subsidence_dim=OUT_S_DIM,
         output_gwl_dim=OUT_G_DIM,
-        normalize_coords=True,
+        normalize_coords=bool(NORMALIZE_COORDS),
+        fit_coord_scaler=bool(NORMALIZE_COORDS),
         savefile=seq_job,
         return_coord_scaler=True,
         mode=MODE,
         model=MODEL_NAME,
         verbose=2,
-        _logger=log,          
-        stop_check=stop_check , 
+        _logger=log,
+        stop_check=stop_check,
         progress_hook=_seq_progress_train,
     )
+    coord_scaler_path = None
+    if coord_scaler is not None:
+        coord_scaler_path = os.path.join(
+            ARTIFACTS_DIR,
+            f"{CITY_NAME}_coord_scaler.joblib",
+        )
+        joblib.dump(coord_scaler, coord_scaler_path)
+        log(f"  Saved coord scaler: {coord_scaler_path}")
+
+    if coord_scaler is not None:
+        cmin = coord_scaler.data_min_
+        cmax = coord_scaler.data_max_
+        coord_ranges = {
+            "t": float(cmax[0] - cmin[0]),
+            "x": float(cmax[1] - cmin[1]),
+            "y": float(cmax[2] - cmin[2]),
+        }
+    else:
+        coord_ranges = {
+            "t": float(df_train[TIME_COL_USED].max() - df_train[TIME_COL_USED].min()),
+            "x": float(df_train[X_COL_USED].max() - df_train[X_COL_USED].min()),
+            "y": float(df_train[Y_COL_USED].max() - df_train[Y_COL_USED].min()),
+        }
+    
+    if should_audit(AUDIT_STAGES, "stage1"):
+        audit = audit_stage1_scaling(
+            df_train=df_train,
+            df_all=df_scaled,
+            city=CITY_NAME,
+            cfg=cfg,
+            time_col=TIME_COL_USED,
+            x_col=X_COL_USED,
+            y_col=Y_COL_USED,
+            normalize_coords=NORMALIZE_COORDS,
+            keep_coords_raw=KEEP_COORDS_RAW,
+            shift_raw_coords=SHIFT_RAW_COORDS,
+            coords_in_degrees=coords_in_degrees,
+            coord_epsg_used=coord_epsg_used,
+            coord_ranges=coord_ranges,
+            scaler_info=scaler_info,
+        )
+        audit_path = os.path.join(
+            RUN_OUTPUT_PATH,
+            "stage1_handshake_audit.json",
+        )
+        with open(audit_path, "w", encoding="utf-8") as f:
+            json.dump(audit, f, indent=2)
+        log(f"[Audit] Saved Stage-1 audit -> {audit_path}")
+
     _progress(0.60, "Stage-1: train sequences built")
     _maybe_stop("after train sequences built")
     
     if targets_train["subsidence"].shape[0] == 0:
         raise ValueError("No training sequences were generated.")
 
-    coord_scaler_path = os.path.join(
-        ARTIFACTS_DIR, f"{CITY_NAME}_coord_scaler.joblib"
-    )
-    joblib.dump(coord_scaler, coord_scaler_path)
-    log(f"  Saved coord scaler: {coord_scaler_path}")
 
     for k, v in inputs_train.items():
         log(f"  Train input '{k}': {None if v is None else v.shape}")
@@ -1041,97 +1676,234 @@ def run_stage1(
     artifacts_dir_abs = os.path.abspath(ARTIFACTS_DIR)
     base_output_abs = os.path.abspath(BASE_OUTPUT_DIR)
 
+    # ===================== MANIFEST (v3.2) =====================
+    log(f"\n{'='*18} Build Manifest {'='*18}")
+    
+    run_dir_abs = os.path.abspath(RUN_OUTPUT_PATH)
+    artifacts_dir_abs = os.path.abspath(ARTIFACTS_DIR)
+    base_output_abs = os.path.abspath(BASE_OUTPUT_DIR)
+    
+    
+    # v3.2 censoring payload (keep keys stable)
     manifest_censor = {
         "specs": CENSORING_SPECS,
         "report": censor_report,
         "use_effective_h_field": USE_EFFECTIVE_H_FIELD,
         "flags_as_dynamic": INCLUDE_CENSOR_FLAGS_AS_DYNAMIC,
+        "flags_as_future": INCLUDE_CENSOR_FLAGS_AS_FUTURE,
     }
+    
+    # v3.2: list of ML-scaled numeric columns (if any)
+    # (If you use the v3.2 leak-safe scaler, this is ML-only.)
+    scaled_ml_numeric_cols = list(scaled_ml_numeric_cols or [])
+    
+    # ------------------------ scaling_kwargs ------------------------
+    scaling_kwargs = {
+        "subs_scale_si": 1.0,
+        "subs_bias_si": 0.0,
+        "head_scale_si": 1.0,
+        "head_bias_si": 0.0,
+        "H_scale_si": 1.0,
+        "H_bias_si": 0.0,
+        "subsidence_kind": str(SUBSIDENCE_KIND),
+        "allow_subs_residual": bool(ALLOW_SUBS_RESIDUAL),
+        "coords_normalized": bool(NORMALIZE_COORDS),
+        "coord_order": ["t", "x", "y"],
+        "coord_ranges": coord_ranges,
+        "coord_mode": COORD_MODE,
+        "coord_src_epsg": COORD_SRC_EPSG,
+        "coord_target_epsg": COORD_TARGET_EPSG,
+        "coord_epsg_used": coord_epsg_used,
+        "coords_in_degrees": bool(coords_in_degrees),
+        "gwl_dyn_index": int(gwl_dyn_index),
+        "subs_dyn_index": (
+            None if subs_dyn_index is None else int(subs_dyn_index)
+        ),
+        "z_surf_static_index": (
+            None
+            if z_surf_static_index is None
+            else int(z_surf_static_index)
+        ),
+        "time_units": str(TIME_UNITS),
+        "cons_residual_units": CONSOLIDATION_RESIDUAL_UNITS,
+        "cons_scale_floor": CONS_SCALE_FLOOR,
+        "gw_scale_floor": GW_SCALE_FLOOR,
+        "dt_min_units": DT_MIN_UNITS,
+        "Q_wrt_normalized_time": Q_WRT_NORMALIZED_TIME,
+        "Q_in_si": Q_IN_SI,
+        "Q_in_per_second": Q_IN_PER_SECOND,
+        "Q_kind": Q_KIND,
+        "Q_length_in_si": Q_LENGTH_IN_SI,
+        "drainage_mode": DRAINAGE_MODE,
+        "scaling_error_policy": SCALING_ERROR_POLICY,
+        "debug_physics_grads": DEBUG_PHYSICS_GRADS,
+        "gw_residual_units": GW_RESIDUAL_UNITS,
+        "clip_global_norm": CLIP_GLOBAL_NORM,
+        "cons_drawdown_mode": str(CONS_DRAWDOWN_MODE).lower(),
+        "cons_drawdown_rule": str(CONS_DRAWDOWN_RULE).lower(),
+        "cons_stop_grad_ref": bool(CONS_STOP_GRAD_REF),
+        "cons_drawdown_zero_at_origin": bool(
+            CONS_DRAWDOWN_ZERO_AT_ORIGIN
+        ),
+        "cons_drawdown_clip_max": (
+            None
+            if CONS_DRAWDOWN_CLIP_MAX is None
+            else float(CONS_DRAWDOWN_CLIP_MAX)
+        ),
+        "cons_relu_beta": float(CONS_RELU_BETA),
+        "mv_prior_units": MV_PRIOR_UNITS,
+        "mv_alpha_disp": MV_ALPHA_DISP,
+        "mv_huber_delta": MV_HUBER_DELTA,
+        "mv_prior_mode": MV_PRIOR_MODE,
+        "mv_weight": MV_WEIGHT,
+        "mv_schedule_unit": MV_SCHEDULE_UNIT,
+        "mv_delay_epochs": int(MV_DELAY_EPOCHS),
+        "mv_warmup_epochs": int(MV_WARMUP_EPOCHS),
+        "mv_delay_steps": (
+            None if MV_DELAY_STEPS is None else int(MV_DELAY_STEPS)
+        ),
+        "mv_warmup_steps": (
+            None if MV_WARMUP_STEPS is None else int(MV_WARMUP_STEPS)
+        ),
+        "track_aux_metrics": TRACK_AUX_METRICS,
+    }
+    # Only attach degree→meter factors if
+    #  coords are actually degrees
+    if coords_in_degrees:
+        # Use the *raw* latitude column, not 
+        # y_used if y_used got shifted/normalized
+        lat_ref_deg = float(
+            np.nanmean(df_proc[LAT_COL].to_numpy(dtype=float)))
+        deg_to_m_lon, deg_to_m_lat = deg_to_m_from_lat(lat_ref_deg)
+        scaling_kwargs.update({
+            "lat_ref_deg": lat_ref_deg,      # handy for audit/fallback
+            "deg_to_m_lon": deg_to_m_lon,
+            "deg_to_m_lat": deg_to_m_lat,
+        })
 
+    # Optional: shift metadata only if used (kept here because Stage-2 needs it)
+    if coord_shift_pack is not None:
+        scaling_kwargs["coord_shift_mins"] = coord_shift_pack.coord_mins
+        scaling_kwargs["coord_shift_meta"] = coord_shift_pack.meta
+
+    
+    # ------------------------ manifest ------------------------
     manifest = {
+        "schema_version": "3.2",
         "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "city": CITY_NAME,
         "model": MODEL_NAME,
         "stage": "stage1",
+        
+        "run": {
+            "city": CITY_NAME,
+            "model": MODEL_NAME,
+            "stage": 1,
+            "created_at": dt.datetime.now().isoformat(),
+        },
+        "paths": {
+            "base_output_dir": base_output_abs,
+            "run_dir": run_dir_abs,
+            "artifacts_dir": artifacts_dir_abs,
+        },
         "config": {
             "TIME_STEPS": TIME_STEPS,
             "FORECAST_HORIZON_YEARS": FORECAST_HORIZON_YEARS,
             "MODE": MODE,
             "TRAIN_END_YEAR": TRAIN_END_YEAR,
             "FORECAST_START_YEAR": FORECAST_START_YEAR,
-            "cols": {
-                "time": TIME_COL,
-                "time_numeric": TIME_COL_NUM,
-                "lon": LON_COL,
-                "lat": LAT_COL,
-                "subsidence": SUBSIDENCE_COL,
-                "gwl": GWL_COL,
-                "h_field": H_FIELD_COL,
+        },
+        "cols_spec": {
+            "time_raw": TIME_COL,
+            "time_numeric": TIME_COL_NUM,
+            "time_used": TIME_COL_USED,
+            "lon_raw": LON_COL,
+            "lat_raw": LAT_COL,
+            "x_raw": COORD_X_COL,
+            "y_raw": COORD_Y_COL,
+            "x_used": X_COL_USED,
+            "y_used": Y_COL_USED,
+            "subs_raw": SUBSIDENCE_COL,
+            "subs_model": SUBS_MODEL_COL,
+            "gwl_raw": GWL_COL,
+            "gwl_meters": GWL_METERS_COL,
+            "gwl_depth_model": GWL_DYN_COL,
+            "head_raw": HEAD_SRC_COL,
+            "head_model": GWL_TARGET_COL,
+            "h_field_raw": H_FIELD_SRC_COL,
+            "h_field_model": H_FIELD_COL,
+            "z_surf_raw": Z_SURF_COL_USED,
+            "z_surf_model": Z_SURF_SI_COL,
+        },
+        "features_spec": {
+            "static": static_features,
+            "dynamic": dynamic_features,
+            "future": future_features,
+        },
+        "indices_spec": {
+            "gwl_dyn_index": int(gwl_dyn_index),
+            "subs_dyn_index": subs_dyn_index,
+            "z_surf_static_index": z_surf_static_index,
+        },
+        "conventions_spec": {
+            "coords_in_degrees": bool(coords_in_degrees),
+            "coord_epsg_used": coord_epsg_used,
+            "deg_to_m": {
+                "x": None if deg2m_x is None else "per_lat_vector",
+                "y": deg2m_y,
             },
-            "features": {
-                "static": static_features,
-                "dynamic": dynamic_features,
-                "future": future_features,
-                "group_id_cols": GROUP_ID_COLS,
+            "positive_z": "down",
+            "positive_subsidence": "down",
+            "units": {
+                "subs": "meter",
+                "head": "meter",
+                "depth": "meter",
+                "thickness": "meter",
+                "coords": (
+                    "meter"
+                    if not coords_in_degrees
+                    else "degree"
+                ),
+                "time": str(TIME_UNITS),
             },
         },
+        "scaling_kwargs": scaling_kwargs,
+        "units_provenance": units_provenance,
+        "censoring": manifest_censor,
         "artifacts": {
-            "csv": {
-                "raw": raw_csv,
-                "clean": clean_csv,
-                "scaled": scaled_csv,
+            "tables": {
+                "raw_csv": raw_csv,
+                "clean_csv": clean_csv,
+                "scaled_csv": scaled_csv,
             },
             "encoders": {
-                "ohe": ohe_paths,            # {categorical_col: path}
-                "main_scaler": scaler_path if num_cols else None,
-                "coord_scaler": coord_scaler_path,
-                "scaler_info": scaler_info,  # indices for inverse-transform
-            },
-            "sequences": {
-                "joblib_train_sequences": seq_job,
-                "dims": {
-                    "output_subsidence_dim": OUT_S_DIM,
-                    "output_gwl_dim": OUT_G_DIM,
-                },
+                "ohe_path": ohe_paths,
+                "main_scaler_path": (
+                    scaler_path if ml_numeric_cols else None
+                ),
+                "coord_scaler_path": coord_scaler_path,
             },
             "numpy": {
-                "train_inputs_npz": train_inputs_npz,
-                "train_targets_npz": train_targets_npz,
-                "val_inputs_npz": val_inputs_npz,
-                "val_targets_npz": val_targets_npz,
+                "train_inputs": train_inputs_npz,
+                "train_targets": train_targets_npz,
+                "val_inputs": val_inputs_npz,
+                "val_targets": val_targets_npz,
             },
-            "shapes": {
-                "train_inputs": {
-                    k: list(v.shape) for k, v in train_np_x.items()
-                },
-                "train_targets": {
-                    k: list(v.shape) for k, v in train_np_y.items()
-                },
-                "val_inputs": {
-                    k: list(v.shape) for k, v in val_np_x.items()
-                },
-                "val_targets": {
-                    k: list(v.shape) for k, v in val_np_y.items()
-                },
+            "meta": {
+                "scaled_ml_numeric_cols": scaled_ml_numeric_cols,
+                "scaler_info": scaler_info,
             },
         },
-        "paths": {
-            "run_dir": run_dir_abs,
-            "artifacts_dir": artifacts_dir_abs,
-            "results_root": base_output_abs,  
-        },
-        "versions": {
-            "python": (
-                f"{os.sys.version_info.major}."
-                f"{os.sys.version_info.minor}."
-                f"{os.sys.version_info.micro}"
-            ),
-            "tensorflow": tf.__version__,
-            "numpy": np.__version__,
-            "pandas": pd.__version__,
-            "sklearn": sklearn.__version__,
-        },
+        
+    "versions": {
+        "python": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+        "tensorflow": tf.__version__,
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "sklearn": sklearn.__version__,
+      },
     }
+
 
     manifest["config"]["feature_registry"] = {
         "optional_numeric_declared": OPTIONAL_NUMERIC_FEATURES,
@@ -1155,13 +1927,14 @@ def run_stage1(
             f"{'='*18}"
         )
         try:
-            test_inputs, test_targets, _ = prepare_pinn_data_sequences(
+            test_inputs, test_targets = prepare_pinn_data_sequences(
                 df=df_test,
-                time_col=TIME_COL_NUM,
-                lon_col=LON_COL,
-                lat_col=LAT_COL,
-                subsidence_col=SUBSIDENCE_COL,
-                gwl_col=GWL_COL,
+                time_col=TIME_COL_USED,
+                lon_col=X_COL_USED,
+                lat_col=Y_COL_USED,
+                subsidence_col=SUBS_MODEL_COL,
+                gwl_col=GWL_TARGET_COL,   
+                gwl_dyn_col=GWL_DYN_COL,     
                 h_field_col=H_FIELD_COL,
                 dynamic_cols=dynamic_features,
                 static_cols=static_features,
@@ -1171,14 +1944,13 @@ def run_stage1(
                 forecast_horizon=FORECAST_HORIZON_YEARS,
                 output_subsidence_dim=OUT_S_DIM,
                 output_gwl_dim=OUT_G_DIM,
-                normalize_coords=True,
-                savefile=None,
-                return_coord_scaler=False,
+                normalize_coords=bool(NORMALIZE_COORDS),
+                coord_scaler=coord_scaler,
+                fit_coord_scaler=False,
+            
                 mode=MODE,
                 model=MODEL_NAME,
                 verbose=2,
-                _logger=log,
-                stop_check=stop_check,
             )
 
             if test_inputs:
@@ -1245,31 +2017,34 @@ def run_stage1(
         log(f"\n{'='*18} Step 7: Future Sequences {'='*18}")
         try:
             future_npz_paths = build_future_sequences_npz(
-                df_scaled=df_scaled,
-                time_col=TIME_COL,
-                time_col_num=TIME_COL_NUM,
-                lon_col=LON_COL,
-                lat_col=LAT_COL,
-                subs_col=SUBSIDENCE_COL,
-                gwl_col=GWL_COL,
-                h_field_col=H_FIELD_COL,
-                static_features=static_features,
-                dynamic_features=dynamic_features,
-                future_features=future_features,
-                group_id_cols=GROUP_ID_COLS,
-                train_end_time=TRAIN_END_YEAR,
-                forecast_start_time=FORECAST_START_YEAR,
-                forecast_horizon=FORECAST_HORIZON_YEARS,
-                time_steps=TIME_STEPS,
-                mode=MODE,
-                model_name=MODEL_NAME,
-                artifacts_dir=ARTIFACTS_DIR,
-                prefix="future",
-                verbose=7,
-                logger=log, 
-                stop_check = stop_check, 
-                progress_hook=_seq_progress_future,
-            )
+            df_scaled=df_scaled,
+            time_col=TIME_COL,
+            time_col_num=TIME_COL_NUM,
+            lon_col=COORD_X_COL,
+            lat_col=COORD_Y_COL,
+            subs_col=SUBS_MODEL_COL,
+            gwl_col=GWL_TARGET_COL,
+            h_field_col=H_FIELD_COL,
+            static_features=static_features,
+            dynamic_features=dynamic_features,
+            future_features=future_features,
+            group_id_cols=GROUP_ID_COLS,
+            train_end_time=TRAIN_END_YEAR,
+            forecast_start_time=FORECAST_START_YEAR,
+            forecast_horizon=FORECAST_HORIZON_YEARS,
+            time_steps=TIME_STEPS,
+            mode=MODE,
+            model_name=MODEL_NAME,
+            artifacts_dir=ARTIFACTS_DIR,
+            prefix="future",
+            normalize_coords=bool(NORMALIZE_COORDS),
+            coord_scaler=coord_scaler,
+            verbose=7,
+            logger=log,
+            stop_check=stop_check,
+            progress_hook=_seq_progress_future,
+        )
+
             manifest["artifacts"]["numpy"].update(future_npz_paths)
             log(f"  Future NPZs: {future_npz_paths}")
         except Exception as e:  # pragma: no cover

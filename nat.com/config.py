@@ -706,6 +706,13 @@ EVAL_JSON_UNITS_MODE = "interpretable"              # or "si / interpretable"
 EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"
 
 # -------------------------------------------------------------------
+# Optional: force scaling_kwargs from an external JSON file.
+# If provided, this JSON takes precedence over any Stage-2/Stage-3
+# auto-computed scaling_kwargs values.
+# -------------------------------------------------------------------
+SCALING_KWARGS_JSON_PATH = None   # e.g. r"F:\...\results\...\scaling_kwargs.json"
+
+# -------------------------------------------------------------------
 # 5. TUNING SEARCH SPACE
 # -------------------------------------------------------------------
 # Hyperparameter search space for the GeoPriorTuner.  The tuner

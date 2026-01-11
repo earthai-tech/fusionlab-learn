@@ -89,6 +89,10 @@ from fusionlab.nn.pinn.geoprior.plot import (
     autoplot_geoprior_history,
     plot_physics_values_in,
 )
+from fusionlab.nn.pinn.geoprior.payloads import load_physics_payload
+from fusionlab.nn.pinn.geoprior.scaling import (
+    override_scaling_kwargs,
+)
 from fusionlab.nn.pinn.op import extract_physical_parameters
 from fusionlab.nn._shapes import (
     _logs_to_py,
@@ -559,7 +563,7 @@ SUBS_DYN_INDEX =None
 SUBS_DYN_INDEX= sk_stage1.get("subs_dyn_index" )
 sub_model_name = sk_stage1.get('subs_dyn_name') 
 if SUBS_DYN_INDEX is None and sub_model_name is not None: 
-    if 'sub_model_name' in list(DYN_NAMES): 
+    if sub_model_name in list(DYN_NAMES): 
         # then get the index 
         SUBS_DYN_INDEX = list(DYN_NAMES).index (sub_model_name) 
 
@@ -1378,6 +1382,31 @@ subsmodel_params["scaling_kwargs"].update({
 subsmodel_params["scaling_kwargs"] = finalize_scaling_kwargs(
     subsmodel_params["scaling_kwargs"]
 )
+
+subsmodel_params["scaling_kwargs"] = finalize_scaling_kwargs(
+    subsmodel_params["scaling_kwargs"]
+)
+
+# ---------------------------------------------------------------------
+# Optional precedence override: load scaling_kwargs from JSON (if provided)
+# and let it override anything computed in Stage-2.
+# ---------------------------------------------------------------------
+subsmodel_params["scaling_kwargs"] = override_scaling_kwargs(
+    subsmodel_params["scaling_kwargs"],
+    cfg,
+    finalize=finalize_scaling_kwargs,
+    dyn_names=DYN_NAMES,
+    gwl_dyn_index=GWL_DYN_INDEX,
+    base_dir=os.path.dirname(__file__),
+    strict=True,
+    log_fn=print,
+)
+
+# Optional: drop Nones to keep scaling_kwargs clean
+subsmodel_params["scaling_kwargs"] = {
+    k: v for k, v in subsmodel_params["scaling_kwargs"].items()
+    if v is not None
+}
 
 # Optional: drop Nones to keep scaling_kwargs clean
 subsmodel_params["scaling_kwargs"] = {
@@ -2709,11 +2738,11 @@ print("Ablation record saved.")
 
 try:
     # payload is what you saved via export_physics_payload(...)
-    # payload, meta = load_physics_payload(phys_npz_path)
+    phys_payload, _ = load_physics_payload(phys_npz_path)
     
     # 1) Spatial maps (needs coords from dataset)
     plot_physics_values_in(
-        payload,
+        phys_payload,
         dataset=ds_eval,
         keys=[
             "cons_res_vals",
@@ -2730,7 +2759,7 @@ try:
     
     # 2) Residual distribution (no coords needed)
     plot_physics_values_in(
-        payload,
+        phys_payload,
         keys=["cons_res_vals"],
         mode="hist",
         transform="signed_log10",

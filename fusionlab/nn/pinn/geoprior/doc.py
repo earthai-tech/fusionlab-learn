@@ -627,7 +627,7 @@ or None, default None
         approximations.
 
     3) Groundwater level (GWL) to head mapping
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     Many datasets store groundwater as depth below ground surface
     (positive downward). Physics residuals usually require head
     (positive upward). GeoPrior provides a structured set of keys
@@ -682,7 +682,7 @@ or None, default None
     resolved ``gwl_z_meta`` in the Stage-1 audit.
 
     4) Dynamic and static feature indexing
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     gwl_dyn_index : int, optional
         Index of the GWL driver channel inside ``dynamic_features``
         (last axis). This must match the feature order exported by
@@ -702,7 +702,7 @@ or None, default None
         These lists are strongly recommended for reproducible runs.
 
     5) Physics residual scaling and floors
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     cons_residual_units : {'second', 'time_unit'}, optional
         Declares the unit convention for the consolidation residual
         scaling. If set to 'second', time derivatives are interpreted
@@ -745,7 +745,7 @@ or None, default None
         Whether any length scale used in Q conversions is in SI.
 
     6) Priors, bounds, and constraint metadata
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     bounds : dict, optional
         Bounds for learned fields and/or their log transforms.
         Common entries include:
@@ -771,7 +771,7 @@ or None, default None
         recommended for scientific workflows.
 
     7) Training policies and diagnostics (optional)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     training_strategy : str, optional
         High-level policy hint, e.g. 'physics_first'. This may be
         used by callbacks or training orchestration code.
@@ -836,7 +836,7 @@ _param_docs = DocstringComponents.from_nested_components(
 # ---------------------------------------------------------------------
 GEOPRIOR_SUBSNET_DOC = r"""
 GeoPriorSubsNet
-===============
+================
 
 Prior-regularized physics-informed network for multi-step
 subsidence forecasting with groundwater coupling.
