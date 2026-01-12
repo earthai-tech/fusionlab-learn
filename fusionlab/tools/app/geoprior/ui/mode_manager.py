@@ -18,12 +18,15 @@ from PyQt5.QtCore import QObject, pyqtSignal, QTimer
 from PyQt5.QtWidgets import QPushButton, QTabWidget
 
 from ..styles import (
+    MODE_DATA_COLOR,
     MODE_DRY_COLOR,
+    MODE_INFER_COLOR,
+    MODE_PREPROCESS_COLOR,
+    MODE_RESULTS_COLOR,
+    MODE_SETUP_COLOR,
     MODE_TRAIN_COLOR,
     MODE_TUNE_COLOR,
-    MODE_INFER_COLOR,
     MODE_XFER_COLOR,
-    MODE_RESULTS_COLOR,
 )
 
 
@@ -53,9 +56,21 @@ class ModeManager(QObject):
 
     # Centralised default help strings (used if caller does not override).
     DEFAULT_HELP_TEXTS: Dict[str, str] = {
+        "data": (
+            "Data tab – manage datasets: load, edit, save, "
+            "and reuse previously saved datasets."
+        ),
+        "setup": (
+            "Configure the experiment (paths, columns, scaling, "
+            "and runtime flags). Save a snapshot to reuse later."
+        ),
+        "preprocess": (
+            "Stage-1 preprocessing: clean, encode/scale, build "
+            "sequences and export arrays/metadata."
+        ),
         "train": (
-            "Train tab – runs Stage-1 (prepare) and Stage-2 "
-            "(GeoPrior training) for the selected city."
+            "Train tab – build the model, train with physics"
+            "constraints and export artifacts for the selected city."
         ),
         "tune": (
             "Tune tab – runs Stage-2 hyperparameter search for the "
@@ -116,7 +131,8 @@ class ModeManager(QObject):
 
         # Internal state
         self._is_dry_mode: bool = False
-        self._active_job_kind: Optional[str] = None  # "train", "tune", "infer", "xfer"
+        self._active_job_kind: Optional[str] = None  
+        # None, "preprocess", "train", "tune", "infer", "xfer"
         self._any_running: bool = False
         self._stop_pulse_state: bool = False
 
@@ -132,8 +148,10 @@ class ModeManager(QObject):
     # ------------------------------------------------------------------
     # Registration helpers
     # ------------------------------------------------------------------
+
     def set_run_buttons(
         self,
+        preprocess_btn: Optional[QPushButton] = None,
         train_btn: Optional[QPushButton] = None,
         tune_btn: Optional[QPushButton] = None,
         infer_btn: Optional[QPushButton] = None,
@@ -144,6 +162,9 @@ class ModeManager(QObject):
         updated based on mode & running state.
         """
         mapping: RunButtonMap = {}
+    
+        if preprocess_btn is not None:
+            mapping["preprocess"] = preprocess_btn
         if train_btn is not None:
             mapping["train"] = train_btn
         if tune_btn is not None:
@@ -152,8 +173,12 @@ class ModeManager(QObject):
             mapping["infer"] = infer_btn
         if xfer_btn is not None:
             mapping["xfer"] = xfer_btn
-
+    
         self._run_buttons = mapping
+    
+        # Apply current UI state immediately
+        self._update_run_button_tooltips()
+        self._update_run_button_icons()
 
     # ------------------------------------------------------------------
     # Public state setters (called by main window)
@@ -256,6 +281,22 @@ class ModeManager(QObject):
         else:
             # Extract mapping from help_texts
             # Extract mapping from help_texts (falling back to defaults)
+            data_idx, data_help = self._resolve_help_entry(
+                "data",
+                -1,
+                self.DEFAULT_HELP_TEXTS["data"],
+            )
+            setup_idx , setup_help = self._resolve_help_entry(
+                "setup",
+                -1,
+                self.DEFAULT_HELP_TEXTS["setup"],
+            )
+            preprocess_idx , preprocess_help = self._resolve_help_entry(
+                "preprocess",
+                -1,
+                self.DEFAULT_HELP_TEXTS["preprocess"],
+            )
+
             train_idx, train_help = self._resolve_help_entry(
                 "train",
                 -1,
@@ -281,8 +322,19 @@ class ModeManager(QObject):
                 -1,
                 self.DEFAULT_HELP_TEXTS["results"],
             )
-
-            if index == train_idx:
+            if index == data_idx:
+                mode_label = "DATA"
+                color = MODE_DATA_COLOR
+                tooltip = data_help
+            elif index == setup_idx:
+                mode_label = "SETUP"
+                color = MODE_SETUP_COLOR
+                tooltip = setup_help
+            elif index == preprocess_idx:
+                mode_label = "PREPROCESS"
+                color = MODE_PREPROCESS_COLOR
+                tooltip = preprocess_help
+            elif index == train_idx:
                 mode_label = "TRAIN"
                 color = MODE_TRAIN_COLOR
                 tooltip = train_help
@@ -418,33 +470,36 @@ class ModeManager(QObject):
             if active == kind:
                 if not is_dry:
                     return {
+                        "preprocess": "Running Stage-1 preprocessing…",
                         "train": "Running training…",
                         "tune": "Running tuning…",
                         "infer": "Running inference…",
                         "xfer": "Running transfer matrix…",
                     }.get(kind, "Running…")
-                else:
-                    return {
-                        "train": "Dry-run – computing planned training steps…",
-                        "tune": "Dry-run – computing planned tuning workflow…",
-                        "infer": "Dry-run – computing planned inference workflow…",
-                        "xfer": "Dry-run – computing planned transfer workflow…",
-                    }.get(kind, "Dry-run – computing planned workflow…")
-            else:
-                if not is_dry:
-                    return {
-                        "train": "Run training",
-                        "tune": "Run tuning",
-                        "infer": "Run inference",
-                        "xfer": "Run transfer matrix",
-                    }.get(kind, "Run workflow")
-                else:
-                    return {
-                        "train": "Run dry (show planned training workflow)",
-                        "tune": "Run dry (show planned tuning workflow)",
-                        "infer": "Run dry (show planned inference workflow)",
-                        "xfer": "Run dry (show planned transfer matrix workflow)",
-                    }.get(kind, "Run dry (show planned workflow)")
+                return {
+                    "preprocess": "Dry-run – computing Stage-1 plan…",
+                    "train": "Dry-run – computing planned training steps…",
+                    "tune": "Dry-run – computing planned tuning workflow…",
+                    "infer": "Dry-run – computing planned inference workflow…",
+                    "xfer": "Dry-run – computing planned transfer workflow…",
+                }.get(kind, "Dry-run – computing planned workflow…")
+            # not active
+            if not is_dry:
+                return {
+                    "preprocess": "Run preprocessing (Stage-1)",
+                    "train": "Run training",
+                    "tune": "Run tuning",
+                    "infer": "Run inference",
+                    "xfer": "Run transfer matrix",
+                }.get(kind, "Run workflow")
+            
+            return {
+                "preprocess": "Run dry (show Stage-1 workflow)",
+                "train": "Run dry (show planned training workflow)",
+                "tune": "Run dry (show planned tuning workflow)",
+                "infer": "Run dry (show planned inference workflow)",
+                "xfer": "Run dry (show planned transfer matrix workflow)",
+            }.get(kind, "Run dry (show planned workflow)")
 
         for kind, btn in self._run_buttons.items():
             if btn is not None:

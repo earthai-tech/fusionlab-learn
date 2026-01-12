@@ -111,8 +111,10 @@ from .....utils.scale_metrics import (
     point_metrics,
 )
 from .....utils.spatial_utils import deg_to_m_from_lat
-from .....utils.subsidence_utils import convert_eval_payload_units
-
+from .....utils.subsidence_utils import ( 
+    convert_eval_payload_units, 
+    postprocess_eval_json,
+)
 from ..utils.view_utils import _notify_gui_forecast_views
 from ..callbacks import ( 
     GuiProgress, 
@@ -2290,6 +2292,20 @@ def run_training(
         )
     except: 
         log("Failed to plot physic values in...")
+    
+    # Convert an existing SI JSON to interpretable and write a new file:
+    json_out_interp = os.path.join(
+        run_dir, f"geoprior_eval_phys_{stamp}_interpretable.json"
+     )
+    out = postprocess_eval_json(
+        metrics_json,
+        scope="all",
+        out_path=json_out_interp,
+        overwrite=True,
+        add_rmse=True,
+    )
+    # "mm" (if SUBS_UNIT_TO_SI ~ 1e-3)
+    log("Interpretable EVAL JSON saved to", out["units"]["subs_metrics_unit"]) 
     
     # Optional plots
     try:

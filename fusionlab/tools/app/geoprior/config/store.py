@@ -1,0 +1,317 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: LKouadio <etanoyau@gmail.com>
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Set
+
+from PyQt5.QtCore import QObject, pyqtSignal
+
+from .geoprior_config import GeoPriorConfig
+from .prior_schema import FieldKey
+
+
+class GeoConfigStore(QObject):
+    """
+    Reactive store around a live GeoPriorConfig instance.
+
+    Tabs/dialogs should write via this store so we can:
+    - emit change signals
+    - compute "dirty"/override count
+    - batch updates into one notification
+    """
+
+    # keys: set[str]
+    config_changed = pyqtSignal(object)
+
+    # overrides_count: int
+    dirty_changed = pyqtSignal(int)
+
+    # cfg: GeoPriorConfig
+    config_replaced = pyqtSignal(object)
+
+    # message: str
+    error_raised = pyqtSignal(str)
+
+    def __init__(
+        self,
+        cfg: GeoPriorConfig,
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._cfg = cfg
+        self._valid_keys = set(cfg.__dataclass_fields__.keys())
+        self._batch_depth = 0
+        self._pending_keys: Set[str] = set()
+        self._dirty_count = self._compute_dirty_count()
+
+    # -----------------------------------------------------------------
+    # Read access
+    # -----------------------------------------------------------------
+    @property
+    def cfg(self) -> GeoPriorConfig:
+        return self._cfg
+
+    def overrides_count(self) -> int:
+        return self._dirty_count
+
+    def snapshot_overrides(self) -> Dict[str, Any]:
+        return dict(self._cfg.to_cfg_overrides())
+    
+    # -----------------------------------------------------------------
+    # Read helpers (schema-aware)
+    # -----------------------------------------------------------------
+    def get_value(
+        self,
+        key: FieldKey,
+        *,
+        default: Any = None,
+    ) -> Any:
+        """
+        Read a config value via a FieldKey.
+
+        Supports:
+        - FieldKey("lambda_cons")
+        - FieldKey("physics_bounds", "K_min")
+        """
+        name = key.name
+        if name not in self._valid_keys:
+            self._emit_error(
+                f"Unknown config key: {name!r}"
+            )
+            return default
+
+        try:
+            cur = getattr(self._cfg, name)
+        except Exception as exc:
+            self._emit_error(
+                f"Failed to read {name!r}: {exc}"
+            )
+            return default
+
+        if not key.is_dict_item():
+            return cur
+
+        if not isinstance(cur, dict):
+            return default
+
+        return cur.get(key.subkey, default)
+
+    def set_value_by_key(
+        self,
+        key: FieldKey,
+        value: Any,
+        *,
+        strict_subkey: bool = True,
+    ) -> bool:
+        """
+        Set a config value via a FieldKey.
+
+        For dict items, updates by replacing the dict object
+        (via merge_dict_field) so change detection stays reliable.
+        """
+        name = key.name
+        if name not in self._valid_keys:
+            self._emit_error(
+                f"Unknown config key: {name!r}"
+            )
+            return False
+
+        if not key.is_dict_item():
+            return self.set_value(name, value)
+
+        # Dict item update
+        try:
+            cur = getattr(self._cfg, name)
+        except Exception as exc:
+            self._emit_error(
+                f"Failed to read {name!r}: {exc}"
+            )
+            return False
+
+        if cur is None:
+            base = {}
+        elif isinstance(cur, dict):
+            base = dict(cur)
+        else:
+            self._emit_error(
+                f"{name!r} is not a dict field."
+            )
+            return False
+
+        sub = key.subkey
+        if strict_subkey and (sub not in base):
+            # For physics_bounds you usually want this ON
+            # to avoid silent typos like "Kmin".
+            self._emit_error(
+                f"Unknown subkey {sub!r} in {name!r}"
+            )
+            return False
+
+        return self.merge_dict_field(
+            name,
+            {sub: value},
+            replace=False,
+        )
+
+    # -----------------------------------------------------------------
+    # Batch updates
+    # -----------------------------------------------------------------
+    @contextmanager
+    def batch(self):
+        self._batch_depth += 1
+        try:
+            yield self
+        finally:
+            self._batch_depth = max(0, self._batch_depth - 1)
+            if self._batch_depth == 0:
+                self._flush_pending()
+
+    # -----------------------------------------------------------------
+    # Mutations (public)
+    # -----------------------------------------------------------------
+    def set_value(self, key: str, value: Any) -> bool:
+        changed = self.patch({key: value})
+        return bool(changed)
+
+    def patch(self, updates: Dict[str, Any]) -> Set[str]:
+        """
+        Patch dataclass fields by name.
+
+        Returns
+        -------
+        changed : set[str]
+            Field names that changed.
+        """
+        changed: Set[str] = set()
+
+        for key, raw in (updates or {}).items():
+            if key not in self._valid_keys:
+                self._emit_error(
+                    f"Unknown config key: {key!r}"
+                )
+                continue
+
+            try:
+                value = self._coerce_value(key, raw)
+                old = getattr(self._cfg, key)
+                if old != value:
+                    setattr(self._cfg, key, value)
+                    changed.add(key)
+            except Exception as exc:
+                self._emit_error(
+                    f"Failed to set {key!r}: {exc}"
+                )
+
+        if changed:
+            self._mark_changed(changed)
+
+        return changed
+
+    def merge_dict_field(
+        self,
+        field: str,
+        updates: Dict[str, Any],
+        *,
+        replace: bool = False,
+    ) -> bool:
+        """
+        Safely update dict-like override fields.
+
+        Use for: feature_overrides, arch_overrides,
+        prob_overrides, tuner_search_space, etc.
+
+        This replaces the dict object so change detection
+        is reliable (avoids in-place mutation invisibility).
+        """
+        if field not in self._valid_keys:
+            self._emit_error(
+                f"Unknown config field: {field!r}"
+            )
+            return False
+
+        cur = getattr(self._cfg, field)
+        if cur is None or not isinstance(cur, dict):
+            base: Dict[str, Any] = {}
+        else:
+            base = dict(cur)
+
+        if replace:
+            new = dict(updates or {})
+        else:
+            new = dict(base)
+            new.update(updates or {})
+
+        if new != cur:
+            setattr(self._cfg, field, new)
+            self._mark_changed({field})
+            return True
+
+        return False
+
+    def replace_config(self, cfg: GeoPriorConfig) -> None:
+        """
+        Replace the entire config object.
+
+        Use when loading a profile / preset.
+        """
+        self._cfg = cfg
+        self._valid_keys = set(cfg.__dataclass_fields__.keys())
+        self._dirty_count = self._compute_dirty_count()
+        self.config_replaced.emit(cfg)
+        self.dirty_changed.emit(self._dirty_count)
+        self.config_changed.emit(set(self._valid_keys))
+
+    # -----------------------------------------------------------------
+    # Internals
+    # -----------------------------------------------------------------
+    def _coerce_value(self, key: str, value: Any) -> Any:
+        # Path-ish fields: accept str and coerce.
+        if key in {"dataset_path", "results_root"}:
+            if value is None:
+                return None
+            if isinstance(value, Path):
+                return value
+            if isinstance(value, str) and value.strip():
+                return Path(value).expanduser()
+            return value
+
+        return value
+
+    def _compute_dirty_count(self) -> int:
+        try:
+            return len(self._cfg.to_cfg_overrides())
+        except Exception:
+            return 0
+
+    def _mark_changed(self, keys: Iterable[str]) -> None:
+        keys_set = set(keys or [])
+        if not keys_set:
+            return
+
+        if self._batch_depth > 0:
+            self._pending_keys |= keys_set
+            return
+
+        self._emit_changed(keys_set)
+
+    def _flush_pending(self) -> None:
+        if not self._pending_keys:
+            return
+        keys = set(self._pending_keys)
+        self._pending_keys.clear()
+        self._emit_changed(keys)
+
+    def _emit_changed(self, keys: Set[str]) -> None:
+        self.config_changed.emit(keys)
+
+        new_dirty = self._compute_dirty_count()
+        if new_dirty != self._dirty_count:
+            self._dirty_count = new_dirty
+            self.dirty_changed.emit(new_dirty)
+
+    def _emit_error(self, msg: str) -> None:
+        self.error_raised.emit(str(msg))

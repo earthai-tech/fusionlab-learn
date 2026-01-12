@@ -39,7 +39,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Mapping
 
 # Directory where this GUI config lives (used as root for nat_utils).
 GUI_CONFIG_DIR = os.path.dirname(__file__)
@@ -102,12 +102,64 @@ def default_tuner_search_space(
         # ----------------------------
         # Optimizer / training
         # ----------------------------
+        # VSN & BatchNorm are *not* tuned here:
+        #   USE_VSN       = True
+        #   USE_BATCH_NORM= False
+        # We keep them fixed via the main config, because
+        # the preprocessing + scaling is designed for that.
+        #
+        # Still allow some variation of VSN width:
+        "vsn_units": [24, 32, 40],
+
+        # --- Physics switches ---
+        #
+        # Always keep full physics active by default.
+        "pde_mode": ["both"],
+
+        "scale_pde_residuals": {"type": "bool"},
+
+        # Config default is "kb", but we can still let tuner
+        # choose between bar/kb if useful.
+        "kappa_mode": ["bar", "kb"],
+
+        # Around GEOPRIOR_HD_FACTOR = 0.6
+        "hd_factor": {
+            "type": "float",
+            "min_value": 0.50,
+            "max_value": 0.70,
+        },
+
+        # --- Learnable scalar initials (model.__init__) ---
+        #
+        # Around GEOPRIOR_INIT_MV = 1e-7
+        "mv": {
+            "type": "float",
+            "min_value": 5e-8,
+            "max_value": 3e-7,
+            "sampling": "log",
+        },
+
+        # Around GEOPRIOR_INIT_KAPPA = 1.0
+        "kappa": {
+            "type": "float",
+            "min_value": 0.8,
+            "max_value": 1.2,
+        },
+        
         "learning_rate": {
             "type": "float",
             "min_value": 3e-4,
             "max_value": 3e-3,
             "sampling": "log",
         },
+        
+        "attention_levels": [ 
+                ['cross', 'memory', 'hierachical']
+            ], 
+        "scales": [ 
+            # [1], 
+            [1, 2]
+        ], 
         # ----------------------------
         # Physics loss weights (compile-time)
         # ----------------------------
@@ -525,7 +577,7 @@ class GeoPriorConfig:
     hidden_units: int = 64
     lstm_units: int = 64
     attention_units: int = 64
-    number_heads: int = 2
+    num_heads: int = 2
     dropout_rate: float = 0.10
     
     memory_size: int = 50
@@ -1082,9 +1134,9 @@ class GeoPriorConfig:
                 "ATTENTION_UNITS",
                 cls.attention_units,
             ),
-            number_heads=iget(
-                "NUMBER_HEADS",
-                cls.number_heads,
+            num_heads=iget(
+                "NUM_HEADS",
+                cls.num_heads,
             ),
             dropout_rate=iget(
                 "DROPOUT_RATE",
@@ -1516,7 +1568,7 @@ class GeoPriorConfig:
         maybe("HIDDEN_UNITS", self.hidden_units)
         maybe("LSTM_UNITS", self.lstm_units)
         maybe("ATTENTION_UNITS", self.attention_units)
-        maybe("NUMBER_HEADS", self.number_heads)
+        maybe("NUM_HEADS", self.num_heads)
         maybe("DROPOUT_RATE", self.dropout_rate)
         
         maybe("MEMORY_SIZE", self.memory_size)
@@ -2101,7 +2153,7 @@ class GeoPriorConfig:
             "hidden_units": self.hidden_units,
             "lstm_units": self.lstm_units,
             "attention_units": self.attention_units,
-            "number_heads": self.number_heads,
+            "num_heads": self.num_heads,
             "dropout_rate": self.dropout_rate,
             "memory_size": self.memory_size,
             "scales": self.scales,
@@ -2143,5 +2195,3 @@ class GeoPriorConfig:
             "arch_overrides": self.arch_overrides,
             "prob_overrides": self.prob_overrides,
         }
-
-        

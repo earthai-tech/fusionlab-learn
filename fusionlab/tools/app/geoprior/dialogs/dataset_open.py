@@ -38,6 +38,22 @@ DATASET_FILTER = (
     "All files (*.*)"
 )
 
+def save_dataframe_to_csv(
+    parent: QWidget,
+    df: pd.DataFrame,
+    target_csv: Path,
+    *,
+    chunk_size: int = 50_000,
+) -> None:
+    """
+    Public wrapper around the chunked CSV save helper.
+    """
+    _save_csv_with_progress(
+        parent,
+        df,
+        target_csv,
+        chunk_size=chunk_size,
+    )
 
 def _load_dataset_with_progress(
     parent: QWidget,

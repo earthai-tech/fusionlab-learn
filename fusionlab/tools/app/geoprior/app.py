@@ -11,19 +11,20 @@ Current features
 - Single "Train" button that runs Stage-1 then Stage-2 training
   in sequence.
 - Log panel + progress bar.
-- A QTabWidget with 4 tabs:
-  [Train, Tune, Inference, Transferability].
-
-Only the Train tab is functionally wired for now. Other tabs are
-simple placeholders and will be populated step by step.
+- A QTabWidget with 9 tabs:
+  [Data, Experimental setup, Preprocess, Train, Tune, Inference,
+   Transferability, Results, Tools].
 """
 
 from __future__ import annotations
 
 import sys
 import time
+import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict
+import pandas as pd
 
 from PyQt5.QtCore import ( 
     Qt, 
@@ -63,10 +64,11 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QDialog,
     QToolButton,
-    QStyle
+    QStyle, 
+    QSplitter
 )
 
-
+from .config.store import GeoConfigStore
 from .workflows.base import RunEnv, GUIHooks
 from .workflows.train import TrainController, TrainGuiState
 from .services.stage1_service import Stage1Service
@@ -82,21 +84,21 @@ from .workflows.transfer import (
     TransferGuiState,
     TransferPlan,
 )
-from .ui.mode_manager import ModeManager
 from .services.results_service import ResultsService
+from .ui.data_tab import DataTab
+from .ui.mode_manager import ModeManager
 from .ui.file_browse import FileBrowseHelper
 from .ui.menu_manager import MenuManager
 from .ui.splash import LoadingSplash
 from .ui.tools_tab import ToolsTab
-
+from .ui.panel import ConfigCenterPanel
+from .ui.preprocess_tab import PreprocessTab
      
 from ..ux_utils import (
     auto_set_ui_fonts,
     auto_resize_window,
     enable_qt_crash_handler,
 )
-
-
 
 from .utils.view_signals import VIS_SIGNALS 
 from .utils.gui_popups import ImagePreviewDialog 
@@ -126,7 +128,6 @@ from .dialogs import (
     InferenceOptionsDialog, 
     GeoPriorResultsDialog,
     PhysicsConfigDialog,
-    PHYSICS_DEFAULTS,
     ScalarsLossDialog,
     ModelParamsDialog,
     TrainOptionsDialog, 
@@ -136,7 +137,10 @@ from .dialogs import (
     Stage1ChoiceDialog, 
     TuneJobSpec,
     open_dataset_with_editor,
-    choose_dataset_for_city
+    choose_dataset_for_city, 
+    CsvEditDialog, 
+    save_dataframe_to_csv, 
+    _load_dataset_with_progress
 )
 
 from .about import show_about_dialog, DOCS_URL
@@ -245,6 +249,10 @@ class GeoPriorForecaster(QMainWindow):
 
         # Central config object (defaults loaded from nat.com/config.py)
         self.geo_cfg = GeoPriorConfig.from_defaults()
+        
+        self.config_store = GeoConfigStore(self.geo_cfg)
+        self.data_tab = None
+        self.setup_tab = None
 
         # Stage-1 manifest hint (used by train/infer flows)
         self._stage1_manifest_hint: Path | None = None
@@ -261,10 +269,23 @@ class GeoPriorForecaster(QMainWindow):
         
         # Map lowercased city name -> manifest path (string)
         self._preferred_stage1_by_city: Dict[str, str] = {}
+        
+        self._main_splitter = None
+        self._console_panel = None
+        self._console_last_h = 220
 
 
     def _init_help_texts(self) -> None:
         """Initialise per-tab help texts and one-shot flags."""
+        self._data_help_text = ModeManager.DEFAULT_HELP_TEXTS["data"]
+        self._data_tip_shown = False
+        
+        self._setup_help_text = ModeManager.DEFAULT_HELP_TEXTS["setup"]
+        self._setup_tip_shown = False
+        
+        self._preprocess_help_text = ModeManager.DEFAULT_HELP_TEXTS["preprocess"]
+        self._preprocess_tip_shown = False
+        
         self._train_help_text = ModeManager.DEFAULT_HELP_TEXTS["train"]
         self._train_tip_shown = False
 
@@ -380,7 +401,9 @@ class GeoPriorForecaster(QMainWindow):
             parent=self,
         )
 
+        
         self.mode_mgr.set_run_buttons(
+            preprocess_btn=self.preprocess_tab.btn_run_stage1,
             train_btn=self.train_btn,
             tune_btn=self.btn_run_tune,
             infer_btn=self.btn_run_infer,
@@ -454,18 +477,15 @@ class GeoPriorForecaster(QMainWindow):
         # Apply Fusionlab stylesheet (tabs / cards / log)
         self.setStyleSheet(FLAB_STYLE_SHEET + TAB_STYLES + LOG_STYLES)
         
-    def _build_ui(self) -> None: 
+
+    def _build_ui(self) -> None:
         root = QWidget(self)
         self.setCentralWidget(root)
-
+    
         layout = QVBoxLayout(root)
-        
-        self._update_splash(42, "Building top toolbar…") 
-        
-        # --- Top row: [Select CSV…] [City / Dataset] [Dry run] [Mode] [Quit] ---
+
         top = QHBoxLayout()
     
-        
         self.select_csv_btn = QPushButton("Open dataset…")
         top.addWidget(self.select_csv_btn)
 
@@ -556,32 +576,49 @@ class GeoPriorForecaster(QMainWindow):
         top.addWidget(self.mode_btn)
         
         layout.addLayout(top)
-        # --- Tabs row: Train / Tune / Inference / Transferability ---
-        self._update_splash(45, "Building tabs…")
         
+        # -------------------------------------------------
+        # Splitter: workspace (tabs+status) / console
+        # -------------------------------------------------
+        self._main_splitter = QSplitter(Qt.Vertical)
+        self._main_splitter.setHandleWidth(6)
+        layout.addWidget(self._main_splitter, 1)
+    
+        # ---------- Workspace (tabs + status row) ----------
+        workspace = QWidget()
+        w_layout = QVBoxLayout(workspace)
+        w_layout.setContentsMargins(0, 0, 0, 0)
+        w_layout.setSpacing(6)
+    
+        self._update_splash(45, "Building tabs…")
         self.tabs = QTabWidget()
         self._init_tabs()
-        layout.addWidget(self.tabs, 1)
-
-        # --- Status line ---
+        w_layout.addWidget(self.tabs, 1)
+    
         status_row = QHBoxLayout()
-
+    
         self.status_label = QLabel("? Idle")
         self.status_label.setStyleSheet(f"color:{PRIMARY};")
-        status_row.addWidget(self.status_label, 1)  # takes the left side
-        
-        status_row.addStretch(1)  # push timer fully to the right
-        
-        # digital run timer (black background, green digits)
+        status_row.addWidget(self.status_label, 1)
+    
+        status_row.addStretch(1)
+    
         self.run_timer = RunClockTimer(self)
         self.run_timer.reset()
         self.run_timer.stop()
         self.run_timer.setVisible(False)
         status_row.addWidget(self.run_timer, 0)
-        
-        layout.addLayout(status_row)
-        
-        # --- Log widget ---
+    
+        w_layout.addLayout(status_row)
+    
+        self._main_splitter.addWidget(workspace)
+    
+        # ---------- Console (log + progress row) ----------
+        self._console_panel = QWidget()
+        c_layout = QVBoxLayout(self._console_panel)
+        c_layout.setContentsMargins(0, 0, 0, 0)
+        c_layout.setSpacing(6)
+    
         self.log_widget = QPlainTextEdit()
         self.log_widget.setObjectName("logWidget")
         self.log_widget.setReadOnly(True)
@@ -589,20 +626,23 @@ class GeoPriorForecaster(QMainWindow):
             QSizePolicy.Expanding,
             QSizePolicy.Expanding,
         )
-        self.log_widget.setMinimumHeight(200)
-        layout.addWidget(self.log_widget, 1)
-
-        # --- Progress row ---
+        # IMPORTANT: allow collapse-to-0
+        self.log_widget.setMinimumHeight(0)
+    
+        c_layout.addWidget(self.log_widget, 1)
+    
         prog = QHBoxLayout()
-
+    
         self.progress_label = QLabel("")
-        self.progress_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.progress_label.setAlignment(
+            Qt.AlignLeft | Qt.AlignVCenter
+        )
         self.progress_label.setSizePolicy(
             QSizePolicy.Minimum,
             QSizePolicy.Fixed,
         )
         prog.addWidget(self.progress_label, 0)
-
+    
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimumHeight(18)
         self.progress_bar.setTextVisible(False)
@@ -611,17 +651,31 @@ class GeoPriorForecaster(QMainWindow):
             QSizePolicy.Fixed,
         )
         prog.addWidget(self.progress_bar, 1)
-
+    
         self.percent_label = QLabel("0 %")
-        self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.percent_label.setAlignment(
+            Qt.AlignRight | Qt.AlignVCenter
+        )
         self.percent_label.setSizePolicy(
             QSizePolicy.Minimum,
             QSizePolicy.Fixed,
         )
         prog.addWidget(self.percent_label, 0)
+    
+        c_layout.addLayout(prog)
+    
+        self._main_splitter.addWidget(self._console_panel)
+    
+        self._main_splitter.setStretchFactor(0, 8)
+        self._main_splitter.setStretchFactor(1, 2)
+        self._main_splitter.setCollapsible(0, False)
+        self._main_splitter.setCollapsible(1, True)
+    
+        self._main_splitter.splitterMoved.connect(
+            self._on_splitter_moved
+        )
 
-        layout.addLayout(prog)
-        
+  
     # ------------------------------------------------------------------
     # Tabs
     # ------------------------------------------------------------------
@@ -683,7 +737,7 @@ class GeoPriorForecaster(QMainWindow):
             sb.setMinimumHeight(26)
             
         temp_box.addLayout(grid_t)
-
+        
         # 2) Training card
         train_card, train_box = self._make_card("Training")
 
@@ -1259,11 +1313,61 @@ class GeoPriorForecaster(QMainWindow):
         x_layout.addStretch(1)
         # ----------------------
  
+        # Data tab (new)
+        data_tab  = DataTab(parent=self)
+        # Setup tab tab (new)
+        setup_tab = ConfigCenterPanel(
+            store=self.config_store,
+            parent=self,
+        )
+        preprocess_tab = PreprocessTab(
+            make_card=self._make_card,
+            make_run_button=self._make_run_button,
+            geo_cfg=self.geo_cfg,
+            runs_root=self.gui_runs_root,
+            parent=self,
+        )
+
+        self.data_tab = data_tab
+        self.setup_tab = setup_tab
+        self.preprocess_tab  = preprocess_tab 
+
         self.train_tab = train_tab
         self.tune_tab = tune_tab
         self.infer_tab = infer_tab
         self.xfer_tab = xfer_tab
+        
+        self._data_tab_index = self.tabs.addTab(
+            self.data_tab,
+            self._workflow_icon(
+                "data.svg",
+                QStyle.SP_DirOpenIcon,
+            ),
+            "Data",
+        )
+        self.data_tab.set_datasets_root(
+            Path(self.gui_runs_root) / "_datasets"
+        )
+        
+        self._setup_tab_index = self.tabs.addTab(
+            self.setup_tab,
+            self._workflow_icon(
+                "setup.svg",
+                QStyle.SP_FileDialogContentsView,
+            ),
+            "Experiment Setup",
+        )
 
+
+        self._preprocess_tab_index = self.tabs.addTab(
+            self.preprocess_tab,
+            self._workflow_icon(
+                "stage1.svg",
+                QStyle.SP_DriveHDIcon,
+            ),
+            "Preprocess",
+        )
+        
         # Results tab – browse & download artifacts/runs
         results_tab = ResultsDownloadTab(
             results_root=self.gui_runs_root,
@@ -1331,6 +1435,11 @@ class GeoPriorForecaster(QMainWindow):
             )
             self._xfer_last_result = {}
             self._update_xfer_view_state()
+
+        try:
+             self.tabs.setCurrentIndex(self._data_tab_index)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Small QMessageBox / dialog helpers for GUIHooks
@@ -1566,15 +1675,39 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
 
     def set_console_visible(self, visible: bool) -> None:
-        """
-        Show or hide the bottom log console.
+        sp = getattr(self, "_main_splitter", None)
+        if sp is None:
+            if getattr(self, "log_widget", None) is not None:
+                self.log_widget.setVisible(visible)
+            return
+    
+        sizes = sp.sizes()
+        if len(sizes) < 2:
+            return
+    
+        total = sum(sizes) or sp.height() or 1
+    
+        if visible:
+            if sizes[1] > 0:
+                return
+            bot = int(getattr(self, "_console_last_h", 220) or 220)
+            bot = max(140, min(bot, int(total * 0.60)))
+            sp.setSizes([total - bot, bot])
+            return
+    
+        # visible == False
+        if sizes[1] > 0:
+            self._console_last_h = sizes[1]
+        sp.setSizes([total, 0])
 
-        Tools / tabs that do not need the shared log (for example the
-        Tools → Dataset explorer) can call this helper so the central
-        workspace uses the full height.
-        """
-        if hasattr(self, "log_widget") and self.log_widget is not None:
-            self.log_widget.setVisible(visible)
+    @pyqtSlot(int, int)
+    def _on_splitter_moved(self, pos: int, index: int) -> None:
+        sp = getattr(self, "_main_splitter", None)
+        if sp is None:
+            return
+        sizes = sp.sizes()
+        if len(sizes) >= 2 and sizes[1] > 0:
+            self._console_last_h = sizes[1]
 
 
     def _is_dry_mode(self) -> bool:
@@ -1592,6 +1725,30 @@ class GeoPriorForecaster(QMainWindow):
             return
 
         help_texts = {
+            "data": (
+                getattr(self, "_data_tab_index", -1),
+                getattr(
+                    self,
+                    "_data_help_text",
+                    "Load / inspect / edit datasets.",
+                ),
+            ),
+            "setup": (
+                getattr(self, "_setup_tab_index", -1),
+                getattr(
+                    self,
+                    "_setup_help_text",
+                    ModeManager.DEFAULT_HELP_TEXTS["setup"],
+                ),
+            ),
+            "preprocess": (
+                getattr(self, "_preprocess_tab_index", -1),
+                getattr(
+                    self,
+                    "_preprocess_help_text",
+                    ModeManager.DEFAULT_HELP_TEXTS["preprocess"],
+                ),
+            ),
             "train": (
                 getattr(self, "_train_tab_index", -1),
                 getattr(
@@ -1635,6 +1792,8 @@ class GeoPriorForecaster(QMainWindow):
         }
 
         self.mode_mgr.update_for_tab(index, self.tabs, help_texts)
+        
+
 
     def _update_xfer_view_state(self) -> None:
         has_result = bool(self._xfer_last_result)
@@ -1690,8 +1849,6 @@ class GeoPriorForecaster(QMainWindow):
         self.mode_mgr.set_dry_mode(self._is_dry_mode())
         self.mode_mgr.update_running_state(any_running)
 
-
-    
     # ------------------------------------------------------------------
     # Signal wiring
     # ------------------------------------------------------------------
@@ -1773,7 +1930,43 @@ class GeoPriorForecaster(QMainWindow):
         self.xfer_results_root_btn.clicked.connect(self._on_browse_xfer_root)
         self.btn_xfer_view.clicked.connect(self._on_xfer_view_clicked)
 
+        self.data_tab.request_open.connect(self._on_open_dataset)
+        self.data_tab.request_open_new.connect(self._on_open_dataset)
+        self.data_tab.request_edit.connect(self._on_data_edit_clicked)
+        self.data_tab.request_save.connect(self._on_data_save_clicked)
+        self.data_tab.request_save_as.connect(self._on_data_save_as_clicked)
+        self.data_tab.request_reload.connect(self._on_data_reload_clicked)
+        self.data_tab.request_load_saved.connect(
+            self._on_data_library_load
+        )
+        self.data_tab.request_duplicate_saved.connect(
+            self._on_data_library_duplicate
+        )
+        self.data_tab.dataset_changed.connect(
+            self.setup_tab.set_dataset_columns,
+        )
+        pt = self.preprocess_tab
+        
+        pt.request_open_dataset.connect(self._on_open_dataset)
+        pt.request_refresh.connect(self._refresh_preprocess_status)
+        pt.request_run_stage1.connect(self._on_preprocess_run_stage1)
+        pt.request_feature_cfg.connect(self._on_open_feature_cfg)
+        
+        pt.request_open_manifest.connect(self._on_open_prep_manifest)
+        pt.request_open_stage1_dir.connect(self._on_open_prep_stage1_dir)
+        pt.request_use_for_city.connect(self._on_use_stage1_for_city)
+        
+        pt.request_browse_results_root.connect(
+            self._on_browse_results_root
+        )
+
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        
+        def _apply_initial_tab_state() -> None:
+            self._on_tab_changed(self.tabs.currentIndex())
+        
+        QTimer.singleShot(0, _apply_initial_tab_state)
+
 
     @pyqtSlot(bool)
     def _on_dry_run_toggled(self, checked: bool) -> None:
@@ -1799,28 +1992,586 @@ class GeoPriorForecaster(QMainWindow):
     
                 
     def _on_tab_changed(self, index: int) -> None:
-        """
-        Update the Mode indicator and toggle the log visibility
-        when the active tab changes.
-        """
         self._update_mode_button(index)
-
-        if not hasattr(self, "log_widget"):
+    
+        data_idx = getattr(self, "_data_tab_index", -1)
+        res_idx = getattr(self, "_results_tab_index", -1)
+        tools_idx = getattr(self, "_tools_tab_index", -1)
+        prep_idx = getattr(self, "_preprocess_tab_index", -1)
+    
+        hide = index in (data_idx, res_idx, tools_idx)
+        self.set_console_visible(not hide)
+    
+        if index == prep_idx:
+            self._refresh_preprocess_status()
+    
+    
+    def _on_preprocess_run_stage1(self) -> None:
+        if self.stage1_thread and self.stage1_thread.isRunning():
+            QMessageBox.information(
+                self,
+                "Busy",
+                "Stage-1 is already running.",
+            )
             return
+    
+        city = self.city_edit.text().strip()
+        if not city:
+            QMessageBox.warning(
+                self,
+                "Missing city",
+                "Please enter a city name first.",
+            )
+            return
+    
+        pt = self.preprocess_tab
+        pt.btn_run_stage1.setEnabled(False)
 
-        results_idx = getattr(self, "_results_tab_index", -1)
-        tools_idx   = getattr(self, "_tools_tab_index", -1)
+        self.geo_cfg.clean_stage1_dir = (
+            pt.chk_prep_clean.isChecked()
+        )
+        self.geo_cfg.build_future_npz = (
+            pt.chk_prep_build_future.isChecked()
+        )
+        self.geo_cfg.stage1_auto_reuse_if_match = (
+            pt.chk_prep_auto_reuse.isChecked()
+        )
+        self.geo_cfg.stage1_force_rebuild_if_mismatch = (
+            pt.chk_prep_force_rebuild.isChecked()
+        )
+    
+        if hasattr(self, "chk_clean_stage1"):
+            self.chk_clean_stage1.setChecked(
+                self.geo_cfg.clean_stage1_dir
+            )
+        if hasattr(self, "chk_build_future"):
+            self.chk_build_future.setChecked(
+                self.geo_cfg.build_future_npz
+            )
+    
+        self.status_updated.emit("Stage-1: preprocessing…")
+        self._update_progress(0.0)
+    
+        self._start_stage1(
+            city=city,
+            results_cb=self._on_preprocess_stage1_done,
+            job_kind="preprocess",
+        )
+    
+    
+    def _on_preprocess_stage1_done(self, result: Any) -> None:
+        self.stage1_thread = None
+        self._stop_run_timer()
+        self._active_job_kind = None
+        self._update_global_running_state()
+    
+        manifest_path = None
+        attr = getattr(result, "manifest_path", None)
+    
+        if attr is not None:
+            manifest_path = str(attr)
+        elif isinstance(result, dict):
+            manifest_path = result.get("manifest_path")
+    
+        if not manifest_path:
+            self.status_updated.emit(
+                "Stage-1 finished without manifest. See log."
+            )
+            return
+    
+        self._prep_last_manifest = manifest_path
+    
+        self.log_updated.emit(
+            "[Stage-1] Finished.\n"
+            f"Manifest: {manifest_path}"
+        )
+        self.status_updated.emit("Idle - Stage-1 ready.")
+    
+        self._refresh_preprocess_status()
+        btn = getattr(self.preprocess_tab, "btn_run_stage1", None)
+        if btn is not None:
+            btn.setEnabled(True)
 
-        # Train / Tune / Inference / Transfer → console visible
-        # Results → console hidden
-        # Tools   → hidden by default; individual tools can override.
-        if index == results_idx:
-            self.set_console_visible(False)
-        elif index == tools_idx:
-            self.set_console_visible(False)   # default for Tools
+    
+    
+    def _set_prep_stage1_actions(
+        self,
+        *,
+        stage1_dir: str | None=None,
+        manifest_path: str | None =None,
+    ) -> None:
+        pt = self.preprocess_tab
+    
+        has_dir = bool(stage1_dir)
+        has_mf = bool(manifest_path)
+    
+        pt.btn_prep_open_stage1_dir.setEnabled(has_dir)
+        pt.btn_prep_open_manifest.setEnabled(has_mf)
+        pt.btn_prep_use_for_city.setEnabled(has_dir)
+    
+        if not has_dir:
+            tip = "Run Stage-1 first."
+            pt.btn_prep_open_stage1_dir.setToolTip(tip)
+            pt.btn_prep_use_for_city.setToolTip(tip)
         else:
-            self.set_console_visible(True)
-         
+            pt.btn_prep_open_stage1_dir.setToolTip(stage1_dir)
+            pt.btn_prep_use_for_city.setToolTip(stage1_dir)
+    
+        if not has_mf:
+            pt.btn_prep_open_manifest.setToolTip(
+                "Run Stage-1 to create a manifest."
+            )
+        else:
+            pt.btn_prep_open_manifest.setToolTip(manifest_path)
+    
+    
+    def _refresh_preprocess_status(self) -> None:
+        pt = self.preprocess_tab
+    
+        city = self.city_edit.text().strip()
+        csv_path = getattr(self, "csv_path", None)
+    
+        pt.set_context(
+            city=city,
+            csv_path=csv_path,
+            runs_root=self.gui_runs_root,
+        )
+    
+        if not city:
+            pt.set_stage1_status(
+                state_text="Stage-1: (no city selected)",
+                manifest_text="Manifest: -",
+            )
+            self._set_prep_stage1_actions(
+                stage1_dir=None,
+                manifest_path=None,
+            )
+            return
+    
+        try:
+            cfg_snap = self.geo_cfg.to_stage1_config()
+        except Exception:
+            cfg_snap = None
+    
+        try:
+            runs, _all_runs = find_stage1_for_city(
+                city=city,
+                results_root=Path(self.gui_runs_root),
+                current_cfg=cfg_snap,
+            )
+        except Exception as exc:
+            pt.set_stage1_status(
+                state_text=(
+                    f"Stage-1: discovery failed ({exc})"
+                ),
+                manifest_text="Manifest: -",
+            )
+            self._set_prep_stage1_actions(
+                stage1_dir=None,
+                manifest_path=None,
+            )
+            return
+    
+        if not runs:
+            pt.set_stage1_status(
+                state_text="Stage-1: not found for this city",
+                manifest_text="Manifest: -",
+            )
+            self._set_prep_stage1_actions(
+                stage1_dir=None,
+                manifest_path=None,
+            )
+            return
+    
+        best = None
+        ordered = sorted(runs, key=lambda x: x.timestamp)
+    
+        for s in reversed(ordered):
+            if s.is_complete and s.config_match:
+                best = s
+                break
+    
+        if best is None:
+            best = ordered[-1]
+    
+        self._prep_best_stage1 = best
+    
+        tag = "OK" if best.is_complete else "INCOMPLETE"
+        match = "MATCH" if best.config_match else "MISMATCH"
+    
+        state = (
+            f"Stage-1: {tag} / {match} "
+            f"(n_train={best.n_train}, "
+            f"n_val={best.n_val})"
+        )
+        mf_text = f"Manifest: {best.manifest_path}"
+    
+        pt.set_stage1_status(
+            state_text=state,
+            manifest_text=mf_text,
+        )
+    
+        self._set_prep_stage1_actions(
+            stage1_dir=str(best.run_dir),
+            manifest_path=str(best.manifest_path),
+        )
+
+    @pyqtSlot()
+    def _on_open_feature_cfg(self) -> None:
+        """
+        Backward-compatible alias for PreprocessTab.
+    
+        PreprocessTab emits `request_feature_cfg`, but the GUI
+        implementation uses `_on_feature_config`.
+        """
+        self._on_feature_config()
+    
+    
+    @pyqtSlot()
+    def _on_browse_results_root(self) -> None:
+        """
+        Browse and set the GUI results root used by all tabs/workflows.
+        """
+        start_dir = str(getattr(self, "gui_runs_root", Path.home()))
+        root = QFileDialog.getExistingDirectory(
+            self,
+            "Select GUI results root",
+            start_dir,
+        )
+        if not root:
+            return
+    
+        new_root = Path(root)
+    
+        # Core roots
+        self.gui_runs_root = new_root
+        self.results_root = new_root
+    
+        # Keep config in sync if field exists
+        if hasattr(self.geo_cfg, "results_root"):
+            self.geo_cfg.results_root = new_root
+    
+        # Keep RunEnv in sync (controllers share this env)
+        if hasattr(self, "_run_env") and self._run_env is not None:
+            self._run_env.gui_runs_root = Path(new_root)
+    
+        # Transfer tab line edit + refresh last xfer discovery
+        if hasattr(self, "xfer_results_root"):
+            self.xfer_results_root.setText(str(new_root))
+            try:
+                self._discover_last_xfer_for_root()
+            except Exception as exc:
+                self.log_updated.emit(
+                    f"[WARN] Could not scan xfer runs: {exc}"
+                )
+    
+        # DataTab datasets root
+        if getattr(self, "data_tab", None) is not None:
+            try:
+                self.data_tab.set_datasets_root(new_root / "_datasets")
+                self.data_tab.refresh_library()
+            except Exception as exc:
+                self.log_updated.emit(
+                    f"[WARN] DataTab refresh failed: {exc}"
+                )
+    
+        # PreprocessTab refresh
+        try:
+            self._refresh_preprocess_status()
+        except Exception as exc:
+            self.log_updated.emit(
+                f"[WARN] Preprocess refresh failed: {exc}"
+            )
+    
+        # Results tab (best-effort)
+        rt = getattr(self, "results_tab", None)
+        if rt is not None:
+            setter = getattr(rt, "set_results_root", None)
+            if callable(setter):
+                try:
+                    setter(new_root)
+                except Exception:
+                    pass
+    
+        self._append_status(f"[GUI] Results root set to: {new_root}")
+
+    
+    def _on_open_prep_manifest(self) -> None:
+        s = getattr(self, "_prep_best_stage1", None)
+        if s is None:
+            return
+        self._open_path(str(s.manifest_path))
+    
+    
+    def _on_open_prep_stage1_dir(self) -> None:
+        s = getattr(self, "_prep_best_stage1", None)
+        if s is None:
+            return
+        self._open_path(str(s.run_dir))
+    
+    
+    def _on_use_stage1_for_city(self) -> None:
+        s = getattr(self, "_prep_best_stage1", None)
+        if s is None:
+            return
+    
+        city = self.city_edit.text().strip()
+        self.set_preferred_stage1_manifest(
+            city=city,
+            manifest_path=str(s.manifest_path),
+        )
+    
+    
+    def _open_path(self, path_str: str) -> None:
+        p = Path(path_str).expanduser()
+        if not p.exists():
+            QMessageBox.warning(
+                self,
+                "Not found",
+                f"Path does not exist:\n{p}",
+            )
+            return
+    
+        try:
+            if sys.platform.startswith("win"):
+                import os
+    
+                os.startfile(str(p))
+            elif sys.platform == "darwin":
+                import subprocess
+    
+                subprocess.Popen(["open", str(p)])
+            else:
+                import subprocess
+    
+                subprocess.Popen(["xdg-open", str(p)])
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Open failed",
+                f"Could not open:\n{p}\n\n{exc}",
+            )
+
+
+    def _sync_data_tab(self) -> None:
+        if not hasattr(self, "data_tab"):
+            return
+    
+        self.data_tab.set_dataset(
+            self.csv_path,
+            self._edited_df,
+            city=str(self.city_edit.text()).strip(),
+            dirty=False,
+        )
+    
+    
+    def _on_data_edit_clicked(self) -> None:
+        if self._edited_df is None:
+            QMessageBox.information(
+                self,
+                "No dataset",
+                "Load a dataset first.",
+            )
+            return
+    
+        dlg = CsvEditDialog(self._edited_df, parent=self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+    
+        new_df = dlg.edited_dataframe()
+        self._edited_df = new_df
+    
+        # If we have a canonical path, overwrite it
+        if self.csv_path:
+            try:
+                save_dataframe_to_csv(
+                    self,
+                    new_df,
+                    Path(self.csv_path),
+                )
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Save failed",
+                    str(exc),
+                )
+                return
+    
+        self._sync_data_tab()
+        self.log_updated.emit("[Data] Dataset edited and saved.")
+    
+
+    def _on_data_save_clicked(self) -> None:
+        if self._edited_df is None:
+            QMessageBox.information(
+                self,
+                "No dataset",
+                "Load a dataset first.",
+            )
+            return
+    
+        if not self.csv_path:
+            self._on_data_save_as_clicked()
+            return
+    
+        try:
+            save_dataframe_to_csv(
+                self,
+                self._edited_df,
+                Path(self.csv_path),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return
+    
+        self._sync_data_tab()
+        self.log_updated.emit("[Data] Dataset saved.")
+    
+    
+    def _on_data_save_as_clicked(self) -> None:
+        if self._edited_df is None:
+            QMessageBox.information(
+                self,
+                "No dataset",
+                "Load a dataset first.",
+            )
+            return
+    
+        out_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save dataset as CSV",
+            "",
+            "CSV files (*.csv);;All files (*.*)",
+        )
+        if not out_path:
+            return
+    
+        try:
+            save_dataframe_to_csv(
+                self,
+                self._edited_df,
+                Path(out_path),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+            return
+    
+        # Update current canonical path to the new one
+        self.csv_path = out_path
+    
+        self._sync_data_tab()
+        self.log_updated.emit(
+            f"[Data] Dataset saved as:\n  {out_path}"
+        )
+    
+    
+    def _on_data_reload_clicked(self) -> None:
+        if not self.csv_path:
+            QMessageBox.information(
+                self,
+                "No dataset",
+                "No dataset path is known yet.",
+            )
+            return
+    
+        try:
+            df = pd.read_csv(self.csv_path)
+        except Exception as exc:
+            QMessageBox.critical(self, "Reload failed", str(exc))
+            return
+    
+        self._edited_df = df
+        self._sync_data_tab()
+        self.log_updated.emit("[Data] Dataset reloaded from disk.")
+
+
+    def _on_data_library_load(self, csv_path: str) -> None:
+        p = Path(csv_path)
+        if not p.exists():
+            QMessageBox.warning(
+                self,
+                "Missing file",
+                f"Dataset not found:\n{p}",
+            )
+            self.data_tab.refresh_library()
+            return
+    
+        try:
+            df = _load_dataset_with_progress(self, p)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Load failed",
+                str(exc),
+            )
+            return
+    
+        if df is None:
+            return
+    
+        self.csv_path = str(p)
+        self._edited_df = df
+    
+        # optional: infer city from filename
+        try:
+            self.city_edit.setText(p.stem)
+        except Exception:
+            pass
+    
+        self._sync_data_tab()
+        self.data_tab.refresh_library(select_path=p)
+        self.log_updated.emit(f"[Data] Loaded: {p.name}")
+    
+    
+    def _next_versioned_path(self, src: Path) -> Path:
+        """
+        Produce: base_v1.csv, base_v2.csv, ...
+        If src already ends with _vN, continue from N+1.
+        """
+        base = src.stem
+        m = re.match(r"^(.*)_v(\d+)$", base)
+        if m:
+            base = m.group(1)
+            start = int(m.group(2)) + 1
+        else:
+            start = 1
+    
+        parent = src.parent
+        for i in range(start, start + 10_000):
+            cand = parent / f"{base}_v{i}{src.suffix}"
+            if not cand.exists():
+                return cand
+    
+        raise RuntimeError("Could not find free version name.")
+    
+    
+    def _on_data_library_duplicate(self, csv_path: str) -> None:
+        src = Path(csv_path)
+        if not src.exists():
+            QMessageBox.warning(
+                self,
+                "Missing file",
+                f"Dataset not found:\n{src}",
+            )
+            self.data_tab.refresh_library()
+            return
+    
+        try:
+            dst = self._next_versioned_path(src)
+            shutil.copy2(src, dst)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Duplicate failed",
+                str(exc),
+            )
+            return
+    
+        self.data_tab.refresh_library(select_path=dst)
+        self.log_updated.emit(
+            f"[Data] Duplicated:\n{src.name} -> {dst.name}"
+        )
+
     # ------------------------------------------------------------------
     # Logging / progress helpers
     # ------------------------------------------------------------------
@@ -1858,7 +2609,11 @@ class GeoPriorForecaster(QMainWindow):
                     self.log_updated.emit(
                         f"  could not interrupt {label}: {exc}"
                     )
-    
+        kind = self._active_job_kind
+        if kind in ("preprocess", "stage1"):
+            self._request_stop_stage1()
+            return
+
         # Optional: stop the run-duration timer here, like before
         self._stop_run_timer()
 
@@ -1928,118 +2683,71 @@ class GeoPriorForecaster(QMainWindow):
         log_mgr = getattr(self, "log_mgr", None)
         self.results_svc.save_gui_log(log_mgr, result)
 
-    
     # ------------------------------------------------------------------
     # Config synchronisation
     # ------------------------------------------------------------------
+    # XXX TODO: #OLDER VERSION TO REMOVE (v3.0) 
+    # def _sync_config_from_ui(self) -> None: 
+    #     """Copy widgets' values into self.geo_cfg."""
+    #     cfg = self.geo_cfg
+    #     cfg.train_end_year = self.sp_train_end.value()
+    #     cfg.forecast_start_year = self.sp_forecast_start.value()
+    #     cfg.forecast_horizon_years = (
+    #         self.sp_forecast_horizon.value()
+    #     )
+    #     cfg.time_steps = self.sp_time_steps.value()
 
-    def _sync_config_from_ui(self) -> None:
-        """Copy widgets' values into self.geo_cfg."""
-        cfg = self.geo_cfg
-        cfg.train_end_year = self.sp_train_end.value()
-        cfg.forecast_start_year = self.sp_forecast_start.value()
-        cfg.forecast_horizon_years = (
-            self.sp_forecast_horizon.value()
-        )
-        cfg.time_steps = self.sp_time_steps.value()
+    #     cfg.epochs = self.sp_epochs.value()
+    #     cfg.batch_size = self.sp_batch_size.value()
+    #     cfg.learning_rate = self.sp_lr.value()
 
-        cfg.epochs = self.sp_epochs.value()
-        cfg.batch_size = self.sp_batch_size.value()
-        cfg.learning_rate = self.sp_lr.value()
+    #     cfg.pde_mode = self.cmb_pde_mode.currentText()
+    #     cfg.lambda_cons = self.sb_lcons.value()
+    #     cfg.lambda_gw = self.sb_lgw.value()
+    #     cfg.lambda_prior = self.sb_lprior.value()
+    #     cfg.lambda_smooth = self.sb_lsmooth.value()
+    #     cfg.lambda_mv = self.sb_lmv.value()
 
-        cfg.pde_mode = self.cmb_pde_mode.currentText()
-        cfg.lambda_cons = self.sb_lcons.value()
-        cfg.lambda_gw = self.sb_lgw.value()
-        cfg.lambda_prior = self.sb_lprior.value()
-        cfg.lambda_smooth = self.sb_lsmooth.value()
-        cfg.lambda_mv = self.sb_lmv.value()
+    #     cfg.clean_stage1_dir = (
+    #         self.chk_clean_stage1.isChecked()
+    #     )
+    #     cfg.build_future_npz = (               
+    #         self.chk_build_future.isChecked()
+    #     )
+    #     cfg.evaluate_training = (
+    #         self.chk_eval_training.isChecked()
+    #     )
 
-        cfg.clean_stage1_dir = (
-            self.chk_clean_stage1.isChecked()
-        )
-        cfg.build_future_npz = (               
-            self.chk_build_future.isChecked()
-        )
-        cfg.evaluate_training = (
-            self.chk_eval_training.isChecked()
-        )
-
-        # This is the missing piece:
-        cfg.tuner_search_space = self._build_tuner_space_from_ui()
+    #     # This is the missing piece:
+    #     cfg.tuner_search_space = self._build_tuner_space_from_ui()
         
+    # XXX todo: NEWEST VERSION V3.2 TO KEEP 
+    
+    def _sync_config_from_ui(self) -> None:
+        patch = {
+            "train_end_year": self.sp_train_end.value(),
+            "forecast_start_year": self.sp_forecast_start.value(),
+            "forecast_horizon_years": self.sp_forecast_horizon.value(),
+            "time_steps": self.sp_time_steps.value(),
+            "epochs": self.sp_epochs.value(),
+            "batch_size": self.sp_batch_size.value(),
+            "learning_rate": self.sp_lr.value(),
+            "pde_mode": self.cmb_pde_mode.currentText(),
+            "lambda_cons": self.sb_lcons.value(),
+            "lambda_gw": self.sb_lgw.value(),
+            "lambda_prior": self.sb_lprior.value(),
+            "lambda_smooth": self.sb_lsmooth.value(),
+            "lambda_mv": self.sb_lmv.value(),
+            "clean_stage1_dir": self.chk_clean_stage1.isChecked(),
+            "build_future_npz": self.chk_build_future.isChecked(),
+            "evaluate_training": self.chk_eval_training.isChecked(),
+            "tuner_search_space": self._build_tuner_space_from_ui(),
+        }
+        self.config_store.patch(patch)
+
     # ------------------------------------------------------------
     #     configure dialog boxes 
     # ------------------------------------------------------------
-
-    # Physics scalar config bridge  (GeoPriorConfig ↔ PhysicsConfigDialog)
-
-    def _physics_cfg_from_geo_cfg(self) -> dict:
-        """
-        Build a NAT-style physics dict from self.geo_cfg.
-
-        Keys match PHYSICS_DEFAULTS / NAT config:
-        MV_LR_MULT, KAPPA_LR_MULT, GEOPRIOR_INIT_MV, ...
-        """
-        cfg = self.geo_cfg
-
-        def get(name: str, attr: str):
-            # Fall back to PHYSICS_DEFAULTS if the dataclass
-            # does not carry the attribute for some reason.
-            return getattr(cfg, attr, PHYSICS_DEFAULTS[name])
-
-        return {
-            "MV_LR_MULT":          float(
-                get("MV_LR_MULT", "mv_lr_mult")),
-            "KAPPA_LR_MULT":       float(
-                get("KAPPA_LR_MULT", "kappa_lr_mult")),
-            "GEOPRIOR_INIT_MV":    float(
-                get("GEOPRIOR_INIT_MV", "geoprior_init_mv")),
-            "GEOPRIOR_INIT_KAPPA": float(
-                get("GEOPRIOR_INIT_KAPPA", "geoprior_init_kappa")),
-            "GEOPRIOR_GAMMA_W":    float(
-                get("GEOPRIOR_GAMMA_W", "geoprior_gamma_w")),
-            "GEOPRIOR_H_REF":      float(
-                get("GEOPRIOR_H_REF", "geoprior_h_ref")),
-            "GEOPRIOR_KAPPA_MODE": str(
-                get("GEOPRIOR_KAPPA_MODE", "geoprior_kappa_mode")).lower(),
-            "GEOPRIOR_HD_FACTOR":  float(
-                get("GEOPRIOR_HD_FACTOR", "geoprior_hd_factor")),
-        }
-
-    def _apply_physics_cfg_to_geo_cfg(self, phys_cfg: dict) -> None:
-        """
-        Take a NAT-style physics dict (as returned by the dialog)
-        and write it back into self.geo_cfg.
-        """
-        cfg = self.geo_cfg
-
-        if "MV_LR_MULT" in phys_cfg:
-            cfg.mv_lr_mult = float(phys_cfg["MV_LR_MULT"])
-
-        if "KAPPA_LR_MULT" in phys_cfg:
-            cfg.kappa_lr_mult = float(phys_cfg["KAPPA_LR_MULT"])
-
-        if "GEOPRIOR_INIT_MV" in phys_cfg:
-            cfg.geoprior_init_mv = float(phys_cfg["GEOPRIOR_INIT_MV"])
-
-        if "GEOPRIOR_INIT_KAPPA" in phys_cfg:
-            cfg.geoprior_init_kappa = float(phys_cfg["GEOPRIOR_INIT_KAPPA"])
-
-        if "GEOPRIOR_GAMMA_W" in phys_cfg:
-            cfg.geoprior_gamma_w = float(phys_cfg["GEOPRIOR_GAMMA_W"])
-
-        if "GEOPRIOR_H_REF" in phys_cfg:
-            cfg.geoprior_h_ref = float(phys_cfg["GEOPRIOR_H_REF"])
-
-        if "GEOPRIOR_KAPPA_MODE" in phys_cfg:
-            cfg.geoprior_kappa_mode = str(
-                phys_cfg["GEOPRIOR_KAPPA_MODE"]
-            ).lower()
-
-        if "GEOPRIOR_HD_FACTOR" in phys_cfg:
-            cfg.geoprior_hd_factor = float(
-                phys_cfg["GEOPRIOR_HD_FACTOR"])
-
     def _get_experiment_name(self, default: str) -> str:
         """
         Return the experiment name from an optional GUI 
@@ -2211,46 +2919,41 @@ class GeoPriorForecaster(QMainWindow):
             f"(keys: {changed}).",
         )
 
-
+            
     @pyqtSlot()
     def _on_physics_config_clicked(self) -> None:
         """
-        Open the PhysicsConfigDialog.
-
-        Values are initialised from self.geo_cfg and written
-        back to self.geo_cfg if the user clicks OK.
+        Open PhysicsConfigDialog and persist changes into GeoPriorConfig
+        via GeoConfigStore (single source of truth).
         """
-        # Make sure temporal + lambda widgets are synced into geo_cfg
+        # Ensure Train tab widgets are pushed into the config first
         self._sync_config_from_ui()
-
-        # Current scalar physics values as NAT-style dict
-        initial = self._physics_cfg_from_geo_cfg()
-
-        updated = PhysicsConfigDialog.edit_physics(
+    
+        # NEW API: dialog returns a patch dict using GeoPriorConfig keys
+        patch = PhysicsConfigDialog.edit(
             parent=self,
-            cfg=initial,
+            store=self.config_store,
         )
-        if updated is None:
-            # User cancelled
+        if not patch:
             return
-
-        # Push the new values into GeoPriorConfig
-        self._apply_physics_cfg_to_geo_cfg(updated)
-
-        # Optional: sanity check + log
+    
         try:
+            # Optional safety check
             self.geo_cfg.ensure_valid()
+    
         except Exception as exc:
             QMessageBox.warning(
                 self,
                 "Physics configuration",
-                f"Updated physics values may be inconsistent:\n\n{exc}",
+                f"Could not apply physics config:\n\n{exc}",
             )
-        else:
-            self.log_updated.emit(
-                "[Physics] Scalar physics parameters updated."
-            )
-            
+            return
+    
+        keys = ", ".join(sorted(patch.keys()))
+        self.log_updated.emit(
+            f"[Physics] Updated: {keys}"
+        )
+        
 
     # ------------------------------------------------------------------
     # Preferred Stage-1 manifest API (used by Stage1ManagerTool)
@@ -2345,13 +3048,14 @@ class GeoPriorForecaster(QMainWindow):
             city = getattr(self.geo_cfg, "city", None)
 
         # 2) City line-edit on the toolbar, if any
-        if not city and hasattr(self, "city_lineedit"):
+        if not city and hasattr(self, "city_edit"):
             try:
-                txt = self.city_lineedit.text().strip()
+                txt = self.city_edit.text().strip()
                 if txt:
                     city = txt
             except Exception:
                 pass
+
 
         return self._get_preferred_stage1_manifest_for_city(city)
 
@@ -2675,6 +3379,30 @@ class GeoPriorForecaster(QMainWindow):
             return  # user cancelled or error
 
         self.csv_path = csv_path
+        
+        # Keep config in sync
+        try:
+            self.config_store.patch(
+                {
+                    "dataset_path": str(self.csv_path),
+                    "city": self.city_edit.text().strip(),
+                }
+            )
+        except Exception as exc:
+            self.log_updated.emit(f"[WARN] config patch: {exc}")
+        
+        # Update DataTab (will emit dataset_changed -> SetupTab)
+        if self.data_tab is not None:
+            self.data_tab.set_dataset(
+                self.csv_path,
+                self._edited_df,
+                city=self.city_edit.text().strip(),
+                dirty=True,
+            )
+        elif self.setup_tab is not None and self._edited_df is not None:
+            self.setup_tab.set_dataset_columns(
+                [str(c) for c in self._edited_df.columns]
+            )
 
         # Auto-fill City/Dataset if empty
         if not self.city_edit.text().strip() and city_name:
@@ -2696,6 +3424,9 @@ class GeoPriorForecaster(QMainWindow):
             )
             msg.exec_()
             self._feature_tip_shown = True
+        
+        self._sync_data_tab()
+        self.data_tab.refresh_library(select_path=self.csv_path)
 
     @pyqtSlot()
     def _on_train_clicked(self) -> None:
@@ -3873,62 +4604,144 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     # Thread orchestration
     # ------------------------------------------------------------------
-    def _start_stage1(self, city: str) -> None:
+    def _start_stage1(
+        self,
+        city: str,
+        *,
+        results_cb=None,
+        job_kind: str = "stage1",
+    ) -> None:
         results_root = getattr(self, "results_root", self.gui_runs_root)
-
-        # Make sure we have cfg_overrides dict to work with
-        overrides = getattr(self, "_cfg_overrides", {}) or {}
-        overrides = dict(overrides)  # shallow copy
-
-        edited_df = self._edited_df
-
-        # If no in-memory dataset is provided, resolve it from _datasets/
+    
+        # Sync GUI → GeoPriorConfig (v3.2 source of truth)
+        try:
+            self._sync_config_from_ui()
+        except Exception:
+            pass
+    
+        # Build overrides from GeoPriorConfig v3.2
+        cfg_overrides = {}
+        try:
+            cfg_overrides = self.geo_cfg.to_cfg_overrides()
+        except Exception:
+            cfg_overrides = {}
+    
+        # Merge any controller-provided overrides (TrainController)
+        prev = getattr(self, "_cfg_overrides", {}) or {}
+        if isinstance(prev, dict):
+            cfg_overrides.update(prev)
+    
+        edited_df = getattr(self, "_edited_df", None)
+    
+        # If no in-memory dataset, use selected CSV or resolve by city
         if edited_df is None:
-            csv_path_str = choose_dataset_for_city(
-                parent=self,
-                city=city,
-                results_root=Path(results_root),
-            )
-            if not csv_path_str:
-                # User cancelled or no dataset found; dialog already
-                # informed them, so just abort Stage-1 quietly.
-                
-                return
-
-            csv_path = Path(csv_path_str)
-            overrides["DATA_DIR"] = str(csv_path.parent)
-            overrides["BIG_FN"] = csv_path.name
-
-            # Keep a stable copy for Stage1Thread
-            self._cfg_overrides = overrides
-
-            # Optional: small log line in GUI
+            csv_path = getattr(self, "csv_path", None)
+    
+            if csv_path is None:
+                csv_path_str = choose_dataset_for_city(
+                    parent=self,
+                    city=city,
+                    results_root=Path(results_root),
+                )
+                if not csv_path_str:
+                    return
+                csv_path = Path(csv_path_str)
+            else:
+                csv_path = Path(str(csv_path))
+    
+            cfg_overrides["DATA_DIR"] = str(csv_path.parent)
+            cfg_overrides["BIG_FN"] = csv_path.name
+    
             self.log_updated.emit(
                 f"[Stage-1] Using dataset: {csv_path.name} "
                 f"({csv_path.parent})"
             )
-
+    
+        # Keep stable copy for Stage1Thread + training reuse
+        self._cfg_overrides = dict(cfg_overrides)
+    
         th = Stage1Thread(
             city=city,
             cfg_overrides=self._cfg_overrides,
             clean_run_dir=self.geo_cfg.clean_stage1_dir,
             base_cfg=self.geo_cfg._base_cfg,
-            edited_df=edited_df,        # may still be None
+            edited_df=edited_df,
             results_root=str(results_root),
             parent=self,
         )
         self.stage1_thread = th
-
+    
         th.log_updated.connect(self.log_updated.emit)
         th.status_updated.connect(self.status_updated.emit)
         th.progress_changed.connect(self._on_thread_progress)
-        th.results_ready.connect(self._on_stage1_finished)
+    
+        cb = results_cb or self._on_stage1_finished
+        th.results_ready.connect(cb)
+    
         th.error_occurred.connect(self._on_worker_error)
-
+    
+        self._active_job_kind = job_kind
+        self._update_global_running_state()
+        self._start_run_timer()
+    
         th.start()
 
-        # Now a job is actually running → show Stop, update labels
-        self._update_global_running_state()
+    # def _start_stage1(self, city: str) -> None:
+    #     results_root = getattr(self, "results_root", self.gui_runs_root)
+
+    #     # Make sure we have cfg_overrides dict to work with
+    #     overrides = getattr(self, "_cfg_overrides", {}) or {}
+    #     overrides = dict(overrides)  # shallow copy
+
+    #     edited_df = self._edited_df
+
+    #     # If no in-memory dataset is provided, resolve it from _datasets/
+    #     if edited_df is None:
+    #         csv_path_str = choose_dataset_for_city(
+    #             parent=self,
+    #             city=city,
+    #             results_root=Path(results_root),
+    #         )
+    #         if not csv_path_str:
+    #             # User cancelled or no dataset found; dialog already
+    #             # informed them, so just abort Stage-1 quietly.
+                
+    #             return
+
+    #         csv_path = Path(csv_path_str)
+    #         overrides["DATA_DIR"] = str(csv_path.parent)
+    #         overrides["BIG_FN"] = csv_path.name
+
+    #         # Keep a stable copy for Stage1Thread
+    #         self._cfg_overrides = overrides
+
+    #         # Optional: small log line in GUI
+    #         self.log_updated.emit(
+    #             f"[Stage-1] Using dataset: {csv_path.name} "
+    #             f"({csv_path.parent})"
+    #         )
+
+    #     th = Stage1Thread(
+    #         city=city,
+    #         cfg_overrides=self._cfg_overrides,
+    #         clean_run_dir=self.geo_cfg.clean_stage1_dir,
+    #         base_cfg=self.geo_cfg._base_cfg,
+    #         edited_df=edited_df,        # may still be None
+    #         results_root=str(results_root),
+    #         parent=self,
+    #     )
+    #     self.stage1_thread = th
+
+    #     th.log_updated.connect(self.log_updated.emit)
+    #     th.status_updated.connect(self.status_updated.emit)
+    #     th.progress_changed.connect(self._on_thread_progress)
+    #     th.results_ready.connect(self._on_stage1_finished)
+    #     th.error_occurred.connect(self._on_worker_error)
+
+    #     th.start()
+
+    #     # Now a job is actually running → show Stop, update labels
+    #     self._update_global_running_state()
  
     def _run_job(self, job: TrainJobSpec) -> None:
         """

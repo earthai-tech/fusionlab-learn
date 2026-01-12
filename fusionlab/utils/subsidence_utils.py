@@ -1719,6 +1719,176 @@ def clean_gwl_zsurf(
     return df, report
 
 
+def postprocess_eval_json(
+    eval_json: Union[str, Mapping[str, Any]],
+    *,
+    cfg: Optional[Mapping[str, object]] = None,
+    scope: Literal["all", "subsidence", "physics"] = "all",
+    out_path: Optional[str] = None,
+    overwrite: bool = False,
+    add_rmse: bool = True,
+    force: bool = False,
+    indent: int = 2,
+) -> Dict[str, Any]:
+    """
+    Post-hoc convert a Stage-2 evaluation JSON from SI to interpretable units.
+
+    This is a safe wrapper around `convert_eval_payload_units(...)` that:
+    - loads a JSON from disk (or accepts a payload dict),
+    - infers unit factors from `payload["units"]` when cfg is missing,
+    - avoids double conversion unless `force=True`,
+    - optionally adds RMSE fields (sqrt(MSE)),
+    - writes a converted JSON file if `out_path` is provided.
+
+    Parameters
+    ----------
+    eval_json :
+        Either a file path to the saved JSON, or an in-memory mapping.
+    cfg :
+        Optional config mapping/module. If missing (or incomplete), this helper
+        will synthesize the minimal keys needed for conversion:
+        - "SUBS_UNIT_TO_SI"
+        - "TIME_UNITS"
+    scope :
+        Forwarded to `convert_eval_payload_units(...)`.
+    out_path :
+        If given, write the converted payload there. If a directory is given,
+        a filename is generated next to the input name (or "geoprior_eval...").
+    overwrite :
+        If False and out_path exists, raise.
+    add_rmse :
+        If True, add RMSE fields wherever MSE is present (metrics_evaluate,
+        point_metrics, per_horizon).
+    force :
+        If False, skip conversion when payload already declares an interpretable
+        subsidence unit (e.g., "mm"). If True, always convert.
+    indent :
+        JSON indent used when writing.
+
+    Returns
+    -------
+    dict
+        The converted payload (always returned as a dict).
+    """
+    # ----------------------------
+    # 1) Load payload if needed
+    # ----------------------------
+    src_path = None
+    if isinstance(eval_json, (str, os.PathLike)):
+        src_path = os.fspath(eval_json)
+        with open(src_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    else:
+        payload = dict(eval_json)
+
+    # ----------------------------
+    # 2) Build minimal cfg if needed
+    # ----------------------------
+    cfg_eff: Dict[str, object] = dict(cfg or {})
+    units = payload.get("units", {})
+    if isinstance(units, dict):
+        # Help `subs_unit_to_si(cfg)` by providing SUBS_UNIT_TO_SI when missing.
+        if "SUBS_UNIT_TO_SI" not in cfg_eff and "subs_unit_to_si" in units:
+            try:
+                cfg_eff["SUBS_UNIT_TO_SI"] = float(units["subs_unit_to_si"])
+            except Exception:
+                pass
+
+        # Help time-rate conversions (epsilon_*_raw) if present.
+        if "TIME_UNITS" not in cfg_eff and "time_units" in units:
+            cfg_eff["TIME_UNITS"] = str(units["time_units"])
+
+    # ----------------------------
+    # 3) Decide whether to convert
+    # ----------------------------
+    already_unit = ""
+    if isinstance(units, dict):
+        already_unit = str(units.get("subs_metrics_unit", "")).strip().lower()
+
+    # If already interpretable (e.g. "mm"), do nothing unless forced.
+    # Note: in your payloads, SI mode sets subs_metrics_unit="m".
+    do_convert = force or (already_unit not in ("mm", "millimeter", "millimeters"))
+
+    out = payload
+    if do_convert:
+        # Use your existing conversion logic (DRY).
+        out = convert_eval_payload_units(  # type: ignore[name-defined]
+            payload,
+            cfg_eff,
+            mode="interpretable",
+            scope=scope,
+            savefile=None,   # we handle writing ourselves below
+            fmt="json",
+            indent=indent,
+            copy_payload=True,
+        )
+
+    # ----------------------------
+    # 4) Add RMSE fields (optional)
+    # ----------------------------
+    if add_rmse:
+        def _safe_sqrt(x: Any) -> Optional[float]:
+            try:
+                v = float(x)
+            except Exception:
+                return None
+            if not math.isfinite(v) or v < 0.0:
+                return None
+            return float(math.sqrt(v))
+
+        me = out.get("metrics_evaluate")
+        if isinstance(me, dict):
+            # q50 convenience
+            if "subs_pred_mse_q50" in me and "subs_pred_rmse_q50" not in me:
+                r = _safe_sqrt(me.get("subs_pred_mse_q50"))
+                if r is not None:
+                    me["subs_pred_rmse_q50"] = r
+            if "gwl_pred_mse_q50" in me and "gwl_pred_rmse_q50" not in me:
+                r = _safe_sqrt(me.get("gwl_pred_mse_q50"))
+                if r is not None:
+                    me["gwl_pred_rmse_q50"] = r
+
+        pm = out.get("point_metrics")
+        if isinstance(pm, dict):
+            if "mse" in pm and "rmse" not in pm:
+                r = _safe_sqrt(pm.get("mse"))
+                if r is not None:
+                    pm["rmse"] = r
+
+        ph = out.get("per_horizon")
+        if isinstance(ph, dict) and "mse" in ph and "rmse" not in ph:
+            mse_map = ph.get("mse")
+            if isinstance(mse_map, dict):
+                rmse_map: Dict[str, float] = {}
+                for k, v in mse_map.items():
+                    r = _safe_sqrt(v)
+                    if r is not None:
+                        rmse_map[str(k)] = r
+                if rmse_map:
+                    ph["rmse"] = rmse_map
+
+    # ----------------------------
+    # 5) Write to disk if requested
+    # ----------------------------
+    if out_path:
+        dst = os.fspath(out_path)
+        if os.path.isdir(dst):
+            # If caller gave a directory, build a filename.
+            base = "geoprior_eval_interpretable.json"
+            if src_path:
+                root = os.path.splitext(os.path.basename(src_path))[0]
+                base = f"{root}_interpretable.json"
+            dst = os.path.join(dst, base)
+
+        if (not overwrite) and os.path.exists(dst):
+            raise FileExistsError(f"File exists: {dst}")
+
+        # Keep UTF-8 friendly (matches your writer style elsewhere).
+        with open(dst, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=int(indent), ensure_ascii=False)
+
+    return dict(out)
+
 # # -----------------------
 # # Recommended usage
 # # -----------------------
@@ -1738,165 +1908,3 @@ def clean_gwl_zsurf(
 #     gwl_scale="auto",   # should pick 1.0
 # )
 
-
-# If config says "GWL", treat it as an alias and standardize to depth_bgs.
-# if isinstance(GWL_COL, str) and (GWL_COL.strip().lower() == "gwl"):
-#     # Priority order: prefer the physically meaningful meters column
-#     if ("GWL_depth_bgs" in df_raw.columns) and ("GWL" in df_raw.columns):
-#         print("  [GWL] Config uses 'GWL'. Both 'GWL' and 'GWL_depth_bgs' exist; "
-#               "switching GWL_COL -> 'GWL_depth_bgs' (meters).")
-#         GWL_COL = "GWL_depth_bgs"
-
-#     elif ("GWL_depth_bgs" in df_raw.columns) and ("GWL" not in df_raw.columns):
-#         print("  [GWL] Config uses 'GWL' but dataset has 'GWL_depth_bgs'. "
-#               "Switching GWL_COL -> 'GWL_depth_bgs'.")
-#         GWL_COL = "GWL_depth_bgs"
-
-#     elif ("GWL" in df_raw.columns) and ("GWL_depth_bgs" not in df_raw.columns):
-#         # We only rename if the target name does not already exist.
-#         print("  [GWL] Dataset has 'GWL' but missing 'GWL_depth_bgs'. "
-#               "Renaming column 'GWL' -> 'GWL_depth_bgs' for consistency.")
-#         df_raw.rename(columns={"GWL": "GWL_depth_bgs"}, inplace=True)
-#         GWL_COL = "GWL_depth_bgs"
-
-#     else:
-#         print("  [GWL] Config uses 'GWL' but dataset has neither 'GWL' nor "
-#               "'GWL_depth_bgs'. Will error later in required-column checks.")
-
-# ------------------------------------------------------------------
-# 2.2 Decide the "meters" groundwater source used for physics
-#
-# Rule (physics-first):
-#   - Physics MUST use meters. Prefer 'GWL_depth_bgs' or 'GWL'.
-#   - If user explicitly provides a GWL_COL (non-None), we interpret it
-#     as "this is the column I want as the PHYSICS groundwater input".
-#       * If it exists and is NOT z-score -> accept.
-#       * If it is z-score -> reject (physics requires meters).
-#   - If user does NOT provide GWL_COL (None or ''), auto-detect:
-#       * If meters exist -> choose 'GWL_depth_bgs' (preferred) else 'GWL'
-#         and print a message.
-#       * If meters exist AND z-score exists -> still choose meters and
-#         print a message that z-score will be ignored for physics.
-#       * If only z-score exists -> raise with a clear physics message.
-#
-# Optional:
-#   - If z-score exists AND meters exists, keep z-score as an optional
-#     ML convenience feature (if you want), but never use it for physics.
-# ------------------------------------------------------------------
-
-# def _is_nonempty_str(x) -> bool:
-#     return isinstance(x, str) and x.strip() != ""
-
-# def _looks_like_zscore_name(col: str) -> bool:
-#     return isinstance(col, str) and col.lower().endswith("_z")
-
-# def resolve_gwl_for_physics(
-#     df: pd.DataFrame,
-#     gwl_col_user: Optional[str],
-#     *,
-#     prefer_depth_bgs: bool = True,
-#     allow_keep_zscore_as_ml: bool = True,
-# ) -> tuple[str, Optional[str]]:
-#     cols = set(df.columns)
-
-#     meters_pref = ["GWL_depth_bgs", "GWL"] if prefer_depth_bgs else ["GWL", "GWL_depth_bgs"]
-#     zscore_cands = ["GWL_depth_bgs_z", "GWL_z"]
-
-#     meters_available = [c for c in meters_pref if c in cols]
-#     zscore_available = [c for c in zscore_cands if c in cols]
-
-#     def is_z(col: str) -> bool:
-#         return isinstance(col, str) and (col.lower().endswith("_z") or col in zscore_cands)
-
-#     def nonempty(x) -> bool:
-#         return isinstance(x, str) and x.strip() != ""
-
-#     # --- User provided something ---
-#     if nonempty(gwl_col_user):
-#         if gwl_col_user not in cols:
-#             raise ValueError(
-#                 f"GWL_COL={gwl_col_user!r} was provided but does not exist in the dataset."
-#             )
-
-#         # User provided z-score column:
-#         if is_z(gwl_col_user):
-#             if meters_available:
-#                 gwl_m = meters_available[0]
-#                 gwl_z = gwl_col_user if allow_keep_zscore_as_ml else None
-#                 print(
-#                     f"  [GWL] Config/user requested {gwl_col_user!r} (z-score), "
-#                     f"but meters column {gwl_m!r} exists. "
-#                     f"Using {gwl_m!r} for physics; keeping {gwl_z!r} as ML-only."
-#                 )
-#                 return gwl_m, gwl_z
-#             raise ValueError(
-#                 f"GWL_COL={gwl_col_user!r} is z-scored, and no meters groundwater column "
-#                 "('GWL_depth_bgs' or 'GWL') exists. Physics requires meters."
-#             )
-
-#         # User provided meters column:
-#         gwl_m = gwl_col_user
-#         gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
-#         if gwl_z is not None:
-#             print(
-#                 f"  [GWL] Using user-provided meters column {gwl_m!r} for physics. "
-#                 f"Z-score {gwl_z!r} exists and can be kept ML-only."
-#             )
-#         else:
-#             print(f"  [GWL] Using user-provided meters column {gwl_m!r} for physics.")
-#         return gwl_m, gwl_z
-
-#     # --- Auto-detect (user did not provide) ---
-#     if meters_available:
-#         gwl_m = meters_available[0]
-#         gwl_z = zscore_available[0] if (allow_keep_zscore_as_ml and zscore_available) else None
-#         if gwl_z is not None:
-#             print(
-#                 f"  [GWL] Auto-selected meters {gwl_m!r} for physics. "
-#                 f"Z-score {gwl_z!r} exists; it will NOT be used for physics."
-#             )
-#         else:
-#             print(f"  [GWL] Auto-selected meters {gwl_m!r} for physics.")
-#         return gwl_m, gwl_z
-
-#     if zscore_available:
-#         raise ValueError(
-#             "No groundwater column in meters was found (expected 'GWL_depth_bgs' or 'GWL'), "
-#             f"but z-score column(s) exist: {zscore_available}. Physics requires meters."
-#         )
-
-#     raise ValueError(
-#         "No groundwater column found. Expected 'GWL_depth_bgs' or 'GWL' (meters)."
-#     )
-
-# def resolve_head_column(
-#     df: pd.DataFrame,
-#     *,
-#     depth_col: str,
-#     head_col: str = "head_m",
-#     z_surf_col: Optional[str] = None,
-#     use_head_proxy: bool = True,
-# ) -> tuple[str, Optional[str]]:
-#     cols = set(df.columns)
-
-#     # Prefer explicit head column if present
-#     if head_col and head_col in cols:
-#         return head_col, z_surf_col if (z_surf_col in cols if z_surf_col else False) else None
-
-#     # Else compute from z_surf - depth if possible
-#     if z_surf_col and (z_surf_col in cols):
-#         new_head = "head_m"  # canonical name
-#         df[new_head] = pd.to_numeric(df[z_surf_col], errors="coerce"
-#                                      ) - pd.to_numeric(df[depth_col], errors="coerce")
-#         return new_head, z_surf_col
-
-#     # Else proxy: head ≈ -depth (only if allowed)
-#     if use_head_proxy:
-#         new_head = "head_m"
-#         df[new_head] = -pd.to_numeric(df[depth_col], errors="coerce")
-#         return new_head, None
-
-#     raise ValueError(
-#         "Cannot resolve head. Provide 'head_m' or 'z_surf' (Z_SURF_COL), "
-#         "or enable USE_HEAD_PROXY."
-#     )

@@ -79,7 +79,9 @@ from fusionlab.utils.scale_metrics import (
     point_metrics,
 )
 from fusionlab.utils.spatial_utils import deg_to_m_from_lat
-from fusionlab.utils.subsidence_utils import convert_eval_payload_units
+from fusionlab.utils.subsidence_utils import ( 
+    convert_eval_payload_units, postprocess_eval_json
+    )
 from fusionlab.plot.forecast import plot_eval_future
 
 from fusionlab.nn.pinn.geoprior.models import GeoPriorSubsNet, PoroElasticSubsNet
@@ -2735,6 +2737,20 @@ save_ablation_record(
 )
 print("Ablation record saved.")
 #
+# Convert an existing SI JSON to interpretable and write a new file:
+json_out_interp = os.path.join(
+    RUN_OUTPUT_PATH, f"geoprior_eval_phys_{stamp}_interpretable.json"
+ )
+out = postprocess_eval_json(
+    json_out,
+    scope="all",
+    out_path=json_out_interp,
+    overwrite=True,
+    add_rmse=True,
+)
+# "mm" (if SUBS_UNIT_TO_SI ~ 1e-3)
+print("Interpretable EVAL JSON file to", out["units"]["subs_metrics_unit"])  
+
 
 try:
     # payload is what you saved via export_physics_payload(...)

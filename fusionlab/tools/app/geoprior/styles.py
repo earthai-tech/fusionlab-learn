@@ -65,6 +65,9 @@ MODE_TUNE_COLOR   = "#8D4004"    # Tuning = neutral brown
 MODE_INFER_COLOR  = "#00aa00"    # Inference = green
 MODE_XFER_COLOR   = "#CF3476"    # Transferability = magenta
 MODE_RESULTS_COLOR = "#4B5563"   # Results = slate grey
+MODE_DATA_COLOR = "#0284C7"   # sky blue for Data tab
+MODE_SETUP_COLOR = "#7c3aed"
+MODE_PREPROCESS_COLOR = "#0ea5e9"
 
 # ------------------------------------------------------------------ #
 #  Run button colours
@@ -586,5 +589,9 @@ __all__ = [
     "RUN_BUTTON_IDLE",
     "RUN_BUTTON_HOVER",
     "RUN_BUTTON_DISABLED",
+    
+    "MODE_DATA_COLOR",
+    "MODE_SETUP_COLOR",
+    "MODE_PREPROCESS_COLOR",
 ]
 
