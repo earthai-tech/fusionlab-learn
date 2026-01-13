@@ -191,11 +191,19 @@ class PreprocessTab(QWidget):
         self.btn_prep_open_dataset = QPushButton(
             "Open dataset…"
         )
+        self.btn_prep_feature_cfg = QPushButton(
+            "Feature config…"
+        )
+        
         inp_btns = QHBoxLayout()
+        inp_btns.setSpacing(8)
+        
         inp_btns.addWidget(self.btn_prep_open_dataset)
+        inp_btns.addWidget(self.btn_prep_feature_cfg)
         inp_btns.addStretch(1)
+        
         inp_box.addLayout(inp_btns)
-    
+
         row.addWidget(inp_card, 1)
     
         # ------------- Card 2: Stage-1 options ----------
@@ -261,24 +269,6 @@ class PreprocessTab(QWidget):
     
         p_layout.addLayout(row)
     
-        # -------------------------------------------------
-        # Row 3: Feature config (left) + Run (right)
-        # -------------------------------------------------
-        feature_run = QHBoxLayout()
-        feature_run.setSpacing(10)
-        
-        self.btn_prep_feature_cfg = QPushButton(
-            "Feature config…"
-        )
-        self.btn_run_stage1 = self._make_run_button(
-            "Run Stage-1 preprocessing"
-        )
-        
-        feature_run.addWidget(self.btn_prep_feature_cfg)
-        feature_run.addStretch(1)
-        feature_run.addWidget(self.btn_run_stage1)
-        
-        p_layout.addLayout(feature_run)
 
         # -------------------------------------------------
         # Workspace (expands)
@@ -305,6 +295,21 @@ class PreprocessTab(QWidget):
     
         ws_box.addWidget(self.ws_tabs)
         p_layout.addWidget(ws_card, 1)
+        
+        # -------------------------------------------------
+        # Row 3: Feature config (left) + Run (right)
+        # -------------------------------------------------
+        run_row = QHBoxLayout()
+        run_row.setSpacing(10)
+        
+        self.btn_run_stage1 = self._make_run_button(
+            "Run Stage-1 preprocessing"
+        )
+        
+        run_row.addStretch(1)
+        run_row.addWidget(self.btn_run_stage1)
+        
+        p_layout.addLayout(run_row)
 
 
     def _wire(self) -> None:

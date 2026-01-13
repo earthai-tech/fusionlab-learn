@@ -16,7 +16,7 @@ import json
 import os
 from typing import Any, Dict, Optional
 
-from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtCore import Qt, QUrl,QEvent, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -42,6 +42,9 @@ from PyQt5.QtWidgets import (
     QWidget,
     QGridLayout,
     QSizePolicy,
+    QTreeWidgetItem, 
+    QTreeWidget, 
+    QTextBrowser
 )
 
 from ..config.geoprior_config import GeoPriorConfig
@@ -53,60 +56,56 @@ from ..config.prior_schema import (
     PHYSICS_GROUP_TITLES,
     PHYSICS_SCHEMA,
 )
-
+from ..config.helps import help_text, first_line
 from ..styles import (
     FLAB_STYLE_SHEET,
     PALETTE,
     PRIMARY,
     SECONDARY,
+    SECONDARY_TBLUE
 )
 
-_DLG_QSS = (
-    FLAB_STYLE_SHEET
-    + f"""
+_DLG_QSS = f"""
+/* ---------------------------------------------------------
+   GeoPrior PhysicsConfigDialog - dialog scoped stylesheet
+   --------------------------------------------------------- */
+
 QDialog {{
-  background: {PALETTE.get("light_bg", "#ffffff")};
+  background: {PALETTE.get("light_bg", "#f8fafc")};
+  color: {PALETTE.get("light_text", "#0f172a")};
+  font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+}}
+
+QToolTip {{
+  background-color: rgba(15, 23, 42, 0.96);
+  color: #e5e7eb;
+  border: 1px solid {PRIMARY};
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
 }}
 
 QFrame#card {{
-  background: #ffffff;
+  background: {PALETTE.get("light_card_bg", "#ffffff")};
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 12px;
 }}
 
 QLabel#title {{
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 18px;
   color: {PALETTE.get("light_text_title", PRIMARY)};
 }}
 
 QLabel#muted {{
-  color: {PALETTE.get("light_text_muted", "#5A6B7B")};
+  color: {PALETTE.get("light_text_muted", "#64748b")};
 }}
 
-QListWidget {{
-  background: #ffffff;
-  border: 1px solid rgba(0, 0, 0, 0.10);
-  border-radius: 12px;
-  padding: 6px;
-}}
-
-QListWidget::item {{
-  padding: 9px 10px;
-  border-radius: 10px;
-}}
-
-QListWidget::item:hover {{
-  background: rgba(0, 0, 0, 0.04);
-}}
-
-QListWidget::item:selected {{
-  background: {SECONDARY};
-  color: #ffffff;
-  font-weight: 700;
-}}
-
-QListWidget::item:selected:hover {{
-  background: {SECONDARY};
+QLabel[role="hint"] {{
+  color: {PALETTE.get("light_text_muted", "#64748b")};
+  font-style: italic;
+  font-weight: 400;
+  font-size: 11px;
 }}
 
 QFrame#fieldTile {{
@@ -119,9 +118,361 @@ QLabel#fieldLabel {{
   font-weight: 600;
 }}
 
-"""
-)
+QFrame#inspector {{
+  background: rgba(0, 0, 0, 0.015);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+}}
 
+QFrame#settingRow {{
+  background: {PALETTE.get("light_card_bg", "#ffffff")};
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+}}
+
+QFrame#settingRow[sel="true"] {{
+  border: 1px solid rgba(0, 0, 0, 0.18);
+}}
+
+QLabel#badge {{
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  background: rgba(0, 0, 0, 0.02);
+}}
+
+QLabel#badge[accent="true"] {{
+  background: {SECONDARY};
+  color: #ffffff;
+  border: 0px;
+}}
+
+/* Inputs */
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox,
+QComboBox {{
+  background: {PALETTE.get("light_input_bg", "#f1f5f9")};
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 8px;
+  padding: 5px 8px;
+}}
+
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QComboBox:focus {{
+  border: 1px solid {PRIMARY};
+}}
+
+QPlainTextEdit,
+QTextBrowser {{
+  background: {PALETTE.get("light_input_bg", "#f1f5f9")};
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  padding: 8px;
+}}
+
+/* Buttons */
+QPushButton {{
+  background: {PRIMARY};
+  color: #ffffff;
+  border: 0px;
+  border-radius: 10px;
+  padding: 7px 14px;
+}}
+
+QPushButton:hover:enabled {{
+  background: {SECONDARY};
+}}
+
+QPushButton:pressed {{
+  background: {SECONDARY};
+}}
+
+QPushButton:disabled {{
+  background: rgba(0, 0, 0, 0.10);
+  color: rgba(0, 0, 0, 0.35);
+}}
+
+/* Ghost buttons (you setObjectName("ghost")) */
+QPushButton#ghost {{
+  background: transparent;
+  color: {PALETTE.get("light_text", "#0f172a")};
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 10px;
+  padding: 6px 12px;
+}}
+
+QPushButton#ghost:hover:enabled {{
+  background: rgba(0, 0, 0, 0.04);
+}}
+
+/* Reset buttons (you setObjectName("reset")) */
+QPushButton#reset {{
+  background: {PALETTE.get("light_reset_bg", "#e2e8f0")};
+  color: {PALETTE.get("light_text", "#0f172a")};
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+  padding: 7px 14px;
+}}
+
+QPushButton#reset:hover:enabled {{
+  background: rgba(0, 0, 0, 0.08);
+}}
+
+/* OK button (QDialogButtonBox.Ok -> objectName "runButton") */
+QDialog QPushButton#runButton:enabled {{
+  background: {PRIMARY};
+  color: #ffffff;
+  border: 0px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  min-width: 90px;
+  font-weight: 700;
+}}
+
+QDialog QPushButton#runButton:hover:enabled {{
+  background: {SECONDARY};
+}}
+
+QDialog QPushButton#runButton:pressed {{
+  background: {SECONDARY};
+}}
+
+QDialog QPushButton#runButton:disabled {{
+  background: rgba(0, 0, 0, 0.10);
+  color: rgba(0, 0, 0, 0.35);
+}}
+
+
+/* Nav tree */
+QTreeWidget {{
+  background: {PALETTE.get("light_card_bg", "#ffffff")};
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  border-radius: 12px;
+  padding: 6px;
+}}
+
+QTreeWidget::item {{
+  padding: 7px 8px;
+  border-radius: 10px;
+}}
+
+QTreeWidget::item:hover {{
+  background: {SECONDARY_TBLUE};
+  color: #ffffff;
+  font-weight: 600;
+}}
+
+QTreeWidget::item:selected {{
+  background: {SECONDARY};
+  color: #ffffff;
+  font-weight: 700;
+}}
+
+QTreeWidget::item:selected:hover {{
+  background: {SECONDARY};
+  color: #ffffff;
+  font-weight: 700;
+}}
+
+/* Splitter handle */
+QSplitter::handle {{
+  background: rgba(0, 0, 0, 0.06);
+}}
+
+QSplitter::handle:hover {{
+  background: rgba(0, 0, 0, 0.10);
+}}
+"""
+
+
+class _Badge(QLabel):
+    def __init__(self, text: str, *, accent: bool = False) -> None:
+        super().__init__(text)
+        self.setObjectName("badge")
+        self.setProperty("accent", bool(accent))
+        self.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+
+
+class _InspectorPanel(QFrame):
+    reset_clicked = pyqtSignal(object)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("inspector")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+
+        self.lbl_title = QLabel("Inspector")
+        self.lbl_title.setObjectName("title")
+
+        self.lbl_key = QLabel("")
+        self.lbl_key.setObjectName("muted")
+        self.lbl_key.setWordWrap(True)
+
+        # self.lbl_help = QLabel("Select a setting to see details.")
+        # self.lbl_help.setWordWrap(True)
+        self.ed_help = QTextBrowser()
+        self.ed_help.setFrameShape(QFrame.NoFrame)
+        self.ed_help.setOpenExternalLinks(False)
+        self.ed_help.setMinimumHeight(90)
+
+        self.lbl_state = QLabel("")
+        self.lbl_state.setObjectName("muted")
+        self.lbl_state.setWordWrap(True)
+
+        self.btn_reset = QPushButton("Reset this setting")
+        # self.btn_reset.setObjectName("reset")
+        self.btn_reset.setEnabled(False)
+        self.btn_reset.clicked.connect(self._on_reset)
+
+        lay.addWidget(self.lbl_title)
+        lay.addWidget(self.lbl_key)
+        # lay.addWidget(self.lbl_help, 1)
+        lay.addWidget(self.ed_help, 1)
+        lay.addWidget(self.lbl_state)
+        lay.addWidget(self.btn_reset)
+
+        self._cur_key: Optional[FieldKey] = None
+
+    def set_field(
+        self,
+        *,
+        spec: FieldSpec,
+        current: Any,
+        default: Any,
+        overridden: bool,
+        changed: bool,
+    ) -> None:
+        self._cur_key = spec.key
+        self.btn_reset.setEnabled(True)
+
+        key_txt = spec.key.name
+        if spec.key.subkey:
+            key_txt += f"[{spec.key.subkey}]"
+
+        self.lbl_title.setText(spec.label)
+        self.lbl_key.setText(key_txt)
+
+        help_txt = (spec.tooltip or "").strip()
+        if not help_txt:
+            help_txt = help_text(
+                spec.key.name,
+                spec.key.subkey,
+            )
+        if not help_txt:
+            help_txt = "No help available for this setting."
+
+        # self.lbl_help.setText(help_txt)
+        self.ed_help.setPlainText(help_txt)
+
+        st = [
+            f"Current: {current!r}",
+            f"Default: {default!r}",
+            f"Base override: {'yes' if overridden else 'no'}",
+            f"Changed in this dialog: {'yes' if changed else 'no'}",
+        ]
+        self.lbl_state.setText(" | ".join(st))
+
+    def clear(self) -> None:
+        self._cur_key = None
+        self.lbl_title.setText("Inspector")
+        self.lbl_key.setText("")
+        self.ed_help.setPlainText("Select a setting to see details.")
+        self.lbl_state.setText("")
+        self.btn_reset.setEnabled(False)
+    
+
+    def _on_reset(self) -> None:
+        if self._cur_key is None:
+            return
+        self.reset_clicked.emit(self._cur_key)
+
+
+class _ChangesDialog(QDialog):
+    def __init__(
+        self,
+        parent: QWidget,
+        *,
+        items: list,  # List[Tuple[FieldSpec, Any, Any]]
+        on_revert: Any,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Changes")
+        self.setModal(True)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(10)
+
+        title = QLabel("Review changes")
+        title.setObjectName("title")
+        lay.addWidget(title)
+
+        info = QLabel("Revert individual settings or close to keep.")
+        info.setObjectName("muted")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        body = QWidget()
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(8)
+
+        if not items:
+            empty = QLabel("No changes.")
+            empty.setObjectName("muted")
+            bl.addWidget(empty)
+        else:
+            for spec, old, new in items:
+                row = QFrame()
+                row.setObjectName("card")
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(10, 8, 10, 8)
+                rl.setSpacing(10)
+
+                left = QVBoxLayout()
+                lbl = QLabel(spec.label)
+                lbl.setObjectName("fieldLabel")
+
+                hint = QLabel(f"{old!r} -> {new!r}")
+                hint.setObjectName("muted")
+                hint.setWordWrap(True)
+
+                left.addWidget(lbl)
+                left.addWidget(hint)
+
+                btn = QPushButton("Revert")
+                btn.setObjectName("reset")
+                btn.clicked.connect(
+                    lambda _, k=spec.key: on_revert(k)
+                )
+
+                rl.addLayout(left, 1)
+                rl.addWidget(btn, 0, Qt.AlignRight)
+                bl.addWidget(row)
+
+        bl.addStretch(1)
+        scroll.setWidget(body)
+        lay.addWidget(scroll, 1)
+
+        box = QDialogButtonBox(QDialogButtonBox.Close)
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+
+        self.resize(720, 520)
 
 
 class _JsonEditorDialog(QDialog):
@@ -196,19 +547,9 @@ class _JsonEditorDialog(QDialog):
             self.err.setText(
                 f"Invalid JSON: {exc}"
             )
-
-
+            
+            
 class PhysicsConfigDialog(QDialog):
-    """
-    Modern Physics editor bound to GeoConfigStore + prior_schema.
-
-    Behavior
-    --------
-    - UI edits write immediately to store
-    - OK keeps changes
-    - Cancel reverts to the opening snapshot
-    """
-
     def __init__(
         self,
         parent: Optional[QWidget],
@@ -227,32 +568,628 @@ class PhysicsConfigDialog(QDialog):
         self._rows: Dict[FieldKey, QWidget] = {}
         self._widgets: Dict[FieldKey, QWidget] = {}
         self._specs: Dict[FieldKey, FieldSpec] = {}
+        self._row_badges: Dict[FieldKey, Dict[str, QLabel]] = {}
 
-        self._scaling_preview: Optional[
-            QPlainTextEdit
-        ] = None
+        self._scaling_preview: Optional[QPlainTextEdit] = None
+        self._nav_item_by_gid: Dict[str, QTreeWidgetItem] = {}
+        self._gid_base_title: Dict[str, str] = {}
+
+        self._current_key: Optional[FieldKey] = None
 
         main = QVBoxLayout(self)
         main.setContentsMargins(12, 12, 12, 12)
         main.setSpacing(8)
-        
+
         header = self._build_header()
-        header.setSizePolicy(
-            QSizePolicy.Preferred,
-            QSizePolicy.Fixed,
-        )
-        
+        header.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
         body = self._build_body()
         footer = self._build_footer_widget()
-        
+
         main.addWidget(header)
         main.addWidget(body, 1)
         main.addWidget(footer)
-        
+
         self._connected = False
         self._connect_store_signals()
 
-        self.resize(980, 620)
+        self.resize(800, 500) #1180, 700
+
+    # ---------------------------
+    # Header
+    # ---------------------------
+    def _build_header(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+
+        title = QLabel("Physics & Units")
+        title.setObjectName("title")
+
+        subtitle = QLabel(
+            "Configure physics residuals, bounds, units, "
+            "Q forcing, and training strategy."
+        )
+        subtitle.setObjectName("muted")
+        subtitle.setWordWrap(True)
+
+        lay.addWidget(title)
+        lay.addWidget(subtitle)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        self.ed_search = QLineEdit()
+        self.ed_search.setPlaceholderText(
+            "Search settings (label, key, subkey)..."
+        )
+        self.ed_search.textChanged.connect(self._apply_filter)
+
+        self.cb_advanced = QCheckBox("Show advanced")
+        self.cb_advanced.setChecked(False)
+        self.cb_advanced.toggled.connect(self._apply_filter)
+
+        self.btn_checks = QPushButton("Run checks")
+        # self.btn_checks.setObjectName("ghost")
+        self.btn_checks.clicked.connect(self._run_sanity_checks)
+
+        self.btn_changes = QPushButton("Changes")
+        # self.btn_changes.setObjectName("ghost")
+        self.btn_changes.clicked.connect(self._open_changes)
+
+        self.lbl_dirty = QLabel("")
+        self.lbl_dirty.setObjectName("muted")
+
+        row.addWidget(self.ed_search, 1)
+        row.addWidget(self.cb_advanced)
+        row.addWidget(self.btn_checks)
+        row.addWidget(self.btn_changes)
+        row.addWidget(self.lbl_dirty)
+
+        lay.addLayout(row)
+        return w
+
+    # ---------------------------
+    # Body (3-panel split)
+    # ---------------------------
+    def _build_body(self) -> QWidget:
+        outer = QSplitter(Qt.Horizontal)
+    
+        # Build pages first so _on_nav_changed has _page_gid ready.
+        self.pages = QStackedWidget()
+        self._page_gid = []
+    
+        self._add_page(
+            "physics.overview",
+            self._build_overview(),
+        )
+    
+        for gid in list(PHYSICS_GROUP_TITLES.keys()):
+            self._add_page(gid, self._build_group_page(gid))
+    
+        # Now build nav (safe: pages + _page_gid exist).
+        self.nav = self._build_nav_tree()
+        self.nav.setMinimumWidth(260)
+        self.nav.setMaximumWidth(360)
+    
+        self.inspector = _InspectorPanel()
+        self.inspector.setMinimumWidth(320)
+        self.inspector.reset_clicked.connect(
+            self._reset_single_key
+        )
+    
+        mid = QSplitter(Qt.Horizontal)
+        mid.addWidget(self.pages)
+        mid.addWidget(self.inspector)
+        mid.setStretchFactor(0, 1)
+        mid.setStretchFactor(1, 0)
+    
+        outer.addWidget(self.nav)
+        outer.addWidget(mid)
+        outer.setStretchFactor(0, 0)
+        outer.setStretchFactor(1, 1)
+    
+        return outer
+
+    def _build_nav_tree(self) -> QTreeWidget:
+        tree = QTreeWidget()
+        tree.setHeaderHidden(True)
+    
+        root_over = QTreeWidgetItem(["Quick setup"])
+        root_over.setData(0, Qt.UserRole, "physics.overview")
+        tree.addTopLevelItem(root_over)
+        self._register_nav_item("physics.overview", root_over)
+    
+        root_phys = QTreeWidgetItem(["Physics"])
+        root_phys.setFlags(
+            root_phys.flags() & ~Qt.ItemIsSelectable
+        )
+        tree.addTopLevelItem(root_phys)
+    
+        root_diag = QTreeWidgetItem(["Diagnostics & safeguards"])
+        root_diag.setData(0, Qt.UserRole, "physics.diagnostics")
+        tree.addTopLevelItem(root_diag)
+        self._register_nav_item("physics.diagnostics", root_diag)
+    
+        for gid in list(PHYSICS_GROUP_TITLES.keys()):
+            if gid == "physics.diagnostics":
+                continue
+            title = PHYSICS_GROUP_TITLES.get(gid, gid)
+            item = QTreeWidgetItem([title])
+            item.setData(0, Qt.UserRole, gid)
+            root_phys.addChild(item)
+            self._register_nav_item(gid, item)
+    
+        root_phys.setExpanded(True)
+    
+        # set default selection BEFORE connecting (avoid early emit)
+        tree.setCurrentItem(root_over)
+        tree.currentItemChanged.connect(self._on_nav_changed)
+    
+        tree.setMouseTracking(True)
+        tree.viewport().setMouseTracking(True)
+        tree.setIndentation(14)
+        tree.setUniformRowHeights(True)
+    
+        return tree
+
+    def _register_nav_item(self, gid: str, item: QTreeWidgetItem) -> None:
+        self._nav_item_by_gid[gid] = item
+        self._gid_base_title[gid] = item.text(0)
+
+    def _add_page(self, gid: str, w: QWidget) -> None:
+        self.pages.addWidget(w)
+        self._page_gid.append(gid)
+        
+    def _on_nav_changed(
+        self,
+        cur: Optional[QTreeWidgetItem],
+        prev: Optional[QTreeWidgetItem],
+    ) -> None:
+        if cur is None:
+            return
+    
+        gid = cur.data(0, Qt.UserRole)
+        if gid not in self._page_gid:
+            return
+    
+        self.pages.setCurrentIndex(self._page_gid.index(gid))
+    
+        self._current_key = None
+        insp = getattr(self, "inspector", None)
+        if insp is not None:
+            insp.clear()
+
+    # ---------------------------
+    # Pages
+    # ---------------------------
+    def _build_overview(self) -> QWidget:
+        outer = QWidget()
+        lay = QVBoxLayout(outer)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        card = QFrame()
+        card.setObjectName("card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(12, 12, 12, 12)
+        cl.setSpacing(8)
+
+        t = QLabel("Quick setup")
+        t.setObjectName("title")
+
+        hint = QLabel(
+            "Start here: pick strategy, units, and safeguards. "
+            "Use 'Run checks' before training."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+
+        cl.addWidget(t)
+        cl.addWidget(hint)
+
+        keys = [
+            FieldKey("pde_mode"),
+            FieldKey("training_strategy"),
+            FieldKey("eval_json_units_mode"),
+            FieldKey("eval_json_units_scope"),
+            FieldKey("physics_baseline_mode"),
+            FieldKey("scaling_error_policy"),
+            FieldKey("scaling_kwargs_json_path"),
+            FieldKey("track_aux_metrics"),
+            FieldKey("debug_physics_grads"),
+        ]
+
+        for k in keys:
+            spec = PHYSICS_SCHEMA.get(k)
+            if spec is None:
+                continue
+            self._specs[k] = spec
+            cl.addWidget(self._make_setting_row(spec))
+
+        lay.addWidget(card)
+        lay.addStretch(1)
+        return outer
+
+    def _build_group_page(self, group_id: str) -> QWidget:
+        outer = QWidget()
+        out_lay = QVBoxLayout(outer)
+        out_lay.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        cl = QVBoxLayout(content)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(10)
+
+        card = QFrame()
+        card.setObjectName("card")
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(12, 12, 12, 12)
+        card_lay.setSpacing(10)
+
+        title = QLabel(PHYSICS_GROUP_TITLES.get(group_id, group_id))
+        title.setObjectName("title")
+        card_lay.addWidget(title)
+
+        for key in list(PHYSICS_GROUPS.get(group_id, [])):
+            spec = PHYSICS_SCHEMA.get(key)
+            if spec is None:
+                continue
+            self._specs[key] = spec
+            card_lay.addWidget(self._make_setting_row(spec))
+
+        if group_id == "physics.diagnostics":
+            card_lay.addWidget(self._make_scaling_preview())
+
+        card_lay.addStretch(1)
+        cl.addWidget(card)
+
+        scroll.setWidget(content)
+        out_lay.addWidget(scroll)
+        return outer
+
+    # ---------------------------
+    # Row widget
+    # ---------------------------
+    def _make_setting_row(self, spec: FieldSpec) -> QWidget:
+        row = QFrame()
+        row.setObjectName("settingRow")
+        row.setProperty("sel", False)
+
+        hl = QHBoxLayout(row)
+        hl.setContentsMargins(12, 10, 12, 10)
+        hl.setSpacing(12)
+
+        left = QVBoxLayout()
+        left.setSpacing(4)
+
+        lbl = QLabel(spec.label)
+        lbl.setObjectName("fieldLabel")
+        lbl.setWordWrap(True)
+        
+        raw = (spec.tooltip or "").strip()
+        if not raw:
+            raw = help_text(
+                spec.key.name,
+                spec.key.subkey,
+            )
+        
+        hint_txt = first_line(raw) if raw else " "
+        hint = QLabel(hint_txt)
+        hint.setProperty("role", "hint")
+        hint.setObjectName("hint")
+        hint.setWordWrap(True)
+
+        left.addWidget(lbl)
+        left.addWidget(hint)
+
+        editor = self._make_editor(spec)
+        self._tune_editor_width(spec, editor)
+
+        b_adv = _Badge("Advanced")
+        b_adv.setVisible(bool(spec.advanced))
+
+        b_chg = _Badge("Changed", accent=True)
+        b_chg.setVisible(False)
+
+        b_ovr = _Badge("Override")
+        b_ovr.setVisible(False)
+
+        badges = QHBoxLayout()
+        badges.setSpacing(6)
+        badges.addWidget(b_ovr)
+        badges.addWidget(b_chg)
+        badges.addWidget(b_adv)
+
+        btn_reset = QPushButton("↺")
+        btn_reset.setToolTip("Reset to default")
+        btn_reset.setObjectName("ghost")
+        btn_reset.setMaximumWidth(34)
+        btn_reset.clicked.connect(
+            lambda _, k=spec.key: self._reset_single_key(k)
+        )
+
+        right = QHBoxLayout()
+        right.setSpacing(8)
+        right.addWidget(editor, 0)
+        if spec.kind == "path":
+            right.addWidget(self._make_path_buttons(spec), 0)
+        
+        if spec.kind == "json":
+            btn = QPushButton("Edit…")
+            btn.setObjectName("ghost")
+            btn.clicked.connect(
+                lambda _, k=spec.key: self._edit_json(k)
+            )
+            right.addWidget(btn, 0)
+
+
+        right.addLayout(badges, 0)
+        right.addWidget(btn_reset, 0)
+
+        hl.addLayout(left, 1)
+        hl.addLayout(right, 0)
+
+        self._rows[spec.key] = row
+        self._widgets[spec.key] = editor
+        self._row_badges[spec.key] = {
+            "changed": b_chg,
+            "override": b_ovr,
+            "advanced": b_adv,
+        }
+
+        self._refresh_widget(spec.key)
+        self._update_row_badges(spec.key)
+
+        for w in (row, lbl, hint, editor):
+            w.installEventFilter(self)
+        
+        # for combo boxes, focus may go to internal widgets
+        if isinstance(editor, QComboBox):
+            le = editor.lineEdit()
+            if le is not None:
+                le.installEventFilter(self)
+        
+        for child in editor.findChildren(QWidget):
+            child.installEventFilter(self)
+
+        return row
+    
+    def _default_value(self, key: FieldKey) -> Any:
+        if not key.is_dict_item():
+            return getattr(self._default_cfg, key.name)
+    
+        base = getattr(self._default_cfg, key.name, None)
+        if isinstance(base, dict):
+            return base.get(key.subkey)
+        return None
+    
+    
+    def _nat_key_for_field(self, field_name: str) -> str:
+        # Most fields match by uppercasing.
+        # Keep a tiny exceptions map when needed.
+        overrides = {
+            "bounds_mode": "PHYSICS_BOUNDS_MODE",
+        }
+        return overrides.get(field_name, field_name.upper())
+    
+    
+    def _base_value(self, key: FieldKey) -> Any:
+        cfg = self._store.cfg
+        base = getattr(cfg, "_base_cfg", None) or {}
+    
+        nat_key = self._nat_key_for_field(key.name)
+        if nat_key not in base:
+            return self._default_value(key)
+    
+        v = base.get(nat_key)
+    
+        if key.is_dict_item() and isinstance(v, dict):
+            return v.get(key.subkey)
+    
+        return v
+    
+    
+    def _is_overridden(self, key: FieldKey) -> bool:
+        cur = self._store.get_value(key)
+        base = self._base_value(key)
+        return cur != base
+    
+    
+    def _update_row_badges(self, key: FieldKey) -> None:
+        badges = self._row_badges.get(key)
+        if not badges:
+            return
+    
+        cur = self._store.get_value(key)
+        old = self._initial.get(key)
+        changed = (cur != old)
+    
+        overridden = self._is_overridden(key)
+    
+        b_chg = badges.get("changed")
+        if b_chg is not None:
+            b_chg.setVisible(bool(changed))
+    
+        b_ovr = badges.get("override")
+        if b_ovr is not None:
+            b_ovr.setVisible(bool(overridden))
+    
+    
+    def _reset_single_key(self, key: FieldKey) -> None:
+        with self._store.batch():
+            self._set_default_value(key)
+    
+        self._update_row_badges(key)
+    
+        if self._current_key == key:
+            self._select_key(key)
+
+    def eventFilter(self, obj: Any, ev: Any) -> bool:
+        t = ev.type()
+        if t in (QEvent.FocusIn, QEvent.MouseButtonPress):
+            key = self._key_for_object(obj)
+            if key is not None:
+                self._select_key(key)
+        return super().eventFilter(obj, ev)
+
+
+    def _select_key(self, key: FieldKey) -> None:
+        self._current_key = key
+
+        for k, r in self._rows.items():
+            r.setProperty("sel", k == key)
+            r.style().unpolish(r)
+            r.style().polish(r)
+
+        spec = self._specs.get(key)
+        if spec is None:
+            self.inspector.clear()
+            return
+
+        cur = self._store.get_value(key)
+        dft = self._default_value(key)
+        overridden = self._is_overridden(key)
+        changed = (cur != self._initial.get(key))
+
+        self.inspector.set_field(
+            spec=spec,
+            current=cur,
+            default=dft,
+            overridden=overridden,
+            changed=changed,
+        )
+
+    # ---------------------------
+    # Filter + nav counts
+    # ---------------------------
+    def _apply_filter(self) -> None:
+        q = self.ed_search.text().strip().lower()
+        show_adv = bool(self.cb_advanced.isChecked())
+
+        for key, row in self._rows.items():
+            spec = self._specs.get(key)
+            if spec is None:
+                row.setVisible(True)
+                continue
+
+            if (not show_adv) and spec.advanced:
+                row.setVisible(False)
+                continue
+
+            if not q:
+                row.setVisible(True)
+                continue
+
+            hay = " ".join(
+                [
+                    spec.label.lower(),
+                    spec.key.name.lower(),
+                    str(spec.key.subkey or "").lower(),
+                ]
+            )
+            row.setVisible(q in hay)
+
+        self._update_nav_counts()
+
+    def _update_nav_counts(self) -> None:
+        show_adv = bool(self.cb_advanced.isChecked())
+        q = self.ed_search.text().strip().lower()
+
+        def ok(k: FieldKey) -> bool:
+            spec = self._specs.get(k)
+            if spec is None:
+                return True
+            if (not show_adv) and spec.advanced:
+                return False
+            if not q:
+                return True
+            hay = " ".join(
+                [
+                    spec.label.lower(),
+                    spec.key.name.lower(),
+                    str(spec.key.subkey or "").lower(),
+                ]
+            )
+            return q in hay
+
+        it = self._nav_item_by_gid.get("physics.overview")
+        if it is not None:
+            it.setText(0, self._gid_base_title["physics.overview"])
+
+        for gid, keys in PHYSICS_GROUPS.items():
+            item = self._nav_item_by_gid.get(gid)
+            if item is None:
+                continue
+            n = sum(1 for k in keys if ok(k))
+            base = self._gid_base_title.get(gid, item.text(0))
+            item.setText(0, f"{base}  ({n})" if q else base)
+
+    # ---------------------------
+    # Changes + checks
+    # ---------------------------
+    def _open_changes(self) -> None:
+        items = []
+        for key, old in self._initial.items():
+            new = self._store.get_value(key)
+            if new == old:
+                continue
+            spec = self._specs.get(key)
+            if spec is None:
+                continue
+            items.append((spec, old, new))
+
+        def revert(k: FieldKey) -> None:
+            self._store.set_value_by_key(
+                k,
+                self._initial.get(k),
+                strict_subkey=False,
+            )
+
+        _ChangesDialog(self, items=items, on_revert=revert).exec_()
+
+    def _run_sanity_checks(self) -> None:
+        issues = []
+
+        p = self._store.get_value(FieldKey("scaling_kwargs_json_path"))
+        if p:
+            pp = str(p)
+            if not os.path.exists(pp):
+                issues.append("Scaling file: not found.")
+            else:
+                try:
+                    with open(pp, "r", encoding="utf-8") as f:
+                        json.load(f)
+                except Exception as exc:
+                    issues.append(f"Scaling file: invalid JSON ({exc}).")
+
+        for prefix in ("K", "Ss", "tau", "H"):
+            kmin = FieldKey("physics_bounds", f"{prefix}_min")
+            kmax = FieldKey("physics_bounds", f"{prefix}_max")
+            vmin = self._store.get_value(kmin)
+            vmax = self._store.get_value(kmax)
+            try:
+                if vmin is not None and vmax is not None:
+                    if float(vmin) > float(vmax):
+                        issues.append(
+                            f"Bounds: {prefix}_min > {prefix}_max."
+                        )
+            except Exception:
+                issues.append(f"Bounds: invalid {prefix} values.")
+
+        if not issues:
+            QMessageBox.information(self, "Checks", "No issues detected.")
+        else:
+            QMessageBox.warning(
+                self,
+                "Checks",
+                "\n".join(f"- {x}" for x in issues),
+            )
 
     def _connect_store_signals(self) -> None:
         if self._connected:
@@ -295,85 +1232,6 @@ class PhysicsConfigDialog(QDialog):
     # ---------------------------------------------------------
     # Layout
     # ---------------------------------------------------------
-    def _build_header(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setSpacing(6)
-        lay.setContentsMargins(0, 0, 0, 0)
-
-        title = QLabel("Physics & Units")
-        title.setObjectName("title")
-
-        subtitle = QLabel(
-            "Edit physics residuals, bounds, units,"
-            " Q forcing, and training strategy."
-        )
-        subtitle.setObjectName("muted")
-        subtitle.setWordWrap(True)
-
-        lay.addWidget(title)
-        lay.addWidget(subtitle)
-
-        row = QHBoxLayout()
-        row.setSpacing(10)
-
-        self.ed_search = QLineEdit()
-        self.ed_search.setPlaceholderText(
-            "Search settings..."
-        )
-        self.ed_search.textChanged.connect(
-            self._apply_filter
-        )
-
-        self.cb_advanced = QCheckBox("Show advanced")
-        self.cb_advanced.setChecked(False)
-        self.cb_advanced.toggled.connect(
-            self._apply_filter
-        )
-
-        self.lbl_dirty = QLabel("")
-        self.lbl_dirty.setObjectName("muted")
-
-        row.addWidget(self.ed_search, 1)
-        row.addWidget(self.cb_advanced)
-        row.addWidget(self.lbl_dirty)
-
-        lay.addLayout(row)
-        return w
-
-    def _build_body(self) -> QWidget:
-        split = QSplitter(Qt.Horizontal)
-
-        # Left nav
-        self.nav = QListWidget()
-        self.nav.setMinimumWidth(260)
-        self.nav.setMaximumWidth(340)
-
-        # Right pages
-        self.pages = QStackedWidget()
-
-        group_ids = list(PHYSICS_GROUP_TITLES.keys())
-        for gid in group_ids:
-            title = PHYSICS_GROUP_TITLES.get(gid, gid)
-            item = QListWidgetItem(title)
-            item.setData(Qt.UserRole, gid)
-            self.nav.addItem(item)
-
-            page = self._build_group_page(gid)
-            self.pages.addWidget(page)
-
-        self.nav.currentRowChanged.connect(
-            self.pages.setCurrentIndex
-        )
-        self.nav.setCurrentRow(0)
-
-        split.addWidget(self.nav)
-        split.addWidget(self.pages)
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 1)
-
-        return split
-
     def _build_footer_widget(self) -> QWidget:
         w = QWidget()
         row = QHBoxLayout(w)
@@ -381,13 +1239,11 @@ class PhysicsConfigDialog(QDialog):
         row.setSpacing(10)
     
         self.btn_reset_group = QPushButton("Reset group")
-        self.btn_reset_group.setObjectName("reset")
         self.btn_reset_group.clicked.connect(
             self._reset_current_group
         )
     
         self.btn_reset_all = QPushButton("Reset all")
-        self.btn_reset_all.setObjectName("reset")
         self.btn_reset_all.clicked.connect(self._reset_all)
     
         row.addWidget(self.btn_reset_group)
@@ -400,88 +1256,23 @@ class PhysicsConfigDialog(QDialog):
         box.accepted.connect(self.accept)
         box.rejected.connect(self.reject)
     
-        ok_btn = box.button(QDialogButtonBox.Ok)
-        if ok_btn is not None:
-            ok_btn.setObjectName("runButton")
-    
-        cancel_btn = box.button(QDialogButtonBox.Cancel)
-        if cancel_btn is not None:
-            cancel_btn.setObjectName("reset")
-    
+        btn_cancel = box.button(QDialogButtonBox.Cancel)
+        if btn_cancel is not None:
+            pass
+        
+        self._btn_ok = box.button(QDialogButtonBox.Ok)
+        if self._btn_ok is not None:
+            self._btn_ok.setObjectName("runButton")
+            self._btn_ok.setEnabled(False)
+            self._btn_ok.setDefault(True)
+        
+            self._btn_ok.style().unpolish(self._btn_ok)
+            self._btn_ok.style().polish(self._btn_ok)
+            self._btn_ok.update()
+
+       
         row.addWidget(box)
         return w
-    
-    def _build_group_page(self, group_id: str) -> QWidget:
-        outer = QWidget()
-        out_lay = QVBoxLayout(outer)
-        out_lay.setContentsMargins(0, 0, 0, 0)
-    
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-    
-        content = QWidget()
-        content_lay = QVBoxLayout(content)
-        content_lay.setContentsMargins(0, 0, 0, 0)
-        content_lay.setSpacing(10)
-    
-        card = QFrame()
-        card.setObjectName("card")
-        card_lay = QVBoxLayout(card)
-        card_lay.setContentsMargins(12, 12, 12, 12)
-        card_lay.setSpacing(10)
-    
-        title = QLabel(
-            PHYSICS_GROUP_TITLES.get(group_id, group_id)
-        )
-        title.setObjectName("title")
-        card_lay.addWidget(title)
-    
-        keys = list(PHYSICS_GROUPS.get(group_id, []))
-        cols = self._grid_cols_for_group(keys)
-    
-        grid_box = QWidget()
-        grid = QGridLayout(grid_box)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(10)
-    
-        r = 0
-        c = 0
-    
-        for key in keys:
-            spec = PHYSICS_SCHEMA.get(key)
-            if spec is None:
-                continue
-    
-            self._specs[key] = spec
-    
-            tile = self._make_tile(spec)
-            self._rows[key] = tile
-    
-            if self._should_span_full(spec):
-                grid.addWidget(tile, r, 0, 1, cols)
-                r += 1
-                c = 0
-                continue
-    
-            grid.addWidget(tile, r, c, 1, 1)
-            c += 1
-            if c >= cols:
-                r += 1
-                c = 0
-    
-        if group_id == "physics.diagnostics":
-            prev = self._make_scaling_preview()
-            grid.addWidget(prev, r, 0, 1, cols)
-    
-        card_lay.addWidget(grid_box)
-    
-        content_lay.addWidget(card)
-        scroll.setWidget(content)
-        out_lay.addWidget(scroll)
-        return outer
-
 
     # ---------------------------------------------------------
     # Row factory
@@ -674,6 +1465,8 @@ class PhysicsConfigDialog(QDialog):
         # text / path
         ed = QLineEdit()
         ed.setText("" if val is None else str(val))
+        ed.setCursorPosition(0)
+        ed.deselect()
         ed.editingFinished.connect(
             lambda k=key, w=ed: self._store.set_value_by_key(
                 k,
@@ -735,33 +1528,6 @@ class PhysicsConfigDialog(QDialog):
         self._refresh_scaling_preview()
         return box
 
-    # ---------------------------------------------------------
-    # Filtering
-    # ---------------------------------------------------------
-    def _apply_filter(self) -> None:
-        q = self.ed_search.text().strip().lower()
-        show_adv = bool(self.cb_advanced.isChecked())
-
-        for key, row in self._rows.items():
-            spec = self._specs.get(key)
-            if spec is None:
-                row.setVisible(True)
-                continue
-
-            if (not show_adv) and spec.advanced:
-                row.setVisible(False)
-                continue
-
-            if not q:
-                row.setVisible(True)
-                continue
-
-            hay = " ".join([
-                spec.label.lower(),
-                spec.key.name.lower(),
-                str(spec.key.subkey or "").lower(),
-            ])
-            row.setVisible(q in hay)
 
     # ---------------------------------------------------------
     # Store sync
@@ -771,17 +1537,21 @@ class PhysicsConfigDialog(QDialog):
             changed = set(keys or [])
         except Exception:
             changed = set()
-
-        # Update widgets whose top-level field changed.
+    
         for fkey in self._widgets:
             if fkey.name in changed:
                 self._refresh_widget(fkey)
-
+                self._update_row_badges(fkey)
+    
         if "scaling_kwargs_json_path" in changed:
             self._refresh_scaling_preview()
+        
+        self._btn_ok.setEnabled(bool(self._compute_patch()))
+
 
     def _on_dirty_changed(self, n: int) -> None:
         self.lbl_dirty.setText(f"Overrides: {int(n)}")
+        self._btn_ok.setEnabled(bool(self._compute_patch()))
 
     def _refresh_widget(self, fkey: FieldKey) -> None:
         w = self._widgets.get(fkey)
@@ -839,6 +1609,8 @@ class PhysicsConfigDialog(QDialog):
         if isinstance(w, QLineEdit):
             w.blockSignals(True)
             w.setText("" if val is None else str(val))
+            w.setCursorPosition(0)
+            w.deselect()
             w.blockSignals(False)
             return
 
@@ -859,15 +1631,33 @@ class PhysicsConfigDialog(QDialog):
     # Reset helpers
     # ---------------------------------------------------------
     def _reset_current_group(self) -> None:
-        row = self.nav.currentRow()
-        if row < 0:
+        it = self.nav.currentItem()
+        if it is None:
             return
-
-        item = self.nav.item(row)
-        gid = str(item.data(Qt.UserRole))
-
+    
+        gid = it.data(0, Qt.UserRole)
+        gid = str(gid) if gid else ""
+        if not gid:
+            return
+    
+        if gid == "physics.overview":
+            keys = [
+                FieldKey("pde_mode"),
+                FieldKey("training_strategy"),
+                FieldKey("eval_json_units_mode"),
+                FieldKey("eval_json_units_scope"),
+                FieldKey("physics_baseline_mode"),
+                FieldKey("scaling_error_policy"),
+                FieldKey("scaling_kwargs_json_path"),
+                FieldKey("track_aux_metrics"),
+                FieldKey("debug_physics_grads"),
+            ]
+            self._reset_keys_to_defaults(keys)
+            return
+    
         keys = PHYSICS_GROUPS.get(gid, [])
         self._reset_keys_to_defaults(keys)
+
 
     def _reset_all(self) -> None:
         keys = list(self._widgets.keys())
@@ -1151,6 +1941,27 @@ class PhysicsConfigDialog(QDialog):
             if ww is w:
                 return k
         return FieldKey("city")
+    
+    def _key_for_object(self, obj: Any) -> Optional[FieldKey]:
+        if isinstance(obj, QWidget):
+            for k, row in self._rows.items():
+                try:
+                    if obj is row or row.isAncestorOf(obj):
+                        return k
+                except Exception:
+                    continue
+    
+        for k, w in self._widgets.items():
+            if obj is w:
+                return k
+            if isinstance(obj, QWidget) and isinstance(w, QWidget):
+                try:
+                    if w.isAncestorOf(obj):
+                        return k
+                except Exception:
+                    pass
+    
+        return None
 
     def _compute_patch(self) -> Dict[str, Any]:
         patch: Dict[str, Any] = {}

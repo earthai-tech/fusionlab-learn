@@ -91,8 +91,10 @@ from .ui.file_browse import FileBrowseHelper
 from .ui.menu_manager import MenuManager
 from .ui.splash import LoadingSplash
 from .ui.tools_tab import ToolsTab
+from .ui.train_tab import TrainTab
 from .ui.panel import ConfigCenterPanel
 from .ui.preprocess_tab import PreprocessTab
+from .ui.tune_tab import TuneTab
      
 from ..ux_utils import (
     auto_set_ui_fonts,
@@ -128,8 +130,6 @@ from .dialogs import (
     InferenceOptionsDialog, 
     GeoPriorResultsDialog,
     PhysicsConfigDialog,
-    ScalarsLossDialog,
-    ModelParamsDialog,
     TrainOptionsDialog, 
     QuickTrainDialog,
     TuneOptionsDialog, 
@@ -304,12 +304,7 @@ class GeoPriorForecaster(QMainWindow):
 
     def _init_dialogs_and_paths(self) -> None:
         """Initialise dialogs and main results root paths."""
-        # Dialog for scalar HPs / loss weights (used from Tune tab)
-        self.scalars_dialog = ScalarsLossDialog(self)
-
-        # Dialog for model-level HPs (memory, scales, attention, etc.)
-        self.model_params_dialog = ModelParamsDialog(self)
-
+        
         # Dedicated root so GUI runs don't mix with CLI results
         self.gui_runs_root = Path.home() / ".fusionlab_runs"
         self.gui_runs_root.mkdir(parents=True, exist_ok=True)
@@ -675,351 +670,90 @@ class GeoPriorForecaster(QMainWindow):
             self._on_splitter_moved
         )
 
-  
     # ------------------------------------------------------------------
     # Tabs
     # ------------------------------------------------------------------
     def _init_tabs(self) -> None:
         """Create tabs. Only Train is functional for now."""
-        cfg = self.geo_cfg
+        # cfg = self.geo_cfg
 
         # ==================================================
-        # Train tab
+        # Train tab (new module)
         # ==================================================
-        train_tab = QWidget()
-        t_layout = QVBoxLayout(train_tab)
-        t_layout.setContentsMargins(6, 6, 6, 6)
-        t_layout.setSpacing(8)
-        
-        # --- three cards in a horizontal row ---
-
-        # 1) Temporal window card
-        temp_card, temp_box = self._make_card("Temporal window")
-
-        self.sp_train_end = QSpinBox()
-        self.sp_train_end.setRange(2000, 2100)
-        self.sp_train_end.setValue(cfg.train_end_year)
-
-        self.sp_forecast_start = QSpinBox()
-        self.sp_forecast_start.setRange(2000, 2100)
-        self.sp_forecast_start.setValue(cfg.forecast_start_year)
-
-        self.sp_forecast_horizon = QSpinBox()
-        self.sp_forecast_horizon.setRange(1, 50)
-        self.sp_forecast_horizon.setValue(cfg.forecast_horizon_years)
-
-        self.sp_time_steps = QSpinBox()
-        self.sp_time_steps.setRange(1, 50)
-        self.sp_time_steps.setValue(cfg.time_steps)
-
-        grid_t = QGridLayout()
-        grid_t.addWidget(QLabel("Train end year:"), 0, 0)
-        grid_t.addWidget(self.sp_train_end, 0, 1)
-        grid_t.addWidget(QLabel("Forecast start year:"), 1, 0)
-        grid_t.addWidget(self.sp_forecast_start, 1, 1)
-        grid_t.addWidget(QLabel("Forecast horizon (years):"), 2, 0)
-        grid_t.addWidget(self.sp_forecast_horizon, 2, 1)
-        grid_t.addWidget(QLabel("Time steps (look-back):"), 3, 0)
-        grid_t.addWidget(self.sp_time_steps, 3, 1)
-        
-        # Make the temporal rows expand to fill the card height
-        for r in range(4):
-            grid_t.setRowStretch(r, 1)
-
-        # (optional) make the spin boxes a bit taller so the values
-        # are easier to read
-        for sb in (
-            self.sp_train_end,
-            self.sp_forecast_start,
-            self.sp_forecast_horizon,
-            self.sp_time_steps,
-        ):
-            sb.setMinimumHeight(26)
-            
-        temp_box.addLayout(grid_t)
-        
-        # 2) Training card
-        train_card, train_box = self._make_card("Training")
-
-        self.sp_epochs = QSpinBox()
-        self.sp_epochs.setRange(1, 5000)
-        self.sp_epochs.setValue(cfg.epochs)
-
-        self.sp_batch_size = QSpinBox()
-        self.sp_batch_size.setRange(1, 1024)
-        self.sp_batch_size.setValue(cfg.batch_size)
-
-        self.sp_lr = QDoubleSpinBox()
-        self.sp_lr.setDecimals(6)
-        self.sp_lr.setRange(1e-6, 1e-2)
-        self.sp_lr.setSingleStep(1e-5)
-        self.sp_lr.setValue(cfg.learning_rate)
-
-        grid_tr = QGridLayout()
-        grid_tr.addWidget(QLabel("Epochs:"), 0, 0)
-        grid_tr.addWidget(self.sp_epochs, 0, 1)
-        grid_tr.addWidget(QLabel("Batch size:"), 1, 0)
-        grid_tr.addWidget(self.sp_batch_size, 1, 1)
-        grid_tr.addWidget(QLabel("Learning rate:"), 2, 0)
-        grid_tr.addWidget(self.sp_lr, 2, 1)
-        train_box.addLayout(grid_tr)
-
-        # 3) Physics weights card
-        phys_card, phys_box = self._make_card("Physics weights")
-
-        self.cmb_pde_mode = QComboBox()
-        self.cmb_pde_mode.addItems(
-            ["both", "consolidation", "gw_flow", "off"]
+        self.train_tab = TrainTab(
+            store=self.config_store,
+            make_card=self._make_card,
+            make_run_button=self._make_run_button,
+            parent=self,
         )
-        idx = self.cmb_pde_mode.findText(cfg.pde_mode)
-        if idx < 0:
-            idx = 0
-        self.cmb_pde_mode.setCurrentIndex(idx)
-
-        def make_lambda_spin(val: float) -> QDoubleSpinBox:
-            sb = QDoubleSpinBox()
-            sb.setDecimals(4)
-            sb.setRange(0.0, 10.0)
-            sb.setSingleStep(0.005)
-            sb.setValue(val)
-            return sb
-
-        self.sb_lcons = make_lambda_spin(cfg.lambda_cons)
-        self.sb_lgw = make_lambda_spin(cfg.lambda_gw)
-        self.sb_lprior = make_lambda_spin(cfg.lambda_prior)
-        self.sb_lsmooth = make_lambda_spin(cfg.lambda_smooth)
-        self.sb_lmv = make_lambda_spin(cfg.lambda_mv)
-
-        grid_p = QGridLayout()
-        grid_p.addWidget(QLabel("PDE mode:"), 0, 0)
-        grid_p.addWidget(self.cmb_pde_mode, 0, 1)
-        grid_p.addWidget(QLabel("λ consolidation:"), 1, 0)
-        grid_p.addWidget(self.sb_lcons, 1, 1)
-        grid_p.addWidget(QLabel("λ GW flow:"), 2, 0)
-        grid_p.addWidget(self.sb_lgw, 2, 1)
-        grid_p.addWidget(QLabel("λ prior:"), 3, 0)
-        grid_p.addWidget(self.sb_lprior, 3, 1)
-        grid_p.addWidget(QLabel("λ smooth:"), 4, 0)
-        grid_p.addWidget(self.sb_lsmooth, 4, 1)
-        grid_p.addWidget(QLabel("λ mᵥ:"), 5, 0)
-        grid_p.addWidget(self.sb_lmv, 5, 1)
-        phys_box.addLayout(grid_p)
         
-        # --- Cards + buttons as a grid so Physics can span two rows ---
-        cards_grid = QGridLayout()
-        cards_grid.setSpacing(10)
-
-        # Make the whole grid top-aligned in its parent
-        cards_grid.setAlignment(Qt.AlignTop)
+        # Optional: keep old attribute names on the App
+        # so the rest of app.py does not change.
+        self.sp_train_end = self.train_tab.sp_train_end
+        self.sp_forecast_start = self.train_tab.sp_forecast_start
+        self.sp_forecast_horizon = self.train_tab.sp_forecast_horizon
+        self.sp_time_steps = self.train_tab.sp_time_steps
         
-        # Row 0: Temporal, Training, Physics (top part)
-        cards_grid.addWidget(temp_card,  0, 0, 1, 1, Qt.AlignTop)
-        cards_grid.addWidget(train_card, 0, 1, 1, 1, Qt.AlignTop)
-
-        # Physics card spans two rows (rows 0 and 1) in the right column
-        cards_grid.addWidget(phys_card, 0, 2, 2, 1, Qt.AlignTop) # rowSpan=2, colSpan=1
+        self.sp_epochs = self.train_tab.sp_epochs
+        self.sp_batch_size = self.train_tab.sp_batch_size
+        self.sp_lr = self.train_tab.sp_lr
         
-        # --- Model / config buttons row (only under Temporal + Training) ---
-        buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(12)
-
-        self.btn_features = QPushButton("Feature config…")
-        buttons_row.addWidget(self.btn_features)
-
-        self.btn_arch = QPushButton("Architecture…")
-        buttons_row.addWidget(self.btn_arch)
-
-        self.btn_prob = QPushButton("Probabilistic…")
-        buttons_row.addWidget(self.btn_prob)
+        self.cmb_pde_mode = self.train_tab.cmb_pde_mode
+        self.sb_lcons = self.train_tab.sb_lcons
+        self.sb_lgw = self.train_tab.sb_lgw
+        self.sb_lprior = self.train_tab.sb_lprior
+        self.sb_lsmooth = self.train_tab.sb_lsmooth
+        self.sb_lmv = self.train_tab.sb_lmv
         
-        self.physics_btn = QPushButton("Physics config…")
-        buttons_row.addWidget(self.physics_btn)
-         
-        buttons_row.addStretch(1)
-
-        # Put the buttons row in a small container so it can go into the grid
-        buttons_container = QWidget()
-        buttons_container.setLayout(buttons_row)
-
-        # Row 1, columns 0–1 (under Temporal + Training only)
-        cards_grid.addWidget(buttons_container, 1, 0, 1, 2)
-
-        # Add the whole grid to the Train tab layout
-        t_layout.addLayout(cards_grid)
-
-
-        # --- bottom flags ---
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(16)
-
-        # Options… button takes the place of the visible clean checkbox
-        self.btn_train_options = QPushButton("Advanced options…")
-        bottom_row.addWidget(self.btn_train_options)
-       
-        self.chk_eval_training = QCheckBox(
-            "Evaluate training metrics",
-        )
-        self.chk_eval_training.setChecked(
-            cfg.evaluate_training,
-        )
-        bottom_row.addWidget(self.chk_eval_training)
+        self.sp_phys_warmup = self.train_tab.sp_phys_warmup
+        self.sp_phys_ramp = self.train_tab.sp_phys_ramp
+        self.chk_scale_pde = self.train_tab.chk_scale_pde
         
-        self.chk_build_future = QCheckBox(
-            "Build future NPZ",
-        )
-        self.chk_build_future.setChecked(
-            cfg.build_future_npz,
-        )
-        bottom_row.addWidget(self.chk_build_future)
-
-        # Hidden checkbox used only as a backing store
-        # (not shown directly on the Train tab anymore)
-        self.chk_clean_stage1 = QCheckBox("Clean Stage-1 run dir")
-        self.chk_clean_stage1.setChecked(cfg.clean_stage1_dir)
-        self.chk_clean_stage1.setVisible(False)
-
-        # push Run button to the far right
-        bottom_row.addStretch(1)
-
-        self.train_btn = self._make_run_button("Run training")
-        bottom_row.addWidget(self.train_btn)
-
+        self.btn_features = self.train_tab.btn_features
+        self.btn_arch = self.train_tab.btn_arch
+        self.btn_prob = self.train_tab.btn_prob
+        self.physics_btn = self.train_tab.physics_btn
         
-        t_layout.addLayout(bottom_row)
-        t_layout.addStretch(1)
+        self.btn_train_options = self.train_tab.btn_train_options
+        self.chk_eval_training = self.train_tab.chk_eval_training
+        self.chk_build_future = self.train_tab.chk_build_future
+        self.chk_clean_stage1 = self.train_tab.chk_clean_stage1
+        self.train_btn = self.train_tab.train_btn
         
         # ==================================================
-        # Tune tab – hyperparameter search
+        # Tune tab (new module)
         # ==================================================
-        tune_tab = QWidget()
-        u_layout = QVBoxLayout(tune_tab)
-        u_layout.setContentsMargins(6, 6, 6, 6)
-        u_layout.setSpacing(8)
-
-        # --- two cards in a horizontal row ---
-        tune_row = QHBoxLayout()
-        tune_row.setSpacing(10)
-
-        # ----------------- 1) Architecture card -----------------
-        arch_card, arch_box = self._make_card("Architecture search")
-
-        self.hp_embed_dim = QLineEdit()
-        self.hp_hidden_units = QLineEdit()
-        self.hp_lstm_units = QLineEdit()
-        self.hp_attention_units = QLineEdit()
-        self.hp_num_heads = QLineEdit()
-        self.hp_vsn_units = QLineEdit()
-
-        self.hp_dropout = RangeListEditor(
-            min_allowed=0.0,
-            max_allowed=1.0,
-            decimals=3,
-            show_sampling=False,
+        self.tune_tab = TuneTab(
+            store=self.config_store,
+            make_card=self._make_card,
+            make_run_button=self._make_run_button,
+            range_editor_cls=RangeListEditor,
+            parent=self,
         )
-        self.hp_dropout.set_defaults(0.05, 0.20, sampling=None)
-
-        grid_a = QGridLayout()
-        row = 0
-
-        # left + right columns -> larger line edits
-        grid_a.addWidget(QLabel("Embedding dim (comma-sep):"), row, 0)
-        grid_a.addWidget(self.hp_embed_dim, row, 1)
-        grid_a.addWidget(QLabel("LSTM units:"), row, 2)
-        grid_a.addWidget(self.hp_lstm_units, row, 3)
-        row += 1
-
-        grid_a.addWidget(QLabel("Hidden units:"), row, 0)
-        grid_a.addWidget(self.hp_hidden_units, row, 1)
-        grid_a.addWidget(QLabel("Attention units:"), row, 2)
-        grid_a.addWidget(self.hp_attention_units, row, 3)
-        row += 1
-
-        grid_a.addWidget(QLabel("Attention heads:"), row, 0)
-        grid_a.addWidget(self.hp_num_heads, row, 1)
-        grid_a.addWidget(QLabel("VSN units:"), row, 2)
-        grid_a.addWidget(self.hp_vsn_units, row, 3)
-        row += 1
-
-        grid_a.addWidget(QLabel("Dropout:"), row, 0)
-        grid_a.addWidget(self.hp_dropout, row, 1, 1, 3)
-
-        arch_box.addLayout(grid_a)
-        tune_row.addWidget(arch_card, 1)
-
-        # ----------------- 2) Physics card -----------------
-        phys_card, phys_box = self._make_card("Physics switches")
-
-        self.hp_pde_mode = QLineEdit()
-        self.hp_scale_pde_bool = QCheckBox(
-            "Tune 'scale PDE residuals' as boolean HP"
-        )
-        self.hp_kappa_mode = QLineEdit()
-
-        self.hp_hd = RangeListEditor(
-            min_allowed=0.0,
-            max_allowed=2.0,
-            decimals=3,
-            show_sampling=False,
-        )
-        self.hp_hd.set_defaults(0.50, 0.70, sampling=None)
-
-        grid_ph = QGridLayout()
-        r = 0
-        grid_ph.addWidget(QLabel("PDE modes:"), r, 0)
-        grid_ph.addWidget(self.hp_pde_mode, r, 1); r += 1
-
-        grid_ph.addWidget(QLabel("κ mode (bar/kb):"), r, 0)
-        grid_ph.addWidget(self.hp_kappa_mode, r, 1); r += 1
-
-        grid_ph.addWidget(self.hp_scale_pde_bool, r, 0, 1, 2); r += 1
-
-        grid_ph.addWidget(QLabel("HD factor:"), r, 0)
-        grid_ph.addWidget(self.hp_hd, r, 1)
-        phys_box.addLayout(grid_ph)
-
-        tune_row.addWidget(phys_card, 1)
-
-        u_layout.addLayout(tune_row)
-
-        # --- Bottom row: options + Scalars popup + Run button ---
-        # Row 1: Evaluate checkbox + Max trials + Scalars button
-        opts_row = QHBoxLayout()
-        opts_row.setSpacing(16)
         
-        self.chk_eval_tuned = QCheckBox("Evaluate tuned model")
-        self.chk_eval_tuned.setChecked(False)
-        opts_row.addWidget(self.chk_eval_tuned)
+        # Keep old attribute names for compatibility
+        self.hp_embed_dim = self.tune_tab.hp_embed_dim
+        self.hp_hidden_units = self.tune_tab.hp_hidden_units
+        self.hp_lstm_units = self.tune_tab.hp_lstm_units
+        self.hp_attention_units = self.tune_tab.hp_attention_units
+        self.hp_num_heads = self.tune_tab.hp_num_heads
+        self.hp_vsn_units = self.tune_tab.hp_vsn_units
+        self.hp_dropout = self.tune_tab.hp_dropout
         
-        # NEW: Max trials (defaults to 20)
-        opts_row.addSpacing(8)
-        opts_row.addWidget(QLabel("Max trials:"))
-        self.spin_max_trials = QSpinBox()
-        self.spin_max_trials.setRange(1, 999)
-        self.spin_max_trials.setValue(20)  # default
-        opts_row.addWidget(self.spin_max_trials)
+        self.hp_pde_mode = self.tune_tab.hp_pde_mode
+        self.hp_kappa_mode = self.tune_tab.hp_kappa_mode
+        self.hp_scale_pde_bool = self.tune_tab.hp_scale_pde_bool
+        self.hp_hd = self.tune_tab.hp_hd
         
-        # 
-        self.btn_model_params = QPushButton("Model params…")
-        opts_row.addWidget(self.btn_model_params)
+        self.chk_eval_tuned = self.tune_tab.chk_eval_tuned
+        self.spin_max_trials = self.tune_tab.spin_max_trials
+        self.btn_model_params = self.tune_tab.btn_model_params
+        self.btn_scalars = self.tune_tab.btn_scalars
         
-        self.btn_scalars = QPushButton("Scalars & losses…")
-        opts_row.addWidget(self.btn_scalars)
-        
-        opts_row.addStretch(1)   # push them to the left
-        u_layout.addLayout(opts_row)
+        self.btn_tune_options = self.tune_tab.btn_tune_options
+        self.btn_run_tune = self.tune_tab.btn_run_tune
 
-
-        # Row 2: Advanced options + Run tuning
-        ops_run_row = QHBoxLayout()
-        self.btn_tune_options = QPushButton("Advanced options…")
-        self.btn_run_tune = self._make_run_button("Run tuning")
-
-        ops_run_row.addWidget(self.btn_tune_options)
-        ops_run_row.addStretch(1)
-        ops_run_row.addWidget(self.btn_run_tune)
-        u_layout.addLayout(ops_run_row)
         
- 
         # ==================================================
         # Inference tab – evaluation & forecasting
         # ==================================================
@@ -1332,8 +1066,6 @@ class GeoPriorForecaster(QMainWindow):
         self.setup_tab = setup_tab
         self.preprocess_tab  = preprocess_tab 
 
-        self.train_tab = train_tab
-        self.tune_tab = tune_tab
         self.infer_tab = infer_tab
         self.xfer_tab = xfer_tab
         
@@ -1390,7 +1122,8 @@ class GeoPriorForecaster(QMainWindow):
 
         self._infer_tab_index = self.tabs.addTab(
             self.infer_tab,
-            self._workflow_icon("inference.svg", QStyle.SP_FileDialogListView),
+            self._workflow_icon("inference.svg", 
+                                QStyle.SP_FileDialogListView),
             "Inference",
         )
 
@@ -1561,7 +1294,7 @@ class GeoPriorForecaster(QMainWindow):
     def _make_card(
         self,
         title: str,
-    ) -> tuple[QTabWidget, QVBoxLayout]:
+    ) -> tuple[QWidget, QVBoxLayout]:
         """
         Create a framed 'card' with a bold title and
         return (frame, inner_layout).
@@ -1856,9 +1589,6 @@ class GeoPriorForecaster(QMainWindow):
         self.select_csv_btn.clicked.connect(
             self._on_open_dataset,
         )
-        self.train_btn.clicked.connect(
-            self._on_train_clicked,
-        )
 
         # Connect Stop button to the manager, and manager → "real" stop logic
         self.btn_stop.clicked.connect(self.mode_mgr.on_stop_clicked)
@@ -1873,19 +1603,18 @@ class GeoPriorForecaster(QMainWindow):
             self._update_progress,
         )
 
-        self.btn_features.clicked.connect(
-            self._on_feature_config,
+        # Train tab (module)
+        self.train_tab.run_clicked.connect(self._on_train_clicked)
+        self.train_tab.advanced_clicked.connect(
+            self._on_train_options_clicked
         )
-        self.btn_arch.clicked.connect(          
-            self._on_arch_config,
-        )
-        self.btn_prob.clicked.connect(          
-            self._on_prob_config,
-        )
-        self.physics_btn.clicked.connect(
+        self.train_tab.features_clicked.connect(self._on_feature_config)
+        self.train_tab.arch_clicked.connect(self._on_arch_config)
+        self.train_tab.prob_clicked.connect(self._on_prob_config)
+        self.train_tab.physics_clicked.connect(
             self._on_physics_config_clicked
         )
-    
+
         self.btn_tune_options.clicked.connect(
             self._on_tune_options_clicked,
         )
@@ -1894,18 +1623,6 @@ class GeoPriorForecaster(QMainWindow):
             self._on_tune_clicked,
         )
 
-        self.btn_model_params.clicked.connect(
-            self._on_model_params_config,
-        )
-        
-        self.btn_scalars.clicked.connect(
-            self._on_scalars_config,
-        )
-        
-        self.btn_train_options.clicked.connect(
-            self._on_train_options_clicked
-        )
-    
         # --- Inference tab ---
         self.btn_inf_options.clicked.connect(
             self._on_infer_options_clicked
@@ -2027,19 +1744,31 @@ class GeoPriorForecaster(QMainWindow):
         pt = self.preprocess_tab
         pt.btn_run_stage1.setEnabled(False)
 
-        self.geo_cfg.clean_stage1_dir = (
-            pt.chk_prep_clean.isChecked()
+        # self.geo_cfg.clean_stage1_dir = (
+        #     pt.chk_prep_clean.isChecked()
+        # )
+        # self.geo_cfg.build_future_npz = (
+        #     pt.chk_prep_build_future.isChecked()
+        # )
+        # self.geo_cfg.stage1_auto_reuse_if_match = (
+        #     pt.chk_prep_auto_reuse.isChecked()
+        # )
+        # self.geo_cfg.stage1_force_rebuild_if_mismatch = (
+        #     pt.chk_prep_force_rebuild.isChecked()
+        # )
+        self.config_store.patch(
+            {
+                "clean_stage1_dir": pt.chk_prep_clean.isChecked(),
+                "build_future_npz": pt.chk_prep_build_future.isChecked(),
+                "stage1_auto_reuse_if_match": (
+                    pt.chk_prep_auto_reuse.isChecked()
+                ),
+                "stage1_force_rebuild_if_mismatch": (
+                    pt.chk_prep_force_rebuild.isChecked()
+                ),
+            }
         )
-        self.geo_cfg.build_future_npz = (
-            pt.chk_prep_build_future.isChecked()
-        )
-        self.geo_cfg.stage1_auto_reuse_if_match = (
-            pt.chk_prep_auto_reuse.isChecked()
-        )
-        self.geo_cfg.stage1_force_rebuild_if_mismatch = (
-            pt.chk_prep_force_rebuild.isChecked()
-        )
-    
+
         if hasattr(self, "chk_clean_stage1"):
             self.chk_clean_stage1.setChecked(
                 self.geo_cfg.clean_stage1_dir
@@ -2686,43 +2415,6 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     # Config synchronisation
     # ------------------------------------------------------------------
-    # XXX TODO: #OLDER VERSION TO REMOVE (v3.0) 
-    # def _sync_config_from_ui(self) -> None: 
-    #     """Copy widgets' values into self.geo_cfg."""
-    #     cfg = self.geo_cfg
-    #     cfg.train_end_year = self.sp_train_end.value()
-    #     cfg.forecast_start_year = self.sp_forecast_start.value()
-    #     cfg.forecast_horizon_years = (
-    #         self.sp_forecast_horizon.value()
-    #     )
-    #     cfg.time_steps = self.sp_time_steps.value()
-
-    #     cfg.epochs = self.sp_epochs.value()
-    #     cfg.batch_size = self.sp_batch_size.value()
-    #     cfg.learning_rate = self.sp_lr.value()
-
-    #     cfg.pde_mode = self.cmb_pde_mode.currentText()
-    #     cfg.lambda_cons = self.sb_lcons.value()
-    #     cfg.lambda_gw = self.sb_lgw.value()
-    #     cfg.lambda_prior = self.sb_lprior.value()
-    #     cfg.lambda_smooth = self.sb_lsmooth.value()
-    #     cfg.lambda_mv = self.sb_lmv.value()
-
-    #     cfg.clean_stage1_dir = (
-    #         self.chk_clean_stage1.isChecked()
-    #     )
-    #     cfg.build_future_npz = (               
-    #         self.chk_build_future.isChecked()
-    #     )
-    #     cfg.evaluate_training = (
-    #         self.chk_eval_training.isChecked()
-    #     )
-
-    #     # This is the missing piece:
-    #     cfg.tuner_search_space = self._build_tuner_space_from_ui()
-        
-    # XXX todo: NEWEST VERSION V3.2 TO KEEP 
-    
     def _sync_config_from_ui(self) -> None:
         patch = {
             "train_end_year": self.sp_train_end.value(),
@@ -2743,7 +2435,23 @@ class GeoPriorForecaster(QMainWindow):
             "evaluate_training": self.chk_eval_training.isChecked(),
             "tuner_search_space": self._build_tuner_space_from_ui(),
         }
+    
+        # --- Missing physics controls (Train tab) ---
+        if hasattr(self, "sp_phys_warmup"):
+            patch["phys_warmup_epochs"] = (
+                self.sp_phys_warmup.value()
+            )
+        if hasattr(self, "sp_phys_ramp"):
+            patch["phys_ramp_epochs"] = (
+                self.sp_phys_ramp.value()
+            )
+        if hasattr(self, "chk_scale_pde"):
+            patch["scale_pde_residuals"] = (
+                self.chk_scale_pde.isChecked()
+            )
+    
         self.config_store.patch(patch)
+
 
     # ------------------------------------------------------------
     #     configure dialog boxes 
@@ -2788,9 +2496,9 @@ class GeoPriorForecaster(QMainWindow):
             return
     
         # Store overrides back on the config
-        self.geo_cfg.feature_overrides = dlg.get_overrides()
-        overs = self.geo_cfg.feature_overrides or {}
-    
+        overs = dlg.get_overrides() or {}
+        self.config_store.patch({"feature_overrides": overs})
+ 
         # ------------------------------------------------------------------
         # Core driver groups
         # ------------------------------------------------------------------
@@ -2890,36 +2598,37 @@ class GeoPriorForecaster(QMainWindow):
         self.log_updated.emit(
             "Architecture configuration updated "
             f"(keys: {changed}).",
-        )
-
+      )
+    
+    
     @pyqtSlot()
     def _on_prob_config(self) -> None:
-        base_cfg = self.geo_cfg._base_cfg or {}
-
-        dlg = ProbConfigDialog(
-            base_cfg=base_cfg,
-            current_overrides=self.geo_cfg.prob_overrides,
+        # Flush Train tab widgets first (safe, consistent)
+        self._sync_config_from_ui()
+    
+        before = ProbConfigDialog.snapshot(self.config_store)
+    
+        ok = ProbConfigDialog.edit(
+            store=self.config_store,
             parent=self,
         )
-        if dlg.exec_() != QDialog.Accepted:
+        if not ok:
             return
+    
+        after = ProbConfigDialog.snapshot(self.config_store)
+    
+        keys = ["quantiles", "subs_weights", "gwl_weights"]
+        changed = [k for k in keys if before.get(k) != after.get(k)]
+    
+        msg = "Probabilistic configuration updated"
+        if changed:
+            msg = f"{msg} (keys: {', '.join(changed)})."
+        else:
+            msg = f"{msg} (no changes)."
+    
+        self.log_updated.emit(msg)
 
-        self.geo_cfg.prob_overrides = (
-            dlg.get_overrides()
-        )
 
-        changed = ", ".join(
-            sorted(self.geo_cfg.prob_overrides.keys()),
-        )
-        if not changed:
-            changed = "none"
-
-        self.log_updated.emit(
-            "Probabilistic configuration updated "
-            f"(keys: {changed}).",
-        )
-
-            
     @pyqtSlot()
     def _on_physics_config_clicked(self) -> None:
         """
@@ -3062,191 +2771,12 @@ class GeoPriorForecaster(QMainWindow):
     # --------------------------------------------------------------
     # Tuner search space <-> UI
     # --------------------------------------------------------------
-
-    def _parse_int_list(
-        self,
-        text: str,
-        fallback: list[int],
-    ) -> list[int]:
-        parts = []
-        for tok in text.replace(";", ",").split(","):
-            tok = tok.strip()
-            if not tok:
-                continue
-            try:
-                parts.append(int(tok))
-            except Exception:
-                pass
-        return parts or list(fallback)
-
     def _load_tuner_space_into_ui(self) -> None:
-        """Populate Tune tab widgets from self.geo_cfg.tuner_search_space."""
-        space = self.geo_cfg.tuner_search_space or default_tuner_search_space()
-        defaults = default_tuner_search_space()
-
-        def _get(name: str):
-            return space.get(name, defaults.get(name))
-
-        # --- Architecture lists ---
-        self.hp_embed_dim.setText(
-            ", ".join(str(v) for v in _get("embed_dim"))
-        )
-        self.hp_hidden_units.setText(
-            ", ".join(str(v) for v in _get("hidden_units"))
-        )
-        self.hp_lstm_units.setText(
-            ", ".join(str(v) for v in _get("lstm_units"))
-        )
-        self.hp_attention_units.setText(
-            ", ".join(str(v) for v in _get("attention_units"))
-        )
-        self.hp_num_heads.setText(
-            ", ".join(str(v) for v in _get("num_heads"))
-        )
-        self.hp_vsn_units.setText(
-            ", ".join(str(v) for v in _get("vsn_units"))
-        )
-
-        # Dropout: range or list
-        self.hp_dropout.from_search_space_value(
-            _get("dropout_rate"),
-            defaults["dropout_rate"],
-        )
-
-        # --- Physics ---
-        self.hp_pde_mode.setText(
-            ", ".join(str(v) for v in _get("pde_mode"))
-        )
-        self.hp_kappa_mode.setText(
-            ", ".join(str(v) for v in _get("kappa_mode"))
-        )
-
-        sc_pde = _get("scale_pde_residuals")
-        self.hp_scale_pde_bool.setChecked(bool(sc_pde))
-
-        self.hp_hd.from_search_space_value(
-            _get("hd_factor"),
-            defaults["hd_factor"],
-        )
-        # --- Model-level params (dialog only) ---
-        self.model_params_dialog.load_from_space(space, defaults)
-        
-        # --- Scalars & loss weights (dialog only) ---
-        self.scalars_dialog.load_from_space(space, defaults)
-
-
+        self.tune_tab.refresh_from_store()
+    
     def _build_tuner_space_from_ui(self) -> Dict[str, Any]:
-        """Collect hyperparameters from Tune tab into a TUNER_SEARCH_SPACE dict."""
-        defaults = default_tuner_search_space()
-        space: Dict[str, Any] = {}
+        return self.tune_tab.build_space_from_ui()
 
-        # --- Architecture (lists) ---
-        space["embed_dim"] = self._parse_int_list(
-            self.hp_embed_dim.text(), defaults["embed_dim"]
-        )
-        space["hidden_units"] = self._parse_int_list(
-            self.hp_hidden_units.text(), defaults["hidden_units"]
-        )
-        space["lstm_units"] = self._parse_int_list(
-            self.hp_lstm_units.text(), defaults["lstm_units"]
-        )
-        space["attention_units"] = self._parse_int_list(
-            self.hp_attention_units.text(), defaults["attention_units"]
-        )
-        space["num_heads"] = self._parse_int_list(
-            self.hp_num_heads.text(), defaults["num_heads"]
-        )
-        space["vsn_units"] = self._parse_int_list(
-            self.hp_vsn_units.text(), defaults["vsn_units"]
-        )
-
-        # Range / list editor
-        space["dropout_rate"] = self.hp_dropout.to_search_space_value()
-
-        # --- Physics ---
-        def _parse_str_list(text: str, fallback: list[str]) -> list[str]:
-            vals: list[str] = []
-            for tok in text.replace(";", ",").split(","):
-                t = tok.strip()
-                if t:
-                    vals.append(t)
-            return vals or list(fallback)
-
-        space["pde_mode"] = _parse_str_list(
-            self.hp_pde_mode.text(), defaults["pde_mode"]
-        )
-        space["kappa_mode"] = _parse_str_list(
-            self.hp_kappa_mode.text(), defaults["kappa_mode"]
-        )
-
-        if self.hp_scale_pde_bool.isChecked():
-            space["scale_pde_residuals"] = {"type": "bool"}
-
-        space["hd_factor"] = self.hp_hd.to_search_space_value()
-
-        # --- Model-level params (from dialog) ---
-        space.update(self.model_params_dialog.to_search_space_fragment())
-        # --- Scalars & loss weights (from dialog) ---
-        space.update(self.scalars_dialog.to_search_space_fragment())
-
-        return space
-
-    @pyqtSlot()
-    def _on_model_params_config(self) -> None:
-        """
-        Open the Model params dialog.
-    
-        The dialog is pre-populated from the current tuner search space
-        (or defaults). When the user clicks OK, the values are written
-        back into GeoPriorConfig.tuner_search_space so they persist
-        across dialog openings.
-        """
-        space = self.geo_cfg.tuner_search_space or default_tuner_search_space()
-        defaults = default_tuner_search_space()
-        self.model_params_dialog.load_from_space(space, defaults)
-    
-        if self.model_params_dialog.exec_() == QDialog.Accepted:
-            # 1) get fragment from dialog
-            frag = self.model_params_dialog.to_search_space_fragment()
-    
-            # 2) merge into current tuner space (copy to avoid in-place surprises)
-            current = dict(self.geo_cfg.tuner_search_space
-                           or default_tuner_search_space())
-            current.update(frag)
-            self.geo_cfg.tuner_search_space = current
-    
-            # 3) (optional) if you want Tune tab widgets to reflect any
-            #    model-level changes immediately, call:
-            # self._load_tuner_space_into_ui()
-    
-            self.log_updated.emit("Model-level tuning parameters updated.")
-    
-
-    @pyqtSlot()
-    def _on_scalars_config(self) -> None:
-        """
-        Open the Scalars & loss weights dialog.
-        
-        The dialog is pre-populated from the current tuner search space
-        (or defaults). When the user clicks OK, the values are written
-        back into GeoPriorConfig.tuner_search_space so they persist
-        across dialog openings and sessions.
-        """
-        space = self.geo_cfg.tuner_search_space or default_tuner_search_space()
-        defaults = default_tuner_search_space()
-        self.scalars_dialog.load_from_space(space, defaults)
-    
-        if self.scalars_dialog.exec_() == QDialog.Accepted:
-            frag = self.scalars_dialog.to_search_space_fragment()
-            current = dict(self.geo_cfg.tuner_search_space
-                           or default_tuner_search_space())
-            current.update(frag)
-            self.geo_cfg.tuner_search_space = current
-    
-            # Optionally refresh Tune tab UI:
-            self._load_tuner_space_into_ui()
-    
-            self.log_updated.emit("Scalars & loss weights updated for tuning.")
     
     @pyqtSlot()
     def _on_train_options_clicked(self) -> None:
@@ -4686,63 +4216,7 @@ class GeoPriorForecaster(QMainWindow):
     
         th.start()
 
-    # def _start_stage1(self, city: str) -> None:
-    #     results_root = getattr(self, "results_root", self.gui_runs_root)
 
-    #     # Make sure we have cfg_overrides dict to work with
-    #     overrides = getattr(self, "_cfg_overrides", {}) or {}
-    #     overrides = dict(overrides)  # shallow copy
-
-    #     edited_df = self._edited_df
-
-    #     # If no in-memory dataset is provided, resolve it from _datasets/
-    #     if edited_df is None:
-    #         csv_path_str = choose_dataset_for_city(
-    #             parent=self,
-    #             city=city,
-    #             results_root=Path(results_root),
-    #         )
-    #         if not csv_path_str:
-    #             # User cancelled or no dataset found; dialog already
-    #             # informed them, so just abort Stage-1 quietly.
-                
-    #             return
-
-    #         csv_path = Path(csv_path_str)
-    #         overrides["DATA_DIR"] = str(csv_path.parent)
-    #         overrides["BIG_FN"] = csv_path.name
-
-    #         # Keep a stable copy for Stage1Thread
-    #         self._cfg_overrides = overrides
-
-    #         # Optional: small log line in GUI
-    #         self.log_updated.emit(
-    #             f"[Stage-1] Using dataset: {csv_path.name} "
-    #             f"({csv_path.parent})"
-    #         )
-
-    #     th = Stage1Thread(
-    #         city=city,
-    #         cfg_overrides=self._cfg_overrides,
-    #         clean_run_dir=self.geo_cfg.clean_stage1_dir,
-    #         base_cfg=self.geo_cfg._base_cfg,
-    #         edited_df=edited_df,        # may still be None
-    #         results_root=str(results_root),
-    #         parent=self,
-    #     )
-    #     self.stage1_thread = th
-
-    #     th.log_updated.connect(self.log_updated.emit)
-    #     th.status_updated.connect(self.status_updated.emit)
-    #     th.progress_changed.connect(self._on_thread_progress)
-    #     th.results_ready.connect(self._on_stage1_finished)
-    #     th.error_occurred.connect(self._on_worker_error)
-
-    #     th.start()
-
-    #     # Now a job is actually running → show Stop, update labels
-    #     self._update_global_running_state()
- 
     def _run_job(self, job: TrainJobSpec) -> None:
         """
         Execute a training job described by TrainJobSpec.

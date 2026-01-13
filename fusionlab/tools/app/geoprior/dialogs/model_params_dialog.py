@@ -1,45 +1,70 @@
 # -*- coding: utf-8 -*-
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
-"""
-Dialog to configure extra model-level tuning parameters for GeoPrior.
-
-Covers:
-- memory_size (choices)
-- scales (list-of-list of ints)
-- attention_levels (list-of-list of strings)
-- use_batch_norm / use_residuals / use_vsn (boolean HPs)
-- batch_size, epochs (choices)
-
-The public API mirrors ScalarsLossDialog:
-
-- load_from_space(space, defaults)
-- to_search_space_fragment() -> dict
-"""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
     QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
-    QCheckBox,
+    QVBoxLayout,
     QWidget,
-    QGroupBox,
 )
+
+from ..config.prior_schema import FieldKey
+from ..config.store import GeoConfigStore
+from ..config.geoprior_config import default_tuner_search_space
 
 
 class ModelParamsDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    """
+    Store-driven dialog for extra model-level tuning parameters.
+
+    Covers:
+    - memory_size (choices)
+    - scales (list-of-list of ints)
+    - attention_levels (list-of-list of strings)
+    - use_batch_norm / use_residuals / use_vsn (boolean HPs)
+    - batch_size, epochs (choices)
+
+    Notes
+    -----
+    - Reads tuner_search_space from GeoConfigStore.
+    - Writes only on OK (merge into tuner_search_space).
+    - Cancel does not touch the store.
+    """
+
+    _KEYS = (
+        "memory_size",
+        "scales",
+        "attention_levels",
+        "use_batch_norm",
+        "use_residuals",
+        "use_vsn",
+        "batch_size",
+        "epochs",
+    )
+
+    def __init__(
+        self,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
+        self._store = store
+
         self.setWindowTitle("Model-level tuning parameters")
         self.setModal(True)
 
@@ -75,7 +100,6 @@ class ModelParamsDialog(QDialog):
 
         mem_layout.addWidget(QLabel("Epochs (choices):"), r, 0)
         mem_layout.addWidget(self.ed_epochs, r, 1)
-        r += 1
 
         mem_group.setLayout(mem_layout)
         root.addWidget(mem_group)
@@ -166,10 +190,12 @@ class ModelParamsDialog(QDialog):
         # -------------------------
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
+        self.btn_reset = QPushButton("Reset to defaults")
         self.btn_ok = QPushButton("OK")
         self.btn_cancel = QPushButton("Cancel")
-        btn_row.addWidget(self.btn_ok)
+        btn_row.addWidget(self.btn_reset)
         btn_row.addWidget(self.btn_cancel)
+        btn_row.addWidget(self.btn_ok)
         root.addLayout(btn_row)
 
         # Signals
@@ -177,13 +203,65 @@ class ModelParamsDialog(QDialog):
         self.btn_scales_clear.clicked.connect(self._on_clear_scales)
         self.btn_att_add.clicked.connect(self._on_add_att_combo)
         self.btn_att_clear.clicked.connect(self._on_clear_att)
-        self.btn_ok.clicked.connect(self.accept)
+
+        self.btn_ok.clicked.connect(self._on_ok)
         self.btn_cancel.clicked.connect(self.reject)
+        self.btn_reset.clicked.connect(self._on_reset_clicked)
+
+        # init from store
+        self._defaults = self._get_defaults()
+        self._space0 = self._get_space_merged(self._defaults)
+
+        self.load_from_space(self._space0, self._defaults)
+        self._init_norm = self._norm_fragment(
+            self.to_search_space_fragment()
+        )
 
     # --------------------------------------------------------------
-    # Small helpers
+    # Store helpers
     # --------------------------------------------------------------
-    def _parse_int_list(self, text: str, fallback: List[int]) -> List[int]:
+    def _get_defaults(self) -> Dict[str, Any]:
+        off = self._store.get_value(
+            FieldKey("offset_mode"),
+            default="mul",
+        )
+        try:
+            return default_tuner_search_space(offset_mode=str(off))
+        except Exception:
+            return default_tuner_search_space()
+
+    def _get_space_merged(
+        self,
+        defaults: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        cur = self._store.get_value(
+            FieldKey("tuner_search_space"),
+            default={},
+        )
+        if not isinstance(cur, dict):
+            cur = {}
+        merged = dict(defaults)
+        merged.update(dict(cur))
+        return merged
+
+    def _apply_fragment(self, frag: Dict[str, Any]) -> None:
+        if not frag:
+            return
+        with self._store.batch():
+            self._store.merge_dict_field(
+                "tuner_search_space",
+                dict(frag),
+                replace=False,
+            )
+
+    # --------------------------------------------------------------
+    # Small helpers (parsing)
+    # --------------------------------------------------------------
+    def _parse_int_list(
+        self,
+        text: str,
+        fallback: List[int],
+    ) -> List[int]:
         vals: List[int] = []
         for tok in text.replace(";", ",").split(","):
             tok = tok.strip()
@@ -238,7 +316,7 @@ class ModelParamsDialog(QDialog):
         self.chk_att_mem.setChecked(False)
 
     # --------------------------------------------------------------
-    # Public API
+    # Public API (kept for compatibility)
     # --------------------------------------------------------------
     def load_from_space(
         self,
@@ -284,7 +362,7 @@ class ModelParamsDialog(QDialog):
                 self._scale_combos.append(ints)
                 self.list_scales.addItem(", ".join(str(v) for v in ints))
 
-        # attention_levels (list of list[str] or flat list[str])
+        # attention_levels
         att_spec = _get(
             "attention_levels",
             [["cross", "hierarchical", "memory"]],
@@ -299,12 +377,14 @@ class ModelParamsDialog(QDialog):
                 self._attn_combos.append(levels)
                 self.list_att.addItem(" + ".join(levels))
 
-        # boolean HPs – we treat dict(type='bool') as "tuned"
+        # boolean HPs – treat dict(type='bool') as "tuned"
         def _is_bool_hp(val: Any) -> bool:
-            return isinstance(val, dict) and val.get("type") == "bool"
+            return isinstance(val, dict) and (
+                str(val.get("type", "")).lower() in ("bool", "boolean")
+            )
 
         self.chk_use_batch_norm.setChecked(
-            _is_bool_hp(_get("use_batch_norm", {"type": "bool"}))
+            _is_bool_hp(_get("use_batch_norm", {}))
         )
         self.chk_use_residuals.setChecked(
             _is_bool_hp(_get("use_residuals", {}))
@@ -312,34 +392,114 @@ class ModelParamsDialog(QDialog):
         self.chk_use_vsn.setChecked(_is_bool_hp(_get("use_vsn", {})))
 
     def to_search_space_fragment(self) -> Dict[str, Any]:
-        """
-        Convert dialog state into a partial TUNER_SEARCH_SPACE dict.
-        """
+        """Convert dialog state into a partial TUNER_SEARCH_SPACE dict."""
         fragment: Dict[str, Any] = {}
 
         fragment["memory_size"] = self._parse_int_list(
-            self.ed_memory_size.text(), [50]
+            self.ed_memory_size.text(),
+            [50],
         )
         fragment["batch_size"] = self._parse_int_list(
-            self.ed_batch_size.text(), [32]
+            self.ed_batch_size.text(),
+            [32],
         )
         fragment["epochs"] = self._parse_int_list(
-            self.ed_epochs.text(), [50]
+            self.ed_epochs.text(),
+            [50],
         )
 
         if self._scale_combos:
             fragment["scales"] = [list(c) for c in self._scale_combos]
+        else:
+            fragment["scales"] = []
 
         if self._attn_combos:
-            fragment["attention_levels"] = [
-                list(c) for c in self._attn_combos
-            ]
+            fragment["attention_levels"] = [list(c) for c in self._attn_combos]
+        else:
+            fragment["attention_levels"] = []
 
         if self.chk_use_batch_norm.isChecked():
             fragment["use_batch_norm"] = {"type": "bool"}
+        else:
+            fragment["use_batch_norm"] = {}
+
         if self.chk_use_residuals.isChecked():
             fragment["use_residuals"] = {"type": "bool"}
+        else:
+            fragment["use_residuals"] = {}
+
         if self.chk_use_vsn.isChecked():
             fragment["use_vsn"] = {"type": "bool"}
+        else:
+            fragment["use_vsn"] = {}
 
         return fragment
+
+    # --------------------------------------------------------------
+    # Reset / OK
+    # --------------------------------------------------------------
+    def _on_reset_clicked(self) -> None:
+        self.load_from_space(self._defaults, self._defaults)
+
+    def _on_ok(self) -> None:
+        try:
+            frag = self.to_search_space_fragment()
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Invalid values",
+                str(exc) or "Check your entries.",
+            )
+            return
+
+        new_norm = self._norm_fragment(frag)
+        patch: Dict[str, Any] = {}
+
+        for k in self._KEYS:
+            if self._init_norm.get(k) != new_norm.get(k):
+                patch[k] = frag.get(k)
+
+        if patch:
+            self._apply_fragment(patch)
+
+        self.accept()
+
+    # --------------------------------------------------------------
+    # Normalization (diff detection)
+    # --------------------------------------------------------------
+    @staticmethod
+    def _norm_fragment(frag: Dict[str, Any]) -> Dict[str, Tuple]:
+        out: Dict[str, Tuple] = {}
+        for k, v in (frag or {}).items():
+            out[k] = ModelParamsDialog._norm_value(v)
+        return out
+
+    @staticmethod
+    def _norm_value(v: Any) -> Tuple:
+        if isinstance(v, dict):
+            t = str(v.get("type", "")).lower()
+            if t in ("bool", "boolean"):
+                return ("bool",)
+            items = tuple(sorted((str(x), str(v[x])) for x in v))
+            return ("dict", items)
+
+        if isinstance(v, (list, tuple)):
+            # list of ints OR list-of-lists
+            if v and isinstance(v[0], (list, tuple)):
+                return ("list2", tuple(tuple(x) for x in v))
+            return ("list", tuple(v))
+
+        return ("other", str(v))
+
+    # --------------------------------------------------------------
+    # Public entry
+    # --------------------------------------------------------------
+    @classmethod
+    def edit(
+        cls,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QWidget] = None,
+    ) -> bool:
+        dlg = cls(store=store, parent=parent)
+        return dlg.exec_() == QDialog.Accepted

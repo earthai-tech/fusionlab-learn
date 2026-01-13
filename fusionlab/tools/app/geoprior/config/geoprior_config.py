@@ -588,6 +588,15 @@ class GeoPriorConfig:
     use_batch_norm: bool = False
     use_vsn: bool = True
     vsn_units: int = 32
+    
+    # ------------------------------------------------------------------
+    # Uncertainty controls (v3.2+)
+    # ------------------------------------------------------------------
+    interval_level: float = 0.8
+    crossing_penalty: float = 0.0
+    crossing_margin: float = 0.0
+    calibration_mode: str = "none"
+    calibration_temperature: float = 1.0
 
     # ------------------------------------------------------------------
     # GUI-only flags
@@ -788,7 +797,7 @@ class GeoPriorConfig:
                 "AUDIT_STAGES",
                 cls.audit_stages,
             ),
-    
+            
             # Training hyper-params ------------------------------------------
             epochs=iget("EPOCHS", cls.epochs),
             batch_size=iget("BATCH_SIZE", cls.batch_size),
@@ -1236,6 +1245,26 @@ class GeoPriorConfig:
             "INCLUDE_CENSOR_FLAGS_AS_FUTURE",
             obj.include_censor_flags_as_future,
         )
+        obj.interval_level = base.get(
+            "INTERVAL_LEVEL", 
+            obj.interval_level
+        )
+
+        obj.crossing_penalty = base.get(
+            "CROSSING_PENALTY", obj.crossing_penalty
+            )
+
+        obj.unc_crossing_margin = base.get(
+            "CROSSING_MARGIN", obj.crossing_margin
+            )
+        obj.calibration_mode = base.get(
+            "CALIBRATION_MODE",  obj.calibration_mode
+        )
+        obj.calibration_temperature = base.get(
+                "CALIBRATION_TEMPERATURE",
+                obj.calibration_temperature,
+            )
+
 
         return obj 
     
@@ -2161,6 +2190,15 @@ class GeoPriorConfig:
             "use_batch_norm": self.use_batch_norm,
             "use_vsn": self.use_vsn,
             "vsn_units": self.vsn_units,
+            
+            # --------------------------------------------------------------
+            # Calibration Prob
+            # --------------------------------------------------------------
+            "interval_level": self.interval_level, 
+            "crossing_penalty": self.crossing_penalty, 
+            "crossing_margin":self.crossing_margin, 
+            "calibration_mode": self.calibration_mode, 
+            "calibration_temperature":self.calibration_temperature, 
     
             # --------------------------------------------------------------
             # GUI-only flags

@@ -31,10 +31,11 @@ from typing import (
     # Sequence,
     Set,
     Tuple,
+    Iterator, 
 )
 
 from .geoprior_config import GeoPriorConfig
-
+from .helps import help_text as _help_text
 # ------------------------------------------------------------
 # Keys
 # ------------------------------------------------------------
@@ -289,6 +290,12 @@ CHOICE_SPECS: Dict[str, Tuple[str, ...]] = {
     "scaling_error_policy": ("raise", "warn", "ignore"),
     "physics_baseline_mode": ("none", "data", "physics"),
 }
+CHOICE_SPECS["calibration_mode"] = (
+    "none",
+    "temperature",
+    "isotonic",
+    "conformal",
+)
 
 
 # Choice-like, but keep editable for forward-compat.
@@ -410,6 +417,15 @@ LABEL_OVERRIDES: Dict[FieldKey, str] = {
     K("scaling_kwargs_json_path"): "Scaling kwargs JSON",
 }
 
+LABEL_OVERRIDES.update(
+    {
+        K("interval_level"): "Interval level",
+        K("crossing_penalty"): "Crossing penalty",
+        K("crossing_margin"): "Crossing margin",
+        K("calibration_mode"): "Calibration mode",
+        K("calibration_temperature"): "Calibration temperature",
+    }
+)
 
 TOOLTIP_OVERRIDES: Dict[FieldKey, str] = {
     K("pde_mode"): "Which physics residuals are active.",
@@ -435,6 +451,15 @@ def _infer_kind(key: FieldKey) -> Kind:
     if key.is_dict_item():
         return "float"
     n = key.name
+
+    if n in {
+        "interval_level",
+        "crossing_penalty",
+        "crossing_margin",
+        "calibration_temperature",
+    }:
+        return "float"
+
     if n in PATH_NAMES:
         return "path"
     if n in JSON_NAMES:
@@ -522,7 +547,12 @@ def build_physics_schema() -> Dict[FieldKey, FieldSpec]:
 PHYSICS_SCHEMA: Dict[FieldKey, FieldSpec] = (
     build_physics_schema()
 )
-
+# “hydrate” the schema once
+# so schema-driven tooltips everywhere
+# for k, spec in PHYSICS_SCHEMA.items():
+#     if not (spec.tooltip or "").strip():
+#         # spec.tooltip = help_text(k.name, k.subkey)
+#         object.__setattr__(spec, "tooltip", help_text(k.name, k.subkey))
 
 # ------------------------------------------------------------
 # Validation guardrail
@@ -643,3 +673,100 @@ def validate_schema_against_config(
             "Unindexed physics-like config fields: "
             f"{not_indexed}"
         )
+
+
+UNCERTAINTY_GROUP_TITLES = {
+    "uncertainty": "Uncertainty & calibration",
+}
+
+UNCERTAINTY_GROUPS = {
+    "uncertainty": [
+        "interval_level",
+        "crossing_penalty",
+        "crossing_margin",
+        "calibration_mode",
+        "calibration_temperature",
+    ],
+}
+
+
+def iter_uncertainty_keys() -> Iterator[FieldKey]:
+    for names in UNCERTAINTY_GROUPS.values():
+        for name in names:
+            yield FieldKey(name)
+
+
+def build_uncertainty_schema(
+    *,
+    help_text: Optional[Dict[str, str]] = None,
+    labels: Optional[Dict[str, str]] = None,
+) -> Dict[FieldKey, FieldSpec]:
+    help_text = help_text or {}
+    labels = labels or {}
+
+    schema: Dict[FieldKey, FieldSpec] = {}
+
+    for group_id, names in UNCERTAINTY_GROUPS.items():
+        for name in names:
+            key = FieldKey(name)
+            kind = _infer_kind(key)
+
+            choices = None
+            editable = False
+
+            if key.name in CHOICE_SPECS:
+                choices = CHOICE_SPECS[key.name]
+
+            if (kind == "choice") and (choices is None):
+                editable = True
+
+            # min/max hints (nice for numeric widgets)
+            min_value = None
+            max_value = None
+
+            if key.name in {
+                "crossing_penalty",
+                "crossing_margin",
+            }:
+                min_value = 0.0
+
+            if key.name == "interval_level":
+                min_value = 0.001
+                max_value = 0.999
+
+            if key.name == "calibration_temperature":
+                min_value = 1e-6
+
+            # tooltip: prefer overrides, then helps
+            tooltip = _tooltip_for(key)
+            if not (tooltip or "").strip():
+                try:
+                    tooltip = str(
+                        _help_text(key.name, key.subkey)
+                        or ""
+                    )
+                except Exception:
+                    tooltip = ""
+
+            schema[key] = FieldSpec(
+                key=key,
+                group=group_id,
+                label=labels.get(
+                    key.name,
+                    _label_for(key),
+                ),
+                kind=kind,
+                tooltip=tooltip,
+                choices=choices,
+                editable=editable,
+                min_value=min_value,
+                max_value=max_value,
+            )
+
+    return schema
+
+
+
+UNCERTAINTY_SCHEMA = build_uncertainty_schema()
+
+ALL_SCHEMA = {**PHYSICS_SCHEMA, **UNCERTAINTY_SCHEMA}

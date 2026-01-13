@@ -89,7 +89,7 @@ QMainWindow {{
     font-family: 'Helvetica Neue', sans-serif;
 }}
 
-QFrame#card {{
+QWidget#card {{
     background: white;
     border: 2px solid {PRIMARY};
     border-radius: 12px;
@@ -188,7 +188,7 @@ QPushButton#tune:disabled {{
     color: #666;
 }}
 
-QFrame#card[inferenceMode="true"] {{
+QWidget#card[inferenceMode="true"] {{
     border: 2px solid #2E3191;
 }}
 
@@ -237,7 +237,7 @@ QPushButton#runButton:disabled {{
     color: #374151;  /* darker grey text while running */
 }}
 
-QPushButton#runButton {{
+QPushButton#runIconButton  {{
     /* icon-only, round hit area */
     background-color: transparent;
     border: none;
@@ -249,13 +249,13 @@ QPushButton#runButton {{
     max-height: 32px;
 }}
 
-QPushButton#runButton:hover:enabled {{
+QPushButton#runIconButton:hover:enabled {{
     /* soft green halo on hover */
     background-color: rgba(34, 197, 94, 0.16);  /* based on RUN_BUTTON_HOVER */
     border-radius: 16px;
 }}
 
-QPushButton#runButton:disabled {{
+QPushButton#runIconButton:disabled{{
     background-color: transparent;
     /* Qt will already dim the icon; this just removes hover halo */
 }}
@@ -285,7 +285,7 @@ QLabel#description {{
     color: {PALETTE['dark_text_muted']};
 }}
 
-QFrame#card {{
+QWidget#card {{
     background-color: {PALETTE['dark_card_bg']};
     border: 1px solid {PALETTE['dark_border']};
     border-radius: 12px;
