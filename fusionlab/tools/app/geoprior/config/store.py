@@ -217,6 +217,7 @@ class GeoConfigStore(QObject):
         updates: Dict[str, Any],
         *,
         replace: bool = False,
+        emit: bool = True,
     ) -> bool:
         """
         Safely update dict-like override fields.
@@ -247,7 +248,10 @@ class GeoConfigStore(QObject):
 
         if new != cur:
             setattr(self._cfg, field, new)
-            self._mark_changed({field})
+            if emit:
+                self._mark_changed({field})
+            else:
+                self._dirty_count = self._compute_dirty_count()
             return True
 
         return False

@@ -43,7 +43,7 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "nansha"
+CITY_NAME = "zhongshan"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
@@ -634,7 +634,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 50 # 100           # Recommended: 50 to 200
+EPOCHS = 20 # 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
@@ -702,7 +702,7 @@ DEBUG = False  # Enable or disable debugging
 #   normalization/inversion checks, and scaling_kwargs consistency.
 AUDIT_STAGES = "*"
 
-EVAL_JSON_UNITS_MODE = "interpretable"              # or "si / interpretable"
+EVAL_JSON_UNITS_MODE = "si"              # or "si / interpretable"
 EVAL_JSON_UNITS_SCOPE = "all"            # "subsidence" / "physics" / "all"
 
 # -------------------------------------------------------------------

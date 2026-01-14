@@ -88,9 +88,6 @@ class TuneTab(QWidget):
 
     run_clicked = pyqtSignal()
     advanced_clicked = pyqtSignal()
-    # model_params_clicked = pyqtSignal()
-    # scalars_clicked = pyqtSignal()
-    # search_algo_clicked = pyqtSignal()
 
     def __init__(
         self,

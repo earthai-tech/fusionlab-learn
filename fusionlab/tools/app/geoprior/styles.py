@@ -82,6 +82,7 @@ RUN_BUTTON_DISABLED = "#9CA3AF"  # greyed while running
 # ------------------------------------------------------------------ #
 #  Light theme – main GeoPrior style
 # ------------------------------------------------------------------ #
+
 FLAB_STYLE_SHEET = f"""
 QMainWindow {{
     background: {BG_LIGHT};
@@ -121,7 +122,78 @@ QComboBox {{
     border-radius: 4px;
     padding: 4px;
 }}
+/* ---------- ComboBox popup contrast (Light) ---------- */
+QComboBox {{
+    color: {PALETTE['light_text']};
+    padding-right: 26px;
+}}
 
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    border-left: 1px solid {PALETTE['light_border']};
+    background: rgba(46, 49, 145, 0.10);
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}}
+
+QComboBox QAbstractItemView,
+QComboBox QListView {{
+    background: {PALETTE['light_card_bg']};
+    color: {PALETTE['light_text']};
+    border: 1px solid {PALETTE['light_border']};
+    outline: 0;
+    padding: 4px;
+}}
+
+QComboBox QAbstractItemView::item,
+QComboBox QListView::item {{
+    padding: 6px 10px;
+}}
+
+QComboBox QAbstractItemView::item:hover,
+QComboBox QListView::item:hover {{
+    background: rgba(46, 49, 145, 0.12);
+}}
+
+QComboBox QAbstractItemView::item:selected,
+QComboBox QListView::item:selected {{
+    background: {PRIMARY};
+    color: white;
+}}
+/* --- ComboBox arrow visibility (Light) --- */
+/* --- Combo arrow (PNG) --- */
+QComboBox::drop-down {{
+    width: 26px;
+    border-left: 1px solid {PALETTE['light_border']};
+    background: rgba(46, 49, 145, 0.20);   /* stronger tint */
+}}
+
+QComboBox::down-arrow:on {{
+    image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'>\
+<path d='M2 3.5 L5 6.5 L8 3.5' fill='none' stroke='{SECONDARY}' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>\
+</svg>");
+}}
+     /* --- Force visible combo arrow (Qt5-safe) --- */
+QComboBox::down-arrow {{
+    image: none;                 /* disable default glyph */
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid {PRIMARY};  /* triangle color */
+    margin-right: 6px;
+}}
+
+QComboBox::down-arrow:on {{
+    border-top: 7px solid {SECONDARY};
+}}      
+QComboBox::drop-down {{
+    width: 26px;
+}}
+    
 QTextEdit {{
     background: #f6f6f6;
     border: 1px solid #cccccc;
@@ -350,6 +422,58 @@ QComboBox:focus {{
     border: 1px solid {PALETTE['primary']};
 }}
 
+/* ---------- ComboBox popup contrast (Dark) ---------- */
+QComboBox {{
+    color: {PALETTE['dark_text']};
+    padding-right: 26px;
+}}
+
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
+    border-left: 1px solid {PALETTE['dark_border']};
+    background: rgba(242, 134, 32, 0.12);
+}}
+
+QComboBox QAbstractItemView,
+QComboBox QListView {{
+    background: {PALETTE['dark_card_bg']};
+    color: {PALETTE['dark_text']};
+    border: 1px solid {PALETTE['dark_border']};
+    outline: 0;
+    padding: 4px;
+}}
+
+QComboBox QAbstractItemView::item,
+QComboBox QListView::item {{
+    padding: 6px 10px;
+}}
+
+QComboBox QAbstractItemView::item:hover,
+QComboBox QListView::item:hover {{
+    background: rgba(46, 49, 145, 0.22);
+}}
+
+QComboBox QAbstractItemView::item:selected,
+QComboBox QListView::item:selected {{
+    background: {PALETTE['primary']};
+    color: white;
+}}
+QComboBox::down-arrow {{
+    image: none;
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid white;
+    margin-right: 6px;
+}}
+
+QComboBox::down-arrow:on {{
+    border-top: 7px solid {SECONDARY};
+}}
+
 QTextEdit,
 QPlainTextEdit {{
     background-color: #020617;
@@ -567,6 +691,90 @@ QMessageBox QPushButton:disabled {{
     color: #888;
 }}
 """
+
+MAIN_TAB_STYLES_LIGHT = f"""
+/* ===== Main tabs (Light) : modern IDE underline ===== */
+QTabWidget#mainTabs::pane {{
+    border: none;
+    background: transparent;
+}}
+
+QTabWidget#mainTabs QTabBar {{
+    qproperty-drawBase: 0;
+    background: rgba(46, 49, 145, 0.06);
+    border: 1px solid rgba(46, 49, 145, 0.22);
+    border-radius: 10px;         /* keep your bar look */
+    padding: 2px 4px;
+}}
+
+QTabWidget#mainTabs QTabBar::tab {{
+    background: transparent;
+    color: {PALETTE['light_text']};
+    border: none;
+    border-radius: 0px;
+
+    /* reduced height */
+    padding: 3px 10px;
+    margin: 0px 4px;
+    min-height: 18px;
+}}
+
+QTabWidget#mainTabs QTabBar::tab:hover {{
+    background: rgba(51, 153, 255, 0.12);   /* SECONDARY_TBLUE tint */
+    border-radius: 6px;
+}}
+
+QTabWidget#mainTabs QTabBar::tab:selected {{
+    color: {PRIMARY};
+    font-weight: 600;
+    background: transparent;
+    border-bottom: 2px solid {SECONDARY};
+}}
+"""
+
+MAIN_TAB_STYLES_DARK = f"""
+/* ===== Main tabs (Dark) : modern IDE underline ===== */
+QTabWidget#mainTabs::pane {{
+    border: none;
+    background: transparent;
+}}
+
+QTabWidget#mainTabs QTabBar {{
+    qproperty-drawBase: 0;
+    /* keep the same "bar" idea, just darker */
+    background: rgba(46, 49, 145, 0.14);
+    border: 1px solid {PALETTE['dark_border']};
+    border-radius: 10px;
+    padding: 2px 4px;
+}}
+
+QTabWidget#mainTabs QTabBar::tab {{
+    background: transparent;
+    color: {PALETTE['dark_text']};
+    border: none;
+    border-radius: 0px;
+
+    /* reduced height */
+    padding: 3px 10px;
+    margin: 0px 4px;
+    min-height: 18px;
+}}
+
+QTabWidget#mainTabs QTabBar::tab:hover {{
+    background: rgba(51, 153, 255, 0.14);
+    border-radius: 6px;
+}}
+
+QTabWidget#mainTabs QTabBar::tab:selected {{
+    color: {PALETTE['dark_text_title']};
+    font-weight: 600;
+    background: transparent;
+    border-bottom: 2px solid {SECONDARY};
+}}
+"""
+
+
+
 __all__ = [
     "PRIMARY",
     "SECONDARY",
@@ -593,5 +801,8 @@ __all__ = [
     "MODE_DATA_COLOR",
     "MODE_SETUP_COLOR",
     "MODE_PREPROCESS_COLOR",
+    "MAIN_TAB_STYLES_DARK", 
+    "MAIN_TAB_STYLES_LIGHT"
+    
 ]
 

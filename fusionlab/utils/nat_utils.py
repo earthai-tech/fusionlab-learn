@@ -3067,7 +3067,7 @@ def resolve_hybrid_config(
     #    (Everything that does NOT affect input data shapes or target columns)
     OVERRIDABLE_KEYS = {
         # track City Name , so we can switch to change city as well 
-        "CITY_NAME", "CITY", 
+        "CITY_NAME", "CITY", "MODEL_NAME", 
         
         "USE_IN_MEMORY_MODEL", "DEBUG", "USE_TF_SAVEDMODEL", 
         

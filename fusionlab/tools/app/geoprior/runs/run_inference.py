@@ -1,51 +1,220 @@
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: LKouadio <etanoyau@gmail.com>
+
 from __future__ import annotations
 
+import datetime as dt
+import json
+import os
+import warnings
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Optional,
+    TYPE_CHECKING,
+)
 
-import os 
-import json 
-import warnings 
-import datetime as dt 
-import joblib 
-import numpy as np 
-
-from typing import Optional, Dict, Any, Callable
+import joblib
+import numpy as np
 import tensorflow as tf
 
-from ....._optdeps import with_progress 
-from .....utils.generic_utils import ensure_directory_exists
-from .....utils.scale_metrics import (
-    inverse_scale_target,
-    point_metrics,
-    per_horizon_metrics,
-)
-from .....utils.forecast_utils import format_and_forecast
-
-from .....nn.keras_metrics import ( 
-    coverage80_fn,
-    sharpness80_fn 
+from .....compat.keras import (
+    load_inference_model,
+    load_model_from_tfv2,
 )
 from .....nn.calibration import (
     IntervalCalibrator,
-    fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
+    fit_interval_calibrator_on_val,
+)
+from .....nn.keras_metrics import (
+    coverage80_fn,
+    sharpness80_fn,
+)
+from .....nn.pinn.geoprior.models import GeoPriorSubsNet
+from .....plot.forecast import plot_eval_future
+from .....utils.forecast_utils import format_and_forecast
+from .....utils.generic_utils import ensure_directory_exists
+from .....utils.nat_utils import (
+    ensure_input_shapes,
+    extract_preds,
+    load_best_hps_near_model,
+    map_targets_for_training,
+    pick_npz_for_dataset,
+    sanitize_inputs_np,
+)
+from .....utils.scale_metrics import (
+    inverse_scale_target,
+    per_horizon_metrics,
+    point_metrics,
 )
 
-from .....plot.forecast import plot_eval_future
-from .....utils.nat_utils import (
-    load_geoprior_for_inference, 
-    pick_npz_for_dataset, 
-    sanitize_inputs_np, 
-    map_targets_for_training, 
-    ensure_input_shapes, 
-  )
+from ..utils.view_utils import _notify_gui_forecast_views
 
-from ..utils.view_utils import _notify_gui_forecast_views 
+if TYPE_CHECKING:
+    from ..config.store import GeoConfigStore
 
-# --- quiet logs ---
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 tf.get_logger().setLevel("ERROR")
+
+
+def _resolve_bundle_paths(model_path: str) -> Dict[str, Any]:
+    mp = os.path.abspath(model_path)
+    run_dir = mp if os.path.isdir(mp) else os.path.dirname(mp)
+
+    tf_dir = None
+    keras_path = None
+    prefix = None
+
+    if os.path.isdir(mp) and mp.endswith("_best_savedmodel"):
+        tf_dir = mp
+        prefix = mp[: -len("_best_savedmodel")]
+        keras_path = prefix + "_best.keras"
+    else:
+        keras_path = mp
+        if keras_path.endswith("_best.keras"):
+            prefix = keras_path[: -len("_best.keras")]
+        elif keras_path.endswith(".keras"):
+            prefix = keras_path[: -len(".keras")]
+        else:
+            prefix = os.path.join(run_dir, "model")
+
+        cand = prefix + "_best_savedmodel"
+        if os.path.isdir(cand):
+            tf_dir = cand
+
+    weights_path = prefix + "_best.weights.h5"
+    if not os.path.isfile(weights_path):
+        weights_path = None
+
+    init_path = os.path.join(
+        run_dir,
+        "model_init_manifest.json",
+    )
+
+    return {
+        "run_dir": run_dir,
+        "keras_path": keras_path,
+        "weights_path": weights_path,
+        "tf_dir": tf_dir,
+        "init_manifest_path": init_path,
+    }
+
+
+def _store_cfg_overrides(
+    store: Optional["GeoConfigStore"],
+) -> Dict[str, Any]:
+    if store is None:
+        return {}
+
+    # Prefer a dedicated "overrides" snapshot API if present.
+    for name in (
+        "snapshot_overrides",
+        "to_overrides",
+        "overrides_snapshot",
+        "get_overrides",
+    ):
+        fn = getattr(store, name, None)
+        if callable(fn):
+            try:
+                out = fn()
+                return dict(out) if isinstance(out, dict) else {}
+            except Exception:
+                return {}
+
+    # Fallback: store.snapshot() or store.to_dict()
+    for name in ("snapshot", "to_dict", "as_dict", "dump"):
+        fn = getattr(store, name, None)
+        if callable(fn):
+            try:
+                out = fn()
+            except Exception:
+                continue
+
+            if isinstance(out, dict):
+                # Some stores wrap as {"config": {...}}
+                cfg = out.get("config", out)
+                return dict(cfg) if isinstance(cfg, dict) else {}
+
+    # Fallback: store.config (GeoPriorConfig) -> dict
+    cfg_obj = getattr(store, "config", None)
+    if cfg_obj is not None:
+        for name in ("to_dict", "as_dict", "dict"):
+            fn = getattr(cfg_obj, name, None)
+            if callable(fn):
+                try:
+                    out = fn()
+                    return dict(out) if isinstance(out, dict) else {}
+                except Exception:
+                    pass
+        try:
+            return dict(cfg_obj)
+        except Exception:
+            pass
+
+    return {}
+
+
+def _merge_cfg(
+    base: Dict[str, Any],
+    *,
+    store: Optional["GeoConfigStore"],
+    cfg_overrides: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    cfg = dict(base)
+
+    live = _store_cfg_overrides(store)
+    if live:
+        cfg.update(live)
+
+    if cfg_overrides:
+        cfg.update(cfg_overrides)
+
+    return cfg
+
+
+def _merge_forecasts(df_a, df_b):
+    if df_a is None or df_a.empty:
+        return df_b
+    if df_b is None or df_b.empty:
+        return df_a
+
+    join_cols = []
+    for c in (
+        "coord_t",
+        "coord_x",
+        "coord_y",
+        "sample_index",
+        "sample_id",
+    ):
+        if c in df_a.columns and c in df_b.columns:
+            join_cols.append(c)
+
+    if join_cols:
+        b_cols = [
+            c
+            for c in df_b.columns
+            if c not in join_cols and c not in df_a.columns
+        ]
+        if not b_cols:
+            return df_a
+        return df_a.merge(
+            df_b[join_cols + b_cols],
+            on=join_cols,
+        )
+
+    b_cols = [
+        c for c in df_b.columns
+        if c not in df_a.columns
+    ]
+    if not b_cols:
+        return df_a
+    return df_a.join(df_b[b_cols])
+
 
 def run_inference(
     model_path: str,
@@ -63,75 +232,22 @@ def run_inference(
     include_gwl: bool = False,
     batch_size: int = 32,
     make_plots: bool = True,
+    store: Optional["GeoConfigStore"] = None,
     cfg_overrides: Optional[Dict[str, Any]] = None,
     logger: Optional[Callable[[str], None]] = None,
     stop_check: Optional[Callable[[], bool]] = None,
-    progress_callback: Optional[Callable[[float, str], None]] = None,  
-    **kws
+    progress_callback: Optional[
+        Callable[[float, str], None]
+    ] = None,
+    **kws,
 ) -> Dict[str, Any]:
-    """
-    Run Stage-3 inference for GeoPriorSubsNet in a GUI-friendly way.
-
-    Parameters
-    ----------
-    model_path :
-        Path to the trained/tuned `.keras` model.
-    dataset :
-        One of {"train", "val", "test", "custom"}.
-    use_stage1_future_npz :
-        If True, ignore ``dataset`` / ``inputs_npz`` and instead
-        load the future NPZs recorded in the Stage-1 manifest
-        (generated when ``BUILD_FUTURE_NPZ=True`` in Stage-1).
-        If those artifacts are missing, a clear error is logged
-        and a ``FileNotFoundError`` is raised.
-    manifest_path :
-        Optional explicit path to Stage-1 `manifest.json`.
-    stage1_dir :
-        Optional Stage-1 directory (must contain `manifest.json`).
-    inputs_npz, targets_npz :
-        Used only when `dataset="custom"`.
-    use_source_calibrator :
-        If True and no `calibrator_path` is given, try to load
-        `interval_factors_80.npy` from the model directory.
-    calibrator_path :
-        Explicit `.npy` file with calibrator factors.
-    fit_calibrator :
-        If True, fit calibrator on val split (if available).
-    cov_target :
-        Target coverage level for the interval calibrator.
-    include_gwl :
-        Whether to include GWL columns in the formatted CSV.
-    batch_size :
-        Batch size for Dataset / inference loops.
-    make_plots :
-        If True, generate spatial & temporal plots.
-    cfg_overrides :
-        Optional shallow overrides for `M["config"]`.
-    logger :
-        Optional logging callable; defaults to `print`.
-    stop_check :
-        Optional callable returning True when caller wants to abort
-        (e.g., GUI "Cancel" button).
-    progress_callback : callable or None, default=None
-        Optional callable ``progress_callback(value, message)`` used
-        by the GUI. ``value`` is a float in [0, 1] encoding the global
-        inference progress; ``message`` is a short status string.
-    Returns
-    -------
-    out : dict
-        Dictionary with paths to artifacts and main metrics.
-    """
-    # ----------------------------------------------------------
-    # Small helpers
-    # ----------------------------------------------------------
     def log(msg: str) -> None:
         (logger or print)(msg)
 
     def should_stop() -> bool:
         return bool(stop_check and stop_check())
-    
-    def _progress(value: float, message: str) -> None:
-        """Safe wrapper around the GUI progress callback."""
+
+    def progress(value: float, message: str) -> None:
         if progress_callback is None:
             return
         try:
@@ -142,67 +258,65 @@ def run_inference(
         try:
             progress_callback(v, message)
         except Exception:
-            # Never crash inference because the GUI callback misbehaved.
             pass
 
-    # ----------------------------------------------------------
-    # 0) Resolve Stage-1 manifest
-    # ----------------------------------------------------------
+    # 0) manifest
     if manifest_path is not None:
-        manifest_file = os.path.abspath(manifest_path)
+        mf = os.path.abspath(manifest_path)
     elif stage1_dir is not None:
-        manifest_file = os.path.join(stage1_dir, "manifest.json")
-        if not os.path.exists(manifest_file):
+        mf = os.path.join(stage1_dir, "manifest.json")
+        if not os.path.exists(mf):
             raise FileNotFoundError(
-                f"manifest.json not found in stage1_dir={stage1_dir!r}"
+                "manifest.json not found in "
+                f"stage1_dir={stage1_dir!r}"
             )
-        manifest_file = os.path.abspath(manifest_file)
+        mf = os.path.abspath(mf)
     else:
-        # In the GUI pipeline we always know which Stage-1 run
-        # we are continuing from, so environment-based discovery
-        # is no longer supported here.
         raise ValueError(
-            "run_inference requires either 'manifest_path' or "
-            "'stage1_dir' when used from the GeoPrior GUI."
+            "run_inference requires 'manifest_path' "
+            "or 'stage1_dir' in the GeoPrior GUI."
         )
 
-    with open(manifest_file, "r", encoding="utf-8") as f:
+    with open(mf, "r", encoding="utf-8") as f:
         M = json.load(f)
 
-    cfg = dict(M["config"])
-    if cfg_overrides:
-        cfg.update(cfg_overrides)
+    cfg_base = dict(M.get("config", {}))
+    cfg = _merge_cfg(
+        cfg_base,
+        store=store,
+        cfg_overrides=cfg_overrides,
+    )
 
-    CITY = M.get("city", cfg.get("CITY_NAME", "unknown_city"))
-    MODEL_NAME = M.get("model", "GeoPriorSubsNet")
+    city = M.get("city", cfg.get("CITY_NAME", "unknown"))
+    model_name = M.get("model", "GeoPriorSubsNet")
 
-    MODE = cfg["MODE"]
-    H = cfg["FORECAST_HORIZON_YEARS"]
-    FSY = cfg.get("FORECAST_START_YEAR")
-    TRAIN_END_YEAR = cfg.get("TRAIN_END_YEAR")
-    QUANTILES = cfg.get("QUANTILES", [0.1, 0.5, 0.9])
+    mode = cfg["MODE"]
+    H = int(cfg["FORECAST_HORIZON_YEARS"])
+    fsy = cfg.get("FORECAST_START_YEAR")
+    tey = cfg.get("TRAIN_END_YEAR")
+    qs = cfg.get("QUANTILES", [0.1, 0.5, 0.9])
 
-    OUT_S_DIM = M["artifacts"]["sequences"]["dims"]["output_subsidence_dim"]
-    OUT_G_DIM = M["artifacts"]["sequences"]["dims"]["output_gwl_dim"]
+    dims = M["artifacts"]["sequences"]["dims"]
+    out_s = int(dims["output_subsidence_dim"])
+    out_g = int(dims["output_gwl_dim"])
 
     log(
-        f"[Manifest] Loaded city={CITY} model={MODEL_NAME} "
-        f"(MODE={MODE}, H={H}, FSY={FSY}, QUANTILES={QUANTILES})"
+        f"[Manifest] city={city} model={model_name} "
+        f"(mode={mode}, H={H}, FSY={fsy}, Q={qs})"
     )
-    _progress(0.05, "Inference: manifest loaded")
+    progress(0.05, "Inference: manifest loaded")
 
     if should_stop():
-        log("[Inference] stop_check=True after manifest load; aborting.")
+        log("[Inference] stop_check=True; abort.")
         return {
             "run_dir": None,
-            "manifest_path": manifest_file,
-            "city": CITY,
-            "model": MODEL_NAME,
+            "manifest_path": mf,
+            "city": city,
+            "model": model_name,
             "dataset": dataset,
         }
-    # ----------------------------------------------------------
-    # 1) Load encoders / scalers
-    # ----------------------------------------------------------
+
+    # 1) scalers
     enc = M["artifacts"]["encoders"]
 
     coord_scaler = None
@@ -214,163 +328,285 @@ def run_inference(
             pass
 
     scaler_info = enc.get("scaler_info")
-    if isinstance(scaler_info, str) and os.path.exists(scaler_info):
-        try:
-            scaler_info = joblib.load(scaler_info)
-        except Exception:
-            pass
+    if isinstance(scaler_info, str):
+        if os.path.exists(scaler_info):
+            try:
+                scaler_info = joblib.load(scaler_info)
+            except Exception:
+                pass
 
     if isinstance(scaler_info, dict):
-        for k, v in scaler_info.items():
-            if isinstance(v, dict) and "scaler_path" in v and "scaler" not in v:
-                p = v["scaler_path"]
-                if p and os.path.exists(p):
-                    try:
-                        v["scaler"] = joblib.load(p)
-                    except Exception:
-                        pass
-                    
-    _progress(0.10, "Inference: encoders/scalers loaded")
+        for _, v in scaler_info.items():
+            if not isinstance(v, dict):
+                continue
+            if "scaler" in v:
+                continue
+            p = v.get("scaler_path")
+            if p and os.path.exists(p):
+                try:
+                    v["scaler"] = joblib.load(p)
+                except Exception:
+                    pass
 
-    # ----------------------------------------------------------
-    # 2) Output directory
-    # ----------------------------------------------------------
+    progress(0.10, "Inference: scalers loaded")
+
+    # 2) output dir
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    inf_dir = os.path.join(M["paths"]["run_dir"], "inference", f"run_{stamp}")
+    inf_dir = os.path.join(
+        M["paths"]["run_dir"],
+        "inference",
+        f"run_{stamp}",
+    )
     ensure_directory_exists(inf_dir)
-    log(f"[Inference] Outputs will be written to: {inf_dir}")
+    log(f"[Inference] Outputs -> {inf_dir}")
+    progress(0.12, "Inference: output directory ready")
 
-    _progress(0.12, "Inference: output directory prepared")
-    
     if should_stop():
-        log("[Inference] stop_check=True before data loading; aborting.")
+        log("[Inference] stop_check=True; abort.")
         return {
             "run_dir": inf_dir,
-            "manifest_path": manifest_file,
-            "city": CITY,
-            "model": MODEL_NAME,
+            "manifest_path": mf,
+            "city": city,
+            "model": model_name,
             "dataset": dataset,
         }
 
-    # -------------------------------------------------------------
-    # 3) Choose dataset (train/val/test/custom or Stage-1 future)
-    # -------------------------------------------------------------
-    npz_dict = M["artifacts"]["numpy"]
+    # 3) dataset
+    npz = M["artifacts"]["numpy"]
 
     if use_stage1_future_npz:
-        # Try to locate future_* NPZs written by Stage-1
-        fut_inputs = npz_dict.get("future_inputs_npz")
-        fut_targets = npz_dict.get("future_targets_npz")
-
-        if not fut_inputs or not os.path.exists(fut_inputs):
-            log(
-                "[Inference] use_stage1_future_npz=True but no "
-                "'future_inputs_npz' entry found in manifest or "
-                "the file is missing.\n"
-                "           Re-run Stage-1 with BUILD_FUTURE_NPZ=True "
-                "to generate future NPZs."
-            )
+        x_p = npz.get("future_inputs_npz")
+        y_p = npz.get("future_targets_npz")
+        if not x_p or not os.path.exists(x_p):
             raise FileNotFoundError(
-                "Stage-1 future_* NPZs are not available. "
-                "Run Stage-1 with BUILD_FUTURE_NPZ=True first."
+                "Stage-1 future NPZ missing. "
+                "Re-run Stage-1 with BUILD_FUTURE_NPZ=True."
             )
-
-        log(f"[Inference] Using Stage-1 future NPZs: {fut_inputs}")
-        X = dict(np.load(fut_inputs))
-        y = (
-            dict(np.load(fut_targets))
-            if fut_targets and os.path.exists(fut_targets)
-            else None
-        )
-        # For naming / logging downstream
+        X = dict(np.load(x_p))
+        if y_p and os.path.exists(y_p):
+            y = dict(np.load(y_p))
+        else:
+            y = None
         dataset = "future"
 
     elif dataset == "custom":
         if not inputs_npz:
             raise ValueError(
-                "--inputs-npz (inputs_npz) required for dataset='custom'"
+                "inputs_npz is required for dataset='custom'."
             )
         X = dict(np.load(inputs_npz))
-        y = dict(np.load(targets_npz)) if targets_npz else None
+        y = None
+        if targets_npz:
+            y = dict(np.load(targets_npz))
+
     else:
         X, y = pick_npz_for_dataset(M, dataset)
         if X is None:
             raise RuntimeError(
-                f"No NPZs found for dataset={dataset!r}. "
-                "Re-run Stage-1 with this split or use dataset='custom'."
+                f"No NPZs for dataset={dataset!r}."
             )
 
     X = sanitize_inputs_np(X)
-    X = ensure_input_shapes(X, MODE, H)
+    X = ensure_input_shapes(X, mode, H)
     y_map = map_targets_for_training(y or {})
-    
-    _progress(0.20, f"Inference: dataset {dataset!r} loaded & shaped")
-    # ----------------------------------------------------------
-    # 4) Optional validation Dataset for calibrator
-    # ----------------------------------------------------------
+
+    progress(0.20, f"Inference: dataset {dataset!r} ready")
+
+    # 4) val dataset for calibrator
     ds_val = None
     if fit_calibrator:
-        if "val_inputs_npz" in npz_dict and "val_targets_npz" in npz_dict:
-            vx = dict(np.load(npz_dict["val_inputs_npz"]))
-            vy = dict(np.load(npz_dict["val_targets_npz"]))
+        vx_p = npz.get("val_inputs_npz")
+        vy_p = npz.get("val_targets_npz")
+
+        have_val = (
+            vx_p
+            and vy_p
+            and os.path.exists(vx_p)
+            and os.path.exists(vy_p)
+        )
+
+        if have_val:
+            vx = dict(np.load(vx_p))
+            vy = dict(np.load(vy_p))
             vx = sanitize_inputs_np(vx)
-            vx = ensure_input_shapes(vx, MODE, H)
+            vx = ensure_input_shapes(vx, mode, H)
             vy = map_targets_for_training(vy)
-            ds_val = tf.data.Dataset.from_tensor_slices((vx, vy)).batch(
-                batch_size
-            )
+            ds_val = tf.data.Dataset.from_tensor_slices(
+                (vx, vy)
+            ).batch(batch_size)
         else:
-            log("[Calibrator] No VAL NPZs found; cannot fit calibrator.")
-    
-    _progress(0.30, "Inference: validation dataset ready for calibrator")
-    
+            log("[Calibrator] VAL NPZs missing; skip fit.")
+
+    progress(0.30, "Inference: val dataset ready")
+
     if should_stop():
-        log("[Inference] stop_check=True before model load; aborting.")
+        log("[Inference] stop_check=True; abort.")
         return {
             "run_dir": inf_dir,
-            "manifest_path": manifest_file,
-            "city": CITY,
-            "model": MODEL_NAME,
+            "manifest_path": mf,
+            "city": city,
+            "model": model_name,
             "dataset": dataset,
         }
 
-    # ----------------------------------------------------------
-    # 5) Load or rebuild model (and compile safely)
-    # ----------------------------------------------------------
-    log(f"[Model] Loading/rebuilding model from: {model_path}")
+    # 5) model load/rebuild
+    bundle = _resolve_bundle_paths(model_path)
 
-    model, _info = load_geoprior_for_inference(
-        model_path=model_path,
-        manifest=M,
-        X_sample=X,
-        out_s_dim=OUT_S_DIM,
-        out_g_dim=OUT_G_DIM,
-        mode=MODE,
-        horizon=H,
-        quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
-        city_name=CITY,
-        include_metrics=True,
-        verbose=1,
+    init_m = {}
+    init_p = bundle["init_manifest_path"]
+    if os.path.isfile(init_p):
+        with open(init_p, "r", encoding="utf-8") as f:
+            init_m = json.load(f)
+
+    init_cfg = init_m.get("config", {})
+    if not isinstance(init_cfg, dict):
+        init_cfg = {}
+    geo_cfg = init_cfg.get("geoprior", {})
+    if not isinstance(geo_cfg, dict):
+        geo_cfg = {}
+
+    q_model = init_cfg.get("quantiles", qs)
+    h_model = int(init_cfg.get("forecast_horizon", H))
+    mode_model = init_cfg.get("mode", mode)
+
+    pde_def = cfg.get("PDE_MODE_CONFIG")
+    if pde_def is None:
+        pde_def = cfg.get("PDE_MODE", "basic")
+
+    best_hps = load_best_hps_near_model(
+        bundle["keras_path"] or bundle["run_dir"]
+    ) or {}
+
+    s_dim = int(
+        X.get("static_features", np.zeros((1, 0))).shape[-1]
     )
+    d_dim = int(X["dynamic_features"].shape[-1])
 
-    _progress(0.45, "Inference: model loaded and compiled")
-     
+    f_feat = X.get(
+        "future_features",
+        np.zeros((1, H, 0)),
+    )
+    f_dim = int(f_feat.shape[-1])
+
+    fixed = dict(
+        static_input_dim=s_dim,
+        dynamic_input_dim=d_dim,
+        future_input_dim=f_dim,
+        output_subsidence_dim=out_s,
+        output_gwl_dim=out_g,
+        forecast_horizon=h_model,
+        quantiles=q_model,
+        mode=mode_model,
+        pde_mode=init_cfg.get(
+            "pde_mode",
+            pde_def,
+        ),
+        bounds_mode=init_cfg.get(
+            "bounds_mode",
+            cfg.get("BOUNDS_MODE", "soft"),
+        ),
+        residual_method=init_cfg.get(
+            "residual_method",
+            cfg.get("RESIDUAL_METHOD", "autodiff"),
+        ),
+        time_units=init_cfg.get(
+            "time_units",
+            cfg.get("TIME_UNITS", "years"),
+        ),
+        scale_pde_residuals=bool(
+            init_cfg.get(
+                "scale_pde_residuals",
+                cfg.get("SCALE_PDE_RESIDUALS", True),
+            )
+        ),
+        use_effective_h=bool(
+            init_cfg.get(
+                "use_effective_h",
+                cfg.get("USE_EFFECTIVE_H", False),
+            )
+        ),
+        hd_factor=float(init_cfg.get("hd_factor", 1.0)),
+        offset_mode=init_cfg.get(
+            "offset_mode",
+            cfg.get("OFFSET_MODE", "mul"),
+        ),
+        scaling_kwargs=init_cfg.get("scaling_kwargs", None),
+    )
+    fixed.update(geo_cfg)
+
+    allowed = {
+        "embed_dim",
+        "hidden_units",
+        "lstm_units",
+        "attention_units",
+        "num_heads",
+        "dropout_rate",
+        "memory_size",
+        "scales",
+        "attention_levels",
+        "use_batch_norm",
+        "use_residuals",
+        "use_vsn",
+        "vsn_units",
+        "max_window_size",
+    }
+    hps = {
+        k: v for k, v in best_hps.items()
+        if k in allowed
+    }
+
+    def builder() -> GeoPriorSubsNet:
+        params = dict(fixed)
+        params.update(hps)
+        return GeoPriorSubsNet(**params)
+
+    mp_init = None
+    if os.path.isfile(init_p):
+        mp_init = init_p
+
+    log(f"[Model] Loading: {bundle['keras_path']}")
+    model = load_inference_model(
+        keras_path=bundle["keras_path"],
+        weights_path=bundle["weights_path"],
+        manifest_path=mp_init,
+        manifest=init_m if init_m else None,
+        builder=builder,
+        build_inputs=X,
+        out_s_dim=out_s,
+        out_g_dim=out_g,
+        mode=mode_model,
+        horizon=h_model,
+        prefer_full_model=False,
+    )
+    model_pred = model
+
+    tf_dir = bundle["tf_dir"]
+    if tf_dir is not None:
+        try:
+            model_pred = load_model_from_tfv2(
+                tf_dir,
+                endpoint="serve",
+            )
+            log(f"[OK] TF endpoint: {tf_dir}")
+        except Exception as e:
+            log(f"[Warn] TF endpoint failed: {e}")
+            model_pred = model
+
+    progress(0.45, "Inference: model ready")
+
     if should_stop():
-        log("[Inference] stop_check=True after model load; aborting.")
+        log("[Inference] stop_check=True; abort.")
         return {
             "run_dir": inf_dir,
-            "manifest_path": manifest_file,
-            "city": CITY,
-            "model": MODEL_NAME,
+            "manifest_path": mf,
+            "city": city,
+            "model": model_name,
             "dataset": dataset,
         }
 
-    # ----------------------------------------------------------
-    # 6) Optional: load / fit interval calibrator
-    # ----------------------------------------------------------
+    # 6) calibrator
     cal = None
 
-    # 0) source-model directory calibrator if requested
     if use_source_calibrator and not calibrator_path:
         cand = os.path.join(
             os.path.dirname(os.path.abspath(model_path)),
@@ -379,340 +615,305 @@ def run_inference(
         if os.path.exists(cand):
             cal = IntervalCalibrator(target=cov_target)
             cal.factors_ = np.load(cand).astype(np.float32)
-            log(f"[Calibrator] Loaded from source model dir: {cand}")
+            log(f"[Calibrator] Loaded: {cand}")
 
-    # 1) explicit calibrator path
-    if cal is None and calibrator_path and os.path.exists(calibrator_path):
-        cal = IntervalCalibrator(target=cov_target)
-        cal.factors_ = np.load(calibrator_path).astype(np.float32)
-        log(f"[Calibrator] Loaded from explicit path: {calibrator_path}")
+    if cal is None:
+        if (
+            calibrator_path
+            and os.path.exists(calibrator_path)
+        ):
+            cal = IntervalCalibrator(target=cov_target)
+            fac = np.load(calibrator_path)
+            cal.factors_ = fac.astype(np.float32)
+            log(f"[Calibrator] Loaded: {calibrator_path}")
 
-    # 2) fit on val if requested
     if cal is None and fit_calibrator and ds_val is not None:
         log("[Calibrator] Fitting on validation set...")
         cal = fit_interval_calibrator_on_val(
-            model, ds_val, target=cov_target
+            model,
+            ds_val,
+            target=cov_target,
         )
-    _progress(0.55, "Inference: interval calibrator ready")
-    
+
+    progress(0.55, "Inference: calibrator ready")
+
     if should_stop():
-        log("[Inference] stop_check=True before prediction; aborting.")
+        log("[Inference] stop_check=True; abort.")
         return {
             "run_dir": inf_dir,
-            "manifest_path": manifest_file,
-            "city": CITY,
-            "model": MODEL_NAME,
+            "manifest_path": mf,
+            "city": city,
+            "model": model_name,
             "dataset": dataset,
         }
 
-    # ----------------------------------------------------------
-    # 7) Predict
-    # ----------------------------------------------------------
-    _progress(0.60, "Inference: running model.predict(...)")
+    # 7) predict
+    log("[Inference] Running predict(...)")
+    progress(0.60, "Inference: predicting")
 
-    log("[Inference] Running model.predict(...)")
-    pred = model.predict(X, verbose=0)
-    data_final = pred["data_final"]
-    
-    _progress(0.70, "Inference: raw predictions computed")
-    
-    # Split heads, handle quantiles vs point
-    if data_final.ndim == 4:  # (B,H,Q,O_total)
-        s_q = data_final[..., :OUT_S_DIM]
-        g_q = data_final[..., OUT_S_DIM:]
-        if cal is not None:
-            s_q = apply_calibrator_to_subs(cal, s_q)
-        predictions_for_formatter = {"subs_pred": s_q, "gwl_pred": g_q}
-    elif data_final.ndim == 3:  # (B,H,O_total)
-        s_p = data_final[..., :OUT_S_DIM]
-        g_p = data_final[..., OUT_S_DIM:]
-        predictions_for_formatter = {"subs_pred": s_p, "gwl_pred": g_p}
-    else:
-        raise RuntimeError(f"Unexpected data_final rank: {data_final.ndim}")
+    pred_dict = model_pred.predict(X, verbose=0)
+    if not isinstance(pred_dict, dict):
+        raise TypeError("predict() must return a dict.")
 
-    # Prepare y_true for formatter (optional)
-    y_true_for_format: Dict[str, Any] = {}
+    subs_pred, gwl_pred = extract_preds(model, pred_dict)
+
+    is_q = getattr(subs_pred, "ndim", 0) == 4
+    if cal is not None and is_q:
+        subs_pred = apply_calibrator_to_subs(cal, subs_pred)
+
+    y_pred = {"subs_pred": subs_pred, "gwl_pred": gwl_pred}
+    progress(0.70, "Inference: predictions ready")
+
+    # 8) CSV forecast
+    subs_kind = cfg.get("SUBSIDENCE_KIND", "cumulative")
+    subs_kind = str(subs_kind).lower()
+    if subs_kind not in ("cumulative", "rate"):
+        subs_kind = "cumulative"
+
+    cols = cfg.get("cols", cfg_base.get("cols", {})) or {}
+    subs_col = cols.get("subsidence", "subsidence")
+    gwl_col = cols.get("gwl", "GWL")
+
+    base = f"{city}_{model_name}_inf_{dataset}_H{H}"
+    if cal is not None:
+        base += "_cal"
+
+    csv_eval = os.path.join(inf_dir, base + "_eval.csv")
+    csv_fut = os.path.join(inf_dir, base + "_future.csv")
+
+    fut_grid = None
+    if fsy is not None and H is not None:
+        fut_grid = np.arange(fsy, fsy + H, dtype=float)
+
+    y_true_fmt: Dict[str, Any] = {}
     if y_map:
-        y_true_for_format = {
-            "subsidence": y_map["subs_pred"],
-            "gwl": y_map["gwl_pred"],
+        y_true_fmt = {
+            "subsidence": y_map.get("subs_pred"),
+            "gwl": y_map.get("gwl_pred"),
         }
 
-    # Dataset for manual diagnostics (scaled space)
-    ds_eval = None
-    if y_map:
-        ds_eval = tf.data.Dataset.from_tensor_slices((X, y_map)).batch(
-            batch_size
-        )
-
-    # ----------------------------------------------------------
-    # 8) Use format_and_forecast to write EVAL/FUTURE CSVs
-    # ----------------------------------------------------------
-    cols_cfg = cfg.get("cols", {})
-    SUBS_COL = cols_cfg.get("subsidence", "subsidence")
-    # GWL_COL = cols_cfg.get("gwl", "GWL")
-
-    target_name = SUBS_COL
-    target_key_pred = "subs_pred"
-
-    base_name = f"{CITY}_{MODEL_NAME}_inference_{dataset}_H{H}"
-    if cal is not None:
-        base_name += "_calibrated"
-
-    csv_eval = os.path.join(inf_dir, base_name + "_eval.csv")
-    csv_future = os.path.join(inf_dir, base_name + "_future.csv")
-
-    # Future grid: same logic as tuning (FSY .. FSY+H)
-    future_grid = None
-    if FSY is not None and H is not None:
-        future_grid = np.arange(FSY, FSY + H, dtype=float)
-
-    df_eval, df_future = format_and_forecast(
-        y_pred=predictions_for_formatter,
-        y_true=y_true_for_format or None,
+    df_eval, df_fut = format_and_forecast(
+        y_pred=y_pred,
+        y_true=y_true_fmt or None,
         coords=X.get("coords", None),
-        quantiles=QUANTILES if QUANTILES else None,
-        target_name=target_name,
-        target_key_pred=target_key_pred,
+        quantiles=qs if qs else None,
+        target_name=subs_col,
+        scaler_target_name=subs_col,
+        output_target_name="subsidence",
+        target_key_pred="subs_pred",
         component_index=0,
         scaler_info=scaler_info,
         coord_scaler=coord_scaler,
         coord_columns=("coord_t", "coord_x", "coord_y"),
-        train_end_time=TRAIN_END_YEAR,
-        forecast_start_time=FSY,
+        train_end_time=tey,
+        forecast_start_time=fsy,
         forecast_horizon=H,
-        future_time_grid=future_grid,
-        eval_forecast_step=None,
-        sample_index_offset=0,
-        city_name=CITY,
-        model_name=MODEL_NAME,
-        dataset_name=dataset,
+        future_time_grid=fut_grid,
+        dataset_name_for_forecast=dataset,
         csv_eval_path=csv_eval,
-        csv_future_path=csv_future,
-        time_as_datetime=False,
-        time_format=None,
-        verbose=1,
-        # In inference mode we don't compute extra eval metrics here
+        csv_future_path=csv_fut,
         eval_metrics=False,
-        value_mode="rate",
-        logger=log,
+        value_mode=subs_kind,
+        input_value_mode=subs_kind,
+        output_unit="mm",
+        output_unit_from="m",
+        output_unit_mode="overwrite",
+        output_unit_col="subsidence_unit",
     )
 
-    if df_eval is not None and not df_eval.empty:
-        log(f"[Inference] Saved calibrated EVAL forecast CSV -> {csv_eval}")
-    else:
-        log("[Inference] Eval forecast DF is empty (df_eval).")
+    if include_gwl:
+        df_ev_g, df_fu_g = format_and_forecast(
+            y_pred=y_pred,
+            y_true=y_true_fmt or None,
+            coords=X.get("coords", None),
+            quantiles=qs if qs else None,
+            target_name=gwl_col,
+            scaler_target_name=gwl_col,
+            output_target_name="gwl",
+            target_key_pred="gwl_pred",
+            component_index=0,
+            scaler_info=scaler_info,
+            coord_scaler=coord_scaler,
+            coord_columns=("coord_t", "coord_x", "coord_y"),
+            train_end_time=tey,
+            forecast_start_time=fsy,
+            forecast_horizon=H,
+            future_time_grid=fut_grid,
+            dataset_name_for_forecast=dataset,
+            csv_eval_path=None,
+            csv_future_path=None,
+            eval_metrics=False,
+            value_mode="cumulative",
+            input_value_mode="cumulative",
+            output_unit="m",
+            output_unit_from="m",
+            output_unit_mode="overwrite",
+            output_unit_col="gwl_unit",
+        )
 
-    if df_future is not None and not df_future.empty:
-        log(f"[Inference] Saved calibrated FUTURE forecast CSV -> {csv_future}")
-    else:
-        log("[Inference] Future forecast DF is empty (df_future).")
+        df_eval = _merge_forecasts(df_eval, df_ev_g)
+        df_fut = _merge_forecasts(df_fut, df_fu_g)
 
-    # Choose a "main" CSV path for convenience (prefer FUTURE if available)
-    if df_future is not None and not df_future.empty:
-        main_csv = csv_future
+        if df_eval is not None and not df_eval.empty:
+            df_eval.to_csv(csv_eval, index=False)
+        if df_fut is not None and not df_fut.empty:
+            df_fut.to_csv(csv_fut, index=False)
+
+    if df_fut is not None and not df_fut.empty:
+        main_csv = csv_fut
     else:
         main_csv = csv_eval
-    
-    _progress(0.75, "Inference: forecast CSVs written")
-    # ----------------------------------------------------------
-    # 9) Manual diagnostics (coverage/sharpness + physical metrics)
-    #     (No Keras model.evaluate(), no physics evaluate)
-    # ----------------------------------------------------------
+
+    progress(0.75, "Inference: CSVs written")
+
+    # 9) diagnostics
+    ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     eval_json: Dict[str, Any] = {
-        "timestamp": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": ts,
         "dataset": dataset,
-        "quantiles": QUANTILES if data_final.ndim == 4 else None,
+        "quantiles": qs if is_q else None,
         "coverage80": None,
         "sharpness80": None,
+        "coverage80_phys": None,
+        "sharpness80_phys": None,
+        "point_metrics_phys": None,
+        "per_horizon_phys": None,
     }
 
     point_phys = None
-    per_h_mae_phys = None
-    per_h_r2_phys = None
+    per_h_mae = None
+    per_h_r2 = None
 
-    if y_map and data_final.ndim == 4 and ds_eval is not None:
-        y_true_list, s_q_list = [], []
-        
-        # Optional: estimate number of batches for GUI progress
-        num_batches = None
-        try:
-            num_batches = int(
-                tf.data.experimental.cardinality(ds_eval).numpy()
-            )
-            if num_batches <= 0:
-                num_batches = None
-        except Exception:
-            num_batches = None
-            
-        for i, (xb, yb) in enumerate(
-            with_progress(ds_eval, desc="Inference interval diagnostics"),
-            start=1,
-        ):
-            if should_stop():
-                log(
-                    "[Inference] stop_check=True inside interval "
-                    "diagnostics loop."
-                )
-                break
-            
-            # Inner progress slice: 0.80 → 0.90
-            if num_batches is not None:
-                inner = max(0.0, min(1.0, i / float(num_batches)))
-                frac = 0.80 + 0.10 * inner
-                _progress(frac, f"Inference: diagnostics {i}/{num_batches}")
-    
-            out_b = model(xb, training=False)
-            s_q_b, _ = model.split_data_predictions(out_b["data_final"])
-            # Use same calibration as for predictions CSV
-            if cal is not None:
-                s_q_b = apply_calibrator_to_subs(cal, s_q_b)
-            y_true_list.append(yb["subs_pred"])   # (B,H,1)
-            s_q_list.append(s_q_b)                # (B,H,Q,1)
+    if y_map and is_q:
+        y_t = tf.convert_to_tensor(
+            y_map.get("subs_pred"),
+            dtype=tf.float32,
+        )
+        s_q = tf.convert_to_tensor(
+            subs_pred,
+            dtype=tf.float32,
+        )
 
-        if y_true_list and s_q_list:
-            y_true = tf.concat(y_true_list, axis=0)    # (N,H,1)
-            s_q_all = tf.concat(s_q_list, axis=0)      # (N,H,Q,1)
+        eval_json["coverage80"] = float(
+            coverage80_fn(y_t, s_q).numpy()
+        )
+        eval_json["sharpness80"] = float(
+            sharpness80_fn(y_t, s_q).numpy()
+        )
 
-            # --- scaled coverage & sharpness ---
-            eval_json["coverage80"] = float(
-                coverage80_fn(y_true, s_q_all).numpy()
-            )
-            eval_json["sharpness80"] = float(
-                sharpness80_fn(y_true, s_q_all).numpy()
-            )
+        y_phys = inverse_scale_target(
+            y_t,
+            scaler_info=scaler_info,
+            target_name=subs_col,
+        )
+        s_phys = inverse_scale_target(
+            s_q,
+            scaler_info=scaler_info,
+            target_name=subs_col,
+        )
+        y_phys_t = tf.convert_to_tensor(
+            y_phys,
+            dtype=tf.float32,
+        )
+        s_phys_t = tf.convert_to_tensor(
+            s_phys,
+            dtype=tf.float32,
+        )
 
-            # --- physical coverage & sharpness ---
-            y_true_phys_np = inverse_scale_target(
-                y_true,
-                scaler_info=scaler_info,
-                target_name=SUBS_COL,
-            )
-            s_q_phys_np = inverse_scale_target(
-                s_q_all,
-                scaler_info=scaler_info,
-                target_name=SUBS_COL,
-            )
-            y_true_phys_tf = tf.convert_to_tensor(
-                y_true_phys_np, dtype=tf.float32
-            )
-            s_q_phys_tf = tf.convert_to_tensor(
-                s_q_phys_np, dtype=tf.float32
-            )
+        eval_json["coverage80_phys"] = float(
+            coverage80_fn(y_phys_t, s_phys_t).numpy()
+        )
+        eval_json["sharpness80_phys"] = float(
+            sharpness80_fn(y_phys_t, s_phys_t).numpy()
+        )
 
-            eval_json["coverage80_phys"] = float(
-                coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
-            )
-            eval_json["sharpness80_phys"] = float(
-                sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
-            )
+        q_arr = np.asarray(qs, dtype=float)
+        med = int(np.argmin(np.abs(q_arr - 0.5)))
+        s_med = s_phys[..., med, :]
 
-            # --- physical point metrics (MAE/MSE/R²) ---
-            quantiles_arr = np.asarray(QUANTILES, dtype=float)
-            med_idx = int(np.argmin(np.abs(quantiles_arr - 0.5)))
-            s_med_phys_np = s_q_phys_np[..., med_idx, :]  # (N,H,1)
+        point_phys = point_metrics(y_phys, s_med)
+        ph = per_horizon_metrics(y_phys, s_med)
+        per_h_mae = ph.get("mae")
+        per_h_r2 = ph.get("r2")
 
-            point_phys = point_metrics(
-                y_true_phys_np,
-                s_med_phys_np,
-            )
-            per_h_mae_phys, per_h_r2_phys = per_horizon_metrics(
-                y_true_phys_np,
-                s_med_phys_np,
-            )
+        eval_json["point_metrics_phys"] = point_phys
+        eval_json["per_horizon_phys"] = {
+            "mae": per_h_mae,
+            "r2": per_h_r2,
+        }
 
-            eval_json["point_metrics_phys"] = {
-                "mae": point_phys.get("mae"),
-                "mse": point_phys.get("mse"),
-                "r2":  point_phys.get("r2"),
-            }
-            eval_json["per_horizon_phys"] = {
-                "mae": per_h_mae_phys,
-                "r2":  per_h_r2_phys,
-            }
-        
-        _progress(0.90, "Inference: diagnostics complete")
+    progress(0.90, "Inference: diagnostics done")
 
-    summary_path = os.path.join(inf_dir, "inference_summary.json")
-    with open(summary_path, "w", encoding="utf-8") as f:
+    summ_p = os.path.join(inf_dir, "inference_summary.json")
+    with open(summ_p, "w", encoding="utf-8") as f:
         json.dump(eval_json, f, indent=2)
-    log(f"[Inference] Saved inference summary JSON -> {summary_path}")
+    log(f"[Inference] Summary JSON -> {summ_p}")
+    progress(0.95, "Inference: summary JSON written")
 
-    _progress(0.95, "Inference: summary JSON written")
-    
-    # ----------------------------------------------------------
-    # 10) Plots (optional, no evaluate/physics)
-    # ----------------------------------------------------------
-    has_any_df = (
+    # 10) plots
+    has_df = (
         (df_eval is not None and not df_eval.empty)
-        or (df_future is not None and not df_future.empty)
+        or (df_fut is not None and not df_fut.empty)
     )
 
-    if make_plots and has_any_df and not should_stop():
-        log("\n[Inference] Plotting forecast views...")
+    if make_plots and has_df and not should_stop():
+        log("[Inference] Plotting forecast views...")
         try:
-            # For eval: last year of training (e.g. 2022)
-            eval_years = [TRAIN_END_YEAR] if TRAIN_END_YEAR is not None else None
-            # For future: use the same grid passed to format_and_forecast
-            future_years = future_grid
+            eval_years = [tey] if tey is not None else None
+            fut_years = fut_grid
+            is_cum = subs_kind == "cumulative"
+
+            q_plot = None
+            if isinstance(qs, list):
+                q_plot = qs
 
             plot_eval_future(
-                df_eval=df_eval,       # can be empty; function should handle it
-                df_future=df_future,
-                target_name=SUBS_COL,
-                quantiles=QUANTILES if isinstance(QUANTILES, list) else None,
+                df_eval=df_eval,
+                df_future=df_fut,
+                target_name=subs_col,
+                quantiles=q_plot,
                 spatial_cols=("coord_x", "coord_y"),
                 time_col="coord_t",
                 eval_years=eval_years,
-                future_years=future_years,
-                eval_view_quantiles=[0.5],     # compare [actual] vs [q50]
-                future_view_quantiles=QUANTILES,
+                future_years=fut_years,
+                eval_view_quantiles=[0.5],
+                future_view_quantiles=qs,
                 spatial_mode="hexbin",
                 hexbin_gridsize=40,
                 savefig_prefix=os.path.join(
                     inf_dir,
-                    f"{CITY}_subsidence_view",
+                    f"{city}_subsidence_view",
                 ),
                 save_fmts=[".png", ".pdf"],
                 show=False,
                 verbose=1,
-                cumulative=True,
+                cumulative=is_cum,
                 _logger=log,
             )
-            log(f"[Inference] Saved forecast figures in: {inf_dir}")
-            
-            # notify the GUI that the PNGs were created
-            _notify_gui_forecast_views(inf_dir, CITY)
-            
+            _notify_gui_forecast_views(inf_dir, city)
         except Exception as e:
             log(f"[Warn] plot_eval_future failed: {e}")
-    
-        _progress(1.0, "Inference: complete (plots saved)")
-    
-    if not make_plots or not has_any_df or should_stop():
-        _progress(1.0, "Inference: complete")
 
-    # ----------------------------------------------------------
-    # 11) Final return payload
-    # ----------------------------------------------------------
+    progress(1.0, "Inference: complete")
+
     return {
         "run_dir": inf_dir,
-        "manifest_path": manifest_file,
-        "city": CITY,
-        "model": MODEL_NAME,
+        "manifest_path": mf,
+        "city": city,
+        "model": model_name,
         "dataset": dataset,
         "model_path": model_path,
         "csv_path": main_csv,
         "csv_eval_path": csv_eval,
-        "csv_future_path": csv_future,
-        "inference_summary_json": summary_path,
+        "csv_future_path": csv_fut,
+        "inference_summary_json": summ_p,
         "coverage80": eval_json.get("coverage80"),
         "sharpness80": eval_json.get("sharpness80"),
         "coverage80_phys": eval_json.get("coverage80_phys"),
         "sharpness80_phys": eval_json.get("sharpness80_phys"),
         "point_metrics_phys": point_phys,
         "per_horizon_phys": {
-            "mae": per_h_mae_phys,
-            "r2": per_h_r2_phys,
+            "mae": per_h_mae,
+            "r2": per_h_r2,
         },
     }

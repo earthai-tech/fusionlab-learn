@@ -32,7 +32,8 @@ from PyQt5.QtCore import (
     pyqtSlot, 
     QSize, 
     QPoint, 
-    QTimer, 
+    QTimer,
+    QSettings
 )
 from PyQt5.QtGui import (
     QCloseEvent,
@@ -57,7 +58,6 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QTabWidget,
     QSpinBox,
-    QDoubleSpinBox,
     QComboBox,
     QCheckBox,
     QGridLayout,
@@ -68,7 +68,7 @@ from PyQt5.QtWidgets import (
     QSplitter
 )
 
-from .config.store import GeoConfigStore
+from .config.store import GeoConfigStore, FieldKey
 from .workflows.base import RunEnv, GUIHooks
 from .workflows.train import TrainController, TrainGuiState
 from .services.stage1_service import Stage1Service
@@ -95,8 +95,10 @@ from .ui.train_tab import TrainTab
 from .ui.panel import ConfigCenterPanel
 from .ui.preprocess_tab import PreprocessTab
 from .ui.tune_tab import TuneTab
+from .ui.inference_tab import InferenceTab
      
 from ..ux_utils import (
+    set_app_metadata,
     auto_set_ui_fonts,
     auto_resize_window,
     enable_qt_crash_handler,
@@ -116,9 +118,11 @@ from .threads import (
 
 
 from .config import ( 
+    load_json, 
     GeoPriorConfig,
-    default_tuner_search_space,
-    find_stage1_for_city
+    find_stage1_for_city, 
+    resolve_stage1_bundle, 
+    make_stage1_summary,
 )
 
 from .dialogs import ( 
@@ -154,6 +158,9 @@ from .styles import (
     FLAB_STYLE_SHEET,
     PRIMARY,
     RUN_BUTTON_IDLE,
+    DARK_THEME_STYLESHEET,
+    MAIN_TAB_STYLES_LIGHT,
+    MAIN_TAB_STYLES_DARK 
 )
 
 from .jobs import TrainJobSpec, latest_jobs_for_root
@@ -177,6 +184,7 @@ class GeoPriorForecaster(QMainWindow):
     ) -> None:
         super().__init__()
         self.theme = theme or "fusionlab"
+        self._restore_theme_setting()
         self._splash = splash
 
         # 1) Core state / config / help texts
@@ -273,7 +281,9 @@ class GeoPriorForecaster(QMainWindow):
         self._main_splitter = None
         self._console_panel = None
         self._console_last_h = 220
-
+        
+        self._prep_cache_key = None
+        self._prep_cache_payload = None
 
     def _init_help_texts(self) -> None:
         """Initialise per-tab help texts and one-shot flags."""
@@ -445,20 +455,80 @@ class GeoPriorForecaster(QMainWindow):
     # UI construction
     # ------------------------------------------------------------------
 
+    
+    def _restore_theme_setting(self) -> None:
+        s = QSettings()
+        saved = s.value(
+            "ui/theme",
+            "",
+            type=str,
+        )
+        saved = (saved or "").strip().lower()
+        if saved:
+            self.theme = saved
+    
+    
+    def set_dark_mode(self, enabled: bool) -> None:
+        self.theme = "dark" if enabled else "fusionlab"
+    
+        s = QSettings()
+        s.setValue("ui/theme", self.theme)
+    
+        self._apply_theme()
+
+
+    def _is_dark(self) -> bool:
+        t = (self.theme or "fusionlab").strip().lower()
+        return t in {"dark", "fusionlab-dark", "night"}
+    
+    def _apply_theme(self) -> None:
+        dark = self._is_dark()
+    
+        base = (
+            DARK_THEME_STYLESHEET
+            if dark
+            else FLAB_STYLE_SHEET
+        )
+    
+        main_tabs = (
+            MAIN_TAB_STYLES_DARK
+            if dark
+            else MAIN_TAB_STYLES_LIGHT
+        )
+    
+        # If you want dialogs to match too,
+        # apply on the QApplication instance.
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(
+                base
+                + main_tabs
+                + TAB_STYLES
+                + LOG_STYLES
+            )
+        else:
+            self.setStyleSheet(
+                base
+                + main_tabs
+                + TAB_STYLES
+                + LOG_STYLES
+            )
+
     def _set_window_props(self) -> None:
         self.setWindowTitle("GeoPrior-3.0 Forecaster")
     
-        # Read window sizing from GeoPriorConfig (with safe fallbacks)
         cfg = self.geo_cfg
     
-        base_w = getattr(cfg, "ui_base_width", 820)
-        base_h = getattr(cfg, "ui_base_height", 520)
-        min_w = getattr(cfg, "ui_min_width", 800)
-        min_h = getattr(cfg, "ui_min_height", 600)
-        max_ratio = float(getattr(cfg, "ui_max_ratio", 0.90))
+        # Bigger defaults (modern feel)
+        base_w = int(getattr(cfg, "ui_base_width", 1180))
+        base_h = int(getattr(cfg, "ui_base_height", 820))
+        min_w = int(getattr(cfg, "ui_min_width", 1060))
+        min_h = int(getattr(cfg, "ui_min_height", 740))
+        max_ratio = float(getattr(cfg, "ui_max_ratio", 0.92))
     
         auto_resize_window(
             self,
+            settings_key="main_window",
             base_size=(base_w, base_h),
             min_size=(min_w, min_h),
             max_ratio=max_ratio,
@@ -469,9 +539,8 @@ class GeoPriorForecaster(QMainWindow):
         if ico.exists():
             self.setWindowIcon(QIcon(str(ico)))
     
-        # Apply Fusionlab stylesheet (tabs / cards / log)
-        self.setStyleSheet(FLAB_STYLE_SHEET + TAB_STYLES + LOG_STYLES)
-        
+        self._apply_theme()
+
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -587,6 +656,11 @@ class GeoPriorForecaster(QMainWindow):
     
         self._update_splash(45, "Building tabs…")
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("mainTabs")
+        self.tabs.setDocumentMode(True)  # flatter tab rendering
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setIconSize(QSize(14, 14)) 
+        
         self._init_tabs()
         w_layout.addWidget(self.tabs, 1)
     
@@ -753,164 +827,42 @@ class GeoPriorForecaster(QMainWindow):
         self.btn_tune_options = self.tune_tab.btn_tune_options
         self.btn_run_tune = self.tune_tab.btn_run_tune
 
+        # ==================================================
+        # Inference tab (new module)
+        # ==================================================
+        self.inference_tab = InferenceTab(
+            store=self.config_store,
+            make_card=self._make_card,
+            make_run_button=self._make_run_button,
+            parent=self,
+        )
         
-        # ==================================================
-        # Inference tab – evaluation & forecasting
-        # ==================================================
-        infer_tab = QWidget()
-        i_layout = QVBoxLayout(infer_tab)
-        i_layout.setContentsMargins(6, 6, 6, 6)
-        i_layout.setSpacing(8)
-
-        inf_row = QHBoxLayout()
-        inf_row.setSpacing(10)
-
-        # 1) Model & dataset card
-        model_card, model_box = self._make_card("Model & dataset")
-
-        self.inf_model_edit = QLineEdit()
-        self.inf_model_edit.setPlaceholderText("Select .keras model…")
-        self.inf_model_btn = QPushButton("Browse…")
-
-        self.inf_manifest_edit = QLineEdit()
-        self.inf_manifest_edit.setPlaceholderText(
-            "Stage-1 manifest (auto if empty)"
-        )
-        self.inf_manifest_btn = QPushButton("Browse…")
-
-        self.cmb_inf_dataset = QComboBox()
-        self.cmb_inf_dataset.addItem("Validation (val)", "val")
-        self.cmb_inf_dataset.addItem("Test (test)", "test")
-        self.cmb_inf_dataset.addItem("Train (train)", "train")
-        self.cmb_inf_dataset.addItem("Custom NPZ", "custom")
-
-        self.chk_inf_use_future = QCheckBox(
-            "Use Stage-1 future NPZ (forecast mode)"
-        )
-
-        self.inf_inputs_edit = QLineEdit()
-        self.inf_inputs_edit.setPlaceholderText("Custom inputs .npz")
-        self.inf_inputs_btn = QPushButton("Inputs…")
-
-        self.inf_targets_edit = QLineEdit()
-        self.inf_targets_edit.setPlaceholderText(
-            "Optional targets .npz (for metrics)"
-        )
-        self.inf_targets_btn = QPushButton("Targets…")
-
-        self.sp_inf_batch = QSpinBox()
-        self.sp_inf_batch.setRange(1, 2048)
-        self.sp_inf_batch.setValue(32)
-
-        grid_inf1 = QGridLayout()
-        r = 0
-        grid_inf1.addWidget(QLabel("Model file:"), r, 0)
-        grid_inf1.addWidget(self.inf_model_edit, r, 1)
-        grid_inf1.addWidget(self.inf_model_btn, r, 2)
-        r += 1
-
-        grid_inf1.addWidget(QLabel("Stage-1 manifest:"), r, 0)
-        grid_inf1.addWidget(self.inf_manifest_edit, r, 1)
-        grid_inf1.addWidget(self.inf_manifest_btn, r, 2)
-        r += 1
-
-        grid_inf1.addWidget(QLabel("Dataset:"), r, 0)
-        grid_inf1.addWidget(self.cmb_inf_dataset, r, 1, 1, 2)
-        r += 1
-
-        # checkbox + batch size on the same row
-        npz_row = QHBoxLayout()
-        npz_row.addWidget(self.chk_inf_use_future)
-        npz_row.addSpacing(16)
-        npz_row.addWidget(QLabel("Batch size:"))
-        npz_row.addWidget(self.sp_inf_batch)
-        npz_row.addStretch(1)
-        grid_inf1.addLayout(npz_row, r, 0, 1, 3)
-        r += 1
-
-        grid_inf1.addWidget(QLabel("Custom inputs:"), r, 0)
-        grid_inf1.addWidget(self.inf_inputs_edit, r, 1)
-        grid_inf1.addWidget(self.inf_inputs_btn, r, 2)
-        r += 1
-
-        grid_inf1.addWidget(QLabel("Custom targets:"), r, 0)
-        grid_inf1.addWidget(self.inf_targets_edit, r, 1)
-        grid_inf1.addWidget(self.inf_targets_btn, r, 2)
-        r += 1
-
-        model_box.addLayout(grid_inf1)
-        inf_row.addWidget(model_card, 1)
-
-        # 2) Calibration & outputs card
-        calib_card, calib_box = self._make_card("Calibration & outputs")
-
-        self.chk_inf_use_source_calib = QCheckBox(
-            "Use source calibrator (interval_factors_80.npy)"
-        )
-        self.chk_inf_fit_calib = QCheckBox(
-            "Fit calibrator on validation split"
-        )
-
-        self.inf_calib_edit = QLineEdit()
-        self.inf_calib_edit.setPlaceholderText(
-            "Optional explicit calibrator .npy"
-        )
-        self.inf_calib_btn = QPushButton("Browse…")
-
-        self.sp_inf_cov = QDoubleSpinBox()
-        self.sp_inf_cov.setDecimals(3)
-        self.sp_inf_cov.setRange(0.50, 0.99)
-        self.sp_inf_cov.setSingleStep(0.01)
-        self.sp_inf_cov.setValue(0.80)
-
-        self.chk_inf_include_gwl = QCheckBox(
-            "Include GWL columns in CSV"
-        )
-        self.chk_inf_include_gwl.setChecked(False)
-
-        self.chk_inf_plots = QCheckBox("Generate plots")
-        self.chk_inf_plots.setChecked(True)
-
-        grid_inf2 = QGridLayout()
-        c = 0
-        grid_inf2.addWidget(self.chk_inf_use_source_calib, c, 0, 1, 3)
-        c += 1
-        grid_inf2.addWidget(self.chk_inf_fit_calib, c, 0, 1, 3)
-        c += 1
-
-        grid_inf2.addWidget(QLabel("Calibrator file:"), c, 0)
-        grid_inf2.addWidget(self.inf_calib_edit, c, 1)
-        grid_inf2.addWidget(self.inf_calib_btn, c, 2)
-        c += 1
-
-        grid_inf2.addWidget(QLabel("Target coverage:"), c, 0)
-        grid_inf2.addWidget(self.sp_inf_cov, c, 1, 1, 2)
-        c += 1
-
-        grid_inf2.addWidget(self.chk_inf_include_gwl, c, 0, 1, 3)
-        c += 1
-        grid_inf2.addWidget(self.chk_inf_plots, c, 0, 1, 3)
-        c += 1
-
-        calib_box.addLayout(grid_inf2)
-        inf_row.addWidget(calib_card, 1)
-
-        i_layout.addLayout(inf_row)
-
-        # --- Bottom row: Advanced options + Run inference -------------
-
-        # Bottom row: advanced options + run button
-        inf_run_row = QHBoxLayout()
-        self.btn_inf_options = QPushButton("Advanced options…")
-        inf_run_row.addWidget(self.btn_inf_options)
-
-        inf_run_row.addStretch(1)
-
-        self.btn_run_infer = self._make_run_button("Run inference")
-        inf_run_row.addWidget(self.btn_run_infer)
-        i_layout.addLayout(inf_run_row)
-
-        i_layout.addStretch(1)
+        # Backward-compatible attribute aliases
+        it = self.inference_tab
+        
+        self.inf_model_edit = it.inf_model_edit
+        self.inf_model_btn = it.inf_model_btn
+        self.inf_manifest_edit = it.inf_manifest_edit
+        self.inf_manifest_btn = it.inf_manifest_btn
+        self.cmb_inf_dataset = it.cmb_inf_dataset
+        self.chk_inf_use_future = it.chk_inf_use_future
+        self.inf_inputs_edit = it.inf_inputs_edit
+        self.inf_inputs_btn = it.inf_inputs_btn
+        self.inf_targets_edit = it.inf_targets_edit
+        self.inf_targets_btn = it.inf_targets_btn
+        
+        self.chk_inf_use_source_calib = it.chk_inf_use_source_calib
+        self.chk_inf_fit_calib = it.chk_inf_fit_calib
+        self.inf_calib_edit = it.inf_calib_edit
+        self.inf_calib_btn = it.inf_calib_btn
+        self.sp_inf_cov = it.sp_inf_cov
+        self.chk_inf_include_gwl = it.chk_inf_include_gwl
+        self.chk_inf_plots = it.chk_inf_plots
+        self.sp_inf_batch = it.sp_inf_batch
+        
+        self.btn_inf_options = it.btn_inf_options
+        self.btn_run_infer = it.btn_run_infer
+        
 
         # ==================================================
         # Transferability tab – cross-city transfer matrix
@@ -1057,16 +1009,22 @@ class GeoPriorForecaster(QMainWindow):
         preprocess_tab = PreprocessTab(
             make_card=self._make_card,
             make_run_button=self._make_run_button,
-            geo_cfg=self.geo_cfg,
-            runs_root=self.gui_runs_root,
+            store=self.config_store,
             parent=self,
         )
 
         self.data_tab = data_tab
+        self.data_tab.column_overrides_changed.connect(
+            lambda p: self.config_store.merge_dict_field(
+                "feature_overrides",
+                p,
+                replace=False,
+            )
+        )
         self.setup_tab = setup_tab
         self.preprocess_tab  = preprocess_tab 
 
-        self.infer_tab = infer_tab
+        self.infer_tab = it
         self.xfer_tab = xfer_tab
         
         self._data_tab_index = self.tabs.addTab(
@@ -1624,23 +1582,19 @@ class GeoPriorForecaster(QMainWindow):
         )
 
         # --- Inference tab ---
-        self.btn_inf_options.clicked.connect(
-            self._on_infer_options_clicked
-        )
-        self.btn_run_infer.clicked.connect(self._on_infer_clicked)
-        self.inf_model_btn.clicked.connect(self._on_browse_model)
-        self.inf_manifest_btn.clicked.connect(self._on_browse_manifest)
-        self.inf_inputs_btn.clicked.connect(self._on_browse_inputs_npz)
-        self.inf_targets_btn.clicked.connect(self._on_browse_targets_npz)
-        self.inf_calib_btn.clicked.connect(self._on_browse_calibrator)
- 
-        self.cmb_inf_dataset.currentIndexChanged.connect(
-            self._update_infer_widgets_state
-        )
-        self.chk_inf_use_future.toggled.connect(
-            self._update_infer_widgets_state
-        )
+        it = self.inference_tab
+        
+        it.advanced_clicked.connect(self._on_infer_options_clicked)
+        it.run_clicked.connect(self._on_infer_clicked)
+        
+        it.browse_model_clicked.connect(self._on_browse_model)
+        it.browse_manifest_clicked.connect(self._on_browse_manifest)
+        it.browse_inputs_clicked.connect(self._on_browse_inputs_npz)
+        it.browse_targets_clicked.connect(self._on_browse_targets_npz)
+        it.browse_calib_clicked.connect(self._on_browse_calibrator)
 
+ 
+ 
         # --- Transferability tab ---
         self.btn_run_xfer.clicked.connect(self._on_xfer_clicked)
         self.btn_xfer_advanced.clicked.connect(self._on_xfer_advanced)
@@ -1720,10 +1674,16 @@ class GeoPriorForecaster(QMainWindow):
         self.set_console_visible(not hide)
     
         if index == prep_idx:
-            self._refresh_preprocess_status()
-    
-    
+            self._refresh_preprocess_status(force=False)
+
     def _on_preprocess_run_stage1(self) -> None:
+        """
+        Run Stage-1 from the Preprocess tab.
+        
+        Store is the single source of truth:
+        - city/dataset_path/results_root are patched here
+        - Stage-1 options are already written by PreprocessTab checkboxes
+        """
         if self.stage1_thread and self.stage1_thread.isRunning():
             QMessageBox.information(
                 self,
@@ -1732,7 +1692,10 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
     
-        city = self.city_edit.text().strip()
+        city = ""
+        if hasattr(self, "city_edit"):
+            city = self.city_edit.text().strip()
+    
         if not city:
             QMessageBox.warning(
                 self,
@@ -1741,71 +1704,83 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
     
+        csv_path = getattr(self, "csv_path", None)
+        rr = getattr(self, "gui_runs_root", None)
+    
+        patch: Dict[str, Any] = {"city": city}
+        if csv_path is not None:
+            patch["dataset_path"] = csv_path
+        if rr is not None:
+            patch["results_root"] = str(rr)
+    
+        self.config_store.patch(patch)
+    
         pt = self.preprocess_tab
         pt.btn_run_stage1.setEnabled(False)
-
-        # self.geo_cfg.clean_stage1_dir = (
-        #     pt.chk_prep_clean.isChecked()
-        # )
-        # self.geo_cfg.build_future_npz = (
-        #     pt.chk_prep_build_future.isChecked()
-        # )
-        # self.geo_cfg.stage1_auto_reuse_if_match = (
-        #     pt.chk_prep_auto_reuse.isChecked()
-        # )
-        # self.geo_cfg.stage1_force_rebuild_if_mismatch = (
-        #     pt.chk_prep_force_rebuild.isChecked()
-        # )
-        self.config_store.patch(
-            {
-                "clean_stage1_dir": pt.chk_prep_clean.isChecked(),
-                "build_future_npz": pt.chk_prep_build_future.isChecked(),
-                "stage1_auto_reuse_if_match": (
-                    pt.chk_prep_auto_reuse.isChecked()
-                ),
-                "stage1_force_rebuild_if_mismatch": (
-                    pt.chk_prep_force_rebuild.isChecked()
-                ),
-            }
+    
+        # Keep legacy mirror checkboxes (if any) in sync from store
+        clean = bool(
+            self.config_store.get_value(
+                FieldKey("clean_stage1_dir"),
+                default=False,
+            )
         )
-
+        build_future = bool(
+            self.config_store.get_value(
+                FieldKey("build_future_npz"),
+                default=False,
+            )
+        )
+    
         if hasattr(self, "chk_clean_stage1"):
-            self.chk_clean_stage1.setChecked(
-                self.geo_cfg.clean_stage1_dir
-            )
+            self.chk_clean_stage1.setChecked(clean)
         if hasattr(self, "chk_build_future"):
-            self.chk_build_future.setChecked(
-                self.geo_cfg.build_future_npz
-            )
+            self.chk_build_future.setChecked(build_future)
     
         self.status_updated.emit("Stage-1: preprocessing…")
         self._update_progress(0.0)
     
-        self._start_stage1(
-            city=city,
-            results_cb=self._on_preprocess_stage1_done,
-            job_kind="preprocess",
-        )
-    
-    
+        try:
+            self._start_stage1(
+                city=city,
+                results_cb=self._on_preprocess_stage1_done,
+                job_kind="preprocess",
+            )
+        except Exception as exc:
+            pt.btn_run_stage1.setEnabled(True)
+            self.status_updated.emit("Stage-1: failed to start.")
+            self.log_updated.emit(f"[Stage-1] Start failed: {exc}")
+            raise
+
     def _on_preprocess_stage1_done(self, result: Any) -> None:
+        """
+        Stage-1 completion handler (Preprocess tab).
+        """
         self.stage1_thread = None
         self._stop_run_timer()
         self._active_job_kind = None
         self._update_global_running_state()
     
-        manifest_path = None
-        attr = getattr(result, "manifest_path", None)
+        def _get_manifest_path(obj: Any) -> str | None:
+            attr = getattr(obj, "manifest_path", None)
+            if attr:
+                return str(attr)
+            if isinstance(obj, dict):
+                p = obj.get("manifest_path")
+                return str(p) if p else None
+            return None
     
-        if attr is not None:
-            manifest_path = str(attr)
-        elif isinstance(result, dict):
-            manifest_path = result.get("manifest_path")
+        manifest_path = _get_manifest_path(result)
+    
+        btn = getattr(self.preprocess_tab, "btn_run_stage1", None)
+        if btn is not None:
+            btn.setEnabled(True)
     
         if not manifest_path:
-            self.status_updated.emit(
-                "Stage-1 finished without manifest. See log."
-            )
+            msg = "Stage-1 finished without manifest. See log."
+            self.status_updated.emit(msg)
+            self.log_updated.emit(f"[Stage-1] {msg}")
+            self._refresh_preprocess_status()
             return
     
         self._prep_last_manifest = manifest_path
@@ -1817,12 +1792,8 @@ class GeoPriorForecaster(QMainWindow):
         self.status_updated.emit("Idle - Stage-1 ready.")
     
         self._refresh_preprocess_status()
-        btn = getattr(self.preprocess_tab, "btn_run_stage1", None)
-        if btn is not None:
-            btn.setEnabled(True)
 
-    
-    
+
     def _set_prep_stage1_actions(
         self,
         *,
@@ -1852,20 +1823,31 @@ class GeoPriorForecaster(QMainWindow):
             )
         else:
             pt.btn_prep_open_manifest.setToolTip(manifest_path)
-    
-    
-    def _refresh_preprocess_status(self) -> None:
+
+    def _refresh_preprocess_status(self, *, force: bool = False) -> None:
+        """Refresh Stage-1 discovery + workspace (Preprocess tab)."""
         pt = self.preprocess_tab
+        st = self.config_store
     
-        city = self.city_edit.text().strip()
-        csv_path = getattr(self, "csv_path", None)
+        # --- read context (cheap) ---
+        city = ""
+        if hasattr(self, "city_edit"):
+            city = self.city_edit.text().strip()
+        if not city:
+            city = str(
+                st.get_value(FieldKey("city"), default="") or ""
+            ).strip()
     
-        pt.set_context(
-            city=city,
-            csv_path=csv_path,
-            runs_root=self.gui_runs_root,
-        )
+        rr_raw = st.get_value(FieldKey("results_root"), default=None)
+        if rr_raw is None:
+            rr_raw = getattr(self, "gui_runs_root", None)
+        if rr_raw is None:
+            rr_raw = Path.home()
     
+        rr = Path(str(rr_raw)).expanduser()
+        model = "GeoPriorSubsNet"
+    
+        # No city => clear fast
         if not city:
             pt.set_stage1_status(
                 state_text="Stage-1: (no city selected)",
@@ -1875,33 +1857,84 @@ class GeoPriorForecaster(QMainWindow):
                 stage1_dir=None,
                 manifest_path=None,
             )
+            pt.set_workspace_context(stage1_dir=None, model="")
+            pt.set_workspace_manifest(None)
+            pt.set_workspace_scaling_audit(None)
+            self._prep_cache_key = None
+            self._prep_cache_payload = None
             return
     
+        # ---- cache key ----
+        key = (str(rr), city.lower(), model)
+    
+        # If not forced and key unchanged: reuse cached payload
+        if (
+            not force
+            and self._prep_cache_key == key
+            and self._prep_cache_payload is not None
+        ):
+            payload = self._prep_cache_payload
+            pt.set_stage1_status(
+                state_text=payload["state_text"],
+                manifest_text=payload["manifest_text"],
+            )
+            self._set_prep_stage1_actions(
+                stage1_dir=payload["stage1_dir"],
+                manifest_path=payload["manifest_path"],
+            )
+            pt.set_workspace_context(
+                stage1_dir=payload["stage1_dir"],
+                model=payload["model"],
+            )
+            pt.set_workspace_manifest(payload["manifest_json"])
+            pt.set_workspace_scaling_audit(payload["audit_json"])
+            return
+    
+        # --- Build cfg snapshot (optional, can be expensive too) ---
+        cfg_snap = None
         try:
             cfg_snap = self.geo_cfg.to_stage1_config()
         except Exception:
             cfg_snap = None
     
-        try:
-            runs, _all_runs = find_stage1_for_city(
-                city=city,
-                results_root=Path(self.gui_runs_root),
-                current_cfg=cfg_snap,
-            )
-        except Exception as exc:
-            pt.set_stage1_status(
-                state_text=(
-                    f"Stage-1: discovery failed ({exc})"
-                ),
-                manifest_text="Manifest: -",
-            )
-            self._set_prep_stage1_actions(
-                stage1_dir=None,
-                manifest_path=None,
-            )
-            return
+        # --- FAST path: direct bundle resolution (O(1) + tiny fallback) ---
+        b = resolve_stage1_bundle(
+            results_root=rr,
+            city=city,
+            model=model,
+        )
     
-        if not runs:
+        best = None
+        if b is not None:
+            try:
+                best = make_stage1_summary(
+                    b.manifest_path,
+                    current_cfg=cfg_snap,
+                )
+            except Exception:
+                best = None
+    
+        # --- Only if direct resolution failed, do the expensive scan ---
+        if best is None:
+            try:
+                runs, _ = find_stage1_for_city(
+                    city=city,
+                    results_root=rr,
+                    current_cfg=cfg_snap,
+                )
+            except Exception:
+                runs = []
+    
+            if runs:
+                ordered = sorted(runs, key=lambda x: x.timestamp)
+                for s in reversed(ordered):
+                    if s.is_complete and s.config_match:
+                        best = s
+                        break
+                if best is None:
+                    best = ordered[-1]
+    
+        if best is None:
             pt.set_stage1_status(
                 state_text="Stage-1: not found for this city",
                 manifest_text="Manifest: -",
@@ -1910,40 +1943,277 @@ class GeoPriorForecaster(QMainWindow):
                 stage1_dir=None,
                 manifest_path=None,
             )
+            pt.set_workspace_context(stage1_dir=None, model="")
+            pt.set_workspace_manifest(None)
+            pt.set_workspace_scaling_audit(None)
+            self._prep_cache_key = key
+            self._prep_cache_payload = None
             return
-    
-        best = None
-        ordered = sorted(runs, key=lambda x: x.timestamp)
-    
-        for s in reversed(ordered):
-            if s.is_complete and s.config_match:
-                best = s
-                break
-    
-        if best is None:
-            best = ordered[-1]
     
         self._prep_best_stage1 = best
     
         tag = "OK" if best.is_complete else "INCOMPLETE"
         match = "MATCH" if best.config_match else "MISMATCH"
-    
-        state = (
+        state_text = (
             f"Stage-1: {tag} / {match} "
-            f"(n_train={best.n_train}, "
-            f"n_val={best.n_val})"
+            f"(n_train={best.n_train}, n_val={best.n_val})"
         )
-        mf_text = f"Manifest: {best.manifest_path}"
+        manifest_text = f"Manifest: {best.manifest_path}"
     
+        manifest_json = None
+        audit_json = None
+        try:
+            manifest_json = load_json(best.manifest_path)
+        except Exception as exc:
+            if hasattr(self, "log_updated"):
+                self.log_updated.emit(
+                    f"[WARN] Could not read manifest: {exc}"
+                )
+    
+        audit_path = best.run_dir / "stage1_scaling_audit.json"
+        if audit_path.is_file():
+            try:
+                audit_json = load_json(audit_path)
+            except Exception:
+                audit_json = None
+    
+        # Apply UI once
         pt.set_stage1_status(
-            state_text=state,
-            manifest_text=mf_text,
+            state_text=state_text,
+            manifest_text=manifest_text,
         )
-    
         self._set_prep_stage1_actions(
             stage1_dir=str(best.run_dir),
             manifest_path=str(best.manifest_path),
         )
+        pt.set_workspace_context(
+            stage1_dir=str(best.run_dir),
+            model=str(best.model or model),
+        )
+        pt.set_workspace_manifest(manifest_json)
+        pt.set_workspace_scaling_audit(audit_json)
+    
+        # Cache payload for instant revisit
+        self._prep_cache_key = key
+        self._prep_cache_payload = {
+            "state_text": state_text,
+            "manifest_text": manifest_text,
+            "stage1_dir": str(best.run_dir),
+            "manifest_path": str(best.manifest_path),
+            "model": str(best.model or model),
+            "manifest_json": manifest_json,
+            "audit_json": audit_json,
+        }
+
+    # def _refresh_preprocess_status(self) -> None:
+    #     """Refresh Stage-1 discovery + workspace (Preprocess tab)."""
+    #     pt = self.preprocess_tab
+    #     st = self.config_store
+    
+    #     # -------------------------------------------------
+    #     # 1) Gather context (city / dataset / results_root)
+    #     # -------------------------------------------------
+    #     city = ""
+    #     if hasattr(self, "city_edit"):
+    #         city = self.city_edit.text().strip()
+    
+    #     if not city:
+    #         city = str(
+    #             st.get_value(
+    #                 FieldKey("city"),
+    #                 default="",
+    #             )
+    #             or ""
+    #         ).strip()
+    
+    #     ds = st.get_value(
+    #         FieldKey("dataset_path"),
+    #         default=None,
+    #     )
+    #     if ds is None:
+    #         ds = getattr(self, "csv_path", None)
+    
+    #     rr_raw = st.get_value(
+    #         FieldKey("results_root"),
+    #         default=None,
+    #     )
+    #     if rr_raw is None:
+    #         rr_raw = getattr(self, "gui_runs_root", None)
+    #     if rr_raw is None:
+    #         rr_raw = Path.home()
+    
+    #     rr = Path(str(rr_raw)).expanduser()
+    
+    #     # -------------------------------------------------
+    #     # 2) Keep store in sync (no positional defaults!)
+    #     # -------------------------------------------------
+    #     patch: Dict[str, Any] = {}
+    
+    #     old_city = str(
+    #         st.get_value(
+    #             FieldKey("city"),
+    #             default="",
+    #         )
+    #         or ""
+    #     ).strip()
+    #     if city != old_city:
+    #         patch["city"] = city
+    
+    #     old_ds = st.get_value(
+    #         FieldKey("dataset_path"),
+    #         default=None,
+    #     )
+    #     if ds != old_ds:
+    #         patch["dataset_path"] = ds
+    
+    #     old_rr = st.get_value(
+    #         FieldKey("results_root"),
+    #         default=None,
+    #     )
+    #     if old_rr is None or str(old_rr) != str(rr):
+    #         # store can coerce Path fine
+    #         patch["results_root"] = rr
+    
+    #     if patch:
+    #         st.patch(patch)
+    
+    #     # -------------------------------------------------
+    #     # 3) No city -> clear UI
+    #     # -------------------------------------------------
+    #     if not city:
+    #         pt.set_stage1_status(
+    #             state_text="Stage-1: (no city selected)",
+    #             manifest_text="Manifest: -",
+    #         )
+    #         self._set_prep_stage1_actions(
+    #             stage1_dir=None,
+    #             manifest_path=None,
+    #         )
+    #         pt.set_workspace_context(stage1_dir=None, model="")
+    #         pt.set_workspace_manifest(None)
+    #         pt.set_workspace_scaling_audit(None)
+    #         return
+    
+    #     # -------------------------------------------------
+    #     # 4) Build cfg snapshot (optional for mismatch flag)
+    #     # -------------------------------------------------
+    #     cfg_snap = None
+    #     try:
+    #         cfg_snap = self.geo_cfg.to_stage1_config()
+    #     except Exception:
+    #         cfg_snap = None
+    
+    #     # -------------------------------------------------
+    #     # 5) Robust discovery (prefer bundle resolver)
+    #     # -------------------------------------------------
+    #     model_name = "GeoPriorSubsNet"
+    
+    #     bundle = None
+    #     try:
+    #         bundle = resolve_stage1_bundle(
+    #             results_root=rr,
+    #             city=city,
+    #             model=model_name,
+    #         )
+    #     except Exception:
+    #         bundle = None
+    
+    #     best = None
+    #     if bundle is not None:
+    #         try:
+    #             best = make_stage1_summary(
+    #                 bundle.manifest_path,
+    #                 current_cfg=cfg_snap,
+    #             )
+    #         except Exception:
+    #             best = None
+    #     else:
+    #         try:
+    #             runs, _ = find_stage1_for_city(
+    #                 city=city,
+    #                 results_root=rr,
+    #                 current_cfg=cfg_snap,
+    #             )
+    #         except Exception as exc:
+    #             msg = f"Stage-1: discovery failed ({exc})"
+    #             pt.set_stage1_status(msg, "Manifest: -")
+    #             self._set_prep_stage1_actions(
+    #                 stage1_dir=None,
+    #                 manifest_path=None,
+    #             )
+    #             pt.set_workspace_context(stage1_dir=None, model="")
+    #             pt.set_workspace_manifest(None)
+    #             pt.set_workspace_scaling_audit(None)
+    #             return
+    
+    #         if runs:
+    #             ordered = sorted(runs, key=lambda x: x.timestamp)
+    #             for s in reversed(ordered):
+    #                 if s.is_complete and s.config_match:
+    #                     best = s
+    #                     break
+    #             if best is None:
+    #                 best = ordered[-1]
+    
+    #     if best is None:
+    #         pt.set_stage1_status(
+    #             state_text="Stage-1: not found for this city",
+    #             manifest_text="Manifest: -",
+    #         )
+    #         self._set_prep_stage1_actions(
+    #             stage1_dir=None,
+    #             manifest_path=None,
+    #         )
+    #         pt.set_workspace_context(stage1_dir=None, model="")
+    #         pt.set_workspace_manifest(None)
+    #         pt.set_workspace_scaling_audit(None)
+    #         return
+    
+    #     # -------------------------------------------------
+    #     # 6) Update status + actions
+    #     # -------------------------------------------------
+    #     self._prep_best_stage1 = best
+    
+    #     tag = "OK" if best.is_complete else "INCOMPLETE"
+    #     match = "MATCH" if best.config_match else "MISMATCH"
+    
+    #     state = (
+    #         f"Stage-1: {tag} / {match} "
+    #         f"(n_train={best.n_train}, n_val={best.n_val})"
+    #     )
+    #     mf_text = f"Manifest: {best.manifest_path}"
+    
+    #     pt.set_stage1_status(
+    #         state_text=state,
+    #         manifest_text=mf_text,
+    #     )
+    
+    #     self._set_prep_stage1_actions(
+    #         stage1_dir=str(best.run_dir),
+    #         manifest_path=str(best.manifest_path),
+    #     )
+    
+    #     # -------------------------------------------------
+    #     # 7) Workspace payloads
+    #     # -------------------------------------------------
+    #     pt.set_workspace_context(
+    #         stage1_dir=str(best.run_dir),
+    #         model=str(best.model or model_name),
+    #     )
+    
+    #     manifest = load_json(best.manifest_path, default=None)
+    
+    #     audit = None
+    #     if bundle is not None and bundle.audit_path is not None:
+    #         audit = load_json(bundle.audit_path, default=None)
+    #     else:
+    #         ap = best.run_dir / "stage1_scaling_audit.json"
+    #         if ap.is_file():
+    #             audit = load_json(ap, default=None)
+    
+    #     pt.set_workspace_manifest(manifest)
+    #     pt.set_workspace_scaling_audit(audit)
+
 
     @pyqtSlot()
     def _on_open_feature_cfg(self) -> None:
@@ -1961,6 +2231,7 @@ class GeoPriorForecaster(QMainWindow):
         """
         Browse and set the GUI results root used by all tabs/workflows.
         """
+
         start_dir = str(getattr(self, "gui_runs_root", Path.home()))
         root = QFileDialog.getExistingDirectory(
             self,
@@ -1971,6 +2242,8 @@ class GeoPriorForecaster(QMainWindow):
             return
     
         new_root = Path(root)
+        self.config_store.patch({"results_root": new_root})
+
     
         # Core roots
         self.gui_runs_root = new_root
@@ -3670,6 +3943,18 @@ class GeoPriorForecaster(QMainWindow):
         self._active_job_kind = None
         self._update_global_running_state()
         self._stop_run_timer()
+        
+        # Update inference tab "Quick actions" with artifacts
+        if hasattr(self, "inference_tab") and self.inference_tab:
+            self.inference_tab.set_last_outputs(
+                {
+                    "run_dir": run_dir or "",
+                    "csv_eval_path": csv_eval or "",
+                    "csv_future_path": csv_future or "",
+                    "inference_summary_json": summary_json or "",
+                }
+            )
+
 
     @pyqtSlot()
     def _on_infer_clicked(self) -> None:
@@ -4533,15 +4818,17 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     def closeEvent(self, event: QCloseEvent) -> None:
         """
-        Intercept window close (File → Exit, Ctrl+Q, window X).
-
+        Intercept window close (File -> Exit, Ctrl+Q, window X).
+    
         If long-running workflows are active, ask for confirmation
-        before closing. Otherwise just accept.
+        before closing. On close, persist window geometry so the next
+        launch restores the same size/position.
         """
         if self._any_job_running():
             msg = (
                 "One or more workflows are still running "
-                "(Stage-1, training, tuning, inference or transfer matrix).\n\n"
+                "(Stage-1, training, tuning, inference or transfer "
+                "matrix).\n\n"
                 "If you quit now, they will be interrupted.\n\n"
                 "Do you really want to quit?"
             )
@@ -4554,53 +4841,88 @@ class GeoPriorForecaster(QMainWindow):
             )
             if reply != QMessageBox.Yes:
                 event.ignore()
-                return  # keep the window open
-
-        # XXX TODO: could do any final cleanup, save settings, etc.
-
-        # Hand back to the base class for normal closing
+                return
+    
+        # Persist window geometry (best-effort).
+        try:
+            from ..ux_utils import save_window_geometry
+    
+            save_window_geometry(
+                self,
+                settings_key="main_window",
+            )
+        except Exception:
+            pass
+    
         super().closeEvent(event)
-
+    
 
 # ----------------------------------------------------------------------
 # Entry point helper
 # ----------------------------------------------------------------------
-
 def launch_geoprior_gui(theme: str = "fusionlab") -> None:
-    
     app = QApplication(sys.argv)
-    cfg = GeoPriorConfig.from_defaults () 
-    auto_set_ui_fonts(app)
-    
-    enable_qt_crash_handler(app, keep_gui_alive=False)  # nice tracebacks if something dies
-    # --- create splash with your logo ---
-    logo_path = Path(__file__).with_name("geoprior_splash.png")
+
+    # QSettings identity (needed for geometry persistence).
+    set_app_metadata(
+        app,
+        org_name="FusionLab",
+        app_name="GeoPrior",
+        org_domain="EarthAI-tech",
+    )
+
+    cfg = GeoPriorConfig.from_defaults()
+    theme = getattr(cfg, "ui_theme", theme) or "fusionlab"
+
+    # Apply global UI font (and scale).
+    scale = float(getattr(cfg, "ui_font_scale", 1.0))
+    auto_set_ui_fonts(app, font_scale=scale)
+
+    enable_qt_crash_handler(
+        app,
+        keep_gui_alive=False,
+        show_dialog=False,
+    )
+
+    # --- splash with logo ---
+    logo_path = Path(__file__).with_name(
+        "geoprior_splash.png",
+    )
     splash = LoadingSplash(logo_path)
     splash.show()
     app.processEvents()
 
-    splash.set_progress(10, "Loading configuration…")
+    splash.set_progress(10, "Loading configuration...")
 
-    scale = float(getattr(cfg, "ui_font_scale", 1.0))
-    if scale != 1.0:
-        f = app.font()
-        f.setPointSizeF(max(6.0, f.pointSizeF() * scale))
-        app.setFont(f)
-    
-    # pass splash into the main window so it can update during _build_ui()
-    gui = GeoPriorForecaster(theme=theme, splash=splash)  
+    # Create main window (pass splash for build progress).
+    gui = GeoPriorForecaster(
+        theme=theme,
+        splash=splash,
+    )
+
+    # Larger default size + restore last geometry if available.
+    auto_resize_window(
+        gui,
+        settings_key="main_window",
+    )
 
     splash.set_progress(100, "Ready")
-    splash.finish(gui)   # hides splash when gui is shown
+    splash.finish(gui)
 
     gui.show()
     sys.exit(app.exec_())
 
 
-
 if __name__ == "__main__":
-    # High-DPI attributes should be set before the QApplication exists
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    # High-DPI attributes should be set before QApplication exists
+    QApplication.setAttribute(
+        Qt.AA_EnableHighDpiScaling,
+        True,
+    )
+    QApplication.setAttribute(
+        Qt.AA_UseHighDpiPixmaps,
+        True,
+    )
 
     launch_geoprior_gui()
+

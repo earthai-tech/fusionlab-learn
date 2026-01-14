@@ -52,6 +52,116 @@ REQUIRED_CSV_KEYS = [
 ]
 
 
+@dataclass(frozen=True)
+class Stage1Bundle:
+    run_dir: Path
+    manifest_path: Path
+    audit_path: Optional[Path]
+    artifacts_dir: Optional[Path]
+
+
+def _norm_stage(v: Any) -> str:
+    s = str(v or "").strip().lower()
+    s = s.replace("-", "").replace("_", "").replace(" ", "")
+    return s
+
+
+def _looks_like_stage1_dir(d: Path) -> bool:
+    mf = d / "manifest.json"
+    if not mf.is_file():
+        return False
+    if (d / "stage1_scaling_audit.json").is_file():
+        return True
+    if (d / "artifacts").is_dir():
+        return True
+    return "stage1" in d.name.lower()
+
+
+def _is_stage1_manifest(m: dict, mf_path: Path) -> bool:
+    tag = _norm_stage(m.get("stage"))
+    if tag in ("stage1", "1"):
+        return True
+    if tag not in ("", "unknown"):
+        return False
+    return _looks_like_stage1_dir(mf_path.parent)
+
+
+def resolve_stage1_bundle(
+    *,
+    results_root: Path,
+    city: str = "",
+    model: str = "GeoPriorSubsNet",
+) -> Optional[Stage1Bundle]:
+    rr = results_root.expanduser()
+
+    # Case A: rr itself is the stage1 dir
+    if _looks_like_stage1_dir(rr):
+        d = rr
+        return Stage1Bundle(
+            run_dir=d,
+            manifest_path=d / "manifest.json",
+            audit_path=(
+                d / "stage1_scaling_audit.json"
+                if (d / "stage1_scaling_audit.json").is_file()
+                else None
+            ),
+            artifacts_dir=(
+                d / "artifacts"
+                if (d / "artifacts").is_dir()
+                else None
+            ),
+        )
+
+    # Case B: typical layout under global results root
+    if city:
+        cand = rr / f"{city}_{model}_stage1"
+        if _looks_like_stage1_dir(cand):
+            d = cand
+            return Stage1Bundle(
+                run_dir=d,
+                manifest_path=d / "manifest.json",
+                audit_path=(
+                    d / "stage1_scaling_audit.json"
+                    if (d / "stage1_scaling_audit.json").is_file()
+                    else None
+                ),
+                artifacts_dir=(
+                    d / "artifacts"
+                    if (d / "artifacts").is_dir()
+                    else None
+                ),
+            )
+
+    # Fallback: search (bounded)
+    for mf in rr.rglob("manifest.json"):
+        d = mf.parent
+        if not _looks_like_stage1_dir(d):
+            continue
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not _is_stage1_manifest(m, mf):
+            continue
+        if city and city.lower() not in d.name.lower():
+            continue
+        return Stage1Bundle(
+            run_dir=d,
+            manifest_path=mf,
+            audit_path=(
+                d / "stage1_scaling_audit.json"
+                if (d / "stage1_scaling_audit.json").is_file()
+                else None
+            ),
+            artifacts_dir=(
+                d / "artifacts"
+                if (d / "artifacts").is_dir()
+                else None
+            ),
+        )
+
+    return None
+
 def _load_manifest(manifest_path: Path) -> Dict[str, Any]:
     with manifest_path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -225,11 +335,14 @@ def discover_stage1_runs(
         except Exception:
             continue
 
-        if m.get("stage") != "stage1":
+        if not _is_stage1_manifest(m, manifest_path):
             continue
 
         try:
-            s = make_stage1_summary(manifest_path, current_cfg=current_cfg)
+            s = make_stage1_summary(
+                manifest_path,
+                current_cfg=current_cfg,
+            )
         except Exception:
             continue
 
@@ -314,4 +427,56 @@ def build_stage1_cfg_from_nat(
 
     return out
 
+def load_json(
+    path: Path | str | None,
+    *,
+    default: Any = None,
+    encoding: str = "utf-8",
+) -> Any:
+    """
+    Robust JSON loader for GUI discovery.
+
+    - Accepts Path/str/None
+    - Expands "~" and environment variables
+    - Returns `default` if missing/unreadable/invalid JSON
+
+    Parameters
+    ----------
+    path : Path | str | None
+        JSON file path.
+    default : Any, optional
+        Value returned on failure (missing, invalid, etc.).
+    encoding : str, default="utf-8"
+        File encoding.
+
+    Returns
+    -------
+    Any
+        Parsed JSON on success, otherwise `default`.
+    """
+    if path is None:
+        return default
+
+    try:
+        p = Path(path)
+    except Exception:
+        return default
+
+    try:
+        p = Path(os.path.expandvars(str(p))).expanduser()
+    except Exception:
+        # If expandvars fails, try plain expanduser
+        try:
+            p = p.expanduser()
+        except Exception:
+            return default
+
+    if not p.is_file():
+        return default
+
+    try:
+        with p.open("r", encoding=encoding) as f:
+            return json.load(f)
+    except Exception:
+        return default
 
