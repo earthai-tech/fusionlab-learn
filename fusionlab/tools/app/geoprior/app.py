@@ -33,7 +33,9 @@ from PyQt5.QtCore import (
     QSize, 
     QPoint, 
     QTimer,
-    QSettings
+    QSettings, 
+    QSignalBlocker, 
+    QUrl
 )
 from PyQt5.QtGui import (
     QCloseEvent,
@@ -42,6 +44,7 @@ from PyQt5.QtGui import (
     QColor,
     QPen,
     QIcon, 
+    QDesktopServices
 )
 from PyQt5.QtWidgets import (
     QApplication,
@@ -57,15 +60,12 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QMessageBox,
     QTabWidget,
-    QSpinBox,
-    QComboBox,
     QCheckBox,
-    QGridLayout,
     QFileDialog,
     QDialog,
     QToolButton,
     QStyle, 
-    QSplitter
+    QSplitter, 
 )
 
 from .config.store import GeoConfigStore, FieldKey
@@ -96,12 +96,14 @@ from .ui.panel import ConfigCenterPanel
 from .ui.preprocess_tab import PreprocessTab
 from .ui.tune_tab import TuneTab
 from .ui.inference_tab import InferenceTab
+from .ui.xfer_tab import XferTab
      
 from ..ux_utils import (
     set_app_metadata,
     auto_set_ui_fonts,
     auto_resize_window,
     enable_qt_crash_handler,
+    save_window_geometry
 )
 
 from .utils.view_signals import VIS_SIGNALS 
@@ -117,28 +119,19 @@ from .threads import (
 )
 
 
-from .config import ( 
-    load_json, 
-    GeoPriorConfig,
-    find_stage1_for_city, 
-    resolve_stage1_bundle, 
-    make_stage1_summary,
-)
-
+from .config import GeoPriorConfig, find_stage1_for_city
 from .dialogs import ( 
     FeatureConfigDialog,
     ArchitectureConfigDialog , 
     ProbConfigDialog ,
-    XferAdvancedDialog, 
     XferResultsDialog, 
     InferenceOptionsDialog, 
     GeoPriorResultsDialog,
     PhysicsConfigDialog,
-    TrainOptionsDialog, 
-    QuickTrainDialog,
-    TuneOptionsDialog, 
+    QuickTrainDialog, 
     QuickTuneDialog,
     Stage1ChoiceDialog, 
+    TrainOptionsDialog, 
     TuneJobSpec,
     open_dataset_with_editor,
     choose_dataset_for_city, 
@@ -281,9 +274,16 @@ class GeoPriorForecaster(QMainWindow):
         self._main_splitter = None
         self._console_panel = None
         self._console_last_h = 220
+                
+        self._prep_refresh_key: tuple[str, str, str] | None = None
+        self._prep_cache_best = None
+        self._prep_cache_manifest = None
+        self._prep_cache_audit = None
         
-        self._prep_cache_key = None
-        self._prep_cache_payload = None
+        # XXX TODO: ENABLE once dark is stable. 
+        self.enable_dark_mode = False
+
+
 
     def _init_help_texts(self) -> None:
         """Initialise per-tab help texts and one-shot flags."""
@@ -406,13 +406,12 @@ class GeoPriorForecaster(QMainWindow):
             parent=self,
         )
 
-        
         self.mode_mgr.set_run_buttons(
             preprocess_btn=self.preprocess_tab.btn_run_stage1,
             train_btn=self.train_btn,
             tune_btn=self.btn_run_tune,
             infer_btn=self.btn_run_infer,
-            xfer_btn=self.btn_run_xfer,
+            xfer_btn=self.xfer_tab.btn_run_xfer,
         )
 
         # Initial mode + running state (no job running at startup)
@@ -455,7 +454,6 @@ class GeoPriorForecaster(QMainWindow):
     # UI construction
     # ------------------------------------------------------------------
 
-    
     def _restore_theme_setting(self) -> None:
         s = QSettings()
         saved = s.value(
@@ -464,12 +462,26 @@ class GeoPriorForecaster(QMainWindow):
             type=str,
         )
         saved = (saved or "").strip().lower()
+        
+        if saved and not getattr(self, "enable_dark_mode", False):
+            if saved in {"dark", "fusionlab-dark", "night"}:
+                saved = "fusionlab"
+
         if saved:
             self.theme = saved
     
     
     def set_dark_mode(self, enabled: bool) -> None:
+        
+        if enabled and not getattr(self, "enable_dark_mode", False):
+            self.statusBar().showMessage(
+                "Dark mode is disabled for now.",
+                5000,
+            )
+            return
+
         self.theme = "dark" if enabled else "fusionlab"
+        
     
         s = QSettings()
         s.setValue("ui/theme", self.theme)
@@ -699,7 +711,7 @@ class GeoPriorForecaster(QMainWindow):
         self.log_widget.setMinimumHeight(0)
     
         c_layout.addWidget(self.log_widget, 1)
-    
+        
         prog = QHBoxLayout()
     
         self.progress_label = QLabel("")
@@ -867,136 +879,13 @@ class GeoPriorForecaster(QMainWindow):
         # ==================================================
         # Transferability tab – cross-city transfer matrix
         # ==================================================
-        xfer_tab = QWidget()
-        x_layout = QVBoxLayout(xfer_tab)
-        x_layout.setContentsMargins(6, 6, 6, 6)
-        x_layout.setSpacing(8)
-        
-        row = QHBoxLayout()
-        row.setSpacing(10)
-        row.setAlignment(Qt.AlignTop)
-        
-        # ----- Cities & splits card -----
-        cities_card, cities_box = self._make_card("Cities & splits")
-        
-        self.xfer_city_a = QLineEdit()
-        self.xfer_city_a.setPlaceholderText("nansha")
-        self.xfer_city_b = QLineEdit()
-        self.xfer_city_b.setPlaceholderText("zhongshan")
-        
-        self.chk_xfer_split_train = QCheckBox("train")
-        self.chk_xfer_split_val = QCheckBox("val")
-        self.chk_xfer_split_test = QCheckBox("test")
-        self.chk_xfer_split_val.setChecked(True)
-        self.chk_xfer_split_test.setChecked(True)
-        
-        self.chk_xfer_cal_none = QCheckBox("none")
-        self.chk_xfer_cal_source = QCheckBox("source")
-        self.chk_xfer_cal_target = QCheckBox("target")
-        for cb in (
-            self.chk_xfer_cal_none,
-            self.chk_xfer_cal_source,
-            self.chk_xfer_cal_target,
-        ):
-            cb.setChecked(True)
-        
-        self.sp_xfer_batch = QSpinBox()
-        self.sp_xfer_batch.setRange(1, 2048)
-        self.sp_xfer_batch.setValue(32)
-        
-        self.chk_xfer_rescale = QCheckBox(
-            "Rescale target city to source domain"
+        self.xfer_tab = XferTab(
+            store=self.config_store,
+            make_card=self._make_card,
+            make_run_button=self._make_run_button,
+            parent=self,
         )
-        
-        grid_cs = QGridLayout()
-        r = 0
-        grid_cs.addWidget(QLabel("City A (source):"), r, 0)
-        grid_cs.addWidget(self.xfer_city_a, r, 1); r += 1
-        grid_cs.addWidget(QLabel("City B (target):"), r, 0)
-        grid_cs.addWidget(self.xfer_city_b, r, 1); r += 1
-        
-        grid_cs.addWidget(QLabel("Splits:"), r, 0)
-        splits_row = QHBoxLayout()
-        splits_row.addWidget(self.chk_xfer_split_train)
-        splits_row.addWidget(self.chk_xfer_split_val)
-        splits_row.addWidget(self.chk_xfer_split_test)
-        splits_row.addStretch(1)
-        grid_cs.addLayout(splits_row, r, 1); r += 1
-        
-        grid_cs.addWidget(QLabel("Calibration modes:"), r, 0)
-        cal_row = QHBoxLayout()
-        cal_row.addWidget(self.chk_xfer_cal_none)
-        cal_row.addWidget(self.chk_xfer_cal_source)
-        cal_row.addWidget(self.chk_xfer_cal_target)
-        cal_row.addStretch(1)
-        grid_cs.addLayout(cal_row, r, 1); r += 1
-        
-        grid_cs.addWidget(QLabel("Batch size:"), r, 0)
-        grid_cs.addWidget(self.sp_xfer_batch, r, 1); r += 1
-        
-        grid_cs.addWidget(self.chk_xfer_rescale, r, 0, 1, 2); r += 1
-        
-        cities_box.addLayout(grid_cs)
-        row.addWidget(cities_card, 1, Qt.AlignTop)
-        
-        # ----- Results & view card -----
-        res_card, res_box = self._make_card("Results & view")
-
-        self.xfer_results_root = QLineEdit(str(self.gui_runs_root))
-        self.xfer_results_root_btn = QPushButton("Browse…")
-        
-        self.lbl_xfer_last_out = QLabel("No transfer run yet.")
-        self.lbl_xfer_last_out.setObjectName("xferLastOutLabel")
-        
-        self.cmb_xfer_view = QComboBox()
-        self.cmb_xfer_view.addItem(
-            "Calibration vs error (scatter panel)",
-            "calib_panel",
-        )
-        self.cmb_xfer_view.addItem(
-            "Per-horizon MAE + cov/sharp (summary)",
-            "summary_panel",
-        )
-        
-        self.cmb_xfer_view_split = QComboBox()
-        self.cmb_xfer_view_split.addItem("Validation (val)", "val")
-        self.cmb_xfer_view_split.addItem("Test (test)", "test")
-        
-        self.btn_xfer_view = QPushButton("Make view figure…")
-        self.btn_xfer_view.setVisible(False)   # appears after first run
-        
-        grid_res = QGridLayout()
-        c = 0
-        grid_res.addWidget(QLabel("Results root:"), c, 0)
-        grid_res.addWidget(self.xfer_results_root, c, 1)
-        grid_res.addWidget(self.xfer_results_root_btn, c, 2); c += 1
-        
-        grid_res.addWidget(QLabel("Last output folder:"), c, 0)
-        grid_res.addWidget(self.lbl_xfer_last_out, c, 1, 1, 2); c += 1
-        
-        grid_res.addWidget(QLabel("View type:"), c, 0)
-        grid_res.addWidget(self.cmb_xfer_view, c, 1, 1, 2); c += 1
-        
-        grid_res.addWidget(QLabel("View split:"), c, 0)
-        grid_res.addWidget(self.cmb_xfer_view_split, c, 1, 1, 2); c += 1
-        
-        grid_res.addWidget(self.btn_xfer_view, c, 0, 1, 3); c += 1
-        
-        res_box.addLayout(grid_res)
-        row.addWidget(res_card, 1, Qt.AlignTop)
-        
-        x_layout.addLayout(row)
-        
-        # Bottom row: advanced button + run button
-        bottom = QHBoxLayout()
-        self.btn_xfer_advanced = QPushButton("Advanced options…")
-        bottom.addWidget(self.btn_xfer_advanced)
-        bottom.addStretch(1)
-        self.btn_run_xfer = self._make_run_button("Run transfer matrix")
-        bottom.addWidget(self.btn_run_xfer)
-        x_layout.addLayout(bottom)
-        
-        x_layout.addStretch(1)
+    
         # ----------------------
  
         # Data tab (new)
@@ -1025,8 +914,7 @@ class GeoPriorForecaster(QMainWindow):
         self.preprocess_tab  = preprocess_tab 
 
         self.infer_tab = it
-        self.xfer_tab = xfer_tab
-        
+
         self._data_tab_index = self.tabs.addTab(
             self.data_tab,
             self._workflow_icon(
@@ -1331,65 +1219,95 @@ class GeoPriorForecaster(QMainWindow):
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFixedSize(40, 40)        # match the CSS min/max
         return btn
-
+    
     def _discover_last_xfer_for_root(self) -> None:
         """
-        Best-effort discovery of the latest transferability run
-        under the current xfer results root.
+        Best-effort discovery of the latest transfer run
+        under the current results_root.
     
-        Keeps `_xfer_last_result` consistent with whatever is
-        already on disk, but delegates the actual search to
-        ResultsService.
+        UI is owned by XferTab in v3.2, so we update the
+        tab via its public helpers.
         """
-        root_text = self.xfer_results_root.text().strip()
+        root_text = str(
+            self.config_store.get("results_root", "")
+        ).strip()
+    
         if not root_text:
-            # Nothing to search
             self._xfer_last_result = {}
-            self.lbl_xfer_last_out.setText("No transfer run yet.")
-            self._update_xfer_view_state()
+            self.xfer_tab.set_last_output(None)
+            self.xfer_tab.set_view_enabled(False)
             return
     
-        result = self.results_svc.discover_last_xfer(Path(root_text))
-    
-        # Store for later (view button, dialogs, etc.)
+        result = self.results_svc.discover_last_xfer(
+            Path(root_text),
+        )
         self._xfer_last_result = result or {}
     
-        if not result:
-            self.lbl_xfer_last_out.setText("No transfer run yet.")
-        else:
-            self.lbl_xfer_last_out.setText(result["out_dir"])
+        out_dir = None
+        if result:
+            out_dir = result.get("out_dir")
     
+        self.xfer_tab.set_last_output(out_dir)
         self._update_xfer_view_state()
 
     # ------------------------------------------------------------------
     # Logging / progress helpers
     # ------------------------------------------------------------------
+    def is_console_visible(self) -> bool:
+        sp = getattr(self, "_main_splitter", None)
+        if sp is None:
+            w = getattr(self, "log_widget", None)
+            return bool(w is not None and w.isVisible())
+    
+        sizes = sp.sizes()
+        if len(sizes) < 2:
+            return True
+    
+        return bool(sizes[1] > 0)
+    
+    
+    def _sync_console_menu(self) -> None:
+        act = getattr(self, "act_show_log", None)
+        if act is None:
+            return
+    
+        try:
+            with QSignalBlocker(act):
+                act.setChecked(self.is_console_visible())
+        except Exception:
+            return
 
     def set_console_visible(self, visible: bool) -> None:
         sp = getattr(self, "_main_splitter", None)
         if sp is None:
             if getattr(self, "log_widget", None) is not None:
                 self.log_widget.setVisible(visible)
+            self._sync_console_menu()
             return
     
         sizes = sp.sizes()
         if len(sizes) < 2:
+            self._sync_console_menu()
             return
     
         total = sum(sizes) or sp.height() or 1
     
         if visible:
             if sizes[1] > 0:
+                self._sync_console_menu()
                 return
+    
             bot = int(getattr(self, "_console_last_h", 220) or 220)
             bot = max(140, min(bot, int(total * 0.60)))
             sp.setSizes([total - bot, bot])
+            self._sync_console_menu()
             return
     
-        # visible == False
         if sizes[1] > 0:
             self._console_last_h = sizes[1]
         sp.setSizes([total, 0])
+        self._sync_console_menu()
+
 
     @pyqtSlot(int, int)
     def _on_splitter_moved(self, pos: int, index: int) -> None:
@@ -1399,6 +1317,8 @@ class GeoPriorForecaster(QMainWindow):
         sizes = sp.sizes()
         if len(sizes) >= 2 and sizes[1] > 0:
             self._console_last_h = sizes[1]
+    
+        self._sync_console_menu()
 
 
     def _is_dry_mode(self) -> bool:
@@ -1484,12 +1404,19 @@ class GeoPriorForecaster(QMainWindow):
 
         self.mode_mgr.update_for_tab(index, self.tabs, help_texts)
         
-
-
     def _update_xfer_view_state(self) -> None:
-        has_result = bool(self._xfer_last_result)
-        self.btn_xfer_view.setVisible(has_result)
-        self.btn_xfer_view.setEnabled(has_result)
+        out_dir = None
+        if self._xfer_last_result:
+            out_dir = self._xfer_last_result.get("out_dir")
+    
+        has_result = bool(out_dir)
+    
+        # Visibility is handled by set_last_output().
+        self.xfer_tab.set_last_output(out_dir)
+    
+        # Enabled/disabled state:
+        self.xfer_tab.set_view_enabled(has_result)
+
 
     def _update_infer_widgets_state(self) -> None:
         """
@@ -1573,10 +1500,6 @@ class GeoPriorForecaster(QMainWindow):
             self._on_physics_config_clicked
         )
 
-        self.btn_tune_options.clicked.connect(
-            self._on_tune_options_clicked,
-        )
-
         self.btn_run_tune.clicked.connect(
             self._on_tune_clicked,
         )
@@ -1596,10 +1519,11 @@ class GeoPriorForecaster(QMainWindow):
  
  
         # --- Transferability tab ---
-        self.btn_run_xfer.clicked.connect(self._on_xfer_clicked)
-        self.btn_xfer_advanced.clicked.connect(self._on_xfer_advanced)
-        self.xfer_results_root_btn.clicked.connect(self._on_browse_xfer_root)
-        self.btn_xfer_view.clicked.connect(self._on_xfer_view_clicked)
+        xt = self.xfer_tab
+
+        xt.run_clicked.connect(self._on_xfer_clicked)
+        xt.view_clicked.connect(self._on_xfer_view_clicked)
+
 
         self.data_tab.request_open.connect(self._on_open_dataset)
         self.data_tab.request_open_new.connect(self._on_open_dataset)
@@ -1619,7 +1543,9 @@ class GeoPriorForecaster(QMainWindow):
         pt = self.preprocess_tab
         
         pt.request_open_dataset.connect(self._on_open_dataset)
-        pt.request_refresh.connect(self._refresh_preprocess_status)
+        pt.request_refresh.connect(
+            lambda: pt.refresh_status(force=True)
+        )
         pt.request_run_stage1.connect(self._on_preprocess_run_stage1)
         pt.request_feature_cfg.connect(self._on_open_feature_cfg)
         
@@ -1630,6 +1556,7 @@ class GeoPriorForecaster(QMainWindow):
         pt.request_browse_results_root.connect(
             self._on_browse_results_root
         )
+        pt.request_open_city_root.connect(self._on_open_prep_city_root)
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
         
@@ -1674,7 +1601,24 @@ class GeoPriorForecaster(QMainWindow):
         self.set_console_visible(not hide)
     
         if index == prep_idx:
-            self._refresh_preprocess_status(force=False)
+            self.preprocess_tab.refresh_status(force=False)
+
+        
+    def _on_open_prep_city_root(self) -> None:
+        pt = self.preprocess_tab
+    
+        city_root = pt.city_root_path()
+        rr_raw = self.config_store.get_value(
+            FieldKey("results_root"), default=None)
+        rr = Path(str(rr_raw)).expanduser(
+            ) if rr_raw else Path.home()
+    
+        target = Path(city_root) if city_root else rr
+        if not target.exists():
+            target = rr
+    
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
+
 
     def _on_preprocess_run_stage1(self) -> None:
         """
@@ -1780,7 +1724,7 @@ class GeoPriorForecaster(QMainWindow):
             msg = "Stage-1 finished without manifest. See log."
             self.status_updated.emit(msg)
             self.log_updated.emit(f"[Stage-1] {msg}")
-            self._refresh_preprocess_status()
+            self.preprocess_tab.refresh_status(force=True)
             return
     
         self._prep_last_manifest = manifest_path
@@ -1791,428 +1735,8 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.status_updated.emit("Idle - Stage-1 ready.")
     
-        self._refresh_preprocess_status()
+        self.preprocess_tab.refresh_status(force=True)
 
-
-    def _set_prep_stage1_actions(
-        self,
-        *,
-        stage1_dir: str | None=None,
-        manifest_path: str | None =None,
-    ) -> None:
-        pt = self.preprocess_tab
-    
-        has_dir = bool(stage1_dir)
-        has_mf = bool(manifest_path)
-    
-        pt.btn_prep_open_stage1_dir.setEnabled(has_dir)
-        pt.btn_prep_open_manifest.setEnabled(has_mf)
-        pt.btn_prep_use_for_city.setEnabled(has_dir)
-    
-        if not has_dir:
-            tip = "Run Stage-1 first."
-            pt.btn_prep_open_stage1_dir.setToolTip(tip)
-            pt.btn_prep_use_for_city.setToolTip(tip)
-        else:
-            pt.btn_prep_open_stage1_dir.setToolTip(stage1_dir)
-            pt.btn_prep_use_for_city.setToolTip(stage1_dir)
-    
-        if not has_mf:
-            pt.btn_prep_open_manifest.setToolTip(
-                "Run Stage-1 to create a manifest."
-            )
-        else:
-            pt.btn_prep_open_manifest.setToolTip(manifest_path)
-
-    def _refresh_preprocess_status(self, *, force: bool = False) -> None:
-        """Refresh Stage-1 discovery + workspace (Preprocess tab)."""
-        pt = self.preprocess_tab
-        st = self.config_store
-    
-        # --- read context (cheap) ---
-        city = ""
-        if hasattr(self, "city_edit"):
-            city = self.city_edit.text().strip()
-        if not city:
-            city = str(
-                st.get_value(FieldKey("city"), default="") or ""
-            ).strip()
-    
-        rr_raw = st.get_value(FieldKey("results_root"), default=None)
-        if rr_raw is None:
-            rr_raw = getattr(self, "gui_runs_root", None)
-        if rr_raw is None:
-            rr_raw = Path.home()
-    
-        rr = Path(str(rr_raw)).expanduser()
-        model = "GeoPriorSubsNet"
-    
-        # No city => clear fast
-        if not city:
-            pt.set_stage1_status(
-                state_text="Stage-1: (no city selected)",
-                manifest_text="Manifest: -",
-            )
-            self._set_prep_stage1_actions(
-                stage1_dir=None,
-                manifest_path=None,
-            )
-            pt.set_workspace_context(stage1_dir=None, model="")
-            pt.set_workspace_manifest(None)
-            pt.set_workspace_scaling_audit(None)
-            self._prep_cache_key = None
-            self._prep_cache_payload = None
-            return
-    
-        # ---- cache key ----
-        key = (str(rr), city.lower(), model)
-    
-        # If not forced and key unchanged: reuse cached payload
-        if (
-            not force
-            and self._prep_cache_key == key
-            and self._prep_cache_payload is not None
-        ):
-            payload = self._prep_cache_payload
-            pt.set_stage1_status(
-                state_text=payload["state_text"],
-                manifest_text=payload["manifest_text"],
-            )
-            self._set_prep_stage1_actions(
-                stage1_dir=payload["stage1_dir"],
-                manifest_path=payload["manifest_path"],
-            )
-            pt.set_workspace_context(
-                stage1_dir=payload["stage1_dir"],
-                model=payload["model"],
-            )
-            pt.set_workspace_manifest(payload["manifest_json"])
-            pt.set_workspace_scaling_audit(payload["audit_json"])
-            return
-    
-        # --- Build cfg snapshot (optional, can be expensive too) ---
-        cfg_snap = None
-        try:
-            cfg_snap = self.geo_cfg.to_stage1_config()
-        except Exception:
-            cfg_snap = None
-    
-        # --- FAST path: direct bundle resolution (O(1) + tiny fallback) ---
-        b = resolve_stage1_bundle(
-            results_root=rr,
-            city=city,
-            model=model,
-        )
-    
-        best = None
-        if b is not None:
-            try:
-                best = make_stage1_summary(
-                    b.manifest_path,
-                    current_cfg=cfg_snap,
-                )
-            except Exception:
-                best = None
-    
-        # --- Only if direct resolution failed, do the expensive scan ---
-        if best is None:
-            try:
-                runs, _ = find_stage1_for_city(
-                    city=city,
-                    results_root=rr,
-                    current_cfg=cfg_snap,
-                )
-            except Exception:
-                runs = []
-    
-            if runs:
-                ordered = sorted(runs, key=lambda x: x.timestamp)
-                for s in reversed(ordered):
-                    if s.is_complete and s.config_match:
-                        best = s
-                        break
-                if best is None:
-                    best = ordered[-1]
-    
-        if best is None:
-            pt.set_stage1_status(
-                state_text="Stage-1: not found for this city",
-                manifest_text="Manifest: -",
-            )
-            self._set_prep_stage1_actions(
-                stage1_dir=None,
-                manifest_path=None,
-            )
-            pt.set_workspace_context(stage1_dir=None, model="")
-            pt.set_workspace_manifest(None)
-            pt.set_workspace_scaling_audit(None)
-            self._prep_cache_key = key
-            self._prep_cache_payload = None
-            return
-    
-        self._prep_best_stage1 = best
-    
-        tag = "OK" if best.is_complete else "INCOMPLETE"
-        match = "MATCH" if best.config_match else "MISMATCH"
-        state_text = (
-            f"Stage-1: {tag} / {match} "
-            f"(n_train={best.n_train}, n_val={best.n_val})"
-        )
-        manifest_text = f"Manifest: {best.manifest_path}"
-    
-        manifest_json = None
-        audit_json = None
-        try:
-            manifest_json = load_json(best.manifest_path)
-        except Exception as exc:
-            if hasattr(self, "log_updated"):
-                self.log_updated.emit(
-                    f"[WARN] Could not read manifest: {exc}"
-                )
-    
-        audit_path = best.run_dir / "stage1_scaling_audit.json"
-        if audit_path.is_file():
-            try:
-                audit_json = load_json(audit_path)
-            except Exception:
-                audit_json = None
-    
-        # Apply UI once
-        pt.set_stage1_status(
-            state_text=state_text,
-            manifest_text=manifest_text,
-        )
-        self._set_prep_stage1_actions(
-            stage1_dir=str(best.run_dir),
-            manifest_path=str(best.manifest_path),
-        )
-        pt.set_workspace_context(
-            stage1_dir=str(best.run_dir),
-            model=str(best.model or model),
-        )
-        pt.set_workspace_manifest(manifest_json)
-        pt.set_workspace_scaling_audit(audit_json)
-    
-        # Cache payload for instant revisit
-        self._prep_cache_key = key
-        self._prep_cache_payload = {
-            "state_text": state_text,
-            "manifest_text": manifest_text,
-            "stage1_dir": str(best.run_dir),
-            "manifest_path": str(best.manifest_path),
-            "model": str(best.model or model),
-            "manifest_json": manifest_json,
-            "audit_json": audit_json,
-        }
-
-    # def _refresh_preprocess_status(self) -> None:
-    #     """Refresh Stage-1 discovery + workspace (Preprocess tab)."""
-    #     pt = self.preprocess_tab
-    #     st = self.config_store
-    
-    #     # -------------------------------------------------
-    #     # 1) Gather context (city / dataset / results_root)
-    #     # -------------------------------------------------
-    #     city = ""
-    #     if hasattr(self, "city_edit"):
-    #         city = self.city_edit.text().strip()
-    
-    #     if not city:
-    #         city = str(
-    #             st.get_value(
-    #                 FieldKey("city"),
-    #                 default="",
-    #             )
-    #             or ""
-    #         ).strip()
-    
-    #     ds = st.get_value(
-    #         FieldKey("dataset_path"),
-    #         default=None,
-    #     )
-    #     if ds is None:
-    #         ds = getattr(self, "csv_path", None)
-    
-    #     rr_raw = st.get_value(
-    #         FieldKey("results_root"),
-    #         default=None,
-    #     )
-    #     if rr_raw is None:
-    #         rr_raw = getattr(self, "gui_runs_root", None)
-    #     if rr_raw is None:
-    #         rr_raw = Path.home()
-    
-    #     rr = Path(str(rr_raw)).expanduser()
-    
-    #     # -------------------------------------------------
-    #     # 2) Keep store in sync (no positional defaults!)
-    #     # -------------------------------------------------
-    #     patch: Dict[str, Any] = {}
-    
-    #     old_city = str(
-    #         st.get_value(
-    #             FieldKey("city"),
-    #             default="",
-    #         )
-    #         or ""
-    #     ).strip()
-    #     if city != old_city:
-    #         patch["city"] = city
-    
-    #     old_ds = st.get_value(
-    #         FieldKey("dataset_path"),
-    #         default=None,
-    #     )
-    #     if ds != old_ds:
-    #         patch["dataset_path"] = ds
-    
-    #     old_rr = st.get_value(
-    #         FieldKey("results_root"),
-    #         default=None,
-    #     )
-    #     if old_rr is None or str(old_rr) != str(rr):
-    #         # store can coerce Path fine
-    #         patch["results_root"] = rr
-    
-    #     if patch:
-    #         st.patch(patch)
-    
-    #     # -------------------------------------------------
-    #     # 3) No city -> clear UI
-    #     # -------------------------------------------------
-    #     if not city:
-    #         pt.set_stage1_status(
-    #             state_text="Stage-1: (no city selected)",
-    #             manifest_text="Manifest: -",
-    #         )
-    #         self._set_prep_stage1_actions(
-    #             stage1_dir=None,
-    #             manifest_path=None,
-    #         )
-    #         pt.set_workspace_context(stage1_dir=None, model="")
-    #         pt.set_workspace_manifest(None)
-    #         pt.set_workspace_scaling_audit(None)
-    #         return
-    
-    #     # -------------------------------------------------
-    #     # 4) Build cfg snapshot (optional for mismatch flag)
-    #     # -------------------------------------------------
-    #     cfg_snap = None
-    #     try:
-    #         cfg_snap = self.geo_cfg.to_stage1_config()
-    #     except Exception:
-    #         cfg_snap = None
-    
-    #     # -------------------------------------------------
-    #     # 5) Robust discovery (prefer bundle resolver)
-    #     # -------------------------------------------------
-    #     model_name = "GeoPriorSubsNet"
-    
-    #     bundle = None
-    #     try:
-    #         bundle = resolve_stage1_bundle(
-    #             results_root=rr,
-    #             city=city,
-    #             model=model_name,
-    #         )
-    #     except Exception:
-    #         bundle = None
-    
-    #     best = None
-    #     if bundle is not None:
-    #         try:
-    #             best = make_stage1_summary(
-    #                 bundle.manifest_path,
-    #                 current_cfg=cfg_snap,
-    #             )
-    #         except Exception:
-    #             best = None
-    #     else:
-    #         try:
-    #             runs, _ = find_stage1_for_city(
-    #                 city=city,
-    #                 results_root=rr,
-    #                 current_cfg=cfg_snap,
-    #             )
-    #         except Exception as exc:
-    #             msg = f"Stage-1: discovery failed ({exc})"
-    #             pt.set_stage1_status(msg, "Manifest: -")
-    #             self._set_prep_stage1_actions(
-    #                 stage1_dir=None,
-    #                 manifest_path=None,
-    #             )
-    #             pt.set_workspace_context(stage1_dir=None, model="")
-    #             pt.set_workspace_manifest(None)
-    #             pt.set_workspace_scaling_audit(None)
-    #             return
-    
-    #         if runs:
-    #             ordered = sorted(runs, key=lambda x: x.timestamp)
-    #             for s in reversed(ordered):
-    #                 if s.is_complete and s.config_match:
-    #                     best = s
-    #                     break
-    #             if best is None:
-    #                 best = ordered[-1]
-    
-    #     if best is None:
-    #         pt.set_stage1_status(
-    #             state_text="Stage-1: not found for this city",
-    #             manifest_text="Manifest: -",
-    #         )
-    #         self._set_prep_stage1_actions(
-    #             stage1_dir=None,
-    #             manifest_path=None,
-    #         )
-    #         pt.set_workspace_context(stage1_dir=None, model="")
-    #         pt.set_workspace_manifest(None)
-    #         pt.set_workspace_scaling_audit(None)
-    #         return
-    
-    #     # -------------------------------------------------
-    #     # 6) Update status + actions
-    #     # -------------------------------------------------
-    #     self._prep_best_stage1 = best
-    
-    #     tag = "OK" if best.is_complete else "INCOMPLETE"
-    #     match = "MATCH" if best.config_match else "MISMATCH"
-    
-    #     state = (
-    #         f"Stage-1: {tag} / {match} "
-    #         f"(n_train={best.n_train}, n_val={best.n_val})"
-    #     )
-    #     mf_text = f"Manifest: {best.manifest_path}"
-    
-    #     pt.set_stage1_status(
-    #         state_text=state,
-    #         manifest_text=mf_text,
-    #     )
-    
-    #     self._set_prep_stage1_actions(
-    #         stage1_dir=str(best.run_dir),
-    #         manifest_path=str(best.manifest_path),
-    #     )
-    
-    #     # -------------------------------------------------
-    #     # 7) Workspace payloads
-    #     # -------------------------------------------------
-    #     pt.set_workspace_context(
-    #         stage1_dir=str(best.run_dir),
-    #         model=str(best.model or model_name),
-    #     )
-    
-    #     manifest = load_json(best.manifest_path, default=None)
-    
-    #     audit = None
-    #     if bundle is not None and bundle.audit_path is not None:
-    #         audit = load_json(bundle.audit_path, default=None)
-    #     else:
-    #         ap = best.run_dir / "stage1_scaling_audit.json"
-    #         if ap.is_file():
-    #             audit = load_json(ap, default=None)
-    
-    #     pt.set_workspace_manifest(manifest)
-    #     pt.set_workspace_scaling_audit(audit)
 
 
     @pyqtSlot()
@@ -2276,14 +1800,6 @@ class GeoPriorForecaster(QMainWindow):
                 self.log_updated.emit(
                     f"[WARN] DataTab refresh failed: {exc}"
                 )
-    
-        # PreprocessTab refresh
-        try:
-            self._refresh_preprocess_status()
-        except Exception as exc:
-            self.log_updated.emit(
-                f"[WARN] Preprocess refresh failed: {exc}"
-            )
     
         # Results tab (best-effort)
         rt = getattr(self, "results_tab", None)
@@ -2353,7 +1869,6 @@ class GeoPriorForecaster(QMainWindow):
                 "Open failed",
                 f"Could not open:\n{p}\n\n{exc}",
             )
-
 
     def _sync_data_tab(self) -> None:
         if not hasattr(self, "data_tab"):
@@ -3448,97 +2963,6 @@ class GeoPriorForecaster(QMainWindow):
     # --------------------------------------------------------------
     # Tuning 
     # --------------------------------------------------------------
-
-    @pyqtSlot()
-    def _on_tune_options_clicked(self) -> None:
-        """
-        Open the Advanced options dialog for tuning.
-    
-        Behaviour
-        ---------
-        - If Stage-1 / training / tuning threads are running, block.
-        - Otherwise, open :class:`TuneOptionsDialog`.
-        - If user picks a city and clicks 'Run', queue the corresponding
-          tuning job and delegate to :meth:`_on_tune_clicked`.
-        """
-        # Do not allow changing options while long-running jobs are active
-        if self.stage1_thread and self.stage1_thread.isRunning():
-            QMessageBox.warning(
-                self,
-                "Stage-1 running",
-                "Please wait for Stage-1 to finish before "
-                "changing tuning options.",
-            )
-            return
-    
-        if self.train_thread and self.train_thread.isRunning():
-            QMessageBox.warning(
-                self,
-                "Training running",
-                "Please wait for training to finish before "
-                "changing tuning options.",
-            )
-            return
-    
-        if self.tuning_thread and self.tuning_thread.isRunning():
-            QMessageBox.warning(
-                self,
-                "Tuning running",
-                "Hyperparameter search is already running.",
-            )
-            return
-    
-        # Open the advanced tune options dialog
-        ok, new_root, job, dev_overrides = TuneOptionsDialog.run(
-            cfg=self.geo_cfg,
-            gui_runs_root=self.gui_runs_root,
-            parent=self,
-        )
-    
-        # Keep legacy attribute + workflow env in sync
-        self._device_cfg_overrides = dev_overrides or {}
-        if hasattr(self, "_wf_env"):
-            self._wf_env.device_overrides = self._device_cfg_overrides
-    
-        if not ok:
-            return
-    
-        # Update GUI-level runs root used by all GUI runs
-        self.gui_runs_root = new_root
-        self.results_root = new_root  # keep in sync
-        if hasattr(self, "_wf_env"):
-            self._wf_env.gui_runs_root = Path(self.gui_runs_root)
-    
-        # keep Transferability tab in sync with the new root
-        if hasattr(self, "xfer_results_root"):
-            self.xfer_results_root.setText(str(self.gui_runs_root))
-            try:
-                self._discover_last_xfer_for_root()
-            except Exception as exc:  # defensive
-                self.log_updated.emit(
-                    f"[WARN] Could not refresh transfer results "
-                    f"for new root: {exc}"
-                )
-    
-        # Keep GeoPriorConfig in sync if it exposes such a field
-        if hasattr(self.geo_cfg, "results_root"):
-            self.geo_cfg.results_root = new_root
-    
-        if job is not None:
-            # Make the GUI city match the chosen Stage-1 summary
-            self.city_edit.setText(job.stage1.city)
-    
-            # Mirror into config if the fields exist
-            if hasattr(self.geo_cfg, "CITY_NAME"):
-                self.geo_cfg.CITY_NAME = job.stage1.city
-            if hasattr(self.geo_cfg, "city_label"):
-                self.geo_cfg.city_label = job.stage1.city
-    
-            # Cache the job so `_on_tune_clicked` can reuse it
-            self._queued_tune_job = job
-            # Now delegate to the main tuning entry point
-            self._on_tune_clicked()
-
     @pyqtSlot()
     def _on_tune_clicked(self) -> None:
         """
@@ -4072,40 +3496,36 @@ class GeoPriorForecaster(QMainWindow):
     # --------------------------------------------------------------
     # Transferability
     # --------------------------------------------------------------
+    def _build_xfer_state(self) -> TransferGuiState:
+        raw = self.xfer_tab.get_state()
     
-    @pyqtSlot()
-    def _on_xfer_advanced(self) -> None:
-        dlg = XferAdvancedDialog(
-            parent=self,
-            quantiles=self._xfer_quantiles_override,
-            write_json=self._xfer_write_json,
-            write_csv=self._xfer_write_csv,
+        return TransferGuiState(
+            city_a=str(raw.get("city_a", "")).strip(),
+            city_b=str(raw.get("city_b", "")).strip(),
+            results_root=raw.get("results_root") or None,
+            splits=list(raw.get("splits") or []),
+            calib_modes=list(raw.get("calib_modes") or []),
+            rescale_to_source=bool(
+                raw.get("rescale_to_source", False)
+            ),
+            batch_size=int(raw.get("batch_size", 32)),
+            quantiles_override=raw.get(
+                "quantiles_override",
+                None,
+            ),
+            write_json=bool(raw.get("write_json", True)),
+            write_csv=bool(raw.get("write_csv", True)),
         )
-        if dlg.exec_() != QDialog.Accepted:
-            return
-
-        self._xfer_quantiles_override = dlg.get_quantiles()
-        self._xfer_write_json = dlg.write_json()
-        self._xfer_write_csv = dlg.write_csv()
-
-        self.log_updated.emit(
-            "Transferability advanced options updated."
-        )
-
+        
+    
     @pyqtSlot()
     def _on_xfer_clicked(self) -> None:
         """
-        Run cross-city transfer matrix using XferMatrixThread.
+        Run cross-city transfer matrix.
     
-        The actual planning / validation is delegated to
-        `TransferController`. This slot only:
-    
-        - protects against concurrent runs;
-        - builds `TransferGuiState` from widgets;
-        - chooses dry-run vs real-run;
-        - provides a callback that knows how to start XferMatrixThread.
+        UI values are collected from XferTab (store-backed).
+        Planning/validation is still delegated to the controller.
         """
-        # Prevent concurrent transfer runs
         if self.xfer_thread is not None:
             QMessageBox.information(
                 self,
@@ -4117,68 +3537,22 @@ class GeoPriorForecaster(QMainWindow):
         if hasattr(self, "log_mgr"):
             self.log_mgr.clear()
     
-        # ------------------------------------------------------------------
-        # 1) Build GUI state snapshot for the controller
-        # ------------------------------------------------------------------
-        city_a = self.xfer_city_a.text().strip()
-        city_b = self.xfer_city_b.text().strip()
+        state = self._build_xfer_state()
     
-        # For results_root, we keep previous behaviour:
-        #   - prefer text from xfer_results_root if present;
-        #   - otherwise fall back to gui_runs_root inside the controller.
-        results_root_txt = self.xfer_results_root.text().strip() or None
-    
-        splits: list[str] = []
-        if self.chk_xfer_split_train.isChecked():
-            splits.append("train")
-        if self.chk_xfer_split_val.isChecked():
-            splits.append("val")
-        if self.chk_xfer_split_test.isChecked():
-            splits.append("test")
-    
-        calib_modes: list[str] = []
-        if self.chk_xfer_cal_none.isChecked():
-            calib_modes.append("none")
-        if self.chk_xfer_cal_source.isChecked():
-            calib_modes.append("source")
-        if self.chk_xfer_cal_target.isChecked():
-            calib_modes.append("target")
-    
-        state = TransferGuiState(
-            city_a=city_a,
-            city_b=city_b,
-            results_root=results_root_txt,
-            splits=splits,
-            calib_modes=calib_modes,
-            rescale_to_source=self.chk_xfer_rescale.isChecked(),
-            batch_size=int(self.sp_xfer_batch.value()),
-            quantiles_override=self._xfer_quantiles_override,
-            write_json=self._xfer_write_json,
-            write_csv=self._xfer_write_csv,
-        )
-    
-        # ------------------------------------------------------------------
-        # 2) Dry-run short-circuit
-        # ------------------------------------------------------------------
         if self._is_dry_mode():
             self.transfer_controller.dry_preview(state)
             return
     
-        # ------------------------------------------------------------------
-        # 3) Real run: let the controller validate and then start the thread
-        # ------------------------------------------------------------------
-        def _start_xfer_from_plan(plan: TransferPlan) -> None:
-            """
-            Callback invoked by TransferController once validation succeeds.
-    
-            Responsible for:
-            - starting the run timer;
-            - creating XferMatrixThread;
-            - wiring Qt signals / buttons;
-            - starting the thread and updating global state.
-            """
+        # 3) real run callback
+        def _start_xfer_from_plan(
+            plan: TransferPlan,
+        ) -> None:
             self._start_run_timer()
     
+            # v3.2 extras live in the store and are already
+            # persisted by XferTab, so the thread can read
+            # them if it forwards store into run_xfer_matrix.
+            
             th = XferMatrixThread(
                 city_a=plan.city_a,
                 city_b=plan.city_b,
@@ -4196,12 +3570,16 @@ class GeoPriorForecaster(QMainWindow):
             self.xfer_thread = th
     
             th.log_updated.connect(self.log_updated.emit)
-            th.status_updated.connect(self.status_updated.emit)
-            th.progress_changed.connect(self._on_thread_progress)
+            th.status_updated.connect(
+                self.status_updated.emit
+            )
+            th.progress_changed.connect(
+                self._on_thread_progress
+            )
             th.error_occurred.connect(self._on_worker_error)
             th.xfer_finished.connect(self._on_xfer_finished)
     
-            self.btn_run_xfer.setEnabled(False)
+            self.xfer_tab.set_run_enabled(False)
     
             self._active_job_kind = "xfer"
             self._update_global_running_state()
@@ -4209,21 +3587,24 @@ class GeoPriorForecaster(QMainWindow):
             th.start()
             self._update_global_running_state()
     
-        # Delegate real planning to the controller
-        self.transfer_controller.start_real_run(state, _start_xfer_from_plan)
-
-        
+        self.transfer_controller.start_real_run(
+            state,
+            _start_xfer_from_plan,
+        )
+    
+    
     @pyqtSlot(dict)
-    def _on_xfer_finished(self, result: Dict[str, Any]) -> None:
-        """
-        Handle completion of XferMatrixThread.
-        """
+    def _on_xfer_finished(
+        self,
+        result: Dict[str, Any],
+    ) -> None:
         self.xfer_thread = None
-        self.btn_run_xfer.setEnabled(True)
-
+        self.xfer_tab.set_run_enabled(True)
+    
         if not result:
             self.log_updated.emit(
-                "Transfer matrix finished with an empty result dict."
+                "Transfer matrix finished with an empty "
+                "result dict."
             )
             self.status_updated.emit(
                 "Transferability failed. See log."
@@ -4231,20 +3612,20 @@ class GeoPriorForecaster(QMainWindow):
             self._update_progress(0.0)
             self._stop_run_timer()
             return
-
+    
         out_dir = result.get("out_dir")
         json_path = result.get("json_path")
         csv_path = result.get("csv_path")
-
-        # remember result for the view thread
+    
         self._xfer_last_result = result
+    
         if out_dir:
             self.log_updated.emit(
                 "Transferability artifacts in:\n"
                 f"  {out_dir}"
             )
-            self.lbl_xfer_last_out.setText(out_dir)
-
+            self.xfer_tab.set_last_output(out_dir)
+    
         if json_path:
             self.log_updated.emit(
                 "Transfer results JSON:\n"
@@ -4255,41 +3636,41 @@ class GeoPriorForecaster(QMainWindow):
                 "Transfer results CSV:\n"
                 f"  {csv_path}"
             )
-
-
+    
         self.log_updated.emit(
             "Transfer matrix completed successfully."
         )
-        
-        # show pretty summary box for the chosen split (default 'val')
+    
+        # Show summary dialog (local import keeps app.py clean)
+        view_split = "val"
         try:
             view_split = (
-                self.cmb_xfer_view_split.currentData() or "val"
+                self.xfer_tab.get_state()
+                .get("view_split", "val")
             )
         except Exception:
             view_split = "val"
-
-        XferResultsDialog.show_for_xfer_result(
-            parent=self,
-            result=result,
-            split=view_split,
-            title="Cross-city transfer summary",
-        )
-
-        # Let _update_xfer_view_state decide visibility
-        self._update_xfer_view_state()
-        
-        # Save GUI log in xfer out_dir
+    
+        if XferResultsDialog is not None:
+            XferResultsDialog.show_for_xfer_result(
+                parent=self,
+                result=result,
+                split=view_split,
+                title="Cross-city transfer summary",
+            )
+    
         self._save_gui_log_for_result(result)
-
-        self.status_updated.emit("Idle – transferability complete.")
+    
+        self.status_updated.emit(
+            "Idle – transferability complete."
+        )
         self._update_progress(1.0)
-        
+    
         self._active_job_kind = None
         self._update_global_running_state()
         self._stop_run_timer()
-
-
+    
+    
     @pyqtSlot()
     def _on_xfer_view_clicked(self) -> None:
         if self.xfer_view_thread is not None:
@@ -4304,40 +3685,50 @@ class GeoPriorForecaster(QMainWindow):
             QMessageBox.warning(
                 self,
                 "No results",
-                "No transfer results found. Run the transfer matrix first.",
+                "No transfer results found. "
+                "Run the transfer matrix first.",
             )
             return
     
-        view_kind = self.cmb_xfer_view.currentData() or "calib_panel"
-        view_split = self.cmb_xfer_view_split.currentData() or "val"
-        results_root = (
-            self.xfer_results_root.text().strip()
-            or str(self.gui_runs_root)
+        raw = self.xfer_tab.get_state()
+    
+        view_kind = str(
+            raw.get("view_kind", "calib_panel")
         )
+        view_split = str(
+            raw.get("view_split", "val")
+        )
+    
+        results_root = raw.get("results_root")
+        if not results_root:
+            results_root = str(self.gui_runs_root)
     
         r = self._xfer_last_result or {}
         out_dir = r.get("out_dir")
         csv_path = r.get("csv_path")
         json_path = r.get("json_path")
-        
+    
         if not (csv_path or json_path or out_dir):
             QMessageBox.warning(
                 self,
                 "No artifacts",
-                "Could not find xfer_results.* in the last output folder.",
+                "Could not find xfer_results.* in "
+                "the last output folder.",
             )
             return
-
+    
         self.log_updated.emit(
             f"Build transferability view ({view_kind}) "
-            f"from {csv_path or json_path or 'latest under results root'}."
+            f"from {csv_path or json_path or 'latest'}."
         )
-        self.status_updated.emit("Rendering transferability view…")
+        self.status_updated.emit(
+            "Rendering transferability view…"
+        )
         self._update_progress(0.0)
     
         th = XferViewThread(
             view_kind=view_kind,
-            results_root=results_root,
+            results_root=str(results_root),
             xfer_out_dir=out_dir,
             xfer_csv=csv_path,
             xfer_json=json_path,
@@ -4352,39 +3743,54 @@ class GeoPriorForecaster(QMainWindow):
         self.xfer_view_thread = th
     
         th.log_updated.connect(self.log_updated.emit)
-        th.status_updated.connect(self.status_updated.emit)
+        th.status_updated.connect(
+            self.status_updated.emit
+        )
         th.progress_changed.connect(self._on_thread_progress)
         th.error_occurred.connect(self._on_worker_error)
-        th.xfer_view_finished.connect(self._on_xfer_view_finished)
+        th.xfer_view_finished.connect(
+            self._on_xfer_view_finished
+        )
     
-        self.btn_xfer_view.setEnabled(False)
+        self.xfer_tab.set_view_enabled(False)
         th.start()
-        
+    
+    
     @pyqtSlot(dict)
-    def _on_xfer_view_finished(self, result: Dict[str, Any]) -> None:
+    def _on_xfer_view_finished(
+        self,
+        result: Dict[str, Any],
+    ) -> None:
         self.xfer_view_thread = None
-        self.btn_xfer_view.setEnabled(True)
+        self.xfer_tab.set_view_enabled(True)
     
         if not result:
             self.log_updated.emit(
-                "Transferability view finished with an empty result dict."
+                "Transferability view finished with an "
+                "empty result dict."
             )
             self.status_updated.emit("View failed. See log.")
             self._update_progress(0.0)
             return
-        
+    
         err = result.get("error")
         if err:
             self.log(f"[Xfer view] Error: {err}")
             return
-        
+    
         png = result.get("png_path")
         if png:
             self.log_updated.emit(
                 "Transferability figure saved:\n"
                 f"  {png}"
             )
-        for key in ("svg_path", "pdf_path", "table_csv", "table_tex"):
+    
+        for key in (
+            "svg_path",
+            "pdf_path",
+            "table_csv",
+            "table_tex",
+        ):
             p = result.get(key)
             if p:
                 self.log_updated.emit(f"{key}: {p}")
@@ -4392,29 +3798,34 @@ class GeoPriorForecaster(QMainWindow):
         view_kind = result.get("view_kind", "view")
         split = result.get("split")
         calib = result.get("calibration")
+    
         bits = [view_kind]
         if split:
             bits.append(f"split={split}")
         if calib:
             bits.append(f"calib={calib}")
-        self.log_updated.emit("View summary: " + ", ".join(bits))
-        
+    
+        self.log_updated.emit(
+            "View summary: " + ", ".join(bits)
+        )
+    
         src = result.get("source_city")
         tgt = result.get("target_city")
-        
+    
         self.log(
             "[Xfer view] Transferability figure saved:\n"
             f"  kind   : {view_kind}\n"
             f"  source : {src}\n"
             f"  target : {tgt}\n"
             f"  file   : {png}"
-         )
-
-        self.status_updated.emit("Idle – transferability view ready.")
-        # auto-preview in GUI (reuses ImagePreviewDialog machinery)
+        )
+    
+        self.status_updated.emit(
+            "Idle – transferability view ready."
+        )
         _notify_gui_xfer_view(result)
-        
         self._update_progress(1.0)
+
 
     # ------------------------------------------------------------------
     # Thread orchestration
@@ -4796,8 +4207,8 @@ class GeoPriorForecaster(QMainWindow):
             self.btn_run_infer.setEnabled(True)
         if hasattr(self, "btn_run_xfer"):
             self.btn_run_xfer.setEnabled(True)
-        if hasattr(self, "btn_xfer_view"):
-            self.btn_xfer_view.setEnabled(True)
+
+        self.xfer_tab.set_has_result(True)
 
         self.stage1_thread = None
         self.train_thread = None
@@ -4812,6 +4223,7 @@ class GeoPriorForecaster(QMainWindow):
         self._update_progress(0.0)
         self.progress_label.setText("")
         self._stop_run_timer()
+        
 
     # ------------------------------------------------------------------
     # Window close handling
@@ -4844,16 +4256,10 @@ class GeoPriorForecaster(QMainWindow):
                 return
     
         # Persist window geometry (best-effort).
-        try:
-            from ..ux_utils import save_window_geometry
-    
-            save_window_geometry(
-                self,
-                settings_key="main_window",
-            )
-        except Exception:
-            pass
-    
+        save_window_geometry(
+            self,
+            settings_key="main_window",
+        )
         super().closeEvent(event)
     
 

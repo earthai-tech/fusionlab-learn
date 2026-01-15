@@ -27,7 +27,9 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QSplitter,
     QMenu, 
-    QCheckBox
+    QCheckBox, 
+    QToolButton,
+    QStyle,
 )
 from ..dialogs.csv_dialog import _PandasModel
 from ..services.column_mapping import ColumnRoleMapper
@@ -82,6 +84,10 @@ class DataTab(QWidget):
     # Emits a feature_overrides patch (dict) for GeoPriorConfig:
     # {"TIME_COL": "...", "LON_COL": "...", ...}
     column_overrides_changed = pyqtSignal(dict)
+    
+    request_browse_results_root = pyqtSignal()
+    request_open_results_root = pyqtSignal()
+
 
 
     def __init__(self, parent=None):
@@ -101,8 +107,7 @@ class DataTab(QWidget):
         self._viz_split: Optional[QSplitter] = None
         self._viz_pane: Optional[SelectionInsightsPane] = None
         self._sel_viz: Optional[SelectionVizController] = None
-
-
+        self._results_root: Optional[Path] = None
 
         root = QHBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -509,11 +514,70 @@ class DataTab(QWidget):
 
         outer.addLayout(top)
 
-        preview_row = QHBoxLayout()
+        # -------------------------------------------------
+        # Context bar: Results root + Filter + Rows (single row)
+        # -------------------------------------------------
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+
+        def _mini_btn(std_icon: QStyle.StandardPixmap, tip: str) -> QToolButton:
+            b = QToolButton()
+            b.setObjectName("miniAction")  # <-- uses your styles.py miniAction rules
+            b.setIcon(self.style().standardIcon(std_icon))
+            b.setToolTip(tip)
+            b.setAutoRaise(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedSize(28, 28)
+            return b
+
+        # Results root (global context)
+        self.btn_results_root = _mini_btn(
+            QStyle.SP_DialogOpenButton,
+            "Change results root…"
+        )
+        self.btn_results_root.clicked.connect(
+            self.request_browse_results_root.emit
+        )
+
+        self.edt_results_root = QLineEdit()
+        self.edt_results_root.setReadOnly(True)
+        self.edt_results_root.setObjectName("resultsRootEdit")
+        self.edt_results_root.setPlaceholderText("Results root…")
+
+        self.btn_open_results_root = _mini_btn(
+            QStyle.SP_DirOpenIcon,
+            "Open results root"
+        )
+        self.btn_open_results_root.setEnabled(False)
+        self.btn_open_results_root.clicked.connect(
+            self.request_open_results_root.emit
+        )
+
+        # Filter columns (local control)
+        self.btn_filter_icon = _mini_btn(
+            QStyle.SP_FileDialogContentsView,   # neutral icon; acts as "filter/search"
+            "Filter columns"
+        )
+
         self.edt_col_filter = QLineEdit()
         self.edt_col_filter.setPlaceholderText("Filter columns…")
         self.edt_col_filter.textChanged.connect(self._refresh_preview)
 
+        self.btn_filter_clear = _mini_btn(
+            QStyle.SP_DialogResetButton,
+            "Clear filter"
+        )
+        self.btn_filter_clear.clicked.connect(
+            lambda: self.edt_col_filter.setText("")
+        )
+
+        def _focus_filter() -> None:
+            self.edt_col_filter.setFocus()
+            self.edt_col_filter.selectAll()
+
+        self.btn_filter_icon.clicked.connect(_focus_filter)
+
+        # Rows (local control)
         self.spin_preview = QSpinBox()
         self.spin_preview.setMinimum(50)
         self.spin_preview.setMaximum(50_000)
@@ -521,11 +585,23 @@ class DataTab(QWidget):
         self.spin_preview.setValue(500)
         self.spin_preview.valueChanged.connect(self._refresh_preview)
 
-        preview_row.addWidget(self.edt_col_filter, 1)
-        preview_row.addWidget(QLabel("Rows:"), 0)
-        preview_row.addWidget(self.spin_preview, 0)
+        # Layout: [Root icon][Root field][Open]  |  [Filter icon][Filter][Clear]  Rows:[spin]
+        bar.addWidget(self.btn_results_root, 0)
+        bar.addWidget(self.edt_results_root, 2)
+        bar.addWidget(self.btn_open_results_root, 0)
 
-        outer.addLayout(preview_row)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        bar.addWidget(sep, 0)
+
+        bar.addWidget(self.btn_filter_icon, 0)
+        bar.addWidget(self.edt_col_filter, 3)
+        bar.addWidget(self.btn_filter_clear, 0)
+        bar.addWidget(QLabel("Rows:"), 0)
+        bar.addWidget(self.spin_preview, 0)
+
+        outer.addLayout(bar)
 
         self._viz_split = QSplitter(Qt.Vertical, page)
         
@@ -724,3 +800,25 @@ class DataTab(QWidget):
             self._viz_split.setSizes([650, 250])
         else:
             self._viz_split.setSizes([9999, 0])
+            
+    def set_results_root(self, root: Optional[str | Path]) -> None:
+        self._results_root = Path(root) if root else None
+
+        # UI exists only after _build_loaded_page()
+        if not hasattr(self, "edt_results_root"):
+            return
+
+        txt = str(self._results_root) if self._results_root else ""
+        self.edt_results_root.setText(txt)
+        self.edt_results_root.setToolTip(
+            txt
+            or "Results root: base folder for all runs/outputs "
+               "(Stage-1/Train/Tune/Infer/Xfer)."
+        )
+
+        has = bool(txt)
+        self.btn_open_results_root.setEnabled(has)
+
+        # show end of path (more useful than start)
+        if has:
+            self.edt_results_root.setCursorPosition(len(txt))

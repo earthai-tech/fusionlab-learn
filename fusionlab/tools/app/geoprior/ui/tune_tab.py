@@ -16,31 +16,43 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, Optional
 
-from PyQt5.QtCore import QSignalBlocker, pyqtSignal
+from PyQt5.QtCore import ( 
+    QSignalBlocker, 
+    pyqtSignal, 
+    Qt, 
+    QSize
+)
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QCheckBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
+    QToolButton,
+    QStyle
 )
 
 from ..config.prior_schema import FieldKey
 from ..config.store import GeoConfigStore
 from ..config.geoprior_config import default_tuner_search_space
 from ..dialogs.hp_arch_dialog import ArchHPDialog
-from ..dialogs.hp_phys_dialog import PhysHPDialog
+from ..dialogs.hp_phys_dialog import PhysHPDialog, PhysSwitchesDetailsDialog
 from ..dialogs.hp_search_dialog import SearchAlgoDialog
 from ..dialogs.hp_export_dialog import ExportDialog
 from ..dialogs.export_actions import export_with_saved_prefs
 from ..dialogs.scalars_loss_dialog import ScalarsLossDialog
 from ..dialogs.model_params_dialog import ModelParamsDialog
+from ..dialogs.tune_options import TuneOptionsDialog
 
 MakeCardFn = Callable[[str], tuple[QWidget, QVBoxLayout]]
 MakeRunBtnFn = Callable[[str], QPushButton]
@@ -187,6 +199,8 @@ class TuneTab(QWidget):
                 self.spin_max_trials.setValue(max_trials)
 
             self._refresh_overview(space)
+            self._refresh_compute_ui()
+
 
         finally:
             self._writing = False
@@ -251,7 +265,11 @@ class TuneTab(QWidget):
         if dr is not None:
             space["dropout_rate"] = dr
 
-        hd = self._read_range_spec(self.hp_hd)
+        # hd = self._read_range_spec(self.hp_hd)
+        base = self._get_space()
+        hd = self._read_range_spec(
+            self.hp_hd, base_spec=base.get("hd_factor")
+        )
         if hd is not None:
             space["hd_factor"] = hd
 
@@ -426,19 +444,22 @@ class TuneTab(QWidget):
             QSizePolicy.Expanding,
             QSizePolicy.Preferred,
         )
-    
+        
+        # -----------------------------
+        # Fields
+        # -----------------------------
         self.hp_pde_mode = QLineEdit()
         self.hp_kappa_mode = QLineEdit()
         _field(self.hp_pde_mode)
         _field(self.hp_kappa_mode)
-    
+        
         self.hp_pde_mode.setPlaceholderText("both, gw, cons")
         self.hp_kappa_mode.setPlaceholderText("bar, kb")
-    
+        
         self.hp_scale_pde_bool = QCheckBox(
             "Tune 'scale PDE residuals' as boolean HP"
         )
-    
+        
         self.hp_hd = self._range_editor_cls(
             min_allowed=0.0,
             max_allowed=2.0,
@@ -450,31 +471,77 @@ class TuneTab(QWidget):
             0.70,
             sampling=None,
         )
-    
+        self.hp_hd.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        
+        # -----------------------------
+        # Mini details action (gear)
+        # -----------------------------
+        self.btn_hd_details = QToolButton()
+        self.btn_hd_details.setObjectName("miniAction")
+        self.btn_hd_details.setAutoRaise(True)
+        self.btn_hd_details.setCursor(Qt.PointingHandCursor)
+        self.btn_hd_details.setFocusPolicy(Qt.NoFocus)
+        self.btn_hd_details.setToolTip(
+            "Advanced HD factor + scale PDE residuals\n"
+            "• step / sampling / list\n"
+            "• fixed True/False for scale PDE"
+        )
+        
+        ico = QIcon.fromTheme("settings")
+        if ico.isNull():
+            ico = self.style().standardIcon(
+                QStyle.SP_FileDialogDetailedView
+            )
+        
+        self.btn_hd_details.setIcon(ico)
+        self.btn_hd_details.setIconSize(QSize(16, 16))
+        self.btn_hd_details.setFixedSize(30, 26)
+        
+        # -----------------------------
+        # Layout (3 columns:
+        # 0=label, 1=field, 2=icon)
+        # -----------------------------
         grid_p = QGridLayout()
+        grid_p.setContentsMargins(0, 0, 0, 0)
+        grid_p.setHorizontalSpacing(10)
+        grid_p.setVerticalSpacing(8)
+        
+        grid_p.setColumnStretch(0, 0)
+        grid_p.setColumnStretch(1, 1)
+        grid_p.setColumnStretch(2, 0)
+        
         p = 0
-    
+        
         grid_p.addWidget(QLabel("PDE modes:"), p, 0)
-        grid_p.addWidget(self.hp_pde_mode, p, 1)
+        grid_p.addWidget(self.hp_pde_mode, p, 1, 1, 2)
         p += 1
-    
+        
         grid_p.addWidget(QLabel("k mode (bar/kb):"), p, 0)
-        grid_p.addWidget(self.hp_kappa_mode, p, 1)
+        grid_p.addWidget(self.hp_kappa_mode, p, 1, 1, 2)
         p += 1
-    
-        grid_p.addWidget(self.hp_scale_pde_bool, p, 0, 1, 2)
+        
+        grid_p.addWidget(self.hp_scale_pde_bool, p, 0, 1, 3)
         p += 1
-    
+        
         grid_p.addWidget(QLabel("HD factor:"), p, 0)
         grid_p.addWidget(self.hp_hd, p, 1)
+        grid_p.addWidget(
+            self.btn_hd_details,
+            p,
+            2,
+            alignment=Qt.AlignRight,
+        )
         p += 1
-    
+        
         self.btn_more_phys_hp = QPushButton("More physics HP...")
-        grid_p.addWidget(self.btn_more_phys_hp, p, 0, 1, 2)
-
+        grid_p.addWidget(self.btn_more_phys_hp, p, 0, 1, 3)
+        
         phys_box.addLayout(grid_p)
         grid.addWidget(phys_card, 0, 1)
-    
+
         # =================================================
         # (1,0) + (2,0) Tuning overview (spans 2 rows)
         # =================================================
@@ -510,14 +577,32 @@ class TuneTab(QWidget):
     
         ov_box.addLayout(top_ov)
     
-        self.txt_space_preview = QPlainTextEdit()
-        self.txt_space_preview.setReadOnly(True)
-        self.txt_space_preview.setMinimumHeight(110)
-        self.txt_space_preview.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding,
+        # Optional: quick filter (very “modern” UX)
+        self.ed_overview_filter = QLineEdit()
+        self.ed_overview_filter.setPlaceholderText("Filter hyperparameters…")
+        ov_box.addWidget(self.ed_overview_filter)
+        
+        # Main overview widget: grouped, scrollable, professional
+        self.tree_space_preview = QTreeWidget()
+        self.tree_space_preview.setColumnCount(2)
+        self.tree_space_preview.setHeaderLabels(["Hyperparameter", "Search space"])
+        self.tree_space_preview.setRootIsDecorated(True)
+        self.tree_space_preview.setAlternatingRowColors(True)
+        self.tree_space_preview.setUniformRowHeights(True)
+        self.tree_space_preview.setSelectionMode(
+            QAbstractItemView.SingleSelection
         )
-        ov_box.addWidget(self.txt_space_preview, 1)
+        self.tree_space_preview.setSelectionBehavior(
+            QAbstractItemView.SelectRows
+        )
+        
+        hdr = self.tree_space_preview.header()
+        hdr.setStretchLastSection(True)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        
+        ov_box.addWidget(self.tree_space_preview, 1)
+
     
         # Span overview across rows 1 and 2 on left column
         grid.addWidget(ov_card, 1, 0, 2, 1)
@@ -526,25 +611,33 @@ class TuneTab(QWidget):
         # (1,1) Tuning controls (6 items) card
         # =================================================
         ctrl_card, ctrl_box = self._make_card("Tuning controls")
-        ctrl_card.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Preferred,
-        )
-    
-        # Buttons / controls (wired in _wire_ui)
-        self.btn_tune_options = QPushButton("Advanced options...")
-        self.btn_model_params = QPushButton("Model params...")
-        self.btn_scalars = QPushButton("Scalars & losses...")
-    
+        ctrl_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        ctrl_box.setSpacing(10)
+        
+        # --- Action buttons (top row) ---
         self.btn_search_algo = QPushButton("Search algo...")
-
+        self.btn_model_params = QPushButton("Model params...")
+        self.btn_scalars = QPushButton("Scalars && losses...")
+        
+        btn_grid = QGridLayout()
+        btn_grid.setHorizontalSpacing(10)
+        btn_grid.setVerticalSpacing(10)
+        btn_grid.addWidget(self.btn_search_algo, 0, 0)
+        btn_grid.addWidget(self.btn_model_params, 0, 1)
+        btn_grid.addWidget(self.btn_scalars, 0, 2)
+        btn_grid.setColumnStretch(0, 1)
+        btn_grid.setColumnStretch(1, 1)
+        btn_grid.setColumnStretch(2, 1)
+        ctrl_box.addLayout(btn_grid)
+        
+        # --- Run options row ---
         self.chk_eval_tuned = QCheckBox("Evaluate tuned model")
         self.chk_eval_tuned.setChecked(False)
-    
+        
         self.spin_max_trials = QSpinBox()
         self.spin_max_trials.setRange(1, 999)
         self.spin_max_trials.setValue(20)
-    
+        
         max_trials_w = QWidget()
         max_trials_l = QHBoxLayout(max_trials_w)
         max_trials_l.setContentsMargins(0, 0, 0, 0)
@@ -552,31 +645,69 @@ class TuneTab(QWidget):
         max_trials_l.addWidget(QLabel("Max trials:"))
         max_trials_l.addWidget(self.spin_max_trials)
         max_trials_l.addStretch(1)
-    
-        ctrl_grid = QGridLayout()
-        ctrl_grid.setHorizontalSpacing(10)
-        ctrl_grid.setVerticalSpacing(10)
-    
-        # Row 0 (3 buttons)
-        ctrl_grid.addWidget(self.btn_tune_options, 0, 0)
-        ctrl_grid.addWidget(self.btn_model_params, 0, 1)
-        ctrl_grid.addWidget(self.btn_scalars, 0, 2)
-    
-        # Row 1 (search + evaluate + max trials)
-        ctrl_grid.addWidget(self.btn_search_algo, 1, 0)
-        ctrl_grid.addWidget(self.chk_eval_tuned, 1, 1)
-        ctrl_grid.addWidget(max_trials_w, 1, 2)
-    
-        # Make columns behave nicely
-        ctrl_grid.setColumnStretch(0, 1)
-        ctrl_grid.setColumnStretch(1, 1)
-        ctrl_grid.setColumnStretch(2, 1)
-    
-        ctrl_box.addLayout(ctrl_grid)
+        
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(12)
+        
+        opts_row.addWidget(self.chk_eval_tuned)
+        opts_row.addStretch(1)
+        opts_row.addWidget(max_trials_w)   # centered-ish
+        opts_row.addStretch(1)
+        
+        ctrl_box.addLayout(opts_row)
+
+        # --- Compute / hardware section ---
+        self.chk_use_cpu = QCheckBox("CPU")
+        self.chk_use_gpu = QCheckBox("GPU")
+        self.chk_use_cpu.setChecked(True)   # may be adjusted after probing
+        self.chk_use_gpu.setChecked(False)
+        
+        self.lbl_compute_summary = QLabel("Detecting compute devices…")
+        self.lbl_compute_summary.setWordWrap(True)
+        
+        self.spin_gpu_limit_mb = QSpinBox()
+        self.spin_gpu_limit_mb.setRange(0, 1048576)
+        self.spin_gpu_limit_mb.setValue(0)       # 0 = Auto / no explicit cap
+        self.spin_gpu_limit_mb.setSuffix(" MB")
+        
+        self.chk_gpu_allow_growth= QCheckBox("GPU memory growth")
+        self.chk_gpu_allow_growth.setChecked(True)
+        
+        compute_w = QWidget()
+        compute_g = QGridLayout(compute_w)
+        compute_g.setContentsMargins(0, 0, 0, 0)
+        compute_g.setHorizontalSpacing(10)
+        compute_g.setVerticalSpacing(8)
+        
+        compute_g.addWidget(QLabel("Compute:"), 0, 0)
+        
+        dev_row = QHBoxLayout()
+        dev_row.setSpacing(10)
+        dev_row.addWidget(self.chk_use_gpu)
+        dev_row.addWidget(self.chk_use_cpu)
+        dev_row.addStretch(1)
+        dev_row_w = QWidget()
+        dev_row_w.setLayout(dev_row)
+        compute_g.addWidget(dev_row_w, 0, 1, 1, 3)
+        
+        compute_g.addWidget(self.lbl_compute_summary, 1, 0, 1, 4)
+        
+        compute_g.addWidget(QLabel("GPU limit:"), 2, 0)
+        compute_g.addWidget(self.spin_gpu_limit_mb, 2, 1)
+        compute_g.addWidget(self.chk_gpu_allow_growth, 2, 2, 1, 2)
+        
+        ctrl_box.addWidget(compute_w, 1)
+        
+        # --- Big bottom “Advanced” button (spans full width) ---
+        self.btn_tune_options = QPushButton("Advanced options…")
+        self.btn_tune_options.setMinimumHeight(34)
+        self.btn_tune_options.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
         ctrl_box.addStretch(1)
-    
+        ctrl_box.addWidget(self.btn_tune_options)
+        
         grid.addWidget(ctrl_card, 1, 1)
-    
+
         # =================================================
         # (2,1) Run button (separate from controls)
         # =================================================
@@ -622,23 +753,37 @@ class TuneTab(QWidget):
         ok = ModelParamsDialog.edit(store=self._store, parent=self)
         if ok:
             self.refresh_from_store()
+            
+    def _on_tune_options(self) -> None:
+        ok, job = TuneOptionsDialog.edit(
+            store=self._store,
+            parent=self,
+        )
+        if ok:
+            self.refresh_from_store()
+    
+        if job is not None:
+            # store already updated -> just trigger run
+            self.run_clicked.emit()
 
     # -----------------------------------------------------------------
     # Wiring
     # -----------------------------------------------------------------
     def _wire_ui(self) -> None:
         self.btn_run_tune.clicked.connect(self.run_clicked.emit)
-        self.btn_tune_options.clicked.connect(
-            self.advanced_clicked.emit
-        )
+    
+        # dialogs
         self.btn_model_params.clicked.connect(self._on_model_params)
         self.btn_scalars.clicked.connect(self._on_scalars_losses)
         self.btn_search_algo.clicked.connect(self._on_search_algo)
-
-
+    
+        # advanced (ONE connection only)
+        self.btn_tune_options.clicked.connect(self._on_tune_options)
+    
         self.btn_reset_space.clicked.connect(self._on_reset)
-
-        # Commit edits -> store
+        self.btn_export_space.clicked.connect(self._on_export_clicked)
+    
+        # Commit edits -> store (HP editors)
         for ed in (
             self.hp_embed_dim,
             self.hp_hidden_units,
@@ -650,22 +795,51 @@ class TuneTab(QWidget):
             self.hp_kappa_mode,
         ):
             ed.editingFinished.connect(self._on_ui_commit)
-
+    
         self.hp_scale_pde_bool.toggled.connect(self._on_ui_commit)
-
         self._connect_range_editor(self.hp_dropout)
         self._connect_range_editor(self.hp_hd)
-
-        self.spin_max_trials.valueChanged.connect(
-            self._on_ui_commit
-        )
+    
+        self.spin_max_trials.valueChanged.connect(self._on_ui_commit)
         self.chk_eval_tuned.toggled.connect(self._on_ui_commit)
+    
         self.btn_more_arch_hp.clicked.connect(self._on_more_arch_hp)
         self.btn_more_phys_hp.clicked.connect(self._on_more_phys_hp)
+    
+        if hasattr(self, "ed_overview_filter"):
+            self.ed_overview_filter.textChanged.connect(self._apply_overview_filter)
+    
+        # Compute bindings (best-effort)
+        self.chk_use_cpu.toggled.connect(self._apply_device_mode_to_store)
+        self.chk_use_gpu.toggled.connect(self._apply_device_mode_to_store)
         
-        self.btn_export_space.clicked.connect(self._on_export_clicked)
+        self.spin_gpu_limit_mb.valueChanged.connect(self._apply_device_mode_to_store)
+        self.chk_gpu_allow_growth.toggled.connect(self._apply_device_mode_to_store)
+        
+        self.btn_hd_details.clicked.connect(self._on_hd_details)
 
+    def _on_hd_details(self) -> None:
+        if PhysSwitchesDetailsDialog.edit(store=self._store, parent=self):
+            self.refresh_from_store()
 
+    def _apply_overview_filter(self, text: str) -> None:
+        text = (text or "").strip().lower()
+        tree = self.tree_space_preview
+    
+        for i in range(tree.topLevelItemCount()):
+            grp = tree.topLevelItem(i)
+            grp_visible = False
+    
+            for j in range(grp.childCount()):
+                ch = grp.child(j)
+                hay = (ch.text(0) + " " + ch.text(1)).lower()
+                vis = (text in hay) if text else True
+                ch.setHidden(not vis)
+                grp_visible = grp_visible or vis
+    
+            grp.setHidden(not grp_visible)
+            if text:
+                grp.setExpanded(True)
 
     def _wire_store(self) -> None:
         def _on_store_changed(*_: Any) -> None:
@@ -792,79 +966,130 @@ class TuneTab(QWidget):
     
         return str(v)
     
+    def _populate_overview_tree(self, space: Dict[str, Any]) -> None:
+        tree = self.tree_space_preview
+        tree.setUpdatesEnabled(False)
+        try:
+            tree.clear()
     
-    def _format_space_pretty(self, space: Dict[str, Any]) -> str:
-        groups = [
-            ("Architecture", [
-                "embed_dim",
-                "hidden_units",
-                "lstm_units",
-                "attention_units",
-                "num_heads",
-                "vsn_units",
-                "dropout_rate",
-                "attention_levels",
-            ]),
-            ("Physics", [
-                "pde_mode",
-                "kappa_mode",
-                "hd_factor",
-                "scale_pde_residuals",
-                "kappa",
-                "mv",
-            ]),
-            ("Optimization", [
-                "learning_rate",
-                "kappa_lr_mult",
-                "mv_lr_mult",
-            ]),
-            ("Loss weights", [
-                "lambda_cons",
-                "lambda_gw",
-                "lambda_prior",
-                "lambda_smooth",
-                "lambda_bounds",
-                "lambda_offset",
-                "lambda_q",
-                "scale_q_with_offset",
-                "scale_mv_with_offset",
-            ]),
-            ("Data / memory", [
-                "max_window_size",
-                "memory_size",
-                "scales",
-            ]),
-        ]
+            groups = [
+                ("Architecture", [
+                    "embed_dim","hidden_units","lstm_units","attention_units",
+                    "num_heads","vsn_units","dropout_rate","attention_levels",
+                ]),
+                ("Physics", [
+                    "pde_mode","kappa_mode","hd_factor","scale_pde_residuals",
+                    "kappa","mv",
+                ]),
+                ("Optimization", [
+                    "learning_rate","kappa_lr_mult","mv_lr_mult",
+                ]),
+                ("Loss weights", [
+                    "lambda_cons","lambda_gw","lambda_prior","lambda_smooth",
+                    "lambda_bounds","lambda_offset","lambda_q",
+                    "scale_q_with_offset","scale_mv_with_offset",
+                ]),
+                ("Data / memory", [
+                    "max_window_size","memory_size","scales",
+                ]),
+            ]
     
-        used = set()
-        lines: list[str] = []
-        idx = 1
+            used = set()
+            idx = 1
     
-        for title, keys in groups:
-            present = [k for k in keys if k in space]
-            if not present:
-                continue
-            lines.append(f"{title}")
-            lines.append("-" * len(title))
-            for k in present:
-                used.add(k)
-                name = self._pretty_name(k)
-                val = self._fmt_value(space.get(k))
-                lines.append(f"[{idx:02d}] {name}: {val}")
-                idx += 1
-            lines.append("")
+            def _make_group(title: str, n: int) -> QTreeWidgetItem:
+                it = QTreeWidgetItem([f"{title}  ({n})", ""])
+                f = it.font(0)
+                f.setBold(True)
+                it.setFont(0, f)
+                it.setFirstColumnSpanned(False)
+                return it
     
-        leftovers = [k for k in sorted(space.keys()) if k not in used]
-        if leftovers:
-            lines.append("Other")
-            lines.append("-----")
-            for k in leftovers:
-                name = self._pretty_name(k)
-                val = self._fmt_value(space.get(k))
-                lines.append(f"[{idx:02d}] {name}: {val}")
-                idx += 1
+            for title, keys in groups:
+                present = [k for k in keys if k in space]
+                if not present:
+                    continue
     
-        return "\n".join(lines).strip()
+                g = _make_group(title, len(present))
+                tree.addTopLevelItem(g)
+    
+                for k in present:
+                    used.add(k)
+                    name = self._pretty_name(k)
+                    disp, tip = self._fmt_value_pretty(space.get(k))  # see next section
+                    row = QTreeWidgetItem([f"[{idx:02d}] {name}", disp])
+                    if tip:
+                        row.setToolTip(1, tip)
+                        row.setToolTip(0, tip)
+                    g.addChild(row)
+                    idx += 1
+    
+                g.setExpanded(True)
+    
+            leftovers = [k for k in sorted(space.keys()) if k not in used]
+            if leftovers:
+                g = _make_group("Other", len(leftovers))
+                tree.addTopLevelItem(g)
+                for k in leftovers:
+                    name = self._pretty_name(k)
+                    disp, tip = self._fmt_value_pretty(space.get(k))
+                    row = QTreeWidgetItem([f"[{idx:02d}] {name}", disp])
+                    if tip:
+                        row.setToolTip(1, tip)
+                    g.addChild(row)
+                    idx += 1
+                g.setExpanded(False)
+    
+        finally:
+            tree.setUpdatesEnabled(True)
+
+    
+    def _fmt_value_pretty(self, v: Any) -> tuple[str, str]:
+        # Tooltip shows “raw” / more detail if needed
+        tip = ""
+    
+        if isinstance(v, list):
+            s = ", ".join(str(x) for x in v)
+            if len(s) > 60:
+                tip = s
+                s = s[:57] + "…"
+            return s, tip
+    
+        if isinstance(v, dict):
+            tip = str(v)
+    
+            t = str(v.get("type", "")).lower()
+            if t in ("float", "int", "range"):
+                vmin = v.get("min_value", v.get("min"))
+                vmax = v.get("max_value", v.get("max"))
+                step = v.get("step")
+                samp = v.get("sampling")
+    
+                # modern-ish: use an en-dash and compact tags
+                s = f"{vmin}–{vmax}"
+                if step is not None:
+                    s += f"  (Δ {step})"
+                if samp:
+                    s += f"  [{samp}]"
+                return s, tip
+    
+            if t == "choice":
+                vals = v.get("values", [])
+                s = ", ".join(str(x) for x in vals)
+                if len(s) > 60:
+                    tip = s
+                    s = s[:57] + "…"
+                return s, tip
+    
+            if t in ("bool", "boolean"):
+                return "True / False", tip
+    
+            return str(v), tip
+    
+        if isinstance(v, bool):
+            return ("True" if v else "False"), ""
+    
+        return str(v), ""
 
     # -----------------------------------------------------------------
     # Overview helpers
@@ -894,10 +1119,7 @@ class TuneTab(QWidget):
         )
         self.lbl_device_hint.setText(f"Device: {dev}")
 
-        txt = self._format_space_pretty(space)
-
-        with QSignalBlocker(self.txt_space_preview):
-            self.txt_space_preview.setPlainText(txt)
+        self._populate_overview_tree(space)
 
     # -----------------------------------------------------------------
     # RangeListEditor best-effort bridges
@@ -927,57 +1149,324 @@ class TuneTab(QWidget):
         dmin: float,
         dmax: float,
     ) -> None:
+        mn, mx, sampling = dmin, dmax, None
         try:
             if isinstance(spec, dict):
-                vmin = float(spec.get("min", dmin))
-                vmax = float(spec.get("max", dmax))
-                sampling = spec.get("sampling", None)
-                editor.set_defaults(vmin, vmax, sampling=sampling)
-                return
+                t = str(spec.get("type", "")).lower()
+                if t in {"float", "range", "int"}:
+                    mn = float(spec.get("min_value", spec.get("min", dmin)))
+                    mx = float(spec.get("max_value", spec.get("max", dmax)))
+                    sampling = spec.get("sampling", None)
         except Exception:
             pass
+            mn, mx , sampling = dmin, dmax, None
+    
         try:
-            editor.set_defaults(dmin, dmax, sampling=None)
+            # main TuneTab editor hides sampling -> keep it None here
+            editor.set_defaults(mn, mx, sampling=None)
         except Exception:
             pass
 
-    def _read_range_spec(self, editor: Any) -> Any:
+
+    # def _apply_range_defaults(
+    #     self,
+    #     *,
+    #     editor: Any,
+    #     spec: Any,
+    #     dmin: float,
+    #     dmax: float,
+    # ) -> None:
+    #     try:
+    #         if isinstance(spec, dict):
+    #             vmin = float(spec.get("min", dmin))
+    #             vmax = float(spec.get("max", dmax))
+    #             sampling = spec.get("sampling", None)
+    #             editor.set_defaults(vmin, vmax, sampling=sampling)
+    #             return
+    #     except Exception:
+    #         pass
+    #     try:
+    #         editor.set_defaults(dmin, dmax, sampling=None)
+    #     except Exception:
+    #         pass
+    def _read_range_spec(
+        self, editor: Any, 
+        *, 
+        base_spec: Any = None
+    ) -> Any:
+        # 1) Try editor-native export (best)
+        spec = None
         for meth in (
-            "to_spec",
+            "to_spec", 
             "get_spec",
             "export_spec",
             "to_dict",
-            "value",
-        ):
+            "value"
+            ):
             fn = getattr(editor, meth, None)
             if callable(fn):
                 try:
-                    return fn()
-                except Exception:
-                    continue
-
-        vmin = None
-        vmax = None
-
-        for nm in ("sp_min", "sb_min", "min_spin"):
-            w = getattr(editor, nm, None)
-            if w is not None and hasattr(w, "value"):
-                try:
-                    vmin = float(w.value())
+                    spec = fn()
                     break
                 except Exception:
                     continue
+    
+        # 2) Fallback: read min/max
+        if spec is None:
+            vmin = vmax = None
+            for nm in ("sp_min", "sb_min", "min_spin"):
+                w = getattr(editor, nm, None)
+                if w is not None and hasattr(w, "value"):
+                    try:
+                        vmin = float(w.value())
+                        break
+                    except Exception:
+                        pass
+            for nm in ("sp_max", "sb_max", "max_spin"):
+                w = getattr(editor, nm, None)
+                if w is not None and hasattr(w, "value"):
+                    try:
+                        vmax = float(w.value())
+                        break
+                    except Exception:
+                        pass
+            if vmin is None or vmax is None:
+                return None
+            spec = {"type": "float", "min_value": vmin, "max_value": vmax}
+    
+        # 3) Normalize to {"type":"float","min_value","max_value",...}
+        if isinstance(spec, dict):
+            t = str(spec.get("type", "")).lower()
+            if t == "range":
+                spec = {
+                    "type": "float",
+                    "min_value": spec.get("min"),
+                    "max_value": spec.get("max"),
+                }
+    
+        # 4) Preserve step/sampling from store if TuneTab editor hides them
+        if isinstance(spec, dict) and isinstance(base_spec, dict):
+            for k in ("step", "sampling"):
+                if k not in spec and k in base_spec:
+                    spec[k] = base_spec[k]
+    
+        return spec
 
-        for nm in ("sp_max", "sb_max", "max_spin"):
-            w = getattr(editor, nm, None)
-            if w is not None and hasattr(w, "value"):
-                try:
-                    vmax = float(w.value())
-                    break
-                except Exception:
-                    continue
+    # def _read_range_spec(self, editor: Any) -> Any:
+    #     for meth in (
+    #         "to_spec",
+    #         "get_spec",
+    #         "export_spec",
+    #         "to_dict",
+    #         "value",
+    #     ):
+    #         fn = getattr(editor, meth, None)
+    #         if callable(fn):
+    #             try:
+    #                 return fn()
+    #             except Exception:
+    #                 continue
 
-        if vmin is None or vmax is None:
-            return None
+    #     vmin = None
+    #     vmax = None
 
-        return {"type": "range", "min": vmin, "max": vmax}
+    #     for nm in ("sp_min", "sb_min", "min_spin"):
+    #         w = getattr(editor, nm, None)
+    #         if w is not None and hasattr(w, "value"):
+    #             try:
+    #                 vmin = float(w.value())
+    #                 break
+    #             except Exception:
+    #                 continue
+
+    #     for nm in ("sp_max", "sb_max", "max_spin"):
+    #         w = getattr(editor, nm, None)
+    #         if w is not None and hasattr(w, "value"):
+    #             try:
+    #                 vmax = float(w.value())
+    #                 break
+    #             except Exception:
+    #                 continue
+
+    #     if vmin is None or vmax is None:
+    #         return None
+
+    #     return {"type": "range", "min": vmin, "max": vmax}
+
+    def _refresh_compute_ui(self) -> None:
+        prof = probe_compute_profile()
+        has_gpu = bool(prof.get("gpus"))
+    
+        cpu_n = prof.get("cpu_count")
+        ram_gb = prof.get("ram_total_gb")
+    
+        if has_gpu:
+            g0 = prof["gpus"][0]
+            name = g0.get("name") or g0.get("path") or "GPU"
+            cc = g0.get("cc")
+            gpu_txt = (
+                f"GPU: {name}"
+                + (f" (cc={cc})" if cc else "")
+            )
+        else:
+            gpu_txt = "GPU: not detected"
+    
+        cpu_txt = "CPU"
+        if cpu_n:
+            cpu_txt += f": {cpu_n} threads"
+        if ram_gb:
+            cpu_txt += f" · RAM: {ram_gb} GB"
+    
+        self.lbl_compute_summary.setText(
+            f"{cpu_txt}\n{gpu_txt}"
+        )
+    
+        self.chk_use_gpu.setEnabled(has_gpu)
+    
+        mode = self._store.get_value(
+            FieldKey("tf_device_mode"),
+            default="auto",
+        )
+        mode = str(mode or "auto").lower()
+    
+        with QSignalBlocker(self.chk_use_cpu):
+            with QSignalBlocker(self.chk_use_gpu):
+                if mode == "cpu":
+                    self.chk_use_cpu.setChecked(True)
+                    self.chk_use_gpu.setChecked(False)
+                elif (mode == "gpu") and has_gpu:
+                    self.chk_use_cpu.setChecked(False)
+                    self.chk_use_gpu.setChecked(True)
+                else:
+                    # auto
+                    self.chk_use_cpu.setChecked(True)
+                    self.chk_use_gpu.setChecked(has_gpu)
+    
+        lim = self._store.get_value(
+            FieldKey("tf_gpu_memory_limit_mb"),
+            default=None,
+        )
+        with QSignalBlocker(self.spin_gpu_limit_mb):
+            self.spin_gpu_limit_mb.setValue(
+                int(lim or 0)
+            )
+    
+        allow = self._store.get_value(
+            FieldKey("tf_gpu_allow_growth"),
+            default=True,
+        )
+        with QSignalBlocker(self.chk_gpu_allow_growth):
+            self.chk_gpu_allow_growth.setChecked(
+                bool(allow)
+            )
+    
+        # Optional: disable GPU controls if no GPU
+        self.spin_gpu_limit_mb.setEnabled(has_gpu)
+        self.chk_gpu_allow_growth.setEnabled(has_gpu)
+
+
+    def _apply_device_mode_to_store(self) -> None:
+        # Rule:
+        # - GPU checked -> "gpu"
+        # - CPU only -> "cpu"
+        # - both -> "auto" (prefer gpu but allow fallback)
+        
+        if self._writing:
+            return
+    
+        cpu = bool(self.chk_use_cpu.isChecked())
+        gpu = bool(self.chk_use_gpu.isChecked())
+    
+        # Never allow "none selected"
+        if (not cpu) and (not gpu):
+            with QSignalBlocker(self.chk_use_cpu):
+                self.chk_use_cpu.setChecked(True)
+            cpu = True
+    
+        if cpu and gpu:
+            mode = "auto"
+        elif gpu:
+            mode = "gpu"
+        else:
+            mode = "cpu"
+    
+        lim = int(self.spin_gpu_limit_mb.value())
+        lim_mb = None if lim <= 0 else lim
+    
+        allow = bool(self.chk_gpu_allow_growth.isChecked())
+    
+        self._writing = True
+        try:
+            try:
+                self._store.set_value_by_key(
+                    FieldKey("tf_device_mode"),
+                    mode,
+                )
+            except Exception:
+                pass
+    
+            try:
+                self._store.set_value_by_key(
+                    FieldKey("tf_gpu_memory_limit_mb"),
+                    lim_mb,
+                )
+            except Exception:
+                pass
+    
+            try:
+                self._store.set_value_by_key(
+                    FieldKey("tf_gpu_allow_growth"),
+                    allow,
+                )
+            except Exception:
+                pass
+        finally:
+            self._writing = False
+
+def probe_compute_profile() -> Dict[str, Any]:
+    """
+    Best-effort compute probe.
+    Returns a dict safe for UI usage (never raises).
+    """
+    prof: Dict[str, Any] = {
+        "cpu_count": None,
+        "ram_total_gb": None,
+        "tf_version": None,
+        "gpus": [],
+    }
+
+    # CPU / RAM
+    try:
+        import os
+        prof["cpu_count"] = int(os.cpu_count() or 0)
+    except Exception:
+        pass
+
+    try:
+        import psutil  # optional
+        prof["ram_total_gb"] = round(psutil.virtual_memory().total / (1024**3), 1)
+    except Exception:
+        # psutil not installed -> skip
+        pass
+
+    # GPUs (TensorFlow)
+    try:
+        import tensorflow as tf
+        prof["tf_version"] = getattr(tf, "__version__", None)
+
+        gpus = tf.config.list_physical_devices("GPU") or []
+        for g in gpus:
+            det = {}
+            try:
+                det = tf.config.experimental.get_device_details(g) or {}
+            except Exception:
+                det = {}
+            prof["gpus"].append({
+                "path": getattr(g, "name", "GPU"),
+                "name": det.get("device_name") or det.get("name") or "",
+                "cc": det.get("compute_capability"),
+            })
+    except Exception:
+        pass
+
+    return prof

@@ -68,7 +68,14 @@ class Stage1Workspace(QWidget):
     ) -> None:
         super().__init__(parent)
         
-        self._context: Optional[dict] = None
+        self._context_key: tuple[str, str, str, str, str] = (
+            "",
+            "",
+            "",
+            "",
+            "",
+        )
+
         self._build_ui()
         self._wire()
 
@@ -93,45 +100,89 @@ class Stage1Workspace(QWidget):
         stage1_dir: Optional[PathLike] = None,
         model: str = "",
     ) -> None:
-        """
-        Broadcast shared context to all panels.
-        """
-        # Normalize to stable comparable strings
-        new_context = {
-            "city": (city or "").strip(),
-            "csv_path": str(csv_path) if csv_path else "",
-            "runs_root": str(runs_root) if runs_root else "",
-            "stage1_dir": str(stage1_dir) if stage1_dir else "",
-            "model": (model or "").strip(),
-        }
-    
-        # Guard: if nothing changed, do nothing
-        if self._context == new_context:
-            return
-        self._context = new_context
-    
-        kw = dict(
-            city=new_context["city"],
-            csv_path=(csv_path if csv_path else None),
-            runs_root=(runs_root if runs_root else None),
-            stage1_dir=(stage1_dir if stage1_dir else None),
+        key = (
+            str(city or "").strip(),
+            str(csv_path or ""),
+            str(runs_root or ""),
+            str(stage1_dir or ""),
+            str(model or ""),
         )
-    
+        # Guard: if nothing changed, do nothing
+        if key == self._context_key:
+            return
+        self._context_key = key
+
+        kw = dict(
+            city=city,
+            csv_path=csv_path,
+            runs_root=runs_root,
+            stage1_dir=stage1_dir,
+        )
+
         self.quicklook.set_context(**kw)
         self.readiness.set_context(**kw)
         self.feature_scaling.set_context(**kw)
         self.artifacts.set_context(**kw)
-    
+
         self.visual_checks.set_context(
-            city=new_context["city"],
-            stage1_dir=(stage1_dir if stage1_dir else None),
+            city=city,
+            stage1_dir=stage1_dir,
         )
-    
+
         self.run_history.set_context(
-            runs_root=new_context["runs_root"],
-            city=new_context["city"],
-            model=new_context["model"],
+            runs_root=str(runs_root or ""),
+            city=city,
+            model=model,
         )
+        
+    # def set_context(
+    #     self,
+    #     *,
+    #     city: str,
+    #     csv_path: Optional[PathLike],
+    #     runs_root: Optional[PathLike],
+    #     stage1_dir: Optional[PathLike] = None,
+    #     model: str = "",
+    # ) -> None:
+    #     """
+    #     Broadcast shared context to all panels.
+    #     """
+    #     # Normalize to stable comparable strings
+    #     new_context = {
+    #         "city": (city or "").strip(),
+    #         "csv_path": str(csv_path) if csv_path else "",
+    #         "runs_root": str(runs_root) if runs_root else "",
+    #         "stage1_dir": str(stage1_dir) if stage1_dir else "",
+    #         "model": (model or "").strip(),
+    #     }
+    
+    #     # Guard: if nothing changed, do nothing
+    #     if self._context == new_context:
+    #         return
+    #     self._context = new_context
+    
+    #     kw = dict(
+    #         city=new_context["city"],
+    #         csv_path=(csv_path if csv_path else None),
+    #         runs_root=(runs_root if runs_root else None),
+    #         stage1_dir=(stage1_dir if stage1_dir else None),
+    #     )
+    
+    #     self.quicklook.set_context(**kw)
+    #     self.readiness.set_context(**kw)
+    #     self.feature_scaling.set_context(**kw)
+    #     self.artifacts.set_context(**kw)
+    
+    #     self.visual_checks.set_context(
+    #         city=new_context["city"],
+    #         stage1_dir=(stage1_dir if stage1_dir else None),
+    #     )
+    
+    #     self.run_history.set_context(
+    #         runs_root=new_context["runs_root"],
+    #         city=new_context["city"],
+    #         model=new_context["model"],
+    #     )
 
     def set_status_all(self, text: str) -> None:
         """

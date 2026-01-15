@@ -3,10 +3,22 @@ from __future__ import annotations
 import json
 import os
 import copy
+import hashlib
+
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import ( 
+    Any, 
+    Dict, 
+    List, 
+    Optional, 
+    Tuple, 
+    Union, 
+    Mapping, 
+    Iterable, 
+)
 
+PathLike = Union[str, Path]
 
 @dataclass
 class Stage1Summary:
@@ -76,6 +88,189 @@ def _looks_like_stage1_dir(d: Path) -> bool:
         return True
     return "stage1" in d.name.lower()
 
+
+# -------------------------------
+# Canonicalization helpers
+# -------------------------------
+
+def _is_primitive(x: Any) -> bool:
+    return x is None or isinstance(x, (bool, int, float, str))
+
+
+def _to_str(x: Any) -> str:
+    # Avoid nondeterministic reprs where possible
+    if isinstance(x, Path):
+        return str(x)
+    return str(x)
+
+
+def _canonicalize(obj: Any) -> Any:
+    """
+    Convert obj to a JSON-stable, deterministic structure.
+
+    - dict: keys sorted, values canonicalized
+    - set/frozenset: sorted list (canonicalized elements)
+    - list/tuple: list (canonicalized elements)
+    - Path: str
+    - unknown objects: str(obj)
+    """
+    if _is_primitive(obj):
+        return obj
+
+    if isinstance(obj, Path):
+        return str(obj)
+
+    # dict-like
+    if isinstance(obj, Mapping):
+        # stringify keys to avoid non-JSON keys
+        items = []
+        for k, v in obj.items():
+            ks = k if isinstance(k, str) else _to_str(k)
+            items.append((ks, _canonicalize(v)))
+        items.sort(key=lambda kv: kv[0])
+        return {k: v for k, v in items}
+
+    # set-like: order independent
+    if isinstance(obj, (set, frozenset)):
+        lst = [_canonicalize(x) for x in obj]
+        # stable sort on JSON representation
+        lst.sort(key=lambda x: json.dumps(x, sort_keys=True, separators=(",", ":")))
+        return lst
+
+    # sequence-like
+    if isinstance(obj, (list, tuple)):
+        return [_canonicalize(x) for x in obj]
+
+    # fallback: stringify
+    return _to_str(obj)
+
+
+def _sorted_unique(seq: Iterable[Any]) -> list:
+    """
+    Convert a feature list/set to a sorted unique list of strings.
+    """
+    out = []
+    seen = set()
+    for x in seq:
+        xs = x if isinstance(x, str) else _to_str(x)
+        xs = xs.strip()
+        if not xs:
+            continue
+        if xs in seen:
+            continue
+        seen.add(xs)
+        out.append(xs)
+    out.sort()
+    return out
+
+
+# -------------------------------
+# Reduced Stage-1 signature
+# -------------------------------
+
+def stage1_cfg_signature(cfg: Any) -> Dict[str, Any]:
+    """
+    Build a reduced, stable signature for Stage-1 compatibility / caching.
+
+    Goal: same signature => same Stage-1 meaning (so caching is safe).
+
+    We intentionally keep only the fields that affect Stage-1 outputs
+    and normalize order-insensitive structures (like feature lists).
+    """
+    if not isinstance(cfg, Mapping):
+        return {}
+
+    # Common top-level keys your Stage-1 pipeline cares about
+    core_keys = (
+        "schema_version",
+        "model",
+        "stage",
+        "MODE",
+        "TIME_STEPS",
+        "FORECAST_HORIZON_YEARS",
+        "TRAIN_END_YEAR",
+        "FORECAST_START_YEAR",
+        "seed",
+    )
+
+    sig: Dict[str, Any] = {}
+    for k in core_keys:
+        if k in cfg:
+            sig[k] = cfg.get(k)
+
+    # Column mapping is important
+    cols = cfg.get("cols", {})
+    if isinstance(cols, Mapping):
+        # keep it fully (it’s small) but canonicalized
+        sig["cols"] = cols
+
+    # Features: normalize to sorted lists (order-insensitive)
+    feats = cfg.get("features", {})
+    if isinstance(feats, Mapping):
+        norm_feats: Dict[str, Any] = {}
+        for group, items in feats.items():
+            g = group if isinstance(group, str) else _to_str(group)
+            if items is None:
+                norm_feats[g] = []
+            elif isinstance(items, (list, tuple, set, frozenset)):
+                norm_feats[g] = _sorted_unique(items)
+            else:
+                # sometimes a single string sneaks in
+                norm_feats[g] = _sorted_unique([items])
+        # stable order of groups
+        sig["features"] = {k: norm_feats[k] for k in sorted(norm_feats.keys())}
+
+    # Optional: include ONLY if they affect Stage-1 artifacts in your pipeline
+    # (keep these if you know Stage-1 uses them)
+    optional_keys = (
+        "stage1_options",
+        "scaling",
+        "scaler",
+        "feature_scaling",
+        "target_scaling",
+        "censoring",
+        "clip",
+        "imputation",
+        "nan_policy",
+    )
+    for k in optional_keys:
+        if k in cfg:
+            sig[k] = cfg.get(k)
+
+    return sig
+
+
+# -------------------------------
+# Canonical hash function
+# -------------------------------
+
+def canonical_hash_cfg(cfg: Any) -> str:
+    """
+    Stable hash for caching. Uses reduced Stage-1 signature + canonicalization.
+
+    Returns "" if cfg is None/unhashable in a meaningful way.
+    """
+    if cfg is None:
+        return ""
+
+    try:
+        sig = stage1_cfg_signature(cfg)
+        canon = _canonicalize(sig)
+        s = json.dumps(
+            canon,
+            sort_keys=True,
+            separators=(",", ":"),  # remove whitespace for stability
+            ensure_ascii=False,
+        )
+        # sha256 is safer than md5; still fast
+        return hashlib.sha256(s.encode("utf-8")).hexdigest()
+    except Exception:
+        # last resort: still be stable-ish
+        try:
+            s = json.dumps(_canonicalize(cfg), sort_keys=True, separators=(",", ":"))
+            return hashlib.sha256(s.encode("utf-8")).hexdigest()
+        except Exception:
+            return ""
 
 def _is_stage1_manifest(m: dict, mf_path: Path) -> bool:
     tag = _norm_stage(m.get("stage"))
@@ -161,6 +356,7 @@ def resolve_stage1_bundle(
         )
 
     return None
+
 
 def _load_manifest(manifest_path: Path) -> Dict[str, Any]:
     with manifest_path.open("r", encoding="utf-8") as f:
@@ -277,6 +473,62 @@ def compare_stage1_configs(
     return (len(diffs) == 0), diffs
 
 
+def pick_best_stage1_run(
+    runs: List["Stage1Summary"],
+) -> Optional["Stage1Summary"]:
+    if not runs:
+        return None
+    ordered = sorted(runs, key=lambda s: s.timestamp)
+    for s in reversed(ordered):
+        if s.is_complete and s.config_match:
+            return s
+    return ordered[-1]
+
+
+def find_stage1_for_city_root(
+    *,
+    city_root: Path,
+    current_cfg: Optional[Dict[str, Any]] = None,
+) -> Tuple[List["Stage1Summary"], List["Stage1Summary"]]:
+    """
+    Like find_stage1_for_city, but searches only inside <city_root>
+    (fast; avoids scanning the whole results_root).
+    """
+    city_root = Path(city_root)
+    if not city_root.is_dir():
+        return [], []
+
+    manifests: List[Path] = []
+
+    # Preferred layout: <city_root>/artifacts/manifest.json
+    mf0 = city_root / "manifest.json" # "artifacts" / 
+    if mf0.is_file():
+        manifests.append(mf0)
+
+    # Also pick up nested stage1 dirs if any (bounded search)
+    for mf in city_root.rglob("manifest.json"):
+        if mf == mf0:
+            continue
+        try:
+            m = _load_manifest(mf)
+        except Exception:
+            continue
+        if not _is_stage1_manifest(m, mf):
+            continue
+        manifests.append(mf)
+
+    summaries: List[Stage1Summary] = []
+    for mf in manifests:
+        try:
+            summaries.append(
+                make_stage1_summary(mf, current_cfg=current_cfg)
+            )
+        except Exception:
+            pass
+
+    summaries.sort(key=lambda s: s.timestamp)
+    return summaries, summaries
+
 def make_stage1_summary(
     manifest_path: Path,
     current_cfg: Optional[Dict[str, Any]] = None,
@@ -351,7 +603,6 @@ def discover_stage1_runs(
     summaries.sort(key=lambda s: s.timestamp)
     return summaries
 
-
 def find_stage1_for_city(
     city: str,
     results_root: Path,
@@ -362,9 +613,43 @@ def find_stage1_for_city(
 
     matching_city = Stage-1 runs for this city (complete/incomplete).
     """
-    all_runs = discover_stage1_runs(results_root, current_cfg=current_cfg)
-    matching_city = [s for s in all_runs if s.city.lower() == city.lower()]
+    b = resolve_stage1_bundle(
+        results_root=results_root,
+        city=city,
+    )
+    if b is not None:
+        try:
+            s = make_stage1_summary(
+                b.manifest_path,
+                current_cfg=current_cfg,
+            )
+            return [s], [s]
+        except Exception:
+            pass
+
+    all_runs = discover_stage1_runs(
+        results_root,
+        current_cfg=current_cfg,
+    )
+    matching_city = [
+        s for s in all_runs
+        if s.city.lower() == city.lower()
+    ]
     return matching_city, all_runs
+
+# def find_stage1_for_city(
+#     city: str,
+#     results_root: Path,
+#     current_cfg: Optional[Dict[str, Any]] = None,
+# ) -> Tuple[List[Stage1Summary], List[Stage1Summary]]:
+#     """
+#     Return (matching_city, all_summaries) for UI.
+
+#     matching_city = Stage-1 runs for this city (complete/incomplete).
+#     """
+#     all_runs = discover_stage1_runs(results_root, current_cfg=current_cfg)
+#     matching_city = [s for s in all_runs if s.city.lower() == city.lower()]
+#     return matching_city, all_runs
 
 
 def build_stage1_cfg_from_nat(
@@ -480,3 +765,29 @@ def load_json(
     except Exception:
         return default
 
+
+# def load_json(
+#     path: PathLike,
+#     *,
+#     default: Any = None,
+# ) -> Any:
+#     p = Path(path).expanduser()
+
+#     if not p.exists() or not p.is_file():
+#         return default
+
+#     try:
+#         txt = p.read_text(encoding="utf-8-sig")
+#     except Exception:
+#         try:
+#             txt = p.read_text(encoding="utf-8")
+#         except Exception:
+#             return default
+
+#     if not (txt or "").strip():
+#         return default
+
+#     try:
+#         return json.loads(txt)
+#     except Exception:
+#         return default

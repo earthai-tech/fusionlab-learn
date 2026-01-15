@@ -332,6 +332,49 @@ QPushButton#runIconButton:disabled{{
     /* Qt will already dim the icon; this just removes hover halo */
 }}
 
+QToolButton#miniAction,
+QPushButton#miniAction {{
+    background: transparent;
+    border: 1px solid rgba(46,49,145,0.30);   /* PRIMARY with alpha */
+    border-radius: 8px;
+    padding: 2px 6px;
+}}
+
+QToolButton#miniAction:hover:enabled,
+QPushButton#miniAction:hover:enabled {{
+    background: rgba(51,153,255,0.16);        /* SECONDARY_TBLUE tint */
+    border-color: {SECONDARY_TBLUE};
+}}
+
+QToolButton#miniAction:pressed,
+QPushButton#miniAction:pressed {{
+    background: rgba(242,134,32,0.18);        /* SECONDARY tint */
+    border-color: {SECONDARY};
+}}
+  
+QToolButton#miniAction:focus {{
+    outline: none;
+    border: 1px solid rgba(46,49,145,0.70);
+    background: rgba(46,49,145,0.10);
+}}
+
+QToolButton#miniAction:disabled {{
+    border-color: rgba(100,116,139,0.35);
+    background: transparent;
+}}
+
+QLineEdit#resultsRootEdit {{
+    background: rgba(46, 49, 145, 0.08);
+    border: 1px solid rgba(46, 49, 145, 0.55);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-weight: 600;
+}}
+
+QLineEdit#resultsRootEdit:hover {{
+    border-color: #3399ff;
+}}
+
 """
 
 # ------------------------------------------------------------------ #
@@ -518,6 +561,48 @@ QMessageBox QPushButton:pressed {{
     background-color: {PALETTE['secondary']};
     color: white;
 }}
+QToolButton#miniAction,
+QPushButton#miniAction {{
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 8px;
+    padding: 2px 6px;
+}}
+
+QToolButton#miniAction:hover:enabled,
+QPushButton#miniAction:hover:enabled {{
+    background: rgba(51,153,255,0.18);        /* SECONDARY_TBLUE tint */
+    border-color: {SECONDARY_TBLUE};
+}}
+
+QToolButton#miniAction:pressed,
+QPushButton#miniAction:pressed {{
+    background: rgba(242,134,32,0.22);        /* SECONDARY tint */
+    border-color: {SECONDARY};
+}}
+
+QToolButton#miniAction:focus {{
+    outline: none;
+    border: 1px solid rgba(46,49,145,0.70);
+    background: rgba(46,49,145,0.10);
+}}
+
+QToolButton#miniAction:disabled {{
+    border-color: rgba(100,116,139,0.35);
+    background: transparent;
+}}
+QLineEdit#resultsRootEdit {{
+    background: rgba(46, 49, 145, 0.22);
+    border: 1px solid rgba(203, 213, 225, 0.26);
+    border-radius: 6px;
+    padding: 8px;
+    font-weight: 600;
+}}
+
+QLineEdit#resultsRootEdit:hover {{
+    border: 1px solid #3399ff;
+}}
+
 """
 
 # ------------------------------------------------------------------ #
@@ -730,6 +815,7 @@ QTabWidget#mainTabs QTabBar::tab:selected {{
     background: transparent;
     border-bottom: 2px solid {SECONDARY};
 }}
+               
 """
 
 MAIN_TAB_STYLES_DARK = f"""

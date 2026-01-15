@@ -182,7 +182,7 @@ class _MapScatterPanel(QWidget):
     ) -> None:
         self._manifest = manifest if isinstance(manifest, dict) else None
         self._data = data
-        self._refresh()
+        # self._refresh() #  # Lazy: do not auto-refresh here
 
     def _build_ui(self) -> None:
         lay = QVBoxLayout(self)
@@ -391,7 +391,7 @@ class _TimeSeriesPanel(QWidget):
     ) -> None:
         self._manifest = manifest if isinstance(manifest, dict) else None
         self._data = data
-        self._refresh()
+        # self._refresh() # Lazy: do not auto-refresh here
 
     def _build_ui(self) -> None:
         lay = QVBoxLayout(self)
@@ -581,8 +581,9 @@ class _RawScaledPanel(QWidget):
         self._manifest = manifest if isinstance(manifest, dict) else None
         self._audit = audit if isinstance(audit, dict) else None
         self._data = data
+        # Keep list rebuilt (cheap) so UI is ready when user opens the tab
         self._rebuild_feature_list()
-        self._refresh()
+        # self._refresh()  # Lazy: do not auto-refresh here
 
     def _build_ui(self) -> None:
         lay = QVBoxLayout(self)
@@ -733,7 +734,12 @@ class Stage1VisualChecks(QWidget):
         self._data = Stage1VisualData()
 
         self._build_ui()
-
+        
+        # Lazy refresh flags
+        self._dirty_map = True
+        self._dirty_ts = True
+        self._dirty_rs = True
+        
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -743,9 +749,14 @@ class Stage1VisualChecks(QWidget):
         self._audit = None
         self._data = Stage1VisualData()
 
-        self.map_panel.plot.clear_plot("")
-        self.ts_panel.plot.clear_plot("")
-        self.rs_panel.plot.clear_plot("")
+        self._dirty_map = True
+        self._dirty_ts = True
+        self._dirty_rs = True
+
+        self.map_panel.plot.clear_plot("No data.")
+        self.ts_panel.plot.clear_plot("No data.")
+        self.rs_panel.plot.clear_plot("No data.")
+
 
     def set_context(
         self,
@@ -758,22 +769,49 @@ class Stage1VisualChecks(QWidget):
             stage1_dir=_as_str(stage1_dir),
         )
 
+    # def set_manifest(self, manifest: Optional[Json]) -> None:
+    #     self._manifest = manifest if isinstance(manifest, dict) else None
+    #     self._push()
+    
     def set_manifest(self, manifest: Optional[Json]) -> None:
+        self.map_panel.plot.set_status("Ready. Open this tab or click Refresh.")
         self._manifest = manifest if isinstance(manifest, dict) else None
-        self._push()
-
+        self._mark_dirty(all_=True)
+        self._push_payloads_only()
+        
+    # def set_scaling_audit(self, audit: Optional[Json]) -> None:
+    #     self._audit = audit if isinstance(audit, dict) else None
+    #     self._push()
     def set_scaling_audit(self, audit: Optional[Json]) -> None:
         self._audit = audit if isinstance(audit, dict) else None
-        self._push()
-
+        self._mark_dirty(all_=True)
+        self._push_payloads_only()
+        
+    # def set_data(self, data: Optional[Stage1VisualData]) -> None:
+    #     self._data = data if isinstance(data, Stage1VisualData) else Stage1VisualData()
+    #     self._push()
+    
     def set_data(self, data: Optional[Stage1VisualData]) -> None:
         self._data = data if isinstance(data, Stage1VisualData) else Stage1VisualData()
-        self._push()
-
+        self._mark_dirty(all_=True)
+        self._push_payloads_only()
+        
+    # def refresh_all(self) -> None:
+    #     self.map_panel._refresh()
+    #     self.ts_panel._refresh()
+    #     self.rs_panel._refresh()
+    
     def refresh_all(self) -> None:
+        # Ensure panels have the latest payloads
+        self._push_payloads_only()
+    
         self.map_panel._refresh()
         self.ts_panel._refresh()
         self.rs_panel._refresh()
+    
+        self._dirty_map = False
+        self._dirty_ts = False
+        self._dirty_rs = False
 
     # ------------------------------------------------------------------
     # UI
@@ -806,8 +844,42 @@ class Stage1VisualChecks(QWidget):
         row.addWidget(self.btn_refresh_all)
 
         lay.addLayout(row)
+        
+        # Refresh only when user opens a specific visual tab
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    # def _push(self) -> None:
+    #     self.map_panel.set_payload(
+    #         manifest=self._manifest,
+    #         data=self._data,
+    #     )
+    #     self.ts_panel.set_payload(
+    #         manifest=self._manifest,
+    #         data=self._data,
+    #     )
+    #     self.rs_panel.set_payload(
+    #         manifest=self._manifest,
+    #         audit=self._audit,
+    #         data=self._data,
+    #     )
 
     def _push(self) -> None:
+        # Backward-compat if something still calls _push()
+        self._push_payloads_only()
+
+
+    def _mark_dirty(self, *, all_: bool = False) -> None:
+        if all_:
+            self._dirty_map = True
+            self._dirty_ts = True
+            self._dirty_rs = True
+    
+    def _push_payloads_only(self) -> None:
+        """
+        Push manifest/audit/data into panels without triggering refresh.
+    
+        This must be cheap and must not read CSVs or plot.
+        """
         self.map_panel.set_payload(
             manifest=self._manifest,
             data=self._data,
@@ -821,3 +893,28 @@ class Stage1VisualChecks(QWidget):
             audit=self._audit,
             data=self._data,
         )
+        
+    def _on_tab_changed(self, index: int) -> None:
+        # Only refresh the currently visible panel, and only if dirty.
+        self._refresh_active_if_dirty(index=index)
+        
+    def _refresh_active_if_dirty(self, *, index: Optional[int] = None) -> None:
+        if index is None:
+            index = int(self.tabs.currentIndex())
+    
+        # No payload? Don’t attempt IO/plot.
+        if not self._manifest and not (self._data.raw_df or self._data.clean_df or self._data.scaled_df):
+            return
+    
+        if index == 0:
+            if self._dirty_map:
+                self.map_panel._refresh()
+                self._dirty_map = False
+        elif index == 1:
+            if self._dirty_ts:
+                self.ts_panel._refresh()
+                self._dirty_ts = False
+        elif index == 2:
+            if self._dirty_rs:
+                self.rs_panel._refresh()
+                self._dirty_rs = False

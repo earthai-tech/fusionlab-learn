@@ -15,6 +15,8 @@ Business logic lives in app.py (controller).
 
 from __future__ import annotations
 
+from pathlib import Path
+import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
@@ -26,10 +28,20 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QGridLayout,
+    QToolButton,   
+    QStyle,        
 )
 
 from ..config.prior_schema import FieldKey
 from ..config.store import GeoConfigStore
+from ..config.smart_stage1 import (
+    canonical_hash_cfg,
+    find_stage1_for_city,
+    find_stage1_for_city_root,
+    pick_best_stage1_run,
+    
+)
 from .stage1_workspace.workspace import Stage1Workspace
 from .stage1_workspace.readiness import (
     CompatibilityResult,
@@ -61,6 +73,8 @@ class PreprocessTab(QWidget):
     request_open_path = pyqtSignal(str)
     request_set_active_stage1 = pyqtSignal(str, str)
     request_refresh_history = pyqtSignal()
+    
+    request_open_city_root = pyqtSignal()
 
     def __init__(
         self,
@@ -78,10 +92,19 @@ class PreprocessTab(QWidget):
         self._store: Optional[GeoConfigStore] = None
         self._ws_stage1_dir: Optional[str] = None
         self._ws_model: str = ""
+        
+        # ---- Stage-1 status cache (fast tab switching) ----
+        self._prep_refresh_key = None  # tuple[str, str, str]
+        self._prep_cache_best = None   # dict | None
+        self._prep_cache_manifest = None
+        self._prep_cache_audit = None
+
 
         self._build_ui()
         self.bind_store(store)
         self._wire()
+        
+
 
     # ------------------------------------------------------------------
     # Store binding
@@ -160,6 +183,13 @@ class PreprocessTab(QWidget):
                 f"Dataset: {ds or '-'}"
             )
 
+        # Update computed city root whenever results_root or city changes
+        if want("results_root") or want("city"):
+            city_root = self._compute_city_root()
+            self.ed_prep_city_root.setText(city_root)
+            self.ed_prep_city_root.setToolTip(city_root or "")
+            self.btn_prep_open_city_root.setEnabled(bool(city_root))
+
         self._sync_stage1_options_from_store(keys=keys)
         self._push_context_to_workspace()
 
@@ -233,14 +263,45 @@ class PreprocessTab(QWidget):
         city = st.get_value(FieldKey("city"), default="")
         ds = st.get_value(FieldKey("dataset_path"), default=None)
         rr = st.get_value(FieldKey("results_root"), default=None)
+        rr = None if rr is None else str(rr)
 
         self.stage1_ws.set_context(
             city=str(city or ""),
             csv_path=ds,
-            runs_root=rr,
-            stage1_dir=self._ws_stage1_dir,
+            runs_root=rr,              # global root (tests/)
+            stage1_dir=self._ws_stage1_dir,  # active run dir (train_... or stage1 run dir)
             model=self._ws_model,
         )
+
+    def _compute_city_root(self) -> str:
+        """
+        Compute city root folder:
+            <results_root>/<city>_<model>_stage1/
+
+        Returns "" if missing inputs.
+        """
+        st = self._store
+        if st is None:
+            return ""
+
+        rr = st.get_value(FieldKey("results_root"), default=None)
+        city = st.get_value(FieldKey("city"), default="")
+
+        rr = "" if rr is None else str(rr).strip()
+        city = str(city or "").strip()
+        if not rr or not city:
+            return ""
+
+        # Prefer workspace model if already known; fallback to store/model
+        model = (self._ws_model or "").strip()
+        if not model:
+            # Optional: if you store model somewhere, use it here.
+            # Otherwise fallback to GeoPriorSubsNet
+            model = "GeoPriorSubsNet"
+
+        base = Path(rr).expanduser()
+        folder = f"{city}_{model}_stage1"
+        return str(base / folder)
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -360,21 +421,76 @@ class PreprocessTab(QWidget):
         # -------------------------------------------------
         # Row 1: Results root (full width)
         # -------------------------------------------------
-        root_row = QHBoxLayout()
-        root_row.setSpacing(10)
+        # -------------------------------------------------
+        # Top bar: Paths (icon-only actions, City root is primary)
+        # -------------------------------------------------
+        paths = QGridLayout()
+        paths.setHorizontalSpacing(8)
+        paths.setVerticalSpacing(0)
 
+        lbl_city_root = QLabel("City root:")
         lbl_root = QLabel("Results root:")
+
+        # Stable label widths (prevents jitter)
+        lbl_city_root.setFixedWidth(70)
+        lbl_root.setFixedWidth(85)
+
+        # --- Fields ---
+        self.ed_prep_city_root = QLineEdit()
+        self.ed_prep_city_root.setReadOnly(True)
+        self.ed_prep_city_root.setPlaceholderText(
+            "Auto-computed from results root + city (+ model)"
+        )
+
         self.ed_prep_root = QLineEdit()
         self.ed_prep_root.setReadOnly(True)
+        self.ed_prep_root.setPlaceholderText("Select results root…")
 
-        self.btn_prep_browse_root = QPushButton("Browse…")
-        self.btn_prep_refresh = QPushButton("Refresh")
+        # --- Icon-only buttons ---
+        def _icon_btn(std_icon: QStyle.StandardPixmap, tip: str) -> QToolButton:
+            b = QToolButton()
+            b.setObjectName("miniAction")  #  binds to styles rules
+            b.setIcon(self.style().standardIcon(std_icon))
+            b.setToolTip(tip)
+            b.setAutoRaise(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setFixedSize(28, 28)
+            return b
 
-        root_row.addWidget(lbl_root)
-        root_row.addWidget(self.ed_prep_root, 1)
-        root_row.addWidget(self.btn_prep_browse_root)
-        root_row.addWidget(self.btn_prep_refresh)
-        p_layout.addLayout(root_row)
+
+        self.btn_prep_open_city_root = _icon_btn(
+            QStyle.SP_DirOpenIcon, "Open city folder"
+        )
+        self.btn_prep_open_city_root.setEnabled(False)
+
+        self.btn_prep_browse_root = _icon_btn(
+            QStyle.SP_DialogOpenButton, "Browse results root…"
+        )
+
+        self.btn_prep_refresh = _icon_btn(
+            QStyle.SP_BrowserReload, "Refresh Stage-1 status"
+        )
+
+        # Accessibility (optional but good): screen readers / tests
+        self.btn_prep_open_city_root.setAccessibleName("Open city folder")
+        self.btn_prep_browse_root.setAccessibleName("Browse results root")
+        self.btn_prep_refresh.setAccessibleName("Refresh preprocess status")
+
+        # Layout: [City root][Open] [Results root][Browse][Refresh]
+        paths.addWidget(lbl_city_root, 0, 0)
+        paths.addWidget(self.ed_prep_city_root, 0, 1)
+        paths.addWidget(self.btn_prep_open_city_root, 0, 2)
+
+        paths.addWidget(lbl_root, 0, 3)
+        paths.addWidget(self.ed_prep_root, 0, 4)
+        paths.addWidget(self.btn_prep_browse_root, 0, 5)
+        paths.addWidget(self.btn_prep_refresh, 0, 6)
+
+        # Stretch: city root gets more space than results root
+        paths.setColumnStretch(1, 6)  # city root field (big)
+        paths.setColumnStretch(4, 3)  # results root field (smaller)
+
+        p_layout.addLayout(paths)
 
         # -------------------------------------------------
         # Top row: 3 cards
@@ -561,6 +677,10 @@ class PreprocessTab(QWidget):
         self.stage1_ws.request_refresh_history.connect(
             self.request_refresh_history.emit
         )
+        self.btn_prep_open_city_root.clicked.connect(
+            self.request_open_city_root.emit
+        )
+
 
     # ------------------------------------------------------------------
     # Stage-1 options handlers
@@ -585,3 +705,196 @@ class PreprocessTab(QWidget):
             "stage1_force_rebuild_if_mismatch",
             v,
         )
+
+    def best_stage1_dir(self) -> Optional[str]:
+        b = self._prep_cache_best or {}
+        return b.get("stage1_dir")
+
+    def best_manifest_path(self) -> Optional[str]:
+        b = self._prep_cache_best or {}
+        return b.get("manifest_path")
+
+    def best_model(self) -> str:
+        b = self._prep_cache_best or {}
+        return str(b.get("model") or "")
+
+    def city_root_path(self) -> str:
+        return (self.ed_prep_city_root.text() or "").strip()
+    
+    def _set_stage1_actions(
+        self,
+        *,
+        stage1_dir: Optional[str],
+        manifest_path: Optional[str],
+    ) -> None:
+        has_dir = bool(stage1_dir)
+        has_mf = bool(manifest_path)
+
+        self.btn_prep_open_stage1_dir.setEnabled(has_dir)
+        self.btn_prep_open_manifest.setEnabled(has_mf)
+        self.btn_prep_use_for_city.setEnabled(has_dir)
+
+        if not has_dir:
+            tip = "Run Stage-1 first."
+            self.btn_prep_open_stage1_dir.setToolTip(tip)
+            self.btn_prep_use_for_city.setToolTip(tip)
+        else:
+            self.btn_prep_open_stage1_dir.setToolTip(stage1_dir or "")
+            self.btn_prep_use_for_city.setToolTip(stage1_dir or "")
+
+        if not has_mf:
+            self.btn_prep_open_manifest.setToolTip(
+                "Run Stage-1 to create a manifest."
+            )
+        else:
+            self.btn_prep_open_manifest.setToolTip(manifest_path or "")
+
+    def refresh_status(self, *, force: bool = False) -> None:
+        st = self._store
+        if st is None:
+            return
+
+        # --- inputs from store ---
+        city = str(st.get_value(FieldKey("city"), default="") or "").strip()
+        rr_raw = st.get_value(FieldKey("results_root"), default=None)
+        rr = "" if rr_raw is None else str(rr_raw).strip()
+        rr_path = Path(rr).expanduser() if rr else None
+
+        # --- stage1 cfg snapshot (for match + cache key) ---
+        cfg_snap = None
+        try:
+            # Prefer "pure" if you want to avoid NAT dependency
+            cfg_snap = st.cfg.to_stage1_cfg(pure=True)
+        except Exception:
+            try:
+                cfg_snap = st.cfg.to_stage1_config()
+            except Exception:
+                cfg_snap = None
+
+        key = (rr, city.lower(), canonical_hash_cfg(cfg_snap))
+        if (not force) and (key == self._prep_refresh_key):
+            if self._prep_cache_best is not None:
+                best = self._prep_cache_best
+                self.set_stage1_status(
+                    state_text=best["state"],
+                    manifest_text=best["mf_text"],
+                )
+                self._set_stage1_actions(
+                    stage1_dir=best["stage1_dir"],
+                    manifest_path=best["manifest_path"],
+                )
+                self.set_workspace_context(
+                    stage1_dir=best["stage1_dir"],
+                    model=best["model"],
+                )
+                self.set_workspace_manifest(self._prep_cache_manifest)
+                self.set_workspace_scaling_audit(self._prep_cache_audit)
+                return
+
+        self._prep_refresh_key = key
+
+        # --- missing city/root cases ---
+        if not city:
+            self.set_stage1_status(
+                state_text="Stage-1: (no city selected)",
+                manifest_text="Manifest: -",
+            )
+            self._set_stage1_actions(stage1_dir=None, manifest_path=None)
+            self.set_workspace_context(stage1_dir=None, model="")
+            self.set_workspace_manifest(None)
+            self.set_workspace_scaling_audit(None)
+            self._prep_cache_best = None
+            self._prep_cache_manifest = None
+            self._prep_cache_audit = None
+            return
+
+        if rr_path is None:
+            self.set_stage1_status(
+                state_text="Stage-1: (no results root selected)",
+                manifest_text="Manifest: -",
+            )
+            self._set_stage1_actions(stage1_dir=None, manifest_path=None)
+            return
+
+        # --- discover runs (FAST: city_root only if it exists) ---
+        city_root_txt = self._compute_city_root()
+        city_root = Path(city_root_txt).expanduser() if city_root_txt else None
+
+        runs = []
+        try:
+            if city_root is not None and city_root.is_dir():
+                runs, _ = find_stage1_for_city_root(
+                    city_root=city_root,
+                    current_cfg=cfg_snap,
+                )
+            else:
+                runs, _ = find_stage1_for_city(
+                    city=city,
+                    results_root=rr_path,
+                    current_cfg=cfg_snap,
+                )
+        except Exception:
+            runs = []
+
+        best = pick_best_stage1_run(runs)
+        if best is None:
+            self.set_stage1_status(
+                state_text="Stage-1: not found for this city",
+                manifest_text="Manifest: -",
+            )
+            self._set_stage1_actions(stage1_dir=None, manifest_path=None)
+            self.set_workspace_context(stage1_dir=None, model="")
+            self.set_workspace_manifest(None)
+            self.set_workspace_scaling_audit(None)
+            self._prep_cache_best = None
+            self._prep_cache_manifest = None
+            self._prep_cache_audit = None
+            return
+
+        tag = "OK" if best.is_complete else "INCOMPLETE"
+        match = "MATCH" if best.config_match else "MISMATCH"
+
+        state = (
+            f"Stage-1: {tag} / {match} "
+            f"(n_train={best.n_train}, n_val={best.n_val})"
+        )
+        mf_text = f"Manifest: {best.manifest_path}"
+
+        stage1_dir = str(best.run_dir)
+        mf_path = str(best.manifest_path)
+        model = str(best.model or "GeoPriorSubsNet")
+
+        self.set_stage1_status(state_text=state, manifest_text=mf_text)
+        self._set_stage1_actions(stage1_dir=stage1_dir, manifest_path=mf_path)
+        self.set_workspace_context(stage1_dir=stage1_dir, model=model)
+
+        # --- load manifest + audit (safe) ---
+        manifest = None
+        audit = None
+        try:
+            manifest = json.loads(
+                Path(best.manifest_path).read_text(encoding="utf-8")
+            )
+        except Exception:
+            manifest = None
+
+        audit_path = Path(best.run_dir) / "stage1_scaling_audit.json"
+        if audit_path.is_file():
+            try:
+                audit = json.loads(audit_path.read_text(encoding="utf-8"))
+            except Exception:
+                audit = None
+
+        self.set_workspace_manifest(manifest)
+        self.set_workspace_scaling_audit(audit)
+
+        # --- cache for next tab entry ---
+        self._prep_cache_best = dict(
+            state=state,
+            mf_text=mf_text,
+            stage1_dir=stage1_dir,
+            manifest_path=mf_path,
+            model=model,
+        )
+        self._prep_cache_manifest = manifest
+        self._prep_cache_audit = audit

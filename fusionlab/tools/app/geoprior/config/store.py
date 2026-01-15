@@ -4,15 +4,22 @@
 
 from __future__ import annotations
 
+import copy
+import re
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Set
+from typing import Any, Dict, Iterable, Optional, Set, Tuple
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
 from .geoprior_config import GeoPriorConfig
 from .prior_schema import FieldKey
 
+
+_KEY_PAT = re.compile(
+    r"^(?P<base>[A-Za-z_][A-Za-z0-9_\.]*?)"
+    r"(?:\[(?P<sub>[^\]]+)\])?$"
+)
 
 class GeoConfigStore(QObject):
     """
@@ -48,6 +55,15 @@ class GeoConfigStore(QObject):
         self._pending_keys: Set[str] = set()
         self._dirty_count = self._compute_dirty_count()
 
+        # GUI-only keys (not in GeoPriorConfig yet).
+        self._extra: Dict[str, Any] = {
+            "xfer.view_mode": "map",
+            "xfer.city_a_lat": None,
+            "xfer.city_a_lon": None,
+            "xfer.city_b_lat": None,
+            "xfer.city_b_lon": None,
+        }
+
     # -----------------------------------------------------------------
     # Read access
     # -----------------------------------------------------------------
@@ -60,38 +76,111 @@ class GeoConfigStore(QObject):
 
     def snapshot_overrides(self) -> Dict[str, Any]:
         return dict(self._cfg.to_cfg_overrides())
-    
+
+    # -------------------------------------------------
+    # Convenience (string keys)
+    # -------------------------------------------------
+    def get(
+        self,
+        key: str,
+        default: Any = None,
+    ) -> Any:
+        fkey, extra_key = self._parse_key_str(key)
+        if fkey is not None:
+            return self.get_value(
+                fkey,
+                default=default,
+            )
+
+        if extra_key in self._extra:
+            return self._extra.get(extra_key, default)
+
+        return default
+
+    def set(
+        self,
+        key: str,
+        value: Any,
+    ) -> bool:
+        fkey, extra_key = self._parse_key_str(key)
+        if fkey is None:
+            old = self._extra.get(extra_key, None)
+            if old != value:
+                self._extra[extra_key] = value
+                self._mark_changed({extra_key})
+            return True
+
+        return self.set_value_by_key(fkey, value)
+
+    def _parse_key_str(
+        self,
+        key: str,
+    ) -> Tuple[Optional[FieldKey], str]:
+        raw = (key or "").strip()
+        m = _KEY_PAT.match(raw)
+        if not m:
+            return None, raw
+
+        base = (m.group("base") or "").strip()
+        sub = m.group("sub") or None
+        attr = base.replace(".", "_")
+
+        if attr in self._valid_keys:
+            fkey = FieldKey(name=attr, subkey=sub)
+            return fkey, raw
+
+        return None, raw
+
+
     # -----------------------------------------------------------------
     # Read helpers (schema-aware)
     # -----------------------------------------------------------------
+    # def get_value(
+    #     self,
+    #     key: FieldKey,
+    #     *,
+    #     default: Any = None,
+    # ) -> Any:
+    #     """
+    #     Read a config value via a FieldKey.
+
+    #     Supports:
+    #     - FieldKey("lambda_cons")
+    #     - FieldKey("physics_bounds", "K_min")
+    #     """
+    #     name = key.name
+    #     if name not in self._valid_keys:
+    #         self._emit_error(
+    #             f"Unknown config key: {name!r}"
+    #         )
+    #         return default
+
+    #     try:
+    #         cur = getattr(self._cfg, name)
+    #     except Exception as exc:
+    #         self._emit_error(
+    #             f"Failed to read {name!r}: {exc}"
+    #         )
+    #         return default
+
+    #     if not key.is_dict_item():
+    #         return cur
+
+    #     if not isinstance(cur, dict):
+    #         return default
+
+    #     return cur.get(key.subkey, default)
+    
     def get_value(
         self,
         key: FieldKey,
         *,
         default: Any = None,
     ) -> Any:
-        """
-        Read a config value via a FieldKey.
-
-        Supports:
-        - FieldKey("lambda_cons")
-        - FieldKey("physics_bounds", "K_min")
-        """
-        name = key.name
-        if name not in self._valid_keys:
-            self._emit_error(
-                f"Unknown config key: {name!r}"
-            )
+        if key.name not in self._valid_keys:
             return default
 
-        try:
-            cur = getattr(self._cfg, name)
-        except Exception as exc:
-            self._emit_error(
-                f"Failed to read {name!r}: {exc}"
-            )
-            return default
-
+        cur = getattr(self._cfg, key.name, None)
         if not key.is_dict_item():
             return cur
 
@@ -99,7 +188,63 @@ class GeoConfigStore(QObject):
             return default
 
         return cur.get(key.subkey, default)
+    
+    # def set_value_by_key(
+    #     self,
+    #     key: FieldKey,
+    #     value: Any,
+    #     *,
+    #     strict_subkey: bool = True,
+    # ) -> bool:
+    #     """
+    #     Set a config value via a FieldKey.
 
+    #     For dict items, updates by replacing the dict object
+    #     (via merge_dict_field) so change detection stays reliable.
+    #     """
+    #     name = key.name
+    #     if name not in self._valid_keys:
+    #         self._emit_error(
+    #             f"Unknown config key: {name!r}"
+    #         )
+    #         return False
+
+    #     if not key.is_dict_item():
+    #         return self.set_value(name, value)
+
+    #     # Dict item update
+    #     try:
+    #         cur = getattr(self._cfg, name)
+    #     except Exception as exc:
+    #         self._emit_error(
+    #             f"Failed to read {name!r}: {exc}"
+    #         )
+    #         return False
+
+    #     if cur is None:
+    #         base = {}
+    #     elif isinstance(cur, dict):
+    #         base = dict(cur)
+    #     else:
+    #         self._emit_error(
+    #             f"{name!r} is not a dict field."
+    #         )
+    #         return False
+
+    #     sub = key.subkey
+    #     if strict_subkey and (sub not in base):
+    #         # For physics_bounds you usually want this ON
+    #         # to avoid silent typos like "Kmin".
+    #         self._emit_error(
+    #             f"Unknown subkey {sub!r} in {name!r}"
+    #         )
+    #         return False
+
+    #     return self.merge_dict_field(
+    #         name,
+    #         {sub: value},
+    #         replace=False,
+    #     )
     def set_value_by_key(
         self,
         key: FieldKey,
@@ -107,12 +252,6 @@ class GeoConfigStore(QObject):
         *,
         strict_subkey: bool = True,
     ) -> bool:
-        """
-        Set a config value via a FieldKey.
-
-        For dict items, updates by replacing the dict object
-        (via merge_dict_field) so change detection stays reliable.
-        """
         name = key.name
         if name not in self._valid_keys:
             self._emit_error(
@@ -121,19 +260,16 @@ class GeoConfigStore(QObject):
             return False
 
         if not key.is_dict_item():
-            return self.set_value(name, value)
+            value = self._coerce_value(name, value)
+            old = getattr(self._cfg, name)
+            if old != value:
+                setattr(self._cfg, name, value)
+                self._mark_changed({name})
+            return True
 
-        # Dict item update
-        try:
-            cur = getattr(self._cfg, name)
-        except Exception as exc:
-            self._emit_error(
-                f"Failed to read {name!r}: {exc}"
-            )
-            return False
-
+        cur = getattr(self._cfg, name)
         if cur is None:
-            base = {}
+            base: Dict[str, Any] = {}
         elif isinstance(cur, dict):
             base = dict(cur)
         else:
@@ -144,18 +280,16 @@ class GeoConfigStore(QObject):
 
         sub = key.subkey
         if strict_subkey and (sub not in base):
-            # For physics_bounds you usually want this ON
-            # to avoid silent typos like "Kmin".
             self._emit_error(
                 f"Unknown subkey {sub!r} in {name!r}"
             )
             return False
 
-        return self.merge_dict_field(
-            name,
-            {sub: value},
-            replace=False,
-        )
+        base[sub] = value
+        setattr(self._cfg, name, base)
+        self._mark_changed({name})
+        
+        return True
 
     # -----------------------------------------------------------------
     # Batch updates
@@ -173,9 +307,22 @@ class GeoConfigStore(QObject):
     # -----------------------------------------------------------------
     # Mutations (public)
     # -----------------------------------------------------------------
-    def set_value(self, key: str, value: Any) -> bool:
-        changed = self.patch({key: value})
-        return bool(changed)
+    # def set_value(self, key: str, value: Any) -> bool:
+    #     changed = self.patch({key: value})
+    #     return bool(changed)
+    
+    def set_value(
+        self,
+        key: FieldKey,
+        value: Any,
+        *,
+        strict_subkey: bool = True,
+    ) -> bool:
+        return self.set_value_by_key(
+            key,
+            value,
+            strict_subkey=strict_subkey,
+        )
 
     def patch(self, updates: Dict[str, Any]) -> Set[str]:
         """
@@ -256,19 +403,50 @@ class GeoConfigStore(QObject):
 
         return False
 
-    def replace_config(self, cfg: GeoPriorConfig) -> None:
-        """
-        Replace the entire config object.
+    # def replace_config(self, cfg: GeoPriorConfig) -> None:
+    #     """
+    #     Replace the entire config object.
 
-        Use when loading a profile / preset.
-        """
+    #     Use when loading a profile / preset.
+    #     """
+    #     self._cfg = cfg
+    #     self._valid_keys = set(cfg.__dataclass_fields__.keys())
+    #     self._dirty_count = self._compute_dirty_count()
+    #     self.config_replaced.emit(cfg)
+    #     self.dirty_changed.emit(self._dirty_count)
+    #     self.config_changed.emit(set(self._valid_keys))
+        
+    def replace_config(
+        self,
+        cfg: GeoPriorConfig,
+        *,
+        emit: bool = True,
+    ) -> None:
         self._cfg = cfg
-        self._valid_keys = set(cfg.__dataclass_fields__.keys())
+        self._valid_keys = set(
+            cfg.__dataclass_fields__.keys()
+        )
         self._dirty_count = self._compute_dirty_count()
-        self.config_replaced.emit(cfg)
-        self.dirty_changed.emit(self._dirty_count)
-        self.config_changed.emit(set(self._valid_keys))
 
+        if emit:
+            self.config_replaced.emit(cfg)
+            self.dirty_changed.emit(self._dirty_count)
+            self.config_changed.emit(set(self._valid_keys))
+            
+    def snapshot(self) -> GeoPriorConfig:
+        """
+       Return a deep copy of the current config.
+
+       Dialogs use this for Cancel rollback semantics.
+       """
+        try:
+            return copy.deepcopy(self._cfg)
+        except Exception:
+            # Fallback: rebuild from exported dict
+            return GeoPriorConfig(
+                **self._cfg.as_dict(),
+            )
+        
     # -----------------------------------------------------------------
     # Internals
     # -----------------------------------------------------------------

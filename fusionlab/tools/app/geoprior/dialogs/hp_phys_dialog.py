@@ -32,7 +32,12 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QVBoxLayout,
     QWidget,
+    QHBoxLayout,
+    QSizePolicy,
+    QStackedWidget,
 )
+
+
 
 from ..config.store import GeoConfigStore
 from ..config.prior_schema import FieldKey
@@ -113,18 +118,20 @@ class _BoolHpEditor(QWidget):
             return ("fixed", bool(v))
         return ("other", repr(v))
 
-
 class _FloatSpecEditor(QWidget):
     """
     Float HP editor supporting:
     - Range dict:
-        {"type":"float","min_value":...,"max_value":...,
-         "step":..., "sampling":"log"}
+      {"type":"float","min_value":...,"max_value":...,
+       "step":..., "sampling":"log"}
     - List:
-        [0.1, 0.2, 0.3]
+      [0.1, 0.2, 0.3]
     """
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
 
         lay = QGridLayout(self)
@@ -134,57 +141,105 @@ class _FloatSpecEditor(QWidget):
 
         self.cb_mode = QComboBox()
         self.cb_mode.addItems(["Range", "List"])
+        self.cb_mode.setMinimumWidth(88)
+        self.cb_mode.setFixedHeight(26)
+        self.cb_mode.setSizeAdjustPolicy(
+            QComboBox.AdjustToContents
+        )
+
+
+        # -------------------------
+        # Range page
+        # -------------------------
+        self._range_page = QWidget()
+        rg = QGridLayout(self._range_page)
+        rg.setContentsMargins(0, 0, 0, 0)
+        rg.setHorizontalSpacing(6)
+        rg.setVerticalSpacing(6)
+
+        self.lab_min = QLabel("Min:")
+        self.lab_max = QLabel("Max:")
+        self.lab_step = QLabel("Step:")
+        self.lab_samp = QLabel("Sampling:")
+        
+        for lab in (self.lab_min, self.lab_max, self.lab_step, self.lab_samp):
+            lab.setMinimumWidth(52)
+            lab.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         self.sp_min = QDoubleSpinBox()
-        self.sp_min.setDecimals(12)
-        self.sp_min.setRange(-1e18, 1e18)
-
         self.sp_max = QDoubleSpinBox()
-        self.sp_max.setDecimals(12)
-        self.sp_max.setRange(-1e18, 1e18)
-
         self.sp_step = QDoubleSpinBox()
-        self.sp_step.setDecimals(12)
+        for sp in (self.sp_min, self.sp_max, self.sp_step):
+            sp.setMinimumWidth(92)
+            sp.setMaximumWidth(120)
+
+
+        for sp in (self.sp_min, self.sp_max, self.sp_step):
+            sp.setDecimals(9)
+            sp.setRange(-1e18, 1e18)
+            sp.setMinimumHeight(26)
+
         self.sp_step.setRange(0.0, 1e18)
 
         self.cb_sampling = QComboBox()
         self.cb_sampling.addItems(["linear", "log"])
+        self.cb_sampling.setMinimumHeight(26)
+
+        rg.addWidget(self.lab_min, 0, 0)
+        rg.addWidget(self.sp_min, 0, 1)
+        rg.addWidget(self.lab_max, 0, 2)
+        rg.addWidget(self.sp_max, 0, 3)
+
+        rg.addWidget(self.lab_step, 1, 0)
+        rg.addWidget(self.sp_step, 1, 1)
+        rg.addWidget(self.lab_samp, 1, 2)
+        rg.addWidget(self.cb_sampling, 1, 3)
+
+        rg.setColumnStretch(1, 1)
+        rg.setColumnStretch(3, 1)
+
+        # -------------------------
+        # List page
+        # -------------------------
+        self._list_page = QWidget()
+        lg = QHBoxLayout(self._list_page)
+        lg.setContentsMargins(0, 0, 0, 0)
+        lg.setSpacing(8)
 
         self.le_list = QLineEdit()
-        self.le_list.setPlaceholderText("e.g. 0.05, 0.10, 0.15")
+        self.le_list.setPlaceholderText(
+            "e.g. 0.05, 0.10, 0.15"
+        )
+        self.le_list.setMinimumHeight(26)
+        self.le_list.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        lg.addWidget(self.le_list, 1)
 
-        lay.addWidget(self.cb_mode, 0, 0)
-        lay.addWidget(QLabel("Min:"), 0, 1)
-        lay.addWidget(self.sp_min, 0, 2)
-        lay.addWidget(QLabel("Max:"), 0, 3)
-        lay.addWidget(self.sp_max, 0, 4)
+        # -------------------------
+        # Stack (stable switching)
+        # -------------------------
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._range_page)  # idx 0
+        self._stack.addWidget(self._list_page)   # idx 1
 
-        lay.addWidget(QLabel("Step:"), 1, 1)
-        lay.addWidget(self.sp_step, 1, 2)
-        lay.addWidget(QLabel("Sampling:"), 1, 3)
-        lay.addWidget(self.cb_sampling, 1, 4)
+        # Keep height stable (avoid “jump”)
+        rng_h = self._range_page.sizeHint().height()
+        self._stack.setMinimumHeight(rng_h)
 
-        lay.addWidget(self.le_list, 0, 1, 1, 4)
+        lay.addWidget(self.cb_mode, 0, 0, 2, 1)
+        lay.addWidget(self._stack, 0, 1, 2, 1)
+        lay.setColumnStretch(1, 1)
 
-        lay.setColumnStretch(5, 1)
-
-        self.cb_mode.currentTextChanged.connect(self._sync_mode)
+        self.cb_mode.currentTextChanged.connect(
+            self._sync_mode
+        )
         self._sync_mode(self.cb_mode.currentText())
 
     def _sync_mode(self, mode: str) -> None:
-        is_range = str(mode).strip().lower() == "range"
-
-        self.sp_min.setVisible(is_range)
-        self.sp_max.setVisible(is_range)
-        self.sp_step.setVisible(is_range)
-        self.cb_sampling.setVisible(is_range)
-
-        for w in self.findChildren(QLabel):
-            t = (w.text() or "").strip().lower()
-            if t in {"min:", "max:", "step:", "sampling:"}:
-                w.setVisible(is_range)
-
-        self.le_list.setVisible(not is_range)
+        m = str(mode or "").strip().lower()
+        self._stack.setCurrentIndex(0 if m == "range" else 1)
 
     def from_value(self, v: Any, default: Any) -> None:
         vv = v if v is not None else default
@@ -196,7 +251,9 @@ class _FloatSpecEditor(QWidget):
             self.sp_step.setValue(float(vv.get("step", 0.0)))
             samp = str(vv.get("sampling", "linear") or "linear")
             samp = samp.strip().lower()
-            self.cb_sampling.setCurrentText("log" if samp == "log" else "linear")
+            self.cb_sampling.setCurrentText(
+                "log" if samp == "log" else "linear"
+            )
             self.le_list.setText("")
             return
 
@@ -223,7 +280,9 @@ class _FloatSpecEditor(QWidget):
             self.sp_step.setValue(float(default.get("step", 0.0)))
             samp = str(default.get("sampling", "linear") or "linear")
             samp = samp.strip().lower()
-            self.cb_sampling.setCurrentText("log" if samp == "log" else "linear")
+            self.cb_sampling.setCurrentText(
+                "log" if samp == "log" else "linear"
+            )
         else:
             self.sp_min.setValue(0.0)
             self.sp_max.setValue(1.0)
@@ -271,7 +330,7 @@ class _FloatSpecEditor(QWidget):
 
     @staticmethod
     def _fmt_float(x: float) -> str:
-        s = f"{float(x):.12f}"
+        s = f"{float(x):.9f}"
         s = s.rstrip("0").rstrip(".")
         return s or "0"
 
@@ -294,7 +353,6 @@ class _FloatSpecEditor(QWidget):
                     continue
             return ("list", tuple(vals))
         return ("other", repr(v))
-
 
 class _ChoiceEditor(QWidget):
     """
@@ -372,10 +430,6 @@ class PhysHPDialog(QDialog):
     """
 
     _PHYS_KEYS = (
-        "pde_mode",
-        "kappa_mode",
-        "scale_pde_residuals",
-        "hd_factor",
         "mv",
         "kappa",
         "lambda_offset",
@@ -391,6 +445,7 @@ class PhysHPDialog(QDialog):
         "scale_mv_with_offset",
         "scale_q_with_offset",
     )
+
 
     def __init__(
         self,
@@ -418,12 +473,6 @@ class PhysHPDialog(QDialog):
             self._initial[k] = space.get(k, defaults.get(k))
 
         self._init_norm: Dict[str, Tuple] = {
-            "scale_pde_residuals": _BoolHpEditor.norm_value(
-                self._initial.get("scale_pde_residuals"),
-            ),
-            "hd_factor": _FloatSpecEditor.norm_value(
-                self._initial.get("hd_factor"),
-            ),
             "mv": _FloatSpecEditor.norm_value(
                 self._initial.get("mv"),
             ),
@@ -473,64 +522,7 @@ class PhysHPDialog(QDialog):
         layout.setSpacing(12)
 
         # ==================================================
-        # Card 1: Physics switches
-        # ==================================================
-        card1, grid1 = self._make_card("Physics switches")
-
-        self.le_pde = QLineEdit()
-        self.le_pde.setPlaceholderText("e.g. both")
-        self.le_pde.setText(
-            self._fmt_str_list(
-                self._coerce_str_list(
-                    space.get("pde_mode"),
-                    defaults.get("pde_mode", ["both"]),
-                )
-            )
-        )
-
-        self.le_kmode = QLineEdit()
-        self.le_kmode.setPlaceholderText("e.g. bar, kb")
-        self.le_kmode.setText(
-            self._fmt_str_list(
-                self._coerce_str_list(
-                    space.get("kappa_mode"),
-                    defaults.get("kappa_mode", ["kb"]),
-                )
-            )
-        )
-
-        self.scale_pde_editor = _BoolHpEditor()
-        self.scale_pde_editor.from_value(
-            space.get("scale_pde_residuals"),
-            defaults.get("scale_pde_residuals"),
-        )
-
-        self.hd_editor = _FloatSpecEditor()
-        self.hd_editor.from_value(
-            space.get("hd_factor"),
-            defaults.get("hd_factor"),
-        )
-
-        r = 0
-        grid1.addWidget(self._lbl("PDE mode(s):"), r, 0)
-        grid1.addWidget(self.le_pde, r, 1)
-        r += 1
-
-        grid1.addWidget(self._lbl("kappa mode(s):"), r, 0)
-        grid1.addWidget(self.le_kmode, r, 1)
-        r += 1
-
-        grid1.addWidget(self._lbl("Scale PDE residuals:"), r, 0)
-        grid1.addWidget(self.scale_pde_editor, r, 1)
-        r += 1
-
-        grid1.addWidget(self._lbl("HD factor:"), r, 0)
-        grid1.addWidget(self.hd_editor, r, 1)
-
-        layout.addWidget(card1)
-
-        # ==================================================
-        # Card 2: Learnable scalar initials + offset coupling
+        # Card 1: Learnable scalar initials + offset coupling
         # ==================================================
         card2, grid2 = self._make_card(
             "Learnable scalars and offset coupling",
@@ -591,7 +583,7 @@ class PhysHPDialog(QDialog):
         grid2.addWidget(self.kappa_editor, rr, 1)
         rr += 1
 
-        grid2.addWidget(self._lbl("lambda offset:"), rr, 0)
+        grid2.addWidget(self._lbl("λ offset:"), rr, 0)
         grid2.addWidget(self.lam_off_editor, rr, 1)
         rr += 1
 
@@ -610,10 +602,9 @@ class PhysHPDialog(QDialog):
         grid2.addWidget(self._lbl("scale q w/ offset:"), rr, 0)
         grid2.addWidget(self.ck_q_scale, rr, 1)
 
-        layout.addWidget(card2)
 
         # ==================================================
-        # Card 3: Physics loss weights
+        # Card 2: Physics loss weights
         # ==================================================
         card3, grid3 = self._make_card("Physics loss weights")
 
@@ -687,7 +678,23 @@ class PhysHPDialog(QDialog):
         grid3.addWidget(self._lbl("λ q:"), tr, 0)
         grid3.addWidget(self.lq_editor, tr, 1)
 
-        layout.addWidget(card3)
+        card2.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
+        card3.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Preferred,
+        )
+        
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        
+        row.addWidget(card2, 1)
+        row.addWidget(card3, 1)
+        
+        layout.addLayout(row, 1)
 
         # ----------------------------
         # Buttons
@@ -739,6 +746,7 @@ class PhysHPDialog(QDialog):
         grid.setVerticalSpacing(8)
         grid.setColumnStretch(1, 1)
         outer.addLayout(grid)
+        outer.addStretch(1)
 
         return frame, grid
 
@@ -899,8 +907,6 @@ class PhysHPDialog(QDialog):
             QMessageBox.warning(self, "Invalid kappa mode", err)
             return
 
-        scale_pde = self.scale_pde_editor.to_value()
-        hd = self.hd_editor.to_value()
         mv = self.mv_editor.to_value()
         kap = self.kappa_editor.to_value()
         lam_off = self.lam_off_editor.to_value()
@@ -921,7 +927,6 @@ class PhysHPDialog(QDialog):
 
         # Validate float specs
         for nm, sp in [
-            ("hd_factor", hd),
             ("mv", mv),
             ("kappa", kap),
             ("lambda_offset", lam_off),
@@ -972,17 +977,6 @@ class PhysHPDialog(QDialog):
         if self._initial.get("kappa_mode") != kmode:
             frag["kappa_mode"] = kmode
 
-        if (
-            _BoolHpEditor.norm_value(scale_pde)
-            != self._init_norm["scale_pde_residuals"]
-        ):
-            frag["scale_pde_residuals"] = scale_pde
-
-        if (
-            _FloatSpecEditor.norm_value(hd)
-            != self._init_norm["hd_factor"]
-        ):
-            frag["hd_factor"] = hd
 
         if (
             _FloatSpecEditor.norm_value(mv)
@@ -1042,6 +1036,209 @@ class PhysHPDialog(QDialog):
             != self._init_norm["scale_q_with_offset"]
         ):
             frag["scale_q_with_offset"] = q_scale
+
+        if frag:
+            self._apply_fragment(frag)
+
+        self.accept()
+
+class PhysSwitchesDetailsDialog(QDialog):
+    """
+    Compact dialog for Physics switches details:
+    - scale_pde_residuals: Tune as boolean HP OR Fixed True/False
+    - hd_factor: Range/List with step + sampling
+
+    Writes are applied only on OK.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QDialog] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._store = store
+        self.setWindowTitle("HD factor & PDE scaling")
+
+        offset_mode = str(self._get("offset_mode", "mul") or "mul")
+        defaults = default_tuner_search_space(offset_mode=offset_mode)
+
+        space = self._coerce_space(self._get_space(defaults), defaults)
+
+        self._initial = {
+            "scale_pde_residuals": space.get(
+                "scale_pde_residuals", defaults.get("scale_pde_residuals")
+            ),
+            "hd_factor": space.get("hd_factor", defaults.get("hd_factor")),
+        }
+
+        self._init_norm = {
+            "scale_pde_residuals": _BoolHpEditor.norm_value(
+                self._initial.get("scale_pde_residuals")
+            ),
+            "hd_factor": _FloatSpecEditor.norm_value(
+                self._initial.get("hd_factor")
+            ),
+        }
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
+
+        card, grid = self._make_card("Details")
+
+        self.scale_pde_editor = _BoolHpEditor()
+        self.scale_pde_editor.from_value(
+            space.get("scale_pde_residuals"),
+            defaults.get("scale_pde_residuals"),
+        )
+
+        self.hd_editor = _FloatSpecEditor()
+        self.hd_editor.from_value(
+            space.get("hd_factor"),
+            defaults.get("hd_factor"),
+        )
+
+        r = 0
+        grid.addWidget(self._lbl("Scale PDE residuals:"), r, 0)
+        grid.addWidget(self.scale_pde_editor, r, 1)
+        r += 1
+
+        grid.addWidget(self._lbl("HD factor:"), r, 0)
+        grid.addWidget(self.hd_editor, r, 1)
+
+        layout.addWidget(card)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        ok_btn = btns.button(QDialogButtonBox.Ok)
+        if ok_btn is not None:
+            ok_btn.setDefault(True)
+
+    # ----------------------------
+    # Public entry
+    # ----------------------------
+    @classmethod
+    def edit(
+        cls,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QDialog] = None,
+    ) -> bool:
+        dlg = cls(store=store, parent=parent)
+        return dlg.exec_() == QDialog.Accepted
+
+    # ----------------------------
+    # Store helpers (same logic as PhysHPDialog)
+    # ----------------------------
+    def _get(self, key: str, default: Any) -> Any:
+        try:
+            return self._store.get_value(FieldKey(key))
+        except Exception:
+            return default
+
+    def _get_space(self, defaults: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            cur = self._store.get_value(FieldKey("tuner_search_space"))
+        except Exception:
+            cur = None
+        if not isinstance(cur, dict):
+            return dict(defaults)
+        merged = dict(defaults)
+        merged.update(dict(cur))
+        return merged
+
+    @staticmethod
+    def _coerce_space(space: Any, defaults: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(space, dict):
+            return dict(defaults)
+        merged = dict(defaults)
+        merged.update(dict(space))
+        return merged
+
+    def _apply_fragment(self, frag: Dict[str, Any]) -> None:
+        if not frag:
+            return
+        with self._store.batch():
+            self._store.merge_dict_field(
+                "tuner_search_space",
+                dict(frag),
+                replace=False,
+            )
+
+    # ----------------------------
+    # UI helpers (reuse same as PhysHPDialog)
+    # ----------------------------
+    def _make_card(self, title: str) -> Tuple[QFrame, QGridLayout]:
+        frame = QFrame()
+        frame.setObjectName("card")
+
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(12, 10, 12, 12)
+        outer.setSpacing(8)
+
+        ttl = QLabel(title)
+        ttl.setObjectName("cardTitle")
+        outer.addWidget(ttl)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        outer.addLayout(grid)
+
+        return frame, grid
+
+    def _lbl(self, text: str) -> QLabel:
+        lab = QLabel(text)
+        lab.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        return lab
+
+    # ----------------------------
+    # Validation + apply
+    # ----------------------------
+    def _validate_float_spec(self, *, name: str, spec: Any) -> Optional[str]:
+        # same as PhysHPDialog
+        if isinstance(spec, dict) and spec.get("type") == "float":
+            mn = float(spec.get("min_value", 0.0))
+            mx = float(spec.get("max_value", 0.0))
+            if not (mn < mx):
+                return f"{name}: min_value must be < max_value"
+            samp = str(spec.get("sampling", "linear") or "linear").strip().lower()
+            if samp == "log" and (mn <= 0.0 or mx <= 0.0):
+                return f"{name}: log sampling needs min/max > 0"
+            step = float(spec.get("step", 0.0) or 0.0)
+            if step < 0.0:
+                return f"{name}: step must be >= 0"
+            return None
+
+        if isinstance(spec, (list, tuple)):
+            if not spec:
+                return f"{name}: empty list"
+            return None
+
+        return f"{name}: unsupported spec"
+
+    def _on_accept(self) -> None:
+        scale_pde = self.scale_pde_editor.to_value()
+        hd = self.hd_editor.to_value()
+
+        e = self._validate_float_spec(name="hd_factor", spec=hd)
+        if e:
+            QMessageBox.warning(self, "Invalid range", e)
+            return
+
+        frag: Dict[str, Any] = {}
+
+        if _BoolHpEditor.norm_value(scale_pde) != self._init_norm["scale_pde_residuals"]:
+            frag["scale_pde_residuals"] = scale_pde
+
+        if _FloatSpecEditor.norm_value(hd) != self._init_norm["hd_factor"]:
+            frag["hd_factor"] = hd
 
         if frag:
             self._apply_fragment(frag)
