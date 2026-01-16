@@ -126,6 +126,65 @@ class DeviceOptions:
             },
         )
 
+    # --------------------------- legacy mapping ---------------------------
+
+    @classmethod
+    def from_cfg(cls, cfg: Mapping[str, Any]) -> "DeviceOptions":
+        """Create options from a legacy NAT-style config dict.
+
+        Accepts either v3.2 field names (tf_*) or NAT-style keys (TF_*).
+        Missing entries fall back to dataclass defaults.
+        """
+        cfg = cfg or {}
+
+        def pick(*names: str):
+            for n in names:
+                if n in cfg:
+                    return cfg.get(n)
+            return None
+
+        mode = pick("tf_device_mode", "TF_DEVICE_MODE", "device_mode")
+        mode = str(mode or "auto").strip().lower()
+
+        intra = _none_if_nonpos(
+            pick("tf_intra_threads", "TF_INTRA_THREADS", "intra_threads")
+        )
+        inter = _none_if_nonpos(
+            pick("tf_inter_threads", "TF_INTER_THREADS", "inter_threads")
+        )
+
+        ag = pick("tf_gpu_allow_growth", "TF_GPU_ALLOW_GROWTH", "gpu_allow_growth")
+        allow_growth = bool(True if ag is None else ag)
+
+        mem = _none_if_nonpos(
+            pick(
+                "tf_gpu_memory_limit_mb",
+                "TF_GPU_MEMORY_LIMIT_MB",
+                "gpu_memory_limit_mb",
+            )
+        )
+
+        return cls(
+            tf_device_mode=mode,
+            tf_intra_threads=intra,
+            tf_inter_threads=inter,
+            tf_gpu_allow_growth=allow_growth,
+            tf_gpu_memory_limit_mb=mem,
+        )
+
+    def to_cfg_overrides(self) -> Dict[str, Any]:
+        """Export NAT-style overrides consumed by backend config (TF_* keys)."""
+        out: Dict[str, Any] = {
+            "TF_DEVICE_MODE": (self.tf_device_mode or "auto").strip().lower(),
+            "TF_GPU_ALLOW_GROWTH": bool(self.tf_gpu_allow_growth),
+        }
+        if self.tf_intra_threads is not None:
+            out["TF_INTRA_THREADS"] = int(self.tf_intra_threads)
+        if self.tf_inter_threads is not None:
+            out["TF_INTER_THREADS"] = int(self.tf_inter_threads)
+        if self.tf_gpu_memory_limit_mb is not None:
+            out["TF_GPU_MEMORY_LIMIT_MB"] = int(self.tf_gpu_memory_limit_mb)
+        return out
 
 # ----------------------------------------------------------------------
 # Qt widget
@@ -161,15 +220,31 @@ class DeviceOptionsWidget(QWidget):
 
     def __init__(
         self,
-        store: GeoConfigStore,
+        store: Optional[GeoConfigStore] = None,
         parent: Optional[QWidget] = None,
+        *,
+        initial: Optional[DeviceOptions] = None,
     ) -> None:
         super().__init__(parent)
         self._store = store
+
+        # Baseline values used when a control group is disabled
+        # (meaning: "do not change").
+        if initial is not None:
+            self._baseline_opts = initial
+        elif self._store is not None:
+            self._baseline_opts = DeviceOptions.from_store(self._store)
+        else:
+            self._baseline_opts = DeviceOptions()
+
         self._build_ui()
         self._connect()
 
-        self.refresh_from_store()
+        if self._store is not None:
+            self.refresh_from_store()
+        else:
+            self.refresh_from_options(self._baseline_opts)
+
         self._refresh_diag()
 
     # --------------------------- UI building ---------------------------
@@ -393,44 +468,6 @@ class DeviceOptionsWidget(QWidget):
 
         self._apply_enable_state()
 
-    def _commit_to_store(self, *_: Any) -> None:
-        """Collect UI state and push to store."""
-        mode = str(self.cmb_backend.currentData() or "auto").strip().lower()
-
-        # threads
-        if self.chk_threads_override.isChecked():
-            intra = int(self.spin_intra.value())
-            inter = int(self.spin_inter.value())
-        else:
-            intra = None
-            inter = None
-
-        # gpu memory
-        if self.chk_gpu_controls.isChecked():
-            allow_growth = bool(self.chk_allow_growth.isChecked())
-            if self.chk_mem_cap.isChecked():
-                mem = int(self.spin_mem_limit.value())
-            else:
-                mem = None
-        else:
-            # if user disables GPU controls, keep current store values
-            # (do not force reset); we just avoid writing changes.
-            allow_growth = None
-            mem = None
-
-        patch: Dict[str, Any] = {
-            "tf_device_mode": mode,
-            "tf_intra_threads": intra,
-            "tf_inter_threads": inter,
-        }
-        if allow_growth is not None:
-            patch["tf_gpu_allow_growth"] = allow_growth
-        if self.chk_gpu_controls.isChecked():
-            patch["tf_gpu_memory_limit_mb"] = mem
-
-        _store_patch_fields(self._store, patch)
-        self._apply_enable_state()
-
     # --------------------------- enable logic ---------------------------
 
     def _apply_enable_state(self) -> None:
@@ -486,7 +523,149 @@ class DeviceOptionsWidget(QWidget):
 
         self.txt_diag.setPlainText("\n".join(lines))
 
+    def refresh_from_options(self, opts: DeviceOptions) -> None:
+        """Refresh UI from a standalone options object (legacy dialogs)."""
+        with QSignalBlocker(self.cmb_backend):
+            idx = self.cmb_backend.findData((opts.tf_device_mode or "auto").lower())
+            if idx < 0:
+                idx = self.cmb_backend.findData("auto")
+            if idx >= 0:
+                self.cmb_backend.setCurrentIndex(idx)
 
+        has_threads = (opts.tf_intra_threads is not None) or (
+            opts.tf_inter_threads is not None
+        )
+        with QSignalBlocker(self.chk_threads_override):
+            self.chk_threads_override.setChecked(bool(has_threads))
+
+        with QSignalBlocker(self.spin_intra):
+            self.spin_intra.setValue(
+                int(opts.tf_intra_threads or max(1, self.spin_intra.value()))
+            )
+        with QSignalBlocker(self.spin_inter):
+            self.spin_inter.setValue(
+                int(opts.tf_inter_threads or max(1, self.spin_inter.value()))
+            )
+
+        cap_set = opts.tf_gpu_memory_limit_mb is not None
+        with QSignalBlocker(self.chk_gpu_controls):
+            self.chk_gpu_controls.setChecked(True)
+
+        with QSignalBlocker(self.chk_allow_growth):
+            self.chk_allow_growth.setChecked(bool(opts.tf_gpu_allow_growth))
+
+        with QSignalBlocker(self.chk_mem_cap):
+            self.chk_mem_cap.setChecked(bool(cap_set))
+
+        with QSignalBlocker(self.spin_mem_limit):
+            self.spin_mem_limit.setValue(
+                int(opts.tf_gpu_memory_limit_mb or max(256, self.spin_mem_limit.value()))
+            )
+
+        self._apply_enable_state()
+
+    def _collect_options(self) -> DeviceOptions:
+        """Collect current UI state into a DeviceOptions object.
+
+        If a whole control group is disabled (unchecked), fall back
+        to baseline values, meaning "do not change".
+        """
+        mode = str(self.cmb_backend.currentData() or "auto").strip().lower()
+
+        # threads
+        if self.chk_threads_override.isChecked():
+            intra = int(self.spin_intra.value())
+            inter = int(self.spin_inter.value())
+        else:
+            intra = None
+            inter = None
+
+        # gpu
+        if self.chk_gpu_controls.isChecked():
+            allow_growth = bool(self.chk_allow_growth.isChecked())
+            mem = int(self.spin_mem_limit.value()) if self.chk_mem_cap.isChecked() else None
+        else:
+            allow_growth = bool(self._baseline_opts.tf_gpu_allow_growth)
+            mem = self._baseline_opts.tf_gpu_memory_limit_mb
+
+        return DeviceOptions(
+            tf_device_mode=mode,
+            tf_intra_threads=intra,
+            tf_inter_threads=inter,
+            tf_gpu_allow_growth=allow_growth,
+            tf_gpu_memory_limit_mb=mem,
+        )
+
+    def to_cfg_overrides(self) -> Dict[str, Any]:
+        """Return NAT-style TF_* overrides from current UI state."""
+        return self._collect_options().to_cfg_overrides()
+
+    # def _commit_to_store(self, *_: Any) -> None:
+    #     """Collect UI state and push to store (or keep locally)."""
+    #     opts = self._collect_options()
+
+    #     patch: Dict[str, Any] = {
+    #         "tf_device_mode": (opts.tf_device_mode or "auto").strip().lower(),
+    #         "tf_intra_threads": opts.tf_intra_threads,
+    #         "tf_inter_threads": opts.tf_inter_threads,
+    #     }
+
+    #     # GPU controls: if disabled, do not write (preserve baseline)
+    #     if self.chk_gpu_controls.isChecked():
+    #         patch["tf_gpu_allow_growth"] = bool(opts.tf_gpu_allow_growth)
+    #         patch["tf_gpu_memory_limit_mb"] = opts.tf_gpu_memory_limit_mb
+
+    #     if self._store is not None:
+    #         _store_patch_fields(self._store, patch)
+    #     else:
+    #         # standalone: keep baseline updated so OK exports correct values
+    #         self._baseline_opts = DeviceOptions(
+    #             tf_device_mode=patch.get("tf_device_mode", self._baseline_opts.tf_device_mode),
+    #             tf_intra_threads=patch.get("tf_intra_threads", self._baseline_opts.tf_intra_threads),
+    #             tf_inter_threads=patch.get("tf_inter_threads", self._baseline_opts.tf_inter_threads),
+    #             tf_gpu_allow_growth=patch.get("tf_gpu_allow_growth", self._baseline_opts.tf_gpu_allow_growth),
+    #             tf_gpu_memory_limit_mb=patch.get("tf_gpu_memory_limit_mb", self._baseline_opts.tf_gpu_memory_limit_mb),
+    #         )
+
+    #     self._apply_enable_state()
+        
+    def _commit_to_store(self, *_: Any) -> None:
+        """Collect UI state and push to store."""
+        mode = str(self.cmb_backend.currentData() or "auto").strip().lower()
+
+        # threads
+        if self.chk_threads_override.isChecked():
+            intra = int(self.spin_intra.value())
+            inter = int(self.spin_inter.value())
+        else:
+            intra = None
+            inter = None
+
+        # gpu memory
+        if self.chk_gpu_controls.isChecked():
+            allow_growth = bool(self.chk_allow_growth.isChecked())
+            if self.chk_mem_cap.isChecked():
+                mem = int(self.spin_mem_limit.value())
+            else:
+                mem = None
+        else:
+            # if user disables GPU controls, keep current store values
+            # (do not force reset); we just avoid writing changes.
+            allow_growth = None
+            mem = None
+
+        patch: Dict[str, Any] = {
+            "tf_device_mode": mode,
+            "tf_intra_threads": intra,
+            "tf_inter_threads": inter,
+        }
+        if allow_growth is not None:
+            patch["tf_gpu_allow_growth"] = allow_growth
+        if self.chk_gpu_controls.isChecked():
+            patch["tf_gpu_memory_limit_mb"] = mem
+
+        _store_patch_fields(self._store, patch)
+        self._apply_enable_state()
 # ----------------------------------------------------------------------
 # Internal helpers (robust against small API shifts)
 # ----------------------------------------------------------------------

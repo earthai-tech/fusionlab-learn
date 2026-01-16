@@ -92,7 +92,7 @@ from .ui.menu_manager import MenuManager
 from .ui.splash import LoadingSplash
 from .ui.tools_tab import ToolsTab
 from .ui.train_tab import TrainTab
-from .ui.panel import ConfigCenterPanel
+from .ui.setup_tab import SetupTab
 from .ui.preprocess_tab import PreprocessTab
 from .ui.tune_tab import TuneTab
 from .ui.inference_tab import InferenceTab
@@ -760,55 +760,58 @@ class GeoPriorForecaster(QMainWindow):
     # Tabs
     # ------------------------------------------------------------------
     def _init_tabs(self) -> None:
-        """Create tabs. Only Train is functional for now."""
-        # cfg = self.geo_cfg
-
-        # ==================================================
+        """Create and register all workflow tabs (v3.2 modular UI)."""
+    
+        # ==============================================================
+        # Core workflow tabs (module-based)
+        # ==============================================================
+    
+        # ------------------------------
         # Train tab (new module)
-        # ==================================================
+        # ------------------------------
         self.train_tab = TrainTab(
             store=self.config_store,
             make_card=self._make_card,
             make_run_button=self._make_run_button,
             parent=self,
         )
-        
-        # Optional: keep old attribute names on the App
-        # so the rest of app.py does not change.
-        self.sp_train_end = self.train_tab.sp_train_end
-        self.sp_forecast_start = self.train_tab.sp_forecast_start
-        self.sp_forecast_horizon = self.train_tab.sp_forecast_horizon
-        self.sp_time_steps = self.train_tab.sp_time_steps
-        
-        self.sp_epochs = self.train_tab.sp_epochs
-        self.sp_batch_size = self.train_tab.sp_batch_size
-        self.sp_lr = self.train_tab.sp_lr
-        
-        self.cmb_pde_mode = self.train_tab.cmb_pde_mode
-        self.sb_lcons = self.train_tab.sb_lcons
-        self.sb_lgw = self.train_tab.sb_lgw
-        self.sb_lprior = self.train_tab.sb_lprior
-        self.sb_lsmooth = self.train_tab.sb_lsmooth
-        self.sb_lmv = self.train_tab.sb_lmv
-        
-        self.sp_phys_warmup = self.train_tab.sp_phys_warmup
-        self.sp_phys_ramp = self.train_tab.sp_phys_ramp
-        self.chk_scale_pde = self.train_tab.chk_scale_pde
-        
-        self.btn_features = self.train_tab.btn_features
-        self.btn_arch = self.train_tab.btn_arch
-        self.btn_prob = self.train_tab.btn_prob
-        self.physics_btn = self.train_tab.physics_btn
-        
-        self.btn_train_options = self.train_tab.btn_train_options
-        self.chk_eval_training = self.train_tab.chk_eval_training
-        self.chk_build_future = self.train_tab.chk_build_future
-        self.chk_clean_stage1 = self.train_tab.chk_clean_stage1
-        self.train_btn = self.train_tab.train_btn
-        
-        # ==================================================
+    
+        # Backward-compatible attribute aliases (keep old app.py code working)
+        tt = self.train_tab
+        self.sp_train_end = tt.sp_train_end
+        self.sp_forecast_start = tt.sp_forecast_start
+        self.sp_forecast_horizon = tt.sp_forecast_horizon
+        self.sp_time_steps = tt.sp_time_steps
+    
+        self.sp_epochs = tt.sp_epochs
+        self.sp_batch_size = tt.sp_batch_size
+        self.sp_lr = tt.sp_lr
+    
+        self.cmb_pde_mode = tt.cmb_pde_mode
+        self.sb_lcons = tt.sb_lcons
+        self.sb_lgw = tt.sb_lgw
+        self.sb_lprior = tt.sb_lprior
+        self.sb_lsmooth = tt.sb_lsmooth
+        self.sb_lmv = tt.sb_lmv
+    
+        self.sp_phys_warmup = tt.sp_phys_warmup
+        self.sp_phys_ramp = tt.sp_phys_ramp
+        self.chk_scale_pde = tt.chk_scale_pde
+    
+        self.btn_features = tt.btn_features
+        self.btn_arch = tt.btn_arch
+        self.btn_prob = tt.btn_prob
+        self.physics_btn = tt.physics_btn
+    
+        self.btn_train_options = tt.btn_train_options
+        self.chk_eval_training = tt.chk_eval_training
+        self.chk_build_future = tt.chk_build_future
+        self.chk_clean_stage1 = tt.chk_clean_stage1
+        self.train_btn = tt.train_btn
+    
+        # ------------------------------
         # Tune tab (new module)
-        # ==================================================
+        # ------------------------------
         self.tune_tab = TuneTab(
             store=self.config_store,
             make_card=self._make_card,
@@ -816,42 +819,42 @@ class GeoPriorForecaster(QMainWindow):
             range_editor_cls=RangeListEditor,
             parent=self,
         )
-        
-        # Keep old attribute names for compatibility
-        self.hp_embed_dim = self.tune_tab.hp_embed_dim
-        self.hp_hidden_units = self.tune_tab.hp_hidden_units
-        self.hp_lstm_units = self.tune_tab.hp_lstm_units
-        self.hp_attention_units = self.tune_tab.hp_attention_units
-        self.hp_num_heads = self.tune_tab.hp_num_heads
-        self.hp_vsn_units = self.tune_tab.hp_vsn_units
-        self.hp_dropout = self.tune_tab.hp_dropout
-        
-        self.hp_pde_mode = self.tune_tab.hp_pde_mode
-        self.hp_kappa_mode = self.tune_tab.hp_kappa_mode
-        self.hp_scale_pde_bool = self.tune_tab.hp_scale_pde_bool
-        self.hp_hd = self.tune_tab.hp_hd
-        
-        self.chk_eval_tuned = self.tune_tab.chk_eval_tuned
-        self.spin_max_trials = self.tune_tab.spin_max_trials
-        self.btn_model_params = self.tune_tab.btn_model_params
-        self.btn_scalars = self.tune_tab.btn_scalars
-        
-        self.btn_tune_options = self.tune_tab.btn_tune_options
-        self.btn_run_tune = self.tune_tab.btn_run_tune
-
-        # ==================================================
+    
+        # Backward-compatible attribute aliases
+        tun = self.tune_tab
+        self.hp_embed_dim = tun.hp_embed_dim
+        self.hp_hidden_units = tun.hp_hidden_units
+        self.hp_lstm_units = tun.hp_lstm_units
+        self.hp_attention_units = tun.hp_attention_units
+        self.hp_num_heads = tun.hp_num_heads
+        self.hp_vsn_units = tun.hp_vsn_units
+        self.hp_dropout = tun.hp_dropout
+    
+        self.hp_pde_mode = tun.hp_pde_mode
+        self.hp_kappa_mode = tun.hp_kappa_mode
+        self.hp_scale_pde_bool = tun.hp_scale_pde_bool
+        self.hp_hd = tun.hp_hd
+    
+        self.chk_eval_tuned = tun.chk_eval_tuned
+        self.spin_max_trials = tun.spin_max_trials
+        self.btn_model_params = tun.btn_model_params
+        self.btn_scalars = tun.btn_scalars
+    
+        self.btn_tune_options = tun.btn_tune_options
+        self.btn_run_tune = tun.btn_run_tune
+    
+        # ------------------------------
         # Inference tab (new module)
-        # ==================================================
+        # ------------------------------
         self.inference_tab = InferenceTab(
             store=self.config_store,
             make_card=self._make_card,
             make_run_button=self._make_run_button,
             parent=self,
         )
-        
+    
         # Backward-compatible attribute aliases
         it = self.inference_tab
-        
         self.inf_model_edit = it.inf_model_edit
         self.inf_model_btn = it.inf_model_btn
         self.inf_manifest_edit = it.inf_manifest_edit
@@ -862,7 +865,7 @@ class GeoPriorForecaster(QMainWindow):
         self.inf_inputs_btn = it.inf_inputs_btn
         self.inf_targets_edit = it.inf_targets_edit
         self.inf_targets_btn = it.inf_targets_btn
-        
+    
         self.chk_inf_use_source_calib = it.chk_inf_use_source_calib
         self.chk_inf_fit_calib = it.chk_inf_fit_calib
         self.inf_calib_edit = it.inf_calib_edit
@@ -871,14 +874,13 @@ class GeoPriorForecaster(QMainWindow):
         self.chk_inf_include_gwl = it.chk_inf_include_gwl
         self.chk_inf_plots = it.chk_inf_plots
         self.sp_inf_batch = it.sp_inf_batch
-        
+    
         self.btn_inf_options = it.btn_inf_options
         self.btn_run_infer = it.btn_run_infer
-        
-
-        # ==================================================
-        # Transferability tab – cross-city transfer matrix
-        # ==================================================
+    
+        # ------------------------------
+        # Transfer tab (cross-city transferability)
+        # ------------------------------
         self.xfer_tab = XferTab(
             store=self.config_store,
             make_card=self._make_card,
@@ -886,23 +888,36 @@ class GeoPriorForecaster(QMainWindow):
             parent=self,
         )
     
-        # ----------------------
- 
-        # Data tab (new)
-        data_tab  = DataTab(parent=self)
-        # Setup tab tab (new)
-        setup_tab = ConfigCenterPanel(
+        # ==============================================================
+        # Data / Setup / Preprocess (new central UI modules)
+        # ==============================================================
+    
+        # Data tab: dataset library + editor
+        data_tab = DataTab(parent=self)
+    
+        # Experiment Setup tab: store-backed configuration cards
+        setup_tab = SetupTab(
             store=self.config_store,
             parent=self,
         )
+    
+        # Preprocess tab: stage1 preparation / readiness
         preprocess_tab = PreprocessTab(
             make_card=self._make_card,
             make_run_button=self._make_run_button,
             store=self.config_store,
             parent=self,
         )
-
+    
+        # Keep references on the main window
         self.data_tab = data_tab
+        self.setup_tab = setup_tab
+        self.preprocess_tab = preprocess_tab
+    
+        # Old attribute name used elsewhere (Inference)
+        self.infer_tab = it
+    
+        # DataTab: propagate column overrides into store (feature_overrides dict)
         self.data_tab.column_overrides_changed.connect(
             lambda p: self.config_store.merge_dict_field(
                 "feature_overrides",
@@ -910,42 +925,41 @@ class GeoPriorForecaster(QMainWindow):
                 replace=False,
             )
         )
-        self.setup_tab = setup_tab
-        self.preprocess_tab  = preprocess_tab 
-
-        self.infer_tab = it
-
+    
+        # DataTab: show default results root from store (fallback to gui_runs_root)
+        rr = self.config_store.get_value(
+            FieldKey("results_root"),
+            default=self.gui_runs_root,
+        )
+        self.data_tab.set_results_root(rr)
+    
+        # ==============================================================
+        # Register tabs in the main QTabWidget (ordering matters)
+        # ==============================================================
+    
+        # Data
         self._data_tab_index = self.tabs.addTab(
             self.data_tab,
-            self._workflow_icon(
-                "data.svg",
-                QStyle.SP_DirOpenIcon,
-            ),
+            self._workflow_icon("data.svg", QStyle.SP_DirOpenIcon),
             "Data",
         )
-        self.data_tab.set_datasets_root(
-            Path(self.gui_runs_root) / "_datasets"
-        )
-        
+        # Default datasets library location under results root
+        self.data_tab.set_datasets_root(Path(self.gui_runs_root) / "_datasets")
+    
+        # Experiment Setup
         self._setup_tab_index = self.tabs.addTab(
             self.setup_tab,
-            self._workflow_icon(
-                "setup.svg",
-                QStyle.SP_FileDialogContentsView,
-            ),
+            self._workflow_icon("setup.svg", QStyle.SP_FileDialogContentsView),
             "Experiment Setup",
         )
-
-
+    
+        # Preprocess
         self._preprocess_tab_index = self.tabs.addTab(
             self.preprocess_tab,
-            self._workflow_icon(
-                "stage1.svg",
-                QStyle.SP_DriveHDIcon,
-            ),
+            self._workflow_icon("stage1.svg", QStyle.SP_DriveHDIcon),
             "Preprocess",
         )
-        
+    
         # Results tab – browse & download artifacts/runs
         results_tab = ResultsDownloadTab(
             results_root=self.gui_runs_root,
@@ -953,57 +967,65 @@ class GeoPriorForecaster(QMainWindow):
             parent=self,
         )
         self.results_tab = results_tab
-
+    
+        # Train
         self._train_tab_index = self.tabs.addTab(
             self.train_tab,
             self._workflow_icon("train.svg", QStyle.SP_ComputerIcon),
             "Train",
         )
-
+    
+        # Tune
         self._tune_tab_index = self.tabs.addTab(
             self.tune_tab,
             self._workflow_icon("tune.svg", QStyle.SP_FileDialogDetailedView),
             "Tune",
         )
-
+    
+        # Inference
         self._infer_tab_index = self.tabs.addTab(
             self.infer_tab,
-            self._workflow_icon("inference.svg", 
-                                QStyle.SP_FileDialogListView),
+            self._workflow_icon("inference.svg", QStyle.SP_FileDialogListView),
             "Inference",
         )
-
+    
+        # Transfer
         self._xfer_tab_index = self.tabs.addTab(
             self.xfer_tab,
             self._workflow_icon("transfer.svg", QStyle.SP_ArrowRight),
             "Transfer",
         )
-
+    
+        # Results
         self._results_tab_index = self.tabs.addTab(
             self.results_tab,
             self._workflow_icon("results.svg", QStyle.SP_DirHomeIcon),
             "Results",
         )
+    
         # Tools tab – utilities (data, manifests, diagnostics, environment)
         self.tools_tab = ToolsTab(
-            app_ctx=self,   
+            app_ctx=self,
             geo_cfg=self.geo_cfg,
             gui_runs_root=self.gui_runs_root,
             parent=self,
         )
-
         self._tools_tab_index = self.tabs.addTab(
             self.tools_tab,
             self._workflow_icon("tools.svg", QStyle.SP_FileDialogInfoView),
             "Tools",
         )
-
+    
+        # ==============================================================
+        # Post-build UI sync / auto-discovery
+        # ==============================================================
+    
         # After building Tune widgets, sync from current config
         self._load_tuner_space_into_ui()
-        
+    
         # After building Inference widgets, set initial enable/disable state
-        self._update_infer_widgets_state()  
-        
+        self._update_infer_widgets_state()
+    
         # Try to auto-discover the latest transfer run under current results root
         try:
             self._discover_last_xfer_for_root()
@@ -1014,9 +1036,10 @@ class GeoPriorForecaster(QMainWindow):
             )
             self._xfer_last_result = {}
             self._update_xfer_view_state()
-
+    
+        # Default to Data tab (best first-time UX)
         try:
-             self.tabs.setCurrentIndex(self._data_tab_index)
+            self.tabs.setCurrentIndex(self._data_tab_index)
         except Exception:
             pass
 
@@ -1540,6 +1563,14 @@ class GeoPriorForecaster(QMainWindow):
         self.data_tab.dataset_changed.connect(
             self.setup_tab.set_dataset_columns,
         )
+        # DataTab: results-root controls
+        self.data_tab.request_browse_results_root.connect(
+            self._on_browse_results_root
+        )
+        self.data_tab.request_open_results_root.connect(
+            self._on_open_data_results_root
+        )
+
         pt = self.preprocess_tab
         
         pt.request_open_dataset.connect(self._on_open_dataset)
@@ -1587,8 +1618,17 @@ class GeoPriorForecaster(QMainWindow):
                 "Dry-run mode disabled – Run buttons now execute "
                 "training/tuning/inference normally."
             )
-    
-                
+
+ 
+    @pyqtSlot()
+    def _on_open_data_results_root(self) -> None:
+        rr = self.config_store.get_value(
+            FieldKey("results_root"), default=None)
+        target = Path(
+            str(rr)).expanduser() if rr else Path(
+                self.gui_runs_root)
+        self._open_path(str(target))
+   
     def _on_tab_changed(self, index: int) -> None:
         self._update_mode_button(index)
     
@@ -1596,8 +1636,9 @@ class GeoPriorForecaster(QMainWindow):
         res_idx = getattr(self, "_results_tab_index", -1)
         tools_idx = getattr(self, "_tools_tab_index", -1)
         prep_idx = getattr(self, "_preprocess_tab_index", -1)
-    
-        hide = index in (data_idx, res_idx, tools_idx)
+        setup_idx = getattr (self, "_setup_tab_index", -1)
+
+        hide = index in (data_idx, setup_idx, res_idx, tools_idx)
         self.set_console_visible(not hide)
     
         if index == prep_idx:
@@ -1796,6 +1837,7 @@ class GeoPriorForecaster(QMainWindow):
             try:
                 self.data_tab.set_datasets_root(new_root / "_datasets")
                 self.data_tab.refresh_library()
+                self.data_tab.set_results_root(new_root) 
             except Exception as exc:
                 self.log_updated.emit(
                     f"[WARN] DataTab refresh failed: {exc}"

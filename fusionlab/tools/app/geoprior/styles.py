@@ -95,11 +95,24 @@ QWidget#card {{
     border: 2px solid {PRIMARY};
     border-radius: 12px;
 }}
+QWidget#cardHeaderRow,
+QWidget#cardBadgesRow,
+QWidget#cardActionsRow,
+QWidget#cardBodyRoot {{
+    background: transparent;
+}}
 
 QLabel#cardTitle {{
     font-size: 18px;
     font-weight: 600;
     color: {PRIMARY};
+}}
+
+QLabel#setupCardSubtitle {{
+    font-size: 11px;
+}}
+QLabel#setupCardSubtitle {{
+    color: rgba(30,30,30,0.72);
 }}
 
 QPushButton {{
@@ -338,6 +351,9 @@ QPushButton#miniAction {{
     border: 1px solid rgba(46,49,145,0.30);   /* PRIMARY with alpha */
     border-radius: 8px;
     padding: 2px 6px;
+    /* add one of these */
+    color: rgba(30,30,30,0.88);              /* neutral */
+   /* or: color: rgba(46,49,145,0.92); */   /* brand/primary */
 }}
 
 QToolButton#miniAction:hover:enabled,
@@ -357,10 +373,12 @@ QToolButton#miniAction:focus {{
     border: 1px solid rgba(46,49,145,0.70);
     background: rgba(46,49,145,0.10);
 }}
-
+               
+QPushButton#miniAction:disabled
 QToolButton#miniAction:disabled {{
     border-color: rgba(100,116,139,0.35);
     background: transparent;
+    color: rgba(100,116,139,0.55);
 }}
 
 QLineEdit#resultsRootEdit {{
@@ -373,6 +391,70 @@ QLineEdit#resultsRootEdit {{
 
 QLineEdit#resultsRootEdit:hover {{
     border-color: #3399ff;
+}}
+
+QFrame#summaryPanel {{
+    border: 1px solid rgba(46,49,145,0.18);
+    background: rgba(46,49,145,0.04);
+}}
+
+QLabel#summaryPanelTitle {{
+    color: rgba(46,49,145,0.96);
+}}
+
+QLabel#summaryKey {{
+    color: rgba(30,30,30,0.62);
+}}
+
+QLabel#summaryValue {{
+    color: rgba(30,30,30,0.90);
+}}
+QLabel#summaryPathValue {{
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.18);
+}}
+ 
+QLabel#featStatus {{
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.18);
+}}
+
+QLabel#featCount {{
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(46,49,145,0.10);
+    border: 1px solid rgba(46,49,145,0.22);
+    font-weight: 700;
+}}
+
+QLabel#featHint {{
+    color: rgba(100,116,139,0.95);
+    font-size: 10.5px;
+}}
+
+QListWidget#featList {{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 10px;
+    padding: 6px;
+    background: rgba(255,255,255,0.90);
+}}
+
+QListWidget#featList::item {{
+    padding: 4px 6px;
+    border-radius: 8px;
+}}
+QLabel#featMissingChip {{
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(242,134,32,0.12);
+    border: 1px solid rgba(242,134,32,0.35);
+    font-weight: 800;
 }}
 
 """
@@ -400,11 +482,6 @@ QLabel#description {{
     color: {PALETTE['dark_text_muted']};
 }}
 
-QWidget#card {{
-    background-color: {PALETTE['dark_card_bg']};
-    border: 1px solid {PALETTE['dark_border']};
-    border-radius: 12px;
-}}
 
 QLabel#cardTitle {{
     font-size: 18px;
@@ -418,6 +495,27 @@ QLabel#cardDescription {{
     color: {PALETTE['dark_text_muted']};
 }}
 
+QLabel#setupCardSubtitle {{
+    font-size: 11px;
+}}
+
+QLabel#setupCardSubtitle {{
+    color: rgba(232,234,237,0.72);
+}}
+
+QWidget#card {{
+    background-color: {PALETTE['dark_card_bg']};
+    border: 1px solid {PALETTE['dark_border']};
+    border-radius: 12px;
+}}
+
+QWidget#cardHeaderRow,
+QWidget#cardBadgesRow,
+QWidget#cardActionsRow,
+QWidget#cardBodyRoot {{
+    background: transparent;
+}}
+           
 QPushButton {{
     background-color: {PALETTE['primary']};
     color: white;
@@ -603,6 +701,74 @@ QLineEdit#resultsRootEdit:hover {{
     border: 1px solid #3399ff;
 }}
 
+QFrame#summaryPanel {{
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.04);
+}}
+
+QLabel#summaryPanelTitle {{
+    color: #ffffff;
+}}
+
+QLabel#summaryKey {{
+    color: rgba(148,163,184,0.92);
+}}
+
+QLabel#summaryValue {{
+    color: rgba(203,213,225,1.0);
+}}
+QLabel#summaryPathValue {{
+    padding: 2px 8px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+}}
+QLabel#featStatus {{
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+}}
+
+QLabel#featCount {{
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.16);
+    font-weight: 700;
+}}
+
+QLabel#featHint {{
+    color: rgba(148,163,184,0.95);
+    font-size: 10.5px;
+}}
+
+QListWidget#featList {{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px;
+    padding: 6px;
+    background: rgba(15,23,42,0.35);
+}}
+
+QListWidget#featList::item {{
+    padding: 4px 6px;
+    border-radius: 8px;
+}}
+QLabel#featMissingChip {{
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: rgba(242,134,32,0.18);
+    border: 1px solid rgba(242,134,32,0.45);
+    font-weight: 800;
+}}
+               
+QListWidget#setupNavList {{
+    background: rgba(15,23,42,0.25);
+    border: 1px solid rgba(255,255,255,0.14);
+}}
+               
 """
 
 # ------------------------------------------------------------------ #

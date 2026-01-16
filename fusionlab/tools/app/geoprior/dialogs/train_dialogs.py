@@ -28,7 +28,6 @@ from PyQt5.QtWidgets import (
 from ..config import GeoPriorConfig
 from ..device_options import DeviceOptions, DeviceOptionsWidget
 from ..jobs import TrainJobSpec, latest_jobs_for_root
-
 from .stage1_dialogs import Stage1DetailsDialog
 
 class TrainOptionsDialog(QDialog):

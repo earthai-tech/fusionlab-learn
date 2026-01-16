@@ -400,8 +400,6 @@ class TrainTab(QWidget):
         t_layout.addLayout(bottom, 0)
 
     
-            
-
     def _build_presets(self) -> Dict[str, Dict[str, Any]]:
         return {
             # Do nothing preset (keeps current values)

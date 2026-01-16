@@ -29,8 +29,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
@@ -40,7 +38,6 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
-    QGridLayout,
     QSizePolicy,
     QTreeWidgetItem, 
     QTreeWidget, 
@@ -58,7 +55,6 @@ from ..config.prior_schema import (
 )
 from ..config.helps import help_text, first_line
 from ..styles import (
-    FLAB_STYLE_SHEET,
     PALETTE,
     PRIMARY,
     SECONDARY,

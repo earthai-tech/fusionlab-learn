@@ -135,42 +135,6 @@ class GeoConfigStore(QObject):
     # -----------------------------------------------------------------
     # Read helpers (schema-aware)
     # -----------------------------------------------------------------
-    # def get_value(
-    #     self,
-    #     key: FieldKey,
-    #     *,
-    #     default: Any = None,
-    # ) -> Any:
-    #     """
-    #     Read a config value via a FieldKey.
-
-    #     Supports:
-    #     - FieldKey("lambda_cons")
-    #     - FieldKey("physics_bounds", "K_min")
-    #     """
-    #     name = key.name
-    #     if name not in self._valid_keys:
-    #         self._emit_error(
-    #             f"Unknown config key: {name!r}"
-    #         )
-    #         return default
-
-    #     try:
-    #         cur = getattr(self._cfg, name)
-    #     except Exception as exc:
-    #         self._emit_error(
-    #             f"Failed to read {name!r}: {exc}"
-    #         )
-    #         return default
-
-    #     if not key.is_dict_item():
-    #         return cur
-
-    #     if not isinstance(cur, dict):
-    #         return default
-
-    #     return cur.get(key.subkey, default)
-    
     def get_value(
         self,
         key: FieldKey,
@@ -188,63 +152,7 @@ class GeoConfigStore(QObject):
             return default
 
         return cur.get(key.subkey, default)
-    
-    # def set_value_by_key(
-    #     self,
-    #     key: FieldKey,
-    #     value: Any,
-    #     *,
-    #     strict_subkey: bool = True,
-    # ) -> bool:
-    #     """
-    #     Set a config value via a FieldKey.
 
-    #     For dict items, updates by replacing the dict object
-    #     (via merge_dict_field) so change detection stays reliable.
-    #     """
-    #     name = key.name
-    #     if name not in self._valid_keys:
-    #         self._emit_error(
-    #             f"Unknown config key: {name!r}"
-    #         )
-    #         return False
-
-    #     if not key.is_dict_item():
-    #         return self.set_value(name, value)
-
-    #     # Dict item update
-    #     try:
-    #         cur = getattr(self._cfg, name)
-    #     except Exception as exc:
-    #         self._emit_error(
-    #             f"Failed to read {name!r}: {exc}"
-    #         )
-    #         return False
-
-    #     if cur is None:
-    #         base = {}
-    #     elif isinstance(cur, dict):
-    #         base = dict(cur)
-    #     else:
-    #         self._emit_error(
-    #             f"{name!r} is not a dict field."
-    #         )
-    #         return False
-
-    #     sub = key.subkey
-    #     if strict_subkey and (sub not in base):
-    #         # For physics_bounds you usually want this ON
-    #         # to avoid silent typos like "Kmin".
-    #         self._emit_error(
-    #             f"Unknown subkey {sub!r} in {name!r}"
-    #         )
-    #         return False
-
-    #     return self.merge_dict_field(
-    #         name,
-    #         {sub: value},
-    #         replace=False,
-    #     )
     def set_value_by_key(
         self,
         key: FieldKey,
@@ -307,10 +215,6 @@ class GeoConfigStore(QObject):
     # -----------------------------------------------------------------
     # Mutations (public)
     # -----------------------------------------------------------------
-    # def set_value(self, key: str, value: Any) -> bool:
-    #     changed = self.patch({key: value})
-    #     return bool(changed)
-    
     def set_value(
         self,
         key: FieldKey,
@@ -403,19 +307,6 @@ class GeoConfigStore(QObject):
 
         return False
 
-    # def replace_config(self, cfg: GeoPriorConfig) -> None:
-    #     """
-    #     Replace the entire config object.
-
-    #     Use when loading a profile / preset.
-    #     """
-    #     self._cfg = cfg
-    #     self._valid_keys = set(cfg.__dataclass_fields__.keys())
-    #     self._dirty_count = self._compute_dirty_count()
-    #     self.config_replaced.emit(cfg)
-    #     self.dirty_changed.emit(self._dirty_count)
-    #     self.config_changed.emit(set(self._valid_keys))
-        
     def replace_config(
         self,
         cfg: GeoPriorConfig,
@@ -447,6 +338,21 @@ class GeoConfigStore(QObject):
                 **self._cfg.as_dict(),
             )
         
+    def is_overridden(self, key: str) -> bool:
+        k = str(key or "").strip()
+        if not k:
+            return False
+    
+        ov = self.snapshot_overrides() or {}
+    
+        # Minimal mapping (extend when needed)
+        special = {
+            "pde_mode": "PDE_MODE_CONFIG",
+        }
+        nat = special.get(k, k.upper())
+        return nat in ov
+
+
     # -----------------------------------------------------------------
     # Internals
     # -----------------------------------------------------------------
