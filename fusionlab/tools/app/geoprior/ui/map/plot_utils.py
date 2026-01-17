@@ -99,6 +99,20 @@ class MplPlot(QFrame):
             return
         assert self.ax is not None
         self.ax.clear()
+
+        fig = self.fig
+        if fig is not None:
+            extra = []
+            for a in list(fig.axes):
+                if a is not self.ax:
+                    extra.append(a)
+
+            for a in extra:
+                try:
+                    a.remove()
+                except Exception:
+                    pass
+
         self.canvas.draw_idle()
 
     def save_png(self, path: str) -> None:

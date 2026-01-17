@@ -79,7 +79,10 @@ def _leaflet_html() -> str:
         "    zoomIn: function(){},",
         "    zoomOut: function(){},",
         "    setLegend: function(){},",
-        "    setBasemap: function(){}",
+        "    setBasemap: function(){},",
+        "    setHotspots: function(){},",
+        "    clearHotspots: function(){},",
+        "    showHotspots: function(){}",
         "  };",
         "",
         "  if (typeof L === 'undefined') {",
@@ -108,6 +111,75 @@ def _leaflet_html() -> str:
         "",
         "  // Qt WebChannel bridge (JS -> Python)",
         "  let bridge = null;",
+        "",
+        "  // Hotspots layer (separate from points)",
+        "  const hotLayer = L.layerGroup().addTo(map);",
+        "  let hotOn = true;",
+        "  let hotTimers = [];",
+        "",
+        "  function _stopHotTimers() {",
+        "    for (let i = 0; i < hotTimers.length; i++) {",
+        "      try { clearInterval(hotTimers[i]); }",
+        "      catch (e) {}",
+        "    }",
+        "    hotTimers = [];",
+        "  }",
+        "",
+        "  function clearHotspots() {",
+        "    _stopHotTimers();",
+        "    hotLayer.clearLayers();",
+        "  }",
+        "",
+        "  function _sevColor(sev) {",
+        "    const s = (sev || 'high').toLowerCase();",
+        "    if (s === 'critical') return '#d7263d';",
+        "    if (s === 'high') return '#f18f01';",
+        "    if (s === 'medium') return '#3f88c5';",
+        "    return '#6c757d';",
+        "  }",
+        "",
+        "  function _sevRadius(sev) {",
+        "    const s = (sev || 'high').toLowerCase();",
+        "    if (s === 'critical') return 18;",
+        "    if (s === 'high') return 14;",
+        "    if (s === 'medium') return 12;",
+        "    return 10;",
+        "  }",
+        "",
+        "  function _pulseRing(ring, r0m, speed) {",
+        "    let r = r0m;",
+        "    let a = 0.9;",
+        "",
+        "    let sp = Number(speed);",
+        "    if (!isFinite(sp) || sp <= 0) sp = 1.0;",
+        "",
+        "    // Faster speed -> smaller dt",
+        "    let dt = 80 / sp;",
+        "    dt = Math.max(25, Math.min(200, dt));",
+        "",
+        "    const t = setInterval(function () {",
+        "      r += (r0m * 0.06);",
+        "      a -= 0.04;",
+        "",
+        "      if (a <= 0.05) {",
+        "        r = r0m;",
+        "        a = 0.9;",
+        "      }",
+        "",
+        "      try {",
+        "        ring.setRadius(r);",
+        "        ring.setStyle({ opacity: a });",
+        "      } catch (e) {}",
+        "    }, dt);",
+        "",
+        "    hotTimers.push(t);",
+        "  }",
+        "",
+        "  function showHotspots(on) {",
+        "    hotOn = !!on;",
+        "    if (hotOn) map.addLayer(hotLayer);",
+        "    else map.removeLayer(hotLayer);",
+        "  }",
         "",
         "  function _emitPointClicked(x, y) {",
         "    if (bridge && bridge.pointClicked) {",
@@ -284,11 +356,112 @@ def _leaflet_html() -> str:
         "    }",
         "  }",
         "",
+        "  function setHotspots(hs, opts) {",
+        "    clearHotspots();",
+        "",
+        "    const h = hs || [];",
+        "    const o = opts || {};",
+        "",
+        "    const want = (o.show != null) ? !!o.show : true;",
+        "    showHotspots(want);",
+        "",
+        "    const style = String(o.style || 'pulse').toLowerCase();",
+        "    const pulse = (o.pulse != null) ? !!o.pulse : true;",
+        "    const labels = (o.labels != null) ? !!o.labels : true;",
+        "",
+        "    let baseKm = Number(o.ringKm);",
+        "    if (!isFinite(baseKm) || baseKm <= 0) baseKm = 0.8;",
+        "",
+        "    let sp = Number(o.pulseSpeed);",
+        "    if (!isFinite(sp) || sp <= 0) sp = 1.0;",
+        "",
+        "    function _sevMul(sev) {",
+        "      const s = (sev || 'high').toLowerCase();",
+        "      if (s === 'critical') return 1.6;",
+        "      if (s === 'high') return 1.25;",
+        "      if (s === 'medium') return 1.0;",
+        "      return 0.8;",
+        "    }",
+        "",
+        "    for (let i = 0; i < h.length; i++) {",
+        "      const pt = h[i] || {};",
+        "      const lat = pt.lat;",
+        "      const lon = pt.lon;",
+        "      if (!isFinite(lat) || !isFinite(lon)) continue;",
+        "",
+        "      const sev = pt.sev || 'high';",
+        "      const col = _sevColor(sev);",
+        "      const mul = _sevMul(sev);",
+        "",
+        "      const tip = pt.label || ('Hotspot #' + (i + 1));",
+        "",
+        "      const core = L.circleMarker([lat, lon], {",
+        "        radius: 5,",
+        "        color: col,",
+        "        fillColor: col,",
+        "        fillOpacity: 0.95,",
+        "        weight: 1",
+        "      }).addTo(hotLayer);",
+        "",
+        "      if (labels) core.bindTooltip(tip);",
+        "      core.on('click', function () {",
+        "        _emitPointClicked(lon, lat);",
+        "      });",
+        "",
+        "      // Style layer",
+        "      if (style === 'glow') {",
+        "        const glow = L.circle([lat, lon], {",
+        "          radius: (baseKm * 1000.0 * mul),",
+        "          color: col,",
+        "          opacity: 0.55,",
+        "          fillColor: col,",
+        "          fillOpacity: 0.12,",
+        "          weight: 1",
+        "        }).addTo(hotLayer);",
+        "        if (labels) glow.bindTooltip(tip);",
+        "        glow.on('click', function () {",
+        "          _emitPointClicked(lon, lat);",
+        "        });",
+        "        continue;",
+        "      }",
+        "",
+        "      // Pulse ring (meters-based)",
+        "      const r0m = (baseKm * 1000.0 * mul);",
+        "      const ring = L.circle([lat, lon], {",
+        "        radius: r0m,",
+        "        color: col,",
+        "        opacity: 0.9,",
+        "        fillOpacity: 0.0,",
+        "        weight: 2",
+        "      }).addTo(hotLayer);",
+        "",
+        "      if (labels) ring.bindTooltip(tip);",
+        "      ring.on('click', function () {",
+        "        _emitPointClicked(lon, lat);",
+        "      });",
+        "",
+        "      if (pulse) _pulseRing(ring, r0m, sp);",
+        "    }",
+        "  }",
+        "",
         "  function fitPoints() {",
         "    const pts = [];",
+        "",
         "    layer.eachLayer(function (m) {",
         "      if (m.getLatLng) pts.push(m.getLatLng());",
         "    });",
+        "",
+        "    hotLayer.eachLayer(function (m) {",
+        "      if (m.getLatLng) pts.push(m.getLatLng());",
+        "      if (m.getBounds) {",
+        "        try {",
+        "          const b = m.getBounds();",
+        "          pts.push(b.getNorthWest());",
+        "          pts.push(b.getSouthEast());",
+        "        } catch (e) {}",
+        "      }",
+        "    });",
+        "",
         "    if (!pts.length) return;",
         "    map.fitBounds(L.latLngBounds(pts).pad(0.2));",
         "  }",
@@ -304,6 +477,9 @@ def _leaflet_html() -> str:
         "  window.__GeoPriorMap.zoomOut = zoomOut;",
         "  window.__GeoPriorMap.setLegend = setLegend;",
         "  window.__GeoPriorMap.setBasemap = setBasemap;",
+        "  window.__GeoPriorMap.setHotspots = setHotspots;",
+        "  window.__GeoPriorMap.clearHotspots = clearHotspots;",
+        "  window.__GeoPriorMap.showHotspots = showHotspots;",
         "})();",
         "</script>",
         "</body>",
@@ -348,8 +524,11 @@ class ForecastMapView(QFrame):
         self._last_vmax: Optional[float] = None
         
         self._view: Dict[str, Any] = {}
-
-
+        self._last_hotspots: List[Dict[str, Any]] = []
+        self._hot_opts: Dict[str, Any] = {
+            "show": True,
+            "pulse": True,
+        }
 
         self._web: Optional[QWebEngineView]
         self._placeholder: Optional[QLabel]
@@ -379,6 +558,63 @@ class ForecastMapView(QFrame):
             "}",
         )
     
+    def clear_hotspots(self) -> None:
+        self._last_hotspots = []
+        self._run_js(
+            "if (window.__GeoPriorMap) {"
+            "  window.__GeoPriorMap.clearHotspots();"
+            "}",
+        )
+
+    def show_hotspots(self, on: bool) -> None:
+        self._hot_opts["show"] = bool(on)
+        js = (
+            "if (window.__GeoPriorMap) {"
+            "  window.__GeoPriorMap.showHotspots("
+            f"{json.dumps(bool(on))}"
+            ");"
+            "}"
+        )
+        self._run_js(js)
+
+    
+    def set_hotspots(
+        self,
+        hotspots: Sequence[Dict[str, Any]],
+        *,
+        show: bool = True,
+        style: str = "pulse",          # "pulse" | "glow"
+        pulse: bool = True,
+        pulse_speed: float = 1.0,      # 0.2..3.0
+        ring_km: float = 0.8,          # base radius in km
+        labels: bool = True,
+    ) -> None:
+        hs = list(hotspots or [])
+        opts: Dict[str, Any] = {
+            "show": bool(show),
+            "style": str(style or "pulse"),
+            "pulse": bool(pulse),
+            "pulseSpeed": float(pulse_speed),
+            "ringKm": float(ring_km),
+            "labels": bool(labels),
+        }
+    
+        # Cache for view re-apply / reload safety.
+        self._last_hotspots = hs
+        self._hot_opts = dict(opts)
+    
+        js_h = json.dumps(hs, separators=(",", ":"))
+        js_o = json.dumps(opts, separators=(",", ":"))
+    
+        js = (
+            "if (window.__GeoPriorMap) {"
+            "  window.__GeoPriorMap.setHotspots("
+            f"{js_h}, {js_o}"
+            ");"
+            "}"
+        )
+        self._run_js(js)
+
     def set_points(
         self,
         points: Sequence[Dict[str, Any]],
@@ -428,14 +664,20 @@ class ForecastMapView(QFrame):
             "}"
         )
         self._run_js(js)
-        
+
     def apply_view(self, view: Dict[str, Any]) -> None:
         v = dict(view or {})
         self._view.update(v)
-    
-        if not self._last_points:
-            return
-    
+        
+        base = str(v.get("basemap", "osm"))
+        style = str(v.get("basemap_style", "light"))
+        top = float(v.get("tiles_opacity", 1.0))
+        
+        # if not self._last_points:
+        #     return
+        # Apply basemap even if there are no points yet.
+        # Points/hotspots redraw only if we have payload.
+
         radius = int(v.get("marker_size", 6))
         opacity = float(v.get("marker_opacity", 0.9))
     
@@ -448,21 +690,35 @@ class ForecastMapView(QFrame):
         cmap = str(v.get("colormap", "viridis"))
         inv = bool(v.get("cmap_invert", False))
     
-        base = str(v.get("basemap", "osm"))
-        style = str(v.get("basemap_style", "light"))
-        top = float(v.get("tiles_opacity", 1.0))
-    
         self._set_basemap(base, style, top)
-        self._redraw_points(
-            radius=radius,
-            opacity=opacity,
-            vmin=vmin,
-            vmax=vmax,
-            cmap=cmap,
-            invert=inv,
-            show_legend=show_leg,
-        )
-        
+        if self._last_points:
+            self._redraw_points(
+                radius=radius,
+                opacity=opacity,
+                vmin=vmin,
+                vmax=vmax,
+                cmap=cmap,
+                invert=inv,
+                show_legend=show_leg,
+            )
+
+        # Re-apply hotspots if present (optional).
+        if self._last_hotspots:
+            try:
+                self.set_hotspots(
+                    self._last_hotspots,
+                    show=bool(self._hot_opts.get("show", True)),
+                    style=str(self._hot_opts.get("style", "pulse")),
+                    pulse=bool(self._hot_opts.get("pulse", True)),
+                    pulse_speed=float(
+                        self._hot_opts.get("pulseSpeed", 1.0)
+                    ),
+                    ring_km=float(self._hot_opts.get("ringKm", 0.8)),
+                    labels=bool(self._hot_opts.get("labels", True)),
+                )
+            except Exception:
+                pass
+            
     def _redraw_points(
         self,
         *,

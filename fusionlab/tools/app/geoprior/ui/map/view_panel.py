@@ -58,6 +58,31 @@ _VIEW_DEFAULTS: Dict[str, object] = {
     "map.view.show_colorbar": True,
     "map.view.show_legend": False,
     "map.view.legend_pos": "br",
+    # Hotspots (attention layer)
+    "map.view.hotspots.enabled": False,
+    "map.view.hotspots.mode": "auto",          # auto|manual|merge
+    "map.view.hotspots.method": "grid",        # grid|quantile|cluster
+    "map.view.hotspots.metric": "high",        # value|abs|high|low
+    "map.view.hotspots.time_agg": "current",   # current|mean|max|trend
+    "map.view.hotspots.thr_mode": "quantile",  # quantile|absolute
+    "map.view.hotspots.quantile": 0.98,
+    "map.view.hotspots.abs_thr": 0.0,
+    "map.view.hotspots.cell_km": 1.0,
+    "map.view.hotspots.min_pts": 20,
+    "map.view.hotspots.max_n": 8,
+    "map.view.hotspots.min_sep_km": 2.0,
+    
+    "map.view.hotspots.style": "pulse",        # pulse|glow
+    "map.view.hotspots.pulse": True,
+    "map.view.hotspots.pulse_speed": 1.0,
+    "map.view.hotspots.ring_km": 0.8,
+    "map.view.hotspots.labels": True,
+    
+    # Interpretation (placeholder but store-backed)
+    "map.view.interp.enabled": False,
+    "map.view.interp.scheme": "subsidence",    # subsidence|risk
+    "map.view.interp.callouts": True,
+
 }
 
 
@@ -135,6 +160,10 @@ class AutoHideViewPanel(AutoHidePanel):
         lay.addWidget(self._group_colors(host), 0)
         lay.addWidget(self._group_markers(host), 0)
         lay.addWidget(self._group_legend(host), 0)
+        
+        lay.addWidget(self._group_hotspots(host), 0)
+        lay.addWidget(self._group_interpretation(host), 0)
+        
         lay.addStretch(1)
 
         root.addWidget(self.scroll, 1)
@@ -307,6 +336,163 @@ class AutoHideViewPanel(AutoHidePanel):
         form.addRow("Position", self.cmb_legpos)
 
         return box
+    
+    def _group_hotspots(self, parent: QWidget) -> QGroupBox:
+        box = QGroupBox("Hotspots", parent)
+        form = QFormLayout(box)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
+    
+        self.chk_hot = QCheckBox("Enable hotspots", box)
+    
+        self.cmb_hot_mode = QComboBox(box)
+        self.cmb_hot_mode.addItems([
+            "auto",
+            "manual",
+            "merge",
+        ])
+    
+        self.cmb_hot_method = QComboBox(box)
+        self.cmb_hot_method.addItems([
+            "grid",
+            "quantile",
+            "cluster",
+        ])
+    
+        self.cmb_hot_metric = QComboBox(box)
+        self.cmb_hot_metric.addItems([
+            "value",
+            "abs",
+            "high",
+            "low",
+        ])
+    
+        self.cmb_hot_time = QComboBox(box)
+        self.cmb_hot_time.addItems([
+            "current",
+            "mean",
+            "max",
+            "trend",
+        ])
+        self.cmb_hot_time.setToolTip(
+            "Time aggregation (v1 uses current selection)."
+        )
+    
+        self.cmb_thr = QComboBox(box)
+        self.cmb_thr.addItems(["quantile", "absolute"])
+    
+        # Quantile slider (0.90..0.995)
+        self.sl_q = QSlider(Qt.Horizontal, box)
+        self.sl_q.setRange(900, 995)
+        self.sl_q.setSingleStep(1)
+        self.lb_q = QLabel("0.980", box)
+        self.lb_q.setMinimumWidth(54)
+        self.lb_q.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    
+        qrow = QWidget(box)
+        ql = QHBoxLayout(qrow)
+        ql.setContentsMargins(0, 0, 0, 0)
+        ql.setSpacing(8)
+        ql.addWidget(self.sl_q, 1)
+        ql.addWidget(self.lb_q, 0)
+    
+        self.sp_abs = QDoubleSpinBox(box)
+        self.sp_abs.setDecimals(6)
+        self.sp_abs.setRange(-1e12, 1e12)
+        self.sp_abs.setSingleStep(0.1)
+    
+        self.sp_cell = QDoubleSpinBox(box)
+        self.sp_cell.setDecimals(3)
+        self.sp_cell.setRange(0.01, 1e6)
+        self.sp_cell.setSingleStep(0.1)
+    
+        self.sp_minpts = QSpinBox(box)
+        self.sp_minpts.setRange(1, 1_000_000)
+    
+        self.sp_maxn = QSpinBox(box)
+        self.sp_maxn.setRange(1, 100)
+    
+        self.sp_sep = QDoubleSpinBox(box)
+        self.sp_sep.setDecimals(2)
+        self.sp_sep.setRange(0.0, 1e6)
+        self.sp_sep.setSingleStep(0.25)
+    
+        # Visual emphasis
+        self.cmb_hot_style = QComboBox(box)
+        self.cmb_hot_style.addItems(["pulse", "glow"])
+    
+        self.chk_pulse = QCheckBox("Pulse", box)
+    
+        self.sl_speed = QSlider(Qt.Horizontal, box)
+        self.sl_speed.setRange(20, 300)  # -> 0.2..3.0
+        self.sl_speed.setSingleStep(5)
+        self.lb_speed = QLabel("1.0×", box)
+        self.lb_speed.setMinimumWidth(54)
+        self.lb_speed.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    
+        srow = QWidget(box)
+        sl = QHBoxLayout(srow)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(8)
+        sl.addWidget(self.sl_speed, 1)
+        sl.addWidget(self.lb_speed, 0)
+    
+        self.sp_ring = QDoubleSpinBox(box)
+        self.sp_ring.setDecimals(2)
+        self.sp_ring.setRange(0.01, 1000.0)
+        self.sp_ring.setSingleStep(0.1)
+    
+        self.chk_labels = QCheckBox("Labels", box)
+    
+        form.addRow("", self.chk_hot)
+        form.addRow("Mode", self.cmb_hot_mode)
+        form.addRow("Method", self.cmb_hot_method)
+        form.addRow("Metric", self.cmb_hot_metric)
+        form.addRow("Time", self.cmb_hot_time)
+    
+        form.addRow("Threshold", self.cmb_thr)
+        form.addRow("Quantile", qrow)
+        form.addRow("Abs thr", self.sp_abs)
+    
+        form.addRow("Cell (km)", self.sp_cell)
+        form.addRow("Min pts", self.sp_minpts)
+        form.addRow("Max N", self.sp_maxn)
+        form.addRow("Min sep (km)", self.sp_sep)
+    
+        form.addRow("Style", self.cmb_hot_style)
+        form.addRow("", self.chk_pulse)
+        form.addRow("Speed", srow)
+        form.addRow("Ring (km)", self.sp_ring)
+        form.addRow("", self.chk_labels)
+    
+        return box
+    
+    def _group_interpretation(self, parent: QWidget) -> QGroupBox:
+        box = QGroupBox("Interpretation", parent)
+        form = QFormLayout(box)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
+    
+        self.chk_interp = QCheckBox("Enable interpretation", box)
+    
+        self.cmb_interp = QComboBox(box)
+        self.cmb_interp.addItems([
+            "subsidence",
+            "risk",
+        ])
+    
+        self.chk_callouts = QCheckBox(
+            "Show callouts on hotspots",
+            box,
+        )
+    
+        form.addRow("", self.chk_interp)
+        form.addRow("Scheme", self.cmb_interp)
+        form.addRow("", self.chk_callouts)
+    
+        return box
 
     # -------------------------------------------------
     # Store sync
@@ -406,8 +592,133 @@ class AutoHideViewPanel(AutoHidePanel):
                 "br",
             )),
         )
+        
+        # --- hotspots
+        self.chk_hot.setChecked(bool(self.store.get(
+            "map.view.hotspots.enabled", False
+        )))
+        self._set_combo(self.cmb_hot_mode, str(self.store.get(
+            "map.view.hotspots.mode", "auto"
+        )))
+        self._set_combo(self.cmb_hot_method, str(self.store.get(
+            "map.view.hotspots.method", "grid"
+        )))
+        self._set_combo(self.cmb_hot_metric, str(self.store.get(
+            "map.view.hotspots.metric", "high"
+        )))
+        self._set_combo(self.cmb_hot_time, str(self.store.get(
+            "map.view.hotspots.time_agg", "current"
+        )))
+        self._set_combo(self.cmb_thr, str(self.store.get(
+            "map.view.hotspots.thr_mode", "quantile"
+        )))
+        
+        q = float(self.store.get("map.view.hotspots.quantile", 0.98) or 0.98)
+        q = max(0.0, min(1.0, q))
+        self.sl_q.setValue(int(round(q * 1000.0)))
+        self.lb_q.setText(f"{q:.3f}")
+        
+        self.sp_abs.setValue(float(self.store.get(
+            "map.view.hotspots.abs_thr", 0.0
+        ) or 0.0))
+        
+        self.sp_cell.setValue(float(self.store.get(
+            "map.view.hotspots.cell_km", 1.0
+        ) or 1.0))
+        self.sp_minpts.setValue(int(self.store.get(
+            "map.view.hotspots.min_pts", 20
+        ) or 20))
+        self.sp_maxn.setValue(int(self.store.get(
+            "map.view.hotspots.max_n", 8
+        ) or 8))
+        self.sp_sep.setValue(float(self.store.get(
+            "map.view.hotspots.min_sep_km", 2.0
+        ) or 2.0))
+        
+        self._set_combo(self.cmb_hot_style, str(self.store.get(
+            "map.view.hotspots.style", "pulse"
+        )))
+        self.chk_pulse.setChecked(bool(self.store.get(
+            "map.view.hotspots.pulse", True
+        )))
+        
+        sp = float(self.store.get("map.view.hotspots.pulse_speed", 1.0) or 1.0)
+        sp = max(0.2, min(3.0, sp))
+        self.sl_speed.setValue(int(round(sp * 100.0)))
+        self.lb_speed.setText(f"{sp:.1f}×")
+        
+        rk = float(self.store.get("map.view.hotspots.ring_km", 0.8) or 0.8)
+        self.sp_ring.setValue(rk)
+        
+        self.chk_labels.setChecked(bool(self.store.get(
+            "map.view.hotspots.labels", True
+        )))
+        
+        # --- interpretation
+        self.chk_interp.setChecked(bool(self.store.get(
+            "map.view.interp.enabled", False
+        )))
+        self._set_combo(self.cmb_interp, str(self.store.get(
+            "map.view.interp.scheme", "subsidence"
+        )))
+        self.chk_callouts.setChecked(bool(self.store.get(
+            "map.view.interp.callouts", True
+        )))
+        
+        self._update_hotspot_ui_enabled()
 
         self._update_vrange_enabled()
+
+    def _update_hotspot_ui_enabled(self) -> None:
+        on = bool(self.chk_hot.isChecked())
+        mode = str(self.cmb_hot_mode.currentText() or "auto").lower()
+        thr = str(self.cmb_thr.currentText() or "quantile").lower()
+    
+        # enable/disable whole set (except master checkbox)
+        for w in (
+            self.cmb_hot_mode,
+            self.cmb_hot_method,
+            self.cmb_hot_metric,
+            self.cmb_hot_time,
+            self.cmb_thr,
+            self.sl_q,
+            self.sp_abs,
+            self.sp_cell,
+            self.sp_minpts,
+            self.sp_maxn,
+            self.sp_sep,
+            self.cmb_hot_style,
+            self.chk_pulse,
+            self.sl_speed,
+            self.sp_ring,
+            self.chk_labels,
+        ):
+            w.setEnabled(on)
+    
+        # Manual mode: auto params are disabled
+        auto_on = on and (mode != "manual")
+        for w in (
+            self.cmb_hot_method,
+            self.cmb_hot_metric,
+            self.cmb_hot_time,
+            self.cmb_thr,
+            self.sl_q,
+            self.sp_abs,
+            self.sp_cell,
+            self.sp_minpts,
+            self.sp_maxn,
+            self.sp_sep,
+        ):
+            w.setEnabled(auto_on)
+    
+        # Threshold: quantile vs absolute
+        self.sl_q.setEnabled(auto_on and thr == "quantile")
+        self.sp_abs.setEnabled(auto_on and thr == "absolute")
+    
+        # Pulse speed only matters if pulse + style pulse
+        style = str(self.cmb_hot_style.currentText() or "pulse").lower()
+        pulse_on = bool(self.chk_pulse.isChecked()) and style == "pulse"
+        self.sl_speed.setEnabled(on and pulse_on)
 
     def _connect(self) -> None:
         self.btn_reset.clicked.connect(self._on_reset)
@@ -472,6 +783,126 @@ class AutoHideViewPanel(AutoHidePanel):
 
         self.store.config_changed.connect(
             self._on_store_changed,
+        )
+        
+        # --- hotspots
+        self.chk_hot.toggled.connect(
+            lambda b: (
+                self.store.set("map.view.hotspots.enabled", bool(b)),
+                self._update_hotspot_ui_enabled(),
+            )
+        )
+        
+        self.cmb_hot_mode.currentTextChanged.connect(
+            lambda v: (
+                self.store.set("map.view.hotspots.mode", str(v)),
+                self._update_hotspot_ui_enabled(),
+            )
+        )
+        
+        self.cmb_hot_method.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.method", str(v)
+            )
+        )
+        self.cmb_hot_metric.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.metric", str(v)
+            )
+        )
+        self.cmb_hot_time.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.time_agg", str(v)
+            )
+        )
+        self.cmb_thr.currentTextChanged.connect(
+            lambda v: (
+                self.store.set("map.view.hotspots.thr_mode", str(v)),
+                self._update_hotspot_ui_enabled(),
+            )
+        )
+        
+        def _on_q(v: int) -> None:
+            q = float(v) / 1000.0
+            self.lb_q.setText(f"{q:.3f}")
+            self.store.set("map.view.hotspots.quantile", q)
+        
+        self.sl_q.valueChanged.connect(_on_q)
+        
+        self.sp_abs.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.abs_thr", float(v)
+            )
+        )
+        
+        self.sp_cell.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.cell_km", float(v)
+            )
+        )
+        self.sp_minpts.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.min_pts", int(v)
+            )
+        )
+        self.sp_maxn.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.max_n", int(v)
+            )
+        )
+        self.sp_sep.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.min_sep_km", float(v)
+            )
+        )
+        
+        self.cmb_hot_style.currentTextChanged.connect(
+            lambda v: (
+                self.store.set("map.view.hotspots.style", str(v)),
+                self._update_hotspot_ui_enabled(),
+            )
+        )
+        self.chk_pulse.toggled.connect(
+            lambda b: (
+                self.store.set("map.view.hotspots.pulse", bool(b)),
+                self._update_hotspot_ui_enabled(),
+            )
+        )
+        
+        def _on_speed(v: int) -> None:
+            sp = float(v) / 100.0
+            sp = max(0.2, min(3.0, sp))
+            self.lb_speed.setText(f"{sp:.1f}×")
+            self.store.set("map.view.hotspots.pulse_speed", sp)
+        
+        self.sl_speed.valueChanged.connect(_on_speed)
+        
+        self.sp_ring.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hotspots.ring_km", float(v)
+            )
+        )
+        self.chk_labels.toggled.connect(
+            lambda b: self.store.set(
+                "map.view.hotspots.labels", bool(b)
+            )
+        )
+        
+        # --- interpretation
+        self.chk_interp.toggled.connect(
+            lambda b: self.store.set(
+                "map.view.interp.enabled", bool(b)
+            )
+        )
+        self.cmb_interp.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.interp.scheme", str(v)
+            )
+        )
+        self.chk_callouts.toggled.connect(
+            lambda b: self.store.set(
+                "map.view.interp.callouts", bool(b)
+            )
         )
 
     # -------------------------------------------------

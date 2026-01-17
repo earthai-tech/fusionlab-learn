@@ -526,6 +526,89 @@ QTreeWidget#mapTree QHeaderView::section {{
     font-weight: 600;
 }}
 
+/* ===== Map tab: Head (Light) ===== */
+QFrame#mapHeadCard{{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 12px;
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(46,49,145,0.06),
+        stop:1 rgba(255,255,255,0.94)
+    );
+}}
+
+QLabel#mapHeadPill{{
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-weight: 700;
+    border: 1px solid rgba(46,49,145,0.28);
+    background: rgba(46,49,145,0.10);
+    color: rgba(15,23,42,0.92);
+}}
+
+QLabel#mapHeadDataset{{
+    padding-left: 2px;
+    font-size: 11px;
+    color: rgba(30,30,30,0.68);
+}}
+
+QLabel#mapHeadKey{{
+    font-weight: 700;
+    color: rgba(46,49,145,0.90);
+}}
+
+QFrame#mapHeadGroup{{
+    border: 1px solid rgba(46,49,145,0.16);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.70);
+}}
+
+QComboBox#mapHeadCombo{{
+    min-height: 30px;
+    padding-left: 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(46,49,145,0.20);
+    background: rgba(46,49,145,0.05);
+}}
+
+QToolButton#mapHeadToggle{{
+    border: 1px solid rgba(46,49,145,0.22);
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-weight: 700;
+    color: rgba(30,30,30,0.86);
+    background: rgba(255,255,255,0.65);
+}}
+
+QToolButton#mapHeadToggle:hover:enabled{{
+    background: rgba(51,153,255,0.14);
+    border-color: #3399ff;
+}}
+
+QToolButton#mapHeadToggle:checked{{
+    background: rgba(46,49,145,0.18);
+    border-color: rgba(46,49,145,0.45);
+    color: rgba(15,23,42,0.95);
+}}
+
+/* Column picker */
+QLabel#mapColLabel{{
+    font-weight: 800;
+    color: rgba(46,49,145,0.90);
+}}
+
+QLineEdit#mapColEdit{{
+    border-radius: 10px;
+    border: 1px solid rgba(46,49,145,0.20);
+    background: rgba(46,49,145,0.05);
+    padding: 6px 10px;
+}}
+
+/* Slightly larger miniAction inside head */
+QToolButton#miniAction[role="mapHead"]{{
+    padding: 4px 8px;
+}}
+               
 """
 
 # ------------------------------------------------------------------ #
@@ -897,6 +980,88 @@ QTreeWidget#mapTree QHeaderView::section {{
     padding: 4px 8px;
     font-weight: 600;
     color: rgba(226,232,240,0.92);
+}}
+               
+/* ===== Map tab: Head (Dark) ===== */
+QFrame#mapHeadCard{{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(46,49,145,0.22),
+        stop:1 rgba(15,23,42,0.28)
+    );
+}}
+
+QLabel#mapHeadPill{{
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-weight: 700;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.06);
+    color: rgba(226,232,240,0.95);
+}}
+
+QLabel#mapHeadDataset{{
+    padding-left: 2px;
+    font-size: 11px;
+    color: rgba(148,163,184,0.92);
+}}
+
+QLabel#mapHeadKey{{
+    font-weight: 700;
+    color: rgba(226,232,240,0.92);
+}}
+
+QFrame#mapHeadGroup{{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: rgba(15,23,42,0.25);
+}}
+
+QComboBox#mapHeadCombo{{
+    min-height: 30px;
+    padding-left: 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(2,6,23,0.55);
+}}
+
+QToolButton#mapHeadToggle{{
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 12px;
+    padding: 4px 10px;
+    font-weight: 700;
+    color: rgba(226,232,240,0.92);
+    background: rgba(15,23,42,0.25);
+}}
+
+QToolButton#mapHeadToggle:hover:enabled{{
+    background: rgba(51,153,255,0.18);
+    border-color: #3399ff;
+}}
+
+QToolButton#mapHeadToggle:checked{{
+    background: rgba(46,49,145,0.30);
+    border-color: rgba(46,49,145,0.55);
+    color: rgba(255,255,255,0.98);
+}}
+
+QLabel#mapColLabel{{
+    font-weight: 800;
+    color: rgba(226,232,240,0.92);
+}}
+
+QLineEdit#mapColEdit{{
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(2,6,23,0.55);
+    padding: 6px 10px;
+    color: rgba(226,232,240,0.95);
+}}
+
+QToolButton#miniAction[role="mapHead"]{{
+    padding: 4px 8px;
 }}
                
 """
