@@ -1,0 +1,539 @@
+# geoprior/ui/map_tab.py
+# -*- coding: utf-8 -*-
+# License: BSD-3-Clause
+# Author: LKouadio <etanoyau@gmail.com>
+
+"""
+geoprior.ui.map_tab
+
+MapTab updates:
+- pass store into Data panel
+- persist map.* defaults for A-panel state
+- store selected files via map.selected_files
+"""
+
+from __future__ import annotations
+
+from typing import Optional, Sequence
+from pathlib import Path
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import QSplitter, QVBoxLayout, QWidget
+
+from ..config.store import GeoConfigStore
+from .map.analytics_panel import CollapsibleAnalyticsPanel
+from .map.canvas import ForecastMapView
+from .map.data_panel import AutoHideDataPanel
+from .map.head import MapHeadBar
+from .map.view_panel import AutoHideViewPanel
+from .map.utils import parse_city_dir  
+
+_MAP_DEFAULTS = {
+    "map.engine": "leaflet",
+    "map.coord_mode": "lonlat",
+    "map.x_col": "",
+    "map.y_col": "",
+    "map.z_col": "",
+    "map.focus_mode": False,
+    "map.show_analytics": False,
+    "map.data_source": "auto",
+    "map.manual_files": [],
+    "map.selected_files": [],
+    "map.active_file": "",
+    "map.time_col": "",
+    "map.step_col": "",
+    "map.value_col": "",
+    "map.time_value": "",
+
+}
+
+
+class MapTab(QWidget):
+    
+    def __init__(
+        self,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.store = store
+
+        self.head = MapHeadBar(parent=self)
+        self.nav_a = AutoHideDataPanel(
+            store=self.store,
+            parent=self,
+        )
+        self.canvas = ForecastMapView(parent=self)
+        self.nav_c = AutoHideViewPanel(
+            store=self.store,
+            parent=self,
+        )
+        # in MapTab.__init__:
+        self.panel_d = CollapsibleAnalyticsPanel(
+            store=self.store,
+            parent=self,
+        )
+
+        self._split_main = QSplitter(Qt.Horizontal, self)
+        self._split_vert = QSplitter(Qt.Vertical, self)
+
+        self._sizes_main: Optional[list[int]] = None
+        self._sizes_vert: Optional[list[int]] = None
+        self._hover_lock = False
+
+        self._build_ui()
+        self._apply_defaults()
+        self._connect_signals()
+
+    def set_available_columns(self, cols: Sequence[str]) -> None:
+        self.head.set_available_columns(cols)
+
+    def _build_ui(self) -> None:
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+
+        lay.addWidget(self.head)
+
+        self._split_main.setChildrenCollapsible(False)
+        self._split_main.addWidget(self.nav_a)
+        self._split_main.addWidget(self.canvas)
+        self._split_main.addWidget(self.nav_c)
+
+        self._split_main.setStretchFactor(0, 0)
+        self._split_main.setStretchFactor(1, 1)
+        self._split_main.setStretchFactor(2, 0)
+        self._split_main.setHandleWidth(2)
+
+        self._split_vert.setChildrenCollapsible(False)
+        self._split_vert.addWidget(self._split_main)
+        self._split_vert.addWidget(self.panel_d)
+
+        lay.addWidget(self._split_vert, 1)
+
+        self._set_analytics_visible(False)
+        self._split_main.setSizes([320, 1, 320])
+        self._split_vert.setSizes([1, 0])
+
+    def _apply_defaults(self) -> None:
+        cfg = self.store.cfg
+        x0 = cfg.lon_col
+        y0 = cfg.lat_col
+        z0 = cfg.subs_col
+
+        with self.store.batch():
+            for k, v in _MAP_DEFAULTS.items():
+                cur = self.store.get(k, None)
+                if cur is None or cur == "":
+                    self.store.set(k, v)
+
+            if not self.store.get("map.x_col", ""):
+                self.store.set("map.x_col", x0)
+            if not self.store.get("map.y_col", ""):
+                self.store.set("map.y_col", y0)
+            if not self.store.get("map.z_col", ""):
+                self.store.set("map.z_col", z0)
+
+        self._sync_from_store()
+
+    def _connect_signals(self) -> None:
+        self.store.config_replaced.connect(self._on_cfg_replaced)
+        self.store.config_changed.connect(self._on_store_changed)
+
+        self.nav_a.selection_changed.connect(
+            self._on_files_selected,
+        )
+
+        self.head.engine_changed.connect(self._on_engine_changed)
+        self.head.coord_mode_changed.connect(self._on_coord_changed)
+        self.head.focus_toggled.connect(self._on_focus_toggled)
+        self.head.analytics_toggled.connect(
+            self._on_analytics_toggled,
+        )
+
+        self.head.x_changed.connect(
+            lambda v: self.store.set("map.x_col", v),
+        )
+        self.head.y_changed.connect(
+            lambda v: self.store.set("map.y_col", v),
+        )
+        self.head.z_changed.connect(
+            lambda v: self.store.set("map.z_col", v),
+        )
+
+        self.canvas.request_focus_mode.connect(
+            self._on_focus_toggled,
+        )
+        
+        self.nav_a.width_changed.connect(
+            self._on_left_width_changed,
+        )
+        self.nav_c.width_changed.connect(
+            self._on_right_width_changed,
+        )
+        
+        self.nav_a.pinned_changed.connect(
+            self._on_left_pinned,
+        )
+        self.nav_c.pinned_changed.connect(
+            self._on_right_pinned,
+        )
+        self.nav_a.columns_changed.connect(
+            self._on_map_cols,
+        )
+        self.nav_a.active_changed.connect(
+            self._on_active_file,
+        )
+        self.nav_c.changed.connect(self._on_view_changed)
+        self.head.fit_clicked.connect(self.canvas.fit_points)
+        self.head.swap_xy_clicked.connect(
+            self._on_swap_xy,
+        )
+        self.head.reset_mapping_clicked.connect(
+            self._on_reset_xyz,
+        )
+        self.canvas.point_clicked.connect(self._on_map_point_clicked)
+
+
+    def _on_map_point_clicked(self, x: float, y: float) -> None:
+        # If focus mode hides analytics, exit focus
+        if bool(self.store.get("map.focus_mode", False)):
+            self.store.set("map.focus_mode", False)
+    
+        # Ensure analytics is visible and select Inspector tab
+        if not bool(self.store.get("map.show_analytics", False)):
+            self.store.set("map.show_analytics", True)
+            self._set_analytics_visible(True)
+    
+        try:
+            self.panel_d.tabs.setCurrentWidget(self.panel_d.inspector)
+            self.panel_d.inspector.set_xy(float(x), float(y))
+        except Exception:
+            pass
+
+
+    def _on_swap_xy(self) -> None:
+        x = str(self.store.get("map.x_col", ""))
+        y = str(self.store.get("map.y_col", ""))
+
+        with self.store.batch():
+            self.store.set("map.x_col", y)
+            self.store.set("map.y_col", x)
+
+    def _on_reset_xyz(self) -> None:
+        cfg = self.store.cfg
+        x0 = str(getattr(cfg, "lon_col", "") or "")
+        y0 = str(getattr(cfg, "lat_col", "") or "")
+        z0 = str(getattr(cfg, "subs_col", "") or "")
+
+        with self.store.batch():
+            self.store.set("map.x_col", x0)
+            self.store.set("map.y_col", y0)
+            self.store.set("map.z_col", z0)
+
+    def _on_view_changed(self, _snap) -> None:
+        self._apply_view_to_canvas()
+
+    def _on_map_cols(self, cols) -> None:
+        cols = list(cols or [])
+        self.head.set_available_columns(cols)
+    
+        x = str(self.store.get("map.x_col", "")).strip()
+        y = str(self.store.get("map.y_col", "")).strip()
+        z = str(self.store.get("map.z_col", "")).strip()
+    
+        if x and x not in cols:
+            self.store.set("map.x_col", "")
+        if y and y not in cols:
+            self.store.set("map.y_col", "")
+        if z and z not in cols:
+            self.store.set("map.z_col", "")
+    
+    def _on_active_file(self, path: str) -> None:
+        
+        self.store.set("map.active_file", str(path))
+        city, model, stage = self._infer_city_from_path(path)
+        self.head.set_city_badge(city=city, model=model, stage=stage)
+        try:
+            p = Path(path)
+            name = p.name
+        except Exception:
+            name = str(path)
+        self.head.set_active_dataset(
+            name,
+            tooltip=str(path),
+        )
+
+    def _on_left_pinned(self, pinned: bool) -> None:
+        if self._hover_lock:
+            return
+
+        if bool(self.store.get("map.focus_mode", False)):
+            return
+    
+        if pinned:
+            self._apply_split_width(
+                left=self.nav_a.expanded_width(),
+                right=None,
+            )
+            return
+
+        self._apply_split_width(
+            left=self.nav_a.handle_width(),
+            right=None,
+        )
+
+    
+    def _on_right_pinned(self, pinned: bool) -> None:
+        if self._hover_lock:
+            return
+        
+        if bool(self.store.get("map.focus_mode", False)):
+            return
+    
+        if pinned:
+          self._apply_split_width(
+              left=None,
+              right=self.nav_c.expanded_width(),
+          )
+          return
+
+        # self._apply_split_width(
+        #     left=None,
+        #     right=int(self.nav_c._handle_w),  # or 22
+        # )
+        self._apply_split_width(
+            left=None, 
+            right=self.nav_c.handle_width(),
+        )
+
+    def _on_left_width_changed(self, w: int) -> None:
+        if self._hover_lock:
+            return
+        if bool(self.store.get("map.focus_mode", False)):
+            return
+        self._apply_split_width(left=int(w), right=None)
+    
+    def _on_right_width_changed(self, w: int) -> None:
+        if self._hover_lock:
+            return
+        if bool(self.store.get("map.focus_mode", False)):
+            return
+        self._apply_split_width(left=None, right=int(w))
+    
+    def _freeze_hover(self, ms: int = 250) -> None:
+        if bool(self.store.get("map.focus_mode", False)):
+            return
+    
+        self._hover_lock = True
+        self.nav_a.set_hover_enabled(False)
+        self.nav_c.set_hover_enabled(False)
+    
+        # Optional: immediately collapse C if it is not pinned.
+        if not self.nav_c.is_pinned():
+            self.nav_c.collapse(immediate=True, force=True)
+            self._apply_split_width(
+                left=None, right=self.nav_c.handle_width())
+    
+        QTimer.singleShot(ms, self._unfreeze_hover)
+    
+    def _unfreeze_hover(self) -> None:
+        self._hover_lock = False
+        if bool(self.store.get("map.focus_mode", False)):
+            return
+        self.nav_a.set_hover_enabled(True)
+        self.nav_c.set_hover_enabled(True)
+
+    def _view_snapshot(self) -> dict:
+        keys = [
+            "map.view.basemap",
+            "map.view.basemap_style",
+            "map.view.tiles_opacity",
+            "map.view.colormap",
+            "map.view.cmap_invert",
+            "map.view.autoscale",
+            "map.view.vmin",
+            "map.view.vmax",
+            "map.view.marker_size",
+            "map.view.marker_opacity",
+            "map.view.show_colorbar",
+        ]
+        out = {}
+        for k in keys:
+            out[k.split("map.view.", 1)[1]] = self.store.get(k)
+        return out
+    
+    def _apply_view_to_canvas(self) -> None:
+        snap = self._view_snapshot()
+        self.canvas.apply_view(snap)
+
+    def _apply_split_width(
+        self,
+        *,
+        left: Optional[int],
+        right: Optional[int],
+    ) -> None:
+        sizes = list(self._split_main.sizes())
+        if len(sizes) != 3:
+            return
+    
+        total = int(sum(sizes)) or 1
+    
+        l = int(left) if left is not None else int(sizes[0])
+        r = int(right) if right is not None else int(sizes[2])
+    
+        l = max(0, l)
+        r = max(0, r)
+    
+        c = total - l - r
+        if c < 1:
+            c = 1
+            # If overflow, shrink the changing side.
+            if left is not None:
+                l = max(0, total - r - c)
+            if right is not None:
+                r = max(0, total - l - c)
+    
+        self._split_main.setSizes([l, c, r])
+
+    def _on_files_selected(self, paths) -> None:
+        # Store already updated in panel; keep hook.
+        _ = paths
+
+    def _on_cfg_replaced(self, _cfg) -> None:
+        self._apply_defaults()
+
+    def _on_store_changed(self, keys) -> None:
+        keys = set(keys or [])
+        if not keys:
+            return
+    
+        if "map.data_source" in keys:
+            self._freeze_hover(ms=250)
+    
+        ui_keys = {
+            "map.engine",
+            "map.coord_mode",
+            "map.x_col",
+            "map.y_col",
+            "map.z_col",
+            "map.focus_mode",
+            "map.show_analytics",
+            "map.active_file",
+        }
+    
+        view_keys = [
+            k for k in keys
+            if k.startswith("map.view.")
+        ]
+    
+        if keys & ui_keys:
+            self._sync_from_store()
+            return
+    
+        if view_keys:
+            self._apply_view_to_canvas()
+
+    def _on_engine_changed(self, engine: str) -> None:
+        self.store.set("map.engine", str(engine))
+
+    def _on_coord_changed(self, mode: str) -> None:
+        self.store.set("map.coord_mode", str(mode))
+
+    def _on_focus_toggled(self, enabled: bool) -> None:
+        self.store.set("map.focus_mode", bool(enabled))
+
+    def _on_analytics_toggled(self, enabled: bool) -> None:
+        self.store.set("map.show_analytics", bool(enabled))
+
+    def _sync_from_store(self) -> None:
+        engine = str(self.store.get("map.engine", "leaflet"))
+        coord = str(self.store.get("map.coord_mode", "lonlat"))
+
+        x = str(self.store.get("map.x_col", ""))
+        y = str(self.store.get("map.y_col", ""))
+        z = str(self.store.get("map.z_col", ""))
+
+        focus = bool(self.store.get("map.focus_mode", False))
+        show_d = bool(self.store.get("map.show_analytics", False))
+
+        self.head.set_engine(engine)
+        self.head.set_coord_mode(coord)
+        self.head.set_xyz(x=x, y=y, z=z)
+        self.head.set_focus_checked(focus)
+        self.head.set_analytics_checked(show_d)
+
+        self.canvas.set_focus_checked(focus)
+
+        self._set_focus_mode(focus)
+        if not focus:
+            self._set_analytics_visible(show_d)
+        
+        self._apply_view_to_canvas()
+
+
+    def _set_focus_mode(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+
+        if enabled:
+            if self._sizes_main is None:
+                self._sizes_main = self._split_main.sizes()
+            if self._sizes_vert is None:
+                self._sizes_vert = self._split_vert.sizes()
+
+            self.nav_a.setVisible(False)
+            self.nav_c.setVisible(False)
+            self.panel_d.setVisible(False)
+
+            self.nav_a.set_hover_enabled(False)
+            self.nav_c.set_hover_enabled(False)
+
+            self._split_main.setSizes([0, 1, 0])
+            self._split_vert.setSizes([1, 0])
+            return
+
+        self.nav_a.setVisible(True)
+        self.nav_c.setVisible(True)
+
+        self.nav_a.set_hover_enabled(True)
+        self.nav_c.set_hover_enabled(True)
+
+        if self._sizes_main:
+            self._split_main.setSizes(self._sizes_main)
+        else:
+            self._split_main.setSizes([320, 1, 320])
+
+        show_d = bool(self.store.get("map.show_analytics", False))
+        self._set_analytics_visible(show_d)
+
+        if self._sizes_vert and show_d:
+            self._split_vert.setSizes(self._sizes_vert)
+        elif show_d:
+            self._split_vert.setSizes([750, 250])
+        else:
+            self._split_vert.setSizes([1, 0])
+
+        self._sizes_main = None
+        self._sizes_vert = None
+
+    def _set_analytics_visible(self, visible: bool) -> None:
+        visible = bool(visible)
+        self.panel_d.setVisible(visible)
+
+        if visible:
+            self.panel_d.expand()
+            self._split_vert.setSizes([750, 250])
+        else:
+            self.panel_d.collapse()
+            self._split_vert.setSizes([1, 0])
+            
+    def _infer_city_from_path(self, p: str) -> tuple[str, str, str]:
+        try:
+            pp = Path(p).resolve()
+        except Exception:
+            return "", "", ""
+        for parent in pp.parents:
+            parsed = parse_city_dir(parent.name)
+            if parsed:
+                return parsed  # (city, model, stage)
+        return "", "", ""

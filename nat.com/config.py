@@ -49,7 +49,7 @@ CITY_NAME = "nansha"
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF
 #   - "PoroElasticSubsNet"   : poroelastic surrogate (consolidation-only)
 #   - "GeoPriorSubsNet"      : full GeoPriorSubsNet (default)
-MODEL_NAME = "PoroElasticSubsNet"
+MODEL_NAME = "GeoPriorSubsNet"
 
 
 # -------------------------------------------------------------------

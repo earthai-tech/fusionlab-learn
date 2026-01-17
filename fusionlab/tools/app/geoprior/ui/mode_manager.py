@@ -21,14 +21,15 @@ from ..styles import (
     MODE_DATA_COLOR,
     MODE_DRY_COLOR,
     MODE_INFER_COLOR,
+    MODE_MAP_COLOR,
     MODE_PREPROCESS_COLOR,
     MODE_RESULTS_COLOR,
     MODE_SETUP_COLOR,
     MODE_TRAIN_COLOR,
     MODE_TUNE_COLOR,
     MODE_XFER_COLOR,
+    MODE_TOOLS_COLOR,
 )
-
 
 HelpMap = Dict[str, Tuple[int, str]]
 RunButtonMap = Dict[str, QPushButton]
@@ -91,6 +92,15 @@ class ModeManager(QObject):
             "Results tab – browse and download Stage-1 artifacts,\n"
             "train/tune/inference runs, and transferability outputs\n"
             "as ZIP archives."
+        ),
+        "map": (
+            "Map tab – explore forecast outputs spatially: load datasets, "
+            "pick a basemap, inspect points, and open analytics/inspector."
+        ),
+        "tools": (
+            "Tools tab – access advanced utilities for model training, "
+            "evaluation, and manipulation. Includes data transformation, "
+            "model diagnostics, and other tools."
         ),
     }
 
@@ -322,6 +332,13 @@ class ModeManager(QObject):
                 -1,
                 self.DEFAULT_HELP_TEXTS["results"],
             )
+            map_idx, map_help = self._resolve_help_entry(
+                "map", -1, self.DEFAULT_HELP_TEXTS["map"]
+            )
+            tools_idx, tools_help = self._resolve_help_entry(
+                "tools", -1, self.DEFAULT_HELP_TEXTS["tools"]
+            )
+                        
             if index == data_idx:
                 mode_label = "DATA"
                 color = MODE_DATA_COLOR
@@ -354,6 +371,14 @@ class ModeManager(QObject):
                 mode_label = "RESULTS"
                 color = MODE_RESULTS_COLOR
                 tooltip = results_help
+            elif index == map_idx:
+                mode_label = "MAP"
+                color = MODE_MAP_COLOR
+                tooltip = map_help
+            elif index == tools_idx:
+                mode_label = "TOOLS"
+                color = MODE_TOOLS_COLOR
+                tooltip = tools_help
             else:
                 # Fallback: just use tab text
                 tab_text = tabs.tabText(index) or "–"

@@ -112,6 +112,10 @@ class ModelArchitectureCard(CardBase):
 
         self.store = store
         self.binder = binder
+        
+        self._fallback_active = False
+        self._pde_before_fallback = None
+
 
         self._build()
         self._wire()
@@ -349,9 +353,11 @@ class ModelArchitectureCard(CardBase):
     # Wiring
     # -----------------------------------------------------------------
     def _wire(self) -> None:
-        self.cmb_model.currentIndexChanged.connect(
-            self._on_model_selected,
-        )
+        # self.cmb_model.currentIndexChanged.connect(
+        #     self._on_model_selected,
+        # )
+        # activated() fires on user selection, even if the index stays the same.
+        self.cmb_model.activated.connect(self._on_model_selected)
 
         self.chk_vsn.toggled.connect(self._toggle_vsn)
         self._toggle_vsn(self.chk_vsn.isChecked())
@@ -362,6 +368,7 @@ class ModelArchitectureCard(CardBase):
         self.store.config_replaced.connect(
             lambda _cfg: self._sync_preview(),
         )
+        
 
     def _toggle_vsn(self, on: bool) -> None:
         self.sp_vsn.setEnabled(bool(on))
@@ -369,10 +376,42 @@ class ModelArchitectureCard(CardBase):
     # -----------------------------------------------------------------
     # Model selection logic
     # -----------------------------------------------------------------
-    def _on_model_selected(self) -> None:
+    # def _on_model_selected(self) -> None:
+    #     model = self.cmb_model.currentData()
+    #     model = str(model or "").strip()
+
+    #     if model == "PoroElasticSubsNet":
+    #         msg = (
+    #             "⏳ PoroElasticSubsNet is planned for the "
+    #             "next release.\n\n"
+    #             "For now we keep GeoPriorSubsNet and set "
+    #             "PDE mode to 'consolidation' to approximate "
+    #             "consolidation-only physics."
+    #         )
+    #         self._fallback_model(
+    #             msg=msg,
+    #             pde_mode="consolidation",
+    #         )
+    #         return
+
+    #     if model == "HybridAttn":
+    #         msg = (
+    #             "🧪 HybridAttn is a roadmap item.\n\n"
+    #             "To mimic a pure Hybrid attention run, we "
+    #             "keep GeoPriorSubsNet and disable physics "
+    #             "(PDE mode = 'off').\n\n"
+    #             "HybridAttn + anomaly detection will land "
+    #             "in a future release."
+    #         )
+    #         self._fallback_model(msg=msg, pde_mode="off")
+    #         return
+
+    #     self.lbl_banner.setVisible(False)
+        
+    def _on_model_selected(self, *_args: Any) -> None:
         model = self.cmb_model.currentData()
         model = str(model or "").strip()
-
+    
         if model == "PoroElasticSubsNet":
             msg = (
                 "⏳ PoroElasticSubsNet is planned for the "
@@ -386,7 +425,7 @@ class ModelArchitectureCard(CardBase):
                 pde_mode="consolidation",
             )
             return
-
+    
         if model == "HybridAttn":
             msg = (
                 "🧪 HybridAttn is a roadmap item.\n\n"
@@ -398,8 +437,29 @@ class ModelArchitectureCard(CardBase):
             )
             self._fallback_model(msg=msg, pde_mode="off")
             return
+    
+        # User explicitly chose the default backbone.
+        # If we were in fallback, restore the PDE mode that existed before.
+        self._restore_default_backbone_state()
 
+    def _restore_default_backbone_state(self) -> None:
+        # Always hide the banner when the default backbone is selected.
         self.lbl_banner.setVisible(False)
+    
+        if not self._fallback_active:
+            return
+    
+        restore_pde = self._pde_before_fallback
+        self._fallback_active = False
+        self._pde_before_fallback = None
+    
+        if not restore_pde:
+            return
+    
+        with self.store.batch():
+            # Ensure model stays default, and restore PDE mode.
+            self.store.patch({"model_name": "GeoPriorSubsNet"})
+            self.store.patch({"pde_mode": str(restore_pde)})
 
     def _fallback_model(
         self,
@@ -407,17 +467,43 @@ class ModelArchitectureCard(CardBase):
         msg: str,
         pde_mode: str,
     ) -> None:
+        # Capture the user's current/default PDE mode ONCE,
+        # so we can restore it when they return to GeoPriorSubsNet.
+        if not self._fallback_active:
+            self._pde_before_fallback = str(self.store.cfg.pde_mode)
+    
+        self._fallback_active = True
+    
         self.lbl_banner.setText(str(msg))
         self.lbl_banner.setVisible(True)
-
+    
         idx = self.cmb_model.findData("GeoPriorSubsNet")
         if idx >= 0:
             with QSignalBlocker(self.cmb_model):
                 self.cmb_model.setCurrentIndex(idx)
-
+    
         with self.store.batch():
             self.store.patch({"model_name": "GeoPriorSubsNet"})
             self.store.patch({"pde_mode": str(pde_mode)})
+
+
+    # def _fallback_model(
+    #     self,
+    #     *,
+    #     msg: str,
+    #     pde_mode: str,
+    # ) -> None:
+    #     self.lbl_banner.setText(str(msg))
+    #     self.lbl_banner.setVisible(True)
+
+    #     idx = self.cmb_model.findData("GeoPriorSubsNet")
+    #     if idx >= 0:
+    #         with QSignalBlocker(self.cmb_model):
+    #             self.cmb_model.setCurrentIndex(idx)
+
+    #     with self.store.batch():
+    #         self.store.patch({"model_name": "GeoPriorSubsNet"})
+    #         self.store.patch({"pde_mode": str(pde_mode)})
 
     # -----------------------------------------------------------------
     # Architecture dialog

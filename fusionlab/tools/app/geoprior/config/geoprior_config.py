@@ -387,7 +387,7 @@ class GeoPriorConfig:
     # ------------------------------------------------------------------
     # GUI exposes a friendly ``pde_mode`` string; this is mapped back to
     # ``PDE_MODE_CONFIG`` in the overrides.
-    pde_mode: str = "off"
+    pde_mode: str = "both"
 
     # v3.2: physics warmup / ramp (stage-2)
     physics_warmup_steps: int = 500

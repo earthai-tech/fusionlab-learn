@@ -44,7 +44,7 @@ DEFAULT_LCONS  = [0.01, 0.05, 0.10, 0.20]
 DEFAULT_LPRIOR = [0.01, 0.05, 0.10, 0.20]
 DEFAULT_PDE_MODES =["both"] #  ["none", "both"]  # you can trim to ["both"] if you want
 
-TRAIN_SCRIPT = Path(__file__).with_name("run_training.py")
+TRAIN_SCRIPT = Path(__file__).with_name("stage2.py")
 
 
 def parse_args() -> argparse.Namespace:
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--epochs",
         type=int,
-        default=20,
+        default=3,
         help="Epochs per sensitivity run (short runs).",
     )
     p.add_argument(

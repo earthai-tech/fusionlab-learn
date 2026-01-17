@@ -97,7 +97,8 @@ from .ui.preprocess_tab import PreprocessTab
 from .ui.tune_tab import TuneTab
 from .ui.inference_tab import InferenceTab
 from .ui.xfer_tab import XferTab
-     
+from .ui.map_tab import MapTab
+
 from ..ux_utils import (
     set_app_metadata,
     auto_set_ui_fonts,
@@ -310,7 +311,12 @@ class GeoPriorForecaster(QMainWindow):
 
         self._results_help_text = ModeManager.DEFAULT_HELP_TEXTS["results"]
         self._results_tip_shown = False
-
+        
+        self._map_help_text = ModeManager.DEFAULT_HELP_TEXTS["map"]
+        self._map_tip_shown = False
+        
+        self._tools_help_text = ModeManager.DEFAULT_HELP_TEXTS["tools"]
+        self._tools_tip_shown = False
 
     def _init_dialogs_and_paths(self) -> None:
         """Initialise dialogs and main results root paths."""
@@ -887,7 +893,13 @@ class GeoPriorForecaster(QMainWindow):
             make_run_button=self._make_run_button,
             parent=self,
         )
-    
+
+        # in init tabs (similar to DataTab/SetupTab)
+        self.map_tab = MapTab(
+            store=self.config_store,
+            parent=self,
+        )
+
         # ==============================================================
         # Data / Setup / Preprocess (new central UI modules)
         # ==============================================================
@@ -1002,7 +1014,15 @@ class GeoPriorForecaster(QMainWindow):
             self._workflow_icon("results.svg", QStyle.SP_DirHomeIcon),
             "Results",
         )
-    
+        
+        self._map_tab_index = self.tabs.addTab(
+            self.map_tab,
+            self._workflow_icon(
+                "map.svg",
+                QStyle.SP_DirIcon,
+            ),
+            "Map",
+        )
         # Tools tab – utilities (data, manifests, diagnostics, environment)
         self.tools_tab = ToolsTab(
             app_ctx=self,
@@ -1422,6 +1442,23 @@ class GeoPriorForecaster(QMainWindow):
                     "_results_help_text",
                     ModeManager.DEFAULT_HELP_TEXTS["results"],
                 ),
+    
+            ),
+            "map": (
+                getattr(self, "_map_tab_index", -1),
+                getattr(
+                    self,
+                    "_map_help_text",
+                    ModeManager.DEFAULT_HELP_TEXTS["map"],
+                ),
+            ),
+            "tools": (
+                getattr(self, "_tools_tab_index", -1),
+                getattr(
+                    self,
+                    "_tools_help_text",
+                    ModeManager.DEFAULT_HELP_TEXTS["tools"],
+                ),
             ),
         }
 
@@ -1637,8 +1674,9 @@ class GeoPriorForecaster(QMainWindow):
         tools_idx = getattr(self, "_tools_tab_index", -1)
         prep_idx = getattr(self, "_preprocess_tab_index", -1)
         setup_idx = getattr (self, "_setup_tab_index", -1)
-
-        hide = index in (data_idx, setup_idx, res_idx, tools_idx)
+        map_idx = getattr (self, "_map_tab_index", -1)
+        
+        hide = index in (data_idx, setup_idx, map_idx, res_idx, tools_idx)
         self.set_console_visible(not hide)
     
         if index == prep_idx:

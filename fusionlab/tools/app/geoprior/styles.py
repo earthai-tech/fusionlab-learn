@@ -68,7 +68,8 @@ MODE_RESULTS_COLOR = "#4B5563"   # Results = slate grey
 MODE_DATA_COLOR = "#0284C7"   # sky blue for Data tab
 MODE_SETUP_COLOR = "#7c3aed"
 MODE_PREPROCESS_COLOR = "#0ea5e9"
-
+MODE_MAP_COLOR = "#0F766E"       # Map = teal (distinct from DRY)
+MODE_TOOLS_COLOR = "#D97706"     # Tools = orange (distinct and eye-catching)
 # ------------------------------------------------------------------ #
 #  Run button colours
 # ------------------------------------------------------------------ #
@@ -456,6 +457,74 @@ QLabel#featMissingChip {{
     border: 1px solid rgba(242,134,32,0.35);
     font-weight: 800;
 }}
+               
+/* ===== Map tab: Data panel ===== */
+QScrollArea#mapDataScroll {{ border: none; background: transparent; }}
+QWidget#mapDataHost {{ background: transparent; }}
+
+QFrame#mapPanelCard {{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.92);
+}}
+QFrame#mapPanelCard[role="toolbar"] {{
+    background: rgba(46,49,145,0.04);
+}}
+
+QLabel#mapSectionTitle {{
+    font-weight: 700;
+    color: rgba(46,49,145,0.96);
+}}
+
+QLabel#mapCountChip {{
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.18);
+    color: rgba(30,30,30,0.85);
+    font-weight: 700;
+}}
+
+QLineEdit#mapSearch {{
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.22);
+    border-radius: 10px;
+    padding: 6px 10px;
+}}
+
+QLabel#mapStatusChip {{
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.18);
+    color: rgba(30,30,30,0.85);
+}}
+
+QTreeWidget#mapTree {{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 10px;
+    background: rgba(255,255,255,0.98);
+    alternate-background-color: rgba(46,49,145,0.03);
+    outline: 0;
+}}
+QTreeWidget#mapTree::item {{
+    padding: 5px 6px;
+    border-radius: 8px;
+}}
+QTreeWidget#mapTree::item:hover {{
+    background: rgba(51,153,255,0.14);
+}}
+QTreeWidget#mapTree::item:selected {{
+    background: rgba(46,49,145,0.18);
+    color: rgba(15,23,42,0.95);
+}}
+
+QTreeWidget#mapTree QHeaderView::section {{
+    background: rgba(46,49,145,0.06);
+    border: none;
+    padding: 4px 8px;
+    font-weight: 600;
+}}
 
 """
 
@@ -768,6 +837,67 @@ QListWidget#setupNavList {{
     background: rgba(15,23,42,0.25);
     border: 1px solid rgba(255,255,255,0.14);
 }}
+/* ===== Map tab: Data panel (Dark) ===== */
+QScrollArea#mapDataScroll {{ border: none; background: transparent; }}
+QWidget#mapDataHost {{ background: transparent; }}
+
+QFrame#mapPanelCard {{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: rgba(15,23,42,0.25);
+}}
+QFrame#mapPanelCard[role="toolbar"] {{
+    background: rgba(46,49,145,0.14);
+}}
+
+QLabel#mapSectionTitle {{
+    font-weight: 700;
+    color: rgba(255,255,255,0.95);
+}}
+
+QLabel#mapCountChip {{
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(203,213,225,0.95);
+    font-weight: 700;
+}}
+
+QLineEdit#mapSearch {{
+    background: rgba(2,6,23,0.55);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px;
+    padding: 6px 10px;
+    color: rgba(226,232,240,0.95);
+}}
+
+QLabel#mapStatusChip {{
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(226,232,240,0.95);
+}}
+
+QTreeWidget#mapTree {{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px;
+    background: rgba(15,23,42,0.35);
+    alternate-background-color: rgba(255,255,255,0.03);
+    outline: 0;
+}}
+QTreeWidget#mapTree::item {{ padding: 5px 6px; border-radius: 8px; }}
+QTreeWidget#mapTree::item:hover {{ background: rgba(51,153,255,0.18); }}
+QTreeWidget#mapTree::item:selected {{ background: rgba(46,49,145,0.26); }}
+
+QTreeWidget#mapTree QHeaderView::section {{
+    background: rgba(255,255,255,0.06);
+    border: none;
+    padding: 4px 8px;
+    font-weight: 600;
+    color: rgba(226,232,240,0.92);
+}}
                
 """
 
@@ -1054,7 +1184,9 @@ __all__ = [
     "MODE_SETUP_COLOR",
     "MODE_PREPROCESS_COLOR",
     "MAIN_TAB_STYLES_DARK", 
-    "MAIN_TAB_STYLES_LIGHT"
+    "MAIN_TAB_STYLES_LIGHT", 
+    "MODE_MAP_COLOR",
+    "MODE_TOOLS_COLOR",
     
 ]
 

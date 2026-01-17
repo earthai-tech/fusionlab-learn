@@ -157,6 +157,7 @@ def make_one_step_windows(
         "static_features": np.repeat(static_vec[None, :], B, axis=0).astype(np.float32),
         "dynamic_features": np.zeros((B, T, 1), dtype=np.float32),
         # IMPORTANT for TFT-like internals: future length should be auto T+H
+        # “T+H”, and TFT-like internals , so no need to add T
         "future_features": np.zeros((B, H, 1), dtype=np.float32),
 
         "coords": np.zeros((B, H, 3), dtype=np.float32),
@@ -257,7 +258,7 @@ def train_one_pixel(
         scaling_kwargs=dict(
             # subsidence target is in mm in  SM3 (alpha=1000) -> convert to meters
             subs_scale_si=1e-3,
-            subs_bias_si=1.0,
+            subs_bias_si=0.0, # rather than 1.0
     
             # head is conceptually meters in  synthetic setup
             head_scale_si=1.0,
@@ -420,6 +421,9 @@ def convert_payload_time_units(
             out["tau_closure"] = _as_float(out["tau_closure"]) / spy
         if "K" in out:
             out["K"] = _as_float(out["K"]) * spy
+            
+        if "cons_res_vals" in out:
+            out["cons_res_vals"] = _as_float(out["cons_res_vals"]) * spy
 
     elif fu == "year" and tu == "sec":
         if "tau" in out:
@@ -430,6 +434,8 @@ def convert_payload_time_units(
             out["tau_closure"] = _as_float(out["tau_closure"]) * spy
         if "K" in out:
             out["K"] = _as_float(out["K"]) / spy
+        if "cons_res_vals" in out:
+            out["cons_res_vals"] = _as_float(out["cons_res_vals"]) / spy
 
     # Refresh log fields if they exist (useful for plots)
     if "log10_tau" in out and "tau" in out:
@@ -448,27 +454,64 @@ def convert_payload_time_units(
 
 def _infer_payload_time_units(meta: Dict[str, Any]) -> str:
     """
-    Infer payload units robustly from metadata.
+    Infer the *native* time units used by the exported physics payload.
 
-    Priority:
-      1) meta["units"]["tau"] if present
-      2) meta["payload_time_units"] if you write it
-      3) meta["time_units"] fallback
+    Returns
+    -------
+    str
+        "sec" or "year".
     """
+    def _norm(u: Any) -> str:
+        s = ("" if u is None else str(u)).strip().lower()
+        s = s.replace(" ", "")
+        return s
+
+    def _is_sec(u: str) -> bool:
+        # Accept "s", "sec", "seconds", and unit strings that imply per-second.
+        return (
+            u in {"s", "sec", "secs", "second", "seconds"}
+            or u.endswith("/s")
+            or u.endswith("persecond")
+            or "/sec" in u
+            or "m/s" in u
+        )
+
+    def _is_year(u: str) -> bool:
+        # Accept "year", "yr", "years", and unit strings that imply per-year.
+        return (
+            u in {"y", "yr", "yrs", "year", "years", "a", "annum", "annums"}
+            or u.endswith("/yr")
+            or u.endswith("/year")
+            or "/year" in u
+            or "m/year" in u
+        )
+
+    # 1) v3.2 canonical metadata: meta["units"]["tau"] is authoritative
     units = meta.get("units") or {}
-    tau_u = str(units.get("tau", "")).lower()
-    if "year" in tau_u:
+    tau_u = _norm(units.get("tau", ""))
+
+    if _is_year(tau_u):
         return "year"
-    if "sec" in tau_u or tau_u in ("s", "second", "seconds"):
+    if _is_sec(tau_u):
         return "sec"
 
-    pu = str(meta.get("payload_time_units", "")).strip().lower()
-    if pu.startswith("y"):
+    # 2) If tau unit is missing, infer from K if present (m/s vs m/year)
+    K_u = _norm(units.get("K", ""))
+    if _is_year(K_u):
         return "year"
-    if pu.startswith("s"):
+    if _is_sec(K_u):
         return "sec"
 
-    return str(meta.get("time_units", "year")).strip().lower()
+    # 3) Legacy / custom field (if you wrote it in older runs)
+    pu = _norm(meta.get("payload_time_units", ""))
+    if _is_year(pu) or pu.startswith("y"):
+        return "year"
+    if _is_sec(pu) or pu.startswith("s"):
+        return "sec"
+
+    # 4) Last resort: fall back to SI (v3.2 exports SI time units)
+    return "sec"
+
 
 
 def run_one_realisation(
@@ -606,7 +649,9 @@ def run_one_realisation(
     npz_path = os.path.join(run_dir, "phys_payload_val.npz")
 
     # IMPORTANT:
-    # Do NOT claim payload is "sec" if model exports "year".
+    # v3.2 exports physics payload in SI time units (tau: s, K: m/s).
+    # report_time_units controls how we *report/diagnose* quantities.
+
     # We keep report_time_units="year" for SM3.
     model.export_physics_payload(
         ds_va,
@@ -617,7 +662,7 @@ def run_one_realisation(
             "synthetic": True,
             "realisation": int(r),
             
-            "payload_time_units": "sec",
+            # "payload_time_units": "sec",
             # "units": {
             #     "tau": "sec",
             #     "K": "m/s",
