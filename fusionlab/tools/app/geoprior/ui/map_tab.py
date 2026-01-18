@@ -38,9 +38,21 @@ from .map.utils import parse_city_dir
 from .map.hotspots import (
     HotspotCfg,
     build_points,
-    clip_lonlat,
     compute_hotspots,
     hotspots_payload,
+)
+from .map.coord_utils import ( 
+    ensure_lonlat,
+    parse_epsg, 
+    df_to_lonlat
+)
+from .map.interpretation import (
+    cfg_from_get,
+    apply_interp,
+    rows_for_export,
+    geojson_from_rows,
+    dump_geojson,
+    policy_brief_md,
 )
 
 _MAP_DEFAULTS = {
@@ -91,6 +103,8 @@ class MapTab(QWidget):
         self.store = store
         self._auto_fit = True
 
+        self._last_hs_payload = []
+        self._last_hs_ctx = {}
 
         self.head = MapHeadBar(parent=self)
         self.nav_a = AutoHideDataPanel(
@@ -151,6 +165,16 @@ class MapTab(QWidget):
 
     def _apply_defaults(self) -> None:
         cfg = self.store.cfg
+        if not self.store.get("map.utm_epsg", None):
+            self.store.set(
+                "map.utm_epsg",
+                int(getattr(cfg, "utm_epsg", 32631)),
+            )
+        if not self.store.get("map.coord_epsg", None):
+            self.store.set(
+                "map.coord_epsg",
+                int(getattr(cfg, "coord_src_epsg", 4326)),
+            )
         x0 = cfg.lon_col
         y0 = cfg.lat_col
         z0 = cfg.subs_col
@@ -212,9 +236,14 @@ class MapTab(QWidget):
         self.nav_c.pinned_changed.connect(
             self._on_right_pinned,
         )
+        self.nav_c.export_requested.connect(
+            self._on_export_requested
+        )
+
         self.nav_a.columns_changed.connect(
             self._on_map_cols,
         )
+        
         self.nav_a.active_changed.connect(
             self._on_active_file,
         )
@@ -246,6 +275,19 @@ class MapTab(QWidget):
         self.head.measure_mode_changed.connect(
             self._on_measure_mode_changed
         )
+        
+        self.head.epsg_changed.connect(
+            self._on_coord_epsg_changed,
+        )
+
+    def _on_coord_epsg_changed(self, epsg: int) -> None:
+        try:
+            v = int(epsg)
+        except Exception:
+            return
+        if v <= 0:
+            return
+        self.store.set("map.coord_epsg", v)
 
     def _on_basemap_changed(self, key: str) -> None:
         self.store.set("map.view.basemap", str(key))
@@ -261,12 +303,100 @@ class MapTab(QWidget):
 
     def _on_measure_mode_changed(self, mode: str) -> None:
         self.store.set("map.measure_mode", str(mode))
-
+     
     def _on_export_requested(self, kind: str) -> None:
-        # Minimal now: PNG snapshot only.
-        if str(kind) != "png":
+        kind = str(kind or "").strip().lower()
+
+        if kind == "png":
+            self._export_png_snapshot()
             return
-        self._export_png_snapshot()
+
+        if kind == "hotspots_csv":
+            self._export_hotspots_csv()
+            return
+
+        if kind == "hotspots_geojson":
+            self._export_hotspots_geojson()
+            return
+
+        if kind == "policy_brief":
+            self._export_policy_brief()
+            return
+
+    def _export_hotspots_csv(self) -> None:
+        if not self._last_hs_payload:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export hotspots CSV",
+            "hotspots.csv",
+            "CSV (*.csv)",
+        )
+        if not path:
+            return
+
+        rows = rows_for_export(
+            self._last_hs_payload,
+            basis=str(self._last_hs_ctx.get("basis", "")),
+            metric=str(self._last_hs_ctx.get("metric", "")),
+        )
+        df = pd.DataFrame(rows)
+        df.to_csv(str(path), index=False)
+
+    def _export_hotspots_geojson(self) -> None:
+        if not self._last_hs_payload:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export hotspots GeoJSON",
+            "hotspots.geojson",
+            "GeoJSON (*.geojson *.json)",
+        )
+        if not path:
+            return
+
+        rows = rows_for_export(
+            self._last_hs_payload,
+            basis=str(self._last_hs_ctx.get("basis", "")),
+            metric=str(self._last_hs_ctx.get("metric", "")),
+        )
+        gj = geojson_from_rows(rows)
+        txt = dump_geojson(gj)
+
+        with open(str(path), "w", encoding="utf-8") as f:
+            f.write(txt)
+
+    def _export_policy_brief(self) -> None:
+        if not self._last_hs_payload:
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export policy brief",
+            "policy_brief.md",
+            "Markdown (*.md)",
+        )
+        if not path:
+            return
+
+        icfg = cfg_from_get(self.store.get)
+
+        rows = rows_for_export(
+            self._last_hs_payload,
+            basis=str(self._last_hs_ctx.get("basis", "")),
+            metric=str(self._last_hs_ctx.get("metric", "")),
+        )
+
+        md = policy_brief_md(
+            rows,
+            cfg=icfg,
+            ctx=self._last_hs_ctx,
+        )
+
+        with open(str(path), "w", encoding="utf-8") as f:
+            f.write(md)
 
     def _on_bookmark_requested(self, req: str) -> None:
         req = str(req or "").strip()
@@ -292,7 +422,16 @@ class MapTab(QWidget):
         if not name:
             return
 
-        snap = dict(self._view_snapshot() or {})
+        snap = {}
+        try:
+            full = dict(self.nav_c.snapshot() or {})
+            for k, v in full.items():
+                kk = str(k)
+                if kk.startswith("map.view."):
+                    snap[kk.split("map.view.", 1)[1]] = v
+        except Exception:
+            snap = dict(self._view_snapshot() or {})
+
         bms = list(self.store.get("map.bookmarks", []) or [])
         bms.append({"name": name, "view": snap})
         self.store.set("map.bookmarks", bms)
@@ -349,6 +488,7 @@ class MapTab(QWidget):
 
     def _on_view_changed(self, _snap) -> None:
         self._apply_view_to_canvas()
+        self._refresh_points()
 
     def _on_map_cols(self, cols) -> None:
         cols = list(cols or [])
@@ -439,30 +579,32 @@ class MapTab(QWidget):
         self._apply_split_width(left=None, right=int(w))
 
     def _refresh_points(self) -> None:
-        # ----------------------------------------------------------
-        # Active dataset
-        # ----------------------------------------------------------
-        p = str(self.store.get("map.active_file", "")).strip()
-        if not p:
+        # --------------------------------------------------
+        # Helpers
+        # --------------------------------------------------
+        def _clear_all() -> None:
             self.canvas.clear_points()
             try:
                 self.canvas.clear_hotspots()
             except Exception:
                 pass
+    
+        # --------------------------------------------------
+        # Active dataset
+        # --------------------------------------------------
+        p = str(self.store.get("map.active_file", "")).strip()
+        if not p:
+            _clear_all()
             return
     
         fp = Path(p)
         if not fp.exists():
-            self.canvas.clear_points()
-            try:
-                self.canvas.clear_hotspots()
-            except Exception:
-                pass
+            _clear_all()
             return
     
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         # Column mapping (X/Y + value)
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         x = str(self.store.get("map.x_col", "")).strip()
         y = str(self.store.get("map.y_col", "")).strip()
     
@@ -471,41 +613,35 @@ class MapTab(QWidget):
         v = v0 or z0
     
         if not x or not y or not v:
-            self.canvas.clear_points()
-            try:
-                self.canvas.clear_hotspots()
-            except Exception:
-                pass
+            _clear_all()
             return
     
+        # --------------------------------------------------
         # Optional time filtering (viewer selection)
+        # --------------------------------------------------
         t = str(self.store.get("map.time_col", "")).strip()
         tv = str(self.store.get("map.time_value", "")).strip()
     
         use = [c for c in (x, y, v, t) if c]
         use = list(dict.fromkeys(use))
     
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         # Read CSV (prefer minimal columns; fallback full)
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         try:
             df = pd.read_csv(fp, usecols=use)
         except Exception:
             try:
                 df = pd.read_csv(fp)
             except Exception:
-                self.canvas.clear_points()
-                try:
-                    self.canvas.clear_hotspots()
-                except Exception:
-                    pass
+                _clear_all()
                 return
     
         df_all = df
     
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         # Viewer slice by time value (df_view)
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         df_view = df_all
         if tv and t and t in df_all.columns:
             s = df_all[t]
@@ -517,48 +653,91 @@ class MapTab(QWidget):
             else:
                 df_view = df_all[s.astype(str) == str(tv)]
     
-        # Validate required columns exist in the loaded df
+        # --------------------------------------------------
+        # Validate required columns exist
+        # --------------------------------------------------
         if x not in df_all.columns or y not in df_all.columns:
-            self.canvas.clear_points()
-            try:
-                self.canvas.clear_hotspots()
-            except Exception:
-                pass
-            return
-        if v not in df_all.columns:
-            self.canvas.clear_points()
-            try:
-                self.canvas.clear_hotspots()
-            except Exception:
-                pass
+            _clear_all()
             return
     
-        # ----------------------------------------------------------
+        if v not in df_all.columns:
+            _clear_all()
+            return
+    
+        # --------------------------------------------------
         # Normalize to canonical schema: lon/lat/v
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         out = build_points(df_view, x=x, y=y, v=v)
     
-        mode = str(self.store.get("map.coord_mode", "lonlat"))
-        mode = mode.strip().lower()
-        if mode == "lonlat":
-            out = clip_lonlat(out)
+        # --------------------------------------------------
+        # Coords: ensure lon/lat degrees for Leaflet
+        # --------------------------------------------------
+        mode = str(
+            self.store.get("map.coord_mode", "lonlat")
+        ).strip().lower()
     
-        if out is None or out.empty:
-            self.canvas.clear_points()
-            try:
-                self.canvas.clear_hotspots()
-            except Exception:
-                pass
+        utm_epsg = parse_epsg(
+            self.store.get("map.utm_epsg", None)
+        )
+        if utm_epsg is None:
+            utm_epsg = parse_epsg(
+                self.store.get("utm_epsg", None)
+            )
+    
+        src_epsg = parse_epsg(
+            self.store.get("map.coord_epsg", None)
+        )
+        if src_epsg is None:
+            src_epsg = parse_epsg(
+                self.store.get("map.src_epsg", None)
+            )
+        if src_epsg is None:
+            src_epsg = parse_epsg(
+                self.store.get("coord_src_epsg", None)
+            )
+    
+        try:
+            out, ok, msg = ensure_lonlat(
+                out,
+                mode=mode,
+                utm_epsg=utm_epsg,
+                src_epsg=src_epsg,
+            )
+            # If there’s a problem, display the error message
+            if not ok:
+                self.lb_status.setText(f"Error: {msg}")
+                self.lb_status.setProperty("state", "warn")
+                self.lb_status.setVisible(True)
+                return
+            
+        except Exception:
+            out = df_to_lonlat(
+                out,
+                x="lon",
+                y="lat",
+                mode=mode,
+                utm_epsg=utm_epsg,
+                src_epsg=src_epsg,
+            )
+            ok = not out.empty
+    
+        if (not ok) or out.empty:
+            self.lb_status.setText("Error: Invalid coordinates")
+            self.lb_status.setProperty("state", "warn")
+            self.lb_status.setVisible(True)
+            _clear_all()
             return
     
+        # --------------------------------------------------
         # Cap points for performance
+        # --------------------------------------------------
         max_pts = 80000
         if len(out) > max_pts:
             out = out.sample(n=max_pts, random_state=0)
     
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         # Render points (style from view panel)
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         snap = self._view_snapshot()
     
         rad = int(snap.get("marker_size") or 6)
@@ -586,9 +765,9 @@ class MapTab(QWidget):
             invert=inv,
         )
     
-        # --------------------------
+        # --------------------------------------------------
         # Hotspots (attention layer)
-        # --------------------------
+        # --------------------------------------------------
         k_en = "map.view.hotspots.enabled"
         hot_on = bool(self.store.get(k_en, False))
     
@@ -597,8 +776,9 @@ class MapTab(QWidget):
                 self.canvas.clear_hotspots()
             except Exception:
                 pass
+            self._last_hs_payload = []
+            self._last_hs_ctx = {}
         else:
-            # --- config (store-backed) ---
             k = "map.view.hotspots."
     
             hs_mode = str(self.store.get(k + "mode", "auto"))
@@ -610,35 +790,37 @@ class MapTab(QWidget):
             metric = str(self.store.get(k + "metric", "high"))
             metric = metric.lower()
     
-            thr_mode = str(self.store.get(k + "thr_mode", "quantile"))
-            thr_mode = thr_mode.lower()
+            thr_mode = str(
+                self.store.get(k + "thr_mode", "quantile")
+            ).lower()
     
             q = float(self.store.get(k + "quantile", 0.98) or 0.98)
             q = max(0.0, min(1.0, q))
     
             abs_thr = self.store.get(k + "abs_thr", None)
     
-            time_agg = str(self.store.get(k + "time_agg", "current"))
-            time_agg = time_agg.lower()
+            time_agg = str(
+                self.store.get(k + "time_agg", "current")
+            ).lower()
     
             time_win = int(self.store.get(k + "time_window", 0) or 0)
     
             cell_km = float(self.store.get(k + "cell_km", 1.0) or 1.0)
             min_pts = int(self.store.get(k + "min_pts", 20) or 20)
             max_n = int(self.store.get(k + "max_n", 8) or 8)
-            min_sep = float(self.store.get(k + "min_sep_km", 2.0) or 2.0)
     
-            # If "cluster" not implemented, fallback to grid
+            min_sep = float(
+                self.store.get(k + "min_sep_km", 2.0) or 2.0
+            )
+    
             if method not in ("grid", "quantile"):
                 method = "grid"
     
-            # --- compute payload ---
             hs_payload = []
     
             if hs_mode in ("auto", "merge"):
                 pts_for_hs = out[["lon", "lat", "v"]].copy()
     
-                # Use full data if time aggregation requested
                 if time_agg != "current" and t and (t in df_all.columns):
                     try:
                         pts_for_hs = build_points(
@@ -649,13 +831,41 @@ class MapTab(QWidget):
                             t=t,
                         )
                     except TypeError:
-                        # Older build_points signature
-                        pts_for_hs = build_points(df_all, x=x, y=y, v=v)
+                        pts_for_hs = build_points(
+                            df_all,
+                            x=x,
+                            y=y,
+                            v=v,
+                        )
     
-                # Absolute threshold guard (avoid nonsense)
+                    # Ensure lon/lat for full-data hotspots too
+                    try:
+                        pts_for_hs, ok2, _m2 = ensure_lonlat(
+                            pts_for_hs,
+                            mode=mode,
+                            utm_epsg=utm_epsg,
+                            src_epsg=src_epsg,
+                        )
+                    except Exception:
+                        pts_for_hs = df_to_lonlat(
+                            pts_for_hs,
+                            x="lon",
+                            y="lat",
+                            mode=mode,
+                            utm_epsg=utm_epsg,
+                            src_epsg=src_epsg,
+                        )
+                        ok2 = not pts_for_hs.empty
+    
+                    if (not ok2) or pts_for_hs.empty:
+                        pts_for_hs = pd.DataFrame(
+                            columns=["lon", "lat", "v"]
+                        )
+    
                 if thr_mode == "absolute" and abs_thr is None:
                     hs_payload = []
-                else:
+                elif not pts_for_hs.empty:
+                    t_col = "t" if (time_agg != "current" and t) else ""
                     cfg = HotspotCfg(
                         method=method,
                         metric=metric,
@@ -668,7 +878,7 @@ class MapTab(QWidget):
                         min_sep_km=min_sep,
                         cell_km=cell_km,
                         min_pts=min_pts,
-                        time_col="t" if (t and time_agg != "current") else "",
+                        time_col=t_col,
                         time_agg=time_agg,
                         time_window=time_win,
                     )
@@ -676,22 +886,42 @@ class MapTab(QWidget):
                     hs = compute_hotspots(
                         pts_for_hs,
                         cfg=cfg,
-                        coord_mode=mode,
+                        coord_mode="lonlat",
                     )
                     hs_payload = hotspots_payload(hs)
     
-            # Manual / merge reserved for later
             style = str(self.store.get(k + "style", "pulse") or "pulse")
             pulse = bool(self.store.get(k + "pulse", True))
     
-            spd = float(self.store.get(k + "pulse_speed", 1.0) or 1.0)
+            spd = float(
+                self.store.get(k + "pulse_speed", 1.0) or 1.0
+            )
             spd = max(0.2, min(3.0, spd))
     
             ring_km = float(self.store.get(k + "ring_km", 0.8) or 0.8)
             ring_km = max(0.01, ring_km)
     
-            labels = bool(self.store.get(k + "labels", True))
-    
+            icfg = cfg_from_get(self.store.get)
+
+            hs_payload = apply_interp(
+                hs_payload,
+                cfg=icfg,
+                basis=time_agg,
+                metric=metric,
+            )
+
+            labels = bool(
+                self.store.get(k + "labels", True)
+            )
+            if icfg.enabled and icfg.callouts:
+                labels = True
+
+            self._last_hs_payload = list(hs_payload or [])
+            self._last_hs_ctx = {
+                "basis": time_agg,
+                "metric": metric,
+            }
+
             try:
                 self.canvas.set_hotspots(
                     hs_payload,
@@ -704,13 +934,15 @@ class MapTab(QWidget):
                 )
             except Exception:
                 pass
-    
-        # ----------------------------------------------------------
+
+        # --------------------------------------------------
         # Auto-fit (once per new active dataset)
-        # ----------------------------------------------------------
+        # --------------------------------------------------
         if self._auto_fit:
             self.canvas.fit_points()
             self._auto_fit = False
+
+
     
     def _freeze_hover(self, ms: int = 250) -> None:
         if bool(self.store.get("map.focus_mode", False)):
@@ -848,6 +1080,15 @@ class MapTab(QWidget):
         if view_keys:
             self._apply_view_to_canvas()
 
+            needs_pts = any(
+                k.startswith("map.view.hotspots.")
+                or k.startswith("map.view.interp.")
+                for k in view_keys
+            )
+            if needs_pts:
+                self._refresh_points()
+            return
+
     def _on_engine_changed(self, engine: str) -> None:
         self.store.set("map.engine", str(engine))
 
@@ -871,6 +1112,13 @@ class MapTab(QWidget):
         focus = bool(self.store.get("map.focus_mode", False))
         show_d = bool(self.store.get("map.show_analytics", False))
 
+        epsg = int(
+            self.store.get(
+                "map.coord_epsg",
+                getattr(self.store.cfg, "coord_src_epsg", 4326),
+            )
+        )
+        self.head.set_epsg(epsg)
         self.head.set_engine(engine)
         self.head.set_coord_mode(coord)
         self.head.set_xyz(x=x, y=y, z=z)

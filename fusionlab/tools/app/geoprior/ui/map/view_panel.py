@@ -78,10 +78,21 @@ _VIEW_DEFAULTS: Dict[str, object] = {
     "map.view.hotspots.ring_km": 0.8,
     "map.view.hotspots.labels": True,
     
-    # Interpretation (placeholder but store-backed)
+    # Interpretation (policy-ready, store-backed)
     "map.view.interp.enabled": False,
-    "map.view.interp.scheme": "subsidence",    # subsidence|risk
+    "map.view.interp.scheme": "subsidence",
     "map.view.interp.callouts": True,
+    "map.view.interp."
+    "callout_level": "standard",
+    "map.view.interp."
+    "callout_actions": True,
+    "map.view.interp.tone": "municipal",
+    "map.view.interp."
+    "action_pack": "balanced",
+    "map.view.interp."
+    "action_intensity": "balanced",
+    "map.view.interp.summary": "",
+
 
 }
 
@@ -96,6 +107,7 @@ class AutoHideViewPanel(AutoHidePanel):
     """
 
     changed = pyqtSignal(object)
+    export_requested = pyqtSignal(str)
 
     def __init__(
         self,
@@ -468,30 +480,108 @@ class AutoHideViewPanel(AutoHidePanel):
     
         return box
     
-    def _group_interpretation(self, parent: QWidget) -> QGroupBox:
+    def _group_interpretation(
+        self,
+        parent: QWidget,
+    ) -> QGroupBox:
         box = QGroupBox("Interpretation", parent)
         form = QFormLayout(box)
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
-    
-        self.chk_interp = QCheckBox("Enable interpretation", box)
-    
+
+        self.chk_interp = QCheckBox(
+            "Enable interpretation",
+            box,
+        )
+
         self.cmb_interp = QComboBox(box)
         self.cmb_interp.addItems([
             "subsidence",
             "risk",
         ])
-    
+
+        self.cmb_tone = QComboBox(box)
+        self.cmb_tone.addItems([
+            "municipal",
+            "technical",
+            "public",
+        ])
+
         self.chk_callouts = QCheckBox(
             "Show callouts on hotspots",
             box,
         )
-    
+
+        self.cmb_call_lvl = QComboBox(box)
+        self.cmb_call_lvl.addItems([
+            "compact",
+            "standard",
+            "detailed",
+        ])
+
+        self.chk_call_act = QCheckBox(
+            "Include actions in callout",
+            box,
+        )
+
+        self.cmb_pack = QComboBox(box)
+        self.cmb_pack.addItems([
+            "balanced",
+            "groundwater",
+            "infrastructure",
+            "planning",
+            "monitoring",
+        ])
+
+        self.cmb_int = QComboBox(box)
+        self.cmb_int.addItems([
+            "conservative",
+            "balanced",
+            "aggressive",
+        ])
+
+        self.lb_interp_sum = QLabel("", box)
+        self.lb_interp_sum.setWordWrap(True)
+        self.lb_interp_sum.setStyleSheet(
+            "color: rgba(140,140,140,1);"
+        )
+
+        exp = QWidget(box)
+        el = QHBoxLayout(exp)
+        el.setContentsMargins(0, 0, 0, 0)
+        el.setSpacing(6)
+
+        self.btn_exp_csv = QPushButton("CSV", box)
+        self.btn_exp_geo = QPushButton("GeoJSON", box)
+        self.btn_exp_brief = QPushButton("Brief", box)
+
+        self.btn_exp_csv.setToolTip(
+            "Export hotspots summary (CSV)"
+        )
+        self.btn_exp_geo.setToolTip(
+            "Export hotspots as GeoJSON"
+        )
+        self.btn_exp_brief.setToolTip(
+            "Export a municipal brief (Markdown)"
+        )
+
+        el.addWidget(self.btn_exp_csv, 0)
+        el.addWidget(self.btn_exp_geo, 0)
+        el.addWidget(self.btn_exp_brief, 0)
+        el.addStretch(1)
+
         form.addRow("", self.chk_interp)
         form.addRow("Scheme", self.cmb_interp)
+        form.addRow("Tone", self.cmb_tone)
         form.addRow("", self.chk_callouts)
-    
+        form.addRow("Callout", self.cmb_call_lvl)
+        form.addRow("", self.chk_call_act)
+        form.addRow("Actions", self.cmb_pack)
+        form.addRow("Intensity", self.cmb_int)
+        form.addRow("Summary", self.lb_interp_sum)
+        form.addRow("Export", exp)
+        
         return box
 
     # -------------------------------------------------
@@ -656,17 +746,68 @@ class AutoHideViewPanel(AutoHidePanel):
         
         # --- interpretation
         self.chk_interp.setChecked(bool(self.store.get(
-            "map.view.interp.enabled", False
+            "map.view.interp.enabled",
+            False,
         )))
-        self._set_combo(self.cmb_interp, str(self.store.get(
-            "map.view.interp.scheme", "subsidence"
-        )))
-        self.chk_callouts.setChecked(bool(self.store.get(
-            "map.view.interp.callouts", True
-        )))
-        
-        self._update_hotspot_ui_enabled()
 
+        self._set_combo(
+            self.cmb_interp,
+            str(self.store.get(
+                "map.view.interp.scheme",
+                "subsidence",
+            )),
+        )
+
+        self.chk_callouts.setChecked(bool(self.store.get(
+            "map.view.interp.callouts",
+            True,
+        )))
+
+        self._set_combo(
+            self.cmb_call_lvl,
+            str(self.store.get(
+                "map.view.interp."
+                "callout_level",
+                "standard",
+            )),
+        )
+
+        self.chk_call_act.setChecked(bool(self.store.get(
+            "map.view.interp."
+            "callout_actions",
+            True,
+        )))
+
+        self._set_combo(
+            self.cmb_tone,
+            str(self.store.get(
+                "map.view.interp.tone",
+                "municipal",
+            )),
+        )
+
+        self._set_combo(
+            self.cmb_pack,
+            str(self.store.get(
+                "map.view.interp."
+                "action_pack",
+                "balanced",
+            )),
+        )
+
+        self._set_combo(
+            self.cmb_int,
+            str(self.store.get(
+                "map.view.interp."
+                "action_intensity",
+                "balanced",
+            )),
+        )
+
+        self._update_interp_ui_enabled()
+        self._update_interp_summary()
+
+        self._update_hotspot_ui_enabled()
         self._update_vrange_enabled()
 
     def _update_hotspot_ui_enabled(self) -> None:
@@ -719,6 +860,83 @@ class AutoHideViewPanel(AutoHidePanel):
         style = str(self.cmb_hot_style.currentText() or "pulse").lower()
         pulse_on = bool(self.chk_pulse.isChecked()) and style == "pulse"
         self.sl_speed.setEnabled(on and pulse_on)
+
+    def _update_interp_ui_enabled(self) -> None:
+        interp_on = bool(self.chk_interp.isChecked())
+        hot_on = bool(self.chk_hot.isChecked())
+
+        for w in (
+            self.cmb_interp,
+            self.cmb_tone,
+            self.chk_callouts,
+            self.cmb_call_lvl,
+            self.chk_call_act,
+            self.cmb_pack,
+            self.cmb_int,
+            self.lb_interp_sum,
+            self.btn_exp_csv,
+            self.btn_exp_geo,
+            self.btn_exp_brief,
+        ):
+            w.setEnabled(interp_on)
+
+        # Callouts + exports are meaningful with hotspots
+        for w in (
+            self.chk_callouts,
+            self.cmb_call_lvl,
+            self.chk_call_act,
+            self.btn_exp_csv,
+            self.btn_exp_geo,
+            self.btn_exp_brief,
+        ):
+            w.setEnabled(interp_on and hot_on)
+
+    def _update_situation_summary(self) -> None:
+        """
+        Update the situation summary in the View Panel based on the
+        current hotspots and interpretation settings.
+        """
+        if not self._last_hs_payload:
+            self.lb_situation_summary.setText("No hotspots detected.")
+            return
+
+        # Get top hotspots information
+        top_hotspots = sorted(
+            self._last_hs_payload, 
+            key=lambda x: x['severity'], reverse=True
+        )
+
+        # Summary text: Number of hotspots, worst severity, top actions
+        num_hotspots = len(self._last_hs_payload)
+        worst_severity = top_hotspots[0]['severity'] if num_hotspots > 0 else "N/A"
+        actions = [hotspot['action'] for hotspot in top_hotspots[:3]]  # Top 3 actions
+
+        summary = f"Hotspots detected: {num_hotspots}\n" \
+                  f"Worst severity: {worst_severity}\n" \
+                  f"Top 3 recommended actions: {', '.join(actions)}"
+
+        self.lb_situation_summary.setText(summary)
+
+    def _update_interp_summary(self) -> None:
+        on = bool(self.chk_interp.isChecked())
+        hot = bool(self.chk_hot.isChecked())
+        sch = str(self.cmb_interp.currentText() or "")
+        tone = str(self.cmb_tone.currentText() or "")
+        call = bool(self.chk_callouts.isChecked())
+        lvl = str(self.cmb_call_lvl.currentText() or "")
+
+        if not on:
+            self.lb_interp_sum.setText("Disabled.")
+            return
+
+        if not hot:
+            self.lb_interp_sum.setText(
+                "Enable hotspots to use callouts/exports."
+            )
+            return
+
+        msg = f"{sch} | {tone} | callouts={call} | {lvl}"
+        self.lb_interp_sum.setText(msg)
 
     def _connect(self) -> None:
         self.btn_reset.clicked.connect(self._on_reset)
@@ -890,24 +1108,101 @@ class AutoHideViewPanel(AutoHidePanel):
         
         # --- interpretation
         self.chk_interp.toggled.connect(
-            lambda b: self.store.set(
-                "map.view.interp.enabled", bool(b)
+            lambda b: (
+                self.store.set(
+                    "map.view.interp.enabled",
+                    bool(b),
+                ),
+                self._update_interp_ui_enabled(),
+                self._update_interp_summary(),
             )
         )
+
         self.cmb_interp.currentTextChanged.connect(
-            lambda v: self.store.set(
-                "map.view.interp.scheme", str(v)
+            lambda v: (
+                self.store.set(
+                    "map.view.interp.scheme",
+                    str(v),
+                ),
+                self._update_interp_summary(),
             )
         )
+
+        self.cmb_tone.currentTextChanged.connect(
+            lambda v: (
+                self.store.set(
+                    "map.view.interp.tone",
+                    str(v),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+
         self.chk_callouts.toggled.connect(
+            lambda b: (
+                self.store.set(
+                    "map.view.interp.callouts",
+                    bool(b),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+
+        self.cmb_call_lvl.currentTextChanged.connect(
+            lambda v: (
+                self.store.set(
+                    "map.view.interp."
+                    "callout_level",
+                    str(v),
+                ),
+                self._update_interp_summary(),
+            )
+        )
+
+        self.chk_call_act.toggled.connect(
             lambda b: self.store.set(
-                "map.view.interp.callouts", bool(b)
+                "map.view.interp."
+                "callout_actions",
+                bool(b),
+            )
+        )
+
+        self.cmb_pack.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.interp."
+                "action_pack",
+                str(v),
+            )
+        )
+
+        self.cmb_int.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.interp."
+                "action_intensity",
+                str(v),
+            )
+        )
+
+        self.btn_exp_csv.clicked.connect(
+            lambda: self.export_requested.emit(
+                "hotspots_csv"
+            )
+        )
+        self.btn_exp_geo.clicked.connect(
+            lambda: self.export_requested.emit(
+                "hotspots_geojson"
+            )
+        )
+        self.btn_exp_brief.clicked.connect(
+            lambda: self.export_requested.emit(
+                "policy_brief"
             )
         )
 
     # -------------------------------------------------
     # Handlers
     # -------------------------------------------------
+
     def _on_store_changed(self, keys) -> None:
         keys = set(keys or [])
         if not keys:

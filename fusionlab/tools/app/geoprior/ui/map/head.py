@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence
 
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
-from PyQt5.QtGui import QIcon, QFontMetrics
+from PyQt5.QtGui import QIcon, QFontMetrics, QIntValidator
 from PyQt5.QtWidgets import (
     QActionGroup,
     QComboBox,
@@ -40,7 +40,9 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QStyle
+    QStyle, 
+    # QFontMetrics,
+    # QIntValidator,
 )
 
 @dataclass
@@ -193,6 +195,9 @@ class MapHeadBar(QWidget):
     export_requested = pyqtSignal(str)
     bookmark_requested = pyqtSignal(str)
     measure_mode_changed = pyqtSignal(str)
+    
+    epsg_changed = pyqtSignal(int)
+
 
     def __init__(
         self,
@@ -251,6 +256,33 @@ class MapHeadBar(QWidget):
             ]
         )
         self.cmb_coord.setMinimumHeight(30)
+        
+        # EPSG input (shown only in "epsg" mode)
+        self._epsg_wrap = QWidget(self.card)
+        self._epsg_wrap.setObjectName("mapHeadEpsgWrap")
+        
+        ew = QHBoxLayout(self._epsg_wrap)
+        ew.setContentsMargins(0, 0, 0, 0)
+        ew.setSpacing(6)
+        
+        self.lb_epsg = QLabel("EPSG", self._epsg_wrap)
+        self.lb_epsg.setObjectName("mapHeadKey")
+        
+        self.ed_epsg = QLineEdit(self._epsg_wrap)
+        self.ed_epsg.setObjectName("mapHeadEpsgEdit")
+        self.ed_epsg.setFixedHeight(30)
+        self.ed_epsg.setFixedWidth(88)
+        self.ed_epsg.setPlaceholderText("4326")
+        self.ed_epsg.setToolTip("Source EPSG for X/Y columns")
+        
+        vld = QIntValidator(1, 999999, self.ed_epsg)
+        self.ed_epsg.setValidator(vld)
+        
+        ew.addWidget(self.lb_epsg, 0)
+        ew.addWidget(self.ed_epsg, 0)
+        ew.addStretch(1)
+        
+        self._epsg_wrap.setVisible(False)
 
         # Toggle pills
         self.btn_focus = QToolButton(self.card)
@@ -401,6 +433,8 @@ class MapHeadBar(QWidget):
         c1.addSpacing(6)
         c1.addWidget(lb_coord, 0)
         c1.addWidget(self.cmb_coord, 0)
+        c1.addSpacing(6)
+        c1.addWidget(self._epsg_wrap, 0)
         c1.addStretch(1)
 
         mapping = QFrame(row1)
@@ -434,7 +468,10 @@ class MapHeadBar(QWidget):
             self.engine_changed
         )
         self.cmb_coord.currentTextChanged.connect(
-            self.coord_mode_changed
+            self._on_coord_changed
+        )
+        self.ed_epsg.editingFinished.connect(
+            self._emit_epsg
         )
 
         self.btn_focus.toggled.connect(self.focus_toggled)
@@ -465,6 +502,34 @@ class MapHeadBar(QWidget):
     # -----------------------------
     # External setters
     # -----------------------------
+    def set_epsg(self, epsg: int) -> None:
+        try:
+            v = int(epsg)
+        except Exception:
+            return
+        if v <= 0:
+            return
+        self.ed_epsg.blockSignals(True)
+        self.ed_epsg.setText(str(v))
+        self.ed_epsg.blockSignals(False)
+
+    def _on_coord_changed(self, mode: str) -> None:
+        m = str(mode or "").strip().lower()
+        self._epsg_wrap.setVisible(m == "epsg")
+        self.coord_mode_changed.emit(str(m))
+
+    def _emit_epsg(self) -> None:
+        txt = self.ed_epsg.text().strip()
+        if not txt:
+            return
+        try:
+            v = int(float(txt))
+        except Exception:
+            return
+        if v <= 0:
+            return
+        self.epsg_changed.emit(int(v))
+
     def set_available_columns(
         self,
         cols: Sequence[str],
@@ -480,6 +545,8 @@ class MapHeadBar(QWidget):
 
     def set_coord_mode(self, mode: str) -> None:
         self._set_combo(self.cmb_coord, mode)
+        m = str(mode or "").strip().lower()
+        self._epsg_wrap.setVisible(m == "epsg")
 
     def set_focus_checked(self, checked: bool) -> None:
         self.btn_focus.blockSignals(True)
