@@ -62,6 +62,10 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QHeaderView,
     QSizePolicy,
+    QSpinBox,
+    QDoubleSpinBox,
+    QCheckBox,
+
 )
 
 from ...config.store import GeoConfigStore
@@ -355,6 +359,7 @@ class AutoHideDataPanel(AutoHidePanel):
     selection_changed = pyqtSignal(object)
     columns_changed = pyqtSignal(object)
     active_changed = pyqtSignal(object)
+    sampling_changed = pyqtSignal(object)
 
 
     def __init__(
@@ -488,13 +493,19 @@ class AutoHideDataPanel(AutoHidePanel):
         ds_l.addWidget(self.stack, 1)
     
         root.addWidget(ds, 1)
-    
+
+        # -----------------------------
+        # Sampling card (visualization)
+        # -----------------------------
+        self.sampling = self._build_sampling_box(host)
+        root.addWidget(self.sampling, 0)
+
         # -----------------------------
         # Details card (Forecast details)
         # -----------------------------
         self.details = self._build_details_box(host)
         root.addWidget(self.details, 0)
-    
+
         # ---- Signals ----
         self.cmb_source.currentIndexChanged.connect(self._on_source_changed)
         self.btn_refresh.clicked.connect(self._on_refresh)
@@ -503,7 +514,257 @@ class AutoHideDataPanel(AutoHidePanel):
         # default view
         self.stack.setCurrentWidget(self.page_auto)
         self._details_set_empty()
-    
+
+    def _build_sampling_box(self, parent: QWidget) -> QFrame:
+        box = QFrame(parent)
+        box.setObjectName("mapPanelCard")
+        box.setProperty("role", "sampling")
+
+        v = QVBoxLayout(box)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
+
+        head = QWidget(box)
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
+
+        title = QLabel("Sampling for visualization", head)
+        title.setObjectName("mapSectionTitle")
+
+        self.lb_samp = QLabel("", head)
+        self.lb_samp.setObjectName("mapCountChip")
+
+        hl.addWidget(title, 1)
+        hl.addWidget(self.lb_samp, 0)
+        v.addWidget(head, 0)
+
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        v.addLayout(grid)
+
+        self.cmb_samp_mode = QComboBox(box)
+        self.cmb_samp_mode.setMinimumHeight(28)
+        self.cmb_samp_mode.addItem("Auto", "auto")
+        self.cmb_samp_mode.addItem("Off", "off")
+        self.cmb_samp_mode.addItem("Always", "always")
+        self.cmb_samp_mode.setToolTip(
+            "Auto: only sample when dataset is huge."
+        )
+
+        self.cmb_samp_method = QComboBox(box)
+        self.cmb_samp_method.setMinimumHeight(28)
+        self.cmb_samp_method.addItem("Grid (spatial)", "grid")
+        self.cmb_samp_method.addItem("Random", "random")
+        self.cmb_samp_method.setToolTip(
+            "Grid keeps spatial coverage."
+        )
+
+        self.sp_samp_max = QSpinBox(box)
+        self.sp_samp_max.setRange(2000, 5000000)
+        self.sp_samp_max.setSingleStep(2000)
+        self.sp_samp_max.setMinimumHeight(28)
+
+        self.sp_samp_seed = QSpinBox(box)
+        self.sp_samp_seed.setRange(0, 999999)
+        self.sp_samp_seed.setMinimumHeight(28)
+
+        self.sp_samp_cell = QDoubleSpinBox(box)
+        self.sp_samp_cell.setRange(0.05, 200.0)
+        self.sp_samp_cell.setDecimals(2)
+        self.sp_samp_cell.setSingleStep(0.25)
+        self.sp_samp_cell.setMinimumHeight(28)
+        self.sp_samp_cell.setToolTip(
+            "Cell size (km) for Grid sampling."
+        )
+
+        self.sp_samp_per = QSpinBox(box)
+        self.sp_samp_per.setRange(1, 1000)
+        self.sp_samp_per.setSingleStep(5)
+        self.sp_samp_per.setMinimumHeight(28)
+        self.sp_samp_per.setToolTip(
+            "Max points per spatial cell."
+        )
+
+        self.chk_samp_hot = QCheckBox(
+            "Apply same sample to hotspots",
+            box,
+        )
+
+        grid.addWidget(QLabel("Mode", box), 0, 0)
+        grid.addWidget(self.cmb_samp_mode, 0, 1)
+
+        grid.addWidget(QLabel("Method", box), 1, 0)
+        grid.addWidget(self.cmb_samp_method, 1, 1)
+
+        grid.addWidget(QLabel("Max points", box), 2, 0)
+        grid.addWidget(self.sp_samp_max, 2, 1)
+
+        grid.addWidget(QLabel("Seed", box), 3, 0)
+        grid.addWidget(self.sp_samp_seed, 3, 1)
+
+        grid.addWidget(QLabel("Cell (km)", box), 4, 0)
+        grid.addWidget(self.sp_samp_cell, 4, 1)
+
+        grid.addWidget(QLabel("Max / cell", box), 5, 0)
+        grid.addWidget(self.sp_samp_per, 5, 1)
+
+        v.addWidget(self.chk_samp_hot, 0)
+
+        hint = QLabel(
+            "Used by Map points, Analytics, and Hotspots.",
+            box,
+        )
+        hint.setWordWrap(True)
+        hint.setObjectName("mapFieldHint")
+        v.addWidget(hint, 0)
+
+        self.cmb_samp_mode.currentIndexChanged.connect(
+            self._on_sampling_ui_changed,
+        )
+        self.cmb_samp_method.currentIndexChanged.connect(
+            self._on_sampling_ui_changed,
+        )
+        self.sp_samp_max.valueChanged.connect(
+            self._on_sampling_ui_changed,
+        )
+        self.sp_samp_seed.valueChanged.connect(
+            self._on_sampling_ui_changed,
+        )
+        self.sp_samp_cell.valueChanged.connect(
+            self._on_sampling_ui_changed,
+        )
+        self.sp_samp_per.valueChanged.connect(
+            self._on_sampling_ui_changed,
+        )
+        self.chk_samp_hot.toggled.connect(
+            self._on_sampling_ui_changed,
+        )
+
+        self._sync_sampling_from_store()
+        return box
+
+    def _sync_sampling_from_store(self) -> None:
+        mode = str(self.store.get(
+            "map.sampling.mode",
+            "auto",
+        ) or "auto").strip().lower()
+
+        method = str(self.store.get(
+            "map.sampling.method",
+            "grid",
+        ) or "grid").strip().lower()
+
+        try:
+            maxp = int(self.store.get(
+                "map.sampling.max_points",
+                80000,
+            ))
+        except Exception:
+            maxp = 80000
+
+        try:
+            seed = int(self.store.get(
+                "map.sampling.seed",
+                0,
+            ))
+        except Exception:
+            seed = 0
+
+        try:
+            cell = float(self.store.get(
+                "map.sampling.cell_km",
+                1.0,
+            ))
+        except Exception:
+            cell = 1.0
+
+        try:
+            per = int(self.store.get(
+                "map.sampling.max_per_cell",
+                50,
+            ))
+        except Exception:
+            per = 50
+
+        hot = bool(self.store.get(
+            "map.sampling.apply_hotspots",
+            True,
+        ))
+
+        for w in (
+            self.cmb_samp_mode,
+            self.cmb_samp_method,
+            self.sp_samp_max,
+            self.sp_samp_seed,
+            self.sp_samp_cell,
+            self.sp_samp_per,
+        ):
+            w.blockSignals(True)
+
+        self.chk_samp_hot.blockSignals(True)
+
+        try:
+            self._set_combo_data(self.cmb_samp_mode, mode)
+            self._set_combo_data(self.cmb_samp_method, method)
+
+            self.sp_samp_max.setValue(max(1, maxp))
+            self.sp_samp_seed.setValue(max(0, seed))
+            self.sp_samp_cell.setValue(max(0.001, cell))
+            self.sp_samp_per.setValue(max(1, per))
+            self.chk_samp_hot.setChecked(bool(hot))
+
+            chip = f"{mode}/{method}  ≤{maxp}"
+            self.lb_samp.setText(chip)
+        finally:
+            for w in (
+                self.cmb_samp_mode,
+                self.cmb_samp_method,
+                self.sp_samp_max,
+                self.sp_samp_seed,
+                self.sp_samp_cell,
+                self.sp_samp_per,
+            ):
+                w.blockSignals(False)
+            self.chk_samp_hot.blockSignals(False)
+
+    def _on_sampling_ui_changed(self) -> None:
+        mode = str(self.cmb_samp_mode.currentData() or "auto")
+        method = str(self.cmb_samp_method.currentData() or "grid")
+
+        snap = {
+            "mode": mode,
+            "method": method,
+            "max_points": int(self.sp_samp_max.value()),
+            "seed": int(self.sp_samp_seed.value()),
+            "cell_km": float(self.sp_samp_cell.value()),
+            "max_per_cell": int(self.sp_samp_per.value()),
+            "apply_hotspots": bool(self.chk_samp_hot.isChecked()),
+        }
+
+        with self.store.batch():
+            self.store.set("map.sampling.mode", snap["mode"])
+            self.store.set("map.sampling.method", snap["method"])
+            self.store.set("map.sampling.max_points", snap["max_points"])
+            self.store.set("map.sampling.seed", snap["seed"])
+            self.store.set("map.sampling.cell_km", snap["cell_km"])
+            self.store.set(
+                "map.sampling.max_per_cell",
+                snap["max_per_cell"],
+            )
+            self.store.set(
+                "map.sampling.apply_hotspots",
+                snap["apply_hotspots"],
+            )
+
+        self.lb_samp.setText(
+            f"{snap['mode']}/{snap['method']}  ≤{snap['max_points']}"
+        )
+        self.sampling_changed.emit(dict(snap))
+
+
     def _build_auto_page(self, parent: QWidget) -> QWidget:
         w = QWidget(parent)
         lay = QVBoxLayout(w)
@@ -616,7 +877,7 @@ class AutoHideDataPanel(AutoHidePanel):
     
         return w
 
-     
+
     def _build_details_box(self, parent: QWidget) -> QFrame:
         box = QFrame(parent)
         box.setObjectName("mapPanelCard")
@@ -782,6 +1043,8 @@ class AutoHideDataPanel(AutoHidePanel):
         self._selected = set(paths)
 
         self._load_manual_list()
+        self._sync_sampling_from_store()
+
 
     def _emit_selection(self) -> None:
         paths = sorted(self._selected)

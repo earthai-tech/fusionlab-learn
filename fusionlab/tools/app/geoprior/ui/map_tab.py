@@ -54,6 +54,10 @@ from .map.interpretation import (
     dump_geojson,
     policy_brief_md,
 )
+from .map.sampling import (
+    cfg_from_get as samp_cfg_from_get,
+    sample_points,
+)
 
 _MAP_DEFAULTS = {
     "map.engine": "leaflet",
@@ -85,6 +89,15 @@ _MAP_DEFAULTS = {
     "map.view.vmax": 1.0,
     "map.view.marker_size": 6,
     "map.view.marker_opacity": 0.9,
+    
+    "map.sampling.mode": "auto",
+    "map.sampling.method": "grid",
+    "map.sampling.max_points": 80000,
+    "map.sampling.seed": 0,
+    "map.sampling.cell_km": 1.0,
+    "map.sampling.max_per_cell": 50,
+    "map.sampling.apply_hotspots": True,
+
 }
 
 
@@ -276,6 +289,42 @@ class MapTab(QWidget):
         self.head.epsg_changed.connect(
             self._on_coord_epsg_changed,
         )
+
+        # in _connect_signals()
+        self.head.clear_map_requested.connect(
+            self._on_clear_map_requested
+        )
+    
+        self.head.clear_map_clicked.connect(
+            self._on_clear_map_requested
+        )
+
+    def _on_clear_map_requested(self) -> None:
+        try:
+            self.canvas.clear_points()
+        except Exception:
+            pass
+        try:
+            self.canvas.clear_hotspots()
+        except Exception:
+            pass
+    
+        self._last_hs_payload = []
+        self._last_hs_ctx = {}
+    
+        with self.store.batch():
+            self.store.set("map.focus_mode", False)
+            self.store.set("map.show_analytics", False)
+    
+            self.store.set("map.active_file", "")
+            self.store.set("map.selected_files", [])
+    
+            self.store.set("map.time_col", "")
+            self.store.set("map.time_value", "")
+            self.store.set("map.step_col", "")
+            self.store.set("map.value_col", "")
+    
+            self.store.set("map.view.hotspots.enabled", False)
 
     def _on_coord_epsg_changed(self, epsg: int) -> None:
         try:
@@ -729,9 +778,12 @@ class MapTab(QWidget):
         # --------------------------------------------------
         # Cap points for performance
         # --------------------------------------------------
-        max_pts = 80000
-        if len(out) > max_pts:
-            out = out.sample(n=max_pts, random_state=0)
+        scfg = samp_cfg_from_get(self.store.get)
+        out = sample_points(out, scfg, lon="lon", lat="lat")
+        if out is None or out.empty:
+            _clear_all()
+            return
+
     
         # --------------------------------------------------
         # Render points (style from view panel)
@@ -864,6 +916,14 @@ class MapTab(QWidget):
                     hs_payload = []
                 elif not pts_for_hs.empty:
                     t_col = "t" if (time_agg != "current" and t) else ""
+                    scfg = samp_cfg_from_get(self.store.get)
+                    if scfg.apply_hotspots:
+                        pts_for_hs = sample_points(
+                            pts_for_hs,
+                            scfg,
+                            lon="lon",
+                            lat="lat",
+                        )
                     cfg = HotspotCfg(
                         method=method,
                         metric=metric,
@@ -940,8 +1000,6 @@ class MapTab(QWidget):
             self.canvas.fit_points()
             self._auto_fit = False
 
-
-    
     def _freeze_hover(self, ms: int = 250) -> None:
         if bool(self.store.get("map.focus_mode", False)):
             return
@@ -1064,6 +1122,14 @@ class MapTab(QWidget):
             "map.value_col",
             "map.time_col",
             "map.time_value",
+            "map.sampling.mode",
+            "map.sampling.method",
+            "map.sampling.max_points",
+            "map.sampling.seed",
+            "map.sampling.cell_km",
+            "map.sampling.max_per_cell",
+            "map.sampling.apply_hotspots",
+
         }
        
         view_keys = [
@@ -1151,8 +1217,6 @@ class MapTab(QWidget):
             names.append(str(it.get("name", "")))
         names = [x for x in names if x.strip()]
         self.head.set_bookmarks(names)
-
-
 
     def _set_focus_mode(self, enabled: bool) -> None:
         enabled = bool(enabled)

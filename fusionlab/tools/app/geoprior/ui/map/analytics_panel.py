@@ -55,6 +55,16 @@ from .plot_utils import (
     pick_obs_col,
     safe_quantile_cols,
 )
+from .hotspots import build_points
+from .coord_utils import (
+    ensure_lonlat,
+    df_to_lonlat,
+    parse_epsg,
+)
+from .sampling import (
+    cfg_from_get as samp_cfg_from_get,
+    sample_points,
+)
 
 
 @dataclass
@@ -172,10 +182,17 @@ class CollapsibleAnalyticsPanel(QFrame):
             obs_col=obs,
         )
 
-        self._spatial.set_context(self._ctx)
-        self._sharp.set_context(self._ctx)
-        self._rely.set_context(self._ctx)
-        self._insp.set_context(self._ctx)
+        for tab in (
+            self._spatial,
+            self._sharp,
+            self._rely,
+            self._insp,
+        ):
+            try:
+                tab.set_context(self._ctx)
+            except Exception:
+                # optional: log the exception
+                pass
 
     # -------------------------
     # UI
@@ -213,7 +230,6 @@ class CollapsibleAnalyticsPanel(QFrame):
         self.tabs.currentChanged.connect(lambda _: self.tabs.currentWidget().refresh())
 
 
-
     # -------------------------
     # Store + IO
     # -------------------------
@@ -228,6 +244,14 @@ class CollapsibleAnalyticsPanel(QFrame):
             "map.time_col",
             "map.step_col",
             "map.time_value",
+            "map.sampling.mode",
+            "map.sampling.method",
+            "map.sampling.max_points",
+            "map.sampling.seed",
+            "map.sampling.cell_km",
+            "map.sampling.max_per_cell",
+            "map.sampling.apply_hotspots",
+
         }
         if ks.intersection(want):
             self.refresh()
@@ -276,8 +300,55 @@ class CollapsibleAnalyticsPanel(QFrame):
             except Exception:
                 pass
 
-        return df
+        # -----------------------------------------
+        # Shared sampling (same subset as MapTab)
+        # -----------------------------------------
+        if self.store is not None and x and y and z:
+            if x in df.columns and y in df.columns and z in df.columns:
+                pts = build_points(df, x=x, y=y, v=z)
 
+                mode = str(self.store.get(
+                    "map.coord_mode",
+                    "lonlat",
+                )).strip().lower()
+
+                utm_epsg = parse_epsg(
+                    self.store.get("map.utm_epsg", None)
+                )
+                src_epsg = parse_epsg(
+                    self.store.get("map.coord_epsg", None)
+                )
+
+                try:
+                    pts, ok, _msg = ensure_lonlat(
+                        pts,
+                        mode=mode,
+                        utm_epsg=utm_epsg,
+                        src_epsg=src_epsg,
+                    )
+                except Exception:
+                    pts = df_to_lonlat(
+                        pts,
+                        x="lon",
+                        y="lat",
+                        mode=mode,
+                        utm_epsg=utm_epsg,
+                        src_epsg=src_epsg,
+                    )
+                    ok = not pts.empty
+
+                if ok and (not pts.empty):
+                    scfg = samp_cfg_from_get(self.store.get)
+                    pts_s = sample_points(
+                        pts,
+                        scfg,
+                        lon="lon",
+                        lat="lat",
+                    )
+                    if pts_s is not None and (not pts_s.empty):
+                        df = df.loc[pts_s.index]
+
+        return df
 
 # =====================================================
 # Tabs
@@ -539,8 +610,6 @@ class SharpnessTab(_TabBase):
         qs = self._ctx.q_cols or []
         t = self._ctx.t
 
-
-
         if df is None or not len(df):
             _show_empty(
                 self.plot,
@@ -590,7 +659,21 @@ class SharpnessTab(_TabBase):
             return
 
         # Ensure that hi_q and lo_q are single columns
-        d["w"] = (d[hi_q].iloc[:, 0] - d[lo_q].iloc[:, 0]).abs()  # This assumes both are DataFrames
+        # inside SharpnessTab.refresh()
+        d0 = df[[t, lo_q, hi_q]].copy()
+        d0 = d0.dropna(subset=[t])
+        
+        lo = _pick_1d(d0, lo_q)
+        hi = _pick_1d(d0, hi_q)
+        
+        lo = pd.to_numeric(lo, errors="coerce")
+        hi = pd.to_numeric(hi, errors="coerce")
+        
+        w = (hi - lo).abs()
+        
+        d = d0[[t]].copy()
+        d["w"] = w
+        d = d.dropna(subset=["w"])
 
         g = d.groupby(t)["w"].median()
 
@@ -1053,7 +1136,6 @@ class InspectorTab(_TabBase):
         t = self._ctx.t
         z = self._ctx.z
         qs = self._ctx.q_cols or []
-
 
         if path is None or not path.exists():
             _show_empty(

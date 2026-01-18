@@ -197,7 +197,10 @@ class MapHeadBar(QWidget):
     measure_mode_changed = pyqtSignal(str)
     
     epsg_changed = pyqtSignal(int)
-
+    clear_map_requested = pyqtSignal()
+    
+    reset_mapping_clicked = pyqtSignal()
+    clear_map_clicked = pyqtSignal()
 
     def __init__(
         self,
@@ -357,6 +360,15 @@ class MapHeadBar(QWidget):
         self.btn_fit.setIcon(self._load_icon("map_icon.svg"))
         self.btn_fit.setIconSize(QSize(18, 18))
         self.btn_fit.setFixedSize(30, 30)
+        
+        self.btn_clear = QToolButton(self.card)
+        self.btn_clear.setObjectName("miniAction")
+        self.btn_clear.setProperty("role", "mapHead")
+        self.btn_clear.setToolTip("Clear map")
+        self.btn_clear.setAutoRaise(True)
+        self.btn_clear.setIcon(self._clear_icon())
+        self.btn_clear.setIconSize(QSize(16, 16))
+        self.btn_clear.setFixedSize(30, 30)
 
         self._build_ui()
         self._connect()
@@ -453,6 +465,7 @@ class MapHeadBar(QWidget):
         m1.addWidget(self.pk_z, 0)
         m1.addSpacing(2)
         m1.addWidget(self.btn_fit, 0)
+        m1.addWidget(self.btn_clear, 0)
         m1.addWidget(self.btn_reset, 0)
 
         r1.addWidget(ctrl, 1)
@@ -498,10 +511,21 @@ class MapHeadBar(QWidget):
         self.btn_reset.clicked.connect(
             self.reset_mapping_clicked
         )
+        
+        self.btn_clear.clicked.connect(
+            self.clear_map_clicked
+        )
 
     # -----------------------------
     # External setters
     # -----------------------------
+
+    def _clear_icon(self) -> QIcon:
+        sp = getattr(QStyle, "SP_TrashIcon", None)
+        if sp is None:
+            sp = QStyle.SP_DialogDiscardButton
+        return self.style().standardIcon(sp)
+
     def set_epsg(self, epsg: int) -> None:
         try:
             v = int(epsg)
@@ -633,6 +657,9 @@ class MapHeadBar(QWidget):
 
         menu.addSeparator()
         self._add_measure_menu(menu)
+        
+        act = menu.addAction("Clear map")
+        act.triggered.connect(self.clear_map_requested.emit)
 
         return menu
 

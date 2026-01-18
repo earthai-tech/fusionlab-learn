@@ -398,7 +398,6 @@ def _hotspots_grid(p: pd.DataFrame, cfg: HotspotCfg) -> pd.DataFrame:
 
     return out
 
-
 def _apply_min_sep(
     c: pd.DataFrame,
     *,
@@ -491,12 +490,28 @@ def _severity(rank: int) -> str:
 def _to_hotspots(c: pd.DataFrame) -> List[Hotspot]:
     out: List[Hotspot] = []
 
-    for k, row in enumerate(c.itertuples(index=False), start=1):
-        lon = float(getattr(row, "lon"))
-        lat = float(getattr(row, "lat"))
-        v = float(getattr(row, "v"))
-        sc = float(getattr(row, "_score"))
-        n = int(getattr(row, "_n"))
+    cols = ["lon", "lat", "v", "_score", "_n"]
+    for cc in cols:
+        if cc not in c.columns:
+            return out
+
+    it = c[cols].itertuples(
+        index=False,
+        name=None,
+    )
+
+    for k, (lon, lat, v, sc, n) in enumerate(
+        it,
+        start=1,
+    ):
+        try:
+            lon = float(lon)
+            lat = float(lat)
+            v = float(v)
+            sc = float(sc)
+            n = int(n)
+        except Exception:
+            continue
 
         sev = _severity(k)
         lab = f"{sev} · #{k} · n={n}"
@@ -515,3 +530,31 @@ def _to_hotspots(c: pd.DataFrame) -> List[Hotspot]:
         )
 
     return out
+
+# def _to_hotspots(c: pd.DataFrame) -> List[Hotspot]:
+#     out: List[Hotspot] = []
+
+#     for k, row in enumerate(c.itertuples(index=False), start=1):
+#         lon = float(getattr(row, "lon"))
+#         lat = float(getattr(row, "lat"))
+#         v = float(getattr(row, "v"))
+#         sc = float(getattr(row, "_score"))
+#         n = int(getattr(row, "_n"))
+
+#         sev = _severity(k)
+#         lab = f"{sev} · #{k} · n={n}"
+
+#         out.append(
+#             Hotspot(
+#                 lon=lon,
+#                 lat=lat,
+#                 v=v,
+#                 score=sc,
+#                 n=n,
+#                 rank=k,
+#                 sev=sev,
+#                 label=lab,
+#             )
+#         )
+
+#     return out

@@ -198,7 +198,6 @@ class MplPlot(QFrame):
         )
         return w
 
-
 def safe_quantile_cols(cols: Optional[Iterable[object]]) -> list[Tuple[float, str]]:
     """
     Find quantile columns ending with `_qXX` (e.g. 'head_q50', 'subs_q10').

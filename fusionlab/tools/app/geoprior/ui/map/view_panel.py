@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QSignalBlocker, pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -27,7 +28,6 @@ from PyQt5.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QStyle
 )
 
 from ...config.store import GeoConfigStore
@@ -82,17 +83,11 @@ _VIEW_DEFAULTS: Dict[str, object] = {
     "map.view.interp.enabled": False,
     "map.view.interp.scheme": "subsidence",
     "map.view.interp.callouts": True,
-    "map.view.interp."
-    "callout_level": "standard",
-    "map.view.interp."
-    "callout_actions": True,
-    "map.view.interp.tone": "municipal",
-    "map.view.interp."
-    "action_pack": "balanced",
-    "map.view.interp."
-    "action_intensity": "balanced",
+    "map.view.interp.callout_level": "standard",
+    "map.view.interp.callout_actions": True,
+    "map.view.interp.action_pack": "balanced",
+    "map.view.interp.action_intensity": "balanced",
     "map.view.interp.summary": "",
-
 
 }
 
@@ -131,25 +126,89 @@ class AutoHideViewPanel(AutoHidePanel):
     # -------------------------------------------------
     # UI
     # -------------------------------------------------
+
+    def _std_icon(self, sp: QStyle.StandardPixmap) -> QIcon:
+        return self.style().standardIcon(sp)
+
+    def _make_card(
+        self,
+        parent: QWidget,
+        *,
+        title: str,
+        sp: QStyle.StandardPixmap,
+    ) -> tuple[QFrame, QWidget, QLabel]:
+        card = QFrame(parent)
+        card.setObjectName("mapPanelCard")
+
+        root = QVBoxLayout(card)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+
+        head = QWidget(card)
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
+
+        ico = QLabel(head)
+        ico.setPixmap(self._std_icon(sp).pixmap(16, 16))
+
+        lb = QLabel(title, head)
+        lb.setObjectName("mapSectionTitle")
+
+        chip = QLabel("", head)
+        chip.setObjectName("mapCountChip")
+
+        hl.addWidget(ico, 0)
+        hl.addWidget(lb, 1)
+        hl.addWidget(chip, 0)
+
+        body = QWidget(card)
+
+        root.addWidget(head, 0)
+        root.addWidget(body, 0)
+
+        return card, body, chip
+
+
     def _build_body(self) -> None:
         root = QVBoxLayout(self.body)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
 
-        bar = QWidget(self.body)
+        bar = QFrame(self.body)
+        bar.setObjectName("mapPanelCard")
+        bar.setProperty("role", "toolbar")
+
         bl = QHBoxLayout(bar)
-        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setContentsMargins(10, 8, 10, 8)
         bl.setSpacing(8)
 
-        self.lb_hint = QLabel("Map style & rendering", bar)
-        self.lb_hint.setStyleSheet("font-weight:600;")
+        self.lb_hint = QLabel("View & rendering", bar)
+        self.lb_hint.setObjectName("mapSectionTitle")
 
-        self.btn_reset = QPushButton("Reset", bar)
+        self.btn_reset = QToolButton(bar)
+        self.btn_reset.setObjectName("miniAction")
         self.btn_reset.setToolTip("Restore defaults")
+        self.btn_reset.setAutoRaise(True)
+        self.btn_reset.setIcon(
+            self._std_icon(QStyle.SP_BrowserReload)
+        )
+        self.btn_reset.setText("Reset")
+        self.btn_reset.setToolButtonStyle(
+            Qt.ToolButtonTextBesideIcon
+        )
 
         self.btn_apply = QToolButton(bar)
-        self.btn_apply.setText("✓")
+        self.btn_apply.setObjectName("miniAction")
         self.btn_apply.setToolTip("Apply to map")
+        self.btn_apply.setAutoRaise(True)
+        self.btn_apply.setIcon(
+            self._std_icon(QStyle.SP_DialogApplyButton)
+        )
+        self.btn_apply.setText("")
+        self.btn_apply.setToolButtonStyle(
+            Qt.ToolButtonIconOnly
+        )
 
         bl.addWidget(self.lb_hint, 1)
         bl.addWidget(self.btn_reset, 0)
@@ -180,9 +239,16 @@ class AutoHideViewPanel(AutoHidePanel):
 
         root.addWidget(self.scroll, 1)
 
-    def _group_basemap(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Basemap", parent)
-        form = QFormLayout(box)
+    def _group_basemap(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Basemap",
+            sp=QStyle.SP_DirIcon,
+        )
+        self._chip_base = chip
+        
+        form = QFormLayout(body)
+        form.setContentsMargins(0, 0, 0, 0)
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
@@ -229,9 +295,17 @@ class AutoHideViewPanel(AutoHidePanel):
 
         return box
 
-    def _group_colors(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Color mapping", parent)
-        form = QFormLayout(box)
+    def _group_colors(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Color mapping",
+            sp=QStyle.SP_DriveDVDIcon,
+        )
+        self._chip_base = chip
+        
+        form = QFormLayout(body)
+        form.setContentsMargins(0, 0, 0, 0)
+
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
@@ -289,9 +363,17 @@ class AutoHideViewPanel(AutoHidePanel):
 
         return box
 
-    def _group_markers(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Markers", parent)
-        form = QFormLayout(box)
+    def _group_markers(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Markers",
+            sp=QStyle.SP_FileIcon,
+        )
+        self._chip_base = chip
+        
+        form = QFormLayout(body)
+        form.setContentsMargins(0, 0, 0, 0)
+
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
@@ -324,9 +406,18 @@ class AutoHideViewPanel(AutoHidePanel):
 
         return box
 
-    def _group_legend(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Legend", parent)
-        form = QFormLayout(box)
+    def _group_legend(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Legend",
+            sp=QStyle.SP_FileDialogDetailedView,
+        )
+        self._chip_base = chip
+        
+        form = QFormLayout(body)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
@@ -349,9 +440,16 @@ class AutoHideViewPanel(AutoHidePanel):
 
         return box
     
-    def _group_hotspots(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Hotspots", parent)
-        form = QFormLayout(box)
+    def _group_hotspots(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Hotspots",
+            sp=QStyle.SP_ArrowUp,
+        )
+        self._chip_base = chip
+        form = QFormLayout(body)
+        form.setContentsMargins(0, 0, 0, 0)
+        
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
@@ -483,9 +581,16 @@ class AutoHideViewPanel(AutoHidePanel):
     def _group_interpretation(
         self,
         parent: QWidget,
-    ) -> QGroupBox:
-        box = QGroupBox("Interpretation", parent)
-        form = QFormLayout(box)
+    ) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Interpretation",
+            sp=QStyle.SP_MessageBoxInformation,
+        )
+        self._chip_base = chip
+        form = QFormLayout(body)
+        form.setContentsMargins(0, 0, 0, 0)
+        
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
@@ -583,6 +688,39 @@ class AutoHideViewPanel(AutoHidePanel):
         form.addRow("Export", exp)
         
         return box
+
+    def _update_chips(self) -> None:
+        if hasattr(self, "_chip_base"):
+            b = str(self.cmb_base.currentText() or "osm")
+            s = str(self.cmb_style.currentText() or "light")
+            self._chip_base.setText(f"{b}/{s}")
+    
+        if hasattr(self, "_chip_colors"):
+            cmap = str(self.cmb_cmap.currentText() or "viridis")
+            inv = "inv" if self.chk_inv.isChecked() else ""
+            clip = str(self.cmb_clip.currentText() or "none")
+            txt = f"{cmap} {inv}".strip()
+            if clip and clip != "none":
+                txt = f"{txt} | {clip}".strip()
+            self._chip_colors.setText(txt)
+    
+        if hasattr(self, "_chip_markers"):
+            sz = int(self.sp_size.value())
+            op = int(self.sl_op.value())
+            self._chip_markers.setText(f"{sz}px/{op}%")
+    
+        if hasattr(self, "_chip_legend"):
+            on = "ON" if self.chk_cbar.isChecked() else "OFF"
+            pos = str(self.cmb_legpos.currentText() or "br")
+            self._chip_legend.setText(f"{on}/{pos}")
+    
+        if hasattr(self, "_chip_hot"):
+            on = "ON" if self.chk_hot.isChecked() else "OFF"
+            self._chip_hot.setText(on)
+    
+        if hasattr(self, "_chip_interp"):
+            on = "ON" if self.chk_interp.isChecked() else "OFF"
+            self._chip_interp.setText(on)
 
     # -------------------------------------------------
     # Store sync
@@ -809,6 +947,7 @@ class AutoHideViewPanel(AutoHidePanel):
 
         self._update_hotspot_ui_enabled()
         self._update_vrange_enabled()
+        self._update_chips()
 
     def _update_hotspot_ui_enabled(self) -> None:
         on = bool(self.chk_hot.isChecked())
@@ -860,6 +999,9 @@ class AutoHideViewPanel(AutoHidePanel):
         style = str(self.cmb_hot_style.currentText() or "pulse").lower()
         pulse_on = bool(self.chk_pulse.isChecked()) and style == "pulse"
         self.sl_speed.setEnabled(on and pulse_on)
+        
+        self._update_chips()
+
 
     def _update_interp_ui_enabled(self) -> None:
         interp_on = bool(self.chk_interp.isChecked())
@@ -890,32 +1032,9 @@ class AutoHideViewPanel(AutoHidePanel):
             self.btn_exp_brief,
         ):
             w.setEnabled(interp_on and hot_on)
+            
+        self._update_chips()
 
-    def _update_situation_summary(self) -> None:
-        """
-        Update the situation summary in the View Panel based on the
-        current hotspots and interpretation settings.
-        """
-        if not self._last_hs_payload:
-            self.lb_situation_summary.setText("No hotspots detected.")
-            return
-
-        # Get top hotspots information
-        top_hotspots = sorted(
-            self._last_hs_payload, 
-            key=lambda x: x['severity'], reverse=True
-        )
-
-        # Summary text: Number of hotspots, worst severity, top actions
-        num_hotspots = len(self._last_hs_payload)
-        worst_severity = top_hotspots[0]['severity'] if num_hotspots > 0 else "N/A"
-        actions = [hotspot['action'] for hotspot in top_hotspots[:3]]  # Top 3 actions
-
-        summary = f"Hotspots detected: {num_hotspots}\n" \
-                  f"Worst severity: {worst_severity}\n" \
-                  f"Top 3 recommended actions: {', '.join(actions)}"
-
-        self.lb_situation_summary.setText(summary)
 
     def _update_interp_summary(self) -> None:
         on = bool(self.chk_interp.isChecked())
@@ -1198,6 +1317,7 @@ class AutoHideViewPanel(AutoHidePanel):
                 "policy_brief"
             )
         )
+
 
     # -------------------------------------------------
     # Handlers
