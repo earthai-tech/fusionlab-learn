@@ -85,9 +85,6 @@ _MAP_DEFAULTS = {
     "map.view.vmax": 1.0,
     "map.view.marker_size": 6,
     "map.view.marker_opacity": 0.9,
-
-
-
 }
 
 
@@ -559,6 +556,7 @@ class MapTab(QWidget):
         #     left=None,
         #     right=int(self.nav_c._handle_w),  # or 22
         # )
+        
         self._apply_split_width(
             left=None, 
             right=self.nav_c.handle_width(),
@@ -705,9 +703,9 @@ class MapTab(QWidget):
             )
             # If there’s a problem, display the error message
             if not ok:
-                self.lb_status.setText(f"Error: {msg}")
-                self.lb_status.setProperty("state", "warn")
-                self.lb_status.setVisible(True)
+                # self.lb_status.setText(f"Error: {msg}")
+                # self.lb_status.setProperty("state", "warn")
+                # self.lb_status.setVisible(True)
                 return
             
         except Exception:
@@ -722,9 +720,9 @@ class MapTab(QWidget):
             ok = not out.empty
     
         if (not ok) or out.empty:
-            self.lb_status.setText("Error: Invalid coordinates")
-            self.lb_status.setProperty("state", "warn")
-            self.lb_status.setVisible(True)
+            # self.lb_status.setText("Error: Invalid coordinates")
+            # self.lb_status.setProperty("state", "warn")
+            # self.lb_status.setVisible(True)
             _clear_all()
             return
     
