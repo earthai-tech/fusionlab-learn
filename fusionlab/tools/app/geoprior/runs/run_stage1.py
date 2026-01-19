@@ -801,7 +801,7 @@ def run_stage1(
         config_sections,
         table_width=_TW,
         title=f"{CITY_NAME.upper()} {MODEL_NAME} STAGE-1 CONFIG",
-        print_fn =log
+        log_fn =log
     )
     _maybe_stop("after config resolved")
     

@@ -737,7 +737,7 @@ def run_tuning(
         config_sections,
         table_width=get_table_size(),
         title=f"{CITY_NAME.upper()} {MODEL_NAME} TUNER CONFIG",
-        print_fn =log,
+        log_fn =log,
     )
     _progress(0.22, "Stage-2 tuning – building GeoPriorTuner…")
 

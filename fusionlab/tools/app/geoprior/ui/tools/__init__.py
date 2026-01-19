@@ -14,7 +14,7 @@ from .build_npz import BuildNPZTool
 from .metrics_dashboard import MetricsDashboardTool
 from .run_comparison import RunComparisonTool 
 from .physics_diagnostics import PhysicsDiagnosticsTool
-
+from .identifiability import IdentifiabilityTool
 
 from .env_check import EnvironmentCheckTool
 
@@ -29,5 +29,6 @@ __all__ = [
     "EnvironmentCheckTool",
     "MetricsDashboardTool", 
     "RunComparisonTool", 
-    "PhysicsDiagnosticsTool"
+    "PhysicsDiagnosticsTool", 
+    "IdentifiabilityTool",
 ]

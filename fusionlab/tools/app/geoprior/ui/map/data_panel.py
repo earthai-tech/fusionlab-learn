@@ -65,6 +65,7 @@ from PyQt5.QtWidgets import (
     QSpinBox,
     QDoubleSpinBox,
     QCheckBox,
+    QLayout,
 
 )
 
@@ -413,6 +414,7 @@ class AutoHideDataPanel(AutoHidePanel):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
         outer.addWidget(self.scroll, 1)
     
         host = QWidget(self.scroll)
@@ -422,6 +424,11 @@ class AutoHideDataPanel(AutoHidePanel):
         root = QVBoxLayout(host)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
+        root.setSizeConstraint(QLayout.SetMinimumSize)
+        
+        self.scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
     
         # -----------------------------
         # Toolbar card (Source + Refresh)
@@ -495,16 +502,48 @@ class AutoHideDataPanel(AutoHidePanel):
         root.addWidget(ds, 1)
 
         # -----------------------------
-        # Sampling card (visualization)
+        # Sampling + Details
+        # One shared horizontal scroll
         # -----------------------------
-        self.sampling = self._build_sampling_box(host)
-        root.addWidget(self.sampling, 0)
-
-        # -----------------------------
-        # Details card (Forecast details)
-        # -----------------------------
-        self.details = self._build_details_box(host)
-        root.addWidget(self.details, 0)
+        self._bottom_scroll = QScrollArea(host)
+        self._bottom_scroll.setObjectName(
+            "mapDataBottomScroll"
+        )
+        self._bottom_scroll.setFrameShape(QFrame.NoFrame)
+        self._bottom_scroll.setWidgetResizable(True)
+        self._bottom_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
+        self._bottom_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        root.addWidget(self._bottom_scroll, 0)
+        
+        bottom = QWidget(self._bottom_scroll)
+        bottom.setObjectName("mapDataBottomHost")
+        self._bottom_scroll.setWidget(bottom)
+        
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(10)
+        bl.setSizeConstraint(QLayout.SetMinimumSize)
+        
+        self.sampling = self._build_sampling_box(bottom)
+        self.details = self._build_details_box(bottom)
+        
+        bl.addWidget(self.sampling, 0)
+        bl.addWidget(self.details, 0)
+        
+        min_w = max(
+            self.sampling.sizeHint().width(),
+            self.details.sizeHint().width(),
+        )
+        bottom.setMinimumWidth(min_w)
+        self._bottom_scroll.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        QTimer.singleShot(0, self._fix_bottom_scroll_height)
 
         # ---- Signals ----
         self.cmb_source.currentIndexChanged.connect(self._on_source_changed)
@@ -514,6 +553,30 @@ class AutoHideDataPanel(AutoHidePanel):
         # default view
         self.stack.setCurrentWidget(self.page_auto)
         self._details_set_empty()
+        
+    def _fix_bottom_scroll_height(self) -> None:
+        s = getattr(self, "_bottom_scroll", None)
+        if s is None:
+            return
+    
+        w = s.widget()
+        if w is None:
+            return
+    
+        h = int(w.sizeHint().height())
+        if h <= 0:
+            return
+    
+        s.setMinimumHeight(h)
+        s.setMaximumHeight(h)
+        
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_bottom_scroll"):
+            QTimer.singleShot(
+                0,
+                self._fix_bottom_scroll_height,
+            )
 
     def _build_sampling_box(self, parent: QWidget) -> QFrame:
         box = QFrame(parent)
@@ -919,6 +982,7 @@ class AutoHideDataPanel(AutoHidePanel):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(8)
         form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         v.addLayout(form)
     
         self.ed_active = QLineEdit(box)

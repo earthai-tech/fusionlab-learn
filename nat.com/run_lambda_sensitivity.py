@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--epochs",
         type=int,
-        default=3,
+        default=20,
         help="Epochs per sensitivity run (short runs).",
     )
     p.add_argument(

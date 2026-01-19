@@ -608,7 +608,142 @@ QLineEdit#mapColEdit{{
 QToolButton#miniAction[role="mapHead"]{{
     padding: 4px 8px;
 }}
-               
+
+/* ===== Xfer tab: Advanced options (Light) ===== */
+QFrame#xferAdvSection {{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.92);
+}}
+
+QToolButton#xferAdvToggle {{
+    background: rgba(46,49,145,0.05);
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 12px;
+    padding: 6px 10px;
+    font-weight: 800;
+    color: {PALETTE['light_text']};
+}}
+
+QToolButton#xferAdvToggle:hover:enabled {{
+    background: rgba(51,153,255,0.14);
+    border-color: {SECONDARY_TBLUE};
+}}
+
+QToolButton#xferAdvToggle:checked {{
+    background: rgba(46,49,145,0.10);
+    border-color: rgba(46,49,145,0.30);
+}}
+
+QWidget#xferAdvBody {{
+    background: transparent;
+    border-top: 1px solid rgba(46,49,145,0.12);
+}}
+
+QLabel#xferAdvTitle {{
+    font-size: 14px;
+    font-weight: 800;
+    color: {PRIMARY};
+}}
+
+QLabel#xferAdvChip {{
+    min-width: 48px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(46,49,145,0.08);
+    border: 1px solid rgba(46,49,145,0.22);
+    color: rgba(15,23,42,0.90);
+    font-weight: 800;
+}}
+
+QLabel#xferAdvChip[ok="false"] {{
+    background: rgba(242,134,32,0.14);
+    border: 1px solid rgba(242,134,32,0.55);
+    color: rgba(15,23,42,0.95);
+}}
+QWidget#xferAdvContent {{
+    background: transparent;
+}}
+
+QFrame#xferField {{
+    border: 1px solid rgba(46,49,145,0.16);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.92);
+}}
+
+QLabel#xferFieldTitle {{
+    font-weight: 800;
+    color: rgba(46,49,145,0.92);
+}}
+QGroupBox#xferWarmBox {{
+    border: 1px solid rgba(46,49,145,0.14);
+    border-radius: 10px;
+    margin-top: 8px;
+    padding-top: 6px;
+}}
+QGroupBox#xferWarmBox::title {{
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 6px;
+    color: rgba(46,49,145,0.92);
+    font-weight: 700;
+}}
+/* -------- Xfer map toolbar: chips + segmented pills (Light) -------- */
+QLabel#xferChipA {{
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    border-radius: 11px;
+    background: rgba(46,49,145,0.14);
+    border: 1px solid rgba(46,49,145,0.35);
+    color: rgba(46,49,145,0.95);
+    font-weight: 700;
+}}
+
+QLabel#xferChipB {{
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    border-radius: 11px;
+    background: rgba(242,134,32,0.16);
+    border: 1px solid rgba(242,134,32,0.40);
+    color: rgba(172,78,10,0.98);
+    font-weight: 700;
+}}
+
+QWidget#xferSeg {{
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.22);
+    border-radius: 10px;
+}}
+
+QToolButton#xferSegBtn {{
+    background: transparent;
+    border: 0px;
+    padding: 4px 10px;
+    color: rgba(30,30,30,0.78);
+}}
+
+QToolButton#xferSegBtn[pos="left"] {{
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+}}
+QToolButton#xferSegBtn[pos="right"] {{
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}}
+
+QToolButton#xferSegBtn:hover:enabled {{
+    background: rgba(51,153,255,0.14);
+}}
+
+QToolButton#xferSegBtn:checked {{
+    background: rgba(46,49,145,0.92);
+    color: white;
+}}
+
 """
 
 # ------------------------------------------------------------------ #
@@ -1062,6 +1197,141 @@ QLineEdit#mapColEdit{{
 
 QToolButton#miniAction[role="mapHead"]{{
     padding: 4px 8px;
+}}
+/* ===== Xfer tab: Advanced options (Dark) ===== */
+QFrame#xferAdvSection {{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: rgba(15,23,42,0.25);
+}}
+
+QToolButton#xferAdvToggle {{
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    padding: 6px 10px;
+    font-weight: 800;
+    color: rgba(226,232,240,0.95);
+}}
+
+QToolButton#xferAdvToggle:hover:enabled {{
+    background: rgba(51,153,255,0.18);
+    border-color: {SECONDARY_TBLUE};
+}}
+
+QToolButton#xferAdvToggle:checked {{
+    background: rgba(46,49,145,0.18);
+    border-color: rgba(46,49,145,0.38);
+}}
+
+QWidget#xferAdvBody {{
+    background: transparent;
+    border-top: 1px solid rgba(255,255,255,0.10);
+}}
+
+QLabel#xferAdvTitle {{
+    font-size: 14px;
+    font-weight: 800;
+    color: rgba(255,255,255,0.96);
+}}
+
+QLabel#xferAdvChip {{
+    min-width: 48px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(203,213,225,0.95);
+    font-weight: 800;
+}}
+
+QLabel#xferAdvChip[ok="false"] {{
+    background: rgba(242,134,32,0.18);
+    border: 1px solid rgba(242,134,32,0.45);
+    color: rgba(255,255,255,0.95);
+}}
+QWidget#xferAdvContent {{
+    background: transparent;
+}}
+
+QFrame#xferField {{
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    background: rgba(15,23,42,0.22);
+}}
+
+QLabel#xferFieldTitle {{
+    font-weight: 800;
+    color: rgba(226,232,240,0.95);
+}}
+
+QGroupBox#xferWarmBox {{
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    margin-top: 8px;
+    padding-top: 6px;
+}}
+QGroupBox#xferWarmBox::title {{
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 6px;
+    color: rgba(226,232,240,0.95);
+    font-weight: 700;
+}}
+/* -------- Xfer map toolbar: chips + segmented pills (Dark) -------- */
+QLabel#xferChipA {{
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    border-radius: 11px;
+    background: rgba(99,102,241,0.20);
+    border: 1px solid rgba(99,102,241,0.35);
+    color: rgba(255,255,255,0.92);
+    font-weight: 700;
+}}
+
+QLabel#xferChipB {{
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
+    border-radius: 11px;
+    background: rgba(242,134,32,0.22);
+    border: 1px solid rgba(242,134,32,0.40);
+    color: rgba(255,255,255,0.90);
+    font-weight: 700;
+}}
+
+QWidget#xferSeg {{
+    background: rgba(148,163,184,0.10);
+    border: 1px solid rgba(148,163,184,0.22);
+    border-radius: 10px;
+}}
+
+QToolButton#xferSegBtn {{
+    background: transparent;
+    border: 0px;
+    padding: 4px 10px;
+    color: rgba(203,213,225,0.86);
+}}
+
+QToolButton#xferSegBtn[pos="left"] {{
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+}}
+QToolButton#xferSegBtn[pos="right"] {{
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}}
+
+QToolButton#xferSegBtn:hover:enabled {{
+    background: rgba(51,153,255,0.18);
+}}
+
+QToolButton#xferSegBtn:checked {{
+    background: rgba(99,102,241,0.86);
+    color: white;
 }}
                
 """

@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Callable
 
@@ -28,45 +28,82 @@ from .base import BaseWorkflowController, RunEnv, GUIHooks
 # Data structures
 # ----------------------------------------------------------------------
 
-
 @dataclass
 class TransferGuiState:
     """
-    Snapshot of the Transferability tab, as seen by the GUI.
+    Snapshot of the Transferability tab.
 
-    All fields are plain Python types so this stays independent of Qt.
+    Plain Python types only (Qt-free).
     """
 
     city_a: str
     city_b: str
-    results_root: Optional[str]  # text from xfer_results_root or None
-    splits: List[str]            # e.g. ["train", "val"]
-    calib_modes: List[str]       # e.g. ["none", "source", "target"]
+    results_root: Optional[str]
+
+    splits: List[str]
+    calib_modes: List[str]
+
     rescale_to_source: bool
     batch_size: int
     quantiles_override: Optional[Sequence[float]]
+
     write_json: bool
     write_csv: bool
+
+    # ---- v3.2 extras (all optional / defaulted) ----
+    rescale_modes: Optional[List[str]] = None
+    strategies: Optional[List[str]] = None
+
+    prefer_tuned: bool = True
+    align_policy: str = "align_by_name_pad"
+
+    allow_reorder_dynamic: Optional[bool] = None
+    allow_reorder_future: Optional[bool] = None
+
+    warm_split: Optional[str] = None
+    warm_samples: Optional[int] = None
+    warm_frac: Optional[float] = None
+    warm_epochs: Optional[int] = None
+    warm_lr: Optional[float] = None
+    warm_seed: Optional[int] = None
 
 
 @dataclass
 class TransferPlan:
     """
-    Fully validated transferability plan.
-
-    This is what we pass to the XferMatrixThread callback.
+    Fully validated plan passed to XferMatrixThread.
     """
 
     city_a: str
     city_b: str
     results_root: Path
+
     splits: List[str]
     calib_modes: List[str]
+
     rescale_to_source: bool
     batch_size: int
     quantiles_override: Optional[List[float]]
+
     write_json: bool
     write_csv: bool
+
+    # ---- v3.2 extras ----
+    rescale_modes: Optional[List[str]] = None
+    strategies: Optional[List[str]] = None
+
+    prefer_tuned: bool = True
+    align_policy: str = "align_by_name_pad"
+
+    allow_reorder_dynamic: Optional[bool] = None
+    allow_reorder_future: Optional[bool] = None
+
+    warm_split: Optional[str] = None
+    warm_samples: Optional[int] = None
+    warm_frac: Optional[float] = None
+    warm_epochs: Optional[int] = None
+    warm_lr: Optional[float] = None
+    warm_seed: Optional[int] = None
 
 
 # ----------------------------------------------------------------------
@@ -165,18 +202,43 @@ class TransferController(BaseWorkflowController):
         if state.quantiles_override is not None:
             q_override = [float(q) for q in state.quantiles_override]
 
+        rescale_modes = (
+            [m for m in (state.rescale_modes or []) if m]
+            if state.rescale_modes is not None
+            else None
+        )
+
+        strategies = (
+            [s for s in (state.strategies or []) if s]
+            if state.strategies is not None
+            else None
+        )
+
         return TransferPlan(
             city_a=city_a,
             city_b=city_b,
             results_root=results_root,
             splits=splits,
             calib_modes=calib_modes,
-            rescale_to_source=state.rescale_to_source,
+            rescale_to_source=bool(state.rescale_to_source),
             batch_size=int(state.batch_size),
             quantiles_override=q_override,
             write_json=bool(state.write_json),
             write_csv=bool(state.write_csv),
+            rescale_modes=rescale_modes,
+            strategies=strategies,
+            prefer_tuned=bool(state.prefer_tuned),
+            align_policy=str(state.align_policy or "align_by_name_pad"),
+            allow_reorder_dynamic=state.allow_reorder_dynamic,
+            allow_reorder_future=state.allow_reorder_future,
+            warm_split=state.warm_split,
+            warm_samples=state.warm_samples,
+            warm_frac=state.warm_frac,
+            warm_epochs=state.warm_epochs,
+            warm_lr=state.warm_lr,
+            warm_seed=state.warm_seed,
         )
+
 
     # ------------------------------------------------------------------
     # Public API: dry preview
@@ -223,6 +285,19 @@ class TransferController(BaseWorkflowController):
             f"  quantiles    : {q_display}",
             f"  write_json   : {plan.write_json}",
             f"  write_csv    : {plan.write_csv}",
+            f"  strategies   : {plan.strategies or '<default>'}",
+            f"  rescale_modes: {plan.rescale_modes or '<auto>'}",
+            f"  prefer_tuned : {plan.prefer_tuned}",
+            f"  align_policy : {plan.align_policy}",
+            f"  allow_re_dyn : {plan.allow_reorder_dynamic}",
+            f"  allow_re_fut : {plan.allow_reorder_future}",
+            f"  warm_split   : {plan.warm_split}",
+            f"  warm_samples : {plan.warm_samples}",
+            f"  warm_frac    : {plan.warm_frac}",
+            f"  warm_epochs  : {plan.warm_epochs}",
+            f"  warm_lr      : {plan.warm_lr}",
+            f"  warm_seed    : {plan.warm_seed}",
+
         ]
         for line in lines:
             self.log(line)
@@ -260,10 +335,13 @@ class TransferController(BaseWorkflowController):
 
         # Mirror your previous logging
         self.log(
-            "Start cross-city transfer matrix: "
+            "Start transfer matrix: "
             f"{plan.city_a!r} ↔ {plan.city_b!r}; "
-            f"splits={plan.splits}, calib={plan.calib_modes}, "
-            f"rescale_to_source={plan.rescale_to_source}."
+            f"splits={plan.splits}, "
+            f"calib={plan.calib_modes}, "
+            f"strat={plan.strategies or 'default'}, "
+            f"rescale={plan.rescale_to_source}, "
+            f"modes={plan.rescale_modes or 'auto'}."
         )
         self.status(
             f"XFER: running transfer matrix for "

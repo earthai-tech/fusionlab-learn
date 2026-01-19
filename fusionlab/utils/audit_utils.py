@@ -252,6 +252,7 @@ def audit_stage1_scaling(
     city: str = "Unknown",
     model_name: str = "Model",
     sample_rows: int = 5,
+    log_fn = None, 
 ) -> Optional[str]:
     """
     Stage-1 audit:
@@ -419,6 +420,7 @@ def audit_stage1_scaling(
         sections,
         table_width=table_width,
         title=f"{title_prefix} — {city.upper()} {model_name} ({dt.datetime.now():%Y-%m-%d %H:%M:%S})",
+        log_fn = log_fn, 
     )
 
     # ---- 6) Save JSON
@@ -528,7 +530,8 @@ def audit_stage2_handshake(
     table_width: int = 100,
     title_prefix: str = "STAGE-2 HANDSHAKE AUDIT",
     city='Unkown', 
-    model_name ="Model"
+    model_name ="Model", 
+    log_fn =None, 
 ):
     audit = {}
 
@@ -708,6 +711,7 @@ def audit_stage2_handshake(
         sections,
         table_width=table_width,
         title=f"{title_prefix} — {city.upper()} {model_name} ({dt.datetime.now():%Y-%m-%d %H:%M:%S})",
+        log_fn = log_fn, 
     )
 
     # ----------------------------------------------------------
@@ -743,6 +747,7 @@ def audit_stage1_stage2_coord_consistency(
     title_prefix: str = "STAGE-1 ↔ STAGE-2 COORD CONSISTENCY",
     city: str = "Unknown",
     model_name: str = "Model",
+    log_fn=None, 
 ):
     """
     Cross-check coordinate semantics between Stage-1 scaler and Stage-2 NPZ coords.
@@ -950,6 +955,7 @@ def audit_stage1_stage2_coord_consistency(
         sec,
         table_width=table_width,
         title=f"{title_prefix} — {city.upper()} {model_name} ({dt.datetime.now():%Y-%m-%d %H:%M:%S})",
+        log_fn =log_fn, 
     )
 
     # --------------------------------------------------------------
@@ -1036,6 +1042,7 @@ def audit_stage3_run(
     title_prefix: str = "STAGE-3 AUDIT",
     city: str = "Unknown",
     model_name: str = "Model",
+    log_fn=None, 
 ) -> Optional[str]:
     """Stage-3 audit: tuned artifacts + eval sanity."""
     os.makedirs(run_dir, exist_ok=True)
@@ -1186,6 +1193,7 @@ def audit_stage3_run(
             f"{title_prefix} — {str(city).upper()} "
             f"{model_name} ({dt.datetime.now():%Y-%m-%d %H:%M:%S})"
         ),
+        log_fn = log_fn, 
     )
 
     out_dir = save_dir or run_dir

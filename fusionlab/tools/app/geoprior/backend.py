@@ -349,8 +349,6 @@ class InferenceJob(AppJob):
         self.last_result = result
         return result
 
-
-
 class XferMatrixJob(AppJob):
     """Run cross-city transfer matrix as a job."""
 
@@ -359,7 +357,9 @@ class XferMatrixJob(AppJob):
         city_a: str,
         city_b: str,
         *,
+        store: Optional[Any] = None,
         results_dir: str = "results",
+        results_root: Optional[str] = None,
         splits: Sequence[str] = ("val", "test"),
         calib_modes: Sequence[str] = (
             "none",
@@ -367,21 +367,27 @@ class XferMatrixJob(AppJob):
             "target",
         ),
         rescale_to_source: bool = False,
+        rescale_modes: Optional[Sequence[str]] = None,
+        strategies: Optional[Sequence[str]] = None,
         batch_size: int = 32,
-        quantiles_override: Optional[
-            Sequence[float]
-        ] = None,
+        quantiles_override: Optional[Sequence[float]] = None,
         out_dir: Optional[str] = None,
         write_json: bool = True,
         write_csv: bool = True,
-        model_name: str = "GeoPriorSubsNet", 
+        model_name: str = "GeoPriorSubsNet",
+        prefer_tuned: bool = True,
+        align_policy: str = "align_by_name_pad",
+        allow_reorder_dynamic: Optional[bool] = None,
+        allow_reorder_future: Optional[bool] = None,
+        warm_split: Optional[str] = None,
+        warm_samples: Optional[int] = None,
+        warm_frac: Optional[float] = None,
+        warm_epochs: Optional[int] = None,
+        warm_lr: Optional[float] = None,
+        warm_seed: Optional[int] = None,
         logger: Optional[LogFn] = None,
-        stop_check: Optional[
-            StopCheckFn
-        ] = None,
-        progress_hook: Optional[
-            ProgressHook
-        ] = None,
+        stop_check: Optional[StopCheckFn] = None,
+        progress_hook: Optional[ProgressHook] = None,
     ) -> None:
         super().__init__(
             logger=logger,
@@ -390,20 +396,49 @@ class XferMatrixJob(AppJob):
         )
         self.city_a = city_a
         self.city_b = city_b
+
+        self.store = store
         self.results_dir = results_dir
+        self.results_root = results_root
+
         self.splits = tuple(splits)
         self.calib_modes = tuple(calib_modes)
-        self.rescale_to_source = rescale_to_source
-        self.batch_size = batch_size
+
+        self.rescale_to_source = bool(rescale_to_source)
+        self.rescale_modes = (
+            tuple(rescale_modes)
+            if rescale_modes is not None
+            else None
+        )
+        self.strategies = (
+            tuple(strategies)
+            if strategies is not None
+            else None
+        )
+
+        self.batch_size = int(batch_size)
         self.quantiles_override = (
             tuple(quantiles_override)
             if quantiles_override
             else None
         )
+
         self.out_dir = out_dir
-        self.write_json = write_json
-        self.write_csv = write_csv
-        self.model_name = model_name 
+        self.write_json = bool(write_json)
+        self.write_csv = bool(write_csv)
+
+        self.model_name = model_name
+        self.prefer_tuned = bool(prefer_tuned)
+        self.align_policy = align_policy
+        self.allow_reorder_dynamic = allow_reorder_dynamic
+        self.allow_reorder_future = allow_reorder_future
+
+        self.warm_split = warm_split
+        self.warm_samples = warm_samples
+        self.warm_frac = warm_frac
+        self.warm_epochs = warm_epochs
+        self.warm_lr = warm_lr
+        self.warm_seed = warm_seed
 
     def run(self) -> Dict[str, Any]:
         self.log(
@@ -421,10 +456,14 @@ class XferMatrixJob(AppJob):
         result = run_xfer_matrix(
             city_a=self.city_a,
             city_b=self.city_b,
+            store=self.store,
             results_dir=self.results_dir,
+            results_root=self.results_root,
             splits=self.splits,
             calib_modes=self.calib_modes,
             rescale_to_source=self.rescale_to_source,
+            rescale_modes=self.rescale_modes,
+            strategies=self.strategies,
             batch_size=self.batch_size,
             quantiles_override=self.quantiles_override,
             out_dir=self.out_dir,
@@ -432,8 +471,18 @@ class XferMatrixJob(AppJob):
             write_csv=self.write_csv,
             logger=self.log,
             stop_check=self.should_stop,
-            progress_callback=self.update_progress, 
+            progress_callback=self.update_progress,
             model_name=self.model_name,
+            prefer_tuned=self.prefer_tuned,
+            align_policy=self.align_policy,
+            allow_reorder_dynamic=self.allow_reorder_dynamic,
+            allow_reorder_future=self.allow_reorder_future,
+            warm_split=self.warm_split,
+            warm_samples=self.warm_samples,
+            warm_frac=self.warm_frac,
+            warm_epochs=self.warm_epochs,
+            warm_lr=self.warm_lr,
+            warm_seed=self.warm_seed,
         )
         self.last_result = result
         return result

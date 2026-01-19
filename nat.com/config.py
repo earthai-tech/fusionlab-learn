@@ -43,7 +43,7 @@
 # -------------------------------------------------------------------
 # CITY_NAME selects which city dataset is used.
 # Typical values: "nansha", "zhongshan"
-CITY_NAME = "nansha"
+CITY_NAME = "zhongshan"
 
 # MODEL_NAME selects the Stage-2 model flavour:
 #   - "HybridAttn-NoPhysics" : HybridAttn encoder-decoder, physics OFF

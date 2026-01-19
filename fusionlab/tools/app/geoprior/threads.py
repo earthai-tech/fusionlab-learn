@@ -224,46 +224,64 @@ class XferMatrixThread(BaseJobThread):
         city_a: str,
         city_b: str,
         *,
+        store: Optional[Any] = None,
         results_dir: str = "results",
-        splits: Optional[
-            Any
-        ] = None,
-        calib_modes: Optional[
-            Any
-        ] = None,
+        results_root: Optional[str] = None,
+        splits: Optional[Any] = None,
+        calib_modes: Optional[Any] = None,
         rescale_to_source: bool = False,
+        rescale_modes: Optional[Any] = None,
+        strategies: Optional[Any] = None,
         batch_size: int = 32,
-        quantiles_override: Optional[
-            Any
-        ] = None,
+        quantiles_override: Optional[Any] = None,
         out_dir: Optional[str] = None,
         write_json: bool = True,
         write_csv: bool = True,
-        model_name: str = "GeoPriorSubsNet",       
+        model_name: str = "GeoPriorSubsNet",
+        prefer_tuned: bool = True,
+        align_policy: str = "align_by_name_pad",
+        allow_reorder_dynamic: Optional[bool] = None,
+        allow_reorder_future: Optional[bool] = None,
+        warm_split: Optional[str] = None,
+        warm_samples: Optional[int] = None,
+        warm_frac: Optional[float] = None,
+        warm_epochs: Optional[int] = None,
+        warm_lr: Optional[float] = None,
+        warm_seed: Optional[int] = None,
         parent: Optional[object] = None,
     ) -> None:
         if splits is None:
             splits = ("val", "test")
         if calib_modes is None:
-            calib_modes = (
-                "none",
-                "source",
-                "target",
-            )
+            calib_modes = ("none", "source", "target")
 
         job = XferMatrixJob(
             city_a=city_a,
             city_b=city_b,
+            store=store,
             results_dir=results_dir,
+            results_root=results_root,
             splits=splits,
             calib_modes=calib_modes,
             rescale_to_source=rescale_to_source,
+            rescale_modes=rescale_modes,
+            strategies=strategies,
             batch_size=batch_size,
             quantiles_override=quantiles_override,
             out_dir=out_dir,
             write_json=write_json,
             write_csv=write_csv,
-            model_name=model_name, 
+            model_name=model_name,
+            prefer_tuned=prefer_tuned,
+            align_policy=align_policy,
+            allow_reorder_dynamic=allow_reorder_dynamic,
+            allow_reorder_future=allow_reorder_future,
+            warm_split=warm_split,
+            warm_samples=warm_samples,
+            warm_frac=warm_frac,
+            warm_epochs=warm_epochs,
+            warm_lr=warm_lr,
+            warm_seed=warm_seed,
         )
         super().__init__(job=job, parent=parent)
 
@@ -271,7 +289,6 @@ class XferMatrixThread(BaseJobThread):
         super().run()
         result = self._job.last_result or {}
         self.xfer_finished.emit(result)
-
 
 class XferViewThread(BaseJobThread):
     """Thread wrapper around XferViewJob."""

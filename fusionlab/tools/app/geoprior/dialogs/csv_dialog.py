@@ -43,7 +43,8 @@ class CsvEditDialog(QDialog):
     - rename column
     - sort ascending / descending
     - drop rows with NA in selected column(s)
-    - convert selected column to numeric
+    - 
+    selected column to numeric
     - reset index
 
     Edits are applied to an internal DataFrame copy and only

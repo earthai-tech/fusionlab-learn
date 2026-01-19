@@ -3636,17 +3636,18 @@ class GeoPriorForecaster(QMainWindow):
             th = XferMatrixThread(
                 city_a=plan.city_a,
                 city_b=plan.city_b,
-                results_dir=str(plan.results_root),
+                store=self.config_store,
+                results_root=str(plan.results_root),
                 splits=plan.splits,
                 calib_modes=plan.calib_modes,
                 rescale_to_source=plan.rescale_to_source,
                 batch_size=plan.batch_size,
                 quantiles_override=plan.quantiles_override,
-                out_dir=None,
                 write_json=plan.write_json,
                 write_csv=plan.write_csv,
                 parent=self,
             )
+
             self.xfer_thread = th
     
             th.log_updated.connect(self.log_updated.emit)

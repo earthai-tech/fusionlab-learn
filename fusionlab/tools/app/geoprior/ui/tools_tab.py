@@ -41,12 +41,12 @@ from .tools import (
     ConfigDiffTool,
     Stage1ManagerTool,
     ManifestBrowserTool,
-    ReproduceRunHelperTool, 
-    BuildNPZTool, 
-    MetricsDashboardTool, 
-    RunComparisonTool, 
+    ReproduceRunHelperTool,
+    BuildNPZTool,
+    MetricsDashboardTool,
+    RunComparisonTool,
     PhysicsDiagnosticsTool,
-
+    IdentifiabilityTool,
 )
 
 
@@ -122,7 +122,13 @@ def _make_placeholder_tool(title: str, desc: str) -> QWidget:
 # Default tools to expose in the tab
 # ----------------------------------------------------------------------
 
-def default_tool_specs(app_ctx: object | None = None) -> List[ToolSpec]:
+def default_tool_specs(
+    *,
+    app_ctx: object | None = None,
+    store: object | None = None,
+    geo_cfg: object | None = None,
+) -> List[ToolSpec]:
+
     """
     Return the list of tool specs that populate the navigator.
 
@@ -130,6 +136,13 @@ def default_tool_specs(app_ctx: object | None = None) -> List[ToolSpec]:
     grouped sections with individual tools. Later, each placeholder
     can be swapped for a real tool widget.
     """
+    def _make_ident_tool() -> QWidget:
+        return IdentifiabilityTool(
+            app_ctx=app_ctx,
+            store=store,
+            geo_cfg=geo_cfg,
+        )
+
     return [
         # --- Data & Config ------------------------------------------------
         ToolSpec(
@@ -249,6 +262,19 @@ def default_tool_specs(app_ctx: object | None = None) -> List[ToolSpec]:
             needs_log=False,
         ),
 
+        ToolSpec(
+            tool_id="diag.identifiability",
+            title="Identifiability (SM3)",
+            group="Diagnostics & Plots",
+            description=(
+                "Run SM3 identifiability diagnostics from a physics "
+                "payload (NPZ) with unit-safe conversions, and export "
+                "JSON + figures."
+            ),
+            factory=lambda: _make_ident_tool(),
+            needs_log=False,
+        ),
+
         # --- System & Environment -----------------------------------------
         ToolSpec(  # XXX TODO: Done 
             tool_id="sys.env_check",
@@ -331,19 +357,26 @@ class ToolsTab(QWidget):
     def __init__(
         self,
         app_ctx: Optional[object] = None,
-        geo_cfg: Optional[object] = None,          # GeoPriorConfig-like
-        gui_runs_root: Optional[Path] = None,      # results_root
+        store: Optional[object] = None,
+        geo_cfg: Optional[object] = None,
+        gui_runs_root: Optional[Path] = None,
         parent: Optional[QWidget] = None,
         tool_specs: Optional[List[ToolSpec]] = None,
     ) -> None:
+
         super().__init__(parent)
 
         self._app_ctx = app_ctx
         self._geo_cfg = geo_cfg
         self._gui_runs_root = gui_runs_root
+        self._store = store
 
         # Tool specs may want to close over app_ctx / geo_cfg / root
-        self._tool_specs = tool_specs or default_tool_specs(app_ctx=app_ctx)
+        self._tool_specs = tool_specs or default_tool_specs(
+            app_ctx=app_ctx,
+            store=store,
+            geo_cfg=geo_cfg,
+        )
         self._tool_id_to_index: Dict[str, int] = {}
 
         self._init_ui()
@@ -423,10 +456,15 @@ class ToolsTab(QWidget):
         btn_metrics.clicked.connect(
             lambda: self.select_tool("diag.metrics_dashboard")
         )
+        btn_ident = QPushButton("Identifiability", quick_group)
+        btn_ident.clicked.connect(
+            lambda: self.select_tool("diag.identifiability")
+        )
 
         quick_layout.addWidget(btn_env)
         quick_layout.addWidget(btn_dataset)
         quick_layout.addWidget(btn_metrics)
+        quick_layout.addWidget(btn_ident)
         quick_layout.addStretch(1)
 
         # Separator line

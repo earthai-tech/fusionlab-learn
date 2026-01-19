@@ -3698,7 +3698,7 @@ def print_config_table(
     sort_keys: bool = True,
     key_col_fraction: float = 0.35,
     max_value_length: int = 200,
-    print_fn=None,
+    log_fn=None,
 ) -> str:
     """
     Pretty-print configuration or hyperparameters as a key/value table.
@@ -3739,7 +3739,7 @@ def print_config_table(
         Longer values are truncated with an ellipsis (``"..."``) before
         being wrapped onto multiple lines.
 
-    print_fn : callable, optional
+    log_fn : callable, optional
         Function used to emit lines (defaults to :func:`print`).  This
         allows capturing the table in logs if needed.
 
@@ -3867,10 +3867,10 @@ def print_config_table(
 
     table_text = "\n".join(lines)
 
-    if print_fn is None:
-        print_fn = print  # pragma: no cover
+    if log_fn is None:
+        log_fn = print  # pragma: no cover
 
-    print_fn(table_text)
+    log_fn(table_text)
     return table_text
 
 def as_tuple(

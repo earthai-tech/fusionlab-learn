@@ -287,7 +287,6 @@ def train_one_pixel(
     )
 
 
-
     ds_tr = tf_dataset(Xtr, ytr, batch, True, seed)
     ds_va = tf_dataset(Xva, yva, batch, False, seed)
 
@@ -511,7 +510,6 @@ def _infer_payload_time_units(meta: Dict[str, Any]) -> str:
 
     # 4) Last resort: fall back to SI (v3.2 exports SI time units)
     return "sec"
-
 
 
 def run_one_realisation(
