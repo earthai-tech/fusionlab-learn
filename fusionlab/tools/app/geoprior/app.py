@@ -53,7 +53,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QPushButton,
     QPlainTextEdit,
     QProgressBar,
@@ -71,7 +70,7 @@ from PyQt5.QtWidgets import (
 from .config.store import GeoConfigStore, FieldKey
 from .workflows.base import RunEnv, GUIHooks
 from .workflows.train import TrainController, TrainGuiState
-from .services.stage1_service import Stage1Service
+
 from .workflows.tune import TuneController, TuneGuiState
 from .workflows.inference import (
     InferenceController,
@@ -85,6 +84,9 @@ from .workflows.transfer import (
     TransferPlan,
 )
 from .services.results_service import ResultsService
+from .services.city_manager import CityManager
+from .services.stage1_service import Stage1Service
+
 from .ui.data_tab import DataTab
 from .ui.mode_manager import ModeManager
 from .ui.file_browse import FileBrowseHelper
@@ -98,6 +100,9 @@ from .ui.tune_tab import TuneTab
 from .ui.inference_tab import InferenceTab
 from .ui.xfer_tab import XferTab
 from .ui.map_tab import MapTab
+from .ui.results_tab import ResultsDownloadTab
+from .ui.city_field import CityField
+from .ui.log_manager import LogManager
 
 from ..ux_utils import (
     set_app_metadata,
@@ -118,7 +123,6 @@ from .threads import (
     XferMatrixThread,
     XferViewThread
 )
-
 
 from .config import GeoPriorConfig, find_stage1_for_city
 from .dialogs import ( 
@@ -145,7 +149,7 @@ from .about import show_about_dialog, DOCS_URL
 
 from .utils.view_utils import _notify_gui_xfer_view
 from .utils.clock_timer import RunClockTimer
-
+from .utils.components import RangeListEditor
 from .styles import (
     TAB_STYLES,
     LOG_STYLES,
@@ -158,9 +162,9 @@ from .styles import (
 )
 
 from .jobs import TrainJobSpec, latest_jobs_for_root
-from .results_tab import ResultsDownloadTab
-from .ui.log_manager import LogManager
-from .utils.components import RangeListEditor
+
+
+
 
 
 class GeoPriorForecaster(QMainWindow):
@@ -571,14 +575,16 @@ class GeoPriorForecaster(QMainWindow):
         self.select_csv_btn = QPushButton("Open dataset…")
         top.addWidget(self.select_csv_btn)
 
-        label = QLabel("City / Dataset:")
-        # label.setStyleSheet("font-weight: 600;")
-        top.addWidget(label)
-       
-        self.city_edit = QLineEdit()
-        self.city_edit.setPlaceholderText("e.g. nansha")
-        top.addWidget(self.city_edit, 1)
-        
+        self.city_mgr = CityManager(self.config_store)
+        self.city_field = CityField(
+            self.config_store,
+            manager=self.city_mgr,
+            enable_completer=True,
+        )
+        top.addWidget(self.city_field, 1)
+        # Backward-compatible alias for old code
+        self.city_edit = self.city_field.line_edit()
+
         self.city_edit.setStyleSheet(
             """
             QLineEdit#cityDatasetEdit {
@@ -975,7 +981,10 @@ class GeoPriorForecaster(QMainWindow):
         # Results tab – browse & download artifacts/runs
         results_tab = ResultsDownloadTab(
             results_root=self.gui_runs_root,
-            get_results_root=lambda: self.gui_runs_root,
+            get_results_root=lambda: self.config_store.get_value(
+                FieldKey("results_root"),
+                default=self.gui_runs_root,
+            ),
             parent=self,
         )
         self.results_tab = results_tab
@@ -1309,23 +1318,69 @@ class GeoPriorForecaster(QMainWindow):
         return bool(sizes[1] > 0)
     
     
+    def _console_menu_label(self, visible: bool) -> str:
+        return "Hide log panel" if visible else "Show log panel"
+    
+    
     def _sync_console_menu(self) -> None:
         act = getattr(self, "act_show_log", None)
         if act is None:
             return
     
+        vis = bool(self.is_console_visible())
+    
         try:
             with QSignalBlocker(act):
-                act.setChecked(self.is_console_visible())
+                act.setChecked(vis)
+        except Exception:
+            pass
+    
+        try:
+            act.setText(self._console_menu_label(vis))
+            if vis:
+                act.setToolTip("Hide the log output panel.")
+            else:
+                act.setToolTip("Show the log output panel.")
         except Exception:
             return
-
-    def set_console_visible(self, visible: bool) -> None:
+    def _remember_console_for_tab(
+        self,
+        *,
+        tab_index: int,
+        visible: bool,
+    ) -> None:
+        if tab_index is None:
+            return
+        try:
+            idx = int(tab_index)
+        except Exception:
+            return
+        if idx < 0:
+            return
+    
+        m = getattr(self, "_console_vis_by_tab", None)
+        if not isinstance(m, dict):
+            m = {}
+            self._console_vis_by_tab = m
+    
+        m[idx] = bool(visible)
+    
+    def set_console_visible(
+        self,
+        visible: bool,
+        *,
+        remember: bool = True,
+    ) -> None:
         sp = getattr(self, "_main_splitter", None)
         if sp is None:
             if getattr(self, "log_widget", None) is not None:
                 self.log_widget.setVisible(visible)
             self._sync_console_menu()
+            if remember and hasattr(self, "tabs"):
+                self._remember_console_for_tab(
+                    tab_index=self.tabs.currentIndex(),
+                    visible=visible,
+                )
             return
     
         sizes = sp.sizes()
@@ -1338,18 +1393,34 @@ class GeoPriorForecaster(QMainWindow):
         if visible:
             if sizes[1] > 0:
                 self._sync_console_menu()
+                if remember and hasattr(self, "tabs"):
+                    self._remember_console_for_tab(
+                        tab_index=self.tabs.currentIndex(),
+                        visible=True,
+                    )
                 return
     
             bot = int(getattr(self, "_console_last_h", 220) or 220)
             bot = max(140, min(bot, int(total * 0.60)))
             sp.setSizes([total - bot, bot])
             self._sync_console_menu()
+            if remember and hasattr(self, "tabs"):
+                self._remember_console_for_tab(
+                    tab_index=self.tabs.currentIndex(),
+                    visible=True,
+                )
             return
     
         if sizes[1] > 0:
             self._console_last_h = sizes[1]
         sp.setSizes([total, 0])
         self._sync_console_menu()
+    
+        if remember and hasattr(self, "tabs"):
+            self._remember_console_for_tab(
+                tab_index=self.tabs.currentIndex(),
+                visible=False,
+            )
 
 
     @pyqtSlot(int, int)
@@ -1362,6 +1433,12 @@ class GeoPriorForecaster(QMainWindow):
             self._console_last_h = sizes[1]
     
         self._sync_console_menu()
+
+        if hasattr(self, "tabs"):
+            self._remember_console_for_tab(
+                tab_index=self.tabs.currentIndex(),
+                visible=self.is_console_visible(),
+            )
 
 
     def _is_dry_mode(self) -> bool:
@@ -1534,7 +1611,7 @@ class GeoPriorForecaster(QMainWindow):
         self.select_csv_btn.clicked.connect(
             self._on_open_dataset,
         )
-
+        self.city_field.toast.connect(self._on_city_toast) 
         # Connect Stop button to the manager, and manager → "real" stop logic
         self.btn_stop.clicked.connect(self.mode_mgr.on_stop_clicked)
         self.mode_mgr.stop_requested.connect(self._on_stop_requested)
@@ -1577,7 +1654,6 @@ class GeoPriorForecaster(QMainWindow):
         it.browse_calib_clicked.connect(self._on_browse_calibrator)
 
  
- 
         # --- Transferability tab ---
         xt = self.xfer_tab
 
@@ -1585,8 +1661,12 @@ class GeoPriorForecaster(QMainWindow):
         xt.view_clicked.connect(self._on_xfer_view_clicked)
 
 
-        self.data_tab.request_open.connect(self._on_open_dataset)
-        self.data_tab.request_open_new.connect(self._on_open_dataset)
+        self.data_tab.request_open.connect(
+            self._on_open_dataset_data_tab
+        )
+        self.data_tab.request_open_new.connect(
+            self._on_open_dataset_data_tab
+        )
         self.data_tab.request_edit.connect(self._on_data_edit_clicked)
         self.data_tab.request_save.connect(self._on_data_save_clicked)
         self.data_tab.request_save_as.connect(self._on_data_save_as_clicked)
@@ -1632,8 +1712,27 @@ class GeoPriorForecaster(QMainWindow):
             self._on_tab_changed(self.tabs.currentIndex())
         
         QTimer.singleShot(0, _apply_initial_tab_state)
+        
+    def _on_city_toast(self, status: str, msg: str) -> None:
+        if msg:
+            self.status_updated.emit(msg)
+            
+    def _get_city(self) -> str:
+        if hasattr(self, "city_mgr"):
+            c = self.city_mgr.get_city()
+            if c:
+                return c
 
+        if hasattr(self, "city_field"):
+            if self.city_field.commit():
+                return self.city_mgr.get_city()
 
+        if hasattr(self, "city_edit"):
+            return self.city_edit.text().strip()
+
+        return ""
+
+        
     @pyqtSlot(bool)
     def _on_dry_run_toggled(self, checked: bool) -> None:
         # Update ModeManager's state
@@ -1676,9 +1775,23 @@ class GeoPriorForecaster(QMainWindow):
         setup_idx = getattr (self, "_setup_tab_index", -1)
         map_idx = getattr (self, "_map_tab_index", -1)
         
-        hide = index in (data_idx, setup_idx, map_idx, res_idx, tools_idx)
-        self.set_console_visible(not hide)
-    
+        hide = index in (
+            data_idx,
+            setup_idx,
+            map_idx,
+            res_idx,
+            tools_idx,
+        )
+        default_vis = not hide
+        
+        m = getattr(self, "_console_vis_by_tab", None)
+        if isinstance(m, dict):
+            vis = bool(m.get(index, default_vis))
+        else:
+            vis = default_vis
+        
+        self.set_console_visible(vis, remember=False)
+
         if index == prep_idx:
             self.preprocess_tab.refresh_status(force=False)
 
@@ -1715,10 +1828,7 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
     
-        city = ""
-        if hasattr(self, "city_edit"):
-            city = self.city_edit.text().strip()
-    
+        city = self._get_city()
         if not city:
             QMessageBox.warning(
                 self,
@@ -1913,7 +2023,7 @@ class GeoPriorForecaster(QMainWindow):
         if s is None:
             return
     
-        city = self.city_edit.text().strip()
+        city = self._get_city()
         self.set_preferred_stage1_manifest(
             city=city,
             manifest_path=str(s.manifest_path),
@@ -1957,7 +2067,7 @@ class GeoPriorForecaster(QMainWindow):
         self.data_tab.set_dataset(
             self.csv_path,
             self._edited_df,
-            city=str(self.city_edit.text()).strip(),
+            city=self._get_city(),
             dirty=False,
         )
     
@@ -2109,12 +2219,14 @@ class GeoPriorForecaster(QMainWindow):
         self.csv_path = str(p)
         self._edited_df = df
     
-        # optional: infer city from filename
-        try:
-            self.city_edit.setText(p.stem)
-        except Exception:
-            pass
-    
+        res = self.city_mgr.resolve_city_for_open_dataset(
+            typed_city=None,
+            dataset_path=p,
+        )
+        if res.city:
+            self.city_mgr.apply_resolved_city(res)
+            self.city_field.refresh_all()
+            
         self._sync_data_tab()
         self.data_tab.refresh_library(select_path=p)
         self.log_updated.emit(f"[Data] Loaded: {p.name}")
@@ -2286,8 +2398,12 @@ class GeoPriorForecaster(QMainWindow):
     def _sync_config_from_ui(self) -> None:
         patch = {
             "train_end_year": self.sp_train_end.value(),
-            "forecast_start_year": self.sp_forecast_start.value(),
-            "forecast_horizon_years": self.sp_forecast_horizon.value(),
+            "forecast_start_year": (
+                self.sp_forecast_start.value()
+            ),
+            "forecast_horizon_years": (
+                self.sp_forecast_horizon.value()
+            ),
             "time_steps": self.sp_time_steps.value(),
             "epochs": self.sp_epochs.value(),
             "batch_size": self.sp_batch_size.value(),
@@ -2298,13 +2414,24 @@ class GeoPriorForecaster(QMainWindow):
             "lambda_prior": self.sb_lprior.value(),
             "lambda_smooth": self.sb_lsmooth.value(),
             "lambda_mv": self.sb_lmv.value(),
-            "clean_stage1_dir": self.chk_clean_stage1.isChecked(),
-            "build_future_npz": self.chk_build_future.isChecked(),
-            "evaluate_training": self.chk_eval_training.isChecked(),
-            "tuner_search_space": self._build_tuner_space_from_ui(),
+            "clean_stage1_dir": (
+                self.chk_clean_stage1.isChecked()
+            ),
+            "build_future_npz": (
+                self.chk_build_future.isChecked()
+            ),
+            "evaluate_training": (
+                self.chk_eval_training.isChecked()
+            ),
+            "tuner_search_space": (
+                self._build_tuner_space_from_ui()
+            ),
         }
-    
-        # --- Missing physics controls (Train tab) ---
+
+        city = self._get_city()
+        if city:
+            patch["city"] = city
+
         if hasattr(self, "sp_phys_warmup"):
             patch["phys_warmup_epochs"] = (
                 self.sp_phys_warmup.value()
@@ -2317,9 +2444,8 @@ class GeoPriorForecaster(QMainWindow):
             patch["scale_pde_residuals"] = (
                 self.chk_scale_pde.isChecked()
             )
-    
-        self.config_store.patch(patch)
 
+        self.config_store.patch(patch)
 
     # ------------------------------------------------------------
     #     configure dialog boxes 
@@ -2625,14 +2751,10 @@ class GeoPriorForecaster(QMainWindow):
             city = getattr(self.geo_cfg, "city", None)
 
         # 2) City line-edit on the toolbar, if any
-        if not city and hasattr(self, "city_edit"):
-            try:
-                txt = self.city_edit.text().strip()
-                if txt:
-                    city = txt
-            except Exception:
-                pass
-
+        if hasattr(self, "city_mgr"):
+            c = self.city_mgr.get_city()
+            if c:
+                city = c
 
         return self._get_preferred_stage1_manifest_for_city(city)
 
@@ -2762,53 +2884,82 @@ class GeoPriorForecaster(QMainWindow):
     def _on_browse_calibrator(self) -> None:
         self.file_browse.browse_calibrator(self.inf_calib_edit)
         
+
     @pyqtSlot()
     def _on_open_dataset(self) -> None:
         """
-        Open a dataset (CSV/parquet/xlsx/…), let the user edit it,
-        then save as a canonical CSV and update City/Dataset.
+        City-bound dataset open.
+    
+        - Uses CityManager lock rules
+        - Saves canonical CSV under _datasets/<city>.csv
+        - Patches store with dataset_path + city
+        - Ensures city root exists
         """
-        csv_path, self._edited_df, city_name = open_dataset_with_editor(
+        mgr = getattr(self, "city_mgr", None)
+        if mgr is None:
+            self.log_updated.emit("[WARN] CityManager missing")
+            return
+    
+        hint = None
+        if mgr.is_locked():
+            cur = mgr.get_city()
+            if cur:
+                hint = cur
+        else:
+            if hasattr(self, "city_field"):
+                hint = self.city_field.city_text()
+    
+        def _msg(m: str) -> None:
+            if m:
+                self.status_updated.emit(m)
+    
+        csv_path, df, city_key = open_dataset_with_editor(
             self,
-            gui_runs_root=self.gui_runs_root,
+            gui_runs_root=Path(self.gui_runs_root),
             initial_dir="",
+            city_hint=hint,
+            normalize_city=mgr.normalize,
+            city_message_hook=_msg,
         )
         if csv_path is None:
-            return  # user cancelled or error
-
-        self.csv_path = csv_path
-        
-        # Keep config in sync
+            return
+    
+        self.csv_path = str(csv_path)
+        self._edited_df = df
+    
+        if city_key:
+            mgr.set_city(city_key, quiet=True)
+            mgr.ensure_city_root(
+                results_root=Path(self.gui_runs_root),
+            )
+            if hasattr(self, "city_field"):
+                self.city_field.refresh_all()
+    
         try:
             self.config_store.patch(
                 {
                     "dataset_path": str(self.csv_path),
-                    "city": self.city_edit.text().strip(),
+                    "city": mgr.get_city(),
+                    "results_root": str(self.gui_runs_root),
                 }
             )
         except Exception as exc:
             self.log_updated.emit(f"[WARN] config patch: {exc}")
-        
-        # Update DataTab (will emit dataset_changed -> SetupTab)
+    
         if self.data_tab is not None:
             self.data_tab.set_dataset(
                 self.csv_path,
                 self._edited_df,
-                city=self.city_edit.text().strip(),
+                city=mgr.get_city(),
                 dirty=True,
             )
-        elif self.setup_tab is not None and self._edited_df is not None:
+        elif self.setup_tab is not None and df is not None:
             self.setup_tab.set_dataset_columns(
-                [str(c) for c in self._edited_df.columns]
+                [str(c) for c in df.columns]
             )
-
-        # Auto-fill City/Dataset if empty
-        if not self.city_edit.text().strip() and city_name:
-            self.city_edit.setText(city_name)
-
+    
         self.log_updated.emit(f"Dataset selected: {self.csv_path}")
-
-        # Friendly hint: check the Feature config dialog at least once
+    
         if not getattr(self, "_feature_tip_shown", False):
             msg = QMessageBox(self)
             msg.setWindowTitle("Check feature configuration")
@@ -2816,13 +2967,65 @@ class GeoPriorForecaster(QMainWindow):
             msg.setTextFormat(Qt.RichText)
             msg.setText(
                 "Dataset selected.<br><br>"
-                "Please open the <b>“Feature config…”</b> box to "
-                "verify the dynamic features and H-field column before "
-                "running the PINN."
+                "Please open the <b>“Feature config…”</b> "
+                "box to verify the dynamic features and "
+                "H-field column before running the PINN."
             )
             msg.exec_()
             self._feature_tip_shown = True
-        
+    
+        self._sync_data_tab()
+        self.data_tab.refresh_library(select_path=self.csv_path)
+
+    @pyqtSlot()
+    def _on_open_dataset_data_tab(self) -> None:
+        """
+        Data-only open from DataTab.
+    
+        - Lets dataset name follow file stem
+        - Does NOT patch city
+        - Does NOT create city root
+        """
+        mgr = getattr(self, "city_mgr", None)
+        if mgr is None:
+            return
+    
+        def _msg(m: str) -> None:
+            if m:
+                self.status_updated.emit(m)
+    
+        csv_path, df, _city_key = open_dataset_with_editor(
+            self,
+            gui_runs_root=Path(self.gui_runs_root),
+            initial_dir="",
+            city_hint=None,
+            normalize_city=mgr.normalize,
+            city_message_hook=_msg,
+        )
+        if csv_path is None:
+            return
+    
+        self.csv_path = str(csv_path)
+        self._edited_df = df
+    
+        try:
+            self.config_store.patch(
+                {
+                    "dataset_path": str(self.csv_path),
+                    "results_root": str(self.gui_runs_root),
+                }
+            )
+        except Exception as exc:
+            self.log_updated.emit(f"[WARN] config patch: {exc}")
+    
+        if self.data_tab is not None:
+            self.data_tab.set_dataset(
+                self.csv_path,
+                self._edited_df,
+                city=mgr.get_city(),
+                dirty=True,
+            )
+    
         self._sync_data_tab()
         self.data_tab.refresh_library(select_path=self.csv_path)
 
@@ -2873,7 +3076,7 @@ class GeoPriorForecaster(QMainWindow):
         # --------------------------------------------------------------
         if self._is_dry_mode():
             csv_path = getattr(self, "csv_path", None)
-            city_text = self.city_edit.text().strip()
+            city_text=self._get_city()
     
             exp_name = None
             if hasattr(self, "exp_name_edit"):
@@ -2891,7 +3094,7 @@ class GeoPriorForecaster(QMainWindow):
         # --------------------------------------------------------------
         preferred_manifest = None
         try:
-            city_text = self.city_edit.text().strip()
+            city_text=self._get_city()
         except Exception:
             city_text = ""
     
@@ -2981,7 +3184,7 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
     
-        city_text = self.city_edit.text().strip()
+        city_text=self._get_city()
     
         exp_name = None
         if hasattr(self, "exp_name_edit"):
@@ -3081,7 +3284,7 @@ class GeoPriorForecaster(QMainWindow):
             job = self._queued_tune_job
             self._queued_tune_job = None
     
-        city_text = self.city_edit.text().strip()
+        city_text=self._get_city()
     
         # 1) If no queued job and no city typed, try QuickTuneDialog
         if job is None and not city_text:

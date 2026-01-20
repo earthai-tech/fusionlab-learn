@@ -77,6 +77,11 @@ from fusionlab.nn.calibration import (
     apply_calibrator_to_subs,
 )
 from ..callbacks import StopCheckCallback, TunerProgressCallback
+from ..config import ( 
+    _deep_update, 
+    _store_cfg_overrides, 
+    GeoConfigStore 
+)
 
 GUI_CONFIG_DIR = os.path.dirname(__file__)
 
@@ -88,10 +93,13 @@ def run_tuning(
     stop_check: Optional[Callable[[], bool]] = None,
     evaluate_tuned: bool = False,
     progress_callback: Optional[Callable[[float, str], None]] = None,
-    base_cfg: Optional[Dict[str, Any]] = None,              
-    results_root: Optional[os.PathLike | str] = None,       
+    base_cfg: Optional[Dict[str, Any]] = None,
+    results_root: Optional[os.PathLike | str] = None,
+    store: Optional["GeoConfigStore"] = None,
+    config_overwrite: Optional[Dict[str, Any]] = None,
     **kws,
 ) -> Dict[str, Any]:
+
 
     """
     Run Stage-2 hyperparameter tuning for GeoPriorSubsNet (GeoPriorTuner).
@@ -243,20 +251,49 @@ def run_tuning(
     _progress(0.0, "Stage-2 tuning – locating Stage-1 artifacts…")
 
     # If GUI passes a base_cfg (GeoPriorConfig snapshot), prefer it.
+    # if base_cfg is not None:
+    #     cfg_hp = dict(base_cfg)
+    #     CFG_CITY = (cfg_hp.get("CITY_NAME") or "").strip().lower() or None
+    #     CFG_MODEL = cfg_hp.get("MODEL_NAME") or "GeoPriorSubsNet"
+    # else:
+    #     # Legacy path: read NATCOM payload + config.json from disk
+    #     cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
+    #     CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
+    #     CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+    #     cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
+
+    # # Apply any explicit overrides from GUI (checkboxes, spin boxes, etc.)
+    # if cfg_overrides:
+    #     cfg_hp.update(cfg_overrides)
+    
     if base_cfg is not None:
         cfg_hp = dict(base_cfg)
-        CFG_CITY = (cfg_hp.get("CITY_NAME") or "").strip().lower() or None
-        CFG_MODEL = cfg_hp.get("MODEL_NAME") or "GeoPriorSubsNet"
+        payload_city = None
+        payload_model = None
     else:
-        # Legacy path: read NATCOM payload + config.json from disk
         cfg_payload = load_nat_config_payload(root=GUI_CONFIG_DIR)
-        CFG_CITY = (cfg_payload.get("city") or "").strip().lower() or None
-        CFG_MODEL = cfg_payload.get("model") or "GeoPriorSubsNet"
+        payload_city = (cfg_payload.get("city") or "").strip().lower() or None
+        payload_model = cfg_payload.get("model") or None
         cfg_hp = load_nat_config(root=GUI_CONFIG_DIR)
 
-    # Apply any explicit overrides from GUI (checkboxes, spin boxes, etc.)
-    if cfg_overrides:
-        cfg_hp.update(cfg_overrides)
+    merged: Dict[str, Any] = {}
+    _deep_update(merged, _store_cfg_overrides(store))
+    _deep_update(merged, dict(cfg_overrides or {}))
+    _deep_update(merged, dict(config_overwrite or {}))
+
+    if merged:
+        _deep_update(cfg_hp, merged)
+
+    CFG_CITY = (
+        (cfg_hp.get("CITY_NAME") or "").strip().lower()
+        or payload_city
+        or None
+    )
+    CFG_MODEL = (
+        cfg_hp.get("MODEL_NAME")
+        or payload_model
+        or "GeoPriorSubsNet"
+    )
 
     # Configure TensorFlow devices / seeds / mixed precision
     configure_tf_from_cfg(cfg_hp, logger=log)

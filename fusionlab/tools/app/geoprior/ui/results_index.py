@@ -17,8 +17,8 @@ from typing import Dict, List, Optional
 
 import json
 
-from .config import Stage1Summary
-from .jobs import latest_jobs_for_root
+from ..config import Stage1Summary
+from ..jobs import latest_jobs_for_root
 
 
 # ---------------------------------------------------------------------

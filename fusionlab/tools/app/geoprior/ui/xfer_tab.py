@@ -184,32 +184,35 @@ class XferTab(QWidget):
         # --------------------------
         # Mini-tabs row + Run
         # --------------------------
-        mode_row = QHBoxLayout()
+        self._mode_bar = QWidget(self)
+        mode_row = QHBoxLayout(self._mode_bar)
+        mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.setSpacing(8)
-
-        self.btn_mode_map = QToolButton(self)
+        
+        self.btn_mode_map = QToolButton(self._mode_bar)
         self.btn_mode_map.setText("Map")
         self.btn_mode_map.setCheckable(True)
-
-        self.btn_mode_opts = QToolButton(self)
-        self.btn_mode_opts.setText("Options")
+        
+        self.btn_mode_opts = QToolButton(self._mode_bar)
+        self.btn_mode_opts.setText("Transfer Options")
         self.btn_mode_opts.setCheckable(True)
-
-        self._mode_group = QButtonGroup(self)
+        
+        self._mode_group = QButtonGroup(self._mode_bar)
         self._mode_group.setExclusive(True)
         self._mode_group.addButton(self.btn_mode_map, 0)
         self._mode_group.addButton(self.btn_mode_opts, 1)
-
+        
         mode_row.addWidget(self.btn_mode_map)
         mode_row.addWidget(self.btn_mode_opts)
         mode_row.addStretch(1)
-
+        
         self.btn_run_xfer = self._make_run_button(
             "Run transfer matrix"
         )
         mode_row.addWidget(self.btn_run_xfer)
-
-        root.addLayout(mode_row)
+        
+        # add the WIDGET, not the layout
+        root.addWidget(self._mode_bar)
 
         # --------------------------
         # Pages: Map + Options
@@ -462,6 +465,7 @@ class XferTab(QWidget):
             self._map_dock.setVisible(True)
     
             tb.set_expanded(True)
+            self._mode_bar.setVisible(False)
         else:
             self._map_dock_l.removeWidget(tb)
             tb.setParent(None)
@@ -471,6 +475,7 @@ class XferTab(QWidget):
             self._cards_row.setVisible(True)
     
             tb.set_expanded(False)
+            self._mode_bar.setVisible(True)
     
         if persist:
             # store "preference", not "current visible layout"

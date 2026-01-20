@@ -743,7 +743,117 @@ QToolButton#xferSegBtn:checked {{
     background: rgba(46,49,145,0.92);
     color: white;
 }}
+/* ===== Results tab (Light) ===== */
+QTableWidget#resultsTable {{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.92);
+    alternate-background-color: rgba(46,49,145,0.03);
+    outline: 0;
+}}
+QTableWidget#resultsTable::item {{
+    padding: 6px 8px;
+}}
+QTableWidget#resultsTable::item:hover {{
+    background: rgba(51,153,255,0.14);
+}}
+QTableWidget#resultsTable::item:selected {{
+    background: rgba(46,49,145,0.18);
+    color: rgba(15,23,42,0.95);
+}}
+QTableWidget#resultsTable QHeaderView::section {{
+    background: rgba(46,49,145,0.06);
+    border: none;
+    padding: 6px 10px;
+    font-weight: 700;
+}}
+QLineEdit#resultsFilter {{
+    border-radius: 10px;
+}}
 
+QFrame#resultsSummary {{
+    border: 1px solid rgba(46,49,145,0.18);
+    border-radius: 12px;
+    background: rgba(255,255,255,0.92);
+}}
+
+QLabel#resultsChip {{
+    padding: 3px 10px;
+    border-radius: 10px;
+    background: rgba(46,49,145,0.06);
+    border: 1px solid rgba(46,49,145,0.18);
+    color: rgba(30,30,30,0.88);
+    font-weight: 700;
+}}
+
+QLabel#resultsRootChip,
+QLabel#resultsScanChip {{
+    padding: 3px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(46,49,145,0.22);
+    background: rgba(46,49,145,0.06);
+    font-weight: 800;
+}}
+
+QLabel#resultsRootChip[mode="custom"] {{
+    border-color: rgba(242,134,32,0.55);
+    background: rgba(242,134,32,0.14);
+}}
+
+QLabel#resultsHint {{
+    color: rgba(100,116,139,0.95);
+    font-size: 11px;
+}}
+#toolsNavTitle {{ font-weight: 700; font-size: 12pt; }}
+#toolsNavFooter {{ color: palette(mid); font-size: 9pt; }}
+
+#toolNavTitle {{ font-weight: 650; }}
+#toolNavDesc {{ color: palette(mid); font-size: 9pt; }}
+
+#toolPageTitle {{ font-weight: 750; font-size: 12pt; }}
+#toolPageGroup {{
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: palette(midlight);
+}}
+#toolPageDesc {{ color: palette(mid); }}
+#toolPageDivider {{ color: palette(midlight); }}
+
+#toolsCmdTitle {{ font-weight: 650; }}
+#toolsCmdSearch {{
+  padding: 6px 10px;
+  border-radius: 8px;
+}}
+#toolsNavSearch {{
+  padding: 6px 10px;
+  border-radius: 8px;
+}}
+QFrame#deviceMonOptions {{
+  border: 1px solid palette(midlight);
+  border-radius: 10px;
+  padding: 6px;
+  background: palette(base);
+}}
+QTreeWidget#deviceReportTree {{
+  border: 1px solid palette(midlight);
+  border-radius: 8px;
+  background: palette(base);
+}}
+
+QTreeWidget#deviceReportTree::item {{
+  padding: 4px 6px;
+}}
+
+QTreeWidget#deviceReportTree::item:selected {{
+  background: palette(highlight);
+  color: palette(highlighted-text);
+}}
+QScrollArea#scriptGenLeftScroll {{
+  background: transparent;
+}}
+QScrollArea#scriptGenLeftScroll QWidget#scriptGenLeft {{
+  background: transparent;
+}}   
 """
 
 # ------------------------------------------------------------------ #
@@ -1332,6 +1442,118 @@ QToolButton#xferSegBtn:hover:enabled {{
 QToolButton#xferSegBtn:checked {{
     background: rgba(99,102,241,0.86);
     color: white;
+}}
+/* ===== Results tab (Dark) ===== */
+QTableWidget#resultsTable {{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: rgba(15,23,42,0.25);
+    alternate-background-color: rgba(255,255,255,0.03);
+    outline: 0;
+}}
+QTableWidget#resultsTable::item {{
+    padding: 6px 8px;
+}}
+QTableWidget#resultsTable::item:hover {{
+    background: rgba(51,153,255,0.18);
+}}
+QTableWidget#resultsTable::item:selected {{
+    background: rgba(46,49,145,0.26);
+}}
+QTableWidget#resultsTable QHeaderView::section {{
+    background: rgba(255,255,255,0.06);
+    border: none;
+    padding: 6px 10px;
+    font-weight: 700;
+    color: rgba(226,232,240,0.92);
+}}
+QLineEdit#resultsFilter {{
+    border-radius: 10px;
+}}
+
+QFrame#resultsSummary {{
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 12px;
+    background: rgba(15,23,42,0.25);
+}}
+
+QLabel#resultsChip {{
+    padding: 3px 10px;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(226,232,240,0.95);
+    font-weight: 700;
+}}
+
+QLabel#resultsRootChip,
+QLabel#resultsScanChip {{
+    padding: 3px 10px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.06);
+    color: rgba(226,232,240,0.95);
+    font-weight: 800;
+}}
+
+QLabel#resultsRootChip[mode="custom"] {{
+    border-color: rgba(242,134,32,0.45);
+    background: rgba(242,134,32,0.18);
+}}
+
+QLabel#resultsHint {{
+    color: rgba(148,163,184,0.95);
+    font-size: 11px;
+}}
+#toolsNavTitle {{ font-weight: 700; font-size: 12pt; }}
+#toolsNavFooter {{ color: palette(mid); font-size: 9pt; }}
+
+#toolNavTitle {{ font-weight: 650; }}
+#toolNavDesc {{ color: palette(mid); font-size: 9pt; }}
+
+#toolPageTitle {{ font-weight: 750; font-size: 12pt; }}
+#toolPageGroup {{
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: palette(midlight);
+}}
+#toolPageDesc {{ color: palette(mid); }}
+#toolPageDivider {{ color: palette(midlight); }}
+
+#toolsCmdTitle {{ font-weight: 650; }}    
+#toolsCmdSearch {{
+  padding: 6px 10px;
+  border-radius: 8px;
+}}
+#toolsNavSearch {{
+  padding: 6px 10px;
+  border-radius: 8px;
+}}
+QFrame#deviceMonOptions {{
+  border: 1px solid palette(midlight);
+  border-radius: 10px;
+  padding: 6px;
+  background: palette(base);
+}} 
+QTreeWidget#deviceReportTree {{
+  border: 1px solid palette(midlight);
+  border-radius: 8px;
+  background: palette(base);
+}}
+
+QTreeWidget#deviceReportTree::item {{
+  padding: 4px 6px;
+}}
+
+QTreeWidget#deviceReportTree::item:selected {{
+  background: palette(highlight);
+  color: palette(highlighted-text);
+}}
+QScrollArea#scriptGenLeftScroll {{
+  background: transparent;
+}}
+QScrollArea#scriptGenLeftScroll QWidget#scriptGenLeft {{
+  background: transparent;
 }}
                
 """

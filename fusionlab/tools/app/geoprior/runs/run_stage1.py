@@ -53,6 +53,8 @@ from .....utils.subsidence_utils import (
 from .....utils.sequence_utils import build_future_sequences_npz
 from .....nn.pinn.utils import prepare_pinn_data_sequences
 
+from ..config import _deep_update, _store_cfg_overrides, GeoConfigStore 
+
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
@@ -416,11 +418,14 @@ def run_stage1(
     logger: Optional[Callable[[str], None]] = None,
     clean_run_dir: bool = False,
     stop_check: Optional[Callable[[], bool]] = None,
-    progress_callback: Optional[Callable[[float, str], None]] = None, 
+    progress_callback: Optional[Callable[[float, str], None]] = None,
     base_cfg: Optional[Dict[str, Any]] = None,
     results_root: Optional[os.PathLike | str] = None,
     edited_df: Optional[pd.DataFrame] = None,
+    store: Optional["GeoConfigStore"] = None,
+    config_overwrite: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+
     """
     Run NATCOM GeoPrior Stage-1 for the current city.
 
@@ -502,8 +507,14 @@ def run_stage1(
 
     # 2) Apply flat overrides (from GeoPriorConfig.to_cfg_overrides, plus
     #    CITY_NAME / DATA_DIR / BIG_FN / BASE_OUTPUT_DIR, etc.).
-    if cfg_overrides:
-        cfg.update(cfg_overrides)
+    merged: Dict[str, Any] = {}
+    _deep_update(merged, _store_cfg_overrides(store))
+    _deep_update(merged, dict(cfg_overrides or {}))
+    _deep_update(merged, dict(config_overwrite or {}))
+
+    if merged:
+        _deep_update(cfg, merged)
+
 
     # 3) Decide where Stage-1 runs live.
     #    - If GUI passes results_root, we force BASE_OUTPUT_DIR to that.

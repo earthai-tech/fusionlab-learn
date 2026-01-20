@@ -344,7 +344,24 @@ _LEAFLET_HTML = r"""
       (shape !== 'circle' || pulse)
     );
 
-    function _mkCircle(lat, lon, fc, v, sid) {
+    function _tooltipText(rawTip, sid, v) {
+      let ttxt = '';
+
+      if (rawTip != null && String(rawTip).length) {
+        ttxt = String(rawTip);
+      } else {
+        if (sid != null) ttxt += `#${sid} `;
+        if (v != null && !Number.isNaN(v)) ttxt += `v=${v}`;
+      }
+
+      // Multi-line tips (from Python) -> HTML breaks for Leaflet tooltips
+      if (ttxt.indexOf('\n') >= 0) {
+        ttxt = ttxt.replace(/\n/g, '<br/>');
+      }
+      return ttxt;
+    }
+
+    function _mkCircle(lat, lon, fc, v, sid, rawTip) {
       const m = L.circleMarker([lat, lon], {
         radius: radius,
         color: stroke,
@@ -355,15 +372,13 @@ _LEAFLET_HTML = r"""
         renderer: canvas
       });
 
-      let tip = '';
-      if (sid != null) tip += `#${sid} `;
-      if (v != null && !Number.isNaN(v)) tip += `v=${v}`;
-      if (enableTip && tip) m.bindTooltip(tip);
+      const ttxt = _tooltipText(rawTip, sid, v);
+      if (enableTip && ttxt) m.bindTooltip(ttxt);
 
       m.addTo(g);
     }
 
-    function _mkHtml(lat, lon, fc, v, sid) {
+    function _mkHtml(lat, lon, fc, v, sid, rawTip) {
       const r = Math.max(2, radius);
       const cls = ['gp-mkr', String(shape)];
       if (pulse) cls.push('gp-pulse');
@@ -382,10 +397,8 @@ _LEAFLET_HTML = r"""
 
       const m = L.marker([lat, lon], { icon: ic });
 
-      let tip = '';
-      if (sid != null) tip += `#${sid} `;
-      if (v != null && !Number.isNaN(v)) tip += `v=${v}`;
-      if (enableTip && tip) m.bindTooltip(tip);
+      const ttxt = _tooltipText(rawTip, sid, v);
+      if (enableTip && ttxt) m.bindTooltip(ttxt);
 
       m.addTo(g);
     }
@@ -396,6 +409,7 @@ _LEAFLET_HTML = r"""
       const lon = Array.isArray(p) ? p[1] : p.lon;
       const v   = Array.isArray(p) ? p[2] : p.v;
       const sid = Array.isArray(p) ? p[3] : p.sid;
+      const tip = Array.isArray(p) ? p[4] : p.tip;
 
       let fc = fillColor;
       if (fillMode === 'value' && vmin != null && vmax != null) {
@@ -403,8 +417,8 @@ _LEAFLET_HTML = r"""
         fc = _ramp(t);
       }
 
-      if (useHtml) _mkHtml(lat, lon, fc, v, sid);
-      else _mkCircle(lat, lon, fc, v, sid);
+      if (useHtml) _mkHtml(lat, lon, fc, v, sid, tip);
+      else _mkCircle(lat, lon, fc, v, sid, tip);
     }
 
     g.addTo(map);
@@ -616,7 +630,7 @@ class MapView(QWidget):
         pts = []
         for p in points:
             # compact representation for JS
-            pts.append([p.lat, p.lon, p.v, p.sid])
+            pts.append([p.lat, p.lon, p.v, p.sid, p.tip])
         payload = _json_min(pts)
         o = _json_min(opts or {})
         lid = _as_js_str(layer_id)

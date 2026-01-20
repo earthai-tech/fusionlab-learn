@@ -18,12 +18,9 @@ UI controls only:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -40,6 +37,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from ...icon_utils import try_icon 
 
 @dataclass
 class DatasetChoice:
@@ -240,6 +239,7 @@ class XferMapToolbar(QWidget):
             "hotspot_top_n": int(self.sp_topn.value()),
             "pulse": bool(self.btn_pulse.isChecked()),
             "play_ms": int(self.cmb_speed.currentData() or 320),
+            "insight": bool(self.btn_insight.isChecked()),
         }
 
 
@@ -412,7 +412,8 @@ class XferMapToolbar(QWidget):
 
         # --- Shape
         self.cmb_shape = QComboBox(self)
-        self.cmb_shape.setMinimumWidth(120)
+        self.cmb_shape.setMinimumWidth(90)
+        self.cmb_shape.setMaximumWidth(120)
         self.cmb_shape.addItem("Auto", "auto")
         self.cmb_shape.addItem("Circle", "circle")
         self.cmb_shape.addItem("Triangle", "triangle")
@@ -428,6 +429,7 @@ class XferMapToolbar(QWidget):
         self.sp_size.setRange(2, 18)
         self.sp_size.setSingleStep(1)
         self.sp_size.setValue(6)
+        self.sp_size.setFixedWidth(58)
         self.sp_size.setToolTip("Marker size (px).")
 
         # --- Hotspots: Top-N
@@ -435,6 +437,7 @@ class XferMapToolbar(QWidget):
         self.sp_topn.setRange(1, 50)
         self.sp_topn.setSingleStep(1)
         self.sp_topn.setValue(8)
+        self.sp_topn.setFixedWidth(58)
         self.sp_topn.setToolTip("Hotspot count (Top-N).")
 
         # --- Pulse (hotspots)
@@ -458,6 +461,22 @@ class XferMapToolbar(QWidget):
         self.cmb_speed.setToolTip(
             "Playback speed (ms per step)."
         )
+        
+        self.btn_insight = QToolButton(self)
+        self.btn_insight.setObjectName("miniAction")
+        self.btn_insight.setAutoRaise(True)
+        self.btn_insight.setCheckable(True)
+        self.btn_insight.setToolTip(
+            "Transfer insight (A↔B)"
+        )
+        
+        ico = try_icon("xfer_insight.svg")
+        if ico is None:
+            ico = self.style().standardIcon(
+                QStyle.SP_MessageBoxInformation
+            )
+        self.btn_insight.setIcon(ico)
+        
 
         # --- Refresh
         self.btn_refresh = QToolButton(self)
@@ -474,7 +493,7 @@ class XferMapToolbar(QWidget):
         self.btn_fit.setAutoRaise(True)
         self.btn_fit.setToolTip("Fit to layers")
 
-        ico = _try_icon("mapfit_icon.svg")
+        ico = try_icon("mapfit_icon.svg")
         if ico is not None:
             self.btn_fit.setIcon(ico)
         else:
@@ -521,6 +540,7 @@ class XferMapToolbar(QWidget):
 
         act_row.addStretch(1)
 
+        act_row.addWidget(self.btn_insight)
         act_row.addWidget(self.btn_refresh)
         act_row.addWidget(self.btn_fit)
         act_row.addWidget(self.btn_reset)
@@ -534,8 +554,8 @@ class XferMapToolbar(QWidget):
         )
 
         gv.addWidget(QLabel("Value:"), 1, 0)
-        gv.addWidget(self.cmb_value, 1, 1, 1, 3)
-        gv.addWidget(w_act, 1, 4, 1, 4)
+        gv.addWidget(self.cmb_value, 1, 1)
+        gv.addWidget(w_act, 1, 2, 1, 6)
 
         gv.setColumnStretch(7, 1)
         root.addWidget(view)
@@ -607,6 +627,7 @@ class XferMapToolbar(QWidget):
         # -------------------------
         # Tooltips + sizing
         # -------------------------
+        # keep city/job/file combos in the loop (exclude cmb_value)
         for cmb in (
             self.cmb_city_a,
             self.cmb_job_a,
@@ -614,13 +635,20 @@ class XferMapToolbar(QWidget):
             self.cmb_city_b,
             self.cmb_job_b,
             self.cmb_file_b,
-            self.cmb_value,
         ):
             cmb.setSizeAdjustPolicy(
                 QComboBox.AdjustToMinimumContentsLengthWithIcon
             )
             cmb.setMinimumContentsLength(10)
-
+        
+        # now value stays compact
+        self.cmb_value.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.cmb_value.setMinimumContentsLength(6)
+        self.cmb_value.setMinimumWidth(110)
+        self.cmb_value.setMaximumWidth(180)
+        
         self.cmb_city_a.setMinimumWidth(120)
         self.cmb_job_a.setMinimumWidth(150)
         self.cmb_file_a.setMinimumWidth(240)
@@ -697,7 +725,7 @@ class XferMapToolbar(QWidget):
             self._on_speed_changed
         )
         self.cmb_speed.currentIndexChanged.connect(self.changed)
-        
+        self.btn_insight.toggled.connect(self.changed)
         # Ensure timer matches current UI speed.
         self._apply_play_ms()
 
@@ -842,6 +870,7 @@ class XferMapToolbar(QWidget):
         self.set_shared(True)
         self.set_time_mode("forecast_step")
         self.set_value("auto")
+        self.btn_insight.setChecked(False)
 
         self.set_points_mode("all")
         self.set_marker_shape("auto")
@@ -852,6 +881,13 @@ class XferMapToolbar(QWidget):
 
         self.sld_step.setValue(1)
         self.changed.emit()
+        
+    def set_insight(self, on: bool) -> None:
+        self.btn_insight.blockSignals(True)
+        try:
+            self.btn_insight.setChecked(bool(on))
+        finally:
+            self.btn_insight.blockSignals(False)
 
     def _fill_combo(
         self,
@@ -866,10 +902,3 @@ class XferMapToolbar(QWidget):
         finally:
             cmb.blockSignals(False)
 
-def _try_icon(name: str) -> Optional[QIcon]:
-    here = Path(__file__).resolve()
-    for up in range(2, 7):
-        p = here.parents[up] / "icons" / name
-        if p.exists():
-            return QIcon(str(p))
-    return None

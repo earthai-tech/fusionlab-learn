@@ -28,7 +28,7 @@ from ....config.store import GeoConfigStore
 from ...map.utils import scan_results_root
 from ...map.coord_utils import ensure_lonlat
 from ...map.hotspots import HotspotCfg, compute_hotspots
-
+from ..insights import build_xfer_badges
 from ..types import MapApi, MapPoint
 from .toolbar import DatasetChoice, XferMapToolbar
 from ..keys import (
@@ -60,6 +60,7 @@ from ..keys import (
     K_MAP_HOTSPOT_QUANTILE,
     K_MAP_ANIM_PULSE,
     K_MAP_ANIM_PLAY_MS,
+    K_MAP_INSIGHT
 
 )
 
@@ -206,7 +207,7 @@ class XferMapController(QObject):
                 K_MAP_ANIM_PLAY_MS,
                 int(st.get("play_ms") or 320),
             )
-            
+            s.set(K_MAP_INSIGHT, bool(st.get("insight")))
         try:
             self._tb.set_play_ms(
                 int(st.get("play_ms") or 320)
@@ -316,6 +317,8 @@ class XferMapController(QObject):
         self._tb.set_hotspot_topn(topn)
         self._tb.set_pulse(pulse)
         self._tb.set_play_ms(play_ms)
+        self._tb.set_insight(bool(s.get(K_MAP_INSIGHT, False)))
+
 
     def _sync_city_choices(self) -> None:
         cities = sorted(self._city_map.keys())
@@ -426,6 +429,63 @@ class XferMapController(QObject):
     
         return out
 
+    def _render_insight(
+        self,
+        *,
+        pts_out: Dict[str, pd.DataFrame],
+        overlay: str,
+    ) -> None:
+        show = bool(self._s.get(K_MAP_INSIGHT, False))
+        if not show:
+            self._v.clear_layer("XFER_AB")
+            self._v.clear_layer("XFER_BA")
+            return
+    
+        root = self._s.get("results_root", "") or ""
+        rp = Path(str(root)).expanduser()
+        if not rp.exists():
+            return
+    
+        a_city = str(self._s.get("xfer.city_a", "") or "")
+        b_city = str(self._s.get("xfer.city_b", "") or "")
+        if not a_city or not b_city:
+            return
+    
+        split = str(self._s.get(K_MAP_SPLIT, "val") or "val")
+    
+        a_df = pts_out.get("A", None)
+        b_df = pts_out.get("B", None)
+        if a_df is None or b_df is None:
+            return
+    
+        a_ctr = self._centroid(a_df)
+        b_ctr = self._centroid(b_df)
+        if a_ctr is None or b_ctr is None:
+            return
+    
+        want_ab = overlay in ("a", "both")
+        want_ba = overlay in ("b", "both")
+    
+        layers = build_xfer_badges(
+            results_root=rp,
+            city_a=a_city,
+            city_b=b_city,
+            split=split,
+            a_lat=a_ctr[0],
+            a_lon=a_ctr[1],
+            b_lat=b_ctr[0],
+            b_lon=b_ctr[1],
+            want_ab=want_ab,
+            want_ba=want_ba,
+        )
+    
+        if not want_ab:
+            self._v.clear_layer("XFER_AB")
+        if not want_ba:
+            self._v.clear_layer("XFER_BA")
+    
+        for lid, name, pts, opts in layers:
+            self._v.set_layer(lid, name, pts, opts)
 
     def _find_job(self, city_obj: Any, jk: JobKey) -> Any:
         for j in (getattr(city_obj, "jobs", []) or []):
@@ -562,6 +622,11 @@ class XferMapController(QObject):
                         )
                     except Exception:
                         pass
+                    
+        self._render_insight(
+            pts_out=pts_out,
+            overlay=overlay,
+        )
 
     def _load_points(
         self,
@@ -958,3 +1023,14 @@ class XferMapController(QObject):
             return set(keys or [])
         except Exception:
             return set()
+        
+    def _centroid(
+        self,
+        df: pd.DataFrame,
+    ) -> Optional[Tuple[float, float]]:
+        lat = pd.to_numeric(df["lat"], errors="coerce")
+        lon = pd.to_numeric(df["lon"], errors="coerce")
+        ok = lat.notna() & lon.notna()
+        if not bool(ok.any()):
+            return None
+        return float(lat[ok].mean()), float(lon[ok].mean())

@@ -70,7 +70,6 @@ def _safe_seq(
         return x
     return default
 
-
 def _maybe_remove(path: Optional[str]) -> None:
     if not path:
         return

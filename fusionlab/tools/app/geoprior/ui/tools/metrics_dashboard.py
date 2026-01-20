@@ -35,7 +35,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QDesktopServices
+from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -44,12 +45,15 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QTreeWidget,
     QTreeWidgetItem,
-    QGroupBox,
     QPlainTextEdit,
     QSplitter,
     QMessageBox,
     QFileDialog, 
     QDialog,
+    QTabWidget,
+    QLineEdit,
+    QToolButton,
+    QStyle,
 )
 
 from matplotlib.backends.backend_qt5agg import (
@@ -58,15 +62,25 @@ from matplotlib.backends.backend_qt5agg import (
 )
 from matplotlib.figure import Figure
 
-from ...styles import SECONDARY_TBLUE  
-
-
 @dataclass
 class RunEntry:
     city: str
     kind: str         # "train", "tuning", "inference"
     run_id: str       # e.g. "train_20251110-122128"
     path: Path
+
+class _Chip(QLabel):
+    def __init__(self, text: str = "", parent: Optional[QWidget] = None):
+        super().__init__(text, parent)
+        self.setObjectName("chip")
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.setMinimumHeight(22)
+        self.setStyleSheet(
+            "padding:2px 10px;"
+            "border-radius:11px;"
+            "background: palette(midlight);"
+            "color: palette(text);"
+        )
 
 # ----------------------------------------------------------------------
 # Main tool
@@ -122,146 +136,308 @@ class MetricsDashboardTool(QWidget):
 
         # Fallback: ./results
         return Path(os.getcwd()) / "results"
+    
+    def _subs_scale_to_mm(
+        self,
+        phys_eval: Optional[Dict[str, Any]],
+    ) -> Tuple[float, Optional[str], Optional[str]]:
+        """
+        Return scale factor to convert phys metrics to mm.
+    
+        Returns
+        -------
+        scale : float
+            Multiply phys subsidence metrics by this to get mm.
+        dst_unit : str or None
+            "mm" when we know we are in mm after conversion, else None.
+        src_unit : str or None
+            Original unit string from JSON, else None.
+        """
+        if not isinstance(phys_eval, dict):
+            return 1.0, None, None
+    
+        units = phys_eval.get("units", {}) or {}
+        src = str(units.get("subs_metrics_unit", "")).strip().lower()
+        if not src:
+            return 1.0, None, None
+    
+        if src == "mm":
+            return 1.0, "mm", "mm"
+    
+        if src == "m":
+            return 1.0e3, "mm", "m"
+    
+        # Unknown: do not force any unit label.
+        return 1.0, None, src
+
 
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
-
     def _init_ui(self) -> None:
-        main = QVBoxLayout(self)
-        main.setContentsMargins(6, 6, 6, 6)
-        main.setSpacing(6)
-
-        # ------- Top: root + rescan -----------------------------------
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-
-        self.lbl_root = QLabel(f"Results root: {self._results_root}")
+        self._build_ui()
+        self._connect_ui()
+    
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
+    
+        # -------------------------------------------------
+        # Header row: title + chips + actions
+        # -------------------------------------------------
+        hdr = QHBoxLayout()
+        hdr.setSpacing(8)
+    
+        title = QLabel("Metrics dashboard", self)
+        title.setStyleSheet("font-weight: 700; font-size: 12pt;")
+    
+        self._chip_group = _Chip("Diagnostics & Plots", self)
+        self._chip_status = _Chip("Idle", self)
+    
+        hdr.addWidget(title)
+        hdr.addWidget(self._chip_group)
+        hdr.addStretch(1)
+        hdr.addWidget(self._chip_status)
+    
+        self._btn_plot_tools = QToolButton(self)
+        self._btn_plot_tools.setCheckable(True)
+        self._btn_plot_tools.setAutoRaise(True)
+        self._btn_plot_tools.setToolTip("Show / hide plot tools")
+        self._btn_plot_tools.setIcon(
+            self.style().standardIcon(QStyle.SP_TitleBarMenuButton)
+        )
+    
+        self._btn_open_root = QToolButton(self)
+        self._btn_open_root.setAutoRaise(True)
+        self._btn_open_root.setToolTip("Open results root in explorer")
+        self._btn_open_root.setIcon(
+            self.style().standardIcon(QStyle.SP_DirOpenIcon)
+        )
+    
+        hdr.addWidget(self._btn_plot_tools)
+        hdr.addWidget(self._btn_open_root)
+    
+        root.addLayout(hdr)
+    
+        # -------------------------------------------------
+        # Root bar: path + buttons
+        # -------------------------------------------------
+        top = QHBoxLayout()
+        top.setSpacing(8)
+    
+        self.lbl_root = QLabel(f"Results root: {self._results_root}", self)
         self.lbl_root.setTextInteractionFlags(Qt.TextSelectableByMouse)
-
-        self.btn_change_root = QPushButton("Change root…")
-        self.btn_change_root.setStyleSheet(
-            f"QPushButton:hover {{ background-color: {SECONDARY_TBLUE}; }}"
+    
+        self.btn_change_root = QPushButton("Change root…", self)
+        self.btn_rescan = QPushButton("Rescan runs", self)
+    
+        top.addWidget(self.lbl_root, 1)
+        top.addWidget(self.btn_change_root)
+        top.addWidget(self.btn_rescan)
+    
+        root.addLayout(top)
+    
+        # -------------------------------------------------
+        # Middle: runs + summary (splitter)
+        # -------------------------------------------------
+        mid = QSplitter(Qt.Horizontal, self)
+        mid.setChildrenCollapsible(False)
+    
+        # ---- Runs panel
+        runs_panel = QWidget(self)
+        runs_lay = QVBoxLayout(runs_panel)
+        runs_lay.setContentsMargins(0, 0, 0, 0)
+        runs_lay.setSpacing(6)
+    
+        filt_row = QHBoxLayout()
+        filt_row.setSpacing(6)
+    
+        self.edit_filter = QLineEdit(self)
+        self.edit_filter.setPlaceholderText(
+            "Filter city / kind / run id..."
         )
-
-        self.btn_rescan = QPushButton("Rescan runs")
-        self.btn_rescan.setStyleSheet(
-            f"QPushButton:hover {{ background-color: {SECONDARY_TBLUE}; }}"
+    
+        self.btn_clear_filter = QToolButton(self)
+        self.btn_clear_filter.setAutoRaise(True)
+        self.btn_clear_filter.setToolTip("Clear filter")
+        self.btn_clear_filter.setIcon(
+            self.style().standardIcon(QStyle.SP_LineEditClearButton)
         )
-
-        top_row.addWidget(self.lbl_root, 1)
-        top_row.addWidget(self.btn_change_root)
-        top_row.addWidget(self.btn_rescan)
-        main.addLayout(top_row)
-
-        # ------- Middle: run list + summary ---------------------------
-        mid = QHBoxLayout()
-        mid.setSpacing(8)
-
-        # Left: tree of runs
-        runs_group = QGroupBox("Available runs")
-        runs_layout = QVBoxLayout(runs_group)
-        runs_layout.setContentsMargins(6, 6, 6, 6)
-        runs_layout.setSpacing(4)
-
-        self.tree_runs = QTreeWidget()
+    
+        filt_row.addWidget(self.edit_filter, 1)
+        filt_row.addWidget(self.btn_clear_filter)
+    
+        runs_lay.addLayout(filt_row)
+    
+        self.tree_runs = QTreeWidget(self)
         self.tree_runs.setHeaderLabels(["City", "Kind", "Run id"])
-        self.tree_runs.setColumnWidth(0, 130)
-        self.tree_runs.setColumnWidth(1, 80)
         self.tree_runs.setAlternatingRowColors(True)
-        runs_layout.addWidget(self.tree_runs)
-
-        mid.addWidget(runs_group, 2)
-
-        # Right: summary
-        summary_group = QGroupBox("Run summary")
-        summary_layout = QVBoxLayout(summary_group)
-        summary_layout.setContentsMargins(6, 6, 6, 6)
-        summary_layout.setSpacing(4)
-
-        self.summary_edit = QPlainTextEdit()
+        self.tree_runs.setRootIsDecorated(True)
+        self.tree_runs.setUniformRowHeights(True)
+    
+        self.tree_runs.setColumnWidth(0, 140)
+        self.tree_runs.setColumnWidth(1, 90)
+    
+        runs_lay.addWidget(self.tree_runs, 1)
+    
+        mid.addWidget(runs_panel)
+    
+        # ---- Summary panel
+        summary_panel = QWidget(self)
+        sum_lay = QVBoxLayout(summary_panel)
+        sum_lay.setContentsMargins(0, 0, 0, 0)
+        sum_lay.setSpacing(6)
+    
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        self._chip_run = _Chip("No run", self)
+        self._chip_units = _Chip("Units: —", self)
+        chips.addWidget(self._chip_run)
+        chips.addWidget(self._chip_units)
+        chips.addStretch(1)
+        sum_lay.addLayout(chips)
+    
+        self.summary_edit = QPlainTextEdit(self)
         self.summary_edit.setReadOnly(True)
-        self.summary_edit.setMinimumWidth(260)
-        summary_layout.addWidget(self.summary_edit)
-
-        mid.addWidget(summary_group, 1)
-
-        main.addLayout(mid, stretch=1)
-
-        # ------- Bottom: plots (splitter) -----------------------------
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setChildrenCollapsible(False)
-
-        # -- Core metrics figure
-        core_group = QGroupBox("Core metrics (overall + per horizon)")
-        core_v = QVBoxLayout(core_group)
+        self.summary_edit.setMinimumWidth(300)
+        sum_lay.addWidget(self.summary_edit, 1)
+    
+        mid.addWidget(summary_panel)
+        mid.setStretchFactor(0, 3)
+        mid.setStretchFactor(1, 2)
+    
+        root.addWidget(mid, 1)
+    
+        # -------------------------------------------------
+        # Bottom: plots as tabs (cleaner + modern)
+        # -------------------------------------------------
+        self.tabs = QTabWidget(self)
+        self.tabs.setDocumentMode(True)
+    
+        # --- Core tab
+        core_tab = QWidget(self)
+        core_v = QVBoxLayout(core_tab)
         core_v.setContentsMargins(6, 6, 6, 6)
-        core_v.setSpacing(4)
-
-        # --- pop-out button for core metrics -------------------------
-        core_btn_row = QHBoxLayout()
-        core_btn_row.addStretch(1)
-        self.btn_pop_core = QPushButton("Pop out…")
-        self.btn_pop_core.setToolTip(
-            "Open core metrics in a larger window."
-        )
+        core_v.setSpacing(6)
+    
+        core_actions = QHBoxLayout()
+        core_actions.setSpacing(6)
+    
+        self.btn_pop_core = QPushButton("Pop out…", self)
         self.btn_pop_core.setMaximumWidth(110)
-        core_btn_row.addWidget(self.btn_pop_core)
-        core_v.addLayout(core_btn_row)
-
+    
+        core_actions.addStretch(1)
+        core_actions.addWidget(self.btn_pop_core)
+        core_v.addLayout(core_actions)
+    
         self.fig_core = Figure(figsize=(5, 3), tight_layout=True)
         self.canvas_core = FigureCanvas(self.fig_core)
         self.toolbar_core = NavigationToolbar(self.canvas_core, self)
-
+        self.toolbar_core.setVisible(False)
+        self.toolbar_core.setMovable(False)
+        self.toolbar_core.setFloatable(False)
+    
         core_v.addWidget(self.toolbar_core)
-        core_v.addWidget(self.canvas_core)
-
-        splitter.addWidget(core_group)
-
-        # -- PIT / reliability figure
-        pit_group = QGroupBox("PIT / reliability diagnostics")
-        pit_v = QVBoxLayout(pit_group)
+        core_v.addWidget(self.canvas_core, 1)
+    
+        # --- PIT tab
+        pit_tab = QWidget(self)
+        pit_v = QVBoxLayout(pit_tab)
         pit_v.setContentsMargins(6, 6, 6, 6)
-        pit_v.setSpacing(4)
-
-        # --- pop-out button for PIT / reliability --------------------
-        pit_btn_row = QHBoxLayout()
-        pit_btn_row.addStretch(1)
-        self.btn_pop_pit = QPushButton("Pop out…")
-        self.btn_pop_pit.setToolTip(
-            "Open PIT / reliability diagnostics in a larger window."
-        )
+        pit_v.setSpacing(6)
+    
+        pit_actions = QHBoxLayout()
+        pit_actions.setSpacing(6)
+    
+        self.btn_pop_pit = QPushButton("Pop out…", self)
         self.btn_pop_pit.setMaximumWidth(110)
-        pit_btn_row.addWidget(self.btn_pop_pit)
-        pit_v.addLayout(pit_btn_row)
-
+    
+        pit_actions.addStretch(1)
+        pit_actions.addWidget(self.btn_pop_pit)
+        pit_v.addLayout(pit_actions)
+    
         self.fig_pit = Figure(figsize=(5, 2.5), tight_layout=True)
         self.canvas_pit = FigureCanvas(self.fig_pit)
         self.toolbar_pit = NavigationToolbar(self.canvas_pit, self)
-
+        self.toolbar_pit.setVisible(False)
+        self.toolbar_pit.setMovable(False)
+        self.toolbar_pit.setFloatable(False)
+    
         pit_v.addWidget(self.toolbar_pit)
-        pit_v.addWidget(self.canvas_pit)
+        pit_v.addWidget(self.canvas_pit, 1)
+    
+        self.tabs.addTab(core_tab, "Core metrics")
+        self.tabs.addTab(pit_tab, "PIT / reliability")
+        self.tabs.currentChanged.connect(self._sync_plot_toolbar)
+    
+        root.addWidget(self.tabs, 2)
 
-        splitter.addWidget(pit_group)
-
-        # preferable default: give a bit more height to first figure
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-
-        main.addWidget(splitter, stretch=2)
-
-        # ------- Connections ------------------------------------------
+    def _connect_ui(self) -> None:
         self.btn_change_root.clicked.connect(self._on_change_root)
         self.btn_rescan.clicked.connect(self._scan_and_populate)
-        self.tree_runs.currentItemChanged.connect(
-            self._on_run_selected
-        )
+    
+        self.tree_runs.currentItemChanged.connect(self._on_run_selected)
+    
         self.btn_pop_core.clicked.connect(self._show_core_popup)
         self.btn_pop_pit.clicked.connect(self._show_pit_popup)
+    
+        self._btn_plot_tools.toggled.connect(
+            self._on_plot_tools_toggled
+        )
+        self._btn_open_root.clicked.connect(self._on_open_root)
+    
+        self.edit_filter.textChanged.connect(self._apply_filter)
+        self.btn_clear_filter.clicked.connect(
+            lambda: self.edit_filter.setText("")
+        )
+        
+    def _sync_plot_toolbar(self, _i: int = 0) -> None:
+        on = bool(self._btn_plot_tools.isChecked())
+    
+        self.toolbar_core.setVisible(
+            on and self.tabs.currentIndex() == 0
+        )
+        self.toolbar_pit.setVisible(
+            on and self.tabs.currentIndex() == 1
+        )
 
     # ------------------------------------------------------------------
     # Run discovery
     # ------------------------------------------------------------------
+    def _on_plot_tools_toggled(self, _on: bool) -> None:
+        self._sync_plot_toolbar()
+
+    def _on_open_root(self) -> None:
+        p = str(self._results_root)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+    
+    def _apply_filter(self) -> None:
+        q = self.edit_filter.text().strip().lower()
+    
+        for i in range(self.tree_runs.topLevelItemCount()):
+            city_item = self.tree_runs.topLevelItem(i)
+            any_child = False
+    
+            for j in range(city_item.childCount()):
+                it = city_item.child(j)
+                entry = it.data(0, Qt.UserRole)
+    
+                if entry is None:
+                    it.setHidden(False)
+                    any_child = True
+                    continue
+    
+                text = (
+                    f"{entry.city} {entry.kind} {entry.run_id}"
+                ).lower()
+    
+                hit = (q in text) if q else True
+                it.setHidden(not hit)
+                if hit:
+                    any_child = True
+    
+            city_item.setHidden(not any_child)
 
     def _scan_and_populate(self) -> None:
         """
@@ -359,10 +535,12 @@ class MetricsDashboardTool(QWidget):
         self.tree_runs.expandAll()
 
         if not self._runs:
+            self._chip_status.setText("No runs")
             self.summary_edit.setPlainText(
                 f"[Info] No runs found under:\n{root}"
             )
         else:
+            self._chip_status.setText("Ready")
             self.summary_edit.setPlainText(
                 "[Info] Select a run on the left to view metrics."
             )
@@ -429,6 +607,27 @@ class MetricsDashboardTool(QWidget):
         self._last_phys_eval = phys_eval
         self._last_pit_data = pit_data
         self._last_reliab_data = reliab_data
+        
+        self._chip_run.setText(
+            f"{entry.city} / {entry.kind} / {entry.run_id}"
+        )
+        
+        scale, dst_unit, src_unit = self._subs_scale_to_mm(phys_eval)
+        
+        if src_unit == "m" and dst_unit == "mm":
+            phys_txt = "m → mm"
+        elif src_unit == "mm":
+            phys_txt = "mm"
+        elif src_unit:
+            phys_txt = src_unit
+        else:
+            phys_txt = "—"
+        
+        self._chip_units.setText(
+            f"Units: diag=mm, phys={phys_txt}"
+        )
+        
+        self._chip_status.setText("OK")
 
         self._update_summary(entry, eval_diag, phys_eval, phys_params)
         self._update_core_plot(eval_diag, phys_eval)
@@ -530,9 +729,24 @@ class MetricsDashboardTool(QWidget):
             pdg = phys_eval.get("physics_diagnostics", {})
 
             lines.append("Point metrics:")
-            for key in ("mae", "mse", "r2"):
-                if key in pm:
-                    lines.append(f"  {key}: {pm[key]:.4g}")
+            scale, yunit, _src = self._subs_scale_to_mm(phys_eval)
+            
+            if "mae" in pm:
+                v = float(pm["mae"]) * scale if yunit == "mm" else pm["mae"]
+                suf = f" {yunit}" if yunit else ""
+                lines.append(f"  mae: {v:.4g}{suf}")
+            
+            if "mse" in pm:
+                if yunit == "mm":
+                    v = float(pm["mse"]) * (scale ** 2)
+                    suf = f" {yunit}^2"
+                else:
+                    v = pm["mse"]
+                    suf = ""
+                lines.append(f"  mse: {v:.4g}{suf}")
+            
+            if "r2" in pm:
+                lines.append(f"  r2: {float(pm['r2']):.4g}")
 
             if "subs_pred_mae" in me or "subs_pred_mse" in me:
                 lines.append("")
@@ -710,7 +924,7 @@ class MetricsDashboardTool(QWidget):
             ax = axs[0]
             ax.plot(xs, mae, marker="o", linewidth=1.8)
             ax.set_title("Overall MAE vs year")
-            ax.set_ylabel("MAE")
+            ax.set_ylabel("MAE (mm)")
             ax.grid(True, alpha=0.3)
 
             ax2 = ax.twinx()
@@ -756,18 +970,22 @@ class MetricsDashboardTool(QWidget):
 
         # --- panel 3: per-horizon MAE --------------------------------
         if phys_eval is not None:
-            ph = phys_eval.get("per_horizon", {})
-            ph_mae = ph.get("mae", {})
+            ph = phys_eval.get("per_horizon", {}) or {}
+            ph_mae = ph.get("mae", {}) or {}
+        
             if ph_mae:
+                scale, yunit, _src = self._subs_scale_to_mm(phys_eval)
+                ylabel = f"MAE ({yunit})" if yunit else "MAE"
+        
                 hs = sorted(ph_mae.keys())
                 xs = list(range(1, len(hs) + 1))
-                ys = [ph_mae[h] for h in hs]
-
+                ys = [float(ph_mae[h]) * scale for h in hs]
+        
                 ax = axs[2]
                 ax.plot(xs, ys, marker="o", linewidth=1.8)
                 ax.set_title("Per-horizon MAE")
                 ax.set_xlabel("Horizon")
-                ax.set_ylabel("MAE")
+                ax.set_ylabel(ylabel)
                 ax.grid(True, alpha=0.3)
             else:
                 axs[2].set_axis_off()

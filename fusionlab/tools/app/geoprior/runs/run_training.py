@@ -123,6 +123,11 @@ from ..callbacks import (
     GuiEpochLogger, 
     GuiMetricLogger
 )
+from ..config import ( 
+    _deep_update, 
+    _store_cfg_overrides, 
+    GeoConfigStore 
+)
 
 # Silence TF chatter
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -144,15 +149,6 @@ def _coerce_quantile_weights(d: dict | None, default: dict) -> dict:
             q = k
         out[q] = float(v)
     return out
-
-
-def _deep_update(base: dict, upd: dict) -> dict:
-    for k, v in (upd or {}).items():
-        if isinstance(v, dict) and isinstance(base.get(k), dict):
-            _deep_update(base[k], v)
-        else:
-            base[k] = v
-    return base
 
 
 def _pick_scaler_key(
@@ -211,7 +207,6 @@ class _ProgressCallback(tf.keras.callbacks.Callback):
         pct = max(0, min(100, pct))
         self._on_pct(pct)
 
-
 def run_training(
     manifest_path: Optional[str] = None,
     cfg_overrides: Optional[Dict[str, Any]] = None,
@@ -221,8 +216,11 @@ def run_training(
     base_cfg: Optional[Dict[str, Any]] = None,
     results_root: Optional[os.PathLike | str] = None,
     evaluate_training: bool = True,
+    store: Optional["GeoConfigStore"] = None,
+    config_overwrite: Optional[Dict[str, Any]] = None,
     **kws,
 ) -> Dict[str, Any]:
+
     """
     Run Stage-2 training & evaluation for GeoPriorSubsNet (GUI).
     """
@@ -353,6 +351,10 @@ def run_training(
             "config",
         )
         cfg_global = load_nat_config(root=config_root)
+        
+    store_ov = _store_cfg_overrides(store)
+    if store_ov:
+        cfg_global = _deep_update(cfg_global, store_ov)
 
     cfg_manifest = M.get("config", {}) or {}
 
@@ -363,13 +365,17 @@ def run_training(
         verbose=False,
     )
 
-    if cfg_overrides:
-        cfg = _deep_update(cfg, dict(cfg_overrides))
+    post: Dict[str, Any] = {}
+    _deep_update(post, dict(cfg_overrides or {}))
+    _deep_update(post, dict(config_overwrite or {}))
+
+    if post:
+        cfg = _deep_update(cfg, post)
 
     device_info = configure_tf_from_cfg(cfg, logger=log)
 
     CITY_NAME = M.get("city", cfg.get("CITY_NAME", "nansha"))
-    MODEL_ENV = (cfg_overrides or {}).get("MODEL_NAME_OVERRIDE")
+    MODEL_ENV = (post or {}).get("MODEL_NAME_OVERRIDE")
     MODEL_NAME = MODEL_ENV or cfg.get("MODEL_NAME", "GeoPriorSubsNet")
 
     DEBUG = bool(cfg.get("DEBUG", False))

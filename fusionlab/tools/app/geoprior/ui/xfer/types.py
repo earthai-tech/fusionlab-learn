@@ -47,6 +47,7 @@ class MapPoint:
     lon: float
     v: float
     sid: Optional[int] = None
+    tip: Optional[str] = None
 
 
 @dataclass(frozen=True)

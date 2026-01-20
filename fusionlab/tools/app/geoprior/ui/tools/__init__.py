@@ -15,8 +15,11 @@ from .metrics_dashboard import MetricsDashboardTool
 from .run_comparison import RunComparisonTool 
 from .physics_diagnostics import PhysicsDiagnosticsTool
 from .identifiability import IdentifiabilityTool
-
+from .json_viewer import JsonViewerTool
 from .env_check import EnvironmentCheckTool
+from .device_monitor import DeviceMonitorTool
+from .paths_permissions import PathsPermissionsTool
+from .script_generator import ScriptGeneratorTool
 
 __all__ = [
     "DatasetExplorerTool",
@@ -31,4 +34,8 @@ __all__ = [
     "RunComparisonTool", 
     "PhysicsDiagnosticsTool", 
     "IdentifiabilityTool",
+    "JsonViewerTool", 
+    "DeviceMonitorTool", 
+    "PathsPermissionsTool", 
+    "ScriptGeneratorTool", 
 ]

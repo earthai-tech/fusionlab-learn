@@ -62,6 +62,8 @@ K_MAP_B_JOB_ID = "xfer.map.b.job_id"
 K_MAP_B_FILE = "xfer.map.b.file"
 K_MAP_EXPANDED = "xfer.map.expanded"
 
+# Map insight (transferability badge)
+K_MAP_INSIGHT = "xfer.map.insight"
 
 DEFAULTS: Dict[str, object] = {
     K_VIEW_MODE: "map",
@@ -97,6 +99,7 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_B_JOB_KIND: None,
     K_MAP_B_JOB_ID: None,
     K_MAP_B_FILE: "",
+    K_MAP_INSIGHT: False,
     
 }
 
@@ -132,4 +135,5 @@ def map_keys() -> Set[str]:
         K_MAP_B_JOB_KIND,
         K_MAP_B_JOB_ID,
         K_MAP_B_FILE,
+        K_MAP_INSIGHT,
     }

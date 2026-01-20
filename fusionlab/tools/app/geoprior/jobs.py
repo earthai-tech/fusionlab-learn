@@ -17,8 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Literal
 
-from .config import Stage1Summary, discover_stage1_runs
-
+from .config import ( 
+    GeoConfigStore, 
+    Stage1Summary, 
+    discover_stage1_runs
+)
 
 JobMode = Literal["reuse", "rebuild"]
 
@@ -45,6 +48,24 @@ class TuneRunInfo:
     summary_path: Optional[Path]
     summary: Optional[Dict[str, Any]]
 
+def _resolve_current_cfg(
+    *,
+    current_cfg: Optional[Dict[str, Any]],
+    store: Optional["GeoConfigStore"],
+    config_overwrite: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    base: Dict[str, Any] = dict(current_cfg or {})
+
+    if not base and store is not None:
+        try:
+            base = dict(store.snapshot_overrides() or {})
+        except Exception:
+            base = {}
+
+    if config_overwrite:
+        base.update(config_overwrite)
+
+    return base or None
 
 def _latest_tune_run_for_stage1(
         stage1_dir: Path, city: str
@@ -95,10 +116,13 @@ def _latest_tune_run_for_stage1(
         summary=summary,
     )
 
-
 def discover_tune_jobs_for_root(
-        results_root: Path
-    ) -> Dict[str, TuneRunInfo]:
+    results_root: Path,
+    *,
+    store: Optional["GeoConfigStore"] = None,
+    current_cfg: Optional[Dict[str, Any]] = None,
+    config_overwrite: Optional[Dict[str, Any]] = None,
+) -> Dict[str, TuneRunInfo]:
     """
     Return a mapping of city -> latest tuning run info (if any) for the
     given results root.
@@ -120,13 +144,15 @@ def discover_tune_jobs_for_root(
         Mapping ``city -> TuneRunInfo`` for cities with at least one
         tuning run.
     """
-
     results_root = Path(results_root)
-
     tune_infos: Dict[str, TuneRunInfo] = {}
 
-    # Reuse existing Stage-1 discovery via TrainJobSpec
-    for job in latest_jobs_for_root(results_root):
+    for job in latest_jobs_for_root(
+        results_root,
+        current_cfg=current_cfg,
+        store=store,
+        config_overwrite=config_overwrite,
+    ):
         # Skip cities that don't actually have a Stage-1 summary
         if job.stage1_summary is None:
             continue
@@ -194,10 +220,12 @@ class TrainJobSpec:
             return None
         return self.stage1_summary.timestamp
 
-
 def group_stage1_by_city(
     results_root: Path,
     current_cfg: Optional[Dict[str, Any]] = None,
+    *,
+    store: Optional["GeoConfigStore"] = None,
+    config_overwrite: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, List[Stage1Summary]]:
     """
     Group all discovered Stage-1 runs by city.
@@ -221,7 +249,15 @@ def group_stage1_by_city(
         timestamp).
     """
     results_root = Path(results_root)
-    summaries = discover_stage1_runs(results_root, current_cfg=current_cfg)
+    cur = _resolve_current_cfg(
+        current_cfg=current_cfg,
+        store=store,
+        config_overwrite=config_overwrite,
+    )
+    summaries = discover_stage1_runs(
+        results_root,
+        current_cfg=cur,
+    )
 
     by_city: Dict[str, List[Stage1Summary]] = {}
     for s in summaries:
@@ -233,6 +269,9 @@ def latest_jobs_for_root(
     results_root: Path,
     current_cfg: Optional[Dict[str, Any]] = None,
     default_mode: JobMode = "reuse",
+    *,
+    store: Optional["GeoConfigStore"] = None,
+    config_overwrite: Optional[Dict[str, Any]] = None,
 ) -> List[TrainJobSpec]:
     """
     Build one :class:`TrainJobSpec` per city under ``results_root``.
@@ -258,7 +297,12 @@ def latest_jobs_for_root(
         Jobs are sorted alphabetically by city name.
     """
     results_root = Path(results_root)
-    by_city = group_stage1_by_city(results_root, current_cfg=current_cfg)
+    by_city = group_stage1_by_city(
+        results_root,
+        current_cfg=current_cfg,
+        store=store,
+        config_overwrite=config_overwrite,
+    )
 
     jobs: List[TrainJobSpec] = []
     for city, runs in by_city.items():

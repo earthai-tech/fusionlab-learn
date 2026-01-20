@@ -13,7 +13,7 @@ GUI can stream logs and later wire progress bars.
 
 from __future__ import annotations
 
-import os 
+import os
 from abc import ABC, abstractmethod
 from typing import (
     Any,
@@ -22,7 +22,9 @@ from typing import (
     Optional,
     Sequence,
 )
+from typing import TYPE_CHECKING
 
+from .config.store import GeoConfigStore
 from .runs.run_stage1 import run_stage1
 from .runs.run_training import run_training
 from .runs.run_tuning import run_tuning
@@ -34,12 +36,14 @@ from .services.xfer_view import (
     make_transferability_panel_from_csv,
     make_cross_transfer_from_json,
 )
+from .config.overrides import _merge_overrides
 
+if TYPE_CHECKING:
+    import pandas as pd
 
 LogFn = Callable[[str], None]
 StopCheckFn = Callable[[], bool]
 ProgressHook = Callable[[float, Optional[str]], None]
-
 
 class AppJob(ABC):
     """Small base class for long-running GUI jobs."""
@@ -91,21 +95,17 @@ class Stage1Job(AppJob):
     def __init__(
         self,
         city: str,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         *,
+        store: Optional["GeoConfigStore"] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         clean_run_dir: bool = True,
-        base_cfg: Optional[Dict[str, Any]] = None,         
-        results_root: Optional[os.PathLike | str] = None,  
-        edited_df: Optional[pd.DataFrame] = None,      
+        base_cfg: Optional[Dict[str, Any]] = None,
+        results_root: Optional[os.PathLike | str] = None,
+        edited_df: Optional["pd.DataFrame"] = None,
         logger: Optional[LogFn] = None,
-        stop_check: Optional[
-            StopCheckFn
-        ] = None,
-        progress_hook: Optional[
-            ProgressHook
-        ] = None,
+        stop_check: Optional[StopCheckFn] = None,
+        progress_hook: Optional[ProgressHook] = None,
     ) -> None:
         super().__init__(
             logger=logger,
@@ -114,16 +114,19 @@ class Stage1Job(AppJob):
         )
         self.city = city
         self.clean_run_dir = clean_run_dir
-        self.base_cfg = base_cfg              
-        self.results_root = results_root      
-        self.edited_df = edited_df 
-        
-        overrides: Dict[str, Any] = dict(
-            cfg_overrides or {}
+        self.base_cfg = base_cfg
+        self.results_root = results_root
+        self.edited_df = edited_df
+
+        self.store = store
+        self.config_overwrite = config_overwrite
+
+        city_ov = {"CITY_NAME": city} if city else {}
+        self.cfg_overrides = _merge_overrides(
+            cfg_overrides,
+            city_ov,
         )
-        if city:
-            overrides.setdefault("CITY_NAME", city)
-        self.cfg_overrides = overrides
+
 
     def run(self) -> Dict[str, Any]:
         self.log(
@@ -139,17 +142,18 @@ class Stage1Job(AppJob):
 
         result = run_stage1(
             cfg_overrides=self.cfg_overrides,
+            store=self.store,
+            config_overwrite=self.config_overwrite,
             logger=self.log,
             clean_run_dir=self.clean_run_dir,
             stop_check=self.should_stop,
-            progress_callback=self.update_progress, 
-            base_cfg=self.base_cfg,               
-            results_root=self.results_root, 
+            progress_callback=self.update_progress,
+            base_cfg=self.base_cfg,
+            results_root=self.results_root,
             edited_df=self.edited_df,
         )
         self.last_result = result
         return result
-
 
 class TrainingJob(AppJob):
     """Run Stage-2 training as a job."""
@@ -157,20 +161,16 @@ class TrainingJob(AppJob):
     def __init__(
         self,
         manifest_path: Optional[str] = None,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         *,
+        store: Optional["GeoConfigStore"] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         evaluate_training: bool = True,
-        base_cfg: Optional[Dict[str, Any]] = None,            
-        results_root: Optional[os.PathLike | str] = None,     
+        base_cfg: Optional[Dict[str, Any]] = None,
+        results_root: Optional[os.PathLike | str] = None,
         logger: Optional[LogFn] = None,
-        stop_check: Optional[
-            StopCheckFn
-        ] = None,
-        progress_hook: Optional[
-            ProgressHook
-        ] = None,
+        stop_check: Optional[StopCheckFn] = None,
+        progress_hook: Optional[ProgressHook] = None,
     ) -> None:
         super().__init__(
             logger=logger,
@@ -178,10 +178,14 @@ class TrainingJob(AppJob):
             progress_hook=progress_hook,
         )
         self.manifest_path = manifest_path
-        self.cfg_overrides = dict(cfg_overrides or {})
         self.evaluate_training = evaluate_training
-        self.base_cfg = base_cfg               
-        self.results_root = results_root        
+        self.base_cfg = base_cfg
+        self.results_root = results_root
+
+        self.store = store
+        self.config_overwrite = config_overwrite
+        self.cfg_overrides = cfg_overrides
+    
 
     def run(self) -> Dict[str, Any]:
         self.log("[TrainingJob] Stage-2 training.")
@@ -196,12 +200,14 @@ class TrainingJob(AppJob):
         result = run_training(
             manifest_path=self.manifest_path,
             cfg_overrides=self.cfg_overrides,
+            store=self.store,
+            config_overwrite=self.config_overwrite,
             logger=self.log,
             stop_check=self.should_stop,
             evaluate_training=self.evaluate_training,
-            progress_callback=self.update_progress, 
-            base_cfg=self.base_cfg,                  
-            results_root=self.results_root,          
+            progress_callback=self.update_progress,
+            base_cfg=self.base_cfg,
+            results_root=self.results_root,
         )
         self.last_result = result
         return result
@@ -213,20 +219,16 @@ class TuningJob(AppJob):
     def __init__(
         self,
         manifest_path: Optional[str] = None,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         *,
+        store: Optional["GeoConfigStore"] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         evaluate_tuned: bool = False,
-        base_cfg: Optional[Dict[str, Any]] = None,              
-        results_root: Optional[os.PathLike | str] = None,       
+        base_cfg: Optional[Dict[str, Any]] = None,
+        results_root: Optional[os.PathLike | str] = None,
         logger: Optional[LogFn] = None,
-        stop_check: Optional[
-            StopCheckFn
-        ] = None,
-        progress_hook: Optional[
-            ProgressHook
-        ] = None,
+        stop_check: Optional[StopCheckFn] = None,
+        progress_hook: Optional[ProgressHook] = None,
     ) -> None:
         super().__init__(
             logger=logger,
@@ -234,10 +236,14 @@ class TuningJob(AppJob):
             progress_hook=progress_hook,
         )
         self.manifest_path = manifest_path
-        self.cfg_overrides = dict(cfg_overrides or {})
         self.evaluate_tuned = evaluate_tuned
-        self.base_cfg = base_cfg                                  
-        self.results_root = results_root  
+        self.base_cfg = base_cfg
+        self.results_root = results_root
+
+        self.store = store
+        self.config_overwrite = config_overwrite
+        self.cfg_overrides = cfg_overrides
+
 
     def run(self) -> Dict[str, Any]:
         self.log("[TuningJob] Hyperparameter search.")
@@ -252,13 +258,16 @@ class TuningJob(AppJob):
         result = run_tuning(
             manifest_path=self.manifest_path,
             cfg_overrides=self.cfg_overrides,
+            store=self.store,
+            config_overwrite=self.config_overwrite,
             logger=self.log,
             stop_check=self.should_stop,
             evaluate_tuned=self.evaluate_tuned,
-            progress_callback=self.update_progress, 
-            base_cfg=self.base_cfg,                
-            results_root=self.results_root,       
+            progress_callback=self.update_progress,
+            base_cfg=self.base_cfg,
+            results_root=self.results_root,
         )
+
         self.last_result = result
         return result
 
@@ -283,6 +292,8 @@ class InferenceJob(AppJob):
         include_gwl: bool = False,
         batch_size: int = 32,
         make_plots: bool = True,
+        store: Optional["GeoConfigStore"] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         cfg_overrides: Optional[
             Dict[str, Any]
         ] = None,          
@@ -315,7 +326,11 @@ class InferenceJob(AppJob):
         self.include_gwl = include_gwl
         self.batch_size = batch_size
         self.make_plots = make_plots
-        self.cfg_overrides = dict(cfg_overrides or {})
+        self.store = store
+        self.cfg_overrides = _merge_overrides(
+            cfg_overrides,
+            config_overwrite,  # deprecated compat
+        )
 
     def run(self) -> Dict[str, Any]:
         self.log("[InferenceJob] Stage-3 inference.")
@@ -341,6 +356,7 @@ class InferenceJob(AppJob):
             include_gwl=self.include_gwl,
             batch_size=self.batch_size,
             make_plots=self.make_plots,
+            store=self.store,
             cfg_overrides=self.cfg_overrides,
             logger=self.log,
             stop_check=self.should_stop,
@@ -357,7 +373,7 @@ class XferMatrixJob(AppJob):
         city_a: str,
         city_b: str,
         *,
-        store: Optional[Any] = None,
+        store: Optional["GeoConfigStore"] = None,
         results_dir: str = "results",
         results_root: Optional[str] = None,
         splits: Sequence[str] = ("val", "test"),

@@ -349,21 +349,25 @@ class MenuManager:
                     _toast(f"Theme switch failed: {exc}")
         
         act_dark.toggled.connect(_on_dark_toggled)
+        
         # ------------------------------- end ----------------------------
 
         view_menu.addAction(act_dark)
         view_menu.addSeparator()
 
         # Nice addition: show/hide log dock
+        is_vis_fn = getattr(win, "is_console_visible", None)
+        vis = bool(is_vis_fn()) if callable(is_vis_fn) else True
+        
         act_log = QAction(
             self._std_icon(QStyle.SP_FileDialogInfoView),
-            "Show log panel",
+            "Hide log panel" if vis else "Show log panel",
             win,
             checkable=True,
         )
+        act_log.setChecked(vis)
         act_log.setShortcut("Ctrl+Shift+L")
         
-        is_vis_fn = getattr(win, "is_console_visible", None)
         if callable(is_vis_fn):
             act_log.setChecked(bool(is_vis_fn()))
         else:
