@@ -1,3 +1,11 @@
-from .about import show_about_dialog, DOCS_URL
+# geoprior/about/__init__.py
+# -*- coding: utf-8 -*-
 
-__all__= ['show_about_dialog', 'DOCS_URL']
+from .dialog import AboutDialog, show_about_dialog
+from .pages.content import DOCS_URL
+
+__all__ = [
+    "AboutDialog",
+    "show_about_dialog",
+    "DOCS_URL",
+]

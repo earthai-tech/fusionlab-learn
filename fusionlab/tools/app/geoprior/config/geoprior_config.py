@@ -39,7 +39,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Mapping
+from typing import Any, Dict, List, Optional
 
 # Directory where this GUI config lives (used as root for nat_utils).
 GUI_CONFIG_DIR = os.path.dirname(__file__)

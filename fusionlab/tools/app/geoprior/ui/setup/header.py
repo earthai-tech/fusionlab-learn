@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QSignalBlocker
 from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import (
     QFrame,
@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
+from ..icon_utils import try_icon 
 
 class SetupHeader(QWidget):
     """Modern header bar for Setup."""
@@ -158,11 +158,13 @@ class SetupHeader(QWidget):
         lay.addWidget(self.lbl_dirty, 0)
 
         # Lock toggle (icon + text)
-        self._ico_locked = self.style().standardIcon(
-            QStyle.SP_DialogCloseButton
+        self._ico_locked = (
+            try_icon("locked_exp.svg")
+            or self.style().standardIcon(QStyle.SP_DialogCloseButton)
         )
-        self._ico_unlocked = self.style().standardIcon(
-            QStyle.SP_DialogOpenButton
+        self._ico_unlocked = (
+            try_icon("unlocked_exp.svg")
+            or self.style().standardIcon(QStyle.SP_DialogOpenButton)
         )
 
         self.btn_lock = QToolButton(bar)
@@ -179,13 +181,53 @@ class SetupHeader(QWidget):
 
         lay.addStretch(1)
 
-        # Search
+        # Search (icon + field + close)
+        self.btn_search_icon = QToolButton(bar)
+        self.btn_search_icon.setObjectName("miniAction")
+        self.btn_search_icon.setAutoRaise(True)
+        self.btn_search_icon.setCursor(Qt.PointingHandCursor)
+        self.btn_search_icon.setFixedSize(28, 28)
+        self.btn_search_icon.setToolTip("Focus search")
+        self.btn_search_icon.setIcon(
+            try_icon("search.svg")
+            or self.style().standardIcon(QStyle.SP_FileDialogContentsView)
+        )
+        
         self.search = QLineEdit(bar)
         self.search.setObjectName("setupHeaderSearch")
-        self.search.setClearButtonEnabled(True)
         self.search.setPlaceholderText("Search…")
-
+        # avoid double “clear” UI; we provide our own close button:
+        self.search.setClearButtonEnabled(False)
+        
+        self.btn_search_clear = QToolButton(bar)
+        self.btn_search_clear.setObjectName("miniAction")
+        self.btn_search_clear.setAutoRaise(True)
+        self.btn_search_clear.setCursor(Qt.PointingHandCursor)
+        self.btn_search_clear.setFixedSize(28, 28)
+        self.btn_search_clear.setToolTip("Clear search")
+        self.btn_search_clear.setIcon(
+            try_icon("close.svg")
+            or self.style().standardIcon(QStyle.SP_DialogCloseButton)
+        )
+        self.btn_search_clear.setVisible(False)  # only show when text exists
+        
+        def _focus_search() -> None:
+            self.search.setFocus()
+            self.search.selectAll()
+        
+        def _clear_search() -> None:
+            self.search.setText("")
+            self.search.setFocus()
+        
+        self.btn_search_icon.clicked.connect(_focus_search)
+        self.btn_search_clear.clicked.connect(_clear_search)
+        self.search.textChanged.connect(
+            lambda t: self.btn_search_clear.setVisible(bool(t.strip()))
+        )
+        
+        lay.addWidget(self.btn_search_icon, 0)
         lay.addWidget(self.search, 1)
+        lay.addWidget(self.btn_search_clear, 0)
 
         # More menu
         self.btn_more = QToolButton(bar)
@@ -281,7 +323,7 @@ class SetupHeader(QWidget):
             self.search.blockSignals(old)
             return
         self.search.setText(str(text or ""))
-
+        
     # -----------------------------------------------------------------
     # Events
     # -----------------------------------------------------------------
@@ -304,7 +346,25 @@ class SetupHeader(QWidget):
             fm.elidedText(txt, Qt.ElideRight, w)
         )
 
+    # def _sync_lock_btn(self) -> None:
+    #     if self._locked:
+    #         self.btn_lock.setIcon(self._ico_locked)
+    #         self.btn_lock.setText("Locked")
+    #         self.btn_lock.setToolTip(
+    #             "Locked (click to unlock edits)"
+    #         )
+    #     else:
+    #         self.btn_lock.setIcon(self._ico_unlocked)
+    #         self.btn_lock.setText("Lock")
+    #         self.btn_lock.setToolTip(
+    #             "Lock config for run"
+    #         )
+            
     def _sync_lock_btn(self) -> None:
+        # Keep check state consistent with the model state
+        with QSignalBlocker(self.btn_lock):
+            self.btn_lock.setChecked(bool(self._locked))
+    
         if self._locked:
             self.btn_lock.setIcon(self._ico_locked)
             self.btn_lock.setText("Locked")

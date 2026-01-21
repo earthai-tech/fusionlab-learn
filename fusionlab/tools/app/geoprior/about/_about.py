@@ -387,99 +387,106 @@ class AboutDialog(QDialog):
         layout = QVBoxLayout(w)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-
-        title = QLabel("Quick workflow reminder", w)
+    
+        title = QLabel("Quick workflow reminder (v3.2)", w)
         title.setObjectName("aboutSectionTitle")
         layout.addWidget(title)
-
+    
         body = QLabel(w)
         body.setObjectName("aboutBody")
         body.setWordWrap(True)
-        body.setText(
-            "<ol>"
-            "<li><b>Select CSV…</b> to load a harmonised city dataset "
-            "(or a custom CSV following the GeoPrior column "
-            "conventions). The base file name (without <code>.csv</code>) "
-            "is used as the default city / dataset name for all runs."
-            "</li>"
-
-            "<li>In the <b>Train</b> tab, choose the temporal window: "
-            "<b>Train end year</b>, <b>Forecast start year</b>, "
-            "<b>Forecast horizon</b>, and <b>Time steps</b> (look-back). "
-            "Configure the <b>Training</b> block (epochs, batch size, "
-            "learning rate) and the <b>Physics weights</b> block to "
-            "control how strongly the PDE priors influence learning."
-            "</li>"
-
-            "<li>Still in <b>Train</b>, use <b>Feature config…</b>, "
-            "<b>Architecture…</b>, and <b>Probabilistic…</b> to adjust "
-            "which variables are used, the GeoPriorSubsNet architecture "
-            "dimensions, and the quantile / probabilistic settings. "
-            "Enable <b>Evaluate training metrics</b> to compute extra "
-            "diagnostics and <b>Build future NPZ</b> to export a "
-            "forecast-only dataset for future inference runs."
-            "</li>"
-
-            "<li>Click the green play button on the right to run "
-            "<b>Stage-1</b> (sequence building) followed by "
-            "<b>Stage-2</b> training. Progress and logs are shown in the "
-            "console at the bottom, and all artifacts are written under "
-            "the selected results root."
-            "</li>"
-
-            "<li>In the <b>Tune</b> tab, perform hyper-parameter search "
-            "around an existing configuration. The left side controls "
-            "architecture ranges (embedding, hidden units, attention "
-            "heads, LSTM / VSN units, dropout), while the right side "
-            "controls physics-related switches. "
-            "Use <b>Scalars losses…</b> to edit scalar loss weights and "
-            "ranges, and <b>Max trials</b> to cap the number of tuner "
-            "experiments."
-            "</li>"
-
-            "<li>In the <b>Inference</b> tab, load a trained "
-            "<code>.keras</code> model and a Stage-1 <b>manifest</b>, "
-            "choose the dataset (train / val / test or future NPZ), and "
-            "optionally apply probabilistic calibration. You can export "
-            "plots and CSV outputs, and evaluate coverage / sharpness on "
-            "the validation set."
-            "</li>"
-
-            "<li>In the <b>Transferability</b> tab, select a source "
-            "city (A) and target city (B), choose which splits to use, "
-            "and configure calibration modes. This tab lets you evaluate "
-            "how a model trained on one city generalises to another, "
-            "with optional rescaling of the target city to the source "
-            "domain."
-            "</li>"
-
-            "<li>In the <b>Results</b> tab, browse all cities and "
-            "workflows found under the current results root. You can "
-            "inspect individual train / tune / inference / transfer "
-            "runs and download them as ZIP archives for archiving or "
-            "sharing."
-            "</li>"
-
-            "<li>The <b>Dry run</b> checkbox (top-right) prepares the "
-            "configuration and decides which Stage-1 / Stage-2 steps "
-            "would be executed, without actually launching long jobs. "
-            "This is useful when exploring a new dataset or results "
-            "root."
-            "</li>"
-            "</ol>"
-        )
+    
+        steps = [
+            (
+                "<li><b>Data</b>: choose the <b>Results root</b> "
+                "and open a dataset (CSV) or pick one from the "
+                "dataset library. Use the column header menus "
+                "to map roles (time, lon/lat, subsidence, GWL, "
+                "etc.), then <b>Save</b> to reuse the dataset."
+                "</li>"
+            ),
+            (
+                "<li><b>Setup</b>: define the experiment context "
+                "(preset / scope / names) and set the core run "
+                "settings (temporal window + main options). "
+                "This becomes the single source of truth for "
+                "the following tabs.</li>"
+            ),
+            (
+                "<li><b>Preprocess</b>: run <b>Stage-1</b> "
+                "(sequence building / NPZ preparation). Reuse an "
+                "existing Stage-1 workspace when possible, or "
+                "rebuild if you changed time window / features. "
+                "Optionally build a <b>future NPZ</b> for "
+                "forecast-only inference.</li>"
+            ),
+            (
+                "<li><b>Train</b>: configure epochs / batch size "
+                "/ learning rate and physics weights, then run "
+                "<b>Stage-2</b> training. Artifacts (model, "
+                "logs, plots) are written under the results root."
+                "</li>"
+            ),
+            (
+                "<li><b>Tune</b>: perform hyper-parameter search "
+                "around the current configuration (architecture "
+                "ranges + physics switches). Use <b>Max trials</b> "
+                "to cap the number of experiments and keep runs "
+                "reproducible.</li>"
+            ),
+            (
+                "<li><b>Inference</b>: load a trained "
+                "<code>.keras</code> model and a Stage-1 "
+                "<b>manifest</b>, choose the dataset split "
+                "(train/val/test or future NPZ), optionally apply "
+                "calibration, then export plots / CSV outputs.</li>"
+            ),
+            (
+                "<li><b>Transferability</b>: evaluate how a model "
+                "trained on city (A) generalises to city (B). "
+                "Pick splits and strategies, optional rescaling "
+                "and calibration, then run the cross-city report."
+                "</li>"
+            ),
+            (
+                "<li><b>Map</b>: explore datasets and outputs "
+                "spatially (interactive layers + analytics panels). "
+                "Use it to quickly verify patterns, hotspots, "
+                "and reliability diagnostics.</li>"
+            ),
+            (
+                "<li><b>Results</b>: browse all cities and "
+                "workflows under the results root, inspect runs "
+                "(train / tune / inference / transfer), and "
+                "download ZIP archives for sharing or archiving."
+                "</li>"
+            ),
+            (
+                "<li><b>Tools</b>: use power-utilities like script "
+                "generation and inspectors for reproducibility and "
+                "debugging. The <b>Dry run</b> option prepares the "
+                "plan (what would run) without launching long jobs."
+                "</li>"
+            ),
+        ]
+    
+        body.setText("<ol>" + "".join(steps) + "</ol>")
         layout.addWidget(body)
-
+    
         extra = QLabel(w)
         extra.setObjectName("aboutFootnote")
         extra.setWordWrap(True)
         extra.setText(
-            "For full configuration details (physics weights, censoring "
-            "options, search spaces, and result folders), please refer "
-            "to the online user guide."
+            "Tip: follow the left-to-right flow "
+            "<b>Data → Setup → Preprocess</b> first. "
+            "Once Stage-1 is ready, you can iterate quickly on "
+            "<b>Train / Tune / Inference / Transferability</b>. "
+            "For full details (folders, manifests, advanced knobs), "
+            "please refer to the user guide."
         )
         layout.addWidget(extra)
-
+    
         layout.addStretch(1)
         return w
+
 

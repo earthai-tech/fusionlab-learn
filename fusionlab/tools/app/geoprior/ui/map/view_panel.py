@@ -41,8 +41,8 @@ from PyQt5.QtWidgets import (
 )
 
 from ...config.store import GeoConfigStore
+from ..icon_utils import try_icon
 from .data_panel import AutoHidePanel
-
 
 _VIEW_DEFAULTS: Dict[str, object] = {
     "map.view.basemap": "osm",
@@ -129,13 +129,14 @@ class AutoHideViewPanel(AutoHidePanel):
 
     def _std_icon(self, sp: QStyle.StandardPixmap) -> QIcon:
         return self.style().standardIcon(sp)
-
+    
     def _make_card(
         self,
         parent: QWidget,
         *,
         title: str,
         sp: QStyle.StandardPixmap,
+        svg: Optional[str] = None,
     ) -> tuple[QFrame, QWidget, QLabel]:
         card = QFrame(parent)
         card.setObjectName("mapPanelCard")
@@ -150,7 +151,15 @@ class AutoHideViewPanel(AutoHidePanel):
         hl.setSpacing(8)
 
         ico = QLabel(head)
-        ico.setPixmap(self._std_icon(sp).pixmap(16, 16))
+
+        qico = None
+        if svg:
+            qico = try_icon(svg)
+
+        if qico is None:
+            qico = self._std_icon(sp)
+
+        ico.setPixmap(qico.pixmap(16, 16))
 
         lb = QLabel(title, head)
         lb.setObjectName("mapSectionTitle")
@@ -168,7 +177,6 @@ class AutoHideViewPanel(AutoHidePanel):
         root.addWidget(body, 0)
 
         return card, body, chip
-
 
     def _build_body(self) -> None:
         root = QVBoxLayout(self.body)
@@ -244,6 +252,7 @@ class AutoHideViewPanel(AutoHidePanel):
             parent,
             title="Basemap",
             sp=QStyle.SP_DirIcon,
+            svg="basemap.svg",
         )
         self._chip_base = chip
         

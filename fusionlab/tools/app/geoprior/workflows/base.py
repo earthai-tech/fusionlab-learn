@@ -38,6 +38,7 @@ class RunEnv:
     geo_cfg: GeoPriorConfig
     device_overrides: Dict[str, Any] = field(default_factory=dict)
     dry_mode: bool = False
+    store: Any = None
 
 
 class BaseWorkflowController:

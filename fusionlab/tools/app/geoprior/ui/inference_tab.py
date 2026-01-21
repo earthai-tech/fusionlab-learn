@@ -389,8 +389,8 @@ class InferenceTab(QWidget):
         rr += 1
         
         act_box.addLayout(g4)
-        act_box.addSpacing(8)
-
+        act_box.addStretch(1)  
+        
         self.btn_inf_options = QPushButton("Advanced options...")
         self.btn_inf_options.setMinimumHeight(34)
         self.btn_inf_options.setSizePolicy(
@@ -399,8 +399,7 @@ class InferenceTab(QWidget):
         )
         act_box.addWidget(self.btn_inf_options)
 
-
-        grid.addWidget(act_card, 1, 1)
+        grid.addWidget(act_card, 1, 1, alignment=Qt.AlignTop)
 
         grid.setRowStretch(1, 1)
         grid.setColumnStretch(0, 1)

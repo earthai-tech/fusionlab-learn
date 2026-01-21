@@ -70,6 +70,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ...config.store import GeoConfigStore
+from ..icon_utils import try_icon
 from .utils import (
     scan_results_root,
     MapCity,
@@ -490,6 +491,20 @@ class AutoHideDataPanel(AutoHidePanel):
         self.ed_filter.setObjectName("mapSearch")
         self.ed_filter.setPlaceholderText("Filter datasets…")
         self.ed_filter.setClearButtonEnabled(True)
+        # Leading filter icon (SVG first, fallback to Qt standard icon)
+        ico = try_icon("filter.svg")
+        if ico is None:
+            ico = self.style().standardIcon(
+                QStyle.SP_FileDialogContentsView
+            )
+        
+        act = self.ed_filter.addAction(
+            ico,
+            QLineEdit.LeadingPosition,
+        )
+        act.setToolTip("Filter datasets")
+        act.triggered.connect(self.ed_filter.setFocus)
+
         ds_l.addWidget(self.ed_filter, 0)
     
         self.stack = QStackedWidget(ds)

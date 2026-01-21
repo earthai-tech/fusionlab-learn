@@ -355,32 +355,89 @@ class MenuManager:
         view_menu.addAction(act_dark)
         view_menu.addSeparator()
 
-        # Nice addition: show/hide log dock
-        is_vis_fn = getattr(win, "is_console_visible", None)
-        vis = bool(is_vis_fn()) if callable(is_vis_fn) else True
+        # # Nice addition: show/hide log dock
+        # is_vis_fn = getattr(win, "is_console_visible", None)
+        # vis = bool(is_vis_fn()) if callable(is_vis_fn) else True
         
+        # act_log = QAction(
+        #     self._std_icon(QStyle.SP_FileDialogInfoView),
+        #     "Hide log panel" if vis else "Show log panel",
+        #     win,
+        #     checkable=True,
+        # )
+        # act_log.setChecked(vis)
+        # act_log.setShortcut("Ctrl+Shift+L")
+        
+        # if callable(is_vis_fn):
+        #     act_log.setChecked(bool(is_vis_fn()))
+        # else:
+        #     act_log.setChecked(True)
+        
+        # set_vis_fn = getattr(win, "set_console_visible", None)
+        # if callable(set_vis_fn):
+        #     act_log.toggled.connect(set_vis_fn)
+        # else:
+        #     act_log.setEnabled(False)
+        
+        # view_menu.addAction(act_log)
+        # win.act_show_log = act_log  # type: ignore[attr-defined]
+        # Show/hide log panel (synced by win._sync_console_menu)
+        # Show/hide log panel
+        # ---------------- Log panel ----------------
         act_log = QAction(
             self._std_icon(QStyle.SP_FileDialogInfoView),
-            "Hide log panel" if vis else "Show log panel",
+            "Log panel",
             win,
             checkable=True,
         )
-        act_log.setChecked(vis)
         act_log.setShortcut("Ctrl+Shift+L")
-        
-        if callable(is_vis_fn):
-            act_log.setChecked(bool(is_vis_fn()))
-        else:
-            act_log.setChecked(True)
+        view_menu.addAction(act_log)
+        win.act_show_log = act_log  # type: ignore[attr-defined]
         
         set_vis_fn = getattr(win, "set_console_visible", None)
         if callable(set_vis_fn):
-            act_log.toggled.connect(set_vis_fn)
+        
+            def _on_toggle(checked: bool) -> None:
+                try:
+                    set_vis_fn(checked, remember=True)
+                except TypeError:
+                    set_vis_fn(checked)
+        
+            act_log.toggled.connect(_on_toggle)
         else:
             act_log.setEnabled(False)
         
-        view_menu.addAction(act_log)
-        win.act_show_log = act_log  # type: ignore[attr-defined]
+        # --------------- Dock/Undock ---------------
+        act_float = QAction(
+            self._std_icon(QStyle.SP_TitleBarNormalButton),
+            "Undock log panel",
+            win,
+            checkable=True,
+        )
+        act_float.setShortcut("Ctrl+Shift+F")
+        view_menu.addAction(act_float)
+        win.act_float_log = act_float  # type: ignore[attr-defined]
+        
+        set_float_fn = getattr(win, "set_console_floating", None)
+        if callable(set_float_fn):
+            act_float.toggled.connect(set_float_fn)
+        else:
+            act_float.setEnabled(False)
+        
+        # --------------- Initial sync ---------------
+        sync_vis = getattr(win, "_sync_console_menu", None)
+        if callable(sync_vis):
+            try:
+                sync_vis()
+            except Exception:
+                pass
+        
+        sync_float = getattr(win, "_sync_console_float_menu", None)
+        if callable(sync_float):
+            try:
+                sync_float()
+            except Exception:
+                pass
 
         view_menu.addSeparator()
 
@@ -486,4 +543,23 @@ class MenuManager:
             win,
         )
         self._connect_if_exists(act_about, "_on_show_about")
+        
+        # Final sync once menus exist
+        sync_vis = getattr(win, "_sync_console_menu", None)
+        if callable(sync_vis):
+            try:
+                sync_vis()
+            except Exception:
+                pass
+        
+        sync_float = getattr(win, "_sync_console_float_menu", None)
+        if callable(sync_float):
+            try:
+                sync_float()
+            except Exception:
+                pass
+
+
         help_menu.addAction(act_about)
+        
+

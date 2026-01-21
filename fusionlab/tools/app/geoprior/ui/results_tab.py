@@ -64,7 +64,7 @@ from .results_index import (
     discover_results_for_root,
 )
 from ..styles import PRIMARY
-
+from .icon_utils import try_icon
 
 _HAS_MPL = False
 try:
@@ -787,28 +787,47 @@ class ResultsDownloadTab(QWidget):
     def _build_filter_row(self, root: QVBoxLayout) -> None:
         flt = QHBoxLayout()
         flt.setSpacing(8)
-
+    
+        def _icon_or_std(
+                svg: str, std: QStyle.StandardPixmap
+                ):
+            ico = try_icon(svg)
+            if ico is None:
+                ico = self.style().standardIcon(std)
+            return ico
+    
         self.filter_edit = QLineEdit()
         self.filter_edit.setObjectName("resultsFilter")
         self.filter_edit.setPlaceholderText(
             "Filter city / job / stamp..."
         )
+        # -------------------------------------------------
+        # Leading filter icon (SVG first, fallback to Qt std)
+        # -------------------------------------------------
+        filter_ico = _icon_or_std(
+            "filter2.svg",
+            QStyle.SP_FileDialogContentsView,  # decent “filter/search” fallback
+        )
+        act = self.filter_edit.addAction(
+            filter_ico,
+            QLineEdit.LeadingPosition,
+        )
+        act.setToolTip("Filter city / job / stamp")
+        act.triggered.connect(self.filter_edit.setFocus)
+    
         flt.addWidget(self.filter_edit, 1)
-
+    
         self.clear_filter_btn = QToolButton()
         self.clear_filter_btn.setObjectName("miniAction")
         self.clear_filter_btn.setAutoRaise(True)
         self.clear_filter_btn.setToolTip("Clear filter")
         self.clear_filter_btn.setCursor(Qt.PointingHandCursor)
         self.clear_filter_btn.setStyleSheet(self._icon_btn_qss())
-
         self.clear_filter_btn.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_DialogCloseButton
-            )
+            self.style().standardIcon(QStyle.SP_DialogCloseButton)
         )
         flt.addWidget(self.clear_filter_btn)
-        
+    
         self.insights_btn = QToolButton()
         self.insights_btn.setText("Insights")
         self.insights_btn.setObjectName("miniAction")
@@ -818,18 +837,15 @@ class ResultsDownloadTab(QWidget):
         self.insights_btn.setCursor(Qt.PointingHandCursor)
         self.insights_btn.setStyleSheet(self._icon_btn_qss())
         self.insights_btn.setIcon(
-            self.style().standardIcon(
-                QStyle.SP_MessageBoxInformation
-            )
+            self.style().standardIcon(QStyle.SP_MessageBoxInformation)
         )
         self.insights_btn.setToolButtonStyle(
             Qt.ToolButtonTextBesideIcon
         )
-        
+    
         flt.addWidget(self.insights_btn)
-        
+    
         root.addLayout(flt)
-
 
     def _build_summary(self, root: QVBoxLayout) -> None:
         self.summary = ResultsSummaryPanel(self)

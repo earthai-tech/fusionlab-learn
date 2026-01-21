@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple, Union 
 
 import pandas as pd
 
@@ -38,6 +38,7 @@ from ..services.selection_viz import (
     SelectionInsightsPane,
     SelectionVizController
 )
+from .icon_utils import try_icon
 
 class RolePandasModel(_PandasModel):
     def __init__(self, df, mapper: ColumnRoleMapper, parent=None):
@@ -166,60 +167,84 @@ class DataTab(QWidget):
 
         self._set_details_visible(False)
         return left
-
+    
     def _build_library_widget(self) -> QWidget:
+        def _icon_or_std(
+            svg: str,
+            std: QStyle.StandardPixmap,
+        ):
+            ico = try_icon(svg)
+            if ico is None:
+                ico = self.style().standardIcon(std)
+            return ico
+    
         w = QFrame()
         w.setFrameShape(QFrame.NoFrame)
-
+    
         left_lay = QVBoxLayout(w)
         left_lay.setContentsMargins(10, 10, 10, 10)
         left_lay.setSpacing(8)
-
+    
         title_row = QHBoxLayout()
         title_row.addWidget(QLabel("Datasets"), 0)
-
+    
         self.btn_refresh = QPushButton("Refresh")
         self.btn_refresh.setCursor(Qt.PointingHandCursor)
         self.btn_refresh.clicked.connect(self.refresh_library)
         title_row.addWidget(self.btn_refresh, 0)
-
+    
         title_row.addStretch(1)
         left_lay.addLayout(title_row)
-
+    
         self.edt_lib_search = QLineEdit()
         self.edt_lib_search.setPlaceholderText("Search…")
         self.edt_lib_search.textChanged.connect(self.refresh_library)
+    
+        # -------------------------------------------------
+        # Leading search icon (SVG first, fallback to Qt std)
+        # -------------------------------------------------
+        ico = _icon_or_std(
+            "search.svg",
+            QStyle.SP_FileDialogContentsView,
+        )
+        act = self.edt_lib_search.addAction(
+            ico,
+            QLineEdit.LeadingPosition,
+        )
+        act.setToolTip("Search datasets")
+        act.triggered.connect(self.edt_lib_search.setFocus)
+    
         left_lay.addWidget(self.edt_lib_search)
-
+    
         self.list_datasets = QListWidget()
         self.list_datasets.itemDoubleClicked.connect(
             self._on_library_item_activated
         )
         left_lay.addWidget(self.list_datasets, 1)
-
+    
         lib_btns = QHBoxLayout()
-
+    
         self.btn_use_selected = QPushButton("Load selected")
         self.btn_use_selected.setCursor(Qt.PointingHandCursor)
         self.btn_use_selected.clicked.connect(
             self._load_selected_clicked
         )
         lib_btns.addWidget(self.btn_use_selected)
-
+    
         self.btn_duplicate = QPushButton("Duplicate")
         self.btn_duplicate.setCursor(Qt.PointingHandCursor)
         self.btn_duplicate.clicked.connect(
             self._duplicate_selected_clicked
         )
         lib_btns.addWidget(self.btn_duplicate)
-
+    
         left_lay.addLayout(lib_btns)
-
+    
         hint = QLabel("Tip: double-click to load")
         hint.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         hint.setStyleSheet("font-size:11px; opacity:0.8;")
         left_lay.addWidget(hint)
-
+    
         return w
 
     def _build_details_widget(self) -> QWidget:
@@ -520,14 +545,30 @@ class DataTab(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
 
-        def _mini_btn(std_icon: QStyle.StandardPixmap, tip: str) -> QToolButton:
+        def _mini_btn(
+            std_icon: QStyle.StandardPixmap,
+            tip: str,
+            *,
+            svg: Optional[ Union [str, Tuple[str, ...]]] = None,
+        ) -> QToolButton:
             b = QToolButton()
-            b.setObjectName("miniAction")  # <-- uses your styles.py miniAction rules
-            b.setIcon(self.style().standardIcon(std_icon))
+            b.setObjectName("miniAction")
             b.setToolTip(tip)
             b.setAutoRaise(True)
             b.setCursor(Qt.PointingHandCursor)
             b.setFixedSize(28, 28)
+            ico = None
+            if isinstance (svg, str): 
+                svg = [svg]
+            if svg:
+                for nm in svg:
+                    ico = try_icon(nm)
+                    if ico is not None:
+                        break
+        
+            if ico is None:
+                ico = self.style().standardIcon(std_icon)
+            b.setIcon(ico)
             return b
 
         # Results root (global context)
@@ -555,8 +596,9 @@ class DataTab(QWidget):
 
         # Filter columns (local control)
         self.btn_filter_icon = _mini_btn(
-            QStyle.SP_FileDialogContentsView,   # neutral icon; acts as "filter/search"
-            "Filter columns"
+            QStyle.SP_FileDialogContentsView, # neutral icon; acts as "filter/search"
+            "Filter columns",
+            svg=("filter.svg", "filter2.svg"),
         )
 
         self.edt_col_filter = QLineEdit()

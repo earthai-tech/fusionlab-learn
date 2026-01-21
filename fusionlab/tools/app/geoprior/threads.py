@@ -5,16 +5,21 @@
 """
 Qt threads wrapping GeoPrior AppJob classes.
 
-Each thread owns one AppJob from backend.py and exposes
-Qt signals for logging, status, progress and results.
+v3.2
+----
+- Threads pass store/config_overwrite correctly.
+- Mirrors backend.py job signatures.
+- Emits Qt signals for log/status/progress/results.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Sequence
 
 from PyQt5.QtCore import QThread, pyqtSignal
 
+from .config.store import GeoConfigStore
 from .backend import (
     AppJob,
     Stage1Job,
@@ -24,6 +29,9 @@ from .backend import (
     XferMatrixJob,
     XferViewJob,
 )
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class BaseJobThread(QThread):
@@ -43,12 +51,11 @@ class BaseJobThread(QThread):
         super().__init__(parent)
         self._job = job
 
-        # Rewire job callbacks to emit Qt signals.
+        # Wire job callbacks -> Qt signals.
         self._job._logger = self._log
         self._job._stop_check = self._should_stop
         self._job._progress_hook = self._progress
 
-    # ---- callbacks wired into AppJob ---------------------------------
     def _log(self, msg: str) -> None:
         self.log_updated.emit(msg)
 
@@ -62,41 +69,50 @@ class BaseJobThread(QThread):
     ) -> None:
         self.progress_changed.emit(value, message or "")
 
-    # ---- main run ----------------------------------------------------
     def run(self) -> None:
         try:
             self.status_updated.emit("Running …")
             result = self._job.run() or {}
             self.results_ready.emit(result)
+            self.status_updated.emit("Done.")
         except Exception as exc:  # noqa: BLE001
+            self.status_updated.emit("Failed.")
             self.error_occurred.emit(str(exc))
 
 
 class Stage1Thread(BaseJobThread):
     """Thread wrapper around Stage1Job."""
 
+    stage1_finished = pyqtSignal(dict)
+
     def __init__(
         self,
         city: str,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         *,
+        store: Optional[GeoConfigStore] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         clean_run_dir: bool = True,
-        base_cfg: Optional[Dict[str, Any]] = None,   
-        results_root: Optional[str] = None, 
-        edited_df: Optional[pd.DataFrame] = None,           
+        base_cfg: Optional[Dict[str, Any]] = None,
+        results_root: Optional[str] = None,
+        edited_df: Optional["pd.DataFrame"] = None,
         parent: Optional[object] = None,
     ) -> None:
         job = Stage1Job(
             city=city,
             cfg_overrides=cfg_overrides,
+            store=store,
+            config_overwrite=config_overwrite,
             clean_run_dir=clean_run_dir,
-            base_cfg=base_cfg,                        
-            results_root=results_root, 
-            edited_df=edited_df,  
+            base_cfg=base_cfg,
+            results_root=results_root,
+            edited_df=edited_df,
         )
         super().__init__(job=job, parent=parent)
+
+    def run(self) -> None:
+        super().run()
+        self.stage1_finished.emit(self._job.last_result or {})
 
 
 class TrainingThread(BaseJobThread):
@@ -107,28 +123,29 @@ class TrainingThread(BaseJobThread):
     def __init__(
         self,
         manifest_path: Optional[str] = None,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         *,
+        store: Optional[GeoConfigStore] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         evaluate_training: bool = True,
-        base_cfg: Optional[Dict[str, Any]] = None,     
-        results_root: Optional[str] = None,            
+        base_cfg: Optional[Dict[str, Any]] = None,
+        results_root: Optional[str] = None,
         parent: Optional[object] = None,
     ) -> None:
         job = TrainingJob(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
+            store=store,
+            config_overwrite=config_overwrite,
             evaluate_training=evaluate_training,
-            base_cfg=base_cfg,                         
-            results_root=results_root,  
+            base_cfg=base_cfg,
+            results_root=results_root,
         )
         super().__init__(job=job, parent=parent)
 
     def run(self) -> None:
         super().run()
-        result = self._job.last_result or {}
-        self.training_finished.emit(result)
+        self.training_finished.emit(self._job.last_result or {})
 
 
 class TuningThread(BaseJobThread):
@@ -139,28 +156,29 @@ class TuningThread(BaseJobThread):
     def __init__(
         self,
         manifest_path: Optional[str] = None,
-        cfg_overrides: Optional[
-            Dict[str, Any]
-        ] = None,
+        cfg_overrides: Optional[Dict[str, Any]] = None,
         *,
+        store: Optional[GeoConfigStore] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         evaluate_tuned: bool = False,
-        base_cfg: Optional[Dict[str, Any]] = None,          
-        results_root: Optional[str] = None,  
+        base_cfg: Optional[Dict[str, Any]] = None,
+        results_root: Optional[str] = None,
         parent: Optional[object] = None,
     ) -> None:
         job = TuningJob(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
+            store=store,
+            config_overwrite=config_overwrite,
             evaluate_tuned=evaluate_tuned,
-            base_cfg=base_cfg,                               
-            results_root=results_root,                       
+            base_cfg=base_cfg,
+            results_root=results_root,
         )
         super().__init__(job=job, parent=parent)
 
     def run(self) -> None:
         super().run()
-        result = self._job.last_result or {}
-        self.tuning_finished.emit(result)
+        self.tuning_finished.emit(self._job.last_result or {})
 
 
 class InferenceThread(BaseJobThread):
@@ -173,7 +191,7 @@ class InferenceThread(BaseJobThread):
         model_path: str,
         dataset: str = "test",
         *,
-        use_stage1_future_npz: bool = False,          
+        use_stage1_future_npz: bool = False,
         manifest_path: Optional[str] = None,
         stage1_dir: Optional[str] = None,
         inputs_npz: Optional[str] = None,
@@ -185,13 +203,15 @@ class InferenceThread(BaseJobThread):
         include_gwl: bool = False,
         batch_size: int = 32,
         make_plots: bool = True,
+        store: Optional[GeoConfigStore] = None,
+        config_overwrite: Optional[Dict[str, Any]] = None,
         cfg_overrides: Optional[Dict[str, Any]] = None,
         parent: Optional[object] = None,
     ) -> None:
         job = InferenceJob(
             model_path=model_path,
             dataset=dataset,
-            use_stage1_future_npz=use_stage1_future_npz,  
+            use_stage1_future_npz=use_stage1_future_npz,
             manifest_path=manifest_path,
             stage1_dir=stage1_dir,
             inputs_npz=inputs_npz,
@@ -203,15 +223,15 @@ class InferenceThread(BaseJobThread):
             include_gwl=include_gwl,
             batch_size=batch_size,
             make_plots=make_plots,
+            store=store,
+            config_overwrite=config_overwrite,
             cfg_overrides=cfg_overrides,
         )
         super().__init__(job=job, parent=parent)
 
-
     def run(self) -> None:
         super().run()
-        result = self._job.last_result or {}
-        self.inference_finished.emit(result)
+        self.inference_finished.emit(self._job.last_result or {})
 
 
 class XferMatrixThread(BaseJobThread):
@@ -224,16 +244,20 @@ class XferMatrixThread(BaseJobThread):
         city_a: str,
         city_b: str,
         *,
-        store: Optional[Any] = None,
+        store: Optional[GeoConfigStore] = None,
         results_dir: str = "results",
         results_root: Optional[str] = None,
-        splits: Optional[Any] = None,
-        calib_modes: Optional[Any] = None,
+        splits: Sequence[str] = ("val", "test"),
+        calib_modes: Sequence[str] = (
+            "none",
+            "source",
+            "target",
+        ),
         rescale_to_source: bool = False,
-        rescale_modes: Optional[Any] = None,
-        strategies: Optional[Any] = None,
+        rescale_modes: Optional[Sequence[str]] = None,
+        strategies: Optional[Sequence[str]] = None,
         batch_size: int = 32,
-        quantiles_override: Optional[Any] = None,
+        quantiles_override: Optional[Sequence[float]] = None,
         out_dir: Optional[str] = None,
         write_json: bool = True,
         write_csv: bool = True,
@@ -250,11 +274,6 @@ class XferMatrixThread(BaseJobThread):
         warm_seed: Optional[int] = None,
         parent: Optional[object] = None,
     ) -> None:
-        if splits is None:
-            splits = ("val", "test")
-        if calib_modes is None:
-            calib_modes = ("none", "source", "target")
-
         job = XferMatrixJob(
             city_a=city_a,
             city_b=city_b,
@@ -287,8 +306,8 @@ class XferMatrixThread(BaseJobThread):
 
     def run(self) -> None:
         super().run()
-        result = self._job.last_result or {}
-        self.xfer_finished.emit(result)
+        self.xfer_finished.emit(self._job.last_result or {})
+
 
 class XferViewThread(BaseJobThread):
     """Thread wrapper around XferViewJob."""
@@ -330,8 +349,7 @@ class XferViewThread(BaseJobThread):
 
     def run(self) -> None:
         super().run()
-        result = self._job.last_result or {}
-        self.xfer_view_finished.emit(result)
+        self.xfer_view_finished.emit(self._job.last_result or {})
 
 
 __all__ = [
@@ -341,6 +359,5 @@ __all__ = [
     "TuningThread",
     "InferenceThread",
     "XferMatrixThread",
-    "XferViewThread"
+    "XferViewThread",
 ]
-

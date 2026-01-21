@@ -54,9 +54,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QPlainTextEdit,
-    QProgressBar,
-    QSizePolicy,
     QMessageBox,
     QTabWidget,
     QCheckBox,
@@ -64,7 +61,6 @@ from PyQt5.QtWidgets import (
     QDialog,
     QToolButton,
     QStyle, 
-    QSplitter, 
 )
 
 from .config.store import GeoConfigStore, FieldKey
@@ -102,7 +98,7 @@ from .ui.xfer_tab import XferTab
 from .ui.map_tab import MapTab
 from .ui.results_tab import ResultsDownloadTab
 from .ui.city_field import CityField
-from .ui.log_manager import LogManager
+from .ui.console import ConsoleDock, ConsoleVisibilityPolicy
 
 from ..ux_utils import (
     set_app_metadata,
@@ -146,7 +142,6 @@ from .dialogs import (
 )
 
 from .about import show_about_dialog, DOCS_URL
-
 from .utils.view_utils import _notify_gui_xfer_view
 from .utils.clock_timer import RunClockTimer
 from .utils.components import RangeListEditor
@@ -160,12 +155,7 @@ from .styles import (
     MAIN_TAB_STYLES_LIGHT,
     MAIN_TAB_STYLES_DARK 
 )
-
 from .jobs import TrainJobSpec, latest_jobs_for_root
-
-
-
-
 
 class GeoPriorForecaster(QMainWindow):
     """GUI wrapper for GeoPrior subsidence runs."""
@@ -289,7 +279,6 @@ class GeoPriorForecaster(QMainWindow):
         self.enable_dark_mode = False
 
 
-
     def _init_help_texts(self) -> None:
         """Initialise per-tab help texts and one-shot flags."""
         self._data_help_text = ModeManager.DEFAULT_HELP_TEXTS["data"]
@@ -334,12 +323,48 @@ class GeoPriorForecaster(QMainWindow):
 
     def _init_log_manager(self) -> None:
         """Create the central LogManager once the log widget exists."""
-        self.log_mgr = LogManager(
-            self.log_widget,
-            mode="collapse",
-            log_dir_name="_log",
+
+        # ------------------------------
+        # Dockable Console (single one)
+        # ------------------------------
+        self.console = ConsoleDock(
+            self,
+            mirror_to_all=True,
+        )
+        self.addDockWidget(
+            Qt.BottomDockWidgetArea,
+            self.console,
         )
 
+        # main_sess = self.console.session(
+        #     self.console._main
+        # )
+        self.console.visibilityChanged.connect(
+            self._on_console_visibility_changed
+        )
+        self.console.topLevelChanged.connect(
+            self._on_console_top_level_changed
+        )
+        self.console.show()
+
+        if not isinstance(
+            getattr(self, "_console_vis_by_tab", None),
+            dict,
+        ):
+            self._console_vis_by_tab = {}
+
+        self.console_policy = ConsoleVisibilityPolicy(
+            self.console,
+            set_visible=self.set_console_visible,
+            hidden_tabs=set(),
+            vis_by_tab=self._console_vis_by_tab,
+            parent=self,
+        )
+
+        self._console_vis_by_tab = (
+            self.console_policy.get_vis_map()
+        )
+        
     def _post_init_misc(self) -> None:
         """Final small initialisations that depend on everything else."""
         # Keep references to non-modal preview dialogs
@@ -366,6 +391,7 @@ class GeoPriorForecaster(QMainWindow):
         self._run_env = RunEnv(
             gui_runs_root=Path(self.gui_runs_root),
             geo_cfg=self.geo_cfg,
+            store = self.config_store, 
             device_overrides=dict(getattr(self, "_device_cfg_overrides", {}) or {}),
             dry_mode=False,
         )
@@ -665,108 +691,44 @@ class GeoPriorForecaster(QMainWindow):
         
         layout.addLayout(top)
         
-        # -------------------------------------------------
-        # Splitter: workspace (tabs+status) / console
-        # -------------------------------------------------
-        self._main_splitter = QSplitter(Qt.Vertical)
-        self._main_splitter.setHandleWidth(6)
-        layout.addWidget(self._main_splitter, 1)
-    
-        # ---------- Workspace (tabs + status row) ----------
+        # ------------------------------
+        # Workspace (tabs + status row)
+        # ------------------------------
         workspace = QWidget()
         w_layout = QVBoxLayout(workspace)
         w_layout.setContentsMargins(0, 0, 0, 0)
         w_layout.setSpacing(6)
-    
+
         self._update_splash(45, "Building tabs…")
         self.tabs = QTabWidget()
         self.tabs.setObjectName("mainTabs")
-        self.tabs.setDocumentMode(True)  # flatter tab rendering
+        self.tabs.setDocumentMode(True)
         self.tabs.setUsesScrollButtons(True)
-        self.tabs.setIconSize(QSize(14, 14)) 
-        
+        self.tabs.setIconSize(QSize(14, 14))
+
         self._init_tabs()
+
         w_layout.addWidget(self.tabs, 1)
-    
+
         status_row = QHBoxLayout()
-    
+
         self.status_label = QLabel("? Idle")
-        self.status_label.setStyleSheet(f"color:{PRIMARY};")
+        self.status_label.setStyleSheet(
+            f"color:{PRIMARY};"
+        )
         status_row.addWidget(self.status_label, 1)
-    
+
         status_row.addStretch(1)
-    
+
         self.run_timer = RunClockTimer(self)
         self.run_timer.reset()
         self.run_timer.stop()
         self.run_timer.setVisible(False)
         status_row.addWidget(self.run_timer, 0)
-    
+
         w_layout.addLayout(status_row)
-    
-        self._main_splitter.addWidget(workspace)
-    
-        # ---------- Console (log + progress row) ----------
-        self._console_panel = QWidget()
-        c_layout = QVBoxLayout(self._console_panel)
-        c_layout.setContentsMargins(0, 0, 0, 0)
-        c_layout.setSpacing(6)
-    
-        self.log_widget = QPlainTextEdit()
-        self.log_widget.setObjectName("logWidget")
-        self.log_widget.setReadOnly(True)
-        self.log_widget.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding,
-        )
-        # IMPORTANT: allow collapse-to-0
-        self.log_widget.setMinimumHeight(0)
-    
-        c_layout.addWidget(self.log_widget, 1)
-        
-        prog = QHBoxLayout()
-    
-        self.progress_label = QLabel("")
-        self.progress_label.setAlignment(
-            Qt.AlignLeft | Qt.AlignVCenter
-        )
-        self.progress_label.setSizePolicy(
-            QSizePolicy.Minimum,
-            QSizePolicy.Fixed,
-        )
-        prog.addWidget(self.progress_label, 0)
-    
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setMinimumHeight(18)
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Fixed,
-        )
-        prog.addWidget(self.progress_bar, 1)
-    
-        self.percent_label = QLabel("0 %")
-        self.percent_label.setAlignment(
-            Qt.AlignRight | Qt.AlignVCenter
-        )
-        self.percent_label.setSizePolicy(
-            QSizePolicy.Minimum,
-            QSizePolicy.Fixed,
-        )
-        prog.addWidget(self.percent_label, 0)
-    
-        c_layout.addLayout(prog)
-    
-        self._main_splitter.addWidget(self._console_panel)
-    
-        self._main_splitter.setStretchFactor(0, 8)
-        self._main_splitter.setStretchFactor(1, 2)
-        self._main_splitter.setCollapsible(0, False)
-        self._main_splitter.setCollapsible(1, True)
-    
-        self._main_splitter.splitterMoved.connect(
-            self._on_splitter_moved
-        )
+
+        layout.addWidget(workspace, 1)
 
     # ------------------------------------------------------------------
     # Tabs
@@ -1305,17 +1267,49 @@ class GeoPriorForecaster(QMainWindow):
     # ------------------------------------------------------------------
     # Logging / progress helpers
     # ------------------------------------------------------------------
+    def _on_console_visibility_changed(self, vis: bool) -> None:
+        self._sync_console_menu()
+    
+        dock = getattr(self, "console", None)
+        if dock is None or not hasattr(self, "tabs"):
+            return
+    
+        # Only remember when NOT floating
+        try:
+            if dock.isFloating():
+                return
+        except Exception:
+            pass
+    
+        self._remember_console_for_tab(
+            tab_index=self.tabs.currentIndex(),
+            visible=bool(vis),
+        )
+    
+    def _on_console_top_level_changed(self, floating: bool) -> None:
+        self._sync_console_float_menu()
+    
+        # If we just docked back, apply policy
+        if not floating and hasattr(self, "console_policy"):
+            if hasattr(self, "tabs"):
+                try:
+                    self.console_policy.apply(
+                        self.tabs.currentIndex()
+                    )
+                except Exception:
+                    pass
+
+    # -----------------------------------
+    # Visibility API (dock-based) 
+    # -----------------------------------
     def is_console_visible(self) -> bool:
-        sp = getattr(self, "_main_splitter", None)
-        if sp is None:
-            w = getattr(self, "log_widget", None)
-            return bool(w is not None and w.isVisible())
-    
-        sizes = sp.sizes()
-        if len(sizes) < 2:
+        dock = getattr(self, "console", None)
+        if dock is None:
             return True
-    
-        return bool(sizes[1] > 0)
+        try:
+            return bool(dock.isVisible())
+        except Exception:
+            return True
     
     
     def _console_menu_label(self, visible: bool) -> str:
@@ -1337,12 +1331,15 @@ class GeoPriorForecaster(QMainWindow):
     
         try:
             act.setText(self._console_menu_label(vis))
-            if vis:
-                act.setToolTip("Hide the log output panel.")
-            else:
-                act.setToolTip("Show the log output panel.")
+            act.setToolTip(
+                "Hide the log output panel."
+                if vis
+                else "Show the log output panel."
+            )
         except Exception:
             return
+    
+    
     def _remember_console_for_tab(
         self,
         *,
@@ -1365,80 +1362,107 @@ class GeoPriorForecaster(QMainWindow):
     
         m[idx] = bool(visible)
     
+    
     def set_console_visible(
         self,
         visible: bool,
         *,
         remember: bool = True,
     ) -> None:
-        sp = getattr(self, "_main_splitter", None)
-        if sp is None:
-            if getattr(self, "log_widget", None) is not None:
-                self.log_widget.setVisible(visible)
-            self._sync_console_menu()
-            if remember and hasattr(self, "tabs"):
-                self._remember_console_for_tab(
-                    tab_index=self.tabs.currentIndex(),
-                    visible=visible,
-                )
+        dock = getattr(self, "console", None)
+        if dock is None:
             return
     
-        sizes = sp.sizes()
-        if len(sizes) < 2:
-            self._sync_console_menu()
+        v = bool(visible)
+        try:
+            dock.setVisible(v)
+        except Exception:
+            pass
+    
+        self._sync_console_menu()
+    
+        if not remember or not hasattr(self, "tabs"):
             return
     
-        total = sum(sizes) or sp.height() or 1
-    
-        if visible:
-            if sizes[1] > 0:
-                self._sync_console_menu()
-                if remember and hasattr(self, "tabs"):
-                    self._remember_console_for_tab(
-                        tab_index=self.tabs.currentIndex(),
-                        visible=True,
-                    )
+        # Only remember when NOT floating
+        try:
+            if dock.isFloating():
                 return
+        except Exception:
+            pass
     
-            bot = int(getattr(self, "_console_last_h", 220) or 220)
-            bot = max(140, min(bot, int(total * 0.60)))
-            sp.setSizes([total - bot, bot])
-            self._sync_console_menu()
-            if remember and hasattr(self, "tabs"):
-                self._remember_console_for_tab(
-                    tab_index=self.tabs.currentIndex(),
-                    visible=True,
-                )
+        self._remember_console_for_tab(
+            tab_index=self.tabs.currentIndex(),
+            visible=v,
+        )
+    # -----------------------------------
+    # Float menu sync helpers
+    # -----------------------------------
+    def _console_float_label(self, floating: bool) -> str:
+        return "Dock log panel" if floating else "Undock log panel"
+    
+    
+    def _sync_console_float_menu(self) -> None:
+        act = getattr(self, "act_float_log", None)
+        if act is None:
             return
     
-        if sizes[1] > 0:
-            self._console_last_h = sizes[1]
-        sp.setSizes([total, 0])
-        self._sync_console_menu()
+        floating = bool(self.is_console_floating())
     
-        if remember and hasattr(self, "tabs"):
-            self._remember_console_for_tab(
-                tab_index=self.tabs.currentIndex(),
-                visible=False,
+        try:
+            with QSignalBlocker(act):
+                act.setChecked(floating)
+        except Exception:
+            pass
+    
+        try:
+            act.setText(self._console_float_label(floating))
+            act.setToolTip(
+                "Dock the log panel back into the window."
+                if floating
+                else "Undock the log panel into a floating window."
             )
+        except Exception:
+            return        
+    
+    # -----------------------------------
+    # Floating API (dock/undock)
+    # -----------------------------------
+    def is_console_floating(self) -> bool:
+        dock = getattr(self, "console", None)
+        if dock is None:
+            return False
+        try:
+            return bool(dock.isFloating())
+        except Exception:
+            return False
+    
 
-
-    @pyqtSlot(int, int)
-    def _on_splitter_moved(self, pos: int, index: int) -> None:
-        sp = getattr(self, "_main_splitter", None)
-        if sp is None:
+    
+    def set_console_floating(self, floating: bool) -> None:
+        dock = getattr(self, "console", None)
+        if dock is None:
             return
-        sizes = sp.sizes()
-        if len(sizes) >= 2 and sizes[1] > 0:
-            self._console_last_h = sizes[1]
     
-        self._sync_console_menu()
-
-        if hasattr(self, "tabs"):
-            self._remember_console_for_tab(
-                tab_index=self.tabs.currentIndex(),
-                visible=self.is_console_visible(),
-            )
+        f = bool(floating)
+    
+        try:
+            dock.setFloating(f)
+            dock.show()
+        except Exception:
+            pass
+    
+        self._sync_console_float_menu()
+    
+        # When docking back, re-apply per-tab policy
+        if not f and hasattr(self, "console_policy"):
+            if hasattr(self, "tabs"):
+                try:
+                    self.console_policy.apply(
+                        self.tabs.currentIndex()
+                    )
+                except Exception:
+                    pass
 
 
     def _is_dry_mode(self) -> bool:
@@ -1617,12 +1641,15 @@ class GeoPriorForecaster(QMainWindow):
         self.mode_mgr.stop_requested.connect(self._on_stop_requested)
 
         self.chk_dry_run.toggled.connect(self._on_dry_run_toggled)
-        self.log_updated.connect(self._append_log)
+  
+        self.log_updated.connect(
+            lambda m: self.console.log_to(None, m)
+        )
         self.status_updated.connect(
-            self.status_label.setText,
+            lambda m: self.console.status_to(None, m)
         )
         self.progress_updated.connect(
-            self._update_progress,
+            lambda v: self.console.progress_to(None, v, "")
         )
 
         # Train tab (module)
@@ -1765,6 +1792,7 @@ class GeoPriorForecaster(QMainWindow):
                 self.gui_runs_root)
         self._open_path(str(target))
    
+
     def _on_tab_changed(self, index: int) -> None:
         self._update_mode_button(index)
     
@@ -1772,26 +1800,25 @@ class GeoPriorForecaster(QMainWindow):
         res_idx = getattr(self, "_results_tab_index", -1)
         tools_idx = getattr(self, "_tools_tab_index", -1)
         prep_idx = getattr(self, "_preprocess_tab_index", -1)
-        setup_idx = getattr (self, "_setup_tab_index", -1)
-        map_idx = getattr (self, "_map_tab_index", -1)
-        
-        hide = index in (
+        setup_idx = getattr(self, "_setup_tab_index", -1)
+        map_idx = getattr(self, "_map_tab_index", -1)
+    
+        hidden = {
             data_idx,
             setup_idx,
             map_idx,
             res_idx,
             tools_idx,
-        )
-        default_vis = not hide
-        
-        m = getattr(self, "_console_vis_by_tab", None)
-        if isinstance(m, dict):
-            vis = bool(m.get(index, default_vis))
+        }
+    
+        # Update policy with defaults and apply.
+        if hasattr(self, "console_policy"):
+            self.console_policy.set_hidden_tabs(hidden)
+            self.console_policy.apply(index)
         else:
-            vis = default_vis
-        
-        self.set_console_visible(vis, remember=False)
-
+            hide = index in hidden
+            self.set_console_visible(not hide, remember=False)
+    
         if index == prep_idx:
             self.preprocess_tab.refresh_status(force=False)
 
@@ -3382,9 +3409,13 @@ class GeoPriorForecaster(QMainWindow):
             self.tuning_thread = th
     
             # Wire signals
-            th.log_updated.connect(self.log_updated.emit)
-            th.status_updated.connect(self.status_updated.emit)
-            th.progress_changed.connect(self._on_thread_progress)
+            self.console.bind_thread(
+              th,
+              kind="tune",
+              title="Tune",
+              start_msg="Tuning…",
+             )
+                
             th.tuning_finished.connect(self._on_tuning_finished)
             th.error_occurred.connect(self._on_worker_error)
     
@@ -3754,9 +3785,14 @@ class GeoPriorForecaster(QMainWindow):
             self.inference_thread = th
     
             # Wire signals
-            th.log_updated.connect(self.log_updated.emit)
-            th.status_updated.connect(self.status_updated.emit)
-            th.progress_changed.connect(self._on_thread_progress)
+            self.console.bind_thread(
+                th,
+                kind="infer",
+                title="Inference",
+                start_msg="Inference…",
+                meta={"dataset": plan.dataset_key, "out_dir": plan.stage1_dir}
+            )
+            
             th.error_occurred.connect(self._on_worker_error)
             th.inference_finished.connect(self._on_inference_finished)
     
@@ -3853,13 +3889,14 @@ class GeoPriorForecaster(QMainWindow):
 
             self.xfer_thread = th
     
-            th.log_updated.connect(self.log_updated.emit)
-            th.status_updated.connect(
-                self.status_updated.emit
+            self.console.bind_thread(
+                th,
+                kind="xfer",
+                title="Transfer matrix",
+                start_msg="Transferability…",
+                meta={"city_a": plan.city_a, "city_b": plan.city_b},
             )
-            th.progress_changed.connect(
-                self._on_thread_progress
-            )
+            
             th.error_occurred.connect(self._on_worker_error)
             th.xfer_finished.connect(self._on_xfer_finished)
     
@@ -4026,11 +4063,13 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.xfer_view_thread = th
     
-        th.log_updated.connect(self.log_updated.emit)
-        th.status_updated.connect(
-            self.status_updated.emit
+        self.console.bind_thread(
+            th,
+            kind="xfer_view",
+            title="Transfer view(city)",
+            start_msg="viewing…",
         )
-        th.progress_changed.connect(self._on_thread_progress)
+        
         th.error_occurred.connect(self._on_worker_error)
         th.xfer_view_finished.connect(
             self._on_xfer_view_finished
@@ -4180,10 +4219,19 @@ class GeoPriorForecaster(QMainWindow):
             parent=self,
         )
         self.stage1_thread = th
-    
-        th.log_updated.connect(self.log_updated.emit)
-        th.status_updated.connect(self.status_updated.emit)
-        th.progress_changed.connect(self._on_thread_progress)
+        
+        job_kind = job_kind  # "preprocess" or "stage1"
+        title = "Preprocess" if job_kind == "preprocess" else "Stage-1"
+        
+        self.console.bind_thread(
+          th,
+          kind=job_kind,
+          title=f"{title} ({city})",
+          start_msg=f"{title}: preprocessing…",
+        )
+        # th.log_updated.connect(self.log_updated.emit)
+        # th.status_updated.connect(self.status_updated.emit)
+        # th.progress_changed.connect(self._on_thread_progress)
     
         cb = results_cb or self._on_stage1_finished
         th.results_ready.connect(cb)
@@ -4387,20 +4435,72 @@ class GeoPriorForecaster(QMainWindow):
             dev_overrides = getattr(self, "_device_cfg_overrides", {}) or {}
             cfg_overrides.update(dev_overrides)
             self._cfg_overrides = cfg_overrides
+            
+        # --- Training lifecycle overwrite (UI-only keys) ---
+        st = getattr(self, "config_store", None)
+        life = "new"
+        base = ""
     
+        if st is not None:
+            try:
+                life = str(
+                    st.get("train.lifecycle", "new")
+                ).strip().lower()
+                base = str(
+                    st.get("train.base_model_path", "")
+                ).strip()
+            except Exception:
+                life = "new"
+                base = ""
+    
+        if life not in ("new", "resume", "finetune"):
+            life = "new"
+    
+        cfg_over = {"TRAIN_LIFECYCLE": life}
+    
+        if life != "new":
+            from pathlib import Path
+    
+            p = Path(base).expanduser()
+            if not base or not p.exists():
+                QMessageBox.warning(
+                    self,
+                    "Missing base model",
+                    "Resume/Fine-tune needs a valid base "
+                    "model path (.keras / .weights.h5 "
+                    "or a run directory).",
+                )
+                self.train_btn.setEnabled(True)
+                if hasattr(self, "btn_train_options"):
+                    self.btn_train_options.setEnabled(True)
+                self._active_job_kind = None
+                self._update_global_running_state()
+                self._stop_run_timer()
+                return
+    
+            cfg_over["BASE_MODEL_PATH"] = str(p) 
+            
         th = TrainingThread(
             manifest_path=manifest_path,
             cfg_overrides=cfg_overrides,
             evaluate_training=self.geo_cfg.evaluate_training,
             results_root=self.geo_cfg.results_root,
-            base_cfg = self.geo_cfg._base_cfg, 
+            base_cfg=self.geo_cfg._base_cfg,
             parent=self,
+            store=st,
+            config_overwrite=cfg_over,
         )
+     # TODO : IMPLEMENT THE RUN ID to get it here 
         self.train_thread = th
     
-        th.log_updated.connect(self.log_updated.emit)
-        th.status_updated.connect(self.status_updated.emit)
-        th.progress_changed.connect(self._on_thread_progress)
+        self.console.bind_thread(
+            th,
+            kind="train",
+            title="Train (city)",
+            start_msg="Stage-2: training…",
+            meta={"city": self._get_city(), "run_id": run_id}
+        )
+
         th.training_finished.connect(self._on_training_finished)
         th.error_occurred.connect(self._on_worker_error)
     

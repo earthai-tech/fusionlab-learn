@@ -30,6 +30,7 @@ __all__ = [
     "load_bundle_for_inference",
     "save_model",
     "load_model_from_tf",
+    "load_model"
 ]
 
 CustomObjects = Optional[Dict[str, Any]]
@@ -243,7 +244,7 @@ def save_model(
         * Keras 3  -> model.export(dir)
         * Keras 2  -> model.save(dir, save_format="tf")
     """
-    keras = _import_keras()
+    _import_keras()
 
     if manifest_path and manifest is not None:
         save_manifest(manifest_path, manifest)
@@ -645,3 +646,20 @@ def load_bundle_for_inference(
         status.assert_consumed()
 
     return model
+
+def load_model(
+    path: str,
+    *,
+    custom_objects: Optional[Dict[str, Any]] = None,
+    compile: bool = False,
+) -> Any:
+    """
+    Load a full Keras model from .keras/.h5 with Keras2/3
+    compatible custom object scope.
+    """
+    keras = _import_keras()
+    with _custom_object_scope(keras, custom_objects):
+        return keras.models.load_model(
+            path,
+            compile=compile,
+        )

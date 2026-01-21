@@ -28,7 +28,7 @@ import platform
 import sys
 import time
 import warnings
-
+from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
@@ -48,6 +48,7 @@ from .....compat.keras import (
     load_model_from_tfv2,
     save_manifest,
     save_model,
+    load_model, 
 )
 from .....nn._shapes import (
     _logs_to_py,
@@ -137,6 +138,130 @@ tf.get_logger().setLevel("ERROR")
 if hasattr(tf, "autograph") and hasattr(tf.autograph, "set_verbosity"):
     tf.autograph.set_verbosity(0)
 
+def _resolve_base_model_path(p: str) -> str:
+    
+    root = Path(p).expanduser().resolve()
+
+    if root.is_file():
+        return str(root)
+
+    if not root.is_dir():
+        raise ValueError(
+            "BASE_MODEL_PATH is not a file/dir: "
+            f"{root}"
+        )
+
+    cands = [
+        root / "artifacts" / "best_model.keras",
+        root / "artifacts" / "best_model.weights.h5",
+        root / "best_model.keras",
+        root / "best_model.weights.h5",
+        root / "artifacts" / "final_model.keras",
+        root / "final_model.keras",
+    ]
+    for c in cands:
+        if c.exists():
+            return str(c)
+
+    raise ValueError(
+        "Could not find a base model in:\n"
+        f"  {root}\n\n"
+        "Expected e.g. artifacts/best_model.keras "
+        "or best_model.weights.h5"
+    )
+
+def _load_base_into_model(
+    model,
+    lifecycle: str,
+    base_path: str,
+    log_fn: Optional[Callable[[str], None]] = None,
+) -> None:
+
+    if log_fn is None:
+        log_fn = lambda _msg: None
+
+    lifecycle = str(lifecycle or "").strip().lower()
+    if lifecycle == "new":
+        return
+
+    if not base_path:
+        raise ValueError(
+            f"TRAIN_LIFECYCLE={lifecycle} needs "
+            "BASE_MODEL_PATH."
+        )
+
+    # Helpful: weights load needs built variables.
+    if hasattr(model, "built") and not model.built:
+        raise ValueError(
+            "Current model is not built yet. "
+            "Build/call the model once before "
+            "loading base weights."
+        )
+
+    resolved = _resolve_base_model_path(base_path)
+    log_fn(
+        "[Train lifecycle] "
+        f"{lifecycle} <- {resolved}"
+    )
+
+    custom = {
+        "GeoPriorSubsNet": GeoPriorSubsNet,
+        "PoroElasticSubsNet": PoroElasticSubsNet,
+        "FixedGammaW": FixedGammaW,
+        "FixedHRef": FixedHRef,
+        "LearnableKappa": LearnableKappa,
+        "LearnableMV": LearnableMV,
+    }
+
+    # -------------------------------------------------
+    # Full-model artifact (.keras / .h5)
+    # -------------------------------------------------
+    if resolved.endswith((".keras", ".h5")):
+        try:
+            base = load_model(
+                resolved,
+                custom_objects=custom,
+                compile=False,
+            )
+        except Exception as exc:
+            raise ValueError(
+                "Failed to load base model:\n"
+                f"  {resolved}\n\n{exc}"
+            )
+
+        try:
+            model.set_weights(base.get_weights())
+        except Exception as exc:
+            raise ValueError(
+                "Base model weights are not "
+                "compatible with current model.\n\n"
+                f"{exc}"
+            )
+        return
+
+    # -------------------------------------------------
+    # SavedModel directories are not a good "base"
+    # for training init in Keras 3 (often inference-only)
+    # -------------------------------------------------
+    if os.path.isdir(resolved):
+        raise ValueError(
+            "BASE_MODEL_PATH for training init must be "
+            "a .keras/.h5 model file or a weights file.\n"
+            "TF SavedModel directories are intended for "
+            "inference export.\n\n"
+            f"Got: {resolved}"
+        )
+
+    # -------------------------------------------------
+    # Weights-only artifact
+    # -------------------------------------------------
+    try:
+        model.load_weights(resolved)
+    except Exception as exc:
+        raise ValueError(
+            "Failed to load base weights:\n"
+            f"  {resolved}\n\n{exc}"
+        )
 
 def _coerce_quantile_weights(d: dict | None, default: dict) -> dict:
     if not d:
@@ -472,6 +597,14 @@ def run_training(
         cfg.get("PHYSICS_BOUNDS_MODE", "soft") or "soft"
     ).strip().lower()
     
+    TRAIN_LIFECYCLE = str(cfg.get("TRAIN_LIFECYCLE", "new")).strip().lower()
+    BASE_MODEL_PATH = str(cfg.get("BASE_MODEL_PATH", "")).strip()
+    if TRAIN_LIFECYCLE not in ("new", "resume", "finetune"):
+        TRAIN_LIFECYCLE = "new"
+    
+    if TRAIN_LIFECYCLE == "new":
+        BASE_MODEL_PATH = ""
+
     _default_phys_bounds = {
         "H_min": 5.0,
         "H_max": 80.0,
@@ -554,10 +687,10 @@ def run_training(
         "subs_model",
         cols_cfg.get("subsidence", "subsidence"),
     )
-    GWL_MODEL_COL = cols_cfg.get(
-        "gwl_model",
-        cols_cfg.get("gwl", "GWL"),
-    )
+    # GWL_MODEL_COL = cols_cfg.get(
+    #     "gwl_model",
+    #     cols_cfg.get("gwl", "GWL"),
+    # )
     SUBSIDENCE_COL = cols_cfg.get("subsidence", "subsidence")
     GWL_COL = cols_cfg.get("gwl", "GWL")
 
@@ -712,6 +845,8 @@ def run_training(
             "QUANTILES": QUANTILES,
             "SUBS_WEIGHTS": SUBS_WEIGHTS,
             "GWL_WEIGHTS": GWL_WEIGHTS,
+            "TRAIN_LIFECYCLE": TRAIN_LIFECYCLE,
+            "BASE_MODEL_PATH": BASE_MODEL_PATH,
         }),
     ]
     
@@ -1348,6 +1483,17 @@ def run_training(
     for xb, _ in train_ds.take(1):
         model(xb)
         break
+
+    # Apply lifecycle after model is built once
+    if TRAIN_LIFECYCLE not in ("new", "resume", "finetune"):
+        TRAIN_LIFECYCLE = "new"
+    
+    _load_base_into_model(
+        model=model,
+        lifecycle=TRAIN_LIFECYCLE,
+        base_path=BASE_MODEL_PATH,
+        log_fn=log,
+    )
 
     # Losses
     loss_dict = {
@@ -2311,8 +2457,11 @@ def run_training(
         add_rmse=True,
     )
     # "mm" (if SUBS_UNIT_TO_SI ~ 1e-3)
-    log("Interpretable EVAL JSON saved to", out["units"]["subs_metrics_unit"]) 
-    
+    log(
+        "Interpretable EVAL JSON saved to "
+        f"{out['units']['subs_metrics_unit']}"
+    )
+
     # Optional plots
     try:
         plot_eval_future(

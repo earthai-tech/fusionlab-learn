@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fusionlab-learn"
-version = "0.4.1"
+version = "0.5.0"
 description = "Next-Gen Temporal Fusion Architectures for Time-Series Forecasting"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.9"

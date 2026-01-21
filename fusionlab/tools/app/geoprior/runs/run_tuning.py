@@ -37,19 +37,20 @@ from typing import Optional, Dict, Any, Callable
 import tensorflow as tf
 from tensorflow.keras.callbacks import EarlyStopping, TerminateOnNaN
 
-from fusionlab.api.util import get_table_size
-from fusionlab.backends.devices import configure_tf_from_cfg
-from fusionlab.utils.generic_utils import (
+from .....api.util import get_table_size
+from .....backends.devices import configure_tf_from_cfg
+from .....compat.keras import save_model, load_model_from_tfv2
+from .....utils.generic_utils import (
     ensure_directory_exists,
     default_results_dir,
     print_config_table,
 )
-from fusionlab._optdeps import with_progress 
-from fusionlab.registry.utils import _find_stage1_manifest
-from fusionlab.nn.forecast_tuner import GeoPriorTuner
-from fusionlab.nn.callbacks import NaNGuard
+from ....._optdeps import with_progress 
+from .....registry.utils import _find_stage1_manifest
+from .....nn.forecast_tuner import GeoPriorTuner
+from .....nn.callbacks import NaNGuard
 
-from fusionlab.utils.nat_utils import (
+from .....utils.nat_utils import (
     load_nat_config,
     load_nat_config_payload,
     ensure_input_shapes,         
@@ -61,20 +62,23 @@ from fusionlab.utils.nat_utils import (
     compile_for_eval,             
 )
 
-from fusionlab.utils.forecast_utils import format_and_forecast   
-from fusionlab.utils.scale_metrics import (                      
+from .....utils.forecast_utils import format_and_forecast   
+from .....utils.scale_metrics import (                      
     inverse_scale_target,
     point_metrics,
     per_horizon_metrics,
 )
-from fusionlab.nn.keras_metrics import (                         
+from .....nn.keras_metrics import (                         
     coverage80_fn,
     sharpness80_fn,
     _to_py,
 )
-from fusionlab.nn.calibration import (                           
+from .....nn.calibration import (                           
     fit_interval_calibrator_on_val,
     apply_calibrator_to_subs,
+)
+from .....nn.pinn.geoprior.scaling import (
+    override_scaling_kwargs,
 )
 from ..callbacks import StopCheckCallback, TunerProgressCallback
 from ..config import ( 
@@ -85,6 +89,34 @@ from ..config import (
 
 GUI_CONFIG_DIR = os.path.dirname(__file__)
 
+# --------------------------------------------------------------
+# Helper: unify model outputs (new: subs_pred/y_pred) vs legacy
+# --------------------------------------------------------------
+def _extract_subs_pred(
+    out_b: Any,
+    out_s_dim: int,
+) -> tf.Tensor:
+    """
+    Return subsidence prediction tensor for a batch.
+
+    Supports:
+    - new dict outputs: {"subs_pred": ...} or {"y_pred": ...}
+    - legacy dict outputs: {"data_final": ...}
+    """
+    if isinstance(out_b, dict):
+        if "subs_pred" in out_b:
+            return out_b["subs_pred"]
+        if "y_pred" in out_b:
+            # Some models return a combined y_pred: (B,H,Q,Os+Og) or (B,H,Os+Og)
+            y_pred = out_b["y_pred"]
+            # If y_pred includes both subs + gwl stacked on last axis
+            return y_pred[..., :out_s_dim]
+        if "data_final" in out_b:
+            return out_b["data_final"][..., :out_s_dim]
+
+    # Fallback: raw tensor/array returned
+    y_pred = out_b
+    return y_pred[..., :out_s_dim]
 
 def run_tuning(
     manifest_path: Optional[str] = None,
@@ -553,6 +585,87 @@ def run_tuning(
         ["cross", "hierarchical", "memory"],
     )
     SCALE_PDE_RESIDUALS = cfg_hp.get("SCALE_PDE_RESIDUALS", True)
+    
+    # --- v3.3 parity with v3.2 scripts: bounds + scaling kwargs ---
+    
+    PHYSICS_BOUNDS_CFG = cfg_hp.get("PHYSICS_BOUNDS", {}) or {}
+    
+    PHYSICS_BOUNDS_MODE = str(
+        cfg_hp.get("PHYSICS_BOUNDS_MODE", "soft") or "soft"
+    ).strip().lower()
+    
+    OFFSET_MODE = str(
+        cfg_hp.get("OFFSET_MODE", "mul") or "mul"
+    ).strip().lower()
+    
+    TIME_UNITS = str(
+        cfg_hp.get("TIME_UNITS", "year") or "year"
+    ).strip().lower()
+    
+    RESIDUAL_METHOD = str(
+        cfg_hp.get(
+            "CONSOLIDATION_STEP_RESIDUAL_METHOD",
+            "exact",
+        )
+        or "exact"
+    ).strip().lower()
+    
+    LOSS_WEIGHT_GWL = float(cfg_hp.get("LOSS_WEIGHT_GWL", 0.5))
+    
+    # defaults should match stage2.py
+    _default_phys_bounds = {
+        "H_min": 5.0,
+        "H_max": 80.0,
+        "K_min": 1e-8,
+        "K_max": 1e-3,
+        "Ss_min": 1e-7,
+        "Ss_max": 1e-3,
+        "tau_min": 7.0 * 86400.0,
+        "tau_max": 300.0 * 31556952.0,
+    }
+
+    phys_bounds = dict(_default_phys_bounds)
+    phys_bounds.update(PHYSICS_BOUNDS_CFG)
+    
+    bounds_for_scaling = {
+        "H_min": float(phys_bounds["H_min"]),
+        "H_max": float(phys_bounds["H_max"]),
+        "K_min": float(phys_bounds["K_min"]),
+        "K_max": float(phys_bounds["K_max"]),
+        "Ss_min": float(phys_bounds["Ss_min"]),
+        "Ss_max": float(phys_bounds["Ss_max"]),
+        "tau_min": float(phys_bounds["tau_min"]),
+        "tau_max": float(phys_bounds["tau_max"]),
+    }
+    
+    # Stage-1 provenance → model scaling kwargs
+    sk_stage1 = cfg.get("scaling_kwargs", {}) or {}
+    sk_model = dict(sk_stage1)
+    
+    override_scaling_kwargs(
+        sk_model,
+        cfg_hp,
+        strict=True,
+        log_fn=log,
+    )
+    
+    sk_bounds0 = sk_model.get("bounds", {}) or {}
+    sk_model["bounds"] = {**sk_bounds0, **bounds_for_scaling}
+    
+    DYN_NAMES = (
+        cfg_stage1.get("DYNAMIC_FEATURE_NAMES")
+        or cfg_stage1.get("dynamic_feature_names")
+        or []
+    )
+    if DYN_NAMES and ("gwl_dyn_index" in sk_model):
+        idx = sk_model.get("gwl_dyn_index")
+        if idx is not None:
+            idx = int(idx)
+            if not (0 <= idx < len(DYN_NAMES)):
+                raise RuntimeError(
+                    "Stage-1 gwl_dyn_index out of bounds: "
+                    f"{idx} not in [0,{len(DYN_NAMES)-1}]"
+                )
 
     # 2.1 Non-HP fixed params (derived from shapes/config)
     fixed_params = {
@@ -565,17 +678,24 @@ def run_tuning(
         "mode": MODE,
         "attention_levels": ATTENTION_LEVELS,
         "quantiles": QUANTILES,
-        "loss_weights": {"subs_pred": 1.0, "gwl_pred": 0.5},
+        "loss_weights": {
+            "subs_pred": 1.0,
+            "gwl_pred": LOSS_WEIGHT_GWL,
+        },
         "pde_mode": PDE_MODE_CONFIG,
         "scale_pde_residuals": SCALE_PDE_RESIDUALS,
         "use_effective_h": USE_EFFECTIVE_H,
+        "bounds_mode": PHYSICS_BOUNDS_MODE,
+        "offset_mode": OFFSET_MODE,
+        "residual_method": RESIDUAL_METHOD,
+        "time_units": TIME_UNITS,
+        "scaling_kwargs": sk_model,
         "architecture_config": {
             "encoder_type": "hybrid",
             "decoder_attention_stack": ATTENTION_LEVELS,
             "feature_processing": "vsn",
         },
     }
-
     # 2.2 Hyperparameter search space
     search_space_cfg = cfg_hp.get("TUNER_SEARCH_SPACE", None)
 
@@ -742,6 +862,12 @@ def run_tuning(
                 "SCALE_PDE_RESIDUALS": SCALE_PDE_RESIDUALS,
                 "USE_EFFECTIVE_H": USE_EFFECTIVE_H,
                 "QUANTILES": QUANTILES,
+                "LOSS_WEIGHT_GWL": LOSS_WEIGHT_GWL,
+                "PHYSICS_BOUNDS_MODE": PHYSICS_BOUNDS_MODE,
+                "OFFSET_MODE": OFFSET_MODE,
+                "RESIDUAL_METHOD": RESIDUAL_METHOD,
+                "TIME_UNITS": TIME_UNITS,
+                "PHYSICS_BOUNDS": phys_bounds,
             },
         ),
         (
@@ -940,31 +1066,99 @@ def run_tuning(
     # ----------------------------------------------------------------------
     # 5) Persist results
     # ----------------------------------------------------------------------
-    best_model_path = os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.keras"
+    USE_TF_SAVEDMODEL = bool(cfg.get("USE_TF_SAVEDMODEL", False))
+    USE_IN_MEMORY_MODEL = bool(cfg.get("USE_IN_MEMORY_MODEL", True))
+    
+    best_keras_path = os.path.join(
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_GeoPrior_best.keras",
     )
+    best_tf_dir = os.path.join(
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_GeoPrior_best_savedmodel",
+    )
+    best_model_path = best_tf_dir if USE_TF_SAVEDMODEL else best_keras_path
+    
     best_weights_path = os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best.weights.h5"
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_GeoPrior_best.weights.h5",
     )
     best_hps_path = os.path.join(
-        RUN_OUTPUT_PATH, f"{CITY_NAME}_GeoPrior_best_hps.json"
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_GeoPrior_best_hps.json",
     )
-
-    if best_model is not None:
-        # 1) Full SavedModel / .keras archive
-        best_model.save(best_model_path)
-        log(f"\nSaved best tuned model to: {best_model_path}")
-
-        # 2) Weights-only checkpoint (robust fallback for inference)
+    
+    model_init_manifest_path = os.path.join(
+        RUN_OUTPUT_PATH,
+        f"{CITY_NAME}_GeoPrior_best_manifest.json",
+    )
+    
+    def _jsonable(x):
+        if isinstance(x, dict):
+            return {k: _jsonable(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [_jsonable(v) for v in x]
+        if hasattr(x, "tolist"):
+            try:
+                return x.tolist()
+            except Exception:
+                return str(x)
         try:
-            best_model.save_weights(best_weights_path)
-            log(f"Saved best model weights to: {best_weights_path}")
-        except Exception as e:
-            log(f"[Warn] Could not save best model weights: {e}")
-            best_weights_path = None
+            json.dumps(x)
+            return x
+        except Exception:
+            return str(x)
+    
+    best_hps_dict = {}
+    if best_hps is not None:
+        try:
+            names = list(getattr(best_hps, "values", {}).keys())
+            if not names and hasattr(best_hps, "space"):
+                names = [hp.name for hp in best_hps.space]
+            best_hps_dict = {n: best_hps.get(n) for n in names}
+        except Exception:
+            try:
+                best_hps_dict = dict(best_hps.values)
+            except Exception:
+                best_hps_dict = {}
+    
+    with open(best_hps_path, "w", encoding="utf-8") as f:
+        json.dump(best_hps_dict, f, indent=2)
+    
+    model_init_manifest = {
+        "city": CITY_NAME,
+        "model": "GeoPriorSubsNet",
+        "created_at": dt.datetime.now().isoformat(timespec="seconds"),
+        "dims": {
+            "static_input_dim": STATIC_DIM,
+            "dynamic_input_dim": DYNAMIC_DIM,
+            "future_input_dim": FUTURE_DIM,
+            "output_subsidence_dim": OUT_S_DIM,
+            "output_gwl_dim": OUT_G_DIM,
+            "forecast_horizon": FORECAST_HORIZON_YEARS,
+        },
+        "config": {
+            "fixed_params": _jsonable(fixed_params),
+            "best_hps": _jsonable(best_hps_dict),
+        },
+        "stage1_manifest": MANIFEST_PATH,
+    }
+    
+    if best_model is not None:
+        save_model(
+            model=best_model,
+            keras_path=best_model_path,
+            weights_path=best_weights_path,
+            manifest_path=model_init_manifest_path,
+            manifest=model_init_manifest,
+            overwrite=True,
+            use_tf_format=USE_TF_SAVEDMODEL,
+        )
+        log(f"\nSaved best tuned model to: {best_model_path}")
     else:
         log("\n[Warn] No best model returned by tuner.")
         best_weights_path = None
+
 
     best_hps_dict: Dict[str, Any] = {}
     if best_hps is not None:
@@ -1168,8 +1362,32 @@ def run_tuning(
                             f"[Eval] Predicting on {dataset_name_for_forecast} "
                             "with tuned model..."
                         )
-                        pred_dict = model_for_eval.predict(X_fore_norm, verbose=0)
-                        data_final = pred_dict["data_final"]
+                        pred_out = model_for_eval.predict(X_fore_norm, verbose=0)
+                        
+                        if isinstance(pred_out, dict):
+                            pred_dict = pred_out
+                        else:
+                            pred_dict = {"data_final": pred_out}
+                        
+                        if "subs_pred" in pred_dict and "gwl_pred" in pred_dict:
+                            s_head = pred_dict["subs_pred"]
+                            h_head = pred_dict["gwl_pred"]
+                        else:
+                            data_final = pred_dict["data_final"]
+                            s_head = data_final[..., :OUT_S_DIM]
+                            h_head = data_final[..., OUT_S_DIM:]
+                        
+                        if QUANTILES:
+                            s_pred_q_cal = apply_calibrator_to_subs(cal80, s_head)
+                            predictions_for_formatter = {
+                                "subs_pred": s_pred_q_cal,
+                                "gwl_pred": h_head,
+                            }
+                        else:
+                            predictions_for_formatter = {
+                                "subs_pred": s_head,
+                                "gwl_pred": h_head,
+                            }
 
                         # Split subsidence / GWL heads and apply calibration to subsidence quantiles
                         if QUANTILES:
@@ -1252,8 +1470,14 @@ def run_tuning(
                             ),
                             metrics_save_format=".json",
                             metrics_time_as_str=True,
-                            value_mode="rate",
-                            logger = log, 
+                            value_mode="cumulative",
+                            input_value_mode="cumulative",
+                            output_unit="mm",
+                            output_unit_from="m",
+                            output_unit_mode="overwrite",
+                            output_unit_col="subsidence_unit",
+                            logger=log, 
+
                         )
 
                         if df_eval is not None and not df_eval.empty:
@@ -1280,9 +1504,14 @@ def run_tuning(
 
                         eval_results: Dict[str, Any] = {}
                         phys: Dict[str, float] = {}
-                        ds_eval_tf = tf.data.Dataset.from_tensor_slices(
-                            (X_fore_norm, y_fore_fmt)
-                        ).batch(BATCH_SIZE)
+                        ds_eval_tf = make_tf_dataset(
+                            X_fore_norm,
+                            y_fore,
+                            batch_size=BATCH_SIZE,
+                            shuffle=False,
+                            mode=MODE,
+                            forecast_horizon=FORECAST_HORIZON_YEARS,
+                        )
 
                         try:
                             eval_results = model_for_eval.evaluate(
@@ -1291,7 +1520,8 @@ def run_tuning(
                                 verbose=1,
                             )
                             log(f"[Eval] Tuned model evaluate(): {eval_results}")
-                            for k in ("epsilon_prior", "epsilon_cons"):
+                            for k in ("epsilon_prior", "epsilon_cons","epsilon_gw", 
+                                      "epsilon_cons_raw",  "epsilon_gw_raw"):
                                 if k in eval_results:
                                     phys[k] = float(_to_py(eval_results[k]))
                             if phys:
@@ -1320,28 +1550,40 @@ def run_tuning(
                         except Exception as e:
                             log(f"[Warn] Physics payload saving failed: {e}")
 
+                        
+                        
+                        # --------------------------------------------------------------
                         # 6.10 Interval metrics (coverage / sharpness) in PHYSICAL space
+                        # --------------------------------------------------------------
                         coverage80_for_abl = None
                         sharpness80_for_abl = None
-
+                        
                         y_true_int = None
                         s_q_int = None
-
+                        
                         if QUANTILES:
                             y_true_list_int = []
                             s_q_list_int = []
+                        
                             for xb, yb in with_progress(
-                                ds_eval_tf, desc="Tuned interval diagnostics"
+                                ds_eval_tf,
+                                desc="Tuned interval diagnostics",
                             ):
                                 out_b = model_for_eval(xb, training=False)
-                                data_final_b = out_b["data_final"]
-                                y_true_list_int.append(yb["subs_pred"])           # (B,H,1)
-                                s_q_list_int.append(data_final_b[..., :OUT_S_DIM])  # (B,H,Q,1)
-
+                        
+                                # New API: subs_pred or y_pred; fallback: data_final
+                                s_pred_b = _extract_subs_pred(out_b, OUT_S_DIM)
+                        
+                                # yb uses training keys: "subs_pred"
+                                y_true_list_int.append(yb["subs_pred"])  # (B,H,1)
+                        
+                                # For quantiles, expect (B,H,Q,1) for subs head
+                                s_q_list_int.append(s_pred_b)            # (B,H,Q,1)
+                        
                             if y_true_list_int and s_q_list_int:
                                 y_true_int = tf.concat(y_true_list_int, axis=0)
                                 s_q_int = tf.concat(s_q_list_int, axis=0)
-
+                        
                                 y_true_phys_np = inverse_scale_target(
                                     y_true_int,
                                     scaler_info=scaler_info_dict,
@@ -1352,49 +1594,71 @@ def run_tuning(
                                     scaler_info=scaler_info_dict,
                                     target_name=SUBSIDENCE_COL,
                                 )
-
+                        
                                 y_true_phys_tf = tf.convert_to_tensor(
-                                    y_true_phys_np, dtype=tf.float32
+                                    y_true_phys_np,
+                                    dtype=tf.float32,
                                 )
                                 s_q_phys_tf = tf.convert_to_tensor(
-                                    s_q_phys_np, dtype=tf.float32
+                                    s_q_phys_np,
+                                    dtype=tf.float32,
                                 )
-
+                        
                                 coverage80_for_abl = float(
                                     coverage80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
                                 )
                                 sharpness80_for_abl = float(
                                     sharpness80_fn(y_true_phys_tf, s_q_phys_tf).numpy()
                                 )
-
+                        
+                        # --------------------------------------------------------------
                         # 6.11 Point metrics + per-horizon metrics (physical units)
+                        # --------------------------------------------------------------
                         metrics_point: Dict[str, Any] = {}
                         per_h_mae_dict: Optional[Dict[str, float]] = None
                         per_h_r2_dict: Optional[Dict[str, float]] = None
-
+                        
                         s_med = None
+                        
                         if QUANTILES and (s_q_int is not None) and (y_true_int is not None):
-                            qs = np.asarray(QUANTILES)
+                            qs = np.asarray(QUANTILES, dtype=float)
                             med_idx = int(np.argmin(np.abs(qs - 0.5)))
-                            s_med = s_q_int[..., med_idx, :]    # (N,H,1)
+                            s_med = s_q_int[..., med_idx, :]  # (N,H,1)
                             y_true_for_point = y_true_int
                         else:
                             y_true_list2 = []
                             s_pred_list2 = []
+                        
                             for xb, yb in with_progress(
-                                ds_eval_tf, desc="Tuned point diagnostics"
+                                ds_eval_tf,
+                                desc="Tuned point diagnostics",
                             ):
                                 out_b = model_for_eval(xb, training=False)
-                                data_final_b = out_b["data_final"]
+                        
+                                # New API: subs_pred or y_pred; fallback: data_final
+                                s_pred_b = _extract_subs_pred(out_b, OUT_S_DIM)
+                        
                                 y_true_list2.append(yb["subs_pred"])
-                                s_pred_list2.append(data_final_b[..., :OUT_S_DIM])
-
+                        
+                                # In non-quantile mode, subs_pred is expected (B,H,1).
+                                # In case a quantile-like tensor slips through, take median-ish:
+                                if (hasattr(s_pred_b, "shape") and len(s_pred_b.shape) >= 4):
+                                    # (B,H,Q,1) -> use nearest 0.5 quantile
+                                    if QUANTILES:
+                                        qs = np.asarray(QUANTILES, dtype=float)
+                                        med_idx = int(np.argmin(np.abs(qs - 0.5)))
+                                    else:
+                                        med_idx = int(s_pred_b.shape[-2] // 2)
+                                    s_pred_b = s_pred_b[..., med_idx, :]
+                        
+                                s_pred_list2.append(s_pred_b)
+                        
                             if s_pred_list2:
                                 s_med = tf.concat(s_pred_list2, axis=0)
                                 y_true_for_point = tf.concat(y_true_list2, axis=0)
                             else:
                                 y_true_for_point = None
-
+                        
                         if s_med is not None and (y_true_for_point is not None):
                             metrics_point = point_metrics(
                                 y_true_for_point,
@@ -1410,6 +1674,7 @@ def run_tuning(
                                 scaler_info=scaler_info_dict,
                                 target_name=SUBSIDENCE_COL,
                             )
+
 
                         # 6.12 Save tuned metrics JSON
                         stamp_eval = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
