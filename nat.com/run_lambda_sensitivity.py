@@ -101,7 +101,11 @@ def main() -> None:
 
     # Cartesian product over PDE mode, lambda_cons, lambda_prior
     for pde_mode in args.pde_modes:
-        for lc, lp in itertools.product(args.lcons, args.lprior):
+        for ii, (lc, lp) in enumerate (itertools.product(args.lcons, args.lprior)):
+            
+            if ii < 14: 
+                continue 
+            
             tag = f"pde={pde_mode}, lcons={lc:g}, lprior={lp:g}"
             print("\n" + "=" * 72)
             print(f"[Sensitivity] Running {tag}")

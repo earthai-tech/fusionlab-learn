@@ -61,6 +61,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QToolButton,
     QStyle, 
+    QSizePolicy
 )
 
 from .config.store import GeoConfigStore, FieldKey
@@ -363,6 +364,11 @@ class GeoPriorForecaster(QMainWindow):
 
         self._console_vis_by_tab = (
             self.console_policy.get_vis_map()
+        )
+        self._restore_main_state()
+        QTimer.singleShot(
+            0,
+            self._apply_console_size_guard,
         )
         
     def _post_init_misc(self) -> None:
@@ -1150,25 +1156,87 @@ class GeoPriorForecaster(QMainWindow):
         timer.reset()
         timer.schedule_hibernate(timeout_ms=60_000)
 
-
     def _make_card(
         self,
         title: str,
     ) -> tuple[QWidget, QVBoxLayout]:
-        """
-        Create a framed 'card' with a bold title and
-        return (frame, inner_layout).
-        """
         frame = QWidget()
         frame.setObjectName("card")
-        vbox = QVBoxLayout(frame)
-        vbox.setContentsMargins(8, 6, 8, 8)
-
+    
+        frame.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Minimum,
+        )
+    
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(8, 6, 8, 8)
+        outer.setSpacing(8)
+    
         lbl = QLabel(title)
         lbl.setObjectName("cardTitle")
-        vbox.addWidget(lbl)
+        lbl.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        outer.addWidget(lbl, 0)
+    
+        body = QWidget(frame)
+        body.setObjectName("cardBody")
+    
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(8)
+    
+        outer.addWidget(body, 0)
+    
+        # Always last: absorbs extra height at bottom
+        outer.addStretch(1)
+    
+        return frame, body_lay
 
-        return frame, vbox
+    
+    # def _make_card(
+    #     self,
+    #     title: str,
+    # ) -> tuple[QWidget, QVBoxLayout]:
+    #     """
+    #     Create a framed 'card' with a bold title and
+    #     return (frame, inner_layout).
+    
+    #     Notes
+    #     -----
+    #     - We add a bottom stretch so that, when the card receives
+    #       extra height (large window / undocked console), the extra
+    #       space is absorbed at the bottom instead of inflating random
+    #       gaps between controls.
+    #     - We set a sane minimum height so cards look consistent
+    #       across tabs.
+    #     """
+    #     frame = QWidget()
+    #     frame.setObjectName("card")
+    
+    #     frame.setSizePolicy(
+    #         QSizePolicy.Expanding,
+    #         QSizePolicy.Minimum,
+    #     )
+    
+    #     vbox = QVBoxLayout(frame)
+    #     vbox.setContentsMargins(8, 6, 8, 8)
+    #     vbox.setSpacing(8)
+    
+    #     lbl = QLabel(title)
+    #     lbl.setObjectName("cardTitle")
+    #     lbl.setSizePolicy(
+    #         QSizePolicy.Expanding,
+    #         QSizePolicy.Fixed,
+    #     )
+    
+    #     vbox.addWidget(lbl)
+    
+    #     # Important: a predictable sink for extra height.
+    #     vbox.addStretch(1)
+    
+    #     return frame, vbox
 
     # --------------------------------------------------------------
     # Run button helpers
@@ -1299,6 +1367,51 @@ class GeoPriorForecaster(QMainWindow):
                 except Exception:
                     pass
 
+
+        if not floating:
+            QTimer.singleShot(
+                0,
+                self._apply_console_size_guard,
+            )
+
+    def _restore_main_state(self) -> None:
+        s = QSettings()
+        st = s.value("main_window/state", None)
+        if st is None:
+            return
+        try:
+            with QSignalBlocker(self):
+                self.restoreState(st)
+        except Exception:
+            return
+
+    def _save_main_state(self) -> None:
+        try:
+            st = self.saveState()
+        except Exception:
+            return
+        s = QSettings()
+        s.setValue("main_window/state", st)
+
+    def _apply_console_size_guard(self) -> None:
+        dock = getattr(self, "console", None)
+        if dock is None:
+            return
+        try:
+            if dock.isFloating() or not dock.isVisible():
+                return
+        except Exception:
+            return
+
+        area = self.dockWidgetArea(dock)
+        if area == Qt.BottomDockWidgetArea:
+            dock.setMinimumHeight(140)
+            dock.setMaximumHeight(int(self.height() * 0.45))
+            target = max(180, int(self.height() * 0.28))
+            try:
+                self.resizeDocks([dock], [target], Qt.Vertical)
+            except Exception:
+                pass
     # -----------------------------------
     # Visibility API (dock-based) 
     # -----------------------------------
@@ -4498,7 +4611,9 @@ class GeoPriorForecaster(QMainWindow):
             kind="train",
             title="Train (city)",
             start_msg="Stage-2: training…",
-            meta={"city": self._get_city(), "run_id": run_id}
+            meta={"city": self._get_city(), 
+                  # "run_id": run_id, 
+                  }
         )
 
         th.training_finished.connect(self._on_training_finished)
@@ -4640,6 +4755,7 @@ class GeoPriorForecaster(QMainWindow):
                 return
     
         # Persist window geometry (best-effort).
+        self._save_main_state()
         save_window_geometry(
             self,
             settings_key="main_window",

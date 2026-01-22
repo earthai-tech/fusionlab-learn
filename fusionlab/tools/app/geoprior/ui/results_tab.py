@@ -313,10 +313,15 @@ class ResultsSummaryPanel(QFrame):
             wedgeprops={"width": 0.45},
         )
         ax.set_aspect("equal")
-        ax.set_title("workflow mix", fontsize=10)
-    
-        for w, lab, v in zip(wedges, labels, vals):
-            self._sec_tip[w] = f"{lab}: {int(v)}"
+
+        # Reserve room for legend on the right
+        self._apply_mpl_margins(
+            self.sec_canvas,
+            left=0.06,
+            right=0.78,
+            bottom=0.10,
+            top=0.90,
+        )
     
         ax.legend(
             wedges,
@@ -326,7 +331,8 @@ class ResultsSummaryPanel(QFrame):
             fontsize=8,
             frameon=False,
         )
-    
+        ax.set_title("workflow mix", fontsize=10, pad=10)
+        
         self.sec_canvas.draw()
 
     def _update_chips(self, idx: ResultsIndex) -> None:
@@ -392,15 +398,24 @@ class ResultsSummaryPanel(QFrame):
                 city = names[i] if i < len(names) else "?"
                 self._main_tip[p] = f"{city} | {lab}: {v}"
 
-
         ax.set_xticks(xs)
         ax.set_xticklabels(names, rotation=0)
         ax.set_ylabel("runs")
         ax.legend(loc="upper right", fontsize=8)
         ax.margins(x=0.02)
-
-        self.canvas.draw()
+        ax.tick_params(axis="x", pad=6)
     
+        # Ensure x labels are visible
+        self._apply_mpl_margins(
+            self.canvas,
+            bottom=0.30,
+            top=0.92,
+            right=0.98,
+            left=0.08,
+        )
+    
+        self.canvas.draw()
+
     def _bind_hover(self, canvas: _MplCanvas, *, which: str) -> None:
         if not _HAS_MPL:
             return
@@ -414,6 +429,39 @@ class ResultsSummaryPanel(QFrame):
     
         c.mpl_connect("motion_notify_event", on_mv)
     
+
+    def _apply_mpl_margins(
+        self,
+        canvas: _MplCanvas,
+        *,
+        left: float = 0.08,
+        right: float = 0.98,
+        bottom: float = 0.22,
+        top: float = 0.92,
+    ) -> None:
+        """
+        Apply consistent Matplotlib figure margins.
+    
+        Parameters
+        ----------
+        canvas:
+            The _MplCanvas wrapper (main or secondary).
+        left, right, bottom, top:
+            Figure fractions in [0..1]. Keep right smaller (e.g. 0.78)
+            when you have a legend anchored outside the axes.
+        """
+        fig = getattr(canvas, "_fig", None)
+        if fig is None:
+            return
+        try:
+            fig.subplots_adjust(
+                left=left,
+                right=right,
+                bottom=bottom,
+                top=top,
+            )
+        except Exception:
+            return
     
     def _on_hover(self, evt, *, which: str) -> None:
         if evt.inaxes is None:
@@ -859,7 +907,7 @@ class ResultsDownloadTab(QWidget):
         main.addWidget(top)
 
         # left: cities
-        left_box = QGroupBox("Cities & workflows")
+        left_box = QGroupBox("Cities && workflows")
         left_lay = QVBoxLayout(left_box)
 
         self.cities_table = QTableWidget()

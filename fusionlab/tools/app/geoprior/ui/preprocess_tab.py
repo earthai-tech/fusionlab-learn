@@ -15,6 +15,7 @@ Business logic lives in app.py (controller).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import json
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -30,7 +31,10 @@ from PyQt5.QtWidgets import (
     QWidget,
     QGridLayout,
     QToolButton,   
-    QStyle,        
+    QStyle, 
+    QScrollArea,
+    QFrame, 
+    QSizePolicy      
 )
 
 from ..config.prior_schema import FieldKey
@@ -414,8 +418,20 @@ class PreprocessTab(QWidget):
     # UI
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
-        p_layout = QVBoxLayout(self)
-        p_layout.setContentsMargins(6, 6, 6, 6)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(8)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        page = QWidget(scroll)
+        scroll.setWidget(page)
+
+        p_layout = QVBoxLayout(page)
+        p_layout.setContentsMargins(0, 0, 0, 0)
         p_layout.setSpacing(8)
 
         # -------------------------------------------------
@@ -529,32 +545,29 @@ class PreprocessTab(QWidget):
         row.addWidget(inp_card, 1)
 
         # ------------- Card 2: Stage-1 options ----------
-        opt_card, opt_box = self._make_card(
-            "Stage-1 options"
-        )
+        opt_card, opt_box = self._make_card("Stage-1 options")
+        
+        self.chk_prep_clean = QCheckBox("Clean Stage-1 run dir before build")
+        self.chk_prep_auto_reuse = QCheckBox("Auto-reuse compatible Stage-1 run")
+        self.chk_prep_force_rebuild = QCheckBox("Force rebuild if mismatch")
+        self.chk_prep_build_future = QCheckBox("Build future NPZ")
+        
+        opt_box.addWidget(self.chk_prep_clean)
+        opt_box.addWidget(self.chk_prep_auto_reuse)
+        
+        row_force = QWidget(opt_card)
+        gl = QGridLayout(row_force)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setHorizontalSpacing(12)
+        gl.setVerticalSpacing(6)
+        
+        gl.addWidget(self.chk_prep_force_rebuild, 0, 0)
+        gl.addWidget(self.chk_prep_build_future, 0, 1)
+        gl.setColumnStretch(0, 1)
+        gl.setColumnStretch(1, 1)
+        
+        opt_box.addWidget(row_force)
 
-        self.chk_prep_clean = QCheckBox(
-            "Clean Stage-1 run dir before build"
-        )
-        self.chk_prep_auto_reuse = QCheckBox(
-            "Auto-reuse compatible Stage-1 run"
-        )
-        self.chk_prep_force_rebuild = QCheckBox(
-            "Force rebuild if mismatch"
-        )
-        self.chk_prep_build_future = QCheckBox(
-            "Build future NPZ"
-        )
-
-        for cb in (
-            self.chk_prep_clean,
-            self.chk_prep_auto_reuse,
-            self.chk_prep_force_rebuild,
-            self.chk_prep_build_future,
-        ):
-            opt_box.addWidget(cb)
-
-        opt_box.addStretch(1)
         row.addWidget(opt_card, 1)
 
         # -------------- Card 3: Stage-1 status ----------
@@ -604,24 +617,50 @@ class PreprocessTab(QWidget):
         ws_card, ws_box = self._make_card(
             "Stage-1 workspace"
         )
-
+        ws_card.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        
         self.stage1_ws = Stage1Workspace()
         ws_box.addWidget(self.stage1_ws, 1)
         p_layout.addWidget(ws_card, 1)
+        # p_layout.addStretch(1)\
 
+        self.stage1_ws.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        
+        self.stage1_ws.tabs.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        def _dump(layout):
+            for i in range(layout.count()):
+                it = layout.itemAt(i)
+                w = it.widget()
+                s = it.spacerItem()
+                print(i, "W", type(w).__name__ if w else None,
+                      "S", bool(s), "stretch", layout.stretch(i))
+                
+        if os.getenv("GEOPRIOR_DEBUG_LAYOUT") == "1":
+            _dump(ws_box)
+  
         # -------------------------------------------------
         # Bottom: Run (right)
         # -------------------------------------------------
+        outer.addWidget(scroll, 1)
+
         run_row = QHBoxLayout()
         run_row.setSpacing(10)
 
         self.btn_run_stage1 = self._make_run_button(
             "Run Stage-1 preprocessing"
         )
-
         run_row.addStretch(1)
         run_row.addWidget(self.btn_run_stage1)
-        p_layout.addLayout(run_row)
+        outer.addLayout(run_row)
 
     def _wire(self) -> None:
         # Top buttons

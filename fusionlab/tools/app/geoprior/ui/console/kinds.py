@@ -22,7 +22,7 @@ K_XF = KindSpec("xfer", "Transfer", "XF")
 K_XV = KindSpec("xfer_view", "Xfer View", "XV")
 
 K_MAIN = KindSpec("main", "Main", "MAIN")
-K_ALL = KindSpec("all", "All", "ALL")
+K_ALL = KindSpec("all", "History", "ALL")
 
 KINDS = {
     K_PREP.kind: K_PREP,

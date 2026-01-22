@@ -41,9 +41,15 @@ Notes
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Mapping
+from typing import ( 
+    List, Tuple, 
+    Any, Dict, Optional,
+    Mapping
+)
 
 import os
+import platform
+import sys
 
 from PyQt5.QtCore import Qt, QSignalBlocker
 from PyQt5.QtWidgets import (
@@ -496,32 +502,9 @@ class DeviceOptionsWidget(QWidget):
     # --------------------------- diagnostics ---------------------------
 
     def _refresh_diag(self, *_: Any) -> None:
-        lines = []
-        lines.append(f"CPUs detected: {os.cpu_count() or 'unknown'}")
-
-        # Try to detect GPUs without hard-failing
-        gpus = None
-        tf_ver = None
-        try:
-            import tensorflow as tf  # type: ignore
-            tf_ver = getattr(tf, "__version__", None)
-            gpus = tf.config.list_physical_devices("GPU")
-        except Exception:
-            gpus = None
-
-        if tf_ver:
-            lines.append(f"TensorFlow: {tf_ver}")
-        else:
-            lines.append("TensorFlow: not importable")
-
-        if gpus is None:
-            lines.append("GPUs: unknown (TF not available)")
-        else:
-            lines.append(f"GPUs detected: {len(gpus)}")
-            for i, dev in enumerate(gpus):
-                lines.append(f"  - GPU[{i}]: {getattr(dev, 'name', str(dev))}")
-
-        self.txt_diag.setPlainText("\n".join(lines))
+        self.txt_diag.setPlainText(
+            runtime_summary_text(self._store)
+        )
 
     def refresh_from_options(self, opts: DeviceOptions) -> None:
         """Refresh UI from a standalone options object (legacy dialogs)."""
@@ -600,34 +583,6 @@ class DeviceOptionsWidget(QWidget):
         """Return NAT-style TF_* overrides from current UI state."""
         return self._collect_options().to_cfg_overrides()
 
-    # def _commit_to_store(self, *_: Any) -> None:
-    #     """Collect UI state and push to store (or keep locally)."""
-    #     opts = self._collect_options()
-
-    #     patch: Dict[str, Any] = {
-    #         "tf_device_mode": (opts.tf_device_mode or "auto").strip().lower(),
-    #         "tf_intra_threads": opts.tf_intra_threads,
-    #         "tf_inter_threads": opts.tf_inter_threads,
-    #     }
-
-    #     # GPU controls: if disabled, do not write (preserve baseline)
-    #     if self.chk_gpu_controls.isChecked():
-    #         patch["tf_gpu_allow_growth"] = bool(opts.tf_gpu_allow_growth)
-    #         patch["tf_gpu_memory_limit_mb"] = opts.tf_gpu_memory_limit_mb
-
-    #     if self._store is not None:
-    #         _store_patch_fields(self._store, patch)
-    #     else:
-    #         # standalone: keep baseline updated so OK exports correct values
-    #         self._baseline_opts = DeviceOptions(
-    #             tf_device_mode=patch.get("tf_device_mode", self._baseline_opts.tf_device_mode),
-    #             tf_intra_threads=patch.get("tf_intra_threads", self._baseline_opts.tf_intra_threads),
-    #             tf_inter_threads=patch.get("tf_inter_threads", self._baseline_opts.tf_inter_threads),
-    #             tf_gpu_allow_growth=patch.get("tf_gpu_allow_growth", self._baseline_opts.tf_gpu_allow_growth),
-    #             tf_gpu_memory_limit_mb=patch.get("tf_gpu_memory_limit_mb", self._baseline_opts.tf_gpu_memory_limit_mb),
-    #         )
-
-    #     self._apply_enable_state()
         
     def _commit_to_store(self, *_: Any) -> None:
         """Collect UI state and push to store."""
@@ -717,3 +672,232 @@ def _store_patch_fields(store: GeoConfigStore, patch: Mapping[str, Any]) -> None
             sig.emit()
         except Exception:
             pass
+        
+# ----------------------------------------------------------------------
+# Public runtime helpers (shared by Train tab + Devices panel)
+# ----------------------------------------------------------------------
+
+def runtime_summary_text(
+    store: Optional[GeoConfigStore] = None,
+) -> str:
+
+    lines: List[str] = []
+
+    os_s = platform.platform()
+    py_s = sys.version.split()[0]
+    cpu_n = os.cpu_count() or 0
+
+    lines.append(f"OS: {os_s}")
+    lines.append(f"Python: {py_s}")
+    lines.append(f"CPU cores: {cpu_n}")
+
+    # RAM
+    try:
+        import psutil
+
+        total = float(psutil.virtual_memory().total)
+        gb = total / (1024.0**3)
+        lines.append(f"RAM: {gb:.1f} GB")
+    except Exception:
+        pass
+
+    # Backend/framework choice + versions
+    lines.extend(_backend_lines(store))
+
+    # GPU summary (TF first, then Torch)
+    lines.extend(_gpu_lines())
+
+    return "\n".join(lines)
+
+
+def _backend_lines(
+    store: Optional[GeoConfigStore],
+) -> List[str]:
+    chosen = _backend_choice_from_store(store)
+    det, vers = _backend_detected()
+
+    if chosen != "Auto":
+        v = vers.get(chosen, "")
+        if v:
+            return [f"Backend: {chosen} ({v})"]
+        return [f"Backend: {chosen}"]
+
+    if det == "None":
+        return ["Backend: Auto (none detected)"]
+
+    if det == "Both":
+        tfv = vers.get("TensorFlow", "")
+        thv = vers.get("PyTorch", "")
+        msg = "Backend: Auto (TF + Torch available)"
+        if tfv or thv:
+            msg += f"  TF={tfv}  Torch={thv}"
+        return [msg]
+
+    v = vers.get(det, "")
+    if v:
+        return [f"Backend: Auto ({det}, {v})"]
+    return [f"Backend: Auto ({det})"]
+
+
+def _backend_choice_from_store(
+    store: Optional[GeoConfigStore],
+) -> str:
+    if store is None:
+        return "Auto"
+
+    # Try cfg attributes first (robust)
+    try:
+        cfg = _store_cfg(store)
+    except Exception:
+        cfg = None
+
+    names = (
+        "backend",
+        "engine",
+        "framework",
+        "dl_backend",
+        "nn_backend",
+        "trainer_backend",
+        "compute_backend",
+    )
+
+    for n in names:
+        v = None
+        if cfg is not None and hasattr(cfg, n):
+            v = getattr(cfg, n)
+        if v is None:
+            continue
+
+        s = str(v).strip().lower()
+        if not s:
+            continue
+
+        if "torch" in s or "pytorch" in s:
+            return "PyTorch"
+        if "tf" in s or "tensorflow" in s or "keras" in s:
+            return "TensorFlow"
+        if "jax" in s:
+            return "JAX"
+        if s in ("auto", "default"):
+            return "Auto"
+
+    return "Auto"
+
+
+def _backend_detected() -> Tuple[str, dict]:
+    vers: dict[str, str] = {}
+
+    have_tf = False
+    have_th = False
+
+    try:
+        import tensorflow as tf
+
+        have_tf = True
+        vers["TensorFlow"] = getattr(tf, "__version__", "")
+    except Exception:
+        pass
+
+    try:
+        import torch
+
+        have_th = True
+        vers["PyTorch"] = getattr(torch, "__version__", "")
+    except Exception:
+        pass
+
+    if have_tf and have_th:
+        return "Both", vers
+    if have_tf:
+        return "TensorFlow", vers
+    if have_th:
+        return "PyTorch", vers
+    return "None", vers
+
+
+def _gpu_lines() -> List[str]:
+    out: List[str] = []
+
+    # -----------------------------
+    # TensorFlow (preferred)
+    # -----------------------------
+    try:
+        import tensorflow as tf
+
+        gpus = tf.config.list_physical_devices("GPU")
+        if gpus:
+            out.append(f"GPU: {len(gpus)} device(s)")
+            for i, dev in enumerate(gpus):
+                # dev.name is like "/physical_device:GPU:0"
+                label = getattr(dev, "name", f"GPU:{i}")
+
+                details: Dict[str, Any] = {}
+                try:
+                    details = (
+                        tf.config.experimental
+                        .get_device_details(dev)
+                    )
+                except Exception:
+                    details = {}
+
+                # Human device name (if available)
+                pretty = details.get("device_name") or ""
+                if pretty:
+                    label = pretty
+
+                # Extra details (safe)
+                extras: List[str] = []
+
+                cc = details.get("compute_capability")
+                if isinstance(cc, (tuple, list)) and len(cc) >= 2:
+                    extras.append(f"cc {cc[0]}.{cc[1]}")
+                elif cc:
+                    extras.append(f"cc {cc}")
+
+                mem = details.get("memory_limit")
+                if isinstance(mem, (int, float)) and mem > 0:
+                    mb = mem / (1024.0**2)
+                    extras.append(f"{mb:.0f} MB")
+
+                if extras:
+                    out.append(
+                        f" - {label} ({', '.join(extras)})"
+                    )
+                else:
+                    out.append(f" - {label}")
+
+            return out
+    except Exception:
+        pass
+
+    # -----------------------------
+    # PyTorch fallback
+    # -----------------------------
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            n = int(torch.cuda.device_count())
+            out.append(f"GPU: {n} CUDA device(s)")
+
+            cuda_v = getattr(torch.version, "cuda", None)
+            if cuda_v:
+                out.append(f"CUDA: {cuda_v}")
+
+            try:
+                cudnn_v = torch.backends.cudnn.version()
+                if cudnn_v:
+                    out.append(f"cuDNN: {cudnn_v}")
+            except Exception:
+                pass
+
+            for i in range(n):
+                nm = torch.cuda.get_device_name(i)
+                out.append(f" - cuda:{i} {nm}")
+
+            return out
+    except Exception:
+        pass
+
+    out.append("GPU: none detected")
+    return out

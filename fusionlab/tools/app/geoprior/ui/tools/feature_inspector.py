@@ -37,13 +37,32 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QSizePolicy,
     QSplitter,
-    QGroupBox
+    QGroupBox,
+    QAbstractItemView,
+    QFormLayout,
+    QFrame,
+    QHeaderView,
+    QLineEdit,
+    QProgressBar,
+    QToolButton,
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from ...styles import SECONDARY_TBLUE
 
+class _NumItem(QTableWidgetItem):
+    def __init__(self, text: str, value: float) -> None:
+        super().__init__(text)
+        self.setData(Qt.UserRole, float(value))
+
+    def __lt__(self, other: "QTableWidgetItem") -> bool:
+        try:
+            a = float(self.data(Qt.UserRole))
+            b = float(other.data(Qt.UserRole))
+            return a < b
+        except Exception:
+            return super().__lt__(other)
 
 class FeatureInspectorTool(QWidget):
     """
@@ -88,55 +107,35 @@ class FeatureInspectorTool(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
 
-        # Header row: title + summary + refresh button
         header = QHBoxLayout()
         header.setSpacing(8)
 
         title_lbl = QLabel("<b>Feature inspector</b>", self)
 
         self._summary_lbl = QLabel(
-            "No active dataset. Use “Open dataset…” on the main toolbar.",
+            "No active dataset. Use “Open dataset…” on the main "
+            "toolbar.",
             self,
         )
         self._summary_lbl.setWordWrap(True)
 
-        btn_refresh = QPushButton("Refresh from GUI", self)
-        btn_refresh.clicked.connect(self._refresh_from_app)
-        # btn_refresh.setStyleSheet(
-        #     f"""
-        #     QPushButton {{
-        #         padding: 4px 10px;
-        #         border-radius: 4px;
-        #         background-color: {SECONDARY_TBLUE};
-        #         color: white;
-        #     }}
-        #     QPushButton:hover {{
-        #         opacity: 0.9;
-        #     }}
-        #     """
-        # )
-        btn_refresh.setStyleSheet(
-            f"""
-            QToolButton {{
-                padding: 4px 10px;
-                border-radius: 4px;
-                color: white;
-            }}
-            QToolButton:hover {{
-                background-color: {SECONDARY_TBLUE};
-                opacity: 0.9;
-            }}
-            """
+        self._btn_refresh = QToolButton(self)
+        self._btn_refresh.setObjectName("miniAction")
+        self._btn_refresh.setText("Refresh from GUI")
+        self._btn_refresh.setToolButtonStyle(
+            Qt.ToolButtonTextBesideIcon
         )
+        self._btn_refresh.clicked.connect(self._refresh_from_app)
+
         header.addWidget(title_lbl)
         header.addSpacing(12)
-        header.addWidget(self._summary_lbl, stretch=1)
-        header.addWidget(btn_refresh)
+        header.addWidget(self._summary_lbl, 1)
+        header.addWidget(self._btn_refresh)
 
-        # ----------------- splitter: table (top) + plot (bottom) -----
         splitter = QSplitter(Qt.Vertical, self)
 
-        # Table of features (top)
+        top_split = QSplitter(Qt.Horizontal, self)
+
         self._table = QTableWidget(self)
         self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels(
@@ -151,16 +150,60 @@ class FeatureInspectorTool(QWidget):
                 "Max",
             ]
         )
-        self._table.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding,
-        )
         self._table.setSortingEnabled(True)
         self._table.verticalHeader().setVisible(False)
+        self._table.setSelectionBehavior(
+            QAbstractItemView.SelectRows
+        )
+        self._table.setSelectionMode(
+            QAbstractItemView.SingleSelection
+        )
+        self._table.setEditTriggers(
+            QAbstractItemView.NoEditTriggers
+        )
 
-        splitter.addWidget(self._table)
+        hh = self._table.horizontalHeader()
+        hh.setSectionResizeMode(
+            0,
+            QHeaderView.Stretch,
+        )
+        hh.setSectionResizeMode(
+            1,
+            QHeaderView.Stretch,
+        )
+        hh.setSectionResizeMode(
+            2,
+            QHeaderView.ResizeToContents,
+        )
+        hh.setSectionResizeMode(
+            3,
+            QHeaderView.ResizeToContents,
+        )
+        hh.setSectionResizeMode(
+            4,
+            QHeaderView.ResizeToContents,
+        )
+        hh.setSectionResizeMode(
+            5,
+            QHeaderView.ResizeToContents,
+        )
+        hh.setSectionResizeMode(
+            6,
+            QHeaderView.ResizeToContents,
+        )
+        hh.setSectionResizeMode(
+            7,
+            QHeaderView.ResizeToContents,
+        )
 
-        # Plot / preview (bottom)
+        self._fx_card = self._build_feature_card()
+
+        top_split.addWidget(self._table)
+        top_split.addWidget(self._fx_card)
+        top_split.setSizes([760, 280])
+
+        splitter.addWidget(top_split)
+
         plot_group = QGroupBox("Quick visual preview", self)
         plot_layout = QVBoxLayout(plot_group)
         plot_layout.setContentsMargins(6, 6, 6, 6)
@@ -174,29 +217,208 @@ class FeatureInspectorTool(QWidget):
 
         self._fig = Figure(figsize=(4, 2))
         self._canvas = FigureCanvas(self._fig)
-        self._canvas.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding,
-        )
 
         plot_layout.addWidget(self._plot_label)
-        plot_layout.addWidget(self._canvas, stretch=1)
+        plot_layout.addWidget(self._canvas, 1)
 
         splitter.addWidget(plot_group)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
 
         layout.addLayout(header)
-        layout.addWidget(splitter, stretch=1)
+        layout.addWidget(splitter, 1)
 
-        # When selection changes → update plot
         self._table.itemSelectionChanged.connect(
             self._on_table_selection_changed
         )
+        
+    def _make_pct_bar(self, pct: float) -> QProgressBar:
+        bar = QProgressBar(self)
+        bar.setObjectName("fxPctBar")
+        bar.setRange(0, 1000)
+        bar.setValue(int(round(pct * 10.0)))
+        bar.setTextVisible(False)
+        bar.setFixedHeight(14)
+        bar.setMinimumWidth(140)
+        bar.setToolTip(f"Missing: {pct:.1f} %")
+        return bar
+
+    def _build_feature_card(self) -> QFrame:
+        card = QFrame(self)
+        card.setObjectName("fxCard")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        self._fx_title = QLabel("No selection", card)
+        self._fx_title.setObjectName("fxTitle")
+
+        self._fx_meta = QLabel("Select a row in the table.", card)
+        self._fx_meta.setWordWrap(True)
+
+        self._fx_roles = QLabel("", card)
+        self._fx_roles.setWordWrap(True)
+        self._fx_roles.setObjectName("fxRoles")
+
+        self._fx_missing_lbl = QLabel("Missingness", card)
+        self._fx_missing = self._make_pct_bar(0.0)
+
+        self._fx_counts = QLabel("", card)
+        self._fx_counts.setWordWrap(True)
+
+        self._fx_range = QLabel("", card)
+        self._fx_range.setWordWrap(True)
+
+        self._fx_corr = QLabel("", card)
+        self._fx_corr.setWordWrap(True)
+
+        self._fx_note = QLabel("", card)
+        self._fx_note.setWordWrap(True)
+        self._fx_note.setObjectName("fxNote")
+
+        lay.addWidget(self._fx_title)
+        lay.addWidget(self._fx_meta)
+        lay.addWidget(self._fx_roles)
+        lay.addWidget(self._fx_missing_lbl)
+        lay.addWidget(self._fx_missing)
+        lay.addWidget(self._fx_counts)
+        lay.addWidget(self._fx_range)
+        lay.addWidget(self._fx_corr)
+        lay.addWidget(self._fx_note)
+        lay.addStretch(1)
+        
+        self._fx_top_lbl = QLabel("Top values", card)
+        self._fx_top_lbl.setObjectName("fxMiniTitle")
+
+        self._fx_top_tbl = QTableWidget(card)
+        self._fx_top_tbl.setObjectName("fxMiniTable")
+        self._fx_top_tbl.setColumnCount(2)
+        self._fx_top_tbl.setHorizontalHeaderLabels(
+            ["Value", "Count"]
+        )
+        self._fx_top_tbl.verticalHeader().setVisible(False)
+        self._fx_top_tbl.setEditTriggers(
+            QAbstractItemView.NoEditTriggers
+        )
+        self._fx_top_tbl.setSelectionMode(
+            QAbstractItemView.NoSelection
+        )
+        self._fx_top_tbl.setSortingEnabled(False)
+        self._fx_top_tbl.setAlternatingRowColors(True)
+        self._fx_top_tbl.setMaximumHeight(180)
+
+        hh = self._fx_top_tbl.horizontalHeader()
+        hh.setSectionResizeMode(
+            0,
+            QHeaderView.Stretch,
+        )
+        hh.setSectionResizeMode(
+            1,
+            QHeaderView.ResizeToContents,
+        )
+
+        lay.addWidget(self._fx_top_lbl)
+        lay.addWidget(self._fx_top_tbl)
+
+        return card
 
     # ------------------------------------------------------------------
     # Data resolution helpers
     # ------------------------------------------------------------------
+    def _mini_clear(self) -> None:
+        self._fx_top_tbl.setRowCount(0)
+
+    def _mini_set_rows(
+        self,
+        title: str,
+        rows: list[tuple[str, str]],
+    ) -> None:
+        self._fx_top_lbl.setText(title)
+        self._fx_top_tbl.setRowCount(len(rows))
+
+        for r, (a, b) in enumerate(rows):
+            it0 = QTableWidgetItem(a)
+            it1 = QTableWidgetItem(b)
+            it1.setTextAlignment(
+                Qt.AlignRight | Qt.AlignVCenter
+            )
+            self._fx_top_tbl.setItem(r, 0, it0)
+            self._fx_top_tbl.setItem(r, 1, it1)
+
+        self._fx_top_tbl.setRowHeight(0, 22)
+        for r in range(self._fx_top_tbl.rowCount()):
+            self._fx_top_tbl.setRowHeight(r, 22)
+            
+    def _update_mini_stats(self, s: pd.Series) -> None:
+        if s is None or s.empty:
+            self._mini_set_rows("Stats", [])
+            return
+
+        clean = s.dropna()
+        if clean.empty:
+            self._mini_set_rows("Stats", [])
+            return
+
+        n = int(clean.shape[0])
+        if n > 200_000:
+            try:
+                clean = clean.sample(
+                    200_000,
+                    random_state=0,
+                )
+            except Exception:
+                clean = clean.iloc[:200_000]
+
+        if is_bool_dtype(clean):
+            vc = clean.value_counts().head(8)
+            rows = []
+            for k, v in vc.items():
+                rows.append((str(k), f"{int(v):,}"))
+            self._mini_set_rows("Top values", rows)
+            return
+
+        if is_datetime64_any_dtype(clean):
+            dt = pd.to_datetime(clean, errors="coerce").dropna()
+            if dt.empty:
+                self._mini_set_rows("Datetime", [])
+                return
+
+            top = dt.value_counts().head(8)
+            rows = [
+                ("min", str(dt.min())),
+                ("max", str(dt.max())),
+            ]
+            for k, v in top.items():
+                rows.append((str(k), f"{int(v):,}"))
+            self._mini_set_rows("Datetime", rows)
+            return
+
+        if is_numeric_dtype(clean):
+            x = pd.to_numeric(clean, errors="coerce").dropna()
+            if x.empty:
+                self._mini_set_rows("Numeric stats", [])
+                return
+
+            d = x.describe()
+            keys = ["mean", "std", "min", "25%"]
+            keys += ["50%", "75%", "max"]
+
+            rows: list[tuple[str, str]] = []
+            for k in keys:
+                if k in d.index:
+                    rows.append((k, f"{float(d[k]):.4g}"))
+            self._mini_set_rows("Numeric stats", rows)
+            return
+
+        vc = clean.astype("string").value_counts().head(8)
+        rows = []
+        for k, v in vc.items():
+            txt = str(k)
+            if len(txt) > 28:
+                txt = txt[:25] + "…"
+            rows.append((txt, f"{int(v):,}"))
+        self._mini_set_rows("Top values", rows)
+
     def _resolve_dataframe(self) -> tuple[Optional[pd.DataFrame], Optional[Path]]:
         """
         Try to obtain the active dataset from the main app.
@@ -372,29 +594,70 @@ class FeatureInspectorTool(QWidget):
                 min_val = max_val = "—"
 
             # Fill table
-            items = [
-                QTableWidgetItem(str(col_name)),
-                QTableWidgetItem(roles_str),
-                QTableWidgetItem(kind),
-                QTableWidgetItem(dtype_str),
-                QTableWidgetItem(f"{non_null:,}"),
-                QTableWidgetItem(f"{missing_pct:5.1f}"),
-                QTableWidgetItem(min_val),
-                QTableWidgetItem(max_val),
-            ]
+            # items = [
+            #     QTableWidgetItem(str(col_name)),
+            #     QTableWidgetItem(roles_str),
+            #     QTableWidgetItem(kind),
+            #     QTableWidgetItem(dtype_str),
+            #     QTableWidgetItem(f"{non_null:,}"),
+            #     QTableWidgetItem(f"{missing_pct:5.1f}"),
+            #     QTableWidgetItem(min_val),
+            #     QTableWidgetItem(max_val),
+            # ]
+            it_name = QTableWidgetItem(str(col_name))
+            it_roles = QTableWidgetItem(roles_str)
+            it_kind = QTableWidgetItem(kind)
+            it_dtype = QTableWidgetItem(dtype_str)
+
+            it_non = _NumItem(
+                text=f"{non_null:,}",
+                value=float(non_null),
+            )
+            it_non.setTextAlignment(
+                Qt.AlignRight | Qt.AlignVCenter
+            )
+
+            it_miss = _NumItem(
+                text=f"{missing_pct:5.1f}",
+                value=float(missing_pct),
+            )
+            it_miss.setTextAlignment(
+                Qt.AlignRight | Qt.AlignVCenter
+            )
+
+            it_min = QTableWidgetItem(min_val)
+            it_max = QTableWidgetItem(max_val)
+
+            for it in (it_min, it_max):
+                it.setTextAlignment(
+                    Qt.AlignRight | Qt.AlignVCenter
+                )
+
+            self._table.setItem(row, 0, it_name)
+            self._table.setItem(row, 1, it_roles)
+            self._table.setItem(row, 2, it_kind)
+            self._table.setItem(row, 3, it_dtype)
+            self._table.setItem(row, 4, it_non)
+            self._table.setItem(row, 5, it_miss)
+            self._table.setItem(row, 6, it_min)
+            self._table.setItem(row, 7, it_max)
+
+            bar = self._make_pct_bar(float(missing_pct))
+            self._table.setCellWidget(row, 5, bar)
+            self._table.setRowHeight(row, 26)
 
             # Highlight targets / physics a bit
-            if any(r.startswith("target") or r.startswith("physics") for r in roles):
-                for it in items[:2]:
-                    f = it.font()
-                    f.setBold(True)
-                    it.setFont(f)
+            # if any(r.startswith("target") or r.startswith("physics") for r in roles):
+            #     for it in items[:2]:
+            #         f = it.font()
+            #         f.setBold(True)
+            #         it.setFont(f)
 
-            for col_ix, it in enumerate(items):
-                # Right-align numeric-ish columns
-                if col_ix in (4, 5, 6, 7):
-                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self._table.setItem(row, col_ix, it)
+            # for col_ix, it in enumerate(items):
+            #     # Right-align numeric-ish columns
+            #     if col_ix in (4, 5, 6, 7):
+            #         it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            #     self._table.setItem(row, col_ix, it)
 
         self._table.resizeColumnsToContents()
 
@@ -424,7 +687,102 @@ class FeatureInspectorTool(QWidget):
 
         series = self._df[col_name]
         roles = self._role_by_col.get(col_name, [])
+        self._update_feature_card(col_name)
         self._update_plot_for_series(col_name, series, roles)
+        
+    def _update_feature_card(self, col_name: str) -> None:
+        if self._df is None or self._df.empty:
+            self._fx_title.setText("No dataset")
+            return
+
+        if col_name not in self._df.columns:
+            self._fx_title.setText("Invalid selection")
+            return
+
+        s = self._df[col_name]
+        roles = self._role_by_col.get(col_name, [])
+
+        n = int(s.shape[0])
+        non = int(s.notna().sum())
+        miss = n - non
+        pct = (float(miss) / float(n) * 100.0) if n else 0.0
+        uniq = int(s.nunique(dropna=True))
+
+        self._fx_title.setText(col_name)
+        self._fx_meta.setText(
+            f"Kind: {self._infer_kind(s)}  •  dtype: {s.dtype}"
+        )
+        self._fx_roles.setText("Roles: " + ", ".join(roles))
+
+        self._fx_missing.setValue(int(round(pct * 10.0)))
+        self._fx_missing.setToolTip(f"Missing: {pct:.1f} %")
+
+        self._fx_counts.setText(
+            f"Rows: {n:,}  •  Non-null: {non:,}  •  "
+            f"Missing: {miss:,}  •  Unique: {uniq:,}"
+        )
+
+        if is_numeric_dtype(s) and non > 0:
+            mn = float(pd.to_numeric(s, errors="coerce").min())
+            mx = float(pd.to_numeric(s, errors="coerce").max())
+            self._fx_range.setText(f"Range: {mn:.4g} → {mx:.4g}")
+        else:
+            self._fx_range.setText("Range: —")
+
+        self._fx_corr.setText(self._corr_text(col_name, s))
+
+        note = self._quality_note(pct, uniq, non)
+        self._fx_note.setText(note)
+        self._update_mini_stats(s)
+
+    def _corr_text(self, col: str, s: pd.Series) -> str:
+        if self._df is None:
+            return ""
+
+        if not is_numeric_dtype(s):
+            return ""
+
+        cfg = getattr(self._app_ctx, "geo_cfg", None)
+        if cfg is None:
+            return ""
+
+        targets = []
+        subs = getattr(cfg, "subs_col", None)
+        gwl = getattr(cfg, "gwl_col", None)
+
+        for t in (subs, gwl):
+            if t and t in self._df.columns:
+                targets.append(str(t))
+
+        if not targets:
+            return ""
+
+        out = []
+        for t in targets:
+            try:
+                a = pd.to_numeric(self._df[col], errors="coerce")
+                b = pd.to_numeric(self._df[t], errors="coerce")
+                cc = a.corr(b)
+                if pd.notna(cc):
+                    out.append(f"corr({t})={cc:.3f}")
+            except Exception:
+                continue
+
+        if not out:
+            return ""
+
+        return "Target links: " + "  •  ".join(out)
+
+    @staticmethod
+    def _quality_note(pct: float, uniq: int, non: int) -> str:
+        warns = []
+        if pct >= 50.0:
+            warns.append("High missingness (≥50%).")
+        if non > 0 and uniq <= 1:
+            warns.append("Constant feature (no variance).")
+        if not warns:
+            return ""
+        return "Notes: " + " ".join(warns)
 
     def _clear_plot(self, message: str) -> None:
         if self._fig is None or self._canvas is None:

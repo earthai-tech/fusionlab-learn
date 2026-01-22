@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QSizePolicy
 )
 
 from .base import CardBase
@@ -228,8 +229,17 @@ class PhysicsConstraintsCard(CardBase):
         right = self._build_weights_box(host)
         footer = self._build_footer_box(host)
     
-        root.addWidget(left, 0, 0)
-        root.addWidget(right, 0, 1)
+        def _top_wrap(w: QWidget) -> QWidget:
+            wrap = QWidget(host)
+            lay = QVBoxLayout(wrap)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            lay.addWidget(w)
+            lay.addStretch(1)
+            return wrap
+    
+        root.addWidget(_top_wrap(left), 0, 0)
+        root.addWidget(_top_wrap(right), 0, 1)
         root.addWidget(footer, 1, 0, 1, 2)
     
         root.setColumnStretch(0, 1)
@@ -343,6 +353,8 @@ class PhysicsConstraintsCard(CardBase):
         lay.addWidget(chk_clip, r, 1)
         lay.addWidget(sp_clip, r, 2, 1, 2)
         r += 1
+        
+        lay.setRowStretch(r, 1)
 
         return box
 
@@ -418,11 +430,12 @@ class PhysicsConstraintsCard(CardBase):
         )
         r += 1
 
-        exp = _Expander("Offsets & schedule", parent=box)
+        exp = _Expander("Offsets && schedule", parent=box)
         lay.addWidget(exp, r, 0, 1, 4)
         r += 1
 
         self._fill_offset_controls(exp.body_lay, box)
+        lay.setRowStretch(r, 1)
 
         return box
 

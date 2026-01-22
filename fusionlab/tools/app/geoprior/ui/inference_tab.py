@@ -25,6 +25,8 @@ from PyQt5.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QHeaderView,
+    QScrollArea,
+    QFrame
 )
 
 
@@ -116,9 +118,24 @@ class InferenceTab(QWidget):
     # UI
     # -----------------------------------------------------------------
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
+        # root = QVBoxLayout(self)
+        # root.setContentsMargins(6, 6, 6, 6)
+        # root.setSpacing(8)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(8)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        page = QWidget(scroll)
+        scroll.setWidget(page)
+
+        root = QVBoxLayout(page)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
+        root.addStretch(0)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -405,8 +422,11 @@ class InferenceTab(QWidget):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
+        # root.addLayout(grid)
         root.addLayout(grid)
+        root.addStretch(1)
 
+        outer.addWidget(scroll, 1)
         # ---------------------------------------------------------
         # Bottom row: Run
         # ---------------------------------------------------------
@@ -416,7 +436,8 @@ class InferenceTab(QWidget):
         self.btn_run_infer = self._make_run_button("Run inference")
         run_row.addWidget(self.btn_run_infer)
         
-        root.addLayout(run_row)
+        # root.addLayout(run_row)
+        outer.addLayout(run_row)
 
     # -----------------------------------------------------------------
     # Wiring

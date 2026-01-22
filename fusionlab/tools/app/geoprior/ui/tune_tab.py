@@ -39,7 +39,9 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QAbstractItemView,
     QToolButton,
-    QStyle
+    QStyle, 
+    QScrollArea, 
+    QFrame
 )
 
 from ..config.prior_schema import FieldKey
@@ -320,14 +322,36 @@ class TuneTab(QWidget):
         # -------------------------------------------------
         # Root layout
         # -------------------------------------------------
-        u_layout = QVBoxLayout(self)
-        u_layout.setContentsMargins(6, 6, 6, 6)
-        u_layout.setSpacing(8)
+        # u_layout = QVBoxLayout(self)
+        # u_layout.setContentsMargins(6, 6, 6, 6)
+        # u_layout.setSpacing(8)
     
+        # grid = QGridLayout()
+        # grid.setHorizontalSpacing(10)
+        # grid.setVerticalSpacing(10)
+        # u_layout.addLayout(grid, 1)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(8)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        page = QWidget(scroll)
+        scroll.setWidget(page)
+
+        u_layout = QVBoxLayout(page)
+        u_layout.setContentsMargins(0, 0, 0, 0)
+        u_layout.setSpacing(8)
+
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(10)
-        u_layout.addLayout(grid, 1)
+        u_layout.addLayout(grid)
+        u_layout.addStretch(1)
+
+        outer.addWidget(scroll, 1)
     
         # Two columns
         grid.setColumnStretch(0, 1)
@@ -711,15 +735,22 @@ class TuneTab(QWidget):
         # =================================================
         # (2,1) Run button (separate from controls)
         # =================================================
-        run_w = QWidget()
-        run_l = QHBoxLayout(run_w)
-        run_l.setContentsMargins(0, 0, 0, 0)
-        run_l.addStretch(1)
+        # run_w = QWidget()
+        # run_l = QHBoxLayout(run_w)
+        # run_l.setContentsMargins(0, 0, 0, 0)
+        # run_l.addStretch(1)
     
+        # self.btn_run_tune = self._make_run_button("Run tuning")
+        # run_l.addWidget(self.btn_run_tune)
+    
+        # grid.addWidget(run_w, 2, 1)
+        
+        run_row = QHBoxLayout()
+        run_row.setContentsMargins(0, 0, 0, 0)
+        run_row.addStretch(1)
         self.btn_run_tune = self._make_run_button("Run tuning")
-        run_l.addWidget(self.btn_run_tune)
-    
-        grid.addWidget(run_w, 2, 1)
+        run_row.addWidget(self.btn_run_tune)
+        outer.addLayout(run_row)
 
     def _on_more_phys_hp(self) -> None:
         if PhysHPDialog.edit(store=self._store, parent=self):

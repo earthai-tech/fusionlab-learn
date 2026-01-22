@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import errno
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from PyQt5.QtCore import (
     QObject,
@@ -19,20 +19,9 @@ from PyQt5.QtWidgets import (
 
 from ..styles import LOG_STYLES
 
-
 class LogManager(QObject):
-    """
-    Central log buffer + widget + on-disk dumping with UI
-    trimming and optional collapse mode.
-
-    Modes
-    -----
-    - "default": full append, trimmed to `_ui_limit`
-    - "collapse": identical consecutive lines are
-      collapsed with a count suffix.
-    """
-
     line_appended = pyqtSignal(str)
+    pending_changed = pyqtSignal(int)
 
     def __init__(
         self,
@@ -47,47 +36,171 @@ class LogManager(QObject):
         super().__init__(parent)
         self._widget = log_widget
         self._widget.setObjectName("logWidget")
-        # Styling is already applied at window level, but this is harmless:
         self._widget.setStyleSheet(LOG_STYLES)
 
-        self._cache: list[str] = []
-        self._limit = cache_limit
-        self._ui_limit = ui_limit
-        self._log_dir = log_dir_name
-        self.mode = mode
+        self._cache: List[Tuple[str, str]] = []
+        self._limit = int(cache_limit)
+        self._ui_limit = int(ui_limit)
+        self._log_dir = str(log_dir_name)
+        self.mode = str(mode)
 
-        # For collapse mode
-        self._last_line: Optional[str] = None
+        self._show_ts = True
+
+        # Collapse bookkeeping
+        self._last_payload: Optional[str] = None
+        self._last_display: Optional[str] = None
         self._repeat_count = 0
 
+        self._paused = False
+        self._pending: List[Tuple[str, str]] = []
+
+    # -------------------------
+    # Getters (tiny API)
+    # -------------------------
+    def ui_limit(self) -> int:
+        return int(self._ui_limit)
+
+    def cache_size(self) -> int:
+        return int(len(self._cache))
+
+    def cache_limit(self) -> int:
+        return int(self._limit)
+
+    def show_timestamps(self) -> bool:
+        return bool(self._show_ts)
+
+    # -------------------------
+    # Public API
+    # -------------------------
+    def set_ui_limit(self, n: int) -> None:
+        try:
+            v = int(n)
+        except Exception:
+            return
+        self._ui_limit = max(50, v)
+        if not self._paused:
+            self._repaint_from_cache()
+
+    def set_show_timestamps(self, on: bool) -> None:
+        on = bool(on)
+        if on == self._show_ts:
+            return
+        self._show_ts = on
+        if not self._paused:
+            self._repaint_from_cache()
+
+    def set_paused(self, paused: bool) -> None:
+        self._paused = bool(paused)
+        if not self._paused:
+            self.flush_pending()
+
+    def pending_count(self) -> int:
+        return int(len(self._pending))
+
+    def flush_pending(self) -> None:
+        if not self._pending:
+            self.pending_changed.emit(0)
+            return
+
+        for ts, payload in self._pending:
+            line = self._fmt(ts, payload)
+            self._append_ui(payload, line)
+
+        self._pending.clear()
+        self.pending_changed.emit(0)
+
     def append(self, msg: str) -> None:
-        """Add one line (no timestamp in `msg`), keep scroll at bottom."""
+        payload = str(msg)
         ts = time.strftime("%H:%M:%S")
-        line = f"[{ts}] {msg}"
 
         # 1) full in-memory cache
-        self._cache.append(line)
+        self._cache.append((ts, payload))
         if len(self._cache) > self._limit:
             self._cache.pop(0)
 
-        # 2) UI display
+        # 2) pause -> buffer only
+        if self._paused:
+            self._pending.append((ts, payload))
+            self.line_appended.emit(self._fmt(ts, payload))
+            self.pending_changed.emit(len(self._pending))
+            return
+
+        # 3) append to UI
+        line = self._fmt(ts, payload)
+        self._append_ui(payload, line)
+        self.line_appended.emit(line)
+
+    def save_cache(self, run_output_path: str | Path) -> Path:
+        out_dir = Path(run_output_path) / self._log_dir
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            if e.errno != errno.EEXIST:
+                raise
+
+        fname = out_dir / (
+            f"gui_log_{time.strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+        with open(fname, "w", encoding="utf-8") as fp:
+            lines = [self._fmt(ts, p) for ts, p in self._cache]
+            fp.write("\n".join(lines))
+        return fname
+
+    def clear(self) -> None:
+        self._cache.clear()
+        self._pending.clear()
+        self._paused = False
+        self.pending_changed.emit(0)
+
+        self._last_payload = None
+        self._last_display = None
+        self._repeat_count = 0
+        self._widget.clear()
+
+    # -------------------------
+    # Internals
+    # -------------------------
+    def _fmt(self, ts: str, payload: str) -> str:
+        if self._show_ts:
+            return f"[{ts}] {payload}"
+        return payload
+
+    def _repaint_from_cache(self) -> None:
+        chunk = self._cache[-self._ui_limit :]
+        lines = [self._fmt(ts, p) for ts, p in chunk]
+        self._widget.setPlainText("\n".join(lines))
+
+        c = self._widget.textCursor()
+        c.movePosition(QTextCursor.End)
+        self._widget.setTextCursor(c)
+        self._widget.ensureCursorVisible()
+
+        # Reset collapse state
+        self._last_payload = None
+        self._last_display = None
+        self._repeat_count = 0
+
+    def _append_ui(self, payload: str, line: str) -> None:
         if self.mode == "collapse":
-            if line == self._last_line:
+            if payload == self._last_payload:
                 self._repeat_count += 1
-                display = f"{line}  (×{self._repeat_count})"
+                base = self._last_display or line
+                display = f"{base}  (×{self._repeat_count})"
+
                 cursor = self._widget.textCursor()
                 cursor.movePosition(QTextCursor.End)
                 cursor.select(QTextCursor.BlockUnderCursor)
                 cursor.removeSelectedText()
                 cursor.insertText(display)
             else:
-                self._last_line = line
+                self._last_payload = payload
+                self._last_display = line
                 self._repeat_count = 1
                 self._widget.appendPlainText(line)
         else:
             self._widget.appendPlainText(line)
 
-        # 3) UI trimming
+        # trim blocks
         doc = self._widget.document()
         blocks = doc.blockCount()
         if blocks > self._ui_limit:
@@ -99,7 +212,7 @@ class LogManager(QObject):
                 cursor.deleteChar()
             self._widget.setTextCursor(cursor)
 
-        # 4) scroll to bottom
+        # scroll to bottom
         sb = self._widget.verticalScrollBar()
         sb.setValue(sb.maximum())
         c = self._widget.textCursor()
@@ -107,35 +220,6 @@ class LogManager(QObject):
         self._widget.setTextCursor(c)
         self._widget.ensureCursorVisible()
 
-        # 5) signal
-        self.line_appended.emit(line)
-
-    def save_cache(self, run_output_path: str | Path) -> Path:
-        """
-        Dump the cached lines to disk under
-
-            <run_output_path>/<self._log_dir>/gui_log_<timestamp>.txt
-
-        Returns the file path.
-        """
-        out_dir = Path(run_output_path) / self._log_dir
-        try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            if e.errno != errno.EEXIST:
-                raise
-
-        fname = out_dir / f"gui_log_{time.strftime('%Y%m%d_%H%M%S')}.txt"
-        with open(fname, "w", encoding="utf-8") as fp:
-            fp.write("\n".join(self._cache))
-        return fname
-
-    def clear(self) -> None:
-        """Clear both UI and in-memory cache."""
-        self._cache.clear()
-        self._last_line = None
-        self._repeat_count = 0
-        self._widget.clear()
 
 
 class ProgressManager(QObject):

@@ -128,24 +128,36 @@ class _PlotPanel(QWidget):
     """
     Base helper: a FigureCanvas + toolbar + status label.
     """
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        *,
+        show_toolbar: bool = False,
+    ) -> None:
         super().__init__(parent)
 
         self.fig = Figure(figsize=(5, 4), dpi=100)
         self.canvas = FigureCanvas(self.fig)
-        self.toolbar = NavToolbar(self.canvas, self)
+
+        self.toolbar = None
+        if show_toolbar:
+            self.toolbar = NavToolbar(self.canvas, self)
 
         self.lbl = QLabel("")
-        self.lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        lay.addWidget(self.toolbar)
+        if self.toolbar is not None:
+            lay.addWidget(self.toolbar)
+
         lay.addWidget(self.canvas, 1)
         lay.addWidget(self.lbl)
+
 
     def set_status(self, text: str) -> None:
         self.lbl.setText(_as_str(text))
@@ -208,7 +220,7 @@ class _MapScatterPanel(QWidget):
         controls.addStretch(1)
         controls.addWidget(self.btn_refresh)
 
-        self.plot = _PlotPanel()
+        self.plot = _PlotPanel(show_toolbar=False)
 
         lay.addLayout(controls)
         lay.addWidget(self.plot, 1)

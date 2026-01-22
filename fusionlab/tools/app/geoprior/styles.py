@@ -84,6 +84,14 @@ RUN_BUTTON_DISABLED = "#9CA3AF"  # greyed while running
 #  Light theme – main GeoPrior style
 # ------------------------------------------------------------------ #
 
+def _rgba(hex_color: str, a: float) -> str:
+    h = hex_color.strip().lstrip("#")
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{a:.2f})"
+
+
 FLAB_STYLE_SHEET = f"""
 QMainWindow {{
     background: {BG_LIGHT};
@@ -184,13 +192,7 @@ QComboBox::drop-down {{
     background: rgba(46, 49, 145, 0.20);   /* stronger tint */
 }}
 
-QComboBox::down-arrow:on {{
-    image: url("data:image/svg+xml;utf8,\
-<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'>\
-<path d='M2 3.5 L5 6.5 L8 3.5' fill='none' stroke='{SECONDARY}' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/>\
-</svg>");
-}}
-     /* --- Force visible combo arrow (Qt5-safe) --- */
+/* --- Force visible combo arrow (Qt5-safe) --- */
 QComboBox::down-arrow {{
     image: none;                 /* disable default glyph */
     width: 0px;
@@ -346,6 +348,23 @@ QPushButton#runIconButton:disabled{{
     /* Qt will already dim the icon; this just removes hover halo */
 }}
 
+QToolButton#runButton {{
+  background: transparent;
+  border: none;
+  padding: 2px;
+  min-width: 40px;
+  min-height: 40px;
+  max-width: 40px;
+  max-height: 40px;
+}}
+QToolButton#runButton:hover:enabled {{
+  background-color: rgba(34, 197, 94, 0.16);
+  border-radius: 20px;
+}}
+QToolButton#runButton:disabled {{
+  background: transparent;
+}}
+               
 QToolButton#miniAction,
 QPushButton#miniAction {{
     background: transparent;
@@ -375,13 +394,12 @@ QToolButton#miniAction:focus {{
     background: rgba(46,49,145,0.10);
 }}
                
-QPushButton#miniAction:disabled
+QPushButton#miniAction:disabled,
 QToolButton#miniAction:disabled {{
     border-color: rgba(100,116,139,0.35);
     background: transparent;
     color: rgba(100,116,139,0.55);
 }}
-
 QLineEdit#resultsRootEdit {{
     background: rgba(46, 49, 145, 0.08);
     border: 1px solid rgba(46, 49, 145, 0.55);
@@ -853,8 +871,117 @@ QScrollArea#scriptGenLeftScroll {{
 }}
 QScrollArea#scriptGenLeftScroll QWidget#scriptGenLeft {{
   background: transparent;
-}}   
+}}
+               
+          
+/* ===== Tools: Dataset explorer ===== */
+
+QFrame#dsxTop {{
+  border: 1px solid palette(midlight);
+  border-radius: 12px;
+  background: palette(base);
+}}
+
+QLabel#dsxStatusChip {{
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: palette(alternate-base);
+  border: 1px solid palette(midlight);
+  font-weight: 700;
+}}
+
+QFrame#dsxSummary {{
+  border: 1px solid palette(midlight);
+  border-radius: 12px;
+  background: palette(alternate-base);
+}}
+
+QLabel#dsxChip {{
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: palette(base);
+  border: 1px solid palette(midlight);
+  font-weight: 700;
+}}
+
+QLineEdit#dsxFilter {{
+  padding: 6px 10px;
+  border-radius: 10px;
+}}
+
+QTableWidget#dsxMissingTable {{
+  border: 1px solid palette(midlight);
+  border-radius: 12px;
+  background: palette(base);
+  outline: 0;
+}}
+
+QTableWidget#dsxMissingTable::item {{
+  padding: 6px 8px;
+  border-radius: 8px;
+}}
+
+QTableWidget#dsxMissingTable::item:hover {{
+  background: palette(alternate-base);
+}}
+
+QFrame#dsxPreviewCard {{
+  border: 1px solid palette(midlight);
+  border-radius: 12px;
+  background: palette(base);
+}}
+
+QLabel#dsxPreviewTitle {{
+  font-weight: 800;
+}}
+
+QPlainTextEdit#dsxPreview {{
+  border: 1px solid palette(midlight);
+  border-radius: 10px;
+  background: palette(base);
+}}
+
+QFrame#fxCard {{
+  border: 1px solid palette(midlight);
+  border-radius: 12px;
+  background: palette(base);
+}}
+
+QLabel#fxTitle {{
+  font-weight: 800;
+}}
+
+QLabel#fxRoles {{
+  color: palette(text);
+}}
+
+QLabel#fxNote {{
+  color: palette(text);
+}}
+
+QLabel#fxMiniTitle {{
+  font-weight: 800;
+}}
+
+QTableWidget#fxMiniTable {{
+  border: 1px solid palette(midlight);
+  border-radius: 10px;
+  background: palette(base);
+}}
+
+QHeaderView::section {{
+  padding: 4px 6px;
+  border: 0px;
+}}
+QLabel#dsxChip, QLabel#dsxStatusChip {{
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(46,49,145,0.14);
+  background: rgba(46,49,145,0.04);
+}}
+
 """
+
 
 # ------------------------------------------------------------------ #
 #  Dark theme
@@ -1555,7 +1682,22 @@ QScrollArea#scriptGenLeftScroll {{
 QScrollArea#scriptGenLeftScroll QWidget#scriptGenLeft {{
   background: transparent;
 }}
-               
+QToolButton#runButton {{
+  background: transparent;
+  border: none;
+  padding: 2px;
+  min-width: 40px;
+  min-height: 40px;
+  max-width: 40px;
+  max-height: 40px;
+}}
+QToolButton#runButton:hover:enabled {{
+  background-color: rgba(34, 197, 94, 0.16);
+  border-radius: 20px;
+}}
+QToolButton#runButton:disabled {{
+  background: transparent;
+}}               
 """
 
 # ------------------------------------------------------------------ #
@@ -1635,6 +1777,475 @@ QDockWidget#logDock QTextEdit {{
     font-family: Consolas, monospace;
     font-size: 11px;
     padding: 6px;
+}}
+"""
+
+TRAIN_TAB_PATCH_LIGHT = f"""
+/* ===== Train tab: modern toolbar + disclosure summaries (Light) ===== */
+
+QWidget#trainTopBar {{
+  background: rgba(46,49,145,0.04);
+  border: 1px solid rgba(46,49,145,0.18);
+  border-radius: 12px;
+  padding: 4px 6px;
+}}
+
+QLabel#sumLine {{
+  color: {PALETTE['light_text_muted']};
+  font-size: 11px;
+}}
+
+QToolButton#disclosure {{
+  background: rgba(46,49,145,0.06);
+  border: 1px solid rgba(46,49,145,0.18);
+  border-radius: 10px;
+  padding: 3px 10px;
+  font-weight: 700;
+  color: rgba(30,30,30,0.84);
+}}
+
+QToolButton#disclosure:hover:enabled {{
+  background: rgba(51,153,255,0.14);
+  border-color: {SECONDARY_TBLUE};
+}}
+
+QToolButton#disclosure:checked {{
+  background: rgba(46,49,145,0.12);
+  border-color: rgba(46,49,145,0.30);
+}}
+
+QSplitter::handle {{
+  background: transparent;
+}}
+
+QSplitter::handle:horizontal {{
+  width: 8px;
+}}
+
+QSplitter::handle:horizontal:hover {{
+  background: rgba(46,49,145,0.08);
+  border-radius: 4px;
+}}
+"""
+TRAIN_TAB_PATCH_DARK = f"""
+/* ===== Train tab: modern toolbar + disclosure summaries (Dark) ===== */
+
+QWidget#trainTopBar {{
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  padding: 4px 6px;
+}}
+
+QLabel#sumLine {{
+  color: {PALETTE['dark_text_muted']};
+  font-size: 11px;
+}}
+
+QToolButton#disclosure {{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  padding: 3px 10px;
+  font-weight: 700;
+  color: rgba(226,232,240,0.92);
+}}
+
+QToolButton#disclosure:hover:enabled {{
+  background: rgba(51,153,255,0.18);
+  border-color: {SECONDARY_TBLUE};
+}}
+
+QToolButton#disclosure:checked {{
+  background: rgba(46,49,145,0.22);
+  border-color: rgba(46,49,145,0.40);
+}}
+
+QSplitter::handle {{
+  background: transparent;
+}}
+
+QSplitter::handle:horizontal {{
+  width: 8px;
+}}
+
+QSplitter::handle:horizontal:hover {{
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+}}
+"""
+
+TRAIN_NAV_LIGHT = """
+QFrame#trainNavCard {
+  border: 1px solid rgba(46,49,145,0.18);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.92);
+}
+
+QLabel#trainNavTitle {
+  font-weight: 800;
+  color: rgba(46,49,145,0.96);
+}
+
+QListWidget#trainNavList {
+  border: 1px solid rgba(46,49,145,0.14);
+  border-radius: 12px;
+  background: rgba(46,49,145,0.03);
+  outline: 0;
+  padding: 6px;
+}
+
+QListWidget#trainNavList::item {
+  padding: 7px 10px;
+  border-radius: 10px;
+  color: rgba(30,30,30,0.86);
+}
+
+QListWidget#trainNavList::item:hover {
+  background: rgba(51,153,255,0.14);
+}
+
+QListWidget#trainNavList::item:selected {
+  background: rgba(46,49,145,0.92);
+  color: white;
+}
+"""
+
+TRAIN_NAV_DARK = """
+QFrame#trainNavCard {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(15,23,42,0.25);
+}
+
+QLabel#trainNavTitle {
+  font-weight: 800;
+  color: rgba(226,232,240,0.95);
+}
+
+QListWidget#trainNavList {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  outline: 0;
+  padding: 6px;
+}
+
+QListWidget#trainNavList::item {
+  padding: 7px 10px;
+  border-radius: 10px;
+  color: rgba(226,232,240,0.90);
+}
+
+QListWidget#trainNavList::item:hover {
+  background: rgba(51,153,255,0.18);
+}
+
+QListWidget#trainNavList::item:selected {
+  background: rgba(99,102,241,0.86);
+  color: white;
+}
+"""
+
+TRAIN_NAV_ROW ="""
+QWidget#navRow {
+  border-radius: 10px;
+  background: transparent;
+}
+
+QWidget#navRow[selected="true"] {
+  background: rgba(46,49,145,0.14);
+}
+
+QLabel#navText {
+  font-weight: 700;
+  text-decoration: none;
+  border: none;
+}
+
+QLabel#navChip {
+  padding: 2px 8px;
+  border-radius: 9px;
+  font-weight: 800;
+  min-width: 34px;
+}
+
+QLabel#navChip[status="ok"] {
+  background: rgba(34,197,94,0.18);
+  color: rgba(22,101,52,0.95);
+}
+
+QLabel#navChip[status="warn"] {
+  background: rgba(245,158,11,0.20);
+  color: rgba(146,64,14,0.95);
+}
+
+QLabel#navChip[status="err"] {
+  background: rgba(239,68,68,0.20);
+  color: rgba(127,29,29,0.95);
+}
+
+QLabel#navChip[status="off"] {
+  background: rgba(148,163,184,0.20);
+  color: rgba(30,41,59,0.85);
+}
+QListWidget#trainNavList::item {
+  padding: 0px;
+  border: none;
+  background: transparent;
+}
+
+QListWidget#trainNavList::item:selected {
+  background: transparent;
+}
+QLabel#navChip {
+  min-height: 18px;
+}
+"""
+_CONSOLE_STYLES_LIGHT = f"""
+QDockWidget#logDock {{
+  border: 1px solid {PALETTE['light_border']};
+  border-radius: 12px;
+  background: {PALETTE['light_card_bg']};
+}}
+
+QWidget#consoleTitleBar {{
+  background: {_rgba(PALETTE['primary'], 0.04)};
+  border-bottom: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+}}
+
+QLabel#consoleTitle {{
+  color: {PALETTE['light_text_title']};
+  font-weight: 700;
+}}
+
+QLabel#consoleChip {{
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 700;
+  color: {PALETTE['light_text']};
+  background: {_rgba(PALETTE['primary'], 0.06)};
+  border: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+}}
+
+QLabel#consoleChip[state="running"] {{
+  background: {_rgba(SECONDARY_TBLUE, 0.16)};
+  border-color: {_rgba(SECONDARY_TBLUE, 0.35)};
+}}
+
+QLabel#consoleChip[state="done"] {{
+  background: {_rgba(RUN_BUTTON_IDLE, 0.16)};
+  border-color: {_rgba(RUN_BUTTON_IDLE, 0.35)};
+}}
+
+QLabel#consoleChip[state="failed"] {{
+  background: rgba(220,38,38,0.16);
+  border-color: rgba(220,38,38,0.35);
+}}
+
+QWidget#consoleActions {{
+  background: {_rgba(PALETTE['primary'], 0.04)};
+  border-bottom: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+}}
+
+QLineEdit#consoleFind {{
+  border: 1px solid {_rgba(PALETTE['primary'], 0.22)};
+  background: {_rgba(PALETTE['primary'], 0.06)};
+  border-radius: 12px;
+  padding: 6px 10px;
+}}
+
+QLineEdit#consoleFind:focus {{
+  border-color: {_rgba(SECONDARY_TBLUE, 0.70)};
+  background: {_rgba(SECONDARY_TBLUE, 0.08)};
+}}
+
+QTabWidget#consoleTabs::pane {{
+  border: none;
+  border-top: 1px solid {_rgba(PALETTE['primary'], 0.12)};
+  background: transparent;
+}}
+
+QTabWidget#consoleTabs QTabBar::tab {{
+  padding: 6px 12px;
+  margin-right: 6px;
+  border-radius: 10px;
+  background: {_rgba(PALETTE['primary'], 0.06)};
+  border: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+  color: {_rgba(PALETTE['light_text'], 0.86)};
+  font-weight: 700;
+}}
+
+QTabWidget#consoleTabs QTabBar::tab:selected {{
+  background: {_rgba(PALETTE['primary'], 0.14)};
+  border: 1px solid {_rgba(PALETTE['primary'], 0.28)};
+  color: {_rgba(PALETTE['primary'], 0.98)};
+}}
+
+QTabWidget#consoleTabs QTabBar::tab:hover {{
+  background: {_rgba(SECONDARY_TBLUE, 0.10)};
+  border-color: {_rgba(SECONDARY_TBLUE, 0.35)};
+}}
+
+QPlainTextEdit#logWidget {{
+  border: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+  border-radius: 10px;
+  background: #0b1220;
+  color: rgba(226,232,240,0.96);
+}}
+
+QProgressBar#consoleProgress {{
+  border: 1px solid {_rgba(PALETTE['primary'], 0.18)};
+  border-radius: 7px;
+  background: {_rgba(PALETTE['primary'], 0.06)};
+  height: 12px;
+}}
+
+QProgressBar#consoleProgress::chunk {{
+  border-radius: 7px;
+  background: {PRIMARY_T75};
+}}
+QFrame#consoleSep {{
+  max-width: 1px;
+  min-width: 1px;
+  background: rgba(46,49,145,0.18);
+  margin: 0 6px;
+}}
+
+QLabel#consoleMatch {{
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(46,49,145,0.14);
+  background: rgba(46,49,145,0.06);
+  color: rgba(15,23,42,0.74);
+  font-weight: 700;
+}}
+
+QToolButton#consolePause:checked {{
+  background: rgba(51,153,255,0.10);
+  border: 1px solid rgba(51,153,255,0.35);
+}}
+
+QToolButton#consoleMore::menu-indicator {{ image: none; }}
+QLabel#consolePending {{
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid rgba(46,49,145,0.22);
+  background: rgba(46,49,145,0.10);
+  color: rgba(46,49,145,0.95);
+  font-weight: 800;
+  min-width: 18px;
+  qproperty-alignment: AlignCenter;
+}}
+QLabel#consoleScopeInline {{
+  padding: 0px 10px;
+  color: palette(mid);
+  font-size: 11px;
+}}
+
+"""
+_CONSOLE_STYLES_DARK = f"""
+QDockWidget#logDock {{
+  border: 1px solid {PALETTE['dark_border']};
+  border-radius: 12px;
+  background: {PALETTE['dark_card_bg']};
+}}
+
+QWidget#consoleTitleBar {{
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}}
+
+QLabel#consoleTitle {{
+  color: {PALETTE['dark_text_title']};
+  font-weight: 700;
+}}
+
+QLabel#consoleChip {{
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 700;
+  color: {PALETTE['dark_text']};
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+}}
+
+QLabel#consoleChip[state="running"] {{
+  background: {_rgba(SECONDARY_TBLUE, 0.18)};
+  border-color: {_rgba(SECONDARY_TBLUE, 0.40)};
+}}
+
+QLabel#consoleChip[state="done"] {{
+  background: {_rgba(RUN_BUTTON_IDLE, 0.18)};
+  border-color: {_rgba(RUN_BUTTON_IDLE, 0.40)};
+}}
+
+QLabel#consoleChip[state="failed"] {{
+  background: rgba(220,38,38,0.18);
+  border-color: rgba(220,38,38,0.40);
+}}
+
+QWidget#consoleActions {{
+  background: rgba(255,255,255,0.03);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}}
+
+QLineEdit#consoleFind {{
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 6px 10px;
+}}
+
+QLineEdit#consoleFind:focus {{
+  border-color: {_rgba(SECONDARY_TBLUE, 0.70)};
+  background: {_rgba(SECONDARY_TBLUE, 0.10)};
+}}
+
+QTabWidget#consoleTabs::pane {{
+  border: none;
+  border-top: 1px solid rgba(255,255,255,0.10);
+  background: transparent;
+}}
+
+QTabWidget#consoleTabs QTabBar::tab {{
+  padding: 6px 12px;
+  margin-right: 6px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(226,232,240,0.92);
+  font-weight: 700;
+}}
+
+QTabWidget#consoleTabs QTabBar::tab:selected {{
+  background: {_rgba(PALETTE['primary'], 0.22)};
+  border: 1px solid {_rgba(PALETTE['primary'], 0.40)};
+  color: rgba(255,255,255,0.98);
+}}
+
+QTabWidget#consoleTabs QTabBar::tab:hover {{
+  background: {_rgba(SECONDARY_TBLUE, 0.14)};
+  border-color: {_rgba(SECONDARY_TBLUE, 0.35)};
+}}
+
+QPlainTextEdit#logWidget {{
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 10px;
+  background: #0b1220;
+  color: rgba(226,232,240,0.96);
+}}
+
+QProgressBar#consoleProgress {{
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.06);
+  height: 12px;
+}}
+
+QProgressBar#consoleProgress::chunk {{
+  border-radius: 7px;
+  background: {PRIMARY_T75};
 }}
 """
 
@@ -1812,6 +2423,17 @@ QTabWidget#mainTabs QTabBar::tab:selected {{
 }}
 """
 
+FLAB_STYLE_SHEET = FLAB_STYLE_SHEET + _CONSOLE_STYLES_LIGHT
+DARK_THEME_STYLESHEET = (
+    DARK_THEME_STYLESHEET + _CONSOLE_STYLES_DARK
+)
+FLAB_STYLE_SHEET += TRAIN_TAB_PATCH_LIGHT
+DARK_THEME_STYLESHEET += TRAIN_TAB_PATCH_DARK
+FLAB_STYLE_SHEET += TRAIN_NAV_LIGHT 
+DARK_THEME_STYLESHEET += TRAIN_NAV_DARK 
+
+FLAB_STYLE_SHEET += TRAIN_NAV_ROW 
+DARK_THEME_STYLESHEET += TRAIN_NAV_ROW
 
 
 __all__ = [

@@ -135,54 +135,6 @@ class Stage1Workspace(QWidget):
             model=model,
         )
         
-    # def set_context(
-    #     self,
-    #     *,
-    #     city: str,
-    #     csv_path: Optional[PathLike],
-    #     runs_root: Optional[PathLike],
-    #     stage1_dir: Optional[PathLike] = None,
-    #     model: str = "",
-    # ) -> None:
-    #     """
-    #     Broadcast shared context to all panels.
-    #     """
-    #     # Normalize to stable comparable strings
-    #     new_context = {
-    #         "city": (city or "").strip(),
-    #         "csv_path": str(csv_path) if csv_path else "",
-    #         "runs_root": str(runs_root) if runs_root else "",
-    #         "stage1_dir": str(stage1_dir) if stage1_dir else "",
-    #         "model": (model or "").strip(),
-    #     }
-    
-    #     # Guard: if nothing changed, do nothing
-    #     if self._context == new_context:
-    #         return
-    #     self._context = new_context
-    
-    #     kw = dict(
-    #         city=new_context["city"],
-    #         csv_path=(csv_path if csv_path else None),
-    #         runs_root=(runs_root if runs_root else None),
-    #         stage1_dir=(stage1_dir if stage1_dir else None),
-    #     )
-    
-    #     self.quicklook.set_context(**kw)
-    #     self.readiness.set_context(**kw)
-    #     self.feature_scaling.set_context(**kw)
-    #     self.artifacts.set_context(**kw)
-    
-    #     self.visual_checks.set_context(
-    #         city=new_context["city"],
-    #         stage1_dir=(stage1_dir if stage1_dir else None),
-    #     )
-    
-    #     self.run_history.set_context(
-    #         runs_root=new_context["runs_root"],
-    #         city=new_context["city"],
-    #         model=new_context["model"],
-    #     )
 
     def set_status_all(self, text: str) -> None:
         """

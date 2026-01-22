@@ -36,7 +36,9 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
-    QWidget,
+    QWidget, 
+    QScrollArea,
+    QFrame,
 )
 
 from ..config.store import GeoConfigStore
@@ -142,20 +144,7 @@ class XferTab(QWidget):
         # --------------------------
         # Top cards row
         # --------------------------
-        # row = QHBoxLayout()
-        # row.setSpacing(10)
-        # row.setAlignment(Qt.AlignTop)
 
-        # c1, b1 = self._make_card("Cities & splits")
-        # self._build_cities_box(b1)
-        # row.addWidget(c1, 1, Qt.AlignTop)
-
-        # c2, b2 = self._make_card("Results & view")
-        # self._build_results_box(b2)
-        # row.addWidget(c2, 1, Qt.AlignTop)
-
-        # root.addLayout(row)
-        
         self._cards_row = QWidget(self)
         row = QHBoxLayout(self._cards_row)
         row.setSpacing(10)
@@ -222,11 +211,22 @@ class XferTab(QWidget):
         self.map_page = XferMapPage(store=self._s, parent=self)
         self._stack.addWidget(self.map_page)
 
+        # self.options_panel = XferOptionsPanel(
+        #     store=self._s,
+        #     parent=self,
+        # )
+        # self._stack.addWidget(self.options_panel)
         self.options_panel = XferOptionsPanel(
             store=self._s,
             parent=self,
         )
-        self._stack.addWidget(self.options_panel)
+
+        opts_scroll = QScrollArea(self)
+        opts_scroll.setWidgetResizable(True)
+        opts_scroll.setFrameShape(QFrame.NoFrame)
+        opts_scroll.setWidget(self.options_panel)
+
+        self._stack.addWidget(opts_scroll)
 
         root.addWidget(self._stack, 1)
 

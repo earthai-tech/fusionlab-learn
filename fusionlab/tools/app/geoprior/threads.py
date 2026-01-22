@@ -78,6 +78,21 @@ class BaseJobThread(QThread):
         except Exception as exc:  # noqa: BLE001
             self.status_updated.emit("Failed.")
             self.error_occurred.emit(str(exc))
+    
+    # def run(self) -> None:
+    #     try:
+    #         self.status_updated.emit("Running …")
+    #         self.progress_changed.emit(-1.0, "Starting…")
+    
+    #         result = self._job.run() or {}
+    #         self.results_ready.emit(result)
+    
+    #         self.progress_changed.emit(1.0, "")
+    #         self.status_updated.emit("Done.")
+    #     except Exception as exc:  # noqa: BLE001
+    #         self.status_updated.emit("Failed.")
+    #         self.progress_changed.emit(1.0, "Failed.")
+    #         self.error_occurred.emit(str(exc))
 
 
 class Stage1Thread(BaseJobThread):
