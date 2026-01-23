@@ -602,6 +602,7 @@ class GeoPriorConfig:
     # GUI-only flags
     # ------------------------------------------------------------------
     evaluate_training: bool = True
+    evaluate_tuned: bool=False 
 
     # Stage-1 behaviour (used only by the smart Stage-1 handshake code).
     clean_stage1_dir: bool = False
@@ -2204,6 +2205,7 @@ class GeoPriorConfig:
             # GUI-only flags
             # --------------------------------------------------------------
             "evaluate_training": self.evaluate_training,
+            "evaluate_training": self.evaluate_tuned,
             "clean_stage1_dir": self.clean_stage1_dir,
             "stage1_auto_reuse_if_match": (
                 self.stage1_auto_reuse_if_match

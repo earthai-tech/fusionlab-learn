@@ -2423,6 +2423,28 @@ QTabWidget#mainTabs QTabBar::tab:selected {{
 }}
 """
 
+SEARCH_STYLE ="""
+QFrame#searchWrap {
+    border: 1px solid rgba(0, 0, 0, 40);
+    border-radius: 8px;
+    background: white;
+}
+
+QToolButton#filterToggle {
+    padding: 0px;
+}
+
+QToolButton#filterToggle:checked {
+    border-radius: 6px;
+    background: rgba(0, 120, 215, 30);
+}
+
+QLineEdit#searchEdit {
+    border: none;
+    background: transparent;
+    padding: 2px 0px;
+}
+"""
 FLAB_STYLE_SHEET = FLAB_STYLE_SHEET + _CONSOLE_STYLES_LIGHT
 DARK_THEME_STYLESHEET = (
     DARK_THEME_STYLESHEET + _CONSOLE_STYLES_DARK
@@ -2432,8 +2454,8 @@ DARK_THEME_STYLESHEET += TRAIN_TAB_PATCH_DARK
 FLAB_STYLE_SHEET += TRAIN_NAV_LIGHT 
 DARK_THEME_STYLESHEET += TRAIN_NAV_DARK 
 
-FLAB_STYLE_SHEET += TRAIN_NAV_ROW 
-DARK_THEME_STYLESHEET += TRAIN_NAV_ROW
+FLAB_STYLE_SHEET += TRAIN_NAV_ROW + SEARCH_STYLE
+DARK_THEME_STYLESHEET += TRAIN_NAV_ROW + SEARCH_STYLE
 
 
 __all__ = [

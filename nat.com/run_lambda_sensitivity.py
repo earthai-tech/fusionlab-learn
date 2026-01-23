@@ -40,8 +40,8 @@ from pathlib import Path
 
 
 # Default grids
-DEFAULT_LCONS  = [0.01, 0.05, 0.10, 0.20]
-DEFAULT_LPRIOR = [0.01, 0.05, 0.10, 0.20]
+DEFAULT_LCONS  = [1.0] # [0.01, 0.05, 0.10, 0.20]
+DEFAULT_LPRIOR = [0.5] # [0.01, 0.05, 0.10, 0.20]
 DEFAULT_PDE_MODES =["both"] #  ["none", "both"]  # you can trim to ["both"] if you want
 
 TRAIN_SCRIPT = Path(__file__).with_name("stage2.py")
@@ -103,8 +103,8 @@ def main() -> None:
     for pde_mode in args.pde_modes:
         for ii, (lc, lp) in enumerate (itertools.product(args.lcons, args.lprior)):
             
-            if ii < 14: 
-                continue 
+            # if ii < 14: 
+            #     continue 
             
             tag = f"pde={pde_mode}, lcons={lc:g}, lprior={lp:g}"
             print("\n" + "=" * 72)

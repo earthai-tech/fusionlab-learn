@@ -145,7 +145,6 @@ from .dialogs import (
 from .about import show_about_dialog, DOCS_URL
 from .utils.view_utils import _notify_gui_xfer_view
 from .utils.clock_timer import RunClockTimer
-from .utils.components import RangeListEditor
 from .styles import (
     TAB_STYLES,
     LOG_STYLES,
@@ -796,10 +795,8 @@ class GeoPriorForecaster(QMainWindow):
             store=self.config_store,
             make_card=self._make_card,
             make_run_button=self._make_run_button,
-            range_editor_cls=RangeListEditor,
             parent=self,
         )
-    
         # Backward-compatible attribute aliases
         tun = self.tune_tab
         self.hp_embed_dim = tun.hp_embed_dim
@@ -1194,50 +1191,7 @@ class GeoPriorForecaster(QMainWindow):
     
         return frame, body_lay
 
-    
-    # def _make_card(
-    #     self,
-    #     title: str,
-    # ) -> tuple[QWidget, QVBoxLayout]:
-    #     """
-    #     Create a framed 'card' with a bold title and
-    #     return (frame, inner_layout).
-    
-    #     Notes
-    #     -----
-    #     - We add a bottom stretch so that, when the card receives
-    #       extra height (large window / undocked console), the extra
-    #       space is absorbed at the bottom instead of inflating random
-    #       gaps between controls.
-    #     - We set a sane minimum height so cards look consistent
-    #       across tabs.
-    #     """
-    #     frame = QWidget()
-    #     frame.setObjectName("card")
-    
-    #     frame.setSizePolicy(
-    #         QSizePolicy.Expanding,
-    #         QSizePolicy.Minimum,
-    #     )
-    
-    #     vbox = QVBoxLayout(frame)
-    #     vbox.setContentsMargins(8, 6, 8, 8)
-    #     vbox.setSpacing(8)
-    
-    #     lbl = QLabel(title)
-    #     lbl.setObjectName("cardTitle")
-    #     lbl.setSizePolicy(
-    #         QSizePolicy.Expanding,
-    #         QSizePolicy.Fixed,
-    #     )
-    
-    #     vbox.addWidget(lbl)
-    
-    #     # Important: a predictable sink for extra height.
-    #     vbox.addStretch(1)
-    
-    #     return frame, vbox
-
+ 
     # --------------------------------------------------------------
     # Run button helpers
     # --------------------------------------------------------------

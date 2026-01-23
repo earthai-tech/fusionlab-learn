@@ -67,24 +67,30 @@ class ConsoleSessionView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
 
-        head = QHBoxLayout()
+        # --- Header widget (so we can hide it fully) ---
+        self._root = root
+        
+        self._head = QWidget(self)
+        self._head.setObjectName("consoleHead")
+        
+        head = QHBoxLayout(self._head)
         head.setContentsMargins(8, 6, 8, 0)
         head.setSpacing(8)
-
+        
         self.lbl_status = QLabel("")
         self.lbl_status.setObjectName("consoleStatus")
         self.lbl_status.setAlignment(
             Qt.AlignLeft | Qt.AlignVCenter
         )
         head.addWidget(self.lbl_status, 1)
-
+        
         self.timer = RunClockTimer(self)
         self.timer.reset()
         self.timer.stop()
         self.timer.setVisible(False)
         head.addWidget(self.timer, 0)
-
-        root.addLayout(head)
+        
+        root.addWidget(self._head, 0)
 
         self.lbl_meta = QLabel("")
         self.lbl_meta.setObjectName("consoleMeta")
@@ -128,6 +134,7 @@ class ConsoleSessionView(QWidget):
         
         # --- Status bar (bottom) ---
         foot = QHBoxLayout()
+        self._foot = foot
         foot.setContentsMargins(8, 0, 8, 8)
         foot.setSpacing(8)
         
@@ -173,26 +180,35 @@ class ConsoleSessionView(QWidget):
         self.lbl_status.setVisible((not c) and bool(t))
 
     def set_compact_ui(self, compact: bool) -> None:
-        """Toggle compact/expanded header + footer UI."""
         c = bool(compact)
         self._ui_compact = c
-
-        # Header: remove in compact mode.
-        if c:
-            self.lbl_status.setVisible(False)
-            self.timer.setVisible(False)
-            self.lbl_meta.setVisible(False)
-            self.lbl_scope.setVisible(False)
-        else:
-            self.lbl_status.setVisible(bool(self.lbl_status.text()))
-            self.lbl_meta.setVisible(bool(self.lbl_meta.text()))
-            self.lbl_scope.setVisible(False)
-
-        # Footer: compact -> only thin progress line.
+    
+        # Collapse header completely
+        self._head.setVisible(not c)
+    
+        # Meta/scope already widgets → hide removes space
+        self.lbl_meta.setVisible((not c) and bool(self.lbl_meta.text()))
+        self.lbl_scope.setVisible(False)
+    
+        # Footer: compact -> thin progress only
         self.chip.setVisible(not c)
         self.lbl_prog.setVisible(not c)
         self.lbl_pct.setVisible(not c)
-
+    
+        # spacing/margins
+        try:
+            self._root.setSpacing(6 if not c else 0)
+        except Exception:
+            pass
+    
+        try:
+            if c:
+                self._foot.setContentsMargins(0, 0, 0, 0)
+            else:
+                self._foot.setContentsMargins(8, 0, 8, 8)
+        except Exception:
+            pass
+    
         if c:
             self.bar.setFixedHeight(4)
             self.bar.setMaximumWidth(16777215)
@@ -207,6 +223,13 @@ class ConsoleSessionView(QWidget):
                 QSizePolicy.Fixed,
                 QSizePolicy.Fixed,
             )
+    
+        # Header status visibility
+        self.lbl_status.setVisible(
+            (not c) and bool(self.lbl_status.text().strip())
+        )
+        self.timer.setVisible((not c) and self.timer.isVisible())
+
     
     def set_prog_text(self, text: str) -> None:
         self._prog_full = str(text or "")
