@@ -9,6 +9,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QFrame,
     QLabel,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -45,27 +47,68 @@ class TuneDetailsCard(QFrame):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
-        t1 = QLabel("Computer details")
-        t1.setObjectName("trainNavTitle")
-        root.addWidget(t1)
+        # ---------------------------------------------------------
+        # Single scroll area for ALL content (compute + stats)
+        # ---------------------------------------------------------
+        sc = QScrollArea(self)
+        sc.setObjectName("trainCompScroll")  # reuse existing QSS
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setWidgetResizable(True)
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        self.lbl_compute = QLabel("")
+        body = QWidget(sc)
+        body.setObjectName("trainCompBody")
+        sc.setWidget(body)
+
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+
+        # =========================================================
+        # Computer details
+        # =========================================================
+        t1 = QLabel("Computer details", body)
+        t1.setObjectName("trainNavTitle")
+        lay.addWidget(t1, 0)
+
+        self.lbl_compute = QLabel("", body)
         self.lbl_compute.setObjectName("runComputeText")
         self.lbl_compute.setWordWrap(True)
         self.lbl_compute.setTextInteractionFlags(
             Qt.TextSelectableByMouse
         )
-        root.addWidget(self.lbl_compute)
+        self.lbl_compute.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Minimum,
+        )
+        lay.addWidget(self.lbl_compute, 0)
 
-        t2 = QLabel("Search-space stats")
+        notes = QLabel(
+            "• Backend/Device info updates when runtime changes.\n"
+            "• GPU visibility depends on the selected backend.\n"
+            "• Use presets to keep tuning runs reproducible.",
+            body,
+        )
+        notes.setWordWrap(True)
+        notes.setObjectName("sumLine")
+        lay.addWidget(notes, 0)
+
+        # =========================================================
+        # Search-space stats
+        # =========================================================
+        t2 = QLabel("Search-space stats", body)
         t2.setObjectName("trainNavTitle")
-        root.addWidget(t2)
+        lay.addWidget(t2, 0)
 
-        self.lbl_space = QLabel("")
+        self.lbl_space = QLabel("", body)
         self.lbl_space.setWordWrap(True)
-        root.addWidget(self.lbl_space)
+        lay.addWidget(self.lbl_space, 0)
 
-        root.addStretch(1)
+        lay.addStretch(1)
+
+        sc.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root.addWidget(sc, 1)
 
     def refresh_from_store(self) -> None:
         self.lbl_compute.setText(

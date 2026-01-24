@@ -59,6 +59,7 @@ class XferMapToolbar(QWidget):
     request_refresh = pyqtSignal()
     changed = pyqtSignal()
     request_expand = pyqtSignal(bool)
+    request_mode_switch = pyqtSignal(str)
 
     def __init__(
         self,
@@ -285,11 +286,11 @@ class XferMapToolbar(QWidget):
         )
 
         self._more_menu = QMenu(self)
-        act_opts = self._more_menu.addAction(
-            "Open Options"
+        self._act_mode = self._more_menu.addAction(
+            "Go to Run mode"
         )
-        act_opts.triggered.connect(
-            self.request_open_options
+        self._act_mode.triggered.connect(
+            lambda *_: self._on_mode_action()
         )
 
         self._more_menu.addSeparator()
@@ -728,6 +729,28 @@ class XferMapToolbar(QWidget):
         self.btn_insight.toggled.connect(self.changed)
         # Ensure timer matches current UI speed.
         self._apply_play_ms()
+        
+    def set_mode(self, mode: str) -> None:
+        m = str(mode or "").strip().lower()
+        if m not in ("run", "map"):
+            m = "map"
+    
+        self._cur_mode = m
+        tgt = "run" if m == "map" else "map"
+        self._mode_target = tgt
+    
+        if hasattr(self, "_act_mode"):
+            if tgt == "run":
+                self._act_mode.setText("Go to Run mode")
+            else:
+                self._act_mode.setText("Go to Map mode")
+    
+    
+    def _on_mode_action(self) -> None:
+        tgt = getattr(self, "_mode_target", "run")
+        self.request_mode_switch.emit(str(tgt))
+        # legacy: keep existing wiring alive
+        self.request_open_options.emit()
 
     # -------------------------
     # Segmented helpers

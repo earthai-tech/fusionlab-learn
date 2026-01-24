@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QSizePolicy
 )
 
 
@@ -35,7 +36,12 @@ class _NavRow(QWidget):
         self.setObjectName("navRow")
         self.setProperty("selected", False)
         self.setAttribute(Qt.WA_StyledBackground, True)
-
+        self.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        self.setMinimumHeight(34)
+        
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 6, 10, 6)
         lay.setSpacing(8)
@@ -46,6 +52,10 @@ class _NavRow(QWidget):
         self.chip = QLabel("OK")
         self.chip.setObjectName("navChip")
         self.chip.setProperty("status", "ok")
+        self.chip.setMinimumWidth(34)
+        self.chip.setMinimumHeight(18)
+        self.chip.setAlignment(Qt.AlignCenter)
+        self.chip.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         lay.addWidget(self.lbl, 1)
         lay.addWidget(self.chip, 0)
@@ -95,7 +105,9 @@ class TuneNavigator(QFrame):
         self.setObjectName("trainNavCard")
         self.setFrameShape(QFrame.NoFrame)
         self.setAttribute(Qt.WA_StyledBackground, True)
-
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.setMinimumWidth(260)
+        
         self._rows: Dict[str, _NavRow] = {}
         self._labels: Dict[str, str] = {}
 

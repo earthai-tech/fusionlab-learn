@@ -147,20 +147,18 @@ class TuneHeadBar(QFrame):
     # UI
     # -------------------------
     def _build_ui(self) -> None:
-        
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 8, 10, 8)
         root.setSpacing(6)
     
-        # -----------------
-        # Row 1
-        # -----------------
+        # =================================================
+        # Row 1: Lifecycle + preset + actions (right)
+        # =================================================
         r1w = QWidget(self)
         r1 = QHBoxLayout(r1w)
         r1.setContentsMargins(0, 0, 0, 0)
         r1.setSpacing(10)
     
-        # Lifecycle strip should take remaining space
         self.lifecycle = LifecycleStrip(
             store=self._store,
             life_key=_TRAIN_LIFE_KEY,
@@ -176,44 +174,41 @@ class TuneHeadBar(QFrame):
         r1.addWidget(QLabel("Preset:"), 0)
     
         self.cmb_preset = QComboBox(self)
-        # Avoid forcing width; let it be minimum-ish
+        self.cmb_preset.addItem("Custom")
         self.cmb_preset.setSizePolicy(
-            QSizePolicy.Minimum,
+            QSizePolicy.Fixed,
             QSizePolicy.Fixed,
         )
-        self.cmb_preset.addItem("Custom")
+        self.cmb_preset.setMinimumContentsLength(10)
+        self.cmb_preset.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
         r1.addWidget(self.cmb_preset, 0)
+    
+        # push actions to the far right
+        r1.addStretch(1)
     
         self.btn_reset = self._mk_icon_btn(
             "Reset to defaults",
             "reset.svg",
             QStyle.SP_BrowserReload,
         )
-        self.btn_copy = self._mk_icon_btn(
-            "Copy tune plan",
-            "copy.svg",
-            QStyle.SP_DialogSaveButton,
-        )
         self.btn_cfg = self._mk_icon_btn(
             "Open config",
             "settings.svg",
             QStyle.SP_FileDialogDetailedView,
         )
-    
-        # Icon buttons: keep them compact (doesn't expand window width)
-        for b in (self.btn_reset, self.btn_copy, self.btn_cfg):
+        for b in (self.btn_reset, self.btn_cfg):
             b.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
     
         r1.addWidget(self.btn_reset, 0)
-        r1.addWidget(self.btn_copy, 0)
         r1.addWidget(self.btn_cfg, 0)
-        r1.addStretch(1)
     
         root.addWidget(r1w)
     
-        # -----------------
-        # Row 2
-        # -----------------
+        # =================================================
+        # Row 2: Objective / trials / eval + search capsule
+        # =================================================
         r2w = QWidget(self)
         r2 = QHBoxLayout(r2w)
         r2.setContentsMargins(0, 0, 0, 0)
@@ -222,58 +217,69 @@ class TuneHeadBar(QFrame):
         r2.addWidget(QLabel("Objective:"), 0)
     
         self.cmb_obj = QComboBox(self)
-        # Minimum, but not forcing the whole window wider
-        self.cmb_obj.setSizePolicy(
-            QSizePolicy.Minimum,
-            QSizePolicy.Fixed,
-        )
         self.cmb_obj.addItem("Auto", "")
         for lab, key in _OBJ_ITEMS:
             self.cmb_obj.addItem(lab, key)
-        r2.addWidget(self.cmb_obj, 0)
-    
-        self.cmb_dir = QComboBox(self)
-        self.cmb_dir.setSizePolicy(
-            QSizePolicy.Minimum,
+        self.cmb_obj.setSizePolicy(
+            QSizePolicy.Fixed,
             QSizePolicy.Fixed,
         )
+        self.cmb_obj.setMinimumContentsLength(14)
+        self.cmb_obj.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        r2.addWidget(self.cmb_obj, 0)
+    
+        r2.addWidget(QLabel("Direction:"), 0)
+    
+        self.cmb_dir = QComboBox(self)
         self.cmb_dir.addItem("Minimize", "min")
         self.cmb_dir.addItem("Maximize", "max")
+        self.cmb_dir.setSizePolicy(
+            QSizePolicy.Fixed,
+            QSizePolicy.Fixed,
+        )
+        self.cmb_dir.setMinimumContentsLength(10)
+        self.cmb_dir.setSizeAdjustPolicy(
+            QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
         r2.addWidget(self.cmb_dir, 0)
     
         r2.addWidget(QLabel("Trials:"), 0)
     
         self.sp_trials = QSpinBox(self)
         self.sp_trials.setRange(1, 5000)
-        # Let it be compact
         self.sp_trials.setSizePolicy(
-            QSizePolicy.Minimum,
+            QSizePolicy.Fixed,
             QSizePolicy.Fixed,
         )
+        self.sp_trials.setFixedWidth(74)
         r2.addWidget(self.sp_trials, 0)
     
-        # Eval tuned model
         self.chk_eval_tuned = QCheckBox("Eval tuned model", self)
         self.chk_eval_tuned.setChecked(False)
         self.chk_eval_tuned.setSizePolicy(
-            QSizePolicy.Minimum,
+            QSizePolicy.Fixed,
             QSizePolicy.Fixed,
         )
         r2.addWidget(self.chk_eval_tuned, 0)
     
-        # Spacer before search capsule
+        # push search to the far right
         r2.addStretch(1)
     
-        # --- Search capsule: [filter] [lineedit] ---
+        # --- Search capsule (DO NOT FIX WIDTH) ---
         self.search_wrap = QFrame(self)
         self.search_wrap.setObjectName("searchWrap")
         self.search_wrap.setFrameShape(QFrame.NoFrame)
         self.search_wrap.setAttribute(Qt.WA_StyledBackground, True)
-        # Keep wrap compact; don't try to expand
+    
+        # Key: don't push main window -> no fixed/min width, only a max
         self.search_wrap.setSizePolicy(
-            QSizePolicy.Minimum,
+            QSizePolicy.Maximum,
             QSizePolicy.Fixed,
         )
+        self.search_wrap.setMinimumWidth(0)
+        self.search_wrap.setMaximumWidth(280)
     
         sw = QHBoxLayout(self.search_wrap)
         sw.setContentsMargins(8, 2, 8, 2)
@@ -286,20 +292,19 @@ class TuneHeadBar(QFrame):
         )
         self.btn_filter.setCheckable(True)
         self.btn_filter.setObjectName("filterToggle")
-        # Keep square icon button (visual only)
         self.btn_filter.setFixedSize(24, 24)
     
         self.ed_search = QLineEdit(self)
         self.ed_search.setObjectName("searchEdit")
         self.ed_search.setPlaceholderText("Search settings…")
         self.ed_search.setFrame(False)
-        # Important: allow shrinking; don't force 200/280 widths
+    
+        # Allow shrinking inside capsule
+        self.ed_search.setMinimumWidth(0)
         self.ed_search.setSizePolicy(
-            QSizePolicy.Preferred,  # expands inside capsule
+            QSizePolicy.Expanding,
             QSizePolicy.Fixed,
         )
-        # Optional: a small minimum so it doesn't collapse to nothing
-        self.ed_search.setMinimumWidth(100)
     
         sw.addWidget(self.btn_filter, 0)
         sw.addWidget(self.ed_search, 1)
@@ -330,20 +335,11 @@ class TuneHeadBar(QFrame):
     # Wiring
     # -------------------------
     def _wire(self) -> None:
-        
-        self.btn_reset.clicked.connect(
-            self.reset_requested.emit
-        )
-        self.btn_cfg.clicked.connect(
-            self.config_clicked.emit
-        )
-        self.btn_filter.clicked.connect(
-            self.filter_clicked.emit
-        )
-        self.btn_copy.clicked.connect(self._on_copy)
-
+        self.btn_reset.clicked.connect(self.reset_requested.emit)
+        self.btn_cfg.clicked.connect(self.config_clicked.emit)
+    
         self.ed_search.textChanged.connect(self._on_search)
-
+    
         self.cmb_preset.currentIndexChanged.connect(
             lambda _=0: self._on_preset()
         )
@@ -354,21 +350,18 @@ class TuneHeadBar(QFrame):
             lambda _=0: self._on_dir()
         )
         self.sp_trials.valueChanged.connect(self._on_trials)
-
-        # Mirror lifecycle if the widget exposes "changed"
+    
         sig = getattr(self.lifecycle, "changed", None)
         if sig is not None:
             sig.connect(self._mirror_lifecycle_to_tune)
-            
+    
         self.btn_filter.toggled.connect(self._on_filter)
         self.btn_filter.clicked.connect(
             lambda: self.ed_search.setFocus()
         )
-        
-        self.chk_eval_tuned.toggled.connect(
-            self._on_eval_tuned
-        )
-        
+    
+        self.chk_eval_tuned.toggled.connect(self._on_eval_tuned)
+
     def _on_eval_tuned(self, on: bool) -> None:
         try:
             self._store.set_value_by_key(_EVAL_TUNED_FK, bool(on))

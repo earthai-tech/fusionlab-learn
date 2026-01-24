@@ -11,13 +11,14 @@ Advanced options panel for XferTab.
 - Store-backed (xfer.* keys)
 - Self-contained scroll + responsive columns
 - Reset-to-defaults
+- Reusable section widgets (for RunCenter later)
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from PyQt5.QtCore import QEvent, QSignalBlocker, Qt
+from PyQt5.QtCore import QEvent, QObject, QSignalBlocker, Qt
 from PyQt5.QtWidgets import (
     QBoxLayout,
     QCheckBox,
@@ -40,6 +41,7 @@ from PyQt5.QtWidgets import (
 
 from ....config.store import GeoConfigStore
 
+
 def _blocked(w: QWidget) -> QSignalBlocker:
     return QSignalBlocker(w)
 
@@ -58,7 +60,6 @@ def _parse_float_list(text: str) -> Optional[List[float]]:
             out.append(float(b))
         except Exception:
             return None
-
     return out or None
 
 
@@ -86,12 +87,34 @@ ADV_DEFAULTS: Dict[str, Any] = {
 }
 
 
-class XferOptionsPanel(QWidget):
-    """
-    Advanced options panel (scrollable).
+_MISSING = object()
 
-    XferTab can embed this directly:
-        self.options_panel = XferOptionsPanel(store=store)
+
+def ensure_adv_defaults(store: GeoConfigStore) -> None:
+    """
+    Initialise missing xfer.* advanced keys only.
+
+    Uses a sentinel so existing values (even None) are not
+    treated as "missing".
+    """
+    s = store
+    with s.batch():
+        for k, v in ADV_DEFAULTS.items():
+            if s.get(k, _MISSING) is _MISSING:
+                s.set(k, v)
+
+
+class OutputsAlignmentSection(QWidget):
+    """
+    Store-backed section widget:
+
+    - quantiles override (+ chip)
+    - output formats (json/csv)
+    - prefer tuned
+    - alignment policy (+ optional reorder)
+    - interval target
+    - load endpoint
+    - export toggles
     """
 
     def __init__(
@@ -103,25 +126,21 @@ class XferOptionsPanel(QWidget):
         super().__init__(parent)
         self._s = store
 
+        ensure_adv_defaults(self._s)
+
         self._build_ui()
-        self._connect()
-        self._ensure_defaults()
+        self._wire()
         self._sync_from_store(keys=set())
 
         self._s.config_changed.connect(self._on_store_changed)
 
-    # -------------------------------------------------
+    # -------------------------
     # Public
-    # -------------------------------------------------
+    # -------------------------
     def get_quantiles(self) -> Optional[Sequence[float]]:
         return _parse_float_list(self.ed_xfer_quantiles.text())
 
     def get_state(self) -> Dict[str, Any]:
-        """
-        UI snapshot for advanced options.
-
-        (XferTab can merge this into its full state.)
-        """
         return {
             "quantiles_override": self.get_quantiles(),
             "write_json": bool(self.chk_xfer_json.isChecked()),
@@ -139,9 +158,12 @@ class XferOptionsPanel(QWidget):
             "allow_reorder_future": self._opt_bool_from_combo(
                 self.cmb_xfer_allow_re_fut
             ),
-            "interval_target": float(self.sp_xfer_interval.value()),
+            "interval_target": float(
+                self.sp_xfer_interval.value()
+            ),
             "load_endpoint": str(
-                self.cmb_xfer_endpoint.currentData() or "serve"
+                self.cmb_xfer_endpoint.currentData()
+                or "serve"
             ),
             "export_physics_payload": bool(
                 self.chk_xfer_phys_payload.isChecked()
@@ -152,218 +174,45 @@ class XferOptionsPanel(QWidget):
             "write_eval_future_csv": bool(
                 self.chk_xfer_eval_future.isChecked()
             ),
-            "strategies": self._get_checked_strategies(),
-            "rescale_modes": self._get_checked_rescale_modes(),
-            "warm_split": str(
-                self.cmb_xfer_warm_split.currentData() or "train"
-            ),
-            "warm_samples": int(self.sp_xfer_warm_samples.value()),
-            "warm_frac": float(self.sp_xfer_warm_frac.value()),
-            "warm_epochs": int(self.sp_xfer_warm_epochs.value()),
-            "warm_lr": float(self.sp_xfer_warm_lr.value()),
-            "warm_seed": int(self.sp_xfer_warm_seed.value()),
         }
 
-    # -------------------------------------------------
+    def adv_keys(self) -> set[str]:
+        return {
+            "xfer.quantiles_override",
+            "xfer.write_json",
+            "xfer.write_csv",
+            "xfer.prefer_tuned",
+            "xfer.align_policy",
+            "xfer.allow_reorder_dynamic",
+            "xfer.allow_reorder_future",
+            "xfer.interval_target",
+            "xfer.load_endpoint",
+            "xfer.export_physics_payload",
+            "xfer.export_physical_parameters_csv",
+            "xfer.write_eval_future_csv",
+        }
+
+    # -------------------------
     # UI
-    # -------------------------------------------------
+    # -------------------------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setSpacing(10)
 
-        self._scroll = QScrollArea(self)
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QScrollArea.NoFrame)
-        self._scroll.setVerticalScrollBarPolicy(
-            Qt.ScrollBarAsNeeded
-        )
-        self._scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarAsNeeded
-        )
-        self._scroll.horizontalScrollBar().setSingleStep(24)
-        self._scroll.horizontalScrollBar().setPageStep(240)
-
-        self._content = self._build_advanced_box()
-        self._scroll.setWidget(self._content)
-
-        self._scroll.viewport().installEventFilter(self)
-
-        root.addWidget(self._scroll, 1)
-
-    def _build_advanced_box(self) -> QWidget:
-        outer = QWidget()
-
-        root = QHBoxLayout(outer)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        host = QWidget()
-        host.setObjectName("xferAdvContent")
-        host.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Preferred,
-        )
-
-        lay = QVBoxLayout(host)
-        lay.setContentsMargins(12, 10, 12, 12)
-        lay.setSpacing(10)
-
-        root.addWidget(host, 1)
-
-        def _section(
-            title: str,
-            icon: QStyle.StandardPixmap,
-        ) -> Tuple[QFrame, QVBoxLayout]:
-            frame = QFrame()
-            frame.setObjectName("xferAdvSection")
-
-            v = QVBoxLayout(frame)
-            v.setContentsMargins(0, 0, 0, 0)
-            v.setSpacing(6)
-
-            header = QToolButton()
-            header.setObjectName("xferAdvToggle")
-            header.setCheckable(True)
-            header.setChecked(True)
-            header.setToolButtonStyle(
-                Qt.ToolButtonTextBesideIcon
-            )
-            header.setIcon(self.style().standardIcon(icon))
-            header.setText(title)
-            header.setArrowType(Qt.DownArrow)
-
-            body = QWidget()
-            body.setObjectName("xferAdvBody")
-
-            body_lay = QVBoxLayout(body)
-            body_lay.setContentsMargins(10, 10, 10, 10)
-            body_lay.setSpacing(10)
-
-            def _toggle(on: bool) -> None:
-                body.setVisible(bool(on))
-                header.setArrowType(
-                    Qt.DownArrow if on else Qt.RightArrow
-                )
-
-            header.toggled.connect(_toggle)
-
-            v.addWidget(header)
-            v.addWidget(body)
-            return frame, body_lay
-
-        def _field(
-            title: str,
-            body: QWidget,
-            tip: str,
-            *,
-            right: Optional[QWidget] = None,
-        ) -> QFrame:
-            f = QFrame()
-            f.setObjectName("xferField")
-
-            v = QVBoxLayout(f)
-            v.setContentsMargins(10, 8, 10, 10)
-            v.setSpacing(6)
-
-            top = QHBoxLayout()
-            top.setContentsMargins(0, 0, 0, 0)
-            top.setSpacing(6)
-
-            lbl = QLabel(title)
-            lbl.setObjectName("xferFieldTitle")
-
-            top.addWidget(lbl)
-            top.addStretch(1)
-
-            if right is not None:
-                top.addWidget(right)
-
-            top.addWidget(self._make_help_btn(tip))
-
-            v.addLayout(top)
-            v.addWidget(body)
-            return f
-
-        # -------------------------
-        # Header row: title + reset
-        # -------------------------
-        top = QHBoxLayout()
-        top.setSpacing(10)
-
-        tcol = QVBoxLayout()
-        tcol.setContentsMargins(0, 0, 0, 0)
-        tcol.setSpacing(2)
-
-        ttl = QLabel("Advanced options")
-        ttl.setObjectName("xferAdvTitle")
-
-        sub = QLabel(
-            "Fine control for audits and transfer semantics."
-        )
-        sub.setObjectName("setupCardSubtitle")
-
-        tcol.addWidget(ttl)
-        tcol.addWidget(sub)
-        top.addLayout(tcol, 1)
-
-        self.btn_xfer_adv_reset = QToolButton()
-        self.btn_xfer_adv_reset.setObjectName("miniAction")
-        self.btn_xfer_adv_reset.setIcon(
-            self.style().standardIcon(QStyle.SP_BrowserReload)
-        )
-        self.btn_xfer_adv_reset.setToolTip(
-            "Reset Advanced options to defaults."
-        )
-        top.addWidget(self.btn_xfer_adv_reset)
-
-        lay.addLayout(top)
-
-        # -------------------------
-        # Responsive columns
-        # -------------------------
-        self._adv_cols = QBoxLayout(QBoxLayout.LeftToRight)
-        self._adv_cols.setContentsMargins(0, 0, 0, 0)
-        self._adv_cols.setSpacing(12)
-
-        self._adv_left = QWidget()
-        self._adv_left.setObjectName("xferAdvColLeft")
-        left = QVBoxLayout(self._adv_left)
-        left.setContentsMargins(0, 0, 0, 0)
-        left.setSpacing(10)
-        left.setAlignment(Qt.AlignTop)
-
-        self._adv_right = QWidget()
-        self._adv_right.setObjectName("xferAdvColRight")
-        right = QVBoxLayout(self._adv_right)
-        right.setContentsMargins(0, 0, 0, 0)
-        right.setSpacing(10)
-        right.setAlignment(Qt.AlignTop)
-
-        self._adv_cols.addWidget(self._adv_left, 1)
-        self._adv_cols.addWidget(self._adv_right, 1)
-
-        lay.addLayout(self._adv_cols)
-
-        # =================================================
-        # LEFT: Outputs & alignment
-        # =================================================
-        s1, s1_lay = _section(
-            "Outputs & alignment",
-            QStyle.SP_FileDialogDetailedView,
-        )
-
-        grid1 = QGridLayout()
-        grid1.setHorizontalSpacing(10)
-        grid1.setVerticalSpacing(10)
-        grid1.setContentsMargins(0, 0, 0, 0)
-        grid1.setColumnStretch(0, 1)
-        grid1.setColumnStretch(1, 1)
-        s1_lay.addLayout(grid1)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        root.addLayout(grid)
 
         # Quantiles
         self.ed_xfer_quantiles = QLineEdit()
-        self.ed_xfer_quantiles.setPlaceholderText("0.1,0.5,0.9")
+        self.ed_xfer_quantiles.setPlaceholderText(
+            "0.1,0.5,0.9"
+        )
 
         self.lbl_xfer_q_chip = QLabel("AUTO")
         self.lbl_xfer_q_chip.setObjectName("xferAdvChip")
@@ -371,9 +220,13 @@ class XferOptionsPanel(QWidget):
         self.btn_xfer_q_clear = QToolButton()
         self.btn_xfer_q_clear.setObjectName("miniAction")
         self.btn_xfer_q_clear.setIcon(
-            self.style().standardIcon(QStyle.SP_DialogCloseButton)
+            self.style().standardIcon(
+                QStyle.SP_DialogCloseButton
+            )
         )
-        self.btn_xfer_q_clear.setToolTip("Clear quantiles override")
+        self.btn_xfer_q_clear.setToolTip(
+            "Clear quantiles override"
+        )
 
         q_body = QWidget()
         q_row = QHBoxLayout(q_body)
@@ -383,13 +236,13 @@ class XferOptionsPanel(QWidget):
         q_row.addWidget(self.lbl_xfer_q_chip)
         q_row.addWidget(self.btn_xfer_q_clear)
 
-        f_q = _field(
+        f_q = self._field(
             "Quantiles override",
             q_body,
             "Override output quantiles for eval/export.\n"
             "Leave empty to use model defaults.",
         )
-        grid1.addWidget(f_q, 0, 0, 1, 2)
+        grid.addWidget(f_q, 0, 0, 1, 2)
 
         # Formats
         self.chk_xfer_json = QCheckBox("Write JSON")
@@ -403,13 +256,13 @@ class XferOptionsPanel(QWidget):
         io.addWidget(self.chk_xfer_csv)
         io.addStretch(1)
 
-        f_io = _field(
+        f_io = self._field(
             "Formats",
             io_body,
             "CSV is easier to audit.\n"
             "JSON enables richer summary panels.",
         )
-        grid1.addWidget(f_io, 1, 0)
+        grid.addWidget(f_io, 1, 0)
 
         # Prefer tuned
         self.chk_xfer_prefer_tuned = QCheckBox(
@@ -422,13 +275,13 @@ class XferOptionsPanel(QWidget):
         pt.setSpacing(0)
         pt.addWidget(self.chk_xfer_prefer_tuned)
 
-        f_pt = _field(
+        f_pt = self._field(
             "Calibration",
             pt_body,
             "If tuning artifacts exist, reuse them\n"
             "instead of fitting a fresh calibrator.",
         )
-        grid1.addWidget(f_pt, 1, 1)
+        grid.addWidget(f_pt, 1, 1)
 
         # Align policy
         self.cmb_xfer_align = QComboBox()
@@ -441,37 +294,37 @@ class XferOptionsPanel(QWidget):
             "strict",
         )
 
-        f_align = _field(
+        f_align = self._field(
             "Align policy",
             self.cmb_xfer_align,
             "How to align feature columns across cities.\n"
             "Strict = fail fast when mismatched.",
         )
-        grid1.addWidget(f_align, 2, 0)
+        grid.addWidget(f_align, 2, 0)
 
         # Reorder dynamic
         self.cmb_xfer_allow_re_dyn = QComboBox()
         self._fill_opt_bool_combo(self.cmb_xfer_allow_re_dyn)
 
-        f_rdyn = _field(
+        f_rdyn = self._field(
             "Reorder dynamic",
             self.cmb_xfer_allow_re_dyn,
             "Auto = follow align policy.\n"
             "Allow = reorder if names match.\n"
             "Block = treat reorder as mismatch.",
         )
-        grid1.addWidget(f_rdyn, 2, 1)
+        grid.addWidget(f_rdyn, 2, 1)
 
         # Reorder future
         self.cmb_xfer_allow_re_fut = QComboBox()
         self._fill_opt_bool_combo(self.cmb_xfer_allow_re_fut)
 
-        f_rfut = _field(
+        f_rfut = self._field(
             "Reorder future",
             self.cmb_xfer_allow_re_fut,
             "Same as above, for future-known inputs.",
         )
-        grid1.addWidget(f_rfut, 3, 0)
+        grid.addWidget(f_rfut, 3, 0)
 
         # Interval target
         self.sp_xfer_interval = QDoubleSpinBox()
@@ -479,24 +332,24 @@ class XferOptionsPanel(QWidget):
         self.sp_xfer_interval.setSingleStep(0.01)
         self.sp_xfer_interval.setDecimals(2)
 
-        f_int = _field(
+        f_int = self._field(
             "Interval target",
             self.sp_xfer_interval,
             "Controls calibration coverage.",
         )
-        grid1.addWidget(f_int, 3, 1)
+        grid.addWidget(f_int, 3, 1)
 
         # Load endpoint
         self.cmb_xfer_endpoint = QComboBox()
         self.cmb_xfer_endpoint.addItem("serve", "serve")
         self.cmb_xfer_endpoint.addItem("export", "export")
 
-        f_end = _field(
+        f_end = self._field(
             "Load endpoint",
             self.cmb_xfer_endpoint,
             "Choose where to load artifacts from.",
         )
-        grid1.addWidget(f_end, 4, 0)
+        grid.addWidget(f_end, 4, 0)
 
         # Exports
         self.chk_xfer_phys_payload = QCheckBox(
@@ -516,33 +369,400 @@ class XferOptionsPanel(QWidget):
         ex.setVerticalSpacing(8)
         ex.addWidget(self.chk_xfer_phys_payload, 0, 0)
         ex.addWidget(self.chk_xfer_phys_csv, 0, 1)
-        ex.addWidget(self.chk_xfer_eval_future, 1, 0, 1, 2)
+        ex.addWidget(
+            self.chk_xfer_eval_future,
+            1,
+            0,
+            1,
+            2,
+        )
 
-        f_ex = _field(
+        f_ex = self._field(
             "Exports",
             ex_body,
             "Export physics/closures for audits.\n"
             "Write extra CSVs when available.",
         )
-        grid1.addWidget(f_ex, 4, 1)
+        grid.addWidget(f_ex, 4, 1)
 
-        left.addWidget(s1)
+        self._update_quantiles_chip()
 
-        # =================================================
-        # RIGHT: Strategies & warm-start
-        # =================================================
-        s2, s2_lay = _section(
-            "Strategies & warm-start",
-            QStyle.SP_ArrowRight,
+    # -------------------------
+    # Wiring
+    # -------------------------
+    def _wire(self) -> None:
+        self.btn_xfer_q_clear.clicked.connect(
+            lambda: self.ed_xfer_quantiles.setText("")
+        )
+        self.btn_xfer_q_clear.clicked.connect(
+            self._update_quantiles_chip
+        )
+        self.btn_xfer_q_clear.clicked.connect(
+            self._push_to_store
         )
 
-        grid2 = QGridLayout()
-        grid2.setHorizontalSpacing(10)
-        grid2.setVerticalSpacing(10)
-        grid2.setContentsMargins(0, 0, 0, 0)
-        grid2.setColumnStretch(0, 1)
-        grid2.setColumnStretch(1, 1)
-        s2_lay.addLayout(grid2)
+        self.ed_xfer_quantiles.editingFinished.connect(
+            self._update_quantiles_chip
+        )
+        self.ed_xfer_quantiles.editingFinished.connect(
+            self._push_to_store
+        )
+
+        for cb in (
+            self.chk_xfer_json,
+            self.chk_xfer_csv,
+            self.chk_xfer_prefer_tuned,
+            self.chk_xfer_phys_payload,
+            self.chk_xfer_phys_csv,
+            self.chk_xfer_eval_future,
+        ):
+            cb.toggled.connect(self._push_to_store)
+
+        self.cmb_xfer_align.currentIndexChanged.connect(
+            self._push_to_store
+        )
+        self.cmb_xfer_allow_re_dyn.currentIndexChanged.connect(
+            self._push_to_store
+        )
+        self.cmb_xfer_allow_re_fut.currentIndexChanged.connect(
+            self._push_to_store
+        )
+        self.sp_xfer_interval.valueChanged.connect(
+            self._push_to_store
+        )
+        self.cmb_xfer_endpoint.currentIndexChanged.connect(
+            self._push_to_store
+        )
+
+    # -------------------------
+    # Store I/O
+    # -------------------------
+    def _on_store_changed(self, keys: object) -> None:
+        try:
+            changed = set(keys or [])
+        except Exception:
+            changed = set()
+        if not changed:
+            return
+
+        if not (changed & self.adv_keys()):
+            return
+
+        self._sync_from_store(keys=changed)
+
+    def _sync_from_store(self, *, keys: set[str]) -> None:
+        s = self._s
+
+        def wants(k: str) -> bool:
+            return (not keys) or (k in keys)
+
+        if wants("xfer.quantiles_override"):
+            q = s.get("xfer.quantiles_override", None)
+            txt = ""
+            if q:
+                try:
+                    txt = ",".join(str(x) for x in q)
+                except Exception:
+                    txt = ""
+            with _blocked(self.ed_xfer_quantiles):
+                self.ed_xfer_quantiles.setText(txt)
+
+        if wants("xfer.write_json"):
+            v = bool(s.get("xfer.write_json", True))
+            with _blocked(self.chk_xfer_json):
+                self.chk_xfer_json.setChecked(v)
+
+        if wants("xfer.write_csv"):
+            v = bool(s.get("xfer.write_csv", True))
+            with _blocked(self.chk_xfer_csv):
+                self.chk_xfer_csv.setChecked(v)
+
+        if wants("xfer.prefer_tuned"):
+            v = bool(s.get("xfer.prefer_tuned", True))
+            with _blocked(self.chk_xfer_prefer_tuned):
+                self.chk_xfer_prefer_tuned.setChecked(v)
+
+        if wants("xfer.align_policy"):
+            v = s.get(
+                "xfer.align_policy",
+                "align_by_name_pad",
+            )
+            self._set_combo_data(self.cmb_xfer_align, v)
+
+        if wants("xfer.allow_reorder_dynamic"):
+            v = s.get("xfer.allow_reorder_dynamic", None)
+            self._set_opt_bool_combo(
+                self.cmb_xfer_allow_re_dyn,
+                v,
+            )
+
+        if wants("xfer.allow_reorder_future"):
+            v = s.get("xfer.allow_reorder_future", None)
+            self._set_opt_bool_combo(
+                self.cmb_xfer_allow_re_fut,
+                v,
+            )
+
+        if wants("xfer.interval_target"):
+            v = float(s.get("xfer.interval_target", 0.80))
+            with _blocked(self.sp_xfer_interval):
+                self.sp_xfer_interval.setValue(v)
+
+        if wants("xfer.load_endpoint"):
+            v = s.get("xfer.load_endpoint", "serve")
+            self._set_combo_data(self.cmb_xfer_endpoint, v)
+
+        if wants("xfer.export_physics_payload"):
+            v = bool(
+                s.get("xfer.export_physics_payload", True)
+            )
+            with _blocked(self.chk_xfer_phys_payload):
+                self.chk_xfer_phys_payload.setChecked(v)
+
+        if wants("xfer.export_physical_parameters_csv"):
+            v = bool(
+                s.get(
+                    "xfer.export_physical_parameters_csv",
+                    True,
+                )
+            )
+            with _blocked(self.chk_xfer_phys_csv):
+                self.chk_xfer_phys_csv.setChecked(v)
+
+        if wants("xfer.write_eval_future_csv"):
+            v = bool(
+                s.get("xfer.write_eval_future_csv", True)
+            )
+            with _blocked(self.chk_xfer_eval_future):
+                self.chk_xfer_eval_future.setChecked(v)
+
+        self._update_quantiles_chip()
+
+    def _push_to_store(self) -> None:
+        s = self._s
+        with s.batch():
+            q, ok, _txt = self._quantiles_ui_status()
+            raw = (self.ed_xfer_quantiles.text() or "").strip()
+            if ok or (not raw):
+                s.set("xfer.quantiles_override", q)
+
+            s.set(
+                "xfer.write_json",
+                bool(self.chk_xfer_json.isChecked()),
+            )
+            s.set(
+                "xfer.write_csv",
+                bool(self.chk_xfer_csv.isChecked()),
+            )
+            s.set(
+                "xfer.prefer_tuned",
+                bool(self.chk_xfer_prefer_tuned.isChecked()),
+            )
+            s.set(
+                "xfer.align_policy",
+                str(self.cmb_xfer_align.currentData()),
+            )
+            s.set(
+                "xfer.allow_reorder_dynamic",
+                self._opt_bool_from_combo(
+                    self.cmb_xfer_allow_re_dyn
+                ),
+            )
+            s.set(
+                "xfer.allow_reorder_future",
+                self._opt_bool_from_combo(
+                    self.cmb_xfer_allow_re_fut
+                ),
+            )
+            s.set(
+                "xfer.interval_target",
+                float(self.sp_xfer_interval.value()),
+            )
+            s.set(
+                "xfer.load_endpoint",
+                str(self.cmb_xfer_endpoint.currentData()),
+            )
+            s.set(
+                "xfer.export_physics_payload",
+                bool(self.chk_xfer_phys_payload.isChecked()),
+            )
+            s.set(
+                "xfer.export_physical_parameters_csv",
+                bool(self.chk_xfer_phys_csv.isChecked()),
+            )
+            s.set(
+                "xfer.write_eval_future_csv",
+                bool(self.chk_xfer_eval_future.isChecked()),
+            )
+
+    # -------------------------
+    # Small UI helpers
+    # -------------------------
+    def _make_help_btn(self, tip: str) -> QToolButton:
+        b = QToolButton()
+        b.setObjectName("miniAction")
+        b.setAutoRaise(True)
+        b.setIcon(
+            self.style().standardIcon(
+                QStyle.SP_MessageBoxInformation
+            )
+        )
+        b.setToolTip(tip)
+        b.setCursor(Qt.WhatsThisCursor)
+        b.setFixedSize(22, 22)
+        return b
+
+    def _field(
+        self,
+        title: str,
+        body: QWidget,
+        tip: str,
+        *,
+        right: Optional[QWidget] = None,
+    ) -> QFrame:
+        f = QFrame()
+        f.setObjectName("xferField")
+
+        v = QVBoxLayout(f)
+        v.setContentsMargins(10, 8, 10, 10)
+        v.setSpacing(6)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+
+        lbl = QLabel(title)
+        lbl.setObjectName("xferFieldTitle")
+
+        top.addWidget(lbl)
+        top.addStretch(1)
+
+        if right is not None:
+            top.addWidget(right)
+
+        top.addWidget(self._make_help_btn(tip))
+
+        v.addLayout(top)
+        v.addWidget(body)
+        return f
+
+    def _fill_opt_bool_combo(self, cmb: QComboBox) -> None:
+        cmb.clear()
+        cmb.addItem("Auto", None)
+        cmb.addItem("Allow", True)
+        cmb.addItem("Block", False)
+
+    def _opt_bool_from_combo(self, cmb: QComboBox) -> Optional[bool]:
+        return cmb.currentData()
+
+    def _set_opt_bool_combo(
+        self,
+        cmb: QComboBox,
+        v: Optional[bool],
+    ) -> None:
+        for i in range(cmb.count()):
+            if cmb.itemData(i) == v:
+                with _blocked(cmb):
+                    cmb.setCurrentIndex(i)
+                return
+
+    def _set_combo_data(self, cmb: QComboBox, data: Any) -> None:
+        for i in range(cmb.count()):
+            if cmb.itemData(i) == data:
+                with _blocked(cmb):
+                    cmb.setCurrentIndex(i)
+                return
+
+    def _quantiles_ui_status(
+        self,
+    ) -> Tuple[Optional[List[float]], bool, str]:
+        raw = (self.ed_xfer_quantiles.text() or "").strip()
+        if not raw:
+            return None, True, "AUTO"
+
+        q = _parse_float_list(raw)
+        if q is None:
+            return None, False, "INVALID"
+
+        return list(q), True, "OK"
+
+    def _update_quantiles_chip(self) -> None:
+        _q, ok, txt = self._quantiles_ui_status()
+        self.lbl_xfer_q_chip.setText(txt)
+        self.lbl_xfer_q_chip.setProperty("ok", bool(ok))
+        self.lbl_xfer_q_chip.style().unpolish(
+            self.lbl_xfer_q_chip
+        )
+        self.lbl_xfer_q_chip.style().polish(
+            self.lbl_xfer_q_chip
+        )
+
+
+class StrategyWarmStartSection(QWidget):
+    """
+    Store-backed section widget:
+
+    - strategies: baseline/xfer/warm
+    - rescale modes: as_is/strict
+    - warm-start settings (enabled only if warm strategy)
+    """
+
+    def __init__(
+        self,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._s = store
+
+        ensure_adv_defaults(self._s)
+
+        self._build_ui()
+        self._wire()
+        self._sync_from_store(keys=set())
+
+        self._s.config_changed.connect(self._on_store_changed)
+
+    def get_state(self) -> Dict[str, Any]:
+        return {
+            "strategies": self._get_checked_strategies(),
+            "rescale_modes": self._get_checked_rescale_modes(),
+            "warm_split": str(
+                self.cmb_xfer_warm_split.currentData()
+                or "train"
+            ),
+            "warm_samples": int(self.sp_xfer_warm_samples.value()),
+            "warm_frac": float(self.sp_xfer_warm_frac.value()),
+            "warm_epochs": int(self.sp_xfer_warm_epochs.value()),
+            "warm_lr": float(self.sp_xfer_warm_lr.value()),
+            "warm_seed": int(self.sp_xfer_warm_seed.value()),
+        }
+
+    def adv_keys(self) -> set[str]:
+        return {
+            "xfer.strategies",
+            "xfer.rescale_modes",
+            "xfer.warm_split",
+            "xfer.warm_samples",
+            "xfer.warm_frac",
+            "xfer.warm_epochs",
+            "xfer.warm_lr",
+            "xfer.warm_seed",
+        }
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        root.addLayout(grid)
 
         self.chk_xfer_strat_baseline = QCheckBox(
             "In-domain baselines (A→A, B→B)"
@@ -562,13 +782,13 @@ class XferOptionsPanel(QWidget):
         st.addWidget(self.chk_xfer_strat_xfer)
         st.addWidget(self.chk_xfer_strat_warm)
 
-        f_st = _field(
+        f_st = self._field(
             "Strategies",
             st_body,
             "Pick which comparisons to run.\n"
             "Warm-start unlocks the panel below.",
         )
-        grid2.addWidget(f_st, 0, 0, 1, 2)
+        grid.addWidget(f_st, 0, 0, 1, 2)
 
         self.chk_xfer_rmode_as_is = QCheckBox("as-is")
         self.chk_xfer_rmode_strict = QCheckBox("strict")
@@ -581,13 +801,13 @@ class XferOptionsPanel(QWidget):
         rm.addWidget(self.chk_xfer_rmode_strict)
         rm.addStretch(1)
 
-        f_rm = _field(
+        f_rm = self._field(
             "Rescale variants",
             rm_body,
             "Run multiple rescale variants for audits.\n"
             "Strict keeps scalers consistent.",
         )
-        grid2.addWidget(f_rm, 1, 0)
+        grid.addWidget(f_rm, 1, 0)
 
         self.cmb_xfer_warm_split = QComboBox()
         self.cmb_xfer_warm_split.addItem("train", "train")
@@ -639,78 +859,17 @@ class XferOptionsPanel(QWidget):
         warm.setColumnStretch(1, 1)
         warm.setColumnStretch(3, 1)
 
-        f_warm = _field(
+        f_warm = self._field(
             "Warm-start",
             self._warm_box,
             "Settings used when warm-start is enabled.",
         )
-        grid2.addWidget(f_warm, 1, 1)
+        grid.addWidget(f_warm, 1, 1)
 
-        right.addWidget(s2)
-
-        left.addStretch(1)
-        right.addStretch(1)
-
-        self._update_quantiles_chip()
         self._update_warm_enabled()
 
-        return outer
-
-    # -------------------------------------------------
-    # Qt events
-    # -------------------------------------------------
-    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:  # type: ignore[name-defined]
-        if obj is self._scroll.viewport():
-            if ev.type() == QEvent.Resize:
-                self._update_adv_layout(
-                    self._scroll.viewport().width()
-                )
-        return super().eventFilter(obj, ev)
-
-    def _update_adv_layout(self, w: int) -> None:
-        bp = 1020
-        stacked = int(w) < int(bp)
-
-        if stacked:
-            self._adv_cols.setDirection(QBoxLayout.TopToBottom)
-            self._scroll.setHorizontalScrollBarPolicy(
-                Qt.ScrollBarAlwaysOff
-            )
-            return
-
-        self._adv_cols.setDirection(QBoxLayout.LeftToRight)
-        self._scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarAsNeeded
-        )
-
-    # -------------------------------------------------
-    # Wiring
-    # -------------------------------------------------
-    def _connect(self) -> None:
-        self.btn_xfer_adv_reset.clicked.connect(self._on_adv_reset)
-
-        self.btn_xfer_q_clear.clicked.connect(
-            lambda: self.ed_xfer_quantiles.setText("")
-        )
-        self.btn_xfer_q_clear.clicked.connect(
-            self._update_quantiles_chip
-        )
-        self.btn_xfer_q_clear.clicked.connect(self._push_to_store)
-
-        self.ed_xfer_quantiles.editingFinished.connect(
-            self._update_quantiles_chip
-        )
-        self.ed_xfer_quantiles.editingFinished.connect(
-            self._push_to_store
-        )
-
+    def _wire(self) -> None:
         for cb in (
-            self.chk_xfer_json,
-            self.chk_xfer_csv,
-            self.chk_xfer_prefer_tuned,
-            self.chk_xfer_phys_payload,
-            self.chk_xfer_phys_csv,
-            self.chk_xfer_eval_future,
             self.chk_xfer_strat_baseline,
             self.chk_xfer_strat_xfer,
             self.chk_xfer_strat_warm,
@@ -719,20 +878,8 @@ class XferOptionsPanel(QWidget):
         ):
             cb.toggled.connect(self._push_to_store)
 
-        self.cmb_xfer_align.currentIndexChanged.connect(
-            self._push_to_store
-        )
-        self.cmb_xfer_allow_re_dyn.currentIndexChanged.connect(
-            self._push_to_store
-        )
-        self.cmb_xfer_allow_re_fut.currentIndexChanged.connect(
-            self._push_to_store
-        )
-        self.sp_xfer_interval.valueChanged.connect(
-            self._push_to_store
-        )
-        self.cmb_xfer_endpoint.currentIndexChanged.connect(
-            self._push_to_store
+        self.chk_xfer_strat_warm.toggled.connect(
+            lambda _v: self._update_warm_enabled()
         )
 
         for w in (
@@ -744,27 +891,23 @@ class XferOptionsPanel(QWidget):
             self.sp_xfer_warm_seed,
         ):
             if isinstance(w, QComboBox):
-                w.currentIndexChanged.connect(self._push_to_store)
+                w.currentIndexChanged.connect(
+                    self._push_to_store
+                )
             else:
-                w.valueChanged.connect(self._push_to_store)  # type: ignore[attr-defined]
+                w.valueChanged.connect(  # type: ignore[attr-defined]
+                    self._push_to_store
+                )
 
-        self.chk_xfer_strat_warm.toggled.connect(
-            lambda _v: self._update_warm_enabled()
-        )
-
-    # -------------------------------------------------
-    # Store I/O
-    # -------------------------------------------------
     def _on_store_changed(self, keys: object) -> None:
         try:
             changed = set(keys or [])
         except Exception:
             changed = set()
-
         if not changed:
             return
 
-        if not (changed & self._adv_keys()):
+        if not (changed & self.adv_keys()):
             return
 
         self._sync_from_store(keys=changed)
@@ -775,72 +918,10 @@ class XferOptionsPanel(QWidget):
         def wants(k: str) -> bool:
             return (not keys) or (k in keys)
 
-        if wants("xfer.quantiles_override"):
-            q = s.get("xfer.quantiles_override", None)
-            txt = ""
-            if q:
-                try:
-                    txt = ",".join(str(x) for x in q)
-                except Exception:
-                    txt = ""
-            with _blocked(self.ed_xfer_quantiles):
-                self.ed_xfer_quantiles.setText(txt)
-
-        if wants("xfer.write_json"):
-            v = bool(s.get("xfer.write_json", True))
-            with _blocked(self.chk_xfer_json):
-                self.chk_xfer_json.setChecked(v)
-
-        if wants("xfer.write_csv"):
-            v = bool(s.get("xfer.write_csv", True))
-            with _blocked(self.chk_xfer_csv):
-                self.chk_xfer_csv.setChecked(v)
-
-        if wants("xfer.prefer_tuned"):
-            v = bool(s.get("xfer.prefer_tuned", True))
-            with _blocked(self.chk_xfer_prefer_tuned):
-                self.chk_xfer_prefer_tuned.setChecked(v)
-
-        if wants("xfer.align_policy"):
-            v = s.get("xfer.align_policy", "align_by_name_pad")
-            self._set_combo_data(self.cmb_xfer_align, v)
-
-        if wants("xfer.allow_reorder_dynamic"):
-            v = s.get("xfer.allow_reorder_dynamic", None)
-            self._set_opt_bool_combo(self.cmb_xfer_allow_re_dyn, v)
-
-        if wants("xfer.allow_reorder_future"):
-            v = s.get("xfer.allow_reorder_future", None)
-            self._set_opt_bool_combo(self.cmb_xfer_allow_re_fut, v)
-
-        if wants("xfer.interval_target"):
-            v = float(s.get("xfer.interval_target", 0.80))
-            with _blocked(self.sp_xfer_interval):
-                self.sp_xfer_interval.setValue(v)
-
-        if wants("xfer.load_endpoint"):
-            v = s.get("xfer.load_endpoint", "serve")
-            self._set_combo_data(self.cmb_xfer_endpoint, v)
-
-        if wants("xfer.export_physics_payload"):
-            v = bool(s.get("xfer.export_physics_payload", True))
-            with _blocked(self.chk_xfer_phys_payload):
-                self.chk_xfer_phys_payload.setChecked(v)
-
-        if wants("xfer.export_physical_parameters_csv"):
-            v = bool(
-                s.get("xfer.export_physical_parameters_csv", True)
-            )
-            with _blocked(self.chk_xfer_phys_csv):
-                self.chk_xfer_phys_csv.setChecked(v)
-
-        if wants("xfer.write_eval_future_csv"):
-            v = bool(s.get("xfer.write_eval_future_csv", True))
-            with _blocked(self.chk_xfer_eval_future):
-                self.chk_xfer_eval_future.setChecked(v)
-
         if wants("xfer.strategies"):
-            self._sync_strategies(s.get("xfer.strategies", None))
+            self._sync_strategies(
+                s.get("xfer.strategies", None)
+            )
 
         if wants("xfer.rescale_modes"):
             self._sync_rescale_modes(
@@ -876,140 +957,44 @@ class XferOptionsPanel(QWidget):
             with _blocked(self.sp_xfer_warm_seed):
                 self.sp_xfer_warm_seed.setValue(int(v))
 
-        self._update_quantiles_chip()
         self._update_warm_enabled()
 
     def _push_to_store(self) -> None:
         s = self._s
-
-        q, ok, _txt = self._quantiles_ui_status()
-        raw = (self.ed_xfer_quantiles.text() or "").strip()
-        if ok or (not raw):
-            s.set("xfer.quantiles_override", q)
-
-        s.set("xfer.write_json", bool(self.chk_xfer_json.isChecked()))
-        s.set("xfer.write_csv", bool(self.chk_xfer_csv.isChecked()))
-        s.set(
-            "xfer.prefer_tuned",
-            bool(self.chk_xfer_prefer_tuned.isChecked()),
-        )
-        s.set("xfer.align_policy", str(self.cmb_xfer_align.currentData()))
-        s.set(
-            "xfer.allow_reorder_dynamic",
-            self._opt_bool_from_combo(self.cmb_xfer_allow_re_dyn),
-        )
-        s.set(
-            "xfer.allow_reorder_future",
-            self._opt_bool_from_combo(self.cmb_xfer_allow_re_fut),
-        )
-        s.set("xfer.interval_target", float(self.sp_xfer_interval.value()))
-        s.set(
-            "xfer.load_endpoint",
-            str(self.cmb_xfer_endpoint.currentData()),
-        )
-        s.set(
-            "xfer.export_physics_payload",
-            bool(self.chk_xfer_phys_payload.isChecked()),
-        )
-        s.set(
-            "xfer.export_physical_parameters_csv",
-            bool(self.chk_xfer_phys_csv.isChecked()),
-        )
-        s.set(
-            "xfer.write_eval_future_csv",
-            bool(self.chk_xfer_eval_future.isChecked()),
-        )
-
-        s.set("xfer.strategies", self._get_checked_strategies())
-        s.set("xfer.rescale_modes", self._get_checked_rescale_modes())
-
-        s.set(
-            "xfer.warm_split",
-            str(self.cmb_xfer_warm_split.currentData()),
-        )
-        s.set("xfer.warm_samples", int(self.sp_xfer_warm_samples.value()))
-        s.set("xfer.warm_frac", float(self.sp_xfer_warm_frac.value()))
-        s.set("xfer.warm_epochs", int(self.sp_xfer_warm_epochs.value()))
-        s.set("xfer.warm_lr", float(self.sp_xfer_warm_lr.value()))
-        s.set("xfer.warm_seed", int(self.sp_xfer_warm_seed.value()))
-
-    # -------------------------------------------------
-    # Helpers
-    # -------------------------------------------------
-    def _ensure_defaults(self) -> None:
-        s = self._s
         with s.batch():
-            for k, v in ADV_DEFAULTS.items():
-                if s.get(k, None) is None:
-                    s.set(k, v)
+            s.set(
+                "xfer.strategies",
+                self._get_checked_strategies(),
+            )
+            s.set(
+                "xfer.rescale_modes",
+                self._get_checked_rescale_modes(),
+            )
 
-    def _adv_keys(self) -> set[str]:
-        return set(ADV_DEFAULTS.keys())
-
-    def _make_help_btn(self, tip: str) -> QToolButton:
-        b = QToolButton()
-        b.setObjectName("miniAction")
-        b.setAutoRaise(True)
-        b.setIcon(
-            self.style().standardIcon(QStyle.SP_MessageBoxInformation)
-        )
-        b.setToolTip(tip)
-        b.setCursor(Qt.WhatsThisCursor)
-        b.setFixedSize(22, 22)
-        return b
-
-    def _fill_opt_bool_combo(self, cmb: QComboBox) -> None:
-        cmb.clear()
-        cmb.addItem("Auto", None)
-        cmb.addItem("Allow", True)
-        cmb.addItem("Block", False)
-
-    def _opt_bool_from_combo(self, cmb: QComboBox) -> Optional[bool]:
-        return cmb.currentData()
-
-    def _set_opt_bool_combo(
-        self,
-        cmb: QComboBox,
-        v: Optional[bool],
-    ) -> None:
-        for i in range(cmb.count()):
-            if cmb.itemData(i) == v:
-                with _blocked(cmb):
-                    cmb.setCurrentIndex(i)
-                return
-
-    def _set_combo_data(self, cmb: QComboBox, data: Any) -> None:
-        for i in range(cmb.count()):
-            if cmb.itemData(i) == data:
-                with _blocked(cmb):
-                    cmb.setCurrentIndex(i)
-                return
-
-    def _quantiles_ui_status(
-        self,
-    ) -> Tuple[Optional[List[float]], bool, str]:
-        raw = (self.ed_xfer_quantiles.text() or "").strip()
-        if not raw:
-            return None, True, "AUTO"
-
-        q = _parse_float_list(raw)
-        if q is None:
-            return None, False, "INVALID"
-
-        return list(q), True, "OK"
-
-    def _update_quantiles_chip(self) -> None:
-        _q, ok, txt = self._quantiles_ui_status()
-        self.lbl_xfer_q_chip.setText(txt)
-        self.lbl_xfer_q_chip.setProperty("ok", bool(ok))
-        self.lbl_xfer_q_chip.style().unpolish(self.lbl_xfer_q_chip)
-        self.lbl_xfer_q_chip.style().polish(self.lbl_xfer_q_chip)
-
-    def _on_adv_reset(self) -> None:
-        s = self._s
-        with s.batch():
-            for k, v in ADV_DEFAULTS.items():
-                s.set(k, v)
+            s.set(
+                "xfer.warm_split",
+                str(self.cmb_xfer_warm_split.currentData()),
+            )
+            s.set(
+                "xfer.warm_samples",
+                int(self.sp_xfer_warm_samples.value()),
+            )
+            s.set(
+                "xfer.warm_frac",
+                float(self.sp_xfer_warm_frac.value()),
+            )
+            s.set(
+                "xfer.warm_epochs",
+                int(self.sp_xfer_warm_epochs.value()),
+            )
+            s.set(
+                "xfer.warm_lr",
+                float(self.sp_xfer_warm_lr.value()),
+            )
+            s.set(
+                "xfer.warm_seed",
+                int(self.sp_xfer_warm_seed.value()),
+            )
 
     def _get_checked_strategies(self) -> Optional[List[str]]:
         out: List[str] = []
@@ -1022,13 +1007,15 @@ class XferOptionsPanel(QWidget):
         return out or None
 
     def _sync_strategies(self, v: Any) -> None:
-        s = set(v or [])
+        ss = set(v or [])
         with _blocked(self.chk_xfer_strat_baseline):
-            self.chk_xfer_strat_baseline.setChecked("baseline" in s)
+            self.chk_xfer_strat_baseline.setChecked(
+                "baseline" in ss
+            )
         with _blocked(self.chk_xfer_strat_xfer):
-            self.chk_xfer_strat_xfer.setChecked("xfer" in s)
+            self.chk_xfer_strat_xfer.setChecked("xfer" in ss)
         with _blocked(self.chk_xfer_strat_warm):
-            self.chk_xfer_strat_warm.setChecked("warm" in s)
+            self.chk_xfer_strat_warm.setChecked("warm" in ss)
         self._update_warm_enabled()
 
     def _get_checked_rescale_modes(self) -> Optional[List[str]]:
@@ -1040,18 +1027,15 @@ class XferOptionsPanel(QWidget):
         return out or None
 
     def _sync_rescale_modes(self, v: Any) -> None:
-        s = set(v or [])
+        ss = set(v or [])
         with _blocked(self.chk_xfer_rmode_as_is):
-            self.chk_xfer_rmode_as_is.setChecked("as_is" in s)
+            self.chk_xfer_rmode_as_is.setChecked("as_is" in ss)
         with _blocked(self.chk_xfer_rmode_strict):
-            self.chk_xfer_rmode_strict.setChecked("strict" in s)
+            self.chk_xfer_rmode_strict.setChecked("strict" in ss)
 
     def _update_warm_enabled(self) -> None:
         on = bool(self.chk_xfer_strat_warm.isChecked())
-
-        if hasattr(self, "_warm_box"):
-            self._warm_box.setEnabled(on)
-
+        self._warm_box.setEnabled(on)
         for w in (
             self.cmb_xfer_warm_split,
             self.sp_xfer_warm_samples,
@@ -1061,3 +1045,323 @@ class XferOptionsPanel(QWidget):
             self.sp_xfer_warm_seed,
         ):
             w.setEnabled(on)
+
+    def _make_help_btn(self, tip: str) -> QToolButton:
+        b = QToolButton()
+        b.setObjectName("miniAction")
+        b.setAutoRaise(True)
+        b.setIcon(
+            self.style().standardIcon(
+                QStyle.SP_MessageBoxInformation
+            )
+        )
+        b.setToolTip(tip)
+        b.setCursor(Qt.WhatsThisCursor)
+        b.setFixedSize(22, 22)
+        return b
+
+    def _field(
+        self,
+        title: str,
+        body: QWidget,
+        tip: str,
+        *,
+        right: Optional[QWidget] = None,
+    ) -> QFrame:
+        f = QFrame()
+        f.setObjectName("xferField")
+
+        v = QVBoxLayout(f)
+        v.setContentsMargins(10, 8, 10, 10)
+        v.setSpacing(6)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+
+        lbl = QLabel(title)
+        lbl.setObjectName("xferFieldTitle")
+
+        top.addWidget(lbl)
+        top.addStretch(1)
+
+        if right is not None:
+            top.addWidget(right)
+
+        top.addWidget(self._make_help_btn(tip))
+
+        v.addLayout(top)
+        v.addWidget(body)
+        return f
+
+    def _set_combo_data(self, cmb: QComboBox, data: Any) -> None:
+        for i in range(cmb.count()):
+            if cmb.itemData(i) == data:
+                with _blocked(cmb):
+                    cmb.setCurrentIndex(i)
+                return
+
+
+class XferOptionsPanel(QWidget):
+    """
+    Advanced options panel (scrollable).
+
+    XferTab can embed this directly:
+        self.options_panel = XferOptionsPanel(store=store)
+
+    Internally composed of two reusable section widgets.
+    """
+
+    def __init__(
+        self,
+        *,
+        store: GeoConfigStore,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._s = store
+
+        ensure_adv_defaults(self._s)
+
+        self._build_ui()
+        self._update_adv_layout(self._scroll.viewport().width())
+
+    # -------------------------------------------------
+    # Public
+    # -------------------------------------------------
+    def get_quantiles(self) -> Optional[Sequence[float]]:
+        return self.outputs.get_quantiles()
+
+    def get_state(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        out.update(self.outputs.get_state())
+        out.update(self.strategy.get_state())
+        return out
+
+    # -------------------------------------------------
+    # UI
+    # -------------------------------------------------
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._scroll = QScrollArea(self)
+        self._scroll.setObjectName("xferAdvScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        self._scroll.horizontalScrollBar().setSingleStep(24)
+        self._scroll.horizontalScrollBar().setPageStep(240)
+
+        self._content = self._build_advanced_box()
+        self._scroll.setWidget(self._content)
+
+        self._scroll.viewport().installEventFilter(self)
+        root.addWidget(self._scroll, 1)
+
+    def _build_advanced_box(self) -> QWidget:
+        outer = QWidget()
+        lay = QVBoxLayout(outer)
+        lay.setContentsMargins(12, 10, 12, 12)
+        lay.setSpacing(10)
+
+        # Header row: title + reset
+        top = QHBoxLayout()
+        top.setSpacing(10)
+
+        tcol = QVBoxLayout()
+        tcol.setContentsMargins(0, 0, 0, 0)
+        tcol.setSpacing(2)
+
+        ttl = QLabel("Advanced options")
+        ttl.setObjectName("xferAdvTitle")
+
+        sub = QLabel(
+            "Fine control for audits and transfer semantics."
+        )
+        sub.setObjectName("setupCardSubtitle")
+
+        tcol.addWidget(ttl)
+        tcol.addWidget(sub)
+        top.addLayout(tcol, 1)
+
+        self.btn_xfer_adv_reset = QToolButton()
+        self.btn_xfer_adv_reset.setObjectName("miniAction")
+        self.btn_xfer_adv_reset.setIcon(
+            self.style().standardIcon(QStyle.SP_BrowserReload)
+        )
+        self.btn_xfer_adv_reset.setToolTip(
+            "Reset Advanced options to defaults."
+        )
+        self.btn_xfer_adv_reset.clicked.connect(
+            self._on_adv_reset
+        )
+        top.addWidget(self.btn_xfer_adv_reset)
+
+        lay.addLayout(top)
+
+        # Responsive columns
+        self._adv_cols = QBoxLayout(QBoxLayout.LeftToRight)
+        self._adv_cols.setContentsMargins(0, 0, 0, 0)
+        self._adv_cols.setSpacing(12)
+
+        self._adv_left = QWidget()
+        left = QVBoxLayout(self._adv_left)
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(10)
+        left.setAlignment(Qt.AlignTop)
+
+        self._adv_right = QWidget()
+        right = QVBoxLayout(self._adv_right)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(10)
+        right.setAlignment(Qt.AlignTop)
+
+        self._adv_cols.addWidget(self._adv_left, 1)
+        self._adv_cols.addWidget(self._adv_right, 1)
+        lay.addLayout(self._adv_cols)
+
+        # Sections (reusable widgets inside)
+        self.outputs = OutputsAlignmentSection(store=self._s)
+        self.strategy = StrategyWarmStartSection(store=self._s)
+
+        left.addWidget(
+            self._wrap_section(
+                "Outputs & alignment",
+                QStyle.SP_FileDialogDetailedView,
+                self.outputs,
+            )
+        )
+        right.addWidget(
+            self._wrap_section(
+                "Strategies & warm-start",
+                QStyle.SP_ArrowRight,
+                self.strategy,
+            )
+        )
+
+        left.addStretch(1)
+        right.addStretch(1)
+
+        # Compatibility aliases (optional, safe)
+        self._alias_widgets_for_compat()
+
+        return outer
+
+    def _alias_widgets_for_compat(self) -> None:
+        """
+        Preserve the old attribute names so nothing breaks.
+        """
+        o = self.outputs
+        s = self.strategy
+
+        self.ed_xfer_quantiles = o.ed_xfer_quantiles
+        self.lbl_xfer_q_chip = o.lbl_xfer_q_chip
+        self.btn_xfer_q_clear = o.btn_xfer_q_clear
+
+        self.chk_xfer_json = o.chk_xfer_json
+        self.chk_xfer_csv = o.chk_xfer_csv
+        self.chk_xfer_prefer_tuned = o.chk_xfer_prefer_tuned
+
+        self.cmb_xfer_align = o.cmb_xfer_align
+        self.cmb_xfer_allow_re_dyn = o.cmb_xfer_allow_re_dyn
+        self.cmb_xfer_allow_re_fut = o.cmb_xfer_allow_re_fut
+        self.sp_xfer_interval = o.sp_xfer_interval
+        self.cmb_xfer_endpoint = o.cmb_xfer_endpoint
+
+        self.chk_xfer_phys_payload = o.chk_xfer_phys_payload
+        self.chk_xfer_phys_csv = o.chk_xfer_phys_csv
+        self.chk_xfer_eval_future = o.chk_xfer_eval_future
+
+        self.chk_xfer_strat_baseline = s.chk_xfer_strat_baseline
+        self.chk_xfer_strat_xfer = s.chk_xfer_strat_xfer
+        self.chk_xfer_strat_warm = s.chk_xfer_strat_warm
+
+        self.chk_xfer_rmode_as_is = s.chk_xfer_rmode_as_is
+        self.chk_xfer_rmode_strict = s.chk_xfer_rmode_strict
+
+        self.cmb_xfer_warm_split = s.cmb_xfer_warm_split
+        self.sp_xfer_warm_samples = s.sp_xfer_warm_samples
+        self.sp_xfer_warm_frac = s.sp_xfer_warm_frac
+        self.sp_xfer_warm_epochs = s.sp_xfer_warm_epochs
+        self.sp_xfer_warm_lr = s.sp_xfer_warm_lr
+        self.sp_xfer_warm_seed = s.sp_xfer_warm_seed
+
+    def _wrap_section(
+        self,
+        title: str,
+        icon: QStyle.StandardPixmap,
+        body: QWidget,
+    ) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("xferAdvSection")
+
+        v = QVBoxLayout(frame)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+
+        header = QToolButton()
+        header.setObjectName("xferAdvToggle")
+        header.setCheckable(True)
+        header.setChecked(True)
+        header.setToolButtonStyle(
+            Qt.ToolButtonTextBesideIcon
+        )
+        header.setIcon(self.style().standardIcon(icon))
+        header.setText(title)
+        header.setArrowType(Qt.DownArrow)
+
+        def _toggle(on: bool) -> None:
+            body.setVisible(bool(on))
+            header.setArrowType(
+                Qt.DownArrow if on else Qt.RightArrow
+            )
+
+        header.toggled.connect(_toggle)
+
+        v.addWidget(header)
+        v.addWidget(body)
+
+        return frame
+
+    # -------------------------------------------------
+    # Qt events
+    # -------------------------------------------------
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:
+        if obj is self._scroll.viewport():
+            if ev.type() == QEvent.Resize:
+                self._update_adv_layout(
+                    self._scroll.viewport().width()
+                )
+        return super().eventFilter(obj, ev)
+
+    def _update_adv_layout(self, w: int) -> None:
+        bp = 1020
+        stacked = int(w) < int(bp)
+
+        if stacked:
+            self._adv_cols.setDirection(QBoxLayout.TopToBottom)
+            self._scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarAlwaysOff
+            )
+            return
+
+        self._adv_cols.setDirection(QBoxLayout.LeftToRight)
+        self._scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+
+    # -------------------------------------------------
+    # Actions
+    # -------------------------------------------------
+    def _on_adv_reset(self) -> None:
+        s = self._s
+        with s.batch():
+            for k, v in ADV_DEFAULTS.items():
+                s.set(k, v)

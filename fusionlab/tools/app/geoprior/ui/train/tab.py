@@ -107,8 +107,8 @@ class TrainTab(QWidget):
         row.setProperty("selected", False)
         row.setAttribute(Qt.WA_StyledBackground, True)
         row.setSizePolicy(
+            QSizePolicy.Preferred,
             QSizePolicy.Expanding,
-            QSizePolicy.Fixed,
         )
         row.setMinimumHeight(34)
     
@@ -388,6 +388,13 @@ class TrainTab(QWidget):
         # Left column: [Setup checklist] + [Computer]
         # -----------------------------------------
         left_col = QWidget(self)
+        # enforce a stable minimum width (match inference feel)
+        left_col.setMinimumWidth(260)
+        # optional: keep it from being treated as fully "expandable"
+        # left_col.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # or, if you still want slight expansion:
+        left_col.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
         left_l = QVBoxLayout(left_col)
         left_l.setContentsMargins(0, 0, 0, 0)
         left_l.setSpacing(8)
@@ -457,27 +464,70 @@ class TrainTab(QWidget):
         # --------
         comp = QFrame(left_col)
         comp.setObjectName("trainNavCard")
+        comp.setFrameShape(QFrame.NoFrame)
+        
         comp_l = QVBoxLayout(comp)
         comp_l.setContentsMargins(10, 10, 10, 10)
         comp_l.setSpacing(10)
         
-        comp_title = QLabel("Computer details")
+        comp_title = QLabel("Computer details", comp)
         comp_title.setObjectName("trainNavTitle")
         comp_l.addWidget(comp_title, 0)
         
-        self.lbl_compute_nav = QLabel("")
+        # --- Scroll area for body (so long text won't cover nav) ---
+        sc = QScrollArea(comp)
+        sc.setObjectName("trainCompScroll")  #  new scoped name
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setWidgetResizable(True)
+        sc.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        
+        body = QWidget(sc)
+        body.setObjectName("trainCompBody")
+        sc.setWidget(body)
+        
+        body_l = QVBoxLayout(body)
+        body_l.setContentsMargins(0, 0, 0, 0)
+        body_l.setSpacing(8)
+        
+        self.lbl_compute_nav = QLabel("", body)
         self.lbl_compute_nav.setObjectName("runComputeText")
         self.lbl_compute_nav.setWordWrap(True)
         self.lbl_compute_nav.setTextInteractionFlags(
             Qt.TextSelectableByMouse
         )
-        comp_l.addWidget(self.lbl_compute_nav, 0)
-        comp_l.addStretch(1)
+        self.lbl_compute_nav.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Minimum,
+        )
+        body_l.addWidget(self.lbl_compute_nav, 0)
+        
+        notes = QLabel(
+            "• Backend/Device info updates when runtime changes.\n"
+            "• GPU visibility depends on the selected backend.\n"
+            "• Use presets to keep training runs reproducible.",
+            body,
+        )
+        notes.setWordWrap(True)
+        notes.setObjectName("sumLine")
+        body_l.addWidget(notes, 0)
+        
+        body_l.addStretch(1)
+        
+        # Let scroll area take remaining height of card
+        sc.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        comp_l.addWidget(sc, 1)
         
         left_l.addWidget(comp, 1)
         
         main_split.addWidget(left_col)
-
+        # splitter-level guard (best UX)
+        main_split.setChildrenCollapsible(False)
+        main_split.setCollapsible(0, False)     # left pane cannot collapse below min
+        main_split.setStretchFactor(0, 0)
+        main_split.setStretchFactor(1, 1)
+        main_split.setSizes([260, 1200])        # pick your default
+        
         # -----------------------------------------
         # Right: Head + workspace (Editor|Preview)
         # -----------------------------------------

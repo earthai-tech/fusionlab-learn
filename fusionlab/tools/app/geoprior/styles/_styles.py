@@ -979,6 +979,10 @@ QLabel#dsxChip, QLabel#dsxStatusChip {{
   border: 1px solid rgba(46,49,145,0.14);
   background: rgba(46,49,145,0.04);
 }}
+QFrame[flash="true"] {{
+    border: 1px solid palette(highlight);
+    border-radius: 10px;
+}}
 
 """
 
@@ -1697,9 +1701,178 @@ QToolButton#runButton:hover:enabled {{
 }}
 QToolButton#runButton:disabled {{
   background: transparent;
-}}               
+}}
+              
+"""
+INF_COMP_SCROLL_LIGHT = """
+/* Inference: Computer details scroll area (Light) */
+QScrollArea#inferCompScroll {
+  background: transparent;
+  border: none;
+}
+
+QScrollArea#inferCompScroll QWidget {
+  background: transparent;
+}
+
+QScrollArea#inferCompScroll > QWidget > QWidget {
+  background: transparent;
+}
+
+/* viewport (the actual painted area) */
+QScrollArea#inferCompScroll QWidget#qt_scrollarea_viewport {
+  background: transparent;
+  border: none;
+}
+
+/* subtle scrollbar */
+QScrollBar:vertical {
+  background: transparent;
+  width: 10px;
+  margin: 0px;
+}
+QScrollBar::handle:vertical {
+  background: rgba(46,49,145,0.18);
+  border-radius: 5px;
+  min-height: 18px;
+}
+QScrollBar::handle:vertical:hover {
+  background: rgba(46,49,145,0.28);
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+  height: 0px;
+}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+  background: transparent;
+}
+QScrollBar:horizontal {
+  background: transparent;
+  height: 10px;
+  margin: 0px;
+}
+QScrollBar::handle:horizontal {
+  background: rgba(46,49,145,0.18);
+  border-radius: 5px;
+  min-width: 18px;
+}
+QScrollBar::handle:horizontal:hover {
+  background: rgba(46,49,145,0.28);
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+  width: 0px;
+}
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+  background: transparent;
+}
 """
 
+INF_COMP_SCROLL_DARK = """
+/* Inference: Computer details scroll area (Dark) */
+QScrollArea#inferCompScroll {
+  background: transparent;
+  border: none;
+}
+
+QScrollArea#inferCompScroll QWidget {
+  background: transparent;
+}
+
+QScrollArea#inferCompScroll > QWidget > QWidget {
+  background: transparent;
+}
+
+QScrollArea#inferCompScroll QWidget#qt_scrollarea_viewport {
+  background: transparent;
+  border: none;
+}
+
+QScrollBar:vertical {
+  background: transparent;
+  width: 10px;
+  margin: 0px;
+}
+QScrollBar::handle:vertical {
+  background: rgba(226,232,240,0.16);
+  border-radius: 5px;
+  min-height: 18px;
+}
+QScrollBar::handle:vertical:hover {
+  background: rgba(226,232,240,0.26);
+}
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+  height: 0px;
+}
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+  background: transparent;
+}
+QScrollBar:horizontal {
+  background: transparent;
+  height: 10px;
+  margin: 0px;
+}
+QScrollBar::handle:horizontal {
+  background: rgba(226,232,240,0.16);
+  border-radius: 5px;
+  min-width: 18px;
+}
+QScrollBar::handle:horizontal:hover {
+  background: rgba(226,232,240,0.26);
+}
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+  width: 0px;
+}
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+  background: transparent;
+}
+
+
+"""
+INFER_CHIP ="""
+QLabel#inferHeadTitle {
+  font-weight: 900;
+  color: rgba(46,49,145,0.96);
+  padding-left: 6px;
+}
+
+QLabel#inferChip {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 800;
+  background: rgba(46,49,145,0.06);
+  border: 1px solid rgba(46,49,145,0.18);
+}
+
+QLabel#inferChip[kind="ok"] {
+  background: rgba(34,197,94,0.18);
+  border-color: rgba(34,197,94,0.28);
+}
+
+QLabel#inferChip[kind="off"] {
+  background: rgba(148,163,184,0.18);
+  border-color: rgba(148,163,184,0.28);
+}
+
+QLabel#inferChip[kind="info"] {
+  background: rgba(51,153,255,0.14);
+  border-color: rgba(51,153,255,0.22);
+}
+QLabel#inferChip[kind="warn"] {
+  background: rgba(245,158,11,0.18);
+  border-color: rgba(245,158,11,0.28);
+}
+QLabel#inferChip[kind="err"] {
+  background: rgba(239,68,68,0.16);
+  border-color: rgba(239,68,68,0.26);
+}
+"""
 # ------------------------------------------------------------------ #
 #  Tabs – shared for both themes
 # ------------------------------------------------------------------ #
@@ -1873,8 +2046,133 @@ QSplitter::handle:horizontal:hover {{
   background: rgba(255,255,255,0.06);
   border-radius: 4px;
 }}
-"""
 
+
+"""
+TRAIN_COMP_SCROLL_LIGHT= """
+/* Training: Computer details scroll area (Light) */
+QScrollArea#trainCompScroll {
+  background: transparent;
+  border: none;
+}
+
+QScrollArea#trainCompScroll QWidget {
+  background: transparent;
+}
+
+QScrollArea#trainCompScroll > QWidget > QWidget {
+  background: transparent;
+}
+
+/* viewport */
+QScrollArea#trainCompScroll QWidget#qt_scrollarea_viewport {
+  background: transparent;
+  border: none;
+}
+
+/* scoped scrollbars (vertical + horizontal) */
+QScrollArea#trainCompScroll QScrollBar:vertical {
+  background: transparent;
+  width: 10px;
+  margin: 0px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:vertical {
+  background: rgba(46,49,145,0.18);
+  border-radius: 5px;
+  min-height: 18px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:vertical:hover {
+  background: rgba(46,49,145,0.28);
+}
+QScrollArea#trainCompScroll QScrollBar::add-line:vertical,
+QScrollArea#trainCompScroll QScrollBar::sub-line:vertical {
+  height: 0px;
+}
+QScrollArea#trainCompScroll QScrollBar::add-page:vertical,
+QScrollArea#trainCompScroll QScrollBar::sub-page:vertical {
+  background: transparent;
+}
+
+QScrollArea#trainCompScroll QScrollBar:horizontal {
+  background: transparent;
+  height: 10px;
+  margin: 0px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:horizontal {
+  background: rgba(46,49,145,0.18);
+  border-radius: 5px;
+  min-width: 18px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:horizontal:hover {
+  background: rgba(46,49,145,0.28);
+}
+QScrollArea#trainCompScroll QScrollBar::add-line:horizontal,
+QScrollArea#trainCompScroll QScrollBar::sub-line:horizontal {
+  width: 0px;
+}
+QScrollArea#trainCompScroll QScrollBar::add-page:horizontal,
+QScrollArea#trainCompScroll QScrollBar::sub-page:horizontal {
+  background: transparent;
+}
+"""
+TRAIN_COMP_SCROLL_DARK="""
+
+/* Training: Computer details scroll area (Dark) */
+QScrollArea#trainCompScroll {
+  background: transparent;
+  border: none;
+}
+
+QScrollArea#trainCompScroll QWidget {
+  background: transparent;
+}
+
+QScrollArea#trainCompScroll > QWidget > QWidget {
+  background: transparent;
+}
+
+QScrollArea#trainCompScroll QWidget#qt_scrollarea_viewport {
+  background: transparent;
+  border: none;
+}
+
+QScrollArea#trainCompScroll QScrollBar:vertical {
+  background: transparent;
+  width: 10px;
+  margin: 0px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:vertical {
+  background: rgba(226,232,240,0.16);
+  border-radius: 5px;
+  min-height: 18px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:vertical:hover {
+  background: rgba(226,232,240,0.26);
+}
+QScrollArea#trainCompScroll QScrollBar::add-line:vertical,
+QScrollArea#trainCompScroll QScrollBar::sub-line:vertical { height: 0px; }
+QScrollArea#trainCompScroll QScrollBar::add-page:vertical,
+QScrollArea#trainCompScroll QScrollBar::sub-page:vertical { background: transparent; }
+
+QScrollArea#trainCompScroll QScrollBar:horizontal {
+  background: transparent;
+  height: 10px;
+  margin: 0px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:horizontal {
+  background: rgba(226,232,240,0.16);
+  border-radius: 5px;
+  min-width: 18px;
+}
+QScrollArea#trainCompScroll QScrollBar::handle:horizontal:hover {
+  background: rgba(226,232,240,0.26);
+}
+QScrollArea#trainCompScroll QScrollBar::add-line:horizontal,
+QScrollArea#trainCompScroll QScrollBar::sub-line:horizontal { width: 0px; }
+QScrollArea#trainCompScroll QScrollBar::add-page:horizontal,
+QScrollArea#trainCompScroll QScrollBar::sub-page:horizontal { background: transparent; }
+
+"""
 TRAIN_NAV_LIGHT = """
 QFrame#trainNavCard {
   border: 1px solid rgba(46,49,145,0.18);
@@ -2445,17 +2743,6 @@ QLineEdit#searchEdit {
     padding: 2px 0px;
 }
 """
-FLAB_STYLE_SHEET = FLAB_STYLE_SHEET + _CONSOLE_STYLES_LIGHT
-DARK_THEME_STYLESHEET = (
-    DARK_THEME_STYLESHEET + _CONSOLE_STYLES_DARK
-)
-FLAB_STYLE_SHEET += TRAIN_TAB_PATCH_LIGHT
-DARK_THEME_STYLESHEET += TRAIN_TAB_PATCH_DARK
-FLAB_STYLE_SHEET += TRAIN_NAV_LIGHT 
-DARK_THEME_STYLESHEET += TRAIN_NAV_DARK 
-
-FLAB_STYLE_SHEET += TRAIN_NAV_ROW + SEARCH_STYLE
-DARK_THEME_STYLESHEET += TRAIN_NAV_ROW + SEARCH_STYLE
 
 
 __all__ = [
@@ -2488,6 +2775,5 @@ __all__ = [
     "MAIN_TAB_STYLES_LIGHT", 
     "MODE_MAP_COLOR",
     "MODE_TOOLS_COLOR",
-    
 ]
 
