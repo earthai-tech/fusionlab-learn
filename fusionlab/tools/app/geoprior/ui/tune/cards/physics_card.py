@@ -242,8 +242,9 @@ class TunePhysicsCard(QWidget):
         self._connect_range_editor(self.hp_hd)
 
         self.btn_hd_details.clicked.connect(
-            self.hd_details_clicked.emit
+            lambda *_: self.hd_details_clicked.emit()
         )
+
 
     # -----------------------------------------------------------------
     # Store helpers

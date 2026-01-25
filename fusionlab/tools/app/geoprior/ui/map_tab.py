@@ -62,6 +62,7 @@ from .map.sampling import (
 _MAP_DEFAULTS = {
     "map.engine": "leaflet",
     "map.coord_mode": "lonlat",
+    "map.google_api_key": "",
     "map.x_col": "",
     "map.y_col": "",
     "map.z_col": "",
@@ -115,6 +116,9 @@ class MapTab(QWidget):
 
         self._last_hs_payload = []
         self._last_hs_ctx = {}
+        
+        self._engine_applied = ""
+        self._google_key_applied = ""
 
         self.head = MapHeadBar(parent=self)
         self.nav_a = AutoHideDataPanel(
@@ -336,7 +340,23 @@ class MapTab(QWidget):
         self.store.set("map.coord_epsg", v)
 
     def _on_basemap_changed(self, key: str) -> None:
-        self.store.set("map.view.basemap", str(key))
+        k = str(key or "").strip().lower()
+    
+        # Treat style selections coming from HeadBar as style changes
+        if k in {"light", "dark", "gray"}:
+            self.store.set("map.view.basemap_style", k)
+            return
+    
+        # Normalize provider aliases to ViewPanel/Canvas keys
+        alias = {
+            "streets": "osm",
+            "sat": "satellite",
+        }
+        self.store.set("map.view.basemap", alias.get(k, k))
+
+
+    # def _on_basemap_changed(self, key: str) -> None:
+    #     self.store.set("map.view.basemap", str(key))
 
     def _on_grid_toggled(self, on: bool) -> None:
         self.store.set("map.view.show_grid", bool(on))
@@ -1107,6 +1127,7 @@ class MapTab(QWidget):
     
         ui_keys = {
             "map.engine",
+            "map.google_api_key",
             "map.coord_mode",
             "map.x_col",
             "map.y_col",
@@ -1165,10 +1186,26 @@ class MapTab(QWidget):
     def _on_analytics_toggled(self, enabled: bool) -> None:
         self.store.set("map.show_analytics", bool(enabled))
 
-    def _sync_from_store(self) -> None:
-        engine = str(self.store.get("map.engine", "leaflet"))
-        coord = str(self.store.get("map.coord_mode", "lonlat"))
 
+    def _sync_from_store(self) -> None:
+        # engine = str(self.store.get("map.engine", "leaflet"))
+        # coord = str(self.store.get("map.coord_mode", "lonlat"))
+        engine = str(self.store.get("map.engine", "leaflet")).strip()
+    
+        # If you store the key in the config store:
+        gkey = str(self.store.get("map.google_api_key", "") or "").strip()
+    
+        # Avoid reloading WebEngine if nothing changed
+        if (
+            engine != self._engine_applied
+            or gkey != self._google_key_applied
+        ):
+            self.canvas.set_engine(engine, google_key=gkey)
+            self._engine_applied = engine
+            self._google_key_applied = gkey
+    
+        coord = str(self.store.get("map.coord_mode", "lonlat"))
+    
         x = str(self.store.get("map.x_col", ""))
         y = str(self.store.get("map.y_col", ""))
         z = str(self.store.get("map.z_col", ""))

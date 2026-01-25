@@ -4,65 +4,43 @@
 #
 # Inference workflow controller for the GeoPrior GUI.
 #
-# This module centralises the "what should inference do?" logic in a
-# testable, Qt-free class. The PyQt main window is responsible only
-# for:
+# v3.2 goals
+# ----------
+# - Store-first: read/write through env.store when available.
+# - Back-compat: fall back to env.resolve_cfg() attributes.
+# - Qt-free: the controller never imports PyQt; GUI side-effects
+#   go through GUIHooks + a GUI callback that starts InferenceThread.
 #
-#   - reading widget values into an InferenceGuiState;
-#   - starting / wiring InferenceThread via a callback;
-#   - handling button states and timers.
-#
-# Behaviour is kept compatible with the original _on_infer_clicked and
-# _run_infer_dry_preview implementations.
+# Compatibility
+# -------------
+# Mirrors the intent of the legacy GUI handlers:
+# - _on_infer_clicked (planning + logging)
+# - _run_infer_dry_preview (dry-run summary + progress)
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .base import BaseWorkflowController
 
 
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
 # Data structures
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 
 @dataclass
 class InferenceGuiState:
     """
-    Snapshot of what the GUI provides for an inference run.
+    Minimal snapshot of the Inference tab (Qt-free).
 
-    Parameters
-    ----------
-    model_path : str
-        Path to the trained/tuned .keras model.
-    dataset_key : str
-        One of {"train", "val", "test", "custom"} coming from the
-        dataset combo box.
-    use_future_npz : bool
-        Whether to use the Stage-1 "future" NPZ instead of eval NPZ.
-    manifest_path : str or None
-        Explicit Stage-1 manifest path, if any. May be None to let the
-        backend auto-discover it.
-    inputs_npz : str or None
-        Optional custom inputs .npz path (for dataset_key == "custom").
-    targets_npz : str or None
-        Optional custom targets .npz path (for dataset_key == "custom").
-    cov_target : float
-        Target coverage level (e.g. 0.80 for 80% intervals).
-    include_gwl : bool
-        Whether to include GWL outputs in inference.
-    batch_size : int
-        Batch size used for inference.
-    make_plots : bool
-        Whether to generate summary plots alongside CSV outputs.
-    use_source_calibrator : bool
-        If True, reuse the source calibrator from training / tuning.
-    fit_calibrator : bool
-        If True, fit a new calibrator on the inference dataset.
-    calibrator_path : str or None
-        Optional explicit calibrator path; may be None.
+    Notes
+    -----
+    - model_path is required for all runs.
+    - dataset_key is typically one of {"train","val","test","custom"}.
+    - for dataset_key="custom", inputs_npz is required when not using
+      the Stage-1 future npz.
     """
 
     model_path: str
@@ -86,14 +64,13 @@ class InferenceGuiState:
 @dataclass
 class InferencePlan:
     """
-    Validated, backend-ready plan for an inference run.
-
-    This is what the GUI callback will pass to InferenceThread.
+    Validated plan passed to the GUI callback / InferenceThread.
     """
 
     model_path: str
     dataset_key: str
     use_stage1_future_npz: bool
+
     manifest_path: Optional[str]
     stage1_dir: Optional[str]
 
@@ -110,191 +87,284 @@ class InferencePlan:
     calibrator_path: Optional[str]
 
 
-# ----------------------------------------------------------------------
+StartInferCb = Callable[[InferencePlan], None]
+
+
+# ---------------------------------------------------------------------
 # Controller
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 
 class InferenceController(BaseWorkflowController):
     """
-    Orchestrates planning and dry-run preview for inference.
+    Plan + dry-run logic for inference.
 
-    Responsibilities
-    ----------------
-    - Validate GUI state (model path, NPZ requirements).
-    - Build a backend-friendly InferencePlan.
-    - Provide:
-        * dry_preview(...) to mirror _run_infer_dry_preview;
-        * start_real_run(...) to mirror the planning / logging part
-          of _on_infer_clicked, leaving thread creation to the GUI.
-
-    The controller never touches Qt widgets directly; it only uses
-    GUIHooks from BaseWorkflowController (log, status, progress, warn).
+    v3.2 behaviour
+    -------------
+    - Read missing values from store first (if provided).
+    - Mirror key values back into store so the UI is persistent
+      across sessions.
+    - Do not assume schema keys exist: "infer.*" keys can live in the
+      store's GUI-only extras.
     """
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # Store helpers (best-effort)
+    # -----------------------------------------------------------------
+    def _store_get(self, key: str, default: Any = None) -> Any:
+        st = getattr(self.env, "store", None)
+        if st is not None and hasattr(st, "get"):
+            try:
+                return st.get(key, default)
+            except Exception:
+                return default
+        return default
+
+    def _store_set(self, key: str, value: Any) -> None:
+        st = getattr(self.env, "store", None)
+        if st is None or not hasattr(st, "set"):
+            return
+        try:
+            st.set(key, value)
+        except Exception:
+            pass
+
+    # -----------------------------------------------------------------
     # Planning
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
     def plan_from_gui(
         self,
         state: InferenceGuiState,
+        *,
         stage1_dir: Optional[str] = None,
     ) -> Optional[InferencePlan]:
         """
-        Validate an InferenceGuiState and convert it into an
-        InferencePlan.
+        Validate GUI state and convert it into an InferencePlan.
+
+        Precedence (v3.2)
+        -----------------
+        - model_path:
+            GUI -> store("infer.model_path") (optional convenience)
+        - manifest_path:
+            GUI -> store("infer.manifest_path") -> None (auto-discover)
+        - calibrator_path:
+            GUI -> store("infer.calibrator_path") -> None
 
         Returns
         -------
         InferencePlan or None
-            None if validation fails (GUIHooks.warn is called).
+            None indicates validation failed (hooks.warn called).
         """
-        # Basic validation: model is mandatory
-        if not state.model_path:
+        # -----------------------------
+        # model path (required)
+        # -----------------------------
+        model_path = str(state.model_path or "").strip()
+        if not model_path:
+            model_path = str(
+                self._store_get("infer.model_path", "")
+            ).strip()
+
+        if not model_path:
             self.hooks.warn(
                 "Model required",
                 "Please select a trained/tuned .keras model first.",
             )
-            # Keep progress consistent with original behaviour
             self.progress(0.0)
             return None
 
-        # For custom NPZ without 'future', inputs_npz is required
-        if (
-            state.dataset_key == "custom"
-            and not state.use_future_npz
-            and not state.inputs_npz
-        ):
-            self.hooks.warn(
-                "Inputs NPZ required",
-                "For 'Custom NPZ', please select an inputs .npz file.",
-            )
-            self.progress(0.0)
-            return None
+        # -----------------------------
+        # dataset selection
+        # -----------------------------
+        dataset_key = str(state.dataset_key or "").strip().lower()
+        if not dataset_key:
+            dataset_key = str(
+                self._store_get("infer.dataset_key", "test")
+            ).strip().lower()
+        if dataset_key not in ("train", "val", "test", "custom"):
+            # Be forgiving: keep unknown keys but default to test
+            dataset_key = "test"
+
+        use_future = bool(state.use_future_npz)
+
+        # -----------------------------
+        # custom npz validation
+        # -----------------------------
+        inputs_npz = (state.inputs_npz or None)
+        targets_npz = (state.targets_npz or None)
+
+        if dataset_key == "custom" and (not use_future):
+            if not inputs_npz:
+                # store fallback (optional)
+                inputs_npz = self._store_get(
+                    "infer.inputs_npz", None
+                )
+                inputs_npz = str(inputs_npz).strip() if inputs_npz else None
+
+            if not inputs_npz:
+                self.hooks.warn(
+                    "Inputs NPZ required",
+                    "For 'Custom NPZ', please select an inputs .npz file.",
+                )
+                self.progress(0.0)
+                return None
+
+        # -----------------------------
+        # manifest / calibrator paths
+        # -----------------------------
+        manifest_path = (state.manifest_path or "").strip() or None
+        if manifest_path is None:
+            mp = self._store_get("infer.manifest_path", None)
+            manifest_path = str(mp).strip() if mp else None
+
+        calibrator_path = (state.calibrator_path or "").strip() or None
+        if calibrator_path is None:
+            cp = self._store_get("infer.calibrator_path", None)
+            calibrator_path = str(cp).strip() if cp else None
+
+        # -----------------------------
+        # numeric + flags
+        # -----------------------------
+        try:
+            cov_target = float(state.cov_target)
+        except Exception:
+            cov_target = float(self._store_get("infer.cov_target", 0.8) or 0.8)
+
+        try:
+            batch_size = int(state.batch_size)
+        except Exception:
+            batch_size = int(self._store_get("infer.batch_size", 256) or 256)
+
+        include_gwl = bool(state.include_gwl)
+        make_plots = bool(state.make_plots)
+        use_source_cal = bool(state.use_source_calibrator)
+        fit_cal = bool(state.fit_calibrator)
 
         plan = InferencePlan(
-            model_path=state.model_path,
-            dataset_key=state.dataset_key or "test",
-            use_stage1_future_npz=bool(state.use_future_npz),
-            manifest_path=state.manifest_path or None,
-            stage1_dir=stage1_dir,  # currently unused (was None in GUI)
-
-            inputs_npz=state.inputs_npz or None,
-            targets_npz=state.targets_npz or None,
-
-            cov_target=float(state.cov_target),
-            include_gwl=bool(state.include_gwl),
-            batch_size=int(state.batch_size),
-            make_plots=bool(state.make_plots),
-
-            use_source_calibrator=bool(state.use_source_calibrator),
-            fit_calibrator=bool(state.fit_calibrator),
-            calibrator_path=state.calibrator_path or None,
+            model_path=model_path,
+            dataset_key=dataset_key,
+            use_stage1_future_npz=use_future,
+            manifest_path=manifest_path,
+            stage1_dir=stage1_dir,
+            inputs_npz=(inputs_npz or None),
+            targets_npz=(targets_npz or None),
+            cov_target=cov_target,
+            include_gwl=include_gwl,
+            batch_size=batch_size,
+            make_plots=make_plots,
+            use_source_calibrator=use_source_cal,
+            fit_calibrator=fit_cal,
+            calibrator_path=calibrator_path,
         )
+
+        # -----------------------------
+        # mirror into store (v3.2)
+        # -----------------------------
+        self._store_set("infer.model_path", plan.model_path)
+        self._store_set("infer.dataset_key", plan.dataset_key)
+        self._store_set("infer.use_future_npz", plan.use_stage1_future_npz)
+        self._store_set("infer.manifest_path", plan.manifest_path)
+        self._store_set("infer.inputs_npz", plan.inputs_npz)
+        self._store_set("infer.targets_npz", plan.targets_npz)
+        self._store_set("infer.cov_target", plan.cov_target)
+        self._store_set("infer.include_gwl", plan.include_gwl)
+        self._store_set("infer.batch_size", plan.batch_size)
+        self._store_set("infer.make_plots", plan.make_plots)
+        self._store_set(
+            "infer.use_source_calibrator",
+            plan.use_source_calibrator,
+        )
+        self._store_set("infer.fit_calibrator", plan.fit_calibrator)
+        self._store_set("infer.calibrator_path", plan.calibrator_path)
+
         return plan
 
-    # ------------------------------------------------------------------
-    # Dry-run preview
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # Dry preview
+    # -----------------------------------------------------------------
     def dry_preview(
         self,
         state: InferenceGuiState,
+        *,
         stage1_dir: Optional[str] = None,
     ) -> None:
         """
-        Simulate what an inference run would do, without threads.
+        Dry-run preview: validate + log what would happen.
 
-        Mirrors the behaviour of the original `_run_infer_dry_preview`:
-        - validate settings;
-        - log a detailed summary of what would happen;
-        - drive the main progress bar 0 → 100 %;
-        - no files are written, no models are loaded.
+        No model load, no IO, no threads.
         """
-        # Reset progress and status for dry mode
         self.progress(0.0)
-        self.status("Dry-run / Inference: resolving inference settings…")
+        self.status("Dry-run / Inference: resolving settings…")
 
-        # Build and validate plan
         plan = self.plan_from_gui(state, stage1_dir=stage1_dir)
         if plan is None:
-            # Validation already warned and progress reset
             return
 
-        # Intro message (same spirit as old helper)
         self.log(
             "[DRY] Inference preview – no model will be loaded, "
             "no files will be written."
         )
-
-        # Mid-way progress: parsing + validation OK
         self.progress(0.4)
 
-        # Summarise configuration in the log
-        summary_lines = [
-            "[DRY] Inference would run with:",
-            f"  model_path       : {plan.model_path}",
-            f"  dataset          : {plan.dataset_key}",
-            f"  use_future_npz   : {plan.use_stage1_future_npz}",
-            f"  manifest_path    : {plan.manifest_path or '<auto-discover>'}",
-            f"  inputs_npz       : {plan.inputs_npz or '<Stage-1 default>'}",
-            f"  targets_npz      : {plan.targets_npz or '<Stage-1 default>'}",
-            f"  cov_target       : {plan.cov_target}",
-            f"  include_gwl      : {plan.include_gwl}",
-            f"  batch_size       : {plan.batch_size}",
-            f"  make_plots       : {plan.make_plots}",
-            f"  use_source_calib : {plan.use_source_calibrator}",
-            f"  fit_calibrator   : {plan.fit_calibrator}",
-            f"  calibrator_path  : {plan.calibrator_path or '<none>'}",
+        manifest = plan.manifest_path or "<auto-discover>"
+        inputs_npz = plan.inputs_npz or "<Stage-1 default>"
+        targets_npz = plan.targets_npz or "<Stage-1 default>"
+        calib = plan.calibrator_path or "<none>"
+
+        lines = [
+            "[DRY] Inference plan:",
+            f"  model_path        : {plan.model_path}",
+            f"  dataset           : {plan.dataset_key}",
+            f"  use_future_npz    : {plan.use_stage1_future_npz}",
+            f"  manifest_path     : {manifest}",
+            f"  inputs_npz        : {inputs_npz}",
+            f"  targets_npz       : {targets_npz}",
+            f"  cov_target        : {plan.cov_target}",
+            f"  include_gwl       : {plan.include_gwl}",
+            f"  batch_size        : {plan.batch_size}",
+            f"  make_plots        : {plan.make_plots}",
+            f"  use_source_calib  : {plan.use_source_calibrator}",
+            f"  fit_calibrator    : {plan.fit_calibrator}",
+            f"  calibrator_path   : {calib}",
         ]
-        for line in summary_lines:
+        for line in lines:
             self.log(line)
 
-        # Final progress
         self.progress(1.0)
         self.status(
             "[DRY] Inference preview complete – nothing was executed."
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
     # Real run
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
     def start_real_run(
         self,
         state: InferenceGuiState,
-        start_infer_cb: Callable[[InferencePlan], None],
+        start_infer_cb: StartInferCb,
+        *,
         stage1_dir: Optional[str] = None,
     ) -> None:
         """
-        Build an InferencePlan and, if valid, delegate to the GUI to
-        start the actual InferenceThread.
+        Real run entry point.
 
-        Parameters
-        ----------
-        state : InferenceGuiState
-            Current GUI values.
-        start_infer_cb : callable
-            Callback provided by the GUI. It receives an InferencePlan
-            and is responsible for:
-                - creating InferenceThread;
-                - wiring signals;
-                - starting the thread;
-                - managing buttons / timers.
-        stage1_dir : str, optional
-            Optional Stage-1 directory. The current GUI passes None;
-            kept for future compatibility.
+        The GUI callback is responsible for creating/wiring
+        InferenceThread(plan) and starting it.
         """
+        if getattr(self.env, "dry_mode", False):
+            self.dry_preview(state, stage1_dir=stage1_dir)
+            return
+
         plan = self.plan_from_gui(state, stage1_dir=stage1_dir)
         if plan is None:
             return
 
-        # Mirror the old logging / status behaviour
         self.log(
-            f"Start inference: model={plan.model_path!r}, "
+            "Start inference: "
+            f"model={plan.model_path!r}, "
             f"dataset={plan.dataset_key!r}, "
             f"use_future={plan.use_stage1_future_npz}."
         )
         self.status("Stage-3: running inference.")
         self.progress(0.0)
 
-        # Delegate thread creation to the GUI
         start_infer_cb(plan)

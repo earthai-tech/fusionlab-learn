@@ -190,6 +190,8 @@ _LEAFLET_HTML = r"""
 
   const map = L.map('map', { zoomControl:true })
                .setView([0,0], 2);
+  
+  map.attributionControl.setPrefix('');
 
   L.tileLayer(
     'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',

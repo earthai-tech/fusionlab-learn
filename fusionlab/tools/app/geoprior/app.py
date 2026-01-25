@@ -64,7 +64,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy
 )
 
-from .config.store import GeoConfigStore, FieldKey
+
 from .workflows.base import RunEnv, GUIHooks
 from .workflows.train import TrainController, TrainGuiState
 
@@ -120,8 +120,14 @@ from .threads import (
     XferMatrixThread,
     XferViewThread
 )
+from .config import ( 
+    GeoPriorConfig, 
+    find_stage1_for_city, 
+    default_tuner_search_space,
+    GeoConfigStore, 
+    FieldKey
+)        
 
-from .config import GeoPriorConfig, find_stage1_for_city
 from .dialogs import ( 
     FeatureConfigDialog,
     ArchitectureConfigDialog , 
@@ -320,6 +326,59 @@ class GeoPriorForecaster(QMainWindow):
 
         # User-overrideable base results root (defaults to gui_runs_root)
         self.results_root = self.gui_runs_root
+
+    # -----------------------------------------
+    # Progress helpers (console-first)
+    # -----------------------------------------
+        
+    def _norm_progress(self, value: float) -> float:
+        try:
+            v = float(value)
+        except Exception:
+            return -1.0
+    
+        # allow "busy" / unknown state
+        if v != v or v < 0.0:
+            return -1.0
+    
+        # accept both [0..1] and [0..100]
+        if v > 1.0:
+            if v <= 100.0:
+                v = v / 100.0
+            else:
+                v = 1.0
+    
+        if v < 0.0:
+            return 0.0
+        if v > 1.0:
+            return 1.0
+        return v
+    
+    
+    @pyqtSlot(float)
+    def _update_progress(self, value: float) -> None:
+        # progress_updated is already wired to ConsoleDock
+        self.progress_updated.emit(self._norm_progress(value))
+    
+    @pyqtSlot(float, str)
+    def _on_stage1_progress(self, frac: float, msg: str) -> None:
+        # keep global progress bar in sync
+        self._update_progress(frac)
+    
+        # push the live hint into Preprocess tab (if present)
+        pt = getattr(self, "preprocess_tab", None)
+        if pt is not None:
+            pt.set_stage1_live_hint(msg=msg)
+    
+    @pyqtSlot(float, str)
+    def _on_thread_progress(
+        self,
+        value: float,
+        message: str,
+    ) -> None:
+        v = self._norm_progress(value)
+        self.console.progress_to(None, v, message)
+
 
     def _init_log_manager(self) -> None:
         """Create the central LogManager once the log widget exists."""
@@ -981,14 +1040,7 @@ class GeoPriorForecaster(QMainWindow):
             self._workflow_icon("transfer.svg", QStyle.SP_ArrowRight),
             "Transfer",
         )
-    
-        # Results
-        self._results_tab_index = self.tabs.addTab(
-            self.results_tab,
-            self._workflow_icon("results.svg", QStyle.SP_DirHomeIcon),
-            "Results",
-        )
-        
+
         self._map_tab_index = self.tabs.addTab(
             self.map_tab,
             self._workflow_icon(
@@ -1009,7 +1061,14 @@ class GeoPriorForecaster(QMainWindow):
             self._workflow_icon("tools.svg", QStyle.SP_FileDialogInfoView),
             "Tools",
         )
-    
+        
+        # Results
+        self._results_tab_index = self.tabs.addTab(
+            self.results_tab,
+            self._workflow_icon("results.svg", QStyle.SP_DirHomeIcon),
+            "Results",
+        )
+        
         # ==============================================================
         # Post-build UI sync / auto-discovery
         # ==============================================================
@@ -2019,9 +2078,10 @@ class GeoPriorForecaster(QMainWindow):
         self.status_updated.emit("Idle - Stage-1 ready.")
     
         self.preprocess_tab.refresh_status(force=True)
-
-
-
+        pt = getattr(self, "preprocess_tab", None)
+        if pt is not None:
+            pt.set_stage1_live_hint(msg="")
+        
     @pyqtSlot()
     def _on_open_feature_cfg(self) -> None:
         """
@@ -2461,21 +2521,6 @@ class GeoPriorForecaster(QMainWindow):
         # Also push to log
         self.log_updated.emit(full)
 
-    @pyqtSlot(float)
-    def _update_progress(self, value: float) -> None:
-        if value is None:
-            value = 0.0
-        value = max(0.0, min(1.0, float(value)))
-        pct = int(round(100.0 * value))
-        self.progress_bar.setValue(pct)
-        self.percent_label.setText(f"{pct:3d} %")
-
-    @pyqtSlot(float, str)
-    def _on_thread_progress(self, value: float, message: str) -> None:
-        self._update_progress(value)
-        if message:
-            self.progress_label.setText(message)
-
 
     def _save_gui_log_for_result(self, result: dict) -> None:
         """
@@ -2516,9 +2561,6 @@ class GeoPriorForecaster(QMainWindow):
             ),
             "evaluate_training": (
                 self.chk_eval_training.isChecked()
-            ),
-            "tuner_search_space": (
-                self._build_tuner_space_from_ui()
             ),
         }
 
@@ -2858,9 +2900,6 @@ class GeoPriorForecaster(QMainWindow):
     def _load_tuner_space_into_ui(self) -> None:
         self.tune_tab.refresh_from_store()
     
-    def _build_tuner_space_from_ui(self) -> Dict[str, Any]:
-        return self.tune_tab.build_space_from_ui()
-
     
     @pyqtSlot()
     def _on_train_options_clicked(self) -> None:
@@ -3423,15 +3462,52 @@ class GeoPriorForecaster(QMainWindow):
         self._sync_config_from_ui()
     
         # 4) Build search space + max_trials from Tune tab widgets
-        tuner_space = self._build_tuner_space_from_ui()
-        max_trials: int | None = None
-        if hasattr(self, "spin_max_trials"):
+        # 4) Read tuner params from store (source of truth)
+        tuner_space = self.config_store.get(
+            "tuner_search_space",
+            {},
+        )
+        
+        if not isinstance(tuner_space, dict) or not tuner_space:
+            offset_mode = self.config_store.get(
+                "offset_mode",
+                "mul",
+            )
+            tuner_space = default_tuner_search_space(
+                offset_mode=str(offset_mode),
+            )
+        
+        max_trials = self.config_store.get(
+            "tuner_max_trials",
+            None,
+        )
+        try:
+            max_trials = (
+                None if max_trials is None else int(max_trials)
+            )
+        except Exception:
+            max_trials = None
+        
+        eval_tuned = bool(
+            self.config_store.get(
+                "tuner_eval_tuned",
+                False,
+            )
+        )
+        
+        # Optional legacy fallback ONLY if those widgets still exist
+        if max_trials is None and hasattr(self, "spin_max_trials"):
             try:
                 max_trials = int(self.spin_max_trials.value())
             except Exception:
                 max_trials = None
-    
-        eval_tuned = self.chk_eval_tuned.isChecked()
+        
+        if hasattr(self, "chk_eval_tuned"):
+            try:
+                eval_tuned = bool(self.chk_eval_tuned.isChecked())
+            except Exception:
+                pass
+
     
         # 5) Assemble TuneGuiState for the workflow controller
         state = TuneGuiState(
@@ -4285,6 +4361,10 @@ class GeoPriorForecaster(QMainWindow):
             results_root=str(results_root),
             parent=self,
         )
+        th.progress_changed.connect(
+            lambda f, m: self.preprocess_tab
+                .set_stage1_live_hint(msg=m)
+        )
         self.stage1_thread = th
         
         job_kind = job_kind  # "preprocess" or "stage1"
@@ -4299,9 +4379,10 @@ class GeoPriorForecaster(QMainWindow):
         # th.log_updated.connect(self.log_updated.emit)
         # th.status_updated.connect(self.status_updated.emit)
         # th.progress_changed.connect(self._on_thread_progress)
-    
+      
         cb = results_cb or self._on_stage1_finished
         th.results_ready.connect(cb)
+        th.progress_changed.connect(self._on_stage1_progress)
     
         th.error_occurred.connect(self._on_worker_error)
     
@@ -4674,10 +4755,8 @@ class GeoPriorForecaster(QMainWindow):
         self._update_global_running_state()
         
         self._update_progress(0.0)
-        self.progress_label.setText("")
         self._stop_run_timer()
         
-
     # ------------------------------------------------------------------
     # Window close handling
     # ------------------------------------------------------------------

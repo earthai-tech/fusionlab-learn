@@ -2,38 +2,45 @@
 # License: BSD-3-Clause
 # Author: LKouadio <etanoyau@gmail.com>
 #
-# Transferability workflow controller.
+# geoprior/workflows/transfer.py
 #
-# Encapsulates planning and dry-run logic for the cross-city transfer
-# matrix (XferMatrixThread), so the Qt GUI only needs to:
+# Transferability workflow controller (Xfer matrix).
 #
-#   * collect widget values into a TransferGuiState;
-#   * delegate validation + logging to TransferController;
-#   * provide a small callback that knows how to actually start the
-#     XferMatrixThread from a TransferPlan.
+# v3.2 goals
+# ----------
+# - Store-first: if env.store exists, read/write there first.
+# - Back-compat: if no store, fall back to env.resolve_cfg().
+# - Qt-free: no widget imports; UI goes through GUIHooks and
+#   a GUI callback that starts XferMatrixThread.
 #
-# This mirrors the structure of TrainController / TuneController /
-# InferenceController.
+# Note on GeoConfigStore "extra" keys
+# -----------------------------------
+# GeoConfigStore.set("xfer.*", ...) is safe even if "xfer.*"
+# is not a GeoPriorConfig dataclass field: the store will keep
+# it in its GUI-only extra dict and still emit change signals.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Callable
+from typing import Any, Callable, List, Optional, Sequence
 
-from .base import BaseWorkflowController, RunEnv, GUIHooks
+from .base import BaseWorkflowController, GUIHooks, RunEnv
 
 
-# ----------------------------------------------------------------------
-# Data structures
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# Data structures (Qt-free)
+# ---------------------------------------------------------------------
+
 
 @dataclass
 class TransferGuiState:
     """
-    Snapshot of the Transferability tab.
+    Snapshot of the Transferability tab (Qt-free).
 
-    Plain Python types only (Qt-free).
+    The GUI should provide plain Python types only.
+    Any field can be left empty if the controller can
+    fill it from store/cfg defaults (dry preview).
     """
 
     city_a: str
@@ -50,7 +57,7 @@ class TransferGuiState:
     write_json: bool
     write_csv: bool
 
-    # ---- v3.2 extras (all optional / defaulted) ----
+    # ---- v3.2 extras (optional) ----
     rescale_modes: Optional[List[str]] = None
     strategies: Optional[List[str]] = None
 
@@ -71,7 +78,10 @@ class TransferGuiState:
 @dataclass
 class TransferPlan:
     """
-    Fully validated plan passed to XferMatrixThread.
+    Validated plan passed to XferMatrixThread.
+
+    Keep this stable: the GUI callback and threads can
+    rely on these fields without importing Qt.
     """
 
     city_a: str
@@ -106,65 +116,152 @@ class TransferPlan:
     warm_seed: Optional[int] = None
 
 
-# ----------------------------------------------------------------------
+StartXferCb = Callable[[TransferPlan], None]
+
+
+# ---------------------------------------------------------------------
 # Controller
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------
 
 
 class TransferController(BaseWorkflowController):
     """
-    Orchestrates planning for the cross-city transfer matrix.
+    Plan + dry-run logic for cross-city transfer matrix.
 
     Responsibilities
     ----------------
-    * validate GUI state (cities, splits, calibration modes);
-    * provide a dry-run preview (logs + progress, no threads);
-    * create a TransferPlan and hand it to a callback for real runs.
+    - Resolve missing values from store/cfg (store first).
+    - Validate required inputs (cities, splits, calib modes).
+    - Provide a dry preview (logs + progress only).
+    - Hand a TransferPlan to a GUI callback for real runs.
     """
 
-    def __init__(self, env: RunEnv, hooks: GUIHooks):
+    def __init__(self, env: RunEnv, hooks: GUIHooks) -> None:
         super().__init__(env, hooks)
 
-    # ------------------------------------------------------------------
-    # Internal helper: validate & build plan
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # Store helpers (best-effort)
+    # -----------------------------------------------------------------
+    def _store_get(self, key: str, default: Any = None) -> Any:
+        st = getattr(self.env, "store", None)
+        if st is not None and hasattr(st, "get"):
+            try:
+                return st.get(key, default)
+            except Exception:
+                return default
+        return default
+
+    def _store_set(self, key: str, value: Any) -> None:
+        st = getattr(self.env, "store", None)
+        if st is None or not hasattr(st, "set"):
+            return
+        try:
+            st.set(key, value)
+        except Exception:
+            pass
+
+    # -----------------------------------------------------------------
+    # Small normalization helpers
+    # -----------------------------------------------------------------
+    @staticmethod
+    def _clean_list(items: Optional[Sequence[str]]) -> List[str]:
+        out: List[str] = []
+        for x in (items or []):
+            s = str(x or "").strip()
+            if s:
+                out.append(s)
+        return out
+
+    @staticmethod
+    def _clean_text(x: Any) -> str:
+        return str(x or "").strip()
+
+    @staticmethod
+    def _as_path(x: Any) -> Optional[Path]:
+        s = str(x or "").strip()
+        if not s:
+            return None
+        return Path(s)
+
+    @staticmethod
+    def _as_float_list(
+        x: Optional[Sequence[float]],
+    ) -> Optional[List[float]]:
+        if x is None:
+            return None
+        out: List[float] = []
+        for v in x:
+            try:
+                out.append(float(v))
+            except Exception:
+                continue
+        return out if out else None
+
+    # -----------------------------------------------------------------
+    # Plan builder
+    # -----------------------------------------------------------------
     def _build_plan(
         self,
         state: TransferGuiState,
         *,
-        for_dry_run: bool = False,
+        for_dry_run: bool,
     ) -> Optional[TransferPlan]:
         """
-        Turn a TransferGuiState into a TransferPlan.
+        Turn GUI snapshot into a validated TransferPlan.
 
-        Parameters
-        ----------
-        state : TransferGuiState
-            Current GUI snapshot.
-        for_dry_run : bool, default False
-            If True, allow the Nansha/Zhongshan defaults when cities
-            are left blank (to mirror your old _run_xfer_dry_preview
-            behaviour). For real runs, both cities must be provided.
-
-        Returns
-        -------
-        TransferPlan or None
-            None indicates validation failed (warnings already shown).
+        Precedence (v3.2)
+        -----------------
+        - cities:
+            GUI -> store("xfer.city_a/b") -> cfg fallback
+            (dry-run only) -> default nansha/zhongshan
+        - results_root:
+            GUI -> store("xfer.results_root") -> env.gui_runs_root
+        - splits / calib_modes:
+            GUI -> store("xfer.splits"/"xfer.calib_modes")
+        - other flags:
+            GUI values are taken as authoritative, but we still
+            mirror them into the store for persistence.
         """
-        # --- Resolve results_root ------------------------------------
-        root_txt = state.results_root or ""
-        if root_txt.strip():
-            results_root = Path(root_txt.strip())
-        else:
-            results_root = Path(self.env.gui_runs_root)
+        cfg = self.resolve_cfg()
 
-        # --- Cities ---------------------------------------------------
-        city_a = (state.city_a or "").strip()
-        city_b = (state.city_b or "").strip()
+        # -----------------------------
+        # results root
+        # -----------------------------
+        root = self._as_path(state.results_root)
+        if root is None:
+            root = self._as_path(
+                self._store_get("xfer.results_root", None)
+            )
+        if root is None:
+            root = Path(self.env.gui_runs_root)
 
+        # -----------------------------
+        # cities (A/B)
+        # -----------------------------
+        city_a = self._clean_text(state.city_a)
+        city_b = self._clean_text(state.city_b)
+
+        if not city_a:
+            city_a = self._clean_text(
+                self._store_get("xfer.city_a", "")
+            )
+        if not city_b:
+            city_b = self._clean_text(
+                self._store_get("xfer.city_b", "")
+            )
+
+        # Optional cfg fallbacks (rare, but safe)
+        if not city_a:
+            city_a = self._clean_text(
+                getattr(cfg, "xfer_city_a", "")
+            )
+        if not city_b:
+            city_b = self._clean_text(
+                getattr(cfg, "xfer_city_b", "")
+            )
+
+        # Dry preview convenience defaults (old behaviour)
         if for_dry_run:
-            # Keep previous behaviour: default to Nansha/Zhongshan
-            # *only* for the dry preview.
             if not city_a:
                 city_a = "nansha"
             if not city_b:
@@ -178,8 +275,22 @@ class TransferController(BaseWorkflowController):
             self.progress(0.0)
             return None
 
-        # --- Splits ---------------------------------------------------
-        splits = [s for s in (state.splits or []) if s]
+        if city_a == city_b:
+            self.hooks.warn(
+                "Invalid cities",
+                "City A and City B must be different.",
+            )
+            self.progress(0.0)
+            return None
+
+        # -----------------------------
+        # splits / calib modes
+        # -----------------------------
+        splits = self._clean_list(state.splits)
+        if not splits:
+            splits = self._clean_list(
+                self._store_get("xfer.splits", [])
+            )
         if not splits:
             self.hooks.warn(
                 "Splits required",
@@ -188,47 +299,78 @@ class TransferController(BaseWorkflowController):
             self.progress(0.0)
             return None
 
-        # --- Calibration modes ---------------------------------------
-        calib_modes = [m for m in (state.calib_modes or []) if m]
-        if not calib_modes:
+        calib = self._clean_list(state.calib_modes)
+        if not calib:
+            calib = self._clean_list(
+                self._store_get("xfer.calib_modes", [])
+            )
+        if not calib:
             self.hooks.warn(
                 "Calibration modes required",
-                "Please select at least one calibration mode.",
+                "Please select at least one mode.",
             )
             self.progress(0.0)
             return None
 
-        q_override: Optional[List[float]] = None
-        if state.quantiles_override is not None:
-            q_override = [float(q) for q in state.quantiles_override]
-
+        # -----------------------------
+        # optional lists
+        # -----------------------------
+        rescale_modes = state.rescale_modes
+        if rescale_modes is None:
+            rescale_modes = self._store_get(
+                "xfer.rescale_modes",
+                None,
+            )
         rescale_modes = (
-            [m for m in (state.rescale_modes or []) if m]
-            if state.rescale_modes is not None
+            self._clean_list(rescale_modes)
+            if rescale_modes is not None
             else None
         )
 
+        strategies = state.strategies
+        if strategies is None:
+            strategies = self._store_get(
+                "xfer.strategies",
+                None,
+            )
         strategies = (
-            [s for s in (state.strategies or []) if s]
-            if state.strategies is not None
+            self._clean_list(strategies)
+            if strategies is not None
             else None
         )
 
-        return TransferPlan(
+        # -----------------------------
+        # quantiles override
+        # -----------------------------
+        q_override = self._as_float_list(
+            state.quantiles_override
+        )
+
+        # -----------------------------
+        # align policy
+        # -----------------------------
+        align_policy = self._clean_text(state.align_policy)
+        if not align_policy:
+            align_policy = "align_by_name_pad"
+
+        # -----------------------------
+        # build plan
+        # -----------------------------
+        plan = TransferPlan(
             city_a=city_a,
             city_b=city_b,
-            results_root=results_root,
+            results_root=root,
             splits=splits,
-            calib_modes=calib_modes,
+            calib_modes=calib,
             rescale_to_source=bool(state.rescale_to_source),
             batch_size=int(state.batch_size),
             quantiles_override=q_override,
             write_json=bool(state.write_json),
             write_csv=bool(state.write_csv),
-            rescale_modes=rescale_modes,
-            strategies=strategies,
+            rescale_modes=rescale_modes or None,
+            strategies=strategies or None,
             prefer_tuned=bool(state.prefer_tuned),
-            align_policy=str(state.align_policy or "align_by_name_pad"),
+            align_policy=align_policy,
             allow_reorder_dynamic=state.allow_reorder_dynamic,
             allow_reorder_future=state.allow_reorder_future,
             warm_split=state.warm_split,
@@ -239,101 +381,136 @@ class TransferController(BaseWorkflowController):
             warm_seed=state.warm_seed,
         )
 
+        # -----------------------------
+        # mirror into store (v3.2)
+        # -----------------------------
+        self._store_set("xfer.city_a", plan.city_a)
+        self._store_set("xfer.city_b", plan.city_b)
+        self._store_set("xfer.results_root", str(plan.results_root))
+        self._store_set("xfer.splits", list(plan.splits))
+        self._store_set("xfer.calib_modes", list(plan.calib_modes))
 
-    # ------------------------------------------------------------------
-    # Public API: dry preview
-    # ------------------------------------------------------------------
+        self._store_set(
+            "xfer.rescale_to_source",
+            bool(plan.rescale_to_source),
+        )
+        self._store_set("xfer.batch_size", int(plan.batch_size))
+        self._store_set(
+            "xfer.quantiles_override",
+            plan.quantiles_override,
+        )
+        self._store_set("xfer.write_json", bool(plan.write_json))
+        self._store_set("xfer.write_csv", bool(plan.write_csv))
+
+        self._store_set("xfer.rescale_modes", plan.rescale_modes)
+        self._store_set("xfer.strategies", plan.strategies)
+
+        self._store_set("xfer.prefer_tuned", bool(plan.prefer_tuned))
+        self._store_set("xfer.align_policy", plan.align_policy)
+
+        self._store_set(
+            "xfer.allow_reorder_dynamic",
+            plan.allow_reorder_dynamic,
+        )
+        self._store_set(
+            "xfer.allow_reorder_future",
+            plan.allow_reorder_future,
+        )
+
+        self._store_set("xfer.warm_split", plan.warm_split)
+        self._store_set("xfer.warm_samples", plan.warm_samples)
+        self._store_set("xfer.warm_frac", plan.warm_frac)
+        self._store_set("xfer.warm_epochs", plan.warm_epochs)
+        self._store_set("xfer.warm_lr", plan.warm_lr)
+        self._store_set("xfer.warm_seed", plan.warm_seed)
+
+        return plan
+
+    # -----------------------------------------------------------------
+    # Dry preview
+    # -----------------------------------------------------------------
     def dry_preview(self, state: TransferGuiState) -> None:
         """
-        Simulate what a transfer run would do, without starting threads.
+        Simulate a transfer run without starting threads.
 
-        Mirrors the old `_run_xfer_dry_preview` behaviour:
-
-        - allows city defaults (Nansha/Zhongshan) if fields are blank;
-        - validates splits and calibration modes;
-        - logs a textual plan and drives the main progress bar.
+        Keeps the legacy convenience:
+        - if cities are blank, default to nansha/zhongshan
+          (dry-run only).
         """
-        # start from 0 %
         self.progress(0.0)
         self.status(
-            "[DRY] Transferability preview – no models will be loaded, "
-            "no transfer matrix will be computed."
+            "[DRY] Transfer preview – nothing will execute."
         )
 
         plan = self._build_plan(state, for_dry_run=True)
         if plan is None:
-            # Validation already handled via hooks.warn
             return
 
-        # Mid-way: everything parsed
         self.progress(0.5)
 
         q_display = (
-            plan.quantiles_override if plan.quantiles_override is not None
+            plan.quantiles_override
+            if plan.quantiles_override is not None
             else "<from model>"
         )
 
         lines = [
-            "[DRY] Transfer matrix would run with:",
-            f"  city_a       : {plan.city_a}",
-            f"  city_b       : {plan.city_b}",
-            f"  results_root : {plan.results_root}",
-            f"  splits       : {plan.splits}",
-            f"  calib_modes  : {plan.calib_modes}",
-            f"  rescale      : {plan.rescale_to_source}",
-            f"  batch_size   : {plan.batch_size}",
-            f"  quantiles    : {q_display}",
-            f"  write_json   : {plan.write_json}",
-            f"  write_csv    : {plan.write_csv}",
-            f"  strategies   : {plan.strategies or '<default>'}",
-            f"  rescale_modes: {plan.rescale_modes or '<auto>'}",
-            f"  prefer_tuned : {plan.prefer_tuned}",
-            f"  align_policy : {plan.align_policy}",
-            f"  allow_re_dyn : {plan.allow_reorder_dynamic}",
-            f"  allow_re_fut : {plan.allow_reorder_future}",
-            f"  warm_split   : {plan.warm_split}",
-            f"  warm_samples : {plan.warm_samples}",
-            f"  warm_frac    : {plan.warm_frac}",
-            f"  warm_epochs  : {plan.warm_epochs}",
-            f"  warm_lr      : {plan.warm_lr}",
-            f"  warm_seed    : {plan.warm_seed}",
-
+            "[DRY] Transfer matrix plan:",
+            f"  city_a        : {plan.city_a}",
+            f"  city_b        : {plan.city_b}",
+            f"  results_root  : {plan.results_root}",
+            f"  splits        : {plan.splits}",
+            f"  calib_modes   : {plan.calib_modes}",
+            f"  rescale       : {plan.rescale_to_source}",
+            f"  batch_size    : {plan.batch_size}",
+            f"  quantiles     : {q_display}",
+            f"  write_json    : {plan.write_json}",
+            f"  write_csv     : {plan.write_csv}",
+            f"  strategies    : {plan.strategies or '<default>'}",
+            f"  rescale_modes : {plan.rescale_modes or '<auto>'}",
+            f"  prefer_tuned  : {plan.prefer_tuned}",
+            f"  align_policy  : {plan.align_policy}",
+            f"  allow_re_dyn  : {plan.allow_reorder_dynamic}",
+            f"  allow_re_fut  : {plan.allow_reorder_future}",
+            f"  warm_split    : {plan.warm_split}",
+            f"  warm_samples  : {plan.warm_samples}",
+            f"  warm_frac     : {plan.warm_frac}",
+            f"  warm_epochs   : {plan.warm_epochs}",
+            f"  warm_lr       : {plan.warm_lr}",
+            f"  warm_seed     : {plan.warm_seed}",
         ]
         for line in lines:
             self.log(line)
 
-        # Final progress + status
         self.progress(1.0)
         self.status(
-            "[DRY] Transferability preview complete – nothing was executed."
+            "[DRY] Transfer preview complete – no run started."
         )
 
-    # ------------------------------------------------------------------
-    # Public API: real run
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------
+    # Real run
+    # -----------------------------------------------------------------
     def start_real_run(
         self,
         state: TransferGuiState,
-        start_xfer_cb: Callable[[TransferPlan], None],
+        start_xfer_cb: StartXferCb,
     ) -> None:
         """
-        Validate GUI state and, if successful, start a real transfer run.
+        Validate GUI state and start a real transfer run.
 
-        Parameters
-        ----------
-        state : TransferGuiState
-            Snapshot of the Transferability tab.
-        start_xfer_cb : callable
-            Callback ``f(plan: TransferPlan) -> None`` that knows how to
-            instantiate and start XferMatrixThread from the plan
-            (this is provided by the GeoPriorForecaster GUI).
+        The GUI callback must:
+        - construct XferMatrixThread(plan)
+        - wire signals
+        - start the thread
         """
-        plan = self._build_plan(state, for_dry_run=False)
-        if plan is None:
-            # Validation already handled
+        if getattr(self.env, "dry_mode", False):
+            self.dry_preview(state)
             return
 
-        # Mirror your previous logging
+        plan = self._build_plan(state, for_dry_run=False)
+        if plan is None:
+            return
+
         self.log(
             "Start transfer matrix: "
             f"{plan.city_a!r} ↔ {plan.city_b!r}; "
@@ -349,9 +526,4 @@ class TransferController(BaseWorkflowController):
         )
         self.progress(0.0)
 
-        # Hand off to the GUI callback which will:
-        #   * start the run timer;
-        #   * create XferMatrixThread;
-        #   * wire signals & buttons;
-        #   * th.start().
         start_xfer_cb(plan)

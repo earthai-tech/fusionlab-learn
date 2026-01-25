@@ -3,27 +3,6 @@
 # Author: LKouadio <etanoyau@gmail.com>
 #
 # Stage-1 discovery / reuse logic extracted from the GeoPrior GUI.
-#
-# This module provides a small, testable service around the
-# "smart Stage-1 handshake" that used to live inside
-# GeoPriorForecaster._smart_stage1_handshake.
-#
-# Key responsibilities
-# --------------------
-# - Inspect existing Stage-1 runs for a given city under a results root.
-# - Decide whether to:
-#       * run Stage-1 from scratch / rebuild, or
-#       * reuse an existing Stage-1 manifest, or
-#       * cancel (user choice).
-# - Return a pure data object (Stage1Decision) that higher-level
-#   controllers can use for:
-#       * real training flows, or
-#       * dry-run previews (no threads, no I/O).
-#
-# The service is intentionally UI-agnostic:
-# all GUI interaction (dialogs, warnings) is delegated to `GUIHooks`
-# supplied by the caller, and to a separate `Stage1Chooser` callback
-# that wraps Stage1ChoiceDialog.ask at the GUI layer.
 
 from __future__ import annotations
 
@@ -39,12 +18,7 @@ from typing import (
     Tuple,
 )
 
-# reuse shared env / hooks from workflows.base
-from ..workflows.base import RunEnv, GUIHooks
-
-###############################################################################
-# Public types
-###############################################################################
+from ..workflows.base import GUIHooks, RunEnv
 
 
 @dataclass
@@ -52,21 +26,14 @@ class Stage1Decision:
     """
     Result of a smart Stage-1 handshake.
 
-    Parameters
-    ----------
-    need_stage1 : bool
+    need_stage1
         If True, Stage-1 should be (re)run now.
-        If False and `cancelled` is False, an existing Stage-1 run
-        can be reused via `manifest_hint`.
-    manifest_hint : str or None
-        Path to the Stage-1 manifest to reuse, if any. Only meaningful
-        when ``need_stage1`` is False and ``cancelled`` is False.
-    cancelled : bool
-        True if the user cancelled in the Stage-1 choice dialog.
-        In this case, callers should abort the workflow.
-    messages : list of str
-        Log lines describing how the decision was reached. The caller
-        is free to forward them to a GUI log widget or logger.
+    manifest_hint
+        Path to the Stage-1 manifest to reuse (if any).
+    cancelled
+        True if the user cancelled the choice dialog.
+    messages
+        Log lines describing how the decision was reached.
     """
 
     need_stage1: bool
@@ -75,97 +42,33 @@ class Stage1Decision:
     messages: List[str] = field(default_factory=list)
 
 
-# A Stage-1 run summary is an opaque object from the backend. We only
-# rely on a few attributes (documented below).
 Stage1RunSummary = Any
 
-# Signature for a discovery helper, typically backed by the existing
-# NATCOM / GeoPrior utility that scans the results tree.
 Stage1Finder = Callable[
     [str, Path, Dict[str, Any]],
-    Tuple[Sequence[Stage1RunSummary], Sequence[Stage1RunSummary]],
+    Tuple[
+        Sequence[Stage1RunSummary],
+        Sequence[Stage1RunSummary],
+    ],
 ]
 
-# Signature for the Stage-1 choice dialog (Stage1ChoiceDialog.ask)
 Stage1Chooser = Callable[
-    [str, Sequence[Stage1RunSummary], Sequence[Stage1RunSummary], bool],
+    [str,
+     Sequence[Stage1RunSummary],
+     Sequence[Stage1RunSummary],
+     bool],
     Tuple[str, Optional[Stage1RunSummary]],
 ]
-
-
-###############################################################################
-# Service implementation
-###############################################################################
 
 
 class Stage1Service:
     """
     Encapsulate Stage-1 discovery and reuse logic.
 
-    This service mirrors the behaviour of the original
-    ``_smart_stage1_handshake`` method from GeoPriorForecaster, but:
-
-    - keeps all logic in a pure, testable class;
-    - does not depend on Qt or widgets;
-    - returns a :class:`Stage1Decision` data object.
-
-    Parameters
-    ----------
-    env : RunEnv
-        Runtime environment carrying the GeoPriorConfig and the
-        GUI runs root. This is the shared RunEnv from
-        :mod:`geoprior.workflows.base` (geo_cfg, gui_runs_root, etc.).
-    hooks : GUIHooks
-        Shared GUI callbacks (log, warn, error, etc.) from
-        :mod:`geoprior.workflows.base`. Stage1Service currently uses:
-            - hooks.log(title)
-            - hooks.warn(title, msg)
-    find_stage1_for_city : callable
-        Backend helper used to list Stage-1 runs.
-
-        It must accept the arguments::
-
-            runs_for_city, all_runs = find_stage1_for_city(
-                city=city,
-                results_root=results_root,
-                current_cfg=current_cfg,
-            )
-
-        where ``runs_for_city`` and ``all_runs`` are sequences of
-        Stage1RunSummary objects exposing at least:
-
-            - .city
-            - .timestamp
-            - .run_dir
-            - .is_complete  (bool)
-            - .config_match (bool)
-            - .manifest_path
-            - .time_steps
-            - .horizon_years
-            - .n_train
-            - .n_val
-            - .diff_fields (iterable of str, optional)
-    chooser : callable or None, optional
-        Function implementing the Stage-1 choice dialog, typically
-        wrapping ``Stage1ChoiceDialog.ask`` from the GUI layer.
-
-        Expected signature::
-
-            decision, selected = chooser(
-                city=city,
-                runs_for_city=runs_for_city,
-                all_runs=all_runs,
-                clean_stage1=clean_stage1_dir,
-            )
-
-        where:
-
-        - ``decision`` is one of {"cancel", "rebuild", "reuse"}.
-        - ``selected`` is a Stage1RunSummary or ``None``.
-
-        If ``chooser`` is None, the service will never ask the user and
-        will fall back to the safest behaviour (rebuild Stage-1) when
-        interaction would be required.
+    v3.2 store-first:
+    - config reads use env.resolve_cfg()
+    - flags prefer store.get(...) when available
+    - GeoPriorConfig is fallback
     """
 
     def __init__(
@@ -180,58 +83,148 @@ class Stage1Service:
         self._finder = find_stage1_for_city
         self._chooser = chooser
 
-    # ------------------------------------------------------------------
+    # -------------------------------------------------
+    # Internals (store-first config reads)
+    # -------------------------------------------------
+    def _cfg_bool(
+        self,
+        name: str,
+        default: bool,
+    ) -> bool:
+        st = getattr(self.env, "store", None)
+        if st is not None and hasattr(st, "get"):
+            try:
+                return bool(st.get(name, default))
+            except Exception:
+                pass
+
+        cfg = self.env.resolve_cfg()
+        try:
+            return bool(getattr(cfg, name, default))
+        except Exception:
+            return bool(default)
+
+    def _log(
+        self,
+        messages: List[str],
+        msg: str,
+    ) -> None:
+        messages.append(msg)
+        try:
+            self.hooks.log(msg)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _manifest_path(obj: Any) -> Optional[str]:
+        for a in (
+            "manifest_path",
+            "manifest",
+            "path",
+            "stage1_manifest",
+        ):
+            if hasattr(obj, a):
+                try:
+                    v = getattr(obj, a)
+                    if v:
+                        return str(v)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _ts_score(run: Any) -> float:
+        v = getattr(run, "timestamp", None)
+        if v is None:
+            return 0.0
+
+        if hasattr(v, "timestamp"):
+            try:
+                return float(v.timestamp())
+            except Exception:
+                pass
+
+        try:
+            return float(v)
+        except Exception:
+            pass
+
+        try:
+            s = str(v).strip()
+            digits = "".join(ch for ch in s if ch.isdigit())
+            return float(digits or "0")
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _diff_msg(run: Any) -> str:
+        diff_fields = getattr(run, "diff_fields", None)
+        if not diff_fields:
+            return ""
+        try:
+            txt = ", ".join(diff_fields)
+            if txt.strip():
+                return " (diff: " + txt + ")"
+        except Exception:
+            return ""
+        return ""
+
+    def _log_run_summary(
+        self,
+        messages: List[str],
+        prefix: str,
+        run: Any,
+        *,
+        city_fallback: str,
+    ) -> None:
+        city = getattr(run, "city", None) or city_fallback
+        run_dir = getattr(run, "run_dir", "?")
+        time_steps = getattr(run, "time_steps", "?")
+        horizon = getattr(run, "horizon_years", "?")
+        n_train = getattr(run, "n_train", "?")
+        n_val = getattr(run, "n_val", "?")
+
+        diff = self._diff_msg(run)
+
+        self._log(
+            messages,
+            prefix + diff + ":\n"
+            f"  City        : {city}\n"
+            f"  Run dir     : {run_dir}\n"
+            f"  T, H        : {time_steps}, {horizon}\n"
+            f"  train / val : {n_train} / {n_val}",
+        )
+
+    def _latest_match(
+        self,
+        runs: Sequence[Any],
+    ) -> Optional[Any]:
+        cands = [
+            r
+            for r in runs
+            if bool(getattr(r, "is_complete", False))
+            and bool(getattr(r, "config_match", False))
+        ]
+        if not cands:
+            return None
+        return max(cands, key=self._ts_score)
+
+    # -------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
+    # -------------------------------------------------
     def decide(
         self,
         city: str,
         clean_stage1_dir: bool,
     ) -> Stage1Decision:
-        """
-        Decide whether Stage-1 should be (re)run or reused.
-
-        This implements the same semantics as the legacy
-        ``_smart_stage1_handshake``:
-
-        1. If ``clean_stage1_dir`` is True → force Stage-1 rebuild.
-        2. Otherwise, build a Stage-1 config snapshot and look for
-           matching runs under ``env.gui_runs_root``.
-        3. If none exist for this city → run Stage-1.
-        4. If global directory is empty → run Stage-1.
-        5. If ``stage1_auto_reuse_if_match`` is True, auto-reuse the
-           latest complete + config_match run.
-        6. If ``stage1_force_rebuild_if_mismatch`` is True and no
-           run matches the current config, force rebuild.
-        7. Otherwise, ask the user via the Stage-1 choice dialog
-           (``Stage1Chooser``).
-
-        Returns
-        -------
-        Stage1Decision
-            Data object describing whether Stage-1 must be run,
-            which manifest to reuse (if any), and whether the
-            user cancelled the workflow.
-        """
         messages: List[str] = []
 
-        def _log(msg: str) -> None:
-            messages.append(msg)
-            try:
-                self.hooks.log(msg)
-            except Exception:
-                # Logging should never break the decision logic
-                pass
-
-        geo_cfg = self.env.geo_cfg
-
-        # --------------------------------------------------------------
         # 0) Forced rebuild via Training options
-        # --------------------------------------------------------------
         if bool(clean_stage1_dir):
-            _log(
-                "[SmartStage1] 'Clean Stage-1 run dir' is enabled → "
-                "forcing Stage-1 rebuild."
+            self._log(
+                messages,
+                "[SmartStage1] 'Clean Stage-1 run dir' "
+                "is enabled → forcing Stage-1 rebuild.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -240,15 +233,16 @@ class Stage1Service:
                 messages=messages,
             )
 
-        # --------------------------------------------------------------
         # 1) Build current Stage-1 config snapshot
-        # --------------------------------------------------------------
+        cfg = self.env.resolve_cfg()
         try:
-            current_cfg: Dict[str, Any] = geo_cfg.to_stage1_config()
-        except Exception as exc:  # pragma: no cover - defensive
-            _log(
-                "[SmartStage1] Failed to build current Stage-1 config "
-                f"({exc}) → falling back to full Stage-1."
+            current_cfg = cfg.to_stage1_config()
+        except Exception as exc:
+            self._log(
+                messages,
+                "[SmartStage1] Failed to build current "
+                "Stage-1 config "
+                f"({exc}) → falling back to full Stage-1.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -257,21 +251,20 @@ class Stage1Service:
                 messages=messages,
             )
 
-        # --------------------------------------------------------------
-        # 2) Discover Stage-1 manifests under the GUI results root
-        # --------------------------------------------------------------
+        # 2) Discover Stage-1 runs under GUI results root
         results_root = Path(self.env.gui_runs_root)
-
         try:
-            runs_for_city, all_runs = self._finder(
+            runs_city, all_runs = self._finder(
                 city=city,
                 results_root=results_root,
                 current_cfg=current_cfg,
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            _log(
-                "[SmartStage1] Error while discovering Stage-1 runs "
-                f"({exc}) → falling back to full Stage-1."
+        except Exception as exc:
+            self._log(
+                messages,
+                "[SmartStage1] Error while discovering "
+                "Stage-1 runs "
+                f"({exc}) → falling back to full Stage-1.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -280,10 +273,11 @@ class Stage1Service:
                 messages=messages,
             )
 
-        if not runs_for_city:
-            _log(
-                "[SmartStage1] No previous Stage-1 manifest found for "
-                "this city → running Stage-1."
+        if not runs_city:
+            self._log(
+                messages,
+                "[SmartStage1] No previous Stage-1 manifest "
+                "found for this city → running Stage-1.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -293,10 +287,10 @@ class Stage1Service:
             )
 
         if not all_runs:
-            # Should be rare, but kept for backward compatibility
-            _log(
-                "[Stage-1] No existing Stage-1 runs in this root – "
-                "building Stage-1 from scratch."
+            self._log(
+                messages,
+                "[Stage-1] No existing Stage-1 runs in this "
+                "root – building Stage-1 from scratch.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -305,53 +299,68 @@ class Stage1Service:
                 messages=messages,
             )
 
-        # Smart options from config
-        auto_reuse = bool(
-            getattr(geo_cfg, "stage1_auto_reuse_if_match", True)
+        # Smart options (store-first)
+        auto_reuse = self._cfg_bool(
+            "stage1_auto_reuse_if_match",
+            True,
         )
-        force_rebuild_mismatch = bool(
-            getattr(geo_cfg, "stage1_force_rebuild_if_mismatch", True)
+        force_mis = self._cfg_bool(
+            "stage1_force_rebuild_if_mismatch",
+            True,
         )
 
-        # --------------------------------------------------------------
-        # 3a) Auto-reuse path: latest complete + config_match
-        # --------------------------------------------------------------
+        # 3a) Auto-reuse: latest complete + config_match
         if auto_reuse:
-            best = next(
-                (
-                    r
-                    for r in runs_for_city
-                    if getattr(r, "is_complete", False)
-                    and getattr(r, "config_match", False)
-                ),
-                None,
-            )
+            best = self._latest_match(runs_city)
             if best is not None:
+                mp = self._manifest_path(best)
                 ts = getattr(best, "timestamp", "?")
-                _log(
-                    "[Stage-1] Auto-reusing complete Stage-1 run "
-                    f"for city '{city}' @ {ts} "
-                    "(config matches current GUI settings)."
+
+                if mp:
+                    self._log(
+                        messages,
+                        "[Stage-1] Auto-reusing complete "
+                        f"Stage-1 run for city '{city}' "
+                        f"@ {ts} (config matches current "
+                        "GUI settings).",
+                    )
+                    self._log_run_summary(
+                        messages,
+                        "[SmartStage1] Reusing Stage-1 run",
+                        best,
+                        city_fallback=city,
+                    )
+                    return Stage1Decision(
+                        need_stage1=False,
+                        manifest_hint=mp,
+                        cancelled=False,
+                        messages=messages,
+                    )
+
+                self._log(
+                    messages,
+                    "[Stage-1] Found a matching Stage-1 run "
+                    "but manifest path is missing → "
+                    "forcing Stage-1 rebuild.",
                 )
-                manifest_hint = str(getattr(best, "manifest_path", ""))
                 return Stage1Decision(
-                    need_stage1=False,
-                    manifest_hint=manifest_hint or None,
+                    need_stage1=True,
+                    manifest_hint=None,
                     cancelled=False,
                     messages=messages,
                 )
 
-        # --------------------------------------------------------------
-        # 3b) Force rebuild when nothing matches the current config
-        # --------------------------------------------------------------
+        # 3b) Force rebuild when nothing matches config
         any_match = any(
-            getattr(r, "config_match", False) for r in runs_for_city
+            bool(getattr(r, "config_match", False))
+            for r in runs_city
         )
-        if force_rebuild_mismatch and not any_match:
-            _log(
-                "[Stage-1] Existing Stage-1 runs found but none match "
-                f"the current GUI config – forcing Stage-1 rebuild for "
-                f"city '{city}'."
+        if force_mis and (not any_match):
+            self._log(
+                messages,
+                "[Stage-1] Existing Stage-1 runs found but "
+                "none match the current GUI config – forcing "
+                f"Stage-1 rebuild for city '{city}'.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -360,14 +369,12 @@ class Stage1Service:
                 messages=messages,
             )
 
-        # --------------------------------------------------------------
-        # 3c) Fallback: interactive Stage-1 choice dialog
-        # --------------------------------------------------------------
+        # 3c) Interactive choice dialog
         if self._chooser is None:
-            # No dialog hook: safest fallback is to rebuild
-            _log(
-                "[SmartStage1] No Stage-1 choice hook provided – "
-                "falling back to Stage-1 rebuild."
+            self._log(
+                messages,
+                "[SmartStage1] No Stage-1 choice hook "
+                "provided – falling back to Stage-1 rebuild.",
             )
             return Stage1Decision(
                 need_stage1=True,
@@ -378,15 +385,17 @@ class Stage1Service:
 
         decision, selected = self._chooser(
             city=city,
-            runs_for_city=runs_for_city,
+            runs_for_city=runs_city,
             all_runs=all_runs,
             clean_stage1=clean_stage1_dir,
         )
-
         decision = (decision or "").lower().strip()
 
         if decision == "cancel":
-            _log("[SmartStage1] Training cancelled by user.")
+            self._log(
+                messages,
+                "[SmartStage1] Training cancelled by user.",
+            )
             return Stage1Decision(
                 need_stage1=False,
                 manifest_hint=None,
@@ -395,7 +404,10 @@ class Stage1Service:
             )
 
         if decision == "rebuild":
-            _log("[SmartStage1] User requested Stage-1 rebuild.")
+            self._log(
+                messages,
+                "[SmartStage1] User requested Stage-1 rebuild.",
+            )
             return Stage1Decision(
                 need_stage1=True,
                 manifest_hint=None,
@@ -404,7 +416,6 @@ class Stage1Service:
             )
 
         if decision == "reuse" and selected is not None:
-            # Safety: only reuse fully compatible + complete runs
             is_complete = bool(
                 getattr(selected, "is_complete", False)
             )
@@ -413,7 +424,6 @@ class Stage1Service:
             )
 
             if (not is_complete) or (not config_match):
-                # Mirror the old QMessageBox warning via hooks.warn
                 msg = (
                     "The selected Stage-1 run is incomplete or "
                     "incompatible with the current configuration.\n\n"
@@ -425,12 +435,12 @@ class Stage1Service:
                         msg,
                     )
                 except Exception:
-                    # Warning dialog failures should not crash the flow
                     pass
 
-                _log(
-                    "[SmartStage1] Selected Stage-1 run is incomplete "
-                    "or incompatible → forcing rebuild."
+                self._log(
+                    messages,
+                    "[SmartStage1] Selected Stage-1 run is "
+                    "incomplete or incompatible → forcing rebuild.",
                 )
                 return Stage1Decision(
                     need_stage1=True,
@@ -439,48 +449,39 @@ class Stage1Service:
                     messages=messages,
                 )
 
-            # At this point we can safely reuse the run
-            manifest_hint = str(
-                getattr(selected, "manifest_path", "")
-            ) or None
+            mp = self._manifest_path(selected)
+            if not mp:
+                self._log(
+                    messages,
+                    "[SmartStage1] Selected Stage-1 run is "
+                    "missing manifest path → forcing rebuild.",
+                )
+                return Stage1Decision(
+                    need_stage1=True,
+                    manifest_hint=None,
+                    cancelled=False,
+                    messages=messages,
+                )
 
-            diff_fields = getattr(selected, "diff_fields", None)
-            diff_msg = ""
-            if diff_fields:
-                try:
-                    diff_msg = " (diff: " + ", ".join(diff_fields) + ")"
-                except Exception:
-                    # diff_fields might not be iterable; ignore gracefully
-                    diff_msg = ""
-
-            city_sel = getattr(selected, "city", city)
-            run_dir = getattr(selected, "run_dir", "?")
-            time_steps = getattr(selected, "time_steps", "?")
-            horizon = getattr(selected, "horizon_years", "?")
-            n_train = getattr(selected, "n_train", "?")
-            n_val = getattr(selected, "n_val", "?")
-
-            _log(
-                "[SmartStage1] Reusing Stage-1 run"
-                + diff_msg
-                + ":\n"
-                f"  City        : {city_sel}\n"
-                f"  Run dir     : {run_dir}\n"
-                f"  T, H        : {time_steps}, {horizon}\n"
-                f"  train / val : {n_train} / {n_val}"
+            self._log_run_summary(
+                messages,
+                "[SmartStage1] Reusing Stage-1 run",
+                selected,
+                city_fallback=city,
             )
 
             return Stage1Decision(
                 need_stage1=False,
-                manifest_hint=manifest_hint,
+                manifest_hint=mp,
                 cancelled=False,
                 messages=messages,
             )
 
-        # Fallback: if the dialog returned something unexpected, be safe
-        _log(
-            f"[SmartStage1] Unexpected decision={decision!r} from "
-            "Stage-1 choice dialog – falling back to Stage-1 rebuild."
+        self._log(
+            messages,
+            "[SmartStage1] Unexpected decision="
+            f"{decision!r} from Stage-1 choice dialog – "
+            "falling back to Stage-1 rebuild.",
         )
         return Stage1Decision(
             need_stage1=True,

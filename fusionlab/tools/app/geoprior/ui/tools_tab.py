@@ -635,6 +635,8 @@ class ToolsTab(QWidget):
             QSizePolicy.Preferred,
             QSizePolicy.Expanding,
         )
+        self._nav_list.setMinimumWidth(260)
+        
         ll.addWidget(self._nav_list, 1)
 
         self._nav_footer = QLabel(

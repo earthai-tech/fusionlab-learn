@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Callable, Optional, Tuple
+from pathlib import Path
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFontMetrics
@@ -20,6 +21,8 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QVBoxLayout,
     QWidget,
+    QDialog, 
+    QMessageBox
 )
 
 from ...config.store import GeoConfigStore
@@ -46,7 +49,10 @@ from ...dialogs.export_actions import export_with_saved_prefs
 from ...dialogs.scalars_loss_dialog import ScalarsLossDialog
 from ...dialogs.model_params_dialog import ModelParamsDialog
 from ...dialogs.tune_options import TuneOptionsDialog
-
+from ...dialogs.feature_dialog import FeatureConfigDialog
+from ...dialogs.architecture_dialog import ArchitectureConfigDialog
+from ...dialogs.prob_dialog import ProbConfigDialog
+from ...dialogs.phys_dialogs import PhysicsConfigDialog
 
 MakeCardFn = Callable[[str], Tuple[QWidget, QVBoxLayout]]
 MakeRunBtnFn = Callable[[str], QWidget]
@@ -77,6 +83,11 @@ class TuneTab(QWidget):
     [C] center: cards (inline expand)
     [D] right: preview
     """
+
+    features_clicked = pyqtSignal()
+    arch_clicked = pyqtSignal()
+    prob_clicked = pyqtSignal()
+    physics_clicked = pyqtSignal()
 
     run_clicked = pyqtSignal()
     reset_requested = pyqtSignal()
@@ -321,6 +332,19 @@ class TuneTab(QWidget):
                     self.head.ed_search.text()
                 )
             )
+            
+        self.nav.features_clicked.connect(
+            self._on_feature_cfg
+        )
+        self.nav.arch_clicked.connect(
+            self._on_arch_cfg
+        )
+        self.nav.prob_clicked.connect(
+            self._on_prob_cfg
+        )
+        self.nav.physics_clicked.connect(
+            self._on_physics_cfg
+        )
 
         # center edit -> scroll
         self.center.edit_requested.connect(self._scroll_to)
@@ -390,7 +414,7 @@ class TuneTab(QWidget):
 
         # optional: physics mini-gear dialog
         phys = getattr(self.center, "card_phys", None)
-        sig = getattr(phys, "details_clicked", None)
+        sig = getattr(phys, "hd_details_clicked", None)
         if sig is not None:
             sig.connect(self._on_phys_switches_details)
 
@@ -410,6 +434,85 @@ class TuneTab(QWidget):
                     sig.connect(self.refresh_from_store)
                 except Exception:
                     pass
+
+    def _on_feature_cfg(self) -> None:
+        csv = self._store.get("dataset_path", None)
+        if not csv:
+            QMessageBox.information(
+                self,
+                "Dataset required",
+                "Please open/select a dataset first.",
+            )
+            return
+    
+        try:
+            csv_path = (
+                csv if isinstance(csv, Path) else Path(str(csv))
+            ).expanduser()
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Invalid dataset path",
+                f"Cannot use dataset_path: {csv!r}",
+            )
+            return
+    
+        base_cfg = self._store.get("_base_cfg", {}) or {}
+        cur = self._store.get("feature_overrides", {}) or {}
+    
+        dlg = FeatureConfigDialog(
+            csv_path=csv_path,
+            base_cfg=base_cfg,
+            current_overrides=cur,
+            parent=self,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+    
+        overs = dlg.get_overrides() or {}
+        self._store.patch({"feature_overrides": overs})
+        self.refresh_from_store()
+    
+    
+    def _on_arch_cfg(self) -> None:
+        base_cfg = self._store.get("_base_cfg", {}) or {}
+        cur = self._store.get("arch_overrides", {}) or {}
+    
+        dlg = ArchitectureConfigDialog(
+            base_cfg=base_cfg,
+            current_overrides=cur,
+            parent=self,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+    
+        delta = dlg.get_overrides() or {}
+    
+        # IMPORTANT: don't wipe existing overrides on "no change"
+        if not delta:
+            return
+    
+        merged = dict(cur)
+        merged.update(delta)
+        self._store.patch({"arch_overrides": merged})
+        self.refresh_from_store()
+    
+    def _on_prob_cfg(self) -> None:
+        ok = ProbConfigDialog.edit(
+            store=self._store,
+            parent=self,
+        )
+        if ok:
+            self.refresh_from_store()
+    
+    
+    def _on_physics_cfg(self) -> None:
+        patch = PhysicsConfigDialog.edit(
+            parent=self,
+            store=self._store,
+        )
+        if patch is not None:
+            self.refresh_from_store()
 
     # -----------------------------------------------------------------
     # Dialog actions (Advanced)

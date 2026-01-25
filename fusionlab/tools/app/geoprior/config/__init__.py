@@ -3,7 +3,7 @@ from .geoprior_config import (
     GeoPriorConfig , 
     default_tuner_search_space
   ) 
-from .store import GeoConfigStore
+from .store import GeoConfigStore, FieldKey
 from .smart_stage1 import (
     Stage1Summary, 
     canonical_hash_cfg, 
@@ -25,6 +25,7 @@ __all__ = [
     "GeoPriorConfig", 
     "GeoConfigStore", 
     "Stage1Summary", 
+    "FieldKey", 
     "default_tuner_search_space",
     "Stage1Options", 
     "_deep_update", 

@@ -21,7 +21,14 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, Sequence
 
-from PyQt5.QtCore import Qt, QUrl, pyqtSignal, QObject, pyqtSlot
+from PyQt5.QtCore import (
+    Qt,
+    QUrl,
+    QTimer,
+    pyqtSignal,
+    QObject,
+    pyqtSlot,
+)
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -31,6 +38,10 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .engines.leaflet_html import _leaflet_html
+from .engines.maplibre_html import maplibre_html
+from .engines.google_html import google_html
 
 try:
     from PyQt5.QtWebEngineWidgets import (
@@ -46,446 +57,6 @@ except Exception:  # pragma: no cover
     QWebChannel = None  # type: ignore
 
 
-def _leaflet_html() -> str:
-    lines = [
-        "<!doctype html>",
-        "<html>",
-        "<head>",
-        '<meta charset="utf-8"/>',
-        '<meta name="viewport"',
-        'content="width=device-width, initial-scale=1.0"/>',
-        '<link rel="stylesheet"',
-        'href="https://unpkg.com/leaflet@1.9.4/'
-        'dist/leaflet.css"/>',
-        "<script",
-        'src="https://unpkg.com/leaflet@1.9.4/'
-        'dist/leaflet.js"></script>',
-        '<script src="qrc:///qtwebchannel/'
-        'qwebchannel.js"></script>',
-        "<style>",
-        "  html, body { height: 100%; margin: 0; }",
-        "  #map { height: 100%; width: 100%; }",
-        "</style>",
-        "</head>",
-        "<body>",
-        '<div id="map"></div>',
-        "<script>",
-        "(function () {",
-        "  // Define API first (safe if Leaflet fails)",
-        "  window.__GeoPriorMap = {",
-        "    setPoints: function(){},",
-        "    clearPoints: function(){},",
-        "    fitPoints: function(){},",
-        "    zoomIn: function(){},",
-        "    zoomOut: function(){},",
-        "    setLegend: function(){},",
-        "    setBasemap: function(){},",
-        "    setHotspots: function(){},",
-        "    clearHotspots: function(){},",
-        "    showHotspots: function(){}",
-        "  };",
-        "",
-        "  if (typeof L === 'undefined') {",
-        "    console.log('Leaflet not available.');",
-        "    return;",
-        "  }",
-        "",
-        "  const map = L.map('map', {",
-        "    zoomControl: true",
-        "  }).setView([0, 0], 2);",
-        "",
-        "  const osmUrl = (",
-        "    'https://{s}.tile.openstreetmap.org/' +",
-        "    '{z}/{x}/{y}.png'",
-        "  );",
-        "  const osmAtt = '© OpenStreetMap';",
-        "",
-        "  // Track tile layer so we can swap basemaps",
-        "  let tileLayer = L.tileLayer(osmUrl, {",
-        "    maxZoom: 19,",
-        "    attribution: osmAtt",
-        "  }).addTo(map);",
-        "",
-        "  const layer = L.layerGroup().addTo(map);",
-        "  let legendCtl = null;",
-        "",
-        "  // Qt WebChannel bridge (JS -> Python)",
-        "  let bridge = null;",
-        "",
-        "  // Hotspots layer (separate from points)",
-        "  const hotLayer = L.layerGroup().addTo(map);",
-        "  let hotOn = true;",
-        "  let hotTimers = [];",
-        "",
-        "  function _stopHotTimers() {",
-        "    for (let i = 0; i < hotTimers.length; i++) {",
-        "      try { clearInterval(hotTimers[i]); }",
-        "      catch (e) {}",
-        "    }",
-        "    hotTimers = [];",
-        "  }",
-        "",
-        "  function clearHotspots() {",
-        "    _stopHotTimers();",
-        "    hotLayer.clearLayers();",
-        "  }",
-        "",
-        "  function _sevColor(sev) {",
-        "    const s = (sev || 'high').toLowerCase();",
-        "    if (s === 'critical') return '#d7263d';",
-        "    if (s === 'high') return '#f18f01';",
-        "    if (s === 'medium') return '#3f88c5';",
-        "    return '#6c757d';",
-        "  }",
-        "",
-        "  function _sevRadius(sev) {",
-        "    const s = (sev || 'high').toLowerCase();",
-        "    if (s === 'critical') return 18;",
-        "    if (s === 'high') return 14;",
-        "    if (s === 'medium') return 12;",
-        "    return 10;",
-        "  }",
-        "",
-        "  function _pulseRing(ring, r0m, speed) {",
-        "    let r = r0m;",
-        "    let a = 0.9;",
-        "",
-        "    let sp = Number(speed);",
-        "    if (!isFinite(sp) || sp <= 0) sp = 1.0;",
-        "",
-        "    // Faster speed -> smaller dt",
-        "    let dt = 80 / sp;",
-        "    dt = Math.max(25, Math.min(200, dt));",
-        "",
-        "    const t = setInterval(function () {",
-        "      r += (r0m * 0.06);",
-        "      a -= 0.04;",
-        "",
-        "      if (a <= 0.05) {",
-        "        r = r0m;",
-        "        a = 0.9;",
-        "      }",
-        "",
-        "      try {",
-        "        ring.setRadius(r);",
-        "        ring.setStyle({ opacity: a });",
-        "      } catch (e) {}",
-        "    }, dt);",
-        "",
-        "    hotTimers.push(t);",
-        "  }",
-        "",
-        "  function showHotspots(on) {",
-        "    hotOn = !!on;",
-        "    if (hotOn) map.addLayer(hotLayer);",
-        "    else map.removeLayer(hotLayer);",
-        "  }",
-        "",
-        "  function _emitPointClicked(x, y) {",
-        "    if (bridge && bridge.pointClicked) {",
-        "      bridge.pointClicked(x, y);",
-        "    }",
-        "  }",
-        "",
-        "  if (typeof QWebChannel !== 'undefined' &&",
-        "      typeof qt !== 'undefined' &&",
-        "      qt.webChannelTransport) {",
-        "    new QWebChannel(",
-        "      qt.webChannelTransport,",
-        "      function (channel) {",
-        "        bridge = channel.objects.bridge || null;",
-        "      }",
-        "    );",
-        "  }",
-        "",
-        "  // Optional: clicking map background also selects",
-        "  map.on('click', function (e) {",
-        "    if (!e || !e.latlng) return;",
-        "    _emitPointClicked(e.latlng.lng, e.latlng.lat);",
-        "  });",
-
-        "  function clearPoints() {",
-        "    layer.clearLayers();",
-        "  }",
-        "",
-        "  function _clamp(x, a, b) {",
-        "    return Math.max(a, Math.min(b, x));",
-        "  }",
-        "",
-        "  function _color(t, cmap, inv) {",
-        "    let tt = t;",
-        "    if (inv) tt = 1 - tt;",
-        "    // v0: keep HSL fallback (cmap reserved)",
-        "    const h = 240 * (1 - tt);",
-        "    return 'hsl(' + h + ',80%,45%)';",
-        "  }",
-        "",
-        "  function setBasemap(provider, style, opacity) {",
-        "    const p = (provider || 'osm').toLowerCase();",
-        "    const s = (style || 'light').toLowerCase();",
-        "",
-        "    let url = osmUrl;",
-        "    let att = osmAtt;",
-        "",
-        "    // Keep simple for now; extend later.",
-        "    // Example: if you want a dark style,",
-        "    // swap to Carto dark tiles, etc.",
-        "    if (p === 'osm' && s === 'dark') {",
-        "      url = (",
-        "        'https://{s}.basemaps.cartocdn.com/' +",
-        "        'dark_all/{z}/{x}/{y}{r}.png'",
-        "      );",
-        "      att = '© OpenStreetMap © CARTO';",
-        "    }",
-        "",
-        "    const op = (opacity != null) ? opacity : 1.0;",
-        "",
-        "    if (tileLayer) {",
-        "      map.removeLayer(tileLayer);",
-        "      tileLayer = null;",
-        "    }",
-        "",
-        "    tileLayer = L.tileLayer(url, {",
-        "      maxZoom: 19,",
-        "      attribution: att,",
-        "      opacity: op",
-        "    }).addTo(map);",
-        "  }",
-        "",
-        "  function setLegend(vmin, vmax, label, cmap, inv) {",
-        "    if (legendCtl) {",
-        "      map.removeControl(legendCtl);",
-        "      legendCtl = null;",
-        "    }",
-        "",
-        "    const cm = cmap || 'viridis';",
-        "    const iv = !!inv;",
-        "",
-        "    legendCtl = L.control({ position: 'bottomright' });",
-        "    legendCtl.onAdd = function() {",
-        "      const div = L.DomUtil.create('div');",
-        "      div.style.background = 'rgba(255,255,255,0.85)';",
-        "      div.style.padding = '8px';",
-        "      div.style.borderRadius = '10px';",
-        "      div.style.fontFamily = 'sans-serif';",
-        "      div.style.fontSize = '12px';",
-        "",
-        "      const title = (label || 'Z');",
-        "      const g = (",
-        "        'linear-gradient(to top,' +",
-        "        _color(0, cm, iv) + ',' +",
-        "        _color(1, cm, iv) + ')'",
-        "      );",
-        "",
-        "      div.innerHTML = (",
-        "        '<div style=\"font-weight:600;\">' +",
-        "        title + '</div>' +",
-        "        '<div style=\"display:flex;gap:8px;' +",
-        "        'align-items:center;\">' +",
-        "        '<div style=\"width:12px;height:90px;' +",
-        "        'background:' + g + ';border-radius:6px;\">' +",
-        "        '</div>' +",
-        "        '<div>' +",
-        "        '<div>' + Number(vmax).toFixed(3) + '</div>' +",
-        "        '<div style=\"height:62px;\"></div>' +",
-        "        '<div>' + Number(vmin).toFixed(3) + '</div>' +",
-        "        '</div></div>'",
-        "      );",
-        "",
-        "      return div;",
-        "    };",
-        "    legendCtl.addTo(map);",
-        "  }",
-        "",
-        "  function setPoints(points, opts) {",
-        "    clearPoints();",
-        "    const p = points || [];",
-        "    const o = opts || {};",
-        "",
-        "    const r = (o.radius != null) ? o.radius : 6;",
-        "    const op = (o.opacity != null) ? o.opacity : 0.9;",
-        "    const vmin = (o.vmin != null) ? o.vmin : null;",
-        "    const vmax = (o.vmax != null) ? o.vmax : null;",
-        "",
-        "    const cmap = o.cmap || 'viridis';",
-        "    const inv = !!o.invert;",
-        "",
-        "    let lo = Infinity;",
-        "    let hi = -Infinity;",
-        "",
-        "    for (let i = 0; i < p.length; i++) {",
-        "      const v = p[i].v;",
-        "      if (v == null || !isFinite(v)) continue;",
-        "      lo = Math.min(lo, v);",
-        "      hi = Math.max(hi, v);",
-        "    }",
-        "",
-        "    const a = (vmin != null) ? vmin : lo;",
-        "    const b = (vmax != null) ? vmax : hi;",
-        "",
-        "    for (let i = 0; i < p.length; i++) {",
-        "      const pt = p[i];",
-        "      const lat = pt.lat;",
-        "      const lon = pt.lon;",
-        "      const v = pt.v;",
-        "      if (!isFinite(lat) || !isFinite(lon)) continue;",
-        "",
-        "      let t = 0.5;",
-        "      if (v != null && isFinite(v) && b > a) {",
-        "        t = (v - a) / (b - a);",
-        "      }",
-        "      t = _clamp(t, 0, 1);",
-        "      const col = _color(t, cmap, inv);",
-        "",
-        "      const m = L.circleMarker([lat, lon], {",
-        "        radius: r,",
-        "        color: col,",
-        "        fillColor: col,",
-        "        fillOpacity: op,",
-        "        weight: 1",
-        "      }).addTo(layer);",
-        "",
-        "      // Emit (x,y) as (lon,lat) to match X/Y columns",
-        "      m.on('click', function () {",
-        "        _emitPointClicked(lon, lat);",
-        "      });",
-        "    }",
-        "",
-        "    if (o.showLegend) {",
-        "      setLegend(a, b, o.label || 'Z', cmap, inv);",
-        "    }",
-        "  }",
-        "",
-        "  function setHotspots(hs, opts) {",
-        "    clearHotspots();",
-        "",
-        "    const h = hs || [];",
-        "    const o = opts || {};",
-        "",
-        "    const want = (o.show != null) ? !!o.show : true;",
-        "    showHotspots(want);",
-        "",
-        "    const style = String(o.style || 'pulse').toLowerCase();",
-        "    const pulse = (o.pulse != null) ? !!o.pulse : true;",
-        "    const labels = (o.labels != null) ? !!o.labels : true;",
-        "",
-        "    let baseKm = Number(o.ringKm);",
-        "    if (!isFinite(baseKm) || baseKm <= 0) baseKm = 0.8;",
-        "",
-        "    let sp = Number(o.pulseSpeed);",
-        "    if (!isFinite(sp) || sp <= 0) sp = 1.0;",
-        "",
-        "    function _sevMul(sev) {",
-        "      const s = (sev || 'high').toLowerCase();",
-        "      if (s === 'critical') return 1.6;",
-        "      if (s === 'high') return 1.25;",
-        "      if (s === 'medium') return 1.0;",
-        "      return 0.8;",
-        "    }",
-        "",
-        "    for (let i = 0; i < h.length; i++) {",
-        "      const pt = h[i] || {};",
-        "      const lat = pt.lat;",
-        "      const lon = pt.lon;",
-        "      if (!isFinite(lat) || !isFinite(lon)) continue;",
-        "",
-        "      const sev = pt.sev || 'high';",
-        "      const col = _sevColor(sev);",
-        "      const mul = _sevMul(sev);",
-        "",
-        "      const tip = pt.label || ('Hotspot #' + (i + 1));",
-        "",
-        "      const core = L.circleMarker([lat, lon], {",
-        "        radius: 5,",
-        "        color: col,",
-        "        fillColor: col,",
-        "        fillOpacity: 0.95,",
-        "        weight: 1",
-        "      }).addTo(hotLayer);",
-        "",
-        "      if (labels) core.bindTooltip(tip);",
-        "      core.on('click', function () {",
-        "        _emitPointClicked(lon, lat);",
-        "      });",
-        "",
-        "      // Style layer",
-        "      if (style === 'glow') {",
-        "        const glow = L.circle([lat, lon], {",
-        "          radius: (baseKm * 1000.0 * mul),",
-        "          color: col,",
-        "          opacity: 0.55,",
-        "          fillColor: col,",
-        "          fillOpacity: 0.12,",
-        "          weight: 1",
-        "        }).addTo(hotLayer);",
-        "        if (labels) glow.bindTooltip(tip);",
-        "        glow.on('click', function () {",
-        "          _emitPointClicked(lon, lat);",
-        "        });",
-        "        continue;",
-        "      }",
-        "",
-        "      // Pulse ring (meters-based)",
-        "      const r0m = (baseKm * 1000.0 * mul);",
-        "      const ring = L.circle([lat, lon], {",
-        "        radius: r0m,",
-        "        color: col,",
-        "        opacity: 0.9,",
-        "        fillOpacity: 0.0,",
-        "        weight: 2",
-        "      }).addTo(hotLayer);",
-        "",
-        "      if (labels) ring.bindTooltip(tip);",
-        "      ring.on('click', function () {",
-        "        _emitPointClicked(lon, lat);",
-        "      });",
-        "",
-        "      if (pulse) _pulseRing(ring, r0m, sp);",
-        "    }",
-        "  }",
-        "",
-        "  function fitPoints() {",
-        "    const pts = [];",
-        "",
-        "    layer.eachLayer(function (m) {",
-        "      if (m.getLatLng) pts.push(m.getLatLng());",
-        "    });",
-        "",
-        "    hotLayer.eachLayer(function (m) {",
-        "      if (m.getLatLng) pts.push(m.getLatLng());",
-        "      if (m.getBounds) {",
-        "        try {",
-        "          const b = m.getBounds();",
-        "          pts.push(b.getNorthWest());",
-        "          pts.push(b.getSouthEast());",
-        "        } catch (e) {}",
-        "      }",
-        "    });",
-        "",
-        "    if (!pts.length) return;",
-        "    map.fitBounds(L.latLngBounds(pts).pad(0.2));",
-        "  }",
-        "",
-        "  function zoomIn() { map.zoomIn(); }",
-        "  function zoomOut() { map.zoomOut(); }",
-        "",
-        "  // Attach real functions",
-        "  window.__GeoPriorMap.setPoints = setPoints;",
-        "  window.__GeoPriorMap.clearPoints = clearPoints;",
-        "  window.__GeoPriorMap.fitPoints = fitPoints;",
-        "  window.__GeoPriorMap.zoomIn = zoomIn;",
-        "  window.__GeoPriorMap.zoomOut = zoomOut;",
-        "  window.__GeoPriorMap.setLegend = setLegend;",
-        "  window.__GeoPriorMap.setBasemap = setBasemap;",
-        "  window.__GeoPriorMap.setHotspots = setHotspots;",
-        "  window.__GeoPriorMap.clearHotspots = clearHotspots;",
-        "  window.__GeoPriorMap.showHotspots = showHotspots;",
-        "})();",
-        "</script>",
-        "</body>",
-        "</html>",
-    ]
-    return "\n".join(lines)
 
 class _GeoPriorBridge(QObject):
     point_clicked = pyqtSignal(float, float)
@@ -498,12 +69,7 @@ class _GeoPriorBridge(QObject):
         except Exception:
             pass
 
-
 class ForecastMapView(QFrame):
-    """
-    Map canvas widget with overlay controls.
-    """
-
     request_focus_mode = pyqtSignal(bool)
     point_clicked = pyqtSignal(float, float)
 
@@ -517,12 +83,12 @@ class ForecastMapView(QFrame):
 
         self._ready = False
         self._pending_js: List[str] = []
-        
+
         self._last_points: List[Dict[str, Any]] = []
         self._last_label: str = "Z"
         self._last_vmin: Optional[float] = None
         self._last_vmax: Optional[float] = None
-        
+
         self._view: Dict[str, Any] = {}
         self._last_hotspots: List[Dict[str, Any]] = []
         self._hot_opts: Dict[str, Any] = {
@@ -530,11 +96,208 @@ class ForecastMapView(QFrame):
             "pulse": True,
         }
 
+        # Engine management
+        self._engine_req = "leaflet"
+        self._engine_active = "leaflet"
+        self._google_key = ""
+
+        self._probe_tries = 0
+        self._probe_max = 10
+
         self._web: Optional[QWebEngineView]
         self._placeholder: Optional[QLabel]
 
         self._build_ui()
+
+        if self._web is not None:
+            self._web.loadFinished.connect(self._on_loaded)
+
         self._load_map()
+
+    # -----------------------------
+    # Engine API
+    # -----------------------------
+    def set_engine(
+        self,
+        engine: str,
+        *,
+        google_key: str = "",
+    ) -> None:
+        eng = str(engine or "leaflet").strip().lower()
+        if eng not in ("leaflet", "maplibre", "google"):
+            eng = "leaflet"
+
+        self._engine_req = eng
+
+        # key = str(google_key or "").strip()
+        # if key:
+        #     self._google_key = key
+   
+        self._google_key = str(google_key or "").strip()
+
+        self._load_map()
+
+    # -----------------------------
+    # WebEngine lifecycle
+    # -----------------------------
+    def _load_map(self) -> None:
+        if self._web is None:
+            return
+
+        self._ready = False
+        self._pending_js.clear()
+
+        st = self._web.settings()
+        st.setAttribute(
+            QWebEngineSettings.LocalContentCanAccessRemoteUrls,
+            True,
+        )
+        st.setAttribute(
+            QWebEngineSettings.WebGLEnabled,
+            True,
+        )
+
+        html, active = self._engine_html()
+        self._engine_active = active
+
+        # WebChannel must exist before JS tries to connect
+        self._bridge = None
+        self._channel = None
+        if QWebChannel is not None:
+            self._bridge = _GeoPriorBridge(self)
+            self._channel = QWebChannel(self._web.page())
+            self._channel.registerObject("bridge", self._bridge)
+            self._web.page().setWebChannel(self._channel)
+            self._bridge.point_clicked.connect(self.point_clicked)
+
+        self._web.setHtml(
+            html,
+            QUrl("https://geoprior.local/"),
+        )
+
+    def _engine_html(self) -> tuple[str, str]:
+        req = self._engine_req
+
+        if req == "maplibre":
+            return maplibre_html(), "maplibre"
+
+        if req == "google":
+            if not self._google_key:
+                return _leaflet_html(), "leaflet"
+            return google_html(self._google_key), "google"
+
+        return _leaflet_html(), "leaflet"
+
+    def _on_loaded(self, ok: bool) -> None:
+        self._ready = bool(ok)
+
+        if not self._ready:
+            if self._engine_active != "leaflet":
+                self._fallback_leaflet()
+            return
+
+        self._probe_tries = 0
+        self._schedule_probe()
+
+    def _schedule_probe(self) -> None:
+        delay = 0
+        if self._engine_active == "google":
+            delay = 250
+        if self._engine_active == "maplibre":
+            delay = 50
+
+        QTimer.singleShot(delay, self._probe_engine)
+
+    def _probe_engine(self) -> None:
+        if self._web is None:
+            return
+        if not self._ready:
+            return
+
+        eng = self._engine_active
+
+        if eng == "leaflet":
+            js = "typeof L !== 'undefined'"
+        elif eng == "maplibre":
+            js = "typeof maplibregl !== 'undefined'"
+        else:
+            js = (
+                "typeof google !== 'undefined' && "
+                "typeof google.maps !== 'undefined'"
+            )
+
+        self._web.page().runJavaScript(
+            js,
+            self._on_probe_result,
+        )
+
+    def _on_probe_result(self, ok: Any) -> None:
+        is_ok = bool(ok)
+
+        if is_ok:
+            self._finalize_ready()
+            return
+
+        if self._engine_active == "google":
+            if self._probe_tries < self._probe_max:
+                self._probe_tries += 1
+                QTimer.singleShot(300, self._probe_engine)
+                return
+
+        if self._engine_active != "leaflet":
+            self._fallback_leaflet()
+
+    def _fallback_leaflet(self) -> None:
+        self._engine_req = "leaflet"
+        self._engine_active = "leaflet"
+        self._load_map()
+
+    def _finalize_ready(self) -> None:
+        if self._web is None:
+            return
+
+        # Re-apply the last known state.
+        try:
+            self.apply_view(self._view)
+        except Exception:
+            pass
+
+# class ForecastMapView(QFrame):
+#     """
+#     Map canvas widget with overlay controls.
+#     """
+
+#     request_focus_mode = pyqtSignal(bool)
+#     point_clicked = pyqtSignal(float, float)
+
+#     def __init__(
+#         self,
+#         parent: Optional[QWidget] = None,
+#     ) -> None:
+#         super().__init__(parent)
+#         self.setObjectName("ForecastMapView")
+#         self.setFrameShape(QFrame.StyledPanel)
+
+#         self._ready = False
+#         self._pending_js: List[str] = []
+        
+#         self._last_points: List[Dict[str, Any]] = []
+#         self._last_label: str = "Z"
+#         self._last_vmin: Optional[float] = None
+#         self._last_vmax: Optional[float] = None
+        
+#         self._view: Dict[str, Any] = {}
+#         self._last_hotspots: List[Dict[str, Any]] = []
+#         self._hot_opts: Dict[str, Any] = {
+#             "show": True,
+#             "pulse": True,
+#         }
+
+#         self._web: Optional[QWebEngineView]
+#         self._placeholder: Optional[QLabel]
+
+#         self._build_ui()
+#         self._load_map()
 
     # -----------------------------
     # Public API
@@ -832,46 +595,43 @@ class ForecastMapView(QFrame):
 
         return w
 
-    # -----------------------------
-    # WebEngine lifecycle
-    # -----------------------------
-    def _load_map(self) -> None:
-        if self._web is None:
-            return
+    # def _load_map(self) -> None:
+    #     if self._web is None:
+    #         return
 
-        st = self._web.settings()
-        st.setAttribute(
-            QWebEngineSettings.LocalContentCanAccessRemoteUrls,
-            True,
-        )
+    #     st = self._web.settings()
+    #     st.setAttribute(
+    #         QWebEngineSettings.LocalContentCanAccessRemoteUrls,
+    #         True,
+    #     )
 
-        html = _leaflet_html()
-        self._web.setHtml(
-            html,
-            QUrl("https://geoprior.local/"),
-        )
+    #     html = _leaflet_html()
+    #     self._web.setHtml(
+    #         html,
+    #         QUrl("https://geoprior.local/"),
+    #     )
         
-        # WebChannel: JS -> Qt (marker click / map click)
-        self._bridge = None
-        self._channel = None
-        if QWebChannel is not None:
-            self._bridge = _GeoPriorBridge(self)
-            self._channel = QWebChannel(self._web.page())
-            self._channel.registerObject("bridge", self._bridge)
-            self._web.page().setWebChannel(self._channel)
-            self._bridge.point_clicked.connect(self.point_clicked)
+    #     # WebChannel: JS -> Qt (marker click / map click)
+    #     self._bridge = None
+    #     self._channel = None
+    #     if QWebChannel is not None:
+    #         self._bridge = _GeoPriorBridge(self)
+    #         self._channel = QWebChannel(self._web.page())
+    #         self._channel.registerObject("bridge", self._bridge)
+    #         self._web.page().setWebChannel(self._channel)
+    #         self._bridge.point_clicked.connect(self.point_clicked)
 
-        self._web.loadFinished.connect(self._on_loaded)
+    #     self._web.loadFinished.connect(self._on_loaded)
 
-    def _on_loaded(self, ok: bool) -> None:
-        self._ready = bool(ok)
-        if not self._ready:
-            return
-        if self._pending_js:
-            q = list(self._pending_js)
-            self._pending_js.clear()
-            for js in q:
-                self._web.page().runJavaScript(js)
+    # def _on_loaded(self, ok: bool) -> None:
+    #     self._ready = bool(ok)
+    #     if not self._ready:
+    #         return
+    #     if self._pending_js:
+    #         q = list(self._pending_js)
+    #         self._pending_js.clear()
+    #         for js in q:
+    #             self._web.page().runJavaScript(js)
 
     def _run_js(self, js: str) -> None:
         if self._web is None:

@@ -53,6 +53,8 @@ QLabel#kvVal[path="true"] {
   background: rgba(46,49,145,0.06);
   border: 1px solid rgba(46,49,145,0.14);
 }
+
+
 """
 
 PREP_PATCH_DARK = """
@@ -105,4 +107,46 @@ QLabel#kvVal[path="true"] {
   background: rgba(255,255,255,0.06);
   border: 1px solid rgba(255,255,255,0.12);
 }
+
 """
+
+PREP_MODE ="""
+/* Preprocess mode switch: Build | Inspect (segmented) */
+QWidget#prepModeSeg {
+  background: palette(base);
+  border: 1px solid palette(midlight);
+  border-radius: 10px;
+  padding: 1px;
+}
+
+QToolButton#prepModeBtn {
+  border: none;
+  padding: 4px 10px;
+  min-height: 28px;
+  color: palette(mid);
+  background: transparent;
+}
+
+QToolButton#prepModeBtn:hover {
+  background: rgba(127,127,127,0.10);
+}
+
+QToolButton#prepModeBtn:checked {
+  background: palette(highlight);
+  color: palette(highlighted-text);
+  font-weight: 600;
+}
+
+QToolButton#prepModeBtn[pos="left"] {
+  border-top-left-radius: 9px;
+  border-bottom-left-radius: 9px;
+}
+
+QToolButton#prepModeBtn[pos="right"] {
+  border-top-right-radius: 9px;
+  border-bottom-right-radius: 9px;
+}
+
+"""
+PREP_PATCH_LIGHT += PREP_MODE
+PREP_PATCH_DARK += PREP_MODE
