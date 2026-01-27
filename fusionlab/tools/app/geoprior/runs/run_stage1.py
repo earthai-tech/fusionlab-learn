@@ -1305,7 +1305,7 @@ def run_stage1(
         datetime_col=DT_TMP,
         # require_full_year=True,
         year_col =TIME_COL, 
-        drop_origin=True,
+        drop_orig=True,
     )
     
     TIME_COL_NUM = f"{TIME_COL}_numeric_coord"
