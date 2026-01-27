@@ -1249,50 +1249,7 @@ def run_stage1(
     # If coords_in_degrees is False here (most cases after projection),
     # deg2m_x/deg2m_y remain as the *degree* heuristics computed above
     # (if we started in degrees), otherwise None.
-    # ------------------------------------------------------------------
-    # 3.3 Normalize time -> numeric coord
-    # ------------------------------------------------------------------
 
-    # # ------------------------------------------------------------------
-    # # 3.2 Coordinates: degrees -> projected meters (optional)
-    # # ------------------------------------------------------------------
-    # coords_in_degrees = COORD_MODE == "degrees"
-    # coord_epsg_used = None
-    
-    # if coords_in_degrees:
-    #     try:
-    #         from pyproj import Transformer  # local import
-    #     except Exception as e:
-    #         raise ImportError(
-    #             "pyproj is required for COORD_MODE='degrees'."
-    #         ) from e
-    
-    #     transformer = Transformer.from_crs(
-    #         COORD_SRC_EPSG,
-    #         COORD_TARGET_EPSG,
-    #         always_xy=True,
-    #     )
-    #     x_m, y_m = transformer.transform(
-    #         df_proc[LON_COL].to_numpy(),
-    #         df_proc[LAT_COL].to_numpy(),
-    #     )
-    #     df_proc[COORD_X_COL] = x_m.astype(float)
-    #     df_proc[COORD_Y_COL] = y_m.astype(float)
-    #     coord_epsg_used = COORD_TARGET_EPSG
-    #     coords_in_degrees=False 
-    # else:
-    #     if COORD_X_COL not in df_proc.columns:
-    #         df_proc[COORD_X_COL] = df_proc[LON_COL].astype(float)
-    #     if COORD_Y_COL not in df_proc.columns:
-    #         df_proc[COORD_Y_COL] = df_proc[LAT_COL].astype(float)
-    #     coord_epsg_used = COORD_SRC_EPSG
-    
-    # # Heuristic degree->meter scale factors (for debug/audit only)
-    # deg2m_x = deg_to_m_from_lat(
-    #     df_proc[LAT_COL].astype(float).to_numpy()
-    # ) if coords_in_degrees else None
-    # deg2m_y = 111_320.0 if coords_in_degrees else None
-    
     # ------------------------------------------------------------------
     # 3.3 Normalize time -> numeric coord
     # ------------------------------------------------------------------
@@ -1513,7 +1470,7 @@ def run_stage1(
     if INCLUDE_SUBS_HIST_DYNAMIC:
         dynamic_features.append(SUBS_MODEL_COL)
     
-    for c in OPTIONAL_NUMERIC_FEATURES:
+    for c in opt_num_cols:
         if c in df_scaled.columns and (c not in dynamic_features):
             if c not in (FUTURE_DRIVER_FEATURES or []):
                 dynamic_features.append(c)
