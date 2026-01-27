@@ -21,7 +21,6 @@ from ._config import (
     Tensor, 
     register_keras_serializable,
     get_loss,
-    
     tf_add_n,
     tf_float32,  
     tf_expand_dims,
@@ -38,6 +37,7 @@ from ._config import (
     tf_reduce_logsumexp, 
     tf_tile, 
     tf_newaxis,
+    tf_concat, 
     tf_reduce_sum
 )
 
@@ -92,9 +92,13 @@ class GaussianHead(Layer, NNLearner):
 
     def call(self, features: Tensor, training: bool = False
              ) -> Dict[str, Tensor]:
+        
         params = self.proj(features)                           # (B,[H], 2*O)
         shp = tf_shape(params)
-        new_shape = tf_stack(shp[:-1] + [2, self.output_dim])  # (..., 2, O)
+        # new_shape = tf_stack(shp[:-1] + [2, self.output_dim])  # (..., 2, O)
+        tail = tf_constant([2, self.output_dim], dtype=shp.dtype)
+        new_shape = tf_concat([shp[:-1], tail], axis=0)
+        
         params = tf_reshape(params, new_shape)
 
         mean  = params[..., 0, :]                              # (..., O)
@@ -205,7 +209,10 @@ class MixtureDensityHead(Layer, NNLearner):
         rest = raw[..., w_end:]                        # (B,[H], 2*K*O)
 
         # Reshape rest → (..., K, 2, O)
-        rest_shape = tf_stack(shp[:-1] + [k, 2, o])
+        # rest_shape = tf_stack(shp[:-1] + [k, 2, o])
+        tail = tf_constant([k, 2, o], dtype=shp.dtype)
+        rest_shape = tf_concat([shp[:-1], tail], axis=0)
+
         rest = tf_reshape(rest, rest_shape)
         means  = rest[..., 0, :]                       # (..., K, O)
         raw_s  = rest[..., 1, :]                       # (..., K, O)
@@ -250,7 +257,10 @@ class MixtureDensityHead(Layer, NNLearner):
 
         # log Σ_k π_k exp(log_norm)  (log-sum-exp per O)
         # weights in prob space -> convert to log
-        log_w = tf_log(weights)
+        # log_w = tf_log(weights)
+        eps = tf_constant(1e-8, dtype=weights.dtype)
+        log_w = tf_log(weights + eps)
+
         log_mix = tf_reduce_logsumexp(log_w + log_norm, axis=-2)  # sum over K
 
         # Sum across O, then mean over batch/time
@@ -359,9 +369,12 @@ class QuantileHead(Layer, NNLearner):
         # Supports (B, F) or (B,H,F). Output should insert Q dimension before O.
         out = self.proj(features)                 # (B,[H], Q*O)
         shp = tf_shape(out)                       # dynamic shape
-        new_shape = tf_stack(                     # (B,[H], Q, O)
-            shp[:-1] + [self.q, self.output_dim]
-        )
+        # new_shape = tf_stack(                     # (B,[H], Q, O)
+        #     shp[:-1] + [self.q, self.output_dim]
+        # )
+        tail = tf_constant([self.q, self.output_dim], dtype=shp.dtype)
+        new_shape = tf_concat([shp[:-1], tail], axis=0)
+        
         out = tf_reshape(out, new_shape)
         return out
 
@@ -564,7 +577,8 @@ class QuantileDistributionModeling(Layer, NNLearner):
     def __init__(
         self,
         quantiles: Optional[Union[str, List[float]]],
-        output_dim: int
+        output_dim: int, 
+        **kwargs,
     ):
         r"""
         Initialize the QuantileDistributionModeling
@@ -579,7 +593,7 @@ class QuantileDistributionModeling(Layer, NNLearner):
             Output dimension for each quantile or
             the deterministic case.
         """
-        super().__init__()
+        super().__init__(**kwargs)
         if quantiles == 'auto':
             quantiles = [0.1, 0.5, 0.9]
         self.quantiles = quantiles

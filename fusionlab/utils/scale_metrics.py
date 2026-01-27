@@ -149,6 +149,98 @@ def _resolve_stage1_entry(
 
     return scaler, idx, n_features
 
+def scale_target(
+    y_phys: ArrayLike,
+    *,
+    scaler_info: Mapping[str, Any] | None = None,
+    target_name: str | None = None,
+    scaler_entry: Mapping[str, Any] | None = None,
+    scaler: Any | None = None,
+    feature_index: int | None = None,
+    n_features: int | None = None,
+    params: Mapping[str, float] | None = None,
+) -> np.ndarray:
+    """
+    Forward-transform physical values into scaled space.
+
+    Mirrors inverse_scale_target(...) conventions.
+    """
+    y = _to_np(y_phys)
+    shp = y.shape
+    y_flat = y.reshape(-1, 1)
+
+    # ---- 1) Manual params ---------------------------------
+    if params:
+        keys = set(params.keys())
+        if {"min", "max"} <= keys:
+            _min = float(params["min"])
+            _max = float(params["max"])
+            span = (_max - _min) or 1.0
+            ys = (y_flat - _min) / span
+            return ys.reshape(shp)
+
+        if {"mean", "std"} <= keys:
+            mean = float(params["mean"])
+            std = float(params["std"]) or 1.0
+            ys = (y_flat - mean) / std
+            return ys.reshape(shp)
+
+        if {"scale", "shift"} <= keys:
+            scale = float(params.get("scale", 1.0)) or 1.0
+            shift = float(params.get("shift", 0.0))
+            ys = (y_flat - shift) / scale
+            return ys.reshape(shp)
+
+        return y
+
+    # ---- 2) Stage-1 metadata -------------------------------
+    stg_sc, stg_idx, stg_nf = _resolve_stage1_entry(
+        scaler_info=scaler_info,
+        target_name=target_name,
+        scaler_entry=scaler_entry,
+    )
+
+    if stg_sc is not None:
+        scaler = stg_sc
+        if feature_index is None:
+            feature_index = stg_idx
+        if stg_nf is not None:
+            n_features = stg_nf
+
+    # ---- 3) Bare scaler or path -----------------------------
+    if isinstance(scaler, str):
+        try:
+            scaler = joblib.load(scaler)
+        except Exception:
+            scaler = None
+
+    if scaler is None or not hasattr(scaler, "transform"):
+        return y
+
+    if n_features is None and hasattr(scaler, "n_features_in_"):
+        try:
+            n_features = int(getattr(scaler, "n_features_in_"))
+        except Exception:
+            n_features = None
+
+    if n_features is None:
+        n_features = 1
+    if feature_index is None:
+        feature_index = 0
+
+    nf = int(n_features)
+    fi = int(feature_index)
+
+    X = np.zeros((y_flat.shape[0], nf), dtype=float)
+    X[:, fi : fi + 1] = y_flat
+
+    try:
+        Xs = scaler.transform(X)
+        ys = Xs[:, fi : fi + 1]
+        return ys.reshape(shp)
+    except Exception:
+        return y
+
 def inverse_scale_target(
     y_scaled: ArrayLike,
     *,

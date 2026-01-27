@@ -426,11 +426,33 @@ class VariableSelectionNetwork(Layer, NNLearner):
         # Add feature dim F=1 if missing
         # Add feature dimension if missing
         # XXX TO ENABLE 
-        inferred_input_shape = tf_cond(
-              tf_equal(input_rank, expected_min_rank),
-              lambda: input_shape.as_list() + [1],
-              lambda: input_shape.as_list()
-          )
+        # inferred_input_shape = tf_cond(
+        #       tf_equal(input_rank, expected_min_rank),
+        #       lambda: input_shape.as_list() + [1],
+        #       lambda: input_shape.as_list()
+        #   )
+
+        # FIX: do NOT use tf.cond for python shape lists.
+        # tf.cond requires both branches return the same
+        # structure; ours differs in list length (rank vs
+        # rank+1) and throws: AssertionError: [3, 2].
+        inferred_input_shape = list(input_shape.as_list())
+        if input_rank == expected_min_rank:
+            inferred_input_shape.append(1)
+
+        # Optional: stricter, clearer error
+        if input_rank not in (
+            expected_min_rank,
+            expected_min_rank + 1,
+        ):
+            raise ValueError(
+                "VSN input rank mismatch: expected "
+                f"{expected_min_rank} or "
+                f"{expected_min_rank + 1}, got "
+                f"{input_rank}. "
+                f"input_shape={input_shape!r}"
+            )
+
         # gating_norm.py :: VariableSelectionNetwork.build
 
         # inferred_input_shape = input_shape.as_list()

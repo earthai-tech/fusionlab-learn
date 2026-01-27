@@ -36,6 +36,7 @@ import numpy as np
 
 from ...api.docs import _tuner_common_params, DocstringComponents 
 from ...api.summary import ResultSummary 
+from ...compat._config import Config
 from ...compat.sklearn import validate_params, Interval
 from ...core.checks import check_params, check_non_emptiness
 from ...core.handlers import param_deprecated_message
@@ -43,7 +44,6 @@ from ...core.io import _get_valid_kwargs
 from ...utils.deps_utils import ensure_pkg
 from ...utils.generic_utils import vlog
 
-from .._config import Config
 from .._tensor_validation import validate_model_inputs
 from .. import KERAS_DEPS, dependency_message
 from ..losses import combined_quantile_loss

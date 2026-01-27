@@ -18,7 +18,15 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Callable, Dict, Optional
+import inspect
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+)
 
 
 __all__ = [
@@ -30,7 +38,8 @@ __all__ = [
     "load_bundle_for_inference",
     "save_model",
     "load_model_from_tf",
-    "load_model"
+    "load_model", 
+    "compute_loss"
 ]
 
 CustomObjects = Optional[Dict[str, Any]]
@@ -663,3 +672,122 @@ def load_model(
             path,
             compile=compile,
         )
+
+# -----------------------------------------------------------
+# Loss compat (Keras 2/3)
+# -----------------------------------------------------------
+
+def zero_loss(y_true, y_pred):
+    """Scalar zero loss (no grads, safe placeholder)."""
+    keras = _import_keras()
+    ops = getattr(keras, "ops", None)
+    if ops is not None:
+        return ops.sum(y_pred * 0.0)
+
+    import tensorflow as tf  # lazy
+
+    return tf.reduce_sum(y_pred * 0.0)
+
+def ensure_loss_dict(
+    loss,
+    *,
+    output_names: Sequence[str],
+    fill: Optional[Callable] = None,
+):
+    """
+    Ensure dict loss covers all outputs.
+
+    Missing outputs get `fill` (defaults to `zero_loss`).
+    This prevents:
+        ValueError: Expected keys [...] in loss dict ...
+    """
+    if not isinstance(loss, dict):
+        return loss
+
+    fill = zero_loss if fill is None else fill
+    out = dict(loss)
+    for k in output_names:
+        if k not in out:
+            out[k] = fill
+    return out
+
+def _sig_params(fn):
+    try:
+        return set(inspect.signature(fn).parameters)
+    except Exception:
+        return set()
+
+def _as_list_by_outputs(obj, *, output_names: Sequence[str]):
+    if isinstance(obj, Mapping):
+        return [obj[k] for k in output_names]
+    return obj
+
+
+def compute_loss(
+    model,
+    *,
+    x,
+    y,
+    y_pred,
+    sample_weight=None,
+    training=None,
+    regularization_losses=None,
+):
+    """
+    Keras 2/3 safe loss compute.
+
+    - Prefers `model.compute_loss(...)` (Keras 3 path).
+    - Falls back to `model.compiled_loss(...)` (Keras 2 path).
+    - If fallback path sees dicts, converts to lists by output
+      order to avoid dict-routing quirks.
+    """
+    compute = getattr(model, "compute_loss", None)
+    if callable(compute):
+        ps = _sig_params(compute)
+        kw = {}
+
+        if "x" in ps:
+            kw["x"] = x
+        if "y" in ps:
+            kw["y"] = y
+        if "y_pred" in ps:
+            kw["y_pred"] = y_pred
+        if "sample_weight" in ps:
+            kw["sample_weight"] = sample_weight
+        if "training" in ps and training is not None:
+            kw["training"] = training
+
+        try:
+            return compute(**kw)
+        except TypeError:
+            pass
+
+    cl = getattr(model, "compiled_loss", None)
+    if not callable(cl):
+        raise AttributeError("No loss function on model.")
+
+    out_names = getattr(model, "output_names", None) or []
+    if out_names:
+        out_names = list(out_names)
+        y = _as_list_by_outputs(y, output_names=out_names)
+        y_pred = _as_list_by_outputs(
+            y_pred,
+            output_names=out_names,
+        )
+
+    try:
+        return cl(
+            y,
+            y_pred,
+            sample_weight=sample_weight,
+            regularization_losses=regularization_losses,
+        )
+    except TypeError:
+        try:
+            return cl(
+                y,
+                y_pred,
+                regularization_losses=regularization_losses,
+            )
+        except TypeError:
+            return cl(y, y_pred)

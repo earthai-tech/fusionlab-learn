@@ -21,7 +21,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # or "3"
 # Disable oneDNN custom operations
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-from ._config import ( 
+from ..compat._config import ( 
     import_keras_dependencies, 
     check_keras_backend , 
     configure_dependencies, 

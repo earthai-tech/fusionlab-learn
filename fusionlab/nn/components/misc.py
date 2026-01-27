@@ -15,6 +15,7 @@ from ...utils.deps_utils import ensure_pkg
 from ._config import (
     Layer, Dense, Dropout,
     Tensor, TensorShape,
+    Constant, 
     activations,
     tf_autograph, 
     tf_cast, 
@@ -357,8 +358,189 @@ class PositionwiseFeedForward(Layer, NNLearner):
         return config
     
 @register_keras_serializable(
-    'fusionlab.nn.components', name='PositionalEncoding')
+    "fusionlab.nn.components",
+    name="PositionalEncoding",
+)
 class PositionalEncoding(Layer, NNLearner):
+    r"""
+    Sinusoidal positional encoding (Transformer-style).
+
+    This layer adds a deterministic (non-trainable) sinusoidal table to
+    the input sequence so the model can distinguish positions.
+
+    Key design goals (why this implementation looks “special”)
+    ----------------------------------------------------------
+    1) **Graph-scope safety**
+       We build the table with NumPy inside `build()` and store it as a
+       **non-trainable Keras weight** via `add_weight(...)`.
+
+       *Why:* tensors created with TF ops inside `build()` can end up
+       attached to a temporary FuncGraph during tracing. Later, when the
+       model is re-traced or used in a different graph context (fit,
+       SavedModel, etc.), those tensors can become “out of scope” and
+       crash. A Keras weight is a TF Variable and is safe across graphs.
+
+    2) **Serialization safety across Keras 2 and Keras 3**
+       Older saved checkpoints may have **no positional_encoding weight**
+       (legacy versions stored a plain tensor attribute).
+       This class tolerates that during load by overriding:
+         - `set_weights` (Keras 2 / H5-like paths)
+         - `load_own_variables` (Keras 3 object-based save paths)
+
+       If the weight is missing, we keep the freshly initialized constant.
+
+    Parameters
+    ----------
+    max_length : int, default=2048
+        Maximum sequence length supported by the precomputed table.
+
+    Notes
+    -----
+    The output shape matches the input: (B, T, D).
+    The `training` argument is accepted for API compatibility only.
+
+    References
+    ----------
+    Vaswani et al., 2017, "Attention is All You Need".
+    """
+
+    def __init__(self, max_length: int = 2048, **kwargs):
+        super().__init__(**kwargs)
+
+        # Max supported sequence length for the lookup table.
+        # Stored as a Python int so it is JSON-serializable in config.
+        self.max_length = int(max_length)
+
+        # Will become a non-trainable weight of shape (1, max_length, D).
+        # Keeping it as None until `build()` ensures we know D.
+        self.positional_encoding = None
+
+    def build(self, input_shape: TensorShape):
+        """
+        Create the fixed sinusoidal table once.
+
+        `input_shape` is expected to be (B, T, D).
+        We only require D (feature dimension) to build the table.
+        """
+        # Unpack shape; only feature_dim matters for the table.
+        _, _, feature_dim = input_shape
+
+        # D must be known at build time to allocate (1, max_length, D).
+        # If D is None, this layer cannot build a fixed table.
+        if feature_dim is None:
+            raise ValueError(
+                "The feature dimension of the input to "
+                "PositionalEncoding cannot be `None`."
+            )
+
+        # If Keras calls build multiple times, do not recreate the weight.
+        if self.positional_encoding is None:
+            d = int(feature_dim)
+
+            # ---------------------------------------------------------
+            # Build the sinusoidal table with NumPy (not TF ops).
+            #
+            # Why NumPy: avoids creating TF tensors inside `build()`
+            # that can be tied to a temporary FuncGraph during tracing.
+            # The result is then stored as a TF Variable via add_weight.
+            # ---------------------------------------------------------
+            pos = np.arange(self.max_length)[:, np.newaxis]  # (L, 1)
+            i = np.arange(d)[np.newaxis, :]                  # (1, D)
+
+            # rates[j] = 1 / 10000^(2*floor(j/2)/D)
+            rates = 1.0 / np.power(
+                10000.0,
+                (2 * (i // 2)) / np.float32(d),
+            )
+            angles = pos * rates  # (L, D)
+
+            # Interleave sin for even dims and cos for odd dims.
+            pe = np.zeros((self.max_length, d), dtype=np.float32)
+            pe[:, 0::2] = np.sin(angles[:, 0::2])
+            pe[:, 1::2] = np.cos(angles[:, 1::2])
+
+            # Add batch axis so broadcasting works: (1, L, D).
+            pe = pe[np.newaxis, :, :]
+
+            # ---------------------------------------------------------
+            # Store as a non-trainable weight:
+            # - a TF Variable (safe across graphs)
+            # - saved/restored by Keras serialization
+            # - excluded from optimizer updates
+            # ---------------------------------------------------------
+            self.positional_encoding = self.add_weight(
+                name="positional_encoding",
+                shape=pe.shape,
+                dtype=tf_float32,
+                initializer=Constant(pe),
+                trainable=False,
+            )
+
+        super().build(input_shape)
+
+    # -----------------------------------------------------------------
+    # Compatibility hooks (Keras 2 / Keras 3)
+    # -----------------------------------------------------------------
+    def set_weights(self, weights):
+        """
+        Keras 2 / H5-style loading hook.
+
+        Legacy checkpoints may provide an EMPTY list for this layer
+        (because old versions had no variables). If so, accept it and
+        keep the newly-initialized constant weight.
+        """
+        if not weights:
+            return
+        return super().set_weights(weights)
+
+    def load_own_variables(self, store):
+        """
+        Keras 3 object-based loading hook.
+
+        In Keras 3, variable loading may use an internal "store" dict.
+        Legacy saves might not include 'positional_encoding'. If missing,
+        do nothing and keep the initialized constant.
+        """
+        try:
+            if not store:
+                return
+            v = store.get("positional_encoding", None)
+            if v is None:
+                return
+            # Ensure the weight exists (build should have run).
+            if self.positional_encoding is not None:
+                self.positional_encoding.assign(v)
+        except Exception:
+            # Never fail deserialization for a deterministic constant.
+            return
+
+    def call(self, inputs: Tensor, training=False) -> Tensor:
+        """
+        Add positional encoding to the input.
+
+        inputs: (B, T, D)
+        returns: (B, T, D)
+        """
+        # Current sequence length T (dynamic at runtime).
+        seq_len = tf_shape(inputs)[1]
+
+        # Slice to the required length and broadcast across batch:
+        # (B, T, D) + (1, T, D) -> (B, T, D)
+        return inputs + self.positional_encoding[:, :seq_len, :]
+
+    def get_config(self) -> dict:
+        """
+        Keras serialization config.
+
+        Keep config minimal and JSON-serializable.
+        """
+        config = super().get_config()
+        config.update({"max_length": self.max_length})
+        return config
+
+@register_keras_serializable(
+    'fusionlab.nn.components', name='PositionalEncoding')
+class _PositionalEncoding(Layer, NNLearner):
     r"""Injects positional information into an input tensor.
 
     This layer adds a positional encoding to the input, allowing models
@@ -428,52 +610,124 @@ class PositionalEncoding(Layer, NNLearner):
         self.max_length = max_length
         self.positional_encoding = None
 
-    def build(self, input_shape: TensorShape):
-        """Pre-calculates the positional encoding matrix."""
-        # The input shape is (batch, sequence_length, feature_dim)
-        _, _, feature_dim = input_shape
+    # def build(self, input_shape: TensorShape):
+    #     """Pre-calculates the positional encoding matrix."""
+    #     # The input shape is (batch, sequence_length, feature_dim)
+    #     _, _, feature_dim = input_shape
         
+    #     if self.positional_encoding is None:
+    #         # The calculation is done once and stored.
+    #         # Ensure feature_dim is a concrete value for matrix creation.
+    #         if feature_dim is None:
+    #             raise ValueError(
+    #                 "The feature dimension of the input to "
+    #                 "PositionalEncoding cannot be `None`. Please "
+    #                 "ensure the input has a defined feature dimension."
+    #             )
+
+    #         # Cast to float for calculations
+    #         d_model = tf_cast(feature_dim, tf_float32)
+
+    #         # Create a matrix of positions (max_length, 1)
+    #         positions = tf_range(
+    #             self.max_length, dtype=tf_float32)[:, tf_newaxis]
+
+    #         # Create the division term for the sine/cosine functions
+    #         # Shape: (feature_dim / 2)
+    #         div_term = tf_exp(
+    #             tf_range(0, feature_dim, 2, dtype=tf_float32) * \
+    #             (-tf_log(10000.0) / d_model)
+    #         )
+
+    #         # Calculate sinusoidal values for even and odd indices
+    #         # Shape of each: (max_length, feature_dim / 2)
+    #         pe_sin = tf_sin(positions * div_term)
+    #         pe_cos = tf_cos(positions * div_term)
+
+    #         # Interleave sin and cos values to get final encoding
+    #         # Resulting shape: (max_length, feature_dim)
+    #         pe_interleaved = tf_reshape(
+    #             tf_stack([pe_sin, pe_cos], axis=-1),
+    #             shape=[self.max_length, feature_dim]
+    #         )
+
+    #         # Add an extra dimension for broadcasting across the batch
+    #         # Shape: (1, max_length, feature_dim)
+    #         self.positional_encoding = pe_interleaved[tf_newaxis, :, :]
+
+    #     super().build(input_shape)
+            
+    def build(self, input_shape: TensorShape):
+        # `input_shape` is expected to be (B, T, D).
+        # We only need the feature dimension D to
+        # construct the sinusoidal table.
+        _, _, feature_dim = input_shape
+    
+        # D must be concrete at build time because we
+        # allocate a fixed (1, max_length, D) tensor.
+        # If D is None, we cannot create the table.
+        if feature_dim is None:
+            raise ValueError(
+                "The feature dimension of the input to "
+                "PositionalEncoding cannot be `None`."
+            )
+    
+        # Cache: build the encoding only once even if
+        # `build()` is called multiple times.
         if self.positional_encoding is None:
-            # The calculation is done once and stored.
-            # Ensure feature_dim is a concrete value for matrix creation.
-            if feature_dim is None:
-                raise ValueError(
-                    "The feature dimension of the input to "
-                    "PositionalEncoding cannot be `None`. Please "
-                    "ensure the input has a defined feature dimension."
-                )
-
-            # Cast to float for calculations
-            d_model = tf_cast(feature_dim, tf_float32)
-
-            # Create a matrix of positions (max_length, 1)
-            positions = tf_range(
-                self.max_length, dtype=tf_float32)[:, tf_newaxis]
-
-            # Create the division term for the sine/cosine functions
-            # Shape: (feature_dim / 2)
-            div_term = tf_exp(
-                tf_range(0, feature_dim, 2, dtype=tf_float32) * \
-                (-tf_log(10000.0) / d_model)
+            # Convert to a Python int for NumPy ops.
+            d = int(feature_dim)
+    
+            # XXX IMPORTANT:
+            # Build in NumPy (not TF ops) to avoid creating
+            # graph-tensors during `build()`.
+            #
+            # Why: when the model is traced (tf.function /
+            # Keras training graph), TF tensors created in a
+            # different FuncGraph can later be "out of scope"
+            # and crash when reused.
+            pos = np.arange(self.max_length)[:, np.newaxis]
+            i = np.arange(d)[np.newaxis, :]
+    
+            # Compute angle rates:
+            # rate[j] = 1 / 10000^(2*floor(j/2)/d)
+            # Use float32 to keep the table compact and to
+            # match typical model dtype.
+            rates = 1.0 / np.power(
+                10000.0,
+                (2 * (i // 2)) / np.float32(d),
             )
-
-            # Calculate sinusoidal values for even and odd indices
-            # Shape of each: (max_length, feature_dim / 2)
-            pe_sin = tf_sin(positions * div_term)
-            pe_cos = tf_cos(positions * div_term)
-
-            # Interleave sin and cos values to get final encoding
-            # Resulting shape: (max_length, feature_dim)
-            pe_interleaved = tf_reshape(
-                tf_stack([pe_sin, pe_cos], axis=-1),
-                shape=[self.max_length, feature_dim]
+            angles = pos * rates
+    
+            # Interleave sin/cos:
+            # even dims -> sin, odd dims -> cos.
+            pe = np.zeros(
+                (self.max_length, d),
+                dtype=np.float32,
             )
-
-            # Add an extra dimension for broadcasting across the batch
-            # Shape: (1, max_length, feature_dim)
-            self.positional_encoding = pe_interleaved[tf_newaxis, :, :]
-
+            pe[:, 0::2] = np.sin(angles[:, 0::2])
+            pe[:, 1::2] = np.cos(angles[:, 1::2])
+    
+            # Add a leading batch axis so call() can do:
+            # inputs + pe[:, :seq_len, :]
+            # and broadcast across the batch dimension.
+            pe = pe[np.newaxis, :, :]  # (1, max_len, d)
+    
+            # Store as a non-trainable weight:
+            # - becomes a TF Variable (safe across graphs)
+            # - serialized with the layer/model
+            # - not updated by the optimizer
+            self.positional_encoding = self.add_weight(
+                name="positional_encoding",
+                shape=pe.shape,
+                dtype=tf_float32,
+                initializer=Constant(pe),
+                trainable=False,
+            )
+    
+        # Mark the layer as built for Keras bookkeeping.
         super().build(input_shape)
+
 
     def call(self, inputs: Tensor, training=False ) -> Tensor:
         r"""Adds positional encoding to the input tensor.

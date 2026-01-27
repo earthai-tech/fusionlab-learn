@@ -436,6 +436,11 @@ def gather_physics_payload(
     # ----------------------------- setup ---------------------------------
     taus, tau_priors, Ks, Sss, Hds, cons_vals = [], [], [], [], [], []
     Hs=[]
+    
+    # OPTIONAL: scaled residuals + scales
+    cons_vals_scaled = []
+    cons_scales = []
+
     # Progress reporting: use `len(dataset)` if available, else unknown total.
     try:
         total = max_batches if max_batches is not None else len(dataset)
@@ -468,6 +473,18 @@ def gather_physics_payload(
         H_t, _   = _pick(phys, "H", "H_field")    # base thickness (needed for bar mode)
         
         Rcons_t, _ = _pick(phys, "R_cons", "cons_res_vals")
+        # OPTIONAL
+        Rcons_s, _ = _pick(
+            phys,
+            "R_cons_scaled",
+            "cons_res_scaled",
+        )
+        cscale_t, _ = _pick(
+            phys,
+            "cons_scale",
+            "cons_res_scale",
+        )
+
         
         # optional: strict validation here (THIS is the right place)
         missing = [n for n, v in [
@@ -487,7 +504,7 @@ def gather_physics_payload(
         tau_priors.append(_to_1d(tp_t, dtype=float_dtype))
         Ks.append(_to_1d(K_t, dtype=float_dtype))
         Sss.append(_to_1d(Ss_t, dtype=float_dtype))
-        
+
         # store thicknesses robustly
         if Hd_t is not None:
             Hds.append(_to_1d(Hd_t, dtype=float_dtype))
@@ -503,7 +520,16 @@ def gather_physics_payload(
             Hs.append(_to_1d(H_t, dtype=float_dtype))
         
         cons_vals.append(_to_1d(Rcons_t, dtype=float_dtype))
-
+                
+        if Rcons_s is not None:
+            cons_vals_scaled.append(
+                _to_1d(Rcons_s, dtype=float_dtype)
+            )
+        if cscale_t is not None:
+            cons_scales.append(
+                _to_1d(cscale_t, dtype=float_dtype)
+            )
+            
         n_seen += 1
         if max_batches is not None and n_seen >= max_batches:
             break
@@ -520,7 +546,21 @@ def gather_physics_payload(
         "Hd": np.concatenate(Hds, axis=0),
         "cons_res_vals": np.concatenate(cons_vals, axis=0),
     }
-    payload["H"] = np.concatenate(Hs, axis=0)
+    # set H if it exists
+    if Hs:
+        payload["H"] = np.concatenate(Hs, axis=0)
+    
+    # OPTIONAL: save scaled residuals
+    if cons_vals_scaled:
+        payload["cons_res_scaled"] = np.concatenate(
+            cons_vals_scaled,
+            axis=0,
+        )
+    if cons_scales:
+        payload["cons_scale"] = np.concatenate(
+            cons_scales,
+            axis=0,
+        )
 
     # -------------------------- safe logs --------------------------------
     tau_clip = np.clip(payload["tau"], eps, None)
@@ -543,7 +583,14 @@ def gather_physics_payload(
         "eps_prior_rms": eps_prior_rms,
         "r2_logtau": r2_logtau,
     }
-
+    
+    # OPTIONAL: metrics for scaled residual
+    if "cons_res_scaled" in payload:
+        payload["metrics"]["eps_cons_scaled_rms"] = float(
+            np.sqrt(
+                np.mean(payload["cons_res_scaled"] ** 2)
+            )
+        )
     # ----------------- optional closure consistency check ----------------
     # If the model exposes a usable scalar kappa, recompute tau_closure from
     # (Hd, Ss, K) and compare to the reported tau_prior in log-space.
@@ -666,6 +713,14 @@ def save_physics_payload(
     )
     if "H" in payload:
         npz_kwargs["H"] = payload["H"]
+    
+    # OPTIONAL
+    if "cons_res_scaled" in payload:
+        npz_kwargs["cons_res_scaled"] = payload[
+            "cons_res_scaled"
+        ]
+    if "cons_scale" in payload:
+        npz_kwargs["cons_scale"] = payload["cons_scale"]
     
     if format.lower() == "npz":
         np.savez_compressed(path, **npz_kwargs)

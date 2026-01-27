@@ -17,9 +17,9 @@ from ...api.docs import _pinn_tuner_common_params
 from ...api.property import BaseClass
 from ...utils.generic_utils import vlog, rename_dict_keys  
 from ...utils.deps_utils import ensure_pkg
- 
+from ...compat._config  import Config
+
 from .. import KERAS_DEPS
-from .._config import Config 
 from . import KT_DEPS, HAS_KT
 
 HyperModel = KT_DEPS.HyperModel

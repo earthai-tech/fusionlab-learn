@@ -53,6 +53,7 @@ Layer = KERAS_DEPS.Layer
 Loss=KERAS_DEPS.Loss
 Tensor=KERAS_DEPS.Tensor
 Sequential =KERAS_DEPS.Sequential
+Constant = KERAS_DEPS.Constant 
 TensorShape =KERAS_DEPS.TensorShape 
 Reduction =KERAS_DEPS.Reduction 
 
@@ -89,7 +90,6 @@ tf_rank=KERAS_DEPS.rank
 tf_split = KERAS_DEPS.split
 tf_multiply=KERAS_DEPS.multiply
 tf_cond=KERAS_DEPS.cond
-tf_constant =KERAS_DEPS.constant 
 tf_equal =KERAS_DEPS.equal 
 tf_int32=KERAS_DEPS.int32 
 tf_debugging =KERAS_DEPS.debugging 

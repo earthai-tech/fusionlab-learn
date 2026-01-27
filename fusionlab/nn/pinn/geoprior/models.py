@@ -14,6 +14,7 @@ import numpy as np
 from ...._fusionlog import OncePerMessageFilter, fusionlog
 from ....api.docs import DocstringComponents, _halnet_core_params
 from ....compat.sklearn import Interval, StrOptions, validate_params
+from ....compat.keras import compute_loss 
 from ....params import (
     DisabledC,
     FixedC,
@@ -1915,11 +1916,48 @@ class GeoPriorSubsNet(BaseAttentive):
         # 0) Unpack + canonicalize targets
         # ------------------------------------------------------
         inputs, targets = data
+        
+        # XXX NOTE:
+        #   Historically we enforced:
+        #       targets = {k: targets[k] for k in self.output_names}
+        #   This is STRICT and will raise KeyError if any output head
+        #   (e.g. "gwl_pred") is intentionally *not supervised* during
+        #   warm-start transferability runs (stage5).
+        #
+        #   Warm-start may provide only {"subs_pred": ...} targets while
+        #   the model still exposes both outputs in self.output_names.
+        #   In that case, strict indexing crashes.
+        #
+        # FIX / FEATURE:
+        #   Introduce an opt-in "allow_missing_targets" flag (store-backed
+        #   via scaling_kwargs). When enabled, missing/None targets are
+        #   replaced *for loss only* with stop_gradient(y_pred) so the
+        #   corresponding head contributes ~0 supervised loss without
+        #   crashing. Metrics/add-on trackers MUST NOT see placeholders.
+        #
+        #   - Strict mode (default): missing targets => raise KeyError
+        #   - Warm mode: allow_missing_targets=True => warn once and continue
+        #
+        # TODO:
+        #   Consider adding a stage5 manifest/audit line that records which
+        #   heads were supervised vs. unsupervised during warm-start.
     
         targets = _canonicalize_targets(targets)
         targets = self._order_by_output_keys(targets)
-        targets = {k: targets[k] for k in self.output_names}
-    
+        
+        # targets = {k: targets[k] for k in self.output_names}
+        
+        # Keep output ordering stable but allow missing keys.
+        # (Missing or None => unsupervised head for this step.)
+        targets = {k: targets.get(k) for k in self.output_names}
+        
+        # "Real" targets are what metrics / add_on / logs should see.
+        # We drop unsupervised heads to avoid fake metrics.
+        targets_real = {
+            k: v for k, v in targets.items()
+            if v is not None
+        }    
+        
         dbg_step0_inputs_targets(
             verbose=self.verbose,
             inputs=inputs,
@@ -1954,25 +1992,63 @@ class GeoPriorSubsNet(BaseAttentive):
             terms_scaled = out["terms_scaled"]
     
             # Keep only supervised outputs (stable ordering)
+            # y_pred = {k: y_pred[k] for k in self.output_names}
+            # Keep only declared outputs (stable ordering)
             y_pred = {k: y_pred[k] for k in self.output_names}
-    
+            
             # --------------------------------------------------
             # 2) Data loss (compiled)
             # --------------------------------------------------
+            # targets_aligned = {
+            #     k: _align_true_for_loss(targets[k], y_pred[k])
+            #     for k in self.output_names
+            # }
+    
+            # yt_list = [targets_aligned[k] for k in self.output_names]
+            # yp_list = [y_pred[k] for k in self.output_names]
+    
+            # data_loss = self.compiled_loss(
+            #     yt_list,
+            #     yp_list,
+            #     regularization_losses=self.losses,
+            # )
+            
+            # --------------------------------------------------
+            # 2) Data loss (compiled)
+            # --------------------------------------------------
+            # XXX: OLD (STRICT) - crashes if a head target is missing:
+            # targets = {k: targets[k] for k in self.output_names}
+            #
+            # FIX: build "loss targets" that may include placeholders for
+            # missing/None heads when allow_missing_targets=True.
+            targets_loss = self._targets_for_loss(targets, y_pred)
+        
             targets_aligned = {
-                k: _align_true_for_loss(targets[k], y_pred[k])
+                k: _align_true_for_loss(targets_loss[k], y_pred[k])
                 for k in self.output_names
             }
-    
-            yt_list = [targets_aligned[k] for k in self.output_names]
-            yp_list = [y_pred[k] for k in self.output_names]
-    
-            data_loss = self.compiled_loss(
-                yt_list,
-                yp_list,
+        
+            # XXX IMPORT NOTE:
+                # This removes the deprecation warning because Keras 3 will use
+                # compute_loss, while Keras 2 will still work via compiled_loss.
+                
+            # yt_list = [targets_aligned[k] for k in self.output_names]
+            # yp_list = [y_pred[k] for k in self.output_names]
+        
+            # data_loss = self.compiled_loss(
+            #     yt_list,
+            #     yp_list,
+            #     regularization_losses=self.losses,
+            # )
+            data_loss = compute_loss(
+                self,
+                x=inputs,
+                y=targets_aligned,
+                y_pred=y_pred,
+                sample_weight=None,
+                training=True,
                 regularization_losses=self.losses,
             )
-    
             # --------------------------------------------------
             # 3) Total loss = data + physics
             # --------------------------------------------------
@@ -2030,9 +2106,15 @@ class GeoPriorSubsNet(BaseAttentive):
         # ------------------------------------------------------
         # 5) Add-on trackers
         # ------------------------------------------------------
+        # if self.add_on is not None:
+        #     self.add_on.update_state(targets, y_pred)
+        
+        #XXX IMPORTANT:
+        #   Use targets_real (no placeholders) so metrics reflect only
+        #   supervised heads. Otherwise we'd log misleadingly good stats.
+        
         if self.add_on is not None:
-            self.add_on.update_state(targets, y_pred)
-    
+            self.add_on.update_state(targets_real, y_pred)
         manual = None
         if self.add_on is not None:
             manual = self.add_on.as_dict
@@ -2040,15 +2122,61 @@ class GeoPriorSubsNet(BaseAttentive):
         # ------------------------------------------------------
         # 6) Return packed results (single path)
         # ------------------------------------------------------
+        # IMPORTANT:
+        #   pass targets_real to pack_step_results so compiled metric
+        #   updater only sees supervised heads (and won't crash on None)
+        
         return pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
-            targets=targets,
+            # targets=targets,
+            targets=targets_real,  # IMPORTANT
             y_pred=y_pred,
             manual_trackers=manual,
             physics=phys,
         )
+    
+    def _allow_missing_targets(self) -> bool:
+        sk = getattr(self, "scaling_kwargs", None) or {}
+        return bool(get_sk(
+            sk,
+            "allow_missing_targets",
+            default=False,
+        ))
+    
+    def _warn_missing_targets_once(self, missing) -> None:
+        if getattr(self, "_warned_missing_targets", False):
+            return
+        self._warned_missing_targets = True
+        logger.warning(
+            "Missing targets for outputs: %s. "
+            "Using stop_gradient(y_pred) as a "
+            "loss-only placeholder (head not "
+            "supervised).",
+            ", ".join(missing),
+        )
+    
+    def _targets_for_loss(self, targets, y_pred):
+        missing = [
+            k for k in self.output_names
+            if (k not in targets) or (targets[k] is None)
+        ]
+        if not missing:
+            return dict(targets)
+    
+        if not self._allow_missing_targets():
+            raise KeyError(
+                "Missing targets for outputs: "
+                + ", ".join(missing)
+            )
+    
+        self._warn_missing_targets_once(missing)
+    
+        t = dict(targets)
+        for k in missing:
+            t[k] = tf_stop_gradient(y_pred[k])
+        return t
 
     def test_step(self, data):
         r"""
@@ -2208,37 +2336,90 @@ class GeoPriorSubsNet(BaseAttentive):
         .. [2] Chollet, F. et al. Keras. 2015.
         """
 
+        # ------------------------------------------------------
+        # 0) Unpack + canonicalize targets
+        # ------------------------------------------------------
         inputs, targets = data
         targets = self._order_by_output_keys(_canonicalize_targets(targets))
-
-        # Forward pass (no optimizer / gradients applied)
+    
+        # ------------------------------------------------------
+        # 1) Forward pass (eval mode; no optimizer updates)
+        # ------------------------------------------------------
         y_pred_for_eval = self(inputs, training=False)
-
-        # safest: dict path (maps by output name)
-        targets = {k: targets[k] for k in self.output_names}
-
+    
+        # XXX NOTE (strict vs warm-start):
+        #   OLD behavior enforced strict supervision for *all* heads:
+        #
+        #       targets = {k: targets[k] for k in self.output_names}
+        #
+        #   This crashes in transfer warm-start if a head (e.g. "gwl_pred")
+        #   is intentionally not provided in the dataset targets.
+        #
+        #   New behavior:
+        #   - Keep stable output ordering but allow missing keys.
+        #   - Build two target views:
+        #       * targets_real: used for metrics / add_on / logging
+        #         (drop missing/None => avoids fake "perfect" metrics)
+        #       * targets_loss: used for compiled_loss only
+        #         (fill missing with stop_gradient(y_pred) if allowed)
+        #
+        #   Strict mode (default): missing => KeyError (debug-friendly)
+        #   Warm mode: scaling_kwargs["allow_missing_targets"]=True
+        #     => warn once and continue.
+    
+        # Keep output ordering stable but allow missing keys.
+        targets = {k: targets.get(k) for k in self.output_names}
+    
         # Force plain python dicts (avoid wrapper weirdness)
         y_pred_for_eval = {k: y_pred_for_eval[k] for k in self.output_names}
+    
+        # Real targets (metrics / add_on) => drop None (unsupervised heads)
+        targets_real = {
+            k: v for k, v in targets.items()
+            if v is not None
+        }
+    
+        # Loss targets => fill missing with stop_gradient if allowed
+        targets_loss = self._targets_for_loss(targets, y_pred_for_eval)
+    
+        # ------------------------------------------------------
+        # 2) Supervised loss (compiled) - always list-based
+        # ------------------------------------------------------
         targets_aligned = {
-            k: _align_true_for_loss(targets[k], y_pred_for_eval[k])
+            k: _align_true_for_loss(targets_loss[k], y_pred_for_eval[k])
             for k in self.output_names
         }
-        
-        # Always call compiled_loss with ordered lists (stable)
-        yt_list = [targets_aligned[k] for k in self.output_names]
-        yp_list = [y_pred_for_eval[k] for k in self.output_names]
-        
-        data_loss = self.compiled_loss(
-            yt_list, yp_list,
+    
+        # yt_list = [targets_aligned[k] for k in self.output_names]
+        # yp_list = [y_pred_for_eval[k] for k in self.output_names]
+    
+        # data_loss = self.compiled_loss(
+        #     yt_list,
+        #     yp_list,
+        #     regularization_losses=self.losses,
+        # )
+        data_loss = compute_loss(
+            self,
+            x=inputs,
+            y=targets_aligned,
+            y_pred=y_pred_for_eval,
+            sample_weight=None,
+            training=False,
             regularization_losses=self.losses,
         )
 
-        physics_bundle = None
-        
+        # ------------------------------------------------------
+        # 3) Optional add-on trackers (diagnostic only)
+        # ------------------------------------------------------
+        # XXX IMPORTANT: use targets_real (no placeholders) to avoid
+        # misleading metrics for unsupervised heads.
         if self.add_on is not None:
-            self.add_on.update_state(targets, y_pred_for_eval)
-
-        
+            self.add_on.update_state(targets_real, y_pred_for_eval)
+    
+        # ------------------------------------------------------
+        # 4) Optional physics diagnostics
+        # ------------------------------------------------------
+        physics_bundle = None
         if not self._physics_off():
             phys = self._evaluate_physics_on_batch(
                 inputs,
@@ -2248,12 +2429,17 @@ class GeoPriorSubsNet(BaseAttentive):
             total_loss = data_loss + phys["physics_loss_scaled"]
         else:
             total_loss = data_loss
-        
+    
+        # ------------------------------------------------------
+        # 5) Return packed results (stable logs)
+        # ------------------------------------------------------
+        # IMPORTANT: pass targets_real so compiled metric updater
+        # only sees supervised heads (dict-safe across Keras 2/3).
         return pack_step_results(
             self,
             total_loss=total_loss,
             data_loss=data_loss,
-            targets=targets,
+            targets=targets_real,  # IMPORTANT
             y_pred=y_pred_for_eval,
             manual_trackers=(
                 self.add_on.as_dict
@@ -2262,7 +2448,6 @@ class GeoPriorSubsNet(BaseAttentive):
             ),
             physics=physics_bundle,
         )
-
 
     def _evaluate_physics_on_batch(
         self,

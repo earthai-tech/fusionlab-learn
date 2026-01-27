@@ -27,6 +27,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import glob
 import joblib
 import datetime as dt
 from typing import Any, Dict, Tuple, Optional, TYPE_CHECKING
@@ -1532,78 +1533,435 @@ def infer_input_dims_from_X(X: dict) -> tuple[int, int, int]:
 
     return static_dim, dynamic_dim, future_dim
 
+def _extract_allowed_hps(
+    obj: object,
+    *,
+    allowed: set[str],
+) -> dict:
+    out: dict = {}
 
-def load_best_hps_near_model(model_path: str) -> dict:
+    def _walk(x: object) -> None:
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if isinstance(k, str) and k in allowed:
+                    out[k] = v
+                _walk(v)
+        elif isinstance(x, (list, tuple)):
+            for it in x:
+                _walk(it)
+
+    _walk(obj)
+    return {k: out[k] for k in allowed if k in out}
+
+def load_tuned_hps_near_model(
+    model_path: str,
+    *,
+    prefer: str = "keras",
+    required: bool = True,
+    log_fn=None,
+) -> dict:
+
+    log = log_fn if callable(log_fn) else None
+
+    def _msg(s: str) -> None:
+        if log is not None:
+            log(s)
+
+    def _load_json(p: str) -> dict:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    mp = os.path.abspath(str(model_path))
+    run_dir = mp if os.path.isdir(mp) else os.path.dirname(mp)
+    base = "" if os.path.isdir(mp) else os.path.basename(mp)
+
+    stem = None
+    if prefer == "keras":
+        if base.endswith("_best.keras"):
+            stem = base[: -len("_best.keras")]
+        elif base.endswith(".keras"):
+            stem = base[: -len(".keras")]
+    else:
+        if base.endswith("_best.weights.h5"):
+            stem = base[: -len("_best.weights.h5")]
+        elif base.endswith(".weights.h5"):
+            stem = base[: -len(".weights.h5")]
+
+    cands: list[str] = []
+    if stem:
+        cands.append(os.path.join(run_dir, stem + "_best_hps.json"))
+    cands.append(os.path.join(run_dir, "tuning_summary.json"))
+    cands.extend(glob.glob(os.path.join(run_dir, "*tuning_summary*.json")))
+
+    for p in cands:
+        if not os.path.exists(p):
+            continue
+        data = _load_json(p)
+        hps = data.get("best_hps") or data.get("hps") or {}
+        if isinstance(hps, dict) and hps:
+            _msg(f"[HP] tuned: {p}")
+            return hps
+
+    if required:
+        raise FileNotFoundError(
+            "No tuned hyperparameters found near:\n"
+            f"  model_path={model_path!r}\n"
+            f"  run_dir={run_dir!r}\n"
+        )
+    return {}
+
+def load_trained_hps_near_model(
+    model_path: str,
+    *,
+    allowed: set[str],
+    required: bool = False,
+    log_fn=None,
+) -> dict:
+
+    log = log_fn if callable(log_fn) else None
+
+    def _msg(s: str) -> None:
+        if log is not None:
+            log(s)
+
+    def _load_json(p: str) -> object:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    mp = os.path.abspath(str(model_path))
+    run_dir = mp if os.path.isdir(mp) else os.path.dirname(mp)
+
+    pats = [
+        os.path.join(run_dir, "model_init_manifest.json"),
+        os.path.join(run_dir, "*training_summary*.json"),
+        os.path.join(run_dir, "*architecture*.json"),
+    ]
+
+    files: list[str] = []
+    for pat in pats:
+        files.extend(glob.glob(pat))
+
+    for p in files:
+        if not os.path.exists(p):
+            continue
+        data = _load_json(p)
+        hps = _extract_allowed_hps(data, allowed=allowed)
+        if hps:
+            _msg(f"[HP] trained: {p}")
+            return hps
+
+    if required:
+        raise FileNotFoundError(
+            "No trained hyperparameters found near:\n"
+            f"  model_path={model_path!r}\n"
+            f"  run_dir={run_dir!r}\n"
+        )
+    return {}
+
+def load_hps_auto_near_model(
+    model_path: str,
+    *,
+    allowed: set[str],
+    prefer: str = "keras",
+    required: bool = False,
+    log_fn=None,
+) -> dict:
+
+    mp = os.path.abspath(str(model_path))
+    run_dir = mp if os.path.isdir(mp) else os.path.dirname(mp)
+
+    tuned_hits = []
+    tuned_hits.extend(
+        glob.glob(os.path.join(run_dir, "*_best_hps.json"))
+    )
+    tuned_hits.extend(
+        glob.glob(os.path.join(run_dir, "*tuning_summary*.json"))
+    )
+    is_tuned = bool(tuned_hits) or ("tuning" in run_dir)
+
+    if is_tuned:
+        return load_tuned_hps_near_model(
+            model_path,
+            prefer=prefer,
+            required=required,
+            log_fn=log_fn,
+        )
+
+    return load_trained_hps_near_model(
+        model_path,
+        allowed=allowed,
+        required=required,
+        log_fn=log_fn,
+    )
+
+def load_best_hps_near_model(
+    model_path: str,
+    *,
+    model_name: str | None = "GeoPriorSubsNet",
+    prefer: str = "keras",
+    log_fn=None,
+) -> dict:
     """
-    Locate and load tuned hyperparameters stored next to a tuned model.
+    Load best hyperparameters saved near a model artifact.
 
-    Search order inside the ``run_YYYYMMDD-HHMMSS`` directory containing
-    ``model_path``:
-
-    1. ``<city>_GeoPrior_best_hps.json``
-       (where ``<city>`` is inferred from the model filename
-       ``<city>_GeoPrior_best.keras``).
-    2. ``tuning_summary.json['best_hps']``
+    Supports model names like:
+    <city>_<model_name>_H{H}_best.keras
+    <city>_<model_name>_H{H}_best.weights.h5
 
     Parameters
     ----------
     model_path : str
-        Path to a tuned model, e.g.::
-
-            .../tuning/run_YYYYMMDD-HHMMSS/nansha_GeoPrior_best.keras
+        Path to a model file or its run directory.
+    model_name : str or None, default="GeoPriorSubsNet"
+        Model name token in filenames.
+    prefer : {"keras", "weights"}, default="keras"
+        Which artifact type to infer the prefix from.
+    log_fn : callable or None, default=None
+        Logger (e.g. print). None disables logs.
 
     Returns
     -------
     best_hps : dict
-        Dictionary of best hyperparameters.
+        Non-empty hyperparameter dictionary.
 
     Raises
     ------
     FileNotFoundError
-        If no hyperparameter JSON can be found.
+        If no hyperparameter JSON is found.
     ValueError
-        If a candidate JSON exists but does not contain hyperparameters.
+        If a candidate JSON exists but is empty/invalid.
     """
-    run_dir = os.path.dirname(os.path.abspath(model_path))
-    base = os.path.basename(model_path)
 
-    # Try to infer the city prefix from '<city>_GeoPrior_best.keras'
-    city_name = None
-    marker = "_GeoPrior_best"
-    if marker in base:
-        city_name = base.split(marker)[0]
+    log = log_fn if callable(log_fn) else None
 
-    # 1) Try explicit '<city>_GeoPrior_best_hps.json'
-    if city_name is not None:
-        hps_path = os.path.join(run_dir, f"{city_name}_GeoPrior_best_hps.json")
-        if os.path.exists(hps_path):
-            with open(hps_path, "r", encoding="utf-8") as f:
-                best_hps = json.load(f)
-            if isinstance(best_hps, dict) and best_hps:
-                print(f"[HP] Loaded best_hps from: {hps_path}")
-                return best_hps
-            raise ValueError(
-                f"File {hps_path!r} exists but does not contain a non-empty dict."
-            )
-
-    # 2) Try tuning_summary.json["best_hps"]
-    summary_path = os.path.join(run_dir, "tuning_summary.json")
-    if os.path.exists(summary_path):
-        with open(summary_path, "r", encoding="utf-8") as f:
-            summary = json.load(f)
-        best_hps = summary.get("best_hps", {})
-        if isinstance(best_hps, dict) and best_hps:
-            print(f"[HP] Loaded best_hps from: {summary_path}")
-            return best_hps
+    if prefer not in ("keras", "weights"):
         raise ValueError(
-            f"File {summary_path!r} exists but 'best_hps' is missing or empty."
+            "prefer must be 'keras' or 'weights'."
         )
 
-    raise FileNotFoundError(
-        f"Could not find best hyperparameters near model_path={model_path!r}.\n"
-        "Looked for '<city>_GeoPrior_best_hps.json' and 'tuning_summary.json'."
-    )
+    mp = os.path.abspath(str(model_path))
+    run_dir = mp if os.path.isdir(mp) else os.path.dirname(mp)
+    base = "" if os.path.isdir(mp) else os.path.basename(mp)
 
+    def _msg(s: str) -> None:
+        if log is not None:
+            log(s)
+
+    def _load_json(p: str) -> dict:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _newest(paths: list[str]) -> str | None:
+        c = []
+        for p in paths:
+            try:
+                c.append((os.path.getmtime(p), p))
+            except Exception:
+                pass
+        if not c:
+            return None
+        c.sort(reverse=True)
+        return c[0][1]
+
+    # -------------------------------------------------
+    # If a directory is provided, infer "base" by scan.
+    # -------------------------------------------------
+    if not base:
+        pats = []
+        if prefer == "keras":
+            if model_name:
+                pats.append(
+                    os.path.join(
+                        run_dir,
+                        f"*_{model_name}_H*_best.keras",
+                    )
+                )
+            pats.append(
+                os.path.join(run_dir, "*_H*_best.keras")
+            )
+            pats.append(
+                os.path.join(run_dir, "*_best.keras")
+            )
+        else:
+            if model_name:
+                pats.append(
+                    os.path.join(
+                        run_dir,
+                        f"*_{model_name}_H*_best.weights.h5",
+                    )
+                )
+            pats.append(
+                os.path.join(
+                    run_dir,
+                    "*_H*_best.weights.h5",
+                )
+            )
+            pats.append(
+                os.path.join(run_dir, "*_best.weights.h5")
+            )
+
+        hits = []
+        for pat in pats:
+            hits.extend(glob.glob(pat))
+        best = _newest(hits)
+        if best:
+            base = os.path.basename(best)
+
+    # -------------------------------------------------
+    # Infer stem/prefix from the artifact filename.
+    # -------------------------------------------------
+    stem = None
+    if prefer == "keras":
+        if base.endswith("_best.keras"):
+            stem = base[: -len("_best.keras")]
+        elif base.endswith(".keras"):
+            stem = base[: -len(".keras")]
+    else:
+        if base.endswith("_best.weights.h5"):
+            stem = base[: -len("_best.weights.h5")]
+        elif base.endswith(".weights.h5"):
+            stem = base[: -len(".weights.h5")]
+
+    # Try to parse city / model / horizon from stem.
+    city = None
+    mname = None
+    horizon = None
+    city_model = None
+
+    if stem:
+        left = stem
+        if "_H" in left:
+            a, b = left.rsplit("_H", 1)
+            digs = []
+            for ch in b:
+                if ch.isdigit():
+                    digs.append(ch)
+                else:
+                    break
+            if digs:
+                horizon = int("".join(digs))
+            left = a
+
+        city_model = left
+
+        if model_name:
+            tok = "_" + str(model_name)
+            if city_model.endswith(tok):
+                city = city_model[: -len(tok)]
+                mname = str(model_name)
+
+        if city is None:
+            parts = city_model.split("_")
+            if len(parts) >= 2:
+                city = parts[0]
+                mname = "_".join(parts[1:])
+
+    # -------------------------------------------------
+    # 1) Near-model explicit JSONs.
+    # -------------------------------------------------
+    cands = []
+    if stem:
+        cands.append(
+            os.path.join(run_dir, stem + "_best_hps.json")
+        )
+
+    if city and mname:
+        cands.append(
+            os.path.join(
+                run_dir,
+                f"{city}_{mname}_best_hps.json",
+            )
+        )
+        if horizon is not None:
+            cands.append(
+                os.path.join(
+                    run_dir,
+                    f"{city}_{mname}_H{horizon}_best_hps.json",
+                )
+            )
+
+    if city:
+        cands.append(
+            os.path.join(
+                run_dir,
+                f"{city}_{mname}_best_hps.json",
+            )
+        )
+
+    seen = set()
+    for p in cands:
+        if p in seen:
+            continue
+        seen.add(p)
+        if os.path.exists(p):
+            best_hps = _load_json(p)
+            if isinstance(best_hps, dict) and best_hps:
+                _msg(f"[HP] Loaded best_hps: {p}")
+                return best_hps
+            raise ValueError(
+                f"{p!r} exists but is empty/invalid."
+            )
+
+    # -------------------------------------------------
+    # 2) tuning summaries.
+    # -------------------------------------------------
+    sum_pats = [
+        os.path.join(run_dir, "tuning_summary.json"),
+        os.path.join(run_dir, "*tuning_summary*.json"),
+    ]
+    sums = []
+    for pat in sum_pats:
+        sums.extend(glob.glob(pat))
+    for p in sums:
+        if not os.path.exists(p):
+            continue
+        s = _load_json(p)
+        best_hps = s.get("best_hps") or s.get("hps") or {}
+        if isinstance(best_hps, dict) and best_hps:
+            _msg(f"[HP] Loaded best_hps: {p}")
+            return best_hps
+
+    # -------------------------------------------------
+    # 3) training summaries.
+    # -------------------------------------------------
+    for p in glob.glob(
+        os.path.join(run_dir, "*training_summary*.json")
+    ):
+        s = _load_json(p)
+        best_hps = (
+            s.get("best_hps")
+            or s.get("hps")
+            or s.get("params")
+            or {}
+        )
+        if isinstance(best_hps, dict) and best_hps:
+            _msg(f"[HP] Loaded best_hps: {p}")
+            return best_hps
+
+    # -------------------------------------------------
+    # 4) architecture dumps.
+    # -------------------------------------------------
+    for p in glob.glob(
+        os.path.join(run_dir, "*architecture*.json")
+    ):
+        a = _load_json(p)
+        best_hps = (
+            a.get("best_hps")
+            or a.get("hps")
+            or a.get("params")
+            or {}
+        )
+        if isinstance(best_hps, dict) and best_hps:
+            _msg(f"[HP] Loaded best_hps: {p}")
+            return best_hps
+
+    raise FileNotFoundError(
+        "Could not find best hyperparameters near:\n"
+        f"  model_path={model_path!r}\n"
+        f"  run_dir={run_dir!r}\n"
+        f"  prefer={prefer!r}\n"
+        "Looked for *_best_hps.json + summaries."
+    )
 
 def coerce_quantile_weights(
     d: dict | None,

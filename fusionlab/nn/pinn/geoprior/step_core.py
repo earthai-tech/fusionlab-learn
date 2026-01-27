@@ -478,8 +478,8 @@ def physics_core(
     t = coords[..., 0:1]
     dt_units = infer_dt_units_from_t(t, sk)
 
-    coords_norm = bool(get_sk(sk, "coords_normalized", False))
-    coords_deg = bool(get_sk(sk, "coords_in_degrees", False))
+    coords_norm = bool(get_sk(sk, "coords_normalized", default=False))
+    coords_deg = bool(get_sk(sk, "coords_in_degrees", default=False))
 
     dbg_step2_coords_checks(
         verbose=verbose,
@@ -692,7 +692,7 @@ def physics_core(
     # 6) Consolidation residual
     # ----------------------------------------------------------
     # dbg_step7_consolidation(...)
-    allow_resid = bool(get_sk(sk, "allow_subs_residual", False))
+    allow_resid = bool(get_sk(sk, "allow_subs_residual", default=False))
     cons_active = (
         hasattr(model, "pde_modes_active")
         and "consolidation" in getattr(
@@ -799,8 +799,8 @@ def physics_core(
         logSs=logSs,
         as_loss=True,
         step=step,
-        alpha_disp=float(get_sk(sk, "mv_alpha_disp", 0.1)),
-        delta=float(get_sk(sk, "mv_huber_delta", 1.0)),
+        alpha_disp=float(get_sk(sk, "mv_alpha_disp",default= 0.1)),
+        delta=float(get_sk(sk, "mv_huber_delta", default=1.0)),
         verbose=verbose,
     )
 

@@ -634,7 +634,7 @@ CLIP_GLOBAL_NORM = 5.0
 # ===================================================================
 # 7) TRAINING LOOP DEFAULTS (non-tuner runs)
 # ===================================================================
-EPOCHS = 3 # 100           # Recommended: 50 to 200
+EPOCHS = 1 # 100           # Recommended: 50 to 200
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-3   # Slightly higher start, let Adam decay it
 
@@ -667,7 +667,7 @@ USE_TF_SAVEDMODEL = False  # Set to False to use the default weight-based saving
 # 9) MODEL LOADING / DEBUGGING CONFIGURATION
 # ===================================================================
 # If True, load the model directly into memory rather than from disk.
-USE_IN_MEMORY_MODEL = True  # Change to True for in-memory usage
+USE_IN_MEMORY_MODEL = False # True  # Change to True for in-memory usage
 
 # If True, enable debug information during training and evaluation.
 DEBUG = False  # Enable or disable debugging

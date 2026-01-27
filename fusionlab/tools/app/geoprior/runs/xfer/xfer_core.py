@@ -78,6 +78,7 @@ from .xfer_utils import (
 from .xfer_utils import _load_scalers as _ls
 from .xfer_utils import _get_scaler as _gs
 from .xfer_utils import _transform_with_scaler as _ts
+from .xfer_utils import best_model_artifact
     
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 tf.get_logger().setLevel("ERROR")
@@ -240,7 +241,7 @@ def _load_source_model(
     if not run_dir:
         raise SystemExit("Missing M_src.paths.run_dir")
 
-    from .xfer_utils import best_model_artifact
+    
 
     best = best_model_artifact(run_dir, prefer_tuned=prefer_tuned)
     if not best:
@@ -286,7 +287,7 @@ def _load_source_model(
         out_g_dim=out_g,
         mode=cfg_mode(dict(M_src.get("config") or {})),
         horizon=horizon,
-        prefer_full_model=False,
+        prefer_full_model=True,
     )
 
     model_pred = model

@@ -120,7 +120,7 @@ def import_keras_dependencies(
 
     # Prioritize TensorFlow as the primary backend
     if importlib.util.find_spec("tensorflow"):
-        from ..compat.tf import KerasDependencies
+        from .tf import KerasDependencies
         return KerasDependencies(extra_msg, error)
 
     # If TensorFlow is not found, check for standalone Keras as a fallback
@@ -131,7 +131,7 @@ def import_keras_dependencies(
             stacklevel=2
         )
         # Still return the real dependency loader, which should handle this
-        from ..compat.tf import KerasDependencies
+        from .tf import KerasDependencies
         return KerasDependencies(
              extra_msg=extra_msg, error = error 
          )

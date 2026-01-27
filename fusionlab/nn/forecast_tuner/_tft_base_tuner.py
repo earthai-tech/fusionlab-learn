@@ -24,6 +24,7 @@ import numpy as np
 
 from ...api.docs import DocstringComponents, _tuner_common_params
 from ...api.summary import ResultSummary
+from ...compat._config  import Config
 from ...compat.sklearn import validate_params, Interval
 from ...core.checks import (
     check_params,
@@ -35,7 +36,6 @@ from ...utils.validator import validate_positive_integer
 
 from .._tensor_validation import validate_model_inputs
 from .. import KERAS_DEPS
-from .._config  import Config
 from ..losses import combined_quantile_loss
 
 from . import KT_DEPS, HAS_KT

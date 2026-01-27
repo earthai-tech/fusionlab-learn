@@ -24,15 +24,12 @@ import datetime as dt
 import glob
 import json
 import os
-from typing import Any, Dict, List, Optional, Tuple, Callable
-
+from typing import Any, Dict, List, Optional, Tuple, Callable, Mapping 
+from pathlib import Path
 import joblib
 import numpy as np
 import tensorflow as tf
 
-from fusionlab.registry.utils import (
-    _find_stage1_manifest,
-)
 from fusionlab.utils.generic_utils import (
     ensure_directory_exists,
 )
@@ -40,6 +37,7 @@ from fusionlab.utils.scale_metrics import (
     inverse_scale_target,
     per_horizon_metrics,
     point_metrics,
+    scale_target, 
 )
 from fusionlab.utils.forecast_utils import (
     format_and_forecast,
@@ -47,9 +45,12 @@ from fusionlab.utils.forecast_utils import (
 from fusionlab.utils.nat_utils import (
     ensure_input_shapes,
     extract_preds,
-    load_best_hps_near_model,
     map_targets_for_training,
     sanitize_inputs_np,
+    load_tuned_hps_near_model, 
+    load_trained_hps_near_model, 
+    load_hps_auto_near_model, 
+    load_scaler_info
 )
 from fusionlab.nn.keras_metrics import (
     coverage80_fn,
@@ -67,6 +68,15 @@ from fusionlab.compat.keras import (
 from fusionlab.nn.pinn.geoprior.models import (
     GeoPriorSubsNet,
 )
+from fusionlab.compat.keras_fit import (
+    suppress_compiled_metrics_warning,
+)
+
+from fusionlab._optdeps import with_progress
+from fusionlab.utils.generic_utils import vlog
+from fusionlab.utils.xfer_utils import load_stage1_bundle
+from fusionlab.utils.xfer_utils import resolve_artifact_path
+
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 tf.get_logger().setLevel("ERROR")
@@ -137,6 +147,82 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Override quantiles (else read manifest)."
+        ),
+    )
+    p.add_argument(
+        "--model-name",
+        default="GeoPriorSubsNet",
+        help=(
+            "Model name token used in filenames, e.g. "
+            "'GeoPriorSubsNet' in "
+            "<city>_GeoPriorSubsNet_H3_best.keras."
+        ),
+    )
+    p.add_argument(
+        "--source-model",
+        default="auto",
+        choices=["auto", "tuned", "trained"],
+        help=(
+            "Which Stage-1 source model to use. "
+            "auto: prefer tuned if available, else trained."
+        ),
+    )
+    p.add_argument(
+        "--source-load",
+        default="auto",
+        choices=["auto", "full", "weights"],
+        help=(
+            "How to load the source model. "
+            "full: load full .keras, "
+            "weights: rebuild + load weights, "
+            "auto: try full then fallback to weights."
+        ),
+    )
+    p.add_argument(
+        "--hps-mode",
+        default="auto",
+        choices=["auto", "tuned", "trained"],
+        help=(
+            "Where to load hyperparameters from when "
+            "weights fallback is needed."
+        ),
+    )
+    p.add_argument(
+        "--prefer-artifact",
+        default="keras",
+        choices=["keras", "weights"],
+        help=(
+            "Which artifact to prefer when searching "
+            "for best model under run dirs."
+        ),
+    )
+    p.add_argument(
+        "--verbose",
+        type=int,
+        default=2,
+        help=(
+            "Verbosity: 0=silent, "
+            "1..3=info, 4..5=debug, "
+            "6..7=trace."
+        ),
+    )
+    p.add_argument(
+        "--progress",
+        default="auto",
+        choices=["auto", "off", "log"],
+        help=(
+            "Progress mode: "
+            "auto=bar in terminal, "
+            "log=redirect tqdm to log_fn, "
+            "off=disable."
+        ),
+    )
+    p.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help=(
+            "Continue other jobs even "
+            "if one job fails."
         ),
     )
 
@@ -210,25 +296,108 @@ def parse_args() -> argparse.Namespace:
 
     return args
 
+def _make_sink(args):
+    if args.log == "none" or int(args.verbose) < 1:
+        return (lambda *_a, **_k: None)
+    return print
 
-def _load_manifest_for_city(
-    city: str,
-    results_dir: str,
-) -> Dict[str, Any]:
-    mpath = _find_stage1_manifest(
-        manual=None,
-        base_dir=results_dir,
-        city_hint=city,
-        model_hint=os.getenv(
-            "MODEL_NAME_OVERRIDE",
-            "GeoPriorSubsNet",
-        ),
-        prefer="timestamp",
-        required_keys=("model", "stage"),
-        verbose=0,
-    )
-    with open(mpath, "r", encoding="utf-8") as f:
-        return json.load(f)
+
+def _mklog(args, sink):
+    def _log(msg, *, level=3, depth="auto"):
+        vlog(
+            str(msg),
+            verbose=int(args.verbose),
+            level=int(level),
+            depth=depth,
+            mode="naive",
+            vp=False,
+            logger=sink,
+        )
+    return _log
+
+
+def _keras_verbose(v: int) -> int:
+    v = int(v)
+    if v >= 6:
+        return 2
+    if v >= 4:
+        return 1
+    return 0
+
+def _build_jobs(
+    args: argparse.Namespace,
+    directions: List[Tuple[str, Any, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Build Stage-5 jobs.
+
+    Contract per job:
+    - tag, src_b, tgt_b
+    - split, rm, cm, strict
+    - kind: one|warm
+    - strategy: baseline|xfer|warm
+    """
+    jobs: List[Dict[str, Any]] = []
+
+    want_baseline = "baseline" in (args.strategies or [])
+    want_xfer = "xfer" in (args.strategies or [])
+    want_warm = "warm" in (args.strategies or [])
+
+    for tag, src_b, tgt_b in directions:
+        is_base_dir = tag in ("A_to_A", "B_to_B")
+
+        for split in (args.splits or []):
+            for cm in (args.calib_modes or []):
+                for rm in (args.rescale_modes or []):
+                    strict = bool(rm == "strict")
+
+                    if is_base_dir and want_baseline:
+                        jobs.append(
+                            dict(
+                                kind="one",
+                                strategy="baseline",
+                                tag=tag,
+                                src_b=src_b,
+                                tgt_b=tgt_b,
+                                split=split,
+                                cm=cm,
+                                rm=rm,
+                                strict=strict,
+                            )
+                        )
+
+                    if (not is_base_dir) and want_xfer:
+                        jobs.append(
+                            dict(
+                                kind="one",
+                                strategy="xfer",
+                                tag=tag,
+                                src_b=src_b,
+                                tgt_b=tgt_b,
+                                split=split,
+                                cm=cm,
+                                rm=rm,
+                                strict=strict,
+                            )
+                        )
+
+                    if (not is_base_dir) and want_warm:
+                        jobs.append(
+                            dict(
+                                kind="warm",
+                                strategy="warm",
+                                tag=tag,
+                                src_b=src_b,
+                                tgt_b=tgt_b,
+                                split=split,
+                                cm=cm,
+                                rm=rm,
+                                strict=strict,
+                            )
+                        )
+
+    return jobs
+
 
 
 def _best_model_artifact(run_dir: str) -> str | None:
@@ -256,33 +425,64 @@ def _resolve_bundle_paths(model_path: str) -> Dict[str, Any]:
 
     tf_dir = None
     keras_path = None
+    weights_path = None
     prefix = None
 
     if os.path.isdir(mp) and mp.endswith("_best_savedmodel"):
         tf_dir = mp
         prefix = mp[: -len("_best_savedmodel")]
         keras_path = prefix + "_best.keras"
+        cand_w = prefix + "_best.weights.h5"
+        weights_path = cand_w if os.path.isfile(cand_w) else None
+
     else:
-        keras_path = mp
-        if keras_path.endswith("_best.keras"):
-            prefix = keras_path[: -len("_best.keras")]
-        elif keras_path.endswith(".keras"):
-            prefix = keras_path[: -len(".keras")]
+        base = os.path.basename(mp)
+
+        # --- case A: weights file passed in ---
+        if base.endswith("_best.weights.h5"):
+            weights_path = mp
+            prefix = mp[: -len("_best.weights.h5")]
+            cand_k = prefix + "_best.keras"
+            keras_path = cand_k if os.path.isfile(cand_k) else None
+
+        elif base.endswith(".weights.h5"):
+            weights_path = mp
+            prefix = mp[: -len(".weights.h5")]
+            cand_k1 = prefix + "_best.keras"
+            cand_k2 = prefix + ".keras"
+            if os.path.isfile(cand_k1):
+                keras_path = cand_k1
+            elif os.path.isfile(cand_k2):
+                keras_path = cand_k2
+            else:
+                keras_path = None
+
+        # --- case B: keras file passed in ---
         else:
-            prefix = os.path.join(run_dir, "model")
+            keras_path = mp
+            if keras_path.endswith("_best.keras"):
+                prefix = keras_path[: -len("_best.keras")]
+            elif keras_path.endswith(".keras"):
+                prefix = keras_path[: -len(".keras")]
+            else:
+                prefix = os.path.join(run_dir, "model")
 
-        cand = prefix + "_best_savedmodel"
-        if os.path.isdir(cand):
-            tf_dir = cand
+            cand_w1 = prefix + "_best.weights.h5"
+            cand_w2 = prefix + ".weights.h5"
+            if os.path.isfile(cand_w1):
+                weights_path = cand_w1
+            elif os.path.isfile(cand_w2):
+                weights_path = cand_w2
+            else:
+                weights_path = None
 
-    weights_path = prefix + "_best.weights.h5"
-    if not os.path.isfile(weights_path):
-        weights_path = None
+        # savedmodel near prefix
+        if prefix:
+            cand_tf = prefix + "_best_savedmodel"
+            if os.path.isdir(cand_tf):
+                tf_dir = cand_tf
 
-    init_path = os.path.join(
-        run_dir,
-        "model_init_manifest.json",
-    )
+    init_path = os.path.join(run_dir, "model_init_manifest.json")
 
     return {
         "run_dir": run_dir,
@@ -293,6 +493,7 @@ def _resolve_bundle_paths(model_path: str) -> Dict[str, Any]:
     }
 
 
+
 def _load_json(path: str) -> Dict[str, Any]:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -301,67 +502,11 @@ def _load_json(path: str) -> Dict[str, Any]:
         return {}
 
 
-def _load_scalers(
-    enc: Dict[str, Any],
-) -> Tuple[Any, Any]:
-    coord_scaler = None
-    cs_path = enc.get("coord_scaler")
-    if cs_path and os.path.exists(cs_path):
-        try:
-            coord_scaler = joblib.load(cs_path)
-        except Exception:
-            coord_scaler = None
-
-    scaler_info = enc.get("scaler_info")
-    if (
-        isinstance(scaler_info, str)
-        and os.path.exists(scaler_info)
-    ):
-        try:
-            scaler_info = joblib.load(scaler_info)
-        except Exception:
-            scaler_info = None
-
-    if isinstance(scaler_info, dict):
-        for _, v in scaler_info.items():
-            if not isinstance(v, dict):
-                continue
-            if "scaler" in v:
-                continue
-            p = v.get("scaler_path")
-            if p and os.path.exists(p):
-                try:
-                    v["scaler"] = joblib.load(p)
-                except Exception:
-                    pass
-
-    return coord_scaler, scaler_info
-
-
-def _get_scaler(
-    scaler_info: Any,
-    name: str,
-) -> Any:
-    if not isinstance(scaler_info, dict):
+def _safe_load(path: str) -> Any:
+    try:
+        return joblib.load(path)
+    except Exception:
         return None
-    blk = scaler_info.get(name)
-    if not isinstance(blk, dict):
-        return None
-    return blk.get("scaler")
-
-
-def _transform_with_scaler(
-    scaler: Any,
-    arr: np.ndarray,
-) -> np.ndarray:
-    if scaler is None:
-        return arr
-    a = np.asarray(arr)
-    shp = a.shape
-    last = int(shp[-1]) if shp else 1
-    flat = a.reshape(-1, last)
-    out = scaler.transform(flat)
-    return out.reshape(shp).astype(np.float32)
 
 
 def _ensure_np_inputs(
@@ -576,9 +721,18 @@ def _check_transfer_schema(
         log_fn=log_fn,
     )
 
+    # s_tgt = int(X_tgt["static_features"].shape[-1])
+    # d_tgt = int(X_tgt["dynamic_features"].shape[-1])
+    # f_tgt = int(X_tgt["future_features"].shape[-1])
+    
     s_tgt = int(X_tgt["static_features"].shape[-1])
     d_tgt = int(X_tgt["dynamic_features"].shape[-1])
-    f_tgt = int(X_tgt["future_features"].shape[-1])
+    
+    fk = _future_key(X_tgt)
+    if fk is None:
+        f_tgt = 0
+    else:
+        f_tgt = int(np.asarray(X_tgt[fk]).shape[-1])
 
     if s_src != s_tgt:
         raise SystemExit(
@@ -680,9 +834,21 @@ def _check_transfer_schema(
             "source order (by name)."
         )
 
+        fk = _future_key(X_tgt)
+        if fk is None:
+            _raise_schema_error(
+                kind="future",
+                src_city=src_city,
+                tgt_city=tgt_city,
+                expected_dim=f_src,
+                got_dim=0,
+                src_feats=fut_src,
+                tgt_feats=[],
+            )
+        
         X_tgt = dict(X_tgt)
-        X_tgt["future_features"] = _reorder_last_dim(
-            X_tgt["future_features"],
+        X_tgt[fk] = _reorder_last_dim(
+            X_tgt[fk],
             src_feats=fut_src,
             tgt_feats=fut_tgt,
         )
@@ -770,47 +936,198 @@ def _infer_input_dims(
     return int(s_dim or 0), int(d_dim or 0), int(f_dim or 0)
 
 
+def _scaled_ml_numeric_cols(
+    M: Mapping[str, Any],
+) -> list[str]:
+    enc = (M.get("artifacts") or {}).get("encoders") or {}
+    cols = enc.get("scaled_ml_numeric_cols") or []
+    out: list[str] = []
+    for c in cols:
+        if isinstance(c, str) and c.strip():
+            out.append(c)
+    return out
+
+
+def _index_map(names: list[str]) -> dict[str, int]:
+    return {str(n): int(i) for i, n in enumerate(names)}
+
+
+def _future_key(X: Mapping[str, Any]) -> str | None:
+    if "future_known_features" in X:
+        return "future_known_features"
+    if "future_features" in X:
+        return "future_features"
+    return None
+
+def _safe_inverse_y(arr, ysi, key, log=None):
+    if not isinstance(ysi, Mapping) or not ysi:
+        if log:
+            log(f"[stage5] NOTE: no y_scaler_info; "
+                f"assuming {key} already physical.")
+        return np.asarray(arr, np.float32)
+
+    ent = ysi.get(key)
+    if not isinstance(ent, Mapping) or not ent:
+        if log:
+            log(f"[stage5] NOTE: missing y scaler entry "
+                f"for {key!r}; identity.")
+        return np.asarray(arr, np.float32)
+
+    params = ent.get("params") if isinstance(ent, Mapping) else None
+    return inverse_scale_target(
+        np.asarray(arr, np.float32),
+        scaler_entry=ent,
+        target_name=key,
+        params=params,
+    )
+
+
+def _can_inverse(ysi: Any, key: str) -> bool:
+    if not isinstance(ysi, Mapping) or not ysi:
+        return False
+    ent = ysi.get(key)
+    if not isinstance(ent, Mapping) or not ent:
+        return False
+
+    # 1) Params-based scaling is valid
+    p = ent.get("params")
+    if isinstance(p, Mapping):
+        keys = set(p.keys())
+        if {"min", "max"} <= keys:
+            return True
+        if {"mean", "std"} <= keys:
+            return True
+        if {"scale", "shift"} <= keys:
+            return True
+
+    # 2) Scaler-based scaling is valid
+    sc = ent.get("scaler", None)
+    if sc is not None and hasattr(sc, "inverse_transform"):
+        return True
+
+    # 3) scaler_path is also valid (if your hydration loads it later)
+    sp = ent.get("scaler_path", None)
+    if isinstance(sp, str) and sp.strip():
+        return True
+
+    return False
+
+
+
+def _safe_scale_y(arr_phys, ysi, key, log=None):
+    if not isinstance(ysi, Mapping) or not ysi:
+        return np.asarray(arr_phys, np.float32)
+
+    ent = ysi.get(key)
+    if not isinstance(ent, Mapping) or not ent:
+        return np.asarray(arr_phys, np.float32)
+
+    params = ent.get("params") if isinstance(ent, Mapping) else None
+    return scale_target(
+        np.asarray(arr_phys, np.float32),
+        scaler_entry=ent,
+        target_name=key,
+        params=params,
+    )
+
+
+
 def _reproject_dynamic_to_source(
-    X_tgt: Dict[str, Any],
-    M_src: Dict[str, Any],
-    M_tgt: Dict[str, Any],
-) -> Dict[str, Any]:
-    enc_s = M_src["artifacts"]["encoders"]
-    enc_t = M_tgt["artifacts"]["encoders"]
+    X_tgt: dict,
+    src_b: Any,
+    tgt_b: Any,
+    *,
+    log_fn: Optional[Callable[[str], Any]] = None,
+) -> dict:
+    """
+    Strict transfer:
+    target scaled -> physical -> source scaled,
+    but ONLY for scaled_ml_numeric_cols.
 
-    _, sc_s = _load_scalers(enc_s)
-    _, sc_t = _load_scalers(enc_t)
+    Avoids multi-feature scaler shape errors by using
+    scaler_entry idx/all_features via inverse_scale_target.
+    """
+    log = log_fn if callable(log_fn) else (lambda *_: None)
 
-    if (
-        not isinstance(sc_s, dict)
-        or not isinstance(sc_t, dict)
-    ):
+    # M_s = src_b.manifest
+    M_t = tgt_b.manifest
+
+    si_s = _bundle_scaler_info(src_b)
+    si_t = _bundle_scaler_info(tgt_b)
+    
+    if not si_s or not si_t:
         return X_tgt
 
-    dyn_names = _feature_list(M_tgt, "dynamic")
-    if not dyn_names:
+    scaled_cols = _scaled_ml_numeric_cols(M_t)
+    if not scaled_cols:
         return X_tgt
+
+    dyn_names = _feature_list(M_t, "dynamic") or []
+    fut_names = _feature_list(M_t, "future") or []
+
+    dyn_map = _index_map(dyn_names)
+    fut_map = _index_map(fut_names)
 
     X = dict(X_tgt)
-    dyn = np.asarray(X["dynamic_features"]).astype(np.float32)
-    dyn2 = np.array(dyn, copy=True)
 
-    for j, name in enumerate(dyn_names):
-        s_t = _get_scaler(sc_t, name)
-        s_s = _get_scaler(sc_s, name)
-        if s_t is None or s_s is None:
-            continue
-        col = dyn[:, :, j:j + 1]
-        phys = s_t.inverse_transform(col.reshape(-1, 1))
-        phys = phys.reshape(col.shape).astype(np.float32)
-        dyn2[:, :, j:j + 1] = _transform_with_scaler(
-            s_s,
-            phys,
+    def _apply_one(
+        arr_key: str,
+        j: int,
+        name: str,
+    ) -> None:
+        arr = np.asarray(X[arr_key], np.float32)
+        arr2 = np.array(arr, copy=True)
+
+        e_t = si_t.get(name)
+        e_s = si_s.get(name)
+
+        if not isinstance(e_t, Mapping):
+            return
+        if not isinstance(e_s, Mapping):
+            return
+
+        col = arr[:, :, j : j + 1]
+        
+
+        phys = inverse_scale_target(
+            col,
+            scaler_entry=e_t,
+            target_name=name,
         )
 
-    X["dynamic_features"] = dyn2
-    return X
+        col_s = scale_target(
+            phys,
+            scaler_entry=e_s,
+            target_name=name,
+        )
 
+        arr2[:, :, j : j + 1] = col_s.astype(np.float32)
+        X[arr_key] = arr2
+
+    touched: list[str] = []
+
+    for name in scaled_cols:
+        if name in dyn_map and "dynamic_features" in X:
+            _apply_one(
+                "dynamic_features",
+                dyn_map[name],
+                name,
+            )
+            touched.append(f"dyn:{name}")
+
+        fk = _future_key(X)
+        if fk and name in fut_map:
+            _apply_one(
+                fk,
+                fut_map[name],
+                name,
+            )
+            touched.append(f"fut:{name}")
+
+    if touched:
+        log("[stage5] strict reproj: " + ", ".join(touched))
+
+    return X
 
 def _load_calibrator_near(
     run_dir: str,
@@ -851,6 +1168,7 @@ def _build_geoprior_builder(
     horizon: int,
     quantiles: List[float] | None,
     best_hps: Dict[str, Any],
+    manifest: Dict[str, Any] | None = None
 ) -> Any:
     cfg = dict(M_src.get("config") or {})
 
@@ -869,14 +1187,14 @@ def _build_geoprior_builder(
         mode=cfg.get("MODE", "tft_like"),
         pde_mode=cfg.get(
             "PDE_MODE_CONFIG",
-            cfg.get("PDE_MODE", "basic"),
+            cfg.get("PDE_MODE", "both"),
         ),
         bounds_mode=cfg.get("BOUNDS_MODE", "soft"),
         residual_method=cfg.get(
             "RESIDUAL_METHOD",
-            "autodiff",
+            "exact",
         ),
-        time_units=cfg.get("TIME_UNITS", "years"),
+        time_units=cfg.get("TIME_UNITS", "year"),
         scale_pde_residuals=cfg.get(
             "SCALE_PDE_RESIDUALS",
             True,
@@ -903,7 +1221,7 @@ def _build_geoprior_builder(
     }
     hps = {k: v for k, v in best_hps.items() if k in allowed}
 
-    def _builder() -> GeoPriorSubsNet:
+    def _builder(_manifest: Dict[str, Any] | None = None) -> GeoPriorSubsNet:
         params = dict(fixed)
         params.update(hps)
         return GeoPriorSubsNet(**params)
@@ -912,69 +1230,274 @@ def _build_geoprior_builder(
 
 
 def _load_source_model(
-    M_src: Dict[str, Any],
+    src_b: Any,
     X_sample: Dict[str, Any],
     quantiles: List[float] | None,
+    *,
+    model_pick: str = "auto",
+    load_mode: str = "auto",
+    hps_pick: str = "auto",
+    model_name: str = "GeoPriorSubsNet",
+    prefer_artifact: str = "keras",
+    log_fn: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[Any, Any, Dict[str, Any]]:
-    run_dir = M_src["paths"]["run_dir"]
-    best = _best_model_artifact(run_dir)
+    """
+    Load the "source" model from the source Stage-1 bundle.
+
+    Parameters
+    ----------
+    src_b:
+        Stage-1 bundle for the source city. Must expose:
+        - src_b.manifest (dict)
+        - src_b.run_dir (str): training run dir
+    X_sample:
+        One target-like batch used for building inputs if weights
+        fallback is required.
+    quantiles:
+        Quantiles for quantile heads. If None, builder uses cfg.
+    model_pick:
+        auto|tuned|trained. Where to search first.
+    load_mode:
+        auto|full|weights. How to load.
+    hps_pick:
+        auto|tuned|trained. Where to pull hyperparams if needed.
+    model_name:
+        Token used in filename patterns.
+    prefer_artifact:
+        keras|weights. Which artifact type to prefer.
+    """
+    log = log_fn if callable(log_fn) else print
+
+    if model_pick not in ("auto", "tuned", "trained"):
+        raise ValueError("model_pick is invalid.")
+    if load_mode not in ("auto", "full", "weights"):
+        raise ValueError("load_mode is invalid.")
+    if hps_pick not in ("auto", "tuned", "trained"):
+        raise ValueError("hps_pick is invalid.")
+    if prefer_artifact not in ("keras", "weights"):
+        raise ValueError("prefer_artifact is invalid.")
+
+    M_src = src_b.manifest
+
+    run_dir = str(getattr(src_b, "run_dir", ""))
+    if not run_dir:
+        raise ValueError("src_b.run_dir is missing.")
+
+    # stage1_root: parent dir containing training/tuning
+    stage1_root = os.path.dirname(run_dir)
+
+    def _best_in_dir(root: str) -> str | None:
+        pats: List[str] = []
+
+        if prefer_artifact == "keras":
+            pats.append(
+                os.path.join(
+                    root,
+                    "**",
+                    f"*_{model_name}_H*_best.keras",
+                )
+            )
+            pats.append(
+                os.path.join(root, "**", "*_H*_best.keras")
+            )
+            pats.append(
+                os.path.join(root, "**", "*_best.keras")
+            )
+            pats.append(
+                os.path.join(root, "**", "*.keras")
+            )
+        else:
+            pats.append(
+                os.path.join(
+                    root,
+                    "**",
+                    f"*_{model_name}_H*_best.weights.h5",
+                )
+            )
+            pats.append(
+                os.path.join(
+                    root,
+                    "**",
+                    "*_H*_best.weights.h5",
+                )
+            )
+            pats.append(
+                os.path.join(
+                    root,
+                    "**",
+                    "*_best.weights.h5",
+                )
+            )
+
+        cands: List[Tuple[float, str]] = []
+        for pat in pats:
+            for p in glob.glob(pat, recursive=True):
+                try:
+                    cands.append((os.path.getmtime(p), p))
+                except Exception:
+                    continue
+
+        if not cands:
+            return None
+
+        cands.sort(reverse=True)
+        return cands[0][1]
+
+    def _pick_model_path() -> str | None:
+        tuned_root = os.path.join(stage1_root, "tuning")
+
+        if model_pick == "trained":
+            return _best_in_dir(run_dir)
+
+        if model_pick == "tuned":
+            if os.path.isdir(tuned_root):
+                return _best_in_dir(tuned_root)
+            return None
+
+        # auto: prefer tuned if present, else trained
+        if os.path.isdir(tuned_root):
+            p = _best_in_dir(tuned_root)
+            if p:
+                return p
+
+        return _best_in_dir(run_dir)
+
+    best = _pick_model_path()
     if not best:
         raise SystemExit(
-            f"No model artifact found under: {run_dir}"
+            "No model artifact found under: "
+            f"{stage1_root}"
         )
 
     bundle = _resolve_bundle_paths(best)
     init_p = bundle["init_manifest_path"]
-    if os.path.isfile(init_p):
-        init_m = _load_json(init_p)
+    man_path = init_p if os.path.isfile(init_p) else None
+
+    # =================================================
+    # Phase A: try full .keras first (no HPS required)
+    # =================================================
+    model = None
+    full_err: Exception | None = None
+
+    if load_mode in ("auto", "full"):
+        if bundle.get("keras_path"):
+            try:
+                model = load_inference_model(
+                    keras_path=bundle["keras_path"],
+                    weights_path=None,
+                    manifest_path=man_path,
+                    builder=None,
+                    build_inputs=None,
+                    prefer_full_model=True,
+                    log_fn=log,
+                )
+            except Exception as e:
+                full_err = e
+                model = None
+
+    if model is not None and load_mode != "weights":
+        model_pred = model
+
+        if bundle.get("tf_dir") is not None:
+            try:
+                model_pred = load_model_from_tfv2(
+                    bundle["tf_dir"],
+                    endpoint="serve",
+                )
+            except Exception:
+                model_pred = model
+
+        return model, model_pred, bundle
+
+    # =================================================
+    # Phase B: builder + weights fallback (needs HPS)
+    # =================================================
+    allowed = {
+        "embed_dim",
+        "hidden_units",
+        "lstm_units",
+        "num_heads",
+        "dropout_rate",
+        "memory_size",
+        "scales",
+        "attention_levels",
+        "use_batch_norm",
+        "use_residuals",
+        "use_vsn",
+        "vsn_units",
+        "max_window_size",
+    }
+
+    if hps_pick == "tuned":
+        best_hps = load_tuned_hps_near_model(
+            bundle["keras_path"] or bundle["run_dir"],
+            prefer="keras",
+            required=False,
+            log_fn=log,
+        )
+    elif hps_pick == "trained":
+        best_hps = load_trained_hps_near_model(
+            bundle["keras_path"] or bundle["run_dir"],
+            allowed=allowed,
+            required=False,
+            log_fn=log,
+        )
     else:
-        init_m = {}
+        best_hps = load_hps_auto_near_model(
+            bundle["keras_path"] or bundle["run_dir"],
+            allowed=allowed,
+            prefer="keras",
+            required=False,
+            log_fn=log,
+        )
 
-    best_hps = load_best_hps_near_model(
-        bundle["keras_path"] or bundle["run_dir"],
-    ) or {}
+    dims = (
+        (M_src.get("artifacts") or {})
+        .get("sequences", {})
+        .get("dims", {})
+        or {}
+    )
+    out_s = int(dims.get("output_subsidence_dim", 1))
+    out_g = int(dims.get("output_gwl_dim", 1))
 
-    dims = M_src["artifacts"]["sequences"]["dims"]
-    out_s = int(dims["output_subsidence_dim"])
-    out_g = int(dims["output_gwl_dim"])
-    H = int((M_src.get("config") or {}).get(
-        "FORECAST_HORIZON_YEARS",
-        1,
-    ))
+    cfg_s = dict(M_src.get("config") or {})
+    horizon = int(cfg_s.get("FORECAST_HORIZON_YEARS", 1))
 
     builder = _build_geoprior_builder(
         M_src=M_src,
         X_sample=X_sample,
         out_s_dim=out_s,
         out_g_dim=out_g,
-        horizon=H,
+        horizon=horizon,
         quantiles=quantiles,
-        best_hps=best_hps,
+        best_hps=best_hps or {},
     )
 
-    model = load_inference_model(
-        keras_path=bundle["keras_path"],
-        weights_path=bundle["weights_path"],
-        manifest_path=(
-            init_p if os.path.isfile(init_p) else None
-        ),
-        manifest=init_m if init_m else None,
-        builder=builder,
-        build_inputs=X_sample,
-        out_s_dim=out_s,
-        out_g_dim=out_g,
-        mode=(
-            (M_src.get("config") or {}).get(
-                "MODE",
-                "tft_like",
-            )
-        ),
-        horizon=H,
-        prefer_full_model=False,
-    )
+    if not bundle.get("weights_path"):
+        raise SystemExit(
+            "Weights fallback requested but no "
+            "weights file was found."
+        )
+
+    try:
+        model = load_inference_model(
+            keras_path=None,
+            weights_path=bundle["weights_path"],
+            manifest_path=man_path,
+            builder=builder,
+            build_inputs=X_sample,
+            prefer_full_model=False,
+            log_fn=log,
+        )
+    except Exception as e:
+        msg: List[str] = ["Weights fallback failed."]
+        if full_err is not None:
+            msg.append(f"Full load error: {full_err!r}")
+        msg.append(f"Weights error: {e!r}")
+        raise SystemExit("\n".join(msg))
 
     model_pred = model
-    if bundle["tf_dir"] is not None:
+    if bundle.get("tf_dir") is not None:
         try:
             model_pred = load_model_from_tfv2(
                 bundle["tf_dir"],
@@ -984,7 +1507,6 @@ def _load_source_model(
             model_pred = model
 
     return model, model_pred, bundle
-
 
 def _choose_warm_idx(
     n_total: int,
@@ -1022,55 +1544,245 @@ def _slice_npz_dict(
     return out
 
 
-def _pinball_loss(
-    quantiles: List[float] | None,
-) -> Any:
+
+def _bundle_scaler_info(b) -> dict:
+    """
+    Return hydrated scaler_info dict for bundle b.
+
+    Supports:
+    - dict directly in manifest/config
+    - joblib path in manifest/artifacts/encoders
+    - scaler_path entries inside dict
+    """
+    M = b.manifest
+    cfg = M.get("config", {}) or {}
+    art = M.get("artifacts", {}) or {}
+    enc = art.get("encoders", {}) or {}
+
+    si = cfg.get("scaler_info", None)
+    if isinstance(si, dict) and si:
+        return _hydrate_si_dict(b, si)
+
+    # common: enc["scaler_info"] is a joblib path
+    si = enc.get("scaler_info", None)
+    if isinstance(si, (str, Path)):
+        p = resolve_artifact_path(b.run_dir, si, strict=False)
+        if p and p.exists():
+            try:
+                si = joblib.load(str(p))
+            except Exception:
+                si = {}
+        else:
+            si = {}
+
+    if isinstance(si, dict) and si:
+        return _hydrate_si_dict(b, si)
+
+    # fallback: scaling_audit may embed it
+    aud = b.scaling_audit or {}
+    sc = aud.get("scalers", {}) or {}
+    si = sc.get("scaler_info", None)
+    if isinstance(si, dict) and si:
+        return _hydrate_si_dict(b, si)
+
+    return {}
+
+def _bundle_y_scaler_info(b) -> dict:
+    M = b.manifest
+    cfg = M.get("config", {}) or {}
+    art = M.get("artifacts", {}) or {}
+    enc = art.get("encoders", {}) or {}
+
+    ysi = (
+        enc.get("target_scaler_info")
+        or enc.get("y_scaler_info")
+        or (art.get("targets", {}) or {}).get("scaler_info")
+        or cfg.get("target_scaler_info")
+        or cfg.get("y_scaler_info")
+    )
+
+    if isinstance(ysi, dict) and ysi:
+        return _hydrate_si_dict(b, ysi)
+
+    if isinstance(ysi, (str, Path)):
+        p = resolve_artifact_path(b.run_dir, ysi, strict=False)
+        if p and p.exists():
+            try:
+                ysi = joblib.load(str(p))
+            except Exception:
+                ysi = {}
+        else:
+            ysi = {}
+
+    if isinstance(ysi, dict) and ysi:
+        return _hydrate_si_dict(b, ysi)
+
+    return {}
+
+def _hydrate_si_dict(b, si: dict) -> dict:
+    """
+    Ensure each entry has v["scaler"] loaded from v["scaler_path"].
+    Uses resolve_artifact_path for portability.
+    """
+    if not isinstance(si, dict):
+        return {}
+
+    out = dict(si)
+    for _k, v in out.items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("scaler") is not None:
+            continue
+        sp = v.get("scaler_path", None)
+        if not sp:
+            continue
+        p = resolve_artifact_path(b.run_dir, sp, strict=False)
+        if p and p.exists():
+            try:
+                v["scaler"] = joblib.load(str(p))
+            except Exception:
+                pass
+    return out
+
+
+def _pick_si_key(si: dict, preferred: str) -> str:
+    """
+    Pick a key inside scaler_info (best-effort).
+    """
+    if preferred in si:
+        return preferred
+
+    low = {str(k).lower(): str(k) for k in si.keys()}
+    pref_l = str(preferred).lower()
+
+    if pref_l in low:
+        return low[pref_l]
+
+    for token in ("subs", "subsidence", "gwl", "head"):
+        for lk, orig in low.items():
+            if token in lk:
+                return orig
+
+    return preferred
+
+# def _apply_sklearn_1d(arr, scaler, inverse=False):
+#     a = np.asarray(arr)
+#     shp = a.shape
+#     x = a.reshape(-1, 1)
+
+#     if inverse:
+#         y = scaler.inverse_transform(x)
+#     else:
+#         y = scaler.transform(x)
+
+#     return y.reshape(shp)
+
+
+# def _reproject(arr, from_info, from_key, to_info, to_key):
+#     """
+#     Convert arr from "from_key" scaling space
+#     into "to_key" scaling space using existing
+#     Stage-1 scalers (no fitting).
+
+#     Works for (N,H,1) and (N,H,Q,1) too.
+#     """
+#     raw = inverse_scale_target(
+#         arr,
+#         scaler_info=from_info,
+#         target_name=from_key,
+#     )
+
+#     to_scaler = (to_info.get(to_key) or {}).get("scaler")
+#     if to_scaler is None:
+#         raise KeyError(f"Missing scaler for {to_key!r}.")
+
+#     return _apply_sklearn_1d(raw, to_scaler, inverse=False)
+
+
+def _pinball_loss(quantiles):
     if not quantiles or len(quantiles) <= 1:
         return tf.keras.losses.MeanSquaredError()
 
-    q = tf.constant(quantiles, dtype=tf.float32)
-    q = tf.reshape(q, (1, 1, -1, 1))
+    q = tf.reshape(tf.constant(quantiles, tf.float32), (1, 1, -1))  # (1,1,Q)
 
     def _loss(y_true, y_pred):
-        yt = tf.expand_dims(y_true, axis=2)
-        e = yt - y_pred
-        return tf.reduce_mean(
-            tf.maximum(q * e, (q - 1.0) * e)
-        )
+        y_true = tf.convert_to_tensor(y_true)
+        y_pred = tf.convert_to_tensor(y_pred)
+
+        # Normalize y_pred to (B,H,Q)
+        if y_pred.shape.rank == 4 and y_pred.shape[-1] == 1:
+            y_pred = tf.squeeze(y_pred, axis=-1)  # (B,H,Q)
+
+        # Normalize y_true to (B,H)
+        if y_true.shape.rank == 4 and y_true.shape[-1] == 1:
+            y_true = tf.squeeze(y_true, axis=-1)  # (B,H,1)
+        if y_true.shape.rank == 3 and y_true.shape[-1] == 1:
+            y_true = tf.squeeze(y_true, axis=-1)  # (B,H)
+
+        # Broadcast y_true across quantiles -> (B,H,1)
+        yt = y_true[..., None]
+        e = yt - y_pred                          # (B,H,Q)
+
+        return tf.reduce_mean(tf.maximum(q * e, (q - 1.0) * e))
 
     return _loss
-
 
 def _compile_warm_model(
     model: tf.keras.Model,
     quantiles: List[float] | None,
     lr: float,
 ) -> List[str]:
+    
+    from fusionlab.compat.keras import (
+        ensure_loss_dict,
+        zero_loss,
+    )
+
     opt = tf.keras.optimizers.Adam(
         learning_rate=float(lr),
     )
     subs_loss = _pinball_loss(quantiles)
 
-    losses = {"subs_pred": subs_loss}
-    try:
-        model.compile(
-            optimizer=opt,
-            loss=losses,
-        )
-        return ["subs_pred"]
-    except Exception:
-        pass
+    # Warm-start commonly provides only subs targets.
+    # Make the model tolerate missing head targets.
+    sk = getattr(model, "scaling_kwargs", None) or {}
+    if not bool(sk.get("allow_missing_targets", False)):
+        sk2 = dict(sk)
+        sk2["allow_missing_targets"] = True
+        setattr(model, "scaling_kwargs", sk2)
 
-    losses = {
-        "subs_pred": subs_loss,
-        "gwl_pred": tf.keras.losses.MSE,
-    }
+    losses = {"subs_pred": subs_loss}
+
+    # Fill any missing output heads with a zero loss.
+    out_names = getattr(model, "output_names", None) or []
+    if out_names:
+        losses = ensure_loss_dict(
+            losses,
+            output_names=list(out_names),
+            fill=zero_loss,
+        )
+    else:
+        # Fallback for unusual builds
+        losses["gwl_pred"] = zero_loss
+
     model.compile(
         optimizer=opt,
         loss=losses,
     )
-    return ["subs_pred", "gwl_pred"]
 
+    # Only subs is truly supervised in warm-start.
+    return ["subs_pred"]
+
+
+def _has_q(
+    qs: List[float],
+    q: float,
+    tol: float = 1e-6,
+) -> bool:
+    if not qs:
+        return False
+    a = np.asarray(qs, dtype=float)
+    return float(np.min(np.abs(a - float(q)))) <= float(tol)
 
 def _make_ds(
     x: Dict[str, Any],
@@ -1093,48 +1805,93 @@ def run_one_direction(
     rescale_mode: str = "as_is",
     model_pack: Tuple[Any, Any, Dict[str, Any]] | None = None,
     warm_meta: Dict[str, Any] | None = None,
-    M_src: Dict[str, Any],
-    M_tgt: Dict[str, Any],
+    src_b: Any,
+    tgt_b: Any,
     split: str,
     calib_mode: str,
     rescale_to_source: bool,
     batch_size: int,
     quantiles_override: List[float] | None,
     save_dir: str,
+    model_pick: str = "auto",
+    load_mode: str = "auto",
+    hps_pick: str = "auto",
+    model_name: str = "GeoPriorSubsNet",
+    prefer_artifact: str = "keras",
     allow_reorder_dynamic: bool = False,
     allow_reorder_future: bool = False,
     log_fn: Optional[Callable[[str], Any]] = None,
+    verbose: int = 0,
 ) -> Optional[Dict[str, Any]]:
+    """
+    Execute one evaluation job for a single direction.
+
+    Pipeline:
+    1) Load target split arrays (Stage-1 NPZ).
+    2) Normalize inputs for model inference.
+    3) Align target static to source schema.
+    4) Optionally reproject target dynamics to source scaling.
+    5) Validate schema compatibility (with optional reorders).
+    6) Load source model (or reuse provided model_pack).
+    7) Optional interval calibration for quantile outputs.
+    8) Predict, compute metrics in physical units.
+    9) Write formatted eval + forecast CSVs.
+    """
+    log = log_fn if callable(log_fn) else print
+
+    # ------------------------------
+    # Stage-1 manifests + split data
+    # ------------------------------
+    M_src = src_b.manifest
+    M_tgt = tgt_b.manifest
+
     X_tgt, y_tgt = _pick_npz(M_tgt, split)
+    sf = X_tgt.get("static_features", None)
+    if sf is None:
+        log("[stage5][debug] static_features: MISSING")
+    else:
+        nz = int(np.count_nonzero(sf))
+        log(
+            f"[stage5][debug] static_features "
+            f"shape={sf.shape} nonzero={nz}"
+        )
+
     if X_tgt is None:
         return None
 
     cfg_t = dict(M_tgt.get("config") or {})
-    cfg_s = dict(M_src.get("config") or {})
-
     mode = str(cfg_t.get("MODE", "tft_like"))
     H = int(cfg_t.get("FORECAST_HORIZON_YEARS", 1))
-    Q = quantiles_override or cfg_t.get(
-        "QUANTILES",
-        [0.1, 0.5, 0.9],
+
+    Q = (
+        quantiles_override
+        or cfg_t.get("QUANTILES", [0.1, 0.5, 0.9])
     )
 
-    log = log_fn if callable(log_fn) else print
-
+    # ------------------------------
+    # Prepare inputs + targets
+    # ------------------------------
     X_tgt = _ensure_np_inputs(X_tgt, mode, H)
     y_map = map_targets_for_training(y_tgt or {})
 
+    # Align static: target -> source schema by name.
     X_tgt = _align_static_to_source(X_tgt, M_src, M_tgt)
+
+    # Strict: move target dynamic scaling into source space.
+    # baseline never needs strict reprojection
+    if str(strategy) == "baseline":
+        rescale_to_source = False
+        rescale_mode = "as_is"
 
     if rescale_to_source:
         X_tgt = _reproject_dynamic_to_source(
             X_tgt,
-            M_src,
-            M_tgt,
+            src_b,
+            tgt_b,
         )
 
+    # Validate transfer schema (dynamic/future must match).
     s_src, d_src, f_src = _infer_input_dims(M_src)
-
     X_tgt, schema_audit = _check_transfer_schema(
         M_src=M_src,
         M_tgt=M_tgt,
@@ -1147,38 +1904,78 @@ def run_one_direction(
         log_fn=log,
     )
 
-
-    if rescale_to_source:
-        X_tgt = _reproject_dynamic_to_source(
-            X_tgt,
-            M_src,
-            M_tgt,
-        )
-
+    # ------------------------------
+    # Load or reuse the source model
+    # ------------------------------
     if model_pack is None:
         model, model_pred, bundle = _load_source_model(
-            M_src=M_src,
+            # M_src=M_src,
+            src_b=src_b, 
             X_sample=X_tgt,
             quantiles=Q,
+            model_pick=model_pick,
+            load_mode=load_mode,
+            hps_pick=hps_pick,
+            model_name=model_name,
+            prefer_artifact=prefer_artifact,
+            log_fn=log,
         )
     else:
         model, model_pred, bundle = model_pack
 
-    model_dir = os.path.dirname(bundle["keras_path"])
+    model_path = bundle.get("keras_path") or ""
+    model_dir = (
+        os.path.dirname(model_path)
+        if model_path
+        else str(bundle.get("run_dir") or "")
+    )
 
+    # ------------------------------
+    # Optional calibration (quantile)
+    # ------------------------------
     cal = None
+
     if calib_mode == "source":
-        cal = _load_calibrator_near(bundle["run_dir"], 0.80)
+        cal = _load_calibrator_near(
+            str(bundle.get("run_dir") or ""),
+            target=0.80,
+        )
+
     elif calib_mode == "target":
         try:
             vx, vy = _pick_npz(M_tgt, "val")
-            if vx is not None:
+            if vx is not None and vy is not None:
                 vx = _ensure_np_inputs(vx, mode, H)
-                vx = _align_static_to_source(vx, M_src, M_tgt)
-                vy_m = map_targets_for_training(vy or {})
+                vx = _align_static_to_source(
+                    vx,
+                    M_src,
+                    M_tgt,
+                )
+
+                if rescale_to_source:
+                    vx = _reproject_dynamic_to_source(
+                        vx,
+                        src_b,
+                        tgt_b,
+                    )
+
+                vx, _ = _check_transfer_schema(
+                    M_src=M_src,
+                    M_tgt=M_tgt,
+                    X_tgt=vx,
+                    s_src=s_src,
+                    d_src=d_src,
+                    f_src=f_src,
+                    allow_reorder_dynamic=allow_reorder_dynamic,
+                    allow_reorder_future=allow_reorder_future,
+                    log_fn=log,
+                )
+
+                vy_map = map_targets_for_training(vy)
                 ds_v = tf.data.Dataset.from_tensor_slices(
-                    (vx, vy_m)
-                ).batch(batch_size)
+                    (vx, vy_map)
+                ).batch(int(batch_size))
+
                 cal = fit_interval_calibrator_on_val(
                     model,
                     ds_v,
@@ -1187,121 +1984,182 @@ def run_one_direction(
         except Exception:
             cal = None
 
-    pred_dict = model_pred.predict(X_tgt, verbose=0)
-    subs_pred, gwl_pred = extract_preds(model, pred_dict)
+    # ------------------------------
+    # Predict
+    # ------------------------------
+    pred_dict = model_pred.predict(
+        X_tgt,
+        verbose=int(verbose),
+    )
+    subs_pred, gwl_pred = extract_preds(
+        model,
+        pred_dict,
+    )
 
-    if cal is not None and subs_pred.ndim == 4:
-        subs_pred = apply_calibrator_to_subs(cal, subs_pred)
+    if cal is not None and int(subs_pred.ndim) == 4:
+        subs_pred = apply_calibrator_to_subs(
+            cal,
+            subs_pred,
+        )
 
     preds = {
         "subs_pred": subs_pred,
         "gwl_pred": gwl_pred,
     }
 
-    enc_s = M_src["artifacts"]["encoders"]
-    enc_t = M_tgt["artifacts"]["encoders"]
+    # ------------------------------
+    # Metrics in physical units
+    # ------------------------------
+    
+    y_si_s = _bundle_y_scaler_info(src_b)
+    y_si_t = _bundle_y_scaler_info(tgt_b)
 
-    coord_scaler, sc_t = _load_scalers(enc_t)
-    _, sc_s = _load_scalers(enc_s)
+    subs_pref_s = str(src_b.target_cols.get("subs", "subs"))
+    subs_pref_t = str(tgt_b.target_cols.get("subs", "subs"))
+    
+    subs_key_s = _pick_si_key(y_si_s, subs_pref_s) if y_si_s else subs_pref_s
+    subs_key_t = _pick_si_key(y_si_t, subs_pref_t) if y_si_t else subs_pref_t
+    
+    ent_s = (y_si_s or {}).get(subs_key_s) or {}
+    ent_t = (y_si_t or {}).get(subs_key_t) or {}
+    log(f"[stage5][debug] subs_key_s={subs_key_s!r} "
+        f"idx={ent_s.get('idx')} has_scaler={ent_s.get('scaler') is not None}")
+    log(f"[stage5][debug] subs_key_t={subs_key_t!r} "
+        f"idx={ent_t.get('idx')} has_scaler={ent_t.get('scaler') is not None}")
+    
+    log(f"[stage5][debug] ent_s keys={list(ent_s.keys())[:10]}")
+    log(f"[stage5][debug] ent_t keys={list(ent_t.keys())[:10]}")
+    log(f"[stage5][debug] ent_s params={ent_s.get('params')}")
+    log(f"[stage5][debug] ent_t params={ent_t.get('params')}")
 
-    cols_s = cfg_s.get("cols") or {}
-    cols_t = cfg_t.get("cols") or {}
-
-    subs_col_s = cols_s.get("subsidence", "subsidence")
-    subs_col_t = cols_t.get("subsidence", "subsidence")
-
+    # Build comparable arrays (scaled space first)
+    # --------
+    y_true_scaled = None
+    
+    if "subs_pred" in y_map:
+        y_true_scaled = np.asarray(y_map["subs_pred"][..., :1], np.float32)
+    
+    if int(subs_pred.ndim) == 4:
+        q_arr = np.asarray(Q, dtype=np.float32)
+        mid = int(np.argmin(np.abs(q_arr - 0.5)))
+        y_pred_scaled = np.asarray(subs_pred[:, :, mid, :1], np.float32)
+    else:
+        y_pred_scaled = np.asarray(subs_pred[:, :, :1], np.float32)
+    
+    metrics_overall: Dict[str, Any] = {}
+    metrics_h: Dict[str, Any] = {}
+    
+    # --------
+    # Decide space: physical only if BOTH sides can be inverse-scaled
+    # --------
     y_true_phys = None
-    if "subs_pred" in y_map and sc_t is not None:
-        y_true_phys = inverse_scale_target(
-            y_map["subs_pred"][..., :1],
-            scaler_info=sc_t,
-            target_name=subs_col_t,
-        )
-
-    y_pred_point_s = None
     y_pred_phys = None
-    if sc_s is not None:
-        if subs_pred.ndim == 4:
-            q_arr = np.asarray(Q, dtype=np.float32)
-            mid = int(np.argmin(np.abs(q_arr - 0.5)))
-            y_pred_point_s = subs_pred[:, :, mid, :1]
+    metrics_space = "scaled"
+
+    can_true = _can_inverse(y_si_t, subs_key_t)
+    can_pred = _can_inverse(y_si_s, subs_key_s)
+    
+    if y_true_scaled is not None:
+        if can_true and can_pred:
+            y_true_phys = _safe_inverse_y(
+                y_true_scaled,
+                y_si_t,
+                subs_key_t,
+                log=log,
+            )
+            y_pred_phys = _safe_inverse_y(
+                y_pred_scaled,
+                y_si_s,
+                subs_key_s,
+                log=log,
+            )
+            log("[stage5] metrics_space=physical")
+            yA, yB = y_true_phys, y_pred_phys
         else:
-            y_pred_point_s = subs_pred[:, :, :1]
+            log(
+                "[stage5] metrics_space=scaled "
+                "(missing/invalid y scaler for true or pred)"
+            )
+            yA, yB = y_true_scaled, y_pred_scaled
+    
+        metrics_overall = point_metrics(yA, yB, use_physical=False)
+        mae_h, r2_h = per_horizon_metrics(yA, yB, use_physical=False)
+        metrics_h = {"mae": mae_h, "r2": r2_h}
+        
+        metrics_space = "physical"
+        log("[stage5] metrics_space=physical")
 
-        y_pred_phys = inverse_scale_target(
-            y_pred_point_s,
-            scaler_info=sc_s,
-            target_name=subs_col_s,
-        )
+    
+        v = float(np.var(yA))
+        log(f"[stage5][debug] var(y_eval)={v:.6g}")
+    
 
-    metrics_overall = {}
-    metrics_h = {}
-    if y_true_phys is not None and y_pred_phys is not None:
-        metrics_overall = point_metrics(
-            y_true_phys,
-            y_pred_phys,
-            include_r2=True,
-        )
-        ph = per_horizon_metrics(
-            y_true_phys,
-            y_pred_phys,
-            include_r2=True,
-        )
-        metrics_h = {
-            "mae": ph.get("mae"),
-            "r2": ph.get("r2"),
-        }
-
+    # Coverage/sharpness for quantile outputs (physical).
     coverage80 = None
     sharpness80 = None
+
+    # if (
+    #     y_true_phys is not None
+    #     and y_si_s
+    #     and int(subs_pred.ndim) == 4
+    # ):
     if (
-        y_true_phys is not None
-        and sc_s is not None
-        and subs_pred.ndim == 4
+        metrics_space == "physical"
+        and y_true_phys is not None
+        and y_pred_phys is not None
+        and int(subs_pred.ndim) == 4
     ):
-        s_q_phys = inverse_scale_target(
-            subs_pred[..., :1],
-            scaler_info=sc_s,
-            target_name=subs_col_s,
-        )
-        yt = tf.convert_to_tensor(y_true_phys, tf.float32)
-        sq = tf.convert_to_tensor(s_q_phys, tf.float32)
         try:
-            coverage80 = float(coverage80_fn(yt, sq).numpy())
-            sharpness80 = float(
-                sharpness80_fn(yt, sq).numpy()
+            s_q_phys = _safe_inverse_y(
+                subs_pred[..., :1],
+                y_si_s,
+                subs_key_s,
+                log=log,
             )
+    
+            yt = tf.convert_to_tensor(y_true_phys, tf.float32)
+            sq = tf.convert_to_tensor(s_q_phys, tf.float32)
+    
+            coverage80 = float(coverage80_fn(yt, sq).numpy())
+            sharpness80 = float(sharpness80_fn(yt, sq).numpy())
         except Exception:
             coverage80 = None
             sharpness80 = None
 
-    subs_t_scaler = _get_scaler(sc_t, subs_col_t)
-    subs_s_scaler = _get_scaler(sc_s, subs_col_s)
 
+    # ------------------------------
+    # Formatting + CSV outputs
+    # ------------------------------
+    # Reproject subs predictions into *target* scaling so
+    # format_and_forecast can inverse-scale with target scalers.
     preds_fmt = dict(preds)
+    
     if (
-        subs_s_scaler is not None
-        and subs_t_scaler is not None
+        y_si_s
+        and y_si_t
+        and (subs_key_s in y_si_s)
+        and (subs_key_t in y_si_t)
     ):
-        s_phys = inverse_scale_target(
+        s_phys = _safe_inverse_y(
             subs_pred,
-            scaler_info=sc_s,
-            target_name=subs_col_s,
+            y_si_s,
+            subs_key_s,
+            log=log,
         )
-        preds_fmt["subs_pred"] = _transform_with_scaler(
-            subs_t_scaler,
+        preds_fmt["subs_pred"] = _safe_scale_y(
             s_phys,
+            y_si_t,
+            subs_key_t,
+            log=log,
         )
 
-    y_true_for_format = None
+    y_true_for_fmt = None
     if y_map:
-        y_true_for_format = {}
+        y_true_for_fmt = {}
         if "subs_pred" in y_map:
-            y_true_for_format["subsidence"] = (
-                y_map["subs_pred"]
-            )
+            y_true_for_fmt["subsidence"] = y_map["subs_pred"]
         if "gwl_pred" in y_map:
-            y_true_for_format["gwl"] = y_map["gwl_pred"]
+            y_true_for_fmt["gwl"] = y_map["gwl_pred"]
 
     train_end = cfg_t.get("TRAIN_END_YEAR")
     f_start = cfg_t.get("FORECAST_START_YEAR")
@@ -1315,25 +2173,41 @@ def run_one_direction(
         )
 
     base = (
-        f"{M_src.get('city')}_to_{M_tgt.get('city')}_"
-        f"{strategy}_{split}_{calib_mode}_{rescale_mode}"
+        f"{M_src.get('city')}_to_"
+        f"{M_tgt.get('city')}_"
+        f"{strategy}_{split}_"
+        f"{calib_mode}_{rescale_mode}"
     )
     csv_eval = os.path.join(save_dir, base + "_eval.csv")
     csv_fut = os.path.join(save_dir, base + "_future.csv")
 
     subs_kind = str(cfg_t.get("SUBSIDENCE_KIND", "rate"))
 
+    coord_scaler = getattr(tgt_b, "coord_scaler", None)
+    if coord_scaler is None:
+        scs = getattr(tgt_b, "scalers", None) or {}
+        coord_scaler = scs.get("coord_scaler", None)
+
+    _q = Q if int(subs_pred.ndim) == 4 else None
+
+    ff_scaler_info = (
+        y_si_t
+        if (isinstance(y_si_t, Mapping) and y_si_t and subs_key_t in y_si_t)
+        else None
+    )
+    ff_scaler_name = subs_key_t if ff_scaler_info else None
+
     df_eval, df_fut = format_and_forecast(
         y_pred=preds_fmt,
-        y_true=y_true_for_format,
+        y_true=y_true_for_fmt,
         coords=X_tgt.get("coords", None),
-        quantiles=Q if subs_pred.ndim == 4 else None,
-        target_name=subs_col_t,
-        scaler_target_name=subs_col_t,
+        quantiles=_q,
+        target_name=subs_pref_t,
+        scaler_target_name= ff_scaler_name, # subs_key_t,
         output_target_name="subsidence",
         target_key_pred="subs_pred",
         component_index=0,
-        scaler_info=sc_t,
+        scaler_info=ff_scaler_info, #si_t,
         coord_scaler=coord_scaler,
         coord_columns=("coord_t", "coord_x", "coord_y"),
         train_end_time=train_end,
@@ -1354,6 +2228,9 @@ def run_one_direction(
         output_unit_col="subsidence_unit",
     )
 
+    # ------------------------------
+    # Optional physics payload export
+    # ------------------------------
     try:
         model.export_physics_payload(
             X_tgt,
@@ -1372,14 +2249,29 @@ def run_one_direction(
     except Exception:
         pass
 
+    def _stat(a, name):
+        a = np.asarray(a)
+        log(f"[stage5][debug] {name}: "
+            f"min={a.min():.6g} max={a.max():.6g} "
+            f"mean={a.mean():.6g} std={a.std():.6g}")
+        
+    # if y_true_phys is not None:
+    #     _stat(y_true_phys, "y_true_phys")
+    # if y_pred_phys is not None:
+    #     _stat(y_pred_phys, "y_pred_phys")
+    # Debug stats (keep your _stat, but point it at yA/yB if you want)
+    if y_true_scaled is not None:
+        _stat(y_true_scaled, "y_true_scaled")
+        _stat(y_pred_scaled, "y_pred_scaled")
+
     return {
         "strategy": strategy,
         "rescale_mode": rescale_mode,
         "warm": warm_meta or {},
-        "model_path": bundle["keras_path"],
+        "model_path": model_path,
         "split": split,
         "calibration": calib_mode,
-        "quantiles": Q if subs_pred.ndim == 4 else None,
+        "quantiles": _q,
         "coverage80": coverage80,
         "sharpness80": sharpness80,
         "overall_mae": metrics_overall.get("mae"),
@@ -1391,13 +2283,17 @@ def run_one_direction(
         "csv_future": csv_fut,
         "model_dir": model_dir,
         "schema": schema_audit,
+        "source_model": model_pick,
+        "source_load": load_mode,
+        "hps_mode": hps_pick,
+        "model_name": model_name,
+        "prefer_artifact": prefer_artifact,
     }
-
 
 def run_warm_start_direction(
     *,
-    M_src: Dict[str, Any],
-    M_tgt: Dict[str, Any],
+    src_b: Any,
+    tgt_b: Any,
     split: str,
     calib_mode: str,
     rescale_to_source: bool,
@@ -1411,11 +2307,37 @@ def run_warm_start_direction(
     warm_lr: float,
     warm_seed: int,
     rescale_mode: str,
+    model_pick: str = "auto",
+    load_mode: str = "auto",
+    hps_pick: str = "auto",
+    model_name: str = "GeoPriorSubsNet",
+    prefer_artifact: str = "keras",
     allow_reorder_dynamic: bool = False,
     allow_reorder_future: bool = False,
     log_fn: Optional[Callable[[str], Any]] = None,
-    
+    verbose: int = 0,
 ) -> Optional[Dict[str, Any]]:
+    """
+    Warm-start the source model on a subset of target data,
+    then evaluate on the requested split via run_one_direction.
+
+    Steps:
+    1) Load warm_split arrays from target bundle.
+    2) Prepare inputs, align schemas, optional strict rescale.
+    3) Load the source model (or weights fallback).
+    4) Sample a subset (warm_samples / warm_frac).
+    5) Compile a tolerant warm-start loss config.
+    6) Fit a few epochs on target subset.
+    7) Call run_one_direction with model_pack reuse.
+    """
+    log = log_fn if callable(log_fn) else print
+
+    M_src = src_b.manifest
+    M_tgt = tgt_b.manifest
+
+    # ------------------------------
+    # Load warm-start split from tgt
+    # ------------------------------
     X_w, y_w = _pick_npz(M_tgt, warm_split)
     if X_w is None or y_w is None:
         return None
@@ -1423,11 +2345,15 @@ def run_warm_start_direction(
     cfg_t = dict(M_tgt.get("config") or {})
     mode = str(cfg_t.get("MODE", "tft_like"))
     H = int(cfg_t.get("FORECAST_HORIZON_YEARS", 1))
-    Q = quantiles_override or cfg_t.get(
-        "QUANTILES",
-        [0.1, 0.5, 0.9],
+
+    Q = (
+        quantiles_override
+        or cfg_t.get("QUANTILES", [0.1, 0.5, 0.9])
     )
 
+    # ------------------------------
+    # Prepare inputs and targets
+    # ------------------------------
     X_w = _ensure_np_inputs(X_w, mode, H)
     y_wm = map_targets_for_training(y_w)
 
@@ -1435,7 +2361,7 @@ def run_warm_start_direction(
 
     s_src, d_src, f_src = _infer_input_dims(M_src)
 
-    X_w,  schema_audit  = _check_transfer_schema(
+    X_w, schema_audit = _check_transfer_schema(
         M_src=M_src,
         M_tgt=M_tgt,
         X_tgt=X_w,
@@ -1444,21 +2370,34 @@ def run_warm_start_direction(
         f_src=f_src,
         allow_reorder_dynamic=allow_reorder_dynamic,
         allow_reorder_future=allow_reorder_future,
-        log_fn=log_fn,
+        log_fn=log,
     )
+
     if rescale_to_source:
         X_w = _reproject_dynamic_to_source(
             X_w,
-            M_src,
-            M_tgt,
+            src_b,
+            tgt_b,
         )
 
-    model, model_pred, bundle = _load_source_model(
-        M_src=M_src,
+    # ------------------------------
+    # Load the source model
+    # ------------------------------
+    model, _pred, bundle = _load_source_model(
+        src_b=src_b, 
         X_sample=X_w,
         quantiles=Q,
+        model_pick=model_pick,
+        load_mode=load_mode,
+        hps_pick=hps_pick,
+        model_name=model_name,
+        prefer_artifact=prefer_artifact,
+        log_fn=log,
     )
 
+    # ------------------------------
+    # Subsample warm-start examples
+    # ------------------------------
     n_total = int(X_w["dynamic_features"].shape[0])
     idx = _choose_warm_idx(
         n_total=n_total,
@@ -1470,25 +2409,33 @@ def run_warm_start_direction(
     X_ws = _slice_npz_dict(X_w, idx)
     y_ws = _slice_npz_dict(y_wm, idx)
 
+    # ------------------------------
+    # Compile + fit warm-start
+    # ------------------------------
     warm_keys = _compile_warm_model(
         model,
         quantiles=Q,
         lr=warm_lr,
     )
-    y_ws = {k: y_ws[k] for k in warm_keys if k in y_ws}
+    y_ws = {
+        k: y_ws[k]
+        for k in warm_keys
+        if k in y_ws
+    }
 
     ds = _make_ds(
         X_ws,
         y_ws,
-        batch_size=batch_size,
-        seed=warm_seed,
+        batch_size=int(batch_size),
+        seed=int(warm_seed),
     )
 
-    model.fit(
-        ds,
-        epochs=int(warm_epochs),
-        verbose=0,
-    )
+    with suppress_compiled_metrics_warning():
+        model.fit(
+            ds,
+            epochs=int(warm_epochs),
+            verbose=int(verbose),
+        )
 
     warm_meta = {
         "warm_split": warm_split,
@@ -1500,38 +2447,70 @@ def run_warm_start_direction(
         "schema": schema_audit,
     }
 
+    # ------------------------------
+    # Evaluate using warmed weights
+    # ------------------------------
     return run_one_direction(
         strategy="warm",
         rescale_mode=rescale_mode,
         model_pack=(model, model, bundle),
         warm_meta=warm_meta,
-        M_src=M_src,
-        M_tgt=M_tgt,
+        src_b=src_b,
+        tgt_b=tgt_b,
         split=split,
         calib_mode=calib_mode,
         rescale_to_source=rescale_to_source,
         batch_size=batch_size,
         quantiles_override=quantiles_override,
         save_dir=save_dir,
-        log_fn =log_fn 
+        model_pick=model_pick,
+        load_mode=load_mode,
+        hps_pick=hps_pick,
+        model_name=model_name,
+        prefer_artifact=prefer_artifact,
+        allow_reorder_dynamic=allow_reorder_dynamic,
+        allow_reorder_future=allow_reorder_future,
+        log_fn=log_fn,
+        verbose=verbose,
     )
 
 def main() -> None:
     args = parse_args()
-    
-    if args.log == "none":
-        args.log_fn = lambda *_: None
-    else:
-        args.log_fn = print
 
-    M_A = _load_manifest_for_city(
-        args.city_a,
-        args.results_dir,
+    sink = _make_sink(args)
+    log = _mklog(args, sink)
+
+    # keep existing contract for called functions
+    args.log_fn = sink
+
+    load_kwargs = dict(
+        model_pick=args.source_model,
+        load_mode=args.source_load,
+        hps_pick=args.hps_mode,
+        model_name=args.model_name,
+        prefer_artifact=args.prefer_artifact,
     )
-    M_B = _load_manifest_for_city(
-        args.city_b,
-        args.results_dir,
+
+    root = Path(args.results_dir)
+    
+    A = load_stage1_bundle(
+        results_root=root,
+        city=args.city_a,
+        model=args.model_name,
+        stage="stage1",
+        load_scalers_flag=True,
+        strict=False,
     )
+    
+    B = load_stage1_bundle(
+        results_root=root,
+        city=args.city_b,
+        model=args.model_name,
+        stage="stage1",
+        load_scalers_flag=True,
+        strict=False,
+    )
+
 
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = os.path.join(
@@ -1544,125 +2523,178 @@ def main() -> None:
 
     directions = []
     
-    # (tag, src_manifest, tgt_manifest)
-
     if "baseline" in args.strategies:
-        directions.extend(
-            [
-                ("A_to_A", M_A, M_A),
-                ("B_to_B", M_B, M_B),
-            ]
-        )
-
+        directions += [
+            ("A_to_A", A, A),
+            ("B_to_B", B, B),
+        ]
+    
     if "xfer" in args.strategies or "warm" in args.strategies:
-        directions.extend(
-            [
-                ("A_to_B", M_A, M_B),
-                ("B_to_A", M_B, M_A),
-            ]
-        )
+        directions += [
+            ("A_to_B", A, B),
+            ("B_to_A", B, A),
+        ]
+
+
+    jobs = _build_jobs(args, directions)
+    n_jobs = int(len(jobs))
+
+    kv = _keras_verbose(args.verbose)
+
+    log(
+        f"[stage5] planned jobs={n_jobs} "
+        f"dirs={len(directions)} "
+        f"kv={kv}",
+        level=3,
+    )
+
+    # Decide whether tqdm output should be redirected
+    disable_pb = (
+        args.progress == "off"
+        or (sink is not print)
+        and args.progress == "off"
+    )
+
+    pb_log_fn = None
+    if args.progress == "log":
+        pb_log_fn = sink
+    elif args.progress == "auto":
+        # terminal: let tqdm draw normally
+        # GUI sink: redirect text
+        pb_log_fn = None if sink is print else sink
+
+    it = with_progress(
+        jobs,
+        total=n_jobs,
+        desc="stage5 xfer",
+        leave=True,
+        disable=disable_pb,
+        log_fn=pb_log_fn,
+        mininterval=1.0,
+    )
 
     results: List[Dict[str, Any]] = []
 
-    for tag, M_src, M_tgt in directions:
-        is_baseline = tag in ("A_to_A", "B_to_B")
+    for i, job in enumerate(it, start=1):
+        tag = job["tag"]
+        rm = job["rm"]
+        cm = job["cm"]
+        split = job["split"]
+        strict = bool(job["strict"])
+        strat = job["strategy"]
 
-        for rm in args.rescale_modes:
-            strict = rm == "strict"
+        src_b = job["src_b"]
+        tgt_b = job["tgt_b"]
 
-            for split in args.splits:
-                for cm in args.calib_modes:
-                    if (
-                        is_baseline
-                        and "baseline" in args.strategies
-                    ):
-                        r = run_one_direction(
-                            strategy="baseline",
-                            rescale_mode=rm,
-                            M_src=M_src,
-                            M_tgt=M_tgt,
-                            split=split,
-                            calib_mode=cm,
-                            rescale_to_source=strict,
-                            batch_size=args.batch_size,
-                            quantiles_override=args.quantiles,
-                            save_dir=outdir,
-                            allow_reorder_dynamic=args.allow_reorder_dynamic,
-                            allow_reorder_future=args.allow_reorder_future,
-                            log_fn =args.log_fn, 
-                        )
-                        if r is not None:
-                            r["direction"] = tag
-                            r["source_city"] = (
-                                M_src.get("city")
-                            )
-                            r["target_city"] = (
-                                M_tgt.get("city")
-                            )
-                            results.append(r)
+        M_src = src_b.manifest
+        M_tgt = tgt_b.manifest
 
-                    if (
-                        (not is_baseline)
-                        and "xfer" in args.strategies
-                    ):
-                        r = run_one_direction(
-                            strategy="xfer",
-                            rescale_mode=rm,
-                            M_src=M_src,
-                            M_tgt=M_tgt,
-                            split=split,
-                            calib_mode=cm,
-                            rescale_to_source=strict,
-                            batch_size=args.batch_size,
-                            quantiles_override=args.quantiles,
-                            save_dir=outdir,
-                            allow_reorder_dynamic=args.allow_reorder_dynamic,
-                            allow_reorder_future=args.allow_reorder_future,
-                            log_fn =args.log_fn, 
-                        )
-                        if r is not None:
-                            r["direction"] = tag
-                            r["source_city"] = (
-                                M_src.get("city")
-                            )
-                            r["target_city"] = (
-                                M_tgt.get("city")
-                            )
-                            results.append(r)
+        src_city = M_src.get("city")
+        tgt_city = M_tgt.get("city")
 
-                    if (
-                        (not is_baseline)
-                        and "warm" in args.strategies
-                    ):
-                        r = run_warm_start_direction(
-                            M_src=M_src,
-                            M_tgt=M_tgt,
-                            split=split,
-                            calib_mode=cm,
-                            rescale_to_source=strict,
-                            batch_size=args.batch_size,
-                            quantiles_override=args.quantiles,
-                            save_dir=outdir,
-                            warm_split=args.warm_split,
-                            warm_samples=args.warm_samples,
-                            warm_frac=args.warm_frac,
-                            warm_epochs=args.warm_epochs,
-                            warm_lr=args.warm_lr,
-                            warm_seed=args.warm_seed,
-                            rescale_mode=rm,
-                            allow_reorder_dynamic=args.allow_reorder_dynamic,
-                            allow_reorder_future=args.allow_reorder_future,
-                            log_fn =args.log_fn, 
-                        )
-                        if r is not None:
-                            r["direction"] = tag
-                            r["source_city"] = (
-                                M_src.get("city")
-                            )
-                            r["target_city"] = (
-                                M_tgt.get("city")
-                            )
-                            results.append(r)
+        log(
+            f"[stage5] ({i}/{n_jobs}) "
+            f"{tag} {strat} "
+            f"rm={rm} split={split} "
+            f"calib={cm} strict={strict} "
+            f"{src_city}->{tgt_city}",
+            level=3,
+        )
+
+        try:
+            if job["kind"] == "one":
+                r = run_one_direction(
+                    strategy=strat,
+                    rescale_mode=rm,
+                    src_b=src_b,
+                    tgt_b=tgt_b,
+                    split=split,
+                    calib_mode=cm,
+                    rescale_to_source=strict,
+                    batch_size=args.batch_size,
+                    quantiles_override=args.quantiles,
+                    save_dir=outdir,
+                    allow_reorder_dynamic=(
+                        args.allow_reorder_dynamic
+                    ),
+                    allow_reorder_future=(
+                        args.allow_reorder_future
+                    ),
+                    log_fn=args.log_fn,
+                    verbose=kv,
+                    **load_kwargs,
+                )
+            else:
+                r = run_warm_start_direction(
+                    src_b=src_b,
+                    tgt_b=tgt_b,
+                    split=split,
+                    calib_mode=cm,
+                    rescale_to_source=strict,
+                    batch_size=args.batch_size,
+                    quantiles_override=args.quantiles,
+                    save_dir=outdir,
+                    warm_split=args.warm_split,
+                    warm_samples=args.warm_samples,
+                    warm_frac=args.warm_frac,
+                    warm_epochs=args.warm_epochs,
+                    warm_lr=args.warm_lr,
+                    warm_seed=args.warm_seed,
+                    rescale_mode=rm,
+                    allow_reorder_dynamic=(
+                        args.allow_reorder_dynamic
+                    ),
+                    allow_reorder_future=(
+                        args.allow_reorder_future
+                    ),
+                    log_fn=args.log_fn,
+                    verbose=kv,
+                    **load_kwargs,
+                )
+
+
+        except SystemExit as e:
+            log(
+                f"[stage5] FAIL ({i}/{n_jobs}) "
+                f"{tag} {strat}: {e}",
+                level=1,
+            )
+            if not args.continue_on_error:
+                raise
+            continue
+
+        except Exception as e:
+            log(
+                f"[stage5] ERROR ({i}/{n_jobs}) "
+                f"{tag} {strat}: {e!r}",
+                level=1,
+            )
+            if not args.continue_on_error:
+                raise
+            continue
+
+        if r is None:
+            log(
+                f"[stage5] SKIP ({i}/{n_jobs}) "
+                f"{tag} {strat}",
+                level=2,
+            )
+            continue
+
+        r["direction"] = tag
+        r["source_city"] = src_city
+        r["target_city"] = tgt_city
+        r["job_index"] = i
+        r["job_total"] = n_jobs
+
+        results.append(r)
+
+        log(
+            f"[stage5] DONE ({i}/{n_jobs}) "
+            f"mae={r.get('overall_mae')} "
+            f"r2={r.get('overall_r2')}",
+            level=3,
+        )
 
     js = os.path.join(outdir, "xfer_results.json")
     with open(js, "w", encoding="utf-8") as f:

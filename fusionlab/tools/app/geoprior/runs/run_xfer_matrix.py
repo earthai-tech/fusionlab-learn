@@ -26,8 +26,7 @@ from typing import Any, Callable, Dict, Optional, Sequence
 from ..config.store import GeoConfigStore
 
 from .xfer.xfer_core import WarmStartConfig
-from .xfer.xfer_core import build_plan
-from .xfer.xfer_core import run_plan
+from .xfer.xfer_core import build_plan, run_plan
 
 
 LogFn = Callable[[str], None]
