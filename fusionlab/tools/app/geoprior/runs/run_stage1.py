@@ -1303,8 +1303,9 @@ def run_stage1(
         df_proc,
         time_col=TIME_COL,
         datetime_col=DT_TMP,
-        require_full_year=True,
-        raise_on_error=True,
+        # require_full_year=True,
+        year_col =TIME_COL, 
+        drop_origin=True,
     )
     
     TIME_COL_NUM = f"{TIME_COL}_numeric_coord"
