@@ -1175,10 +1175,24 @@ def run_stage1(
     # ------------------------------------------------------------------
     # 3.2 Coordinates: degrees -> projected meters (optional)
     # ------------------------------------------------------------------
-    coords_in_degrees = COORD_MODE == "degrees"
-    coord_epsg_used = None
+    coords_in_degrees = str(COORD_MODE).strip().lower() == "degrees"
+    coord_epsg_used: int | None = None
+    
+    # Heuristic degree->meter scale factors (for debug/audit only)
+    # NOTE:
+    # - Only meaningful when coordinates are still in degrees.
+    # - deg_to_m_from_lat() expects a scalar latitude.
+    deg2m_x: float | None = None  # meters per degree of longitude at lat_ref
+    deg2m_y: float | None = None  # meters per degree of latitude at lat_ref
+    lat_ref_deg: float | None = None
     
     if coords_in_degrees:
+        # Compute reference latitude *before* any projection for audit/debug.
+        lat_ref_deg = float(
+            np.nanmean(df_proc[LAT_COL].to_numpy(dtype=float))
+        )
+        deg2m_x, deg2m_y = deg_to_m_from_lat(lat_ref_deg)
+    
         try:
             from pyproj import Transformer  # local import
         except Exception as e:
@@ -1187,29 +1201,97 @@ def run_stage1(
             ) from e
     
         transformer = Transformer.from_crs(
-            COORD_SRC_EPSG,
-            COORD_TARGET_EPSG,
+            int(COORD_SRC_EPSG),
+            int(COORD_TARGET_EPSG),
             always_xy=True,
         )
-        x_m, y_m = transformer.transform(
-            df_proc[LON_COL].to_numpy(),
-            df_proc[LAT_COL].to_numpy(),
-        )
-        df_proc[COORD_X_COL] = x_m.astype(float)
-        df_proc[COORD_Y_COL] = y_m.astype(float)
-        coord_epsg_used = COORD_TARGET_EPSG
-    else:
-        if COORD_X_COL not in df_proc.columns:
-            df_proc[COORD_X_COL] = df_proc[LON_COL].astype(float)
-        if COORD_Y_COL not in df_proc.columns:
-            df_proc[COORD_Y_COL] = df_proc[LAT_COL].astype(float)
-        coord_epsg_used = COORD_SRC_EPSG
     
-    # Heuristic degree->meter scale factors (for debug/audit only)
-    deg2m_x = deg_to_m_from_lat(
-        df_proc[LAT_COL].astype(float).to_numpy()
-    ) if coords_in_degrees else None
-    deg2m_y = 111_320.0 if coords_in_degrees else None
+        x_m, y_m = transformer.transform(
+            df_proc[LON_COL].to_numpy(dtype=float),
+            df_proc[LAT_COL].to_numpy(dtype=float),
+        )
+    
+        df_proc[COORD_X_COL] = np.asarray(x_m, dtype=float)
+        df_proc[COORD_Y_COL] = np.asarray(y_m, dtype=float)
+    
+        coord_epsg_used = int(COORD_TARGET_EPSG)
+    
+        # IMPORTANT:
+        # Coordinates are now projected meters, so they are no longer degrees.
+        coords_in_degrees = False
+    
+    else:
+        # Treat input coords as already projected meters (or any consistent
+        # linear unit), using COORD_X_COL/COORD_Y_COL if present, otherwise
+        # fall back to LON_COL/LAT_COL as numeric columns.
+        if COORD_X_COL not in df_proc.columns:
+            df_proc[COORD_X_COL] = pd.to_numeric(
+                df_proc[LON_COL], errors="coerce"
+            ).astype(float)
+        else:
+            df_proc[COORD_X_COL] = pd.to_numeric(
+                df_proc[COORD_X_COL], errors="coerce"
+            ).astype(float)
+    
+        if COORD_Y_COL not in df_proc.columns:
+            df_proc[COORD_Y_COL] = pd.to_numeric(
+                df_proc[LAT_COL], errors="coerce"
+            ).astype(float)
+        else:
+            df_proc[COORD_Y_COL] = pd.to_numeric(
+                df_proc[COORD_Y_COL], errors="coerce"
+            ).astype(float)
+    
+        coord_epsg_used = (
+            int(COORD_SRC_EPSG) if COORD_SRC_EPSG is not None else None
+        )
+    
+    # If coords_in_degrees is False here (most cases after projection),
+    # deg2m_x/deg2m_y remain as the *degree* heuristics computed above
+    # (if we started in degrees), otherwise None.
+    # ------------------------------------------------------------------
+    # 3.3 Normalize time -> numeric coord
+    # ------------------------------------------------------------------
+
+    # # ------------------------------------------------------------------
+    # # 3.2 Coordinates: degrees -> projected meters (optional)
+    # # ------------------------------------------------------------------
+    # coords_in_degrees = COORD_MODE == "degrees"
+    # coord_epsg_used = None
+    
+    # if coords_in_degrees:
+    #     try:
+    #         from pyproj import Transformer  # local import
+    #     except Exception as e:
+    #         raise ImportError(
+    #             "pyproj is required for COORD_MODE='degrees'."
+    #         ) from e
+    
+    #     transformer = Transformer.from_crs(
+    #         COORD_SRC_EPSG,
+    #         COORD_TARGET_EPSG,
+    #         always_xy=True,
+    #     )
+    #     x_m, y_m = transformer.transform(
+    #         df_proc[LON_COL].to_numpy(),
+    #         df_proc[LAT_COL].to_numpy(),
+    #     )
+    #     df_proc[COORD_X_COL] = x_m.astype(float)
+    #     df_proc[COORD_Y_COL] = y_m.astype(float)
+    #     coord_epsg_used = COORD_TARGET_EPSG
+    #     coords_in_degrees=False 
+    # else:
+    #     if COORD_X_COL not in df_proc.columns:
+    #         df_proc[COORD_X_COL] = df_proc[LON_COL].astype(float)
+    #     if COORD_Y_COL not in df_proc.columns:
+    #         df_proc[COORD_Y_COL] = df_proc[LAT_COL].astype(float)
+    #     coord_epsg_used = COORD_SRC_EPSG
+    
+    # # Heuristic degree->meter scale factors (for debug/audit only)
+    # deg2m_x = deg_to_m_from_lat(
+    #     df_proc[LAT_COL].astype(float).to_numpy()
+    # ) if coords_in_degrees else None
+    # deg2m_y = 111_320.0 if coords_in_degrees else None
     
     # ------------------------------------------------------------------
     # 3.3 Normalize time -> numeric coord
