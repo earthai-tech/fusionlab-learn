@@ -2547,6 +2547,229 @@ QProgressBar#consoleProgress::chunk {{
 }}
 """
 
+_DOCK_CHROME_LIGHT = f"""
+/* ===== Generic GeoPrior docks (Light) ===== */
+
+QDockWidget[gpDock="true"] {{
+  border: 1px solid {_rgba(PALETTE['primary'], 0.18)};
+  border-radius: 12px;
+  background: {PALETTE['light_card_bg']};
+}}
+
+/* remove default title padding if you use a custom title bar */
+QDockWidget[gpDock="true"]::title {{
+  padding: 0px;
+}}
+
+/* docking splitter handle */
+QDockWidget[gpDock="true"]::separator {{
+  background: transparent;
+  width: 8px;
+  height: 8px;
+}}
+QDockWidget[gpDock="true"]::separator:hover {{
+  background: {_rgba(PALETTE['primary'], 0.08)};
+  border-radius: 4px;
+}}
+
+/* title bar */
+QWidget#dockTitleBar {{
+  background: {_rgba(PALETTE['primary'], 0.04)};
+  border-bottom: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+}}
+
+QLabel#dockTitle {{
+  color: {PALETTE['light_text_title']};
+  font-weight: 800;
+}}
+
+QLabel#dockChip {{
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 800;
+  background: {_rgba(PALETTE['primary'], 0.06)};
+  border: 1px solid {_rgba(PALETTE['primary'], 0.14)};
+  color: {_rgba(PALETTE['light_text'], 0.90)};
+}}
+
+QLabel#dockChip[kind="ok"] {{
+  background: {_rgba(RUN_BUTTON_IDLE, 0.16)};
+  border-color: {_rgba(RUN_BUTTON_IDLE, 0.35)};
+}}
+
+QLabel#dockChip[kind="warn"] {{
+  background: rgba(245,158,11,0.16);
+  border-color: rgba(245,158,11,0.30);
+}}
+
+QLabel#dockChip[kind="err"] {{
+  background: rgba(239,68,68,0.16);
+  border-color: rgba(239,68,68,0.30);
+}}
+
+QToolButton#dockBtn {{
+  background: transparent;
+  border: 1px solid {_rgba(PALETTE['primary'], 0.18)};
+  border-radius: 10px;
+  padding: 2px 6px;
+}}
+
+QToolButton#dockBtn:hover:enabled {{
+  background: {_rgba(SECONDARY_TBLUE, 0.12)};
+  border-color: {_rgba(SECONDARY_TBLUE, 0.40)};
+}}
+
+QToolButton#dockBtn:pressed {{
+  background: {_rgba(PALETTE['secondary'], 0.14)};
+  border-color: {_rgba(PALETTE['secondary'], 0.45)};
+}}
+
+QLineEdit#dockSearch {{
+  border: 1px solid {_rgba(PALETTE['primary'], 0.22)};
+  background: {_rgba(PALETTE['primary'], 0.06)};
+  border-radius: 12px;
+  padding: 6px 10px;
+}}
+
+QLineEdit#dockSearch:focus {{
+  border-color: {_rgba(SECONDARY_TBLUE, 0.70)};
+  background: {_rgba(SECONDARY_TBLUE, 0.08)};
+}}
+
+QWidget#dockBody {{
+  background: transparent;
+}}
+"""
+
+_DOCK_CHROME_DARK = f"""
+/* ===== Generic GeoPrior docks (Dark) ===== */
+
+QDockWidget[gpDock="true"] {{
+  border: 1px solid {PALETTE['dark_border']};
+  border-radius: 12px;
+  background: {PALETTE['dark_card_bg']};
+}}
+
+QDockWidget[gpDock="true"]::title {{
+  padding: 0px;
+}}
+
+QDockWidget[gpDock="true"]::separator {{
+  background: transparent;
+  width: 8px;
+  height: 8px;
+}}
+QDockWidget[gpDock="true"]::separator:hover {{
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+}}
+
+QWidget#dockTitleBar {{
+  background: rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(255,255,255,0.10);
+}}
+
+QLabel#dockTitle {{
+  color: {PALETTE['dark_text_title']};
+  font-weight: 800;
+}}
+
+QLabel#dockChip {{
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 800;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(226,232,240,0.92);
+}}
+
+QLabel#dockChip[kind="ok"] {{
+  background: {_rgba(RUN_BUTTON_IDLE, 0.18)};
+  border-color: {_rgba(RUN_BUTTON_IDLE, 0.40)};
+}}
+
+QLabel#dockChip[kind="warn"] {{
+  background: rgba(245,158,11,0.18);
+  border-color: rgba(245,158,11,0.35);
+}}
+
+QLabel#dockChip[kind="err"] {{
+  background: rgba(239,68,68,0.18);
+  border-color: rgba(239,68,68,0.35);
+}}
+
+QToolButton#dockBtn {{
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 10px;
+  padding: 2px 6px;
+}}
+
+QToolButton#dockBtn:hover:enabled {{
+  background: {_rgba(SECONDARY_TBLUE, 0.14)};
+  border-color: {_rgba(SECONDARY_TBLUE, 0.35)};
+}}
+
+QToolButton#dockBtn:pressed {{
+  background: {_rgba(PALETTE['secondary'], 0.20)};
+  border-color: {_rgba(PALETTE['secondary'], 0.45)};
+}}
+
+QLineEdit#dockSearch {{
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 6px 10px;
+  color: rgba(226,232,240,0.92);
+}}
+
+QLineEdit#dockSearch:focus {{
+  border-color: {_rgba(SECONDARY_TBLUE, 0.70)};
+  background: {_rgba(SECONDARY_TBLUE, 0.10)};
+}}
+
+QWidget#dockBody {{
+  background: transparent;
+}}
+"""
+MAP_TOOL_DOCK_PANEL_LIGHT = """
+QDockWidget#mapToolDock QFrame#mapToolDockBasic {
+  border: 1px solid rgba(46,49,145,0.14);
+  border-radius: 12px;
+  background: rgba(46,49,145,0.03);
+}
+
+QDockWidget#mapToolDock QFrame#mapToolDockAdv {
+  border: 1px solid rgba(46,49,145,0.14);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.80);
+}
+
+QDockWidget#mapToolDock QFrame#mapToolDockAdvBody {
+  border-top: 1px solid rgba(46,49,145,0.12);
+  background: transparent;
+}
+"""
+
+MAP_TOOL_DOCK_PANEL_DARK = """
+QDockWidget#mapToolDock QFrame#mapToolDockBasic {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+}
+
+QDockWidget#mapToolDock QFrame#mapToolDockAdv {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(15,23,42,0.18);
+}
+
+QDockWidget#mapToolDock QFrame#mapToolDockAdvBody {
+  border-top: 1px solid rgba(255,255,255,0.10);
+  background: transparent;
+}
+"""
+
 # ------------------------------------------------------------------ #
 #  Tuner + error dialog styles
 # ------------------------------------------------------------------ #
@@ -2744,6 +2967,8 @@ QLineEdit#searchEdit {
 }
 """
 
+_DOCK_CHROME_DARK += MAP_TOOL_DOCK_PANEL_LIGHT
+_DOCK_CHROME_DARK += MAP_TOOL_DOCK_PANEL_DARK
 
 __all__ = [
     "PRIMARY",

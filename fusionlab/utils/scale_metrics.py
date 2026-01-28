@@ -37,6 +37,120 @@ import joblib
 ArrayLike = Any
 
 
+def auto_noise_std_from_increments(
+    y_inc: np.ndarray,
+    *,
+    noise_frac: float = 0.10,
+    percentile: float = 95.0,
+    min_std: float = 0.0,
+    max_std: Optional[float] = None,
+    eps: float = 1e-12,
+) -> float:
+    """
+    Compute noise std as a fraction of a robust
+    increment scale.
+
+    Parameters
+    ----------
+    y_inc : np.ndarray
+        Deterministic increments (before noise).
+        Any shape; will be flattened.
+    noise_frac : float, default=0.10
+        Fraction applied to the percentile scale.
+    percentile : float, default=95.0
+        Percentile of |y_inc| used as scale.
+    min_std : float, default=0.0
+        Lower bound for returned std.
+    max_std : float or None, default=None
+        Optional upper bound for returned std.
+    eps : float, default=1e-12
+        Small positive value for safe fallback.
+
+    Returns
+    -------
+    float
+        A finite, non-negative std value.
+
+    Notes
+    -----
+    - Filters non-finite values.
+    - If scale is ~0, falls back to max(|y_inc|)
+      then mean(|y_inc|), then eps.
+    """
+    if y_inc is None:
+        return float(max(min_std, 0.0))
+
+    a = np.asarray(y_inc, dtype=float).ravel()
+    if a.size == 0:
+        return float(max(min_std, 0.0))
+
+    a = a[np.isfinite(a)]
+    if a.size == 0:
+        return float(max(min_std, 0.0))
+
+    if not np.isfinite(noise_frac):
+        noise_frac = 0.0
+    noise_frac = float(max(noise_frac, 0.0))
+
+    p = float(percentile)
+    p = float(np.clip(p, 0.0, 100.0))
+
+    abs_a = np.abs(a)
+
+    try:
+        scale = float(np.percentile(abs_a, p))
+    except Exception:
+        scale = float(np.nan)
+
+    if (not np.isfinite(scale)) or (scale <= eps):
+        scale = float(np.max(abs_a)) if abs_a.size else 0.0
+
+    if (not np.isfinite(scale)) or (scale <= eps):
+        scale = float(np.mean(abs_a)) if abs_a.size else 0.0
+
+    if (not np.isfinite(scale)) or (scale <= eps):
+        scale = float(eps)
+
+    std = float(noise_frac * scale)
+
+    if not np.isfinite(std):
+        std = float(min_std)
+
+    std = float(max(std, float(min_std)))
+
+    if max_std is not None:
+        mx = float(max_std)
+        if np.isfinite(mx):
+            std = float(min(std, mx))
+
+    return std
+
+
+def resolve_noise_std(
+    y_inc: np.ndarray,
+    *,
+    noise_std: Optional[float] = None,
+    noise_frac: float = 0.10,
+    percentile: float = 95.0,
+    min_std: float = 0.0,
+    max_std: Optional[float] = None,
+) -> float:
+    """
+    Prefer explicit `noise_std` when provided,
+    otherwise auto-compute from increments.
+    """
+    if noise_std is not None:
+        v = float(noise_std)
+        if np.isfinite(v) and v >= 0.0:
+            return v
+    return auto_noise_std_from_increments(
+        y_inc,
+        noise_frac=noise_frac,
+        percentile=percentile,
+        min_std=min_std,
+        max_std=max_std,
+    )
+
 def _to_np(x: ArrayLike) -> np.ndarray:
     """Convert Tensor / list-like to a NumPy array."""
     if hasattr(x, "numpy"):

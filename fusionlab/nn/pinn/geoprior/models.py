@@ -8,6 +8,7 @@ from collections import OrderedDict
 from collections.abc import Mapping
 from numbers import Integral, Real
 from typing import Any, Dict, List, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 
@@ -481,6 +482,139 @@ class GeoPriorSubsNet(BaseAttentive):
         self._init_coordinate_corrections()
         self._build_pinn_components()
         
+
+    def build(self, input_shape: Any) -> None:
+        """
+        Build the model's weights and sublayers.
+
+        Keras may call `build()` (e.g. via `model.build()` or
+        `model.summary()`) before the first forward pass.
+        For subclassed models, we must ensure all sublayers
+        are actually built, otherwise Keras can mark the layer
+        as built while internal state remains unbuilt.
+        
+        How to use it 
+        ---------------
+        model.build(
+            {
+                "static_features": (None, S),
+                "dynamic_features": (None, H, D),
+                "future_features": (None, H, F),
+                "coords": (None, H, 3),
+                "H_field": (None, H, 1),
+            }
+        )
+        model.summary()
+
+        """
+        if getattr(self, "built", False):
+            return
+
+        # -------------------------------------------------
+        # 0) Ensure heads/layers exist (if lazily created)
+        # -------------------------------------------------
+        if not hasattr(self, "K_head"):
+            # This also calls `_build_physics_layers()`.
+            self._build_attentive_layers()
+
+        # -------------------------------------------------
+        # 1) Extract shapes (dict-input is the common case)
+        # -------------------------------------------------
+        shp = input_shape
+        s_sh = None
+        d_sh = None
+        f_sh = None
+        c_sh = None
+        h_sh = None
+
+        if isinstance(shp, Mapping):
+            s_sh = shp.get("static_features", None)
+            d_sh = shp.get("dynamic_features", None)
+            f_sh = shp.get("future_features", None)
+            c_sh = shp.get("coords", None)
+            h_sh = (
+                shp.get("H_field", None)
+                or shp.get("soil_thickness", None)
+            )
+        elif isinstance(shp, (list, tuple)):
+            # Best-effort positional fallback.
+            if len(shp) >= 1:
+                s_sh = shp[0]
+            if len(shp) >= 2:
+                d_sh = shp[1]
+            if len(shp) >= 3:
+                f_sh = shp[2]
+            if len(shp) >= 4:
+                c_sh = shp[3]
+            if len(shp) >= 5:
+                h_sh = shp[4]
+
+        def _as_list(x: Any) -> List[int | None]:
+            if x is None:
+                return []
+            if hasattr(x, "as_list"):
+                return list(x.as_list())
+            try:
+                return list(x)
+            except Exception:
+                return []
+
+        def _fix_shape(
+            raw: Any,
+            fallback: Tuple[int, ...],
+        ) -> Tuple[int, ...]:
+            sh = _as_list(raw)
+            if not sh:
+                sh = list(fallback)
+            if len(sh) != len(fallback):
+                sh = list(fallback)
+            # Replace None with fallback dims.
+            for i, dim in enumerate(sh):
+                if dim is None:
+                    sh[i] = fallback[i]
+            # Force a concrete batch for dummy build.
+            sh[0] = 1
+            return tuple(int(v) for v in sh)
+
+        # -------------------------------------------------
+        # 2) Choose safe fallback dims
+        # -------------------------------------------------
+        H = int(getattr(self, "forecast_horizon", 1) or 1)
+        H = max(H, 1)
+
+        s_fb = (1, int(self.static_input_dim))
+        d_fb = (1, H, int(self.dynamic_input_dim))
+        f_fb = (1, H, int(self.future_input_dim))
+        c_fb = (1, H, 3)
+        h_fb = (1, H, 1)
+
+        s_shape = _fix_shape(s_sh, s_fb)
+        d_shape = _fix_shape(d_sh, d_fb)
+        f_shape = _fix_shape(f_sh, f_fb)
+        c_shape = _fix_shape(c_sh, c_fb)
+        h_shape = _fix_shape(h_sh, h_fb)
+
+        # -------------------------------------------------
+        # 3) Dummy forward to force-build sublayers
+        # -------------------------------------------------
+        # Avoid surfacing non-critical scaling warnings
+        # during `summary()` / `build()`.
+    
+
+        dummy_inputs = {
+            "static_features": tf_zeros(s_shape, tf_float32),
+            "dynamic_features": tf_zeros(d_shape, tf_float32),
+            "future_features": tf_zeros(f_shape, tf_float32),
+            "coords": tf_zeros(c_shape, tf_float32),
+            "H_field": tf_zeros(h_shape, tf_float32),
+        }
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            _ = self.call(dummy_inputs, training=False)
+
+        super().build(input_shape)
+ 
 
     @property
     def _output_keys(self):

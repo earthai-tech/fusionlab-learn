@@ -65,6 +65,25 @@ K_MAP_EXPANDED = "xfer.map.expanded"
 # Map insight (transferability badge)
 K_MAP_INSIGHT = "xfer.map.insight"
 
+K_MAP_INTERACTION = "xfer.map.interaction"
+K_MAP_INT_CELL_KM = "xfer.map.int.cell_km"
+K_MAP_INT_AGG = "xfer.map.int.agg"
+K_MAP_INT_DELTA = "xfer.map.int.delta"
+
+# extras toggles
+
+K_MAP_INT_HOT_ENABLE = "xfer.map.int.hot.enable"
+K_MAP_INT_HOT_TOPN = "xfer.map.int.hot.topn"
+K_MAP_INT_HOT_METRIC = "xfer.map.int.hot.metric"
+K_MAP_INT_HOT_Q = "xfer.map.int.hot.q"
+K_MAP_INT_HOT_SEP = "xfer.map.int.hot.sep_km"
+
+K_MAP_INT_INTENS_ENABLE = "xfer.map.int.intens.enable"
+
+K_MAP_INT_BUF_ENABLE = "xfer.map.int.buf.enable"
+K_MAP_INT_BUF_K = "xfer.map.int.buf.k"
+
+
 DEFAULTS: Dict[str, object] = {
     K_VIEW_MODE: "map",
     K_MAP_SPLIT: "val",
@@ -101,6 +120,20 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_B_FILE: "",
     K_MAP_INSIGHT: False,
     
+    K_MAP_INTERACTION: "none",
+    K_MAP_INT_CELL_KM: 2.0,
+    K_MAP_INT_AGG: "mean",
+    K_MAP_INT_DELTA: "a_minus_b",
+    
+    K_MAP_INT_HOT_ENABLE: False,
+    K_MAP_INT_HOT_TOPN: 8,
+    K_MAP_INT_HOT_METRIC: "abs",
+    K_MAP_INT_HOT_Q: 0.98,
+    K_MAP_INT_HOT_SEP: 2.0,
+    K_MAP_INT_INTENS_ENABLE: False,
+    K_MAP_INT_BUF_ENABLE: False,
+    K_MAP_INT_BUF_K: 1,
+    
 }
 
 
@@ -136,4 +169,16 @@ def map_keys() -> Set[str]:
         K_MAP_B_JOB_ID,
         K_MAP_B_FILE,
         K_MAP_INSIGHT,
+        K_MAP_INTERACTION,
+        K_MAP_INT_CELL_KM,
+        K_MAP_INT_AGG,
+        K_MAP_INT_DELTA,
+        K_MAP_INT_HOT_ENABLE,
+        K_MAP_INT_HOT_TOPN,
+        K_MAP_INT_HOT_METRIC,
+        K_MAP_INT_HOT_Q,
+        K_MAP_INT_HOT_SEP,
+        K_MAP_INT_INTENS_ENABLE,
+        K_MAP_INT_BUF_ENABLE,
+        K_MAP_INT_BUF_K,
     }

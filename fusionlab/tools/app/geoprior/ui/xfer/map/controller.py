@@ -30,7 +30,7 @@ from ...map.coord_utils import ensure_lonlat
 from ...map.hotspots import HotspotCfg, compute_hotspots
 from ..insights import build_xfer_badges
 from ..types import MapApi, MapPoint
-from .toolbar import DatasetChoice, XferMapToolbar
+
 from ..keys import (
     DEFAULTS,
     map_keys,
@@ -60,11 +60,27 @@ from ..keys import (
     K_MAP_HOTSPOT_QUANTILE,
     K_MAP_ANIM_PULSE,
     K_MAP_ANIM_PLAY_MS,
-    K_MAP_INSIGHT
-
+    K_MAP_INSIGHT, 
+    K_MAP_INTERACTION,
+    K_MAP_INT_CELL_KM,
+    K_MAP_INT_AGG,
+    K_MAP_INT_DELTA,
+    K_MAP_INT_HOT_ENABLE, 
+    K_MAP_INT_INTENS_ENABLE, 
+    K_MAP_INT_BUF_ENABLE
+    
+    
 )
 
-
+from .interactions import (
+    InteractionCfg,
+    compute_interaction_layers,
+)
+from .interaction_extras import (
+    IntExtrasCfg,
+    compute_interaction_extras,
+)
+from .toolbar import DatasetChoice, XferMapToolbar
 
 @dataclass(frozen=True)
 class JobKey:
@@ -628,6 +644,12 @@ class XferMapController(QObject):
             overlay=overlay,
         )
 
+        self._render_interactions(
+            pts_out=pts_out,
+            unit=unit,
+        )
+        self._render_interaction_extras(pts_out=pts_out, unit=unit)
+
     def _load_points(
         self,
         *,
@@ -804,10 +826,43 @@ class XferMapController(QObject):
         if not bool(ok.any()):
             return []
     
+        has_sid = "sid" in df.columns
+        has_tip = "tip" in df.columns
+    
         out: List[MapPoint] = []
-        dd = df.loc[ok, ["lat", "lon", "v"]]
-        for la, lo, vv in dd.to_numpy(dtype=float):
-            out.append(MapPoint(lat=float(la), lon=float(lo), v=float(vv)))
+        cols = ["lat", "lon", "v"]
+        if has_sid:
+            cols.append("sid")
+        if has_tip:
+            cols.append("tip")
+    
+        dd = df.loc[ok, cols]
+    
+        for row in dd.itertuples(index=False, name=None):
+            la = float(row[0])
+            lo = float(row[1])
+            vv = float(row[2])
+    
+            sid = 0
+            tip = None
+    
+            if has_sid and has_tip:
+                sid = int(row[3])
+                tip = row[4]
+            elif has_sid:
+                sid = int(row[3])
+            elif has_tip:
+                tip = row[3]
+    
+            out.append(
+                MapPoint(
+                    lat=la,
+                    lon=lo,
+                    v=vv,
+                    sid=sid,
+                    tip=tip,
+                )
+            )
         return out
 
     def _layer_opts(
@@ -1004,6 +1059,31 @@ class XferMapController(QObject):
             _add("A")
         if overlay in ("b", "both"):
             _add("B")
+            
+        mode = str(
+            self._s.get(K_MAP_INTERACTION, "none") or "none"
+        ).strip().lower()
+        
+        if mode in ("zones", "partition"):
+            ids.extend(["I_AONLY", "I_BONLY", "I_INTER"])
+        elif mode == "a_only":
+            ids.append("I_AONLY")
+        elif mode == "b_only":
+            ids.append("I_BONLY")
+        elif mode == "union":
+            ids.append("I_UNION")
+        elif mode in ("intersection", "inter"):
+            ids.append("I_INTER")
+        elif mode == "delta":
+            ids.append("I_DELTA")
+            
+        if bool(self._s.get(K_MAP_INT_HOT_ENABLE, False)):
+            ids.append("I_DHOT")
+        if bool(self._s.get(K_MAP_INT_INTENS_ENABLE, False)):
+            ids.append("I_INTENS")
+        if bool(self._s.get(K_MAP_INT_BUF_ENABLE, False)):
+            ids.append("I_BUFINT")
+        
 
         return ids
 
@@ -1034,3 +1114,171 @@ class XferMapController(QObject):
         if not bool(ok.any()):
             return None
         return float(lat[ok].mean()), float(lon[ok].mean())
+    
+    def _render_interactions(
+        self,
+        *,
+        pts_out: Dict[str, pd.DataFrame],
+        unit: str,
+    ) -> None:
+        # Always clear old interaction layers.
+        for lid in (
+            "I_AONLY",
+            "I_BONLY",
+            "I_UNION",
+            "I_INTER",
+            "I_DELTA",
+        ):
+            try:
+                self._v.clear_layer(lid)
+            except Exception:
+                pass
+    
+        a_df = pts_out.get("A", None)
+        b_df = pts_out.get("B", None)
+        if a_df is None or b_df is None:
+            return
+    
+        mode = str(self._s.get(K_MAP_INTERACTION, "none") or "none")
+        cell_km = float(self._s.get(K_MAP_INT_CELL_KM, 2.0) or 2.0)
+        agg = str(self._s.get(K_MAP_INT_AGG, "mean") or "mean")
+        delt = str(self._s.get(K_MAP_INT_DELTA, "a_minus_b") or "a_minus_b")
+    
+        if mode.strip().lower() in ("none", "", "off"):
+            return
+    
+        mk_size = int(self._s.get(K_MAP_MARKER_SIZE, 6) or 6)
+        opacity = float(self._s.get(K_MAP_OPACITY, 0.90) or 0.90)
+    
+        cfg = InteractionCfg(
+            mode=mode,
+            cell_km=cell_km,
+            agg=agg,
+            delta=delt,
+        )
+    
+        layers = compute_interaction_layers(
+            a_df,
+            b_df,
+            cfg=cfg,
+            radius=mk_size,
+            opacity=opacity,
+        )
+    
+        if not layers:
+            return
+    
+        # If delta is active, we update legend to match delta.
+        for sp in layers:
+            if sp.legend is not None:
+                leg = dict(sp.legend)
+                leg["unit"] = unit
+                try:
+                    self._v.set_legend(leg)
+                except Exception:
+                    pass
+    
+        for sp in layers:
+            if sp.df is None or sp.df.empty:
+                continue
+            try:
+                self._v.set_layer(
+                    layer_id=sp.layer_id,
+                    name=sp.name,
+                    points=self._as_points(sp.df),
+                    opts=sp.opts,
+                )
+            except Exception:
+                pass
+            
+    def _render_interaction_extras(
+        self,
+        *,
+        pts_out: Dict[str, pd.DataFrame],
+        unit: str,
+    ) -> None:
+        for lid in ("I_DHOT", "I_INTENS", "I_BUFINT"):
+            try:
+                self._v.clear_layer(lid)
+            except Exception:
+                pass
+    
+        a_df = pts_out.get("A")
+        b_df = pts_out.get("B")
+        if a_df is None or b_df is None:
+            return
+    
+        cfg = IntExtrasCfg(
+            cell_km=float(
+                self._s.get("xfer.map.int.cell_km", 2.0) or 2.0
+            ),
+            agg=str(
+                self._s.get("xfer.map.int.agg", "mean") or "mean"
+            ),
+            delta=str(
+                self._s.get("xfer.map.int.delta", "a_minus_b")
+                or "a_minus_b"
+            ),
+            hot_enable=bool(
+                self._s.get("xfer.map.int.hot.enable", False)
+            ),
+            hot_topn=int(
+                self._s.get("xfer.map.int.hot.topn", 8) or 8
+            ),
+            hot_metric=str(
+                self._s.get("xfer.map.int.hot.metric", "abs")
+                or "abs"
+            ),
+            hot_quantile=float(
+                self._s.get("xfer.map.int.hot.q", 0.98) or 0.98
+            ),
+            hot_min_sep_km=float(
+                self._s.get("xfer.map.int.hot.sep_km", 2.0)
+                or 2.0
+            ),
+            intens_enable=bool(
+                self._s.get("xfer.map.int.intens.enable", False)
+            ),
+            buf_enable=bool(
+                self._s.get("xfer.map.int.buf.enable", False)
+            ),
+            buf_k=int(
+                self._s.get("xfer.map.int.buf.k", 1) or 1
+            ),
+        )
+    
+        mk = int(self._s.get(K_MAP_MARKER_SIZE, 6) or 6)
+        op = float(self._s.get(K_MAP_OPACITY, 0.90) or 0.90)
+    
+        layers = compute_interaction_extras(
+            a_df,
+            b_df,
+            cfg=cfg,
+            coord_mode=self._coord_mode(),
+            radius=mk,
+            opacity=op,
+        )
+    
+        for p in layers:
+            leg = p.get("legend")
+            if isinstance(leg, dict):
+                leg = dict(leg)
+                leg["unit"] = unit
+                try:
+                    self._v.set_legend(leg)
+                except Exception:
+                    pass
+    
+            df = p.get("df")
+            if df is None or getattr(df, "empty", True):
+                continue
+    
+            try:
+                self._v.set_layer(
+                    layer_id=str(p.get("id")),
+                    name=str(p.get("name")),
+                    points=self._as_points(df),
+                    opts=dict(p.get("opts") or {}),
+                )
+            except Exception:
+                pass

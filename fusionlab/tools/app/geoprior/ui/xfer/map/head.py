@@ -119,10 +119,12 @@ class XferMapHeadBar(QFrame):
         self._host.setObjectName("mapHeadGroup")
         self._host.setFrameShape(QFrame.NoFrame)
         self._host.setAttribute(Qt.WA_StyledBackground, True)
-
+        self._host.setVisible(False)
+        
         self._host_l = QVBoxLayout(self._host)
         self._host_l.setContentsMargins(8, 8, 8, 8)
         self._host_l.setSpacing(0)
+        
 
         root.addWidget(self._host)
 
@@ -148,6 +150,7 @@ class XferMapHeadBar(QFrame):
         self._toolbar = tb
         tb.setParent(self._host)
         self._host_l.addWidget(tb)
+        self._host.setVisible(True)
 
         # Forward key signals (disconnect-safe)
         try:
@@ -187,4 +190,6 @@ class XferMapHeadBar(QFrame):
         self._host_l.removeWidget(tb)
         tb.setParent(None)
         self._toolbar = None
+
+        self._host.setVisible(False)
         return tb

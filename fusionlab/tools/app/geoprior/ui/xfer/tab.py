@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -13,12 +13,15 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QMainWindow, 
+    QSizePolicy
 )
 
 from ...config.store import GeoConfigStore
 from .keys import K_VIEW_MODE, K_MAP_EXPANDED, K_MAP_OVERLAY  
 from .map.page import XferMapPage
 from .map.head import XferMapHeadBar
+from .map.tool_dock import XferMapToolDock
 from .run.preview import XferRunPreview
 from .run.navigator import XferNavigator 
 from .run.run_center import XferRunCenter 
@@ -163,19 +166,6 @@ class XferTab(QWidget):
     def _apply_mode_from_store(self) -> None:
         self._set_mode(self._mode_from_store(), persist=False)
 
-    # def _set_mode(self, mode: str, *, persist: bool = True):
-    #     m = "map" if str(mode).lower() == "map" else "run"
-    
-    #     self.head.setVisible(m == "run")
-    #     self._stack.setCurrentIndex(1 if m == "map" else 0)
-    
-    #     if persist:
-    #         self._s.set(K_VIEW_MODE, m)
-    
-    #     if m != "map":
-    #         self.map_ws.set_expanded(False, persist=False)
-    #     else:
-    #         self._apply_map_expanded_from_store()
     
     def _set_mode(self, mode: str, *, persist: bool = True):
         m = "map" if str(mode).lower() == "map" else "run"
@@ -197,7 +187,8 @@ class XferTab(QWidget):
             self.map_ws.set_expanded(False, persist=False)
         else:
             self._apply_map_expanded_from_store()
-
+            QTimer.singleShot(0, self.map_ws._activate_map_ui)
+            QTimer.singleShot(0, self.map_ws.map_page.refresh)
 
     def _on_map_expand(self, on: bool) -> None:
         if self._mode_from_store() != "map":
@@ -353,94 +344,168 @@ class XferMapWorkspace(QWidget):
         self._build_ui()
         self._wire()
 
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        QTimer.singleShot(0, self._activate_map_ui)
+    
+    def _activate_map_ui(self) -> None:
+        # Ensure dock is visible and has height *after* show.
+        if hasattr(self, "tool_dock"):
+            self.tool_dock.setVisible(True)
+            self.tool_dock.raise_()
+            self.tool_dock.setMinimumHeight(80)
+    
+            tb = getattr(self, "_tb", None)
+            if tb is not None:
+                h = tb.sizeHint().height()
+                h = max(80, int(h) + 18)
+            else:
+                h = 120
+    
+            self._mw.resizeDocks(
+                [self.tool_dock],
+                [h],
+                Qt.Vertical,
+            )
+    
+        # Refresh map after it is actually shown.
+        try:
+            self.map_page.refresh()
+        except Exception:
+            pass
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
     
+        # Head stays as info card (no toolbar in it)
         self.head = XferMapHeadBar(parent=self)
-        root.addWidget(self.head)
+        root.addWidget(self.head, 0)
     
-        self._dock = QWidget(self)
-        self._dock.setVisible(False)
-        self._dock_l = QVBoxLayout(self._dock)
-        self._dock_l.setContentsMargins(0, 0, 0, 0)
-        self._dock_l.setSpacing(0)
-        root.addWidget(self._dock)
+        # Dock host needs a QMainWindow. Make it native so
+        # docks + QtWebEngine reliably paint.
+        self._mw = QMainWindow(self)
+        self._mw.setObjectName("xferMapMainWin")
+        self._mw.setAttribute(Qt.WA_NativeWindow, True)
+        self._mw.setDockNestingEnabled(True)
+
+        root.addWidget(self._mw, 1)
     
-        self.map_page = XferMapPage(store=self._s, parent=self)
-        root.addWidget(self.map_page, 1)
+        # Central map page (let QMainWindow parent it)
+        self.map_page = XferMapPage(store=self._s, parent=None)
+        self._mw.setCentralWidget(self.map_page)
     
-        # --- move toolbar from map_page into head card
+        # head must NOT eat the whole page should be on the top
+        self.head.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        
+        # the dock + map host must expand
+        self._mw.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+        self._mw.setMinimumHeight(1)
+
+        # Take existing toolbar from the page
         tb = self.map_page.toolbar
         self._tb = tb
-        
-        self.map_page.take_toolbar()
     
+        self.map_page.take_toolbar()
         if hasattr(self.map_page, "_toolbar_w"):
             self.map_page._toolbar_w.setVisible(False)
     
-        self.head.set_toolbar(tb)
+        # Dock widget (dock by default)
+        self.tool_dock = XferMapToolDock(store=self._s, parent=self._mw)
+        self.tool_dock.set_toolbar(tb)
+        self._mw.addDockWidget(
+            Qt.TopDockWidgetArea,
+            self.tool_dock,
+        )
+        self.tool_dock.setVisible(True)
+
+        if hasattr(tb, "set_mode"):
+            tb.set_mode("map")
+            
+        def _post_layout() -> None:
+            self.tool_dock.show()
         
+            if self._tb is not None:
+                self._tb.show()
+        
+                h = self._tb.sizeHint().height()
+                h = max(80, int(h) + 18)
+        
+                self._mw.resizeDocks(
+                    [self.tool_dock],
+                    [h],
+                    Qt.Vertical,
+                )
+        
+            try:
+                self.map_page.refresh()
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _post_layout)
+        
+
     def _wire(self) -> None:
-        # expand from toolbar (forwarded by head)
-        self.head.expand_toggled.connect(self.expand_changed.emit)
+        tb = getattr(self, "_tb", None)
     
-        # head already has mode_changed; use it as “open run”.
+        if tb is not None:
+            tb.request_expand.connect(
+                self.expand_changed.emit
+            )
+    
+            tb.request_mode_switch.connect(
+                self._on_toolbar_mode_switch
+            )
+    
+            # legacy wiring kept alive
+            tb.request_open_options.connect(
+                self.request_open_run.emit
+            )
+    
         self.head.open_run_clicked.connect(
             self.request_open_run.emit
         )
-         
-        # map_page can also request "run"
+    
         self.map_page.request_open_options.connect(
             self.request_open_run.emit
         )
+
         
     def _on_head_mode(self, mode: str) -> None:
         if str(mode).strip().lower() == "run":
             self.request_open_run.emit()
-            
+                
+    def _on_toolbar_mode_switch(self, tgt: str) -> None:
+        m = str(tgt or "").strip().lower()
+        if m == "run":
+            self.request_open_run.emit()
+
     def set_expanded(self, on: bool, *, persist: bool = True) -> None:
         on = bool(on)
+    
+        # tb = self._current_toolbar()
+        tb = self._tb
+        if tb is not None:
+            tb.set_expanded(on)
+    
         if on == self._expanded:
-            # keep toolbar icon in sync
-            tb = self._current_toolbar()
-            if tb is not None:
-                tb.set_expanded(on)
             return
     
         self._expanded = on
     
-        if on:
-            tb = self.head.take_toolbar()
-            if tb is not None:
-                self._dock_l.addWidget(tb)
-                self._dock.setVisible(True)
-                self.head.setVisible(False)
-                tb.set_expanded(True)
-        else:
-            tb = self._take_dock_toolbar()
-            if tb is not None:
-                self.head.set_toolbar(tb)
-                self._dock.setVisible(False)
-                self.head.setVisible(True)
-                tb.set_expanded(False)
+        # Expanded == hide head only (gain vertical space)
+        self.head.setVisible(not on)
     
         if persist:
             cur = bool(self._s.get(K_MAP_EXPANDED, False))
             if cur != on:
                 self._s.set(K_MAP_EXPANDED, on)
-    
-    def _current_toolbar(self):
-        return getattr(self, "_tb", None)
-    
-    def _take_dock_toolbar(self):
-        if self._dock_l.count() < 1:
-            return None
-        it = self._dock_l.takeAt(0)
-        w = it.widget() if it is not None else None
-        if w is None:
-            return None
-        w.setParent(None)
-        return w
 

@@ -43,6 +43,14 @@ from fusionlab.params import (
     LearnableMV,
 )
 
+from fusionlab.nn.keras_metrics import (
+    Coverage80,
+    MAEQ50,
+    MSEQ50,
+    Sharpness80,
+)
+from fusionlab.utils.scale_metrics import resolve_noise_std
+
 SEC_PER_YEAR = 365.25 * 24.0 * 3600.0
 
 
@@ -196,7 +204,7 @@ def make_one_step_windows(
     ).astype(np.float32)
 
     X["dynamic_features"] = np.zeros(
-        (B, T, 1),
+        (B, T, 2),
         np.float32,
     )
 
@@ -225,6 +233,8 @@ def make_one_step_windows(
         j = i + T
 
         X["dynamic_features"][i, :, 0] = z_gwl[i : i + T]
+        X["dynamic_features"][i, :, 1] = s_cum[i : i + T]
+        
         y["subs_pred"][i, 0, 0] = s_cum[j]
         # after: z_surf = 0 -> head = -depth
         y["gwl_pred"][i, 0, 0] = -z_gwl[j]
@@ -375,7 +385,7 @@ def _make_scaling_kwargs(
     # - use_head_proxy=True yields head = -depth when
     #   z_surf is missing (SM3 synthetic case).
     return dict(
-        subs_scale_si=1e-3,
+        subs_scale_si=1.0,
         subs_bias_si=0.0,
         head_scale_si=1.0,
         head_bias_si=0.0,
@@ -395,6 +405,8 @@ def _make_scaling_kwargs(
         physics_warmup_steps=0, # 10,
         physics_ramp_steps=0, #20,
 
+        subs_dyn_index=1,
+        subs_dyn_name="subs_model",
         # input is depth (down+), model converts to head using z_surf
         gwl_dyn_index=0,
         gwl_col="GWL_depth_bgs_m",
@@ -414,7 +426,11 @@ def _make_scaling_kwargs(
         # disable proxy (even if ignored, harmless)
         use_head_proxy=False,
 
-        dynamic_feature_names=["GWL_depth_bgs_m"],
+        # dynamic_feature_names=["GWL_depth_bgs_m"],
+        dynamic_feature_names=[
+            "GWL_depth_bgs_m",
+            "subs_model",
+        ],
         bounds=dict(
             H_min=3.0,
             H_max=80.0,
@@ -517,27 +533,75 @@ def train_one_pixel(
         _ = model(xb)
         break
 
-    loss_sub = make_weighted_pinball(
-        [0.1, 0.5, 0.9],
-        {0.1: 3.0, 0.5: 1.0, 0.9: 3.0},
+    QUANTILES = [0.1, 0.5, 0.9]
+    SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
+
+    loss_dict = {
+        "subs_pred": make_weighted_pinball(
+            QUANTILES, SUBS_WEIGHTS
+        ),
+        "gwl_pred": tf.keras.losses.MSE,
+    }
+
+    # # Metrics (meters).
+    metrics_arg = {
+        "subs_pred": [
+            MAEQ50(name="mae_q50"),
+            MSEQ50(name="mse_q50"),
+            Coverage80(name="coverage80"),
+            Sharpness80(name="sharpness80"),
+        ],
+        "gwl_pred": [
+            MAEQ50(name="mae_q50"),
+            MSEQ50(name="mse_q50"),
+        ],
+    }
+    physics_loss_weights = {
+        "lambda_cons": 1.0,
+        "lambda_gw": 0.0,
+        "lambda_prior": 0.3,
+        "lambda_smooth": 0.0,
+        "lambda_bounds": 0.0,
+        "lambda_mv": 0.0,
+        "mv_lr_mult": 1.0,
+        "kappa_lr_mult": 0.0,
+        "lambda_offset": float(lambda_offset),
+        # IMPORTANT: penalize quantile crossing
+        "lambda_q": 0.1,
+    }
+
+    loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": 1.0}
+
+    out_names = (
+        list(getattr(model, "output_names", []))
+        or ["subs_pred", "gwl_pred"]
     )
+
+    import keras
+    IS_KERAS2 = keras.__version__.startswith("2.")
+
+    if IS_KERAS2:
+        loss_arg = [loss_dict[k] for k in out_names]
+        lossw_arg = [
+            loss_weights_dict.get(k, 1.0) for k in out_names
+        ]
+        metrics_compile = [
+            metrics_arg.get(k, []) for k in out_names
+        ]
+    else:
+        loss_arg = loss_dict
+        lossw_arg = loss_weights_dict
+        metrics_compile = metrics_arg
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(
             learning_rate=float(lr),
             clipnorm=1.0,
         ),
-        loss={"subs_pred": loss_sub, "gwl_pred": tf.keras.losses.MSE},
-        loss_weights={"subs_pred": 1.0, "gwl_pred": 1.0},
-        lambda_cons=1.0,
-        lambda_gw=0.0,
-        lambda_prior=0.3,
-        lambda_smooth=0.0,
-        lambda_mv=0.0,
-        lambda_bounds=0.0,
-        lambda_offset=lambda_offset, 
-        mv_lr_mult=1.0,
-        kappa_lr_mult=0.0,
+        loss=loss_arg,
+        loss_weights=lossw_arg,
+        metrics=metrics_compile,
+        **physics_loss_weights,
     )
 
     os.makedirs(outdir, exist_ok=True)
@@ -681,11 +745,22 @@ def run_one_realisation(
     y_inc[0] = s_cum[0]
     y_inc[1:] = s_cum[1:] - s_cum[:-1]
 
+
+    # AUTO noise from deterministic increments
+    noise_std = resolve_noise_std(
+        y_inc,
+        noise_std=args.noise_std,
+        noise_frac=getattr(args, "noise_frac", 0.10),
+        percentile=95.0,
+        min_std=0.0,
+    )
+
     y_inc = y_inc + rng.normal(
         0.0,
-        float(args.noise_std),
+        float(noise_std),
         size=y_inc.shape,
     )
+
     s_obs = np.cumsum(y_inc)
 
     is_capped = float(H_phys > args.thickness_cap)
@@ -735,6 +810,7 @@ def run_one_realisation(
 
     npz_path = os.path.join(run_dir, "phys_payload_val.npz")
 
+
     meta = {
         "synthetic": True,
         "realisation": int(r),
@@ -756,7 +832,7 @@ def run_one_realisation(
         "load_type": str(args.load_type),
         "amp_dh": float(amp),
         "step_year": int(step_year),
-        "noise_std": float(args.noise_std),
+        "noise_std": float(noise_std),
         
         "payload_time_units": "sec",
         "units": {
@@ -813,7 +889,6 @@ def run_one_realisation(
     eps_prior_rms = pm.get("eps_prior_rms", np.nan)
     r2_logtau = pm.get("r2_logtau", np.nan)
     clos_rms = pm.get("closure_consistency_rms", np.nan)
-
 
     diag_path = os.path.join(
         run_dir,
@@ -992,7 +1067,8 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=1e-3)
 
-    ap.add_argument("--noise-std", type=float, default=0.02)
+    ap.add_argument("--noise-std", type=float, default=None)
+    ap.add_argument("--noise-frac", type=float, default=0.10)
 
     ap.add_argument(
         "--load-type",
@@ -1000,7 +1076,7 @@ def main() -> None:
         default="step",
     )
 
-    ap.add_argument("--alpha", type=float, default=1000.0)
+    ap.add_argument("--alpha", type=float, default=1.0)
     ap.add_argument("--hd-factor", type=float, default=0.6)
     ap.add_argument(
         "--thickness-cap",

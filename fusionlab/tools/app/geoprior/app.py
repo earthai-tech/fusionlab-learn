@@ -67,7 +67,10 @@ from PyQt5.QtWidgets import (
 
 from .workflows.base import RunEnv, GUIHooks
 from .workflows.train import TrainController, TrainGuiState
-
+from .workflows.preprocess import (
+    PreprocessController,
+    PreprocessGuiState,
+)
 from .workflows.tune import TuneController, TuneGuiState
 from .workflows.inference import (
     InferenceController,
@@ -475,6 +478,12 @@ class GeoPriorForecaster(QMainWindow):
             find_stage1_for_city=find_stage1_for_city,
             chooser=self._choose_stage1_run,
         )
+        self.preprocess_ctl = PreprocessController(
+            env=self._run_env,
+            hooks=self._gui_hooks,
+            stage1_svc=self._stage1_service,
+        )
+
         # 4) Training controller (real + dry)
         self.train_controller = TrainController(
             env=self._run_env,
@@ -1948,15 +1957,19 @@ class GeoPriorForecaster(QMainWindow):
         if index == prep_idx:
             self.preprocess_tab.refresh_status(force=False)
 
-        
+    
+    # ---------------------------------------------------------
+    # UX helper: open city root
+    # ---------------------------------------------------------
     def _on_open_prep_city_root(self) -> None:
         pt = self.preprocess_tab
     
         city_root = pt.city_root_path()
         rr_raw = self.config_store.get_value(
-            FieldKey("results_root"), default=None)
-        rr = Path(str(rr_raw)).expanduser(
-            ) if rr_raw else Path.home()
+            FieldKey("results_root"),
+            default=None,
+        )
+        rr = Path(str(rr_raw)).expanduser() if rr_raw else Path.home()
     
         target = Path(city_root) if city_root else rr
         if not target.exists():
@@ -1965,15 +1978,234 @@ class GeoPriorForecaster(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
 
+    # ---------------------------------------------------------
+    # Stage-1: thread construction helpers
+    # ---------------------------------------------------------
+    def _build_stage1_cfg_overrides(
+        self,
+        city: str,
+        *,
+        results_root: str,
+        edited_df: Any,
+    ) -> Dict[str, Any]:
+        """
+        Build cfg_overrides deterministically.
+    
+        Rules:
+        - Start from geo_cfg.to_cfg_overrides()
+        - Merge ONLY controller overrides (if any)
+        - If edited_df is None, resolve dataset + set DATA_DIR/BIG_FN
+        """
+        overrides: Dict[str, Any] = {}
+    
+        # 1) Base overrides from GeoPriorConfig (v3.2)
+        try:
+            overrides = self.geo_cfg.to_cfg_overrides()
+        except Exception:
+            overrides = {}
+    
+        # 2) Controller overrides (DO NOT reuse _cfg_overrides)
+        ctl = getattr(self, "_controller_cfg_overrides", None)
+        if isinstance(ctl, dict):
+            overrides.update(ctl)
+    
+        # 3) Dataset selection if no in-memory edited df
+        if edited_df is None:
+            csv_path = getattr(self, "csv_path", None)
+    
+            if csv_path is None:
+                pick = choose_dataset_for_city(
+                    parent=self,
+                    city=city,
+                    results_root=Path(results_root),
+                )
+                if not pick:
+                    # Caller must handle "cancel" upstream
+                    return {}
+                csv_path = Path(pick)
+            else:
+                csv_path = Path(str(csv_path))
+    
+            overrides["DATA_DIR"] = str(csv_path.parent)
+            overrides["BIG_FN"] = str(csv_path.name)
+    
+            try:
+                self.log_updated.emit(
+                    f"[Stage-1] Dataset: {csv_path.name} "
+                    f"({csv_path.parent})"
+                )
+            except Exception:
+                pass
+    
+        return overrides
+    
+    
+    def _start_stage1(
+        self,
+        city: str,
+        *,
+        results_cb=None,
+        job_kind: str = "stage1",
+        cfg_overrides: Dict[str, Any] | None = None,
+        store=None,
+        config_overwrite: Dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Single authoritative Stage-1 start.
+    
+        - If cfg_overrides is provided, we trust it (plan path).
+        - Else we build overrides from geo_cfg + dataset selection.
+        """
+        # ---------------------------------------------------------
+        # Guard: do not start twice
+        # ---------------------------------------------------------
+        th0 = getattr(self, "stage1_thread", None)
+        if th0 is not None and th0.isRunning():
+            return
+    
+        results_root = getattr(self, "results_root", None)
+        if results_root is None:
+            results_root = getattr(self, "gui_runs_root", None)
+        if results_root is None:
+            results_root = str(Path.home())
+        results_root = str(results_root)
+    
+        # ---------------------------------------------------------
+        # Sync GUI -> GeoPriorConfig (log if fails)
+        # ---------------------------------------------------------
+        try:
+            self._sync_config_from_ui()
+        except Exception as exc:
+            try:
+                self.log_updated.emit(
+                    f"[Stage-1] Sync warning: {exc}"
+                )
+            except Exception:
+                pass
+    
+        edited_df = getattr(self, "_edited_df", None)
+    
+        # Build overrides (unless plan supplied them)
+        if cfg_overrides is None:
+            cfg_overrides = self.build_stage1_cfg_overrides(
+                self,
+                city,
+                results_root=results_root,
+                edited_df=edited_df,
+            )
+            if not cfg_overrides and edited_df is None:
+                # dataset picker was cancelled
+                return
+    
+        # Keep stable copy for training reuse (OK)
+        self._cfg_overrides = dict(cfg_overrides)
+    
+        # Thread creation: EXACT signature (no guessing)
+        th = Stage1Thread(
+            city=city,
+            cfg_overrides=self._cfg_overrides,
+            store=store,
+            config_overwrite=config_overwrite,
+            clean_run_dir=bool(self.geo_cfg.clean_stage1_dir),
+            base_cfg=self.geo_cfg._base_cfg,
+            results_root=results_root,
+            edited_df=edited_df,
+            parent=self,
+        )
+        self.stage1_thread = th
+    
+        # UI wiring
+        title = "Preprocess" if job_kind == "preprocess" else "Stage-1"
+    
+        # 1) Preprocess live hint
+        if job_kind == "preprocess":
+            pt = getattr(self, "preprocess_tab", None)
+    
+            if pt is not None:
+    
+                def _hint(_f: float, msg: str) -> None:
+                    try:
+                        pt.set_stage1_live_hint(msg=msg)
+                    except Exception:
+                        pass
+    
+                th.progress_changed.connect(_hint)
+    
+        # 2) Console binding (recommended)
+        self.console.bind_thread(
+            th,
+            kind=job_kind,
+            title=f"{title} ({city})",
+            start_msg=f"{title}: preprocessing…",
+        )
+    
+        # 3) Canonical progress -> global UI
+  
+        th.progress_changed.connect(self._on_stage1_progress)
+
+        # 4) Canonical error handling
+
+        th.error_occurred.connect(self._on_worker_error)
+  
+        # 5) Completion: CONNECT ONLY ONCE
+        cb = results_cb or self._on_stage1_finished
+        th.results_ready.connect(cb)
+    
+        # ---------------------------------------------------------
+        # Running state + timer
+        # ---------------------------------------------------------
+        self._active_job_kind = job_kind
+        self._update_global_running_state()
+        self._start_run_timer()
+    
+        th.start()
+
+
+    # ---------------------------------------------------------
+    # Preprocess integration
+    # ---------------------------------------------------------
+    def _start_stage1_from_prep_plan(self, plan) -> None:
+        """
+        Preprocess plan hook: delegate to _start_stage1 so
+        signal wiring + console binding are identical.
+        """
+        self._start_stage1(
+            city=str(plan.city),
+            results_cb=self._on_preprocess_stage1_done,
+            job_kind="preprocess",
+            cfg_overrides=dict(plan.cfg_overrides or {}),
+            store=getattr(plan, "store", None),
+            config_overwrite=getattr(plan, "config_overwrite", None),
+        )
+
+    def _reuse_prep_manifest(self, path: str) -> None:
+        self.preprocess_tab.set_workspace_manifest(path)
+    
+        btn = getattr(self.preprocess_tab, "btn_run_stage1", None)
+        if btn is not None:
+            btn.setEnabled(True)
+    
+        self.preprocess_tab.refresh_status(force=True)
+    
+        # Symmetric cleanup
+        self.stage1_thread = None
+        self._stop_run_timer()
+        self._active_job_kind = None
+        self._update_global_running_state()
+    
+        pt = getattr(self, "preprocess_tab", None)
+        if pt is not None:
+            try:
+                pt.set_stage1_live_hint(msg="")
+            except Exception:
+                pass
+
     def _on_preprocess_run_stage1(self) -> None:
         """
-        Run Stage-1 from the Preprocess tab.
-        
-        Store is the single source of truth:
-        - city/dataset_path/results_root are patched here
-        - Stage-1 options are already written by PreprocessTab checkboxes
+        Run Stage-1 from Preprocess tab via PreprocessController.
         """
-        if self.stage1_thread and self.stage1_thread.isRunning():
+        th0 = getattr(self, "stage1_thread", None)
+        if th0 is not None and th0.isRunning():
             QMessageBox.information(
                 self,
                 "Busy",
@@ -1990,83 +2222,89 @@ class GeoPriorForecaster(QMainWindow):
             )
             return
     
+        # Patch store (single source of truth)
         csv_path = getattr(self, "csv_path", None)
         rr = getattr(self, "gui_runs_root", None)
     
         patch: Dict[str, Any] = {"city": city}
         if csv_path is not None:
-            patch["dataset_path"] = csv_path
+            patch["dataset_path"] = str(csv_path)
         if rr is not None:
             patch["results_root"] = str(rr)
     
         self.config_store.patch(patch)
     
         pt = self.preprocess_tab
-        pt.btn_run_stage1.setEnabled(False)
-    
-        # Keep legacy mirror checkboxes (if any) in sync from store
-        clean = bool(
-            self.config_store.get_value(
-                FieldKey("clean_stage1_dir"),
-                default=False,
-            )
-        )
-        build_future = bool(
-            self.config_store.get_value(
-                FieldKey("build_future_npz"),
-                default=False,
-            )
-        )
-    
-        if hasattr(self, "chk_clean_stage1"):
-            self.chk_clean_stage1.setChecked(clean)
-        if hasattr(self, "chk_build_future"):
-            self.chk_build_future.setChecked(build_future)
+        btn = getattr(pt, "btn_run_stage1", None)
+        if btn is not None:
+            btn.setEnabled(False)
     
         self.status_updated.emit("Stage-1: preprocessing…")
         self._update_progress(0.0)
     
         try:
-            self._start_stage1(
-                city=city,
-                results_cb=self._on_preprocess_stage1_done,
-                job_kind="preprocess",
+            state = PreprocessGuiState(
+                city=str(self.config_store.cfg.city or ""),
+                dataset_path=str(
+                    self.config_store.cfg.dataset_path or ""
+                ),
+                results_root=str(
+                    self.config_store.cfg.results_root or ""
+                ),
             )
+    
+            self.preprocess_ctl.start_real_run(
+                state,
+                self._start_stage1_from_prep_plan,
+                reuse_stage1_cb=self._reuse_prep_manifest,
+            )
+    
         except Exception as exc:
-            pt.btn_run_stage1.setEnabled(True)
+            if btn is not None:
+                btn.setEnabled(True)
+    
             self.status_updated.emit("Stage-1: failed to start.")
             self.log_updated.emit(f"[Stage-1] Start failed: {exc}")
             raise
 
+
     def _on_preprocess_stage1_done(self, result: Any) -> None:
         """
-        Stage-1 completion handler (Preprocess tab).
+        Completion handler for preprocess Stage-1.
         """
         self.stage1_thread = None
         self._stop_run_timer()
         self._active_job_kind = None
         self._update_global_running_state()
     
-        def _get_manifest_path(obj: Any) -> str | None:
-            attr = getattr(obj, "manifest_path", None)
-            if attr:
-                return str(attr)
+        def _get_manifest(obj: Any) -> str | None:
+            p = getattr(obj, "manifest_path", None)
+            if p:
+                return str(p)
             if isinstance(obj, dict):
-                p = obj.get("manifest_path")
-                return str(p) if p else None
+                p2 = obj.get("manifest_path")
+                return str(p2) if p2 else None
             return None
     
-        manifest_path = _get_manifest_path(result)
+        manifest_path = _get_manifest(result)
     
-        btn = getattr(self.preprocess_tab, "btn_run_stage1", None)
+        pt = getattr(self, "preprocess_tab", None)
+        if pt is not None:
+            try:
+                pt.set_stage1_live_hint(msg="")
+            except Exception:
+                pass
+    
+        btn = getattr(pt, "btn_run_stage1", None) if pt else None
         if btn is not None:
             btn.setEnabled(True)
     
         if not manifest_path:
-            msg = "Stage-1 finished without manifest. See log."
+            msg = "Stage-1 finished without manifest."
             self.status_updated.emit(msg)
             self.log_updated.emit(f"[Stage-1] {msg}")
-            self.preprocess_tab.refresh_status(force=True)
+            if pt is not None:
+                pt.refresh_status(force=True)
             return
     
         self._prep_last_manifest = manifest_path
@@ -2077,10 +2315,13 @@ class GeoPriorForecaster(QMainWindow):
         )
         self.status_updated.emit("Idle - Stage-1 ready.")
     
-        self.preprocess_tab.refresh_status(force=True)
-        pt = getattr(self, "preprocess_tab", None)
         if pt is not None:
-            pt.set_stage1_live_hint(msg="")
+            try:
+                pt.set_workspace_manifest(manifest_path)
+            except Exception:
+                pass
+            pt.refresh_status(force=True)
+
         
     @pyqtSlot()
     def _on_open_feature_cfg(self) -> None:
@@ -4291,108 +4532,7 @@ class GeoPriorForecaster(QMainWindow):
         )
         _notify_gui_xfer_view(result)
         self._update_progress(1.0)
-
-
-    # ------------------------------------------------------------------
-    # Thread orchestration
-    # ------------------------------------------------------------------
-    def _start_stage1(
-        self,
-        city: str,
-        *,
-        results_cb=None,
-        job_kind: str = "stage1",
-    ) -> None:
-        results_root = getattr(self, "results_root", self.gui_runs_root)
     
-        # Sync GUI → GeoPriorConfig (v3.2 source of truth)
-        try:
-            self._sync_config_from_ui()
-        except Exception:
-            pass
-    
-        # Build overrides from GeoPriorConfig v3.2
-        cfg_overrides = {}
-        try:
-            cfg_overrides = self.geo_cfg.to_cfg_overrides()
-        except Exception:
-            cfg_overrides = {}
-    
-        # Merge any controller-provided overrides (TrainController)
-        prev = getattr(self, "_cfg_overrides", {}) or {}
-        if isinstance(prev, dict):
-            cfg_overrides.update(prev)
-    
-        edited_df = getattr(self, "_edited_df", None)
-    
-        # If no in-memory dataset, use selected CSV or resolve by city
-        if edited_df is None:
-            csv_path = getattr(self, "csv_path", None)
-    
-            if csv_path is None:
-                csv_path_str = choose_dataset_for_city(
-                    parent=self,
-                    city=city,
-                    results_root=Path(results_root),
-                )
-                if not csv_path_str:
-                    return
-                csv_path = Path(csv_path_str)
-            else:
-                csv_path = Path(str(csv_path))
-    
-            cfg_overrides["DATA_DIR"] = str(csv_path.parent)
-            cfg_overrides["BIG_FN"] = csv_path.name
-    
-            self.log_updated.emit(
-                f"[Stage-1] Using dataset: {csv_path.name} "
-                f"({csv_path.parent})"
-            )
-    
-        # Keep stable copy for Stage1Thread + training reuse
-        self._cfg_overrides = dict(cfg_overrides)
-    
-        th = Stage1Thread(
-            city=city,
-            cfg_overrides=self._cfg_overrides,
-            clean_run_dir=self.geo_cfg.clean_stage1_dir,
-            base_cfg=self.geo_cfg._base_cfg,
-            edited_df=edited_df,
-            results_root=str(results_root),
-            parent=self,
-        )
-        th.progress_changed.connect(
-            lambda f, m: self.preprocess_tab
-                .set_stage1_live_hint(msg=m)
-        )
-        self.stage1_thread = th
-        
-        job_kind = job_kind  # "preprocess" or "stage1"
-        title = "Preprocess" if job_kind == "preprocess" else "Stage-1"
-        
-        self.console.bind_thread(
-          th,
-          kind=job_kind,
-          title=f"{title} ({city})",
-          start_msg=f"{title}: preprocessing…",
-        )
-        # th.log_updated.connect(self.log_updated.emit)
-        # th.status_updated.connect(self.status_updated.emit)
-        # th.progress_changed.connect(self._on_thread_progress)
-      
-        cb = results_cb or self._on_stage1_finished
-        th.results_ready.connect(cb)
-        th.progress_changed.connect(self._on_stage1_progress)
-    
-        th.error_occurred.connect(self._on_worker_error)
-    
-        self._active_job_kind = job_kind
-        self._update_global_running_state()
-        self._start_run_timer()
-    
-        th.start()
-
-
     def _run_job(self, job: TrainJobSpec) -> None:
         """
         Execute a training job described by TrainJobSpec.
