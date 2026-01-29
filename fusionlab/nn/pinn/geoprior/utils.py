@@ -264,7 +264,6 @@ def enforce_scaling_alias_consistency(
                     where=where,
                 )
 
-
 def canonicalize_scaling_kwargs(
     scaling_kwargs: Optional[Dict[str, Any]],
     *,
@@ -506,6 +505,39 @@ def _handle_scaling_issue(
         return
     # validate + raise
     raise ValueError(message)
+    
+def _is_deg_mode(mode: str) -> bool:
+    m = (mode or "").strip().lower()
+    return m in {"deg", "degree", "degrees", "lonlat", "latlon"}
+
+
+def _validate_scaling_kwargs(scaling_kwargs):
+    sk = canonicalize_scaling_kwargs(scaling_kwargs)
+    enforce_scaling_alias_consistency(sk, where="validate")
+
+    mode = str(sk.get("coord_mode", ""))
+    deg_mode = _is_deg_mode(mode)
+    deg_flag = bool(sk.get("coords_in_degrees", False))
+
+    if deg_mode != deg_flag:
+        msg = (
+            "Inconsistent coord flags: "
+            f"coord_mode={mode!r} but "
+            f"coords_in_degrees={deg_flag}. "
+            "Decide: degrees(+deg_to_m_*) or "
+            "projected meters (coords_in_degrees=False)."
+        )
+        _handle_scaling_issue(sk, msg, where="validate")
+
+    epsg_used = sk.get("coord_epsg_used", None)
+    if deg_flag and (epsg_used not in (None, 4326)):
+        msg = (
+            "coords_in_degrees=True but "
+            f"coord_epsg_used={epsg_used!r} "
+            "looks projected. If you already "
+            "reprojected, set coords_in_degrees=False."
+        )
+        _handle_scaling_issue(sk, msg, where="validate")
 
 def validate_scaling_kwargs(
     scaling_kwargs: Optional[Dict[str, Any]],

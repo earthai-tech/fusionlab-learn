@@ -38,7 +38,6 @@ from ..keys import (
     K_MAP_INT_BUF_K,
 )
 
-
 __all__ = ["XferMapInteractionsBlock"]
 
 

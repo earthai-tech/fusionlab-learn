@@ -60,6 +60,7 @@ class XferMapToolbar(QWidget):
     changed = pyqtSignal()
     request_expand = pyqtSignal(bool)
     request_mode_switch = pyqtSignal(str)
+    request_toggle_advanced = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -384,7 +385,66 @@ class XferMapToolbar(QWidget):
             )
         )
         gv.addWidget(QLabel("Time:"), 0, 6)
-        gv.addWidget(w_time, 0, 7)
+        
+        # make segmented widget expand
+        w_time.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+
+        # ---- Time + Insight (A↔B) in the same cell ----
+        time_box = QWidget(self)
+        time_box.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        hb_time = QHBoxLayout(time_box)
+        hb_time.setContentsMargins(0, 0, 0, 0)
+        hb_time.setSpacing(6)
+        
+        # IMPORTANT: give stretch-factor to w_time
+        hb_time.addWidget(w_time, 1)
+
+        # hb_time.addWidget(w_time, 0)
+        
+        # create Insight button here (moved from act_row)
+        self.btn_insight = QToolButton(self)
+        self.btn_insight.setObjectName("miniAction")
+        self.btn_insight.setAutoRaise(True)
+        self.btn_insight.setCheckable(True)
+        self.btn_insight.setToolTip(
+            "Transfer insight (A↔B)"
+        )
+        
+        ico = try_icon("xfer_insight.svg")
+        if ico is None:
+            ico = self.style().standardIcon(
+                QStyle.SP_MessageBoxInformation
+            )
+        self.btn_insight.setIcon(ico)
+        
+
+        hb_time.addWidget(self.btn_insight, 0)
+
+        # Fit (move here, right after Insight)
+        self.btn_fit = QToolButton(self)
+        self.btn_fit.setObjectName("miniAction")
+        self.btn_fit.setAutoRaise(True)
+        self.btn_fit.setToolTip("Fit to layers")
+        
+        ico = try_icon("mapfit_icon.svg")
+        if ico is not None:
+            self.btn_fit.setIcon(ico)
+        else:
+            self.btn_fit.setIcon(
+                self.style().standardIcon(
+                    QStyle.SP_TitleBarMaxButton
+                )
+            )
+        
+        hb_time.addWidget(self.btn_fit, 0)
+
+        gv.addWidget(time_box, 0, 7)
 
         # Value dropdown + actions (row 1)
         self.cmb_value = QComboBox(self)
@@ -463,21 +523,14 @@ class XferMapToolbar(QWidget):
             "Playback speed (ms per step)."
         )
         
-        self.btn_insight = QToolButton(self)
-        self.btn_insight.setObjectName("miniAction")
-        self.btn_insight.setAutoRaise(True)
-        self.btn_insight.setCheckable(True)
-        self.btn_insight.setToolTip(
-            "Transfer insight (A↔B)"
-        )
-        
-        ico = try_icon("xfer_insight.svg")
-        if ico is None:
-            ico = self.style().standardIcon(
-                QStyle.SP_MessageBoxInformation
-            )
-        self.btn_insight.setIcon(ico)
-        
+        self.btn_adv = QToolButton(self)
+        self.btn_adv.setObjectName("miniAction")
+        self.btn_adv.setAutoRaise(True)
+        self.btn_adv.setCheckable(True)
+        self.btn_adv.setText("Adv")
+        self.btn_adv.setToolTip("Advanced controls")
+        act_row.addWidget(self.btn_adv)
+
 
         # --- Refresh
         self.btn_refresh = QToolButton(self)
@@ -487,22 +540,6 @@ class XferMapToolbar(QWidget):
         self.btn_refresh.setIcon(
             self.style().standardIcon(QStyle.SP_BrowserReload)
         )
-
-        # --- Fit (moved to end)
-        self.btn_fit = QToolButton(self)
-        self.btn_fit.setObjectName("miniAction")
-        self.btn_fit.setAutoRaise(True)
-        self.btn_fit.setToolTip("Fit to layers")
-
-        ico = try_icon("mapfit_icon.svg")
-        if ico is not None:
-            self.btn_fit.setIcon(ico)
-        else:
-            self.btn_fit.setIcon(
-                self.style().standardIcon(
-                    QStyle.SP_TitleBarMaxButton
-                )
-            )
 
         # --- Reset (moved to end)
         self.btn_reset = QToolButton(self)
@@ -541,9 +578,7 @@ class XferMapToolbar(QWidget):
 
         act_row.addStretch(1)
 
-        act_row.addWidget(self.btn_insight)
         act_row.addWidget(self.btn_refresh)
-        act_row.addWidget(self.btn_fit)
         act_row.addWidget(self.btn_reset)
         act_row.addWidget(self.btn_expand)
 
@@ -727,9 +762,21 @@ class XferMapToolbar(QWidget):
         )
         self.cmb_speed.currentIndexChanged.connect(self.changed)
         self.btn_insight.toggled.connect(self.changed)
+        
+        self.btn_adv.toggled.connect(
+                self.request_toggle_advanced.emit
+            )
+
         # Ensure timer matches current UI speed.
         self._apply_play_ms()
-        
+            
+    def set_advanced_open(self, on: bool) -> None:
+        self.btn_adv.blockSignals(True)
+        try:
+            self.btn_adv.setChecked(bool(on))
+        finally:
+            self.btn_adv.blockSignals(False)
+
     def set_mode(self, mode: str) -> None:
         m = str(mode or "").strip().lower()
         if m not in ("run", "map"):

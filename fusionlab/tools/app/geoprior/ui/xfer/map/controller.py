@@ -30,6 +30,8 @@ from ...map.coord_utils import ensure_lonlat
 from ...map.hotspots import HotspotCfg, compute_hotspots
 from ..insights import build_xfer_badges
 from ..types import MapApi, MapPoint
+from .interpretation import interpret_transfer
+from .interpretation import render_html, render_tip
 
 from ..keys import (
     DEFAULTS,
@@ -67,7 +69,26 @@ from ..keys import (
     K_MAP_INT_DELTA,
     K_MAP_INT_HOT_ENABLE, 
     K_MAP_INT_INTENS_ENABLE, 
-    K_MAP_INT_BUF_ENABLE
+    K_MAP_INT_BUF_ENABLE, 
+    K_MAP_INT_HOT_TOPN,
+    K_MAP_INT_HOT_METRIC,
+    K_MAP_INT_HOT_Q,
+    K_MAP_INT_HOT_SEP,
+    K_MAP_INT_BUF_K,
+    K_MAP_INTERP_HTML,
+    K_MAP_INTERP_TIP,
+
+    K_MAP_RADAR_ENABLE,
+    K_MAP_RADAR_TARGET,
+    K_MAP_RADAR_ORDER,
+    K_MAP_RADAR_DWELL_MS,
+    K_MAP_RADAR_RADIUS_KM,
+    K_MAP_RADAR_RINGS,
+    K_MAP_LINKS_ENABLE,
+    K_MAP_LINKS_MODE,
+    K_MAP_LINKS_K,
+    K_MAP_LINKS_MAX,
+    K_MAP_LINKS_SHOW_DIST,
     
     
 )
@@ -79,6 +100,8 @@ from .interactions import (
 from .interaction_extras import (
     IntExtrasCfg,
     compute_interaction_extras,
+    build_hotspot_links,
+    build_radar_centers,
 )
 from .toolbar import DatasetChoice, XferMapToolbar
 
@@ -648,7 +671,24 @@ class XferMapController(QObject):
             pts_out=pts_out,
             unit=unit,
         )
-        self._render_interaction_extras(pts_out=pts_out, unit=unit)
+
+        map_sig = self._render_interaction_extras(
+            pts_out=pts_out,
+            unit=unit,
+        )
+
+        hs_a = self._hotspot_df(pts_out.get("A"), name="City A")
+        hs_b = self._hotspot_df(pts_out.get("B"), name="City B")
+
+        self._render_hotspot_analytics(
+            hs_a=hs_a,
+            hs_b=hs_b,
+            overlay=overlay,
+        )
+
+        self._push_interpretation(map_sig=map_sig)
+
+
 
     def _load_points(
         self,
@@ -1018,6 +1058,139 @@ class XferMapController(QObject):
                 )
             )
         return out
+    
+    def _hotspot_df(
+        self,
+        df: pd.DataFrame,
+        *,
+        name: str,
+    ) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame(
+                columns=["lon", "lat", "v", "sid", "score", "tip"]
+            )
+    
+        topn = int(self._s.get(K_MAP_HOTSPOT_TOPN, 8) or 8)
+        min_sep = float(
+            self._s.get(K_MAP_HOTSPOT_MIN_SEP_KM, 2.0) or 2.0
+        )
+        metric = str(self._s.get(K_MAP_HOTSPOT_METRIC, "abs") or "abs")
+        q = float(self._s.get(K_MAP_HOTSPOT_QUANTILE, 0.98) or 0.98)
+    
+        pts = df[["lon", "lat", "v"]].copy()
+        for c in ("lon", "lat", "v"):
+            pts[c] = pd.to_numeric(pts[c], errors="coerce")
+        pts = pts.dropna(subset=["lon", "lat", "v"])
+        if pts.empty:
+            return pd.DataFrame(
+                columns=["lon", "lat", "v", "sid", "score", "tip"]
+            )
+    
+        cfg = HotspotCfg(
+            method="grid",
+            metric=metric,
+            quantile=q,
+            max_n=topn,
+            min_sep_km=min_sep,
+        )
+        hs = compute_hotspots(
+            pts,
+            cfg=cfg,
+            coord_mode=self._coord_mode(),
+        )
+        if not hs:
+            return pd.DataFrame(
+                columns=["lon", "lat", "v", "sid", "score", "tip"]
+            )
+    
+        rows: List[Dict[str, Any]] = []
+        for h in hs:
+            sc = float(getattr(h, "score", abs(float(h.v))))
+            tip = (
+                f"{name} hotspot\n"
+                f"rank={int(h.rank)}\n"
+                f"v={float(h.v):.3g}\n"
+                f"score={sc:.3g}"
+            )
+            rows.append(
+                {
+                    "lon": float(h.lon),
+                    "lat": float(h.lat),
+                    "v": float(h.v),
+                    "sid": int(h.rank),
+                    "score": sc,
+                    "tip": tip,
+                }
+            )
+        return pd.DataFrame(rows)
+    
+    def _render_hotspot_analytics(
+        self,
+        *,
+        hs_a: pd.DataFrame,
+        hs_b: pd.DataFrame,
+        overlay: str,
+    ) -> None:
+        s = self._s
+        v = self._v
+    
+        # --- Radar ---
+        radar_on = bool(s.get(K_MAP_RADAR_ENABLE, False))
+        if radar_on and hasattr(v, "set_radar"):
+            dwell = int(s.get(K_MAP_RADAR_DWELL_MS, 520) or 520)
+            rkm = float(s.get(K_MAP_RADAR_RADIUS_KM, 8.0) or 8.0)
+            rings = int(s.get(K_MAP_RADAR_RINGS, 3) or 3)
+            target = str(s.get(K_MAP_RADAR_TARGET, "overlay") or "overlay")
+            order = str(s.get(K_MAP_RADAR_ORDER, "score") or "score")
+    
+            centers = build_radar_centers(
+                hs_a,
+                hs_b,
+                target=target,
+                overlay=overlay,
+                order=order,
+            )
+            v.set_radar(
+                "R_HOT",
+                centers,
+                opts={
+                    "dwellMs": dwell,
+                    "radiusKm": rkm,
+                    "rings": rings,
+                },
+            )
+        else:
+            if hasattr(v, "clear_radar"):
+                v.clear_radar("R_HOT")
+    
+        # --- Links ---
+        links_on = bool(s.get(K_MAP_LINKS_ENABLE, False))
+        if links_on and hasattr(v, "set_links"):
+            mode = str(s.get(K_MAP_LINKS_MODE, "nearest") or "nearest")
+            k = int(s.get(K_MAP_LINKS_K, 1) or 1)
+            mx = int(s.get(K_MAP_LINKS_MAX, 12) or 12)
+            show_dist = bool(s.get(K_MAP_LINKS_SHOW_DIST, True))
+    
+            links = build_hotspot_links(
+                hs_a,
+                hs_b,
+                mode=mode,
+                k=k,
+                max_links=mx,
+                show_dist=show_dist,
+            )
+            v.set_links(
+                "L_HOT",
+                "Hotspot links",
+                links,
+                opts={
+                    "arrow": True,
+                    "label": show_dist,
+                },
+            )
+        else:
+            if hasattr(v, "clear_links"):
+                v.clear_links("L_HOT")
 
     def _clear_map_layers(self) -> None:
         try:
@@ -1196,60 +1369,59 @@ class XferMapController(QObject):
         *,
         pts_out: Dict[str, pd.DataFrame],
         unit: str,
-    ) -> None:
+    ) -> Optional[Dict[str, Any]]:
         for lid in ("I_DHOT", "I_INTENS", "I_BUFINT"):
             try:
                 self._v.clear_layer(lid)
             except Exception:
                 pass
-    
+
         a_df = pts_out.get("A")
         b_df = pts_out.get("B")
         if a_df is None or b_df is None:
-            return
-    
+            return None
+
         cfg = IntExtrasCfg(
             cell_km=float(
-                self._s.get("xfer.map.int.cell_km", 2.0) or 2.0
+                self._s.get(K_MAP_INT_CELL_KM, 2.0) or 2.0
             ),
             agg=str(
-                self._s.get("xfer.map.int.agg", "mean") or "mean"
+                self._s.get(K_MAP_INT_AGG, "mean") or "mean"
             ),
             delta=str(
-                self._s.get("xfer.map.int.delta", "a_minus_b")
+                self._s.get(K_MAP_INT_DELTA, "a_minus_b")
                 or "a_minus_b"
             ),
             hot_enable=bool(
-                self._s.get("xfer.map.int.hot.enable", False)
+                self._s.get(K_MAP_INT_HOT_ENABLE, False)
             ),
             hot_topn=int(
-                self._s.get("xfer.map.int.hot.topn", 8) or 8
+                self._s.get(K_MAP_INT_HOT_TOPN, 8) or 8
             ),
             hot_metric=str(
-                self._s.get("xfer.map.int.hot.metric", "abs")
+                self._s.get(K_MAP_INT_HOT_METRIC, "abs")
                 or "abs"
             ),
             hot_quantile=float(
-                self._s.get("xfer.map.int.hot.q", 0.98) or 0.98
+                self._s.get(K_MAP_INT_HOT_Q, 0.98) or 0.98
             ),
             hot_min_sep_km=float(
-                self._s.get("xfer.map.int.hot.sep_km", 2.0)
-                or 2.0
+                self._s.get(K_MAP_INT_HOT_SEP, 2.0) or 2.0
             ),
             intens_enable=bool(
-                self._s.get("xfer.map.int.intens.enable", False)
+                self._s.get(K_MAP_INT_INTENS_ENABLE, False)
             ),
             buf_enable=bool(
-                self._s.get("xfer.map.int.buf.enable", False)
+                self._s.get(K_MAP_INT_BUF_ENABLE, False)
             ),
             buf_k=int(
-                self._s.get("xfer.map.int.buf.k", 1) or 1
+                self._s.get(K_MAP_INT_BUF_K, 1) or 1
             ),
         )
-    
+
         mk = int(self._s.get(K_MAP_MARKER_SIZE, 6) or 6)
         op = float(self._s.get(K_MAP_OPACITY, 0.90) or 0.90)
-    
+
         layers = compute_interaction_extras(
             a_df,
             b_df,
@@ -1258,7 +1430,9 @@ class XferMapController(QObject):
             radius=mk,
             opacity=op,
         )
-    
+
+        map_sig = self._summarize_map_sig(layers)
+
         for p in layers:
             leg = p.get("legend")
             if isinstance(leg, dict):
@@ -1268,11 +1442,11 @@ class XferMapController(QObject):
                     self._v.set_legend(leg)
                 except Exception:
                     pass
-    
+
             df = p.get("df")
             if df is None or getattr(df, "empty", True):
                 continue
-    
+
             try:
                 self._v.set_layer(
                     layer_id=str(p.get("id")),
@@ -1282,3 +1456,76 @@ class XferMapController(QObject):
                 )
             except Exception:
                 pass
+
+        return map_sig
+
+    def _summarize_map_sig(
+        self,
+        layers: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        sig: Dict[str, Any] = {}
+
+        for p in layers or []:
+            lid = str(p.get("id") or "")
+            df = p.get("df", None)
+            if df is None or getattr(df, "empty", True):
+                continue
+
+            if lid == "I_DHOT":
+                sig["dhot_n"] = int(len(df))
+                if "v" in df.columns:
+                    vv = pd.to_numeric(df["v"], errors="coerce")
+                    vv = vv.to_numpy()
+                    vv = vv[np.isfinite(vv)]
+                    if vv.size:
+                        sig["dhot_abs_max"] = float(
+                            np.max(np.abs(vv))
+                        )
+
+            if lid == "I_INTENS":
+                if "v" in df.columns:
+                    vv = pd.to_numeric(df["v"], errors="coerce")
+                    vv = vv.to_numpy()
+                    vv = vv[np.isfinite(vv)]
+                    if vv.size:
+                        sig["overlap_mean"] = float(np.mean(vv))
+
+            if lid == "I_BUFINT":
+                sig["buf_n"] = int(len(df))
+
+        return sig
+    
+    def _push_interpretation(
+        self,
+        *,
+        map_sig: Optional[Dict[str, Any]],
+    ) -> None:
+        split = str(self._s.get(K_MAP_SPLIT, "val") or "val")
+        shared = bool(self._s.get(K_MAP_SHARED, True))
+        ov = str(self._s.get(K_MAP_OVERLAY, "both") or "both")
+
+        strat = "map"
+        if ov in ("a", "both"):
+            ak = self._s.get(K_MAP_A_JOB_KIND, None)
+            if ak:
+                strat = str(ak).strip().lower()
+        if strat == "map" and ov in ("b", "both"):
+            bk = self._s.get(K_MAP_B_JOB_KIND, None)
+            if bk:
+                strat = str(bk).strip().lower()
+
+        run = {
+            "strategy": strat,
+            "split": split,
+            "rescale_mode": "shared" if shared else "auto",
+            "calibration": "na",
+        }
+
+        p = interpret_transfer(run, map_sig=map_sig)
+        html = render_html(p)
+        tip = render_tip(p)
+
+        with self._s.batch():
+            self._s.set(K_MAP_INTERP_HTML, html)
+            self._s.set(K_MAP_INTERP_TIP, tip)
+

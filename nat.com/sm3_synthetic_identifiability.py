@@ -204,7 +204,7 @@ def make_one_step_windows(
     ).astype(np.float32)
 
     X["dynamic_features"] = np.zeros(
-        (B, T, 2),
+        (B, T, 1),
         np.float32,
     )
 
@@ -233,7 +233,7 @@ def make_one_step_windows(
         j = i + T
 
         X["dynamic_features"][i, :, 0] = z_gwl[i : i + T]
-        X["dynamic_features"][i, :, 1] = s_cum[i : i + T]
+        # X["dynamic_features"][i, :, 1] = s_cum[i : i + T]
         
         y["subs_pred"][i, 0, 0] = s_cum[j]
         # after: z_surf = 0 -> head = -depth
@@ -405,8 +405,8 @@ def _make_scaling_kwargs(
         physics_warmup_steps=0, # 10,
         physics_ramp_steps=0, #20,
 
-        subs_dyn_index=1,
-        subs_dyn_name="subs_model",
+        # subs_dyn_index=1,
+        # subs_dyn_name="subs_model",
         # input is depth (down+), model converts to head using z_surf
         gwl_dyn_index=0,
         gwl_col="GWL_depth_bgs_m",
@@ -426,11 +426,11 @@ def _make_scaling_kwargs(
         # disable proxy (even if ignored, harmless)
         use_head_proxy=False,
 
-        # dynamic_feature_names=["GWL_depth_bgs_m"],
-        dynamic_feature_names=[
-            "GWL_depth_bgs_m",
-            "subs_model",
-        ],
+        dynamic_feature_names=["GWL_depth_bgs_m"],
+        # dynamic_feature_names=[
+        #     "GWL_depth_bgs_m",
+        #     "subs_model",
+        # ],
         bounds=dict(
             H_min=3.0,
             H_max=80.0,
@@ -513,6 +513,10 @@ def train_one_pixel(
         offset_mode="log10",
         scaling_kwargs=sk,
     )
+    print("logK bounds used:", model.scaling_kwargs["bounds"]["logK_min"],
+                             model.scaling_kwargs["bounds"]["logK_max"])
+    print("K bounds used:", np.exp(model.scaling_kwargs["bounds"]["logK_min"]),
+                           np.exp(model.scaling_kwargs["bounds"]["logK_max"]))
 
     ds_tr = tf_dataset(
         Xtr,
@@ -557,11 +561,11 @@ def train_one_pixel(
         ],
     }
     physics_loss_weights = {
-        "lambda_cons": 1.0,
+        "lambda_cons": 100, #1.0,
         "lambda_gw": 0.0,
-        "lambda_prior": 0.3,
+        "lambda_prior":1.0, # 0.3,
         "lambda_smooth": 0.0,
-        "lambda_bounds": 0.0,
+        "lambda_bounds": 1.0, #0.0,
         "lambda_mv": 0.0,
         "mv_lr_mult": 1.0,
         "kappa_lr_mult": 0.0,
@@ -964,6 +968,7 @@ def run_one_realisation(
         abs(dK - (dS + 2.0 * dH))
     )
 
+
     return row
 
 def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
@@ -993,7 +998,19 @@ def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    
+    x = np.log10(df.tau_est_med_sec.to_numpy())
+    y = np.log10(df.tau_true_sec.to_numpy())
+    
+    if x.size < 2:
+        r2 = np.nan
+    else:
+        r = np.corrcoef(x, y)[0, 1]
+        r2 = r * r
 
+    print("r2 = np.corrcoef(np.log10(df.tau_est_med_sec), np.log10(df.tau_true_sec))[0,1]**2")
+    print("r2 (computed manually):", r2 )
+    
     runs_csv = os.path.join(
         args.outdir,
         "sm3_synth_runs.csv",

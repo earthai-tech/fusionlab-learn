@@ -104,3 +104,22 @@ class MapApi(Protocol):
     ) -> None: ...
 
     def clear(self) -> None: ...
+
+    def set_links(
+        self,
+        layer_id: str,
+        name: str,
+        links: Iterable[list],
+        opts: Optional[Dict[str, Any]] = None,
+    ) -> None: ...
+
+    def clear_links(self, layer_id: str) -> None: ...
+
+    def set_radar(
+        self,
+        layer_id: str,
+        centers: Iterable[list],
+        opts: Optional[Dict[str, Any]] = None,
+    ) -> None: ...
+
+    def clear_radar(self, layer_id: str) -> None: ...

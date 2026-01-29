@@ -228,6 +228,12 @@ class XferMapToolDock(QDockWidget):
     ) -> None:
 
         super().__init__("Map tools", parent)
+        
+        self.setAllowedAreas(
+            Qt.TopDockWidgetArea
+            | Qt.LeftDockWidgetArea
+            | Qt.RightDockWidgetArea
+        )
 
         self.setObjectName("mapToolDock")
         self.setProperty("gpDock", True)
@@ -258,10 +264,11 @@ class XferMapToolDock(QDockWidget):
         self._title.set_state(floating)
         self._update_docked_height()
 
-        self._update_docked_height()
-
-
     def _update_docked_height(self) -> None:
+        if not self.isVisible() and not self.isFloating():
+            self.setMaximumHeight(16777215)
+            return
+
         tbw = self.titleBarWidget()
         title_h = tbw.sizeHint().height() if tbw else 28
     
