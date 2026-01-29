@@ -4941,6 +4941,9 @@ class GeoPriorForecaster(QMainWindow):
 # ----------------------------------------------------------------------
 def launch_geoprior_gui(theme: str = "fusionlab") -> None:
     app = QApplication(sys.argv)
+    from PyQt5.QtCore import QCoreApplication, Qt
+    QCoreApplication.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings, True)
+
 
     # QSettings identity (needed for geometry persistence).
     set_app_metadata(

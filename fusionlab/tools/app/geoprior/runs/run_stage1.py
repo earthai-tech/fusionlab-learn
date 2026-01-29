@@ -1614,7 +1614,7 @@ def run_stage1(
             "y": float(df_train[Y_COL_USED].max() - df_train[Y_COL_USED].min()),
         }
     
-    if should_audit(AUDIT_STAGES, "stage1"):
+    if should_audit(AUDIT_STAGES, stage="stage1"):
         audit = audit_stage1_scaling(
             df_train=df_train,
             df_all=df_scaled,

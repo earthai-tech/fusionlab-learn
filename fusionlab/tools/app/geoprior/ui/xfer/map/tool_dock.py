@@ -253,27 +253,33 @@ class XferMapToolDock(QDockWidget):
         self._update_docked_height()
 
     def _on_top_level(self, floating: bool) -> None:
-        self._body.advanced.setVisible(bool(floating))
+        floating = bool(floating)
+        self._body.set_advanced_available(floating)
+        self._title.set_state(floating)
         self._update_docked_height()
 
+        self._update_docked_height()
+
+
     def _update_docked_height(self) -> None:
-        # Title bar height
         tbw = self.titleBarWidget()
         title_h = tbw.sizeHint().height() if tbw else 28
-
-        # Docked: only basic section visible
+    
         basic_h = self._body.basic.sizeHint().height()
+        tb = self._body.toolbar()
+        if tb is not None:
+            basic_h = max(basic_h, tb.sizeHint().height() + 16)
+    
         h = int(max(60, title_h + basic_h + 12))
-
         self.setMinimumHeight(h)
-
+    
         if self.isFloating():
             self.setMaximumHeight(16777215)
         else:
-            # Pin docked height so TOP docking
-            # doesn't collapse or eat the map.
-            self.setMaximumHeight(h)
+            # If hints aren't ready yet, don't pin to "title-only" height.
+            if basic_h < 40:
+                self.setMaximumHeight(16777215)
+            else:
+                self.setMaximumHeight(h)
 
-        self._body.updateGeometry()
-        self.updateGeometry()
 
