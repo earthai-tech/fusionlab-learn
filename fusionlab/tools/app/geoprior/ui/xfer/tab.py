@@ -388,7 +388,6 @@ class XferMapWorkspace(QWidget):
         # docks + QtWebEngine reliably paint.
         self._mw = QMainWindow(self)
         self._mw.setObjectName("xferMapMainWin")
-        self._mw.setAttribute(Qt.WA_NativeWindow, True)
         self._mw.setDockNestingEnabled(True)
 
         root.addWidget(self._mw, 1)

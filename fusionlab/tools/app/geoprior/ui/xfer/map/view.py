@@ -79,7 +79,7 @@ class MapView(QWidget):
         super().__init__(parent)
         # QtWebEngine is much more reliable when its chain
         # contains native widgets.
-        self.setAttribute(Qt.WA_NativeWindow, True)
+        # self.setAttribute(Qt.WA_NativeWindow, True)
 
         self._ready = False
         self._pending_js: list[str] = []
