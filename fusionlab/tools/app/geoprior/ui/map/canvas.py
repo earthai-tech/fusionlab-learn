@@ -528,39 +528,39 @@ class ForecastMapView(QFrame):
             invert=invert,
         )
     
-    # def _set_basemap(
-    #     self,
-    #     provider: str,
-    #     style: str,
-    #     opacity: float,
-    # ) -> None:
-    #     js = (
-    #         "if (window.__GeoPriorMap) {"
-    #         "  window.__GeoPriorMap.setBasemap("
-    #         f"{json.dumps(provider)},"
-    #         f"{json.dumps(style)},"
-    #         f"{json.dumps(float(opacity))}"
-    #         ");"
-    #         "}"
-    #     )
-    #     self._run_js(js)
-    
-    def _set_basemap(self, provider: str, style: str, opacity: float) -> None:
-        spec = resolve_basemap(
-            self._engine_active,
-            provider,
-            style,
-        )
-        spec["opacity"] = float(opacity)
-    
+    def _set_basemap(
+        self, provider: str, 
+        style: str, 
+        opacity: float
+        ) -> None:
         js = (
             "if (window.__GeoPriorMap) {"
             "  window.__GeoPriorMap.setBasemap("
-            f"{json.dumps(spec)}"
+            f"{json.dumps(provider)},"
+            f"{json.dumps(style)},"
+            f"{json.dumps(float(opacity))}"
             ");"
             "}"
         )
         self._run_js(js)
+
+    
+    # def _set_basemap(self, provider: str, style: str, opacity: float) -> None:
+    #     spec = resolve_basemap(
+    #         self._engine_active,
+    #         provider,
+    #         style,
+    #     )
+    #     spec["opacity"] = float(opacity)
+    
+    #     js = (
+    #         "if (window.__GeoPriorMap) {"
+    #         "  window.__GeoPriorMap.setBasemap("
+    #         f"{json.dumps(spec)}"
+    #         ");"
+    #         "}"
+    #     )
+    #     self._run_js(js)
 
     # -----------------------------
     # UI
