@@ -95,7 +95,7 @@ class TunePreviewViz(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
 
         w = float(self.width())
-        h = float(self.height())
+        # h = float(self.height())
 
         pad = 12.0
         x0 = pad

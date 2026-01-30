@@ -76,6 +76,71 @@ def ensure_lonlat(
 
     m = str(mode or "lonlat").strip().lower()
 
+    # Auto mode:
+    # - if values already look like degrees, keep/clip them
+    # - otherwise, if an EPSG is provided, try reprojection
+    # - otherwise, fail with a helpful message
+    if m == "auto":
+        x = pd.to_numeric(pts.get("lon"), errors="coerce")
+        y = pd.to_numeric(pts.get("lat"), errors="coerce")
+
+        ok_xy = x.notna() & y.notna()
+        if not bool(ok_xy.any()):
+            return (
+                pd.DataFrame(columns=pts.columns),
+                False,
+                "No valid coordinates (lon/lat).",
+            )
+
+        xx = x.to_numpy(dtype=float)
+        yy = y.to_numpy(dtype=float)
+
+        # If it already looks like lon/lat degrees, treat as lonlat.
+        if _looks_like_lonlat(xx, yy):
+            out = _clip_lonlat(pts)
+            ok = not out.empty
+            msg = "" if ok else "No valid lon/lat points."
+            return out, ok, msg
+
+        # Otherwise, treat as projected: attempt reprojection if EPSG is set.
+        # src = parse_epsg(utm_epsg or src_epsg)
+        src = parse_epsg(src_epsg) or parse_epsg(utm_epsg)
+        if src is None:
+            return (
+                pd.DataFrame(columns=pts.columns),
+                False,
+                "Auto coord mode detected projected coordinates; "
+                "set UTM/EPSG to reproject.",
+            )
+        
+        z, _south = _utm_zone_hemi_from_epsg(int(src))
+        if z > 0:
+            out = _utm_df_to_lonlat(pts, epsg=int(src))
+        else:
+            # out = _reproject_xy(
+            #     pts,
+            #     src_epsg=int(src),
+            #     dst_epsg=int(dst_epsg),
+            # )
+
+            try:
+                out = _reproject_xy(
+                    pts,
+                    src_epsg=int(src),
+                    dst_epsg=int(dst_epsg),
+                )
+            except Exception as e:
+                return (
+                    pd.DataFrame(columns=pts.columns),
+                    False,
+                    f"Reprojection failed: {e}",
+                )
+
+        out = _clip_lonlat(out)
+        ok = not out.empty
+        msg = "" if ok else "No valid lon/lat after reprojection."
+        return out, ok, msg
+
     if m == "lonlat":
         out = _clip_lonlat(pts)
         ok = not out.empty
@@ -221,6 +286,17 @@ def to_lonlat(
     if _looks_like_lonlat(x, y):
         return x, y, True
 
+    # Auto: treat non-degree coordinates as projected
+    # if EPSG information is available.
+    if m == "auto":
+        if utm_epsg:
+            m = "utm"
+        elif src_epsg:
+            m = "epsg"
+        else:
+            # No EPSG info: cannot infer a reprojection.
+            return x * np.nan, y * np.nan, False
+
     if m == "lonlat":
         return x, y, True
 
@@ -362,3 +438,54 @@ def utm_to_lonlat(
     lon = np.deg2rad(lon0) + q3 / cosf
 
     return np.rad2deg(lon), np.rad2deg(lat)
+
+def utm_epsg_from_center(
+    lat: float | None,
+    lon: float | None,
+) -> int | None:
+    if lat is None or lon is None:
+        return None
+    try:
+        lo = float(lon)
+        la = float(lat)
+    except Exception:
+        return None
+
+    # Normalize lon to [-180, 180]
+    while lo > 180.0:
+        lo -= 360.0
+    while lo < -180.0:
+        lo += 360.0
+
+    z = int((lo + 180.0) // 6.0) + 1
+    z = max(1, min(60, z))
+
+    base = 32700 if la < 0.0 else 32600
+    return base + z
+
+def _utm_df_to_lonlat(
+    pts: pd.DataFrame,
+    *,
+    epsg: int,
+) -> pd.DataFrame:
+    out = pts.copy()
+
+    x = pd.to_numeric(out["lon"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    y = pd.to_numeric(out["lat"], errors="coerce").to_numpy(
+        dtype=float
+    )
+
+    ok = np.isfinite(x) & np.isfinite(y)
+    if not bool(np.any(ok)):
+        return pd.DataFrame(columns=out.columns)
+
+    z, south = _utm_zone_hemi_from_epsg(int(epsg))
+    if z <= 0:
+        return pd.DataFrame(columns=out.columns)
+
+    lon, lat = utm_to_lonlat(x, y, z, south=south)
+    out["lon"] = lon
+    out["lat"] = lat
+    return out

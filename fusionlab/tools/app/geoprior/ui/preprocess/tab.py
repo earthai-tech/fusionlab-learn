@@ -24,6 +24,7 @@ from PyQt5.QtCore import (
     QSignalBlocker, 
     QPoint,
     pyqtSignal, 
+    QTimer,
 )
 from PyQt5.QtGui import (
     QColor,
@@ -41,7 +42,6 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
-    QGridLayout,
     QToolButton,   
     QStyle, 
     QScrollArea,
@@ -63,6 +63,11 @@ from ...config.smart_stage1 import (
     
 )
 from ...device_options import runtime_summary_text
+from ...utils.path_display import (
+    compact_path,
+    set_path_label,
+)
+from ...utils.generic_utils import open_json_editor
 
 from ..stage1_workspace.workspace import Stage1Workspace
 from ..stage1_workspace.readiness import (
@@ -101,7 +106,13 @@ class PreprocessTab(QWidget):
         "tf_gpu_allow_growth",
         "tf_gpu_memory_limit_mb",
     }
-        
+    
+    _PREVIEW_RESET_KEYS = {
+    "city",
+    "results_root",
+    "dataset_path",
+}
+
     request_open_dataset = pyqtSignal()
     request_refresh = pyqtSignal()
     request_run_stage1 = pyqtSignal()
@@ -134,13 +145,14 @@ class PreprocessTab(QWidget):
         self._store: Optional[GeoConfigStore] = None
         self._ws_stage1_dir: Optional[str] = None
         self._ws_model: str = ""
-        
+        self._build_split_sizes = [900, 420]
+
         # ---- Stage-1 status cache (fast tab switching) ----
         self._prep_refresh_key = None  # tuple[str, str, str]
         self._prep_cache_best = None   # dict | None
         self._prep_cache_manifest = None
         self._prep_cache_audit = None
-
+        
 
         self._build_ui()
         self.bind_store(store)
@@ -150,6 +162,31 @@ class PreprocessTab(QWidget):
     # ------------------------------------------------------------------
     # Store binding
     # ------------------------------------------------------------------
+    def _on_build_splitter_moved(self, *_: Any) -> None:
+        sp = getattr(self, "_build_split", None)
+        if sp is not None:
+            self._build_split_sizes = sp.sizes()
+
+    def _preview_scroll_to_top(self) -> None:
+        sa = getattr(self, "_prep_preview_scroll", None)
+        if sa is None:
+            return
+        sb = sa.verticalScrollBar()
+        if sb is None:
+            return
+        sb.setValue(sb.minimum())
+    
+    def _schedule_preview_scroll_top(self) -> None:
+        if not hasattr(self, "_prep_preview_scroll"):
+            return
+        QTimer.singleShot(0, self._preview_scroll_to_top)
+    
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if getattr(self, "_view_mode", "build") == "build":
+            self._schedule_preview_scroll_top()
+
+
     def bind_store(self, store: GeoConfigStore) -> None:
         if self._store is store:
             return
@@ -220,10 +257,17 @@ class PreprocessTab(QWidget):
                 FieldKey("dataset_path"),
                 default=None,
             )
-            self.lbl_prep_csv.setText(
-                f"Dataset: {ds or '-'}"
-            )
-
+            if ds:
+                set_path_label(
+                    self.lbl_prep_csv,
+                    prefix="Dataset: ",
+                    full_path=str(ds),
+                    max_len=62,
+                )
+            else:
+                self.lbl_prep_csv.setText("Dataset: -")
+                self.lbl_prep_csv.setToolTip("")
+            
         # Update computed city root whenever results_root or city changes
         if want("results_root") or want("city"):
             city_root = self._compute_city_root()
@@ -241,6 +285,9 @@ class PreprocessTab(QWidget):
         self._refresh_left_details()
         self._refresh_nav_chips()
         
+        if keys is None or (keys & self._PREVIEW_RESET_KEYS):
+            self._schedule_preview_scroll_top()
+    
     def _sync_stage1_options_from_store(
         self,
         *,
@@ -397,10 +444,15 @@ class PreprocessTab(QWidget):
         self,
         *,
         state_text: str,
-        manifest_text: str,
+        manifest_path: Optional[str],
     ) -> None:
         self.lbl_prep_stage1_state.setText(state_text)
-        self.lbl_prep_stage1_manifest.setText(manifest_text)
+        set_path_label(
+            self.lbl_prep_stage1_manifest,
+            prefix="Manifest: ",
+            full_path=manifest_path,
+            max_len=62,
+        )
 
     # ---- Workspace pass-throughs (controller-friendly) ----
     def set_workspace_context(
@@ -465,16 +517,24 @@ class PreprocessTab(QWidget):
         mode = (mode or "").strip().lower()
         if mode not in ("build", "inspect"):
             mode = "build"
-
+    
         self._view_mode = mode
-
+    
         if mode == "build":
             self.btn_mode_build.setChecked(True)
             self._stack.setCurrentIndex(0)
+    
+            # restore the split AFTER layout settles
+            sp = getattr(self, "_build_split", None)
+            sizes = getattr(self, "_build_split_sizes", None) or [900, 420]
+            if sp is not None:
+                QTimer.singleShot(0, lambda s=sizes, w=sp: w.setSizes(s))
+    
+            self._schedule_preview_scroll_top()
         else:
             self.btn_mode_inspect.setChecked(True)
             self._stack.setCurrentIndex(1)
-            
+
     def _refresh_nav_chips(self) -> None:
         st = self._store
         if st is None:
@@ -537,11 +597,22 @@ class PreprocessTab(QWidget):
         s1 = "" if stage1_dir is None else str(stage1_dir)
         mf = "" if manifest_path is None else str(manifest_path)
 
-        self.lbl_prep_best_dir.setText(s1 or "-")
-        self.lbl_prep_best_mf.setText(mf or "-")
+        # self.lbl_prep_best_dir.setText(s1 or "-")
+        # self.lbl_prep_best_mf.setText(mf or "-")
+        set_path_label(
+            self.lbl_prep_best_dir,
+            prefix="",
+            full_path=s1 or None,
+            max_len=62,
+        )
+        
+        set_path_label(
+            self.lbl_prep_best_mf,
+            prefix="",
+            full_path=mf or None,
+            max_len=62,
+        )
 
-        self.btn_prep_preview_open_dir.setEnabled(bool(s1))
-        self.btn_prep_preview_open_mf.setEnabled(bool(mf))
         self._set_reco_chip(dec)
         self._apply_run_button_state(dec)
         
@@ -882,6 +953,11 @@ class PreprocessTab(QWidget):
 
         build_split = QSplitter(Qt.Horizontal, self)
         build_split.setChildrenCollapsible(False)
+        build_split.setCollapsible(0, False)
+        build_split.setCollapsible(1, False)
+        
+        self._build_split = build_split
+        build_split.splitterMoved.connect(self._on_build_splitter_moved)
 
         # C: cards (scroll)
         self._build_scroll = QScrollArea(self)
@@ -952,18 +1028,9 @@ class PreprocessTab(QWidget):
         opt_box.addWidget(self.chk_prep_clean)
         opt_box.addWidget(self.chk_prep_auto_reuse)
 
-        row_force = QWidget(self.card_policy)
-        gl = QGridLayout(row_force)
-        gl.setContentsMargins(0, 0, 0, 0)
-        gl.setHorizontalSpacing(12)
-        gl.setVerticalSpacing(6)
-
-        gl.addWidget(self.chk_prep_force_rebuild, 0, 0)
-        gl.addWidget(self.chk_prep_build_future, 0, 1)
-        gl.setColumnStretch(0, 1)
-        gl.setColumnStretch(1, 1)
-
-        opt_box.addWidget(row_force)
+        # opt_box.addWidget(row_force)
+        opt_box.addWidget(self.chk_prep_force_rebuild)
+        opt_box.addWidget(self.chk_prep_build_future)
 
         c_lay.addWidget(self.card_policy, 0)
 
@@ -1067,29 +1134,7 @@ class PreprocessTab(QWidget):
             Qt.TextSelectableByMouse
         )
         d_box.addWidget(self.lbl_prep_best_mf)
-
-        d_btns = QHBoxLayout()
-        d_btns.setContentsMargins(0, 0, 0, 0)
-        d_btns.setSpacing(8)
-
-        self.btn_prep_preview_open_dir = QPushButton(
-            "Open folder",
-            self,
-        )
-        self.btn_prep_preview_open_mf = QPushButton(
-            "Open manifest",
-            self,
-        )
-        self.btn_prep_preview_readiness = QPushButton(
-            "View readiness",
-            self,
-        )
-
-        d_btns.addWidget(self.btn_prep_preview_open_dir)
-        d_btns.addWidget(self.btn_prep_preview_open_mf)
-        d_btns.addWidget(self.btn_prep_preview_readiness)
-        d_btns.addStretch(1)
-        d_box.addLayout(d_btns)
+        
         d_box.addSpacing(10)
         
         self.pv_viz = Stage1PreviewViz(self)
@@ -1120,14 +1165,50 @@ class PreprocessTab(QWidget):
         
         self.prep_recap = RecapTable(self)
         d_box.addWidget(self.prep_recap, 1)
-
-        d_card.setMinimumWidth(320)
+     
+        # optional preview card expands properly
+        d_card.setMinimumWidth(340)
+        d_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        
+        # Wrap the preview card in a scroll area (like Tune tab)
+        self._prep_preview_scroll = QScrollArea(self)
+        self._prep_preview_scroll.setMinimumWidth(360)
+        self._prep_preview_scroll.setSizePolicy(
+            QSizePolicy.Preferred, QSizePolicy.Expanding
+        )
+        self._prep_preview_scroll.setWidgetResizable(True)
+        self._prep_preview_scroll.setFrameShape(QFrame.NoFrame)
+        self._prep_preview_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
+        self._prep_preview_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        
+        _pv_page = QWidget(self._prep_preview_scroll)
+        self._prep_preview_scroll.setWidget(_pv_page)
+        
+        _pv_lay = QVBoxLayout(_pv_page)
+        _pv_page.setMinimumWidth(340)
+        _pv_page.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        _pv_lay.setAlignment(Qt.AlignTop)
+        _pv_lay.setContentsMargins(0, 0, 0, 0)
+        _pv_lay.setSpacing(10)
+        
+        _pv_lay.addWidget(d_card, 0)
+        _pv_lay.addStretch(1)
 
         build_split.addWidget(self._build_scroll)
-        build_split.addWidget(d_card)
-        build_split.setStretchFactor(0, 7)
-        build_split.setStretchFactor(1, 3)
-
+        build_split.addWidget(self._prep_preview_scroll)
+        # build_split.setStretchFactor(0, 7)
+        # build_split.setStretchFactor(1, 3)
+        # Make left expand, right "stable"
+        build_split.setStretchFactor(0, 1)
+        build_split.setStretchFactor(1, 0)
+        
+        # Pick a stable default (copy TrainTab feel)
+        build_split.setSizes([900, 420])
+        
         build_lay.addWidget(build_split, 1)
 
         self._stack.addWidget(build_page)
@@ -1215,7 +1296,18 @@ class PreprocessTab(QWidget):
 
         # default mode
         self._set_view_mode("build")
-    
+
+    def _on_open_manifest_clicked(self) -> None:
+        p = getattr(self, "_stage1_manifest_path", None)
+        if not p:
+            return
+        open_json_editor(
+            self,
+            title="Stage-1 manifest",
+            path=str(p),
+            read_only=True,  # starts read-only; user can press Edit
+        )
+        
     def _refresh_left_details(self) -> None:
         st = self._store
         if st is None:
@@ -1419,26 +1511,29 @@ class PreprocessTab(QWidget):
                     ),
                 )
     
-        city_root = self.city_root_path() or "-"
         dec = (self.lbl_prep_decision.text() or "-").strip()
-    
+        
         clean = self._opt_bool("clean_stage1_dir", False)
         future = self._opt_bool("build_future_npz", False)
-    
+        
         extras: list[str] = []
         if clean:
             extras.append("clean")
         if future:
             extras.append("future-npz")
-    
+        
         extra_txt = ""
         if extras:
             extra_txt = " (" + ", ".join(extras) + ")"
-    
+        
+        city_root = self.city_root_path() or ""
+        city_root_disp = compact_path(city_root, max_len=62)
+        
         self.lbl_plan_hint.setText(
-            f"Decision: {dec}. Output root: {city_root}{extra_txt}"
+            f"Decision: {dec}. Output root: {city_root_disp}{extra_txt}"
         )
-    
+        self.lbl_plan_hint.setToolTip(city_root or "")
+
         # artifacts (show present/missing if best dir known)
         stage1_dir = b.get("stage1_dir")
         base = None
@@ -1582,8 +1677,13 @@ class PreprocessTab(QWidget):
         self.btn_plan_show.setChecked(True)
         self._set_plan_details_visible(True)
 
+
     def _set_plan_details_visible(self, on: bool) -> None:
         on = bool(on)
+    
+        sp = getattr(self, "_build_split", None)
+        sizes = sp.sizes() if sp is not None else None
+    
         if hasattr(self, "plan_details"):
             self.plan_details.setVisible(on)
     
@@ -1593,6 +1693,18 @@ class PreprocessTab(QWidget):
                 self._plan_icon_up if on else self._plan_icon_down
             )
     
+        if sp is not None and sizes:
+            # clamp right pane so it never becomes a thin strip
+            min_right = max(360, getattr(
+                self._prep_preview_scroll, "minimumWidth",
+                lambda: 360)())
+            total = sum(sizes)
+            right = max(sizes[1], min_right)
+            left = max(0, total - right)
+            new_sizes = [left, right]
+    
+            QTimer.singleShot(0, lambda s=new_sizes, w=sp: w.setSizes(s))
+
     def _goto_build_plan(self, *, expand: bool = True) -> None:
         self._set_view_mode("build")
         if expand and hasattr(self, "btn_plan_show"):
@@ -1878,24 +1990,14 @@ class PreprocessTab(QWidget):
         # Status card actions
         # -------------------------------------------------
         self.btn_prep_open_manifest.clicked.connect(
-            self.request_open_manifest.emit
+            self._on_open_manifest_clicked
         )
+
         self.btn_prep_open_stage1_dir.clicked.connect(
             self.request_open_stage1_dir.emit
         )
         self.btn_prep_use_for_city.clicked.connect(
             self.request_use_for_city.emit
-        )
-
-        # Preview card shortcuts (D)
-        self.btn_prep_preview_open_dir.clicked.connect(
-            self.request_open_stage1_dir.emit
-        )
-        self.btn_prep_preview_open_mf.clicked.connect(
-            self.request_open_manifest.emit
-        )
-        self.btn_prep_preview_readiness.clicked.connect(
-            lambda: self._goto_inspect_tab("Readiness")
         )
 
         # -------------------------------------------------
@@ -2006,6 +2108,10 @@ class PreprocessTab(QWidget):
         stage1_dir: Optional[str],
         manifest_path: Optional[str],
     ) -> None:
+        
+        self._stage1_dir = stage1_dir
+        self._stage1_manifest_path = manifest_path
+
         has_dir = bool(stage1_dir)
         has_mf = bool(manifest_path)
 
@@ -2054,10 +2160,24 @@ class PreprocessTab(QWidget):
         if (not force) and (key == self._prep_refresh_key):
             if self._prep_cache_best is not None:
                 best = self._prep_cache_best
+                # self.set_stage1_status(
+                #     state_text=best["state"],
+                #     manifest_text=best["mf_text"],
+                # )
                 self.set_stage1_status(
                     state_text=best["state"],
-                    manifest_text=best["mf_text"],
+                    manifest_path=best.get("manifest_path"),
                 )
+                try:
+                    set_path_label(
+                        self.lbl_prep_stage1_manifest,
+                        prefix="Manifest: ",
+                        full_path=best.get("manifest_path"),
+                        max_len=62,
+                    )
+                except Exception:
+                    pass
+                
                 self._set_stage1_actions(
                     stage1_dir=best["stage1_dir"],
                     manifest_path=best["manifest_path"],
@@ -2070,6 +2190,7 @@ class PreprocessTab(QWidget):
                 self.set_workspace_scaling_audit(self._prep_cache_audit)
 
                 self._refresh_preview_only()
+                self._schedule_preview_scroll_top()
 
                 return
 
@@ -2079,7 +2200,7 @@ class PreprocessTab(QWidget):
         if not city:
             self.set_stage1_status(
                 state_text="Stage-1: (no city selected)",
-                manifest_text="Manifest: -",
+                manifest_path=None,
             )
             self._set_stage1_actions(stage1_dir=None, manifest_path=None)
             self.set_workspace_context(stage1_dir=None, model="")
@@ -2089,16 +2210,21 @@ class PreprocessTab(QWidget):
             self._prep_cache_manifest = None
             self._prep_cache_audit = None
             self._refresh_preview_only()
+            self._schedule_preview_scroll_top()
             return
 
         if rr_path is None:
+            # self.set_stage1_status(
+            #     state_text="Stage-1: (no results root selected)",
+            #     manifest_text="Manifest: -",
+            # )
             self.set_stage1_status(
-                state_text="Stage-1: (no results root selected)",
-                manifest_text="Manifest: -",
+                state_text="Stage-1: ...",
+                manifest_path=None,
             )
             self._set_stage1_actions(stage1_dir=None, manifest_path=None)
             self._refresh_preview_only()
-
+            self._schedule_preview_scroll_top()
             return
 
         # --- discover runs (FAST: city_root only if it exists) ---
@@ -2123,9 +2249,14 @@ class PreprocessTab(QWidget):
 
         best = pick_best_stage1_run(runs)
         if best is None:
+            # self.set_stage1_status(
+            #     state_text="Stage-1: not found for this city",
+            #     manifest_text="Manifest: -",
+            # )
+            
             self.set_stage1_status(
-                state_text="Stage-1: not found for this city",
-                manifest_text="Manifest: -",
+                state_text="Stage-1: ...",
+                manifest_path=None,
             )
             self._set_stage1_actions(stage1_dir=None, manifest_path=None)
             self.set_workspace_context(stage1_dir=None, model="")
@@ -2138,6 +2269,7 @@ class PreprocessTab(QWidget):
             self._prep_cache_manifest = None
             self._prep_cache_audit = None
             self._refresh_preview_only()
+            self._schedule_preview_scroll_top()
   
             return
 
@@ -2148,7 +2280,6 @@ class PreprocessTab(QWidget):
             f"Stage-1: {tag} / {match} "
             f"(n_train={best.n_train}, n_val={best.n_val})"
         )
-        mf_text = f"Manifest: {best.manifest_path}"
 
         stage1_dir = str(best.run_dir)
         mf_path = str(best.manifest_path)
@@ -2173,7 +2304,11 @@ class PreprocessTab(QWidget):
             manifest_path=mf_path,
         )
 
-        self.set_stage1_status(state_text=state, manifest_text=mf_text)
+        self.set_stage1_status(
+            state_text=state,
+            manifest_path=mf_path,
+        )
+
         self._set_stage1_actions(stage1_dir=stage1_dir, manifest_path=mf_path)
         self.set_workspace_context(stage1_dir=stage1_dir, model=model)
 
@@ -2197,10 +2332,8 @@ class PreprocessTab(QWidget):
         self.set_workspace_manifest(manifest)
         self.set_workspace_scaling_audit(audit)
 
-        # --- cache for next tab entry ---
         self._prep_cache_best = dict(
             state=state,
-            mf_text=mf_text,
             stage1_dir=stage1_dir,
             manifest_path=mf_path,
             model=model,
@@ -2209,11 +2342,13 @@ class PreprocessTab(QWidget):
             decision=dec,
             reason=rsn,
         )
+
         self._prep_cache_manifest = manifest
         self._prep_cache_audit = audit
         
         self._update_recap()
         self._refresh_plan_card()
+        self._schedule_preview_scroll_top()
 
 
     def _refresh_runtime_snapshot(

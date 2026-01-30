@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "cities": [
+    {
+      "id": "nansha",
+      "name": "Nansha, Guangzhou, China",
+      "lat": 22.616,
+      "lon": 113.604,
+      "utm_epsg": 32649,
+      "aliases": [
+        "Nansha",
+        "南沙"
+      ]
+    },
+    {
+      "id": "zhongshan",
+      "name": "Zhongshan, Guangdong, China",
+      "lat": 22.517,
+      "lon": 113.392,
+      "utm_epsg": 32649,
+      "aliases": [
+        "Zhongshan",
+        "中山"
+      ]
+    }
+  ]
+}

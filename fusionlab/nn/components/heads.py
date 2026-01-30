@@ -204,27 +204,31 @@ class MixtureDensityHead(Layer, NNLearner):
         # Split: first K for weights, remaining 2*K*O for μ/σ
         k = self.num_components
         o = self.output_dim
+        
         w_end = k
-        w_raw = raw[..., :w_end]                       # (B,[H], K)
-        rest = raw[..., w_end:]                        # (B,[H], 2*K*O)
-
+        w_raw = raw[..., :w_end]          # (B,[H], K)
+        rest  = raw[..., w_end:]          # (B,[H], 2*K*O)
+        
         # Reshape rest → (..., K, 2, O)
         # rest_shape = tf_stack(shp[:-1] + [k, 2, o])
         tail = tf_constant([k, 2, o], dtype=shp.dtype)
         rest_shape = tf_concat([shp[:-1], tail], axis=0)
-
+       
         rest = tf_reshape(rest, rest_shape)
         means  = rest[..., 0, :]                       # (..., K, O)
         raw_s  = rest[..., 1, :]                       # (..., K, O)
         scales = tf_softplus(raw_s) + self.min_scale
-
-        # weights softmax across K (axis=-2)
-        # Need to align dims: add an O dim for broadcasting if O>1
-        # We'll expand to (.., K, 1) then tile to O
-        w = self.softmax(tf_expand_dims(w_raw, axis=-1))  # (..., K, 1)
-        # broadcast or tile to (..., K, O)
+        
+        # weights: if K==1, skip softmax and set weights=1
+        if k == 1:
+            one = tf_constant(1.0, dtype=w_raw.dtype)
+            w = tf_expand_dims(w_raw * 0.0 + one, axis=-1)   # (B,[H], 1, 1)
+        else:
+            w = self.softmax(tf_expand_dims(w_raw, axis=-1)) # (B,[H], K, 1)
+        
         if o > 1:
-            w = tf_tile(w, [1] * (len(w.shape) - 1) + [o])
+            w = tf_tile(w, [1] * (len(w.shape) - 1) + [o])   # (B,[H], K, O)
+
         return {"weights": w, "means": means, "scales": scales}
 
     # Negative log-likelihood for mixtures

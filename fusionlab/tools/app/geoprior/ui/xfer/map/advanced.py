@@ -57,7 +57,6 @@ from ..keys import (
     K_MAP_LINKS_SHOW_DIST,
     K_MAP_INTERP_HTML,
     K_MAP_INTERP_TIP,
-    K_MAP_INTERP_TIP
 )
 
 from .interactions_ui import XferMapInteractionsBlock
@@ -189,19 +188,20 @@ class XferMapAdvancedPanel(QWidget):
         self.cmb_coord = QComboBox(self)
         self.cmb_coord.addItems(
             [
+                "Auto (detect degrees vs meters)",
                 "Lon/Lat degrees",
                 "UTM (EPSG:326xx/327xx)",
                 "Projected (EPSG)",
             ]
         )
-
+        
         self.sp_utm = QSpinBox(self)
-        self.sp_utm.setRange(1, 999999)
-        self.sp_utm.setSingleStep(1)
-
+        self.sp_utm.setRange(0, 999999)
+        self.sp_utm.setSpecialValueText("Auto")
+        
         self.sp_src = QSpinBox(self)
-        self.sp_src.setRange(1, 999999)
-        self.sp_src.setSingleStep(1)
+        self.sp_src.setRange(0, 999999)
+        self.sp_src.setSpecialValueText("Auto")
 
         self.sec_view.add_row(
             0,
@@ -509,22 +509,26 @@ class XferMapAdvancedPanel(QWidget):
             self.sp_opacity.setValue(max(0.05, min(1.0, v)))
 
         if not ch or K_MAP_COORD_MODE in ch:
-            cm = str(s.get(K_MAP_COORD_MODE, "auto") or "")
+            cm = str(s.get(K_MAP_COORD_MODE, "auto") or "auto")
             cm = cm.strip().lower()
-            idx = 0
-            if cm == "utm":
+            
+            idx = 0  # auto
+            if cm in ("lonlat", "degrees"):
                 idx = 1
-            elif cm == "epsg":
+            elif cm == "utm":
                 idx = 2
+            elif cm == "epsg":
+                idx = 3
+            
             self.cmb_coord.setCurrentIndex(idx)
 
         if not ch or K_MAP_UTM_EPSG in ch:
-            v = int(s.get(K_MAP_UTM_EPSG, 32600) or 32600)
-            self.sp_utm.setValue(max(1, v))
+            v = int(s.get(K_MAP_UTM_EPSG, 0) or 0)
+            self.sp_utm.setValue(max(0, v))
 
         if not ch or K_MAP_SRC_EPSG in ch:
-            v = int(s.get(K_MAP_SRC_EPSG, 4326) or 4326)
-            self.sp_src.setValue(max(1, v))
+            v = int(s.get(K_MAP_SRC_EPSG, 0) or 0)
+            self.sp_src.setValue(max(0, v))
 
         if not ch or K_MAP_POINTS_MODE in ch:
             pm = str(s.get(K_MAP_POINTS_MODE, "all") or "")
@@ -620,28 +624,32 @@ class XferMapAdvancedPanel(QWidget):
 
         self._enable_hot_ana()
         
-        cm = self.cmb_coord.currentIndex()
-        self.sp_utm.setEnabled(cm == 1)
-        self.sp_src.setEnabled(cm == 2)
-
+        cm_i = self.cmb_coord.currentIndex()
+        self.sp_utm.setEnabled(cm_i in (0, 2))  # auto or utm
+        self.sp_src.setEnabled(cm_i in (0, 3))  # auto or epsg
+        
     # -------------------------
     # Push -> store
     # -------------------------
     def _push_view(self) -> None:
         s = self._s
         cm_i = int(self.cmb_coord.currentIndex())
-        cm = "lonlat"
+        
+        cm = "auto"
         if cm_i == 1:
-            cm = "utm"
+            cm = "lonlat"
         elif cm_i == 2:
+            cm = "utm"
+        elif cm_i == 3:
             cm = "epsg"
-
+        
         with s.batch():
             s.set(K_MAP_MAX_POINTS, int(self.sp_max_pts.value()))
             s.set(K_MAP_OPACITY, float(self.sp_opacity.value()))
             s.set(K_MAP_COORD_MODE, cm)
             s.set(K_MAP_UTM_EPSG, int(self.sp_utm.value()))
             s.set(K_MAP_SRC_EPSG, int(self.sp_src.value()))
+
 
     def _push_hot(self) -> None:
         s = self._s

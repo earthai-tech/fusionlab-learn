@@ -8,7 +8,7 @@ geoprior.ui.map.utils
 
 Scanning helpers for MapTab auto data discovery.
 
-We detect:
+We detect: (v3.0)
 <results_root>/
   <city>_<model>_stage1/
     train_<jobid>/
@@ -20,7 +20,6 @@ We detect:
     inference/
       run_<jobid>/
         *.csv
-
 We never rename files on disk.
 We only generate shorter display labels for the UI.
 """

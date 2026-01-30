@@ -372,16 +372,16 @@ def _make_scaling_kwargs(
 ) -> dict[str, Any]:
     spy = float(SEC_PER_YEAR)
 
-    # Consistent linear/log bounds.
-    logK_min = float(np.log(K_min))
-    logK_max = float(np.log(K_max))
-    logSs_min = float(np.log(Ss_min))
-    logSs_max = float(np.log(Ss_max))
+    # Consistent linear/log bounds (LOG10 because offset_mode="log10")
+    logK_min = float(np.log10(K_min))
+    logK_max = float(np.log10(K_max))
+    logSs_min = float(np.log10(Ss_min))
+    logSs_max = float(np.log10(Ss_max))
 
     tau_min_sec = float(tau_min_year) * spy
     tau_max_sec = float(tau_max_year) * spy
-    logTau_min = float(np.log(tau_min_sec))
-    logTau_max = float(np.log(tau_max_sec))
+    logTau_min = float(np.log10(tau_min_sec))
+    logTau_max = float(np.log10(tau_max_sec))
 
     return dict(
         # Units/scales (subsidence is already meters).
@@ -401,6 +401,9 @@ def _make_scaling_kwargs(
         # Strongly recommended for identifiability runs:
         allow_subs_residual=bool(allow_subs_residual),
 
+        subs_dyn_index=None,
+        subs_dyn_name=None,
+    
         # Dynamic input is depth-bgs (down+).
         gwl_dyn_index=0,
         gwl_col="GWL_depth_bgs_m",
@@ -496,12 +499,12 @@ def train_one_pixel(
         H_max=H_max,
         tau_min_year=tau_min_year,
         tau_max_year=tau_max_year,
-        allow_subs_residual=True,
+        allow_subs_residual=False,
     )
 
     b = sk["bounds"]
     print("K_max (linear):", b["K_max"])
-    print("K_max (from log):", float(np.exp(b["logK_max"])))
+    print("K_max (from log10):", 10.0 ** b["logK_max"])
 
     model = GeoPriorSubsNet(
         static_input_dim=s_dim,
@@ -541,10 +544,9 @@ def train_one_pixel(
         offset_mode="log10",
         scaling_kwargs=sk,
     )
-    print("logK bounds used:", model.scaling_kwargs["bounds"]["logK_min"],
-                             model.scaling_kwargs["bounds"]["logK_max"])
-    print("K bounds used:", np.exp(model.scaling_kwargs["bounds"]["logK_min"]),
-                           np.exp(model.scaling_kwargs["bounds"]["logK_max"]))
+    print("K bounds used:", 10**b["logK_min"], 10**b["logK_max"])
+    print("tau bounds used:", 10**b["logTau_min"], 10**b["logTau_max"])
+
 
     ds_tr = tf_dataset(
         Xtr,
@@ -561,10 +563,29 @@ def train_one_pixel(
         seed=seed,
     )
 
-    for xb, _ in ds_tr.take(1):
-        _ = model(xb)
-        break
+    # for xb, _ in ds_tr.take(1):
+        # _ = model(xb)
 
+    for xb, yb in ds_va.take(1):
+        yp = model(xb, training=False)
+        q = yp["subs_pred"].numpy()          # expect (B, H, Q, O) or similar
+        y = yb["subs_pred"].numpy()
+    
+        # Try assuming (B,H,Q,1)
+        q10 = q[..., 0, 0]
+        q50 = q[..., 1, 0]
+        q90 = q[..., 2, 0]
+        yt  = y[..., 0, 0]
+    
+        print("q-shapes:", q.shape, "y-shape:", y.shape)
+        print("crossing rate (q10>q90):", np.mean(q10 > q90))
+        lo = np.minimum(q10, q90)
+        hi = np.maximum(q10, q90)
+        cov = np.mean((yt >= lo) & (yt <= hi))
+        print("coverage80 (using min/max):", cov)
+        print("MAE(q50):", np.mean(np.abs(yt - q50)))
+        break
+    
     QUANTILES = [0.1, 0.5, 0.9]
     SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
 
@@ -601,10 +622,22 @@ def train_one_pixel(
     #     # IMPORTANT: penalize quantile crossing
     #     "lambda_q": 0.1,
     # }
+    # physics_loss_weights = dict(
+    #     lambda_cons=10.0,
+    #     lambda_gw=0.0,
+    #     lambda_prior=0.3,
+    #     lambda_smooth=0.0,
+    #     lambda_bounds=0.1,
+    #     lambda_mv=0.0,
+    #     mv_lr_mult=1.0,
+    #     kappa_lr_mult=0.0,
+    #     lambda_offset=float(lambda_offset),
+    #     lambda_q=0.1,
+    # )
     physics_loss_weights = dict(
-        lambda_cons=10.0,
+        lambda_cons=100.0,   # stronger physics
         lambda_gw=0.0,
-        lambda_prior=0.3,
+        lambda_prior=0.0,    # <- disable until consistent
         lambda_smooth=0.0,
         lambda_bounds=0.1,
         lambda_mv=0.0,
@@ -636,7 +669,16 @@ def train_one_pixel(
         loss_arg = loss_dict
         lossw_arg = loss_weights_dict
         metrics_compile = metrics_arg
-
+    
+    tau_vars = []
+    for v in model.trainable_variables:
+        nm = getattr(v, "path", v.name)
+        if "tau" in str(nm).lower():
+            tau_vars.append(str(nm))
+    
+    print("Trainable tau vars:", tau_vars)
+    
+        
     model.compile(
         optimizer=tf.keras.optimizers.Adam(
             learning_rate=float(lr),
@@ -665,7 +707,22 @@ def train_one_pixel(
             verbose=1,
         ),
     ]
-
+    for xb, yb in ds_tr.take(1):
+        with tf.GradientTape() as tape:
+            yp = model(xb, training=True)
+            loss = model.compiled_loss(yb, yp)
+    
+        tau_w = model.get_layer("tau_head").trainable_weights
+        grads = tape.gradient(loss, tau_w)
+    
+        s = []
+        for g in grads:
+            if g is None:
+                s.append(None)
+            else:
+                s.append(float(tf.reduce_sum(tf.abs(g))))
+        print("tau_head grad sums:", s)
+        
     model.fit(
         ds_tr,
         validation_data=ds_va,

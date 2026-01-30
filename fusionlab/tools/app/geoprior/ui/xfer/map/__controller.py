@@ -19,17 +19,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import re
 import numpy as np
 import pandas as pd
 
 from PyQt5.QtCore import QObject
 
 from ....config.store import GeoConfigStore
+from ...map.utils import scan_results_root
 from ...map.coord_utils import ensure_lonlat
 from ...map.hotspots import HotspotCfg, compute_hotspots
 from ..insights import build_xfer_badges
 from ..types import MapApi, MapPoint
+from .interpretation import interpret_transfer
+from .interpretation import render_html, render_tip
+
 from ..keys import (
     DEFAULTS,
     map_keys,
@@ -89,8 +92,7 @@ from ..keys import (
     
     
 )
-from .interpretation import interpret_transfer
-from .interpretation import render_html, render_tip
+
 from .interactions import (
     InteractionCfg,
     compute_interaction_layers,
@@ -102,121 +104,11 @@ from .interaction_extras import (
     build_radar_centers,
 )
 from .toolbar import DatasetChoice, XferMapToolbar
-from ..utils import (
-    parse_xfer_csv_name,
-    scan_xfer_results_root as scan_results_root,
-    select_xfer_csv,
-    decode_job_id
-)
-
-_SLUG_RE = re.compile(r"[^0-9a-zA-Z]+")
 
 @dataclass(frozen=True)
 class JobKey:
     kind: str
     job_id: str
-
-
-
-def _as_int(v: object) -> Optional[int]:
-    if v is None:
-        return None
-    try:
-        x = int(str(v).strip())
-    except Exception:
-        return None
-    return x if x > 0 else None
-
-
-# def _epsg_from_city_meta(
-#     meta: object,
-#     city: str,
-# ) -> Optional[int]:
-#     if not isinstance(meta, dict):
-#         return None
-
-#     c = str(city or "").strip()
-#     if not c:
-#         return None
-
-#     for k in (c, c.lower(), c.upper()):
-#         v = meta.get(k, None)  # type: ignore[attr-defined]
-#         if isinstance(v, dict):
-#             for kk in (
-#                 "utm_epsg",
-#                 "epsg",
-#                 "src_epsg",
-#                 "crs_epsg",
-#                 "epsg_code",
-#             ):
-#                 e = _as_int(v.get(kk, None))
-#                 if e:
-#                     return e
-#         else:
-#             e = _as_int(v)
-#             if e:
-#                 return e
-
-#     return None
-
-def _slug_city(name: str) -> str:
-    s = str(name or "").strip().lower()
-    s = _SLUG_RE.sub("_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s or "unknown"
-
-
-def _epsg_from_city_meta(
-    meta: object,
-    city: str,
-) -> Optional[int]:
-    if not isinstance(meta, dict):
-        return None
-
-    c = str(city or "").strip()
-    if not c:
-        return None
-
-    def _pick(v: object) -> Optional[int]:
-        if isinstance(v, dict):
-            for kk in (
-                "utm_epsg",
-                "src_epsg",
-                "epsg",
-                "crs_epsg",
-                "epsg_code",
-            ):
-                e = _as_int(v.get(kk, None))
-                if e:
-                    return e
-            return None
-        return _as_int(v)
-
-    # New registry payload:
-    # {"cities": {...}, "aliases": {...}}
-    cities = meta.get("cities", None)
-    if isinstance(cities, dict):
-        aliases = meta.get("aliases", None)
-        aliases = aliases if isinstance(aliases, dict) else {}
-
-        k = _slug_city(c)
-        v = cities.get(k, None)
-        if v is None:
-            k2 = aliases.get(k, None)
-            if k2:
-                v = cities.get(k2, None)
-
-        e = _pick(v)
-        if e:
-            return e
-
-    # Old layout fallback
-    for k in (c, c.lower(), c.upper()):
-        e = _pick(meta.get(k, None))
-        if e:
-            return e
-
-    return None
 
 
 class XferMapController(QObject):
@@ -287,7 +179,6 @@ class XferMapController(QObject):
             return
     
         if ch & {"xfer.city_a", "xfer.city_b"}:
-            self._maybe_autofill_epsg()
             self._sync_toolbar_all()
             self._render_from_store()
             return
@@ -356,10 +247,6 @@ class XferMapController(QObject):
                 int(st.get("play_ms") or 320),
             )
             s.set(K_MAP_INSIGHT, bool(st.get("insight")))
-        self._maybe_autofill_epsg(
-            city_a=st.get("city_a"),
-            city_b=st.get("city_b"),
-        )
         try:
             self._tb.set_play_ms(
                 int(st.get("play_ms") or 320)
@@ -524,163 +411,10 @@ class XferMapController(QObject):
 
         self._tb.set_file_choices(a=a, b=b)
 
-        a_fb = str(a[0].data) if a else ""
-        b_fb = str(b[0].data) if b else ""
-
-        self._auto_pick_xfer_file(
-            target=a_city,
-            other=b_city,
-            job_id=str(a_id) if a_id else None,
-            file_key=K_MAP_A_FILE,
-            fallback=a_fb,
-        )
-
-        self._auto_pick_xfer_file(
-            target=b_city,
-            other=a_city,
-            job_id=str(b_id) if b_id else None,
-            file_key=K_MAP_B_FILE,
-            fallback=b_fb,
-        )
-
-    def _auto_pick_xfer_file(
-        self,
-        *,
-        target: str,
-        other: str,
-        job_id: Optional[str],
-        file_key: str,
-        fallback: str,
-    ) -> None:
-        """
-        Auto-pick the correct v3.2 direction for a layer.
-
-        A layer targets `target` and should pull
-        `{other}_to_{target}_...csv`.
-
-        We keep user's selection unless it is a v3.2
-        xfer file that does not match the direction
-        or the current split.
-        """
-        root = self._s.get("results_root", "") or ""
-        rp = Path(str(root)).expanduser()
-        if not rp.exists():
-            return
-
-        tgt = str(target or "").strip()
-        src = str(other or "").strip()
-        if not tgt or not src:
-            if not str(self._s.get(file_key, "") or ""):
-                if fallback:
-                    self._s.set(file_key, fallback)
-            return
-
-        split = str(self._s.get(K_MAP_SPLIT, "val") or "val")
-
-        cur = str(self._s.get(file_key, "") or "")
-        if cur:
-            try:
-                if not Path(cur).expanduser().exists():
-                    cur = ""
-            except Exception:
-                cur = ""
-        want_kind = self._want_xfer_kind(cur)
-
-        meta = None
-        if cur:
-            try:
-                meta = parse_xfer_csv_name(
-                    Path(cur).name
-                )
-            except Exception:
-                meta = None
-
-        pref_strategy = None
-        pref_calib = None
-        pref_rescale = None
-        if meta is not None:
-            pref_strategy = meta.strategy
-            pref_calib = meta.calibration
-            pref_rescale = meta.rescale_mode
-
-        if cur and self._xfer_file_ok(
-            cur,
-            src=src,
-            tgt=tgt,
-            split=split,
-            kind=want_kind,
-        ):
-            return
-
-        hit = select_xfer_csv(
-            rp,
-            city_a=tgt,
-            city_b=src,
-            target_city=tgt,
-            kind=want_kind,
-            strategy=pref_strategy,
-            calibration=pref_calib,
-            rescale_mode=pref_rescale,
-            split=split,
-            job_id=job_id,
-        )
-        if hit is not None:
-            self._s.set(file_key, str(hit))
-            return
-
-        if (not cur) and fallback:
-            self._s.set(file_key, fallback)
-
-    def _want_xfer_kind(self, fp: str) -> str:
-        """Return 'eval' or 'future' preference."""
-        p = Path(str(fp or "")).expanduser()
-        meta = parse_xfer_csv_name(p.name)
-        if meta is not None:
-            return str(meta.kind or "eval")
-
-        s = str(fp or "").lower()
-        if "future" in s:
-            return "future"
-        return "eval"
-
-    def _xfer_file_ok(
-        self,
-        fp: str,
-        *,
-        src: str,
-        tgt: str,
-        split: str,
-        kind: str,
-    ) -> bool:
-        """
-        True if `fp` is a v3.2 xfer file that matches
-        direction + split + kind.
-
-        If `fp` is not a v3.2 xfer file, return False
-        so we don't enforce direction on v3.0.
-        """
-        p = Path(str(fp or "")).expanduser()
-        if not p.exists():
-            return False
-
-        meta = parse_xfer_csv_name(p.name)
-        if meta is None:
-            return False
-
-        if meta.src_city.lower() != str(src).lower():
-            return False
-        if meta.tgt_city.lower() != str(tgt).lower():
-            return False
-
-        sp = str(split or "").strip().lower()
-        if sp and meta.split != sp:
-            return False
-
-        kd = str(kind or "eval").strip().lower()
-        if kd and meta.kind != kd:
-            return False
-
-        return True
+        if a and not str(self._s.get(K_MAP_A_FILE, "") or ""):
+            self._s.set(K_MAP_A_FILE, a[0].data)
+        if b and not str(self._s.get(K_MAP_B_FILE, "") or ""):
+            self._s.set(K_MAP_B_FILE, b[0].data)
 
     def _sync_value_choices(self) -> None:
         items = [
@@ -697,44 +431,15 @@ class XferMapController(QObject):
         c = self._city_map.get(city, None)
         if c is None:
             return []
-    
+
         jobs = list(getattr(c, "jobs", []) or [])
-    
-        def _sort_key(j: Any) -> str:
-            # prefer real job folder name for v3.2 xfer
-            _, jname = decode_job_id(getattr(j, "job_id", ""))
-            return jname or str(getattr(j, "job_id", ""))
-    
-        jobs = sorted(jobs, key=_sort_key, reverse=True)
-    
+        jobs = sorted(jobs, key=lambda j: j.job_id, reverse=True)
+
         out: List[DatasetChoice] = []
         for j in jobs:
-            kind = str(getattr(j, "kind", "") or "")
-            jid = str(getattr(j, "job_id", "") or "")
-    
-            label = f"{kind} {jid}"
-            if kind.strip().lower() == "xfer":
-                _, jname = decode_job_id(jid)
-                label = jname or jid  # ONLY show job folder
-    
-            out.append(
-                DatasetChoice(label, JobKey(j.kind, j.job_id))
-            )
+            txt = f"{j.kind} {j.job_id}"
+            out.append(DatasetChoice(txt, JobKey(j.kind, j.job_id)))
         return out
-
-    # def _job_items(self, city: str) -> List[DatasetChoice]:
-    #     c = self._city_map.get(city, None)
-    #     if c is None:
-    #         return []
-
-    #     jobs = list(getattr(c, "jobs", []) or [])
-    #     jobs = sorted(jobs, key=lambda j: j.job_id, reverse=True)
-
-    #     out: List[DatasetChoice] = []
-    #     for j in jobs:
-    #         txt = f"{j.kind} {j.job_id}"
-    #         out.append(DatasetChoice(txt, JobKey(j.kind, j.job_id)))
-    #     return out
 
     def _file_items(
         self,
@@ -858,60 +563,25 @@ class XferMapController(QObject):
         if overlay in ("b", "both") and b_file:
             layers.append(("B", "City B", str(b_file)))
 
-        # First pass: load all dfs
         pts_out: Dict[str, pd.DataFrame] = {}
         unit = ""
-       
-        ok_any = False
-        last_err = ""
-        step_max_seen = 1
-       
-        # First pass: load dfs + discover step range
+
+        # First pass: load all dfs
         for lid, name, fp in layers:
             df, ok, msg, u, step_max = self._load_points(
-                fp=fp,
-                value=value,
-                time_mode=mode,
-                step=step,
+                fp=fp, value=value, time_mode=mode, step=step
             )
-       
-            # keep horizon/years even if CRS fails
-            try:
-                step_max_seen = max(
-                    step_max_seen,
-                    int(step_max or 1),
-                )
-            except Exception:
-                pass
-       
             if not ok:
-                last_err = msg or last_err
+                self._set_status(msg, ok=False)
                 continue
-       
-            ok_any = True
             unit = unit or (u or "")
             pts_out[lid] = df
-       
-        # Apply time range once (even if no layer OK)
-        self._update_step_range(step, step_max_seen)
-       
-        if not ok_any:
-            if last_err:
-                self._set_status(last_err, ok=False)
-            else:
-                self._set_status(
-                    "No map dataset to plot.",
-                    ok=False,
-                )
-            return
-       
+            self._update_step_range(step, step_max)
+        
         if not pts_out:
-            self._set_status(
-                "No map dataset to plot.",
-                ok=False,
-            )
+            self._set_status("No map dataset to plot.", ok=False)
             return
-
+        
         vmin = vmax = None
         if shared:
             vmin, vmax = self._shared_minmax(pts_out)
@@ -1076,12 +746,7 @@ class XferMapController(QObject):
         ue = self._epsg(self._s.get(K_MAP_UTM_EPSG, None))
         se = self._epsg(self._s.get(K_MAP_SRC_EPSG, None))
 
-       # Fallback: use global CRS keys if map keys unset.
-        if ue is None:
-            ue = self._epsg(self._s.get("utm_epsg", None))
-        if se is None:
-            se = self._epsg(self._s.get("coord_src_epsg", None))
-            
+
         out, ok, msg = ensure_lonlat(
             out,
             mode=cm,
@@ -1095,17 +760,6 @@ class XferMapController(QObject):
                 msg,
                 "",
                 step_max,
-            )
-
-        # Avoid silent "empty layer" after clipping/reproject.
-        if out.empty:
-            return (
-                pd.DataFrame(),
-                False,
-                "No mappable points after CRS conversion. "
-                "Check Coords + EPSG (UTM/src).",
-                "",
-               step_max,
             )
 
         unit = ""
@@ -1317,9 +971,7 @@ class XferMapController(QObject):
     def _coord_mode(self) -> str:
         cm = str(self._s.get(K_MAP_COORD_MODE, "auto") or "auto")
         cm = cm.strip().lower()
-        if cm in ("auto", "detect"):
-            return "auto"
-        if cm in ("lonlat", "degrees"):
+        if cm in ("auto", "lonlat", "degrees"):
             return "lonlat"
         if cm == "utm":
             return "utm"
@@ -1876,118 +1528,4 @@ class XferMapController(QObject):
         with self._s.batch():
             self._s.set(K_MAP_INTERP_HTML, html)
             self._s.set(K_MAP_INTERP_TIP, tip)
-
-
-    # -------------------------
-    # CRS auto-fill from city meta
-    # -------------------------
-    def _maybe_autofill_epsg(
-        self,
-        *,
-        city_a: Optional[str] = None,
-        city_b: Optional[str] = None,
-    ) -> None:
-        """
-        If EPSG is not set, try to fill it from city metadata.
-
-        We do not override user-provided EPSG values.
-        """
-        if self._has_epsg():
-            return
-
-        s = self._s
-        a = str(city_a or s.get("xfer.city_a", "") or "")
-        b = str(city_b or s.get("xfer.city_b", "") or "")
-        a = a.strip()
-        b = b.strip()
-
-        if not a and not b:
-            return
-
-        ea = self._city_epsg(a)
-        eb = self._city_epsg(b)
-        pick = self._pick_pair_epsg(ea, eb)
-        if pick is None:
-            return
-
-        with s.batch():
-            # keep "auto" unless user already chose
-            cm = str(s.get(K_MAP_COORD_MODE, "") or "")
-            if not cm:
-                s.set(K_MAP_COORD_MODE, "auto")
-
-            if 32601 <= int(pick) <= 32760:
-                s.set(K_MAP_UTM_EPSG, int(pick))
-            else:
-                s.set(K_MAP_SRC_EPSG, int(pick))
-
-    def _has_epsg(self) -> bool:
-        s = self._s
-        ue = _as_int(s.get(K_MAP_UTM_EPSG, None))
-        se = _as_int(s.get(K_MAP_SRC_EPSG, None))
-
-        # Also treat global CRS as "already set".
-        if not ue:
-            ue = _as_int(s.get("utm_epsg", None))
-        if not se:
-            se = _as_int(s.get("coord_src_epsg", None))
-        return bool(ue or se)
-
-    def _pick_pair_epsg(
-        self,
-        a: Optional[int],
-        b: Optional[int],
-    ) -> Optional[int]:
-        if a and b:
-            return int(a) if int(a) == int(b) else None
-        if a:
-            return int(a)
-        if b:
-            return int(b)
-        return None
-
-    def _city_epsg(self, city: str) -> Optional[int]:
-        c = str(city or "").strip()
-        if not c:
-            return None
-
-        s = self._s
-
-        # 1) bulk meta dict (recommended)
-        meta = s.get("cities.meta", None)
-        e = _epsg_from_city_meta(meta, c)
-        if e:
-            return int(e)
-
-        # 2) per-city keys (fallback)
-        for k in self._city_epsg_keys(c):
-            e2 = _as_int(s.get(k, None))
-            if e2:
-                return int(e2)
-
-        return None
-
-    def _city_epsg_keys(self, city: str) -> List[str]:
-        c = str(city or "").strip()
-        if not c:
-            return []
-
-        cc = c.lower()
-        out: List[str] = []
-
-        for nm in (c, cc):
-            out.extend(
-                [
-                    f"city.{nm}.utm_epsg",
-                    f"city.{nm}.epsg",
-                    f"geo.city.{nm}.utm_epsg",
-                    f"geo.city.{nm}.epsg",
-                    f"cities.{nm}.utm_epsg",
-                    f"cities.{nm}.epsg",
-                    f"city_meta.{nm}.utm_epsg",
-                    f"city_meta.{nm}.epsg",
-                ]
-            )
-
-        return out
 
