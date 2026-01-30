@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QStyle,
     QVBoxLayout,
     QWidget,
+    QSizePolicy
 )
 
 from .toolbar import XferMapToolbar
@@ -55,7 +56,11 @@ class XferMapHeadBar(QFrame):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-
+        
+        self.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
         self._toolbar: Optional[XferMapToolbar] = None
 
         self.setObjectName("mapHeadCard")

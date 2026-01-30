@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+import math 
 import numpy as np
 import pandas as pd
 
@@ -407,11 +408,19 @@ def _layer_buf_intersection(
     kk = max(0, int(k))
     if kk == 0:
         return None
-
+    
     jj = j.copy()
+    jj = jj[jj["gx"].notna() & jj["gy"].notna()].copy()
+    
+    jj["gx"] = jj["gx"].astype("int64")
+    jj["gy"] = jj["gy"].astype("int64")
     jj["key"] = (jj["gx"] * 10_000_000) + jj["gy"]
-    idx = {int(r.key): i for i, r in jj[["key"]].itertuples()}
-    base = jj[m][["gx", "gy"]].to_numpy(dtype=int)
+    
+    keyset = set(jj["key"].to_numpy(dtype="int64"))
+    
+    m2 = jj["v_a"].notna() & jj["v_b"].notna()
+    base = jj.loc[m2, ["gx", "gy"]].to_numpy(dtype="int64")
+
     if base.size == 0:
         return None
 
@@ -420,7 +429,7 @@ def _layer_buf_intersection(
         for dx in range(-kk, kk + 1):
             for dy in range(-kk, kk + 1):
                 key = int((gx + dx) * 10_000_000 + (gy + dy))
-                if key in idx:
+                if key in keyset:
                     tgt.add(key)
 
     if not tgt:
@@ -478,3 +487,188 @@ def _fmt(v: object) -> str:
     if not np.isfinite(x):
         return "NA"
     return f"{x:.3g}"
+
+
+
+def _haversine_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    r = 6371.0088
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dphi / 2.0) ** 2
+        + math.cos(p1)
+        * math.cos(p2)
+        * math.sin(dl / 2.0) ** 2
+    )
+    return 2.0 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def build_hotspot_links(
+    hs_a: pd.DataFrame,
+    hs_b: pd.DataFrame,
+    *,
+    mode: str = "nearest",
+    k: int = 1,
+    max_links: int = 12,
+    show_dist: bool = True,
+) -> List[List[Any]]:
+    """
+    Return JS rows:
+      [lat1,lon1,lat2,lon2,dist_km,tip,label]
+    Expects cols: lon,lat,sid (optional), tip (optional)
+    """
+    if hs_a is None or hs_b is None:
+        return []
+    if getattr(hs_a, "empty", True) or getattr(hs_b, "empty", True):
+        return []
+
+    a = hs_a.copy()
+    b = hs_b.copy()
+
+    for df in (a, b):
+        df["lon"] = pd.to_numeric(df["lon"], errors="coerce")
+        df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+    a = a.dropna(subset=["lon", "lat"])
+    b = b.dropna(subset=["lon", "lat"])
+    if a.empty or b.empty:
+        return []
+
+    mode = str(mode or "nearest").strip().lower()
+    k = max(1, int(k or 1))
+    max_links = max(1, int(max_links or 12))
+
+    pairs: List[tuple[int, int, float]] = []
+
+    if mode == "rank":
+        n = min(len(a), len(b), max_links)
+        for i in range(n):
+            d = _haversine_km(
+                float(a.iloc[i]["lat"]),
+                float(a.iloc[i]["lon"]),
+                float(b.iloc[i]["lat"]),
+                float(b.iloc[i]["lon"]),
+            )
+            pairs.append((i, i, d))
+    else:
+        cand: List[tuple[int, int, float]] = []
+        for ia in range(len(a)):
+            la = float(a.iloc[ia]["lat"])
+            loa = float(a.iloc[ia]["lon"])
+            for ib in range(len(b)):
+                lb = float(b.iloc[ib]["lat"])
+                lob = float(b.iloc[ib]["lon"])
+                cand.append((ia, ib, _haversine_km(la, loa, lb, lob)))
+        cand.sort(key=lambda x: x[2])
+
+        if mode == "nearest":
+            used_a: set[int] = set()
+            used_b: set[int] = set()
+            for ia, ib, d in cand:
+                if ia in used_a or ib in used_b:
+                    continue
+                pairs.append((ia, ib, d))
+                used_a.add(ia)
+                used_b.add(ib)
+                if len(pairs) >= max_links:
+                    break
+        else:
+            # knn
+            per_a: dict[int, int] = {}
+            for ia, ib, d in cand:
+                c = per_a.get(ia, 0)
+                if c >= k:
+                    continue
+                pairs.append((ia, ib, d))
+                per_a[ia] = c + 1
+                if len(pairs) >= max_links:
+                    break
+
+    out: List[List[Any]] = []
+    for ia, ib, d in pairs[:max_links]:
+        ra = a.iloc[ia]
+        rb = b.iloc[ib]
+        label = f"{d:.2f} km" if show_dist else ""
+        tip = (
+            "Hotspot link\n"
+            f"A#{ra.get('sid','?')} → "
+            f"B#{rb.get('sid','?')}\n"
+            f"d={d:.2f} km"
+        )
+        out.append(
+            [
+                float(ra["lat"]),
+                float(ra["lon"]),
+                float(rb["lat"]),
+                float(rb["lon"]),
+                float(d),
+                str(tip),
+                str(label),
+            ]
+        )
+    return out
+
+
+def build_radar_centers(
+    hs_a: pd.DataFrame,
+    hs_b: pd.DataFrame,
+    *,
+    target: str,
+    overlay: str,
+    order: str,
+) -> List[List[Any]]:
+    """
+    Return JS rows:
+      [lat,lon,rank,score,tip]
+    """
+    target = str(target or "overlay").strip().lower()
+    overlay = str(overlay or "both").strip().lower()
+    order = str(order or "score").strip().lower()
+
+    use_a = target in ("a",) or (target == "overlay" and overlay in ("a",))
+    use_b = target in ("b",) or (target == "overlay" and overlay in ("b",))
+    use_both = target in ("both",) or (target == "overlay" and overlay == "both")
+
+    frames: List[pd.DataFrame] = []
+    if use_both or use_a:
+        if hs_a is not None and not hs_a.empty:
+            frames.append(hs_a.copy())
+    if use_both or use_b:
+        if hs_b is not None and not hs_b.empty:
+            frames.append(hs_b.copy())
+
+    if not frames:
+        return []
+
+    df = pd.concat(frames, axis=0, ignore_index=True)
+    df["score"] = pd.to_numeric(df.get("score", df.get("v")), errors="coerce")
+    df["sid"] = pd.to_numeric(df.get("sid", 0), errors="coerce").fillna(0)
+
+    if order in ("rank",):
+        df = df.sort_values("sid", ascending=True)
+    else:
+        # score/abs
+        sc = df["score"].to_numpy(dtype=float)
+        df = df.assign(_k=np.abs(sc)).sort_values("_k", ascending=False)
+
+    out: List[List[Any]] = []
+    rk = 1
+    for r in df.itertuples(index=False):
+        lat = float(getattr(r, "lat"))
+        lon = float(getattr(r, "lon"))
+        score = float(getattr(r, "score", 0.0))
+        sid = int(getattr(r, "sid", rk))
+        tip = getattr(r, "tip", None)
+        if not tip:
+            tip = f"Hotspot\nrank={sid}\nscore={score:.3g}"
+        out.append([lat, lon, rk, score, str(tip)])
+        rk += 1
+
+    return out
+

@@ -78,9 +78,11 @@ from ._styles import (
 # ------------------------------------------------------------------ #
 
 from ._prep_styles import PREP_PATCH_DARK, PREP_PATCH_LIGHT
+from ._xfer_advsec import XFER_ADVSEC_LIGHT, XFER_ADVSEC_DARK
 
 FLAB_STYLE_SHEET = ( 
     FLAB_STYLE_SHEET 
+    + XFER_ADVSEC_LIGHT
     + _DOCK_CHROME_LIGHT
     + _CONSOLE_STYLES_LIGHT 
     + INF_COMP_SCROLL_LIGHT
@@ -96,16 +98,18 @@ FLAB_STYLE_SHEET = (
 
 DARK_THEME_STYLESHEET = (
     DARK_THEME_STYLESHEET 
+    + XFER_ADVSEC_DARK
     + _DOCK_CHROME_DARK
     + _CONSOLE_STYLES_DARK 
     + INF_COMP_SCROLL_DARK
-    +TRAIN_NAV_DARK
+    + TRAIN_NAV_DARK
     + TRAIN_TAB_PATCH_DARK
     + TRAIN_NAV_ROW 
     + SEARCH_STYLE 
     + INFER_CHIP 
     + TRAIN_COMP_SCROLL_DARK
     + PREP_PATCH_DARK
+
 )
 
 

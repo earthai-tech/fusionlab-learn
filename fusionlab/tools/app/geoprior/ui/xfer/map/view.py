@@ -49,11 +49,16 @@ from ..types import MapPoint
 
 from .engines.leaflet_html import _LEAFLET_HTML
 
+# def _as_js_str(text: str) -> str:
+#     s = (text or "").replace("\\", "\\\\")
+#     s = s.replace("'", "\\'")
+#     return s
+
 def _as_js_str(text: str) -> str:
     s = (text or "").replace("\\", "\\\\")
     s = s.replace("'", "\\'")
+    s = s.replace("\n", "\\n").replace("\r", "\\r")
     return s
-
 
 def _json_min(obj: Any) -> str:
     return json.dumps(
@@ -77,16 +82,12 @@ class MapView(QWidget):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        # QtWebEngine is much more reliable when its chain
-        # contains native widgets.
-        # self.setAttribute(Qt.WA_NativeWindow, True)
 
         self._ready = False
         self._pending_js: list[str] = []
 
         if QWebEngineView is None:
             self._web = None
-            self._web.setAttribute(Qt.WA_NativeWindow, True)
             self._fallback = QLabel(
                 "Interactive map requires PyQtWebEngine.\n"
                 "Install: pip install PyQtWebEngine"
@@ -158,7 +159,65 @@ class MapView(QWidget):
             "}"
         )
         self._run_js(js)
+        
+    # -------------------------
+    #  Links (polylines with arrows)
+    # -------------------------
+    def set_links(
+        self,
+        layer_id: str,
+        name: str,
+        links: Iterable[list],
+        opts: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = _json_min(list(links))
+        o = _json_min(opts or {})
+        lid = _as_js_str(layer_id)
+        nm = _as_js_str(name)
+        js = (
+            "if (window.__GeoPriorMap) {"
+            f"  window.__GeoPriorMap.setLinks("
+            f"'{lid}','{nm}',{payload},{o}"
+            ");}"
+        )
+        self._run_js(js)
     
+    def clear_links(self, layer_id: str) -> None:
+        lid = _as_js_str(layer_id)
+        js = (
+            "if (window.__GeoPriorMap) {"
+            f"  window.__GeoPriorMap.clearLinks('{lid}');"
+            "}"
+        )
+        self._run_js(js)
+    
+    def set_radar(
+        self,
+        layer_id: str,
+        centers: Iterable[list],
+        opts: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = _json_min(list(centers))
+        o = _json_min(opts or {})
+        lid = _as_js_str(layer_id)
+        js = (
+            "if (window.__GeoPriorMap) {"
+            f"  window.__GeoPriorMap.setRadar("
+            f"'{lid}',{payload},{o}"
+            ");}"
+        )
+        self._run_js(js)
+    
+    def clear_radar(self, layer_id: str) -> None:
+        lid = _as_js_str(layer_id)
+        js = (
+            "if (window.__GeoPriorMap) {"
+            f"  window.__GeoPriorMap.clearRadar('{lid}');"
+            "}"
+        )
+        self._run_js(js)
+
+
     def fit_to_cities(self) -> None:
         # JS fitLayers already includes city markers.
         self.fit_layers([])
@@ -226,14 +285,31 @@ class MapView(QWidget):
         )
         self._run_js(js)
 
+    # def fit_layers(
+    #     self,
+    #     layer_ids: Optional[Iterable[str]] = None,
+    # ) -> None:
+    #     ids = None
+    #     if layer_ids is not None:
+    #         ids = [str(x) for x in layer_ids]
+    #     payload = _json_min(ids) if ids else "null"
+
+    #     js = (
+    #         "if (window.__GeoPriorMap) {"
+    #         f"  window.__GeoPriorMap.fitLayers({payload});"
+    #         "}"
+    #     )
+    #     self._run_js(js)
+    
     def fit_layers(
         self,
         layer_ids: Optional[Iterable[str]] = None,
     ) -> None:
-        ids = None
-        if layer_ids is not None:
+        if layer_ids is None:
+            payload = "null"
+        else:
             ids = [str(x) for x in layer_ids]
-        payload = _json_min(ids) if ids else "null"
+            payload = _json_min(ids)
 
         js = (
             "if (window.__GeoPriorMap) {"

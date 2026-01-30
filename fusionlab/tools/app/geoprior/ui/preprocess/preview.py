@@ -232,7 +232,17 @@ class RecapTable(QTableWidget):
 
         self.setSelectionMode(QAbstractItemView.NoSelection)
         self.setFocusPolicy(Qt.NoFocus)
-
+        self.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Fixed,
+        )
+        self.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
+        self.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
+        
         self.horizontalHeader().hide()
         self.verticalHeader().hide()
 
@@ -245,6 +255,12 @@ class RecapTable(QTableWidget):
         self._bold = QFont()
         self._bold.setBold(True)
 
+    def _fit_height(self) -> None:
+        h = 6 + self.frameWidth() * 2
+        for i in range(self.rowCount()):
+            h += self.rowHeight(i)
+        self.setFixedHeight(max(70, h))
+        
     def set_rows(self, rows: List[Tuple[str, str]]) -> None:
         rows = list(rows or [])
         self.setRowCount(len(rows))
@@ -260,3 +276,4 @@ class RecapTable(QTableWidget):
             self.setItem(i, 1, it_v)
 
         self.resizeRowsToContents()
+        self._fit_height()

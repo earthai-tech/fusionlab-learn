@@ -17,7 +17,9 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QLabel
+    QLabel, 
+    QScrollArea, 
+    QFrame
 )
 
 from ...config.store import GeoConfigStore
@@ -180,9 +182,33 @@ class InferenceTab(QWidget):
         )
         prev_body.addWidget(self.preview, 1)
         
+        # Wrap the preview card in an OUTER scroll area (Tune/Preprocess style)
+        self._inf_preview_scroll = QScrollArea(self.split_work)
+        self._inf_preview_scroll.setWidgetResizable(True)
+        self._inf_preview_scroll.setStyleSheet(
+            "QScrollArea{background:transparent;}"
+        )
+        self._inf_preview_scroll.setFrameShape(QFrame.NoFrame)
+        self._inf_preview_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff
+        )
+        self._inf_preview_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        
+        _pv_page = QWidget(self._inf_preview_scroll)
+        self._inf_preview_scroll.setWidget(_pv_page)
+        
+        _pv_lay = QVBoxLayout(_pv_page)
+        _pv_lay.setContentsMargins(0, 0, 0, 0)
+        _pv_lay.setSpacing(10)
+        _pv_lay.addWidget(prev_card, 0)
+        _pv_lay.addStretch(1)
+        
         # Splitter: ONLY TWO widgets
         self.split_work.addWidget(self.center)
-        self.split_work.addWidget(prev_card)
+        self.split_work.addWidget(self._inf_preview_scroll)
+
         
         self.split_work.setStretchFactor(0, 2)
         self.split_work.setStretchFactor(1, 2)

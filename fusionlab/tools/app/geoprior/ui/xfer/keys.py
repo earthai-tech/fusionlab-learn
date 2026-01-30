@@ -83,6 +83,25 @@ K_MAP_INT_INTENS_ENABLE = "xfer.map.int.intens.enable"
 K_MAP_INT_BUF_ENABLE = "xfer.map.int.buf.enable"
 K_MAP_INT_BUF_K = "xfer.map.int.buf.k"
 
+K_MAP_INTERP_HTML = "xfer.map.interp_html"
+K_MAP_INTERP_TIP = "xfer.map.interp_tip"
+
+# xfer/map/keys.py (additions)
+
+K_MAP_RADAR_ENABLE = "xfer.map.radar.enable"
+K_MAP_RADAR_TARGET = "xfer.map.radar.target"        # overlay|both|a|b
+K_MAP_RADAR_ORDER = "xfer.map.radar.order"          # score|abs|rank
+K_MAP_RADAR_DWELL_MS = "xfer.map.radar.dwell_ms"    # int
+K_MAP_RADAR_RADIUS_KM = "xfer.map.radar.radius_km"  # float
+K_MAP_RADAR_RINGS = "xfer.map.radar.rings"          # int
+
+K_MAP_LINKS_ENABLE = "xfer.map.links.enable"
+K_MAP_LINKS_MODE = "xfer.map.links.mode"            # nearest|rank|knn
+K_MAP_LINKS_K = "xfer.map.links.k"                  # int
+K_MAP_LINKS_MAX = "xfer.map.links.max"              # int
+K_MAP_LINKS_SHOW_DIST = "xfer.map.links.show_dist"  # bool
+
+
 
 DEFAULTS: Dict[str, object] = {
     K_VIEW_MODE: "map",
@@ -125,6 +144,9 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_INT_AGG: "mean",
     K_MAP_INT_DELTA: "a_minus_b",
     
+    K_MAP_INTERP_HTML: "",
+    K_MAP_INTERP_TIP: "",
+    
     K_MAP_INT_HOT_ENABLE: False,
     K_MAP_INT_HOT_TOPN: 8,
     K_MAP_INT_HOT_METRIC: "abs",
@@ -133,6 +155,19 @@ DEFAULTS: Dict[str, object] = {
     K_MAP_INT_INTENS_ENABLE: False,
     K_MAP_INT_BUF_ENABLE: False,
     K_MAP_INT_BUF_K: 1,
+    
+    K_MAP_RADAR_ENABLE: False,
+    K_MAP_RADAR_TARGET: "overlay",   # overlay|both|a|b
+    K_MAP_RADAR_ORDER: "score",      # score|abs|rank
+    K_MAP_RADAR_DWELL_MS: 520,
+    K_MAP_RADAR_RADIUS_KM: 8.0,
+    K_MAP_RADAR_RINGS: 3,
+
+    K_MAP_LINKS_ENABLE: False,
+    K_MAP_LINKS_MODE: "nearest",     # nearest|rank|knn
+    K_MAP_LINKS_K: 1,
+    K_MAP_LINKS_MAX: 12,
+    K_MAP_LINKS_SHOW_DIST: True,
     
 }
 
@@ -181,4 +216,16 @@ def map_keys() -> Set[str]:
         K_MAP_INT_INTENS_ENABLE,
         K_MAP_INT_BUF_ENABLE,
         K_MAP_INT_BUF_K,
+        
+        K_MAP_RADAR_ENABLE,
+        K_MAP_RADAR_TARGET,
+        K_MAP_RADAR_ORDER,
+        K_MAP_RADAR_DWELL_MS,
+        K_MAP_RADAR_RADIUS_KM,
+        K_MAP_RADAR_RINGS,
+        K_MAP_LINKS_ENABLE,
+        K_MAP_LINKS_MODE,
+        K_MAP_LINKS_K,
+        K_MAP_LINKS_MAX,
+        K_MAP_LINKS_SHOW_DIST,
     }

@@ -171,52 +171,39 @@ def make_one_step_windows(
     static_vec: np.ndarray,
     time_steps: int,
     H_field_value: float,
-) -> Tuple[
-    Dict[str, np.ndarray],
-    Dict[str, np.ndarray],
-    float,
-]:
-    years = np.asarray(years, dtype=float)
-    dh = np.asarray(dh, dtype=float)
-    s_cum = np.asarray(s_cum, dtype=float)
+    *,
+    z_surf_static_index: int,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], float]:
+    years = np.asarray(years, float)
+    dh = np.asarray(dh, float)
+    s_cum = np.asarray(s_cum, float)
 
     T = int(time_steps)
     H = 1
     B = len(years) - T
     if B <= 0:
-        raise ValueError(
-            "Not enough samples for time_steps."
-        )
+        raise ValueError("Not enough samples for time_steps.")
 
-    # Depth-to-water z_GWL (m), positive down.
-    z_gwl = -dh
+    # Depth-to-water (m), positive down.
+    depth = -dh
 
     t0 = float(years[0])
     t_range = float(years[-1] - t0)
     t_range = max(t_range, 1.0)
 
-    X: Dict[str, np.ndarray] = {}
-
+    X: dict[str, np.ndarray] = {}
     X["static_features"] = np.repeat(
         static_vec[None, :],
         B,
         axis=0,
     ).astype(np.float32)
 
-    X["dynamic_features"] = np.zeros(
-        (B, T, 2),
-        np.float32,
-    )
+    # Only ONE dynamic channel: depth (down+).
+    X["dynamic_features"] = np.zeros((B, T, 1), np.float32)
+    X["future_features"] = np.zeros((B, H, 1), np.float32)
 
-    X["future_features"] = np.zeros(
-        (B, H, 1),
-        np.float32,
-    )
-
-    X["coords"] = np.zeros(
-        (B, H, 3),
-        np.float32,
-    )
+    # Normalized coords (t in [0,1], x=y=0).
+    X["coords"] = np.zeros((B, H, 3), np.float32)
 
     X["H_field"] = np.full(
         (B, H, 1),
@@ -229,18 +216,17 @@ def make_one_step_windows(
         "gwl_pred": np.zeros((B, H, 1), np.float32),
     }
 
+    z_surf = float(static_vec[int(z_surf_static_index)])
+
     for i in range(B):
         j = i + T
 
-        X["dynamic_features"][i, :, 0] = z_gwl[i : i + T]
-        X["dynamic_features"][i, :, 1] = s_cum[i : i + T]
-        
+        X["dynamic_features"][i, :, 0] = depth[i : i + T]
         y["subs_pred"][i, 0, 0] = s_cum[j]
-        # after: z_surf = 0 -> head = -depth
-        y["gwl_pred"][i, 0, 0] = -z_gwl[j]
-        # y["gwl_pred"][i, 0, 0] = z_gwl[j]
 
-        # normalized coords
+        # Head (up+): z_surf - depth(down+)
+        y["gwl_pred"][i, 0, 0] = z_surf - depth[j]
+
         X["coords"][i, 0, 0] = (years[j] - t0) / t_range
         X["coords"][i, 0, 1] = 0.0
         X["coords"][i, 0, 2] = 0.0
@@ -369,75 +355,99 @@ def convert_payload_time_units(
 
     return out
 
-
 def _make_scaling_kwargs(
     *,
     t_range: float,
-    logK_min: float,
-    logK_max: float,
-    logSs_min: float,
-    logSs_max: float,
-    z_surf_static_index: int
-) -> Dict[str, Any]:
-    # Key fix vs old SM3:
-    # - gwl_kind must be "depth_*" (or gwl_col has
-    #   "depth") otherwise gwl_to_head_m assumes head.
-    # - use_head_proxy=True yields head = -depth when
-    #   z_surf is missing (SM3 synthetic case).
+    z_surf_static_index: int,
+    # These bounds should match your synthetic generator.
+    K_min: float = 1e-15,
+    K_max: float = 3e-10,
+    Ss_min: float = 1e-7,
+    Ss_max: float = 3e-4,
+    H_min: float = 3.0,
+    H_max: float = 80.0,
+    tau_min_year: float = 0.3,
+    tau_max_year: float = 10.0,
+    allow_subs_residual: bool = True, #False,
+) -> dict[str, Any]:
+    spy = float(SEC_PER_YEAR)
+
+    # Consistent linear/log bounds (LOG10 because offset_mode="log10")
+    logK_min = float(np.log10(K_min))
+    logK_max = float(np.log10(K_max))
+    logSs_min = float(np.log10(Ss_min))
+    logSs_max = float(np.log10(Ss_max))
+
+    tau_min_sec = float(tau_min_year) * spy
+    tau_max_sec = float(tau_max_year) * spy
+    logTau_min = float(np.log10(tau_min_sec))
+    logTau_max = float(np.log10(tau_max_sec))
+
     return dict(
+        # Units/scales (subsidence is already meters).
         subs_scale_si=1.0,
         subs_bias_si=0.0,
         head_scale_si=1.0,
         head_bias_si=0.0,
         time_units="year",
-        seconds_per_time_unit=float(SEC_PER_YEAR),
+        seconds_per_time_unit=spy,
+
+        # Coords are normalized in windows.
         coords_normalized=True,
         coord_order=["t", "x", "y"],
-        coord_ranges=dict(
-            t=float(t_range),
-            x=1.0,
-            y=1.0,
-        ),
+        coord_ranges=dict(t=float(t_range), x=1.0, y=1.0),
         coords_in_degrees=False,
-        
-        allow_subs_residual=True,
-        
-        physics_warmup_steps=0, # 10,
-        physics_ramp_steps=0, #20,
 
-        subs_dyn_index=1,
-        subs_dyn_name="subs_model",
-        # input is depth (down+), model converts to head using z_surf
+        # Strongly recommended for identifiability runs:
+        allow_subs_residual=bool(allow_subs_residual),
+
+        subs_dyn_index=None,
+        subs_dyn_name=None,
+    
+        # Dynamic input is depth-bgs (down+).
         gwl_dyn_index=0,
         gwl_col="GWL_depth_bgs_m",
         gwl_kind="depth_bgs",
         gwl_sign="down_positive",
 
-        # target is head (up+)
+        # Target is head (up+).
         gwl_target_kind="head",
         gwl_target_sign="up_positive",
 
-        # provide a datum so we don't use "head proxy"
-        z_surf_m=0.0,
-        z_surf=0.0,
-        
+        # We DO provide z_surf in static features.
         z_surf_static_index=int(z_surf_static_index),
 
-        # disable proxy (even if ignored, harmless)
+        # Force “true” head conversion using z_surf.
+        # If z_surf is missing for any reason, we want to know.
         use_head_proxy=False,
 
-        # dynamic_feature_names=["GWL_depth_bgs_m"],
-        dynamic_feature_names=[
-            "GWL_depth_bgs_m",
-            "subs_model",
-        ],
+        # Names must match your actual tensor layout.
+        dynamic_feature_names=["GWL_depth_bgs_m"],
+        future_feature_names=["future_dummy"],
+        # If you want extra safety for lookup:
+        static_feature_names=None,
+
         bounds=dict(
-            H_min=3.0,
-            H_max=80.0,
-            logK_min=float(logK_min),
-            logK_max=float(logK_max),
-            logSs_min=float(logSs_min),
-            logSs_max=float(logSs_max),
+            H_min=float(H_min),
+            H_max=float(H_max),
+
+            # Provide both linear and log to prevent
+            # any internal recomputation drift.
+            K_min=float(K_min),
+            K_max=float(K_max),
+            logK_min=logK_min,
+            logK_max=logK_max,
+
+            Ss_min=float(Ss_min),
+            Ss_max=float(Ss_max),
+            logSs_min=logSs_min,
+            logSs_max=logSs_max,
+
+            # Optional but strongly recommended:
+            tau_min=float(tau_min_sec),
+            tau_max=float(tau_max_sec),
+            logTau_min=logTau_min,
+            logTau_max=logTau_max,
         ),
     )
 
@@ -456,9 +466,20 @@ def train_one_pixel(
     gamma_w: float,
     hd_factor: float,
     t_range_years: float,
-    n_lith: int, 
-    lambda_offset: float = 0, 
+    n_lith: int,
+    z_surf_static_index: int, 
+    # These bounds should match your synthetic generator.
+    K_min: float = 1e-15,
+    K_max: float = 3e-10,
+    Ss_min: float = 1e-7,
+    Ss_max: float = 3e-4,
+    H_min: float = 3.0,
+    H_max: float = 80.0,
+    tau_min_year: float = 0.3,
+    tau_max_year: float = 10.0,
+    lambda_offset: float = 0,
 ) -> Tuple[GeoPriorSubsNet, tf.data.Dataset]:
+
 
     tf.keras.utils.set_random_seed(int(seed))
 
@@ -468,12 +489,22 @@ def train_one_pixel(
 
     sk = _make_scaling_kwargs(
         t_range=float(t_range_years),
-        logK_min=np.log(1e-14),
-        logK_max=np.log(1e-3),
-        logSs_min=np.log(1e-8),
-        logSs_max=np.log(1e-3),
-        z_surf_static_index = n_lith + 2, 
+        z_surf_static_index=int(z_surf_static_index),
+        # keep these consistent with your generator:
+        K_min=K_min,
+        K_max=K_max,
+        Ss_min=Ss_min,
+        Ss_max=Ss_max,
+        H_min=H_min,
+        H_max=H_max,
+        tau_min_year=tau_min_year,
+        tau_max_year=tau_max_year,
+        allow_subs_residual=False,
     )
+
+    b = sk["bounds"]
+    print("K_max (linear):", b["K_max"])
+    print("K_max (from log10):", 10.0 ** b["logK_max"])
 
     model = GeoPriorSubsNet(
         static_input_dim=s_dim,
@@ -513,6 +544,9 @@ def train_one_pixel(
         offset_mode="log10",
         scaling_kwargs=sk,
     )
+    print("K bounds used:", 10**b["logK_min"], 10**b["logK_max"])
+    print("tau bounds used:", 10**b["logTau_min"], 10**b["logTau_max"])
+
 
     ds_tr = tf_dataset(
         Xtr,
@@ -529,10 +563,29 @@ def train_one_pixel(
         seed=seed,
     )
 
-    for xb, _ in ds_tr.take(1):
-        _ = model(xb)
-        break
+    # for xb, _ in ds_tr.take(1):
+        # _ = model(xb)
 
+    for xb, yb in ds_va.take(1):
+        yp = model(xb, training=False)
+        q = yp["subs_pred"].numpy()          # expect (B, H, Q, O) or similar
+        y = yb["subs_pred"].numpy()
+    
+        # Try assuming (B,H,Q,1)
+        q10 = q[..., 0, 0]
+        q50 = q[..., 1, 0]
+        q90 = q[..., 2, 0]
+        yt  = y[..., 0, 0]
+    
+        print("q-shapes:", q.shape, "y-shape:", y.shape)
+        print("crossing rate (q10>q90):", np.mean(q10 > q90))
+        lo = np.minimum(q10, q90)
+        hi = np.maximum(q10, q90)
+        cov = np.mean((yt >= lo) & (yt <= hi))
+        print("coverage80 (using min/max):", cov)
+        print("MAE(q50):", np.mean(np.abs(yt - q50)))
+        break
+    
     QUANTILES = [0.1, 0.5, 0.9]
     SUBS_WEIGHTS = {0.1: 3.0, 0.5: 1.0, 0.9: 3.0}
 
@@ -556,19 +609,43 @@ def train_one_pixel(
             MSEQ50(name="mse_q50"),
         ],
     }
-    physics_loss_weights = {
-        "lambda_cons": 1.0,
-        "lambda_gw": 0.0,
-        "lambda_prior": 0.3,
-        "lambda_smooth": 0.0,
-        "lambda_bounds": 0.0,
-        "lambda_mv": 0.0,
-        "mv_lr_mult": 1.0,
-        "kappa_lr_mult": 0.0,
-        "lambda_offset": float(lambda_offset),
-        # IMPORTANT: penalize quantile crossing
-        "lambda_q": 0.1,
-    }
+    # physics_loss_weights = {
+    #     "lambda_cons": 100, #1.0,
+    #     "lambda_gw": 0.0,
+    #     "lambda_prior":1.0, # 0.3,
+    #     "lambda_smooth": 0.0,
+    #     "lambda_bounds": 1.0, #0.0,
+    #     "lambda_mv": 0.0,
+    #     "mv_lr_mult": 1.0,
+    #     "kappa_lr_mult": 0.0,
+    #     "lambda_offset": float(lambda_offset),
+    #     # IMPORTANT: penalize quantile crossing
+    #     "lambda_q": 0.1,
+    # }
+    # physics_loss_weights = dict(
+    #     lambda_cons=10.0,
+    #     lambda_gw=0.0,
+    #     lambda_prior=0.3,
+    #     lambda_smooth=0.0,
+    #     lambda_bounds=0.1,
+    #     lambda_mv=0.0,
+    #     mv_lr_mult=1.0,
+    #     kappa_lr_mult=0.0,
+    #     lambda_offset=float(lambda_offset),
+    #     lambda_q=0.1,
+    # )
+    physics_loss_weights = dict(
+        lambda_cons=100.0,   # stronger physics
+        lambda_gw=0.0,
+        lambda_prior=0.0,    # <- disable until consistent
+        lambda_smooth=0.0,
+        lambda_bounds=0.1,
+        lambda_mv=0.0,
+        mv_lr_mult=1.0,
+        kappa_lr_mult=0.0,
+        lambda_offset=float(lambda_offset),
+        lambda_q=0.1,
+    )
 
     loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": 1.0}
 
@@ -592,7 +669,16 @@ def train_one_pixel(
         loss_arg = loss_dict
         lossw_arg = loss_weights_dict
         metrics_compile = metrics_arg
-
+    
+    tau_vars = []
+    for v in model.trainable_variables:
+        nm = getattr(v, "path", v.name)
+        if "tau" in str(nm).lower():
+            tau_vars.append(str(nm))
+    
+    print("Trainable tau vars:", tau_vars)
+    
+        
     model.compile(
         optimizer=tf.keras.optimizers.Adam(
             learning_rate=float(lr),
@@ -621,7 +707,22 @@ def train_one_pixel(
             verbose=1,
         ),
     ]
-
+    for xb, yb in ds_tr.take(1):
+        with tf.GradientTape() as tape:
+            yp = model(xb, training=True)
+            loss = model.compiled_loss(yb, yp)
+    
+        tau_w = model.get_layer("tau_head").trainable_weights
+        grads = tape.gradient(loss, tau_w)
+    
+        s = []
+        for g in grads:
+            if g is None:
+                s.append(None)
+            else:
+                s.append(float(tf.reduce_sum(tf.abs(g))))
+        print("tau_head grad sums:", s)
+        
     model.fit(
         ds_tr,
         validation_data=ds_va,
@@ -764,20 +865,18 @@ def run_one_realisation(
     s_obs = np.cumsum(y_inc)
 
     is_capped = float(H_phys > args.thickness_cap)
-    # static_vec = np.concatenate(
-    #     [
-    #         one_hot(lith_idx, n_lith),
-    #         np.array([H_eff, is_capped], np.float32),
-    #     ],
-    #     axis=0,
-    # ).astype(np.float32)
+    
     z_surf = 0.0  # constant datum for SM3
     static_vec = np.concatenate(
-        [one_hot(lith_idx, n_lith),
-         np.array([H_eff, is_capped, z_surf], np.float32)],
+        [
+            one_hot(lith_idx, n_lith),
+            np.array([H_eff, is_capped, z_surf], np.float32),
+        ],
         axis=0,
     ).astype(np.float32)
-
+    
+    z_surf_static_index = int(static_vec.size - 1)  # == n_lith + 2
+    
     X, y, t_range_years = make_one_step_windows(
         years=years,
         dh=dh,
@@ -785,8 +884,9 @@ def run_one_realisation(
         static_vec=static_vec,
         time_steps=args.time_steps,
         H_field_value=H_eff,
+        z_surf_static_index=z_surf_static_index,
     )
-    
+
     Xtr, ytr, Xva, yva = split_tail(X, y, args.val_tail)
 
     model, ds_va = train_one_pixel(
@@ -803,9 +903,9 @@ def run_one_realisation(
         gamma_w=args.gamma_w,
         hd_factor=args.hd_factor,
         t_range_years=float(t_range_years),
-        n_lith = n_lith, 
-        lambda_offset= float(args.lambda_offset),
-        
+        n_lith=n_lith,
+        z_surf_static_index=z_surf_static_index,  
+        lambda_offset=float(args.lambda_offset),
     )
 
     npz_path = os.path.join(run_dir, "phys_payload_val.npz")
@@ -964,6 +1064,7 @@ def run_one_realisation(
         abs(dK - (dS + 2.0 * dH))
     )
 
+
     return row
 
 def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
@@ -993,7 +1094,20 @@ def run_experiment(args: argparse.Namespace) -> pd.DataFrame:
         rows.append(row)
 
     df = pd.DataFrame(rows)
+    
+    x = np.log10(df.tau_est_med_sec.to_numpy())
+    y = np.log10(df.tau_true_sec.to_numpy())
+    m = np.isfinite(x) & np.isfinite(y)
+    
+    if m.sum() >= 2:
+        r2 = np.corrcoef(x[m], y[m])[0, 1] ** 2
+    else:
+        r2 = np.nan
 
+
+    print("r2 = np.corrcoef(np.log10(df.tau_est_med_sec), np.log10(df.tau_true_sec))[0,1]**2")
+    print("r2 (computed manually):", r2 )
+    
     runs_csv = os.path.join(
         args.outdir,
         "sm3_synth_runs.csv",

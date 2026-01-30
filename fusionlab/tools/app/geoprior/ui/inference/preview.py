@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QHeaderView
 )
 
 from ..icon_utils import try_icon
@@ -255,8 +256,36 @@ class InferencePreviewPanel(QFrame):
         self._tree.setAlternatingRowColors(True)
         self._tree.setRootIsDecorated(True)
         self._tree.setIndentation(14)
+
+        # Fill remaining space (removes "space below").
+        self._tree.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding,
+        )
+
+        # Horizontal scroll when long values (paths) appear.
+        self._tree.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        self._tree.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAsNeeded
+        )
+        self._tree.setTextElideMode(Qt.ElideNone)
+
+        hdr = self._tree.header()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(
+            0,
+            QHeaderView.ResizeToContents,
+        )
+        hdr.setSectionResizeMode(
+            1,
+            QHeaderView.ResizeToContents,
+        )
+
         root.addWidget(self._tree, 1)
-    
+        root.setStretchFactor(self._tree, 1)
+
         # Status label (used by bottom bar)
         self._lbl_status = QLabel("—", self)
         self._lbl_status.setObjectName("sumLine")
@@ -526,6 +555,12 @@ class InferencePreviewPanel(QFrame):
             ),
         )
         self.runtime_snapshot_changed.emit(snap)
+        
+        try:
+            self._tree.resizeColumnToContents(0)
+            self._tree.resizeColumnToContents(1)
+        except Exception:
+            pass
 
     def _set_ready(self, ok: bool, n_warn: int) -> None:
         if ok:

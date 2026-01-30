@@ -103,6 +103,25 @@ _LEAFLET_HTML = r"""
     opacity: 0.7;
     pointer-events: none;
   }
+  
+  .gp-link-label {
+    background: rgba(17,24,39,0.85);
+    color: #fff;
+    border: 0;
+    border-radius: 8px;
+    padding: 2px 6px;
+    font: 12px ui-monospace, monospace;
+  }
+
+  .gp-arrow {
+    font-size: 16px;
+    line-height: 16px;
+    color: var(--gp-ac);
+    transform: rotate(var(--gp-rot));
+    transform-origin: 50% 50%;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    user-select: none;
+  }
 
 </style>
 </head>
@@ -120,7 +139,11 @@ _LEAFLET_HTML = r"""
     clearLayer: function(){},
     clearLayers: function(){},
     fitLayers: function(){},
-    setLegend: function(){}
+    setLegend: function(){},
+    setLinks: function(){},
+    clearLinks: function(){},
+    setRadar: function(){},
+    clearRadar: function(){}
   };
 
   if (typeof L === 'undefined') {
@@ -144,6 +167,10 @@ _LEAFLET_HTML = r"""
   const layers = {};        // id -> L.LayerGroup
   const overlays = {};      // name -> L.LayerGroup
   let layerCtl = null;
+  const linkLayers = {};   // id -> L.LayerGroup
+  const radarLayers = {};  // id -> L.LayerGroup
+  const radarTimers = {};  // id -> timer id
+
 
   // Centroids + link
   let srcMarker = null;
@@ -247,6 +274,7 @@ _LEAFLET_HTML = r"""
   }
 
   function clearLayers() {
+    // clear normal point layers
     const ids = Object.keys(layers);
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i];
@@ -255,7 +283,284 @@ _LEAFLET_HTML = r"""
       if (g) delete overlays[g.__name || id];
       delete layers[id];
     }
+
+    // clear link layers
+    const lids = Object.keys(linkLayers);
+    for (let i = 0; i < lids.length; i++) {
+      const id = lids[i];
+      const g = linkLayers[id];
+      if (g) map.removeLayer(g);
+      if (g) delete overlays[g.__name || id];
+      delete linkLayers[id];
+    }
+
+    // clear radar layers + timers
+    const rids = Object.keys(radarLayers);
+    for (let i = 0; i < rids.length; i++) {
+      const id = rids[i];
+
+      if (radarTimers[id]) {
+        clearInterval(radarTimers[id]);
+        delete radarTimers[id];
+      }
+
+      const g = radarLayers[id];
+      if (g) map.removeLayer(g);
+      if (g) delete overlays[g.__name || id];
+      delete radarLayers[id];
+    }
+
     _rebuildLayerCtl();
+  }
+  
+  // -------------------------
+  // Links (arrows + distance labels)
+  // -------------------------
+  function _arrowIcon(angleDeg, color) {
+    const html = `
+      <div class="gp-arrow"
+        style="--gp-rot:${angleDeg}deg;--gp-ac:${color};">
+        ▶
+      </div>`;
+    return L.divIcon({
+      className: '',
+      html: html,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
+    });
+  }
+
+  function _angleDeg(a, b) {
+    const z = map.getZoom();
+    const p1 = map.project(a, z);
+    const p2 = map.project(b, z);
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    return Math.atan2(dy, dx) * 180 / Math.PI;
+  }
+
+  function clearLinks(id) {
+    const g = linkLayers[id];
+    if (!g) return;
+    map.removeLayer(g);
+    delete overlays[g.__name || id];
+    delete linkLayers[id];
+    _rebuildLayerCtl();
+  }
+
+  function setLinks(id, name, links, opts) {
+    clearLinks(id);
+
+    const o = opts || {};
+    const color = o.color || '#111827';
+
+    const g = L.layerGroup();
+    g.__name = name || id;
+
+    for (let i = 0; i < links.length; i++) {
+      const p = links[i];
+      const a = L.latLng(p[0], p[1]);
+      const b = L.latLng(p[2], p[3]);
+      const tip = p[5] || '';
+      let label = p[6] || '';
+      if (!label && typeof p[4] === 'number') {
+        label = `${p[4].toFixed(2)} km`;
+      }
+
+      const line = L.polyline([a, b], {
+        color: color,
+        weight: 2,
+        opacity: 0.85
+      }).addTo(g);
+
+      if (tip) {
+        line.bindTooltip(
+          String(tip).replace(/\n/g, '<br/>')
+        );
+      }
+
+      if (o.arrow !== false) {
+        const ang = _angleDeg(a, b);
+        const m = L.marker(b, {
+          icon: _arrowIcon(ang, color),
+          interactive: false,
+        }).addTo(g);
+
+        // store endpoints so we can recompute angle on zoom/move
+        m.__gp_link_a = a;
+        m.__gp_link_b = b;
+        m.__gp_link_color = color;
+      }
+
+      if (o.label === true && label) {
+        const mid = L.latLng(
+          (a.lat + b.lat) / 2.0,
+          (a.lng + b.lng) / 2.0
+        );
+        const lm = L.circleMarker(mid, {
+          radius: 1,
+          opacity: 0,
+          fillOpacity: 0
+        }).addTo(g);
+
+        lm.bindTooltip(String(label), {
+          permanent: true,
+          direction: 'center',
+          className: 'gp-link-label',
+          opacity: 0.95
+        }).openTooltip();
+      }
+    }
+
+    g.addTo(map);
+    linkLayers[id] = g;
+    overlays[g.__name] = g;
+    _ensureLayerCtl();
+    _rebuildLayerCtl();
+  }
+
+  map.on('zoomend moveend', function () {
+    const ids = Object.keys(linkLayers);
+    for (let k = 0; k < ids.length; k++) {
+      const g = linkLayers[ids[k]];
+      if (!g) continue;
+      g.eachLayer(function (ly) {
+        if (!ly || !ly.setIcon) return;
+        if (!ly.__gp_link_a || !ly.__gp_link_b) return;
+
+        const ang = _angleDeg(ly.__gp_link_a, ly.__gp_link_b);
+        const col = ly.__gp_link_color || '#111827';
+        ly.setIcon(_arrowIcon(ang, col));
+      });
+    }
+  });
+
+  // -------------------------
+  // Radar sweep (rings + wedge sweep)
+  // -------------------------
+  function clearRadar(id) {
+    if (radarTimers[id]) {
+      clearInterval(radarTimers[id]);
+      delete radarTimers[id];
+    }
+    const g = radarLayers[id];
+    if (!g) return;
+    map.removeLayer(g);
+    delete overlays[g.__name || id];
+    delete radarLayers[id];
+    _rebuildLayerCtl();
+  }
+
+  function _offsetLatLng(lat, lon, dxm, dym) {
+    const dlat = dym / 111320.0;
+    const dlon = dxm / (
+      111320.0 * Math.max(1e-9, Math.cos(lat * Math.PI / 180))
+    );
+    return [lat + dlat, lon + dlon];
+  }
+
+  function _wedge(center, rM, angDeg, widthDeg) {
+    const lat = center.lat;
+    const lon = center.lng;
+
+    const a0 = (angDeg - widthDeg / 2) * Math.PI / 180;
+    const a1 = (angDeg + widthDeg / 2) * Math.PI / 180;
+
+    const p0 = _offsetLatLng(
+      lat,
+      lon,
+      rM * Math.cos(a0),
+      rM * Math.sin(a0)
+    );
+    const p1 = _offsetLatLng(
+      lat,
+      lon,
+      rM * Math.cos(a1),
+      rM * Math.sin(a1)
+    );
+
+    return [[lat, lon], p0, p1];
+  }
+
+  function setRadar(id, centers, opts) {
+    clearRadar(id);
+
+    const o = opts || {};
+    const dwellMs = o.dwellMs || 520;
+    const rKm = o.radiusKm || 8.0;
+    const rings = Math.max(1, Math.min(8, o.rings || 3));
+
+    if (!centers || !centers.length) return;
+
+    const g = L.layerGroup();
+    g.__name = 'Radar';
+
+    let idx = 0;
+    let baseT = Date.now();
+
+    let ringLayersLocal = [];
+    let wedgePoly = null;
+
+    function _setCenter(c) {
+      for (let i = 0; i < ringLayersLocal.length; i++) {
+        g.removeLayer(ringLayersLocal[i]);
+      }
+      ringLayersLocal = [];
+
+      const lat = c[0], lon = c[1];
+      const center = L.latLng(lat, lon);
+
+      const rM = (rKm * 1000.0);
+      for (let k = 1; k <= rings; k++) {
+        const rr = (rM * k) / rings;
+        const cr = L.circle(center, {
+          radius: rr,
+          color: '#00C853',
+          weight: 1,
+          opacity: 0.35,
+          fillOpacity: 0
+        });
+        cr.addTo(g);
+        ringLayersLocal.push(cr);
+      }
+
+      if (wedgePoly) g.removeLayer(wedgePoly);
+      wedgePoly = L.polygon(_wedge(center, rM, 0, 26), {
+        color: '#00C853',
+        weight: 1,
+        opacity: 0.30,
+        fillColor: '#00C853',
+        fillOpacity: 0.12
+      }).addTo(g);
+    }
+
+    _setCenter(centers[idx]);
+
+    g.addTo(map);
+    radarLayers[id] = g;
+    overlays[g.__name] = g;
+    _ensureLayerCtl();
+    _rebuildLayerCtl();
+
+    radarTimers[id] = setInterval(function () {
+      const now = Date.now();
+      let dt = now - baseT;
+
+      if (dt >= dwellMs) {
+        idx = (idx + 1) % centers.length;
+        baseT = now;
+        dt = 0;
+        _setCenter(centers[idx]);
+      }
+
+      const c = centers[idx];
+      const center = L.latLng(c[0], c[1]);
+      const rM = (rKm * 1000.0);
+
+      const ang = (dt / dwellMs) * 360.0;
+      const pts = _wedge(center, rM, ang, 26);
+      if (wedgePoly) wedgePoly.setLatLngs(pts);
+    }, 40);
   }
 
   function setLayer(id, name, points, opts) {
@@ -438,6 +743,12 @@ _LEAFLET_HTML = r"""
   window.__GeoPriorMap.clearLayers = clearLayers;
   window.__GeoPriorMap.fitLayers = fitLayers;
   window.__GeoPriorMap.setLegend = setLegend;
+  window.__GeoPriorMap.setLinks = setLinks;
+  window.__GeoPriorMap.clearLinks = clearLinks;
+
+  window.__GeoPriorMap.setRadar = setRadar;
+  window.__GeoPriorMap.clearRadar = clearRadar;
+
 })();
 </script>
 </body>

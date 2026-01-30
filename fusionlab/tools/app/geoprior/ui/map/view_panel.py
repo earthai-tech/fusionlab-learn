@@ -42,55 +42,10 @@ from PyQt5.QtWidgets import (
 
 from ...config.store import GeoConfigStore
 from ..icon_utils import try_icon
+
+from .keys import VIEW_DEFAULTS, VIEW_KEYS, get_engine
 from .data_panel import AutoHidePanel
-
-_VIEW_DEFAULTS: Dict[str, object] = {
-    "map.view.basemap": "osm",
-    "map.view.basemap_style": "light",
-    "map.view.tiles_opacity": 1.0,
-    "map.view.colormap": "viridis",
-    "map.view.cmap_invert": False,
-    "map.view.autoscale": True,
-    "map.view.vmin": 0.0,
-    "map.view.vmax": 1.0,
-    "map.view.clip_mode": "none",
-    "map.view.marker_size": 6,
-    "map.view.marker_opacity": 0.85,
-    "map.view.show_colorbar": True,
-    "map.view.show_legend": False,
-    "map.view.legend_pos": "br",
-    # Hotspots (attention layer)
-    "map.view.hotspots.enabled": False,
-    "map.view.hotspots.mode": "auto",          # auto|manual|merge
-    "map.view.hotspots.method": "grid",        # grid|quantile|cluster
-    "map.view.hotspots.metric": "high",        # value|abs|high|low
-    "map.view.hotspots.time_agg": "current",   # current|mean|max|trend
-    "map.view.hotspots.thr_mode": "quantile",  # quantile|absolute
-    "map.view.hotspots.quantile": 0.98,
-    "map.view.hotspots.abs_thr": 0.0,
-    "map.view.hotspots.cell_km": 1.0,
-    "map.view.hotspots.min_pts": 20,
-    "map.view.hotspots.max_n": 8,
-    "map.view.hotspots.min_sep_km": 2.0,
-    
-    "map.view.hotspots.style": "pulse",        # pulse|glow
-    "map.view.hotspots.pulse": True,
-    "map.view.hotspots.pulse_speed": 1.0,
-    "map.view.hotspots.ring_km": 0.8,
-    "map.view.hotspots.labels": True,
-    
-    # Interpretation (policy-ready, store-backed)
-    "map.view.interp.enabled": False,
-    "map.view.interp.scheme": "subsidence",
-    "map.view.interp.callouts": True,
-    "map.view.interp.callout_level": "standard",
-    "map.view.interp.callout_actions": True,
-    "map.view.interp.action_pack": "balanced",
-    "map.view.interp.action_intensity": "balanced",
-    "map.view.interp.summary": "",
-
-}
-
+from .basemap.basemap import engine_providers, engine_styles
 
 class AutoHideViewPanel(AutoHidePanel):
     """
@@ -247,6 +202,67 @@ class AutoHideViewPanel(AutoHidePanel):
 
         root.addWidget(self.scroll, 1)
 
+    def _refresh_basemap_choices(self) -> None:
+        eng = get_engine(self.store, "leaflet")
+    
+        cur_p = str(self.store.get("map.view.basemap", "osm") or "osm")
+        cur_s = str(
+            self.store.get("map.view.basemap_style", "light")
+            or "light"
+        )
+    
+        prov = engine_providers(eng)
+        sty = engine_styles(eng, cur_p)
+    
+        with QSignalBlocker(self.cmb_base):
+            self.cmb_base.clear()
+            for it in prov:
+                self.cmb_base.addItem(it.key)
+            self._set_combo(self.cmb_base, cur_p)
+            if self.cmb_base.currentIndex() < 0:
+                self.cmb_base.setCurrentIndex(0)
+    
+        p_now = str(self.cmb_base.currentText() or "osm")
+    
+        with QSignalBlocker(self.cmb_style):
+            self.cmb_style.clear()
+            for it in engine_styles(eng, p_now):
+                self.cmb_style.addItem(it.key)
+            self._set_combo(self.cmb_style, cur_s)
+            if self.cmb_style.currentIndex() < 0:
+                self.cmb_style.setCurrentIndex(0)
+    
+        # enforce store coherence (provider may change)
+        self.store.set("map.view.basemap", p_now)
+        self.store.set(
+            "map.view.basemap_style",
+            str(self.cmb_style.currentText() or "light"),
+        )
+
+
+    def _refresh_styles_only(self) -> None:
+        eng = get_engine(self.store, "leaflet")
+        p_now = str(self.cmb_base.currentText() or "osm")
+    
+        cur_s = str(
+            self.store.get("map.view.basemap_style", "light")
+            or "light"
+        )
+    
+        with QSignalBlocker(self.cmb_style):
+            self.cmb_style.clear()
+            for it in engine_styles(eng, p_now):
+                self.cmb_style.addItem(it.key)
+            self._set_combo(self.cmb_style, cur_s)
+            if self.cmb_style.currentIndex() < 0:
+                self.cmb_style.setCurrentIndex(0)
+    
+        self.store.set("map.view.basemap", p_now)
+        self.store.set(
+            "map.view.basemap_style",
+            str(self.cmb_style.currentText() or "light"),
+        )
+
     def _group_basemap(self, parent: QWidget) -> QFrame:
         box, body, chip = self._make_card(
             parent,
@@ -263,16 +279,18 @@ class AutoHideViewPanel(AutoHidePanel):
         form.setVerticalSpacing(8)
 
         self.cmb_base = QComboBox(box)
-        self.cmb_base.addItems([
-            "osm",
-            "terrain",
-            "satellite",
-        ])
+        self.cmb_style = QComboBox(box)
+        # self.cmb_base.addItems([
+        #     "osm",
+        #     "terrain",
+        #     "satellite",
+        # ])
+ 
         self.cmb_base.setToolTip(
             "Base tiles provider (engine dependent)."
         )
 
-        self.cmb_style = QComboBox(box)
+ 
         self.cmb_style.addItems([
             "light",
             "dark",
@@ -310,7 +328,7 @@ class AutoHideViewPanel(AutoHidePanel):
             title="Color mapping",
             sp=QStyle.SP_DriveDVDIcon,
         )
-        self._chip_base = chip
+        self._chip_colors = chip
         
         form = QFormLayout(body)
         form.setContentsMargins(0, 0, 0, 0)
@@ -378,7 +396,7 @@ class AutoHideViewPanel(AutoHidePanel):
             title="Markers",
             sp=QStyle.SP_FileIcon,
         )
-        self._chip_base = chip
+        self._chip_markers = chip
         
         form = QFormLayout(body)
         form.setContentsMargins(0, 0, 0, 0)
@@ -421,7 +439,7 @@ class AutoHideViewPanel(AutoHidePanel):
             title="Legend",
             sp=QStyle.SP_FileDialogDetailedView,
         )
-        self._chip_base = chip
+        self._chip_legend = chip
         
         form = QFormLayout(body)
         form.setContentsMargins(0, 0, 0, 0)
@@ -455,7 +473,8 @@ class AutoHideViewPanel(AutoHidePanel):
             title="Hotspots",
             sp=QStyle.SP_ArrowUp,
         )
-        self._chip_base = chip
+        self._chip_hot = chip
+        
         form = QFormLayout(body)
         form.setContentsMargins(0, 0, 0, 0)
         
@@ -596,7 +615,8 @@ class AutoHideViewPanel(AutoHidePanel):
             title="Interpretation",
             sp=QStyle.SP_MessageBoxInformation,
         )
-        self._chip_base = chip
+        self._chip_interp = chip
+        
         form = QFormLayout(body)
         form.setContentsMargins(0, 0, 0, 0)
         
@@ -736,7 +756,7 @@ class AutoHideViewPanel(AutoHidePanel):
     # -------------------------------------------------
     def _apply_defaults(self) -> None:
         with self.store.batch():
-            for k, v in _VIEW_DEFAULTS.items():
+            for k, v in VIEW_DEFAULTS.items():
                 cur = self.store.get(k, None)
                 if cur is None or cur == "":
                     self.store.set(k, v)
@@ -745,7 +765,9 @@ class AutoHideViewPanel(AutoHidePanel):
         blk = QSignalBlocker(self)
 
         _ = blk  # keep reference
-
+        
+        self._refresh_basemap_choices()
+        
         self._set_combo(
             self.cmb_base,
             str(self.store.get(
@@ -1070,16 +1092,29 @@ class AutoHideViewPanel(AutoHidePanel):
         self.btn_reset.clicked.connect(self._on_reset)
         self.btn_apply.clicked.connect(self._emit_changed)
 
-        self.cmb_base.currentTextChanged.connect(
-            lambda v: self.store.set(
-                "map.view.basemap", str(v)
-            )
-        )
-        self.cmb_style.currentTextChanged.connect(
-            lambda v: self.store.set(
-                "map.view.basemap_style", str(v)
-            )
-        )
+        # self.cmb_base.currentTextChanged.connect(
+        #     lambda v: self.store.set(
+        #         "map.view.basemap", str(v)
+        #     )
+        # )
+        # self.cmb_style.currentTextChanged.connect(
+        #     lambda v: self.store.set(
+        #         "map.view.basemap_style", str(v)
+        #     )
+        # )
+        
+        def _on_base(v: str) -> None:
+            self.store.set("map.view.basemap", str(v))
+            self._refresh_styles_only()
+            self._update_chips()
+        
+        def _on_style(v: str) -> None:
+            self.store.set("map.view.basemap_style", str(v))
+            self._update_chips()
+        
+        self.cmb_base.currentTextChanged.connect(_on_base)
+        self.cmb_style.currentTextChanged.connect(_on_style)
+
         self.sl_tiles_op.valueChanged.connect(
             self._on_tiles_op
         )
@@ -1336,12 +1371,16 @@ class AutoHideViewPanel(AutoHidePanel):
         keys = set(keys or [])
         if not keys:
             return
+        
+        if any(k in keys for k in ("map.engine", "map.engine.active")):
+            self._refresh_basemap_choices() 
+            
         if any(k.startswith("map.view.") for k in keys):
             self._sync_from_store()
-
+            
     def _on_reset(self) -> None:
         with self.store.batch():
-            for k, v in _VIEW_DEFAULTS.items():
+            for k, v in VIEW_DEFAULTS.items():
                 self.store.set(k, v)
         self._sync_from_store()
         self._emit_changed()
@@ -1378,8 +1417,8 @@ class AutoHideViewPanel(AutoHidePanel):
     # Public helpers
     # -------------------------------------------------
     def snapshot(self) -> Dict[str, object]:
-        keys = list(_VIEW_DEFAULTS.keys())
-        return {k: self.store.get(k, None) for k in keys}
+        return {k: self.store.get(k, None) for k in VIEW_KEYS}
+
 
     # -------------------------------------------------
     # Small UI helpers

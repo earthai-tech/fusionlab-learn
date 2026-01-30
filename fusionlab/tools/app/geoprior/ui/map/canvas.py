@@ -38,7 +38,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
+from .basemap.basemap import resolve_basemap
 from .engines.leaflet_html import _leaflet_html
 from .engines.maplibre_html import maplibre_html
 from .engines.google_html import google_html
@@ -47,6 +47,7 @@ try:
     from PyQt5.QtWebEngineWidgets import (
         QWebEngineSettings,
         QWebEngineView,
+        QWebEnginePage,
     )
 except Exception:  # pragma: no cover
     QWebEngineView = None  # type: ignore
@@ -56,7 +57,21 @@ try:
 except Exception:  # pragma: no cover
     QWebChannel = None  # type: ignore
 
-
+class _LogPage(QWebEnginePage):
+    def javaScriptConsoleMessage(
+        self,
+        level: QWebEnginePage.JavaScriptConsoleMessageLevel,
+        message: str,
+        line: int,
+        source_id: str,
+    ) -> None:
+        try:
+            print(
+                f"[js:{int(level)}] "
+                f"{source_id}:{line} - {message}"
+            )
+        except Exception:
+            pass
 
 class _GeoPriorBridge(QObject):
     point_clicked = pyqtSignal(float, float)
@@ -82,6 +97,7 @@ class ForecastMapView(QFrame):
         self.setFrameShape(QFrame.StyledPanel)
 
         self._ready = False
+        self._page_loaded = False
         self._pending_js: List[str] = []
 
         self._last_points: List[Dict[str, Any]] = []
@@ -145,6 +161,8 @@ class ForecastMapView(QFrame):
             return
 
         self._ready = False
+        self._page_loaded = False
+
         self._pending_js.clear()
 
         st = self._web.settings()
@@ -159,6 +177,11 @@ class ForecastMapView(QFrame):
 
         html, active = self._engine_html()
         self._engine_active = active
+        
+        print(
+            f"[map] request={self._engine_req} "
+            f"active={self._engine_active}"
+        )
 
         # WebChannel must exist before JS tries to connect
         self._bridge = None
@@ -188,116 +211,116 @@ class ForecastMapView(QFrame):
 
         return _leaflet_html(), "leaflet"
 
-    def _on_loaded(self, ok: bool) -> None:
-        self._ready = bool(ok)
 
-        if not self._ready:
+    def _on_loaded(self, ok: bool) -> None:
+        self._page_loaded = bool(ok)
+    
+        if not self._page_loaded:
             if self._engine_active != "leaflet":
                 self._fallback_leaflet()
             return
-
+    
         self._probe_tries = 0
         self._schedule_probe()
-
+    
+    
     def _schedule_probe(self) -> None:
         delay = 0
         if self._engine_active == "google":
             delay = 250
-        if self._engine_active == "maplibre":
-            delay = 50
-
+        elif self._engine_active == "maplibre":
+            delay = 250
+    
         QTimer.singleShot(delay, self._probe_engine)
-
+    
+    
     def _probe_engine(self) -> None:
         if self._web is None:
             return
-        if not self._ready:
+        if not self._page_loaded:
             return
-
+    
         eng = self._engine_active
-
+    
         if eng == "leaflet":
             js = "typeof L !== 'undefined'"
         elif eng == "maplibre":
-            js = "typeof maplibregl !== 'undefined'"
+            js = (
+                "window.__GeoPriorMap ? {"
+                "ready: !!window.__GeoPriorMap.__ready,"
+                "failed: !!window.__GeoPriorMap.__failed,"
+                "err: window.__GeoPriorMap.__err || ''"
+                "} : null"
+            )
         else:
             js = (
                 "typeof google !== 'undefined' && "
                 "typeof google.maps !== 'undefined'"
             )
-
-        self._web.page().runJavaScript(
-            js,
-            self._on_probe_result,
-        )
-
+    
+        self._web.page().runJavaScript(js, self._on_probe_result)
+    
+    
     def _on_probe_result(self, ok: Any) -> None:
-        is_ok = bool(ok)
-
+        eng = self._engine_active
+        is_ok = False
+        failed = False
+        err = ""
+    
+        if eng == "maplibre" and isinstance(ok, dict):
+            is_ok = bool(ok.get("ready"))
+            failed = bool(ok.get("failed"))
+            err = str(ok.get("err") or "")
+        else:
+            is_ok = bool(ok)
+    
+        print(
+            f"[map] probe eng={eng} ok={ok} "
+            f"tries={self._probe_tries} "
+            f"failed={failed} err={err!r}"
+        )
+        
         if is_ok:
             self._finalize_ready()
             return
-
-        if self._engine_active == "google":
+    
+        if failed and eng == "maplibre":
+            print("[map] maplibre failed:", err)
+            self._fallback_leaflet()
+            return
+    
+        if eng in ("google", "maplibre"):
             if self._probe_tries < self._probe_max:
                 self._probe_tries += 1
                 QTimer.singleShot(300, self._probe_engine)
                 return
-
-        if self._engine_active != "leaflet":
+    
+        if eng != "leaflet":
             self._fallback_leaflet()
+    
+    
+    def _finalize_ready(self) -> None:
+        if self._web is None:
+            return
+    
+        self._ready = True
+    
+        if self._pending_js:
+            q = list(self._pending_js)
+            self._pending_js.clear()
+            for js in q:
+                self._web.page().runJavaScript(str(js))
+    
+        try:
+            self.apply_view(self._view)
+        except Exception:
+            pass
 
     def _fallback_leaflet(self) -> None:
         self._engine_req = "leaflet"
         self._engine_active = "leaflet"
         self._load_map()
 
-    def _finalize_ready(self) -> None:
-        if self._web is None:
-            return
-
-        # Re-apply the last known state.
-        try:
-            self.apply_view(self._view)
-        except Exception:
-            pass
-
-# class ForecastMapView(QFrame):
-#     """
-#     Map canvas widget with overlay controls.
-#     """
-
-#     request_focus_mode = pyqtSignal(bool)
-#     point_clicked = pyqtSignal(float, float)
-
-#     def __init__(
-#         self,
-#         parent: Optional[QWidget] = None,
-#     ) -> None:
-#         super().__init__(parent)
-#         self.setObjectName("ForecastMapView")
-#         self.setFrameShape(QFrame.StyledPanel)
-
-#         self._ready = False
-#         self._pending_js: List[str] = []
-        
-#         self._last_points: List[Dict[str, Any]] = []
-#         self._last_label: str = "Z"
-#         self._last_vmin: Optional[float] = None
-#         self._last_vmax: Optional[float] = None
-        
-#         self._view: Dict[str, Any] = {}
-#         self._last_hotspots: List[Dict[str, Any]] = []
-#         self._hot_opts: Dict[str, Any] = {
-#             "show": True,
-#             "pulse": True,
-#         }
-
-#         self._web: Optional[QWebEngineView]
-#         self._placeholder: Optional[QLabel]
-
-#         self._build_ui()
-#         self._load_map()
 
     # -----------------------------
     # Public API
@@ -505,18 +528,35 @@ class ForecastMapView(QFrame):
             invert=invert,
         )
     
-    def _set_basemap(
-        self,
-        provider: str,
-        style: str,
-        opacity: float,
-    ) -> None:
+    # def _set_basemap(
+    #     self,
+    #     provider: str,
+    #     style: str,
+    #     opacity: float,
+    # ) -> None:
+    #     js = (
+    #         "if (window.__GeoPriorMap) {"
+    #         "  window.__GeoPriorMap.setBasemap("
+    #         f"{json.dumps(provider)},"
+    #         f"{json.dumps(style)},"
+    #         f"{json.dumps(float(opacity))}"
+    #         ");"
+    #         "}"
+    #     )
+    #     self._run_js(js)
+    
+    def _set_basemap(self, provider: str, style: str, opacity: float) -> None:
+        spec = resolve_basemap(
+            self._engine_active,
+            provider,
+            style,
+        )
+        spec["opacity"] = float(opacity)
+    
         js = (
             "if (window.__GeoPriorMap) {"
             "  window.__GeoPriorMap.setBasemap("
-            f"{json.dumps(provider)},"
-            f"{json.dumps(style)},"
-            f"{json.dumps(float(opacity))}"
+            f"{json.dumps(spec)}"
             ");"
             "}"
         )
@@ -545,7 +585,13 @@ class ForecastMapView(QFrame):
             stack.addWidget(self._placeholder)
         else:
             self._placeholder = None
+            # self._web = QWebEngineView(self._container)
+            # stack.addWidget(self._web)
             self._web = QWebEngineView(self._container)
+            try:
+                self._web.setPage(_LogPage(self._web))
+            except Exception:
+                pass
             stack.addWidget(self._web)
 
         self._overlay = self._make_overlay(self._container)
@@ -594,44 +640,6 @@ class ForecastMapView(QFrame):
         row.addWidget(self.btn_focus)
 
         return w
-
-    # def _load_map(self) -> None:
-    #     if self._web is None:
-    #         return
-
-    #     st = self._web.settings()
-    #     st.setAttribute(
-    #         QWebEngineSettings.LocalContentCanAccessRemoteUrls,
-    #         True,
-    #     )
-
-    #     html = _leaflet_html()
-    #     self._web.setHtml(
-    #         html,
-    #         QUrl("https://geoprior.local/"),
-    #     )
-        
-    #     # WebChannel: JS -> Qt (marker click / map click)
-    #     self._bridge = None
-    #     self._channel = None
-    #     if QWebChannel is not None:
-    #         self._bridge = _GeoPriorBridge(self)
-    #         self._channel = QWebChannel(self._web.page())
-    #         self._channel.registerObject("bridge", self._bridge)
-    #         self._web.page().setWebChannel(self._channel)
-    #         self._bridge.point_clicked.connect(self.point_clicked)
-
-    #     self._web.loadFinished.connect(self._on_loaded)
-
-    # def _on_loaded(self, ok: bool) -> None:
-    #     self._ready = bool(ok)
-    #     if not self._ready:
-    #         return
-    #     if self._pending_js:
-    #         q = list(self._pending_js)
-    #         self._pending_js.clear()
-    #         for js in q:
-    #             self._web.page().runJavaScript(js)
 
     def _run_js(self, js: str) -> None:
         if self._web is None:
