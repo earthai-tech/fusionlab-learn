@@ -953,9 +953,7 @@ class PreprocessTab(QWidget):
 
         build_split = QSplitter(Qt.Horizontal, self)
         build_split.setChildrenCollapsible(False)
-        build_split.setCollapsible(0, False)
-        build_split.setCollapsible(1, False)
-        
+
         self._build_split = build_split
         build_split.splitterMoved.connect(self._on_build_splitter_moved)
 
@@ -1202,6 +1200,9 @@ class PreprocessTab(QWidget):
         build_split.addWidget(self._prep_preview_scroll)
         # build_split.setStretchFactor(0, 7)
         # build_split.setStretchFactor(1, 3)
+        # build_split.setCollapsible(0, False)
+        # build_split.setCollapsible(1, False)
+        
         # Make left expand, right "stable"
         build_split.setStretchFactor(0, 1)
         build_split.setStretchFactor(1, 0)
