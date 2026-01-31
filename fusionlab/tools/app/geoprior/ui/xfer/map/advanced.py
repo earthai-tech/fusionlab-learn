@@ -30,10 +30,12 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QTextBrowser
+    QTextBrowser, 
+    QFileDialog
 )
 
 from ....config.store import GeoConfigStore
+from ....config.city_meta_registry import install_city_meta
 from ..keys import (
     K_MAP_COORD_MODE,
     K_MAP_HOTSPOT_METRIC,
@@ -42,7 +44,6 @@ from ..keys import (
     K_MAP_MAX_POINTS,
     K_MAP_OPACITY,
     K_MAP_POINTS_MODE,
-    K_MAP_SRC_EPSG,
     K_MAP_UTM_EPSG,
     K_MAP_RADAR_ENABLE,
     K_MAP_RADAR_TARGET,
@@ -57,8 +58,23 @@ from ..keys import (
     K_MAP_LINKS_SHOW_DIST,
     K_MAP_INTERP_HTML,
     K_MAP_INTERP_TIP,
+    K_MAP_A_EPSG, 
+    K_MAP_B_EPSG,
+    K_CITIES_META_PATH
 )
-
+from ...view.keys import (
+    K_PLOT_KIND, 
+    K_HEX_GRIDSIZE,
+    K_HEX_METRIC,
+    K_CONTOUR_BANDWIDTH, 
+    K_CONTOUR_STEPS, 
+    K_CONTOUR_FILLED, 
+    K_CONTOUR_LABELS,
+    K_FILTER_ENABLE, 
+    K_FILTER_V_MIN, 
+    K_FILTER_V_MAX, 
+    K_SPACE_MODE
+)
 from .interactions_ui import XferMapInteractionsBlock
 from .interpretation import map_help_html
 
@@ -185,36 +201,138 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_opacity.setRange(0.05, 1.0)
         self.sp_opacity.setSingleStep(0.05)
 
+        # 1. Global / Fallback controls (Existing)
         self.cmb_coord = QComboBox(self)
-        self.cmb_coord.addItems(
-            [
-                "Auto (detect degrees vs meters)",
-                "Lon/Lat degrees",
-                "UTM (EPSG:326xx/327xx)",
-                "Projected (EPSG)",
-            ]
-        )
+        self.cmb_coord.addItems(["Auto", "Lon/Lat", "UTM", "EPSG"])
         
         self.sp_utm = QSpinBox(self)
         self.sp_utm.setRange(0, 999999)
         self.sp_utm.setSpecialValueText("Auto")
-        
-        self.sp_src = QSpinBox(self)
-        self.sp_src.setRange(0, 999999)
-        self.sp_src.setSpecialValueText("Auto")
+        self.sp_utm.setToolTip("Global Default EPSG (if A/B not set)")
 
-        self.sec_view.add_row(
-            0,
-            "Max points",
-            self.sp_max_pts,
-        )
+        # 2. NEW: Specific Overrides
+        self.sp_epsg_a = QSpinBox(self)
+        self.sp_epsg_a.setRange(0, 999999)
+        self.sp_epsg_a.setSpecialValueText("Auto / Meta")
+        self.sp_epsg_a.setToolTip("Override EPSG for City A (Input)")
+
+        self.sp_epsg_b = QSpinBox(self)
+        self.sp_epsg_b.setRange(0, 999999)
+        self.sp_epsg_b.setSpecialValueText("Auto / Meta")
+        self.sp_epsg_b.setToolTip("Override EPSG for City B (Target)")
+
+        # 3. NEW: Load Meta JSON
+        self.btn_load_meta = QToolButton(self)
+        self.btn_load_meta.setText("Load cities.meta.json...")
+        self.btn_load_meta.setToolTip(
+            "Load a registry file to auto-detect EPSGs by city name"
+            )
+        self.btn_load_meta.clicked.connect(self._on_load_meta_click)
+
+        # Add to layout
+        self.sec_view.add_row(0, "Max points", self.sp_max_pts)
         self.sec_view.add_row(1, "Opacity", self.sp_opacity)
-        self.sec_view.add_row(2, "Coords", self.cmb_coord)
-        self.sec_view.add_row(3, "UTM EPSG", self.sp_utm)
-        self.sec_view.add_row(4, "SRC EPSG", self.sp_src)
-
+        self.sec_view.add_row(2, "Coords Mode", self.cmb_coord)
+        self.sec_view.add_row(3, "Default EPSG", self.sp_utm)
+        
+        # Separator or label for specifics
+        lbl_spec = QLabel("<b>Specific Overrides</b>", self)
+        self.sec_view.body_l.addWidget(lbl_spec, 5, 0, 1, 2)
+        
+        self.sec_view.add_row(6, "City A EPSG", self.sp_epsg_a)
+        self.sec_view.add_row(7, "City B EPSG", self.sp_epsg_b)
+        self.sec_view.body_l.addWidget(self.btn_load_meta, 8, 0, 1, 2)
         root.addWidget(self.sec_view, 0)
 
+        # -------------------------
+        # 1b) Visualization 
+        # -------------------------
+        self.sec_viz = _Fold(
+            "Visualization", 
+            "Plot type (Scatter, Contour, Hexbin) and style.",
+            parent=self
+        )
+
+        self.cmb_plot_kind = QComboBox(self)
+        self.cmb_plot_kind.addItems(["scatter", "contour", "hexbin"])
+
+        # Contour Specifics
+        self.sp_cont_bw = QDoubleSpinBox(self)
+        self.sp_cont_bw.setRange(1.0, 200.0)
+        self.sp_cont_bw.setSingleStep(2.0)
+        self.sp_cont_bw.setSuffix(" px")
+        self.sp_cont_bw.setToolTip("Bandwidth (smoothing radius)")
+
+        self.sp_cont_steps = QSpinBox(self)
+        self.sp_cont_steps.setRange(2, 50)
+        self.sp_cont_steps.setToolTip("Number of contour levels")
+        
+        self.chk_cont_fill = QCheckBox("Filled contours", self)
+        self.chk_cont_lbl  = QCheckBox("Annotate", self)
+
+        # Hexbin Specifics
+        self.sp_hex_grid = QSpinBox(self)
+        self.sp_hex_grid.setRange(5, 200)
+        self.sp_hex_grid.setSuffix(" px")
+        self.sp_hex_grid.setToolTip("Hexagon radius/size")
+        
+        self.cmb_hex_metric = QComboBox(self) #
+        self.cmb_hex_metric.addItems(["mean", "max", "min", "count"])
+        # Layout
+        self.sec_viz.add_row(0, "Plot Type", self.cmb_plot_kind)
+        
+        # Conditional rows (labels are stored to toggle visibility)
+        self.lbl_cont_bw = QLabel("Smoothing", self)
+        self.sec_viz.body_l.addWidget(self.lbl_cont_bw, 1, 0)
+        self.sec_viz.body_l.addWidget(self.sp_cont_bw, 1, 1)
+
+        self.lbl_cont_steps = QLabel("Levels", self)
+        self.sec_viz.body_l.addWidget(self.lbl_cont_steps, 2, 0)
+        self.sec_viz.body_l.addWidget(self.sp_cont_steps, 2, 1)
+        
+        self.sec_viz.body_l.addWidget(self.chk_cont_fill, 3, 0)
+        self.sec_viz.body_l.addWidget(self.chk_cont_lbl, 3, 1)
+
+        self.lbl_hex_grid = QLabel("Grid Size", self)
+        self.sec_viz.body_l.addWidget(self.lbl_hex_grid, 4, 0)
+        self.sec_viz.body_l.addWidget(self.sp_hex_grid, 4, 1)
+
+        self.lbl_hex_mt = QLabel("Metric", self)
+        self.sec_viz.body_l.addWidget(self.lbl_hex_mt, 5, 0)
+        self.sec_viz.body_l.addWidget(self.cmb_hex_metric, 5, 1)
+        
+        root.addWidget(self.sec_viz, 0)
+        
+        # -------------------------
+        # 1c) Data Filters (NEW SECTION)
+        # -------------------------
+        self.sec_filt = _Fold(
+            "Data Filters", "Clip values and spatial range", 
+            parent=self
+            )
+        
+        self.chk_filt_en = QCheckBox("Enable Value Filter", self)
+        
+        self.sp_vmin = QDoubleSpinBox(self)
+        self.sp_vmin.setRange(-9999, 9999)
+        self.sp_vmin.setPrefix("Min: ")
+        
+        self.sp_vmax = QDoubleSpinBox(self)
+        self.sp_vmax.setRange(-9999, 9999)
+        self.sp_vmax.setPrefix("Max: ")
+
+        self.cmb_space = QComboBox(self)
+        self.cmb_space.addItems(
+            ["all", "hotspots_only", "hotspots_proximity"]
+            )
+
+        self.sec_filt.body_l.addWidget(self.chk_filt_en, 0, 0, 1, 2)
+        self.sec_filt.add_row(1, "Min Value", self.sp_vmin)
+        self.sec_filt.add_row(2, "Max Value", self.sp_vmax)
+        self.sec_filt.add_row(3, "Spatial Mode", self.cmb_space)
+        
+
+        root.addWidget(self.sec_filt, 0)
         # -------------------------
         # 2) Hotspots
         # -------------------------
@@ -367,9 +485,6 @@ class XferMapAdvancedPanel(QWidget):
         )
 
         # Tip (short, action-oriented)
-        # Placed LAST so it reflects the newest features
-        # (Interactions/Extras + Radar/Links) without
-        # cluttering the main help HTML.
         self.lbl_interp_tip = QLabel(self)
         self.lbl_interp_tip.setObjectName("xferMapInterpTip")
         self.lbl_interp_tip.setWordWrap(True)
@@ -408,7 +523,7 @@ class XferMapAdvancedPanel(QWidget):
             self._push_view
         )
         self.sp_utm.valueChanged.connect(self._push_view)
-        self.sp_src.valueChanged.connect(self._push_view)
+        # self.sp_src.valueChanged.connect(self._push_view)
 
         self.cmb_pts_mode.currentIndexChanged.connect(
             self._push_hot
@@ -438,7 +553,40 @@ class XferMapAdvancedPanel(QWidget):
         self.sp_links_k.valueChanged.connect(self._push_hot_ana)
         self.sp_links_max.valueChanged.connect(self._push_hot_ana)
         self.chk_links_dist.toggled.connect(self._push_hot_ana)
-
+        
+        self.sp_epsg_a.valueChanged.connect(self._push_view)
+        self.sp_epsg_b.valueChanged.connect(self._push_view)
+        
+        # Visualization
+        self.cmb_plot_kind.currentIndexChanged.connect(self._push_viz)
+        self.sp_cont_bw.valueChanged.connect(self._push_viz)
+        self.sp_cont_steps.valueChanged.connect(self._push_viz)
+        self.chk_cont_fill.toggled.connect(self._push_viz)
+        self.sp_hex_grid.valueChanged.connect(self._push_viz)
+        self.chk_cont_lbl.toggled.connect(self._push_viz)
+        self.cmb_hex_metric.currentIndexChanged.connect(self._push_viz)
+        
+        # Filters
+        self.chk_filt_en.toggled.connect(self._push_filt)
+        self.sp_vmin.valueChanged.connect(self._push_filt)
+        self.sp_vmax.valueChanged.connect(self._push_filt)
+        self.cmb_space.currentIndexChanged.connect(self._push_filt)
+        
+        
+    def _on_load_meta_click(self) -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load City Metadata", "", "JSON Files (*.json)"
+            )
+            if path:
+                try:
+                    # Install into store immediately
+                    install_city_meta(self._s, paths=[path])
+                    self._s.set(K_CITIES_META_PATH, path)
+                    # Force refresh of controller
+                    self._s.set("xfer.map.meta_reloaded", True) 
+                except Exception as e:
+                    print(f"Error loading meta: {e}")
+                
     def _on_store_changed(self, keys: object) -> None:
         ch = self._as_set(keys)
         if not ch:
@@ -459,7 +607,7 @@ class XferMapAdvancedPanel(QWidget):
         b_op = QSignalBlocker(self.sp_opacity)
         b_cm = QSignalBlocker(self.cmb_coord)
         b_utm = QSignalBlocker(self.sp_utm)
-        b_src = QSignalBlocker(self.sp_src)
+        # b_src = QSignalBlocker(self.sp_src)
         b_pm = QSignalBlocker(self.cmb_pts_mode)
         b_sep = QSignalBlocker(self.sp_sep)
         b_met = QSignalBlocker(self.cmb_metric)
@@ -476,12 +624,24 @@ class XferMapAdvancedPanel(QWidget):
         b_lmax = QSignalBlocker(self.sp_links_max)
         b_ld = QSignalBlocker(self.chk_links_dist)
 
+        b_pk = QSignalBlocker(self.cmb_plot_kind)
+        b_cbw = QSignalBlocker(self.sp_cont_bw)
+        b_cst = QSignalBlocker(self.sp_cont_steps)
+        b_cfil = QSignalBlocker(self.chk_cont_fill)
+        b_hgd = QSignalBlocker(self.sp_hex_grid)
+        
         _ = (
             b_max,
             b_op,
             b_cm,
             b_utm,
-            b_src,
+            b_pk, 
+            b_cbw, 
+            b_cst, 
+            b_cfil, 
+            b_hgd, 
+            
+            # b_src,
             b_pm,
             b_sep,
             b_met,
@@ -526,9 +686,9 @@ class XferMapAdvancedPanel(QWidget):
             v = int(s.get(K_MAP_UTM_EPSG, 0) or 0)
             self.sp_utm.setValue(max(0, v))
 
-        if not ch or K_MAP_SRC_EPSG in ch:
-            v = int(s.get(K_MAP_SRC_EPSG, 0) or 0)
-            self.sp_src.setValue(max(0, v))
+        # if not ch or K_MAP_SRC_EPSG in ch:
+        #     v = int(s.get(K_MAP_SRC_EPSG, 0) or 0)
+        #     self.sp_src.setValue(max(0, v))
 
         if not ch or K_MAP_POINTS_MODE in ch:
             pm = str(s.get(K_MAP_POINTS_MODE, "all") or "")
@@ -621,16 +781,90 @@ class XferMapAdvancedPanel(QWidget):
             tip = str(self._s.get(K_MAP_INTERP_TIP, "") or "")
             if tip.strip():
                 self.lbl_interp_tip.setText(tip)
+                
+        if not ch or K_MAP_A_EPSG in ch:
+            v = int(self._s.get(K_MAP_A_EPSG, 0) or 0)
+            self.sp_epsg_a.setValue(v)
+            
+        if not ch or K_MAP_B_EPSG in ch:
+            v = int(self._s.get(K_MAP_B_EPSG, 0) or 0)
+            self.sp_epsg_b.setValue(v)
+            
+        if not ch or K_PLOT_KIND in ch:
+            kind = str(s.get(K_PLOT_KIND, "scatter") or "scatter")
+            idx = self.cmb_plot_kind.findText(kind)
+            if idx >= 0: self.cmb_plot_kind.setCurrentIndex(idx)
 
+        if not ch or K_CONTOUR_BANDWIDTH in ch:
+            v = float(s.get(K_CONTOUR_BANDWIDTH, 15.0) or 15.0)
+            self.sp_cont_bw.setValue(v)
+
+        if not ch or K_CONTOUR_STEPS in ch:
+            v = int(s.get(K_CONTOUR_STEPS, 10) or 10)
+            self.sp_cont_steps.setValue(v)
+
+        if not ch or K_CONTOUR_FILLED in ch:
+            self.chk_cont_fill.setChecked(
+                bool(s.get(K_CONTOUR_FILLED, True))
+            )
+
+        if not ch or K_HEX_GRIDSIZE in ch:
+            v = int(s.get(K_HEX_GRIDSIZE, 30) or 30)
+            self.sp_hex_grid.setValue(v)
+
+        if not ch or K_FILTER_ENABLE in ch:
+            self.chk_filt_en.setChecked(bool(s.get(K_FILTER_ENABLE, False)))
+            
+        self._enable_viz_opts()
         self._enable_hot_ana()
         
         cm_i = self.cmb_coord.currentIndex()
         self.sp_utm.setEnabled(cm_i in (0, 2))  # auto or utm
-        self.sp_src.setEnabled(cm_i in (0, 3))  # auto or epsg
+        # self.sp_src.setEnabled(cm_i in (0, 3))  # auto or epsg
         
     # -------------------------
     # Push -> store
     # -------------------------
+    def _push_viz(self) -> None:
+        s = self._s
+        with s.batch():
+            s.set(K_PLOT_KIND, self.cmb_plot_kind.currentText())
+            s.set(K_CONTOUR_BANDWIDTH, self.sp_cont_bw.value())
+            s.set(K_CONTOUR_STEPS, self.sp_cont_steps.value())
+            s.set(K_CONTOUR_FILLED, self.chk_cont_fill.isChecked())
+            s.set(K_CONTOUR_LABELS, self.chk_cont_lbl.isChecked())
+            s.set(K_HEX_GRIDSIZE, self.sp_hex_grid.value())
+            s.set(K_HEX_METRIC, self.cmb_hex_metric.currentText())
+
+        self._enable_viz_opts()
+        
+    def _push_filt(self) -> None:
+        s = self._s
+        with s.batch():
+            s.set(K_FILTER_ENABLE, self.chk_filt_en.isChecked())
+            s.set(K_FILTER_V_MIN, self.sp_vmin.value())
+            s.set(K_FILTER_V_MAX, self.sp_vmax.value())
+            s.set(K_SPACE_MODE, self.cmb_space.currentText())
+            
+    def _enable_viz_opts(self) -> None:
+        kind = self.cmb_plot_kind.currentText()
+        is_cont = (kind == "contour")
+        is_hex = (kind == "hexbin")
+
+        # Toggle Contour Widgets
+        self.lbl_cont_bw.setVisible(is_cont)
+        self.sp_cont_bw.setVisible(is_cont)
+        self.lbl_cont_steps.setVisible(is_cont)
+        self.sp_cont_steps.setVisible(is_cont)
+        self.chk_cont_fill.setVisible(is_cont)
+        self.chk_cont_lbl.setVisible(is_cont)
+        
+        # Toggle Hex Widgets
+        self.lbl_hex_grid.setVisible(is_hex)
+        self.sp_hex_grid.setVisible(is_hex)
+        self.lbl_hex_mt.setVisible(is_hex)
+        self.cmb_hex_metric.setVisible(is_hex)
+        
     def _push_view(self) -> None:
         s = self._s
         cm_i = int(self.cmb_coord.currentIndex())
@@ -648,7 +882,9 @@ class XferMapAdvancedPanel(QWidget):
             s.set(K_MAP_OPACITY, float(self.sp_opacity.value()))
             s.set(K_MAP_COORD_MODE, cm)
             s.set(K_MAP_UTM_EPSG, int(self.sp_utm.value()))
-            s.set(K_MAP_SRC_EPSG, int(self.sp_src.value()))
+            # s.set(K_MAP_SRC_EPSG, int(self.sp_src.value()))
+            s.set(K_MAP_A_EPSG, int(self.sp_epsg_a.value()))
+            s.set(K_MAP_B_EPSG, int(self.sp_epsg_b.value()))
 
 
     def _push_hot(self) -> None:

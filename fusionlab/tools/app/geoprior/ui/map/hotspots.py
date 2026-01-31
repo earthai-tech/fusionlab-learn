@@ -531,30 +531,3 @@ def _to_hotspots(c: pd.DataFrame) -> List[Hotspot]:
 
     return out
 
-# def _to_hotspots(c: pd.DataFrame) -> List[Hotspot]:
-#     out: List[Hotspot] = []
-
-#     for k, row in enumerate(c.itertuples(index=False), start=1):
-#         lon = float(getattr(row, "lon"))
-#         lat = float(getattr(row, "lat"))
-#         v = float(getattr(row, "v"))
-#         sc = float(getattr(row, "_score"))
-#         n = int(getattr(row, "_n"))
-
-#         sev = _severity(k)
-#         lab = f"{sev} · #{k} · n={n}"
-
-#         out.append(
-#             Hotspot(
-#                 lon=lon,
-#                 lat=lat,
-#                 v=v,
-#                 score=sc,
-#                 n=n,
-#                 rank=k,
-#                 sev=sev,
-#                 label=lab,
-#             )
-#         )
-
-#     return out

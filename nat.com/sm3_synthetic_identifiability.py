@@ -174,46 +174,62 @@ def make_one_step_windows(
     *,
     z_surf_static_index: int,
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], float]:
+    """
+    Creates sliding windows with NORMALIZED inputs for the neural network.
+    """
     years = np.asarray(years, float)
     dh = np.asarray(dh, float)
     s_cum = np.asarray(s_cum, float)
 
+    # 1. Setup dimensions
     T = int(time_steps)
-    H = 1
+    H_horiz = 1  
     B = len(years) - T
+    
     if B <= 0:
         raise ValueError("Not enough samples for time_steps.")
 
-    # Depth-to-water (m), positive down.
+    # 2. Calculate Raw Depth (meters)
     depth = -dh
+
+    # =========================================================
+    # 3. NORMALIZATION FIX
+    # =========================================================
+    # Normalize depth to [0, 1] for the Neural Network.
+    # We use fixed bounds [0, 80] matching your priors.
+    depth_min = 0.0
+    depth_max = 80.0 
+    denom = max(depth_max - depth_min, 1e-6)
+    
+    # This 'depth_norm' goes into X (the NN input)
+    depth_norm = (depth - depth_min) / denom
+    # =========================================================
 
     t0 = float(years[0])
     t_range = float(years[-1] - t0)
     t_range = max(t_range, 1.0)
 
+    # 4. Initialize Tensors
     X: dict[str, np.ndarray] = {}
-    X["static_features"] = np.repeat(
-        static_vec[None, :],
-        B,
-        axis=0,
-    ).astype(np.float32)
+    
+    # Static features
+    X["static_features"] = np.repeat(static_vec[None, :], B, axis=0).astype(np.float32)
 
-    # Only ONE dynamic channel: depth (down+).
+    # Dynamic features: (B, T, 1) -> Holds Normalized Depth
     X["dynamic_features"] = np.zeros((B, T, 1), np.float32)
-    X["future_features"] = np.zeros((B, H, 1), np.float32)
+    
+    # Future features
+    X["future_features"] = np.zeros((B, H_horiz, 1), np.float32)
 
-    # Normalized coords (t in [0,1], x=y=0).
-    X["coords"] = np.zeros((B, H, 3), np.float32)
+    # Coords
+    X["coords"] = np.zeros((B, H_horiz, 3), np.float32)
 
-    X["H_field"] = np.full(
-        (B, H, 1),
-        float(H_field_value),
-        np.float32,
-    )
+    # H_field
+    X["H_field"] = np.full((B, H_horiz, 1), float(H_field_value), np.float32)
 
     y = {
-        "subs_pred": np.zeros((B, H, 1), np.float32),
-        "gwl_pred": np.zeros((B, H, 1), np.float32),
+        "subs_pred": np.zeros((B, H_horiz, 1), np.float32),
+        "gwl_pred": np.zeros((B, H_horiz, 1), np.float32),
     }
 
     z_surf = float(static_vec[int(z_surf_static_index)])
@@ -221,12 +237,16 @@ def make_one_step_windows(
     for i in range(B):
         j = i + T
 
-        X["dynamic_features"][i, :, 0] = depth[i : i + T]
+        # FIX: Input uses SCALED depth [0,1]
+        X["dynamic_features"][i, :, 0] = depth_norm[i : i + T]
+        
+        # Target uses RAW Subsidence [meters]
         y["subs_pred"][i, 0, 0] = s_cum[j]
 
-        # Head (up+): z_surf - depth(down+)
+        # Target uses RAW Head [meters] (for physics)
         y["gwl_pred"][i, 0, 0] = z_surf - depth[j]
 
+        # Coords
         X["coords"][i, 0, 0] = (years[j] - t0) / t_range
         X["coords"][i, 0, 1] = 0.0
         X["coords"][i, 0, 2] = 0.0
@@ -622,22 +642,10 @@ def train_one_pixel(
     #     # IMPORTANT: penalize quantile crossing
     #     "lambda_q": 0.1,
     # }
-    # physics_loss_weights = dict(
-    #     lambda_cons=10.0,
-    #     lambda_gw=0.0,
-    #     lambda_prior=0.3,
-    #     lambda_smooth=0.0,
-    #     lambda_bounds=0.1,
-    #     lambda_mv=0.0,
-    #     mv_lr_mult=1.0,
-    #     kappa_lr_mult=0.0,
-    #     lambda_offset=float(lambda_offset),
-    #     lambda_q=0.1,
-    # )
     physics_loss_weights = dict(
-        lambda_cons=100.0,   # stronger physics
+        lambda_cons=10.0,
         lambda_gw=0.0,
-        lambda_prior=0.0,    # <- disable until consistent
+        lambda_prior=0.3,
         lambda_smooth=0.0,
         lambda_bounds=0.1,
         lambda_mv=0.0,
@@ -646,6 +654,18 @@ def train_one_pixel(
         lambda_offset=float(lambda_offset),
         lambda_q=0.1,
     )
+    # physics_loss_weights = dict(
+    #     lambda_cons=100.0,   # stronger physics
+    #     lambda_gw=0.0,
+    #     lambda_prior=0.0,    # <- disable until consistent
+    #     lambda_smooth=0.0,
+    #     lambda_bounds=0.1,
+    #     lambda_mv=0.0,
+    #     mv_lr_mult=1.0,
+    #     kappa_lr_mult=0.0,
+    #     lambda_offset=float(lambda_offset),
+    #     lambda_q=0.1,
+    # )
 
     loss_weights_dict = {"subs_pred": 1.0, "gwl_pred": 1.0}
 
@@ -707,21 +727,21 @@ def train_one_pixel(
             verbose=1,
         ),
     ]
-    for xb, yb in ds_tr.take(1):
-        with tf.GradientTape() as tape:
-            yp = model(xb, training=True)
-            loss = model.compiled_loss(yb, yp)
+    # for xb, yb in ds_tr.take(1):
+    #     with tf.GradientTape() as tape:
+    #         yp = model(xb, training=True)
+    #         loss = model.compiled_loss(yb, yp)
     
-        tau_w = model.get_layer("tau_head").trainable_weights
-        grads = tape.gradient(loss, tau_w)
+    #     tau_w = model.get_layer("tau_head").trainable_weights
+    #     grads = tape.gradient(loss, tau_w)
     
-        s = []
-        for g in grads:
-            if g is None:
-                s.append(None)
-            else:
-                s.append(float(tf.reduce_sum(tf.abs(g))))
-        print("tau_head grad sums:", s)
+    #     s = []
+    #     for g in grads:
+    #         if g is None:
+    #             s.append(None)
+    #         else:
+    #             s.append(float(tf.reduce_sum(tf.abs(g))))
+    #     print("tau_head grad sums:", s)
         
     model.fit(
         ds_tr,

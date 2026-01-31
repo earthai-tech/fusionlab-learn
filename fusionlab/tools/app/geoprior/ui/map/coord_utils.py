@@ -52,7 +52,6 @@ def _tr(src: int, dst: int) -> "Transformer":
         always_xy=True,
     )
 
-
 def ensure_lonlat(
     pts: pd.DataFrame,
     *,
@@ -76,10 +75,13 @@ def ensure_lonlat(
 
     m = str(mode or "lonlat").strip().lower()
 
-    # Auto mode:
-    # - if values already look like degrees, keep/clip them
-    # - otherwise, if an EPSG is provided, try reprojection
-    # - otherwise, fail with a helpful message
+    # Consolidate target EPSG (source of truth)
+    # used for reprojection if needed.
+    target_s = parse_epsg(src_epsg) or parse_epsg(utm_epsg)
+
+    # ----------------------------------------------------
+    # Case 1: Auto-detection
+    # ----------------------------------------------------
     if m == "auto":
         x = pd.to_numeric(pts.get("lon"), errors="coerce")
         y = pd.to_numeric(pts.get("lat"), errors="coerce")
@@ -95,77 +97,96 @@ def ensure_lonlat(
         xx = x.to_numpy(dtype=float)
         yy = y.to_numpy(dtype=float)
 
-        # If it already looks like lon/lat degrees, treat as lonlat.
+        # 1a. If values look like lon/lat, just clip & return
         if _looks_like_lonlat(xx, yy):
             out = _clip_lonlat(pts)
             ok = not out.empty
             msg = "" if ok else "No valid lon/lat points."
             return out, ok, msg
 
-        # Otherwise, treat as projected: attempt reprojection if EPSG is set.
-        # src = parse_epsg(utm_epsg or src_epsg)
-        src = parse_epsg(src_epsg) or parse_epsg(utm_epsg)
-        if src is None:
+        # 1b. If not lon/lat, we need an EPSG to reproject
+        if target_s is None:
             return (
                 pd.DataFrame(columns=pts.columns),
                 False,
-                "Auto coord mode detected projected coordinates; "
-                "set UTM/EPSG to reproject.",
+                "Auto detected projected coords; set "
+                "EPSG/UTM.",
             )
-        
-        z, _south = _utm_zone_hemi_from_epsg(int(src))
+
+        # 1c. Try Heuristic (Math-based UTM)
+        # Avoids pyproj dependency for standard zones.
+        z, _south = _utm_zone_hemi_from_epsg(int(target_s))
         if z > 0:
-            out = _utm_df_to_lonlat(pts, epsg=int(src))
-        else:
-            # out = _reproject_xy(
-            #     pts,
-            #     src_epsg=int(src),
-            #     dst_epsg=int(dst_epsg),
-            # )
-
             try:
-                out = _reproject_xy(
-                    pts,
-                    src_epsg=int(src),
-                    dst_epsg=int(dst_epsg),
+                out = _utm_df_to_lonlat(
+                    pts, epsg=int(target_s)
                 )
-            except Exception as e:
-                return (
-                    pd.DataFrame(columns=pts.columns),
-                    False,
-                    f"Reprojection failed: {e}",
-                )
+                return _finalize(out)
+            except Exception:
+                pass  # Fallback to pyproj
 
-        out = _clip_lonlat(out)
-        ok = not out.empty
-        msg = "" if ok else "No valid lon/lat after reprojection."
-        return out, ok, msg
+        # 1d. Fallback to pyproj (general reprojection)
+        try:
+            out = _reproject_xy(
+                pts,
+                src_epsg=int(target_s),
+                dst_epsg=int(dst_epsg),
+            )
+            return _finalize(out)
+        except Exception as e:
+            return (
+                pd.DataFrame(columns=pts.columns),
+                False,
+                f"Reprojection failed: {e}",
+            )
 
+    # ----------------------------------------------------
+    # Case 2: Explicit Lon/Lat
+    # ----------------------------------------------------
     if m == "lonlat":
         out = _clip_lonlat(pts)
         ok = not out.empty
         msg = "" if ok else "No valid lon/lat points."
         return out, ok, msg
 
+    # ----------------------------------------------------
+    # Case 3: Explicit Projected (UTM/EPSG)
+    # ----------------------------------------------------
+    # Force usage of the specifically requested EPSG slot
+    # if provided, otherwise fallback to the generic one.
     if m == "utm":
         src = utm_epsg
     else:
         src = src_epsg
 
-    src = parse_epsg(src)
-    if src is None:
+    # Resolve actual integer code
+    final_src = parse_epsg(src)
+    if final_src is None:
         return (
             pd.DataFrame(columns=pts.columns),
             False,
             "Missing source EPSG for coord reprojection.",
         )
 
+    # 3a. Try Heuristic first (same as Auto)
+    z, _south = _utm_zone_hemi_from_epsg(int(final_src))
+    if z > 0:
+        try:
+            out = _utm_df_to_lonlat(
+                pts, epsg=int(final_src)
+            )
+            return _finalize(out)
+        except Exception:
+            pass  # Fallback
+
+    # 3b. Fallback to pyproj
     try:
         out = _reproject_xy(
             pts,
-            src_epsg=int(src),
+            src_epsg=int(final_src),
             dst_epsg=int(dst_epsg),
         )
+        return _finalize(out)
     except Exception as e:
         return (
             pd.DataFrame(columns=pts.columns),
@@ -173,9 +194,14 @@ def ensure_lonlat(
             f"Reprojection failed: {e}",
         )
 
+
+def _finalize(
+    out: pd.DataFrame,
+) -> Tuple[pd.DataFrame, bool, str]:
+    """Helper to clip bounds and format return tuple."""
     out = _clip_lonlat(out)
     ok = not out.empty
-    msg = "" if ok else "No valid lon/lat after reprojection."
+    msg = "" if ok else "No valid points after reproj."
     return out, ok, msg
 
 
@@ -185,7 +211,14 @@ def _reproject_xy(
     src_epsg: int,
     dst_epsg: int,
 ) -> pd.DataFrame:
+    """Uses pyproj to transform coordinates."""
     out = pts.copy()
+
+    # Guard: ensure library is present
+    if Transformer is None:
+        raise RuntimeError(
+            "pyproj not installed. Cannot reproject."
+        )
 
     x = pd.to_numeric(out["lon"], errors="coerce")
     y = pd.to_numeric(out["lat"], errors="coerce")
@@ -204,6 +237,175 @@ def _reproject_xy(
     out["lon"] = lon
     out["lat"] = lat
     return out
+
+# def ensure_lonlat(
+#     pts: pd.DataFrame,
+#     *,
+#     mode: str,
+#     utm_epsg: Optional[int] = None,
+#     src_epsg: Optional[int] = None,
+#     dst_epsg: int = WGS84_EPSG,
+# ) -> Tuple[pd.DataFrame, bool, str]:
+#     """
+#     Ensure pts has lon/lat in degrees.
+
+#     pts must have columns: lon, lat
+#     (even if they are x/y in meters).
+
+#     Returns
+#     -------
+#     (out, ok, msg)
+#     """
+#     if pts is None or pts.empty:
+#         return pts, True, ""
+
+#     m = str(mode or "lonlat").strip().lower()
+
+#     # Auto mode:
+#     # - if values already look like degrees, keep/clip them
+#     # - otherwise, if an EPSG is provided, try reprojection
+#     # - otherwise, fail with a helpful message
+    
+#     # Consolidate target EPSG
+#     target_s = parse_epsg(src_epsg) or parse_epsg(utm_epsg)
+    
+#     if m == "auto":
+#         x = pd.to_numeric(pts.get("lon"), errors="coerce")
+#         y = pd.to_numeric(pts.get("lat"), errors="coerce")
+
+#         ok_xy = x.notna() & y.notna()
+#         if not bool(ok_xy.any()):
+#             return (
+#                 pd.DataFrame(columns=pts.columns),
+#                 False,
+#                 "No valid coordinates (lon/lat).",
+#             )
+
+#         xx = x.to_numpy(dtype=float)
+#         yy = y.to_numpy(dtype=float)
+
+#         # If it already looks like lon/lat degrees, treat as lonlat.
+#         if _looks_like_lonlat(xx, yy):
+#             out = _clip_lonlat(pts)
+#             ok = not out.empty
+#             msg = "" if ok else "No valid lon/lat points."
+#             return out, ok, msg
+
+#         # Otherwise, treat as projected: attempt reprojection if EPSG is set.
+#         # src = parse_epsg(utm_epsg or src_epsg)
+#         src = parse_epsg(src_epsg) or parse_epsg(utm_epsg)
+#         if src is None:
+#             return (
+#                 pd.DataFrame(columns=pts.columns),
+#                 False,
+#                 "Auto coord mode detected projected coordinates; "
+#                 "set UTM/EPSG to reproject.",
+#             )
+        
+#         if target_s is None:
+#              return (pts, False, "Auto mode: No EPSG provided for projection.")
+         
+#         # TRY HEURISTIC FIRST (Faster, no pyproj needed for standard UTM)
+#         z, _south = _utm_zone_hemi_from_epsg(int(src))
+#         if z > 0:
+#             # Valid standard UTM EPSG found -> Use math-based conversion
+#             try:
+#                 out = _utm_df_to_lonlat(pts, epsg=int(target_s))
+#                 return _finalize(out)
+#             except Exception:
+#                 pass # Fallback to pyproj if math fails
+  
+#         try:
+#             out = _reproject_xy(
+#                 pts,
+#                 src_epsg=int(src),
+#                 dst_epsg=int(dst_epsg),
+#             )
+#             return _finalize(out)
+        
+#         except Exception as e:
+#             return (
+#                 pd.DataFrame(columns=pts.columns),
+#                 False,
+#                 f"Reprojection failed: {e}",
+#             )
+
+#         out = _clip_lonlat(out)
+#         ok = not out.empty
+#         msg = "" if ok else "No valid lon/lat after reprojection."
+        
+#         return out, ok, msg
+
+#     if m == "lonlat":
+#         out = _clip_lonlat(pts)
+#         ok = not out.empty
+#         msg = "" if ok else "No valid lon/lat points."
+#         return out, ok, msg
+
+#     if m == "utm":
+#         src = utm_epsg
+#     else:
+#         src = src_epsg
+
+#     src = parse_epsg(src)
+#     if src is None:
+#         return (
+#             pd.DataFrame(columns=pts.columns),
+#             False,
+#             "Missing source EPSG for coord reprojection.",
+#         )
+
+#     try:
+#         out = _reproject_xy(
+#             pts,
+#             src_epsg=int(src),
+#             dst_epsg=int(dst_epsg),
+#         )
+#     except Exception as e:
+#         return (
+#             pd.DataFrame(columns=pts.columns),
+#             False,
+#             f"Reprojection failed: {e}",
+#         )
+
+#     out = _clip_lonlat(out)
+#     ok = not out.empty
+#     msg = "" if ok else "No valid lon/lat after reprojection."
+#     return out, ok, msg
+
+# def _finalize(out: pd.DataFrame) -> Tuple[pd.DataFrame, bool, str]:
+#     out = _clip_lonlat(out)
+#     ok = not out.empty
+#     msg = "" if ok else "No valid points after reprojection."
+#     return out, ok, msg
+
+# def _reproject_xy(
+#     pts: pd.DataFrame,
+#     *,
+#     src_epsg: int,
+#     dst_epsg: int,
+# ) -> pd.DataFrame:
+#     out = pts.copy()
+    
+#     if Transformer is None:
+#         raise RuntimeError("pyproj not installed. Cannot reproject non-UTM EPSG.")
+#     x = pd.to_numeric(out["lon"], errors="coerce")
+#     y = pd.to_numeric(out["lat"], errors="coerce")
+
+#     ok = x.notna() & y.notna()
+#     if not bool(ok.any()):
+#         return pd.DataFrame(columns=out.columns)
+
+#     tr = _tr(int(src_epsg), int(dst_epsg))
+
+#     xx = x.to_numpy(dtype=float)
+#     yy = y.to_numpy(dtype=float)
+
+#     lon, lat = tr.transform(xx, yy)
+
+#     out["lon"] = lon
+#     out["lat"] = lat
+#     return out
 
 
 def _clip_lonlat(pts: pd.DataFrame) -> pd.DataFrame:

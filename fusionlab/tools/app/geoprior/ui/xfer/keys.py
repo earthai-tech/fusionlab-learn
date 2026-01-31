@@ -101,7 +101,12 @@ K_MAP_LINKS_K = "xfer.map.links.k"                  # int
 K_MAP_LINKS_MAX = "xfer.map.links.max"              # int
 K_MAP_LINKS_SHOW_DIST = "xfer.map.links.show_dist"  # bool
 
+# Specific EPSG overrides for A and B
+K_MAP_A_EPSG = "xfer.map.a.epsg"
+K_MAP_B_EPSG = "xfer.map.b.epsg"
 
+# NEW: Path to loaded meta file
+K_CITIES_META_PATH = "cities.meta.path"
 
 DEFAULTS: Dict[str, object] = {
     K_VIEW_MODE: "map",
@@ -228,4 +233,8 @@ def map_keys() -> Set[str]:
         K_MAP_LINKS_K,
         K_MAP_LINKS_MAX,
         K_MAP_LINKS_SHOW_DIST,
+        
+        K_MAP_A_EPSG,
+        K_MAP_B_EPSG,
+        K_CITIES_META_PATH,
     }
