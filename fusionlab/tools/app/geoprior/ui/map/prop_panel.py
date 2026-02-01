@@ -25,8 +25,8 @@ from .keys import (
     K_PROP_YEARS,
     K_PROP_SPEED,
     K_PROP_LOOP,
+    K_PROP_VECTORS,
 )
-
 
 class PropagationPanel(QFrame):
     """
@@ -123,6 +123,20 @@ class PropagationPanel(QFrame):
             }
             """
         )
+            
+        self.chk_enable.setChecked(
+            bool(self.store.get(K_PROP_ENABLED, False))
+        )
+        self.chk_vectors.setChecked(
+            bool(self.store.get(K_PROP_VECTORS, True))
+        )
+        self.chk_loop.setChecked(
+            bool(self.store.get(K_PROP_LOOP, False))
+        )
+        self.player_frame.setVisible(
+            bool(self.store.get(K_PROP_ENABLED, False))
+        )
+
 
     def _connect_store(self):
         self.btn_sim.clicked.connect(self._request_simulation)
@@ -136,6 +150,17 @@ class PropagationPanel(QFrame):
         self.sp_years.valueChanged.connect(
             lambda v: self.store.set(
                 K_PROP_YEARS, int(v)
+            )
+        )
+        
+        self.chk_vectors.toggled.connect(
+            lambda on: self.store.set(
+                K_PROP_VECTORS, bool(on)
+            )
+        )
+        self.chk_loop.toggled.connect(
+            lambda on: self.store.set(
+                K_PROP_LOOP, bool(on)
             )
         )
 

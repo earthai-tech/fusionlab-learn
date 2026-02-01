@@ -18,7 +18,10 @@ Features
 
 from __future__ import annotations
 
+from pathlib import Path
 import json
+import math 
+
 from typing import Any, Dict, List, Optional, Sequence
 
 from PyQt5.QtCore import (
@@ -56,6 +59,10 @@ try:
     from PyQt5.QtWebChannel import QWebChannel
 except Exception:  # pragma: no cover
     QWebChannel = None  # type: ignore
+
+_ASSET_ROOT = (
+    Path(__file__).resolve().parent / "assets"
+)
 
 class _LogPage(QWebEnginePage):
     def javaScriptConsoleMessage(
@@ -105,6 +112,10 @@ class ForecastMapView(QFrame):
         self._last_vmin: Optional[float] = None
         self._last_vmax: Optional[float] = None
 
+        self._last_layer_kind = "points"
+        self._last_layer_opts: Dict[str, Any] = {}
+
+
         self._view: Dict[str, Any] = {}
         self._last_hotspots: List[Dict[str, Any]] = []
         self._hot_opts: Dict[str, Any] = {
@@ -133,6 +144,15 @@ class ForecastMapView(QFrame):
     # -----------------------------
     # Engine API
     # -----------------------------
+    def _leaflet_index_url(self) -> Optional[QUrl]:
+        p = _ASSET_ROOT / "leaflet" / "index.html"
+        try:
+            if p.exists():
+                return QUrl.fromLocalFile(str(p))
+        except Exception:
+            pass
+        return None
+
     def set_vectors(self, vectors: List[Dict[str, float]]) -> None:
         """
         Draw direction arrows.
@@ -185,6 +205,10 @@ class ForecastMapView(QFrame):
             True,
         )
         st.setAttribute(
+            QWebEngineSettings.LocalContentCanAccessFileUrls,
+            True,
+        )
+        st.setAttribute(
             QWebEngineSettings.WebGLEnabled,
             True,
         )
@@ -192,6 +216,7 @@ class ForecastMapView(QFrame):
         html, active = self._engine_html()
         self._engine_active = active
         
+        # todo : to use consol output later
         print(
             f"[map] request={self._engine_req} "
             f"active={self._engine_active}"
@@ -207,6 +232,22 @@ class ForecastMapView(QFrame):
             self._web.page().setWebChannel(self._channel)
             self._bridge.point_clicked.connect(self.point_clicked)
 
+        # self._web.setHtml(
+        #     html,
+        #     QUrl("https://geoprior.local/"),
+        # )
+        
+        # Load engine page.
+        # Leaflet: prefer local index.html so relative
+        # assets (style.css, layers/*.js) work.
+        if self._engine_active == "leaflet":
+            url = self._leaflet_index_url()
+            if url is not None:
+                self._web.setUrl(url)
+                return
+
+        # Fallback: inline HTML mode (also used by
+        # google/maplibre engines for now).
         self._web.setHtml(
             html,
             QUrl("https://geoprior.local/"),
@@ -344,11 +385,20 @@ class ForecastMapView(QFrame):
         self.btn_focus.setChecked(bool(checked))
         self.btn_focus.blockSignals(False)
 
+    # def clear_points(self) -> None:
+    #     self._run_js(
+    #         "if (window.__GeoPriorMap) {"
+    #         "  window.__GeoPriorMap.clearPoints();"
+    #         "}",
+    #     )
     def clear_points(self) -> None:
+        self._last_points = []
+        self._last_layer_kind = "points"
+        self._last_layer_opts = {}
+
         self._run_js(
-            "if (window.__GeoPriorMap) {"
-            "  window.__GeoPriorMap.clearPoints();"
-            "}",
+            "if(window.__GeoPriorMap) "
+            "window.__GeoPriorMap.clearPoints();"
         )
 
     def fit_points(self) -> None:
@@ -357,7 +407,34 @@ class ForecastMapView(QFrame):
             "  window.__GeoPriorMap.fitPoints();"
             "}",
         )
-    
+
+    def fit_bounds(
+        self,
+        min_lon: float,
+        min_lat: float,
+        max_lon: float,
+        max_lat: float,
+    ) -> None:
+        """
+        Zoom map to specific bounding box (New).
+        Used by Focus Critical alert.
+        """
+        try:
+            # Leaflet expects [[lat1, lon1], [lat2, lon2]]
+            c1 = [float(min_lat), float(min_lon)]
+            c2 = [float(max_lat), float(max_lon)]
+        except (ValueError, TypeError):
+            return
+
+        js_coords = json.dumps([c1, c2])
+        js = (
+            "if (window.__GeoPriorMap && "
+            "    window.__GeoPriorMap.fitBounds) {"
+            f"  window.__GeoPriorMap.fitBounds({js_coords});"
+            "}"
+        )
+        self._run_js(js)
+
     def clear_hotspots(self) -> None:
         self._last_hotspots = []
         self._run_js(
@@ -377,7 +454,6 @@ class ForecastMapView(QFrame):
         )
         self._run_js(js)
 
-    
     def set_hotspots(
         self,
         hotspots: Sequence[Dict[str, Any]],
@@ -415,6 +491,103 @@ class ForecastMapView(QFrame):
         )
         self._run_js(js)
 
+    def _norm_points(
+        self,
+        points: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, float]]:
+        out: List[Dict[str, float]] = []
+        for p in points or []:
+            if not isinstance(p, dict):
+                continue
+    
+            try:
+                lat = float(p.get("lat"))
+                lon = float(p.get("lon"))
+                v = float(p.get("v"))
+            except Exception:
+                continue
+    
+            if not math.isfinite(lat):
+                continue
+            if not math.isfinite(lon):
+                continue
+            if not math.isfinite(v):
+                continue
+    
+            out.append({"lat": lat, "lon": lon, "v": v})
+    
+        return out
+
+    def set_layer(
+        self,
+        kind: str,
+        points: Sequence[Dict[str, Any]],
+        *,
+        opts: Optional[Dict[str, Any]] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        label: str = "Z",
+        show_legend: bool = True,
+        cmap: str = "viridis",
+        invert: bool = False,
+    ) -> None:
+        k = str(kind or "points").strip().lower()
+        o = dict(opts or {})
+
+        self._last_layer_kind = k
+        self._last_layer_opts = dict(o or {})
+        self._last_label = str(label or "Z")
+        self._last_vmin = vmin
+        self._last_vmax = vmax
+
+        pts = self._norm_points(points)
+        self._last_points = list(pts)
+
+        if k in ("points", "scatter"):
+            self.set_points(
+                pts,
+                vmin=vmin,
+                vmax=vmax,
+                radius=int(o.get("radius", 6) or 6),
+                opacity=float(o.get("opacity", 0.9) or 0.9),
+                label=label,
+                show_legend=show_legend,
+                cmap=cmap,
+                invert=invert,
+            )
+            return
+
+        js_pts = json.dumps(pts, separators=(",", ":"))
+
+        o.update(
+            {
+                "vmin": vmin,
+                "vmax": vmax,
+                "label": str(label or "Z"),
+                "showLegend": bool(show_legend),
+                "cmap": str(cmap or "viridis"),
+                "invert": bool(invert),
+            }
+        )
+        js_opt = json.dumps(o, separators=(",", ":"))
+
+        fn = "setHexbin"
+        if k == "contour_source":
+            fn = "setContours"
+
+        js = (
+            "if (window.__GeoPriorMap) {"
+            f"  if (window.__GeoPriorMap.{fn}) {{"
+            f"    window.__GeoPriorMap.{fn}({js_pts}, {js_opt});"
+            "  } else {"
+            "    window.__GeoPriorMap.setPoints("
+            f"{js_pts}, {js_opt}"
+            "    );"
+            "  }"
+            "}"
+        )
+        self._run_js(js)
+
     def set_points(
         self,
         points: Sequence[Dict[str, Any]],
@@ -429,7 +602,13 @@ class ForecastMapView(QFrame):
         invert: bool = False,
     ) -> None:
 
-        self._last_points = list(points or [])
+        self._last_layer_kind = "points"
+        self._last_layer_opts = {
+            "radius": int(radius),
+            "opacity": float(opacity),
+        }
+
+        # self._last_points = list(points or [])
         self._last_label = str(label or "Z")
         self._last_vmin = vmin
         self._last_vmax = vmax
@@ -439,8 +618,10 @@ class ForecastMapView(QFrame):
         self._view["opacity"] = float(opacity)
         self._view["showLegend"] = bool(show_legend)
 
-
-        pts = list(points or [])
+        pts = self._norm_points(points)
+        self._last_points = list(pts)
+        
+        # pts = list(points or [])
         opts: Dict[str, Any] = {
             "vmin": vmin,
             "vmax": vmax,
@@ -451,7 +632,6 @@ class ForecastMapView(QFrame):
             "cmap": str(cmap or "viridis"),
             "invert": bool(invert),
         }
-
 
         js_pts = json.dumps(pts, separators=(",", ":"))
         js_opt = json.dumps(opts, separators=(",", ":"))
@@ -492,7 +672,7 @@ class ForecastMapView(QFrame):
     
         self._set_basemap(base, style, top)
         if self._last_points:
-            self._redraw_points(
+            self._redraw_layer(
                 radius=radius,
                 opacity=opacity,
                 vmin=vmin,
@@ -519,6 +699,36 @@ class ForecastMapView(QFrame):
             except Exception:
                 pass
             
+    def _redraw_layer(
+        self,
+        *,
+        radius: int,
+        opacity: float,
+        vmin: Optional[float],
+        vmax: Optional[float],
+        cmap: str,
+        invert: bool,
+        show_legend: bool,
+    ) -> None:
+        if not self._last_points:
+            return
+
+        o = dict(self._last_layer_opts or {})
+        o["radius"] = int(radius)
+        o["opacity"] = float(opacity)
+
+        self.set_layer(
+            self._last_layer_kind,
+            self._last_points,
+            opts=o,
+            vmin=vmin,
+            vmax=vmax,
+            label=self._last_label,
+            show_legend=show_legend,
+            cmap=cmap,
+            invert=invert,
+        )
+
     def _redraw_points(
         self,
         *,
@@ -530,18 +740,27 @@ class ForecastMapView(QFrame):
         invert: bool,
         show_legend: bool,
     ) -> None:
-        self.set_points(
-            self._last_points,
-            vmin=vmin,
-            vmax=vmax,
+        # self.set_points(
+        #     self._last_points,
+        #     vmin=vmin,
+        #     vmax=vmax,
+        #     radius=radius,
+        #     opacity=opacity,
+        #     label=self._last_label,
+        #     show_legend=show_legend,
+        #     cmap=cmap,
+        #     invert=invert,
+        # )
+        self._redraw_layer(
             radius=radius,
             opacity=opacity,
-            label=self._last_label,
-            show_legend=show_legend,
+            vmin=vmin,
+            vmax=vmax,
             cmap=cmap,
             invert=invert,
+            show_legend=show_legend,
         )
-    
+
     def _set_basemap(
         self, provider: str, 
         style: str, 

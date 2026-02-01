@@ -37,6 +37,8 @@ def _leaflet_html() -> str:
         "  // Define API first (safe if Leaflet fails)",
         "  window.__GeoPriorMap = {",
         "    setPoints: function(){},",
+        "    setHexbin: function(){},",
+        "    setContours: function(){},",
         "    clearPoints: function(){},",
         "    fitPoints: function(){},",
         "    zoomIn: function(){},",
@@ -46,7 +48,7 @@ def _leaflet_html() -> str:
         "    setHotspots: function(){},",
         "    clearHotspots: function(){},",
         "    showHotspots: function(){},",
-        "    setVectors: function(){}"
+        "    setVectors: function(){}",
         "  };",
         "",
         "  if (typeof L === 'undefined') {",
@@ -76,6 +78,10 @@ def _leaflet_html() -> str:
         "  const layer = L.layerGroup().addTo(map);",
         "  let legendCtl = null;",
         "",
+        "  let lastMainKind = 'points';",
+        "  let lastMainPoints = [];",
+        "  let lastMainOpts = {};",
+        "  let contourOverlay = null;",
         "  // Qt WebChannel bridge (JS -> Python)",
         "  let bridge = null;",
         "",
@@ -191,6 +197,14 @@ def _leaflet_html() -> str:
 
         "  function clearPoints() {",
         "    layer.clearLayers();",
+        "    if (contourOverlay) {",
+        "      try { map.removeLayer(contourOverlay); }",
+        "      catch (e) {}",
+        "      contourOverlay = null;",
+        "    }",
+        "    lastMainKind = 'points';",
+        "    lastMainPoints = [];",
+        "    lastMainOpts = {};",
         "  }",
         "",
         "  function _clamp(x, a, b) {",
@@ -475,6 +489,13 @@ def _leaflet_html() -> str:
         "",
         "    layer.eachLayer(function (m) {",
         "      if (m.getLatLng) pts.push(m.getLatLng());",
+        "      if (m.getBounds) {",
+        "        try {",
+        "          const b = m.getBounds();",
+        "          pts.push(b.getNorthWest());",
+        "          pts.push(b.getSouthEast());",
+        "        } catch (e) {}",
+        "      }",
         "    });",
         "",
         "    hotLayer.eachLayer(function (m) {",
@@ -492,13 +513,224 @@ def _leaflet_html() -> str:
         "    map.fitBounds(L.latLngBounds(pts).pad(0.2));",
         "  }",
         "",
+        "  function fitBounds(coords) {",
+        "    // coords = [[lat1, lon1], [lat2, lon2]]",
+        "    if (!coords || coords.length !== 2) return;",
+        "    try {",
+        "      map.fitBounds(coords, { padding: [50, 50] });",
+        "    } catch (e) {",
+        "      console.log('fitBounds error:', e);",
+        "    }",
+        "  }",
+        "",
+                r"""
+          // -------------------------------------------------
+          // Visualization strategies (hexbin / contours)
+          // -------------------------------------------------
+        
+          function _agg(vals, metric) {
+            const m = (metric || "mean").toLowerCase();
+            if (!vals || !vals.length) return null;
+            if (m === "count") return vals.length;
+            if (m === "max") return Math.max.apply(null, vals);
+            if (m === "min") return Math.min.apply(null, vals);
+            if (m === "sum") {
+              let s = 0;
+              for (let i = 0; i < vals.length; i++) s += vals[i];
+              return s;
+            }
+            let s = 0;
+            for (let i = 0; i < vals.length; i++) s += vals[i];
+            return s / vals.length;
+          }
+        
+          function _renderHexbin() {
+            const pts = lastMainPoints || [];
+            const o = lastMainOpts || {};
+        
+            clearPoints();
+        
+            const gs = Math.max(5, Number(o.gridsize || 30));
+            const metric = String(o.metric || "mean");
+            const op = (o.opacity != null) ? Number(o.opacity) : 0.85;
+        
+            if (!pts.length) return;
+        
+            const bins = {};
+            const sqrt3 = Math.sqrt(3);
+        
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i];
+              const q = map.latLngToContainerPoint([p.lat, p.lon]);
+              const x = q.x;
+              const y = q.y;
+        
+              const col = Math.round(x / (1.5 * gs));
+              const row = Math.round(
+                (y - (col & 1) * (sqrt3 * 0.5 * gs)) / (sqrt3 * gs)
+              );
+              const key = col + "," + row;
+              if (!bins[key]) bins[key] = {col: col, row: row, vs: []};
+              bins[key].vs.push(Number(p.v));
+            }
+        
+            let lo = Infinity;
+            let hi = -Infinity;
+            for (const k in bins) {
+              if (!bins.hasOwnProperty(k)) continue;
+              const it = bins[k];
+              const v = _agg(it.vs, metric);
+              if (v == null) continue;
+              it.v = v;
+              lo = Math.min(lo, v);
+              hi = Math.max(hi, v);
+            }
+        
+            const a = (o.vmin != null) ? Number(o.vmin) : lo;
+            const b = (o.vmax != null) ? Number(o.vmax) : hi;
+        
+            for (const k in bins) {
+              if (!bins.hasOwnProperty(k)) continue;
+              const it = bins[k];
+              if (it.v == null) continue;
+        
+              const cx = it.col * 1.5 * gs;
+              const cy = it.row * (sqrt3 * gs) + (it.col & 1)
+                * (sqrt3 * 0.5 * gs);
+        
+              const t = _clamp((it.v - a) / ((b - a) || 1), 0, 1);
+              const col = _color(t, o.cmap, !!o.invert);
+        
+              const latlngs = [];
+              for (let j = 0; j < 6; j++) {
+                const ang = (Math.PI / 3) * j;
+                const px = cx + gs * Math.cos(ang);
+                const py = cy + gs * Math.sin(ang);
+                const ll = map.containerPointToLatLng(L.point(px, py));
+                latlngs.push(ll);
+              }
+        
+              L.polygon(latlngs, {
+                color: col,
+                weight: 1,
+                fillColor: col,
+                fillOpacity: op,
+                interactive: false,
+              }).addTo(layer);
+            }
+        
+            if (o.showLegend) {
+              setLegend(a, b, o.label || "Z", o.cmap, !!o.invert);
+            }
+          }
+        
+          function setHexbin(points, opts) {
+            lastMainKind = "hexbin_source";
+            lastMainPoints = points || [];
+            lastMainOpts = opts || {};
+            _renderHexbin();
+          }
+        
+          function _renderContours() {
+            const pts = lastMainPoints || [];
+            const o = lastMainOpts || {};
+        
+            clearPoints();
+        
+            const op = (o.opacity != null) ? Number(o.opacity) : 0.7;
+            const bw = Math.max(4, Number(o.bandwidth || 15));
+            const step = Math.max(6, Math.min(80, bw));
+            const size = map.getSize();
+            const w = size.x;
+            const h = size.y;
+        
+            if (!pts.length || !w || !h) return;
+        
+            const proj = [];
+            let lo = Infinity;
+            let hi = -Infinity;
+            for (let i = 0; i < pts.length; i++) {
+              const p = pts[i];
+              const q = map.latLngToContainerPoint([p.lat, p.lon]);
+              const v = Number(p.v);
+              proj.push({x: q.x, y: q.y, v: v});
+              lo = Math.min(lo, v);
+              hi = Math.max(hi, v);
+            }
+        
+            const a = (o.vmin != null) ? Number(o.vmin) : lo;
+            const b = (o.vmax != null) ? Number(o.vmax) : hi;
+        
+            const cvs = document.createElement("canvas");
+            cvs.width = w;
+            cvs.height = h;
+        
+            const ctx = cvs.getContext("2d");
+            if (!ctx) return;
+        
+            ctx.globalAlpha = op;
+        
+            const sig2 = 2 * step * step;
+        
+            for (let y = 0; y < h; y += step) {
+              for (let x = 0; x < w; x += step) {
+                let num = 0;
+                let den = 0;
+        
+                for (let i = 0; i < proj.length; i++) {
+                  const p = proj[i];
+                  const dx = x - p.x;
+                  const dy = y - p.y;
+                  const d2 = dx * dx + dy * dy;
+                  const w0 = Math.exp(-d2 / sig2);
+                  num += w0 * p.v;
+                  den += w0;
+                }
+        
+                if (den <= 0) continue;
+        
+                const v = num / den;
+                const t = _clamp((v - a) / ((b - a) || 1), 0, 1);
+                ctx.fillStyle = _color(t, o.cmap, !!o.invert);
+                ctx.fillRect(x, y, step, step);
+              }
+            }
+        
+            const url = cvs.toDataURL("image/png");
+            const bounds = map.getBounds();
+            contourOverlay = L.imageOverlay(url, bounds, {
+              opacity: 1.0,
+              interactive: false,
+            }).addTo(map);
+        
+            if (o.showLegend) {
+              setLegend(a, b, o.label || "Z", o.cmap, !!o.invert);
+            }
+          }
+        
+          function setContours(points, opts) {
+            lastMainKind = "contour_source";
+            lastMainPoints = points || [];
+            lastMainOpts = opts || {};
+            _renderContours();
+          }
+        
+          map.on("zoomend moveend", function () {
+            if (lastMainKind === "hexbin_source") _renderHexbin();
+            if (lastMainKind === "contour_source") _renderContours();
+          });
+        """,
+        
         "  function zoomIn() { map.zoomIn(); }",
         "  function zoomOut() { map.zoomOut(); }",
         "",
         "  // Attach real functions",
         "  window.__GeoPriorMap.setPoints = setPoints;",
+        "  window.__GeoPriorMap.setHexbin = setHexbin;",
+        "  window.__GeoPriorMap.setContours = setContours;",
         "  window.__GeoPriorMap.clearPoints = clearPoints;",
         "  window.__GeoPriorMap.fitPoints = fitPoints;",
+        "  window.__GeoPriorMap.fitBounds = fitBounds;",
         "  window.__GeoPriorMap.zoomIn = zoomIn;",
         "  window.__GeoPriorMap.zoomOut = zoomOut;",
         "  window.__GeoPriorMap.setLegend = setLegend;",
@@ -513,3 +745,9 @@ def _leaflet_html() -> str:
         "</html>",
     ]
     return "\n".join(lines)
+
+# function setLayer(name, kind, data, opts) {
+#   if (kind === "points") return drawPoints(name, data, opts);
+#   if (kind === "hexbin_source") return drawHexbin(name, data, opts);
+#   if (kind === "contour_source") return drawContour(name, data, opts);
+# }

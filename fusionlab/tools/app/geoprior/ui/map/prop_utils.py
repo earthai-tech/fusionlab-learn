@@ -13,12 +13,153 @@ gradient (flow) analysis.
 
 from __future__ import annotations
 
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Sequence
+
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy.interpolate import griddata 
 
-from ..map.coord_utils import ensure_lonlat
+from .coord_utils import ensure_lonlat
+
+
+def _coerce_year(s: pd.Series) -> pd.Series:
+    """
+    Return numeric years.
+    - keep year ints/floats (1500..3000)
+    - if datetime64, use .dt.year
+    - if datetime64 but all 1970, recover from
+      "pd.to_datetime(year_int)" mistake
+    """
+    if s is None:
+        return pd.Series([], dtype="float64")
+
+    if pd.api.types.is_datetime64_any_dtype(s):
+        y = s.dt.year.astype("float64")
+
+        # common bug: year ints -> datetime -> 1970
+        if y.notna().any():
+            u = y.dropna().unique()
+            if len(u) == 1 and int(u[0]) == 1970:
+                raw = pd.Series(
+                    s.view("int64"),
+                    index=s.index,
+                    dtype="float64",
+                )
+                m = (raw >= 1500) & (raw <= 3000)
+                if m.any():
+                    return raw.where(m, np.nan)
+
+        return y
+
+    num = pd.to_numeric(s, errors="coerce")
+    m = (num >= 1500) & (num <= 3000)
+    if m.any():
+        return num.where(m, np.nan)
+
+    dt = pd.to_datetime(s, errors="coerce")
+    return dt.dt.year.astype("float64")
+
+
+def pick_col(
+    df: pd.DataFrame,
+    prefer: str,
+    fallbacks: Sequence[str],
+) -> str:
+    p = str(prefer or "").strip()
+    if p and p in df.columns:
+        return p
+    for c in fallbacks:
+        if c in df.columns:
+            return c
+    return ""
+
+
+def detect_time_col(
+    fp: str | Path,
+    prefer: str = "",
+    *,
+    candidates: Sequence[str] = (
+        "coord_t", "t", "year", "date",
+    ),
+) -> str:
+    p = str(prefer or "").strip()
+    if p:
+        return p
+    try:
+        cols = list(pd.read_csv(fp, nrows=0).columns)
+    except Exception:
+        return ""
+    for c in candidates:
+        if c in cols:
+            return c
+    return ""
+
+
+def process_simulation(
+    df: pd.DataFrame,
+    *,
+    years_to_add: int,
+    time_col: str,
+    value_col: str,
+) -> Tuple[pd.DataFrame, List[int], str, str]:
+    
+    t0 = pick_col(
+        df,
+        time_col,
+        ["coord_t", "t", "year", "date"],
+    )
+    s0 = pick_col(
+        df,
+        "",
+        ["forecast_step", "step", "horizon"],
+    )
+    
+    if t0 and s0 and (t0 in df.columns) and (s0 in df.columns):
+        tt = pd.to_numeric(df[t0], errors="coerce")
+        ss = pd.to_numeric(df[s0], errors="coerce")
+    
+        if tt.notna().any() and ss.notna().any():
+            base_like = (tt.dropna().nunique() == 1)
+            step_like = (ss.dropna().nunique() > 1)
+            base = float(tt.dropna().iloc[0])
+    
+            if base_like and step_like:
+                if (base >= 1500) and (base <= 3000):
+                    df = df.copy()
+                    df["t_eff"] = tt + ss
+                    time_col = "t_eff"
+
+    sim = extrapolate_scenarios(
+        df,
+        years_to_add=years_to_add,
+        time_col=time_col,
+        value_col=value_col,
+    )
+
+    t_used = pick_col(
+        sim,
+        time_col,
+        ["t", "coord_t", "year", "date"],
+    )
+    v_used = pick_col(
+        sim,
+        value_col,
+        ["v", "subsidence_q50", "subsidence", "subsidence_pred"],
+    )
+
+    if not t_used:
+        return sim, [], "", v_used
+
+    s = pd.to_numeric(
+        sim[t_used],
+        errors="coerce",
+    ).dropna()
+
+    years = sorted(set(s.astype(int).tolist()))
+    return sim, years, t_used, v_used
+
 
 def extrapolate_scenarios(
     df: pd.DataFrame,
@@ -62,20 +203,22 @@ def extrapolate_scenarios(
     d = df.copy()
     
     # Safely convert time to integer years (Fix for TypeError: Timestamp vs int)
-    if pd.api.types.is_datetime64_any_dtype(d[use_t]):
-        d["_t"] = d[use_t].dt.year
-    else:
-        # Try numeric first (float/int)
-        d["_t"] = pd.to_numeric(d[use_t], errors="coerce")
+    d["_t"] = _coerce_year(d[use_t])
+
+    # if pd.api.types.is_datetime64_any_dtype(d[use_t]):
+    #     d["_t"] = d[use_t].dt.year
+    # else:
+    #     # Try numeric first (float/int)
+    #     d["_t"] = pd.to_numeric(d[use_t], errors="coerce")
         
-        # If numeric failed (e.g. object column with Dates), try datetime parse
-        if d["_t"].isna().any():
-            try:
-                dt_series = pd.to_datetime(d[use_t], errors='coerce')
-                mask = d["_t"].isna() & dt_series.notna()
-                d.loc[mask, "_t"] = dt_series.loc[mask].dt.year
-            except Exception:
-                pass
+    #     # If numeric failed (e.g. object column with Dates), try datetime parse
+    #     if d["_t"].isna().any():
+    #         try:
+    #             dt_series = pd.to_datetime(d[use_t], errors='coerce')
+    #             mask = d["_t"].isna() & dt_series.notna()
+    #             d.loc[mask, "_t"] = dt_series.loc[mask].dt.year
+    #         except Exception:
+    #             pass
 
     # Drop invalid rows (missing time or value)
     d = d.dropna(subset=["_t", use_v])
@@ -190,9 +333,15 @@ def compute_propagation_vectors(
 
     # 1. Normalize coordinates to lon/lat
     # Pass actual EPSG if known (omitted here for simplicity, relies on auto)
-    pts, ok, _ = ensure_lonlat(df_slice, mode="auto", src_epsg=None) 
-    if not ok: 
-        return []
+    if "lon" in df_slice.columns and "lat" in df_slice.columns:
+        pts = df_slice
+        ok = True
+    else:
+        pts, ok, _ = ensure_lonlat(
+            df_slice,
+            mode="auto",
+            src_epsg=None,
+        )
 
     x = pts["lon"].values
     y = pts["lat"].values

@@ -43,17 +43,19 @@ from PyQt5.QtWidgets import (
 from ...config.store import GeoConfigStore
 from ..icon_utils import try_icon
 
-from .keys import VIEW_DEFAULTS, VIEW_KEYS, get_engine
-from .data_panel import AutoHidePanel
 from .basemap.basemap import engine_providers, engine_styles
-from ..view.keys import ( 
-    # Propagation / Simulation Options
+from .data_panel import AutoHidePanel
+from .alerts import AlertGroup
+from .keys import ( 
+    VIEW_DEFAULTS, 
+    VIEW_KEYS, 
     K_PROP_ENABLED, 
     K_PROP_YEARS,
     K_PROP_SPEED, 
     K_PROP_MODE,
     K_PROP_VECTORS,  
     K_PROP_LOOP, 
+    get_engine,
   )
 
 class AutoHideViewPanel(AutoHidePanel):
@@ -201,6 +203,28 @@ class AutoHideViewPanel(AutoHidePanel):
 
         lay.addWidget(self._group_basemap(host), 0)
         lay.addWidget(self._group_colors(host), 0)
+        lay.addWidget(self._group_rendering(host), 0) 
+        
+        # We wrap it in a card-like frame method or use directly
+        self.alert_group = AlertGroup(
+            store=self.store,
+            parent=host
+        )
+        # Wrap alert_group in a card UI manually 
+        # to match style
+        alert_card, alert_body, _ = self._make_card(
+            host,
+            title="Early Warning",
+            sp=QStyle.SP_MessageBoxWarning,
+        )
+        # We replace the empty body layout with our widget
+        # Or simply add the widget to body layout
+        abl = QVBoxLayout(alert_body)
+        abl.setContentsMargins(0, 0, 0, 0)
+        abl.addWidget(self.alert_group)
+        
+        lay.addWidget(alert_card, 0)
+        
         lay.addWidget(self._group_markers(host), 0)
         lay.addWidget(self._group_legend(host), 0)
         lay.addWidget(self._group_propagation(host), 0)
@@ -318,7 +342,8 @@ class AutoHideViewPanel(AutoHidePanel):
     
         cur_p = str(self.store.get("map.view.basemap", "osm") or "osm")
         cur_s = str(
-            self.store.get("map.view.basemap_style", "light")
+            self.store.get(
+                "map.view.basemap_style", "light")
             or "light"
         )
     
@@ -373,6 +398,77 @@ class AutoHideViewPanel(AutoHidePanel):
             "map.view.basemap_style",
             str(self.cmb_style.currentText() or "light"),
         )
+
+    def _group_rendering(self, parent: QWidget) -> QFrame:
+        box, body, chip = self._make_card(
+            parent,
+            title="Rendering",
+            sp=QStyle.SP_DesktopIcon,
+        )
+        self._chip_render = chip
+    
+        form = QFormLayout(body)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
+    
+        self.cmb_plot_kind = QComboBox(box)
+        self.cmb_plot_kind.addItems([
+            "scatter",
+            "hexbin",
+            "contour",
+        ])
+    
+        # ---- Hexbin
+        self.sp_hex_grid = QSpinBox(box)
+        self.sp_hex_grid.setRange(5, 200)
+    
+        self.cmb_hex_metric = QComboBox(box)
+        self.cmb_hex_metric.addItems([
+            "mean",
+            "max",
+            "min",
+            "count",
+        ])
+    
+        # ---- Contour
+        self.sp_ctr_bw = QDoubleSpinBox(box)
+        self.sp_ctr_bw.setDecimals(2)
+        self.sp_ctr_bw.setRange(0.1, 5000.0)
+        self.sp_ctr_bw.setSingleStep(1.0)
+    
+        self.sp_ctr_steps = QSpinBox(box)
+        self.sp_ctr_steps.setRange(2, 50)
+    
+        self.chk_ctr_filled = QCheckBox("Filled", box)
+        self.chk_ctr_labels = QCheckBox("Labels", box)
+    
+        # ---- Filters
+        self.chk_filt = QCheckBox("Enable", box)
+    
+        self.sp_fmin = QDoubleSpinBox(box)
+        self.sp_fmin.setDecimals(6)
+        self.sp_fmin.setRange(-1e12, 1e12)
+    
+        self.sp_fmax = QDoubleSpinBox(box)
+        self.sp_fmax.setDecimals(6)
+        self.sp_fmax.setRange(-1e12, 1e12)
+    
+        form.addRow("Kind", self.cmb_plot_kind)
+    
+        form.addRow("Hex grid", self.sp_hex_grid)
+        form.addRow("Hex metric", self.cmb_hex_metric)
+    
+        form.addRow("Contour bw", self.sp_ctr_bw)
+        form.addRow("Contour steps", self.sp_ctr_steps)
+        form.addRow("", self.chk_ctr_filled)
+        form.addRow("", self.chk_ctr_labels)
+    
+        form.addRow("Filter", self.chk_filt)
+        form.addRow("V min", self.sp_fmin)
+        form.addRow("V max", self.sp_fmax)
+    
+        return box
 
     def _group_basemap(self, parent: QWidget) -> QFrame:
         box, body, chip = self._make_card(
@@ -1083,7 +1179,89 @@ class AutoHideViewPanel(AutoHidePanel):
                 "balanced",
             )),
         )
+        self._set_combo(
+            self.cmb_plot_kind,
+            str(self.store.get(
+                "map.view.plot.kind",
+                "scatter",
+            ) or "scatter"),
+        )
+        
+        self.sp_hex_grid.setValue(
+            int(self.store.get(
+            "map.view.hex.gridsize",
+            30,
+        ) or 30))
+        
+        self._set_combo(
+            self.cmb_hex_metric,
+            str(self.store.get(
+                "map.view.hex.metric",
+                "mean",
+            ) or "mean"),
+        )
+        
+        self.sp_ctr_bw.setValue(
+            float(self.store.get(
+            "map.view.contour.bandwidth",
+            15.0,
+        ) or 15.0))
+        
+        self.sp_ctr_steps.setValue(
+            int(self.store.get(
+            "map.view.contour.steps",
+            10,
+        ) or 10))
+        
+        self.chk_ctr_filled.setChecked(
+            bool(self.store.get(
+            "map.view.contour.filled",
+            True,
+        )))
+        
+        self.chk_ctr_labels.setChecked(
+            bool(self.store.get(
+            "map.view.contour.labels",
+            False,
+        )))
+        
+        self.chk_filt.setChecked(
+            bool(self.store.get(
+            "map.view.filter.enable",
+            False,
+        )))
+        
+        self.sp_fmin.setValue(
+            float(self.store.get(
+            "map.view.filter.v_min",
+            -50.0,
+        ) or -50.0))
+        
+        self.sp_fmax.setValue(
+            float(self.store.get(
+            "map.view.filter.v_max",
+            50.0,
+        ) or 50.0))
+        
+        self._update_render_ui_enabled()
 
+        self._set_combo(
+            self.cmb_int,
+            str(self.store.get(
+                "map.view.interp.action_intensity",
+                "balanced",
+            )),
+        )
+
+        # --- ALERT SYSTEM REFRESH ---
+        # FIX: Explicitly sync the sub-widget to match the store
+        if hasattr(self, "alert_group"):
+            self.alert_group.sync()
+
+        self.chk_prop_enable.setChecked(
+            bool(self.store.get(K_PROP_ENABLED, False))
+        )
+        
         self.chk_prop_enable.setChecked(
             bool(self.store.get(K_PROP_ENABLED, False))
         )
@@ -1114,6 +1292,33 @@ class AutoHideViewPanel(AutoHidePanel):
         self._update_hotspot_ui_enabled()
         self._update_vrange_enabled()
         self._update_chips()
+
+    def _update_render_ui_enabled(self) -> None:
+        kind = str(
+            self.cmb_plot_kind.currentText()
+            or "scatter"
+        ).lower()
+    
+        hex_on = kind == "hexbin"
+        ctr_on = kind == "contour"
+    
+        for w in (self.sp_hex_grid, self.cmb_hex_metric):
+            w.setEnabled(hex_on)
+    
+        for w in (
+            self.sp_ctr_bw,
+            self.sp_ctr_steps,
+            self.chk_ctr_filled,
+            self.chk_ctr_labels,
+        ):
+            w.setEnabled(ctr_on)
+    
+        filt_on = bool(self.chk_filt.isChecked())
+        self.sp_fmin.setEnabled(filt_on)
+        self.sp_fmax.setEnabled(filt_on)
+    
+        if hasattr(self, "_chip_render"):
+            self._chip_render.setText(kind)
 
     def _update_hotspot_ui_enabled(self) -> None:
         on = bool(self.chk_hot.isChecked())
@@ -1227,17 +1432,7 @@ class AutoHideViewPanel(AutoHidePanel):
         self.btn_reset.clicked.connect(self._on_reset)
         self.btn_apply.clicked.connect(self._emit_changed)
 
-        # self.cmb_base.currentTextChanged.connect(
-        #     lambda v: self.store.set(
-        #         "map.view.basemap", str(v)
-        #     )
-        # )
-        # self.cmb_style.currentTextChanged.connect(
-        #     lambda v: self.store.set(
-        #         "map.view.basemap_style", str(v)
-        #     )
-        # )
-        
+
         def _on_base(v: str) -> None:
             self.store.set("map.view.basemap", str(v))
             self._refresh_styles_only()
@@ -1494,6 +1689,78 @@ class AutoHideViewPanel(AutoHidePanel):
         self.btn_exp_brief.clicked.connect(
             lambda: self.export_requested.emit(
                 "policy_brief"
+            )
+        )
+        def _on_kind(v: str) -> None:
+            self.store.set("map.view.plot.kind", str(v))
+            self._update_render_ui_enabled()
+            self._update_chips()
+        
+        self.cmb_plot_kind.currentTextChanged.connect(_on_kind)
+        
+        self.sp_hex_grid.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hex.gridsize",
+                int(v),
+            )
+        )
+        
+        self.cmb_hex_metric.currentTextChanged.connect(
+            lambda v: self.store.set(
+                "map.view.hex.metric",
+                str(v),
+            )
+        )
+        
+        self.sp_ctr_bw.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.contour.bandwidth",
+                float(v),
+            )
+        )
+        
+        self.sp_ctr_steps.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.contour.steps",
+                int(v),
+            )
+        )
+        
+        self.chk_ctr_filled.toggled.connect(
+            lambda b: self.store.set(
+                "map.view.contour.filled",
+                bool(b),
+            )
+        )
+        
+        self.chk_ctr_labels.toggled.connect(
+            lambda b: self.store.set(
+                "map.view.contour.labels",
+                bool(b),
+            )
+        )
+        
+        self.chk_filt.toggled.connect(
+            lambda b: (
+                self.store.set(
+                    "map.view.filter.enable",
+                    bool(b),
+                ),
+                self._update_render_ui_enabled(),
+            )
+        )
+        
+        self.sp_fmin.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.filter.v_min",
+                float(v),
+            )
+        )
+        
+        self.sp_fmax.valueChanged.connect(
+            lambda v: self.store.set(
+                "map.view.filter.v_max",
+                float(v),
             )
         )
 

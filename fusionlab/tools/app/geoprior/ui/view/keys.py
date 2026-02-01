@@ -34,13 +34,6 @@ K_CONTOUR_STEPS = "view.contour.steps"          # Number of levels
 K_CONTOUR_FILLED = "view.contour.filled"        # Bool: fill or lines
 K_CONTOUR_LABELS = "view.contour.labels"  
 
-# Propagation / Simulation Options
-K_PROP_ENABLED = "view.prop.enabled"        # bool
-K_PROP_YEARS = "view.prop.years_extra"      # int (e.g. 5 future years)
-K_PROP_SPEED = "view.prop.speed"            # int (ms per frame)
-K_PROP_MODE = "view.prop.mode"              # absolute | differential | risk_mask
-K_PROP_VECTORS = "view.prop.show_vectors"   # bool (show expansion arrows)
-K_PROP_LOOP = "view.prop.loop"              # bool
 
 DEFAULTS = {
     K_PLOT_KIND: "scatter",
@@ -57,12 +50,5 @@ DEFAULTS = {
     K_CONTOUR_STEPS: 10,
     K_CONTOUR_FILLED: True,
     K_CONTOUR_LABELS: False,
-    
-    K_PROP_ENABLED: False,
-    K_PROP_YEARS: 5,
-    K_PROP_SPEED: 800,  # 800ms per year
-    K_PROP_MODE: "absolute",
-    K_PROP_VECTORS: True,
-    K_PROP_LOOP: False,
     
 }

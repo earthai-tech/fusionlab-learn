@@ -28,8 +28,9 @@ from PyQt5.QtCore import QObject
 from ....config.store import GeoConfigStore
 from ...map.coord_utils import ensure_lonlat
 from ...map.hotspots import HotspotCfg, compute_hotspots
+from ...map.keys import map_view_key
 from ...view.factory import ViewFactory
-# --- NEW IMPORTS: View Keys ---
+
 from ...view.keys import (
     K_PLOT_KIND, 
     K_HEX_GRIDSIZE,
@@ -101,7 +102,9 @@ from ..keys import (
     K_MAP_LINKS_MAX,
     K_MAP_LINKS_SHOW_DIST,
     K_MAP_A_EPSG, 
-    K_MAP_B_EPSG
+    K_MAP_B_EPSG, 
+    
+    # VIEW_DEFAULTS, 
 )
 from .interpretation import interpret_transfer
 from .interpretation import render_html, render_tip
@@ -216,7 +219,11 @@ class XferMapController(QObject):
         self._tb = toolbar
         self._v = view
 
-        self._view_factory = ViewFactory(store)
+        self._view_factory = ViewFactory(
+            store,
+            key_fn=map_view_key,
+            radius_key="map.view.marker_size"
+        )
 
         self._root: Optional[Path] = None
         self._index: Optional[List[Any]] = None
@@ -1288,7 +1295,10 @@ class XferMapController(QObject):
             for k, v in DEFAULTS.items():
                 if s.get(k, None) is None:
                     s.set(k, v)
-
+            # for k, v in VIEW_DEFAULTS.items():
+            #     if s.get(k, None) is None:
+            #         s.set(k, v)
+                    
     def _map_keys(self) -> Set[str]:
         return set(map_keys())
 

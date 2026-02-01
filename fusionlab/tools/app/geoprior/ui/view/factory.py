@@ -10,6 +10,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Callable, 
 )
 
 import pandas as pd
@@ -29,7 +30,6 @@ from .keys import (
     K_CONTOUR_FILLED,
     K_CONTOUR_LABELS
 )
-
 
 class RenderPayload:
     """
@@ -60,8 +60,22 @@ class ViewFactory:
     - Style prep (Opacity, Color)
     """
 
-    def __init__(self, store: GeoConfigStore) -> None:
+    def __init__(
+        self,
+        store: GeoConfigStore,
+        *,
+        key_fn: Optional[Callable[[str], str]] = None,
+        radius_key: Optional[str] = None,
+    ) -> None:
         self._s = store
+        self._key_fn = key_fn or (lambda k: k)
+        self._radius_key = radius_key
+
+    def _k(self, k: str) -> str:
+        return self._key_fn(k)
+
+    def _get(self, k: str, default: Any) -> Any:
+        return self._s.get(self._k(k), default)
 
     def build_layer(
         self,
@@ -81,10 +95,10 @@ class ViewFactory:
 
         # 2. Determine Plot Type
         kind = str(
-            self._s.get(K_PLOT_KIND, "scatter") or "scatter"
+            self._get(K_PLOT_KIND, "scatter") or "scatter"
         )
         opacity = float(
-            self._s.get(K_PLOT_OPACITY, 0.85) or 0.85
+            self._get(K_PLOT_OPACITY, 0.85) or 0.85
         )
 
         # 3. Generate Payload
@@ -107,13 +121,10 @@ class ViewFactory:
         out = df.copy()
 
         # A) Value Range Filtering
-        if self._s.get(K_FILTER_ENABLE, False):
-            vmin = float(
-                self._s.get(K_FILTER_V_MIN, -9999)
-            )
-            vmax = float(
-                self._s.get(K_FILTER_V_MAX, 9999)
-            )
+        if self._get(K_FILTER_ENABLE, False):
+            vmin = float(self._get(K_FILTER_V_MIN, -9999))
+            vmax = float(self._get(K_FILTER_V_MAX, 9999))
+            
             # Filter rows where 'v' is within range
             if "v" in out.columns:
                 out = out[
@@ -121,9 +132,7 @@ class ViewFactory:
                 ]
 
         # B) Spatial / Hotspot Filtering
-        mode = str(
-            self._s.get(K_SPACE_MODE, "all") or "all"
-        )
+        mode = str(self._get(K_SPACE_MODE, "all") or "all")
         if mode == "hotspots_only":
             # 'sid' > 0 usually implies a ranked hotspot
             if "sid" in out.columns:
@@ -201,13 +210,17 @@ class ViewFactory:
                     "tip": tip,
                 }
             )
-
+            
+        rad = 6
+        if self._radius_key:
+            rad = int(self._s.get(self._radius_key, 6) or 6)
+    
         return RenderPayload(
             kind="points",
             data=points,
             opts={
                 "opacity": opacity,
-                "radius": 6,
+                "radius": rad,
             },
         )
 
@@ -225,12 +238,8 @@ class ViewFactory:
         # Reuse scatter logic to get clean points list
         payload = self._build_scatter(df, opacity)
 
-        gridsize = int(
-            self._s.get(K_HEX_GRIDSIZE, 30) or 30
-        )
-        metric = str(
-            self._s.get(K_HEX_METRIC, "mean") or "mean"
-        )
+        gridsize = int(self._get(K_HEX_GRIDSIZE, 30) or 30)
+        metric = str(self._get(K_HEX_METRIC, "mean") or "mean")
 
         return RenderPayload(
             kind="hexbin_source",
@@ -262,15 +271,11 @@ class ViewFactory:
 
         # Fetch contour-specific settings
         bandwidth = float(
-            self._s.get(K_CONTOUR_BANDWIDTH, 15.0) or 15.0
+            self._get(K_CONTOUR_BANDWIDTH, 15.0) or 15.0
         )
-        steps = int(
-            self._s.get(K_CONTOUR_STEPS, 10) or 10
-        )
-        filled = bool(
-            self._s.get(K_CONTOUR_FILLED, True)
-        )
-        labels = bool(self._s.get(K_CONTOUR_LABELS, False))
+        steps = int(self._get(K_CONTOUR_STEPS, 10) or 10)
+        filled = bool(self._get(K_CONTOUR_FILLED, True))
+        labels = bool(self._get(K_CONTOUR_LABELS, False))
 
         return RenderPayload(
             kind="contour_source",
